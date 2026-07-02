@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 )
 
@@ -115,4 +116,42 @@ func createConfigPrompt(filePath string) (*Config, error) {
 	}
 
 	return cfg, nil
+}
+
+func (c *Config) GetConfigValue(key string) (string, error) {
+	switch strings.ToLower(key) {
+	case "api_endpoint", "endpoint":
+		return c.APIEndpoint, nil
+	case "model":
+		return c.Model, nil
+	case "max_context_tokens", "tokens":
+		return strconv.Itoa(c.MaxContextTokens), nil
+	case "last_session":
+		return c.LastSession, nil
+	default:
+		return "", fmt.Errorf("unknown config key '%s'", key)
+	}
+}
+
+func (c *Config) SetConfigValue(key, val string) error {
+	switch strings.ToLower(key) {
+	case "api_endpoint", "endpoint":
+		c.APIEndpoint = val
+		return nil
+	case "model":
+		c.Model = val
+		return nil
+	case "max_context_tokens", "tokens":
+		v, err := strconv.Atoi(val)
+		if err != nil {
+			return fmt.Errorf("invalid integer value for %s: %w", key, err)
+		}
+		c.MaxContextTokens = v
+		return nil
+	case "last_session":
+		c.LastSession = val
+		return nil
+	default:
+		return fmt.Errorf("unknown config key '%s'", key)
+	}
 }

@@ -67,6 +67,40 @@ func main() {
 			PrintError(err.Error())
 		}
 		return
+
+	case "config":
+		if len(os.Args) < 3 {
+			data, err := json.MarshalIndent(cfg, "", "  ")
+			if err != nil {
+				PrintError(fmt.Sprintf("Failed to marshal config: %v", err))
+				return
+			}
+			fmt.Println(string(data))
+			return
+		}
+
+		key := os.Args[2]
+		if len(os.Args) < 4 {
+			val, err := cfg.GetConfigValue(key)
+			if err != nil {
+				PrintError(err.Error())
+				return
+			}
+			fmt.Println(val)
+			return
+		}
+
+		val := os.Args[3]
+		if err := cfg.SetConfigValue(key, val); err != nil {
+			PrintError(err.Error())
+			return
+		}
+		if err := SaveConfig(cfg); err != nil {
+			PrintError(fmt.Sprintf("Failed to save config: %v", err))
+			return
+		}
+		PrintSuccess(fmt.Sprintf("Config updated: %s = %s", key, val))
+		return
 	}
 
 	sessionName := os.Args[1]
@@ -81,6 +115,9 @@ func printUsage() {
 	fmt.Println("  q rm <session_name>            : Delete a session")
 	fmt.Println("  q mv <old_name> <new_name>     : Rename a session")
 	fmt.Println("  q cp <src_name> <dst_name>     : Copy a session")
+	fmt.Println("  q config                       : Print all configurations in JSON")
+	fmt.Println("  q config <key>                 : Get a configuration value")
+	fmt.Println("  q config <key> <value>         : Set a configuration value")
 }
 
 func runInteractiveAgent(cfg *Config, sessionName string) {
