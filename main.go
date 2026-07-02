@@ -67,8 +67,8 @@ func runInteractiveAgent() {
 	sysInfo := GetSystemInfo()
 	ctx := context.Background()
 
-	fmt.Println("Welcome to q Interactive Agent Shell.")
-	fmt.Println("Type 'exit' or 'quit' to close.")
+	PrintInfo("Welcome to q Interactive Agent Shell.")
+	PrintInfo("Type 'exit' or 'quit' to close.")
 
 	messages := CreateInitialMessages(sysInfo, "Start session")
 	messages = messages[:1]
@@ -79,7 +79,9 @@ func runInteractiveAgent() {
 			sysInfo.PWD = wd
 		}
 		
-		fmt.Printf("\n[%s] q > ", filepath.Base(sysInfo.PWD))
+		dirPart := Color(filepath.Base(sysInfo.PWD), ansiCyan)
+		promptPart := Color("⚡ q › ", ansiYellow)
+		fmt.Printf("\n📂 %s %s", dirPart, promptPart)
 		input, err := reader.ReadString('\n')
 		if err != nil {
 			break
@@ -110,9 +112,11 @@ type CommandArgs struct {
 func runAgentLoop(ctx context.Context, cfg *Config, sysInfo *SystemInfo, messages *[]ChatMessage, executeMode bool) {
 	maxLoops := 10
 	for i := 0; i < maxLoops; i++ {
+		PrintAgentThinking()
 		msg, err := GenerateCommandMultiTurn(ctx, cfg, *messages)
+		ClearAgentThinking()
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error calling LLM: %v\n", err)
+			PrintError(fmt.Sprintf("Error calling LLM: %v", err))
 			return
 		}
 
@@ -123,17 +127,17 @@ func runAgentLoop(ctx context.Context, cfg *Config, sysInfo *SystemInfo, message
 				if toolCall.Function.Name == "run_shell_command" {
 					var args CommandArgs
 					if err := json.Unmarshal([]byte(toolCall.Function.Arguments), &args); err != nil {
-						fmt.Fprintf(os.Stderr, "Failed to parse tool arguments: %v\n", err)
+						PrintError(fmt.Sprintf("Failed to parse tool arguments: %v", err))
 						continue
 					}
 
 					cmdStr := args.Command
 					if !executeMode {
-						fmt.Printf("Suggested command: %s\n", cmdStr)
+						fmt.Printf("Suggested command: %s\n", Color(cmdStr, ansiGreen))
 						return
 					}
 
-					fmt.Printf("\n[Agent] Executing: %s\n", cmdStr)
+					fmt.Printf("\n⚙️  %s\n", Color("Executing: "+cmdStr, ansiCyan))
 					stdout, stderr, finalDir, runErr := executeCommand(sysInfo.Shell, cmdStr, sysInfo.PWD)
 
 					// Sync PWD if updated
