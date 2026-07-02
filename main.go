@@ -183,6 +183,14 @@ func runInteractiveAgent(cfg *Config, sessionName string) {
 			PrintSuccess("Chat history cleared.")
 			continue
 		}
+		if input == "compact" {
+			if err := CompressContext(ctx, cfg, &session.Messages, true); err != nil {
+				PrintError(fmt.Sprintf("Failed to compact history: %v", err))
+			} else {
+				_ = SaveSession(session)
+			}
+			continue
+		}
 
 		session.Messages = append(session.Messages, ChatMessage{Role: "user", Content: input})
 		runAgentLoop(ctx, cfg, sysInfo, session)
@@ -205,7 +213,7 @@ type CommandArgs struct {
 func runAgentLoop(ctx context.Context, cfg *Config, sysInfo *SystemInfo, session *Session) {
 	maxLoops := 10
 	for i := 0; i < maxLoops; i++ {
-		if err := CompressContextIfNeeded(ctx, cfg, &session.Messages); err != nil {
+		if err := CompressContext(ctx, cfg, &session.Messages, false); err != nil {
 			PrintWarning(fmt.Sprintf("Context compression warning: %v", err))
 		}
 

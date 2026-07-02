@@ -186,19 +186,22 @@ func EstimateTokens(messages []ChatMessage) int {
 	return totalChars / 3
 }
 
-func CompressContextIfNeeded(ctx context.Context, cfg *Config, messages *[]ChatMessage) error {
+func CompressContext(ctx context.Context, cfg *Config, messages *[]ChatMessage, force bool) error {
 	if len(*messages) <= 2 {
 		return nil
 	}
 
-	estTokens := EstimateTokens(*messages)
-	limit := int(float64(cfg.MaxContextTokens) * 0.85)
+	if !force {
+		estTokens := EstimateTokens(*messages)
+		limit := int(float64(cfg.MaxContextTokens) * 0.85)
 
-	if estTokens <= limit {
-		return nil
+		if estTokens <= limit {
+			return nil
+		}
+		PrintInfo("Context limit (85%) reached. Compressing history...")
+	} else {
+		PrintInfo("Force compressing history...")
 	}
-
-	PrintInfo("Context limit (85%) reached. Compressing history...")
 
 	summaryReq := make([]ChatMessage, len(*messages))
 	copy(summaryReq, *messages)
