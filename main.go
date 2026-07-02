@@ -175,6 +175,14 @@ func runInteractiveAgent(cfg *Config, sessionName string) {
 		if input == "exit" || input == "quit" {
 			break
 		}
+		if input == "clear" || input == "cls" {
+			if len(session.Messages) > 1 {
+				session.Messages = session.Messages[:1]
+				_ = SaveSession(session)
+			}
+			PrintSuccess("Chat history cleared.")
+			continue
+		}
 
 		session.Messages = append(session.Messages, ChatMessage{Role: "user", Content: input})
 		runAgentLoop(ctx, cfg, sysInfo, session)
