@@ -15,73 +15,118 @@ import (
 )
 
 func main() {
-	if len(os.Args) < 2 {
-		runInteractiveAgent()
-		return
-	}
-
-	executeMode := false
-	var promptArgs []string
-	for _, arg := range os.Args[1:] {
-		if arg == "e" || arg == "-e" {
-			executeMode = true
-		} else {
-			promptArgs = append(promptArgs, arg)
-		}
-	}
-
-	if len(promptArgs) == 0 {
-		printUsage()
-		os.Exit(1)
-	}
-
-	prompt := strings.Join(promptArgs, " ")
-
 	cfg, err := LoadConfig()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error loading configuration: %v\n", err)
 		os.Exit(1)
 	}
 
-	sysInfo := GetSystemInfo()
-	ctx := context.Background()
+	if len(os.Args) < 2 {
+		sessionName := cfg.LastSession
+		if sessionName == "" {
+			sessionName = "default"
+		}
+		runInteractiveAgent(cfg, sessionName)
+		return
+	}
 
-	messages := CreateInitialMessages(sysInfo, prompt)
-	runAgentLoop(ctx, cfg, sysInfo, &messages, executeMode)
+	cmd := strings.ToLower(os.Args[1])
+	switch cmd {
+	case "ls":
+		if err := ListSessions(); err != nil {
+			PrintError(fmt.Sprintf("Failed to list sessions: %v", err))
+		}
+		return
+
+	case "rm":
+		if len(os.Args) < 3 {
+			PrintError("Missing session name. Usage: q rm <session_name>")
+			return
+		}
+		if err := DeleteSession(os.Args[2]); err != nil {
+			PrintError(err.Error())
+		}
+		return
+
+	case "mv":
+		if len(os.Args) < 4 {
+			PrintError("Missing arguments. Usage: q mv <old_name> <new_name>")
+			return
+		}
+		if err := RenameSession(os.Args[2], os.Args[3]); err != nil {
+			PrintError(err.Error())
+		}
+		return
+
+	case "cp":
+		if len(os.Args) < 4 {
+			PrintError("Missing arguments. Usage: q cp <src_name> <dst_name>")
+			return
+		}
+		if err := CopySession(os.Args[2], os.Args[3]); err != nil {
+			PrintError(err.Error())
+		}
+		return
+	}
+
+	sessionName := os.Args[1]
+	runInteractiveAgent(cfg, sessionName)
 }
 
 func printUsage() {
 	fmt.Println("Usage:")
-	fmt.Println("  q <prompt>                     : Show generated CLI command without executing")
-	fmt.Println("  q e <prompt> | q -e <prompt>   : Execute agentically with tool calling")
-	fmt.Println("  q (no arguments)               : Enter stateful interactive agent REPL")
+	fmt.Println("  q                              : Enter last active session (or default)")
+	fmt.Println("  q <session_name>               : Enter or create a specific session")
+	fmt.Println("  q ls                           : List all saved sessions")
+	fmt.Println("  q rm <session_name>            : Delete a session")
+	fmt.Println("  q mv <old_name> <new_name>     : Rename a session")
+	fmt.Println("  q cp <src_name> <dst_name>     : Copy a session")
 }
 
-func runInteractiveAgent() {
-	cfg, err := LoadConfig()
+func runInteractiveAgent(cfg *Config, sessionName string) {
+	cfg.LastSession = sessionName
+	_ = SaveConfig(cfg)
+
+	session, err := LoadSession(sessionName)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error loading configuration: %v\n", err)
+		PrintError(fmt.Sprintf("Failed to load session '%s': %v", sessionName, err))
 		os.Exit(1)
 	}
 
+	if session.PWD != "" {
+		if _, err := os.Stat(session.PWD); err == nil {
+			_ = os.Chdir(session.PWD)
+		}
+	}
+
 	sysInfo := GetSystemInfo()
+	if wd, err := os.Getwd(); err == nil {
+		sysInfo.PWD = wd
+		session.PWD = wd
+	}
 	ctx := context.Background()
 
-	PrintInfo("Welcome to q Interactive Agent Shell.")
+	PrintInfo(fmt.Sprintf("Entering session '%s'...", sessionName))
 	PrintInfo("Type 'exit' or 'quit' to close.")
 
-	messages := CreateInitialMessages(sysInfo, "Start session")
-	messages = messages[:1]
+	if len(session.Messages) == 0 {
+		initialMsgs := CreateInitialMessages(sysInfo, "Start session")
+		session.Messages = initialMsgs[:1]
+		_ = SaveSession(session)
+	}
 
 	reader := bufio.NewReader(os.Stdin)
 	for {
 		if wd, err := os.Getwd(); err == nil {
 			sysInfo.PWD = wd
+			session.PWD = wd
 		}
 		
 		dirPart := Color(filepath.Base(sysInfo.PWD), ansiCyan)
+		sessionPart := Color("("+sessionName+")", ansiMagenta)
 		promptPart := Color("⚡ q › ", ansiYellow)
-		fmt.Printf("\n📂 %s %s", dirPart, promptPart)
+		fmt.Printf("\n📂 %s %s %s", dirPart, sessionPart, promptPart)
+
 		input, err := reader.ReadString('\n')
 		if err != nil {
 			break
@@ -94,8 +139,11 @@ func runInteractiveAgent() {
 			break
 		}
 
-		messages = append(messages, ChatMessage{Role: "user", Content: input})
-		runAgentLoop(ctx, cfg, sysInfo, &messages, true)
+		session.Messages = append(session.Messages, ChatMessage{Role: "user", Content: input})
+		runAgentLoop(ctx, cfg, sysInfo, session)
+		
+		session.PWD = sysInfo.PWD
+		_ = SaveSession(session)
 	}
 }
 
@@ -109,18 +157,22 @@ type CommandArgs struct {
 	Command string `json:"command"`
 }
 
-func runAgentLoop(ctx context.Context, cfg *Config, sysInfo *SystemInfo, messages *[]ChatMessage, executeMode bool) {
+func runAgentLoop(ctx context.Context, cfg *Config, sysInfo *SystemInfo, session *Session) {
 	maxLoops := 10
 	for i := 0; i < maxLoops; i++ {
+		if err := CompressContextIfNeeded(ctx, cfg, &session.Messages); err != nil {
+			PrintWarning(fmt.Sprintf("Context compression warning: %v", err))
+		}
+
 		PrintAgentThinking()
-		msg, err := GenerateCommandMultiTurn(ctx, cfg, *messages)
+		msg, err := GenerateCommandMultiTurn(ctx, cfg, session.Messages)
 		ClearAgentThinking()
 		if err != nil {
 			PrintError(fmt.Sprintf("Error calling LLM: %v", err))
 			return
 		}
 
-		*messages = append(*messages, *msg)
+		session.Messages = append(session.Messages, *msg)
 
 		if len(msg.ToolCalls) > 0 {
 			for _, toolCall := range msg.ToolCalls {
@@ -132,18 +184,14 @@ func runAgentLoop(ctx context.Context, cfg *Config, sysInfo *SystemInfo, message
 					}
 
 					cmdStr := args.Command
-					if !executeMode {
-						fmt.Printf("Suggested command: %s\n", Color(cmdStr, ansiGreen))
-						return
-					}
-
 					fmt.Printf("\n⚙️  %s\n", Color("Executing: "+cmdStr, ansiCyan))
 					stdout, stderr, finalDir, runErr := executeCommand(sysInfo.Shell, cmdStr, sysInfo.PWD)
 
-					// Sync PWD if updated
 					if finalDir != "" {
 						sysInfo.PWD = finalDir
-						_ = os.Chdir(finalDir) // update Go runtime PWD too
+						session.PWD = finalDir
+						_ = os.Chdir(finalDir)
+						_ = SaveSession(session)
 					}
 
 					var errStr string
@@ -158,7 +206,7 @@ func runAgentLoop(ctx context.Context, cfg *Config, sysInfo *SystemInfo, message
 					}
 
 					resJSON, _ := json.Marshal(res)
-					*messages = append(*messages, ChatMessage{
+					session.Messages = append(session.Messages, ChatMessage{
 						Role:       "tool",
 						Name:       "run_shell_command",
 						ToolCallID: toolCall.ID,
@@ -180,7 +228,6 @@ func executeCommand(shell string, cmdStr string, currentDir string) ([]byte, []b
 	var execCmd *exec.Cmd
 	shellLower := strings.ToLower(shell)
 
-	// Chain marker commands to capture PWD after execution
 	var chainedCmd string
 	if runtime.GOOS == "windows" {
 		if shellLower == "powershell" || shellLower == "pwsh" {
@@ -213,7 +260,6 @@ func executeCommand(shell string, cmdStr string, currentDir string) ([]byte, []b
 
 	if idx != -1 {
 		userOutput = stdoutBytes[:idx]
-		// Trim the newline that usually precedes the marker
 		userOutput = bytes.TrimRight(userOutput, "\r\n")
 
 		markerLen := len(marker)
@@ -223,10 +269,9 @@ func executeCommand(shell string, cmdStr string, currentDir string) ([]byte, []b
 		userOutput = stdoutBytes
 	}
 
-	// Print clean user output to stdout
 	if len(userOutput) > 0 {
 		_, _ = os.Stdout.Write(userOutput)
-		fmt.Println() // Ensure trailing newline
+		fmt.Println()
 	}
 
 	return userOutput, stderrBuf.Bytes(), finalDir, err

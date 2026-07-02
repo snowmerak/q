@@ -174,3 +174,61 @@ func cleanCommand(cmd string) string {
 	}
 	return cmd
 }
+
+func EstimateTokens(messages []ChatMessage) int {
+	totalChars := 0
+	for _, m := range messages {
+		totalChars += len(m.Content)
+		for _, tc := range m.ToolCalls {
+			totalChars += len(tc.Function.Name) + len(tc.Function.Arguments)
+		}
+	}
+	return totalChars / 3
+}
+
+func CompressContextIfNeeded(ctx context.Context, cfg *Config, messages *[]ChatMessage) error {
+	if len(*messages) <= 2 {
+		return nil
+	}
+
+	estTokens := EstimateTokens(*messages)
+	limit := int(float64(cfg.MaxContextTokens) * 0.85)
+
+	if estTokens <= limit {
+		return nil
+	}
+
+	PrintInfo("Context limit (85%) reached. Compressing history...")
+
+	summaryReq := make([]ChatMessage, len(*messages))
+	copy(summaryReq, *messages)
+	
+	promptMsg := ChatMessage{
+		Role:    "user",
+		Content: "Please summarize the core results, user environment parameters (like PWD), and current state of the conversation so far in 2-3 concise sentences. Do not lose key context, variables, or the PWD path.",
+	}
+	summaryReq = append(summaryReq, promptMsg)
+
+	summaryResp, err := GenerateCommandMultiTurn(ctx, cfg, summaryReq)
+	if err != nil {
+		return fmt.Errorf("failed to generate summary for compression: %w", err)
+	}
+
+	if summaryResp.Content == "" {
+		return fmt.Errorf("empty summary returned from LLM")
+	}
+
+	systemPrompt := (*messages)[0]
+	
+	newMessages := []ChatMessage{
+		systemPrompt,
+		{
+			Role:    "system",
+			Content: fmt.Sprintf("Summary of previous conversation: %s", summaryResp.Content),
+		},
+	}
+	
+	*messages = newMessages
+	PrintSuccess("Context compressed successfully.")
+	return nil
+}

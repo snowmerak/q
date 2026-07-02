@@ -10,13 +10,16 @@ import (
 )
 
 type Config struct {
-	APIEndpoint string `json:"api_endpoint"`
-	Model       string `json:"model"`
+	APIEndpoint      string `json:"api_endpoint"`
+	Model            string `json:"model"`
+	MaxContextTokens int    `json:"max_context_tokens"`
+	LastSession      string `json:"last_session"`
 }
 
 const (
-	defaultEndpoint = "http://localhost:1234/v1"
-	defaultModel    = "lfm2.5-230m"
+	defaultEndpoint      = "http://localhost:1234/v1"
+	defaultModel         = "lfm2.5-230m"
+	defaultContextTokens = 4096
 )
 
 func getConfigFilePath() (string, error) {
@@ -51,7 +54,31 @@ func LoadConfig() (*Config, error) {
 		return nil, err
 	}
 
+	changed := false
+	if cfg.MaxContextTokens == 0 {
+		cfg.MaxContextTokens = defaultContextTokens
+		changed = true
+	}
+
+	if changed {
+		_ = SaveConfig(&cfg)
+	}
+
 	return &cfg, nil
+}
+
+func SaveConfig(cfg *Config) error {
+	filePath, err := getConfigFilePath()
+	if err != nil {
+		return err
+	}
+
+	data, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		return err
+	}
+
+	return os.WriteFile(filePath, data, 0644)
 }
 
 func createConfigPrompt(filePath string) (*Config, error) {
@@ -72,8 +99,10 @@ func createConfigPrompt(filePath string) (*Config, error) {
 	}
 
 	cfg := &Config{
-		APIEndpoint: endpointInput,
-		Model:       modelInput,
+		APIEndpoint:      endpointInput,
+		Model:            modelInput,
+		MaxContextTokens: defaultContextTokens,
+		LastSession:      "",
 	}
 
 	data, err := json.MarshalIndent(cfg, "", "  ")
