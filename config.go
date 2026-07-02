@@ -11,16 +11,18 @@ import (
 )
 
 type Config struct {
-	APIEndpoint      string `json:"api_endpoint"`
-	Model            string `json:"model"`
-	MaxContextTokens int    `json:"max_context_tokens"`
-	LastSession      string `json:"last_session"`
+	APIEndpoint       string `json:"api_endpoint"`
+	Model             string `json:"model"`
+	MaxContextTokens  int    `json:"max_context_tokens"`
+	LastSession       string `json:"last_session"`
+	APITimeoutSeconds int    `json:"api_timeout_seconds"`
 }
 
 const (
 	defaultEndpoint      = "http://localhost:1234/v1"
 	defaultModel         = "lfm2.5-230m"
 	defaultContextTokens = 4096
+	defaultAPITimeout    = 300 // 5 minutes
 )
 
 func getConfigFilePath() (string, error) {
@@ -58,6 +60,10 @@ func LoadConfig() (*Config, error) {
 	changed := false
 	if cfg.MaxContextTokens == 0 {
 		cfg.MaxContextTokens = defaultContextTokens
+		changed = true
+	}
+	if cfg.APITimeoutSeconds == 0 {
+		cfg.APITimeoutSeconds = defaultAPITimeout
 		changed = true
 	}
 
@@ -100,10 +106,11 @@ func createConfigPrompt(filePath string) (*Config, error) {
 	}
 
 	cfg := &Config{
-		APIEndpoint:      endpointInput,
-		Model:            modelInput,
-		MaxContextTokens: defaultContextTokens,
-		LastSession:      "",
+		APIEndpoint:       endpointInput,
+		Model:             modelInput,
+		MaxContextTokens:  defaultContextTokens,
+		LastSession:       "",
+		APITimeoutSeconds: defaultAPITimeout,
 	}
 
 	data, err := json.MarshalIndent(cfg, "", "  ")
@@ -128,6 +135,8 @@ func (c *Config) GetConfigValue(key string) (string, error) {
 		return strconv.Itoa(c.MaxContextTokens), nil
 	case "last_session":
 		return c.LastSession, nil
+	case "api_timeout_seconds", "timeout":
+		return strconv.Itoa(c.APITimeoutSeconds), nil
 	default:
 		return "", fmt.Errorf("unknown config key '%s'", key)
 	}
@@ -150,6 +159,13 @@ func (c *Config) SetConfigValue(key, val string) error {
 		return nil
 	case "last_session":
 		c.LastSession = val
+		return nil
+	case "api_timeout_seconds", "timeout":
+		v, err := strconv.Atoi(val)
+		if err != nil {
+			return fmt.Errorf("invalid integer value for %s: %w", key, err)
+		}
+		c.APITimeoutSeconds = v
 		return nil
 	default:
 		return fmt.Errorf("unknown config key '%s'", key)

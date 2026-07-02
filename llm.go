@@ -129,7 +129,7 @@ func GenerateCommandMultiTurn(ctx context.Context, cfg *Config, messages []ChatM
 	}
 	req.Header.Set("Content-Type", "application/json")
 
-	client := &http.Client{Timeout: 60 * time.Second}
+	client := &http.Client{Timeout: time.Duration(cfg.APITimeoutSeconds) * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, err
