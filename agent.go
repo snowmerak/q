@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strings"
 )
 
 type AgentTool struct {
@@ -354,6 +355,69 @@ func (a *Agent) registerBuiltinTools() {
 				}
 			}
 			resJSON, _ := json.Marshal(res)
+			return string(resJSON), nil
+		},
+	}
+
+	// 6. search_skills
+	searchSkillsParams := map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"query": map[string]any{
+				"type":        "string",
+				"description": "The search term or tag to find matching skills.",
+			},
+		},
+		"required": []string{"query"},
+	}
+	a.Tools["search_skills"] = AgentTool{
+		Name:        "search_skills",
+		Description: "Search for available agent skills / SOP guidelines by keywords or tags.",
+		Parameters:  searchSkillsParams,
+		Handler: func(argsJSON string) (string, error) {
+			var args struct {
+				Query string `json:"query"`
+			}
+			if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
+				return "", err
+			}
+
+			skills := SearchSkills(args.Query)
+			resJSON, _ := json.Marshal(skills)
+			return string(resJSON), nil
+		},
+	}
+
+	// 7. get_skill
+	getSkillParams := map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"name": map[string]any{
+				"type":        "string",
+				"description": "The exact name of the skill to retrieve (case-insensitive).",
+			},
+		},
+		"required": []string{"name"},
+	}
+	a.Tools["get_skill"] = AgentTool{
+		Name:        "get_skill",
+		Description: "Retrieve the full prompt and guidelines of a specific skill by its name.",
+		Parameters:  getSkillParams,
+		Handler: func(argsJSON string) (string, error) {
+			var args struct {
+				Name string `json:"name"`
+			}
+			if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
+				return "", err
+			}
+
+			nameLower := strings.ToLower(args.Name)
+			skill, ok := GlobalLoadedSkills[nameLower]
+			if !ok {
+				return "", fmt.Errorf("skill '%s' not found", args.Name)
+			}
+
+			resJSON, _ := json.Marshal(skill)
 			return string(resJSON), nil
 		},
 	}

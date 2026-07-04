@@ -159,11 +159,15 @@ func printUsage() {
 	fmt.Println("  q mcp ls                       : List all configured MCP servers and status")
 	fmt.Println("  q mcp add <name> [-e K=V]... <cmd> [args...] : Add a new MCP server configuration")
 	fmt.Println("  q mcp rm <name>                : Remove an MCP server configuration")
+	fmt.Println("Interactive Session Commands:")
+	fmt.Println("  /skills                        : List all loaded skills")
+	fmt.Println("  /<skill_name> [args]           : Run a specific skill workflow")
 }
 
 func runInteractiveAgent(cfg *Config, sessionName string) {
 	InitMCPManager(cfg)
 	defer StopMCPManager()
+	_ = LoadSkills()
 
 	cfg.LastSession = sessionName
 	_ = SaveConfig(cfg)
@@ -219,6 +223,54 @@ func runInteractiveAgent(cfg *Config, sessionName string) {
 		if input == "exit" || input == "quit" {
 			break
 		}
+
+		if strings.HasPrefix(input, "/") {
+			cmdParts := strings.Fields(input)
+			slashCmd := cmdParts[0]
+
+			if slashCmd == "/skills" {
+				if len(GlobalLoadedSkills) == 0 {
+					PrintWarning("No skills loaded.")
+				} else {
+					fmt.Println(Bold("\nAvailable Skills:"))
+					for _, skill := range GlobalLoadedSkills {
+						fmt.Printf("  %s: %s\n", Color(skill.Name, ansiCyan), skill.Description)
+						if len(skill.Tags) > 0 {
+							fmt.Printf("    Tags: %s\n", Dim(strings.Join(skill.Tags, ", ")))
+						}
+					}
+					fmt.Println()
+				}
+				continue
+			}
+
+			skillName := strings.TrimPrefix(slashCmd, "/")
+			if skill, ok := GlobalLoadedSkills[strings.ToLower(skillName)]; ok {
+				extraPrompt := ""
+				if len(cmdParts) > 1 {
+					extraPrompt = strings.Join(cmdParts[1:], " ")
+				}
+
+				combinedPrompt := skill.Prompt
+				if extraPrompt != "" {
+					combinedPrompt = fmt.Sprintf("%s\n\nAdditional instructions:\n%s", combinedPrompt, extraPrompt)
+				}
+
+				PrintInfo(fmt.Sprintf("Running skill '%s'...", skill.Name))
+
+				session.Messages = append(session.Messages, ChatMessage{Role: "user", Content: combinedPrompt})
+				agent := NewAgent(cfg, sysInfo, session)
+				agent.Run(ctx)
+
+				session.PWD = sysInfo.PWD
+				_ = SaveSession(session)
+				continue
+			}
+
+			PrintError(fmt.Sprintf("Unknown command: %s. Type /skills to see available skills.", slashCmd))
+			continue
+		}
+
 		if input == "clear" || input == "cls" {
 			if len(session.Messages) > 1 {
 				session.Messages = session.Messages[:1]
