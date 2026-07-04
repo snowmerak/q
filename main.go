@@ -80,6 +80,23 @@ func main() {
 		}
 
 		key := os.Args[2]
+		if strings.ToLower(key) == "edit" && len(os.Args) < 5 {
+			filePath, err := getConfigFilePath()
+			if err != nil {
+				PrintError(fmt.Sprintf("Failed to get config path: %v", err))
+				return
+			}
+			PrintInfo(fmt.Sprintf("Opening config file at: %s", filePath))
+			editorOverride := ""
+			if len(os.Args) == 4 {
+				editorOverride = os.Args[3]
+			}
+			if err := openEditor(filePath, editorOverride); err != nil {
+				PrintError(fmt.Sprintf("Failed to open editor: %v", err))
+			}
+			return
+		}
+
 		if len(os.Args) < 4 {
 			val, err := cfg.GetConfigValue(key)
 			if err != nil {
@@ -116,6 +133,7 @@ func printUsage() {
 	fmt.Println("  q mv <old_name> <new_name>     : Rename a session")
 	fmt.Println("  q cp <src_name> <dst_name>     : Copy a session")
 	fmt.Println("  q config                       : Print all configurations in JSON")
+	fmt.Println("  q config edit [editor]         : Open the configuration file in specified or text editor")
 	fmt.Println("  q config <key>                 : Get a configuration value")
 	fmt.Println("  q config <key> <value>         : Set a configuration value")
 }
@@ -460,4 +478,24 @@ func resolvePath(baseDir, targetPath string) string {
 		return targetPath
 	}
 	return filepath.Join(baseDir, targetPath)
+}
+
+func openEditor(filePath string, editorOverride string) error {
+	editor := editorOverride
+	if editor == "" {
+		editor = os.Getenv("EDITOR")
+	}
+	if editor == "" {
+		if runtime.GOOS == "windows" {
+			editor = "notepad"
+		} else {
+			editor = "nano"
+		}
+	}
+
+	cmd := exec.Command(editor, filePath)
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	return cmd.Run()
 }
