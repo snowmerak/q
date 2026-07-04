@@ -229,7 +229,11 @@ func runAgentLoop(ctx context.Context, cfg *Config, sysInfo *SystemInfo, session
 
 		if len(msg.ToolCalls) > 0 {
 			for _, toolCall := range msg.ToolCalls {
-				if toolCall.Function.Name == "run_shell_command" {
+				name := toolCall.Function.Name
+				var resJSON []byte
+
+				switch name {
+				case "run_shell_command":
 					var args CommandArgs
 					if err := json.Unmarshal([]byte(toolCall.Function.Arguments), &args); err != nil {
 						PrintError(fmt.Sprintf("Failed to parse tool arguments: %v", err))
@@ -257,15 +261,115 @@ func runAgentLoop(ctx context.Context, cfg *Config, sysInfo *SystemInfo, session
 						Stderr: string(stderr),
 						Error:  errStr,
 					}
+					resJSON, _ = json.Marshal(res)
 
-					resJSON, _ := json.Marshal(res)
-					session.Messages = append(session.Messages, ChatMessage{
-						Role:       "tool",
-						Name:       "run_shell_command",
-						ToolCallID: toolCall.ID,
-						Content:    string(resJSON),
-					})
+				case "read_file":
+					var args struct {
+						FilePath  string `json:"file_path"`
+						StartLine int    `json:"start_line"`
+						EndLine   int    `json:"end_line"`
+						MaxLines  int    `json:"max_lines"`
+					}
+					if err := json.Unmarshal([]byte(toolCall.Function.Arguments), &args); err != nil {
+						resJSON, _ = json.Marshal(map[string]any{"error": err.Error()})
+					} else {
+						resolvedPath := resolvePath(sysInfo.PWD, args.FilePath)
+						maxLines := args.MaxLines
+						if maxLines <= 0 {
+							maxLines = 200
+						}
+						content, total, err := ReadFileTool(resolvedPath, args.StartLine, args.EndLine, maxLines)
+						var res map[string]any
+						if err != nil {
+							res = map[string]any{"error": err.Error()}
+						} else {
+							res = map[string]any{
+								"path":        resolvedPath,
+								"total_lines": total,
+								"content":     content,
+							}
+						}
+						resJSON, _ = json.Marshal(res)
+					}
+
+				case "edit_file":
+					var args struct {
+						FilePath string `json:"file_path"`
+						Pos      string `json:"pos"`
+						End      string `json:"end"`
+						Data     string `json:"data"`
+					}
+					if err := json.Unmarshal([]byte(toolCall.Function.Arguments), &args); err != nil {
+						resJSON, _ = json.Marshal(map[string]any{"error": err.Error()})
+					} else {
+						resolvedPath := resolvePath(sysInfo.PWD, args.FilePath)
+						diffPreview, err := EditFileTool(resolvedPath, args.Pos, args.End, args.Data)
+						var res map[string]any
+						if err != nil {
+							res = map[string]any{"error": err.Error()}
+						} else {
+							res = map[string]any{
+								"success":      true,
+								"message":      fmt.Sprintf("Successfully edited file %s", args.FilePath),
+								"diff_preview": diffPreview,
+							}
+						}
+						resJSON, _ = json.Marshal(res)
+					}
+
+				case "insert_file":
+					var args struct {
+						FilePath string `json:"file_path"`
+						Pos      string `json:"pos"`
+						Content  string `json:"content"`
+					}
+					if err := json.Unmarshal([]byte(toolCall.Function.Arguments), &args); err != nil {
+						resJSON, _ = json.Marshal(map[string]any{"error": err.Error()})
+					} else {
+						resolvedPath := resolvePath(sysInfo.PWD, args.FilePath)
+						err := InsertFileTool(resolvedPath, args.Pos, args.Content)
+						var res map[string]any
+						if err != nil {
+							res = map[string]any{"error": err.Error()}
+						} else {
+							res = map[string]any{
+								"success": true,
+								"message": fmt.Sprintf("Successfully inserted content into %s", args.FilePath),
+							}
+						}
+						resJSON, _ = json.Marshal(res)
+					}
+
+				case "erase_file":
+					var args struct {
+						FilePath string `json:"file_path"`
+						Pos      string `json:"pos"`
+						End      string `json:"end"`
+					}
+					if err := json.Unmarshal([]byte(toolCall.Function.Arguments), &args); err != nil {
+						resJSON, _ = json.Marshal(map[string]any{"error": err.Error()})
+					} else {
+						resolvedPath := resolvePath(sysInfo.PWD, args.FilePath)
+						err := EraseFileTool(resolvedPath, args.Pos, args.End)
+						var res map[string]any
+						if err != nil {
+							res = map[string]any{"error": err.Error()}
+						} else {
+							res = map[string]any{
+								"success": true,
+								"message": fmt.Sprintf("Successfully erased range in %s", args.FilePath),
+							}
+						}
+						resJSON, _ = json.Marshal(res)
+					}
 				}
+
+				session.Messages = append(session.Messages, ChatMessage{
+					Role:       "tool",
+					Name:       name,
+					ToolCallID: toolCall.ID,
+					Content:    string(resJSON),
+				})
 			}
 			continue
 		}
@@ -328,4 +432,11 @@ func executeCommand(shell string, cmdStr string, currentDir string) ([]byte, []b
 	}
 
 	return userOutput, stderrBuf.Bytes(), finalDir, err
+}
+
+func resolvePath(baseDir, targetPath string) string {
+	if filepath.IsAbs(targetPath) {
+		return targetPath
+	}
+	return filepath.Join(baseDir, targetPath)
 }
