@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"text/tabwriter"
 )
 
 func main() {
@@ -32,6 +33,25 @@ func main() {
 
 	cmd := strings.ToLower(os.Args[1])
 	switch cmd {
+	case "mcp":
+		if len(os.Args) < 3 {
+			printMcpUsage()
+			return
+		}
+
+		mcpCmd := strings.ToLower(os.Args[2])
+		switch mcpCmd {
+		case "ls", "list":
+			handleMcpList(cfg)
+		case "add":
+			handleMcpAdd(cfg)
+		case "rm", "remove":
+			handleMcpRm(cfg)
+		default:
+			printMcpUsage()
+		}
+		return
+
 	case "ls":
 		if err := ListSessions(); err != nil {
 			PrintError(fmt.Sprintf("Failed to list sessions: %v", err))
@@ -136,6 +156,9 @@ func printUsage() {
 	fmt.Println("  q config edit [editor]         : Open the configuration file in specified or text editor")
 	fmt.Println("  q config <key>                 : Get a configuration value")
 	fmt.Println("  q config <key> <value>         : Set a configuration value")
+	fmt.Println("  q mcp ls                       : List all configured MCP servers and status")
+	fmt.Println("  q mcp add <name> [-e K=V]... <cmd> [args...] : Add a new MCP server configuration")
+	fmt.Println("  q mcp rm <name>                : Remove an MCP server configuration")
 }
 
 func runInteractiveAgent(cfg *Config, sessionName string) {
@@ -214,7 +237,8 @@ func runInteractiveAgent(cfg *Config, sessionName string) {
 		}
 
 		session.Messages = append(session.Messages, ChatMessage{Role: "user", Content: input})
-		runAgentLoop(ctx, cfg, sysInfo, session)
+		agent := NewAgent(cfg, sysInfo, session)
+		agent.Run(ctx)
 		
 		session.PWD = sysInfo.PWD
 		_ = SaveSession(session)
@@ -229,195 +253,6 @@ type ToolResult struct {
 
 type CommandArgs struct {
 	Command string `json:"command"`
-}
-
-func runAgentLoop(ctx context.Context, cfg *Config, sysInfo *SystemInfo, session *Session) {
-	maxLoops := 10
-	for i := 0; i < maxLoops; i++ {
-		if err := CompressContext(ctx, cfg, &session.Messages, false); err != nil {
-			PrintWarning(fmt.Sprintf("Context compression warning: %v", err))
-		}
-
-		PrintAgentThinking()
-		msg, err := GenerateCommandMultiTurn(ctx, cfg, session.Messages)
-		ClearAgentThinking()
-		if err != nil {
-			PrintError(fmt.Sprintf("Error calling LLM: %v", err))
-			return
-		}
-
-		session.Messages = append(session.Messages, *msg)
-
-		if len(msg.ToolCalls) > 0 {
-			for _, toolCall := range msg.ToolCalls {
-				name := toolCall.Function.Name
-				var resJSON []byte
-
-				switch name {
-				case "run_shell_command":
-					var args CommandArgs
-					if err := json.Unmarshal([]byte(toolCall.Function.Arguments), &args); err != nil {
-						PrintError(fmt.Sprintf("Failed to parse tool arguments: %v", err))
-						continue
-					}
-
-					cmdStr := args.Command
-					fmt.Printf("\n⚙️  %s\n", Color("Executing: "+cmdStr, ansiCyan))
-					stdout, stderr, finalDir, runErr := executeCommand(sysInfo.Shell, cmdStr, sysInfo.PWD)
-
-					if finalDir != "" {
-						sysInfo.PWD = finalDir
-						session.PWD = finalDir
-						_ = os.Chdir(finalDir)
-						_ = SaveSession(session)
-					}
-
-					var errStr string
-					if runErr != nil {
-						errStr = runErr.Error()
-					}
-
-					res := ToolResult{
-						Stdout: string(stdout),
-						Stderr: string(stderr),
-						Error:  errStr,
-					}
-					resJSON, _ = json.Marshal(res)
-
-				case "read_file":
-					var args struct {
-						FilePath  string `json:"file_path"`
-						StartLine int    `json:"start_line"`
-						EndLine   int    `json:"end_line"`
-						MaxLines  int    `json:"max_lines"`
-					}
-					if err := json.Unmarshal([]byte(toolCall.Function.Arguments), &args); err != nil {
-						resJSON, _ = json.Marshal(map[string]any{"error": err.Error()})
-					} else {
-						resolvedPath := resolvePath(sysInfo.PWD, args.FilePath)
-						maxLines := args.MaxLines
-						if maxLines <= 0 {
-							maxLines = 200
-						}
-						content, total, err := ReadFileTool(resolvedPath, args.StartLine, args.EndLine, maxLines)
-						var res map[string]any
-						if err != nil {
-							res = map[string]any{"error": err.Error()}
-						} else {
-							res = map[string]any{
-								"path":        resolvedPath,
-								"total_lines": total,
-								"content":     content,
-							}
-						}
-						resJSON, _ = json.Marshal(res)
-					}
-
-				case "edit_file":
-					var args struct {
-						FilePath string `json:"file_path"`
-						Pos      string `json:"pos"`
-						End      string `json:"end"`
-						Data     string `json:"data"`
-					}
-					if err := json.Unmarshal([]byte(toolCall.Function.Arguments), &args); err != nil {
-						resJSON, _ = json.Marshal(map[string]any{"error": err.Error()})
-					} else {
-						resolvedPath := resolvePath(sysInfo.PWD, args.FilePath)
-						diffPreview, err := EditFileTool(resolvedPath, args.Pos, args.End, args.Data)
-						var res map[string]any
-						if err != nil {
-							res = map[string]any{"error": err.Error()}
-						} else {
-							res = map[string]any{
-								"success":      true,
-								"message":      fmt.Sprintf("Successfully edited file %s", args.FilePath),
-								"diff_preview": diffPreview,
-							}
-						}
-						resJSON, _ = json.Marshal(res)
-					}
-
-				case "insert_file":
-					var args struct {
-						FilePath string `json:"file_path"`
-						Pos      string `json:"pos"`
-						Content  string `json:"content"`
-					}
-					if err := json.Unmarshal([]byte(toolCall.Function.Arguments), &args); err != nil {
-						resJSON, _ = json.Marshal(map[string]any{"error": err.Error()})
-					} else {
-						resolvedPath := resolvePath(sysInfo.PWD, args.FilePath)
-						err := InsertFileTool(resolvedPath, args.Pos, args.Content)
-						var res map[string]any
-						if err != nil {
-							res = map[string]any{"error": err.Error()}
-						} else {
-							res = map[string]any{
-								"success": true,
-								"message": fmt.Sprintf("Successfully inserted content into %s", args.FilePath),
-							}
-						}
-						resJSON, _ = json.Marshal(res)
-					}
-
-				case "erase_file":
-					var args struct {
-						FilePath string `json:"file_path"`
-						Pos      string `json:"pos"`
-						End      string `json:"end"`
-					}
-					if err := json.Unmarshal([]byte(toolCall.Function.Arguments), &args); err != nil {
-						resJSON, _ = json.Marshal(map[string]any{"error": err.Error()})
-					} else {
-						resolvedPath := resolvePath(sysInfo.PWD, args.FilePath)
-						err := EraseFileTool(resolvedPath, args.Pos, args.End)
-						var res map[string]any
-						if err != nil {
-							res = map[string]any{"error": err.Error()}
-						} else {
-							res = map[string]any{
-								"success": true,
-								"message": fmt.Sprintf("Successfully erased range in %s", args.FilePath),
-							}
-						}
-						resJSON, _ = json.Marshal(res)
-					}
-
-				default:
-					var args any
-					if err := json.Unmarshal([]byte(toolCall.Function.Arguments), &args); err != nil {
-						resJSON, _ = json.Marshal(map[string]any{"error": err.Error()})
-					} else {
-						output, err := CallMCPTool(name, args)
-						var res map[string]any
-						if err != nil {
-							res = map[string]any{"error": err.Error(), "output": output}
-						} else {
-							res = map[string]any{
-								"success": true,
-								"output":  output,
-							}
-						}
-						resJSON, _ = json.Marshal(res)
-					}
-				}
-
-				session.Messages = append(session.Messages, ChatMessage{
-					Role:       "tool",
-					Name:       name,
-					ToolCallID: toolCall.ID,
-					Content:    string(resJSON),
-				})
-			}
-			continue
-		}
-
-		if msg.Content != "" {
-			fmt.Println(msg.Content)
-		}
-		break
-	}
 }
 
 func executeCommand(shell string, cmdStr string, currentDir string) ([]byte, []byte, string, error) {
@@ -498,4 +333,131 @@ func openEditor(filePath string, editorOverride string) error {
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	return cmd.Run()
+}
+
+func printMcpUsage() {
+	fmt.Println("Usage:")
+	fmt.Println("  q mcp ls                       : List all configured MCP servers and their status")
+	fmt.Println("  q mcp add <name> [-e K=V]... <cmd> [args...] : Add a new MCP server configuration")
+	fmt.Println("  q mcp rm <name>                : Remove an MCP server configuration")
+}
+
+func handleMcpList(cfg *Config) {
+	if len(cfg.MCPServers) == 0 {
+		PrintWarning("No MCP servers configured.")
+		return
+	}
+
+	w := tabwriter.NewWriter(os.Stdout, 0, 0, 3, ' ', 0)
+	fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", Bold("SERVER NAME"), Bold("COMMAND"), Bold("STATUS"), Bold("TOOLS COUNT"), Bold("TOOLS"))
+	fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", "-----------", "-------", "------", "-----------", "-----")
+
+	for name, mcpCfg := range cfg.MCPServers {
+		cmdStr := mcpCfg.Command + " " + strings.Join(mcpCfg.Args, " ")
+		client := NewMCPClient(name, mcpCfg)
+
+		status := Color("Failed", ansiRed)
+		toolsStr := "-"
+		toolsCount := 0
+
+		if err := client.Start(); err == nil {
+			status = Color("Running", ansiGreen)
+			tools, err := client.ListTools()
+			if err == nil {
+				toolsCount = len(tools)
+				names := make([]string, len(tools))
+				for i, t := range tools {
+					names[i] = t.Name
+				}
+				toolsStr = strings.Join(names, ", ")
+			}
+			_ = client.Stop()
+		}
+
+		fmt.Fprintf(w, "%s\t%s\t%s\t%d\t%s\n", Color(name, ansiCyan), Dim(cmdStr), status, toolsCount, toolsStr)
+	}
+	_ = w.Flush()
+}
+
+func handleMcpAdd(cfg *Config) {
+	if len(os.Args) < 5 {
+		PrintError("Missing arguments. Usage: q mcp add <name> [-e KEY=VAL]... <command> [args...]")
+		return
+	}
+
+	name := os.Args[3]
+	env := make(map[string]string)
+
+	idx := 4
+	for idx < len(os.Args) {
+		arg := os.Args[idx]
+		if arg == "-e" || arg == "--env" {
+			if idx+1 >= len(os.Args) {
+				PrintError("Missing value for environment variable flag.")
+				return
+			}
+			val := os.Args[idx+1]
+			parts := strings.SplitN(val, "=", 2)
+			if len(parts) != 2 {
+				PrintError(fmt.Sprintf("Invalid environment variable format: %s. Expected KEY=VAL", val))
+				return
+			}
+			env[parts[0]] = parts[1]
+			idx += 2
+		} else {
+			break
+		}
+	}
+
+	if idx >= len(os.Args) {
+		PrintError("Missing command. Usage: q mcp add <name> [-e KEY=VAL]... <command> [args...]")
+		return
+	}
+
+	command := os.Args[idx]
+	args := os.Args[idx+1:]
+
+	if cfg.MCPServers == nil {
+		cfg.MCPServers = make(map[string]MCPServerConfig)
+	}
+
+	cfg.MCPServers[name] = MCPServerConfig{
+		Command: command,
+		Args:    args,
+		Env:     env,
+	}
+
+	if err := SaveConfig(cfg); err != nil {
+		PrintError(fmt.Sprintf("Failed to save config: %v", err))
+		return
+	}
+
+	PrintSuccess(fmt.Sprintf("MCP server '%s' added successfully.", name))
+}
+
+func handleMcpRm(cfg *Config) {
+	if len(os.Args) < 4 {
+		PrintError("Missing server name. Usage: q mcp rm <name>")
+		return
+	}
+
+	name := os.Args[3]
+	if cfg.MCPServers == nil {
+		PrintError(fmt.Sprintf("MCP server '%s' does not exist", name))
+		return
+	}
+
+	if _, ok := cfg.MCPServers[name]; !ok {
+		PrintError(fmt.Sprintf("MCP server '%s' does not exist", name))
+		return
+	}
+
+	delete(cfg.MCPServers, name)
+
+	if err := SaveConfig(cfg); err != nil {
+		PrintError(fmt.Sprintf("Failed to save config: %v", err))
+		return
+	}
+
+	PrintSuccess(fmt.Sprintf("MCP server '%s' removed successfully.", name))
 }

@@ -57,151 +57,9 @@ type CallFunctionDetail struct {
 	Arguments string `json:"arguments"`
 }
 
-func GetToolsSpec() []Tool {
-	runShellParams := map[string]any{
-		"type": "object",
-		"properties": map[string]any{
-			"command": map[string]any{
-				"type":        "string",
-				"description": "The exact CLI shell command to run on the user's terminal.",
-			},
-		},
-		"required": []string{"command"},
-	}
-
-	readFileParams := map[string]any{
-		"type": "object",
-		"properties": map[string]any{
-			"file_path": map[string]any{
-				"type":        "string",
-				"description": "The path to the file to read.",
-			},
-			"start_line": map[string]any{
-				"type":        "integer",
-				"description": "The 1-based line number to start reading from (inclusive). Omit for line 1.",
-			},
-			"end_line": map[string]any{
-				"type":        "integer",
-				"description": "The 1-based line number to stop reading at (inclusive). Omit for end of file.",
-			},
-			"max_lines": map[string]any{
-				"type":        "integer",
-				"description": "Maximum number of lines to return. Defaults to 200.",
-			},
-		},
-		"required": []string{"file_path"},
-	}
-
-	editFileParams := map[string]any{
-		"type": "object",
-		"properties": map[string]any{
-			"file_path": map[string]any{
-				"type":        "string",
-				"description": "Path to the file to modify.",
-			},
-			"pos": map[string]any{
-				"type":        "string",
-				"description": "Anchor of the FIRST line to replace (e.g. \"10#VR\") from read_file output.",
-			},
-			"end": map[string]any{
-				"type":        "string",
-				"description": "Anchor of the LAST line to replace (inclusive). Omit or set equal to pos for single-line replacement.",
-			},
-			"data": map[string]any{
-				"type":        "string",
-				"description": "Replacement text. Plain content only — NEVER include LINE#HASH prefixes.",
-			},
-		},
-		"required": []string{"file_path", "pos", "data"},
-	}
-
-	insertFileParams := map[string]any{
-		"type": "object",
-		"properties": map[string]any{
-			"file_path": map[string]any{
-				"type":        "string",
-				"description": "The path to the file to modify.",
-			},
-			"pos": map[string]any{
-				"type":        "string",
-				"description": "The anchor of the line AFTER which the new content is inserted (e.g. \"10#VR\") from read_file output. To insert at the very beginning of the file use \"0\".",
-			},
-			"content": map[string]any{
-				"type":        "string",
-				"description": "The text to insert. Plain string — no anchor prefixes.",
-			},
-		},
-		"required": []string{"file_path", "pos", "content"},
-	}
-
-	eraseFileParams := map[string]any{
-		"type": "object",
-		"properties": map[string]any{
-			"file_path": map[string]any{
-				"type":        "string",
-				"description": "The path to the file to modify.",
-			},
-			"pos": map[string]any{
-				"type":        "string",
-				"description": "The anchor of the first line to delete (e.g. \"10#VR\") from read_file output.",
-			},
-			"end": map[string]any{
-				"type":        "string",
-				"description": "The anchor of the last line to delete (inclusive) from read_file output.",
-			},
-		},
-		"required": []string{"file_path", "pos", "end"},
-	}
-
-	builtins := []Tool{
-		{
-			Type: "function",
-			Function: ToolFunction{
-				Name:        "run_shell_command",
-				Description: "Execute a CLI shell command on the user's local terminal and return the output.",
-				Parameters:  runShellParams,
-			},
-		},
-		{
-			Type: "function",
-			Function: ToolFunction{
-				Name:        "read_file",
-				Description: "Read a file's contents with optional line range. Returns lines prefixed with 'LINE#HASH:' anchors.",
-				Parameters:  readFileParams,
-			},
-		},
-		{
-			Type: "function",
-			Function: ToolFunction{
-				Name:        "edit_file",
-				Description: "Replace a range of lines in a file atomically. Validates both anchors before writing.",
-				Parameters:  editFileParams,
-			},
-		},
-		{
-			Type: "function",
-			Function: ToolFunction{
-				Name:        "insert_file",
-				Description: "Insert one or more new lines into a file AFTER the line indicated by pos.",
-				Parameters:  insertFileParams,
-			},
-		},
-		{
-			Type: "function",
-			Function: ToolFunction{
-				Name:        "erase_file",
-				Description: "Delete a range of lines from a file (inclusive).",
-				Parameters:  eraseFileParams,
-			},
-		},
-	}
-
-	return append(builtins, GetMCPTools()...)
-}
-
-func GenerateCommand(ctx context.Context, cfg *Config, info *SystemInfo, prompt string) (*ChatMessage, error) {
+func GenerateCommand(ctx context.Context, cfg *Config, info *SystemInfo, prompt string, tools []Tool) (*ChatMessage, error) {
 	messages := CreateInitialMessages(info, prompt)
-	return GenerateCommandMultiTurn(ctx, cfg, messages)
+	return GenerateCommandMultiTurn(ctx, cfg, messages, tools)
 }
 
 func CreateInitialMessages(info *SystemInfo, prompt string) []ChatMessage {
@@ -226,12 +84,12 @@ func CreateInitialMessages(info *SystemInfo, prompt string) []ChatMessage {
 	}
 }
 
-func GenerateCommandMultiTurn(ctx context.Context, cfg *Config, messages []ChatMessage) (*ChatMessage, error) {
+func GenerateCommandMultiTurn(ctx context.Context, cfg *Config, messages []ChatMessage, tools []Tool) (*ChatMessage, error) {
 	reqBody := ChatRequest{
 		Model:       cfg.Model,
 		Messages:    messages,
 		Temperature: 0.1,
-		Tools:       GetToolsSpec(),
+		Tools:       tools,
 	}
 
 	jsonData, err := json.Marshal(reqBody)
@@ -329,7 +187,7 @@ func CompressContext(ctx context.Context, cfg *Config, messages *[]ChatMessage, 
 	}
 	summaryReq = append(summaryReq, promptMsg)
 
-	summaryResp, err := GenerateCommandMultiTurn(ctx, cfg, summaryReq)
+	summaryResp, err := GenerateCommandMultiTurn(ctx, cfg, summaryReq, nil)
 	if err != nil {
 		return fmt.Errorf("failed to generate summary for compression: %w", err)
 	}
