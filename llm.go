@@ -153,7 +153,7 @@ func GetToolsSpec() []Tool {
 		"required": []string{"file_path", "pos", "end"},
 	}
 
-	return []Tool{
+	builtins := []Tool{
 		{
 			Type: "function",
 			Function: ToolFunction{
@@ -195,6 +195,8 @@ func GetToolsSpec() []Tool {
 			},
 		},
 	}
+
+	return append(builtins, GetMCPTools()...)
 }
 
 func GenerateCommand(ctx context.Context, cfg *Config, info *SystemInfo, prompt string) (*ChatMessage, error) {

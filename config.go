@@ -10,12 +10,19 @@ import (
 	"strings"
 )
 
+type MCPServerConfig struct {
+	Command string            `json:"command"`
+	Args    []string          `json:"args"`
+	Env     map[string]string `json:"env,omitempty"`
+}
+
 type Config struct {
-	APIEndpoint       string `json:"api_endpoint"`
-	Model             string `json:"model"`
-	MaxContextTokens  int    `json:"max_context_tokens"`
-	LastSession       string `json:"last_session"`
-	APITimeoutSeconds int    `json:"api_timeout_seconds"`
+	APIEndpoint       string                     `json:"api_endpoint"`
+	Model             string                     `json:"model"`
+	MaxContextTokens  int                        `json:"max_context_tokens"`
+	LastSession       string                     `json:"last_session"`
+	APITimeoutSeconds int                        `json:"api_timeout_seconds"`
+	MCPServers        map[string]MCPServerConfig `json:"mcp_servers,omitempty"`
 }
 
 const (

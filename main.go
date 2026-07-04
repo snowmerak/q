@@ -121,6 +121,9 @@ func printUsage() {
 }
 
 func runInteractiveAgent(cfg *Config, sessionName string) {
+	InitMCPManager(cfg)
+	defer StopMCPManager()
+
 	cfg.LastSession = sessionName
 	_ = SaveConfig(cfg)
 
@@ -358,6 +361,24 @@ func runAgentLoop(ctx context.Context, cfg *Config, sysInfo *SystemInfo, session
 							res = map[string]any{
 								"success": true,
 								"message": fmt.Sprintf("Successfully erased range in %s", args.FilePath),
+							}
+						}
+						resJSON, _ = json.Marshal(res)
+					}
+
+				default:
+					var args any
+					if err := json.Unmarshal([]byte(toolCall.Function.Arguments), &args); err != nil {
+						resJSON, _ = json.Marshal(map[string]any{"error": err.Error()})
+					} else {
+						output, err := CallMCPTool(name, args)
+						var res map[string]any
+						if err != nil {
+							res = map[string]any{"error": err.Error(), "output": output}
+						} else {
+							res = map[string]any{
+								"success": true,
+								"output":  output,
 							}
 						}
 						resJSON, _ = json.Marshal(res)
