@@ -172,10 +172,19 @@ func runInteractiveAgent(cfg *Config, sessionName string) {
 	cfg.LastSession = sessionName
 	_ = SaveConfig(cfg)
 
+	execWD, err := os.Getwd()
+	if err != nil {
+		execWD = "."
+	}
+
 	session, err := LoadSession(sessionName)
 	if err != nil {
 		PrintError(fmt.Sprintf("Failed to load session '%s': %v", sessionName, err))
 		os.Exit(1)
+	}
+
+	if len(session.Messages) == 0 {
+		session.PWD = execWD
 	}
 
 	if session.PWD != "" {
