@@ -344,6 +344,53 @@ func TestExecuteWorkflowMaxVisits(t *testing.T) {
 	}
 }
 
+func TestWorkflowVisitLogWritten(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("APPDATA", filepath.Join(root, "appdata"))
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(root, "config"))
+	t.Chdir(root)
+
+	wf := &Workflow{
+		Version: 1,
+		Name:    "log-test",
+		Entry:   "a",
+		Limits:  WorkflowLimits{MaxVisits: 5},
+		Steps: map[string]WorkflowStep{
+			"a": {Type: "command", Command: "echo hello-log"},
+		},
+		Edges: []WorkflowEdge{{From: "a", To: "end", When: "always"}},
+		Sinks: map[string]WorkflowSink{"end": {Type: "success"}, "fail": {Type: "failure"}},
+	}
+	if err := validateWorkflow(wf); err != nil {
+		t.Fatal(err)
+	}
+	run, err := NewWorkflowRun(wf, "w.yaml", "s", "input text")
+	if err != nil {
+		t.Fatal(err)
+	}
+	session := &Session{Name: "s", PWD: root}
+	if err := ExecuteWorkflow(t.Context(), wf, run, session); err != nil {
+		t.Fatal(err)
+	}
+	if run.LogPath == "" {
+		t.Fatal("expected log path")
+	}
+	data, err := os.ReadFile(run.LogPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(data)
+	if !strings.Contains(body, "hello-log") && !strings.Contains(body, "visit 1") {
+		// echo may include CRLF/noise; require visit marker at least
+		if !strings.Contains(body, `step="a"`) {
+			t.Fatalf("log missing visit content: %q", body)
+		}
+	}
+	if !strings.Contains(body, "COMPLETED") {
+		t.Fatalf("log missing completion: %q", body)
+	}
+}
+
 func TestNewWorkflowRunSnapshotsDefinition(t *testing.T) {
 	workflow := &Workflow{
 		Version: 1,

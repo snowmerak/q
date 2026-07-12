@@ -239,6 +239,14 @@ q workflow resume <run_id>
 
 Downloaded workflows must be HTTPS, pass graph validation, and be under 1 MiB. Legacy fixed-loop YAML (`loop.review` / `loop.improve`) is rejected. Design notes: [docs/workflow-dag-design.md](docs/workflow-dag-design.md), [docs/workflow-dag-schema.md](docs/workflow-dag-schema.md).
 
+Each run writes a step-by-step work log under the session working directory:
+
+```text
+.q/workflow-logs/<run-id>.log
+```
+
+The console also prints a short preview of each step's output. Full provider transcripts and routing decisions live in that log file; durable run state (including all visit payloads) is still stored under the q config `workflow-runs` directory.
+
 ## Configuration
 
 The configuration file is stored at:

@@ -45,10 +45,19 @@ func handleWorkflowCommand(ctx context.Context, cfg *Config, args []string) erro
 			return err
 		}
 		PrintInfo(fmt.Sprintf("Workflow run created: %s", run.ID))
+		if run.LogPath != "" {
+			PrintInfo(fmt.Sprintf("Workflow log: %s", run.LogPath))
+		}
 		if err := ExecuteWorkflow(ctx, workflow, run, session); err != nil {
+			if run.LogPath != "" {
+				PrintWarning(fmt.Sprintf("See log: %s", run.LogPath))
+			}
 			return fmt.Errorf("workflow %s failed: %w", run.ID, err)
 		}
 		PrintSuccess(fmt.Sprintf("Workflow completed: %s", run.ID))
+		if run.LogPath != "" {
+			PrintSuccess(fmt.Sprintf("Workflow log: %s", run.LogPath))
+		}
 		return nil
 	case "resume":
 		if len(args) != 2 {
@@ -75,10 +84,19 @@ func handleWorkflowCommand(ctx context.Context, cfg *Config, args []string) erro
 		if run.Status == "completed" {
 			return fmt.Errorf("workflow %s is already completed", run.ID)
 		}
+		if run.LogPath != "" {
+			PrintInfo(fmt.Sprintf("Workflow log: %s", run.LogPath))
+		}
 		if err := ExecuteWorkflow(ctx, workflow, run, session); err != nil {
+			if run.LogPath != "" {
+				PrintWarning(fmt.Sprintf("See log: %s", run.LogPath))
+			}
 			return fmt.Errorf("workflow %s failed: %w", run.ID, err)
 		}
 		PrintSuccess(fmt.Sprintf("Workflow completed: %s", run.ID))
+		if run.LogPath != "" {
+			PrintSuccess(fmt.Sprintf("Workflow log: %s", run.LogPath))
+		}
 		return nil
 	case "status":
 		if len(args) != 2 {

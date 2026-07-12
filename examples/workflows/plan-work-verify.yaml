@@ -37,8 +37,10 @@ steps:
       Plan JSON:
       {{ steps.plan }}
 
-      Apply every plan action with minimal diffs. Run focused checks. Do not commit/push unless asked.
-      Summarize changes, commands, and residual risks.
+      Apply every plan action with tools — edit files, run shell commands, install deps as needed.
+      Do not only describe what you will do; finish the implementation in this turn.
+      Minimal diffs. Do not commit/push unless asked.
+      Summarize files changed, commands run, and residual risks.
   verify:
     type: provider
     provider: claude

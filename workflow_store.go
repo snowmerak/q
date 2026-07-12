@@ -262,7 +262,8 @@ steps:
     prompt: |
       WORK for: {{ input }}
       Plan: {{ steps.plan }}
-      Implement plan actions. Summarize changes.
+      Use tools to implement every plan action (edit files, run commands). Do not only describe intent.
+      Summarize files changed, commands run, and residual risks.
   verify:
     type: provider
     provider: claude

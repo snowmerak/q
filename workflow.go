@@ -92,6 +92,7 @@ type WorkflowRun struct {
 	Outputs       map[string]StepOutput `json:"outputs"`
 	Visits        []WorkflowVisit       `json:"visits"`
 	LastError     string                `json:"last_error,omitempty"`
+	LogPath       string                `json:"log_path,omitempty"`
 	CreatedAt     time.Time             `json:"created_at"`
 	UpdatedAt     time.Time             `json:"updated_at"`
 	StartedAt     time.Time             `json:"started_at,omitempty"`
@@ -350,6 +351,7 @@ func NewWorkflowRun(workflow *Workflow, path, sessionName, input string) (*Workf
 		return nil, err
 	}
 	now := time.Now()
+	logPath := filepath.Join(workingDir, ".q", "workflow-logs", id+".log")
 	return &WorkflowRun{
 		ID:            id,
 		WorkflowName:  workflow.Name,
@@ -363,6 +365,7 @@ func NewWorkflowRun(workflow *Workflow, path, sessionName, input string) (*Workf
 		VisitsPerStep: map[string]int{},
 		Outputs:       map[string]StepOutput{},
 		Visits:        []WorkflowVisit{},
+		LogPath:       logPath,
 		CreatedAt:     now,
 		UpdatedAt:     now,
 	}, nil
@@ -389,12 +392,25 @@ func ExecuteWorkflow(ctx context.Context, workflow *Workflow, run *WorkflowRun, 
 	if run.StartedAt.IsZero() {
 		run.StartedAt = time.Now()
 	}
+	if strings.TrimSpace(run.LogPath) == "" {
+		base := run.WorkingDir
+		if base == "" {
+			base, _ = os.Getwd()
+		}
+		run.LogPath = filepath.Join(base, ".q", "workflow-logs", run.ID+".log")
+	}
+	if err := writeWorkflowLogHeader(run); err != nil {
+		PrintWarning(fmt.Sprintf("workflow log header: %v", err))
+	} else {
+		PrintInfo(fmt.Sprintf("Workflow log: %s", run.LogPath))
+	}
 	if err := SaveWorkflowRun(run); err != nil {
 		return err
 	}
 
 	for {
 		if err := checkWorkflowLimits(workflow, run); err != nil {
+			_ = appendWorkflowLog(run, fmt.Sprintf("LIMIT/ERROR: %v\n", err))
 			return failWorkflowRun(run, err)
 		}
 
@@ -422,17 +438,25 @@ func ExecuteWorkflow(ctx context.Context, workflow *Workflow, run *WorkflowRun, 
 		out := StepOutput{Raw: visit.Raw, Parsed: visit.Parsed, ExitCode: visit.ExitCode, Status: visit.Status}
 		run.Outputs[run.Cursor] = out
 
+		logVisitToConsole(visit)
+		if err := appendWorkflowVisitLog(run, visit); err != nil {
+			PrintWarning(fmt.Sprintf("workflow log append: %v", err))
+		}
+
 		if err := SaveWorkflowRun(run); err != nil {
 			return err
 		}
 
 		next, term, err := pickWorkflowNext(workflow, run, run.Cursor, visit)
 		if err != nil {
+			_ = appendWorkflowLog(run, fmt.Sprintf("EDGE ERROR after %q: %v\n", run.Cursor, err))
 			return failWorkflowRun(run, err)
 		}
 		if term != nil {
+			_ = appendWorkflowLog(run, fmt.Sprintf("NEXT: sink type=%s message=%q\n", term.Type, term.Message))
 			return finishWorkflowSink(run, *term)
 		}
+		_ = appendWorkflowLog(run, fmt.Sprintf("NEXT: %s -> %s\n", run.Cursor, next))
 		run.Cursor = next
 		if err := SaveWorkflowRun(run); err != nil {
 			return err
@@ -466,6 +490,10 @@ func finishWorkflowSink(run *WorkflowRun, sink WorkflowSink) error {
 		if sink.Message != "" {
 			PrintInfo(sink.Message)
 		}
+		_ = appendWorkflowLog(run, fmt.Sprintf("\n=== COMPLETED ===\nstatus=completed visits=%d\nlog=%s\n", run.VisitCount, run.LogPath))
+		if run.LogPath != "" {
+			PrintSuccess(fmt.Sprintf("Workflow log written: %s", run.LogPath))
+		}
 		return SaveWorkflowRun(run)
 	default:
 		msg := sink.Message
@@ -478,8 +506,103 @@ func finishWorkflowSink(run *WorkflowRun, sink WorkflowSink) error {
 
 func failWorkflowRun(run *WorkflowRun, err error) error {
 	run.Status, run.LastError = "failed", err.Error()
+	_ = appendWorkflowLog(run, fmt.Sprintf("\n=== FAILED ===\nstatus=failed error=%s visits=%d\nlog=%s\n", err.Error(), run.VisitCount, run.LogPath))
+	if run.LogPath != "" {
+		PrintWarning(fmt.Sprintf("Workflow log written: %s", run.LogPath))
+	}
 	_ = SaveWorkflowRun(run)
 	return err
+}
+
+const workflowLogConsoleMax = 1200
+
+func workflowLogDir(run *WorkflowRun) string {
+	base := run.WorkingDir
+	if base == "" {
+		base, _ = os.Getwd()
+	}
+	return filepath.Join(base, ".q", "workflow-logs")
+}
+
+func ensureWorkflowLogPath(run *WorkflowRun) string {
+	if strings.TrimSpace(run.LogPath) == "" {
+		run.LogPath = filepath.Join(workflowLogDir(run), run.ID+".log")
+	}
+	return run.LogPath
+}
+
+func writeWorkflowLogHeader(run *WorkflowRun) error {
+	path := ensureWorkflowLogPath(run)
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		return err
+	}
+	// Truncate on first start; append on resume if file already has content.
+	flag := os.O_CREATE | os.O_WRONLY
+	if fi, err := os.Stat(path); err == nil && fi.Size() > 0 {
+		flag |= os.O_APPEND
+	} else {
+		flag |= os.O_TRUNC
+	}
+	f, err := os.OpenFile(path, flag, 0644)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	_, err = fmt.Fprintf(f, "=== workflow run %s ===\nname=%s\ninput=%s\nworking_dir=%s\nsession=%s\nstarted=%s\n\n",
+		run.ID, run.WorkflowName, run.Input, run.WorkingDir, run.SessionName, time.Now().Format(time.RFC3339))
+	return err
+}
+
+func appendWorkflowLog(run *WorkflowRun, text string) error {
+	path := ensureWorkflowLogPath(run)
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		return err
+	}
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	_, err = f.WriteString(text)
+	return err
+}
+
+func appendWorkflowVisitLog(run *WorkflowRun, visit WorkflowVisit) error {
+	var b strings.Builder
+	fmt.Fprintf(&b, "--- visit %d step=%q status=%s ---\n", visit.Index, visit.StepID, visit.Status)
+	fmt.Fprintf(&b, "started=%s finished=%s\n", visit.StartedAt.Format(time.RFC3339), visit.FinishedAt.Format(time.RFC3339))
+	if visit.ExitCode != nil {
+		fmt.Fprintf(&b, "exit_code=%d\n", *visit.ExitCode)
+	}
+	if visit.Error != "" {
+		fmt.Fprintf(&b, "error=%s\n", visit.Error)
+	}
+	if visit.Parsed != nil {
+		if raw, err := json.MarshalIndent(visit.Parsed, "", "  "); err == nil {
+			fmt.Fprintf(&b, "parsed:\n%s\n", raw)
+		}
+	}
+	fmt.Fprintf(&b, "raw:\n%s\n\n", visit.Raw)
+	return appendWorkflowLog(run, b.String())
+}
+
+func logVisitToConsole(visit WorkflowVisit) {
+	if visit.Status == "error" {
+		PrintWarning(fmt.Sprintf("step %q failed: %s", visit.StepID, visit.Error))
+	} else {
+		PrintInfo(fmt.Sprintf("step %q ok (output %d bytes)", visit.StepID, len(visit.Raw)))
+	}
+	preview := strings.TrimSpace(visit.Raw)
+	if preview == "" {
+		PrintWarning(fmt.Sprintf("step %q produced empty output", visit.StepID))
+		return
+	}
+	if len(preview) > workflowLogConsoleMax {
+		preview = preview[:workflowLogConsoleMax] + "\n… (truncated; see workflow log file)"
+	}
+	fmt.Println(Dim("──── step output ────"))
+	fmt.Println(preview)
+	fmt.Println(Dim("─────────────────────"))
 }
 
 func pickWorkflowNext(workflow *Workflow, run *WorkflowRun, from string, visit WorkflowVisit) (next string, sink *WorkflowSink, err error) {
