@@ -95,28 +95,35 @@ func LoadWorkflow(path string) (*Workflow, error) {
 	if err := yaml.Unmarshal(data, &workflow); err != nil {
 		return nil, err
 	}
-	if workflow.Version != 1 {
-		return nil, fmt.Errorf("unsupported workflow version %d", workflow.Version)
-	}
-	if strings.TrimSpace(workflow.Name) == "" {
-		return nil, errors.New("workflow name is required")
-	}
-	if workflow.Loop.MaxIterations <= 0 {
-		return nil, errors.New("loop.max_iterations must be greater than zero")
-	}
-	if workflow.Loop.RepairAttempts < 0 {
-		return nil, errors.New("loop.repair_attempts cannot be negative")
-	}
-	if err := validateWorkflowProviderStep("review", workflow.Loop.Review); err != nil {
+	if err := validateWorkflow(&workflow); err != nil {
 		return nil, err
-	}
-	if err := validateWorkflowProviderStep("improve", workflow.Loop.Improve); err != nil {
-		return nil, err
-	}
-	if workflow.Loop.Verify != nil && strings.TrimSpace(workflow.Loop.Verify.Command) == "" {
-		return nil, errors.New("loop.verify.command is required")
 	}
 	return &workflow, nil
+}
+
+func validateWorkflow(workflow *Workflow) error {
+	if workflow.Version != 1 {
+		return fmt.Errorf("unsupported workflow version %d", workflow.Version)
+	}
+	if strings.TrimSpace(workflow.Name) == "" {
+		return errors.New("workflow name is required")
+	}
+	if workflow.Loop.MaxIterations <= 0 {
+		return errors.New("loop.max_iterations must be greater than zero")
+	}
+	if workflow.Loop.RepairAttempts < 0 {
+		return errors.New("loop.repair_attempts cannot be negative")
+	}
+	if err := validateWorkflowProviderStep("review", workflow.Loop.Review); err != nil {
+		return err
+	}
+	if err := validateWorkflowProviderStep("improve", workflow.Loop.Improve); err != nil {
+		return err
+	}
+	if workflow.Loop.Verify != nil && strings.TrimSpace(workflow.Loop.Verify.Command) == "" {
+		return errors.New("loop.verify.command is required")
+	}
+	return nil
 }
 
 func validateWorkflowProviderStep(name string, step WorkflowProviderStep) error {

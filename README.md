@@ -171,16 +171,44 @@ loop:
     command: go test ./...
 ```
 
-Run the included example against the most recently active q session:
+Run the included example against the most recently active q session. `run` accepts an explicit path or a workflow name:
 
 ```bash
 q workflow run examples/workflows/improve-until-clean.yaml "Improve session persistence safety"
 ```
 
+Project workflows live in `.q/workflows`; global workflows live in `%APPDATA%\q\workflows` on Windows and `~/.config/q/workflows` on Linux and macOS. A project workflow overrides a global workflow with the same name.
+
+```bash
+q workflow init my-review
+q workflow init shared-review --global
+q workflow get upstream-review https://example.com/upstream-review.yaml
+q workflow ls
+q workflow path
+q workflow run shared-review "Review session persistence"
+```
+
+Downloaded workflows must use HTTPS, pass YAML and workflow validation, and be smaller than 1 MiB. Existing files are never overwritten.
+
+Edit the resolved project or global workflow using `$VISUAL`, then `$EDITOR`, then the platform default editor:
+
+```bash
+q workflow edit shared-review
+q workflow edit shared-review code --wait
+q workflow edit shared-review --global
+```
+
+Remove a project workflow, or explicitly remove its global counterpart:
+
+```bash
+q workflow rm my-review
+q workflow rm shared-review --global
+```
+
 Inspect and resume workflow runs:
 
 ```bash
-q workflow ls
+q workflow runs
 q workflow status <run_id>
 q workflow resume <run_id>
 ```

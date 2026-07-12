@@ -201,10 +201,16 @@ func printUsage() {
 	fmt.Println("  q grok <prompt>                : Run one turn in this q session's Grok session")
 	fmt.Println("  q agy <prompt>                 : Run one turn in this q session's agy conversation")
 	fmt.Println("  q claude <prompt>              : Run one turn in this q session's Claude Code session")
-	fmt.Println("  q workflow run <file> [input]  : Run an iterative review/improve workflow")
+	fmt.Println("  q workflow run <name|file> [input] : Run an iterative review/improve workflow")
 	fmt.Println("  q workflow resume <run_id>     : Resume a failed workflow run")
 	fmt.Println("  q workflow status <run_id>     : Print workflow run state")
-	fmt.Println("  q workflow ls                  : List workflow runs")
+	fmt.Println("  q workflow ls                  : List project and global workflows")
+	fmt.Println("  q workflow runs                : List workflow runs")
+	fmt.Println("  q workflow get <name> <url>    : Download a global workflow")
+	fmt.Println("  q workflow init <name> [--global] : Create a workflow")
+	fmt.Println("  q workflow edit <name> [editor] : Edit a workflow")
+	fmt.Println("  q workflow rm <name> [--global] : Remove a workflow")
+	fmt.Println("  q workflow path                : Print workflow directories")
 	fmt.Println("Interactive Session Commands:")
 	fmt.Println("  /skills                        : List all loaded skills")
 	fmt.Println("  /codex <prompt>                : Run Codex in this q session's native thread")
@@ -571,6 +577,9 @@ func resolvePath(baseDir, targetPath string) string {
 func openEditor(filePath string, editorOverride string) error {
 	editor := editorOverride
 	if editor == "" {
+		editor = os.Getenv("VISUAL")
+	}
+	if editor == "" {
 		editor = os.Getenv("EDITOR")
 	}
 	if editor == "" {
@@ -581,7 +590,11 @@ func openEditor(filePath string, editorOverride string) error {
 		}
 	}
 
-	cmd := exec.Command(editor, filePath)
+	parts := strings.Fields(editor)
+	if len(parts) == 0 {
+		return errors.New("editor command is empty")
+	}
+	cmd := exec.Command(parts[0], append(parts[1:], filePath)...)
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
