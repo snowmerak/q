@@ -22,7 +22,8 @@ type Session struct {
 // ID is intentionally provider-neutral: Codex stores a thread ID here, while
 // Grok or agy can store their own conversation/session IDs.
 type ProviderSession struct {
-	ID string `json:"id"`
+	ID         string `json:"id"`
+	WorkingDir string `json:"working_dir,omitempty"`
 }
 
 func getSessionDir() (string, error) {
@@ -100,14 +101,29 @@ func (s *Session) ProviderSessionID(provider string) string {
 	if s.ProviderSessions == nil {
 		return ""
 	}
-	return s.ProviderSessions[strings.ToLower(provider)].ID
+	providerSession := s.ProviderSessions[strings.ToLower(provider)]
+	if providerSession.ID == "" || providerSession.WorkingDir == "" {
+		return ""
+	}
+	current, err := filepath.Abs(s.PWD)
+	if err != nil {
+		return ""
+	}
+	bound, err := filepath.Abs(providerSession.WorkingDir)
+	if err != nil {
+		return ""
+	}
+	if !strings.EqualFold(filepath.Clean(current), filepath.Clean(bound)) {
+		return ""
+	}
+	return providerSession.ID
 }
 
 func (s *Session) SetProviderSessionID(provider, id string) {
 	if s.ProviderSessions == nil {
 		s.ProviderSessions = make(map[string]ProviderSession)
 	}
-	s.ProviderSessions[strings.ToLower(provider)] = ProviderSession{ID: id}
+	s.ProviderSessions[strings.ToLower(provider)] = ProviderSession{ID: id, WorkingDir: s.PWD}
 }
 
 func ListSessions() error {

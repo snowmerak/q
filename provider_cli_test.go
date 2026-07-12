@@ -10,22 +10,22 @@ import (
 )
 
 func TestGrokArgs(t *testing.T) {
-	wantNew := []string{"--cwd", "C:/repo", "--output-format", "plain", "--session-id", "id", "--single", "hello"}
+	wantNew := []string{"--cwd", "C:/repo", "--output-format", "plain", "--permission-mode", "acceptEdits", "--session-id", "id", "--single", "hello"}
 	if got := grokArgs("C:/repo", "id", "hello", false); !reflect.DeepEqual(got, wantNew) {
 		t.Fatalf("new args = %#v", got)
 	}
-	wantResume := []string{"--cwd", "C:/repo", "--output-format", "plain", "--resume", "id", "--single", "hello"}
+	wantResume := []string{"--cwd", "C:/repo", "--output-format", "plain", "--permission-mode", "acceptEdits", "--resume", "id", "--single", "hello"}
 	if got := grokArgs("C:/repo", "id", "hello", true); !reflect.DeepEqual(got, wantResume) {
 		t.Fatalf("resume args = %#v", got)
 	}
 }
 
 func TestClaudeArgs(t *testing.T) {
-	wantNew := []string{"--output-format", "text", "--session-id", "id", "--print", "hello"}
+	wantNew := []string{"--output-format", "text", "--permission-mode", "acceptEdits", "--session-id", "id", "--print", "hello"}
 	if got := claudeArgs("id", "hello", false); !reflect.DeepEqual(got, wantNew) {
 		t.Fatalf("new args = %#v", got)
 	}
-	wantResume := []string{"--output-format", "text", "--resume", "id", "--print", "hello"}
+	wantResume := []string{"--output-format", "text", "--permission-mode", "acceptEdits", "--resume", "id", "--print", "hello"}
 	if got := claudeArgs("id", "hello", true); !reflect.DeepEqual(got, wantResume) {
 		t.Fatalf("resume args = %#v", got)
 	}

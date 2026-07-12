@@ -65,6 +65,10 @@ func ResolveWorkflow(nameOrPath string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	fileNames := []string{fileName}
+	if filepath.Ext(nameOrPath) == "" {
+		fileNames = []string{nameOrPath + ".yaml", nameOrPath + ".yml"}
+	}
 	project, err := projectWorkflowDir()
 	if err != nil {
 		return "", err
@@ -74,9 +78,11 @@ func ResolveWorkflow(nameOrPath string) (string, error) {
 		return "", err
 	}
 	for _, dir := range []string{project, global} {
-		path := filepath.Join(dir, fileName)
-		if _, err := os.Stat(path); err == nil {
-			return path, nil
+		for _, candidate := range fileNames {
+			path := filepath.Join(dir, candidate)
+			if _, err := os.Stat(path); err == nil {
+				return path, nil
+			}
 		}
 	}
 	return "", fmt.Errorf("workflow %q was not found in project or global workflow directories", nameOrPath)

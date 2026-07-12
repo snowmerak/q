@@ -64,6 +64,7 @@ type WorkflowRun struct {
 	WorkflowPath string              `json:"workflow_path"`
 	Definition   Workflow            `json:"definition"`
 	SessionName  string              `json:"session_name"`
+	WorkingDir   string              `json:"working_dir"`
 	Input        string              `json:"input"`
 	Status       string              `json:"status"`
 	Iteration    int                 `json:"iteration"`
@@ -102,6 +103,8 @@ func LoadWorkflow(path string) (*Workflow, error) {
 }
 
 func validateWorkflow(workflow *Workflow) error {
+	workflow.Loop.Review.Provider = strings.ToLower(workflow.Loop.Review.Provider)
+	workflow.Loop.Improve.Provider = strings.ToLower(workflow.Loop.Improve.Provider)
 	if workflow.Version != 1 {
 		return fmt.Errorf("unsupported workflow version %d", workflow.Version)
 	}
@@ -147,8 +150,12 @@ func NewWorkflowRun(workflow *Workflow, path, sessionName, input string) (*Workf
 		return nil, err
 	}
 	now := time.Now()
+	workingDir, err := os.Getwd()
+	if err != nil {
+		return nil, err
+	}
 	return &WorkflowRun{ID: id, WorkflowName: workflow.Name, WorkflowPath: absPath, Definition: *workflow, SessionName: sessionName,
-		Input: input, Status: "pending", Iteration: 1, Phase: "review", CreatedAt: now, UpdatedAt: now}, nil
+		WorkingDir: workingDir, Input: input, Status: "pending", Iteration: 1, Phase: "review", CreatedAt: now, UpdatedAt: now}, nil
 }
 
 func ExecuteWorkflow(ctx context.Context, workflow *Workflow, run *WorkflowRun, session *Session) error {
@@ -307,6 +314,7 @@ func callWorkflowProvider(ctx context.Context, session *Session, provider, promp
 }
 
 func extractStructuredPayload(provider, raw string) ([]byte, error) {
+	provider = strings.ToLower(provider)
 	raw = strings.TrimSpace(raw)
 	if provider == "codex" || provider == "agy" {
 		if !json.Valid([]byte(raw)) {
@@ -410,7 +418,24 @@ func SaveWorkflowRun(run *WorkflowRun) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(filepath.Join(dir, run.ID+".json"), data, 0644)
+	temp, err := os.CreateTemp(dir, ".run-*.tmp")
+	if err != nil {
+		return err
+	}
+	tempPath := temp.Name()
+	defer os.Remove(tempPath)
+	if _, err := temp.Write(data); err != nil {
+		temp.Close()
+		return err
+	}
+	if err := temp.Sync(); err != nil {
+		temp.Close()
+		return err
+	}
+	if err := temp.Close(); err != nil {
+		return err
+	}
+	return replaceFileAtomic(tempPath, filepath.Join(dir, run.ID+".json"))
 }
 
 func LoadWorkflowRun(id string) (*WorkflowRun, error) {

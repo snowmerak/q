@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 const validWorkflowYAML = `version: 1
@@ -48,6 +49,44 @@ func TestResolveWorkflowPrefersProjectDefinition(t *testing.T) {
 	}
 	if got != projectPath {
 		t.Fatalf("resolved %q, want %q", got, projectPath)
+	}
+}
+
+func TestResolveWorkflowFindsBareYMLName(t *testing.T) {
+	root := setupWorkflowStoreTest(t)
+	dir := filepath.Join(root, ".q", "workflows")
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	want := filepath.Join(dir, "review.yml")
+	if err := os.WriteFile(want, []byte(validWorkflowYAML), 0600); err != nil {
+		t.Fatal(err)
+	}
+	got, err := ResolveWorkflow("review")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != want {
+		t.Fatalf("resolved %q, want %q", got, want)
+	}
+}
+
+func TestSaveWorkflowRunReplacesCheckpoint(t *testing.T) {
+	setupWorkflowStoreTest(t)
+	run := &WorkflowRun{ID: "run-one", WorkflowName: "test", Status: "running", CreatedAt: time.Now()}
+	if err := SaveWorkflowRun(run); err != nil {
+		t.Fatal(err)
+	}
+	run.Status = "completed"
+	if err := SaveWorkflowRun(run); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := LoadWorkflowRun(run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.Status != "completed" {
+		t.Fatalf("status = %q", loaded.Status)
 	}
 }
 

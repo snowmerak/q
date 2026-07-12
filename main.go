@@ -521,14 +521,14 @@ func executeCommand(shell string, cmdStr string, currentDir string) ([]byte, []b
 	var chainedCmd string
 	if runtime.GOOS == "windows" {
 		if shellLower == "powershell" || shellLower == "pwsh" {
-			chainedCmd = fmt.Sprintf("%s ; Write-Output \"Q_PWD_MARKER\" ; (Get-Location).Path", cmdStr)
+			chainedCmd = fmt.Sprintf("$global:LASTEXITCODE = 0; & { %s }; $qSuccess = $?; $qStatus = $LASTEXITCODE; if (-not $qSuccess -and $qStatus -eq 0) { $qStatus = 1 }; Write-Output \"Q_PWD_MARKER\"; (Get-Location).Path; exit $qStatus", cmdStr)
 			execCmd = exec.Command("powershell", "-NoProfile", "-Command", chainedCmd)
 		} else {
-			chainedCmd = fmt.Sprintf("%s & echo Q_PWD_MARKER & cd", cmdStr)
-			execCmd = exec.Command("cmd", "/c", chainedCmd)
+			chainedCmd = fmt.Sprintf("%s & set q_status=!errorlevel! & echo Q_PWD_MARKER & cd & exit /b !q_status!", cmdStr)
+			execCmd = exec.Command("cmd", "/v:on", "/c", chainedCmd)
 		}
 	} else {
-		chainedCmd = fmt.Sprintf("%s ; echo \"Q_PWD_MARKER\" ; pwd", cmdStr)
+		chainedCmd = fmt.Sprintf("%s; q_status=$?; echo \"Q_PWD_MARKER\"; pwd; exit $q_status", cmdStr)
 		execCmd = exec.Command(shell, "-c", chainedCmd)
 	}
 

@@ -57,7 +57,7 @@ func callGrokForSession(ctx context.Context, session *Session, prompt, schema st
 }
 
 func grokArgs(cwd, id, prompt string, resume bool) []string {
-	args := []string{"--cwd", cwd, "--output-format", "plain"}
+	args := []string{"--cwd", cwd, "--output-format", "plain", "--permission-mode", "acceptEdits"}
 	if resume {
 		args = append(args, "--resume", id)
 	} else {
@@ -125,7 +125,7 @@ func printProviderText(text string) {
 }
 
 func claudeArgs(id, prompt string, resume bool) []string {
-	args := []string{"--output-format", "text"}
+	args := []string{"--output-format", "text", "--permission-mode", "acceptEdits"}
 	if resume {
 		args = append(args, "--resume", id)
 	} else {

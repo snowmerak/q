@@ -2,11 +2,12 @@ package main
 
 import (
 	"encoding/json"
+	"path/filepath"
 	"testing"
 )
 
 func TestProviderSessionMappingRoundTrip(t *testing.T) {
-	s := Session{Name: "work"}
+	s := Session{Name: "work", PWD: filepath.Join("root", "work")}
 	s.SetProviderSessionID("Codex", "thread-123")
 	if got := s.ProviderSessionID("codex"); got != "thread-123" {
 		t.Fatalf("ProviderSessionID() = %q", got)
@@ -31,5 +32,17 @@ func TestOldSessionJSONRemainsCompatible(t *testing.T) {
 	}
 	if got := s.ProviderSessionID("codex"); got != "" {
 		t.Fatalf("unexpected provider ID %q", got)
+	}
+}
+
+func TestProviderSessionMappingIsScopedToWorkingDirectory(t *testing.T) {
+	s := Session{Name: "work", PWD: filepath.Join("root", "one")}
+	s.SetProviderSessionID("claude", "session-one")
+	if got := s.ProviderSessionID("claude"); got != "session-one" {
+		t.Fatalf("got %q", got)
+	}
+	s.PWD = filepath.Join("root", "two")
+	if got := s.ProviderSessionID("claude"); got != "" {
+		t.Fatalf("cross-directory session = %q", got)
 	}
 }

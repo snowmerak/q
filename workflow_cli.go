@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"strings"
 )
 
@@ -26,6 +27,14 @@ func handleWorkflowCommand(ctx context.Context, cfg *Config, args []string) erro
 		}
 		session, err := loadLastSession(cfg)
 		if err != nil {
+			return err
+		}
+		cwd, err := os.Getwd()
+		if err != nil {
+			return err
+		}
+		session.PWD = cwd
+		if err := SaveSession(session); err != nil {
 			return err
 		}
 		run, err := NewWorkflowRun(workflow, workflowPath, session.Name, strings.Join(args[2:], " "))
@@ -60,6 +69,9 @@ func handleWorkflowCommand(ctx context.Context, cfg *Config, args []string) erro
 		session, err := LoadSession(run.SessionName)
 		if err != nil {
 			return err
+		}
+		if run.WorkingDir != "" {
+			session.PWD = run.WorkingDir
 		}
 		if run.Status == "completed" {
 			return fmt.Errorf("workflow %s is already completed", run.ID)

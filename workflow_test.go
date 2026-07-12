@@ -59,6 +59,8 @@ func TestExtractStructuredPayload(t *testing.T) {
 		{"codex", payload}, {"agy", payload},
 		{"grok", `{"structuredOutput":` + payload + `}`},
 		{"claude", `{"structured_output":` + payload + `}`},
+		{"Codex", payload},
+		{"Claude", `{"structured_output":` + payload + `}`},
 	}
 	for _, test := range tests {
 		t.Run(test.provider, func(t *testing.T) {
@@ -74,6 +76,13 @@ func TestExtractStructuredPayload(t *testing.T) {
 				t.Fatalf("unexpected review: %#v", review)
 			}
 		})
+	}
+}
+
+func TestExecuteCommandPreservesFailureExitCode(t *testing.T) {
+	_, _, _, err := executeCommand(GetSystemInfo().Shell, "go test ./package-that-does-not-exist", ".")
+	if err == nil {
+		t.Fatal("expected command failure")
 	}
 }
 

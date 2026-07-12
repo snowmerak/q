@@ -125,6 +125,8 @@ Codex runs with the q session's working directory, the `workspace-write` sandbox
 
 Each q session independently owns a Grok session, an agy conversation, and a Claude Code session. `q` creates and stores the provider's native session ID on the first invocation and resumes it on later invocations.
 
+Native provider session IDs are scoped to the working directory where they were created. If a q session moves to another working directory, q creates a new native provider session instead of attempting to resume an incompatible project session.
+
 Inside an interactive session:
 
 ```text
