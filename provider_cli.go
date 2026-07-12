@@ -95,10 +95,16 @@ func runAgyForSession(ctx context.Context, session *Session, prompt string) erro
 	id := session.ProviderSessionID("agy")
 	newSession := id == ""
 	var before map[string]time.Time
+	var previousText string
 	if newSession {
 		before, err = scanConversationDirs(brainDir)
 		if err != nil {
 			return err
+		}
+	} else {
+		previousText, err = readAgyModelText(agyTranscriptPath(brainDir, id))
+		if err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("read agy transcript before turn: %w", err)
 		}
 	}
 	args := []string{"-p", prompt}
@@ -127,15 +133,20 @@ func runAgyForSession(ctx context.Context, session *Session, prompt string) erro
 			return fmt.Errorf("save agy conversation mapping: %w", err)
 		}
 	}
-	text, err := readAgyAssistantText(filepath.Join(brainDir, id, ".system_generated", "logs", "transcript.jsonl"))
+	currentText, err := readAgyModelText(agyTranscriptPath(brainDir, id))
 	if err != nil {
 		return err
 	}
+	text := truncateAgyTranscriptPrefix(previousText, currentText)
 	fmt.Print(text)
 	if text != "" && !strings.HasSuffix(text, "\n") {
 		fmt.Println()
 	}
 	return nil
+}
+
+func agyTranscriptPath(brainDir, id string) string {
+	return filepath.Join(brainDir, id, ".system_generated", "logs", "transcript.jsonl")
 }
 
 func agyBrainDir() (string, error) {
@@ -186,38 +197,29 @@ type agyTranscriptLine struct {
 	Content string `json:"content"`
 }
 
-func readAgyAssistantText(path string) (string, error) {
+func readAgyModelText(path string) (string, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return "", err
 	}
 	defer f.Close()
-	var lines []agyTranscriptLine
+	var out strings.Builder
 	scanner := bufio.NewScanner(f)
 	scanner.Buffer(make([]byte, 64*1024), 16*1024*1024)
 	for scanner.Scan() {
 		var line agyTranscriptLine
-		if json.Unmarshal(scanner.Bytes(), &line) == nil {
-			lines = append(lines, line)
+		if json.Unmarshal(scanner.Bytes(), &line) == nil && line.Source == "MODEL" {
+			out.WriteString(line.Content)
 		}
 	}
 	if err := scanner.Err(); err != nil {
 		return "", err
 	}
-	lastUser := -1
-	for i := len(lines) - 1; i >= 0; i-- {
-		if lines[i].Source == "USER_EXPLICIT" {
-			lastUser = i
-			break
-		}
-	}
-	var out strings.Builder
-	for _, line := range lines[lastUser+1:] {
-		if line.Source == "MODEL" {
-			out.WriteString(line.Content)
-		}
-	}
 	return out.String(), nil
+}
+
+func truncateAgyTranscriptPrefix(previous, current string) string {
+	return strings.TrimPrefix(current, previous)
 }
 
 func newUUID() (string, error) {

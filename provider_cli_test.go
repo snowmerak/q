@@ -1,6 +1,8 @@
 package main
 
 import (
+	"os"
+	"path/filepath"
 	"reflect"
 	"regexp"
 	"testing"
@@ -44,6 +46,43 @@ func TestFindNewConversationID(t *testing.T) {
 	before := map[string]time.Time{"old": now}
 	after := map[string]time.Time{"old": now, "first": now.Add(time.Second), "latest": now.Add(2 * time.Second)}
 	if got := findNewConversationID(before, after); got != "latest" {
+		t.Fatalf("got %q", got)
+	}
+}
+
+func TestReadAgyModelTextAndTruncatePreviousPrefix(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "transcript.jsonl")
+	before := "previous answer"
+	initial := `{"source":"USER_EXPLICIT","content":"first"}` + "\n" +
+		`{"source":"MODEL","content":"previous answer"}` + "\n" +
+		`{"source":"TOOL","content":"ignored"}` + "\n"
+	if err := os.WriteFile(path, []byte(initial), 0600); err != nil {
+		t.Fatal(err)
+	}
+	gotBefore, err := readAgyModelText(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotBefore != before {
+		t.Fatalf("before = %q", gotBefore)
+	}
+
+	appended := initial + `{"source":"USER_EXPLICIT","content":"second"}` + "\n" +
+		`{"source":"MODEL","content":"current answer"}` + "\n"
+	if err := os.WriteFile(path, []byte(appended), 0600); err != nil {
+		t.Fatal(err)
+	}
+	gotAfter, err := readAgyModelText(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := truncateAgyTranscriptPrefix(gotBefore, gotAfter); got != "current answer" {
+		t.Fatalf("new response = %q", got)
+	}
+}
+
+func TestTruncateAgyTranscriptPrefixKeepsCurrentOnMismatch(t *testing.T) {
+	if got := truncateAgyTranscriptPrefix("old", "new"); got != "new" {
 		t.Fatalf("got %q", got)
 	}
 }
