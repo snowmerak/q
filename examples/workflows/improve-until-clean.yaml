@@ -1,0 +1,32 @@
+version: 1
+name: improve-until-clean
+
+loop:
+  max_iterations: 3
+  repair_attempts: 2
+
+  review:
+    provider: grok
+    prompt: |
+      Review the current working tree against this objective:
+
+      {{ input }}
+
+      This is iteration {{ iteration }}. Inspect the actual files and tests.
+      Report only material issues with concrete evidence. Set done=true only
+      when no material issue remains.
+
+  improve:
+    provider: codex
+    prompt: |
+      Implement the following reviewed improvements for this objective:
+
+      {{ input }}
+
+      Structured review:
+      {{ review }}
+
+      Modify the working tree, run focused tests, and summarize the changes.
+
+  verify:
+    command: go test ./...

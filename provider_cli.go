@@ -17,29 +17,43 @@ import (
 )
 
 func runGrokForSession(ctx context.Context, session *Session, prompt string) error {
+	text, err := callGrokForSession(ctx, session, prompt, "")
+	if err != nil {
+		return err
+	}
+	printProviderText(text)
+	return nil
+}
+
+func callGrokForSession(ctx context.Context, session *Session, prompt, schema string) (string, error) {
 	id := session.ProviderSessionID("grok")
 	newSession := id == ""
 	if newSession {
 		var err error
 		id, err = newUUID()
 		if err != nil {
-			return err
+			return "", err
 		}
 	}
 	args := grokArgs(session.PWD, id, prompt, !newSession)
+	if schema != "" {
+		args = replaceOutputFormat(args, "json")
+		args = append([]string{"--json-schema", schema}, args...)
+	}
 	cmd := exec.CommandContext(ctx, "grok", args...)
 	cmd.Dir = session.PWD
-	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
+	var stdout strings.Builder
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, &stdout, os.Stderr
 	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("run Grok session %q: %w", id, err)
+		return "", fmt.Errorf("run Grok session %q: %w", id, err)
 	}
 	if newSession {
 		session.SetProviderSessionID("grok", id)
 		if err := SaveSession(session); err != nil {
-			return fmt.Errorf("save Grok session mapping: %w", err)
+			return "", fmt.Errorf("save Grok session mapping: %w", err)
 		}
 	}
-	return nil
+	return stdout.String(), nil
 }
 
 func grokArgs(cwd, id, prompt string, resume bool) []string {
@@ -53,28 +67,61 @@ func grokArgs(cwd, id, prompt string, resume bool) []string {
 }
 
 func runClaudeForSession(ctx context.Context, session *Session, prompt string) error {
+	text, err := callClaudeForSession(ctx, session, prompt, "")
+	if err != nil {
+		return err
+	}
+	printProviderText(text)
+	return nil
+}
+
+func callClaudeForSession(ctx context.Context, session *Session, prompt, schema string) (string, error) {
 	id := session.ProviderSessionID("claude")
 	newSession := id == ""
 	if newSession {
 		var err error
 		id, err = newUUID()
 		if err != nil {
-			return err
+			return "", err
 		}
 	}
-	cmd := exec.CommandContext(ctx, "claude", claudeArgs(id, prompt, !newSession)...)
+	args := claudeArgs(id, prompt, !newSession)
+	if schema != "" {
+		args = replaceOutputFormat(args, "json")
+		args = append([]string{"--json-schema", schema}, args...)
+	}
+	cmd := exec.CommandContext(ctx, "claude", args...)
 	cmd.Dir = session.PWD
-	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
+	var stdout strings.Builder
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, &stdout, os.Stderr
 	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("run Claude Code session %q: %w", id, err)
+		return "", fmt.Errorf("run Claude Code session %q: %w", id, err)
 	}
 	if newSession {
 		session.SetProviderSessionID("claude", id)
 		if err := SaveSession(session); err != nil {
-			return fmt.Errorf("save Claude Code session mapping: %w", err)
+			return "", fmt.Errorf("save Claude Code session mapping: %w", err)
 		}
 	}
-	return nil
+	return stdout.String(), nil
+}
+
+func replaceOutputFormat(args []string, value string) []string {
+	out := append([]string(nil), args...)
+	for i := 0; i+1 < len(out); i++ {
+		if out[i] == "--output-format" {
+			out[i+1] = value
+			return out
+		}
+	}
+	return append([]string{"--output-format", value}, out...)
+}
+
+func printProviderText(text string) {
+	fmt.Print(text)
+	if text != "" && !strings.HasSuffix(text, "\n") {
+		fmt.Println()
+	}
 }
 
 func claudeArgs(id, prompt string, resume bool) []string {
@@ -88,9 +135,18 @@ func claudeArgs(id, prompt string, resume bool) []string {
 }
 
 func runAgyForSession(ctx context.Context, session *Session, prompt string) error {
-	brainDir, err := agyBrainDir()
+	text, err := callAgyForSession(ctx, session, prompt)
 	if err != nil {
 		return err
+	}
+	printProviderText(text)
+	return nil
+}
+
+func callAgyForSession(ctx context.Context, session *Session, prompt string) (string, error) {
+	brainDir, err := agyBrainDir()
+	if err != nil {
+		return "", err
 	}
 	id := session.ProviderSessionID("agy")
 	newSession := id == ""
@@ -99,12 +155,12 @@ func runAgyForSession(ctx context.Context, session *Session, prompt string) erro
 	if newSession {
 		before, err = scanConversationDirs(brainDir)
 		if err != nil {
-			return err
+			return "", err
 		}
 	} else {
 		previousText, err = readAgyModelText(agyTranscriptPath(brainDir, id))
 		if err != nil && !os.IsNotExist(err) {
-			return fmt.Errorf("read agy transcript before turn: %w", err)
+			return "", fmt.Errorf("read agy transcript before turn: %w", err)
 		}
 	}
 	args := []string{"-p", prompt}
@@ -117,32 +173,28 @@ func runAgyForSession(ctx context.Context, session *Session, prompt string) erro
 	cmd.Stdout = io.Discard
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("run agy: %w", err)
+		return "", fmt.Errorf("run agy: %w", err)
 	}
 	if newSession {
 		after, err := scanConversationDirs(brainDir)
 		if err != nil {
-			return err
+			return "", err
 		}
 		id = findNewConversationID(before, after)
 		if id == "" {
-			return errors.New("agy completed but its new conversation ID could not be determined")
+			return "", errors.New("agy completed but its new conversation ID could not be determined")
 		}
 		session.SetProviderSessionID("agy", id)
 		if err := SaveSession(session); err != nil {
-			return fmt.Errorf("save agy conversation mapping: %w", err)
+			return "", fmt.Errorf("save agy conversation mapping: %w", err)
 		}
 	}
 	currentText, err := readAgyModelText(agyTranscriptPath(brainDir, id))
 	if err != nil {
-		return err
+		return "", err
 	}
 	text := truncateAgyTranscriptPrefix(previousText, currentText)
-	fmt.Print(text)
-	if text != "" && !strings.HasSuffix(text, "\n") {
-		fmt.Println()
-	}
-	return nil
+	return text, nil
 }
 
 func agyTranscriptPath(brainDir, id string) string {

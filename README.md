@@ -143,6 +143,52 @@ q claude "Review the current implementation."
 
 The corresponding provider CLI must be installed, authenticated, and available on `PATH`.
 
+## Iterative Workflows
+
+`q` can run a checkpointed review/improve loop across native provider sessions. A workflow is a YAML file with a structured review step, an implementation step, and an optional verification command.
+
+```yaml
+version: 1
+name: improve-until-clean
+
+loop:
+  max_iterations: 3
+  repair_attempts: 2
+
+  review:
+    provider: grok
+    prompt: |
+      Review the working tree for this objective: {{ input }}
+      This is iteration {{ iteration }}.
+
+  improve:
+    provider: codex
+    prompt: |
+      Apply this structured review for {{ input }}:
+      {{ review }}
+
+  verify:
+    command: go test ./...
+```
+
+Run the included example against the most recently active q session:
+
+```bash
+q workflow run examples/workflows/improve-until-clean.yaml "Improve session persistence safety"
+```
+
+Inspect and resume workflow runs:
+
+```bash
+q workflow ls
+q workflow status <run_id>
+q workflow resume <run_id>
+```
+
+Every review must produce `done`, `summary`, `issues`, and `plan`, and every issue must have a matching plan item. Codex, Grok, and Claude Code use their native structured-output support. agy uses JSON prompting with schema validation and repair turns. A run stops when the reviewer returns `done: true`, a step fails, or `max_iterations` is reached. Run checkpoints and a snapshot of the workflow definition are stored under the q configuration directory in `workflow-runs`.
+
+Available template variables are `{{ input }}`, `{{ iteration }}`, `{{ review }}`, `{{ improve }}`, and `{{ verify }}`. Workflow steps execute sequentially in the q session's shared working tree.
+
 ## Configuration
 
 The configuration file is stored at:

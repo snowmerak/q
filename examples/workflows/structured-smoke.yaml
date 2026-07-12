@@ -1,0 +1,18 @@
+version: 1
+name: structured-smoke
+
+loop:
+  max_iterations: 1
+  repair_attempts: 1
+
+  review:
+    provider: grok
+    prompt: |
+      This is a structured-output transport smoke test. Do not inspect or
+      modify files and do not use tools. Return done=true, summary="smoke ok",
+      and empty issues and plan arrays. Input: {{ input }}
+
+  improve:
+    provider: codex
+    prompt: |
+      This step must not run because the smoke review must return done=true.

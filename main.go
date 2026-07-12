@@ -34,6 +34,11 @@ func main() {
 
 	cmd := strings.ToLower(os.Args[1])
 	switch cmd {
+	case "workflow":
+		if err := handleWorkflowCommand(context.Background(), cfg, os.Args[2:]); err != nil {
+			PrintError(err.Error())
+		}
+		return
 	case "codex":
 		if len(os.Args) < 3 {
 			PrintError("Missing prompt. Usage: q codex <prompt>")
@@ -196,6 +201,10 @@ func printUsage() {
 	fmt.Println("  q grok <prompt>                : Run one turn in this q session's Grok session")
 	fmt.Println("  q agy <prompt>                 : Run one turn in this q session's agy conversation")
 	fmt.Println("  q claude <prompt>              : Run one turn in this q session's Claude Code session")
+	fmt.Println("  q workflow run <file> [input]  : Run an iterative review/improve workflow")
+	fmt.Println("  q workflow resume <run_id>     : Resume a failed workflow run")
+	fmt.Println("  q workflow status <run_id>     : Print workflow run state")
+	fmt.Println("  q workflow ls                  : List workflow runs")
 	fmt.Println("Interactive Session Commands:")
 	fmt.Println("  /skills                        : List all loaded skills")
 	fmt.Println("  /codex <prompt>                : Run Codex in this q session's native thread")
@@ -226,19 +235,28 @@ func loadLastSession(cfg *Config) (*Session, error) {
 }
 
 func runCodexForSession(ctx context.Context, session *Session, prompt string) error {
-	server, err := StartCodexAppServer(ctx, "", os.Stderr)
+	text, err := callCodexForSession(ctx, session, prompt, nil)
 	if err != nil {
 		return err
 	}
+	printProviderText(text)
+	return nil
+}
+
+func callCodexForSession(ctx context.Context, session *Session, prompt string, outputSchema any) (string, error) {
+	server, err := StartCodexAppServer(ctx, "", os.Stderr)
+	if err != nil {
+		return "", err
+	}
 	defer server.Close()
 	if err := server.Initialize(ctx); err != nil {
-		return err
+		return "", err
 	}
 	cwd := session.PWD
 	if cwd == "" {
 		cwd, err = os.Getwd()
 		if err != nil {
-			return err
+			return "", err
 		}
 	}
 
@@ -246,20 +264,21 @@ func runCodexForSession(ctx context.Context, session *Session, prompt string) er
 	if threadID == "" {
 		threadID, err = server.StartThread(ctx, cwd)
 		if err != nil {
-			return err
+			return "", err
 		}
 		session.SetProviderSessionID("codex", threadID)
 		if err := SaveSession(session); err != nil {
-			return fmt.Errorf("save Codex thread mapping: %w", err)
+			return "", fmt.Errorf("save Codex thread mapping: %w", err)
 		}
 	} else if err := server.ResumeThread(ctx, threadID, cwd); err != nil {
-		return fmt.Errorf("resume Codex thread %q for q session %q: %w", threadID, session.Name, err)
+		return "", fmt.Errorf("resume Codex thread %q for q session %q: %w", threadID, session.Name, err)
 	}
-	turnID, err := server.StartTurn(ctx, threadID, prompt)
+	turnID, err := server.StartTurnWithSchema(ctx, threadID, prompt, outputSchema)
 	if err != nil {
-		return err
+		return "", err
 	}
 
+	var output strings.Builder
 	for event := range server.Events() {
 		switch event.Method {
 		case "item/agentMessage/delta":
@@ -268,7 +287,7 @@ func runCodexForSession(ctx context.Context, session *Session, prompt string) er
 				TurnID string `json:"turnId"`
 			}
 			if json.Unmarshal(event.Params, &p) == nil && p.TurnID == turnID {
-				fmt.Print(p.Delta)
+				output.WriteString(p.Delta)
 			}
 		case "turn/completed":
 			var p struct {
@@ -279,18 +298,17 @@ func runCodexForSession(ctx context.Context, session *Session, prompt string) er
 				} `json:"turn"`
 			}
 			if json.Unmarshal(event.Params, &p) == nil && p.Turn.ID == turnID {
-				fmt.Println()
 				if p.Turn.Status == "failed" {
-					return fmt.Errorf("codex turn failed: %s", compactJSON(p.Turn.Error))
+					return "", fmt.Errorf("codex turn failed: %s", compactJSON(p.Turn.Error))
 				}
 				if p.Turn.Status == "interrupted" {
-					return errors.New("codex turn was interrupted")
+					return "", errors.New("codex turn was interrupted")
 				}
-				return nil
+				return output.String(), nil
 			}
 		}
 	}
-	return errors.New("codex app-server stopped before the turn completed")
+	return "", errors.New("codex app-server stopped before the turn completed")
 }
 
 func compactJSON(raw json.RawMessage) string {

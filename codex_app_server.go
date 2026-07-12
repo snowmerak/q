@@ -170,12 +170,19 @@ func (c *CodexAppServer) ResumeThread(ctx context.Context, threadID, cwd string)
 }
 
 func (c *CodexAppServer) StartTurn(ctx context.Context, threadID, prompt string) (string, error) {
+	return c.StartTurnWithSchema(ctx, threadID, prompt, nil)
+}
+
+func (c *CodexAppServer) StartTurnWithSchema(ctx context.Context, threadID, prompt string, outputSchema any) (string, error) {
 	var response struct {
 		Turn struct {
 			ID string `json:"id"`
 		} `json:"turn"`
 	}
 	params := map[string]any{"threadId": threadID, "input": []any{map[string]any{"type": "text", "text": prompt}}}
+	if outputSchema != nil {
+		params["outputSchema"] = outputSchema
+	}
 	if err := c.Call(ctx, "turn/start", params, &response); err != nil {
 		return "", err
 	}
