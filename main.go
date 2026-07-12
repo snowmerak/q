@@ -43,7 +43,7 @@ func main() {
 			PrintError(err.Error())
 		}
 		return
-	case "grok", "agy":
+	case "grok", "agy", "claude":
 		if len(os.Args) < 3 {
 			PrintError(fmt.Sprintf("Missing prompt. Usage: q %s <prompt>", cmd))
 			return
@@ -56,8 +56,10 @@ func main() {
 		prompt := strings.Join(os.Args[2:], " ")
 		if cmd == "grok" {
 			err = runGrokForSession(context.Background(), session, prompt)
-		} else {
+		} else if cmd == "agy" {
 			err = runAgyForSession(context.Background(), session, prompt)
+		} else {
+			err = runClaudeForSession(context.Background(), session, prompt)
 		}
 		if err != nil {
 			PrintError(err.Error())
@@ -193,11 +195,13 @@ func printUsage() {
 	fmt.Println("  q codex <prompt>               : Run one turn through Codex app-server")
 	fmt.Println("  q grok <prompt>                : Run one turn in this q session's Grok session")
 	fmt.Println("  q agy <prompt>                 : Run one turn in this q session's agy conversation")
+	fmt.Println("  q claude <prompt>              : Run one turn in this q session's Claude Code session")
 	fmt.Println("Interactive Session Commands:")
 	fmt.Println("  /skills                        : List all loaded skills")
 	fmt.Println("  /codex <prompt>                : Run Codex in this q session's native thread")
 	fmt.Println("  /grok <prompt>                 : Run Grok in this q session's native session")
 	fmt.Println("  /agy <prompt>                  : Run agy in this q session's native conversation")
+	fmt.Println("  /claude <prompt>               : Run Claude Code in this q session's native session")
 	fmt.Println("  /<skill_name> [args]           : Run a specific skill workflow")
 }
 
@@ -403,7 +407,7 @@ func runInteractiveAgent(cfg *Config, sessionName string) {
 				continue
 			}
 
-			if slashCmd == "/grok" || slashCmd == "/agy" {
+			if slashCmd == "/grok" || slashCmd == "/agy" || slashCmd == "/claude" {
 				prompt := strings.TrimSpace(strings.TrimPrefix(input, slashCmd))
 				if prompt == "" {
 					PrintError(fmt.Sprintf("Missing prompt. Usage: %s <prompt>", slashCmd))
@@ -411,8 +415,10 @@ func runInteractiveAgent(cfg *Config, sessionName string) {
 					var err error
 					if slashCmd == "/grok" {
 						err = runGrokForSession(ctx, session, prompt)
-					} else {
+					} else if slashCmd == "/agy" {
 						err = runAgyForSession(ctx, session, prompt)
+					} else {
+						err = runClaudeForSession(ctx, session, prompt)
 					}
 					if err != nil {
 						PrintError(err.Error())

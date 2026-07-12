@@ -52,6 +52,41 @@ func grokArgs(cwd, id, prompt string, resume bool) []string {
 	return append(args, "--single", prompt)
 }
 
+func runClaudeForSession(ctx context.Context, session *Session, prompt string) error {
+	id := session.ProviderSessionID("claude")
+	newSession := id == ""
+	if newSession {
+		var err error
+		id, err = newUUID()
+		if err != nil {
+			return err
+		}
+	}
+	cmd := exec.CommandContext(ctx, "claude", claudeArgs(id, prompt, !newSession)...)
+	cmd.Dir = session.PWD
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("run Claude Code session %q: %w", id, err)
+	}
+	if newSession {
+		session.SetProviderSessionID("claude", id)
+		if err := SaveSession(session); err != nil {
+			return fmt.Errorf("save Claude Code session mapping: %w", err)
+		}
+	}
+	return nil
+}
+
+func claudeArgs(id, prompt string, resume bool) []string {
+	args := []string{"--output-format", "text"}
+	if resume {
+		args = append(args, "--resume", id)
+	} else {
+		args = append(args, "--session-id", id)
+	}
+	return append(args, "--print", prompt)
+}
+
 func runAgyForSession(ctx context.Context, session *Session, prompt string) error {
 	brainDir, err := agyBrainDir()
 	if err != nil {

@@ -18,6 +18,17 @@ func TestGrokArgs(t *testing.T) {
 	}
 }
 
+func TestClaudeArgs(t *testing.T) {
+	wantNew := []string{"--output-format", "text", "--session-id", "id", "--print", "hello"}
+	if got := claudeArgs("id", "hello", false); !reflect.DeepEqual(got, wantNew) {
+		t.Fatalf("new args = %#v", got)
+	}
+	wantResume := []string{"--output-format", "text", "--resume", "id", "--print", "hello"}
+	if got := claudeArgs("id", "hello", true); !reflect.DeepEqual(got, wantResume) {
+		t.Fatalf("resume args = %#v", got)
+	}
+}
+
 func TestNewUUID(t *testing.T) {
 	id, err := newUUID()
 	if err != nil {
