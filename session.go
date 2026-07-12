@@ -11,10 +11,18 @@ import (
 )
 
 type Session struct {
-	Name      string        `json:"name"`
-	UpdatedAt time.Time     `json:"updated_at"`
-	PWD       string        `json:"pwd"`
-	Messages  []ChatMessage `json:"messages"`
+	Name             string                     `json:"name"`
+	UpdatedAt        time.Time                  `json:"updated_at"`
+	PWD              string                     `json:"pwd"`
+	Messages         []ChatMessage              `json:"messages"`
+	ProviderSessions map[string]ProviderSession `json:"provider_sessions,omitempty"`
+}
+
+// ProviderSession binds a q session to a provider's native conversation.
+// ID is intentionally provider-neutral: Codex stores a thread ID here, while
+// Grok or agy can store their own conversation/session IDs.
+type ProviderSession struct {
+	ID string `json:"id"`
 }
 
 func getSessionDir() (string, error) {
@@ -88,6 +96,20 @@ func SaveSession(s *Session) error {
 	return os.WriteFile(filePath, data, 0644)
 }
 
+func (s *Session) ProviderSessionID(provider string) string {
+	if s.ProviderSessions == nil {
+		return ""
+	}
+	return s.ProviderSessions[strings.ToLower(provider)].ID
+}
+
+func (s *Session) SetProviderSessionID(provider, id string) {
+	if s.ProviderSessions == nil {
+		s.ProviderSessions = make(map[string]ProviderSession)
+	}
+	s.ProviderSessions[strings.ToLower(provider)] = ProviderSession{ID: id}
+}
+
 func ListSessions() error {
 	dir, err := getSessionDir()
 	if err != nil {
@@ -148,7 +170,7 @@ func RenameSession(oldName, newName string) error {
 	if err != nil {
 		return err
 	}
-	
+
 	oldPath, _ := getSessionPath(oldName)
 	if _, err := os.Stat(oldPath); os.IsNotExist(err) {
 		return fmt.Errorf("session '%s' does not exist", oldName)
@@ -170,13 +192,16 @@ func CopySession(srcName, dstName string) error {
 	if err != nil {
 		return err
 	}
-	
+
 	srcPath, _ := getSessionPath(srcName)
 	if _, err := os.Stat(srcPath); os.IsNotExist(err) {
 		return fmt.Errorf("source session '%s' does not exist", srcName)
 	}
 
 	s.Name = dstName
+	// A copied q session must not alias the original provider conversations.
+	// Providers may add an explicit native fork operation in the future.
+	s.ProviderSessions = nil
 	if err := SaveSession(s); err != nil {
 		return err
 	}

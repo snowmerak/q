@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -33,6 +34,36 @@ func main() {
 
 	cmd := strings.ToLower(os.Args[1])
 	switch cmd {
+	case "codex":
+		if len(os.Args) < 3 {
+			PrintError("Missing prompt. Usage: q codex <prompt>")
+			return
+		}
+		if err := runCodexOnce(context.Background(), cfg, strings.Join(os.Args[2:], " ")); err != nil {
+			PrintError(err.Error())
+		}
+		return
+	case "grok", "agy":
+		if len(os.Args) < 3 {
+			PrintError(fmt.Sprintf("Missing prompt. Usage: q %s <prompt>", cmd))
+			return
+		}
+		session, err := loadLastSession(cfg)
+		if err != nil {
+			PrintError(err.Error())
+			return
+		}
+		prompt := strings.Join(os.Args[2:], " ")
+		if cmd == "grok" {
+			err = runGrokForSession(context.Background(), session, prompt)
+		} else {
+			err = runAgyForSession(context.Background(), session, prompt)
+		}
+		if err != nil {
+			PrintError(err.Error())
+		}
+		return
+
 	case "mcp":
 		if len(os.Args) < 3 {
 			printMcpUsage()
@@ -159,9 +190,118 @@ func printUsage() {
 	fmt.Println("  q mcp ls                       : List all configured MCP servers and status")
 	fmt.Println("  q mcp add <name> [-e K=V]... <cmd> [args...] : Add a new MCP server configuration")
 	fmt.Println("  q mcp rm <name>                : Remove an MCP server configuration")
+	fmt.Println("  q codex <prompt>               : Run one turn through Codex app-server")
+	fmt.Println("  q grok <prompt>                : Run one turn in this q session's Grok session")
+	fmt.Println("  q agy <prompt>                 : Run one turn in this q session's agy conversation")
 	fmt.Println("Interactive Session Commands:")
 	fmt.Println("  /skills                        : List all loaded skills")
+	fmt.Println("  /codex <prompt>                : Run Codex in this q session's native thread")
+	fmt.Println("  /grok <prompt>                 : Run Grok in this q session's native session")
+	fmt.Println("  /agy <prompt>                  : Run agy in this q session's native conversation")
 	fmt.Println("  /<skill_name> [args]           : Run a specific skill workflow")
+}
+
+func runCodexOnce(ctx context.Context, cfg *Config, prompt string) error {
+	session, err := loadLastSession(cfg)
+	if err != nil {
+		return err
+	}
+	return runCodexForSession(ctx, session, prompt)
+}
+
+func loadLastSession(cfg *Config) (*Session, error) {
+	sessionName := cfg.LastSession
+	if sessionName == "" {
+		sessionName = "default"
+	}
+	session, err := LoadSession(sessionName)
+	if err != nil {
+		return nil, fmt.Errorf("load q session %q: %w", sessionName, err)
+	}
+	return session, nil
+}
+
+func runCodexForSession(ctx context.Context, session *Session, prompt string) error {
+	server, err := StartCodexAppServer(ctx, "", os.Stderr)
+	if err != nil {
+		return err
+	}
+	defer server.Close()
+	if err := server.Initialize(ctx); err != nil {
+		return err
+	}
+	cwd := session.PWD
+	if cwd == "" {
+		cwd, err = os.Getwd()
+		if err != nil {
+			return err
+		}
+	}
+
+	threadID := session.ProviderSessionID("codex")
+	if threadID == "" {
+		threadID, err = server.StartThread(ctx, cwd)
+		if err != nil {
+			return err
+		}
+		session.SetProviderSessionID("codex", threadID)
+		if err := SaveSession(session); err != nil {
+			return fmt.Errorf("save Codex thread mapping: %w", err)
+		}
+	} else if err := server.ResumeThread(ctx, threadID, cwd); err != nil {
+		return fmt.Errorf("resume Codex thread %q for q session %q: %w", threadID, session.Name, err)
+	}
+	turnID, err := server.StartTurn(ctx, threadID, prompt)
+	if err != nil {
+		return err
+	}
+
+	for event := range server.Events() {
+		switch event.Method {
+		case "item/agentMessage/delta":
+			var p struct {
+				Delta  string `json:"delta"`
+				TurnID string `json:"turnId"`
+			}
+			if json.Unmarshal(event.Params, &p) == nil && p.TurnID == turnID {
+				fmt.Print(p.Delta)
+			}
+		case "turn/completed":
+			var p struct {
+				Turn struct {
+					ID     string          `json:"id"`
+					Status string          `json:"status"`
+					Error  json.RawMessage `json:"error"`
+				} `json:"turn"`
+			}
+			if json.Unmarshal(event.Params, &p) == nil && p.Turn.ID == turnID {
+				fmt.Println()
+				if p.Turn.Status == "failed" {
+					return fmt.Errorf("codex turn failed: %s", compactJSON(p.Turn.Error))
+				}
+				if p.Turn.Status == "interrupted" {
+					return errors.New("codex turn was interrupted")
+				}
+				return nil
+			}
+		}
+	}
+	return errors.New("codex app-server stopped before the turn completed")
+}
+
+func compactJSON(raw json.RawMessage) string {
+	if len(raw) == 0 || string(raw) == "null" {
+		return "unknown error"
+	}
+	var value any
+	if json.Unmarshal(raw, &value) != nil {
+		return string(raw)
+	}
+	data, err := json.Marshal(value)
+	if err != nil {
+		return string(raw)
+	}
+	return string(data)
 }
 
 func runInteractiveAgent(cfg *Config, sessionName string) {
@@ -215,7 +355,7 @@ func runInteractiveAgent(cfg *Config, sessionName string) {
 			sysInfo.PWD = wd
 			session.PWD = wd
 		}
-		
+
 		dirPart := Color(filepath.Base(sysInfo.PWD), ansiCyan)
 		sessionPart := Color("("+sessionName+")", ansiMagenta)
 		promptPart := Color("⚡ q › ", ansiYellow)
@@ -249,6 +389,34 @@ func runInteractiveAgent(cfg *Config, sessionName string) {
 						}
 					}
 					fmt.Println()
+				}
+				continue
+			}
+
+			if slashCmd == "/codex" {
+				prompt := strings.TrimSpace(strings.TrimPrefix(input, slashCmd))
+				if prompt == "" {
+					PrintError("Missing prompt. Usage: /codex <prompt>")
+				} else if err := runCodexForSession(ctx, session, prompt); err != nil {
+					PrintError(err.Error())
+				}
+				continue
+			}
+
+			if slashCmd == "/grok" || slashCmd == "/agy" {
+				prompt := strings.TrimSpace(strings.TrimPrefix(input, slashCmd))
+				if prompt == "" {
+					PrintError(fmt.Sprintf("Missing prompt. Usage: %s <prompt>", slashCmd))
+				} else {
+					var err error
+					if slashCmd == "/grok" {
+						err = runGrokForSession(ctx, session, prompt)
+					} else {
+						err = runAgyForSession(ctx, session, prompt)
+					}
+					if err != nil {
+						PrintError(err.Error())
+					}
 				}
 				continue
 			}
@@ -300,7 +468,7 @@ func runInteractiveAgent(cfg *Config, sessionName string) {
 		session.Messages = append(session.Messages, ChatMessage{Role: "user", Content: input})
 		agent := NewAgent(cfg, sysInfo, session)
 		agent.Run(ctx)
-		
+
 		session.PWD = sysInfo.PWD
 		_ = SaveSession(session)
 	}

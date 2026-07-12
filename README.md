@@ -71,6 +71,42 @@ go build -o q.exe
   ```
   *(예: `q config model qwen2.5-7b`, `q config timeout 300`)*
 
+### 5. Codex app-server 실행
+
+설치 및 로그인된 Codex CLI의 공식 app-server 프로토콜을 통해 일회성 작업을 실행할 수 있습니다.
+
+```bash
+q codex "이 프로젝트의 테스트를 실행하고 실패 원인을 설명해줘"
+```
+
+대화형 q 세션 안에서는 해당 세션에 연결된 Codex thread를 직접 사용합니다.
+
+```text
+/codex 이 프로젝트의 테스트를 실행해줘
+```
+
+`q`는 `codex app-server --stdio`를 자식 프로세스로 시작합니다. 현재 q 세션에 Codex thread가
+없으면 `thread/start`로 만들고 ID를 저장하며, 다음 실행부터는 `thread/resume`으로 같은 Codex
+대화를 이어갑니다. app-server 프로세스는 매번 종료되지만 Codex thread는 유지됩니다. 작업
+디렉터리는 q 세션의 PWD이며 `workspace-write` 샌드박스와 `never` 승인 정책을 사용합니다.
+
+### 6. Grok 및 agy 네이티브 세션
+
+각 q 세션은 Codex thread뿐 아니라 Grok session과 agy conversation도 별도로 소유합니다.
+첫 호출에서 provider 세션을 생성해 ID를 저장하고 이후 호출부터 해당 세션을 재개합니다.
+
+```text
+/grok 이 코드의 잠재적인 문제를 검토해줘
+/agy 같은 작업을 이어서 테스트해줘
+```
+
+대화형 모드 밖에서는 마지막으로 사용한 q 세션을 이용합니다.
+
+```bash
+q grok "테스트 실패를 분석해줘"
+q agy "앞선 분석을 바탕으로 수정해줘"
+```
+
 ## 설정 정보
 
 설정 파일은 다음 경로에 위치합니다.
