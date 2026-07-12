@@ -76,6 +76,40 @@ Enter these commands directly at the interactive prompt:
 - `/agy <prompt>`: Run a turn in this q session's agy conversation.
 - `/claude <prompt>`: Run a turn in this q session's Claude Code session.
 
+### 3.1 Agent Skills
+
+Skills are reusable SOP prompts stored as Markdown files. The agent can also discover them with the `search_skills` and `get_skill` tools.
+
+Load paths (local overrides global when names collide):
+
+- **Project**: `.skills/*.md`
+- **Global**: `~/.config/q/skills/*.md`
+
+Minimal skill file:
+
+```markdown
+---
+name: code-review
+description: Review the working tree against a stated objective.
+tags: [review, quality]
+---
+
+# Code Review
+
+1. Inspect relevant files and tests.
+2. Report only material issues with evidence.
+3. Propose concrete fix actions.
+```
+
+Usage:
+
+```text
+/skills
+/code-review focus on session save races
+```
+
+Example skills that mirror the workflow review → improve → verify loop live in `examples/skills/`. Full authoring guide: [docs/agent-skills.md](docs/agent-skills.md).
+
 ### 4. Manage Configuration
 
 Print the complete configuration as JSON:
