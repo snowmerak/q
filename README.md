@@ -1,123 +1,159 @@
 # q (Stateful AI CLI Copilot)
 
-`q`는 로컬 LLM(OpenAI 호환 API)과 연동하여 사용자의 자연어 요청을 해석하고, 직접 쉘 명령어를 제안 및 실행하는 대화형 에이전트 CLI 도구입니다.
+`q` is an interactive agent CLI that connects to a local LLM through an OpenAI-compatible API. It interprets natural-language requests, proposes shell commands, executes tools, and analyzes the results to complete tasks.
 
-## 주요 특징
+## Features
 
-- **에이전틱 실행 및 Tool Calling**: LLM이 `run_shell_command` 도구를 직접 호출하여 쉘 명령어를 실행하고 결과를 분석하여 작업을 완수합니다.
-- **PWD(작업 디렉토리) 자동 동기화**: 매 명령어 종료 시점의 디렉토리를 부모 프로세스 세션에 동기화하여 `cd` 등의 이동 명령이 세션 전반에 유지됩니다.
-- **간편한 세션 관리**: Unix 친화적인 단축 명령어(`ls`, `rm`, `mv`, `cp`)를 활용해 대화형 세션 히스토리를 독립적으로 관리하고 복원할 수 있습니다.
-- **컨텍스트 자가 압축 (Self-Compression)**: 장기 문답 시 토큰 누적이 임계치(85%)에 도달하면 자동으로 대화 흐름을 2~3문장으로 압축 요약하여 컨텍스트가 초과되는 현상을 방지합니다.
-- **시각화 터미널 UI**: ANSI Escape Sequence를 적용해 세련된 색상 지표와 상태 이모지로 가독성을 높였습니다.
+- **Agentic execution and tool calling**: The LLM can call tools such as `run_shell_command`, inspect the results, and continue working until the task is complete.
+- **Automatic working-directory synchronization**: The working directory is synchronized after each command, so directory changes such as `cd` persist throughout the session.
+- **Simple session management**: Unix-style commands (`ls`, `rm`, `mv`, and `cp`) manage and restore independent conversation sessions.
+- **Automatic context compression**: When accumulated context reaches 85% of the configured token limit, `q` summarizes the conversation to prevent context overflow.
+- **Terminal UI**: ANSI colors and status indicators make agent activity easier to follow.
+- **Native agent sessions**: Each q session can own and resume separate Codex, Grok, agy, and Claude Code sessions.
 
-## 설치 및 빌드
+## Requirements and Build
 
-Go 1.26 이상 환경에서 아래 명령어를 실행하여 빌드할 수 있습니다.
+Build with Go 1.26 or later:
 
 ```bash
 go build -o q.exe
 ```
 
-## 사용 방법
+## Usage
 
-### 1. 대화형 에이전트 쉘 진입
-- **이전 세션 이어하기**:
-  인자 없이 단독 실행 시 가장 최근에 활성화되었던 세션을 자동 로드합니다. (이전 세션 기록이 없다면 `"default"` 세션을 신규 생성합니다.)
-  ```bash
-  q
-  ```
-- **특정 세션 시작/로드**:
-  지정한 이름의 세션을 이어서 열거나, 없는 경우 새 세션을 생성하여 대화형 쉘로 진입합니다.
-  ```bash
-  q <세션_이름>
-  ```
+### 1. Start an Interactive Agent Shell
 
-### 2. 세션 관리 명령어
-- **저장된 세션 목록 조회**:
-  ```bash
-  q ls
-  ```
-- **세션 복사**:
-  ```bash
-  q cp <원본_세션_이름> <대상_세션_이름>
-  ```
-- **세션 이름 변경**:
-  ```bash
-  q mv <기존_세션_이름> <새_세션_이름>
-  ```
-- **세션 삭제**:
-  ```bash
-  q rm <세션_이름>
-  ```
-
-### 3. 대화형 쉘 내장 명령어
-대화형 쉘 안에서 프롬프트에 아래 명령어를 단독 입력하면 로컬에서 즉시 제어 동작을 수행합니다.
-- **`clear`** 또는 **`cls`** : 대화 히스토리를 시스템 프롬프트만 제외하고 완전히 비워 초기화합니다.
-- **`compact`** : 85% 토큰 임계치 도달 여부와 무관하게 현재까지의 대화 내용을 요약본 하나로 강제 압축합니다.
-
-### 4. CLI 설정 관리
-터미널에서 설정 정보를 직접 확인하고 즉시 수정할 수 있습니다.
-- **전체 설정 JSON 출력**:
-  ```bash
-  q config
-  ```
-- **특정 설정값 조회**:
-  ```bash
-  q config <key>
-  ```
-- **설정값 변경 및 저장**:
-  ```bash
-  q config <key> <value>
-  ```
-  *(예: `q config model qwen2.5-7b`, `q config timeout 300`)*
-
-### 5. Codex app-server 실행
-
-설치 및 로그인된 Codex CLI의 공식 app-server 프로토콜을 통해 일회성 작업을 실행할 수 있습니다.
+Resume the most recently used session. If no previous session exists, `q` creates a session named `default`:
 
 ```bash
-q codex "이 프로젝트의 테스트를 실행하고 실패 원인을 설명해줘"
+q
 ```
 
-대화형 q 세션 안에서는 해당 세션에 연결된 Codex thread를 직접 사용합니다.
-
-```text
-/codex 이 프로젝트의 테스트를 실행해줘
-```
-
-`q`는 `codex app-server --stdio`를 자식 프로세스로 시작합니다. 현재 q 세션에 Codex thread가
-없으면 `thread/start`로 만들고 ID를 저장하며, 다음 실행부터는 `thread/resume`으로 같은 Codex
-대화를 이어갑니다. app-server 프로세스는 매번 종료되지만 Codex thread는 유지됩니다. 작업
-디렉터리는 q 세션의 PWD이며 `workspace-write` 샌드박스와 `never` 승인 정책을 사용합니다.
-
-### 6. Grok, agy 및 Claude Code 네이티브 세션
-
-각 q 세션은 Codex thread뿐 아니라 Grok session, agy conversation, Claude Code session도 별도로 소유합니다.
-첫 호출에서 provider 세션을 생성해 ID를 저장하고 이후 호출부터 해당 세션을 재개합니다.
-
-```text
-/grok 이 코드의 잠재적인 문제를 검토해줘
-/agy 같은 작업을 이어서 테스트해줘
-/claude 이 변경을 리뷰해줘
-```
-
-대화형 모드 밖에서는 마지막으로 사용한 q 세션을 이용합니다.
+Start or resume a named session:
 
 ```bash
-q grok "테스트 실패를 분석해줘"
-q agy "앞선 분석을 바탕으로 수정해줘"
-q claude "현재 구현을 리뷰해줘"
+q <session_name>
 ```
 
-## 설정 정보
+### 2. Manage Sessions
 
-설정 파일은 다음 경로에 위치합니다.
+List saved sessions:
+
+```bash
+q ls
+```
+
+Copy a session:
+
+```bash
+q cp <source_session> <destination_session>
+```
+
+Rename a session:
+
+```bash
+q mv <old_name> <new_name>
+```
+
+Delete a session:
+
+```bash
+q rm <session_name>
+```
+
+Copied sessions do not inherit native provider session IDs. A new provider conversation is created the first time the copied q session invokes that provider.
+
+### 3. Interactive Commands
+
+Enter these commands directly at the interactive prompt:
+
+- `clear` or `cls`: Clear the conversation while preserving the system prompt.
+- `compact`: Compress the current conversation immediately, regardless of the automatic 85% threshold.
+- `/skills`: List loaded skills.
+- `/<skill_name> [args]`: Run a loaded skill.
+- `/codex <prompt>`: Run a turn in this q session's Codex thread.
+- `/grok <prompt>`: Run a turn in this q session's Grok session.
+- `/agy <prompt>`: Run a turn in this q session's agy conversation.
+- `/claude <prompt>`: Run a turn in this q session's Claude Code session.
+
+### 4. Manage Configuration
+
+Print the complete configuration as JSON:
+
+```bash
+q config
+```
+
+Read a configuration value:
+
+```bash
+q config <key>
+```
+
+Update and save a configuration value:
+
+```bash
+q config <key> <value>
+```
+
+Examples:
+
+```bash
+q config model qwen2.5-7b
+q config timeout 300
+```
+
+### 5. Use Codex app-server
+
+Run a one-shot task through an installed and authenticated Codex CLI:
+
+```bash
+q codex "Run the tests in this project and explain any failures."
+```
+
+Inside an interactive q session, use the Codex thread associated with that session:
+
+```text
+/codex Run the tests in this project.
+```
+
+`q` starts `codex app-server --stdio` as a child process. If the current q session does not have a Codex thread, `q` creates one with `thread/start` and stores its ID. Later invocations resume the same conversation with `thread/resume`. The app-server process exits after each invocation, but the Codex thread persists.
+
+Codex runs with the q session's working directory, the `workspace-write` sandbox, and the `never` approval policy.
+
+### 6. Use Grok, agy, and Claude Code Sessions
+
+Each q session independently owns a Grok session, an agy conversation, and a Claude Code session. `q` creates and stores the provider's native session ID on the first invocation and resumes it on later invocations.
+
+Inside an interactive session:
+
+```text
+/grok Review this code for potential problems.
+/agy Continue by running the relevant tests.
+/claude Review the resulting changes.
+```
+
+Outside interactive mode, provider commands use the most recently active q session:
+
+```bash
+q grok "Analyze the failing tests."
+q agy "Fix the issue based on the previous analysis."
+q claude "Review the current implementation."
+```
+
+The corresponding provider CLI must be installed, authenticated, and available on `PATH`.
+
+## Configuration
+
+The configuration file is stored at:
+
 - **Windows**: `%APPDATA%\q\config.json`
-- **Linux / macOS**: `~/.config/q/config.json`
+- **Linux and macOS**: `~/.config/q/config.json`
 
-### 설정 키 상세
-- `"api_endpoint"` (단축어: `endpoint`): OpenAI 호환 API 서버 엔드포인트 주소.
-- `"model"`: 연동하여 구동할 LLM 모델명.
-- `"max_context_tokens"` (단축어: `tokens`): 자가 압축 기준이 되는 컨텍스트 최대 토큰 한계값 (기본값: `4096`).
-- `"api_timeout_seconds"` (단축어: `timeout`): API 요청 제한 시간(초) (기본값: `300`초/5분).
-- `"last_session"`: 마지막으로 활성화되었던 세션의 이름.
+### Configuration Keys
+
+- `"api_endpoint"` (alias: `endpoint`): OpenAI-compatible API endpoint.
+- `"model"`: LLM model used by the OpenAI-compatible backend.
+- `"max_context_tokens"` (alias: `tokens`): Maximum context size used to trigger automatic compression. Default: `4096`.
+- `"api_timeout_seconds"` (alias: `timeout`): API request timeout in seconds. Default: `300`.
+- `"last_session"`: Name of the most recently active q session.
