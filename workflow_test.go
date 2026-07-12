@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -105,9 +106,12 @@ func TestExtractStructuredPayload(t *testing.T) {
 		{"codex", payload}, {"agy", payload},
 		{"grok", `{"structuredOutput":` + payload + `}`},
 		{"claude", `{"structured_output":` + payload + `}`},
+		// Grok sometimes leaves structuredOutput null and only fills text.
+		{"grok", `{"text":` + mustJSONString(payload) + `,"structuredOutput":null,"structuredOutputError":"model did not produce structured output"}`},
+		{"claude", `{"text":` + mustJSONString(payload) + `,"structured_output":null}`},
 	}
-	for _, test := range tests {
-		t.Run(test.provider, func(t *testing.T) {
+	for i, test := range tests {
+		t.Run(fmt.Sprintf("%s_%d", test.provider, i), func(t *testing.T) {
 			got, err := extractStructuredPayload(test.provider, test.raw)
 			if err != nil {
 				t.Fatal(err)
@@ -121,6 +125,14 @@ func TestExtractStructuredPayload(t *testing.T) {
 			}
 		})
 	}
+}
+
+func mustJSONString(s string) string {
+	b, err := json.Marshal(s)
+	if err != nil {
+		panic(err)
+	}
+	return string(b)
 }
 
 func TestValidatePlanAndVerdict(t *testing.T) {

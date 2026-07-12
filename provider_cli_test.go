@@ -10,19 +10,13 @@ import (
 )
 
 func TestGrokArgs(t *testing.T) {
-	wantNew := []string{"--cwd", "C:/repo", "--output-format", "plain", "--permission-mode", "acceptEdits", "--always-approve", "--session-id", "id", "hello"}
+	wantNew := []string{"--cwd", "C:/repo", "--output-format", "plain", "--permission-mode", "acceptEdits", "--always-approve", "--session-id", "id", "-p", "hello"}
 	if got := grokArgs("C:/repo", "id", "hello", false); !reflect.DeepEqual(got, wantNew) {
 		t.Fatalf("new args = %#v", got)
 	}
-	wantResume := []string{"--cwd", "C:/repo", "--output-format", "plain", "--permission-mode", "acceptEdits", "--always-approve", "--resume", "id", "hello"}
+	wantResume := []string{"--cwd", "C:/repo", "--output-format", "plain", "--permission-mode", "acceptEdits", "--always-approve", "--resume", "id", "-p", "hello"}
 	if got := grokArgs("C:/repo", "id", "hello", true); !reflect.DeepEqual(got, wantResume) {
 		t.Fatalf("resume args = %#v", got)
-	}
-	// Regression: --single is text-only and skips tool use.
-	for _, a := range grokArgs("C:/repo", "id", "hello", false) {
-		if a == "--single" || a == "-p" {
-			t.Fatal("grokArgs must not use --single/-p (single-turn, no tools)")
-		}
 	}
 }
 

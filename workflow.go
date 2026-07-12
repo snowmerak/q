@@ -921,21 +921,49 @@ func extractStructuredPayload(provider, raw string) ([]byte, error) {
 		}
 		return []byte(raw), nil
 	}
+	// Grok/Claude headless JSON wraps the schema object. Prefer the dedicated
+	// field; if the model only put JSON in "text" (structuredOutput null +
+	// structuredOutputError), fall back so workflow steps still work.
 	var wrapper struct {
 		StructuredOutput      json.RawMessage `json:"structuredOutput"`
 		StructuredOutputSnake json.RawMessage `json:"structured_output"`
+		Text                  string          `json:"text"`
+		StructuredOutputError string          `json:"structuredOutputError"`
 	}
 	if err := json.Unmarshal([]byte(raw), &wrapper); err != nil {
+		// Bare JSON object (no wrapper) — accept if valid.
+		if json.Valid([]byte(raw)) {
+			return []byte(raw), nil
+		}
 		return nil, err
 	}
 	payload := wrapper.StructuredOutput
 	if provider == "claude" {
-		payload = wrapper.StructuredOutputSnake
+		if len(wrapper.StructuredOutputSnake) > 0 && string(wrapper.StructuredOutputSnake) != "null" {
+			payload = wrapper.StructuredOutputSnake
+		}
 	}
-	if len(payload) == 0 || string(payload) == "null" {
-		return nil, errors.New("structured output field is missing")
+	if len(payload) > 0 && string(payload) != "null" {
+		return payload, nil
 	}
-	return payload, nil
+	// Fallback: text field may hold a JSON object string.
+	if text := strings.TrimSpace(wrapper.Text); text != "" {
+		if json.Valid([]byte(text)) {
+			return []byte(text), nil
+		}
+		// Sometimes text is a fenced or quoted blob; try unquote once.
+		var unquoted string
+		if err := json.Unmarshal([]byte(text), &unquoted); err == nil {
+			unquoted = strings.TrimSpace(unquoted)
+			if json.Valid([]byte(unquoted)) {
+				return []byte(unquoted), nil
+			}
+		}
+	}
+	if wrapper.StructuredOutputError != "" {
+		return nil, fmt.Errorf("structured output field is missing (%s)", wrapper.StructuredOutputError)
+	}
+	return nil, errors.New("structured output field is missing")
 }
 
 // --- Templates ---

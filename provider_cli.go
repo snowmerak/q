@@ -56,8 +56,10 @@ func callGrokForSession(ctx context.Context, session *Session, prompt, schema st
 	return stdout.String(), nil
 }
 
-// grokArgs builds headless agent invocations. Do not use --single/-p: that is
-// single-turn text-only and will not run tools or edit the working tree.
+// grokArgs builds a one-shot headless invocation.
+// -p/--single: run with a single prompt on stdin/out (non-interactive); agent may
+// still use tools during that turn. Without -p, the TUI path can prompt for
+// auto-approve and other interactive setup.
 func grokArgs(cwd, id, prompt string, resume bool) []string {
 	args := []string{
 		"--cwd", cwd,
@@ -70,8 +72,7 @@ func grokArgs(cwd, id, prompt string, resume bool) []string {
 	} else {
 		args = append(args, "--session-id", id)
 	}
-	// Positional prompt = multi-turn agent (tools + edits). Same idea as claude --print.
-	return append(args, prompt)
+	return append(args, "-p", prompt)
 }
 
 func runClaudeForSession(ctx context.Context, session *Session, prompt string) error {
