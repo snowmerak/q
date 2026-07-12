@@ -36,6 +36,7 @@ func callGrokForSession(ctx context.Context, session *Session, prompt, schema st
 		}
 	}
 	args := grokArgs(session.PWD, id, prompt, !newSession)
+	streaming := schema == ""
 	if schema != "" {
 		args = replaceOutputFormat(args, "json")
 		args = append([]string{"--json-schema", schema}, args...)
@@ -53,6 +54,13 @@ func callGrokForSession(ctx context.Context, session *Session, prompt, schema st
 			return "", fmt.Errorf("save Grok session mapping: %w", err)
 		}
 	}
+	if streaming {
+		text, err := parseGrokStreamingOutput(stdout.String())
+		if err != nil {
+			return "", fmt.Errorf("Grok session %q did not complete: %w", id, err)
+		}
+		return text, nil
+	}
 	return stdout.String(), nil
 }
 
@@ -63,8 +71,8 @@ func callGrokForSession(ctx context.Context, session *Session, prompt, schema st
 func grokArgs(cwd, id, prompt string, resume bool) []string {
 	args := []string{
 		"--cwd", cwd,
-		"--output-format", "plain",
-		"--permission-mode", "acceptEdits",
+		"--output-format", "streaming-json",
+		"--permission-mode", "bypassPermissions",
 		"--always-approve",
 	}
 	if resume {
@@ -73,6 +81,48 @@ func grokArgs(cwd, id, prompt string, resume bool) []string {
 		args = append(args, "--session-id", id)
 	}
 	return append(args, "-p", prompt)
+}
+
+type grokStreamEvent struct {
+	Type       string `json:"type"`
+	Data       string `json:"data"`
+	StopReason string `json:"stopReason"`
+}
+
+// parseGrokStreamingOutput rejects logical failures that Grok reports with a
+// successful process exit code. In particular, Grok 0.2.93 can emit an end
+// event with stopReason=Cancelled after its first tool request and exit 0.
+func parseGrokStreamingOutput(output string) (string, error) {
+	var text strings.Builder
+	foundEnd := false
+	scanner := bufio.NewScanner(strings.NewReader(output))
+	scanner.Buffer(make([]byte, 64*1024), 16*1024*1024)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" {
+			continue
+		}
+		var event grokStreamEvent
+		if err := json.Unmarshal([]byte(line), &event); err != nil {
+			return "", fmt.Errorf("decode streaming event: %w", err)
+		}
+		switch event.Type {
+		case "text":
+			text.WriteString(event.Data)
+		case "end":
+			foundEnd = true
+			if strings.EqualFold(event.StopReason, "cancelled") || strings.EqualFold(event.StopReason, "canceled") {
+				return "", fmt.Errorf("agent stopped with reason %q", event.StopReason)
+			}
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return "", fmt.Errorf("read streaming events: %w", err)
+	}
+	if !foundEnd {
+		return "", errors.New("stream ended without an end event")
+	}
+	return text.String(), nil
 }
 
 func runClaudeForSession(ctx context.Context, session *Session, prompt string) error {

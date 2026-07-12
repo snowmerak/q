@@ -10,13 +10,39 @@ import (
 )
 
 func TestGrokArgs(t *testing.T) {
-	wantNew := []string{"--cwd", "C:/repo", "--output-format", "plain", "--permission-mode", "acceptEdits", "--always-approve", "--session-id", "id", "-p", "hello"}
+	wantNew := []string{"--cwd", "C:/repo", "--output-format", "streaming-json", "--permission-mode", "bypassPermissions", "--always-approve", "--session-id", "id", "-p", "hello"}
 	if got := grokArgs("C:/repo", "id", "hello", false); !reflect.DeepEqual(got, wantNew) {
 		t.Fatalf("new args = %#v", got)
 	}
-	wantResume := []string{"--cwd", "C:/repo", "--output-format", "plain", "--permission-mode", "acceptEdits", "--always-approve", "--resume", "id", "-p", "hello"}
+	wantResume := []string{"--cwd", "C:/repo", "--output-format", "streaming-json", "--permission-mode", "bypassPermissions", "--always-approve", "--resume", "id", "-p", "hello"}
 	if got := grokArgs("C:/repo", "id", "hello", true); !reflect.DeepEqual(got, wantResume) {
 		t.Fatalf("resume args = %#v", got)
+	}
+}
+
+func TestParseGrokStreamingOutput(t *testing.T) {
+	input := "{\"type\":\"text\",\"data\":\"done\"}\n" +
+		"{\"type\":\"end\",\"stopReason\":\"EndTurn\",\"sessionId\":\"id\"}\n"
+	got, err := parseGrokStreamingOutput(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "done" {
+		t.Fatalf("text = %q", got)
+	}
+}
+
+func TestParseGrokStreamingOutputRejectsCancelledExitZero(t *testing.T) {
+	input := "{\"type\":\"text\",\"data\":\"I'll do it.\"}\n" +
+		"{\"type\":\"end\",\"stopReason\":\"Cancelled\",\"sessionId\":\"id\"}\n"
+	if _, err := parseGrokStreamingOutput(input); err == nil {
+		t.Fatal("expected cancelled stream to fail")
+	}
+}
+
+func TestParseGrokStreamingOutputRequiresEndEvent(t *testing.T) {
+	if _, err := parseGrokStreamingOutput("{\"type\":\"text\",\"data\":\"partial\"}\n"); err == nil {
+		t.Fatal("expected incomplete stream to fail")
 	}
 }
 
