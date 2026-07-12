@@ -179,79 +179,65 @@ q claude "Review the current implementation."
 
 The corresponding provider CLI must be installed, authenticated, and available on `PATH`.
 
-## Iterative Workflows
+## Workflows (step graphs)
 
-`q` can run a checkpointed review/improve loop across native provider sessions. A workflow is a YAML file with a structured review step, an implementation step, and an optional verification command.
+`q` runs checkpointed **workflow graphs**: freely defined steps connected by conditional edges (including loops). There is no fixed review/improve/verify loop.
 
 ```yaml
 version: 1
-name: improve-until-clean
-
-loop:
-  max_iterations: 3
-  repair_attempts: 2
-
-  review:
+name: plan-work-verify
+entry: plan
+limits:
+  max_visits: 24
+steps:
+  plan:
+    type: provider
+    provider: claude
+    prompt: |
+      PLAN for: {{ input }}
+    output: { kind: structured, schema: plan }
+  work:
+    type: provider
     provider: grok
     prompt: |
-      Review the working tree for this objective: {{ input }}
-      This is iteration {{ iteration }}.
-
-  improve:
-    provider: codex
-    prompt: |
-      Apply this structured review for {{ input }}:
-      {{ review }}
-
+      WORK using plan: {{ steps.plan }}
   verify:
-    command: go test ./...
+    type: provider
+    provider: claude
+    prompt: |
+      VERIFY work: {{ steps.work }}
+    output: { kind: structured, schema: verdict }
+edges:
+  - { from: plan, to: end, when: "steps.plan.done == true" }
+  - { from: plan, to: work, when: "steps.plan.done == false" }
+  - { from: work, to: verify, when: always }
+  - { from: verify, to: end, when: "steps.verify.pass == true" }
+  - { from: verify, to: plan, when: "steps.verify.pass == false" }
+sinks:
+  end: { type: success }
 ```
 
-Run the included example against the most recently active q session. `run` accepts an explicit path or a workflow name:
+Step types: `provider` (`codex` | `grok` | `claude` | `agy`) or `command` (shell). Built-in structured schemas: `plan`, `verdict`. Template context includes `{{ input }}`, `{{ visit }}`, `{{ step }}`, and `{{ steps.<id> }}` / nested fields.
 
 ```bash
-q workflow run examples/workflows/improve-until-clean.yaml "Improve session persistence safety"
+q workflow run examples/workflows/plan-work-verify.yaml "Safer atomic session saves"
 ```
 
-Project workflows live in `.q/workflows`; global workflows live in `%APPDATA%\q\workflows` on Windows and `~/.config/q/workflows` on Linux and macOS. A project workflow overrides a global workflow with the same name.
+Project workflows: `.q/workflows`. Global: `%APPDATA%\q\workflows` (Windows) or `~/.config/q/workflows` (Linux/macOS). Project overrides global for the same name.
 
 ```bash
-q workflow init my-review
-q workflow init shared-review --global
-q workflow get upstream-review https://example.com/upstream-review.yaml
+q workflow init my-flow
+q workflow init shared-flow --global
+q workflow get upstream-flow https://example.com/flow.yaml
 q workflow ls
 q workflow path
-q workflow run shared-review "Review session persistence"
-```
-
-Downloaded workflows must use HTTPS, pass YAML and workflow validation, and be smaller than 1 MiB. Existing files are never overwritten.
-
-Edit the resolved project or global workflow using `$VISUAL`, then `$EDITOR`, then the platform default editor:
-
-```bash
-q workflow edit shared-review
-q workflow edit shared-review code --wait
-q workflow edit shared-review --global
-```
-
-Remove a project workflow, or explicitly remove its global counterpart:
-
-```bash
-q workflow rm my-review
-q workflow rm shared-review --global
-```
-
-Inspect and resume workflow runs:
-
-```bash
+q workflow run shared-flow "objective"
 q workflow runs
 q workflow status <run_id>
 q workflow resume <run_id>
 ```
 
-Every review must produce `done`, `summary`, `issues`, and `plan`, and every issue must have a matching plan item. Codex, Grok, and Claude Code use their native structured-output support. agy uses JSON prompting with schema validation and repair turns. A run stops when the reviewer returns `done: true`, a step fails, or `max_iterations` is reached. Run checkpoints and a snapshot of the workflow definition are stored under the q configuration directory in `workflow-runs`.
-
-Available template variables are `{{ input }}`, `{{ iteration }}`, `{{ review }}`, `{{ improve }}`, and `{{ verify }}`. Workflow steps execute sequentially in the q session's shared working tree.
+Downloaded workflows must be HTTPS, pass graph validation, and be under 1 MiB. Legacy fixed-loop YAML (`loop.review` / `loop.improve`) is rejected. Design notes: [docs/workflow-dag-design.md](docs/workflow-dag-design.md), [docs/workflow-dag-schema.md](docs/workflow-dag-schema.md).
 
 ## Configuration
 

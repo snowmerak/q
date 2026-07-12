@@ -1,32 +1,18 @@
+# Engine smoke: command-only graph (no live LLM).
 version: 1
 name: full-loop-smoke
-
-loop:
-  max_iterations: 2
-  repair_attempts: 1
-
-  review:
-    provider: grok
-    prompt: |
-      This is a workflow engine smoke test. Do not inspect or modify files and
-      do not use tools.
-
-      On iteration 1, return done=false with exactly one low-severity issue:
-      id="smoke-step", description="exercise improve", evidence="test plan",
-      acceptance_criteria="improve step runs", and one matching plan action.
-
-      On iteration 2, return done=true, summary="full loop smoke ok", and empty
-      issues and plan arrays.
-
-      Current iteration: {{ iteration }}
-
-  improve:
-    provider: claude
-    prompt: |
-      This is a workflow engine smoke test. Do not inspect or modify files and
-      do not use tools. Reply only with: IMPROVE-SMOKE-OK
-
-      Review payload: {{ review }}
-
-  verify:
-    command: go test ./...
+entry: a
+limits:
+  max_visits: 6
+steps:
+  a:
+    type: command
+    command: echo A-SMOKE-OK
+  b:
+    type: command
+    command: echo B-SMOKE-OK
+edges:
+  - { from: a, to: b, when: always }
+  - { from: b, to: end, when: always }
+sinks:
+  end: { type: success }

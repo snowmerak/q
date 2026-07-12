@@ -1,33 +1,52 @@
 version: 1
 name: improve-until-clean-claude
-
-loop:
-  max_iterations: 3
+entry: review
+limits:
+  max_visits: 12
+  max_visits_per_step:
+    review: 3
+    improve: 3
+    verify: 3
+defaults:
   repair_attempts: 2
-
+steps:
   review:
+    type: provider
     provider: grok
     prompt: |
       Review the current working tree against this objective:
 
       {{ input }}
 
-      This is iteration {{ iteration }}. Inspect the actual files and tests.
-      Report only material issues with concrete evidence. Set done=true only
-      when no material issue remains.
+      Visit {{ visit }}. Last improve: {{ steps.improve }}
+      Last verify: {{ steps.verify }}
 
+      Inspect the actual files and tests. Report only material issues with concrete evidence.
+      Set done=true only when no material issue remains.
+    output:
+      kind: structured
+      schema: plan
   improve:
+    type: provider
     provider: claude
     prompt: |
       Implement the following reviewed improvements for this objective:
 
       {{ input }}
 
-      Structured review:
-      {{ review }}
+      Structured plan:
+      {{ steps.review }}
 
       Modify the working tree, run focused tests, and summarize the changes.
       Do not commit.
-
   verify:
+    type: command
     command: go test ./...
+edges:
+  - { from: review, to: end, when: "steps.review.done == true" }
+  - { from: review, to: improve, when: "steps.review.done == false" }
+  - { from: improve, to: verify, when: always }
+  - { from: verify, to: review, when: always, on: success }
+  - { from: verify, to: improve, when: always, on: error }
+sinks:
+  end: { type: success }

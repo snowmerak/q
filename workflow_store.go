@@ -11,8 +11,6 @@ import (
 	"sort"
 	"strings"
 	"time"
-
-	"gopkg.in/yaml.v3"
 )
 
 const maxWorkflowDownloadBytes = 1 << 20
@@ -141,7 +139,7 @@ func InitWorkflowDefinition(name string, global bool) (string, error) {
 	if _, err := os.Stat(path); err == nil {
 		return "", fmt.Errorf("workflow already exists: %s", path)
 	}
-	content := "version: 1\nname: " + strings.TrimSuffix(fileName, filepath.Ext(fileName)) + "\n\nloop:\n  max_iterations: 3\n  repair_attempts: 2\n\n  review:\n    provider: grok\n    prompt: |\n      Review the working tree for: {{ input }}\n\n  improve:\n    provider: codex\n    prompt: |\n      Apply this structured review:\n      {{ review }}\n\n  verify:\n    command: go test ./...\n"
+	content := defaultWorkflowGraphYAML(strings.TrimSuffix(fileName, filepath.Ext(fileName)))
 	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
 		return "", err
 	}
@@ -185,11 +183,7 @@ func downloadWorkflowDefinitionWithClient(fileName, rawURL string, client *http.
 	if len(data) > maxWorkflowDownloadBytes {
 		return "", fmt.Errorf("workflow exceeds %d bytes", maxWorkflowDownloadBytes)
 	}
-	var workflow Workflow
-	if err := yaml.Unmarshal(data, &workflow); err != nil {
-		return "", fmt.Errorf("invalid downloaded workflow: %w", err)
-	}
-	if err := validateWorkflow(&workflow); err != nil {
+	if _, err := parseWorkflow(data); err != nil {
 		return "", fmt.Errorf("invalid downloaded workflow: %w", err)
 	}
 	dir, err := globalWorkflowDir()
@@ -236,6 +230,58 @@ func RemoveWorkflowDefinition(name string, global bool) (string, error) {
 		return "", err
 	}
 	return path, nil
+}
+
+func defaultWorkflowGraphYAML(name string) string {
+	return `version: 1
+name: ` + name + `
+entry: plan
+limits:
+  max_visits: 24
+  max_visits_per_step:
+    plan: 5
+    work: 5
+    verify: 5
+defaults:
+  repair_attempts: 2
+steps:
+  plan:
+    type: provider
+    provider: claude
+    prompt: |
+      PLAN for: {{ input }}
+      Visit {{ visit }}. Prior work: {{ steps.work }}
+      Prior verify: {{ steps.verify }}
+      Structured plan only.
+    output:
+      kind: structured
+      schema: plan
+  work:
+    type: provider
+    provider: grok
+    prompt: |
+      WORK for: {{ input }}
+      Plan: {{ steps.plan }}
+      Implement plan actions. Summarize changes.
+  verify:
+    type: provider
+    provider: claude
+    prompt: |
+      VERIFY for: {{ input }}
+      Plan: {{ steps.plan }}
+      Work: {{ steps.work }}
+    output:
+      kind: structured
+      schema: verdict
+edges:
+  - { from: plan, to: end, when: "steps.plan.done == true" }
+  - { from: plan, to: work, when: "steps.plan.done == false" }
+  - { from: work, to: verify, when: always }
+  - { from: verify, to: end, when: "steps.verify.pass == true" }
+  - { from: verify, to: plan, when: "steps.verify.pass == false" }
+sinks:
+  end: { type: success }
+`
 }
 
 func WorkflowDefinitionPath(name string, global bool) (string, error) {

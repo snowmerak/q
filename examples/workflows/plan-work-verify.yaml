@@ -1,0 +1,70 @@
+version: 1
+name: plan-work-verify
+entry: plan
+limits:
+  max_visits: 24
+  max_visits_per_step:
+    plan: 5
+    work: 5
+    verify: 5
+defaults:
+  repair_attempts: 2
+steps:
+  plan:
+    type: provider
+    provider: claude
+    prompt: |
+      PLAN for:
+
+      {{ input }}
+
+      Visit {{ visit }}. Prior work: {{ steps.work }}
+      Prior verify: {{ steps.verify }}
+      Structured plan only — do not implement.
+      Material issues only; each needs severity, evidence, acceptance_criteria, and a matching plan action.
+      done=true only when the objective is already fully met.
+    output:
+      kind: structured
+      schema: plan
+  work:
+    type: provider
+    provider: grok
+    prompt: |
+      WORK — implement the plan for:
+
+      {{ input }}
+
+      Plan JSON:
+      {{ steps.plan }}
+
+      Apply every plan action with minimal diffs. Run focused checks. Do not commit/push unless asked.
+      Summarize changes, commands, and residual risks.
+  verify:
+    type: provider
+    provider: claude
+    prompt: |
+      VERIFY objective:
+
+      {{ input }}
+
+      Visit {{ visit }}
+
+      Plan:
+      {{ steps.plan }}
+
+      Worker summary:
+      {{ steps.work }}
+
+      Inspect the working tree and run appropriate checks/tests.
+      Return structured verdict: pass, summary, gaps (if fail), evidence.
+    output:
+      kind: structured
+      schema: verdict
+edges:
+  - { from: plan, to: end, when: "steps.plan.done == true" }
+  - { from: plan, to: work, when: "steps.plan.done == false" }
+  - { from: work, to: verify, when: always }
+  - { from: verify, to: end, when: "steps.verify.pass == true" }
+  - { from: verify, to: plan, when: "steps.verify.pass == false" }
+sinks:
+  end: { type: success }

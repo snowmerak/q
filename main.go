@@ -201,7 +201,7 @@ func printUsage() {
 	fmt.Println("  q grok <prompt>                : Run one turn in this q session's Grok session")
 	fmt.Println("  q agy <prompt>                 : Run one turn in this q session's agy conversation")
 	fmt.Println("  q claude <prompt>              : Run one turn in this q session's Claude Code session")
-	fmt.Println("  q workflow run <name|file> [input] : Run an iterative review/improve workflow")
+	fmt.Println("  q workflow run <name|file> [input] : Run a step graph workflow")
 	fmt.Println("  q workflow resume <run_id>     : Resume a failed workflow run")
 	fmt.Println("  q workflow status <run_id>     : Print workflow run state")
 	fmt.Println("  q workflow ls                  : List project and global workflows")

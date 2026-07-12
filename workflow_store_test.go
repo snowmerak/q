@@ -11,10 +11,13 @@ import (
 
 const validWorkflowYAML = `version: 1
 name: stored
-loop:
-  max_iterations: 1
-  review: { provider: grok, prompt: review }
-  improve: { provider: codex, prompt: improve }
+entry: only
+steps:
+  only:
+    type: command
+    command: echo ok
+    terminal: true
+edges: []
 `
 
 func setupWorkflowStoreTest(t *testing.T) string {
@@ -73,7 +76,18 @@ func TestResolveWorkflowFindsBareYMLName(t *testing.T) {
 
 func TestSaveWorkflowRunReplacesCheckpoint(t *testing.T) {
 	setupWorkflowStoreTest(t)
-	run := &WorkflowRun{ID: "run-one", WorkflowName: "test", Status: "running", CreatedAt: time.Now()}
+	run := &WorkflowRun{
+		ID: "run-one", WorkflowName: "test", Status: "running", CreatedAt: time.Now(),
+		Definition: Workflow{
+			Version: 1, Name: "test", Entry: "a",
+			Steps:  map[string]WorkflowStep{"a": {Type: "command", Command: "echo", Terminal: true}},
+			Edges:  []WorkflowEdge{},
+			Sinks:  map[string]WorkflowSink{"end": {Type: "success"}},
+			Limits: WorkflowLimits{MaxVisits: 5},
+		},
+		Outputs:       map[string]StepOutput{},
+		VisitsPerStep: map[string]int{},
+	}
 	if err := SaveWorkflowRun(run); err != nil {
 		t.Fatal(err)
 	}
@@ -133,5 +147,21 @@ func TestDownloadWorkflowDefinitionRejectsInvalidWorkflow(t *testing.T) {
 	defer server.Close()
 	if _, err := downloadWorkflowDefinitionWithClient("broken.yaml", server.URL, server.Client()); err == nil {
 		t.Fatal("expected validation error")
+	}
+}
+
+func TestDownloadWorkflowDefinitionRejectsLegacyLoop(t *testing.T) {
+	setupWorkflowStoreTest(t)
+	legacy := `version: 1
+name: old
+loop:
+  max_iterations: 1
+  review: { provider: grok, prompt: r }
+  improve: { provider: codex, prompt: i }
+`
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte(legacy)) }))
+	defer server.Close()
+	if _, err := downloadWorkflowDefinitionWithClient("legacy.yaml", server.URL, server.Client()); err == nil {
+		t.Fatal("expected legacy rejection")
 	}
 }

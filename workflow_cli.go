@@ -59,12 +59,11 @@ func handleWorkflowCommand(ctx context.Context, cfg *Config, args []string) erro
 			return err
 		}
 		workflow := &run.Definition
-		if workflow.Version == 0 {
-			var err error
-			workflow, err = LoadWorkflow(run.WorkflowPath)
-			if err != nil {
-				return err
-			}
+		if len(workflow.Steps) == 0 {
+			return errLegacyWorkflowRun
+		}
+		if err := validateWorkflow(workflow); err != nil {
+			return err
 		}
 		session, err := LoadSession(run.SessionName)
 		if err != nil {
@@ -118,7 +117,7 @@ func handleWorkflowCommand(ctx context.Context, cfg *Config, args []string) erro
 			return nil
 		}
 		for _, run := range runs {
-			fmt.Printf("%s\t%s\t%s\titeration=%d\t%s\n", run.ID, run.WorkflowName, run.Status, run.Iteration, run.UpdatedAt.Format("2006-01-02 15:04:05"))
+			fmt.Printf("%s\t%s\t%s\tcursor=%s\tvisits=%d\t%s\n", run.ID, run.WorkflowName, run.Status, run.Cursor, run.VisitCount, run.UpdatedAt.Format("2006-01-02 15:04:05"))
 		}
 		return nil
 	case "get":
