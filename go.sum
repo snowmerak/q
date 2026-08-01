@@ -1,3 +1,5 @@
+github.com/snowmerak/llm-provider v0.0.0-20260801113848-564f83f5ac2f h1:D8UuuA4EE1HomNgKc4TpKW991Jsj86FfXpEbgC20Dm0=
+github.com/snowmerak/llm-provider v0.0.0-20260801113848-564f83f5ac2f/go.mod h1:dKxWf2NT9t+HSBVOpqYBnlWdLS2gTsjG3Dp00AI4apg=
 gopkg.in/check.v1 v0.0.0-20161208181325-20d25e280405 h1:yhCVgyC4o1eVCa2tZl7eS0r+SDo693bJlVdllGtEeKM=
 gopkg.in/check.v1 v0.0.0-20161208181325-20d25e280405/go.mod h1:Co6ibVJAznAaIkqp8huTwlJQCZ016jof/cbN4VW5Yz0=
 gopkg.in/yaml.v3 v3.0.1 h1:fxVm/GzAzEWqLHuvctI91KS9hhNmmWOoWu0XTYJS7CA=
