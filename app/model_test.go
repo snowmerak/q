@@ -492,6 +492,19 @@ func TestWorkspaceSessionPersistsAndRestoresWithGlobalChatConfig(t *testing.T) {
 	}
 }
 
+func TestChatHeaderShowsAbsoluteWorkspacePath(t *testing.T) {
+	workspaceStore := workspace.Store{Root: t.TempDir()}
+	value := config.Default()
+	value.Provider.Model = "global-model"
+	m := newModel(context.Background(), config.Store{Dir: t.TempDir()}, nil)
+	m.workspaceStore = &workspaceStore
+	m.enterChat(value, &fakeClient{})
+	m.resize(120, 30)
+	if view := m.View().Content; !strings.Contains(view, "workspace · "+workspaceStore.Root) {
+		t.Fatalf("chat header does not show workspace path: %q", view)
+	}
+}
+
 func TestClearRemovesWorkspaceSession(t *testing.T) {
 	workspaceStore := workspace.Store{Root: t.TempDir()}
 	if err := workspaceStore.Save(workspace.Session{

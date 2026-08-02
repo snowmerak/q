@@ -1202,7 +1202,11 @@ func (m *model) resize(width, height int) {
 	m.modelFilter.SetWidth(min(contentWidth-2, 72))
 	m.input.SetWidth(contentWidth)
 	m.viewport.SetWidth(contentWidth)
-	m.viewport.SetHeight(max(3, m.height-10))
+	chromeHeight := 10
+	if m.workspaceStore != nil {
+		chromeHeight++
+	}
+	m.viewport.SetHeight(max(3, m.height-chromeHeight))
 	m.refreshTranscript()
 }
 
@@ -1264,8 +1268,12 @@ func (m model) View() tea.View {
 	view.WindowTitle = "q"
 	if m.screen == screenChat && !m.waiting {
 		if cursor := m.input.Cursor(); cursor != nil {
+			headerOffset := 2
+			if m.workspaceStore != nil {
+				headerOffset++
+			}
 			cursor.Position.X += frameStyle.GetPaddingLeft()
-			cursor.Position.Y += frameStyle.GetPaddingTop() + 2 + m.viewport.Height()
+			cursor.Position.Y += frameStyle.GetPaddingTop() + headerOffset + m.viewport.Height()
 			view.Cursor = cursor
 		}
 	}
@@ -1304,6 +1312,7 @@ func (m model) viewSetup() string {
 	}
 	body.WriteString(titleStyle.Render(title))
 	body.WriteString("\n")
+	m.writeWorkspacePath(&body)
 	if m.runtime != nil {
 		body.WriteString(subtleStyle.Render("Managed by q's internal llm-provider Gateway"))
 	} else {
@@ -1354,6 +1363,7 @@ func (m model) viewProviders() string {
 	var body strings.Builder
 	body.WriteString(titleStyle.Render("q · providers"))
 	body.WriteString("\n")
+	m.writeWorkspacePath(&body)
 	body.WriteString(subtleStyle.Render("Internal llm-provider Gateway · " + m.runtime.Endpoint()))
 	body.WriteString("\n\n")
 	if len(m.gatewayConfig.Providers) == 0 {
@@ -1407,6 +1417,7 @@ func (m model) viewModels() string {
 	var body strings.Builder
 	body.WriteString(titleStyle.Render("q · select model"))
 	body.WriteString("\n")
+	m.writeWorkspacePath(&body)
 	endpoint := m.draftConfig.Provider.BaseURL
 	if m.runtime != nil {
 		endpoint = m.runtime.Endpoint()
@@ -1446,14 +1457,10 @@ func (m model) viewChat() string {
 	if m.runtime != nil {
 		endpoint = m.runtime.Endpoint()
 	}
-	title := "q"
+	header := titleStyle.Render("q") + "  " + subtleStyle.Render(m.config.Provider.Model+" · "+endpoint+" · "+m.contextLabel())
 	if m.workspaceStore != nil {
-		name := filepath.Base(filepath.Clean(m.workspaceStore.Root))
-		if name != "." && name != string(filepath.Separator) && name != "" {
-			title += " · " + name
-		}
+		header += "\n" + subtleStyle.Render("workspace · "+filepath.Clean(m.workspaceStore.Root))
 	}
-	header := titleStyle.Render(title) + "  " + subtleStyle.Render(m.config.Provider.Model+" · "+endpoint+" · "+m.contextLabel())
 	status := m.status
 	if m.waiting {
 		status = m.spinner.View() + " " + status
@@ -1465,6 +1472,13 @@ func (m model) viewChat() string {
 	}
 	content += "\n" + footer
 	return frameStyle.Width(max(36, m.width-4)).Render(content)
+}
+
+func (m model) writeWorkspacePath(body *strings.Builder) {
+	if m.workspaceStore != nil {
+		body.WriteString(subtleStyle.Render("workspace · " + filepath.Clean(m.workspaceStore.Root)))
+		body.WriteString("\n")
+	}
 }
 
 func memoryPolicy(value config.Config) memory.Policy {
