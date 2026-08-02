@@ -144,10 +144,15 @@ func TestEnterSendsAndShiftEnterAddsNewline(t *testing.T) {
 	}
 
 	m.input.SetValue("send me")
-	updated, command := m.updateChatKey(tea.KeyPressMsg{Code: tea.KeyEnter})
+	updated, delayCommand := m.updateChatKey(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m = updated.(model)
+	if !m.submitPending || delayCommand == nil || m.waiting {
+		t.Fatal("enter did not schedule chat submission")
+	}
+	updated, command := m.Update(deferredSubmitMsg{})
 	m = updated.(model)
 	if !m.waiting || command == nil {
-		t.Fatal("enter did not submit chat")
+		t.Fatal("deferred enter did not submit chat")
 	}
 }
 
@@ -167,12 +172,53 @@ func TestUnicodeInputUsesNFCAndRealCursor(t *testing.T) {
 	fake := &fakeClient{}
 	m := newModel(context.Background(), config.Store{Dir: t.TempDir()}, nil)
 	m.enterChat(value, fake)
-	if m.input.VirtualCursor() || m.View().Cursor == nil {
+	view := m.View()
+	if m.input.VirtualCursor() || view.Cursor == nil || view.Cursor.Shape != tea.CursorBar {
 		t.Fatal("chat input is not using the real terminal cursor")
 	}
 	m = submitAndReceive(t, m, decomposed)
 	if got := fake.requests[0].Messages[1].Content; got != "가" {
 		t.Fatalf("submitted content = %q", got)
+	}
+}
+
+func TestEnterWaitsForFinalIMECommitBeforeSending(t *testing.T) {
+	value := config.Default()
+	value.Provider.Model = "test-model"
+	fake := &fakeClient{}
+	m := newModel(context.Background(), config.Store{Dir: t.TempDir()}, nil)
+	m.enterChat(value, fake)
+	m.input.SetValue("마지막 글")
+
+	updated, command := m.updateChatKey(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m = updated.(model)
+	if !m.submitPending || command == nil || len(fake.requests) != 0 {
+		t.Fatalf("pending = %v, command nil = %v, requests = %d", m.submitPending, command == nil, len(fake.requests))
+	}
+
+	// Windows IMEs can deliver the committed composition after the Enter key.
+	updated, _ = m.Update(tea.KeyPressMsg{Code: '자', Text: "자"})
+	m = updated.(model)
+	updated, sendCommand := m.Update(deferredSubmitMsg{})
+	m = updated.(model)
+	if m.submitPending || !m.waiting || sendCommand == nil {
+		t.Fatalf("pending = %v, waiting = %v, command nil = %v", m.submitPending, m.waiting, sendCommand == nil)
+	}
+	result, ok := sendCommand().(tea.BatchMsg)
+	if !ok {
+		t.Fatal("deferred submit did not start the chat request")
+	}
+	for _, child := range result {
+		_ = child()
+	}
+	if len(fake.requests) != 1 {
+		t.Fatalf("requests = %d", len(fake.requests))
+	}
+	if got := fake.requests[0].Messages[1].Content; got != "마지막 글자" {
+		t.Fatalf("submitted content = %q", got)
+	}
+	if m.input.Value() != "" {
+		t.Fatalf("input retained final IME character: %q", m.input.Value())
 	}
 }
 
@@ -186,7 +232,9 @@ func TestSlashModelOpensPickerAndPreservesHistory(t *testing.T) {
 	m.messages = append(m.messages, client.Message{Role: client.RoleUser, Content: "keep me"})
 	m.input.SetValue("/model")
 
-	updated, command := m.updateChatKey(tea.KeyPressMsg{Code: tea.KeyEnter})
+	updated, _ := m.updateChatKey(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m = updated.(model)
+	updated, command := m.Update(deferredSubmitMsg{})
 	m = updated.(model)
 	if m.screen != screenModels || !m.discovering || command == nil {
 		t.Fatalf("model discovery state = screen %v, discovering %v", m.screen, m.discovering)
@@ -219,6 +267,8 @@ func TestSlashProviderOpensProviderSettings(t *testing.T) {
 
 	updated, _ := m.updateChatKey(tea.KeyPressMsg{Code: tea.KeyEnter})
 	m = updated.(model)
+	updated, _ = m.Update(deferredSubmitMsg{})
+	m = updated.(model)
 	if m.screen != screenSetup || !m.setupEdit || m.input.Value() != "" {
 		t.Fatalf("provider command state = screen %v, edit %v, input %q", m.screen, m.setupEdit, m.input.Value())
 	}
@@ -240,6 +290,8 @@ func TestSlashClearResetsConversation(t *testing.T) {
 	m.input.SetValue("/clear")
 
 	updated, _ := m.updateChatKey(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m = updated.(model)
+	updated, _ = m.Update(deferredSubmitMsg{})
 	m = updated.(model)
 	if m.input.Value() != "" || m.conversationID != "" {
 		t.Fatalf("input = %q, conversation ID = %q", m.input.Value(), m.conversationID)

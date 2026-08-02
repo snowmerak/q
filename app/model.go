@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	"charm.land/bubbles/v2/spinner"
 	"charm.land/bubbles/v2/textarea"
@@ -65,6 +66,7 @@ type model struct {
 	spinner          spinner.Model
 	waiting          bool
 	compacting       bool
+	submitPending    bool
 }
 
 type configuredMsg struct {
@@ -84,6 +86,10 @@ type compactionResultMsg struct {
 	plan     memory.Plan
 	err      error
 }
+
+type deferredSubmitMsg struct{}
+
+const imeCommitGracePeriod = 35 * time.Millisecond
 
 type modelsResultMsg struct {
 	models []client.Model
@@ -133,6 +139,9 @@ func newChatInput() textarea.Model {
 	// A real terminal cursor gives Windows IMEs an accurate composition and
 	// candidate-window position. The default virtual cursor is only painted text.
 	input.SetVirtualCursor(false)
+	styles := input.Styles()
+	styles.Cursor.Shape = tea.CursorBar
+	input.SetStyles(styles)
 	input.Placeholder = "Type a message…"
 	input.Prompt = "│ "
 	input.ShowLineNumbers = false
@@ -265,6 +274,12 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		m.compactionTarget = message.plan.TargetTokens
 		m.status = fmt.Sprintf("Context compacted · %s → %s", formatTokens(message.plan.BeforeTokens), formatTokens(m.memory.PredictedTokens()))
 		return m, m.sendChatRequest()
+	case deferredSubmitMsg:
+		if !m.submitPending {
+			return m, nil
+		}
+		m.submitPending = false
+		return m.submitChat()
 	}
 
 	if key, ok := message.(tea.KeyPressMsg); ok {
@@ -468,7 +483,7 @@ func (m model) updateChatKey(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case "ctrl+s":
 		return m.submitChat()
 	case "enter":
-		return m.submitChat()
+		return m.deferChatSubmit()
 	}
 	var commands []tea.Cmd
 	var command tea.Cmd
@@ -481,7 +496,18 @@ func (m model) updateChatKey(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	return m, tea.Batch(commands...)
 }
 
+func (m model) deferChatSubmit() (tea.Model, tea.Cmd) {
+	if m.waiting || m.submitPending || m.client == nil {
+		return m, nil
+	}
+	m.submitPending = true
+	return m, tea.Tick(imeCommitGracePeriod, func(time.Time) tea.Msg {
+		return deferredSubmitMsg{}
+	})
+}
+
 func (m model) submitChat() (tea.Model, tea.Cmd) {
+	m.submitPending = false
 	content := strings.TrimSpace(norm.NFC.String(m.input.Value()))
 	if m.waiting || content == "" || m.client == nil {
 		return m, nil
@@ -563,6 +589,7 @@ func (m *model) rollbackPendingMessage() {
 	m.waiting = false
 	m.compacting = false
 	m.compactionTarget = 0
+	m.submitPending = false
 	m.refreshTranscript()
 }
 
@@ -580,6 +607,7 @@ func (m *model) enterChat(value config.Config, configuredClient chatClient) {
 	m.waiting = false
 	m.compacting = false
 	m.compactionTarget = 0
+	m.submitPending = false
 	m.pendingMessage = client.Message{}
 	m.status = ""
 	m.input = newChatInput()
@@ -663,6 +691,7 @@ func (m *model) resetConversation() {
 	}
 	m.conversationID = ""
 	m.compactionTarget = 0
+	m.submitPending = false
 	m.status = "Conversation cleared"
 	m.refreshTranscript()
 }
@@ -685,7 +714,9 @@ func (m *model) applyColorScheme(dark bool) {
 		m.setup[index].SetStyles(textinput.DefaultStyles(dark))
 	}
 	m.modelFilter.SetStyles(textinput.DefaultStyles(dark))
-	m.input.SetStyles(textarea.DefaultStyles(dark))
+	inputStyles := textarea.DefaultStyles(dark)
+	inputStyles.Cursor.Shape = tea.CursorBar
+	m.input.SetStyles(inputStyles)
 }
 
 func (m *model) refreshTranscript() {
