@@ -386,8 +386,12 @@ func TestSlashModelConfiguresSubagentModelAndReasoning(t *testing.T) {
 	m = updated.(model)
 
 	agent := m.config.Agents.Roles[config.AgentRolePlanner]
-	if m.screen != screenChat || agent.Model != "planning-model" || agent.ReasoningEffort != "high" {
+	if m.screen != screenModels || m.modelPickerStage != modelPickerTargets ||
+		agent.Model != "planning-model" || agent.ReasoningEffort != "high" {
 		t.Fatalf("saved planner config = %#v on screen %v", agent, m.screen)
+	}
+	if targets[m.modelTargetCursor] != config.AgentRolePlanner {
+		t.Fatalf("target cursor moved to %q", targets[m.modelTargetCursor])
 	}
 	if fake.closed {
 		t.Fatal("subagent model change replaced the main chat client")
@@ -398,6 +402,11 @@ func TestSlashModelConfiguresSubagentModelAndReasoning(t *testing.T) {
 	loaded, err := store.Load()
 	if err != nil || loaded.Agents.Roles[config.AgentRolePlanner] != agent {
 		t.Fatalf("loaded config = %#v, err = %v", loaded, err)
+	}
+	updated, _ = m.updateModelPicker(tea.KeyPressMsg{Code: tea.KeyEscape})
+	m = updated.(model)
+	if m.screen != screenChat {
+		t.Fatalf("escape returned to screen %v", m.screen)
 	}
 }
 
@@ -428,6 +437,9 @@ func TestModelPickerCanRestoreSubagentDefaultInheritance(t *testing.T) {
 	m = updated.(model)
 	if _, configured := m.config.Agents.Roles[config.AgentRoleCoder]; configured {
 		t.Fatalf("coder override was not removed: %#v", m.config.Agents.Roles)
+	}
+	if m.screen != screenModels || m.modelPickerStage != modelPickerTargets {
+		t.Fatalf("inherit returned to screen %v stage %v", m.screen, m.modelPickerStage)
 	}
 }
 

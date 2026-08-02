@@ -331,10 +331,11 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.config = message.config
 		m.draftConfig = message.config
-		m.screen = screenChat
+		m.screen = screenModels
+		m.modelPickerStage = modelPickerTargets
 		m.status = message.role + " model settings saved"
 		m.modelFilter.Blur()
-		return m, m.input.Focus()
+		return m, nil
 	case modelsResultMsg:
 		m.discovering = false
 		if message.err != nil {
@@ -2037,7 +2038,7 @@ func (m model) viewModelTargets() string {
 	}
 	if m.status != "" && !m.discovering {
 		body.WriteString("\n")
-		body.WriteString(errorStyle.Render(m.status))
+		body.WriteString(subtleStyle.Render(m.status))
 		body.WriteString("\n")
 	}
 	body.WriteString("\n")
