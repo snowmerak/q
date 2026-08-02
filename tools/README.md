@@ -15,8 +15,15 @@ Builtin tools:
 - `write_file`: create or explicitly overwrite a complete file
 - `list_directory`, `create_directory`
 - `move_path`, `copy_path`, `remove_path`
+- `run_command`: start a shell command in a workspace directory
+- `cmd_status`: poll command state and incremental output
+- `wait`: wait up to 60 seconds for command progress or completion
 
 Every path is relative to the configured workspace unless it is an absolute
 path already inside that workspace. Lexical `..` escapes and symlink escapes
 are rejected. Hashline edits should always use anchors from the latest
 `read_file` result.
+
+`run_command` is asynchronous and returns a `command_id`. Pass the returned
+`next_offset` to `cmd_status` or `wait` to receive only new output. Command
+output is retained up to 4 MiB and returned in chunks of at most 256 KiB.

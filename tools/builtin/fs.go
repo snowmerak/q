@@ -13,8 +13,9 @@ const codePath = "E_PATH"
 
 // FS is a filesystem view jailed to Root.
 type FS struct {
-	Root string
-	mu   sync.Mutex
+	Root     string
+	mu       sync.Mutex
+	commands *commandRegistry
 }
 
 // NewFS constructs a root-jailed filesystem. root must exist and be a
@@ -38,7 +39,11 @@ func NewFS(root string) (*FS, error) {
 	if !info.IsDir() {
 		return nil, fmt.Errorf("builtin: root is not a directory")
 	}
-	return &FS{Root: evaluated}, nil
+	return &FS{Root: evaluated, commands: newCommandRegistry(evaluated)}, nil
+}
+
+func (fs *FS) Close() {
+	fs.commands.Close()
 }
 
 func insideRoot(root, candidate string) bool {

@@ -81,6 +81,24 @@ func Register(server *mcp.Server, root string) (*FS, error) {
 		Annotations: &mcp.ToolAnnotations{DestructiveHint: &destructive, IdempotentHint: true},
 	}, valueHandler(fs.RemovePath))
 
+	mcp.AddTool(server, &mcp.Tool{
+		Name:        "run_command",
+		Description: "Start a shell command in the workspace and return immediately with a command_id. Commands may modify files; use cmd_status or wait to collect output.",
+		Annotations: &mcp.ToolAnnotations{DestructiveHint: &destructive},
+	}, valueHandler(fs.RunCommand))
+
+	mcp.AddTool(server, &mcp.Tool{
+		Name:        "cmd_status",
+		Description: "Read a command's current status and output from the requested byte offset without waiting.",
+		Annotations: &mcp.ToolAnnotations{ReadOnlyHint: readOnly},
+	}, valueHandler(fs.CommandStatus))
+
+	mcp.AddTool(server, &mcp.Tool{
+		Name:        "wait",
+		Description: "Wait up to 60 seconds for a run_command process, then return its status and output from the requested byte offset.",
+		Annotations: &mcp.ToolAnnotations{ReadOnlyHint: readOnly},
+	}, valueHandler(fs.WaitCommand))
+
 	return fs, nil
 }
 
