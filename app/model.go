@@ -33,6 +33,16 @@ const (
 	screenChat
 )
 
+type modelPickerStage uint8
+
+const (
+	modelPickerModels modelPickerStage = iota
+	modelPickerTargets
+	modelPickerReasoning
+)
+
+const defaultModelTarget = "default"
+
 const (
 	setupProviderID = iota
 	setupProviderPrefix
@@ -108,6 +118,12 @@ type model struct {
 	models             []client.Model
 	modelCursor        int
 	modelFilter        textinput.Model
+	modelPickerStage   modelPickerStage
+	modelChooseTarget  bool
+	modelTarget        string
+	modelTargetCursor  int
+	reasoningCursor    int
+	modelSelection     client.Model
 	draftConfig        config.Config
 	modelReturn        screen
 
@@ -132,6 +148,12 @@ type configuredMsg struct {
 	client          chatClient
 	preserveHistory bool
 	err             error
+}
+
+type agentConfiguredMsg struct {
+	config config.Config
+	role   string
+	err    error
 }
 
 type chatResultMsg struct {
@@ -258,7 +280,7 @@ func (m model) Init() tea.Cmd {
 		return tea.Batch(m.input.Focus(), tea.RequestBackgroundColor)
 	}
 	if m.screen == screenModels {
-		return tea.Batch(m.modelFilter.Focus(), tea.RequestBackgroundColor)
+		return tea.Batch(m.modelPickerFocus(), tea.RequestBackgroundColor)
 	}
 	if m.screen == screenProviders {
 		return tea.RequestBackgroundColor
@@ -302,6 +324,17 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			m.enterChat(message.config, message.client)
 		}
 		return m, m.input.Focus()
+	case agentConfiguredMsg:
+		if message.err != nil {
+			m.status = message.err.Error()
+			return m, m.modelPickerFocus()
+		}
+		m.config = message.config
+		m.draftConfig = message.config
+		m.screen = screenChat
+		m.status = message.role + " model settings saved"
+		m.modelFilter.Blur()
+		return m, m.input.Focus()
 	case modelsResultMsg:
 		m.discovering = false
 		if message.err != nil {
@@ -320,7 +353,7 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		if m.screen == screenChat {
 			return m, m.input.Focus()
 		}
-		return m, m.modelFilter.Focus()
+		return m, m.modelPickerFocus()
 	case providersAppliedMsg:
 		m.discovering = false
 		if message.err != nil {
@@ -341,7 +374,7 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		m.conversationID = ""
 		m.compactionTarget = 0
 		m.enterModelPicker(message.config, message.models)
-		return m, m.modelFilter.Focus()
+		return m, m.modelPickerFocus()
 	case agentEventMsg:
 		event := message.event
 		if event.call != nil {
@@ -651,6 +684,7 @@ func (m model) applyGatewayConfig(candidate gateway.Config) (tea.Model, tea.Cmd)
 		return m, nil
 	}
 	m.discovering = true
+	m.modelChooseTarget = false
 	m.status = "Starting and validating Gateway…"
 	for index := range m.setup {
 		m.setup[index].Blur()
@@ -787,6 +821,7 @@ func (m model) discoverModels() (tea.Model, tea.Cmd) {
 	}
 	m.status = "Loading models…"
 	m.discovering = true
+	m.modelChooseTarget = false
 	m.modelReturn = screenSetup
 	for index := range m.setup {
 		m.setup[index].Blur()
@@ -812,6 +847,7 @@ func (m model) discoverCurrentModels() (tea.Model, tea.Cmd) {
 	}
 	m.screen = screenModels
 	m.modelReturn = screenChat
+	m.modelChooseTarget = true
 	m.draftConfig = m.config
 	m.models = nil
 	m.modelCursor = 0
@@ -834,9 +870,21 @@ func (m model) updateModelPicker(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if m.discovering {
 		return m, nil
 	}
+	switch m.modelPickerStage {
+	case modelPickerTargets:
+		return m.updateModelTargetPicker(key)
+	case modelPickerReasoning:
+		return m.updateReasoningPicker(key)
+	}
 	filtered := m.filteredModels()
 	switch key.String() {
 	case "esc":
+		if m.modelChooseTarget {
+			m.modelPickerStage = modelPickerTargets
+			m.modelFilter.Blur()
+			m.status = ""
+			return m, nil
+		}
 		if m.runtime != nil && m.modelReturn == screenChat && !containsModel(filtered, m.config.Provider.Model) {
 			m.status = "Select a model from the updated providers"
 			return m, nil
@@ -870,14 +918,92 @@ func (m model) updateModelPicker(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 		value := m.draftConfig
 		selected := filtered[m.modelCursor]
-		value.Provider.Model = selected.ID
-		value.Provider.ContextWindow = selected.ContextLength
-		return m.saveConfiguration(value, m.modelReturn == screenChat)
+		if m.modelTarget == "" || m.modelTarget == defaultModelTarget {
+			value.Provider.Model = selected.ID
+			value.Provider.ContextWindow = selected.ContextLength
+			return m.saveConfiguration(value, m.modelReturn == screenChat)
+		}
+		value = withAgentModel(value, m.modelTarget, selected.ID)
+		m.draftConfig = value
+		m.modelSelection = selected
+		reasoning := selectedReasoning(selected)
+		if reasoning == nil || len(reasoning.SupportedEfforts) == 0 {
+			value = withAgentReasoningEffort(value, m.modelTarget, "")
+			return m.saveAgentConfiguration(value, m.modelTarget)
+		}
+		m.modelPickerStage = modelPickerReasoning
+		m.reasoningCursor = reasoningEffortCursor(value, m.modelTarget, reasoning.SupportedEfforts)
+		m.modelFilter.Blur()
+		return m, nil
 	}
 	var command tea.Cmd
 	m.modelFilter, command = m.modelFilter.Update(key)
 	m.modelCursor = 0
 	return m, command
+}
+
+func (m model) updateModelTargetPicker(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	targets := modelTargets()
+	switch key.String() {
+	case "esc":
+		m.screen = m.modelReturn
+		m.status = ""
+		if m.screen == screenChat {
+			return m, m.input.Focus()
+		}
+		return m, m.setup[m.setupFocus].Focus()
+	case "up":
+		if m.modelTargetCursor > 0 {
+			m.modelTargetCursor--
+		}
+	case "down":
+		if m.modelTargetCursor < len(targets)-1 {
+			m.modelTargetCursor++
+		}
+	case "enter":
+		if len(targets) == 0 {
+			return m, nil
+		}
+		m.modelTarget = targets[m.modelTargetCursor]
+		m.modelPickerStage = modelPickerModels
+		m.modelFilter.Reset()
+		m.selectConfiguredModel()
+		return m, m.modelFilter.Focus()
+	case "i":
+		if len(targets) == 0 || targets[m.modelTargetCursor] == defaultModelTarget {
+			return m, nil
+		}
+		role := targets[m.modelTargetCursor]
+		value := withoutAgentOverride(m.draftConfig, role)
+		return m.saveAgentConfiguration(value, role)
+	}
+	return m, nil
+}
+
+func (m model) updateReasoningPicker(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	reasoning := selectedReasoning(m.modelSelection)
+	if reasoning == nil || len(reasoning.SupportedEfforts) == 0 {
+		m.modelPickerStage = modelPickerModels
+		return m, m.modelFilter.Focus()
+	}
+	options := append([]string{""}, reasoning.SupportedEfforts...)
+	switch key.String() {
+	case "esc":
+		m.modelPickerStage = modelPickerModels
+		return m, m.modelFilter.Focus()
+	case "up":
+		if m.reasoningCursor > 0 {
+			m.reasoningCursor--
+		}
+	case "down":
+		if m.reasoningCursor < len(options)-1 {
+			m.reasoningCursor++
+		}
+	case "enter":
+		value := withAgentReasoningEffort(m.draftConfig, m.modelTarget, options[m.reasoningCursor])
+		return m.saveAgentConfiguration(value, m.modelTarget)
+	}
+	return m, nil
 }
 
 func (m model) saveConfiguration(value config.Config, preserveHistory bool) (tea.Model, tea.Cmd) {
@@ -893,6 +1019,21 @@ func (m model) saveConfiguration(value config.Config, preserveHistory bool) (tea
 		}
 		configuredClient, err := m.factory(value)
 		return configuredMsg{config: value, client: configuredClient, preserveHistory: preserveHistory, err: err}
+	}
+}
+
+func (m model) saveAgentConfiguration(value config.Config, role string) (tea.Model, tea.Cmd) {
+	if err := value.Validate(); err != nil {
+		m.status = err.Error()
+		return m, nil
+	}
+	m.status = "Saving " + role + " model settings…"
+	m.modelFilter.Blur()
+	return m, func() tea.Msg {
+		if err := m.store.Save(value); err != nil {
+			return agentConfiguredMsg{err: err}
+		}
+		return agentConfiguredMsg{config: value, role: role}
 	}
 }
 
@@ -1268,15 +1409,96 @@ func (m *model) enterModelPicker(value config.Config, available []client.Model) 
 	m.modelCursor = 0
 	m.modelFilter.Reset()
 	m.status = ""
-	if m.setupEdit || m.modelReturn == screenChat {
-		for index, candidate := range m.models {
-			if candidate.ID == m.config.Provider.Model {
-				m.modelCursor = index
-				break
-			}
+	if m.modelChooseTarget {
+		m.modelPickerStage = modelPickerTargets
+		m.modelTarget = defaultModelTarget
+		m.modelTargetCursor = 0
+		m.modelFilter.Blur()
+		return
+	}
+	m.modelPickerStage = modelPickerModels
+	m.modelTarget = defaultModelTarget
+	m.selectConfiguredModel()
+	m.modelFilter.Focus()
+}
+
+func (m *model) selectConfiguredModel() {
+	modelID := m.draftConfig.Provider.Model
+	if m.modelTarget != "" && m.modelTarget != defaultModelTarget {
+		if agent, ok := m.draftConfig.Agents.Roles[m.modelTarget]; ok && agent.Model != "" {
+			modelID = agent.Model
 		}
 	}
-	m.modelFilter.Focus()
+	m.modelCursor = 0
+	for index, candidate := range m.models {
+		if candidate.ID == modelID {
+			m.modelCursor = index
+			return
+		}
+	}
+}
+
+func (m *model) modelPickerFocus() tea.Cmd {
+	if m.modelPickerStage == modelPickerModels && !m.discovering {
+		return m.modelFilter.Focus()
+	}
+	m.modelFilter.Blur()
+	return nil
+}
+
+func modelTargets() []string {
+	return append([]string{defaultModelTarget}, config.AgentRoles()...)
+}
+
+func withAgentModel(value config.Config, role, modelID string) config.Config {
+	value.Agents.Roles = cloneAgentRoles(value.Agents.Roles)
+	agent := value.Agents.Roles[role]
+	agent.Model = modelID
+	value.Agents.Roles[role] = agent
+	return value
+}
+
+func withAgentReasoningEffort(value config.Config, role, effort string) config.Config {
+	value.Agents.Roles = cloneAgentRoles(value.Agents.Roles)
+	agent := value.Agents.Roles[role]
+	agent.ReasoningEffort = effort
+	value.Agents.Roles[role] = agent
+	return value
+}
+
+func withoutAgentOverride(value config.Config, role string) config.Config {
+	value.Agents.Roles = cloneAgentRoles(value.Agents.Roles)
+	delete(value.Agents.Roles, role)
+	return value
+}
+
+func cloneAgentRoles(source map[string]config.AgentConfig) map[string]config.AgentConfig {
+	result := make(map[string]config.AgentConfig, len(source)+1)
+	for role, agent := range source {
+		result[role] = agent
+	}
+	return result
+}
+
+func selectedReasoning(model client.Model) *client.ReasoningCapabilities {
+	if model.Capabilities == nil || model.Capabilities.Reasoning == nil {
+		return nil
+	}
+	reasoning := model.Capabilities.Reasoning
+	if !reasoning.Supported || reasoning.Control != client.ReasoningControlEffort {
+		return nil
+	}
+	return reasoning
+}
+
+func reasoningEffortCursor(value config.Config, role string, efforts []string) int {
+	configured := value.Agents.Roles[role].ReasoningEffort
+	for index, effort := range efforts {
+		if configured == effort {
+			return index + 1
+		}
+	}
+	return 0
 }
 
 func (m model) filteredModels() []client.Model {
@@ -1729,6 +1951,12 @@ func (m model) viewProviders() string {
 }
 
 func (m model) viewModels() string {
+	switch m.modelPickerStage {
+	case modelPickerTargets:
+		return m.viewModelTargets()
+	case modelPickerReasoning:
+		return m.viewReasoningEfforts()
+	}
 	filtered := m.filteredModels()
 	visible := max(4, m.height-10)
 	start := 0
@@ -1738,7 +1966,11 @@ func (m model) viewModels() string {
 	end := min(len(filtered), start+visible)
 
 	var body strings.Builder
-	body.WriteString(titleStyle.Render("q · select model"))
+	title := "q · select model"
+	if m.modelTarget != "" {
+		title = "q · " + m.modelTarget + " model"
+	}
+	body.WriteString(titleStyle.Render(title))
 	body.WriteString("\n")
 	m.writeWorkspacePath(&body)
 	endpoint := m.draftConfig.Provider.BaseURL
@@ -1770,9 +2002,99 @@ func (m model) viewModels() string {
 	if m.discovering {
 		body.WriteString(helpStyle.Render("loading models · ctrl+c quit"))
 	} else {
-		body.WriteString(helpStyle.Render(fmt.Sprintf("%d/%d models · type to filter · ↑/↓ select · enter save · esc back", len(filtered), len(m.models))))
+		help := fmt.Sprintf("%d/%d models · type to filter · ↑/↓ select · enter save · esc back", len(filtered), len(m.models))
+		if m.modelTarget != "" && m.modelTarget != defaultModelTarget {
+			help = fmt.Sprintf("%d/%d models · type to filter · ↑/↓ select · enter next/save · esc back", len(filtered), len(m.models))
+		}
+		body.WriteString(helpStyle.Render(help))
 	}
 	return frameStyle.Width(max(36, m.width-4)).Render(body.String())
+}
+
+func (m model) viewModelTargets() string {
+	targets := modelTargets()
+	var body strings.Builder
+	body.WriteString(titleStyle.Render("q · model settings"))
+	body.WriteString("\n")
+	m.writeWorkspacePath(&body)
+	body.WriteString(subtleStyle.Render("Choose the main loop or a subagent role"))
+	body.WriteString("\n\n")
+	if m.discovering {
+		body.WriteString(subtleStyle.Render("Loading models…"))
+	} else {
+		for index, target := range targets {
+			prefix := "  "
+			style := subtleStyle
+			if index == m.modelTargetCursor {
+				prefix = "› "
+				style = activeLabelStyle
+			}
+			body.WriteString(prefix)
+			body.WriteString(style.Render(target))
+			body.WriteString(subtleStyle.Render("  " + targetModelSummary(m.draftConfig, target)))
+			body.WriteString("\n")
+		}
+	}
+	if m.status != "" && !m.discovering {
+		body.WriteString("\n")
+		body.WriteString(errorStyle.Render(m.status))
+		body.WriteString("\n")
+	}
+	body.WriteString("\n")
+	body.WriteString(helpStyle.Render("↑/↓ select · enter edit · i inherit default · esc chat"))
+	return frameStyle.Width(max(36, m.width-4)).Render(body.String())
+}
+
+func (m model) viewReasoningEfforts() string {
+	reasoning := selectedReasoning(m.modelSelection)
+	efforts := []string{""}
+	if reasoning != nil {
+		efforts = append(efforts, reasoning.SupportedEfforts...)
+	}
+	var body strings.Builder
+	body.WriteString(titleStyle.Render("q · " + m.modelTarget + " reasoning effort"))
+	body.WriteString("\n")
+	m.writeWorkspacePath(&body)
+	body.WriteString(subtleStyle.Render(m.modelSelection.ID))
+	body.WriteString("\n\n")
+	for index, effort := range efforts {
+		label := effort
+		if effort == "" {
+			label = "default"
+		}
+		prefix := "  "
+		style := subtleStyle
+		if index == m.reasoningCursor {
+			prefix = "› "
+			style = activeLabelStyle
+		}
+		body.WriteString(prefix)
+		body.WriteString(style.Render(label))
+		if effort == "" {
+			body.WriteString(subtleStyle.Render("  omit reasoning_effort"))
+		} else if reasoning != nil && effort == reasoning.DefaultEffort {
+			body.WriteString(subtleStyle.Render("  provider default"))
+		}
+		body.WriteString("\n")
+	}
+	body.WriteString("\n")
+	body.WriteString(helpStyle.Render("↑/↓ select · enter save · esc models"))
+	return frameStyle.Width(max(36, m.width-4)).Render(body.String())
+}
+
+func targetModelSummary(value config.Config, target string) string {
+	if target == defaultModelTarget {
+		return value.Provider.Model + " · main loop"
+	}
+	agent, configured := value.Agents.Roles[target]
+	if !configured || agent.Model == "" {
+		return "inherits default · " + value.Provider.Model
+	}
+	summary := agent.Model
+	if agent.ReasoningEffort != "" {
+		summary += " · effort " + agent.ReasoningEffort
+	}
+	return summary
 }
 
 func (m model) viewChat() string {

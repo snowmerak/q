@@ -310,6 +310,14 @@ func TestSlashModelOpensPickerAndPreservesHistory(t *testing.T) {
 	if m.screen != screenModels || len(m.models) != 2 {
 		t.Fatalf("model picker state = screen %v, models %#v", m.screen, m.models)
 	}
+	if m.modelPickerStage != modelPickerTargets {
+		t.Fatalf("model picker stage = %v", m.modelPickerStage)
+	}
+	updated, _ = m.updateModelPicker(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m = updated.(model)
+	if m.modelPickerStage != modelPickerModels || m.modelTarget != defaultModelTarget {
+		t.Fatalf("default target state = stage %v, target %q", m.modelPickerStage, m.modelTarget)
+	}
 	m.modelCursor = 0 // new-model sorts before old-model.
 	updated, command = m.updateModelPicker(tea.KeyPressMsg{Code: tea.KeyEnter})
 	m = updated.(model)
@@ -324,6 +332,102 @@ func TestSlashModelOpensPickerAndPreservesHistory(t *testing.T) {
 	}
 	if len(m.messages) != 2 || m.messages[1].Content != "keep me" {
 		t.Fatalf("history was not preserved: %#v", m.messages)
+	}
+}
+
+func TestSlashModelConfiguresSubagentModelAndReasoning(t *testing.T) {
+	store := config.Store{Dir: t.TempDir()}
+	value := config.Default()
+	value.Provider.Model = "default-model"
+	fake := &fakeClient{models: []client.Model{
+		{ID: "default-model"},
+		{ID: "planning-model", Capabilities: &client.ModelCapabilities{Reasoning: &client.ReasoningCapabilities{
+			Supported: true, Control: client.ReasoningControlEffort,
+			SupportedEfforts: []string{"low", "high"}, DefaultEffort: "high",
+		}}},
+	}}
+	m := newModel(context.Background(), store, nil)
+	m.enterChat(value, fake)
+	m.messages = append(m.messages, client.Message{Role: client.RoleUser, Content: "keep me"})
+	m.input.SetValue("/model")
+
+	updated, _ := m.updateChatKey(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m = updated.(model)
+	updated, command := m.Update(deferredSubmitMsg{})
+	m = updated.(model)
+	updated, _ = m.Update(command())
+	m = updated.(model)
+
+	targets := modelTargets()
+	for index, target := range targets {
+		if target == config.AgentRolePlanner {
+			m.modelTargetCursor = index
+			break
+		}
+	}
+	updated, _ = m.updateModelPicker(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m = updated.(model)
+	if m.modelPickerStage != modelPickerModels || m.modelTarget != config.AgentRolePlanner {
+		t.Fatalf("planner target state = stage %v, target %q", m.modelPickerStage, m.modelTarget)
+	}
+	m.modelCursor = 1
+	updated, command = m.updateModelPicker(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m = updated.(model)
+	if command != nil || m.modelPickerStage != modelPickerReasoning {
+		t.Fatalf("reasoning stage = %v, command nil = %v", m.modelPickerStage, command == nil)
+	}
+	m.reasoningCursor = 2 // default, low, high
+	updated, command = m.updateModelPicker(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m = updated.(model)
+	if command == nil {
+		t.Fatal("save subagent configuration command is nil")
+	}
+	updated, _ = m.Update(command())
+	m = updated.(model)
+
+	agent := m.config.Agents.Roles[config.AgentRolePlanner]
+	if m.screen != screenChat || agent.Model != "planning-model" || agent.ReasoningEffort != "high" {
+		t.Fatalf("saved planner config = %#v on screen %v", agent, m.screen)
+	}
+	if fake.closed {
+		t.Fatal("subagent model change replaced the main chat client")
+	}
+	if len(m.messages) != 2 || m.messages[1].Content != "keep me" {
+		t.Fatalf("history was not preserved: %#v", m.messages)
+	}
+	loaded, err := store.Load()
+	if err != nil || loaded.Agents.Roles[config.AgentRolePlanner] != agent {
+		t.Fatalf("loaded config = %#v, err = %v", loaded, err)
+	}
+}
+
+func TestModelPickerCanRestoreSubagentDefaultInheritance(t *testing.T) {
+	store := config.Store{Dir: t.TempDir()}
+	value := config.Default()
+	value.Provider.Model = "default-model"
+	value.Agents.Roles = map[string]config.AgentConfig{
+		config.AgentRoleCoder: {Model: "coding-model", ReasoningEffort: "high"},
+	}
+	m := newModel(context.Background(), store, nil)
+	m.enterChat(value, &fakeClient{})
+	m.modelReturn = screenChat
+	m.modelChooseTarget = true
+	m.enterModelPicker(value, []client.Model{{ID: "default-model"}, {ID: "coding-model"}})
+	for index, target := range modelTargets() {
+		if target == config.AgentRoleCoder {
+			m.modelTargetCursor = index
+			break
+		}
+	}
+	updated, command := m.updateModelPicker(tea.KeyPressMsg{Code: 'i', Text: "i"})
+	m = updated.(model)
+	if command == nil {
+		t.Fatal("inherit default command is nil")
+	}
+	updated, _ = m.Update(command())
+	m = updated.(model)
+	if _, configured := m.config.Agents.Roles[config.AgentRoleCoder]; configured {
+		t.Fatalf("coder override was not removed: %#v", m.config.Agents.Roles)
 	}
 }
 

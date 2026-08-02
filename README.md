@@ -100,12 +100,19 @@ Chat keys:
 - `Enter`: send
 - `Shift+Enter`: insert a newline
 - `/clear`: clear the conversation and remove the current workspace session
-- `/model`: load the current provider's models and change the active model
+- `/model`: configure the main-loop default model or a subagent role model
 - `/provider`: list, add, edit, enable, disable, or delete Gateway providers
 - `Ctrl+L`: clear the in-memory conversation
 - `Ctrl+S`: send (alternative shortcut)
 - `Ctrl+P`: edit provider settings (alternative shortcut)
 - `Esc` or `Ctrl+C`: quit
+
+`/model` first shows `default` (the main chat loop) followed by the built-in
+subagent roles. Selecting a role opens the shared model catalog; models that
+advertise enumerated reasoning efforts add a final effort picker whose
+`default` choice omits `reasoning_effort`. Select a subagent in the target list
+and press `i` to remove that role's override and inherit the main-loop default
+again.
 
 The full chat transcript and separate request context are persisted in the
 current workspace. When model context metadata is available, q
