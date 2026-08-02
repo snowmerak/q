@@ -15,6 +15,7 @@ import (
 	"github.com/snowmerak/q/client"
 	"github.com/snowmerak/q/config"
 	"github.com/snowmerak/q/memory"
+	"golang.org/x/text/unicode/norm"
 )
 
 type screen uint8
@@ -129,6 +130,9 @@ func newModel(ctx context.Context, store config.Store, factory clientFactory) mo
 
 func newChatInput() textarea.Model {
 	input := textarea.New()
+	// A real terminal cursor gives Windows IMEs an accurate composition and
+	// candidate-window position. The default virtual cursor is only painted text.
+	input.SetVirtualCursor(false)
 	input.Placeholder = "Type a message…"
 	input.Prompt = "│ "
 	input.ShowLineNumbers = false
@@ -151,6 +155,7 @@ func (m model) Init() tea.Cmd {
 }
 
 func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
+	message = normalizeTextInputMessage(message)
 	switch message := message.(type) {
 	case tea.WindowSizeMsg:
 		m.resize(message.Width, message.Height)
@@ -477,7 +482,7 @@ func (m model) updateChatKey(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m model) submitChat() (tea.Model, tea.Cmd) {
-	content := strings.TrimSpace(m.input.Value())
+	content := strings.TrimSpace(norm.NFC.String(m.input.Value()))
 	if m.waiting || content == "" || m.client == nil {
 		return m, nil
 	}
@@ -727,7 +732,31 @@ func (m model) View() tea.View {
 	view := tea.NewView(content)
 	view.AltScreen = true
 	view.WindowTitle = "q"
+	if m.screen == screenChat && !m.waiting {
+		if cursor := m.input.Cursor(); cursor != nil {
+			cursor.Position.X += frameStyle.GetPaddingLeft()
+			cursor.Position.Y += frameStyle.GetPaddingTop() + 2 + m.viewport.Height()
+			view.Cursor = cursor
+		}
+	}
 	return view
+}
+
+func normalizeTextInputMessage(message tea.Msg) tea.Msg {
+	switch value := message.(type) {
+	case tea.KeyPressMsg:
+		if value.Text != "" && !norm.NFC.IsNormalString(value.Text) {
+			value.Text = norm.NFC.String(value.Text)
+		}
+		return value
+	case tea.PasteMsg:
+		if !norm.NFC.IsNormalString(value.Content) {
+			value.Content = norm.NFC.String(value.Content)
+		}
+		return value
+	default:
+		return message
+	}
 }
 
 func (m model) viewSetup() string {

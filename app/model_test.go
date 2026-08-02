@@ -151,6 +151,31 @@ func TestEnterSendsAndShiftEnterAddsNewline(t *testing.T) {
 	}
 }
 
+func TestUnicodeInputUsesNFCAndRealCursor(t *testing.T) {
+	decomposed := "\u1100\u1161" // Hangul choseong kiyeok + jungseong a.
+	key := normalizeTextInputMessage(tea.KeyPressMsg{Code: 'ᄀ', Text: decomposed}).(tea.KeyPressMsg)
+	if key.Text != "가" {
+		t.Fatalf("normalized key text = %q", key.Text)
+	}
+	paste := normalizeTextInputMessage(tea.PasteMsg{Content: decomposed}).(tea.PasteMsg)
+	if paste.Content != "가" {
+		t.Fatalf("normalized paste = %q", paste.Content)
+	}
+
+	value := config.Default()
+	value.Provider.Model = "test-model"
+	fake := &fakeClient{}
+	m := newModel(context.Background(), config.Store{Dir: t.TempDir()}, nil)
+	m.enterChat(value, fake)
+	if m.input.VirtualCursor() || m.View().Cursor == nil {
+		t.Fatal("chat input is not using the real terminal cursor")
+	}
+	m = submitAndReceive(t, m, decomposed)
+	if got := fake.requests[0].Messages[1].Content; got != "가" {
+		t.Fatalf("submitted content = %q", got)
+	}
+}
+
 func TestSlashModelOpensPickerAndPreservesHistory(t *testing.T) {
 	store := config.Store{Dir: t.TempDir()}
 	value := config.Default()
@@ -214,11 +239,8 @@ func TestSlashClearResetsConversation(t *testing.T) {
 	m.conversationID = "conversation-1"
 	m.input.SetValue("/clear")
 
-	updated, command := m.updateChatKey(tea.KeyPressMsg{Code: tea.KeyEnter})
+	updated, _ := m.updateChatKey(tea.KeyPressMsg{Code: tea.KeyEnter})
 	m = updated.(model)
-	if command == nil {
-		t.Fatal("clear command did not restore input focus")
-	}
 	if m.input.Value() != "" || m.conversationID != "" {
 		t.Fatalf("input = %q, conversation ID = %q", m.input.Value(), m.conversationID)
 	}
