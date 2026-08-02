@@ -25,7 +25,7 @@ provider:
   api_key_env: OPENAI_API_KEY
   system_prompt: You are a helpful assistant.
 context:
-  trigger_ratio: 0.78
+  trigger_ratio: 0.85
   target_ratio: 0.22
   recent_ratio: 0.07
 ```
@@ -48,7 +48,7 @@ Chat keys:
 
 The full chat transcript is held in memory, while a separate request context
 provides multi-turn conversation. When model context metadata is available, q
-automatically compacts that request context at 78% to a maximum of 22% while
+automatically compacts that request context at 85% to a maximum of 22% while
 keeping the full transcript visible. Set `context.window` when the provider does
 not expose `context_length`; discovered model context metadata is otherwise saved
 as `provider.context_window`. Conversation persistence and agent tool execution

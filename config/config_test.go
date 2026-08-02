@@ -75,7 +75,7 @@ func TestResolveAPIKeyPrecedence(t *testing.T) {
 func TestEffectiveContextUsesDefaultsAndExplicitWindow(t *testing.T) {
 	value := Config{Provider: ProviderConfig{ContextWindow: 123456}}
 	effective := value.EffectiveContext()
-	if effective.TriggerRatio != .78 || effective.TargetRatio != .22 || effective.RecentRatio != .07 {
+	if effective.TriggerRatio != .85 || effective.TargetRatio != .22 || effective.RecentRatio != .07 {
 		t.Fatalf("effective context = %#v", effective)
 	}
 	if got := value.EffectiveContextWindow(); got != 123456 {

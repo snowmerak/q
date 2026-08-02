@@ -8,21 +8,21 @@ import (
 )
 
 func TestThresholdUsesSeventyEightPercent(t *testing.T) {
-	m := New(Policy{ContextWindow: 1000, TriggerRatio: .78, TargetRatio: .22, RecentRatio: .07}, nil)
+	m := New(Policy{ContextWindow: 1000, TriggerRatio: .85, TargetRatio: .22, RecentRatio: .07}, nil)
 	m.Append(client.Message{Role: client.RoleUser, Content: strings.Repeat("x", 2200)})
 	predicted := m.PredictedTokens()
-	m.Configure(Policy{ContextWindow: int(float64(predicted)/.78) + 10, TriggerRatio: .78, TargetRatio: .22, RecentRatio: .07})
+	m.Configure(Policy{ContextWindow: int(float64(predicted)/.85) + 10, TriggerRatio: .85, TargetRatio: .22, RecentRatio: .07})
 	if m.ShouldCompact() {
-		t.Fatalf("predicted tokens = %d, compacted below 78%%", predicted)
+		t.Fatalf("predicted tokens = %d, compacted below 85%%", predicted)
 	}
-	m.Configure(Policy{ContextWindow: int(float64(predicted) / .78), TriggerRatio: .78, TargetRatio: .22, RecentRatio: .07})
+	m.Configure(Policy{ContextWindow: int(float64(predicted) / .85), TriggerRatio: .85, TargetRatio: .22, RecentRatio: .07})
 	if !m.ShouldCompact() {
 		t.Fatalf("predicted tokens = %d, want compaction", m.PredictedTokens())
 	}
 }
 
 func TestPlanAndApplyKeepSystemAndRecent(t *testing.T) {
-	policy := Policy{ContextWindow: 4000, TriggerRatio: .78, TargetRatio: .22, RecentRatio: .07}
+	policy := Policy{ContextWindow: 4000, TriggerRatio: .85, TargetRatio: .22, RecentRatio: .07}
 	system := client.Message{Role: client.RoleSystem, Content: "keep system"}
 	m := New(policy, []client.Message{system})
 	for index := 0; index < 8; index++ {
@@ -52,7 +52,7 @@ func TestPlanAndApplyKeepSystemAndRecent(t *testing.T) {
 }
 
 func TestUsageCalibratesProviderOverhead(t *testing.T) {
-	m := New(Policy{ContextWindow: 100000, TriggerRatio: .78, TargetRatio: .22, RecentRatio: .07}, []client.Message{{Role: client.RoleUser, Content: "hi"}})
+	m := New(Policy{ContextWindow: 100000, TriggerRatio: .85, TargetRatio: .22, RecentRatio: .07}, []client.Message{{Role: client.RoleUser, Content: "hi"}})
 	estimate := m.LocalEstimate()
 	m.ObserveUsage(16000, estimate)
 	stats := m.Stats()

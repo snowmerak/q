@@ -53,7 +53,7 @@ func Default() Config {
 			SystemPrompt: "You are a helpful assistant.",
 		},
 		Context: ContextConfig{
-			TriggerRatio: 0.78,
+			TriggerRatio: 0.85,
 			TargetRatio:  0.22,
 			RecentRatio:  0.07,
 		},

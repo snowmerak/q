@@ -2,7 +2,7 @@
 
 ## 목적
 
-대화 요청에 사용될 입력 컨텍스트가 선택한 모델의 context window 중 78%에
+대화 요청에 사용될 입력 컨텍스트가 선택한 모델의 context window 중 85%에
 도달하면, 오래된 대화를 누적 요약으로 교체해 다음 요청의 입력 컨텍스트를
 전체 window의 22% 이하로 줄인다.
 
@@ -19,7 +19,7 @@
 
 현재 다음 핵심 경로가 구현되어 있다.
 
-- 기본 정책 78% trigger, 22% target, 7% recent 원문
+- 기본 정책 85% trigger, 22% target, 7% recent 원문
 - 선택 모델의 `context_length` 저장 및 기존 설정 시작 시 metadata 보충
 - 전체 transcript와 API request context 분리
 - 보수적 token 추정과 실제 `prompt_tokens` 기반 provider overhead 보정
@@ -159,12 +159,12 @@ downstream 제한과 다를 수 있기 때문이다. context window가 없거나
 ```yaml
 context:
   window: 258400
-  trigger_ratio: 0.78
+  trigger_ratio: 0.85
   target_ratio: 0.22
   recent_ratio: 0.07
 ```
 
-기본값은 trigger 0.78, target 0.22, recent 0.07이다. `window`는 선택 모델의
+기본값은 trigger 0.85, target 0.22, recent 0.07이다. `window`는 선택 모델의
 metadata가 존재하면 생략할 수 있다.
 
 ## token 사용량 계산
@@ -179,7 +179,7 @@ providerOverhead = max(0, usage.PromptTokens-lastLocalEstimate)
 
 ```go
 projected = tokenCounter.Count(nextPayload) + providerOverhead
-trigger   = int(float64(contextWindow) * 0.78)
+trigger   = int(float64(contextWindow) * 0.85)
 target    = int(float64(contextWindow) * 0.22)
 ```
 
@@ -245,8 +245,8 @@ immutable 영역만 이미 22%를 넘으면 목표 달성은 불가능하다. �
 ```text
 Idle
   └─ Enter
-      ├─ projected < 78% → Sending
-      └─ projected >= 78%
+      ├─ projected < 85% → Sending
+      └─ projected >= 85%
            └─ Compacting
                 ├─ 성공 → conversation_id 초기화 → Sending
                 └─ 실패 → 원문 보존 → 사용자 입력 복구 → Idle
@@ -302,7 +302,7 @@ context size unknown
 
 단위 테스트:
 
-- 77.9%에서는 압축하지 않고 78% 이상에서 압축한다.
+- 77.9%에서는 압축하지 않고 85% 이상에서 압축한다.
 - 압축 후 immutable + summary + recent가 22% 이하가 된다.
 - system prompt와 tool call/result 묶음이 보존된다.
 - 기존 summary가 다음 summary에 병합된다.
@@ -315,7 +315,7 @@ context size unknown
 
 통합 테스트:
 
-- 가짜 client로 `chat → 78% 감지 → compact → 원 요청 재전송` 순서를 검증한다.
+- 가짜 client로 `chat → 85% 감지 → compact → 원 요청 재전송` 순서를 검증한다.
 - 로컬 API에서 usage가 반환되는 chat 모델 하나와 반환되지 않는 fake provider를
   각각 검증한다.
 - `go test ./...`, `go vet ./...`, `go build ./...`를 통과한다.
