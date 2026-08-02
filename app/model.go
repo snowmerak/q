@@ -631,14 +631,18 @@ func (m model) viewSetup() string {
 		if index == m.setupFocus {
 			label = activeLabelStyle.Render(labels[index])
 		}
-		body.WriteString(label + "\n" + field.View() + "\n\n")
+		body.WriteString(label)
+		body.WriteString("\n")
+		body.WriteString(field.View())
+		body.WriteString("\n\n")
 	}
 	if m.status != "" {
 		statusStyle := errorStyle
 		if m.discovering {
 			statusStyle = subtleStyle
 		}
-		body.WriteString(statusStyle.Render(m.status) + "\n")
+		body.WriteString(statusStyle.Render(m.status))
+		body.WriteString("\n")
 	}
 	help := "tab/↑/↓ navigate · enter next/save · esc quit"
 	if m.setupEdit {
@@ -676,7 +680,9 @@ func (m model) viewModels() string {
 				prefix = "› "
 				style = activeLabelStyle
 			}
-			body.WriteString(prefix + style.Render(filtered[index].ID) + "\n")
+			body.WriteString(prefix)
+			body.WriteString(style.Render(filtered[index].ID))
+			body.WriteString("\n")
 		}
 	}
 	body.WriteString("\n")
