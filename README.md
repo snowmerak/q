@@ -98,5 +98,7 @@ as `provider.context_window`.
 
 Each chat request exposes q's workspace-scoped builtin MCP tools to the model.
 When the model returns tool calls, q executes them, appends their results to the
-conversation, and continues the same turn automatically. Filesystem tools are
-root-jailed; shell commands start in the workspace but are not an OS sandbox.
+conversation, and continues the same turn automatically. Tool calls, command
+status, exit codes, and command output are rendered as live progress while the
+turn is running. Filesystem tools are root-jailed; shell commands start in the
+workspace but are not an OS sandbox.

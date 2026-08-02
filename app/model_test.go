@@ -617,7 +617,31 @@ func TestChatExecutesToolCallsAndContinuesTurn(t *testing.T) {
 	m.workspaceStore = &workspaceStore
 	m.toolRuntime = agentTools
 	m.enterChat(value, configuredClient)
-	m = submitAndReceive(t, m, "create a Go project")
+	m.input.SetValue("create a Go project")
+	updated, command := m.submitChat()
+	m = updated.(model)
+
+	updated, command = m.Update(nextAgentMessage(t, command))
+	m = updated.(model)
+	if !m.waiting || !strings.Contains(m.status, "Preparing tool") ||
+		len(m.messages[len(m.messages)-1].ToolCalls) != 1 {
+		t.Fatalf("tool-call progress = waiting %v, status %q, messages %#v", m.waiting, m.status, m.messages)
+	}
+
+	updated, command = m.Update(nextAgentMessage(t, command))
+	m = updated.(model)
+	if !strings.Contains(m.status, "Running tool") || !strings.Contains(m.status, "write main.go") {
+		t.Fatalf("tool-start progress status = %q", m.status)
+	}
+
+	updated, command = m.Update(nextAgentMessage(t, command))
+	m = updated.(model)
+	if m.messages[len(m.messages)-1].Role != client.RoleTool || !strings.Contains(m.status, "completed") {
+		t.Fatalf("tool-result progress = status %q, messages %#v", m.status, m.messages)
+	}
+
+	updated, _ = m.Update(nextAgentMessage(t, command))
+	m = updated.(model)
 
 	if len(configuredClient.requests) != 2 || len(configuredClient.requests[0].Tools) != 1 {
 		t.Fatalf("agent requests = %#v", configuredClient.requests)
@@ -642,6 +666,47 @@ func TestChatExecutesToolCallsAndContinuesTurn(t *testing.T) {
 	if m.messages[len(m.messages)-1].Content != "Created main.go" || !strings.Contains(m.status, "Tools used · 1") {
 		t.Fatalf("final transcript = %#v, status = %q", m.messages, m.status)
 	}
+}
+
+func TestTranscriptRendersToolActivityAsReadableProgress(t *testing.T) {
+	transcript := renderTranscript([]client.Message{
+		{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{{
+			ID: "call-1", Type: client.ToolTypeFunction,
+			Function: client.FunctionCall{Name: "run_command", Arguments: `{"command":"go test ./..."}`},
+		}}},
+		{Role: client.RoleTool, Name: "wait", ToolCallID: "call-1",
+			Content: `{"command_id":"cmd-1","status":"succeeded","exit_code":0,"output":"line one\nline two\n"}`},
+	}, 100)
+	for _, expected := range []string{"→ $ go test ./...", "✓ cmd-1", "exit 0", "line one", "line two"} {
+		if !strings.Contains(transcript, expected) {
+			t.Fatalf("rendered transcript does not contain %q: %q", expected, transcript)
+		}
+	}
+	if strings.Contains(transcript, `\"command_id\"`) || strings.Contains(transcript, `line one\nline two`) {
+		t.Fatalf("rendered transcript exposed raw JSON: %q", transcript)
+	}
+}
+
+func nextAgentMessage(t *testing.T, command tea.Cmd) agentEventMsg {
+	t.Helper()
+	if command == nil {
+		t.Fatal("agent command is nil")
+	}
+	message := command()
+	if event, ok := message.(agentEventMsg); ok {
+		return event
+	}
+	batch, ok := message.(tea.BatchMsg)
+	if !ok {
+		t.Fatalf("agent command returned %T", message)
+	}
+	for _, child := range batch {
+		if event, ok := child().(agentEventMsg); ok {
+			return event
+		}
+	}
+	t.Fatal("batch did not contain an agent event")
+	return agentEventMsg{}
 }
 
 func TestProviderSettingsCanBeCancelled(t *testing.T) {

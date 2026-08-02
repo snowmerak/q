@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -139,6 +140,20 @@ type chatResultMsg struct {
 	requestEstimate int
 	toolCalls       int
 	err             error
+}
+
+type agentEvent struct {
+	message         *client.Message
+	call            *client.ToolCall
+	response        *client.ChatResponse
+	requestEstimate int
+	toolCalls       int
+	err             error
+}
+
+type agentEventMsg struct {
+	events <-chan agentEvent
+	event  agentEvent
 }
 
 type compactionResultMsg struct {
@@ -327,6 +342,29 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		m.compactionTarget = 0
 		m.enterModelPicker(message.config, message.models)
 		return m, m.modelFilter.Focus()
+	case agentEventMsg:
+		event := message.event
+		if event.call != nil {
+			m.status = "Running tool · " + describeToolCall(*event.call)
+			return m, tea.Batch(m.spinner.Tick, waitAgentEvent(message.events))
+		}
+		if event.message != nil {
+			m.messages = append(m.messages, *event.message)
+			if m.memory != nil {
+				m.memory.Append(*event.message)
+			}
+			if event.message.Role == client.RoleAssistant {
+				m.status = "Preparing tool call…"
+			} else {
+				m.status = "Thinking… · " + event.message.Name + " completed"
+			}
+			m.refreshTranscript()
+			return m, tea.Batch(m.spinner.Tick, waitAgentEvent(message.events))
+		}
+		return m.Update(chatResultMsg{
+			response: event.response, requestEstimate: event.requestEstimate,
+			toolCalls: event.toolCalls, err: event.err,
+		})
 	case chatResultMsg:
 		m.waiting = false
 		m.compacting = false
@@ -969,25 +1007,33 @@ func (m *model) sendChatRequest() tea.Cmd {
 	conversationID := m.conversationID
 	configuredClient := m.client
 	toolRuntime := m.toolRuntime
+	if toolRuntime == nil {
+		return func() tea.Msg {
+			response, err := configuredClient.Chat(m.ctx, client.ChatRequest{
+				Messages: providerMessages(history), ConversationID: conversationID,
+			})
+			return chatResultMsg{response: response, requestEstimate: m.requestEstimate, err: err}
+		}
+	}
+	events := make(chan agentEvent)
 	return func() tea.Msg {
-		return runAgentLoop(m.ctx, configuredClient, toolRuntime, history, conversationID)
+		go streamAgentLoop(m.ctx, configuredClient, toolRuntime, history, conversationID, events)
+		return waitAgentEvent(events)()
 	}
 }
 
 const maximumToolRounds = 32
 
-func runAgentLoop(
+func streamAgentLoop(
 	ctx context.Context,
 	configuredClient chatClient,
 	toolRuntime agentToolRuntime,
 	history []client.Message,
 	conversationID string,
-) chatResultMsg {
-	var availableTools []client.Tool
-	if toolRuntime != nil {
-		availableTools = toolRuntime.Tools()
-	}
-	intermediate := make([]client.Message, 0)
+	events chan<- agentEvent,
+) {
+	defer close(events)
+	availableTools := toolRuntime.Tools()
 	toolCalls := 0
 	for round := 0; round < maximumToolRounds; round++ {
 		requestEstimate := memory.CountMessages(history)
@@ -995,21 +1041,26 @@ func runAgentLoop(
 			Messages: providerMessages(history), ConversationID: conversationID, Tools: availableTools,
 		})
 		if err != nil {
-			return chatResultMsg{err: err}
+			emitAgentEvent(ctx, events, agentEvent{err: err})
+			return
 		}
 		if response == nil || len(response.Choices) == 0 {
-			return chatResultMsg{response: response}
+			emitAgentEvent(ctx, events, agentEvent{response: response})
+			return
 		}
 		assistant := response.Choices[0].Message
 		if assistant.Role == "" {
 			assistant.Role = client.RoleAssistant
 		}
-		if len(assistant.ToolCalls) == 0 || toolRuntime == nil {
+		if len(assistant.ToolCalls) == 0 {
 			response.Choices[0].Message = assistant
-			return chatResultMsg{
-				response: response, intermediate: intermediate,
-				requestEstimate: requestEstimate, toolCalls: toolCalls,
+			if response.ConversationID == "" {
+				response.ConversationID = conversationID
 			}
+			emitAgentEvent(ctx, events, agentEvent{
+				response: response, requestEstimate: requestEstimate, toolCalls: toolCalls,
+			})
+			return
 		}
 		if response.ConversationID != "" {
 			conversationID = response.ConversationID
@@ -1020,8 +1071,14 @@ func runAgentLoop(
 			}
 		}
 		history = append(history, assistant)
-		intermediate = append(intermediate, assistant)
+		if !emitAgentEvent(ctx, events, agentEvent{message: &assistant}) {
+			return
+		}
 		for _, call := range assistant.ToolCalls {
+			callCopy := call
+			if !emitAgentEvent(ctx, events, agentEvent{call: &callCopy}) {
+				return
+			}
 			result, callErr := toolRuntime.Call(ctx, call)
 			if callErr != nil {
 				result = client.ToolResult{Content: callErr.Error(), IsError: true}
@@ -1035,11 +1092,32 @@ func runAgentLoop(
 				ToolCallID: call.ID, Content: content,
 			}
 			history = append(history, message)
-			intermediate = append(intermediate, message)
 			toolCalls++
+			if !emitAgentEvent(ctx, events, agentEvent{message: &message}) {
+				return
+			}
 		}
 	}
-	return chatResultMsg{err: fmt.Errorf("agent stopped after %d tool rounds", maximumToolRounds)}
+	emitAgentEvent(ctx, events, agentEvent{err: fmt.Errorf("agent stopped after %d tool rounds", maximumToolRounds)})
+}
+
+func emitAgentEvent(ctx context.Context, events chan<- agentEvent, event agentEvent) bool {
+	select {
+	case events <- event:
+		return true
+	case <-ctx.Done():
+		return false
+	}
+}
+
+func waitAgentEvent(events <-chan agentEvent) tea.Cmd {
+	return func() tea.Msg {
+		event, ok := <-events
+		if !ok {
+			event.err = errors.New("agent event stream closed unexpectedly")
+		}
+		return agentEventMsg{events: events, event: event}
+	}
 }
 
 // providerMessages removes q-internal message names that some compatible APIs
@@ -1352,8 +1430,16 @@ func renderTranscript(messages []client.Message, width int) string {
 			bodyStyle = assistantBodyStyle
 		}
 		body := message.TextContent()
-		if body == "" && len(message.ToolCalls) > 0 {
-			body = fmt.Sprintf("[%d tool call(s)]", len(message.ToolCalls))
+		if len(message.ToolCalls) > 0 {
+			calls := renderToolCalls(message.ToolCalls)
+			if body == "" {
+				body = calls
+			} else {
+				body += "\n\n" + calls
+			}
+		}
+		if message.Role == client.RoleTool {
+			body = renderToolResult(message)
 		}
 		blocks = append(blocks, labelStyle.Render(label)+"\n"+bodyStyle.Width(max(10, width-2)).Render(body))
 	}
@@ -1361,6 +1447,134 @@ func renderTranscript(messages []client.Message, width int) string {
 		return emptyStyle.Render("Start a conversation. Your messages stay in memory for this run.")
 	}
 	return strings.Join(blocks, "\n\n")
+}
+
+func renderToolCalls(calls []client.ToolCall) string {
+	lines := make([]string, 0, len(calls))
+	for _, call := range calls {
+		lines = append(lines, "→ "+describeToolCall(call))
+	}
+	return strings.Join(lines, "\n")
+}
+
+func describeToolCall(call client.ToolCall) string {
+	arguments := toolArguments(call.Function.Arguments)
+	switch call.Function.Name {
+	case "run_command":
+		if command := stringArgument(arguments, "command"); command != "" {
+			return "$ " + command
+		}
+	case "wait":
+		return "wait for " + stringArgument(arguments, "command_id")
+	case "cmd_status":
+		return "check " + stringArgument(arguments, "command_id")
+	case "read_file":
+		return "read " + stringArgument(arguments, "path")
+	case "write_file":
+		content := stringArgument(arguments, "content")
+		return fmt.Sprintf("write %s · %d bytes", stringArgument(arguments, "path"), len([]byte(content)))
+	case "edit_file":
+		return "edit " + stringArgument(arguments, "path")
+	case "list_directory":
+		path := stringArgument(arguments, "path")
+		if path == "" {
+			path = "."
+		}
+		return "list " + path
+	case "create_directory":
+		return "create directory " + stringArgument(arguments, "path")
+	case "remove_path":
+		return "remove " + stringArgument(arguments, "path")
+	case "move_path", "copy_path":
+		return call.Function.Name + " " + stringArgument(arguments, "source") + " → " + stringArgument(arguments, "destination")
+	}
+	return call.Function.Name
+}
+
+func renderToolResult(message client.Message) string {
+	if strings.HasPrefix(message.Content, "Tool error: ") {
+		return "✗ " + message.Name + "\n" + strings.TrimPrefix(message.Content, "Tool error: ")
+	}
+	var value map[string]any
+	if json.Unmarshal([]byte(message.Content), &value) != nil {
+		return "✓ " + message.Content
+	}
+	switch message.Name {
+	case "run_command", "cmd_status", "wait":
+		id := stringValue(value["command_id"])
+		status := stringValue(value["status"])
+		marker := "•"
+		if status == "succeeded" {
+			marker = "✓"
+		} else if status == "failed" {
+			marker = "✗"
+		}
+		line := strings.TrimSpace(strings.Join([]string{marker, id, "·", status}, " "))
+		if exitCode, ok := value["exit_code"]; ok {
+			line += " · exit " + stringValue(exitCode)
+		}
+		if output := strings.TrimRight(stringValue(value["output"]), "\r\n"); output != "" {
+			line += "\n" + limitToolOutput(output)
+		}
+		if more, _ := value["more_output"].(bool); more {
+			line += "\n… more output available"
+		}
+		return line
+	case "write_file":
+		return fmt.Sprintf("✓ wrote %s · %s bytes", stringValue(value["path"]), stringValue(value["bytes"]))
+	case "edit_file":
+		result := fmt.Sprintf("✓ edited %s · %s change(s)", stringValue(value["path"]), stringValue(value["applied"]))
+		if diff := strings.TrimSpace(stringValue(value["diff"])); diff != "" {
+			result += "\n" + limitToolOutput(diff)
+		}
+		return result
+	case "read_file":
+		return fmt.Sprintf("✓ read %s · %s/%s lines", stringValue(value["path"]), stringValue(value["line_count"]), stringValue(value["total_lines"]))
+	case "create_directory":
+		return "✓ created " + stringValue(value["path"])
+	case "remove_path":
+		return "✓ removed " + stringValue(value["path"])
+	case "move_path", "copy_path":
+		return "✓ " + stringValue(value["source"]) + " → " + stringValue(value["destination"])
+	case "list_directory":
+		entries, _ := value["entries"].([]any)
+		return fmt.Sprintf("✓ listed %s · %d entries", stringValue(value["path"]), len(entries))
+	}
+	body, err := json.MarshalIndent(value, "", "  ")
+	if err != nil {
+		return "✓ " + message.Name
+	}
+	return "✓ " + message.Name + "\n" + string(body)
+}
+
+func toolArguments(arguments string) map[string]any {
+	var value map[string]any
+	_ = json.Unmarshal([]byte(arguments), &value)
+	return value
+}
+
+func stringArgument(arguments map[string]any, name string) string {
+	return stringValue(arguments[name])
+}
+
+func stringValue(value any) string {
+	switch value := value.(type) {
+	case string:
+		return value
+	case nil:
+		return ""
+	default:
+		return fmt.Sprint(value)
+	}
+}
+
+func limitToolOutput(output string) string {
+	const maximumRunes = 8000
+	runes := []rune(output)
+	if len(runes) <= maximumRunes {
+		return output
+	}
+	return "… output truncated in UI\n" + string(runes[len(runes)-maximumRunes:])
 }
 
 func (m model) View() tea.View {
