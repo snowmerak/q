@@ -60,6 +60,47 @@ func TestSupervisorStartsAndStopsCurrentExecutableChild(t *testing.T) {
 	}
 }
 
+func TestSupervisorReportsProviderDiscoveryErrorWithoutLeakingAPIKey(t *testing.T) {
+	const apiKey = "secret-test-api-key"
+	upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.URL.Path != "/v1/models" {
+			http.NotFound(writer, request)
+			return
+		}
+		writer.Header().Set("Content-Type", "application/json")
+		writer.WriteHeader(http.StatusUnauthorized)
+		_, _ = writer.Write([]byte(`{"type":"error","error":{"type":"authentication_error","message":"invalid x-api-key secret-test-api-key"}}`))
+	}))
+	defer upstream.Close()
+
+	t.Setenv("Q_GATEWAY_HELPER_PROCESS", "1")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	supervisor := &Supervisor{
+		ctx: ctx, store: Store{Dir: t.TempDir()}, executable: os.Args[0],
+		argsPrefix: []string{"-test.run=TestGatewayChildProcess", "--"},
+	}
+	_, err := supervisor.Prepare(ctx, gateway.Config{Providers: []gateway.ProviderConfig{{
+		ID: "claude", Type: "anthropic", Enabled: true,
+		BaseURL: upstream.URL + "/v1", APIKey: apiKey,
+	}}})
+	if err == nil {
+		t.Fatal("provider with rejected API key unexpectedly started")
+	}
+	message := err.Error()
+	for _, expected := range []string{"claude", "HTTP 401", "authentication_error"} {
+		if !strings.Contains(message, expected) {
+			t.Errorf("error %q does not contain %q", message, expected)
+		}
+	}
+	if strings.Contains(message, apiKey) {
+		t.Fatalf("error leaked API key: %q", message)
+	}
+	if strings.Contains(message, "returned no models") {
+		t.Fatalf("error hid provider failure: %q", message)
+	}
+}
+
 func TestGatewayChildProcess(t *testing.T) {
 	if os.Getenv("Q_GATEWAY_HELPER_PROCESS") != "1" {
 		return

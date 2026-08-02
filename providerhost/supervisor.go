@@ -15,6 +15,8 @@ import (
 	"time"
 
 	"github.com/snowmerak/llm-provider/gateway"
+	"github.com/snowmerak/llm-provider/providers/anthropic"
+	provideropenai "github.com/snowmerak/llm-provider/providers/openai"
 )
 
 const childStartupTimeout = 30 * time.Second
@@ -228,10 +230,70 @@ func validateModels(ctx context.Context, endpoint string, value gateway.Config) 
 			}
 		}
 		if !found {
+			if discoveryErr := diagnoseProviderModels(ctx, provider); discoveryErr != nil {
+				return fmt.Errorf("providerhost: provider %q model discovery failed: %s", provider.ID, redactProviderError(discoveryErr, provider))
+			}
 			return fmt.Errorf("providerhost: provider %q returned no models", provider.ID)
 		}
 	}
 	return nil
+}
+
+func diagnoseProviderModels(ctx context.Context, config gateway.ProviderConfig) error {
+	apiKey := config.APIKey
+	if config.APIKeyEnv != "" {
+		apiKey = os.Getenv(config.APIKeyEnv)
+	}
+	switch config.Type {
+	case "anthropic", "claude":
+		options := []anthropic.Option{anthropic.WithAPIKey(apiKey)}
+		if config.BaseURL != "" {
+			options = append(options, anthropic.WithBaseURL(config.BaseURL))
+		}
+		for name, value := range config.Headers {
+			options = append(options, anthropic.WithHeader(name, value))
+		}
+		_, err := anthropic.New(options...).ListModels(ctx)
+		return err
+	case "openai-compatible", "openrouter", "xai", "grok":
+		baseURL := config.BaseURL
+		if baseURL == "" {
+			switch config.Type {
+			case "openrouter":
+				baseURL = "https://openrouter.ai/api/v1"
+			case "xai", "grok":
+				baseURL = "https://api.x.ai/v1"
+			}
+		}
+		options := []provideropenai.Option{
+			provideropenai.WithBaseURL(baseURL), provideropenai.WithAPIKey(apiKey),
+		}
+		for name, value := range config.Headers {
+			options = append(options, provideropenai.WithHeader(name, value))
+		}
+		_, err := provideropenai.New(options...).ListModels(ctx)
+		return err
+	default:
+		return nil
+	}
+}
+
+func redactProviderError(err error, config gateway.ProviderConfig) string {
+	message := err.Error()
+	secrets := []string{config.APIKey}
+	if config.APIKeyEnv != "" {
+		secrets = append(secrets, os.Getenv(config.APIKeyEnv))
+	}
+	for _, secret := range secrets {
+		if secret != "" {
+			message = strings.ReplaceAll(message, secret, "[redacted]")
+		}
+	}
+	const maximumErrorLength = 1024
+	if len(message) > maximumErrorLength {
+		message = message[:maximumErrorLength] + "…"
+	}
+	return message
 }
 
 type limitedBuffer struct {
