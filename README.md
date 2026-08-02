@@ -1,17 +1,22 @@
 # q
 
-`q` is an interactive OpenAI-compatible chat client built with Bubble Tea.
+`q` is an interactive multi-provider chat client built with Bubble Tea. It
+embeds `snowmerak/llm-provider` and runs its OpenAI-compatible Gateway as a
+supervised child of the current `q` executable.
 
 ```powershell
 go run ./cmd/q
 ```
 
-On first launch, q asks for the provider base URL, API-key environment variable,
-and an optional inline API key. It then loads `/models` from that endpoint and
-opens a searchable model selector. Personal configuration is stored at:
+On first launch, q asks for a provider ID, optional model prefix, selectable API
+type, endpoint, and API-key source. API types are selected with `Left`/`Right`;
+the prefix defaults to the provider ID when omitted. q then starts an internal
+Gateway on a random loopback port, validates the provider through `/v1/models`,
+and opens a searchable model selector. Personal configuration is stored at:
 
 ```text
 ~/.q/config.yaml
+~/.q/providers.json
 ```
 
 Example:
@@ -19,10 +24,8 @@ Example:
 ```yaml
 version: 1
 provider:
-  type: openai-compatible
-  base_url: https://api.openai.com/v1
-  model: your-model
-  api_key_env: OPENAI_API_KEY
+  managed: true
+  model: codex/gpt-5.6-terra
   system_prompt: You are a helpful assistant.
 context:
   trigger_ratio: 0.85
@@ -30,9 +33,38 @@ context:
   recent_ratio: 0.07
 ```
 
-On POSIX systems the directory is created with user-only permissions and the
-configuration is written with mode `0600`. Prefer an environment variable over
-an inline key, especially on Windows where file modes do not manage ACLs.
+`providers.json` uses `llm-provider/gateway.Config` directly. Multiple enabled
+providers are exposed together using their provider ID or configured prefix:
+
+```json
+{
+  "listen": "127.0.0.1:0",
+  "providers": [
+    {
+      "id": "codex",
+      "type": "codex",
+      "enabled": true
+    },
+    {
+      "id": "local",
+      "type": "openai-compatible",
+      "enabled": true,
+      "base_url": "http://localhost:1234/v1"
+    }
+  ]
+}
+```
+
+The child binds only to `127.0.0.1:0` and reports its assigned port to the
+parent over a private stdout handshake. Provider changes start and probe a new
+child before q saves the candidate configuration and replaces the old child.
+Failed changes leave the running Gateway untouched.
+
+On POSIX systems the directory is created with user-only permissions and both
+configuration files are written with mode `0600`. Prefer an environment
+variable over an inline key, especially on Windows where file modes do not
+manage ACLs. Existing single-endpoint q configurations are migrated to a
+`default` Gateway provider on first launch.
 
 Chat keys:
 
@@ -40,7 +72,7 @@ Chat keys:
 - `Shift+Enter`: insert a newline
 - `/clear`: clear the in-memory conversation
 - `/model`: load the current provider's models and change the active model
-- `/provider`: edit provider settings
+- `/provider`: list, add, edit, enable, disable, or delete Gateway providers
 - `Ctrl+L`: clear the in-memory conversation
 - `Ctrl+S`: send (alternative shortcut)
 - `Ctrl+P`: edit provider settings (alternative shortcut)

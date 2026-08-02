@@ -6,9 +6,24 @@ import (
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/snowmerak/llm-provider/gateway"
 	"github.com/snowmerak/q/client"
 	"github.com/snowmerak/q/config"
 )
+
+type fakeProviderRuntime struct {
+	endpoint string
+	config   gateway.Config
+	applies  int
+}
+
+func (f *fakeProviderRuntime) Endpoint() string       { return f.endpoint }
+func (f *fakeProviderRuntime) Config() gateway.Config { return cloneGatewayConfig(f.config) }
+func (f *fakeProviderRuntime) Apply(_ context.Context, value gateway.Config) error {
+	f.config = cloneGatewayConfig(value)
+	f.applies++
+	return nil
+}
 
 type fakeClient struct {
 	requests []client.ChatRequest
@@ -271,6 +286,134 @@ func TestSlashProviderOpensProviderSettings(t *testing.T) {
 	m = updated.(model)
 	if m.screen != screenSetup || !m.setupEdit || m.input.Value() != "" {
 		t.Fatalf("provider command state = screen %v, edit %v, input %q", m.screen, m.setupEdit, m.input.Value())
+	}
+}
+
+func TestManagedSlashProviderOpensProviderList(t *testing.T) {
+	value := config.Default()
+	value.Provider.Model = "local/test-model"
+	value.UseManagedGateway()
+	runtime := &fakeProviderRuntime{
+		endpoint: "http://127.0.0.1:54321/v1",
+		config: gateway.Config{Providers: []gateway.ProviderConfig{{
+			ID: "local", Type: "openai-compatible", Enabled: true, BaseURL: "http://localhost:1234/v1",
+		}}},
+	}
+	fake := &fakeClient{}
+	m := newManagedModel(context.Background(), config.Store{Dir: t.TempDir()}, nil, runtime)
+	m.enterChat(value, fake)
+	m.input.SetValue("/provider")
+
+	updated, _ := m.updateChatKey(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m = updated.(model)
+	updated, _ = m.Update(deferredSubmitMsg{})
+	m = updated.(model)
+	if m.screen != screenProviders || m.input.Value() != "" || len(m.gatewayConfig.Providers) != 1 {
+		t.Fatalf("provider command state = screen %v, input %q, providers %#v", m.screen, m.input.Value(), m.gatewayConfig.Providers)
+	}
+}
+
+func TestManagedProviderAddAppliesThenOpensModelPicker(t *testing.T) {
+	value := config.Default()
+	value.Provider.Model = "local/test-model"
+	value.UseManagedGateway()
+	runtime := &fakeProviderRuntime{
+		endpoint: "http://127.0.0.1:54321/v1",
+		config: gateway.Config{Providers: []gateway.ProviderConfig{{
+			ID: "local", Type: "openai-compatible", Enabled: true, BaseURL: "http://localhost:1234/v1",
+		}}},
+	}
+	fake := &fakeClient{models: []client.Model{{ID: "local/test-model"}, {ID: "codex/gpt-test"}}}
+	m := newManagedModel(context.Background(), config.Store{Dir: t.TempDir()}, func(config.Config) (chatClient, error) {
+		return fake, nil
+	}, runtime)
+	m.enterChat(value, &fakeClient{})
+	m.enterProviderList()
+	updated, _ := m.updateProviders(tea.KeyPressMsg{Code: 'a', Text: "a"})
+	m = updated.(model)
+	m.setup[setupProviderID].SetValue("codex")
+	m.setup[setupProviderPrefix].SetValue("code")
+	m.setProviderType("codex")
+	m.setup[setupBaseURL].SetValue("")
+	m.setup[setupAPIKeyEnv].SetValue("")
+
+	updated, command := m.applyProviderEdit()
+	m = updated.(model)
+	if command == nil {
+		t.Fatal("provider apply command is nil")
+	}
+	updated, _ = m.Update(command())
+	m = updated.(model)
+	if runtime.applies != 1 || len(runtime.config.Providers) != 2 ||
+		runtime.config.Providers[1].Type != "codex" || runtime.config.Providers[1].Prefix != "code" {
+		t.Fatalf("runtime applies = %d, config = %#v", runtime.applies, runtime.config)
+	}
+	if m.screen != screenModels || len(m.models) != 2 {
+		t.Fatalf("screen = %v, models = %#v, status = %q", m.screen, m.models, m.status)
+	}
+}
+
+func TestFirstManagedProviderIsAlwaysAppended(t *testing.T) {
+	runtime := &fakeProviderRuntime{endpoint: "http://127.0.0.1:54321/v1"}
+	fake := &fakeClient{models: []client.Model{{ID: "codex/gpt-test"}}}
+	m := newManagedModel(context.Background(), config.Store{Dir: t.TempDir()}, func(config.Config) (chatClient, error) {
+		return fake, nil
+	}, runtime)
+	if !m.providerAdding || m.providerEditIndex != -1 || len(m.gatewayConfig.Providers) != 0 {
+		t.Fatalf("initial provider state = adding %v, edit index %d, providers %#v", m.providerAdding, m.providerEditIndex, m.gatewayConfig.Providers)
+	}
+	m.setup[setupProviderID].SetValue("codex")
+	m.setProviderType("codex")
+	m.setup[setupBaseURL].SetValue("")
+	m.setup[setupAPIKeyEnv].SetValue("")
+
+	updated, command := m.applyProviderEdit()
+	m = updated.(model)
+	if command == nil {
+		t.Fatal("first provider apply command is nil")
+	}
+	updated, _ = m.Update(command())
+	m = updated.(model)
+	if runtime.applies != 1 || len(runtime.config.Providers) != 1 || runtime.config.Providers[0].ID != "codex" {
+		t.Fatalf("runtime applies = %d, config = %#v", runtime.applies, runtime.config)
+	}
+}
+
+func TestProviderTypeSelectorCyclesAndUpdatesUntouchedDefaults(t *testing.T) {
+	runtime := &fakeProviderRuntime{}
+	m := newManagedModel(context.Background(), config.Store{Dir: t.TempDir()}, nil, runtime)
+	m.enterProviderEditor(-1)
+	m.setupFocus = setupProviderType
+
+	updated, _ := m.updateSetup(tea.KeyPressMsg{Code: tea.KeyRight})
+	m = updated.(model)
+	if selected := m.selectedProviderType(); selected.value != "openrouter" {
+		t.Fatalf("selected type = %#v", selected)
+	}
+	if m.setup[setupBaseURL].Value() != "" || m.setup[setupAPIKeyEnv].Value() != "OPENROUTER_API_KEY" {
+		t.Fatalf("defaults = base URL %q, API key env %q", m.setup[setupBaseURL].Value(), m.setup[setupAPIKeyEnv].Value())
+	}
+	if !strings.Contains(m.setup[setupBaseURL].Placeholder, "openrouter.ai") {
+		t.Fatalf("base URL placeholder = %q", m.setup[setupBaseURL].Placeholder)
+	}
+	if !strings.Contains(m.viewSetup(), "OpenRouter") || !strings.Contains(m.viewSetup(), "select API type") {
+		t.Fatalf("selector view = %q", m.viewSetup())
+	}
+}
+
+func TestProviderEditorRejectsDuplicateEffectivePrefixBeforeApply(t *testing.T) {
+	runtime := &fakeProviderRuntime{config: gateway.Config{Providers: []gateway.ProviderConfig{{
+		ID: "first", Prefix: "shared", Type: "openai-compatible", Enabled: true,
+	}}}}
+	m := newManagedModel(context.Background(), config.Store{Dir: t.TempDir()}, nil, runtime)
+	m.enterProviderEditor(-1)
+	m.setup[setupProviderID].SetValue("second")
+	m.setup[setupProviderPrefix].SetValue("shared")
+
+	updated, command := m.applyProviderEdit()
+	m = updated.(model)
+	if command != nil || runtime.applies != 0 || !strings.Contains(m.status, "already in use") {
+		t.Fatalf("command = %v, applies = %d, status = %q", command != nil, runtime.applies, m.status)
 	}
 }
 

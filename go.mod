@@ -8,7 +8,7 @@ require (
 	charm.land/lipgloss/v2 v2.0.5
 	github.com/OneOfOne/xxhash v1.2.8
 	github.com/modelcontextprotocol/go-sdk v1.7.0
-	github.com/snowmerak/llm-provider v0.0.0-20260801113848-564f83f5ac2f
+	github.com/snowmerak/llm-provider v0.0.0-20260802095120-519c056c6741
 	golang.org/x/text v0.40.0
 	gopkg.in/yaml.v3 v3.0.1
 )
@@ -24,9 +24,11 @@ require (
 	github.com/clipperhouse/displaywidth v0.11.0 // indirect
 	github.com/clipperhouse/uax29/v2 v2.7.0 // indirect
 	github.com/google/jsonschema-go v0.4.3 // indirect
+	github.com/kr/pretty v0.3.1 // indirect
 	github.com/lucasb-eyer/go-colorful v1.4.0 // indirect
 	github.com/mattn/go-runewidth v0.0.24 // indirect
 	github.com/muesli/cancelreader v0.2.2 // indirect
+	github.com/redis/rueidis v1.0.76 // indirect
 	github.com/rivo/uniseg v0.4.7 // indirect
 	github.com/segmentio/asm v1.1.3 // indirect
 	github.com/segmentio/encoding v0.5.4 // indirect

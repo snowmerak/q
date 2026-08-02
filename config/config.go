@@ -27,6 +27,7 @@ type Config struct {
 }
 
 type ProviderConfig struct {
+	Managed       bool   `yaml:"managed,omitempty"`
 	Type          string `yaml:"type"`
 	BaseURL       string `yaml:"base_url"`
 	Model         string `yaml:"model"`
@@ -64,15 +65,17 @@ func (c Config) Validate() error {
 	if c.Version != CurrentVersion {
 		return fmt.Errorf("config: unsupported version %d", c.Version)
 	}
-	if c.Provider.Type != "openai-compatible" {
-		return fmt.Errorf("config: unsupported provider type %q", c.Provider.Type)
-	}
-	parsed, err := url.Parse(c.Provider.BaseURL)
-	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
-		return fmt.Errorf("config: provider base_url must be an absolute HTTP(S) URL")
-	}
-	if parsed.RawQuery != "" || parsed.Fragment != "" {
-		return fmt.Errorf("config: provider base_url must not contain a query or fragment")
+	if !c.Provider.Managed {
+		if c.Provider.Type != "openai-compatible" {
+			return fmt.Errorf("config: unsupported provider type %q", c.Provider.Type)
+		}
+		parsed, err := url.Parse(c.Provider.BaseURL)
+		if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
+			return fmt.Errorf("config: provider base_url must be an absolute HTTP(S) URL")
+		}
+		if parsed.RawQuery != "" || parsed.Fragment != "" {
+			return fmt.Errorf("config: provider base_url must not contain a query or fragment")
+		}
 	}
 	if strings.TrimSpace(c.Provider.Model) == "" {
 		return fmt.Errorf("config: provider model is required")
@@ -94,6 +97,16 @@ func (c Config) Validate() error {
 		return fmt.Errorf("config: context recent_ratio must be positive and below target_ratio")
 	}
 	return nil
+}
+
+// UseManagedGateway removes legacy endpoint credentials after they have been
+// migrated into providers.json. Model and chat policy fields remain intact.
+func (c *Config) UseManagedGateway() {
+	c.Provider.Managed = true
+	c.Provider.Type = ""
+	c.Provider.BaseURL = ""
+	c.Provider.APIKeyEnv = ""
+	c.Provider.APIKey = ""
 }
 
 // EffectiveContext fills policy values omitted by configurations written by

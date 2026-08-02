@@ -5,10 +5,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/snowmerak/llm-provider/gateway"
 	"github.com/snowmerak/q/client"
 	"github.com/snowmerak/q/config"
+	"github.com/snowmerak/q/providerhost"
 )
 
 type chatClient interface {
@@ -18,6 +21,12 @@ type chatClient interface {
 }
 
 type clientFactory func(config.Config) (chatClient, error)
+
+type providerRuntime interface {
+	Endpoint() string
+	Config() gateway.Config
+	Apply(context.Context, gateway.Config) error
+}
 
 func defaultClientFactory(value config.Config) (chatClient, error) {
 	apiKey := value.Provider.ResolveAPIKey()
@@ -29,6 +38,20 @@ func defaultClientFactory(value config.Config) (chatClient, error) {
 	})
 }
 
+func managedClientFactory(runtime providerRuntime) clientFactory {
+	return func(value config.Config) (chatClient, error) {
+		endpoint := runtime.Endpoint()
+		if endpoint == "" {
+			return nil, errors.New("internal LLM Gateway is not running")
+		}
+		return client.New(client.Config{
+			BaseURL:       endpoint,
+			DefaultModel:  value.Provider.Model,
+			DisableAPIKey: true,
+		})
+	}
+}
+
 // Run loads personal configuration and starts the interactive application.
 // A missing configuration opens the first-run provider setup screen.
 func Run(ctx context.Context, store config.Store) error {
@@ -37,9 +60,43 @@ func Run(ctx context.Context, store config.Store) error {
 		return err
 	}
 
-	initialModel := newModel(ctx, store, defaultClientFactory)
-	if err == nil {
-		configuredClient, clientErr := defaultClientFactory(loaded)
+	manager, managerErr := providerhost.NewManager(ctx, providerhost.Store{Dir: store.Dir})
+	if managerErr != nil {
+		return managerErr
+	}
+	defer manager.Close()
+
+	startupErr := manager.LoadAndStart(ctx)
+	if errors.Is(startupErr, providerhost.ErrNotFound) && err == nil && !loaded.Provider.Managed {
+		legacy, legacyErr := providerhost.LegacyProvider(
+			"default", loaded.Provider.BaseURL, loaded.Provider.APIKeyEnv, loaded.Provider.APIKey,
+		)
+		if legacyErr == nil {
+			startupErr = manager.Apply(ctx, gateway.Config{Providers: []gateway.ProviderConfig{legacy}})
+			if startupErr == nil {
+				if !strings.HasPrefix(loaded.Provider.Model, "default/") {
+					loaded.Provider.Model = "default/" + loaded.Provider.Model
+				}
+				loaded.UseManagedGateway()
+				startupErr = store.Save(loaded)
+			}
+		} else {
+			startupErr = legacyErr
+		}
+	} else if errors.Is(startupErr, providerhost.ErrNotFound) {
+		startupErr = nil
+	}
+
+	factory := managedClientFactory(manager)
+	initialModel := newManagedModel(ctx, store, factory, manager)
+	if startupErr != nil {
+		initialModel.status = startupErr.Error()
+	}
+	if err == nil && manager.Endpoint() != "" {
+		if !loaded.Provider.Managed {
+			loaded.UseManagedGateway()
+		}
+		configuredClient, clientErr := factory(loaded)
 		if clientErr != nil {
 			return clientErr
 		}
@@ -55,6 +112,8 @@ func Run(ctx context.Context, store config.Store) error {
 			}
 		}
 		initialModel.enterChat(loaded, configuredClient)
+	} else if len(manager.Config().Providers) > 0 {
+		initialModel.enterProviderList()
 	}
 
 	final, runErr := tea.NewProgram(initialModel).Run()

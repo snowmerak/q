@@ -13,6 +13,7 @@ import (
 	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"github.com/snowmerak/llm-provider/gateway"
 	"github.com/snowmerak/q/client"
 	"github.com/snowmerak/q/config"
 	"github.com/snowmerak/q/memory"
@@ -23,16 +24,59 @@ type screen uint8
 
 const (
 	screenSetup screen = iota
+	screenProviders
 	screenModels
 	screenChat
 )
 
 const (
-	setupBaseURL = iota
+	setupProviderID = iota
+	setupProviderPrefix
+	setupProviderType
+	setupBaseURL
 	setupAPIKeyEnv
 	setupAPIKey
 	setupFieldCount
 )
+
+type providerTypeOption struct {
+	value       string
+	label       string
+	description string
+	baseURL     string
+	apiKeyEnv   string
+	baseURLHint string
+	apiKeyHint  string
+}
+
+var providerTypeOptions = []providerTypeOption{
+	{
+		value: "openai-compatible", label: "OpenAI compatible",
+		description: "OpenAI-compatible HTTP API, including local servers",
+		baseURL:     "https://api.openai.com/v1", apiKeyEnv: "OPENAI_API_KEY",
+		baseURLHint: "https://api.openai.com/v1", apiKeyHint: "OPENAI_API_KEY",
+	},
+	{
+		value: "openrouter", label: "OpenRouter",
+		description: "OpenRouter API with native reasoning and cache controls",
+		apiKeyEnv:   "OPENROUTER_API_KEY", baseURLHint: "default: https://openrouter.ai/api/v1", apiKeyHint: "OPENROUTER_API_KEY",
+	},
+	{
+		value: "xai", label: "xAI",
+		description: "xAI API for Grok models",
+		apiKeyEnv:   "XAI_API_KEY", baseURLHint: "default: https://api.x.ai/v1", apiKeyHint: "XAI_API_KEY",
+	},
+	{
+		value: "anthropic", label: "Anthropic",
+		description: "Native Anthropic Messages API",
+		apiKeyEnv:   "ANTHROPIC_API_KEY", baseURLHint: "optional; uses the Anthropic default", apiKeyHint: "ANTHROPIC_API_KEY",
+	},
+	{
+		value: "codex", label: "Codex App Server",
+		description: "Local codex app-server using the current Codex login",
+		baseURLHint: "not used", apiKeyHint: "not used",
+	},
+}
 
 type model struct {
 	ctx     context.Context
@@ -42,16 +86,22 @@ type model struct {
 	width   int
 	height  int
 	status  string
+	runtime providerRuntime
 
-	setup       [setupFieldCount]textinput.Model
-	setupFocus  int
-	setupEdit   bool
-	discovering bool
-	models      []client.Model
-	modelCursor int
-	modelFilter textinput.Model
-	draftConfig config.Config
-	modelReturn screen
+	setup              [setupFieldCount]textinput.Model
+	setupFocus         int
+	setupEdit          bool
+	providerEditIndex  int
+	providerAdding     bool
+	providerTypeCursor int
+	gatewayConfig      gateway.Config
+	providerCursor     int
+	discovering        bool
+	models             []client.Model
+	modelCursor        int
+	modelFilter        textinput.Model
+	draftConfig        config.Config
+	modelReturn        screen
 
 	config           config.Config
 	client           chatClient
@@ -97,21 +147,42 @@ type modelsResultMsg struct {
 	err    error
 }
 
+type providersAppliedMsg struct {
+	models        []client.Model
+	config        config.Config
+	gatewayConfig gateway.Config
+	client        chatClient
+	err           error
+}
+
 func newModel(ctx context.Context, store config.Store, factory clientFactory) model {
+	return newManagedModel(ctx, store, factory, nil)
+}
+
+func newManagedModel(ctx context.Context, store config.Store, factory clientFactory, runtime providerRuntime) model {
 	defaults := config.Default()
 	m := model{
-		ctx: ctx, store: store, factory: factory, screen: screenSetup,
+		ctx: ctx, store: store, factory: factory, runtime: runtime, screen: screenSetup,
 		viewport: viewport.New(viewport.WithWidth(80), viewport.WithHeight(12)),
 		spinner:  spinner.New(spinner.WithSpinner(spinner.Dot)),
+	}
+	if runtime != nil {
+		m.gatewayConfig = runtime.Config()
 	}
 	m.viewport.SoftWrap = true
 
 	placeholders := []string{
+		"provider id",
+		"optional; defaults to provider id",
+		"",
 		"https://api.openai.com/v1",
 		"OPENAI_API_KEY",
 		"optional inline key",
 	}
 	values := []string{
+		"default",
+		"",
+		"",
 		defaults.Provider.BaseURL,
 		defaults.Provider.APIKeyEnv,
 		defaults.Provider.APIKey,
@@ -125,12 +196,16 @@ func newModel(ctx context.Context, store config.Store, factory clientFactory) mo
 		m.setup[index] = field
 	}
 	m.setup[setupAPIKey].EchoMode = textinput.EchoPassword
+	m.setProviderType("openai-compatible")
 	m.setup[m.setupFocus].Focus()
 	m.modelFilter = textinput.New()
 	m.modelFilter.Prompt = "/ "
 	m.modelFilter.Placeholder = "Filter models"
 	m.modelFilter.SetWidth(60)
 	m.input = newChatInput()
+	if runtime != nil && len(m.gatewayConfig.Providers) == 0 {
+		m.enterProviderEditor(-1)
+	}
 	return m
 }
 
@@ -159,6 +234,9 @@ func (m model) Init() tea.Cmd {
 	}
 	if m.screen == screenModels {
 		return tea.Batch(m.modelFilter.Focus(), tea.RequestBackgroundColor)
+	}
+	if m.screen == screenProviders {
+		return tea.RequestBackgroundColor
 	}
 	return tea.Batch(m.setup[m.setupFocus].Focus(), tea.RequestBackgroundColor)
 }
@@ -217,6 +295,27 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		if m.screen == screenChat {
 			return m, m.input.Focus()
 		}
+		return m, m.modelFilter.Focus()
+	case providersAppliedMsg:
+		m.discovering = false
+		if message.err != nil {
+			m.status = message.err.Error()
+			if m.screen == screenProviders {
+				return m, nil
+			}
+			return m, m.setup[m.setupFocus].Focus()
+		}
+		if m.client != nil && m.client != message.client {
+			_ = m.client.Close()
+		}
+		m.client = message.client
+		m.gatewayConfig = message.gatewayConfig
+		if strings.TrimSpace(m.config.Provider.Model) == "" {
+			m.config = message.config
+		}
+		m.conversationID = ""
+		m.compactionTarget = 0
+		m.enterModelPicker(message.config, message.models)
 		return m, m.modelFilter.Focus()
 	case chatResultMsg:
 		m.waiting = false
@@ -289,6 +388,9 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		if m.screen == screenSetup {
 			return m.updateSetup(key)
 		}
+		if m.screen == screenProviders {
+			return m.updateProviders(key)
+		}
 		if m.screen == screenModels {
 			return m.updateModelPicker(key)
 		}
@@ -318,6 +420,13 @@ func (m model) updateSetup(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	}
 	switch key.String() {
 	case "esc":
+		if m.runtime != nil {
+			if len(m.gatewayConfig.Providers) > 0 {
+				m.enterProviderList()
+				return m, nil
+			}
+			return m, tea.Quit
+		}
 		if m.setupEdit && m.client != nil {
 			m.screen = screenChat
 			m.status = ""
@@ -326,20 +435,276 @@ func (m model) updateSetup(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, tea.Quit
 	case "tab", "down", "enter":
 		if key.String() == "enter" && m.setupFocus == setupFieldCount-1 {
+			if m.runtime != nil {
+				return m.applyProviderEdit()
+			}
 			return m.discoverModels()
 		}
 		return m.moveSetupFocus(1)
 	case "shift+tab", "up":
 		return m.moveSetupFocus(-1)
 	}
+	if m.runtime != nil && m.setupFocus == setupProviderType {
+		switch key.String() {
+		case "left":
+			m.cycleProviderType(-1)
+		case "right", " ":
+			m.cycleProviderType(1)
+		}
+		return m, nil
+	}
 	var command tea.Cmd
 	m.setup[m.setupFocus], command = m.setup[m.setupFocus].Update(key)
 	return m, command
 }
 
+func (m model) updateProviders(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	providers := m.gatewayConfig.Providers
+	if m.discovering {
+		return m, nil
+	}
+	switch key.String() {
+	case "esc":
+		if m.client != nil && m.config.Provider.Model != "model-discovery" {
+			m.screen = screenChat
+			m.status = ""
+			return m, m.input.Focus()
+		}
+		return m, tea.Quit
+	case "up":
+		if m.providerCursor > 0 {
+			m.providerCursor--
+		}
+		return m, nil
+	case "down":
+		if m.providerCursor < len(providers)-1 {
+			m.providerCursor++
+		}
+		return m, nil
+	case "a":
+		m.enterProviderEditor(-1)
+		return m, m.setup[m.setupFocus].Focus()
+	case "enter":
+		if len(providers) == 0 {
+			m.enterProviderEditor(-1)
+		} else {
+			m.enterProviderEditor(m.providerCursor)
+		}
+		return m, m.setup[m.setupFocus].Focus()
+	case " ":
+		if len(providers) == 0 {
+			return m, nil
+		}
+		candidate := cloneGatewayConfig(m.gatewayConfig)
+		candidate.Providers[m.providerCursor].Enabled = !candidate.Providers[m.providerCursor].Enabled
+		if enabledProviderCount(candidate) == 0 {
+			m.status = "At least one provider must remain enabled"
+			return m, nil
+		}
+		return m.applyGatewayConfig(candidate)
+	case "d":
+		if len(providers) <= 1 {
+			m.status = "Add another provider before deleting this one"
+			return m, nil
+		}
+		candidate := cloneGatewayConfig(m.gatewayConfig)
+		candidate.Providers = append(candidate.Providers[:m.providerCursor], candidate.Providers[m.providerCursor+1:]...)
+		if enabledProviderCount(candidate) == 0 {
+			m.status = "At least one provider must remain enabled"
+			return m, nil
+		}
+		if m.providerCursor >= len(candidate.Providers) {
+			m.providerCursor = len(candidate.Providers) - 1
+		}
+		return m.applyGatewayConfig(candidate)
+	}
+	return m, nil
+}
+
+func (m model) applyProviderEdit() (tea.Model, tea.Cmd) {
+	id := strings.TrimSpace(m.setup[setupProviderID].Value())
+	prefix := strings.TrimSpace(m.setup[setupProviderPrefix].Value())
+	providerType := m.selectedProviderType().value
+	if id == "" {
+		m.status = "Provider ID is required"
+		return m, nil
+	}
+	if strings.Contains(id, "/") {
+		m.status = "Provider ID must not contain '/'"
+		return m, nil
+	}
+	if strings.Contains(prefix, "/") {
+		m.status = "Provider prefix must not contain '/'"
+		return m, nil
+	}
+	if providerType == "" {
+		m.status = "Provider type is required"
+		return m, nil
+	}
+
+	candidate := cloneGatewayConfig(m.gatewayConfig)
+	editing := !m.providerAdding && m.providerEditIndex >= 0 && m.providerEditIndex < len(candidate.Providers)
+	effectivePrefix := prefix
+	if effectivePrefix == "" {
+		effectivePrefix = id
+	}
+	for index, existing := range candidate.Providers {
+		if editing && index == m.providerEditIndex {
+			continue
+		}
+		if existing.ID == id {
+			m.status = "Provider ID " + id + " is already in use"
+			return m, nil
+		}
+		existingPrefix := existing.Prefix
+		if existingPrefix == "" {
+			existingPrefix = existing.ID
+		}
+		if existingPrefix == effectivePrefix {
+			m.status = "Provider prefix " + effectivePrefix + " is already in use"
+			return m, nil
+		}
+	}
+	provider := gateway.ProviderConfig{Enabled: true}
+	if editing {
+		provider = candidate.Providers[m.providerEditIndex]
+	}
+	provider.ID = id
+	provider.Prefix = prefix
+	provider.Type = providerType
+	provider.BaseURL = strings.TrimSpace(m.setup[setupBaseURL].Value())
+	provider.APIKeyEnv = strings.TrimSpace(m.setup[setupAPIKeyEnv].Value())
+	provider.APIKey = m.setup[setupAPIKey].Value()
+	if editing {
+		candidate.Providers[m.providerEditIndex] = provider
+	} else {
+		candidate.Providers = append(candidate.Providers, provider)
+	}
+	return m.applyGatewayConfig(candidate)
+}
+
+func (m model) applyGatewayConfig(candidate gateway.Config) (tea.Model, tea.Cmd) {
+	if m.runtime == nil {
+		m.status = "internal Gateway runtime is unavailable"
+		return m, nil
+	}
+	m.discovering = true
+	m.status = "Starting and validating Gateway…"
+	for index := range m.setup {
+		m.setup[index].Blur()
+	}
+	m.input.Blur()
+	if m.client != nil && m.config.Provider.Model != "model-discovery" {
+		m.modelReturn = screenChat
+	} else {
+		m.modelReturn = screenSetup
+	}
+	value := m.config
+	if strings.TrimSpace(value.Provider.Model) == "" {
+		value = config.Default()
+		value.Provider.Model = "model-discovery"
+	}
+	value.UseManagedGateway()
+	runtime := m.runtime
+	factory := m.factory
+	return m, func() tea.Msg {
+		if err := runtime.Apply(m.ctx, candidate); err != nil {
+			return providersAppliedMsg{err: err}
+		}
+		configuredClient, err := factory(value)
+		if err != nil {
+			return providersAppliedMsg{err: err}
+		}
+		models, err := configuredClient.ListModels(m.ctx)
+		if err != nil {
+			_ = configuredClient.Close()
+			return providersAppliedMsg{err: fmt.Errorf("load Gateway models: %w", err)}
+		}
+		return providersAppliedMsg{
+			models: models, config: value, gatewayConfig: candidate, client: configuredClient,
+		}
+	}
+}
+
+func enabledProviderCount(value gateway.Config) int {
+	count := 0
+	for _, provider := range value.Providers {
+		if provider.Enabled {
+			count++
+		}
+	}
+	return count
+}
+
+func cloneGatewayConfig(value gateway.Config) gateway.Config {
+	result := value
+	result.Providers = append([]gateway.ProviderConfig(nil), value.Providers...)
+	return result
+}
+
+func containsModel(models []client.Model, id string) bool {
+	for _, model := range models {
+		if model.ID == id {
+			return true
+		}
+	}
+	return false
+}
+
+func (m model) selectedProviderType() providerTypeOption {
+	if m.providerTypeCursor < 0 || m.providerTypeCursor >= len(providerTypeOptions) {
+		return providerTypeOptions[0]
+	}
+	return providerTypeOptions[m.providerTypeCursor]
+}
+
+func (m *model) setProviderType(value string) {
+	switch value {
+	case "grok":
+		value = "xai"
+	case "claude":
+		value = "anthropic"
+	case "codex-app-server":
+		value = "codex"
+	}
+	for index, option := range providerTypeOptions {
+		if option.value == value {
+			m.providerTypeCursor = index
+			m.updateProviderTypePlaceholders()
+			return
+		}
+	}
+	m.providerTypeCursor = 0
+	m.updateProviderTypePlaceholders()
+}
+
+func (m *model) cycleProviderType(delta int) {
+	previous := m.selectedProviderType()
+	baseURLWasDefault := m.setup[setupBaseURL].Value() == previous.baseURL
+	apiKeyEnvWasDefault := m.setup[setupAPIKeyEnv].Value() == previous.apiKeyEnv
+	m.providerTypeCursor = (m.providerTypeCursor + delta + len(providerTypeOptions)) % len(providerTypeOptions)
+	next := m.selectedProviderType()
+	m.updateProviderTypePlaceholders()
+	if baseURLWasDefault {
+		m.setup[setupBaseURL].SetValue(next.baseURL)
+	}
+	if apiKeyEnvWasDefault {
+		m.setup[setupAPIKeyEnv].SetValue(next.apiKeyEnv)
+	}
+}
+
+func (m *model) updateProviderTypePlaceholders() {
+	selected := m.selectedProviderType()
+	m.setup[setupBaseURL].Placeholder = selected.baseURLHint
+	m.setup[setupAPIKeyEnv].Placeholder = selected.apiKeyHint
+}
+
 func (m model) moveSetupFocus(delta int) (tea.Model, tea.Cmd) {
 	m.setup[m.setupFocus].Blur()
 	m.setupFocus = (m.setupFocus + delta + setupFieldCount) % setupFieldCount
+	if m.runtime != nil && m.setupFocus == setupProviderType {
+		return m, nil
+	}
 	return m, m.setup[m.setupFocus].Focus()
 }
 
@@ -410,6 +775,10 @@ func (m model) updateModelPicker(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	filtered := m.filteredModels()
 	switch key.String() {
 	case "esc":
+		if m.runtime != nil && m.modelReturn == screenChat && !containsModel(filtered, m.config.Provider.Model) {
+			m.status = "Select a model from the updated providers"
+			return m, nil
+		}
 		m.screen = m.modelReturn
 		m.status = ""
 		m.modelFilter.Blur()
@@ -476,6 +845,10 @@ func (m model) updateChatKey(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case "ctrl+p":
 		if !m.waiting {
+			if m.runtime != nil {
+				m.enterProviderList()
+				return m, nil
+			}
 			m.enterSetup(m.config)
 			return m, m.setup[m.setupFocus].Focus()
 		}
@@ -522,6 +895,10 @@ func (m model) submitChat() (tea.Model, tea.Cmd) {
 		return m.discoverCurrentModels()
 	case "/provider":
 		m.input.Reset()
+		if m.runtime != nil {
+			m.enterProviderList()
+			return m, nil
+		}
 		m.enterSetup(m.config)
 		return m, m.setup[m.setupFocus].Focus()
 	}
@@ -628,6 +1005,54 @@ func (m *model) enterSetup(value config.Config) {
 	for index := range m.setup {
 		m.setup[index].Blur()
 	}
+	m.status = ""
+}
+
+func (m *model) enterProviderList() {
+	m.screen = screenProviders
+	m.gatewayConfig = m.runtime.Config()
+	if m.providerCursor >= len(m.gatewayConfig.Providers) {
+		m.providerCursor = max(0, len(m.gatewayConfig.Providers)-1)
+	}
+	m.discovering = false
+	m.input.Blur()
+	for index := range m.setup {
+		m.setup[index].Blur()
+	}
+	if len(m.gatewayConfig.Providers) == 0 {
+		m.enterProviderEditor(-1)
+		return
+	}
+	m.status = ""
+}
+
+func (m *model) enterProviderEditor(index int) {
+	if index < 0 || index >= len(m.gatewayConfig.Providers) {
+		index = -1
+	}
+	m.screen = screenSetup
+	m.setupEdit = index >= 0
+	m.providerAdding = index < 0
+	m.providerEditIndex = index
+	m.setupFocus = setupProviderID
+	provider := gateway.ProviderConfig{
+		ID: "provider", Type: "openai-compatible", Enabled: true,
+		BaseURL: "https://api.openai.com/v1", APIKeyEnv: "OPENAI_API_KEY",
+	}
+	if index >= 0 && index < len(m.gatewayConfig.Providers) {
+		provider = m.gatewayConfig.Providers[index]
+	}
+	m.setup[setupProviderID].SetValue(provider.ID)
+	m.setup[setupProviderPrefix].SetValue(provider.Prefix)
+	m.setProviderType(provider.Type)
+	m.setup[setupBaseURL].SetValue(provider.BaseURL)
+	m.setup[setupAPIKeyEnv].SetValue(provider.APIKeyEnv)
+	m.setup[setupAPIKey].SetValue(provider.APIKey)
+	m.input.Blur()
+	for fieldIndex := range m.setup {
+		m.setup[fieldIndex].Blur()
+	}
+	m.setup[m.setupFocus].Focus()
 	m.status = ""
 }
 
@@ -755,7 +1180,9 @@ func renderTranscript(messages []client.Message, width int) string {
 
 func (m model) View() tea.View {
 	content := m.viewSetup()
-	if m.screen == screenModels {
+	if m.screen == screenProviders {
+		content = m.viewProviders()
+	} else if m.screen == screenModels {
 		content = m.viewModels()
 	} else if m.screen == screenChat {
 		content = m.viewChat()
@@ -791,15 +1218,25 @@ func normalizeTextInputMessage(message tea.Msg) tea.Msg {
 }
 
 func (m model) viewSetup() string {
-	labels := []string{"Base URL", "API key environment variable", "API key (optional, stored in config)"}
+	labels := []string{"Provider ID", "Model prefix", "API type", "Base URL", "API key environment variable", "API key (optional, stored in config)"}
 	var body strings.Builder
 	title := "q · first-run setup"
 	if m.setupEdit {
 		title = "q · provider settings"
 	}
+	if m.runtime != nil {
+		title = "q · add provider"
+		if m.setupEdit {
+			title = "q · edit provider"
+		}
+	}
 	body.WriteString(titleStyle.Render(title))
 	body.WriteString("\n")
-	body.WriteString(subtleStyle.Render("OpenAI-compatible provider · " + m.store.Path()))
+	if m.runtime != nil {
+		body.WriteString(subtleStyle.Render("Managed by q's internal llm-provider Gateway"))
+	} else {
+		body.WriteString(subtleStyle.Render("OpenAI-compatible provider · " + m.store.Path()))
+	}
 	body.WriteString("\n\n")
 	for index, field := range m.setup {
 		label := subtleStyle.Render(labels[index])
@@ -808,7 +1245,18 @@ func (m model) viewSetup() string {
 		}
 		body.WriteString(label)
 		body.WriteString("\n")
-		body.WriteString(field.View())
+		if m.runtime != nil && index == setupProviderType {
+			selected := m.selectedProviderType()
+			selector := "  " + selected.label
+			if index == m.setupFocus {
+				selector = "‹ " + selected.label + " ›"
+			}
+			body.WriteString(activeLabelStyle.Render(selector))
+			body.WriteString("\n")
+			body.WriteString(subtleStyle.Render(selected.description))
+		} else {
+			body.WriteString(field.View())
+		}
 		body.WriteString("\n\n")
 	}
 	if m.status != "" {
@@ -819,11 +1267,59 @@ func (m model) viewSetup() string {
 		body.WriteString(statusStyle.Render(m.status))
 		body.WriteString("\n")
 	}
-	help := "tab/↑/↓ navigate · enter next/save · esc quit"
+	help := "tab/↑/↓ navigate · enter next/apply · esc quit"
 	if m.setupEdit {
-		help = "tab/↑/↓ navigate · enter next/save · esc cancel"
+		help = "tab/↑/↓ navigate · enter next/apply · esc cancel"
+	}
+	if m.runtime != nil && m.setupFocus == setupProviderType {
+		help = "←/→ select API type · tab/↑/↓ navigate · enter next · esc cancel"
 	}
 	body.WriteString(helpStyle.Render(help))
+	return frameStyle.Width(max(36, m.width-4)).Render(body.String())
+}
+
+func (m model) viewProviders() string {
+	var body strings.Builder
+	body.WriteString(titleStyle.Render("q · providers"))
+	body.WriteString("\n")
+	body.WriteString(subtleStyle.Render("Internal llm-provider Gateway · " + m.runtime.Endpoint()))
+	body.WriteString("\n\n")
+	if len(m.gatewayConfig.Providers) == 0 {
+		body.WriteString(emptyStyle.Render("No providers configured"))
+		body.WriteString("\n")
+	} else {
+		for index, provider := range m.gatewayConfig.Providers {
+			prefix := "  "
+			style := subtleStyle
+			if index == m.providerCursor {
+				prefix = "› "
+				style = activeLabelStyle
+			}
+			state := "disabled"
+			if provider.Enabled {
+				state = "enabled"
+			}
+			modelPrefix := provider.Prefix
+			if modelPrefix == "" {
+				modelPrefix = provider.ID
+			}
+			body.WriteString(prefix)
+			body.WriteString(style.Render(provider.ID))
+			body.WriteString(subtleStyle.Render("  " + provider.Type + " · prefix " + modelPrefix + " · " + state))
+			body.WriteString("\n")
+		}
+	}
+	if m.status != "" {
+		body.WriteString("\n")
+		style := errorStyle
+		if m.discovering {
+			style = subtleStyle
+		}
+		body.WriteString(style.Render(m.status))
+		body.WriteString("\n")
+	}
+	body.WriteString("\n")
+	body.WriteString(helpStyle.Render("↑/↓ select · enter edit · a add · space enable/disable · d delete · esc chat"))
 	return frameStyle.Width(max(36, m.width-4)).Render(body.String())
 }
 
@@ -839,7 +1335,11 @@ func (m model) viewModels() string {
 	var body strings.Builder
 	body.WriteString(titleStyle.Render("q · select model"))
 	body.WriteString("\n")
-	body.WriteString(subtleStyle.Render(m.draftConfig.Provider.BaseURL))
+	endpoint := m.draftConfig.Provider.BaseURL
+	if m.runtime != nil {
+		endpoint = m.runtime.Endpoint()
+	}
+	body.WriteString(subtleStyle.Render(endpoint))
 	body.WriteString("\n\n")
 	body.WriteString(m.modelFilter.View())
 	body.WriteString("\n\n")
@@ -870,7 +1370,11 @@ func (m model) viewModels() string {
 }
 
 func (m model) viewChat() string {
-	header := titleStyle.Render("q") + "  " + subtleStyle.Render(m.config.Provider.Model+" · "+m.config.Provider.BaseURL+" · "+m.contextLabel())
+	endpoint := m.config.Provider.BaseURL
+	if m.runtime != nil {
+		endpoint = m.runtime.Endpoint()
+	}
+	header := titleStyle.Render("q") + "  " + subtleStyle.Render(m.config.Provider.Model+" · "+endpoint+" · "+m.contextLabel())
 	status := m.status
 	if m.waiting {
 		status = m.spinner.View() + " " + status

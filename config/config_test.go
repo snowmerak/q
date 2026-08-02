@@ -72,6 +72,19 @@ func TestResolveAPIKeyPrecedence(t *testing.T) {
 	}
 }
 
+func TestManagedGatewayConfigDoesNotPersistEndpointCredentials(t *testing.T) {
+	value := Default()
+	value.Provider.Model = "codex/gpt-test"
+	value.Provider.APIKey = "secret"
+	value.UseManagedGateway()
+	if err := value.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	if !value.Provider.Managed || value.Provider.BaseURL != "" || value.Provider.APIKey != "" || value.Provider.APIKeyEnv != "" {
+		t.Fatalf("managed provider = %#v", value.Provider)
+	}
+}
+
 func TestEffectiveContextUsesDefaultsAndExplicitWindow(t *testing.T) {
 	value := Config{Provider: ProviderConfig{ContextWindow: 123456}}
 	effective := value.EffectiveContext()
