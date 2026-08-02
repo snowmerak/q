@@ -71,6 +71,76 @@ func TestSetupMasksAndPersistsInlineKey(t *testing.T) {
 	}
 }
 
+func TestEnterSendsAndShiftEnterAddsNewline(t *testing.T) {
+	value := config.Default()
+	value.Provider.Model = "test-model"
+	fake := &fakeClient{}
+	m := newModel(context.Background(), config.Store{Dir: t.TempDir()}, nil)
+	m.enterChat(value, fake)
+	m.input.SetValue("first line")
+
+	updated, _ := m.updateChatKey(tea.KeyPressMsg{Code: tea.KeyEnter, Mod: tea.ModShift})
+	m = updated.(model)
+	if !strings.Contains(m.input.Value(), "\n") || len(fake.requests) != 0 {
+		t.Fatalf("shift+enter value = %q, requests = %d", m.input.Value(), len(fake.requests))
+	}
+
+	m.input.SetValue("send me")
+	updated, command := m.updateChatKey(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m = updated.(model)
+	if !m.waiting || command == nil {
+		t.Fatal("enter did not submit chat")
+	}
+}
+
+func TestSlashModelOpensPickerAndPreservesHistory(t *testing.T) {
+	store := config.Store{Dir: t.TempDir()}
+	value := config.Default()
+	value.Provider.Model = "old-model"
+	fake := &fakeClient{models: []client.Model{{ID: "old-model"}, {ID: "new-model"}}}
+	m := newModel(context.Background(), store, func(config.Config) (chatClient, error) { return fake, nil })
+	m.enterChat(value, fake)
+	m.messages = append(m.messages, client.Message{Role: client.RoleUser, Content: "keep me"})
+	m.input.SetValue("/model")
+
+	updated, command := m.updateChatKey(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m = updated.(model)
+	if m.screen != screenModels || !m.discovering || command == nil {
+		t.Fatalf("model discovery state = screen %v, discovering %v", m.screen, m.discovering)
+	}
+	updated, _ = m.Update(command())
+	m = updated.(model)
+	if m.screen != screenModels || len(m.models) != 2 {
+		t.Fatalf("model picker state = screen %v, models %#v", m.screen, m.models)
+	}
+	m.modelCursor = 0 // new-model sorts before old-model.
+	updated, command = m.updateModelPicker(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m = updated.(model)
+	updated, _ = m.Update(command())
+	m = updated.(model)
+	if m.screen != screenChat || m.config.Provider.Model != "new-model" {
+		t.Fatalf("selected model = %q on screen %v", m.config.Provider.Model, m.screen)
+	}
+	if len(m.messages) != 2 || m.messages[1].Content != "keep me" {
+		t.Fatalf("history was not preserved: %#v", m.messages)
+	}
+}
+
+func TestSlashProviderOpensProviderSettings(t *testing.T) {
+	value := config.Default()
+	value.Provider.Model = "test-model"
+	fake := &fakeClient{}
+	m := newModel(context.Background(), config.Store{Dir: t.TempDir()}, nil)
+	m.enterChat(value, fake)
+	m.input.SetValue("/provider")
+
+	updated, _ := m.updateChatKey(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m = updated.(model)
+	if m.screen != screenSetup || !m.setupEdit || m.input.Value() != "" {
+		t.Fatalf("provider command state = screen %v, edit %v, input %q", m.screen, m.setupEdit, m.input.Value())
+	}
+}
+
 func TestModelPickerFiltersModels(t *testing.T) {
 	m := newModel(context.Background(), config.Store{Dir: t.TempDir()}, nil)
 	value := config.Default()

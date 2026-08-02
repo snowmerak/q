@@ -32,10 +32,13 @@ an inline key, especially on Windows where file modes do not manage ACLs.
 
 Chat keys:
 
-- `Ctrl+S`: send
-- `Enter`: insert a newline
+- `Enter`: send
+- `Shift+Enter`: insert a newline
+- `/model`: load the current provider's models and change the active model
+- `/provider`: edit provider settings
 - `Ctrl+L`: clear the in-memory conversation
-- `Ctrl+P`: edit provider settings
+- `Ctrl+S`: send (alternative shortcut)
+- `Ctrl+P`: edit provider settings (alternative shortcut)
 - `Esc` or `Ctrl+C`: quit
 
 The current chat history is held in memory and sent with every request, which

@@ -48,6 +48,7 @@ type model struct {
 	modelCursor int
 	modelFilter textinput.Model
 	draftConfig config.Config
+	modelReturn screen
 
 	config         config.Config
 	client         chatClient
@@ -60,9 +61,10 @@ type model struct {
 }
 
 type configuredMsg struct {
-	config config.Config
-	client chatClient
-	err    error
+	config          config.Config
+	client          chatClient
+	preserveHistory bool
+	err             error
 }
 
 type chatResultMsg struct {
@@ -121,6 +123,8 @@ func newChatInput() textarea.Model {
 	input.SetHeight(4)
 	input.SetWidth(80)
 	input.CharLimit = 32_000
+	input.KeyMap.InsertNewline.SetKeys("shift+enter")
+	input.KeyMap.InsertNewline.SetHelp("shift+enter", "insert newline")
 	return input
 }
 
@@ -153,17 +157,35 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		if m.client != nil && m.client != message.client {
 			_ = m.client.Close()
 		}
-		m.enterChat(message.config, message.client)
+		if message.preserveHistory {
+			m.screen = screenChat
+			m.setupEdit = false
+			m.config = message.config
+			m.client = message.client
+			m.conversationID = ""
+			m.status = "Model changed to " + message.config.Provider.Model
+			m.refreshTranscript()
+		} else {
+			m.enterChat(message.config, message.client)
+		}
 		return m, m.input.Focus()
 	case modelsResultMsg:
 		m.discovering = false
 		if message.err != nil {
 			m.status = message.err.Error()
+			if m.modelReturn == screenChat {
+				m.screen = screenChat
+				return m, m.input.Focus()
+			}
+			m.screen = screenSetup
 			return m, m.setup[m.setupFocus].Focus()
 		}
 		m.enterModelPicker(message.config, message.models)
 		if m.screen == screenSetup {
 			return m, m.setup[m.setupFocus].Focus()
+		}
+		if m.screen == screenChat {
+			return m, m.input.Focus()
 		}
 		return m, m.modelFilter.Focus()
 	case chatResultMsg:
@@ -267,6 +289,7 @@ func (m model) discoverModels() (tea.Model, tea.Cmd) {
 	}
 	m.status = "Loading models…"
 	m.discovering = true
+	m.modelReturn = screenSetup
 	for index := range m.setup {
 		m.setup[index].Blur()
 	}
@@ -284,13 +307,44 @@ func (m model) discoverModels() (tea.Model, tea.Cmd) {
 	}
 }
 
+func (m model) discoverCurrentModels() (tea.Model, tea.Cmd) {
+	if m.client == nil {
+		m.status = "provider is not configured"
+		return m, nil
+	}
+	m.screen = screenModels
+	m.modelReturn = screenChat
+	m.draftConfig = m.config
+	m.models = nil
+	m.modelCursor = 0
+	m.modelFilter.Reset()
+	m.modelFilter.Blur()
+	m.input.Blur()
+	m.discovering = true
+	m.status = "Loading models…"
+	configuredClient := m.client
+	return m, func() tea.Msg {
+		models, err := configuredClient.ListModels(m.ctx)
+		if err != nil {
+			return modelsResultMsg{err: fmt.Errorf("load models: %w", err)}
+		}
+		return modelsResultMsg{models: models, config: m.config}
+	}
+}
+
 func (m model) updateModelPicker(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	if m.discovering {
+		return m, nil
+	}
 	filtered := m.filteredModels()
 	switch key.String() {
 	case "esc":
-		m.screen = screenSetup
+		m.screen = m.modelReturn
 		m.status = ""
 		m.modelFilter.Blur()
+		if m.screen == screenChat {
+			return m, m.input.Focus()
+		}
 		return m, m.setup[m.setupFocus].Focus()
 	case "up":
 		if m.modelCursor > 0 {
@@ -314,7 +368,7 @@ func (m model) updateModelPicker(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 		value := m.draftConfig
 		value.Provider.Model = filtered[m.modelCursor].ID
-		return m.saveConfiguration(value)
+		return m.saveConfiguration(value, m.modelReturn == screenChat)
 	}
 	var command tea.Cmd
 	m.modelFilter, command = m.modelFilter.Update(key)
@@ -322,7 +376,7 @@ func (m model) updateModelPicker(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	return m, command
 }
 
-func (m model) saveConfiguration(value config.Config) (tea.Model, tea.Cmd) {
+func (m model) saveConfiguration(value config.Config, preserveHistory bool) (tea.Model, tea.Cmd) {
 	if err := value.Validate(); err != nil {
 		m.status = err.Error()
 		return m, nil
@@ -334,7 +388,7 @@ func (m model) saveConfiguration(value config.Config) (tea.Model, tea.Cmd) {
 			return configuredMsg{err: err}
 		}
 		configuredClient, err := m.factory(value)
-		return configuredMsg{config: value, client: configuredClient, err: err}
+		return configuredMsg{config: value, client: configuredClient, preserveHistory: preserveHistory, err: err}
 	}
 }
 
@@ -355,6 +409,8 @@ func (m model) updateChatKey(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case "ctrl+s":
 		return m.submitChat()
+	case "enter":
+		return m.submitChat()
 	}
 	var commands []tea.Cmd
 	var command tea.Cmd
@@ -371,6 +427,15 @@ func (m model) submitChat() (tea.Model, tea.Cmd) {
 	content := strings.TrimSpace(m.input.Value())
 	if m.waiting || content == "" || m.client == nil {
 		return m, nil
+	}
+	switch content {
+	case "/model":
+		m.input.Reset()
+		return m.discoverCurrentModels()
+	case "/provider":
+		m.input.Reset()
+		m.enterSetup(m.config)
+		return m, m.setup[m.setupFocus].Focus()
 	}
 	m.messages = append(m.messages, client.Message{Role: client.RoleUser, Content: content})
 	m.input.Reset()
@@ -438,8 +503,8 @@ func (m *model) enterModelPicker(value config.Config, available []client.Model) 
 	}
 	sort.Slice(m.models, func(i, j int) bool { return m.models[i].ID < m.models[j].ID })
 	if len(m.models) == 0 {
-		m.screen = screenSetup
 		m.status = "provider returned no models"
+		m.screen = m.modelReturn
 		return
 	}
 	m.screen = screenModels
@@ -447,7 +512,7 @@ func (m *model) enterModelPicker(value config.Config, available []client.Model) 
 	m.modelCursor = 0
 	m.modelFilter.Reset()
 	m.status = ""
-	if m.setupEdit {
+	if m.setupEdit || m.modelReturn == screenChat {
 		for index, candidate := range m.models {
 			if candidate.ID == m.config.Provider.Model {
 				m.modelCursor = index
@@ -599,7 +664,9 @@ func (m model) viewModels() string {
 	body.WriteString("\n\n")
 	body.WriteString(m.modelFilter.View())
 	body.WriteString("\n\n")
-	if len(filtered) == 0 {
+	if m.discovering {
+		body.WriteString(subtleStyle.Render("Loading models…"))
+	} else if len(filtered) == 0 {
 		body.WriteString(emptyStyle.Render("No matching models"))
 	} else {
 		for index := start; index < end; index++ {
@@ -613,7 +680,11 @@ func (m model) viewModels() string {
 		}
 	}
 	body.WriteString("\n")
-	body.WriteString(helpStyle.Render(fmt.Sprintf("%d/%d models · type to filter · ↑/↓ select · enter save · esc back", len(filtered), len(m.models))))
+	if m.discovering {
+		body.WriteString(helpStyle.Render("loading models · ctrl+c quit"))
+	} else {
+		body.WriteString(helpStyle.Render(fmt.Sprintf("%d/%d models · type to filter · ↑/↓ select · enter save · esc back", len(filtered), len(m.models))))
+	}
 	return frameStyle.Width(max(36, m.width-4)).Render(body.String())
 }
 
@@ -623,7 +694,7 @@ func (m model) viewChat() string {
 	if m.waiting {
 		status = m.spinner.View() + " " + status
 	}
-	footer := helpStyle.Render("ctrl+s send · enter newline · ctrl+l clear · ctrl+p provider · esc quit")
+	footer := helpStyle.Render("enter send · shift+enter newline · /model · /provider · ctrl+l clear · esc quit")
 	content := header + "\n\n" + m.viewport.View() + "\n" + m.input.View()
 	if status != "" {
 		content += "\n" + subtleStyle.Render(status)
