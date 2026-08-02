@@ -13,9 +13,17 @@ import (
 )
 
 const (
-	CurrentVersion = 1
-	DirectoryName  = ".q"
-	FileName       = "config.yaml"
+	CurrentVersion          = 1
+	DirectoryName           = ".q"
+	FileName                = "config.yaml"
+	DefaultAgentMaxParallel = 3
+
+	AgentRoleGriller  = "griller"
+	AgentRoleScout    = "scout"
+	AgentRoleResearch = "research"
+	AgentRolePlanner  = "planner"
+	AgentRoleCoder    = "coder"
+	AgentRoleAdvisor  = "advisor"
 )
 
 var ErrNotFound = errors.New("q config not found")
@@ -24,6 +32,7 @@ type Config struct {
 	Version  int            `yaml:"version"`
 	Provider ProviderConfig `yaml:"provider"`
 	Context  ContextConfig  `yaml:"context,omitempty"`
+	Agents   AgentsConfig   `yaml:"agents,omitempty"`
 }
 
 type ProviderConfig struct {
@@ -44,6 +53,28 @@ type ContextConfig struct {
 	RecentRatio  float64 `yaml:"recent_ratio,omitempty"`
 }
 
+type AgentsConfig struct {
+	MaxParallel int                    `yaml:"max_parallel,omitempty"`
+	Roles       map[string]AgentConfig `yaml:"roles,omitempty"`
+}
+
+// AgentConfig selects the model controls for one subagent role. An empty
+// Model inherits the active chat model. An empty ReasoningEffort leaves the
+// model/provider default unchanged.
+type AgentConfig struct {
+	Model           string `yaml:"model,omitempty"`
+	ReasoningEffort string `yaml:"reasoning_effort,omitempty"`
+}
+
+var agentRoles = []string{
+	AgentRoleGriller,
+	AgentRoleScout,
+	AgentRoleResearch,
+	AgentRolePlanner,
+	AgentRoleCoder,
+	AgentRoleAdvisor,
+}
+
 func Default() Config {
 	return Config{
 		Version: CurrentVersion,
@@ -58,6 +89,7 @@ func Default() Config {
 			TargetRatio:  0.22,
 			RecentRatio:  0.07,
 		},
+		Agents: AgentsConfig{MaxParallel: DefaultAgentMaxParallel},
 	}
 }
 
@@ -96,6 +128,21 @@ func (c Config) Validate() error {
 	if contextConfig.RecentRatio <= 0 || contextConfig.RecentRatio >= contextConfig.TargetRatio {
 		return fmt.Errorf("config: context recent_ratio must be positive and below target_ratio")
 	}
+	if c.Agents.MaxParallel < 0 {
+		return fmt.Errorf("config: agents max_parallel must not be negative")
+	}
+	for role, agent := range c.Agents.Roles {
+		if !IsAgentRole(role) {
+			return fmt.Errorf("config: unsupported agent role %q", role)
+		}
+		if agent.Model != strings.TrimSpace(agent.Model) {
+			return fmt.Errorf("config: agent %q model must not have surrounding whitespace", role)
+		}
+		trimmedEffort := strings.TrimSpace(agent.ReasoningEffort)
+		if trimmedEffort != "" && agent.ReasoningEffort != trimmedEffort {
+			return fmt.Errorf("config: agent %q reasoning_effort must not have surrounding whitespace", role)
+		}
+	}
 	return nil
 }
 
@@ -131,6 +178,51 @@ func (c Config) EffectiveContextWindow() int64 {
 		return c.Context.Window
 	}
 	return c.Provider.ContextWindow
+}
+
+// AgentRoles returns the built-in role names accepted in Agents.Roles.
+func AgentRoles() []string {
+	return append([]string(nil), agentRoles...)
+}
+
+func IsAgentRole(role string) bool {
+	for _, candidate := range agentRoles {
+		if role == candidate {
+			return true
+		}
+	}
+	return false
+}
+
+// EffectiveAgents fills defaults omitted by older or hand-written configs.
+func (c Config) EffectiveAgents() AgentsConfig {
+	result := c.Agents
+	if result.MaxParallel == 0 {
+		result.MaxParallel = DefaultAgentMaxParallel
+	}
+	if c.Agents.Roles != nil {
+		result.Roles = make(map[string]AgentConfig, len(c.Agents.Roles))
+		for role, agent := range c.Agents.Roles {
+			if strings.TrimSpace(agent.ReasoningEffort) == "" {
+				agent.ReasoningEffort = ""
+			}
+			result.Roles[role] = agent
+		}
+	}
+	return result
+}
+
+// EffectiveAgent returns a role's configured model controls with an empty
+// model inherited from the active chat model.
+func (c Config) EffectiveAgent(role string) (AgentConfig, error) {
+	if !IsAgentRole(role) {
+		return AgentConfig{}, fmt.Errorf("config: unsupported agent role %q", role)
+	}
+	result := c.EffectiveAgents().Roles[role]
+	if result.Model == "" {
+		result.Model = c.Provider.Model
+	}
+	return result, nil
 }
 
 // ResolveAPIKey returns the inline key first, then the configured environment
@@ -186,6 +278,7 @@ func (s Store) Load() (Config, error) {
 func (s Store) Save(value Config) error {
 	value.Version = CurrentVersion
 	value.Context = value.EffectiveContext()
+	value.Agents = value.EffectiveAgents()
 	if err := value.Validate(); err != nil {
 		return err
 	}

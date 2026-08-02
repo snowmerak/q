@@ -42,6 +42,9 @@ func TestChatUsesProviderConfigurationAndDefaultModel(t *testing.T) {
 		if body["model"] != "default-model" || body["route"] != "request" || body["stream"] != false {
 			t.Errorf("body = %#v", body)
 		}
+		if _, present := body["reasoning_effort"]; present {
+			t.Errorf("empty reasoning_effort was sent: %#v", body)
+		}
 		writer.Header().Set("Content-Type", "application/json")
 		_, _ = io.WriteString(writer, `{"id":"chat_1","model":"default-model","choices":[{"index":0,"message":{"role":"assistant","content":"hello"},"finish_reason":"stop"}]}`)
 	}))
@@ -71,7 +74,7 @@ func TestOptionalOpenAICompatibleEndpoints(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		switch request.URL.Path {
 		case "/v1/models":
-			_, _ = io.WriteString(writer, `{"data":[{"id":"model-a","object":"model"}]}`)
+			_, _ = io.WriteString(writer, `{"data":[{"id":"model-a","object":"model","capabilities":{"reasoning":{"supported":true,"control":"effort","supported_efforts":["low","high"],"default_effort":"high"}}}]}`)
 		case "/v1/embeddings":
 			var body map[string]any
 			_ = json.NewDecoder(request.Body).Decode(&body)
@@ -100,6 +103,14 @@ func TestOptionalOpenAICompatibleEndpoints(t *testing.T) {
 	if err != nil || len(models) != 1 || models[0].ID != "model-a" {
 		t.Fatalf("models = %#v, err = %v", models, err)
 	}
+	if models[0].Capabilities == nil || models[0].Capabilities.Reasoning == nil {
+		t.Fatalf("missing reasoning capabilities: %#v", models[0])
+	}
+	reasoning := models[0].Capabilities.Reasoning
+	if reasoning.Control != ReasoningControlEffort || reasoning.DefaultEffort != "high" ||
+		len(reasoning.SupportedEfforts) != 2 || reasoning.SupportedEfforts[0] != "low" {
+		t.Fatalf("reasoning capabilities = %#v", reasoning)
+	}
 	embedding, err := c.Embed(context.Background(), EmbeddingRequest{Input: "hello"})
 	if err != nil || len(embedding.Data) != 1 {
 		t.Fatalf("embedding = %#v, err = %v", embedding, err)
@@ -115,7 +126,8 @@ func TestChatPreservesFunctionToolsAndModelOverride(t *testing.T) {
 		var body map[string]any
 		_ = json.NewDecoder(request.Body).Decode(&body)
 		tools, _ := body["tools"].([]any)
-		if body["model"] != "request-model" || body["tool_choice"] != "required" || len(tools) != 1 {
+		if body["model"] != "request-model" || body["reasoning_effort"] != "high" ||
+			body["tool_choice"] != "required" || len(tools) != 1 {
 			t.Errorf("body = %#v", body)
 		}
 		_, _ = io.WriteString(writer, `{"id":"chat_tool","choices":[{"index":0,"message":{"role":"assistant","tool_calls":[{"id":"call_1","type":"function","function":{"name":"lookup","arguments":"{\"key\":\"value\"}"}}]},"finish_reason":"tool_calls"}]}`)
@@ -127,6 +139,7 @@ func TestChatPreservesFunctionToolsAndModelOverride(t *testing.T) {
 	}
 	response, err := c.Chat(context.Background(), ChatRequest{
 		Model: "request-model", Messages: []Message{{Role: RoleUser, Content: "look it up"}},
+		ReasoningEffort: "high",
 		Tools: []Tool{{Type: ToolTypeFunction, Function: FunctionDefinition{
 			Name: "lookup", Parameters: map[string]any{"type": "object"},
 		}}},

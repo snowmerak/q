@@ -42,7 +42,25 @@ context:
   trigger_ratio: 0.85
   target_ratio: 0.22
   recent_ratio: 0.07
+agents:
+  max_parallel: 3
+  roles:
+    planner:
+      model: codex/gpt-5.6-sol
+      reasoning_effort: high
+    coder:
+      model: codex/gpt-5.6-terra
+      reasoning_effort: medium
 ```
+
+Subagent roles may override `model` and `reasoning_effort`. A missing role or
+empty role model inherits `provider.model`; an omitted effort leaves the
+provider's model default unchanged. The effort default is empty; empty or
+whitespace-only values are omitted from model requests. Subagent execution resolves configured
+roles against `/v1/models`. Explicit effort values are accepted only when the
+selected model advertises `capabilities.reasoning.control: effort` and, when
+enumerated, the value appears in `supported_efforts`. The built-in roles are
+`griller`, `scout`, `research`, `planner`, `coder`, and `advisor`.
 
 `providers.json` uses `llm-provider/gateway.Config` directly. Multiple enabled
 providers are exposed together using their provider ID or configured prefix:

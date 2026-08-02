@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strings"
 	"testing"
@@ -14,6 +15,10 @@ func TestStoreRoundTrip(t *testing.T) {
 	want := Default()
 	want.Provider.Model = "test-model"
 	want.Provider.APIKey = "secret"
+	want.Agents.Roles = map[string]AgentConfig{
+		AgentRolePlanner: {Model: "planning-model", ReasoningEffort: "high"},
+		AgentRoleCoder:   {Model: "coding-model", ReasoningEffort: "medium"},
+	}
 	if err := store.Save(want); err != nil {
 		t.Fatal(err)
 	}
@@ -21,7 +26,7 @@ func TestStoreRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got != want {
+	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("loaded config = %#v; want %#v", got, want)
 	}
 	want.Provider.Model = "second-model"
@@ -97,5 +102,67 @@ func TestEffectiveContextUsesDefaultsAndExplicitWindow(t *testing.T) {
 	value.Context.Window = 654321
 	if got := value.EffectiveContextWindow(); got != 654321 {
 		t.Fatalf("explicit context window = %d", got)
+	}
+}
+
+func TestEffectiveAgentUsesRoleOverrideAndActiveModelFallback(t *testing.T) {
+	value := Default()
+	value.Provider.Model = "active-model"
+	value.Agents.Roles = map[string]AgentConfig{
+		AgentRolePlanner: {Model: "planning-model", ReasoningEffort: "high"},
+		AgentRoleCoder:   {ReasoningEffort: "medium"},
+	}
+
+	planner, err := value.EffectiveAgent(AgentRolePlanner)
+	if err != nil || planner.Model != "planning-model" || planner.ReasoningEffort != "high" {
+		t.Fatalf("planner = %#v, err = %v", planner, err)
+	}
+	coder, err := value.EffectiveAgent(AgentRoleCoder)
+	if err != nil || coder.Model != "active-model" || coder.ReasoningEffort != "medium" {
+		t.Fatalf("coder = %#v, err = %v", coder, err)
+	}
+	if _, err := value.EffectiveAgent("reviewer"); err == nil {
+		t.Fatal("unknown role unexpectedly resolved")
+	}
+}
+
+func TestValidateAgentConfiguration(t *testing.T) {
+	tests := []struct {
+		name   string
+		agents AgentsConfig
+		want   string
+	}{
+		{name: "negative parallelism", agents: AgentsConfig{MaxParallel: -1}, want: "max_parallel"},
+		{name: "unknown role", agents: AgentsConfig{Roles: map[string]AgentConfig{"reviewer": {}}}, want: "unsupported agent role"},
+		{name: "model whitespace", agents: AgentsConfig{Roles: map[string]AgentConfig{AgentRoleScout: {Model: " model"}}}, want: "model must not"},
+		{name: "effort whitespace", agents: AgentsConfig{Roles: map[string]AgentConfig{AgentRoleScout: {ReasoningEffort: " high "}}}, want: "reasoning_effort"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			value := Default()
+			value.Provider.Model = "active-model"
+			value.Agents = test.agents
+			if err := value.Validate(); err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("error = %v; want containing %q", err, test.want)
+			}
+		})
+	}
+}
+
+func TestWhitespaceOnlyReasoningEffortIsCanonicalizedToEmpty(t *testing.T) {
+	value := Default()
+	value.Provider.Model = "active-model"
+	value.Agents.Roles = map[string]AgentConfig{
+		AgentRoleScout: {ReasoningEffort: "   "},
+	}
+	if err := value.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	agent, err := value.EffectiveAgent(AgentRoleScout)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if agent.ReasoningEffort != "" {
+		t.Fatalf("reasoning effort = %q", agent.ReasoningEffort)
 	}
 }
