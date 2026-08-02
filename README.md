@@ -38,6 +38,7 @@ Chat keys:
 
 - `Enter`: send
 - `Shift+Enter`: insert a newline
+- `/clear`: clear the in-memory conversation
 - `/model`: load the current provider's models and change the active model
 - `/provider`: edit provider settings
 - `Ctrl+L`: clear the in-memory conversation

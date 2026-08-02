@@ -199,6 +199,40 @@ func TestSlashProviderOpensProviderSettings(t *testing.T) {
 	}
 }
 
+func TestSlashClearResetsConversation(t *testing.T) {
+	value := config.Default()
+	value.Provider.Model = "test-model"
+	fake := &fakeClient{}
+	m := newModel(context.Background(), config.Store{Dir: t.TempDir()}, nil)
+	m.enterChat(value, fake)
+	m.messages = append(m.messages,
+		client.Message{Role: client.RoleUser, Content: "old question"},
+		client.Message{Role: client.RoleAssistant, Content: "old answer"},
+	)
+	m.memory.Append(client.Message{Role: client.RoleUser, Content: "old question"})
+	m.memory.Append(client.Message{Role: client.RoleAssistant, Content: "old answer"})
+	m.conversationID = "conversation-1"
+	m.input.SetValue("/clear")
+
+	updated, command := m.updateChatKey(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m = updated.(model)
+	if command == nil {
+		t.Fatal("clear command did not restore input focus")
+	}
+	if m.input.Value() != "" || m.conversationID != "" {
+		t.Fatalf("input = %q, conversation ID = %q", m.input.Value(), m.conversationID)
+	}
+	if len(m.messages) != 1 || m.messages[0].Role != client.RoleSystem {
+		t.Fatalf("transcript after clear = %#v", m.messages)
+	}
+	if got := m.memory.Messages(); len(got) != 1 || got[0].Role != client.RoleSystem {
+		t.Fatalf("request context after clear = %#v", got)
+	}
+	if m.status != "Conversation cleared" {
+		t.Fatalf("status = %q", m.status)
+	}
+}
+
 func TestModelPickerFiltersModels(t *testing.T) {
 	m := newModel(context.Background(), config.Store{Dir: t.TempDir()}, nil)
 	value := config.Default()

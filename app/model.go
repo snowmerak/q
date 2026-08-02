@@ -482,6 +482,10 @@ func (m model) submitChat() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	switch content {
+	case "/clear":
+		m.input.Reset()
+		m.resetConversation()
+		return m, m.input.Focus()
 	case "/model":
 		m.input.Reset()
 		return m.discoverCurrentModels()
@@ -811,7 +815,7 @@ func (m model) viewChat() string {
 	if m.waiting {
 		status = m.spinner.View() + " " + status
 	}
-	footer := helpStyle.Render("enter send · shift+enter newline · /model · /provider · ctrl+l clear · esc quit")
+	footer := helpStyle.Render("enter send · shift+enter newline · /clear · /model · /provider · esc quit")
 	content := header + "\n\n" + m.viewport.View() + "\n" + m.input.View()
 	if status != "" {
 		content += "\n" + subtleStyle.Render(status)
