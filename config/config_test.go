@@ -71,3 +71,18 @@ func TestResolveAPIKeyPrecedence(t *testing.T) {
 		t.Fatalf("key = %q", got)
 	}
 }
+
+func TestEffectiveContextUsesDefaultsAndExplicitWindow(t *testing.T) {
+	value := Config{Provider: ProviderConfig{ContextWindow: 123456}}
+	effective := value.EffectiveContext()
+	if effective.TriggerRatio != .78 || effective.TargetRatio != .22 || effective.RecentRatio != .07 {
+		t.Fatalf("effective context = %#v", effective)
+	}
+	if got := value.EffectiveContextWindow(); got != 123456 {
+		t.Fatalf("model context window = %d", got)
+	}
+	value.Context.Window = 654321
+	if got := value.EffectiveContextWindow(); got != 654321 {
+		t.Fatalf("explicit context window = %d", got)
+	}
+}

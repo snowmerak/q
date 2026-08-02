@@ -39,7 +39,7 @@ func (f *fakeClient) Close() error {
 
 func TestSetupMasksAndPersistsInlineKey(t *testing.T) {
 	store := config.Store{Dir: t.TempDir()}
-	fake := &fakeClient{models: []client.Model{{ID: "z-model"}, {ID: "test-model"}}}
+	fake := &fakeClient{models: []client.Model{{ID: "z-model"}, {ID: "test-model", ContextLength: 123456}}}
 	m := newModel(context.Background(), store, func(config.Config) (chatClient, error) { return fake, nil })
 	m.setup[setupAPIKey].SetValue("super-secret")
 	if strings.Contains(m.View().Content, "super-secret") {
@@ -66,8 +66,66 @@ func TestSetupMasksAndPersistsInlineKey(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if loaded.Provider.Model != "test-model" || loaded.Provider.APIKey != "super-secret" {
+	if loaded.Provider.Model != "test-model" || loaded.Provider.APIKey != "super-secret" || loaded.Provider.ContextWindow != 123456 {
 		t.Fatalf("loaded config = %#v", loaded)
+	}
+}
+
+func TestChatCompactsAtThresholdThenSendsPendingMessage(t *testing.T) {
+	value := config.Default()
+	value.Provider.Model = "test-model"
+	value.Provider.ContextWindow = 1000
+	fake := &fakeClient{}
+	m := newModel(context.Background(), config.Store{Dir: t.TempDir()}, nil)
+	m.enterChat(value, fake)
+	oldUser := client.Message{Role: client.RoleUser, Content: strings.Repeat("old context ", 180)}
+	oldAssistant := client.Message{Role: client.RoleAssistant, Content: strings.Repeat("old answer ", 120)}
+	m.messages = append(m.messages, oldUser, oldAssistant)
+	m.memory.Append(oldUser)
+	m.memory.Append(oldAssistant)
+	m.input.SetValue("latest request")
+
+	updated, command := m.submitChat()
+	m = updated.(model)
+	if !m.compacting || command == nil {
+		t.Fatalf("compacting = %v, command nil = %v", m.compacting, command == nil)
+	}
+	batch, ok := command().(tea.BatchMsg)
+	if !ok {
+		t.Fatal("compaction did not return a batch")
+	}
+	var compacted compactionResultMsg
+	found := false
+	for _, child := range batch {
+		if message, ok := child().(compactionResultMsg); ok {
+			compacted = message
+			found = true
+		}
+	}
+	if !found || len(fake.requests) != 1 || fake.requests[0].MaxCompletionTokens == nil {
+		t.Fatalf("compaction request = %#v", fake.requests)
+	}
+
+	updated, command = m.Update(compacted)
+	m = updated.(model)
+	if m.compacting || command == nil {
+		t.Fatalf("post-compaction state = compacting %v, command nil %v", m.compacting, command == nil)
+	}
+	result, ok := command().(chatResultMsg)
+	if !ok {
+		t.Fatal("compaction did not continue the pending chat")
+	}
+	updated, _ = m.Update(result)
+	m = updated.(model)
+	if len(fake.requests) != 2 || fake.requests[1].ConversationID != "" {
+		t.Fatalf("requests = %#v", fake.requests)
+	}
+	requestMessages := fake.requests[1].Messages
+	if requestMessages[len(requestMessages)-1].Content != "latest request" {
+		t.Fatalf("pending request was not preserved: %#v", requestMessages)
+	}
+	if len(m.messages) != 5 { // system, two old messages, latest user, assistant reply
+		t.Fatalf("full transcript was not preserved: %#v", m.messages)
 	}
 }
 

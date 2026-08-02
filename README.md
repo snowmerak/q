@@ -24,6 +24,10 @@ provider:
   model: your-model
   api_key_env: OPENAI_API_KEY
   system_prompt: You are a helpful assistant.
+context:
+  trigger_ratio: 0.78
+  target_ratio: 0.22
+  recent_ratio: 0.07
 ```
 
 On POSIX systems the directory is created with user-only permissions and the
@@ -41,6 +45,10 @@ Chat keys:
 - `Ctrl+P`: edit provider settings (alternative shortcut)
 - `Esc` or `Ctrl+C`: quit
 
-The current chat history is held in memory and sent with every request, which
-provides basic multi-turn conversation. Conversation persistence and agent tool
-execution will be added in later stages.
+The full chat transcript is held in memory, while a separate request context
+provides multi-turn conversation. When model context metadata is available, q
+automatically compacts that request context at 78% to a maximum of 22% while
+keeping the full transcript visible. Set `context.window` when the provider does
+not expose `context_length`; discovered model context metadata is otherwise saved
+as `provider.context_window`. Conversation persistence and agent tool execution
+will be added in later stages.

@@ -23,15 +23,24 @@ var ErrNotFound = errors.New("q config not found")
 type Config struct {
 	Version  int            `yaml:"version"`
 	Provider ProviderConfig `yaml:"provider"`
+	Context  ContextConfig  `yaml:"context,omitempty"`
 }
 
 type ProviderConfig struct {
-	Type         string `yaml:"type"`
-	BaseURL      string `yaml:"base_url"`
-	Model        string `yaml:"model"`
-	APIKeyEnv    string `yaml:"api_key_env,omitempty"`
-	APIKey       string `yaml:"api_key,omitempty"`
-	SystemPrompt string `yaml:"system_prompt,omitempty"`
+	Type          string `yaml:"type"`
+	BaseURL       string `yaml:"base_url"`
+	Model         string `yaml:"model"`
+	APIKeyEnv     string `yaml:"api_key_env,omitempty"`
+	APIKey        string `yaml:"api_key,omitempty"`
+	SystemPrompt  string `yaml:"system_prompt,omitempty"`
+	ContextWindow int64  `yaml:"context_window,omitempty"`
+}
+
+type ContextConfig struct {
+	Window       int64   `yaml:"window,omitempty"`
+	TriggerRatio float64 `yaml:"trigger_ratio,omitempty"`
+	TargetRatio  float64 `yaml:"target_ratio,omitempty"`
+	RecentRatio  float64 `yaml:"recent_ratio,omitempty"`
 }
 
 func Default() Config {
@@ -42,6 +51,11 @@ func Default() Config {
 			BaseURL:      "https://api.openai.com/v1",
 			APIKeyEnv:    "OPENAI_API_KEY",
 			SystemPrompt: "You are a helpful assistant.",
+		},
+		Context: ContextConfig{
+			TriggerRatio: 0.78,
+			TargetRatio:  0.22,
+			RecentRatio:  0.07,
 		},
 	}
 }
@@ -66,7 +80,44 @@ func (c Config) Validate() error {
 	if strings.Contains(c.Provider.APIKeyEnv, "=") {
 		return fmt.Errorf("config: api_key_env must be an environment variable name")
 	}
+	contextConfig := c.EffectiveContext()
+	if contextConfig.Window < 0 || c.Provider.ContextWindow < 0 {
+		return fmt.Errorf("config: context window must not be negative")
+	}
+	if contextConfig.TriggerRatio <= 0 || contextConfig.TriggerRatio >= 1 {
+		return fmt.Errorf("config: context trigger_ratio must be between 0 and 1")
+	}
+	if contextConfig.TargetRatio <= 0 || contextConfig.TargetRatio >= contextConfig.TriggerRatio {
+		return fmt.Errorf("config: context target_ratio must be positive and below trigger_ratio")
+	}
+	if contextConfig.RecentRatio <= 0 || contextConfig.RecentRatio >= contextConfig.TargetRatio {
+		return fmt.Errorf("config: context recent_ratio must be positive and below target_ratio")
+	}
 	return nil
+}
+
+// EffectiveContext fills policy values omitted by configurations written by
+// older q versions. An explicit window overrides model discovery metadata.
+func (c Config) EffectiveContext() ContextConfig {
+	result := c.Context
+	defaults := Default().Context
+	if result.TriggerRatio == 0 {
+		result.TriggerRatio = defaults.TriggerRatio
+	}
+	if result.TargetRatio == 0 {
+		result.TargetRatio = defaults.TargetRatio
+	}
+	if result.RecentRatio == 0 {
+		result.RecentRatio = defaults.RecentRatio
+	}
+	return result
+}
+
+func (c Config) EffectiveContextWindow() int64 {
+	if c.Context.Window > 0 {
+		return c.Context.Window
+	}
+	return c.Provider.ContextWindow
 }
 
 // ResolveAPIKey returns the inline key first, then the configured environment
@@ -121,6 +172,7 @@ func (s Store) Load() (Config, error) {
 
 func (s Store) Save(value Config) error {
 	value.Version = CurrentVersion
+	value.Context = value.EffectiveContext()
 	if err := value.Validate(); err != nil {
 		return err
 	}

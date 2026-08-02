@@ -14,6 +14,7 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/snowmerak/q/client"
 	"github.com/snowmerak/q/config"
+	"github.com/snowmerak/q/memory"
 )
 
 type screen uint8
@@ -50,14 +51,19 @@ type model struct {
 	draftConfig config.Config
 	modelReturn screen
 
-	config         config.Config
-	client         chatClient
-	messages       []client.Message
-	conversationID string
-	input          textarea.Model
-	viewport       viewport.Model
-	spinner        spinner.Model
-	waiting        bool
+	config           config.Config
+	client           chatClient
+	messages         []client.Message
+	memory           *memory.Manager
+	conversationID   string
+	pendingMessage   client.Message
+	requestEstimate  int
+	compactionTarget int
+	input            textarea.Model
+	viewport         viewport.Model
+	spinner          spinner.Model
+	waiting          bool
+	compacting       bool
 }
 
 type configuredMsg struct {
@@ -69,6 +75,12 @@ type configuredMsg struct {
 
 type chatResultMsg struct {
 	response *client.ChatResponse
+	err      error
+}
+
+type compactionResultMsg struct {
+	response *client.ChatResponse
+	plan     memory.Plan
 	err      error
 }
 
@@ -163,6 +175,10 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			m.config = message.config
 			m.client = message.client
 			m.conversationID = ""
+			m.compactionTarget = 0
+			if m.memory != nil {
+				m.memory.Configure(memoryPolicy(message.config))
+			}
 			m.status = "Model changed to " + message.config.Provider.Model
 			m.refreshTranscript()
 		} else {
@@ -190,11 +206,15 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.modelFilter.Focus()
 	case chatResultMsg:
 		m.waiting = false
+		m.compacting = false
+		m.pendingMessage = client.Message{}
 		if message.err != nil {
+			m.compactionTarget = 0
 			m.status = message.err.Error()
 			return m, m.input.Focus()
 		}
 		if message.response == nil || len(message.response.Choices) == 0 {
+			m.compactionTarget = 0
 			m.status = "provider returned no choices"
 			return m, m.input.Focus()
 		}
@@ -203,12 +223,43 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			assistant.Role = client.RoleAssistant
 		}
 		m.messages = append(m.messages, assistant)
+		if m.memory != nil {
+			m.memory.ObserveUsage(message.response.Usage.PromptTokens, m.requestEstimate)
+			m.memory.Append(assistant)
+		}
 		if message.response.ConversationID != "" {
 			m.conversationID = message.response.ConversationID
 		}
-		m.status = ""
+		if m.compactionTarget > 0 && message.response.Usage.PromptTokens > m.compactionTarget {
+			m.status = fmt.Sprintf("Context remains above target · %s/%s", formatTokens(message.response.Usage.PromptTokens), formatTokens(m.compactionTarget))
+		} else {
+			m.status = ""
+		}
+		m.compactionTarget = 0
 		m.refreshTranscript()
 		return m, m.input.Focus()
+	case compactionResultMsg:
+		if message.err != nil {
+			m.rollbackPendingMessage()
+			m.status = "compact context: " + message.err.Error()
+			return m, m.input.Focus()
+		}
+		if message.response == nil || len(message.response.Choices) == 0 {
+			m.rollbackPendingMessage()
+			m.status = "compact context: provider returned no choices"
+			return m, m.input.Focus()
+		}
+		summary := strings.TrimSpace(message.response.Choices[0].Message.TextContent())
+		if err := m.memory.Apply(message.plan, summary); err != nil {
+			m.rollbackPendingMessage()
+			m.status = "compact context: " + err.Error()
+			return m, m.input.Focus()
+		}
+		m.conversationID = ""
+		m.compacting = false
+		m.compactionTarget = message.plan.TargetTokens
+		m.status = fmt.Sprintf("Context compacted · %s → %s", formatTokens(message.plan.BeforeTokens), formatTokens(m.memory.PredictedTokens()))
+		return m, m.sendChatRequest()
 	}
 
 	if key, ok := message.(tea.KeyPressMsg); ok {
@@ -367,7 +418,9 @@ func (m model) updateModelPicker(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		value := m.draftConfig
-		value.Provider.Model = filtered[m.modelCursor].ID
+		selected := filtered[m.modelCursor]
+		value.Provider.Model = selected.ID
+		value.Provider.ContextWindow = selected.ContextLength
 		return m.saveConfiguration(value, m.modelReturn == screenChat)
 	}
 	var command tea.Cmd
@@ -437,23 +490,71 @@ func (m model) submitChat() (tea.Model, tea.Cmd) {
 		m.enterSetup(m.config)
 		return m, m.setup[m.setupFocus].Focus()
 	}
-	m.messages = append(m.messages, client.Message{Role: client.RoleUser, Content: content})
+	userMessage := client.Message{Role: client.RoleUser, Content: content}
+	m.messages = append(m.messages, userMessage)
+	if m.memory == nil {
+		m.memory = memory.New(memoryPolicy(m.config), nil)
+	}
+	m.memory.Append(userMessage)
+	m.pendingMessage = userMessage
 	m.input.Reset()
 	m.input.Blur()
 	m.waiting = true
-	m.status = "Thinking…"
 	m.refreshTranscript()
+	if m.memory.ShouldCompact() {
+		plan, err := m.memory.Plan()
+		if err != nil {
+			m.rollbackPendingMessage()
+			m.status = err.Error()
+			return m, m.input.Focus()
+		}
+		m.compacting = true
+		m.status = "Compacting context…"
+		return m, tea.Batch(m.spinner.Tick, m.compactContext(plan))
+	}
+	m.status = "Thinking…"
+	return m, tea.Batch(m.spinner.Tick, m.sendChatRequest())
+}
 
-	history := append([]client.Message(nil), m.messages...)
+func (m model) compactContext(plan memory.Plan) tea.Cmd {
+	configuredClient := m.client
+	maxTokens := plan.OutputBudget
+	return func() tea.Msg {
+		response, err := configuredClient.Chat(m.ctx, client.ChatRequest{
+			Messages: plan.RequestMessages(), MaxCompletionTokens: &maxTokens,
+		})
+		return compactionResultMsg{response: response, plan: plan, err: err}
+	}
+}
+
+func (m *model) sendChatRequest() tea.Cmd {
+	history := m.memory.Messages()
+	m.requestEstimate = memory.CountMessages(history)
 	conversationID := m.conversationID
 	configuredClient := m.client
-	request := func() tea.Msg {
+	return func() tea.Msg {
 		response, err := configuredClient.Chat(m.ctx, client.ChatRequest{
 			Messages: history, ConversationID: conversationID,
 		})
 		return chatResultMsg{response: response, err: err}
 	}
-	return m, tea.Batch(m.spinner.Tick, request)
+}
+
+func (m *model) rollbackPendingMessage() {
+	if m.pendingMessage.Content != "" {
+		if len(m.messages) > 0 {
+			m.messages = m.messages[:len(m.messages)-1]
+		}
+		if m.memory != nil {
+			m.memory.PopLast()
+		}
+		m.input.SetValue(m.pendingMessage.Content)
+	}
+	m.pendingMessage = client.Message{}
+	m.waiting = false
+	m.compacting = false
+	m.compactionTarget = 0
+	m.refreshTranscript()
 }
 
 func (m *model) enterChat(value config.Config, configuredClient chatClient) {
@@ -465,8 +566,12 @@ func (m *model) enterChat(value config.Config, configuredClient chatClient) {
 	if value.Provider.SystemPrompt != "" {
 		m.messages = append(m.messages, client.Message{Role: client.RoleSystem, Content: value.Provider.SystemPrompt})
 	}
+	m.memory = memory.New(memoryPolicy(value), m.messages)
 	m.conversationID = ""
 	m.waiting = false
+	m.compacting = false
+	m.compactionTarget = 0
+	m.pendingMessage = client.Message{}
 	m.status = ""
 	m.input = newChatInput()
 	m.resize(m.width, m.height)
@@ -542,7 +647,13 @@ func (m *model) resetConversation() {
 	if m.config.Provider.SystemPrompt != "" {
 		m.messages = append(m.messages, client.Message{Role: client.RoleSystem, Content: m.config.Provider.SystemPrompt})
 	}
+	if m.memory == nil {
+		m.memory = memory.New(memoryPolicy(m.config), m.messages)
+	} else {
+		m.memory.Reset(m.messages)
+	}
 	m.conversationID = ""
+	m.compactionTarget = 0
 	m.status = "Conversation cleared"
 	m.refreshTranscript()
 }
@@ -695,7 +806,7 @@ func (m model) viewModels() string {
 }
 
 func (m model) viewChat() string {
-	header := titleStyle.Render("q") + "  " + subtleStyle.Render(m.config.Provider.Model+" · "+m.config.Provider.BaseURL)
+	header := titleStyle.Render("q") + "  " + subtleStyle.Render(m.config.Provider.Model+" · "+m.config.Provider.BaseURL+" · "+m.contextLabel())
 	status := m.status
 	if m.waiting {
 		status = m.spinner.View() + " " + status
@@ -707,6 +818,38 @@ func (m model) viewChat() string {
 	}
 	content += "\n" + footer
 	return frameStyle.Width(max(36, m.width-4)).Render(content)
+}
+
+func memoryPolicy(value config.Config) memory.Policy {
+	contextConfig := value.EffectiveContext()
+	return memory.Policy{
+		ContextWindow: int(value.EffectiveContextWindow()),
+		TriggerRatio:  contextConfig.TriggerRatio,
+		TargetRatio:   contextConfig.TargetRatio,
+		RecentRatio:   contextConfig.RecentRatio,
+	}
+}
+
+func (m model) contextLabel() string {
+	if m.memory == nil {
+		return "context unknown"
+	}
+	stats := m.memory.Stats()
+	if stats.ContextWindow <= 0 {
+		return "context unknown"
+	}
+	percent := min(999, stats.PredictedTokens*100/stats.ContextWindow)
+	return fmt.Sprintf("context %d%% · %s/%s", percent, formatTokens(stats.PredictedTokens), formatTokens(stats.ContextWindow))
+}
+
+func formatTokens(tokens int) string {
+	if tokens >= 1_000_000 {
+		return fmt.Sprintf("%.1fm", float64(tokens)/1_000_000)
+	}
+	if tokens >= 1_000 {
+		return fmt.Sprintf("%.1fk", float64(tokens)/1_000)
+	}
+	return fmt.Sprintf("%d", tokens)
 }
 
 var (

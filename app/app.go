@@ -43,6 +43,17 @@ func Run(ctx context.Context, store config.Store) error {
 		if clientErr != nil {
 			return clientErr
 		}
+		if loaded.EffectiveContextWindow() == 0 {
+			if models, modelsErr := configuredClient.ListModels(ctx); modelsErr == nil {
+				for _, candidate := range models {
+					if candidate.ID == loaded.Provider.Model && candidate.ContextLength > 0 {
+						loaded.Provider.ContextWindow = candidate.ContextLength
+						_ = store.Save(loaded)
+						break
+					}
+				}
+			}
+		}
 		initialModel.enterChat(loaded, configuredClient)
 	}
 
