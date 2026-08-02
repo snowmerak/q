@@ -33,6 +33,55 @@ type fakeClient struct {
 	closed   bool
 }
 
+type fakeAgentTools struct {
+	calls []client.ToolCall
+}
+
+func (f *fakeAgentTools) Tools() []client.Tool {
+	return []client.Tool{{
+		Type: client.ToolTypeFunction,
+		Function: client.FunctionDefinition{
+			Name: "write_file", Description: "write a file",
+			Parameters: map[string]any{"type": "object"},
+		},
+	}}
+}
+
+func (f *fakeAgentTools) Call(_ context.Context, call client.ToolCall) (client.ToolResult, error) {
+	f.calls = append(f.calls, call)
+	return client.ToolResult{Content: `{"path":"main.go"}`}, nil
+}
+
+type toolCallingClient struct {
+	requests []client.ChatRequest
+}
+
+func (f *toolCallingClient) Chat(_ context.Context, request client.ChatRequest) (*client.ChatResponse, error) {
+	request.Messages = append([]client.Message(nil), request.Messages...)
+	f.requests = append(f.requests, request)
+	if len(f.requests) == 1 {
+		return &client.ChatResponse{
+			ConversationID: "tool-conversation",
+			Choices: []client.Choice{{Message: client.Message{
+				Role: client.RoleAssistant,
+				ToolCalls: []client.ToolCall{{
+					ID: "call-1", Type: client.ToolTypeFunction,
+					Function: client.FunctionCall{Name: "write_file", Arguments: `{"path":"main.go","content":"package main"}`},
+				}},
+			}}},
+		}, nil
+	}
+	return &client.ChatResponse{
+		ConversationID: "tool-conversation",
+		Choices: []client.Choice{{Message: client.Message{
+			Role: client.RoleAssistant, Content: "Created main.go",
+		}}},
+	}, nil
+}
+
+func (f *toolCallingClient) ListModels(context.Context) ([]client.Model, error) { return nil, nil }
+func (f *toolCallingClient) Close() error                                       { return nil }
+
 func (f *fakeClient) Chat(_ context.Context, request client.ChatRequest) (*client.ChatResponse, error) {
 	request.Messages = append([]client.Message(nil), request.Messages...)
 	f.requests = append(f.requests, request)
@@ -555,6 +604,43 @@ func TestChatCarriesHistoryAcrossTurns(t *testing.T) {
 		fake.requests[1].Messages[2].Content != "reply 1" ||
 		fake.requests[1].ConversationID != "conversation-1" {
 		t.Fatalf("second request = %#v", fake.requests[1])
+	}
+}
+
+func TestChatExecutesToolCallsAndContinuesTurn(t *testing.T) {
+	value := config.Default()
+	value.Provider.Model = "tool-model"
+	workspaceStore := workspace.Store{Root: t.TempDir()}
+	agentTools := &fakeAgentTools{}
+	configuredClient := &toolCallingClient{}
+	m := newModel(context.Background(), config.Store{Dir: t.TempDir()}, nil)
+	m.workspaceStore = &workspaceStore
+	m.toolRuntime = agentTools
+	m.enterChat(value, configuredClient)
+	m = submitAndReceive(t, m, "create a Go project")
+
+	if len(configuredClient.requests) != 2 || len(configuredClient.requests[0].Tools) != 1 {
+		t.Fatalf("agent requests = %#v", configuredClient.requests)
+	}
+	continuation := configuredClient.requests[1]
+	if continuation.ConversationID != "tool-conversation" || len(continuation.Messages) < 2 {
+		t.Fatalf("tool continuation = %#v", continuation)
+	}
+	assistantCall := continuation.Messages[len(continuation.Messages)-2]
+	toolResult := continuation.Messages[len(continuation.Messages)-1]
+	if len(assistantCall.ToolCalls) != 1 || toolResult.Role != client.RoleTool ||
+		toolResult.ToolCallID != "call-1" || len(agentTools.calls) != 1 {
+		t.Fatalf("assistant call = %#v, tool result = %#v, calls = %#v", assistantCall, toolResult, agentTools.calls)
+	}
+	for requestIndex, request := range configuredClient.requests {
+		for _, message := range request.Messages {
+			if message.Role != client.RoleUser && message.Name != "" {
+				t.Fatalf("request %d sent name %q on role %q", requestIndex, message.Name, message.Role)
+			}
+		}
+	}
+	if m.messages[len(m.messages)-1].Content != "Created main.go" || !strings.Contains(m.status, "Tools used · 1") {
+		t.Fatalf("final transcript = %#v, status = %q", m.messages, m.status)
 	}
 }
 

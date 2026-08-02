@@ -82,14 +82,15 @@ var providerTypeOptions = []providerTypeOption{
 }
 
 type model struct {
-	ctx     context.Context
-	store   config.Store
-	factory clientFactory
-	screen  screen
-	width   int
-	height  int
-	status  string
-	runtime providerRuntime
+	ctx         context.Context
+	store       config.Store
+	factory     clientFactory
+	screen      screen
+	width       int
+	height      int
+	status      string
+	runtime     providerRuntime
+	toolRuntime agentToolRuntime
 
 	workspaceStore    *workspace.Store
 	workspaceRestored bool
@@ -133,8 +134,11 @@ type configuredMsg struct {
 }
 
 type chatResultMsg struct {
-	response *client.ChatResponse
-	err      error
+	response        *client.ChatResponse
+	intermediate    []client.Message
+	requestEstimate int
+	toolCalls       int
+	err             error
 }
 
 type compactionResultMsg struct {
@@ -341,9 +345,17 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		if assistant.Role == "" {
 			assistant.Role = client.RoleAssistant
 		}
+		m.messages = append(m.messages, message.intermediate...)
 		m.messages = append(m.messages, assistant)
 		if m.memory != nil {
-			m.memory.ObserveUsage(message.response.Usage.PromptTokens, m.requestEstimate)
+			for _, intermediate := range message.intermediate {
+				m.memory.Append(intermediate)
+			}
+			requestEstimate := message.requestEstimate
+			if requestEstimate == 0 {
+				requestEstimate = m.requestEstimate
+			}
+			m.memory.ObserveUsage(message.response.Usage.PromptTokens, requestEstimate)
 			m.memory.Append(assistant)
 		}
 		if message.response.ConversationID != "" {
@@ -353,6 +365,9 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			m.status = fmt.Sprintf("Context remains above target · %s/%s", formatTokens(message.response.Usage.PromptTokens), formatTokens(m.compactionTarget))
 		} else {
 			m.status = ""
+			if message.toolCalls > 0 {
+				m.status = fmt.Sprintf("Tools used · %d", message.toolCalls)
+			}
 		}
 		m.compactionTarget = 0
 		m.refreshTranscript()
@@ -953,12 +968,91 @@ func (m *model) sendChatRequest() tea.Cmd {
 	m.requestEstimate = memory.CountMessages(history)
 	conversationID := m.conversationID
 	configuredClient := m.client
+	toolRuntime := m.toolRuntime
 	return func() tea.Msg {
-		response, err := configuredClient.Chat(m.ctx, client.ChatRequest{
-			Messages: history, ConversationID: conversationID,
-		})
-		return chatResultMsg{response: response, err: err}
+		return runAgentLoop(m.ctx, configuredClient, toolRuntime, history, conversationID)
 	}
+}
+
+const maximumToolRounds = 32
+
+func runAgentLoop(
+	ctx context.Context,
+	configuredClient chatClient,
+	toolRuntime agentToolRuntime,
+	history []client.Message,
+	conversationID string,
+) chatResultMsg {
+	var availableTools []client.Tool
+	if toolRuntime != nil {
+		availableTools = toolRuntime.Tools()
+	}
+	intermediate := make([]client.Message, 0)
+	toolCalls := 0
+	for round := 0; round < maximumToolRounds; round++ {
+		requestEstimate := memory.CountMessages(history)
+		response, err := configuredClient.Chat(ctx, client.ChatRequest{
+			Messages: providerMessages(history), ConversationID: conversationID, Tools: availableTools,
+		})
+		if err != nil {
+			return chatResultMsg{err: err}
+		}
+		if response == nil || len(response.Choices) == 0 {
+			return chatResultMsg{response: response}
+		}
+		assistant := response.Choices[0].Message
+		if assistant.Role == "" {
+			assistant.Role = client.RoleAssistant
+		}
+		if len(assistant.ToolCalls) == 0 || toolRuntime == nil {
+			response.Choices[0].Message = assistant
+			return chatResultMsg{
+				response: response, intermediate: intermediate,
+				requestEstimate: requestEstimate, toolCalls: toolCalls,
+			}
+		}
+		if response.ConversationID != "" {
+			conversationID = response.ConversationID
+		}
+		for index := range assistant.ToolCalls {
+			if assistant.ToolCalls[index].ID == "" {
+				assistant.ToolCalls[index].ID = fmt.Sprintf("q-call-%d-%d", round+1, index+1)
+			}
+		}
+		history = append(history, assistant)
+		intermediate = append(intermediate, assistant)
+		for _, call := range assistant.ToolCalls {
+			result, callErr := toolRuntime.Call(ctx, call)
+			if callErr != nil {
+				result = client.ToolResult{Content: callErr.Error(), IsError: true}
+			}
+			content := result.Content
+			if result.IsError {
+				content = "Tool error: " + content
+			}
+			message := client.Message{
+				Role: client.RoleTool, Name: call.Function.Name,
+				ToolCallID: call.ID, Content: content,
+			}
+			history = append(history, message)
+			intermediate = append(intermediate, message)
+			toolCalls++
+		}
+	}
+	return chatResultMsg{err: fmt.Errorf("agent stopped after %d tool rounds", maximumToolRounds)}
+}
+
+// providerMessages removes q-internal message names that some compatible APIs
+// reject outside the user role. Names remain in memory for summary detection
+// and transcript labels, but are not part of the provider wire request.
+func providerMessages(messages []client.Message) []client.Message {
+	result := append([]client.Message(nil), messages...)
+	for index := range result {
+		if result[index].Role != client.RoleUser {
+			result[index].Name = ""
+		}
+	}
+	return result
 }
 
 func (m *model) rollbackPendingMessage() {
@@ -987,6 +1081,13 @@ func (m *model) enterChat(value config.Config, configuredClient chatClient) {
 	m.messages = nil
 	if value.Provider.SystemPrompt != "" {
 		m.messages = append(m.messages, client.Message{Role: client.RoleSystem, Content: value.Provider.SystemPrompt})
+	}
+	if m.toolRuntime != nil && m.workspaceStore != nil {
+		m.messages = append(m.messages, client.Message{
+			Role: client.RoleDeveloper, Name: "q_workspace",
+			Content: "Current workspace root: " + filepath.Clean(m.workspaceStore.Root) +
+				". Use the available tools to inspect, edit, and run work in this workspace when the user asks for changes.",
+		})
 	}
 	m.memory = memory.New(memoryPolicy(value), m.messages)
 	m.conversationID = ""
@@ -1231,7 +1332,7 @@ func (m *model) refreshTranscript() {
 func renderTranscript(messages []client.Message, width int) string {
 	var blocks []string
 	for _, message := range messages {
-		if message.Role == client.RoleSystem {
+		if message.Role == client.RoleSystem || message.Role == client.RoleDeveloper {
 			continue
 		}
 		label := "YOU"
@@ -1240,6 +1341,14 @@ func renderTranscript(messages []client.Message, width int) string {
 		if message.Role == client.RoleAssistant {
 			label = "ASSISTANT"
 			labelStyle = assistantLabelStyle
+			bodyStyle = assistantBodyStyle
+		}
+		if message.Role == client.RoleTool {
+			label = "TOOL"
+			if message.Name != "" {
+				label += " · " + message.Name
+			}
+			labelStyle = subtleStyle
 			bodyStyle = assistantBodyStyle
 		}
 		body := message.TextContent()

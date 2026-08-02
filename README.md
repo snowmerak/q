@@ -94,5 +94,9 @@ current workspace. When model context metadata is available, q
 automatically compacts that request context at 85% to a maximum of 22% while
 keeping the full transcript visible. Set `context.window` when the provider does
 not expose `context_length`; discovered model context metadata is otherwise saved
-as `provider.context_window`. Agent tool execution will be added in later
-stages.
+as `provider.context_window`.
+
+Each chat request exposes q's workspace-scoped builtin MCP tools to the model.
+When the model returns tool calls, q executes them, appends their results to the
+conversation, and continues the same turn automatically. Filesystem tools are
+root-jailed; shell commands start in the workspace but are not an OS sandbox.

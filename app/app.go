@@ -12,6 +12,7 @@ import (
 	"github.com/snowmerak/q/client"
 	"github.com/snowmerak/q/config"
 	"github.com/snowmerak/q/providerhost"
+	qtools "github.com/snowmerak/q/tools"
 	"github.com/snowmerak/q/workspace"
 )
 
@@ -27,6 +28,11 @@ type providerRuntime interface {
 	Endpoint() string
 	Config() gateway.Config
 	Apply(context.Context, gateway.Config) error
+}
+
+type agentToolRuntime interface {
+	Tools() []client.Tool
+	Call(context.Context, client.ToolCall) (client.ToolResult, error)
 }
 
 func defaultClientFactory(value config.Config) (chatClient, error) {
@@ -93,8 +99,14 @@ func Run(ctx context.Context, store config.Store) error {
 	}
 
 	factory := managedClientFactory(manager)
+	agentTools, toolsErr := qtools.NewRuntime(ctx, workspaceStore.Root)
+	if toolsErr != nil {
+		return toolsErr
+	}
+	defer agentTools.Close()
 	initialModel := newManagedModel(ctx, store, factory, manager)
 	initialModel.workspaceStore = &workspaceStore
+	initialModel.toolRuntime = agentTools
 	if startupErr != nil {
 		initialModel.status = startupErr.Error()
 	}
