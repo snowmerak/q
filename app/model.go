@@ -2,7 +2,9 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -17,6 +19,7 @@ import (
 	"github.com/snowmerak/q/client"
 	"github.com/snowmerak/q/config"
 	"github.com/snowmerak/q/memory"
+	"github.com/snowmerak/q/workspace"
 	"golang.org/x/text/unicode/norm"
 )
 
@@ -87,6 +90,9 @@ type model struct {
 	height  int
 	status  string
 	runtime providerRuntime
+
+	workspaceStore    *workspace.Store
+	workspaceRestored bool
 
 	setup              [setupFieldCount]textinput.Model
 	setupFocus         int
@@ -350,6 +356,9 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.compactionTarget = 0
 		m.refreshTranscript()
+		if err := m.saveWorkspaceSession(); err != nil {
+			m.status = err.Error()
+		}
 		return m, m.input.Focus()
 	case compactionResultMsg:
 		if message.err != nil {
@@ -988,6 +997,7 @@ func (m *model) enterChat(value config.Config, configuredClient chatClient) {
 	m.pendingMessage = client.Message{}
 	m.status = ""
 	m.input = newChatInput()
+	m.restoreWorkspaceSession()
 	m.resize(m.width, m.height)
 	m.input.Focus()
 	m.refreshTranscript()
@@ -1118,7 +1128,69 @@ func (m *model) resetConversation() {
 	m.compactionTarget = 0
 	m.submitPending = false
 	m.status = "Conversation cleared"
+	if m.workspaceStore != nil {
+		if err := m.workspaceStore.Clear(); err != nil {
+			m.status = err.Error()
+		}
+	}
 	m.refreshTranscript()
+}
+
+func (m *model) restoreWorkspaceSession() {
+	if m.workspaceStore == nil || m.workspaceRestored {
+		return
+	}
+	m.workspaceRestored = true
+	session, err := m.workspaceStore.Load()
+	if errors.Is(err, workspace.ErrNotFound) {
+		return
+	}
+	if err != nil {
+		m.status = err.Error()
+		return
+	}
+	base := append([]client.Message(nil), m.messages...)
+	m.messages = mergeWorkspaceMessages(base, session.Transcript)
+	requestContext := session.Context
+	if len(requestContext) == 0 {
+		requestContext = session.Transcript
+	}
+	m.memory = memory.New(memoryPolicy(m.config), mergeWorkspaceMessages(base, requestContext))
+	if len(session.Transcript) > 0 {
+		m.status = fmt.Sprintf("Workspace session restored · %d messages", len(session.Transcript))
+	}
+}
+
+func (m *model) saveWorkspaceSession() error {
+	if m.workspaceStore == nil || m.memory == nil {
+		return nil
+	}
+	return m.workspaceStore.Save(workspace.Session{
+		Transcript: workspaceSessionMessages(m.messages),
+		Context:    workspaceSessionMessages(m.memory.Messages()),
+	})
+}
+
+func workspaceSessionMessages(messages []client.Message) []client.Message {
+	saved := make([]client.Message, 0, len(messages))
+	for _, message := range messages {
+		if (message.Role == client.RoleSystem || message.Role == client.RoleDeveloper) && message.Name != memory.SummaryName {
+			continue
+		}
+		saved = append(saved, message)
+	}
+	return saved
+}
+
+func mergeWorkspaceMessages(base, saved []client.Message) []client.Message {
+	merged := append([]client.Message(nil), base...)
+	for _, message := range saved {
+		if (message.Role == client.RoleSystem || message.Role == client.RoleDeveloper) && message.Name != memory.SummaryName {
+			continue
+		}
+		merged = append(merged, message)
+	}
+	return merged
 }
 
 func (m *model) resize(width, height int) {
@@ -1374,7 +1446,14 @@ func (m model) viewChat() string {
 	if m.runtime != nil {
 		endpoint = m.runtime.Endpoint()
 	}
-	header := titleStyle.Render("q") + "  " + subtleStyle.Render(m.config.Provider.Model+" · "+endpoint+" · "+m.contextLabel())
+	title := "q"
+	if m.workspaceStore != nil {
+		name := filepath.Base(filepath.Clean(m.workspaceStore.Root))
+		if name != "." && name != string(filepath.Separator) && name != "" {
+			title += " · " + name
+		}
+	}
+	header := titleStyle.Render(title) + "  " + subtleStyle.Render(m.config.Provider.Model+" · "+endpoint+" · "+m.contextLabel())
 	status := m.status
 	if m.waiting {
 		status = m.spinner.View() + " " + status

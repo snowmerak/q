@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -9,6 +10,7 @@ import (
 	"github.com/snowmerak/llm-provider/gateway"
 	"github.com/snowmerak/q/client"
 	"github.com/snowmerak/q/config"
+	"github.com/snowmerak/q/workspace"
 )
 
 type fakeProviderRuntime struct {
@@ -267,6 +269,10 @@ func TestSlashModelOpensPickerAndPreservesHistory(t *testing.T) {
 	if m.screen != screenChat || m.config.Provider.Model != "new-model" {
 		t.Fatalf("selected model = %q on screen %v", m.config.Provider.Model, m.screen)
 	}
+	loaded, err := store.Load()
+	if err != nil || loaded.Provider.Model != "new-model" {
+		t.Fatalf("global model config = %#v, err = %v", loaded, err)
+	}
 	if len(m.messages) != 2 || m.messages[1].Content != "keep me" {
 		t.Fatalf("history was not preserved: %#v", m.messages)
 	}
@@ -447,6 +453,61 @@ func TestSlashClearResetsConversation(t *testing.T) {
 	}
 	if m.status != "Conversation cleared" {
 		t.Fatalf("status = %q", m.status)
+	}
+}
+
+func TestWorkspaceSessionPersistsAndRestoresWithGlobalChatConfig(t *testing.T) {
+	workspaceStore := workspace.Store{Root: t.TempDir()}
+	value := config.Default()
+	value.Provider.Model = "global-model"
+	fake := &fakeClient{}
+	m := newModel(context.Background(), config.Store{Dir: t.TempDir()}, nil)
+	m.workspaceStore = &workspaceStore
+	m.enterChat(value, fake)
+	m = submitAndReceive(t, m, "remember this folder")
+
+	session, err := workspaceStore.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(session.Transcript) != 2 || session.Transcript[0].Content != "remember this folder" || len(session.Context) != 2 {
+		t.Fatalf("saved workspace session = %#v", session)
+	}
+
+	restoredConfig := value
+	restoredConfig.Provider.SystemPrompt = "updated global prompt"
+	restored := newModel(context.Background(), config.Store{Dir: t.TempDir()}, nil)
+	restored.workspaceStore = &workspaceStore
+	restored.enterChat(restoredConfig, &fakeClient{})
+	if restored.config.Provider.Model != "global-model" {
+		t.Fatalf("workspace overrode global model: %q", restored.config.Provider.Model)
+	}
+	if len(restored.messages) != 3 || restored.messages[0].Content != "updated global prompt" ||
+		restored.messages[1].Content != "remember this folder" {
+		t.Fatalf("restored transcript = %#v", restored.messages)
+	}
+	requestContext := restored.memory.Messages()
+	if len(requestContext) != 3 || requestContext[0].Content != "updated global prompt" {
+		t.Fatalf("restored request context = %#v", requestContext)
+	}
+}
+
+func TestClearRemovesWorkspaceSession(t *testing.T) {
+	workspaceStore := workspace.Store{Root: t.TempDir()}
+	if err := workspaceStore.Save(workspace.Session{
+		Transcript: []client.Message{{Role: client.RoleUser, Content: "old"}},
+		Context:    []client.Message{{Role: client.RoleUser, Content: "old"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	value := config.Default()
+	value.Provider.Model = "global-model"
+	m := newModel(context.Background(), config.Store{Dir: t.TempDir()}, nil)
+	m.workspaceStore = &workspaceStore
+	m.enterChat(value, &fakeClient{})
+	m.resetConversation()
+	if _, err := workspaceStore.Load(); !errors.Is(err, workspace.ErrNotFound) {
+		t.Fatalf("workspace session survived clear: %v", err)
 	}
 }
 

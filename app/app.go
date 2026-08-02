@@ -12,6 +12,7 @@ import (
 	"github.com/snowmerak/q/client"
 	"github.com/snowmerak/q/config"
 	"github.com/snowmerak/q/providerhost"
+	"github.com/snowmerak/q/workspace"
 )
 
 type chatClient interface {
@@ -55,6 +56,10 @@ func managedClientFactory(runtime providerRuntime) clientFactory {
 // Run loads personal configuration and starts the interactive application.
 // A missing configuration opens the first-run provider setup screen.
 func Run(ctx context.Context, store config.Store) error {
+	workspaceStore, err := workspace.DefaultStore()
+	if err != nil {
+		return err
+	}
 	loaded, err := store.Load()
 	if err != nil && !errors.Is(err, config.ErrNotFound) {
 		return err
@@ -89,6 +94,7 @@ func Run(ctx context.Context, store config.Store) error {
 
 	factory := managedClientFactory(manager)
 	initialModel := newManagedModel(ctx, store, factory, manager)
+	initialModel.workspaceStore = &workspaceStore
 	if startupErr != nil {
 		initialModel.status = startupErr.Error()
 	}

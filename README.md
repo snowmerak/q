@@ -19,6 +19,17 @@ and opens a searchable model selector. Personal configuration is stored at:
 ~/.q/providers.json
 ```
 
+The selected model remains part of this global configuration. Chat state is
+workspace-local: q resumes the transcript and compacted request context from
+the directory where it is launched:
+
+```text
+<current-directory>/.q/session.json
+```
+
+The workspace session does not contain provider settings, API keys, or a model
+override. `/clear` removes the local session as well as clearing the screen.
+
 Example:
 
 ```yaml
@@ -70,7 +81,7 @@ Chat keys:
 
 - `Enter`: send
 - `Shift+Enter`: insert a newline
-- `/clear`: clear the in-memory conversation
+- `/clear`: clear the conversation and remove the current workspace session
 - `/model`: load the current provider's models and change the active model
 - `/provider`: list, add, edit, enable, disable, or delete Gateway providers
 - `Ctrl+L`: clear the in-memory conversation
@@ -78,10 +89,10 @@ Chat keys:
 - `Ctrl+P`: edit provider settings (alternative shortcut)
 - `Esc` or `Ctrl+C`: quit
 
-The full chat transcript is held in memory, while a separate request context
-provides multi-turn conversation. When model context metadata is available, q
+The full chat transcript and separate request context are persisted in the
+current workspace. When model context metadata is available, q
 automatically compacts that request context at 85% to a maximum of 22% while
 keeping the full transcript visible. Set `context.window` when the provider does
 not expose `context_length`; discovered model context metadata is otherwise saved
-as `provider.context_window`. Conversation persistence and agent tool execution
-will be added in later stages.
+as `provider.context_window`. Agent tool execution will be added in later
+stages.
