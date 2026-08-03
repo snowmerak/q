@@ -10,6 +10,7 @@ import (
 	"github.com/snowmerak/llm-provider/gateway"
 	"github.com/snowmerak/q/client"
 	"github.com/snowmerak/q/config"
+	"github.com/snowmerak/q/sessionstore"
 	"github.com/snowmerak/q/workspace"
 )
 
@@ -726,6 +727,9 @@ func TestWorkspaceSessionPersistsAndRestoresWithGlobalChatConfig(t *testing.T) {
 	if len(session.Transcript) != 2 || session.Transcript[0].Content != "remember this folder" || len(session.Context) != 2 {
 		t.Fatalf("saved workspace session = %#v", session)
 	}
+	if session.RunID == "" || session.RunID != m.runID {
+		t.Fatalf("saved run ID = %q, model run ID = %q", session.RunID, m.runID)
+	}
 
 	restoredConfig := value
 	restoredConfig.Provider.SystemPrompt = "updated global prompt"
@@ -734,6 +738,9 @@ func TestWorkspaceSessionPersistsAndRestoresWithGlobalChatConfig(t *testing.T) {
 	restored.enterChat(restoredConfig, &fakeClient{})
 	if restored.config.Provider.Model != "global-model" {
 		t.Fatalf("workspace overrode global model: %q", restored.config.Provider.Model)
+	}
+	if restored.runID != session.RunID {
+		t.Fatalf("restored run ID = %q, want %q", restored.runID, session.RunID)
 	}
 	if len(restored.messages) != 3 || restored.messages[0].Content != "updated global prompt" ||
 		restored.messages[1].Content != "remember this folder" {
@@ -817,9 +824,16 @@ func TestChatExecutesToolCallsAndContinuesTurn(t *testing.T) {
 	workspaceStore := workspace.Store{Root: t.TempDir()}
 	agentTools := &fakeAgentTools{}
 	configuredClient := &toolCallingClient{}
+	archiveStore, err := sessionstore.Open(workspaceStore.Root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	archiveWriter := sessionstore.NewWriter(archiveStore, 16)
+	t.Cleanup(func() { _ = archiveWriter.Close() })
 	m := newModel(context.Background(), config.Store{Dir: t.TempDir()}, nil)
 	m.workspaceStore = &workspaceStore
 	m.toolRuntime = agentTools
+	m.archive = archiveWriter
 	m.enterChat(value, configuredClient)
 	m.input.SetValue("create a Go project")
 	updated, command := m.submitChat()
@@ -869,6 +883,33 @@ func TestChatExecutesToolCallsAndContinuesTurn(t *testing.T) {
 	}
 	if m.messages[len(m.messages)-1].Content != "Created main.go" || !strings.Contains(m.status, "Tools used · 1") {
 		t.Fatalf("final transcript = %#v, status = %q", m.messages, m.status)
+	}
+	archived, err := archiveStore.Search(context.Background(), sessionstore.SearchOptions{
+		Filters: sessionstore.Filters{RunIDs: []string{m.runID}},
+		Sort:    sessionstore.SortOldest,
+		Limit:   20,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(archived.Hits) != 5 {
+		t.Fatalf("archived records = %#v", archived.Hits)
+	}
+	var archivedToolCall, archivedToolResult *sessionstore.Record
+	for index := range archived.Hits {
+		record := &archived.Hits[index].Record
+		if record.Kind == sessionstore.KindEvent && record.TaskID == "call-1" {
+			archivedToolCall = record
+		}
+		if record.Kind == sessionstore.KindResult && record.TaskID == "call-1" {
+			archivedToolResult = record
+		}
+	}
+	if archivedToolCall == nil || archivedToolCall.Status != sessionstore.StatusRunning || archivedToolCall.Summary != "write_file" {
+		t.Fatalf("tool call record = %#v", archivedToolCall)
+	}
+	if archivedToolResult == nil || archivedToolResult.Status != sessionstore.StatusSucceeded || archivedToolResult.ParentID != archivedToolCall.ID {
+		t.Fatalf("tool result record = %#v", archivedToolResult)
 	}
 }
 

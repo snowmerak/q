@@ -60,6 +60,21 @@ const (
 	KindSummary  = "summary"
 )
 
+const (
+	StatusSubmitted = "submitted"
+	StatusQueued    = "queued"
+	StatusRunning   = "running"
+	StatusSucceeded = "succeeded"
+	StatusFailed    = "failed"
+	StatusCancelled = "cancelled"
+)
+
+// NewID returns an archive-safe, time-sortable identifier. Callers can use it
+// for run and task IDs as well as explicit record IDs.
+func NewID() (string, error) {
+	return newRecordID(time.Now().UTC())
+}
+
 func prepareRecord(record Record, previous *Record, now time.Time) (Record, error) {
 	record.ID = strings.TrimSpace(record.ID)
 	record.Kind = strings.TrimSpace(record.Kind)

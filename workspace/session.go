@@ -23,6 +23,7 @@ var ErrNotFound = errors.New("q workspace session not found")
 
 type Session struct {
 	Version    int              `json:"version"`
+	RunID      string           `json:"run_id,omitempty"`
 	Transcript []client.Message `json:"transcript,omitempty"`
 	Context    []client.Message `json:"context,omitempty"`
 }

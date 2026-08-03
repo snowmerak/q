@@ -21,6 +21,7 @@ import (
 	"github.com/snowmerak/q/client"
 	"github.com/snowmerak/q/config"
 	"github.com/snowmerak/q/memory"
+	"github.com/snowmerak/q/sessionstore"
 	"github.com/snowmerak/q/workspace"
 	"golang.org/x/text/unicode/norm"
 )
@@ -110,6 +111,9 @@ type model struct {
 
 	workspaceStore    *workspace.Store
 	workspaceRestored bool
+	archive           recordArchive
+	archiveErr        error
+	runID             string
 
 	setup               [setupFieldCount]textinput.Model
 	setupFocus          int
@@ -173,6 +177,7 @@ type chatResultMsg struct {
 type agentEvent struct {
 	message         *client.Message
 	call            *client.ToolCall
+	toolIsError     bool
 	response        *client.ChatResponse
 	requestEstimate int
 	toolCalls       int
@@ -391,6 +396,7 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	case agentEventMsg:
 		event := message.event
 		if event.call != nil {
+			m.archiveToolCall(*event.call)
 			m.status = "Running tool · " + describeToolCall(*event.call)
 			return m, tea.Batch(m.spinner.Tick, waitAgentEvent(message.events))
 		}
@@ -400,8 +406,14 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 				m.memory.Append(*event.message)
 			}
 			if event.message.Role == client.RoleAssistant {
+				m.archiveMessage(*event.message, sessionstore.StatusSucceeded, false)
 				m.status = "Preparing tool call…"
 			} else {
+				status := sessionstore.StatusSucceeded
+				if event.toolIsError {
+					status = sessionstore.StatusFailed
+				}
+				m.archiveMessage(*event.message, status, event.toolIsError)
 				m.status = "Thinking… · " + event.message.Name + " completed"
 			}
 			m.refreshTranscript()
@@ -417,20 +429,37 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		m.pendingMessage = client.Message{}
 		if message.err != nil {
 			m.compactionTarget = 0
+			m.archiveFailure("chat", message.err)
+			if archiveErr := m.flushArchive(); archiveErr != nil {
+				m.status = message.err.Error() + " · archive: " + archiveErr.Error()
+				return m, m.input.Focus()
+			}
 			m.status = message.err.Error()
 			return m, m.input.Focus()
 		}
 		if message.response == nil || len(message.response.Choices) == 0 {
 			m.compactionTarget = 0
+			err := errors.New("provider returned no choices")
+			m.archiveFailure("chat", err)
 			m.status = "provider returned no choices"
+			if archiveErr := m.flushArchive(); archiveErr != nil {
+				m.status += " · archive: " + archiveErr.Error()
+			}
 			return m, m.input.Focus()
 		}
 		assistant := message.response.Choices[0].Message
 		if assistant.Role == "" {
 			assistant.Role = client.RoleAssistant
 		}
+		if message.response.ConversationID != "" {
+			m.conversationID = message.response.ConversationID
+		}
 		m.messages = append(m.messages, message.intermediate...)
 		m.messages = append(m.messages, assistant)
+		for _, intermediate := range message.intermediate {
+			m.archiveMessage(intermediate, sessionstore.StatusSucceeded, false)
+		}
+		m.archiveMessage(assistant, sessionstore.StatusSucceeded, false)
 		if m.memory != nil {
 			for _, intermediate := range message.intermediate {
 				m.memory.Append(intermediate)
@@ -441,9 +470,6 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			m.memory.ObserveUsage(message.response.Usage.PromptTokens, requestEstimate)
 			m.memory.Append(assistant)
-		}
-		if message.response.ConversationID != "" {
-			m.conversationID = message.response.ConversationID
 		}
 		if m.compactionTarget > 0 && message.response.Usage.PromptTokens > m.compactionTarget {
 			m.status = fmt.Sprintf("Context remains above target · %s/%s", formatTokens(message.response.Usage.PromptTokens), formatTokens(m.compactionTarget))
@@ -458,25 +484,42 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		if err := m.saveWorkspaceSession(); err != nil {
 			m.status = err.Error()
 		}
+		if err := m.flushArchive(); err != nil {
+			m.status = "archive: " + err.Error()
+		}
 		return m, m.input.Focus()
 	case compactionResultMsg:
 		if message.err != nil {
 			m.rollbackPendingMessage()
+			m.archiveFailure("context_compaction", message.err)
 			m.status = "compact context: " + message.err.Error()
+			if archiveErr := m.flushArchive(); archiveErr != nil {
+				m.status += " · archive: " + archiveErr.Error()
+			}
 			return m, m.input.Focus()
 		}
 		if message.response == nil || len(message.response.Choices) == 0 {
 			m.rollbackPendingMessage()
+			err := errors.New("provider returned no choices")
+			m.archiveFailure("context_compaction", err)
 			m.status = "compact context: provider returned no choices"
+			if archiveErr := m.flushArchive(); archiveErr != nil {
+				m.status += " · archive: " + archiveErr.Error()
+			}
 			return m, m.input.Focus()
 		}
 		summary := strings.TrimSpace(message.response.Choices[0].Message.TextContent())
 		if err := m.memory.Apply(message.plan, summary); err != nil {
 			m.rollbackPendingMessage()
+			m.archiveFailure("context_compaction", err)
 			m.status = "compact context: " + err.Error()
+			if archiveErr := m.flushArchive(); archiveErr != nil {
+				m.status += " · archive: " + archiveErr.Error()
+			}
 			return m, m.input.Focus()
 		}
 		m.conversationID = ""
+		m.archiveSummary(summary)
 		m.compacting = false
 		m.compactionTarget = message.plan.TargetTokens
 		m.status = fmt.Sprintf("Context compacted · %s → %s", formatTokens(message.plan.BeforeTokens), formatTokens(m.memory.PredictedTokens()))
@@ -1160,6 +1203,7 @@ func (m model) submitChat() (tea.Model, tea.Cmd) {
 		return m, m.setup[m.setupFocus].Focus()
 	}
 	userMessage := client.Message{Role: client.RoleUser, Content: content}
+	m.archiveMessage(userMessage, sessionstore.StatusSubmitted, false)
 	m.messages = append(m.messages, userMessage)
 	if m.memory == nil {
 		m.memory = memory.New(memoryPolicy(m.config), nil)
@@ -1174,7 +1218,11 @@ func (m model) submitChat() (tea.Model, tea.Cmd) {
 		plan, err := m.memory.Plan()
 		if err != nil {
 			m.rollbackPendingMessage()
+			m.archiveFailure("context_compaction", err)
 			m.status = err.Error()
+			if archiveErr := m.flushArchive(); archiveErr != nil {
+				m.status += " · archive: " + archiveErr.Error()
+			}
 			return m, m.input.Focus()
 		}
 		m.compacting = true
@@ -1288,7 +1336,7 @@ func streamAgentLoop(
 			}
 			history = append(history, message)
 			toolCalls++
-			if !emitAgentEvent(ctx, events, agentEvent{message: &message}) {
+			if !emitAgentEvent(ctx, events, agentEvent{message: &message, toolIsError: result.IsError}) {
 				return
 			}
 		}
@@ -1364,6 +1412,7 @@ func (m *model) enterChat(value config.Config, configuredClient chatClient) {
 	}
 	m.memory = memory.New(memoryPolicy(value), m.messages)
 	m.conversationID = ""
+	m.runID = ""
 	m.waiting = false
 	m.compacting = false
 	m.compactionTarget = 0
@@ -1372,6 +1421,7 @@ func (m *model) enterChat(value config.Config, configuredClient chatClient) {
 	m.status = ""
 	m.input = newChatInput()
 	m.restoreWorkspaceSession()
+	m.ensureRunID()
 	m.resize(m.width, m.height)
 	m.input.Focus()
 	m.refreshTranscript()
@@ -1586,6 +1636,8 @@ func (m *model) resetConversation() {
 		m.memory.Reset(m.messages)
 	}
 	m.conversationID = ""
+	m.runID = ""
+	m.ensureRunID()
 	m.compactionTarget = 0
 	m.submitPending = false
 	m.status = "Conversation cleared"
@@ -1617,6 +1669,8 @@ func (m *model) restoreWorkspaceSession() {
 		requestContext = session.Transcript
 	}
 	m.memory = memory.New(memoryPolicy(m.config), mergeWorkspaceMessages(base, requestContext))
+	m.runID = session.RunID
+	m.ensureRunID()
 	if len(session.Transcript) > 0 {
 		m.status = fmt.Sprintf("Workspace session restored · %d messages", len(session.Transcript))
 	}
@@ -1627,6 +1681,7 @@ func (m *model) saveWorkspaceSession() error {
 		return nil
 	}
 	return m.workspaceStore.Save(workspace.Session{
+		RunID:      m.runID,
 		Transcript: workspaceSessionMessages(m.messages),
 		Context:    workspaceSessionMessages(m.memory.Messages()),
 	})

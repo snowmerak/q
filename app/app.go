@@ -12,6 +12,7 @@ import (
 	"github.com/snowmerak/q/client"
 	"github.com/snowmerak/q/config"
 	"github.com/snowmerak/q/providerhost"
+	"github.com/snowmerak/q/sessionstore"
 	qtools "github.com/snowmerak/q/tools"
 	"github.com/snowmerak/q/workspace"
 )
@@ -104,12 +105,15 @@ func Run(ctx context.Context, store config.Store) error {
 		return toolsErr
 	}
 	defer agentTools.Close()
+	archiveStore, archiveOpenErr := sessionstore.Open(workspaceStore.Root)
+	var archiveWriter *sessionstore.Writer
+	if archiveOpenErr == nil {
+		archiveWriter = sessionstore.NewWriter(archiveStore, 0)
+	}
 	initialModel := newManagedModel(ctx, store, factory, manager)
 	initialModel.workspaceStore = &workspaceStore
 	initialModel.toolRuntime = agentTools
-	if startupErr != nil {
-		initialModel.status = startupErr.Error()
-	}
+	initialModel.archive = archiveWriter
 	if err == nil && manager.Endpoint() != "" {
 		if !loaded.Provider.Managed {
 			loaded.UseManagedGateway()
@@ -133,6 +137,15 @@ func Run(ctx context.Context, store config.Store) error {
 	} else if len(manager.Config().Providers) > 0 {
 		initialModel.enterProviderList()
 	}
+	if startupErr != nil {
+		initialModel.status = startupErr.Error()
+	}
+	if archiveOpenErr != nil {
+		if initialModel.status != "" {
+			initialModel.status += " · "
+		}
+		initialModel.status += "archive: " + archiveOpenErr.Error()
+	}
 
 	final, runErr := tea.NewProgram(initialModel).Run()
 	if finalModel, ok := final.(model); ok && finalModel.client != nil {
@@ -140,7 +153,11 @@ func Run(ctx context.Context, store config.Store) error {
 	} else if initialModel.client != nil {
 		_ = initialModel.client.Close()
 	}
-	return runErr
+	var archiveCloseErr error
+	if archiveWriter != nil {
+		archiveCloseErr = archiveWriter.Close()
+	}
+	return errors.Join(runErr, archiveCloseErr)
 }
 
 func RunDefault(ctx context.Context) error {
