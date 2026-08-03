@@ -7,8 +7,9 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-// Register adds the root-jailed builtin filesystem tools to server.
-func Register(server *mcp.Server, root string) (*FS, error) {
+// Register adds the root-jailed builtin tools to server. Archive tools are
+// included when a workspace record store is supplied.
+func Register(server *mcp.Server, root string, archive Archive) (*FS, error) {
 	fs, err := NewFS(root)
 	if err != nil {
 		return nil, err
@@ -99,6 +100,32 @@ func Register(server *mcp.Server, root string) (*FS, error) {
 		Annotations: &mcp.ToolAnnotations{ReadOnlyHint: readOnly},
 	}, valueHandler(fs.WaitCommand))
 
+	if archive != nil {
+		mcp.AddTool(server, &mcp.Tool{
+			Name:        "search_archive",
+			Description: "Search durable workspace history for prior conversations, decisions, agent tasks, failures, and tool results. Returns bounded excerpts; use get_archive_record for a selected full record.",
+			Annotations: &mcp.ToolAnnotations{ReadOnlyHint: readOnly, IdempotentHint: true},
+		}, func(ctx context.Context, _ *mcp.CallToolRequest, input SearchArchiveInput) (*mcp.CallToolResult, SearchArchiveOutput, error) {
+			output, err := SearchArchive(ctx, archive, input)
+			if err != nil {
+				return nil, SearchArchiveOutput{}, err
+			}
+			return structuredTextResult(output)
+		})
+
+		mcp.AddTool(server, &mcp.Tool{
+			Name:        "get_archive_record",
+			Description: "Get one durable workspace archive record by ID. Content is paginated by Unicode character offset; payload is optional and omitted when too large.",
+			Annotations: &mcp.ToolAnnotations{ReadOnlyHint: readOnly, IdempotentHint: true},
+		}, func(_ context.Context, _ *mcp.CallToolRequest, input GetArchiveRecordInput) (*mcp.CallToolResult, GetArchiveRecordOutput, error) {
+			output, err := GetArchiveRecord(archive, input)
+			if err != nil {
+				return nil, GetArchiveRecordOutput{}, err
+			}
+			return structuredTextResult(output)
+		})
+	}
+
 	return fs, nil
 }
 
@@ -115,11 +142,15 @@ func valueHandler[In, Out any](fn func(In) (Out, error)) mcp.ToolHandlerFor[In, 
 			var zero Out
 			return nil, zero, err
 		}
-		body, err := json.Marshal(output)
-		if err != nil {
-			var zero Out
-			return nil, zero, err
-		}
-		return textResult(string(body)), output, nil
+		return structuredTextResult(output)
 	}
+}
+
+func structuredTextResult[Out any](output Out) (*mcp.CallToolResult, Out, error) {
+	body, err := json.Marshal(output)
+	if err != nil {
+		var zero Out
+		return nil, zero, err
+	}
+	return textResult(string(body)), output, nil
 }

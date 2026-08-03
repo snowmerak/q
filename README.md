@@ -147,3 +147,11 @@ conversation, and continues the same turn automatically. Tool calls, command
 status, exit codes, and command output are rendered as live progress while the
 turn is running. Filesystem tools are root-jailed; shell commands start in the
 workspace but are not an OS sandbox.
+
+The model can query durable workspace history with the read-only
+`search_archive` and `get_archive_record` tools. Search supports text, record
+metadata, RFC3339 creation-time bounds, sorting, and optional recency weighting;
+it returns bounded excerpts. Full record content is paginated by
+`get_archive_record`, while structured payload retrieval is explicit and size
+bounded. Semantic retrieval remains inactive until the configured embedding
+model is connected to record generation and backfill.

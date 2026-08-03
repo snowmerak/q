@@ -22,7 +22,13 @@ type Runtime struct {
 }
 
 func NewRuntime(ctx context.Context, root string) (*Runtime, error) {
-	server, fs, err := newServer(root)
+	return NewRuntimeWithArchive(ctx, root, nil)
+}
+
+// NewRuntimeWithArchive connects the chat loop to filesystem, command, and
+// read-only workspace archive tools. The caller owns the archive lifetime.
+func NewRuntimeWithArchive(ctx context.Context, root string, archive builtin.Archive) (*Runtime, error) {
+	server, fs, err := newServer(root, archive)
 	if err != nil {
 		return nil, err
 	}

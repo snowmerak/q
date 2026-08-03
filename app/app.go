@@ -100,12 +100,21 @@ func Run(ctx context.Context, store config.Store) error {
 	}
 
 	factory := managedClientFactory(manager)
-	agentTools, toolsErr := qtools.NewRuntime(ctx, workspaceStore.Root)
+	archiveStore, archiveOpenErr := sessionstore.Open(workspaceStore.Root)
+	var agentTools *qtools.Runtime
+	var toolsErr error
+	if archiveOpenErr == nil {
+		agentTools, toolsErr = qtools.NewRuntimeWithArchive(ctx, workspaceStore.Root, archiveStore)
+	} else {
+		agentTools, toolsErr = qtools.NewRuntime(ctx, workspaceStore.Root)
+	}
 	if toolsErr != nil {
+		if archiveStore != nil {
+			_ = archiveStore.Close()
+		}
 		return toolsErr
 	}
 	defer agentTools.Close()
-	archiveStore, archiveOpenErr := sessionstore.Open(workspaceStore.Root)
 	var archiveWriter *sessionstore.Writer
 	if archiveOpenErr == nil {
 		archiveWriter = sessionstore.NewWriter(archiveStore, 0)
@@ -120,6 +129,9 @@ func Run(ctx context.Context, store config.Store) error {
 		}
 		configuredClient, clientErr := factory(loaded)
 		if clientErr != nil {
+			if archiveWriter != nil {
+				_ = archiveWriter.Close()
+			}
 			return clientErr
 		}
 		if loaded.EffectiveContextWindow() == 0 {

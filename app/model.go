@@ -1404,10 +1404,14 @@ func (m *model) enterChat(value config.Config, configuredClient chatClient) {
 		m.messages = append(m.messages, client.Message{Role: client.RoleSystem, Content: value.Provider.SystemPrompt})
 	}
 	if m.toolRuntime != nil && m.workspaceStore != nil {
+		workspacePrompt := "Current workspace root: " + filepath.Clean(m.workspaceStore.Root) +
+			". Use the available tools to inspect, edit, and run work in this workspace when the user asks for changes."
+		if m.archive != nil {
+			workspacePrompt += " Use search_archive when prior workspace conversations, decisions, agent results, or tool failures may be relevant; use get_archive_record only for selected results that need more detail."
+		}
 		m.messages = append(m.messages, client.Message{
 			Role: client.RoleDeveloper, Name: "q_workspace",
-			Content: "Current workspace root: " + filepath.Clean(m.workspaceStore.Root) +
-				". Use the available tools to inspect, edit, and run work in this workspace when the user asks for changes.",
+			Content: workspacePrompt,
 		})
 	}
 	m.memory = memory.New(memoryPolicy(value), m.messages)

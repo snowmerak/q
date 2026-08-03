@@ -42,6 +42,8 @@ func (m *model) archiveMessage(message client.Message, status string, isError bo
 	m.ensureRunID()
 	kind := sessionstore.KindMessage
 	tags := []string{"chat"}
+	content := message.TextContent()
+	payloadMessage := message
 	parentID := ""
 	taskID := ""
 	refs := make([]string, 0, len(message.ToolCalls))
@@ -50,6 +52,13 @@ func (m *model) archiveMessage(message client.Message, status string, isError bo
 		tags = append(tags, "tool")
 		taskID = message.ToolCallID
 		parentID = toolCallRecordID(m.runID, message.ToolCallID)
+		if isArchiveReadTool(message.Name) && !isError {
+			// Archive reads are already durable. Keep invocation/result metadata
+			// without recursively copying retrieved records back into the index.
+			content = ""
+			payloadMessage.Content = ""
+			tags = append(tags, "archive-read")
+		}
 	}
 	for _, call := range message.ToolCalls {
 		refs = append(refs, toolCallRecordID(m.runID, call.ID))
@@ -60,7 +69,7 @@ func (m *model) archiveMessage(message client.Message, status string, isError bo
 	}
 	payload, err := json.Marshal(archivedMessagePayload{
 		ConversationID: m.conversationID,
-		Message:        message,
+		Message:        payloadMessage,
 		IsError:        isError,
 	})
 	if err != nil {
@@ -70,7 +79,7 @@ func (m *model) archiveMessage(message client.Message, status string, isError bo
 	record := sessionstore.Record{
 		Kind: kind, RunID: m.runID, TaskID: taskID, ParentID: parentID,
 		Role: string(message.Role), Model: model, Status: status,
-		Content: message.TextContent(), Refs: refs, Tags: tags, Payload: payload,
+		Content: content, Refs: refs, Tags: tags, Payload: payload,
 	}
 	if message.Role == client.RoleTool {
 		record.Summary = message.Name
@@ -88,11 +97,16 @@ func (m *model) archiveToolCall(call client.ToolCall) {
 		m.rememberArchiveError(err)
 		return
 	}
+	content := call.Function.Arguments
+	tags := []string{"chat", "tool", "call"}
+	if isArchiveReadTool(call.Function.Name) {
+		content = ""
+		tags = append(tags, "archive-read")
+	}
 	m.appendArchive(sessionstore.Record{
 		ID: toolCallRecordID(m.runID, call.ID), Kind: sessionstore.KindEvent,
 		RunID: m.runID, TaskID: call.ID, Role: "tool", Status: sessionstore.StatusRunning,
-		Summary: call.Function.Name, Content: call.Function.Arguments,
-		Tags: []string{"chat", "tool", "call"}, Payload: payload,
+		Summary: call.Function.Name, Content: content, Tags: tags, Payload: payload,
 	})
 }
 
@@ -150,4 +164,8 @@ func (m *model) flushArchive() error {
 func toolCallRecordID(runID, callID string) string {
 	sum := sha256.Sum256([]byte(runID + "\x00" + callID))
 	return "tool-call-" + hex.EncodeToString(sum[:])
+}
+
+func isArchiveReadTool(name string) bool {
+	return name == "search_archive" || name == "get_archive_record"
 }

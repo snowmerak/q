@@ -131,6 +131,13 @@ task의 terminal outcome과 결과를 저장한다.
 tool call의 원본 구조와 arguments, tool result의 message 및 error 여부는 `payload`에
 보존한다. 사람이 검색할 본문은 `summary`와 `content`에도 분리해 색인한다.
 
+Agent는 read-only builtin tool인 `search_archive`와 `get_archive_record`로 이
+저장소를 사용한다. 전자는 text, metadata, 생성 시간, 정렬과 recency 조건으로
+검색하고 크기가 제한된 excerpt를 반환한다. 후자는 선택한 record의 content를 문자
+offset으로 나눠 읽고, 명시적으로 요청한 작은 payload만 함께 반환한다. archive
+검색 tool의 결과는 invocation/status만 기록하고 검색된 본문을 다시 archive content로
+복제하지 않는다.
+
 ## Bleve와 HNSW의 역할
 
 Bleve는 다음 기능을 담당한다.
