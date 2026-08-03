@@ -81,6 +81,9 @@ func TestOptionalOpenAICompatibleEndpoints(t *testing.T) {
 			if body["model"] != "model-a" {
 				t.Errorf("embedding model = %#v", body["model"])
 			}
+			if body["dimensions"] != float64(2) {
+				t.Errorf("embedding dimensions = %#v", body["dimensions"])
+			}
 			_, _ = io.WriteString(writer, `{"object":"list","model":"model-a","data":[{"object":"embedding","embedding":[0.1,0.2],"index":0}],"usage":{"prompt_tokens":1,"total_tokens":1}}`)
 		case "/v1/responses":
 			var body map[string]any
@@ -111,7 +114,8 @@ func TestOptionalOpenAICompatibleEndpoints(t *testing.T) {
 		len(reasoning.SupportedEfforts) != 2 || reasoning.SupportedEfforts[0] != "low" {
 		t.Fatalf("reasoning capabilities = %#v", reasoning)
 	}
-	embedding, err := c.Embed(context.Background(), EmbeddingRequest{Input: "hello"})
+	dimensions := 2
+	embedding, err := c.Embed(context.Background(), EmbeddingRequest{Input: "hello", Dimensions: &dimensions})
 	if err != nil || len(embedding.Data) != 1 {
 		t.Fatalf("embedding = %#v, err = %v", embedding, err)
 	}

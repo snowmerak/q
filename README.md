@@ -8,6 +8,17 @@ supervised child of the current `q` executable.
 go run ./cmd/q
 ```
 
+With [Task](https://taskfile.dev/) installed, the common commands are:
+
+```powershell
+task install  # install q and q-mcp into the Go binary directory
+task build    # build both commands into ./bin
+task run      # run q from source
+```
+
+The session store uses a pure-Go HNSW index for semantic search, so these tasks
+do not require CGO, FAISS, or a vector-specific build tag.
+
 On first launch, q asks for a provider ID, optional model prefix, selectable API
 type, endpoint, and API-key source. API types are selected with `Left`/`Right`;
 the prefix defaults to the provider ID when omitted. q then starts an internal
@@ -38,6 +49,9 @@ provider:
   managed: true
   model: codex/gpt-5.6-terra
   system_prompt: You are a helpful assistant.
+embedding:
+  model: openai/text-embedding-3-small
+  dimensions: 1536
 context:
   trigger_ratio: 0.85
   target_ratio: 0.22
@@ -100,15 +114,21 @@ Chat keys:
 - `Enter`: send
 - `Shift+Enter`: insert a newline
 - `/clear`: clear the conversation and remove the current workspace session
-- `/model`: configure the main-loop default model or a subagent role model
+- `/model`: configure the main-loop, embedding, or subagent role models
 - `/provider`: list, add, edit, enable, disable, or delete Gateway providers
 - `Ctrl+L`: clear the in-memory conversation
 - `Ctrl+S`: send (alternative shortcut)
 - `Ctrl+P`: edit provider settings (alternative shortcut)
 - `Esc` or `Ctrl+C`: quit
 
-`/model` first shows `default` (the main chat loop) followed by the built-in
-subagent roles. Selecting a role opens the shared model catalog; models that
+`/model` first shows `default` (the main chat loop), `embedding`, and then the
+built-in subagent roles. Selecting `embedding` opens the shared model catalog
+and then asks for a vector dimension between 1 and 4096. Because the common
+`/v1/models` response does not currently identify embedding-only models, the
+picker shows the whole catalog. Press `i` on `embedding` to clear the optional
+configuration.
+
+Selecting a subagent role opens the shared model catalog; models that
 advertise enumerated reasoning efforts add a final effort picker whose
 `default` choice omits `reasoning_effort`. Select a subagent in the target list
 and press `i` to remove that role's override and inherit the main-loop default

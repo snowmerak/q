@@ -29,10 +29,11 @@ const (
 var ErrNotFound = errors.New("q config not found")
 
 type Config struct {
-	Version  int            `yaml:"version"`
-	Provider ProviderConfig `yaml:"provider"`
-	Context  ContextConfig  `yaml:"context,omitempty"`
-	Agents   AgentsConfig   `yaml:"agents,omitempty"`
+	Version   int             `yaml:"version"`
+	Provider  ProviderConfig  `yaml:"provider"`
+	Embedding EmbeddingConfig `yaml:"embedding,omitempty"`
+	Context   ContextConfig   `yaml:"context,omitempty"`
+	Agents    AgentsConfig    `yaml:"agents,omitempty"`
 }
 
 type ProviderConfig struct {
@@ -51,6 +52,13 @@ type ContextConfig struct {
 	TriggerRatio float64 `yaml:"trigger_ratio,omitempty"`
 	TargetRatio  float64 `yaml:"target_ratio,omitempty"`
 	RecentRatio  float64 `yaml:"recent_ratio,omitempty"`
+}
+
+// EmbeddingConfig selects the model and fixed vector size used by the
+// workspace archive. A zero value disables embedding generation.
+type EmbeddingConfig struct {
+	Model      string `yaml:"model,omitempty"`
+	Dimensions int    `yaml:"dimensions,omitempty"`
 }
 
 type AgentsConfig struct {
@@ -114,6 +122,15 @@ func (c Config) Validate() error {
 	}
 	if strings.Contains(c.Provider.APIKeyEnv, "=") {
 		return fmt.Errorf("config: api_key_env must be an environment variable name")
+	}
+	if c.Embedding.Model != strings.TrimSpace(c.Embedding.Model) {
+		return fmt.Errorf("config: embedding model must not have surrounding whitespace")
+	}
+	if c.Embedding.Model == "" && c.Embedding.Dimensions != 0 {
+		return fmt.Errorf("config: embedding model is required when dimensions are configured")
+	}
+	if c.Embedding.Model != "" && (c.Embedding.Dimensions < 1 || c.Embedding.Dimensions > 4096) {
+		return fmt.Errorf("config: embedding dimensions must be between 1 and 4096")
 	}
 	contextConfig := c.EffectiveContext()
 	if contextConfig.Window < 0 || c.Provider.ContextWindow < 0 {

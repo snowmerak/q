@@ -1,10 +1,15 @@
-# Bleve-based session store notes
+# Bleve + HNSW session store notes
 
 ## 상태
 
 이 문서는 workspace의 `.q` 아래에 채팅과 agent 실행 데이터를 계속 축적하고,
-Bleve를 이용해 검색하는 세션 저장소의 설계 메모다. 현재 코드에는 이 저장소와
-Bleve를 아직 구현하지 않는다.
+Bleve를 이용해 검색하는 세션 저장소의 설계 메모다.
+
+`sessionstore` 패키지에 1차 저장소 기반을 구현했다. 공통 record의 atomic JSON
+저장, 명시적인 Bleve mapping, text/구조/시간 검색, 최신성 재정렬, 순수 Go HNSW
+vector 검색과 전체 index rebuild를 지원한다. 아직 앱 및 subagent runner에는
+연결하지 않았으며 append-only run event, blob과 embedding 생성 pipeline은 후속
+범위다.
 
 ## 목표
 
@@ -24,6 +29,7 @@ Bleve를 아직 구현하지 않는다.
 .q/
 ├─ session.json                 # 현재 채팅을 빠르게 복구하기 위한 projection
 ├─ data/
+│  ├─ records/                  # 1차 구현의 공통 record 원본 JSON
 │  ├─ runs/
 │  │  └─ <run-id>/
 │  │     ├─ manifest.json
@@ -33,13 +39,19 @@ Bleve를 아직 구현하지 않는다.
 │  └─ blobs/
 │     └─ <sha256>
 └─ index/
-   ├─ bleve/
+   ├─ bleve/                      # text, metadata, datetime
+   ├─ vectors.hnsw                # 파생 HNSW graph
+   ├─ vectors.ids.json            # graph numeric ID -> record ID
    └─ state.json
 ```
 
-`data`가 source of truth다. Bleve는 파생 데이터이며 언제든 삭제하고 다시 만들 수
-있어야 한다. `session.json`은 현재 UI용 projection으로 유지하되 장기 이력의
-유일한 원본으로 사용하지 않는다.
+`data`가 source of truth다. Bleve와 HNSW는 파생 데이터이며 언제든 삭제하고 다시
+만들 수 있어야 한다. `session.json`은 현재 UI용 projection으로 유지하되 장기
+이력의 유일한 원본으로 사용하지 않는다.
+
+1차 구현은 record ID의 SHA-256 값을 파일명으로 사용해 path traversal과 파일명
+충돌을 피한다. run별 `events.jsonl`과 projection이 추가되기 전까지 모든 공통
+record를 `data/records`에 둔다.
 
 큰 context, tool output과 결과 본문은 content-addressed blob으로 분리하는 방식을
 고려한다. run과 task record에는 blob hash와 논리적인 artifact 참조를 저장한다.
@@ -102,15 +114,15 @@ task의 terminal outcome과 결과를 저장한다.
 `/clear`는 현재 채팅 projection을 비우되 `.q/data`의 장기 archive는 삭제하지
 않는 방향으로 한다. archive 삭제와 index rebuild는 별도 명령으로 제공한다.
 
-## Bleve의 역할
+## Bleve와 HNSW의 역할
 
 Bleve는 다음 기능을 담당한다.
 
 - message, summary, result와 artifact의 full-text 검색
 - `run_id`, `task_id`, `kind`, `role`, `status`, `tags` 조건 검색
 - `created_at`과 `updated_at` 범위 필터 및 정렬
-- embedding이 준비된 record의 vector 검색
-- text와 vector 결과의 hybrid fusion
+- HNSW는 embedding이 준비된 record의 approximate cosine 검색
+- 애플리케이션 계층은 text와 vector 결과의 RRF hybrid fusion
 
 Bleve v2의 document type별 mapping을 사용하고 동적 mapping에만 의존하지 않는다.
 필드의 초기 mapping 후보는 다음과 같다.
@@ -121,7 +133,7 @@ Bleve v2의 document type별 mapping을 사용하고 동적 mapping에만 의존
 | `kind`, `role`, `status`, `model`, `effort`, `tags` | keyword | filter와 facet |
 | `summary`, `content` | text | BM25 full-text 검색 |
 | `created_at`, `updated_at` | datetime + doc values | 범위, 정렬, 시간 가중치 |
-| `embedding` | vector | semantic search |
+| `embedding` | record JSON 원본 | HNSW rebuild와 semantic search |
 | `refs` | keyword 또는 별도 artifact document | 역참조 검색 |
 
 Bleve mapping과 index format이 바뀌면 `.q/index/bleve`를 새로 만드는 방식을
@@ -191,19 +203,42 @@ vector candidates┘
      structured filters
 ```
 
-Bleve의 RRF/RSF fusion 이후 상위 N개에 애플리케이션 레벨 recency reranking을
-적용하는 방식을 기본 후보로 둔다. text query 내부의 `custom_score`만 사용하면
+현재 구현은 Bleve와 HNSW에서 각각 후보를 얻고 애플리케이션 계층에서 RRF로
+합친 뒤 recency reranking을 적용한다. text query 내부의 `custom_score`만 사용하면
 vector와 fusion하는 과정에서 시간 가중치가 희석될 수 있기 때문이다. 실제
-candidate 수, half-life와 fusion 방식을 corpus를 축적한 뒤 실험한다.
+candidate 수, half-life와 fusion 파라미터는 corpus를 축적한 뒤 조정한다.
 
 embedding 생성에 실패하거나 embedding model이 설정되지 않은 record도 text
 검색은 가능해야 한다. embedding model ID, vector dimension과 생성 시각을 함께
 보존하고 모델이 바뀌면 background re-embedding을 지원한다.
 
+embedding model과 dimension은 개인 config에 명시적으로 저장한다.
+
+```yaml
+embedding:
+  model: openai/text-embedding-3-small
+  dimensions: 1536
+```
+
+`/model`의 `embedding` target에서 `/v1/models` 카탈로그의 모델을 고른 뒤
+1~4096 범위의 dimension을 입력한다. 현재 공통 model metadata는 embedding
+capability와 기본 dimension을 광고하지 않으므로 자동 추론하지 않는다. 이 값은
+embedding request와 HNSW `VectorConfig`의 `model`, `dimensions`에 동일하게
+사용해야 한다. 어느 한쪽이 바뀌면 vector state 불일치로 보고 graph를 다시 만든다.
+새 모델의 embedding이 없는 기존 record는 text 검색에는 계속 포함되며 background
+re-embedding 대상이 된다.
+
+HNSW backend는 `goformersearch`의 순수 Go 구현을 사용한다. graph는
+`.q/index/vectors.hnsw`, numeric ID mapping은 `.q/index/vectors.ids.json`에 atomic
+replace로 저장한다. 현재 backend는 delete/update를 직접 지원하지 않으므로 record의
+embedding이 변경되거나 제거되면 원본 record에서 vector graph만 다시 만든다.
+신규 record는 graph에 증분 추가한다. 이 선택으로 `vectors` build tag, CGO와
+`libfaiss_c`가 필요하지 않다.
+
 ## 동시성과 운영
 
 - 원본 store write는 run 단위 sequence를 부여한다.
-- Bleve update는 batch로 묶되 원본 write와 하나의 transaction으로 간주하지 않는다.
+- Bleve update와 HNSW graph 저장은 원본 write와 하나의 transaction으로 간주하지 않는다.
 - 하나의 index writer 또는 직렬화된 indexing queue로 동시 update를 제어한다.
 - 검색은 index update와 병행할 수 있어야 한다.
 - 앱 비정상 종료 후 마지막 불완전 JSONL record를 감지할 수 있어야 한다.
@@ -213,16 +248,26 @@ embedding 생성에 실패하거나 embedding model이 설정되지 않은 recor
 
 ## 초기 구현 단계 후보
 
-1. record, run, task, event와 blob 참조 schema를 정의한다.
-2. `.q/data`의 atomic projection write와 append-only event store를 구현한다.
+현재 완료한 범위:
+
+- 공통 record envelope와 종류별 payload 저장
+- `.q/data/records`의 atomic source write
+- 명시적인 Bleve text, keyword, datetime mapping
+- text, structured filter, inclusive created-at range와 정렬 검색
+- half-life 기반 애플리케이션 레벨 recency reranking
+- 색인 실패 후 source 보존, 시작 시 catch-up과 전체 rebuild
+- Record embedding 원본, HNSW vector index와 BM25/vector RRF fusion
+
+후속 구현 순서:
+
+1. run, task, event와 blob 참조 schema를 구체화한다.
+2. append-only event store와 run/task projection을 구현한다.
 3. 진행 중 run load와 `waiting_user` 복구 테스트를 작성한다.
-4. `SearchIndex` 인터페이스와 no-op 또는 scan 구현을 추가한다.
-5. Bleve dependency, explicit mapping과 batch indexing을 연결한다.
-6. text 검색, structured filter, 시간 범위와 정렬 테스트를 작성한다.
-7. `custom_score` 또는 top-N recency reranking을 비교한다.
-8. embedding pipeline과 vector index를 추가한다.
-9. BM25/vector fusion, rebuild와 re-embedding을 통합 테스트한다.
-10. TUI 검색, archive 관리와 index rebuild 명령을 추가한다.
+4. 현재 chat과 subagent runner의 lifecycle을 저장소에 연결한다.
+5. 현재 chat과 agent record의 embedding 생성 pipeline을 추가한다.
+6. model 변경 시 background re-embedding을 통합 테스트한다.
+7. TUI 검색, archive 관리와 index rebuild 명령을 추가한다.
+8. 여러 process의 file lock, 보존 기간과 redaction 정책을 구현한다.
 
 ## 결정이 필요한 사항
 

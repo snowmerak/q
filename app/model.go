@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -39,9 +40,13 @@ const (
 	modelPickerModels modelPickerStage = iota
 	modelPickerTargets
 	modelPickerReasoning
+	modelPickerEmbeddingDimensions
 )
 
-const defaultModelTarget = "default"
+const (
+	defaultModelTarget   = "default"
+	embeddingModelTarget = "embedding"
+)
 
 const (
 	setupProviderID = iota
@@ -106,26 +111,27 @@ type model struct {
 	workspaceStore    *workspace.Store
 	workspaceRestored bool
 
-	setup              [setupFieldCount]textinput.Model
-	setupFocus         int
-	setupEdit          bool
-	providerEditIndex  int
-	providerAdding     bool
-	providerTypeCursor int
-	gatewayConfig      gateway.Config
-	providerCursor     int
-	discovering        bool
-	models             []client.Model
-	modelCursor        int
-	modelFilter        textinput.Model
-	modelPickerStage   modelPickerStage
-	modelChooseTarget  bool
-	modelTarget        string
-	modelTargetCursor  int
-	reasoningCursor    int
-	modelSelection     client.Model
-	draftConfig        config.Config
-	modelReturn        screen
+	setup               [setupFieldCount]textinput.Model
+	setupFocus          int
+	setupEdit           bool
+	providerEditIndex   int
+	providerAdding      bool
+	providerTypeCursor  int
+	gatewayConfig       gateway.Config
+	providerCursor      int
+	discovering         bool
+	models              []client.Model
+	modelCursor         int
+	modelFilter         textinput.Model
+	modelPickerStage    modelPickerStage
+	modelChooseTarget   bool
+	modelTarget         string
+	modelTargetCursor   int
+	reasoningCursor     int
+	modelSelection      client.Model
+	embeddingDimensions textinput.Model
+	draftConfig         config.Config
+	modelReturn         screen
 
 	config           config.Config
 	client           chatClient
@@ -150,9 +156,9 @@ type configuredMsg struct {
 	err             error
 }
 
-type agentConfiguredMsg struct {
+type modelTargetConfiguredMsg struct {
 	config config.Config
-	role   string
+	target string
 	err    error
 }
 
@@ -249,6 +255,11 @@ func newManagedModel(ctx context.Context, store config.Store, factory clientFact
 	m.modelFilter.Prompt = "/ "
 	m.modelFilter.Placeholder = "Filter models"
 	m.modelFilter.SetWidth(60)
+	m.embeddingDimensions = textinput.New()
+	m.embeddingDimensions.Prompt = "dimensions · "
+	m.embeddingDimensions.Placeholder = "1536"
+	m.embeddingDimensions.CharLimit = 5
+	m.embeddingDimensions.SetWidth(24)
 	m.input = newChatInput()
 	if runtime != nil && len(m.gatewayConfig.Providers) == 0 {
 		m.enterProviderEditor(-1)
@@ -324,7 +335,7 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			m.enterChat(message.config, message.client)
 		}
 		return m, m.input.Focus()
-	case agentConfiguredMsg:
+	case modelTargetConfiguredMsg:
 		if message.err != nil {
 			m.status = message.err.Error()
 			return m, m.modelPickerFocus()
@@ -333,8 +344,9 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		m.draftConfig = message.config
 		m.screen = screenModels
 		m.modelPickerStage = modelPickerTargets
-		m.status = message.role + " model settings saved"
+		m.status = message.target + " model settings saved"
 		m.modelFilter.Blur()
+		m.embeddingDimensions.Blur()
 		return m, nil
 	case modelsResultMsg:
 		m.discovering = false
@@ -876,6 +888,8 @@ func (m model) updateModelPicker(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m.updateModelTargetPicker(key)
 	case modelPickerReasoning:
 		return m.updateReasoningPicker(key)
+	case modelPickerEmbeddingDimensions:
+		return m.updateEmbeddingDimensionsPicker(key)
 	}
 	filtered := m.filteredModels()
 	switch key.String() {
@@ -924,13 +938,25 @@ func (m model) updateModelPicker(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			value.Provider.ContextWindow = selected.ContextLength
 			return m.saveConfiguration(value, m.modelReturn == screenChat)
 		}
+		if m.modelTarget == embeddingModelTarget {
+			value.Embedding.Model = selected.ID
+			m.draftConfig = value
+			m.modelSelection = selected
+			m.modelPickerStage = modelPickerEmbeddingDimensions
+			m.embeddingDimensions.SetValue("")
+			if value.Embedding.Dimensions > 0 {
+				m.embeddingDimensions.SetValue(strconv.Itoa(value.Embedding.Dimensions))
+			}
+			m.modelFilter.Blur()
+			return m, m.embeddingDimensions.Focus()
+		}
 		value = withAgentModel(value, m.modelTarget, selected.ID)
 		m.draftConfig = value
 		m.modelSelection = selected
 		reasoning := selectedReasoning(selected)
 		if reasoning == nil || len(reasoning.SupportedEfforts) == 0 {
 			value = withAgentReasoningEffort(value, m.modelTarget, "")
-			return m.saveAgentConfiguration(value, m.modelTarget)
+			return m.saveModelTargetConfiguration(value, m.modelTarget)
 		}
 		m.modelPickerStage = modelPickerReasoning
 		m.reasoningCursor = reasoningEffortCursor(value, m.modelTarget, reasoning.SupportedEfforts)
@@ -974,9 +1000,14 @@ func (m model) updateModelTargetPicker(key tea.KeyPressMsg) (tea.Model, tea.Cmd)
 		if len(targets) == 0 || targets[m.modelTargetCursor] == defaultModelTarget {
 			return m, nil
 		}
-		role := targets[m.modelTargetCursor]
-		value := withoutAgentOverride(m.draftConfig, role)
-		return m.saveAgentConfiguration(value, role)
+		target := targets[m.modelTargetCursor]
+		value := m.draftConfig
+		if target == embeddingModelTarget {
+			value.Embedding = config.EmbeddingConfig{}
+		} else {
+			value = withoutAgentOverride(value, target)
+		}
+		return m.saveModelTargetConfiguration(value, target)
 	}
 	return m, nil
 }
@@ -1002,9 +1033,30 @@ func (m model) updateReasoningPicker(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 	case "enter":
 		value := withAgentReasoningEffort(m.draftConfig, m.modelTarget, options[m.reasoningCursor])
-		return m.saveAgentConfiguration(value, m.modelTarget)
+		return m.saveModelTargetConfiguration(value, m.modelTarget)
 	}
 	return m, nil
+}
+
+func (m model) updateEmbeddingDimensionsPicker(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	switch key.String() {
+	case "esc":
+		m.modelPickerStage = modelPickerModels
+		m.embeddingDimensions.Blur()
+		return m, m.modelFilter.Focus()
+	case "enter":
+		dimensions, err := strconv.Atoi(strings.TrimSpace(m.embeddingDimensions.Value()))
+		if err != nil || dimensions < 1 || dimensions > 4096 {
+			m.status = "Embedding dimensions must be a number between 1 and 4096"
+			return m, nil
+		}
+		value := m.draftConfig
+		value.Embedding.Dimensions = dimensions
+		return m.saveModelTargetConfiguration(value, embeddingModelTarget)
+	}
+	var command tea.Cmd
+	m.embeddingDimensions, command = m.embeddingDimensions.Update(key)
+	return m, command
 }
 
 func (m model) saveConfiguration(value config.Config, preserveHistory bool) (tea.Model, tea.Cmd) {
@@ -1023,18 +1075,19 @@ func (m model) saveConfiguration(value config.Config, preserveHistory bool) (tea
 	}
 }
 
-func (m model) saveAgentConfiguration(value config.Config, role string) (tea.Model, tea.Cmd) {
+func (m model) saveModelTargetConfiguration(value config.Config, target string) (tea.Model, tea.Cmd) {
 	if err := value.Validate(); err != nil {
 		m.status = err.Error()
 		return m, nil
 	}
-	m.status = "Saving " + role + " model settings…"
+	m.status = "Saving " + target + " model settings…"
 	m.modelFilter.Blur()
+	m.embeddingDimensions.Blur()
 	return m, func() tea.Msg {
 		if err := m.store.Save(value); err != nil {
-			return agentConfiguredMsg{err: err}
+			return modelTargetConfiguredMsg{err: err}
 		}
-		return agentConfiguredMsg{config: value, role: role}
+		return modelTargetConfiguredMsg{config: value, target: target}
 	}
 }
 
@@ -1425,7 +1478,9 @@ func (m *model) enterModelPicker(value config.Config, available []client.Model) 
 
 func (m *model) selectConfiguredModel() {
 	modelID := m.draftConfig.Provider.Model
-	if m.modelTarget != "" && m.modelTarget != defaultModelTarget {
+	if m.modelTarget == embeddingModelTarget {
+		modelID = m.draftConfig.Embedding.Model
+	} else if m.modelTarget != "" && m.modelTarget != defaultModelTarget {
 		if agent, ok := m.draftConfig.Agents.Roles[m.modelTarget]; ok && agent.Model != "" {
 			modelID = agent.Model
 		}
@@ -1443,12 +1498,16 @@ func (m *model) modelPickerFocus() tea.Cmd {
 	if m.modelPickerStage == modelPickerModels && !m.discovering {
 		return m.modelFilter.Focus()
 	}
+	if m.modelPickerStage == modelPickerEmbeddingDimensions && !m.discovering {
+		return m.embeddingDimensions.Focus()
+	}
 	m.modelFilter.Blur()
+	m.embeddingDimensions.Blur()
 	return nil
 }
 
 func modelTargets() []string {
-	return append([]string{defaultModelTarget}, config.AgentRoles()...)
+	return append([]string{defaultModelTarget, embeddingModelTarget}, config.AgentRoles()...)
 }
 
 func withAgentModel(value config.Config, role, modelID string) config.Config {
@@ -1602,6 +1661,7 @@ func (m *model) resize(width, height int) {
 		m.setup[index].SetWidth(min(contentWidth-2, 72))
 	}
 	m.modelFilter.SetWidth(min(contentWidth-2, 72))
+	m.embeddingDimensions.SetWidth(min(contentWidth-2, 24))
 	m.input.SetWidth(contentWidth)
 	m.viewport.SetWidth(contentWidth)
 	chromeHeight := 10
@@ -1617,6 +1677,7 @@ func (m *model) applyColorScheme(dark bool) {
 		m.setup[index].SetStyles(textinput.DefaultStyles(dark))
 	}
 	m.modelFilter.SetStyles(textinput.DefaultStyles(dark))
+	m.embeddingDimensions.SetStyles(textinput.DefaultStyles(dark))
 	inputStyles := textarea.DefaultStyles(dark)
 	inputStyles.Cursor.Shape = tea.CursorBar
 	m.input.SetStyles(inputStyles)
@@ -1957,6 +2018,8 @@ func (m model) viewModels() string {
 		return m.viewModelTargets()
 	case modelPickerReasoning:
 		return m.viewReasoningEfforts()
+	case modelPickerEmbeddingDimensions:
+		return m.viewEmbeddingDimensions()
 	}
 	filtered := m.filteredModels()
 	visible := max(4, m.height-10)
@@ -2018,7 +2081,7 @@ func (m model) viewModelTargets() string {
 	body.WriteString(titleStyle.Render("q · model settings"))
 	body.WriteString("\n")
 	m.writeWorkspacePath(&body)
-	body.WriteString(subtleStyle.Render("Choose the main loop or a subagent role"))
+	body.WriteString(subtleStyle.Render("Choose the main loop, embedding model, or a subagent role"))
 	body.WriteString("\n\n")
 	if m.discovering {
 		body.WriteString(subtleStyle.Render("Loading models…"))
@@ -2042,7 +2105,7 @@ func (m model) viewModelTargets() string {
 		body.WriteString("\n")
 	}
 	body.WriteString("\n")
-	body.WriteString(helpStyle.Render("↑/↓ select · enter edit · i inherit default · esc chat"))
+	body.WriteString(helpStyle.Render("↑/↓ select · enter edit · i inherit/clear · esc chat"))
 	return frameStyle.Width(max(36, m.width-4)).Render(body.String())
 }
 
@@ -2083,9 +2146,34 @@ func (m model) viewReasoningEfforts() string {
 	return frameStyle.Width(max(36, m.width-4)).Render(body.String())
 }
 
+func (m model) viewEmbeddingDimensions() string {
+	var body strings.Builder
+	body.WriteString(titleStyle.Render("q · embedding dimensions"))
+	body.WriteString("\n")
+	m.writeWorkspacePath(&body)
+	body.WriteString(subtleStyle.Render(m.modelSelection.ID))
+	body.WriteString("\n\n")
+	body.WriteString(m.embeddingDimensions.View())
+	body.WriteString("\n")
+	body.WriteString(subtleStyle.Render("The configured size will be sent with embedding requests and select the workspace HNSW index."))
+	if m.status != "" {
+		body.WriteString("\n\n")
+		body.WriteString(errorStyle.Render(m.status))
+	}
+	body.WriteString("\n\n")
+	body.WriteString(helpStyle.Render("enter save · esc models"))
+	return frameStyle.Width(max(36, m.width-4)).Render(body.String())
+}
+
 func targetModelSummary(value config.Config, target string) string {
 	if target == defaultModelTarget {
 		return value.Provider.Model + " · main loop"
+	}
+	if target == embeddingModelTarget {
+		if value.Embedding.Model == "" {
+			return "not configured"
+		}
+		return fmt.Sprintf("%s · %d dimensions", value.Embedding.Model, value.Embedding.Dimensions)
 	}
 	agent, configured := value.Agents.Roles[target]
 	if !configured || agent.Model == "" {

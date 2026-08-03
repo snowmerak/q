@@ -410,6 +410,94 @@ func TestSlashModelConfiguresSubagentModelAndReasoning(t *testing.T) {
 	}
 }
 
+func TestModelPickerConfiguresEmbeddingModelAndDimensions(t *testing.T) {
+	store := config.Store{Dir: t.TempDir()}
+	value := config.Default()
+	value.Provider.Model = "default-model"
+	fake := &fakeClient{}
+	m := newModel(context.Background(), store, nil)
+	m.enterChat(value, fake)
+	m.messages = append(m.messages, client.Message{Role: client.RoleUser, Content: "keep me"})
+	m.modelReturn = screenChat
+	m.modelChooseTarget = true
+	m.enterModelPicker(value, []client.Model{{ID: "default-model"}, {ID: "embed-model"}})
+
+	targets := modelTargets()
+	for index, target := range targets {
+		if target == embeddingModelTarget {
+			m.modelTargetCursor = index
+			break
+		}
+	}
+	updated, _ := m.updateModelPicker(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m = updated.(model)
+	if m.modelPickerStage != modelPickerModels || m.modelTarget != embeddingModelTarget {
+		t.Fatalf("embedding target state = stage %v, target %q", m.modelPickerStage, m.modelTarget)
+	}
+	m.modelCursor = 1 // default-model sorts before embed-model.
+	updated, command := m.updateModelPicker(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m = updated.(model)
+	if command == nil || m.modelPickerStage != modelPickerEmbeddingDimensions {
+		t.Fatalf("dimension stage = %v, command nil = %v", m.modelPickerStage, command == nil)
+	}
+	m.embeddingDimensions.SetValue("0")
+	updated, command = m.updateModelPicker(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m = updated.(model)
+	if command != nil || !strings.Contains(m.status, "between 1 and 4096") {
+		t.Fatalf("invalid dimension state = command %v, status %q", command, m.status)
+	}
+	m.embeddingDimensions.SetValue("1536")
+	updated, command = m.updateModelPicker(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m = updated.(model)
+	if command == nil {
+		t.Fatal("save embedding configuration command is nil")
+	}
+	updated, _ = m.Update(command())
+	m = updated.(model)
+	if m.screen != screenModels || m.modelPickerStage != modelPickerTargets ||
+		m.config.Embedding.Model != "embed-model" || m.config.Embedding.Dimensions != 1536 {
+		t.Fatalf("saved embedding config = %#v on screen %v stage %v", m.config.Embedding, m.screen, m.modelPickerStage)
+	}
+	if targets[m.modelTargetCursor] != embeddingModelTarget {
+		t.Fatalf("target cursor moved to %q", targets[m.modelTargetCursor])
+	}
+	if fake.closed || len(m.messages) != 2 || m.messages[1].Content != "keep me" {
+		t.Fatalf("embedding config disturbed chat: closed %v, messages %#v", fake.closed, m.messages)
+	}
+	loaded, err := store.Load()
+	if err != nil || loaded.Embedding != m.config.Embedding {
+		t.Fatalf("loaded config = %#v, err = %v", loaded, err)
+	}
+}
+
+func TestModelPickerCanClearEmbeddingConfiguration(t *testing.T) {
+	store := config.Store{Dir: t.TempDir()}
+	value := config.Default()
+	value.Provider.Model = "default-model"
+	value.Embedding = config.EmbeddingConfig{Model: "embed-model", Dimensions: 3072}
+	m := newModel(context.Background(), store, nil)
+	m.enterChat(value, &fakeClient{})
+	m.modelReturn = screenChat
+	m.modelChooseTarget = true
+	m.enterModelPicker(value, []client.Model{{ID: "default-model"}, {ID: "embed-model"}})
+	for index, target := range modelTargets() {
+		if target == embeddingModelTarget {
+			m.modelTargetCursor = index
+			break
+		}
+	}
+	updated, command := m.updateModelPicker(tea.KeyPressMsg{Code: 'i', Text: "i"})
+	m = updated.(model)
+	if command == nil {
+		t.Fatal("clear embedding command is nil")
+	}
+	updated, _ = m.Update(command())
+	m = updated.(model)
+	if m.config.Embedding != (config.EmbeddingConfig{}) || m.modelPickerStage != modelPickerTargets {
+		t.Fatalf("embedding config was not cleared: %#v", m.config.Embedding)
+	}
+}
+
 func TestModelPickerCanRestoreSubagentDefaultInheritance(t *testing.T) {
 	store := config.Store{Dir: t.TempDir()}
 	value := config.Default()

@@ -15,6 +15,7 @@ func TestStoreRoundTrip(t *testing.T) {
 	want := Default()
 	want.Provider.Model = "test-model"
 	want.Provider.APIKey = "secret"
+	want.Embedding = EmbeddingConfig{Model: "embed-model", Dimensions: 1536}
 	want.Agents.Roles = map[string]AgentConfig{
 		AgentRolePlanner: {Model: "planning-model", ReasoningEffort: "high"},
 		AgentRoleCoder:   {Model: "coding-model", ReasoningEffort: "medium"},
@@ -146,6 +147,36 @@ func TestValidateAgentConfiguration(t *testing.T) {
 				t.Fatalf("error = %v; want containing %q", err, test.want)
 			}
 		})
+	}
+}
+
+func TestValidateEmbeddingConfiguration(t *testing.T) {
+	tests := []struct {
+		name      string
+		embedding EmbeddingConfig
+		want      string
+	}{
+		{name: "dimensions without model", embedding: EmbeddingConfig{Dimensions: 1536}, want: "model is required"},
+		{name: "model without dimensions", embedding: EmbeddingConfig{Model: "embed-model"}, want: "dimensions"},
+		{name: "model whitespace", embedding: EmbeddingConfig{Model: " embed-model", Dimensions: 1536}, want: "surrounding whitespace"},
+		{name: "dimensions too large", embedding: EmbeddingConfig{Model: "embed-model", Dimensions: 4097}, want: "dimensions"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			value := Default()
+			value.Provider.Model = "active-model"
+			value.Embedding = test.embedding
+			if err := value.Validate(); err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("error = %v; want containing %q", err, test.want)
+			}
+		})
+	}
+
+	value := Default()
+	value.Provider.Model = "active-model"
+	value.Embedding = EmbeddingConfig{Model: "embed-model", Dimensions: 3072}
+	if err := value.Validate(); err != nil {
+		t.Fatalf("valid embedding configuration: %v", err)
 	}
 }
 
