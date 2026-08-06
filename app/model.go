@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"image/color"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -1940,8 +1941,6 @@ func renderTranscriptWithStyle(messages []client.Message, width int, dark bool) 
 			if message.Name != "" {
 				label += " · " + message.Name
 			}
-			labelStyle = subtleStyle
-			bodyStyle = assistantBodyStyle
 		}
 		body := message.TextContent()
 		if message.Role == client.RoleAssistant && body != "" {
@@ -1956,7 +1955,9 @@ func renderTranscriptWithStyle(messages []client.Message, width int, dark bool) 
 			}
 		}
 		if message.Role == client.RoleTool {
-			body = renderToolResult(message)
+			body = renderToolResult(message, dark, bodyWidth)
+			blocks = append(blocks, renderToolPanel(label, body, bodyWidth, dark))
+			continue
 		}
 		blocks = append(blocks, labelStyle.Render(label)+"\n"+bodyStyle.Width(bodyWidth).Render(body))
 	}
@@ -1987,6 +1988,27 @@ func renderMarkdown(renderer *glamour.TermRenderer, source string) string {
 		return source
 	}
 	return strings.Trim(rendered, "\n")
+}
+func renderToolPanel(label, body string, width int, dark bool) string {
+	background := themedColor(dark, "235", "255")
+	border := themedColor(dark, "81", "25")
+	labelStyle := lipgloss.NewStyle().Bold(true).Foreground(border).Background(background)
+	content := labelStyle.Render(label) + "\n" + body
+	return lipgloss.NewStyle().
+		Background(background).
+		BorderStyle(lipgloss.Border{Left: "▌"}).
+		BorderLeft(true).
+		BorderForeground(border).
+		Padding(0, 1).
+		Width(max(10, width-3)).
+		Render(content)
+}
+
+func themedColor(dark bool, darkColor, lightColor string) color.Color {
+	if dark {
+		return lipgloss.Color(darkColor)
+	}
+	return lipgloss.Color(lightColor)
 }
 
 func renderToolCalls(calls []client.ToolCall) string {
@@ -2031,7 +2053,7 @@ func describeToolCall(call client.ToolCall) string {
 	return call.Function.Name
 }
 
-func renderToolResult(message client.Message) string {
+func renderToolResult(message client.Message, dark bool, width int) string {
 	content := message.Content
 	isError := strings.HasPrefix(content, "Tool error: ")
 	if isError {
@@ -2047,10 +2069,7 @@ func renderToolResult(message client.Message) string {
 	}
 	loomNote := ""
 	if ref := stringValue(value["loom_ref"]); ref != "" {
-		loomNote = "\n↳ " + ref
-		if bytes := stringValue(value["bytes"]); bytes != "" {
-			loomNote += " · " + bytes + " bytes"
-		}
+		loomNote = "\n" + renderLoomNote(ref, value["bytes"], dark)
 		if result, exists := value["result"]; exists {
 			if resultObject, ok := result.(map[string]any); ok {
 				value = resultObject
@@ -2100,20 +2119,24 @@ func renderToolResult(message client.Message) string {
 			rendered += "\n… more output available"
 		}
 	case "write_file":
-		rendered = fmt.Sprintf("✓ wrote %s · %s bytes", stringValue(value["path"]), stringValue(value["bytes"]))
+		rendered = fmt.Sprintf("✓ wrote %s · %s", renderFilePath(stringValue(value["path"]), dark), formatByteValue(value["bytes"]))
 	case "edit_file":
-		rendered = fmt.Sprintf("✓ edited %s · %s change(s)", stringValue(value["path"]), stringValue(value["applied"]))
+		rendered = fmt.Sprintf("✓ edited %s · %s change(s)", renderFilePath(stringValue(value["path"]), dark), stringValue(value["applied"]))
 		if diff := strings.TrimSpace(stringValue(value["diff"])); diff != "" {
-			rendered += "\n" + limitToolOutput(diff)
+			diff = limitToolOutput(diff)
+			formatted, added, removed := renderFileDiff(diff, dark, max(10, width-6))
+			counts := diffCountStyle(dark, true).Render(fmt.Sprintf("+%d", added)) + " " +
+				diffCountStyle(dark, false).Render(fmt.Sprintf("-%d", removed))
+			rendered += " · " + counts + "\n" + formatted
 		}
 	case "read_file":
-		rendered = fmt.Sprintf("✓ read %s · %s/%s lines", stringValue(value["path"]), stringValue(value["line_count"]), stringValue(value["total_lines"]))
+		rendered = fmt.Sprintf("✓ read %s · %s/%s lines", renderFilePath(stringValue(value["path"]), dark), stringValue(value["line_count"]), stringValue(value["total_lines"]))
 	case "create_directory":
-		rendered = "✓ created " + stringValue(value["path"])
+		rendered = "✓ created " + renderFilePath(stringValue(value["path"]), dark)
 	case "remove_path":
-		rendered = "✓ removed " + stringValue(value["path"])
+		rendered = "✓ removed " + renderFilePath(stringValue(value["path"]), dark)
 	case "move_path", "copy_path":
-		rendered = "✓ " + stringValue(value["source"]) + " → " + stringValue(value["destination"])
+		rendered = "✓ " + renderFilePath(stringValue(value["source"]), dark) + " → " + renderFilePath(stringValue(value["destination"]), dark)
 	case "list_directory":
 		entries, _ := value["entries"].([]any)
 		rendered = fmt.Sprintf("✓ listed %s · %d entries", stringValue(value["path"]), len(entries))
@@ -2126,6 +2149,109 @@ func renderToolResult(message client.Message) string {
 		}
 	}
 	return rendered + loomNote
+}
+func renderFilePath(path string, dark bool) string {
+	return lipgloss.NewStyle().Bold(true).
+		Foreground(themedColor(dark, "153", "24")).
+		Render(path)
+}
+
+func renderLoomNote(ref string, bytes any, dark bool) string {
+	id := strings.TrimPrefix(ref, "loom://")
+	if len(id) > 12 {
+		id = id[:12] + "…"
+	}
+	note := "↳ Loom " + id
+	if size := formatByteValue(bytes); size != "" {
+		note += " · " + size
+	}
+	return lipgloss.NewStyle().Foreground(themedColor(dark, "243", "242")).Render(note)
+}
+
+func formatByteValue(value any) string {
+	var size int64
+	switch value := value.(type) {
+	case float64:
+		size = int64(value)
+	case int:
+		size = int64(value)
+	case int64:
+		size = value
+	case json.Number:
+		size, _ = value.Int64()
+	default:
+		if text := stringValue(value); text != "" {
+			return text + " B"
+		}
+		return ""
+	}
+	switch {
+	case size >= 1<<20:
+		return fmt.Sprintf("%.1f MiB", float64(size)/(1<<20))
+	case size >= 1<<10:
+		return fmt.Sprintf("%.1f KiB", float64(size)/(1<<10))
+	default:
+		return fmt.Sprintf("%d B", size)
+	}
+}
+
+func diffCountStyle(dark, added bool) lipgloss.Style {
+	if added {
+		return lipgloss.NewStyle().Bold(true).Foreground(themedColor(dark, "120", "22"))
+	}
+	return lipgloss.NewStyle().Bold(true).Foreground(themedColor(dark, "210", "88"))
+}
+
+func renderFileDiff(diff string, dark bool, width int) (string, int, int) {
+	addedStyle := lipgloss.NewStyle().
+		Foreground(themedColor(dark, "120", "22")).
+		Background(themedColor(dark, "22", "194")).
+		Width(width)
+	removedStyle := lipgloss.NewStyle().
+		Foreground(themedColor(dark, "210", "88")).
+		Background(themedColor(dark, "52", "224")).
+		Width(width)
+	headerStyle := lipgloss.NewStyle().Bold(true).
+		Foreground(themedColor(dark, "81", "25")).
+		Width(width)
+	subtle := lipgloss.NewStyle().Foreground(themedColor(dark, "245", "240")).Width(width)
+	lines := strings.Split(diff, "\n")
+	rendered := make([]string, 0, len(lines))
+	added, removed, change := 0, 0, 0
+	for _, line := range lines {
+		switch {
+		case line == "Diff preview:":
+			change++
+			rendered = append(rendered, headerStyle.Render(fmt.Sprintf("@@ change %d @@", change)))
+		case strings.HasPrefix(line, "+ "):
+			added++
+			rendered = append(rendered, addedStyle.Render(formatDiffLine(line)))
+		case strings.HasPrefix(line, "- "):
+			removed++
+			rendered = append(rendered, removedStyle.Render(formatDiffLine(line)))
+		default:
+			rendered = append(rendered, subtle.Render(line))
+		}
+	}
+	return strings.Join(rendered, "\n"), added, removed
+}
+
+func formatDiffLine(line string) string {
+	if len(line) < 3 {
+		return line
+	}
+	marker := line[:1]
+	anchored := line[2:]
+	hash := strings.IndexByte(anchored, '#')
+	if hash < 1 {
+		return line
+	}
+	colon := strings.IndexByte(anchored[hash+1:], ':')
+	if colon < 0 {
+		return line
+	}
+	content := anchored[hash+1+colon+1:]
+	return fmt.Sprintf("%s %s │ %s", marker, anchored[:hash], content)
 }
 
 func toolArguments(arguments string) map[string]any {

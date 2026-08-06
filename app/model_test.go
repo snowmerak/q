@@ -1102,16 +1102,46 @@ func TestTranscriptRendersInlineAndPreviewLoomResults(t *testing.T) {
 		{Role: client.RoleTool, Name: "search_archive", ToolCallID: "call-3",
 			Content: `{"loom_ref":"` + ref + `","bytes":40000,"stored":true,"preview":"{\"hits\":[{\"id\":\"first\"}]}"}`},
 	}, 100)
+	plain := ansi.Strip(transcript)
 	for _, expected := range []string{
 		"✓ cmd-1", "exit 0", "tests passed", "✓ read main.go · 42/42 lines",
-		"full result stored in Loom", `"id":"first"`, ref,
+		"full result stored in Loom", `"id":"first"`, "Loom 0123456789ab…",
 	} {
-		if !strings.Contains(transcript, expected) {
-			t.Fatalf("rendered Loom transcript does not contain %q: %q", expected, transcript)
+		if !strings.Contains(plain, expected) {
+			t.Fatalf("rendered Loom transcript does not contain %q: %q", expected, plain)
 		}
 	}
-	if strings.Contains(transcript, "•  ·") || strings.Contains(transcript, `\"loom_ref\"`) {
-		t.Fatalf("rendered Loom transcript exposed an empty result or raw receipt: %q", transcript)
+	if strings.Contains(plain, "•  ·") || strings.Contains(plain, `\"loom_ref\"`) {
+		t.Fatalf("rendered Loom transcript exposed an empty result or raw receipt: %q", plain)
+	}
+}
+
+func TestTranscriptRendersToolPanelAndFileDiffForBothThemes(t *testing.T) {
+	message := client.Message{
+		Role: client.RoleTool, Name: "edit_file", ToolCallID: "call-edit",
+		Content: `{"path":"app/model.go","applied":1,"diff":"Diff preview:\n- 42#AB:old value\n+ 42#CD:new value"}`,
+	}
+	dark := renderTranscriptWithStyle([]client.Message{message}, 80, true)
+	light := renderTranscriptWithStyle([]client.Message{message}, 80, false)
+	for name, rendered := range map[string]string{"dark": dark, "light": light} {
+		plain := ansi.Strip(rendered)
+		for _, expected := range []string{
+			"▌", "TOOL · edit_file", "✓ edited app/model.go · 1 change(s)",
+			"+1 -1", "@@ change 1 @@", "- 42 │ old value", "+ 42 │ new value",
+		} {
+			if !strings.Contains(plain, expected) {
+				t.Fatalf("%s tool diff does not contain %q: %q", name, expected, plain)
+			}
+		}
+		if strings.Contains(plain, "#AB:") || strings.Contains(plain, "#CD:") {
+			t.Fatalf("%s tool diff exposed hash anchors: %q", name, plain)
+		}
+		if !strings.Contains(rendered, "\x1b[48;5;") {
+			t.Fatalf("%s tool panel has no background color: %q", name, rendered)
+		}
+	}
+	if dark == light {
+		t.Fatal("tool panel did not adapt to terminal theme")
 	}
 }
 
