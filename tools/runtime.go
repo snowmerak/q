@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	goruntime "runtime"
 	"strings"
 	"sync"
 
@@ -15,6 +16,12 @@ import (
 )
 
 const maximumInlineToolResult = 32 << 10
+
+type HostEnvironment struct {
+	OS           string
+	Architecture string
+	Shell        string
+}
 
 // Runtime connects q's chat loop to the builtin MCP server in-process.
 type Runtime struct {
@@ -82,6 +89,12 @@ func newRuntime(ctx context.Context, root string, archive builtin.Archive, evalu
 
 func (r *Runtime) Tools() []client.Tool {
 	return append([]client.Tool(nil), r.tools...)
+}
+func (r *Runtime) Environment() HostEnvironment {
+	return HostEnvironment{
+		OS: goruntime.GOOS, Architecture: goruntime.GOARCH,
+		Shell: builtin.CommandShellDescription(),
+	}
 }
 
 func (r *Runtime) Call(ctx context.Context, call client.ToolCall) (client.ToolResult, error) {

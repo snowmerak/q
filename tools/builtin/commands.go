@@ -14,6 +14,10 @@ const (
 	maximumWait        = 60 * time.Second
 )
 
+func CommandShellDescription() string {
+	return commandShellDescription()
+}
+
 type RunCommandInput struct {
 	Command string `json:"command" jsonschema:"Shell command to run."`
 	Workdir string `json:"workdir,omitempty" jsonschema:"Starting directory inside the workspace. Defaults to the workspace root."`

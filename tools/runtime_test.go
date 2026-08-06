@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	goruntime "runtime"
 	"strings"
 	"testing"
 
@@ -23,6 +24,10 @@ func TestRuntimeListsAndCallsBuiltinTools(t *testing.T) {
 	defer runtime.Close()
 	if len(runtime.Tools()) != 14 {
 		t.Fatalf("runtime tools = %d", len(runtime.Tools()))
+	}
+	environment := runtime.Environment()
+	if environment.OS != goruntime.GOOS || environment.Architecture != goruntime.GOARCH || environment.Shell == "" {
+		t.Fatalf("runtime environment = %#v", environment)
 	}
 	result, err := runtime.Call(context.Background(), client.ToolCall{
 		ID: "call-1", Type: client.ToolTypeFunction,

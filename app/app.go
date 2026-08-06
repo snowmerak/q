@@ -33,6 +33,7 @@ type providerRuntime interface {
 
 type agentToolRuntime interface {
 	Tools() []client.Tool
+	Environment() qtools.HostEnvironment
 	Call(context.Context, client.ToolCall) (client.ToolResult, error)
 }
 

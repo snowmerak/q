@@ -7,6 +7,10 @@ import (
 	"syscall"
 )
 
+func commandShellDescription() string {
+	return "POSIX shell (/bin/sh -lc)"
+}
+
 func shellCommand(command string) *exec.Cmd {
 	cmd := exec.Command("/bin/sh", "-lc", command)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}

@@ -12,6 +12,7 @@ import (
 	"github.com/snowmerak/q/client"
 	"github.com/snowmerak/q/config"
 	"github.com/snowmerak/q/sessionstore"
+	qtools "github.com/snowmerak/q/tools"
 	"github.com/snowmerak/q/workspace"
 )
 
@@ -37,6 +38,10 @@ type fakeClient struct {
 
 type fakeAgentTools struct {
 	calls []client.ToolCall
+}
+
+func (f *fakeAgentTools) Environment() qtools.HostEnvironment {
+	return qtools.HostEnvironment{OS: "test-os", Architecture: "test-arch", Shell: "test-shell"}
 }
 
 func (f *fakeAgentTools) Tools() []client.Tool {
@@ -1009,6 +1014,16 @@ func TestChatExecutesToolCallsAndContinuesTurn(t *testing.T) {
 	if len(configuredClient.requests) != 2 || len(configuredClient.requests[0].Tools) != 1 {
 		t.Fatalf("agent requests = %#v", configuredClient.requests)
 	}
+	runtimePromptFound := false
+	for _, message := range configuredClient.requests[0].Messages {
+		if strings.Contains(message.Content, "Runtime environment: OS=test-os; architecture=test-arch; run_command shell=test-shell.") {
+			runtimePromptFound = true
+			break
+		}
+	}
+	if !runtimePromptFound {
+		t.Fatalf("first request omitted runtime environment: %#v", configuredClient.requests[0].Messages)
+	}
 	continuation := configuredClient.requests[1]
 	if continuation.ConversationID != "tool-conversation" || len(continuation.Messages) < 2 {
 		t.Fatalf("tool continuation = %#v", continuation)
@@ -1077,6 +1092,29 @@ func TestTranscriptRendersToolActivityAsReadableProgress(t *testing.T) {
 		t.Fatalf("rendered transcript exposed raw JSON: %q", transcript)
 	}
 }
+func TestTranscriptRendersInlineAndPreviewLoomResults(t *testing.T) {
+	ref := "loom://0123456789abcdef0123456789abcdef"
+	transcript := renderTranscript([]client.Message{
+		{Role: client.RoleTool, Name: "wait", ToolCallID: "call-1",
+			Content: `{"loom_ref":"` + ref + `","bytes":321,"stored":true,"result":{"command_id":"cmd-1","status":"succeeded","exit_code":0,"output":"tests passed\n"}}`},
+		{Role: client.RoleTool, Name: "read_file", ToolCallID: "call-2",
+			Content: `{"loom_ref":"` + ref + `","bytes":654,"stored":true,"result":{"path":"main.go","line_count":42,"total_lines":42}}`},
+		{Role: client.RoleTool, Name: "search_archive", ToolCallID: "call-3",
+			Content: `{"loom_ref":"` + ref + `","bytes":40000,"stored":true,"preview":"{\"hits\":[{\"id\":\"first\"}]}"}`},
+	}, 100)
+	for _, expected := range []string{
+		"✓ cmd-1", "exit 0", "tests passed", "✓ read main.go · 42/42 lines",
+		"full result stored in Loom", `"id":"first"`, ref,
+	} {
+		if !strings.Contains(transcript, expected) {
+			t.Fatalf("rendered Loom transcript does not contain %q: %q", expected, transcript)
+		}
+	}
+	if strings.Contains(transcript, "•  ·") || strings.Contains(transcript, `\"loom_ref\"`) {
+		t.Fatalf("rendered Loom transcript exposed an empty result or raw receipt: %q", transcript)
+	}
+}
+
 func TestTranscriptRendersAssistantMarkdownOnly(t *testing.T) {
 	transcript := renderTranscriptWithStyle([]client.Message{
 		{Role: client.RoleUser, Content: "**literal user input**"},

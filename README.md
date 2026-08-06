@@ -160,6 +160,9 @@ cached as `provider.context_window`; the file-only `context.window` setting is
 used only when the Gateway does not expose `context_length`.
 
 Each chat request exposes q's workspace-scoped builtin MCP tools to the model.
+The accompanying developer context states the host OS, CPU architecture, and
+the exact shell used by `run_command`, so generated commands use the correct
+syntax and quoting from the first tool call.
 When the model returns tool calls, q executes them, appends their results to the
 conversation, and continues the same turn automatically. Tool calls, command
 status, exit codes, and command output are rendered as live progress while the

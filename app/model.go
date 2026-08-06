@@ -1557,7 +1557,11 @@ func (m *model) enterChat(value config.Config, configuredClient chatClient) {
 		m.messages = append(m.messages, client.Message{Role: client.RoleSystem, Content: value.Provider.SystemPrompt})
 	}
 	if m.toolRuntime != nil && m.workspaceStore != nil {
-		workspacePrompt := "Current workspace root: " + filepath.Clean(m.workspaceStore.Root) +
+		environment := m.toolRuntime.Environment()
+		workspacePrompt := fmt.Sprintf(
+			"Runtime environment: OS=%s; architecture=%s; run_command shell=%s. Use commands and quoting compatible with this shell. ",
+			environment.OS, environment.Architecture, environment.Shell,
+		) + "Current workspace root: " + filepath.Clean(m.workspaceStore.Root) +
 			". Use the available tools to inspect, edit, and run work in this workspace when the user asks for changes." +
 			" Non-Loom MCP tool results include a loom_ref to the immutable full result. For large results, use loom_inspect, loom_read, or loom_eval instead of copying the result through chat context."
 		if m.archive != nil {
@@ -2028,13 +2032,53 @@ func describeToolCall(call client.ToolCall) string {
 }
 
 func renderToolResult(message client.Message) string {
-	if strings.HasPrefix(message.Content, "Tool error: ") {
-		return "✗ " + message.Name + "\n" + strings.TrimPrefix(message.Content, "Tool error: ")
+	content := message.Content
+	isError := strings.HasPrefix(content, "Tool error: ")
+	if isError {
+		content = strings.TrimPrefix(content, "Tool error: ")
 	}
 	var value map[string]any
-	if json.Unmarshal([]byte(message.Content), &value) != nil {
-		return "✓ " + message.Content
+	if json.Unmarshal([]byte(content), &value) != nil {
+		marker := "✓"
+		if isError {
+			marker = "✗"
+		}
+		return marker + " " + content
 	}
+	loomNote := ""
+	if ref := stringValue(value["loom_ref"]); ref != "" {
+		loomNote = "\n↳ " + ref
+		if bytes := stringValue(value["bytes"]); bytes != "" {
+			loomNote += " · " + bytes + " bytes"
+		}
+		if result, exists := value["result"]; exists {
+			if resultObject, ok := result.(map[string]any); ok {
+				value = resultObject
+			} else {
+				body, _ := json.MarshalIndent(result, "", "  ")
+				marker := "✓"
+				if isError {
+					marker = "✗"
+				}
+				return marker + " " + message.Name + "\n" + string(body) + loomNote
+			}
+		} else {
+			marker := "•"
+			if isError {
+				marker = "✗"
+			}
+			rendered := marker + " " + message.Name + " · full result stored in Loom"
+			if preview := strings.TrimSpace(stringValue(value["preview"])); preview != "" {
+				rendered += "\n" + limitToolOutput(preview)
+			}
+			return rendered + loomNote
+		}
+	}
+	if isError {
+		body, _ := json.MarshalIndent(value, "", "  ")
+		return "✗ " + message.Name + "\n" + string(body) + loomNote
+	}
+	var rendered string
 	switch message.Name {
 	case "run_command", "cmd_status", "wait":
 		id := stringValue(value["command_id"])
@@ -2045,42 +2089,43 @@ func renderToolResult(message client.Message) string {
 		} else if status == "failed" {
 			marker = "✗"
 		}
-		line := strings.TrimSpace(strings.Join([]string{marker, id, "·", status}, " "))
+		rendered = strings.TrimSpace(strings.Join([]string{marker, id, "·", status}, " "))
 		if exitCode, ok := value["exit_code"]; ok {
-			line += " · exit " + stringValue(exitCode)
+			rendered += " · exit " + stringValue(exitCode)
 		}
 		if output := strings.TrimRight(stringValue(value["output"]), "\r\n"); output != "" {
-			line += "\n" + limitToolOutput(output)
+			rendered += "\n" + limitToolOutput(output)
 		}
 		if more, _ := value["more_output"].(bool); more {
-			line += "\n… more output available"
+			rendered += "\n… more output available"
 		}
-		return line
 	case "write_file":
-		return fmt.Sprintf("✓ wrote %s · %s bytes", stringValue(value["path"]), stringValue(value["bytes"]))
+		rendered = fmt.Sprintf("✓ wrote %s · %s bytes", stringValue(value["path"]), stringValue(value["bytes"]))
 	case "edit_file":
-		result := fmt.Sprintf("✓ edited %s · %s change(s)", stringValue(value["path"]), stringValue(value["applied"]))
+		rendered = fmt.Sprintf("✓ edited %s · %s change(s)", stringValue(value["path"]), stringValue(value["applied"]))
 		if diff := strings.TrimSpace(stringValue(value["diff"])); diff != "" {
-			result += "\n" + limitToolOutput(diff)
+			rendered += "\n" + limitToolOutput(diff)
 		}
-		return result
 	case "read_file":
-		return fmt.Sprintf("✓ read %s · %s/%s lines", stringValue(value["path"]), stringValue(value["line_count"]), stringValue(value["total_lines"]))
+		rendered = fmt.Sprintf("✓ read %s · %s/%s lines", stringValue(value["path"]), stringValue(value["line_count"]), stringValue(value["total_lines"]))
 	case "create_directory":
-		return "✓ created " + stringValue(value["path"])
+		rendered = "✓ created " + stringValue(value["path"])
 	case "remove_path":
-		return "✓ removed " + stringValue(value["path"])
+		rendered = "✓ removed " + stringValue(value["path"])
 	case "move_path", "copy_path":
-		return "✓ " + stringValue(value["source"]) + " → " + stringValue(value["destination"])
+		rendered = "✓ " + stringValue(value["source"]) + " → " + stringValue(value["destination"])
 	case "list_directory":
 		entries, _ := value["entries"].([]any)
-		return fmt.Sprintf("✓ listed %s · %d entries", stringValue(value["path"]), len(entries))
+		rendered = fmt.Sprintf("✓ listed %s · %d entries", stringValue(value["path"]), len(entries))
+	default:
+		body, err := json.MarshalIndent(value, "", "  ")
+		if err != nil {
+			rendered = "✓ " + message.Name
+		} else {
+			rendered = "✓ " + message.Name + "\n" + string(body)
+		}
 	}
-	body, err := json.MarshalIndent(value, "", "  ")
-	if err != nil {
-		return "✓ " + message.Name
-	}
-	return "✓ " + message.Name + "\n" + string(body)
+	return rendered + loomNote
 }
 
 func toolArguments(arguments string) map[string]any {

@@ -8,6 +8,10 @@ import (
 	"syscall"
 )
 
+func commandShellDescription() string {
+	return "Windows PowerShell (powershell.exe -NoLogo -NoProfile -NonInteractive)"
+}
+
 func shellCommand(command string) *exec.Cmd {
 	cmd := exec.Command("powershell.exe", "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", command)
 	cmd.SysProcAttr = &syscall.SysProcAttr{CreationFlags: syscall.CREATE_NEW_PROCESS_GROUP, HideWindow: true}
