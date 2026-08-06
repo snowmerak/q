@@ -91,18 +91,18 @@ func TestManagedGatewayConfigDoesNotPersistEndpointCredentials(t *testing.T) {
 	}
 }
 
-func TestEffectiveContextUsesDefaultsAndExplicitWindow(t *testing.T) {
-	value := Config{Provider: ProviderConfig{ContextWindow: 123456}}
+func TestEffectiveContextUsesDefaultsAndGatewayWindowFirst(t *testing.T) {
+	value := Config{Context: ContextConfig{Window: 654321}}
 	effective := value.EffectiveContext()
 	if effective.TriggerRatio != .85 || effective.TargetRatio != .22 || effective.RecentRatio != .07 {
 		t.Fatalf("effective context = %#v", effective)
 	}
-	if got := value.EffectiveContextWindow(); got != 123456 {
-		t.Fatalf("model context window = %d", got)
-	}
-	value.Context.Window = 654321
 	if got := value.EffectiveContextWindow(); got != 654321 {
-		t.Fatalf("explicit context window = %d", got)
+		t.Fatalf("fallback context window = %d", got)
+	}
+	value.Provider.ContextWindow = 123456
+	if got := value.EffectiveContextWindow(); got != 123456 {
+		t.Fatalf("Gateway model context window = %d", got)
 	}
 }
 

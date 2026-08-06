@@ -92,11 +92,21 @@ providers are exposed together using their provider ID or configured prefix:
       "id": "local",
       "type": "openai-compatible",
       "enabled": true,
-      "base_url": "http://localhost:1234/v1"
+      "base_url": "http://localhost:1234/v1",
+      "model_metadata": {
+        "qwen3-32b": {
+          "context_length": 131072
+        }
+      }
     }
   ]
 }
 ```
+
+Gateway `model_metadata` overrides upstream metadata before model IDs receive
+their configured prefix. In the `/model` catalog, press `Ctrl+E` on a model to
+set or clear its Gateway `context_length`; q replaces and validates the Gateway,
+reloads `/v1/models`, and updates the active context cache immediately.
 
 The child binds only to `127.0.0.1:0` and reports its assigned port to the
 parent over a private stdout handshake. Provider changes start and probe a new
@@ -122,24 +132,26 @@ Chat keys:
 - `Esc` or `Ctrl+C`: quit
 
 `/model` first shows `default` (the main chat loop), `embedding`, and then the
-built-in subagent roles. Selecting `embedding` opens the shared model catalog
-and then asks for a vector dimension between 1 and 4096. Because the common
-`/v1/models` response does not currently identify embedding-only models, the
-picker shows the whole catalog. Press `i` on `embedding` to clear the optional
-configuration.
+built-in subagent roles. The shared catalog shows each model's Gateway context
+length and marks explicit Gateway overrides. Press `Ctrl+E` on any model to edit
+that per-model override.
 
-Selecting a subagent role opens the shared model catalog; models that
-advertise enumerated reasoning efforts add a final effort picker whose
-`default` choice omits `reasoning_effort`. Select a subagent in the target list
-and press `i` to remove that role's override and inherit the main-loop default
-again.
+Selecting `embedding` asks for a vector dimension between 1 and 4096. Because
+the common `/v1/models` response does not currently identify embedding-only
+models, the picker shows the whole catalog. Press `i` on `embedding` to clear
+the optional configuration.
+
+Selecting a subagent role opens the same catalog; models that advertise
+enumerated reasoning efforts add a final effort picker whose `default` choice
+omits `reasoning_effort`. Select a subagent in the target list and press `i` to
+remove that role's override and inherit the main-loop default again.
 
 The full chat transcript and separate request context are persisted in the
-current workspace. When model context metadata is available, q
+current workspace. When Gateway model context metadata is available, q
 automatically compacts that request context at 85% to a maximum of 22% while
-keeping the full transcript visible. Set `context.window` when the provider does
-not expose `context_length`; discovered model context metadata is otherwise saved
-as `provider.context_window`.
+keeping the full transcript visible. Gateway metadata has priority and is
+cached as `provider.context_window`; the file-only `context.window` setting is
+used only when the Gateway does not expose `context_length`.
 
 Each chat request exposes q's workspace-scoped builtin MCP tools to the model.
 When the model returns tool calls, q executes them, appends their results to the

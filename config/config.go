@@ -174,7 +174,7 @@ func (c *Config) UseManagedGateway() {
 }
 
 // EffectiveContext fills policy values omitted by configurations written by
-// older q versions. An explicit window overrides model discovery metadata.
+// older q versions.
 func (c Config) EffectiveContext() ContextConfig {
 	result := c.Context
 	defaults := Default().Context
@@ -190,11 +190,13 @@ func (c Config) EffectiveContext() ContextConfig {
 	return result
 }
 
+// EffectiveContextWindow prefers the current Gateway model metadata and uses
+// context.window only when the Gateway does not advertise a context length.
 func (c Config) EffectiveContextWindow() int64 {
-	if c.Context.Window > 0 {
-		return c.Context.Window
+	if c.Provider.ContextWindow > 0 {
+		return c.Provider.ContextWindow
 	}
-	return c.Provider.ContextWindow
+	return c.Context.Window
 }
 
 // AgentRoles returns the built-in role names accepted in Agents.Roles.

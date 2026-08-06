@@ -20,7 +20,7 @@
 현재 다음 핵심 경로가 구현되어 있다.
 
 - 기본 정책 85% trigger, 22% target, 7% recent 원문
-- 선택 모델의 `context_length` 저장 및 기존 설정 시작 시 metadata 보충
+- Gateway 모델의 `context_length` 우선 적용, 시작 및 설정 변경 시 cache 갱신
 - 전체 transcript와 API request context 분리
 - 보수적 token 추정과 실제 `prompt_tokens` 기반 provider overhead 보정
 - 오래된 context의 구조화된 rolling summary와 최근 원문 보존
@@ -28,6 +28,7 @@
 - 압축 성공 후 `conversation_id` 초기화 및 보류한 사용자 요청 자동 전송
 - 압축 실패 시 context를 유지하고 사용자 입력 복구
 - TUI header의 예상 context 사용량 표시
+- TUI 모델 catalog의 context length 표시 및 Gateway override 편집
 
 수동 `/compact`, `/context`, context-length 오류의 단일 자동 재시도와 모델별
 정확한 tokenizer는 후속 단계로 남아 있다.
@@ -146,13 +147,17 @@ func (m *Manager) Messages(immutable []client.Message, next client.Message) []cl
 
 우선순위는 다음과 같다.
 
-1. 사용자가 설정한 `context.window`
-2. `/models`에서 선택한 모델의 `context_length`
+1. Gateway `/models`에서 선택한 모델의 `context_length`
+   (`model_metadata` override 포함)
+2. 사용자가 파일에 설정한 fallback `context.window`
 3. 알 수 없음
 
-명시적 설정을 가장 먼저 두는 이유는 compatible gateway의 metadata가 실제
-downstream 제한과 다를 수 있기 때문이다. context window가 없거나 0이면 자동
-압축을 비활성화하고 UI에 `context size unknown`을 표시한다.
+Gateway metadata를 실제 routing 제한의 권위 있는 값으로 취급한다. 모델
+catalog의 `Ctrl+E` 편집은 Gateway `model_metadata`를 변경하고 Gateway 교체와
+`/models` 재조회를 거쳐 현재 모델의 cache를 즉시 갱신한다. `context.window`는
+TUI에 노출하지 않으며 metadata가 없는 provider를 위한 file-only fallback이다.
+두 값이 모두 없거나 0이면 자동 압축을 비활성화하고 UI에
+`context unknown`을 표시한다.
 
 설정 예시는 다음과 같다.
 

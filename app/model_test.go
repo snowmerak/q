@@ -612,6 +612,127 @@ func TestManagedProviderAddAppliesThenOpensModelPicker(t *testing.T) {
 		t.Fatalf("screen = %v, models = %#v, status = %q", m.screen, m.models, m.status)
 	}
 }
+func TestGatewayContextOverrideAppliesAndRefreshesActiveCache(t *testing.T) {
+	store := config.Store{Dir: t.TempDir()}
+	value := config.Default()
+	value.Provider.Model = "local/vendor/model"
+	value.Provider.ContextWindow = 131072
+	value.Context.Window = 64000
+	value.UseManagedGateway()
+	runtime := &fakeProviderRuntime{
+		endpoint: "http://127.0.0.1:54321/v1",
+		config: gateway.Config{Providers: []gateway.ProviderConfig{{
+			ID: "local", Type: "openai-compatible", Enabled: true, BaseURL: "http://localhost:1234/v1",
+		}}},
+	}
+	currentClient := &fakeClient{}
+	refreshedClient := &fakeClient{models: []client.Model{{
+		ID: "local/vendor/model", ContextLength: 200000,
+	}}}
+	m := newManagedModel(context.Background(), store, func(config.Config) (chatClient, error) {
+		return refreshedClient, nil
+	}, runtime)
+	m.enterChat(value, currentClient)
+	kept := client.Message{Role: client.RoleUser, Content: "keep this history"}
+	m.messages = append(m.messages, kept)
+	m.memory.Append(kept)
+	m.conversationID = "stale-conversation"
+	m.modelReturn = screenChat
+	m.modelChooseTarget = false
+	m.enterModelPicker(value, []client.Model{{
+		ID: "local/vendor/model", ContextLength: 131072,
+	}})
+
+	updated, _ := m.updateModelPicker(tea.KeyPressMsg{Code: 'e', Mod: tea.ModCtrl})
+	m = updated.(model)
+	if m.modelPickerStage != modelPickerContextWindow || !strings.Contains(m.View().Content, "Gateway model context") {
+		t.Fatalf("context editor stage = %v, view = %q", m.modelPickerStage, m.View().Content)
+	}
+	m.modelContextWindow.SetValue("200000")
+	updated, command := m.updateModelPicker(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m = updated.(model)
+	if command == nil {
+		t.Fatal("context metadata apply command is nil")
+	}
+	updated, _ = m.Update(command())
+	m = updated.(model)
+
+	metadata := runtime.config.Providers[0].ModelMetadata["vendor/model"]
+	if runtime.applies != 1 || metadata.ContextLength != 200000 {
+		t.Fatalf("runtime applies = %d, metadata = %#v", runtime.applies, metadata)
+	}
+	if m.config.Provider.ContextWindow != 200000 || m.config.EffectiveContextWindow() != 200000 ||
+		m.memory.Stats().ContextWindow != 200000 {
+		t.Fatalf("active context config = %#v, stats = %#v", m.config, m.memory.Stats())
+	}
+	if m.conversationID != "" || len(m.messages) != 2 ||
+		m.messages[1].Role != kept.Role || m.messages[1].Content != kept.Content {
+		t.Fatalf("conversation refresh lost state: id = %q, messages = %#v", m.conversationID, m.messages)
+	}
+	if !currentClient.closed || m.client != refreshedClient || !strings.Contains(m.View().Content, "Gateway override") {
+		t.Fatalf("client refreshed = %v, active client = %#v, view = %q", currentClient.closed, m.client, m.View().Content)
+	}
+	loaded, err := store.Load()
+	if err != nil || loaded.Provider.ContextWindow != 200000 {
+		t.Fatalf("persisted config = %#v, err = %v", loaded, err)
+	}
+}
+
+func TestRefreshModelContextWindowClearsStaleCache(t *testing.T) {
+	value := config.Default()
+	value.Provider.Model = "local/test-model"
+	value.Provider.ContextWindow = 262144
+	value.Context.Window = 65536
+
+	refreshed, found := refreshModelContextWindow(value, []client.Model{{
+		ID: "local/test-model",
+	}})
+	if !found || refreshed.Provider.ContextWindow != 0 || refreshed.EffectiveContextWindow() != 65536 {
+		t.Fatalf("refreshed config = %#v, found = %v", refreshed, found)
+	}
+}
+func TestGatewayContextOverrideCanBeClearedWithoutDroppingOtherMetadata(t *testing.T) {
+	value := config.Default()
+	value.Provider.Model = "local/test-model"
+	value.Provider.ContextWindow = 200000
+	value.UseManagedGateway()
+	runtime := &fakeProviderRuntime{
+		endpoint: "http://127.0.0.1:54321/v1",
+		config: gateway.Config{Providers: []gateway.ProviderConfig{{
+			ID: "local", Type: "openai-compatible", Enabled: true,
+			ModelMetadata: map[string]client.ModelMetadata{
+				"test-model": {ContextLength: 200000, MaxOutputTokens: 8192},
+			},
+		}}},
+	}
+	refreshedClient := &fakeClient{models: []client.Model{{
+		ID: "local/test-model", ContextLength: 131072, MaxOutputTokens: 8192,
+	}}}
+	m := newManagedModel(context.Background(), config.Store{Dir: t.TempDir()}, func(config.Config) (chatClient, error) {
+		return refreshedClient, nil
+	}, runtime)
+	m.enterChat(value, &fakeClient{})
+	m.modelReturn = screenChat
+	m.enterModelPicker(value, []client.Model{{
+		ID: "local/test-model", ContextLength: 200000, MaxOutputTokens: 8192,
+	}})
+
+	updated, _ := m.updateModelPicker(tea.KeyPressMsg{Code: 'e', Mod: tea.ModCtrl})
+	m = updated.(model)
+	m.modelContextWindow.SetValue("")
+	updated, command := m.updateModelPicker(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m = updated.(model)
+	updated, _ = m.Update(command())
+	m = updated.(model)
+
+	metadata, found := runtime.config.Providers[0].ModelMetadata["test-model"]
+	if !found || metadata.ContextLength != 0 || metadata.MaxOutputTokens != 8192 {
+		t.Fatalf("remaining metadata = %#v, found = %v", metadata, found)
+	}
+	if m.config.Provider.ContextWindow != 131072 || m.memory.Stats().ContextWindow != 131072 {
+		t.Fatalf("refreshed context = %#v, stats = %#v", m.config.Provider, m.memory.Stats())
+	}
+}
 
 func TestFirstManagedProviderIsAlwaysAppended(t *testing.T) {
 	runtime := &fakeProviderRuntime{endpoint: "http://127.0.0.1:54321/v1"}
@@ -793,6 +914,12 @@ func TestModelPickerFiltersModels(t *testing.T) {
 	filtered := m.filteredModels()
 	if len(filtered) != 2 || filtered[0].ID != "gpt-large" || filtered[1].ID != "gpt-mini" {
 		t.Fatalf("filtered models = %#v", filtered)
+	}
+	m.modelFilter.Reset()
+	updated, _ := m.updateModelPicker(tea.KeyPressMsg{Code: 'c', Text: "c"})
+	m = updated.(model)
+	if m.modelPickerStage != modelPickerModels || m.modelFilter.Value() != "c" {
+		t.Fatalf("plain c did not filter models: stage = %v, filter = %q", m.modelPickerStage, m.modelFilter.Value())
 	}
 }
 

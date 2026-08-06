@@ -28,6 +28,7 @@ type (
 	TokenDetails          = llmprovider.TokenDetails
 	ChatChunk             = llmprovider.ChatChunk
 	Model                 = llmprovider.Model
+	ModelMetadata         = llmprovider.ModelMetadata
 	Stream                = llmprovider.Stream
 	ResponseHeaderer      = llmprovider.ResponseHeaderer
 	EmbeddingRequest      = llmprovider.EmbeddingRequest

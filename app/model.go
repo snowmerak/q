@@ -42,6 +42,7 @@ const (
 	modelPickerTargets
 	modelPickerReasoning
 	modelPickerEmbeddingDimensions
+	modelPickerContextWindow
 )
 
 const (
@@ -134,6 +135,7 @@ type model struct {
 	reasoningCursor     int
 	modelSelection      client.Model
 	embeddingDimensions textinput.Model
+	modelContextWindow  textinput.Model
 	draftConfig         config.Config
 	modelReturn         screen
 
@@ -210,6 +212,7 @@ type providersAppliedMsg struct {
 	config        config.Config
 	gatewayConfig gateway.Config
 	client        chatClient
+	modelTarget   string
 	err           error
 }
 
@@ -265,6 +268,11 @@ func newManagedModel(ctx context.Context, store config.Store, factory clientFact
 	m.embeddingDimensions.Placeholder = "1536"
 	m.embeddingDimensions.CharLimit = 5
 	m.embeddingDimensions.SetWidth(24)
+	m.modelContextWindow = textinput.New()
+	m.modelContextWindow.Prompt = "context length · "
+	m.modelContextWindow.Placeholder = "provider metadata"
+	m.modelContextWindow.CharLimit = 12
+	m.modelContextWindow.SetWidth(28)
 	m.input = newChatInput()
 	if runtime != nil && len(m.gatewayConfig.Providers) == 0 {
 		m.enterProviderEditor(-1)
@@ -379,6 +387,9 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			if m.screen == screenProviders {
 				return m, nil
 			}
+			if m.screen == screenModels {
+				return m, m.modelPickerFocus()
+			}
 			return m, m.setup[m.setupFocus].Focus()
 		}
 		if m.client != nil && m.client != message.client {
@@ -386,12 +397,23 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.client = message.client
 		m.gatewayConfig = message.gatewayConfig
-		if strings.TrimSpace(m.config.Provider.Model) == "" {
+		if strings.TrimSpace(m.config.Provider.Model) == "" || m.config.Provider.Model == "model-discovery" {
 			m.config = message.config
+		} else {
+			m.config.Provider.ContextWindow = message.config.Provider.ContextWindow
+			if m.memory != nil {
+				m.memory.Configure(memoryPolicy(m.config))
+			}
 		}
 		m.conversationID = ""
 		m.compactionTarget = 0
 		m.enterModelPicker(message.config, message.models)
+		if message.modelTarget != "" {
+			m.modelChooseTarget = true
+			m.modelPickerStage = modelPickerModels
+			m.modelTarget = message.modelTarget
+			m.selectConfiguredModel()
+		}
 		return m, m.modelPickerFocus()
 	case agentEventMsg:
 		event := message.event
@@ -740,7 +762,12 @@ func (m model) applyGatewayConfig(candidate gateway.Config) (tea.Model, tea.Cmd)
 		return m, nil
 	}
 	m.discovering = true
-	m.modelChooseTarget = false
+	returnTarget := ""
+	if m.screen == screenModels && m.modelPickerStage == modelPickerContextWindow {
+		returnTarget = m.modelTarget
+	} else {
+		m.modelChooseTarget = false
+	}
 	m.status = "Starting and validating Gateway…"
 	for index := range m.setup {
 		m.setup[index].Blur()
@@ -772,8 +799,16 @@ func (m model) applyGatewayConfig(candidate gateway.Config) (tea.Model, tea.Cmd)
 			_ = configuredClient.Close()
 			return providersAppliedMsg{err: fmt.Errorf("load Gateway models: %w", err)}
 		}
+		if refreshed, found := refreshModelContextWindow(value, models); found {
+			value = refreshed
+			if err := m.store.Save(value); err != nil {
+				_ = configuredClient.Close()
+				return providersAppliedMsg{err: err}
+			}
+		}
 		return providersAppliedMsg{
 			models: models, config: value, gatewayConfig: candidate, client: configuredClient,
+			modelTarget: returnTarget,
 		}
 	}
 }
@@ -791,6 +826,16 @@ func enabledProviderCount(value gateway.Config) int {
 func cloneGatewayConfig(value gateway.Config) gateway.Config {
 	result := value
 	result.Providers = append([]gateway.ProviderConfig(nil), value.Providers...)
+	for index := range result.Providers {
+		source := value.Providers[index].ModelMetadata
+		if source == nil {
+			continue
+		}
+		result.Providers[index].ModelMetadata = make(map[string]client.ModelMetadata, len(source))
+		for modelID, metadata := range source {
+			result.Providers[index].ModelMetadata[modelID] = metadata
+		}
+	}
 	return result
 }
 
@@ -801,6 +846,41 @@ func containsModel(models []client.Model, id string) bool {
 		}
 	}
 	return false
+}
+func refreshModelContextWindow(value config.Config, models []client.Model) (config.Config, bool) {
+	for _, candidate := range models {
+		if candidate.ID == value.Provider.Model {
+			value.Provider.ContextWindow = candidate.ContextLength
+			return value, true
+		}
+	}
+	return value, false
+}
+
+func gatewayModelLocation(value gateway.Config, modelID string) (int, string, bool) {
+	prefix, upstreamID, found := strings.Cut(modelID, "/")
+	if !found || prefix == "" || upstreamID == "" {
+		return 0, "", false
+	}
+	for index, provider := range value.Providers {
+		effectivePrefix := provider.Prefix
+		if effectivePrefix == "" {
+			effectivePrefix = provider.ID
+		}
+		if effectivePrefix == prefix {
+			return index, upstreamID, true
+		}
+	}
+	return 0, "", false
+}
+
+func (m model) gatewayContextWindowOverride(modelID string) (int64, bool) {
+	providerIndex, upstreamID, found := gatewayModelLocation(m.gatewayConfig, modelID)
+	if !found {
+		return 0, false
+	}
+	metadata, configured := m.gatewayConfig.Providers[providerIndex].ModelMetadata[upstreamID]
+	return metadata.ContextLength, configured && metadata.ContextLength > 0
 }
 
 func (m model) selectedProviderType() providerTypeOption {
@@ -933,6 +1013,8 @@ func (m model) updateModelPicker(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m.updateReasoningPicker(key)
 	case modelPickerEmbeddingDimensions:
 		return m.updateEmbeddingDimensionsPicker(key)
+	case modelPickerContextWindow:
+		return m.updateContextWindowPicker(key)
 	}
 	filtered := m.filteredModels()
 	switch key.String() {
@@ -970,6 +1052,11 @@ func (m model) updateModelPicker(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case "pgdown":
 		m.modelCursor = min(max(0, len(filtered)-1), m.modelCursor+10)
 		return m, nil
+	case "ctrl+e":
+		if len(filtered) == 0 {
+			return m, nil
+		}
+		return m.enterContextWindowPicker(filtered[m.modelCursor])
 	case "enter":
 		if len(filtered) == 0 {
 			return m, nil
@@ -1099,6 +1186,70 @@ func (m model) updateEmbeddingDimensionsPicker(key tea.KeyPressMsg) (tea.Model, 
 	}
 	var command tea.Cmd
 	m.embeddingDimensions, command = m.embeddingDimensions.Update(key)
+	return m, command
+}
+func (m model) enterContextWindowPicker(selected client.Model) (tea.Model, tea.Cmd) {
+	if m.runtime == nil {
+		m.status = "Gateway model metadata is unavailable for this provider"
+		return m, nil
+	}
+	if _, _, found := gatewayModelLocation(m.gatewayConfig, selected.ID); !found {
+		m.status = "Model is not mapped to a configured Gateway provider"
+		return m, nil
+	}
+	m.modelSelection = selected
+	m.modelPickerStage = modelPickerContextWindow
+	m.modelContextWindow.SetValue("")
+	if override, configured := m.gatewayContextWindowOverride(selected.ID); configured {
+		m.modelContextWindow.SetValue(strconv.FormatInt(override, 10))
+	}
+	m.modelFilter.Blur()
+	m.status = ""
+	return m, m.modelContextWindow.Focus()
+}
+
+func (m model) updateContextWindowPicker(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	switch key.String() {
+	case "esc":
+		m.modelPickerStage = modelPickerModels
+		m.modelContextWindow.Blur()
+		m.status = ""
+		return m, m.modelFilter.Focus()
+	case "enter":
+		raw := strings.TrimSpace(m.modelContextWindow.Value())
+		var contextWindow int64
+		if raw != "" {
+			parsed, err := strconv.ParseInt(raw, 10, 64)
+			if err != nil || parsed <= 0 {
+				m.status = "Context length must be a positive integer or empty"
+				return m, nil
+			}
+			contextWindow = parsed
+		}
+		candidate := cloneGatewayConfig(m.gatewayConfig)
+		providerIndex, upstreamID, found := gatewayModelLocation(candidate, m.modelSelection.ID)
+		if !found {
+			m.status = "Model is not mapped to a configured Gateway provider"
+			return m, nil
+		}
+		provider := &candidate.Providers[providerIndex]
+		if provider.ModelMetadata == nil {
+			provider.ModelMetadata = make(map[string]client.ModelMetadata)
+		}
+		metadata := provider.ModelMetadata[upstreamID]
+		metadata.ContextLength = contextWindow
+		if metadata.ContextLength == 0 && metadata.MaxOutputTokens == 0 && metadata.Capabilities == nil {
+			delete(provider.ModelMetadata, upstreamID)
+		} else {
+			provider.ModelMetadata[upstreamID] = metadata
+		}
+		if len(provider.ModelMetadata) == 0 {
+			provider.ModelMetadata = nil
+		}
+		return m.applyGatewayConfig(candidate)
+	}
+	var command tea.Cmd
+	m.modelContextWindow, command = m.modelContextWindow.Update(key)
 	return m, command
 }
 
@@ -1549,14 +1700,17 @@ func (m *model) selectConfiguredModel() {
 }
 
 func (m *model) modelPickerFocus() tea.Cmd {
-	if m.modelPickerStage == modelPickerModels && !m.discovering {
+	switch {
+	case m.modelPickerStage == modelPickerModels && !m.discovering:
 		return m.modelFilter.Focus()
-	}
-	if m.modelPickerStage == modelPickerEmbeddingDimensions && !m.discovering {
+	case m.modelPickerStage == modelPickerEmbeddingDimensions && !m.discovering:
 		return m.embeddingDimensions.Focus()
+	case m.modelPickerStage == modelPickerContextWindow && !m.discovering:
+		return m.modelContextWindow.Focus()
 	}
 	m.modelFilter.Blur()
 	m.embeddingDimensions.Blur()
+	m.modelContextWindow.Blur()
 	return nil
 }
 
@@ -1721,6 +1875,7 @@ func (m *model) resize(width, height int) {
 	}
 	m.modelFilter.SetWidth(min(contentWidth-2, 72))
 	m.embeddingDimensions.SetWidth(min(contentWidth-2, 24))
+	m.modelContextWindow.SetWidth(min(contentWidth-2, 28))
 	m.input.SetWidth(contentWidth)
 	m.viewport.SetWidth(contentWidth)
 	chromeHeight := 10
@@ -1737,6 +1892,7 @@ func (m *model) applyColorScheme(dark bool) {
 	}
 	m.modelFilter.SetStyles(textinput.DefaultStyles(dark))
 	m.embeddingDimensions.SetStyles(textinput.DefaultStyles(dark))
+	m.modelContextWindow.SetStyles(textinput.DefaultStyles(dark))
 	inputStyles := textarea.DefaultStyles(dark)
 	inputStyles.Cursor.Shape = tea.CursorBar
 	m.input.SetStyles(inputStyles)
@@ -2079,6 +2235,8 @@ func (m model) viewModels() string {
 		return m.viewReasoningEfforts()
 	case modelPickerEmbeddingDimensions:
 		return m.viewEmbeddingDimensions()
+	case modelPickerContextWindow:
+		return m.viewContextWindow()
 	}
 	filtered := m.filteredModels()
 	visible := max(4, m.height-10)
@@ -2118,6 +2276,14 @@ func (m model) viewModels() string {
 			}
 			body.WriteString(prefix)
 			body.WriteString(style.Render(filtered[index].ID))
+			if filtered[index].ContextLength > 0 {
+				body.WriteString(subtleStyle.Render("  · context " + formatTokenCount(filtered[index].ContextLength)))
+			} else {
+				body.WriteString(subtleStyle.Render("  · context unknown"))
+			}
+			if _, overridden := m.gatewayContextWindowOverride(filtered[index].ID); overridden {
+				body.WriteString(subtleStyle.Render(" · Gateway override"))
+			}
 			body.WriteString("\n")
 		}
 	}
@@ -2125,9 +2291,9 @@ func (m model) viewModels() string {
 	if m.discovering {
 		body.WriteString(helpStyle.Render("loading models · ctrl+c quit"))
 	} else {
-		help := fmt.Sprintf("%d/%d models · type to filter · ↑/↓ select · enter save · esc back", len(filtered), len(m.models))
+		help := fmt.Sprintf("%d/%d models · type to filter · ↑/↓ select · ctrl+e context · enter save · esc back", len(filtered), len(m.models))
 		if m.modelTarget != "" && m.modelTarget != defaultModelTarget {
-			help = fmt.Sprintf("%d/%d models · type to filter · ↑/↓ select · enter next/save · esc back", len(filtered), len(m.models))
+			help = fmt.Sprintf("%d/%d models · type to filter · ↑/↓ select · ctrl+e context · enter next/save · esc back", len(filtered), len(m.models))
 		}
 		body.WriteString(helpStyle.Render(help))
 	}
@@ -2223,6 +2389,30 @@ func (m model) viewEmbeddingDimensions() string {
 	body.WriteString(helpStyle.Render("enter save · esc models"))
 	return frameStyle.Width(max(36, m.width-4)).Render(body.String())
 }
+func (m model) viewContextWindow() string {
+	var body strings.Builder
+	body.WriteString(titleStyle.Render("q · Gateway model context"))
+	body.WriteString("\n")
+	m.writeWorkspacePath(&body)
+	body.WriteString(subtleStyle.Render(m.modelSelection.ID))
+	body.WriteString("\n\n")
+	body.WriteString(m.modelContextWindow.View())
+	body.WriteString("\n")
+	if m.modelSelection.ContextLength > 0 {
+		body.WriteString(subtleStyle.Render("Current Gateway value · " + formatTokenCount(m.modelSelection.ContextLength)))
+	} else {
+		body.WriteString(subtleStyle.Render("Current Gateway value · unknown"))
+	}
+	body.WriteString("\n")
+	body.WriteString(subtleStyle.Render("Set a positive token count. Leave empty to remove the Gateway override."))
+	if m.status != "" {
+		body.WriteString("\n\n")
+		body.WriteString(errorStyle.Render(m.status))
+	}
+	body.WriteString("\n\n")
+	body.WriteString(helpStyle.Render("enter apply and refresh · esc models"))
+	return frameStyle.Width(max(36, m.width-4)).Render(body.String())
+}
 
 func targetModelSummary(value config.Config, target string) string {
 	if target == defaultModelTarget {
@@ -2297,6 +2487,10 @@ func (m model) contextLabel() string {
 }
 
 func formatTokens(tokens int) string {
+	return formatTokenCount(int64(tokens))
+}
+
+func formatTokenCount(tokens int64) string {
 	if tokens >= 1_000_000 {
 		return fmt.Sprintf("%.1fm", float64(tokens)/1_000_000)
 	}
