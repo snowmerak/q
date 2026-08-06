@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/snowmerak/llm-provider/gateway"
 	"github.com/snowmerak/q/client"
 	"github.com/snowmerak/q/config"
@@ -1056,6 +1057,43 @@ func TestTranscriptRendersToolActivityAsReadableProgress(t *testing.T) {
 	}
 	if strings.Contains(transcript, `\"command_id\"`) || strings.Contains(transcript, `line one\nline two`) {
 		t.Fatalf("rendered transcript exposed raw JSON: %q", transcript)
+	}
+}
+func TestTranscriptRendersAssistantMarkdownOnly(t *testing.T) {
+	transcript := renderTranscriptWithStyle([]client.Message{
+		{Role: client.RoleUser, Content: "**literal user input**"},
+		{Role: client.RoleAssistant, Content: "# Result\n\n- **first** item\n- second\n\n```go\nfmt.Println(\"ok\")\n```"},
+	}, 60, true)
+	plain := ansi.Strip(transcript)
+	for _, expected := range []string{"**literal user input**", "Result", "first item", "second", `fmt.Println("ok")`} {
+		if !strings.Contains(plain, expected) {
+			t.Fatalf("rendered Markdown does not contain %q: %q", expected, plain)
+		}
+	}
+	for _, rawMarkdown := range []string{"# Result", "```go", "**first**"} {
+		if strings.Contains(plain, rawMarkdown) {
+			t.Fatalf("assistant Markdown marker %q was not rendered: %q", rawMarkdown, plain)
+		}
+	}
+}
+
+func TestTranscriptMarkdownWrapsAndTracksTerminalTheme(t *testing.T) {
+	messages := []client.Message{{
+		Role:    client.RoleAssistant,
+		Content: "This is a long Markdown paragraph that must wrap to the current viewport width without changing the stored message.",
+	}}
+	dark := renderTranscriptWithStyle(messages, 42, true)
+	light := renderTranscriptWithStyle(messages, 42, false)
+	if dark == light {
+		t.Fatal("dark and light Markdown styles rendered identically")
+	}
+	for _, line := range strings.Split(dark, "\n") {
+		if width := ansi.StringWidth(line); width > 42 {
+			t.Fatalf("rendered line width = %d, want <= 42: %q", width, ansi.Strip(line))
+		}
+	}
+	if messages[0].Content != "This is a long Markdown paragraph that must wrap to the current viewport width without changing the stored message." {
+		t.Fatalf("rendering mutated stored message: %#v", messages[0])
 	}
 }
 

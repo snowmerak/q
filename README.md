@@ -146,6 +146,12 @@ enumerated reasoning efforts add a final effort picker whose `default` choice
 omits `reasoning_effort`. Select a subagent in the target list and press `i` to
 remove that role's override and inherit the main-loop default again.
 
+Assistant responses are rendered as terminal Markdown with headings, lists,
+links, tables, block quotes, emphasis, and syntax-highlighted fenced code.
+Rendering follows the detected light/dark terminal theme and current viewport
+width. User input and tool output remain literal so their contents are never
+reinterpreted as presentation markup.
+
 The full chat transcript and separate request context are persisted in the
 current workspace. When Gateway model context metadata is available, q
 automatically compacts that request context at 85% to a maximum of 22% while

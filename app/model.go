@@ -16,6 +16,7 @@ import (
 	"charm.land/bubbles/v2/textinput"
 	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
+	"charm.land/glamour/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/snowmerak/llm-provider/gateway"
 	"github.com/snowmerak/q/client"
@@ -106,6 +107,7 @@ type model struct {
 	screen      screen
 	width       int
 	height      int
+	dark        bool
 	status      string
 	runtime     providerRuntime
 	toolRuntime agentToolRuntime
@@ -1887,6 +1889,7 @@ func (m *model) resize(width, height int) {
 }
 
 func (m *model) applyColorScheme(dark bool) {
+	m.dark = dark
 	for index := range m.setup {
 		m.setup[index].SetStyles(textinput.DefaultStyles(dark))
 	}
@@ -1896,17 +1899,24 @@ func (m *model) applyColorScheme(dark bool) {
 	inputStyles := textarea.DefaultStyles(dark)
 	inputStyles.Cursor.Shape = tea.CursorBar
 	m.input.SetStyles(inputStyles)
+	m.refreshTranscript()
 }
 
 func (m *model) refreshTranscript() {
 	if m.screen != screenChat {
 		return
 	}
-	m.viewport.SetContent(renderTranscript(m.messages, m.viewport.Width()))
+	m.viewport.SetContent(renderTranscriptWithStyle(m.messages, m.viewport.Width(), m.dark))
 	m.viewport.GotoBottom()
 }
 
 func renderTranscript(messages []client.Message, width int) string {
+	return renderTranscriptWithStyle(messages, width, true)
+}
+
+func renderTranscriptWithStyle(messages []client.Message, width int, dark bool) string {
+	bodyWidth := max(10, width-2)
+	markdownRenderer, _ := newMarkdownRenderer(bodyWidth, dark)
 	var blocks []string
 	for _, message := range messages {
 		if message.Role == client.RoleSystem || message.Role == client.RoleDeveloper {
@@ -1929,6 +1939,9 @@ func renderTranscript(messages []client.Message, width int) string {
 			bodyStyle = assistantBodyStyle
 		}
 		body := message.TextContent()
+		if message.Role == client.RoleAssistant && body != "" {
+			body = renderMarkdown(markdownRenderer, body)
+		}
 		if len(message.ToolCalls) > 0 {
 			calls := renderToolCalls(message.ToolCalls)
 			if body == "" {
@@ -1940,12 +1953,35 @@ func renderTranscript(messages []client.Message, width int) string {
 		if message.Role == client.RoleTool {
 			body = renderToolResult(message)
 		}
-		blocks = append(blocks, labelStyle.Render(label)+"\n"+bodyStyle.Width(max(10, width-2)).Render(body))
+		blocks = append(blocks, labelStyle.Render(label)+"\n"+bodyStyle.Width(bodyWidth).Render(body))
 	}
 	if len(blocks) == 0 {
 		return emptyStyle.Render("Start a conversation. Your messages stay in memory for this run.")
 	}
 	return strings.Join(blocks, "\n\n")
+}
+
+func newMarkdownRenderer(width int, dark bool) (*glamour.TermRenderer, error) {
+	style := "light"
+	if dark {
+		style = "dark"
+	}
+	return glamour.NewTermRenderer(
+		glamour.WithStandardStyle(style),
+		glamour.WithWordWrap(max(10, width)),
+		glamour.WithPreservedNewLines(),
+	)
+}
+
+func renderMarkdown(renderer *glamour.TermRenderer, source string) string {
+	if renderer == nil {
+		return source
+	}
+	rendered, err := renderer.Render(source)
+	if err != nil {
+		return source
+	}
+	return strings.Trim(rendered, "\n")
 }
 
 func renderToolCalls(calls []client.ToolCall) string {
