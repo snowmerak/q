@@ -2126,12 +2126,9 @@ func (m model) View() tea.View {
 	view.WindowTitle = "q"
 	if m.screen == screenChat && !m.waiting {
 		if cursor := m.input.Cursor(); cursor != nil {
-			headerOffset := 2
-			if m.workspaceStore != nil {
-				headerOffset++
-			}
+			inputOffset := m.renderedChatHeaderHeight() + 1 + lipgloss.Height(m.viewport.View())
 			cursor.Position.X += frameStyle.GetPaddingLeft()
-			cursor.Position.Y += frameStyle.GetPaddingTop() + headerOffset + m.viewport.Height()
+			cursor.Position.Y += frameStyle.GetPaddingTop() + inputOffset
 			view.Cursor = cursor
 		}
 	}
@@ -2471,7 +2468,7 @@ func targetModelSummary(value config.Config, target string) string {
 	return summary
 }
 
-func (m model) viewChat() string {
+func (m model) chatHeader() string {
 	endpoint := m.config.Provider.BaseURL
 	if m.runtime != nil {
 		endpoint = m.runtime.Endpoint()
@@ -2480,6 +2477,19 @@ func (m model) viewChat() string {
 	if m.workspaceStore != nil {
 		header += "\n" + subtleStyle.Render("workspace · "+filepath.Clean(m.workspaceStore.Root))
 	}
+	return header
+}
+func (m model) chatFrameWidth() int {
+	return max(36, m.width-4)
+}
+
+func (m model) renderedChatHeaderHeight() int {
+	rendered := frameStyle.Width(m.chatFrameWidth()).Render(m.chatHeader())
+	return lipgloss.Height(rendered) - frameStyle.GetVerticalFrameSize()
+}
+
+func (m model) viewChat() string {
+	header := m.chatHeader()
 	status := m.status
 	if m.waiting {
 		status = m.spinner.View() + " " + status
@@ -2490,7 +2500,7 @@ func (m model) viewChat() string {
 		content += "\n" + subtleStyle.Render(status)
 	}
 	content += "\n" + footer
-	return frameStyle.Width(max(36, m.width-4)).Render(content)
+	return frameStyle.Width(m.chatFrameWidth()).Render(content)
 }
 
 func (m model) writeWorkspacePath(body *strings.Builder) {

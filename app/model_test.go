@@ -240,10 +240,27 @@ func TestUnicodeInputUsesNFCAndRealCursor(t *testing.T) {
 	fake := &fakeClient{}
 	m := newModel(context.Background(), config.Store{Dir: t.TempDir()}, nil)
 	m.enterChat(value, fake)
+	assistant := client.Message{Role: client.RoleAssistant, Content: "**알겠어요.** 필요한 때 말해 주세요."}
+	m.messages = append(m.messages, assistant)
+	m.memory.Append(assistant)
+	m.refreshTranscript()
 	view := m.View()
 	if m.input.VirtualCursor() || view.Cursor == nil || view.Cursor.Shape != tea.CursorBar {
 		t.Fatal("chat input is not using the real terminal cursor")
 	}
+	inputRow := -1
+	for row, line := range strings.Split(ansi.Strip(view.Content), "\n") {
+		if strings.Contains(line, "Type a message") {
+			inputRow = row
+			break
+		}
+	}
+	if inputRow < 0 || view.Cursor.Position.Y != inputRow {
+		t.Fatalf("cursor row = %d, input row = %d", view.Cursor.Position.Y, inputRow)
+	}
+	m.messages = m.messages[:1]
+	m.memory.Reset(m.messages)
+	m.refreshTranscript()
 	m = submitAndReceive(t, m, decomposed)
 	if got := fake.requests[0].Messages[1].Content; got != "가" {
 		t.Fatalf("submitted content = %q", got)
