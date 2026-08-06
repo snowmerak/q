@@ -1162,6 +1162,33 @@ func TestTranscriptRendersAssistantMarkdownOnly(t *testing.T) {
 		}
 	}
 }
+func TestTranscriptCodeBlockUsesHighContrastSurfaceForBothThemes(t *testing.T) {
+	message := client.Message{
+		Role:    client.RoleAssistant,
+		Content: "```go\nlogger := zerolog.New(os.Stdout).With().Timestamp().Logger()\n```",
+	}
+	for name, rendered := range map[string]string{
+		"dark":  renderTranscriptWithStyle([]client.Message{message}, 100, true),
+		"light": renderTranscriptWithStyle([]client.Message{message}, 100, false),
+	} {
+		plain := ansi.Strip(rendered)
+		if !strings.Contains(plain, "logger := zerolog.New") {
+			t.Fatalf("%s code block content missing: %q", name, plain)
+		}
+		hasHighContrastName := strings.Contains(rendered, "\x1b[38;5;117mlogger") ||
+			strings.Contains(rendered, "139;233;253mlogger") ||
+			strings.Contains(rendered, "139:233:253mlogger")
+		if !hasHighContrastName {
+			index := strings.Index(rendered, "logger")
+			start := max(0, index-40)
+			end := min(len(rendered), index+60)
+			t.Fatalf("%s code block did not highlight its main text brightly: %q", name, rendered[start:end])
+		}
+		if strings.Contains(rendered, "\x1b[38;2;42;42;42mlogger") {
+			t.Fatalf("%s code block used the low-contrast light-theme foreground: %q", name, rendered)
+		}
+	}
+}
 
 func TestTranscriptMarkdownWrapsAndTracksTerminalTheme(t *testing.T) {
 	messages := []client.Message{{

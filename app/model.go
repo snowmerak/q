@@ -18,6 +18,7 @@ import (
 	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/glamour/v2"
+	glamourstyles "charm.land/glamour/v2/styles"
 	"charm.land/lipgloss/v2"
 	"github.com/snowmerak/llm-provider/gateway"
 	"github.com/snowmerak/q/client"
@@ -1968,12 +1969,15 @@ func renderTranscriptWithStyle(messages []client.Message, width int, dark bool) 
 }
 
 func newMarkdownRenderer(width int, dark bool) (*glamour.TermRenderer, error) {
-	style := "light"
+	style := glamourstyles.LightStyleConfig
 	if dark {
-		style = "dark"
+		style = glamourstyles.DarkStyleConfig
 	}
+	// Keep fenced code readable even when a terminal does not report its
+	// background color. Dracula's bright syntax palette works in either theme.
+	style.CodeBlock = glamourstyles.DraculaStyleConfig.CodeBlock
 	return glamour.NewTermRenderer(
-		glamour.WithStandardStyle(style),
+		glamour.WithStyles(style),
 		glamour.WithWordWrap(max(10, width)),
 		glamour.WithPreservedNewLines(),
 	)
