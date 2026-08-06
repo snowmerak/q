@@ -165,6 +165,23 @@ conversation, and continues the same turn automatically. Tool calls, command
 status, exit codes, and command output are rendered as live progress while the
 turn is running. Filesystem tools are root-jailed; shell commands start in the
 workspace but are not an OS sandbox.
+Every non-Loom MCP result is also captured as an immutable Loom artifact under
+the workspace's `.q/loom` directory. The tool message contains a `loom_ref`,
+artifact metadata, and either the complete small result or a bounded preview.
+This keeps large structured results available without repeatedly carrying them
+through model context. Artifacts are content-addressed, deduplicated, limited to
+64 MiB each, and the workspace blob store is limited to 256 MiB.
+
+The model can use `loom_inspect` for metadata, `loom_read` for byte ranges, and
+`loom_eval` to transform one or more artifacts with JavaScript. `loom_eval`
+exposes only `inputs` and `loom.inspect`, `loom.read`, `loom.get`, and
+`loom.json`; it has no filesystem, process, module, environment, or network API.
+Scripts run in a short-lived child process, must return a JSON value, and store
+that value as a new artifact with parent references and a script digest. An MCP
+result artifact is a JSON envelope whose `structured` field contains the
+server's structured result and whose `content` field preserves its MCP content
+parts.
+
 
 The model can query durable workspace history with the read-only
 `search_archive` and `get_archive_record` tools. Search supports text, record

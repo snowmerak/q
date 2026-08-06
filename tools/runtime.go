@@ -3,20 +3,25 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/snowmerak/q/client"
+	"github.com/snowmerak/q/loom"
 	"github.com/snowmerak/q/tools/builtin"
 )
+
+const maximumInlineToolResult = 32 << 10
 
 // Runtime connects q's chat loop to the builtin MCP server in-process.
 type Runtime struct {
 	client  *mcp.ClientSession
 	server  *mcp.ServerSession
 	fs      *builtin.FS
+	loom    *builtin.LoomRuntime
 	tools   []client.Tool
 	closeMu sync.Once
 }
@@ -25,10 +30,18 @@ func NewRuntime(ctx context.Context, root string) (*Runtime, error) {
 	return NewRuntimeWithArchive(ctx, root, nil)
 }
 
-// NewRuntimeWithArchive connects the chat loop to filesystem, command, and
-// read-only workspace archive tools. The caller owns the archive lifetime.
+// NewRuntimeWithArchive connects the chat loop to filesystem, command,
+// workspace archive, and Loom tools. The caller owns the archive lifetime.
 func NewRuntimeWithArchive(ctx context.Context, root string, archive builtin.Archive) (*Runtime, error) {
-	server, fs, err := newServer(root, archive)
+	return newRuntime(ctx, root, archive, loom.NewProcessEvaluator())
+}
+
+func newRuntime(ctx context.Context, root string, archive builtin.Archive, evaluator loom.Evaluator) (*Runtime, error) {
+	loomRuntime, err := newLoomRuntime(root, evaluator)
+	if err != nil {
+		return nil, err
+	}
+	server, fs, err := newServer(root, archive, loomRuntime)
 	if err != nil {
 		return nil, err
 	}
@@ -44,7 +57,7 @@ func NewRuntimeWithArchive(ctx context.Context, root string, archive builtin.Arc
 		fs.Close()
 		return nil, fmt.Errorf("tools: connect builtin MCP client: %w", err)
 	}
-	runtime := &Runtime{client: clientSession, server: serverSession, fs: fs}
+	runtime := &Runtime{client: clientSession, server: serverSession, fs: fs, loom: loomRuntime}
 	listed, err := clientSession.ListTools(ctx, nil)
 	if err != nil {
 		_ = runtime.Close()
@@ -86,7 +99,91 @@ func (r *Runtime) Call(ctx context.Context, call client.ToolCall) (client.ToolRe
 	if err != nil {
 		return client.ToolResult{}, err
 	}
-	return client.ToolResult{Content: content, IsError: result.IsError}, nil
+	if strings.HasPrefix(call.Function.Name, "loom_") {
+		return client.ToolResult{Content: content, IsError: result.IsError}, nil
+	}
+	artifact, err := CaptureMCPResult(ctx, r.loom.Store, ServerName, call, result)
+	if err != nil {
+		return client.ToolResult{}, err
+	}
+	receipt, err := encodeLoomReceipt(artifact, content)
+	if err != nil {
+		return client.ToolResult{}, err
+	}
+	return client.ToolResult{Content: receipt, IsError: result.IsError}, nil
+}
+
+type capturedMCPResult struct {
+	Protocol   string        `json:"protocol"`
+	Server     string        `json:"server"`
+	Tool       string        `json:"tool"`
+	CallID     string        `json:"call_id"`
+	IsError    bool          `json:"is_error"`
+	Structured any           `json:"structured,omitempty"`
+	Content    []mcp.Content `json:"content,omitempty"`
+}
+
+type loomReceipt struct {
+	LoomRef loom.Ref `json:"loom_ref"`
+	Kind    string   `json:"kind"`
+	Bytes   int64    `json:"bytes"`
+	Digest  string   `json:"digest"`
+	Stored  bool     `json:"stored"`
+	Result  any      `json:"result,omitempty"`
+	Preview string   `json:"preview,omitempty"`
+}
+
+// CaptureMCPResult stores a raw result before it is flattened for a model.
+// Builtin and future external MCP dispatchers use the same capture boundary.
+func CaptureMCPResult(
+	ctx context.Context,
+	store *loom.Store,
+	server string,
+	call client.ToolCall,
+	result *mcp.CallToolResult,
+) (loom.Artifact, error) {
+	if store == nil || result == nil || strings.TrimSpace(server) == "" {
+		return loom.Artifact{}, errors.New("tools: Loom capture requires a store, server, and result")
+	}
+	envelope := capturedMCPResult{
+		Protocol: "mcp", Server: server, Tool: call.Function.Name, CallID: call.ID,
+		IsError: result.IsError, Structured: result.StructuredContent, Content: result.Content,
+	}
+	body, err := json.Marshal(envelope)
+	if err != nil {
+		return loom.Artifact{}, fmt.Errorf("tools: encode MCP result for Loom: %w", err)
+	}
+	artifact, err := store.Put(ctx, body, loom.PutOptions{
+		Kind: "mcp-result", MediaType: "application/vnd.q.mcp-result+json",
+		Source: map[string]string{"server": server, "tool": call.Function.Name, "call_id": call.ID},
+	})
+	if err != nil {
+		return loom.Artifact{}, fmt.Errorf("tools: store MCP result in Loom: %w", err)
+	}
+	return artifact, nil
+}
+
+func encodeLoomReceipt(artifact loom.Artifact, content string) (string, error) {
+	receipt := loomReceipt{
+		LoomRef: artifact.Ref, Kind: artifact.Kind, Bytes: artifact.Bytes,
+		Digest: artifact.Digest, Stored: true,
+	}
+	if len(content) <= maximumInlineToolResult {
+		if err := json.Unmarshal([]byte(content), &receipt.Result); err != nil {
+			receipt.Result = content
+		}
+	} else {
+		runes := []rune(content)
+		if len(runes) > 4096 {
+			runes = runes[:4096]
+		}
+		receipt.Preview = string(runes)
+	}
+	body, err := json.Marshal(receipt)
+	if err != nil {
+		return "", fmt.Errorf("tools: encode Loom receipt: %w", err)
+	}
+	return string(body), nil
 }
 
 func (r *Runtime) Close() error {

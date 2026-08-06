@@ -1558,7 +1558,8 @@ func (m *model) enterChat(value config.Config, configuredClient chatClient) {
 	}
 	if m.toolRuntime != nil && m.workspaceStore != nil {
 		workspacePrompt := "Current workspace root: " + filepath.Clean(m.workspaceStore.Root) +
-			". Use the available tools to inspect, edit, and run work in this workspace when the user asks for changes."
+			". Use the available tools to inspect, edit, and run work in this workspace when the user asks for changes." +
+			" Non-Loom MCP tool results include a loom_ref to the immutable full result. For large results, use loom_inspect, loom_read, or loom_eval instead of copying the result through chat context."
 		if m.archive != nil {
 			workspacePrompt += " Use search_archive when prior workspace conversations, decisions, agent results, or tool failures may be relevant; use get_archive_record only for selected results that need more detail."
 		}

@@ -7,9 +7,14 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-// Register adds the root-jailed builtin tools to server. Archive tools are
-// included when a workspace record store is supplied.
-func Register(server *mcp.Server, root string, archive Archive) (*FS, error) {
+type Dependencies struct {
+	Archive Archive
+	Loom    *LoomRuntime
+}
+
+// Register adds the root-jailed builtin tools to server. Optional workspace
+// services are included when supplied through dependencies.
+func Register(server *mcp.Server, root string, dependencies Dependencies) (*FS, error) {
 	fs, err := NewFS(root)
 	if err != nil {
 		return nil, err
@@ -100,13 +105,13 @@ func Register(server *mcp.Server, root string, archive Archive) (*FS, error) {
 		Annotations: &mcp.ToolAnnotations{ReadOnlyHint: readOnly},
 	}, valueHandler(fs.WaitCommand))
 
-	if archive != nil {
+	if dependencies.Archive != nil {
 		mcp.AddTool(server, &mcp.Tool{
 			Name:        "search_archive",
 			Description: "Search durable workspace history for prior conversations, decisions, agent tasks, failures, and tool results. Returns bounded excerpts; use get_archive_record for a selected full record.",
 			Annotations: &mcp.ToolAnnotations{ReadOnlyHint: readOnly, IdempotentHint: true},
 		}, func(ctx context.Context, _ *mcp.CallToolRequest, input SearchArchiveInput) (*mcp.CallToolResult, SearchArchiveOutput, error) {
-			output, err := SearchArchive(ctx, archive, input)
+			output, err := SearchArchive(ctx, dependencies.Archive, input)
 			if err != nil {
 				return nil, SearchArchiveOutput{}, err
 			}
@@ -118,12 +123,30 @@ func Register(server *mcp.Server, root string, archive Archive) (*FS, error) {
 			Description: "Get one durable workspace archive record by ID. Content is paginated by Unicode character offset; payload is optional and omitted when too large.",
 			Annotations: &mcp.ToolAnnotations{ReadOnlyHint: readOnly, IdempotentHint: true},
 		}, func(_ context.Context, _ *mcp.CallToolRequest, input GetArchiveRecordInput) (*mcp.CallToolResult, GetArchiveRecordOutput, error) {
-			output, err := GetArchiveRecord(archive, input)
+			output, err := GetArchiveRecord(dependencies.Archive, input)
 			if err != nil {
 				return nil, GetArchiveRecordOutput{}, err
 			}
 			return structuredTextResult(output)
 		})
+	}
+	if dependencies.Loom != nil && dependencies.Loom.Store != nil {
+		mcp.AddTool(server, &mcp.Tool{
+			Name:        "loom_inspect",
+			Description: "Inspect immutable data captured from an MCP result or produced by a Loom JavaScript transform without reading its content.",
+			Annotations: &mcp.ToolAnnotations{ReadOnlyHint: readOnly, IdempotentHint: true},
+		}, contextValueHandler(dependencies.Loom.Inspect))
+		mcp.AddTool(server, &mcp.Tool{
+			Name:        "loom_read",
+			Description: "Read a byte range from a Loom artifact. Results are UTF-8 when valid and base64 otherwise; paginate with next_offset while more is true.",
+			Annotations: &mcp.ToolAnnotations{ReadOnlyHint: readOnly, IdempotentHint: true},
+		}, contextValueHandler(dependencies.Loom.Read))
+		mcp.AddTool(server, &mcp.Tool{
+			Name: "loom_eval",
+			Description: "Run restricted JavaScript over Loom artifacts. Pass refs in inputs; scripts can call loom.inspect(ref), loom.read(ref, offset, limit), " +
+				"loom.get(ref), and loom.json(ref, JSONPointer), and must return a JSON value. The result is stored as a new immutable artifact.",
+			Annotations: &mcp.ToolAnnotations{ReadOnlyHint: readOnly},
+		}, contextValueHandler(dependencies.Loom.Eval))
 	}
 
 	return fs, nil
@@ -138,6 +161,16 @@ func textResult(text string) *mcp.CallToolResult {
 func valueHandler[In, Out any](fn func(In) (Out, error)) mcp.ToolHandlerFor[In, Out] {
 	return func(_ context.Context, _ *mcp.CallToolRequest, input In) (*mcp.CallToolResult, Out, error) {
 		output, err := fn(input)
+		if err != nil {
+			var zero Out
+			return nil, zero, err
+		}
+		return structuredTextResult(output)
+	}
+}
+func contextValueHandler[In, Out any](fn func(context.Context, In) (Out, error)) mcp.ToolHandlerFor[In, Out] {
+	return func(ctx context.Context, _ *mcp.CallToolRequest, input In) (*mcp.CallToolResult, Out, error) {
+		output, err := fn(ctx, input)
 		if err != nil {
 			var zero Out
 			return nil, zero, err

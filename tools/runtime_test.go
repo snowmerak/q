@@ -5,9 +5,11 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/snowmerak/q/client"
+	"github.com/snowmerak/q/loom"
 	"github.com/snowmerak/q/sessionstore"
 	"github.com/snowmerak/q/tools/builtin"
 )
@@ -19,7 +21,7 @@ func TestRuntimeListsAndCallsBuiltinTools(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer runtime.Close()
-	if len(runtime.Tools()) != 11 {
+	if len(runtime.Tools()) != 14 {
 		t.Fatalf("runtime tools = %d", len(runtime.Tools()))
 	}
 	result, err := runtime.Call(context.Background(), client.ToolCall{
@@ -34,6 +36,17 @@ func TestRuntimeListsAndCallsBuiltinTools(t *testing.T) {
 	body, err := os.ReadFile(filepath.Join(root, "created.txt"))
 	if err != nil || string(body) != "from tool" {
 		t.Fatalf("created file = %q, err = %v", body, err)
+	}
+	var receipt loomReceipt
+	if err := json.Unmarshal([]byte(result.Content), &receipt); err != nil {
+		t.Fatal(err)
+	}
+	if receipt.LoomRef == "" || !receipt.Stored {
+		t.Fatalf("Loom receipt = %#v", receipt)
+	}
+	artifact, err := runtime.loom.Store.Inspect(context.Background(), receipt.LoomRef)
+	if err != nil || artifact.Source["tool"] != "write_file" {
+		t.Fatalf("captured artifact = %#v, err = %v", artifact, err)
 	}
 }
 
@@ -56,7 +69,7 @@ func TestRuntimeExposesAndCallsArchiveTools(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer runtime.Close()
-	if len(runtime.Tools()) != 13 || !runtimeHasTool(runtime, "search_archive") || !runtimeHasTool(runtime, "get_archive_record") {
+	if len(runtime.Tools()) != 16 || !runtimeHasTool(runtime, "search_archive") || !runtimeHasTool(runtime, "get_archive_record") {
 		t.Fatalf("runtime tools = %#v", runtime.Tools())
 	}
 
@@ -68,7 +81,7 @@ func TestRuntimeExposesAndCallsArchiveTools(t *testing.T) {
 		t.Fatalf("search result = %#v, err = %v", searched, err)
 	}
 	var searchOutput builtin.SearchArchiveOutput
-	if err := json.Unmarshal([]byte(searched.Content), &searchOutput); err != nil {
+	if err := decodeReceiptResult(searched.Content, &searchOutput); err != nil {
 		t.Fatal(err)
 	}
 	if len(searchOutput.Hits) != 1 || searchOutput.Hits[0].ID != "decision-1" {
@@ -83,12 +96,87 @@ func TestRuntimeExposesAndCallsArchiveTools(t *testing.T) {
 		t.Fatalf("get result = %#v, err = %v", got, err)
 	}
 	var record builtin.GetArchiveRecordOutput
-	if err := json.Unmarshal([]byte(got.Content), &record); err != nil {
+	if err := decodeReceiptResult(got.Content, &record); err != nil {
 		t.Fatal(err)
 	}
 	if record.ID != "decision-1" || record.Content != "Use the workspace archive for durable agent history." {
 		t.Fatalf("record = %#v", record)
 	}
+}
+func TestRuntimeEvaluatesCapturedMCPResult(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "one.txt"), []byte("one"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var evaluator loom.Evaluator = loom.InProcessEvaluator{}
+	if executable := os.Getenv("Q_LOOM_WORKER_EXECUTABLE"); executable != "" {
+		evaluator = loom.ProcessEvaluator{Executable: executable}
+	}
+	runtime, err := newRuntime(context.Background(), root, nil, evaluator)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer runtime.Close()
+	listed, err := runtime.Call(context.Background(), client.ToolCall{
+		ID: "call-list", Type: client.ToolTypeFunction,
+		Function: client.FunctionCall{Name: "list_directory", Arguments: `{}`},
+	})
+	if err != nil || listed.IsError {
+		t.Fatalf("list result = %#v, err = %v", listed, err)
+	}
+	var captured loomReceipt
+	if err := json.Unmarshal([]byte(listed.Content), &captured); err != nil {
+		t.Fatal(err)
+	}
+	arguments, err := json.Marshal(map[string]any{
+		"inputs": map[string]string{"source": captured.LoomRef.String()},
+		"code":   `const entries = loom.json(inputs.source, "/structured/entries"); return {count: entries.filter(entry => entry.name === "one.txt").length};`,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	evaluated, err := runtime.Call(context.Background(), client.ToolCall{
+		ID: "call-eval", Type: client.ToolTypeFunction,
+		Function: client.FunctionCall{Name: "loom_eval", Arguments: string(arguments)},
+	})
+	if err != nil || evaluated.IsError {
+		t.Fatalf("eval result = %#v, err = %v", evaluated, err)
+	}
+	var output builtin.LoomEvalOutput
+	if err := json.Unmarshal([]byte(evaluated.Content), &output); err != nil {
+		t.Fatal(err)
+	}
+	value, ok := output.Value.(map[string]any)
+	if !ok || value["count"] != float64(1) || len(output.Artifact.Parents) != 1 || output.Artifact.Parents[0] != captured.LoomRef {
+		t.Fatalf("eval output = %#v", output)
+	}
+}
+func TestLargeToolResultReceiptKeepsOnlyBoundedPreview(t *testing.T) {
+	artifact := loom.Artifact{
+		Ref: "loom://0123456789abcdef0123456789abcdef", Kind: "mcp-result",
+		Bytes: 1 << 20, Digest: strings.Repeat("a", 64),
+	}
+	encoded, err := encodeLoomReceipt(artifact, strings.Repeat("x", maximumInlineToolResult+1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var receipt loomReceipt
+	if err := json.Unmarshal([]byte(encoded), &receipt); err != nil {
+		t.Fatal(err)
+	}
+	if receipt.Result != nil || len([]rune(receipt.Preview)) != 4096 || receipt.LoomRef != artifact.Ref {
+		t.Fatalf("receipt = %#v", receipt)
+	}
+}
+
+func decodeReceiptResult(content string, output any) error {
+	var receipt struct {
+		Result json.RawMessage `json:"result"`
+	}
+	if err := json.Unmarshal([]byte(content), &receipt); err != nil {
+		return err
+	}
+	return json.Unmarshal(receipt.Result, output)
 }
 
 func runtimeHasTool(runtime *Runtime, name string) bool {

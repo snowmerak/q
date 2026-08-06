@@ -51,7 +51,7 @@ func (f *fakeAgentTools) Tools() []client.Tool {
 
 func (f *fakeAgentTools) Call(_ context.Context, call client.ToolCall) (client.ToolResult, error) {
 	f.calls = append(f.calls, call)
-	return client.ToolResult{Content: `{"path":"main.go"}`}, nil
+	return client.ToolResult{Content: `{"loom_ref":"loom://0123456789abcdef0123456789abcdef","stored":true,"result":{"path":"main.go"}}`}, nil
 }
 
 type toolCallingClient struct {
@@ -1016,7 +1016,8 @@ func TestChatExecutesToolCallsAndContinuesTurn(t *testing.T) {
 	assistantCall := continuation.Messages[len(continuation.Messages)-2]
 	toolResult := continuation.Messages[len(continuation.Messages)-1]
 	if len(assistantCall.ToolCalls) != 1 || toolResult.Role != client.RoleTool ||
-		toolResult.ToolCallID != "call-1" || len(agentTools.calls) != 1 {
+		toolResult.ToolCallID != "call-1" || len(agentTools.calls) != 1 ||
+		!strings.Contains(toolResult.Content, `"loom_ref":"loom://0123456789abcdef0123456789abcdef"`) {
 		t.Fatalf("assistant call = %#v, tool result = %#v, calls = %#v", assistantCall, toolResult, agentTools.calls)
 	}
 	for requestIndex, request := range configuredClient.requests {

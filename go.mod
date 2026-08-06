@@ -11,6 +11,7 @@ require (
 	github.com/OneOfOne/xxhash v1.2.8
 	github.com/blevesearch/bleve/v2 v2.6.0
 	github.com/charmbracelet/x/ansi v0.11.7
+	github.com/dop251/goja v0.0.0-20260806115107-493f22071ef6
 	github.com/modelcontextprotocol/go-sdk v1.7.0
 	github.com/snowmerak/llm-provider v0.0.0-20260802095120-519c056c6741
 	golang.org/x/text v0.40.0
@@ -50,8 +51,11 @@ require (
 	github.com/clipperhouse/displaywidth v0.11.0 // indirect
 	github.com/clipperhouse/uax29/v2 v2.7.0 // indirect
 	github.com/dlclark/regexp2 v1.11.0 // indirect
+	github.com/dlclark/regexp2/v2 v2.5.2 // indirect
+	github.com/go-sourcemap/sourcemap v2.1.3+incompatible // indirect
 	github.com/golang/snappy v1.0.0 // indirect
 	github.com/google/jsonschema-go v0.4.3 // indirect
+	github.com/google/pprof v0.0.0-20260402051712-545e8a4df936 // indirect
 	github.com/gorilla/css v1.0.1 // indirect
 	github.com/json-iterator/go v0.0.0-20171115153421-f7279a603ede // indirect
 	github.com/kr/pretty v0.3.1 // indirect
