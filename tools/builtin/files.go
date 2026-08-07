@@ -10,9 +10,8 @@ import (
 )
 
 type WriteFileInput struct {
-	Path      string `json:"path" jsonschema:"Workspace-relative or in-workspace absolute destination path."`
-	Content   string `json:"content" jsonschema:"Complete literal file content."`
-	Overwrite bool   `json:"overwrite,omitempty" jsonschema:"Allow replacing an existing regular file. Defaults to false."`
+	Path    string `json:"path" jsonschema:"Workspace-relative or in-workspace absolute destination path."`
+	Content string `json:"content" jsonschema:"Complete literal file content."`
 }
 
 type WriteFileOutput struct {
@@ -27,17 +26,16 @@ func (fs *FS) WriteFile(input WriteFileInput) (WriteFileOutput, error) {
 	}
 	fs.mu.Lock()
 	defer fs.mu.Unlock()
+	permission := os.FileMode(0o644)
 	if info, err := os.Stat(path); err == nil {
 		if !info.Mode().IsRegular() {
 			return WriteFileOutput{}, fmt.Errorf("[E_PATH] destination is not a regular file")
 		}
-		if !input.Overwrite {
-			return WriteFileOutput{}, fmt.Errorf("[E_EXISTS] destination already exists; set overwrite to true")
-		}
+		permission = info.Mode().Perm()
 	} else if !os.IsNotExist(err) {
 		return WriteFileOutput{}, err
 	}
-	if err := atomicWriteFile(path, []byte(input.Content), 0o644); err != nil {
+	if err := atomicWriteFile(path, []byte(input.Content), permission); err != nil {
 		return WriteFileOutput{}, err
 	}
 	return WriteFileOutput{Path: input.Path, Bytes: len([]byte(input.Content))}, nil

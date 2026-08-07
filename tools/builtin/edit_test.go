@@ -117,8 +117,11 @@ func TestBasicFileAndDirectoryOperations(t *testing.T) {
 	if _, err := fs.WriteFile(WriteFileInput{Path: "a/b/file.txt", Content: "hello"}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := fs.WriteFile(WriteFileInput{Path: "a/b/file.txt", Content: "clobber"}); err == nil {
-		t.Fatal("write_file overwrote without explicit permission")
+	if _, err := fs.WriteFile(WriteFileInput{Path: "a/b/file.txt", Content: "clobber"}); err != nil {
+		t.Fatalf("write_file did not replace existing file: %v", err)
+	}
+	if body, err := os.ReadFile(filepath.Join(fs.Root, "a/b/file.txt")); err != nil || string(body) != "clobber" {
+		t.Fatalf("replaced file = %q, err = %v", body, err)
 	}
 	if _, err := fs.CopyPath(CopyPathInput{Source: "a", Destination: "copy"}); err != nil {
 		t.Fatal(err)

@@ -53,7 +53,7 @@ func Register(server *mcp.Server, root string, dependencies Dependencies) (*FS, 
 
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "write_file",
-		Description: "Create a text file atomically, or replace it only when overwrite is explicitly true. Prefer edit_file for existing text files.",
+		Description: "Atomically write complete text file content, creating the file or replacing an existing regular file. Prefer edit_file when a targeted change is practical.",
 		Annotations: &mcp.ToolAnnotations{DestructiveHint: &destructive, IdempotentHint: true},
 	}, valueHandler(fs.WriteFile))
 

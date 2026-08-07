@@ -12,7 +12,7 @@ Builtin tools:
 
 - `read_file`: bounded text reads with `LINE#HASH:` anchors
 - `edit_file`: atomic, stale-safe `replace`, `append`, and `prepend` edits
-- `write_file`: create or explicitly overwrite a complete file
+- `write_file`: atomically create or replace a complete file
 - `list_directory`, `create_directory`
 - `move_path`, `copy_path`, `remove_path`
 - `run_command`: start a shell command in a workspace directory
