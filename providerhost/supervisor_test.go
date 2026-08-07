@@ -60,8 +60,7 @@ func TestSupervisorStartsAndStopsCurrentExecutableChild(t *testing.T) {
 	}
 }
 
-func TestSupervisorReportsProviderDiscoveryErrorWithoutLeakingAPIKey(t *testing.T) {
-	const apiKey = "secret-test-api-key"
+func TestSupervisorAllowsUnavailableProvider(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		if request.URL.Path != "/v1/models" {
 			http.NotFound(writer, request)
@@ -69,7 +68,7 @@ func TestSupervisorReportsProviderDiscoveryErrorWithoutLeakingAPIKey(t *testing.
 		}
 		writer.Header().Set("Content-Type", "application/json")
 		writer.WriteHeader(http.StatusUnauthorized)
-		_, _ = writer.Write([]byte(`{"type":"error","error":{"type":"authentication_error","message":"invalid x-api-key secret-test-api-key"}}`))
+		_, _ = writer.Write([]byte(`{"type":"error","error":{"type":"authentication_error","message":"offline"}}`))
 	}))
 	defer upstream.Close()
 
@@ -80,25 +79,14 @@ func TestSupervisorReportsProviderDiscoveryErrorWithoutLeakingAPIKey(t *testing.
 		ctx: ctx, store: Store{Dir: t.TempDir()}, executable: os.Args[0],
 		argsPrefix: []string{"-test.run=TestGatewayChildProcess", "--"},
 	}
-	_, err := supervisor.Prepare(ctx, gateway.Config{Providers: []gateway.ProviderConfig{{
+	prepared, err := supervisor.Prepare(ctx, gateway.Config{Providers: []gateway.ProviderConfig{{
 		ID: "claude", Type: "anthropic", Enabled: true,
-		BaseURL: upstream.URL + "/v1", APIKey: apiKey,
+		BaseURL: upstream.URL + "/v1", APIKey: "unused-test-key",
 	}}})
-	if err == nil {
-		t.Fatal("provider with rejected API key unexpectedly started")
+	if err != nil {
+		t.Fatalf("unavailable provider prevented Gateway startup: %v", err)
 	}
-	message := err.Error()
-	for _, expected := range []string{"claude", "HTTP 401", "authentication_error"} {
-		if !strings.Contains(message, expected) {
-			t.Errorf("error %q does not contain %q", message, expected)
-		}
-	}
-	if strings.Contains(message, apiKey) {
-		t.Fatalf("error leaked API key: %q", message)
-	}
-	if strings.Contains(message, "returned no models") {
-		t.Fatalf("error hid provider failure: %q", message)
-	}
+	defer prepared.close()
 }
 
 func TestGatewayChildProcess(t *testing.T) {

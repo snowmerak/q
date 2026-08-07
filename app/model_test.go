@@ -31,9 +31,11 @@ func (f *fakeProviderRuntime) Apply(_ context.Context, value gateway.Config) err
 }
 
 type fakeClient struct {
-	requests []client.ChatRequest
-	models   []client.Model
-	closed   bool
+	requests      []client.ChatRequest
+	models        []client.Model
+	listModelsErr error
+	listCalls     int
+	closed        bool
 }
 
 type fakeAgentTools struct {
@@ -102,6 +104,10 @@ func (f *fakeClient) Chat(_ context.Context, request client.ChatRequest) (*clien
 }
 
 func (f *fakeClient) ListModels(context.Context) ([]client.Model, error) {
+	f.listCalls++
+	if f.listModelsErr != nil {
+		return nil, f.listModelsErr
+	}
 	return append([]client.Model(nil), f.models...), nil
 }
 
@@ -596,7 +602,7 @@ func TestManagedSlashProviderOpensProviderList(t *testing.T) {
 	}
 }
 
-func TestManagedProviderAddAppliesThenOpensModelPicker(t *testing.T) {
+func TestManagedProviderAddAppliesWithoutRediscoveringModels(t *testing.T) {
 	value := config.Default()
 	value.Provider.Model = "local/test-model"
 	value.UseManagedGateway()
@@ -631,8 +637,8 @@ func TestManagedProviderAddAppliesThenOpensModelPicker(t *testing.T) {
 		runtime.config.Providers[1].Type != "codex" || runtime.config.Providers[1].Prefix != "code" {
 		t.Fatalf("runtime applies = %d, config = %#v", runtime.applies, runtime.config)
 	}
-	if m.screen != screenModels || len(m.models) != 2 {
-		t.Fatalf("screen = %v, models = %#v, status = %q", m.screen, m.models, m.status)
+	if m.screen != screenProviders || fake.listCalls != 0 || !strings.Contains(m.status, "saved") {
+		t.Fatalf("screen = %v, model list calls = %d, status = %q", m.screen, fake.listCalls, m.status)
 	}
 }
 func TestGatewayContextOverrideAppliesAndRefreshesActiveCache(t *testing.T) {
@@ -718,6 +724,7 @@ func TestGatewayContextOverrideCanBeClearedWithoutDroppingOtherMetadata(t *testi
 	value := config.Default()
 	value.Provider.Model = "local/test-model"
 	value.Provider.ContextWindow = 200000
+	value.Context.Window = 65536
 	value.UseManagedGateway()
 	runtime := &fakeProviderRuntime{
 		endpoint: "http://127.0.0.1:54321/v1",
@@ -752,7 +759,8 @@ func TestGatewayContextOverrideCanBeClearedWithoutDroppingOtherMetadata(t *testi
 	if !found || metadata.ContextLength != 0 || metadata.MaxOutputTokens != 8192 {
 		t.Fatalf("remaining metadata = %#v, found = %v", metadata, found)
 	}
-	if m.config.Provider.ContextWindow != 131072 || m.memory.Stats().ContextWindow != 131072 {
+	if m.config.Provider.ContextWindow != 0 || m.config.EffectiveContextWindow() != 65536 ||
+		m.memory.Stats().ContextWindow != 65536 {
 		t.Fatalf("refreshed context = %#v, stats = %#v", m.config.Provider, m.memory.Stats())
 	}
 }
@@ -780,6 +788,36 @@ func TestFirstManagedProviderIsAlwaysAppended(t *testing.T) {
 	m = updated.(model)
 	if runtime.applies != 1 || len(runtime.config.Providers) != 1 || runtime.config.Providers[0].ID != "codex" {
 		t.Fatalf("runtime applies = %d, config = %#v", runtime.applies, runtime.config)
+	}
+}
+
+func TestFirstManagedProviderIsSavedWhenModelDiscoveryFails(t *testing.T) {
+	runtime := &fakeProviderRuntime{endpoint: "http://127.0.0.1:54321/v1"}
+	fake := &fakeClient{listModelsErr: errors.New("provider is offline")}
+	m := newManagedModel(context.Background(), config.Store{Dir: t.TempDir()}, func(config.Config) (chatClient, error) {
+		return fake, nil
+	}, runtime)
+	m.setup[setupProviderID].SetValue("offline")
+	m.setup[setupBaseURL].SetValue("http://127.0.0.1:1/v1")
+	m.setup[setupAPIKeyEnv].SetValue("")
+
+	updated, command := m.applyProviderEdit()
+	m = updated.(model)
+	if command == nil {
+		t.Fatal("provider apply command is nil")
+	}
+	updated, _ = m.Update(command())
+	m = updated.(model)
+
+	if runtime.applies != 1 || len(runtime.config.Providers) != 1 ||
+		len(m.gatewayConfig.Providers) != 1 || m.gatewayConfig.Providers[0].ID != "offline" {
+		t.Fatalf("runtime applies = %d, runtime config = %#v, UI config = %#v", runtime.applies, runtime.config, m.gatewayConfig)
+	}
+	if m.screen != screenProviders || m.client != fake || fake.listCalls != 1 {
+		t.Fatalf("screen = %v, client = %#v, model list calls = %d", m.screen, m.client, fake.listCalls)
+	}
+	if !strings.Contains(m.status, "Provider settings saved") || !strings.Contains(m.status, "model discovery unavailable") {
+		t.Fatalf("status = %q", m.status)
 	}
 }
 

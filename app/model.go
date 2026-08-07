@@ -217,6 +217,9 @@ type providersAppliedMsg struct {
 	gatewayConfig gateway.Config
 	client        chatClient
 	modelTarget   string
+	openModels    bool
+	replaceClient bool
+	warning       string
 	err           error
 }
 
@@ -396,10 +399,12 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, m.setup[m.setupFocus].Focus()
 		}
-		if m.client != nil && m.client != message.client {
-			_ = m.client.Close()
+		if message.replaceClient {
+			if m.client != nil && m.client != message.client {
+				_ = m.client.Close()
+			}
+			m.client = message.client
 		}
-		m.client = message.client
 		m.gatewayConfig = message.gatewayConfig
 		if strings.TrimSpace(m.config.Provider.Model) == "" || m.config.Provider.Model == "model-discovery" {
 			m.config = message.config
@@ -411,14 +416,27 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.conversationID = ""
 		m.compactionTarget = 0
-		m.enterModelPicker(message.config, message.models)
-		if message.modelTarget != "" {
-			m.modelChooseTarget = true
-			m.modelPickerStage = modelPickerModels
-			m.modelTarget = message.modelTarget
-			m.selectConfiguredModel()
+		if message.openModels {
+			m.enterModelPicker(message.config, message.models)
+			return m, m.modelPickerFocus()
 		}
-		return m, m.modelPickerFocus()
+		if message.modelTarget != "" {
+			m.screen = screenModels
+			m.modelPickerStage = modelPickerModels
+			m.draftConfig = message.config
+			m.modelContextWindow.Blur()
+			m.status = "Gateway model metadata saved"
+			if message.warning != "" {
+				m.status += " · " + message.warning
+			}
+			return m, m.modelFilter.Focus()
+		}
+		m.enterProviderList()
+		m.status = "Provider settings saved"
+		if message.warning != "" {
+			m.status += " · " + message.warning
+		}
+		return m, nil
 	case agentEventMsg:
 		event := message.event
 		if event.call != nil {
@@ -772,7 +790,7 @@ func (m model) applyGatewayConfig(candidate gateway.Config) (tea.Model, tea.Cmd)
 	} else {
 		m.modelChooseTarget = false
 	}
-	m.status = "Starting and validating Gateway…"
+	m.status = "Saving Gateway settings…"
 	for index := range m.setup {
 		m.setup[index].Blur()
 	}
@@ -783,38 +801,67 @@ func (m model) applyGatewayConfig(candidate gateway.Config) (tea.Model, tea.Cmd)
 		m.modelReturn = screenSetup
 	}
 	value := m.config
+	needsModelDiscovery := strings.TrimSpace(value.Provider.Model) == "" || value.Provider.Model == "model-discovery"
 	if strings.TrimSpace(value.Provider.Model) == "" {
 		value = config.Default()
 		value.Provider.Model = "model-discovery"
 	}
 	value.UseManagedGateway()
+	if returnTarget != "" && m.modelSelection.ID == value.Provider.Model {
+		if providerIndex, upstreamID, found := gatewayModelLocation(candidate, m.modelSelection.ID); found {
+			value.Provider.ContextWindow = candidate.Providers[providerIndex].ModelMetadata[upstreamID].ContextLength
+		}
+	}
 	runtime := m.runtime
 	factory := m.factory
 	return m, func() tea.Msg {
 		if err := runtime.Apply(m.ctx, candidate); err != nil {
 			return providersAppliedMsg{err: err}
 		}
+		result := providersAppliedMsg{
+			config: value, gatewayConfig: candidate, modelTarget: returnTarget, replaceClient: true,
+		}
+		if returnTarget != "" {
+			if err := m.store.Save(value); err != nil {
+				result.warning = "save active context cache: " + err.Error()
+			}
+		}
 		configuredClient, err := factory(value)
 		if err != nil {
-			return providersAppliedMsg{err: err}
+			result.warning = appendStatusWarning(result.warning, "refresh Gateway client: "+err.Error())
+			return result
+		}
+		result.client = configuredClient
+		if !needsModelDiscovery {
+			return result
 		}
 		models, err := configuredClient.ListModels(m.ctx)
 		if err != nil {
-			_ = configuredClient.Close()
-			return providersAppliedMsg{err: fmt.Errorf("load Gateway models: %w", err)}
+			result.warning = appendStatusWarning(result.warning, "model discovery unavailable: "+err.Error())
+			return result
+		}
+		if len(models) == 0 {
+			result.warning = appendStatusWarning(result.warning, "Gateway returned no models")
+			return result
 		}
 		if refreshed, found := refreshModelContextWindow(value, models); found {
 			value = refreshed
 			if err := m.store.Save(value); err != nil {
-				_ = configuredClient.Close()
-				return providersAppliedMsg{err: err}
+				result.warning = appendStatusWarning(result.warning, "save model context: "+err.Error())
 			}
 		}
-		return providersAppliedMsg{
-			models: models, config: value, gatewayConfig: candidate, client: configuredClient,
-			modelTarget: returnTarget,
-		}
+		result.models = models
+		result.config = value
+		result.openModels = true
+		return result
 	}
+}
+
+func appendStatusWarning(existing, next string) string {
+	if existing == "" {
+		return next
+	}
+	return existing + " · " + next
 }
 
 func enabledProviderCount(value gateway.Config) int {

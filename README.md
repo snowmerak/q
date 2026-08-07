@@ -22,8 +22,9 @@ do not require CGO, FAISS, or a vector-specific build tag.
 On first launch, q asks for a provider ID, optional model prefix, selectable API
 type, endpoint, and API-key source. API types are selected with `Left`/`Right`;
 the prefix defaults to the provider ID when omitted. q then starts an internal
-Gateway on a random loopback port, validates the provider through `/v1/models`,
-and opens a searchable model selector. Personal configuration is stored at:
+Gateway on a random loopback port and opens a searchable model selector when
+model discovery is available. Provider settings are saved even when an
+upstream is temporarily unavailable. Personal configuration is stored at:
 
 ```text
 ~/.q/config.yaml
@@ -105,13 +106,16 @@ providers are exposed together using their provider ID or configured prefix:
 
 Gateway `model_metadata` overrides upstream metadata before model IDs receive
 their configured prefix. In the `/model` catalog, press `Ctrl+E` on a model to
-set or clear its Gateway `context_length`; q replaces and validates the Gateway,
-reloads `/v1/models`, and updates the active context cache immediately.
+set or clear its Gateway `context_length`; q replaces the Gateway without
+requiring provider discovery to succeed and updates the active context cache
+from the override.
 
 The child binds only to `127.0.0.1:0` and reports its assigned port to the
-parent over a private stdout handshake. Provider changes start and probe a new
-child before q saves the candidate configuration and replaces the old child.
-Failed changes leave the running Gateway untouched.
+parent over a private stdout handshake. Provider changes start a new child
+before q saves the candidate configuration and replaces the old child. Startup
+does not require provider model discovery to succeed, so an offline provider
+does not block adding, editing, enabling, disabling, or deleting provider
+settings. A child startup failure leaves the running Gateway untouched.
 
 On POSIX systems the directory is created with user-only permissions and both
 configuration files are written with mode `0600`. Prefer an environment

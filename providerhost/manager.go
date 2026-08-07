@@ -39,8 +39,10 @@ func (m *Manager) LoadAndStart(ctx context.Context) error {
 	return nil
 }
 
-// Apply prepares and probes a replacement child before persisting or activating
-// it. A failed candidate leaves the current Gateway untouched.
+// Apply starts a replacement child before persisting or activating it. Provider
+// connectivity is deliberately not checked here: an unavailable upstream must
+// not prevent its settings from being saved. A child startup failure still
+// leaves the current Gateway untouched.
 func (m *Manager) Apply(ctx context.Context, value gateway.Config) error {
 	value.Listen = "127.0.0.1:0"
 	prepared, err := m.supervisor.Prepare(ctx, value)
