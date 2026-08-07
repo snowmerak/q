@@ -4,7 +4,8 @@
 
 이 문서는 역할별 모델 할당과 서브에이전트 orchestration을 위한 아이디어
 초안이다. 실제 인터페이스와 구현은 추후 통합할 라이브러리를 확인한 뒤
-확정한다. 현재 코드에는 이 설계를 구현하지 않는다.
+확정한다. 현재 코드는 메인 agent의 `ask_to_user`와 `task_complete` 제어만
+구현하며, 역할별 subagent runner와 orchestration graph는 아직 구현하지 않는다.
 
 ## 목표
 
@@ -157,6 +158,13 @@ type AgentResult struct {
 재사용한다.
 
 ## orchestration builtin tools
+
+현재 메인 agent loop에는 아래 두 도구의 스키마와 실행 제어가 구현되어 있다.
+`ask_to_user`는 TUI 입력을 기다렸다가 같은 tool loop를 재개하고,
+`task_complete`는 구조화된 결과를 최종 assistant 응답으로 변환하며 실행을
+종료한다. 일반 assistant 응답만 반환하면 loop가 종료되지 않고
+`task_complete` 호출을 요구한다. 향후 subagent runner에도 같은 제어기를
+연결해야 한다.
 
 root와 서브에이전트를 포함한 모든 agent 실행 모드가 사용자와의 상호작용
 경계와 자신의 실행 종료를 명시적으로 표현할 수 있도록 다음 builtin tool이

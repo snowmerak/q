@@ -99,12 +99,17 @@ func (m *model) archiveToolCall(call client.ToolCall) {
 	}
 	content := call.Function.Arguments
 	tags := []string{"chat", "tool", "call"}
+	kind := sessionstore.KindEvent
+	if call.Function.Name == askToUserToolName {
+		kind = sessionstore.KindQuestion
+		tags = append(tags, "question")
+	}
 	if isArchiveReadTool(call.Function.Name) {
 		content = ""
 		tags = append(tags, "archive-read")
 	}
 	m.appendArchive(sessionstore.Record{
-		ID: toolCallRecordID(m.runID, call.ID), Kind: sessionstore.KindEvent,
+		ID: toolCallRecordID(m.runID, call.ID), Kind: kind,
 		RunID: m.runID, TaskID: call.ID, Role: "tool", Status: sessionstore.StatusRunning,
 		Summary: call.Function.Name, Content: content, Tags: tags, Payload: payload,
 	})

@@ -157,6 +157,10 @@ type model struct {
 	waiting          bool
 	compacting       bool
 	submitPending    bool
+	asking           bool
+	pendingQuestion  askToUserInput
+	questionAnswer   chan askToUserOutput
+	questionEvents   <-chan agentEvent
 }
 
 type configuredMsg struct {
@@ -183,6 +187,8 @@ type chatResultMsg struct {
 type agentEvent struct {
 	message         *client.Message
 	call            *client.ToolCall
+	question        *askToUserInput
+	answer          chan askToUserOutput
 	toolIsError     bool
 	response        *client.ChatResponse
 	requestEstimate int
@@ -444,6 +450,17 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			m.status = "Running tool · " + describeToolCall(*event.call)
 			return m, tea.Batch(m.spinner.Tick, waitAgentEvent(message.events))
 		}
+		if event.question != nil {
+			m.asking = true
+			m.pendingQuestion = *event.question
+			m.questionAnswer = event.answer
+			m.questionEvents = message.events
+			m.input.Reset()
+			m.input.Placeholder = "Answer the question…"
+			m.status = "Waiting for your answer"
+			m.resize(m.width, m.height)
+			return m, m.input.Focus()
+		}
 		if event.message != nil {
 			m.messages = append(m.messages, *event.message)
 			if m.memory != nil {
@@ -470,6 +487,10 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	case chatResultMsg:
 		m.waiting = false
 		m.compacting = false
+		m.asking = false
+		m.pendingQuestion = askToUserInput{}
+		m.questionAnswer = nil
+		m.questionEvents = nil
 		m.pendingMessage = client.Message{}
 		if message.err != nil {
 			m.compactionTarget = 0
@@ -597,7 +618,7 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		var command tea.Cmd
 		m.viewport, command = m.viewport.Update(message)
 		commands = append(commands, command)
-		if m.waiting {
+		if m.waiting && !m.asking {
 			m.spinner, command = m.spinner.Update(message)
 			commands = append(commands, command)
 		} else {
@@ -1364,7 +1385,7 @@ func (m model) updateChatKey(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	var command tea.Cmd
 	m.viewport, command = m.viewport.Update(key)
 	commands = append(commands, command)
-	if !m.waiting {
+	if !m.waiting || m.asking {
 		m.input, command = m.input.Update(key)
 		commands = append(commands, command)
 	}
@@ -1372,7 +1393,7 @@ func (m model) updateChatKey(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m model) deferChatSubmit() (tea.Model, tea.Cmd) {
-	if m.waiting || m.submitPending || m.client == nil {
+	if (m.waiting && !m.asking) || m.submitPending || m.client == nil {
 		return m, nil
 	}
 	m.submitPending = true
@@ -1384,6 +1405,9 @@ func (m model) deferChatSubmit() (tea.Model, tea.Cmd) {
 func (m model) submitChat() (tea.Model, tea.Cmd) {
 	m.submitPending = false
 	content := strings.TrimSpace(norm.NFC.String(m.input.Value()))
+	if m.asking {
+		return m.submitQuestionAnswer(content)
+	}
 	if m.waiting || content == "" || m.client == nil {
 		return m, nil
 	}
@@ -1435,6 +1459,32 @@ func (m model) submitChat() (tea.Model, tea.Cmd) {
 	return m, tea.Batch(m.spinner.Tick, m.sendChatRequest())
 }
 
+func (m model) submitQuestionAnswer(content string) (tea.Model, tea.Cmd) {
+	if content == "" || m.questionAnswer == nil || m.questionEvents == nil {
+		return m, nil
+	}
+	answer := answerForQuestion(m.pendingQuestion, content)
+	answerChannel := m.questionAnswer
+	events := m.questionEvents
+	m.asking = false
+	m.pendingQuestion = askToUserInput{}
+	m.questionAnswer = nil
+	m.questionEvents = nil
+	m.input.Reset()
+	m.input.Placeholder = "Type a message…"
+	m.input.Blur()
+	m.status = "Thinking…"
+	m.resize(m.width, m.height)
+	return m, tea.Batch(m.spinner.Tick, func() tea.Msg {
+		select {
+		case answerChannel <- answer:
+			return waitAgentEvent(events)()
+		case <-m.ctx.Done():
+			return agentEventMsg{events: events, event: agentEvent{err: m.ctx.Err()}}
+		}
+	})
+}
+
 func (m model) compactContext(plan memory.Plan) tea.Cmd {
 	configuredClient := m.client
 	maxTokens := plan.OutputBudget
@@ -1478,7 +1528,7 @@ func streamAgentLoop(
 	events chan<- agentEvent,
 ) {
 	defer close(events)
-	availableTools := toolRuntime.Tools()
+	availableTools := append(toolRuntime.Tools(), orchestrationTools()...)
 	toolCalls := 0
 	for round := 0; round < maximumToolRounds; round++ {
 		requestEstimate := memory.CountMessages(history)
@@ -1497,18 +1547,16 @@ func streamAgentLoop(
 		if assistant.Role == "" {
 			assistant.Role = client.RoleAssistant
 		}
-		if len(assistant.ToolCalls) == 0 {
-			response.Choices[0].Message = assistant
-			if response.ConversationID == "" {
-				response.ConversationID = conversationID
-			}
-			emitAgentEvent(ctx, events, agentEvent{
-				response: response, requestEstimate: requestEstimate, toolCalls: toolCalls,
-			})
-			return
-		}
 		if response.ConversationID != "" {
 			conversationID = response.ConversationID
+		}
+		if len(assistant.ToolCalls) == 0 {
+			history = append(history, assistant, client.Message{
+				Role: client.RoleDeveloper,
+				Content: "The task is not complete until you call task_complete. Call task_complete now with the final outcome and summary; " +
+					"if more work is required, continue the work first.",
+			})
+			continue
 		}
 		for index := range assistant.ToolCalls {
 			if assistant.ToolCalls[index].ID == "" {
@@ -1522,6 +1570,59 @@ func streamAgentLoop(
 		for _, call := range assistant.ToolCalls {
 			callCopy := call
 			if !emitAgentEvent(ctx, events, agentEvent{call: &callCopy}) {
+				return
+			}
+			if call.Function.Name == askToUserToolName {
+				input, parseErr := parseAskToUser(call.Function.Arguments)
+				if parseErr != nil {
+					message := orchestrationToolResult(call, "invalid ask_to_user arguments: "+parseErr.Error(), true)
+					history = append(history, message)
+					if !emitAgentEvent(ctx, events, agentEvent{message: &message, toolIsError: true}) {
+						return
+					}
+					continue
+				}
+				answerChannel := make(chan askToUserOutput, 1)
+				if !emitAgentEvent(ctx, events, agentEvent{question: &input, answer: answerChannel}) {
+					return
+				}
+				var answer askToUserOutput
+				select {
+				case answer = <-answerChannel:
+				case <-ctx.Done():
+					return
+				}
+				body, _ := json.Marshal(answer)
+				message := orchestrationToolResult(call, string(body), false)
+				history = append(history, message)
+				if !emitAgentEvent(ctx, events, agentEvent{message: &message}) {
+					return
+				}
+				continue
+			}
+			if call.Function.Name == taskCompleteToolName {
+				completion, parseErr := parseTaskComplete(call.Function.Arguments)
+				if parseErr != nil {
+					message := orchestrationToolResult(call, "invalid task_complete arguments: "+parseErr.Error(), true)
+					history = append(history, message)
+					if !emitAgentEvent(ctx, events, agentEvent{message: &message, toolIsError: true}) {
+						return
+					}
+					continue
+				}
+				body, _ := json.Marshal(completion)
+				message := orchestrationToolResult(call, string(body), false)
+				history = append(history, message)
+				if !emitAgentEvent(ctx, events, agentEvent{message: &message}) {
+					return
+				}
+				response.Choices[0].Message = client.Message{
+					Role: client.RoleAssistant, Content: renderTaskCompletion(completion),
+				}
+				response.ConversationID = conversationID
+				emitAgentEvent(ctx, events, agentEvent{
+					response: response, requestEstimate: requestEstimate, toolCalls: toolCalls,
+				})
 				return
 			}
 			result, callErr := toolRuntime.Call(ctx, call)
@@ -1544,6 +1645,16 @@ func streamAgentLoop(
 		}
 	}
 	emitAgentEvent(ctx, events, agentEvent{err: fmt.Errorf("agent stopped after %d tool rounds", maximumToolRounds)})
+}
+
+func orchestrationToolResult(call client.ToolCall, content string, isError bool) client.Message {
+	if isError {
+		content = "Tool error: " + content
+	}
+	return client.Message{
+		Role: client.RoleTool, Name: call.Function.Name,
+		ToolCallID: call.ID, Content: content,
+	}
 }
 
 func emitAgentEvent(ctx context.Context, events chan<- agentEvent, event agentEvent) bool {
@@ -1591,6 +1702,10 @@ func (m *model) rollbackPendingMessage() {
 	m.pendingMessage = client.Message{}
 	m.waiting = false
 	m.compacting = false
+	m.asking = false
+	m.pendingQuestion = askToUserInput{}
+	m.questionAnswer = nil
+	m.questionEvents = nil
 	m.compactionTarget = 0
 	m.submitPending = false
 	m.refreshTranscript()
@@ -1605,6 +1720,29 @@ func (m *model) enterChat(value config.Config, configuredClient chatClient) {
 	if value.Provider.SystemPrompt != "" {
 		m.messages = append(m.messages, client.Message{Role: client.RoleSystem, Content: value.Provider.SystemPrompt})
 	}
+	m.appendRuntimeMessages()
+	m.memory = memory.New(memoryPolicy(value), m.messages)
+	m.conversationID = ""
+	m.runID = ""
+	m.waiting = false
+	m.compacting = false
+	m.asking = false
+	m.pendingQuestion = askToUserInput{}
+	m.questionAnswer = nil
+	m.questionEvents = nil
+	m.compactionTarget = 0
+	m.submitPending = false
+	m.pendingMessage = client.Message{}
+	m.status = ""
+	m.input = newChatInput()
+	m.restoreWorkspaceSession()
+	m.ensureRunID()
+	m.resize(m.width, m.height)
+	m.input.Focus()
+	m.refreshTranscript()
+}
+
+func (m *model) appendRuntimeMessages() {
 	if m.toolRuntime != nil && m.workspaceStore != nil {
 		environment := m.toolRuntime.Environment()
 		workspacePrompt := fmt.Sprintf(
@@ -1621,21 +1759,14 @@ func (m *model) enterChat(value config.Config, configuredClient chatClient) {
 			Content: workspacePrompt,
 		})
 	}
-	m.memory = memory.New(memoryPolicy(value), m.messages)
-	m.conversationID = ""
-	m.runID = ""
-	m.waiting = false
-	m.compacting = false
-	m.compactionTarget = 0
-	m.submitPending = false
-	m.pendingMessage = client.Message{}
-	m.status = ""
-	m.input = newChatInput()
-	m.restoreWorkspaceSession()
-	m.ensureRunID()
-	m.resize(m.width, m.height)
-	m.input.Focus()
-	m.refreshTranscript()
+	if m.toolRuntime != nil {
+		m.messages = append(m.messages, client.Message{
+			Role: client.RoleDeveloper, Name: "q_orchestration",
+			Content: "Use ask_to_user when a required user decision or missing detail prevents safe progress; wait for the answer and then continue the same task. " +
+				"Every user task must finish with exactly one successful task_complete call. Do not finish with a plain assistant response. " +
+				"Call task_complete only after all requested work and appropriate verification are done, or with outcome blocked when progress genuinely cannot continue.",
+		})
+	}
 }
 
 func (m *model) enterSetup(value config.Config) {
@@ -1844,6 +1975,7 @@ func (m *model) resetConversation() {
 	if m.config.Provider.SystemPrompt != "" {
 		m.messages = append(m.messages, client.Message{Role: client.RoleSystem, Content: m.config.Provider.SystemPrompt})
 	}
+	m.appendRuntimeMessages()
 	if m.memory == nil {
 		m.memory = memory.New(memoryPolicy(m.config), m.messages)
 	} else {
@@ -1854,6 +1986,11 @@ func (m *model) resetConversation() {
 	m.ensureRunID()
 	m.compactionTarget = 0
 	m.submitPending = false
+	m.asking = false
+	m.pendingQuestion = askToUserInput{}
+	m.questionAnswer = nil
+	m.questionEvents = nil
+	m.input.Placeholder = "Type a message…"
 	m.status = "Conversation cleared"
 	if m.workspaceStore != nil {
 		if err := m.workspaceStore.Clear(); err != nil {
@@ -1937,6 +2074,10 @@ func (m *model) resize(width, height int) {
 	chromeHeight := 10
 	if m.workspaceStore != nil {
 		chromeHeight++
+	}
+	if m.asking {
+		question := renderToolPanel("Question", renderPendingQuestion(m.pendingQuestion), max(36, contentWidth), m.dark)
+		chromeHeight += lipgloss.Height(question) + 1
 	}
 	m.viewport.SetHeight(max(3, m.height-chromeHeight))
 	m.refreshTranscript()
@@ -2100,6 +2241,10 @@ func describeToolCall(call client.ToolCall) string {
 		return "remove " + stringArgument(arguments, "path")
 	case "move_path", "copy_path":
 		return call.Function.Name + " " + stringArgument(arguments, "source") + " → " + stringArgument(arguments, "destination")
+	case askToUserToolName:
+		return "ask user · " + stringArgument(arguments, "question")
+	case taskCompleteToolName:
+		return "complete task · " + stringArgument(arguments, "outcome")
 	}
 	return call.Function.Name
 }
@@ -2714,11 +2859,16 @@ func (m model) renderedChatHeaderHeight() int {
 func (m model) viewChat() string {
 	header := m.chatHeader()
 	status := m.status
-	if m.waiting {
+	if m.waiting && !m.asking {
 		status = m.spinner.View() + " " + status
 	}
 	footer := helpStyle.Render("enter send · shift+enter newline · /clear · /model · /provider · esc quit")
-	content := header + "\n\n" + m.viewport.View() + "\n" + m.input.View()
+	content := header + "\n\n" + m.viewport.View() + "\n"
+	if m.asking {
+		content += renderToolPanel("Question", renderPendingQuestion(m.pendingQuestion), m.chatFrameWidth(), m.dark) + "\n"
+		footer = helpStyle.Render("enter answer · shift+enter newline · esc quit")
+	}
+	content += m.input.View()
 	if status != "" {
 		content += "\n" + subtleStyle.Render(status)
 	}

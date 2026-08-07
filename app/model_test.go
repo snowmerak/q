@@ -65,6 +65,40 @@ type toolCallingClient struct {
 	requests []client.ChatRequest
 }
 
+type askingClient struct {
+	requests []client.ChatRequest
+}
+
+func (f *askingClient) Chat(_ context.Context, request client.ChatRequest) (*client.ChatResponse, error) {
+	request.Messages = append([]client.Message(nil), request.Messages...)
+	f.requests = append(f.requests, request)
+	if len(f.requests) == 1 {
+		return &client.ChatResponse{Choices: []client.Choice{{Message: client.Message{
+			Role: client.RoleAssistant,
+			ToolCalls: []client.ToolCall{{
+				ID: "ask-1", Type: client.ToolTypeFunction,
+				Function: client.FunctionCall{
+					Name:      askToUserToolName,
+					Arguments: `{"question":"Which color?","context":"Choose the accent color.","choices":[{"id":"blue","label":"Blue"},{"id":"green","label":"Green"}]}`,
+				},
+			}},
+		}}}}, nil
+	}
+	return &client.ChatResponse{Choices: []client.Choice{{Message: client.Message{
+		Role: client.RoleAssistant,
+		ToolCalls: []client.ToolCall{{
+			ID: "complete-question", Type: client.ToolTypeFunction,
+			Function: client.FunctionCall{
+				Name:      taskCompleteToolName,
+				Arguments: `{"outcome":"succeeded","summary":"Selected blue"}`,
+			},
+		}},
+	}}}}, nil
+}
+
+func (f *askingClient) ListModels(context.Context) ([]client.Model, error) { return nil, nil }
+func (f *askingClient) Close() error                                       { return nil }
+
 func (f *toolCallingClient) Chat(_ context.Context, request client.ChatRequest) (*client.ChatResponse, error) {
 	request.Messages = append([]client.Message(nil), request.Messages...)
 	f.requests = append(f.requests, request)
@@ -80,10 +114,24 @@ func (f *toolCallingClient) Chat(_ context.Context, request client.ChatRequest) 
 			}}},
 		}, nil
 	}
+	if len(f.requests) == 2 {
+		return &client.ChatResponse{
+			ConversationID: "tool-conversation",
+			Choices: []client.Choice{{Message: client.Message{
+				Role: client.RoleAssistant, Content: "Created main.go",
+			}}},
+		}, nil
+	}
 	return &client.ChatResponse{
 		ConversationID: "tool-conversation",
 		Choices: []client.Choice{{Message: client.Message{
-			Role: client.RoleAssistant, Content: "Created main.go",
+			Role: client.RoleAssistant,
+			ToolCalls: []client.ToolCall{{
+				ID: "complete-1", Type: client.ToolTypeFunction,
+				Function: client.FunctionCall{
+					Name: taskCompleteToolName, Arguments: `{"outcome":"succeeded","summary":"Created main.go"}`,
+				},
+			}},
 		}}},
 	}, nil
 }
@@ -1046,11 +1094,17 @@ func TestChatExecutesToolCallsAndContinuesTurn(t *testing.T) {
 		t.Fatalf("tool-result progress = status %q, messages %#v", m.status, m.messages)
 	}
 
-	updated, _ = m.Update(nextAgentMessage(t, command))
-	m = updated.(model)
+	for m.waiting {
+		updated, command = m.Update(nextAgentMessage(t, command))
+		m = updated.(model)
+	}
 
-	if len(configuredClient.requests) != 2 || len(configuredClient.requests[0].Tools) != 1 {
+	if len(configuredClient.requests) != 3 || len(configuredClient.requests[0].Tools) != 3 {
 		t.Fatalf("agent requests = %#v", configuredClient.requests)
+	}
+	if configuredClient.requests[0].Tools[1].Function.Name != askToUserToolName ||
+		configuredClient.requests[0].Tools[2].Function.Name != taskCompleteToolName {
+		t.Fatalf("orchestration tools = %#v", configuredClient.requests[0].Tools)
 	}
 	runtimePromptFound := false
 	for _, message := range configuredClient.requests[0].Messages {
@@ -1065,6 +1119,12 @@ func TestChatExecutesToolCallsAndContinuesTurn(t *testing.T) {
 	continuation := configuredClient.requests[1]
 	if continuation.ConversationID != "tool-conversation" || len(continuation.Messages) < 2 {
 		t.Fatalf("tool continuation = %#v", continuation)
+	}
+	completionRequest := configuredClient.requests[2]
+	if len(completionRequest.Messages) < 2 || !strings.Contains(
+		completionRequest.Messages[len(completionRequest.Messages)-1].Content, "not complete until you call task_complete",
+	) {
+		t.Fatalf("completion enforcement request = %#v", completionRequest.Messages)
 	}
 	assistantCall := continuation.Messages[len(continuation.Messages)-2]
 	toolResult := continuation.Messages[len(continuation.Messages)-1]
@@ -1091,10 +1151,10 @@ func TestChatExecutesToolCallsAndContinuesTurn(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(archived.Hits) != 5 {
+	if len(archived.Hits) != 8 {
 		t.Fatalf("archived records = %#v", archived.Hits)
 	}
-	var archivedToolCall, archivedToolResult *sessionstore.Record
+	var archivedToolCall, archivedToolResult, archivedCompletionCall, archivedCompletionResult *sessionstore.Record
 	for index := range archived.Hits {
 		record := &archived.Hits[index].Record
 		if record.Kind == sessionstore.KindEvent && record.TaskID == "call-1" {
@@ -1103,12 +1163,63 @@ func TestChatExecutesToolCallsAndContinuesTurn(t *testing.T) {
 		if record.Kind == sessionstore.KindResult && record.TaskID == "call-1" {
 			archivedToolResult = record
 		}
+		if record.Kind == sessionstore.KindEvent && record.TaskID == "complete-1" {
+			archivedCompletionCall = record
+		}
+		if record.Kind == sessionstore.KindResult && record.TaskID == "complete-1" {
+			archivedCompletionResult = record
+		}
 	}
 	if archivedToolCall == nil || archivedToolCall.Status != sessionstore.StatusRunning || archivedToolCall.Summary != "write_file" {
 		t.Fatalf("tool call record = %#v", archivedToolCall)
 	}
 	if archivedToolResult == nil || archivedToolResult.Status != sessionstore.StatusSucceeded || archivedToolResult.ParentID != archivedToolCall.ID {
 		t.Fatalf("tool result record = %#v", archivedToolResult)
+	}
+	if archivedCompletionCall == nil || archivedCompletionResult == nil || archivedCompletionResult.ParentID != archivedCompletionCall.ID {
+		t.Fatalf("completion records = call %#v, result %#v", archivedCompletionCall, archivedCompletionResult)
+	}
+}
+
+func TestAskToUserPausesForAnswerAndResumesSameTask(t *testing.T) {
+	value := config.Default()
+	value.Provider.Model = "tool-model"
+	configuredClient := &askingClient{}
+	m := newModel(context.Background(), config.Store{Dir: t.TempDir()}, nil)
+	m.toolRuntime = &fakeAgentTools{}
+	m.enterChat(value, configuredClient)
+	m.input.SetValue("choose a color")
+	updated, command := m.submitChat()
+	m = updated.(model)
+
+	for index := 0; index < 3; index++ {
+		updated, command = m.Update(nextAgentMessage(t, command))
+		m = updated.(model)
+	}
+	if !m.asking || !m.waiting || m.pendingQuestion.Question != "Which color?" ||
+		!strings.Contains(m.View().Content, "blue · Blue") {
+		t.Fatalf("question state = asking %v, waiting %v, question %#v, view %q", m.asking, m.waiting, m.pendingQuestion, m.View().Content)
+	}
+
+	m.input.SetValue("blue")
+	updated, command = m.submitChat()
+	m = updated.(model)
+	if m.asking || !m.waiting || command == nil {
+		t.Fatalf("answer submit state = asking %v, waiting %v, command %v", m.asking, m.waiting, command != nil)
+	}
+	for m.waiting {
+		updated, command = m.Update(nextAgentMessage(t, command))
+		m = updated.(model)
+	}
+	if len(configuredClient.requests) != 2 {
+		t.Fatalf("requests = %#v", configuredClient.requests)
+	}
+	continuation := configuredClient.requests[1]
+	if len(continuation.Messages) < 2 || !strings.Contains(continuation.Messages[len(continuation.Messages)-1].Content, `"selected_choice_id":"blue"`) {
+		t.Fatalf("question continuation = %#v", continuation.Messages)
+	}
+	if m.messages[len(m.messages)-1].Content != "Selected blue" {
+		t.Fatalf("final transcript = %#v", m.messages)
 	}
 }
 
