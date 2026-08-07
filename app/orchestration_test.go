@@ -5,14 +5,25 @@ import (
 	"testing"
 )
 
-func TestOrchestrationToolsExposeQuestionAndRequiredCompletion(t *testing.T) {
+func TestOrchestrationToolsExposeConditionalTaskLifecycle(t *testing.T) {
 	available := orchestrationTools()
-	if len(available) != 2 || available[0].Function.Name != askToUserToolName ||
-		available[1].Function.Name != taskCompleteToolName {
+	if len(available) != 3 || available[0].Function.Name != taskStartToolName ||
+		available[1].Function.Name != askToUserToolName || available[2].Function.Name != taskCompleteToolName {
 		t.Fatalf("orchestration tools = %#v", available)
 	}
-	if !strings.Contains(available[1].Function.Description, "Every task must end") {
-		t.Fatalf("task_complete description = %q", available[1].Function.Description)
+	if !strings.Contains(available[0].Function.Description, "Direct, short answers do not need") ||
+		!strings.Contains(available[2].Function.Description, "previously started") {
+		t.Fatalf("task lifecycle descriptions = start %q, complete %q", available[0].Function.Description, available[2].Function.Description)
+	}
+}
+
+func TestTaskStartRequiresObjective(t *testing.T) {
+	started, err := parseTaskStart(`{"objective":"Implement the feature","completion_criteria":["Tests pass"]}`)
+	if err != nil || started.Objective != "Implement the feature" {
+		t.Fatalf("task start = %#v, err = %v", started, err)
+	}
+	if _, err := parseTaskStart(`{"objective":" "}`); err == nil {
+		t.Fatal("task_start without objective was accepted")
 	}
 }
 

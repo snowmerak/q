@@ -12,8 +12,19 @@ import (
 
 const (
 	askToUserToolName    = "ask_to_user"
+	taskStartToolName    = "task_start"
 	taskCompleteToolName = "task_complete"
 )
+
+type taskStartInput struct {
+	Objective          string   `json:"objective"`
+	CompletionCriteria []string `json:"completion_criteria,omitempty"`
+}
+
+type taskStartOutput struct {
+	Started   bool   `json:"started"`
+	Objective string `json:"objective"`
+}
 
 type askToUserChoice struct {
 	ID          string `json:"id"`
@@ -43,6 +54,22 @@ type taskCompleteInput struct {
 
 func orchestrationTools() []client.Tool {
 	return []client.Tool{
+		{
+			Type: client.ToolTypeFunction,
+			Function: client.FunctionDefinition{
+				Name:        taskStartToolName,
+				Description: "Start an explicit task lifecycle for work that requires tools or multiple steps. Direct, short answers do not need task_start. Once started, the task must end with task_complete.",
+				Parameters: map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"objective":           map[string]any{"type": "string"},
+						"completion_criteria": stringArraySchema(),
+					},
+					"required":             []string{"objective"},
+					"additionalProperties": false,
+				},
+			},
+		},
 		{
 			Type: client.ToolTypeFunction,
 			Function: client.FunctionDefinition{
@@ -76,7 +103,7 @@ func orchestrationTools() []client.Tool {
 			Type: client.ToolTypeFunction,
 			Function: client.FunctionDefinition{
 				Name:        taskCompleteToolName,
-				Description: "Finish the current task and return its structured result. Every task must end with exactly one successful task_complete call.",
+				Description: "Finish a task previously started with task_start and return its structured result. It cannot complete a turn that did not call task_start.",
 				Parameters: map[string]any{
 					"type": "object",
 					"properties": map[string]any{
@@ -93,6 +120,21 @@ func orchestrationTools() []client.Tool {
 			},
 		},
 	}
+}
+
+func parseTaskStart(arguments string) (taskStartInput, error) {
+	var input taskStartInput
+	if err := decodeToolArguments(arguments, &input); err != nil {
+		return taskStartInput{}, err
+	}
+	input.Objective = strings.TrimSpace(input.Objective)
+	if input.Objective == "" {
+		return taskStartInput{}, errors.New("objective is required")
+	}
+	for index := range input.CompletionCriteria {
+		input.CompletionCriteria[index] = strings.TrimSpace(input.CompletionCriteria[index])
+	}
+	return input, nil
 }
 
 func stringArraySchema() map[string]any {

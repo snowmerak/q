@@ -1530,6 +1530,7 @@ func streamAgentLoop(
 	defer close(events)
 	availableTools := append(toolRuntime.Tools(), orchestrationTools()...)
 	toolCalls := 0
+	taskStarted := false
 	for round := 0; round < maximumToolRounds; round++ {
 		requestEstimate := memory.CountMessages(history)
 		response, err := configuredClient.Chat(ctx, client.ChatRequest{
@@ -1551,9 +1552,18 @@ func streamAgentLoop(
 			conversationID = response.ConversationID
 		}
 		if len(assistant.ToolCalls) == 0 {
+			if !taskStarted {
+				response.Choices[0].Message = assistant
+				response.ConversationID = conversationID
+				emitAgentEvent(ctx, events, agentEvent{
+					response: response, requestEstimate: requestEstimate, toolCalls: toolCalls,
+				})
+				return
+			}
 			history = append(history, assistant, client.Message{
 				Role: client.RoleDeveloper,
-				Content: "The task is not complete until you call task_complete. Call task_complete now with the final outcome and summary; " +
+				Content: "This task was started with task_start and is not complete until you call task_complete. " +
+					"Call task_complete now with the final outcome and summary; " +
 					"if more work is required, continue the work first.",
 			})
 			continue
@@ -1571,6 +1581,28 @@ func streamAgentLoop(
 			callCopy := call
 			if !emitAgentEvent(ctx, events, agentEvent{call: &callCopy}) {
 				return
+			}
+			if call.Function.Name == taskStartToolName {
+				input, parseErr := parseTaskStart(call.Function.Arguments)
+				if parseErr == nil && taskStarted {
+					parseErr = errors.New("task_start was already called for this turn")
+				}
+				if parseErr != nil {
+					message := orchestrationToolResult(call, "invalid task_start arguments: "+parseErr.Error(), true)
+					history = append(history, message)
+					if !emitAgentEvent(ctx, events, agentEvent{message: &message, toolIsError: true}) {
+						return
+					}
+					continue
+				}
+				taskStarted = true
+				body, _ := json.Marshal(taskStartOutput{Started: true, Objective: input.Objective})
+				message := orchestrationToolResult(call, string(body), false)
+				history = append(history, message)
+				if !emitAgentEvent(ctx, events, agentEvent{message: &message}) {
+					return
+				}
+				continue
 			}
 			if call.Function.Name == askToUserToolName {
 				input, parseErr := parseAskToUser(call.Function.Arguments)
@@ -1601,6 +1633,14 @@ func streamAgentLoop(
 				continue
 			}
 			if call.Function.Name == taskCompleteToolName {
+				if !taskStarted {
+					message := orchestrationToolResult(call, "task_complete requires a successful task_start call in the same turn", true)
+					history = append(history, message)
+					if !emitAgentEvent(ctx, events, agentEvent{message: &message, toolIsError: true}) {
+						return
+					}
+					continue
+				}
 				completion, parseErr := parseTaskComplete(call.Function.Arguments)
 				if parseErr != nil {
 					message := orchestrationToolResult(call, "invalid task_complete arguments: "+parseErr.Error(), true)
@@ -1762,9 +1802,9 @@ func (m *model) appendRuntimeMessages() {
 	if m.toolRuntime != nil {
 		m.messages = append(m.messages, client.Message{
 			Role: client.RoleDeveloper, Name: "q_orchestration",
-			Content: "Use ask_to_user when a required user decision or missing detail prevents safe progress; wait for the answer and then continue the same task. " +
-				"Every user task must finish with exactly one successful task_complete call. Do not finish with a plain assistant response. " +
-				"Call task_complete only after all requested work and appropriate verification are done, or with outcome blocked when progress genuinely cannot continue.",
+			Content: "Use task_start before work that requires tools or multiple execution steps. Once task_start succeeds, that task must finish with exactly one successful task_complete call; do not finish it with a plain assistant response. " +
+				"Direct questions and short answers may finish normally without task_start or task_complete. Use ask_to_user when a required user decision or missing detail prevents safe progress; wait for the answer and then continue the same turn. " +
+				"Call task_complete only for a started task after all requested work and appropriate verification are done, or with outcome blocked when progress genuinely cannot continue.",
 		})
 	}
 }
@@ -2241,6 +2281,8 @@ func describeToolCall(call client.ToolCall) string {
 		return "remove " + stringArgument(arguments, "path")
 	case "move_path", "copy_path":
 		return call.Function.Name + " " + stringArgument(arguments, "source") + " → " + stringArgument(arguments, "destination")
+	case taskStartToolName:
+		return "start task · " + stringArgument(arguments, "objective")
 	case askToUserToolName:
 		return "ask user · " + stringArgument(arguments, "question")
 	case taskCompleteToolName:

@@ -167,12 +167,13 @@ Each chat request exposes q's workspace-scoped builtin MCP tools to the model.
 The accompanying developer context states the host OS, CPU architecture, and
 the exact shell used by `run_command`, so generated commands use the correct
 syntax and quoting from the first tool call.
-The main agent also receives two orchestration tools. `ask_to_user` pauses the
+The main agent also receives three orchestration tools. `task_start` begins an
+explicit task lifecycle for tool-using or multi-step work. Once started, that
+task must finish with `task_complete`; a plain final assistant response is fed
+back to the model with a completion reminder. Turns that do not call
+`task_start` may finish with a direct assistant answer. `ask_to_user` pauses the
 current tool loop, renders the question and optional choices in the TUI, and
-resumes the same task with the user's answer. `task_complete` returns the
-structured terminal result and ends the loop. Every tool-enabled user task must
-finish with `task_complete`; a plain final assistant response is fed back to the
-model with a completion reminder instead of ending the task.
+resumes the same turn with the user's answer.
 When the model returns tool calls, q executes them, appends their results to the
 conversation, and continues the same turn automatically. Tool calls, command
 status, exit codes, and command output are rendered as live progress while the

@@ -4,8 +4,9 @@
 
 이 문서는 역할별 모델 할당과 서브에이전트 orchestration을 위한 아이디어
 초안이다. 실제 인터페이스와 구현은 추후 통합할 라이브러리를 확인한 뒤
-확정한다. 현재 코드는 메인 agent의 `ask_to_user`와 `task_complete` 제어만
-구현하며, 역할별 subagent runner와 orchestration graph는 아직 구현하지 않는다.
+확정한다. 현재 코드는 메인 agent의 `task_start`, `ask_to_user`,
+`task_complete` 제어만 구현하며, 역할별 subagent runner와 orchestration graph는
+아직 구현하지 않는다.
 
 ## 목표
 
@@ -159,17 +160,30 @@ type AgentResult struct {
 
 ## orchestration builtin tools
 
-현재 메인 agent loop에는 아래 두 도구의 스키마와 실행 제어가 구현되어 있다.
-`ask_to_user`는 TUI 입력을 기다렸다가 같은 tool loop를 재개하고,
+현재 메인 agent loop에는 아래 세 도구의 스키마와 실행 제어가 구현되어 있다.
+`task_start`가 명시적인 task lifecycle을 시작하고, 시작된 task만
+`task_complete`를 필수로 요구한다. 시작하지 않은 turn은 일반 assistant 단답으로
+종료할 수 있다. `ask_to_user`는 TUI 입력을 기다렸다가 같은 tool loop를 재개하고,
 `task_complete`는 구조화된 결과를 최종 assistant 응답으로 변환하며 실행을
-종료한다. 일반 assistant 응답만 반환하면 loop가 종료되지 않고
-`task_complete` 호출을 요구한다. 향후 subagent runner에도 같은 제어기를
-연결해야 한다.
+종료한다. 향후 subagent runner에도 같은 제어기를 연결해야 한다.
 
 root와 서브에이전트를 포함한 모든 agent 실행 모드가 사용자와의 상호작용
 경계와 자신의 실행 종료를 명시적으로 표현할 수 있도록 다음 builtin tool이
-필요하다. 두 도구는 역할이나 모드별 allowlist 대상이 아니며 모든 agent run에
+필요하다. 세 도구는 역할이나 모드별 allowlist 대상이 아니며 모든 agent run에
 기본으로 등록한다.
+
+### `task_start`
+
+도구 사용이나 여러 실행 단계가 필요한 작업의 lifecycle을 명시적으로 시작한다.
+단순 질문과 짧은 답변에는 호출하지 않아도 된다. 성공적으로 호출된 뒤에는 같은
+turn이 반드시 `task_complete`로 끝나야 한다.
+
+```go
+type TaskStartInput struct {
+    Objective          string
+    CompletionCriteria []string
+}
+```
 
 ### `ask_to_user`
 
@@ -224,12 +238,13 @@ type TaskCompleteInput struct {
 }
 ```
 
+`task_complete`는 같은 turn에서 `task_start`가 성공한 경우에만 허용한다.
 `Outcome`의 초기 후보는 `succeeded`와 `blocked`다. 시스템 오류나 취소는 모델이
 선언하는 outcome과 구분해 runner lifecycle에서 처리한다. `task_complete`가
 호출되면 해당 에이전트의 model/tool loop를 종료하고 입력을 `AgentResult`로
 변환한다.
 
-두 도구는 workspace 파일 도구를 제공하는 builtin MCP server와 성격이 다르다.
+세 도구는 workspace 파일 도구를 제공하는 builtin MCP server와 성격이 다르다.
 TUI 상호작용과 agent lifecycle을 제어해야 하므로 공통 agent runner가 항상
 등록하거나 tool call을 가로채 처리하는 orchestration 전용 builtin으로 둔다.
 

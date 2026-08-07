@@ -69,19 +69,51 @@ type askingClient struct {
 	requests []client.ChatRequest
 }
 
-func (f *askingClient) Chat(_ context.Context, request client.ChatRequest) (*client.ChatResponse, error) {
+type prematureCompletionClient struct {
+	requests []client.ChatRequest
+}
+
+func (f *prematureCompletionClient) Chat(_ context.Context, request client.ChatRequest) (*client.ChatResponse, error) {
 	request.Messages = append([]client.Message(nil), request.Messages...)
 	f.requests = append(f.requests, request)
 	if len(f.requests) == 1 {
 		return &client.ChatResponse{Choices: []client.Choice{{Message: client.Message{
 			Role: client.RoleAssistant,
 			ToolCalls: []client.ToolCall{{
-				ID: "ask-1", Type: client.ToolTypeFunction,
-				Function: client.FunctionCall{
-					Name:      askToUserToolName,
-					Arguments: `{"question":"Which color?","context":"Choose the accent color.","choices":[{"id":"blue","label":"Blue"},{"id":"green","label":"Green"}]}`,
-				},
+				ID: "premature-complete", Type: client.ToolTypeFunction,
+				Function: client.FunctionCall{Name: taskCompleteToolName, Arguments: `{"outcome":"succeeded","summary":"Too early"}`},
 			}},
+		}}}}, nil
+	}
+	return &client.ChatResponse{Choices: []client.Choice{{Message: client.Message{
+		Role: client.RoleAssistant, Content: "Direct answer after correction",
+	}}}}, nil
+}
+
+func (f *prematureCompletionClient) ListModels(context.Context) ([]client.Model, error) {
+	return nil, nil
+}
+func (f *prematureCompletionClient) Close() error { return nil }
+
+func (f *askingClient) Chat(_ context.Context, request client.ChatRequest) (*client.ChatResponse, error) {
+	request.Messages = append([]client.Message(nil), request.Messages...)
+	f.requests = append(f.requests, request)
+	if len(f.requests) == 1 {
+		return &client.ChatResponse{Choices: []client.Choice{{Message: client.Message{
+			Role: client.RoleAssistant,
+			ToolCalls: []client.ToolCall{
+				{
+					ID: "start-question", Type: client.ToolTypeFunction,
+					Function: client.FunctionCall{Name: taskStartToolName, Arguments: `{"objective":"Choose an accent color"}`},
+				},
+				{
+					ID: "ask-1", Type: client.ToolTypeFunction,
+					Function: client.FunctionCall{
+						Name:      askToUserToolName,
+						Arguments: `{"question":"Which color?","context":"Choose the accent color.","choices":[{"id":"blue","label":"Blue"},{"id":"green","label":"Green"}]}`,
+					},
+				},
+			},
 		}}}}, nil
 	}
 	return &client.ChatResponse{Choices: []client.Choice{{Message: client.Message{
@@ -107,10 +139,16 @@ func (f *toolCallingClient) Chat(_ context.Context, request client.ChatRequest) 
 			ConversationID: "tool-conversation",
 			Choices: []client.Choice{{Message: client.Message{
 				Role: client.RoleAssistant,
-				ToolCalls: []client.ToolCall{{
-					ID: "call-1", Type: client.ToolTypeFunction,
-					Function: client.FunctionCall{Name: "write_file", Arguments: `{"path":"main.go","content":"package main"}`},
-				}},
+				ToolCalls: []client.ToolCall{
+					{
+						ID: "start-1", Type: client.ToolTypeFunction,
+						Function: client.FunctionCall{Name: taskStartToolName, Arguments: `{"objective":"Create a Go project"}`},
+					},
+					{
+						ID: "call-1", Type: client.ToolTypeFunction,
+						Function: client.FunctionCall{Name: "write_file", Arguments: `{"path":"main.go","content":"package main"}`},
+					},
+				},
 			}}},
 		}, nil
 	}
@@ -1078,8 +1116,20 @@ func TestChatExecutesToolCallsAndContinuesTurn(t *testing.T) {
 	updated, command = m.Update(nextAgentMessage(t, command))
 	m = updated.(model)
 	if !m.waiting || !strings.Contains(m.status, "Preparing tool") ||
-		len(m.messages[len(m.messages)-1].ToolCalls) != 1 {
+		len(m.messages[len(m.messages)-1].ToolCalls) != 2 {
 		t.Fatalf("tool-call progress = waiting %v, status %q, messages %#v", m.waiting, m.status, m.messages)
+	}
+
+	updated, command = m.Update(nextAgentMessage(t, command))
+	m = updated.(model)
+	if !strings.Contains(m.status, "Running tool") || !strings.Contains(m.status, "start task") {
+		t.Fatalf("task-start progress status = %q", m.status)
+	}
+
+	updated, command = m.Update(nextAgentMessage(t, command))
+	m = updated.(model)
+	if m.messages[len(m.messages)-1].Name != taskStartToolName || !strings.Contains(m.status, "completed") {
+		t.Fatalf("task-start result = status %q, messages %#v", m.status, m.messages)
 	}
 
 	updated, command = m.Update(nextAgentMessage(t, command))
@@ -1099,11 +1149,12 @@ func TestChatExecutesToolCallsAndContinuesTurn(t *testing.T) {
 		m = updated.(model)
 	}
 
-	if len(configuredClient.requests) != 3 || len(configuredClient.requests[0].Tools) != 3 {
+	if len(configuredClient.requests) != 3 || len(configuredClient.requests[0].Tools) != 4 {
 		t.Fatalf("agent requests = %#v", configuredClient.requests)
 	}
-	if configuredClient.requests[0].Tools[1].Function.Name != askToUserToolName ||
-		configuredClient.requests[0].Tools[2].Function.Name != taskCompleteToolName {
+	if configuredClient.requests[0].Tools[1].Function.Name != taskStartToolName ||
+		configuredClient.requests[0].Tools[2].Function.Name != askToUserToolName ||
+		configuredClient.requests[0].Tools[3].Function.Name != taskCompleteToolName {
 		t.Fatalf("orchestration tools = %#v", configuredClient.requests[0].Tools)
 	}
 	runtimePromptFound := false
@@ -1122,13 +1173,20 @@ func TestChatExecutesToolCallsAndContinuesTurn(t *testing.T) {
 	}
 	completionRequest := configuredClient.requests[2]
 	if len(completionRequest.Messages) < 2 || !strings.Contains(
-		completionRequest.Messages[len(completionRequest.Messages)-1].Content, "not complete until you call task_complete",
+		completionRequest.Messages[len(completionRequest.Messages)-1].Content, "started with task_start",
 	) {
 		t.Fatalf("completion enforcement request = %#v", completionRequest.Messages)
 	}
-	assistantCall := continuation.Messages[len(continuation.Messages)-2]
-	toolResult := continuation.Messages[len(continuation.Messages)-1]
-	if len(assistantCall.ToolCalls) != 1 || toolResult.Role != client.RoleTool ||
+	var assistantCall, toolResult client.Message
+	for _, message := range continuation.Messages {
+		if len(message.ToolCalls) == 2 {
+			assistantCall = message
+		}
+		if message.ToolCallID == "call-1" {
+			toolResult = message
+		}
+	}
+	if len(assistantCall.ToolCalls) != 2 || toolResult.Role != client.RoleTool ||
 		toolResult.ToolCallID != "call-1" || len(agentTools.calls) != 1 ||
 		!strings.Contains(toolResult.Content, `"loom_ref":"loom://0123456789abcdef0123456789abcdef"`) {
 		t.Fatalf("assistant call = %#v, tool result = %#v, calls = %#v", assistantCall, toolResult, agentTools.calls)
@@ -1151,7 +1209,7 @@ func TestChatExecutesToolCallsAndContinuesTurn(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(archived.Hits) != 8 {
+	if len(archived.Hits) != 10 {
 		t.Fatalf("archived records = %#v", archived.Hits)
 	}
 	var archivedToolCall, archivedToolResult, archivedCompletionCall, archivedCompletionResult *sessionstore.Record
@@ -1192,7 +1250,7 @@ func TestAskToUserPausesForAnswerAndResumesSameTask(t *testing.T) {
 	updated, command := m.submitChat()
 	m = updated.(model)
 
-	for index := 0; index < 3; index++ {
+	for index := 0; index < 5; index++ {
 		updated, command = m.Update(nextAgentMessage(t, command))
 		m = updated.(model)
 	}
@@ -1220,6 +1278,54 @@ func TestAskToUserPausesForAnswerAndResumesSameTask(t *testing.T) {
 	}
 	if m.messages[len(m.messages)-1].Content != "Selected blue" {
 		t.Fatalf("final transcript = %#v", m.messages)
+	}
+}
+
+func TestDirectAnswerDoesNotRequireTaskLifecycle(t *testing.T) {
+	value := config.Default()
+	value.Provider.Model = "tool-model"
+	configuredClient := &fakeClient{}
+	m := newModel(context.Background(), config.Store{Dir: t.TempDir()}, nil)
+	m.toolRuntime = &fakeAgentTools{}
+	m.enterChat(value, configuredClient)
+	m.input.SetValue("answer briefly")
+	updated, command := m.submitChat()
+	m = updated.(model)
+
+	updated, _ = m.Update(nextAgentMessage(t, command))
+	m = updated.(model)
+	if m.waiting || len(configuredClient.requests) != 1 ||
+		m.messages[len(m.messages)-1].Content != "reply 1" {
+		t.Fatalf("direct answer state = waiting %v, requests %d, messages %#v", m.waiting, len(configuredClient.requests), m.messages)
+	}
+}
+
+func TestTaskCompleteIsRejectedWithoutTaskStart(t *testing.T) {
+	value := config.Default()
+	value.Provider.Model = "tool-model"
+	configuredClient := &prematureCompletionClient{}
+	m := newModel(context.Background(), config.Store{Dir: t.TempDir()}, nil)
+	m.toolRuntime = &fakeAgentTools{}
+	m.enterChat(value, configuredClient)
+	m.input.SetValue("answer directly")
+	updated, command := m.submitChat()
+	m = updated.(model)
+
+	for m.waiting {
+		updated, command = m.Update(nextAgentMessage(t, command))
+		m = updated.(model)
+	}
+	if len(configuredClient.requests) != 2 || m.messages[len(m.messages)-1].Content != "Direct answer after correction" {
+		t.Fatalf("requests = %d, transcript = %#v", len(configuredClient.requests), m.messages)
+	}
+	foundError := false
+	for _, message := range m.messages {
+		if message.Name == taskCompleteToolName && strings.Contains(message.Content, "requires a successful task_start") {
+			foundError = true
+		}
+	}
+	if !foundError {
+		t.Fatalf("premature task_complete error missing from transcript: %#v", m.messages)
 	}
 }
 
