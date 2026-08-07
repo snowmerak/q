@@ -132,6 +132,23 @@ func (m *model) archiveFailure(stage string, err error) {
 	})
 }
 
+func (m *model) archiveTurnCancelled(reason string) {
+	if m.archive == nil {
+		return
+	}
+	m.ensureRunID()
+	payload, err := json.Marshal(map[string]string{"reason": reason})
+	if err != nil {
+		m.rememberArchiveError(err)
+		return
+	}
+	m.appendArchive(sessionstore.Record{
+		Kind: sessionstore.KindEvent, RunID: m.runID, Model: m.config.Provider.Model,
+		Status: sessionstore.StatusCancelled, Summary: "turn interrupted", Content: reason,
+		Tags: []string{"chat", "turn", "cancelled"}, Payload: payload,
+	})
+}
+
 func (m *model) archiveSummary(content string) {
 	if m.archive == nil || strings.TrimSpace(content) == "" {
 		return

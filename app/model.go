@@ -161,6 +161,11 @@ type model struct {
 	pendingQuestion  askToUserInput
 	questionAnswer   chan askToUserOutput
 	questionEvents   <-chan agentEvent
+	questionTurnID   uint64
+	turnContext      context.Context
+	turnCancel       context.CancelFunc
+	turnID           uint64
+	turnMessageStart int
 }
 
 type configuredMsg struct {
@@ -177,6 +182,7 @@ type modelTargetConfiguredMsg struct {
 }
 
 type chatResultMsg struct {
+	turnID          uint64
 	response        *client.ChatResponse
 	intermediate    []client.Message
 	requestEstimate int
@@ -199,9 +205,11 @@ type agentEvent struct {
 type agentEventMsg struct {
 	events <-chan agentEvent
 	event  agentEvent
+	turnID uint64
 }
 
 type compactionResultMsg struct {
+	turnID   uint64
 	response *client.ChatResponse
 	plan     memory.Plan
 	err      error
@@ -444,17 +452,21 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case agentEventMsg:
+		if message.turnID != 0 && message.turnID != m.turnID {
+			return m, nil
+		}
 		event := message.event
 		if event.call != nil {
 			m.archiveToolCall(*event.call)
 			m.status = "Running tool · " + describeToolCall(*event.call)
-			return m, tea.Batch(m.spinner.Tick, waitAgentEvent(message.events))
+			return m, tea.Batch(m.spinner.Tick, waitAgentEvent(message.events, message.turnID))
 		}
 		if event.question != nil {
 			m.asking = true
 			m.pendingQuestion = *event.question
 			m.questionAnswer = event.answer
 			m.questionEvents = message.events
+			m.questionTurnID = message.turnID
 			m.input.Reset()
 			m.input.Placeholder = "Answer the question…"
 			m.status = "Waiting for your answer"
@@ -478,19 +490,25 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 				m.status = "Thinking… · " + event.message.Name + " completed"
 			}
 			m.refreshTranscript()
-			return m, tea.Batch(m.spinner.Tick, waitAgentEvent(message.events))
+			return m, tea.Batch(m.spinner.Tick, waitAgentEvent(message.events, message.turnID))
 		}
 		return m.Update(chatResultMsg{
+			turnID:   message.turnID,
 			response: event.response, requestEstimate: event.requestEstimate,
 			toolCalls: event.toolCalls, err: event.err,
 		})
 	case chatResultMsg:
+		if message.turnID != 0 && message.turnID != m.turnID {
+			return m, nil
+		}
+		m.finishTurn()
 		m.waiting = false
 		m.compacting = false
 		m.asking = false
 		m.pendingQuestion = askToUserInput{}
 		m.questionAnswer = nil
 		m.questionEvents = nil
+		m.questionTurnID = 0
 		m.pendingMessage = client.Message{}
 		if message.err != nil {
 			m.compactionTarget = 0
@@ -554,6 +572,9 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, m.input.Focus()
 	case compactionResultMsg:
+		if message.turnID != 0 && message.turnID != m.turnID {
+			return m, nil
+		}
 		if message.err != nil {
 			m.rollbackPendingMessage()
 			m.archiveFailure("context_compaction", message.err)
@@ -599,6 +620,9 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 
 	if key, ok := message.(tea.KeyPressMsg); ok {
 		if key.String() == "ctrl+c" {
+			if m.screen == screenChat && m.waiting {
+				return m.interruptTurn()
+			}
 			return m, tea.Quit
 		}
 		if m.screen == screenSetup {
@@ -1428,6 +1452,8 @@ func (m model) submitChat() (tea.Model, tea.Cmd) {
 		m.enterSetup(m.config)
 		return m, m.setup[m.setupFocus].Focus()
 	}
+	m.beginTurn()
+	m.turnMessageStart = len(m.messages)
 	userMessage := client.Message{Role: client.RoleUser, Content: content}
 	m.archiveMessage(userMessage, sessionstore.StatusSubmitted, false)
 	m.messages = append(m.messages, userMessage)
@@ -1466,10 +1492,13 @@ func (m model) submitQuestionAnswer(content string) (tea.Model, tea.Cmd) {
 	answer := answerForQuestion(m.pendingQuestion, content)
 	answerChannel := m.questionAnswer
 	events := m.questionEvents
+	turnID := m.questionTurnID
+	turnContext := m.activeTurnContext()
 	m.asking = false
 	m.pendingQuestion = askToUserInput{}
 	m.questionAnswer = nil
 	m.questionEvents = nil
+	m.questionTurnID = 0
 	m.input.Reset()
 	m.input.Placeholder = "Type a message…"
 	m.input.Blur()
@@ -1478,21 +1507,116 @@ func (m model) submitQuestionAnswer(content string) (tea.Model, tea.Cmd) {
 	return m, tea.Batch(m.spinner.Tick, func() tea.Msg {
 		select {
 		case answerChannel <- answer:
-			return waitAgentEvent(events)()
-		case <-m.ctx.Done():
-			return agentEventMsg{events: events, event: agentEvent{err: m.ctx.Err()}}
+			return waitAgentEvent(events, turnID)()
+		case <-turnContext.Done():
+			return agentEventMsg{events: events, event: agentEvent{err: turnContext.Err()}, turnID: turnID}
 		}
 	})
+}
+
+func (m *model) beginTurn() {
+	if m.turnCancel != nil {
+		m.turnCancel()
+	}
+	m.turnID++
+	m.turnContext, m.turnCancel = context.WithCancel(m.ctx)
+}
+
+func (m *model) finishTurn() {
+	if m.turnCancel != nil {
+		m.turnCancel()
+	}
+	m.turnContext = nil
+	m.turnCancel = nil
+	m.turnMessageStart = 0
+}
+
+func (m model) activeTurnContext() context.Context {
+	if m.turnContext != nil {
+		return m.turnContext
+	}
+	return m.ctx
+}
+
+func (m model) interruptTurn() (tea.Model, tea.Cmd) {
+	if !m.waiting {
+		return m, nil
+	}
+	if m.turnCancel != nil {
+		m.turnCancel()
+	}
+	m.turnID++
+	m.completeInterruptedToolCalls()
+	m.archiveTurnCancelled("interrupted by user")
+	m.turnContext = nil
+	m.turnCancel = nil
+	m.turnMessageStart = 0
+	m.waiting = false
+	m.compacting = false
+	m.asking = false
+	m.submitPending = false
+	m.pendingMessage = client.Message{}
+	m.pendingQuestion = askToUserInput{}
+	m.questionAnswer = nil
+	m.questionEvents = nil
+	m.questionTurnID = 0
+	m.conversationID = ""
+	m.compactionTarget = 0
+	m.input.Reset()
+	m.input.Placeholder = "Type a message…"
+	m.status = "Turn interrupted"
+	m.resize(m.width, m.height)
+	if err := m.saveWorkspaceSession(); err != nil {
+		m.status += " · " + err.Error()
+	}
+	if err := m.flushArchive(); err != nil {
+		m.status += " · archive: " + err.Error()
+	}
+	return m, m.input.Focus()
+}
+
+func (m *model) completeInterruptedToolCalls() {
+	start := min(max(m.turnMessageStart, 0), len(m.messages))
+	completed := make(map[string]struct{})
+	for _, message := range m.messages[start:] {
+		if message.Role == client.RoleTool && message.ToolCallID != "" {
+			completed[message.ToolCallID] = struct{}{}
+		}
+	}
+	for _, message := range m.messages[start:] {
+		for _, call := range message.ToolCalls {
+			if call.ID == "" {
+				continue
+			}
+			if _, found := completed[call.ID]; found {
+				continue
+			}
+			m.archiveToolCall(call)
+			cancelled := client.Message{
+				Role: client.RoleTool, Name: call.Function.Name, ToolCallID: call.ID,
+				Content: "Tool error: interrupted by user",
+			}
+			m.messages = append(m.messages, cancelled)
+			if m.memory != nil {
+				m.memory.Append(cancelled)
+			}
+			m.archiveMessage(cancelled, sessionstore.StatusCancelled, true)
+			completed[call.ID] = struct{}{}
+		}
+	}
+	m.refreshTranscript()
 }
 
 func (m model) compactContext(plan memory.Plan) tea.Cmd {
 	configuredClient := m.client
 	maxTokens := plan.OutputBudget
+	turnContext := m.activeTurnContext()
+	turnID := m.turnID
 	return func() tea.Msg {
-		response, err := configuredClient.Chat(m.ctx, client.ChatRequest{
+		response, err := configuredClient.Chat(turnContext, client.ChatRequest{
 			Messages: plan.RequestMessages(), MaxCompletionTokens: &maxTokens,
 		})
-		return compactionResultMsg{response: response, plan: plan, err: err}
+		return compactionResultMsg{turnID: turnID, response: response, plan: plan, err: err}
 	}
 }
 
@@ -1502,18 +1626,20 @@ func (m *model) sendChatRequest() tea.Cmd {
 	conversationID := m.conversationID
 	configuredClient := m.client
 	toolRuntime := m.toolRuntime
+	turnContext := m.activeTurnContext()
+	turnID := m.turnID
 	if toolRuntime == nil {
 		return func() tea.Msg {
-			response, err := configuredClient.Chat(m.ctx, client.ChatRequest{
+			response, err := configuredClient.Chat(turnContext, client.ChatRequest{
 				Messages: providerMessages(history), ConversationID: conversationID,
 			})
-			return chatResultMsg{response: response, requestEstimate: m.requestEstimate, err: err}
+			return chatResultMsg{turnID: turnID, response: response, requestEstimate: m.requestEstimate, err: err}
 		}
 	}
 	events := make(chan agentEvent)
 	return func() tea.Msg {
-		go streamAgentLoop(m.ctx, configuredClient, toolRuntime, history, conversationID, events)
-		return waitAgentEvent(events)()
+		go streamAgentLoop(turnContext, configuredClient, toolRuntime, history, conversationID, events)
+		return waitAgentEvent(events, turnID)()
 	}
 }
 
@@ -1706,13 +1832,13 @@ func emitAgentEvent(ctx context.Context, events chan<- agentEvent, event agentEv
 	}
 }
 
-func waitAgentEvent(events <-chan agentEvent) tea.Cmd {
+func waitAgentEvent(events <-chan agentEvent, turnID uint64) tea.Cmd {
 	return func() tea.Msg {
 		event, ok := <-events
 		if !ok {
 			event.err = errors.New("agent event stream closed unexpectedly")
 		}
-		return agentEventMsg{events: events, event: event}
+		return agentEventMsg{events: events, event: event, turnID: turnID}
 	}
 }
 
@@ -1730,6 +1856,7 @@ func providerMessages(messages []client.Message) []client.Message {
 }
 
 func (m *model) rollbackPendingMessage() {
+	m.finishTurn()
 	if m.pendingMessage.Content != "" {
 		if len(m.messages) > 0 {
 			m.messages = m.messages[:len(m.messages)-1]
@@ -1746,6 +1873,7 @@ func (m *model) rollbackPendingMessage() {
 	m.pendingQuestion = askToUserInput{}
 	m.questionAnswer = nil
 	m.questionEvents = nil
+	m.questionTurnID = 0
 	m.compactionTarget = 0
 	m.submitPending = false
 	m.refreshTranscript()
@@ -2904,11 +3032,15 @@ func (m model) viewChat() string {
 	if m.waiting && !m.asking {
 		status = m.spinner.View() + " " + status
 	}
-	footer := helpStyle.Render("enter send · shift+enter newline · /clear · /model · /provider · esc quit")
+	footerText := "enter send · shift+enter newline · /clear · /model · /provider · ctrl+c quit · esc quit"
+	if m.waiting {
+		footerText = "ctrl+c interrupt turn · esc quit"
+	}
+	footer := helpStyle.Render(footerText)
 	content := header + "\n\n" + m.viewport.View() + "\n"
 	if m.asking {
 		content += renderToolPanel("Question", renderPendingQuestion(m.pendingQuestion), m.chatFrameWidth(), m.dark) + "\n"
-		footer = helpStyle.Render("enter answer · shift+enter newline · esc quit")
+		footer = helpStyle.Render("enter answer · shift+enter newline · ctrl+c interrupt turn · esc quit")
 	}
 	content += m.input.View()
 	if status != "" {

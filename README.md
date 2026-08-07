@@ -133,7 +133,8 @@ Chat keys:
 - `Ctrl+L`: clear the in-memory conversation
 - `Ctrl+S`: send (alternative shortcut)
 - `Ctrl+P`: edit provider settings (alternative shortcut)
-- `Esc` or `Ctrl+C`: quit
+- `Ctrl+C`: interrupt the active turn; quit when idle
+- `Esc`: quit
 
 `/model` first shows `default` (the main chat loop), `embedding`, and then the
 built-in subagent roles. The shared catalog shows each model's Gateway context
@@ -174,6 +175,9 @@ back to the model with a completion reminder. Turns that do not call
 `task_start` may finish with a direct assistant answer. `ask_to_user` pauses the
 current tool loop, renders the question and optional choices in the TUI, and
 resumes the same turn with the user's answer.
+Interrupting an active turn cancels its request context, ignores late events,
+closes unfinished tool calls with cancelled results, and persists a cancelled
+turn event before returning to the input prompt.
 When the model returns tool calls, q executes them, appends their results to the
 conversation, and continues the same turn automatically. Tool calls, command
 status, exit codes, and command output are rendered as live progress while the

@@ -1329,6 +1329,90 @@ func TestTaskCompleteIsRejectedWithoutTaskStart(t *testing.T) {
 	}
 }
 
+func TestCtrlCInterruptsActiveTurnAndRecordsCancellation(t *testing.T) {
+	workspaceStore := workspace.Store{Root: t.TempDir()}
+	archiveStore, err := sessionstore.Open(workspaceStore.Root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	archiveWriter := sessionstore.NewWriter(archiveStore, 16)
+	t.Cleanup(func() { _ = archiveWriter.Close() })
+	value := config.Default()
+	value.Provider.Model = "tool-model"
+	m := newModel(context.Background(), config.Store{Dir: t.TempDir()}, nil)
+	m.workspaceStore = &workspaceStore
+	m.archive = archiveWriter
+	m.enterChat(value, &fakeClient{})
+	m.beginTurn()
+	oldTurnID := m.turnID
+	turnContext := m.activeTurnContext()
+	m.turnMessageStart = len(m.messages)
+	userMessage := client.Message{Role: client.RoleUser, Content: "start a long task"}
+	assistantCall := client.Message{
+		Role: client.RoleAssistant,
+		ToolCalls: []client.ToolCall{{
+			ID: "pending-call", Type: client.ToolTypeFunction,
+			Function: client.FunctionCall{Name: "run_command", Arguments: `{"command":"long-running"}`},
+		}},
+	}
+	m.messages = append(m.messages, userMessage, assistantCall)
+	m.memory.Append(userMessage)
+	m.memory.Append(assistantCall)
+	m.archiveMessage(userMessage, sessionstore.StatusSubmitted, false)
+	m.archiveMessage(assistantCall, sessionstore.StatusSucceeded, false)
+	m.pendingMessage = userMessage
+	m.waiting = true
+
+	updated, _ := m.Update(tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
+	m = updated.(model)
+	if m.waiting || m.turnID == oldTurnID || m.status != "Turn interrupted" {
+		t.Fatalf("interrupted state = waiting %v, turn %d, status %q", m.waiting, m.turnID, m.status)
+	}
+	select {
+	case <-turnContext.Done():
+	default:
+		t.Fatal("turn context was not cancelled")
+	}
+	last := m.messages[len(m.messages)-1]
+	if last.Role != client.RoleTool || last.ToolCallID != "pending-call" || !strings.Contains(last.Content, "interrupted by user") {
+		t.Fatalf("cancelled tool result = %#v", last)
+	}
+	session, err := workspaceStore.Load()
+	if err != nil || len(session.Transcript) == 0 || session.Transcript[len(session.Transcript)-1].ToolCallID != "pending-call" {
+		t.Fatalf("saved interrupted session = %#v, err = %v", session, err)
+	}
+	archived, err := archiveStore.Search(context.Background(), sessionstore.SearchOptions{
+		Filters: sessionstore.Filters{RunIDs: []string{m.runID}}, Sort: sessionstore.SortOldest, Limit: 20,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	foundTurnCancellation := false
+	foundToolCancellation := false
+	for _, hit := range archived.Hits {
+		if hit.Record.Status == sessionstore.StatusCancelled && hit.Record.Summary == "turn interrupted" {
+			foundTurnCancellation = true
+		}
+		if hit.Record.Status == sessionstore.StatusCancelled && hit.Record.TaskID == "pending-call" {
+			foundToolCancellation = true
+		}
+	}
+	if !foundTurnCancellation || !foundToolCancellation {
+		t.Fatalf("cancellation records = %#v", archived.Hits)
+	}
+	messageCount := len(m.messages)
+	updated, _ = m.Update(agentEventMsg{
+		turnID: oldTurnID,
+		event: agentEvent{response: &client.ChatResponse{Choices: []client.Choice{{Message: client.Message{
+			Role: client.RoleAssistant, Content: "late response",
+		}}}}},
+	})
+	m = updated.(model)
+	if len(m.messages) != messageCount {
+		t.Fatalf("stale event changed transcript: %#v", m.messages)
+	}
+}
+
 func TestTranscriptRendersToolActivityAsReadableProgress(t *testing.T) {
 	transcript := renderTranscript([]client.Message{
 		{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{{
