@@ -248,8 +248,9 @@ can be changed under `loom` in the personal config.
 Enter `/loom` in the TUI to view current artifact, blob, and byte usage; edit
 the size and automatic-GC policy; preview collection; or run it immediately.
 Automatic GC starts at the configured trigger ratio and aims for the target
-ratio. Durable Session Store references and their parent lineage are retained,
-and newly created artifacts are protected for the configured grace period.
+ratio. References in the current workspace `.q/session.json` projection and
+their parent lineage are retained; durable archive records do not pin Loom
+artifacts. Newly created artifacts are protected for the configured grace period.
 Set `loom.gc.disabled: true` to disable automatic collection; manual preview
 and collection remain available.
 

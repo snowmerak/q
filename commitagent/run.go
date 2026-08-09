@@ -10,8 +10,8 @@ import (
 	"github.com/snowmerak/q/config"
 	"github.com/snowmerak/q/loom"
 	"github.com/snowmerak/q/providerhost"
-	"github.com/snowmerak/q/sessionstore"
 	"github.com/snowmerak/q/subagent"
+	"github.com/snowmerak/q/workspace"
 )
 
 type resolvedRuntime struct {
@@ -93,18 +93,7 @@ func prepareSessionDefault(ctx context.Context, directory string, logger *progre
 	}
 	resolved := <-runtimeChannel
 	loomOptions := value.LoomStoreOptions(func(ctx context.Context) ([]loom.Ref, error) {
-		values, err := sessionstore.LoomReferencesAt(ctx, repository.state.root)
-		if err != nil {
-			return nil, err
-		}
-		refs := make([]loom.Ref, 0, len(values))
-		for _, value := range values {
-			ref, parseErr := loom.ParseRef(value)
-			if parseErr == nil {
-				refs = append(refs, ref)
-			}
-		}
-		return refs, nil
+		return workspace.LoomReferencesAt(ctx, repository.state.root)
 	})
 	session := &Session{
 		state: repository.state, maxParallel: value.EffectiveAgents().MaxParallel,

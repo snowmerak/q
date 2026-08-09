@@ -8,6 +8,7 @@ import (
 	"github.com/snowmerak/q/loom"
 	"github.com/snowmerak/q/sessionstore"
 	"github.com/snowmerak/q/tools/builtin"
+	"github.com/snowmerak/q/workspace"
 )
 
 const (
@@ -17,7 +18,7 @@ const (
 
 // NewServer builds an MCP server with the root-jailed builtin tool set.
 func NewServer(root string) (*mcp.Server, error) {
-	loomRuntime, err := newLoomRuntime(root, loom.NewProcessEvaluator(), loom.StoreOptions{})
+	loomRuntime, err := newLoomRuntime(root, loom.NewProcessEvaluator(), withSessionRoots(loom.StoreOptions{}, root))
 	if err != nil {
 		return nil, err
 	}
@@ -28,7 +29,7 @@ func NewServer(root string) (*mcp.Server, error) {
 // NewServerWithArchive builds an MCP server whose read-only archive tools use
 // the supplied workspace store. The caller owns the archive lifetime.
 func NewServerWithArchive(root string, archive builtin.Archive) (*mcp.Server, error) {
-	loomRuntime, err := newLoomRuntime(root, loom.NewProcessEvaluator(), withArchiveRoots(loom.StoreOptions{}, archive))
+	loomRuntime, err := newLoomRuntime(root, loom.NewProcessEvaluator(), withSessionRoots(loom.StoreOptions{}, root))
 	if err != nil {
 		return nil, err
 	}
@@ -68,7 +69,7 @@ func RunStdioWithLoomOptions(ctx context.Context, root string, options loom.Stor
 		return err
 	}
 	defer archive.Close()
-	loomRuntime, err := newLoomRuntime(root, loom.NewProcessEvaluator(), withArchiveRoots(options, archive))
+	loomRuntime, err := newLoomRuntime(root, loom.NewProcessEvaluator(), withSessionRoots(options, root))
 	if err != nil {
 		return err
 	}
@@ -80,29 +81,9 @@ func RunStdioWithLoomOptions(ctx context.Context, root string, options loom.Stor
 	return server.Run(ctx, &mcp.StdioTransport{})
 }
 
-type loomReferenceArchive interface {
-	LoomReferences(context.Context) ([]string, error)
-}
-
-func withArchiveRoots(options loom.StoreOptions, archive builtin.Archive) loom.StoreOptions {
-	provider, ok := archive.(loomReferenceArchive)
-	if !ok {
-		return options
-	}
+func withSessionRoots(options loom.StoreOptions, root string) loom.StoreOptions {
 	options.Roots = func(ctx context.Context) ([]loom.Ref, error) {
-		values, err := provider.LoomReferences(ctx)
-		if err != nil {
-			return nil, err
-		}
-		refs := make([]loom.Ref, 0, len(values))
-		for _, value := range values {
-			ref, err := loom.ParseRef(value)
-			if err != nil {
-				continue
-			}
-			refs = append(refs, ref)
-		}
-		return refs, nil
+		return workspace.LoomReferencesAt(ctx, root)
 	}
 	return options
 }

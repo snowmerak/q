@@ -54,7 +54,7 @@ func NewRuntimeWithArchiveAndLoomOptions(
 }
 
 func newRuntime(ctx context.Context, root string, archive builtin.Archive, evaluator loom.Evaluator, options loom.StoreOptions) (*Runtime, error) {
-	loomRuntime, err := newLoomRuntime(root, evaluator, withArchiveRoots(options, archive))
+	loomRuntime, err := newLoomRuntime(root, evaluator, withSessionRoots(options, root))
 	if err != nil {
 		return nil, err
 	}

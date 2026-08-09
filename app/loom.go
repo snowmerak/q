@@ -120,7 +120,6 @@ func (m model) applyLoomAction(action string) (tea.Model, tea.Cmd) {
 	}
 	m.blurLoomInputs()
 	store := m.store
-	archive := m.archive
 	ctx := m.ctx
 	return m, func() tea.Msg {
 		if err := store.Save(value); err != nil {
@@ -133,11 +132,6 @@ func (m model) applyLoomAction(action string) (tea.Model, tea.Cmd) {
 		}
 		var result *loom.GCResult
 		if action != "save" {
-			if archive != nil {
-				if err := archive.Flush(); err != nil {
-					return loomActionMsg{config: value, action: action, err: fmt.Errorf("flush archive before Loom GC: %w", err)}
-				}
-			}
 			collected, err := controller.CollectLoom(ctx, action == "dry-run")
 			if err != nil {
 				return loomActionMsg{config: value, action: action, err: err}

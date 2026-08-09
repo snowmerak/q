@@ -7,30 +7,23 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
 	"sort"
+
+	"github.com/snowmerak/q/loom"
 )
 
-var loomReferencePattern = regexp.MustCompile(`loom://[0-9a-fA-F]{32}`)
-
 func ExtractLoomReferences(values ...string) []string {
-	seen := make(map[string]struct{})
-	for _, value := range values {
-		for _, ref := range loomReferencePattern.FindAllString(value, -1) {
-			seen[ref] = struct{}{}
-		}
+	refs := loom.ExtractReferences(values...)
+	result := make([]string, len(refs))
+	for index, ref := range refs {
+		result[index] = ref.String()
 	}
-	result := make([]string, 0, len(seen))
-	for ref := range seen {
-		result = append(result, ref)
-	}
-	sort.Strings(result)
 	return result
 }
 
-// LoomReferences returns every Loom reference retained by durable records.
-// It scans explicit refs and legacy content/payload fields so records written
-// before Loom refs were indexed remain valid GC roots.
+// LoomReferences returns every Loom reference mentioned by durable records.
+// These references are available for archive inspection but are not Loom GC
+// roots; only references in the current workspace session pin artifacts.
 func (s *Store) LoomReferences(ctx context.Context) ([]string, error) {
 	if ctx == nil {
 		return nil, errors.New("sessionstore: Loom reference context is nil")

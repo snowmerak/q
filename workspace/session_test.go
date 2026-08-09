@@ -1,13 +1,16 @@
 package workspace
 
 import (
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"testing"
 
 	"github.com/snowmerak/q/client"
+	"github.com/snowmerak/q/loom"
 )
 
 func TestStoreRoundTripAndClear(t *testing.T) {
@@ -55,5 +58,36 @@ func TestLoadRejectsUnknownFields(t *testing.T) {
 	}
 	if _, err := store.Load(); err == nil {
 		t.Fatal("Load accepted an unknown field")
+	}
+}
+
+func TestLoomReferencesAtUsesCurrentSessionProjection(t *testing.T) {
+	root := t.TempDir()
+	first := loom.Ref("loom://0123456789abcdef0123456789abcdef")
+	second := loom.Ref("loom://fedcba9876543210fedcba9876543210")
+	store := Store{Root: root}
+	if err := store.Save(Session{
+		Transcript: []client.Message{{Role: client.RoleTool, Content: `{"loom_ref":"` + first.String() + `"}`}},
+		Context:    []client.Message{{Role: client.RoleSystem, Content: "parent " + second.String()}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	refs, err := LoomReferencesAt(context.Background(), root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(refs, []loom.Ref{first, second}) {
+		t.Fatalf("Loom refs = %#v", refs)
+	}
+}
+
+func TestLoomReferencesAtAllowsMissingSession(t *testing.T) {
+	refs, err := LoomReferencesAt(context.Background(), t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(refs) != 0 {
+		t.Fatalf("Loom refs = %#v", refs)
 	}
 }

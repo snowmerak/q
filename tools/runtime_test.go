@@ -14,6 +14,7 @@ import (
 	"github.com/snowmerak/q/loom"
 	"github.com/snowmerak/q/sessionstore"
 	"github.com/snowmerak/q/tools/builtin"
+	"github.com/snowmerak/q/workspace"
 )
 
 func TestRuntimeListsAndCallsBuiltinTools(t *testing.T) {
@@ -107,6 +108,40 @@ func TestRuntimeExposesAndCallsArchiveTools(t *testing.T) {
 	}
 	if record.ID != "decision-1" || record.Content != "Use the workspace archive for durable agent history." {
 		t.Fatalf("record = %#v", record)
+	}
+}
+
+func TestRuntimeRootsComeFromCurrentSessionNotArchive(t *testing.T) {
+	root := t.TempDir()
+	sessionRef := loom.Ref("loom://0123456789abcdef0123456789abcdef")
+	archiveRef := "loom://fedcba9876543210fedcba9876543210"
+	if err := (workspace.Store{Root: root}).Save(workspace.Session{
+		Transcript: []client.Message{{Role: client.RoleTool, Content: sessionRef.String()}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	archive, err := sessionstore.Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer archive.Close()
+	if _, err := archive.Save(sessionstore.Record{
+		Kind: sessionstore.KindResult, Refs: []string{archiveRef}, Content: archiveRef,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	runtime, err := newRuntime(context.Background(), root, archive, loom.InProcessEvaluator{}, loom.StoreOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer runtime.Close()
+
+	refs, err := runtime.loom.Store.Options().Roots(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(refs) != 1 || refs[0] != sessionRef {
+		t.Fatalf("Loom roots = %#v", refs)
 	}
 }
 func TestRuntimeEvaluatesCapturedMCPResult(t *testing.T) {
