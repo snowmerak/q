@@ -69,11 +69,15 @@ func TestScoutRunnerUsesReadOnlyToolsAndReturnsStructuredReport(t *testing.T) {
 		scoutFunctionTool("edit_file"), scoutFunctionTool("loom_eval"), scoutFunctionTool("read_file"),
 	}}
 	sink := &scoutRecordSink{}
+	var progress []ProgressEvent
 	ref := loom.Ref("loom://0123456789abcdef0123456789abcdef")
 	runner := ScoutRunner{
 		Client: fakeClient, Tools: fakeTools,
 		Spec: Spec{Role: config.AgentRoleScout, Model: "scout-model", ReasoningEffort: "medium"},
 		Sink: sink, RunID: "run-plan-1", WorkingDirectory: `C:\workspace`,
+		Progress: func(event ProgressEvent) {
+			progress = append(progress, event)
+		},
 	}
 	result, err := runner.Run(context.Background(), ScoutTask{
 		Objective:  "Find where a scout should connect to the plan flow",
@@ -112,6 +116,25 @@ func TestScoutRunnerUsesReadOnlyToolsAndReturnsStructuredReport(t *testing.T) {
 	}
 	if len(sink.records) < 5 || sink.records[len(sink.records)-1].Status != sessionstore.StatusSucceeded {
 		t.Fatalf("lifecycle records = %#v", sink.records)
+	}
+	if len(progress) < 6 || progress[0].Action != ProgressStarted ||
+		progress[len(progress)-1].Action != ProgressCompleted {
+		t.Fatalf("progress events = %#v", progress)
+	}
+	var sawRead, sawComplete bool
+	for _, event := range progress {
+		if event.Agent != "scout" || event.TaskID == "" {
+			t.Fatalf("unidentified Scout progress = %#v", event)
+		}
+		if event.Action == ProgressTool && event.Detail == "read_file" {
+			sawRead = true
+		}
+		if event.Action == ProgressTool && event.Detail == ScoutCompleteToolName {
+			sawComplete = true
+		}
+	}
+	if !sawRead || !sawComplete {
+		t.Fatalf("tool progress missing: %#v", progress)
 	}
 }
 

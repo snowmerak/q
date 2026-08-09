@@ -301,17 +301,22 @@ root/orchestrator는 결과를 단순 연결하지 않고 다음 규칙으로 �
 6. advisor의 진단과 제안은 권고로 취급하며 root/orchestrator가 다음 행동을 결정한다.
 7. 완료 판단과 최종 사용자 응답은 root/orchestrator가 담당한다.
 
-## TUI 아이디어
+## TUI activity projection
 
-메인 transcript를 서브에이전트 로그로 채우지 않고 요약된 상태만 표시한다.
+메인 transcript를 서브에이전트 로그로 채우지 않고 별도 activity panel에 role별
+상태와 최근 동작을 표시한다.
 
 ```text
-agents · scout ✓ · research … · planner waiting
-coder: blocked · advisor diagnosing
+agents · griller ✓ · scout ✓ · planner …
+· scout   tool · read_file
+› planner thinking · model round 1
 ```
 
-상세 실행 로그는 별도 panel 또는 `/agents` 명령으로 여는 방식을 고려한다.
-취소는 전체 작업과 개별 agent 모두 지원해야 한다.
+runner는 prompt나 원본 tool result 대신 `agent`, `task_id`, `parent_id`, `action`,
+bounded detail만 progress event로 보낸다. TUI는 최근 이벤트만 화면 크기에 맞춰
+표시하고 전체 Scout message/result는 Session Store lifecycle archive에 유지한다.
+이 구조는 향후 병렬 Scout를 task ID별로 구분할 수 있다. 전체 history 탐색용
+`/agents` 화면과 개별 agent 취소는 후속 범위다.
 
 ## 통합 라이브러리 확인 후 결정할 사항
 

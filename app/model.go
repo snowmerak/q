@@ -20,6 +20,7 @@ import (
 	"charm.land/glamour/v2"
 	glamourstyles "charm.land/glamour/v2/styles"
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/snowmerak/llm-provider/gateway"
 	"github.com/snowmerak/q/client"
 	"github.com/snowmerak/q/config"
@@ -184,6 +185,9 @@ type model struct {
 	questionEvents   <-chan agentEvent
 	questionTurnID   uint64
 	planArmed        bool
+	agentActivities  []agentActivity
+	agentStates      map[string]string
+	agentLogVisible  int
 	turnContext      context.Context
 	turnCancel       context.CancelFunc
 	turnID           uint64
@@ -214,6 +218,7 @@ type chatResultMsg struct {
 
 type agentEvent struct {
 	status          string
+	activity        *agentActivity
 	message         *client.Message
 	call            *client.ToolCall
 	question        *askToUserInput
@@ -223,6 +228,14 @@ type agentEvent struct {
 	requestEstimate int
 	toolCalls       int
 	err             error
+}
+
+type agentActivity struct {
+	Agent    string
+	TaskID   string
+	ParentID string
+	Action   string
+	Detail   string
 }
 
 type agentEventMsg struct {
@@ -506,6 +519,12 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		event := message.event
+		if event.activity != nil {
+			m.appendAgentActivity(*event.activity)
+			m.status = activityStatus(*event.activity)
+			m.resize(m.width, m.height)
+			return m, tea.Batch(m.spinner.Tick, waitAgentEvent(message.events, message.turnID))
+		}
 		if event.status != "" {
 			m.status = event.status
 			return m, tea.Batch(m.spinner.Tick, waitAgentEvent(message.events, message.turnID))
@@ -1564,6 +1583,8 @@ func (m model) submitChat() (tea.Model, tea.Cmd) {
 	if m.planArmed {
 		return m.startPlan(content)
 	}
+	m.clearAgentActivities()
+	m.resize(m.width, m.height)
 	m.beginTurn()
 	m.turnMessageStart = len(m.messages)
 	userMessage := client.Message{Role: client.RoleUser, Content: content}
@@ -2016,6 +2037,7 @@ func (m *model) enterChat(value config.Config, configuredClient chatClient) {
 	m.compactionTarget = 0
 	m.submitPending = false
 	m.pendingMessage = client.Message{}
+	m.clearAgentActivities()
 	m.status = ""
 	m.input = newChatInput()
 	m.restoreWorkspaceSession()
@@ -2276,6 +2298,8 @@ func (m *model) resetConversation() {
 	m.questionEvents = nil
 	m.input.Placeholder = "Type a message…"
 	m.status = "Conversation cleared"
+	m.clearAgentActivities()
+	m.resize(m.width, m.height)
 	if m.workspaceStore != nil {
 		if err := m.workspaceStore.Clear(); err != nil {
 			m.status = err.Error()
@@ -2360,6 +2384,11 @@ func (m *model) resize(width, height int) {
 		chromeHeight++
 	}
 	dynamicHeight := max(2, m.height-chromeHeight)
+	m.agentLogVisible = 0
+	if len(m.agentActivities) > 0 && dynamicHeight >= 6 {
+		m.agentLogVisible = min(len(m.agentActivities), max(1, min(8, dynamicHeight/4)))
+		dynamicHeight = max(2, dynamicHeight-m.agentLogVisible-2)
+	}
 	if m.asking {
 		question := renderToolPanel("Question", renderPendingQuestion(m.pendingQuestion), max(36, contentWidth), m.dark)
 		questionHeight := min(lipgloss.Height(question), max(1, dynamicHeight*2/3))
@@ -2424,6 +2453,113 @@ func (m *model) configureQuestionViewport(width int) {
 
 func (m model) renderedQuestionViewport() string {
 	return toolPanelStyle(m.chatFrameWidth(), m.dark).Render(m.questionViewport.View())
+}
+
+func (m *model) clearAgentActivities() {
+	m.agentActivities = nil
+	m.agentStates = nil
+	m.agentLogVisible = 0
+}
+
+func (m *model) appendAgentActivity(activity agentActivity) {
+	activity.Agent = strings.TrimSpace(activity.Agent)
+	activity.TaskID = strings.TrimSpace(activity.TaskID)
+	activity.ParentID = strings.TrimSpace(activity.ParentID)
+	activity.Action = strings.TrimSpace(activity.Action)
+	activity.Detail = strings.TrimSpace(activity.Detail)
+	if activity.Agent == "" {
+		activity.Agent = "agent"
+	}
+	m.agentActivities = append(m.agentActivities, activity)
+	if len(m.agentActivities) > 200 {
+		m.agentActivities = append([]agentActivity(nil), m.agentActivities[len(m.agentActivities)-200:]...)
+	}
+	if activity.Agent == "plan" {
+		return
+	}
+	if m.agentStates == nil {
+		m.agentStates = make(map[string]string)
+	}
+	switch activity.Action {
+	case "completed":
+		m.agentStates[activity.Agent] = "succeeded"
+	case "failed":
+		m.agentStates[activity.Agent] = "failed"
+	case "waiting":
+		m.agentStates[activity.Agent] = "waiting"
+	default:
+		m.agentStates[activity.Agent] = "running"
+	}
+}
+
+func activityStatus(activity agentActivity) string {
+	activity.Agent = strings.TrimSpace(activity.Agent)
+	if activity.Agent == "" {
+		activity.Agent = "agent"
+	}
+	label := strings.ToUpper(activity.Agent[:1]) + activity.Agent[1:]
+	detail := activity.Action
+	if activity.Detail != "" {
+		detail += " · " + activity.Detail
+	}
+	return label + " · " + detail
+}
+
+func (m model) renderedAgentActivities() string {
+	if m.agentLogVisible <= 0 || len(m.agentActivities) == 0 {
+		return ""
+	}
+	var body strings.Builder
+	contentWidth := max(20, m.chatFrameWidth()-frameStyle.GetHorizontalFrameSize())
+	body.WriteString(ansi.Truncate(agentSummary(m.agentStates), contentWidth, "…"))
+	body.WriteString("\n")
+	start := max(0, len(m.agentActivities)-m.agentLogVisible)
+	for index, activity := range m.agentActivities[start:] {
+		active := start+index == len(m.agentActivities)-1 && m.waiting
+		prefix, stageStyle := "· ", subtleStyle
+		if active {
+			prefix, stageStyle = "› ", activeLabelStyle
+		}
+		body.WriteString(stageStyle.Render(prefix))
+		body.WriteString(stageStyle.Render(fmt.Sprintf("%-8s", activity.Agent)))
+		body.WriteString(" ")
+		detail := activity.Action
+		if activity.Detail != "" {
+			detail += " · " + activity.Detail
+		}
+		body.WriteString(subtleStyle.Render(ansi.Truncate(detail, max(4, contentWidth-12), "…")))
+		if index < m.agentLogVisible-1 {
+			body.WriteString("\n")
+		}
+	}
+	return body.String()
+}
+
+func agentSummary(states map[string]string) string {
+	parts := []string{titleStyle.Render("agents")}
+	for _, role := range []string{"griller", "scout", "planner"} {
+		state, exists := states[role]
+		if !exists {
+			continue
+		}
+		marker := "…"
+		switch state {
+		case "succeeded":
+			marker = "✓"
+		case "failed":
+			marker = "×"
+		case "waiting":
+			marker = "waiting"
+		}
+		style := subtleStyle
+		if state == "running" || state == "waiting" {
+			style = activeLabelStyle
+		} else if state == "failed" {
+			style = errorStyle
+		}
+		parts = append(parts, style.Render(role+" "+marker))
+	}
+	return strings.Join(parts, subtleStyle.Render(" · "))
 }
 
 func isQuestionScrollKey(key string) bool {
@@ -2840,6 +2976,9 @@ func (m model) View() tea.View {
 	if m.screen == screenChat && (!m.waiting || m.asking) {
 		if cursor := m.input.Cursor(); cursor != nil {
 			inputOffset := m.renderedChatHeaderHeight() + 1 + lipgloss.Height(m.viewport.View())
+			if activities := m.renderedAgentActivities(); activities != "" {
+				inputOffset += lipgloss.Height(activities) + 1
+			}
 			if m.asking {
 				inputOffset += lipgloss.Height(m.renderedQuestionViewport()) + 1
 			}
@@ -3216,13 +3355,17 @@ func (m model) viewChat() string {
 	}
 	footer := helpStyle.Render(footerText)
 	content := header + "\n\n" + m.viewport.View() + "\n"
+	if activities := m.renderedAgentActivities(); activities != "" {
+		content += activities + "\n"
+	}
 	if m.asking {
 		content += m.renderedQuestionViewport() + "\n"
 		footer = helpStyle.Render("pgup/pgdn scroll · enter answer · shift+enter newline · ctrl+c interrupt")
 	}
 	content += m.input.View()
 	if status != "" {
-		content += "\n" + subtleStyle.Render(status)
+		statusWidth := max(10, m.chatFrameWidth()-frameStyle.GetHorizontalFrameSize())
+		content += "\n" + subtleStyle.Render(ansi.Truncate(status, statusWidth, "…"))
 	}
 	content += "\n" + footer
 	return frameStyle.Width(m.chatFrameWidth()).Render(content)

@@ -97,9 +97,10 @@ type ScoutRunner struct {
 	RunID            string
 	WorkingDirectory string
 	MaxRounds        int
+	Progress         ProgressFunc
 }
 
-func (r ScoutRunner) Run(ctx context.Context, task ScoutTask) (ScoutResult, error) {
+func (r ScoutRunner) Run(ctx context.Context, task ScoutTask) (result ScoutResult, runErr error) {
 	if ctx == nil {
 		return ScoutResult{}, errors.New("subagent: scout context is nil")
 	}
@@ -116,6 +117,23 @@ func (r ScoutRunner) Run(ctx context.Context, task ScoutTask) (ScoutResult, erro
 	if err != nil {
 		return ScoutResult{}, err
 	}
+	reportProgress(r.Progress, ProgressEvent{
+		Agent: "scout", TaskID: prepared.ID, ParentID: prepared.ParentID,
+		Action: ProgressStarted, Detail: prepared.Objective,
+	})
+	defer func() {
+		if runErr != nil {
+			reportProgress(r.Progress, ProgressEvent{
+				Agent: "scout", TaskID: prepared.ID, ParentID: prepared.ParentID,
+				Action: ProgressFailed, Detail: runErr.Error(),
+			})
+			return
+		}
+		reportProgress(r.Progress, ProgressEvent{
+			Agent: "scout", TaskID: prepared.ID, ParentID: prepared.ParentID,
+			Action: ProgressCompleted, Detail: result.Summary,
+		})
+	}()
 
 	prompt, err := encodeScoutTask(prepared)
 	if err != nil {
@@ -135,7 +153,7 @@ func (r ScoutRunner) Run(ctx context.Context, task ScoutTask) (ScoutResult, erro
 		}
 	}
 
-	result, runErr := r.run(ctx, prepared, prompt, lifecycle)
+	result, runErr = r.run(ctx, prepared, prompt, lifecycle)
 	if runErr != nil {
 		if lifecycle != nil {
 			runErr = errors.Join(runErr, lifecycle.Failed(runErr))
@@ -163,6 +181,10 @@ func (r ScoutRunner) run(ctx context.Context, task ScoutTask, prompt string, lif
 	reminders := 0
 	var usage client.Usage
 	for round := 0; round < rounds; round++ {
+		reportProgress(r.Progress, ProgressEvent{
+			Agent: "scout", TaskID: task.ID, ParentID: task.ParentID,
+			Action: ProgressThinking, Detail: fmt.Sprintf("model round %d", round+1),
+		})
 		parallel := false
 		request := client.ChatRequest{
 			Messages: messages, Tools: tools, ToolChoice: client.ToolChoiceAuto,
@@ -200,6 +222,10 @@ func (r ScoutRunner) run(ctx context.Context, task ScoutTask, prompt string, lif
 		}
 
 		for _, call := range assistant.ToolCalls {
+			reportProgress(r.Progress, ProgressEvent{
+				Agent: "scout", TaskID: task.ID, ParentID: task.ParentID,
+				Action: ProgressTool, Detail: call.Function.Name,
+			})
 			var toolResult client.ToolResult
 			if call.Function.Name == ScoutCompleteToolName {
 				if len(assistant.ToolCalls) != 1 {

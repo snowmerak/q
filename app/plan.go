@@ -35,6 +35,8 @@ func (m model) startPlan(objective string) (tea.Model, tea.Cmd) {
 	m.input.Blur()
 	m.waiting = true
 	m.status = "Grilling planning request…"
+	m.clearAgentActivities()
+	m.resize(m.width, m.height)
 	m.refreshTranscript()
 	return m, tea.Batch(m.spinner.Tick, m.sendPlanRequest(objective))
 }
@@ -123,14 +125,21 @@ func streamPlanWorkflow(
 			return subagent.UserAnswer{}, ctx.Err()
 		}
 	}
-	progress := func(stage, detail string) {
-		status := planStatus(stage, detail)
-		_ = emitAgentEvent(ctx, events, agentEvent{status: status})
+	progress := func(progress subagent.ProgressEvent) {
+		activity := agentActivity{
+			Agent: progress.Agent, TaskID: progress.TaskID, ParentID: progress.ParentID,
+			Action: progress.Action, Detail: progress.Detail,
+		}
+		_ = emitAgentEvent(ctx, events, agentEvent{activity: &activity})
 	}
 
+	scoutRunID := runID
+	if archive == nil {
+		scoutRunID = ""
+	}
 	scout := subagent.ScoutRunner{
 		Client: configuredClient, Tools: toolRuntime, Spec: scoutSpec,
-		Sink: archive, RunID: runID, WorkingDirectory: workingDirectory,
+		Sink: archive, RunID: scoutRunID, WorkingDirectory: workingDirectory, Progress: progress,
 	}
 	griller := subagent.GrillerRunner{
 		Client: configuredClient, Tools: toolRuntime, Scout: scout, Spec: grillerSpec,
@@ -154,6 +163,7 @@ func streamPlanWorkflow(
 	if result.Approved {
 		content = "Plan approved. Execution has not started.\n\n" + subagent.RenderPlanProposal(result.Plan)
 	}
+	progress(subagent.ProgressEvent{Agent: "plan", Action: subagent.ProgressCompleted, Detail: "planning finished"})
 	response := &client.ChatResponse{Choices: []client.Choice{{Message: client.Message{
 		Role: client.RoleAssistant, Content: content,
 	}}}}
@@ -177,22 +187,4 @@ func planContext(messages []client.Message) []string {
 		result = result[len(result)-maximumMessages:]
 	}
 	return result
-}
-
-func planStatus(stage, detail string) string {
-	label := stage
-	switch stage {
-	case "griller":
-		label = "Griller"
-	case "scout":
-		label = "Scout"
-	case "planner":
-		label = "Planner"
-	case "confirm":
-		label = "Plan review"
-	}
-	if strings.TrimSpace(detail) == "" {
-		return label + "…"
-	}
-	return label + " · " + detail
 }

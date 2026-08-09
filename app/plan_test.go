@@ -7,6 +7,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/charmbracelet/x/ansi"
 	"github.com/snowmerak/q/client"
 	"github.com/snowmerak/q/config"
 	"github.com/snowmerak/q/subagent"
@@ -38,6 +39,13 @@ func (p *planningClient) Close() error { return nil }
 
 func TestPlanCommandRunsGrillerPlannerAndStopsAfterApproval(t *testing.T) {
 	configuredClient := &planningClient{responses: []client.Message{
+		{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{planToolCall(subagent.DelegateScoutToolName, `{
+			"objective":"Locate the plan command boundary"
+		}`)}},
+		{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{planToolCall(subagent.ScoutCompleteToolName, `{
+			"outcome":"succeeded",
+			"summary":"Located the plan command boundary"
+		}`)}},
 		{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{planToolCall(subagent.SubmitBriefToolName, `{
 			"objective":"Add a plan flow",
 			"conditions":["Stop before execution"],
@@ -56,6 +64,7 @@ func TestPlanCommandRunsGrillerPlannerAndStopsAfterApproval(t *testing.T) {
 	m := newModel(context.Background(), config.Store{Dir: t.TempDir()}, nil)
 	m.toolRuntime = &fakeAgentTools{}
 	m.enterChat(value, configuredClient)
+	m.resize(100, 36)
 
 	m.input.SetValue("/plan")
 	updated, _ := m.submitChat()
@@ -70,7 +79,7 @@ func TestPlanCommandRunsGrillerPlannerAndStopsAfterApproval(t *testing.T) {
 	if m.planArmed || !m.waiting || command == nil {
 		t.Fatalf("started state = armed %v waiting %v command %v", m.planArmed, m.waiting, command != nil)
 	}
-	for attempts := 0; !m.asking && attempts < 12; attempts++ {
+	for attempts := 0; !m.asking && attempts < 64; attempts++ {
 		updated, command = m.Update(nextAgentMessage(t, command))
 		m = updated.(model)
 	}
@@ -78,11 +87,20 @@ func TestPlanCommandRunsGrillerPlannerAndStopsAfterApproval(t *testing.T) {
 		!strings.Contains(m.pendingQuestion.Context, "Connect an approval-gated plan flow") {
 		t.Fatalf("confirmation state = asking %v question %#v", m.asking, m.pendingQuestion)
 	}
+	view := ansi.Strip(m.viewChat())
+	for _, expected := range []string{"agents", "griller ✓", "scout ✓", "planner ✓", "submit_plan", "Answer the question"} {
+		if !strings.Contains(view, expected) {
+			t.Fatalf("agent activity panel does not contain %q:\n%s", expected, view)
+		}
+	}
+	if height := strings.Count(view, "\n") + 1; height > m.height {
+		t.Fatalf("plan confirmation view height %d exceeds terminal height %d", height, m.height)
+	}
 
 	m.input.SetValue("approve")
 	updated, command = m.submitChat()
 	m = updated.(model)
-	for attempts := 0; m.waiting && attempts < 8; attempts++ {
+	for attempts := 0; m.waiting && attempts < 64; attempts++ {
 		updated, command = m.Update(nextAgentMessage(t, command))
 		m = updated.(model)
 	}
@@ -94,9 +112,13 @@ func TestPlanCommandRunsGrillerPlannerAndStopsAfterApproval(t *testing.T) {
 		!strings.Contains(final, "Connect an approval-gated plan flow") {
 		t.Fatalf("final plan = %q", final)
 	}
-	if len(configuredClient.requests) != 2 ||
-		configuredClient.requests[0].Model != "plan-model" || configuredClient.requests[1].Model != "plan-model" {
+	if len(configuredClient.requests) != 4 {
 		t.Fatalf("planning requests = %#v", configuredClient.requests)
+	}
+	for _, request := range configuredClient.requests {
+		if request.Model != "plan-model" {
+			t.Fatalf("planning request model = %#v", request)
+		}
 	}
 }
 

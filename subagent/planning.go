@@ -40,7 +40,6 @@ type UserAnswer struct {
 }
 
 type AskUserFunc func(context.Context, UserQuestion) (UserAnswer, error)
-type PlanningProgressFunc func(stage, detail string)
 
 type GrillTask struct {
 	ID        string   `json:"id,omitempty"`
@@ -95,7 +94,7 @@ type GrillerRunner struct {
 	Ask              AskUserFunc
 	WorkingDirectory string
 	MaxRounds        int
-	Progress         PlanningProgressFunc
+	Progress         ProgressFunc
 }
 
 type PlannerRunner struct {
@@ -103,18 +102,18 @@ type PlannerRunner struct {
 	Spec             Spec
 	WorkingDirectory string
 	MaxRounds        int
-	Progress         PlanningProgressFunc
+	Progress         ProgressFunc
 }
 
 type PlanWorkflow struct {
 	Griller   GrillerRunner
 	Planner   PlannerRunner
 	Ask       AskUserFunc
-	Progress  PlanningProgressFunc
+	Progress  ProgressFunc
 	MaxCycles int
 }
 
-func (r GrillerRunner) Run(ctx context.Context, task GrillTask) (GrillBrief, error) {
+func (r GrillerRunner) Run(ctx context.Context, task GrillTask) (brief GrillBrief, runErr error) {
 	if ctx == nil {
 		return GrillBrief{}, errors.New("subagent: griller context is nil")
 	}
@@ -130,6 +129,23 @@ func (r GrillerRunner) Run(ctx context.Context, task GrillTask) (GrillBrief, err
 	}
 	task.Context = cleanStrings(task.Context)
 	task.Feedback = cleanStrings(task.Feedback)
+	reportProgress(r.Progress, ProgressEvent{
+		Agent: "griller", TaskID: task.ID, ParentID: task.ParentID,
+		Action: ProgressStarted, Detail: task.Objective,
+	})
+	defer func() {
+		if runErr != nil {
+			reportProgress(r.Progress, ProgressEvent{
+				Agent: "griller", TaskID: task.ID, ParentID: task.ParentID,
+				Action: ProgressFailed, Detail: runErr.Error(),
+			})
+			return
+		}
+		reportProgress(r.Progress, ProgressEvent{
+			Agent: "griller", TaskID: task.ID, ParentID: task.ParentID,
+			Action: ProgressCompleted, Detail: "planning brief ready",
+		})
+	}()
 	body, err := json.MarshalIndent(task, "", "  ")
 	if err != nil {
 		return GrillBrief{}, err
@@ -145,6 +161,10 @@ func (r GrillerRunner) Run(ctx context.Context, task GrillTask) (GrillBrief, err
 	}
 	reminders := 0
 	for round := 0; round < rounds; round++ {
+		reportProgress(r.Progress, ProgressEvent{
+			Agent: "griller", TaskID: task.ID, ParentID: task.ParentID,
+			Action: ProgressThinking, Detail: fmt.Sprintf("model round %d", round+1),
+		})
 		parallel := false
 		request := client.ChatRequest{
 			Messages: messages, Tools: available, ToolChoice: client.ToolChoiceAuto,
@@ -175,6 +195,10 @@ func (r GrillerRunner) Run(ctx context.Context, task GrillTask) (GrillBrief, err
 			continue
 		}
 		for _, call := range assistant.ToolCalls {
+			reportProgress(r.Progress, ProgressEvent{
+				Agent: "griller", TaskID: task.ID, ParentID: task.ParentID,
+				Action: ProgressTool, Detail: call.Function.Name,
+			})
 			result := client.ToolResult{}
 			switch call.Function.Name {
 			case AskToUserToolName:
@@ -183,13 +207,18 @@ func (r GrillerRunner) Run(ctx context.Context, task GrillTask) (GrillBrief, err
 					result = scoutToolError(parseErr)
 					break
 				}
-				if r.Progress != nil {
-					r.Progress("griller", "waiting for user information")
-				}
+				reportProgress(r.Progress, ProgressEvent{
+					Agent: "griller", TaskID: task.ID, ParentID: task.ParentID,
+					Action: ProgressWaiting, Detail: "user information",
+				})
 				answer, askErr := r.Ask(ctx, question)
 				if askErr != nil {
 					return GrillBrief{}, askErr
 				}
+				reportProgress(r.Progress, ProgressEvent{
+					Agent: "griller", TaskID: task.ID, ParentID: task.ParentID,
+					Action: ProgressResumed, Detail: "received user answer",
+				})
 				result = jsonToolResult(answer)
 			case DelegateScoutToolName:
 				scoutTask, parseErr := parseDelegateScout(call.Function.Arguments)
@@ -200,13 +229,22 @@ func (r GrillerRunner) Run(ctx context.Context, task GrillTask) (GrillBrief, err
 				if scoutTask.ParentID == "" {
 					scoutTask.ParentID = task.ID
 				}
-				if r.Progress != nil {
-					r.Progress("scout", scoutTask.Objective)
+				reportProgress(r.Progress, ProgressEvent{
+					Agent: "griller", TaskID: task.ID, ParentID: task.ParentID,
+					Action: ProgressDelegated, Detail: scoutTask.Objective,
+				})
+				scoutRunner := r.Scout
+				if scoutRunner.Progress == nil {
+					scoutRunner.Progress = r.Progress
 				}
-				scoutResult, scoutErr := r.Scout.Run(ctx, scoutTask)
+				scoutResult, scoutErr := scoutRunner.Run(ctx, scoutTask)
 				if scoutErr != nil {
 					result = scoutToolError(scoutErr)
 				} else {
+					reportProgress(r.Progress, ProgressEvent{
+						Agent: "griller", TaskID: task.ID, ParentID: task.ParentID,
+						Action: ProgressResumed, Detail: "received Scout report · " + scoutResult.Summary,
+					})
 					// The bounded structured report is intentionally returned inline.
 					// Loom refs inside it only point to larger supporting material.
 					result = jsonToolResult(scoutResult)
@@ -238,7 +276,7 @@ func (r GrillerRunner) Run(ctx context.Context, task GrillTask) (GrillBrief, err
 	return GrillBrief{}, fmt.Errorf("subagent: griller exceeded %d model rounds", rounds)
 }
 
-func (r PlannerRunner) Run(ctx context.Context, brief GrillBrief) (PlanProposal, error) {
+func (r PlannerRunner) Run(ctx context.Context, brief GrillBrief) (proposal PlanProposal, runErr error) {
 	if ctx == nil {
 		return PlanProposal{}, errors.New("subagent: planner context is nil")
 	}
@@ -248,6 +286,16 @@ func (r PlannerRunner) Run(ctx context.Context, brief GrillBrief) (PlanProposal,
 	if r.Spec.Role != config.AgentRolePlanner {
 		return PlanProposal{}, fmt.Errorf("subagent: planner runner requires role %q", config.AgentRolePlanner)
 	}
+	reportProgress(r.Progress, ProgressEvent{
+		Agent: "planner", Action: ProgressStarted, Detail: brief.Objective,
+	})
+	defer func() {
+		if runErr != nil {
+			reportProgress(r.Progress, ProgressEvent{Agent: "planner", Action: ProgressFailed, Detail: runErr.Error()})
+			return
+		}
+		reportProgress(r.Progress, ProgressEvent{Agent: "planner", Action: ProgressCompleted, Detail: "approval-ready plan"})
+	}()
 	body, err := json.MarshalIndent(brief, "", "  ")
 	if err != nil {
 		return PlanProposal{}, err
@@ -262,6 +310,9 @@ func (r PlannerRunner) Run(ctx context.Context, brief GrillBrief) (PlanProposal,
 	}
 	reminders := 0
 	for round := 0; round < rounds; round++ {
+		reportProgress(r.Progress, ProgressEvent{
+			Agent: "planner", Action: ProgressThinking, Detail: fmt.Sprintf("model round %d", round+1),
+		})
 		parallel := false
 		request := client.ChatRequest{
 			Messages: messages, Tools: []client.Tool{submitPlanTool()}, ToolChoice: client.ToolChoiceAuto,
@@ -292,6 +343,9 @@ func (r PlannerRunner) Run(ctx context.Context, brief GrillBrief) (PlanProposal,
 			continue
 		}
 		for _, call := range assistant.ToolCalls {
+			reportProgress(r.Progress, ProgressEvent{
+				Agent: "planner", Action: ProgressTool, Detail: call.Function.Name,
+			})
 			var result client.ToolResult
 			if call.Function.Name != SubmitPlanToolName {
 				result = scoutToolError(fmt.Errorf("tool %q is not available to planner", call.Function.Name))
@@ -322,15 +376,12 @@ func (w PlanWorkflow) Run(ctx context.Context, task GrillTask) (PlanWorkflowResu
 		cycles = defaultPlanningCycles
 	}
 	for cycle := 1; cycle <= cycles; cycle++ {
-		if w.Progress != nil {
-			w.Progress("griller", fmt.Sprintf("grilling request · cycle %d", cycle))
-		}
+		reportProgress(w.Progress, ProgressEvent{
+			Agent: "plan", Action: ProgressStarted, Detail: fmt.Sprintf("Grill cycle %d", cycle),
+		})
 		brief, err := w.Griller.Run(ctx, task)
 		if err != nil {
 			return PlanWorkflowResult{}, err
-		}
-		if w.Progress != nil {
-			w.Progress("planner", "building conditions and execution steps")
 		}
 		proposal, err := w.Planner.Run(ctx, brief)
 		if err != nil {
@@ -341,9 +392,9 @@ func (w PlanWorkflow) Run(ctx context.Context, task GrillTask) (PlanWorkflowResu
 			task.Feedback = append(task.Feedback, "Planner could not produce a valid plan: "+proposal.Blocker)
 			continue
 		}
-		if w.Progress != nil {
-			w.Progress("confirm", "waiting for plan approval")
-		}
+		reportProgress(w.Progress, ProgressEvent{
+			Agent: "plan", Action: ProgressWaiting, Detail: "plan approval",
+		})
 		answer, err := w.Ask(ctx, UserQuestion{
 			Question: "Approve this plan?",
 			Context:  RenderPlanProposal(proposal),
