@@ -37,7 +37,7 @@ func (p *planningClient) ListModels(context.Context) ([]client.Model, error) {
 
 func (p *planningClient) Close() error { return nil }
 
-func TestPlanCommandRunsGrillerPlannerAndStopsAfterApproval(t *testing.T) {
+func TestPlanCommandExecutesApprovedPlanWithCoderAndPlannerReview(t *testing.T) {
 	configuredClient := &planningClient{responses: []client.Message{
 		{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{planToolCall(subagent.DelegateScoutToolName, `{
 			"objective":"Locate the plan command boundary"
@@ -48,15 +48,38 @@ func TestPlanCommandRunsGrillerPlannerAndStopsAfterApproval(t *testing.T) {
 		}`)}},
 		{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{planToolCall(subagent.SubmitBriefToolName, `{
 			"objective":"Add a plan flow",
-			"conditions":["Stop before execution"],
-			"acceptance_criteria":["The user approves the composed plan"]
+			"conditions":["Execute only after approval"],
+			"acceptance_criteria":["The approved task is implemented and reviewed"]
 		}`)}},
 		{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{planToolCall(subagent.SubmitPlanToolName, `{
 			"outcome":"succeeded",
-			"summary":"Connect an approval-gated plan flow",
-			"conditions":["Stop before execution"],
+			"summary":"Connect and execute an approval-gated plan flow",
+			"conditions":["Execute only after approval"],
 			"steps":[{"title":"Connect roles","description":"Run Griller and Planner in sequence","target":{"any":[{"all":[{"kind":"paths","paths":["app/plan.go"]}]}]}}],
 			"verification":["Complete one approved plan cycle"]
+		}`)}},
+		{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{planToolCall("write_file", `{"path":"app/plan.go","content":"updated"}`)}},
+		{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{planToolCall(subagent.CoderCompleteToolName, `{
+			"outcome":"succeeded",
+			"summary":"Connected the approved execution flow",
+			"artifacts":["app/plan.go"],
+			"verification":["go test ./app"]
+		}`)}},
+		{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{planToolCall(subagent.ReviewTaskToolName, `{
+			"decision":"retry",
+			"feedback":"Preserve the existing command boundary",
+			"facts":["app/plan.go owns the approved execution boundary"]
+		}`)}},
+		{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{planToolCall(subagent.CoderCompleteToolName, `{
+			"outcome":"succeeded",
+			"summary":"Preserved the command boundary and connected execution",
+			"artifacts":["app/plan.go"],
+			"verification":["go test ./app"]
+		}`)}},
+		{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{planToolCall(subagent.ReviewTaskToolName, `{
+			"decision":"next",
+			"feedback":"",
+			"facts":["The approved plan now enters the Coder loop"]
 		}`)}},
 	}}
 	value := config.Default()
@@ -84,7 +107,7 @@ func TestPlanCommandRunsGrillerPlannerAndStopsAfterApproval(t *testing.T) {
 		m = updated.(model)
 	}
 	if !m.asking || m.pendingQuestion.Question != "Approve this plan?" ||
-		!strings.Contains(m.pendingQuestion.Context, "Connect an approval-gated plan flow") {
+		!strings.Contains(m.pendingQuestion.Context, "Connect and execute an approval-gated plan flow") {
 		t.Fatalf("confirmation state = asking %v question %#v", m.asking, m.pendingQuestion)
 	}
 	view := ansi.Strip(m.viewChat())
@@ -100,7 +123,7 @@ func TestPlanCommandRunsGrillerPlannerAndStopsAfterApproval(t *testing.T) {
 	m.input.Reset()
 	updated, command = m.submitChat()
 	m = updated.(model)
-	for attempts := 0; m.waiting && attempts < 64; attempts++ {
+	for attempts := 0; m.waiting && attempts < 128; attempts++ {
 		updated, command = m.Update(nextAgentMessage(t, command))
 		m = updated.(model)
 	}
@@ -108,17 +131,52 @@ func TestPlanCommandRunsGrillerPlannerAndStopsAfterApproval(t *testing.T) {
 		t.Fatalf("plan did not finish: waiting %v messages %#v", m.waiting, m.messages)
 	}
 	final := m.messages[len(m.messages)-1].Content
-	if !strings.Contains(final, "Plan approved. Execution has not started.") ||
-		!strings.Contains(final, "Connect an approval-gated plan flow") {
-		t.Fatalf("final plan = %q", final)
+	if !strings.Contains(final, "Plan executed successfully.") ||
+		!strings.Contains(final, "Preserved the command boundary and connected execution") ||
+		!strings.Contains(final, "attempts: 2") ||
+		!strings.Contains(final, "go test ./app") {
+		t.Fatalf("final execution = %q", final)
 	}
-	if len(configuredClient.requests) != 4 {
+	if len(configuredClient.requests) != 9 {
 		t.Fatalf("planning requests = %#v", configuredClient.requests)
 	}
 	for _, request := range configuredClient.requests {
 		if request.Model != "plan-model" {
 			t.Fatalf("planning request model = %#v", request)
 		}
+	}
+	if len(m.toolRuntime.(*fakeAgentTools).calls) != 1 || m.toolRuntime.(*fakeAgentTools).calls[0].Function.Name != "write_file" {
+		t.Fatalf("Coder workspace calls = %#v", m.toolRuntime.(*fakeAgentTools).calls)
+	}
+	if !hasPlanTool(configuredClient.requests[4].Tools, "write_file") ||
+		!hasPlanTool(configuredClient.requests[4].Tools, subagent.CoderCompleteToolName) ||
+		!strings.Contains(configuredClient.requests[4].Messages[0].Content, `"resolved_targets"`) {
+		t.Fatalf("Coder request = %#v", configuredClient.requests[4])
+	}
+	if !hasPlanTool(configuredClient.requests[6].Tools, subagent.ReviewTaskToolName) ||
+		!hasPlanTool(configuredClient.requests[8].Tools, subagent.ReviewTaskToolName) {
+		t.Fatalf("Planner review requests = %#v / %#v", configuredClient.requests[6], configuredClient.requests[8])
+	}
+	retryPrompt := configuredClient.requests[7].Messages[0].Content
+	if !strings.Contains(retryPrompt, "Preserve the existing command boundary") ||
+		!strings.Contains(retryPrompt, "app/plan.go owns the approved execution boundary") ||
+		!strings.Contains(retryPrompt, `"attempt": 2`) {
+		t.Fatalf("Coder retry prompt = %s", retryPrompt)
+	}
+	var sawCoderTool, sawPlannerReview, sawExecutionComplete bool
+	for _, activity := range m.agentActivities {
+		if activity.Agent == "coder" && activity.Action == subagent.ProgressTool && activity.Detail == "write_file" {
+			sawCoderTool = true
+		}
+		if activity.Agent == "planner" && activity.Action == subagent.ProgressTool && activity.Detail == subagent.ReviewTaskToolName {
+			sawPlannerReview = true
+		}
+		if activity.Agent == "executor" && activity.Action == subagent.ProgressCompleted && activity.Detail == "approved plan executed" {
+			sawExecutionComplete = true
+		}
+	}
+	if !sawCoderTool || !sawPlannerReview || !sawExecutionComplete {
+		t.Fatalf("execution activity missing: %#v", m.agentActivities)
 	}
 }
 
@@ -127,4 +185,13 @@ func planToolCall(name, arguments string) client.ToolCall {
 		ID: "call-" + name, Type: client.ToolTypeFunction,
 		Function: client.FunctionCall{Name: name, Arguments: arguments},
 	}
+}
+
+func hasPlanTool(tools []client.Tool, name string) bool {
+	for _, tool := range tools {
+		if tool.Function.Name == name {
+			return true
+		}
+	}
+	return false
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 )
 
 const defaultTaskAttempts = 3
@@ -28,9 +29,17 @@ type ExecutionLoop struct {
 }
 
 type PlanExecutionResult struct {
-	Plan           PlanProposal `json:"plan"`
-	CompletedTasks int          `json:"completed_tasks"`
-	Attempts       int          `json:"attempts"`
+	Plan           PlanProposal          `json:"plan"`
+	CompletedTasks int                   `json:"completed_tasks"`
+	Attempts       int                   `json:"attempts"`
+	Tasks          []TaskExecutionResult `json:"tasks,omitempty"`
+}
+
+type TaskExecutionResult struct {
+	TaskIndex int         `json:"task_index"`
+	Title     string      `json:"title"`
+	Attempts  int         `json:"attempts"`
+	Result    CoderResult `json:"result"`
 }
 
 func (l ExecutionLoop) Run(ctx context.Context, plan PlanProposal) (PlanExecutionResult, error) {
@@ -49,12 +58,22 @@ func (l ExecutionLoop) Run(ctx context.Context, plan PlanProposal) (PlanExecutio
 	}
 	result := PlanExecutionResult{Plan: plan}
 	for taskIndex := range result.Plan.Steps {
+		reportProgress(l.Progress, ProgressEvent{
+			Agent: "executor", Action: ProgressStarted,
+			Detail: fmt.Sprintf("resolving task %d/%d target", taskIndex+1, len(result.Plan.Steps)),
+		})
 		targets, err := l.Resolver.Resolve(ctx, result.Plan.Steps[taskIndex].Target)
 		if err != nil {
 			return result, fmt.Errorf("subagent: resolve task %d target: %w", taskIndex+1, err)
 		}
+		reportProgress(l.Progress, ProgressEvent{
+			Agent: "executor", Action: ProgressCompleted,
+			Detail: fmt.Sprintf("task %d target · %d files", taskIndex+1, len(targets)),
+		})
 		feedback := ""
 		advanced := false
+		var accepted CoderResult
+		taskAttempts := 0
 		for attempt := 1; attempt <= maximumAttempts; attempt++ {
 			reportProgress(l.Progress, ProgressEvent{
 				Agent: "coder", Action: ProgressStarted,
@@ -65,6 +84,7 @@ func (l ExecutionLoop) Run(ctx context.Context, plan PlanProposal) (PlanExecutio
 				Targets: append([]string(nil), targets...), Feedback: feedback,
 			})
 			result.Attempts++
+			taskAttempts++
 			if err != nil {
 				reportProgress(l.Progress, ProgressEvent{Agent: "coder", Action: ProgressFailed, Detail: err.Error()})
 				return result, fmt.Errorf("subagent: Coder task %d attempt %d: %w", taskIndex+1, attempt, err)
@@ -81,6 +101,11 @@ func (l ExecutionLoop) Run(ctx context.Context, plan PlanProposal) (PlanExecutio
 			}
 			if review.Decision == "next" {
 				result.CompletedTasks++
+				accepted = coderResult
+				result.Tasks = append(result.Tasks, TaskExecutionResult{
+					TaskIndex: taskIndex, Title: result.Plan.Steps[taskIndex].Title,
+					Attempts: taskAttempts, Result: accepted,
+				})
 				advanced = true
 				break
 			}
@@ -91,4 +116,22 @@ func (l ExecutionLoop) Run(ctx context.Context, plan PlanProposal) (PlanExecutio
 		}
 	}
 	return result, nil
+}
+
+func RenderPlanExecutionResult(result PlanExecutionResult) string {
+	var body strings.Builder
+	body.WriteString("Plan executed successfully.")
+	body.WriteString(fmt.Sprintf("\n\nCompleted %d task(s) in %d Coder attempt(s).", result.CompletedTasks, result.Attempts))
+	for _, task := range result.Tasks {
+		body.WriteString(fmt.Sprintf("\n\n%d. %s", task.TaskIndex+1, task.Title))
+		body.WriteString(fmt.Sprintf("\n   %s", task.Result.Summary))
+		if task.Attempts > 1 {
+			body.WriteString(fmt.Sprintf("\n   attempts: %d", task.Attempts))
+		}
+		for _, verification := range task.Result.Verification {
+			body.WriteString("\n   verification: ")
+			body.WriteString(verification)
+		}
+	}
+	return body.String()
 }

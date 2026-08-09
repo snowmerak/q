@@ -161,9 +161,46 @@ func streamPlanWorkflow(
 	}
 	content := "Planning canceled. No work was executed."
 	if result.Approved {
-		content = "Plan approved. Execution has not started.\n\n" + subagent.RenderPlanProposal(result.Plan)
+		coderSpec, resolveErr := subagent.Resolve(value, config.AgentRoleCoder, models)
+		if resolveErr != nil {
+			emitAgentEvent(ctx, events, agentEvent{err: resolveErr})
+			return
+		}
+		executionID, idErr := sessionstore.NewID()
+		if idErr != nil {
+			emitAgentEvent(ctx, events, agentEvent{err: fmt.Errorf("plan: create execution ID: %w", idErr)})
+			return
+		}
+		executionID = "plan-execution-" + executionID
+		environment := toolRuntime.Environment()
+		coder := subagent.CoderRunner{
+			Client: configuredClient, Tools: toolRuntime, Spec: coderSpec,
+			Sink: archive, RunID: scoutRunID, ExecutionID: executionID,
+			WorkingDirectory: workingDirectory, Progress: progress,
+			Environment: fmt.Sprintf(
+				"Runtime environment: OS=%s; architecture=%s; run_command shell=%s. Use commands and quoting compatible with this shell.",
+				environment.OS, environment.Architecture, environment.Shell,
+			),
+		}
+		reviewer := subagent.PlannerReviewRunner{
+			Client: configuredClient, Spec: plannerSpec,
+			Sink: archive, RunID: scoutRunID, ExecutionID: executionID,
+			WorkingDirectory: workingDirectory, Progress: progress,
+		}
+		progress(subagent.ProgressEvent{Agent: "executor", Action: subagent.ProgressStarted, Detail: "executing approved plan"})
+		execution, executionErr := (subagent.ExecutionLoop{
+			Resolver: subagent.TargetResolver{Tools: toolRuntime},
+			Coder:    coder.Run, Review: reviewer.Run, Progress: progress,
+		}).Run(ctx, result.Plan)
+		if executionErr != nil {
+			progress(subagent.ProgressEvent{Agent: "executor", Action: subagent.ProgressFailed, Detail: executionErr.Error()})
+			emitAgentEvent(ctx, events, agentEvent{err: executionErr})
+			return
+		}
+		progress(subagent.ProgressEvent{Agent: "executor", Action: subagent.ProgressCompleted, Detail: "approved plan executed"})
+		content = subagent.RenderPlanExecutionResult(execution)
 	}
-	progress(subagent.ProgressEvent{Agent: "plan", Action: subagent.ProgressCompleted, Detail: "planning finished"})
+	progress(subagent.ProgressEvent{Agent: "plan", Action: subagent.ProgressCompleted, Detail: "plan workflow finished"})
 	response := &client.ChatResponse{Choices: []client.Choice{{Message: client.Message{
 		Role: client.RoleAssistant, Content: content,
 	}}}}

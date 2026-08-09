@@ -5,8 +5,9 @@
 이 문서는 역할별 모델 할당과 서브에이전트 orchestration의 전체 메모다.
 메인 agent의 `task_start`, `ask_to_user`, `task_complete` 제어와 read-only
 `ScoutRunner`가 구현되어 있다. `/plan`은 Griller가 필요할 때 Scout를 반복 호출하고,
-Planner의 조건·계획을 사용자에게 확인받은 뒤 실행 전 상태에서 종료하는 한 사이클을
-지원한다. 승인된 계획의 coder 실행 연결과 진행 중 graph 복구는 아직 구현하지 않는다.
+Planner의 조건·계획을 사용자에게 확인받은 뒤 승인된 task를 격리 Coder session에서
+실행한다. 각 attempt 뒤 Planner가 `retry` 또는 `next`를 결정하며, 진행 중 실행의
+재시작 복구는 아직 구현하지 않는다.
 
 `/plan`의 확정된 상태와 역할 계약은 [plan-orchestration.md](plan-orchestration.md)를
 우선한다. 승인 이후 Coder task와 Planner review 계약은

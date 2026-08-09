@@ -65,12 +65,15 @@ type TaskReview struct {
 type PlannerReviewRunner struct {
 	Client           AgentClient
 	Spec             Spec
+	Sink             RecordSink
+	RunID            string
+	ExecutionID      string
 	WorkingDirectory string
 	MaxRounds        int
 	Progress         ProgressFunc
 }
 
-func (r PlannerReviewRunner) Run(ctx context.Context, input TaskReviewRequest) (TaskReview, error) {
+func (r PlannerReviewRunner) Run(ctx context.Context, input TaskReviewRequest) (review TaskReview, runErr error) {
 	if ctx == nil {
 		return TaskReview{}, errors.New("subagent: planner review context is nil")
 	}
@@ -87,17 +90,46 @@ func (r PlannerReviewRunner) Run(ctx context.Context, input TaskReviewRequest) (
 	if err != nil {
 		return TaskReview{}, err
 	}
+	prompt := "Review this completed Coder attempt.\n\n" + string(body)
+	taskID := fmt.Sprintf("%s-planner-%d-%d", strings.TrimSpace(r.ExecutionID), input.TaskIndex+1, input.Attempt)
+	if strings.TrimSpace(r.ExecutionID) == "" {
+		taskID = fmt.Sprintf("plan-execution-planner-%d-%d", input.TaskIndex+1, input.Attempt)
+	}
+	var lifecycle *Lifecycle
+	if r.Sink != nil || strings.TrimSpace(r.RunID) != "" {
+		lifecycle, err = NewLifecycle(r.Sink, r.RunID, taskID, r.ExecutionID, r.Spec)
+		if err != nil {
+			return TaskReview{}, err
+		}
+		if err := lifecycle.Queued(prompt); err != nil {
+			return TaskReview{}, err
+		}
+		if err := lifecycle.Started(prompt); err != nil {
+			return TaskReview{}, err
+		}
+	}
+	defer func() {
+		if runErr != nil && lifecycle != nil {
+			runErr = errors.Join(runErr, lifecycle.Failed(runErr))
+		}
+	}()
 	messages := []client.Message{
 		{Role: client.RoleSystem, Content: plannerReviewInstructions()},
-		{Role: client.RoleUser, Content: "Review this completed Coder attempt.\n\n" + string(body)},
+		{Role: client.RoleUser, Content: prompt},
 	}
 	rounds := r.MaxRounds
 	if rounds <= 0 {
 		rounds = maximumReviewRounds
 	}
-	reportProgress(r.Progress, ProgressEvent{Agent: "planner", Action: ProgressStarted, Detail: "reviewing Coder result"})
+	reportProgress(r.Progress, ProgressEvent{
+		Agent: "planner", TaskID: taskID, ParentID: r.ExecutionID,
+		Action: ProgressStarted, Detail: "reviewing Coder result",
+	})
 	for round := 0; round < rounds; round++ {
-		reportProgress(r.Progress, ProgressEvent{Agent: "planner", Action: ProgressThinking, Detail: fmt.Sprintf("review round %d", round+1)})
+		reportProgress(r.Progress, ProgressEvent{
+			Agent: "planner", TaskID: taskID, ParentID: r.ExecutionID,
+			Action: ProgressThinking, Detail: fmt.Sprintf("review round %d", round+1),
+		})
 		parallel := false
 		request := client.ChatRequest{
 			Messages: messages, Tools: []client.Tool{reviewTaskTool()},
@@ -114,20 +146,42 @@ func (r PlannerReviewRunner) Run(ctx context.Context, input TaskReviewRequest) (
 			return TaskReview{}, fmt.Errorf("subagent: planner review: %w", err)
 		}
 		messages = append(messages, assistant)
+		if lifecycle != nil {
+			if err := lifecycle.Message(assistant); err != nil {
+				return TaskReview{}, err
+			}
+		}
 		if len(assistant.ToolCalls) != 1 || assistant.ToolCalls[0].Function.Name != ReviewTaskToolName {
 			messages = append(messages, client.Message{Role: client.RoleSystem, Content: "Call review_task exactly once."})
 			continue
 		}
-		reportProgress(r.Progress, ProgressEvent{Agent: "planner", Action: ProgressTool, Detail: ReviewTaskToolName})
-		review, err := parseTaskReview(assistant.ToolCalls[0].Function.Arguments)
+		reportProgress(r.Progress, ProgressEvent{
+			Agent: "planner", TaskID: taskID, ParentID: r.ExecutionID,
+			Action: ProgressTool, Detail: ReviewTaskToolName,
+		})
+		review, err = parseTaskReview(assistant.ToolCalls[0].Function.Arguments)
 		if err != nil {
-			messages = append(messages, client.Message{
+			message := client.Message{
 				Role: client.RoleTool, Name: ReviewTaskToolName, ToolCallID: assistant.ToolCalls[0].ID,
 				Content: scoutToolError(err).Content,
-			})
+			}
+			messages = append(messages, message)
+			if lifecycle != nil {
+				if err := lifecycle.Message(message); err != nil {
+					return TaskReview{}, err
+				}
+			}
 			continue
 		}
-		reportProgress(r.Progress, ProgressEvent{Agent: "planner", Action: ProgressCompleted, Detail: review.Decision})
+		if lifecycle != nil {
+			if err := lifecycle.Succeeded(review.Decision, review.Decision, review); err != nil {
+				return TaskReview{}, err
+			}
+		}
+		reportProgress(r.Progress, ProgressEvent{
+			Agent: "planner", TaskID: taskID, ParentID: r.ExecutionID,
+			Action: ProgressCompleted, Detail: review.Decision,
+		})
 		return review, nil
 	}
 	return TaskReview{}, fmt.Errorf("subagent: planner review exceeded %d model rounds", rounds)
@@ -266,14 +320,8 @@ func validateTaskReviewRequest(request TaskReviewRequest) error {
 	request.Result.Outcome = strings.TrimSpace(request.Result.Outcome)
 	request.Result.Summary = strings.TrimSpace(request.Result.Summary)
 	request.Result.Blocker = strings.TrimSpace(request.Result.Blocker)
-	if request.Result.Outcome != "succeeded" && request.Result.Outcome != "blocked" {
-		return errors.New("subagent: Coder result outcome must be succeeded or blocked")
-	}
-	if request.Result.Summary == "" {
-		return errors.New("subagent: Coder result summary is required")
-	}
-	if request.Result.Outcome == "blocked" && request.Result.Blocker == "" {
-		return errors.New("subagent: blocked Coder result requires blocker")
+	if err := validateCoderResult(request.Result); err != nil {
+		return fmt.Errorf("subagent: Coder result: %w", err)
 	}
 	return nil
 }

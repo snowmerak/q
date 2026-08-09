@@ -259,8 +259,10 @@ func TestPlannerReviewUpdatesPlanFactsAndCoderPromptCarriesCurrentPlan(t *testin
 			"facts":["app/model.go contains a generated section"]
 		}`)},
 	}}}
+	sink := &scoutRecordSink{}
 	runner := PlannerReviewRunner{
 		Client: fake, Spec: Spec{Role: config.AgentRolePlanner, Model: "planner-model"},
+		Sink: sink, RunID: "run-review-1", ExecutionID: "execution-review-1",
 	}
 	review, err := runner.Run(context.Background(), TaskReviewRequest{
 		Plan: plan, TaskIndex: 0, Attempt: 1,
@@ -275,6 +277,10 @@ func TestPlannerReviewUpdatesPlanFactsAndCoderPromptCarriesCurrentPlan(t *testin
 	if len(fake.requests) != 1 || fake.requests[0].ToolChoice == nil ||
 		!hasScoutTool(fake.requests[0].Tools, ReviewTaskToolName) {
 		t.Fatalf("review request = %#v", fake.requests)
+	}
+	if len(sink.records) < 4 || sink.records[len(sink.records)-1].Status != "succeeded" ||
+		sink.records[len(sink.records)-1].Role != config.AgentRolePlanner {
+		t.Fatalf("Planner review lifecycle = %#v", sink.records)
 	}
 	if err := ApplyTaskReview(&plan, review); err != nil {
 		t.Fatal(err)
