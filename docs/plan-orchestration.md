@@ -118,6 +118,11 @@ Scout는 반드시 `task_complete`를 단독 호출해 다음 구조를 반환�
 Scout 결과는 먼저 Griller에게 돌아간다. Griller는 결과에 따라 사용자 질문, 추가
 Scout 호출, Loom transform 또는 Planner handoff 중 다음 행동을 정한다.
 
+Scout의 bounded `summary`, `findings`, `evidence`, `risks`는 `delegate_scout`의
+구조화 JSON 결과로 Griller context에 직접 전달한다. Scout 응답을 Loom reference
+하나로 치환하지 않는다. Loom은 큰 원본 tool result와 Scout가 명시적으로 남긴
+supporting artifact를 보관할 때만 사용한다.
+
 ## Planner와 확인 계약
 
 Planner는 완성된 Grill brief를 받아 다음을 하나의 proposal로 만든다.
@@ -138,20 +143,26 @@ Planner만 반복하지 않는다. 기존 사용자 답변, Scout 결과, Loom r
 
 ## 구현 상태
 
-현재 `subagent.ScoutRunner`가 첫 실행 코어로 구현되어 있다.
+현재 `/plan`은 한 번의 승인 흐름을 실제로 실행할 수 있다. 채팅에서 `/plan`을
+입력한 뒤 다음 메시지로 요청을 주거나 `/plan <request>`로 바로 시작한다.
 
+- Griller의 반복 tool loop와 `ask_to_user`
+- Griller가 호출하는 `delegate_scout`
 - role별 model과 reasoning effort 적용
 - Griller가 넘길 bounded `ScoutTask`
 - 읽기 전용 tool allowlist
-- 독립 model/tool loop
+- Scout의 독립 model/tool loop와 inline structured report
 - 검증된 `task_complete` 결과
 - plain-text 종료 reminder
 - Session Store lifecycle 기록
+- Planner의 `submit_plan` validation
+- 조건과 계획을 조합한 사용자 confirmation
+- 거절 또는 Planner `blocked` 시 이전 brief/proposal/feedback을 보존한 re-grill
+- 승인 또는 취소 후 실행 단계로 넘어가지 않고 종료
 
-아직 구현되지 않은 연결은 다음과 같다.
+후속 구현 범위는 다음과 같다.
 
-- `/plan` 명령과 상태 저장
-- Griller runner 및 `delegate_scout` tool bridge
-- Scout 결과를 Griller context로 되돌리는 반복 loop
-- Planner runner와 사용자 confirmation TUI
-- 실패 시 accumulated context를 사용한 re-grill
+- 진행 중 planning state의 재시작 복구
+- Griller와 Planner 내부 lifecycle archive
+- plan 전용 상세 로그 panel
+- 승인된 계획을 coder 실행 단계로 넘기는 별도 명령과 gate

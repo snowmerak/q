@@ -173,6 +173,7 @@ type model struct {
 	compactionTarget int
 	input            textarea.Model
 	viewport         viewport.Model
+	questionViewport viewport.Model
 	spinner          spinner.Model
 	waiting          bool
 	compacting       bool
@@ -182,6 +183,7 @@ type model struct {
 	questionAnswer   chan askToUserOutput
 	questionEvents   <-chan agentEvent
 	questionTurnID   uint64
+	planArmed        bool
 	turnContext      context.Context
 	turnCancel       context.CancelFunc
 	turnID           uint64
@@ -211,6 +213,7 @@ type chatResultMsg struct {
 }
 
 type agentEvent struct {
+	status          string
 	message         *client.Message
 	call            *client.ToolCall
 	question        *askToUserInput
@@ -278,13 +281,16 @@ func newManagedModel(ctx context.Context, store config.Store, factory clientFact
 	defaults := config.Default()
 	m := model{
 		ctx: ctx, store: store, factory: factory, runtime: runtime, screen: screenSetup,
-		viewport: viewport.New(viewport.WithWidth(80), viewport.WithHeight(12)),
-		spinner:  spinner.New(spinner.WithSpinner(spinner.Dot)),
+		viewport:         viewport.New(viewport.WithWidth(80), viewport.WithHeight(12)),
+		questionViewport: viewport.New(viewport.WithWidth(80), viewport.WithHeight(8)),
+		spinner:          spinner.New(spinner.WithSpinner(spinner.Dot)),
 	}
 	if runtime != nil {
 		m.gatewayConfig = runtime.Config()
 	}
 	m.viewport.SoftWrap = true
+	m.questionViewport.SoftWrap = true
+	m.questionViewport.FillHeight = true
 
 	placeholders := []string{
 		"provider id",
@@ -500,6 +506,10 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		event := message.event
+		if event.status != "" {
+			m.status = event.status
+			return m, tea.Batch(m.spinner.Tick, waitAgentEvent(message.events, message.turnID))
+		}
 		if event.call != nil {
 			m.archiveToolCall(*event.call)
 			m.status = "Running tool · " + describeToolCall(*event.call)
@@ -515,6 +525,7 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			m.input.Placeholder = "Answer the question…"
 			m.status = "Waiting for your answer"
 			m.resize(m.width, m.height)
+			m.questionViewport.GotoTop()
 			return m, m.input.Focus()
 		}
 		if event.message != nil {
@@ -716,7 +727,11 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	if m.screen == screenChat {
 		var commands []tea.Cmd
 		var command tea.Cmd
-		m.viewport, command = m.viewport.Update(message)
+		if m.asking {
+			m.questionViewport, command = m.questionViewport.Update(message)
+		} else {
+			m.viewport, command = m.viewport.Update(message)
+		}
 		commands = append(commands, command)
 		if m.waiting && !m.asking {
 			m.spinner, command = m.spinner.Update(message)
@@ -1458,6 +1473,11 @@ func (m model) saveModelTargetConfiguration(value config.Config, target string) 
 }
 
 func (m model) updateChatKey(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	if m.asking && isQuestionScrollKey(key.String()) {
+		var command tea.Cmd
+		m.questionViewport, command = m.questionViewport.Update(key)
+		return m, command
+	}
 	switch key.String() {
 	case "esc":
 		return m, tea.Quit
@@ -1512,6 +1532,13 @@ func (m model) submitChat() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	switch content {
+	case "/plan":
+		m.input.Reset()
+		m.planArmed = true
+		m.input.Placeholder = "Describe the work to plan…"
+		m.status = "Plan mode · enter a planning request"
+		m.resize(m.width, m.height)
+		return m, m.input.Focus()
 	case "/clear":
 		m.input.Reset()
 		m.resetConversation()
@@ -1530,6 +1557,12 @@ func (m model) submitChat() (tea.Model, tea.Cmd) {
 	case "/loom":
 		m.input.Reset()
 		return m.enterLoom()
+	}
+	if strings.HasPrefix(content, "/plan ") {
+		return m.startPlan(strings.TrimSpace(strings.TrimPrefix(content, "/plan")))
+	}
+	if m.planArmed {
+		return m.startPlan(content)
 	}
 	m.beginTurn()
 	m.turnMessageStart = len(m.messages)
@@ -1574,6 +1607,7 @@ func (m model) submitQuestionAnswer(content string) (tea.Model, tea.Cmd) {
 	turnID := m.questionTurnID
 	turnContext := m.activeTurnContext()
 	m.asking = false
+	m.planArmed = false
 	m.pendingQuestion = askToUserInput{}
 	m.questionAnswer = nil
 	m.questionEvents = nil
@@ -1633,6 +1667,7 @@ func (m model) interruptTurn() (tea.Model, tea.Cmd) {
 	m.waiting = false
 	m.compacting = false
 	m.asking = false
+	m.planArmed = false
 	m.submitPending = false
 	m.pendingMessage = client.Message{}
 	m.pendingQuestion = askToUserInput{}
@@ -1949,6 +1984,7 @@ func (m *model) rollbackPendingMessage() {
 	m.waiting = false
 	m.compacting = false
 	m.asking = false
+	m.planArmed = false
 	m.pendingQuestion = askToUserInput{}
 	m.questionAnswer = nil
 	m.questionEvents = nil
@@ -2234,6 +2270,7 @@ func (m *model) resetConversation() {
 	m.compactionTarget = 0
 	m.submitPending = false
 	m.asking = false
+	m.planArmed = false
 	m.pendingQuestion = askToUserInput{}
 	m.questionAnswer = nil
 	m.questionEvents = nil
@@ -2322,11 +2359,17 @@ func (m *model) resize(width, height int) {
 	if m.workspaceStore != nil {
 		chromeHeight++
 	}
+	dynamicHeight := max(2, m.height-chromeHeight)
 	if m.asking {
 		question := renderToolPanel("Question", renderPendingQuestion(m.pendingQuestion), max(36, contentWidth), m.dark)
-		chromeHeight += lipgloss.Height(question) + 1
+		questionHeight := min(lipgloss.Height(question), max(1, dynamicHeight*2/3))
+		m.questionViewport.SetHeight(questionHeight)
+		m.configureQuestionViewport(max(36, contentWidth))
+		m.viewport.SetHeight(max(1, dynamicHeight-questionHeight-1))
+	} else {
+		m.questionViewport.SetContent("")
+		m.viewport.SetHeight(max(3, dynamicHeight))
 	}
-	m.viewport.SetHeight(max(3, m.height-chromeHeight))
 	m.refreshTranscript()
 }
 
@@ -2342,6 +2385,7 @@ func (m *model) applyColorScheme(dark bool) {
 	inputStyles.Cursor.Shape = tea.CursorBar
 	m.input.SetStyles(inputStyles)
 	m.refreshTranscript()
+	m.refreshQuestion()
 }
 
 func (m *model) refreshTranscript() {
@@ -2350,6 +2394,45 @@ func (m *model) refreshTranscript() {
 	}
 	m.viewport.SetContent(renderTranscriptWithStyle(m.messages, m.viewport.Width(), m.dark))
 	m.viewport.GotoBottom()
+}
+
+func (m *model) refreshQuestion() {
+	if m.screen != screenChat || !m.asking {
+		m.questionViewport.SetContent("")
+		return
+	}
+	m.configureQuestionViewport(m.chatFrameWidth())
+}
+
+func (m *model) configureQuestionViewport(width int) {
+	border := themedColor(m.dark, "81", "25")
+	panelStyle := toolPanelStyle(width, m.dark)
+	// Keep the viewport responsible only for clipping and scrolling. Applying the
+	// panel frame to it makes bubbles calculate soft wraps with the outer width,
+	// then Lip Gloss renders those lines into the narrower framed width. The
+	// resulting second wrap can change the rendered height while scrolling.
+	m.questionViewport.SetWidth(panelStyle.GetWidth() - panelStyle.GetHorizontalFrameSize())
+	m.questionViewport.Style = lipgloss.NewStyle()
+	m.questionViewport.StyleLineFunc = func(index int) lipgloss.Style {
+		if index == 0 {
+			return lipgloss.NewStyle().Bold(true).Foreground(border)
+		}
+		return lipgloss.NewStyle()
+	}
+	m.questionViewport.SetContent("Question\n" + renderPendingQuestion(m.pendingQuestion))
+}
+
+func (m model) renderedQuestionViewport() string {
+	return toolPanelStyle(m.chatFrameWidth(), m.dark).Render(m.questionViewport.View())
+}
+
+func isQuestionScrollKey(key string) bool {
+	switch key {
+	case "pgup", "pgdown", "ctrl+u", "ctrl+d":
+		return true
+	default:
+		return false
+	}
 }
 
 func renderTranscript(messages []client.Message, width int) string {
@@ -2429,18 +2512,26 @@ func renderMarkdown(renderer *glamour.TermRenderer, source string) string {
 	return strings.Trim(rendered, "\n")
 }
 func renderToolPanel(label, body string, width int, dark bool) string {
+	return toolPanelStyle(width, dark).Render(toolPanelContent(label, body, dark))
+}
+
+func toolPanelContent(label, body string, dark bool) string {
 	background := themedColor(dark, "235", "255")
 	border := themedColor(dark, "81", "25")
 	labelStyle := lipgloss.NewStyle().Bold(true).Foreground(border).Background(background)
-	content := labelStyle.Render(label) + "\n" + body
+	return labelStyle.Render(label) + "\n" + body
+}
+
+func toolPanelStyle(width int, dark bool) lipgloss.Style {
+	background := themedColor(dark, "235", "255")
+	border := themedColor(dark, "81", "25")
 	return lipgloss.NewStyle().
 		Background(background).
 		BorderStyle(lipgloss.Border{Left: "▌"}).
 		BorderLeft(true).
 		BorderForeground(border).
 		Padding(0, 1).
-		Width(max(10, width-3)).
-		Render(content)
+		Width(max(10, width-3))
 }
 
 func themedColor(dark bool, darkColor, lightColor string) color.Color {
@@ -2743,9 +2834,15 @@ func (m model) View() tea.View {
 	view := tea.NewView(content)
 	view.AltScreen = true
 	view.WindowTitle = "q"
-	if m.screen == screenChat && !m.waiting {
+	if m.screen == screenChat && m.asking {
+		view.MouseMode = tea.MouseModeCellMotion
+	}
+	if m.screen == screenChat && (!m.waiting || m.asking) {
 		if cursor := m.input.Cursor(); cursor != nil {
 			inputOffset := m.renderedChatHeaderHeight() + 1 + lipgloss.Height(m.viewport.View())
+			if m.asking {
+				inputOffset += lipgloss.Height(m.renderedQuestionViewport()) + 1
+			}
 			cursor.Position.X += frameStyle.GetPaddingLeft()
 			cursor.Position.Y += frameStyle.GetPaddingTop() + inputOffset
 			view.Cursor = cursor
@@ -3120,8 +3217,8 @@ func (m model) viewChat() string {
 	footer := helpStyle.Render(footerText)
 	content := header + "\n\n" + m.viewport.View() + "\n"
 	if m.asking {
-		content += renderToolPanel("Question", renderPendingQuestion(m.pendingQuestion), m.chatFrameWidth(), m.dark) + "\n"
-		footer = helpStyle.Render("enter answer · shift+enter newline · ctrl+c interrupt turn · esc quit")
+		content += m.renderedQuestionViewport() + "\n"
+		footer = helpStyle.Render("pgup/pgdn scroll · enter answer · shift+enter newline · ctrl+c interrupt")
 	}
 	content += m.input.View()
 	if status != "" {

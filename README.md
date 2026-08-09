@@ -182,6 +182,7 @@ Chat keys:
 - `Enter`: send
 - `Shift+Enter`: insert a newline
 - `/clear`: clear the conversation and remove the current workspace session
+- `/plan`: arm approval-gated planning for the next message; `/plan <request>` starts immediately
 - `/model`: configure the main-loop, embedding, or subagent role models
 - `/provider`: list, add, edit, enable, disable, or delete Gateway providers
 - `Ctrl+L`: clear the in-memory conversation

@@ -19,6 +19,9 @@ const (
 	ScoutCompleteToolName = "task_complete"
 	defaultScoutRounds    = 24
 	maximumScoutReminders = 3
+	maximumScoutFindings  = 32
+	maximumScoutListItems = 16
+	maximumScoutTextBytes = 16 << 10
 )
 
 var scoutReadTools = map[string]struct{}{
@@ -322,7 +325,10 @@ func scoutTools(available []client.Tool) []client.Tool {
 
 func scoutCompletionTool() client.Tool {
 	strict := true
-	stringArray := map[string]any{"type": "array", "items": map[string]any{"type": "string"}}
+	stringArray := map[string]any{
+		"type": "array", "maxItems": maximumScoutListItems,
+		"items": map[string]any{"type": "string"},
+	}
 	return client.Tool{Type: client.ToolTypeFunction, Function: client.FunctionDefinition{
 		Name:        ScoutCompleteToolName,
 		Description: "Finish this scout task with a structured repository report for the caller.",
@@ -332,7 +338,7 @@ func scoutCompletionTool() client.Tool {
 			"properties": map[string]any{
 				"outcome": map[string]any{"type": "string", "enum": []string{"succeeded", "blocked"}},
 				"summary": map[string]any{"type": "string"},
-				"findings": map[string]any{"type": "array", "items": map[string]any{
+				"findings": map[string]any{"type": "array", "maxItems": maximumScoutFindings, "items": map[string]any{
 					"type": "object", "properties": map[string]any{
 						"path": map[string]any{"type": "string"}, "symbol": map[string]any{"type": "string"},
 						"summary": map[string]any{"type": "string"}, "evidence": stringArray, "risks": stringArray,
@@ -369,8 +375,14 @@ func parseScoutCompletion(arguments string) (scoutCompletion, error) {
 	if completion.Summary == "" {
 		return scoutCompletion{}, errors.New("task_complete summary is required")
 	}
+	if len(completion.Summary) > maximumScoutTextBytes || len(completion.Blocker) > maximumScoutTextBytes {
+		return scoutCompletion{}, fmt.Errorf("task_complete summary and blocker must not exceed %d bytes", maximumScoutTextBytes)
+	}
 	if completion.Outcome == "blocked" && completion.Blocker == "" {
 		return scoutCompletion{}, errors.New("task_complete blocker is required for blocked outcome")
+	}
+	if len(completion.Findings) > maximumScoutFindings {
+		return scoutCompletion{}, fmt.Errorf("task_complete findings must contain at most %d items", maximumScoutFindings)
 	}
 	for index := range completion.Findings {
 		finding := &completion.Findings[index]
@@ -382,9 +394,15 @@ func parseScoutCompletion(arguments string) (scoutCompletion, error) {
 		if finding.Summary == "" {
 			return scoutCompletion{}, fmt.Errorf("task_complete finding %d requires summary", index+1)
 		}
+		if len(finding.Evidence) > maximumScoutListItems || len(finding.Risks) > maximumScoutListItems {
+			return scoutCompletion{}, fmt.Errorf("task_complete finding %d evidence and risks must contain at most %d items", index+1, maximumScoutListItems)
+		}
 	}
 	completion.Artifacts = cleanStrings(completion.Artifacts)
 	completion.Verification = cleanStrings(completion.Verification)
+	if len(completion.Artifacts) > maximumScoutListItems || len(completion.Verification) > maximumScoutListItems {
+		return scoutCompletion{}, fmt.Errorf("task_complete artifacts and verification must contain at most %d items", maximumScoutListItems)
+	}
 	return completion, nil
 }
 

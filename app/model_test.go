@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/snowmerak/llm-provider/gateway"
 	"github.com/snowmerak/q/client"
@@ -1317,6 +1318,7 @@ func TestAskToUserPausesForAnswerAndResumesSameTask(t *testing.T) {
 	m := newModel(context.Background(), config.Store{Dir: t.TempDir()}, nil)
 	m.toolRuntime = &fakeAgentTools{}
 	m.enterChat(value, configuredClient)
+	m.resize(80, 24)
 	m.input.SetValue("choose a color")
 	updated, command := m.submitChat()
 	m = updated.(model)
@@ -1350,6 +1352,70 @@ func TestAskToUserPausesForAnswerAndResumesSameTask(t *testing.T) {
 	if m.messages[len(m.messages)-1].Content != "Selected blue" {
 		t.Fatalf("final transcript = %#v", m.messages)
 	}
+}
+
+func TestLongQuestionIsScrollableAndKeepsAnswerInputVisible(t *testing.T) {
+	m := newModel(context.Background(), config.Store{Dir: t.TempDir()}, nil)
+	m.screen = screenChat
+	m.waiting = true
+	m.asking = true
+	m.pendingQuestion = askToUserInput{
+		Question: "Approve this plan?",
+		// Keep each line just wider than the framed panel's content width. The
+		// viewport and panel must agree on wrapping or the panel grows mid-scroll.
+		Context: strings.Repeat(strings.Repeat("x", 91)+"\n", 48),
+		Choices: []askToUserChoice{{ID: "approve", Label: "Approve"}},
+	}
+	m.input.Placeholder = "Answer the question…"
+	m.input.Focus()
+	m.resize(100, 30)
+
+	if m.questionViewport.TotalLineCount() <= m.questionViewport.VisibleLineCount() {
+		t.Fatalf("question did not become scrollable: total %d visible %d",
+			m.questionViewport.TotalLineCount(), m.questionViewport.VisibleLineCount())
+	}
+	view := m.viewChat()
+	plain := ansi.Strip(view)
+	if !strings.Contains(plain, "Answer the question…") || !strings.Contains(plain, "pgup/pgdn") {
+		t.Fatalf("answer input or scroll help is not visible:\n%s", view)
+	}
+	if height := strings.Count(plain, "\n") + 1; height > m.height {
+		t.Fatalf("chat view height %d exceeds terminal height %d", height, m.height)
+	}
+	inputRow := lineContaining(plain, "Answer the question…")
+	questionHeight := lipgloss.Height(m.renderedQuestionViewport())
+	terminalView := m.View()
+	if terminalView.Cursor == nil || terminalView.MouseMode != tea.MouseModeCellMotion {
+		t.Fatalf("question view cursor or mouse mode missing: cursor %v mouse %v", terminalView.Cursor != nil, terminalView.MouseMode)
+	}
+
+	before := m.questionViewport.ScrollPercent()
+	for !m.questionViewport.AtBottom() {
+		updated, _ := m.updateChatKey(tea.KeyPressMsg{Code: tea.KeyPgDown})
+		m = updated.(model)
+		afterView := ansi.Strip(m.viewChat())
+		if got := lipgloss.Height(m.renderedQuestionViewport()); got != questionHeight {
+			t.Fatalf("question height changed while scrolling: before %d after %d", questionHeight, got)
+		}
+		if got := lineContaining(afterView, "Answer the question…"); got != inputRow {
+			t.Fatalf("answer input moved while scrolling: before row %d after row %d", inputRow, got)
+		}
+		if height := strings.Count(afterView, "\n") + 1; height > m.height {
+			t.Fatalf("scrolled chat view height %d exceeds terminal height %d", height, m.height)
+		}
+	}
+	if m.questionViewport.ScrollPercent() <= before {
+		t.Fatalf("question did not scroll: before %.2f after %.2f", before, m.questionViewport.ScrollPercent())
+	}
+}
+
+func lineContaining(value, needle string) int {
+	for index, line := range strings.Split(value, "\n") {
+		if strings.Contains(line, needle) {
+			return index
+		}
+	}
+	return -1
 }
 
 func TestDirectAnswerDoesNotRequireTaskLifecycle(t *testing.T) {
