@@ -19,6 +19,7 @@ func TestStoreRoundTrip(t *testing.T) {
 	want.Agents.Roles = map[string]AgentConfig{
 		AgentRolePlanner: {Model: "planning-model", ReasoningEffort: "high"},
 		AgentRoleCoder:   {Model: "coding-model", ReasoningEffort: "medium"},
+		AgentRoleCommit:  {Model: "commit-model", ReasoningEffort: "low"},
 	}
 	if err := store.Save(want); err != nil {
 		t.Fatal(err)
@@ -124,6 +125,24 @@ func TestEffectiveAgentUsesRoleOverrideAndActiveModelFallback(t *testing.T) {
 	}
 	if _, err := value.EffectiveAgent("reviewer"); err == nil {
 		t.Fatal("unknown role unexpectedly resolved")
+	}
+}
+
+func TestCommitAgentUsesRoleOverrideAndActiveModelFallback(t *testing.T) {
+	value := Default()
+	value.Provider.Model = "active-model"
+
+	inherited, err := value.EffectiveAgent(AgentRoleCommit)
+	if err != nil || inherited.Model != "active-model" || inherited.ReasoningEffort != "" {
+		t.Fatalf("inherited commit agent = %#v, err = %v", inherited, err)
+	}
+
+	value.Agents.Roles = map[string]AgentConfig{
+		AgentRoleCommit: {Model: "commit-model", ReasoningEffort: "low"},
+	}
+	overridden, err := value.EffectiveAgent(AgentRoleCommit)
+	if err != nil || overridden.Model != "commit-model" || overridden.ReasoningEffort != "low" {
+		t.Fatalf("overridden commit agent = %#v, err = %v", overridden, err)
 	}
 }
 

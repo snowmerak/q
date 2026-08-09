@@ -451,13 +451,13 @@ func TestSlashModelOpensPickerAndPreservesHistory(t *testing.T) {
 	}
 }
 
-func TestSlashModelConfiguresSubagentModelAndReasoning(t *testing.T) {
+func TestSlashModelConfiguresCommitAgentModelAndReasoning(t *testing.T) {
 	store := config.Store{Dir: t.TempDir()}
 	value := config.Default()
 	value.Provider.Model = "default-model"
 	fake := &fakeClient{models: []client.Model{
 		{ID: "default-model"},
-		{ID: "planning-model", Capabilities: &client.ModelCapabilities{Reasoning: &client.ReasoningCapabilities{
+		{ID: "commit-model", Capabilities: &client.ModelCapabilities{Reasoning: &client.ReasoningCapabilities{
 			Supported: true, Control: client.ReasoningControlEffort,
 			SupportedEfforts: []string{"low", "high"}, DefaultEffort: "high",
 		}}},
@@ -476,17 +476,22 @@ func TestSlashModelConfiguresSubagentModelAndReasoning(t *testing.T) {
 
 	targets := modelTargets()
 	for index, target := range targets {
-		if target == config.AgentRolePlanner {
+		if target == config.AgentRoleCommit {
 			m.modelTargetCursor = index
 			break
 		}
 	}
 	updated, _ = m.updateModelPicker(tea.KeyPressMsg{Code: tea.KeyEnter})
 	m = updated.(model)
-	if m.modelPickerStage != modelPickerModels || m.modelTarget != config.AgentRolePlanner {
-		t.Fatalf("planner target state = stage %v, target %q", m.modelPickerStage, m.modelTarget)
+	if m.modelPickerStage != modelPickerModels || m.modelTarget != config.AgentRoleCommit {
+		t.Fatalf("commit target state = stage %v, target %q", m.modelPickerStage, m.modelTarget)
 	}
-	m.modelCursor = 1
+	for index, model := range m.filteredModels() {
+		if model.ID == "commit-model" {
+			m.modelCursor = index
+			break
+		}
+	}
 	updated, command = m.updateModelPicker(tea.KeyPressMsg{Code: tea.KeyEnter})
 	m = updated.(model)
 	if command != nil || m.modelPickerStage != modelPickerReasoning {
@@ -501,12 +506,12 @@ func TestSlashModelConfiguresSubagentModelAndReasoning(t *testing.T) {
 	updated, _ = m.Update(command())
 	m = updated.(model)
 
-	agent := m.config.Agents.Roles[config.AgentRolePlanner]
+	agent := m.config.Agents.Roles[config.AgentRoleCommit]
 	if m.screen != screenModels || m.modelPickerStage != modelPickerTargets ||
-		agent.Model != "planning-model" || agent.ReasoningEffort != "high" {
-		t.Fatalf("saved planner config = %#v on screen %v", agent, m.screen)
+		agent.Model != "commit-model" || agent.ReasoningEffort != "high" {
+		t.Fatalf("saved commit config = %#v on screen %v", agent, m.screen)
 	}
-	if targets[m.modelTargetCursor] != config.AgentRolePlanner {
+	if targets[m.modelTargetCursor] != config.AgentRoleCommit {
 		t.Fatalf("target cursor moved to %q", targets[m.modelTargetCursor])
 	}
 	if fake.closed {
@@ -516,7 +521,7 @@ func TestSlashModelConfiguresSubagentModelAndReasoning(t *testing.T) {
 		t.Fatalf("history was not preserved: %#v", m.messages)
 	}
 	loaded, err := store.Load()
-	if err != nil || loaded.Agents.Roles[config.AgentRolePlanner] != agent {
+	if err != nil || loaded.Agents.Roles[config.AgentRoleCommit] != agent {
 		t.Fatalf("loaded config = %#v, err = %v", loaded, err)
 	}
 	updated, _ = m.updateModelPicker(tea.KeyPressMsg{Code: tea.KeyEscape})

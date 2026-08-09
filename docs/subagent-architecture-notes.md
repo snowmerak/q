@@ -14,7 +14,7 @@
 명확한 서브에이전트를 구성한다. 각 역할에는 독립적인 모델, reasoning effort,
 context와 실행 예산을 할당할 수 있어야 한다.
 
-초기 역할은 다음 여섯 가지다.
+초기 역할은 다음 일곱 가지다.
 
 | 역할 | 책임 | 기대 출력 |
 |---|---|---|
@@ -23,6 +23,7 @@ context와 실행 예산을 할당할 수 있어야 한다.
 | `research` | 공식 문서, API, 라이브러리와 외부 사실을 조사 | 근거와 출처가 포함된 조사 결과 |
 | `planner` | 조사 결과를 실행 가능한 단계와 완료 조건으로 변환 | 사용자가 승인할 수 있는 구현 계획 |
 | `coder` | 사용자가 승인한 계획에 따라 코드를 수정하고 적절히 검증 | 패치, 테스트 결과, 변경 설명 |
+| `commit` | 현재 작업 트리의 변경을 검토하고 적절한 Git commit을 준비 | 검증된 변경 범위와 commit 메시지 |
 | `advisor` | coder가 막히거나 작업이 늘어질 때 문제를 진단하고 대안을 제시 | 실패 원인 가설, 대안, 권장 다음 행동 |
 
 ## 기본 orchestration 흐름
@@ -78,6 +79,7 @@ root/orchestrator가 coder 재시도, planner를 통한 재계획, 사용자 질
 | `research` | 중간 | `medium` 또는 `high` | 큰 context와 출처 보존 |
 | `planner` | 중간 | `high` | scout/research 결과와 사용자 피드백 중심 |
 | `coder` | 품질 우선 | `high` | 승인된 계획, 관련 코드, 테스트 중심 |
+| `commit` | 빠름 | `low` 또는 `medium` | 작업 트리 diff와 검증 결과 중심 |
 | `advisor` | 품질 우선 | `high` | coder의 시도, 실패 결과와 미해결 문제 중심 |
 
 정확한 모델과 effort는 `http://localhost:18181/v1/models`의 실제 capability와
@@ -103,6 +105,9 @@ agents:
       model: ""
       reasoning_effort: ""
     coder:
+      model: ""
+      reasoning_effort: ""
+    commit:
       model: ""
       reasoning_effort: ""
     advisor:

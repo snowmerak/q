@@ -23,6 +23,7 @@ const (
 	AgentRoleResearch = "research"
 	AgentRolePlanner  = "planner"
 	AgentRoleCoder    = "coder"
+	AgentRoleCommit   = "commit"
 	AgentRoleAdvisor  = "advisor"
 )
 
@@ -80,6 +81,7 @@ var agentRoles = []string{
 	AgentRoleResearch,
 	AgentRolePlanner,
 	AgentRoleCoder,
+	AgentRoleCommit,
 	AgentRoleAdvisor,
 }
 
