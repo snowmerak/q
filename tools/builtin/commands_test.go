@@ -27,13 +27,16 @@ func TestRunCommandStatusAndWait(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if status.Status == "running" && status.NextAction != "wait" {
+		t.Fatalf("running status next action = %q; want wait", status.NextAction)
+	}
 	finished, err := fs.WaitCommand(WaitInput{CommandID: started.CommandID, Offset: status.NextOffset, TimeoutMS: 5000})
 	if err != nil {
 		t.Fatal(err)
 	}
 	combined := status.Output + finished.Output
 	if finished.Status != "succeeded" || finished.ExitCode == nil || *finished.ExitCode != 0 ||
-		!strings.Contains(combined, "hello from command") {
+		finished.NextAction != "" || !strings.Contains(combined, "hello from command") {
 		t.Fatalf("status = %#v, output = %q", finished, combined)
 	}
 }

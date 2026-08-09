@@ -135,7 +135,9 @@ Planner가 반환한 `facts`는 decision 적용 전에 Plan에 중복 제거하�
 - 현재 Plan 전체를 포함하는 Coder system prompt builder
 - task 순서, retry, next와 attempt 상한을 집행하는 execution loop
 - 승인 직후 execution loop로 진입하는 `/plan` TUI 연결
-- workspace MCP 도구와 전용 `task_complete`만 제공하는 격리 Coder session
+- workspace MCP 도구와 전용 `task_complete`를 제공하는 격리 Coder session.
+  비동기 명령의 busy polling을 막기 위해 `cmd_status`는 제외하고
+  `run_command` 뒤에는 `next_offset`을 이어서 `wait`만 사용한다.
 - Coder/Planner의 실제 assistant note, tool arguments/result와 review payload를
   스크롤해서 보는 detailed trace (`Ctrl+G`로 compact activity 전환)
 - Coder attempt와 Planner review의 전체 message/tool lifecycle archive

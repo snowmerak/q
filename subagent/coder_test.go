@@ -22,6 +22,7 @@ func TestCoderRunnerUsesWorkspaceToolsAndCompletesAttempt(t *testing.T) {
 	}}
 	fakeTools := &fakeScoutTools{available: []client.Tool{
 		scoutFunctionTool("read_file"), scoutFunctionTool("edit_file"), scoutFunctionTool("run_command"),
+		scoutFunctionTool("cmd_status"), scoutFunctionTool("wait"),
 		scoutFunctionTool(AskToUserToolName), scoutFunctionTool(DelegateScoutToolName),
 	}}
 	sink := &scoutRecordSink{}
@@ -50,17 +51,18 @@ func TestCoderRunnerUsesWorkspaceToolsAndCompletesAttempt(t *testing.T) {
 		fakeClient.requests[0].ReasoningEffort != "high" || fakeClient.requests[0].WorkingDirectory != `C:\workspace` {
 		t.Fatalf("Coder requests = %#v", fakeClient.requests)
 	}
-	for _, expected := range []string{"read_file", "edit_file", "run_command", CoderCompleteToolName} {
+	for _, expected := range []string{"read_file", "edit_file", "run_command", "wait", CoderCompleteToolName} {
 		if !hasScoutTool(fakeClient.requests[0].Tools, expected) {
 			t.Fatalf("Coder tool %q missing: %#v", expected, fakeClient.requests[0].Tools)
 		}
 	}
 	if hasScoutTool(fakeClient.requests[0].Tools, AskToUserToolName) ||
-		hasScoutTool(fakeClient.requests[0].Tools, DelegateScoutToolName) {
-		t.Fatalf("Coder was offered orchestration tools: %#v", fakeClient.requests[0].Tools)
+		hasScoutTool(fakeClient.requests[0].Tools, DelegateScoutToolName) ||
+		hasScoutTool(fakeClient.requests[0].Tools, "cmd_status") {
+		t.Fatalf("Coder was offered reserved tools: %#v", fakeClient.requests[0].Tools)
 	}
 	prompt := fakeClient.requests[0].Messages[0].Content
-	for _, expected := range []string{`"plan"`, `"resolved_targets"`, "app/model.go", "Runtime environment: Windows"} {
+	for _, expected := range []string{`"plan"`, `"resolved_targets"`, "app/model.go", "Runtime environment: Windows", "use wait with the latest next_offset"} {
 		if !strings.Contains(prompt, expected) {
 			t.Fatalf("Coder prompt does not contain %q:\n%s", expected, prompt)
 		}

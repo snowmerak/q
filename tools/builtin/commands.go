@@ -37,6 +37,7 @@ type WaitInput struct {
 type CommandOutput struct {
 	CommandID  string     `json:"command_id"`
 	Status     string     `json:"status"`
+	NextAction string     `json:"next_action,omitempty"`
 	PID        int        `json:"pid"`
 	Workdir    string     `json:"workdir"`
 	Output     string     `json:"output,omitempty"`
@@ -215,11 +216,12 @@ func (s *commandState) snapshot(offset int64) CommandOutput {
 	output, next, more, truncated := s.output.read(offset, commandReadLimit)
 	s.mu.RLock()
 	result := CommandOutput{
-		CommandID: s.id, Status: "running", PID: s.command.Process.Pid, Workdir: s.workdir,
+		CommandID: s.id, Status: "running", NextAction: "wait", PID: s.command.Process.Pid, Workdir: s.workdir,
 		Output: output, NextOffset: next, MoreOutput: more, Truncated: truncated,
 		ExitCode: s.exitCode, StartedAt: s.started, FinishedAt: s.finished,
 	}
 	if s.exitCode != nil {
+		result.NextAction = ""
 		if *s.exitCode == 0 {
 			result.Status = "succeeded"
 		} else {
