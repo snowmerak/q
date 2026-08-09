@@ -164,35 +164,38 @@ type model struct {
 	loomStats           loom.Stats
 	loomBusy            bool
 
-	config           config.Config
-	client           chatClient
-	messages         []client.Message
-	memory           *memory.Manager
-	conversationID   string
-	pendingMessage   client.Message
-	requestEstimate  int
-	compactionTarget int
-	input            textarea.Model
-	viewport         viewport.Model
-	questionViewport viewport.Model
-	spinner          spinner.Model
-	waiting          bool
-	compacting       bool
-	submitPending    bool
-	asking           bool
-	pendingQuestion  askToUserInput
-	questionAnswer   chan askToUserOutput
-	questionEvents   <-chan agentEvent
-	questionTurnID   uint64
-	questionChoice   int
-	planArmed        bool
-	agentActivities  []agentActivity
-	agentStates      map[string]string
-	agentLogVisible  int
-	turnContext      context.Context
-	turnCancel       context.CancelFunc
-	turnID           uint64
-	turnMessageStart int
+	config             config.Config
+	client             chatClient
+	messages           []client.Message
+	memory             *memory.Manager
+	conversationID     string
+	pendingMessage     client.Message
+	requestEstimate    int
+	compactionTarget   int
+	input              textarea.Model
+	viewport           viewport.Model
+	questionViewport   viewport.Model
+	agentTraceViewport viewport.Model
+	spinner            spinner.Model
+	waiting            bool
+	compacting         bool
+	submitPending      bool
+	asking             bool
+	pendingQuestion    askToUserInput
+	questionAnswer     chan askToUserOutput
+	questionEvents     <-chan agentEvent
+	questionTurnID     uint64
+	questionChoice     int
+	planArmed          bool
+	agentActivities    []agentActivity
+	agentStates        map[string]string
+	agentLogVisible    int
+	agentTraces        []agentTrace
+	agentTraceExpanded bool
+	turnContext        context.Context
+	turnCancel         context.CancelFunc
+	turnID             uint64
+	turnMessageStart   int
 }
 
 type configuredMsg struct {
@@ -220,6 +223,7 @@ type chatResultMsg struct {
 type agentEvent struct {
 	status          string
 	activity        *agentActivity
+	trace           *agentTrace
 	message         *client.Message
 	call            *client.ToolCall
 	question        *askToUserInput
@@ -237,6 +241,16 @@ type agentActivity struct {
 	ParentID string
 	Action   string
 	Detail   string
+}
+
+type agentTrace struct {
+	Agent    string
+	TaskID   string
+	ParentID string
+	Kind     string
+	Name     string
+	Content  string
+	IsError  bool
 }
 
 type agentEventMsg struct {
@@ -295,16 +309,19 @@ func newManagedModel(ctx context.Context, store config.Store, factory clientFact
 	defaults := config.Default()
 	m := model{
 		ctx: ctx, store: store, factory: factory, runtime: runtime, screen: screenSetup,
-		viewport:         viewport.New(viewport.WithWidth(80), viewport.WithHeight(12)),
-		questionViewport: viewport.New(viewport.WithWidth(80), viewport.WithHeight(8)),
-		spinner:          spinner.New(spinner.WithSpinner(spinner.Dot)),
+		viewport:           viewport.New(viewport.WithWidth(80), viewport.WithHeight(12)),
+		questionViewport:   viewport.New(viewport.WithWidth(80), viewport.WithHeight(8)),
+		agentTraceViewport: viewport.New(viewport.WithWidth(80), viewport.WithHeight(8)),
+		spinner:            spinner.New(spinner.WithSpinner(spinner.Dot)),
 	}
 	if runtime != nil {
 		m.gatewayConfig = runtime.Config()
 	}
 	m.viewport.SoftWrap = true
 	m.questionViewport.SoftWrap = true
+	m.agentTraceViewport.SoftWrap = true
 	m.questionViewport.FillHeight = true
+	m.agentTraceViewport.FillHeight = true
 
 	placeholders := []string{
 		"provider id",
@@ -523,6 +540,11 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		if event.activity != nil {
 			m.appendAgentActivity(*event.activity)
 			m.status = activityStatus(*event.activity)
+			m.resize(m.width, m.height)
+			return m, tea.Batch(m.spinner.Tick, waitAgentEvent(message.events, message.turnID))
+		}
+		if event.trace != nil {
+			m.appendAgentTrace(*event.trace)
 			m.resize(m.width, m.height)
 			return m, tea.Batch(m.spinner.Tick, waitAgentEvent(message.events, message.turnID))
 		}
@@ -754,6 +776,8 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		var command tea.Cmd
 		if m.asking {
 			m.questionViewport, command = m.questionViewport.Update(message)
+		} else if m.waiting && m.agentTraceExpanded && len(m.agentTraces) > 0 {
+			m.agentTraceViewport, command = m.agentTraceViewport.Update(message)
 		} else {
 			m.viewport, command = m.viewport.Update(message)
 		}
@@ -1498,6 +1522,11 @@ func (m model) saveModelTargetConfiguration(value config.Config, target string) 
 }
 
 func (m model) updateChatKey(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	if key.String() == "ctrl+g" && len(m.agentTraces) > 0 {
+		m.agentTraceExpanded = !m.agentTraceExpanded
+		m.resize(m.width, m.height)
+		return m, nil
+	}
 	if m.asking && len(m.pendingQuestion.Choices) > 0 && strings.TrimSpace(m.input.Value()) == "" {
 		choiceCount := questionChoiceCount(m.pendingQuestion)
 		switch key.String() {
@@ -1516,6 +1545,11 @@ func (m model) updateChatKey(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if m.asking && isQuestionScrollKey(key.String()) {
 		var command tea.Cmd
 		m.questionViewport, command = m.questionViewport.Update(key)
+		return m, command
+	}
+	if !m.asking && m.agentTraceExpanded && len(m.agentTraces) > 0 && isAgentTraceScrollKey(key.String()) {
+		var command tea.Cmd
+		m.agentTraceViewport, command = m.agentTraceViewport.Update(key)
 		return m, command
 	}
 	switch key.String() {
@@ -2423,13 +2457,22 @@ func (m *model) resize(width, height int) {
 	m.modelContextWindow.SetWidth(min(contentWidth-2, 28))
 	m.input.SetWidth(contentWidth)
 	m.viewport.SetWidth(contentWidth)
+	m.agentTraceViewport.SetWidth(max(10, contentWidth-3))
 	chromeHeight := 10
 	if m.workspaceStore != nil {
 		chromeHeight++
 	}
 	dynamicHeight := max(2, m.height-chromeHeight)
 	m.agentLogVisible = 0
-	if len(m.agentActivities) > 0 && dynamicHeight >= 6 {
+	if m.agentTraceExpanded && len(m.agentTraces) > 0 && dynamicHeight >= 8 {
+		traceHeight := max(4, dynamicHeight*2/3)
+		if m.asking {
+			traceHeight = max(3, dynamicHeight/3)
+		}
+		m.agentTraceViewport.SetHeight(traceHeight)
+		dynamicHeight = max(2, dynamicHeight-traceHeight-3)
+		m.refreshAgentTrace(false)
+	} else if len(m.agentActivities) > 0 && dynamicHeight >= 6 {
 		m.agentLogVisible = min(len(m.agentActivities), max(1, min(8, dynamicHeight/4)))
 		dynamicHeight = max(2, dynamicHeight-m.agentLogVisible-2)
 	}
@@ -2503,6 +2546,46 @@ func (m *model) clearAgentActivities() {
 	m.agentActivities = nil
 	m.agentStates = nil
 	m.agentLogVisible = 0
+	m.agentTraces = nil
+	m.agentTraceExpanded = true
+	m.agentTraceViewport.SetContent("")
+}
+
+func (m *model) appendAgentTrace(trace agentTrace) {
+	trace.Agent = strings.TrimSpace(trace.Agent)
+	trace.TaskID = strings.TrimSpace(trace.TaskID)
+	trace.ParentID = strings.TrimSpace(trace.ParentID)
+	trace.Kind = strings.TrimSpace(trace.Kind)
+	trace.Name = strings.TrimSpace(trace.Name)
+	trace.Content = boundedAgentTraceContent(trace.Content)
+	if trace.Agent == "" || trace.Kind == "" {
+		return
+	}
+	wasAtBottom := len(m.agentTraces) == 0 || m.agentTraceViewport.AtBottom()
+	m.agentTraces = append(m.agentTraces, trace)
+	if len(m.agentTraces) > 400 {
+		m.agentTraces = append([]agentTrace(nil), m.agentTraces[len(m.agentTraces)-400:]...)
+	}
+	m.refreshAgentTrace(wasAtBottom)
+}
+
+func boundedAgentTraceContent(content string) string {
+	const maximum = 16 << 10
+	content = strings.TrimSpace(content)
+	if len(content) <= maximum {
+		return content
+	}
+	return content[:maximum] + "\n… trace content truncated; full value remains in the session archive"
+}
+
+func (m *model) refreshAgentTrace(gotoBottom bool) {
+	if m.screen != screenChat {
+		return
+	}
+	m.agentTraceViewport.SetContent(renderAgentTraces(m.agentTraces))
+	if gotoBottom {
+		m.agentTraceViewport.GotoBottom()
+	}
 }
 
 func (m *model) appendAgentActivity(activity agentActivity) {
@@ -2550,6 +2633,14 @@ func activityStatus(activity agentActivity) string {
 }
 
 func (m model) renderedAgentActivities() string {
+	if m.agentTraceExpanded && len(m.agentTraces) > 0 {
+		contentWidth := max(20, m.chatFrameWidth()-frameStyle.GetHorizontalFrameSize())
+		current := m.agentTraces[len(m.agentTraces)-1]
+		summary := ansi.Truncate(agentSummary(m.agentStates)+subtleStyle.Render(" · detailed trace"), contentWidth, "…")
+		currentLabel := ansi.Truncate("› "+agentTraceLabel(current), contentWidth, "…")
+		return summary + "\n" + activeLabelStyle.Render(currentLabel) + "\n" +
+			toolPanelStyle(m.chatFrameWidth(), m.dark).Render(m.agentTraceViewport.View())
+	}
 	if m.agentLogVisible <= 0 || len(m.agentActivities) == 0 {
 		return ""
 	}
@@ -2581,7 +2672,7 @@ func (m model) renderedAgentActivities() string {
 
 func agentSummary(states map[string]string) string {
 	parts := []string{titleStyle.Render("agents")}
-	for _, role := range []string{"griller", "scout", "planner"} {
+	for _, role := range []string{"griller", "scout", "planner", "coder", "executor"} {
 		state, exists := states[role]
 		if !exists {
 			continue
@@ -2606,9 +2697,58 @@ func agentSummary(states map[string]string) string {
 	return strings.Join(parts, subtleStyle.Render(" · "))
 }
 
+func renderAgentTraces(traces []agentTrace) string {
+	var body strings.Builder
+	for index, trace := range traces {
+		style := subtleStyle
+		if trace.IsError {
+			style = errorStyle
+		} else if trace.Kind == "tool_call" {
+			style = activeLabelStyle
+		}
+		label := agentTraceLabel(trace)
+		body.WriteString(style.Render(label))
+		if trace.Content != "" {
+			body.WriteString("\n")
+			body.WriteString(formatAgentTraceContent(trace.Content))
+		}
+		if index < len(traces)-1 {
+			body.WriteString("\n\n")
+		}
+	}
+	return body.String()
+}
+
+func agentTraceLabel(trace agentTrace) string {
+	label := trace.Agent + " · " + strings.ReplaceAll(trace.Kind, "_", " ")
+	if trace.Name != "" {
+		label += " · " + trace.Name
+	}
+	return label
+}
+
+func formatAgentTraceContent(content string) string {
+	var value any
+	if json.Unmarshal([]byte(content), &value) == nil {
+		if formatted, err := json.MarshalIndent(value, "", "  "); err == nil {
+			return string(formatted)
+		}
+	}
+	return content
+}
+
 func isQuestionScrollKey(key string) bool {
 	switch key {
 	case "pgup", "pgdown", "ctrl+u", "ctrl+d":
+		return true
+	default:
+		return false
+	}
+}
+
+func isAgentTraceScrollKey(key string) bool {
+	switch key {
+	case "pgup", "pgdown", "ctrl+u", "ctrl+d", "home", "end":
 		return true
 	default:
 		return false
@@ -3396,6 +3536,19 @@ func (m model) viewChat() string {
 	footerText := "enter send · shift+enter newline · /clear · /model · /provider · /loom · ctrl+c quit · esc quit"
 	if m.waiting {
 		footerText = "ctrl+c interrupt turn · esc quit"
+		if len(m.agentTraces) > 0 {
+			if m.agentTraceExpanded {
+				footerText = "pgup/pgdn trace · ctrl+g collapse trace · ctrl+c interrupt turn · esc quit"
+			} else {
+				footerText = "ctrl+g expand trace · ctrl+c interrupt turn · esc quit"
+			}
+		}
+	} else if len(m.agentTraces) > 0 {
+		if m.agentTraceExpanded {
+			footerText = "pgup/pgdn trace · ctrl+g collapse trace · enter send · ctrl+c quit"
+		} else {
+			footerText = "ctrl+g expand trace · enter send · shift+enter newline · ctrl+c quit"
+		}
 	}
 	footer := helpStyle.Render(footerText)
 	content := header + "\n\n" + m.viewport.View() + "\n"

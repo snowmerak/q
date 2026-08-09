@@ -98,6 +98,7 @@ type ScoutRunner struct {
 	WorkingDirectory string
 	MaxRounds        int
 	Progress         ProgressFunc
+	Trace            TraceFunc
 }
 
 func (r ScoutRunner) Run(ctx context.Context, task ScoutTask) (result ScoutResult, runErr error) {
@@ -204,6 +205,7 @@ func (r ScoutRunner) run(ctx context.Context, task ScoutTask, prompt string, lif
 		}
 		usage = addUsage(usage, response.Usage)
 		messages = append(messages, assistant)
+		traceAssistant(r.Trace, "scout", task.ID, task.ParentID, assistant)
 		if lifecycle != nil {
 			if err := lifecycle.Message(assistant); err != nil {
 				return ScoutResult{}, err
@@ -254,6 +256,7 @@ func (r ScoutRunner) run(ctx context.Context, task ScoutTask, prompt string, lif
 				Role: client.RoleTool, Name: call.Function.Name,
 				ToolCallID: call.ID, Content: toolResult.Content,
 			}
+			traceToolResult(r.Trace, "scout", task.ID, task.ParentID, call.Function.Name, toolResult)
 			messages = append(messages, message)
 			if lifecycle != nil {
 				if err := lifecycle.Message(message); err != nil {
@@ -334,7 +337,8 @@ Rules:
 4. Anchor findings to paths and symbols. Put concrete observations in evidence and keep inference in summary or risks.
 5. Investigate enough surrounding code to identify existing patterns, dependencies, tests, and likely change boundaries.
 6. If evidence is unavailable, return outcome blocked with a specific blocker; never invent repository facts.
-7. Finish by calling task_complete as the only tool call in that turn. Never return the scout report as plain text.`
+7. On each tool-calling turn, include a concise user-visible progress note describing the immediate investigation and expected evidence; do not expose or invent hidden chain-of-thought.
+8. Finish by calling task_complete as the only tool call in that turn. Never return the scout report as plain text.`
 }
 
 func scoutTools(available []client.Tool) []client.Tool {

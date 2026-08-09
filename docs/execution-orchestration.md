@@ -136,7 +136,8 @@ Planner가 반환한 `facts`는 decision 적용 전에 Plan에 중복 제거하�
 - task 순서, retry, next와 attempt 상한을 집행하는 execution loop
 - 승인 직후 execution loop로 진입하는 `/plan` TUI 연결
 - workspace MCP 도구와 전용 `task_complete`만 제공하는 격리 Coder session
-- Coder tool/model round와 Planner review를 표시하는 activity log
+- Coder/Planner의 실제 assistant note, tool arguments/result와 review payload를
+  스크롤해서 보는 detailed trace (`Ctrl+G`로 compact activity 전환)
 - Coder attempt와 Planner review의 전체 message/tool lifecycle archive
 
 아직 연결하지 않은 부분은 다음과 같다.

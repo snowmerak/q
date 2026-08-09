@@ -307,19 +307,36 @@ root/orchestrator는 결과를 단순 연결하지 않고 다음 규칙으로 �
 
 ## TUI activity projection
 
-메인 transcript를 서브에이전트 로그로 채우지 않고 별도 activity panel에 role별
-상태와 최근 동작을 표시한다.
+메인 transcript를 서브에이전트 로그로 채우지 않고 별도 scrollable trace panel에
+role별 상태와 실제 model/tool transcript를 표시한다.
 
 ```text
-agents · griller ✓ · scout ✓ · planner …
-· scout   tool · read_file
-› planner thinking · model round 1
+agents · griller ✓ · scout ✓ · planner … · detailed trace
+› coder · tool call · read_file
+
+coder · assistant
+I will inspect the existing benchmark conventions before editing.
+
+coder · tool call · read_file
+{
+  "path": "hash_bench_test.go"
+}
+
+coder · tool result · read_file
+{"content":"...","loom_ref":"..."}
 ```
 
-runner는 prompt나 원본 tool result 대신 `agent`, `task_id`, `parent_id`, `action`,
-bounded detail만 progress event로 보낸다. TUI는 최근 이벤트만 화면 크기에 맞춰
-표시하고 전체 Scout message/result는 Session Store lifecycle archive에 유지한다.
-이 구조는 향후 병렬 Scout를 task ID별로 구분할 수 있다. 전체 history 탐색용
+runner는 모델이 실제로 반환한 assistant text, tool name과 raw arguments, tool
+result/error를 `agent`, `task_id`, `parent_id`와 함께 trace event로 보낸다. JSON은
+읽기 좋게 펼쳐 표시한다. `PgUp/PgDn`, `Ctrl+U/Ctrl+D`, `Home/End`로 스크롤하고
+`Ctrl+G`로 상세 trace와 compact activity를 전환한다. 새 이벤트가 들어올 때 사용자가
+과거 로그를 읽는 중이면 위치를 유지하고, bottom에 있을 때만 자동으로 따라간다.
+
+provider가 반환하지 않은 hidden chain-of-thought는 표시하거나 추정하지 않는다.
+대신 각 agent prompt는 tool call과 함께 짧은 user-visible progress note를 생성하도록
+요구하며, 반환된 note만 assistant trace로 표시한다. 화면 보관은 최근 400 events,
+event당 16 KiB로 제한하고, 전체 message/tool lifecycle은 Session Store archive에
+유지한다. 이 구조는 병렬 Scout도 task ID별로 구분할 수 있다. 전체 history 탐색용
 `/agents` 화면과 개별 agent 취소는 후속 범위다.
 
 ## 통합 라이브러리 확인 후 결정할 사항

@@ -58,7 +58,7 @@ func TestPlanCommandExecutesApprovedPlanWithCoderAndPlannerReview(t *testing.T) 
 			"steps":[{"title":"Connect roles","description":"Run Griller and Planner in sequence","target":{"any":[{"all":[{"kind":"paths","paths":["app/plan.go"]}]}]}}],
 			"verification":["Complete one approved plan cycle"]
 		}`)}},
-		{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{planToolCall("write_file", `{"path":"app/plan.go","content":"updated"}`)}},
+		{Role: client.RoleAssistant, Content: "I will update the approved execution boundary, then verify it.", ToolCalls: []client.ToolCall{planToolCall("write_file", `{"path":"app/plan.go","content":"updated"}`)}},
 		{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{planToolCall(subagent.CoderCompleteToolName, `{
 			"outcome":"succeeded",
 			"summary":"Connected the approved execution flow",
@@ -177,6 +177,24 @@ func TestPlanCommandExecutesApprovedPlanWithCoderAndPlannerReview(t *testing.T) 
 	}
 	if !sawCoderTool || !sawPlannerReview || !sawExecutionComplete {
 		t.Fatalf("execution activity missing: %#v", m.agentActivities)
+	}
+	var sawAssistant, sawToolCall, sawToolResult, sawReviewPayload bool
+	for _, trace := range m.agentTraces {
+		if trace.Agent == "coder" && trace.Kind == subagent.TraceAssistant && strings.Contains(trace.Content, "approved execution boundary") {
+			sawAssistant = true
+		}
+		if trace.Agent == "coder" && trace.Kind == subagent.TraceToolCall && trace.Name == "write_file" && strings.Contains(trace.Content, `"app/plan.go"`) {
+			sawToolCall = true
+		}
+		if trace.Agent == "coder" && trace.Kind == subagent.TraceToolResult && trace.Name == "write_file" && strings.Contains(trace.Content, "loom_ref") {
+			sawToolResult = true
+		}
+		if trace.Agent == "planner" && trace.Kind == subagent.TraceToolCall && trace.Name == subagent.ReviewTaskToolName && strings.Contains(trace.Content, `"retry"`) {
+			sawReviewPayload = true
+		}
+	}
+	if !sawAssistant || !sawToolCall || !sawToolResult || !sawReviewPayload {
+		t.Fatalf("detailed execution trace missing: %#v", m.agentTraces)
 	}
 }
 

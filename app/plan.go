@@ -132,6 +132,13 @@ func streamPlanWorkflow(
 		}
 		_ = emitAgentEvent(ctx, events, agentEvent{activity: &activity})
 	}
+	trace := func(event subagent.TraceEvent) {
+		entry := agentTrace{
+			Agent: event.Agent, TaskID: event.TaskID, ParentID: event.ParentID,
+			Kind: event.Kind, Name: event.Name, Content: event.Content, IsError: event.IsError,
+		}
+		_ = emitAgentEvent(ctx, events, agentEvent{trace: &entry})
+	}
 
 	scoutRunID := runID
 	if archive == nil {
@@ -139,15 +146,15 @@ func streamPlanWorkflow(
 	}
 	scout := subagent.ScoutRunner{
 		Client: configuredClient, Tools: toolRuntime, Spec: scoutSpec,
-		Sink: archive, RunID: scoutRunID, WorkingDirectory: workingDirectory, Progress: progress,
+		Sink: archive, RunID: scoutRunID, WorkingDirectory: workingDirectory, Progress: progress, Trace: trace,
 	}
 	griller := subagent.GrillerRunner{
 		Client: configuredClient, Tools: toolRuntime, Scout: scout, Spec: grillerSpec,
-		Ask: ask, WorkingDirectory: workingDirectory, Progress: progress,
+		Ask: ask, WorkingDirectory: workingDirectory, Progress: progress, Trace: trace,
 	}
 	planner := subagent.PlannerRunner{
 		Client: configuredClient, Spec: plannerSpec, WorkingDirectory: workingDirectory,
-		Progress: progress,
+		Progress: progress, Trace: trace,
 	}
 	workflow := subagent.PlanWorkflow{
 		Griller: griller, Planner: planner, Ask: ask, Progress: progress,
@@ -177,6 +184,7 @@ func streamPlanWorkflow(
 			Client: configuredClient, Tools: toolRuntime, Spec: coderSpec,
 			Sink: archive, RunID: scoutRunID, ExecutionID: executionID,
 			WorkingDirectory: workingDirectory, Progress: progress,
+			Trace: trace,
 			Environment: fmt.Sprintf(
 				"Runtime environment: OS=%s; architecture=%s; run_command shell=%s. Use commands and quoting compatible with this shell.",
 				environment.OS, environment.Architecture, environment.Shell,
@@ -186,6 +194,7 @@ func streamPlanWorkflow(
 			Client: configuredClient, Spec: plannerSpec,
 			Sink: archive, RunID: scoutRunID, ExecutionID: executionID,
 			WorkingDirectory: workingDirectory, Progress: progress,
+			Trace: trace,
 		}
 		progress(subagent.ProgressEvent{Agent: "executor", Action: subagent.ProgressStarted, Detail: "executing approved plan"})
 		execution, executionErr := (subagent.ExecutionLoop{

@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -1431,6 +1432,41 @@ func TestLongQuestionIsScrollableAndKeepsAnswerInputVisible(t *testing.T) {
 	}
 	if m.questionViewport.ScrollPercent() <= before {
 		t.Fatalf("question did not scroll: before %.2f after %.2f", before, m.questionViewport.ScrollPercent())
+	}
+}
+
+func TestDetailedAgentTraceIsScrollableAndCollapsible(t *testing.T) {
+	m := newModel(context.Background(), config.Store{Dir: t.TempDir()}, nil)
+	m.screen = screenChat
+	m.waiting = true
+	m.agentTraceExpanded = true
+	m.agentStates = map[string]string{"coder": "running"}
+	for index := 0; index < 12; index++ {
+		m.appendAgentTrace(agentTrace{
+			Agent: "coder", Kind: "tool_call", Name: "read_file",
+			Content: fmt.Sprintf(`{"path":"app/file-%02d.go","detail":"%s"}`, index, strings.Repeat("evidence ", 20)),
+		})
+	}
+	m.resize(100, 30)
+	if m.agentTraceViewport.TotalLineCount() <= m.agentTraceViewport.VisibleLineCount() {
+		t.Fatalf("agent trace did not become scrollable: total %d visible %d",
+			m.agentTraceViewport.TotalLineCount(), m.agentTraceViewport.VisibleLineCount())
+	}
+	view := ansi.Strip(m.viewChat())
+	if !strings.Contains(view, "detailed trace") || !strings.Contains(view, "coder · tool call · read_file") ||
+		!strings.Contains(view, "ctrl+g collapse trace") {
+		t.Fatalf("detailed trace view missing:\n%s", view)
+	}
+	before := m.agentTraceViewport.ScrollPercent()
+	updated, _ := m.updateChatKey(tea.KeyPressMsg{Code: tea.KeyPgUp})
+	m = updated.(model)
+	if m.agentTraceViewport.ScrollPercent() >= before {
+		t.Fatalf("agent trace did not scroll up: before %.2f after %.2f", before, m.agentTraceViewport.ScrollPercent())
+	}
+	updated, _ = m.updateChatKey(tea.KeyPressMsg{Code: 'g', Mod: tea.ModCtrl})
+	m = updated.(model)
+	if m.agentTraceExpanded || strings.Contains(ansi.Strip(m.viewChat()), "detailed trace") {
+		t.Fatalf("agent trace did not collapse: expanded %v", m.agentTraceExpanded)
 	}
 }
 

@@ -33,6 +33,7 @@ type CoderRunner struct {
 	Environment      string
 	MaxRounds        int
 	Progress         ProgressFunc
+	Trace            TraceFunc
 }
 
 func (r CoderRunner) Run(ctx context.Context, attempt CoderAttempt) (result CoderResult, runErr error) {
@@ -124,6 +125,7 @@ func (r CoderRunner) run(
 			return CoderResult{}, fmt.Errorf("subagent: coder: %w", err)
 		}
 		messages = append(messages, assistant)
+		traceAssistant(r.Trace, "coder", taskID, r.ExecutionID, assistant)
 		if lifecycle != nil {
 			if err := lifecycle.Message(assistant); err != nil {
 				return CoderResult{}, err
@@ -168,6 +170,7 @@ func (r CoderRunner) run(
 				Role: client.RoleTool, Name: call.Function.Name,
 				ToolCallID: call.ID, Content: toolResult.Content,
 			}
+			traceToolResult(r.Trace, "coder", taskID, r.ExecutionID, call.Function.Name, toolResult)
 			messages = append(messages, message)
 			if lifecycle != nil {
 				if err := lifecycle.Message(message); err != nil {

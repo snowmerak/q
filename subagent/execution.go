@@ -71,6 +71,7 @@ type PlannerReviewRunner struct {
 	WorkingDirectory string
 	MaxRounds        int
 	Progress         ProgressFunc
+	Trace            TraceFunc
 }
 
 func (r PlannerReviewRunner) Run(ctx context.Context, input TaskReviewRequest) (review TaskReview, runErr error) {
@@ -146,6 +147,7 @@ func (r PlannerReviewRunner) Run(ctx context.Context, input TaskReviewRequest) (
 			return TaskReview{}, fmt.Errorf("subagent: planner review: %w", err)
 		}
 		messages = append(messages, assistant)
+		traceAssistant(r.Trace, "planner", taskID, r.ExecutionID, assistant)
 		if lifecycle != nil {
 			if err := lifecycle.Message(assistant); err != nil {
 				return TaskReview{}, err
@@ -165,6 +167,7 @@ func (r PlannerReviewRunner) Run(ctx context.Context, input TaskReviewRequest) (
 				Role: client.RoleTool, Name: ReviewTaskToolName, ToolCallID: assistant.ToolCalls[0].ID,
 				Content: scoutToolError(err).Content,
 			}
+			traceToolResult(r.Trace, "planner", taskID, r.ExecutionID, ReviewTaskToolName, scoutToolError(err))
 			messages = append(messages, message)
 			if lifecycle != nil {
 				if err := lifecycle.Message(message); err != nil {
@@ -207,7 +210,7 @@ func CoderSystemPrompt(plan PlanProposal, taskIndex, attempt int, targets []stri
 	if err != nil {
 		return "", err
 	}
-	return `You are q's isolated Coder subagent. Execute only the current task from the approved plan below. The complete current plan is authoritative context and may include facts learned from earlier tasks. Do not change another task, broaden scope, or reinterpret target conditions. Use the resolved target files, perform appropriate verification, and finish with task_complete.
+	return `You are q's isolated Coder subagent. Execute only the current task from the approved plan below. The complete current plan is authoritative context and may include facts learned from earlier tasks. Do not change another task, broaden scope, or reinterpret target conditions. Use the resolved target files, perform appropriate verification, and finish with task_complete. On each tool-calling turn, include a concise user-visible progress note describing your immediate intent and what the call should establish; do not expose or invent hidden chain-of-thought.
 
 ` + string(body), nil
 }
@@ -361,7 +364,7 @@ Choose exactly one transition:
 - retry: run the same task again. Always provide feedback; use an empty string when no additional guidance is needed.
 - next: accept this task and advance to the next task (or finish after the final task).
 
-Add only durable facts newly learned from the attempt to facts. Those facts become part of the current plan before the next Coder invocation. Finish by calling review_task exactly once.`
+Add only durable facts newly learned from the attempt to facts. Those facts become part of the current plan before the next Coder invocation. Include a concise user-visible review note with the tool call, without exposing hidden chain-of-thought. Finish by calling review_task exactly once.`
 }
 
 func reviewTaskTool() client.Tool {

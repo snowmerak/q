@@ -96,6 +96,7 @@ type GrillerRunner struct {
 	WorkingDirectory string
 	MaxRounds        int
 	Progress         ProgressFunc
+	Trace            TraceFunc
 }
 
 type PlannerRunner struct {
@@ -104,6 +105,7 @@ type PlannerRunner struct {
 	WorkingDirectory string
 	MaxRounds        int
 	Progress         ProgressFunc
+	Trace            TraceFunc
 }
 
 type PlanWorkflow struct {
@@ -184,6 +186,7 @@ func (r GrillerRunner) Run(ctx context.Context, task GrillTask) (brief GrillBrie
 			return GrillBrief{}, fmt.Errorf("subagent: griller: %w", err)
 		}
 		messages = append(messages, assistant)
+		traceAssistant(r.Trace, "griller", task.ID, task.ParentID, assistant)
 		if len(assistant.ToolCalls) == 0 {
 			if reminders == maximumScoutReminders {
 				return GrillBrief{}, errors.New("subagent: griller ended without submit_brief")
@@ -238,6 +241,9 @@ func (r GrillerRunner) Run(ctx context.Context, task GrillTask) (brief GrillBrie
 				if scoutRunner.Progress == nil {
 					scoutRunner.Progress = r.Progress
 				}
+				if scoutRunner.Trace == nil {
+					scoutRunner.Trace = r.Trace
+				}
 				scoutResult, scoutErr := scoutRunner.Run(ctx, scoutTask)
 				if scoutErr != nil {
 					result = scoutToolError(scoutErr)
@@ -268,6 +274,7 @@ func (r GrillerRunner) Run(ctx context.Context, task GrillTask) (brief GrillBrie
 			default:
 				result = scoutToolError(fmt.Errorf("tool %q is not available to griller", call.Function.Name))
 			}
+			traceToolResult(r.Trace, "griller", task.ID, task.ParentID, call.Function.Name, result)
 			messages = append(messages, client.Message{
 				Role: client.RoleTool, Name: call.Function.Name,
 				ToolCallID: call.ID, Content: result.Content,
@@ -332,6 +339,7 @@ func (r PlannerRunner) Run(ctx context.Context, brief GrillBrief) (proposal Plan
 			return PlanProposal{}, fmt.Errorf("subagent: planner: %w", err)
 		}
 		messages = append(messages, assistant)
+		traceAssistant(r.Trace, "planner", "", "", assistant)
 		if len(assistant.ToolCalls) == 0 {
 			if reminders == maximumScoutReminders {
 				return PlanProposal{}, errors.New("subagent: planner ended without submit_plan")
@@ -359,6 +367,7 @@ func (r PlannerRunner) Run(ctx context.Context, brief GrillBrief) (proposal Plan
 				}
 				result = scoutToolError(parseErr)
 			}
+			traceToolResult(r.Trace, "planner", "", "", call.Function.Name, result)
 			messages = append(messages, client.Message{
 				Role: client.RoleTool, Name: call.Function.Name,
 				ToolCallID: call.ID, Content: result.Content,
@@ -448,7 +457,8 @@ Rules:
 5. Preserve prior feedback and settled decisions. On a re-grill, investigate only newly exposed gaps and do not repeat answered questions.
 6. Use Loom tools when existing large artifacts need inspection or transformation.
 7. Separate confirmed facts from assumptions and explicitly state scope, non-goals, acceptance criteria, and repository evidence.
-8. Finish by calling submit_brief as the only tool call in that turn. Never return the brief as plain text.`
+8. On each tool-calling turn, include a concise user-visible progress note describing the immediate intent; do not expose or invent hidden chain-of-thought.
+9. Finish by calling submit_brief as the only tool call in that turn. Never return the brief as plain text.`
 }
 
 func plannerInstructions() string {
@@ -461,7 +471,8 @@ Rules:
 4. Put durable confirmed repository facts that every Coder should know in facts.
 5. Include overall verification and material risks.
 6. If the brief is insufficient for a responsible plan, return outcome blocked with a precise blocker so the workflow can re-grill.
-7. Finish by calling submit_plan as the only tool call in that turn. Never return the plan as plain text.`
+7. Include a concise user-visible planning note with the submit_plan call; do not expose or invent hidden chain-of-thought.
+8. Finish by calling submit_plan as the only tool call in that turn. Never return the plan as plain text.`
 }
 
 func grillerTools(available []client.Tool) []client.Tool {
