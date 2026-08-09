@@ -1232,13 +1232,14 @@ func TestChatExecutesToolCallsAndContinuesTurn(t *testing.T) {
 	}
 	runtimePromptFound := false
 	for _, message := range configuredClient.requests[0].Messages {
-		if strings.Contains(message.Content, "Runtime environment: OS=test-os; architecture=test-arch; run_command shell=test-shell.") {
+		if strings.Contains(message.Content, "Runtime environment: OS=test-os; architecture=test-arch; run_command shell=test-shell.") &&
+			strings.Contains(message.Content, "workspace-root .qignore") {
 			runtimePromptFound = true
 			break
 		}
 	}
 	if !runtimePromptFound {
-		t.Fatalf("first request omitted runtime environment: %#v", configuredClient.requests[0].Messages)
+		t.Fatalf("first request omitted runtime environment or discovery policy: %#v", configuredClient.requests[0].Messages)
 	}
 	continuation := configuredClient.requests[1]
 	if continuation.ConversationID != "tool-conversation" || len(continuation.Messages) < 2 {

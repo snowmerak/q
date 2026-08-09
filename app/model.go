@@ -2133,6 +2133,7 @@ func (m *model) appendRuntimeMessages() {
 			environment.OS, environment.Architecture, environment.Shell,
 		) + "Current workspace root: " + filepath.Clean(m.workspaceStore.Root) +
 			". Use the available tools to inspect, edit, and run work in this workspace when the user asks for changes." +
+			" For repository discovery, never traverse q's .q metadata directory and honor patterns in the workspace-root .qignore file, including when scanning through run_command. Explicit ignored-path access is allowed when the task requires it." +
 			" Non-Loom MCP tool results include a loom_ref to the immutable full result. For large results, use loom_inspect, loom_read, or loom_eval instead of copying the result through chat context."
 		if m.archive != nil {
 			workspacePrompt += " Use search_archive when prior workspace conversations, decisions, agent results, or tool failures may be relevant; use get_archive_record only for selected results that need more detail."

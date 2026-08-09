@@ -240,6 +240,23 @@ conversation, and continues the same turn automatically. Tool calls, command
 status, exit codes, and command output are rendered as live progress while the
 turn is running. Filesystem tools are root-jailed; shell commands start in the
 workspace but are not an OS sandbox.
+
+Repository discovery honors a workspace-root `.qignore` file. It accepts one
+slash-normalized pattern per line, blank lines, `#` comments, `!` negation,
+root anchoring with a leading `/`, directory-only patterns ending in `/`, and
+the `*`, `**`, and `?` wildcards. q's own root `.q/` directory is always
+excluded. These rules filter discovery such as `list_directory` and therefore
+the Loom artifacts derived from those results; explicitly reading an ignored
+path remains possible. Shell command output is not rewritten, so agents are
+also instructed to honor `.qignore` when using commands for repository scans.
+
+```gitignore
+# Example for a Gradle project with checked-in vendor sources
+.gradle/
+build/
+vendor/
+```
+
 Every non-Loom MCP result is also captured as an immutable Loom artifact under
 the workspace's `.q/loom` directory. The tool message contains a `loom_ref`,
 artifact metadata, and either the complete small result or a bounded preview.

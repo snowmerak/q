@@ -166,6 +166,9 @@ func TestListDirectoryOmitsQMetadataOnlyFromWorkspaceRoot(t *testing.T) {
 	if len(root.Entries) != 1 || root.Entries[0].Name != "source.go" {
 		t.Fatalf("root entries = %+v", root.Entries)
 	}
+	if root.Ignored != 1 {
+		t.Fatalf("ignored root entry count = %d; want 1", root.Ignored)
+	}
 
 	metadata, err := fs.ListDirectory(ListDirectoryInput{Path: ".q"})
 	if err != nil {

@@ -56,6 +56,7 @@ type DirectoryEntry struct {
 type ListDirectoryOutput struct {
 	Path    string           `json:"path"`
 	Entries []DirectoryEntry `json:"entries"`
+	Ignored int              `json:"ignored,omitempty"`
 }
 
 func (fsys *FS) ListDirectory(input ListDirectoryInput) (ListDirectoryOutput, error) {
@@ -71,12 +72,19 @@ func (fsys *FS) ListDirectory(input ListDirectoryInput) (ListDirectoryOutput, er
 	if err != nil {
 		return ListDirectoryOutput{}, err
 	}
+	ignore, err := loadDiscoveryIgnore(fsys.Root)
+	if err != nil {
+		return ListDirectoryOutput{}, fmt.Errorf("read %s: %w", workspaceIgnoreFile, err)
+	}
 	result := make([]DirectoryEntry, 0, len(entries))
+	resultIgnored := 0
 	for _, entry := range entries {
-		// .q contains q's own session, archive, index, and Loom state. Hiding it
-		// from root discovery keeps agents from recursively investigating their
-		// own runtime data. Explicit access to .q remains available for debugging.
-		if filepath.Clean(path) == fsys.Root && entry.Name() == ".q" {
+		relative, err := filepath.Rel(fsys.Root, filepath.Join(path, entry.Name()))
+		if err != nil {
+			return ListDirectoryOutput{}, err
+		}
+		if ignore.matches(relative, entry.IsDir()) {
+			resultIgnored++
 			continue
 		}
 		info, err := entry.Info()
@@ -98,7 +106,7 @@ func (fsys *FS) ListDirectory(input ListDirectoryInput) (ListDirectoryOutput, er
 		})
 	}
 	sort.Slice(result, func(i, j int) bool { return result[i].Name < result[j].Name })
-	return ListDirectoryOutput{Path: userPath, Entries: result}, nil
+	return ListDirectoryOutput{Path: userPath, Entries: result, Ignored: resultIgnored}, nil
 }
 
 type CreateDirectoryInput struct {

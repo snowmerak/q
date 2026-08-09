@@ -59,7 +59,7 @@ func Register(server *mcp.Server, root string, dependencies Dependencies) (*FS, 
 
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "list_directory",
-		Description: "List the immediate children of a directory inside the workspace. The q-owned .q metadata directory is omitted from workspace-root listings.",
+		Description: "List the immediate children of a directory inside the workspace, excluding q-owned .q metadata and entries matched by the workspace-root .qignore file. Explicit file access remains available.",
 		Annotations: &mcp.ToolAnnotations{ReadOnlyHint: readOnly, IdempotentHint: true},
 	}, valueHandler(fs.ListDirectory))
 

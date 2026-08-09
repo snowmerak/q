@@ -186,7 +186,7 @@ func streamPlanWorkflow(
 			WorkingDirectory: workingDirectory, Progress: progress,
 			Trace: trace,
 			Environment: fmt.Sprintf(
-				"Runtime environment: OS=%s; architecture=%s; run_command shell=%s. Use commands and quoting compatible with this shell.",
+				"Runtime environment: OS=%s; architecture=%s; run_command shell=%s. Use commands and quoting compatible with this shell. For repository discovery, never traverse q's .q metadata directory and honor the workspace-root .qignore file, including in shell scans.",
 				environment.OS, environment.Architecture, environment.Shell,
 			),
 		}

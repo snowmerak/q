@@ -111,6 +111,7 @@ func TestScoutRunnerUsesReadOnlyToolsAndReturnsStructuredReport(t *testing.T) {
 		t.Fatalf("tool calls = %#v", fakeTools.calls)
 	}
 	if !strings.Contains(fakeClient.requests[0].Messages[0].Content, "return precise evidence to the Griller") ||
+		!strings.Contains(fakeClient.requests[0].Messages[0].Content, "workspace-root .qignore") ||
 		!strings.Contains(fakeClient.requests[0].Messages[1].Content, ref.String()) {
 		t.Fatalf("messages = %#v", fakeClient.requests[0].Messages)
 	}
