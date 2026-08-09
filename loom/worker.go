@@ -9,14 +9,28 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"sort"
 	"time"
 )
 
 const ChildCommand = "__loom_worker"
 
+const maximumWorkerRequestBytes = maximumScriptBytes + (16 << 20)
+
 type workerRequest struct {
-	WorkspaceRoot string      `json:"workspace_root"`
-	Eval          EvalRequest `json:"eval"`
+	WorkspaceRoot string             `json:"workspace_root"`
+	Eval          EvalRequest        `json:"eval"`
+	Store         workerStoreOptions `json:"store"`
+	Roots         []Ref              `json:"roots,omitempty"`
+}
+
+type workerStoreOptions struct {
+	MaximumArtifactBytes int64         `json:"maximum_artifact_bytes"`
+	MaximumStoreBytes    int64         `json:"maximum_store_bytes"`
+	AutoGC               bool          `json:"auto_gc"`
+	GCTriggerRatio       float64       `json:"gc_trigger_ratio"`
+	GCTargetRatio        float64       `json:"gc_target_ratio"`
+	GCGracePeriod        time.Duration `json:"gc_grace_period"`
 }
 
 type workerResponse struct {
@@ -48,9 +62,16 @@ func (e ProcessEvaluator) Evaluate(ctx context.Context, store *Store, request Ev
 	}
 	workerCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	requestBody, err := json.Marshal(workerRequest{WorkspaceRoot: store.WorkspaceRoot(), Eval: request})
+	workerRequest, err := prepareWorkerRequest(workerCtx, store, request)
+	if err != nil {
+		return EvalResult{}, err
+	}
+	requestBody, err := json.Marshal(workerRequest)
 	if err != nil {
 		return EvalResult{}, fmt.Errorf("loom: encode worker request: %w", err)
+	}
+	if len(requestBody) > maximumWorkerRequestBytes {
+		return EvalResult{}, fmt.Errorf("loom: worker request exceeds %d bytes", maximumWorkerRequestBytes)
 	}
 	command := exec.CommandContext(workerCtx, executable, ChildCommand)
 	command.Env = []string{}
@@ -81,13 +102,13 @@ func (e ProcessEvaluator) Evaluate(ctx context.Context, store *Store, request Ev
 }
 
 func RunChild(ctx context.Context, input io.Reader, output io.Writer) error {
-	decoder := json.NewDecoder(io.LimitReader(input, maximumScriptBytes+(1<<20)))
+	decoder := json.NewDecoder(io.LimitReader(input, maximumWorkerRequestBytes+1))
 	decoder.DisallowUnknownFields()
 	var request workerRequest
 	if err := decoder.Decode(&request); err != nil {
 		return fmt.Errorf("loom: decode worker request: %w", err)
 	}
-	store, err := Open(request.WorkspaceRoot)
+	store, err := OpenWithOptions(request.WorkspaceRoot, request.storeOptions())
 	if err != nil {
 		return writeWorkerResponse(output, workerResponse{Error: err.Error()})
 	}
@@ -97,6 +118,61 @@ func RunChild(ctx context.Context, input io.Reader, output io.Writer) error {
 		response.Error = evalErr.Error()
 	}
 	return writeWorkerResponse(output, response)
+}
+
+func prepareWorkerRequest(ctx context.Context, store *Store, eval EvalRequest) (workerRequest, error) {
+	options := store.Options()
+	request := workerRequest{
+		WorkspaceRoot: store.WorkspaceRoot(), Eval: eval,
+		Store: workerStoreOptions{
+			MaximumArtifactBytes: options.MaximumArtifactBytes,
+			MaximumStoreBytes:    options.MaximumStoreBytes,
+			AutoGC:               options.AutoGC, GCTriggerRatio: options.GCTriggerRatio,
+			GCTargetRatio: options.GCTargetRatio, GCGracePeriod: options.GCGracePeriod,
+		},
+	}
+	if !options.AutoGC {
+		return request, nil
+	}
+	seen := make(map[Ref]struct{})
+	for _, ref := range eval.Inputs {
+		if parsed, err := ParseRef(ref.String()); err == nil {
+			seen[parsed] = struct{}{}
+		}
+	}
+	if options.Roots != nil {
+		roots, err := options.Roots(ctx)
+		if err != nil {
+			return workerRequest{}, fmt.Errorf("loom: collect worker GC roots: %w", err)
+		}
+		for _, ref := range roots {
+			if parsed, err := ParseRef(ref.String()); err == nil {
+				seen[parsed] = struct{}{}
+			}
+		}
+	}
+	request.Roots = make([]Ref, 0, len(seen))
+	for ref := range seen {
+		request.Roots = append(request.Roots, ref)
+	}
+	sort.Slice(request.Roots, func(i, j int) bool { return request.Roots[i] < request.Roots[j] })
+	return request, nil
+}
+
+func (request workerRequest) storeOptions() StoreOptions {
+	options := StoreOptions{
+		MaximumArtifactBytes: request.Store.MaximumArtifactBytes,
+		MaximumStoreBytes:    request.Store.MaximumStoreBytes,
+		AutoGC:               request.Store.AutoGC, GCTriggerRatio: request.Store.GCTriggerRatio,
+		GCTargetRatio: request.Store.GCTargetRatio, GCGracePeriod: request.Store.GCGracePeriod,
+	}
+	if options.AutoGC {
+		roots := append([]Ref(nil), request.Roots...)
+		options.Roots = func(context.Context) ([]Ref, error) {
+			return append([]Ref(nil), roots...), nil
+		}
+	}
+	return options
 }
 
 func writeWorkerResponse(output io.Writer, response workerResponse) error {

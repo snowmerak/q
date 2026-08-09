@@ -1,11 +1,13 @@
 package loom
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -136,6 +138,65 @@ func TestEvaluatorInterruptsRunawayScript(t *testing.T) {
 	_, err = (InProcessEvaluator{}).Evaluate(ctx, store, EvalRequest{Code: `for (;;) {}`})
 	if err == nil {
 		t.Fatal("runaway script was not interrupted")
+	}
+}
+
+func TestWorkerRequestCarriesStoreOptionsAndGCRoots(t *testing.T) {
+	ctx := context.Background()
+	extra := Ref("loom://0123456789abcdef0123456789abcdef")
+	store, err := OpenWithOptions(t.TempDir(), StoreOptions{
+		MaximumArtifactBytes: 32, MaximumStoreBytes: 64, AutoGC: true,
+		GCTriggerRatio: .8, GCTargetRatio: .6, GCGracePeriod: time.Hour,
+		Roots: func(context.Context) ([]Ref, error) { return []Ref{extra}, nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	source, err := store.Put(ctx, []byte(`{}`), PutOptions{Kind: "test", MediaType: "application/json"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request, err := prepareWorkerRequest(ctx, store, EvalRequest{
+		Inputs: map[string]Ref{"source": source.Ref}, Code: `return loom.get(inputs.source);`,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if request.Store.MaximumArtifactBytes != 32 || request.Store.MaximumStoreBytes != 64 || !request.Store.AutoGC {
+		t.Fatalf("worker store options = %#v", request.Store)
+	}
+	rootSet := make(map[Ref]bool, len(request.Roots))
+	for _, ref := range request.Roots {
+		rootSet[ref] = true
+	}
+	if len(request.Roots) != 2 || !rootSet[extra] || !rootSet[source.Ref] {
+		t.Fatalf("worker roots = %#v", request.Roots)
+	}
+}
+
+func TestRunChildUsesConfiguredArtifactLimit(t *testing.T) {
+	request := workerRequest{
+		WorkspaceRoot: t.TempDir(),
+		Eval:          EvalRequest{Code: `return "123456789";`},
+		Store: workerStoreOptions{
+			MaximumArtifactBytes: 8, MaximumStoreBytes: 64,
+			GCTriggerRatio: .8, GCTargetRatio: .6, GCGracePeriod: time.Hour,
+		},
+	}
+	var input bytes.Buffer
+	if err := json.NewEncoder(&input).Encode(request); err != nil {
+		t.Fatal(err)
+	}
+	var output bytes.Buffer
+	if err := RunChild(context.Background(), &input, &output); err != nil {
+		t.Fatal(err)
+	}
+	var response workerResponse
+	if err := json.NewDecoder(&output).Decode(&response); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(response.Error, "artifact exceeds 8 bytes") {
+		t.Fatalf("worker response = %#v", response)
 	}
 }
 
