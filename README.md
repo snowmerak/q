@@ -229,7 +229,9 @@ task must finish with `task_complete`; a plain final assistant response is fed
 back to the model with a completion reminder. Turns that do not call
 `task_start` may finish with a direct assistant answer. `ask_to_user` pauses the
 current tool loop, renders the question and optional choices in the TUI, and
-resumes the same turn with the user's answer.
+resumes the same turn with the user's answer. When choices are present, use
+Up/Down or Tab/Shift+Tab and Enter to return the selected choice ID; typing in
+the input sends a custom free-form answer instead.
 Interrupting an active turn cancels its request context, ignores late events,
 closes unfinished tool calls with cancelled results, and persists a cancelled
 turn event before returning to the input prompt.

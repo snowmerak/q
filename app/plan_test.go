@@ -88,7 +88,7 @@ func TestPlanCommandRunsGrillerPlannerAndStopsAfterApproval(t *testing.T) {
 		t.Fatalf("confirmation state = asking %v question %#v", m.asking, m.pendingQuestion)
 	}
 	view := ansi.Strip(m.viewChat())
-	for _, expected := range []string{"agents", "griller ✓", "scout ✓", "planner ✓", "submit_plan", "Answer the question"} {
+	for _, expected := range []string{"agents", "griller ✓", "scout ✓", "planner ✓", "submit_plan", "› approve · Approve", "Type a custom answer"} {
 		if !strings.Contains(view, expected) {
 			t.Fatalf("agent activity panel does not contain %q:\n%s", expected, view)
 		}
@@ -97,7 +97,7 @@ func TestPlanCommandRunsGrillerPlannerAndStopsAfterApproval(t *testing.T) {
 		t.Fatalf("plan confirmation view height %d exceeds terminal height %d", height, m.height)
 	}
 
-	m.input.SetValue("approve")
+	m.input.Reset()
 	updated, command = m.submitChat()
 	m = updated.(model)
 	for attempts := 0; m.waiting && attempts < 64; attempts++ {

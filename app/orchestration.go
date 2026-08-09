@@ -244,18 +244,21 @@ func writeCompletionList(body *strings.Builder, label string, values []string) {
 	}
 }
 
-func renderPendingQuestion(input askToUserInput) string {
+func renderPendingQuestion(input askToUserInput, selected int) string {
 	var body strings.Builder
 	body.WriteString(input.Question)
 	if input.Context != "" {
 		body.WriteString("\n")
 		body.WriteString(input.Context)
 	}
-	for _, choice := range input.Choices {
+	for index, choice := range input.Choices {
 		body.WriteString("\n")
-		body.WriteString(choice.ID)
-		body.WriteString(" · ")
-		body.WriteString(choice.Label)
+		label := choice.ID + " · " + choice.Label
+		if index == selected {
+			body.WriteString(activeLabelStyle.Render("› " + label))
+		} else {
+			body.WriteString("  " + label)
+		}
 		if choice.Description != "" {
 			body.WriteString(" — ")
 			body.WriteString(choice.Description)

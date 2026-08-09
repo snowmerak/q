@@ -141,7 +141,7 @@ func (f *askingClient) Chat(_ context.Context, request client.ChatRequest) (*cli
 			ID: "complete-question", Type: client.ToolTypeFunction,
 			Function: client.FunctionCall{
 				Name:      taskCompleteToolName,
-				Arguments: `{"outcome":"succeeded","summary":"Selected blue"}`,
+				Arguments: `{"outcome":"succeeded","summary":"Selection recorded"}`,
 			},
 		}},
 	}}}}, nil
@@ -1328,11 +1328,15 @@ func TestAskToUserPausesForAnswerAndResumesSameTask(t *testing.T) {
 		m = updated.(model)
 	}
 	if !m.asking || !m.waiting || m.pendingQuestion.Question != "Which color?" ||
-		!strings.Contains(m.View().Content, "blue · Blue") {
+		!strings.Contains(m.View().Content, "› blue · Blue") {
 		t.Fatalf("question state = asking %v, waiting %v, question %#v, view %q", m.asking, m.waiting, m.pendingQuestion, m.View().Content)
 	}
 
-	m.input.SetValue("blue")
+	updated, _ = m.updateChatKey(tea.KeyPressMsg{Code: tea.KeyDown})
+	m = updated.(model)
+	if m.questionChoice != 1 || !strings.Contains(m.View().Content, "› green · Green") {
+		t.Fatalf("selected choice = %d, view %q", m.questionChoice, m.View().Content)
+	}
 	updated, command = m.submitChat()
 	m = updated.(model)
 	if m.asking || !m.waiting || command == nil {
@@ -1346,10 +1350,10 @@ func TestAskToUserPausesForAnswerAndResumesSameTask(t *testing.T) {
 		t.Fatalf("requests = %#v", configuredClient.requests)
 	}
 	continuation := configuredClient.requests[1]
-	if len(continuation.Messages) < 2 || !strings.Contains(continuation.Messages[len(continuation.Messages)-1].Content, `"selected_choice_id":"blue"`) {
+	if len(continuation.Messages) < 2 || !strings.Contains(continuation.Messages[len(continuation.Messages)-1].Content, `"selected_choice_id":"green"`) {
 		t.Fatalf("question continuation = %#v", continuation.Messages)
 	}
-	if m.messages[len(m.messages)-1].Content != "Selected blue" {
+	if m.messages[len(m.messages)-1].Content != "Selection recorded" {
 		t.Fatalf("final transcript = %#v", m.messages)
 	}
 }

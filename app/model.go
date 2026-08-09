@@ -184,6 +184,7 @@ type model struct {
 	questionAnswer   chan askToUserOutput
 	questionEvents   <-chan agentEvent
 	questionTurnID   uint64
+	questionChoice   int
 	planArmed        bool
 	agentActivities  []agentActivity
 	agentStates      map[string]string
@@ -537,14 +538,19 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		if event.question != nil {
 			m.asking = true
 			m.pendingQuestion = *event.question
+			m.questionChoice = 0
 			m.questionAnswer = event.answer
 			m.questionEvents = message.events
 			m.questionTurnID = message.turnID
 			m.input.Reset()
-			m.input.Placeholder = "Answer the question…"
-			m.status = "Waiting for your answer"
+			m.input.Placeholder = "Type a custom answer…"
+			m.status = "Choose an option or type a custom answer"
 			m.resize(m.width, m.height)
-			m.questionViewport.GotoTop()
+			if len(m.pendingQuestion.Choices) > 0 {
+				m.questionViewport.GotoBottom()
+			} else {
+				m.questionViewport.GotoTop()
+			}
 			return m, m.input.Focus()
 		}
 		if event.message != nil {
@@ -1492,6 +1498,20 @@ func (m model) saveModelTargetConfiguration(value config.Config, target string) 
 }
 
 func (m model) updateChatKey(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	if m.asking && len(m.pendingQuestion.Choices) > 0 && strings.TrimSpace(m.input.Value()) == "" {
+		switch key.String() {
+		case "up", "shift+tab":
+			m.questionChoice = (m.questionChoice - 1 + len(m.pendingQuestion.Choices)) % len(m.pendingQuestion.Choices)
+			m.refreshQuestion()
+			m.questionViewport.GotoBottom()
+			return m, nil
+		case "down", "tab":
+			m.questionChoice = (m.questionChoice + 1) % len(m.pendingQuestion.Choices)
+			m.refreshQuestion()
+			m.questionViewport.GotoBottom()
+			return m, nil
+		}
+	}
 	if m.asking && isQuestionScrollKey(key.String()) {
 		var command tea.Cmd
 		m.questionViewport, command = m.questionViewport.Update(key)
@@ -1619,10 +1639,19 @@ func (m model) submitChat() (tea.Model, tea.Cmd) {
 }
 
 func (m model) submitQuestionAnswer(content string) (tea.Model, tea.Cmd) {
-	if content == "" || m.questionAnswer == nil || m.questionEvents == nil {
+	if m.questionAnswer == nil || m.questionEvents == nil {
 		return m, nil
 	}
-	answer := answerForQuestion(m.pendingQuestion, content)
+	var answer askToUserOutput
+	if content == "" {
+		if len(m.pendingQuestion.Choices) == 0 {
+			return m, nil
+		}
+		choice := m.pendingQuestion.Choices[min(max(m.questionChoice, 0), len(m.pendingQuestion.Choices)-1)]
+		answer = askToUserOutput{SelectedChoiceID: choice.ID}
+	} else {
+		answer = answerForQuestion(m.pendingQuestion, content)
+	}
 	answerChannel := m.questionAnswer
 	events := m.questionEvents
 	turnID := m.questionTurnID
@@ -1630,6 +1659,7 @@ func (m model) submitQuestionAnswer(content string) (tea.Model, tea.Cmd) {
 	m.asking = false
 	m.planArmed = false
 	m.pendingQuestion = askToUserInput{}
+	m.questionChoice = 0
 	m.questionAnswer = nil
 	m.questionEvents = nil
 	m.questionTurnID = 0
@@ -2390,7 +2420,7 @@ func (m *model) resize(width, height int) {
 		dynamicHeight = max(2, dynamicHeight-m.agentLogVisible-2)
 	}
 	if m.asking {
-		question := renderToolPanel("Question", renderPendingQuestion(m.pendingQuestion), max(36, contentWidth), m.dark)
+		question := renderToolPanel("Question", renderPendingQuestion(m.pendingQuestion, m.questionChoice), max(36, contentWidth), m.dark)
 		questionHeight := min(lipgloss.Height(question), max(1, dynamicHeight*2/3))
 		m.questionViewport.SetHeight(questionHeight)
 		m.configureQuestionViewport(max(36, contentWidth))
@@ -2448,7 +2478,7 @@ func (m *model) configureQuestionViewport(width int) {
 		}
 		return lipgloss.NewStyle()
 	}
-	m.questionViewport.SetContent("Question\n" + renderPendingQuestion(m.pendingQuestion))
+	m.questionViewport.SetContent("Question\n" + renderPendingQuestion(m.pendingQuestion, m.questionChoice))
 }
 
 func (m model) renderedQuestionViewport() string {
@@ -3360,7 +3390,11 @@ func (m model) viewChat() string {
 	}
 	if m.asking {
 		content += m.renderedQuestionViewport() + "\n"
-		footer = helpStyle.Render("pgup/pgdn scroll · enter answer · shift+enter newline · ctrl+c interrupt")
+		if len(m.pendingQuestion.Choices) > 0 {
+			footer = helpStyle.Render("↑/↓ select · enter choose · type custom · pgup/pgdn review · ctrl+c interrupt")
+		} else {
+			footer = helpStyle.Render("pgup/pgdn scroll · enter answer · shift+enter newline · ctrl+c interrupt")
+		}
 	}
 	content += m.input.View()
 	if status != "" {
