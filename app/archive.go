@@ -76,6 +76,7 @@ func (m *model) archiveMessage(message client.Message, status string, isError bo
 		m.rememberArchiveError(err)
 		return
 	}
+	refs = append(refs, sessionstore.ExtractLoomReferences(content, string(payload))...)
 	record := sessionstore.Record{
 		Kind: kind, RunID: m.runID, TaskID: taskID, ParentID: parentID,
 		Role: string(message.Role), Model: model, Status: status,

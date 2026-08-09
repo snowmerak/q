@@ -15,6 +15,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/snowmerak/q/client"
+	"github.com/snowmerak/q/loom"
 	"github.com/snowmerak/q/subagent"
 )
 
@@ -108,7 +109,7 @@ func TestCommitToolsAutomaticallyCaptureResultsInLoom(t *testing.T) {
 		root: root, visibleFiles: []string{"app/main.go"}, files: []string{"app/main.go"},
 		fileDiffs: map[string]string{"app/main.go": strings.Repeat("+changed line\n", 4096)},
 	}}
-	if err := runtime.enableLoom(root); err != nil {
+	if err := runtime.enableLoom(root, loom.StoreOptions{}); err != nil {
 		t.Fatal(err)
 	}
 	if result := runtime.call(context.Background(), toolCall(toolGitOverview, `{}`)); result.IsError {
@@ -153,7 +154,7 @@ func TestCommitAgentForcesOverviewAndFallsBackAfterThreeReminders(t *testing.T) 
 	fake := &fakeAgentClient{responses: responses}
 	state := repositoryState{visibleFiles: []string{"app/main.go"}, scopeCandidates: []string{"app"}, fileDiffs: map[string]string{"app/main.go": "diff"}}
 	var progress bytes.Buffer
-	proposal, fallback, err := runCommitAgent(context.Background(), fake, subagent.Spec{Model: "commit-model"}, state, 2, newProgressLogger(&progress))
+	proposal, fallback, err := runCommitAgent(context.Background(), fake, subagent.Spec{Model: "commit-model"}, state, 2, loom.StoreOptions{}, newProgressLogger(&progress))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -184,7 +185,7 @@ func TestCommitAgentAcceptsToolProposal(t *testing.T) {
 	}}
 	state := repositoryState{visibleFiles: []string{"commitagent/agent.go"}, fileDiffs: map[string]string{"commitagent/agent.go": "diff"}}
 	var progress bytes.Buffer
-	proposal, fallback, err := runCommitAgent(context.Background(), fake, subagent.Spec{Model: "commit-model", ReasoningEffort: "high"}, state, 2, newProgressLogger(&progress))
+	proposal, fallback, err := runCommitAgent(context.Background(), fake, subagent.Spec{Model: "commit-model", ReasoningEffort: "high"}, state, 2, loom.StoreOptions{}, newProgressLogger(&progress))
 	if err != nil || fallback || proposal.Single == nil {
 		t.Fatalf("proposal = %#v, fallback = %v, err = %v", proposal, fallback, err)
 	}

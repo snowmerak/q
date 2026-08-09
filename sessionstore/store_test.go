@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
 )
@@ -248,5 +249,25 @@ func TestSearchValidation(t *testing.T) {
 	}
 	if _, err := store.Search(nil, SearchOptions{}); err == nil {
 		t.Fatal("Search accepted a nil context")
+	}
+}
+
+func TestLoomReferencesIncludesExplicitAndLegacyRecords(t *testing.T) {
+	store, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	first := "loom://0123456789abcdef0123456789abcdef"
+	second := "loom://fedcba9876543210fedcba9876543210"
+	if _, err := store.Save(Record{Kind: KindResult, Refs: []string{first}, Content: `{"loom_ref":"` + second + `"}`}); err != nil {
+		t.Fatal(err)
+	}
+	refs, err := store.LoomReferences(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(refs, []string{first, second}) {
+		t.Fatalf("Loom refs = %#v", refs)
 	}
 }

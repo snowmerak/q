@@ -69,6 +69,13 @@ agents:
     commit:
       model: codex/gpt-5.6-terra
       reasoning_effort: low
+loom:
+  maximum_artifact_mib: 64
+  maximum_store_mib: 256
+  gc:
+    trigger_ratio: 0.8
+    target_ratio: 0.6
+    grace_hours: 1
 ```
 
 Subagent roles may override `model` and `reasoning_effort`. A missing role or
@@ -86,8 +93,9 @@ when the index is empty, q runs `git add -A`. Whitespace-only and import-order
 changes bypass the model and use `style: formatted code` or
 `style: reorganized imports` directly.
 
-For ordinary changes, q starts an isolated commit session with only seven
-commit tools. The first call is forced to `git_overview`; full staged diffs are
+For ordinary changes, q starts an isolated commit session with seven commit
+tools and three restricted Loom tools. The first call is forced to
+`git_overview`; full staged diffs are
 kept outside the initial prompt and exposed by file or hunk tools. Lock files
 remain part of the eventual commit but are omitted from the overview. The
 agent can inspect recent history, fan out isolated per-file analysis, and must
@@ -233,8 +241,17 @@ Every non-Loom MCP result is also captured as an immutable Loom artifact under
 the workspace's `.q/loom` directory. The tool message contains a `loom_ref`,
 artifact metadata, and either the complete small result or a bounded preview.
 This keeps large structured results available without repeatedly carrying them
-through model context. Artifacts are content-addressed, deduplicated, limited to
-64 MiB each, and the workspace blob store is limited to 256 MiB.
+through model context. Artifacts are content-addressed and deduplicated.
+Artifact and workspace limits default to 64 MiB and 256 MiB respectively and
+can be changed under `loom` in the personal config.
+
+Enter `/loom` in the TUI to view current artifact, blob, and byte usage; edit
+the size and automatic-GC policy; preview collection; or run it immediately.
+Automatic GC starts at the configured trigger ratio and aims for the target
+ratio. Durable Session Store references and their parent lineage are retained,
+and newly created artifacts are protected for the configured grace period.
+Set `loom.gc.disabled: true` to disable automatic collection; manual preview
+and collection remain available.
 
 The model can use `loom_inspect` for metadata, `loom_read` for byte ranges, and
 `loom_eval` to transform one or more artifacts with JavaScript. `loom_eval`

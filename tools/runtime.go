@@ -8,6 +8,7 @@ import (
 	goruntime "runtime"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/snowmerak/q/client"
@@ -40,11 +41,20 @@ func NewRuntime(ctx context.Context, root string) (*Runtime, error) {
 // NewRuntimeWithArchive connects the chat loop to filesystem, command,
 // workspace archive, and Loom tools. The caller owns the archive lifetime.
 func NewRuntimeWithArchive(ctx context.Context, root string, archive builtin.Archive) (*Runtime, error) {
-	return newRuntime(ctx, root, archive, loom.NewProcessEvaluator())
+	return NewRuntimeWithArchiveAndLoomOptions(ctx, root, archive, loom.StoreOptions{})
 }
 
-func newRuntime(ctx context.Context, root string, archive builtin.Archive, evaluator loom.Evaluator) (*Runtime, error) {
-	loomRuntime, err := newLoomRuntime(root, evaluator)
+func NewRuntimeWithArchiveAndLoomOptions(
+	ctx context.Context,
+	root string,
+	archive builtin.Archive,
+	options loom.StoreOptions,
+) (*Runtime, error) {
+	return newRuntime(ctx, root, archive, loom.NewProcessEvaluator(), options)
+}
+
+func newRuntime(ctx context.Context, root string, archive builtin.Archive, evaluator loom.Evaluator, options loom.StoreOptions) (*Runtime, error) {
+	loomRuntime, err := newLoomRuntime(root, evaluator, withArchiveRoots(options, archive))
 	if err != nil {
 		return nil, err
 	}
@@ -85,6 +95,41 @@ func newRuntime(ctx context.Context, root string, archive builtin.Archive, evalu
 		})
 	}
 	return runtime, nil
+}
+
+func (r *Runtime) ConfigureLoom(options loom.StoreOptions) error {
+	if r == nil || r.loom == nil || r.loom.Store == nil {
+		return errors.New("tools: Loom runtime is unavailable")
+	}
+	if options.Roots == nil {
+		options.Roots = r.loom.Store.Options().Roots
+	}
+	return r.loom.Store.Configure(options)
+}
+
+func (r *Runtime) LoomStats(ctx context.Context) (loom.Stats, error) {
+	if r == nil || r.loom == nil || r.loom.Store == nil {
+		return loom.Stats{}, errors.New("tools: Loom runtime is unavailable")
+	}
+	return r.loom.Store.Stats(ctx)
+}
+
+func (r *Runtime) CollectLoom(ctx context.Context, dryRun bool) (loom.GCResult, error) {
+	if r == nil || r.loom == nil || r.loom.Store == nil {
+		return loom.GCResult{}, errors.New("tools: Loom runtime is unavailable")
+	}
+	options := r.loom.Store.Options()
+	var roots []loom.Ref
+	if options.Roots != nil {
+		var err error
+		roots, err = options.Roots(ctx)
+		if err != nil {
+			return loom.GCResult{}, err
+		}
+	}
+	return r.loom.Store.Collect(ctx, loom.GCOptions{
+		Roots: roots, ProtectNewerThan: time.Now().UTC().Add(-options.GCGracePeriod), DryRun: dryRun,
+	})
 }
 
 func (r *Runtime) Tools() []client.Tool {

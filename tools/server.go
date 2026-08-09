@@ -17,7 +17,7 @@ const (
 
 // NewServer builds an MCP server with the root-jailed builtin tool set.
 func NewServer(root string) (*mcp.Server, error) {
-	loomRuntime, err := newLoomRuntime(root, loom.NewProcessEvaluator())
+	loomRuntime, err := newLoomRuntime(root, loom.NewProcessEvaluator(), loom.StoreOptions{})
 	if err != nil {
 		return nil, err
 	}
@@ -28,7 +28,7 @@ func NewServer(root string) (*mcp.Server, error) {
 // NewServerWithArchive builds an MCP server whose read-only archive tools use
 // the supplied workspace store. The caller owns the archive lifetime.
 func NewServerWithArchive(root string, archive builtin.Archive) (*mcp.Server, error) {
-	loomRuntime, err := newLoomRuntime(root, loom.NewProcessEvaluator())
+	loomRuntime, err := newLoomRuntime(root, loom.NewProcessEvaluator(), withArchiveRoots(loom.StoreOptions{}, archive))
 	if err != nil {
 		return nil, err
 	}
@@ -48,8 +48,8 @@ func newServer(root string, archive builtin.Archive, loomRuntime *builtin.LoomRu
 	return server, fs, nil
 }
 
-func newLoomRuntime(root string, evaluator loom.Evaluator) (*builtin.LoomRuntime, error) {
-	store, err := loom.Open(root)
+func newLoomRuntime(root string, evaluator loom.Evaluator, options loom.StoreOptions) (*builtin.LoomRuntime, error) {
+	store, err := loom.OpenWithOptions(root, options)
 	if err != nil {
 		return nil, err
 	}
@@ -59,12 +59,16 @@ func newLoomRuntime(root string, evaluator loom.Evaluator) (*builtin.LoomRuntime
 // RunStdio serves the builtin tools over MCP stdio until ctx is cancelled or
 // the client disconnects. Callers must keep stdout reserved for MCP messages.
 func RunStdio(ctx context.Context, root string) error {
+	return RunStdioWithLoomOptions(ctx, root, loom.StoreOptions{})
+}
+
+func RunStdioWithLoomOptions(ctx context.Context, root string, options loom.StoreOptions) error {
 	archive, err := sessionstore.Open(root)
 	if err != nil {
 		return err
 	}
 	defer archive.Close()
-	loomRuntime, err := newLoomRuntime(root, loom.NewProcessEvaluator())
+	loomRuntime, err := newLoomRuntime(root, loom.NewProcessEvaluator(), withArchiveRoots(options, archive))
 	if err != nil {
 		return err
 	}
@@ -74,4 +78,31 @@ func RunStdio(ctx context.Context, root string) error {
 	}
 	defer fs.Close()
 	return server.Run(ctx, &mcp.StdioTransport{})
+}
+
+type loomReferenceArchive interface {
+	LoomReferences(context.Context) ([]string, error)
+}
+
+func withArchiveRoots(options loom.StoreOptions, archive builtin.Archive) loom.StoreOptions {
+	provider, ok := archive.(loomReferenceArchive)
+	if !ok {
+		return options
+	}
+	options.Roots = func(ctx context.Context) ([]loom.Ref, error) {
+		values, err := provider.LoomReferences(ctx)
+		if err != nil {
+			return nil, err
+		}
+		refs := make([]loom.Ref, 0, len(values))
+		for _, value := range values {
+			ref, err := loom.ParseRef(value)
+			if err != nil {
+				continue
+			}
+			refs = append(refs, ref)
+		}
+		return refs, nil
+	}
+	return options
 }

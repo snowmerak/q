@@ -7,6 +7,8 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+
+	"github.com/snowmerak/q/loom"
 )
 
 var commitHeaderPattern = regexp.MustCompile(`^([a-z]+)(?:\(([a-z0-9][a-z0-9._/-]*)\))?: (.+)$`)
@@ -16,6 +18,7 @@ type Session struct {
 	runtime     resolvedRuntime
 	runtimeErr  error
 	maxParallel int
+	loomOptions loom.StoreOptions
 	proposal    proposalState
 	source      string
 	logger      *progressLogger
@@ -51,6 +54,7 @@ func (session *Session) Regenerate(ctx context.Context, logger *progressLogger) 
 	runtime := session.runtime
 	state := session.state
 	maxParallel := session.maxParallel
+	loomOptions := session.loomOptions
 	session.mu.Unlock()
 	if runtimeErr != nil {
 		return runtimeErr
@@ -59,7 +63,7 @@ func (session *Session) Regenerate(ctx context.Context, logger *progressLogger) 
 		return errors.New("q commit: commit model is unavailable")
 	}
 	logger.step("agent", "starting an isolated commit session")
-	proposal, fallback, err := runCommitAgent(ctx, runtime.client, runtime.spec, state, maxParallel, logger)
+	proposal, fallback, err := runCommitAgent(ctx, runtime.client, runtime.spec, state, maxParallel, loomOptions, logger)
 	if err != nil {
 		return err
 	}

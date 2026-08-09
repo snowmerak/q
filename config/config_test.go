@@ -128,6 +128,24 @@ func TestEffectiveAgentUsesRoleOverrideAndActiveModelFallback(t *testing.T) {
 	}
 }
 
+func TestEffectiveLoomUsesDefaultsAndValidatesPolicy(t *testing.T) {
+	value := Default()
+	value.Provider.Model = "active-model"
+	value.Loom = LoomConfig{}
+	effective := value.EffectiveLoom()
+	if effective.MaximumArtifactMiB != 64 || effective.MaximumStoreMiB != 256 ||
+		effective.GC.TriggerRatio != .80 || effective.GC.TargetRatio != .60 || effective.GC.GraceHours != 1 {
+		t.Fatalf("effective Loom config = %#v", effective)
+	}
+	value.Loom = LoomConfig{
+		MaximumArtifactMiB: 128, MaximumStoreMiB: 64,
+		GC: LoomGCConfig{TriggerRatio: .8, TargetRatio: .6, GraceHours: 24},
+	}
+	if err := value.Validate(); err == nil || !strings.Contains(err.Error(), "cannot exceed") {
+		t.Fatalf("validation error = %v", err)
+	}
+}
+
 func TestCommitAgentUsesRoleOverrideAndActiveModelFallback(t *testing.T) {
 	value := Default()
 	value.Provider.Model = "active-model"

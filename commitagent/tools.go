@@ -67,11 +67,11 @@ type commitToolRuntime struct {
 	proposal    proposalState
 }
 
-func (runtime *commitToolRuntime) enableLoom(root string) error {
+func (runtime *commitToolRuntime) enableLoom(root string, options loom.StoreOptions) error {
 	if strings.TrimSpace(root) == "" {
 		return nil
 	}
-	store, err := loom.Open(root)
+	store, err := loom.OpenWithOptions(root, options)
 	if err != nil {
 		return err
 	}

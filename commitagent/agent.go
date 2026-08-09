@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/snowmerak/q/client"
+	"github.com/snowmerak/q/loom"
 	"github.com/snowmerak/q/subagent"
 )
 
@@ -25,12 +26,13 @@ func runCommitAgent(
 	spec subagent.Spec,
 	state repositoryState,
 	maxParallel int,
+	loomOptions loom.StoreOptions,
 	logger *progressLogger,
 ) (proposalState, bool, error) {
 	runtime := &commitToolRuntime{
 		state: state, client: configuredClient, spec: spec, maxParallel: maxParallel, logger: logger,
 	}
-	if err := runtime.enableLoom(state.root); err != nil {
+	if err := runtime.enableLoom(state.root, loomOptions); err != nil {
 		return proposalState{}, false, fmt.Errorf("q commit: initialize Loom: %w", err)
 	}
 	messages := []client.Message{

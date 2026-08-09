@@ -11,6 +11,7 @@ import (
 	"github.com/snowmerak/llm-provider/gateway"
 	"github.com/snowmerak/q/client"
 	"github.com/snowmerak/q/config"
+	"github.com/snowmerak/q/loom"
 	"github.com/snowmerak/q/sessionstore"
 	qtools "github.com/snowmerak/q/tools"
 	"github.com/snowmerak/q/workspace"
@@ -39,7 +40,24 @@ type fakeClient struct {
 }
 
 type fakeAgentTools struct {
-	calls []client.ToolCall
+	calls        []client.ToolCall
+	loomOptions  loom.StoreOptions
+	loomStats    loom.Stats
+	loomCollects int
+}
+
+func (f *fakeAgentTools) ConfigureLoom(options loom.StoreOptions) error {
+	f.loomOptions = options
+	return nil
+}
+
+func (f *fakeAgentTools) LoomStats(context.Context) (loom.Stats, error) {
+	return f.loomStats, nil
+}
+
+func (f *fakeAgentTools) CollectLoom(_ context.Context, dryRun bool) (loom.GCResult, error) {
+	f.loomCollects++
+	return loom.GCResult{ArtifactsRemoved: 2, BytesReclaimed: 1024, DryRun: dryRun}, nil
 }
 
 func (f *fakeAgentTools) Environment() qtools.HostEnvironment {
@@ -666,6 +684,54 @@ func TestSlashProviderOpensProviderSettings(t *testing.T) {
 	m = updated.(model)
 	if m.screen != screenSetup || !m.setupEdit || m.input.Value() != "" {
 		t.Fatalf("provider command state = screen %v, edit %v, input %q", m.screen, m.setupEdit, m.input.Value())
+	}
+}
+
+func TestSlashLoomEditsSettingsAndPreviewsGC(t *testing.T) {
+	store := config.Store{Dir: t.TempDir()}
+	value := config.Default()
+	value.Provider.Model = "test-model"
+	tools := &fakeAgentTools{loomStats: loom.Stats{Artifacts: 4, Blobs: 3, Bytes: 12 << 20}}
+	m := newModel(context.Background(), store, nil)
+	m.toolRuntime = tools
+	m.enterChat(value, &fakeClient{})
+	m.input.SetValue("/loom")
+
+	updated, _ := m.updateChatKey(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m = updated.(model)
+	updated, command := m.Update(deferredSubmitMsg{})
+	m = updated.(model)
+	if m.screen != screenLoom || command == nil {
+		t.Fatalf("Loom screen state = %v, command nil = %v", m.screen, command == nil)
+	}
+	updated, _ = m.Update(command())
+	m = updated.(model)
+	if m.loomStats.Bytes != 12<<20 || !strings.Contains(m.View().Content, "12.0 MiB / 256.0 MiB") {
+		t.Fatalf("Loom stats = %#v, view = %q", m.loomStats, m.View().Content)
+	}
+	m.loomInputs[0].SetValue("32")
+	m.loomInputs[1].SetValue("128")
+	m.loomInputs[2].SetValue("75")
+	m.loomInputs[3].SetValue("50")
+	m.loomInputs[4].SetValue("48")
+	m.loomFocus = loomDryRun
+	updated, command = m.updateLoom(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m = updated.(model)
+	if command == nil || !m.loomBusy {
+		t.Fatalf("Loom action command nil = %v, busy = %v", command == nil, m.loomBusy)
+	}
+	updated, _ = m.Update(command())
+	m = updated.(model)
+	loaded, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.Loom.MaximumArtifactMiB != 32 || loaded.Loom.MaximumStoreMiB != 128 ||
+		loaded.Loom.GC.TriggerRatio != .75 || loaded.Loom.GC.TargetRatio != .50 || loaded.Loom.GC.GraceHours != 48 {
+		t.Fatalf("saved Loom config = %#v", loaded.Loom)
+	}
+	if tools.loomCollects != 1 || tools.loomOptions.MaximumStoreBytes != 128<<20 || !strings.Contains(m.status, "GC preview") {
+		t.Fatalf("Loom action = collects %d, options %#v, status %q", tools.loomCollects, tools.loomOptions, m.status)
 	}
 }
 

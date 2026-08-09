@@ -105,9 +105,13 @@ func Run(ctx context.Context, store config.Store) error {
 	var agentTools *qtools.Runtime
 	var toolsErr error
 	if archiveOpenErr == nil {
-		agentTools, toolsErr = qtools.NewRuntimeWithArchive(ctx, workspaceStore.Root, archiveStore)
+		agentTools, toolsErr = qtools.NewRuntimeWithArchiveAndLoomOptions(
+			ctx, workspaceStore.Root, archiveStore, loaded.LoomStoreOptions(nil),
+		)
 	} else {
-		agentTools, toolsErr = qtools.NewRuntime(ctx, workspaceStore.Root)
+		agentTools, toolsErr = qtools.NewRuntimeWithArchiveAndLoomOptions(
+			ctx, workspaceStore.Root, nil, loaded.LoomStoreOptions(nil),
+		)
 	}
 	if toolsErr != nil {
 		if archiveStore != nil {

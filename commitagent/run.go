@@ -8,7 +8,9 @@ import (
 
 	"github.com/snowmerak/q/client"
 	"github.com/snowmerak/q/config"
+	"github.com/snowmerak/q/loom"
 	"github.com/snowmerak/q/providerhost"
+	"github.com/snowmerak/q/sessionstore"
 	"github.com/snowmerak/q/subagent"
 )
 
@@ -90,9 +92,24 @@ func prepareSessionDefault(ctx context.Context, directory string, logger *progre
 		return nil, err
 	}
 	resolved := <-runtimeChannel
+	loomOptions := value.LoomStoreOptions(func(ctx context.Context) ([]loom.Ref, error) {
+		values, err := sessionstore.LoomReferencesAt(ctx, repository.state.root)
+		if err != nil {
+			return nil, err
+		}
+		refs := make([]loom.Ref, 0, len(values))
+		for _, value := range values {
+			ref, parseErr := loom.ParseRef(value)
+			if parseErr == nil {
+				refs = append(refs, ref)
+			}
+		}
+		return refs, nil
+	})
 	session := &Session{
 		state: repository.state, maxParallel: value.EffectiveAgents().MaxParallel,
-		runtime: resolved.runtime, runtimeErr: resolved.err, logger: logger, cancel: cancel,
+		runtime: resolved.runtime, runtimeErr: resolved.err, loomOptions: loomOptions,
+		logger: logger, cancel: cancel,
 	}
 	if trivial.Found {
 		logger.step("detect", "matched %s", trivial.Message)

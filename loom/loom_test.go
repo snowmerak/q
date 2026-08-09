@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 )
@@ -134,5 +136,121 @@ func TestEvaluatorInterruptsRunawayScript(t *testing.T) {
 	_, err = (InProcessEvaluator{}).Evaluate(ctx, store, EvalRequest{Code: `for (;;) {}`})
 	if err == nil {
 		t.Fatal("runaway script was not interrupted")
+	}
+}
+
+func TestCollectPreservesRootsAndParentLineage(t *testing.T) {
+	ctx := context.Background()
+	store, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	source, err := store.Put(ctx, []byte(`{"source":true}`), PutOptions{Kind: "source", MediaType: "application/json"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	derived, err := store.Put(ctx, []byte(`{"derived":true}`), PutOptions{
+		Kind: "derived", MediaType: "application/json", Parents: []Ref{source.Ref},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	unrooted, err := store.Put(ctx, []byte(`{"unused":true}`), PutOptions{Kind: "source", MediaType: "application/json"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := store.Collect(ctx, GCOptions{Roots: []Ref{derived.Ref}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.ArtifactsRemoved != 1 || result.BlobsRemoved != 1 || result.BytesReclaimed != unrooted.Bytes {
+		t.Fatalf("GC result = %#v", result)
+	}
+	for _, ref := range []Ref{source.Ref, derived.Ref} {
+		if _, err := store.Inspect(ctx, ref); err != nil {
+			t.Fatalf("preserved artifact %s: %v", ref, err)
+		}
+	}
+	if _, err := store.Inspect(ctx, unrooted.Ref); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("unrooted artifact error = %v", err)
+	}
+}
+
+func TestCollectDryRunAndSharedBlob(t *testing.T) {
+	ctx := context.Background()
+	store, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := []byte(`{"same":true}`)
+	kept, err := store.Put(ctx, content, PutOptions{Kind: "test", MediaType: "application/json"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	duplicate, err := store.Put(ctx, content, PutOptions{Kind: "test", MediaType: "application/json"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	preview, err := store.Collect(ctx, GCOptions{Roots: []Ref{kept.Ref}, DryRun: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if preview.ArtifactsRemoved != 1 || preview.BlobsRemoved != 0 || preview.BytesReclaimed != 0 {
+		t.Fatalf("dry-run result = %#v", preview)
+	}
+	if _, err := store.Inspect(ctx, duplicate.Ref); err != nil {
+		t.Fatalf("dry-run removed duplicate: %v", err)
+	}
+	result, err := store.Collect(ctx, GCOptions{Roots: []Ref{kept.Ref}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.ArtifactsRemoved != 1 || result.BlobsRemoved != 0 || result.After.Bytes != int64(len(content)) {
+		t.Fatalf("GC result = %#v", result)
+	}
+}
+
+func TestPutRunsConfiguredAutomaticGC(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	store, err := OpenWithOptions(root, StoreOptions{
+		MaximumArtifactBytes: 16, MaximumStoreBytes: 16, AutoGC: true,
+		GCTriggerRatio: .75, GCTargetRatio: .25, GCGracePeriod: time.Nanosecond,
+		Roots: func(context.Context) ([]Ref, error) { return nil, nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	old, err := store.Put(ctx, []byte("1234567890"), PutOptions{Kind: "test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	metadataPath := filepath.Join(store.artifacts, old.Ref.ID()+".json")
+	metadata, err := os.ReadFile(metadataPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var artifact Artifact
+	if err := json.Unmarshal(metadata, &artifact); err != nil {
+		t.Fatal(err)
+	}
+	artifact.CreatedAt = time.Now().UTC().Add(-time.Hour)
+	metadata, err = json.MarshalIndent(artifact, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(metadataPath, append(metadata, '\n'), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	created, err := store.Put(ctx, []byte("abcdefghij"), PutOptions{Kind: "test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Inspect(ctx, old.Ref); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("old artifact error = %v", err)
+	}
+	if _, err := store.Inspect(ctx, created.Ref); err != nil {
+		t.Fatalf("new artifact error = %v", err)
 	}
 }

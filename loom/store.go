@@ -19,11 +19,14 @@ import (
 )
 
 const (
-	DirectoryName       = "loom"
-	maximumArtifactSize = 64 << 20
-	maximumStoreSize    = 256 << 20
-	defaultReadLimit    = 64 << 10
-	maximumReadLimit    = 1 << 20
+	DirectoryName               = "loom"
+	DefaultMaximumArtifactBytes = 64 << 20
+	DefaultMaximumStoreBytes    = 256 << 20
+	DefaultGCTriggerRatio       = 0.80
+	DefaultGCTargetRatio        = 0.60
+	DefaultGCGracePeriod        = time.Hour
+	defaultReadLimit            = 64 << 10
+	maximumReadLimit            = 1 << 20
 )
 
 var ErrNotFound = errors.New("loom: artifact not found")
@@ -74,19 +77,41 @@ type ReadResult struct {
 	More       bool
 }
 
+type RootProvider func(context.Context) ([]Ref, error)
+
+type StoreOptions struct {
+	MaximumArtifactBytes int64
+	MaximumStoreBytes    int64
+	AutoGC               bool
+	GCTriggerRatio       float64
+	GCTargetRatio        float64
+	GCGracePeriod        time.Duration
+	Roots                RootProvider
+}
+
 type Store struct {
 	root      string
 	artifacts string
 	blobs     string
+	options   StoreOptions
 	mu        sync.Mutex
 }
 
 func Open(workspaceRoot string) (*Store, error) {
+	return OpenWithOptions(workspaceRoot, StoreOptions{})
+}
+
+func OpenWithOptions(workspaceRoot string, options StoreOptions) (*Store, error) {
+	options, err := normalizeStoreOptions(options)
+	if err != nil {
+		return nil, err
+	}
 	root := filepath.Join(workspaceRoot, ".q", DirectoryName)
 	store := &Store{
 		root:      root,
 		artifacts: filepath.Join(root, "artifacts"),
 		blobs:     filepath.Join(root, "blobs"),
+		options:   options,
 	}
 	for _, directory := range []string{root, store.artifacts, store.blobs} {
 		if err := os.MkdirAll(directory, 0o700); err != nil {
@@ -99,6 +124,54 @@ func Open(workspaceRoot string) (*Store, error) {
 	return store, nil
 }
 
+func normalizeStoreOptions(options StoreOptions) (StoreOptions, error) {
+	if options.MaximumArtifactBytes == 0 {
+		options.MaximumArtifactBytes = DefaultMaximumArtifactBytes
+	}
+	if options.MaximumStoreBytes == 0 {
+		options.MaximumStoreBytes = DefaultMaximumStoreBytes
+	}
+	if options.GCTriggerRatio == 0 {
+		options.GCTriggerRatio = DefaultGCTriggerRatio
+	}
+	if options.GCTargetRatio == 0 {
+		options.GCTargetRatio = DefaultGCTargetRatio
+	}
+	if options.GCGracePeriod == 0 {
+		options.GCGracePeriod = DefaultGCGracePeriod
+	}
+	if options.MaximumArtifactBytes < 1 || options.MaximumStoreBytes < 1 {
+		return StoreOptions{}, errors.New("loom: maximum artifact and store sizes must be positive")
+	}
+	if options.MaximumArtifactBytes > options.MaximumStoreBytes {
+		return StoreOptions{}, errors.New("loom: maximum artifact size cannot exceed maximum store size")
+	}
+	if options.GCTargetRatio <= 0 || options.GCTriggerRatio <= options.GCTargetRatio || options.GCTriggerRatio >= 1 {
+		return StoreOptions{}, errors.New("loom: GC ratios must satisfy 0 < target < trigger < 1")
+	}
+	if options.GCGracePeriod < 0 {
+		return StoreOptions{}, errors.New("loom: GC grace period must not be negative")
+	}
+	return options, nil
+}
+
+func (s *Store) Configure(options StoreOptions) error {
+	options, err := normalizeStoreOptions(options)
+	if err != nil {
+		return err
+	}
+	s.mu.Lock()
+	s.options = options
+	s.mu.Unlock()
+	return nil
+}
+
+func (s *Store) Options() StoreOptions {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.options
+}
+
 func (s *Store) WorkspaceRoot() string {
 	return filepath.Dir(filepath.Dir(s.root))
 }
@@ -107,8 +180,11 @@ func (s *Store) Put(ctx context.Context, content []byte, options PutOptions) (Ar
 	if err := ctx.Err(); err != nil {
 		return Artifact{}, err
 	}
-	if len(content) > maximumArtifactSize {
-		return Artifact{}, fmt.Errorf("loom: artifact exceeds %d bytes", maximumArtifactSize)
+	s.mu.Lock()
+	maximumArtifactBytes := s.options.MaximumArtifactBytes
+	s.mu.Unlock()
+	if int64(len(content)) > maximumArtifactBytes {
+		return Artifact{}, fmt.Errorf("loom: artifact exceeds %d bytes", maximumArtifactBytes)
 	}
 	if options.Kind == "" {
 		return Artifact{}, errors.New("loom: artifact kind is required")
@@ -124,6 +200,9 @@ func (s *Store) Put(ctx context.Context, content []byte, options PutOptions) (Ar
 
 	digestBytes := sha256.Sum256(content)
 	digest := hex.EncodeToString(digestBytes[:])
+	if err := s.maybeAutoCollect(ctx, digest, int64(len(content))); err != nil {
+		return Artifact{}, err
+	}
 	id, err := randomID()
 	if err != nil {
 		return Artifact{}, err
@@ -148,8 +227,8 @@ func (s *Store) Put(ctx context.Context, content []byte, options PutOptions) (Ar
 		if sizeErr != nil {
 			return Artifact{}, sizeErr
 		}
-		if size+int64(len(content)) > maximumStoreSize {
-			return Artifact{}, fmt.Errorf("loom: workspace store would exceed %d bytes", maximumStoreSize)
+		if size+int64(len(content)) > s.options.MaximumStoreBytes {
+			return Artifact{}, fmt.Errorf("loom: workspace store would exceed %d bytes", s.options.MaximumStoreBytes)
 		}
 		if err := writeNewFile(blobPath, content); err != nil {
 			return Artifact{}, err
@@ -170,6 +249,12 @@ func (s *Store) Put(ctx context.Context, content []byte, options PutOptions) (Ar
 }
 
 func (s *Store) Inspect(ctx context.Context, ref Ref) (Artifact, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.inspectLocked(ctx, ref)
+}
+
+func (s *Store) inspectLocked(ctx context.Context, ref Ref) (Artifact, error) {
 	if err := ctx.Err(); err != nil {
 		return Artifact{}, err
 	}
@@ -200,14 +285,16 @@ func (s *Store) Inspect(ctx context.Context, ref Ref) (Artifact, error) {
 	if _, err := hex.DecodeString(artifact.Digest); err != nil {
 		return Artifact{}, errors.New("loom: artifact metadata has invalid digest")
 	}
-	if artifact.Bytes < 0 || artifact.Bytes > maximumArtifactSize {
+	if artifact.Bytes < 0 {
 		return Artifact{}, errors.New("loom: artifact metadata has invalid size")
 	}
 	return artifact, nil
 }
 
 func (s *Store) Read(ctx context.Context, ref Ref, offset, limit int64) (ReadResult, error) {
-	artifact, err := s.Inspect(ctx, ref)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	artifact, err := s.inspectLocked(ctx, ref)
 	if err != nil {
 		return ReadResult{}, err
 	}
@@ -241,7 +328,9 @@ func (s *Store) Read(ctx context.Context, ref Ref, offset, limit int64) (ReadRes
 }
 
 func (s *Store) ReadAll(ctx context.Context, ref Ref, maximum int64) ([]byte, error) {
-	artifact, err := s.Inspect(ctx, ref)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	artifact, err := s.inspectLocked(ctx, ref)
 	if err != nil {
 		return nil, err
 	}

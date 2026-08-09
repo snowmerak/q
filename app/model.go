@@ -23,6 +23,7 @@ import (
 	"github.com/snowmerak/llm-provider/gateway"
 	"github.com/snowmerak/q/client"
 	"github.com/snowmerak/q/config"
+	"github.com/snowmerak/q/loom"
 	"github.com/snowmerak/q/memory"
 	"github.com/snowmerak/q/sessionstore"
 	"github.com/snowmerak/q/workspace"
@@ -35,6 +36,7 @@ const (
 	screenSetup screen = iota
 	screenProviders
 	screenModels
+	screenLoom
 	screenChat
 )
 
@@ -46,6 +48,19 @@ const (
 	modelPickerReasoning
 	modelPickerEmbeddingDimensions
 	modelPickerContextWindow
+)
+
+const (
+	loomAutoGC = iota
+	loomMaximumArtifact
+	loomMaximumStore
+	loomGCTrigger
+	loomGCTarget
+	loomGCGrace
+	loomSave
+	loomDryRun
+	loomCollect
+	loomControlCount
 )
 
 const (
@@ -142,6 +157,11 @@ type model struct {
 	modelContextWindow  textinput.Model
 	draftConfig         config.Config
 	modelReturn         screen
+	loomInputs          [5]textinput.Model
+	loomFocus           int
+	loomDraft           config.LoomConfig
+	loomStats           loom.Stats
+	loomBusy            bool
 
 	config           config.Config
 	client           chatClient
@@ -216,6 +236,19 @@ type compactionResultMsg struct {
 }
 
 type deferredSubmitMsg struct{}
+
+type loomStatsMsg struct {
+	stats loom.Stats
+	err   error
+}
+
+type loomActionMsg struct {
+	config config.Config
+	stats  loom.Stats
+	result *loom.GCResult
+	action string
+	err    error
+}
 
 const imeCommitGracePeriod = 35 * time.Millisecond
 
@@ -294,6 +327,14 @@ func newManagedModel(ctx context.Context, store config.Store, factory clientFact
 	m.modelContextWindow.Placeholder = "provider metadata"
 	m.modelContextWindow.CharLimit = 12
 	m.modelContextWindow.SetWidth(28)
+	loomPrompts := []string{"artifact MiB · ", "store MiB · ", "GC trigger % · ", "GC target % · ", "grace hours · "}
+	for index := range m.loomInputs {
+		field := textinput.New()
+		field.Prompt = loomPrompts[index]
+		field.CharLimit = 8
+		field.SetWidth(28)
+		m.loomInputs[index] = field
+	}
 	m.input = newChatInput()
 	if runtime != nil && len(m.gatewayConfig.Providers) == 0 {
 		m.enterProviderEditor(-1)
@@ -329,6 +370,9 @@ func (m model) Init() tea.Cmd {
 	}
 	if m.screen == screenProviders {
 		return tea.RequestBackgroundColor
+	}
+	if m.screen == screenLoom {
+		return tea.Batch(m.loomFocusCommand(), tea.RequestBackgroundColor)
 	}
 	return tea.Batch(m.setup[m.setupFocus].Focus(), tea.RequestBackgroundColor)
 }
@@ -616,6 +660,35 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.submitPending = false
 		return m.submitChat()
+	case loomStatsMsg:
+		m.loomBusy = false
+		if message.err != nil {
+			m.status = message.err.Error()
+		} else {
+			m.loomStats = message.stats
+			m.status = ""
+		}
+		return m, m.loomFocusCommand()
+	case loomActionMsg:
+		m.loomBusy = false
+		if message.config.Provider.Model != "" {
+			m.config = message.config
+			m.loomDraft = message.config.EffectiveLoom()
+		}
+		if message.err != nil {
+			m.status = message.err.Error()
+			return m, m.loomFocusCommand()
+		}
+		m.loomStats = message.stats
+		m.status = "Loom settings saved"
+		if message.result != nil {
+			prefix := "GC preview"
+			if !message.result.DryRun {
+				prefix = "GC completed"
+			}
+			m.status = fmt.Sprintf("%s · %d artifacts · %s reclaimed", prefix, message.result.ArtifactsRemoved, formatBytes(message.result.BytesReclaimed))
+		}
+		return m, m.loomFocusCommand()
 	}
 
 	if key, ok := message.(tea.KeyPressMsg); ok {
@@ -633,6 +706,9 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if m.screen == screenModels {
 			return m.updateModelPicker(key)
+		}
+		if m.screen == screenLoom {
+			return m.updateLoom(key)
 		}
 		return m.updateChatKey(key)
 	}
@@ -1451,6 +1527,9 @@ func (m model) submitChat() (tea.Model, tea.Cmd) {
 		}
 		m.enterSetup(m.config)
 		return m, m.setup[m.setupFocus].Focus()
+	case "/loom":
+		m.input.Reset()
+		return m.enterLoom()
 	}
 	m.beginTurn()
 	m.turnMessageStart = len(m.messages)
@@ -2656,6 +2735,8 @@ func (m model) View() tea.View {
 		content = m.viewProviders()
 	} else if m.screen == screenModels {
 		content = m.viewModels()
+	} else if m.screen == screenLoom {
+		content = m.viewLoom()
 	} else if m.screen == screenChat {
 		content = m.viewChat()
 	}
@@ -3032,7 +3113,7 @@ func (m model) viewChat() string {
 	if m.waiting && !m.asking {
 		status = m.spinner.View() + " " + status
 	}
-	footerText := "enter send · shift+enter newline · /clear · /model · /provider · ctrl+c quit · esc quit"
+	footerText := "enter send · shift+enter newline · /clear · /model · /provider · /loom · ctrl+c quit · esc quit"
 	if m.waiting {
 		footerText = "ctrl+c interrupt turn · esc quit"
 	}

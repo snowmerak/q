@@ -118,7 +118,7 @@ func TestRuntimeEvaluatesCapturedMCPResult(t *testing.T) {
 	if executable := os.Getenv("Q_LOOM_WORKER_EXECUTABLE"); executable != "" {
 		evaluator = loom.ProcessEvaluator{Executable: executable}
 	}
-	runtime, err := newRuntime(context.Background(), root, nil, evaluator)
+	runtime, err := newRuntime(context.Background(), root, nil, evaluator, loom.StoreOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}

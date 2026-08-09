@@ -8,7 +8,9 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
+	"github.com/snowmerak/q/loom"
 	"gopkg.in/yaml.v3"
 )
 
@@ -17,6 +19,9 @@ const (
 	DirectoryName           = ".q"
 	FileName                = "config.yaml"
 	DefaultAgentMaxParallel = 3
+	DefaultLoomArtifactMiB  = 64
+	DefaultLoomStoreMiB     = 256
+	DefaultLoomGCGraceHours = 1
 
 	AgentRoleGriller  = "griller"
 	AgentRoleScout    = "scout"
@@ -35,6 +40,7 @@ type Config struct {
 	Embedding EmbeddingConfig `yaml:"embedding,omitempty"`
 	Context   ContextConfig   `yaml:"context,omitempty"`
 	Agents    AgentsConfig    `yaml:"agents,omitempty"`
+	Loom      LoomConfig      `yaml:"loom,omitempty"`
 }
 
 type ProviderConfig struct {
@@ -53,6 +59,19 @@ type ContextConfig struct {
 	TriggerRatio float64 `yaml:"trigger_ratio,omitempty"`
 	TargetRatio  float64 `yaml:"target_ratio,omitempty"`
 	RecentRatio  float64 `yaml:"recent_ratio,omitempty"`
+}
+
+type LoomConfig struct {
+	MaximumArtifactMiB int          `yaml:"maximum_artifact_mib,omitempty"`
+	MaximumStoreMiB    int          `yaml:"maximum_store_mib,omitempty"`
+	GC                 LoomGCConfig `yaml:"gc,omitempty"`
+}
+
+type LoomGCConfig struct {
+	Disabled     bool    `yaml:"disabled,omitempty"`
+	TriggerRatio float64 `yaml:"trigger_ratio,omitempty"`
+	TargetRatio  float64 `yaml:"target_ratio,omitempty"`
+	GraceHours   int     `yaml:"grace_hours,omitempty"`
 }
 
 // EmbeddingConfig selects the model and fixed vector size used by the
@@ -100,6 +119,11 @@ func Default() Config {
 			RecentRatio:  0.07,
 		},
 		Agents: AgentsConfig{MaxParallel: DefaultAgentMaxParallel},
+		Loom: LoomConfig{
+			MaximumArtifactMiB: DefaultLoomArtifactMiB,
+			MaximumStoreMiB:    DefaultLoomStoreMiB,
+			GC:                 LoomGCConfig{TriggerRatio: .80, TargetRatio: .60, GraceHours: DefaultLoomGCGraceHours},
+		},
 	}
 }
 
@@ -162,6 +186,22 @@ func (c Config) Validate() error {
 			return fmt.Errorf("config: agent %q reasoning_effort must not have surrounding whitespace", role)
 		}
 	}
+	loomConfig := c.EffectiveLoom()
+	if loomConfig.MaximumArtifactMiB < 1 || loomConfig.MaximumArtifactMiB > 1024 {
+		return errors.New("config: Loom maximum_artifact_mib must be between 1 and 1024")
+	}
+	if loomConfig.MaximumStoreMiB < 1 || loomConfig.MaximumStoreMiB > 10240 {
+		return errors.New("config: Loom maximum_store_mib must be between 1 and 10240")
+	}
+	if loomConfig.MaximumArtifactMiB > loomConfig.MaximumStoreMiB {
+		return errors.New("config: Loom maximum_artifact_mib cannot exceed maximum_store_mib")
+	}
+	if loomConfig.GC.TargetRatio <= 0 || loomConfig.GC.TriggerRatio <= loomConfig.GC.TargetRatio || loomConfig.GC.TriggerRatio >= 1 {
+		return errors.New("config: Loom GC ratios must satisfy 0 < target_ratio < trigger_ratio < 1")
+	}
+	if loomConfig.GC.GraceHours < 1 || loomConfig.GC.GraceHours > 24*365 {
+		return errors.New("config: Loom GC grace_hours must be between 1 and 8760")
+	}
 	return nil
 }
 
@@ -199,6 +239,40 @@ func (c Config) EffectiveContextWindow() int64 {
 		return c.Provider.ContextWindow
 	}
 	return c.Context.Window
+}
+
+func (c Config) EffectiveLoom() LoomConfig {
+	result := c.Loom
+	defaults := Default().Loom
+	if result.MaximumArtifactMiB == 0 {
+		result.MaximumArtifactMiB = defaults.MaximumArtifactMiB
+	}
+	if result.MaximumStoreMiB == 0 {
+		result.MaximumStoreMiB = defaults.MaximumStoreMiB
+	}
+	if result.GC.TriggerRatio == 0 {
+		result.GC.TriggerRatio = defaults.GC.TriggerRatio
+	}
+	if result.GC.TargetRatio == 0 {
+		result.GC.TargetRatio = defaults.GC.TargetRatio
+	}
+	if result.GC.GraceHours == 0 {
+		result.GC.GraceHours = defaults.GC.GraceHours
+	}
+	return result
+}
+
+func (c Config) LoomStoreOptions(roots loom.RootProvider) loom.StoreOptions {
+	effective := c.EffectiveLoom()
+	return loom.StoreOptions{
+		MaximumArtifactBytes: int64(effective.MaximumArtifactMiB) << 20,
+		MaximumStoreBytes:    int64(effective.MaximumStoreMiB) << 20,
+		AutoGC:               !effective.GC.Disabled,
+		GCTriggerRatio:       effective.GC.TriggerRatio,
+		GCTargetRatio:        effective.GC.TargetRatio,
+		GCGracePeriod:        time.Duration(effective.GC.GraceHours) * time.Hour,
+		Roots:                roots,
+	}
 }
 
 // AgentRoles returns the built-in role names accepted in Agents.Roles.
@@ -300,6 +374,7 @@ func (s Store) Save(value Config) error {
 	value.Version = CurrentVersion
 	value.Context = value.EffectiveContext()
 	value.Agents = value.EffectiveAgents()
+	value.Loom = value.EffectiveLoom()
 	if err := value.Validate(); err != nil {
 		return err
 	}
