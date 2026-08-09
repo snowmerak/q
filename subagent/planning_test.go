@@ -68,7 +68,7 @@ func TestPlanWorkflowRegrillsAfterUserRevision(t *testing.T) {
 		"outcome":"succeeded",
 		"summary":"Introduce a gated plan workflow",
 		"conditions":["Stop before execution"],
-		"steps":[{"title":"Connect plan mode","description":"Run Griller and Planner before confirmation"}],
+		"steps":[{"title":"Connect plan mode","description":"Run Griller and Planner before confirmation","target":{"any":[{"all":[{"kind":"paths","paths":["app/model.go"]}]}]}}],
 		"verification":["Exercise one complete plan cycle"]
 	}`
 	grillerClient := &fakeScoutClient{responses: []client.Message{

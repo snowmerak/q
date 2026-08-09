@@ -60,16 +60,17 @@ type GrillBrief struct {
 }
 
 type PlanStep struct {
-	Title        string   `json:"title"`
-	Description  string   `json:"description"`
-	Files        []string `json:"files,omitempty"`
-	Verification []string `json:"verification,omitempty"`
+	Title        string          `json:"title"`
+	Description  string          `json:"description"`
+	Target       TargetCondition `json:"target"`
+	Verification []string        `json:"verification,omitempty"`
 }
 
 type PlanProposal struct {
 	Outcome      string     `json:"outcome"`
 	Summary      string     `json:"summary"`
 	Conditions   []string   `json:"conditions,omitempty"`
+	Facts        []string   `json:"facts,omitempty"`
 	Assumptions  []string   `json:"assumptions,omitempty"`
 	NonGoals     []string   `json:"non_goals,omitempty"`
 	Steps        []PlanStep `json:"steps,omitempty"`
@@ -454,10 +455,12 @@ func plannerInstructions() string {
 
 Rules:
 1. Preserve the brief's confirmed conditions, decisions, scope, non-goals, and assumptions.
-2. Produce ordered, concrete steps with likely files and verification where supported by evidence.
-3. Include overall verification and material risks.
-4. If the brief is insufficient for a responsible plan, return outcome blocked with a precise blocker so the workflow can re-grill.
-5. Finish by calling submit_plan as the only tool call in that turn. Never return the plan as plain text.`
+2. Produce ordered, concrete tasks. Every task must include a target condition in disjunctive normal form: outer any entries are OR/union, and selectors inside each all entry are AND/intersection. A selector is either explicit workspace-relative paths or one Loom JavaScript transform that returns a JSON array of workspace-relative file paths.
+3. Target conditions only select the files for one task. They never consume a previous task result, control task order, or judge a Coder result.
+4. Put durable confirmed repository facts that every Coder should know in facts.
+5. Include overall verification and material risks.
+6. If the brief is insufficient for a responsible plan, return outcome blocked with a precise blocker so the workflow can re-grill.
+7. Finish by calling submit_plan as the only tool call in that turn. Never return the plan as plain text.`
 }
 
 func grillerTools(available []client.Tool) []client.Tool {
@@ -522,18 +525,34 @@ func submitBriefTool() client.Tool {
 func submitPlanTool() client.Tool {
 	strict := true
 	stringsSchema := stringArraySchemaValue()
+	selectorSchema := map[string]any{
+		"type": "object", "properties": map[string]any{
+			"kind":  map[string]any{"type": "string", "enum": []string{TargetSelectorPaths, TargetSelectorLoom}},
+			"paths": stringsSchema, "code": map[string]any{"type": "string"},
+			"inputs": map[string]any{"type": "object", "additionalProperties": map[string]any{"type": "string"}},
+		}, "required": []string{"kind"}, "additionalProperties": false,
+	}
+	targetSchema := map[string]any{
+		"type": "object", "properties": map[string]any{
+			"any": map[string]any{"type": "array", "minItems": 1, "items": map[string]any{
+				"type": "object", "properties": map[string]any{
+					"all": map[string]any{"type": "array", "minItems": 1, "items": selectorSchema},
+				}, "required": []string{"all"}, "additionalProperties": false,
+			}},
+		}, "required": []string{"any"}, "additionalProperties": false,
+	}
 	return client.Tool{Type: client.ToolTypeFunction, Function: client.FunctionDefinition{
 		Name: SubmitPlanToolName, Description: "Submit a validated approval-ready plan or a precise planning blocker.", Strict: &strict,
 		Parameters: map[string]any{
 			"type": "object", "properties": map[string]any{
 				"outcome": map[string]any{"type": "string", "enum": []string{"succeeded", "blocked"}},
-				"summary": map[string]any{"type": "string"}, "conditions": stringsSchema,
+				"summary": map[string]any{"type": "string"}, "conditions": stringsSchema, "facts": stringsSchema,
 				"assumptions": stringsSchema, "non_goals": stringsSchema,
 				"steps": map[string]any{"type": "array", "items": map[string]any{
 					"type": "object", "properties": map[string]any{
 						"title": map[string]any{"type": "string"}, "description": map[string]any{"type": "string"},
-						"files": stringsSchema, "verification": stringsSchema,
-					}, "required": []string{"title", "description"}, "additionalProperties": false,
+						"target": targetSchema, "verification": stringsSchema,
+					}, "required": []string{"title", "description", "target"}, "additionalProperties": false,
 				}},
 				"verification": stringsSchema, "risks": stringsSchema, "blocker": map[string]any{"type": "string"},
 			}, "required": []string{"outcome", "summary"}, "additionalProperties": false,
@@ -623,6 +642,7 @@ func parsePlanProposal(arguments string) (PlanProposal, error) {
 	proposal.Summary = strings.TrimSpace(proposal.Summary)
 	proposal.Blocker = strings.TrimSpace(proposal.Blocker)
 	proposal.Conditions = cleanStrings(proposal.Conditions)
+	proposal.Facts = cleanStrings(proposal.Facts)
 	proposal.Assumptions = cleanStrings(proposal.Assumptions)
 	proposal.NonGoals = cleanStrings(proposal.NonGoals)
 	proposal.Verification = cleanStrings(proposal.Verification)
@@ -646,10 +666,12 @@ func parsePlanProposal(arguments string) (PlanProposal, error) {
 		step := &proposal.Steps[index]
 		step.Title = strings.TrimSpace(step.Title)
 		step.Description = strings.TrimSpace(step.Description)
-		step.Files = cleanStrings(step.Files)
 		step.Verification = cleanStrings(step.Verification)
 		if step.Title == "" || step.Description == "" {
 			return PlanProposal{}, fmt.Errorf("submit_plan step %d requires title and description", index+1)
+		}
+		if err := validateTargetCondition(&step.Target); err != nil {
+			return PlanProposal{}, fmt.Errorf("submit_plan step %d target: %w", index+1, err)
 		}
 	}
 	return proposal, nil
@@ -687,17 +709,15 @@ func RenderPlanProposal(plan PlanProposal) string {
 	var body strings.Builder
 	body.WriteString(plan.Summary)
 	writePlanList(&body, "Conditions", plan.Conditions)
+	writePlanList(&body, "Facts", plan.Facts)
 	writePlanList(&body, "Assumptions", plan.Assumptions)
 	writePlanList(&body, "Non-goals", plan.NonGoals)
 	if len(plan.Steps) > 0 {
 		body.WriteString("\n\nPlan:")
 		for index, step := range plan.Steps {
 			fmt.Fprintf(&body, "\n%d. %s — %s", index+1, step.Title, step.Description)
-			if len(step.Files) > 0 {
-				body.WriteString(" [")
-				body.WriteString(strings.Join(step.Files, ", "))
-				body.WriteString("]")
-			}
+			body.WriteString("\n   Target: ")
+			body.WriteString(renderTargetCondition(step.Target))
 		}
 	}
 	writePlanList(&body, "Verification", plan.Verification)

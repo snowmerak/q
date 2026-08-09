@@ -55,7 +55,7 @@ func TestPlanCommandRunsGrillerPlannerAndStopsAfterApproval(t *testing.T) {
 			"outcome":"succeeded",
 			"summary":"Connect an approval-gated plan flow",
 			"conditions":["Stop before execution"],
-			"steps":[{"title":"Connect roles","description":"Run Griller and Planner in sequence"}],
+			"steps":[{"title":"Connect roles","description":"Run Griller and Planner in sequence","target":{"any":[{"all":[{"kind":"paths","paths":["app/plan.go"]}]}]}}],
 			"verification":["Complete one approved plan cycle"]
 		}`)}},
 	}}

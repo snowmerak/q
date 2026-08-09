@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	goruntime "runtime"
 	"strings"
 	"testing"
@@ -13,6 +14,7 @@ import (
 	"github.com/snowmerak/q/client"
 	"github.com/snowmerak/q/loom"
 	"github.com/snowmerak/q/sessionstore"
+	"github.com/snowmerak/q/subagent"
 	"github.com/snowmerak/q/tools/builtin"
 	"github.com/snowmerak/q/workspace"
 )
@@ -190,6 +192,48 @@ func TestRuntimeEvaluatesCapturedMCPResult(t *testing.T) {
 	value, ok := output.Value.(map[string]any)
 	if !ok || value["count"] != float64(1) || len(output.Artifact.Parents) != 1 || output.Artifact.Parents[0] != captured.LoomRef {
 		t.Fatalf("eval output = %#v", output)
+	}
+}
+
+func TestTargetResolverUsesRealLoomRuntime(t *testing.T) {
+	root := t.TempDir()
+	for name, content := range map[string]string{"one.go": "package sample", "two.txt": "two"} {
+		if err := os.WriteFile(filepath.Join(root, name), []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	runtime, err := newRuntime(context.Background(), root, nil, loom.InProcessEvaluator{}, loom.StoreOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer runtime.Close()
+	listed, err := runtime.Call(context.Background(), client.ToolCall{
+		ID: "target-list", Type: client.ToolTypeFunction,
+		Function: client.FunctionCall{Name: "list_directory", Arguments: `{}`},
+	})
+	if err != nil || listed.IsError {
+		t.Fatalf("list result = %#v, err = %v", listed, err)
+	}
+	var captured loomReceipt
+	if err := json.Unmarshal([]byte(listed.Content), &captured); err != nil {
+		t.Fatal(err)
+	}
+	target := subagent.TargetCondition{Any: []subagent.TargetProduct{
+		{All: []subagent.TargetSelector{
+			{Kind: subagent.TargetSelectorPaths, Paths: []string{"one.go", "two.txt"}},
+			{Kind: subagent.TargetSelectorLoom,
+				Code:   `const entries = loom.json(inputs.tree, "/structured/entries"); return entries.filter(entry => entry.name.endsWith(".go")).map(entry => entry.name);`,
+				Inputs: map[string]string{"tree": captured.LoomRef.String()}},
+		}},
+		{All: []subagent.TargetSelector{{Kind: subagent.TargetSelectorPaths, Paths: []string{"README.md"}}}},
+	}}
+	resolved, err := (subagent.TargetResolver{Tools: runtime}).Resolve(context.Background(), target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"README.md", "one.go"}
+	if !reflect.DeepEqual(resolved, want) {
+		t.Fatalf("resolved targets = %#v, want %#v", resolved, want)
 	}
 }
 func TestLargeToolResultReceiptKeepsOnlyBoundedPreview(t *testing.T) {

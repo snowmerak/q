@@ -131,10 +131,15 @@ Planner는 완성된 Grill brief를 받아 다음을 하나의 proposal로 만�
 - 명시적 가정과 위험
 - 범위와 비범위
 - 순서가 있는 실행 계획
+- 각 task의 Loom/static path 기반 target condition
 - 완료 기준과 검증 방법
 
 사용자는 이 조합된 proposal 전체를 승인한다. 승인 전에는 coder나 변경 실행기로
 전달하지 않는다.
+
+승인된 Plan의 task 실행과 Planner review 의미는
+[execution-orchestration.md](execution-orchestration.md)를 따른다. Target condition은
+task의 파일 집합만 고르며 순차 조건이나 결과 조건으로 사용하지 않는다.
 
 사용자가 거절하거나 수정 사항을 주거나 Planner가 유효한 계획을 만들지 못하면
 Planner만 반복하지 않는다. 기존 사용자 답변, Scout 결과, Loom reference, proposal과
@@ -156,6 +161,7 @@ Planner만 반복하지 않는다. 기존 사용자 답변, Scout 결과, Loom r
 - plain-text 종료 reminder
 - Session Store lifecycle 기록
 - Planner의 `submit_plan` validation
+- task별 OR-of-AND target condition validation
 - 조건과 계획을 조합한 사용자 confirmation
 - 거절 또는 Planner `blocked` 시 이전 brief/proposal/feedback을 보존한 re-grill
 - Griller, Scout, Planner의 구조화된 progress event와 채팅 TUI activity panel
@@ -168,3 +174,4 @@ Planner만 반복하지 않는다. 기존 사용자 답변, Scout 결과, Loom r
 - Griller와 Planner 내부 lifecycle archive
 - 전체 activity history를 탐색하는 `/agents` 상세 화면
 - 승인된 계획을 coder 실행 단계로 넘기는 별도 명령과 gate
+- Loom target evaluator와 Coder/Planner review 실행 loop
