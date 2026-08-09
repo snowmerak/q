@@ -148,3 +148,30 @@ func TestCopyDirectoryIntoItselfIsRejected(t *testing.T) {
 		t.Fatal("copy into source unexpectedly succeeded")
 	}
 }
+
+func TestListDirectoryOmitsQMetadataOnlyFromWorkspaceRoot(t *testing.T) {
+	fs := newTestFS(t)
+	writeTestFile(t, fs, ".q/data/records/record.json", "internal")
+	writeTestFile(t, fs, "source.go", "package sample")
+
+	root, err := fs.ListDirectory(ListDirectoryInput{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range root.Entries {
+		if entry.Name == ".q" {
+			t.Fatalf("workspace metadata leaked into root listing: %+v", root.Entries)
+		}
+	}
+	if len(root.Entries) != 1 || root.Entries[0].Name != "source.go" {
+		t.Fatalf("root entries = %+v", root.Entries)
+	}
+
+	metadata, err := fs.ListDirectory(ListDirectoryInput{Path: ".q"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(metadata.Entries) != 1 || metadata.Entries[0].Name != "data" {
+		t.Fatalf("explicit .q entries = %+v", metadata.Entries)
+	}
+}

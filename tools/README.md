@@ -13,7 +13,7 @@ Builtin tools:
 - `read_file`: bounded text reads with `LINE#HASH:` anchors
 - `edit_file`: atomic, stale-safe `replace`, `append`, and `prepend` edits
 - `write_file`: atomically create or replace a complete file
-- `list_directory`, `create_directory`
+- `list_directory`, `create_directory` (`list_directory` omits q-owned `.q` metadata from the workspace-root listing)
 - `move_path`, `copy_path`, `remove_path`
 - `run_command`: start a shell command in a workspace directory
 - `cmd_status`: poll command state and incremental output

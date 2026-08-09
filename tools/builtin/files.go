@@ -73,6 +73,12 @@ func (fsys *FS) ListDirectory(input ListDirectoryInput) (ListDirectoryOutput, er
 	}
 	result := make([]DirectoryEntry, 0, len(entries))
 	for _, entry := range entries {
+		// .q contains q's own session, archive, index, and Loom state. Hiding it
+		// from root discovery keeps agents from recursively investigating their
+		// own runtime data. Explicit access to .q remains available for debugging.
+		if filepath.Clean(path) == fsys.Root && entry.Name() == ".q" {
+			continue
+		}
 		info, err := entry.Info()
 		if err != nil {
 			return ListDirectoryOutput{}, err
