@@ -11,6 +11,7 @@ import (
 	"sync"
 	"testing"
 
+	tea "charm.land/bubbletea/v2"
 	"github.com/snowmerak/q/client"
 	"github.com/snowmerak/q/subagent"
 )
@@ -109,7 +110,8 @@ func TestCommitAgentForcesOverviewAndFallsBackAfterThreeReminders(t *testing.T) 
 	}
 	fake := &fakeAgentClient{responses: responses}
 	state := repositoryState{visibleFiles: []string{"app/main.go"}, scopeCandidates: []string{"app"}, fileDiffs: map[string]string{"app/main.go": "diff"}}
-	proposal, fallback, err := runCommitAgent(context.Background(), fake, subagent.Spec{Model: "commit-model"}, state, 2)
+	var progress bytes.Buffer
+	proposal, fallback, err := runCommitAgent(context.Background(), fake, subagent.Spec{Model: "commit-model"}, state, 2, newProgressLogger(&progress))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -126,6 +128,11 @@ func TestCommitAgentForcesOverviewAndFallsBackAfterThreeReminders(t *testing.T) 
 	if len(fake.requests[0].Tools) != 7 {
 		t.Fatalf("commit tools = %d", len(fake.requests[0].Tools))
 	}
+	for _, expected := range []string{"calling git_overview", "sending proposal reminder 3/3", "proposal reminders exhausted"} {
+		if !strings.Contains(progress.String(), expected) {
+			t.Fatalf("progress log does not contain %q:\n%s", expected, progress.String())
+		}
+	}
 }
 
 func TestCommitAgentAcceptsToolProposal(t *testing.T) {
@@ -134,7 +141,8 @@ func TestCommitAgentAcceptsToolProposal(t *testing.T) {
 		{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{toolCall(toolProposeCommit, `{"type":"feat","scope":"commit","summary":"added commit generation","body":["Generated validated messages."]}`)}},
 	}}
 	state := repositoryState{visibleFiles: []string{"commitagent/agent.go"}, fileDiffs: map[string]string{"commitagent/agent.go": "diff"}}
-	proposal, fallback, err := runCommitAgent(context.Background(), fake, subagent.Spec{Model: "commit-model", ReasoningEffort: "high"}, state, 2)
+	var progress bytes.Buffer
+	proposal, fallback, err := runCommitAgent(context.Background(), fake, subagent.Spec{Model: "commit-model", ReasoningEffort: "high"}, state, 2, newProgressLogger(&progress))
 	if err != nil || fallback || proposal.Single == nil {
 		t.Fatalf("proposal = %#v, fallback = %v, err = %v", proposal, fallback, err)
 	}
@@ -143,6 +151,9 @@ func TestCommitAgentAcceptsToolProposal(t *testing.T) {
 	}
 	if fake.requests[0].Model != "commit-model" || fake.requests[0].ReasoningEffort != "high" {
 		t.Fatalf("request model controls = %#v", fake.requests[0])
+	}
+	if !strings.Contains(progress.String(), "accepted feat(commit): added commit generation") {
+		t.Fatalf("progress log = %q", progress.String())
 	}
 }
 
@@ -164,7 +175,7 @@ func TestExecuteSplitCommitsPreservesFileGroups(t *testing.T) {
 		{Type: "docs", Summary: "updated documentation", Files: []string{"docs.txt"}},
 	}
 	var output bytes.Buffer
-	result, err := executeProposal(context.Background(), state, proposalState{Split: proposals}, "commit agent", &output)
+	result, err := executeProposal(context.Background(), state, proposalState{Split: proposals}, "commit agent", newProgressLogger(&output))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -181,6 +192,140 @@ func TestExecuteSplitCommitsPreservesFileGroups(t *testing.T) {
 	}
 	if got := gitTest(t, root, "show", "HEAD^:docs.txt"); got != "old docs\n" {
 		t.Fatalf("first commit included docs change: %q", got)
+	}
+}
+
+func TestSessionEditsSelectedSplitMessageWithoutChangingFiles(t *testing.T) {
+	session := &Session{proposal: proposalState{Split: []Proposal{
+		{Type: "feat", Scope: "app", Summary: "added application flow", Files: []string{"app.go"}},
+		{Type: "docs", Summary: "documented application flow", Files: []string{"README.md"}},
+	}}}
+	model := newCommitUIModel(context.Background(), t.TempDir())
+	defer model.cancel()
+	model.session = session
+	model.proposals = session.Proposals()
+	model.phase = commitUIReview
+	model.selected = 1
+	view := model.View().Content
+	for _, expected := range []string{"Split proposal", "README.md", "e edit message", "p commit+push"} {
+		if !strings.Contains(view, expected) {
+			t.Fatalf("review view does not contain %q:\n%s", expected, view)
+		}
+	}
+
+	updated, command := model.updateReview(tea.KeyPressMsg{Code: 'e', Text: "e"})
+	model = updated.(commitUIModel)
+	if model.phase != commitUIEditing {
+		t.Fatalf("edit state = %v, command nil = %v", model.phase, command == nil)
+	}
+	model.editor.SetValue("docs(commit): documented interactive review\n\n- Explained message editing.")
+	updated, _ = model.updateEditor(tea.KeyPressMsg{Code: 's', Mod: tea.ModCtrl})
+	model = updated.(commitUIModel)
+	proposals := session.Proposals()
+	if model.phase != commitUIReview || proposals[1].Scope != "commit" || proposals[1].Summary != "documented interactive review" {
+		t.Fatalf("updated model = phase %v, proposal %#v", model.phase, proposals[1])
+	}
+	if !reflect.DeepEqual(proposals[1].Files, []string{"README.md"}) || !reflect.DeepEqual(proposals[0].Files, []string{"app.go"}) {
+		t.Fatalf("split files changed: %#v", proposals)
+	}
+}
+
+func TestSessionRejectsChangedIndexBeforeCommit(t *testing.T) {
+	root := newTestRepository(t)
+	writeTestFile(t, root, "app.txt", "old\n")
+	gitTest(t, root, "add", "-A")
+	gitTest(t, root, "commit", "-m", "chore: initial")
+	writeTestFile(t, root, "app.txt", "first\n")
+	gitTest(t, root, "add", "-A")
+	state, err := prepareRepository(context.Background(), root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	proposal := Proposal{Type: "feat", Scope: "app", Summary: "updated application"}
+	session := &Session{state: state, proposal: proposalState{Single: &proposal}, source: "edited proposal"}
+	writeTestFile(t, root, "app.txt", "second\n")
+	gitTest(t, root, "add", "-A")
+	if _, err := session.Commit(context.Background(), newProgressLogger(nil)); err == nil || !strings.Contains(err.Error(), "changed during review") {
+		t.Fatalf("commit error = %v", err)
+	}
+}
+
+func TestSessionCommitThenPushRequiresUpstream(t *testing.T) {
+	root := newTestRepository(t)
+	writeTestFile(t, root, "app.txt", "content\n")
+	state, err := prepareRepository(context.Background(), root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	proposal := Proposal{Type: "feat", Scope: "app", Summary: "added application"}
+	session := &Session{state: state, proposal: proposalState{Single: &proposal}, source: "commit agent"}
+	result, err := session.Commit(context.Background(), newProgressLogger(nil))
+	if err != nil || len(result.Messages) != 1 {
+		t.Fatalf("result = %#v, err = %v", result, err)
+	}
+	if err := session.Push(context.Background(), newProgressLogger(nil)); err == nil || !strings.Contains(err.Error(), "no upstream") {
+		t.Fatalf("push error = %v", err)
+	}
+}
+
+func TestCommitUIApprovesProposalBeforeCreatingCommit(t *testing.T) {
+	root := newTestRepository(t)
+	writeTestFile(t, root, "app.txt", "content\n")
+	state, err := prepareRepository(context.Background(), root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	proposal := Proposal{Type: "feat", Scope: "app", Summary: "added application"}
+	session := &Session{state: state, proposal: proposalState{Single: &proposal}, source: "commit agent"}
+	model := newCommitUIModel(context.Background(), root)
+	defer model.cancel()
+	model.session = session
+	model.proposals = session.Proposals()
+	model.phase = commitUIReview
+
+	updated, command := model.updateReview(tea.KeyPressMsg{Code: tea.KeyEnter})
+	model = updated.(commitUIModel)
+	if model.phase != commitUIWorking || command == nil {
+		t.Fatalf("working state = %v, command nil = %v", model.phase, command == nil)
+	}
+	updated, _ = model.Update(command())
+	model = updated.(commitUIModel)
+	if model.phase != commitUIDone || len(model.result.Messages) != 1 || model.status != "Commit created" {
+		t.Fatalf("completed model = phase %v, result %#v, status %q", model.phase, model.result, model.status)
+	}
+	if got := strings.TrimSpace(gitTest(t, root, "log", "-1", "--format=%s")); got != "feat(app): added application" {
+		t.Fatalf("commit subject = %q", got)
+	}
+}
+
+func TestSessionPushesCommittedProposalToExistingUpstream(t *testing.T) {
+	root := newTestRepository(t)
+	remote := filepath.Join(t.TempDir(), "remote.git")
+	if err := os.MkdirAll(remote, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	gitTest(t, remote, "init", "--bare", "-q")
+	writeTestFile(t, root, "app.txt", "initial\n")
+	gitTest(t, root, "add", "-A")
+	gitTest(t, root, "commit", "-m", "chore: initial")
+	gitTest(t, root, "remote", "add", "origin", remote)
+	gitTest(t, root, "push", "-u", "origin", "HEAD")
+
+	writeTestFile(t, root, "app.txt", "updated\n")
+	state, err := prepareRepository(context.Background(), root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	proposal := Proposal{Type: "feat", Scope: "app", Summary: "updated application"}
+	session := &Session{state: state, proposal: proposalState{Single: &proposal}, source: "commit agent"}
+	if _, err := session.Commit(context.Background(), newProgressLogger(nil)); err != nil {
+		t.Fatal(err)
+	}
+	if err := session.Push(context.Background(), newProgressLogger(nil)); err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.TrimSpace(gitTest(t, remote, "log", "-1", "--format=%s")); got != "feat(app): updated application" {
+		t.Fatalf("remote subject = %q", got)
 	}
 }
 

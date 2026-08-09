@@ -25,9 +25,10 @@ func runCommitAgent(
 	spec subagent.Spec,
 	state repositoryState,
 	maxParallel int,
+	logger *progressLogger,
 ) (proposalState, bool, error) {
 	runtime := &commitToolRuntime{
-		state: state, client: configuredClient, spec: spec, maxParallel: maxParallel,
+		state: state, client: configuredClient, spec: spec, maxParallel: maxParallel, logger: logger,
 	}
 	messages := []client.Message{
 		{Role: client.RoleSystem, Content: commitAgentInstructions()},
@@ -58,9 +59,11 @@ func runCommitAgent(
 				return runtime.proposal, false, nil
 			}
 			if reminders == maximumProposalPrompts {
+				logger.step("agent", "proposal reminders exhausted")
 				return proposalState{Single: pointerProposal(mechanicalFallback(state))}, true, nil
 			}
 			reminders++
+			logger.step("agent", "sending proposal reminder %d/%d", reminders, maximumProposalPrompts)
 			messages = append(messages, client.Message{
 				Role:    client.RoleSystem,
 				Content: fmt.Sprintf("Reminder %d/%d: a commit proposal is mandatory. Call propose_commit or split_commit now; do not answer with plain text.", reminders, maximumProposalPrompts),
@@ -68,12 +71,21 @@ func runCommitAgent(
 			continue
 		}
 		for _, call := range assistant.ToolCalls {
+			logger.step("tool", "calling %s", call.Function.Name)
 			result := runtime.call(ctx, call)
+			if result.IsError {
+				logger.step("tool", "%s returned a validation error", call.Function.Name)
+			}
 			messages = append(messages, client.Message{
 				Role: client.RoleTool, Name: call.Function.Name, ToolCallID: call.ID, Content: result.Content,
 			})
 		}
 		if runtime.proposal.Single != nil || len(runtime.proposal.Split) > 0 {
+			if runtime.proposal.Single != nil {
+				logger.step("proposal", "accepted %s", formatSubject(*runtime.proposal.Single))
+			} else {
+				logger.step("proposal", "accepted a %d-commit split", len(runtime.proposal.Split))
+			}
 			return runtime.proposal, false, nil
 		}
 	}

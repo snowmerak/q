@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"strings"
 
 	"github.com/snowmerak/q/client"
@@ -29,31 +28,45 @@ type repositoryResult struct {
 	err   error
 }
 
-// RunDefault loads q's personal provider and commit-agent settings, prepares
-// staged changes, and creates one or more commits.
-func RunDefault(ctx context.Context, directory string, output io.Writer) (Result, error) {
+func prepareSessionDefault(ctx context.Context, directory string, logger *progressLogger) (*Session, error) {
 	store, err := config.DefaultStore()
 	if err != nil {
-		return Result{}, err
+		return nil, err
 	}
 	value, err := store.Load()
 	if err != nil {
 		if errors.Is(err, config.ErrNotFound) {
-			return Result{}, errors.New("q commit: q is not configured; run q first")
+			return nil, errors.New("q commit: q is not configured; run q first")
 		}
-		return Result{}, err
+		return nil, err
 	}
 
 	workContext, cancel := context.WithCancel(ctx)
-	defer cancel()
 	repositoryChannel := make(chan repositoryResult, 1)
 	runtimeChannel := make(chan runtimeResult, 1)
 	go func() {
+		logger.step("prepare", "inspecting the Git index")
 		state, prepareErr := prepareRepository(workContext, directory)
+		if prepareErr == nil {
+			if state.autoStaged {
+				logger.step("prepare", "staged all working-tree changes")
+			}
+			logger.step("prepare", "collected %d visible and %d lock files", len(state.visibleFiles), len(state.lockFiles))
+		}
 		repositoryChannel <- repositoryResult{state: state, err: prepareErr}
 	}()
 	go func() {
+		logger.step("model", "resolving the commit agent model")
 		runtime, resolveErr := resolveCommitRuntime(workContext, store, value)
+		if resolveErr == nil {
+			effort := runtime.spec.ReasoningEffort
+			if effort == "" {
+				effort = "provider default"
+			}
+			logger.step("model", "resolved %s (%s)", runtime.spec.Model, effort)
+		} else {
+			logger.step("model", "model resolution failed")
+		}
 		runtimeChannel <- runtimeResult{runtime: runtime, err: resolveErr}
 	}()
 
@@ -64,8 +77,9 @@ func RunDefault(ctx context.Context, directory string, output io.Writer) (Result
 		if resolved.err == nil {
 			_ = resolved.runtime.close()
 		}
-		return Result{}, repository.err
+		return nil, repository.err
 	}
+	logger.step("detect", "checking for trivial staged changes")
 	trivial, err := detectTrivialChange(ctx, repository.state)
 	if err != nil {
 		cancel()
@@ -73,43 +87,36 @@ func RunDefault(ctx context.Context, directory string, output io.Writer) (Result
 		if resolved.err == nil {
 			_ = resolved.runtime.close()
 		}
-		return Result{}, err
+		return nil, err
+	}
+	resolved := <-runtimeChannel
+	session := &Session{
+		state: repository.state, maxParallel: value.EffectiveAgents().MaxParallel,
+		runtime: resolved.runtime, runtimeErr: resolved.err, logger: logger, cancel: cancel,
 	}
 	if trivial.Found {
-		cancel()
-		resolved := <-runtimeChannel
-		if resolved.err == nil {
-			_ = resolved.runtime.close()
-		}
+		logger.step("detect", "matched %s", trivial.Message)
 		proposal := proposalForTrivialMessage(trivial.Message)
-		return executeProposal(ctx, repository.state, proposalState{Single: &proposal}, "trivial detector", output)
+		session.proposal = proposalState{Single: &proposal}
+		session.source = "trivial detector"
+		return session, nil
 	}
 	if len(repository.state.visibleFiles) == 0 {
-		cancel()
-		resolved := <-runtimeChannel
-		if resolved.err == nil {
-			_ = resolved.runtime.close()
-		}
+		logger.step("fallback", "only lock files changed")
 		proposal := Proposal{Type: "chore", Scope: "deps", Summary: "updated dependency locks"}
-		return executeProposal(ctx, repository.state, proposalState{Single: &proposal}, "mechanical fallback", output)
+		session.proposal = proposalState{Single: &proposal}
+		session.source = "mechanical fallback"
+		return session, nil
 	}
-
-	resolved := <-runtimeChannel
 	if resolved.err != nil {
-		return Result{}, resolved.err
+		cancel()
+		return nil, resolved.err
 	}
-	defer resolved.runtime.close()
-	proposal, fallback, err := runCommitAgent(
-		ctx, resolved.runtime.client, resolved.runtime.spec, repository.state, value.EffectiveAgents().MaxParallel,
-	)
-	if err != nil {
-		return Result{}, err
+	if err := session.Regenerate(ctx, logger); err != nil {
+		_ = session.Close()
+		return nil, err
 	}
-	source := "commit agent"
-	if fallback {
-		source = "mechanical fallback"
-	}
-	return executeProposal(ctx, repository.state, proposal, source, output)
+	return session, nil
 }
 
 func resolveCommitRuntime(ctx context.Context, store config.Store, value config.Config) (resolvedRuntime, error) {

@@ -93,12 +93,35 @@ remain part of the eventual commit but are omitted from the overview. The
 agent can inspect recent history, fan out isolated per-file analysis, and must
 finish with a validated `propose_commit` or `split_commit` call. Three missing
 proposal reminders are allowed before q creates a mechanical fallback commit.
-Split proposals are applied to the Git index and committed in order without
-replacing unstaged working-tree content.
+Every proposal, including a trivial one, opens an interactive review before
+Git is changed. Split proposals show each message and its read-only file group.
+The selected single or split message can be edited and revalidated, while `r`
+regenerates the whole proposal without recollecting the staged diff. File and
+hunk reassignment are intentionally not exposed. Approved split proposals are
+applied to the Git index and committed in order without replacing unstaged
+working-tree content. The index is compared with the captured diff immediately
+before committing so external changes cannot be approved accidentally.
 
 ```powershell
 q commit
 ```
+
+The command prints live, metadata-only progress without exposing diff content:
+
+```text
+q commit · prepare · inspecting the Git index
+q commit · model · resolving the commit agent model
+q commit · agent · starting an isolated commit session
+q commit · tool · calling git_overview
+q commit · proposal · accepted feat(commit): added commit generation
+q commit · commit · creating feat(commit): added commit generation
+```
+
+Review keys are `Up`/`Down` to select a split message, `e` to edit only that
+message, `Ctrl+S` to validate and save an edit, `r` to regenerate, `Enter` to
+commit, `p` to commit and push, and `Esc` to cancel. Push uses only an existing
+upstream; detached HEADs and branches without an upstream remain local and
+show an actionable error.
 
 `providers.json` uses `llm-provider/gateway.Config` directly. Multiple enabled
 providers are exposed together using their provider ID or configured prefix:

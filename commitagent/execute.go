@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"io"
 	"strings"
 )
 
@@ -15,21 +14,23 @@ type Result struct {
 	Split        bool
 }
 
-func executeProposal(ctx context.Context, state repositoryState, proposal proposalState, source string, output io.Writer) (Result, error) {
+func executeProposal(ctx context.Context, state repositoryState, proposal proposalState, source string, logger *progressLogger) (Result, error) {
 	fallback := source == "mechanical fallback"
 	if proposal.Single != nil {
 		message := formatCommitMessage(*proposal.Single)
-		commandOutput, err := commitIndex(ctx, state.root, *proposal.Single)
+		logger.step("commit", "creating %s", formatSubject(*proposal.Single))
+		_, err := commitIndex(ctx, state.root, *proposal.Single)
 		if err != nil {
 			return Result{}, err
 		}
-		writeCommitOutput(output, commandOutput, message, source)
+		logger.step("commit", "created %s", formatSubject(*proposal.Single))
 		return Result{Messages: []string{message}, AutoStaged: state.autoStaged, UsedFallback: fallback}, nil
 	}
 	if len(proposal.Split) == 0 {
 		return Result{}, fmt.Errorf("q commit: proposal is empty")
 	}
-	messages, err := executeSplit(ctx, state, proposal.Split, output)
+	logger.step("split", "preparing %d index patches", len(proposal.Split))
+	messages, err := executeSplit(ctx, state, proposal.Split, logger)
 	if err != nil {
 		return Result{}, err
 	}
@@ -52,7 +53,7 @@ func commitIndex(ctx context.Context, root string, proposal Proposal) (string, e
 	return body, nil
 }
 
-func executeSplit(ctx context.Context, state repositoryState, proposals []Proposal, output io.Writer) ([]string, error) {
+func executeSplit(ctx context.Context, state repositoryState, proposals []Proposal, logger *progressLogger) ([]string, error) {
 	patches := make([]string, len(proposals))
 	for index, proposal := range proposals {
 		var patch strings.Builder
@@ -72,18 +73,19 @@ func executeSplit(ctx context.Context, state repositoryState, proposals []Propos
 
 	messages := make([]string, 0, len(proposals))
 	for index, proposal := range proposals {
+		logger.step("split", "creating commit %d/%d: %s", index+1, len(proposals), formatSubject(proposal))
 		if err := applyIndexPatch(ctx, state.root, patches[index]); err != nil {
 			restoreErr := restoreRemainingPatches(ctx, state.root, patches[index:])
 			return nil, errorsJoin(fmt.Errorf("q commit: stage split %d: %w", index+1, err), restoreErr)
 		}
-		commandOutput, err := commitIndex(ctx, state.root, proposal)
+		_, err := commitIndex(ctx, state.root, proposal)
 		if err != nil {
 			restoreErr := restoreRemainingPatches(ctx, state.root, patches[index+1:])
 			return nil, errorsJoin(err, restoreErr)
 		}
 		message := formatCommitMessage(proposal)
 		messages = append(messages, message)
-		writeCommitOutput(output, commandOutput, message, "commit agent")
+		logger.step("split", "created commit %d/%d", index+1, len(proposals))
 	}
 	return messages, nil
 }
@@ -106,19 +108,6 @@ func applyIndexPatch(ctx context.Context, root, patch string) error {
 	}
 	_, err := gitBytes(ctx, root, bytes.NewBufferString(patch), "apply", "--cached", "--binary", "--whitespace=nowarn", "-")
 	return err
-}
-
-func writeCommitOutput(output io.Writer, gitOutput, message, source string) {
-	if output == nil {
-		return
-	}
-	if strings.TrimSpace(gitOutput) != "" {
-		fmt.Fprintln(output, strings.TrimSpace(gitOutput))
-	}
-	if source == "" {
-		source = "commit agent"
-	}
-	fmt.Fprintf(output, "q commit · %s\n%s\n", source, message)
 }
 
 func errorsJoin(primary, secondary error) error {

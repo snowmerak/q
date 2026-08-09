@@ -54,6 +54,7 @@ type commitToolRuntime struct {
 	client      agentClient
 	spec        subagent.Spec
 	maxParallel int
+	logger      *progressLogger
 	overviewed  bool
 	proposal    proposalState
 }
@@ -301,6 +302,7 @@ func (runtime *commitToolRuntime) analyzeFiles(ctx context.Context, arguments st
 	if len(input.Paths) == 0 || len(input.Paths) > 16 {
 		return nil, errors.New("paths must contain between 1 and 16 files")
 	}
+	runtime.logger.step("analyze", "fan-out requested for %d files", len(input.Paths))
 	paths := make([]string, 0, len(input.Paths))
 	seen := make(map[string]struct{}, len(input.Paths))
 	for _, requested := range input.Paths {
