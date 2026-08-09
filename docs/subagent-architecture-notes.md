@@ -2,11 +2,13 @@
 
 ## 상태
 
-이 문서는 역할별 모델 할당과 서브에이전트 orchestration을 위한 아이디어
-초안이다. 실제 인터페이스와 구현은 추후 통합할 라이브러리를 확인한 뒤
-확정한다. 현재 코드는 메인 agent의 `task_start`, `ask_to_user`,
-`task_complete` 제어만 구현하며, 역할별 subagent runner와 orchestration graph는
-아직 구현하지 않는다.
+이 문서는 역할별 모델 할당과 서브에이전트 orchestration의 전체 메모다.
+메인 agent의 `task_start`, `ask_to_user`, `task_complete` 제어와 단일 read-only
+`ScoutRunner` 실행 코어가 구현되어 있다. `/plan` 상태 머신, Griller가 Scout를
+호출하는 bridge와 Planner confirmation graph는 아직 구현하지 않는다.
+
+`/plan`의 확정된 상태와 역할 계약은 [plan-orchestration.md](plan-orchestration.md)를
+우선한다.
 
 ## 목표
 
@@ -29,20 +31,22 @@ context와 실행 예산을 할당할 수 있어야 한다.
 ## 기본 orchestration 흐름
 
 ```text
-사용자 요청
+사용자 `/plan` 요청
    │
-   ├─ griller ── 모호함·위험·가정 확인
+   ▼
+ griller ◄──── scout ──── 저장소 조사
+   │  ▲          │
+   │  └──────────┘ 필요한 만큼 반복
+   ├──────── research ─── 외부 조사
    │
-   ├─ scout ───── 저장소 조사 ─┐
-   └─ research ── 외부 조사 ──┤  필요할 때 병렬 실행
-                              ▼
-                           planner
+   ▼
+ planner
                               │
                        사용자 승인
                     ┌─────────┴─────────┐
               수정 요청                 승인
                  │                       │
-                 └────── planner         ▼
+                 └────── griller         ▼
                                       coder
                                          │
                          ┌───────────────┴───────────────┐
