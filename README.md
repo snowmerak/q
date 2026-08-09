@@ -80,6 +80,26 @@ selected model advertises `capabilities.reasoning.control: effort` and, when
 enumerated, the value appears in `supported_efforts`. The built-in roles are
 `griller`, `scout`, `research`, `planner`, `coder`, `commit`, and `advisor`.
 
+Run `q commit` inside a Git worktree to create Oh My Pi-style Conventional
+Commits with the configured `commit` model. Existing staged changes are used;
+when the index is empty, q runs `git add -A`. Whitespace-only and import-order
+changes bypass the model and use `style: formatted code` or
+`style: reorganized imports` directly.
+
+For ordinary changes, q starts an isolated commit session with only seven
+commit tools. The first call is forced to `git_overview`; full staged diffs are
+kept outside the initial prompt and exposed by file or hunk tools. Lock files
+remain part of the eventual commit but are omitted from the overview. The
+agent can inspect recent history, fan out isolated per-file analysis, and must
+finish with a validated `propose_commit` or `split_commit` call. Three missing
+proposal reminders are allowed before q creates a mechanical fallback commit.
+Split proposals are applied to the Git index and committed in order without
+replacing unstaged working-tree content.
+
+```powershell
+q commit
+```
+
 `providers.json` uses `llm-provider/gateway.Config` directly. Multiple enabled
 providers are exposed together using their provider ID or configured prefix:
 

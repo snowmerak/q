@@ -9,6 +9,7 @@ import (
 	"os/signal"
 
 	"github.com/snowmerak/q/app"
+	"github.com/snowmerak/q/commitagent"
 	"github.com/snowmerak/q/loom"
 	"github.com/snowmerak/q/providerhost"
 )
@@ -25,6 +26,21 @@ func main() {
 	}
 	if len(os.Args) > 1 && os.Args[1] == providerhost.ChildCommand {
 		if err := runGatewayChild(ctx, os.Args[2:]); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
+	if len(os.Args) > 1 && os.Args[1] == "commit" {
+		if len(os.Args) != 2 {
+			fmt.Fprintln(os.Stderr, "usage: q commit")
+			os.Exit(2)
+		}
+		directory, err := os.Getwd()
+		if err == nil {
+			_, err = commitagent.RunDefault(ctx, directory, os.Stdout)
+		}
+		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}
