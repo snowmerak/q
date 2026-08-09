@@ -737,6 +737,61 @@ func TestSlashLoomEditsSettingsAndPreviewsGC(t *testing.T) {
 	}
 }
 
+func TestSlashIgnoreEditsAndSavesWorkspaceRules(t *testing.T) {
+	root := t.TempDir()
+	workspaceStore := workspace.Store{Root: root}
+	if err := workspaceStore.SaveIgnore(".gradle/\n"); err != nil {
+		t.Fatal(err)
+	}
+	value := config.Default()
+	value.Provider.Model = "test-model"
+	m := newModel(context.Background(), config.Store{Dir: t.TempDir()}, nil)
+	m.workspaceStore = &workspaceStore
+	m.enterChat(value, &fakeClient{})
+	m.resize(100, 32)
+	m.input.SetValue("/ignore")
+
+	updated, _ := m.updateChatKey(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m = updated.(model)
+	updated, _ = m.Update(deferredSubmitMsg{})
+	m = updated.(model)
+	if m.screen != screenIgnore || m.ignoreEditor.Value() != ".gradle/\n" {
+		t.Fatalf("ignore screen = %v, content %q", m.screen, m.ignoreEditor.Value())
+	}
+	view := ansi.Strip(m.View().Content)
+	for _, expected := range []string{"q · Discovery ignore", ".q/ is always excluded", "DISCOVERY PATTERNS", "ctrl+s save"} {
+		if !strings.Contains(view, expected) {
+			t.Fatalf("ignore view missing %q:\n%s", expected, view)
+		}
+	}
+	if height := lipgloss.Height(view); height > m.height {
+		t.Fatalf("ignore view height %d exceeds terminal %d:\n%s", height, m.height, view)
+	}
+
+	m.ignoreEditor.SetValue(".gradle/\nbuild/\nvendor/")
+	updated, _ = m.updateIgnore(tea.KeyPressMsg{Code: 's', Mod: tea.ModCtrl})
+	m = updated.(model)
+	saved, err := workspaceStore.LoadIgnore()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if saved != ".gradle/\nbuild/\nvendor/\n" || !strings.Contains(m.status, "saved") {
+		t.Fatalf("saved ignore = %q, status %q", saved, m.status)
+	}
+
+	m.ignoreEditor.SetValue(saved + "tmp/\n")
+	updated, _ = m.updateIgnore(tea.KeyPressMsg{Code: tea.KeyEsc})
+	m = updated.(model)
+	if m.screen != screenIgnore || !m.ignoreDiscardArmed {
+		t.Fatalf("dirty escape left screen: screen %v armed %v", m.screen, m.ignoreDiscardArmed)
+	}
+	updated, _ = m.updateIgnore(tea.KeyPressMsg{Code: tea.KeyEsc})
+	m = updated.(model)
+	if m.screen != screenChat {
+		t.Fatalf("second escape screen = %v", m.screen)
+	}
+}
+
 func TestManagedSlashProviderOpensProviderList(t *testing.T) {
 	value := config.Default()
 	value.Provider.Model = "local/test-model"
@@ -1468,6 +1523,43 @@ func TestDetailedAgentTraceIsScrollableAndCollapsible(t *testing.T) {
 	m = updated.(model)
 	if m.agentTraceExpanded || strings.Contains(ansi.Strip(m.viewChat()), "SUBAGENT TRACE") {
 		t.Fatalf("agent trace did not collapse: expanded %v", m.agentTraceExpanded)
+	}
+}
+
+func TestAgentTraceNeverPushesQuestionInputBelowTerminal(t *testing.T) {
+	m := newModel(context.Background(), config.Store{Dir: t.TempDir()}, nil)
+	m.screen = screenChat
+	m.waiting = true
+	m.asking = true
+	m.agentTraceExpanded = true
+	m.agentStates = map[string]string{"griller": "waiting", "scout": "succeeded"}
+	m.pendingQuestion = askToUserInput{
+		Question: "Which benchmark scope should be used?",
+		Context:  strings.Repeat("Long planning context. ", 20),
+		Choices: []askToUserChoice{
+			{ID: "current", Label: "Current scope", Description: strings.Repeat("Keep existing behavior. ", 8)},
+			{ID: "expand", Label: "Expanded scope", Description: strings.Repeat("Add more coverage. ", 8)},
+		},
+	}
+	m.input.Placeholder = "Type a custom answer…"
+	for index := 0; index < 8; index++ {
+		m.appendAgentTrace(agentTrace{
+			Agent: "scout", Kind: "tool_result", Name: "read_file",
+			Content: fmt.Sprintf(`{"content":%q,"path":"benchmark_test.go"}`, strings.Repeat("line content with wrapping ", 80)),
+		})
+	}
+	m.resize(120, 36)
+
+	view := ansi.Strip(m.viewChat())
+	if height := lipgloss.Height(view); height > m.height {
+		t.Fatalf("combined trace/question view height %d exceeds terminal %d:\n%s", height, m.height, view)
+	}
+	if !strings.Contains(view, "QUESTION") || !strings.Contains(view, "Type a custom answer…") {
+		t.Fatalf("question input was pushed out of view:\n%s", view)
+	}
+	wantTraceHeight := m.agentTraceViewport.Height() + 2
+	if got := lipgloss.Height(m.renderedAgentActivities()); got != wantTraceHeight {
+		t.Fatalf("trace rendered height = %d; want viewport %d + chrome 2", got, m.agentTraceViewport.Height())
 	}
 }
 

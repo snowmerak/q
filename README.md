@@ -257,6 +257,11 @@ build/
 vendor/
 ```
 
+Enter `/ignore` in the chat TUI to edit the current workspace `.qignore`.
+The editor shows line numbers and syntax guidance; press `Ctrl+S` to save.
+New directory listings use the saved rules immediately. `Esc` returns to chat,
+and requires a second press before discarding unsaved changes.
+
 Every non-Loom MCP result is also captured as an immutable Loom artifact under
 the workspace's `.q/loom` directory. The tool message contains a `loom_ref`,
 artifact metadata, and either the complete small result or a bounded preview.

@@ -38,6 +38,7 @@ const (
 	screenProviders
 	screenModels
 	screenLoom
+	screenIgnore
 	screenChat
 )
 
@@ -163,6 +164,9 @@ type model struct {
 	loomDraft           config.LoomConfig
 	loomStats           loom.Stats
 	loomBusy            bool
+	ignoreEditor        textarea.Model
+	ignoreOriginal      string
+	ignoreDiscardArmed  bool
 
 	config             config.Config
 	client             chatClient
@@ -373,6 +377,7 @@ func newManagedModel(ctx context.Context, store config.Store, factory clientFact
 		m.loomInputs[index] = field
 	}
 	m.input = newChatInput()
+	m.ignoreEditor = newIgnoreEditor()
 	if runtime != nil && len(m.gatewayConfig.Providers) == 0 {
 		m.enterProviderEditor(-1)
 	}
@@ -398,6 +403,19 @@ func newChatInput() textarea.Model {
 	return input
 }
 
+func newIgnoreEditor() textarea.Model {
+	editor := textarea.New()
+	editor.Placeholder = "# One discovery pattern per line\n.gradle/\nbuild/\nvendor/"
+	editor.Prompt = ""
+	editor.ShowLineNumbers = true
+	editor.SetWidth(80)
+	editor.SetHeight(12)
+	editor.CharLimit = 1 << 20
+	editor.KeyMap.InsertNewline.SetKeys("enter")
+	editor.KeyMap.InsertNewline.SetHelp("enter", "new line")
+	return editor
+}
+
 func (m model) Init() tea.Cmd {
 	if m.screen == screenChat {
 		return tea.Batch(m.input.Focus(), tea.RequestBackgroundColor)
@@ -410,6 +428,9 @@ func (m model) Init() tea.Cmd {
 	}
 	if m.screen == screenLoom {
 		return tea.Batch(m.loomFocusCommand(), tea.RequestBackgroundColor)
+	}
+	if m.screen == screenIgnore {
+		return tea.Batch(m.ignoreEditor.Focus(), tea.RequestBackgroundColor)
 	}
 	return tea.Batch(m.setup[m.setupFocus].Focus(), tea.RequestBackgroundColor)
 }
@@ -768,7 +789,21 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		if m.screen == screenLoom {
 			return m.updateLoom(key)
 		}
+		if m.screen == screenIgnore {
+			return m.updateIgnore(key)
+		}
 		return m.updateChatKey(key)
+	}
+
+	if m.screen == screenIgnore {
+		before := m.ignoreEditor.Value()
+		var command tea.Cmd
+		m.ignoreEditor, command = m.ignoreEditor.Update(message)
+		if m.ignoreEditor.Value() != before {
+			m.ignoreDiscardArmed = false
+			m.status = ""
+		}
+		return m, command
 	}
 
 	if m.screen == screenChat {
@@ -1637,6 +1672,9 @@ func (m model) submitChat() (tea.Model, tea.Cmd) {
 	case "/loom":
 		m.input.Reset()
 		return m.enterLoom()
+	case "/ignore":
+		m.input.Reset()
+		return m.enterIgnore()
 	}
 	if strings.HasPrefix(content, "/plan ") {
 		return m.startPlan(strings.TrimSpace(strings.TrimPrefix(content, "/plan")))
@@ -2456,9 +2494,13 @@ func (m *model) resize(width, height int) {
 	m.modelFilter.SetWidth(min(contentWidth-2, 72))
 	m.embeddingDimensions.SetWidth(min(contentWidth-2, 24))
 	m.modelContextWindow.SetWidth(min(contentWidth-2, 28))
+	ignorePanel := ignoreEditorPanelStyle(max(36, m.width-4), m.dark)
+	m.ignoreEditor.SetWidth(max(20, ignorePanel.GetWidth()-ignorePanel.GetHorizontalFrameSize()))
+	m.ignoreEditor.SetHeight(max(4, m.height-16))
 	m.input.SetWidth(contentWidth)
 	m.viewport.SetWidth(contentWidth)
-	m.agentTraceViewport.SetWidth(max(10, contentWidth-3))
+	tracePanel := agentTracePanelStyle(m.chatFrameWidth(), m.dark)
+	m.agentTraceViewport.SetWidth(max(10, tracePanel.GetWidth()-tracePanel.GetHorizontalFrameSize()))
 	chromeHeight := 10
 	if m.workspaceStore != nil {
 		chromeHeight++
@@ -2509,6 +2551,7 @@ func (m *model) applyColorScheme(dark bool) {
 	inputStyles := textarea.DefaultStyles(dark)
 	inputStyles.Cursor.Shape = tea.CursorBar
 	m.input.SetStyles(inputStyles)
+	m.ignoreEditor.SetStyles(inputStyles)
 	m.refreshTranscript()
 	m.refreshQuestion()
 }
@@ -3224,6 +3267,8 @@ func (m model) View() tea.View {
 		content = m.viewModels()
 	} else if m.screen == screenLoom {
 		content = m.viewLoom()
+	} else if m.screen == screenIgnore {
+		content = m.viewIgnore()
 	} else if m.screen == screenChat {
 		content = m.viewChat()
 	}
@@ -3612,7 +3657,7 @@ func (m model) viewChat() string {
 	if m.waiting && !m.asking {
 		status = m.spinner.View() + " " + status
 	}
-	footerText := "enter send · shift+enter newline · /clear · /model · /provider · /loom · ctrl+c quit · esc quit"
+	footerText := "enter send · shift+enter newline · /clear · /model · /provider · /loom · /ignore · ctrl+c quit · esc quit"
 	if m.waiting {
 		footerText = "ctrl+c interrupt turn · esc quit"
 		if len(m.agentTraces) > 0 {
