@@ -1454,7 +1454,7 @@ func TestDetailedAgentTraceIsScrollableAndCollapsible(t *testing.T) {
 			m.agentTraceViewport.TotalLineCount(), m.agentTraceViewport.VisibleLineCount())
 	}
 	view := ansi.Strip(m.viewChat())
-	if !strings.Contains(view, "detailed trace") || !strings.Contains(view, "coder · tool call · read_file") ||
+	if !strings.Contains(view, "SUBAGENT TRACE") || !strings.Contains(view, "coder · tool call · read_file") ||
 		!strings.Contains(view, "ctrl+g collapse trace") {
 		t.Fatalf("detailed trace view missing:\n%s", view)
 	}
@@ -1466,7 +1466,7 @@ func TestDetailedAgentTraceIsScrollableAndCollapsible(t *testing.T) {
 	}
 	updated, _ = m.updateChatKey(tea.KeyPressMsg{Code: 'g', Mod: tea.ModCtrl})
 	m = updated.(model)
-	if m.agentTraceExpanded || strings.Contains(ansi.Strip(m.viewChat()), "detailed trace") {
+	if m.agentTraceExpanded || strings.Contains(ansi.Strip(m.viewChat()), "SUBAGENT TRACE") {
 		t.Fatalf("agent trace did not collapse: expanded %v", m.agentTraceExpanded)
 	}
 }

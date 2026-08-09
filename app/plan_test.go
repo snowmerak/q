@@ -111,7 +111,7 @@ func TestPlanCommandExecutesApprovedPlanWithCoderAndPlannerReview(t *testing.T) 
 		t.Fatalf("confirmation state = asking %v question %#v", m.asking, m.pendingQuestion)
 	}
 	view := ansi.Strip(m.viewChat())
-	for _, expected := range []string{"agents", "griller ✓", "scout ✓", "planner ✓", "submit_plan", "› approve · Approve", "Type a custom answer"} {
+	for _, expected := range []string{"SUBAGENT TRACE", "agents", "griller ✓", "scout ✓", "planner ✓", "submit_plan", "PLAN APPROVAL", "› approve · Approve", "Type a custom answer"} {
 		if !strings.Contains(view, expected) {
 			t.Fatalf("agent activity panel does not contain %q:\n%s", expected, view)
 		}

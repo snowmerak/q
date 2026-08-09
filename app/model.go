@@ -2471,16 +2471,24 @@ func (m *model) resize(width, height int) {
 			traceHeight = max(3, dynamicHeight/3)
 		}
 		m.agentTraceViewport.SetHeight(traceHeight)
-		dynamicHeight = max(2, dynamicHeight-traceHeight-3)
+		traceChrome := 3
+		if m.asking {
+			traceChrome++ // visual gap between execution trace and user decision
+		}
+		dynamicHeight = max(2, dynamicHeight-traceHeight-traceChrome)
 		m.refreshAgentTrace(false)
 	} else if len(m.agentActivities) > 0 && dynamicHeight >= 6 {
 		m.agentLogVisible = min(len(m.agentActivities), max(1, min(8, dynamicHeight/4)))
-		dynamicHeight = max(2, dynamicHeight-m.agentLogVisible-2)
+		activityChrome := 2
+		if m.asking {
+			activityChrome++
+		}
+		dynamicHeight = max(2, dynamicHeight-m.agentLogVisible-activityChrome)
 	}
 	if m.asking {
-		question := renderToolPanel("Question", renderPendingQuestion(m.pendingQuestion, m.questionChoice), max(36, contentWidth), m.dark)
-		questionHeight := min(lipgloss.Height(question), max(1, dynamicHeight*2/3))
-		m.questionViewport.SetHeight(questionHeight)
+		question := renderQuestionPanel(m.pendingQuestion, m.questionChoice, max(36, contentWidth), m.dark)
+		questionHeight := min(lipgloss.Height(question), max(2, dynamicHeight*2/3))
+		m.questionViewport.SetHeight(max(1, questionHeight-1)) // sticky semantic title occupies one row
 		m.configureQuestionViewport(max(36, contentWidth))
 		m.viewport.SetHeight(max(1, dynamicHeight-questionHeight-1))
 	} else {
@@ -2522,25 +2530,21 @@ func (m *model) refreshQuestion() {
 }
 
 func (m *model) configureQuestionViewport(width int) {
-	border := themedColor(m.dark, "81", "25")
-	panelStyle := toolPanelStyle(width, m.dark)
+	panelStyle := questionPanelStyle(width, m.dark, isPlanApprovalQuestion(m.pendingQuestion))
 	// Keep the viewport responsible only for clipping and scrolling. Applying the
 	// panel frame to it makes bubbles calculate soft wraps with the outer width,
 	// then Lip Gloss renders those lines into the narrower framed width. The
 	// resulting second wrap can change the rendered height while scrolling.
 	m.questionViewport.SetWidth(panelStyle.GetWidth() - panelStyle.GetHorizontalFrameSize())
 	m.questionViewport.Style = lipgloss.NewStyle()
-	m.questionViewport.StyleLineFunc = func(index int) lipgloss.Style {
-		if index == 0 {
-			return lipgloss.NewStyle().Bold(true).Foreground(border)
-		}
-		return lipgloss.NewStyle()
-	}
-	m.questionViewport.SetContent("Question\n" + renderPendingQuestion(m.pendingQuestion, m.questionChoice))
+	m.questionViewport.StyleLineFunc = nil
+	m.questionViewport.SetContent(renderPendingQuestion(m.pendingQuestion, m.questionChoice))
 }
 
 func (m model) renderedQuestionViewport() string {
-	return toolPanelStyle(m.chatFrameWidth(), m.dark).Render(m.questionViewport.View())
+	style := questionPanelStyle(m.chatFrameWidth(), m.dark, isPlanApprovalQuestion(m.pendingQuestion))
+	title := lipgloss.NewStyle().Bold(true).Foreground(questionPanelAccent(m.pendingQuestion, m.dark))
+	return style.Render(title.Render(questionPanelTitle(m.pendingQuestion)) + "\n" + m.questionViewport.View())
 }
 
 func (m *model) clearAgentActivities() {
@@ -2637,10 +2641,11 @@ func (m model) renderedAgentActivities() string {
 	if m.agentTraceExpanded && len(m.agentTraces) > 0 {
 		contentWidth := max(20, m.chatFrameWidth()-frameStyle.GetHorizontalFrameSize())
 		current := m.agentTraces[len(m.agentTraces)-1]
-		summary := ansi.Truncate(agentSummary(m.agentStates)+subtleStyle.Render(" · detailed trace"), contentWidth, "…")
+		header := agentTraceTitleStyle(m.dark).Render("SUBAGENT TRACE")
+		summary := ansi.Truncate(header+subtleStyle.Render(" · ")+agentSummary(m.agentStates), contentWidth, "…")
 		currentLabel := ansi.Truncate("› "+agentTraceLabel(current), contentWidth, "…")
-		return summary + "\n" + activeLabelStyle.Render(currentLabel) + "\n" +
-			toolPanelStyle(m.chatFrameWidth(), m.dark).Render(m.agentTraceViewport.View())
+		return summary + "\n" + agentTraceActiveStyle(m.dark).Render(currentLabel) + "\n" +
+			agentTracePanelStyle(m.chatFrameWidth(), m.dark).Render(m.agentTraceViewport.View())
 	}
 	if m.agentLogVisible <= 0 || len(m.agentActivities) == 0 {
 		return ""
@@ -2853,6 +2858,76 @@ func toolPanelStyle(width int, dark bool) lipgloss.Style {
 		BorderForeground(border).
 		Padding(0, 1).
 		Width(max(10, width-3))
+}
+
+func agentTraceTitleStyle(dark bool) lipgloss.Style {
+	return lipgloss.NewStyle().Bold(true).Foreground(themedColor(dark, "99", "61"))
+}
+
+func agentTraceActiveStyle(dark bool) lipgloss.Style {
+	return lipgloss.NewStyle().Bold(true).Foreground(themedColor(dark, "75", "61"))
+}
+
+func agentTracePanelStyle(width int, dark bool) lipgloss.Style {
+	return lipgloss.NewStyle().
+		Background(themedColor(dark, "233", "255")).
+		BorderStyle(lipgloss.Border{Left: "│"}).
+		BorderLeft(true).
+		BorderForeground(themedColor(dark, "99", "61")).
+		Padding(0, 1).
+		Width(max(10, width-3))
+}
+
+func isPlanApprovalQuestion(input askToUserInput) bool {
+	if strings.EqualFold(strings.TrimSpace(input.Question), "Approve this plan?") {
+		return true
+	}
+	choices := make(map[string]struct{}, len(input.Choices))
+	for _, choice := range input.Choices {
+		choices[strings.ToLower(strings.TrimSpace(choice.ID))] = struct{}{}
+	}
+	_, approve := choices["approve"]
+	_, revise := choices["revise"]
+	_, cancel := choices["cancel"]
+	return approve && revise && cancel
+}
+
+func questionPanelTitle(input askToUserInput) string {
+	if isPlanApprovalQuestion(input) {
+		return "PLAN APPROVAL"
+	}
+	return "QUESTION"
+}
+
+func questionPanelAccent(input askToUserInput, dark bool) color.Color {
+	if isPlanApprovalQuestion(input) {
+		return themedColor(dark, "214", "130")
+	}
+	return themedColor(dark, "81", "25")
+}
+
+func questionPanelStyle(width int, dark, planApproval bool) lipgloss.Style {
+	background := themedColor(dark, "235", "255")
+	border := themedColor(dark, "81", "25")
+	marker := "▌"
+	if planApproval {
+		background = themedColor(dark, "236", "230")
+		border = themedColor(dark, "214", "130")
+		marker = "┃"
+	}
+	return lipgloss.NewStyle().
+		Background(background).
+		BorderStyle(lipgloss.Border{Left: marker}).
+		BorderLeft(true).
+		BorderForeground(border).
+		Padding(0, 1).
+		Width(max(10, width-3))
+}
+
+func renderQuestionPanel(input askToUserInput, selected, width int, dark bool) string {
+	style := questionPanelStyle(width, dark, isPlanApprovalQuestion(input))
+	title := lipgloss.NewStyle().Bold(true).Foreground(questionPanelAccent(input, dark))
+	return style.Render(title.Render(questionPanelTitle(input)) + "\n" + renderPendingQuestion(input, selected))
 }
 
 func themedColor(dark bool, darkColor, lightColor string) color.Color {
@@ -3163,6 +3238,9 @@ func (m model) View() tea.View {
 			inputOffset := m.renderedChatHeaderHeight() + 1 + lipgloss.Height(m.viewport.View())
 			if activities := m.renderedAgentActivities(); activities != "" {
 				inputOffset += lipgloss.Height(activities) + 1
+				if m.asking {
+					inputOffset++
+				}
 			}
 			if m.asking {
 				inputOffset += lipgloss.Height(m.renderedQuestionViewport()) + 1
@@ -3555,6 +3633,9 @@ func (m model) viewChat() string {
 	content := header + "\n\n" + m.viewport.View() + "\n"
 	if activities := m.renderedAgentActivities(); activities != "" {
 		content += activities + "\n"
+		if m.asking {
+			content += "\n"
+		}
 	}
 	if m.asking {
 		content += m.renderedQuestionViewport() + "\n"
