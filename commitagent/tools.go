@@ -15,7 +15,10 @@ import (
 	"unicode/utf8"
 
 	"github.com/snowmerak/q/client"
+	"github.com/snowmerak/q/loom"
 	"github.com/snowmerak/q/subagent"
+	qtools "github.com/snowmerak/q/tools"
+	"github.com/snowmerak/q/tools/builtin"
 )
 
 const (
@@ -24,8 +27,12 @@ const (
 	toolGitHunk       = "git_hunk"
 	toolRecentCommits = "recent_commits"
 	toolAnalyzeFiles  = "analyze_files"
+	toolLoomInspect   = "loom_inspect"
+	toolLoomRead      = "loom_read"
+	toolLoomEval      = "loom_eval"
 	toolProposeCommit = "propose_commit"
 	toolSplitCommit   = "split_commit"
+	commitToolServer  = "commit-agent"
 )
 
 var (
@@ -55,8 +62,21 @@ type commitToolRuntime struct {
 	spec        subagent.Spec
 	maxParallel int
 	logger      *progressLogger
+	loom        *builtin.LoomRuntime
 	overviewed  bool
 	proposal    proposalState
+}
+
+func (runtime *commitToolRuntime) enableLoom(root string) error {
+	if strings.TrimSpace(root) == "" {
+		return nil
+	}
+	store, err := loom.Open(root)
+	if err != nil {
+		return err
+	}
+	runtime.loom = &builtin.LoomRuntime{Store: store, Evaluator: loom.NewProcessEvaluator()}
+	return nil
 }
 
 func commitTools() []client.Tool {
@@ -90,6 +110,22 @@ func commitTools() []client.Tool {
 		functionTool(toolAnalyzeFiles, "Fan out isolated file-analysis workers and return structured summaries, highlights, and risks.", map[string]any{
 			"type": "object", "properties": map[string]any{"paths": stringArray()},
 			"required": []string{"paths"}, "additionalProperties": false,
+		}, &strict),
+		functionTool(toolLoomInspect, "Inspect immutable data captured from a commit tool result without reading its content.", map[string]any{
+			"type": "object", "properties": map[string]any{"ref": map[string]any{"type": "string"}},
+			"required": []string{"ref"}, "additionalProperties": false,
+		}, &strict),
+		functionTool(toolLoomRead, "Read a byte range from a captured commit tool result. Paginate with next_offset while more is true.", map[string]any{
+			"type": "object", "properties": map[string]any{
+				"ref": map[string]any{"type": "string"}, "offset": map[string]any{"type": "integer", "minimum": 0},
+				"limit": map[string]any{"type": "integer", "minimum": 1, "maximum": 1048576},
+			}, "required": []string{"ref"}, "additionalProperties": false,
+		}, &strict),
+		functionTool(toolLoomEval, "Run restricted JavaScript over captured commit tool results and store the derived JSON result.", map[string]any{
+			"type": "object", "properties": map[string]any{
+				"code":   map[string]any{"type": "string"},
+				"inputs": map[string]any{"type": "object", "additionalProperties": map[string]any{"type": "string"}},
+			}, "required": []string{"code"}, "additionalProperties": false,
 		}, &strict),
 		functionTool(toolProposeCommit, "Submit one validated commit proposal. Use this instead of replying with a commit message.", map[string]any{
 			"type": "object", "properties": proposalProperties,
@@ -133,6 +169,18 @@ func sortedCommitTypes() []string {
 }
 
 func (runtime *commitToolRuntime) call(ctx context.Context, call client.ToolCall) client.ToolResult {
+	result := runtime.callUncaptured(ctx, call)
+	if runtime.loom == nil || runtime.loom.Store == nil {
+		return result
+	}
+	captured, err := qtools.CaptureToolResult(ctx, runtime.loom.Store, commitToolServer, call, result)
+	if err != nil {
+		return toolError(err)
+	}
+	return captured
+}
+
+func (runtime *commitToolRuntime) callUncaptured(ctx context.Context, call client.ToolCall) client.ToolResult {
 	if call.Function.Name != toolGitOverview && !runtime.overviewed {
 		return toolError(errors.New("git_overview must be called before every other commit tool"))
 	}
@@ -149,6 +197,33 @@ func (runtime *commitToolRuntime) call(ctx context.Context, call client.ToolCall
 		output, err = runtime.recentCommits(ctx, call.Function.Arguments)
 	case toolAnalyzeFiles:
 		output, err = runtime.analyzeFiles(ctx, call.Function.Arguments)
+	case toolLoomInspect:
+		var input builtin.LoomInspectInput
+		if err = decodeArguments(call.Function.Arguments, &input); err == nil {
+			if runtime.loom == nil {
+				err = errors.New("Loom is unavailable")
+			} else {
+				output, err = runtime.loom.Inspect(ctx, input)
+			}
+		}
+	case toolLoomRead:
+		var input builtin.LoomReadInput
+		if err = decodeArguments(call.Function.Arguments, &input); err == nil {
+			if runtime.loom == nil {
+				err = errors.New("Loom is unavailable")
+			} else {
+				output, err = runtime.loom.Read(ctx, input)
+			}
+		}
+	case toolLoomEval:
+		var input builtin.LoomEvalInput
+		if err = decodeArguments(call.Function.Arguments, &input); err == nil {
+			if runtime.loom == nil {
+				err = errors.New("Loom is unavailable")
+			} else {
+				output, err = runtime.loom.Eval(ctx, input)
+			}
+		}
 	case toolProposeCommit:
 		output, err = runtime.proposeCommit(call.Function.Arguments)
 	case toolSplitCommit:

@@ -108,6 +108,22 @@ func (r *Runtime) Call(ctx context.Context, call client.ToolCall) (client.ToolRe
 	if err != nil {
 		return client.ToolResult{}, err
 	}
+	return CaptureMCPToolResult(ctx, r.loom.Store, ServerName, call, result)
+}
+
+// CaptureMCPToolResult captures a raw MCP result and returns the bounded Loom
+// receipt that should be sent to the model. Builtin and custom MCP dispatchers
+// share this post-CallTool boundary.
+func CaptureMCPToolResult(
+	ctx context.Context,
+	store *loom.Store,
+	server string,
+	call client.ToolCall,
+	result *mcp.CallToolResult,
+) (client.ToolResult, error) {
+	if result == nil {
+		return client.ToolResult{}, errors.New("tools: Loom capture requires an MCP result")
+	}
 	content, err := toolResultText(result)
 	if err != nil {
 		return client.ToolResult{}, err
@@ -115,7 +131,7 @@ func (r *Runtime) Call(ctx context.Context, call client.ToolCall) (client.ToolRe
 	if strings.HasPrefix(call.Function.Name, "loom_") {
 		return client.ToolResult{Content: content, IsError: result.IsError}, nil
 	}
-	artifact, err := CaptureMCPResult(ctx, r.loom.Store, ServerName, call, result)
+	artifact, err := CaptureMCPResult(ctx, store, server, call, result)
 	if err != nil {
 		return client.ToolResult{}, err
 	}
@@ -126,14 +142,56 @@ func (r *Runtime) Call(ctx context.Context, call client.ToolCall) (client.ToolRe
 	return client.ToolResult{Content: receipt, IsError: result.IsError}, nil
 }
 
+// CaptureToolResult applies the same Loom capture boundary to tool runtimes
+// that already expose q's common client.ToolResult shape. Registering tools
+// behind one of these runtimes makes capture automatic for every non-Loom
+// result dispatched through it.
+func CaptureToolResult(
+	ctx context.Context,
+	store *loom.Store,
+	server string,
+	call client.ToolCall,
+	result client.ToolResult,
+) (client.ToolResult, error) {
+	if strings.HasPrefix(call.Function.Name, "loom_") {
+		return result, nil
+	}
+	if store == nil || strings.TrimSpace(server) == "" {
+		return client.ToolResult{}, errors.New("tools: Loom capture requires a store and server")
+	}
+	envelope := capturedMCPResult{
+		Protocol: "mcp", Server: server, Tool: call.Function.Name, CallID: call.ID,
+		IsError: result.IsError,
+	}
+	if err := json.Unmarshal([]byte(result.Content), &envelope.Structured); err != nil {
+		envelope.Content = result.Content
+	}
+	body, err := json.Marshal(envelope)
+	if err != nil {
+		return client.ToolResult{}, fmt.Errorf("tools: encode tool result for Loom: %w", err)
+	}
+	artifact, err := store.Put(ctx, body, loom.PutOptions{
+		Kind: "mcp-result", MediaType: "application/vnd.q.mcp-result+json",
+		Source: map[string]string{"server": server, "tool": call.Function.Name, "call_id": call.ID},
+	})
+	if err != nil {
+		return client.ToolResult{}, fmt.Errorf("tools: store tool result in Loom: %w", err)
+	}
+	receipt, err := encodeLoomReceipt(artifact, result.Content)
+	if err != nil {
+		return client.ToolResult{}, err
+	}
+	return client.ToolResult{Content: receipt, IsError: result.IsError}, nil
+}
+
 type capturedMCPResult struct {
-	Protocol   string        `json:"protocol"`
-	Server     string        `json:"server"`
-	Tool       string        `json:"tool"`
-	CallID     string        `json:"call_id"`
-	IsError    bool          `json:"is_error"`
-	Structured any           `json:"structured,omitempty"`
-	Content    []mcp.Content `json:"content,omitempty"`
+	Protocol   string `json:"protocol"`
+	Server     string `json:"server"`
+	Tool       string `json:"tool"`
+	CallID     string `json:"call_id"`
+	IsError    bool   `json:"is_error"`
+	Structured any    `json:"structured,omitempty"`
+	Content    any    `json:"content,omitempty"`
 }
 
 type loomReceipt struct {

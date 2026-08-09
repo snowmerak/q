@@ -30,6 +30,9 @@ func runCommitAgent(
 	runtime := &commitToolRuntime{
 		state: state, client: configuredClient, spec: spec, maxParallel: maxParallel, logger: logger,
 	}
+	if err := runtime.enableLoom(state.root); err != nil {
+		return proposalState{}, false, fmt.Errorf("q commit: initialize Loom: %w", err)
+	}
 	messages := []client.Message{
 		{Role: client.RoleSystem, Content: commitAgentInstructions()},
 		{Role: client.RoleUser, Content: "Create the best commit or split-commit proposal for the prepared staged changes. Start by calling git_overview. The full diff is available only through the commit tools."},
@@ -93,11 +96,11 @@ func runCommitAgent(
 }
 
 func commitAgentInstructions() string {
-	return `You are q's isolated commit agent. You have no filesystem, shell, MCP, LSP, skill, or extension access. Use only the supplied commit tools.
+	return `You are q's isolated commit agent. You have no direct filesystem, shell, external MCP server, LSP, skill, or extension access. Use only the supplied commit and Loom tools.
 
 Rules:
 1. Your first tool call must be git_overview.
-2. Inspect enough staged evidence to explain intent, not merely filenames. Use git_file_diff, git_hunk, recent_commits, or analyze_files when helpful.
+2. Inspect enough staged evidence to explain intent, not merely filenames. Use git_file_diff, git_hunk, recent_commits, or analyze_files when helpful. Tool results are stored in Loom; when a result contains only a preview, use loom_inspect, loom_read, or loom_eval with its loom_ref.
 3. Match the repository's established Oh My Pi-style Conventional Commit format: type(scope): lowercase past-tense summary. Keep the full subject at most 72 characters and omit the trailing period.
 4. Optional body items must be concise, begin with a capital letter, and end with a period. The formatter adds bullet markers.
 5. Use a scope only when it adds stable, specific information.

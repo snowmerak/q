@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/snowmerak/q/client"
 	"github.com/snowmerak/q/loom"
 	"github.com/snowmerak/q/sessionstore"
@@ -171,6 +172,38 @@ func TestLargeToolResultReceiptKeepsOnlyBoundedPreview(t *testing.T) {
 	}
 	if receipt.Result != nil || len([]rune(receipt.Preview)) != 4096 || receipt.LoomRef != artifact.Ref {
 		t.Fatalf("receipt = %#v", receipt)
+	}
+}
+
+func TestCaptureMCPToolResultSupportsCustomServer(t *testing.T) {
+	store, err := loom.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	call := client.ToolCall{
+		ID: "custom-call-1", Type: client.ToolTypeFunction,
+		Function: client.FunctionCall{Name: "search", Arguments: `{"query":"loom"}`},
+	}
+	raw := &mcp.CallToolResult{StructuredContent: map[string]any{
+		"matches": []any{"first", "second"},
+	}}
+	result, err := CaptureMCPToolResult(context.Background(), store, "custom-search", call, raw)
+	if err != nil || result.IsError {
+		t.Fatalf("captured custom MCP result = %#v, err = %v", result, err)
+	}
+	var receipt loomReceipt
+	if err := json.Unmarshal([]byte(result.Content), &receipt); err != nil {
+		t.Fatal(err)
+	}
+	if receipt.LoomRef == "" || !receipt.Stored {
+		t.Fatalf("Loom receipt = %#v", receipt)
+	}
+	artifact, err := store.Inspect(context.Background(), receipt.LoomRef)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if artifact.Source["server"] != "custom-search" || artifact.Source["tool"] != "search" || artifact.Source["call_id"] != "custom-call-1" {
+		t.Fatalf("captured artifact source = %#v", artifact.Source)
 	}
 }
 

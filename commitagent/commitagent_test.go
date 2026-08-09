@@ -3,6 +3,8 @@ package commitagent
 import (
 	"bytes"
 	"context"
+	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -100,6 +102,46 @@ func TestCommitToolsRequireOverviewAndValidateProposal(t *testing.T) {
 	}
 }
 
+func TestCommitToolsAutomaticallyCaptureResultsInLoom(t *testing.T) {
+	root := t.TempDir()
+	runtime := commitToolRuntime{state: repositoryState{
+		root: root, visibleFiles: []string{"app/main.go"}, files: []string{"app/main.go"},
+		fileDiffs: map[string]string{"app/main.go": strings.Repeat("+changed line\n", 4096)},
+	}}
+	if err := runtime.enableLoom(root); err != nil {
+		t.Fatal(err)
+	}
+	if result := runtime.call(context.Background(), toolCall(toolGitOverview, `{}`)); result.IsError {
+		t.Fatal(result.Content)
+	}
+	result := runtime.call(context.Background(), toolCall(toolGitFileDiff, `{"path":"app/main.go"}`))
+	if result.IsError {
+		t.Fatal(result.Content)
+	}
+	var receipt struct {
+		LoomRef string `json:"loom_ref"`
+		Preview string `json:"preview"`
+		Stored  bool   `json:"stored"`
+	}
+	if err := json.Unmarshal([]byte(result.Content), &receipt); err != nil {
+		t.Fatal(err)
+	}
+	if !receipt.Stored || receipt.LoomRef == "" || receipt.Preview == "" {
+		t.Fatalf("Loom receipt = %#v", receipt)
+	}
+	read := runtime.call(context.Background(), toolCall(toolLoomRead,
+		fmt.Sprintf(`{"ref":%q,"limit":4096}`, receipt.LoomRef)))
+	var readOutput struct {
+		Content string `json:"content"`
+	}
+	if err := json.Unmarshal([]byte(read.Content), &readOutput); err != nil {
+		t.Fatal(err)
+	}
+	if read.IsError || !strings.Contains(readOutput.Content, `"server":"commit-agent"`) {
+		t.Fatalf("Loom read result = %#v", read)
+	}
+}
+
 func TestCommitAgentForcesOverviewAndFallsBackAfterThreeReminders(t *testing.T) {
 	responses := []client.Message{
 		{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{toolCall(toolGitOverview, `{}`)}},
@@ -125,7 +167,7 @@ func TestCommitAgentForcesOverviewAndFallsBackAfterThreeReminders(t *testing.T) 
 	if !ok || choice["type"] != "function" {
 		t.Fatalf("first tool choice = %#v", fake.requests[0].ToolChoice)
 	}
-	if len(fake.requests[0].Tools) != 7 {
+	if len(fake.requests[0].Tools) != 10 {
 		t.Fatalf("commit tools = %d", len(fake.requests[0].Tools))
 	}
 	for _, expected := range []string{"calling git_overview", "sending proposal reminder 3/3", "proposal reminders exhausted"} {
