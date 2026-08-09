@@ -1337,6 +1337,27 @@ func TestAskToUserPausesForAnswerAndResumesSameTask(t *testing.T) {
 	if m.questionChoice != 1 || !strings.Contains(m.View().Content, "› green · Green") {
 		t.Fatalf("selected choice = %d, view %q", m.questionChoice, m.View().Content)
 	}
+	updated, _ = m.updateChatKey(tea.KeyPressMsg{Code: tea.KeyDown})
+	m = updated.(model)
+	if m.questionChoice != 2 || !strings.Contains(m.View().Content, "› "+customAnswerLabel) {
+		t.Fatalf("custom answer choice = %d, view %q", m.questionChoice, m.View().Content)
+	}
+	updated, command = m.submitQuestionAnswer("")
+	m = updated.(model)
+	if !m.asking || m.status != "Type a custom answer below" {
+		t.Fatalf("empty custom answer submitted: asking %v status %q", m.asking, m.status)
+	}
+	updated, _ = m.updateChatKey(tea.KeyPressMsg{Code: 'x', Text: "x"})
+	m = updated.(model)
+	if m.questionChoice != 2 || m.input.Value() != "x" {
+		t.Fatalf("custom answer input = choice %d value %q", m.questionChoice, m.input.Value())
+	}
+	m.input.Reset()
+	updated, _ = m.updateChatKey(tea.KeyPressMsg{Code: tea.KeyUp})
+	m = updated.(model)
+	if m.questionChoice != 1 {
+		t.Fatalf("choice after custom answer = %d", m.questionChoice)
+	}
 	updated, command = m.submitChat()
 	m = updated.(model)
 	if m.asking || !m.waiting || command == nil {

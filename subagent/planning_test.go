@@ -154,3 +154,14 @@ func TestPlanningValidationRequiresExecutableContract(t *testing.T) {
 		t.Fatal("successful plan without conditions, steps, and verification was accepted")
 	}
 }
+
+func TestGrillerQuestionChoicesAreNonExhaustive(t *testing.T) {
+	if prompt := grillerInstructions(); !strings.Contains(prompt, "non-exhaustive") ||
+		!strings.Contains(prompt, "free-form answer") || !strings.Contains(prompt, "not treat every choice as an action") {
+		t.Fatalf("Griller prompt does not preserve free-form answers:\n%s", prompt)
+	}
+	if description := askUserTool().Function.Description; !strings.Contains(description, "non-exhaustive") ||
+		!strings.Contains(description, "free-form") {
+		t.Fatalf("ask_to_user description = %q", description)
+	}
+}

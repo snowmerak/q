@@ -1499,14 +1499,15 @@ func (m model) saveModelTargetConfiguration(value config.Config, target string) 
 
 func (m model) updateChatKey(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if m.asking && len(m.pendingQuestion.Choices) > 0 && strings.TrimSpace(m.input.Value()) == "" {
+		choiceCount := questionChoiceCount(m.pendingQuestion)
 		switch key.String() {
 		case "up", "shift+tab":
-			m.questionChoice = (m.questionChoice - 1 + len(m.pendingQuestion.Choices)) % len(m.pendingQuestion.Choices)
+			m.questionChoice = (m.questionChoice - 1 + choiceCount) % choiceCount
 			m.refreshQuestion()
 			m.questionViewport.GotoBottom()
 			return m, nil
 		case "down", "tab":
-			m.questionChoice = (m.questionChoice + 1) % len(m.pendingQuestion.Choices)
+			m.questionChoice = (m.questionChoice + 1) % choiceCount
 			m.refreshQuestion()
 			m.questionViewport.GotoBottom()
 			return m, nil
@@ -1547,6 +1548,12 @@ func (m model) updateChatKey(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if !m.waiting || m.asking {
 		m.input, command = m.input.Update(key)
 		commands = append(commands, command)
+		if m.asking && len(m.pendingQuestion.Choices) > 0 && strings.TrimSpace(m.input.Value()) != "" &&
+			!customAnswerSelected(m.pendingQuestion, m.questionChoice) {
+			m.questionChoice = len(m.pendingQuestion.Choices)
+			m.refreshQuestion()
+			m.questionViewport.GotoBottom()
+		}
 	}
 	return m, tea.Batch(commands...)
 }
@@ -1647,8 +1654,15 @@ func (m model) submitQuestionAnswer(content string) (tea.Model, tea.Cmd) {
 		if len(m.pendingQuestion.Choices) == 0 {
 			return m, nil
 		}
+		if customAnswerSelected(m.pendingQuestion, m.questionChoice) {
+			m.status = "Type a custom answer below"
+			m.input.Placeholder = "Type a custom answer…"
+			return m, m.input.Focus()
+		}
 		choice := m.pendingQuestion.Choices[min(max(m.questionChoice, 0), len(m.pendingQuestion.Choices)-1)]
 		answer = askToUserOutput{SelectedChoiceID: choice.ID}
+	} else if customAnswerSelected(m.pendingQuestion, m.questionChoice) {
+		answer = askToUserOutput{Freeform: content}
 	} else {
 		answer = answerForQuestion(m.pendingQuestion, content)
 	}
@@ -3391,7 +3405,7 @@ func (m model) viewChat() string {
 	if m.asking {
 		content += m.renderedQuestionViewport() + "\n"
 		if len(m.pendingQuestion.Choices) > 0 {
-			footer = helpStyle.Render("↑/↓ select · enter choose · type custom · pgup/pgdn review · ctrl+c interrupt")
+			footer = helpStyle.Render("↑/↓ select · enter choose · type for custom answer · pgup/pgdn review · ctrl+c interrupt")
 		} else {
 			footer = helpStyle.Render("pgup/pgdn scroll · enter answer · shift+enter newline · ctrl+c interrupt")
 		}

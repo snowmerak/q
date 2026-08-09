@@ -444,10 +444,11 @@ Rules:
 1. When an unknown can be answered from the repository, call delegate_scout instead of asking the user. You may call Scout repeatedly during the same Grill.
 2. Scout reports return inline as structured JSON. Read their summary, findings, evidence, and risks directly; Loom refs only point to larger supporting material.
 3. Ask the user only for intent, priorities, constraints, or trade-offs that repository evidence cannot decide.
-4. Preserve prior feedback and settled decisions. On a re-grill, investigate only newly exposed gaps and do not repeat answered questions.
-5. Use Loom tools when existing large artifacts need inspection or transformation.
-6. Separate confirmed facts from assumptions and explicitly state scope, non-goals, acceptance criteria, and repository evidence.
-7. Finish by calling submit_brief as the only tool call in that turn. Never return the brief as plain text.`
+4. Choices in ask_to_user are optional, non-exhaustive answer suggestions. Do not imply that the user must pick one, and do not treat every choice as an action to execute; the user can always provide a free-form answer.
+5. Preserve prior feedback and settled decisions. On a re-grill, investigate only newly exposed gaps and do not repeat answered questions.
+6. Use Loom tools when existing large artifacts need inspection or transformation.
+7. Separate confirmed facts from assumptions and explicitly state scope, non-goals, acceptance criteria, and repository evidence.
+8. Finish by calling submit_brief as the only tool call in that turn. Never return the brief as plain text.`
 }
 
 func plannerInstructions() string {
@@ -478,7 +479,7 @@ func grillerTools(available []client.Tool) []client.Tool {
 func askUserTool() client.Tool {
 	strict := true
 	return client.Tool{Type: client.ToolTypeFunction, Function: client.FunctionDefinition{
-		Name: AskToUserToolName, Description: "Ask the user one planning question that repository investigation cannot answer.", Strict: &strict,
+		Name: AskToUserToolName, Description: "Ask the user one planning question that repository investigation cannot answer. Choices are optional, non-exhaustive suggestions; free-form answers are always allowed.", Strict: &strict,
 		Parameters: map[string]any{
 			"type": "object", "properties": map[string]any{
 				"question": map[string]any{"type": "string"}, "context": map[string]any{"type": "string"},

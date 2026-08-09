@@ -39,6 +39,14 @@ func TestAskToUserArgumentsAndChoiceAnswer(t *testing.T) {
 	if answer.SelectedChoiceID != "safe" || answer.Freeform != "" {
 		t.Fatalf("answer = %#v", answer)
 	}
+	custom := answerForQuestion(input, "Use the current repository convention")
+	if custom.SelectedChoiceID != "" || custom.Freeform != "Use the current repository convention" {
+		t.Fatalf("custom answer = %#v", custom)
+	}
+	rendered := renderPendingQuestion(input, len(input.Choices))
+	if !strings.Contains(rendered, customAnswerLabel) || !strings.Contains(rendered, "type below") {
+		t.Fatalf("custom answer choice was not rendered last: %q", rendered)
+	}
 	if _, err := parseAskToUser(`{"question":"","unexpected":true}`); err == nil {
 		t.Fatal("invalid ask_to_user arguments were accepted")
 	}

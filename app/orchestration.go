@@ -14,6 +14,7 @@ const (
 	askToUserToolName    = "ask_to_user"
 	taskStartToolName    = "task_start"
 	taskCompleteToolName = "task_complete"
+	customAnswerLabel    = "Write a custom answer"
 )
 
 type taskStartInput struct {
@@ -74,7 +75,7 @@ func orchestrationTools() []client.Tool {
 			Type: client.ToolTypeFunction,
 			Function: client.FunctionDefinition{
 				Name:        askToUserToolName,
-				Description: "Pause the current task and ask the user one necessary question. The task resumes after the user answers.",
+				Description: "Pause the current task and ask the user one necessary question. Choices are optional, non-exhaustive answer suggestions; the user may always answer in free text. The task resumes after the user answers.",
 				Parameters: map[string]any{
 					"type": "object",
 					"properties": map[string]any{
@@ -264,5 +265,26 @@ func renderPendingQuestion(input askToUserInput, selected int) string {
 			body.WriteString(choice.Description)
 		}
 	}
+	if len(input.Choices) > 0 {
+		body.WriteString("\n")
+		label := customAnswerLabel
+		if selected == len(input.Choices) {
+			body.WriteString(activeLabelStyle.Render("› " + label))
+		} else {
+			body.WriteString("  " + label)
+		}
+		body.WriteString(" — type below and press enter")
+	}
 	return body.String()
+}
+
+func questionChoiceCount(input askToUserInput) int {
+	if len(input.Choices) == 0 {
+		return 0
+	}
+	return len(input.Choices) + 1
+}
+
+func customAnswerSelected(input askToUserInput, selected int) bool {
+	return len(input.Choices) > 0 && selected == len(input.Choices)
 }
