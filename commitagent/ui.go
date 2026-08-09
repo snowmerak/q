@@ -4,10 +4,21 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"path/filepath"
 	"strings"
 
 	"charm.land/bubbles/v2/textarea"
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
+)
+
+var (
+	commitTitleStyle  = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("63"))
+	commitSubtleStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
+	commitHelpStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
+	commitErrorStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("196"))
+	commitActiveStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("39"))
+	commitFrameStyle  = lipgloss.NewStyle().Padding(1, 2)
 )
 
 type commitUIPhase int
@@ -255,54 +266,83 @@ func (model commitUIModel) updateEditor(key tea.KeyPressMsg) (tea.Model, tea.Cmd
 
 func (model commitUIModel) View() tea.View {
 	var body strings.Builder
-	body.WriteString("q · commit\n")
-	if model.directory != "" {
-		body.WriteString(model.directory)
+	body.WriteString(commitTitleStyle.Render("q · commit"))
+	body.WriteString("\n")
+	workspace := model.directory
+	if model.session != nil {
+		workspace = model.session.Root()
+	}
+	if workspace != "" {
+		body.WriteString(commitSubtleStyle.Render("workspace · " + filepath.Clean(workspace)))
 		body.WriteString("\n")
 	}
 	body.WriteString("\n")
 	model.renderLogs(&body)
+	editorOffsetY := 0
 	switch model.phase {
 	case commitUILoading:
-		body.WriteString("\nPreparing commit proposal…\n\nctrl+c cancel")
+		body.WriteString("\n")
+		body.WriteString(commitSubtleStyle.Render("Preparing commit proposal…"))
+		body.WriteString("\n\n")
+		body.WriteString(commitHelpStyle.Render("ctrl+c cancel"))
 	case commitUIReview:
 		model.renderReview(&body)
 	case commitUIEditing:
-		body.WriteString("\nEdit commit message\n\n")
+		body.WriteString("\n")
+		body.WriteString(commitActiveStyle.Render("Edit commit message"))
+		body.WriteString("\n\n")
+		editorOffsetY = lipgloss.Height(body.String())
 		body.WriteString(model.editor.View())
 		if model.status != "" {
 			body.WriteString("\n\n")
-			body.WriteString(model.status)
+			body.WriteString(commitErrorStyle.Render(model.status))
 		}
-		body.WriteString("\n\nctrl+s save · esc cancel")
+		body.WriteString("\n\n")
+		body.WriteString(commitHelpStyle.Render("ctrl+s save · esc cancel"))
 	case commitUIWorking:
 		body.WriteString("\n")
-		body.WriteString(model.status)
-		body.WriteString("\n\nctrl+c cancel")
+		body.WriteString(commitActiveStyle.Render("› "))
+		body.WriteString(commitSubtleStyle.Render(model.status))
+		body.WriteString("\n\n")
+		body.WriteString(commitHelpStyle.Render("ctrl+c cancel"))
 	case commitUIDone:
 		body.WriteString("\n")
-		body.WriteString(model.status)
+		body.WriteString(commitActiveStyle.Render("✓ " + model.status))
 		body.WriteString("\n")
 		for _, message := range model.result.Messages {
 			body.WriteString("\n")
-			body.WriteString(message)
+			body.WriteString(commitSubtleStyle.Render(message))
 			body.WriteString("\n")
 		}
 		if model.pushed {
-			body.WriteString("\nenter close")
+			body.WriteString("\n")
+			body.WriteString(commitHelpStyle.Render("enter close"))
 		} else {
-			body.WriteString("\np push · enter close")
+			body.WriteString("\n")
+			body.WriteString(commitHelpStyle.Render("p push · enter close"))
 		}
 	case commitUIFailed:
-		body.WriteString("\nFailed\n\n")
-		body.WriteString(model.err.Error())
-		body.WriteString("\n\nenter close")
+		body.WriteString("\n")
+		body.WriteString(commitErrorStyle.Render("Failed"))
+		body.WriteString("\n\n")
+		body.WriteString(commitErrorStyle.Render(model.err.Error()))
+		body.WriteString("\n\n")
+		body.WriteString(commitHelpStyle.Render("enter close"))
 	}
-	view := tea.NewView(body.String())
+	frameWidth := model.width - 4
+	if model.width <= 0 {
+		frameWidth = 80
+	}
+	content := commitFrameStyle.Width(max(36, frameWidth)).Render(body.String())
+	view := tea.NewView(content)
 	view.AltScreen = true
 	view.WindowTitle = "q commit"
 	if model.phase == commitUIEditing {
-		view.Cursor = model.editor.Cursor()
+		if cursor := model.editor.Cursor(); cursor != nil {
+			cursor.Position.X += commitFrameStyle.GetPaddingLeft()
+			cursor.Position.Y += commitFrameStyle.GetPaddingTop() + editorOffsetY
+			view.Cursor = cursor
+		}
 	}
 	return view
 }
@@ -313,37 +353,57 @@ func (model commitUIModel) renderLogs(body *strings.Builder) {
 		visible = max(4, min(14, model.height/3))
 	}
 	start := max(0, len(model.logs)-visible)
-	for _, event := range model.logs[start:] {
-		fmt.Fprintf(body, "· %-8s %s\n", event.Stage, event.Message)
+	for index, event := range model.logs[start:] {
+		prefix := commitSubtleStyle.Render("· ")
+		stageStyle := commitSubtleStyle
+		if start+index == len(model.logs)-1 && (model.phase == commitUILoading || model.phase == commitUIWorking) {
+			prefix = commitActiveStyle.Render("› ")
+			stageStyle = commitActiveStyle
+		}
+		body.WriteString(prefix)
+		body.WriteString(stageStyle.Render(fmt.Sprintf("%-8s", event.Stage)))
+		body.WriteString(" ")
+		body.WriteString(commitSubtleStyle.Render(event.Message))
+		body.WriteString("\n")
 	}
 }
 
 func (model commitUIModel) renderReview(body *strings.Builder) {
 	if len(model.proposals) > 1 {
-		fmt.Fprintf(body, "\nSplit proposal · %d commits", len(model.proposals))
+		body.WriteString("\n")
+		body.WriteString(commitSubtleStyle.Render(fmt.Sprintf("Split proposal · %d commits", len(model.proposals))))
 	} else {
-		body.WriteString("\nReview proposal")
+		body.WriteString("\n")
+		body.WriteString(commitSubtleStyle.Render("Review proposal"))
 	}
 	body.WriteString("\n")
 	for index, proposal := range model.proposals {
 		prefix := "  "
+		style := commitSubtleStyle
 		if index == model.selected {
 			prefix = "› "
+			style = commitActiveStyle
 		}
-		fmt.Fprintf(body, "\n%s%d. %s\n", prefix, index+1, formatSubject(proposal))
+		body.WriteString("\n")
+		body.WriteString(prefix)
+		body.WriteString(style.Render(fmt.Sprintf("%d. %s", index+1, formatSubject(proposal))))
+		body.WriteString("\n")
 		for _, line := range proposal.Body {
-			fmt.Fprintf(body, "     - %s\n", line)
+			body.WriteString(commitSubtleStyle.Render("     - " + line))
+			body.WriteString("\n")
 		}
 		if len(model.proposals) > 1 {
-			fmt.Fprintf(body, "     files · %s\n", compactFiles(proposal.Files, 5))
+			body.WriteString(commitSubtleStyle.Render("     files · " + compactFiles(proposal.Files, 5)))
+			body.WriteString("\n")
 		}
 	}
 	if model.status != "" {
 		body.WriteString("\n")
-		body.WriteString(model.status)
+		body.WriteString(commitSubtleStyle.Render(model.status))
 		body.WriteString("\n")
 	}
-	body.WriteString("\n↑/↓ select · e edit message · r regenerate · enter commit · p commit+push · esc cancel")
+	body.WriteString("\n")
+	body.WriteString(commitHelpStyle.Render("↑/↓ select · e edit message · r regenerate · enter commit · p commit+push · esc cancel"))
 }
 
 func compactFiles(files []string, limit int) string {
