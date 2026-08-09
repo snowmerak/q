@@ -39,6 +39,7 @@ const (
 	screenModels
 	screenLoom
 	screenIgnore
+	screenHelp
 	screenChat
 )
 
@@ -167,6 +168,7 @@ type model struct {
 	ignoreEditor        textarea.Model
 	ignoreOriginal      string
 	ignoreDiscardArmed  bool
+	helpReturn          screen
 
 	config             config.Config
 	client             chatClient
@@ -180,6 +182,7 @@ type model struct {
 	viewport           viewport.Model
 	questionViewport   viewport.Model
 	agentTraceViewport viewport.Model
+	helpViewport       viewport.Model
 	spinner            spinner.Model
 	waiting            bool
 	compacting         bool
@@ -316,6 +319,7 @@ func newManagedModel(ctx context.Context, store config.Store, factory clientFact
 		viewport:           viewport.New(viewport.WithWidth(80), viewport.WithHeight(12)),
 		questionViewport:   viewport.New(viewport.WithWidth(80), viewport.WithHeight(8)),
 		agentTraceViewport: viewport.New(viewport.WithWidth(80), viewport.WithHeight(8)),
+		helpViewport:       viewport.New(viewport.WithWidth(80), viewport.WithHeight(12)),
 		spinner:            spinner.New(spinner.WithSpinner(spinner.Dot)),
 	}
 	if runtime != nil {
@@ -324,8 +328,10 @@ func newManagedModel(ctx context.Context, store config.Store, factory clientFact
 	m.viewport.SoftWrap = true
 	m.questionViewport.SoftWrap = true
 	m.agentTraceViewport.SoftWrap = true
+	m.helpViewport.SoftWrap = true
 	m.questionViewport.FillHeight = true
 	m.agentTraceViewport.FillHeight = true
+	m.helpViewport.FillHeight = true
 
 	placeholders := []string{
 		"provider id",
@@ -431,6 +437,9 @@ func (m model) Init() tea.Cmd {
 	}
 	if m.screen == screenIgnore {
 		return tea.Batch(m.ignoreEditor.Focus(), tea.RequestBackgroundColor)
+	}
+	if m.screen == screenHelp {
+		return tea.RequestBackgroundColor
 	}
 	return tea.Batch(m.setup[m.setupFocus].Focus(), tea.RequestBackgroundColor)
 }
@@ -685,8 +694,14 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 				m.status = fmt.Sprintf("Tools used · %d", message.toolCalls)
 			}
 		}
+		if len(m.agentTraces) > 0 {
+			m.agentTraceExpanded = false
+			if m.status == "" {
+				m.status = "Plan completed · ctrl+g inspect subagent trace"
+			}
+		}
 		m.compactionTarget = 0
-		m.refreshTranscript()
+		m.resize(m.width, m.height)
 		if err := m.saveWorkspaceSession(); err != nil {
 			m.status = err.Error()
 		}
@@ -777,6 +792,12 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, tea.Quit
 		}
+		if key.String() == "ctrl+h" {
+			if m.screen == screenHelp {
+				return m.leaveHelp()
+			}
+			return m.enterHelp()
+		}
 		if m.screen == screenSetup {
 			return m.updateSetup(key)
 		}
@@ -792,6 +813,9 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		if m.screen == screenIgnore {
 			return m.updateIgnore(key)
 		}
+		if m.screen == screenHelp {
+			return m.updateHelp(key)
+		}
 		return m.updateChatKey(key)
 	}
 
@@ -803,6 +827,11 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			m.ignoreDiscardArmed = false
 			m.status = ""
 		}
+		return m, command
+	}
+	if m.screen == screenHelp {
+		var command tea.Cmd
+		m.helpViewport, command = m.helpViewport.Update(message)
 		return m, command
 	}
 
@@ -1675,6 +1704,9 @@ func (m model) submitChat() (tea.Model, tea.Cmd) {
 	case "/ignore":
 		m.input.Reset()
 		return m.enterIgnore()
+	case "/help":
+		m.input.Reset()
+		return m.enterHelp()
 	}
 	if strings.HasPrefix(content, "/plan ") {
 		return m.startPlan(strings.TrimSpace(strings.TrimPrefix(content, "/plan")))
@@ -2497,6 +2529,10 @@ func (m *model) resize(width, height int) {
 	ignorePanel := ignoreEditorPanelStyle(max(36, m.width-4), m.dark)
 	m.ignoreEditor.SetWidth(max(20, ignorePanel.GetWidth()-ignorePanel.GetHorizontalFrameSize()))
 	m.ignoreEditor.SetHeight(max(4, m.height-16))
+	helpPanel := helpPanelStyle(max(36, m.width-4), m.dark)
+	m.helpViewport.SetWidth(max(20, helpPanel.GetWidth()-helpPanel.GetHorizontalFrameSize()))
+	m.helpViewport.SetHeight(max(1, m.height-11))
+	m.refreshHelp(false)
 	m.input.SetWidth(contentWidth)
 	m.viewport.SetWidth(contentWidth)
 	tracePanel := agentTracePanelStyle(m.chatFrameWidth(), m.dark)
@@ -2519,6 +2555,8 @@ func (m *model) resize(width, height int) {
 		}
 		dynamicHeight = max(2, dynamicHeight-traceHeight-traceChrome)
 		m.refreshAgentTrace(false)
+	} else if !m.agentTraceExpanded && len(m.agentTraces) > 0 && !m.waiting {
+		dynamicHeight = max(2, dynamicHeight-2)
 	} else if len(m.agentActivities) > 0 && dynamicHeight >= 6 {
 		m.agentLogVisible = min(len(m.agentActivities), max(1, min(8, dynamicHeight/4)))
 		activityChrome := 2
@@ -2554,6 +2592,7 @@ func (m *model) applyColorScheme(dark bool) {
 	m.ignoreEditor.SetStyles(inputStyles)
 	m.refreshTranscript()
 	m.refreshQuestion()
+	m.refreshHelp(false)
 }
 
 func (m *model) refreshTranscript() {
@@ -2689,6 +2728,12 @@ func (m model) renderedAgentActivities() string {
 		currentLabel := ansi.Truncate("› "+agentTraceLabel(current), contentWidth, "…")
 		return summary + "\n" + agentTraceActiveStyle(m.dark).Render(currentLabel) + "\n" +
 			agentTracePanelStyle(m.chatFrameWidth(), m.dark).Render(m.agentTraceViewport.View())
+	}
+	if !m.agentTraceExpanded && len(m.agentTraces) > 0 && !m.waiting {
+		contentWidth := max(20, m.chatFrameWidth()-frameStyle.GetHorizontalFrameSize())
+		summary := titleStyle.Render("SUBAGENTS COMPLETE") +
+			subtleStyle.Render(" · ctrl+g inspect trace · ") + agentSummary(m.agentStates)
+		return ansi.Truncate(summary, contentWidth, "…")
 	}
 	if m.agentLogVisible <= 0 || len(m.agentActivities) == 0 {
 		return ""
@@ -3269,6 +3314,8 @@ func (m model) View() tea.View {
 		content = m.viewLoom()
 	} else if m.screen == screenIgnore {
 		content = m.viewIgnore()
+	} else if m.screen == screenHelp {
+		content = m.viewHelp()
 	} else if m.screen == screenChat {
 		content = m.viewChat()
 	}
@@ -3657,21 +3704,21 @@ func (m model) viewChat() string {
 	if m.waiting && !m.asking {
 		status = m.spinner.View() + " " + status
 	}
-	footerText := "enter send · shift+enter newline · /clear · /model · /provider · /loom · /ignore · ctrl+c quit · esc quit"
+	footerText := "enter send · shift+enter newline · ctrl+h help · ctrl+c quit · esc quit"
 	if m.waiting {
-		footerText = "ctrl+c interrupt turn · esc quit"
+		footerText = "ctrl+h help · ctrl+c interrupt turn · esc quit"
 		if len(m.agentTraces) > 0 {
 			if m.agentTraceExpanded {
-				footerText = "pgup/pgdn trace · ctrl+g collapse trace · ctrl+c interrupt turn · esc quit"
+				footerText = "pgup/pgdn trace · ctrl+g collapse trace · ctrl+h help · ctrl+c interrupt turn · esc quit"
 			} else {
-				footerText = "ctrl+g expand trace · ctrl+c interrupt turn · esc quit"
+				footerText = "ctrl+g expand trace · ctrl+h help · ctrl+c interrupt turn · esc quit"
 			}
 		}
 	} else if len(m.agentTraces) > 0 {
 		if m.agentTraceExpanded {
-			footerText = "pgup/pgdn trace · ctrl+g collapse trace · enter send · ctrl+c quit"
+			footerText = "pgup/pgdn trace · ctrl+g collapse trace · enter send · ctrl+h help · ctrl+c quit"
 		} else {
-			footerText = "ctrl+g expand trace · enter send · shift+enter newline · ctrl+c quit"
+			footerText = "ctrl+g expand trace · enter send · shift+enter newline · ctrl+h help · ctrl+c quit"
 		}
 	}
 	footer := helpStyle.Render(footerText)
@@ -3685,9 +3732,9 @@ func (m model) viewChat() string {
 	if m.asking {
 		content += m.renderedQuestionViewport() + "\n"
 		if len(m.pendingQuestion.Choices) > 0 {
-			footer = helpStyle.Render("↑/↓ select · enter choose · type for custom answer · pgup/pgdn review · ctrl+c interrupt")
+			footer = helpStyle.Render("↑/↓ select · enter choose · type for custom answer · pgup/pgdn review · ctrl+h help · ctrl+c interrupt")
 		} else {
-			footer = helpStyle.Render("pgup/pgdn scroll · enter answer · shift+enter newline · ctrl+c interrupt")
+			footer = helpStyle.Render("pgup/pgdn scroll · enter answer · shift+enter newline · ctrl+h help · ctrl+c interrupt")
 		}
 	}
 	content += m.input.View()

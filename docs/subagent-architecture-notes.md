@@ -331,6 +331,10 @@ result/error를 `agent`, `task_id`, `parent_id`와 함께 trace event로 보낸�
 읽기 좋게 펼쳐 표시한다. `PgUp/PgDn`, `Ctrl+U/Ctrl+D`, `Home/End`로 스크롤하고
 `Ctrl+G`로 상세 trace와 compact activity를 전환한다. 새 이벤트가 들어올 때 사용자가
 과거 로그를 읽는 중이면 위치를 유지하고, bottom에 있을 때만 자동으로 따라간다.
+성공적으로 workflow가 끝나면 상세 panel은 자동으로 접히고
+`SUBAGENTS COMPLETE · ctrl+g inspect trace` 한 줄만 남긴다. 따라서 최종 응답과
+입력칸이 즉시 보이며, 보존된 trace는 `Ctrl+G`로 다시 펼칠 수 있다. 실패 시에는
+원인 확인을 위해 상세 panel을 펼친 상태로 유지한다.
 
 provider가 반환하지 않은 hidden chain-of-thought는 표시하거나 추정하지 않는다.
 대신 각 agent prompt는 tool call과 함께 짧은 user-visible progress note를 생성하도록

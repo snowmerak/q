@@ -7,6 +7,8 @@ import (
 	"sync"
 	"testing"
 
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/snowmerak/q/client"
 	"github.com/snowmerak/q/config"
@@ -137,6 +139,16 @@ func TestPlanCommandExecutesApprovedPlanWithCoderAndPlannerReview(t *testing.T) 
 		!strings.Contains(final, "go test ./app") {
 		t.Fatalf("final execution = %q", final)
 	}
+	completedView := ansi.Strip(m.viewChat())
+	if m.agentTraceExpanded || strings.Contains(completedView, "SUBAGENT TRACE") ||
+		!strings.Contains(completedView, "SUBAGENTS COMPLETE · ctrl+g inspect trace") ||
+		!strings.Contains(completedView, "Plan executed successfully.") ||
+		!strings.Contains(completedView, "Type a message…") {
+		t.Fatalf("completed plan did not collapse trace and reveal result/input:\n%s", completedView)
+	}
+	if height := lipgloss.Height(completedView); height > m.height {
+		t.Fatalf("completed plan view height %d exceeds terminal %d", height, m.height)
+	}
 	if len(configuredClient.requests) != 9 {
 		t.Fatalf("planning requests = %#v", configuredClient.requests)
 	}
@@ -195,6 +207,11 @@ func TestPlanCommandExecutesApprovedPlanWithCoderAndPlannerReview(t *testing.T) 
 	}
 	if !sawAssistant || !sawToolCall || !sawToolResult || !sawReviewPayload {
 		t.Fatalf("detailed execution trace missing: %#v", m.agentTraces)
+	}
+	updated, _ = m.updateChatKey(tea.KeyPressMsg{Code: 'g', Mod: tea.ModCtrl})
+	m = updated.(model)
+	if !m.agentTraceExpanded || !strings.Contains(ansi.Strip(m.viewChat()), "SUBAGENT TRACE") {
+		t.Fatalf("completed trace could not be reopened")
 	}
 }
 

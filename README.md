@@ -185,11 +185,19 @@ Chat keys:
 - `/plan`: arm approval-gated planning for the next message; `/plan <request>` starts immediately
 - `/model`: configure the main-loop, embedding, or subagent role models
 - `/provider`: list, add, edit, enable, disable, or delete Gateway providers
+- `/loom`: inspect Loom storage and garbage-collection settings
+- `/ignore`: edit workspace discovery rules in `.qignore`
+- `/help`: open the scrollable command and shortcut guide
 - `Ctrl+L`: clear the in-memory conversation
 - `Ctrl+S`: send (alternative shortcut)
 - `Ctrl+P`: edit provider settings (alternative shortcut)
+- `Ctrl+H`: open or close the help screen
 - `Ctrl+C`: interrupt the active turn; quit when idle
 - `Esc`: quit
+
+The regular chat footer stays compact and does not enumerate slash commands.
+Use `Ctrl+H` or `/help` to open the complete guide from any TUI screen; press
+`Ctrl+H` or `Esc` to return without losing editor state or an active turn.
 
 `/model` first shows `default` (the main chat loop), `embedding`, and then the
 built-in subagent roles. The shared catalog shows each model's Gateway context

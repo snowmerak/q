@@ -792,6 +792,126 @@ func TestSlashIgnoreEditsAndSavesWorkspaceRules(t *testing.T) {
 	}
 }
 
+func TestHelpCommandAndShortcutKeepCommandsOutOfChatFooter(t *testing.T) {
+	value := config.Default()
+	value.Provider.Model = "test-model"
+	m := newModel(context.Background(), config.Store{Dir: t.TempDir()}, nil)
+	m.enterChat(value, &fakeClient{})
+	m.resize(96, 24)
+
+	chat := ansi.Strip(m.viewChat())
+	if !strings.Contains(chat, "ctrl+h help") {
+		t.Fatalf("chat footer does not advertise help:\n%s", chat)
+	}
+	for _, command := range []string{"/clear", "/model", "/provider", "/loom", "/ignore", "/help"} {
+		if strings.Contains(chat, command) {
+			t.Fatalf("chat footer exposes %q:\n%s", command, chat)
+		}
+	}
+
+	updated, _ := m.Update(tea.KeyPressMsg{Code: 'h', Mod: tea.ModCtrl})
+	m = updated.(model)
+	if m.screen != screenHelp || m.helpReturn != screenChat {
+		t.Fatalf("ctrl+h screen = %v, return = %v", m.screen, m.helpReturn)
+	}
+	help := ansi.Strip(m.View().Content)
+	for _, expected := range []string{
+		"q · Help", "SLASH COMMANDS", "/plan [request]", "/clear", "/model",
+		"/provider", "/loom", "/ignore", "/help",
+	} {
+		if !strings.Contains(help, expected) {
+			t.Fatalf("help view missing %q:\n%s", expected, help)
+		}
+	}
+	allHelp := ansi.Strip(renderHelpContent(m.dark))
+	for _, expected := range []string{"SUBAGENTS AND QUESTIONS", "ctrl+g", "COMMAND LINE", "q commit"} {
+		if !strings.Contains(allHelp, expected) {
+			t.Fatalf("help content missing %q:\n%s", expected, allHelp)
+		}
+	}
+
+	updated, _ = m.Update(tea.KeyPressMsg{Code: 'h', Mod: tea.ModCtrl})
+	m = updated.(model)
+	if m.screen != screenChat {
+		t.Fatalf("second ctrl+h screen = %v", m.screen)
+	}
+
+	m.input.SetValue("/help")
+	updated, _ = m.updateChatKey(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m = updated.(model)
+	updated, _ = m.Update(deferredSubmitMsg{})
+	m = updated.(model)
+	if m.screen != screenHelp {
+		t.Fatalf("/help screen = %v", m.screen)
+	}
+	updated, _ = m.updateHelp(tea.KeyPressMsg{Code: tea.KeyEsc})
+	m = updated.(model)
+	if m.screen != screenChat {
+		t.Fatalf("help escape screen = %v", m.screen)
+	}
+}
+
+func TestHelpScrollsAndRestoresDirtyIgnoreEditor(t *testing.T) {
+	root := t.TempDir()
+	workspaceStore := workspace.Store{Root: root}
+	if err := workspaceStore.SaveIgnore("vendor/\n"); err != nil {
+		t.Fatal(err)
+	}
+	value := config.Default()
+	value.Provider.Model = "test-model"
+	m := newModel(context.Background(), config.Store{Dir: t.TempDir()}, nil)
+	m.workspaceStore = &workspaceStore
+	m.enterChat(value, &fakeClient{})
+	updated, _ := m.enterIgnore()
+	m = updated.(model)
+	m.ignoreEditor.SetValue("vendor/\nbuild/\n")
+	m.resize(80, 18)
+
+	updated, _ = m.Update(tea.KeyPressMsg{Code: 'h', Mod: tea.ModCtrl})
+	m = updated.(model)
+	if m.helpViewport.TotalLineCount() <= m.helpViewport.VisibleLineCount() {
+		t.Fatalf("help is not scrollable: total %d visible %d", m.helpViewport.TotalLineCount(), m.helpViewport.VisibleLineCount())
+	}
+	if viewHeight := lipgloss.Height(ansi.Strip(m.View().Content)); viewHeight > m.height {
+		t.Fatalf("help view height %d exceeds terminal %d", viewHeight, m.height)
+	}
+	before := m.helpViewport.ScrollPercent()
+	updated, _ = m.updateHelp(tea.KeyPressMsg{Code: tea.KeyPgDown})
+	m = updated.(model)
+	if m.helpViewport.ScrollPercent() <= before {
+		t.Fatalf("help did not scroll: before %.2f after %.2f", before, m.helpViewport.ScrollPercent())
+	}
+	updated, _ = m.updateHelp(tea.KeyPressMsg{Code: tea.KeyEsc})
+	m = updated.(model)
+	if m.screen != screenIgnore || m.ignoreEditor.Value() != "vendor/\nbuild/\n" {
+		t.Fatalf("help did not restore ignore editor: screen %v content %q", m.screen, m.ignoreEditor.Value())
+	}
+}
+
+func TestHelpKeepsReceivingSubagentEvents(t *testing.T) {
+	value := config.Default()
+	value.Provider.Model = "test-model"
+	m := newModel(context.Background(), config.Store{Dir: t.TempDir()}, nil)
+	m.enterChat(value, &fakeClient{})
+	m.waiting = true
+	m.resize(90, 22)
+	updated, _ := m.enterHelp()
+	m = updated.(model)
+
+	activity := agentActivity{Agent: "scout", Action: "thinking", Detail: "inspecting workspace"}
+	updated, _ = m.Update(agentEventMsg{event: agentEvent{activity: &activity}})
+	m = updated.(model)
+	if m.screen != screenHelp || len(m.agentActivities) != 1 || m.agentActivities[0].Agent != "scout" {
+		t.Fatalf("background event state = screen %v activities %#v", m.screen, m.agentActivities)
+	}
+
+	updated, _ = m.updateHelp(tea.KeyPressMsg{Code: tea.KeyEsc})
+	m = updated.(model)
+	if m.screen != screenChat || !m.waiting {
+		t.Fatalf("return state = screen %v waiting %v", m.screen, m.waiting)
+	}
+}
+
 func TestManagedSlashProviderOpensProviderList(t *testing.T) {
 	value := config.Default()
 	value.Provider.Model = "local/test-model"
