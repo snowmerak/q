@@ -24,6 +24,7 @@ func TestPrepareRepositoryAutoStagesAndHidesLocksFromOverview(t *testing.T) {
 	writeTestFile(t, root, "AGENTS.md", "Use conventional commits.\n")
 	writeTestFile(t, root, "app/main.go", "package app\n")
 	writeTestFile(t, root, "go.sum", "module checksum\n")
+	writeTestFile(t, root, ".q/workspace.lock", "q runtime metadata\n")
 
 	state, err := prepareRepository(context.Background(), root)
 	if err != nil {
@@ -44,11 +45,35 @@ func TestPrepareRepositoryAutoStagesAndHidesLocksFromOverview(t *testing.T) {
 	if state.fullDiff == "" || state.fileDiffs["go.sum"] == "" {
 		t.Fatal("staged diffs were not retained")
 	}
+	if staged := strings.TrimSpace(gitTest(t, root, "diff", "--cached", "--name-only")); strings.Contains(staged, ".q/") {
+		t.Fatalf("q metadata was auto-staged: %q", staged)
+	}
 
 	runtime := commitToolRuntime{state: state}
 	result := runtime.call(context.Background(), toolCall(toolGitOverview, `{}`))
 	if result.IsError || strings.Contains(result.Content, "go.sum") {
 		t.Fatalf("overview result = %#v", result)
+	}
+}
+
+func TestPrepareRepositoryAutoStagesWhenQDirectoryIsIgnored(t *testing.T) {
+	root := newTestRepository(t)
+	writeTestFile(t, root, ".gitignore", ".q\n")
+	writeTestFile(t, root, "app/main.go", "package app\n")
+	writeTestFile(t, root, ".q/workspace.lock", "q runtime metadata\n")
+
+	state, err := prepareRepository(context.Background(), root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !state.autoStaged {
+		t.Fatal("changes were not auto-staged")
+	}
+	if !reflect.DeepEqual(state.visibleFiles, []string{".gitignore", "app/main.go"}) {
+		t.Fatalf("visible files = %#v", state.visibleFiles)
+	}
+	if staged := strings.TrimSpace(gitTest(t, root, "diff", "--cached", "--name-only")); strings.Contains(staged, ".q/") {
+		t.Fatalf("ignored q metadata was auto-staged: %q", staged)
 	}
 }
 

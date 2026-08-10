@@ -64,7 +64,13 @@ func RunStdio(ctx context.Context, root string) error {
 }
 
 func RunStdioWithLoomOptions(ctx context.Context, root string, options loom.StoreOptions) error {
-	archive, err := sessionstore.Open(root)
+	workspaceLock, err := workspace.AcquireLock(root, "q-mcp")
+	if err != nil {
+		return err
+	}
+	defer workspaceLock.Close()
+
+	archive, err := sessionstore.OpenWithOptions(root, sessionstore.OpenOptions{WorkspaceLock: workspaceLock})
 	if err != nil {
 		return err
 	}

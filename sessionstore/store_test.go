@@ -9,6 +9,8 @@ import (
 	"reflect"
 	"testing"
 	"time"
+
+	"github.com/snowmerak/q/worklock"
 )
 
 func TestStoreSaveGetUpdateAndReopen(t *testing.T) {
@@ -184,8 +186,10 @@ func TestSaveKeepsSourceWhenIndexingFailsAndOpenCatchesUp(t *testing.T) {
 	}
 	store.mu.Lock()
 	store.index = nil
-	store.closed = true
 	store.mu.Unlock()
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
 
 	reopened, err := Open(root)
 	if err != nil {
@@ -232,6 +236,125 @@ func TestRebuildRestoresDeletedDerivedIndex(t *testing.T) {
 	}
 	if result.Total != 1 || result.Hits[0].Record.ID != "kept" {
 		t.Fatalf("rebuilt result = %#v", result)
+	}
+}
+
+func TestOpenRejectsASecondWorkspaceWriterWithoutTouchingActiveIndex(t *testing.T) {
+	root := t.TempDir()
+	first, err := Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := first.Save(Record{ID: "kept", Kind: KindSummary, Content: "active index remains usable"}); err != nil {
+		t.Fatal(err)
+	}
+
+	second, err := Open(root)
+	if second != nil {
+		_ = second.Close()
+		t.Fatal("second Session Store opened the active workspace")
+	}
+	if !errors.Is(err, worklock.ErrLocked) {
+		t.Fatalf("second Open() error = %v, want worklock.ErrLocked", err)
+	}
+	result, err := first.Search(context.Background(), SearchOptions{Text: "usable"})
+	if err != nil {
+		t.Fatalf("active index was disturbed: %v", err)
+	}
+	if result.Total != 1 || result.Hits[0].Record.ID != "kept" {
+		t.Fatalf("active index result = %#v", result)
+	}
+	if err := first.Close(); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := Open(root)
+	if err != nil {
+		t.Fatalf("Open() after owner close: %v", err)
+	}
+	if err := reopened.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestOpenDoesNotRebuildAnIndexLockedByALegacyWriter(t *testing.T) {
+	root := t.TempDir()
+	legacy, err := Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := legacy.Save(Record{ID: "kept", Kind: KindSummary, Content: "legacy owner remains usable"}); err != nil {
+		t.Fatal(err)
+	}
+	// Simulate a q version that holds Bleve without participating in the new
+	// workspace ownership protocol.
+	legacy.mu.Lock()
+	if legacy.lock == nil {
+		legacy.mu.Unlock()
+		t.Fatal("Session Store did not own a workspace lock")
+	}
+	if err := legacy.lock.Close(); err != nil {
+		legacy.mu.Unlock()
+		t.Fatal(err)
+	}
+	legacy.lock = nil
+	legacy.mu.Unlock()
+
+	started := time.Now()
+	contender, err := Open(root)
+	if contender != nil {
+		_ = contender.Close()
+		_ = legacy.Close()
+		t.Fatal("contender opened a legacy-locked Bleve index")
+	}
+	if !errors.Is(err, ErrIndexLocked) {
+		_ = legacy.Close()
+		t.Fatalf("contender error = %v, want ErrIndexLocked", err)
+	}
+	if elapsed := time.Since(started); elapsed > 3*time.Second {
+		_ = legacy.Close()
+		t.Fatalf("legacy lock detection took %s", elapsed)
+	}
+	result, err := legacy.Search(context.Background(), SearchOptions{Text: "usable"})
+	if err != nil {
+		_ = legacy.Close()
+		t.Fatalf("legacy index was disturbed: %v", err)
+	}
+	if result.Total != 1 || result.Hits[0].Record.ID != "kept" {
+		_ = legacy.Close()
+		t.Fatalf("legacy index result = %#v", result)
+	}
+	if err := legacy.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestCloseDoesNotReleaseCallerOwnedWorkspaceLock(t *testing.T) {
+	root := t.TempDir()
+	owner, err := worklock.Acquire(root, "q test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := OpenWithOptions(root, OpenOptions{WorkspaceLock: owner})
+	if err != nil {
+		_ = owner.Close()
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		_ = owner.Close()
+		t.Fatal(err)
+	}
+	contender, err := worklock.Acquire(root, "q contender")
+	if contender != nil {
+		_ = contender.Close()
+		_ = owner.Close()
+		t.Fatal("Session Store released its caller-owned workspace lock")
+	}
+	if !errors.Is(err, worklock.ErrLocked) {
+		_ = owner.Close()
+		t.Fatalf("contender error = %v, want worklock.ErrLocked", err)
+	}
+	if err := owner.Close(); err != nil {
+		t.Fatal(err)
 	}
 }
 

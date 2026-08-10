@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	goformersearch "github.com/MichaelAyles/goformersearch"
+	"github.com/snowmerak/q/worklock"
 )
 
 const (
@@ -26,7 +27,8 @@ const (
 // OpenOptions controls optional derived indexes. A zero value opens the text
 // store without a vector index.
 type OpenOptions struct {
-	Vector VectorConfig
+	Vector        VectorConfig
+	WorkspaceLock *worklock.Lock
 }
 
 // VectorConfig identifies the embeddings included in one HNSW graph. Model

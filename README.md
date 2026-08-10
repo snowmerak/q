@@ -38,6 +38,7 @@ the directory where it is launched:
 ```text
 <current-directory>/.q/session.json
 <current-directory>/.q/plan-execution.json
+<current-directory>/.q/workspace.lock
 ```
 
 The workspace session does not contain provider settings, API keys, or a model
@@ -49,6 +50,15 @@ Discard. A Coder interrupted after possible workspace side effects is resumed
 as a new recovery attempt that must inspect existing changes first; a saved
 Coder result resumes directly at Planner review. Discard removes only the
 checkpoint and never reverts workspace changes.
+
+One q writer owns a workspace at a time. The interactive app, `q commit`,
+`q-mcp`, and direct Session Store opens use an OS-backed exclusive lock held
+for their full lifetime. A second writer exits with the owning PID, host, and
+command instead of opening or rebuilding Bleve/HNSW state. The
+`workspace.lock` file is persistent diagnostic metadata, not a sentinel:
+crashes and forced termination close the process handle, so the OS releases
+the actual lock and the next q process can reuse the file without stale-lock
+cleanup.
 
 Example:
 
@@ -191,6 +201,7 @@ Chat keys:
 - `Shift+Enter`: insert a newline
 - `/clear`: clear the conversation and remove the current workspace session
 - `/plan`: arm approval-gated planning for the next message; `/plan <request>` starts immediately
+- `/commit`: open the interactive commit workflow and return to chat afterward
 - `/model`: configure the main-loop, embedding, or subagent role models
 - `/provider`: list, add, edit, enable, disable, or delete Gateway providers
 - `/loom`: inspect Loom storage and garbage-collection settings

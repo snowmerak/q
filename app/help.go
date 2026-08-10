@@ -111,6 +111,7 @@ func renderHelpContent(dark bool) string {
 
 	writeHelpSection("SLASH COMMANDS", [][2]string{
 		{"/plan [request]", "Grill, research, approve, and execute a work plan."},
+		{"/commit", "Open the interactive commit workflow."},
 		{"/clear", "Clear the current chat projection."},
 		{"/model", "Choose default, subagent, and embedding models."},
 		{"/provider", "Configure and select a model provider."},

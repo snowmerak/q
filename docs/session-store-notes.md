@@ -34,6 +34,7 @@ agent message와 result를 같은 저장소에 기록할 수 있게 준비되어
 ```text
 .q/
 ├─ session.json                 # 현재 채팅을 빠르게 복구하기 위한 projection
+├─ workspace.lock               # OS lock owner 진단 metadata; 존재 자체는 lock이 아님
 ├─ data/
 │  ├─ records/                  # 1차 구현의 공통 record 원본 JSON
 │  ├─ runs/
@@ -261,9 +262,25 @@ embedding이 변경되거나 제거되면 원본 record에서 vector graph만 �
 
 ## 동시성과 운영
 
+- workspace writer는 `.q/workspace.lock`의 OS exclusive lock을 프로세스 수명 동안
+  보유한다. 앱, `q commit`, `q-mcp`와 직접 `sessionstore.Open` 경로가 같은 정책을
+  사용한다.
+- lock 파일의 존재 여부나 기록된 PID로 소유권을 판단하지 않는다. 강제 종료와
+  crash 시 OS가 열린 handle을 닫아 실제 lock을 해제하며 다음 프로세스는 남은
+  metadata 파일을 그대로 재사용한다.
+- lock contention은 `workspace.ErrLocked`로 반환하고 Bleve open 실패나 index
+  corruption과 구분한다. contention 경로에서는 Bleve/HNSW rebuild나 파일 제거를
+  시작하지 않는다.
+- workspace lock을 모르는 구버전 writer가 Bleve Bolt file을 보유한 경우에도 open
+  timeout을 `sessionstore.ErrIndexLocked`로 구분하고 rebuild 없이 즉시 종료한다.
+- Bleve rebuild, HNSW rebuild/save와 Loom GC는 workspace lock owner만 실행한다.
+  따라서 프로세스별 HNSW memory snapshot이 서로의 변경을 덮어쓰지 않는다.
+- HNSW graph와 ID map 사이의 crash 시점 불일치는 다음 open에서 검증하고 source
+  record로 rebuild한다. 두 파일 모두 파생 데이터이며 원본 record는 제거하지 않는다.
 - 원본 store write는 run 단위 sequence를 부여한다.
 - Bleve update와 HNSW graph 저장은 원본 write와 하나의 transaction으로 간주하지 않는다.
-- 하나의 index writer 또는 직렬화된 indexing queue로 동시 update를 제어한다.
+- 프로세스 간에는 workspace single-writer lock, 프로세스 내부에서는 Store mutex와
+  background writer queue로 update를 직렬화한다.
 - 검색은 index update와 병행할 수 있어야 한다.
 - 앱 비정상 종료 후 마지막 불완전 JSONL record를 감지할 수 있어야 한다.
 - index open 실패, mapping version 불일치와 sequence gap은 rebuild 대상으로 본다.

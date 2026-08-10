@@ -10,6 +10,7 @@ import (
 	"charm.land/bubbles/v2/textarea"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"github.com/snowmerak/q/workspace"
 )
 
 var (
@@ -418,8 +419,40 @@ func compactFiles(files []string, limit int) string {
 
 // RunDefault opens the interactive commit review UI.
 func RunDefault(ctx context.Context, directory string, output io.Writer) (Result, error) {
+	return RunEmbedded(ctx, directory, nil, output, nil)
+}
+
+// RunEmbedded opens the interactive commit review UI inside another terminal
+// application. It reuses existingLock when it owns the Git root, or acquires a
+// supplemental repository-root lock when the embedding q was launched from a
+// subdirectory. The caller always retains ownership of existingLock.
+func RunEmbedded(
+	ctx context.Context,
+	directory string,
+	input io.Reader,
+	output io.Writer,
+	existingLock *workspace.Lock,
+) (Result, error) {
+	root, err := repositoryRoot(ctx, directory)
+	if err != nil {
+		return Result{}, err
+	}
+	if existingLock == nil || !existingLock.Owns(root) {
+		repositoryLock, lockErr := workspace.AcquireLock(root, "q commit")
+		if lockErr != nil {
+			return Result{}, lockErr
+		}
+		defer repositoryLock.Close()
+	}
+	return runCommitUI(ctx, directory, input, output)
+}
+
+func runCommitUI(ctx context.Context, directory string, input io.Reader, output io.Writer) (Result, error) {
 	initial := newCommitUIModel(ctx, directory)
 	options := []tea.ProgramOption{tea.WithContext(ctx)}
+	if input != nil {
+		options = append(options, tea.WithInput(input))
+	}
 	if output != nil {
 		options = append(options, tea.WithOutput(output))
 	}

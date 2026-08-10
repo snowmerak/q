@@ -43,13 +43,9 @@ type trivialChange struct {
 }
 
 func prepareRepository(ctx context.Context, directory string) (repositoryState, error) {
-	root, err := gitOutput(ctx, directory, "rev-parse", "--show-toplevel")
+	root, err := repositoryRoot(ctx, directory)
 	if err != nil {
-		return repositoryState{}, fmt.Errorf("q commit: find repository: %w", err)
-	}
-	root = strings.TrimSpace(root)
-	if root == "" {
-		return repositoryState{}, errors.New("q commit: Git returned an empty repository root")
+		return repositoryState{}, err
 	}
 
 	files, err := stagedFiles(ctx, root)
@@ -58,10 +54,10 @@ func prepareRepository(ctx context.Context, directory string) (repositoryState, 
 	}
 	autoStaged := false
 	if len(files) == 0 {
-		if _, err := gitOutput(ctx, root, "add", "-A"); err != nil {
-			return repositoryState{}, fmt.Errorf("q commit: stage changes: %w", err)
+		autoStaged, err = stageWorkingTree(ctx, root)
+		if err != nil {
+			return repositoryState{}, err
 		}
-		autoStaged = true
 		files, err = stagedFiles(ctx, root)
 		if err != nil {
 			return repositoryState{}, err
@@ -102,6 +98,63 @@ func prepareRepository(ctx context.Context, directory string) (repositoryState, 
 	state.changelogTargets = findChangelogTargets(root, files)
 	state.scopeCandidates = inferScopes(state.visibleFiles)
 	return state, nil
+}
+
+func stageWorkingTree(ctx context.Context, root string) (bool, error) {
+	tracked, err := gitBytes(ctx, root, nil, "diff", "--name-only", "-z", "--diff-filter=ACDMRTUXB")
+	if err != nil {
+		return false, fmt.Errorf("q commit: list tracked working-tree changes: %w", err)
+	}
+	untracked, err := gitBytes(ctx, root, nil, "ls-files", "--others", "--exclude-standard", "-z")
+	if err != nil {
+		return false, fmt.Errorf("q commit: list untracked working-tree changes: %w", err)
+	}
+	seen := make(map[string]struct{})
+	paths := make([]string, 0)
+	for _, body := range [][]byte{tracked, untracked} {
+		for _, value := range bytes.Split(body, []byte{0}) {
+			if len(value) == 0 {
+				continue
+			}
+			path := filepath.ToSlash(string(value))
+			if path == ".q" || strings.HasPrefix(path, ".q/") {
+				continue
+			}
+			if _, exists := seen[path]; exists {
+				continue
+			}
+			seen[path] = struct{}{}
+			paths = append(paths, path)
+		}
+	}
+	if len(paths) == 0 {
+		return false, nil
+	}
+	sort.Strings(paths)
+	pathspecs := make([]byte, 0)
+	for _, path := range paths {
+		pathspecs = append(pathspecs, path...)
+		pathspecs = append(pathspecs, 0)
+	}
+	if _, err := gitBytes(
+		ctx, root, bytes.NewReader(pathspecs), "--literal-pathspecs", "add", "-A",
+		"--pathspec-from-file=-", "--pathspec-file-nul",
+	); err != nil {
+		return false, fmt.Errorf("q commit: stage changes: %w", err)
+	}
+	return true, nil
+}
+
+func repositoryRoot(ctx context.Context, directory string) (string, error) {
+	root, err := gitOutput(ctx, directory, "rev-parse", "--show-toplevel")
+	if err != nil {
+		return "", fmt.Errorf("q commit: find repository: %w", err)
+	}
+	root = strings.TrimSpace(root)
+	if root == "" {
+		return "", errors.New("q commit: Git returned an empty repository root")
+	}
+	return filepath.Clean(root), nil
 }
 
 func stagedFiles(ctx context.Context, root string) ([]string, error) {

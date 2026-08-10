@@ -134,6 +134,7 @@ type model struct {
 	toolRuntime agentToolRuntime
 
 	workspaceStore    *workspace.Store
+	workspaceLock     *workspace.Lock
 	workspaceRestored bool
 	archive           recordArchive
 	archiveErr        error
@@ -185,6 +186,7 @@ type model struct {
 	agentTraceViewport viewport.Model
 	helpViewport       viewport.Model
 	spinner            spinner.Model
+	commitRunning      bool
 	waiting            bool
 	compacting         bool
 	submitPending      bool
@@ -456,6 +458,15 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.BackgroundColorMsg:
 		m.applyColorScheme(message.IsDark())
 		return m, nil
+	case commitFinishedMsg:
+		m.commitRunning = false
+		if message.err != nil {
+			m.status = "Commit failed · " + message.err.Error()
+		} else {
+			m.status = commitResultStatus(message.result)
+		}
+		m.resize(m.width, m.height)
+		return m, m.input.Focus()
 	case configuredMsg:
 		if message.err != nil {
 			m.status = message.err.Error()
@@ -1689,6 +1700,8 @@ func (m model) submitChat() (tea.Model, tea.Cmd) {
 		m.status = "Plan mode · enter a planning request"
 		m.resize(m.width, m.height)
 		return m, m.input.Focus()
+	case "/commit":
+		return m.startCommit()
 	case "/clear":
 		m.input.Reset()
 		m.resetConversation()

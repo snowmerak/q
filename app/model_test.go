@@ -12,6 +12,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 	"github.com/snowmerak/llm-provider/gateway"
 	"github.com/snowmerak/q/client"
+	"github.com/snowmerak/q/commitagent"
 	"github.com/snowmerak/q/config"
 	"github.com/snowmerak/q/loom"
 	"github.com/snowmerak/q/sessionstore"
@@ -803,7 +804,7 @@ func TestHelpCommandAndShortcutKeepCommandsOutOfChatFooter(t *testing.T) {
 	if !strings.Contains(chat, "ctrl+h help") {
 		t.Fatalf("chat footer does not advertise help:\n%s", chat)
 	}
-	for _, command := range []string{"/clear", "/model", "/provider", "/loom", "/ignore", "/help"} {
+	for _, command := range []string{"/clear", "/commit", "/model", "/provider", "/loom", "/ignore", "/help"} {
 		if strings.Contains(chat, command) {
 			t.Fatalf("chat footer exposes %q:\n%s", command, chat)
 		}
@@ -816,7 +817,7 @@ func TestHelpCommandAndShortcutKeepCommandsOutOfChatFooter(t *testing.T) {
 	}
 	help := ansi.Strip(m.View().Content)
 	for _, expected := range []string{
-		"q · Help", "SLASH COMMANDS", "/plan [request]", "/clear", "/model",
+		"q · Help", "SLASH COMMANDS", "/plan [request]", "/commit", "/clear", "/model",
 		"/provider", "/loom", "/ignore", "/help",
 	} {
 		if !strings.Contains(help, expected) {
@@ -848,6 +849,53 @@ func TestHelpCommandAndShortcutKeepCommandsOutOfChatFooter(t *testing.T) {
 	m = updated.(model)
 	if m.screen != screenChat {
 		t.Fatalf("help escape screen = %v", m.screen)
+	}
+}
+
+func TestSlashCommitStartsEmbeddedWorkflowAndRestoresChatStatus(t *testing.T) {
+	root := t.TempDir()
+	workspaceStore := workspace.Store{Root: root}
+	workspaceLock, err := workspace.AcquireLock(root, "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = workspaceLock.Close() })
+
+	value := config.Default()
+	value.Provider.Model = "test-model"
+	m := newModel(context.Background(), config.Store{Dir: t.TempDir()}, nil)
+	m.workspaceStore = &workspaceStore
+	m.workspaceLock = workspaceLock
+	m.enterChat(value, &fakeClient{})
+	m.input.SetValue("/commit")
+
+	updated, command := m.submitChat()
+	m = updated.(model)
+	if command == nil || !m.commitRunning {
+		t.Fatalf("commit start = command %v, running %v", command != nil, m.commitRunning)
+	}
+	if value := m.input.Value(); value != "" {
+		t.Fatalf("commit command left input = %q", value)
+	}
+
+	updated, _ = m.Update(commitFinishedMsg{result: commitagent.Result{
+		Messages: []string{"feat(app): added embedded commit\n\n- Opened the commit UI."},
+	}})
+	m = updated.(model)
+	if m.commitRunning || m.status != "Committed · feat(app): added embedded commit" {
+		t.Fatalf("commit completion = running %v, status %q", m.commitRunning, m.status)
+	}
+
+	updated, _ = m.Update(commitFinishedMsg{})
+	m = updated.(model)
+	if m.status != "Commit cancelled" {
+		t.Fatalf("commit cancellation status = %q", m.status)
+	}
+
+	updated, _ = m.Update(commitFinishedMsg{err: errors.New("boom")})
+	m = updated.(model)
+	if m.status != "Commit failed · boom" {
+		t.Fatalf("commit failure status = %q", m.status)
 	}
 }
 

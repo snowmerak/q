@@ -68,6 +68,11 @@ func Run(ctx context.Context, store config.Store) error {
 	if err != nil {
 		return err
 	}
+	workspaceLock, err := workspace.AcquireLock(workspaceStore.Root, "q")
+	if err != nil {
+		return err
+	}
+	defer workspaceLock.Close()
 	loaded, err := store.Load()
 	if err != nil && !errors.Is(err, config.ErrNotFound) {
 		return err
@@ -101,7 +106,12 @@ func Run(ctx context.Context, store config.Store) error {
 	}
 
 	factory := managedClientFactory(manager)
-	archiveStore, archiveOpenErr := sessionstore.Open(workspaceStore.Root)
+	archiveStore, archiveOpenErr := sessionstore.OpenWithOptions(workspaceStore.Root, sessionstore.OpenOptions{
+		WorkspaceLock: workspaceLock,
+	})
+	if errors.Is(archiveOpenErr, sessionstore.ErrIndexLocked) {
+		return archiveOpenErr
+	}
 	var agentTools *qtools.Runtime
 	var toolsErr error
 	if archiveOpenErr == nil {
@@ -126,6 +136,7 @@ func Run(ctx context.Context, store config.Store) error {
 	}
 	initialModel := newManagedModel(ctx, store, factory, manager)
 	initialModel.workspaceStore = &workspaceStore
+	initialModel.workspaceLock = workspaceLock
 	initialModel.toolRuntime = agentTools
 	initialModel.archive = archiveWriter
 	if err == nil && manager.Endpoint() != "" {

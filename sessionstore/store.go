@@ -14,9 +14,19 @@ import (
 	"time"
 
 	"github.com/blevesearch/bleve/v2"
+	"github.com/snowmerak/q/worklock"
+	bolt "go.etcd.io/bbolt"
 )
 
-const maximumRecordSize = 64 << 20
+const (
+	maximumRecordSize = 64 << 20
+	bleveOpenTimeout  = time.Second
+)
+
+// ErrIndexLocked means a process that does not participate in q's workspace
+// lock policy still owns Bleve's underlying Bolt file. This is distinct from
+// index corruption and must never trigger a destructive rebuild.
+var ErrIndexLocked = errors.New("sessionstore: Bleve index is locked by another process; close the other q process and retry")
 
 type indexState struct {
 	MappingVersion    int          `json:"mapping_version"`
@@ -65,6 +75,7 @@ type Store struct {
 	index   bleve.Index
 	vectors *vectorIndex
 	closed  bool
+	lock    *worklock.Lock
 }
 
 // Open opens the workspace-local store rooted at root. Missing, stale, or
@@ -91,6 +102,22 @@ func OpenWithOptions(root string, options OpenOptions) (*Store, error) {
 	if !info.IsDir() {
 		return nil, errors.New("sessionstore: root is not a directory")
 	}
+	var ownedLock *worklock.Lock
+	if options.WorkspaceLock == nil {
+		ownedLock, err = worklock.Acquire(absolute, "sessionstore")
+		if err != nil {
+			return nil, fmt.Errorf("sessionstore: acquire workspace ownership: %w", err)
+		}
+		options.WorkspaceLock = ownedLock
+	} else if !options.WorkspaceLock.Owns(absolute) {
+		return nil, errors.New("sessionstore: supplied workspace lock does not own the store root")
+	}
+	keepLock := false
+	defer func() {
+		if !keepLock && ownedLock != nil {
+			_ = ownedLock.Close()
+		}
+	}()
 	workspaceDir := filepath.Join(absolute, ".q")
 	store := &Store{
 		root:          absolute,
@@ -101,6 +128,7 @@ func OpenWithOptions(root string, options OpenOptions) (*Store, error) {
 		vectorIDsPath: filepath.Join(workspaceDir, "index", "vectors.ids.json"),
 		statePath:     filepath.Join(workspaceDir, "index", "state.json"),
 		vectorCfg:     vectorConfig,
+		lock:          ownedLock,
 	}
 	if err := os.MkdirAll(store.recordsDir, 0o700); err != nil {
 		return nil, fmt.Errorf("sessionstore: create records directory: %w", err)
@@ -113,7 +141,12 @@ func OpenWithOptions(root string, options OpenOptions) (*Store, error) {
 	_ = os.Chmod(store.indexRoot, 0o700)
 
 	if store.indexStateIsCurrent() {
-		opened, openErr := bleve.Open(store.indexPath)
+		opened, openErr := bleve.OpenUsing(store.indexPath, map[string]interface{}{
+			"bolt_timeout": bleveOpenTimeout.String(),
+		})
+		if errors.Is(openErr, bolt.ErrTimeout) {
+			return nil, fmt.Errorf("%w: %s", ErrIndexLocked, store.indexPath)
+		}
 		if openErr == nil {
 			store.index = opened
 			if vectorConfig.Enabled() {
@@ -129,8 +162,10 @@ func OpenWithOptions(root string, options OpenOptions) (*Store, error) {
 		if rebuildErr := store.rebuildLocked(); rebuildErr != nil {
 			return nil, rebuildErr
 		}
+		keepLock = true
 		return store, nil
 	}
+	keepLock = true
 	return store, nil
 }
 
@@ -582,14 +617,17 @@ func (s *Store) Close() error {
 		return nil
 	}
 	s.closed = true
-	if s.index == nil {
-		return nil
+	var closeErr error
+	if s.index != nil {
+		if err := s.index.Close(); err != nil {
+			closeErr = fmt.Errorf("sessionstore: close Bleve index: %w", err)
+		}
 	}
-	err := s.index.Close()
 	s.index = nil
 	s.vectors = nil
-	if err != nil {
-		return fmt.Errorf("sessionstore: close Bleve index: %w", err)
+	if s.lock != nil {
+		closeErr = errors.Join(closeErr, s.lock.Close())
+		s.lock = nil
 	}
-	return nil
+	return closeErr
 }
