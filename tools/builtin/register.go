@@ -5,11 +5,13 @@ import (
 	"encoding/json"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"github.com/snowmerak/q/agentskills"
 )
 
 type Dependencies struct {
 	Archive Archive
 	Loom    *LoomRuntime
+	Skills  *agentskills.Registry
 }
 
 // Register adds the root-jailed builtin tools to server. Optional workspace
@@ -147,6 +149,22 @@ func Register(server *mcp.Server, root string, dependencies Dependencies) (*FS, 
 				"loom.get(ref), and loom.json(ref, JSONPointer), and must return a JSON value. The result is stored as a new immutable artifact.",
 			Annotations: &mcp.ToolAnnotations{ReadOnlyHint: readOnly},
 		}, contextValueHandler(dependencies.Loom.Eval))
+	}
+	if dependencies.Skills != nil {
+		mcp.AddTool(server, &mcp.Tool{
+			Name:        "search_skills",
+			Description: "Search the Session Store's Bleve index for relevant Agent Skills by title, description, and optional tags. Use get_skill with a selected result ID.",
+			Annotations: &mcp.ToolAnnotations{ReadOnlyHint: readOnly, IdempotentHint: true},
+		}, contextValueHandler(func(ctx context.Context, input SearchSkillsInput) (SearchSkillsOutput, error) {
+			return searchSkills(ctx, dependencies.Archive, dependencies.Skills, input)
+		}))
+		mcp.AddTool(server, &mcp.Tool{
+			Name:        "get_skill",
+			Description: "Store one selected SKILL.md or skill-relative resource as an immutable Loom artifact. Read or transform the returned artifact with Loom tools.",
+			Annotations: &mcp.ToolAnnotations{ReadOnlyHint: readOnly, IdempotentHint: true},
+		}, contextValueHandler(func(ctx context.Context, input GetSkillInput) (GetSkillOutput, error) {
+			return getSkill(ctx, dependencies.Skills, dependencies.Loom, input)
+		}))
 	}
 
 	return fs, nil

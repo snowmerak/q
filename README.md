@@ -66,6 +66,7 @@ screen without discarding editor state or interrupting an active turn.
 | `/provider` | List, add, edit, enable, disable, or delete Gateway providers. |
 | `/loom` | Inspect Loom usage and configure or run garbage collection. |
 | `/ignore` | Edit workspace discovery rules in `.qignore`. |
+| `/skills` | Interactively add, pull, remove, and reindex global/session Agent Skills. |
 | `/clear` | Clear the chat projection and remove the current workspace session. |
 | `/help` | Open the command and shortcut guide. |
 
@@ -287,6 +288,53 @@ Tool calls, arguments, results, command status, and intermediate agent notes can
 be inspected in the live detailed trace. Interrupting a turn cancels its request
 context, records unfinished tool calls as cancelled, persists the cancellation,
 and returns to the input prompt.
+
+## Agent Skills
+
+q supports the [`SKILL.md` Agent Skills format](https://agentskills.io/specification)
+without injecting the complete skill catalog into model context. Discovered
+titles, descriptions, and optional tags are projected into the workspace
+Session Store and indexed by Bleve. The main chat, Griller, and Scout can use
+`search_skills`; `get_skill` stores the selected `SKILL.md` or relative resource
+as a Loom artifact without copying its body into the tool response.
+
+Skills are discovered in increasing precedence order:
+
+1. `~/.agents/skills/`
+2. `~/.q/skills/`
+3. `<workspace>/.agents/skills/`
+4. `<workspace>/.q/skills/`
+
+The later definition wins when names collide. The `/skills` manager keeps
+global and current-session (workspace/project) entries in separate panels,
+including shadowed paths, and reports validation failures. A skill name must
+match its directory.
+Project skills are retrievable by the main agent, Griller, and Scout. Planner,
+Coder, and the isolated commit agent do not receive the retrieval tools.
+
+Open `/skills` to manage Git-backed skills without leaving the screen:
+
+```text
+Tab / Left / Right   switch Global and Session panels
+Up / Down            select a skill
+A                    clone a Git repository into the focused scope
+U                    pull the selected checkout with --ff-only
+D                    confirm removal of the selected checkout
+R                    rediscover skills and reconcile the Bleve index
+```
+
+Managed checkouts live under `~/.q/skills` or `<workspace>/.q/skills`. Startup,
+interactive reload, Git operations, and every `search_skills` call reconcile
+added, changed, and deleted checkout metadata with the Session Store index.
+Portable `.agents/skills` entries are shown as externally managed and remain
+read-only in this screen.
+
+Skill resources are read-only, size-bounded, and confined to the resolved
+skill directory. The experimental `allowed-tools` metadata is parsed but never
+grants capabilities beyond tools already supplied by q. Arbitrary execution of
+user-level skill scripts is not part of this initial support; project scripts
+inside the workspace can still be invoked through the ordinary command tool
+when the active agent already has that capability.
 
 ## Discovery and `.qignore`
 

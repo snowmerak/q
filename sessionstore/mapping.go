@@ -5,7 +5,7 @@ import (
 	"github.com/blevesearch/bleve/v2/mapping"
 )
 
-const MappingVersion = 1
+const MappingVersion = 3
 
 func indexMapping() *mapping.IndexMappingImpl {
 	index := bleve.NewIndexMapping()
@@ -13,7 +13,7 @@ func indexMapping() *mapping.IndexMappingImpl {
 
 	for _, field := range []string{
 		"id", "kind", "run_id", "task_id", "parent_id", "role", "model",
-		"effort", "status", "refs", "tags",
+		"effort", "status", "scope", "refs", "tags",
 	} {
 		value := bleve.NewKeywordFieldMapping()
 		value.Name = field
@@ -21,7 +21,7 @@ func indexMapping() *mapping.IndexMappingImpl {
 		value.DocValues = true
 		document.AddFieldMappingsAt(field, value)
 	}
-	for _, field := range []string{"summary", "content"} {
+	for _, field := range []string{"summary", "content", "search_text"} {
 		value := bleve.NewTextFieldMapping()
 		value.Name = field
 		value.Store = false

@@ -15,6 +15,7 @@ func (m model) enterHelp() (tea.Model, tea.Cmd) {
 	m.screen = screenHelp
 	m.input.Blur()
 	m.ignoreEditor.Blur()
+	m.skillsInput.Blur()
 	m.modelFilter.Blur()
 	m.embeddingDimensions.Blur()
 	m.modelContextWindow.Blur()
@@ -45,6 +46,11 @@ func (m model) leaveHelp() (tea.Model, tea.Cmd) {
 		return m, m.loomFocusCommand()
 	case screenIgnore:
 		return m, m.ignoreEditor.Focus()
+	case screenSkills:
+		if m.skillsMode == skillModeAdd {
+			return m, m.skillsInput.Focus()
+		}
+		return m, nil
 	case screenChat:
 		m.refreshTranscript()
 		m.refreshAgentTrace(false)
@@ -117,6 +123,7 @@ func renderHelpContent(dark bool) string {
 		{"/provider", "Configure and select a model provider."},
 		{"/loom", "Inspect Loom storage and garbage-collection settings."},
 		{"/ignore", "Edit workspace discovery rules in .qignore."},
+		{"/skills", "Interactively add, pull, remove, and reindex global/session skills."},
 		{"/help", "Open this help screen."},
 	})
 	writeHelpSection("CHAT", [][2]string{

@@ -153,11 +153,19 @@ func SearchArchive(ctx context.Context, archive Archive, input SearchArchiveInpu
 			sortOrder = sessionstore.SortRelevance
 		}
 	}
+	kinds := input.Kinds
+	if len(kinds) == 0 {
+		kinds = []string{
+			sessionstore.KindMessage, sessionstore.KindTask, sessionstore.KindEvent,
+			sessionstore.KindResult, sessionstore.KindQuestion, sessionstore.KindArtifact,
+			sessionstore.KindSummary,
+		}
+	}
 	options := sessionstore.SearchOptions{
 		Text: input.Query,
 		Filters: sessionstore.Filters{
 			RunIDs: input.RunIDs, TaskIDs: input.TaskIDs, ParentIDs: input.ParentIDs,
-			Kinds: input.Kinds, Roles: input.Roles, Models: input.Models,
+			Kinds: kinds, Roles: input.Roles, Models: input.Models,
 			Efforts: input.Efforts, Statuses: input.Statuses, Tags: input.Tags,
 		},
 		CreatedAfter: after, CreatedBefore: before, Sort: sortOrder, Limit: limit, Offset: input.Offset,

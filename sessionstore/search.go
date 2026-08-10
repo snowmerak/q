@@ -31,6 +31,7 @@ type Filters struct {
 	Models    []string
 	Efforts   []string
 	Statuses  []string
+	Scopes    []string
 	Refs      []string
 	Tags      []string
 }
@@ -339,6 +340,7 @@ func recordMatchesSearch(record Record, options SearchOptions) bool {
 		!matches(record.ParentID, filters.ParentIDs) || !matches(record.Kind, filters.Kinds) ||
 		!matches(record.Role, filters.Roles) || !matches(record.Model, filters.Models) ||
 		!matches(record.Effort, filters.Efforts) || !matches(record.Status, filters.Statuses) ||
+		!matches(record.Scope, filters.Scopes) ||
 		!intersects(record.Refs, filters.Refs) || !intersects(record.Tags, filters.Tags) {
 		return false
 	}
@@ -358,14 +360,17 @@ func buildQuery(options SearchOptions) blevequery.Query {
 		summary.SetField("summary")
 		content := bleve.NewMatchQuery(text)
 		content.SetField("content")
-		conjuncts = append(conjuncts, bleve.NewDisjunctionQuery(summary, content))
+		searchText := bleve.NewMatchQuery(text)
+		searchText.SetField("search_text")
+		conjuncts = append(conjuncts, bleve.NewDisjunctionQuery(summary, content, searchText))
 	}
 	for field, values := range map[string][]string{
 		"run_id": options.Filters.RunIDs, "task_id": options.Filters.TaskIDs,
 		"parent_id": options.Filters.ParentIDs, "kind": options.Filters.Kinds,
 		"role": options.Filters.Roles, "model": options.Filters.Models,
 		"effort": options.Filters.Efforts, "status": options.Filters.Statuses,
-		"refs": options.Filters.Refs, "tags": options.Filters.Tags,
+		"scope": options.Filters.Scopes,
+		"refs":  options.Filters.Refs, "tags": options.Filters.Tags,
 	} {
 		terms := make([]blevequery.Query, 0, len(values))
 		for _, value := range values {

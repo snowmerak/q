@@ -37,8 +37,8 @@ func TestServerListsAndCallsBuiltinTools(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(listed.Tools) != 14 {
-		t.Fatalf("listed %d tools; want 14", len(listed.Tools))
+	if len(listed.Tools) != 16 {
+		t.Fatalf("listed %d tools; want 16", len(listed.Tools))
 	}
 	result, err := clientSession.CallTool(context.Background(), &mcp.CallToolParams{
 		Name: "read_file", Arguments: map[string]any{"path": "hello.txt"},

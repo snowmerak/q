@@ -3,8 +3,10 @@ package tools
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"github.com/snowmerak/q/agentskills"
 	"github.com/snowmerak/q/loom"
 	"github.com/snowmerak/q/sessionstore"
 	"github.com/snowmerak/q/tools/builtin"
@@ -22,7 +24,7 @@ func NewServer(root string) (*mcp.Server, error) {
 	if err != nil {
 		return nil, err
 	}
-	server, _, err := newServer(root, nil, loomRuntime)
+	server, _, _, err := newServer(root, nil, loomRuntime)
 	return server, err
 }
 
@@ -33,20 +35,29 @@ func NewServerWithArchive(root string, archive builtin.Archive) (*mcp.Server, er
 	if err != nil {
 		return nil, err
 	}
-	server, _, err := newServer(root, archive, loomRuntime)
+	server, _, _, err := newServer(root, archive, loomRuntime)
 	return server, err
 }
 
-func newServer(root string, archive builtin.Archive, loomRuntime *builtin.LoomRuntime) (*mcp.Server, *builtin.FS, error) {
+func newServer(root string, archive builtin.Archive, loomRuntime *builtin.LoomRuntime) (*mcp.Server, *builtin.FS, *agentskills.Registry, error) {
+	skills, err := agentskills.Discover(root)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	if store, ok := archive.(agentskills.RecordStore); ok {
+		if err := skills.SyncRecords(context.Background(), store); err != nil {
+			return nil, nil, nil, fmt.Errorf("tools: index Agent Skills: %w", err)
+		}
+	}
 	server := mcp.NewServer(&mcp.Implementation{
 		Name:    ServerName,
 		Version: ServerVersion,
 	}, nil)
-	fs, err := builtin.Register(server, root, builtin.Dependencies{Archive: archive, Loom: loomRuntime})
+	fs, err := builtin.Register(server, root, builtin.Dependencies{Archive: archive, Loom: loomRuntime, Skills: skills})
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
-	return server, fs, nil
+	return server, fs, skills, nil
 }
 
 func newLoomRuntime(root string, evaluator loom.Evaluator, options loom.StoreOptions) (*builtin.LoomRuntime, error) {
@@ -79,7 +90,7 @@ func RunStdioWithLoomOptions(ctx context.Context, root string, options loom.Stor
 	if err != nil {
 		return err
 	}
-	server, fs, err := newServer(root, archive, loomRuntime)
+	server, fs, _, err := newServer(root, archive, loomRuntime)
 	if err != nil {
 		return err
 	}

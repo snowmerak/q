@@ -212,7 +212,7 @@ func coderTools(available []client.Tool) []client.Tool {
 func coderReservedTool(name string) bool {
 	switch name {
 	case CoderCompleteToolName, "task_start", AskToUserToolName, DelegateScoutToolName,
-		SubmitBriefToolName, SubmitPlanToolName, ReviewTaskToolName, "cmd_status":
+		SubmitBriefToolName, SubmitPlanToolName, ReviewTaskToolName, "cmd_status", "search_skills", "get_skill":
 		return true
 	default:
 		return false

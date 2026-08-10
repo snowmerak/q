@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"github.com/snowmerak/q/agentskills"
 	"github.com/snowmerak/q/client"
 	"github.com/snowmerak/q/loom"
 	"github.com/snowmerak/q/tools/builtin"
@@ -26,12 +27,14 @@ type HostEnvironment struct {
 
 // Runtime connects q's chat loop to the builtin MCP server in-process.
 type Runtime struct {
-	client  *mcp.ClientSession
-	server  *mcp.ServerSession
-	fs      *builtin.FS
-	loom    *builtin.LoomRuntime
-	tools   []client.Tool
-	closeMu sync.Once
+	client     *mcp.ClientSession
+	server     *mcp.ServerSession
+	fs         *builtin.FS
+	loom       *builtin.LoomRuntime
+	skills     *agentskills.Registry
+	skillStore agentskills.RecordStore
+	tools      []client.Tool
+	closeMu    sync.Once
 }
 
 func NewRuntime(ctx context.Context, root string) (*Runtime, error) {
@@ -58,7 +61,7 @@ func newRuntime(ctx context.Context, root string, archive builtin.Archive, evalu
 	if err != nil {
 		return nil, err
 	}
-	server, fs, err := newServer(root, archive, loomRuntime)
+	server, fs, skills, err := newServer(root, archive, loomRuntime)
 	if err != nil {
 		return nil, err
 	}
@@ -74,7 +77,8 @@ func newRuntime(ctx context.Context, root string, archive builtin.Archive, evalu
 		fs.Close()
 		return nil, fmt.Errorf("tools: connect builtin MCP client: %w", err)
 	}
-	runtime := &Runtime{client: clientSession, server: serverSession, fs: fs, loom: loomRuntime}
+	store, _ := archive.(agentskills.RecordStore)
+	runtime := &Runtime{client: clientSession, server: serverSession, fs: fs, loom: loomRuntime, skills: skills, skillStore: store}
 	listed, err := clientSession.ListTools(ctx, nil)
 	if err != nil {
 		_ = runtime.Close()
@@ -135,6 +139,88 @@ func (r *Runtime) CollectLoom(ctx context.Context, dryRun bool) (loom.GCResult, 
 func (r *Runtime) Tools() []client.Tool {
 	return append([]client.Tool(nil), r.tools...)
 }
+
+func (r *Runtime) Skills() []agentskills.Skill {
+	if r == nil || r.skills == nil {
+		return nil
+	}
+	return r.skills.Skills()
+}
+
+func (r *Runtime) SkillEntries() []agentskills.Skill {
+	if r == nil || r.skills == nil {
+		return nil
+	}
+	return r.skills.Entries()
+}
+
+func (r *Runtime) SkillIssues() []agentskills.Issue {
+	if r == nil || r.skills == nil {
+		return nil
+	}
+	return r.skills.Issues()
+}
+
+func (r *Runtime) ReloadSkills() error {
+	if r == nil || r.skills == nil {
+		return errors.New("tools: Agent Skills registry is unavailable")
+	}
+	if err := r.skills.Reload(); err != nil {
+		return err
+	}
+	if r.skillStore != nil {
+		return r.skills.SyncRecords(context.Background(), r.skillStore)
+	}
+	return nil
+}
+
+func (r *Runtime) InstallSkill(ctx context.Context, scope, repository string) (agentskills.Skill, error) {
+	if r == nil || r.skills == nil {
+		return agentskills.Skill{}, errors.New("tools: Agent Skills registry is unavailable")
+	}
+	skill, err := r.skills.InstallGit(ctx, scope, repository)
+	if err != nil {
+		return agentskills.Skill{}, err
+	}
+	if r.skillStore != nil {
+		if err := r.skills.SyncRecords(ctx, r.skillStore); err != nil {
+			return agentskills.Skill{}, err
+		}
+	}
+	return skill, nil
+}
+
+func (r *Runtime) UpdateSkill(ctx context.Context, idOrName string) (agentskills.Skill, error) {
+	if r == nil || r.skills == nil {
+		return agentskills.Skill{}, errors.New("tools: Agent Skills registry is unavailable")
+	}
+	skill, err := r.skills.UpdateGit(ctx, idOrName)
+	if err != nil {
+		return agentskills.Skill{}, err
+	}
+	if r.skillStore != nil {
+		if err := r.skills.SyncRecords(ctx, r.skillStore); err != nil {
+			return agentskills.Skill{}, err
+		}
+	}
+	return skill, nil
+}
+
+func (r *Runtime) RemoveSkill(ctx context.Context, idOrName string) (agentskills.Skill, error) {
+	if r == nil || r.skills == nil {
+		return agentskills.Skill{}, errors.New("tools: Agent Skills registry is unavailable")
+	}
+	skill, err := r.skills.RemoveGit(idOrName)
+	if err != nil {
+		return agentskills.Skill{}, err
+	}
+	if r.skillStore != nil {
+		if err := r.skills.SyncRecords(ctx, r.skillStore); err != nil {
+			return agentskills.Skill{}, err
+		}
+	}
+	return skill, nil
+}
 func (r *Runtime) Environment() HostEnvironment {
 	return HostEnvironment{
 		OS: goruntime.GOOS, Architecture: goruntime.GOARCH,
@@ -173,7 +259,7 @@ func CaptureMCPToolResult(
 	if err != nil {
 		return client.ToolResult{}, err
 	}
-	if strings.HasPrefix(call.Function.Name, "loom_") {
+	if strings.HasPrefix(call.Function.Name, "loom_") || (server == ServerName && call.Function.Name == "get_skill") {
 		return client.ToolResult{Content: content, IsError: result.IsError}, nil
 	}
 	artifact, err := CaptureMCPResult(ctx, store, server, call, result)

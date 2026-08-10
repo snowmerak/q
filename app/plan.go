@@ -393,7 +393,7 @@ func streamPlanWorkflow(
 		Ask: ask, WorkingDirectory: workingDirectory, Progress: progress, Trace: trace,
 	}
 	planner := subagent.PlannerRunner{
-		Client: configuredClient, Spec: plannerSpec, WorkingDirectory: workingDirectory,
+		Client: configuredClient, Tools: toolRuntime, Spec: plannerSpec, WorkingDirectory: workingDirectory,
 		Progress: progress, Trace: trace,
 	}
 	workflow := subagent.PlanWorkflow{

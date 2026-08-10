@@ -30,6 +30,8 @@ var scoutReadTools = map[string]struct{}{
 	"loom_inspect":   {},
 	"loom_read":      {},
 	"loom_eval":      {},
+	"search_skills":  {},
+	"get_skill":      {},
 }
 
 // AgentClient is the model surface required by an isolated subagent run.
@@ -171,7 +173,7 @@ func (r ScoutRunner) Run(ctx context.Context, task ScoutTask) (result ScoutResul
 
 func (r ScoutRunner) run(ctx context.Context, task ScoutTask, prompt string, lifecycle *Lifecycle) (ScoutResult, error) {
 	messages := []client.Message{
-		{Role: client.RoleSystem, Content: scoutInstructions()},
+		{Role: client.RoleSystem, Content: withSkillCatalog(scoutInstructions(), r.Tools)},
 		{Role: client.RoleUser, Content: prompt},
 	}
 	tools := scoutTools(r.Tools.Tools())

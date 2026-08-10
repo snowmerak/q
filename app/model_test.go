@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -11,6 +13,7 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/snowmerak/llm-provider/gateway"
+	"github.com/snowmerak/q/agentskills"
 	"github.com/snowmerak/q/client"
 	"github.com/snowmerak/q/commitagent"
 	"github.com/snowmerak/q/config"
@@ -43,10 +46,40 @@ type fakeClient struct {
 }
 
 type fakeAgentTools struct {
-	calls        []client.ToolCall
-	loomOptions  loom.StoreOptions
-	loomStats    loom.Stats
-	loomCollects int
+	calls          []client.ToolCall
+	loomOptions    loom.StoreOptions
+	loomStats      loom.Stats
+	loomCollects   int
+	skills         []agentskills.Skill
+	skillIssues    []agentskills.Issue
+	skillReloads   int
+	installedScope string
+	installedRepo  string
+	updatedSkill   string
+	removedSkill   string
+}
+
+func (f *fakeAgentTools) Skills() []agentskills.Skill {
+	return append([]agentskills.Skill(nil), f.skills...)
+}
+func (f *fakeAgentTools) SkillEntries() []agentskills.Skill {
+	return append([]agentskills.Skill(nil), f.skills...)
+}
+func (f *fakeAgentTools) SkillIssues() []agentskills.Issue {
+	return append([]agentskills.Issue(nil), f.skillIssues...)
+}
+func (f *fakeAgentTools) ReloadSkills() error { f.skillReloads++; return nil }
+func (f *fakeAgentTools) InstallSkill(_ context.Context, scope, repository string) (agentskills.Skill, error) {
+	f.installedScope, f.installedRepo = scope, repository
+	return agentskills.Skill{Name: "installed-skill", Scope: scope}, nil
+}
+func (f *fakeAgentTools) UpdateSkill(_ context.Context, identifier string) (agentskills.Skill, error) {
+	f.updatedSkill = identifier
+	return agentskills.Skill{Name: "updated-skill", Scope: "global"}, nil
+}
+func (f *fakeAgentTools) RemoveSkill(_ context.Context, identifier string) (agentskills.Skill, error) {
+	f.removedSkill = identifier
+	return agentskills.Skill{Name: "removed-skill", Scope: "project"}, nil
 }
 
 func (f *fakeAgentTools) ConfigureLoom(options loom.StoreOptions) error {
@@ -804,7 +837,7 @@ func TestHelpCommandAndShortcutKeepCommandsOutOfChatFooter(t *testing.T) {
 	if !strings.Contains(chat, "ctrl+h help") {
 		t.Fatalf("chat footer does not advertise help:\n%s", chat)
 	}
-	for _, command := range []string{"/clear", "/commit", "/model", "/provider", "/loom", "/ignore", "/help"} {
+	for _, command := range []string{"/clear", "/commit", "/model", "/provider", "/loom", "/ignore", "/skills", "/help"} {
 		if strings.Contains(chat, command) {
 			t.Fatalf("chat footer exposes %q:\n%s", command, chat)
 		}
@@ -818,7 +851,7 @@ func TestHelpCommandAndShortcutKeepCommandsOutOfChatFooter(t *testing.T) {
 	help := ansi.Strip(m.View().Content)
 	for _, expected := range []string{
 		"q · Help", "SLASH COMMANDS", "/plan [request]", "/commit", "/clear", "/model",
-		"/provider", "/loom", "/ignore", "/help",
+		"/provider", "/loom", "/ignore", "/skills", "/help",
 	} {
 		if !strings.Contains(help, expected) {
 			t.Fatalf("help view missing %q:\n%s", expected, help)
@@ -849,6 +882,151 @@ func TestHelpCommandAndShortcutKeepCommandsOutOfChatFooter(t *testing.T) {
 	m = updated.(model)
 	if m.screen != screenChat {
 		t.Fatalf("help escape screen = %v", m.screen)
+	}
+}
+
+func TestSlashSkillsShowsCatalogAndReloads(t *testing.T) {
+	value := config.Default()
+	value.Provider.Model = "test-model"
+	tools := &fakeAgentTools{
+		skills: []agentskills.Skill{{
+			Name: "review-go", Description: "Review Go changes.", Source: agentskills.SourceProjectPortable,
+			Scope: "project", Directory: filepath.Join(t.TempDir(), ".agents", "skills", "review-go"),
+		}},
+		skillIssues: []agentskills.Issue{{Path: "bad-skill", Message: "invalid frontmatter"}},
+	}
+	m := newModel(context.Background(), config.Store{Dir: t.TempDir()}, nil)
+	m.toolRuntime = tools
+	m.enterChat(value, &fakeClient{})
+	m.resize(96, 24)
+	m.input.SetValue("/skills")
+	updated, _ := m.submitChat()
+	m = updated.(model)
+	if m.screen != screenSkills {
+		t.Fatalf("screen = %v", m.screen)
+	}
+	view := ansi.Strip(m.View().Content)
+	for _, expected := range []string{"q · Agent Skills", "review-go", "Review Go changes", "DISCOVERY NOTES", "invalid frontmatter"} {
+		if !strings.Contains(view, expected) {
+			t.Fatalf("skills view missing %q:\n%s", expected, view)
+		}
+	}
+	updated, command := m.Update(tea.KeyPressMsg{Code: 'r'})
+	m = updated.(model)
+	if command == nil || !m.skillsBusy {
+		t.Fatal("reload did not start asynchronously")
+	}
+	updated, _ = m.Update(command())
+	m = updated.(model)
+	if tools.skillReloads != 1 || !strings.Contains(m.status, "1 active") {
+		t.Fatalf("reloads=%d status=%q", tools.skillReloads, m.status)
+	}
+}
+
+func TestSlashSkillsGitManagement(t *testing.T) {
+	value := config.Default()
+	value.Provider.Model = "test-model"
+	tools := &fakeAgentTools{}
+	m := newModel(context.Background(), config.Store{Dir: t.TempDir()}, nil)
+	m.toolRuntime = tools
+	m.enterChat(value, &fakeClient{})
+	m.input.SetValue("/skills add global https://example.test/skill.git")
+	updated, command := m.submitChat()
+	m = updated.(model)
+	if command == nil || !m.skillsBusy {
+		t.Fatalf("command=%v busy=%v", command, m.skillsBusy)
+	}
+	message := command()
+	updated, _ = m.Update(message)
+	m = updated.(model)
+	if tools.installedScope != "global" || tools.installedRepo != "https://example.test/skill.git" || !strings.Contains(m.status, "Installed installed-skill") {
+		t.Fatalf("scope=%q repo=%q status=%q", tools.installedScope, tools.installedRepo, m.status)
+	}
+}
+
+func TestSkillsScreenManagesFocusedScope(t *testing.T) {
+	globalDir := filepath.Join(t.TempDir(), ".q", "skills", "global-skill")
+	projectDir := filepath.Join(t.TempDir(), ".q", "skills", "project-skill")
+	for _, directory := range []string{globalDir, projectDir} {
+		if err := os.MkdirAll(filepath.Join(directory, ".git"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	tools := &fakeAgentTools{skills: []agentskills.Skill{
+		{ID: "skill-global", Name: "global-skill", Description: "Global instructions.", Scope: "global", Source: agentskills.SourceUserQ, Directory: globalDir},
+		{ID: "skill-project", Name: "project-skill", Description: "Workspace instructions.", Scope: "project", Source: agentskills.SourceProjectQ, Directory: projectDir},
+	}}
+	value := config.Default()
+	value.Provider.Model = "test-model"
+	m := newModel(context.Background(), config.Store{Dir: t.TempDir()}, nil)
+	m.toolRuntime = tools
+	m.enterChat(value, &fakeClient{})
+	m.resize(110, 28)
+	updated, _ := m.enterSkills()
+	m = updated.(model)
+
+	view := ansi.Strip(m.View().Content)
+	for _, expected := range []string{"GLOBAL SKILLS · 1", "SESSION SKILLS · 1", "global-skill", "project-skill", "q-managed Git"} {
+		if !strings.Contains(view, expected) {
+			t.Fatalf("skills manager missing %q:\n%s", expected, view)
+		}
+	}
+
+	updated, _ = m.Update(tea.KeyPressMsg{Code: 'a'})
+	m = updated.(model)
+	if m.skillsMode != skillModeAdd {
+		t.Fatalf("add mode = %v", m.skillsMode)
+	}
+	m.skillsInput.SetValue("https://example.test/global.git")
+	updated, command := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m = updated.(model)
+	if command == nil || !m.skillsBusy {
+		t.Fatal("interactive install did not start")
+	}
+	updated, _ = m.Update(command())
+	m = updated.(model)
+	if tools.installedScope != "global" || tools.installedRepo != "https://example.test/global.git" {
+		t.Fatalf("install scope=%q repository=%q", tools.installedScope, tools.installedRepo)
+	}
+
+	updated, command = m.Update(tea.KeyPressMsg{Code: 'u'})
+	m = updated.(model)
+	if command == nil {
+		t.Fatal("interactive pull did not start")
+	}
+	updated, _ = m.Update(command())
+	m = updated.(model)
+	if tools.updatedSkill != "skill-global" {
+		t.Fatalf("updated skill = %q", tools.updatedSkill)
+	}
+
+	updated, _ = m.Update(tea.KeyPressMsg{Code: 'd'})
+	m = updated.(model)
+	if m.skillsMode != skillModeRemove {
+		t.Fatalf("remove mode = %v", m.skillsMode)
+	}
+	updated, command = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m = updated.(model)
+	if command == nil {
+		t.Fatal("interactive removal did not start")
+	}
+	updated, _ = m.Update(command())
+	m = updated.(model)
+	if tools.removedSkill != "skill-global" {
+		t.Fatalf("removed skill = %q", tools.removedSkill)
+	}
+
+	updated, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyRight})
+	m = updated.(model)
+	updated, _ = m.Update(tea.KeyPressMsg{Code: 'a'})
+	m = updated.(model)
+	m.skillsInput.SetValue("https://example.test/project.git")
+	updated, command = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m = updated.(model)
+	updated, _ = m.Update(command())
+	m = updated.(model)
+	if tools.installedScope != "project" {
+		t.Fatalf("session panel installed to %q", tools.installedScope)
 	}
 }
 

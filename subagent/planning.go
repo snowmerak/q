@@ -101,6 +101,7 @@ type GrillerRunner struct {
 
 type PlannerRunner struct {
 	Client           AgentClient
+	Tools            ToolRuntime
 	Spec             Spec
 	WorkingDirectory string
 	MaxRounds        int
@@ -154,7 +155,7 @@ func (r GrillerRunner) Run(ctx context.Context, task GrillTask) (brief GrillBrie
 		return GrillBrief{}, err
 	}
 	messages := []client.Message{
-		{Role: client.RoleSystem, Content: grillerInstructions()},
+		{Role: client.RoleSystem, Content: withSkillCatalog(grillerInstructions(), r.Tools)},
 		{Role: client.RoleUser, Content: "Grill this planning request.\n\n" + string(body)},
 	}
 	available := grillerTools(r.Tools.Tools())
@@ -266,7 +267,7 @@ func (r GrillerRunner) Run(ctx context.Context, task GrillTask) (brief GrillBrie
 					return brief, nil
 				}
 				result = scoutToolError(parseErr)
-			case "loom_inspect", "loom_read", "loom_eval":
+			case "loom_inspect", "loom_read", "loom_eval", "search_skills", "get_skill":
 				result, err = r.Tools.Call(ctx, call)
 				if err != nil {
 					result = scoutToolError(err)
@@ -317,13 +318,14 @@ func (r PlannerRunner) Run(ctx context.Context, brief GrillBrief) (proposal Plan
 		rounds = defaultPlanningRounds
 	}
 	reminders := 0
+	available := []client.Tool{submitPlanTool()}
 	for round := 0; round < rounds; round++ {
 		reportProgress(r.Progress, ProgressEvent{
 			Agent: "planner", Action: ProgressThinking, Detail: fmt.Sprintf("model round %d", round+1),
 		})
 		parallel := false
 		request := client.ChatRequest{
-			Messages: messages, Tools: []client.Tool{submitPlanTool()}, ToolChoice: client.ToolChoiceAuto,
+			Messages: messages, Tools: available, ToolChoice: client.ToolChoiceAuto,
 			ParallelToolCalls: &parallel, WorkingDirectory: r.WorkingDirectory,
 		}
 		if reminders > 0 {
@@ -479,7 +481,7 @@ func grillerTools(available []client.Tool) []client.Tool {
 	result := make([]client.Tool, 0, 6)
 	for _, tool := range available {
 		switch tool.Function.Name {
-		case "loom_inspect", "loom_read", "loom_eval":
+		case "loom_inspect", "loom_read", "loom_eval", "search_skills", "get_skill":
 			result = append(result, tool)
 		}
 	}

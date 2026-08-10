@@ -20,24 +20,27 @@ var ErrNotFound = errors.New("sessionstore: record not found")
 // Record is the common envelope stored for messages, agent lifecycle events,
 // task projections, results, questions, artifacts, and summaries.
 type Record struct {
-	ID        string          `json:"id"`
-	Kind      string          `json:"kind"`
-	Version   int             `json:"version"`
-	RunID     string          `json:"run_id,omitempty"`
-	TaskID    string          `json:"task_id,omitempty"`
-	ParentID  string          `json:"parent_id,omitempty"`
-	Role      string          `json:"role,omitempty"`
-	Model     string          `json:"model,omitempty"`
-	Effort    string          `json:"effort,omitempty"`
-	Status    string          `json:"status,omitempty"`
-	CreatedAt time.Time       `json:"created_at"`
-	UpdatedAt time.Time       `json:"updated_at"`
-	Summary   string          `json:"summary,omitempty"`
-	Content   string          `json:"content,omitempty"`
-	Refs      []string        `json:"refs,omitempty"`
-	Tags      []string        `json:"tags,omitempty"`
-	Embedding *Embedding      `json:"embedding,omitempty"`
-	Payload   json.RawMessage `json:"payload,omitempty"`
+	ID         string          `json:"id"`
+	Kind       string          `json:"kind"`
+	Version    int             `json:"version"`
+	RunID      string          `json:"run_id,omitempty"`
+	TaskID     string          `json:"task_id,omitempty"`
+	ParentID   string          `json:"parent_id,omitempty"`
+	Role       string          `json:"role,omitempty"`
+	Model      string          `json:"model,omitempty"`
+	Effort     string          `json:"effort,omitempty"`
+	Status     string          `json:"status,omitempty"`
+	Scope      string          `json:"scope,omitempty"`
+	Location   string          `json:"location,omitempty"`
+	CreatedAt  time.Time       `json:"created_at"`
+	UpdatedAt  time.Time       `json:"updated_at"`
+	Summary    string          `json:"summary,omitempty"`
+	Content    string          `json:"content,omitempty"`
+	SearchText string          `json:"search_text,omitempty"`
+	Refs       []string        `json:"refs,omitempty"`
+	Tags       []string        `json:"tags,omitempty"`
+	Embedding  *Embedding      `json:"embedding,omitempty"`
+	Payload    json.RawMessage `json:"payload,omitempty"`
 }
 
 // Embedding is the source-of-truth vector attached to a record. The HNSW
@@ -58,6 +61,7 @@ const (
 	KindQuestion = "question"
 	KindArtifact = "artifact"
 	KindSummary  = "summary"
+	KindSkill    = "skill"
 )
 
 const (

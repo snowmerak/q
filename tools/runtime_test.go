@@ -21,13 +21,23 @@ import (
 
 func TestRuntimeListsAndCallsBuiltinTools(t *testing.T) {
 	root := t.TempDir()
+	skillDirectory := filepath.Join(root, ".agents", "skills", "test-skill")
+	if err := os.MkdirAll(skillDirectory, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(skillDirectory, "SKILL.md"), []byte("---\nname: test-skill\ndescription: Use for runtime tests.\n---\n\nFollow these instructions.\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	runtime, err := NewRuntime(context.Background(), root)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer runtime.Close()
-	if len(runtime.Tools()) != 14 {
+	if len(runtime.Tools()) != 16 {
 		t.Fatalf("runtime tools = %d", len(runtime.Tools()))
+	}
+	if !runtimeHasTool(runtime, "search_skills") || !runtimeHasTool(runtime, "get_skill") {
+		t.Fatalf("skill retrieval tools are unavailable: %#v", runtime.Tools())
 	}
 	environment := runtime.Environment()
 	if environment.OS != goruntime.GOOS || environment.Architecture != goruntime.GOARCH || environment.Shell == "" {
@@ -61,6 +71,13 @@ func TestRuntimeListsAndCallsBuiltinTools(t *testing.T) {
 
 func TestRuntimeExposesAndCallsArchiveTools(t *testing.T) {
 	root := t.TempDir()
+	skillDirectory := filepath.Join(root, ".agents", "skills", "archive-test-skill")
+	if err := os.MkdirAll(skillDirectory, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(skillDirectory, "SKILL.md"), []byte("---\nname: archive-test-skill\ndescription: Diagnose unique archive skill fixtures.\ntags: [testing]\n---\n\nFollow the archived skill.\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	archive, err := sessionstore.Open(root)
 	if err != nil {
 		t.Fatal(err)
@@ -78,7 +95,7 @@ func TestRuntimeExposesAndCallsArchiveTools(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer runtime.Close()
-	if len(runtime.Tools()) != 16 || !runtimeHasTool(runtime, "search_archive") || !runtimeHasTool(runtime, "get_archive_record") {
+	if len(runtime.Tools()) != 18 || !runtimeHasTool(runtime, "search_archive") || !runtimeHasTool(runtime, "get_archive_record") {
 		t.Fatalf("runtime tools = %#v", runtime.Tools())
 	}
 
@@ -110,6 +127,35 @@ func TestRuntimeExposesAndCallsArchiveTools(t *testing.T) {
 	}
 	if record.ID != "decision-1" || record.Content != "Use the workspace archive for durable agent history." {
 		t.Fatalf("record = %#v", record)
+	}
+
+	found, err := runtime.Call(context.Background(), client.ToolCall{
+		ID: "call-skill-search", Type: client.ToolTypeFunction,
+		Function: client.FunctionCall{Name: "search_skills", Arguments: `{"query":"unique archive skill fixtures"}`},
+	})
+	if err != nil || found.IsError {
+		t.Fatalf("search skills = %#v, err = %v", found, err)
+	}
+	var skills builtin.SearchSkillsOutput
+	if err := decodeReceiptResult(found.Content, &skills); err != nil {
+		t.Fatal(err)
+	}
+	if len(skills.Hits) == 0 || skills.Hits[0].Title != "archive-test-skill" {
+		t.Fatalf("skill hits = %#v", skills.Hits)
+	}
+	loaded, err := runtime.Call(context.Background(), client.ToolCall{
+		ID: "call-skill-get", Type: client.ToolTypeFunction,
+		Function: client.FunctionCall{Name: "get_skill", Arguments: `{"id":"` + skills.Hits[0].ID + `"}`},
+	})
+	if err != nil || loaded.IsError {
+		t.Fatalf("get skill = %#v, err = %v", loaded, err)
+	}
+	var skill builtin.GetSkillOutput
+	if err := json.Unmarshal([]byte(loaded.Content), &skill); err != nil {
+		t.Fatal(err)
+	}
+	if !skill.Stored || skill.Artifact.Ref == "" || skill.Skill.Name != "archive-test-skill" {
+		t.Fatalf("loaded skill = %#v", skill)
 	}
 }
 

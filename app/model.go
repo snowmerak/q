@@ -28,6 +28,7 @@ import (
 	"github.com/snowmerak/q/memory"
 	"github.com/snowmerak/q/sessionstore"
 	"github.com/snowmerak/q/subagent"
+	qtools "github.com/snowmerak/q/tools"
 	"github.com/snowmerak/q/workspace"
 	"golang.org/x/text/unicode/norm"
 )
@@ -40,6 +41,7 @@ const (
 	screenModels
 	screenLoom
 	screenIgnore
+	screenSkills
 	screenHelp
 	screenChat
 )
@@ -171,6 +173,12 @@ type model struct {
 	ignoreOriginal      string
 	ignoreDiscardArmed  bool
 	helpReturn          screen
+	skillsBusy          bool
+	skillsStatusError   bool
+	skillsScope         int
+	skillsCursor        [2]int
+	skillsMode          skillScreenMode
+	skillsInput         textinput.Model
 
 	config             config.Config
 	client             chatClient
@@ -391,6 +399,11 @@ func newManagedModel(ctx context.Context, store config.Store, factory clientFact
 	}
 	m.input = newChatInput()
 	m.ignoreEditor = newIgnoreEditor()
+	m.skillsInput = textinput.New()
+	m.skillsInput.Prompt = "git · "
+	m.skillsInput.Placeholder = "https://github.com/owner/skill.git"
+	m.skillsInput.SetWidth(72)
+	m.skillsInput.CharLimit = 2048
 	if runtime != nil && len(m.gatewayConfig.Providers) == 0 {
 		m.enterProviderEditor(-1)
 	}
@@ -840,6 +853,16 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			m.status = fmt.Sprintf("%s · %d artifacts · %s reclaimed", prefix, message.result.ArtifactsRemoved, formatBytes(message.result.BytesReclaimed))
 		}
 		return m, m.loomFocusCommand()
+	case skillActionMsg:
+		m.skillsBusy = false
+		m.skillsStatusError = message.err != nil
+		if message.err != nil {
+			m.status = message.err.Error()
+		} else {
+			m.status = message.detail
+		}
+		m.refreshSkills(false)
+		return m, nil
 	}
 
 	if key, ok := message.(tea.KeyPressMsg); ok {
@@ -870,6 +893,9 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		if m.screen == screenIgnore {
 			return m.updateIgnore(key)
 		}
+		if m.screen == screenSkills {
+			return m.updateSkills(key)
+		}
 		if m.screen == screenHelp {
 			return m.updateHelp(key)
 		}
@@ -890,6 +916,14 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		var command tea.Cmd
 		m.helpViewport, command = m.helpViewport.Update(message)
 		return m, command
+	}
+	if m.screen == screenSkills {
+		if m.skillsMode == skillModeAdd {
+			var command tea.Cmd
+			m.skillsInput, command = m.skillsInput.Update(message)
+			return m, command
+		}
+		return m, nil
 	}
 
 	if m.screen == screenChat {
@@ -1732,6 +1766,9 @@ func (m model) submitChat() (tea.Model, tea.Cmd) {
 	if m.waiting || content == "" || m.client == nil {
 		return m, nil
 	}
+	if updated, command, handled := m.startSkillCommand(content); handled {
+		return updated, command
+	}
 	switch content {
 	case "/plan":
 		m.input.Reset()
@@ -1763,6 +1800,9 @@ func (m model) submitChat() (tea.Model, tea.Cmd) {
 	case "/ignore":
 		m.input.Reset()
 		return m.enterIgnore()
+	case "/skills":
+		m.input.Reset()
+		return m.enterSkills()
 	case "/help":
 		m.input.Reset()
 		return m.enterHelp()
@@ -2280,6 +2320,23 @@ func (m *model) appendRuntimeMessages() {
 		})
 	}
 	if m.toolRuntime != nil {
+		toolsAvailable := true
+		if runtime, ok := m.toolRuntime.(*qtools.Runtime); ok && runtime == nil {
+			toolsAvailable = false
+		}
+		var runtimeTools []client.Tool
+		if toolsAvailable {
+			runtimeTools = m.toolRuntime.Tools()
+		}
+		for _, tool := range runtimeTools {
+			if tool.Function.Name == "search_skills" {
+				m.messages = append(m.messages, client.Message{
+					Role: client.RoleDeveloper, Name: "q_agent_skills",
+					Content: "Agent Skills are retrieved from the Session Store rather than preloaded. When reusable procedural guidance may help, call search_skills with concise keywords, select a result, then call get_skill and inspect its Loom artifact. Search explicit $skill-name mentions by name.",
+				})
+				break
+			}
+		}
 		m.messages = append(m.messages, client.Message{
 			Role: client.RoleDeveloper, Name: "q_orchestration",
 			Content: "Use task_start before work that requires tools or multiple execution steps. Once task_start succeeds, that task must finish with exactly one successful task_complete call; do not finish it with a plain assistant response. " +
@@ -2594,6 +2651,7 @@ func (m *model) resize(width, height int) {
 	m.modelFilter.SetWidth(min(contentWidth-2, 72))
 	m.embeddingDimensions.SetWidth(min(contentWidth-2, 24))
 	m.modelContextWindow.SetWidth(min(contentWidth-2, 28))
+	m.skillsInput.SetWidth(min(contentWidth-10, 96))
 	ignorePanel := ignoreEditorPanelStyle(max(36, m.width-4), m.dark)
 	m.ignoreEditor.SetWidth(max(20, ignorePanel.GetWidth()-ignorePanel.GetHorizontalFrameSize()))
 	m.ignoreEditor.SetHeight(max(4, m.height-16))
@@ -2601,6 +2659,7 @@ func (m *model) resize(width, height int) {
 	m.helpViewport.SetWidth(max(20, helpPanel.GetWidth()-helpPanel.GetHorizontalFrameSize()))
 	m.helpViewport.SetHeight(max(1, m.height-11))
 	m.refreshHelp(false)
+	m.refreshSkills(false)
 	m.input.SetWidth(contentWidth)
 	m.viewport.SetWidth(contentWidth)
 	tracePanel := agentTracePanelStyle(m.chatFrameWidth(), m.dark)
@@ -3396,6 +3455,8 @@ func (m model) View() tea.View {
 		content = m.viewLoom()
 	} else if m.screen == screenIgnore {
 		content = m.viewIgnore()
+	} else if m.screen == screenSkills {
+		content = m.viewSkills()
 	} else if m.screen == screenHelp {
 		content = m.viewHelp()
 	} else if m.screen == screenChat {

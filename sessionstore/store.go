@@ -247,6 +247,39 @@ func (s *Store) Get(id string) (Record, error) {
 	return s.loadRecordLocked(id)
 }
 
+// Delete removes a source record and its derived index entries.
+func (s *Store) Delete(id string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := s.requireOpenLocked(); err != nil {
+		return err
+	}
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return errors.New("sessionstore: record ID is required")
+	}
+	record, err := s.loadRecordLocked(id)
+	if err != nil {
+		return err
+	}
+	if err := os.Remove(s.recordPath(id)); err != nil {
+		return fmt.Errorf("sessionstore: remove record %q: %w", id, err)
+	}
+	if err := s.index.Delete(id); err != nil {
+		return &IndexingError{RecordID: id, Err: err}
+	}
+	if s.vectors != nil && record.Embedding != nil {
+		if err := s.rebuildVectorsLocked(); err != nil {
+			s.vectors = nil
+			return &IndexingError{RecordID: id, Err: err}
+		}
+	}
+	if err := s.writeStateLocked(); err != nil {
+		return &IndexingError{RecordID: id, Err: err}
+	}
+	return nil
+}
+
 func (s *Store) loadRecordLocked(id string) (Record, error) {
 	id = strings.TrimSpace(id)
 	if id == "" {
