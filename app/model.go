@@ -27,6 +27,7 @@ import (
 	"github.com/snowmerak/q/loom"
 	"github.com/snowmerak/q/memory"
 	"github.com/snowmerak/q/sessionstore"
+	"github.com/snowmerak/q/subagent"
 	"github.com/snowmerak/q/workspace"
 	"golang.org/x/text/unicode/norm"
 )
@@ -194,6 +195,8 @@ type model struct {
 	questionTurnID     uint64
 	questionChoice     int
 	planArmed          bool
+	planResumePending  bool
+	planCheckpoint     subagent.ExecutionCheckpoint
 	agentActivities    []agentActivity
 	agentStates        map[string]string
 	agentLogVisible    int
@@ -647,9 +650,11 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			m.archiveFailure("chat", message.err)
 			if archiveErr := m.flushArchive(); archiveErr != nil {
 				m.status = message.err.Error() + " · archive: " + archiveErr.Error()
+				m.offerPlanExecutionResume()
 				return m, m.input.Focus()
 			}
 			m.status = message.err.Error()
+			m.offerPlanExecutionResume()
 			return m, m.input.Focus()
 		}
 		if message.response == nil || len(message.response.Choices) == 0 {
@@ -660,6 +665,7 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			if archiveErr := m.flushArchive(); archiveErr != nil {
 				m.status += " · archive: " + archiveErr.Error()
 			}
+			m.offerPlanExecutionResume()
 			return m, m.input.Focus()
 		}
 		assistant := message.response.Choices[0].Message
@@ -1620,7 +1626,7 @@ func (m model) updateChatKey(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case "esc":
 		return m, tea.Quit
 	case "ctrl+l":
-		if !m.waiting {
+		if !m.waiting && !m.planResumePending {
 			m.resetConversation()
 		}
 		return m, nil
@@ -1750,6 +1756,9 @@ func (m model) submitChat() (tea.Model, tea.Cmd) {
 }
 
 func (m model) submitQuestionAnswer(content string) (tea.Model, tea.Cmd) {
+	if m.planResumePending {
+		return m.submitPlanResumeAnswer(content)
+	}
 	if m.questionAnswer == nil || m.questionEvents == nil {
 		return m, nil
 	}
@@ -1855,6 +1864,7 @@ func (m model) interruptTurn() (tea.Model, tea.Cmd) {
 	if err := m.flushArchive(); err != nil {
 		m.status += " · archive: " + err.Error()
 	}
+	m.offerPlanExecutionResume()
 	return m, m.input.Focus()
 }
 
@@ -2179,6 +2189,8 @@ func (m *model) enterChat(value config.Config, configuredClient chatClient) {
 	m.waiting = false
 	m.compacting = false
 	m.asking = false
+	m.planResumePending = false
+	m.planCheckpoint = subagent.ExecutionCheckpoint{}
 	m.pendingQuestion = askToUserInput{}
 	m.questionAnswer = nil
 	m.questionEvents = nil
@@ -2190,6 +2202,7 @@ func (m *model) enterChat(value config.Config, configuredClient chatClient) {
 	m.input = newChatInput()
 	m.restoreWorkspaceSession()
 	m.ensureRunID()
+	m.offerPlanExecutionResume()
 	m.resize(m.width, m.height)
 	m.input.Focus()
 	m.refreshTranscript()
@@ -2442,6 +2455,8 @@ func (m *model) resetConversation() {
 	m.submitPending = false
 	m.asking = false
 	m.planArmed = false
+	m.planResumePending = false
+	m.planCheckpoint = subagent.ExecutionCheckpoint{}
 	m.pendingQuestion = askToUserInput{}
 	m.questionAnswer = nil
 	m.questionEvents = nil
@@ -2539,7 +2554,7 @@ func (m *model) resize(width, height int) {
 	m.agentTraceViewport.SetWidth(max(10, tracePanel.GetWidth()-tracePanel.GetHorizontalFrameSize()))
 	chromeHeight := 10
 	if m.workspaceStore != nil {
-		chromeHeight++
+		chromeHeight += 3
 	}
 	dynamicHeight := max(2, m.height-chromeHeight)
 	m.agentLogVisible = 0
@@ -2612,7 +2627,7 @@ func (m *model) refreshQuestion() {
 }
 
 func (m *model) configureQuestionViewport(width int) {
-	panelStyle := questionPanelStyle(width, m.dark, isPlanApprovalQuestion(m.pendingQuestion))
+	panelStyle := questionPanelStyle(width, m.dark, isPlanControlQuestion(m.pendingQuestion))
 	// Keep the viewport responsible only for clipping and scrolling. Applying the
 	// panel frame to it makes bubbles calculate soft wraps with the outer width,
 	// then Lip Gloss renders those lines into the narrower framed width. The
@@ -2624,7 +2639,7 @@ func (m *model) configureQuestionViewport(width int) {
 }
 
 func (m model) renderedQuestionViewport() string {
-	style := questionPanelStyle(m.chatFrameWidth(), m.dark, isPlanApprovalQuestion(m.pendingQuestion))
+	style := questionPanelStyle(m.chatFrameWidth(), m.dark, isPlanControlQuestion(m.pendingQuestion))
 	title := lipgloss.NewStyle().Bold(true).Foreground(questionPanelAccent(m.pendingQuestion, m.dark))
 	return style.Render(title.Render(questionPanelTitle(m.pendingQuestion)) + "\n" + m.questionViewport.View())
 }
@@ -2980,9 +2995,20 @@ func isPlanApprovalQuestion(input askToUserInput) bool {
 	return approve && revise && cancel
 }
 
+func isPlanRecoveryQuestion(input askToUserInput) bool {
+	return strings.EqualFold(strings.TrimSpace(input.Question), "Resume interrupted plan?")
+}
+
+func isPlanControlQuestion(input askToUserInput) bool {
+	return isPlanApprovalQuestion(input) || isPlanRecoveryQuestion(input)
+}
+
 func questionPanelTitle(input askToUserInput) string {
 	if isPlanApprovalQuestion(input) {
 		return "PLAN APPROVAL"
+	}
+	if isPlanRecoveryQuestion(input) {
+		return "EXECUTION RECOVERY"
 	}
 	return "QUESTION"
 }
@@ -2991,14 +3017,17 @@ func questionPanelAccent(input askToUserInput, dark bool) color.Color {
 	if isPlanApprovalQuestion(input) {
 		return themedColor(dark, "214", "130")
 	}
+	if isPlanRecoveryQuestion(input) {
+		return themedColor(dark, "141", "97")
+	}
 	return themedColor(dark, "81", "25")
 }
 
-func questionPanelStyle(width int, dark, planApproval bool) lipgloss.Style {
+func questionPanelStyle(width int, dark, planControl bool) lipgloss.Style {
 	background := themedColor(dark, "235", "255")
 	border := themedColor(dark, "81", "25")
 	marker := "▌"
-	if planApproval {
+	if planControl {
 		background = themedColor(dark, "236", "230")
 		border = themedColor(dark, "214", "130")
 		marker = "┃"
@@ -3013,7 +3042,7 @@ func questionPanelStyle(width int, dark, planApproval bool) lipgloss.Style {
 }
 
 func renderQuestionPanel(input askToUserInput, selected, width int, dark bool) string {
-	style := questionPanelStyle(width, dark, isPlanApprovalQuestion(input))
+	style := questionPanelStyle(width, dark, isPlanControlQuestion(input))
 	title := lipgloss.NewStyle().Bold(true).Foreground(questionPanelAccent(input, dark))
 	return style.Render(title.Render(questionPanelTitle(input)) + "\n" + renderPendingQuestion(input, selected))
 }

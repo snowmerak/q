@@ -1,4 +1,4 @@
-// Package workspace persists chat state for the directory where q is run.
+// Package workspace persists active q state for the directory where q is run.
 package workspace
 
 import (

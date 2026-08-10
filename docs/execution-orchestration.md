@@ -141,7 +141,16 @@ Planner가 반환한 `facts`는 decision 적용 전에 Plan에 중복 제거하�
 - Coder/Planner의 실제 assistant note, tool arguments/result와 review payload를
   스크롤해서 보는 detailed trace (`Ctrl+G`로 compact activity 전환)
 - Coder attempt와 Planner review의 전체 message/tool lifecycle archive
+- 승인된 실행의 `.q/plan-execution.json` atomic checkpoint
+- 시작 시 중단 실행 감지와 Resume / Inspect / Discard recovery UI
+- target, Coder pending/running, Planner review, completed 단계별 재시작 복구
+- Coder running에서 끊겼을 때 기존 부작용을 먼저 검사하는 새 recovery attempt
+- checkpoint가 참조하는 Loom artifact를 live GC root로 유지
 
-아직 연결하지 않은 부분은 다음과 같다.
+checkpoint는 Coder 호출 전에 `coder_running`으로 저장된다. 이 상태에서 프로세스가
+끝났다면 기존 호출을 그대로 replay하지 않는다. 재개 시 attempt 번호를 올리고 현재
+workspace 변경을 먼저 검사하라는 recovery feedback을 주입한다. 반면 Coder 결과가
+이미 저장된 `review_pending` 상태는 Coder를 다시 호출하지 않고 Planner review부터
+이어간다. 성공적으로 모든 task가 끝난 뒤에만 checkpoint 파일을 제거한다.
 
-- 중단과 재시작 persistence
+아직 연결하지 않은 부분은 승인 이전 Griller/Planner planning state의 재시작 복구다.

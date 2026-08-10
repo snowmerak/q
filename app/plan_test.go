@@ -13,6 +13,7 @@ import (
 	"github.com/snowmerak/q/client"
 	"github.com/snowmerak/q/config"
 	"github.com/snowmerak/q/subagent"
+	"github.com/snowmerak/q/workspace"
 )
 
 type planningClient struct {
@@ -40,6 +41,7 @@ func (p *planningClient) ListModels(context.Context) ([]client.Model, error) {
 func (p *planningClient) Close() error { return nil }
 
 func TestPlanCommandExecutesApprovedPlanWithCoderAndPlannerReview(t *testing.T) {
+	workspaceStore := workspace.Store{Root: t.TempDir()}
 	configuredClient := &planningClient{responses: []client.Message{
 		{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{planToolCall(subagent.DelegateScoutToolName, `{
 			"objective":"Locate the plan command boundary"
@@ -87,6 +89,7 @@ func TestPlanCommandExecutesApprovedPlanWithCoderAndPlannerReview(t *testing.T) 
 	value := config.Default()
 	value.Provider.Model = "plan-model"
 	m := newModel(context.Background(), config.Store{Dir: t.TempDir()}, nil)
+	m.workspaceStore = &workspaceStore
 	m.toolRuntime = &fakeAgentTools{}
 	m.enterChat(value, configuredClient)
 	m.resize(100, 36)
@@ -125,6 +128,12 @@ func TestPlanCommandExecutesApprovedPlanWithCoderAndPlannerReview(t *testing.T) 
 	m.input.Reset()
 	updated, command = m.submitChat()
 	m = updated.(model)
+	updated, command = m.Update(nextAgentMessage(t, command))
+	m = updated.(model)
+	persisted, err := workspaceStore.LoadExecution()
+	if err != nil || persisted.ExecutionID == "" || persisted.RunID != m.runID {
+		t.Fatalf("approved execution checkpoint = %#v, error = %v", persisted, err)
+	}
 	for attempts := 0; m.waiting && attempts < 128; attempts++ {
 		updated, command = m.Update(nextAgentMessage(t, command))
 		m = updated.(model)
@@ -212,6 +221,195 @@ func TestPlanCommandExecutesApprovedPlanWithCoderAndPlannerReview(t *testing.T) 
 	m = updated.(model)
 	if !m.agentTraceExpanded || !strings.Contains(ansi.Strip(m.viewChat()), "SUBAGENT TRACE") {
 		t.Fatalf("completed trace could not be reopened")
+	}
+	if _, err := workspaceStore.LoadExecution(); !errors.Is(err, workspace.ErrExecutionNotFound) {
+		t.Fatalf("successful plan left an execution checkpoint: %v", err)
+	}
+}
+
+func TestInterruptedPlanRestoresInspectsAndResumesFromPlannerReview(t *testing.T) {
+	workspaceStore := workspace.Store{Root: t.TempDir()}
+	checkpoint := resumablePlanCheckpoint(subagent.ExecutionPhaseReviewPending)
+	checkpoint.Targets = []string{"app/plan.go"}
+	checkpoint.Attempts = 1
+	checkpoint.TaskAttempts = 1
+	checkpoint.PendingResult = &subagent.CoderResult{
+		Outcome: "succeeded", Summary: "Coder already changed the workspace",
+		Artifacts: []string{"app/plan.go"}, Verification: []string{"go test ./app"},
+	}
+	if err := workspaceStore.SaveExecution(checkpoint); err != nil {
+		t.Fatal(err)
+	}
+	configuredClient := &planningClient{responses: []client.Message{{
+		Role: client.RoleAssistant,
+		ToolCalls: []client.ToolCall{planToolCall(subagent.ReviewTaskToolName, `{
+			"decision":"next",
+			"feedback":"",
+			"facts":["The interrupted Coder result was reviewed after restart"]
+		}`)},
+	}}}
+	value := config.Default()
+	value.Provider.Model = "plan-model"
+	m := newModel(context.Background(), config.Store{Dir: t.TempDir()}, nil)
+	m.workspaceStore = &workspaceStore
+	m.toolRuntime = &fakeAgentTools{}
+	m.enterChat(value, configuredClient)
+	m.resize(100, 30)
+
+	recoveryView := ansi.Strip(m.viewChat())
+	if !m.planResumePending || !m.asking || m.pendingQuestion.Question != "Resume interrupted plan?" ||
+		!strings.Contains(recoveryView, "EXECUTION RECOVERY") {
+		t.Fatalf("recovery prompt = pending %v asking %v question %#v\n%s", m.planResumePending, m.asking, m.pendingQuestion, recoveryView)
+	}
+	if height := lipgloss.Height(recoveryView); height > m.height {
+		t.Fatalf("recovery view height %d exceeds terminal %d", height, m.height)
+	}
+	m.questionChoice = 1
+	updated, _ := m.submitChat()
+	m = updated.(model)
+	if !m.asking || !strings.Contains(m.pendingQuestion.Context, "Saved plan:") ||
+		!strings.Contains(m.pendingQuestion.Context, "app/plan.go") {
+		t.Fatalf("inspect context = %q", m.pendingQuestion.Context)
+	}
+	if inspectHeight := lipgloss.Height(ansi.Strip(m.viewChat())); inspectHeight > m.height {
+		t.Fatalf("inspected recovery view height %d exceeds terminal %d", inspectHeight, m.height)
+	}
+
+	m.input.Reset()
+	updated, command := m.submitChat()
+	m = updated.(model)
+	if !m.waiting || m.planResumePending || command == nil {
+		t.Fatalf("resume state = waiting %v pending %v command %v", m.waiting, m.planResumePending, command != nil)
+	}
+	for attempts := 0; m.waiting && attempts < 64; attempts++ {
+		updated, command = m.Update(nextAgentMessage(t, command))
+		m = updated.(model)
+	}
+	if m.waiting || len(m.messages) == 0 || !strings.Contains(m.messages[len(m.messages)-1].Content, "Plan executed successfully") {
+		t.Fatalf("resumed plan did not finish: waiting %v messages %#v", m.waiting, m.messages)
+	}
+	if len(configuredClient.requests) != 1 || !hasPlanTool(configuredClient.requests[0].Tools, subagent.ReviewTaskToolName) {
+		t.Fatalf("resume repeated Coder or missed review: %#v", configuredClient.requests)
+	}
+	if len(m.toolRuntime.(*fakeAgentTools).calls) != 0 {
+		t.Fatalf("resume repeated workspace tools: %#v", m.toolRuntime.(*fakeAgentTools).calls)
+	}
+	if _, err := workspaceStore.LoadExecution(); !errors.Is(err, workspace.ErrExecutionNotFound) {
+		t.Fatalf("completed checkpoint still exists: %v", err)
+	}
+}
+
+func TestInterruptedPlanCanBeDiscardedWithoutExecution(t *testing.T) {
+	workspaceStore := workspace.Store{Root: t.TempDir()}
+	checkpoint := resumablePlanCheckpoint(subagent.ExecutionPhaseTarget)
+	if err := workspaceStore.SaveExecution(checkpoint); err != nil {
+		t.Fatal(err)
+	}
+	configuredClient := &planningClient{}
+	value := config.Default()
+	value.Provider.Model = "plan-model"
+	m := newModel(context.Background(), config.Store{Dir: t.TempDir()}, nil)
+	m.workspaceStore = &workspaceStore
+	m.toolRuntime = &fakeAgentTools{}
+	m.enterChat(value, configuredClient)
+	m.questionChoice = 2
+
+	updated, _ := m.submitChat()
+	m = updated.(model)
+	if m.asking || m.planResumePending || !strings.Contains(m.status, "workspace changes were kept") {
+		t.Fatalf("discard state = asking %v pending %v status %q", m.asking, m.planResumePending, m.status)
+	}
+	if len(configuredClient.requests) != 0 {
+		t.Fatalf("discard executed model requests: %#v", configuredClient.requests)
+	}
+	if _, err := workspaceStore.LoadExecution(); !errors.Is(err, workspace.ErrExecutionNotFound) {
+		t.Fatalf("discarded checkpoint still exists: %v", err)
+	}
+}
+
+func TestInterruptedCoderResumesAsNewRecoveryAttempt(t *testing.T) {
+	workspaceStore := workspace.Store{Root: t.TempDir()}
+	checkpoint := resumablePlanCheckpoint(subagent.ExecutionPhaseCoderRunning)
+	checkpoint.Targets = []string{"app/plan.go"}
+	if err := workspaceStore.SaveExecution(checkpoint); err != nil {
+		t.Fatal(err)
+	}
+	configuredClient := &planningClient{responses: []client.Message{
+		{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{planToolCall(subagent.CoderCompleteToolName, `{
+			"outcome":"succeeded",
+			"summary":"Inspected and completed the interrupted workspace change",
+			"verification":["go test ./app"]
+		}`)}},
+		{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{planToolCall(subagent.ReviewTaskToolName, `{
+			"decision":"next",
+			"feedback":""
+		}`)}},
+	}}
+	value := config.Default()
+	value.Provider.Model = "plan-model"
+	m := newModel(context.Background(), config.Store{Dir: t.TempDir()}, nil)
+	m.workspaceStore = &workspaceStore
+	m.toolRuntime = &fakeAgentTools{}
+	m.enterChat(value, configuredClient)
+
+	updated, command := m.submitChat()
+	m = updated.(model)
+	for attempts := 0; m.waiting && attempts < 64; attempts++ {
+		updated, command = m.Update(nextAgentMessage(t, command))
+		m = updated.(model)
+	}
+	if m.waiting || len(configuredClient.requests) != 2 {
+		t.Fatalf("recovery execution = waiting %v requests %#v", m.waiting, configuredClient.requests)
+	}
+	coderPrompt := configuredClient.requests[0].Messages[0].Content
+	if !strings.Contains(coderPrompt, `"attempt": 2`) ||
+		!strings.Contains(coderPrompt, "previous Coder attempt was interrupted") ||
+		!strings.Contains(coderPrompt, "Inspect the current workspace") {
+		t.Fatalf("recovery Coder prompt = %s", coderPrompt)
+	}
+	if _, err := workspaceStore.LoadExecution(); !errors.Is(err, workspace.ErrExecutionNotFound) {
+		t.Fatalf("recovered checkpoint still exists: %v", err)
+	}
+}
+
+func TestInterruptImmediatelyOffersDurablePlanRecovery(t *testing.T) {
+	workspaceStore := workspace.Store{Root: t.TempDir()}
+	value := config.Default()
+	value.Provider.Model = "plan-model"
+	m := newModel(context.Background(), config.Store{Dir: t.TempDir()}, nil)
+	m.workspaceStore = &workspaceStore
+	m.toolRuntime = &fakeAgentTools{}
+	m.enterChat(value, &planningClient{})
+	checkpoint := resumablePlanCheckpoint(subagent.ExecutionPhaseTarget)
+	checkpoint.RunID = m.runID
+	if err := workspaceStore.SaveExecution(checkpoint); err != nil {
+		t.Fatal(err)
+	}
+	m.beginTurn()
+	m.waiting = true
+	m.status = "Coder running"
+
+	updated, _ := m.interruptTurn()
+	m = updated.(model)
+	if m.waiting || !m.asking || !m.planResumePending || m.pendingQuestion.Question != "Resume interrupted plan?" {
+		t.Fatalf("interrupt recovery = waiting %v asking %v pending %v question %#v", m.waiting, m.asking, m.planResumePending, m.pendingQuestion)
+	}
+}
+
+func resumablePlanCheckpoint(phase subagent.ExecutionPhase) subagent.ExecutionCheckpoint {
+	return subagent.ExecutionCheckpoint{
+		ExecutionID: "plan-execution-resume", RunID: "run-resume", Objective: "Persist approved execution",
+		Phase: phase, Attempt: 1,
+		Plan: subagent.PlanProposal{
+			Outcome: "succeeded", Summary: "Resume an approved plan",
+			Conditions: []string{"Do not repeat completed side effects"},
+			Steps: []subagent.PlanStep{{
+				Title: "Connect persistence", Description: "Resume the saved task",
+				Target: subagent.TargetCondition{Any: []subagent.TargetProduct{{All: []subagent.TargetSelector{{
+					Kind: subagent.TargetSelectorPaths, Paths: []string{"app/plan.go"},
+				}}}}},
+			}},
+		},
 	}
 }
 

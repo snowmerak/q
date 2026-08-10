@@ -3,6 +3,7 @@ package subagent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"reflect"
 	"strings"
@@ -161,6 +162,146 @@ func TestExecutionLoopStopsAfterRetryLimit(t *testing.T) {
 	}
 	if result.Attempts != 2 || result.CompletedTasks != 0 {
 		t.Fatalf("execution result = %#v", result)
+	}
+}
+
+func TestExecutionLoopResumesInterruptedCoderAsRecoveryAttempt(t *testing.T) {
+	var persisted []ExecutionCheckpoint
+	first := ExecutionLoop{
+		Resolver: TargetResolver{},
+		Coder: func(_ context.Context, attempt CoderAttempt) (CoderResult, error) {
+			if attempt.Attempt != 1 {
+				t.Fatalf("first attempt = %#v", attempt)
+			}
+			return CoderResult{}, errors.New("simulated process interruption")
+		},
+		Review: func(context.Context, TaskReviewRequest) (TaskReview, error) {
+			return TaskReview{}, errors.New("review should not run")
+		},
+		Checkpoint: func(_ context.Context, checkpoint ExecutionCheckpoint) error {
+			persisted = append(persisted, checkpoint)
+			return nil
+		},
+	}
+	_, err := first.Run(context.Background(), executableTestPlan())
+	if err == nil || len(persisted) == 0 {
+		t.Fatalf("first run error = %v, checkpoints = %#v", err, persisted)
+	}
+	interrupted := persisted[len(persisted)-1]
+	if interrupted.Phase != ExecutionPhaseCoderRunning || interrupted.Attempt != 1 {
+		t.Fatalf("interrupted checkpoint = %#v", interrupted)
+	}
+	resumed, err := PrepareExecutionResume(interrupted)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resumed.Phase != ExecutionPhaseCoderPending || resumed.Attempt != 2 || resumed.ResumeCount != 1 ||
+		!strings.Contains(resumed.Feedback, "partially changed") {
+		t.Fatalf("prepared checkpoint = %#v", resumed)
+	}
+
+	var recovery CoderAttempt
+	second := ExecutionLoop{
+		Resolver: TargetResolver{},
+		Coder: func(_ context.Context, attempt CoderAttempt) (CoderResult, error) {
+			recovery = attempt
+			return CoderResult{Outcome: "succeeded", Summary: "recovered safely"}, nil
+		},
+		Review: func(context.Context, TaskReviewRequest) (TaskReview, error) {
+			return TaskReview{Decision: "next", Feedback: ""}, nil
+		},
+		Checkpoint: func(_ context.Context, checkpoint ExecutionCheckpoint) error {
+			persisted = append(persisted, checkpoint)
+			return nil
+		},
+	}
+	result, err := second.RunFrom(context.Background(), resumed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if recovery.Attempt != 2 || !strings.Contains(recovery.Feedback, "Inspect the current workspace") {
+		t.Fatalf("recovery attempt = %#v", recovery)
+	}
+	if result.CompletedTasks != 1 || result.Attempts != 1 {
+		t.Fatalf("resumed result = %#v", result)
+	}
+	if final := persisted[len(persisted)-1]; final.Phase != ExecutionPhaseCompleted || final.ResumeCount != 1 {
+		t.Fatalf("final checkpoint = %#v", final)
+	}
+}
+
+func TestExecutionLoopResumesReviewWithoutRepeatingCoder(t *testing.T) {
+	var persisted ExecutionCheckpoint
+	first := ExecutionLoop{
+		Resolver: TargetResolver{},
+		Coder: func(context.Context, CoderAttempt) (CoderResult, error) {
+			return CoderResult{Outcome: "succeeded", Summary: "workspace already changed"}, nil
+		},
+		Review: func(context.Context, TaskReviewRequest) (TaskReview, error) {
+			return TaskReview{}, errors.New("review service stopped")
+		},
+		Checkpoint: func(_ context.Context, checkpoint ExecutionCheckpoint) error {
+			persisted = checkpoint
+			return nil
+		},
+	}
+	if _, err := first.Run(context.Background(), executableTestPlan()); err == nil {
+		t.Fatal("first run succeeded")
+	}
+	if persisted.Phase != ExecutionPhaseReviewPending || persisted.PendingResult == nil {
+		t.Fatalf("review checkpoint = %#v", persisted)
+	}
+	prepared, err := PrepareExecutionResume(persisted)
+	if err != nil {
+		t.Fatal(err)
+	}
+	coderCalls := 0
+	second := ExecutionLoop{
+		Resolver: TargetResolver{},
+		Coder: func(context.Context, CoderAttempt) (CoderResult, error) {
+			coderCalls++
+			return CoderResult{}, errors.New("Coder must not repeat")
+		},
+		Review: func(_ context.Context, request TaskReviewRequest) (TaskReview, error) {
+			if request.Result.Summary != "workspace already changed" {
+				t.Fatalf("review request = %#v", request)
+			}
+			return TaskReview{Decision: "next", Feedback: ""}, nil
+		},
+	}
+	result, err := second.RunFrom(context.Background(), prepared)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if coderCalls != 0 || result.CompletedTasks != 1 {
+		t.Fatalf("coder calls = %d, result = %#v", coderCalls, result)
+	}
+}
+
+func TestExecutionLoopDoesNotStartCoderBeforeRunningCheckpointIsDurable(t *testing.T) {
+	coderCalls := 0
+	loop := ExecutionLoop{
+		Resolver: TargetResolver{},
+		Coder: func(context.Context, CoderAttempt) (CoderResult, error) {
+			coderCalls++
+			return CoderResult{Outcome: "succeeded", Summary: "should not run"}, nil
+		},
+		Review: func(context.Context, TaskReviewRequest) (TaskReview, error) {
+			return TaskReview{Decision: "next", Feedback: ""}, nil
+		},
+		Checkpoint: func(_ context.Context, checkpoint ExecutionCheckpoint) error {
+			if checkpoint.Phase == ExecutionPhaseCoderRunning {
+				return errors.New("disk unavailable")
+			}
+			return nil
+		},
+	}
+	_, err := loop.Run(context.Background(), executableTestPlan())
+	if err == nil || !strings.Contains(err.Error(), "disk unavailable") {
+		t.Fatalf("checkpoint error = %v", err)
+	}
+	if coderCalls != 0 {
+		t.Fatalf("Coder ran %d time(s) before its checkpoint was durable", coderCalls)
 	}
 }
 

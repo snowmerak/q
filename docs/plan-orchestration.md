@@ -166,12 +166,13 @@ Planner만 반복하지 않는다. 기존 사용자 답변, Scout 결과, Loom r
 - 거절 또는 Planner `blocked` 시 이전 brief/proposal/feedback을 보존한 re-grill
 - Griller, Scout, Planner의 구조화된 progress event와 채팅 TUI activity panel
 - role별 현재 상태와 최근 `started/thinking/tool/delegated/waiting/completed/failed` 로그
-- 승인 또는 취소 후 실행 단계로 넘어가지 않고 종료
+- 승인 직후 Loom/static target을 해석하고 Coder/Planner review execution loop 실행
+- task별 `retry | next`, feedback, facts 병합과 attempt 상한
+- Coder/Planner의 상세 trace와 완료 후 접힌 summary
+- 승인된 실행의 단계별 durable checkpoint와 재시작 recovery UI
 
 후속 구현 범위는 다음과 같다.
 
-- 진행 중 planning state의 재시작 복구
+- 승인 이전 Griller/Planner planning state의 재시작 복구
 - Griller와 Planner 내부 lifecycle archive
 - 전체 activity history를 탐색하는 `/agents` 상세 화면
-- 승인된 계획을 coder 실행 단계로 넘기는 별도 명령과 gate
-- Loom target evaluator와 Coder/Planner review 실행 loop

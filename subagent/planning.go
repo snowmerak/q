@@ -409,7 +409,7 @@ func (w PlanWorkflow) Run(ctx context.Context, task GrillTask) (PlanWorkflowResu
 			Question: "Approve this plan?",
 			Context:  RenderPlanProposal(proposal),
 			Choices: []UserChoice{
-				{ID: "approve", Label: "Approve", Description: "Accept the conditions and plan without executing it yet."},
+				{ID: "approve", Label: "Approve", Description: "Accept the conditions and execute the approved plan."},
 				{ID: "revise", Label: "Revise", Description: "Return to Griller with feedback."},
 				{ID: "cancel", Label: "Cancel", Description: "Stop planning without approval."},
 			},
