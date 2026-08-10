@@ -4,9 +4,12 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/snowmerak/llm-provider/gateway"
 )
+
+const modelDiscoveryTimeout = 1500 * time.Millisecond
 
 type Manager struct {
 	store      Store
@@ -28,6 +31,7 @@ func (m *Manager) LoadAndStart(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	value = boundedModelDiscovery(value)
 	m.mu.Lock()
 	m.config = cloneConfig(value)
 	m.mu.Unlock()
@@ -45,6 +49,7 @@ func (m *Manager) LoadAndStart(ctx context.Context) error {
 // leaves the current Gateway untouched.
 func (m *Manager) Apply(ctx context.Context, value gateway.Config) error {
 	value.Listen = "127.0.0.1:0"
+	value = boundedModelDiscovery(value)
 	prepared, err := m.supervisor.Prepare(ctx, value)
 	if err != nil {
 		return err
@@ -58,6 +63,11 @@ func (m *Manager) Apply(ctx context.Context, value gateway.Config) error {
 	m.config = cloneConfig(value)
 	m.mu.Unlock()
 	return nil
+}
+
+func boundedModelDiscovery(value gateway.Config) gateway.Config {
+	value.ModelCacheRefreshTimeout = modelDiscoveryTimeout.String()
+	return value
 }
 
 func (m *Manager) Config() gateway.Config {

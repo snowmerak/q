@@ -5,14 +5,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/snowmerak/llm-provider/gateway"
 	"github.com/snowmerak/q/client"
 	"github.com/snowmerak/q/config"
 	"github.com/snowmerak/q/providerhost"
-	"github.com/snowmerak/q/sessionstore"
 	qtools "github.com/snowmerak/q/tools"
 	"github.com/snowmerak/q/workspace"
 )
@@ -64,6 +62,8 @@ func managedClientFactory(runtime providerRuntime) clientFactory {
 // Run loads personal configuration and starts the interactive application.
 // A missing configuration opens the first-run provider setup screen.
 func Run(ctx context.Context, store config.Store) error {
+	runtimeContext, cancelRuntime := context.WithCancel(ctx)
+	defer cancelRuntime()
 	workspaceStore, err := workspace.DefaultStore()
 	if err != nil {
 		return err
@@ -78,110 +78,41 @@ func Run(ctx context.Context, store config.Store) error {
 		return err
 	}
 
-	manager, managerErr := providerhost.NewManager(ctx, providerhost.Store{Dir: store.Dir})
+	manager, managerErr := providerhost.NewManager(runtimeContext, providerhost.Store{Dir: store.Dir})
 	if managerErr != nil {
 		return managerErr
 	}
 	defer manager.Close()
 
-	startupErr := manager.LoadAndStart(ctx)
-	if errors.Is(startupErr, providerhost.ErrNotFound) && err == nil && !loaded.Provider.Managed {
-		legacy, legacyErr := providerhost.LegacyProvider(
-			"default", loaded.Provider.BaseURL, loaded.Provider.APIKeyEnv, loaded.Provider.APIKey,
-		)
-		if legacyErr == nil {
-			startupErr = manager.Apply(ctx, gateway.Config{Providers: []gateway.ProviderConfig{legacy}})
-			if startupErr == nil {
-				if !strings.HasPrefix(loaded.Provider.Model, "default/") {
-					loaded.Provider.Model = "default/" + loaded.Provider.Model
-				}
-				loaded.UseManagedGateway()
-				startupErr = store.Save(loaded)
-			}
-		} else {
-			startupErr = legacyErr
-		}
-	} else if errors.Is(startupErr, providerhost.ErrNotFound) {
-		startupErr = nil
-	}
-
 	factory := managedClientFactory(manager)
-	archiveStore, archiveOpenErr := sessionstore.OpenWithOptions(workspaceStore.Root, sessionstore.OpenOptions{
-		WorkspaceLock: workspaceLock,
-	})
-	if errors.Is(archiveOpenErr, sessionstore.ErrIndexLocked) {
-		return archiveOpenErr
-	}
-	var agentTools *qtools.Runtime
-	var toolsErr error
-	if archiveOpenErr == nil {
-		agentTools, toolsErr = qtools.NewRuntimeWithArchiveAndLoomOptions(
-			ctx, workspaceStore.Root, archiveStore, loaded.LoomStoreOptions(nil),
-		)
-	} else {
-		agentTools, toolsErr = qtools.NewRuntimeWithArchiveAndLoomOptions(
-			ctx, workspaceStore.Root, nil, loaded.LoomStoreOptions(nil),
-		)
-	}
-	if toolsErr != nil {
-		if archiveStore != nil {
-			_ = archiveStore.Close()
-		}
-		return toolsErr
-	}
-	defer agentTools.Close()
-	var archiveWriter *sessionstore.Writer
-	if archiveOpenErr == nil {
-		archiveWriter = sessionstore.NewWriter(archiveStore, 0)
-	}
-	initialModel := newManagedModel(ctx, store, factory, manager)
+	lifecycle := newStartupLifecycle()
+	initialModel := newManagedModel(runtimeContext, store, factory, manager)
 	initialModel.workspaceStore = &workspaceStore
 	initialModel.workspaceLock = workspaceLock
-	initialModel.toolRuntime = agentTools
-	initialModel.archive = archiveWriter
-	if err == nil && manager.Endpoint() != "" {
-		if !loaded.Provider.Managed {
-			loaded.UseManagedGateway()
-		}
-		configuredClient, clientErr := factory(loaded)
-		if clientErr != nil {
-			if archiveWriter != nil {
-				_ = archiveWriter.Close()
-			}
-			return clientErr
-		}
-		if models, modelsErr := configuredClient.ListModels(ctx); modelsErr == nil {
-			refreshed, found := refreshModelContextWindow(loaded, models)
-			if found && refreshed.Provider.ContextWindow != loaded.Provider.ContextWindow {
-				loaded = refreshed
-				_ = store.Save(loaded)
-			}
-		}
-		initialModel.enterChat(loaded, configuredClient)
-	} else if len(manager.Config().Providers) > 0 {
-		initialModel.enterProviderList()
+	initialModel.screen = screenChat
+	initialModel.config = loaded
+	if err != nil {
+		initialModel.config = config.Default()
 	}
-	if startupErr != nil {
-		initialModel.status = startupErr.Error()
+	initialModel.initializing = true
+	initialModel.status = "Starting Gateway and workspace services…"
+	startup := startupRequest{
+		ctx: runtimeContext, store: store, workspaceStore: workspaceStore,
+		workspaceLock: workspaceLock, loaded: loaded, configErr: err,
+		manager: manager, factory: factory, lifecycle: lifecycle,
 	}
-	if archiveOpenErr != nil {
-		if initialModel.status != "" {
-			initialModel.status += " · "
-		}
-		initialModel.status += "archive: " + archiveOpenErr.Error()
-	}
+	initialModel.startup = func() tea.Msg { return startup.run() }
 
 	final, runErr := tea.NewProgram(initialModel).Run()
+	cancelRuntime()
+	lifecycle.waitIfStarted()
+	var clientCloseErr error
 	if finalModel, ok := final.(model); ok && finalModel.client != nil {
-		_ = finalModel.client.Close()
-	} else if initialModel.client != nil {
-		_ = initialModel.client.Close()
+		clientCloseErr = finalModel.client.Close()
+	} else if startupClient := lifecycle.startupClient(); startupClient != nil {
+		clientCloseErr = startupClient.Close()
 	}
-	var archiveCloseErr error
-	if archiveWriter != nil {
-		archiveCloseErr = archiveWriter.Close()
-	}
-	return errors.Join(runErr, archiveCloseErr)
+	return errors.Join(runErr, clientCloseErr, lifecycle.closeResources())
 }
 
 func RunDefault(ctx context.Context) error {

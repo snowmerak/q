@@ -3,6 +3,7 @@ package providerhost
 import (
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/snowmerak/llm-provider/gateway"
 )
@@ -26,5 +27,12 @@ func TestStoreRoundTrip(t *testing.T) {
 	if loaded.Listen != "127.0.0.1:0" || len(loaded.Providers) != 1 ||
 		loaded.Providers[0].ID != "local" || loaded.Providers[0].APIKeyEnv != "LOCAL_API_KEY" {
 		t.Fatalf("loaded config = %#v", loaded)
+	}
+}
+
+func TestBoundedModelDiscoveryUsesInteractiveStartupBudget(t *testing.T) {
+	value := boundedModelDiscovery(gateway.Config{ModelCacheRefreshTimeout: "30s"})
+	if value.ModelCacheRefreshTimeout != (1500 * time.Millisecond).String() {
+		t.Fatalf("model discovery timeout = %q", value.ModelCacheRefreshTimeout)
 	}
 }

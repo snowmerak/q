@@ -187,6 +187,8 @@ type model struct {
 	helpViewport       viewport.Model
 	spinner            spinner.Model
 	commitRunning      bool
+	initializing       bool
+	startup            tea.Cmd
 	waiting            bool
 	compacting         bool
 	submitPending      bool
@@ -428,6 +430,9 @@ func newIgnoreEditor() textarea.Model {
 }
 
 func (m model) Init() tea.Cmd {
+	if m.initializing && m.startup != nil {
+		return tea.Batch(m.startup, m.spinner.Tick, tea.RequestBackgroundColor)
+	}
 	if m.screen == screenChat {
 		return tea.Batch(m.input.Focus(), tea.RequestBackgroundColor)
 	}
@@ -467,6 +472,41 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.resize(m.width, m.height)
 		return m, m.input.Focus()
+	case runtimeInitializedMsg:
+		m.initializing = false
+		m.startup = nil
+		m.toolRuntime = message.tools
+		m.archive = message.archive
+		m.archiveErr = message.archiveErr
+		m.gatewayConfig = message.gatewayConfig
+		if message.client != nil {
+			m.enterChat(message.config, message.client)
+		} else if len(message.gatewayConfig.Providers) > 0 {
+			m.enterProviderList()
+		} else {
+			m.enterSetup(message.config)
+		}
+		var statuses []string
+		if message.err != nil {
+			statuses = append(statuses, message.err.Error())
+		}
+		if message.startupErr != nil {
+			statuses = append(statuses, message.startupErr.Error())
+		}
+		if message.archiveErr != nil {
+			statuses = append(statuses, "archive: "+message.archiveErr.Error())
+		}
+		if len(statuses) > 0 {
+			m.status = strings.Join(statuses, " · ")
+		}
+		m.resize(m.width, m.height)
+		if m.screen == screenChat {
+			return m, m.input.Focus()
+		}
+		if m.screen == screenProviders {
+			return m, nil
+		}
+		return m, m.setup[m.setupFocus].Focus()
 	case configuredMsg:
 		if message.err != nil {
 			m.status = message.err.Error()
@@ -863,7 +903,7 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			m.viewport, command = m.viewport.Update(message)
 		}
 		commands = append(commands, command)
-		if m.waiting && !m.asking {
+		if (m.waiting || m.initializing) && !m.asking {
 			m.spinner, command = m.spinner.Update(message)
 			commands = append(commands, command)
 		} else {
@@ -3367,7 +3407,7 @@ func (m model) View() tea.View {
 	if m.screen == screenChat && m.asking {
 		view.MouseMode = tea.MouseModeCellMotion
 	}
-	if m.screen == screenChat && (!m.waiting || m.asking) {
+	if m.screen == screenChat && ((!m.waiting && !m.initializing) || m.asking) {
 		if cursor := m.input.Cursor(); cursor != nil {
 			inputOffset := m.renderedChatHeaderHeight() + 1 + lipgloss.Height(m.viewport.View())
 			if activities := m.renderedAgentActivities(); activities != "" {
@@ -3743,11 +3783,13 @@ func (m model) renderedChatHeaderHeight() int {
 func (m model) viewChat() string {
 	header := m.chatHeader()
 	status := m.status
-	if m.waiting && !m.asking {
+	if (m.waiting || m.initializing) && !m.asking {
 		status = m.spinner.View() + " " + status
 	}
 	footerText := "enter send · shift+enter newline · ctrl+h help · ctrl+c quit · esc quit"
-	if m.waiting {
+	if m.initializing {
+		footerText = "starting workspace services · ctrl+h help · ctrl+c quit · esc quit"
+	} else if m.waiting {
 		footerText = "ctrl+h help · ctrl+c interrupt turn · esc quit"
 		if len(m.agentTraces) > 0 {
 			if m.agentTraceExpanded {

@@ -899,6 +899,35 @@ func TestSlashCommitStartsEmbeddedWorkflowAndRestoresChatStatus(t *testing.T) {
 	}
 }
 
+func TestRuntimeInitializationRendersBeforeServicesAreReady(t *testing.T) {
+	value := config.Default()
+	value.Provider.Model = "loading-model"
+	m := newModel(context.Background(), config.Store{Dir: t.TempDir()}, nil)
+	m.screen = screenChat
+	m.config = value
+	m.initializing = true
+	m.status = "Starting Gateway and workspace services…"
+	m.startup = func() tea.Msg { return runtimeInitializedMsg{} }
+	m.resize(96, 24)
+
+	view := ansi.Strip(m.View().Content)
+	if !strings.Contains(view, "loading-model") ||
+		!strings.Contains(view, "Starting Gateway and workspace services") ||
+		!strings.Contains(view, "starting workspace services") {
+		t.Fatalf("startup view is not immediately useful:\n%s", view)
+	}
+	if m.Init() == nil {
+		t.Fatal("startup command was not scheduled from Init")
+	}
+
+	configuredClient := &fakeClient{}
+	updated, _ := m.Update(runtimeInitializedMsg{config: value, client: configuredClient})
+	m = updated.(model)
+	if m.initializing || m.screen != screenChat || m.client != configuredClient {
+		t.Fatalf("initialized state = initializing %v, screen %v, client %#v", m.initializing, m.screen, m.client)
+	}
+}
+
 func TestHelpScrollsAndRestoresDirtyIgnoreEditor(t *testing.T) {
 	root := t.TempDir()
 	workspaceStore := workspace.Store{Root: root}
