@@ -1,14 +1,23 @@
 # q
 
-`q` is an interactive multi-provider chat client built with Bubble Tea. It
-embeds `snowmerak/llm-provider` and runs its OpenAI-compatible Gateway as a
-supervised child of the current `q` executable.
+`q` is a workspace-native terminal agent built with Bubble Tea. It combines a
+multi-provider chat client, approval-gated planning and execution, isolated
+subagents, durable workspace history, Loom artifacts, and an interactive Git
+commit workflow.
+
+`q` embeds [`snowmerak/llm-provider`](https://github.com/snowmerak/llm-provider)
+and supervises its OpenAI-compatible Gateway as a child of the current `q`
+executable.
+
+## Quick start
+
+Run from source:
 
 ```powershell
 go run ./cmd/q
 ```
 
-With [Task](https://taskfile.dev/) installed, the common commands are:
+With [Task](https://taskfile.dev/) installed:
 
 ```powershell
 task install  # install q and q-mcp into the Go binary directory
@@ -16,51 +25,186 @@ task build    # build both commands into ./bin
 task run      # run q from source
 ```
 
-The session store uses a pure-Go HNSW index for semantic search, so these tasks
-do not require CGO, FAISS, or a vector-specific build tag.
+Run `q` inside the directory you want to use as the workspace. The TUI renders
+before Gateway, Session Store, Loom, and MCP initialization completes. Provider
+model discovery runs in parallel with a 1.5-second budget; providers that do
+not answer in time are skipped for that refresh instead of delaying the UI.
 
-On first launch, q asks for a provider ID, optional model prefix, selectable API
-type, endpoint, and API-key source. API types are selected with `Left`/`Right`;
-the prefix defaults to the provider ID when omitted. q then starts an internal
-Gateway on a random loopback port and opens a searchable model selector when
-model discovery is available. Provider settings are saved even when an
-upstream is temporarily unavailable. Personal configuration is stored at:
+The Session Store uses a pure-Go HNSW index, so q does not require CGO, FAISS,
+or a vector-specific build tag.
+
+## First launch
+
+On first launch, q asks for a provider ID, optional model prefix, API type,
+endpoint, and API-key source. The prefix defaults to the provider ID. Provider
+settings remain editable even when an upstream is offline.
+
+Personal configuration is stored in:
 
 ```text
 ~/.q/config.yaml
 ~/.q/providers.json
 ```
 
-The selected model remains part of this global configuration. Chat state is
-workspace-local: q resumes the transcript and compacted request context from
-the directory where it is launched:
+Prefer environment variables over inline API keys. On POSIX, q creates the
+configuration directory with user-only permissions and writes both files with
+mode `0600`. Windows file modes do not manage ACLs.
+
+## TUI reference
+
+The regular chat footer stays compact. Use `Ctrl+H` or `/help` from any screen
+to open the complete, scrollable guide. Closing help restores the previous
+screen without discarding editor state or interrupting an active turn.
+
+### Slash commands
+
+| Command | Action |
+|---|---|
+| `/plan [request]` | Grill, research, approve, and execute a work plan. Without an inline request, the next message becomes the request. |
+| `/commit` | Open the interactive commit workflow, then return to chat. |
+| `/model` | Configure the main-loop, embedding, or subagent role models. |
+| `/provider` | List, add, edit, enable, disable, or delete Gateway providers. |
+| `/loom` | Inspect Loom usage and configure or run garbage collection. |
+| `/ignore` | Edit workspace discovery rules in `.qignore`. |
+| `/clear` | Clear the chat projection and remove the current workspace session. |
+| `/help` | Open the command and shortcut guide. |
+
+### Chat keys
+
+| Key | Action |
+|---|---|
+| `Enter` / `Ctrl+S` | Send. |
+| `Shift+Enter` | Insert a newline. |
+| `Ctrl+P` | Open provider settings. |
+| `Ctrl+H` | Open or close help. |
+| `Ctrl+G` | Expand or collapse the detailed subagent trace when available. |
+| `Ctrl+C` | Interrupt the active turn; quit while idle. |
+| `Esc` | Leave the current screen or quit chat. |
+
+Assistant responses render as terminal Markdown using the detected terminal
+theme and current viewport width. User input and tool output remain literal.
+
+## Planning and execution
+
+`/plan` is an explicit orchestration mode. It does not modify the workspace
+until the combined conditions and plan have been approved.
 
 ```text
-<current-directory>/.q/session.json
-<current-directory>/.q/plan-execution.json
-<current-directory>/.q/workspace.lock
+request
+  -> Griller questions and repository research
+  -> Scout read-only investigations when evidence is needed
+  -> Planner conditions, targets, tasks, and verification
+  -> user approval
+  -> Coder task
+  -> Planner review: retry or next
+  -> completion
 ```
 
-The workspace session does not contain provider settings, API keys, or a model
-override. `/clear` removes the local session as well as clearing the screen.
-After plan approval, q atomically checkpoints the execution phase, current task,
-resolved targets, retry feedback, learned facts, and completed Coder results.
-If q stops before completion, the next launch offers Resume, Inspect, and
-Discard. A Coder interrupted after possible workspace side effects is resumed
-as a new recovery attempt that must inspect existing changes first; a saved
-Coder result resumes directly at Planner review. Discard removes only the
-checkpoint and never reverts workspace changes.
+The Griller asks the user only for decisions the repository cannot answer. It
+can delegate bounded, read-only questions to Scout while building the planning
+brief. Scout returns structured findings directly; large supporting results
+remain available through Loom references.
 
-One q writer owns a workspace at a time. The interactive app, `q commit`,
-`q-mcp`, and direct Session Store opens use an OS-backed exclusive lock held
-for their full lifetime. A second writer exits with the owning PID, host, and
-command instead of opening or rebuilding Bleve/HNSW state. The
-`workspace.lock` file is persistent diagnostic metadata, not a sentinel:
-crashes and forced termination close the process handle, so the OS releases
-the actual lock and the next q process can reuse the file without stale-lock
-cleanup.
+Each approved task selects its files using an OR-of-AND target condition made
+from static paths and optional `loom_eval` transforms. The condition selects a
+file set only—it does not encode execution order or result acceptance. The
+Coder receives the full current Plan, resolved targets, and any retry feedback.
+After every attempt, the Planner chooses `retry` or `next` and may add newly
+verified facts to the Plan.
 
-Example:
+Execution state is atomically checkpointed in `.q/plan-execution.json`. On the
+next launch, interrupted work offers Resume, Inspect, and Discard. Resuming a
+Coder that may already have changed files starts a new recovery attempt that
+first inspects the workspace; a saved Coder result resumes at Planner review.
+Discard removes the checkpoint but never reverts workspace changes.
+
+See [plan orchestration](docs/plan-orchestration.md) and
+[execution orchestration](docs/execution-orchestration.md) for the detailed
+contracts.
+
+## Commit workflow
+
+Use `/commit` from the main TUI or run the standalone command inside a Git
+worktree:
+
+```powershell
+q commit
+```
+
+The workflow creates Oh My Pi-style Conventional Commits with the configured
+`commit` model:
+
+- Existing staged changes are used. If the index is empty, q stages the working
+  tree while excluding q's root `.q` metadata.
+- Whitespace-only and import-order-only changes bypass the model and use
+  `style: formatted code` or `style: reorganized imports`.
+- Ordinary changes run in an isolated commit session with commit-specific tools
+  and restricted Loom access.
+- The agent must begin with `git_overview`; full diffs stay outside the initial
+  prompt and are fetched by file or hunk only when needed.
+- A validated `propose_commit` or `split_commit` tool call is required. After
+  three missing-proposal reminders, q uses a mechanical fallback.
+- Every proposal opens a review before Git changes. Split proposals expose
+  read-only file groups; file and hunk reassignment are intentionally omitted.
+- The captured index is checked again immediately before commit so external
+  changes cannot be approved accidentally.
+
+Review keys are `Up`/`Down` to select a split message, `e` to edit it, `Ctrl+S`
+to validate and save the edit, `r` to regenerate, `Enter` to commit, `p` to
+commit and push, and `Esc` to cancel. Push requires an existing upstream.
+
+## Providers and models
+
+`providers.json` uses `llm-provider/gateway.Config`. Multiple enabled providers
+share one local Gateway and expose models with their provider ID or configured
+prefix:
+
+```json
+{
+  "listen": "127.0.0.1:0",
+  "providers": [
+    {
+      "id": "codex",
+      "type": "codex",
+      "enabled": true
+    },
+    {
+      "id": "local",
+      "type": "openai-compatible",
+      "enabled": true,
+      "base_url": "http://localhost:1234/v1",
+      "models": ["qwen3-32b"],
+      "model_metadata": {
+        "qwen3-32b": {
+          "context_length": 131072
+        }
+      }
+    }
+  ]
+}
+```
+
+Static `models` remain available even when metadata discovery times out.
+`model_metadata` overrides upstream metadata before prefixes are applied. In
+the `/model` catalog, `Ctrl+E` sets or clears a model's Gateway
+`context_length` override.
+
+The Gateway binds only to `127.0.0.1:0` and reports the assigned port to its
+parent over a private stdout handshake. Provider edits start a replacement
+child before saving and activating it; a failed replacement leaves the running
+Gateway untouched.
+
+`/model` lists the main `default` target, optional `embedding` target, and each
+subagent role. A role without an explicit model inherits the main model. An
+empty reasoning effort lets the provider choose its default; explicit efforts
+are accepted only when advertised by that model. The built-in roles are
+`griller`, `scout`, `research`, `planner`, `coder`, `commit`, and `advisor`.
+
+The embedding picker accepts dimensions from 1 to 4096. Because the shared
+model catalog does not identify embedding-only models, it currently shows all
+models. Press `i` to clear an embedding or role override and restore inheritance.
+
+## Configuration example
 
 ```yaml
 version: 1
@@ -96,232 +240,128 @@ loom:
     grace_hours: 1
 ```
 
-Subagent roles may override `model` and `reasoning_effort`. A missing role or
-empty role model inherits `provider.model`; an omitted effort leaves the
-provider's model default unchanged. The effort default is empty; empty or
-whitespace-only values are omitted from model requests. Subagent execution resolves configured
-roles against `/v1/models`. Explicit effort values are accepted only when the
-selected model advertises `capabilities.reasoning.control: effort` and, when
-enumerated, the value appears in `supported_efforts`. The built-in roles are
-`griller`, `scout`, `research`, `planner`, `coder`, `commit`, and `advisor`.
+## Workspace state and locking
 
-Run `q commit` inside a Git worktree to create Oh My Pi-style Conventional
-Commits with the configured `commit` model. Existing staged changes are used;
-when the index is empty, q runs `git add -A`. Whitespace-only and import-order
-changes bypass the model and use `style: formatted code` or
-`style: reorganized imports` directly.
+Global provider and model choices stay under `~/.q`. Conversation and execution
+state are local to the directory where q starts:
 
-For ordinary changes, q starts an isolated commit session with seven commit
-tools and three restricted Loom tools. The first call is forced to
-`git_overview`; full staged diffs are
-kept outside the initial prompt and exposed by file or hunk tools. Lock files
-remain part of the eventual commit but are omitted from the overview. The
-agent can inspect recent history, fan out isolated per-file analysis, and must
-finish with a validated `propose_commit` or `split_commit` call. Three missing
-proposal reminders are allowed before q creates a mechanical fallback commit.
-Every proposal, including a trivial one, opens an interactive review before
-Git is changed. Split proposals show each message and its read-only file group.
-The selected single or split message can be edited and revalidated, while `r`
-regenerates the whole proposal without recollecting the staged diff. File and
-hunk reassignment are intentionally not exposed. Approved split proposals are
-applied to the Git index and committed in order without replacing unstaged
-working-tree content. The index is compared with the captured diff immediately
-before committing so external changes cannot be approved accidentally.
+| Path | Purpose |
+|---|---|
+| `.q/session.json` | Current transcript and compacted request-context projection. |
+| `.q/plan-execution.json` | Durable checkpoint for an approved plan execution. |
+| `.q/data/records/` | Source records for durable workspace history. |
+| `.q/index/bleve/` | Derived full-text index. |
+| `.q/index/vectors.hnsw` | Derived semantic index when embeddings are available. |
+| `.q/loom/` | Immutable, content-addressed tool artifacts. |
+| `.q/workspace.lock` | Diagnostic metadata for the current or most recent lock owner. |
+| `.qignore` | Workspace discovery exclusions. |
 
-```powershell
-q commit
-```
+Only one writer may own a workspace. The interactive app, `q commit`, `q-mcp`,
+and direct Session Store opens use an OS-backed exclusive lock for their full
+lifetime. Another writer exits with owner diagnostics instead of opening or
+rebuilding shared Bleve/HNSW state.
 
-The command prints live, metadata-only progress without exposing diff content:
+`workspace.lock` is not a sentinel. The OS lock lives on the open file handle;
+after a crash or forced termination the handle closes automatically, while the
+file remains as reusable diagnostic metadata.
 
-```text
-q commit · prepare · inspecting the Git index
-q commit · model · resolving the commit agent model
-q commit · agent · starting an isolated commit session
-q commit · tool · calling git_overview
-q commit · proposal · accepted feat(commit): added commit generation
-q commit · commit · creating feat(commit): added commit generation
-```
+`/clear` removes only the current chat projection. Durable archive records and
+workspace file changes remain intact.
 
-Review keys are `Up`/`Down` to select a split message, `e` to edit only that
-message, `Ctrl+S` to validate and save an edit, `r` to regenerate, `Enter` to
-commit, `p` to commit and push, and `Esc` to cancel. Push uses only an existing
-upstream; detached HEADs and branches without an upstream remain local and
-show an actionable error.
+## Tools and task lifecycle
 
-`providers.json` uses `llm-provider/gateway.Config` directly. Multiple enabled
-providers are exposed together using their provider ID or configured prefix:
+Each chat request exposes q's workspace-scoped builtin MCP tools. Developer
+context describes the host OS, architecture, workspace root, and exact command
+shell so generated commands use appropriate quoting. Filesystem tools are
+root-jailed; shell commands start in the workspace but are not an OS sandbox.
 
-```json
-{
-  "listen": "127.0.0.1:0",
-  "providers": [
-    {
-      "id": "codex",
-      "type": "codex",
-      "enabled": true
-    },
-    {
-      "id": "local",
-      "type": "openai-compatible",
-      "enabled": true,
-      "base_url": "http://localhost:1234/v1",
-      "model_metadata": {
-        "qwen3-32b": {
-          "context_length": 131072
-        }
-      }
-    }
-  ]
-}
-```
+The main agent also receives orchestration tools:
 
-Gateway `model_metadata` overrides upstream metadata before model IDs receive
-their configured prefix. In the `/model` catalog, press `Ctrl+E` on a model to
-set or clear its Gateway `context_length`; q replaces the Gateway without
-requiring provider discovery to succeed and updates the active context cache
-from the override.
+- `task_start` begins a tool-using or multi-step task.
+- `task_complete` is required exactly once after a started task reaches a
+  terminal outcome.
+- `ask_to_user` pauses the current turn for a required decision. Choices return
+  their stable ID; typing sends a free-form answer instead.
 
-The child binds only to `127.0.0.1:0` and reports its assigned port to the
-parent over a private stdout handshake. Provider changes start a new child
-before q saves the candidate configuration and replaces the old child. Startup
-does not require provider model discovery to succeed, so an offline provider
-does not block adding, editing, enabling, disabling, or deleting provider
-settings. A child startup failure leaves the running Gateway untouched.
+Tool calls, arguments, results, command status, and intermediate agent notes can
+be inspected in the live detailed trace. Interrupting a turn cancels its request
+context, records unfinished tool calls as cancelled, persists the cancellation,
+and returns to the input prompt.
 
-On POSIX systems the directory is created with user-only permissions and both
-configuration files are written with mode `0600`. Prefer an environment
-variable over an inline key, especially on Windows where file modes do not
-manage ACLs. Existing single-endpoint q configurations are migrated to a
-`default` Gateway provider on first launch.
+## Discovery and `.qignore`
 
-Chat keys:
-
-- `Enter`: send
-- `Shift+Enter`: insert a newline
-- `/clear`: clear the conversation and remove the current workspace session
-- `/plan`: arm approval-gated planning for the next message; `/plan <request>` starts immediately
-- `/commit`: open the interactive commit workflow and return to chat afterward
-- `/model`: configure the main-loop, embedding, or subagent role models
-- `/provider`: list, add, edit, enable, disable, or delete Gateway providers
-- `/loom`: inspect Loom storage and garbage-collection settings
-- `/ignore`: edit workspace discovery rules in `.qignore`
-- `/help`: open the scrollable command and shortcut guide
-- `Ctrl+L`: clear the in-memory conversation
-- `Ctrl+S`: send (alternative shortcut)
-- `Ctrl+P`: edit provider settings (alternative shortcut)
-- `Ctrl+H`: open or close the help screen
-- `Ctrl+C`: interrupt the active turn; quit when idle
-- `Esc`: quit
-
-The regular chat footer stays compact and does not enumerate slash commands.
-Use `Ctrl+H` or `/help` to open the complete guide from any TUI screen; press
-`Ctrl+H` or `Esc` to return without losing editor state or an active turn.
-
-`/model` first shows `default` (the main chat loop), `embedding`, and then the
-built-in subagent roles. The shared catalog shows each model's Gateway context
-length and marks explicit Gateway overrides. Press `Ctrl+E` on any model to edit
-that per-model override.
-
-Selecting `embedding` asks for a vector dimension between 1 and 4096. Because
-the common `/v1/models` response does not currently identify embedding-only
-models, the picker shows the whole catalog. Press `i` on `embedding` to clear
-the optional configuration.
-
-Selecting a subagent role opens the same catalog; models that advertise
-enumerated reasoning efforts add a final effort picker whose `default` choice
-omits `reasoning_effort`. Select a subagent in the target list and press `i` to
-remove that role's override and inherit the main-loop default again.
-
-Assistant responses are rendered as terminal Markdown with headings, lists,
-links, tables, block quotes, emphasis, and syntax-highlighted fenced code.
-Rendering follows the detected light/dark terminal theme and current viewport
-width. User input and tool output remain literal so their contents are never
-reinterpreted as presentation markup.
-
-The full chat transcript and separate request context are persisted in the
-current workspace. When Gateway model context metadata is available, q
-automatically compacts that request context at 85% to a maximum of 22% while
-keeping the full transcript visible. Gateway metadata has priority and is
-cached as `provider.context_window`; the file-only `context.window` setting is
-used only when the Gateway does not expose `context_length`.
-
-Each chat request exposes q's workspace-scoped builtin MCP tools to the model.
-The accompanying developer context states the host OS, CPU architecture, and
-the exact shell used by `run_command`, so generated commands use the correct
-syntax and quoting from the first tool call.
-The main agent also receives three orchestration tools. `task_start` begins an
-explicit task lifecycle for tool-using or multi-step work. Once started, that
-task must finish with `task_complete`; a plain final assistant response is fed
-back to the model with a completion reminder. Turns that do not call
-`task_start` may finish with a direct assistant answer. `ask_to_user` pauses the
-current tool loop, renders the question and optional choices in the TUI, and
-resumes the same turn with the user's answer. When choices are present, use
-Up/Down or Tab/Shift+Tab and Enter to return the selected choice ID; typing in
-the input sends a custom free-form answer instead.
-Interrupting an active turn cancels its request context, ignores late events,
-closes unfinished tool calls with cancelled results, and persists a cancelled
-turn event before returning to the input prompt.
-When the model returns tool calls, q executes them, appends their results to the
-conversation, and continues the same turn automatically. Tool calls, command
-status, exit codes, and command output are rendered as live progress while the
-turn is running. Filesystem tools are root-jailed; shell commands start in the
-workspace but are not an OS sandbox.
-
-Repository discovery honors a workspace-root `.qignore` file. It accepts one
-slash-normalized pattern per line, blank lines, `#` comments, `!` negation,
-root anchoring with a leading `/`, directory-only patterns ending in `/`, and
-the `*`, `**`, and `?` wildcards. q's own root `.q/` directory is always
-excluded. These rules filter discovery such as `list_directory` and therefore
-the Loom artifacts derived from those results; explicitly reading an ignored
-path remains possible. Shell command output is not rewritten, so agents are
-also instructed to honor `.qignore` when using commands for repository scans.
+Repository discovery always excludes q's root `.q/` directory and honors a
+workspace-root `.qignore`. Rules support blank lines, `#` comments, `!`
+negation, leading `/` root anchors, trailing `/` directory matches, and `*`,
+`**`, and `?` wildcards.
 
 ```gitignore
-# Example for a Gradle project with checked-in vendor sources
+# Gradle outputs and checked-in vendor sources
 .gradle/
 build/
 vendor/
 ```
 
-Enter `/ignore` in the chat TUI to edit the current workspace `.qignore`.
-The editor shows line numbers and syntax guidance; press `Ctrl+S` to save.
-New directory listings use the saved rules immediately. `Esc` returns to chat,
-and requires a second press before discarding unsaved changes.
+These rules affect discovery tools such as `list_directory` and therefore the
+Loom artifacts derived from them. Explicit reads remain possible. Shell output
+is not rewritten, so agents are separately instructed to honor `.qignore`
+during command-based scans.
 
-Every non-Loom MCP result is also captured as an immutable Loom artifact under
-the workspace's `.q/loom` directory. The tool message contains a `loom_ref`,
-artifact metadata, and either the complete small result or a bounded preview.
-This keeps large structured results available without repeatedly carrying them
-through model context. Artifacts are content-addressed and deduplicated.
-Artifact and workspace limits default to 64 MiB and 256 MiB respectively and
-can be changed under `loom` in the personal config.
+Use `/ignore` to edit the file. `Ctrl+S` saves immediately; `Esc` requires a
+second press before discarding unsaved changes.
 
-Enter `/loom` in the TUI to view current artifact, blob, and byte usage; edit
-the size and automatic-GC policy; preview collection; or run it immediately.
+## Loom
+
+Every non-Loom MCP result is captured as an immutable artifact under `.q/loom`.
+The model receives a bounded receipt containing a `loom_ref`, metadata, and
+either a small complete result or a preview. Large structured output therefore
+remains queryable without being copied through every subsequent prompt.
+
+Artifacts are content-addressed and deduplicated. Defaults are 64 MiB per
+artifact and 256 MiB per workspace store. `/loom` displays artifact, blob, and
+byte usage and edits these limits and the automatic-GC policy.
+
 Automatic GC starts at the configured trigger ratio and aims for the target
-ratio. References in the current workspace `.q/session.json` projection and an
-active `.q/plan-execution.json` checkpoint, along with their parent lineage, are
-retained; durable archive records do not pin Loom artifacts. Newly created
-artifacts are protected for the configured grace period.
-Set `loom.gc.disabled: true` to disable automatic collection; manual preview
-and collection remain available.
+ratio. References from the current session and active plan checkpoint, including
+their parent lineage, remain live. Durable archive records do not pin Loom
+artifacts. New artifacts remain protected for the configured grace period.
+Setting `loom.gc.disabled: true` disables automatic collection but leaves manual
+preview and collection available.
 
-The model can use `loom_inspect` for metadata, `loom_read` for byte ranges, and
-`loom_eval` to transform one or more artifacts with JavaScript. `loom_eval`
-exposes only `inputs` and `loom.inspect`, `loom.read`, `loom.get`, and
-`loom.json`; it has no filesystem, process, module, environment, or network API.
-Scripts run in a short-lived child process, must return a JSON value, and store
-that value as a new artifact with parent references and a script digest. An MCP
-result artifact is a JSON envelope whose `structured` field contains the
-server's structured result and whose `content` field preserves its MCP content
-parts.
+The model can use `loom_inspect`, `loom_read`, and `loom_eval`. `loom_eval` runs
+JavaScript in a short-lived child process with access only to `inputs` and the
+bounded `loom.inspect`, `loom.read`, `loom.get`, and `loom.json` APIs. It has no
+filesystem, process, module, environment, or network API. Its JSON result is
+stored as a new artifact with parent references and a script digest.
 
+## Durable history and context
 
-The model can query durable workspace history with the read-only
-`search_archive` and `get_archive_record` tools. Search supports text, record
-metadata, RFC3339 creation-time bounds, sorting, and optional recency weighting;
-it returns bounded excerpts. Full record content is paginated by
-`get_archive_record`, while structured payload retrieval is explicit and size
-bounded. Semantic retrieval remains inactive until the configured embedding
-model is connected to record generation and backfill.
+The current transcript and request context are persisted separately. When model
+context metadata is known, q compacts request context at 85% to at most 22%
+while leaving the complete transcript visible. Gateway metadata takes priority;
+`provider.context_window` caches it, and `context.window` is only a fallback.
+
+Chat messages, tool activity, subagent lifecycle events, questions, failures,
+results, and compaction summaries are written to the Session Store. The model
+can search this durable history with `search_archive` and page selected records
+with `get_archive_record`. Text, metadata, time bounds, sorting, and recency
+weighting are supported. Semantic retrieval becomes active when records have
+embeddings; app-side record embedding and historical backfill are not yet
+connected, so current archive queries remain text and metadata based.
+
+The JSON records are the source of truth. Bleve and HNSW are derived indexes and
+can be rebuilt from those records. See
+[Session Store notes](docs/session-store-notes.md) for the storage design.
+
+## Development
+
+```powershell
+go test ./...
+go vet ./...
+task build
+```
+
+The two command entry points are:
+
+- `./cmd/q`: interactive chat and `q commit`
+- `./cmd/q-mcp`: workspace MCP server
