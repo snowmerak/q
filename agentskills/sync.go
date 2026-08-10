@@ -25,21 +25,21 @@ type recordPayload struct {
 	Metadata      map[string]string `json:"metadata,omitempty"`
 }
 
+const skillSyncPageSize = 1000
+
 // SyncRecords makes the current discovered skills addressable through the
 // workspace Session Store's Bleve index. Skill bodies remain on disk.
 func (r *Registry) SyncRecords(ctx context.Context, store RecordStore) error {
 	if r == nil || store == nil {
 		return errors.New("agent skills: record store is unavailable")
 	}
-	existing, err := store.Search(ctx, sessionstore.SearchOptions{
-		Filters: sessionstore.Filters{Kinds: []string{sessionstore.KindSkill}}, Limit: 1000,
-	})
+	existing, err := existingSkillRecords(ctx, store)
 	if err != nil {
 		return err
 	}
-	old := make(map[string]sessionstore.Record, len(existing.Hits))
-	for _, hit := range existing.Hits {
-		old[hit.Record.ID] = hit.Record
+	old := make(map[string]sessionstore.Record, len(existing))
+	for _, record := range existing {
+		old[record.ID] = record
 	}
 	for _, skill := range r.Skills() {
 		payload := recordPayload{
@@ -71,6 +71,32 @@ func (r *Registry) SyncRecords(ctx context.Context, store RecordStore) error {
 		}
 	}
 	return nil
+}
+
+// existingSkillRecords reads the complete derived skill projection before
+// reconciliation starts mutating it. Session Store intentionally caps one
+// search request at 1000 hits, so cleanup must walk the full result set rather
+// than treating that request limit as a catalog limit.
+func existingSkillRecords(ctx context.Context, store RecordStore) ([]sessionstore.Record, error) {
+	var records []sessionstore.Record
+	for offset := 0; ; {
+		page, err := store.Search(ctx, sessionstore.SearchOptions{
+			Filters: sessionstore.Filters{Kinds: []string{sessionstore.KindSkill}},
+			Sort:    sessionstore.SortOldest,
+			Limit:   skillSyncPageSize,
+			Offset:  offset,
+		})
+		if err != nil {
+			return nil, err
+		}
+		for _, hit := range page.Hits {
+			records = append(records, hit.Record)
+		}
+		offset += len(page.Hits)
+		if len(page.Hits) == 0 || uint64(offset) >= page.Total {
+			return records, nil
+		}
+	}
 }
 
 func sameRecord(previous, current sessionstore.Record, digest string) bool {
