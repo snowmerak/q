@@ -155,7 +155,7 @@ func RunGatewayConfig(ctx context.Context, store config.Store) error {
 		m.status = startupErr.Error()
 	}
 
-	_, runErr := tea.NewProgram(m).Run()
+	_, runErr := runStandalone(m, screenGateway)
 	cancelRuntime()
 	return runErr
 }

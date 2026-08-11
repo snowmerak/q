@@ -53,7 +53,7 @@ func (m model) startSkillCommand(content string) (model, tea.Cmd, bool) {
 	if len(parts) < 2 || parts[0] != "/skills" || parts[1] == "" {
 		return m, nil, false
 	}
-	runtime, ok := m.toolRuntime.(skillManageRuntime)
+	runtime, ok := m.currentSkillRuntime().(skillManageRuntime)
 	if !ok {
 		m.status = "Agent Skills Git management is unavailable"
 		return m, nil, true
@@ -122,7 +122,7 @@ func reloadSkillsCmd(runtime skillRuntime) tea.Cmd {
 }
 
 func (m model) enterSkills() (tea.Model, tea.Cmd) {
-	if _, ok := m.toolRuntime.(skillRuntime); !ok {
+	if m.currentSkillRuntime() == nil {
 		m.status = "Agent Skills registry is unavailable"
 		return m, m.input.Focus()
 	}
@@ -158,7 +158,7 @@ func (m model) updateSkills(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				m.status = "Enter a Git repository URL"
 				return m, nil
 			}
-			runtime, ok := m.toolRuntime.(skillManageRuntime)
+			runtime, ok := m.currentSkillRuntime().(skillManageRuntime)
 			if !ok {
 				m.status = "Agent Skills Git management is unavailable"
 				return m, nil
@@ -185,7 +185,7 @@ func (m model) updateSkills(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				m.skillsMode = skillModeBrowse
 				return m, nil
 			}
-			runtime, ok := m.toolRuntime.(skillManageRuntime)
+			runtime, ok := m.currentSkillRuntime().(skillManageRuntime)
 			if !ok {
 				m.status = "Agent Skills Git management is unavailable"
 				return m, nil
@@ -208,6 +208,9 @@ func (m model) updateSkills(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case "esc":
 		m.screen = screenChat
 		m.status = ""
+		if m.isStandaloneScreen(screenSkills) {
+			return m, tea.Quit
+		}
 		return m, m.input.Focus()
 	case "tab":
 		m.skillsScope = (m.skillsScope + 1) % skillScopeCount
@@ -270,13 +273,13 @@ func (m model) updateSkills(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.status = fmt.Sprintf("Delete %s and its checkout?", skill.Name)
 		return m, nil
 	case "r":
-		runtime, ok := m.toolRuntime.(skillRuntime)
-		if !ok {
+		runtime := m.currentSkillRuntime()
+		if runtime == nil {
 			m.status = "Agent Skills registry is unavailable"
 			return m, nil
 		}
 		m.skillsBusy = true
-		m.status = "Reloading discovery and Bleve index…"
+		m.status = "Reloading skill registry…"
 		m.skillsStatusError = false
 		return m, reloadSkillsCmd(runtime)
 	}
@@ -293,7 +296,7 @@ func (m model) startSelectedSkillUpdate() (tea.Model, tea.Cmd) {
 		m.status = "Read-only discovery entry · only q-managed Git skills can be pulled"
 		return m, nil
 	}
-	runtime, ok := m.toolRuntime.(skillManageRuntime)
+	runtime, ok := m.currentSkillRuntime().(skillManageRuntime)
 	if !ok {
 		m.status = "Agent Skills Git management is unavailable"
 		return m, nil
@@ -316,8 +319,8 @@ func (m *model) refreshSkills(gotoTop bool) {
 }
 
 func (m model) skillEntries() []agentskills.Skill {
-	runtime, ok := m.toolRuntime.(skillRuntime)
-	if !ok {
+	runtime := m.currentSkillRuntime()
+	if runtime == nil {
 		return nil
 	}
 	return runtime.SkillEntries()
@@ -345,7 +348,7 @@ func (m model) selectedSkill() (agentskills.Skill, bool) {
 
 func (m model) activeSkillIDs() map[string]bool {
 	active := make(map[string]bool)
-	if runtime, ok := m.toolRuntime.(skillRuntime); ok {
+	if runtime := m.currentSkillRuntime(); runtime != nil {
 		for _, skill := range runtime.Skills() {
 			active[skill.ID] = true
 		}
@@ -483,7 +486,7 @@ func (m model) viewSkills() string {
 	body.WriteString(lipgloss.JoinHorizontal(lipgloss.Top, left, strings.Repeat(" ", panelGap), right))
 	body.WriteString("\n")
 	body.WriteString(m.renderSelectedSkill(contentWidth))
-	if runtime, ok := m.toolRuntime.(skillRuntime); ok {
+	if runtime := m.currentSkillRuntime(); runtime != nil {
 		if issues := runtime.SkillIssues(); len(issues) > 0 {
 			body.WriteString("\n")
 			body.WriteString(errorStyle.Render(fmt.Sprintf("DISCOVERY NOTES · %d · ", len(issues)) + issues[0].Message))
@@ -513,7 +516,19 @@ func (m model) viewSkills() string {
 	} else if m.skillsMode == skillModeAdd {
 		body.WriteString(helpStyle.Render("enter clone · esc cancel"))
 	} else if m.skillsMode != skillModeRemove {
-		body.WriteString(helpStyle.Render("tab/←/→ scope · ↑/↓ select · a add · u pull · d delete · r reload index · esc chat"))
+		help := "tab/←/→ scope · ↑/↓ select · a add · u pull · d delete · r reload · esc chat"
+		if m.isStandaloneScreen(screenSkills) {
+			help = "tab/←/→ scope · ↑/↓ select · a add · u pull · d delete · r reload · esc quit"
+		}
+		body.WriteString(helpStyle.Render(help))
 	}
 	return frameStyle.Width(contentWidth).Render(body.String())
+}
+
+func (m model) currentSkillRuntime() skillRuntime {
+	if m.skillRegistry != nil {
+		return m.skillRegistry
+	}
+	runtime, _ := m.toolRuntime.(skillRuntime)
+	return runtime
 }

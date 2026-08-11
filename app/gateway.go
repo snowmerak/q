@@ -79,7 +79,7 @@ func (m *model) enterGatewayKeys() tea.Cmd {
 func (m model) updateGateway(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch key.String() {
 	case "esc":
-		if m.gatewayConfigOnly || m.client == nil {
+		if m.isStandaloneScreen(screenGateway) || m.gatewayConfigOnly || m.client == nil {
 			return m, tea.Quit
 		}
 		m.screen = screenChat

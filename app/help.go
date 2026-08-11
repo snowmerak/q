@@ -72,6 +72,9 @@ func (m model) leaveHelp() (tea.Model, tea.Cmd) {
 func (m model) updateHelp(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch key.String() {
 	case "esc":
+		if m.isStandaloneScreen(screenHelp) {
+			return m, tea.Quit
+		}
 		return m.leaveHelp()
 	case "home":
 		m.helpViewport.GotoTop()
@@ -104,7 +107,11 @@ func (m model) viewHelp() string {
 	body.WriteString("\n\n")
 	body.WriteString(helpPanelStyle(max(36, m.width-4), m.dark).Render(m.helpViewport.View()))
 	body.WriteString("\n\n")
-	body.WriteString(helpStyle.Render("pgup/pgdn scroll · home/end jump · ctrl+h/esc back · ctrl+c quit"))
+	help := "pgup/pgdn scroll · home/end jump · ctrl+h/esc back · ctrl+c quit"
+	if m.isStandaloneScreen(screenHelp) {
+		help = "pgup/pgdn scroll · home/end jump · ctrl+h/esc quit · ctrl+c quit"
+	}
+	body.WriteString(helpStyle.Render(help))
 	return frameStyle.Width(max(36, m.width-4)).Render(body.String())
 }
 
@@ -152,6 +159,12 @@ func renderHelpContent(dark bool) string {
 	})
 	writeHelpSection("COMMAND LINE", [][2]string{
 		{"q commit", "Open the guided commit-message and commit TUI."},
+		{"q gateway", "Run only the standalone OpenAI-compatible Gateway."},
+		{"q gateway config", "Configure Gateway network, API keys, and providers."},
+		{"q model", "Configure main, embedding, and subagent models."},
+		{"q skills", "Manage global and current-workspace Agent Skills."},
+		{"q ignore", "Edit the current workspace's .qignore rules."},
+		{"q help", "Open this help screen without starting q services."},
 	})
 	return strings.TrimRight(body.String(), "\n")
 }

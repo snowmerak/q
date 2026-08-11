@@ -890,7 +890,10 @@ func TestHelpCommandAndShortcutKeepCommandsOutOfChatFooter(t *testing.T) {
 		}
 	}
 	allHelp := ansi.Strip(renderHelpContent(m.dark))
-	for _, expected := range []string{"SUBAGENTS AND QUESTIONS", "ctrl+g", "COMMAND LINE", "q commit"} {
+	for _, expected := range []string{
+		"SUBAGENTS AND QUESTIONS", "ctrl+g", "COMMAND LINE", "q commit", "q gateway config",
+		"q model", "q skills", "q ignore", "q help",
+	} {
 		if !strings.Contains(allHelp, expected) {
 			t.Fatalf("help content missing %q:\n%s", expected, allHelp)
 		}

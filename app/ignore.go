@@ -43,6 +43,9 @@ func (m model) updateIgnore(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.ignoreEditor.Blur()
 		m.ignoreDiscardArmed = false
 		m.status = ""
+		if m.isStandaloneScreen(screenIgnore) {
+			return m, tea.Quit
+		}
 		return m, m.input.Focus()
 	}
 	before := m.ignoreEditor.Value()
@@ -108,7 +111,11 @@ func (m model) viewIgnore() string {
 		body.WriteString(style.Render(m.status))
 	}
 	body.WriteString("\n\n")
-	body.WriteString(helpStyle.Render("ctrl+s save · enter newline · esc chat (press twice to discard changes) · ctrl+c quit"))
+	help := "ctrl+s save · enter newline · esc chat (press twice to discard changes) · ctrl+c quit"
+	if m.isStandaloneScreen(screenIgnore) {
+		help = "ctrl+s save · enter newline · esc quit (press twice to discard changes) · ctrl+c quit"
+	}
+	body.WriteString(helpStyle.Render(help))
 	return frameStyle.Width(max(36, m.width-4)).Render(body.String())
 }
 

@@ -31,6 +31,20 @@ func main() {
 		}
 		return
 	}
+	if len(os.Args) > 1 {
+		runStandalone := standaloneUICommand(os.Args[1])
+		if runStandalone != nil {
+			if len(os.Args) != 2 {
+				fmt.Fprintf(os.Stderr, "usage: q %s\n", os.Args[1])
+				os.Exit(2)
+			}
+			if err := runStandalone(ctx); err != nil {
+				fmt.Fprintln(os.Stderr, err)
+				os.Exit(1)
+			}
+			return
+		}
+	}
 	if len(os.Args) > 1 && os.Args[1] == "gateway" {
 		if len(os.Args) > 2 && os.Args[2] == "config" {
 			if len(os.Args) != 3 {
@@ -67,6 +81,21 @@ func main() {
 	if err := app.RunDefault(ctx); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
+	}
+}
+
+func standaloneUICommand(name string) func(context.Context) error {
+	switch name {
+	case "model":
+		return app.RunModelDefault
+	case "skills":
+		return app.RunSkillsDefault
+	case "ignore":
+		return app.RunIgnoreDefault
+	case "help":
+		return app.RunHelp
+	default:
+		return nil
 	}
 }
 

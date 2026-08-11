@@ -145,6 +145,8 @@ type model struct {
 	archive           recordArchive
 	archiveErr        error
 	runID             string
+	standalone        bool
+	standaloneRoot    screen
 
 	setup                 [setupFieldCount]textinput.Model
 	setupFocus            int
@@ -196,6 +198,7 @@ type model struct {
 	skillsCursor          [2]int
 	skillsMode            skillScreenMode
 	skillsInput           textinput.Model
+	skillRegistry         skillRuntime
 
 	config             config.Config
 	client             chatClient
@@ -568,6 +571,16 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if m.client != nil && m.client != message.client {
 			_ = m.client.Close()
+		}
+		if m.isStandaloneScreen(screenModels) {
+			m.config = message.config
+			m.draftConfig = message.config
+			m.client = message.client
+			m.screen = screenModels
+			m.modelPickerStage = modelPickerTargets
+			m.modelFilter.Blur()
+			m.status = "Model changed to " + message.config.Provider.Model
+			return m, nil
 		}
 		if message.preserveHistory {
 			m.screen = screenChat
@@ -948,6 +961,9 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if key.String() == "ctrl+h" {
 			if m.screen == screenHelp {
+				if m.isStandaloneScreen(screenHelp) {
+					return m, tea.Quit
+				}
 				return m.leaveHelp()
 			}
 			return m.enterHelp()
@@ -1601,6 +1617,9 @@ func (m model) updateModelTargetPicker(key tea.KeyPressMsg) (tea.Model, tea.Cmd)
 	targets := modelTargets()
 	switch key.String() {
 	case "esc":
+		if m.isStandaloneScreen(screenModels) {
+			return m, tea.Quit
+		}
 		m.screen = m.modelReturn
 		m.status = ""
 		if m.screen == screenChat {
@@ -3835,7 +3854,11 @@ func (m model) viewModelTargets() string {
 		body.WriteString("\n")
 	}
 	body.WriteString("\n")
-	body.WriteString(helpStyle.Render("↑/↓ select · enter edit · i inherit/clear · esc chat"))
+	help := "↑/↓ select · enter edit · i inherit/clear · esc chat"
+	if m.isStandaloneScreen(screenModels) {
+		help = "↑/↓ select · enter edit · i inherit/clear · esc quit"
+	}
+	body.WriteString(helpStyle.Render(help))
 	return frameStyle.Width(max(36, m.width-4)).Render(body.String())
 }
 

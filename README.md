@@ -56,6 +56,16 @@ services. Network defaults, API keys, and providers are separate sections:
 q gateway config
 ```
 
+The remaining settings screens can also be opened directly. Each command loads
+only the resources its screen needs instead of starting the main chat UI:
+
+```powershell
+q model   # managed Gateway + model discovery
+q skills  # global and current-workspace Agent Skills
+q ignore  # current workspace's .qignore editor
+q help    # scrollable command and key reference
+```
+
 The Session Store uses a pure-Go HNSW index, so q does not require CGO, FAISS,
 or a vector-specific build tag.
 
