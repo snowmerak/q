@@ -30,6 +30,26 @@ before Gateway, Session Store, Loom, and MCP initialization completes. Provider
 model discovery runs in parallel with a 1.5-second budget; providers that do
 not answer in time are skipped for that refresh instead of delaying the UI.
 
+Run only the configured Gateway, without the TUI or workspace services:
+
+```powershell
+q gateway [--host <ip>] [--port <port>]
+```
+
+The command reads `~/.q/providers.json` and listens on `127.0.0.1` with an
+automatically selected available port by default. Pass `--port` to use a fixed
+port. The effective OpenAI-compatible `/v1` endpoint is printed after startup.
+The command also prints a newly generated temporary API key; clients must send
+it as an `Authorization: Bearer` credential. Provider settings are loaded once;
+restart the command after changing `providers.json`.
+
+Open only the Gateway provider settings UI, without initializing the main chat
+UI or workspace services:
+
+```powershell
+q gateway config
+```
+
 The Session Store uses a pure-Go HNSW index, so q does not require CGO, FAISS,
 or a vector-specific build tag.
 
@@ -194,6 +214,11 @@ The Gateway binds only to `127.0.0.1:0` and reports the assigned port to its
 parent over a private stdout handshake. Provider edits start a replacement
 child before saving and activating it; a failed replacement leaves the running
 Gateway untouched.
+
+Each supervised Gateway generation also receives a newly generated temporary
+API key. The parent `q` client uses that key automatically, and it is neither
+written to `providers.json` nor retained in the child environment after
+startup. Replacing the Gateway rotates both its endpoint and API key.
 
 `/model` lists the main `default` target, optional `embedding` target, and each
 subagent role. A role without an explicit model inherits the main model. An

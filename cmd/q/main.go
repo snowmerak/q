@@ -31,6 +31,24 @@ func main() {
 		}
 		return
 	}
+	if len(os.Args) > 1 && os.Args[1] == "gateway" {
+		if len(os.Args) > 2 && os.Args[2] == "config" {
+			if len(os.Args) != 3 {
+				fmt.Fprintln(os.Stderr, "usage: q gateway config")
+				os.Exit(2)
+			}
+			if err := app.RunGatewayConfigDefault(ctx); err != nil {
+				fmt.Fprintln(os.Stderr, err)
+				os.Exit(1)
+			}
+			return
+		}
+		if err := runGatewayCommand(ctx, os.Args[2:], os.Stdout, os.Stderr); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
 	if len(os.Args) > 1 && os.Args[1] == "commit" {
 		if len(os.Args) != 2 {
 			fmt.Fprintln(os.Stderr, "usage: q commit")
@@ -58,9 +76,14 @@ func runGatewayChild(parent context.Context, args []string) error {
 	}
 	ctx, cancel := context.WithCancel(parent)
 	defer cancel()
+	apiKey := os.Getenv(providerhost.ChildAPIKeyEnv)
+	_ = os.Unsetenv(providerhost.ChildAPIKeyEnv)
+	if apiKey == "" {
+		return fmt.Errorf("Gateway child API key is missing")
+	}
 	go func() {
 		_, _ = io.Copy(io.Discard, os.Stdin)
 		cancel()
 	}()
-	return providerhost.RunChild(ctx, args[1], providerhost.EncodeReady(json.NewEncoder(os.Stdout)))
+	return providerhost.RunChild(ctx, args[1], apiKey, providerhost.EncodeReady(json.NewEncoder(os.Stdout)))
 }

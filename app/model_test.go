@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -25,16 +27,45 @@ import (
 
 type fakeProviderRuntime struct {
 	endpoint string
+	apiKey   string
 	config   gateway.Config
 	applies  int
 }
 
-func (f *fakeProviderRuntime) Endpoint() string       { return f.endpoint }
+func (f *fakeProviderRuntime) Endpoint() string { return f.endpoint }
+func (f *fakeProviderRuntime) APIKey() string {
+	if f.apiKey != "" {
+		return f.apiKey
+	}
+	return "test-gateway-api-key"
+}
 func (f *fakeProviderRuntime) Config() gateway.Config { return cloneGatewayConfig(f.config) }
 func (f *fakeProviderRuntime) Apply(_ context.Context, value gateway.Config) error {
 	f.config = cloneGatewayConfig(value)
 	f.applies++
 	return nil
+}
+
+func TestManagedClientFactoryUsesGatewayAPIKey(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.Header.Get("Authorization") != "Bearer temporary-gateway-key" {
+			writer.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		_, _ = writer.Write([]byte(`{"object":"list","data":[]}`))
+	}))
+	defer server.Close()
+
+	runtime := &fakeProviderRuntime{endpoint: server.URL + "/v1", apiKey: "temporary-gateway-key"}
+	factory := managedClientFactory(runtime)
+	configuredClient, err := factory(config.Default())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer configuredClient.Close()
+	if _, err := configuredClient.ListModels(t.Context()); err != nil {
+		t.Fatal(err)
+	}
 }
 
 type fakeClient struct {
@@ -1377,6 +1408,42 @@ func TestFirstManagedProviderIsAlwaysAppended(t *testing.T) {
 	m = updated.(model)
 	if runtime.applies != 1 || len(runtime.config.Providers) != 1 || runtime.config.Providers[0].ID != "codex" {
 		t.Fatalf("runtime applies = %d, config = %#v", runtime.applies, runtime.config)
+	}
+}
+
+func TestGatewayConfigOnlySavesProviderWithoutOpeningChatOrModels(t *testing.T) {
+	runtime := &fakeProviderRuntime{endpoint: "http://127.0.0.1:54321/v1"}
+	factoryCalls := 0
+	m := newManagedModel(context.Background(), config.Store{Dir: t.TempDir()}, func(config.Config) (chatClient, error) {
+		factoryCalls++
+		return &fakeClient{}, nil
+	}, runtime)
+	m.gatewayConfigOnly = true
+	m.setup[setupProviderID].SetValue("codex")
+	m.setProviderType("codex")
+	m.setup[setupBaseURL].SetValue("")
+	m.setup[setupAPIKeyEnv].SetValue("")
+
+	updated, command := m.applyProviderEdit()
+	m = updated.(model)
+	if command == nil {
+		t.Fatal("provider apply command is nil")
+	}
+	updated, _ = m.Update(command())
+	m = updated.(model)
+
+	if runtime.applies != 1 || len(m.gatewayConfig.Providers) != 1 {
+		t.Fatalf("runtime applies = %d, Gateway config = %#v", runtime.applies, m.gatewayConfig)
+	}
+	if factoryCalls != 0 || m.client != nil || m.screen != screenProviders {
+		t.Fatalf("factory calls = %d, client = %#v, screen = %v", factoryCalls, m.client, m.screen)
+	}
+	if !strings.Contains(m.status, "Provider settings saved") || !strings.Contains(m.viewProviders(), "esc quit") {
+		t.Fatalf("status = %q, view = %q", m.status, m.viewProviders())
+	}
+	_, quit := m.updateProviders(tea.KeyPressMsg{Code: tea.KeyEscape})
+	if quit == nil {
+		t.Fatal("Esc did not quit Gateway config-only mode")
 	}
 }
 

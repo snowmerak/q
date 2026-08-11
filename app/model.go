@@ -149,6 +149,7 @@ type model struct {
 	providerAdding      bool
 	providerTypeCursor  int
 	gatewayConfig       gateway.Config
+	gatewayConfigOnly   bool
 	providerCursor      int
 	discovering         bool
 	models              []client.Model
@@ -591,6 +592,12 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, m.setup[m.setupFocus].Focus()
 		}
+		if m.gatewayConfigOnly {
+			m.gatewayConfig = message.gatewayConfig
+			m.enterProviderList()
+			m.status = "Provider settings saved"
+			return m, nil
+		}
 		if message.replaceClient {
 			if m.client != nil && m.client != message.client {
 				_ = m.client.Close()
@@ -1000,6 +1007,9 @@ func (m model) updateProviders(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	}
 	switch key.String() {
 	case "esc":
+		if m.gatewayConfigOnly {
+			return m, tea.Quit
+		}
 		if m.client != nil && m.config.Provider.Model != "model-discovery" {
 			m.screen = screenChat
 			m.status = ""
@@ -1122,6 +1132,20 @@ func (m model) applyGatewayConfig(candidate gateway.Config) (tea.Model, tea.Cmd)
 	if m.runtime == nil {
 		m.status = "internal Gateway runtime is unavailable"
 		return m, nil
+	}
+	if m.gatewayConfigOnly {
+		m.discovering = true
+		m.status = "Saving Gateway settings…"
+		for index := range m.setup {
+			m.setup[index].Blur()
+		}
+		runtime := m.runtime
+		return m, func() tea.Msg {
+			if err := runtime.Apply(m.ctx, candidate); err != nil {
+				return providersAppliedMsg{err: err}
+			}
+			return providersAppliedMsg{gatewayConfig: candidate}
+		}
 	}
 	m.discovering = true
 	returnTarget := ""
@@ -3609,7 +3633,11 @@ func (m model) viewProviders() string {
 		body.WriteString("\n")
 	}
 	body.WriteString("\n")
-	body.WriteString(helpStyle.Render("↑/↓ select · enter edit · a add · space enable/disable · d delete · esc chat"))
+	help := "↑/↓ select · enter edit · a add · space enable/disable · d delete · esc chat"
+	if m.gatewayConfigOnly {
+		help = "↑/↓ select · enter edit · a add · space enable/disable · d delete · esc quit"
+	}
+	body.WriteString(helpStyle.Render(help))
 	return frameStyle.Width(max(36, m.width-4)).Render(body.String())
 }
 

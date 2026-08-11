@@ -25,6 +25,7 @@ type clientFactory func(config.Config) (chatClient, error)
 
 type providerRuntime interface {
 	Endpoint() string
+	APIKey() string
 	Config() gateway.Config
 	Apply(context.Context, gateway.Config) error
 }
@@ -51,10 +52,14 @@ func managedClientFactory(runtime providerRuntime) clientFactory {
 		if endpoint == "" {
 			return nil, errors.New("internal LLM Gateway is not running")
 		}
+		apiKey := runtime.APIKey()
+		if apiKey == "" {
+			return nil, errors.New("internal LLM Gateway API key is unavailable")
+		}
 		return client.New(client.Config{
-			BaseURL:       endpoint,
-			DefaultModel:  value.Provider.Model,
-			DisableAPIKey: true,
+			BaseURL:      endpoint,
+			APIKey:       apiKey,
+			DefaultModel: value.Provider.Model,
 		})
 	}
 }
@@ -122,6 +127,48 @@ func RunDefault(ctx context.Context) error {
 	}
 	if err := Run(ctx, store); err != nil {
 		return fmt.Errorf("q: %w", err)
+	}
+	return nil
+}
+
+// RunGatewayConfig opens only the managed provider settings UI. It does not
+// acquire a workspace lock or initialize chat, Session Store, Loom, or tools.
+func RunGatewayConfig(ctx context.Context, store config.Store) error {
+	runtimeContext, cancelRuntime := context.WithCancel(ctx)
+	defer cancelRuntime()
+
+	manager, err := providerhost.NewManager(runtimeContext, providerhost.Store{Dir: store.Dir})
+	if err != nil {
+		return err
+	}
+	defer manager.Close()
+
+	startupErr := manager.LoadAndStart(runtimeContext)
+	if errors.Is(startupErr, providerhost.ErrNotFound) {
+		startupErr = nil
+	}
+	m := newManagedModel(runtimeContext, store, managedClientFactory(manager), manager)
+	m.gatewayConfigOnly = true
+	m.config = config.Default()
+	if len(m.gatewayConfig.Providers) > 0 {
+		m.enterProviderList()
+	}
+	if startupErr != nil {
+		m.status = startupErr.Error()
+	}
+
+	_, runErr := tea.NewProgram(m).Run()
+	cancelRuntime()
+	return runErr
+}
+
+func RunGatewayConfigDefault(ctx context.Context) error {
+	store, err := config.DefaultStore()
+	if err != nil {
+		return err
+	}
+	if err := RunGatewayConfig(ctx, store); err != nil {
+		return fmt.Errorf("q gateway config: %w", err)
 	}
 	return nil
 }

@@ -42,9 +42,16 @@ func TestSupervisorStartsAndStopsCurrentExecutableChild(t *testing.T) {
 	if !strings.HasPrefix(prepared.endpoint, "http://127.0.0.1:") || strings.HasSuffix(prepared.endpoint, ":0/v1") {
 		t.Fatalf("endpoint = %q", prepared.endpoint)
 	}
+	if prepared.apiKey == "" {
+		t.Fatal("prepared child has no API key")
+	}
 	supervisor.Activate(prepared)
+	firstAPIKey := prepared.apiKey
 	if supervisor.Endpoint() != prepared.endpoint {
 		t.Fatalf("Endpoint() = %q", supervisor.Endpoint())
+	}
+	if supervisor.APIKey() != prepared.apiKey {
+		t.Fatalf("APIKey() = %q", supervisor.APIKey())
 	}
 	if _, err := supervisor.Prepare(ctx, gateway.Config{}); err == nil {
 		t.Fatal("invalid replacement unexpectedly started")
@@ -52,11 +59,29 @@ func TestSupervisorStartsAndStopsCurrentExecutableChild(t *testing.T) {
 	if supervisor.Endpoint() != prepared.endpoint {
 		t.Fatalf("failed replacement changed endpoint to %q", supervisor.Endpoint())
 	}
+	if supervisor.APIKey() != firstAPIKey {
+		t.Fatalf("failed replacement changed API key to %q", supervisor.APIKey())
+	}
+	replacement, err := supervisor.Prepare(ctx, gateway.Config{Providers: []gateway.ProviderConfig{{
+		ID: "test", Type: "openai-compatible", Enabled: true, BaseURL: upstream.URL + "/v1",
+	}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if replacement.apiKey == firstAPIKey {
+		t.Fatal("replacement reused the previous API key")
+	}
+	supervisor.Activate(replacement)
+	if supervisor.APIKey() != replacement.apiKey {
+		t.Fatalf("replacement APIKey() = %q", supervisor.APIKey())
+	}
 	if err := supervisor.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Stat(prepared.configPath); !os.IsNotExist(err) {
-		t.Fatalf("runtime snapshot still exists: %v", err)
+	for _, path := range []string{prepared.configPath, replacement.configPath} {
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Fatalf("runtime snapshot still exists: %s: %v", path, err)
+		}
 	}
 }
 
@@ -108,7 +133,9 @@ func TestGatewayChildProcess(t *testing.T) {
 		_, _ = io.Copy(io.Discard, os.Stdin)
 		cancel()
 	}()
-	err := RunChild(ctx, os.Args[index+2], EncodeReady(json.NewEncoder(os.Stdout)))
+	apiKey := os.Getenv(ChildAPIKeyEnv)
+	_ = os.Unsetenv(ChildAPIKeyEnv)
+	err := RunChild(ctx, os.Args[index+2], apiKey, EncodeReady(json.NewEncoder(os.Stdout)))
 	if err != nil {
 		_, _ = os.Stderr.WriteString(err.Error())
 		os.Exit(1)

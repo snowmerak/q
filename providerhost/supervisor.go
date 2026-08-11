@@ -20,6 +20,7 @@ const childStartupTimeout = 30 * time.Second
 
 type generation struct {
 	endpoint   string
+	apiKey     string
 	configPath string
 	command    *exec.Cmd
 	stdin      io.WriteCloser
@@ -52,7 +53,15 @@ func (s *Supervisor) Prepare(ctx context.Context, value gateway.Config) (*genera
 	if err != nil {
 		return nil, err
 	}
-	prepared := &generation{configPath: configPath, done: make(chan struct{}), stderr: newLimitedBuffer(32 << 10)}
+	apiKey, err := NewEphemeralAPIKey()
+	if err != nil {
+		_ = os.Remove(configPath)
+		return nil, err
+	}
+	prepared := &generation{
+		apiKey: apiKey, configPath: configPath,
+		done: make(chan struct{}), stderr: newLimitedBuffer(32 << 10),
+	}
 	abort := true
 	defer func() {
 		if abort {
@@ -63,6 +72,7 @@ func (s *Supervisor) Prepare(ctx context.Context, value gateway.Config) (*genera
 	arguments := append([]string(nil), s.argsPrefix...)
 	arguments = append(arguments, ChildCommand, "--config", configPath)
 	command := exec.CommandContext(s.ctx, s.executable, arguments...)
+	command.Env = environmentWithValue(os.Environ(), ChildAPIKeyEnv, apiKey)
 	configureChildProcess(command)
 	stdin, err := command.StdinPipe()
 	if err != nil {
@@ -124,6 +134,18 @@ func (s *Supervisor) Prepare(ctx context.Context, value gateway.Config) (*genera
 	return prepared, nil
 }
 
+func environmentWithValue(environment []string, key, value string) []string {
+	result := make([]string, 0, len(environment)+1)
+	for _, entry := range environment {
+		name, _, _ := strings.Cut(entry, "=")
+		if strings.EqualFold(name, key) {
+			continue
+		}
+		result = append(result, entry)
+	}
+	return append(result, key+"="+value)
+}
+
 func (s *Supervisor) Activate(prepared *generation) {
 	s.mu.Lock()
 	previous := s.current
@@ -141,6 +163,15 @@ func (s *Supervisor) Endpoint() string {
 		return ""
 	}
 	return s.current.endpoint
+}
+
+func (s *Supervisor) APIKey() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.current == nil {
+		return ""
+	}
+	return s.current.apiKey
 }
 
 func (s *Supervisor) Close() error {

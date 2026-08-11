@@ -34,7 +34,7 @@ func TestRunChildReportsRandomLoopbackEndpoint(t *testing.T) {
 	ready := make(chan ReadyMessage, 1)
 	done := make(chan error, 1)
 	go func() {
-		done <- RunChild(ctx, path, func(message ReadyMessage) error {
+		done <- RunChild(ctx, path, "test-gateway-key", func(message ReadyMessage) error {
 			ready <- message
 			return nil
 		})
@@ -49,7 +49,12 @@ func TestRunChildReportsRandomLoopbackEndpoint(t *testing.T) {
 	if message.Event != "ready" || message.BaseURL == "http://127.0.0.1:0" {
 		t.Fatalf("ready message = %#v", message)
 	}
-	response, err := http.Get(message.BaseURL + "/v1/models")
+	request, err := http.NewRequest(http.MethodGet, message.BaseURL+"/v1/models", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Set("Authorization", "Bearer test-gateway-key")
+	response, err := http.DefaultClient.Do(request)
 	if err != nil {
 		t.Fatal(err)
 	}

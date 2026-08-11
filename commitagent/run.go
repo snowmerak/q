@@ -138,7 +138,7 @@ func resolveCommitRuntime(ctx context.Context, store config.Store, value config.
 			return resolvedRuntime{}, fmt.Errorf("q commit: start provider gateway: %w", err)
 		}
 		configuredClient, err = client.New(client.Config{
-			BaseURL: manager.Endpoint(), DefaultModel: value.Provider.Model, DisableAPIKey: true,
+			BaseURL: manager.Endpoint(), APIKey: manager.APIKey(), DefaultModel: value.Provider.Model,
 		})
 		if err != nil {
 			_ = manager.Close()
