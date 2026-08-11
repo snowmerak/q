@@ -39,18 +39,31 @@ type TargetSelector struct {
 }
 
 type CoderResult struct {
-	Outcome      string   `json:"outcome"`
-	Summary      string   `json:"summary"`
-	Findings     []string `json:"findings,omitempty"`
-	Artifacts    []string `json:"artifacts,omitempty"`
-	Verification []string `json:"verification,omitempty"`
-	Blocker      string   `json:"blocker,omitempty"`
+	Outcome      string          `json:"outcome"`
+	Summary      string          `json:"summary"`
+	Findings     []string        `json:"findings,omitempty"`
+	Artifacts    []string        `json:"artifacts,omitempty"`
+	Verification []string        `json:"verification,omitempty"`
+	Blocker      string          `json:"blocker,omitempty"`
+	Evidence     []CoderEvidence `json:"evidence,omitempty"`
+}
+
+// CoderEvidence is the bounded, automatically collected proof for one Coder
+// tool call. It deliberately omits tool arguments and result bodies: reviewers
+// receive only the tool identity, its immutable Loom receipt, error state, and
+// workspace paths relevant to file access.
+type CoderEvidence struct {
+	Tool    string   `json:"tool"`
+	LoomRef string   `json:"loom_ref,omitempty"`
+	IsError bool     `json:"is_error"`
+	Paths   []string `json:"paths,omitempty"`
 }
 
 type TaskReviewRequest struct {
 	Plan      PlanProposal `json:"plan"`
 	TaskIndex int          `json:"task_index"`
 	Attempt   int          `json:"attempt"`
+	Targets   []string     `json:"resolved_targets,omitempty"`
 	Result    CoderResult  `json:"result"`
 }
 
@@ -64,6 +77,7 @@ type TaskReview struct {
 
 type PlannerReviewRunner struct {
 	Client           AgentClient
+	Tools            ToolRuntime
 	Spec             Spec
 	Sink             RecordSink
 	RunID            string
@@ -131,11 +145,18 @@ func (r PlannerReviewRunner) Run(ctx context.Context, input TaskReviewRequest) (
 			Agent: "planner", TaskID: taskID, ParentID: r.ExecutionID,
 			Action: ProgressThinking, Detail: fmt.Sprintf("review round %d", round+1),
 		})
+		available := plannerReviewTools(nil)
+		if r.Tools != nil {
+			available = plannerReviewTools(r.Tools.Tools())
+		}
 		parallel := false
 		request := client.ChatRequest{
-			Messages: messages, Tools: []client.Tool{reviewTaskTool()},
-			ToolChoice: client.NamedToolChoice(ReviewTaskToolName), ParallelToolCalls: &parallel,
+			Messages: messages, Tools: available,
+			ToolChoice: client.ToolChoiceAuto, ParallelToolCalls: &parallel,
 			WorkingDirectory: r.WorkingDirectory,
+		}
+		if len(available) == 1 {
+			request.ToolChoice = client.NamedToolChoice(ReviewTaskToolName)
 		}
 		r.Spec.Apply(&request)
 		response, err := r.Client.Chat(ctx, request)
@@ -153,16 +174,29 @@ func (r PlannerReviewRunner) Run(ctx context.Context, input TaskReviewRequest) (
 				return TaskReview{}, err
 			}
 		}
-		if len(assistant.ToolCalls) != 1 || assistant.ToolCalls[0].Function.Name != ReviewTaskToolName {
-			messages = append(messages, client.Message{Role: client.RoleSystem, Content: "Call review_task exactly once."})
+		if len(assistant.ToolCalls) == 0 {
+			messages = append(messages, client.Message{Role: client.RoleSystem, Content: "Inspect evidence only when needed, then finish by calling review_task exactly once."})
 			continue
 		}
-		reportProgress(r.Progress, ProgressEvent{
-			Agent: "planner", TaskID: taskID, ParentID: r.ExecutionID,
-			Action: ProgressTool, Detail: ReviewTaskToolName,
-		})
-		review, err = parseTaskReview(assistant.ToolCalls[0].Function.Arguments)
-		if err != nil {
+		if len(assistant.ToolCalls) == 1 && assistant.ToolCalls[0].Function.Name == ReviewTaskToolName {
+			call := assistant.ToolCalls[0]
+			reportProgress(r.Progress, ProgressEvent{
+				Agent: "planner", TaskID: taskID, ParentID: r.ExecutionID,
+				Action: ProgressTool, Detail: ReviewTaskToolName,
+			})
+			review, err = parseTaskReview(call.Function.Arguments)
+			if err == nil {
+				if lifecycle != nil {
+					if err := lifecycle.Succeeded(review.Decision, review.Decision, review); err != nil {
+						return TaskReview{}, err
+					}
+				}
+				reportProgress(r.Progress, ProgressEvent{
+					Agent: "planner", TaskID: taskID, ParentID: r.ExecutionID,
+					Action: ProgressCompleted, Detail: review.Decision,
+				})
+				return review, nil
+			}
 			message := client.Message{
 				Role: client.RoleTool, Name: ReviewTaskToolName, ToolCallID: assistant.ToolCalls[0].ID,
 				Content: scoutToolError(err).Content,
@@ -176,16 +210,35 @@ func (r PlannerReviewRunner) Run(ctx context.Context, input TaskReviewRequest) (
 			}
 			continue
 		}
-		if lifecycle != nil {
-			if err := lifecycle.Succeeded(review.Decision, review.Decision, review); err != nil {
-				return TaskReview{}, err
+		for _, call := range assistant.ToolCalls {
+			reportProgress(r.Progress, ProgressEvent{
+				Agent: "planner", TaskID: taskID, ParentID: r.ExecutionID,
+				Action: ProgressTool, Detail: call.Function.Name,
+			})
+			var toolResult client.ToolResult
+			switch {
+			case call.Function.Name == ReviewTaskToolName:
+				toolResult = scoutToolError(errors.New("review_task must be the only tool call in its turn"))
+			case r.Tools == nil || !hasTool(available, call.Function.Name):
+				toolResult = scoutToolError(fmt.Errorf("tool %q is not available to planner review", call.Function.Name))
+			default:
+				toolResult, err = r.Tools.Call(ctx, call)
+				if err != nil {
+					toolResult = scoutToolError(err)
+				}
+			}
+			message := client.Message{
+				Role: client.RoleTool, Name: call.Function.Name, ToolCallID: call.ID,
+				Content: toolResult.Content,
+			}
+			traceToolResult(r.Trace, "planner", taskID, r.ExecutionID, call.Function.Name, toolResult)
+			messages = append(messages, message)
+			if lifecycle != nil {
+				if err := lifecycle.Message(message); err != nil {
+					return TaskReview{}, err
+				}
 			}
 		}
-		reportProgress(r.Progress, ProgressEvent{
-			Agent: "planner", TaskID: taskID, ParentID: r.ExecutionID,
-			Action: ProgressCompleted, Detail: review.Decision,
-		})
-		return review, nil
 	}
 	return TaskReview{}, fmt.Errorf("subagent: planner review exceeded %d model rounds", rounds)
 }
@@ -322,6 +375,11 @@ func validateTaskReviewRequest(request TaskReviewRequest) error {
 	if request.Attempt <= 0 {
 		return errors.New("subagent: planner review attempt must be positive")
 	}
+	if len(request.Targets) > 0 {
+		if err := validateResolvedTargets(request.Targets); err != nil {
+			return fmt.Errorf("subagent: planner review targets: %w", err)
+		}
+	}
 	request.Result.Outcome = strings.TrimSpace(request.Result.Outcome)
 	request.Result.Summary = strings.TrimSpace(request.Result.Summary)
 	request.Result.Blocker = strings.TrimSpace(request.Result.Blocker)
@@ -362,11 +420,35 @@ func validateTaskReview(review TaskReview) error {
 func plannerReviewInstructions() string {
 	return `You are q's Planner reviewing one Coder attempt against the current approved plan. The plan is a task list, not a dataflow graph. Target conditions select files for one task only; there are no sequential conditions or result conditions.
 
+The Coder result includes bounded evidence collected automatically from its tool calls: tool identity, Loom reference, error state, and relevant workspace paths. It does not include raw command output or the full Coder transcript. Inspect current files or selected Loom evidence only when needed. Use run_command only for non-mutating verification and follow it with wait; do not run Git commands or modify the workspace.
+
 Choose exactly one transition:
 - retry: run the same task again. Always provide feedback; use an empty string when no additional guidance is needed.
 - next: accept this task and advance to the next task (or finish after the final task).
 
 Add only durable facts newly learned from the attempt to facts. Those facts become part of the current plan before the next Coder invocation. Include a concise user-visible review note with the tool call, without exposing hidden chain-of-thought. Finish by calling review_task exactly once.`
+}
+
+func plannerReviewTools(available []client.Tool) []client.Tool {
+	allowed := map[string]struct{}{
+		"read_file": {}, "loom_inspect": {}, "loom_read": {}, "loom_eval": {},
+		"run_command": {}, "wait": {},
+	}
+	result := make([]client.Tool, 0, len(allowed)+1)
+	seen := make(map[string]struct{}, len(allowed)+1)
+	for _, tool := range available {
+		name := strings.TrimSpace(tool.Function.Name)
+		if _, ok := allowed[name]; !ok {
+			continue
+		}
+		if _, exists := seen[name]; exists {
+			continue
+		}
+		seen[name] = struct{}{}
+		result = append(result, tool)
+	}
+	result = append(result, reviewTaskTool())
+	return result
 }
 
 func reviewTaskTool() client.Tool {

@@ -2,21 +2,25 @@ package subagent
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"sort"
 	"strings"
 
 	"github.com/snowmerak/q/client"
 	"github.com/snowmerak/q/config"
+	"github.com/snowmerak/q/loom"
 )
 
 const (
-	CoderCompleteToolName = "task_complete"
-	defaultCoderRounds    = 48
-	maximumCoderReminders = 3
-	maximumCoderListItems = 32
-	maximumCoderTextBytes = 32 << 10
+	CoderCompleteToolName     = "task_complete"
+	defaultCoderRounds        = 48
+	maximumCoderReminders     = 3
+	maximumCoderListItems     = 32
+	maximumCoderTextBytes     = 32 << 10
+	maximumCoderEvidenceItems = 128
 )
 
 // CoderRunner executes one approved plan task in an isolated model/tool
@@ -102,6 +106,7 @@ func (r CoderRunner) run(
 		rounds = defaultCoderRounds
 	}
 	reminders := 0
+	evidence := make([]CoderEvidence, 0)
 	for round := 0; round < rounds; round++ {
 		reportProgress(r.Progress, ProgressEvent{
 			Agent: "coder", TaskID: taskID, ParentID: r.ExecutionID,
@@ -154,6 +159,10 @@ func (r CoderRunner) run(
 				} else {
 					completion, err := parseCoderCompletion(call.Function.Arguments)
 					if err == nil {
+						completion.Evidence = append([]CoderEvidence(nil), evidence...)
+						if err := validateCoderResult(completion); err != nil {
+							return CoderResult{}, err
+						}
 						return completion, nil
 					}
 					toolResult = scoutToolError(err)
@@ -165,6 +174,9 @@ func (r CoderRunner) run(
 				if err != nil {
 					toolResult = scoutToolError(err)
 				}
+			}
+			if call.Function.Name != CoderCompleteToolName && len(evidence) < maximumCoderEvidenceItems {
+				evidence = append(evidence, coderEvidence(call, toolResult, r.WorkingDirectory))
 			}
 			message := client.Message{
 				Role: client.RoleTool, Name: call.Function.Name,
@@ -239,6 +251,12 @@ func coderCompletionTool() client.Tool {
 }
 
 func parseCoderCompletion(arguments string) (CoderResult, error) {
+	var supplied map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(arguments), &supplied); err == nil {
+		if _, exists := supplied["evidence"]; exists {
+			return CoderResult{}, errors.New("task_complete evidence is collected automatically and must not be supplied by Coder")
+		}
+	}
 	var result CoderResult
 	if err := decodeStrict(arguments, &result); err != nil {
 		return CoderResult{}, fmt.Errorf("decode task_complete: %w", err)
@@ -272,7 +290,104 @@ func validateCoderResult(result CoderResult) error {
 		len(result.Verification) > maximumCoderListItems {
 		return fmt.Errorf("task_complete lists must contain at most %d items", maximumCoderListItems)
 	}
+	if len(result.Evidence) > maximumCoderEvidenceItems {
+		return fmt.Errorf("Coder evidence must contain at most %d items", maximumCoderEvidenceItems)
+	}
+	for index, evidence := range result.Evidence {
+		if strings.TrimSpace(evidence.Tool) == "" {
+			return fmt.Errorf("Coder evidence %d tool is required", index+1)
+		}
+		if evidence.LoomRef != "" {
+			if _, err := loom.ParseRef(evidence.LoomRef); err != nil {
+				return fmt.Errorf("Coder evidence %d: %w", index+1, err)
+			}
+		}
+		for _, path := range evidence.Paths {
+			if !workspaceRelativePath(path) {
+				return fmt.Errorf("Coder evidence %d path %q must stay workspace-relative", index+1, path)
+			}
+		}
+	}
 	return nil
+}
+
+func coderEvidence(call client.ToolCall, result client.ToolResult, workingDirectory string) CoderEvidence {
+	return CoderEvidence{
+		Tool: strings.TrimSpace(call.Function.Name), LoomRef: evidenceLoomRef(result.Content),
+		IsError: result.IsError, Paths: evidencePaths(call.Function.Name, call.Function.Arguments, workingDirectory),
+	}
+}
+
+func evidenceLoomRef(content string) string {
+	var receipt struct {
+		LoomRef  string `json:"loom_ref"`
+		Artifact struct {
+			Ref string `json:"ref"`
+		} `json:"artifact"`
+	}
+	if json.Unmarshal([]byte(content), &receipt) == nil {
+		for _, candidate := range []string{receipt.LoomRef, receipt.Artifact.Ref} {
+			candidate = strings.TrimSpace(candidate)
+			if ref, err := loom.ParseRef(candidate); err == nil {
+				return ref.String()
+			}
+		}
+	}
+	refs := loom.ExtractReferences(content)
+	if len(refs) > 0 {
+		return refs[0].String()
+	}
+	return ""
+}
+
+func evidencePaths(tool, arguments, workingDirectory string) []string {
+	var keys []string
+	switch strings.TrimSpace(tool) {
+	case "read_file", "edit_file", "write_file", "list_directory", "create_directory", "remove_path":
+		keys = []string{"path"}
+	case "move_path", "copy_path":
+		keys = []string{"source", "destination"}
+	default:
+		return nil
+	}
+	var values map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(arguments), &values); err != nil {
+		return nil
+	}
+	paths := make([]string, 0, len(keys))
+	for _, key := range keys {
+		var value string
+		if err := json.Unmarshal(values[key], &value); err != nil {
+			continue
+		}
+		if normalized := evidencePath(value, workingDirectory); normalized != "" {
+			paths = append(paths, normalized)
+		}
+	}
+	return cleanStrings(paths)
+}
+
+func evidencePath(value, workingDirectory string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ""
+	}
+	if filepath.IsAbs(value) {
+		root := strings.TrimSpace(workingDirectory)
+		if root == "" {
+			return ""
+		}
+		relative, err := filepath.Rel(root, value)
+		if err != nil {
+			return ""
+		}
+		value = relative
+	}
+	value = filepath.Clean(value)
+	if !workspaceRelativePath(value) {
+		return ""
+	}
+	return filepath.ToSlash(value)
 }
 
 func hasTool(tools []client.Tool, name string) bool {

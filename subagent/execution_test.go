@@ -390,6 +390,55 @@ func TestTaskReviewRequiresFeedbackButAllowsEmptyRetry(t *testing.T) {
 	}
 }
 
+func TestPlannerReviewCanInspectBoundedCoderEvidence(t *testing.T) {
+	loomRef := "loom://0123456789abcdef0123456789abcdef"
+	clientFake := &fakeScoutClient{responses: []client.Message{
+		{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{scoutCall("loom_inspect", `{"ref":"`+loomRef+`"}`)}},
+		{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{scoutCall(ReviewTaskToolName, `{
+			"decision":"next",
+			"feedback":"",
+			"facts":["The edited file was inspected"]
+		}`)}},
+	}}
+	toolResult := client.ToolResult{Content: `{"ref":"` + loomRef + `","bytes":128}`}
+	tools := &fakeScoutTools{available: []client.Tool{
+		scoutFunctionTool("read_file"), scoutFunctionTool("edit_file"),
+		scoutFunctionTool("loom_inspect"), scoutFunctionTool("loom_read"), scoutFunctionTool("loom_eval"),
+		scoutFunctionTool("run_command"), scoutFunctionTool("cmd_status"), scoutFunctionTool("wait"),
+	}, result: &toolResult}
+	runner := PlannerReviewRunner{
+		Client: clientFake, Tools: tools, Spec: Spec{Role: config.AgentRolePlanner, Model: "planner-model"},
+		WorkingDirectory: `C:\workspace`,
+	}
+	review, err := runner.Run(context.Background(), TaskReviewRequest{
+		Plan: executableTestPlan(), TaskIndex: 0, Attempt: 1, Targets: []string{"app/model.go"},
+		Result: CoderResult{
+			Outcome: "succeeded", Summary: "Updated the model",
+			Evidence: []CoderEvidence{{Tool: "edit_file", LoomRef: loomRef, Paths: []string{"app/model.go"}}},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if review.Decision != "next" || len(tools.calls) != 1 || tools.calls[0].Function.Name != "loom_inspect" {
+		t.Fatalf("review = %#v, tool calls = %#v", review, tools.calls)
+	}
+	if len(clientFake.requests) != 2 || !strings.Contains(clientFake.requests[0].Messages[1].Content, loomRef) ||
+		!strings.Contains(clientFake.requests[0].Messages[1].Content, `"resolved_targets"`) {
+		t.Fatalf("review requests = %#v", clientFake.requests)
+	}
+	for _, name := range []string{"read_file", "loom_inspect", "loom_read", "loom_eval", "run_command", "wait", ReviewTaskToolName} {
+		if !hasScoutTool(clientFake.requests[0].Tools, name) {
+			t.Fatalf("Planner review tool %q missing: %#v", name, clientFake.requests[0].Tools)
+		}
+	}
+	for _, name := range []string{"edit_file", "cmd_status"} {
+		if hasScoutTool(clientFake.requests[0].Tools, name) {
+			t.Fatalf("Planner review received disallowed tool %q: %#v", name, clientFake.requests[0].Tools)
+		}
+	}
+}
+
 func TestPlannerReviewUpdatesPlanFactsAndCoderPromptCarriesCurrentPlan(t *testing.T) {
 	plan := executableTestPlan()
 	fake := &fakeScoutClient{responses: []client.Message{{

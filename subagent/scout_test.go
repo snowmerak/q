@@ -33,12 +33,16 @@ func (f *fakeScoutClient) Chat(_ context.Context, request client.ChatRequest) (*
 type fakeScoutTools struct {
 	available []client.Tool
 	calls     []client.ToolCall
+	result    *client.ToolResult
 }
 
 func (f *fakeScoutTools) Tools() []client.Tool { return append([]client.Tool(nil), f.available...) }
 
 func (f *fakeScoutTools) Call(_ context.Context, call client.ToolCall) (client.ToolResult, error) {
 	f.calls = append(f.calls, call)
+	if f.result != nil {
+		return *f.result, nil
+	}
 	return client.ToolResult{Content: `{"path":"subagent/scout.go","content":"package subagent"}`}, nil
 }
 

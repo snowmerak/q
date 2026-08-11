@@ -477,7 +477,7 @@ func executeApprovedPlan(
 		),
 	}
 	reviewer := subagent.PlannerReviewRunner{
-		Client: configuredClient, Spec: plannerSpec,
+		Client: configuredClient, Tools: toolRuntime, Spec: plannerSpec,
 		Sink: archive, RunID: runID, ExecutionID: checkpoint.ExecutionID,
 		WorkingDirectory: workingDirectory, Progress: progress, Trace: trace,
 	}

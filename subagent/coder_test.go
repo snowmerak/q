@@ -24,7 +24,7 @@ func TestCoderRunnerUsesWorkspaceToolsAndCompletesAttempt(t *testing.T) {
 		scoutFunctionTool("read_file"), scoutFunctionTool("edit_file"), scoutFunctionTool("run_command"),
 		scoutFunctionTool("cmd_status"), scoutFunctionTool("wait"),
 		scoutFunctionTool(AskToUserToolName), scoutFunctionTool(DelegateScoutToolName),
-	}}
+	}, result: &client.ToolResult{Content: `{"loom_ref":"loom://0123456789abcdef0123456789abcdef","stored":true}`}}
 	sink := &scoutRecordSink{}
 	var progress []ProgressEvent
 	runner := CoderRunner{
@@ -43,6 +43,11 @@ func TestCoderRunnerUsesWorkspaceToolsAndCompletesAttempt(t *testing.T) {
 	}
 	if result.Outcome != "succeeded" || result.Summary != "Updated the model" || len(result.Verification) != 1 {
 		t.Fatalf("Coder result = %#v", result)
+	}
+	if len(result.Evidence) != 1 || result.Evidence[0].Tool != "edit_file" ||
+		result.Evidence[0].LoomRef != "loom://0123456789abcdef0123456789abcdef" ||
+		result.Evidence[0].IsError || len(result.Evidence[0].Paths) != 1 || result.Evidence[0].Paths[0] != "app/model.go" {
+		t.Fatalf("Coder evidence = %#v", result.Evidence)
 	}
 	if len(fakeTools.calls) != 1 || fakeTools.calls[0].Function.Name != "edit_file" {
 		t.Fatalf("workspace calls = %#v", fakeTools.calls)
@@ -90,5 +95,16 @@ func TestCoderRunnerUsesWorkspaceToolsAndCompletesAttempt(t *testing.T) {
 func TestCoderCompletionRequiresBlocker(t *testing.T) {
 	if _, err := parseCoderCompletion(`{"outcome":"blocked","summary":"Cannot continue"}`); err == nil {
 		t.Fatal("blocked Coder completion without blocker was accepted")
+	}
+}
+
+func TestCoderCannotSupplyAutomaticEvidence(t *testing.T) {
+	_, err := parseCoderCompletion(`{
+		"outcome":"succeeded",
+		"summary":"Pretend evidence",
+		"evidence":[{"tool":"read_file","loom_ref":"loom://0123456789abcdef0123456789abcdef","is_error":false}]
+	}`)
+	if err == nil || !strings.Contains(err.Error(), "evidence is collected automatically") {
+		t.Fatalf("model-supplied evidence error = %v", err)
 	}
 }

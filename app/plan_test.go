@@ -178,6 +178,13 @@ func TestPlanCommandExecutesApprovedPlanWithCoderAndPlannerReview(t *testing.T) 
 		!hasPlanTool(configuredClient.requests[8].Tools, subagent.ReviewTaskToolName) {
 		t.Fatalf("Planner review requests = %#v / %#v", configuredClient.requests[6], configuredClient.requests[8])
 	}
+	firstReviewInput := configuredClient.requests[6].Messages[1].Content
+	if !strings.Contains(firstReviewInput, `"evidence"`) ||
+		!strings.Contains(firstReviewInput, `"tool": "write_file"`) ||
+		!strings.Contains(firstReviewInput, `"loom_ref": "loom://0123456789abcdef0123456789abcdef"`) ||
+		!strings.Contains(firstReviewInput, `"paths": [`) || !strings.Contains(firstReviewInput, `"app/plan.go"`) {
+		t.Fatalf("Planner review did not receive bounded Coder evidence: %s", firstReviewInput)
+	}
 	retryPrompt := configuredClient.requests[7].Messages[0].Content
 	if !strings.Contains(retryPrompt, "Preserve the existing command boundary") ||
 		!strings.Contains(retryPrompt, "app/plan.go owns the approved execution boundary") ||

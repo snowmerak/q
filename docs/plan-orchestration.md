@@ -167,6 +167,7 @@ Planner만 반복하지 않는다. 기존 사용자 답변, Scout 결과, Loom r
 - Griller, Scout, Planner의 구조화된 progress event와 채팅 TUI activity panel
 - role별 현재 상태와 최근 `started/thinking/tool/delegated/waiting/completed/failed` 로그
 - 승인 직후 Loom/static target을 해석하고 Coder/Planner review execution loop 실행
+- Coder tool call의 Loom/path evidence를 자동 수집하고 Planner가 선택적으로 검토
 - task별 `retry | next`, feedback, facts 병합과 attempt 상한
 - Coder/Planner의 상세 trace와 완료 후 접힌 summary
 - 승인된 실행의 단계별 durable checkpoint와 재시작 recovery UI

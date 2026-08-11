@@ -241,7 +241,8 @@ func (l ExecutionLoop) RunFrom(ctx context.Context, checkpoint ExecutionCheckpoi
 			reportProgress(l.Progress, ProgressEvent{Agent: "coder", Action: ProgressCompleted, Detail: coderResult.Summary})
 		case ExecutionPhaseReviewPending:
 			review, err := l.Review(ctx, TaskReviewRequest{
-				Plan: checkpoint.Plan, TaskIndex: taskIndex, Attempt: checkpoint.Attempt, Result: *checkpoint.PendingResult,
+				Plan: checkpoint.Plan, TaskIndex: taskIndex, Attempt: checkpoint.Attempt,
+				Targets: append([]string(nil), checkpoint.Targets...), Result: *checkpoint.PendingResult,
 			})
 			if err != nil {
 				return checkpoint.result(), fmt.Errorf("subagent: review task %d attempt %d: %w", taskIndex+1, checkpoint.Attempt, err)

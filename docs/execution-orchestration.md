@@ -85,7 +85,7 @@ Target condition은 한 task가 다룰 파일 집합만 계산한다. 조건 간
              Coder 실행
                 │
                 ▼
-          Planner review_task
+     자동 evidence 수집 + Planner review
           ┌─────┴─────┐
         retry        next
           │            │
@@ -94,6 +94,31 @@ Target condition은 한 task가 다룰 파일 집합만 계산한다. 조건 간
 
 Task는 배열 순서대로 실행하지만 target condition 자체에는 순차 의미가 없다.
 결과 조건식도 없다. Coder 결과의 수용 여부는 Planner의 review가 판단한다.
+
+## Coder evidence와 review 도구
+
+Coder가 호출한 non-Loom 도구 결과는 기존 runtime 경계에서 Loom artifact로 저장된다.
+각 Coder attempt는 이 receipt와 도구 호출 인자에서 다음의 제한된 evidence만 자동으로
+수집한다.
+
+- 도구 이름
+- 결과의 `loom_ref`
+- 오류 여부
+- 파일 접근 도구에 포함된 workspace-relative path
+
+원시 명령 출력과 전체 Coder transcript는 review 요청에 복제하지 않는다. Coder가
+`task_complete` 인자로 evidence를 직접 작성할 수도 없다. Planner는 필요한 근거만
+Loom에서 선택적으로 읽는다.
+
+Planner review에는 다음 도구만 제공한다.
+
+- `read_file`
+- `loom_inspect`, `loom_read`, `loom_eval`
+- 검증 명령을 위한 `run_command`, `wait`
+- 최종 전이 결정을 위한 `review_task`
+
+Planner는 Git 명령이나 workspace를 변경하는 명령을 실행하지 않도록 지시받으며,
+`edit_file`, `write_file`, `cmd_status`와 archive/transcript 조회 도구를 받지 않는다.
 
 ## Planner review
 
@@ -128,7 +153,9 @@ Planner가 반환한 `facts`는 decision 적용 전에 Plan에 중복 제거하�
 - Plan task별 OR-of-AND target condition schema와 validation
 - 정적 path selector와 실제 `loom_eval`/`loom_read`를 사용하는 Loom transform selector
 - product 내부 파일 집합 교집합과 product 간 합집합 evaluator
-- `review_task` 전용 Planner runner
+- Coder tool call의 bounded Loom/path evidence 자동 수집
+- `read_file`, Loom 조회와 검증 명령만 허용하는 Planner review tool loop
+- 최종 전이를 강제하는 `review_task`
 - `decision: retry | next`
 - 필수지만 빈 문자열을 허용하는 `feedback`
 - review facts를 현재 Plan에 병합하는 처리
