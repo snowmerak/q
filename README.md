@@ -131,7 +131,7 @@ until the combined conditions and plan have been approved.
 ```text
 request
   -> Griller questions and repository research
-  -> Scout read-only investigations when evidence is needed
+  -> Scout non-mutating investigations when evidence is needed
   -> Planner conditions, targets, tasks, and verification
   -> user approval
   -> Coder task
@@ -140,9 +140,12 @@ request
 ```
 
 The Griller asks the user only for decisions the repository cannot answer. It
-can delegate bounded, read-only questions to Scout while building the planning
-brief. Scout returns structured findings directly; large supporting results
-remain available through Loom references.
+can delegate bounded, non-mutating questions to Scout while building the
+planning brief. Scout can run information-gathering commands for environment,
+architecture, and tool-version facts, but its contract forbids workspace
+changes, builds, tests, generators, dependency changes, and Git mutations.
+Scout returns structured findings directly; large supporting results remain
+available through Loom references.
 
 Each approved task selects its files using an OR-of-AND target condition made
 from static paths and optional `loom_eval` transforms. The condition selects a

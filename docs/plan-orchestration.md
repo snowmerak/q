@@ -14,7 +14,8 @@
   subagent 역할이다.
 - **Grill**: 누적된 사용자 답변, 기존 결정, Loom 자료와 Scout 결과를 조합해 다음
   질문이나 다음 agent의 bounded context를 만드는 내부 과정이다.
-- **Scout**: Griller가 위임한 저장소 질문을 읽기 전용으로 조사하는 subagent다.
+- **Scout**: Griller가 위임한 저장소 질문을 workspace 비변경 방식으로 조사하는
+  subagent다.
 - **Planner**: Grill이 완성한 brief를 조건, 완료 기준, 검증 방법과 실행 단계로
   변환하는 역할이다.
 
@@ -97,15 +98,19 @@ Scout는 Griller가 호출한다. Planner를 위해 직접 계획을 쓰거나 �
 candidate file과 Loom input은 선택적 lead다. Griller가 관련 파일을 아직 모르는 경우
 Scout의 목적 자체가 관련 파일과 심볼을 찾는 것이 될 수 있다.
 
-Scout는 읽기 전용 도구만 사용한다. 초기 allowlist는 다음과 같다.
+Scout는 workspace 비변경 조사 도구만 사용한다. 현재 allowlist는 다음과 같다.
 
 - `list_directory`
 - `read_file`
-- `loom_inspect`
-- `loom_read`
-- `loom_eval`
+- `loom_inspect`, `loom_read`, `loom_eval`
+- `search_skills`, `get_skill`
+- `run_command`, `wait`
 
-파일 변경, command 실행, 사용자 질문과 재귀 subagent 생성은 허용하지 않는다.
+`run_command`는 OS, architecture, shell, tool version, environment와 project metadata처럼
+계획에 필요한 사실을 수집할 때만 사용한다. 파일 생성·변경·삭제, dependency
+설치·갱신, format/generate, build/test, project script 실행과 Git 상태 변경은 prompt
+계약으로 금지한다. 비동기 명령은 `cmd_status` 없이 `wait`로만 완료를 추적한다.
+사용자 질문과 재귀 subagent 생성도 허용하지 않는다.
 Scout는 반드시 `task_complete`를 단독 호출해 다음 구조를 반환한다.
 
 - `outcome`: `succeeded` 또는 `blocked`
@@ -155,7 +160,7 @@ Planner만 반복하지 않는다. 기존 사용자 답변, Scout 결과, Loom r
 - Griller가 호출하는 `delegate_scout`
 - role별 model과 reasoning effort 적용
 - Griller가 넘길 bounded `ScoutTask`
-- 읽기 전용 tool allowlist
+- workspace 비변경 조사 tool allowlist와 정보수집 전용 `run_command`/`wait`
 - Scout의 독립 model/tool loop와 inline structured report
 - 검증된 `task_complete` 결과
 - plain-text 종료 reminder
@@ -177,3 +182,11 @@ Planner만 반복하지 않는다. 기존 사용자 답변, Scout 결과, Loom r
 - 승인 이전 Griller/Planner planning state의 재시작 복구
 - Griller와 Planner 내부 lifecycle archive
 - 전체 activity history를 탐색하는 `/agents` 상세 화면
+- Scout 시작 전 workspace baseline/fingerprint를 기록하고 command 실행 뒤 mutation을
+  감지하는 harness guard
+- Scout mutation이 감지되면 결과를 Griller에 전달하지 않고 비변경 재조사를
+  요구하는 nudge/retry 경로
+- 기존 사용자 변경과 동시 변경을 보존하면서 Scout 소유 변경만 식별하는 mutation
+  journal 및 그 소유권이 확실할 때만 수행하는 안전한 rollback
+- workspace 밖의 tool cache, 전역 파일과 외부 부작용은 rollback할 수 없다는 경계의
+  명시와 별도 격리 전략

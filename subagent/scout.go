@@ -24,7 +24,7 @@ const (
 	maximumScoutTextBytes = 16 << 10
 )
 
-var scoutReadTools = map[string]struct{}{
+var scoutAllowedTools = map[string]struct{}{
 	"read_file":      {},
 	"list_directory": {},
 	"loom_inspect":   {},
@@ -32,6 +32,8 @@ var scoutReadTools = map[string]struct{}{
 	"loom_eval":      {},
 	"search_skills":  {},
 	"get_skill":      {},
+	"run_command":    {},
+	"wait":           {},
 }
 
 // AgentClient is the model surface required by an isolated subagent run.
@@ -40,7 +42,7 @@ type AgentClient interface {
 }
 
 // ToolRuntime supplies workspace tools. ScoutRunner filters this catalog to
-// its read-only allowlist before exposing it to the model.
+// its non-mutating investigation allowlist before exposing it to the model.
 type ToolRuntime interface {
 	Tools() []client.Tool
 	Call(context.Context, client.ToolCall) (client.ToolResult, error)
@@ -88,7 +90,8 @@ type scoutCompletion struct {
 	Blocker      string         `json:"blocker,omitempty"`
 }
 
-// ScoutRunner executes one isolated, read-only repository investigation.
+// ScoutRunner executes one isolated repository investigation. Its command
+// access is constrained by prompt contract to information gathering only.
 // Sink and RunID are optional together; when configured they persist the
 // lifecycle through the existing durable archive.
 type ScoutRunner struct {
@@ -246,7 +249,7 @@ func (r ScoutRunner) run(ctx context.Context, task ScoutTask, prompt string, lif
 					}
 					toolResult = scoutToolError(err)
 				}
-			} else if _, allowed := scoutReadTools[call.Function.Name]; !allowed {
+			} else if _, allowed := scoutAllowedTools[call.Function.Name]; !allowed {
 				toolResult = scoutToolError(fmt.Errorf("tool %q is not available to scout", call.Function.Name))
 			} else {
 				toolResult, err = r.Tools.Call(ctx, call)
@@ -330,10 +333,10 @@ func encodeScoutTask(task ScoutTask) (string, error) {
 }
 
 func scoutInstructions() string {
-	return `You are q's isolated scout subagent. Investigate the repository and return precise evidence to the Griller that called you. The Griller may use your report to ask the user better questions, delegate another scout, or prepare a brief for the Planner. You cannot ask the user, modify files, run commands, create subagents, or declare the overall user task complete.
+	return `You are q's isolated scout subagent. Investigate the repository and return precise evidence to the Griller that called you. The Griller may use your report to ask the user better questions, delegate another scout, or prepare a brief for the Planner. You cannot ask the user, modify files, create subagents, or declare the overall user task complete.
 
 Rules:
-1. Use only the supplied read-only repository and Loom tools.
+1. Use only the supplied repository, Loom, skill, and information-gathering command tools. Maintain a non-mutating investigation: commands may inspect the OS, architecture, shell, tool versions, and environment or project metadata, but must not create, modify, move, or delete files; install or update dependencies; format or generate code; build or test the project; run project scripts; or change Git state.
 2. During repository discovery, do not traverse q's .q metadata directory and honor entries omitted by the workspace-root .qignore file. Access an ignored path only when the task explicitly identifies it.
 3. Treat candidate_files and loom_inputs as optional leads, not as proof that no other file matters. When they are empty, discover the relevant area from the objective and available repository structure.
 4. Prefer loom_eval when a large Loom artifact can be transformed into a smaller structured view before reading individual files.
@@ -341,13 +344,14 @@ Rules:
 6. Investigate enough surrounding code to identify existing patterns, dependencies, tests, and likely change boundaries.
 7. If evidence is unavailable, return outcome blocked with a specific blocker; never invent repository facts.
 8. On each tool-calling turn, include a concise user-visible progress note describing the immediate investigation and expected evidence; do not expose or invent hidden chain-of-thought.
-9. Finish by calling task_complete as the only tool call in that turn. Never return the scout report as plain text.`
+9. run_command is asynchronous. When it returns a command_id, use wait with the latest next_offset until the command finishes. Never use cmd_status or busy-poll a command.
+10. Finish by calling task_complete as the only tool call in that turn. Never return the scout report as plain text.`
 }
 
 func scoutTools(available []client.Tool) []client.Tool {
-	result := make([]client.Tool, 0, len(scoutReadTools)+1)
+	result := make([]client.Tool, 0, len(scoutAllowedTools)+1)
 	for _, tool := range available {
-		if _, allowed := scoutReadTools[tool.Function.Name]; allowed {
+		if _, allowed := scoutAllowedTools[tool.Function.Name]; allowed {
 			result = append(result, tool)
 		}
 	}

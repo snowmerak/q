@@ -3,8 +3,9 @@
 ## 상태
 
 이 문서는 역할별 모델 할당과 서브에이전트 orchestration의 전체 메모다.
-메인 agent의 `task_start`, `ask_to_user`, `task_complete` 제어와 read-only
-`ScoutRunner`가 구현되어 있다. `/plan`은 Griller가 필요할 때 Scout를 반복 호출하고,
+메인 agent의 `task_start`, `ask_to_user`, `task_complete` 제어와 workspace 비변경
+`ScoutRunner`가 구현되어 있다. Scout의 `run_command`/`wait`는 정보 수집에만 사용한다.
+`/plan`은 Griller가 필요할 때 Scout를 반복 호출하고,
 Planner의 조건·계획을 사용자에게 확인받은 뒤 승인된 task를 격리 Coder session에서
 실행한다. 각 attempt 뒤 Planner가 `retry` 또는 `next`를 결정하며, 진행 중 실행의
 재시작 복구는 아직 구현하지 않는다.

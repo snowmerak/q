@@ -53,7 +53,7 @@ func (s *scoutRecordSink) Append(record sessionstore.Record) error {
 	return nil
 }
 
-func TestScoutRunnerUsesReadOnlyToolsAndReturnsStructuredReport(t *testing.T) {
+func TestScoutRunnerUsesInvestigationToolsAndReturnsStructuredReport(t *testing.T) {
 	complete := `{
 		"outcome":"succeeded",
 		"summary":"Located the scout execution boundary",
@@ -71,6 +71,7 @@ func TestScoutRunnerUsesReadOnlyToolsAndReturnsStructuredReport(t *testing.T) {
 	}}
 	fakeTools := &fakeScoutTools{available: []client.Tool{
 		scoutFunctionTool("edit_file"), scoutFunctionTool("loom_eval"), scoutFunctionTool("read_file"),
+		scoutFunctionTool("run_command"), scoutFunctionTool("cmd_status"), scoutFunctionTool("wait"),
 	}}
 	sink := &scoutRecordSink{}
 	var progress []ProgressEvent
@@ -101,13 +102,15 @@ func TestScoutRunnerUsesReadOnlyToolsAndReturnsStructuredReport(t *testing.T) {
 		fakeClient.requests[0].ReasoningEffort != "medium" || fakeClient.requests[0].WorkingDirectory != `C:\workspace` {
 		t.Fatalf("requests = %#v", fakeClient.requests)
 	}
-	for _, tool := range fakeClient.requests[0].Tools {
-		if tool.Function.Name == "edit_file" {
-			t.Fatal("scout was offered edit_file")
+	for _, name := range []string{"edit_file", "cmd_status"} {
+		if hasScoutTool(fakeClient.requests[0].Tools, name) {
+			t.Fatalf("scout was offered %s", name)
 		}
 	}
 	if !hasScoutTool(fakeClient.requests[0].Tools, "read_file") ||
 		!hasScoutTool(fakeClient.requests[0].Tools, "loom_eval") ||
+		!hasScoutTool(fakeClient.requests[0].Tools, "run_command") ||
+		!hasScoutTool(fakeClient.requests[0].Tools, "wait") ||
 		!hasScoutTool(fakeClient.requests[0].Tools, ScoutCompleteToolName) {
 		t.Fatalf("scout tools = %#v", fakeClient.requests[0].Tools)
 	}
@@ -116,6 +119,9 @@ func TestScoutRunnerUsesReadOnlyToolsAndReturnsStructuredReport(t *testing.T) {
 	}
 	if !strings.Contains(fakeClient.requests[0].Messages[0].Content, "return precise evidence to the Griller") ||
 		!strings.Contains(fakeClient.requests[0].Messages[0].Content, "workspace-root .qignore") ||
+		!strings.Contains(fakeClient.requests[0].Messages[0].Content, "information-gathering command tools") ||
+		!strings.Contains(fakeClient.requests[0].Messages[0].Content, "must not create, modify, move, or delete files") ||
+		!strings.Contains(fakeClient.requests[0].Messages[0].Content, "use wait with the latest next_offset") ||
 		!strings.Contains(fakeClient.requests[0].Messages[1].Content, ref.String()) {
 		t.Fatalf("messages = %#v", fakeClient.requests[0].Messages)
 	}
@@ -140,6 +146,33 @@ func TestScoutRunnerUsesReadOnlyToolsAndReturnsStructuredReport(t *testing.T) {
 	}
 	if !sawRead || !sawComplete {
 		t.Fatalf("tool progress missing: %#v", progress)
+	}
+}
+
+func TestScoutRunnerDispatchesInformationGatheringCommandAndWait(t *testing.T) {
+	fakeClient := &fakeScoutClient{responses: []client.Message{
+		{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{scoutCall("run_command", `{"command":"go version"}`)}},
+		{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{scoutCall("wait", `{"command_id":"command-1","next_offset":0}`)}},
+		{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{scoutCall(ScoutCompleteToolName,
+			`{"outcome":"succeeded","summary":"Captured the Go toolchain version","verification":["go version"]}`)}},
+	}}
+	fakeTools := &fakeScoutTools{available: []client.Tool{
+		scoutFunctionTool("run_command"), scoutFunctionTool("cmd_status"), scoutFunctionTool("wait"),
+	}}
+	runner := ScoutRunner{
+		Client: fakeClient, Tools: fakeTools,
+		Spec: Spec{Role: config.AgentRoleScout, Model: "scout-model"},
+	}
+	result, err := runner.Run(context.Background(), ScoutTask{Objective: "Inspect the Go toolchain version"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Outcome != "succeeded" || len(fakeTools.calls) != 2 ||
+		fakeTools.calls[0].Function.Name != "run_command" || fakeTools.calls[1].Function.Name != "wait" {
+		t.Fatalf("result = %#v, calls = %#v", result, fakeTools.calls)
+	}
+	if hasScoutTool(fakeClient.requests[0].Tools, "cmd_status") {
+		t.Fatalf("scout was offered cmd_status: %#v", fakeClient.requests[0].Tools)
 	}
 }
 

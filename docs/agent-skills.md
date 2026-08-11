@@ -26,7 +26,7 @@ bytes as an immutable `agent-skill` Loom artifact. The response contains the
 artifact reference rather than the file body.
 
 Main chat and Griller receive `search_skills` and `get_skill`; Scout receives
-the same tools in its read-only allowlist and is the preferred repository
+the same tools in its non-mutating investigation allowlist and is the preferred repository
 research role for skill discovery. Planner, Coder, and commit sessions do not
 receive them.
 
