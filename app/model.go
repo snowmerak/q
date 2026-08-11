@@ -24,6 +24,7 @@ import (
 	"github.com/snowmerak/llm-provider/gateway"
 	"github.com/snowmerak/q/client"
 	"github.com/snowmerak/q/config"
+	"github.com/snowmerak/q/gatewayconfig"
 	"github.com/snowmerak/q/loom"
 	"github.com/snowmerak/q/memory"
 	"github.com/snowmerak/q/sessionstore"
@@ -42,6 +43,9 @@ const (
 	screenLoom
 	screenIgnore
 	screenSkills
+	screenGateway
+	screenGatewayNetwork
+	screenGatewayKeys
 	screenHelp
 	screenChat
 )
@@ -142,44 +146,56 @@ type model struct {
 	archiveErr        error
 	runID             string
 
-	setup               [setupFieldCount]textinput.Model
-	setupFocus          int
-	setupEdit           bool
-	providerEditIndex   int
-	providerAdding      bool
-	providerTypeCursor  int
-	gatewayConfig       gateway.Config
-	gatewayConfigOnly   bool
-	providerCursor      int
-	discovering         bool
-	models              []client.Model
-	modelCursor         int
-	modelFilter         textinput.Model
-	modelPickerStage    modelPickerStage
-	modelChooseTarget   bool
-	modelTarget         string
-	modelTargetCursor   int
-	reasoningCursor     int
-	modelSelection      client.Model
-	embeddingDimensions textinput.Model
-	modelContextWindow  textinput.Model
-	draftConfig         config.Config
-	modelReturn         screen
-	loomInputs          [5]textinput.Model
-	loomFocus           int
-	loomDraft           config.LoomConfig
-	loomStats           loom.Stats
-	loomBusy            bool
-	ignoreEditor        textarea.Model
-	ignoreOriginal      string
-	ignoreDiscardArmed  bool
-	helpReturn          screen
-	skillsBusy          bool
-	skillsStatusError   bool
-	skillsScope         int
-	skillsCursor        [2]int
-	skillsMode          skillScreenMode
-	skillsInput         textinput.Model
+	setup                 [setupFieldCount]textinput.Model
+	setupFocus            int
+	setupEdit             bool
+	providerEditIndex     int
+	providerAdding        bool
+	providerTypeCursor    int
+	gatewayConfig         gateway.Config
+	gatewayConfigOnly     bool
+	providerCursor        int
+	providerReturn        screen
+	gatewaySettingsStore  gatewayconfig.Store
+	gatewaySettings       gatewayconfig.Config
+	gatewayCursor         int
+	gatewayHostInput      textinput.Model
+	gatewayPortInput      textinput.Model
+	gatewayNetworkFocus   int
+	gatewayKeyCursor      int
+	gatewayKeyAlias       textinput.Model
+	gatewayKeyAdding      bool
+	gatewayKeyRevokeArmed bool
+	generatedGatewayKey   string
+	discovering           bool
+	models                []client.Model
+	modelCursor           int
+	modelFilter           textinput.Model
+	modelPickerStage      modelPickerStage
+	modelChooseTarget     bool
+	modelTarget           string
+	modelTargetCursor     int
+	reasoningCursor       int
+	modelSelection        client.Model
+	embeddingDimensions   textinput.Model
+	modelContextWindow    textinput.Model
+	draftConfig           config.Config
+	modelReturn           screen
+	loomInputs            [5]textinput.Model
+	loomFocus             int
+	loomDraft             config.LoomConfig
+	loomStats             loom.Stats
+	loomBusy              bool
+	ignoreEditor          textarea.Model
+	ignoreOriginal        string
+	ignoreDiscardArmed    bool
+	helpReturn            screen
+	skillsBusy            bool
+	skillsStatusError     bool
+	skillsScope           int
+	skillsCursor          [2]int
+	skillsMode            skillScreenMode
+	skillsInput           textinput.Model
 
 	config             config.Config
 	client             chatClient
@@ -390,6 +406,18 @@ func newManagedModel(ctx context.Context, store config.Store, factory clientFact
 	m.modelContextWindow.Placeholder = "provider metadata"
 	m.modelContextWindow.CharLimit = 12
 	m.modelContextWindow.SetWidth(28)
+	m.gatewaySettingsStore = gatewayconfig.Store{Dir: store.Dir}
+	m.gatewayHostInput = textinput.New()
+	m.gatewayHostInput.Prompt = "host · "
+	m.gatewayHostInput.SetWidth(40)
+	m.gatewayPortInput = textinput.New()
+	m.gatewayPortInput.Prompt = "port · "
+	m.gatewayPortInput.CharLimit = 5
+	m.gatewayPortInput.SetWidth(16)
+	m.gatewayKeyAlias = textinput.New()
+	m.gatewayKeyAlias.Prompt = "alias · "
+	m.gatewayKeyAlias.CharLimit = 64
+	m.gatewayKeyAlias.SetWidth(48)
 	loomPrompts := []string{"artifact MiB · ", "store MiB · ", "GC trigger % · ", "GC target % · ", "grace hours · "}
 	for index := range m.loomInputs {
 		field := textinput.New()
@@ -454,6 +482,15 @@ func (m model) Init() tea.Cmd {
 		return tea.Batch(m.modelPickerFocus(), tea.RequestBackgroundColor)
 	}
 	if m.screen == screenProviders {
+		return tea.RequestBackgroundColor
+	}
+	if m.screen == screenGatewayNetwork {
+		return tea.Batch(m.gatewayNetworkFocusCommand(), tea.RequestBackgroundColor)
+	}
+	if m.screen == screenGatewayKeys && m.gatewayKeyAdding {
+		return tea.Batch(m.gatewayKeyAlias.Focus(), tea.RequestBackgroundColor)
+	}
+	if m.screen == screenGateway || m.screen == screenGatewayKeys {
 		return tea.RequestBackgroundColor
 	}
 	if m.screen == screenLoom {
@@ -870,6 +907,36 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.refreshSkills(false)
 		return m, nil
+	case gatewaySettingsSavedMsg:
+		if message.err != nil {
+			m.status = message.err.Error()
+			return m, m.gatewayNetworkFocusCommand()
+		}
+		m.gatewaySettings = message.config
+		m.status = "Gateway network settings saved; restart a running standalone Gateway to rebind"
+		return m, m.gatewayNetworkFocusCommand()
+	case gatewayAPIKeyGeneratedMsg:
+		if message.err != nil {
+			m.status = message.err.Error()
+			m.gatewayKeyAdding = true
+			return m, m.gatewayKeyAlias.Focus()
+		}
+		m.gatewaySettings = message.config
+		m.gatewayKeyAdding = false
+		m.gatewayKeyAlias.Reset()
+		m.gatewayKeyAlias.Blur()
+		m.generatedGatewayKey = message.key
+		m.gatewayKeyCursor = len(message.config.APIKeys) - 1
+		m.status = ""
+		return m, nil
+	case gatewayAPIKeyRevokedMsg:
+		if message.err != nil {
+			m.status = message.err.Error()
+			return m, nil
+		}
+		m.gatewaySettings = message.config
+		m.status = "API key revoked"
+		return m, nil
 	}
 
 	if key, ok := message.(tea.KeyPressMsg); ok {
@@ -890,6 +957,15 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if m.screen == screenProviders {
 			return m.updateProviders(key)
+		}
+		if m.screen == screenGateway {
+			return m.updateGateway(key)
+		}
+		if m.screen == screenGatewayNetwork {
+			return m.updateGatewayNetwork(key)
+		}
+		if m.screen == screenGatewayKeys {
+			return m.updateGatewayKeys(key)
 		}
 		if m.screen == screenModels {
 			return m.updateModelPicker(key)
@@ -931,6 +1007,9 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			return m, command
 		}
 		return m, nil
+	}
+	if m.screen == screenGatewayNetwork || (m.screen == screenGatewayKeys && m.gatewayKeyAdding) {
+		return m.updateGatewayInput(message)
 	}
 
 	if m.screen == screenChat {
@@ -1007,6 +1086,10 @@ func (m model) updateProviders(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	}
 	switch key.String() {
 	case "esc":
+		if m.providerReturn == screenGateway {
+			m.enterGatewaySettings()
+			return m, nil
+		}
 		if m.gatewayConfigOnly {
 			return m, tea.Quit
 		}
@@ -1742,7 +1825,7 @@ func (m model) updateChatKey(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case "ctrl+p":
 		if !m.waiting {
 			if m.runtime != nil {
-				m.enterProviderList()
+				m.enterGatewaySettings()
 				return m, nil
 			}
 			m.enterSetup(m.config)
@@ -1810,10 +1893,10 @@ func (m model) submitChat() (tea.Model, tea.Cmd) {
 	case "/model":
 		m.input.Reset()
 		return m.discoverCurrentModels()
-	case "/provider":
+	case "/gateway":
 		m.input.Reset()
 		if m.runtime != nil {
-			m.enterProviderList()
+			m.enterGatewaySettings()
 			return m, nil
 		}
 		m.enterSetup(m.config)
@@ -3473,6 +3556,12 @@ func (m model) View() tea.View {
 	content := m.viewSetup()
 	if m.screen == screenProviders {
 		content = m.viewProviders()
+	} else if m.screen == screenGateway {
+		content = m.viewGateway()
+	} else if m.screen == screenGatewayNetwork {
+		content = m.viewGatewayNetwork()
+	} else if m.screen == screenGatewayKeys {
+		content = m.viewGatewayKeys()
 	} else if m.screen == screenModels {
 		content = m.viewModels()
 	} else if m.screen == screenLoom {
@@ -3634,7 +3723,9 @@ func (m model) viewProviders() string {
 	}
 	body.WriteString("\n")
 	help := "↑/↓ select · enter edit · a add · space enable/disable · d delete · esc chat"
-	if m.gatewayConfigOnly {
+	if m.providerReturn == screenGateway {
+		help = "↑/↓ select · enter edit · a add · space enable/disable · d delete · esc Gateway"
+	} else if m.gatewayConfigOnly {
 		help = "↑/↓ select · enter edit · a add · space enable/disable · d delete · esc quit"
 	}
 	body.WriteString(helpStyle.Render(help))

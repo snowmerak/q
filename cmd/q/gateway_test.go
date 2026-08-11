@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	"github.com/snowmerak/llm-provider/gateway"
+	"github.com/snowmerak/q/gatewayconfig"
 	"github.com/snowmerak/q/providerhost"
 )
 
@@ -20,7 +22,7 @@ func TestParseGatewayOptions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if defaults.host != defaultGatewayHost || defaults.port != defaultGatewayPort {
+	if defaults.hostSet || defaults.portSet || defaults.host != "" || defaults.port != -1 {
 		t.Fatalf("defaults = %#v", defaults)
 	}
 
@@ -28,8 +30,32 @@ func TestParseGatewayOptions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if configured.host != "0.0.0.0" || configured.port != 0 {
+	if configured.host != "0.0.0.0" || configured.port != 0 || !configured.hostSet || !configured.portSet {
 		t.Fatalf("configured = %#v", configured)
+	}
+}
+
+func TestListenGatewayFallsBackOnlyForConfiguredPort(t *testing.T) {
+	occupied, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer occupied.Close()
+	port := occupied.Addr().(*net.TCPAddr).Port
+	configured := gatewayconfig.ServerConfig{Host: "127.0.0.1", Port: port}
+
+	listener, fallback, err := listenGateway(gatewayCommandOptions{}, configured)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	if !fallback || listener.Addr().(*net.TCPAddr).Port == port {
+		t.Fatalf("fallback=%v address=%s", fallback, listener.Addr())
+	}
+
+	_, _, err = listenGateway(gatewayCommandOptions{port: port, portSet: true}, configured)
+	if err == nil {
+		t.Fatal("explicit occupied port unexpectedly fell back")
 	}
 }
 
@@ -60,10 +86,28 @@ func TestRunGatewayWithStoreServesConfiguredProviders(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	store := providerhost.Store{Dir: t.TempDir()}
-	if err := store.Save(gateway.Config{Providers: []gateway.ProviderConfig{{
+	directory := t.TempDir()
+	providerStore := providerhost.Store{Dir: directory}
+	if err := providerStore.Save(gateway.Config{Providers: []gateway.ProviderConfig{{
 		ID: "local", Type: "openai-compatible", Enabled: true, BaseURL: upstream.URL + "/v1",
 	}}}); err != nil {
+		t.Fatal(err)
+	}
+	settingsStore := gatewayconfig.Store{Dir: directory}
+	var master [32]byte
+	master[0] = 42
+	if _, err := settingsStore.EnsureMasterKey(master); err != nil {
+		t.Fatal(err)
+	}
+	generated, err := gatewayconfig.GenerateAPIKey(master, "test client", time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	settings, err := gatewayconfig.AddAPIKey(gatewayconfig.Default(), generated)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := settingsStore.Save(settings); err != nil {
 		t.Fatal(err)
 	}
 
@@ -71,7 +115,7 @@ func TestRunGatewayWithStoreServesConfiguredProviders(t *testing.T) {
 	stdoutReader, stdoutWriter := io.Pipe()
 	done := make(chan error, 1)
 	go func() {
-		done <- runGatewayWithStore(ctx, nil, stdoutWriter, io.Discard, store)
+		done <- runGatewayWithStore(ctx, nil, stdoutWriter, io.Discard, providerStore, settingsStore)
 		_ = stdoutWriter.Close()
 	}()
 
@@ -82,12 +126,6 @@ func TestRunGatewayWithStoreServesConfiguredProviders(t *testing.T) {
 		t.Fatal(err)
 	}
 	endpoint := strings.TrimSpace(strings.TrimPrefix(line, "q gateway listening on "))
-	apiKeyLine, err := outputReader.ReadString('\n')
-	if err != nil {
-		cancel()
-		t.Fatal(err)
-	}
-	apiKey := strings.TrimSpace(strings.TrimPrefix(apiKeyLine, "q gateway API key: "))
 	unauthorized, err := http.Get(endpoint + "/models")
 	if err != nil {
 		cancel()
@@ -103,13 +141,12 @@ func TestRunGatewayWithStoreServesConfiguredProviders(t *testing.T) {
 		cancel()
 		t.Fatal(err)
 	}
-	request.Header.Set("Authorization", "Bearer "+apiKey)
+	request.Header.Set("Authorization", "Bearer "+generated.Secret)
 	response, err := http.DefaultClient.Do(request)
 	if err != nil {
 		cancel()
 		t.Fatal(err)
 	}
-	defer response.Body.Close()
 	var payload struct {
 		Data []struct {
 			ID string `json:"id"`
@@ -122,6 +159,35 @@ func TestRunGatewayWithStoreServesConfiguredProviders(t *testing.T) {
 	if len(payload.Data) != 1 || payload.Data[0].ID != "local/test-model" {
 		cancel()
 		t.Fatalf("models = %#v", payload.Data)
+	}
+	_ = response.Body.Close()
+
+	if _, err := settingsStore.RevokeAPIKey(settings, generated.Record.ID, time.Now()); err != nil {
+		cancel()
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		request, err = http.NewRequest(http.MethodGet, endpoint+"/models", nil)
+		if err != nil {
+			cancel()
+			t.Fatal(err)
+		}
+		request.Header.Set("Authorization", "Bearer "+generated.Secret)
+		response, err = http.DefaultClient.Do(request)
+		if err != nil {
+			cancel()
+			t.Fatal(err)
+		}
+		_ = response.Body.Close()
+		if response.StatusCode == http.StatusUnauthorized {
+			break
+		}
+		if time.Now().After(deadline) {
+			cancel()
+			t.Fatal("revoked API key remained authorized after settings reload")
+		}
+		time.Sleep(50 * time.Millisecond)
 	}
 
 	cancel()

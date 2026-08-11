@@ -131,7 +131,7 @@ func RunDefault(ctx context.Context) error {
 	return nil
 }
 
-// RunGatewayConfig opens only the managed provider settings UI. It does not
+// RunGatewayConfig opens only the Gateway settings UI. It does not
 // acquire a workspace lock or initialize chat, Session Store, Loom, or tools.
 func RunGatewayConfig(ctx context.Context, store config.Store) error {
 	runtimeContext, cancelRuntime := context.WithCancel(ctx)
@@ -150,9 +150,7 @@ func RunGatewayConfig(ctx context.Context, store config.Store) error {
 	m := newManagedModel(runtimeContext, store, managedClientFactory(manager), manager)
 	m.gatewayConfigOnly = true
 	m.config = config.Default()
-	if len(m.gatewayConfig.Providers) > 0 {
-		m.enterProviderList()
-	}
+	m.enterGatewaySettings()
 	if startupErr != nil {
 		m.status = startupErr.Error()
 	}

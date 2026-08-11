@@ -14,6 +14,7 @@ require (
 	github.com/dop251/goja v0.0.0-20260806115107-493f22071ef6
 	github.com/modelcontextprotocol/go-sdk v1.7.0
 	github.com/snowmerak/llm-provider v0.0.0-20260802095120-519c056c6741
+	github.com/zeebo/blake3 v0.2.4
 	go.etcd.io/bbolt v1.4.0
 	golang.org/x/sys v0.46.0
 	golang.org/x/text v0.40.0
@@ -60,6 +61,7 @@ require (
 	github.com/google/pprof v0.0.0-20260402051712-545e8a4df936 // indirect
 	github.com/gorilla/css v1.0.1 // indirect
 	github.com/json-iterator/go v0.0.0-20171115153421-f7279a603ede // indirect
+	github.com/klauspost/cpuid/v2 v2.0.12 // indirect
 	github.com/kr/pretty v0.3.1 // indirect
 	github.com/lucasb-eyer/go-colorful v1.4.0 // indirect
 	github.com/mattn/go-runewidth v0.0.24 // indirect

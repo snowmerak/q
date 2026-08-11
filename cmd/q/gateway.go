@@ -8,22 +8,22 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"os"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/snowmerak/llm-provider/gateway"
 	"github.com/snowmerak/q/config"
+	"github.com/snowmerak/q/gatewayconfig"
 	"github.com/snowmerak/q/providerhost"
 )
 
-const (
-	defaultGatewayHost = "127.0.0.1"
-	defaultGatewayPort = 0
-)
-
 type gatewayCommandOptions struct {
-	host string
-	port int
+	host    string
+	port    int
+	hostSet bool
+	portSet bool
 }
 
 func runGatewayCommand(ctx context.Context, args []string, stdout, stderr io.Writer) error {
@@ -31,7 +31,10 @@ func runGatewayCommand(ctx context.Context, args []string, stdout, stderr io.Wri
 	if err != nil {
 		return fmt.Errorf("q gateway: %w", err)
 	}
-	return runGatewayWithStore(ctx, args, stdout, stderr, providerhost.Store{Dir: store.Dir})
+	return runGatewayWithStore(
+		ctx, args, stdout, stderr,
+		providerhost.Store{Dir: store.Dir}, gatewayconfig.Store{Dir: store.Dir},
+	)
 }
 
 func runGatewayWithStore(
@@ -39,7 +42,8 @@ func runGatewayWithStore(
 	args []string,
 	stdout io.Writer,
 	stderr io.Writer,
-	store providerhost.Store,
+	providerStore providerhost.Store,
+	settingsStore gatewayconfig.Store,
 ) error {
 	options, err := parseGatewayOptions(args, stderr)
 	if errors.Is(err, flag.ErrHelp) {
@@ -49,14 +53,28 @@ func runGatewayWithStore(
 		return fmt.Errorf("q gateway: %w", err)
 	}
 
-	value, err := store.Load()
+	value, err := providerStore.Load()
 	if err != nil {
 		return fmt.Errorf("q gateway: load providers: %w", err)
 	}
-	address := net.JoinHostPort(options.host, fmt.Sprintf("%d", options.port))
-	listener, err := net.Listen("tcp", address)
+	settings, err := settingsStore.LoadOrDefault()
 	if err != nil {
-		return fmt.Errorf("q gateway: listen on %s: %w", address, err)
+		return fmt.Errorf("q gateway: load settings: %w", err)
+	}
+	if settings.ActiveKeyCount() == 0 {
+		return errors.New("q gateway: no active API keys; run `q gateway config` to generate one")
+	}
+	masterKey, err := settingsStore.LoadMasterKey()
+	if err != nil {
+		return fmt.Errorf("q gateway: load API key master: %w", err)
+	}
+	authenticator, err := gatewayconfig.NewAuthenticator(masterKey, settings)
+	if err != nil {
+		return fmt.Errorf("q gateway: initialize authentication: %w", err)
+	}
+	listener, fallback, err := listenGateway(options, settings.Server)
+	if err != nil {
+		return err
 	}
 	defer listener.Close()
 	instance, err := gateway.NewContext(ctx, value)
@@ -64,13 +82,9 @@ func runGatewayWithStore(
 		return fmt.Errorf("q gateway: initialize: %w", err)
 	}
 	defer instance.Close()
-	apiKey, err := providerhost.NewEphemeralAPIKey()
-	if err != nil {
-		return fmt.Errorf("q gateway: %w", err)
-	}
 
 	server := &http.Server{
-		Handler:           providerhost.AuthenticatedHandler(apiKey, instance.Handler()),
+		Handler:           authenticator.Handler(instance.Handler()),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 	serverContext, cancelServer := context.WithCancel(ctx)
@@ -83,19 +97,21 @@ func runGatewayWithStore(
 		defer cancelShutdown()
 		_ = server.Shutdown(shutdownContext)
 	}()
+	watchDone := watchGatewayKeyring(serverContext, settingsStore, authenticator, stderr)
 
-	if _, err := fmt.Fprintf(
-		stdout,
-		"q gateway listening on http://%s/v1\nq gateway API key: %s\n",
-		listener.Addr().String(), apiKey,
-	); err != nil {
+	if fallback {
+		_, _ = fmt.Fprintf(stderr, "q gateway: configured port %d is unavailable; using %s\n", settings.Server.Port, listener.Addr().String())
+	}
+	if _, err := fmt.Fprintf(stdout, "q gateway listening on http://%s/v1\n", listener.Addr().String()); err != nil {
 		cancelServer()
 		<-shutdownDone
+		<-watchDone
 		return fmt.Errorf("q gateway: report listen address: %w", err)
 	}
 	serveErr := server.Serve(listener)
 	cancelServer()
 	<-shutdownDone
+	<-watchDone
 	if errors.Is(serveErr, http.ErrServerClosed) {
 		return nil
 	}
@@ -103,7 +119,7 @@ func runGatewayWithStore(
 }
 
 func parseGatewayOptions(args []string, output io.Writer) (gatewayCommandOptions, error) {
-	options := gatewayCommandOptions{host: defaultGatewayHost, port: defaultGatewayPort}
+	options := gatewayCommandOptions{port: -1}
 	flags := flag.NewFlagSet("q gateway", flag.ContinueOnError)
 	flags.SetOutput(output)
 	flags.Usage = func() {
@@ -112,19 +128,101 @@ func parseGatewayOptions(args []string, output io.Writer) (gatewayCommandOptions
 		_, _ = fmt.Fprintln(output, "  q gateway config")
 		flags.PrintDefaults()
 	}
-	flags.StringVar(&options.host, "host", options.host, "IP address to listen on")
-	flags.IntVar(&options.port, "port", options.port, "port to listen on (default 0 selects a random port)")
+	flags.StringVar(&options.host, "host", "", "override the configured listen IP address")
+	flags.IntVar(&options.port, "port", -1, "override the configured listen port (0 selects a random port)")
 	if err := flags.Parse(args); err != nil {
 		return gatewayCommandOptions{}, err
 	}
 	if flags.NArg() != 0 {
 		return gatewayCommandOptions{}, fmt.Errorf("unexpected arguments: %s", strings.Join(flags.Args(), " "))
 	}
-	if net.ParseIP(options.host) == nil {
+	flags.Visit(func(current *flag.Flag) {
+		switch current.Name {
+		case "host":
+			options.hostSet = true
+		case "port":
+			options.portSet = true
+		}
+	})
+	if options.hostSet && net.ParseIP(options.host) == nil {
 		return gatewayCommandOptions{}, fmt.Errorf("host %q is not an IP address", options.host)
 	}
-	if options.port < 0 || options.port > 65535 {
+	if options.portSet && (options.port < 0 || options.port > 65535) {
 		return gatewayCommandOptions{}, fmt.Errorf("port must be between 0 and 65535")
 	}
 	return options, nil
+}
+
+func listenGateway(options gatewayCommandOptions, configured gatewayconfig.ServerConfig) (net.Listener, bool, error) {
+	host := configured.Host
+	port := configured.Port
+	if options.hostSet {
+		host = options.host
+	}
+	if options.portSet {
+		port = options.port
+	}
+	address := net.JoinHostPort(host, fmt.Sprintf("%d", port))
+	listener, err := net.Listen("tcp", address)
+	if err == nil {
+		return listener, false, nil
+	}
+	if options.portSet || port == 0 || !isAddressInUse(err) {
+		return nil, false, fmt.Errorf("q gateway: listen on %s: %w", address, err)
+	}
+	fallbackAddress := net.JoinHostPort(host, "0")
+	listener, fallbackErr := net.Listen("tcp", fallbackAddress)
+	if fallbackErr != nil {
+		return nil, false, fmt.Errorf("q gateway: listen on %s after %s was unavailable: %w", fallbackAddress, address, fallbackErr)
+	}
+	return listener, true, nil
+}
+
+func isAddressInUse(err error) bool {
+	if errors.Is(err, syscall.EADDRINUSE) {
+		return true
+	}
+	var errno syscall.Errno
+	return errors.As(err, &errno) && errno == syscall.Errno(10048)
+}
+
+func watchGatewayKeyring(
+	ctx context.Context,
+	store gatewayconfig.Store,
+	authenticator *gatewayconfig.Authenticator,
+	logOutput io.Writer,
+) <-chan struct{} {
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		ticker := time.NewTicker(500 * time.Millisecond)
+		defer ticker.Stop()
+		var lastModified time.Time
+		if info, err := os.Stat(store.Path()); err == nil {
+			lastModified = info.ModTime()
+		}
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				info, err := os.Stat(store.Path())
+				if err != nil || info.ModTime().Equal(lastModified) {
+					continue
+				}
+				lastModified = info.ModTime()
+				value, err := store.Load()
+				if err != nil {
+					_, _ = fmt.Fprintf(logOutput, "q gateway: API key reload skipped: %v\n", err)
+					continue
+				}
+				if err := authenticator.Reload(value); err != nil {
+					_, _ = fmt.Fprintf(logOutput, "q gateway: API key reload skipped: %v\n", err)
+					continue
+				}
+				_, _ = fmt.Fprintln(logOutput, "q gateway: API keys reloaded")
+			}
+		}
+	}()
+	return done
 }

@@ -19,6 +19,7 @@ import (
 	"github.com/snowmerak/q/client"
 	"github.com/snowmerak/q/commitagent"
 	"github.com/snowmerak/q/config"
+	"github.com/snowmerak/q/gatewayconfig"
 	"github.com/snowmerak/q/loom"
 	"github.com/snowmerak/q/sessionstore"
 	qtools "github.com/snowmerak/q/tools"
@@ -737,20 +738,20 @@ func TestModelPickerCanRestoreSubagentDefaultInheritance(t *testing.T) {
 	}
 }
 
-func TestSlashProviderOpensProviderSettings(t *testing.T) {
+func TestSlashGatewayOpensSetupWithoutManagedRuntime(t *testing.T) {
 	value := config.Default()
 	value.Provider.Model = "test-model"
 	fake := &fakeClient{}
 	m := newModel(context.Background(), config.Store{Dir: t.TempDir()}, nil)
 	m.enterChat(value, fake)
-	m.input.SetValue("/provider")
+	m.input.SetValue("/gateway")
 
 	updated, _ := m.updateChatKey(tea.KeyPressMsg{Code: tea.KeyEnter})
 	m = updated.(model)
 	updated, _ = m.Update(deferredSubmitMsg{})
 	m = updated.(model)
 	if m.screen != screenSetup || !m.setupEdit || m.input.Value() != "" {
-		t.Fatalf("provider command state = screen %v, edit %v, input %q", m.screen, m.setupEdit, m.input.Value())
+		t.Fatalf("Gateway command state = screen %v, edit %v, input %q", m.screen, m.setupEdit, m.input.Value())
 	}
 }
 
@@ -868,7 +869,7 @@ func TestHelpCommandAndShortcutKeepCommandsOutOfChatFooter(t *testing.T) {
 	if !strings.Contains(chat, "ctrl+h help") {
 		t.Fatalf("chat footer does not advertise help:\n%s", chat)
 	}
-	for _, command := range []string{"/clear", "/commit", "/model", "/provider", "/loom", "/ignore", "/skills", "/help"} {
+	for _, command := range []string{"/clear", "/commit", "/model", "/gateway", "/loom", "/ignore", "/skills", "/help"} {
 		if strings.Contains(chat, command) {
 			t.Fatalf("chat footer exposes %q:\n%s", command, chat)
 		}
@@ -882,7 +883,7 @@ func TestHelpCommandAndShortcutKeepCommandsOutOfChatFooter(t *testing.T) {
 	help := ansi.Strip(m.View().Content)
 	for _, expected := range []string{
 		"q · Help", "SLASH COMMANDS", "/plan [request]", "/commit", "/clear", "/model",
-		"/provider", "/loom", "/ignore", "/skills", "/help",
+		"/gateway", "/loom", "/ignore", "/skills", "/help",
 	} {
 		if !strings.Contains(help, expected) {
 			t.Fatalf("help view missing %q:\n%s", expected, help)
@@ -1198,7 +1199,7 @@ func TestHelpKeepsReceivingSubagentEvents(t *testing.T) {
 	}
 }
 
-func TestManagedSlashProviderOpensProviderList(t *testing.T) {
+func TestManagedSlashGatewayOpensGatewaySettings(t *testing.T) {
 	value := config.Default()
 	value.Provider.Model = "local/test-model"
 	value.UseManagedGateway()
@@ -1211,14 +1212,102 @@ func TestManagedSlashProviderOpensProviderList(t *testing.T) {
 	fake := &fakeClient{}
 	m := newManagedModel(context.Background(), config.Store{Dir: t.TempDir()}, nil, runtime)
 	m.enterChat(value, fake)
-	m.input.SetValue("/provider")
+	m.input.SetValue("/gateway")
 
 	updated, _ := m.updateChatKey(tea.KeyPressMsg{Code: tea.KeyEnter})
 	m = updated.(model)
 	updated, _ = m.Update(deferredSubmitMsg{})
 	m = updated.(model)
-	if m.screen != screenProviders || m.input.Value() != "" || len(m.gatewayConfig.Providers) != 1 {
-		t.Fatalf("provider command state = screen %v, input %q, providers %#v", m.screen, m.input.Value(), m.gatewayConfig.Providers)
+	if m.screen != screenGateway || m.input.Value() != "" || len(m.gatewayConfig.Providers) != 1 {
+		t.Fatalf("Gateway command state = screen %v, input %q, providers %#v", m.screen, m.input.Value(), m.gatewayConfig.Providers)
+	}
+	m.gatewayCursor = gatewaySectionProviders
+	updated, _ = m.updateGateway(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m = updated.(model)
+	if m.screen != screenProviders || m.providerReturn != screenGateway {
+		t.Fatalf("provider section state = screen %v, return %v", m.screen, m.providerReturn)
+	}
+	updated, _ = m.updateProviders(tea.KeyPressMsg{Code: tea.KeyEsc})
+	m = updated.(model)
+	if m.screen != screenGateway {
+		t.Fatalf("provider escape screen = %v", m.screen)
+	}
+}
+
+func TestGatewaySettingsSaveNetworkAndManageAPIKeys(t *testing.T) {
+	directory := t.TempDir()
+	store := config.Store{Dir: directory}
+	runtime := &fakeProviderRuntime{endpoint: "http://127.0.0.1:54321/v1"}
+	m := newManagedModel(context.Background(), store, nil, runtime)
+	m.enterGatewaySettings()
+
+	updated, _ := m.updateGateway(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m = updated.(model)
+	if m.screen != screenGatewayNetwork {
+		t.Fatalf("network screen = %v", m.screen)
+	}
+	m.gatewayHostInput.SetValue("0.0.0.0")
+	m.gatewayPortInput.SetValue("18181")
+	updated, command := m.updateGatewayNetwork(tea.KeyPressMsg{Code: 's', Mod: tea.ModCtrl})
+	m = updated.(model)
+	if command == nil {
+		t.Fatal("network save command is nil")
+	}
+	updated, _ = m.Update(command())
+	m = updated.(model)
+	if m.gatewaySettings.Server.Host != "0.0.0.0" || m.gatewaySettings.Server.Port != 18181 {
+		t.Fatalf("saved network = %#v", m.gatewaySettings.Server)
+	}
+
+	m.enterGatewaySettings()
+	m.gatewayCursor = gatewaySectionKeys
+	updated, _ = m.updateGateway(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m = updated.(model)
+	updated, _ = m.updateGatewayKeys(tea.KeyPressMsg{Code: 'a', Text: "a"})
+	m = updated.(model)
+	m.gatewayKeyAlias.SetValue("desktop")
+	updated, command = m.updateGatewayKeys(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m = updated.(model)
+	if command == nil {
+		t.Fatal("API key generation command is nil")
+	}
+	updated, _ = m.Update(command())
+	m = updated.(model)
+	secret := m.generatedGatewayKey
+	if !strings.HasPrefix(secret, "qk_") || len(m.gatewaySettings.APIKeys) != 1 {
+		t.Fatalf("generated key state = secret prefix %v, records %#v", strings.HasPrefix(secret, "qk_"), m.gatewaySettings.APIKeys)
+	}
+	settingsBody, err := os.ReadFile(gatewayconfig.Store{Dir: directory}.Path())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(settingsBody), secret) {
+		t.Fatal("plaintext API key was persisted")
+	}
+	masterKey, err := (gatewayconfig.Store{Dir: directory}).LoadMasterKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !gatewayconfig.VerifyAPIKey(masterKey, m.gatewaySettings.APIKeys[0], secret) {
+		t.Fatal("generated API key does not verify")
+	}
+
+	updated, _ = m.updateGatewayKeys(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m = updated.(model)
+	updated, _ = m.updateGatewayKeys(tea.KeyPressMsg{Code: 'r', Text: "r"})
+	m = updated.(model)
+	if !m.gatewayKeyRevokeArmed {
+		t.Fatal("first revoke keypress did not arm confirmation")
+	}
+	updated, command = m.updateGatewayKeys(tea.KeyPressMsg{Code: 'r', Text: "r"})
+	m = updated.(model)
+	if command == nil {
+		t.Fatal("API key revoke command is nil")
+	}
+	updated, _ = m.Update(command())
+	m = updated.(model)
+	if m.gatewaySettings.ActiveKeyCount() != 0 || m.gatewaySettings.APIKeys[0].RevokedAt == nil {
+		t.Fatalf("revoked keys = %#v", m.gatewaySettings.APIKeys)
 	}
 }
 

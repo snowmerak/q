@@ -36,15 +36,21 @@ Run only the configured Gateway, without the TUI or workspace services:
 q gateway [--host <ip>] [--port <port>]
 ```
 
-The command reads `~/.q/providers.json` and listens on `127.0.0.1` with an
-automatically selected available port by default. Pass `--port` to use a fixed
-port. The effective OpenAI-compatible `/v1` endpoint is printed after startup.
-The command also prints a newly generated temporary API key; clients must send
-it as an `Authorization: Bearer` credential. Provider settings are loaded once;
-restart the command after changing `providers.json`.
+The command reads providers from `~/.q/providers.json` and listener/API-key
+settings from `~/.q/gateway.json`. The initial default is `127.0.0.1:0`, so the
+OS selects an available port. A saved nonzero port is used when available and
+falls back to port `0` on a collision; an explicit conflicting `--port` remains
+an error. Command-line `--host` and `--port` values override the saved defaults.
+The effective OpenAI-compatible `/v1` endpoint is printed after startup.
 
-Open only the Gateway provider settings UI, without initializing the main chat
-UI or workspace services:
+Standalone clients must send one of the managed API keys as an
+`Authorization: Bearer` credential. Generate and revoke keys in `q gateway
+config`; the plaintext is shown only once, while `gateway.json` stores a keyed
+BLAKE3 digest. Key changes are reloaded by a running standalone Gateway.
+Provider and listener changes require a restart.
+
+Open the Gateway settings UI without initializing the main chat UI or workspace
+services. Network defaults, API keys, and providers are separate sections:
 
 ```powershell
 q gateway config
@@ -64,10 +70,12 @@ Personal configuration is stored in:
 ```text
 ~/.q/config.yaml
 ~/.q/providers.json
+~/.q/gateway.json
+~/.q/gateway.key
 ```
 
 Prefer environment variables over inline API keys. On POSIX, q creates the
-configuration directory with user-only permissions and writes both files with
+configuration directory with user-only permissions and writes configuration files with
 mode `0600`. Windows file modes do not manage ACLs.
 
 ## TUI reference
@@ -83,7 +91,7 @@ screen without discarding editor state or interrupting an active turn.
 | `/plan [request]` | Grill, research, approve, and execute a work plan. Without an inline request, the next message becomes the request. |
 | `/commit` | Open the interactive commit workflow, then return to chat. |
 | `/model` | Configure the main-loop, embedding, or subagent role models. |
-| `/provider` | List, add, edit, enable, disable, or delete Gateway providers. |
+| `/gateway` | Configure Gateway network defaults, API keys, and providers. |
 | `/loom` | Inspect Loom usage and configure or run garbage collection. |
 | `/ignore` | Edit workspace discovery rules in `.qignore`. |
 | `/skills` | Interactively add, pull, remove, and reindex global/session Agent Skills. |
@@ -96,7 +104,7 @@ screen without discarding editor state or interrupting an active turn.
 |---|---|
 | `Enter` / `Ctrl+S` | Send. |
 | `Shift+Enter` | Insert a newline. |
-| `Ctrl+P` | Open provider settings. |
+| `Ctrl+P` | Open Gateway settings. |
 | `Ctrl+H` | Open or close help. |
 | `Ctrl+G` | Expand or collapse the detailed subagent trace when available. |
 | `Ctrl+C` | Interrupt the active turn; quit while idle. |
@@ -219,6 +227,11 @@ Each supervised Gateway generation also receives a newly generated temporary
 API key. The parent `q` client uses that key automatically, and it is neither
 written to `providers.json` nor retained in the child environment after
 startup. Replacing the Gateway rotates both its endpoint and API key.
+
+That supervised child credential is independent of the persistent keys used by
+standalone `q gateway`: the parent process injects the temporary key into its
+own clients automatically, so launching or replacing the child does not require
+the user to copy a key.
 
 `/model` lists the main `default` target, optional `embedding` target, and each
 subagent role. A role without an explicit model inherits the main model. An

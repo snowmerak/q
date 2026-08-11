@@ -19,6 +19,7 @@ func (m model) enterHelp() (tea.Model, tea.Cmd) {
 	m.modelFilter.Blur()
 	m.embeddingDimensions.Blur()
 	m.modelContextWindow.Blur()
+	m.blurGatewayInputs()
 	for index := range m.setup {
 		m.setup[index].Blur()
 	}
@@ -49,6 +50,13 @@ func (m model) leaveHelp() (tea.Model, tea.Cmd) {
 	case screenSkills:
 		if m.skillsMode == skillModeAdd {
 			return m, m.skillsInput.Focus()
+		}
+		return m, nil
+	case screenGatewayNetwork:
+		return m, m.gatewayNetworkFocusCommand()
+	case screenGatewayKeys:
+		if m.gatewayKeyAdding {
+			return m, m.gatewayKeyAlias.Focus()
 		}
 		return m, nil
 	case screenChat:
@@ -120,7 +128,7 @@ func renderHelpContent(dark bool) string {
 		{"/commit", "Open the interactive commit workflow."},
 		{"/clear", "Clear the current chat projection."},
 		{"/model", "Choose default, subagent, and embedding models."},
-		{"/provider", "Configure and select a model provider."},
+		{"/gateway", "Configure Gateway network, API keys, and providers."},
 		{"/loom", "Inspect Loom storage and garbage-collection settings."},
 		{"/ignore", "Edit workspace discovery rules in .qignore."},
 		{"/skills", "Interactively add, pull, remove, and reindex global/session skills."},
@@ -131,7 +139,7 @@ func renderHelpContent(dark bool) string {
 		{"shift+enter", "Insert a newline."},
 		{"ctrl+s", "Send the current message."},
 		{"ctrl+l", "Clear the current chat projection."},
-		{"ctrl+p", "Open provider settings."},
+		{"ctrl+p", "Open Gateway settings."},
 		{"ctrl+h", "Open or close this help screen."},
 		{"ctrl+c", "Interrupt the active turn, or quit while idle."},
 		{"esc", "Leave the current screen or quit chat."},
