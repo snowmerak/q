@@ -2166,7 +2166,7 @@ func (m model) compactContext(plan memory.Plan) tea.Cmd {
 	turnContext := m.activeTurnContext()
 	turnID := m.turnID
 	return func() tea.Msg {
-		response, err := configuredClient.Chat(turnContext, client.ChatRequest{
+		response, err := chatWithConversationRecovery(turnContext, configuredClient, client.ChatRequest{
 			Messages: plan.RequestMessages(), MaxCompletionTokens: &maxTokens,
 		})
 		return compactionResultMsg{turnID: turnID, response: response, plan: plan, err: err}
@@ -2183,7 +2183,7 @@ func (m *model) sendChatRequest() tea.Cmd {
 	turnID := m.turnID
 	if toolRuntime == nil {
 		return func() tea.Msg {
-			response, err := configuredClient.Chat(turnContext, client.ChatRequest{
+			response, err := chatWithConversationRecovery(turnContext, configuredClient, client.ChatRequest{
 				Messages: providerMessages(history), ConversationID: conversationID,
 			})
 			return chatResultMsg{turnID: turnID, response: response, requestEstimate: m.requestEstimate, err: err}
@@ -2212,7 +2212,7 @@ func streamAgentLoop(
 	taskStarted := false
 	for round := 0; round < maximumToolRounds; round++ {
 		requestEstimate := memory.CountMessages(history)
-		response, err := configuredClient.Chat(ctx, client.ChatRequest{
+		response, err := chatWithConversationRecovery(ctx, configuredClient, client.ChatRequest{
 			Messages: providerMessages(history), ConversationID: conversationID, Tools: availableTools,
 		})
 		if err != nil {
