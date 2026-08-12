@@ -41,6 +41,33 @@ type RootConfig struct {
 	Disabled bool   `json:"disabled,omitempty"`
 }
 
+// Normalized canonicalizes language names while preserving server profile IDs
+// and commands. It is used at configuration load/save boundaries so direct
+// YAML edits such as `Go` behave like TUI input.
+func (c GlobalConfig) Normalized() (GlobalConfig, error) {
+	result := GlobalConfig{
+		Servers:   make(map[string]ServerConfig, len(c.Servers)),
+		Languages: make(map[string]string, len(c.Languages)),
+	}
+	for id, server := range c.Servers {
+		languages, err := NormalizeLanguages(server.Languages)
+		if err != nil {
+			return GlobalConfig{}, fmt.Errorf("LSP server %q: %w", id, err)
+		}
+		server.Languages = languages
+		server.Args = append([]string(nil), server.Args...)
+		result.Servers[id] = server
+	}
+	for language, serverID := range c.Languages {
+		language = strings.ToLower(strings.TrimSpace(language))
+		if existing := result.Languages[language]; existing != "" && existing != serverID {
+			return GlobalConfig{}, fmt.Errorf("LSP language %q has conflicting server mappings", language)
+		}
+		result.Languages[language] = serverID
+	}
+	return result, nil
+}
+
 func (c GlobalConfig) Validate() error {
 	for id, server := range c.Servers {
 		if err := validateIdentifier("server ID", id); err != nil {
@@ -163,7 +190,7 @@ func ResolveServer(global GlobalConfig, root RootConfig) (string, bool) {
 		server, ok := global.Servers[root.Server]
 		return root.Server, ok && !server.Disabled && containsLanguage(server.Languages, root.Language)
 	}
-	id := global.Languages[root.Language]
+	id := global.Languages[strings.ToLower(strings.TrimSpace(root.Language))]
 	server, exists := global.Servers[id]
 	if exists && !server.Disabled && containsLanguage(server.Languages, root.Language) {
 		return id, true

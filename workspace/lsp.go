@@ -47,6 +47,13 @@ func (s Store) LoadLSP() (lsp.WorkspaceConfig, error) {
 		}
 		return lsp.WorkspaceConfig{}, fmt.Errorf("workspace: decode %s: %w", s.LSPPath(), err)
 	}
+	for index := range value.Roots {
+		normalized, err := lsp.NormalizeRoot(value.Roots[index])
+		if err != nil {
+			return lsp.WorkspaceConfig{}, fmt.Errorf("workspace: decode %s root %d: %w", s.LSPPath(), index+1, err)
+		}
+		value.Roots[index] = normalized
+	}
 	return value, nil
 }
 

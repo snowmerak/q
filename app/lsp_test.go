@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -89,6 +90,35 @@ func TestLSPServerRenameUpdatesDefaultsAndRootOverrides(t *testing.T) {
 	m = updated.(model)
 	if _, exists := m.lspDraftGlobal.Servers["old"]; exists || m.lspDraftGlobal.Languages["go"] != "new" || m.lspDraftWorkspace.Roots[0].Server != "new" {
 		t.Fatalf("renamed global = %#v, roots = %#v", m.lspDraftGlobal, m.lspDraftWorkspace.Roots)
+	}
+}
+
+func TestLSPServerPanelAutoDetectsInstalledServer(t *testing.T) {
+	bin := t.TempDir()
+	name := "gopls"
+	content := "#!/bin/sh\nexit 0\n"
+	if runtime.GOOS == "windows" {
+		name = "gopls.exe"
+		content = ""
+	}
+	if err := os.WriteFile(filepath.Join(bin, name), []byte(content), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin)
+	m := newModel(context.Background(), config.Store{Dir: t.TempDir()}, nil)
+	m.screen = screenLSP
+	m.workspaceStore = &workspace.Store{Root: t.TempDir()}
+	m.lspDraftGlobal = qlsp.GlobalConfig{}
+	m.lspDraftWorkspace = qlsp.WorkspaceConfig{Version: qlsp.WorkspaceConfigVersion}
+	updated, command := m.startLSPDiscovery()
+	m = updated.(model)
+	if command == nil {
+		t.Fatal("server discovery did not start")
+	}
+	updated, _ = m.Update(command())
+	m = updated.(model)
+	if m.lspDraftGlobal.Servers["gopls"].Command != "gopls" || m.lspDraftGlobal.Languages["go"] != "gopls" {
+		t.Fatalf("discovered global = %#v", m.lspDraftGlobal)
 	}
 }
 

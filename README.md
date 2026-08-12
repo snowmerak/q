@@ -441,13 +441,19 @@ Use `Tab` to switch panels, `A`/`E`/`D` to add, edit, or remove an entry,
 its supported languages, and `Ctrl+S` to save both scopes. Unsaved changes
 require a second `Esc` to discard.
 
-Press `R` in the roots panel to discover projects. Discovery currently detects
-Go workspaces and modules, Rust workspaces and crates, TypeScript and
-JavaScript config roots, and Python `pyproject.toml` roots. Language-level
-workspace markers fold nested modules of the same language. Discovery skips
-q metadata, common dependency/build directories, and paths excluded by the
-workspace `.qignore`. Discovered entries are added to the draft and are not
-persisted until `Ctrl+S`.
+Press `R` in the servers panel to detect known language-server executables on
+`PATH`. Current candidates are `gopls`, `rust-analyzer`,
+`typescript-language-server`, and (in preference order) `basedpyright`,
+`pyright`, or `pylsp`. Detection adds portable command profiles to the draft;
+it does not execute the binaries or persist anything by itself.
+
+Press `R` in the roots panel to discover projects and the installed servers
+needed by their languages. Project discovery currently detects Go workspaces
+and modules, Rust workspaces and crates, TypeScript and JavaScript config roots,
+and Python `pyproject.toml` roots. Language-level workspace markers fold nested
+modules of the same language. Discovery skips q metadata, common
+dependency/build directories, and paths excluded by the workspace `.qignore`.
+All discovered entries remain draft-only until `Ctrl+S`.
 
 These settings do not start language servers or expose LSP tools yet. Runtime
 activation and MCP integration are a separate layer over the stored settings.

@@ -42,3 +42,22 @@ func TestSettingsRejectInvalidRootAndServer(t *testing.T) {
 		t.Fatalf("error = %v", err)
 	}
 }
+
+func TestGlobalSettingsNormalizeLanguageCase(t *testing.T) {
+	value, err := (GlobalConfig{
+		Servers:   map[string]ServerConfig{"gopls": {Languages: []string{"Go"}, Command: "gopls"}},
+		Languages: map[string]string{"Go": "gopls"},
+	}).Normalized()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := value.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	if len(value.Servers["gopls"].Languages) != 1 || value.Servers["gopls"].Languages[0] != "go" || value.Languages["go"] != "gopls" {
+		t.Fatalf("normalized = %#v", value)
+	}
+	if server, ok := ResolveServer(value, RootConfig{Path: ".", Language: "GO"}); !ok || server != "gopls" {
+		t.Fatalf("resolved = %q, %v", server, ok)
+	}
+}

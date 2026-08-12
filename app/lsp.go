@@ -19,9 +19,11 @@ import (
 type lspScreenMode uint8
 
 type lspDiscoveryMsg struct {
-	id    uint64
-	roots []qlsp.RootConfig
-	err   error
+	id        uint64
+	scanRoots bool
+	roots     []qlsp.RootConfig
+	servers   []qlsp.DiscoveredServer
+	err       error
 }
 
 const (
@@ -85,9 +87,7 @@ func (m model) updateLSP(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			return m.makeLSPServerDefault()
 		}
 	case "r":
-		if m.lspPanel == 1 {
-			return m.startLSPDiscovery()
-		}
+		return m.startLSPDiscovery()
 	case "ctrl+s":
 		return m.saveLSPSettings()
 	case "esc":
@@ -379,9 +379,24 @@ func (m model) startLSPDiscovery() (tea.Model, tea.Cmd) {
 	m.status = "Discovering language project roots…"
 	store := *m.workspaceStore
 	discoveryID := m.lspDiscoveryID
+	scanRoots := m.lspPanel == 1
+	existingRoots := append([]qlsp.RootConfig(nil), m.lspDraftWorkspace.Roots...)
 	return m, func() tea.Msg {
+		if !scanRoots {
+			return lspDiscoveryMsg{id: discoveryID, servers: qlsp.DiscoverServers(nil)}
+		}
 		roots, err := store.DiscoverLSPRoots()
-		return lspDiscoveryMsg{id: discoveryID, roots: roots, err: err}
+		if err != nil {
+			return lspDiscoveryMsg{id: discoveryID, scanRoots: true, err: err}
+		}
+		languages := make([]string, 0, len(roots)+len(existingRoots))
+		for _, root := range existingRoots {
+			languages = append(languages, root.Language)
+		}
+		for _, root := range roots {
+			languages = append(languages, root.Language)
+		}
+		return lspDiscoveryMsg{id: discoveryID, scanRoots: true, roots: roots, servers: qlsp.DiscoverServers(languages)}
 	}
 }
 
@@ -399,14 +414,16 @@ func (m model) applyLSPDiscovery(message lspDiscoveryMsg) (tea.Model, tea.Cmd) {
 	for _, root := range m.lspDraftWorkspace.Roots {
 		seen[lspRootKey(root)] = struct{}{}
 	}
-	added := 0
-	for _, root := range discovered {
-		if _, exists := seen[lspRootKey(root)]; exists {
-			continue
+	addedRoots := 0
+	if message.scanRoots {
+		for _, root := range discovered {
+			if _, exists := seen[lspRootKey(root)]; exists {
+				continue
+			}
+			m.lspDraftWorkspace.Roots = append(m.lspDraftWorkspace.Roots, root)
+			seen[lspRootKey(root)] = struct{}{}
+			addedRoots++
 		}
-		m.lspDraftWorkspace.Roots = append(m.lspDraftWorkspace.Roots, root)
-		seen[lspRootKey(root)] = struct{}{}
-		added++
 	}
 	sort.Slice(m.lspDraftWorkspace.Roots, func(i, j int) bool {
 		if m.lspDraftWorkspace.Roots[i].Path == m.lspDraftWorkspace.Roots[j].Path {
@@ -415,8 +432,46 @@ func (m model) applyLSPDiscovery(message lspDiscoveryMsg) (tea.Model, tea.Cmd) {
 		return m.lspDraftWorkspace.Roots[i].Path < m.lspDraftWorkspace.Roots[j].Path
 	})
 	m.lspDiscardArmed = false
-	m.status = fmt.Sprintf("Discovery found %d roots · %d added to draft", len(discovered), added)
+	addedServers := m.mergeDiscoveredLSPServers(message.servers)
+	if message.scanRoots {
+		m.status = fmt.Sprintf("Discovery found %d roots and %d installed servers · %d roots and %d servers added to draft", len(discovered), len(message.servers), addedRoots, addedServers)
+	} else {
+		m.status = fmt.Sprintf("Discovery found %d installed servers · %d added to draft", len(message.servers), addedServers)
+	}
 	return m, nil
+}
+
+func (m *model) mergeDiscoveredLSPServers(discovered []qlsp.DiscoveredServer) int {
+	if m.lspDraftGlobal.Servers == nil {
+		m.lspDraftGlobal.Servers = make(map[string]qlsp.ServerConfig)
+	}
+	if m.lspDraftGlobal.Languages == nil {
+		m.lspDraftGlobal.Languages = make(map[string]string)
+	}
+	added := 0
+	for _, found := range discovered {
+		if _, exists := m.lspDraftGlobal.Servers[found.ID]; exists || hasLSPCommand(m.lspDraftGlobal, found.Config.Command) {
+			continue
+		}
+		m.lspDraftGlobal.Servers[found.ID] = found.Config
+		for _, language := range found.Config.Languages {
+			language = strings.ToLower(language)
+			if m.lspDraftGlobal.Languages[language] == "" {
+				m.lspDraftGlobal.Languages[language] = found.ID
+			}
+		}
+		added++
+	}
+	return added
+}
+
+func hasLSPCommand(global qlsp.GlobalConfig, command string) bool {
+	for _, server := range global.Servers {
+		if strings.EqualFold(strings.TrimSpace(server.Command), strings.TrimSpace(command)) {
+			return true
+		}
+	}
+	return false
 }
 
 func (m model) saveLSPSettings() (tea.Model, tea.Cmd) {
@@ -473,7 +528,7 @@ func (m model) viewLSP() string {
 		body.WriteString(subtleStyle.Render(m.status))
 	}
 	body.WriteString("\n\n")
-	help := "tab/←/→ panel · ↑/↓ select · a add · e/enter edit · d delete · space enable · m language default · r discover roots · ctrl+s save · esc chat"
+	help := "tab/←/→ panel · ↑/↓ select · a add · e/enter edit · d delete · space enable · m language default · r auto-detect · ctrl+s save · esc chat"
 	if m.lspMode != lspModeList {
 		help = "tab/↑/↓ field · enter/ctrl+s apply draft · esc cancel"
 	} else if m.isStandaloneScreen(screenLSP) {

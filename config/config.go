@@ -369,6 +369,11 @@ func (s Store) Load() (Config, error) {
 	if err := decoder.Decode(&loaded); err != nil {
 		return Config{}, fmt.Errorf("config: decode %s: %w", s.Path(), err)
 	}
+	normalizedLSP, err := loaded.LSP.Normalized()
+	if err != nil {
+		return Config{}, fmt.Errorf("config: %w", err)
+	}
+	loaded.LSP = normalizedLSP
 	if err := loaded.Validate(); err != nil {
 		return Config{}, err
 	}
@@ -380,6 +385,11 @@ func (s Store) Save(value Config) error {
 	value.Context = value.EffectiveContext()
 	value.Agents = value.EffectiveAgents()
 	value.Loom = value.EffectiveLoom()
+	normalizedLSP, err := value.LSP.Normalized()
+	if err != nil {
+		return fmt.Errorf("config: %w", err)
+	}
+	value.LSP = normalizedLSP
 	if err := value.Validate(); err != nil {
 		return err
 	}
