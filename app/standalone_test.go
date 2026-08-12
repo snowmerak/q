@@ -49,6 +49,14 @@ func TestStandaloneRootScreensQuitOnEscape(t *testing.T) {
 	if _, command := skillsScreen.updateSkills(tea.KeyPressMsg{Code: tea.KeyEsc}); command == nil {
 		t.Fatal("standalone skills escape did not quit")
 	}
+
+	lspScreen := newModel(context.Background(), store, nil)
+	lspScreen.standalone = true
+	lspScreen.standaloneRoot = screenLSP
+	lspScreen.screen = screenLSP
+	if _, command := lspScreen.updateLSP(tea.KeyPressMsg{Code: tea.KeyEsc}); command == nil {
+		t.Fatal("standalone LSP escape did not quit")
+	}
 }
 
 func TestStandaloneHelpOpenedFromAnotherScreenReturnsToThatScreen(t *testing.T) {

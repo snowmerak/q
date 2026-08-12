@@ -16,6 +16,9 @@ func (m model) enterHelp() (tea.Model, tea.Cmd) {
 	m.input.Blur()
 	m.ignoreEditor.Blur()
 	m.skillsInput.Blur()
+	for index := range m.lspInputs {
+		m.lspInputs[index].Blur()
+	}
 	m.modelFilter.Blur()
 	m.embeddingDimensions.Blur()
 	m.modelContextWindow.Blur()
@@ -50,6 +53,11 @@ func (m model) leaveHelp() (tea.Model, tea.Cmd) {
 	case screenSkills:
 		if m.skillsMode == skillModeAdd {
 			return m, m.skillsInput.Focus()
+		}
+		return m, nil
+	case screenLSP:
+		if m.lspMode != lspModeList {
+			return m, m.lspInputs[m.lspFormFocus].Focus()
 		}
 		return m, nil
 	case screenGatewayNetwork:
@@ -139,6 +147,7 @@ func renderHelpContent(dark bool) string {
 		{"/loom", "Inspect Loom storage and garbage-collection settings."},
 		{"/ignore", "Edit workspace discovery rules in .qignore."},
 		{"/skills", "Interactively add, pull, remove, and reindex global/session skills."},
+		{"/lsp", "Configure global language servers and workspace project roots."},
 		{"/help", "Open this help screen."},
 	})
 	writeHelpSection("CHAT", [][2]string{
@@ -163,6 +172,7 @@ func renderHelpContent(dark bool) string {
 		{"q gateway config", "Configure Gateway network, API keys, and providers."},
 		{"q model", "Configure main, embedding, and subagent models."},
 		{"q skills", "Manage global and current-workspace Agent Skills."},
+		{"q lsp", "Configure language servers and discover workspace roots."},
 		{"q ignore", "Edit the current workspace's .qignore rules."},
 		{"q help", "Open this help screen without starting q services."},
 	})

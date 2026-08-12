@@ -26,6 +26,7 @@ import (
 	"github.com/snowmerak/q/config"
 	"github.com/snowmerak/q/gatewayconfig"
 	"github.com/snowmerak/q/loom"
+	qlsp "github.com/snowmerak/q/lsp"
 	"github.com/snowmerak/q/memory"
 	"github.com/snowmerak/q/sessionstore"
 	"github.com/snowmerak/q/subagent"
@@ -43,6 +44,7 @@ const (
 	screenLoom
 	screenIgnore
 	screenSkills
+	screenLSP
 	screenGateway
 	screenGatewayNetwork
 	screenGatewayKeys
@@ -199,6 +201,20 @@ type model struct {
 	skillsMode            skillScreenMode
 	skillsInput           textinput.Model
 	skillRegistry         skillRuntime
+	lspPanel              int
+	lspCursor             [2]int
+	lspMode               lspScreenMode
+	lspEditID             string
+	lspEditingIndex       int
+	lspFormFocus          int
+	lspInputs             [4]textinput.Model
+	lspDraftGlobal        qlsp.GlobalConfig
+	lspOriginalGlobal     qlsp.GlobalConfig
+	lspDraftWorkspace     qlsp.WorkspaceConfig
+	lspOriginalWorkspace  qlsp.WorkspaceConfig
+	lspDiscardArmed       bool
+	lspBusy               bool
+	lspDiscoveryID        uint64
 
 	config             config.Config
 	client             chatClient
@@ -436,6 +452,15 @@ func newManagedModel(ctx context.Context, store config.Store, factory clientFact
 	m.skillsInput.Placeholder = "https://github.com/owner/skill.git"
 	m.skillsInput.SetWidth(72)
 	m.skillsInput.CharLimit = 2048
+	lspPlaceholders := []string{"profile ID or project path", "languages or language", "command or server override", `arguments as JSON, e.g. ["serve"]`}
+	for index := range m.lspInputs {
+		field := textinput.New()
+		field.Prompt = ""
+		field.Placeholder = lspPlaceholders[index]
+		field.SetWidth(72)
+		field.CharLimit = 4096
+		m.lspInputs[index] = field
+	}
 	if runtime != nil && len(m.gatewayConfig.Providers) == 0 {
 		m.enterProviderEditor(-1)
 	}
@@ -501,6 +526,9 @@ func (m model) Init() tea.Cmd {
 	}
 	if m.screen == screenIgnore {
 		return tea.Batch(m.ignoreEditor.Focus(), tea.RequestBackgroundColor)
+	}
+	if m.screen == screenLSP && m.lspMode != lspModeList {
+		return tea.Batch(m.lspInputs[m.lspFormFocus].Focus(), tea.RequestBackgroundColor)
 	}
 	if m.screen == screenHelp {
 		return tea.RequestBackgroundColor
@@ -686,6 +714,8 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			m.status += " · " + message.warning
 		}
 		return m, nil
+	case lspDiscoveryMsg:
+		return m.applyLSPDiscovery(message)
 	case agentEventMsg:
 		if message.turnID != 0 && message.turnID != m.turnID {
 			return m, nil
@@ -995,6 +1025,9 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		if m.screen == screenSkills {
 			return m.updateSkills(key)
 		}
+		if m.screen == screenLSP {
+			return m.updateLSP(key)
+		}
 		if m.screen == screenHelp {
 			return m.updateHelp(key)
 		}
@@ -1023,6 +1056,11 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			return m, command
 		}
 		return m, nil
+	}
+	if m.screen == screenLSP && m.lspMode != lspModeList {
+		var command tea.Cmd
+		m.lspInputs[m.lspFormFocus], command = m.lspInputs[m.lspFormFocus].Update(message)
+		return m, command
 	}
 	if m.screen == screenGatewayNetwork || (m.screen == screenGatewayKeys && m.gatewayKeyAdding) {
 		return m.updateGatewayInput(message)
@@ -1929,6 +1967,9 @@ func (m model) submitChat() (tea.Model, tea.Cmd) {
 	case "/skills":
 		m.input.Reset()
 		return m.enterSkills()
+	case "/lsp":
+		m.input.Reset()
+		return m.enterLSP()
 	case "/help":
 		m.input.Reset()
 		return m.enterHelp()
@@ -2778,6 +2819,9 @@ func (m *model) resize(width, height int) {
 	m.embeddingDimensions.SetWidth(min(contentWidth-2, 24))
 	m.modelContextWindow.SetWidth(min(contentWidth-2, 28))
 	m.skillsInput.SetWidth(min(contentWidth-10, 96))
+	for index := range m.lspInputs {
+		m.lspInputs[index].SetWidth(min(contentWidth-12, 84))
+	}
 	ignorePanel := ignoreEditorPanelStyle(max(36, m.width-4), m.dark)
 	m.ignoreEditor.SetWidth(max(20, ignorePanel.GetWidth()-ignorePanel.GetHorizontalFrameSize()))
 	m.ignoreEditor.SetHeight(max(4, m.height-16))
@@ -2839,6 +2883,9 @@ func (m *model) applyColorScheme(dark bool) {
 	m.modelFilter.SetStyles(textinput.DefaultStyles(dark))
 	m.embeddingDimensions.SetStyles(textinput.DefaultStyles(dark))
 	m.modelContextWindow.SetStyles(textinput.DefaultStyles(dark))
+	for index := range m.lspInputs {
+		m.lspInputs[index].SetStyles(textinput.DefaultStyles(dark))
+	}
 	inputStyles := textarea.DefaultStyles(dark)
 	inputStyles.Cursor.Shape = tea.CursorBar
 	m.input.SetStyles(inputStyles)
@@ -3589,6 +3636,8 @@ func (m model) View() tea.View {
 		content = m.viewIgnore()
 	} else if m.screen == screenSkills {
 		content = m.viewSkills()
+	} else if m.screen == screenLSP {
+		content = m.viewLSP()
 	} else if m.screen == screenHelp {
 		content = m.viewHelp()
 	} else if m.screen == screenChat {

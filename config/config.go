@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/snowmerak/q/loom"
+	"github.com/snowmerak/q/lsp"
 	"gopkg.in/yaml.v3"
 )
 
@@ -35,12 +36,13 @@ const (
 var ErrNotFound = errors.New("q config not found")
 
 type Config struct {
-	Version   int             `yaml:"version"`
-	Provider  ProviderConfig  `yaml:"provider"`
-	Embedding EmbeddingConfig `yaml:"embedding,omitempty"`
-	Context   ContextConfig   `yaml:"context,omitempty"`
-	Agents    AgentsConfig    `yaml:"agents,omitempty"`
-	Loom      LoomConfig      `yaml:"loom,omitempty"`
+	Version   int              `yaml:"version"`
+	Provider  ProviderConfig   `yaml:"provider"`
+	Embedding EmbeddingConfig  `yaml:"embedding,omitempty"`
+	Context   ContextConfig    `yaml:"context,omitempty"`
+	Agents    AgentsConfig     `yaml:"agents,omitempty"`
+	Loom      LoomConfig       `yaml:"loom,omitempty"`
+	LSP       lsp.GlobalConfig `yaml:"lsp,omitempty"`
 }
 
 type ProviderConfig struct {
@@ -201,6 +203,9 @@ func (c Config) Validate() error {
 	}
 	if loomConfig.GC.GraceHours < 1 || loomConfig.GC.GraceHours > 24*365 {
 		return errors.New("config: Loom GC grace_hours must be between 1 and 8760")
+	}
+	if err := c.LSP.Validate(); err != nil {
+		return fmt.Errorf("config: %w", err)
 	}
 	return nil
 }

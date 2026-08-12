@@ -8,6 +8,8 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/snowmerak/q/lsp"
 )
 
 func TestStoreRoundTrip(t *testing.T) {
@@ -20,6 +22,10 @@ func TestStoreRoundTrip(t *testing.T) {
 		AgentRolePlanner: {Model: "planning-model", ReasoningEffort: "high"},
 		AgentRoleCoder:   {Model: "coding-model", ReasoningEffort: "medium"},
 		AgentRoleCommit:  {Model: "commit-model", ReasoningEffort: "low"},
+	}
+	want.LSP = lsp.GlobalConfig{
+		Servers:   map[string]lsp.ServerConfig{"gopls": {Languages: []string{"go"}, Command: "gopls"}},
+		Languages: map[string]string{"go": "gopls"},
 	}
 	if err := store.Save(want); err != nil {
 		t.Fatal(err)

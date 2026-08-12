@@ -63,6 +63,7 @@ only the resources its screen needs instead of starting the main chat UI:
 q model   # managed Gateway + model discovery
 q skills  # global and current-workspace Agent Skills
 q ignore  # current workspace's .qignore editor
+q lsp     # global language servers and current-workspace project roots
 q help    # scrollable command and key reference
 ```
 
@@ -105,6 +106,7 @@ screen without discarding editor state or interrupting an active turn.
 | `/loom` | Inspect Loom usage and configure or run garbage collection. |
 | `/ignore` | Edit workspace discovery rules in `.qignore`. |
 | `/skills` | Interactively add, pull, remove, and reindex global/session Agent Skills. |
+| `/lsp` | Configure global language servers and current-workspace project roots. |
 | `/clear` | Clear the chat projection and remove the current workspace session. |
 | `/help` | Open the command and shortcut guide. |
 
@@ -290,6 +292,20 @@ loom:
     trigger_ratio: 0.8
     target_ratio: 0.6
     grace_hours: 1
+lsp:
+  servers:
+    gopls:
+      languages: [go]
+      command: gopls
+      args: [serve]
+    typescript:
+      languages: [typescript, javascript]
+      command: typescript-language-server
+      args: [--stdio]
+  languages:
+    go: gopls
+    typescript: typescript
+    javascript: typescript
 ```
 
 ## Workspace state and locking
@@ -300,6 +316,7 @@ state are local to the directory where q starts:
 | Path | Purpose |
 |---|---|
 | `.q/session.json` | Current transcript and compacted request-context projection. |
+| `.q/lsp.json` | Current workspace's language project roots and optional server overrides. |
 | `.q/plan-execution.json` | Durable checkpoint for an approved plan execution. |
 | `.q/data/records/` | Source records for durable workspace history. |
 | `.q/index/bleve/` | Derived full-text index. |
@@ -408,6 +425,32 @@ during command-based scans.
 
 Use `/ignore` to edit the file. `Ctrl+S` saves immediately; `Esc` requires a
 second press before discarding unsaved changes.
+
+## Language server settings
+
+Use `/lsp` from chat or run `q lsp` to manage language servers without editing
+configuration files directly. The `Global Servers` panel stores trusted server
+profiles in `~/.q/config.yaml`: profile ID, supported languages, executable,
+arguments, enabled state, and the default profile selected for each language.
+The `Workspace Roots` panel stores workspace-relative project roots in
+`.q/lsp.json`, including language, optional server override, discovery source,
+and enabled state.
+
+Use `Tab` to switch panels, `A`/`E`/`D` to add, edit, or remove an entry,
+`Space` to enable or disable it, `M` to make a server the global default for
+its supported languages, and `Ctrl+S` to save both scopes. Unsaved changes
+require a second `Esc` to discard.
+
+Press `R` in the roots panel to discover projects. Discovery currently detects
+Go workspaces and modules, Rust workspaces and crates, TypeScript and
+JavaScript config roots, and Python `pyproject.toml` roots. Language-level
+workspace markers fold nested modules of the same language. Discovery skips
+q metadata, common dependency/build directories, and paths excluded by the
+workspace `.qignore`. Discovered entries are added to the draft and are not
+persisted until `Ctrl+S`.
+
+These settings do not start language servers or expose LSP tools yet. Runtime
+activation and MCP integration are a separate layer over the stored settings.
 
 ## Loom
 
