@@ -68,8 +68,20 @@ func TestManagerQueriesAndDiagnostics(t *testing.T) {
 		t.Fatalf("workspace symbols = %#v, err = %v", workspaceSymbols, err)
 	}
 	diagnostics, err := manager.Diagnostics(ctx, DiagnosticsRequest{Path: "main.go"})
-	if err != nil || !diagnostics.Published || len(diagnostics.Diagnostics) != 1 || diagnostics.Diagnostics[0].SeverityName != "warning" {
+	if err != nil || diagnostics.Status != DiagnosticStatusIssues || !diagnostics.Published || len(diagnostics.Diagnostics) != 1 || diagnostics.Diagnostics[0].SeverityName != "warning" {
 		t.Fatalf("diagnostics = %#v, err = %v", diagnostics, err)
+	}
+}
+
+func TestDiagnosticStatusDistinguishesCleanAndUnavailable(t *testing.T) {
+	manager := &Manager{root: t.TempDir()}
+	clean := manager.diagnosticsResult("file:///external/test.go", diagnosticSnapshot{}, true)
+	if clean.Status != DiagnosticStatusClean || !clean.Published || len(clean.Diagnostics) != 0 {
+		t.Fatalf("clean diagnostics = %#v", clean)
+	}
+	unavailable := manager.diagnosticsResult("file:///external/test.go", diagnosticSnapshot{}, false)
+	if unavailable.Status != DiagnosticStatusUnavailable || unavailable.Published {
+		t.Fatalf("unavailable diagnostics = %#v", unavailable)
 	}
 }
 

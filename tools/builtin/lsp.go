@@ -24,7 +24,7 @@ func registerLSP(server *mcp.Server, manager *lsp.Manager) {
 
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "lsp_diagnostics",
-		Description: "Read diagnostics published by the language server for a workspace file. This synchronizes an in-memory document and never writes the file.",
+		Description: "Read diagnostics published by the language server for a workspace file. Status is clean, issues, or unavailable; the default publication wait is one second. This synchronizes an in-memory document and never writes the file.",
 		Annotations: annotations,
 	}, contextValueHandler(manager.Diagnostics))
 

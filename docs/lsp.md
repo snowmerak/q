@@ -89,8 +89,11 @@ approval rules as q's existing filesystem tools.
 Diagnostics arrive through `textDocument/publishDiagnostics` notifications and
 are cached per session and document URI, including an empty published set.
 `lsp_diagnostics` synchronizes the requested file and briefly waits for a newer
-publication when appropriate. The cache is session-local and is not a source of
-truth after the session closes.
+publication when appropriate. The default wait is one second. Its `status`
+field is `clean` only for a published empty set, `issues` for a published
+non-empty set, and `unavailable` when no publication was received; callers
+must not interpret `unavailable` as an error-free file. The cache is
+session-local and is not a source of truth after the session closes.
 
 ## Failure behavior
 

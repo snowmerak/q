@@ -95,8 +95,17 @@ type DiagnosticResult struct {
 	Tags         []int       `json:"tags,omitempty"`
 }
 
+type DiagnosticStatus string
+
+const (
+	DiagnosticStatusClean       DiagnosticStatus = "clean"
+	DiagnosticStatusIssues      DiagnosticStatus = "issues"
+	DiagnosticStatusUnavailable DiagnosticStatus = "unavailable"
+)
+
 type DiagnosticsResult struct {
 	Path        string             `json:"path"`
+	Status      DiagnosticStatus   `json:"status"`
 	Published   bool               `json:"published"`
 	Version     *int               `json:"version,omitempty"`
 	Diagnostics []DiagnosticResult `json:"diagnostics"`
@@ -276,7 +285,7 @@ func (m *Manager) Diagnostics(ctx context.Context, request DiagnosticsRequest) (
 	if err != nil {
 		return DiagnosticsResult{}, err
 	}
-	waitDuration := 750 * time.Millisecond
+	waitDuration := time.Second
 	if request.WaitMilliseconds != 0 {
 		if request.WaitMilliseconds < 0 || request.WaitMilliseconds > 5000 {
 			return DiagnosticsResult{}, errors.New("lsp: diagnostic wait must be between 0 and 5000 milliseconds")
@@ -292,7 +301,10 @@ func (m *Manager) Diagnostics(ctx context.Context, request DiagnosticsRequest) (
 			return m.diagnosticsResult(document.URI, snapshot, true), nil
 		}
 		if waitDuration <= 0 {
-			return DiagnosticsResult{Path: m.location(document.URI, Range{}).Path, Published: published, Diagnostics: []DiagnosticResult{}}, nil
+			return DiagnosticsResult{
+				Path: m.location(document.URI, Range{}).Path, Status: DiagnosticStatusUnavailable,
+				Published: published, Diagnostics: []DiagnosticResult{},
+			}, nil
 		}
 		timer := time.NewTimer(waitDuration)
 		select {
@@ -305,7 +317,10 @@ func (m *Manager) Diagnostics(ctx context.Context, request DiagnosticsRequest) (
 			if published {
 				return m.diagnosticsResult(document.URI, snapshot, true), nil
 			}
-			return DiagnosticsResult{Path: m.location(document.URI, Range{}).Path, Published: false, Diagnostics: []DiagnosticResult{}}, nil
+			return DiagnosticsResult{
+				Path: m.location(document.URI, Range{}).Path, Status: DiagnosticStatusUnavailable,
+				Published: false, Diagnostics: []DiagnosticResult{},
+			}, nil
 		case <-ctx.Done():
 			if !timer.Stop() {
 				<-timer.C
@@ -329,7 +344,17 @@ func (m *Manager) preparePosition(ctx context.Context, request PositionRequest) 
 }
 
 func (m *Manager) diagnosticsResult(uri DocumentURI, snapshot diagnosticSnapshot, published bool) DiagnosticsResult {
-	result := DiagnosticsResult{Path: m.location(uri, Range{}).Path, Published: published, Version: snapshot.Version, Diagnostics: make([]DiagnosticResult, 0, len(snapshot.Diagnostics))}
+	status := DiagnosticStatusUnavailable
+	if published {
+		status = DiagnosticStatusClean
+		if len(snapshot.Diagnostics) > 0 {
+			status = DiagnosticStatusIssues
+		}
+	}
+	result := DiagnosticsResult{
+		Path: m.location(uri, Range{}).Path, Status: status, Published: published,
+		Version: snapshot.Version, Diagnostics: make([]DiagnosticResult, 0, len(snapshot.Diagnostics)),
+	}
 	for _, diagnostic := range snapshot.Diagnostics {
 		result.Diagnostics = append(result.Diagnostics, DiagnosticResult{
 			Path: result.Path, URI: uri, Range: sourceRange(diagnostic.Range), Severity: diagnostic.Severity,
