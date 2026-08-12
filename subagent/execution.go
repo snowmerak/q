@@ -438,7 +438,8 @@ func plannerReviewTools(available []client.Tool) []client.Tool {
 	seen := make(map[string]struct{}, len(allowed)+1)
 	for _, tool := range available {
 		name := strings.TrimSpace(tool.Function.Name)
-		if _, ok := allowed[name]; !ok {
+		_, explicitlyAllowed := allowed[name]
+		if !explicitlyAllowed && !lspQueryToolAllowed(name) {
 			continue
 		}
 		if _, exists := seen[name]; exists {

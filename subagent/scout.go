@@ -249,7 +249,7 @@ func (r ScoutRunner) run(ctx context.Context, task ScoutTask, prompt string, lif
 					}
 					toolResult = scoutToolError(err)
 				}
-			} else if _, allowed := scoutAllowedTools[call.Function.Name]; !allowed {
+			} else if !scoutToolAllowed(call.Function.Name) {
 				toolResult = scoutToolError(fmt.Errorf("tool %q is not available to scout", call.Function.Name))
 			} else {
 				toolResult, err = r.Tools.Call(ctx, call)
@@ -351,13 +351,30 @@ Rules:
 func scoutTools(available []client.Tool) []client.Tool {
 	result := make([]client.Tool, 0, len(scoutAllowedTools)+1)
 	for _, tool := range available {
-		if _, allowed := scoutAllowedTools[tool.Function.Name]; allowed {
+		if scoutToolAllowed(tool.Function.Name) {
 			result = append(result, tool)
 		}
 	}
 	sort.Slice(result, func(i, j int) bool { return result[i].Function.Name < result[j].Function.Name })
 	result = append(result, scoutCompletionTool())
 	return result
+}
+
+func scoutToolAllowed(name string) bool {
+	if lspQueryToolAllowed(name) {
+		return true
+	}
+	_, allowed := scoutAllowedTools[name]
+	return allowed
+}
+
+func lspQueryToolAllowed(name string) bool {
+	switch strings.TrimSpace(name) {
+	case "lsp_status", "lsp_diagnostics", "lsp_hover", "lsp_definition", "lsp_references", "lsp_document_symbols", "lsp_workspace_symbols":
+		return true
+	default:
+		return false
+	}
 }
 
 func scoutCompletionTool() client.Tool {

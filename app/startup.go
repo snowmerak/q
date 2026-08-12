@@ -148,9 +148,14 @@ func (request startupRequest) run() runtimeInitializedMsg {
 	if archiveOpenErr == nil {
 		archive = sessionstore.NewWriter(archiveStore, 0)
 	}
-	tools, toolsErr := qtools.NewRuntimeWithArchiveAndLoomOptions(
-		request.ctx, request.workspaceStore.Root, archiveStore, loaded.LoomStoreOptions(nil),
-	)
+	workspaceLSP, toolsErr := request.workspaceStore.LoadLSP()
+	var tools *qtools.Runtime
+	if toolsErr == nil {
+		tools, toolsErr = qtools.NewRuntimeWithArchiveAndLoomOptionsAndLSP(
+			request.ctx, request.workspaceStore.Root, archiveStore, loaded.LoomStoreOptions(nil), loaded.LSP, workspaceLSP,
+		)
+		result.tools = tools
+	}
 	if toolsErr != nil {
 		if archive != nil {
 			_ = archive.Close()
@@ -161,7 +166,6 @@ func (request startupRequest) run() runtimeInitializedMsg {
 		return result
 	}
 	request.lifecycle.setResources(nil, tools, archive)
-	result.tools = tools
 	result.archive = archive
 
 	if request.configErr == nil && request.manager.Endpoint() != "" {

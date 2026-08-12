@@ -6,12 +6,14 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/snowmerak/q/agentskills"
+	"github.com/snowmerak/q/lsp"
 )
 
 type Dependencies struct {
 	Archive Archive
 	Loom    *LoomRuntime
 	Skills  *agentskills.Registry
+	LSP     *lsp.Manager
 }
 
 // Register adds the root-jailed builtin tools to server. Optional workspace
@@ -165,6 +167,9 @@ func Register(server *mcp.Server, root string, dependencies Dependencies) (*FS, 
 		}, contextValueHandler(func(ctx context.Context, input GetSkillInput) (GetSkillOutput, error) {
 			return getSkill(ctx, dependencies.Skills, dependencies.Loom, input)
 		}))
+	}
+	if dependencies.LSP != nil {
+		registerLSP(server, dependencies.LSP)
 	}
 
 	return fs, nil

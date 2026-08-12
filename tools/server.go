@@ -3,11 +3,14 @@ package tools
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/snowmerak/q/agentskills"
+	"github.com/snowmerak/q/config"
 	"github.com/snowmerak/q/loom"
+	"github.com/snowmerak/q/lsp"
 	"github.com/snowmerak/q/sessionstore"
 	"github.com/snowmerak/q/tools/builtin"
 	"github.com/snowmerak/q/workspace"
@@ -24,7 +27,7 @@ func NewServer(root string) (*mcp.Server, error) {
 	if err != nil {
 		return nil, err
 	}
-	server, _, _, err := newServer(root, nil, loomRuntime)
+	server, _, _, err := newServer(root, nil, loomRuntime, nil)
 	return server, err
 }
 
@@ -35,11 +38,11 @@ func NewServerWithArchive(root string, archive builtin.Archive) (*mcp.Server, er
 	if err != nil {
 		return nil, err
 	}
-	server, _, _, err := newServer(root, archive, loomRuntime)
+	server, _, _, err := newServer(root, archive, loomRuntime, nil)
 	return server, err
 }
 
-func newServer(root string, archive builtin.Archive, loomRuntime *builtin.LoomRuntime) (*mcp.Server, *builtin.FS, *agentskills.Registry, error) {
+func newServer(root string, archive builtin.Archive, loomRuntime *builtin.LoomRuntime, lspManager *lsp.Manager) (*mcp.Server, *builtin.FS, *agentskills.Registry, error) {
 	skills, err := agentskills.Discover(root)
 	if err != nil {
 		return nil, nil, nil, err
@@ -53,7 +56,7 @@ func newServer(root string, archive builtin.Archive, loomRuntime *builtin.LoomRu
 		Name:    ServerName,
 		Version: ServerVersion,
 	}, nil)
-	fs, err := builtin.Register(server, root, builtin.Dependencies{Archive: archive, Loom: loomRuntime, Skills: skills})
+	fs, err := builtin.Register(server, root, builtin.Dependencies{Archive: archive, Loom: loomRuntime, Skills: skills, LSP: lspManager})
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -90,7 +93,27 @@ func RunStdioWithLoomOptions(ctx context.Context, root string, options loom.Stor
 	if err != nil {
 		return err
 	}
-	server, fs, _, err := newServer(root, archive, loomRuntime)
+	globalLSP := lsp.GlobalConfig{}
+	configStore, err := config.DefaultStore()
+	if err != nil {
+		return err
+	}
+	loaded, err := configStore.Load()
+	if err == nil {
+		globalLSP = loaded.LSP
+	} else if !errors.Is(err, config.ErrNotFound) {
+		return err
+	}
+	workspaceLSP, err := (workspace.Store{Root: root}).LoadLSP()
+	if err != nil {
+		return err
+	}
+	lspManager, err := lsp.NewManager(ctx, root, globalLSP, workspaceLSP)
+	if err != nil {
+		return err
+	}
+	defer lspManager.Close()
+	server, fs, _, err := newServer(root, archive, loomRuntime, lspManager)
 	if err != nil {
 		return err
 	}

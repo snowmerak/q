@@ -14,6 +14,7 @@ import (
 	"github.com/snowmerak/q/agentskills"
 	"github.com/snowmerak/q/client"
 	"github.com/snowmerak/q/loom"
+	"github.com/snowmerak/q/lsp"
 	"github.com/snowmerak/q/tools/builtin"
 )
 
@@ -31,6 +32,7 @@ type Runtime struct {
 	server     *mcp.ServerSession
 	fs         *builtin.FS
 	loom       *builtin.LoomRuntime
+	lsp        *lsp.Manager
 	skills     *agentskills.Registry
 	skillStore agentskills.RecordStore
 	tools      []client.Tool
@@ -56,12 +58,38 @@ func NewRuntimeWithArchiveAndLoomOptions(
 	return newRuntime(ctx, root, archive, loom.NewProcessEvaluator(), options)
 }
 
+// NewRuntimeWithArchiveAndLoomOptionsAndLSP adds the workspace's configured
+// read-only language-server query tools to the in-process MCP runtime.
+func NewRuntimeWithArchiveAndLoomOptionsAndLSP(
+	ctx context.Context,
+	root string,
+	archive builtin.Archive,
+	options loom.StoreOptions,
+	global lsp.GlobalConfig,
+	workspace lsp.WorkspaceConfig,
+) (*Runtime, error) {
+	manager, err := lsp.NewManager(ctx, root, global, workspace)
+	if err != nil {
+		return nil, err
+	}
+	runtime, err := newRuntimeWithLSP(ctx, root, archive, loom.NewProcessEvaluator(), options, manager)
+	if err != nil {
+		_ = manager.Close()
+		return nil, err
+	}
+	return runtime, nil
+}
+
 func newRuntime(ctx context.Context, root string, archive builtin.Archive, evaluator loom.Evaluator, options loom.StoreOptions) (*Runtime, error) {
+	return newRuntimeWithLSP(ctx, root, archive, evaluator, options, nil)
+}
+
+func newRuntimeWithLSP(ctx context.Context, root string, archive builtin.Archive, evaluator loom.Evaluator, options loom.StoreOptions, lspManager *lsp.Manager) (*Runtime, error) {
 	loomRuntime, err := newLoomRuntime(root, evaluator, withSessionRoots(options, root))
 	if err != nil {
 		return nil, err
 	}
-	server, fs, skills, err := newServer(root, archive, loomRuntime)
+	server, fs, skills, err := newServer(root, archive, loomRuntime, lspManager)
 	if err != nil {
 		return nil, err
 	}
@@ -78,7 +106,7 @@ func newRuntime(ctx context.Context, root string, archive builtin.Archive, evalu
 		return nil, fmt.Errorf("tools: connect builtin MCP client: %w", err)
 	}
 	store, _ := archive.(agentskills.RecordStore)
-	runtime := &Runtime{client: clientSession, server: serverSession, fs: fs, loom: loomRuntime, skills: skills, skillStore: store}
+	runtime := &Runtime{client: clientSession, server: serverSession, fs: fs, loom: loomRuntime, lsp: lspManager, skills: skills, skillStore: store}
 	listed, err := clientSession.ListTools(ctx, nil)
 	if err != nil {
 		_ = runtime.Close()
@@ -401,6 +429,9 @@ func (r *Runtime) Close() error {
 		}
 		if r.fs != nil {
 			r.fs.Close()
+		}
+		if r.lsp != nil {
+			closeErr = errors.Join(closeErr, r.lsp.Close())
 		}
 	})
 	return closeErr

@@ -502,7 +502,7 @@ func (m model) saveLSPSettings() (tea.Model, tea.Cmd) {
 	m.lspOriginalGlobal = cloneLSPGlobal(m.lspDraftGlobal)
 	m.lspOriginalWorkspace = cloneLSPWorkspace(m.lspDraftWorkspace)
 	m.lspDiscardArmed = false
-	m.status = "LSP settings saved · runtime activation is not enabled yet"
+	m.status = "LSP settings saved · restart q to activate changes"
 	return m, nil
 }
 

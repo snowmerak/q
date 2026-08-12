@@ -13,6 +13,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/snowmerak/q/client"
 	"github.com/snowmerak/q/loom"
+	"github.com/snowmerak/q/lsp"
 	"github.com/snowmerak/q/sessionstore"
 	"github.com/snowmerak/q/subagent"
 	"github.com/snowmerak/q/tools/builtin"
@@ -66,6 +67,40 @@ func TestRuntimeListsAndCallsBuiltinTools(t *testing.T) {
 	artifact, err := runtime.loom.Store.Inspect(context.Background(), receipt.LoomRef)
 	if err != nil || artifact.Source["tool"] != "write_file" {
 		t.Fatalf("captured artifact = %#v, err = %v", artifact, err)
+	}
+}
+
+func TestRuntimeExposesConfiguredLSPTools(t *testing.T) {
+	root := t.TempDir()
+	runtime, err := NewRuntimeWithArchiveAndLoomOptionsAndLSP(
+		context.Background(), root, nil, loom.StoreOptions{}, lsp.GlobalConfig{},
+		lsp.WorkspaceConfig{Version: lsp.WorkspaceConfigVersion},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer runtime.Close()
+	for _, name := range []string{
+		"lsp_status", "lsp_diagnostics", "lsp_hover", "lsp_definition",
+		"lsp_references", "lsp_document_symbols", "lsp_workspace_symbols",
+	} {
+		if !runtimeHasTool(runtime, name) {
+			t.Fatalf("LSP tool %q is unavailable", name)
+		}
+	}
+	result, err := runtime.Call(context.Background(), client.ToolCall{
+		ID: "call-lsp-status", Type: client.ToolTypeFunction,
+		Function: client.FunctionCall{Name: "lsp_status", Arguments: `{}`},
+	})
+	if err != nil || result.IsError {
+		t.Fatalf("status result = %#v, err = %v", result, err)
+	}
+	var status lsp.StatusResult
+	if err := decodeReceiptResult(result.Content, &status); err != nil {
+		t.Fatal(err)
+	}
+	if status.Workspace != root || len(status.Sessions) != 0 {
+		t.Fatalf("status = %#v", status)
 	}
 }
 
