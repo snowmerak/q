@@ -189,6 +189,21 @@ func (request startupRequest) run() runtimeInitializedMsg {
 			result.err = clientErr
 			return result
 		}
+		if loaded.Embedding.Model != "" && libraryClient != nil {
+			embedder, ok := configuredClient.(qlibrary.Embedder)
+			if !ok {
+				_ = configuredClient.Close()
+				result.err = errors.New("configured LLM client does not support embeddings")
+				return result
+			}
+			if embeddingErr := libraryClient.ConfigureEmbedding(
+				embedder, loaded.Embedding.Model, loaded.Embedding.Dimensions,
+			); embeddingErr != nil {
+				_ = configuredClient.Close()
+				result.err = embeddingErr
+				return result
+			}
+		}
 		if models, modelsErr := configuredClient.ListModels(request.ctx); modelsErr == nil {
 			result.models = append([]client.Model(nil), models...)
 			refreshed, found := refreshModelContextWindow(loaded, models)

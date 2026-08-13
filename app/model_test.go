@@ -38,8 +38,9 @@ type fakeProviderRuntime struct {
 }
 
 type extractionClient struct {
-	responses []client.Message
-	requests  []client.ChatRequest
+	responses  []client.Message
+	requests   []client.ChatRequest
+	embeddings [][]string
 }
 
 func (c *extractionClient) Chat(_ context.Context, request client.ChatRequest) (*client.ChatResponse, error) {
@@ -57,6 +58,25 @@ func (c *extractionClient) ListModels(context.Context) ([]client.Model, error) {
 }
 
 func (c *extractionClient) Close() error { return nil }
+
+func (c *extractionClient) Embed(_ context.Context, request client.EmbeddingRequest) (*client.EmbeddingResponse, error) {
+	inputs, ok := request.Input.([]string)
+	if !ok {
+		return nil, fmt.Errorf("embedding input = %T", request.Input)
+	}
+	c.embeddings = append(c.embeddings, append([]string(nil), inputs...))
+	dimensions := 3
+	if request.Dimensions != nil {
+		dimensions = *request.Dimensions
+	}
+	response := &client.EmbeddingResponse{Model: request.Model, Data: make([]client.Embedding, len(inputs))}
+	for index := range inputs {
+		vector := make([]float64, dimensions)
+		vector[0] = 1
+		response.Data[index] = client.Embedding{Index: index, Embedding: vector}
+	}
+	return response, nil
+}
 
 func (f *fakeProviderRuntime) Endpoint() string { return f.endpoint }
 func (f *fakeProviderRuntime) APIKey() string {
@@ -680,10 +700,14 @@ func TestCompletedTurnStartsThinkerExtractionThroughLibraryClient(t *testing.T) 
 	}}
 	value := config.Default()
 	value.Provider.Model = "thinker-model"
+	value.Embedding = config.EmbeddingConfig{Model: "embed-model", Dimensions: 3}
 	m := newModel(context.Background(), config.Store{Dir: t.TempDir()}, nil)
 	m.config = value
 	m.client = configuredClient
 	m.libraryClient = qlibrary.NewClient(server.URL+"/v1", "test-key", time.Second)
+	if err := m.libraryClient.ConfigureEmbedding(configuredClient, value.Embedding.Model, value.Embedding.Dimensions); err != nil {
+		t.Fatal(err)
+	}
 	m.models = []client.Model{{ID: "thinker-model", ContextLength: 16_000}}
 	m.messages = []client.Message{
 		{Role: client.RoleSystem, Content: "main prompt"},
@@ -699,7 +723,8 @@ func TestCompletedTurnStartsThinkerExtractionThroughLibraryClient(t *testing.T) 
 	if !ok || message.err != nil || message.result.Registered != 1 {
 		t.Fatalf("Thinker result = %#v", message)
 	}
-	if registered.Content != "Use one proposition per call." || registered.ExtractorModel != "thinker-model" || registered.ExtractorVersion != thinker.ExtractorVersion {
+	if registered.Content != "Use one proposition per call." || registered.ExtractorModel != "thinker-model" || registered.ExtractorVersion != thinker.ExtractorVersion ||
+		registered.Embeddings == nil || len(registered.Embeddings.Vectors) != 2 || len(configuredClient.embeddings) != 1 {
 		t.Fatalf("registered proposition = %#v", registered)
 	}
 }

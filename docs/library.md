@@ -362,9 +362,17 @@ source record, BM25 document, and all vector variants together.
 
 Semantic search accepts one query embedding, collapses HNSW variants by source
 proposition before reciprocal-rank fusion with BM25, and then applies the
-existing immutable-`created_at` boost. Embedding generation is intentionally a
-caller responsibility at this boundary; wiring the Thinker and MCP query path
-to the configured embedding client is the next slice.
+existing immutable-`created_at` boost. The shared Library client uses q's
+configured embedding provider to generate the registration batch and search
+query vector automatically. Consequently the private Thinker
+`register_proposition` tool and the existing MCP `search_propositions` tool use
+the same semantic path without exposing vectors to either model-facing schema.
+When embedding configuration is absent, both retain BM25-only behavior.
+
+Embedding vectors are excluded from the idempotency digest because they are
+derived data and may differ slightly when an identical logical request is
+retried. The canonical content, normalized queries, metadata, tags, and refs
+still define request identity.
 
 ## CLI and runtime integration
 
@@ -417,8 +425,8 @@ that global skill/proposition retrieval and extraction are unavailable.
 5. Add `KindProposition`, bounded extraction records, generated BM25 query
    text, and proposition search without vectors.
 6. Generalize HNSW projection IDs to support multiple vector variants per
-   proposition and add hybrid RRF retrieval. Implemented; caller-side embedding
-   generation remains to be connected.
+   proposition, add hybrid RRF retrieval, and connect automatic embedding to
+   Thinker registration and MCP proposition search. Implemented.
 7. Add immutable `created_at` decay, extraction gating, failure recovery, and
    TUI/CLI status surfaces.
 

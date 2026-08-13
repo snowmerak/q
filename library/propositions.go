@@ -163,7 +163,11 @@ func (s *propositionService) register(idempotencyKey string, request Proposition
 			)
 		}
 	}
-	body, err := json.Marshal(normalized)
+	// Embeddings are a derived projection and may vary slightly across retries.
+	// Idempotency is defined by the logical proposition request, not its vectors.
+	digestInput := normalized
+	digestInput.Embeddings = nil
+	body, err := json.Marshal(digestInput)
 	if err != nil {
 		return PropositionRegisterResponse{}, fmt.Errorf("library: encode proposition registration: %w", err)
 	}

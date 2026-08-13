@@ -9,10 +9,12 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/snowmerak/q/agentskills"
+	"github.com/snowmerak/q/client"
 	"github.com/snowmerak/q/config"
 	qlibrary "github.com/snowmerak/q/library"
 	"github.com/snowmerak/q/loom"
 	"github.com/snowmerak/q/lsp"
+	"github.com/snowmerak/q/providerhost"
 	"github.com/snowmerak/q/sessionstore"
 	"github.com/snowmerak/q/tools/builtin"
 	"github.com/snowmerak/q/workspace"
@@ -129,9 +131,53 @@ func RunStdioWithLoomOptions(ctx context.Context, root string, options loom.Stor
 	if libraryConfigErr != nil {
 		libraryConfig = qlibrary.DefaultConfig()
 	}
-	var globalSkills builtin.GlobalSkillLibrary = qlibrary.NewClient(
+	libraryClient := qlibrary.NewClient(
 		libraryConfig.Endpoint(), libraryConfig.ResolveAPIKey(), 5*time.Second,
 	)
+	var embeddingClient *client.Client
+	var embeddingManager *providerhost.Manager
+	if loaded.Embedding.Model != "" {
+		if loaded.Provider.Managed {
+			embeddingManager, err = providerhost.NewManager(ctx, providerhost.Store{Dir: configStore.Dir})
+			if err != nil {
+				return err
+			}
+			if err = embeddingManager.LoadAndStart(ctx); err != nil {
+				_ = embeddingManager.Close()
+				return err
+			}
+			embeddingClient, err = client.New(client.Config{
+				BaseURL: embeddingManager.Endpoint(), APIKey: embeddingManager.APIKey(),
+				DefaultModel: loaded.Provider.Model,
+			})
+		} else {
+			apiKey := loaded.Provider.ResolveAPIKey()
+			embeddingClient, err = client.New(client.Config{
+				BaseURL: loaded.Provider.BaseURL, APIKey: apiKey, DefaultModel: loaded.Provider.Model,
+				DisableAPIKey: apiKey == "",
+			})
+		}
+		if err != nil {
+			if embeddingManager != nil {
+				_ = embeddingManager.Close()
+			}
+			return err
+		}
+		if err = libraryClient.ConfigureEmbedding(
+			embeddingClient, loaded.Embedding.Model, loaded.Embedding.Dimensions,
+		); err != nil {
+			_ = embeddingClient.Close()
+			if embeddingManager != nil {
+				_ = embeddingManager.Close()
+			}
+			return err
+		}
+		defer embeddingClient.Close()
+		if embeddingManager != nil {
+			defer embeddingManager.Close()
+		}
+	}
+	var globalSkills builtin.GlobalSkillLibrary = libraryClient
 	var libraryRuntime *qlibrary.Runtime
 	libraryRuntime, err = qlibrary.Ensure(ctx, configStore.Dir)
 	if err != nil {

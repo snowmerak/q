@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net"
 	"net/http"
 	"os"
@@ -15,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	llmclient "github.com/snowmerak/q/client"
 	"github.com/snowmerak/q/gatewayconfig"
 	"github.com/snowmerak/q/sessionstore"
 	"github.com/snowmerak/q/worklock"
@@ -362,29 +364,33 @@ func TestGlobalPropositionAPIPersistsSearchesAndDeletesVectorProjections(t *test
 		t.Fatal(err)
 	}
 	defer runtime.Close()
+	embedder := &testPropositionEmbedder{}
+	if err := runtime.Client().ConfigureEmbedding(embedder, "embed-test", 3); err != nil {
+		t.Fatal(err)
+	}
 
-	first, err := runtime.Client().RegisterProposition(context.Background(), "vectors/0", PropositionRegisterRequest{
+	firstInput := PropositionRegisterRequest{
 		Content:    "The Library persists one vector projection per proposition text and retrieval query.",
 		Queries:    []string{"how are proposition vectors stored", "semantic memory projection"},
 		Confidence: 0.9, ExtractorModel: "thinker-model", ExtractorVersion: "thinker-v1",
-		Embeddings: &PropositionEmbeddings{
-			Model: "embed-test", Dimensions: 3,
-			Vectors: [][]float32{{1, 0, 0}, {0.99, 0.01, 0}, {0.98, 0.02, 0}},
-		},
-	})
+	}
+	first, err := runtime.Client().RegisterProposition(context.Background(), "vectors/0", firstInput)
 	if err != nil {
 		t.Fatal(err)
+	}
+	retried, err := runtime.Client().RegisterProposition(context.Background(), "vectors/0", firstInput)
+	if err != nil || retried.Created || retried.ID != first.ID {
+		t.Fatalf("vector registration retry = %#v, %v", retried, err)
 	}
 	second, err := runtime.Client().RegisterProposition(context.Background(), "vectors/1", PropositionRegisterRequest{
 		Content: "A separate proposition.", Confidence: 0.8,
 		ExtractorModel: "thinker-model", ExtractorVersion: "thinker-v1",
-		Embeddings: &PropositionEmbeddings{Model: "embed-test", Dimensions: 3, Vectors: [][]float32{{0, 0, 1}}},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	result, err := runtime.Client().SearchPropositions(context.Background(), PropositionSearchRequest{
-		Embedding: []float32{1, 0, 0}, RecencyWeight: floatPointer(0), Limit: 10,
+		Query: "unseen semantic lookup", RecencyWeight: floatPointer(0), Limit: 10,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -400,8 +406,11 @@ func TestGlobalPropositionAPIPersistsSearchesAndDeletesVectorProjections(t *test
 		t.Fatal(err)
 	}
 	defer runtime.Close()
+	if err := runtime.Client().ConfigureEmbedding(embedder, "embed-test", 3); err != nil {
+		t.Fatal(err)
+	}
 	persisted, err := runtime.Client().SearchPropositions(context.Background(), PropositionSearchRequest{
-		Embedding: []float32{1, 0, 0}, RecencyWeight: floatPointer(0), Limit: 10,
+		Query: "unseen semantic lookup", RecencyWeight: floatPointer(0), Limit: 10,
 	})
 	if err != nil || persisted.Total != 2 || persisted.Hits[0].ID != first.ID {
 		t.Fatalf("persisted vector proposition search = %#v, %v", persisted, err)
@@ -415,7 +424,7 @@ func TestGlobalPropositionAPIPersistsSearchesAndDeletesVectorProjections(t *test
 		t.Fatalf("idempotent delete = %#v, %v", removedAgain, err)
 	}
 	after, err := runtime.Client().SearchPropositions(context.Background(), PropositionSearchRequest{
-		Embedding: []float32{1, 0, 0}, RecencyWeight: floatPointer(0), Limit: 10,
+		Query: "unseen semantic lookup", RecencyWeight: floatPointer(0), Limit: 10,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -423,9 +432,33 @@ func TestGlobalPropositionAPIPersistsSearchesAndDeletesVectorProjections(t *test
 	if after.Total != 1 || len(after.Hits) != 1 || after.Hits[0].ID != second.ID {
 		t.Fatalf("vector search after delete = %#v", after)
 	}
+	if len(embedder.inputs) != 6 || len(embedder.inputs[0]) != 3 {
+		t.Fatalf("embedding batches = %#v", embedder.inputs)
+	}
 }
 
 func floatPointer(value float64) *float64 { return &value }
+
+type testPropositionEmbedder struct{ inputs [][]string }
+
+func (e *testPropositionEmbedder) Embed(_ context.Context, request llmclient.EmbeddingRequest) (*llmclient.EmbeddingResponse, error) {
+	inputs, ok := request.Input.([]string)
+	if !ok {
+		return nil, fmt.Errorf("embedding input = %T", request.Input)
+	}
+	e.inputs = append(e.inputs, append([]string(nil), inputs...))
+	response := &llmclient.EmbeddingResponse{Model: request.Model, Data: make([]llmclient.Embedding, len(inputs))}
+	for index, input := range inputs {
+		vector := []float64{1, 0, 0}
+		if strings.Contains(input, "separate") {
+			vector = []float64{0, 0, 1}
+		} else {
+			vector[1] = float64(len(e.inputs)) / 1000
+		}
+		response.Data[index] = llmclient.Embedding{Index: index, Embedding: vector}
+	}
+	return response, nil
+}
 
 func TestEnsureConcurrentElectionAndTakeover(t *testing.T) {
 	dir := t.TempDir()

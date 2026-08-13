@@ -449,8 +449,10 @@ selected proposition with provenance and extraction metadata. These read tools
 remain part of the existing `q-tools` MCP server. The Library storage/API layer
 also supports content/query embedding batches, multi-projection HNSW indexing,
 record-level result collapse, hybrid reciprocal-rank fusion, and atomic
-proposition deletion. Thinker and MCP-side embedding generation is the next
-integration step.
+proposition deletion. With a global embedding model configured, Thinker
+registration automatically embeds the canonical proposition and generated
+queries as one batch, while MCP proposition search automatically embeds its
+query. Without that configuration, retrieval remains BM25-only.
 
 ## Discovery and `.qignore`
 

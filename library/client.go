@@ -8,8 +8,12 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"sort"
 	"strings"
+	"sync"
 	"time"
+
+	llmclient "github.com/snowmerak/q/client"
 )
 
 const (
@@ -35,6 +39,21 @@ type Client struct {
 	endpoint string
 	apiKey   string
 	http     *http.Client
+
+	embeddingMu sync.RWMutex
+	embedding   embeddingClientConfig
+}
+
+// Embedder is the subset of q's configured LLM client needed for Library
+// proposition registration and semantic search.
+type Embedder interface {
+	Embed(context.Context, llmclient.EmbeddingRequest) (*llmclient.EmbeddingResponse, error)
+}
+
+type embeddingClientConfig struct {
+	provider   Embedder
+	model      string
+	dimensions int
 }
 
 func NewClient(endpoint, apiKey string, timeout time.Duration) *Client {
@@ -48,6 +67,29 @@ func NewClient(endpoint, apiKey string, timeout time.Duration) *Client {
 }
 
 func (c *Client) Endpoint() string { return c.endpoint }
+
+// ConfigureEmbedding enables automatic proposition embedding on this client.
+// A zero model and dimensions clear the configuration and retain BM25-only
+// behavior. The Library server still validates the configured graph shape.
+func (c *Client) ConfigureEmbedding(provider Embedder, model string, dimensions int) error {
+	if c == nil {
+		return errors.New("library: client is nil")
+	}
+	model = strings.TrimSpace(model)
+	if model == "" && dimensions == 0 {
+		c.embeddingMu.Lock()
+		c.embedding = embeddingClientConfig{}
+		c.embeddingMu.Unlock()
+		return nil
+	}
+	if provider == nil || model == "" || dimensions < 1 || dimensions > 4096 {
+		return errors.New("library: embedding provider, model, and dimensions between 1 and 4096 are required together")
+	}
+	c.embeddingMu.Lock()
+	c.embedding = embeddingClientConfig{provider: provider, model: model, dimensions: dimensions}
+	c.embeddingMu.Unlock()
+	return nil
+}
 
 func (c *Client) Health(ctx context.Context) (Health, error) {
 	return c.getHealth(ctx, "/health", false)
@@ -118,6 +160,20 @@ func (c *Client) ReloadSkills(ctx context.Context) (SkillReloadResponse, error) 
 }
 
 func (c *Client) SearchPropositions(ctx context.Context, input PropositionSearchRequest) (PropositionSearchResponse, error) {
+	query := strings.TrimSpace(input.Query)
+	if len([]rune(query)) > maximumPropositionQueryRunes {
+		return PropositionSearchResponse{}, fmt.Errorf("library: proposition query exceeds %d characters", maximumPropositionQueryRunes)
+	}
+	if len(input.Embedding) == 0 && query != "" {
+		configured := c.embeddingConfig()
+		if configured.provider != nil {
+			vectors, err := embedPropositionTexts(ctx, configured, []string{query})
+			if err != nil {
+				return PropositionSearchResponse{}, fmt.Errorf("library: embed proposition search query: %w", err)
+			}
+			input.Embedding = vectors[0]
+		}
+	}
 	var output PropositionSearchResponse
 	if err := c.doJSON(ctx, http.MethodPost, "/propositions/search", input, &output); err != nil {
 		return PropositionSearchResponse{}, err
@@ -135,6 +191,26 @@ func (c *Client) GetProposition(ctx context.Context, id string) (Proposition, er
 }
 
 func (c *Client) RegisterProposition(ctx context.Context, idempotencyKey string, input PropositionRegisterRequest) (PropositionRegisterResponse, error) {
+	if input.Embeddings == nil {
+		configured := c.embeddingConfig()
+		if configured.provider != nil {
+			normalized, err := normalizePropositionRegisterRequest(input)
+			if err != nil {
+				return PropositionRegisterResponse{}, err
+			}
+			texts := make([]string, 0, len(normalized.Queries)+1)
+			texts = append(texts, normalized.Content)
+			texts = append(texts, normalized.Queries...)
+			vectors, err := embedPropositionTexts(ctx, configured, texts)
+			if err != nil {
+				return PropositionRegisterResponse{}, fmt.Errorf("library: embed proposition registration: %w", err)
+			}
+			normalized.Embeddings = &PropositionEmbeddings{
+				Model: configured.model, Dimensions: configured.dimensions, Vectors: vectors,
+			}
+			input = normalized
+		}
+	}
 	var output PropositionRegisterResponse
 	if err := c.doJSONWithHeaders(ctx, http.MethodPost, "/propositions", input, &output, map[string]string{
 		"Idempotency-Key": idempotencyKey,
@@ -142,6 +218,89 @@ func (c *Client) RegisterProposition(ctx context.Context, idempotencyKey string,
 		return PropositionRegisterResponse{}, err
 	}
 	return output, nil
+}
+
+func (c *Client) embeddingConfig() embeddingClientConfig {
+	if c == nil {
+		return embeddingClientConfig{}
+	}
+	c.embeddingMu.RLock()
+	defer c.embeddingMu.RUnlock()
+	return c.embedding
+}
+
+func embedPropositionTexts(ctx context.Context, configured embeddingClientConfig, texts []string) ([][]float32, error) {
+	if ctx == nil {
+		return nil, errors.New("embedding context is nil")
+	}
+	if len(texts) == 0 {
+		return nil, errors.New("embedding input is empty")
+	}
+	dimensions := configured.dimensions
+	response, err := configured.provider.Embed(ctx, llmclient.EmbeddingRequest{
+		Model: configured.model, Input: append([]string(nil), texts...), Dimensions: &dimensions,
+	})
+	if err != nil {
+		return nil, err
+	}
+	if response == nil || len(response.Data) != len(texts) {
+		return nil, fmt.Errorf("embedding response contains %d vectors; want %d", embeddingDataLength(response), len(texts))
+	}
+	data := append([]llmclient.Embedding(nil), response.Data...)
+	sort.Slice(data, func(left, right int) bool { return data[left].Index < data[right].Index })
+	vectors := make([][]float32, len(texts))
+	for position, item := range data {
+		if item.Index != position {
+			return nil, fmt.Errorf("embedding response index %d is invalid; want %d", item.Index, position)
+		}
+		vector, err := decodeEmbeddingVector(item.Embedding)
+		if err != nil {
+			return nil, fmt.Errorf("embedding response index %d: %w", item.Index, err)
+		}
+		if len(vector) != configured.dimensions {
+			return nil, fmt.Errorf("embedding response index %d has %d dimensions; want %d", item.Index, len(vector), configured.dimensions)
+		}
+		vectors[position] = vector
+	}
+	return vectors, nil
+}
+
+func embeddingDataLength(response *llmclient.EmbeddingResponse) int {
+	if response == nil {
+		return 0
+	}
+	return len(response.Data)
+}
+
+func decodeEmbeddingVector(value any) ([]float32, error) {
+	switch vector := value.(type) {
+	case []float32:
+		return append([]float32(nil), vector...), nil
+	case []float64:
+		result := make([]float32, len(vector))
+		for index, component := range vector {
+			result[index] = float32(component)
+		}
+		return result, nil
+	case []any:
+		result := make([]float32, len(vector))
+		for index, component := range vector {
+			number, ok := component.(float64)
+			if !ok {
+				return nil, fmt.Errorf("component %d is %T, not a number", index, component)
+			}
+			result[index] = float32(number)
+		}
+		return result, nil
+	case json.RawMessage:
+		var decoded []float32
+		if err := json.Unmarshal(vector, &decoded); err != nil {
+			return nil, fmt.Errorf("decode vector: %w", err)
+		}
+		return decoded, nil
+	default:
+		return nil, fmt.Errorf("unsupported vector encoding %T", value)
+	}
 }
 
 func (c *Client) DeleteProposition(ctx context.Context, id string) (PropositionDeleteResponse, error) {
