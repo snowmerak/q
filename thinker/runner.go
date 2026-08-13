@@ -185,7 +185,7 @@ func thinkerToolError(call client.ToolCall, err error) client.Message {
 
 func thinkerInstructions(maximum int) string {
 	return fmt.Sprintf(`You extract durable, reusable propositions from conversation data.
-Only extract propositions newly established or explicitly reconfirmed by the most recent completed user/assistant turn. Earlier messages provide context and must not be registered again merely because they appear in the input.
+The supplied data is one closed, non-overlapping learning segment. Extract propositions established or explicitly reconfirmed anywhere in that segment.
 Register one proposition at a time by calling register_proposition. Never place multiple propositions in one call and never call tools in parallel.
 Extract only supported user preferences, confirmed decisions, durable constraints, reusable resolutions, and stable facts. Exclude speculation, progress narration, transient tool output, secrets, credentials, and unconfirmed assistant claims.
 Write a concise self-contained canonical statement and bounded retrieval queries. When no propositions remain, call thinking_complete. Register at most %d propositions. Never answer with plain text.`, maximum)

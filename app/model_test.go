@@ -675,10 +675,10 @@ func TestModelTargetsIncludeThinker(t *testing.T) {
 	}
 }
 
-func TestCompletedTurnStartsThinkerExtractionThroughLibraryClient(t *testing.T) {
+func TestExplicitLearningSegmentStartsThinkerExtractionThroughLibraryClient(t *testing.T) {
 	var registered qlibrary.PropositionRegisterRequest
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		if request.URL.Path != "/v1/propositions" || !strings.HasPrefix(request.Header.Get("Idempotency-Key"), "think-") || !strings.HasSuffix(request.Header.Get("Idempotency-Key"), "/0") {
+		if request.URL.Path != "/v1/propositions" || !strings.HasPrefix(request.Header.Get("Idempotency-Key"), "learn-") || !strings.HasSuffix(request.Header.Get("Idempotency-Key"), "/0") {
 			t.Errorf("registration request = %s %s, key %q", request.Method, request.URL.Path, request.Header.Get("Idempotency-Key"))
 		}
 		if err := json.NewDecoder(request.Body).Decode(&registered); err != nil {
@@ -715,9 +715,15 @@ func TestCompletedTurnStartsThinkerExtractionThroughLibraryClient(t *testing.T) 
 		{Role: client.RoleAssistant, Content: "Understood."},
 	}
 	m.runID = "run-test"
-	command := m.startThinkerExtraction(7, 1)
+	if err := m.ensureLearningMachine(thinker.LearningState{}, nil); err != nil {
+		t.Fatal(err)
+	}
+	m.learning.AppendMessage(m.messages[1])
+	m.learning.AppendMessage(m.messages[2])
+	m.learning.EnqueueExplicit()
+	command := m.startNextLearningSegment()
 	if command == nil {
-		t.Fatal("completed turn did not start Thinker extraction")
+		t.Fatal("explicit segment did not start Thinker extraction")
 	}
 	message, ok := command().(thinkerResultMsg)
 	if !ok || message.err != nil || message.result.Registered != 1 {
@@ -981,7 +987,7 @@ func TestHelpCommandAndShortcutKeepCommandsOutOfChatFooter(t *testing.T) {
 	if !strings.Contains(chat, "ctrl+h help") {
 		t.Fatalf("chat footer does not advertise help:\n%s", chat)
 	}
-	for _, command := range []string{"/clear", "/commit", "/model", "/gateway", "/loom", "/ignore", "/skills", "/help"} {
+	for _, command := range []string{"/clear", "/learn", "/commit", "/model", "/gateway", "/loom", "/ignore", "/skills", "/help"} {
 		if strings.Contains(chat, command) {
 			t.Fatalf("chat footer exposes %q:\n%s", command, chat)
 		}
@@ -994,8 +1000,8 @@ func TestHelpCommandAndShortcutKeepCommandsOutOfChatFooter(t *testing.T) {
 	}
 	help := ansi.Strip(m.View().Content)
 	for _, expected := range []string{
-		"q · Help", "SLASH COMMANDS", "/plan [request]", "/commit", "/clear", "/model",
-		"/gateway", "/loom", "/ignore", "/skills", "/help",
+		"q · Help", "SLASH COMMANDS", "/plan [request]", "/commit", "/clear", "/learn", "/model",
+		"/gateway", "/loom", "/ignore", "/skills",
 	} {
 		if !strings.Contains(help, expected) {
 			t.Fatalf("help view missing %q:\n%s", expected, help)
@@ -1003,7 +1009,7 @@ func TestHelpCommandAndShortcutKeepCommandsOutOfChatFooter(t *testing.T) {
 	}
 	allHelp := ansi.Strip(renderHelpContent(m.dark))
 	for _, expected := range []string{
-		"SUBAGENTS AND QUESTIONS", "ctrl+g", "COMMAND LINE", "q commit", "q gateway config",
+		"/help", "SUBAGENTS AND QUESTIONS", "ctrl+g", "COMMAND LINE", "q commit", "q gateway config",
 		"q model", "q skills", "q ignore", "q help",
 	} {
 		if !strings.Contains(allHelp, expected) {
@@ -1067,6 +1073,35 @@ func TestSlashSkillsShowsCatalogAndReloads(t *testing.T) {
 	m = updated.(model)
 	if tools.skillReloads != 1 || !strings.Contains(m.status, "1 active") {
 		t.Fatalf("reloads=%d status=%q", tools.skillReloads, m.status)
+	}
+}
+
+func TestSlashLearnAcknowledgesEmptyAndClosesEligibleContext(t *testing.T) {
+	value := config.Default()
+	value.Provider.Model = "test-model"
+	workspaceStore := workspace.Store{Root: t.TempDir()}
+	m := newModel(context.Background(), config.Store{Dir: t.TempDir()}, nil)
+	m.workspaceStore = &workspaceStore
+	m.enterChat(value, &fakeClient{})
+
+	m.input.SetValue("/learn")
+	updated, _ := m.submitChat()
+	m = updated.(model)
+	if m.status != "Learning checkpoint enqueued" {
+		t.Fatalf("empty /learn status = %q", m.status)
+	}
+	if _, _, ok := m.learning.Next(); ok {
+		t.Fatal("empty /learn created a learning segment")
+	}
+
+	m.learning.AppendMessage(client.Message{Role: client.RoleUser, Content: "Prefer checkpointed learning."})
+	m.input.SetValue("/learn")
+	updated, _ = m.submitChat()
+	m = updated.(model)
+	segment, messages, ok := m.learning.Next()
+	if !ok || segment.Reason != thinker.BoundaryExplicit || len(messages) != 1 ||
+		messages[0].Content != "Prefer checkpointed learning." {
+		t.Fatalf("explicit learning segment = %#v, %#v", segment, messages)
 	}
 }
 
@@ -1992,6 +2027,12 @@ func TestChatExecutesToolCallsAndContinuesTurn(t *testing.T) {
 	}
 	if m.messages[len(m.messages)-1].Content != "Created main.go" || !strings.Contains(m.status, "Tools used · 1") {
 		t.Fatalf("final transcript = %#v, status = %q", m.messages, m.status)
+	}
+	segment, learningMessages, ok := m.learning.Next()
+	if !ok || segment.Reason != thinker.BoundaryTaskComplete || len(learningMessages) != 2 ||
+		learningMessages[0].Role != client.RoleUser || learningMessages[1].Name != thinker.TaskCompleteEventName ||
+		!strings.Contains(learningMessages[1].Content, `"summary":"Created main.go"`) {
+		t.Fatalf("task completion learning segment = %#v, %#v", segment, learningMessages)
 	}
 	archived, err := archiveStore.Search(context.Background(), sessionstore.SearchOptions{
 		Filters: sessionstore.Filters{RunIDs: []string{m.runID}},

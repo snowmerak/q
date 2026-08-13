@@ -11,6 +11,7 @@ import (
 
 	"github.com/snowmerak/q/client"
 	"github.com/snowmerak/q/loom"
+	"github.com/snowmerak/q/thinker"
 )
 
 func TestStoreRoundTripAndClear(t *testing.T) {
@@ -18,6 +19,10 @@ func TestStoreRoundTripAndClear(t *testing.T) {
 	want := Session{
 		Transcript: []client.Message{{Role: client.RoleUser, Content: "question"}},
 		Context:    []client.Message{{Role: client.RoleSystem, Name: "q_context_summary", Content: "summary"}},
+		Learning: thinker.LearningState{
+			Version: 1, StreamID: "stream", NextCursor: 2,
+			Events: []thinker.LearningEvent{{Cursor: 1, Message: client.Message{Role: client.RoleUser, Content: "durable decision"}}},
+		},
 	}
 	if err := store.Save(want); err != nil {
 		t.Fatal(err)
@@ -27,7 +32,8 @@ func TestStoreRoundTripAndClear(t *testing.T) {
 		t.Fatal(err)
 	}
 	if got.Version != CurrentVersion || len(got.Transcript) != 1 || got.Transcript[0].Content != "question" ||
-		len(got.Context) != 1 || got.Context[0].Content != "summary" {
+		len(got.Context) != 1 || got.Context[0].Content != "summary" ||
+		got.Learning.StreamID != "stream" || len(got.Learning.Events) != 1 || got.Learning.Events[0].Message.Content != "durable decision" {
 		t.Fatalf("loaded session = %#v", got)
 	}
 	info, err := os.Stat(store.Path())

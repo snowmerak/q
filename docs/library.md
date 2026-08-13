@@ -211,35 +211,57 @@ length, generated-query count, and query length.
 
 ## Extraction pipeline
 
-Extraction is not performed for every message. A cheap deterministic gate
-first decides whether a completed turn contains durable information. Initial
-positive classes are user preferences, confirmed decisions, durable
-constraints, reusable problem resolutions, and stable facts established by
-the conversation. Progress narration, speculative suggestions, transient tool
-output, and unconfirmed assistant claims are excluded.
+Extraction is not performed for every message or completed turn. A durable
+workspace-local state machine accumulates filtered conversation events after a
+committed cursor, closes non-overlapping learning segments, and sends only
+closed segments to the Thinker. The persisted state contains the stream ID,
+next and committed cursors, uncommitted events, and a FIFO segment queue.
 
 The extraction model uses the built-in `thinker` role. Like other role models,
 it is configurable from `/model` or `agents.roles.thinker` and inherits the
-active chat model when no override is present. Successful user/assistant turns
-enqueue extraction without blocking the next chat input. Thinker jobs are
-serialized so their idempotency slots remain stable.
+active chat model when no override is present. Thinker jobs are serialized so
+their idempotency slots and source order remain stable. A segment checkpoint is
+committed only after the Thinker successfully calls `thinking_complete`; a
+failure leaves the same queue head and deterministic segment ID available for
+retry after restart or the next trigger.
 
-The conversation chunk targets 35% of the Thinker model's advertised context
-length and has a hard 45% cap. Recent messages win. Tool-result messages and
-assistant `tool_calls` are removed entirely; an assistant message that contains
-only tool calls is removed as well, while any accompanying assistant prose is
-kept. Oversized remaining message content is shortened only when the recent
-context cannot fit. The unused context is reserved for the system prompt, tool
-schemas, and repeated registration exchanges.
+With no existing checkpoint, accumulation starts at the latest context
+compaction summary, or at the first user message when no summary exists. A
+segment closes under exactly four conditions:
 
-For a selected turn:
+1. adding an event reaches 45% of the Thinker model's advertised context;
+2. a validated `task_complete` result is appended;
+3. a plan is approved and its complete plan payload is appended;
+4. the user enters `/learn` or the agent calls the existing q-tools MCP
+   `learn` tool.
+
+If adding the next ordinary message would exceed 45%, the segment closes
+before that message and the message starts the next segment. Exact 45% includes
+the event and closes the segment. A single oversized event is shortened only
+when it is prepared for the Thinker. The remaining 55% is reserved for the
+system prompt, tool schemas, and repeated registration exchanges.
+
+Ordinary tool-result messages and assistant `tool_calls` are excluded entirely;
+an assistant message containing only tool calls is excluded, while accompanying
+assistant prose remains. A successful `task_complete` result is the sole tool
+result exception and is retained as a complete special event. Plan approval is
+also a special event containing the approval marker, objective, and complete
+approved plan; execution output starts the following segment.
+
+Both explicit controls are fire-and-forget. They immediately acknowledge that
+learning was enqueued and close the current segment when it contains eligible
+context. If the segment is empty, the worker performs no model call, creates no
+empty segment, and does not advance the checkpoint. The MCP `learn` call and
+its result are themselves excluded like other tool traffic.
+
+For a closed segment:
 
 ```text
-bounded conversation context
+checkpoint-bounded conversation segment
   -> proposition/query extraction
   -> schema and sensitive-data validation
   -> one register_proposition call per proposition
-  -> idempotent Library write and BM25 update
+  -> idempotent Library write and BM25/HNSW update
 ```
 
 The submitted context is bounded independently of the full workspace archive.

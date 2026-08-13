@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -12,6 +13,7 @@ import (
 	"github.com/snowmerak/q/memory"
 	"github.com/snowmerak/q/sessionstore"
 	"github.com/snowmerak/q/subagent"
+	"github.com/snowmerak/q/thinker"
 	"github.com/snowmerak/q/workspace"
 )
 
@@ -33,6 +35,7 @@ func (m model) startPlan(objective string) (tea.Model, tea.Cmd) {
 	message := client.Message{Role: client.RoleUser, Content: objective}
 	m.archiveMessage(message, sessionstore.StatusSubmitted, false)
 	m.messages = append(m.messages, message)
+	learning := m.observeLearningMessage(message)
 	if m.memory == nil {
 		m.memory = memoryForPlan(m.config)
 	}
@@ -52,7 +55,7 @@ func (m model) startPlan(objective string) (tea.Model, tea.Cmd) {
 		m.status = err.Error()
 		return m, m.input.Focus()
 	}
-	return m, tea.Batch(m.spinner.Tick, m.sendPlanRequest(objective))
+	return m, tea.Batch(m.spinner.Tick, m.sendPlanRequest(objective), learning)
 }
 
 func memoryForPlan(value config.Config) *memory.Manager {
@@ -423,6 +426,18 @@ func streamPlanWorkflow(
 				emitAgentEvent(ctx, events, agentEvent{err: saveErr})
 				return
 			}
+		}
+		approved, marshalErr := json.Marshal(map[string]any{
+			"approved": true, "objective": objective, "plan": result.Plan,
+		})
+		if marshalErr != nil {
+			emitAgentEvent(ctx, events, agentEvent{err: fmt.Errorf("plan: encode approved plan: %w", marshalErr)})
+			return
+		}
+		if !emitAgentEvent(ctx, events, agentEvent{
+			learningName: thinker.PlanApprovedEventName, learningPayload: approved,
+		}) {
+			return
 		}
 		progress(subagent.ProgressEvent{Agent: "executor", Action: subagent.ProgressStarted, Detail: "executing approved plan"})
 		execution, executionErr := executeApprovedPlan(

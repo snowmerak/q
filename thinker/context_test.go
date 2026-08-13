@@ -7,9 +7,9 @@ import (
 	"github.com/snowmerak/q/client"
 )
 
-func TestBuildContextChunkTargetsThirtyFiveAndCapsFortyFivePercent(t *testing.T) {
-	messages := make([]client.Message, 0, 40)
-	for index := 0; index < 40; index++ {
+func TestBuildContextChunkUsesClosedSegmentAndCapsFortyFivePercent(t *testing.T) {
+	messages := make([]client.Message, 0, 12)
+	for index := 0; index < 12; index++ {
 		role := client.RoleUser
 		if index%2 == 1 {
 			role = client.RoleAssistant
@@ -20,11 +20,11 @@ func TestBuildContextChunkTargetsThirtyFiveAndCapsFortyFivePercent(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if chunk.TargetTokens != 1400 || chunk.MaximumTokens != 1800 || chunk.Tokens > chunk.MaximumTokens || !chunk.Truncated {
+	if chunk.TargetTokens != 1800 || chunk.MaximumTokens != 1800 || chunk.Tokens > chunk.MaximumTokens {
 		t.Fatalf("chunk = %#v", chunk)
 	}
-	if len(chunk.Messages) == 0 || chunk.Messages[len(chunk.Messages)-1].Role != client.RoleAssistant {
-		t.Fatalf("latest messages were not retained: %#v", chunk.Messages)
+	if len(chunk.Messages) != len(messages) || chunk.Messages[len(chunk.Messages)-1].Role != client.RoleAssistant {
+		t.Fatalf("closed segment was not retained: %#v", chunk.Messages)
 	}
 }
 

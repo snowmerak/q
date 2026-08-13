@@ -147,6 +147,7 @@ func renderHelpContent(dark bool) string {
 		{"/plan [request]", "Grill, research, approve, and execute a work plan."},
 		{"/commit", "Open the interactive commit workflow."},
 		{"/clear", "Clear the current chat projection."},
+		{"/learn", "Close and enqueue the current Thinker learning segment."},
 		{"/model", "Choose default, subagent, and embedding models."},
 		{"/gateway", "Configure Gateway network, API keys, and providers."},
 		{"/library", "Configure the global Library listener defaults."},

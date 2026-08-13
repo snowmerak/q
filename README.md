@@ -135,6 +135,7 @@ screen without discarding editor state or interrupting an active turn.
 | `/skills` | Interactively add, pull, remove, and reindex global/session Agent Skills. |
 | `/lsp` | Configure global language servers and current-workspace project roots. |
 | `/clear` | Clear the chat projection and remove the current workspace session. |
+| `/learn` | Close the current learning segment and enqueue Thinker extraction. |
 | `/help` | Open the command and shortcut guide. |
 
 ### Chat keys
@@ -438,12 +439,16 @@ when the active agent already has that capability.
 ## Global propositions
 
 q Library stores and reads durable global proposition records through its
-authenticated API. After a successful conversation turn, the configured
-`thinker` model receives a recent context chunk targeting 35% of its context
-window and capped at 45%. Raw tool calls and tool-result messages are excluded
-from that chunk; assistant prose is retained. It calls a private
-`register_proposition` tool once per proposition, and each call is immediately
-persisted with an idempotency key.
+authenticated API. A workspace-local checkpoint state machine accumulates
+conversation events and closes a learning segment at 45% of the Thinker
+model's context, after a successful `task_complete`, when a complete plan is
+approved, or when `/learn`/the q-tools MCP `learn` tool explicitly requests a
+boundary. Raw tool calls and ordinary tool results are excluded; assistant
+prose, the complete validated `task_complete` result, and the complete approved
+plan are retained. Checkpoints advance only after `thinking_complete`, so a
+failed or interrupted extraction retries the same durable segment. The Thinker
+calls a private `register_proposition` tool once per proposition, and each call
+is immediately persisted with an idempotency key.
 
 `search_propositions` searches canonical text and generated query variants
 with a default `created_at` recency boost; `get_proposition` returns the

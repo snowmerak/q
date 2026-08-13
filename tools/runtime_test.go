@@ -56,10 +56,10 @@ func TestRuntimeListsAndCallsBuiltinTools(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer runtime.Close()
-	if len(runtime.Tools()) != 16 {
+	if len(runtime.Tools()) != 17 {
 		t.Fatalf("runtime tools = %d", len(runtime.Tools()))
 	}
-	if !runtimeHasTool(runtime, "search_skills") || !runtimeHasTool(runtime, "get_skill") {
+	if !runtimeHasTool(runtime, "search_skills") || !runtimeHasTool(runtime, "get_skill") || !runtimeHasTool(runtime, "learn") {
 		t.Fatalf("skill retrieval tools are unavailable: %#v", runtime.Tools())
 	}
 	environment := runtime.Environment()
@@ -152,7 +152,7 @@ func TestRuntimeExposesAndCallsArchiveTools(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer runtime.Close()
-	if len(runtime.Tools()) != 18 || !runtimeHasTool(runtime, "search_archive") || !runtimeHasTool(runtime, "get_archive_record") {
+	if len(runtime.Tools()) != 19 || !runtimeHasTool(runtime, "search_archive") || !runtimeHasTool(runtime, "get_archive_record") {
 		t.Fatalf("runtime tools = %#v", runtime.Tools())
 	}
 

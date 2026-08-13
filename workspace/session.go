@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 
 	"github.com/snowmerak/q/client"
+	"github.com/snowmerak/q/thinker"
 )
 
 const (
@@ -22,10 +23,11 @@ const (
 var ErrNotFound = errors.New("q workspace session not found")
 
 type Session struct {
-	Version    int              `json:"version"`
-	RunID      string           `json:"run_id,omitempty"`
-	Transcript []client.Message `json:"transcript,omitempty"`
-	Context    []client.Message `json:"context,omitempty"`
+	Version    int                   `json:"version"`
+	RunID      string                `json:"run_id,omitempty"`
+	Transcript []client.Message      `json:"transcript,omitempty"`
+	Context    []client.Message      `json:"context,omitempty"`
+	Learning   thinker.LearningState `json:"learning,omitempty"`
 }
 
 type Store struct {
@@ -152,5 +154,6 @@ func (s Store) Clear() error {
 func cloneSession(session Session) Session {
 	session.Transcript = append([]client.Message(nil), session.Transcript...)
 	session.Context = append([]client.Message(nil), session.Context...)
+	session.Learning = session.Learning.Clone()
 	return session
 }

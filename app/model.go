@@ -145,6 +145,9 @@ type model struct {
 	toolRuntime   agentToolRuntime
 	libraryClient *qlibrary.Client
 	thinkerSerial *thinker.Serial
+	learning      *thinker.Machine
+	thinkerBusy   bool
+	thinkerJobID  string
 
 	workspaceStore    *workspace.Store
 	workspaceLock     *workspace.Lock
@@ -300,6 +303,8 @@ type agentEvent struct {
 	response        *client.ChatResponse
 	requestEstimate int
 	toolCalls       int
+	learningName    string
+	learningPayload json.RawMessage
 	err             error
 }
 
@@ -613,13 +618,18 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.resize(m.width, m.height)
 		if m.screen == screenChat {
-			return m, m.input.Focus()
+			return m, tea.Batch(m.input.Focus(), m.startNextLearningSegment())
 		}
 		if m.screen == screenProviders {
 			return m, nil
 		}
 		return m, m.setup[m.setupFocus].Focus()
 	case thinkerResultMsg:
+		if message.jobID == "" || message.jobID != m.thinkerJobID {
+			return m, nil
+		}
+		m.thinkerBusy = false
+		m.thinkerJobID = ""
 		if message.err != nil {
 			m.archiveFailure("thinker", message.err)
 			_ = m.flushArchive()
@@ -629,11 +639,21 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		}
+		if m.learning != nil {
+			if err := m.learning.Commit(message.jobID); err != nil {
+				m.status = "Thinker checkpoint: " + err.Error()
+				return m, nil
+			}
+			if err := m.saveWorkspaceSession(); err != nil {
+				m.status = err.Error()
+				return m, nil
+			}
+		}
 		if !m.waiting && message.result.Registered > 0 {
 			m.status = fmt.Sprintf("Thinker registered %d proposition(s)", message.result.Registered)
 			m.resize(m.width, m.height)
 		}
-		return m, nil
+		return m, m.startNextLearningSegment()
 	case configuredMsg:
 		if message.err != nil {
 			m.status = message.err.Error()
@@ -667,10 +687,11 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			m.status = "Model changed to " + message.config.Provider.Model
 			m.refreshTranscript()
+			m.refreshLearningContextLength()
 		} else {
 			m.enterChat(message.config, message.client)
 		}
-		return m, m.input.Focus()
+		return m, tea.Batch(m.input.Focus(), m.startNextLearningSegment())
 	case modelTargetConfiguredMsg:
 		if message.err != nil {
 			m.status = message.err.Error()
@@ -766,6 +787,10 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		event := message.event
+		if event.learningName != "" {
+			command := m.enqueueLearningSpecial(event.learningName, event.learningPayload)
+			return m, tea.Batch(m.spinner.Tick, waitAgentEvent(message.events, message.turnID), command)
+		}
 		if event.activity != nil {
 			m.appendAgentActivity(*event.activity)
 			m.status = activityStatus(*event.activity)
@@ -784,7 +809,11 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		if event.call != nil {
 			m.archiveToolCall(*event.call)
 			m.status = "Running tool · " + describeToolCall(*event.call)
-			return m, tea.Batch(m.spinner.Tick, waitAgentEvent(message.events, message.turnID))
+			var learning tea.Cmd
+			if event.call.Function.Name == "learn" {
+				learning = m.enqueueExplicitLearning()
+			}
+			return m, tea.Batch(m.spinner.Tick, waitAgentEvent(message.events, message.turnID), learning)
 		}
 		if event.question != nil {
 			m.asking = true
@@ -806,6 +835,7 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if event.message != nil {
 			m.messages = append(m.messages, *event.message)
+			learning := m.observeLearningMessage(*event.message)
 			if m.memory != nil {
 				m.memory.Append(*event.message)
 			}
@@ -821,7 +851,7 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 				m.status = "Thinking… · " + event.message.Name + " completed"
 			}
 			m.refreshTranscript()
-			return m, tea.Batch(m.spinner.Tick, waitAgentEvent(message.events, message.turnID))
+			return m, tea.Batch(m.spinner.Tick, waitAgentEvent(message.events, message.turnID), learning)
 		}
 		return m.Update(chatResultMsg{
 			turnID:   message.turnID,
@@ -832,8 +862,6 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		if message.turnID != 0 && message.turnID != m.turnID {
 			return m, nil
 		}
-		completedTurnID := m.turnID
-		turnMessageStart := m.turnMessageStart
 		m.finishTurn()
 		m.waiting = false
 		m.compacting = false
@@ -875,6 +903,11 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.messages = append(m.messages, message.intermediate...)
 		m.messages = append(m.messages, assistant)
+		learningCommands := make([]tea.Cmd, 0, len(message.intermediate)+2)
+		for _, intermediate := range message.intermediate {
+			learningCommands = append(learningCommands, m.observeLearningMessage(intermediate))
+		}
+		learningCommands = append(learningCommands, m.observeLearningMessage(assistant))
 		for _, intermediate := range message.intermediate {
 			m.archiveMessage(intermediate, sessionstore.StatusSucceeded, false)
 		}
@@ -913,10 +946,8 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			m.status = "archive: " + err.Error()
 		}
 		focus := m.input.Focus()
-		if command := m.startThinkerExtraction(completedTurnID, turnMessageStart); command != nil {
-			return m, tea.Batch(focus, command)
-		}
-		return m, focus
+		learningCommands = append(learningCommands, focus, m.startNextLearningSegment())
+		return m, tea.Batch(learningCommands...)
 	case compactionResultMsg:
 		if message.turnID != 0 && message.turnID != m.turnID {
 			return m, nil
@@ -2016,6 +2047,10 @@ func (m model) submitChat() (tea.Model, tea.Cmd) {
 		m.input.Reset()
 		m.resetConversation()
 		return m, m.input.Focus()
+	case "/learn":
+		m.input.Reset()
+		m.status = "Learning checkpoint enqueued"
+		return m, tea.Batch(m.input.Focus(), m.enqueueExplicitLearning())
 	case "/model":
 		m.input.Reset()
 		return m.discoverCurrentModels()
@@ -2059,6 +2094,7 @@ func (m model) submitChat() (tea.Model, tea.Cmd) {
 	userMessage := client.Message{Role: client.RoleUser, Content: content}
 	m.archiveMessage(userMessage, sessionstore.StatusSubmitted, false)
 	m.messages = append(m.messages, userMessage)
+	learning := m.observeLearningMessage(userMessage)
 	if m.memory == nil {
 		m.memory = memory.New(memoryPolicy(m.config), nil)
 	}
@@ -2081,10 +2117,10 @@ func (m model) submitChat() (tea.Model, tea.Cmd) {
 		}
 		m.compacting = true
 		m.status = "Compacting context…"
-		return m, tea.Batch(m.spinner.Tick, m.compactContext(plan))
+		return m, tea.Batch(m.spinner.Tick, m.compactContext(plan), learning)
 	}
 	m.status = "Thinking…"
-	return m, tea.Batch(m.spinner.Tick, m.sendChatRequest())
+	return m, tea.Batch(m.spinner.Tick, m.sendChatRequest(), learning)
 }
 
 func (m model) submitQuestionAnswer(content string) (tea.Model, tea.Cmd) {
@@ -2159,60 +2195,6 @@ func (m model) activeTurnContext() context.Context {
 		return m.turnContext
 	}
 	return m.ctx
-}
-
-func (m *model) startThinkerExtraction(turnID uint64, turnMessageStart int) tea.Cmd {
-	if m == nil || m.client == nil || m.libraryClient == nil || m.thinkerSerial == nil || turnID == 0 {
-		return nil
-	}
-	start := min(max(turnMessageStart, 0), len(m.messages))
-	hasUser, hasAssistant := false, false
-	for _, message := range m.messages[start:] {
-		hasUser = hasUser || message.Role == client.RoleUser
-		hasAssistant = hasAssistant || message.Role == client.RoleAssistant
-	}
-	if !hasUser || !hasAssistant {
-		return nil
-	}
-	m.ensureRunID()
-	extractionID, err := sessionstore.NewID()
-	if err != nil {
-		extractionID = strconv.FormatInt(time.Now().UTC().UnixNano(), 10)
-	}
-	job := thinker.Job{
-		ID:       "think-" + extractionID,
-		Messages: append([]client.Message(nil), m.messages...),
-		Refs:     []string{"run:" + m.runID, "turn:" + strconv.FormatUint(turnID, 10)},
-	}
-	if m.workspaceStore != nil {
-		job.WorkingDirectory = m.workspaceStore.Root
-	}
-	configuredClient := m.client
-	libraryClient := m.libraryClient
-	serial := m.thinkerSerial
-	value := m.config
-	models := append([]client.Model(nil), m.models...)
-	ctx := m.ctx
-	return func() tea.Msg {
-		if len(models) == 0 {
-			listed, err := configuredClient.ListModels(ctx)
-			if err != nil {
-				return thinkerResultMsg{jobID: job.ID, err: fmt.Errorf("resolve thinker model: %w", err)}
-			}
-			models = listed
-		}
-		spec, err := subagent.Resolve(value, config.AgentRoleThinker, models)
-		if err != nil {
-			return thinkerResultMsg{jobID: job.ID, err: err}
-		}
-		if spec.ContextLength <= 0 && spec.Model == value.Provider.Model {
-			spec.ContextLength = value.EffectiveContextWindow()
-		}
-		result, err := serial.Run(ctx, thinker.Runner{
-			Client: configuredClient, Library: libraryClient, Spec: spec,
-		}, job)
-		return thinkerResultMsg{jobID: job.ID, result: result, err: err}
-	}
 }
 
 func (m model) interruptTurn() (tea.Model, tea.Cmd) {
@@ -2461,8 +2443,14 @@ func streamAgentLoop(
 				if !emitAgentEvent(ctx, events, agentEvent{message: &message}) {
 					return
 				}
+				if !emitAgentEvent(ctx, events, agentEvent{
+					learningName: thinker.TaskCompleteEventName, learningPayload: append(json.RawMessage(nil), body...),
+				}) {
+					return
+				}
 				response.Choices[0].Message = client.Message{
-					Role: client.RoleAssistant, Content: renderTaskCompletion(completion),
+					Role: client.RoleAssistant, Name: thinker.TaskCompletionReplyName,
+					Content: renderTaskCompletion(completion),
 				}
 				response.ConversationID = conversationID
 				emitAgentEvent(ctx, events, agentEvent{
@@ -2863,6 +2851,11 @@ func (m *model) resetConversation() {
 	m.conversationID = ""
 	m.runID = ""
 	m.ensureRunID()
+	m.thinkerBusy = false
+	m.thinkerJobID = ""
+	if err := m.ensureLearningMachine(thinker.LearningState{}, nil); err != nil {
+		m.status = err.Error()
+	}
 	m.compactionTarget = 0
 	m.submitPending = false
 	m.asking = false
@@ -2891,6 +2884,9 @@ func (m *model) restoreWorkspaceSession() {
 	m.workspaceRestored = true
 	session, err := m.workspaceStore.Load()
 	if errors.Is(err, workspace.ErrNotFound) {
+		if learningErr := m.ensureLearningMachine(thinker.LearningState{}, nil); learningErr != nil {
+			m.status = learningErr.Error()
+		}
 		return
 	}
 	if err != nil {
@@ -2904,6 +2900,9 @@ func (m *model) restoreWorkspaceSession() {
 		requestContext = session.Transcript
 	}
 	m.memory = memory.New(memoryPolicy(m.config), mergeWorkspaceMessages(base, requestContext))
+	if learningErr := m.ensureLearningMachine(session.Learning, requestContext); learningErr != nil {
+		m.status = learningErr.Error()
+	}
 	m.runID = session.RunID
 	m.ensureRunID()
 	if len(session.Transcript) > 0 {
@@ -2919,6 +2918,12 @@ func (m *model) saveWorkspaceSession() error {
 		RunID:      m.runID,
 		Transcript: workspaceSessionMessages(m.messages),
 		Context:    workspaceSessionMessages(m.memory.Messages()),
+		Learning: func() thinker.LearningState {
+			if m.learning == nil {
+				return thinker.LearningState{}
+			}
+			return m.learning.State()
+		}(),
 	})
 }
 

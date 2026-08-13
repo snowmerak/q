@@ -37,8 +37,8 @@ func TestServerListsAndCallsBuiltinTools(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(listed.Tools) != 16 {
-		t.Fatalf("listed %d tools; want 16", len(listed.Tools))
+	if len(listed.Tools) != 17 {
+		t.Fatalf("listed %d tools; want 17", len(listed.Tools))
 	}
 	result, err := clientSession.CallTool(context.Background(), &mcp.CallToolParams{
 		Name: "read_file", Arguments: map[string]any{"path": "hello.txt"},
@@ -48,5 +48,13 @@ func TestServerListsAndCallsBuiltinTools(t *testing.T) {
 	}
 	if result.IsError || result.StructuredContent == nil || len(result.Content) != 1 {
 		t.Fatalf("unexpected tool result: %+v", result)
+	}
+	learned, err := clientSession.CallTool(context.Background(), &mcp.CallToolParams{Name: "learn"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	structured, ok := learned.StructuredContent.(map[string]any)
+	if learned.IsError || !ok || structured["enqueued"] != true {
+		t.Fatalf("unexpected learn result: %+v", learned)
 	}
 }
