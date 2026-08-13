@@ -68,10 +68,11 @@ taken from validated frontmatter, not from the repository URL. Updates refuse
 non-fast-forward integration.
 
 The index is a derived projection. q reconciles it at startup, on interactive
-reload, after managed Git operations, and immediately before every skill
-search. Consequently additions, modifications, and deletions made by another
-Git or filesystem process are reflected on the next search. Stale `skill`
-records are deleted; conversation records remain untouched.
+reload, and after managed Git operations. Search reads the existing Session
+Store projection without scanning skill directories or parsing YAML. Changes
+made by another Git or filesystem process become visible after explicit reload
+or restart. Stale `skill` records are deleted during reconciliation;
+conversation records remain untouched.
 
 ## Capability boundary
 

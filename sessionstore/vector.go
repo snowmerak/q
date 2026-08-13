@@ -29,6 +29,9 @@ const (
 type OpenOptions struct {
 	Vector        VectorConfig
 	WorkspaceLock *worklock.Lock
+	// Directory selects the store directory below root. The zero value uses
+	// ".q" for workspace compatibility. It must be a relative child path.
+	Directory string
 }
 
 // VectorConfig identifies the embeddings included in one HNSW graph. Model

@@ -36,6 +36,18 @@ Run only the configured Gateway, without the TUI or workspace services:
 q gateway [--host <ip>] [--port <port>]
 ```
 
+Run the global Library as a dedicated foreground service:
+
+```powershell
+q library
+```
+
+Ordinary `q` sessions also ensure that the same Library server is available.
+When no compatible server is running, one session wins the user-level file
+lock and embeds the server until that q process exits. Other sessions connect
+over HTTP, and `q library` can be used when the service should remain available
+independently of a workspace TUI.
+
 The command reads providers from `~/.q/providers.json` and listener/API-key
 settings from `~/.q/gateway.json`. The initial default is `127.0.0.1:0`, so the
 OS selects an available port. A saved nonzero port is used when available and
@@ -83,6 +95,7 @@ Personal configuration is stored in:
 ~/.q/providers.json
 ~/.q/gateway.json
 ~/.q/gateway.key
+~/.q/library.json
 ```
 
 Prefer environment variables over inline API keys. On POSIX, q creates the

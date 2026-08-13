@@ -118,7 +118,20 @@ func OpenWithOptions(root string, options OpenOptions) (*Store, error) {
 			_ = ownedLock.Close()
 		}
 	}()
-	workspaceDir := filepath.Join(absolute, ".q")
+	directory := strings.TrimSpace(options.Directory)
+	if directory == "" {
+		directory = ".q"
+	}
+	directory = filepath.Clean(directory)
+	if filepath.IsAbs(directory) || directory == "." || directory == ".." ||
+		strings.HasPrefix(directory, ".."+string(filepath.Separator)) {
+		return nil, errors.New("sessionstore: store directory must stay inside root")
+	}
+	workspaceDir := filepath.Join(absolute, directory)
+	relative, err := filepath.Rel(absolute, workspaceDir)
+	if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+		return nil, errors.New("sessionstore: store directory resolves outside root")
+	}
 	store := &Store{
 		root:          absolute,
 		recordsDir:    filepath.Join(workspaceDir, "data", "records"),

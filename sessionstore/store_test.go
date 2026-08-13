@@ -358,6 +358,32 @@ func TestCloseDoesNotReleaseCallerOwnedWorkspaceLock(t *testing.T) {
 	}
 }
 
+func TestOpenWithCustomStoreDirectory(t *testing.T) {
+	root := t.TempDir()
+	owner, err := worklock.AcquireFile(root, "library.lock", "q library")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer owner.Close()
+	store, err := OpenWithOptions(root, OpenOptions{WorkspaceLock: owner, Directory: "library"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Save(Record{ID: "global", Kind: KindSkill, Content: "global skill"}); err != nil {
+		_ = store.Close()
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "library", "data", "records")); err != nil {
+		t.Fatalf("custom store directory was not used: %v", err)
+	}
+	if _, err := OpenWithOptions(root, OpenOptions{WorkspaceLock: owner, Directory: "../outside"}); err == nil {
+		t.Fatal("Session Store accepted a directory outside root")
+	}
+}
+
 func TestSearchValidation(t *testing.T) {
 	store, err := Open(t.TempDir())
 	if err != nil {

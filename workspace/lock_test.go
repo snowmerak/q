@@ -8,6 +8,8 @@ import (
 	"strconv"
 	"testing"
 	"time"
+
+	"github.com/snowmerak/q/worklock"
 )
 
 const (
@@ -53,6 +55,24 @@ func TestWorkspaceLockRejectsSecondOwnerAndReusesStaleFile(t *testing.T) {
 	}
 	if err := reopened.Close(); err != nil {
 		t.Fatalf("second Close() = %v", err)
+	}
+}
+
+func TestNamedLockUsesRequestedPath(t *testing.T) {
+	root := t.TempDir()
+	lock, err := worklock.AcquireFile(root, "library.lock", "q library")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lock.Close()
+	if lock.Path() != filepath.Join(root, "library.lock") {
+		t.Fatalf("lock path = %q", lock.Path())
+	}
+	if _, err := worklock.AcquireFile(root, "library.lock", "q contender"); !errors.Is(err, worklock.ErrLocked) {
+		t.Fatalf("second named lock error = %v", err)
+	}
+	if _, err := worklock.AcquireFile(root, "../outside.lock", "q invalid"); err == nil {
+		t.Fatal("named lock accepted a path outside root")
 	}
 }
 

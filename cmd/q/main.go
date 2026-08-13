@@ -10,6 +10,8 @@ import (
 
 	"github.com/snowmerak/q/app"
 	"github.com/snowmerak/q/commitagent"
+	"github.com/snowmerak/q/config"
+	qlibrary "github.com/snowmerak/q/library"
 	"github.com/snowmerak/q/loom"
 	"github.com/snowmerak/q/providerhost"
 )
@@ -58,6 +60,21 @@ func main() {
 			return
 		}
 		if err := runGatewayCommand(ctx, os.Args[2:], os.Stdout, os.Stderr); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
+	if len(os.Args) > 1 && os.Args[1] == "library" {
+		if len(os.Args) != 2 {
+			fmt.Fprintln(os.Stderr, "usage: q library")
+			os.Exit(2)
+		}
+		store, err := config.DefaultStore()
+		if err == nil {
+			err = qlibrary.Run(ctx, store.Dir, os.Stdout)
+		}
+		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}

@@ -168,6 +168,7 @@ func renderHelpContent(dark bool) string {
 	})
 	writeHelpSection("COMMAND LINE", [][2]string{
 		{"q commit", "Open the guided commit-message and commit TUI."},
+		{"q library", "Run the global Library as a dedicated foreground service."},
 		{"q gateway", "Run only the standalone OpenAI-compatible Gateway."},
 		{"q gateway config", "Configure Gateway network, API keys, and providers."},
 		{"q model", "Configure main, embedding, and subagent models."},

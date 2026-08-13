@@ -84,6 +84,13 @@ type Lock struct {
 // harmless: abnormal process termination closes the owning handle and the OS
 // releases the actual lock automatically.
 func Acquire(root, command string) (*Lock, error) {
+	return AcquireFile(root, filepath.Join(directoryName, lockFileName), command)
+}
+
+// AcquireFile takes exclusive ownership using a lock file below root. The
+// relative path must remain inside root. It supports q-owned stores, such as
+// the global Library, that do not use the workspace .q/workspace.lock path.
+func AcquireFile(root, relativePath, command string) (*Lock, error) {
 	absolute, err := filepath.Abs(root)
 	if err != nil {
 		return nil, fmt.Errorf("workspace: resolve lock root: %w", err)
@@ -95,12 +102,21 @@ func Acquire(root, command string) (*Lock, error) {
 	if !info.IsDir() {
 		return nil, errors.New("workspace: lock root is not a directory")
 	}
-	directory := filepath.Join(absolute, directoryName)
+	relativePath = filepath.Clean(strings.TrimSpace(relativePath))
+	if relativePath == "." || filepath.IsAbs(relativePath) || relativePath == ".." ||
+		strings.HasPrefix(relativePath, ".."+string(filepath.Separator)) {
+		return nil, errors.New("workspace: lock path must stay inside the lock root")
+	}
+	path := filepath.Join(absolute, relativePath)
+	relative, err := filepath.Rel(absolute, path)
+	if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+		return nil, errors.New("workspace: lock path resolves outside the lock root")
+	}
+	directory := filepath.Dir(path)
 	if err := os.MkdirAll(directory, 0o700); err != nil {
 		return nil, fmt.Errorf("workspace: create lock directory: %w", err)
 	}
 	_ = os.Chmod(directory, 0o700)
-	path := filepath.Join(directory, lockFileName)
 	file, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
 		return nil, fmt.Errorf("workspace: open lock %s: %w", path, err)

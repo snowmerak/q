@@ -5,11 +5,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/snowmerak/llm-provider/gateway"
 	"github.com/snowmerak/q/client"
 	"github.com/snowmerak/q/config"
+	qlibrary "github.com/snowmerak/q/library"
 	"github.com/snowmerak/q/providerhost"
 	qtools "github.com/snowmerak/q/tools"
 	"github.com/snowmerak/q/workspace"
@@ -69,6 +71,10 @@ func managedClientFactory(runtime providerRuntime) clientFactory {
 func Run(ctx context.Context, store config.Store) error {
 	runtimeContext, cancelRuntime := context.WithCancel(ctx)
 	defer cancelRuntime()
+	libraryDone := make(chan error, 1)
+	go func() {
+		libraryDone <- qlibrary.Run(runtimeContext, store.Dir, io.Discard)
+	}()
 	workspaceStore, err := workspace.DefaultStore()
 	if err != nil {
 		return err
@@ -110,6 +116,7 @@ func Run(ctx context.Context, store config.Store) error {
 
 	final, runErr := tea.NewProgram(initialModel).Run()
 	cancelRuntime()
+	libraryErr := <-libraryDone
 	lifecycle.waitIfStarted()
 	var clientCloseErr error
 	if finalModel, ok := final.(model); ok && finalModel.client != nil {
@@ -117,7 +124,7 @@ func Run(ctx context.Context, store config.Store) error {
 	} else if startupClient := lifecycle.startupClient(); startupClient != nil {
 		clientCloseErr = startupClient.Close()
 	}
-	return errors.Join(runErr, clientCloseErr, lifecycle.closeResources())
+	return errors.Join(runErr, clientCloseErr, libraryErr, lifecycle.closeResources())
 }
 
 func RunDefault(ctx context.Context) error {
