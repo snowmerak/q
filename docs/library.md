@@ -11,9 +11,9 @@ are available for lifecycle verification. Authenticated global Agent Skill
 search, resource reads, and explicit reconciliation are available through the
 `/v1/skills/*` routes and are consumed by the existing MCP skill tools.
 
-Proposition extraction and write routes, persistent write idempotency, and
-multi-vector hybrid search described below remain the next implementation
-stages. The proposition read routes are implemented.
+Proposition extraction, authenticated single-record writes, persistent write
+idempotency, BM25 search, and `created_at` recency ranking are implemented.
+Embedding generation and multi-vector hybrid search remain later stages.
 
 ## Purpose and decisions
 
@@ -220,9 +220,15 @@ output, and unconfirmed assistant claims are excluded.
 
 The extraction model uses the built-in `thinker` role. Like other role models,
 it is configurable from `/model` or `agents.roles.thinker` and inherits the
-active chat model when no override is present. Registering the role is the
-first implementation slice; invoking it from the extraction pipeline remains
-separate work.
+active chat model when no override is present. Successful user/assistant turns
+enqueue extraction without blocking the next chat input. Thinker jobs are
+serialized so their idempotency slots remain stable.
+
+The conversation chunk targets 35% of the Thinker model's advertised context
+length and has a hard 45% cap. Recent messages win, assistant tool calls stay
+with their tool results, and oversized fields are shortened only when the most
+recent unit cannot fit. The remaining context is reserved for the system
+prompt, tool schemas, and repeated registration exchanges.
 
 For a selected turn:
 
@@ -230,9 +236,8 @@ For a selected turn:
 bounded conversation context
   -> proposition/query extraction
   -> schema and sensitive-data validation
-  -> embedding generation
-  -> idempotent Library write
-  -> BM25/HNSW projection update
+  -> one register_proposition call per proposition
+  -> idempotent Library write and BM25 update
 ```
 
 The submitted context is bounded independently of the full workspace archive.
@@ -269,9 +274,9 @@ before they are returned.
 Proposition retrieval performs:
 
 ```text
-BM25 candidates ----\
-                     +-- rank fusion -- created_at decay -- collapse -- top K
-HNSW variants -------/
+BM25 candidates ----------------\
+                                 +-- rank fusion -- created_at decay -- top K
+HNSW variants -- record collapse /
 ```
 
 BM25 and vector scores are not added directly. Their independently ranked
@@ -305,9 +310,10 @@ boundary needs at least these operations:
 
 ```text
 GET  /v1/health
-POST /v1/propositions/extract
+POST /v1/propositions
 POST /v1/propositions/search
 GET  /v1/propositions/{id}
+DELETE /v1/propositions/{id}
 POST /v1/skills/search
 GET  /v1/skills/{id}/resources/{path...}
 POST /v1/skills/reload
@@ -331,11 +337,34 @@ boost. `GET /propositions/{id}` returns the canonical text, provenance refs,
 tags, and extraction payload. Both routes require Library API-key
 authentication.
 
-The existing `q-tools` MCP server exposes these reads as
+`POST /propositions` is also implemented for the Thinker-local
+`register_proposition` tool. It requires an `Idempotency-Key`, validates the
+bounded single-proposition schema and obvious credential-like content, forces
+`kind=proposition` and `scope=global`, and persists the canonical content plus
+generated-query `search_text`. Reusing a key with identical input returns the
+existing ID; different input returns HTTP 409.
+
+The existing `q-tools` MCP server exposes the reads as
 `search_propositions` and `get_proposition`; there is no separate proposition
 MCP server. Search results are captured through the normal workspace Loom
-boundary. Extraction, writes, embedding generation, and HNSW proposition
-projection are not implemented in this slice.
+boundary. The mutation tool is private to the Thinker runner rather than being
+added to the general MCP catalog.
+
+The registration API can atomically accept a bounded embedding batch ordered
+as canonical content followed by one vector per normalized retrieval query.
+The Library assigns stable `content`, `query-0`, ... projection IDs, persists
+them inside the proposition source record, and adds every matching projection
+to HNSW. The configured global `embedding.model` and `embedding.dimensions`
+select the Library graph shape at leader startup. Updates and deletes rebuild
+the derived graph because the current pure-Go HNSW implementation has no
+in-place deletion. `DELETE /propositions/{id}` is idempotent and removes the
+source record, BM25 document, and all vector variants together.
+
+Semantic search accepts one query embedding, collapses HNSW variants by source
+proposition before reciprocal-rank fusion with BM25, and then applies the
+existing immutable-`created_at` boost. Embedding generation is intentionally a
+caller responsibility at this boundary; wiring the Thinker and MCP query path
+to the configured embedding client is the next slice.
 
 ## CLI and runtime integration
 
@@ -362,9 +391,10 @@ endpoint. Listener changes take effect after the current Library leader is
 restarted.
 
 Configuration includes the listen host, fixed port, local rendezvous URL when
-needed, remote/client-only mode, API-key source, extraction model, embedding
-model and dimensions, generated-query bound, and recency parameters. Listener
-and index-shape changes require a Library restart. Library API-key changes use
+needed, remote/client-only mode, and API-key source. The Thinker model is
+configured through q's agent-role settings. The Library currently uses q's
+global embedding model and dimensions for its HNSW index; listener and
+index-shape changes require a Library restart. Library API-key changes use
 the same live-reload behavior as Gateway keys while remaining in the Library's
 independent configuration.
 
@@ -387,7 +417,8 @@ that global skill/proposition retrieval and extraction are unavailable.
 5. Add `KindProposition`, bounded extraction records, generated BM25 query
    text, and proposition search without vectors.
 6. Generalize HNSW projection IDs to support multiple vector variants per
-   proposition and add hybrid RRF retrieval.
+   proposition and add hybrid RRF retrieval. Implemented; caller-side embedding
+   generation remains to be connected.
 7. Add immutable `created_at` decay, extraction gating, failure recovery, and
    TUI/CLI status surfaces.
 

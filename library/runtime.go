@@ -12,12 +12,15 @@ import (
 	"syscall"
 	"time"
 
+	qconfig "github.com/snowmerak/q/config"
+	"github.com/snowmerak/q/sessionstore"
 	"github.com/snowmerak/q/worklock"
 )
 
 type EnsureOptions struct {
 	Dir            string
 	Config         Config
+	Vector         sessionstore.VectorConfig
 	ProbeTimeout   time.Duration
 	StartupTimeout time.Duration
 }
@@ -34,7 +37,13 @@ func Ensure(ctx context.Context, dir string) (*Runtime, error) {
 	if err != nil {
 		return nil, err
 	}
-	return EnsureWithOptions(ctx, EnsureOptions{Dir: dir, Config: value})
+	options := EnsureOptions{Dir: dir, Config: value}
+	if global, loadErr := (qconfig.Store{Dir: dir}).Load(); loadErr == nil {
+		options.Vector = sessionstore.VectorConfig{
+			Model: global.Embedding.Model, Dimensions: global.Embedding.Dimensions,
+		}
+	}
+	return EnsureWithOptions(ctx, options)
 }
 
 func EnsureWithOptions(ctx context.Context, options EnsureOptions) (*Runtime, error) {
@@ -78,7 +87,7 @@ func EnsureWithOptions(ctx context.Context, options EnsureOptions) (*Runtime, er
 				_ = lock.Close()
 				return nil, fmt.Errorf("library: configured address %s is unavailable: %w", value.ListenAddress(), listenErr)
 			}
-			leader, startErr := startLeader(ctx, options.Dir, value, listener, lock)
+			leader, startErr := startLeader(ctx, options.Dir, value, options.Vector, listener, lock)
 			if startErr != nil {
 				_ = listener.Close()
 				_ = lock.Close()

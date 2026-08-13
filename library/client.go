@@ -134,7 +134,30 @@ func (c *Client) GetProposition(ctx context.Context, id string) (Proposition, er
 	return output, nil
 }
 
+func (c *Client) RegisterProposition(ctx context.Context, idempotencyKey string, input PropositionRegisterRequest) (PropositionRegisterResponse, error) {
+	var output PropositionRegisterResponse
+	if err := c.doJSONWithHeaders(ctx, http.MethodPost, "/propositions", input, &output, map[string]string{
+		"Idempotency-Key": idempotencyKey,
+	}); err != nil {
+		return PropositionRegisterResponse{}, err
+	}
+	return output, nil
+}
+
+func (c *Client) DeleteProposition(ctx context.Context, id string) (PropositionDeleteResponse, error) {
+	var output PropositionDeleteResponse
+	path := "/propositions/" + url.PathEscape(strings.TrimSpace(id))
+	if err := c.doJSON(ctx, http.MethodDelete, path, nil, &output); err != nil {
+		return PropositionDeleteResponse{}, err
+	}
+	return output, nil
+}
+
 func (c *Client) doJSON(ctx context.Context, method, path string, input, output any) error {
+	return c.doJSONWithHeaders(ctx, method, path, input, output, nil)
+}
+
+func (c *Client) doJSONWithHeaders(ctx context.Context, method, path string, input, output any, headers map[string]string) error {
 	if c == nil {
 		return errors.New("library: client is nil")
 	}
@@ -158,6 +181,9 @@ func (c *Client) doJSON(ctx context.Context, method, path string, input, output 
 	}
 	if c.apiKey != "" {
 		request.Header.Set("Authorization", "Bearer "+c.apiKey)
+	}
+	for name, value := range headers {
+		request.Header.Set(name, value)
 	}
 	response, err := c.http.Do(request)
 	if err != nil {

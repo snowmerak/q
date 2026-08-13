@@ -36,6 +36,7 @@ func startLeader(
 	parent context.Context,
 	dir string,
 	value Config,
+	vector sessionstore.VectorConfig,
 	listener net.Listener,
 	lock *worklock.Lock,
 ) (*leader, error) {
@@ -58,7 +59,7 @@ func startLeader(
 		return nil, fmt.Errorf("library: create store root: %w", err)
 	}
 	archive, err := sessionstore.OpenWithOptions(dir, sessionstore.OpenOptions{
-		WorkspaceLock: lock, Directory: "library",
+		WorkspaceLock: lock, Directory: "library", Vector: vector,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("library: open global Store: %w", err)

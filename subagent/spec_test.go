@@ -16,7 +16,7 @@ func TestResolveUsesRoleModelAndReasoningEffort(t *testing.T) {
 	}
 	models := []client.Model{
 		{ID: "chat-model"},
-		{ID: "planning-model", Capabilities: &client.ModelCapabilities{Reasoning: &client.ReasoningCapabilities{
+		{ID: "planning-model", ContextLength: 200_000, MaxOutputTokens: 16_000, Capabilities: &client.ModelCapabilities{Reasoning: &client.ReasoningCapabilities{
 			Supported: true, Control: client.ReasoningControlEffort,
 			SupportedEfforts: []string{"low", "medium", "high"}, DefaultEffort: "medium",
 		}}},
@@ -31,6 +31,9 @@ func TestResolveUsesRoleModelAndReasoningEffort(t *testing.T) {
 	}
 	if spec.Reasoning == nil || spec.Reasoning.DefaultEffort != "medium" || len(spec.Reasoning.SupportedEfforts) != 3 {
 		t.Fatalf("reasoning = %#v", spec.Reasoning)
+	}
+	if spec.ContextLength != 200_000 || spec.MaxOutputTokens != 16_000 {
+		t.Fatalf("model limits = %#v", spec)
 	}
 	request := client.ChatRequest{}
 	spec.Apply(&request)

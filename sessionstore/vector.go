@@ -15,7 +15,7 @@ import (
 )
 
 const (
-	VectorIndexVersion    = 1
+	VectorIndexVersion    = 2
 	defaultHNSWM          = 16
 	defaultEfConstruction = 200
 	defaultEfSearch       = 64
@@ -84,18 +84,23 @@ func normalizeVectorConfig(c VectorConfig) (VectorConfig, error) {
 }
 
 type vectorIDState struct {
-	Version  int               `json:"version"`
-	NextID   uint64            `json:"next_id"`
-	RecordID map[string]string `json:"record_ids"`
+	Version    int                            `json:"version"`
+	NextID     uint64                         `json:"next_id"`
+	Projection map[string]vectorProjectionRef `json:"projections"`
+}
+
+type vectorProjectionRef struct {
+	RecordID     string `json:"record_id"`
+	ProjectionID string `json:"projection_id"`
 }
 
 type vectorIndex struct {
-	config     VectorConfig
-	graph      *goformersearch.HNSWIndex
-	idToRecord map[uint64]string
-	recordToID map[string]uint64
-	nextID     uint64
-	dirty      bool
+	config         VectorConfig
+	graph          *goformersearch.HNSWIndex
+	idToProjection map[uint64]vectorProjectionRef
+	projectionToID map[string]uint64
+	nextID         uint64
+	dirty          bool
 }
 
 type vectorResult struct {
@@ -111,8 +116,8 @@ func newVectorIndex(config VectorConfig) *vectorIndex {
 		goformersearch.WithEfSearch(config.EfSearch),
 	)
 	return &vectorIndex{
-		config: config, graph: graph, idToRecord: make(map[uint64]string),
-		recordToID: make(map[string]uint64), nextID: 1,
+		config: config, graph: graph, idToProjection: make(map[uint64]vectorProjectionRef),
+		projectionToID: make(map[string]uint64), nextID: 1,
 	}
 }
 
@@ -141,23 +146,24 @@ func loadVectorIndex(graphPath, idsPath string, config VectorConfig) (*vectorInd
 	if err := json.Unmarshal(body, &state); err != nil {
 		return nil, fmt.Errorf("decode HNSW ID map: %w", err)
 	}
-	if state.Version != VectorIndexVersion || len(state.RecordID) != graph.Len() {
+	if state.Version != VectorIndexVersion || len(state.Projection) != graph.Len() {
 		return nil, errors.New("HNSW ID map does not match graph")
 	}
 	index := &vectorIndex{
-		config: config, graph: graph, idToRecord: make(map[uint64]string, len(state.RecordID)),
-		recordToID: make(map[string]uint64, len(state.RecordID)), nextID: state.NextID,
+		config: config, graph: graph, idToProjection: make(map[uint64]vectorProjectionRef, len(state.Projection)),
+		projectionToID: make(map[string]uint64, len(state.Projection)), nextID: state.NextID,
 	}
-	for encodedID, recordID := range state.RecordID {
+	for encodedID, projection := range state.Projection {
 		var id uint64
-		if _, err := fmt.Sscan(encodedID, &id); err != nil || id == 0 || recordID == "" {
+		if _, err := fmt.Sscan(encodedID, &id); err != nil || id == 0 || projection.RecordID == "" || projection.ProjectionID == "" {
 			return nil, errors.New("HNSW ID map contains an invalid entry")
 		}
-		if _, duplicate := index.recordToID[recordID]; duplicate {
-			return nil, errors.New("HNSW ID map contains a duplicate record")
+		key := projectionKey(projection.RecordID, projection.ProjectionID)
+		if _, duplicate := index.projectionToID[key]; duplicate {
+			return nil, errors.New("HNSW ID map contains a duplicate projection")
 		}
-		index.idToRecord[id] = recordID
-		index.recordToID[recordID] = id
+		index.idToProjection[id] = projection
+		index.projectionToID[key] = id
 	}
 	if index.nextID == 0 {
 		return nil, errors.New("HNSW ID map has an invalid next ID")
@@ -170,27 +176,48 @@ func (v *vectorIndex) matches(embedding *Embedding) bool {
 		embedding.Dimensions == v.config.Dimensions && len(embedding.Vector) == v.config.Dimensions
 }
 
+func projectionKey(recordID, projectionID string) string {
+	return recordID + "\x00" + projectionID
+}
+
+func recordEmbeddings(record Record) []VectorProjection {
+	result := make([]VectorProjection, 0, len(record.VectorProjections)+1)
+	if record.Embedding != nil {
+		result = append(result, VectorProjection{ID: "$record", Embedding: *record.Embedding})
+	}
+	result = append(result, record.VectorProjections...)
+	return result
+}
+
 // addRecord only accepts a record not already present. Updates and removals
 // rebuild the derived graph because goformersearch intentionally has no delete
 // operation.
 func (v *vectorIndex) addRecord(record Record) (bool, error) {
-	if !v.matches(record.Embedding) {
-		return false, nil
+	added := false
+	for _, projection := range recordEmbeddings(record) {
+		if !v.matches(&projection.Embedding) {
+			continue
+		}
+		if err := validateFiniteNonzeroVector(projection.Embedding.Vector); err != nil {
+			return added, fmt.Errorf("sessionstore: HNSW projection %q for record %q: %w", projection.ID, record.ID, err)
+		}
+		key := projectionKey(record.ID, projection.ID)
+		if _, exists := v.projectionToID[key]; exists {
+			return added, fmt.Errorf("sessionstore: HNSW projection %q for record %q already exists", projection.ID, record.ID)
+		}
+		if v.nextID == 0 {
+			return added, errors.New("sessionstore: HNSW numeric ID space exhausted")
+		}
+		id := v.nextID
+		v.nextID++
+		v.graph.Add(id, normalizedVector(projection.Embedding.Vector))
+		ref := vectorProjectionRef{RecordID: record.ID, ProjectionID: projection.ID}
+		v.idToProjection[id] = ref
+		v.projectionToID[key] = id
+		v.dirty = true
+		added = true
 	}
-	if _, exists := v.recordToID[record.ID]; exists {
-		return false, fmt.Errorf("sessionstore: HNSW record %q already exists", record.ID)
-	}
-	if v.nextID == 0 {
-		return false, errors.New("sessionstore: HNSW numeric ID space exhausted")
-	}
-	id := v.nextID
-	v.nextID++
-	vector := normalizedVector(record.Embedding.Vector)
-	v.graph.Add(id, vector)
-	v.idToRecord[id] = record.ID
-	v.recordToID[record.ID] = id
-	v.dirty = true
-	return true, nil
+	return added, nil
 }
 
 func (v *vectorIndex) search(vector []float32, limit int) ([]vectorResult, error) {
@@ -203,14 +230,25 @@ func (v *vectorIndex) search(vector []float32, limit int) ([]vectorResult, error
 	if err := validateFiniteNonzeroVector(vector); err != nil {
 		return nil, fmt.Errorf("sessionstore: query vector: %w", err)
 	}
-	results := v.graph.Search(normalizedVector(vector), min(limit, v.graph.Len()))
-	out := make([]vectorResult, 0, len(results))
+	// One record may own many variants. Oversample the graph query, then
+	// collapse to each record's best-ranked projection before rank fusion.
+	projectionLimit := min(v.graph.Len(), limit*(maximumVectorProjections+1))
+	results := v.graph.Search(normalizedVector(vector), projectionLimit)
+	out := make([]vectorResult, 0, min(limit, len(results)))
+	seenRecords := make(map[string]struct{}, len(out))
 	for _, result := range results {
-		recordID, ok := v.idToRecord[result.ID]
+		projection, ok := v.idToProjection[result.ID]
 		if !ok {
 			return nil, fmt.Errorf("sessionstore: HNSW result ID %d is not mapped", result.ID)
 		}
-		out = append(out, vectorResult{RecordID: recordID, Similarity: float64(result.Similarity)})
+		if _, duplicate := seenRecords[projection.RecordID]; duplicate {
+			continue
+		}
+		seenRecords[projection.RecordID] = struct{}{}
+		out = append(out, vectorResult{RecordID: projection.RecordID, Similarity: float64(result.Similarity)})
+		if len(out) == limit {
+			break
+		}
 	}
 	return out, nil
 }
@@ -248,9 +286,9 @@ func (v *vectorIndex) save(graphPath, idsPath string) error {
 	}); err != nil {
 		return err
 	}
-	state := vectorIDState{Version: VectorIndexVersion, NextID: v.nextID, RecordID: make(map[string]string, len(v.idToRecord))}
-	for id, recordID := range v.idToRecord {
-		state.RecordID[fmt.Sprint(id)] = recordID
+	state := vectorIDState{Version: VectorIndexVersion, NextID: v.nextID, Projection: make(map[string]vectorProjectionRef, len(v.idToProjection))}
+	for id, projection := range v.idToProjection {
+		state.Projection[fmt.Sprint(id)] = projection
 	}
 	body, err := json.MarshalIndent(state, "", "  ")
 	if err != nil {

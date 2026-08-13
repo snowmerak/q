@@ -131,6 +131,74 @@ func TestHNSWHybridSearchFusesTextAndVectorCandidates(t *testing.T) {
 	}
 }
 
+func TestHNSWMultipleProjectionsCollapseUpdateAndDelete(t *testing.T) {
+	store, err := OpenWithOptions(t.TempDir(), OpenOptions{Vector: testVectorConfig()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	created := time.Date(2026, time.August, 13, 12, 0, 0, 0, time.UTC)
+	proposition := Record{
+		ID: "prop", Kind: KindProposition, Scope: "global", Content: "canonical", CreatedAt: created, UpdatedAt: created,
+		VectorProjections: []VectorProjection{
+			{ID: "content", Embedding: Embedding{Model: "embed-test", Vector: []float32{1, 0, 0}}},
+			{ID: "query-0", Embedding: Embedding{Model: "embed-test", Vector: []float32{0.99, 0.01, 0}}},
+		},
+	}
+	other := Record{
+		ID: "other", Kind: KindProposition, Scope: "global", Content: "other",
+		VectorProjections: []VectorProjection{{ID: "content", Embedding: Embedding{Model: "embed-test", Vector: []float32{0.8, 0.2, 0}}}},
+	}
+	for _, record := range []Record{proposition, other} {
+		if _, err := store.Save(record); err != nil {
+			t.Fatal(err)
+		}
+	}
+	result, err := store.Search(context.Background(), SearchOptions{
+		Vector: &VectorQuery{Embedding: []float32{1, 0, 0}}, Limit: 10,
+		Filters: Filters{Kinds: []string{KindProposition}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Total != 2 || len(result.Hits) != 2 || result.Hits[0].Record.ID != "prop" {
+		t.Fatalf("collapsed projection result = %#v", result)
+	}
+
+	loaded, err := store.Get("prop")
+	if err != nil {
+		t.Fatal(err)
+	}
+	loaded.UpdatedAt = created.Add(time.Minute)
+	loaded.VectorProjections = []VectorProjection{
+		{ID: "content", Embedding: Embedding{Model: "embed-test", Vector: []float32{0, 0, 1}}},
+	}
+	if _, err := store.Save(loaded); err != nil {
+		t.Fatal(err)
+	}
+	updated, err := store.Search(context.Background(), SearchOptions{
+		Vector: &VectorQuery{Embedding: []float32{1, 0, 0}}, Limit: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(updated.Hits) != 1 || updated.Hits[0].Record.ID != "other" {
+		t.Fatalf("updated projections = %#v", updated)
+	}
+	if err := store.Delete("other"); err != nil {
+		t.Fatal(err)
+	}
+	deleted, err := store.Search(context.Background(), SearchOptions{
+		Vector: &VectorQuery{Embedding: []float32{1, 0, 0}}, Limit: 10,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if deleted.Total != 1 || deleted.Hits[0].Record.ID != "prop" {
+		t.Fatalf("deleted projections = %#v", deleted)
+	}
+}
+
 func TestHNSWCorruptionAndModelChangesRebuildFromRecords(t *testing.T) {
 	root := t.TempDir()
 	store, err := OpenWithOptions(root, OpenOptions{Vector: testVectorConfig()})

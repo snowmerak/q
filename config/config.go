@@ -77,8 +77,9 @@ type LoomGCConfig struct {
 	GraceHours   int     `yaml:"grace_hours,omitempty"`
 }
 
-// EmbeddingConfig selects the model and fixed vector size used by the
-// workspace archive. A zero value disables embedding generation.
+// EmbeddingConfig selects the model and fixed vector size used by q's
+// rebuildable semantic indexes, including the global Library. A zero value
+// disables embedding generation and vector indexing.
 type EmbeddingConfig struct {
 	Model      string `yaml:"model,omitempty"`
 	Dimensions int    `yaml:"dimensions,omitempty"`

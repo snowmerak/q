@@ -215,6 +215,7 @@ type fusedCandidate struct {
 	textScore   float64
 	vectorScore float64
 	hasVector   bool
+	vectorRank  int
 	baseScore   float64
 }
 
@@ -250,7 +251,9 @@ func (s *Store) searchWithVectorLocked(ctx context.Context, options SearchOption
 		}
 		vectorRank++
 		similarity := min(1, max(-1, result.Similarity))
-		candidate := &fusedCandidate{record: record, vectorScore: (similarity + 1) / 2, hasVector: true}
+		candidate := &fusedCandidate{
+			record: record, vectorScore: (similarity + 1) / 2, hasVector: true, vectorRank: vectorRank,
+		}
 		candidates[record.ID] = candidate
 	}
 
@@ -276,9 +279,9 @@ func (s *Store) searchWithVectorLocked(ctx context.Context, options SearchOption
 			candidate.baseScore += 1 / float64(60+rank+1)
 		}
 		weight := options.Vector.Weight
-		for rank, result := range vectorResults {
-			if candidate := candidates[result.RecordID]; candidate != nil && candidate.hasVector {
-				candidate.baseScore += weight / float64(60+rank+1)
+		for _, candidate := range candidates {
+			if candidate.hasVector {
+				candidate.baseScore += weight / float64(60+candidate.vectorRank)
 			}
 		}
 	} else {

@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -10,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
@@ -20,8 +22,10 @@ import (
 	"github.com/snowmerak/q/commitagent"
 	"github.com/snowmerak/q/config"
 	"github.com/snowmerak/q/gatewayconfig"
+	qlibrary "github.com/snowmerak/q/library"
 	"github.com/snowmerak/q/loom"
 	"github.com/snowmerak/q/sessionstore"
+	"github.com/snowmerak/q/thinker"
 	qtools "github.com/snowmerak/q/tools"
 	"github.com/snowmerak/q/workspace"
 )
@@ -32,6 +36,27 @@ type fakeProviderRuntime struct {
 	config   gateway.Config
 	applies  int
 }
+
+type extractionClient struct {
+	responses []client.Message
+	requests  []client.ChatRequest
+}
+
+func (c *extractionClient) Chat(_ context.Context, request client.ChatRequest) (*client.ChatResponse, error) {
+	c.requests = append(c.requests, request)
+	if len(c.responses) == 0 {
+		return nil, errors.New("no extraction response")
+	}
+	message := c.responses[0]
+	c.responses = c.responses[1:]
+	return &client.ChatResponse{Choices: []client.Choice{{Message: message}}}, nil
+}
+
+func (c *extractionClient) ListModels(context.Context) ([]client.Model, error) {
+	return []client.Model{{ID: "thinker-model", ContextLength: 16_000}}, nil
+}
+
+func (c *extractionClient) Close() error { return nil }
 
 func (f *fakeProviderRuntime) Endpoint() string { return f.endpoint }
 func (f *fakeProviderRuntime) APIKey() string {
@@ -627,6 +652,55 @@ func TestModelTargetsIncludeThinker(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("model targets = %#v", modelTargets())
+	}
+}
+
+func TestCompletedTurnStartsThinkerExtractionThroughLibraryClient(t *testing.T) {
+	var registered qlibrary.PropositionRegisterRequest
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.URL.Path != "/v1/propositions" || !strings.HasPrefix(request.Header.Get("Idempotency-Key"), "think-") || !strings.HasSuffix(request.Header.Get("Idempotency-Key"), "/0") {
+			t.Errorf("registration request = %s %s, key %q", request.Method, request.URL.Path, request.Header.Get("Idempotency-Key"))
+		}
+		if err := json.NewDecoder(request.Body).Decode(&registered); err != nil {
+			t.Error(err)
+		}
+		writer.Header().Set("Content-Type", "application/json")
+		_, _ = writer.Write([]byte(`{"id":"prop-app-test","created":true}`))
+	}))
+	defer server.Close()
+	configuredClient := &extractionClient{responses: []client.Message{
+		{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{{
+			ID: "register", Type: client.ToolTypeFunction,
+			Function: client.FunctionCall{Name: thinker.RegisterToolName, Arguments: `{"content":"Use one proposition per call.","queries":["proposition call size"],"confidence":0.9,"tags":["thinker"]}`},
+		}}},
+		{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{{
+			ID: "complete", Type: client.ToolTypeFunction,
+			Function: client.FunctionCall{Name: thinker.CompleteToolName, Arguments: `{}`},
+		}}},
+	}}
+	value := config.Default()
+	value.Provider.Model = "thinker-model"
+	m := newModel(context.Background(), config.Store{Dir: t.TempDir()}, nil)
+	m.config = value
+	m.client = configuredClient
+	m.libraryClient = qlibrary.NewClient(server.URL+"/v1", "test-key", time.Second)
+	m.models = []client.Model{{ID: "thinker-model", ContextLength: 16_000}}
+	m.messages = []client.Message{
+		{Role: client.RoleSystem, Content: "main prompt"},
+		{Role: client.RoleUser, Content: "Remember this decision."},
+		{Role: client.RoleAssistant, Content: "Understood."},
+	}
+	m.runID = "run-test"
+	command := m.startThinkerExtraction(7, 1)
+	if command == nil {
+		t.Fatal("completed turn did not start Thinker extraction")
+	}
+	message, ok := command().(thinkerResultMsg)
+	if !ok || message.err != nil || message.result.Registered != 1 {
+		t.Fatalf("Thinker result = %#v", message)
+	}
+	if registered.Content != "Use one proposition per call." || registered.ExtractorModel != "thinker-model" || registered.ExtractorVersion != thinker.ExtractorVersion {
+		t.Fatalf("registered proposition = %#v", registered)
 	}
 }
 

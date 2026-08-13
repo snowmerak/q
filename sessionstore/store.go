@@ -233,7 +233,7 @@ func (s *Store) Save(record Record) (Record, error) {
 			if _, err := s.vectors.addRecord(prepared); err != nil {
 				return cloneRecord(prepared), &IndexingError{RecordID: prepared.ID, Err: err}
 			}
-		} else if !embeddingsEqual(previous.Embedding, prepared.Embedding) {
+		} else if !recordEmbeddingsEqual(*previous, prepared) {
 			if err := s.rebuildVectorsLocked(); err != nil {
 				s.vectors = nil
 				return cloneRecord(prepared), &IndexingError{RecordID: prepared.ID, Err: err}
@@ -281,7 +281,7 @@ func (s *Store) Delete(id string) error {
 	if err := s.index.Delete(id); err != nil {
 		return &IndexingError{RecordID: id, Err: err}
 	}
-	if s.vectors != nil && record.Embedding != nil {
+	if s.vectors != nil && (record.Embedding != nil || len(record.VectorProjections) > 0) {
 		if err := s.rebuildVectorsLocked(); err != nil {
 			s.vectors = nil
 			return &IndexingError{RecordID: id, Err: err}
@@ -590,6 +590,20 @@ func embeddingsEqual(left, right *Embedding) bool {
 	}
 	for index := range left.Vector {
 		if left.Vector[index] != right.Vector[index] {
+			return false
+		}
+	}
+	return true
+}
+
+func recordEmbeddingsEqual(left, right Record) bool {
+	if !embeddingsEqual(left.Embedding, right.Embedding) || len(left.VectorProjections) != len(right.VectorProjections) {
+		return false
+	}
+	for index := range left.VectorProjections {
+		leftProjection := left.VectorProjections[index]
+		rightProjection := right.VectorProjections[index]
+		if leftProjection.ID != rightProjection.ID || !embeddingsEqual(&leftProjection.Embedding, &rightProjection.Embedding) {
 			return false
 		}
 	}

@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -303,6 +304,128 @@ func TestGlobalPropositionAPIReadsStoredRecordsWithRecency(t *testing.T) {
 		t.Fatal("get proposition returned a record of another kind")
 	}
 }
+
+func TestGlobalPropositionAPIRegistersIdempotently(t *testing.T) {
+	dir := t.TempDir()
+	value, secret := installTestAPIKey(t, dir, testConfig(t))
+	t.Setenv(DefaultAPIKeyEnv, secret)
+	runtime, err := EnsureWithOptions(context.Background(), testOptions(dir, value))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer runtime.Close()
+	input := PropositionRegisterRequest{
+		Content:    "The Thinker registers one proposition per tool call.",
+		Queries:    []string{"how does thinker register propositions", "proposition tool granularity"},
+		Confidence: 0.95, Tags: []string{"thinker"}, Refs: []string{"run:test"},
+		ExtractorModel: "thinker-model", ExtractorVersion: "thinker-v1",
+	}
+	if _, err := NewClient(value.Endpoint(), "", time.Second).RegisterProposition(context.Background(), "job/0", input); err == nil {
+		t.Fatal("proposition registration accepted a missing Library API key")
+	}
+	created, err := runtime.Client().RegisterProposition(context.Background(), "job/0", input)
+	if err != nil || !created.Created || created.ID == "" {
+		t.Fatalf("created = %#v, err = %v", created, err)
+	}
+	retried, err := runtime.Client().RegisterProposition(context.Background(), "job/0", input)
+	if err != nil || retried.Created || retried.ID != created.ID {
+		t.Fatalf("retried = %#v, err = %v", retried, err)
+	}
+	changed := input
+	changed.Content = "Different content must conflict."
+	if _, err := runtime.Client().RegisterProposition(context.Background(), "job/0", changed); err == nil || !strings.Contains(err.Error(), "HTTP 409") {
+		t.Fatalf("idempotency conflict = %v", err)
+	}
+	sensitive := input
+	sensitive.Content = "api_key=qk_example.abcdefghijklmnopqrstuvwxyz"
+	if _, err := runtime.Client().RegisterProposition(context.Background(), "job/1", sensitive); err == nil || !strings.Contains(err.Error(), "sensitive data") {
+		t.Fatalf("sensitive proposition = %v", err)
+	}
+	result, err := runtime.Client().SearchPropositions(context.Background(), PropositionSearchRequest{Query: "proposition tool granularity"})
+	if err != nil || result.Total != 1 || result.Hits[0].ID != created.ID {
+		t.Fatalf("registered search = %#v, err = %v", result, err)
+	}
+	got, err := runtime.Client().GetProposition(context.Background(), created.ID)
+	if err != nil || got.Payload.ExtractorModel != "thinker-model" || len(got.Payload.Queries) != 2 {
+		t.Fatalf("registered proposition = %#v, err = %v", got, err)
+	}
+}
+
+func TestGlobalPropositionAPIPersistsSearchesAndDeletesVectorProjections(t *testing.T) {
+	dir := t.TempDir()
+	value, secret := installTestAPIKey(t, dir, testConfig(t))
+	t.Setenv(DefaultAPIKeyEnv, secret)
+	options := testOptions(dir, value)
+	options.Vector = sessionstore.VectorConfig{Model: "embed-test", Dimensions: 3}
+	runtime, err := EnsureWithOptions(context.Background(), options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer runtime.Close()
+
+	first, err := runtime.Client().RegisterProposition(context.Background(), "vectors/0", PropositionRegisterRequest{
+		Content:    "The Library persists one vector projection per proposition text and retrieval query.",
+		Queries:    []string{"how are proposition vectors stored", "semantic memory projection"},
+		Confidence: 0.9, ExtractorModel: "thinker-model", ExtractorVersion: "thinker-v1",
+		Embeddings: &PropositionEmbeddings{
+			Model: "embed-test", Dimensions: 3,
+			Vectors: [][]float32{{1, 0, 0}, {0.99, 0.01, 0}, {0.98, 0.02, 0}},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := runtime.Client().RegisterProposition(context.Background(), "vectors/1", PropositionRegisterRequest{
+		Content: "A separate proposition.", Confidence: 0.8,
+		ExtractorModel: "thinker-model", ExtractorVersion: "thinker-v1",
+		Embeddings: &PropositionEmbeddings{Model: "embed-test", Dimensions: 3, Vectors: [][]float32{{0, 0, 1}}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := runtime.Client().SearchPropositions(context.Background(), PropositionSearchRequest{
+		Embedding: []float32{1, 0, 0}, RecencyWeight: floatPointer(0), Limit: 10,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Total != 2 || len(result.Hits) != 2 || result.Hits[0].ID != first.ID {
+		t.Fatalf("vector proposition search = %#v", result)
+	}
+	if err := runtime.Close(); err != nil {
+		t.Fatal(err)
+	}
+	runtime, err = EnsureWithOptions(context.Background(), options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer runtime.Close()
+	persisted, err := runtime.Client().SearchPropositions(context.Background(), PropositionSearchRequest{
+		Embedding: []float32{1, 0, 0}, RecencyWeight: floatPointer(0), Limit: 10,
+	})
+	if err != nil || persisted.Total != 2 || persisted.Hits[0].ID != first.ID {
+		t.Fatalf("persisted vector proposition search = %#v, %v", persisted, err)
+	}
+	removed, err := runtime.Client().DeleteProposition(context.Background(), first.ID)
+	if err != nil || !removed.Deleted {
+		t.Fatalf("delete proposition = %#v, %v", removed, err)
+	}
+	removedAgain, err := runtime.Client().DeleteProposition(context.Background(), first.ID)
+	if err != nil || removedAgain.Deleted {
+		t.Fatalf("idempotent delete = %#v, %v", removedAgain, err)
+	}
+	after, err := runtime.Client().SearchPropositions(context.Background(), PropositionSearchRequest{
+		Embedding: []float32{1, 0, 0}, RecencyWeight: floatPointer(0), Limit: 10,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.Total != 1 || len(after.Hits) != 1 || after.Hits[0].ID != second.ID {
+		t.Fatalf("vector search after delete = %#v", after)
+	}
+}
+
+func floatPointer(value float64) *float64 { return &value }
 
 func TestEnsureConcurrentElectionAndTakeover(t *testing.T) {
 	dir := t.TempDir()

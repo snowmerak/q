@@ -280,9 +280,8 @@ subagent role. A role without an explicit model inherits the main model. An
 empty reasoning effort lets the provider choose its default; explicit efforts
 are accepted only when advertised by that model. The built-in roles are
 `griller`, `scout`, `research`, `planner`, `coder`, `commit`, `advisor`, and
-`thinker`. The `thinker` role is reserved for durable proposition selection
-and extraction; until that pipeline is connected, configuring it only records
-the model and reasoning-effort policy.
+`thinker`. The `thinker` role performs durable proposition selection and
+extraction after successful conversation turns.
 
 The embedding picker accepts dimensions from 1 to 4096. Because the shared
 model catalog does not identify embedding-only models, it currently shows all
@@ -438,12 +437,20 @@ when the active agent already has that capability.
 
 ## Global propositions
 
-q Library can read durable global proposition records through the authenticated
-Library API. `search_propositions` searches canonical text and generated query
-variants with a default `created_at` recency boost; `get_proposition` returns
-the selected proposition with provenance and extraction metadata. Both tools
-are part of the existing `q-tools` MCP server. Proposition extraction, writes,
-embeddings, and HNSW indexing are planned separately.
+q Library stores and reads durable global proposition records through its
+authenticated API. After a successful conversation turn, the configured
+`thinker` model receives a recent context chunk targeting 35% of its context
+window and capped at 45%. It calls a private `register_proposition` tool once
+per proposition; each call is immediately persisted with an idempotency key.
+
+`search_propositions` searches canonical text and generated query variants
+with a default `created_at` recency boost; `get_proposition` returns the
+selected proposition with provenance and extraction metadata. These read tools
+remain part of the existing `q-tools` MCP server. The Library storage/API layer
+also supports content/query embedding batches, multi-projection HNSW indexing,
+record-level result collapse, hybrid reciprocal-rank fusion, and atomic
+proposition deletion. Thinker and MCP-side embedding generation is the next
+integration step.
 
 ## Discovery and `.qignore`
 

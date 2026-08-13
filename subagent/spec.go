@@ -17,6 +17,8 @@ type Spec struct {
 	Model           string
 	ReasoningEffort string
 	Reasoning       *client.ReasoningCapabilities
+	ContextLength   int64
+	MaxOutputTokens int64
 }
 
 // Resolve combines a role override with the active chat model and validates
@@ -37,6 +39,8 @@ func Resolve(value config.Config, role string, models []client.Model) (Spec, err
 		Model:           agent.Model,
 		ReasoningEffort: agent.ReasoningEffort,
 		Reasoning:       cloneReasoning(model),
+		ContextLength:   model.ContextLength,
+		MaxOutputTokens: model.MaxOutputTokens,
 	}
 	if agent.ReasoningEffort == "" {
 		return spec, nil

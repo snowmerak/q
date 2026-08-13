@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/snowmerak/llm-provider/gateway"
+	"github.com/snowmerak/q/client"
 	"github.com/snowmerak/q/config"
 	qlibrary "github.com/snowmerak/q/library"
 	"github.com/snowmerak/q/providerhost"
@@ -21,6 +22,8 @@ type runtimeInitializedMsg struct {
 	client        chatClient
 	tools         *qtools.Runtime
 	archive       *sessionstore.Writer
+	library       *qlibrary.Client
+	models        []client.Model
 	gatewayConfig gateway.Config
 	startupErr    error
 	archiveErr    error
@@ -152,16 +155,18 @@ func (request startupRequest) run() runtimeInitializedMsg {
 	}
 	workspaceLSP, toolsErr := request.workspaceStore.LoadLSP()
 	var tools *qtools.Runtime
+	var libraryClient *qlibrary.Client
 	if toolsErr == nil {
 		libraryConfig, libraryConfigErr := (qlibrary.ConfigStore{Dir: request.store.Dir}).LoadOrDefault()
 		if libraryConfigErr != nil {
 			libraryConfig = qlibrary.DefaultConfig()
 		}
-		libraryClient := qlibrary.NewClient(libraryConfig.Endpoint(), libraryConfig.ResolveAPIKey(), 5*time.Second)
+		libraryClient = qlibrary.NewClient(libraryConfig.Endpoint(), libraryConfig.ResolveAPIKey(), 5*time.Second)
 		tools, toolsErr = qtools.NewRuntimeWithArchiveAndLoomOptionsAndLSPAndLibrary(
 			request.ctx, request.workspaceStore.Root, archiveStore, loaded.LoomStoreOptions(nil), loaded.LSP, workspaceLSP, libraryClient,
 		)
 		result.tools = tools
+		result.library = libraryClient
 	}
 	if toolsErr != nil {
 		if archive != nil {
@@ -185,6 +190,7 @@ func (request startupRequest) run() runtimeInitializedMsg {
 			return result
 		}
 		if models, modelsErr := configuredClient.ListModels(request.ctx); modelsErr == nil {
+			result.models = append([]client.Model(nil), models...)
 			refreshed, found := refreshModelContextWindow(loaded, models)
 			if found && refreshed.Provider.ContextWindow != loaded.Provider.ContextWindow {
 				loaded = refreshed

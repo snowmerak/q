@@ -31,6 +31,7 @@ import (
 	"github.com/snowmerak/q/memory"
 	"github.com/snowmerak/q/sessionstore"
 	"github.com/snowmerak/q/subagent"
+	"github.com/snowmerak/q/thinker"
 	qtools "github.com/snowmerak/q/tools"
 	"github.com/snowmerak/q/workspace"
 	"golang.org/x/text/unicode/norm"
@@ -132,16 +133,18 @@ var providerTypeOptions = []providerTypeOption{
 }
 
 type model struct {
-	ctx         context.Context
-	store       config.Store
-	factory     clientFactory
-	screen      screen
-	width       int
-	height      int
-	dark        bool
-	status      string
-	runtime     providerRuntime
-	toolRuntime agentToolRuntime
+	ctx           context.Context
+	store         config.Store
+	factory       clientFactory
+	screen        screen
+	width         int
+	height        int
+	dark          bool
+	status        string
+	runtime       providerRuntime
+	toolRuntime   agentToolRuntime
+	libraryClient *qlibrary.Client
+	thinkerSerial *thinker.Serial
 
 	workspaceStore    *workspace.Store
 	workspaceLock     *workspace.Lock
@@ -338,6 +341,12 @@ type loomStatsMsg struct {
 	err   error
 }
 
+type thinkerResultMsg struct {
+	jobID  string
+	result thinker.Result
+	err    error
+}
+
 type loomActionMsg struct {
 	config config.Config
 	stats  loom.Stats
@@ -379,6 +388,7 @@ func newManagedModel(ctx context.Context, store config.Store, factory clientFact
 		agentTraceViewport: viewport.New(viewport.WithWidth(80), viewport.WithHeight(8)),
 		helpViewport:       viewport.New(viewport.WithWidth(80), viewport.WithHeight(12)),
 		spinner:            spinner.New(spinner.WithSpinner(spinner.Dot)),
+		thinkerSerial:      &thinker.Serial{},
 	}
 	if runtime != nil {
 		m.gatewayConfig = runtime.Config()
@@ -578,6 +588,8 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		m.toolRuntime = message.tools
 		m.archive = message.archive
 		m.archiveErr = message.archiveErr
+		m.libraryClient = message.library
+		m.models = append([]client.Model(nil), message.models...)
 		m.gatewayConfig = message.gatewayConfig
 		if message.client != nil {
 			m.enterChat(message.config, message.client)
@@ -607,6 +619,21 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		return m, m.setup[m.setupFocus].Focus()
+	case thinkerResultMsg:
+		if message.err != nil {
+			m.archiveFailure("thinker", message.err)
+			_ = m.flushArchive()
+			if !m.waiting {
+				m.status = "Thinker: " + message.err.Error()
+				m.resize(m.width, m.height)
+			}
+			return m, nil
+		}
+		if !m.waiting && message.result.Registered > 0 {
+			m.status = fmt.Sprintf("Thinker registered %d proposition(s)", message.result.Registered)
+			m.resize(m.width, m.height)
+		}
+		return m, nil
 	case configuredMsg:
 		if message.err != nil {
 			m.status = message.err.Error()
@@ -805,6 +832,8 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		if message.turnID != 0 && message.turnID != m.turnID {
 			return m, nil
 		}
+		completedTurnID := m.turnID
+		turnMessageStart := m.turnMessageStart
 		m.finishTurn()
 		m.waiting = false
 		m.compacting = false
@@ -883,7 +912,11 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		if err := m.flushArchive(); err != nil {
 			m.status = "archive: " + err.Error()
 		}
-		return m, m.input.Focus()
+		focus := m.input.Focus()
+		if command := m.startThinkerExtraction(completedTurnID, turnMessageStart); command != nil {
+			return m, tea.Batch(focus, command)
+		}
+		return m, focus
 	case compactionResultMsg:
 		if message.turnID != 0 && message.turnID != m.turnID {
 			return m, nil
@@ -2126,6 +2159,60 @@ func (m model) activeTurnContext() context.Context {
 		return m.turnContext
 	}
 	return m.ctx
+}
+
+func (m *model) startThinkerExtraction(turnID uint64, turnMessageStart int) tea.Cmd {
+	if m == nil || m.client == nil || m.libraryClient == nil || m.thinkerSerial == nil || turnID == 0 {
+		return nil
+	}
+	start := min(max(turnMessageStart, 0), len(m.messages))
+	hasUser, hasAssistant := false, false
+	for _, message := range m.messages[start:] {
+		hasUser = hasUser || message.Role == client.RoleUser
+		hasAssistant = hasAssistant || message.Role == client.RoleAssistant
+	}
+	if !hasUser || !hasAssistant {
+		return nil
+	}
+	m.ensureRunID()
+	extractionID, err := sessionstore.NewID()
+	if err != nil {
+		extractionID = strconv.FormatInt(time.Now().UTC().UnixNano(), 10)
+	}
+	job := thinker.Job{
+		ID:       "think-" + extractionID,
+		Messages: append([]client.Message(nil), m.messages...),
+		Refs:     []string{"run:" + m.runID, "turn:" + strconv.FormatUint(turnID, 10)},
+	}
+	if m.workspaceStore != nil {
+		job.WorkingDirectory = m.workspaceStore.Root
+	}
+	configuredClient := m.client
+	libraryClient := m.libraryClient
+	serial := m.thinkerSerial
+	value := m.config
+	models := append([]client.Model(nil), m.models...)
+	ctx := m.ctx
+	return func() tea.Msg {
+		if len(models) == 0 {
+			listed, err := configuredClient.ListModels(ctx)
+			if err != nil {
+				return thinkerResultMsg{jobID: job.ID, err: fmt.Errorf("resolve thinker model: %w", err)}
+			}
+			models = listed
+		}
+		spec, err := subagent.Resolve(value, config.AgentRoleThinker, models)
+		if err != nil {
+			return thinkerResultMsg{jobID: job.ID, err: err}
+		}
+		if spec.ContextLength <= 0 && spec.Model == value.Provider.Model {
+			spec.ContextLength = value.EffectiveContextWindow()
+		}
+		result, err := serial.Run(ctx, thinker.Runner{
+			Client: configuredClient, Library: libraryClient, Spec: spec,
+		}, job)
+		return thinkerResultMsg{jobID: job.ID, result: result, err: err}
+	}
 }
 
 func (m model) interruptTurn() (tea.Model, tea.Cmd) {
