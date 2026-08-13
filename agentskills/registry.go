@@ -58,6 +58,8 @@ type Issue struct {
 type Registry struct {
 	root    string
 	home    string
+	global  bool
+	qDir    string
 	mu      sync.RWMutex
 	skills  map[string]Skill
 	byID    map[string]Skill
@@ -81,6 +83,25 @@ func Discover(root string) (*Registry, error) {
 	return r, nil
 }
 
+// DiscoverGlobal discovers only user-level skills. qDir is the personal q
+// configuration directory (normally ~/.q); keeping it explicit makes the
+// Library's global ownership independent from any workspace root.
+func DiscoverGlobal(home, qDir string) (*Registry, error) {
+	home, err := filepath.Abs(home)
+	if err != nil {
+		return nil, fmt.Errorf("agent skills: resolve user home: %w", err)
+	}
+	qDir, err = filepath.Abs(qDir)
+	if err != nil {
+		return nil, fmt.Errorf("agent skills: resolve q directory: %w", err)
+	}
+	r := &Registry{root: home, home: home, global: true, qDir: qDir}
+	if err := r.Reload(); err != nil {
+		return nil, err
+	}
+	return r, nil
+}
+
 func (r *Registry) Reload() error {
 	if r == nil {
 		return errors.New("agent skills: registry is nil")
@@ -91,8 +112,21 @@ func (r *Registry) Reload() error {
 	}{
 		{filepath.Join(r.home, ".agents", "skills"), SourceUserPortable},
 		{filepath.Join(r.home, ".q", "skills"), SourceUserQ},
-		{filepath.Join(r.root, ".agents", "skills"), SourceProjectPortable},
-		{filepath.Join(r.root, ".q", "skills"), SourceProjectQ},
+	}
+	if r.qDir != "" {
+		locations[1].path = filepath.Join(r.qDir, "skills")
+	}
+	if !r.global {
+		locations = append(locations,
+			struct {
+				path   string
+				source Source
+			}{filepath.Join(r.root, ".agents", "skills"), SourceProjectPortable},
+			struct {
+				path   string
+				source Source
+			}{filepath.Join(r.root, ".q", "skills"), SourceProjectQ},
+		)
 	}
 	skills := make(map[string]Skill)
 	var discovered []Skill

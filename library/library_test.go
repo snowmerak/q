@@ -3,16 +3,19 @@ package library
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"net"
 	"net/http"
 	"os"
+	"path/filepath"
 	"reflect"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/snowmerak/q/gatewayconfig"
+	"github.com/snowmerak/q/sessionstore"
 	"github.com/snowmerak/q/worklock"
 )
 
@@ -166,6 +169,138 @@ func TestLibraryAuthenticationDoesNotUseGatewaySettings(t *testing.T) {
 	}
 	if !bytes.Equal(gatewayConfigAfter, gatewayConfigBefore) || !bytes.Equal(gatewayMasterAfter, gatewayMasterBefore) {
 		t.Fatal("starting the Library modified Gateway authentication files")
+	}
+}
+
+func TestGlobalSkillAPIReconcilesOnlyOnExplicitReload(t *testing.T) {
+	dir := t.TempDir()
+	skillDirectory := filepath.Join(dir, "skills", "global-api-skill")
+	if err := os.MkdirAll(skillDirectory, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeLibrarySkill := func(description string) {
+		body := "---\nname: global-api-skill\ndescription: " + description + "\ntags: [library-api]\n---\n\n# Global API skill\n"
+		if err := os.WriteFile(filepath.Join(skillDirectory, "SKILL.md"), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeLibrarySkill("Initial global skill token.")
+	value, secret := installTestAPIKey(t, dir, testConfig(t))
+	t.Setenv(DefaultAPIKeyEnv, secret)
+	runtime, err := EnsureWithOptions(context.Background(), testOptions(dir, value))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer runtime.Close()
+	client := runtime.Client()
+	if _, err := NewClient(value.Endpoint(), "", time.Second).SearchSkills(context.Background(), SkillSearchRequest{Query: "Initial"}); err == nil {
+		t.Fatal("global skill search accepted a missing Library API key")
+	}
+
+	initial, err := client.SearchSkills(context.Background(), SkillSearchRequest{Query: "Initial global skill token"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(initial.Hits) != 1 || initial.Hits[0].Scope != "global" {
+		t.Fatalf("initial global skill search = %#v", initial)
+	}
+	resource, err := client.GetSkill(context.Background(), initial.Hits[0].ID, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resource.Skill.Name != "global-api-skill" || resource.Path != "SKILL.md" || !bytes.Contains(resource.Content, []byte("# Global API skill")) {
+		t.Fatalf("global skill resource = %#v", resource)
+	}
+
+	writeLibrarySkill("Updated explicit reload token.")
+	beforeReload, err := client.SearchSkills(context.Background(), SkillSearchRequest{Query: "Updated explicit reload token"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(beforeReload.Hits) != 1 || beforeReload.Hits[0].Description != "Initial global skill token." {
+		t.Fatalf("search implicitly reloaded global skills: %#v", beforeReload.Hits)
+	}
+	reloaded, err := client.ReloadSkills(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reloaded.Active != 1 {
+		t.Fatalf("reload response = %#v", reloaded)
+	}
+	afterReload, err := client.SearchSkills(context.Background(), SkillSearchRequest{Query: "Updated explicit reload token"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(afterReload.Hits) != 1 || afterReload.Hits[0].ID != initial.Hits[0].ID || afterReload.Hits[0].Description != "Updated explicit reload token." {
+		t.Fatalf("reloaded global skill search = %#v", afterReload)
+	}
+}
+
+func TestGlobalPropositionAPIReadsStoredRecordsWithRecency(t *testing.T) {
+	dir := t.TempDir()
+	now := time.Date(2026, time.August, 13, 12, 0, 0, 0, time.UTC)
+	confidence := 0.9
+	payload, err := json.Marshal(PropositionPayload{
+		Queries: []string{"how should services emit logs"}, Confidence: &confidence,
+		ExtractorModel: "test-model", ExtractorVersion: "v1",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	seedLibraryRecords(t, dir,
+		sessionstore.Record{
+			ID: "prop-old", Kind: sessionstore.KindProposition, Scope: "global",
+			Content: "Services emit structured JSON logs.", SearchText: "how should services emit logs",
+			CreatedAt: now.Add(-90 * 24 * time.Hour), UpdatedAt: now.Add(-90 * 24 * time.Hour),
+			Refs: []string{"thread://old"}, Tags: []string{"logging"}, Payload: payload,
+		},
+		sessionstore.Record{
+			ID: "prop-new", Kind: sessionstore.KindProposition, Scope: "global",
+			Content: "Services emit structured JSON logs.", SearchText: "how should services emit logs",
+			CreatedAt: now.Add(-time.Hour), UpdatedAt: now.Add(-time.Hour),
+			Refs: []string{"thread://new"}, Tags: []string{"logging"}, Payload: payload,
+		},
+		sessionstore.Record{
+			ID: "not-a-proposition", Kind: sessionstore.KindSkill, Scope: "global",
+			Content: "Services emit structured JSON logs.", SearchText: "how should services emit logs",
+			CreatedAt: now, UpdatedAt: now,
+		},
+	)
+
+	value, secret := installTestAPIKey(t, dir, testConfig(t))
+	t.Setenv(DefaultAPIKeyEnv, secret)
+	runtime, err := EnsureWithOptions(context.Background(), testOptions(dir, value))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer runtime.Close()
+	if _, err := NewClient(value.Endpoint(), "", time.Second).SearchPropositions(
+		context.Background(), PropositionSearchRequest{Query: "how should services emit logs"},
+	); err == nil {
+		t.Fatal("proposition search accepted a missing Library API key")
+	}
+
+	result, err := runtime.Client().SearchPropositions(context.Background(), PropositionSearchRequest{
+		Query: "how should services emit logs", Tags: []string{"logging"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Total != 2 || len(result.Hits) != 2 || result.Hits[0].ID != "prop-new" || result.Hits[0].Score <= result.Hits[1].Score {
+		t.Fatalf("proposition search = %#v", result)
+	}
+	if result.RecencyWeight != defaultPropositionRecencyWeight || result.RecencyHalfLifeHours != defaultPropositionRecencyHalfLifeHour {
+		t.Fatalf("proposition recency = %#v", result)
+	}
+	proposition, err := runtime.Client().GetProposition(context.Background(), "prop-new")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if proposition.Content != "Services emit structured JSON logs." || len(proposition.Payload.Queries) != 1 || proposition.Payload.Confidence == nil || *proposition.Payload.Confidence != confidence {
+		t.Fatalf("proposition = %#v", proposition)
+	}
+	if _, err := runtime.Client().GetProposition(context.Background(), "not-a-proposition"); err == nil {
+		t.Fatal("get proposition returned a record of another kind")
 	}
 }
 
@@ -425,4 +560,36 @@ func installTestAPIKey(t *testing.T, dir string, value Config) (Config, string) 
 		t.Fatal(err)
 	}
 	return updated, generated.Secret
+}
+
+func seedLibraryRecords(t *testing.T, dir string, records ...sessionstore.Record) {
+	t.Helper()
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	lock, err := worklock.AcquireFile(dir, LockFileName, "seed Library test records")
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := sessionstore.OpenWithOptions(dir, sessionstore.OpenOptions{
+		WorkspaceLock: lock, Directory: "library",
+	})
+	if err != nil {
+		_ = lock.Close()
+		t.Fatal(err)
+	}
+	for _, record := range records {
+		if _, err := store.Save(record); err != nil {
+			_ = store.Close()
+			_ = lock.Close()
+			t.Fatal(err)
+		}
+	}
+	if err := store.Close(); err != nil {
+		_ = lock.Close()
+		t.Fatal(err)
+	}
+	if err := lock.Close(); err != nil {
+		t.Fatal(err)
+	}
 }

@@ -432,7 +432,7 @@ Add only durable facts newly learned from the attempt to facts. Those facts beco
 func plannerReviewTools(available []client.Tool) []client.Tool {
 	allowed := map[string]struct{}{
 		"read_file": {}, "loom_inspect": {}, "loom_read": {}, "loom_eval": {},
-		"run_command": {}, "wait": {},
+		"run_command": {}, "wait": {}, "search_propositions": {}, "get_proposition": {},
 	}
 	result := make([]client.Tool, 0, len(allowed)+1)
 	seen := make(map[string]struct{}, len(allowed)+1)

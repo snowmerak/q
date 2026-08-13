@@ -13,6 +13,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/snowmerak/q/agentskills"
 	"github.com/snowmerak/q/client"
+	qlibrary "github.com/snowmerak/q/library"
 	"github.com/snowmerak/q/loom"
 	"github.com/snowmerak/q/lsp"
 	"github.com/snowmerak/q/tools/builtin"
@@ -28,15 +29,16 @@ type HostEnvironment struct {
 
 // Runtime connects q's chat loop to the builtin MCP server in-process.
 type Runtime struct {
-	client     *mcp.ClientSession
-	server     *mcp.ServerSession
-	fs         *builtin.FS
-	loom       *builtin.LoomRuntime
-	lsp        *lsp.Manager
-	skills     *agentskills.Registry
-	skillStore agentskills.RecordStore
-	tools      []client.Tool
-	closeMu    sync.Once
+	client       *mcp.ClientSession
+	server       *mcp.ServerSession
+	fs           *builtin.FS
+	loom         *builtin.LoomRuntime
+	lsp          *lsp.Manager
+	skills       *agentskills.Registry
+	skillStore   agentskills.RecordStore
+	globalSkills builtin.GlobalSkillLibrary
+	tools        []client.Tool
+	closeMu      sync.Once
 }
 
 func NewRuntime(ctx context.Context, root string) (*Runtime, error) {
@@ -72,7 +74,30 @@ func NewRuntimeWithArchiveAndLoomOptionsAndLSP(
 	if err != nil {
 		return nil, err
 	}
-	runtime, err := newRuntimeWithLSP(ctx, root, archive, loom.NewProcessEvaluator(), options, manager)
+	runtime, err := newRuntimeWithLSP(ctx, root, archive, loom.NewProcessEvaluator(), options, manager, nil)
+	if err != nil {
+		_ = manager.Close()
+		return nil, err
+	}
+	return runtime, nil
+}
+
+// NewRuntimeWithArchiveAndLoomOptionsAndLSPAndLibrary routes global Agent
+// Skills through the shared Library while keeping project skills local.
+func NewRuntimeWithArchiveAndLoomOptionsAndLSPAndLibrary(
+	ctx context.Context,
+	root string,
+	archive builtin.Archive,
+	options loom.StoreOptions,
+	global lsp.GlobalConfig,
+	workspace lsp.WorkspaceConfig,
+	globalSkills builtin.GlobalSkillLibrary,
+) (*Runtime, error) {
+	manager, err := lsp.NewManager(ctx, root, global, workspace)
+	if err != nil {
+		return nil, err
+	}
+	runtime, err := newRuntimeWithLSP(ctx, root, archive, loom.NewProcessEvaluator(), options, manager, globalSkills)
 	if err != nil {
 		_ = manager.Close()
 		return nil, err
@@ -81,15 +106,15 @@ func NewRuntimeWithArchiveAndLoomOptionsAndLSP(
 }
 
 func newRuntime(ctx context.Context, root string, archive builtin.Archive, evaluator loom.Evaluator, options loom.StoreOptions) (*Runtime, error) {
-	return newRuntimeWithLSP(ctx, root, archive, evaluator, options, nil)
+	return newRuntimeWithLSP(ctx, root, archive, evaluator, options, nil, nil)
 }
 
-func newRuntimeWithLSP(ctx context.Context, root string, archive builtin.Archive, evaluator loom.Evaluator, options loom.StoreOptions, lspManager *lsp.Manager) (*Runtime, error) {
+func newRuntimeWithLSP(ctx context.Context, root string, archive builtin.Archive, evaluator loom.Evaluator, options loom.StoreOptions, lspManager *lsp.Manager, globalSkills builtin.GlobalSkillLibrary) (*Runtime, error) {
 	loomRuntime, err := newLoomRuntime(root, evaluator, withSessionRoots(options, root))
 	if err != nil {
 		return nil, err
 	}
-	server, fs, skills, err := newServer(root, archive, loomRuntime, lspManager)
+	server, fs, skills, err := newServer(root, archive, loomRuntime, lspManager, globalSkills)
 	if err != nil {
 		return nil, err
 	}
@@ -106,7 +131,10 @@ func newRuntimeWithLSP(ctx context.Context, root string, archive builtin.Archive
 		return nil, fmt.Errorf("tools: connect builtin MCP client: %w", err)
 	}
 	store, _ := archive.(agentskills.RecordStore)
-	runtime := &Runtime{client: clientSession, server: serverSession, fs: fs, loom: loomRuntime, lsp: lspManager, skills: skills, skillStore: store}
+	runtime := &Runtime{
+		client: clientSession, server: serverSession, fs: fs, loom: loomRuntime, lsp: lspManager,
+		skills: skills, skillStore: store, globalSkills: globalSkills,
+	}
 	listed, err := clientSession.ListTools(ctx, nil)
 	if err != nil {
 		_ = runtime.Close()
@@ -196,10 +224,10 @@ func (r *Runtime) ReloadSkills() error {
 	if err := r.skills.Reload(); err != nil {
 		return err
 	}
-	if r.skillStore != nil {
-		return r.skills.SyncRecords(context.Background(), r.skillStore)
+	if err := r.syncProjectSkills(context.Background()); err != nil {
+		return err
 	}
-	return nil
+	return r.reloadGlobalSkills(context.Background())
 }
 
 func (r *Runtime) InstallSkill(ctx context.Context, scope, repository string) (agentskills.Skill, error) {
@@ -210,8 +238,11 @@ func (r *Runtime) InstallSkill(ctx context.Context, scope, repository string) (a
 	if err != nil {
 		return agentskills.Skill{}, err
 	}
-	if r.skillStore != nil {
-		if err := r.skills.SyncRecords(ctx, r.skillStore); err != nil {
+	if err := r.syncProjectSkills(ctx); err != nil {
+		return agentskills.Skill{}, err
+	}
+	if skill.Scope == "global" {
+		if err := r.reloadGlobalSkills(ctx); err != nil {
 			return agentskills.Skill{}, err
 		}
 	}
@@ -226,8 +257,11 @@ func (r *Runtime) UpdateSkill(ctx context.Context, idOrName string) (agentskills
 	if err != nil {
 		return agentskills.Skill{}, err
 	}
-	if r.skillStore != nil {
-		if err := r.skills.SyncRecords(ctx, r.skillStore); err != nil {
+	if err := r.syncProjectSkills(ctx); err != nil {
+		return agentskills.Skill{}, err
+	}
+	if skill.Scope == "global" {
+		if err := r.reloadGlobalSkills(ctx); err != nil {
 			return agentskills.Skill{}, err
 		}
 	}
@@ -242,12 +276,39 @@ func (r *Runtime) RemoveSkill(ctx context.Context, idOrName string) (agentskills
 	if err != nil {
 		return agentskills.Skill{}, err
 	}
-	if r.skillStore != nil {
-		if err := r.skills.SyncRecords(ctx, r.skillStore); err != nil {
+	if err := r.syncProjectSkills(ctx); err != nil {
+		return agentskills.Skill{}, err
+	}
+	if skill.Scope == "global" {
+		if err := r.reloadGlobalSkills(ctx); err != nil {
 			return agentskills.Skill{}, err
 		}
 	}
 	return skill, nil
+}
+
+func (r *Runtime) syncProjectSkills(ctx context.Context) error {
+	if r.skillStore == nil {
+		return nil
+	}
+	if r.globalSkills == nil {
+		return r.skills.SyncRecords(ctx, r.skillStore)
+	}
+	return r.skills.SyncRecordsForScopes(ctx, r.skillStore, "project")
+}
+
+func (r *Runtime) reloadGlobalSkills(ctx context.Context) error {
+	if r.globalSkills == nil {
+		return nil
+	}
+	reloader, ok := r.globalSkills.(interface {
+		ReloadSkills(context.Context) (qlibrary.SkillReloadResponse, error)
+	})
+	if !ok {
+		return nil
+	}
+	_, err := reloader.ReloadSkills(ctx)
+	return err
 }
 func (r *Runtime) Environment() HostEnvironment {
 	return HostEnvironment{

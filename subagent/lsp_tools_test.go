@@ -25,3 +25,20 @@ func TestReadOnlyLSPToolsAreAvailableToQueryRoles(t *testing.T) {
 		}
 	}
 }
+
+func TestReadOnlyPropositionToolsAreAvailableToQueryRoles(t *testing.T) {
+	available := []client.Tool{
+		scoutFunctionTool("search_propositions"),
+		scoutFunctionTool("get_proposition"),
+	}
+	for label, tools := range map[string][]client.Tool{
+		"scout":          scoutTools(available),
+		"griller":        grillerTools(available),
+		"planner review": plannerReviewTools(available),
+		"coder":          coderTools(available),
+	} {
+		if !hasScoutTool(tools, "search_propositions") || !hasScoutTool(tools, "get_proposition") {
+			t.Fatalf("%s proposition tools = %#v", label, tools)
+		}
+	}
+}

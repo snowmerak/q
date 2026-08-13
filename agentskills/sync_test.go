@@ -2,11 +2,13 @@ package agentskills
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
 	"testing"
+	"time"
 
 	"github.com/snowmerak/q/sessionstore"
 )
@@ -82,6 +84,41 @@ func TestSyncRecordsTracksAddUpdateAndDelete(t *testing.T) {
 	assertSkillSearchCount(t, store, "Updated searchable", 0)
 }
 
+func TestSyncRecordsDoesNotRewriteUnchangedSkills(t *testing.T) {
+	root := t.TempDir()
+	home := t.TempDir()
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("HOME", home)
+	writeSkill(t, root, ".agents", "stable-skill", "Stable indexed description.")
+	registry, err := Discover(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := sessionstore.Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	if err := registry.SyncRecords(context.Background(), store); err != nil {
+		t.Fatal(err)
+	}
+	before, err := store.Get(registry.Skills()[0].ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(10 * time.Millisecond)
+	if err := registry.SyncRecords(context.Background(), store); err != nil {
+		t.Fatal(err)
+	}
+	after, err := store.Get(before.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !after.UpdatedAt.Equal(before.UpdatedAt) {
+		t.Fatalf("unchanged skill was rewritten: before %s after %s", before.UpdatedAt, after.UpdatedAt)
+	}
+}
+
 func TestSyncRecordsDeletesStaleRecordsBeyondFirstPage(t *testing.T) {
 	store := &pagedSkillRecordStore{records: make([]sessionstore.Record, skillSyncPageSize+1)}
 	for index := range store.records {
@@ -102,6 +139,33 @@ func TestSyncRecordsDeletesStaleRecordsBeyondFirstPage(t *testing.T) {
 	last := fmt.Sprintf("stale-skill-%04d", skillSyncPageSize)
 	if !slices.Contains(store.deleted, last) {
 		t.Fatalf("record beyond first page was not deleted: %q", last)
+	}
+}
+
+func TestSyncRecordsForScopesLeavesOtherScopeUntouched(t *testing.T) {
+	root := t.TempDir()
+	store, err := sessionstore.Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	for _, record := range []sessionstore.Record{
+		{ID: "global-skill", Kind: sessionstore.KindSkill, Scope: "global", Summary: "global"},
+		{ID: "project-skill", Kind: sessionstore.KindSkill, Scope: "project", Summary: "project"},
+	} {
+		if _, err := store.Save(record); err != nil {
+			t.Fatal(err)
+		}
+	}
+	registry := &Registry{skills: make(map[string]Skill)}
+	if err := registry.SyncRecordsForScopes(context.Background(), store, "project"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Get("global-skill"); err != nil {
+		t.Fatalf("global record was changed by project reconciliation: %v", err)
+	}
+	if _, err := store.Get("project-skill"); !errors.Is(err, sessionstore.ErrNotFound) {
+		t.Fatalf("stale project record was not deleted: %v", err)
 	}
 }
 

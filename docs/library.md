@@ -7,11 +7,13 @@ foreground hosting, ordinary q in-process hosting, fixed-port discovery,
 exclusive leader ownership, failure takeover, Gateway-compatible bearer
 authentication, configurable wildcard/non-loopback binding, and persistent
 global Session Store ownership. `/v1/health` and authenticated `/v1/status`
-are available for lifecycle verification.
+are available for lifecycle verification. Authenticated global Agent Skill
+search, resource reads, and explicit reconciliation are available through the
+`/v1/skills/*` routes and are consumed by the existing MCP skill tools.
 
-The Agent Skill migration, proposition extraction and data routes, persistent
-write idempotency, and multi-vector hybrid search described below remain the
-next implementation stages; the baseline does not claim those APIs yet.
+Proposition extraction and write routes, persistent write idempotency, and
+multi-vector hybrid search described below remain the next implementation
+stages. The proposition read routes are implemented.
 
 ## Purpose and decisions
 
@@ -308,6 +310,26 @@ POST /v1/skills/reload
 Health exposes no stored content. All content, search, extraction, and
 management routes require Gateway-compatible bearer authentication. Mutating
 routes require idempotency keys and bounded request bodies.
+
+The global skill routes are implemented as the first data slice. Leader
+startup and `/skills/reload` reconcile file digests against the persisted
+projection; they do not blindly rewrite every skill. `search_skills` and
+resource reads never trigger discovery or reconciliation.
+
+Global proposition reads are also implemented. `POST /propositions/search`
+queries only records with `kind=proposition` and `scope=global`; it searches
+both canonical `content` and generated-query `search_text`. The default ranking
+applies a `created_at` boost with weight `0.25` and a 720-hour half-life. A
+request may override both values, and an explicit zero weight disables the
+boost. `GET /propositions/{id}` returns the canonical text, provenance refs,
+tags, and extraction payload. Both routes require Library API-key
+authentication.
+
+The existing `q-tools` MCP server exposes these reads as
+`search_propositions` and `get_proposition`; there is no separate proposition
+MCP server. Search results are captured through the normal workspace Loom
+boundary. Extraction, writes, embedding generation, and HNSW proposition
+projection are not implemented in this slice.
 
 ## CLI and runtime integration
 

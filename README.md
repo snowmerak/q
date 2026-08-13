@@ -387,10 +387,11 @@ and returns to the input prompt.
 ## Agent Skills
 
 q supports the [`SKILL.md` Agent Skills format](https://agentskills.io/specification)
-without injecting the complete skill catalog into model context. Discovered
-titles, descriptions, and optional tags are projected into the workspace
-Session Store and indexed by Bleve. The main chat, Griller, and Scout can use
-`search_skills`; `get_skill` stores the selected `SKILL.md` or relative resource
+without injecting the complete skill catalog into model context. Global skill
+metadata is projected into q Library, while project metadata is projected into
+the workspace Session Store; both are indexed by Bleve. The main chat, Griller, and Scout can use
+`search_skills`; global results come from q Library and project results come
+from the workspace index. `get_skill` stores the selected `SKILL.md` or relative resource
 as a Loom artifact without copying its body into the tool response.
 
 Skills are discovered in increasing precedence order:
@@ -404,7 +405,7 @@ The later definition wins when names collide. The `/skills` manager keeps
 global and current-session (workspace/project) entries in separate panels,
 including shadowed paths, and reports validation failures. A skill name must
 match its directory.
-Project skills are retrievable by the main agent, Griller, and Scout. Planner,
+Global and project skills are retrievable by the main agent, Griller, and Scout. Planner,
 Coder, and the isolated commit agent do not receive the retrieval tools.
 
 Open `/skills` to manage Git-backed skills without leaving the screen:
@@ -418,9 +419,10 @@ D                    confirm removal of the selected checkout
 R                    rediscover skills and reconcile the Bleve index
 ```
 
-Managed checkouts live under `~/.q/skills` or `<workspace>/.q/skills`. Startup,
-interactive reload, Git operations, and every `search_skills` call reconcile
-added, changed, and deleted checkout metadata with the Session Store index.
+Managed checkouts live under `~/.q/skills` or `<workspace>/.q/skills`.
+Library/workspace startup, explicit reload, and managed Git operations
+reconcile added, changed, and deleted checkout metadata. Unchanged digests are
+not rewritten or reindexed, and `search_skills` performs queries only.
 Portable `.agents/skills` entries are shown as externally managed and remain
 read-only in this screen.
 
@@ -430,6 +432,15 @@ grants capabilities beyond tools already supplied by q. Arbitrary execution of
 user-level skill scripts is not part of this initial support; project scripts
 inside the workspace can still be invoked through the ordinary command tool
 when the active agent already has that capability.
+
+## Global propositions
+
+q Library can read durable global proposition records through the authenticated
+Library API. `search_propositions` searches canonical text and generated query
+variants with a default `created_at` recency boost; `get_proposition` returns
+the selected proposition with provenance and extraction metadata. Both tools
+are part of the existing `q-tools` MCP server. Proposition extraction, writes,
+embeddings, and HNSW indexing are planned separately.
 
 ## Discovery and `.qignore`
 

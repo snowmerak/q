@@ -10,10 +10,12 @@ import (
 )
 
 type Dependencies struct {
-	Archive Archive
-	Loom    *LoomRuntime
-	Skills  *agentskills.Registry
-	LSP     *lsp.Manager
+	Archive      Archive
+	Loom         *LoomRuntime
+	Skills       *agentskills.Registry
+	GlobalSkills GlobalSkillLibrary
+	Propositions PropositionLibrary
+	LSP          *lsp.Manager
 }
 
 // Register adds the root-jailed builtin tools to server. Optional workspace
@@ -155,17 +157,33 @@ func Register(server *mcp.Server, root string, dependencies Dependencies) (*FS, 
 	if dependencies.Skills != nil {
 		mcp.AddTool(server, &mcp.Tool{
 			Name:        "search_skills",
-			Description: "Search the Session Store's Bleve index for relevant Agent Skills by title, description, and optional tags. Use get_skill with a selected result ID.",
+			Description: "Search global Agent Skills through q Library and project skills through the workspace index, then merge the results. Use get_skill with a selected result ID.",
 			Annotations: &mcp.ToolAnnotations{ReadOnlyHint: readOnly, IdempotentHint: true},
 		}, contextValueHandler(func(ctx context.Context, input SearchSkillsInput) (SearchSkillsOutput, error) {
-			return searchSkills(ctx, dependencies.Archive, input)
+			return searchSkills(ctx, dependencies.Archive, dependencies.GlobalSkills, input)
 		}))
 		mcp.AddTool(server, &mcp.Tool{
 			Name:        "get_skill",
 			Description: "Store one selected SKILL.md or skill-relative resource as an immutable Loom artifact. Read or transform the returned artifact with Loom tools.",
 			Annotations: &mcp.ToolAnnotations{ReadOnlyHint: readOnly, IdempotentHint: true},
 		}, contextValueHandler(func(ctx context.Context, input GetSkillInput) (GetSkillOutput, error) {
-			return getSkill(ctx, dependencies.Skills, dependencies.Loom, input)
+			return getSkill(ctx, dependencies.Skills, dependencies.GlobalSkills, dependencies.Loom, input)
+		}))
+	}
+	if dependencies.Propositions != nil {
+		mcp.AddTool(server, &mcp.Tool{
+			Name:        "search_propositions",
+			Description: "Search durable global propositions in q Library. Matching includes canonical proposition text and generated query variants, with a configurable created_at recency boost. Use get_proposition for a selected result.",
+			Annotations: &mcp.ToolAnnotations{ReadOnlyHint: readOnly, IdempotentHint: true},
+		}, contextValueHandler(func(ctx context.Context, input SearchPropositionsInput) (SearchPropositionsOutput, error) {
+			return searchPropositions(ctx, dependencies.Propositions, input)
+		}))
+		mcp.AddTool(server, &mcp.Tool{
+			Name:        "get_proposition",
+			Description: "Get one durable global proposition by the exact ID returned from search_propositions, including provenance and extraction metadata.",
+			Annotations: &mcp.ToolAnnotations{ReadOnlyHint: readOnly, IdempotentHint: true},
+		}, contextValueHandler(func(ctx context.Context, input GetPropositionInput) (GetPropositionOutput, error) {
+			return getProposition(ctx, dependencies.Propositions, input)
 		}))
 	}
 	if dependencies.LSP != nil {

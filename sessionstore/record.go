@@ -54,14 +54,15 @@ type Embedding struct {
 }
 
 const (
-	KindMessage  = "message"
-	KindTask     = "task"
-	KindEvent    = "event"
-	KindResult   = "result"
-	KindQuestion = "question"
-	KindArtifact = "artifact"
-	KindSummary  = "summary"
-	KindSkill    = "skill"
+	KindMessage     = "message"
+	KindTask        = "task"
+	KindEvent       = "event"
+	KindResult      = "result"
+	KindQuestion    = "question"
+	KindArtifact    = "artifact"
+	KindSummary     = "summary"
+	KindSkill       = "skill"
+	KindProposition = "proposition"
 )
 
 const (

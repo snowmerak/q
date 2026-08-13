@@ -5,9 +5,11 @@ import (
 	"errors"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/snowmerak/llm-provider/gateway"
 	"github.com/snowmerak/q/config"
+	qlibrary "github.com/snowmerak/q/library"
 	"github.com/snowmerak/q/providerhost"
 	"github.com/snowmerak/q/sessionstore"
 	qtools "github.com/snowmerak/q/tools"
@@ -151,8 +153,13 @@ func (request startupRequest) run() runtimeInitializedMsg {
 	workspaceLSP, toolsErr := request.workspaceStore.LoadLSP()
 	var tools *qtools.Runtime
 	if toolsErr == nil {
-		tools, toolsErr = qtools.NewRuntimeWithArchiveAndLoomOptionsAndLSP(
-			request.ctx, request.workspaceStore.Root, archiveStore, loaded.LoomStoreOptions(nil), loaded.LSP, workspaceLSP,
+		libraryConfig, libraryConfigErr := (qlibrary.ConfigStore{Dir: request.store.Dir}).LoadOrDefault()
+		if libraryConfigErr != nil {
+			libraryConfig = qlibrary.DefaultConfig()
+		}
+		libraryClient := qlibrary.NewClient(libraryConfig.Endpoint(), libraryConfig.ResolveAPIKey(), 5*time.Second)
+		tools, toolsErr = qtools.NewRuntimeWithArchiveAndLoomOptionsAndLSPAndLibrary(
+			request.ctx, request.workspaceStore.Root, archiveStore, loaded.LoomStoreOptions(nil), loaded.LSP, workspaceLSP, libraryClient,
 		)
 		result.tools = tools
 	}

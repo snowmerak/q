@@ -5,10 +5,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/snowmerak/q/agentskills"
 	"github.com/snowmerak/q/config"
+	qlibrary "github.com/snowmerak/q/library"
 	"github.com/snowmerak/q/loom"
 	"github.com/snowmerak/q/lsp"
 	"github.com/snowmerak/q/sessionstore"
@@ -27,7 +29,7 @@ func NewServer(root string) (*mcp.Server, error) {
 	if err != nil {
 		return nil, err
 	}
-	server, _, _, err := newServer(root, nil, loomRuntime, nil)
+	server, _, _, err := newServer(root, nil, loomRuntime, nil, nil)
 	return server, err
 }
 
@@ -38,25 +40,35 @@ func NewServerWithArchive(root string, archive builtin.Archive) (*mcp.Server, er
 	if err != nil {
 		return nil, err
 	}
-	server, _, _, err := newServer(root, archive, loomRuntime, nil)
+	server, _, _, err := newServer(root, archive, loomRuntime, nil, nil)
 	return server, err
 }
 
-func newServer(root string, archive builtin.Archive, loomRuntime *builtin.LoomRuntime, lspManager *lsp.Manager) (*mcp.Server, *builtin.FS, *agentskills.Registry, error) {
+func newServer(root string, archive builtin.Archive, loomRuntime *builtin.LoomRuntime, lspManager *lsp.Manager, globalSkills builtin.GlobalSkillLibrary) (*mcp.Server, *builtin.FS, *agentskills.Registry, error) {
 	skills, err := agentskills.Discover(root)
 	if err != nil {
 		return nil, nil, nil, err
 	}
 	if store, ok := archive.(agentskills.RecordStore); ok {
-		if err := skills.SyncRecords(context.Background(), store); err != nil {
-			return nil, nil, nil, fmt.Errorf("tools: index Agent Skills: %w", err)
+		var syncErr error
+		if globalSkills == nil {
+			syncErr = skills.SyncRecords(context.Background(), store)
+		} else {
+			syncErr = skills.SyncRecordsForScopes(context.Background(), store, "project")
+		}
+		if syncErr != nil {
+			return nil, nil, nil, fmt.Errorf("tools: index Agent Skills: %w", syncErr)
 		}
 	}
 	server := mcp.NewServer(&mcp.Implementation{
 		Name:    ServerName,
 		Version: ServerVersion,
 	}, nil)
-	fs, err := builtin.Register(server, root, builtin.Dependencies{Archive: archive, Loom: loomRuntime, Skills: skills, LSP: lspManager})
+	propositions, _ := globalSkills.(builtin.PropositionLibrary)
+	fs, err := builtin.Register(server, root, builtin.Dependencies{
+		Archive: archive, Loom: loomRuntime, Skills: skills, GlobalSkills: globalSkills,
+		Propositions: propositions, LSP: lspManager,
+	})
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -113,7 +125,22 @@ func RunStdioWithLoomOptions(ctx context.Context, root string, options loom.Stor
 		return err
 	}
 	defer lspManager.Close()
-	server, fs, _, err := newServer(root, archive, loomRuntime, lspManager)
+	libraryConfig, libraryConfigErr := (qlibrary.ConfigStore{Dir: configStore.Dir}).LoadOrDefault()
+	if libraryConfigErr != nil {
+		libraryConfig = qlibrary.DefaultConfig()
+	}
+	var globalSkills builtin.GlobalSkillLibrary = qlibrary.NewClient(
+		libraryConfig.Endpoint(), libraryConfig.ResolveAPIKey(), 5*time.Second,
+	)
+	var libraryRuntime *qlibrary.Runtime
+	libraryRuntime, err = qlibrary.Ensure(ctx, configStore.Dir)
+	if err != nil {
+		libraryRuntime = nil
+	}
+	if libraryRuntime != nil {
+		defer libraryRuntime.Close()
+	}
+	server, fs, _, err := newServer(root, archive, loomRuntime, lspManager, globalSkills)
 	if err != nil {
 		return err
 	}

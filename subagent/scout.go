@@ -25,15 +25,17 @@ const (
 )
 
 var scoutAllowedTools = map[string]struct{}{
-	"read_file":      {},
-	"list_directory": {},
-	"loom_inspect":   {},
-	"loom_read":      {},
-	"loom_eval":      {},
-	"search_skills":  {},
-	"get_skill":      {},
-	"run_command":    {},
-	"wait":           {},
+	"read_file":           {},
+	"list_directory":      {},
+	"loom_inspect":        {},
+	"loom_read":           {},
+	"loom_eval":           {},
+	"search_skills":       {},
+	"get_skill":           {},
+	"search_propositions": {},
+	"get_proposition":     {},
+	"run_command":         {},
+	"wait":                {},
 }
 
 // AgentClient is the model surface required by an isolated subagent run.

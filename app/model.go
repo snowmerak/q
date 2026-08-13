@@ -2538,7 +2538,16 @@ func (m *model) appendRuntimeMessages() {
 			if tool.Function.Name == "search_skills" {
 				m.messages = append(m.messages, client.Message{
 					Role: client.RoleDeveloper, Name: "q_agent_skills",
-					Content: "Agent Skills are retrieved from the Session Store rather than preloaded. When reusable procedural guidance may help, call search_skills with concise keywords, select a result, then call get_skill and inspect its Loom artifact. Search explicit $skill-name mentions by name.",
+					Content: "Agent Skills are retrieved on demand from the global q Library and the workspace skill index rather than preloaded. When reusable procedural guidance may help, call search_skills with concise keywords, select a result, then call get_skill and inspect its Loom artifact. Search explicit $skill-name mentions by name.",
+				})
+				break
+			}
+		}
+		for _, tool := range runtimeTools {
+			if tool.Function.Name == "search_propositions" {
+				m.messages = append(m.messages, client.Message{
+					Role: client.RoleDeveloper, Name: "q_propositions",
+					Content: "Durable cross-workspace facts are stored as global q Library propositions. When a prior preference, decision, constraint, stable fact, or reusable resolution may be relevant, call search_propositions, then call get_proposition only for a selected result that needs full provenance or extraction metadata.",
 				})
 				break
 			}

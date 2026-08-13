@@ -3,22 +3,44 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"net"
 	"os"
 	"path/filepath"
 	"reflect"
 	goruntime "runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"github.com/snowmerak/q/agentskills"
 	"github.com/snowmerak/q/client"
+	qlibrary "github.com/snowmerak/q/library"
 	"github.com/snowmerak/q/loom"
 	"github.com/snowmerak/q/lsp"
 	"github.com/snowmerak/q/sessionstore"
 	"github.com/snowmerak/q/subagent"
 	"github.com/snowmerak/q/tools/builtin"
+	"github.com/snowmerak/q/worklock"
 	"github.com/snowmerak/q/workspace"
 )
+
+type fakeGlobalSkillLibrary struct {
+	search   qlibrary.SkillSearchResponse
+	items    map[string]qlibrary.SkillResource
+	searches int
+	gets     int
+}
+
+func (f *fakeGlobalSkillLibrary) SearchSkills(_ context.Context, _ qlibrary.SkillSearchRequest) (qlibrary.SkillSearchResponse, error) {
+	f.searches++
+	return f.search, nil
+}
+
+func (f *fakeGlobalSkillLibrary) GetSkill(_ context.Context, id, _ string) (qlibrary.SkillResource, error) {
+	f.gets++
+	return f.items[id], nil
+}
 
 func TestRuntimeListsAndCallsBuiltinTools(t *testing.T) {
 	root := t.TempDir()
@@ -191,6 +213,207 @@ func TestRuntimeExposesAndCallsArchiveTools(t *testing.T) {
 	}
 	if !skill.Stored || skill.Artifact.Ref == "" || skill.Skill.Name != "archive-test-skill" {
 		t.Fatalf("loaded skill = %#v", skill)
+	}
+}
+
+func TestSkillToolsMergeGlobalLibraryAndProjectStore(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	root := t.TempDir()
+	projectDirectory := filepath.Join(root, ".agents", "skills", "project-procedure")
+	if err := os.MkdirAll(projectDirectory, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(projectDirectory, "SKILL.md"), []byte("---\nname: project-procedure\ndescription: Project-local procedure.\n---\n\nProject body.\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	archive, err := sessionstore.Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer archive.Close()
+	globalID := "skill-global-library"
+	global := &fakeGlobalSkillLibrary{
+		search: qlibrary.SkillSearchResponse{Total: 1, Hits: []qlibrary.SkillSearchHit{{
+			ID: globalID, Title: "global-procedure", Description: "Global Library procedure.", Scope: "global", Score: 2,
+		}}},
+		items: map[string]qlibrary.SkillResource{globalID: {
+			Skill: agentskills.Skill{ID: globalID, Name: "global-procedure", Description: "Global Library procedure.", Scope: "global"},
+			Path:  "SKILL.md", Content: []byte("# Global body\n"),
+		}},
+	}
+	runtime, err := NewRuntimeWithArchiveAndLoomOptionsAndLSPAndLibrary(
+		context.Background(), root, archive, loom.StoreOptions{}, lsp.GlobalConfig{}, lsp.WorkspaceConfig{}, global,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer runtime.Close()
+
+	found, err := runtime.Call(context.Background(), client.ToolCall{
+		ID: "call-merged-skills", Type: client.ToolTypeFunction,
+		Function: client.FunctionCall{Name: "search_skills", Arguments: `{"query":"procedure"}`},
+	})
+	if err != nil || found.IsError {
+		t.Fatalf("merged search = %#v, err = %v", found, err)
+	}
+	var output builtin.SearchSkillsOutput
+	if err := decodeReceiptResult(found.Content, &output); err != nil {
+		t.Fatal(err)
+	}
+	if output.Total != 2 || len(output.Hits) != 2 || output.Hits[0].Scope != "global" || output.Hits[1].Scope != "project" || global.searches != 1 {
+		t.Fatalf("merged skill output = %#v, searches = %d", output, global.searches)
+	}
+	workspaceGlobals, err := archive.Search(context.Background(), sessionstore.SearchOptions{
+		Filters: sessionstore.Filters{Kinds: []string{sessionstore.KindSkill}, Scopes: []string{"global"}}, Limit: 20,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if workspaceGlobals.Total != 0 {
+		t.Fatalf("global skills leaked into workspace Store: %#v", workspaceGlobals.Hits)
+	}
+
+	loaded, err := runtime.Call(context.Background(), client.ToolCall{
+		ID: "call-global-skill", Type: client.ToolTypeFunction,
+		Function: client.FunctionCall{Name: "get_skill", Arguments: `{"id":"` + globalID + `"}`},
+	})
+	if err != nil || loaded.IsError {
+		t.Fatalf("global get_skill = %#v, err = %v", loaded, err)
+	}
+	var skill builtin.GetSkillOutput
+	if err := json.Unmarshal([]byte(loaded.Content), &skill); err != nil {
+		t.Fatal(err)
+	}
+	if !skill.Stored || skill.Skill.Scope != "global" || skill.Artifact.Ref == "" || global.gets != 1 {
+		t.Fatalf("global skill output = %#v, gets = %d", skill, global.gets)
+	}
+}
+
+func TestSkillToolsUseAuthenticatedGlobalLibraryAPIEndToEnd(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	configDirectory := filepath.Join(home, ".q")
+	skillDirectory := filepath.Join(configDirectory, "skills", "global-e2e-skill")
+	if err := os.MkdirAll(skillDirectory, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(skillDirectory, "SKILL.md"), []byte("---\nname: global-e2e-skill\ndescription: Authenticated Library MCP integration token.\n---\n\n# End-to-end body\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	propositionPayload, err := json.Marshal(qlibrary.PropositionPayload{
+		Queries: []string{"which MCP server contains durable facts"}, ExtractorModel: "test-model", ExtractorVersion: "v1",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	seedGlobalLibraryRecords(t, configDirectory, sessionstore.Record{
+		ID: "prop-mcp-e2e", Kind: sessionstore.KindProposition, Scope: "global",
+		Content:    "Durable propositions are read through the existing q-tools MCP server.",
+		SearchText: "which MCP server contains durable facts", Refs: []string{"thread://mcp-e2e"},
+		Tags: []string{"mcp"}, Payload: propositionPayload,
+	})
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := listener.Addr().(*net.TCPAddr).Port
+	if err := listener.Close(); err != nil {
+		t.Fatal(err)
+	}
+	libraryConfig := qlibrary.Config{
+		Version: qlibrary.ConfigVersion, Host: "127.0.0.1", Port: port, APIKeyEnv: qlibrary.DefaultAPIKeyEnv,
+	}
+	libraryConfig, generated, err := (qlibrary.ConfigStore{Dir: configDirectory}).CreateAPIKey(libraryConfig, "MCP test", time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(qlibrary.DefaultAPIKeyEnv, generated.Secret)
+	libraryRuntime, err := qlibrary.EnsureWithOptions(context.Background(), qlibrary.EnsureOptions{
+		Dir: configDirectory, Config: libraryConfig,
+		ProbeTimeout: 300 * time.Millisecond, StartupTimeout: 3 * time.Second,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer libraryRuntime.Close()
+
+	root := t.TempDir()
+	archive, err := sessionstore.Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer archive.Close()
+	libraryClient := qlibrary.NewClient(libraryConfig.Endpoint(), generated.Secret, 5*time.Second)
+	runtime, err := NewRuntimeWithArchiveAndLoomOptionsAndLSPAndLibrary(
+		context.Background(), root, archive, loom.StoreOptions{}, lsp.GlobalConfig{}, lsp.WorkspaceConfig{}, libraryClient,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer runtime.Close()
+	if !runtimeHasTool(runtime, "search_propositions") || !runtimeHasTool(runtime, "get_proposition") {
+		t.Fatalf("proposition tools are missing: %#v", runtime.Tools())
+	}
+
+	found, err := runtime.Call(context.Background(), client.ToolCall{
+		ID: "call-e2e-library-search", Type: client.ToolTypeFunction,
+		Function: client.FunctionCall{Name: "search_skills", Arguments: `{"query":"Authenticated Library MCP integration token","scopes":["global"]}`},
+	})
+	if err != nil || found.IsError {
+		t.Fatalf("end-to-end Library search = %#v, err = %v", found, err)
+	}
+	var output builtin.SearchSkillsOutput
+	if err := decodeReceiptResult(found.Content, &output); err != nil {
+		t.Fatal(err)
+	}
+	if len(output.Hits) != 1 || output.Hits[0].Title != "global-e2e-skill" || len(output.Warnings) != 0 {
+		t.Fatalf("end-to-end Library hits = %#v", output)
+	}
+	loaded, err := runtime.Call(context.Background(), client.ToolCall{
+		ID: "call-e2e-library-get", Type: client.ToolTypeFunction,
+		Function: client.FunctionCall{Name: "get_skill", Arguments: `{"id":"` + output.Hits[0].ID + `"}`},
+	})
+	if err != nil || loaded.IsError {
+		t.Fatalf("end-to-end Library get = %#v, err = %v", loaded, err)
+	}
+	var skill builtin.GetSkillOutput
+	if err := json.Unmarshal([]byte(loaded.Content), &skill); err != nil {
+		t.Fatal(err)
+	}
+	if !skill.Stored || skill.Skill.Name != "global-e2e-skill" || skill.Artifact.Ref == "" {
+		t.Fatalf("end-to-end Library skill = %#v", skill)
+	}
+
+	propositions, err := runtime.Call(context.Background(), client.ToolCall{
+		ID: "call-e2e-proposition-search", Type: client.ToolTypeFunction,
+		Function: client.FunctionCall{Name: "search_propositions", Arguments: `{"query":"which MCP server contains durable facts"}`},
+	})
+	if err != nil || propositions.IsError {
+		t.Fatalf("end-to-end proposition search = %#v, err = %v", propositions, err)
+	}
+	var propositionSearch builtin.SearchPropositionsOutput
+	if err := decodeReceiptResult(propositions.Content, &propositionSearch); err != nil {
+		t.Fatal(err)
+	}
+	if len(propositionSearch.Hits) != 1 || propositionSearch.Hits[0].ID != "prop-mcp-e2e" {
+		t.Fatalf("end-to-end proposition hits = %#v", propositionSearch)
+	}
+	loadedProposition, err := runtime.Call(context.Background(), client.ToolCall{
+		ID: "call-e2e-proposition-get", Type: client.ToolTypeFunction,
+		Function: client.FunctionCall{Name: "get_proposition", Arguments: `{"id":"prop-mcp-e2e"}`},
+	})
+	if err != nil || loadedProposition.IsError {
+		t.Fatalf("end-to-end proposition get = %#v, err = %v", loadedProposition, err)
+	}
+	var proposition builtin.GetPropositionOutput
+	if err := decodeReceiptResult(loadedProposition.Content, &proposition); err != nil {
+		t.Fatal(err)
+	}
+	if proposition.ID != "prop-mcp-e2e" || len(proposition.Payload.Queries) != 1 || proposition.Refs[0] != "thread://mcp-e2e" {
+		t.Fatalf("end-to-end proposition = %#v", proposition)
 	}
 }
 
@@ -453,4 +676,36 @@ func runtimeHasTool(runtime *Runtime, name string) bool {
 		}
 	}
 	return false
+}
+
+func seedGlobalLibraryRecords(t *testing.T, dir string, records ...sessionstore.Record) {
+	t.Helper()
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	lock, err := worklock.AcquireFile(dir, qlibrary.LockFileName, "seed Library MCP test records")
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := sessionstore.OpenWithOptions(dir, sessionstore.OpenOptions{
+		WorkspaceLock: lock, Directory: "library",
+	})
+	if err != nil {
+		_ = lock.Close()
+		t.Fatal(err)
+	}
+	for _, record := range records {
+		if _, err := store.Save(record); err != nil {
+			_ = store.Close()
+			_ = lock.Close()
+			t.Fatal(err)
+		}
+	}
+	if err := store.Close(); err != nil {
+		_ = lock.Close()
+		t.Fatal(err)
+	}
+	if err := lock.Close(); err != nil {
+		t.Fatal(err)
+	}
 }

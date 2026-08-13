@@ -30,10 +30,24 @@ const skillSyncPageSize = 1000
 // SyncRecords makes the current discovered skills addressable through the
 // workspace Session Store's Bleve index. Skill bodies remain on disk.
 func (r *Registry) SyncRecords(ctx context.Context, store RecordStore) error {
+	return r.SyncRecordsForScopes(ctx, store)
+}
+
+// SyncRecordsForScopes reconciles only the requested scopes. An empty scope
+// list preserves SyncRecords' all-scope behavior. Unchanged digests are not
+// saved or reindexed.
+func (r *Registry) SyncRecordsForScopes(ctx context.Context, store RecordStore, scopes ...string) error {
 	if r == nil || store == nil {
 		return errors.New("agent skills: record store is unavailable")
 	}
-	existing, err := existingSkillRecords(ctx, store)
+	wanted := make(map[string]struct{}, len(scopes))
+	for _, scope := range scopes {
+		scope = strings.TrimSpace(scope)
+		if scope != "" {
+			wanted[scope] = struct{}{}
+		}
+	}
+	existing, err := existingSkillRecords(ctx, store, scopes...)
 	if err != nil {
 		return err
 	}
@@ -42,6 +56,11 @@ func (r *Registry) SyncRecords(ctx context.Context, store RecordStore) error {
 		old[record.ID] = record
 	}
 	for _, skill := range r.Skills() {
+		if len(wanted) > 0 {
+			if _, ok := wanted[skill.Scope]; !ok {
+				continue
+			}
+		}
 		payload := recordPayload{
 			Source: skill.Source, Digest: skill.Digest, License: skill.License,
 			Compatibility: skill.Compatibility, AllowedTools: skill.AllowedTools, Metadata: skill.Metadata,
@@ -77,11 +96,11 @@ func (r *Registry) SyncRecords(ctx context.Context, store RecordStore) error {
 // reconciliation starts mutating it. Session Store intentionally caps one
 // search request at 1000 hits, so cleanup must walk the full result set rather
 // than treating that request limit as a catalog limit.
-func existingSkillRecords(ctx context.Context, store RecordStore) ([]sessionstore.Record, error) {
+func existingSkillRecords(ctx context.Context, store RecordStore, scopes ...string) ([]sessionstore.Record, error) {
 	var records []sessionstore.Record
 	for offset := 0; ; {
 		page, err := store.Search(ctx, sessionstore.SearchOptions{
-			Filters: sessionstore.Filters{Kinds: []string{sessionstore.KindSkill}},
+			Filters: sessionstore.Filters{Kinds: []string{sessionstore.KindSkill}, Scopes: scopes},
 			Sort:    sessionstore.SortOldest,
 			Limit:   skillSyncPageSize,
 			Offset:  offset,

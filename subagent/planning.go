@@ -267,7 +267,7 @@ func (r GrillerRunner) Run(ctx context.Context, task GrillTask) (brief GrillBrie
 					return brief, nil
 				}
 				result = scoutToolError(parseErr)
-			case "loom_inspect", "loom_read", "loom_eval", "search_skills", "get_skill":
+			case "loom_inspect", "loom_read", "loom_eval", "search_skills", "get_skill", "search_propositions", "get_proposition":
 				result, err = r.Tools.Call(ctx, call)
 				if err != nil {
 					result = scoutToolError(err)
@@ -481,7 +481,7 @@ func grillerTools(available []client.Tool) []client.Tool {
 	result := make([]client.Tool, 0, 6)
 	for _, tool := range available {
 		switch tool.Function.Name {
-		case "loom_inspect", "loom_read", "loom_eval", "search_skills", "get_skill":
+		case "loom_inspect", "loom_read", "loom_eval", "search_skills", "get_skill", "search_propositions", "get_proposition":
 			result = append(result, tool)
 		}
 	}

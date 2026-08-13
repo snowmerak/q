@@ -6,8 +6,9 @@ every model request.
 
 ## Storage and retrieval
 
-Each active discovered skill is projected into the workspace Session Store as
-a `skill` record:
+Each active global skill is projected into the global Library Store. Active
+project skills are projected into the current workspace Session Store. Both
+use the same `skill` record shape:
 
 - `summary`: skill title/name, full-text indexed
 - `content`: description, full-text indexed
@@ -19,11 +20,12 @@ a `skill` record:
 - `payload`: source kind, content digest, compatibility, license, metadata, and
   informational `allowed-tools`
 
-The record contains no `SKILL.md` body. `search_skills` performs a bounded
-Bleve query and returns only IDs and metadata. `get_skill` resolves one ID,
-reads `SKILL.md` or an optional relative resource from disk, and stores its
-bytes as an immutable `agent-skill` Loom artifact. The response contains the
-artifact reference rather than the file body.
+The record contains no `SKILL.md` body. `search_skills` performs one bounded
+Library query for global scope and one workspace Bleve query for project scope,
+then merges the results inside the existing MCP tool. A project definition
+shadows a same-named global result. `get_skill` routes the selected ID to the
+Library or local registry, then stores the returned bytes as an immutable
+workspace `agent-skill` Loom artifact. There is no separate Library MCP tool.
 
 Main chat and Griller receive `search_skills` and `get_skill`; Scout receives
 the same tools in its non-mutating investigation allowlist and is the preferred repository
@@ -44,8 +46,9 @@ From lowest to highest precedence:
 Each direct child is one skill and must contain `SKILL.md`. The later valid
 definition wins when names collide. The `/skills` management catalog retains
 all valid entries so a shadowed global checkout can still be pulled or removed;
-only the winning definition is projected into the search index. Validation and
-shadowing notes remain visible in the manager.
+each scope keeps its own projection, and merged search suppresses a same-named
+global result when a project definition exists. Validation and shadowing notes
+remain visible in the manager.
 
 ## Git management
 
@@ -67,12 +70,14 @@ The cloned repository must have `SKILL.md` at its root. The destination name is
 taken from validated frontmatter, not from the repository URL. Updates refuse
 non-fast-forward integration.
 
-The index is a derived projection. q reconciles it at startup, on interactive
-reload, and after managed Git operations. Search reads the existing Session
-Store projection without scanning skill directories or parsing YAML. Changes
-made by another Git or filesystem process become visible after explicit reload
-or restart. Stale `skill` records are deleted during reconciliation;
-conversation records remain untouched.
+The indexes are derived projections. The Library reconciles global roots when
+the leader starts, after explicit reload, and after managed global Git
+operations. The workspace reconciles project roots at workspace startup and
+its explicit management points. Reconciliation compares content digests:
+unchanged records are not saved or reindexed, while added, changed, and deleted
+skills are applied. Search only queries the existing projections and never
+scans directories or parses YAML. External filesystem changes become visible
+after explicit reload or Library/workspace restart.
 
 ## Capability boundary
 

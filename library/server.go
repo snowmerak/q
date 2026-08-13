@@ -63,6 +63,11 @@ func startLeader(
 	if err != nil {
 		return nil, fmt.Errorf("library: open global Store: %w", err)
 	}
+	skills, err := newSkillService(parent, dir, archive)
+	if err != nil {
+		_ = archive.Close()
+		return nil, err
+	}
 	storeID, err := loadOrCreateID(filepath.Join(root, "store.id"))
 	if err != nil {
 		_ = archive.Close()
@@ -87,6 +92,12 @@ func startLeader(
 	mux.Handle("GET /v1/status", authenticateLibrary(authenticator, http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
 		writeJSON(writer, http.StatusOK, health)
 	})))
+	registerSkillRoutes(mux, func(next http.Handler) http.Handler {
+		return authenticateLibrary(authenticator, next)
+	}, skills)
+	registerPropositionRoutes(mux, func(next http.Handler) http.Handler {
+		return authenticateLibrary(authenticator, next)
+	}, newPropositionService(archive))
 	l := &leader{
 		health: health, archive: archive, lock: lock, cancel: cancel, done: make(chan struct{}),
 		server: &http.Server{Handler: mux, ReadHeaderTimeout: 10 * time.Second},
