@@ -28,21 +28,37 @@ func TestBuildContextChunkTargetsThirtyFiveAndCapsFortyFivePercent(t *testing.T)
 	}
 }
 
-func TestBuildContextChunkKeepsToolExchangeAtomic(t *testing.T) {
+func TestBuildContextChunkExcludesToolCallsAndResults(t *testing.T) {
 	messages := []client.Message{
-		{Role: client.RoleUser, Content: strings.Repeat("old ", 1200)},
-		{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{{
+		{Role: client.RoleUser, Content: "Please inspect the repository."},
+		{Role: client.RoleAssistant, Content: "I will inspect it.", ToolCalls: []client.ToolCall{{
 			ID: "call-1", Type: client.ToolTypeFunction,
 			Function: client.FunctionCall{Name: "read_file", Arguments: `{"path":"README.md"}`},
 		}}},
-		{Role: client.RoleTool, Name: "read_file", ToolCallID: "call-1", Content: "tool result"},
+		{Role: client.RoleTool, Name: "read_file", ToolCallID: "call-1", Content: "large raw tool result"},
+		{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{{
+			ID: "call-2", Type: client.ToolTypeFunction,
+			Function: client.FunctionCall{Name: "search", Arguments: `{"query":"internal"}`},
+		}}},
+		{Role: client.RoleTool, Name: "search", ToolCallID: "call-2", Content: "another tool result"},
+		{Role: client.RoleAssistant, Content: "The repository uses a global Library."},
 	}
 	chunk, err := BuildContextChunk(messages, 2000)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(chunk.Messages) != 3 || len(chunk.Messages[1].ToolCalls) != 1 || chunk.Messages[2].ToolCallID != "call-1" {
-		t.Fatalf("tool exchange was split: %#v", chunk.Messages)
+	if len(chunk.Messages) != 3 || chunk.SourceMessages != 3 {
+		t.Fatalf("filtered context = %#v", chunk)
+	}
+	for _, message := range chunk.Messages {
+		if message.Role == client.RoleTool || len(message.ToolCalls) != 0 || message.ToolCallID != "" {
+			t.Fatalf("tool data remained in context: %#v", chunk.Messages)
+		}
+	}
+	for _, excluded := range []string{"read_file", "README.md", "large raw tool result", "another tool result"} {
+		if strings.Contains(chunk.Prompt, excluded) {
+			t.Fatalf("prompt contains excluded tool data %q: %s", excluded, chunk.Prompt)
+		}
 	}
 }
 

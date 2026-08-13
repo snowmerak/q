@@ -77,29 +77,26 @@ func latestContextTurnStart(messages []client.Message) int {
 }
 
 func previousContextUnitStart(messages []client.Message, end int) int {
-	start := end - 1
-	if messages[start].Role != client.RoleTool {
-		return start
-	}
-	for start > 0 && messages[start-1].Role == client.RoleTool {
-		start--
-	}
-	if start > 0 && len(messages[start-1].ToolCalls) > 0 {
-		start--
-	}
-	return start
+	return end - 1
 }
 
 func thinkerContextMessages(source []client.Message) []client.Message {
 	result := make([]client.Message, 0, len(source))
 	for _, message := range source {
+		if message.Role == client.RoleTool {
+			continue
+		}
 		if message.Role == client.RoleSystem || message.Role == client.RoleDeveloper {
 			if message.Name != memory.SummaryName {
 				continue
 			}
 		}
 		copy := message
-		copy.ToolCalls = append([]client.ToolCall(nil), message.ToolCalls...)
+		copy.ToolCalls = nil
+		copy.ToolCallID = ""
+		if copy.Role == client.RoleAssistant && strings.TrimSpace(copy.Content) == "" {
+			continue
+		}
 		result = append(result, copy)
 	}
 	return result
@@ -138,13 +135,6 @@ func trimLargestContextField(messages []client.Message) bool {
 		if value := messages[index].Content; len([]rune(value)) > largest.length {
 			i := index
 			largest = field{length: len([]rune(value)), value: value, set: func(next string) { messages[i].Content = next }}
-		}
-		for callIndex := range messages[index].ToolCalls {
-			value := messages[index].ToolCalls[callIndex].Function.Arguments
-			if len([]rune(value)) > largest.length {
-				i, j := index, callIndex
-				largest = field{length: len([]rune(value)), value: value, set: func(next string) { messages[i].ToolCalls[j].Function.Arguments = next }}
-			}
 		}
 	}
 	if largest.length <= 32 || largest.set == nil {

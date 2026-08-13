@@ -440,8 +440,10 @@ when the active agent already has that capability.
 q Library stores and reads durable global proposition records through its
 authenticated API. After a successful conversation turn, the configured
 `thinker` model receives a recent context chunk targeting 35% of its context
-window and capped at 45%. It calls a private `register_proposition` tool once
-per proposition; each call is immediately persisted with an idempotency key.
+window and capped at 45%. Raw tool calls and tool-result messages are excluded
+from that chunk; assistant prose is retained. It calls a private
+`register_proposition` tool once per proposition, and each call is immediately
+persisted with an idempotency key.
 
 `search_propositions` searches canonical text and generated query variants
 with a default `created_at` recency boost; `get_proposition` returns the

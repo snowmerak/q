@@ -225,10 +225,12 @@ enqueue extraction without blocking the next chat input. Thinker jobs are
 serialized so their idempotency slots remain stable.
 
 The conversation chunk targets 35% of the Thinker model's advertised context
-length and has a hard 45% cap. Recent messages win, assistant tool calls stay
-with their tool results, and oversized fields are shortened only when the most
-recent unit cannot fit. The remaining context is reserved for the system
-prompt, tool schemas, and repeated registration exchanges.
+length and has a hard 45% cap. Recent messages win. Tool-result messages and
+assistant `tool_calls` are removed entirely; an assistant message that contains
+only tool calls is removed as well, while any accompanying assistant prose is
+kept. Oversized remaining message content is shortened only when the recent
+context cannot fit. The unused context is reserved for the system prompt, tool
+schemas, and repeated registration exchanges.
 
 For a selected turn:
 
