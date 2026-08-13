@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
-	"unicode/utf8"
 
 	"github.com/snowmerak/q/agentskills"
 	"github.com/snowmerak/q/loom"
@@ -17,7 +16,7 @@ type SearchSkillsInput struct {
 	Query  string   `json:"query" jsonschema:"Keywords describing the procedure or expertise needed"`
 	Scopes []string `json:"scopes,omitempty" jsonschema:"Optional exact scopes: global or project"`
 	Tags   []string `json:"tags,omitempty" jsonschema:"Optional tags; a skill must match at least one"`
-	Limit  int      `json:"limit,omitempty" jsonschema:"Maximum results from 1 to 20; defaults to 5"`
+	Limit  int      `json:"limit,omitempty" jsonschema:"Maximum results; uses the Session Store default when omitted"`
 }
 
 type SkillSearchHit struct {
@@ -47,43 +46,12 @@ type GetSkillOutput struct {
 	Stored   bool              `json:"stored"`
 }
 
-func searchSkills(ctx context.Context, archive Archive, registry *agentskills.Registry, input SearchSkillsInput) (SearchSkillsOutput, error) {
+func searchSkills(ctx context.Context, archive Archive, input SearchSkillsInput) (SearchSkillsOutput, error) {
 	if archive == nil {
 		return SearchSkillsOutput{}, errors.New("[E_SKILLS] Session Store is unavailable")
 	}
-	if store, ok := archive.(agentskills.RecordStore); ok && registry != nil {
-		if err := registry.Reload(); err != nil {
-			return SearchSkillsOutput{}, fmt.Errorf("[E_SKILLS] refresh discovery: %w", err)
-		}
-		if err := registry.SyncRecords(ctx, store); err != nil {
-			return SearchSkillsOutput{}, fmt.Errorf("[E_SKILLS] refresh index: %w", err)
-		}
-	}
-	input.Query = strings.TrimSpace(input.Query)
-	if input.Query == "" {
-		return SearchSkillsOutput{}, errors.New("[E_SKILLS] query is required")
-	}
-	if utf8.RuneCountInString(input.Query) > 4000 {
-		return SearchSkillsOutput{}, errors.New("[E_SKILLS] query exceeds 4000 characters")
-	}
-	limit := input.Limit
-	if limit == 0 {
-		limit = 5
-	}
-	if limit < 1 || limit > 20 {
-		return SearchSkillsOutput{}, errors.New("[E_SKILLS] limit must be between 1 and 20")
-	}
-	for index := range input.Scopes {
-		input.Scopes[index] = strings.ToLower(strings.TrimSpace(input.Scopes[index]))
-		if input.Scopes[index] != "global" && input.Scopes[index] != "project" {
-			return SearchSkillsOutput{}, errors.New("[E_SKILLS] scopes must contain only global or project")
-		}
-	}
-	for index := range input.Tags {
-		input.Tags[index] = strings.ToLower(strings.TrimSpace(input.Tags[index]))
-	}
 	result, err := archive.Search(ctx, sessionstore.SearchOptions{
-		Text: input.Query, Sort: sessionstore.SortRelevance, Limit: limit,
+		Text: input.Query, Sort: sessionstore.SortRelevance, Limit: input.Limit,
 		Filters: sessionstore.Filters{
 			Kinds: []string{sessionstore.KindSkill}, Scopes: input.Scopes, Tags: input.Tags,
 		},

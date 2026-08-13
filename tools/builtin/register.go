@@ -158,7 +158,7 @@ func Register(server *mcp.Server, root string, dependencies Dependencies) (*FS, 
 			Description: "Search the Session Store's Bleve index for relevant Agent Skills by title, description, and optional tags. Use get_skill with a selected result ID.",
 			Annotations: &mcp.ToolAnnotations{ReadOnlyHint: readOnly, IdempotentHint: true},
 		}, contextValueHandler(func(ctx context.Context, input SearchSkillsInput) (SearchSkillsOutput, error) {
-			return searchSkills(ctx, dependencies.Archive, dependencies.Skills, input)
+			return searchSkills(ctx, dependencies.Archive, input)
 		}))
 		mcp.AddTool(server, &mcp.Tool{
 			Name:        "get_skill",

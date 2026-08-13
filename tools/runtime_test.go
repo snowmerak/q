@@ -194,6 +194,75 @@ func TestRuntimeExposesAndCallsArchiveTools(t *testing.T) {
 	}
 }
 
+func TestSearchSkillsUsesSessionStoreSnapshotUntilReload(t *testing.T) {
+	root := t.TempDir()
+	initialDirectory := filepath.Join(root, ".agents", "skills", "initial-skill")
+	if err := os.MkdirAll(initialDirectory, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(initialDirectory, "SKILL.md"), []byte("---\nname: initial-skill\ndescription: Initial indexed procedure.\n---\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	archive, err := sessionstore.Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer archive.Close()
+	runtime, err := NewRuntimeWithArchive(context.Background(), root, archive)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer runtime.Close()
+
+	listed, err := runtime.Call(context.Background(), client.ToolCall{
+		ID: "call-list-skills", Type: client.ToolTypeFunction,
+		Function: client.FunctionCall{Name: "search_skills", Arguments: `{"query":""}`},
+	})
+	if err != nil || listed.IsError {
+		t.Fatalf("list skills = %#v, err = %v", listed, err)
+	}
+	var initial builtin.SearchSkillsOutput
+	if err := decodeReceiptResult(listed.Content, &initial); err != nil {
+		t.Fatal(err)
+	}
+	if len(initial.Hits) != 1 || initial.Hits[0].Title != "initial-skill" {
+		t.Fatalf("initial skill hits = %#v", initial.Hits)
+	}
+
+	lateDirectory := filepath.Join(root, ".agents", "skills", "late-skill")
+	if err := os.MkdirAll(lateDirectory, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(lateDirectory, "SKILL.md"), []byte("---\nname: late-skill\ndescription: uniquelateskilltoken\n---\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	search := func() builtin.SearchSkillsOutput {
+		t.Helper()
+		result, callErr := runtime.Call(context.Background(), client.ToolCall{
+			ID: "call-search-late-skill", Type: client.ToolTypeFunction,
+			Function: client.FunctionCall{Name: "search_skills", Arguments: `{"query":"uniquelateskilltoken"}`},
+		})
+		if callErr != nil || result.IsError {
+			t.Fatalf("search late skill = %#v, err = %v", result, callErr)
+		}
+		var output builtin.SearchSkillsOutput
+		if err := decodeReceiptResult(result.Content, &output); err != nil {
+			t.Fatal(err)
+		}
+		return output
+	}
+	if before := search(); len(before.Hits) != 0 {
+		t.Fatalf("search unexpectedly refreshed skill index: %#v", before.Hits)
+	}
+	if err := runtime.ReloadSkills(); err != nil {
+		t.Fatal(err)
+	}
+	if after := search(); len(after.Hits) != 1 || after.Hits[0].Title != "late-skill" {
+		t.Fatalf("reloaded skill hits = %#v", after.Hits)
+	}
+}
+
 func TestRuntimeRootsComeFromCurrentSessionNotArchive(t *testing.T) {
 	root := t.TempDir()
 	sessionRef := loom.Ref("loom://0123456789abcdef0123456789abcdef")
