@@ -31,6 +31,7 @@ const (
 	AgentRoleCoder    = "coder"
 	AgentRoleCommit   = "commit"
 	AgentRoleAdvisor  = "advisor"
+	AgentRoleThinker  = "thinker"
 )
 
 var ErrNotFound = errors.New("q config not found")
@@ -104,6 +105,7 @@ var agentRoles = []string{
 	AgentRoleCoder,
 	AgentRoleCommit,
 	AgentRoleAdvisor,
+	AgentRoleThinker,
 }
 
 func Default() Config {

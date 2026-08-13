@@ -617,6 +617,19 @@ func TestSlashModelConfiguresCommitAgentModelAndReasoning(t *testing.T) {
 	}
 }
 
+func TestModelTargetsIncludeThinker(t *testing.T) {
+	found := false
+	for _, target := range modelTargets() {
+		if target == config.AgentRoleThinker {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("model targets = %#v", modelTargets())
+	}
+}
+
 func TestModelPickerConfiguresEmbeddingModelAndDimensions(t *testing.T) {
 	store := config.Store{Dir: t.TempDir()}
 	value := config.Default()

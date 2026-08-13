@@ -279,7 +279,10 @@ the user to copy a key.
 subagent role. A role without an explicit model inherits the main model. An
 empty reasoning effort lets the provider choose its default; explicit efforts
 are accepted only when advertised by that model. The built-in roles are
-`griller`, `scout`, `research`, `planner`, `coder`, `commit`, and `advisor`.
+`griller`, `scout`, `research`, `planner`, `coder`, `commit`, `advisor`, and
+`thinker`. The `thinker` role is reserved for durable proposition selection
+and extraction; until that pipeline is connected, configuring it only records
+the model and reasoning-effort policy.
 
 The embedding picker accepts dimensions from 1 to 4096. Because the shared
 model catalog does not identify embedding-only models, it currently shows all

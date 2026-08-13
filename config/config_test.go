@@ -22,6 +22,7 @@ func TestStoreRoundTrip(t *testing.T) {
 		AgentRolePlanner: {Model: "planning-model", ReasoningEffort: "high"},
 		AgentRoleCoder:   {Model: "coding-model", ReasoningEffort: "medium"},
 		AgentRoleCommit:  {Model: "commit-model", ReasoningEffort: "low"},
+		AgentRoleThinker: {Model: "thinking-model", ReasoningEffort: "high"},
 	}
 	want.LSP = lsp.GlobalConfig{
 		Servers:   map[string]lsp.ServerConfig{"gopls": {Languages: []string{"go"}, Command: "gopls"}},
@@ -131,6 +132,41 @@ func TestEffectiveAgentUsesRoleOverrideAndActiveModelFallback(t *testing.T) {
 	}
 	if _, err := value.EffectiveAgent("reviewer"); err == nil {
 		t.Fatal("unknown role unexpectedly resolved")
+	}
+}
+
+func TestThinkerUsesRoleOverrideAndActiveModelFallback(t *testing.T) {
+	value := Default()
+	value.Provider.Model = "active-model"
+
+	inherited, err := value.EffectiveAgent(AgentRoleThinker)
+	if err != nil || inherited.Model != "active-model" || inherited.ReasoningEffort != "" {
+		t.Fatalf("inherited thinker = %#v, err = %v", inherited, err)
+	}
+
+	value.Agents.Roles = map[string]AgentConfig{
+		AgentRoleThinker: {Model: "thinking-model", ReasoningEffort: "high"},
+	}
+	overridden, err := value.EffectiveAgent(AgentRoleThinker)
+	if err != nil || overridden.Model != "thinking-model" || overridden.ReasoningEffort != "high" {
+		t.Fatalf("overridden thinker = %#v, err = %v", overridden, err)
+	}
+}
+
+func TestAgentRolesIncludesThinker(t *testing.T) {
+	roles := AgentRoles()
+	if !IsAgentRole(AgentRoleThinker) {
+		t.Fatal("thinker is not recognized as an agent role")
+	}
+	found := false
+	for _, role := range roles {
+		if role == AgentRoleThinker {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("agent roles = %#v", roles)
 	}
 }
 

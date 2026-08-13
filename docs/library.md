@@ -218,6 +218,12 @@ constraints, reusable problem resolutions, and stable facts established by
 the conversation. Progress narration, speculative suggestions, transient tool
 output, and unconfirmed assistant claims are excluded.
 
+The extraction model uses the built-in `thinker` role. Like other role models,
+it is configurable from `/model` or `agents.roles.thinker` and inherits the
+active chat model when no override is present. Registering the role is the
+first implementation slice; invoking it from the extraction pipeline remains
+separate work.
+
 For a selected turn:
 
 ```text
