@@ -42,6 +42,18 @@ Run the global Library as a dedicated foreground service:
 q library
 ```
 
+Configure the default Library bind host and fixed rendezvous port in the TUI:
+
+```powershell
+q library config
+```
+
+The same screen is available as `/library` from an ordinary q session. The
+defaults are saved independently in `~/.q/library.json`; a running Library
+leader must be restarted before listener changes take effect. Unlike the
+Gateway's optional port `0`, the Library requires a stable port from `1` to
+`65535` so other q processes can find the same service.
+
 Ordinary `q` sessions also ensure that the same Library server is available.
 When no compatible server is running, one session wins the user-level file
 lock and embeds the server until that q process exits. Other sessions connect
@@ -96,6 +108,7 @@ Personal configuration is stored in:
 ~/.q/gateway.json
 ~/.q/gateway.key
 ~/.q/library.json
+~/.q/library.key
 ```
 
 Prefer environment variables over inline API keys. On POSIX, q creates the
@@ -116,6 +129,7 @@ screen without discarding editor state or interrupting an active turn.
 | `/commit` | Open the interactive commit workflow, then return to chat. |
 | `/model` | Configure the main-loop, embedding, or subagent role models. |
 | `/gateway` | Configure Gateway network defaults, API keys, and providers. |
+| `/library` | Configure the global Library's default host and fixed port. |
 | `/loom` | Inspect Loom usage and configure or run garbage collection. |
 | `/ignore` | Edit workspace discovery rules in `.qignore`. |
 | `/skills` | Interactively add, pull, remove, and reindex global/session Agent Skills. |

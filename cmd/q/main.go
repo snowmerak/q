@@ -66,8 +66,19 @@ func main() {
 		return
 	}
 	if len(os.Args) > 1 && os.Args[1] == "library" {
+		if len(os.Args) > 2 && os.Args[2] == "config" {
+			if len(os.Args) != 3 {
+				fmt.Fprintln(os.Stderr, "usage: q library config")
+				os.Exit(2)
+			}
+			if err := app.RunLibraryConfigDefault(ctx); err != nil {
+				fmt.Fprintln(os.Stderr, err)
+				os.Exit(1)
+			}
+			return
+		}
 		if len(os.Args) != 2 {
-			fmt.Fprintln(os.Stderr, "usage: q library")
+			fmt.Fprintln(os.Stderr, "usage: q library | q library config")
 			os.Exit(2)
 		}
 		store, err := config.DefaultStore()

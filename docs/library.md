@@ -68,6 +68,7 @@ The global files live below the personal q configuration directory:
 ```text
 ~/.q/
 |- library.json
+|- library.key
 |- library.lock
 `- library/
    |- data/records/
@@ -99,11 +100,13 @@ Library data endpoints use the existing Gateway API-key design:
 - live keyring reload where practical;
 - the same JSON authentication-error shape as the Gateway.
 
-No Library-specific random token file is introduced. The first implementation
-should reuse the Gateway API-key implementation and keyring rather than create
-a second incompatible credential system. Because the keyring stores only
-hashes, a Library client still needs the plaintext key from an explicit client
-setting or environment variable, just like any standalone Gateway client.
+The implementation shares the Gateway authentication code and record format,
+not the Gateway's settings. Library key records live in `library.json`, and
+their keyed-hash master lives in `library.key`. The Library never reads or
+mutates `gateway.json` or `gateway.key`. `library.key` is server-side hashing
+material, not a bearer token; plaintext Library keys are shown only when they
+are generated and reach clients through an explicit client setting or
+environment variable such as `Q_LIBRARY_API_KEY`.
 
 The listener configuration must distinguish the bind address from the local
 rendezvous URL when necessary. For example, a server may bind to
@@ -323,11 +326,19 @@ keeps dedicated, embedded, local, and remote operation equivalent. Internal
 health and lifecycle coordination may use direct handles, but data operations
 continue through the public Library service boundary.
 
+`q library config` opens the standalone Library listener settings, and
+`/library` opens the same settings from the regular q TUI. Both edit the
+default bind host and fixed rendezvous port in `library.json`. Port `0` is not
+valid for the Library because every process must be able to find the same
+endpoint. Listener changes take effect after the current Library leader is
+restarted.
+
 Configuration includes the listen host, fixed port, local rendezvous URL when
 needed, remote/client-only mode, API-key source, extraction model, embedding
 model and dimensions, generated-query bound, and recency parameters. Listener
-and index-shape changes require a Library restart. API-key changes follow the
-Gateway keyring reload behavior.
+and index-shape changes require a Library restart. Library API-key changes use
+the same live-reload behavior as Gateway keys while remaining in the Library's
+independent configuration.
 
 The Library must fail independently from workspace startup where possible. A
 workspace remains usable without global memory, while its status clearly says
@@ -335,8 +346,9 @@ that global skill/proposition retrieval and extraction are unavailable.
 
 ## Implementation stages
 
-1. Extract reusable API-key authentication and OS lock primitives without
-   changing existing Gateway or workspace behavior.
+1. Reuse the API-key authentication format and verifier, while keeping Library
+   and Gateway settings and master keys independent; extract the OS lock
+   primitive without changing existing Gateway or workspace behavior.
 2. Add the reusable Library server component, configuration, identity/health,
    fixed-port serving, connection, leader election, startup waiting, shutdown,
    and takeover tests; host the same component from `q library` and ordinary q.
@@ -364,7 +376,8 @@ The implementation is complete only when tests cover:
 - leader termination followed by bounded takeover and successful retry;
 - a fixed-port collision with a non-Library service;
 - non-loopback and wildcard binding with authenticated access;
-- missing, invalid, and revoked Gateway-compatible API keys;
+- missing, invalid, and revoked Gateway-compatible Library API keys, including
+  rejection of keys configured only for the Gateway;
 - duplicate mutating requests before and after leader takeover;
 - Store/index recovery while the lock remains exclusively owned;
 - global skills changing only on startup or explicit management/reload;

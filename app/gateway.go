@@ -113,17 +113,20 @@ func (m model) updateGatewayNetwork(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case "tab", "down", "up", "shift+tab":
 		m.gatewayNetworkFocus = 1 - m.gatewayNetworkFocus
-		return m, m.gatewayNetworkFocusCommand()
+		command := m.gatewayNetworkFocusCommand()
+		return m, command
 	case "ctrl+s", "enter":
 		host := strings.TrimSpace(m.gatewayHostInput.Value())
 		if net.ParseIP(host) == nil {
 			m.status = "Host must be an IP address"
-			return m, m.gatewayNetworkFocusCommand()
+			command := m.gatewayNetworkFocusCommand()
+			return m, command
 		}
 		port, err := strconv.Atoi(strings.TrimSpace(m.gatewayPortInput.Value()))
 		if err != nil || port < 0 || port > 65535 {
 			m.status = "Port must be between 0 and 65535"
-			return m, m.gatewayNetworkFocusCommand()
+			command := m.gatewayNetworkFocusCommand()
+			return m, command
 		}
 		value := m.gatewaySettings
 		value.Server = gatewayconfig.ServerConfig{Host: host, Port: port}
@@ -227,7 +230,7 @@ func (m model) updateGatewayKeys(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m model) gatewayNetworkFocusCommand() tea.Cmd {
+func (m *model) gatewayNetworkFocusCommand() tea.Cmd {
 	if m.gatewayNetworkFocus == 0 {
 		m.gatewayPortInput.Blur()
 		return m.gatewayHostInput.Focus()

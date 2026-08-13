@@ -23,6 +23,7 @@ func (m model) enterHelp() (tea.Model, tea.Cmd) {
 	m.embeddingDimensions.Blur()
 	m.modelContextWindow.Blur()
 	m.blurGatewayInputs()
+	m.blurLibraryInputs()
 	for index := range m.setup {
 		m.setup[index].Blur()
 	}
@@ -61,12 +62,16 @@ func (m model) leaveHelp() (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case screenGatewayNetwork:
-		return m, m.gatewayNetworkFocusCommand()
+		command := m.gatewayNetworkFocusCommand()
+		return m, command
 	case screenGatewayKeys:
 		if m.gatewayKeyAdding {
 			return m, m.gatewayKeyAlias.Focus()
 		}
 		return m, nil
+	case screenLibrary:
+		command := m.libraryNetworkFocusCommand()
+		return m, command
 	case screenChat:
 		m.refreshTranscript()
 		m.refreshAgentTrace(false)
@@ -144,6 +149,7 @@ func renderHelpContent(dark bool) string {
 		{"/clear", "Clear the current chat projection."},
 		{"/model", "Choose default, subagent, and embedding models."},
 		{"/gateway", "Configure Gateway network, API keys, and providers."},
+		{"/library", "Configure the global Library listener defaults."},
 		{"/loom", "Inspect Loom storage and garbage-collection settings."},
 		{"/ignore", "Edit workspace discovery rules in .qignore."},
 		{"/skills", "Interactively add, pull, remove, and reindex global/session skills."},
@@ -169,6 +175,7 @@ func renderHelpContent(dark bool) string {
 	writeHelpSection("COMMAND LINE", [][2]string{
 		{"q commit", "Open the guided commit-message and commit TUI."},
 		{"q library", "Run the global Library as a dedicated foreground service."},
+		{"q library config", "Configure the Library's default host and fixed port."},
 		{"q gateway", "Run only the standalone OpenAI-compatible Gateway."},
 		{"q gateway config", "Configure Gateway network, API keys, and providers."},
 		{"q model", "Configure main, embedding, and subagent models."},

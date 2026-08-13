@@ -25,6 +25,7 @@ import (
 	"github.com/snowmerak/q/client"
 	"github.com/snowmerak/q/config"
 	"github.com/snowmerak/q/gatewayconfig"
+	qlibrary "github.com/snowmerak/q/library"
 	"github.com/snowmerak/q/loom"
 	qlsp "github.com/snowmerak/q/lsp"
 	"github.com/snowmerak/q/memory"
@@ -48,6 +49,7 @@ const (
 	screenGateway
 	screenGatewayNetwork
 	screenGatewayKeys
+	screenLibrary
 	screenHelp
 	screenChat
 )
@@ -171,6 +173,11 @@ type model struct {
 	gatewayKeyAdding      bool
 	gatewayKeyRevokeArmed bool
 	generatedGatewayKey   string
+	librarySettingsStore  qlibrary.ConfigStore
+	librarySettings       qlibrary.Config
+	libraryHostInput      textinput.Model
+	libraryPortInput      textinput.Model
+	libraryNetworkFocus   int
 	discovering           bool
 	models                []client.Model
 	modelCursor           int
@@ -437,6 +444,14 @@ func newManagedModel(ctx context.Context, store config.Store, factory clientFact
 	m.gatewayKeyAlias.Prompt = "alias · "
 	m.gatewayKeyAlias.CharLimit = 64
 	m.gatewayKeyAlias.SetWidth(48)
+	m.librarySettingsStore = qlibrary.ConfigStore{Dir: store.Dir}
+	m.libraryHostInput = textinput.New()
+	m.libraryHostInput.Prompt = "host · "
+	m.libraryHostInput.SetWidth(40)
+	m.libraryPortInput = textinput.New()
+	m.libraryPortInput.Prompt = "port · "
+	m.libraryPortInput.CharLimit = 5
+	m.libraryPortInput.SetWidth(16)
 	loomPrompts := []string{"artifact MiB · ", "store MiB · ", "GC trigger % · ", "GC target % · ", "grace hours · "}
 	for index := range m.loomInputs {
 		field := textinput.New()
@@ -520,6 +535,9 @@ func (m model) Init() tea.Cmd {
 	}
 	if m.screen == screenGateway || m.screen == screenGatewayKeys {
 		return tea.RequestBackgroundColor
+	}
+	if m.screen == screenLibrary {
+		return tea.Batch(m.libraryNetworkFocusCommand(), tea.RequestBackgroundColor)
 	}
 	if m.screen == screenLoom {
 		return tea.Batch(m.loomFocusCommand(), tea.RequestBackgroundColor)
@@ -953,11 +971,13 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	case gatewaySettingsSavedMsg:
 		if message.err != nil {
 			m.status = message.err.Error()
-			return m, m.gatewayNetworkFocusCommand()
+			command := m.gatewayNetworkFocusCommand()
+			return m, command
 		}
 		m.gatewaySettings = message.config
 		m.status = "Gateway network settings saved; restart a running standalone Gateway to rebind"
-		return m, m.gatewayNetworkFocusCommand()
+		command := m.gatewayNetworkFocusCommand()
+		return m, command
 	case gatewayAPIKeyGeneratedMsg:
 		if message.err != nil {
 			m.status = message.err.Error()
@@ -980,6 +1000,16 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		m.gatewaySettings = message.config
 		m.status = "API key revoked"
 		return m, nil
+	case librarySettingsSavedMsg:
+		if message.err != nil {
+			m.status = message.err.Error()
+			command := m.libraryNetworkFocusCommand()
+			return m, command
+		}
+		m.librarySettings = message.config
+		m.status = "Library network settings saved; restart the running Library leader to rebind"
+		command := m.libraryNetworkFocusCommand()
+		return m, command
 	}
 
 	if key, ok := message.(tea.KeyPressMsg); ok {
@@ -1012,6 +1042,9 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if m.screen == screenGatewayKeys {
 			return m.updateGatewayKeys(key)
+		}
+		if m.screen == screenLibrary {
+			return m.updateLibrary(key)
 		}
 		if m.screen == screenModels {
 			return m.updateModelPicker(key)
@@ -1064,6 +1097,9 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	}
 	if m.screen == screenGatewayNetwork || (m.screen == screenGatewayKeys && m.gatewayKeyAdding) {
 		return m.updateGatewayInput(message)
+	}
+	if m.screen == screenLibrary {
+		return m.updateLibraryInput(message)
 	}
 
 	if m.screen == screenChat {
@@ -1958,6 +1994,9 @@ func (m model) submitChat() (tea.Model, tea.Cmd) {
 		}
 		m.enterSetup(m.config)
 		return m, m.setup[m.setupFocus].Focus()
+	case "/library":
+		m.input.Reset()
+		return m, m.enterLibrarySettings()
 	case "/loom":
 		m.input.Reset()
 		return m.enterLoom()
@@ -3628,6 +3667,8 @@ func (m model) View() tea.View {
 		content = m.viewGatewayNetwork()
 	} else if m.screen == screenGatewayKeys {
 		content = m.viewGatewayKeys()
+	} else if m.screen == screenLibrary {
+		content = m.viewLibrary()
 	} else if m.screen == screenModels {
 		content = m.viewModels()
 	} else if m.screen == screenLoom {

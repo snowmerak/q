@@ -39,20 +39,16 @@ func startLeader(
 	listener net.Listener,
 	lock *worklock.Lock,
 ) (*leader, error) {
-	gatewayStore := gatewayconfig.Store{Dir: dir}
-	settings, err := gatewayStore.LoadOrDefault()
-	if err != nil {
-		return nil, fmt.Errorf("library: load API keys: %w", err)
-	}
+	libraryStore := ConfigStore{Dir: dir}
 	var randomMaster [32]byte
 	if _, err := rand.Read(randomMaster[:]); err != nil {
 		return nil, fmt.Errorf("library: generate API-key master: %w", err)
 	}
-	master, err := gatewayStore.EnsureMasterKey(randomMaster)
+	master, err := libraryStore.EnsureMasterKey(randomMaster)
 	if err != nil {
 		return nil, fmt.Errorf("library: load API-key master: %w", err)
 	}
-	authenticator, err := gatewayconfig.NewAuthenticator(master, settings)
+	authenticator, err := gatewayconfig.NewAuthenticator(master, authenticationConfig(value))
 	if err != nil {
 		return nil, fmt.Errorf("library: initialize authentication: %w", err)
 	}
@@ -88,14 +84,14 @@ func startLeader(
 	mux.HandleFunc("GET /v1/health", func(writer http.ResponseWriter, _ *http.Request) {
 		writeJSON(writer, http.StatusOK, health)
 	})
-	mux.Handle("GET /v1/status", authenticator.Handler(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+	mux.Handle("GET /v1/status", authenticateLibrary(authenticator, http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
 		writeJSON(writer, http.StatusOK, health)
 	})))
 	l := &leader{
 		health: health, archive: archive, lock: lock, cancel: cancel, done: make(chan struct{}),
 		server: &http.Server{Handler: mux, ReadHeaderTimeout: 10 * time.Second},
 	}
-	watchDone := watchKeyring(ctx, gatewayStore, authenticator)
+	watchDone := watchKeyring(ctx, libraryStore, authenticator)
 	go func() {
 		serveErr := l.server.Serve(listener)
 		cancel()
@@ -138,7 +134,22 @@ func writeJSON(writer http.ResponseWriter, status int, value any) {
 	_ = json.NewEncoder(writer).Encode(value)
 }
 
-func watchKeyring(ctx context.Context, store gatewayconfig.Store, authenticator *gatewayconfig.Authenticator) <-chan struct{} {
+func authenticateLibrary(authenticator *gatewayconfig.Authenticator, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if !authenticator.Authorized(request.Header.Get("Authorization")) {
+			writer.Header().Set("WWW-Authenticate", "Bearer")
+			writeJSON(writer, http.StatusUnauthorized, map[string]any{"error": map[string]any{
+				"message": "invalid Library API key",
+				"type":    "authentication_error",
+				"code":    "invalid_api_key",
+			}})
+			return
+		}
+		next.ServeHTTP(writer, request)
+	})
+}
+
+func watchKeyring(ctx context.Context, store ConfigStore, authenticator *gatewayconfig.Authenticator) <-chan struct{} {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
@@ -157,8 +168,8 @@ func watchKeyring(ctx context.Context, store gatewayconfig.Store, authenticator 
 				if err != nil || info.ModTime().Equal(modified) {
 					continue
 				}
-				value, err := store.Load()
-				if err != nil || authenticator.Reload(value) != nil {
+				value, err := store.LoadOrDefault()
+				if err != nil || authenticator.Reload(authenticationConfig(value)) != nil {
 					continue
 				}
 				modified = info.ModTime()

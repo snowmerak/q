@@ -6,6 +6,8 @@ import (
 	"errors"
 	"net"
 	"net/http"
+	"os"
+	"reflect"
 	"sync"
 	"testing"
 	"time"
@@ -58,7 +60,7 @@ func TestConfigStoreRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got != want {
+	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("config = %#v, want %#v", got, want)
 	}
 }
@@ -66,7 +68,7 @@ func TestConfigStoreRoundTrip(t *testing.T) {
 func TestEnsureElectsOneLeaderAndAuthenticatesStatus(t *testing.T) {
 	dir := t.TempDir()
 	value := testConfig(t)
-	secret := installTestAPIKey(t, dir)
+	value, secret := installTestAPIKey(t, dir, value)
 	t.Setenv(DefaultAPIKeyEnv, secret)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -102,6 +104,68 @@ func TestEnsureElectsOneLeaderAndAuthenticatesStatus(t *testing.T) {
 	secondHealth, err := second.Client().Health(ctx)
 	if err != nil || secondHealth.Generation != health.Generation {
 		t.Fatalf("second health = %#v, err = %v", secondHealth, err)
+	}
+}
+
+func TestLibraryAuthenticationDoesNotUseGatewaySettings(t *testing.T) {
+	dir := t.TempDir()
+	gatewayStore := gatewayconfig.Store{Dir: dir}
+	var gatewayMaster [32]byte
+	gatewayMaster[0] = 17
+	if _, err := gatewayStore.EnsureMasterKey(gatewayMaster); err != nil {
+		t.Fatal(err)
+	}
+	gatewayKey, err := gatewayconfig.GenerateAPIKey(gatewayMaster, "gateway only", time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	gatewaySettings, err := gatewayconfig.AddAPIKey(gatewayconfig.Default(), gatewayKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := gatewayStore.Save(gatewaySettings); err != nil {
+		t.Fatal(err)
+	}
+	gatewayConfigBefore, err := os.ReadFile(gatewayStore.Path())
+	if err != nil {
+		t.Fatal(err)
+	}
+	gatewayMasterBefore, err := os.ReadFile(gatewayStore.MasterKeyPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	value, librarySecret := installTestAPIKey(t, dir, testConfig(t))
+	t.Setenv(DefaultAPIKeyEnv, librarySecret)
+	runtime, err := EnsureWithOptions(context.Background(), testOptions(dir, value))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer runtime.Close()
+	if _, err := runtime.Client().Status(context.Background()); err != nil {
+		t.Fatalf("Library key was rejected: %v", err)
+	}
+	if _, err := NewClient(value.Endpoint(), gatewayKey.Secret, time.Second).Status(context.Background()); err == nil {
+		t.Fatal("Gateway key was accepted by the Library")
+	}
+
+	libraryStore := ConfigStore{Dir: dir}
+	if libraryStore.MasterKeyPath() == gatewayStore.MasterKeyPath() {
+		t.Fatal("Library and Gateway master-key paths are shared")
+	}
+	if _, err := os.Stat(libraryStore.MasterKeyPath()); err != nil {
+		t.Fatalf("Library master key was not created: %v", err)
+	}
+	gatewayConfigAfter, err := os.ReadFile(gatewayStore.Path())
+	if err != nil {
+		t.Fatal(err)
+	}
+	gatewayMasterAfter, err := os.ReadFile(gatewayStore.MasterKeyPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(gatewayConfigAfter, gatewayConfigBefore) || !bytes.Equal(gatewayMasterAfter, gatewayMasterBefore) {
+		t.Fatal("starting the Library modified Gateway authentication files")
 	}
 }
 
@@ -354,24 +418,11 @@ func testOptions(dir string, value Config) EnsureOptions {
 	}
 }
 
-func installTestAPIKey(t *testing.T, dir string) string {
+func installTestAPIKey(t *testing.T, dir string, value Config) (Config, string) {
 	t.Helper()
-	store := gatewayconfig.Store{Dir: dir}
-	var master [32]byte
-	master[0] = 42
-	if _, err := store.EnsureMasterKey(master); err != nil {
-		t.Fatal(err)
-	}
-	generated, err := gatewayconfig.GenerateAPIKey(master, "library test", time.Now())
+	updated, generated, err := (ConfigStore{Dir: dir}).CreateAPIKey(value, "library test", time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
-	value, err := gatewayconfig.AddAPIKey(gatewayconfig.Default(), generated)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := store.Save(value); err != nil {
-		t.Fatal(err)
-	}
-	return generated.Secret
+	return updated, generated.Secret
 }

@@ -1314,6 +1314,23 @@ func TestGatewaySettingsSaveNetworkAndManageAPIKeys(t *testing.T) {
 	}
 }
 
+func TestGatewayArrowNavigationFocusesEditablePort(t *testing.T) {
+	m := newManagedModel(context.Background(), config.Store{Dir: t.TempDir()}, nil, &fakeProviderRuntime{})
+	m.enterGatewaySettings()
+	m.enterGatewayNetwork()
+	m.gatewayPortInput.SetValue("")
+	updated, _ := m.updateGatewayNetwork(tea.KeyPressMsg{Code: tea.KeyDown})
+	m = updated.(model)
+	if m.gatewayNetworkFocus != 1 || !m.gatewayPortInput.Focused() || m.gatewayHostInput.Focused() {
+		t.Fatalf("Gateway input focus = index %d, host %v, port %v", m.gatewayNetworkFocus, m.gatewayHostInput.Focused(), m.gatewayPortInput.Focused())
+	}
+	updated, _ = m.updateGatewayNetwork(tea.KeyPressMsg{Code: '1', Text: "1"})
+	m = updated.(model)
+	if m.gatewayPortInput.Value() != "1" {
+		t.Fatalf("Gateway port input = %q", m.gatewayPortInput.Value())
+	}
+}
+
 func TestManagedProviderAddAppliesWithoutRediscoveringModels(t *testing.T) {
 	value := config.Default()
 	value.Provider.Model = "local/test-model"
