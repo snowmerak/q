@@ -201,8 +201,7 @@ func (r ScoutRunner) run(ctx context.Context, task ScoutTask, prompt string, lif
 		if reminders > 0 {
 			request.ToolChoice = client.NamedToolChoice(ScoutCompleteToolName)
 		}
-		r.Spec.Apply(&request)
-		response, err := r.Client.Chat(ctx, request)
+		response, err := r.Spec.Chat(ctx, r.Client, request)
 		if err != nil {
 			return ScoutResult{}, fmt.Errorf("subagent: scout model: %w", err)
 		}

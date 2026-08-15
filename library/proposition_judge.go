@@ -36,10 +36,13 @@ type propositionJudgeClient interface {
 }
 
 type modelPropositionJudge struct {
-	client  propositionJudgeClient
-	manager *providerhost.Manager
-	model   string
-	effort  string
+	client     propositionJudgeClient
+	manager    *providerhost.Manager
+	model      string
+	effort     string
+	group      string
+	candidates []client.ModelCandidate
+	router     *client.ModelRouter
 }
 
 func newConfiguredPropositionJudge(ctx context.Context, dir string) (*modelPropositionJudge, error) {
@@ -54,8 +57,21 @@ func newConfiguredPropositionJudge(ctx context.Context, dir string) (*modelPropo
 	if err != nil {
 		return nil, err
 	}
+	configuredCandidates, err := value.EffectiveModelCandidates(config.AgentRoleLibrarian)
+	if err != nil {
+		return nil, err
+	}
+	candidates := make([]client.ModelCandidate, len(configuredCandidates))
+	for index, candidate := range configuredCandidates {
+		candidates[index] = client.ModelCandidate{
+			Model: candidate.Model, ReasoningEffort: candidate.ReasoningEffort, Timeout: candidate.Timeout,
+		}
+	}
 	var configured *client.Client
-	judge := &modelPropositionJudge{model: agent.Model, effort: agent.ReasoningEffort}
+	judge := &modelPropositionJudge{
+		model: candidates[0].Model, effort: candidates[0].ReasoningEffort,
+		group: agent.Group, candidates: candidates,
+	}
 	if value.Provider.Managed {
 		manager, err := providerhost.NewManager(ctx, providerhost.Store{Dir: dir})
 		if err != nil {
@@ -141,7 +157,12 @@ func (j *modelPropositionJudge) JudgeProposition(
 		}}},
 		ToolChoice: client.ToolChoiceRequired, ParallelToolCalls: &parallel,
 	}
-	response, err := j.client.Chat(ctx, request)
+	var response *client.ChatResponse
+	if j.group == "" {
+		response, err = j.client.Chat(ctx, request)
+	} else {
+		response, _, err = j.router.RouteChat(ctx, j.client, request, j.candidates, 0)
+	}
 	if err != nil {
 		return PropositionDecision{}, fmt.Errorf("library: judge proposition: %w", err)
 	}

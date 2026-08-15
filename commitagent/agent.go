@@ -49,8 +49,7 @@ func runCommitAgent(
 		if !runtime.overviewed {
 			request.ToolChoice = client.NamedToolChoice(toolGitOverview)
 		}
-		spec.Apply(&request)
-		response, err := configuredClient.Chat(ctx, request)
+		response, err := spec.Chat(ctx, configuredClient, request)
 		if err != nil {
 			return proposalState{}, false, fmt.Errorf("q commit: commit agent: %w", err)
 		}

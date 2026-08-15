@@ -277,14 +277,26 @@ own clients automatically, so launching or replacing the child does not require
 the user to copy a key.
 
 `/model` lists the main `default` target, optional `embedding` target, and each
-subagent role. A role without an explicit model inherits the main model. An
-empty reasoning effort lets the provider choose its default; explicit efforts
-are accepted only when advertised by that model. The built-in roles are
+subagent role. A role without an explicit model or group inherits the main
+model. An empty reasoning effort lets the provider choose its default; explicit
+efforts are accepted only when advertised by that model. The built-in roles are
 `griller`, `scout`, `research`, `planner`, `coder`, `commit`, `advisor`,
 `thinker`, and `librarian`. The `thinker` role performs durable proposition
 selection and extraction after successful conversation turns. The `librarian`
 role independently judges whether each extracted proposition should be created,
 merged, or discarded.
+
+Roles may also reference an ordered model group. Each candidate can override
+the role's reasoning effort and can set an optional timeout. q tries the first
+candidate and falls back immediately on a candidate timeout or HTTP 5xx error.
+Other HTTP errors, tool failures, user cancellation, and structured-output
+validation failures do not trigger model fallback. Three consecutive transient
+failures open that model's in-memory circuit for 30 seconds; one half-open probe
+is allowed after the cooldown. Circuit state is process-local and is not
+persisted. A successful fallback remains selected for the rest of that agent
+execution; a new execution starts from the first candidate whose circuit allows
+a request. Define groups in `~/.q/config.yaml`; `/model` then lists each
+`group:<name>` choice for agent roles.
 
 The embedding picker accepts dimensions from 1 to 4096. Because the shared
 model catalog does not identify embedding-only models, it currently shows all
@@ -305,12 +317,20 @@ context:
   trigger_ratio: 0.85
   target_ratio: 0.22
   recent_ratio: 0.07
+model_groups:
+  heavy:
+    candidates:
+      - model: codex/gpt-5.6-sol
+        reasoning_effort: high
+        timeout: 60s
+      - model: grok/grok-4.5
+        reasoning_effort: high
+        timeout: 90s
 agents:
   max_parallel: 3
   roles:
     planner:
-      model: codex/gpt-5.6-sol
-      reasoning_effort: high
+      group: heavy
     coder:
       model: codex/gpt-5.6-terra
       reasoning_effort: medium

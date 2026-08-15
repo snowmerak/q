@@ -78,6 +78,8 @@ const (
 	loomControlCount
 )
 
+const modelGroupChoicePrefix = "group:"
+
 const (
 	defaultModelTarget   = "default"
 	embeddingModelTarget = "embedding"
@@ -1711,6 +1713,10 @@ func (m model) updateModelPicker(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		if len(filtered) == 0 {
 			return m, nil
 		}
+		if _, grouped := modelGroupChoice(m.draftConfig, filtered[m.modelCursor].ID); grouped {
+			m.status = "Context overrides apply to models, not model groups"
+			return m, nil
+		}
 		return m.enterContextWindowPicker(filtered[m.modelCursor])
 	case "enter":
 		if len(filtered) == 0 {
@@ -1734,6 +1740,14 @@ func (m model) updateModelPicker(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			}
 			m.modelFilter.Blur()
 			return m, m.embeddingDimensions.Focus()
+		}
+		if group, grouped := modelGroupChoice(value, selected.ID); grouped {
+			value = withAgentGroup(value, m.modelTarget, group)
+			if _, err := subagent.Resolve(value, m.modelTarget, m.models); err != nil {
+				m.status = err.Error()
+				return m, nil
+			}
+			return m.saveModelTargetConfiguration(value, m.modelTarget)
 		}
 		value = withAgentModel(value, m.modelTarget, selected.ID)
 		m.draftConfig = value
@@ -2743,12 +2757,16 @@ func (m *model) selectConfiguredModel() {
 	if m.modelTarget == embeddingModelTarget {
 		modelID = m.draftConfig.Embedding.Model
 	} else if m.modelTarget != "" && m.modelTarget != defaultModelTarget {
-		if agent, ok := m.draftConfig.Agents.Roles[m.modelTarget]; ok && agent.Model != "" {
-			modelID = agent.Model
+		if agent, ok := m.draftConfig.Agents.Roles[m.modelTarget]; ok {
+			if agent.Group != "" {
+				modelID = modelGroupChoicePrefix + agent.Group
+			} else if agent.Model != "" {
+				modelID = agent.Model
+			}
 		}
 	}
 	m.modelCursor = 0
-	for index, candidate := range m.models {
+	for index, candidate := range m.selectableModels() {
 		if candidate.ID == modelID {
 			m.modelCursor = index
 			return
@@ -2779,6 +2797,16 @@ func withAgentModel(value config.Config, role, modelID string) config.Config {
 	value.Agents.Roles = cloneAgentRoles(value.Agents.Roles)
 	agent := value.Agents.Roles[role]
 	agent.Model = modelID
+	agent.Group = ""
+	value.Agents.Roles[role] = agent
+	return value
+}
+
+func withAgentGroup(value config.Config, role, group string) config.Config {
+	value.Agents.Roles = cloneAgentRoles(value.Agents.Roles)
+	agent := value.Agents.Roles[role]
+	agent.Model = ""
+	agent.Group = group
 	value.Agents.Roles[role] = agent
 	return value
 }
@@ -2827,17 +2855,43 @@ func reasoningEffortCursor(value config.Config, role string, efforts []string) i
 }
 
 func (m model) filteredModels() []client.Model {
+	available := m.selectableModels()
 	query := strings.ToLower(strings.TrimSpace(m.modelFilter.Value()))
 	if query == "" {
-		return m.models
+		return available
 	}
-	filtered := make([]client.Model, 0, len(m.models))
-	for _, candidate := range m.models {
+	filtered := make([]client.Model, 0, len(available))
+	for _, candidate := range available {
 		if strings.Contains(strings.ToLower(candidate.ID), query) {
 			filtered = append(filtered, candidate)
 		}
 	}
 	return filtered
+}
+
+func (m model) selectableModels() []client.Model {
+	result := append([]client.Model(nil), m.models...)
+	if m.modelTarget == "" || m.modelTarget == defaultModelTarget || m.modelTarget == embeddingModelTarget {
+		return result
+	}
+	names := make([]string, 0, len(m.draftConfig.ModelGroups))
+	for name := range m.draftConfig.ModelGroups {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		result = append(result, client.Model{ID: modelGroupChoicePrefix + name})
+	}
+	return result
+}
+
+func modelGroupChoice(value config.Config, choice string) (string, bool) {
+	name, grouped := strings.CutPrefix(choice, modelGroupChoicePrefix)
+	if !grouped {
+		return "", false
+	}
+	_, found := value.ModelGroups[name]
+	return name, found
 }
 
 func (m *model) resetConversation() {
@@ -3994,13 +4048,17 @@ func (m model) viewModels() string {
 			}
 			body.WriteString(prefix)
 			body.WriteString(style.Render(filtered[index].ID))
-			if filtered[index].ContextLength > 0 {
+			if group, grouped := modelGroupChoice(m.draftConfig, filtered[index].ID); grouped {
+				body.WriteString(subtleStyle.Render(fmt.Sprintf("  · %d ordered candidates", len(m.draftConfig.ModelGroups[group].Candidates))))
+			} else if filtered[index].ContextLength > 0 {
 				body.WriteString(subtleStyle.Render("  · context " + formatTokenCount(filtered[index].ContextLength)))
 			} else {
 				body.WriteString(subtleStyle.Render("  · context unknown"))
 			}
-			if _, overridden := m.gatewayContextWindowOverride(filtered[index].ID); overridden {
-				body.WriteString(subtleStyle.Render(" · Gateway override"))
+			if _, grouped := modelGroupChoice(m.draftConfig, filtered[index].ID); !grouped {
+				if _, overridden := m.gatewayContextWindowOverride(filtered[index].ID); overridden {
+					body.WriteString(subtleStyle.Render(" · Gateway override"))
+				}
 			}
 			body.WriteString("\n")
 		}
@@ -4009,9 +4067,10 @@ func (m model) viewModels() string {
 	if m.discovering {
 		body.WriteString(helpStyle.Render("loading models · ctrl+c quit"))
 	} else {
-		help := fmt.Sprintf("%d/%d models · type to filter · ↑/↓ select · ctrl+e context · enter save · esc back", len(filtered), len(m.models))
+		available := m.selectableModels()
+		help := fmt.Sprintf("%d/%d choices · type to filter · ↑/↓ select · ctrl+e context · enter save · esc back", len(filtered), len(available))
 		if m.modelTarget != "" && m.modelTarget != defaultModelTarget {
-			help = fmt.Sprintf("%d/%d models · type to filter · ↑/↓ select · ctrl+e context · enter next/save · esc back", len(filtered), len(m.models))
+			help = fmt.Sprintf("%d/%d choices · type to filter · ↑/↓ select · ctrl+e context · enter next/save · esc back", len(filtered), len(available))
 		}
 		body.WriteString(helpStyle.Render(help))
 	}
@@ -4147,6 +4206,16 @@ func targetModelSummary(value config.Config, target string) string {
 		return fmt.Sprintf("%s · %d dimensions", value.Embedding.Model, value.Embedding.Dimensions)
 	}
 	agent, configured := value.Agents.Roles[target]
+	if configured && agent.Group != "" {
+		summary := "group " + agent.Group
+		if group, found := value.ModelGroups[agent.Group]; found {
+			summary += fmt.Sprintf(" · %d candidates", len(group.Candidates))
+		}
+		if agent.ReasoningEffort != "" {
+			summary += " · effort " + agent.ReasoningEffort
+		}
+		return summary
+	}
 	if !configured || agent.Model == "" {
 		return "inherits default · " + value.Provider.Model
 	}

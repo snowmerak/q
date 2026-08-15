@@ -228,7 +228,9 @@ retry after restart or the next trigger.
 The registration adjudicator uses the separate built-in `librarian` role. It
 is configurable from `/model` or `agents.roles.librarian` and independently
 inherits the active chat model when no override is present. A running Library
-process reads this setting at startup.
+process reads this setting at startup. Like other agent roles, `librarian` may
+reference a `model_groups` entry; candidate timeout and HTTP 5xx failures use
+the ordered fallback and process-local circuit breaker policy.
 
 With no existing checkpoint, accumulation starts at the latest context
 compaction summary, or at the first user message when no summary exists. A

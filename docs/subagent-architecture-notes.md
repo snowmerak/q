@@ -97,6 +97,14 @@ root/orchestrator가 coder 재시도, planner를 통한 재계획, 사용자 질
 ## 설정 구조 초안
 
 ```yaml
+model_groups:
+  heavy:
+    candidates:
+      - model: codex/gpt-5.6-sol
+        reasoning_effort: high
+        timeout: 60s
+      - model: grok/grok-4.5
+        reasoning_effort: high
 agents:
   max_parallel: 3
   roles:
@@ -110,8 +118,7 @@ agents:
       model: ""
       reasoning_effort: ""
     planner:
-      model: ""
-      reasoning_effort: ""
+      group: heavy
     coder:
       model: ""
       reasoning_effort: ""
@@ -123,8 +130,10 @@ agents:
       reasoning_effort: ""
 ```
 
-모델을 비워두면 현재 채팅 모델 또는 역할별 기본 모델을 상속하는 방식을
-사용한다. `reasoning_effort`의 기본값은 빈 문자열이다. 값이 비어 있거나 공백만
+`model`과 `group`을 모두 비워두면 현재 채팅 모델 또는 역할별 기본 모델을
+상속한다. 둘은 동시에 지정할 수 없다. 그룹은 후보 순서대로 timeout 또는 HTTP
+5xx 장애에 fallback하며, 후보의 `timeout`을 생략하면 별도 제한을 걸지 않는다.
+`reasoning_effort`의 기본값은 빈 문자열이다. 값이 비어 있거나 공백만
 있으면 요청 필드 자체를 전송하지 않고 provider의 모델 기본값을 사용한다.
 명시한 값은 `/v1/models`의 `capabilities.reasoning`이 `effort` control을 광고할
 때만 허용하며, `supported_efforts`가 제공되면 그 목록에 포함된 값인지 검증한다.

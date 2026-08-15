@@ -113,8 +113,7 @@ func (r Runner) Run(ctx context.Context, job Job) (Result, error) {
 			Messages: messages, Tools: tools, ToolChoice: client.ToolChoiceRequired,
 			ParallelToolCalls: &parallel, WorkingDirectory: job.WorkingDirectory,
 		}
-		r.Spec.Apply(&request)
-		response, err := r.Client.Chat(ctx, request)
+		response, err := r.Spec.Chat(ctx, r.Client, request)
 		if err != nil {
 			return Result{}, fmt.Errorf("thinker: model: %w", err)
 		}

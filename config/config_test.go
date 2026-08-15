@@ -8,6 +8,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/snowmerak/q/lsp"
 )
@@ -18,8 +19,14 @@ func TestStoreRoundTrip(t *testing.T) {
 	want.Provider.Model = "test-model"
 	want.Provider.APIKey = "secret"
 	want.Embedding = EmbeddingConfig{Model: "embed-model", Dimensions: 1536}
+	want.ModelGroups = map[string]ModelGroupConfig{
+		"heavy": {Candidates: []ModelCandidateConfig{
+			{Model: "planning-model", ReasoningEffort: "high", Timeout: 45 * time.Second},
+			{Model: "backup-model", ReasoningEffort: "medium"},
+		}},
+	}
 	want.Agents.Roles = map[string]AgentConfig{
-		AgentRolePlanner:   {Model: "planning-model", ReasoningEffort: "high"},
+		AgentRolePlanner:   {Group: "heavy"},
 		AgentRoleCoder:     {Model: "coding-model", ReasoningEffort: "medium"},
 		AgentRoleCommit:    {Model: "commit-model", ReasoningEffort: "low"},
 		AgentRoleThinker:   {Model: "thinking-model", ReasoningEffort: "high"},
@@ -136,6 +143,30 @@ func TestEffectiveAgentUsesRoleOverrideAndActiveModelFallback(t *testing.T) {
 	}
 }
 
+func TestEffectiveModelCandidatesResolvesOrderedGroup(t *testing.T) {
+	value := Default()
+	value.Provider.Model = "active-model"
+	value.ModelGroups = map[string]ModelGroupConfig{
+		"heavy": {Candidates: []ModelCandidateConfig{
+			{Model: "primary", Timeout: 10 * time.Second},
+			{Model: "secondary", ReasoningEffort: "medium"},
+		}},
+	}
+	value.Agents.Roles = map[string]AgentConfig{
+		AgentRolePlanner: {Group: "heavy", ReasoningEffort: "high"},
+	}
+
+	candidates, err := value.EffectiveModelCandidates(AgentRolePlanner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(candidates) != 2 || candidates[0].Model != "primary" ||
+		candidates[0].ReasoningEffort != "high" || candidates[0].Timeout != 10*time.Second ||
+		candidates[1].Model != "secondary" || candidates[1].ReasoningEffort != "medium" {
+		t.Fatalf("candidates = %#v", candidates)
+	}
+}
+
 func TestThinkerUsesRoleOverrideAndActiveModelFallback(t *testing.T) {
 	value := Default()
 	value.Provider.Model = "active-model"
@@ -243,6 +274,35 @@ func TestValidateAgentConfiguration(t *testing.T) {
 			value := Default()
 			value.Provider.Model = "active-model"
 			value.Agents = test.agents
+			if err := value.Validate(); err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("error = %v; want containing %q", err, test.want)
+			}
+		})
+	}
+}
+
+func TestValidateModelGroups(t *testing.T) {
+	tests := []struct {
+		name   string
+		groups map[string]ModelGroupConfig
+		agent  AgentConfig
+		want   string
+	}{
+		{name: "empty group", groups: map[string]ModelGroupConfig{"heavy": {}}, want: "at least one"},
+		{name: "empty model", groups: map[string]ModelGroupConfig{"heavy": {Candidates: []ModelCandidateConfig{{}}}}, want: "model must be"},
+		{name: "duplicate model", groups: map[string]ModelGroupConfig{"heavy": {Candidates: []ModelCandidateConfig{{Model: "one"}, {Model: "one"}}}}, want: "duplicate"},
+		{name: "negative timeout", groups: map[string]ModelGroupConfig{"heavy": {Candidates: []ModelCandidateConfig{{Model: "one", Timeout: -time.Second}}}}, want: "timeout"},
+		{name: "unknown group", agent: AgentConfig{Group: "missing"}, want: "unknown model group"},
+		{name: "model and group", groups: map[string]ModelGroupConfig{"heavy": {Candidates: []ModelCandidateConfig{{Model: "one"}}}}, agent: AgentConfig{Model: "one", Group: "heavy"}, want: "mutually exclusive"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			value := Default()
+			value.Provider.Model = "active-model"
+			value.ModelGroups = test.groups
+			if test.agent != (AgentConfig{}) {
+				value.Agents.Roles = map[string]AgentConfig{AgentRolePlanner: test.agent}
+			}
 			if err := value.Validate(); err == nil || !strings.Contains(err.Error(), test.want) {
 				t.Fatalf("error = %v; want containing %q", err, test.want)
 			}

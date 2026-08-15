@@ -447,8 +447,7 @@ func (runtime *commitToolRuntime) analyzeFile(ctx context.Context, path string) 
 			}, "required": []string{"summary", "highlights", "risks"}, "additionalProperties": false,
 		},
 	}
-	runtime.spec.Apply(&request)
-	response, err := runtime.client.Chat(ctx, request)
+	response, err := runtime.spec.Chat(ctx, runtime.client, request)
 	if err != nil {
 		return fileAnalysis{}, err
 	}

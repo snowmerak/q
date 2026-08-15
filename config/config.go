@@ -38,13 +38,14 @@ const (
 var ErrNotFound = errors.New("q config not found")
 
 type Config struct {
-	Version   int              `yaml:"version"`
-	Provider  ProviderConfig   `yaml:"provider"`
-	Embedding EmbeddingConfig  `yaml:"embedding,omitempty"`
-	Context   ContextConfig    `yaml:"context,omitempty"`
-	Agents    AgentsConfig     `yaml:"agents,omitempty"`
-	Loom      LoomConfig       `yaml:"loom,omitempty"`
-	LSP       lsp.GlobalConfig `yaml:"lsp,omitempty"`
+	Version     int                         `yaml:"version"`
+	Provider    ProviderConfig              `yaml:"provider"`
+	Embedding   EmbeddingConfig             `yaml:"embedding,omitempty"`
+	Context     ContextConfig               `yaml:"context,omitempty"`
+	ModelGroups map[string]ModelGroupConfig `yaml:"model_groups,omitempty"`
+	Agents      AgentsConfig                `yaml:"agents,omitempty"`
+	Loom        LoomConfig                  `yaml:"loom,omitempty"`
+	LSP         lsp.GlobalConfig            `yaml:"lsp,omitempty"`
 }
 
 type ProviderConfig struct {
@@ -91,11 +92,23 @@ type AgentsConfig struct {
 	Roles       map[string]AgentConfig `yaml:"roles,omitempty"`
 }
 
-// AgentConfig selects the model controls for one subagent role. An empty
-// Model inherits the active chat model. An empty ReasoningEffort leaves the
-// model/provider default unchanged.
+type ModelGroupConfig struct {
+	Candidates []ModelCandidateConfig `yaml:"candidates"`
+}
+
+type ModelCandidateConfig struct {
+	Model           string        `yaml:"model"`
+	ReasoningEffort string        `yaml:"reasoning_effort,omitempty"`
+	Timeout         time.Duration `yaml:"timeout,omitempty"`
+}
+
+// AgentConfig selects the model controls for one subagent role. Model and
+// Group are mutually exclusive. With neither set, the active chat model is
+// inherited. ReasoningEffort is also the default for group candidates that do
+// not provide their own effort.
 type AgentConfig struct {
 	Model           string `yaml:"model,omitempty"`
+	Group           string `yaml:"group,omitempty"`
 	ReasoningEffort string `yaml:"reasoning_effort,omitempty"`
 }
 
@@ -181,6 +194,30 @@ func (c Config) Validate() error {
 	if c.Agents.MaxParallel < 0 {
 		return fmt.Errorf("config: agents max_parallel must not be negative")
 	}
+	for name, group := range c.ModelGroups {
+		if strings.TrimSpace(name) == "" || name != strings.TrimSpace(name) {
+			return fmt.Errorf("config: model group name %q must be non-empty without surrounding whitespace", name)
+		}
+		if len(group.Candidates) == 0 {
+			return fmt.Errorf("config: model group %q must contain at least one candidate", name)
+		}
+		seen := make(map[string]struct{}, len(group.Candidates))
+		for index, candidate := range group.Candidates {
+			if candidate.Model == "" || candidate.Model != strings.TrimSpace(candidate.Model) {
+				return fmt.Errorf("config: model group %q candidate %d model must be non-empty without surrounding whitespace", name, index)
+			}
+			if _, duplicate := seen[candidate.Model]; duplicate {
+				return fmt.Errorf("config: model group %q contains duplicate model %q", name, candidate.Model)
+			}
+			seen[candidate.Model] = struct{}{}
+			if candidate.ReasoningEffort != strings.TrimSpace(candidate.ReasoningEffort) {
+				return fmt.Errorf("config: model group %q candidate %d reasoning_effort must not have surrounding whitespace", name, index)
+			}
+			if candidate.Timeout < 0 {
+				return fmt.Errorf("config: model group %q candidate %d timeout must not be negative", name, index)
+			}
+		}
+	}
 	for role, agent := range c.Agents.Roles {
 		if !IsAgentRole(role) {
 			return fmt.Errorf("config: unsupported agent role %q", role)
@@ -191,6 +228,17 @@ func (c Config) Validate() error {
 		trimmedEffort := strings.TrimSpace(agent.ReasoningEffort)
 		if trimmedEffort != "" && agent.ReasoningEffort != trimmedEffort {
 			return fmt.Errorf("config: agent %q reasoning_effort must not have surrounding whitespace", role)
+		}
+		if agent.Group != strings.TrimSpace(agent.Group) {
+			return fmt.Errorf("config: agent %q group must not have surrounding whitespace", role)
+		}
+		if agent.Model != "" && agent.Group != "" {
+			return fmt.Errorf("config: agent %q model and group are mutually exclusive", role)
+		}
+		if agent.Group != "" {
+			if _, found := c.ModelGroups[agent.Group]; !found {
+				return fmt.Errorf("config: agent %q references unknown model group %q", role, agent.Group)
+			}
 		}
 	}
 	loomConfig := c.EffectiveLoom()
@@ -324,8 +372,32 @@ func (c Config) EffectiveAgent(role string) (AgentConfig, error) {
 		return AgentConfig{}, fmt.Errorf("config: unsupported agent role %q", role)
 	}
 	result := c.EffectiveAgents().Roles[role]
-	if result.Model == "" {
+	if result.Model == "" && result.Group == "" {
 		result.Model = c.Provider.Model
+	}
+	return result, nil
+}
+
+// EffectiveModelCandidates resolves a role to an ordered model list. A
+// role-level reasoning effort supplies the default for group candidates.
+func (c Config) EffectiveModelCandidates(role string) ([]ModelCandidateConfig, error) {
+	agent, err := c.EffectiveAgent(role)
+	if err != nil {
+		return nil, err
+	}
+	if agent.Group == "" {
+		return []ModelCandidateConfig{{Model: agent.Model, ReasoningEffort: agent.ReasoningEffort}}, nil
+	}
+	group, found := c.ModelGroups[agent.Group]
+	if !found {
+		return nil, fmt.Errorf("config: agent %q references unknown model group %q", role, agent.Group)
+	}
+	result := make([]ModelCandidateConfig, len(group.Candidates))
+	copy(result, group.Candidates)
+	for index := range result {
+		if result[index].ReasoningEffort == "" {
+			result[index].ReasoningEffort = agent.ReasoningEffort
+		}
 	}
 	return result, nil
 }

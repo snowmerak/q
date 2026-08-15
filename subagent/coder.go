@@ -120,8 +120,7 @@ func (r CoderRunner) run(
 		if reminders > 0 {
 			request.ToolChoice = client.NamedToolChoice(CoderCompleteToolName)
 		}
-		r.Spec.Apply(&request)
-		response, err := r.Client.Chat(ctx, request)
+		response, err := r.Spec.Chat(ctx, r.Client, request)
 		if err != nil {
 			return CoderResult{}, fmt.Errorf("subagent: coder model: %w", err)
 		}

@@ -177,8 +177,7 @@ func (r GrillerRunner) Run(ctx context.Context, task GrillTask) (brief GrillBrie
 		if reminders > 0 {
 			request.ToolChoice = client.NamedToolChoice(SubmitBriefToolName)
 		}
-		r.Spec.Apply(&request)
-		response, err := r.Client.Chat(ctx, request)
+		response, err := r.Spec.Chat(ctx, r.Client, request)
 		if err != nil {
 			return GrillBrief{}, fmt.Errorf("subagent: griller model: %w", err)
 		}
@@ -331,8 +330,7 @@ func (r PlannerRunner) Run(ctx context.Context, brief GrillBrief) (proposal Plan
 		if reminders > 0 {
 			request.ToolChoice = client.NamedToolChoice(SubmitPlanToolName)
 		}
-		r.Spec.Apply(&request)
-		response, err := r.Client.Chat(ctx, request)
+		response, err := r.Spec.Chat(ctx, r.Client, request)
 		if err != nil {
 			return PlanProposal{}, fmt.Errorf("subagent: planner model: %w", err)
 		}

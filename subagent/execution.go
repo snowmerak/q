@@ -158,8 +158,7 @@ func (r PlannerReviewRunner) Run(ctx context.Context, input TaskReviewRequest) (
 		if len(available) == 1 {
 			request.ToolChoice = client.NamedToolChoice(ReviewTaskToolName)
 		}
-		r.Spec.Apply(&request)
-		response, err := r.Client.Chat(ctx, request)
+		response, err := r.Spec.Chat(ctx, r.Client, request)
 		if err != nil {
 			return TaskReview{}, fmt.Errorf("subagent: planner review model: %w", err)
 		}

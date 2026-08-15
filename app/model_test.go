@@ -858,6 +858,38 @@ func TestModelPickerCanRestoreSubagentDefaultInheritance(t *testing.T) {
 	}
 }
 
+func TestAgentModelSelectionReplacesGroupAndSummaryShowsGroup(t *testing.T) {
+	value := config.Default()
+	value.Provider.Model = "default-model"
+	value.ModelGroups = map[string]config.ModelGroupConfig{
+		"heavy": {Candidates: []config.ModelCandidateConfig{{Model: "primary"}, {Model: "secondary"}}},
+	}
+	value.Agents.Roles = map[string]config.AgentConfig{
+		config.AgentRolePlanner: {Group: "heavy", ReasoningEffort: "high"},
+	}
+	if summary := targetModelSummary(value, config.AgentRolePlanner); summary != "group heavy · 2 candidates · effort high" {
+		t.Fatalf("summary = %q", summary)
+	}
+	updated := withAgentModel(value, config.AgentRolePlanner, "single-model")
+	agent := updated.Agents.Roles[config.AgentRolePlanner]
+	if agent.Model != "single-model" || agent.Group != "" || agent.ReasoningEffort != "high" {
+		t.Fatalf("agent = %#v", agent)
+	}
+	m := model{
+		draftConfig: value, modelTarget: config.AgentRolePlanner,
+		models: []client.Model{{ID: "primary"}, {ID: "secondary"}},
+	}
+	choices := m.selectableModels()
+	if len(choices) != 3 || choices[2].ID != "group:heavy" {
+		t.Fatalf("choices = %#v", choices)
+	}
+	grouped := withAgentGroup(updated, config.AgentRolePlanner, "heavy")
+	agent = grouped.Agents.Roles[config.AgentRolePlanner]
+	if agent.Model != "" || agent.Group != "heavy" {
+		t.Fatalf("grouped agent = %#v", agent)
+	}
+}
+
 func TestSlashGatewayOpensSetupWithoutManagedRuntime(t *testing.T) {
 	value := config.Default()
 	value.Provider.Model = "test-model"
