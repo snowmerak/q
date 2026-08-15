@@ -225,6 +225,11 @@ committed only after the Thinker successfully calls `thinking_complete`; a
 failure leaves the same queue head and deterministic segment ID available for
 retry after restart or the next trigger.
 
+The registration adjudicator uses the separate built-in `librarian` role. It
+is configurable from `/model` or `agents.roles.librarian` and independently
+inherits the active chat model when no override is present. A running Library
+process reads this setting at startup.
+
 With no existing checkpoint, accumulation starts at the latest context
 compaction summary, or at the first user message when no summary exists. A
 segment closes under exactly four conditions:
@@ -369,7 +374,7 @@ authentication.
 bounded single-proposition schema and obvious credential-like content, then
 places the request in a durable SQLite FIFO queue. The handler waits while the
 single Library worker searches up to five existing propositions using the
-final hybrid score with recency disabled and starts a fresh `thinker` role
+final hybrid score with recency disabled and starts a fresh `librarian` role
 session to choose `create`, `merge`, or `discard`. Create persists a new global
 record; merge unions bounded refs, queries, tags, confidence, and matching query
 vectors into the selected record; discard writes no proposition. Reusing a key

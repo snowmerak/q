@@ -280,9 +280,11 @@ the user to copy a key.
 subagent role. A role without an explicit model inherits the main model. An
 empty reasoning effort lets the provider choose its default; explicit efforts
 are accepted only when advertised by that model. The built-in roles are
-`griller`, `scout`, `research`, `planner`, `coder`, `commit`, `advisor`, and
-`thinker`. The `thinker` role performs durable proposition selection and
-extraction after successful conversation turns.
+`griller`, `scout`, `research`, `planner`, `coder`, `commit`, `advisor`,
+`thinker`, and `librarian`. The `thinker` role performs durable proposition
+selection and extraction after successful conversation turns. The `librarian`
+role independently judges whether each extracted proposition should be created,
+merged, or discarded.
 
 The embedding picker accepts dimensions from 1 to 4096. Because the shared
 model catalog does not identify embedding-only models, it currently shows all
@@ -451,7 +453,7 @@ plan are retained. Checkpoints advance only after `thinking_complete`, so a
 failed or interrupted extraction retries the same durable segment. The Thinker
 calls a private `register_proposition` tool once per proposition. q Library
 durably queues each call in SQLite, retrieves up to five existing propositions
-with hybrid search and recency disabled, and starts a fresh `thinker` model
+with hybrid search and recency disabled, and starts a fresh `librarian` model
 session to choose `create`, `merge`, or `discard`. Registrations wait for that
 serialized decision. Completed job payloads expire after seven days, while
 compact idempotency receipts remain so delayed retries return the same result.

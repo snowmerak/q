@@ -662,16 +662,18 @@ func TestSlashModelConfiguresCommitAgentModelAndReasoning(t *testing.T) {
 	}
 }
 
-func TestModelTargetsIncludeThinker(t *testing.T) {
-	found := false
-	for _, target := range modelTargets() {
-		if target == config.AgentRoleThinker {
-			found = true
-			break
+func TestModelTargetsIncludeLearningRoles(t *testing.T) {
+	for _, expected := range []string{config.AgentRoleThinker, config.AgentRoleLibrarian} {
+		found := false
+		for _, target := range modelTargets() {
+			if target == expected {
+				found = true
+				break
+			}
 		}
-	}
-	if !found {
-		t.Fatalf("model targets = %#v", modelTargets())
+		if !found {
+			t.Fatalf("model targets = %#v; missing %q", modelTargets(), expected)
+		}
 	}
 }
 

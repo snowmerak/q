@@ -19,10 +19,11 @@ func TestStoreRoundTrip(t *testing.T) {
 	want.Provider.APIKey = "secret"
 	want.Embedding = EmbeddingConfig{Model: "embed-model", Dimensions: 1536}
 	want.Agents.Roles = map[string]AgentConfig{
-		AgentRolePlanner: {Model: "planning-model", ReasoningEffort: "high"},
-		AgentRoleCoder:   {Model: "coding-model", ReasoningEffort: "medium"},
-		AgentRoleCommit:  {Model: "commit-model", ReasoningEffort: "low"},
-		AgentRoleThinker: {Model: "thinking-model", ReasoningEffort: "high"},
+		AgentRolePlanner:   {Model: "planning-model", ReasoningEffort: "high"},
+		AgentRoleCoder:     {Model: "coding-model", ReasoningEffort: "medium"},
+		AgentRoleCommit:    {Model: "commit-model", ReasoningEffort: "low"},
+		AgentRoleThinker:   {Model: "thinking-model", ReasoningEffort: "high"},
+		AgentRoleLibrarian: {Model: "librarian-model", ReasoningEffort: "medium"},
 	}
 	want.LSP = lsp.GlobalConfig{
 		Servers:   map[string]lsp.ServerConfig{"gopls": {Languages: []string{"go"}, Command: "gopls"}},
@@ -153,20 +154,40 @@ func TestThinkerUsesRoleOverrideAndActiveModelFallback(t *testing.T) {
 	}
 }
 
-func TestAgentRolesIncludesThinker(t *testing.T) {
+func TestLibrarianUsesRoleOverrideAndActiveModelFallback(t *testing.T) {
+	value := Default()
+	value.Provider.Model = "active-model"
+
+	inherited, err := value.EffectiveAgent(AgentRoleLibrarian)
+	if err != nil || inherited.Model != "active-model" || inherited.ReasoningEffort != "" {
+		t.Fatalf("inherited librarian = %#v, err = %v", inherited, err)
+	}
+
+	value.Agents.Roles = map[string]AgentConfig{
+		AgentRoleLibrarian: {Model: "librarian-model", ReasoningEffort: "medium"},
+	}
+	overridden, err := value.EffectiveAgent(AgentRoleLibrarian)
+	if err != nil || overridden.Model != "librarian-model" || overridden.ReasoningEffort != "medium" {
+		t.Fatalf("overridden librarian = %#v, err = %v", overridden, err)
+	}
+}
+
+func TestAgentRolesIncludesLearningRoles(t *testing.T) {
 	roles := AgentRoles()
-	if !IsAgentRole(AgentRoleThinker) {
-		t.Fatal("thinker is not recognized as an agent role")
-	}
-	found := false
-	for _, role := range roles {
-		if role == AgentRoleThinker {
-			found = true
-			break
+	for _, expected := range []string{AgentRoleThinker, AgentRoleLibrarian} {
+		if !IsAgentRole(expected) {
+			t.Fatalf("%s is not recognized as an agent role", expected)
 		}
-	}
-	if !found {
-		t.Fatalf("agent roles = %#v", roles)
+		found := false
+		for _, role := range roles {
+			if role == expected {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("agent roles = %#v; missing %q", roles, expected)
+		}
 	}
 }
 

@@ -24,14 +24,15 @@ const (
 	DefaultLoomStoreMiB     = 256
 	DefaultLoomGCGraceHours = 1
 
-	AgentRoleGriller  = "griller"
-	AgentRoleScout    = "scout"
-	AgentRoleResearch = "research"
-	AgentRolePlanner  = "planner"
-	AgentRoleCoder    = "coder"
-	AgentRoleCommit   = "commit"
-	AgentRoleAdvisor  = "advisor"
-	AgentRoleThinker  = "thinker"
+	AgentRoleGriller   = "griller"
+	AgentRoleScout     = "scout"
+	AgentRoleResearch  = "research"
+	AgentRolePlanner   = "planner"
+	AgentRoleCoder     = "coder"
+	AgentRoleCommit    = "commit"
+	AgentRoleAdvisor   = "advisor"
+	AgentRoleThinker   = "thinker"
+	AgentRoleLibrarian = "librarian"
 )
 
 var ErrNotFound = errors.New("q config not found")
@@ -107,6 +108,7 @@ var agentRoles = []string{
 	AgentRoleCommit,
 	AgentRoleAdvisor,
 	AgentRoleThinker,
+	AgentRoleLibrarian,
 }
 
 func Default() Config {

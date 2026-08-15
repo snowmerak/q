@@ -50,7 +50,7 @@ func newConfiguredPropositionJudge(ctx context.Context, dir string) (*modelPropo
 	if err != nil {
 		return nil, err
 	}
-	agent, err := value.EffectiveAgent(config.AgentRoleThinker)
+	agent, err := value.EffectiveAgent(config.AgentRoleLibrarian)
 	if err != nil {
 		return nil, err
 	}
