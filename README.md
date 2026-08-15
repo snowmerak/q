@@ -2,14 +2,17 @@
 
 `q` is a workspace-native terminal agent built with Bubble Tea. It combines a
 multi-provider chat client, approval-gated planning and execution, isolated
-subagents, durable workspace history, Loom artifacts, and an interactive Git
-commit workflow.
+subagents, ordered model fallback, durable workspace history, a shared Library
+for Agent Skills and propositions, read-only language-server queries, Loom
+artifacts, and an interactive Git commit workflow.
 
 `q` embeds [`snowmerak/llm-provider`](https://github.com/snowmerak/llm-provider)
 and supervises its OpenAI-compatible Gateway as a child of the current `q`
 executable.
 
 ## Quick start
+
+q requires Go 1.26.5 or later.
 
 Run from source:
 
@@ -30,35 +33,14 @@ before Gateway, Session Store, Loom, and MCP initialization completes. Provider
 model discovery runs in parallel with a 1.5-second budget; providers that do
 not answer in time are skipped for that refresh instead of delaying the UI.
 
+### Standalone Gateway
+
 Run only the configured Gateway, without the TUI or workspace services:
 
 ```powershell
 q gateway [--host <ip>] [--port <port>]
+q gateway config
 ```
-
-Run the global Library as a dedicated foreground service:
-
-```powershell
-q library
-```
-
-Configure the default Library bind host and fixed rendezvous port in the TUI:
-
-```powershell
-q library config
-```
-
-The same screen is available as `/library` from an ordinary q session. The
-defaults are saved independently in `~/.q/library.json`; a running Library
-leader must be restarted before listener changes take effect. Unlike the
-Gateway's optional port `0`, the Library requires a stable port from `1` to
-`65535` so other q processes can find the same service.
-
-Ordinary `q` sessions also ensure that the same Library server is available.
-When no compatible server is running, one session wins the user-level file
-lock and embeds the server until that q process exits. Other sessions connect
-over HTTP, and `q library` can be used when the service should remain available
-independently of a workspace TUI.
 
 The command reads providers from `~/.q/providers.json` and listener/API-key
 settings from `~/.q/gateway.json`. The initial default is `127.0.0.1:0`, so the
@@ -67,23 +49,41 @@ falls back to port `0` on a collision; an explicit conflicting `--port` remains
 an error. Command-line `--host` and `--port` values override the saved defaults.
 The effective OpenAI-compatible `/v1` endpoint is printed after startup.
 
-When at least one managed API key is active, standalone clients must send one
+When at least one Gateway API key is active, standalone clients must send one
 as an `Authorization: Bearer` credential. With no active keys, `q gateway`
-accepts requests without authentication. Generate and revoke keys in `q
-gateway config`; the plaintext is shown only once, while `gateway.json` stores
-a keyed BLAKE3 digest. Key changes, including transitions between authenticated
-and unauthenticated operation, are reloaded by a running standalone Gateway.
-Provider and listener changes require a restart.
+accepts requests without authentication. `q gateway config` manages network
+defaults, keys, and providers; plaintext keys are shown only once, while
+`gateway.json` stores keyed BLAKE3 digests. Key changes, including transitions
+between authenticated and unauthenticated operation, are reloaded without a
+restart. Provider and listener changes require a restart. Do not expose a
+no-key Gateway on a non-loopback address unless the surrounding network is
+already trusted and access-controlled.
 
-Open the Gateway settings UI without initializing the main chat UI or workspace
-services. Network defaults, API keys, and providers are separate sections:
+### Global Library
+
+Run the global Library as a dedicated foreground service or configure its bind
+host and fixed rendezvous port:
 
 ```powershell
-q gateway config
+q library
+q library config
 ```
 
-The remaining settings screens can also be opened directly. Each command loads
-only the resources its screen needs instead of starting the main chat UI:
+The configuration screen is also available as `/library`. Defaults are saved
+independently in `~/.q/library.json`; a running leader must be restarted before
+listener changes take effect. Unlike the Gateway's optional port `0`, the
+Library requires a stable port from `1` to `65535` so other q processes can
+find the same service.
+
+Ordinary `q` sessions ensure that the same Library is available. When no
+compatible server is running, one session wins the user-level file lock and
+embeds the server until that q process exits. Other sessions connect over HTTP;
+use `q library` when its lifetime should be independent of a workspace TUI.
+
+### Standalone settings screens
+
+The remaining settings screens can be opened without starting the main chat
+UI. Each command loads only the resources its screen needs:
 
 ```powershell
 q model   # managed Gateway + model discovery
@@ -95,6 +95,22 @@ q help    # scrollable command and key reference
 
 The Session Store uses a pure-Go HNSW index, so q does not require CGO, FAISS,
 or a vector-specific build tag.
+
+## Runtime layout
+
+An ordinary `q` session coordinates four components with different lifetimes:
+
+| Component | Scope and ownership |
+|---|---|
+| Main TUI | Owns the active conversation, task lifecycle, and session-only `learn` tool. |
+| Managed Gateway child | Aggregates configured providers for that q process. It binds to loopback on an ephemeral port and uses a parent-injected temporary bearer key. |
+| Workspace runtime | Owns `.q/session.json`, the Session Store, Loom, LSP sessions, and the exclusive workspace writer lock. |
+| Global Library | Owns global Agent Skill projections, propositions, their search indexes, and the serialized proposition-judging queue under `~/.q/library/`. One process leads; other q processes connect over HTTP. |
+
+`q gateway` is a separate, user-addressable Gateway process. It uses the saved
+host and port and requires bearer authentication only while at least one API
+key is active. `q-mcp` exposes the workspace MCP surface over stdio without
+starting the chat TUI or owning its learning cursor.
 
 ## First launch
 
@@ -114,8 +130,8 @@ Personal configuration is stored in:
 ```
 
 Prefer environment variables over inline API keys. On POSIX, q creates the
-configuration directory with user-only permissions and writes configuration files with
-mode `0600`. Windows file modes do not manage ACLs.
+configuration directory with user-only permissions and writes configuration
+files with mode `0600`. Windows file modes do not manage ACLs.
 
 ## TUI reference
 
@@ -129,7 +145,7 @@ screen without discarding editor state or interrupting an active turn.
 |---|---|
 | `/plan [request]` | Grill, research, approve, and execute a work plan. Without an inline request, the next message becomes the request. |
 | `/commit` | Open the interactive commit workflow, then return to chat. |
-| `/model` | Configure the main-loop, embedding, or subagent role models. |
+| `/model` | Configure the default, embedding, subagent role, and grouped fallback models. |
 | `/gateway` | Configure Gateway network defaults, API keys, and providers. |
 | `/library` | Configure the global Library's default host and fixed port. |
 | `/loom` | Inspect Loom usage and configure or run garbage collection. |
@@ -146,6 +162,7 @@ screen without discarding editor state or interrupting an active turn.
 |---|---|
 | `Enter` / `Ctrl+S` | Send. |
 | `Shift+Enter` | Insert a newline. |
+| `Ctrl+L` | Clear the current chat projection. |
 | `Ctrl+P` | Open Gateway settings. |
 | `Ctrl+H` | Open or close help. |
 | `Ctrl+G` | Expand or collapse the detailed subagent trace when available. |
@@ -185,6 +202,13 @@ file set only—it does not encode execution order or result acceptance. The
 Coder receives the full current Plan, resolved targets, and any retry feedback.
 After every attempt, the Planner chooses `retry` or `next` and may add newly
 verified facts to the Plan.
+
+Coder tool calls automatically contribute bounded review evidence: tool name,
+Loom reference, error state, and relevant workspace paths, without copying raw
+command output or the complete Coder transcript into the review prompt. The
+Planner can inspect selected files and Loom artifacts, query propositions and
+read-only LSP data, or run non-mutating verification commands before accepting
+the task or returning actionable retry feedback.
 
 Execution state is atomically checkpointed in `.q/plan-execution.json`. On the
 next launch, interrupted work offers Resume, Inspect, and Discard. Resuming a
@@ -263,10 +287,12 @@ Static `models` remain available even when metadata discovery times out.
 the `/model` catalog, `Ctrl+E` sets or clears a model's Gateway
 `context_length` override.
 
-The Gateway binds only to `127.0.0.1:0` and reports the assigned port to its
-parent over a private stdout handshake. Provider edits start a replacement
-child before saving and activating it; a failed replacement leaves the running
-Gateway untouched.
+The managed Gateway used by an ordinary `q` session binds only to
+`127.0.0.1:0` and reports the assigned port to its parent over a private stdout
+handshake. Provider edits start a replacement child before saving and
+activating it; a failed replacement leaves the running Gateway untouched. This
+is separate from `q gateway`, whose listener uses `gateway.json` and command-line
+overrides.
 
 Each supervised Gateway generation also receives a newly generated temporary
 API key. The parent `q` client uses that key automatically, and it is neither
@@ -302,11 +328,19 @@ groups, add candidates, choose per-candidate effort and timeout, reorder the
 fallback chain, or delete an unreferenced group. Groups can also be declared in
 `~/.q/config.yaml`.
 
+Inside the group editor, `a` adds a candidate, `Enter` edits the selected
+candidate, `Ctrl+Up`/`Ctrl+Down` changes fallback order, `d` removes a
+candidate, and `s` validates and saves the group. Saving a group does not assign
+it to any role; choose the group separately from the relevant role's model
+picker.
+
 The managed and standalone Gateways expose each group as `group/<name>` in
 `/v1/models` and accept that ID in chat-completion requests. The advertised
 context length and maximum output are the smallest corresponding limits among
 all candidates; an unknown member limit makes the group limit unknown. Agent
-role pickers render configured groups as `group:<name>` choices.
+role pickers render configured groups as `group:<name>` choices. Gateway group
+configuration is read for each request, so editing a group does not require a
+Gateway restart.
 
 The embedding picker accepts dimensions from 1 to 4096. Because the shared
 model catalog does not identify embedding-only models, it currently shows all
@@ -377,13 +411,14 @@ state are local to the directory where q starts:
 
 | Path | Purpose |
 |---|---|
-| `.q/session.json` | Current transcript and compacted request-context projection. |
+| `.q/session.json` | Current transcript, compacted request-context projection, run identity, and durable Thinker learning queue. |
 | `.q/lsp.json` | Current workspace's language project roots and optional server overrides. |
 | `.q/plan-execution.json` | Durable checkpoint for an approved plan execution. |
 | `.q/data/records/` | Source records for durable workspace history. |
 | `.q/index/bleve/` | Derived full-text index. |
-| `.q/index/vectors.hnsw` | Derived semantic index when embeddings are available. |
+| `.q/index/vectors.hnsw`, `.q/index/vectors.ids.json`, `.q/index/state.json` | Derived semantic index and rebuild state when embeddings are available. |
 | `.q/loom/` | Immutable, content-addressed tool artifacts. |
+| `.q/skills/` | q-managed project Agent Skill checkouts. |
 | `.q/workspace.lock` | Diagnostic metadata for the current or most recent lock owner. |
 | `.qignore` | Workspace discovery exclusions. |
 
@@ -406,6 +441,12 @@ context describes the host OS, architecture, workspace root, and exact command
 shell so generated commands use appropriate quoting. Filesystem tools are
 root-jailed; shell commands start in the workspace but are not an OS sandbox.
 
+The core surface covers anchored file reads and edits, complete-file writes,
+directory listing and creation, path copy/move/removal, asynchronous commands,
+and Loom inspection. Optional runtime services add archive, Agent Skill,
+proposition, and read-only LSP queries. Every non-Loom result passes through
+Loom's bounded capture layer before it returns to the model.
+
 The main agent also receives orchestration tools:
 
 - `task_start` begins a tool-using or multi-step task.
@@ -413,6 +454,10 @@ The main agent also receives orchestration tools:
   terminal outcome.
 - `ask_to_user` pauses the current turn for a required decision. Choices return
   their stable ID; typing sends a free-form answer instead.
+
+The in-process chat runtime also exposes `learn`, which closes the current
+conversation's learning segment. The standalone `q-mcp` command deliberately
+omits it because an external MCP process does not own the active chat cursor.
 
 Tool calls, arguments, results, command status, and intermediate agent notes can
 be inspected in the live detailed trace. Interrupting a turn cancels its request
@@ -424,10 +469,11 @@ and returns to the input prompt.
 q supports the [`SKILL.md` Agent Skills format](https://agentskills.io/specification)
 without injecting the complete skill catalog into model context. Global skill
 metadata is projected into q Library, while project metadata is projected into
-the workspace Session Store; both are indexed by Bleve. The main chat, Griller, and Scout can use
-`search_skills`; global results come from q Library and project results come
-from the workspace index. `get_skill` stores the selected `SKILL.md` or relative resource
-as a Loom artifact without copying its body into the tool response.
+the workspace Session Store; both are indexed by Bleve. The main chat, Griller,
+and Scout can use `search_skills`; global results come from q Library and
+project results come from the workspace index. `get_skill` stores the selected
+`SKILL.md` or relative resource as a Loom artifact without copying its body
+into the tool response.
 
 Skills are discovered in increasing precedence order:
 
@@ -439,9 +485,9 @@ Skills are discovered in increasing precedence order:
 The later definition wins when names collide. The `/skills` manager keeps
 global and current-session (workspace/project) entries in separate panels,
 including shadowed paths, and reports validation failures. A skill name must
-match its directory.
-Global and project skills are retrievable by the main agent, Griller, and Scout. Planner,
-Coder, and the isolated commit agent do not receive the retrieval tools.
+match its directory. Global and project skills are retrievable by the main
+agent, Griller, and Scout. Planner, Coder, and the isolated commit agent do not
+receive the retrieval tools.
 
 Open `/skills` to manage Git-backed skills without leaving the screen:
 
@@ -468,6 +514,9 @@ user-level skill scripts is not part of this initial support; project scripts
 inside the workspace can still be invoked through the ordinary command tool
 when the active agent already has that capability.
 
+See [Agent Skills](docs/agent-skills.md) for indexing, precedence, Git
+management, and capability-boundary details.
+
 ## Global propositions
 
 q Library stores and reads durable global proposition records through its
@@ -477,16 +526,17 @@ model's context, after a successful `task_complete`, when a complete plan is
 approved, or when `/learn` or the active chat's session-only MCP `learn` tool
 explicitly requests a boundary. The standalone `q-mcp` server does not expose
 `learn` because it does not own the active conversation cursor. Raw tool calls
-and ordinary tool results are excluded; assistant
-prose, the complete validated `task_complete` result, and the complete approved
-plan are retained. Checkpoints advance only after `thinking_complete`, so a
-failed or interrupted extraction retries the same durable segment. The Thinker
-calls a private `register_proposition` tool once per proposition. q Library
-durably queues each call in SQLite, retrieves up to five existing propositions
-with hybrid search and recency disabled, and starts a fresh `librarian` model
-session to choose `create`, `merge`, or `discard`. Registrations wait for that
-serialized decision. Completed job payloads expire after seven days, while
-compact idempotency receipts remain so delayed retries return the same result.
+and ordinary tool results are excluded; assistant prose, the complete validated
+`task_complete` result, and the complete approved plan are retained.
+Checkpoints advance only after `thinking_complete`, so a failed or interrupted
+extraction retries the same durable segment. The Thinker calls a private
+`register_proposition` tool once per proposition. q Library durably queues each
+call in `~/.q/library/proposition-jobs.sqlite`, retrieves up to five existing
+propositions with hybrid search and recency disabled, and starts a fresh
+`librarian` model session to choose `create`, `merge`, or `discard`.
+Registrations wait for that serialized decision. Completed job payloads expire
+after seven days, while compact idempotency receipts remain so delayed retries
+return the same result.
 
 `search_propositions` searches canonical text and generated query variants
 with a default `created_at` recency boost; `get_proposition` returns the
@@ -498,6 +548,9 @@ proposition deletion. With a global embedding model configured, Thinker
 registration automatically embeds the canonical proposition and generated
 queries as one batch, while MCP proposition search automatically embeds its
 query. Without that configuration, retrieval remains BM25-only.
+
+See [Global Library](docs/library.md) for service ownership, authentication,
+leader election, storage, and proposition API details.
 
 ## Discovery and `.qignore`
 
@@ -521,7 +574,7 @@ during command-based scans.
 Use `/ignore` to edit the file. `Ctrl+S` saves immediately; `Esc` requires a
 second press before discarding unsaved changes.
 
-## Language server settings
+## Language servers
 
 Use `/lsp` from chat or run `q lsp` to manage language servers without editing
 configuration files directly. The `Global Servers` panel stores trusted server
@@ -550,8 +603,25 @@ modules of the same language. Discovery skips q metadata, common
 dependency/build directories, and paths excluded by the workspace `.qignore`.
 All discovered entries remain draft-only until `Ctrl+S`.
 
-These settings do not start language servers or expose LSP tools yet. Runtime
-activation and MCP integration are a separate layer over the stored settings.
+The main TUI and `q-mcp` consume these settings at runtime. q lazily creates one
+session per enabled `(project root, language)` pair, initializes the server on
+the first routed query, and synchronizes the current on-disk file with
+`didOpen`/full-content `didChange`. File-scoped calls choose the deepest
+matching root; workspace-symbol searches without a path fan out across enabled
+roots and return bounded, deduplicated results.
+
+The MCP surface is read-only: `lsp_status`, `lsp_diagnostics`, `lsp_hover`,
+`lsp_definition`, `lsp_references`, `lsp_document_symbols`, and
+`lsp_workspace_symbols`. It is available to the main agent, Scout, Planner
+review, and Coder, while Griller and the isolated commit agent do not receive
+it. q rejects `workspace/applyEdit` and does not expose rename, formatting,
+code-action execution, or arbitrary language-server commands.
+
+Diagnostics distinguish `clean`, `issues`, and `unavailable`; the default wait
+for a newer `publishDiagnostics` notification is one second. Saved LSP changes
+apply when the tool runtime is next rebuilt, not by mutating already-running
+sessions. See [LSP integration](docs/lsp.md) for routing, position encoding,
+synchronization, and failure behavior.
 
 ## Loom
 
@@ -592,6 +662,12 @@ weighting are supported. Semantic retrieval becomes active when records have
 embeddings; app-side record embedding and historical backfill are not yet
 connected, so current archive queries remain text and metadata based.
 
+When a resumed Codex conversation returns the specific `no rollout found for
+thread id` failure, q retries that request once on a fresh provider thread using
+the complete message history supplied with the current request. Other provider
+errors and retry failures are returned normally rather than being hidden by
+recovery.
+
 The JSON records are the source of truth. Bleve and HNSW are derived indexes and
 can be rebuilt from those records. See
 [Session Store notes](docs/session-store-notes.md) for the storage design.
@@ -606,5 +682,18 @@ task build
 
 The two command entry points are:
 
-- `./cmd/q`: interactive chat and `q commit`
-- `./cmd/q-mcp`: workspace MCP server
+- `./cmd/q`: interactive chat plus the `commit`, `gateway`, `library`,
+  `model`, `skills`, `ignore`, `lsp`, and `help` command surfaces.
+- `./cmd/q-mcp`: workspace MCP stdio server. It acquires the same exclusive
+  workspace lock, opens archive/Loom/LSP/Library integrations, and excludes the
+  chat-session-only `learn` tool.
+
+Additional design and operational notes live in:
+
+- [Subagent architecture](docs/subagent-architecture-notes.md)
+- [Plan orchestration](docs/plan-orchestration.md) and
+  [execution orchestration](docs/execution-orchestration.md)
+- [Session Store](docs/session-store-notes.md)
+- [Agent Skills](docs/agent-skills.md)
+- [LSP integration](docs/lsp.md)
+- [Global Library](docs/library.md)
