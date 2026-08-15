@@ -8,12 +8,12 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
-	"sort"
 	"strings"
 	"sync"
 	"time"
 
 	llmclient "github.com/snowmerak/q/client"
+	qembedding "github.com/snowmerak/q/embedding"
 )
 
 const (
@@ -232,77 +232,11 @@ func (c *Client) embeddingConfig() embeddingClientConfig {
 }
 
 func embedPropositionTexts(ctx context.Context, configured embeddingClientConfig, texts []string) ([][]float32, error) {
-	if ctx == nil {
-		return nil, errors.New("embedding context is nil")
-	}
-	if len(texts) == 0 {
-		return nil, errors.New("embedding input is empty")
-	}
-	dimensions := configured.dimensions
-	response, err := configured.provider.Embed(ctx, llmclient.EmbeddingRequest{
-		Model: configured.model, Input: append([]string(nil), texts...), Dimensions: &dimensions,
-	})
+	vectorizer, err := qembedding.New(configured.provider, configured.model, configured.dimensions)
 	if err != nil {
 		return nil, err
 	}
-	if response == nil || len(response.Data) != len(texts) {
-		return nil, fmt.Errorf("embedding response contains %d vectors; want %d", embeddingDataLength(response), len(texts))
-	}
-	data := append([]llmclient.Embedding(nil), response.Data...)
-	sort.Slice(data, func(left, right int) bool { return data[left].Index < data[right].Index })
-	vectors := make([][]float32, len(texts))
-	for position, item := range data {
-		if item.Index != position {
-			return nil, fmt.Errorf("embedding response index %d is invalid; want %d", item.Index, position)
-		}
-		vector, err := decodeEmbeddingVector(item.Embedding)
-		if err != nil {
-			return nil, fmt.Errorf("embedding response index %d: %w", item.Index, err)
-		}
-		if len(vector) != configured.dimensions {
-			return nil, fmt.Errorf("embedding response index %d has %d dimensions; want %d", item.Index, len(vector), configured.dimensions)
-		}
-		vectors[position] = vector
-	}
-	return vectors, nil
-}
-
-func embeddingDataLength(response *llmclient.EmbeddingResponse) int {
-	if response == nil {
-		return 0
-	}
-	return len(response.Data)
-}
-
-func decodeEmbeddingVector(value any) ([]float32, error) {
-	switch vector := value.(type) {
-	case []float32:
-		return append([]float32(nil), vector...), nil
-	case []float64:
-		result := make([]float32, len(vector))
-		for index, component := range vector {
-			result[index] = float32(component)
-		}
-		return result, nil
-	case []any:
-		result := make([]float32, len(vector))
-		for index, component := range vector {
-			number, ok := component.(float64)
-			if !ok {
-				return nil, fmt.Errorf("component %d is %T, not a number", index, component)
-			}
-			result[index] = float32(number)
-		}
-		return result, nil
-	case json.RawMessage:
-		var decoded []float32
-		if err := json.Unmarshal(vector, &decoded); err != nil {
-			return nil, fmt.Errorf("decode vector: %w", err)
-		}
-		return decoded, nil
-	default:
-		return nil, fmt.Errorf("unsupported vector encoding %T", value)
-	}
+	return vectorizer.Embed(ctx, texts)
 }
 
 func (c *Client) DeleteProposition(ctx context.Context, id string) (PropositionDeleteResponse, error) {

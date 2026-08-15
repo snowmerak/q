@@ -233,6 +233,14 @@ func cloneRecord(record Record) Record {
 	return record
 }
 
+func cloneRecordSlice(records []Record) []Record {
+	cloned := make([]Record, len(records))
+	for index, record := range records {
+		cloned[index] = cloneRecord(record)
+	}
+	return cloned
+}
+
 func cloneVectorProjections(values []VectorProjection) []VectorProjection {
 	result := make([]VectorProjection, len(values))
 	for index, value := range values {

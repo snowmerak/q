@@ -9,6 +9,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/snowmerak/q/agentskills"
+	"github.com/snowmerak/q/archiveembed"
 	"github.com/snowmerak/q/client"
 	"github.com/snowmerak/q/config"
 	qlibrary "github.com/snowmerak/q/library"
@@ -98,15 +99,6 @@ func RunStdioWithLoomOptions(ctx context.Context, root string, options loom.Stor
 	}
 	defer workspaceLock.Close()
 
-	archive, err := sessionstore.OpenWithOptions(root, sessionstore.OpenOptions{WorkspaceLock: workspaceLock})
-	if err != nil {
-		return err
-	}
-	defer archive.Close()
-	loomRuntime, err := newLoomRuntime(root, loom.NewProcessEvaluator(), withSessionRoots(options, root))
-	if err != nil {
-		return err
-	}
 	globalLSP := lsp.GlobalConfig{}
 	configStore, err := config.DefaultStore()
 	if err != nil {
@@ -116,6 +108,24 @@ func RunStdioWithLoomOptions(ctx context.Context, root string, options loom.Stor
 	if err == nil {
 		globalLSP = loaded.LSP
 	} else if !errors.Is(err, config.ErrNotFound) {
+		return err
+	}
+	vectorConfig := sessionstore.VectorConfig{}
+	if loaded.Embedding.Model != "" {
+		vectorConfig = sessionstore.VectorConfig{
+			Model: loaded.Embedding.Model, Dimensions: loaded.Embedding.Dimensions,
+		}
+	}
+	archive, err := sessionstore.OpenWithOptions(root, sessionstore.OpenOptions{
+		WorkspaceLock: workspaceLock, Vector: vectorConfig,
+	})
+	if err != nil {
+		return err
+	}
+	defer archive.Close()
+	semanticArchive := archiveembed.New(archive)
+	loomRuntime, err := newLoomRuntime(root, loom.NewProcessEvaluator(), withSessionRoots(options, root))
+	if err != nil {
 		return err
 	}
 	workspaceLSP, err := (workspace.Store{Root: root}).LoadLSP()
@@ -172,6 +182,16 @@ func RunStdioWithLoomOptions(ctx context.Context, root string, options loom.Stor
 			}
 			return err
 		}
+		if err = semanticArchive.Configure(
+			embeddingClient, loaded.Embedding.Model, loaded.Embedding.Dimensions,
+		); err != nil {
+			_ = embeddingClient.Close()
+			if embeddingManager != nil {
+				_ = embeddingManager.Close()
+			}
+			return err
+		}
+		go func() { _, _ = semanticArchive.Backfill(ctx) }()
 		defer embeddingClient.Close()
 		if embeddingManager != nil {
 			defer embeddingManager.Close()
@@ -186,7 +206,7 @@ func RunStdioWithLoomOptions(ctx context.Context, root string, options loom.Stor
 	if libraryRuntime != nil {
 		defer libraryRuntime.Close()
 	}
-	server, fs, _, err := newServer(root, archive, loomRuntime, lspManager, globalSkills)
+	server, fs, _, err := newServer(root, semanticArchive, loomRuntime, lspManager, globalSkills)
 	if err != nil {
 		return err
 	}

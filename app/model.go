@@ -22,6 +22,7 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/snowmerak/llm-provider/gateway"
+	"github.com/snowmerak/q/archiveembed"
 	"github.com/snowmerak/q/client"
 	"github.com/snowmerak/q/config"
 	"github.com/snowmerak/q/gatewayconfig"
@@ -161,6 +162,7 @@ type model struct {
 	workspaceLock     *workspace.Lock
 	workspaceRestored bool
 	archive           recordArchive
+	archiveSearch     *archiveembed.Archive
 	archiveErr        error
 	runID             string
 	standalone        bool
@@ -291,6 +293,11 @@ type configuredMsg struct {
 	client          chatClient
 	preserveHistory bool
 	err             error
+}
+
+type archiveEmbeddingConfiguredMsg struct {
+	stats archiveembed.BackfillStats
+	err   error
 }
 
 type modelTargetConfiguredMsg struct {
@@ -625,6 +632,7 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		m.startup = nil
 		m.toolRuntime = message.tools
 		m.archive = message.archive
+		m.archiveSearch = message.archiveSearch
 		m.archiveErr = message.archiveErr
 		m.libraryClient = message.library
 		m.models = append([]client.Model(nil), message.models...)
@@ -701,6 +709,7 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		if m.client != nil && m.client != message.client {
 			_ = m.client.Close()
 		}
+		embeddingCommand := m.configureEmbeddingRuntime(message.config, message.client)
 		if m.isStandaloneScreen(screenModels) {
 			m.config = message.config
 			m.draftConfig = message.config
@@ -709,7 +718,7 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			m.modelPickerStage = modelPickerTargets
 			m.modelFilter.Blur()
 			m.status = "Model changed to " + message.config.Provider.Model
-			return m, nil
+			return m, embeddingCommand
 		}
 		if message.preserveHistory {
 			m.screen = screenChat
@@ -727,7 +736,14 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			m.enterChat(message.config, message.client)
 		}
-		return m, tea.Batch(m.input.Focus(), m.startNextLearningSegment())
+		return m, tea.Batch(m.input.Focus(), m.startNextLearningSegment(), embeddingCommand)
+	case archiveEmbeddingConfiguredMsg:
+		if message.err != nil {
+			m.status = "Embedding: " + message.err.Error()
+		} else if message.stats.Embedded > 0 {
+			m.status = fmt.Sprintf("Embedded %d workspace history record(s)", message.stats.Embedded)
+		}
+		return m, nil
 	case modelTargetConfiguredMsg:
 		if message.err != nil {
 			m.status = message.err.Error()

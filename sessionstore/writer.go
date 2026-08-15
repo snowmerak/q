@@ -1,11 +1,14 @@
 package sessionstore
 
 import (
+	"context"
 	"errors"
+	"fmt"
 	"sync"
 )
 
 const defaultWriterBuffer = 256
+const defaultWriterBatchSize = 32
 
 var (
 	ErrWriterClosed    = errors.New("sessionstore: writer is closed")
@@ -17,12 +20,27 @@ type writeRequest struct {
 	flush  chan struct{}
 }
 
+// RecordBatchPreparer may enrich records before they are persisted. Writer
+// falls back to the original records when preparation fails so optional
+// derived data cannot cause archive loss.
+type RecordBatchPreparer func(context.Context, []Record) ([]Record, error)
+
+type WriterOptions struct {
+	Buffer    int
+	BatchSize int
+	Context   context.Context
+	Prepare   RecordBatchPreparer
+}
+
 // Writer serializes archive writes on a background goroutine. Append never
 // waits for disk I/O; Flush and Close provide explicit durability barriers.
 type Writer struct {
-	store *Store
-	queue chan writeRequest
-	done  chan struct{}
+	store     *Store
+	queue     chan writeRequest
+	done      chan struct{}
+	ctx       context.Context
+	prepare   RecordBatchPreparer
+	batchSize int
 
 	mu       sync.Mutex
 	closed   bool
@@ -31,13 +49,24 @@ type Writer struct {
 }
 
 func NewWriter(store *Store, buffer int) *Writer {
-	if buffer <= 0 {
-		buffer = defaultWriterBuffer
+	return NewWriterWithOptions(store, WriterOptions{Buffer: buffer})
+}
+
+func NewWriterWithOptions(store *Store, options WriterOptions) *Writer {
+	if options.Buffer <= 0 {
+		options.Buffer = defaultWriterBuffer
+	}
+	if options.BatchSize <= 0 {
+		options.BatchSize = defaultWriterBatchSize
+	}
+	if options.Context == nil {
+		options.Context = context.Background()
 	}
 	w := &Writer{
 		store: store,
-		queue: make(chan writeRequest, buffer),
+		queue: make(chan writeRequest, options.Buffer),
 		done:  make(chan struct{}),
+		ctx:   options.Context, prepare: options.Prepare, batchSize: options.BatchSize,
 	}
 	go w.run()
 	return w
@@ -109,14 +138,74 @@ func (w *Writer) Close() error {
 
 func (w *Writer) run() {
 	defer close(w.done)
-	for request := range w.queue {
-		if request.record != nil {
-			if _, err := w.store.Save(*request.record); err != nil {
-				w.rememberError(err)
-			}
+	for {
+		request, ok := <-w.queue
+		if !ok {
+			return
 		}
 		if request.flush != nil {
 			close(request.flush)
+			continue
+		}
+		if request.record == nil {
+			continue
+		}
+		records := []Record{*request.record}
+		var barrier chan struct{}
+		closed := false
+	collect:
+		for len(records) < w.batchSize {
+			select {
+			case next, open := <-w.queue:
+				if !open {
+					closed = true
+					break collect
+				}
+				if next.flush != nil {
+					barrier = next.flush
+					break collect
+				}
+				if next.record != nil {
+					records = append(records, *next.record)
+				}
+			default:
+				break collect
+			}
+		}
+		w.saveBatch(records)
+		if barrier != nil {
+			close(barrier)
+		}
+		if closed {
+			return
+		}
+	}
+}
+
+func (w *Writer) saveBatch(records []Record) {
+	prepared := records
+	if w.prepare != nil {
+		copies := make([]Record, len(records))
+		for index, record := range records {
+			copies[index] = cloneRecord(record)
+		}
+		candidate, err := w.prepare(w.ctx, copies)
+		if err != nil {
+			w.rememberError(fmt.Errorf("sessionstore: prepare archive records: %w", err))
+		} else if len(candidate) != len(records) {
+			w.rememberError(fmt.Errorf("sessionstore: prepared %d archive records; want %d", len(candidate), len(records)))
+		} else {
+			prepared = candidate
+		}
+	}
+	if _, err := w.store.SaveBatch(prepared); err != nil {
+		w.rememberError(err)
+		// A malformed record or partial batch failure must not prevent unrelated
+		// archive entries from reaching their individual durability boundary.
+		for _, record := range prepared {
+			if _, saveErr := w.store.Save(record); saveErr != nil {
+				w.rememberError(saveErr)
+			}
 		}
 	}
 }

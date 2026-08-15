@@ -190,7 +190,55 @@ func (s *Store) IndexPath() string { return s.indexPath }
 
 func (s *Store) VectorIndexPath() string { return s.vectorPath }
 
-func (s *Store) VectorConfig() VectorConfig { return s.vectorCfg }
+func (s *Store) VectorConfig() VectorConfig {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.vectorCfg
+}
+
+// ConfigureVector switches the derived HNSW graph without reopening the
+// source store. Records with non-matching embeddings remain available to text
+// search and can be re-embedded in the background.
+func (s *Store) ConfigureVector(config VectorConfig) error {
+	normalized, err := normalizeVectorConfig(config)
+	if err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := s.requireOpenLocked(); err != nil {
+		return err
+	}
+	if s.vectorCfg == normalized {
+		return nil
+	}
+	previousConfig := s.vectorCfg
+	previousIndex := s.vectors
+	s.vectorCfg = normalized
+	if normalized.Enabled() {
+		if err := s.rebuildVectorsLocked(); err != nil {
+			s.vectorCfg = previousConfig
+			s.vectors = previousIndex
+			return err
+		}
+	} else {
+		s.vectors = nil
+		if err := os.Remove(s.vectorPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+			s.vectorCfg = previousConfig
+			s.vectors = previousIndex
+			return fmt.Errorf("sessionstore: remove HNSW index: %w", err)
+		}
+		if err := os.Remove(s.vectorIDsPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+			s.vectorCfg = previousConfig
+			s.vectors = previousIndex
+			return fmt.Errorf("sessionstore: remove HNSW ID map: %w", err)
+		}
+	}
+	if err := s.writeStateLocked(); err != nil {
+		return &IndexingError{Err: err}
+	}
+	return nil
+}
 
 // Save atomically persists record before updating the Bleve index. A blank ID,
 // version, or timestamp is populated by Save and returned to the caller.
@@ -249,6 +297,96 @@ func (s *Store) Save(record Record) (Record, error) {
 		return cloneRecord(prepared), &IndexingError{RecordID: prepared.ID, Err: err}
 	}
 	return cloneRecord(prepared), nil
+}
+
+// SaveBatch persists and indexes records under one store lock, rebuilding the
+// derived vector graph at most once. It is intended for embedding backfills
+// and other bounded batches; source files remain the durability boundary.
+func (s *Store) SaveBatch(records []Record) ([]Record, error) {
+	if len(records) == 0 {
+		return []Record{}, nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := s.requireOpenLocked(); err != nil {
+		return nil, err
+	}
+
+	now := time.Now().UTC()
+	prepared := make([]Record, len(records))
+	bodies := make([][]byte, len(records))
+	seen := make(map[string]struct{}, len(records))
+	vectorRebuild := false
+	vectorAdds := make([]Record, 0, len(records))
+	for index, record := range records {
+		var previous *Record
+		if strings.TrimSpace(record.ID) != "" {
+			loaded, err := s.loadRecordLocked(strings.TrimSpace(record.ID))
+			if err == nil {
+				previous = &loaded
+			} else if !errors.Is(err, ErrNotFound) {
+				return nil, err
+			}
+		}
+		value, err := prepareRecord(record, previous, now)
+		if err != nil {
+			return nil, err
+		}
+		if _, duplicate := seen[value.ID]; duplicate {
+			return nil, fmt.Errorf("sessionstore: duplicate record ID %q in batch", value.ID)
+		}
+		seen[value.ID] = struct{}{}
+		body, err := json.MarshalIndent(value, "", "  ")
+		if err != nil {
+			return nil, fmt.Errorf("sessionstore: encode record: %w", err)
+		}
+		if len(body) > maximumRecordSize {
+			return nil, fmt.Errorf("sessionstore: record exceeds %d bytes", maximumRecordSize)
+		}
+		prepared[index] = value
+		bodies[index] = append(body, '\n')
+		if s.vectors != nil {
+			if previous == nil && len(recordEmbeddings(value)) > 0 {
+				vectorAdds = append(vectorAdds, value)
+			} else if previous != nil && !recordEmbeddingsEqual(*previous, value) {
+				vectorRebuild = true
+			}
+		}
+	}
+
+	batch := s.index.NewBatch()
+	for index, record := range prepared {
+		if err := writeAtomic(s.recordPath(record.ID), bodies[index], 0o600); err != nil {
+			return cloneRecordSlice(prepared[:index]), fmt.Errorf("sessionstore: persist record %q: %w", record.ID, err)
+		}
+		if err := batch.Index(record.ID, record); err != nil {
+			return cloneRecordSlice(prepared[:index+1]), &IndexingError{RecordID: record.ID, Err: err}
+		}
+	}
+	if err := s.index.Batch(batch); err != nil {
+		return cloneRecordSlice(prepared), fmt.Errorf("sessionstore: index record batch: %w", err)
+	}
+	if s.vectors != nil && vectorRebuild {
+		if err := s.rebuildVectorsLocked(); err != nil {
+			s.vectors = nil
+			return cloneRecordSlice(prepared), &IndexingError{Err: err}
+		}
+	} else if s.vectors != nil && len(vectorAdds) > 0 {
+		for _, record := range vectorAdds {
+			if _, err := s.vectors.addRecord(record); err != nil {
+				return cloneRecordSlice(prepared), &IndexingError{RecordID: record.ID, Err: err}
+			}
+		}
+		if s.vectors.dirty {
+			if err := s.vectors.save(s.vectorPath, s.vectorIDsPath); err != nil {
+				return cloneRecordSlice(prepared), &IndexingError{Err: fmt.Errorf("persist HNSW index: %w", err)}
+			}
+		}
+	}
+	if err := s.writeStateLocked(); err != nil {
+		return cloneRecordSlice(prepared), &IndexingError{Err: err}
+	}
+	return cloneRecordSlice(prepared), nil
 }
 
 func (s *Store) Get(id string) (Record, error) {

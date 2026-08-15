@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/snowmerak/llm-provider/gateway"
+	"github.com/snowmerak/q/archiveembed"
 	"github.com/snowmerak/q/client"
 	"github.com/snowmerak/q/config"
 	qlibrary "github.com/snowmerak/q/library"
@@ -22,6 +23,7 @@ type runtimeInitializedMsg struct {
 	client        chatClient
 	tools         *qtools.Runtime
 	archive       *sessionstore.Writer
+	archiveSearch *archiveembed.Archive
 	library       *qlibrary.Client
 	models        []client.Model
 	gatewayConfig gateway.Config
@@ -139,9 +141,15 @@ func (request startupRequest) run() runtimeInitializedMsg {
 	result := runtimeInitializedMsg{
 		config: loaded, gatewayConfig: request.manager.Config(), startupErr: startupErr,
 	}
+	vectorConfig := sessionstore.VectorConfig{}
+	if loaded.Embedding.Model != "" {
+		vectorConfig = sessionstore.VectorConfig{
+			Model: loaded.Embedding.Model, Dimensions: loaded.Embedding.Dimensions,
+		}
+	}
 	archiveStore, archiveOpenErr := sessionstore.OpenWithOptions(
 		request.workspaceStore.Root,
-		sessionstore.OpenOptions{WorkspaceLock: request.workspaceLock},
+		sessionstore.OpenOptions{WorkspaceLock: request.workspaceLock, Vector: vectorConfig},
 	)
 	result.archiveErr = archiveOpenErr
 	if errors.Is(archiveOpenErr, sessionstore.ErrIndexLocked) {
@@ -150,8 +158,12 @@ func (request startupRequest) run() runtimeInitializedMsg {
 	}
 
 	var archive *sessionstore.Writer
+	var semanticArchive *archiveembed.Archive
 	if archiveOpenErr == nil {
-		archive = sessionstore.NewWriter(archiveStore, 0)
+		semanticArchive = archiveembed.New(archiveStore)
+		archive = sessionstore.NewWriterWithOptions(archiveStore, sessionstore.WriterOptions{
+			Context: request.ctx, Prepare: semanticArchive.Prepare,
+		})
 	}
 	workspaceLSP, toolsErr := request.workspaceStore.LoadLSP()
 	var tools *qtools.Runtime
@@ -163,7 +175,7 @@ func (request startupRequest) run() runtimeInitializedMsg {
 		}
 		libraryClient = qlibrary.NewClient(libraryConfig.Endpoint(), libraryConfig.ResolveAPIKey(), 5*time.Second)
 		tools, toolsErr = qtools.NewRuntimeWithArchiveAndLoomOptionsAndLSPAndLibrary(
-			request.ctx, request.workspaceStore.Root, archiveStore, loaded.LoomStoreOptions(nil), loaded.LSP, workspaceLSP, libraryClient,
+			request.ctx, request.workspaceStore.Root, semanticArchive, loaded.LoomStoreOptions(nil), loaded.LSP, workspaceLSP, libraryClient,
 		)
 		result.tools = tools
 		result.library = libraryClient
@@ -179,6 +191,7 @@ func (request startupRequest) run() runtimeInitializedMsg {
 	}
 	request.lifecycle.setResources(nil, tools, archive)
 	result.archive = archive
+	result.archiveSearch = semanticArchive
 
 	if request.configErr == nil && request.manager.Endpoint() != "" {
 		if !loaded.Provider.Managed {
@@ -202,6 +215,16 @@ func (request startupRequest) run() runtimeInitializedMsg {
 				_ = configuredClient.Close()
 				result.err = embeddingErr
 				return result
+			}
+			if semanticArchive != nil {
+				if embeddingErr := semanticArchive.Configure(
+					embedder, loaded.Embedding.Model, loaded.Embedding.Dimensions,
+				); embeddingErr != nil {
+					_ = configuredClient.Close()
+					result.err = embeddingErr
+					return result
+				}
+				go func() { _, _ = semanticArchive.Backfill(request.ctx) }()
 			}
 		}
 		if models, modelsErr := configuredClient.ListModels(request.ctx); modelsErr == nil {

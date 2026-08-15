@@ -344,7 +344,9 @@ Gateway restart.
 
 The embedding picker accepts dimensions from 1 to 4096. Because the shared
 model catalog does not identify embedding-only models, it currently shows all
-models. Press `i` to clear an embedding or role override and restore inheritance.
+models. The selected model powers both global proposition retrieval and
+workspace-history embedding. Press `i` to clear an embedding or role override
+and restore inheritance.
 
 ## Configuration example
 
@@ -658,9 +660,13 @@ Chat messages, tool activity, subagent lifecycle events, questions, failures,
 results, and compaction summaries are written to the Session Store. The model
 can search this durable history with `search_archive` and page selected records
 with `get_archive_record`. Text, metadata, time bounds, sorting, and recency
-weighting are supported. Semantic retrieval becomes active when records have
-embeddings; app-side record embedding and historical backfill are not yet
-connected, so current archive queries remain text and metadata based.
+weighting are supported. With an embedding model configured, new history
+records are embedded in the background writer, existing records are backfilled
+in bounded batches, and relevance searches use BM25/HNSW reciprocal-rank
+fusion. Filter-only or chronological searches do not call the embedding
+provider. Without embedding configuration, archive retrieval remains BM25 and
+metadata based. Embedding failures do not discard the underlying history
+record, so lexical retrieval remains available for records awaiting backfill.
 
 When a resumed Codex conversation returns the specific `no rollout found for
 thread id` failure, q retries that request once on a fresh provider thread using

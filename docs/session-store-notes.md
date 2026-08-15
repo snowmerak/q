@@ -7,12 +7,15 @@ Bleve를 이용해 검색하는 세션 저장소의 설계 메모다.
 
 `sessionstore` 패키지에 1차 저장소 기반을 구현했다. 공통 record의 atomic JSON
 저장, 명시적인 Bleve mapping, text/구조/시간 검색, 최신성 재정렬, 순수 Go HNSW
-vector 검색과 전체 index rebuild를 지원한다. append-only run event, blob과
-embedding 생성 pipeline은 후속 범위다.
+vector 검색과 전체 index rebuild를 지원한다. append-only run event와 blob은
+후속 범위다.
 
 현재 앱의 채팅 loop에는 저장소를 연결했다. user/assistant 메시지, assistant의 tool
 call 요청, tool 실행 시작과 결과, context compaction summary, provider 실패를 공통
 record로 기록한다. 저장은 background writer가 직렬화하고 chat turn 종료 시 flush한다.
+embedding model이 설정되면 writer가 새 history record를 batch embedding하고,
+기존 record는 startup 이후 background backfill한다. `search_archive`의 relevance
+query는 같은 model로 query embedding을 생성해 BM25/HNSW RRF를 사용한다.
 workspace `session.json`에는 현재 archive `run_id`도 함께 보존한다. 실제 subagent
 runner는 아직 없지만 `subagent.Lifecycle`이 task의 queued/running/terminal projection,
 agent message와 result를 같은 저장소에 기록할 수 있게 준비되어 있다.
@@ -298,6 +301,8 @@ embedding이 변경되거나 제거되면 원본 record에서 vector graph만 �
 - half-life 기반 애플리케이션 레벨 recency reranking
 - 색인 실패 후 source 보존, 시작 시 catch-up과 전체 rebuild
 - Record embedding 원본, HNSW vector index와 BM25/vector RRF fusion
+- chat/agent history batch embedding, startup backfill과 model 변경 re-embedding
+- `search_archive` query embedding과 BM25/HNSW hybrid retrieval
 - background archive writer와 turn 종료 durability flush
 - chat message, tool call/result, compaction 및 provider failure record 연결
 - workspace session의 archive run ID 복구
@@ -309,10 +314,8 @@ embedding이 변경되거나 제거되면 원본 record에서 vector graph만 �
 2. append-only event store와 run/task projection을 구현한다.
 3. 진행 중 run load와 `waiting_user` 복구 테스트를 작성한다.
 4. 실제 subagent runner가 추가될 때 `subagent.Lifecycle`을 실행 경로에 연결한다.
-5. 현재 chat과 agent record의 embedding 생성 pipeline을 추가한다.
-6. model 변경 시 background re-embedding을 통합 테스트한다.
-7. TUI 검색, archive 관리와 index rebuild 명령을 추가한다.
-8. 여러 process의 file lock, 보존 기간과 redaction 정책을 구현한다.
+5. TUI 검색, archive 관리와 index rebuild 명령을 추가한다.
+6. 여러 process의 file lock, 보존 기간과 redaction 정책을 구현한다.
 
 ## 결정이 필요한 사항
 
