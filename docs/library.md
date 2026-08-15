@@ -11,9 +11,9 @@ are available for lifecycle verification. Authenticated global Agent Skill
 search, resource reads, and explicit reconciliation are available through the
 `/v1/skills/*` routes and are consumed by the existing MCP skill tools.
 
-Proposition extraction, authenticated single-record writes, persistent write
-idempotency, BM25 search, and `created_at` recency ranking are implemented.
-Embedding generation and multi-vector hybrid search remain later stages.
+Proposition extraction, authenticated queued writes, persistent write
+idempotency, BM25 search, embedding generation, multi-vector hybrid search,
+and `created_at` recency ranking are implemented.
 
 ## Purpose and decisions
 
@@ -261,7 +261,10 @@ checkpoint-bounded conversation segment
   -> proposition/query extraction
   -> schema and sensitive-data validation
   -> one register_proposition call per proposition
-  -> idempotent Library write and BM25/HNSW update
+  -> durable SQLite registration queue
+  -> hybrid duplicate candidates with recency disabled
+  -> fresh Library-owned Thinker create/merge/discard decision
+  -> idempotent Library mutation and BM25/HNSW update
 ```
 
 The submitted context is bounded independently of the full workspace archive.
@@ -363,10 +366,23 @@ authentication.
 
 `POST /propositions` is also implemented for the Thinker-local
 `register_proposition` tool. It requires an `Idempotency-Key`, validates the
-bounded single-proposition schema and obvious credential-like content, forces
-`kind=proposition` and `scope=global`, and persists the canonical content plus
-generated-query `search_text`. Reusing a key with identical input returns the
-existing ID; different input returns HTTP 409.
+bounded single-proposition schema and obvious credential-like content, then
+places the request in a durable SQLite FIFO queue. The handler waits while the
+single Library worker searches up to five existing propositions using the
+final hybrid score with recency disabled and starts a fresh `thinker` role
+session to choose `create`, `merge`, or `discard`. Create persists a new global
+record; merge unions bounded refs, queries, tags, confidence, and matching query
+vectors into the selected record; discard writes no proposition. Reusing a key
+with identical input returns the stored decision; different input returns HTTP
+409.
+
+Queue state progresses through `queued`, `running`, `decided`, `applying`, and
+`succeeded` or `failed`. A decision is persisted before its mutation so leader
+takeover can replay an idempotent create or merge without another model call.
+Successful job payloads are removed after seven days. Compact receipts mapping
+the idempotency key and request digest to the final result remain durable after
+job cleanup and leader restart. A failed job may be resubmitted with the same
+key and identical request.
 
 The existing `q-tools` MCP server exposes the reads as
 `search_propositions` and `get_proposition`; there is no separate proposition
@@ -453,6 +469,9 @@ that global skill/proposition retrieval and extraction are unavailable.
    Thinker registration and MCP proposition search. Implemented.
 7. Add immutable `created_at` decay, extraction gating, failure recovery, and
    TUI/CLI status surfaces.
+8. Serialize proposition registration through a durable SQLite queue and use a
+   fresh Library-owned Thinker session to create, merge, or discard hybrid
+   duplicate candidates. Implemented.
 
 ## Verification
 

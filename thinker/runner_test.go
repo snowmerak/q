@@ -34,6 +34,38 @@ type fakePropositionLibrary struct {
 	inputs []qlibrary.PropositionRegisterRequest
 }
 
+type dispositionPropositionLibrary struct {
+	responses []qlibrary.PropositionRegisterResponse
+}
+
+type failedThenCreatedPropositionLibrary struct {
+	keys  []string
+	calls int
+}
+
+func (f *failedThenCreatedPropositionLibrary) RegisterProposition(
+	_ context.Context,
+	key string,
+	_ qlibrary.PropositionRegisterRequest,
+) (qlibrary.PropositionRegisterResponse, error) {
+	f.keys = append(f.keys, key)
+	f.calls++
+	if f.calls <= 2 {
+		return qlibrary.PropositionRegisterResponse{}, errors.New("temporary registration failure")
+	}
+	return qlibrary.PropositionRegisterResponse{ID: "prop-next", Action: qlibrary.PropositionActionCreate, Created: true}, nil
+}
+
+func (f *dispositionPropositionLibrary) RegisterProposition(
+	_ context.Context,
+	_ string,
+	_ qlibrary.PropositionRegisterRequest,
+) (qlibrary.PropositionRegisterResponse, error) {
+	response := f.responses[0]
+	f.responses = f.responses[1:]
+	return response, nil
+}
+
 func (f *fakePropositionLibrary) RegisterProposition(_ context.Context, key string, input qlibrary.PropositionRegisterRequest) (qlibrary.PropositionRegisterResponse, error) {
 	f.keys = append(f.keys, key)
 	f.inputs = append(f.inputs, input)
@@ -57,7 +89,8 @@ func TestRunnerRegistersOnePropositionPerRoundAndCompletes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Registered != 2 || len(result.IDs) != 2 || result.Usage.TotalTokens != 36 {
+	if result.Proposed != 2 || result.Processed != 2 || result.Registered != 2 || result.Created != 2 || result.Merged != 0 || result.Discarded != 0 ||
+		len(result.IDs) != 2 || result.Usage.TotalTokens != 36 {
 		t.Fatalf("result = %#v", result)
 	}
 	if len(library.keys) != 2 || library.keys[0] != "job-1/0" || library.keys[1] != "job-1/1" {
@@ -85,6 +118,53 @@ func TestRunnerRejectsMultipleToolCallsInOneRound(t *testing.T) {
 	}).Run(context.Background(), Job{ID: "job", Messages: []client.Message{{Role: client.RoleUser, Content: "fact"}}})
 	if err == nil {
 		t.Fatal("multiple tool calls were accepted")
+	}
+}
+
+func TestRunnerCountsLibraryMergeAndDiscardDecisions(t *testing.T) {
+	configuredClient := &fakeThinkerClient{responses: []client.Message{
+		thinkerToolCall("merge", RegisterToolName, `{"content":"Existing fact.","queries":[],"confidence":0.9,"tags":[]}`),
+		thinkerToolCall("discard", RegisterToolName, `{"content":"Redundant fact.","queries":[],"confidence":0.8,"tags":[]}`),
+		thinkerToolCall("complete", CompleteToolName, `{}`),
+	}}
+	library := &dispositionPropositionLibrary{responses: []qlibrary.PropositionRegisterResponse{
+		{ID: "prop-existing", Action: qlibrary.PropositionActionMerge, Merged: true},
+		{ID: "prop-redundant", Action: qlibrary.PropositionActionDiscard, Discarded: true},
+	}}
+	result, err := (Runner{
+		Client: configuredClient, Library: library,
+		Spec: subagent.Spec{Role: config.AgentRoleThinker, Model: "thinker-model", ContextLength: 16_000},
+	}).Run(context.Background(), Job{
+		ID: "job-decisions", Messages: []client.Message{{Role: client.RoleUser, Content: "Remember facts."}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Proposed != 2 || result.Processed != 2 || result.Registered != 1 || result.Created != 0 || result.Merged != 1 || result.Discarded != 1 ||
+		len(result.IDs) != 1 || result.IDs[0] != "prop-existing" {
+		t.Fatalf("result = %#v", result)
+	}
+}
+
+func TestRunnerConsumesIdempotencySlotAfterFailedProposal(t *testing.T) {
+	configuredClient := &fakeThinkerClient{responses: []client.Message{
+		thinkerToolCall("failed", RegisterToolName, `{"content":"Failed proposal.","queries":[],"confidence":0.9,"tags":[]}`),
+		thinkerToolCall("next", RegisterToolName, `{"content":"Next proposal.","queries":[],"confidence":0.8,"tags":[]}`),
+		thinkerToolCall("complete", CompleteToolName, `{}`),
+	}}
+	library := &failedThenCreatedPropositionLibrary{}
+	result, err := (Runner{
+		Client: configuredClient, Library: library,
+		Spec: subagent.Spec{Role: config.AgentRoleThinker, Model: "thinker-model", ContextLength: 16_000},
+	}).Run(context.Background(), Job{
+		ID: "job-slots", Messages: []client.Message{{Role: client.RoleUser, Content: "Remember facts."}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Proposed != 2 || result.Processed != 1 || len(library.keys) != 3 ||
+		library.keys[0] != "job-slots/0" || library.keys[1] != "job-slots/0" || library.keys[2] != "job-slots/1" {
+		t.Fatalf("result = %#v, keys = %#v", result, library.keys)
 	}
 }
 

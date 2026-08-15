@@ -35,6 +35,7 @@ const (
 	maximumPropositionRefs                = 32
 	maximumPropositionRefRunes            = 2_048
 	maximumPropositionIdempotencyKeyBytes = 256
+	propositionJudgeTimeout               = 90 * time.Second
 )
 
 var errPropositionIdempotencyConflict = errors.New("library: proposition idempotency key was already used with different input")
@@ -94,8 +95,11 @@ type PropositionRegisterRequest struct {
 }
 
 type PropositionRegisterResponse struct {
-	ID      string `json:"id"`
-	Created bool   `json:"created"`
+	ID        string `json:"id,omitempty"`
+	Action    string `json:"action"`
+	Created   bool   `json:"created,omitempty"`
+	Merged    bool   `json:"merged,omitempty"`
+	Discarded bool   `json:"discarded,omitempty"`
 }
 
 type PropositionDeleteResponse struct {
@@ -131,12 +135,18 @@ type Proposition struct {
 }
 
 type propositionService struct {
-	archive *sessionstore.Store
-	now     func() time.Time
-	mu      sync.Mutex
+	archive  *sessionstore.Store
+	queue    *propositionQueue
+	judge    PropositionJudge
+	judgeErr error
+	now      func() time.Time
+	mu       sync.Mutex
+	ctx      context.Context
+	cancel   context.CancelFunc
+	done     chan struct{}
 }
 
-func (s *propositionService) register(idempotencyKey string, request PropositionRegisterRequest) (PropositionRegisterResponse, error) {
+func (s *propositionService) register(ctx context.Context, idempotencyKey string, request PropositionRegisterRequest) (PropositionRegisterResponse, error) {
 	if s == nil || s.archive == nil {
 		return PropositionRegisterResponse{}, errors.New("library: propositions are unavailable")
 	}
@@ -151,6 +161,9 @@ func (s *propositionService) register(idempotencyKey string, request Proposition
 	if err != nil {
 		return PropositionRegisterResponse{}, err
 	}
+	if s.queue == nil {
+		return PropositionRegisterResponse{}, errors.New("library: proposition queue is unavailable")
+	}
 	if normalized.Embeddings != nil {
 		vector := s.archive.VectorConfig()
 		if !vector.Enabled() {
@@ -163,19 +176,32 @@ func (s *propositionService) register(idempotencyKey string, request Proposition
 			)
 		}
 	}
+	_, _, requestDigest, err := propositionRegistrationIdentity(idempotencyKey, normalized)
+	if err != nil {
+		return PropositionRegisterResponse{}, err
+	}
+	return s.queue.submit(ctx, idempotencyKey, requestDigest, normalized)
+}
+
+func propositionRegistrationIdentity(idempotencyKey string, request PropositionRegisterRequest) (string, string, string, error) {
 	// Embeddings are a derived projection and may vary slightly across retries.
 	// Idempotency is defined by the logical proposition request, not its vectors.
-	digestInput := normalized
+	digestInput := request
 	digestInput.Embeddings = nil
 	body, err := json.Marshal(digestInput)
 	if err != nil {
-		return PropositionRegisterResponse{}, fmt.Errorf("library: encode proposition registration: %w", err)
+		return "", "", "", fmt.Errorf("library: encode proposition registration: %w", err)
 	}
 	keySum := sha256.Sum256([]byte("q-library-proposition-v1\x00" + idempotencyKey))
 	requestSum := sha256.Sum256(body)
-	id := "prop-" + hex.EncodeToString(keySum[:16])
-	idempotencyHash := hex.EncodeToString(keySum[:])
-	requestDigest := hex.EncodeToString(requestSum[:])
+	return "prop-" + hex.EncodeToString(keySum[:16]), hex.EncodeToString(keySum[:]), hex.EncodeToString(requestSum[:]), nil
+}
+
+func (s *propositionService) create(job propositionJob) (PropositionRegisterResponse, error) {
+	id, idempotencyHash, requestDigest, err := propositionRegistrationIdentity(job.Key, job.Request)
+	if err != nil {
+		return PropositionRegisterResponse{}, err
+	}
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -186,14 +212,14 @@ func (s *propositionService) register(idempotencyKey string, request Proposition
 			payload.RequestDigest != requestDigest {
 			return PropositionRegisterResponse{}, errPropositionIdempotencyConflict
 		}
-		return PropositionRegisterResponse{ID: existing.ID, Created: false}, nil
+		return PropositionRegisterResponse{ID: existing.ID, Action: PropositionActionCreate, Created: false}, nil
 	} else if !errors.Is(getErr, sessionstore.ErrNotFound) {
 		return PropositionRegisterResponse{}, getErr
 	}
 	payload, err := json.Marshal(propositionStoredPayload{
 		PropositionPayload: PropositionPayload{
-			Queries: normalized.Queries, Confidence: &normalized.Confidence,
-			ExtractorModel: normalized.ExtractorModel, ExtractorVersion: normalized.ExtractorVersion,
+			Queries: job.Request.Queries, Confidence: &job.Request.Confidence,
+			ExtractorModel: job.Request.ExtractorModel, ExtractorVersion: job.Request.ExtractorVersion,
 		},
 		IdempotencyHash: idempotencyHash, RequestDigest: requestDigest,
 	})
@@ -205,9 +231,9 @@ func (s *propositionService) register(idempotencyKey string, request Proposition
 		now = s.now().UTC()
 	}
 	projections := make([]sessionstore.VectorProjection, 0)
-	if normalized.Embeddings != nil {
-		projections = make([]sessionstore.VectorProjection, 0, len(normalized.Embeddings.Vectors))
-		for index, vector := range normalized.Embeddings.Vectors {
+	if job.Request.Embeddings != nil {
+		projections = make([]sessionstore.VectorProjection, 0, len(job.Request.Embeddings.Vectors))
+		for index, vector := range job.Request.Embeddings.Vectors {
 			projectionID := "content"
 			if index > 0 {
 				projectionID = fmt.Sprintf("query-%d", index-1)
@@ -215,7 +241,7 @@ func (s *propositionService) register(idempotencyKey string, request Proposition
 			projections = append(projections, sessionstore.VectorProjection{
 				ID: projectionID,
 				Embedding: sessionstore.Embedding{
-					Model: normalized.Embeddings.Model, Dimensions: normalized.Embeddings.Dimensions,
+					Model: job.Request.Embeddings.Model, Dimensions: job.Request.Embeddings.Dimensions,
 					CreatedAt: now, Vector: append([]float32(nil), vector...),
 				},
 			})
@@ -223,14 +249,14 @@ func (s *propositionService) register(idempotencyKey string, request Proposition
 	}
 	_, err = s.archive.Save(sessionstore.Record{
 		ID: id, Kind: sessionstore.KindProposition, Scope: "global",
-		Content: normalized.Content, SearchText: strings.Join(normalized.Queries, "\n"),
-		CreatedAt: now, UpdatedAt: now, Refs: normalized.Refs, Tags: normalized.Tags,
+		Content: job.Request.Content, SearchText: strings.Join(job.Request.Queries, "\n"),
+		CreatedAt: now, UpdatedAt: now, Refs: job.Request.Refs, Tags: job.Request.Tags,
 		VectorProjections: projections, Payload: payload,
 	})
 	if err != nil {
 		return PropositionRegisterResponse{}, err
 	}
-	return PropositionRegisterResponse{ID: id, Created: true}, nil
+	return PropositionRegisterResponse{ID: id, Action: PropositionActionCreate, Created: true}, nil
 }
 
 func normalizePropositionRegisterRequest(request PropositionRegisterRequest) (PropositionRegisterRequest, error) {
@@ -331,8 +357,222 @@ func normalizeBoundedStrings(values []string, maximumItems, maximumRunes int, fi
 	return result, nil
 }
 
-func newPropositionService(archive *sessionstore.Store) *propositionService {
-	return &propositionService{archive: archive, now: time.Now}
+func newPropositionService(parent context.Context, archive *sessionstore.Store, queue *propositionQueue, judge PropositionJudge, judgeErr error) *propositionService {
+	ctx, cancel := context.WithCancel(parent)
+	service := &propositionService{
+		archive: archive, queue: queue, judge: judge, judgeErr: judgeErr, now: time.Now,
+		ctx: ctx, cancel: cancel, done: make(chan struct{}),
+	}
+	go service.runQueue()
+	return service
+}
+
+func (s *propositionService) close() {
+	if s == nil || s.cancel == nil {
+		return
+	}
+	s.cancel()
+	<-s.done
+}
+
+func (s *propositionService) runQueue() {
+	defer close(s.done)
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+	for {
+		processed, err := s.processNext(s.ctx)
+		if err != nil {
+			select {
+			case <-s.ctx.Done():
+				return
+			case <-time.After(250 * time.Millisecond):
+			}
+			continue
+		}
+		if processed {
+			continue
+		}
+		select {
+		case <-s.ctx.Done():
+			return
+		case <-s.queue.notify:
+		case <-ticker.C:
+			_ = s.queue.cleanup(s.ctx)
+		}
+	}
+}
+
+func (s *propositionService) processNext(ctx context.Context) (bool, error) {
+	job, found, err := s.queue.claim(ctx)
+	if err != nil || !found {
+		return found, err
+	}
+	decision := job.Decision
+	if job.State == "running" {
+		if s.judgeErr != nil {
+			err = fmt.Errorf("library: initialize proposition judge: %w", s.judgeErr)
+		} else if s.judge == nil {
+			err = errors.New("library: proposition judge is not configured")
+		} else {
+			var candidates []PropositionSearchHit
+			candidates, err = s.similarCandidates(ctx, job.Request)
+			if err == nil {
+				judgeContext, cancelJudge := context.WithTimeout(ctx, propositionJudgeTimeout)
+				decision, err = s.judge.JudgeProposition(judgeContext, job.Request, candidates)
+				cancelJudge()
+			}
+			if err == nil {
+				err = validatePropositionDecision(decision, candidates)
+			}
+		}
+		if err == nil {
+			err = s.queue.saveDecision(ctx, job.Key, decision)
+		}
+	}
+	if err != nil {
+		if ctx.Err() != nil {
+			return true, ctx.Err()
+		}
+		_ = s.queue.fail(context.Background(), job.Key, err)
+		return true, nil
+	}
+	job.Decision = decision
+	response, err := s.applyDecision(job)
+	if err != nil {
+		_ = s.queue.fail(context.Background(), job.Key, err)
+		return true, nil
+	}
+	if err := s.queue.complete(ctx, job, response); err != nil {
+		return true, err
+	}
+	_ = s.queue.cleanup(ctx)
+	return true, nil
+}
+
+func (s *propositionService) similarCandidates(ctx context.Context, request PropositionRegisterRequest) ([]PropositionSearchHit, error) {
+	zero := 0.0
+	search := PropositionSearchRequest{Query: request.Content, Limit: 5, RecencyWeight: &zero}
+	if request.Embeddings != nil && len(request.Embeddings.Vectors) > 0 {
+		search.Embedding = append([]float32(nil), request.Embeddings.Vectors[0]...)
+	}
+	result, err := s.search(ctx, search)
+	if err != nil {
+		return nil, err
+	}
+	return result.Hits, nil
+}
+
+func (s *propositionService) applyDecision(job propositionJob) (PropositionRegisterResponse, error) {
+	switch job.Decision.Action {
+	case PropositionActionCreate:
+		return s.create(job)
+	case PropositionActionMerge:
+		return s.merge(job.Decision.TargetID, job.Request)
+	case PropositionActionDiscard:
+		return PropositionRegisterResponse{
+			ID: job.Decision.TargetID, Action: PropositionActionDiscard, Discarded: true,
+		}, nil
+	default:
+		return PropositionRegisterResponse{}, fmt.Errorf("library: unsupported queued proposition action %q", job.Decision.Action)
+	}
+}
+
+func (s *propositionService) merge(id string, request PropositionRegisterRequest) (PropositionRegisterResponse, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	record, err := s.archive.Get(id)
+	if err != nil {
+		return PropositionRegisterResponse{}, err
+	}
+	if record.Kind != sessionstore.KindProposition || record.Scope != "global" {
+		return PropositionRegisterResponse{}, sessionstore.ErrNotFound
+	}
+	var payload propositionStoredPayload
+	if err := json.Unmarshal(record.Payload, &payload); err != nil {
+		return PropositionRegisterResponse{}, fmt.Errorf("library: decode proposition payload: %w", err)
+	}
+	existingQueries := append([]string(nil), payload.Queries...)
+	payload.Queries = mergeBoundedStrings(payload.Queries, request.Queries, maximumPropositionQueries)
+	if payload.Confidence == nil || request.Confidence > *payload.Confidence {
+		confidence := request.Confidence
+		payload.Confidence = &confidence
+	}
+	record.Refs = mergeBoundedStrings(record.Refs, request.Refs, maximumPropositionRefs)
+	record.Tags = mergeBoundedStrings(record.Tags, request.Tags, maximumPropositionTags)
+	record.SearchText = strings.Join(payload.Queries, "\n")
+	record.VectorProjections = mergeQueryProjections(record.VectorProjections, existingQueries, payload.Queries, request)
+	record.UpdatedAt = time.Time{}
+	record.Payload, err = json.Marshal(payload)
+	if err != nil {
+		return PropositionRegisterResponse{}, err
+	}
+	if _, err := s.archive.Save(record); err != nil {
+		return PropositionRegisterResponse{}, err
+	}
+	return PropositionRegisterResponse{ID: id, Action: PropositionActionMerge, Merged: true}, nil
+}
+
+func mergeBoundedStrings(existing, additions []string, maximum int) []string {
+	result := append([]string(nil), existing...)
+	seen := make(map[string]struct{}, len(result))
+	for _, value := range result {
+		seen[value] = struct{}{}
+	}
+	for _, value := range additions {
+		if len(result) >= maximum {
+			break
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		result = append(result, value)
+	}
+	return result
+}
+
+func mergeQueryProjections(
+	existing []sessionstore.VectorProjection,
+	existingQueries, mergedQueries []string,
+	request PropositionRegisterRequest,
+) []sessionstore.VectorProjection {
+	byQuery := make(map[string]sessionstore.Embedding)
+	var content *sessionstore.VectorProjection
+	for _, projection := range existing {
+		if projection.ID == "content" {
+			copy := projection
+			content = &copy
+			continue
+		}
+		var index int
+		if _, err := fmt.Sscanf(projection.ID, "query-%d", &index); err == nil && index >= 0 && index < len(existingQueries) {
+			byQuery[existingQueries[index]] = projection.Embedding
+		}
+	}
+	if request.Embeddings != nil {
+		for index, query := range request.Queries {
+			if _, exists := byQuery[query]; exists {
+				continue
+			}
+			vectorIndex := index + 1
+			if vectorIndex < len(request.Embeddings.Vectors) {
+				byQuery[query] = sessionstore.Embedding{
+					Model: request.Embeddings.Model, Dimensions: request.Embeddings.Dimensions,
+					Vector: append([]float32(nil), request.Embeddings.Vectors[vectorIndex]...),
+				}
+			}
+		}
+	}
+	result := make([]sessionstore.VectorProjection, 0, len(mergedQueries)+1)
+	if content != nil {
+		result = append(result, *content)
+	}
+	for index, query := range mergedQueries {
+		if embedding, ok := byQuery[query]; ok {
+			result = append(result, sessionstore.VectorProjection{ID: fmt.Sprintf("query-%d", index), Embedding: embedding})
+		}
+	}
+	return result
 }
 
 func (s *propositionService) search(ctx context.Context, request PropositionSearchRequest) (PropositionSearchResponse, error) {
@@ -467,11 +707,16 @@ func registerPropositionRoutes(mux *http.ServeMux, authenticator func(http.Handl
 			writeLibraryError(writer, http.StatusBadRequest, err)
 			return
 		}
-		output, err := propositions.register(request.Header.Get("Idempotency-Key"), input)
+		output, err := propositions.register(request.Context(), request.Header.Get("Idempotency-Key"), input)
 		if err != nil {
 			status := http.StatusBadRequest
 			if errors.Is(err, errPropositionIdempotencyConflict) {
 				status = http.StatusConflict
+			} else {
+				var jobFailure *propositionJobFailure
+				if errors.As(err, &jobFailure) {
+					status = http.StatusServiceUnavailable
+				}
 			}
 			writeLibraryError(writer, status, err)
 			return

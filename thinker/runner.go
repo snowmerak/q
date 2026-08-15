@@ -38,7 +38,12 @@ type Job struct {
 }
 
 type Result struct {
+	Proposed   int          `json:"proposed"`
+	Processed  int          `json:"processed"`
 	Registered int          `json:"registered"`
+	Created    int          `json:"created,omitempty"`
+	Merged     int          `json:"merged,omitempty"`
+	Discarded  int          `json:"discarded,omitempty"`
 	IDs        []string     `json:"ids,omitempty"`
 	Usage      client.Usage `json:"usage,omitempty"`
 	Truncated  bool         `json:"truncated,omitempty"`
@@ -102,6 +107,7 @@ func (r Runner) Run(ctx context.Context, job Job) (Result, error) {
 	tools := thinkerTools()
 	parallel := false
 	result := Result{Truncated: chunk.Truncated}
+	proposalIndex := 0
 	for round := 0; round < rounds; round++ {
 		request := client.ChatRequest{
 			Messages: messages, Tools: tools, ToolChoice: client.ToolChoiceRequired,
@@ -134,7 +140,7 @@ func (r Runner) Run(ctx context.Context, job Job) (Result, error) {
 			}
 			return result, nil
 		case RegisterToolName:
-			if result.Registered >= maximum {
+			if proposalIndex >= maximum {
 				return Result{}, fmt.Errorf("thinker: proposition limit %d exceeded", maximum)
 			}
 			var input registerInput
@@ -142,7 +148,9 @@ func (r Runner) Run(ctx context.Context, job Job) (Result, error) {
 				messages = append(messages, thinkerToolError(call, fmt.Errorf("register proposition: %w", err)))
 				continue
 			}
-			idempotencyKey := fmt.Sprintf("%s/%d", job.ID, result.Registered)
+			idempotencyKey := fmt.Sprintf("%s/%d", job.ID, proposalIndex)
+			proposalIndex++
+			result.Proposed = proposalIndex
 			registration := qlibrary.PropositionRegisterRequest{
 				Content: input.Content, Queries: input.Queries, Confidence: input.Confidence, Tags: input.Tags,
 				Refs: job.Refs, ExtractorModel: r.Spec.Model, ExtractorVersion: ExtractorVersion,
@@ -160,8 +168,29 @@ func (r Runner) Run(ctx context.Context, job Job) (Result, error) {
 				messages = append(messages, thinkerToolError(call, fmt.Errorf("register proposition: %w", err)))
 				continue
 			}
-			result.Registered++
-			result.IDs = append(result.IDs, registered.ID)
+			result.Processed++
+			action := registered.Action
+			if action == "" {
+				action = qlibrary.PropositionActionCreate
+			}
+			switch action {
+			case qlibrary.PropositionActionCreate:
+				result.Registered++
+				result.Created++
+				if registered.ID != "" {
+					result.IDs = append(result.IDs, registered.ID)
+				}
+			case qlibrary.PropositionActionMerge:
+				result.Registered++
+				result.Merged++
+				if registered.ID != "" {
+					result.IDs = append(result.IDs, registered.ID)
+				}
+			case qlibrary.PropositionActionDiscard:
+				result.Discarded++
+			default:
+				return Result{}, fmt.Errorf("thinker: unsupported proposition action %q", action)
+			}
 			ack, _ := json.Marshal(registered)
 			messages = append(messages, client.Message{
 				Role: client.RoleTool, Name: RegisterToolName, ToolCallID: call.ID, Content: string(ack),

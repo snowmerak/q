@@ -17,9 +17,10 @@ import (
 )
 
 const (
-	ServiceName     = "q-library"
-	ProtocolVersion = 1
-	Implementation  = "0.1.0"
+	ServiceName         = "q-library"
+	ProtocolVersion     = 1
+	Implementation      = "0.1.0"
+	registrationTimeout = 2 * time.Minute
 )
 
 type Health struct {
@@ -39,6 +40,7 @@ type Client struct {
 	endpoint string
 	apiKey   string
 	http     *http.Client
+	register *http.Client
 
 	embeddingMu sync.RWMutex
 	embedding   embeddingClientConfig
@@ -62,7 +64,7 @@ func NewClient(endpoint, apiKey string, timeout time.Duration) *Client {
 	}
 	return &Client{
 		endpoint: strings.TrimRight(endpoint, "/"), apiKey: apiKey,
-		http: &http.Client{Timeout: timeout},
+		http: &http.Client{Timeout: timeout}, register: &http.Client{Timeout: max(timeout, registrationTimeout)},
 	}
 }
 
@@ -212,7 +214,7 @@ func (c *Client) RegisterProposition(ctx context.Context, idempotencyKey string,
 		}
 	}
 	var output PropositionRegisterResponse
-	if err := c.doJSONWithHeaders(ctx, http.MethodPost, "/propositions", input, &output, map[string]string{
+	if err := c.doJSONWithClient(ctx, c.register, http.MethodPost, "/propositions", input, &output, map[string]string{
 		"Idempotency-Key": idempotencyKey,
 	}); err != nil {
 		return PropositionRegisterResponse{}, err
@@ -317,8 +319,15 @@ func (c *Client) doJSON(ctx context.Context, method, path string, input, output 
 }
 
 func (c *Client) doJSONWithHeaders(ctx context.Context, method, path string, input, output any, headers map[string]string) error {
+	return c.doJSONWithClient(ctx, c.http, method, path, input, output, headers)
+}
+
+func (c *Client) doJSONWithClient(ctx context.Context, httpClient *http.Client, method, path string, input, output any, headers map[string]string) error {
 	if c == nil {
 		return errors.New("library: client is nil")
+	}
+	if httpClient == nil {
+		return errors.New("library: HTTP client is unavailable")
 	}
 	var body *bytes.Reader
 	if input == nil {
@@ -344,7 +353,7 @@ func (c *Client) doJSONWithHeaders(ctx context.Context, method, path string, inp
 	for name, value := range headers {
 		request.Header.Set(name, value)
 	}
-	response, err := c.http.Do(request)
+	response, err := httpClient.Do(request)
 	if err != nil {
 		return err
 	}

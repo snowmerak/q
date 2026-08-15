@@ -353,6 +353,220 @@ func TestGlobalPropositionAPIRegistersIdempotently(t *testing.T) {
 	}
 }
 
+func TestPropositionQueueJudgesAndMergesDuplicateAcrossIdempotencyKeys(t *testing.T) {
+	dir := t.TempDir()
+	value := testConfig(t)
+	value, key := installTestAPIKey(t, dir, value)
+	judge := &mergeDuplicateTestJudge{}
+	options := testOptions(dir, value)
+	options.Judge = judge
+	runtime, err := EnsureWithOptions(context.Background(), options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer runtime.Close()
+	client := NewClient(runtime.Endpoint(), key, time.Second)
+	first, err := client.RegisterProposition(context.Background(), "duplicate/one", PropositionRegisterRequest{
+		Content: "The Library serializes proposition adjudication.",
+		Queries: []string{"how are proposition decisions ordered"}, Confidence: 0.8,
+		Tags: []string{"library"}, Refs: []string{"run:first"},
+		ExtractorModel: "thinker", ExtractorVersion: "v1",
+	})
+	if err != nil || !first.Created || first.Action != PropositionActionCreate {
+		t.Fatalf("first registration = %#v, %v", first, err)
+	}
+	second, err := client.RegisterProposition(context.Background(), "duplicate/two", PropositionRegisterRequest{
+		Content: "The Library serializes proposition adjudication.",
+		Queries: []string{"how does the library queue judgments"}, Confidence: 0.95,
+		Tags: []string{"dedup"}, Refs: []string{"run:second"},
+		ExtractorModel: "thinker", ExtractorVersion: "v1",
+	})
+	if err != nil || !second.Merged || second.Action != PropositionActionMerge || second.ID != first.ID {
+		t.Fatalf("merged registration = %#v, %v", second, err)
+	}
+	got, err := client.GetProposition(context.Background(), first.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(got.Refs, []string{"run:first", "run:second"}) ||
+		!reflect.DeepEqual(got.Tags, []string{"library", "dedup"}) || len(got.Payload.Queries) != 2 ||
+		got.Payload.Confidence == nil || *got.Payload.Confidence != 0.95 {
+		t.Fatalf("merged proposition = %#v", got)
+	}
+	if judge.calls != 2 || judge.lastScore <= 0 {
+		t.Fatalf("judge calls = %d, final score = %f", judge.calls, judge.lastScore)
+	}
+}
+
+func TestPropositionReceiptSurvivesLeaderRestartWithoutRejudging(t *testing.T) {
+	dir := t.TempDir()
+	value := testConfig(t)
+	value, key := installTestAPIKey(t, dir, value)
+	firstJudge := &mergeDuplicateTestJudge{}
+	options := testOptions(dir, value)
+	options.Judge = firstJudge
+	runtime, err := EnsureWithOptions(context.Background(), options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := NewClient(runtime.Endpoint(), key, time.Second)
+	input := PropositionRegisterRequest{
+		Content: "Completed proposition jobs retain compact receipts.", Confidence: 0.9,
+		ExtractorModel: "thinker", ExtractorVersion: "v1",
+	}
+	created, err := client.RegisterProposition(context.Background(), "receipt/restart", input)
+	if err != nil || !created.Created {
+		t.Fatalf("created = %#v, %v", created, err)
+	}
+	runtime.leader.queue.now = func() time.Time { return time.Now().Add(propositionJobRetention + time.Hour) }
+	if err := runtime.leader.queue.cleanup(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	var remainingJobs int
+	if err := runtime.leader.queue.db.QueryRow(`SELECT count(*) FROM proposition_jobs`).Scan(&remainingJobs); err != nil || remainingJobs != 0 {
+		t.Fatalf("remaining jobs = %d, err = %v", remainingJobs, err)
+	}
+	if err := runtime.Close(); err != nil {
+		t.Fatal(err)
+	}
+	secondJudge := &mergeDuplicateTestJudge{}
+	options.Judge = secondJudge
+	runtime, err = EnsureWithOptions(context.Background(), options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer runtime.Close()
+	retried, err := NewClient(runtime.Endpoint(), key, time.Second).RegisterProposition(context.Background(), "receipt/restart", input)
+	if err != nil || retried.Created || retried.ID != created.ID || retried.Action != PropositionActionCreate {
+		t.Fatalf("retried = %#v, %v", retried, err)
+	}
+	if secondJudge.calls != 0 {
+		t.Fatalf("receipt retry invoked judge %d time(s)", secondJudge.calls)
+	}
+}
+
+func TestPropositionQueueRunsJudgeSessionsSequentially(t *testing.T) {
+	dir := t.TempDir()
+	value := testConfig(t)
+	value, key := installTestAPIKey(t, dir, value)
+	judge := &serialTestPropositionJudge{}
+	options := testOptions(dir, value)
+	options.Judge = judge
+	runtime, err := EnsureWithOptions(context.Background(), options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer runtime.Close()
+	client := NewClient(runtime.Endpoint(), key, time.Second)
+	var wait sync.WaitGroup
+	errorsByCall := make(chan error, 2)
+	for index := range 2 {
+		wait.Add(1)
+		go func(index int) {
+			defer wait.Done()
+			_, err := client.RegisterProposition(context.Background(), fmt.Sprintf("serial/%d", index), PropositionRegisterRequest{
+				Content: fmt.Sprintf("Serial proposition %d.", index), Confidence: 0.9,
+				ExtractorModel: "thinker", ExtractorVersion: "v1",
+			})
+			errorsByCall <- err
+		}(index)
+	}
+	wait.Wait()
+	close(errorsByCall)
+	for err := range errorsByCall {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	judge.mu.Lock()
+	defer judge.mu.Unlock()
+	if judge.calls != 2 || judge.maximumActive != 1 {
+		t.Fatalf("judge calls = %d, maximum active = %d", judge.calls, judge.maximumActive)
+	}
+}
+
+func TestFailedPropositionJobCanBeRetriedWithSameIdempotencyKey(t *testing.T) {
+	dir := t.TempDir()
+	value := testConfig(t)
+	value, key := installTestAPIKey(t, dir, value)
+	judge := &flakyTestPropositionJudge{}
+	options := testOptions(dir, value)
+	options.Judge = judge
+	runtime, err := EnsureWithOptions(context.Background(), options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer runtime.Close()
+	client := NewClient(runtime.Endpoint(), key, time.Second)
+	input := PropositionRegisterRequest{
+		Content: "Failed adjudication jobs are retryable.", Confidence: 0.9,
+		ExtractorModel: "thinker", ExtractorVersion: "v1",
+	}
+	if _, err := client.RegisterProposition(context.Background(), "retry/job", input); err == nil || !strings.Contains(err.Error(), "temporary judge failure") {
+		t.Fatalf("first registration error = %v", err)
+	}
+	created, err := client.RegisterProposition(context.Background(), "retry/job", input)
+	if err != nil || !created.Created || created.Action != PropositionActionCreate {
+		t.Fatalf("retried registration = %#v, %v", created, err)
+	}
+}
+
+type mergeDuplicateTestJudge struct {
+	calls     int
+	lastScore float64
+}
+
+type serialTestPropositionJudge struct {
+	mu            sync.Mutex
+	calls         int
+	active        int
+	maximumActive int
+}
+
+type flakyTestPropositionJudge struct{ calls int }
+
+func (j *flakyTestPropositionJudge) JudgeProposition(
+	_ context.Context,
+	_ PropositionRegisterRequest,
+	_ []PropositionSearchHit,
+) (PropositionDecision, error) {
+	j.calls++
+	if j.calls == 1 {
+		return PropositionDecision{}, errors.New("temporary judge failure")
+	}
+	return PropositionDecision{Action: PropositionActionCreate, Reason: "retry succeeded"}, nil
+}
+
+func (j *serialTestPropositionJudge) JudgeProposition(
+	_ context.Context,
+	_ PropositionRegisterRequest,
+	_ []PropositionSearchHit,
+) (PropositionDecision, error) {
+	j.mu.Lock()
+	j.calls++
+	j.active++
+	j.maximumActive = max(j.maximumActive, j.active)
+	j.mu.Unlock()
+	time.Sleep(25 * time.Millisecond)
+	j.mu.Lock()
+	j.active--
+	j.mu.Unlock()
+	return PropositionDecision{Action: PropositionActionCreate, Reason: "distinct test input"}, nil
+}
+
+func (j *mergeDuplicateTestJudge) JudgeProposition(
+	_ context.Context,
+	_ PropositionRegisterRequest,
+	candidates []PropositionSearchHit,
+) (PropositionDecision, error) {
+	j.calls++
+	if len(candidates) == 0 {
+		return PropositionDecision{Action: PropositionActionCreate, Reason: "no candidate"}, nil
+	}
+	j.lastScore = candidates[0].Score
+	return PropositionDecision{Action: PropositionActionMerge, TargetID: candidates[0].ID, Reason: "same fact"}, nil
+}
+
 func TestGlobalPropositionAPIPersistsSearchesAndDeletesVectorProjections(t *testing.T) {
 	dir := t.TempDir()
 	value, secret := installTestAPIKey(t, dir, testConfig(t))
@@ -704,9 +918,19 @@ func testConfig(t *testing.T) Config {
 
 func testOptions(dir string, value Config) EnsureOptions {
 	return EnsureOptions{
-		Dir: dir, Config: value,
+		Dir: dir, Config: value, Judge: createTestPropositionJudge{},
 		ProbeTimeout: 300 * time.Millisecond, StartupTimeout: 3 * time.Second,
 	}
+}
+
+type createTestPropositionJudge struct{}
+
+func (createTestPropositionJudge) JudgeProposition(
+	_ context.Context,
+	_ PropositionRegisterRequest,
+	_ []PropositionSearchHit,
+) (PropositionDecision, error) {
+	return PropositionDecision{Action: PropositionActionCreate, Reason: "test fixture"}, nil
 }
 
 func installTestAPIKey(t *testing.T, dir string, value Config) (Config, string) {

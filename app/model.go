@@ -649,8 +649,11 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 		}
-		if !m.waiting && message.result.Registered > 0 {
-			m.status = fmt.Sprintf("Thinker registered %d proposition(s)", message.result.Registered)
+		if !m.waiting && message.result.Processed > 0 {
+			m.status = fmt.Sprintf(
+				"Thinker processed %d proposition(s) · %d created · %d merged · %d discarded",
+				message.result.Processed, message.result.Created, message.result.Merged, message.result.Discarded,
+			)
 			m.resize(m.width, m.height)
 		}
 		return m, m.startNextLearningSegment()

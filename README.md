@@ -449,8 +449,12 @@ and ordinary tool results are excluded; assistant
 prose, the complete validated `task_complete` result, and the complete approved
 plan are retained. Checkpoints advance only after `thinking_complete`, so a
 failed or interrupted extraction retries the same durable segment. The Thinker
-calls a private `register_proposition` tool once per proposition, and each call
-is immediately persisted with an idempotency key.
+calls a private `register_proposition` tool once per proposition. q Library
+durably queues each call in SQLite, retrieves up to five existing propositions
+with hybrid search and recency disabled, and starts a fresh `thinker` model
+session to choose `create`, `merge`, or `discard`. Registrations wait for that
+serialized decision. Completed job payloads expire after seven days, while
+compact idempotency receipts remain so delayed retries return the same result.
 
 `search_propositions` searches canonical text and generated query variants
 with a default `created_at` recency boost; `get_proposition` returns the

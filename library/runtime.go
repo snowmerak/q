@@ -21,6 +21,7 @@ type EnsureOptions struct {
 	Dir            string
 	Config         Config
 	Vector         sessionstore.VectorConfig
+	Judge          PropositionJudge
 	ProbeTimeout   time.Duration
 	StartupTimeout time.Duration
 }
@@ -87,7 +88,7 @@ func EnsureWithOptions(ctx context.Context, options EnsureOptions) (*Runtime, er
 				_ = lock.Close()
 				return nil, fmt.Errorf("library: configured address %s is unavailable: %w", value.ListenAddress(), listenErr)
 			}
-			leader, startErr := startLeader(ctx, options.Dir, value, options.Vector, listener, lock)
+			leader, startErr := startLeader(ctx, options.Dir, value, options.Vector, options.Judge, listener, lock)
 			if startErr != nil {
 				_ = listener.Close()
 				_ = lock.Close()
