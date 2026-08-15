@@ -442,8 +442,10 @@ q Library stores and reads durable global proposition records through its
 authenticated API. A workspace-local checkpoint state machine accumulates
 conversation events and closes a learning segment at 45% of the Thinker
 model's context, after a successful `task_complete`, when a complete plan is
-approved, or when `/learn`/the q-tools MCP `learn` tool explicitly requests a
-boundary. Raw tool calls and ordinary tool results are excluded; assistant
+approved, or when `/learn` or the active chat's session-only MCP `learn` tool
+explicitly requests a boundary. The standalone `q-mcp` server does not expose
+`learn` because it does not own the active conversation cursor. Raw tool calls
+and ordinary tool results are excluded; assistant
 prose, the complete validated `task_complete` result, and the complete approved
 plan are retained. Checkpoints advance only after `thinking_complete`, so a
 failed or interrupted extraction retries the same durable segment. The Thinker

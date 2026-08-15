@@ -30,14 +30,6 @@ func Register(server *mcp.Server, root string, dependencies Dependencies) (*FS, 
 	nonDestructive := false
 
 	mcp.AddTool(server, &mcp.Tool{
-		Name:        "learn",
-		Description: "Close the current learning segment and enqueue it for asynchronous Thinker extraction. Returns immediately; an empty segment is a no-op.",
-		Annotations: &mcp.ToolAnnotations{IdempotentHint: true},
-	}, func(_ context.Context, _ *mcp.CallToolRequest, _ LearnInput) (*mcp.CallToolResult, LearnOutput, error) {
-		return structuredTextResult(LearnOutput{Enqueued: true})
-	})
-
-	mcp.AddTool(server, &mcp.Tool{
 		Name:        "read_file",
 		Description: "Read a text file with LINE#HASH anchors. Use these exact anchors for edit_file; re-read after a stale-anchor error.",
 		Annotations: &mcp.ToolAnnotations{ReadOnlyHint: readOnly, IdempotentHint: true},

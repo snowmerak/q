@@ -118,6 +118,7 @@ func newRuntimeWithLSP(ctx context.Context, root string, archive builtin.Archive
 	if err != nil {
 		return nil, err
 	}
+	builtin.RegisterLearning(server)
 	serverTransport, clientTransport := mcp.NewInMemoryTransports()
 	serverSession, err := server.Connect(ctx, serverTransport, nil)
 	if err != nil {

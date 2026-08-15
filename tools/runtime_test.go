@@ -62,6 +62,14 @@ func TestRuntimeListsAndCallsBuiltinTools(t *testing.T) {
 	if !runtimeHasTool(runtime, "search_skills") || !runtimeHasTool(runtime, "get_skill") || !runtimeHasTool(runtime, "learn") {
 		t.Fatalf("skill retrieval tools are unavailable: %#v", runtime.Tools())
 	}
+	learned, err := runtime.client.CallTool(context.Background(), &mcp.CallToolParams{Name: "learn"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	structured, ok := learned.StructuredContent.(map[string]any)
+	if learned.IsError || !ok || structured["enqueued"] != true {
+		t.Fatalf("unexpected learn result: %+v", learned)
+	}
 	environment := runtime.Environment()
 	if environment.OS != goruntime.GOOS || environment.Architecture != goruntime.GOARCH || environment.Shell == "" {
 		t.Fatalf("runtime environment = %#v", environment)
