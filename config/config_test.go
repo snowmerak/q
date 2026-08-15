@@ -291,14 +291,19 @@ func TestValidateModelGroups(t *testing.T) {
 		{name: "empty group", groups: map[string]ModelGroupConfig{"heavy": {}}, want: "at least one"},
 		{name: "empty model", groups: map[string]ModelGroupConfig{"heavy": {Candidates: []ModelCandidateConfig{{}}}}, want: "model must be"},
 		{name: "duplicate model", groups: map[string]ModelGroupConfig{"heavy": {Candidates: []ModelCandidateConfig{{Model: "one"}, {Model: "one"}}}}, want: "duplicate"},
+		{name: "nested group", groups: map[string]ModelGroupConfig{"heavy": {Candidates: []ModelCandidateConfig{{Model: "group/other"}}}}, want: "cannot reference"},
 		{name: "negative timeout", groups: map[string]ModelGroupConfig{"heavy": {Candidates: []ModelCandidateConfig{{Model: "one", Timeout: -time.Second}}}}, want: "timeout"},
 		{name: "unknown group", agent: AgentConfig{Group: "missing"}, want: "unknown model group"},
 		{name: "model and group", groups: map[string]ModelGroupConfig{"heavy": {Candidates: []ModelCandidateConfig{{Model: "one"}}}}, agent: AgentConfig{Model: "one", Group: "heavy"}, want: "mutually exclusive"},
+		{name: "unknown provider group", agent: AgentConfig{}, want: "provider model references unknown model group"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			value := Default()
 			value.Provider.Model = "active-model"
+			if test.name == "unknown provider group" {
+				value.Provider.Model = "group/missing"
+			}
 			value.ModelGroups = test.groups
 			if test.agent != (AgentConfig{}) {
 				value.Agents.Roles = map[string]AgentConfig{AgentRolePlanner: test.agent}

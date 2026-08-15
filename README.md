@@ -295,8 +295,16 @@ failures open that model's in-memory circuit for 30 seconds; one half-open probe
 is allowed after the cooldown. Circuit state is process-local and is not
 persisted. A successful fallback remains selected for the rest of that agent
 execution; a new execution starts from the first candidate whose circuit allows
-a request. Define groups in `~/.q/config.yaml`; `/model` then lists each
-`group:<name>` choice for agent roles.
+a request. Press `g` on `/model`'s top-level target screen to create and edit
+groups, add candidates, choose per-candidate effort and timeout, reorder the
+fallback chain, or delete an unreferenced group. Groups can also be declared in
+`~/.q/config.yaml`.
+
+The managed and standalone Gateways expose each group as `group/<name>` in
+`/v1/models` and accept that ID in chat-completion requests. The advertised
+context length and maximum output are the smallest corresponding limits among
+all candidates; an unknown member limit makes the group limit unknown. Agent
+role pickers render configured groups as `group:<name>` choices.
 
 The embedding picker accepts dimensions from 1 to 4096. Because the shared
 model catalog does not identify embedding-only models, it currently shows all

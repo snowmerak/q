@@ -206,6 +206,9 @@ func (c Config) Validate() error {
 			if candidate.Model == "" || candidate.Model != strings.TrimSpace(candidate.Model) {
 				return fmt.Errorf("config: model group %q candidate %d model must be non-empty without surrounding whitespace", name, index)
 			}
+			if strings.HasPrefix(candidate.Model, "group/") {
+				return fmt.Errorf("config: model group %q candidate %d cannot reference another model group", name, index)
+			}
 			if _, duplicate := seen[candidate.Model]; duplicate {
 				return fmt.Errorf("config: model group %q contains duplicate model %q", name, candidate.Model)
 			}
@@ -216,6 +219,11 @@ func (c Config) Validate() error {
 			if candidate.Timeout < 0 {
 				return fmt.Errorf("config: model group %q candidate %d timeout must not be negative", name, index)
 			}
+		}
+	}
+	if name, grouped := strings.CutPrefix(c.Provider.Model, "group/"); grouped {
+		if _, found := c.ModelGroups[name]; !found {
+			return fmt.Errorf("config: provider model references unknown model group %q", name)
 		}
 	}
 	for role, agent := range c.Agents.Roles {

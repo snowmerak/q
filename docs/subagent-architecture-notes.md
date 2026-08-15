@@ -133,6 +133,9 @@ agents:
 `model`과 `group`을 모두 비워두면 현재 채팅 모델 또는 역할별 기본 모델을
 상속한다. 둘은 동시에 지정할 수 없다. 그룹은 후보 순서대로 timeout 또는 HTTP
 5xx 장애에 fallback하며, 후보의 `timeout`을 생략하면 별도 제한을 걸지 않는다.
+`/model`의 최상위 화면에서 `g`를 누르면 그룹 편집 화면으로 들어간다. Gateway는
+그룹을 `group/<name>` 모델로 노출하며 context length는 모든 후보 중 가장 작은
+값을 사용한다.
 `reasoning_effort`의 기본값은 빈 문자열이다. 값이 비어 있거나 공백만
 있으면 요청 필드 자체를 전송하지 않고 provider의 모델 기본값을 사용한다.
 명시한 값은 `/v1/models`의 `capabilities.reasoning`이 `effort` control을 광고할

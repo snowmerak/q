@@ -120,6 +120,24 @@ func TestResolveModelGroupAndKeepSuccessfulFallbackForExecution(t *testing.T) {
 	}
 }
 
+func TestValidateModelGroupDoesNotRequireAgentRole(t *testing.T) {
+	group := config.ModelGroupConfig{Candidates: []config.ModelCandidateConfig{
+		{Model: "primary", ReasoningEffort: "high"}, {Model: "secondary"},
+	}}
+	models := []client.Model{
+		{ID: "primary", Capabilities: effortCapabilities("high")},
+		{ID: "secondary"},
+	}
+	if err := ValidateModelGroup("heavy", group, models); err != nil {
+		t.Fatal(err)
+	}
+	group.Candidates[1].Model = "missing"
+	err := ValidateModelGroup("heavy", group, models)
+	if err == nil || !strings.Contains(err.Error(), `model group "heavy"`) || strings.Contains(err.Error(), "planner") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
 func TestResolveRejectsInvalidModelReasoningConfiguration(t *testing.T) {
 	tests := []struct {
 		name   string

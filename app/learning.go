@@ -20,7 +20,7 @@ func (m *model) learningContextLength() int64 {
 	if err != nil {
 		return 0
 	}
-	if spec.ContextLength <= 0 && spec.Model == m.config.Provider.Model {
+	if spec.Group == "" && spec.ContextLength <= 0 && spec.Model == m.config.Provider.Model {
 		return m.config.EffectiveContextWindow()
 	}
 	return spec.ContextLength
@@ -108,7 +108,7 @@ func (m *model) startNextLearningSegment() tea.Cmd {
 		if err != nil {
 			return thinkerResultMsg{jobID: job.ID, err: err}
 		}
-		if spec.ContextLength <= 0 && spec.Model == value.Provider.Model {
+		if spec.Group == "" && spec.ContextLength <= 0 && spec.Model == value.Provider.Model {
 			spec.ContextLength = value.EffectiveContextWindow()
 		}
 		result, err := serial.Run(ctx, thinker.Runner{

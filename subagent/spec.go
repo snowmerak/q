@@ -40,25 +40,41 @@ func Resolve(value config.Config, role string, models []client.Model) (Spec, err
 	candidates := make([]client.ModelCandidate, 0, len(configured))
 	var primary client.Model
 	var minimumContext, minimumOutput int64
+	contextKnown := len(configured) > 0
+	outputKnown := len(configured) > 0
 	for index, candidate := range configured {
 		model, found := findModel(models, candidate.Model)
 		if !found {
 			return Spec{}, fmt.Errorf("subagent: model %q for role %q was not found in /v1/models", candidate.Model, role)
 		}
-		if err := validateReasoning(role, candidate.Model, candidate.ReasoningEffort, model); err != nil {
+		if err := validateReasoning(fmt.Sprintf("role %q", role), candidate.Model, candidate.ReasoningEffort, model); err != nil {
 			return Spec{}, err
 		}
 		if index == 0 {
 			primary = model
 		}
-		minimumContext = minimumPositive(minimumContext, model.ContextLength)
-		minimumOutput = minimumPositive(minimumOutput, model.MaxOutputTokens)
+		if model.ContextLength <= 0 {
+			contextKnown = false
+		} else {
+			minimumContext = minimumPositive(minimumContext, model.ContextLength)
+		}
+		if model.MaxOutputTokens <= 0 {
+			outputKnown = false
+		} else {
+			minimumOutput = minimumPositive(minimumOutput, model.MaxOutputTokens)
+		}
 		candidates = append(candidates, client.ModelCandidate{
 			Model: candidate.Model, ReasoningEffort: candidate.ReasoningEffort, Timeout: candidate.Timeout,
 		})
 	}
 	if len(candidates) == 0 {
 		return Spec{}, fmt.Errorf("subagent: role %q resolved no model candidates", role)
+	}
+	if !contextKnown {
+		minimumContext = 0
+	}
+	if !outputKnown {
+		minimumOutput = 0
 	}
 	return Spec{
 		Role: role, Group: agent.Group,
@@ -68,21 +84,40 @@ func Resolve(value config.Config, role string, models []client.Model) (Spec, err
 	}, nil
 }
 
-func validateReasoning(role, modelID, effort string, model client.Model) error {
+// ValidateModelGroup validates model availability and per-candidate reasoning
+// controls without assigning the group to an agent role.
+func ValidateModelGroup(name string, group config.ModelGroupConfig, models []client.Model) error {
+	if len(group.Candidates) == 0 {
+		return fmt.Errorf("subagent: model group %q has no candidates", name)
+	}
+	subject := fmt.Sprintf("model group %q", name)
+	for _, candidate := range group.Candidates {
+		model, found := findModel(models, candidate.Model)
+		if !found {
+			return fmt.Errorf("subagent: model %q for %s was not found in /v1/models", candidate.Model, subject)
+		}
+		if err := validateReasoning(subject, candidate.Model, candidate.ReasoningEffort, model); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateReasoning(subject, modelID, effort string, model client.Model) error {
 	if effort == "" {
 		return nil
 	}
 	reasoning := cloneReasoning(model)
 	if reasoning == nil || !reasoning.Supported {
-		return fmt.Errorf("subagent: model %q for role %q does not advertise reasoning support", modelID, role)
+		return fmt.Errorf("subagent: model %q for %s does not advertise reasoning support", modelID, subject)
 	}
 	if reasoning.Control != client.ReasoningControlEffort {
-		return fmt.Errorf("subagent: model %q reasoning control is %q, not effort", modelID, reasoning.Control)
+		return fmt.Errorf("subagent: model %q for %s reasoning control is %q, not effort", modelID, subject, reasoning.Control)
 	}
 	if len(reasoning.SupportedEfforts) > 0 && !slices.Contains(reasoning.SupportedEfforts, effort) {
 		return fmt.Errorf(
-			"subagent: model %q does not support reasoning effort %q (supported: %v)",
-			modelID, effort, reasoning.SupportedEfforts,
+			"subagent: model %q for %s does not support reasoning effort %q (supported: %v)",
+			modelID, subject, effort, reasoning.SupportedEfforts,
 		)
 	}
 	return nil

@@ -84,7 +84,9 @@ func runGatewayWithStore(
 	defer instance.Close()
 
 	server := &http.Server{
-		Handler:           authenticator.Handler(instance.Handler()),
+		Handler: authenticator.Handler(providerhost.ModelGroupHandler(
+			instance.Handler(), config.Store{Dir: providerStore.Dir},
+		)),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 	serverContext, cancelServer := context.WithCancel(ctx)

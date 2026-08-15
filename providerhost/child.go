@@ -7,9 +7,11 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"path/filepath"
 	"time"
 
 	"github.com/snowmerak/llm-provider/gateway"
+	qconfig "github.com/snowmerak/q/config"
 )
 
 const ChildCommand = "__gateway-child"
@@ -39,7 +41,9 @@ func RunChild(ctx context.Context, configPath, apiKey string, ready func(ReadyMe
 	defer instance.Close()
 
 	server := &http.Server{
-		Handler:           AuthenticatedHandler(apiKey, instance.Handler()),
+		Handler: AuthenticatedHandler(apiKey, ModelGroupHandler(
+			instance.Handler(), qconfig.Store{Dir: filepath.Dir(filepath.Dir(configPath))},
+		)),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 	serveDone := make(chan error, 1)

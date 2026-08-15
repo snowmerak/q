@@ -890,6 +890,129 @@ func TestAgentModelSelectionReplacesGroupAndSummaryShowsGroup(t *testing.T) {
 	}
 }
 
+func TestModelGroupsTUIShortcutCreatesOrderedGroup(t *testing.T) {
+	store := config.Store{Dir: t.TempDir()}
+	value := config.Default()
+	value.Provider.Model = "primary"
+	value.Agents.Roles = map[string]config.AgentConfig{
+		config.AgentRolePlanner: {Model: "primary", ReasoningEffort: "high"},
+	}
+	m := newModel(context.Background(), store, nil)
+	m.draftConfig = value
+	m.config = value
+	m.screen = screenModels
+	m.modelPickerStage = modelPickerTargets
+	m.models = []client.Model{
+		{ID: "primary", ContextLength: 200_000, MaxOutputTokens: 16_000, Capabilities: &client.ModelCapabilities{Reasoning: &client.ReasoningCapabilities{
+			Supported: true, Control: client.ReasoningControlEffort, SupportedEfforts: []string{"high"},
+		}}},
+		{ID: "secondary", ContextLength: 128_000, MaxOutputTokens: 8_000, Capabilities: &client.ModelCapabilities{Reasoning: &client.ReasoningCapabilities{
+			Supported: true, Control: client.ReasoningControlEffort, SupportedEfforts: []string{"high"},
+		}}},
+	}
+
+	updated, _ := m.updateModelPicker(tea.KeyPressMsg{Code: 'g', Text: "g"})
+	m = updated.(model)
+	if m.modelPickerStage != modelPickerGroups {
+		t.Fatalf("g stage = %v", m.modelPickerStage)
+	}
+	updated, _ = m.updateModelPicker(tea.KeyPressMsg{Code: 'a', Text: "a"})
+	m = updated.(model)
+	m.modelGroupNameInput.SetValue("heavy")
+	updated, _ = m.updateModelPicker(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m = updated.(model)
+	if m.modelPickerStage != modelPickerGroupCandidates {
+		t.Fatalf("name stage = %v", m.modelPickerStage)
+	}
+
+	addCandidate := func(modelIndex int, timeout string) {
+		updated, _ = m.updateModelPicker(tea.KeyPressMsg{Code: 'a', Text: "a"})
+		m = updated.(model)
+		for m.modelCursor < modelIndex {
+			updated, _ = m.updateModelPicker(tea.KeyPressMsg{Code: tea.KeyDown})
+			m = updated.(model)
+		}
+		if m.modelCursor != modelIndex {
+			t.Fatalf("arrow navigation cursor = %d, want %d", m.modelCursor, modelIndex)
+		}
+		if modelIndex > 0 {
+			updated, _ = m.updateModelPicker(tea.KeyPressMsg{Code: tea.KeyUp})
+			m = updated.(model)
+			if m.modelCursor != modelIndex-1 {
+				t.Fatalf("up arrow cursor = %d, want %d", m.modelCursor, modelIndex-1)
+			}
+			updated, _ = m.updateModelPicker(tea.KeyPressMsg{Code: tea.KeyDown})
+			m = updated.(model)
+		}
+		updated, _ = m.updateModelPicker(tea.KeyPressMsg{Code: tea.KeyEnter})
+		m = updated.(model)
+		if m.modelPickerStage != modelPickerGroupCandidateReasoning {
+			t.Fatalf("model stage = %v", m.modelPickerStage)
+		}
+		m.reasoningCursor = 1
+		updated, _ = m.updateModelPicker(tea.KeyPressMsg{Code: tea.KeyEnter})
+		m = updated.(model)
+		m.modelGroupTimeoutInput.SetValue(timeout)
+		updated, _ = m.updateModelPicker(tea.KeyPressMsg{Code: tea.KeyEnter})
+		m = updated.(model)
+		if m.modelPickerStage != modelPickerGroupCandidates {
+			t.Fatalf("timeout stage = %v", m.modelPickerStage)
+		}
+	}
+	addCandidate(0, "60s")
+	addCandidate(1, "")
+	updated, command := m.updateModelPicker(tea.KeyPressMsg{Code: 's', Text: "s"})
+	m = updated.(model)
+	if command == nil {
+		t.Fatal("save group command is nil")
+	}
+	updated, _ = m.Update(command())
+	m = updated.(model)
+	group := m.config.ModelGroups["heavy"]
+	if m.modelPickerStage != modelPickerGroups || len(group.Candidates) != 2 ||
+		group.Candidates[0].Model != "primary" || group.Candidates[0].Timeout != time.Minute ||
+		group.Candidates[1].Model != "secondary" {
+		t.Fatalf("saved group = %#v, stage = %v", group, m.modelPickerStage)
+	}
+	if contextLength, output := modelGroupLimits(group, m.models); contextLength != 128_000 || output != 8_000 {
+		t.Fatalf("limits = %d/%d", contextLength, output)
+	}
+	planner := m.config.Agents.Roles[config.AgentRolePlanner]
+	if planner.Model != "primary" || planner.Group != "" || planner.ReasoningEffort != "high" {
+		t.Fatalf("saving group changed planner = %#v", planner)
+	}
+}
+
+func TestModelGroupCatalogKeepsAvailableGroupWithUnknownLimits(t *testing.T) {
+	group := config.ModelGroupConfig{Candidates: []config.ModelCandidateConfig{
+		{Model: "known"}, {Model: "unknown-limits"},
+	}}
+	models := []client.Model{
+		{ID: "known", ContextLength: 128_000, MaxOutputTokens: 8_000},
+		{ID: "unknown-limits"},
+	}
+	if !modelGroupAvailable(group, models) {
+		t.Fatal("available group was rejected")
+	}
+	if contextLength, output := modelGroupLimits(group, models); contextLength != 0 || output != 0 {
+		t.Fatalf("unknown limits must stay unknown, got %d/%d", contextLength, output)
+	}
+	m := model{draftConfig: config.Config{ModelGroups: map[string]config.ModelGroupConfig{"heavy": group}}, models: models}
+	m.refreshModelGroupCatalog()
+	found := false
+	for _, model := range m.models {
+		if model.ID == "group/heavy" {
+			found = true
+			if model.ContextLength != 0 || model.MaxOutputTokens != 0 {
+				t.Fatalf("synthetic group = %#v", model)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("available group with unknown limits was not exposed")
+	}
+}
+
 func TestSlashGatewayOpensSetupWithoutManagedRuntime(t *testing.T) {
 	value := config.Default()
 	value.Provider.Model = "test-model"

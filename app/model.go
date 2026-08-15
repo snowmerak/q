@@ -63,6 +63,12 @@ const (
 	modelPickerReasoning
 	modelPickerEmbeddingDimensions
 	modelPickerContextWindow
+	modelPickerGroups
+	modelPickerGroupName
+	modelPickerGroupCandidates
+	modelPickerGroupCandidateModels
+	modelPickerGroupCandidateReasoning
+	modelPickerGroupCandidateTimeout
 )
 
 const (
@@ -160,76 +166,85 @@ type model struct {
 	standalone        bool
 	standaloneRoot    screen
 
-	setup                 [setupFieldCount]textinput.Model
-	setupFocus            int
-	setupEdit             bool
-	providerEditIndex     int
-	providerAdding        bool
-	providerTypeCursor    int
-	gatewayConfig         gateway.Config
-	gatewayConfigOnly     bool
-	providerCursor        int
-	providerReturn        screen
-	gatewaySettingsStore  gatewayconfig.Store
-	gatewaySettings       gatewayconfig.Config
-	gatewayCursor         int
-	gatewayHostInput      textinput.Model
-	gatewayPortInput      textinput.Model
-	gatewayNetworkFocus   int
-	gatewayKeyCursor      int
-	gatewayKeyAlias       textinput.Model
-	gatewayKeyAdding      bool
-	gatewayKeyRevokeArmed bool
-	generatedGatewayKey   string
-	librarySettingsStore  qlibrary.ConfigStore
-	librarySettings       qlibrary.Config
-	libraryHostInput      textinput.Model
-	libraryPortInput      textinput.Model
-	libraryNetworkFocus   int
-	discovering           bool
-	models                []client.Model
-	modelCursor           int
-	modelFilter           textinput.Model
-	modelPickerStage      modelPickerStage
-	modelChooseTarget     bool
-	modelTarget           string
-	modelTargetCursor     int
-	reasoningCursor       int
-	modelSelection        client.Model
-	embeddingDimensions   textinput.Model
-	modelContextWindow    textinput.Model
-	draftConfig           config.Config
-	modelReturn           screen
-	loomInputs            [5]textinput.Model
-	loomFocus             int
-	loomDraft             config.LoomConfig
-	loomStats             loom.Stats
-	loomBusy              bool
-	ignoreEditor          textarea.Model
-	ignoreOriginal        string
-	ignoreDiscardArmed    bool
-	helpReturn            screen
-	skillsBusy            bool
-	skillsStatusError     bool
-	skillsScope           int
-	skillsCursor          [2]int
-	skillsMode            skillScreenMode
-	skillsInput           textinput.Model
-	skillRegistry         skillRuntime
-	lspPanel              int
-	lspCursor             [2]int
-	lspMode               lspScreenMode
-	lspEditID             string
-	lspEditingIndex       int
-	lspFormFocus          int
-	lspInputs             [4]textinput.Model
-	lspDraftGlobal        qlsp.GlobalConfig
-	lspOriginalGlobal     qlsp.GlobalConfig
-	lspDraftWorkspace     qlsp.WorkspaceConfig
-	lspOriginalWorkspace  qlsp.WorkspaceConfig
-	lspDiscardArmed       bool
-	lspBusy               bool
-	lspDiscoveryID        uint64
+	setup                     [setupFieldCount]textinput.Model
+	setupFocus                int
+	setupEdit                 bool
+	providerEditIndex         int
+	providerAdding            bool
+	providerTypeCursor        int
+	gatewayConfig             gateway.Config
+	gatewayConfigOnly         bool
+	providerCursor            int
+	providerReturn            screen
+	gatewaySettingsStore      gatewayconfig.Store
+	gatewaySettings           gatewayconfig.Config
+	gatewayCursor             int
+	gatewayHostInput          textinput.Model
+	gatewayPortInput          textinput.Model
+	gatewayNetworkFocus       int
+	gatewayKeyCursor          int
+	gatewayKeyAlias           textinput.Model
+	gatewayKeyAdding          bool
+	gatewayKeyRevokeArmed     bool
+	generatedGatewayKey       string
+	librarySettingsStore      qlibrary.ConfigStore
+	librarySettings           qlibrary.Config
+	libraryHostInput          textinput.Model
+	libraryPortInput          textinput.Model
+	libraryNetworkFocus       int
+	discovering               bool
+	models                    []client.Model
+	modelCursor               int
+	modelFilter               textinput.Model
+	modelPickerStage          modelPickerStage
+	modelChooseTarget         bool
+	modelTarget               string
+	modelTargetCursor         int
+	reasoningCursor           int
+	modelSelection            client.Model
+	embeddingDimensions       textinput.Model
+	modelContextWindow        textinput.Model
+	modelGroupCursor          int
+	modelGroupName            string
+	modelGroupNameInput       textinput.Model
+	modelGroupDraft           config.ModelGroupConfig
+	modelGroupCandidate       config.ModelCandidateConfig
+	modelGroupCandidateCursor int
+	modelGroupCandidateEdit   int
+	modelGroupTimeoutInput    textinput.Model
+	modelGroupDeleteArmed     bool
+	draftConfig               config.Config
+	modelReturn               screen
+	loomInputs                [5]textinput.Model
+	loomFocus                 int
+	loomDraft                 config.LoomConfig
+	loomStats                 loom.Stats
+	loomBusy                  bool
+	ignoreEditor              textarea.Model
+	ignoreOriginal            string
+	ignoreDiscardArmed        bool
+	helpReturn                screen
+	skillsBusy                bool
+	skillsStatusError         bool
+	skillsScope               int
+	skillsCursor              [2]int
+	skillsMode                skillScreenMode
+	skillsInput               textinput.Model
+	skillRegistry             skillRuntime
+	lspPanel                  int
+	lspCursor                 [2]int
+	lspMode                   lspScreenMode
+	lspEditID                 string
+	lspEditingIndex           int
+	lspFormFocus              int
+	lspInputs                 [4]textinput.Model
+	lspDraftGlobal            qlsp.GlobalConfig
+	lspOriginalGlobal         qlsp.GlobalConfig
+	lspDraftWorkspace         qlsp.WorkspaceConfig
+	lspOriginalWorkspace      qlsp.WorkspaceConfig
+	lspDiscardArmed           bool
+	lspBusy                   bool
+	lspDiscoveryID            uint64
 
 	config             config.Config
 	client             chatClient
@@ -382,6 +397,12 @@ type providersAppliedMsg struct {
 	err           error
 }
 
+type modelGroupsConfiguredMsg struct {
+	config config.Config
+	group  string
+	err    error
+}
+
 func newModel(ctx context.Context, store config.Store, factory clientFactory) model {
 	return newManagedModel(ctx, store, factory, nil)
 }
@@ -449,6 +470,16 @@ func newManagedModel(ctx context.Context, store config.Store, factory clientFact
 	m.modelContextWindow.Placeholder = "provider metadata"
 	m.modelContextWindow.CharLimit = 12
 	m.modelContextWindow.SetWidth(28)
+	m.modelGroupNameInput = textinput.New()
+	m.modelGroupNameInput.Prompt = "group name · "
+	m.modelGroupNameInput.Placeholder = "heavy"
+	m.modelGroupNameInput.CharLimit = 64
+	m.modelGroupNameInput.SetWidth(40)
+	m.modelGroupTimeoutInput = textinput.New()
+	m.modelGroupTimeoutInput.Prompt = "timeout · "
+	m.modelGroupTimeoutInput.Placeholder = "none (for example 60s or 2m)"
+	m.modelGroupTimeoutInput.CharLimit = 32
+	m.modelGroupTimeoutInput.SetWidth(48)
 	m.gatewaySettingsStore = gatewayconfig.Store{Dir: store.Dir}
 	m.gatewayHostInput = textinput.New()
 	m.gatewayHostInput.Prompt = "host · "
@@ -704,11 +735,25 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.config = message.config
 		m.draftConfig = message.config
+		m.refreshModelGroupCatalog()
 		m.screen = screenModels
 		m.modelPickerStage = modelPickerTargets
 		m.status = message.target + " model settings saved"
 		m.modelFilter.Blur()
 		m.embeddingDimensions.Blur()
+		return m, nil
+	case modelGroupsConfiguredMsg:
+		if message.err != nil {
+			m.status = message.err.Error()
+			return m, m.modelPickerFocus()
+		}
+		m.config = message.config
+		m.draftConfig = message.config
+		m.refreshModelGroupCatalog()
+		m.modelPickerStage = modelPickerGroups
+		m.modelGroupDeleteArmed = false
+		m.status = "Model groups saved"
+		m.selectModelGroup(message.group)
 		return m, nil
 	case modelsResultMsg:
 		m.discovering = false
@@ -1666,6 +1711,18 @@ func (m model) updateModelPicker(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch m.modelPickerStage {
 	case modelPickerTargets:
 		return m.updateModelTargetPicker(key)
+	case modelPickerGroups:
+		return m.updateModelGroups(key)
+	case modelPickerGroupName:
+		return m.updateModelGroupName(key)
+	case modelPickerGroupCandidates:
+		return m.updateModelGroupCandidates(key)
+	case modelPickerGroupCandidateModels:
+		return m.updateModelGroupCandidateModels(key)
+	case modelPickerGroupCandidateReasoning:
+		return m.updateModelGroupCandidateReasoning(key)
+	case modelPickerGroupCandidateTimeout:
+		return m.updateModelGroupCandidateTimeout(key)
 	case modelPickerReasoning:
 		return m.updateReasoningPicker(key)
 	case modelPickerEmbeddingDimensions:
@@ -1789,6 +1846,12 @@ func (m model) updateModelTargetPicker(key tea.KeyPressMsg) (tea.Model, tea.Cmd)
 		if m.modelTargetCursor < len(targets)-1 {
 			m.modelTargetCursor++
 		}
+	case "g":
+		m.modelPickerStage = modelPickerGroups
+		m.modelGroupDeleteArmed = false
+		m.status = ""
+		m.selectModelGroup("")
+		return m, nil
 	case "enter":
 		if len(targets) == 0 {
 			return m, nil
@@ -1812,6 +1875,396 @@ func (m model) updateModelTargetPicker(key tea.KeyPressMsg) (tea.Model, tea.Cmd)
 		return m.saveModelTargetConfiguration(value, target)
 	}
 	return m, nil
+}
+
+func (m model) updateModelGroups(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	names := modelGroupNames(m.draftConfig)
+	if len(names) == 0 {
+		m.modelGroupCursor = 0
+	} else {
+		m.modelGroupCursor = min(m.modelGroupCursor, len(names)-1)
+	}
+	switch key.String() {
+	case "esc":
+		m.modelPickerStage = modelPickerTargets
+		m.status = ""
+		m.modelGroupDeleteArmed = false
+		return m, nil
+	case "up":
+		if m.modelGroupCursor > 0 {
+			m.modelGroupCursor--
+		}
+		m.modelGroupDeleteArmed = false
+	case "down":
+		if m.modelGroupCursor < len(names)-1 {
+			m.modelGroupCursor++
+		}
+		m.modelGroupDeleteArmed = false
+	case "a":
+		m.modelGroupName = ""
+		m.modelGroupDraft = config.ModelGroupConfig{}
+		m.modelGroupNameInput.SetValue("")
+		m.modelPickerStage = modelPickerGroupName
+		m.status = ""
+		return m, m.modelGroupNameInput.Focus()
+	case "enter":
+		if len(names) == 0 {
+			return m, nil
+		}
+		m.beginModelGroupEdit(names[m.modelGroupCursor])
+		return m, nil
+	case "d":
+		if len(names) == 0 {
+			return m, nil
+		}
+		name := names[m.modelGroupCursor]
+		if roles := rolesUsingModelGroup(m.draftConfig, name); len(roles) > 0 {
+			m.status = "Group is used by: " + strings.Join(roles, ", ")
+			m.modelGroupDeleteArmed = false
+			return m, nil
+		}
+		if !m.modelGroupDeleteArmed {
+			m.modelGroupDeleteArmed = true
+			m.status = "Press d again to delete group " + name
+			return m, nil
+		}
+		value := m.draftConfig
+		value.ModelGroups = cloneModelGroups(value.ModelGroups)
+		delete(value.ModelGroups, name)
+		return m.saveModelGroupsConfiguration(value, "")
+	}
+	return m, nil
+}
+
+func (m model) updateModelGroupName(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	switch key.String() {
+	case "esc":
+		m.modelGroupNameInput.Blur()
+		m.modelPickerStage = modelPickerGroups
+		m.status = ""
+		return m, nil
+	case "enter":
+		name := strings.TrimSpace(m.modelGroupNameInput.Value())
+		if name == "" || name != m.modelGroupNameInput.Value() {
+			m.status = "Group name must be non-empty without surrounding whitespace"
+			return m, nil
+		}
+		if _, exists := m.draftConfig.ModelGroups[name]; exists {
+			m.status = "Model group already exists: " + name
+			return m, nil
+		}
+		m.modelGroupName = name
+		m.modelGroupDraft = config.ModelGroupConfig{}
+		m.modelGroupCandidateCursor = 0
+		m.modelGroupNameInput.Blur()
+		m.modelPickerStage = modelPickerGroupCandidates
+		m.status = "Add at least one candidate"
+		return m, nil
+	}
+	var command tea.Cmd
+	m.modelGroupNameInput, command = m.modelGroupNameInput.Update(key)
+	return m, command
+}
+
+func (m model) updateModelGroupCandidates(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	candidates := m.modelGroupDraft.Candidates
+	if len(candidates) == 0 {
+		m.modelGroupCandidateCursor = 0
+	} else {
+		m.modelGroupCandidateCursor = min(m.modelGroupCandidateCursor, len(candidates)-1)
+	}
+	switch key.String() {
+	case "esc":
+		m.modelPickerStage = modelPickerGroups
+		m.status = "Changes discarded"
+		return m, nil
+	case "up":
+		if m.modelGroupCandidateCursor > 0 {
+			m.modelGroupCandidateCursor--
+		}
+	case "down":
+		if m.modelGroupCandidateCursor < len(candidates)-1 {
+			m.modelGroupCandidateCursor++
+		}
+	case "ctrl+up":
+		index := m.modelGroupCandidateCursor
+		if index > 0 {
+			m.modelGroupDraft.Candidates[index-1], m.modelGroupDraft.Candidates[index] =
+				m.modelGroupDraft.Candidates[index], m.modelGroupDraft.Candidates[index-1]
+			m.modelGroupCandidateCursor--
+		}
+	case "ctrl+down":
+		index := m.modelGroupCandidateCursor
+		if index >= 0 && index < len(candidates)-1 {
+			m.modelGroupDraft.Candidates[index+1], m.modelGroupDraft.Candidates[index] =
+				m.modelGroupDraft.Candidates[index], m.modelGroupDraft.Candidates[index+1]
+			m.modelGroupCandidateCursor++
+		}
+	case "a":
+		return m.beginModelGroupCandidateEdit(-1)
+	case "enter":
+		if len(candidates) == 0 {
+			return m, nil
+		}
+		return m.beginModelGroupCandidateEdit(m.modelGroupCandidateCursor)
+	case "d":
+		if len(candidates) == 0 {
+			return m, nil
+		}
+		index := m.modelGroupCandidateCursor
+		m.modelGroupDraft.Candidates = append(m.modelGroupDraft.Candidates[:index], m.modelGroupDraft.Candidates[index+1:]...)
+		m.modelGroupCandidateCursor = min(index, len(m.modelGroupDraft.Candidates)-1)
+		m.modelGroupCandidateCursor = max(0, m.modelGroupCandidateCursor)
+	case "s":
+		value := m.draftConfig
+		value.ModelGroups = cloneModelGroups(value.ModelGroups)
+		value.ModelGroups[m.modelGroupName] = cloneModelGroup(m.modelGroupDraft)
+		if err := subagent.ValidateModelGroup(m.modelGroupName, m.modelGroupDraft, m.models); err != nil {
+			m.status = err.Error()
+			return m, nil
+		}
+		return m.saveModelGroupsConfiguration(value, m.modelGroupName)
+	}
+	return m, nil
+}
+
+func (m model) beginModelGroupCandidateEdit(index int) (tea.Model, tea.Cmd) {
+	m.modelGroupCandidateEdit = index
+	m.modelGroupCandidate = config.ModelCandidateConfig{}
+	if index >= 0 && index < len(m.modelGroupDraft.Candidates) {
+		m.modelGroupCandidate = m.modelGroupDraft.Candidates[index]
+	}
+	m.modelPickerStage = modelPickerGroupCandidateModels
+	m.modelFilter.Reset()
+	m.modelCursor = 0
+	for candidateIndex, model := range m.candidateModels() {
+		if model.ID == m.modelGroupCandidate.Model {
+			m.modelCursor = candidateIndex
+			break
+		}
+	}
+	m.status = ""
+	return m, m.modelFilter.Focus()
+}
+
+func (m model) updateModelGroupCandidateModels(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	filtered := m.filteredCandidateModels()
+	switch key.String() {
+	case "esc":
+		m.modelFilter.Blur()
+		m.modelPickerStage = modelPickerGroupCandidates
+		return m, nil
+	case "up":
+		if m.modelCursor > 0 {
+			m.modelCursor--
+		}
+		return m, nil
+	case "down":
+		if m.modelCursor < len(filtered)-1 {
+			m.modelCursor++
+		}
+		return m, nil
+	case "enter":
+		if len(filtered) == 0 {
+			return m, nil
+		}
+		m.modelSelection = filtered[m.modelCursor]
+		m.modelGroupCandidate.Model = m.modelSelection.ID
+		reasoning := selectedReasoning(m.modelSelection)
+		m.modelFilter.Blur()
+		if reasoning == nil || len(reasoning.SupportedEfforts) == 0 {
+			m.modelGroupCandidate.ReasoningEffort = ""
+			return m.enterModelGroupCandidateTimeout()
+		}
+		m.modelPickerStage = modelPickerGroupCandidateReasoning
+		m.reasoningCursor = effortCursor(m.modelGroupCandidate.ReasoningEffort, reasoning.SupportedEfforts)
+		return m, nil
+	}
+	var command tea.Cmd
+	m.modelFilter, command = m.modelFilter.Update(key)
+	m.modelCursor = 0
+	return m, command
+}
+
+func (m model) updateModelGroupCandidateReasoning(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	reasoning := selectedReasoning(m.modelSelection)
+	if reasoning == nil {
+		m.modelPickerStage = modelPickerGroupCandidateModels
+		return m, m.modelFilter.Focus()
+	}
+	options := append([]string{""}, reasoning.SupportedEfforts...)
+	switch key.String() {
+	case "esc":
+		m.modelPickerStage = modelPickerGroupCandidateModels
+		return m, m.modelFilter.Focus()
+	case "up":
+		if m.reasoningCursor > 0 {
+			m.reasoningCursor--
+		}
+	case "down":
+		if m.reasoningCursor < len(options)-1 {
+			m.reasoningCursor++
+		}
+	case "enter":
+		m.modelGroupCandidate.ReasoningEffort = options[m.reasoningCursor]
+		return m.enterModelGroupCandidateTimeout()
+	}
+	return m, nil
+}
+
+func (m model) enterModelGroupCandidateTimeout() (tea.Model, tea.Cmd) {
+	m.modelPickerStage = modelPickerGroupCandidateTimeout
+	m.modelGroupTimeoutInput.SetValue("")
+	if m.modelGroupCandidate.Timeout > 0 {
+		m.modelGroupTimeoutInput.SetValue(m.modelGroupCandidate.Timeout.String())
+	}
+	return m, m.modelGroupTimeoutInput.Focus()
+}
+
+func (m model) updateModelGroupCandidateTimeout(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	switch key.String() {
+	case "esc":
+		m.modelGroupTimeoutInput.Blur()
+		if selectedReasoning(m.modelSelection) != nil {
+			m.modelPickerStage = modelPickerGroupCandidateReasoning
+			return m, nil
+		}
+		m.modelPickerStage = modelPickerGroupCandidateModels
+		return m, m.modelFilter.Focus()
+	case "enter":
+		raw := strings.TrimSpace(m.modelGroupTimeoutInput.Value())
+		var timeout time.Duration
+		if raw != "" {
+			parsed, err := time.ParseDuration(raw)
+			if err != nil || parsed <= 0 {
+				m.status = "Timeout must be a positive duration such as 60s, or empty"
+				return m, nil
+			}
+			timeout = parsed
+		}
+		m.modelGroupCandidate.Timeout = timeout
+		for index, candidate := range m.modelGroupDraft.Candidates {
+			if candidate.Model == m.modelGroupCandidate.Model && index != m.modelGroupCandidateEdit {
+				m.status = "Model group already contains " + candidate.Model
+				return m, nil
+			}
+		}
+		if m.modelGroupCandidateEdit >= 0 && m.modelGroupCandidateEdit < len(m.modelGroupDraft.Candidates) {
+			m.modelGroupDraft.Candidates[m.modelGroupCandidateEdit] = m.modelGroupCandidate
+			m.modelGroupCandidateCursor = m.modelGroupCandidateEdit
+		} else {
+			m.modelGroupDraft.Candidates = append(m.modelGroupDraft.Candidates, m.modelGroupCandidate)
+			m.modelGroupCandidateCursor = len(m.modelGroupDraft.Candidates) - 1
+		}
+		m.modelGroupTimeoutInput.Blur()
+		m.modelPickerStage = modelPickerGroupCandidates
+		m.status = "Candidate updated; press s to save the group"
+		return m, nil
+	}
+	var command tea.Cmd
+	m.modelGroupTimeoutInput, command = m.modelGroupTimeoutInput.Update(key)
+	return m, command
+}
+
+func (m *model) beginModelGroupEdit(name string) {
+	m.modelGroupName = name
+	m.modelGroupDraft = cloneModelGroup(m.draftConfig.ModelGroups[name])
+	m.modelGroupCandidateCursor = 0
+	m.modelPickerStage = modelPickerGroupCandidates
+	m.modelGroupDeleteArmed = false
+	m.status = ""
+}
+
+func (m *model) selectModelGroup(name string) {
+	names := modelGroupNames(m.draftConfig)
+	m.modelGroupCursor = 0
+	for index, candidate := range names {
+		if candidate == name {
+			m.modelGroupCursor = index
+			break
+		}
+	}
+}
+
+func (m *model) refreshModelGroupCatalog() {
+	base := m.candidateModels()
+	m.models = append([]client.Model(nil), base...)
+	for _, name := range modelGroupNames(m.draftConfig) {
+		group := m.draftConfig.ModelGroups[name]
+		if !modelGroupAvailable(group, base) {
+			continue
+		}
+		contextLength, output := modelGroupLimits(group, base)
+		m.models = append(m.models, client.Model{
+			ID: "group/" + name, Object: "model", OwnedBy: "q-model-group",
+			ContextLength: contextLength, MaxOutputTokens: output,
+		})
+	}
+	sort.Slice(m.models, func(i, j int) bool { return m.models[i].ID < m.models[j].ID })
+}
+
+func (m model) saveModelGroupsConfiguration(value config.Config, group string) (tea.Model, tea.Cmd) {
+	if name, grouped := strings.CutPrefix(value.Provider.Model, "group/"); grouped {
+		if configured, found := value.ModelGroups[name]; found {
+			value.Provider.ContextWindow, _ = modelGroupLimits(configured, m.models)
+		}
+	}
+	if err := value.Validate(); err != nil {
+		m.status = err.Error()
+		return m, nil
+	}
+	m.status = "Saving model groups…"
+	return m, func() tea.Msg {
+		if err := m.store.Save(value); err != nil {
+			return modelGroupsConfiguredMsg{err: err}
+		}
+		return modelGroupsConfiguredMsg{config: value, group: group}
+	}
+}
+
+func modelGroupNames(value config.Config) []string {
+	names := make([]string, 0, len(value.ModelGroups))
+	for name := range value.ModelGroups {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}
+
+func rolesUsingModelGroup(value config.Config, group string) []string {
+	roles := make([]string, 0)
+	if value.Provider.Model == "group/"+group {
+		roles = append(roles, "default")
+	}
+	for role, agent := range value.Agents.Roles {
+		if agent.Group == group || agent.Model == "group/"+group {
+			roles = append(roles, role)
+		}
+	}
+	sort.Strings(roles)
+	return roles
+}
+
+func cloneModelGroups(source map[string]config.ModelGroupConfig) map[string]config.ModelGroupConfig {
+	result := make(map[string]config.ModelGroupConfig, len(source)+1)
+	for name, group := range source {
+		result[name] = cloneModelGroup(group)
+	}
+	return result
+}
+
+func cloneModelGroup(group config.ModelGroupConfig) config.ModelGroupConfig {
+	group.Candidates = append([]config.ModelCandidateConfig(nil), group.Candidates...)
+	return group
+}
+
+func effortCursor(configured string, efforts []string) int {
+	for index, effort := range efforts {
+		if effort == configured {
+			return index + 1
+		}
+	}
+	return 0
 }
 
 func (m model) updateReasoningPicker(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
@@ -2778,6 +3231,12 @@ func (m *model) modelPickerFocus() tea.Cmd {
 	switch {
 	case m.modelPickerStage == modelPickerModels && !m.discovering:
 		return m.modelFilter.Focus()
+	case m.modelPickerStage == modelPickerGroupName:
+		return m.modelGroupNameInput.Focus()
+	case m.modelPickerStage == modelPickerGroupCandidateModels:
+		return m.modelFilter.Focus()
+	case m.modelPickerStage == modelPickerGroupCandidateTimeout:
+		return m.modelGroupTimeoutInput.Focus()
 	case m.modelPickerStage == modelPickerEmbeddingDimensions && !m.discovering:
 		return m.embeddingDimensions.Focus()
 	case m.modelPickerStage == modelPickerContextWindow && !m.discovering:
@@ -2786,6 +3245,8 @@ func (m *model) modelPickerFocus() tea.Cmd {
 	m.modelFilter.Blur()
 	m.embeddingDimensions.Blur()
 	m.modelContextWindow.Blur()
+	m.modelGroupNameInput.Blur()
+	m.modelGroupTimeoutInput.Blur()
 	return nil
 }
 
@@ -2807,6 +3268,7 @@ func withAgentGroup(value config.Config, role, group string) config.Config {
 	agent := value.Agents.Roles[role]
 	agent.Model = ""
 	agent.Group = group
+	agent.ReasoningEffort = ""
 	value.Agents.Roles[role] = agent
 	return value
 }
@@ -2870,8 +3332,11 @@ func (m model) filteredModels() []client.Model {
 }
 
 func (m model) selectableModels() []client.Model {
-	result := append([]client.Model(nil), m.models...)
-	if m.modelTarget == "" || m.modelTarget == defaultModelTarget || m.modelTarget == embeddingModelTarget {
+	if m.modelTarget == "" || m.modelTarget == defaultModelTarget {
+		return append([]client.Model(nil), m.models...)
+	}
+	result := m.candidateModels()
+	if m.modelTarget == embeddingModelTarget {
 		return result
 	}
 	names := make([]string, 0, len(m.draftConfig.ModelGroups))
@@ -2881,6 +3346,31 @@ func (m model) selectableModels() []client.Model {
 	sort.Strings(names)
 	for _, name := range names {
 		result = append(result, client.Model{ID: modelGroupChoicePrefix + name})
+	}
+	return result
+}
+
+func (m model) candidateModels() []client.Model {
+	result := make([]client.Model, 0, len(m.models))
+	for _, model := range m.models {
+		if !strings.HasPrefix(model.ID, "group/") {
+			result = append(result, model)
+		}
+	}
+	return result
+}
+
+func (m model) filteredCandidateModels() []client.Model {
+	available := m.candidateModels()
+	query := strings.ToLower(strings.TrimSpace(m.modelFilter.Value()))
+	if query == "" {
+		return available
+	}
+	result := make([]client.Model, 0, len(available))
+	for _, model := range available {
+		if strings.Contains(strings.ToLower(model.ID), query) {
+			result = append(result, model)
+		}
 	}
 	return result
 }
@@ -3015,6 +3505,8 @@ func (m *model) resize(width, height int) {
 	m.modelFilter.SetWidth(min(contentWidth-2, 72))
 	m.embeddingDimensions.SetWidth(min(contentWidth-2, 24))
 	m.modelContextWindow.SetWidth(min(contentWidth-2, 28))
+	m.modelGroupNameInput.SetWidth(min(contentWidth-2, 40))
+	m.modelGroupTimeoutInput.SetWidth(min(contentWidth-2, 48))
 	m.skillsInput.SetWidth(min(contentWidth-10, 96))
 	for index := range m.lspInputs {
 		m.lspInputs[index].SetWidth(min(contentWidth-12, 84))
@@ -3080,6 +3572,8 @@ func (m *model) applyColorScheme(dark bool) {
 	m.modelFilter.SetStyles(textinput.DefaultStyles(dark))
 	m.embeddingDimensions.SetStyles(textinput.DefaultStyles(dark))
 	m.modelContextWindow.SetStyles(textinput.DefaultStyles(dark))
+	m.modelGroupNameInput.SetStyles(textinput.DefaultStyles(dark))
+	m.modelGroupTimeoutInput.SetStyles(textinput.DefaultStyles(dark))
 	for index := range m.lspInputs {
 		m.lspInputs[index].SetStyles(textinput.DefaultStyles(dark))
 	}
@@ -4003,6 +4497,18 @@ func (m model) viewModels() string {
 	switch m.modelPickerStage {
 	case modelPickerTargets:
 		return m.viewModelTargets()
+	case modelPickerGroups:
+		return m.viewModelGroups()
+	case modelPickerGroupName:
+		return m.viewModelGroupName()
+	case modelPickerGroupCandidates:
+		return m.viewModelGroupCandidates()
+	case modelPickerGroupCandidateModels:
+		return m.viewModelGroupCandidateModels()
+	case modelPickerGroupCandidateReasoning:
+		return m.viewModelGroupCandidateReasoning()
+	case modelPickerGroupCandidateTimeout:
+		return m.viewModelGroupCandidateTimeout()
 	case modelPickerReasoning:
 		return m.viewReasoningEfforts()
 	case modelPickerEmbeddingDimensions:
@@ -4107,12 +4613,254 @@ func (m model) viewModelTargets() string {
 		body.WriteString("\n")
 	}
 	body.WriteString("\n")
-	help := "↑/↓ select · enter edit · i inherit/clear · esc chat"
+	help := "↑/↓ select · enter edit · g model groups · i inherit/clear · esc chat"
 	if m.isStandaloneScreen(screenModels) {
-		help = "↑/↓ select · enter edit · i inherit/clear · esc quit"
+		help = "↑/↓ select · enter edit · g model groups · i inherit/clear · esc quit"
 	}
 	body.WriteString(helpStyle.Render(help))
 	return frameStyle.Width(max(36, m.width-4)).Render(body.String())
+}
+
+func (m model) viewModelGroups() string {
+	names := modelGroupNames(m.draftConfig)
+	var body strings.Builder
+	body.WriteString(titleStyle.Render("q · model groups"))
+	body.WriteString("\n")
+	m.writeWorkspacePath(&body)
+	body.WriteString(subtleStyle.Render("Ordered Gateway models with transient fallback"))
+	body.WriteString("\n\n")
+	if len(names) == 0 {
+		body.WriteString(emptyStyle.Render("No model groups. Press a to create one."))
+		body.WriteString("\n")
+	} else {
+		for index, name := range names {
+			prefix := "  "
+			style := subtleStyle
+			if index == m.modelGroupCursor {
+				prefix = "› "
+				style = activeLabelStyle
+			}
+			group := m.draftConfig.ModelGroups[name]
+			body.WriteString(prefix)
+			body.WriteString(style.Render(name))
+			body.WriteString(subtleStyle.Render(fmt.Sprintf("  · %d candidates", len(group.Candidates))))
+			if contextLength, _ := modelGroupLimits(group, m.models); contextLength > 0 {
+				body.WriteString(subtleStyle.Render(" · context " + formatTokenCount(contextLength)))
+			}
+			body.WriteString("\n")
+			if len(group.Candidates) > 0 {
+				models := make([]string, len(group.Candidates))
+				for candidateIndex, candidate := range group.Candidates {
+					models[candidateIndex] = candidate.Model
+				}
+				body.WriteString(subtleStyle.Render("    " + strings.Join(models, " → ")))
+				body.WriteString("\n")
+			}
+		}
+	}
+	if m.status != "" {
+		body.WriteString("\n")
+		body.WriteString(subtleStyle.Render(m.status))
+		body.WriteString("\n")
+	}
+	body.WriteString("\n")
+	body.WriteString(helpStyle.Render("a add · enter edit · d delete · esc model settings"))
+	return frameStyle.Width(max(36, m.width-4)).Render(body.String())
+}
+
+func (m model) viewModelGroupName() string {
+	var body strings.Builder
+	body.WriteString(titleStyle.Render("q · new model group"))
+	body.WriteString("\n")
+	m.writeWorkspacePath(&body)
+	body.WriteString(subtleStyle.Render("The Gateway model ID will be group/<name>."))
+	body.WriteString("\n\n")
+	body.WriteString(m.modelGroupNameInput.View())
+	if m.status != "" {
+		body.WriteString("\n\n")
+		body.WriteString(errorStyle.Render(m.status))
+	}
+	body.WriteString("\n\n")
+	body.WriteString(helpStyle.Render("enter continue · esc groups"))
+	return frameStyle.Width(max(36, m.width-4)).Render(body.String())
+}
+
+func (m model) viewModelGroupCandidates() string {
+	var body strings.Builder
+	body.WriteString(titleStyle.Render("q · model group · " + m.modelGroupName))
+	body.WriteString("\n")
+	m.writeWorkspacePath(&body)
+	contextLength, output := modelGroupLimits(m.modelGroupDraft, m.models)
+	limits := "context unknown"
+	if contextLength > 0 {
+		limits = "context " + formatTokenCount(contextLength)
+	}
+	if output > 0 {
+		limits += " · output " + formatTokenCount(output)
+	}
+	body.WriteString(subtleStyle.Render(limits))
+	body.WriteString("\n\n")
+	if len(m.modelGroupDraft.Candidates) == 0 {
+		body.WriteString(emptyStyle.Render("No candidates. Press a to add one."))
+		body.WriteString("\n")
+	} else {
+		for index, candidate := range m.modelGroupDraft.Candidates {
+			prefix := "  "
+			style := subtleStyle
+			if index == m.modelGroupCandidateCursor {
+				prefix = "› "
+				style = activeLabelStyle
+			}
+			body.WriteString(prefix)
+			body.WriteString(style.Render(fmt.Sprintf("%d. %s", index+1, candidate.Model)))
+			detail := "provider default effort"
+			if candidate.ReasoningEffort != "" {
+				detail = "effort " + candidate.ReasoningEffort
+			}
+			if candidate.Timeout > 0 {
+				detail += " · timeout " + candidate.Timeout.String()
+			} else {
+				detail += " · no timeout"
+			}
+			body.WriteString(subtleStyle.Render("  · " + detail))
+			body.WriteString("\n")
+		}
+	}
+	if m.status != "" {
+		body.WriteString("\n")
+		body.WriteString(subtleStyle.Render(m.status))
+		body.WriteString("\n")
+	}
+	body.WriteString("\n")
+	body.WriteString(helpStyle.Render("a add · enter edit · ctrl+↑/↓ reorder · d remove · s save · esc discard"))
+	return frameStyle.Width(max(36, m.width-4)).Render(body.String())
+}
+
+func (m model) viewModelGroupCandidateModels() string {
+	filtered := m.filteredCandidateModels()
+	var body strings.Builder
+	body.WriteString(titleStyle.Render("q · " + m.modelGroupName + " · candidate model"))
+	body.WriteString("\n")
+	m.writeWorkspacePath(&body)
+	body.WriteString(m.modelFilter.View())
+	body.WriteString("\n\n")
+	if len(filtered) == 0 {
+		body.WriteString(emptyStyle.Render("No matching models"))
+	} else {
+		visible := max(4, m.height-10)
+		start := max(0, m.modelCursor-visible+1)
+		end := min(len(filtered), start+visible)
+		for index := start; index < end; index++ {
+			prefix := "  "
+			style := subtleStyle
+			if index == m.modelCursor {
+				prefix = "› "
+				style = activeLabelStyle
+			}
+			body.WriteString(prefix)
+			body.WriteString(style.Render(filtered[index].ID))
+			if filtered[index].ContextLength > 0 {
+				body.WriteString(subtleStyle.Render("  · context " + formatTokenCount(filtered[index].ContextLength)))
+			}
+			body.WriteString("\n")
+		}
+	}
+	body.WriteString("\n")
+	body.WriteString(helpStyle.Render("type to filter · ↑/↓ select · enter next · esc candidates"))
+	return frameStyle.Width(max(36, m.width-4)).Render(body.String())
+}
+
+func (m model) viewModelGroupCandidateReasoning() string {
+	reasoning := selectedReasoning(m.modelSelection)
+	efforts := []string{""}
+	if reasoning != nil {
+		efforts = append(efforts, reasoning.SupportedEfforts...)
+	}
+	var body strings.Builder
+	body.WriteString(titleStyle.Render("q · " + m.modelGroupName + " · candidate effort"))
+	body.WriteString("\n")
+	m.writeWorkspacePath(&body)
+	body.WriteString(subtleStyle.Render(m.modelSelection.ID))
+	body.WriteString("\n\n")
+	for index, effort := range efforts {
+		label := effort
+		if label == "" {
+			label = "provider default"
+		}
+		prefix := "  "
+		style := subtleStyle
+		if index == m.reasoningCursor {
+			prefix = "› "
+			style = activeLabelStyle
+		}
+		body.WriteString(prefix + style.Render(label) + "\n")
+	}
+	body.WriteString("\n")
+	body.WriteString(helpStyle.Render("↑/↓ select · enter timeout · esc model"))
+	return frameStyle.Width(max(36, m.width-4)).Render(body.String())
+}
+
+func (m model) viewModelGroupCandidateTimeout() string {
+	var body strings.Builder
+	body.WriteString(titleStyle.Render("q · " + m.modelGroupName + " · candidate timeout"))
+	body.WriteString("\n")
+	m.writeWorkspacePath(&body)
+	body.WriteString(subtleStyle.Render(m.modelGroupCandidate.Model + " · empty means no additional deadline"))
+	body.WriteString("\n\n")
+	body.WriteString(m.modelGroupTimeoutInput.View())
+	if m.status != "" {
+		body.WriteString("\n\n")
+		body.WriteString(errorStyle.Render(m.status))
+	}
+	body.WriteString("\n\n")
+	body.WriteString(helpStyle.Render("enter apply candidate · esc back"))
+	return frameStyle.Width(max(36, m.width-4)).Render(body.String())
+}
+
+func modelGroupAvailable(group config.ModelGroupConfig, models []client.Model) bool {
+	if len(group.Candidates) == 0 {
+		return false
+	}
+	available := make(map[string]struct{}, len(models))
+	for _, model := range models {
+		available[model.ID] = struct{}{}
+	}
+	for _, candidate := range group.Candidates {
+		if _, found := available[candidate.Model]; !found {
+			return false
+		}
+	}
+	return true
+}
+
+func modelGroupLimits(group config.ModelGroupConfig, models []client.Model) (int64, int64) {
+	byID := make(map[string]client.Model, len(models))
+	for _, model := range models {
+		byID[model.ID] = model
+	}
+	var contextLength, output int64
+	contextKnown := len(group.Candidates) > 0
+	outputKnown := len(group.Candidates) > 0
+	for _, candidate := range group.Candidates {
+		model, found := byID[candidate.Model]
+		if !found || model.ContextLength <= 0 {
+			contextKnown = false
+		} else if contextLength == 0 || model.ContextLength < contextLength {
+			contextLength = model.ContextLength
+		}
+		if !found || model.MaxOutputTokens <= 0 {
+			outputKnown = false
+		} else if output == 0 || model.MaxOutputTokens < output {
+			output = model.MaxOutputTokens
+		}
+	}
+	if !contextKnown {
+		contextLength = 0
+	}
+	if !outputKnown {
+		output = 0
+	}
+	return contextLength, output
 }
 
 func (m model) viewReasoningEfforts() string {
