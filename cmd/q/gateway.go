@@ -61,12 +61,14 @@ func runGatewayWithStore(
 	if err != nil {
 		return fmt.Errorf("q gateway: load settings: %w", err)
 	}
-	if settings.ActiveKeyCount() == 0 {
-		return errors.New("q gateway: no active API keys; run `q gateway config` to generate one")
-	}
-	masterKey, err := settingsStore.LoadMasterKey()
-	if err != nil {
-		return fmt.Errorf("q gateway: load API key master: %w", err)
+	var masterKey [32]byte
+	if settings.ActiveKeyCount() > 0 {
+		masterKey, err = settingsStore.LoadMasterKey()
+		if err != nil {
+			return fmt.Errorf("q gateway: load API key master: %w", err)
+		}
+	} else {
+		_, _ = fmt.Fprintln(stderr, "q gateway: no active API keys; authentication disabled")
 	}
 	authenticator, err := gatewayconfig.NewAuthenticator(masterKey, settings)
 	if err != nil {
@@ -84,7 +86,7 @@ func runGatewayWithStore(
 	defer instance.Close()
 
 	server := &http.Server{
-		Handler: authenticator.Handler(providerhost.ModelGroupHandler(
+		Handler: authenticator.OptionalHandler(providerhost.ModelGroupHandler(
 			instance.Handler(), config.Store{Dir: providerStore.Dir},
 		)),
 		ReadHeaderTimeout: 10 * time.Second,
@@ -218,8 +220,19 @@ func watchGatewayKeyring(
 					_, _ = fmt.Fprintf(logOutput, "q gateway: API key reload skipped: %v\n", err)
 					continue
 				}
-				if err := authenticator.Reload(value); err != nil {
-					_, _ = fmt.Fprintf(logOutput, "q gateway: API key reload skipped: %v\n", err)
+				var reloadErr error
+				if value.ActiveKeyCount() == 0 {
+					reloadErr = authenticator.Reload(value)
+				} else {
+					masterKey, masterErr := store.LoadMasterKey()
+					if masterErr != nil {
+						_, _ = fmt.Fprintf(logOutput, "q gateway: API key reload skipped: %v\n", masterErr)
+						continue
+					}
+					reloadErr = authenticator.ReloadWithMasterKey(masterKey, value)
+				}
+				if reloadErr != nil {
+					_, _ = fmt.Fprintf(logOutput, "q gateway: API key reload skipped: %v\n", reloadErr)
 					continue
 				}
 				_, _ = fmt.Fprintln(logOutput, "q gateway: API keys reloaded")

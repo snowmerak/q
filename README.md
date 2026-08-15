@@ -67,10 +67,12 @@ falls back to port `0` on a collision; an explicit conflicting `--port` remains
 an error. Command-line `--host` and `--port` values override the saved defaults.
 The effective OpenAI-compatible `/v1` endpoint is printed after startup.
 
-Standalone clients must send one of the managed API keys as an
-`Authorization: Bearer` credential. Generate and revoke keys in `q gateway
-config`; the plaintext is shown only once, while `gateway.json` stores a keyed
-BLAKE3 digest. Key changes are reloaded by a running standalone Gateway.
+When at least one managed API key is active, standalone clients must send one
+as an `Authorization: Bearer` credential. With no active keys, `q gateway`
+accepts requests without authentication. Generate and revoke keys in `q
+gateway config`; the plaintext is shown only once, while `gateway.json` stores
+a keyed BLAKE3 digest. Key changes, including transitions between authenticated
+and unauthenticated operation, are reloaded by a running standalone Gateway.
 Provider and listener changes require a restart.
 
 Open the Gateway settings UI without initializing the main chat UI or workspace

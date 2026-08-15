@@ -168,26 +168,77 @@ func TestRunGatewayWithStoreServesConfiguredProviders(t *testing.T) {
 	}
 	deadline := time.Now().Add(3 * time.Second)
 	for {
-		request, err = http.NewRequest(http.MethodGet, endpoint+"/models", nil)
-		if err != nil {
-			cancel()
-			t.Fatal(err)
-		}
-		request.Header.Set("Authorization", "Bearer "+generated.Secret)
-		response, err = http.DefaultClient.Do(request)
+		response, err = http.Get(endpoint + "/models")
 		if err != nil {
 			cancel()
 			t.Fatal(err)
 		}
 		_ = response.Body.Close()
-		if response.StatusCode == http.StatusUnauthorized {
+		if response.StatusCode == http.StatusOK {
 			break
 		}
 		if time.Now().After(deadline) {
 			cancel()
-			t.Fatal("revoked API key remained authorized after settings reload")
+			t.Fatalf("Gateway did not disable authentication after the last key was revoked; status = %d", response.StatusCode)
 		}
 		time.Sleep(50 * time.Millisecond)
+	}
+
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("gateway did not stop after cancellation")
+	}
+}
+
+func TestRunGatewayWithStoreAllowsRequestsWithoutConfiguredAPIKeys(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.URL.Path != "/v1/models" {
+			http.NotFound(writer, request)
+			return
+		}
+		_ = json.NewEncoder(writer).Encode(map[string]any{
+			"object": "list",
+			"data":   []map[string]any{{"id": "test-model", "object": "model"}},
+		})
+	}))
+	defer upstream.Close()
+
+	directory := t.TempDir()
+	providerStore := providerhost.Store{Dir: directory}
+	if err := providerStore.Save(gateway.Config{Providers: []gateway.ProviderConfig{{
+		ID: "local", Type: "openai-compatible", Enabled: true, BaseURL: upstream.URL + "/v1",
+	}}}); err != nil {
+		t.Fatal(err)
+	}
+	settingsStore := gatewayconfig.Store{Dir: directory}
+	ctx, cancel := context.WithCancel(context.Background())
+	stdoutReader, stdoutWriter := io.Pipe()
+	done := make(chan error, 1)
+	go func() {
+		done <- runGatewayWithStore(ctx, nil, stdoutWriter, io.Discard, providerStore, settingsStore)
+		_ = stdoutWriter.Close()
+	}()
+
+	line, err := bufio.NewReader(stdoutReader).ReadString('\n')
+	if err != nil {
+		cancel()
+		t.Fatal(err)
+	}
+	endpoint := strings.TrimSpace(strings.TrimPrefix(line, "q gateway listening on "))
+	response, err := http.Get(endpoint + "/models")
+	if err != nil {
+		cancel()
+		t.Fatal(err)
+	}
+	_ = response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		cancel()
+		t.Fatalf("unauthenticated status = %d", response.StatusCode)
 	}
 
 	cancel()

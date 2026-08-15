@@ -119,6 +119,48 @@ func TestAuthenticatorReloadAppliesRevocation(t *testing.T) {
 	}
 }
 
+func TestAuthenticatorOptionalHandlerBypassesOnlyWithoutActiveKeys(t *testing.T) {
+	var master [32]byte
+	master[0] = 9
+	authenticator, err := NewAuthenticator(master, Default())
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler := authenticator.OptionalHandler(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		writer.WriteHeader(http.StatusNoContent)
+	}))
+
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/v1/models", nil))
+	if response.Code != http.StatusNoContent {
+		t.Fatalf("disabled authentication status = %d", response.Code)
+	}
+
+	generated, err := GenerateAPIKey(master, "automation", time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	value, err := AddAPIKey(Default(), generated)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := authenticator.ReloadWithMasterKey(master, value); err != nil {
+		t.Fatal(err)
+	}
+	response = httptest.NewRecorder()
+	handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/v1/models", nil))
+	if response.Code != http.StatusUnauthorized {
+		t.Fatalf("enabled authentication status = %d", response.Code)
+	}
+	request := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+	request.Header.Set("Authorization", "Bearer "+generated.Secret)
+	response = httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusNoContent {
+		t.Fatalf("valid optional authentication status = %d", response.Code)
+	}
+}
+
 func TestAPIKeyAliasesAreUnique(t *testing.T) {
 	var master [32]byte
 	first, err := GenerateAPIKey(master, "Desktop", time.Now())
