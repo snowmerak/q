@@ -87,6 +87,7 @@ UI. Each command loads only the resources its screen needs:
 
 ```powershell
 q model   # managed Gateway + model discovery
+q mcp     # external MCP tool servers + per-role assignments
 q skills  # global and current-workspace Agent Skills
 q ignore  # current workspace's .qignore editor
 q lsp     # global language servers and current-workspace project roots
@@ -127,6 +128,7 @@ Personal configuration is stored in:
 ~/.q/gateway.key
 ~/.q/library.json
 ~/.q/library.key
+~/.q/mcp.json
 ```
 
 Prefer environment variables over inline API keys. On POSIX, q creates the
@@ -152,6 +154,7 @@ screen without discarding editor state or interrupting an active turn.
 | `/ignore` | Edit workspace discovery rules in `.qignore`. |
 | `/skills` | Interactively add, pull, remove, and reindex global/session Agent Skills. |
 | `/lsp` | Configure global language servers and current-workspace project roots. |
+| `/mcp` | Configure external MCP tool servers and per-role assignments. |
 | `/clear` | Clear the chat projection and remove the current workspace session. |
 | `/learn` | Close the current learning segment and enqueue Thinker extraction. |
 | `/help` | Open the command and shortcut guide. |
@@ -461,6 +464,45 @@ The in-process chat runtime also exposes `learn`, which closes the current
 conversation's learning segment. The standalone `q-mcp` command deliberately
 omits it because an external MCP process does not own the active chat cursor.
 
+### External MCP tools
+
+Use `q mcp` to define external MCP servers and assign them to q roles. The same
+screen is available as `/mcp` in chat. `default` is the main chat role; the
+remaining entries are the tool-using `griller`, `scout`, `planner`, and `coder`
+roles. Assignments stay stable when a role's model or fallback group changes.
+`q mcp` is the configuration command and does not need Gateway model discovery;
+`q-mcp` remains q's separate workspace MCP server.
+
+External profiles are stored in `~/.q/mcp.json`. Stdio profiles contain a
+command and argument array; Streamable HTTP profiles contain an absolute URL.
+Credentials are never stored inline: child environment variables and HTTP
+headers map to environment-variable names in q's parent process. For example:
+
+```json
+{
+  "version": 1,
+  "servers": {
+    "docs": {
+      "transport": "streamable-http",
+      "url": "https://example.test/mcp",
+      "headers": { "Authorization": "DOCS_MCP_AUTH" }
+    }
+  },
+  "roles": {
+    "default": ["docs"],
+    "scout": ["docs"]
+  }
+}
+```
+
+Only MCP tools are imported. A server is exposed only to the roles it is
+assigned to. Exposed names are namespaced as
+`mcp_<server-id>__<tool-name>` to prevent collisions. Every external result is
+captured by Loom before its bounded receipt is returned to the model. Connection
+or discovery failure for one server does not disable builtin tools or other MCP
+servers. Stdio children run with the active workspace as their working directory
+and are closed when q exits or applies replacement MCP settings.
+
 Tool calls, arguments, results, command status, and intermediate agent notes can
 be inspected in the live detailed trace. Interrupting a turn cancels its request
 context, records unfinished tool calls as cancelled, persists the cancellation,
@@ -689,7 +731,7 @@ task build
 The two command entry points are:
 
 - `./cmd/q`: interactive chat plus the `commit`, `gateway`, `library`,
-  `model`, `skills`, `ignore`, `lsp`, and `help` command surfaces.
+  `model`, `mcp`, `skills`, `ignore`, `lsp`, and `help` command surfaces.
 - `./cmd/q-mcp`: workspace MCP stdio server. It acquires the same exclusive
   workspace lock, opens archive/Loom/LSP/Library integrations, and excludes the
   chat-session-only `learn` tool.

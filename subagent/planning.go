@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"sort"
 	"strings"
 
 	"github.com/snowmerak/q/client"
@@ -272,7 +273,14 @@ func (r GrillerRunner) Run(ctx context.Context, task GrillTask) (brief GrillBrie
 					result = scoutToolError(err)
 				}
 			default:
-				result = scoutToolError(fmt.Errorf("tool %q is not available to griller", call.Function.Name))
+				if externalMCPToolAllowed(call.Function.Name) {
+					result, err = r.Tools.Call(ctx, call)
+					if err != nil {
+						result = scoutToolError(err)
+					}
+				} else {
+					result = scoutToolError(fmt.Errorf("tool %q is not available to griller", call.Function.Name))
+				}
 			}
 			traceToolResult(r.Trace, "griller", task.ID, task.ParentID, call.Function.Name, result)
 			messages = append(messages, client.Message{
@@ -317,7 +325,7 @@ func (r PlannerRunner) Run(ctx context.Context, brief GrillBrief) (proposal Plan
 		rounds = defaultPlanningRounds
 	}
 	reminders := 0
-	available := []client.Tool{submitPlanTool()}
+	available := plannerTools(r.Tools)
 	for round := 0; round < rounds; round++ {
 		reportProgress(r.Progress, ProgressEvent{
 			Agent: "planner", Action: ProgressThinking, Detail: fmt.Sprintf("model round %d", round+1),
@@ -356,16 +364,21 @@ func (r PlannerRunner) Run(ctx context.Context, brief GrillBrief) (proposal Plan
 				Agent: "planner", Action: ProgressTool, Detail: call.Function.Name,
 			})
 			var result client.ToolResult
-			if call.Function.Name != SubmitPlanToolName {
-				result = scoutToolError(fmt.Errorf("tool %q is not available to planner", call.Function.Name))
-			} else if len(assistant.ToolCalls) != 1 {
+			if call.Function.Name == SubmitPlanToolName && len(assistant.ToolCalls) != 1 {
 				result = scoutToolError(errors.New("submit_plan must be the only tool call in its turn"))
-			} else {
+			} else if call.Function.Name == SubmitPlanToolName {
 				proposal, parseErr := parsePlanProposal(call.Function.Arguments)
 				if parseErr == nil {
 					return proposal, nil
 				}
 				result = scoutToolError(parseErr)
+			} else if r.Tools != nil && hasTool(available, call.Function.Name) {
+				result, err = r.Tools.Call(ctx, call)
+				if err != nil {
+					result = scoutToolError(err)
+				}
+			} else {
+				result = scoutToolError(fmt.Errorf("tool %q is not available to planner", call.Function.Name))
 			}
 			traceToolResult(r.Trace, "planner", "", "", call.Function.Name, result)
 			messages = append(messages, client.Message{
@@ -478,13 +491,30 @@ Rules:
 func grillerTools(available []client.Tool) []client.Tool {
 	result := make([]client.Tool, 0, 6)
 	for _, tool := range available {
-		switch tool.Function.Name {
-		case "loom_inspect", "loom_read", "loom_eval", "search_skills", "get_skill", "search_propositions", "get_proposition":
+		switch {
+		case externalMCPToolAllowed(tool.Function.Name):
+			result = append(result, tool)
+		case tool.Function.Name == "loom_inspect", tool.Function.Name == "loom_read", tool.Function.Name == "loom_eval",
+			tool.Function.Name == "search_skills", tool.Function.Name == "get_skill",
+			tool.Function.Name == "search_propositions", tool.Function.Name == "get_proposition":
 			result = append(result, tool)
 		}
 	}
 	result = append(result, askUserTool(), delegateScoutTool(), submitBriefTool())
 	return result
+}
+
+func plannerTools(runtime ToolRuntime) []client.Tool {
+	var result []client.Tool
+	if runtime != nil {
+		for _, tool := range runtime.Tools() {
+			if externalMCPToolAllowed(tool.Function.Name) {
+				result = append(result, tool)
+			}
+		}
+	}
+	sort.Slice(result, func(i, j int) bool { return result[i].Function.Name < result[j].Function.Name })
+	return append(result, submitPlanTool())
 }
 
 func askUserTool() client.Tool {

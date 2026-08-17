@@ -12,6 +12,7 @@ import (
 	"github.com/snowmerak/q/client"
 	"github.com/snowmerak/q/config"
 	qlibrary "github.com/snowmerak/q/library"
+	"github.com/snowmerak/q/mcpconfig"
 	"github.com/snowmerak/q/providerhost"
 	"github.com/snowmerak/q/sessionstore"
 	qtools "github.com/snowmerak/q/tools"
@@ -28,6 +29,8 @@ type runtimeInitializedMsg struct {
 	models        []client.Model
 	gatewayConfig gateway.Config
 	startupErr    error
+	mcpErr        error
+	mcpStatuses   []qtools.ExternalStatus
 	archiveErr    error
 	err           error
 }
@@ -179,6 +182,13 @@ func (request startupRequest) run() runtimeInitializedMsg {
 		)
 		result.tools = tools
 		result.library = libraryClient
+		if toolsErr == nil {
+			mcpValue, mcpErr := (mcpconfig.Store{Dir: request.store.Dir}).LoadOrDefault()
+			result.mcpErr = mcpErr
+			if mcpErr == nil {
+				result.mcpStatuses = tools.ConfigureExternal(request.ctx, request.workspaceStore.Root, mcpValue)
+			}
+		}
 	}
 	if toolsErr != nil {
 		if archive != nil {

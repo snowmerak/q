@@ -26,6 +26,7 @@ import (
 	qlibrary "github.com/snowmerak/q/library"
 	"github.com/snowmerak/q/loom"
 	qlsp "github.com/snowmerak/q/lsp"
+	"github.com/snowmerak/q/mcpconfig"
 	"github.com/snowmerak/q/memory"
 	"github.com/snowmerak/q/sessionstore"
 	"github.com/snowmerak/q/subagent"
@@ -45,6 +46,7 @@ const (
 	screenIgnore
 	screenSkills
 	screenLSP
+	screenMCP
 	screenGateway
 	screenGatewayNetwork
 	screenGatewayKeys
@@ -244,6 +246,17 @@ type model struct {
 	lspDiscardArmed           bool
 	lspBusy                   bool
 	lspDiscoveryID            uint64
+	mcpSettingsStore          mcpconfig.Store
+	mcpDraft                  mcpconfig.Config
+	mcpOriginal               mcpconfig.Config
+	mcpPanel                  int
+	mcpCursor                 [2]int
+	mcpMode                   mcpScreenMode
+	mcpEditID                 string
+	mcpFormFocus              int
+	mcpInputs                 [6]textinput.Model
+	mcpDiscardArmed           bool
+	mcpBusy                   bool
 
 	config             config.Config
 	client             chatClient
@@ -295,6 +308,12 @@ type configuredMsg struct {
 type archiveEmbeddingConfiguredMsg struct {
 	stats archiveembed.BackfillStats
 	err   error
+}
+
+type mcpSettingsSavedMsg struct {
+	config   mcpconfig.Config
+	statuses []qtools.ExternalStatus
+	err      error
 }
 
 type modelTargetConfiguredMsg struct {
@@ -497,6 +516,7 @@ func newManagedModel(ctx context.Context, store config.Store, factory clientFact
 	m.gatewayKeyAlias.CharLimit = 64
 	m.gatewayKeyAlias.SetWidth(48)
 	m.librarySettingsStore = qlibrary.ConfigStore{Dir: store.Dir}
+	m.mcpSettingsStore = mcpconfig.Store{Dir: store.Dir}
 	m.libraryHostInput = textinput.New()
 	m.libraryHostInput.Prompt = "host · "
 	m.libraryHostInput.SetWidth(40)
@@ -527,6 +547,15 @@ func newManagedModel(ctx context.Context, store config.Store, factory clientFact
 		field.SetWidth(72)
 		field.CharLimit = 4096
 		m.lspInputs[index] = field
+	}
+	mcpPlaceholders := []string{"server ID", "stdio or streamable-http", "command or https://… URL", `arguments as JSON, e.g. ["serve"]`, `child env mapping, e.g. {"TOKEN":"TOKEN"}`, `header env mapping, e.g. {"Authorization":"MCP_AUTH"}`}
+	for index := range m.mcpInputs {
+		field := textinput.New()
+		field.Prompt = ""
+		field.Placeholder = mcpPlaceholders[index]
+		field.SetWidth(72)
+		field.CharLimit = 4096
+		m.mcpInputs[index] = field
 	}
 	if runtime != nil && len(m.gatewayConfig.Providers) == 0 {
 		m.enterProviderEditor(-1)
@@ -600,6 +629,9 @@ func (m model) Init() tea.Cmd {
 	if m.screen == screenLSP && m.lspMode != lspModeList {
 		return tea.Batch(m.lspInputs[m.lspFormFocus].Focus(), tea.RequestBackgroundColor)
 	}
+	if m.screen == screenMCP && m.mcpMode != mcpModeList {
+		return tea.Batch(m.mcpInputs[m.mcpFormFocus].Focus(), tea.RequestBackgroundColor)
+	}
 	if m.screen == screenHelp {
 		return tea.RequestBackgroundColor
 	}
@@ -650,6 +682,14 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if message.archiveErr != nil {
 			statuses = append(statuses, "archive: "+message.archiveErr.Error())
+		}
+		if message.mcpErr != nil {
+			statuses = append(statuses, "MCP: "+message.mcpErr.Error())
+		}
+		for _, status := range message.mcpStatuses {
+			if status.Error != "" {
+				statuses = append(statuses, "MCP "+status.ID+": "+status.Error)
+			}
 		}
 		if len(statuses) > 0 {
 			m.status = strings.Join(statuses, " · ")
@@ -754,6 +794,17 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		m.status = message.target + " model settings saved"
 		m.modelFilter.Blur()
 		m.embeddingDimensions.Blur()
+		return m, nil
+	case mcpSettingsSavedMsg:
+		m.mcpBusy = false
+		if message.err != nil {
+			m.status = message.err.Error()
+			return m, nil
+		}
+		m.mcpDraft = cloneMCPConfig(message.config)
+		m.mcpOriginal = cloneMCPConfig(message.config)
+		m.mcpDiscardArmed = false
+		m.status = renderMCPSaveStatus(message.statuses, m.toolRuntime == nil)
 		return m, nil
 	case modelGroupsConfiguredMsg:
 		if message.err != nil {
@@ -1188,6 +1239,9 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		if m.screen == screenLSP {
 			return m.updateLSP(key)
 		}
+		if m.screen == screenMCP {
+			return m.updateMCP(key)
+		}
 		if m.screen == screenHelp {
 			return m.updateHelp(key)
 		}
@@ -1220,6 +1274,11 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	if m.screen == screenLSP && m.lspMode != lspModeList {
 		var command tea.Cmd
 		m.lspInputs[m.lspFormFocus], command = m.lspInputs[m.lspFormFocus].Update(message)
+		return m, command
+	}
+	if m.screen == screenMCP && m.mcpMode != mcpModeList {
+		var command tea.Cmd
+		m.mcpInputs[m.mcpFormFocus], command = m.mcpInputs[m.mcpFormFocus].Update(message)
 		return m, command
 	}
 	if m.screen == screenGatewayNetwork || (m.screen == screenGatewayKeys && m.gatewayKeyAdding) {
@@ -2560,6 +2619,9 @@ func (m model) submitChat() (tea.Model, tea.Cmd) {
 	case "/lsp":
 		m.input.Reset()
 		return m.enterLSP()
+	case "/mcp":
+		m.input.Reset()
+		return m.enterMCP()
 	case "/help":
 		m.input.Reset()
 		return m.enterHelp()
@@ -2769,7 +2831,7 @@ func (m *model) sendChatRequest() tea.Cmd {
 	m.requestEstimate = memory.CountMessages(history)
 	conversationID := m.conversationID
 	configuredClient := m.client
-	toolRuntime := m.toolRuntime
+	toolRuntime := scopeTools(m.toolRuntime, mcpconfig.RoleDefault)
 	turnContext := m.activeTurnContext()
 	turnID := m.turnID
 	if toolRuntime == nil {
@@ -3524,6 +3586,9 @@ func (m *model) resize(width, height int) {
 	for index := range m.lspInputs {
 		m.lspInputs[index].SetWidth(min(contentWidth-12, 84))
 	}
+	for index := range m.mcpInputs {
+		m.mcpInputs[index].SetWidth(min(contentWidth-12, 84))
+	}
 	ignorePanel := ignoreEditorPanelStyle(max(36, m.width-4), m.dark)
 	m.ignoreEditor.SetWidth(max(20, ignorePanel.GetWidth()-ignorePanel.GetHorizontalFrameSize()))
 	m.ignoreEditor.SetHeight(max(4, m.height-16))
@@ -3589,6 +3654,9 @@ func (m *model) applyColorScheme(dark bool) {
 	m.modelGroupTimeoutInput.SetStyles(textinput.DefaultStyles(dark))
 	for index := range m.lspInputs {
 		m.lspInputs[index].SetStyles(textinput.DefaultStyles(dark))
+	}
+	for index := range m.mcpInputs {
+		m.mcpInputs[index].SetStyles(textinput.DefaultStyles(dark))
 	}
 	inputStyles := textarea.DefaultStyles(dark)
 	inputStyles.Cursor.Shape = tea.CursorBar
@@ -3875,6 +3943,8 @@ func (m model) View() tea.View {
 		content = m.viewSkills()
 	} else if m.screen == screenLSP {
 		content = m.viewLSP()
+	} else if m.screen == screenMCP {
+		content = m.viewMCP()
 	} else if m.screen == screenHelp {
 		content = m.viewHelp()
 	} else if m.screen == screenChat {

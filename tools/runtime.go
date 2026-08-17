@@ -16,6 +16,7 @@ import (
 	qlibrary "github.com/snowmerak/q/library"
 	"github.com/snowmerak/q/loom"
 	"github.com/snowmerak/q/lsp"
+	"github.com/snowmerak/q/mcpconfig"
 	"github.com/snowmerak/q/tools/builtin"
 )
 
@@ -29,16 +30,20 @@ type HostEnvironment struct {
 
 // Runtime connects q's chat loop to the builtin MCP server in-process.
 type Runtime struct {
-	client       *mcp.ClientSession
-	server       *mcp.ServerSession
-	fs           *builtin.FS
-	loom         *builtin.LoomRuntime
-	lsp          *lsp.Manager
-	skills       *agentskills.Registry
-	skillStore   agentskills.RecordStore
-	globalSkills builtin.GlobalSkillLibrary
-	tools        []client.Tool
-	closeMu      sync.Once
+	client         *mcp.ClientSession
+	server         *mcp.ServerSession
+	fs             *builtin.FS
+	loom           *builtin.LoomRuntime
+	lsp            *lsp.Manager
+	skills         *agentskills.Registry
+	skillStore     agentskills.RecordStore
+	globalSkills   builtin.GlobalSkillLibrary
+	tools          []client.Tool
+	externalMu     sync.RWMutex
+	external       map[string]*externalServer
+	externalRoutes map[string]externalToolRoute
+	externalConfig mcpconfig.Config
+	closeMu        sync.Once
 }
 
 func NewRuntime(ctx context.Context, root string) (*Runtime, error) {
@@ -197,6 +202,20 @@ func (r *Runtime) Tools() []client.Tool {
 	return append([]client.Tool(nil), r.tools...)
 }
 
+// ToolsForRole returns builtin tools plus external MCP tools assigned to role.
+func (r *Runtime) ToolsForRole(role string) []client.Tool {
+	result := append([]client.Tool(nil), r.tools...)
+	r.externalMu.RLock()
+	defer r.externalMu.RUnlock()
+	for _, serverID := range r.externalConfig.ServersForRole(role) {
+		server := r.external[serverID]
+		if server != nil {
+			result = append(result, server.tools...)
+		}
+	}
+	return result
+}
+
 func (r *Runtime) Skills() []agentskills.Skill {
 	if r == nil || r.skills == nil {
 		return nil
@@ -325,6 +344,19 @@ func (r *Runtime) Call(ctx context.Context, call client.ToolCall) (client.ToolRe
 			return client.ToolResult{Content: "invalid tool arguments: " + err.Error(), IsError: true}, nil
 		}
 	}
+	r.externalMu.RLock()
+	route, external := r.externalRoutes[call.Function.Name]
+	if external {
+		defer r.externalMu.RUnlock()
+		callContext, cancel := context.WithTimeout(ctx, externalCallTimeout)
+		defer cancel()
+		result, err := route.session.CallTool(callContext, &mcp.CallToolParams{Name: route.tool, Arguments: arguments})
+		if err != nil {
+			return client.ToolResult{}, err
+		}
+		return CaptureMCPToolResult(ctx, r.loom.Store, route.server, call, result)
+	}
+	r.externalMu.RUnlock()
 	result, err := r.client.CallTool(ctx, &mcp.CallToolParams{Name: call.Function.Name, Arguments: arguments})
 	if err != nil {
 		return client.ToolResult{}, err
@@ -481,8 +513,15 @@ func encodeLoomReceipt(artifact loom.Artifact, content string) (string, error) {
 func (r *Runtime) Close() error {
 	var closeErr error
 	r.closeMu.Do(func() {
+		r.externalMu.Lock()
+		for _, server := range r.external {
+			closeErr = errors.Join(closeErr, server.session.Close())
+		}
+		r.external = nil
+		r.externalRoutes = nil
+		r.externalMu.Unlock()
 		if r.client != nil {
-			closeErr = r.client.Close()
+			closeErr = errors.Join(closeErr, r.client.Close())
 		}
 		if r.server != nil {
 			if err := r.server.Close(); closeErr == nil {

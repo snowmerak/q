@@ -1144,7 +1144,7 @@ func TestHelpCommandAndShortcutKeepCommandsOutOfChatFooter(t *testing.T) {
 	if !strings.Contains(chat, "ctrl+h help") {
 		t.Fatalf("chat footer does not advertise help:\n%s", chat)
 	}
-	for _, command := range []string{"/clear", "/learn", "/commit", "/model", "/gateway", "/loom", "/ignore", "/skills", "/help"} {
+	for _, command := range []string{"/clear", "/learn", "/commit", "/model", "/gateway", "/loom", "/ignore", "/skills", "/mcp", "/help"} {
 		if strings.Contains(chat, command) {
 			t.Fatalf("chat footer exposes %q:\n%s", command, chat)
 		}
@@ -1166,8 +1166,8 @@ func TestHelpCommandAndShortcutKeepCommandsOutOfChatFooter(t *testing.T) {
 	}
 	allHelp := ansi.Strip(renderHelpContent(m.dark))
 	for _, expected := range []string{
-		"/help", "SUBAGENTS AND QUESTIONS", "ctrl+g", "COMMAND LINE", "q commit", "q gateway config",
-		"q model", "q skills", "q ignore", "q help",
+		"/help", "/mcp", "SUBAGENTS AND QUESTIONS", "ctrl+g", "COMMAND LINE", "q commit", "q gateway config",
+		"q model", "q mcp", "q skills", "q ignore", "q help",
 	} {
 		if !strings.Contains(allHelp, expected) {
 			t.Fatalf("help content missing %q:\n%s", expected, allHelp)

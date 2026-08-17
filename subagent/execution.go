@@ -438,6 +438,7 @@ func plannerReviewTools(available []client.Tool) []client.Tool {
 	for _, tool := range available {
 		name := strings.TrimSpace(tool.Function.Name)
 		_, explicitlyAllowed := allowed[name]
+		explicitlyAllowed = explicitlyAllowed || externalMCPToolAllowed(name)
 		if !explicitlyAllowed && !lspQueryToolAllowed(name) {
 			continue
 		}

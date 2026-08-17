@@ -388,15 +388,15 @@ func streamPlanWorkflow(
 		scoutRunID = ""
 	}
 	scout := subagent.ScoutRunner{
-		Client: configuredClient, Tools: toolRuntime, Spec: scoutSpec,
+		Client: configuredClient, Tools: scopeTools(toolRuntime, scoutSpec.Role), Spec: scoutSpec,
 		Sink: archive, RunID: scoutRunID, WorkingDirectory: workingDirectory, Progress: progress, Trace: trace,
 	}
 	griller := subagent.GrillerRunner{
-		Client: configuredClient, Tools: toolRuntime, Scout: scout, Spec: grillerSpec,
+		Client: configuredClient, Tools: scopeTools(toolRuntime, grillerSpec.Role), Scout: scout, Spec: grillerSpec,
 		Ask: ask, WorkingDirectory: workingDirectory, Progress: progress, Trace: trace,
 	}
 	planner := subagent.PlannerRunner{
-		Client: configuredClient, Tools: toolRuntime, Spec: plannerSpec, WorkingDirectory: workingDirectory,
+		Client: configuredClient, Tools: scopeTools(toolRuntime, plannerSpec.Role), Spec: plannerSpec, WorkingDirectory: workingDirectory,
 		Progress: progress, Trace: trace,
 	}
 	workflow := subagent.PlanWorkflow{
@@ -483,7 +483,7 @@ func executeApprovedPlan(
 	}
 	environment := toolRuntime.Environment()
 	coder := subagent.CoderRunner{
-		Client: configuredClient, Tools: toolRuntime, Spec: coderSpec,
+		Client: configuredClient, Tools: scopeTools(toolRuntime, coderSpec.Role), Spec: coderSpec,
 		Sink: archive, RunID: runID, ExecutionID: checkpoint.ExecutionID,
 		WorkingDirectory: workingDirectory, Progress: progress, Trace: trace,
 		Environment: fmt.Sprintf(
@@ -492,7 +492,7 @@ func executeApprovedPlan(
 		),
 	}
 	reviewer := subagent.PlannerReviewRunner{
-		Client: configuredClient, Tools: toolRuntime, Spec: plannerSpec,
+		Client: configuredClient, Tools: scopeTools(toolRuntime, plannerSpec.Role), Spec: plannerSpec,
 		Sink: archive, RunID: runID, ExecutionID: checkpoint.ExecutionID,
 		WorkingDirectory: workingDirectory, Progress: progress, Trace: trace,
 	}

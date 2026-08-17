@@ -122,6 +122,8 @@ func standaloneUICommand(name string) func(context.Context) error {
 		return app.RunIgnoreDefault
 	case "lsp":
 		return app.RunLSPDefault
+	case "mcp":
+		return app.RunMCPDefault
 	case "help":
 		return app.RunHelp
 	default:

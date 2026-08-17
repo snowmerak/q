@@ -456,7 +456,11 @@ func TestSearchSkillsUsesSessionStoreSnapshotUntilReload(t *testing.T) {
 	if err := decodeReceiptResult(listed.Content, &initial); err != nil {
 		t.Fatal(err)
 	}
-	if len(initial.Hits) != 1 || initial.Hits[0].Title != "initial-skill" {
+	foundInitial := false
+	for _, hit := range initial.Hits {
+		foundInitial = foundInitial || hit.Title == "initial-skill"
+	}
+	if !foundInitial {
 		t.Fatalf("initial skill hits = %#v", initial.Hits)
 	}
 

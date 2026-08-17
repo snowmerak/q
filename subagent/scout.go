@@ -362,11 +362,18 @@ func scoutTools(available []client.Tool) []client.Tool {
 }
 
 func scoutToolAllowed(name string) bool {
+	if externalMCPToolAllowed(name) {
+		return true
+	}
 	if lspQueryToolAllowed(name) {
 		return true
 	}
 	_, allowed := scoutAllowedTools[name]
 	return allowed
+}
+
+func externalMCPToolAllowed(name string) bool {
+	return strings.HasPrefix(strings.TrimSpace(name), "mcp_")
 }
 
 func lspQueryToolAllowed(name string) bool {
