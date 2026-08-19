@@ -13,7 +13,7 @@ require (
 	github.com/charmbracelet/x/ansi v0.11.7
 	github.com/dop251/goja v0.0.0-20260806115107-493f22071ef6
 	github.com/modelcontextprotocol/go-sdk v1.7.0
-	github.com/snowmerak/llm-provider v0.0.0-20260819134142-0362d9bc188d
+	github.com/snowmerak/llm-provider v0.0.0-20260819153033-78ea5c0d8090
 	github.com/zeebo/blake3 v0.2.4
 	go.etcd.io/bbolt v1.4.0
 	golang.org/x/sys v0.47.0
