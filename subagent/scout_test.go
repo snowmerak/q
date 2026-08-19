@@ -13,8 +13,9 @@ import (
 )
 
 type fakeScoutClient struct {
-	responses []client.Message
-	requests  []client.ChatRequest
+	responses      []client.Message
+	requests       []client.ChatRequest
+	conversationID string
 }
 
 func (f *fakeScoutClient) Chat(_ context.Context, request client.ChatRequest) (*client.ChatResponse, error) {
@@ -25,8 +26,9 @@ func (f *fakeScoutClient) Chat(_ context.Context, request client.ChatRequest) (*
 	message := f.responses[0]
 	f.responses = f.responses[1:]
 	return &client.ChatResponse{
-		Choices: []client.Choice{{Message: message}},
-		Usage:   client.Usage{PromptTokens: 10, CompletionTokens: 2, TotalTokens: 12},
+		ConversationID: f.conversationID,
+		Choices:        []client.Choice{{Message: message}},
+		Usage:          client.Usage{PromptTokens: 10, CompletionTokens: 2, TotalTokens: 12},
 	}, nil
 }
 
@@ -65,7 +67,7 @@ func TestScoutRunnerUsesInvestigationToolsAndReturnsStructuredReport(t *testing.
 		}],
 		"verification":["Read subagent/scout.go"]
 	}`
-	fakeClient := &fakeScoutClient{responses: []client.Message{
+	fakeClient := &fakeScoutClient{conversationID: "cache_scout", responses: []client.Message{
 		{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{scoutCall("read_file", `{"path":"subagent/scout.go"}`)}},
 		{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{scoutCall(ScoutCompleteToolName, complete)}},
 	}}
@@ -101,6 +103,9 @@ func TestScoutRunnerUsesInvestigationToolsAndReturnsStructuredReport(t *testing.
 	if len(fakeClient.requests) != 2 || fakeClient.requests[0].Model != "scout-model" ||
 		fakeClient.requests[0].ReasoningEffort != "medium" || fakeClient.requests[0].WorkingDirectory != `C:\workspace` {
 		t.Fatalf("requests = %#v", fakeClient.requests)
+	}
+	if fakeClient.requests[0].ConversationID != "" || fakeClient.requests[1].ConversationID != "cache_scout" {
+		t.Fatalf("Scout cache lifecycle = %#v", fakeClient.requests)
 	}
 	for _, name := range []string{"edit_file", "cmd_status"} {
 		if hasScoutTool(fakeClient.requests[0].Tools, name) {
@@ -146,6 +151,30 @@ func TestScoutRunnerUsesInvestigationToolsAndReturnsStructuredReport(t *testing.
 	}
 	if !sawRead || !sawComplete {
 		t.Fatalf("tool progress missing: %#v", progress)
+	}
+}
+
+func TestScoutRunnerDoesNotReuseConversationIDAcrossRuns(t *testing.T) {
+	complete := `{"outcome":"succeeded","summary":"Investigation complete"}`
+	fakeClient := &fakeScoutClient{conversationID: "cache_scout", responses: []client.Message{
+		{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{scoutCall(ScoutCompleteToolName, complete)}},
+		{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{scoutCall(ScoutCompleteToolName, complete)}},
+	}}
+	runner := ScoutRunner{
+		Client: fakeClient,
+		Tools:  &fakeScoutTools{},
+		Spec:   Spec{Role: config.AgentRoleScout, Model: "scout-model"},
+	}
+
+	if _, err := runner.Run(t.Context(), ScoutTask{Objective: "Inspect the first target"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runner.Run(t.Context(), ScoutTask{Objective: "Inspect the second target"}); err != nil {
+		t.Fatal(err)
+	}
+	if len(fakeClient.requests) != 2 || fakeClient.requests[0].ConversationID != "" ||
+		fakeClient.requests[1].ConversationID != "" {
+		t.Fatalf("conversation IDs crossed Scout executions: %#v", fakeClient.requests)
 	}
 }
 

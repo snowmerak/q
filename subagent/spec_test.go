@@ -12,15 +12,53 @@ import (
 )
 
 type groupChatClient struct {
-	models []string
+	models          []string
+	conversationIDs []string
 }
 
 func (c *groupChatClient) Chat(_ context.Context, request client.ChatRequest) (*client.ChatResponse, error) {
 	c.models = append(c.models, request.Model)
+	c.conversationIDs = append(c.conversationIDs, request.ConversationID)
+	if request.Model == "primary" {
+		return nil, &client.APIError{StatusCode: http.StatusServiceUnavailable, Message: "temporary"}
+	}
+	return &client.ChatResponse{ConversationID: "cache_secondary"}, nil
+}
+
+type conversationChatClient struct {
+	requests []client.ChatRequest
+}
+
+func (c *conversationChatClient) Chat(_ context.Context, request client.ChatRequest) (*client.ChatResponse, error) {
+	c.requests = append(c.requests, request)
+	return &client.ChatResponse{ConversationID: "cache_subagent"}, nil
+}
+
+type emptyFallbackChatClient struct {
+	requests []client.ChatRequest
+}
+
+func (c *emptyFallbackChatClient) Chat(_ context.Context, request client.ChatRequest) (*client.ChatResponse, error) {
+	c.requests = append(c.requests, request)
 	if request.Model == "primary" {
 		return nil, &client.APIError{StatusCode: http.StatusServiceUnavailable, Message: "temporary"}
 	}
 	return &client.ChatResponse{}, nil
+}
+
+func TestSpecChatReusesConversationIDWithinExecution(t *testing.T) {
+	configured := &conversationChatClient{}
+	spec := Spec{Role: config.AgentRoleScout, Model: "scout-model"}
+	if _, err := spec.Chat(t.Context(), configured, client.ChatRequest{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := spec.Chat(t.Context(), configured, client.ChatRequest{}); err != nil {
+		t.Fatal(err)
+	}
+	if len(configured.requests) != 2 || configured.requests[0].ConversationID != "" ||
+		configured.requests[1].ConversationID != "cache_subagent" {
+		t.Fatalf("requests = %#v", configured.requests)
+	}
 }
 
 func TestResolveUsesRoleModelAndReasoningEffort(t *testing.T) {
@@ -117,6 +155,42 @@ func TestResolveModelGroupAndKeepSuccessfulFallbackForExecution(t *testing.T) {
 	}
 	if got := strings.Join(configured.models, ","); got != "primary,secondary,secondary" {
 		t.Fatalf("model calls = %s", got)
+	}
+	if got := strings.Join(configured.conversationIDs, ","); got != ",,cache_secondary" {
+		t.Fatalf("conversation IDs = %q", got)
+	}
+}
+
+func TestSpecChatClearsConversationIDWhenFallbackReturnsNone(t *testing.T) {
+	configured := &emptyFallbackChatClient{}
+	spec := Spec{
+		Group: "heavy", Model: "primary",
+		Candidates: []client.ModelCandidate{{Model: "primary"}, {Model: "secondary"}},
+		Router:     client.NewModelRouter(), conversationID: "cache_primary",
+	}
+
+	if _, err := spec.Chat(t.Context(), configured, client.ChatRequest{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := spec.Chat(t.Context(), configured, client.ChatRequest{}); err != nil {
+		t.Fatal(err)
+	}
+	if len(configured.requests) != 3 {
+		t.Fatalf("requests = %#v", configured.requests)
+	}
+	if got := strings.Join([]string{
+		configured.requests[0].ConversationID,
+		configured.requests[1].ConversationID,
+		configured.requests[2].ConversationID,
+	}, ","); got != "cache_primary,," {
+		t.Fatalf("conversation IDs = %q", got)
+	}
+	if got := strings.Join([]string{
+		configured.requests[0].Model,
+		configured.requests[1].Model,
+		configured.requests[2].Model,
+	}, ","); got != "primary,secondary,secondary" {
+		t.Fatalf("models = %q", got)
 	}
 }
 

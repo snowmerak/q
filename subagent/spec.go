@@ -24,6 +24,7 @@ type Spec struct {
 	Candidates      []client.ModelCandidate
 	Router          *client.ModelRouter
 	activeCandidate int
+	conversationID  string
 }
 
 // Resolve combines a role override with the active chat model and validates
@@ -143,15 +144,31 @@ func (s *Spec) Chat(ctx context.Context, configured client.ModelChatClient, requ
 	if s == nil {
 		return nil, fmt.Errorf("subagent: model spec is nil")
 	}
+	if request.ConversationID == "" {
+		request.ConversationID = s.conversationID
+	}
 	if s.Group == "" {
 		s.Apply(&request)
-		return configured.Chat(ctx, request)
+		response, err := configured.Chat(ctx, request)
+		if err == nil && response != nil && response.ConversationID != "" {
+			s.conversationID = response.ConversationID
+		}
+		return response, err
 	}
+	previousCandidate := s.activeCandidate
 	response, selected, err := s.Router.RouteChat(ctx, configured, request, s.Candidates, s.activeCandidate)
 	if err == nil {
 		s.activeCandidate = selected
 		s.Model = s.Candidates[selected].Model
 		s.ReasoningEffort = s.Candidates[selected].ReasoningEffort
+		if response != nil && response.ConversationID != "" {
+			s.conversationID = response.ConversationID
+		} else if selected != previousCandidate {
+			// A fallback starts a new backend lifecycle. Never retain the prior
+			// candidate's stateful conversation ID when the replacement backend
+			// did not return its own ID.
+			s.conversationID = ""
+		}
 	}
 	return response, err
 }

@@ -11,7 +11,7 @@ import (
 )
 
 func TestCoderRunnerUsesWorkspaceToolsAndCompletesAttempt(t *testing.T) {
-	fakeClient := &fakeScoutClient{responses: []client.Message{
+	fakeClient := &fakeScoutClient{conversationID: "cache_coder", responses: []client.Message{
 		{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{scoutCall("edit_file", `{"path":"app/model.go"}`)}},
 		{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{scoutCall(CoderCompleteToolName, `{
 			"outcome":"succeeded",
@@ -55,6 +55,9 @@ func TestCoderRunnerUsesWorkspaceToolsAndCompletesAttempt(t *testing.T) {
 	if len(fakeClient.requests) != 2 || fakeClient.requests[0].Model != "coder-model" ||
 		fakeClient.requests[0].ReasoningEffort != "high" || fakeClient.requests[0].WorkingDirectory != `C:\workspace` {
 		t.Fatalf("Coder requests = %#v", fakeClient.requests)
+	}
+	if fakeClient.requests[0].ConversationID != "" || fakeClient.requests[1].ConversationID != "cache_coder" {
+		t.Fatalf("Coder cache lifecycle = %#v", fakeClient.requests)
 	}
 	for _, expected := range []string{"read_file", "edit_file", "run_command", "wait", CoderCompleteToolName} {
 		if !hasScoutTool(fakeClient.requests[0].Tools, expected) {

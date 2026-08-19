@@ -95,6 +95,7 @@ const (
 	setupProviderID = iota
 	setupProviderPrefix
 	setupProviderType
+	setupProviderKind
 	setupBaseURL
 	setupAPIKeyEnv
 	setupAPIKey
@@ -109,6 +110,12 @@ type providerTypeOption struct {
 	apiKeyEnv   string
 	baseURLHint string
 	apiKeyHint  string
+}
+
+type providerKindOption struct {
+	value       string
+	label       string
+	description string
 }
 
 var providerTypeOptions = []providerTypeOption{
@@ -173,6 +180,7 @@ type model struct {
 	providerEditIndex         int
 	providerAdding            bool
 	providerTypeCursor        int
+	providerKindCursor        int
 	gatewayConfig             gateway.Config
 	gatewayConfigOnly         bool
 	providerCursor            int
@@ -456,12 +464,14 @@ func newManagedModel(ctx context.Context, store config.Store, factory clientFact
 		"provider id",
 		"optional; defaults to provider id",
 		"",
+		"",
 		"https://api.openai.com/v1",
 		"OPENAI_API_KEY",
 		"optional inline key",
 	}
 	values := []string{
 		"default",
+		"",
 		"",
 		"",
 		defaults.Provider.BaseURL,
@@ -1350,6 +1360,15 @@ func (m model) updateSetup(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	}
+	if m.runtime != nil && m.setupFocus == setupProviderKind {
+		switch key.String() {
+		case "left":
+			m.cycleProviderKind(-1)
+		case "right", " ":
+			m.cycleProviderKind(1)
+		}
+		return m, nil
+	}
 	var command tea.Cmd
 	m.setup[m.setupFocus], command = m.setup[m.setupFocus].Update(key)
 	return m, command
@@ -1429,6 +1448,7 @@ func (m model) applyProviderEdit() (tea.Model, tea.Cmd) {
 	id := strings.TrimSpace(m.setup[setupProviderID].Value())
 	prefix := strings.TrimSpace(m.setup[setupProviderPrefix].Value())
 	providerType := m.selectedProviderType().value
+	providerKind := m.selectedProviderKind().value
 	if id == "" {
 		m.status = "Provider ID is required"
 		return m, nil
@@ -1476,6 +1496,7 @@ func (m model) applyProviderEdit() (tea.Model, tea.Cmd) {
 	provider.ID = id
 	provider.Prefix = prefix
 	provider.Type = providerType
+	provider.Kind = providerKind
 	provider.BaseURL = strings.TrimSpace(m.setup[setupBaseURL].Value())
 	provider.APIKeyEnv = strings.TrimSpace(m.setup[setupAPIKeyEnv].Value())
 	provider.APIKey = m.setup[setupAPIKey].Value()
@@ -1664,6 +1685,109 @@ func (m model) selectedProviderType() providerTypeOption {
 	return providerTypeOptions[m.providerTypeCursor]
 }
 
+func providerKindOptions(providerType string) []providerKindOption {
+	automatic := providerKindOption{
+		label:       "Auto (inferred)",
+		description: "Infer OpenAI semantics, except api.x.ai endpoints are inferred as Grok.",
+	}
+	if providerType != "openai-compatible" {
+		kind := nativeProviderKind(providerType)
+		automatic.description = "Infer " + providerKindLabel(kind) + " semantics from this native API type."
+		return []providerKindOption{
+			automatic,
+			{value: kind, label: providerKindLabel(kind), description: "Explicit matching kind for this native API type."},
+		}
+	}
+	return []providerKindOption{
+		automatic,
+		{value: "generic", label: "Generic", description: "Strict compatible API; disable provider-specific prompt-cache extensions."},
+		{value: "openai", label: "OpenAI", description: "Use OpenAI prompt_cache_key semantics."},
+		{value: "openrouter", label: "OpenRouter", description: "Use OpenRouter session_id sticky routing semantics."},
+		{value: "grok", label: "Grok / xAI", description: "Use Grok conversation-affinity headers and xAI capabilities."},
+		{value: "anthropic", label: "Claude / Anthropic", description: "Use Anthropic automatic prompt-cache semantics."},
+		{value: "codex", label: "Codex App Server", description: "Use Codex provider-managed conversation semantics."},
+	}
+}
+
+func nativeProviderKind(providerType string) string {
+	switch providerType {
+	case "openrouter":
+		return "openrouter"
+	case "xai", "grok":
+		return "grok"
+	case "anthropic", "claude":
+		return "anthropic"
+	case "codex", "codex-app-server":
+		return "codex"
+	default:
+		return "openai"
+	}
+}
+
+func providerKindLabel(kind string) string {
+	switch kind {
+	case "openrouter":
+		return "OpenRouter"
+	case "grok":
+		return "Grok / xAI"
+	case "anthropic":
+		return "Claude / Anthropic"
+	case "codex":
+		return "Codex App Server"
+	default:
+		return "OpenAI"
+	}
+}
+
+func canonicalProviderKind(kind string) string {
+	switch strings.ToLower(strings.TrimSpace(kind)) {
+	case "":
+		return ""
+	case "openai", "openai-compatible":
+		return "openai"
+	case "openrouter":
+		return "openrouter"
+	case "grok", "xai":
+		return "grok"
+	case "anthropic", "claude":
+		return "anthropic"
+	case "codex", "codex-app-server":
+		return "codex"
+	case "generic":
+		return "generic"
+	default:
+		return ""
+	}
+}
+
+func (m model) selectedProviderKind() providerKindOption {
+	options := providerKindOptions(m.selectedProviderType().value)
+	if m.providerKindCursor < 0 || m.providerKindCursor >= len(options) {
+		return options[0]
+	}
+	return options[m.providerKindCursor]
+}
+
+func (m *model) setProviderKind(value string) {
+	value = canonicalProviderKind(value)
+	options := providerKindOptions(m.selectedProviderType().value)
+	for index, option := range options {
+		if option.value == value {
+			m.providerKindCursor = index
+			return
+		}
+	}
+	// Changing to a native transport must not retain an incompatible semantic
+	// kind from the previous OpenAI-compatible route. Empty means infer the
+	// matching native kind and always passes the type/kind validation matrix.
+	m.providerKindCursor = 0
+}
+
+func (m *model) cycleProviderKind(delta int) {
+	options := providerKindOptions(m.selectedProviderType().value)
+	m.providerKindCursor = (m.providerKindCursor + delta + len(options)) % len(options)
+}
+
 func (m *model) setProviderType(value string) {
 	switch value {
 	case "grok":
@@ -1686,11 +1810,13 @@ func (m *model) setProviderType(value string) {
 
 func (m *model) cycleProviderType(delta int) {
 	previous := m.selectedProviderType()
+	previousKind := m.selectedProviderKind().value
 	baseURLWasDefault := m.setup[setupBaseURL].Value() == previous.baseURL
 	apiKeyEnvWasDefault := m.setup[setupAPIKeyEnv].Value() == previous.apiKeyEnv
 	m.providerTypeCursor = (m.providerTypeCursor + delta + len(providerTypeOptions)) % len(providerTypeOptions)
 	next := m.selectedProviderType()
 	m.updateProviderTypePlaceholders()
+	m.setProviderKind(previousKind)
 	if baseURLWasDefault {
 		m.setup[setupBaseURL].SetValue(next.baseURL)
 	}
@@ -1708,7 +1834,7 @@ func (m *model) updateProviderTypePlaceholders() {
 func (m model) moveSetupFocus(delta int) (tea.Model, tea.Cmd) {
 	m.setup[m.setupFocus].Blur()
 	m.setupFocus = (m.setupFocus + delta + setupFieldCount) % setupFieldCount
-	if m.runtime != nil && m.setupFocus == setupProviderType {
+	if m.runtime != nil && (m.setupFocus == setupProviderType || m.setupFocus == setupProviderKind) {
 		return m, nil
 	}
 	return m, m.setup[m.setupFocus].Focus()
@@ -3233,6 +3359,7 @@ func (m *model) enterProviderEditor(index int) {
 	m.setup[setupProviderID].SetValue(provider.ID)
 	m.setup[setupProviderPrefix].SetValue(provider.Prefix)
 	m.setProviderType(provider.Type)
+	m.setProviderKind(provider.Kind)
 	m.setup[setupBaseURL].SetValue(provider.BaseURL)
 	m.setup[setupAPIKeyEnv].SetValue(provider.APIKeyEnv)
 	m.setup[setupAPIKey].SetValue(provider.APIKey)

@@ -41,7 +41,7 @@ func TestModelRouterFallsBackImmediatelyOnHTTP5xx(t *testing.T) {
 		}
 		return &ChatResponse{}, nil
 	}}
-	response, selected, err := NewModelRouter().RouteChat(t.Context(), configured, ChatRequest{}, []ModelCandidate{
+	response, selected, err := NewModelRouter().RouteChat(t.Context(), configured, ChatRequest{ConversationID: "primary-thread"}, []ModelCandidate{
 		{Model: "primary", ReasoningEffort: "high"},
 		{Model: "secondary", ReasoningEffort: "medium"},
 	}, 0)
@@ -49,6 +49,7 @@ func TestModelRouterFallsBackImmediatelyOnHTTP5xx(t *testing.T) {
 		t.Fatalf("response = %#v, selected = %d, err = %v", response, selected, err)
 	}
 	if configured.count("primary") != 1 || configured.count("secondary") != 1 ||
+		configured.calls[0].ConversationID != "primary-thread" || configured.calls[1].ConversationID != "" ||
 		configured.calls[1].ReasoningEffort != "medium" {
 		t.Fatalf("calls = %#v", configured.calls)
 	}

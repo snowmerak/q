@@ -96,6 +96,12 @@ func (r *ModelRouter) RouteChat(
 		attempt := request
 		attempt.Model = candidate.Model
 		attempt.ReasoningEffort = candidate.ReasoningEffort
+		if index != start {
+			// conversation_id belongs to the candidate that produced it. A
+			// fallback may select another provider or model, so that candidate
+			// must begin its own state/cache lifecycle.
+			attempt.ConversationID = ""
+		}
 		response, err := configured.Chat(attemptContext, attempt)
 		attemptErr := attemptContext.Err()
 		cancel()

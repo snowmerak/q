@@ -698,6 +698,20 @@ context metadata is known, q compacts request context at 85% to at most 22%
 while leaving the complete transcript visible. Gateway metadata takes priority;
 `provider.context_window` caches it, and `context.window` is only a fallback.
 
+q retains the Gateway's `conversation_id` across user turns and tool rounds so
+the selected provider can reuse its prompt cache. Conversation IDs are scoped
+to the current q process and are never written to the workspace session, so a
+restart always begins a new conversation and cache lifecycle. They are also
+cleared on `/clear`, model/provider changes, and successful context compaction,
+where the request prefix begins a new lifecycle.
+
+Each isolated subagent execution has its own conversation lifecycle. Scout,
+Griller, Planner, Coder, and Planner review reuse the ID returned by their first
+model round for later tool/model rounds, then discard it when that execution
+ends. They never share the main chat ID or another subagent's ID. If a model
+group falls back to another candidate, the fallback request starts without the
+previous candidate's ID and retains the replacement candidate's returned ID.
+
 Chat messages, tool activity, subagent lifecycle events, questions, failures,
 results, and compaction summaries are written to the Session Store. The model
 can search this durable history with `search_archive` and page selected records

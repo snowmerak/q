@@ -9,7 +9,7 @@ import (
 )
 
 func (m model) viewSetup() string {
-	labels := []string{"Provider ID", "Model prefix", "API type", "Base URL", "API key environment variable", "API key (optional, stored in config)"}
+	labels := []string{"Provider ID", "Model prefix", "API type", "Provider kind (optional)", "Base URL", "API key environment variable", "API key (optional, stored in config)"}
 	var body strings.Builder
 	title := "q · first-run setup"
 	if m.setupEdit {
@@ -46,6 +46,21 @@ func (m model) viewSetup() string {
 			body.WriteString(activeLabelStyle.Render(selector))
 			body.WriteString("\n")
 			body.WriteString(subtleStyle.Render(selected.description))
+		} else if m.runtime != nil && index == setupProviderKind {
+			selected := m.selectedProviderKind()
+			selector := "  " + selected.label
+			if index == m.setupFocus {
+				selector = "‹ " + selected.label + " ›"
+			}
+			body.WriteString(activeLabelStyle.Render(selector))
+			body.WriteString("\n")
+			body.WriteString(subtleStyle.Render(selected.description))
+			body.WriteString("\n")
+			if m.selectedProviderType().value == "openai-compatible" {
+				body.WriteString(subtleStyle.Render("Compatible APIs accept any listed kind; use Generic for strict or unknown servers."))
+			} else {
+				body.WriteString(subtleStyle.Render("Native APIs accept only their matching kind; Auto is recommended."))
+			}
 		} else {
 			body.WriteString(field.View())
 		}
@@ -65,6 +80,8 @@ func (m model) viewSetup() string {
 	}
 	if m.runtime != nil && m.setupFocus == setupProviderType {
 		help = "←/→ select API type · tab/↑/↓ navigate · enter next · esc cancel"
+	} else if m.runtime != nil && m.setupFocus == setupProviderKind {
+		help = "←/→ select provider kind · tab/↑/↓ navigate · enter next · esc cancel"
 	}
 	body.WriteString(helpStyle.Render(help))
 	return frameStyle.Width(max(36, m.width-4)).Render(body.String())
@@ -98,7 +115,11 @@ func (m model) viewProviders() string {
 			}
 			body.WriteString(prefix)
 			body.WriteString(style.Render(provider.ID))
-			body.WriteString(subtleStyle.Render("  " + provider.Type + " · prefix " + modelPrefix + " · " + state))
+			detail := "  " + provider.Type
+			if provider.Kind != "" {
+				detail += " · kind " + provider.Kind
+			}
+			body.WriteString(subtleStyle.Render(detail + " · prefix " + modelPrefix + " · " + state))
 			body.WriteString("\n")
 		}
 	}

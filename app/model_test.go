@@ -1912,6 +1912,85 @@ func TestProviderTypeSelectorCyclesAndUpdatesUntouchedDefaults(t *testing.T) {
 	}
 }
 
+func TestProviderKindSelectorPersistsGenericCompatibleProvider(t *testing.T) {
+	runtime := &fakeProviderRuntime{endpoint: "http://127.0.0.1:54321/v1"}
+	m := newManagedModel(context.Background(), config.Store{Dir: t.TempDir()}, nil, runtime)
+	m.gatewayConfigOnly = true
+	m.enterProviderEditor(-1)
+	m.setup[setupProviderID].SetValue("strict-compatible")
+	m.setup[setupBaseURL].SetValue("https://gateway.example/v1")
+	m.setup[setupAPIKeyEnv].SetValue("")
+	m.setupFocus = setupProviderKind
+
+	updated, _ := m.updateSetup(tea.KeyPressMsg{Code: tea.KeyRight})
+	m = updated.(model)
+	if selected := m.selectedProviderKind(); selected.value != "generic" {
+		t.Fatalf("selected kind = %#v", selected)
+	}
+	view := m.viewSetup()
+	if !strings.Contains(view, "Generic") || !strings.Contains(view, "strict or unknown servers") ||
+		!strings.Contains(view, "select provider kind") {
+		t.Fatalf("kind selector view = %q", view)
+	}
+
+	updated, command := m.applyProviderEdit()
+	m = updated.(model)
+	if command == nil {
+		t.Fatal("provider apply command is nil")
+	}
+	updated, _ = m.Update(command())
+	m = updated.(model)
+	if runtime.applies != 1 || len(runtime.config.Providers) != 1 ||
+		runtime.config.Providers[0].Kind != "generic" {
+		t.Fatalf("runtime applies = %d, config = %#v", runtime.applies, runtime.config)
+	}
+	if !strings.Contains(m.viewProviders(), "kind generic") {
+		t.Fatalf("provider list omitted kind: %q", m.viewProviders())
+	}
+}
+
+func TestProviderTypeSelectorClearsIncompatibleKindForNativeTransport(t *testing.T) {
+	runtime := &fakeProviderRuntime{config: gateway.Config{Providers: []gateway.ProviderConfig{{
+		ID: "custom", Type: "openai-compatible", Kind: "generic", Enabled: true,
+		BaseURL: "https://gateway.example/v1",
+	}}}}
+	m := newManagedModel(context.Background(), config.Store{Dir: t.TempDir()}, nil, runtime)
+	m.enterProviderEditor(0)
+	if selected := m.selectedProviderKind(); selected.value != "generic" {
+		t.Fatalf("loaded kind = %#v", selected)
+	}
+	m.setupFocus = setupProviderType
+
+	updated, _ := m.updateSetup(tea.KeyPressMsg{Code: tea.KeyRight})
+	m = updated.(model)
+	if selectedType := m.selectedProviderType(); selectedType.value != "openrouter" {
+		t.Fatalf("selected type = %#v", selectedType)
+	}
+	if selectedKind := m.selectedProviderKind(); selectedKind.value != "" {
+		t.Fatalf("incompatible kind survived type change = %#v", selectedKind)
+	}
+	m.setupFocus = setupProviderKind
+	if view := m.viewSetup(); !strings.Contains(view, "Native APIs accept only their") ||
+		!strings.Contains(view, "matching kind; Auto is") {
+		t.Fatalf("native kind constraint missing: %q", view)
+	}
+	updated, _ = m.updateSetup(tea.KeyPressMsg{Code: tea.KeyRight})
+	m = updated.(model)
+	if selectedKind := m.selectedProviderKind(); selectedKind.value != "openrouter" {
+		t.Fatalf("explicit native kind = %#v", selectedKind)
+	}
+
+	m.setupFocus = setupProviderType
+	updated, _ = m.updateSetup(tea.KeyPressMsg{Code: tea.KeyRight})
+	m = updated.(model)
+	if selectedType := m.selectedProviderType(); selectedType.value != "xai" {
+		t.Fatalf("selected type = %#v", selectedType)
+	}
+	if selectedKind := m.selectedProviderKind(); selectedKind.value != "" {
+		t.Fatalf("OpenRouter kind survived xAI type change = %#v", selectedKind)
+	}
+}
+
 func TestProviderEditorRejectsDuplicateEffectivePrefixBeforeApply(t *testing.T) {
 	runtime := &fakeProviderRuntime{config: gateway.Config{Providers: []gateway.ProviderConfig{{
 		ID: "first", Prefix: "shared", Type: "openai-compatible", Enabled: true,
@@ -1981,6 +2060,10 @@ func TestWorkspaceSessionPersistsAndRestoresWithGlobalChatConfig(t *testing.T) {
 	if session.RunID == "" || session.RunID != m.runID {
 		t.Fatalf("saved run ID = %q, model run ID = %q", session.RunID, m.runID)
 	}
+	m.conversationID = "cache_workspace_test"
+	if err := m.saveWorkspaceSession(); err != nil {
+		t.Fatal(err)
+	}
 
 	restoredConfig := value
 	restoredConfig.Provider.SystemPrompt = "updated global prompt"
@@ -1992,6 +2075,9 @@ func TestWorkspaceSessionPersistsAndRestoresWithGlobalChatConfig(t *testing.T) {
 	}
 	if restored.runID != session.RunID {
 		t.Fatalf("restored run ID = %q, want %q", restored.runID, session.RunID)
+	}
+	if restored.conversationID != "" {
+		t.Fatalf("restored process-local conversation ID = %q, want empty", restored.conversationID)
 	}
 	if len(restored.messages) != 3 || restored.messages[0].Content != "updated global prompt" ||
 		restored.messages[1].Content != "remember this folder" {

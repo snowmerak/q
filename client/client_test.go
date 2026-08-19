@@ -25,7 +25,9 @@ func TestNewValidatesConfig(t *testing.T) {
 }
 
 func TestChatUsesProviderConfigurationAndDefaultModel(t *testing.T) {
+	calls := 0
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		calls++
 		if request.URL.Path != "/v1/chat/completions" {
 			t.Errorf("path = %q", request.URL.Path)
 		}
@@ -45,8 +47,15 @@ func TestChatUsesProviderConfigurationAndDefaultModel(t *testing.T) {
 		if _, present := body["reasoning_effort"]; present {
 			t.Errorf("empty reasoning_effort was sent: %#v", body)
 		}
+		if calls == 1 {
+			if _, present := body["conversation_id"]; present {
+				t.Errorf("first request had conversation_id: %#v", body)
+			}
+		} else if body["conversation_id"] != "cache_q_test" {
+			t.Errorf("continued request conversation_id = %#v", body["conversation_id"])
+		}
 		writer.Header().Set("Content-Type", "application/json")
-		_, _ = io.WriteString(writer, `{"id":"chat_1","model":"default-model","choices":[{"index":0,"message":{"role":"assistant","content":"hello"},"finish_reason":"stop"}]}`)
+		_, _ = io.WriteString(writer, `{"id":"chat_1","model":"default-model","conversation_id":"cache_q_test","choices":[{"index":0,"message":{"role":"assistant","content":"hello"},"finish_reason":"stop"}]}`)
 	}))
 	defer server.Close()
 
@@ -65,8 +74,15 @@ func TestChatUsesProviderConfigurationAndDefaultModel(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if response.ID != "chat_1" || response.Choices[0].Message.Content != "hello" {
+	if response.ID != "chat_1" || response.ConversationID != "cache_q_test" || response.Choices[0].Message.Content != "hello" {
 		t.Fatalf("response = %#v", response)
+	}
+	if _, err := c.Chat(context.Background(), ChatRequest{
+		ConversationID: response.ConversationID,
+		Messages:       []Message{{Role: RoleUser, Content: "continue"}},
+		Extra:          map[string]any{"route": "request"}, Headers: http.Header{"X-Request": {"turn"}},
+	}); err != nil {
+		t.Fatal(err)
 	}
 }
 
