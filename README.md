@@ -116,8 +116,9 @@ starting the chat TUI or owning its learning cursor.
 ## First launch
 
 On first launch, q asks for a provider ID, optional model prefix, API type,
-endpoint, and API-key source. The prefix defaults to the provider ID. Provider
-settings remain editable even when an upstream is offline.
+optional provider kind, endpoint, and API-key source. The prefix defaults to
+the provider ID. Provider settings remain editable even when an upstream is
+offline.
 
 Personal configuration is stored in:
 
@@ -272,6 +273,7 @@ prefix:
     {
       "id": "local",
       "type": "openai-compatible",
+      "kind": "generic",
       "enabled": true,
       "base_url": "http://localhost:1234/v1",
       "models": ["qwen3-32b"],
@@ -284,6 +286,32 @@ prefix:
   ]
 }
 ```
+
+The optional `kind` separates the HTTP transport from the backend semantics.
+It is especially useful when a proxy exposes several providers through one
+OpenAI-compatible API:
+
+| Kind | Gateway behavior |
+|---|---|
+| omitted | Infer from `type`; an `openai-compatible` `api.x.ai` URL is inferred as Grok, and other compatible URLs default to OpenAI semantics. |
+| `generic` | Send no provider-specific prompt-cache extension. Use this for strict or unknown OpenAI-compatible servers. |
+| `openai` | Use OpenAI `prompt_cache_key` affinity. |
+| `openrouter` | Use OpenRouter `session_id` sticky routing. |
+| `grok` / `xai` | Use `X-Grok-Conv-Id` affinity and known xAI model capabilities. |
+| `anthropic` / `claude` | Use Anthropic automatic top-level `cache_control`. |
+| `codex` / `codex-app-server` | Keep provider-managed conversation state. |
+
+Only `type: "openai-compatible"` accepts every kind. Native Anthropic, Grok,
+Codex, and OpenRouter transports accept only their matching kind; leaving it
+empty selects the matching behavior automatically. The provider editor exposes
+only valid choices and resets an incompatible explicit kind to automatic when
+the API type changes.
+
+OpenRouter-hosted Claude models intentionally receive only `session_id` sticky
+routing; q does not add Anthropic `cache_control` automatically on an OpenRouter
+route. Use a native Anthropic route for automatic Claude prompt caching, or add
+an explicit `body.cache_control` value in `providers.json` when OpenRouter is
+required.
 
 Static `models` remain available even when metadata discovery times out.
 `model_metadata` overrides upstream metadata before prefixes are applied. In
@@ -699,11 +727,13 @@ while leaving the complete transcript visible. Gateway metadata takes priority;
 `provider.context_window` caches it, and `context.window` is only a fallback.
 
 q retains the Gateway's `conversation_id` across user turns and tool rounds so
-the selected provider can reuse its prompt cache. Conversation IDs are scoped
-to the current q process and are never written to the workspace session, so a
-restart always begins a new conversation and cache lifecycle. They are also
-cleared on `/clear`, model/provider changes, and successful context compaction,
-where the request prefix begins a new lifecycle.
+the selected provider can reuse its prompt cache. If an upstream returns its
+own non-empty conversation ID, that provider-native value takes precedence over
+the Gateway's generated cache-affinity ID. Conversation IDs are scoped to the
+current q process and are never written to the workspace session, so a restart
+always begins a new conversation and cache lifecycle. They are also cleared on
+`/clear`, model/provider changes, and successful context compaction, where the
+request prefix begins a new lifecycle.
 
 Each isolated subagent execution has its own conversation lifecycle. Scout,
 Griller, Planner, Coder, and Planner review reuse the ID returned by their first
