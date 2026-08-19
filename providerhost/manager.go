@@ -4,12 +4,11 @@ import (
 	"context"
 	"fmt"
 	"sync"
-	"time"
 
 	"github.com/snowmerak/llm-provider/gateway"
 )
 
-const modelDiscoveryTimeout = 1500 * time.Millisecond
+const legacyInteractiveModelDiscoveryTimeout = "1.5s"
 
 type Manager struct {
 	store      Store
@@ -31,7 +30,7 @@ func (m *Manager) LoadAndStart(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	value = boundedModelDiscovery(value)
+	value = migrateLegacyModelDiscoveryTimeout(value)
 	m.mu.Lock()
 	m.config = cloneConfig(value)
 	m.mu.Unlock()
@@ -49,7 +48,7 @@ func (m *Manager) LoadAndStart(ctx context.Context) error {
 // leaves the current Gateway untouched.
 func (m *Manager) Apply(ctx context.Context, value gateway.Config) error {
 	value.Listen = "127.0.0.1:0"
-	value = boundedModelDiscovery(value)
+	value = migrateLegacyModelDiscoveryTimeout(value)
 	prepared, err := m.supervisor.Prepare(ctx, value)
 	if err != nil {
 		return err
@@ -65,8 +64,13 @@ func (m *Manager) Apply(ctx context.Context, value gateway.Config) error {
 	return nil
 }
 
-func boundedModelDiscovery(value gateway.Config) gateway.Config {
-	value.ModelCacheRefreshTimeout = modelDiscoveryTimeout.String()
+// Older q versions persisted the UI's 1.5-second wait as the Gateway's own
+// discovery timeout. Clear only that generated value so discovery can continue
+// after the UI wait expires; all other explicitly configured timeouts survive.
+func migrateLegacyModelDiscoveryTimeout(value gateway.Config) gateway.Config {
+	if value.ModelCacheRefreshTimeout == legacyInteractiveModelDiscoveryTimeout {
+		value.ModelCacheRefreshTimeout = ""
+	}
 	return value
 }
 

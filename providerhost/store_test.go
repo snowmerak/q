@@ -3,7 +3,6 @@ package providerhost
 import (
 	"errors"
 	"testing"
-	"time"
 
 	"github.com/snowmerak/llm-provider/gateway"
 )
@@ -30,9 +29,14 @@ func TestStoreRoundTrip(t *testing.T) {
 	}
 }
 
-func TestBoundedModelDiscoveryUsesInteractiveStartupBudget(t *testing.T) {
-	value := boundedModelDiscovery(gateway.Config{ModelCacheRefreshTimeout: "30s"})
-	if value.ModelCacheRefreshTimeout != (1500 * time.Millisecond).String() {
-		t.Fatalf("model discovery timeout = %q", value.ModelCacheRefreshTimeout)
+func TestMigrateLegacyModelDiscoveryTimeout(t *testing.T) {
+	legacy := migrateLegacyModelDiscoveryTimeout(gateway.Config{ModelCacheRefreshTimeout: "1.5s"})
+	if legacy.ModelCacheRefreshTimeout != "" {
+		t.Fatalf("legacy model discovery timeout = %q", legacy.ModelCacheRefreshTimeout)
+	}
+
+	explicit := migrateLegacyModelDiscoveryTimeout(gateway.Config{ModelCacheRefreshTimeout: "30s"})
+	if explicit.ModelCacheRefreshTimeout != "30s" {
+		t.Fatalf("explicit model discovery timeout = %q", explicit.ModelCacheRefreshTimeout)
 	}
 }

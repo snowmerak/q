@@ -28,10 +28,10 @@ task build    # build both commands into ./bin
 task run      # run q from source
 ```
 
-Run `q` inside the directory you want to use as the workspace. The TUI renders
-before Gateway, Session Store, Loom, and MCP initialization completes. Provider
-model discovery runs in parallel with a 1.5-second budget; providers that do
-not answer in time are skipped for that refresh instead of delaying the UI.
+Run `q` inside the directory you want to use as the workspace. On startup, q
+waits up to 1.5 seconds for initial model discovery. If discovery finishes
+sooner, the TUI opens immediately; otherwise the same initialization continues
+in the background after the TUI renders.
 
 ### Standalone Gateway
 

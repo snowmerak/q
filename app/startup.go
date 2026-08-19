@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	tea "charm.land/bubbletea/v2"
 	"github.com/snowmerak/llm-provider/gateway"
 	"github.com/snowmerak/q/archiveembed"
 	"github.com/snowmerak/q/client"
@@ -18,6 +19,27 @@ import (
 	qtools "github.com/snowmerak/q/tools"
 	"github.com/snowmerak/q/workspace"
 )
+
+const initialModelLoadWait = 1500 * time.Millisecond
+
+// startStartup starts initialization immediately and waits for it for at most
+// budget. Model discovery signals ready independently from the remaining
+// initialization, which always continues through the returned command.
+func startStartup(run func(chan<- struct{}) runtimeInitializedMsg, budget time.Duration) tea.Cmd {
+	modelReady := make(chan struct{})
+	results := make(chan runtimeInitializedMsg, 1)
+	go func() { results <- run(modelReady) }()
+
+	timer := time.NewTimer(budget)
+	defer timer.Stop()
+	select {
+	case result := <-results:
+		return func() tea.Msg { return result }
+	case <-modelReady:
+	case <-timer.C:
+	}
+	return func() tea.Msg { return <-results }
+}
 
 type runtimeInitializedMsg struct {
 	config        config.Config
@@ -115,7 +137,7 @@ type startupRequest struct {
 	lifecycle      *startupLifecycle
 }
 
-func (request startupRequest) run() runtimeInitializedMsg {
+func (request startupRequest) run(modelReady chan<- struct{}) runtimeInitializedMsg {
 	request.lifecycle.begin()
 	defer request.lifecycle.finish()
 
@@ -139,6 +161,9 @@ func (request startupRequest) run() runtimeInitializedMsg {
 		}
 	} else if errors.Is(startupErr, providerhost.ErrNotFound) {
 		startupErr = nil
+	}
+	if modelReady != nil {
+		close(modelReady)
 	}
 
 	result := runtimeInitializedMsg{

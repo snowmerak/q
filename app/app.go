@@ -112,7 +112,7 @@ func Run(ctx context.Context, store config.Store) error {
 		workspaceLock: workspaceLock, loaded: loaded, configErr: err,
 		manager: manager, factory: factory, lifecycle: lifecycle,
 	}
-	initialModel.startup = func() tea.Msg { return startup.run() }
+	initialModel.startup = startStartup(startup.run, initialModelLoadWait)
 
 	final, runErr := tea.NewProgram(initialModel).Run()
 	cancelRuntime()
