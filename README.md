@@ -360,7 +360,10 @@ change the selected assignment, and `i` to clear it. Workspace overrides for
 the default main model and non-shared roles are stored in `.q/model.json`; an
 empty workspace cell inherits its active/global assignment. Thinker, Librarian,
 and Embedding have disabled workspace cells because their state is shared
-across workspaces. An empty
+across workspaces. Workspace overrides store only the role-to-model assignment;
+context length and other model metadata always come from the global Gateway
+catalog. Version 1 workspace model files are accepted, but their legacy
+`context_window` cache is discarded. An empty
 reasoning effort lets the provider choose its default; explicit
 efforts are accepted only when advertised by that model. The built-in roles are
 `griller`, `scout`, `research`, `planner`, `coder`, `commit`, `advisor`,
@@ -469,7 +472,7 @@ state are local to the directory where q starts:
 | Path | Purpose |
 |---|---|
 | `.q/session.json` | Current transcript, compacted request-context projection, run identity, active task lifecycle, and durable Thinker learning queue. |
-| `.q/model.json` | Per-role workspace model overrides and the main model's cached context window. It is preserved by `/clear`. |
+| `.q/model.json` | Per-role workspace model overrides. Model metadata remains in the global Gateway configuration. It is preserved by `/clear`. |
 | `.q/learning.json` | Workspace learning disable switch. Existing queued segments are preserved while learning is disabled, and the setting is preserved by `/clear`. |
 | `.q/lsp.json` | Current workspace's language project roots and optional server overrides. |
 | `.q/plan-execution.json` | Durable checkpoint for an approved plan execution. |

@@ -373,7 +373,7 @@ func TestChatCompactsAtThresholdThenSendsPendingMessage(t *testing.T) {
 	workspaceStore := workspace.Store{Root: t.TempDir()}
 	if err := workspaceStore.SaveModelConfig(workspace.ModelConfig{
 		Overrides: map[string]workspace.ModelOverride{
-			defaultModelTarget: {Model: "workspace-model", ContextWindow: 1000},
+			defaultModelTarget: {Model: "workspace-model"},
 		},
 	}); err != nil {
 		t.Fatal(err)
@@ -384,6 +384,7 @@ func TestChatCompactsAtThresholdThenSendsPendingMessage(t *testing.T) {
 	fake := &fakeClient{}
 	m := newModel(context.Background(), config.Store{Dir: t.TempDir()}, nil)
 	m.workspaceStore = &workspaceStore
+	m.models = []client.Model{{ID: "workspace-model", ContextLength: 1000}}
 	m.enterChat(value, fake)
 	oldUser := client.Message{Role: client.RoleUser, Content: strings.Repeat("old context ", 180)}
 	oldAssistant := client.Message{Role: client.RoleAssistant, Content: strings.Repeat("old answer ", 120)}
@@ -1862,6 +1863,65 @@ func TestGatewayContextOverrideAppliesAndRefreshesActiveCache(t *testing.T) {
 	}
 }
 
+func TestGatewayContextOverrideDrivesWorkspaceModelImmediatelyAndAfterRestore(t *testing.T) {
+	globalStore := config.Store{Dir: t.TempDir()}
+	workspaceStore := workspace.Store{Root: t.TempDir()}
+	if err := workspaceStore.SaveModelConfig(workspace.ModelConfig{Overrides: map[string]workspace.ModelOverride{
+		defaultModelTarget: {Model: "local/vendor/model"},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	value := config.Default()
+	value.Provider.Model = "global/model"
+	value.Provider.ContextWindow = 16000
+	value.UseManagedGateway()
+	runtime := &fakeProviderRuntime{
+		endpoint: "http://127.0.0.1:54321/v1",
+		config: gateway.Config{Providers: []gateway.ProviderConfig{{
+			ID: "local", Type: "openai-compatible", Enabled: true, BaseURL: "http://localhost:1234/v1",
+		}}},
+	}
+	refreshedClient := &fakeClient{}
+	m := newManagedModel(context.Background(), globalStore, func(config.Config) (chatClient, error) {
+		return refreshedClient, nil
+	}, runtime)
+	m.workspaceStore = &workspaceStore
+	m.models = []client.Model{{ID: "local/vendor/model", ContextLength: 8192}}
+	m.enterChat(value, &fakeClient{})
+	if got := m.memory.Stats().ContextWindow; got != 8192 {
+		t.Fatalf("initial discovered context window = %d", got)
+	}
+	m.modelReturn = screenChat
+	m.modelChooseTarget = false
+	m.enterModelPicker(value, m.models)
+
+	updated, _ := m.updateModelPicker(tea.KeyPressMsg{Code: 'e', Mod: tea.ModCtrl})
+	m = updated.(model)
+	m.modelContextWindow.SetValue("131072")
+	updated, command := m.updateModelPicker(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m = updated.(model)
+	if command == nil {
+		t.Fatal("context metadata apply command is nil")
+	}
+	updated, _ = m.Update(command())
+	m = updated.(model)
+	if got := m.memory.Stats().ContextWindow; got != 131072 {
+		t.Fatalf("live workspace context window = %d", got)
+	}
+	stored, err := workspaceStore.LoadModelConfig()
+	if err != nil || stored.Overrides[defaultModelTarget].Model != "local/vendor/model" {
+		t.Fatalf("workspace model config = %#v, err = %v", stored, err)
+	}
+
+	restored := newManagedModel(context.Background(), globalStore, nil, runtime)
+	restored.workspaceStore = &workspaceStore
+	restored.gatewayConfig = runtime.Config()
+	restored.enterChat(value, &fakeClient{})
+	if restored.activeModel() != "local/vendor/model" || restored.memory.Stats().ContextWindow != 131072 {
+		t.Fatalf("restored active model = %q, context = %d", restored.activeModel(), restored.memory.Stats().ContextWindow)
+	}
+}
+
 func TestRefreshModelContextWindowClearsStaleCache(t *testing.T) {
 	value := config.Default()
 	value.Provider.Model = "local/test-model"
@@ -2215,7 +2275,7 @@ func TestWorkspaceModelOverridesInteractiveChatAndSurvivesClear(t *testing.T) {
 	workspaceStore := workspace.Store{Root: t.TempDir()}
 	if err := workspaceStore.SaveModelConfig(workspace.ModelConfig{
 		Overrides: map[string]workspace.ModelOverride{
-			defaultModelTarget: {Model: "workspace-model", ContextWindow: 32000},
+			defaultModelTarget: {Model: "workspace-model"},
 		},
 	}); err != nil {
 		t.Fatal(err)
@@ -2227,6 +2287,7 @@ func TestWorkspaceModelOverridesInteractiveChatAndSurvivesClear(t *testing.T) {
 	fake := &fakeClient{}
 	m := newModel(context.Background(), config.Store{Dir: t.TempDir()}, nil)
 	m.workspaceStore = &workspaceStore
+	m.models = []client.Model{{ID: "workspace-model", ContextLength: 32000}}
 	m.enterChat(value, fake)
 
 	if m.config.Provider.Model != "global-model" || m.activeModel() != "workspace-model" {
@@ -2282,8 +2343,7 @@ func TestWorkspaceModelPickerPersistsWithoutChangingGlobalConfig(t *testing.T) {
 	updated, _ = m.Update(command())
 	m = updated.(model)
 	stored, err := workspaceStore.LoadModelConfig()
-	if err != nil || stored.Overrides[defaultModelTarget].Model != "workspace-model" ||
-		stored.Overrides[defaultModelTarget].ContextWindow != 32000 {
+	if err != nil || stored.Overrides[defaultModelTarget].Model != "workspace-model" {
 		t.Fatalf("workspace model = %#v, err = %v", stored, err)
 	}
 	if m.config.Provider.Model != "global-model" || m.activeModel() != "workspace-model" {
@@ -2438,7 +2498,7 @@ func TestWorkspaceModelDoesNotOverrideGlobalServiceModels(t *testing.T) {
 		workspaceModel: workspace.ModelConfig{
 			Version: workspace.ModelConfigVersion,
 			Overrides: map[string]workspace.ModelOverride{
-				defaultModelTarget:      {Model: "workspace-main", ContextWindow: 32000},
+				defaultModelTarget:      {Model: "workspace-main"},
 				config.AgentRolePlanner: {Model: "workspace-planner"},
 			},
 		},
@@ -2475,10 +2535,11 @@ func TestEmbeddedCommitReceivesActiveConfig(t *testing.T) {
 		workspaceModel: workspace.ModelConfig{
 			Version: workspace.ModelConfigVersion,
 			Overrides: map[string]workspace.ModelOverride{
-				defaultModelTarget:     {Model: "workspace-main", ContextWindow: 32000},
+				defaultModelTarget:     {Model: "workspace-main"},
 				config.AgentRoleCommit: {Model: "workspace-commit"},
 			},
 		},
+		models: []client.Model{{ID: "workspace-main", ContextLength: 32000}},
 	}
 	command := m.newEmbeddedCommitCommand()
 	if command.config.Provider.Model != "workspace-main" || command.config.Provider.ContextWindow != 32000 {

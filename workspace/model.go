@@ -14,15 +14,14 @@ import (
 
 const (
 	ModelFileName       = "model.json"
-	ModelConfigVersion  = 1
+	ModelConfigVersion  = 2
 	maximumModelCfgSize = 64 << 10
 )
 
-// ModelOverride selects one model within a workspace and caches its context
-// window for main-chat memory policy when the target is the default role.
+// ModelOverride selects one model for a role within a workspace. Model
+// metadata, including context length, remains global Gateway state.
 type ModelOverride struct {
-	Model         string `json:"model"`
-	ContextWindow int64  `json:"context_window,omitempty"`
+	Model string `json:"model"`
 }
 
 // ModelConfig stores per-role model overrides for one workspace. Which role
@@ -31,6 +30,18 @@ type ModelOverride struct {
 type ModelConfig struct {
 	Version   int                      `json:"version"`
 	Overrides map[string]ModelOverride `json:"overrides,omitempty"`
+}
+
+// persistedModelConfig accepts the version 1 context_window cache long enough
+// to migrate existing workspaces without retaining it in current state.
+type persistedModelConfig struct {
+	Version   int                               `json:"version"`
+	Overrides map[string]persistedModelOverride `json:"overrides,omitempty"`
+}
+
+type persistedModelOverride struct {
+	Model         string `json:"model"`
+	ContextWindow *int64 `json:"context_window,omitempty"`
 }
 
 func (s Store) ModelPath() string { return filepath.Join(s.Dir(), ModelFileName) }
@@ -55,8 +66,8 @@ func (s Store) LoadModelConfig() (ModelConfig, error) {
 	}
 	decoder := json.NewDecoder(io.LimitReader(file, maximumModelCfgSize+1))
 	decoder.DisallowUnknownFields()
-	var value ModelConfig
-	if err := decoder.Decode(&value); err != nil {
+	var persisted persistedModelConfig
+	if err := decoder.Decode(&persisted); err != nil {
 		return ModelConfig{}, fmt.Errorf("workspace: decode %s: %w", s.ModelPath(), err)
 	}
 	var trailing any
@@ -65,6 +76,22 @@ func (s Store) LoadModelConfig() (ModelConfig, error) {
 			return ModelConfig{}, fmt.Errorf("workspace: decode %s: multiple JSON values", s.ModelPath())
 		}
 		return ModelConfig{}, fmt.Errorf("workspace: decode %s: %w", s.ModelPath(), err)
+	}
+	if persisted.Version != 1 && persisted.Version != ModelConfigVersion {
+		return ModelConfig{}, fmt.Errorf("workspace: decode %s: unsupported model settings version %d", s.ModelPath(), persisted.Version)
+	}
+	value := ModelConfig{Version: ModelConfigVersion}
+	if len(persisted.Overrides) > 0 {
+		value.Overrides = make(map[string]ModelOverride, len(persisted.Overrides))
+	}
+	for role, override := range persisted.Overrides {
+		if persisted.Version == ModelConfigVersion && override.ContextWindow != nil {
+			return ModelConfig{}, fmt.Errorf("workspace: decode %s: context_window is not supported in model settings version %d", s.ModelPath(), ModelConfigVersion)
+		}
+		if override.ContextWindow != nil && *override.ContextWindow < 0 {
+			return ModelConfig{}, fmt.Errorf("workspace: decode %s: model context window for role %q must not be negative", s.ModelPath(), role)
+		}
+		value.Overrides[role] = ModelOverride{Model: override.Model}
 	}
 	if err := value.Validate(); err != nil {
 		return ModelConfig{}, fmt.Errorf("workspace: decode %s: %w", s.ModelPath(), err)
@@ -82,9 +109,6 @@ func (c ModelConfig) Validate() error {
 		}
 		if strings.TrimSpace(override.Model) == "" || override.Model != strings.TrimSpace(override.Model) {
 			return fmt.Errorf("workspace model for role %q must be non-empty without surrounding whitespace", role)
-		}
-		if override.ContextWindow < 0 {
-			return fmt.Errorf("workspace model context window for role %q must not be negative", role)
 		}
 		if !ModelOverrideAllowed(role) {
 			return fmt.Errorf("workspace model role %q is shared globally or unsupported", role)

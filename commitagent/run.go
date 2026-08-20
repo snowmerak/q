@@ -48,7 +48,6 @@ func prepareSessionDefault(ctx context.Context, directory string, logger *progre
 	}
 	if override, found := workspaceModel.Overrides["default"]; found {
 		value.Provider.Model = override.Model
-		value.Provider.ContextWindow = override.ContextWindow
 	}
 	if override, found := workspaceModel.Overrides[config.AgentRoleCommit]; found {
 		roles := make(map[string]config.AgentConfig, len(value.Agents.Roles)+1)

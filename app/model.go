@@ -3830,7 +3830,7 @@ func (m model) saveWorkspaceModel(target string, selected client.Model) (tea.Mod
 		value.Overrides = make(map[string]workspace.ModelOverride)
 	}
 	value.Version = workspace.ModelConfigVersion
-	value.Overrides[target] = workspace.ModelOverride{Model: modelID, ContextWindow: selected.ContextLength}
+	value.Overrides[target] = workspace.ModelOverride{Model: modelID}
 	if err := value.Validate(); err != nil {
 		m.status = err.Error()
 		return m, nil
@@ -4133,7 +4133,7 @@ func (m model) activeConfig() config.Config {
 	value := m.config
 	if override, found := m.workspaceOverride(defaultModelTarget); found {
 		value.Provider.Model = override.Model
-		value.Provider.ContextWindow = override.ContextWindow
+		value.Provider.ContextWindow = m.contextWindowForModel(override.Model)
 	}
 	if len(m.workspaceModel.Overrides) > 0 {
 		value.Agents.Roles = cloneAgentRoles(value.Agents.Roles)
@@ -4158,6 +4158,24 @@ func (m model) activeConfig() config.Config {
 }
 
 func (m model) activeModel() string { return m.activeConfig().Provider.Model }
+
+// contextWindowForModel resolves operational model metadata without storing a
+// duplicate in workspace role overrides. Explicit Gateway metadata wins over
+// the discovered catalog; the global selected-model cache is only a fallback.
+func (m model) contextWindowForModel(modelID string) int64 {
+	if contextWindow, configured := m.gatewayContextWindowOverride(modelID); configured {
+		return contextWindow
+	}
+	for _, candidate := range m.models {
+		if candidate.ID == modelID && candidate.ContextLength > 0 {
+			return candidate.ContextLength
+		}
+	}
+	if modelID == m.config.Provider.Model {
+		return m.config.Provider.ContextWindow
+	}
+	return 0
+}
 
 func (m *model) saveWorkspaceSession() error {
 	if m.workspaceStore == nil || m.memory == nil {
