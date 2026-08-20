@@ -9,6 +9,7 @@ import (
 	"github.com/snowmerak/q/config"
 	"github.com/snowmerak/q/subagent"
 	"github.com/snowmerak/q/thinker"
+	"github.com/snowmerak/q/workspace"
 )
 
 func (m *model) learningContextLength() int64 {
@@ -31,13 +32,16 @@ func (m *model) ensureLearningMachine(state thinker.LearningState, seed []client
 	if err != nil {
 		return err
 	}
+	if m.learningDisabled() {
+		seed = nil
+	}
 	machine.Initialize(seed)
 	m.learning = machine
 	return nil
 }
 
 func (m *model) observeLearningMessage(message client.Message) tea.Cmd {
-	if m == nil || m.learning == nil {
+	if m == nil || m.learning == nil || m.learningDisabled() {
 		return nil
 	}
 	m.refreshLearningContextLength()
@@ -47,7 +51,7 @@ func (m *model) observeLearningMessage(message client.Message) tea.Cmd {
 }
 
 func (m *model) enqueueLearningSpecial(name string, payload json.RawMessage) tea.Cmd {
-	if m == nil || m.learning == nil {
+	if m == nil || m.learning == nil || m.learningDisabled() {
 		return nil
 	}
 	m.refreshLearningContextLength()
@@ -62,7 +66,7 @@ func (m *model) enqueueLearningSpecial(name string, payload json.RawMessage) tea
 }
 
 func (m *model) enqueueExplicitLearning() tea.Cmd {
-	if m == nil || m.learning == nil {
+	if m == nil || m.learning == nil || m.learningDisabled() {
 		return nil
 	}
 	m.refreshLearningContextLength()
@@ -72,7 +76,7 @@ func (m *model) enqueueExplicitLearning() tea.Cmd {
 }
 
 func (m *model) startNextLearningSegment() tea.Cmd {
-	if m == nil || m.thinkerBusy || m.learning == nil || m.client == nil || m.libraryClient == nil || m.thinkerSerial == nil {
+	if m == nil || m.learningDisabled() || m.thinkerBusy || m.learning == nil || m.client == nil || m.libraryClient == nil || m.thinkerSerial == nil {
 		return nil
 	}
 	m.refreshLearningContextLength()
@@ -119,10 +123,33 @@ func (m *model) startNextLearningSegment() tea.Cmd {
 }
 
 func (m *model) refreshLearningContextLength() {
-	if m == nil || m.learning == nil {
+	if m == nil || m.learning == nil || m.learningDisabled() {
 		return
 	}
 	if closed := m.learning.SetContextLength(m.learningContextLength()); len(closed) > 0 {
 		_ = m.saveWorkspaceSession()
 	}
+}
+
+func (m *model) learningDisabled() bool {
+	return m != nil && m.workspaceLearning.Disabled
+}
+
+func (m *model) setWorkspaceLearningDisabled(disabled bool) error {
+	if m == nil || m.workspaceStore == nil {
+		return fmt.Errorf("workspace learning settings are unavailable")
+	}
+	if disabled {
+		value := workspace.LearningConfig{Version: workspace.LearningConfigVersion, Disabled: true}
+		if err := m.workspaceStore.SaveLearningConfig(value); err != nil {
+			return err
+		}
+		m.workspaceLearning = value
+		return nil
+	}
+	if err := m.workspaceStore.ClearLearningConfig(); err != nil {
+		return err
+	}
+	m.workspaceLearning = workspace.LearningConfig{Version: workspace.LearningConfigVersion}
+	return nil
 }

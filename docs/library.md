@@ -242,6 +242,13 @@ segment closes under exactly four conditions:
 4. the user enters `/learn` or the agent calls the active chat's session-only
    MCP `learn` tool. The standalone `q-mcp` server does not expose this tool.
 
+`/learn off` persists a workspace-local disable switch in `.q/learning.json`.
+While disabled, conversation events are not collected, none of the four
+boundaries enqueue work, and queued Thinker segments are not started. Existing
+events and queued segments remain durable and resume after `/learn on`; events
+produced during the disabled interval are not recovered later. `/learn status`
+reports the current workspace setting.
+
 If adding the next ordinary message would exceed 45%, the segment closes
 before that message and the message starts the next segment. Exact 45% includes
 the event and closes the segment. A single oversized event is shortened only
@@ -255,11 +262,12 @@ result exception and is retained as a complete special event. Plan approval is
 also a special event containing the approval marker, objective, and complete
 approved plan; execution output starts the following segment.
 
-Both explicit controls are fire-and-forget. They immediately acknowledge that
-learning was enqueued and close the current segment when it contains eligible
-context. If the segment is empty, the worker performs no model call, creates no
-empty segment, and does not advance the checkpoint. The session-only MCP
-`learn` call and its result are themselves excluded like other tool traffic.
+When learning is enabled, both explicit controls are fire-and-forget. They
+immediately acknowledge that learning was enqueued and close the current
+segment when it contains eligible context. If the segment is empty, the worker
+performs no model call, creates no empty segment, and does not advance the
+checkpoint. The session-only MCP `learn` call and its result are themselves
+excluded like other tool traffic.
 
 For a closed segment:
 

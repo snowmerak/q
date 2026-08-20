@@ -169,17 +169,19 @@ type model struct {
 	thinkerBusy   bool
 	thinkerJobID  string
 
-	workspaceStore         *workspace.Store
-	workspaceLock          *workspace.Lock
-	workspaceRestored      bool
-	workspaceModel         workspace.ModelConfig
-	workspaceModelRestored bool
-	archive                recordArchive
-	archiveSearch          *archiveembed.Archive
-	archiveErr             error
-	runID                  string
-	standalone             bool
-	standaloneRoot         screen
+	workspaceStore            *workspace.Store
+	workspaceLock             *workspace.Lock
+	workspaceRestored         bool
+	workspaceModel            workspace.ModelConfig
+	workspaceModelRestored    bool
+	workspaceLearning         workspace.LearningConfig
+	workspaceLearningRestored bool
+	archive                   recordArchive
+	archiveSearch             *archiveembed.Archive
+	archiveErr                error
+	runID                     string
+	standalone                bool
+	standaloneRoot            screen
 
 	setup                     [setupFieldCount]textinput.Model
 	setupFocus                int
@@ -2787,8 +2789,36 @@ func (m model) submitChat() (tea.Model, tea.Cmd) {
 		return m, m.input.Focus()
 	case "/learn":
 		m.input.Reset()
+		if m.learningDisabled() {
+			m.status = "Learning is disabled for this workspace · /learn on to enable"
+			return m, m.input.Focus()
+		}
 		m.status = "Learning checkpoint enqueued"
 		return m, tea.Batch(m.input.Focus(), m.enqueueExplicitLearning())
+	case "/learn off":
+		m.input.Reset()
+		if err := m.setWorkspaceLearningDisabled(true); err != nil {
+			m.status = err.Error()
+			return m, m.input.Focus()
+		}
+		m.status = "Learning disabled for this workspace"
+		return m, m.input.Focus()
+	case "/learn on":
+		m.input.Reset()
+		if err := m.setWorkspaceLearningDisabled(false); err != nil {
+			m.status = err.Error()
+			return m, m.input.Focus()
+		}
+		m.status = "Learning enabled for this workspace"
+		return m, tea.Batch(m.input.Focus(), m.startNextLearningSegment())
+	case "/learn status":
+		m.input.Reset()
+		if m.learningDisabled() {
+			m.status = "Learning is disabled for this workspace"
+		} else {
+			m.status = "Learning is enabled for this workspace"
+		}
+		return m, m.input.Focus()
 	case "/model":
 		m.input.Reset()
 		return m.discoverCurrentModels()
@@ -3297,6 +3327,7 @@ func (m *model) enterChat(value config.Config, configuredClient chatClient) {
 	m.config = value
 	m.client = configuredClient
 	workspaceModelErr := m.restoreWorkspaceModel()
+	workspaceLearningErr := m.restoreWorkspaceLearning()
 	active := m.activeConfig()
 	m.messages = nil
 	if value.Provider.SystemPrompt != "" {
@@ -3326,6 +3357,12 @@ func (m *model) enterChat(value config.Config, configuredClient chatClient) {
 			m.status += " · "
 		}
 		m.status += workspaceModelErr.Error()
+	}
+	if workspaceLearningErr != nil {
+		if m.status != "" {
+			m.status += " · "
+		}
+		m.status += workspaceLearningErr.Error()
 	}
 	m.ensureRunID()
 	m.offerPlanExecutionResume()
@@ -3842,6 +3879,22 @@ func (m *model) restoreWorkspaceModel() error {
 		return err
 	}
 	m.workspaceModel = value
+	return nil
+}
+
+func (m *model) restoreWorkspaceLearning() error {
+	if m.workspaceStore == nil || m.workspaceLearningRestored {
+		return nil
+	}
+	m.workspaceLearningRestored = true
+	value, err := m.workspaceStore.LoadLearningConfig()
+	if err != nil {
+		m.workspaceLearning = workspace.LearningConfig{
+			Version: workspace.LearningConfigVersion, Disabled: true,
+		}
+		return err
+	}
+	m.workspaceLearning = value
 	return nil
 }
 

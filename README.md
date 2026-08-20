@@ -157,7 +157,10 @@ screen without discarding editor state or interrupting an active turn.
 | `/lsp` | Configure global language servers and current-workspace project roots. |
 | `/mcp` | Configure external MCP tool servers and per-role assignments. |
 | `/clear` | Clear the chat projection and remove the current workspace session. |
-| `/learn` | Close the current learning segment and enqueue Thinker extraction. |
+| `/learn` | Close the current learning segment and enqueue Thinker extraction when workspace learning is enabled. |
+| `/learn off` | Disable conversation collection and Thinker queue processing for this workspace. |
+| `/learn on` | Re-enable workspace learning and resume any previously queued segments. |
+| `/learn status` | Show whether learning is enabled for this workspace. |
 | `/help` | Open the command and shortcut guide. |
 
 ### Chat keys
@@ -451,6 +454,7 @@ state are local to the directory where q starts:
 |---|---|
 | `.q/session.json` | Current transcript, compacted request-context projection, run identity, and durable Thinker learning queue. |
 | `.q/model.json` | Per-role workspace model overrides and the main model's cached context window. It is preserved by `/clear`. |
+| `.q/learning.json` | Workspace learning disable switch. Existing queued segments are preserved while learning is disabled, and the setting is preserved by `/clear`. |
 | `.q/lsp.json` | Current workspace's language project roots and optional server overrides. |
 | `.q/plan-execution.json` | Durable checkpoint for an approved plan execution. |
 | `.q/data/records/` | Source records for durable workspace history. |
@@ -606,6 +610,10 @@ explicitly requests a boundary. The standalone `q-mcp` server does not expose
 `learn` because it does not own the active conversation cursor. Raw tool calls
 and ordinary tool results are excluded; assistant prose, the complete validated
 `task_complete` result, and the complete approved plan are retained.
+`/learn off` disables collection, automatic boundaries, explicit boundaries,
+and queued Thinker processing for the current workspace. Already queued
+segments remain durable and resume after `/learn on`; messages produced while
+learning is disabled are not collected.
 Checkpoints advance only after `thinking_complete`, so a failed or interrupted
 extraction retries the same durable segment. The Thinker calls a private
 `register_proposition` tool once per proposition. q Library durably queues each

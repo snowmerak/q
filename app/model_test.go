@@ -1168,7 +1168,7 @@ func TestHelpCommandAndShortcutKeepCommandsOutOfChatFooter(t *testing.T) {
 	}
 	help := ansi.Strip(m.View().Content)
 	for _, expected := range []string{
-		"q · Help", "SLASH COMMANDS", "/plan [request]", "/commit", "/clear", "/learn", "/model",
+		"q · Help", "SLASH COMMANDS", "/plan [request]", "/commit", "/clear", "/learn [on|off|status]", "/model",
 		"/gateway", "/loom", "/ignore", "/skills",
 	} {
 		if !strings.Contains(help, expected) {
@@ -1270,6 +1270,115 @@ func TestSlashLearnAcknowledgesEmptyAndClosesEligibleContext(t *testing.T) {
 	if !ok || segment.Reason != thinker.BoundaryExplicit || len(messages) != 1 ||
 		messages[0].Content != "Prefer checkpointed learning." {
 		t.Fatalf("explicit learning segment = %#v, %#v", segment, messages)
+	}
+}
+
+func TestWorkspaceLearningCanBeDisabledAndReenabled(t *testing.T) {
+	value := config.Default()
+	value.Provider.Model = "test-model"
+	workspaceStore := workspace.Store{Root: t.TempDir()}
+	m := newModel(context.Background(), config.Store{Dir: t.TempDir()}, nil)
+	m.workspaceStore = &workspaceStore
+	m.enterChat(value, &fakeClient{})
+
+	m.learning.AppendMessage(client.Message{Role: client.RoleUser, Content: "queued before disabling"})
+	m.learning.EnqueueExplicit()
+	before := m.learning.State()
+	m.input.SetValue("/learn off")
+	updated, _ := m.submitChat()
+	m = updated.(model)
+	if !m.learningDisabled() || m.status != "Learning disabled for this workspace" {
+		t.Fatalf("disabled=%v status=%q", m.learningDisabled(), m.status)
+	}
+	stored, err := workspaceStore.LoadLearningConfig()
+	if err != nil || !stored.Disabled {
+		t.Fatalf("stored learning config = %#v, %v", stored, err)
+	}
+	if command := m.observeLearningMessage(client.Message{Role: client.RoleUser, Content: "do not learn this"}); command != nil {
+		t.Fatal("disabled learning observed a conversation message")
+	}
+	if command := m.enqueueLearningSpecial(thinker.TaskCompleteEventName, json.RawMessage(`{"summary":"ignored"}`)); command != nil {
+		t.Fatal("disabled learning enqueued a task completion")
+	}
+	if command := m.enqueueExplicitLearning(); command != nil {
+		t.Fatal("disabled learning enqueued an explicit boundary")
+	}
+	after := m.learning.State()
+	if len(after.Events) != len(before.Events) || len(after.Queue) != len(before.Queue) {
+		t.Fatalf("disabled learning changed state: before=%#v after=%#v", before, after)
+	}
+
+	m.input.SetValue("/learn")
+	updated, _ = m.submitChat()
+	m = updated.(model)
+	if m.status != "Learning is disabled for this workspace · /learn on to enable" {
+		t.Fatalf("disabled /learn status = %q", m.status)
+	}
+	m.input.SetValue("/learn status")
+	updated, _ = m.submitChat()
+	m = updated.(model)
+	if m.status != "Learning is disabled for this workspace" {
+		t.Fatalf("disabled status = %q", m.status)
+	}
+
+	m.input.SetValue("/learn on")
+	updated, _ = m.submitChat()
+	m = updated.(model)
+	if m.learningDisabled() || m.status != "Learning enabled for this workspace" {
+		t.Fatalf("disabled=%v status=%q", m.learningDisabled(), m.status)
+	}
+	if _, err := os.Stat(workspaceStore.LearningPath()); !os.IsNotExist(err) {
+		t.Fatalf("learning config after enabling: %v", err)
+	}
+	if state := m.learning.State(); len(state.Queue) != len(before.Queue) {
+		t.Fatalf("enabling did not preserve queued segments: %#v", state)
+	}
+}
+
+func TestDisabledWorkspaceLearningDoesNotSeedRestoredTranscript(t *testing.T) {
+	value := config.Default()
+	value.Provider.Model = "test-model"
+	workspaceStore := workspace.Store{Root: t.TempDir()}
+	if err := workspaceStore.SaveLearningConfig(workspace.LearningConfig{Disabled: true}); err != nil {
+		t.Fatal(err)
+	}
+	if err := workspaceStore.Save(workspace.Session{Transcript: []client.Message{
+		{Role: client.RoleUser, Content: "do not seed this transcript"},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+
+	m := newModel(context.Background(), config.Store{Dir: t.TempDir()}, nil)
+	m.workspaceStore = &workspaceStore
+	m.enterChat(value, &fakeClient{})
+	if !m.learningDisabled() {
+		t.Fatal("workspace learning setting was not restored")
+	}
+	state := m.learning.State()
+	if len(state.Events) != 0 || len(state.Queue) != 0 {
+		t.Fatalf("disabled learning seeded restored transcript: %#v", state)
+	}
+}
+
+func TestInvalidWorkspaceLearningConfigFailsClosed(t *testing.T) {
+	value := config.Default()
+	value.Provider.Model = "test-model"
+	workspaceStore := workspace.Store{Root: t.TempDir()}
+	if err := os.MkdirAll(workspaceStore.Dir(), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(workspaceStore.LearningPath(), []byte(`{"version":2,"disabled":false}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	m := newModel(context.Background(), config.Store{Dir: t.TempDir()}, nil)
+	m.workspaceStore = &workspaceStore
+	m.enterChat(value, &fakeClient{})
+	if !m.learningDisabled() || !strings.Contains(m.status, "unsupported learning settings version") {
+		t.Fatalf("invalid config did not fail closed: disabled=%v status=%q", m.learningDisabled(), m.status)
+	}
+	if command := m.observeLearningMessage(client.Message{Role: client.RoleUser, Content: "must not be learned"}); command != nil {
+		t.Fatal("invalid workspace learning config allowed collection")
 	}
 }
 
@@ -2394,6 +2503,9 @@ func TestChatHeaderShowsAbsoluteWorkspacePath(t *testing.T) {
 
 func TestClearRemovesWorkspaceSession(t *testing.T) {
 	workspaceStore := workspace.Store{Root: t.TempDir()}
+	if err := workspaceStore.SaveLearningConfig(workspace.LearningConfig{Disabled: true}); err != nil {
+		t.Fatal(err)
+	}
 	if err := workspaceStore.Save(workspace.Session{
 		Transcript: []client.Message{{Role: client.RoleUser, Content: "old"}},
 		Context:    []client.Message{{Role: client.RoleUser, Content: "old"}},
@@ -2408,6 +2520,10 @@ func TestClearRemovesWorkspaceSession(t *testing.T) {
 	m.resetConversation()
 	if _, err := workspaceStore.Load(); !errors.Is(err, workspace.ErrNotFound) {
 		t.Fatalf("workspace session survived clear: %v", err)
+	}
+	learning, err := workspaceStore.LoadLearningConfig()
+	if err != nil || !learning.Disabled {
+		t.Fatalf("workspace learning setting after clear = %#v, %v", learning, err)
 	}
 }
 
