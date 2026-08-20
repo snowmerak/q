@@ -10,6 +10,7 @@ import (
 	"charm.land/bubbles/v2/textarea"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"github.com/snowmerak/q/config"
 	"github.com/snowmerak/q/workspace"
 )
 
@@ -37,6 +38,7 @@ type commitUIModel struct {
 	ctx       context.Context
 	cancel    context.CancelFunc
 	directory string
+	config    *config.Config
 	events    chan ProgressEvent
 	logger    *progressLogger
 	session   *Session
@@ -71,7 +73,7 @@ type commitUIPushMsg struct{ err error }
 
 type commitUIProgressMsg ProgressEvent
 
-func newCommitUIModel(ctx context.Context, directory string) commitUIModel {
+func newCommitUIModel(ctx context.Context, directory string, value *config.Config) commitUIModel {
 	workContext, cancel := context.WithCancel(ctx)
 	events := make(chan ProgressEvent, 256)
 	editor := textarea.New()
@@ -83,7 +85,7 @@ func newCommitUIModel(ctx context.Context, directory string) commitUIModel {
 	editor.SetHeight(8)
 	editor.SetWidth(76)
 	return commitUIModel{
-		ctx: workContext, cancel: cancel, directory: directory, events: events,
+		ctx: workContext, cancel: cancel, directory: directory, config: value, events: events,
 		logger: newEventProgressLogger(events), phase: commitUILoading, editor: editor,
 	}
 }
@@ -93,9 +95,15 @@ func (model commitUIModel) Init() tea.Cmd {
 }
 
 func (model commitUIModel) prepare() tea.Cmd {
-	ctx, directory, logger := model.ctx, model.directory, model.logger
+	ctx, directory, logger, value := model.ctx, model.directory, model.logger, model.config
 	return func() tea.Msg {
-		session, err := prepareSessionDefault(ctx, directory, logger)
+		var session *Session
+		var err error
+		if value == nil {
+			session, err = prepareSessionDefault(ctx, directory, logger)
+		} else {
+			session, err = prepareSessionWithConfig(ctx, directory, *value, logger)
+		}
 		return commitUIPreparedMsg{session: session, err: err}
 	}
 }
@@ -433,6 +441,31 @@ func RunEmbedded(
 	output io.Writer,
 	existingLock *workspace.Lock,
 ) (Result, error) {
+	return runEmbedded(ctx, directory, input, output, existingLock, nil)
+}
+
+// RunEmbeddedWithConfig opens the commit UI with the caller's effective
+// interactive configuration. This lets an embedding q process preserve a
+// workspace model override without changing global configuration.
+func RunEmbeddedWithConfig(
+	ctx context.Context,
+	directory string,
+	input io.Reader,
+	output io.Writer,
+	existingLock *workspace.Lock,
+	value config.Config,
+) (Result, error) {
+	return runEmbedded(ctx, directory, input, output, existingLock, &value)
+}
+
+func runEmbedded(
+	ctx context.Context,
+	directory string,
+	input io.Reader,
+	output io.Writer,
+	existingLock *workspace.Lock,
+	value *config.Config,
+) (Result, error) {
 	root, err := repositoryRoot(ctx, directory)
 	if err != nil {
 		return Result{}, err
@@ -444,11 +477,11 @@ func RunEmbedded(
 		}
 		defer repositoryLock.Close()
 	}
-	return runCommitUI(ctx, directory, input, output)
+	return runCommitUI(ctx, directory, input, output, value)
 }
 
-func runCommitUI(ctx context.Context, directory string, input io.Reader, output io.Writer) (Result, error) {
-	initial := newCommitUIModel(ctx, directory)
+func runCommitUI(ctx context.Context, directory string, input io.Reader, output io.Writer, value *config.Config) (Result, error) {
+	initial := newCommitUIModel(ctx, directory, value)
 	options := []tea.ProgramOption{tea.WithContext(ctx)}
 	if input != nil {
 		options = append(options, tea.WithInput(input))

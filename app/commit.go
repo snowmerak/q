@@ -7,6 +7,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/snowmerak/q/commitagent"
+	"github.com/snowmerak/q/config"
 	"github.com/snowmerak/q/workspace"
 )
 
@@ -22,6 +23,7 @@ type embeddedCommitCommand struct {
 	input     io.Reader
 	output    io.Writer
 	stderr    io.Writer
+	config    config.Config
 	result    commitagent.Result
 }
 
@@ -32,8 +34,8 @@ func (command *embeddedCommitCommand) SetStdout(output io.Writer) { command.outp
 func (command *embeddedCommitCommand) SetStderr(stderr io.Writer) { command.stderr = stderr }
 
 func (command *embeddedCommitCommand) Run() error {
-	result, err := commitagent.RunEmbedded(
-		command.ctx, command.directory, command.input, command.output, command.lock,
+	result, err := commitagent.RunEmbeddedWithConfig(
+		command.ctx, command.directory, command.input, command.output, command.lock, command.config,
 	)
 	command.result = result
 	return err
@@ -48,12 +50,20 @@ func (m model) startCommit() (tea.Model, tea.Cmd) {
 	m.input.Blur()
 	m.commitRunning = true
 	m.status = "Opening commit workflow…"
-	command := &embeddedCommitCommand{
-		ctx: m.ctx, directory: m.workspaceStore.Root, lock: m.workspaceLock,
-	}
+	command := m.newEmbeddedCommitCommand()
 	return m, tea.Exec(command, func(err error) tea.Msg {
 		return commitFinishedMsg{result: command.result, err: err}
 	})
+}
+
+func (m model) newEmbeddedCommitCommand() *embeddedCommitCommand {
+	directory := ""
+	if m.workspaceStore != nil {
+		directory = m.workspaceStore.Root
+	}
+	return &embeddedCommitCommand{
+		ctx: m.ctx, directory: directory, lock: m.workspaceLock, config: m.activeConfig(),
+	}
 }
 
 func commitResultStatus(result commitagent.Result) string {

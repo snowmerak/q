@@ -65,7 +65,7 @@ func (m *model) archiveMessage(message client.Message, status string, isError bo
 	}
 	model := ""
 	if message.Role == client.RoleAssistant {
-		model = m.config.Provider.Model
+		model = m.activeModel()
 	}
 	payload, err := json.Marshal(archivedMessagePayload{
 		ConversationID: m.conversationID,
@@ -127,7 +127,7 @@ func (m *model) archiveFailure(stage string, err error) {
 		return
 	}
 	m.appendArchive(sessionstore.Record{
-		Kind: sessionstore.KindEvent, RunID: m.runID, Model: m.config.Provider.Model,
+		Kind: sessionstore.KindEvent, RunID: m.runID, Model: m.activeModel(),
 		Status: sessionstore.StatusFailed, Summary: stage, Content: err.Error(),
 		Tags: []string{"chat", "error"}, Payload: payload,
 	})
@@ -144,7 +144,7 @@ func (m *model) archiveTurnCancelled(reason string) {
 		return
 	}
 	m.appendArchive(sessionstore.Record{
-		Kind: sessionstore.KindEvent, RunID: m.runID, Model: m.config.Provider.Model,
+		Kind: sessionstore.KindEvent, RunID: m.runID, Model: m.activeModel(),
 		Status: sessionstore.StatusCancelled, Summary: "turn interrupted", Content: reason,
 		Tags: []string{"chat", "turn", "cancelled"}, Payload: payload,
 	})
@@ -157,7 +157,7 @@ func (m *model) archiveSummary(content string) {
 	m.ensureRunID()
 	m.appendArchive(sessionstore.Record{
 		Kind: sessionstore.KindSummary, RunID: m.runID, Role: "assistant",
-		Model: m.config.Provider.Model, Status: sessionstore.StatusSucceeded,
+		Model: m.activeModel(), Status: sessionstore.StatusSucceeded,
 		Summary: "context compaction", Content: content, Tags: []string{"chat", "compaction"},
 	})
 }

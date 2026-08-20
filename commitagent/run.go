@@ -42,7 +42,49 @@ func prepareSessionDefault(ctx context.Context, directory string, logger *progre
 		}
 		return nil, err
 	}
+	workspaceModel, err := (workspace.Store{Root: directory}).LoadModelConfig()
+	if err != nil {
+		return nil, err
+	}
+	if override, found := workspaceModel.Overrides["default"]; found {
+		value.Provider.Model = override.Model
+		value.Provider.ContextWindow = override.ContextWindow
+	}
+	if override, found := workspaceModel.Overrides[config.AgentRoleCommit]; found {
+		roles := make(map[string]config.AgentConfig, len(value.Agents.Roles)+1)
+		for role, agent := range value.Agents.Roles {
+			roles[role] = agent
+		}
+		agent := roles[config.AgentRoleCommit]
+		agent.Model = override.Model
+		agent.Group = ""
+		roles[config.AgentRoleCommit] = agent
+		value.Agents.Roles = roles
+	}
+	if err := value.Validate(); err != nil {
+		return nil, err
+	}
+	return prepareSession(ctx, directory, store, value, logger)
+}
 
+func prepareSessionWithConfig(ctx context.Context, directory string, value config.Config, logger *progressLogger) (*Session, error) {
+	if err := value.Validate(); err != nil {
+		return nil, err
+	}
+	store, err := config.DefaultStore()
+	if err != nil {
+		return nil, err
+	}
+	return prepareSession(ctx, directory, store, value, logger)
+}
+
+func prepareSession(
+	ctx context.Context,
+	directory string,
+	store config.Store,
+	value config.Config,
+	logger *progressLogger,
+) (*Session, error) {
 	workContext, cancel := context.WithCancel(ctx)
 	repositoryChannel := make(chan repositoryResult, 1)
 	runtimeChannel := make(chan runtimeResult, 1)

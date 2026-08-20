@@ -268,7 +268,7 @@ func TestSessionEditsSelectedSplitMessageWithoutChangingFiles(t *testing.T) {
 		{Type: "feat", Scope: "app", Summary: "added application flow", Files: []string{"app.go"}},
 		{Type: "docs", Summary: "documented application flow", Files: []string{"README.md"}},
 	}}}
-	model := newCommitUIModel(context.Background(), t.TempDir())
+	model := newCommitUIModel(context.Background(), t.TempDir(), nil)
 	defer model.cancel()
 	model.session = session
 	model.proposals = session.Proposals()
@@ -345,7 +345,7 @@ func TestCommitUIApprovesProposalBeforeCreatingCommit(t *testing.T) {
 	}
 	proposal := Proposal{Type: "feat", Scope: "app", Summary: "added application"}
 	session := &Session{state: state, proposal: proposalState{Single: &proposal}, source: "commit agent"}
-	model := newCommitUIModel(context.Background(), root)
+	model := newCommitUIModel(context.Background(), root, nil)
 	defer model.cancel()
 	model.session = session
 	model.proposals = session.Proposals()

@@ -92,6 +92,11 @@ const (
 )
 
 const (
+	modelScopeGlobal = iota
+	modelScopeWorkspace
+)
+
+const (
 	setupProviderID = iota
 	setupProviderPrefix
 	setupProviderType
@@ -164,15 +169,17 @@ type model struct {
 	thinkerBusy   bool
 	thinkerJobID  string
 
-	workspaceStore    *workspace.Store
-	workspaceLock     *workspace.Lock
-	workspaceRestored bool
-	archive           recordArchive
-	archiveSearch     *archiveembed.Archive
-	archiveErr        error
-	runID             string
-	standalone        bool
-	standaloneRoot    screen
+	workspaceStore         *workspace.Store
+	workspaceLock          *workspace.Lock
+	workspaceRestored      bool
+	workspaceModel         workspace.ModelConfig
+	workspaceModelRestored bool
+	archive                recordArchive
+	archiveSearch          *archiveembed.Archive
+	archiveErr             error
+	runID                  string
+	standalone             bool
+	standaloneRoot         screen
 
 	setup                     [setupFieldCount]textinput.Model
 	setupFocus                int
@@ -209,6 +216,8 @@ type model struct {
 	modelChooseTarget         bool
 	modelTarget               string
 	modelTargetCursor         int
+	modelScopeCursor          int
+	modelWorkspace            bool
 	reasoningCursor           int
 	modelSelection            client.Model
 	embeddingDimensions       textinput.Model
@@ -328,6 +337,13 @@ type modelTargetConfiguredMsg struct {
 	config config.Config
 	target string
 	err    error
+}
+
+type workspaceModelConfiguredMsg struct {
+	config  workspace.ModelConfig
+	target  string
+	cleared bool
+	err     error
 }
 
 type chatResultMsg struct {
@@ -775,9 +791,13 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			m.conversationID = ""
 			m.compactionTarget = 0
 			if m.memory != nil {
-				m.memory.Configure(memoryPolicy(message.config))
+				m.memory.Configure(memoryPolicy(m.activeConfig()))
 			}
-			m.status = "Model changed to " + message.config.Provider.Model
+			if override, found := m.workspaceOverride(defaultModelTarget); found {
+				m.status = "Default model changed to " + message.config.Provider.Model + " · workspace model remains " + override.Model
+			} else {
+				m.status = "Model changed to " + message.config.Provider.Model
+			}
 			m.refreshTranscript()
 			m.refreshLearningContextLength()
 		} else {
@@ -804,6 +824,27 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		m.status = message.target + " model settings saved"
 		m.modelFilter.Blur()
 		m.embeddingDimensions.Blur()
+		return m, nil
+	case workspaceModelConfiguredMsg:
+		if message.err != nil {
+			m.status = message.err.Error()
+			return m, m.modelPickerFocus()
+		}
+		m.workspaceModel = message.config
+		m.conversationID = ""
+		m.compactionTarget = 0
+		if m.memory != nil {
+			m.memory.Configure(memoryPolicy(m.activeConfig()))
+		}
+		m.screen = screenModels
+		m.modelPickerStage = modelPickerTargets
+		m.modelFilter.Blur()
+		if message.cleared {
+			m.status = "Workspace " + message.target + " model cleared · inheriting active/global setting"
+		} else {
+			m.status = "Workspace " + message.target + " model changed to " + message.config.Overrides[message.target].Model
+		}
+		m.refreshTranscript()
 		return m, nil
 	case mcpSettingsSavedMsg:
 		m.mcpBusy = false
@@ -878,7 +919,7 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			m.config.Provider.ContextWindow = message.config.Provider.ContextWindow
 			if m.memory != nil {
-				m.memory.Configure(memoryPolicy(m.config))
+				m.memory.Configure(memoryPolicy(m.activeConfig()))
 			}
 		}
 		m.conversationID = ""
@@ -1937,7 +1978,7 @@ func (m model) updateModelPicker(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.status = ""
 			return m, nil
 		}
-		if m.runtime != nil && m.modelReturn == screenChat && !containsModel(filtered, m.config.Provider.Model) {
+		if m.runtime != nil && m.modelReturn == screenChat && !containsModel(filtered, m.activeConfig().Provider.Model) {
 			m.status = "Select a model from the updated providers"
 			return m, nil
 		}
@@ -1979,6 +2020,9 @@ func (m model) updateModelPicker(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 		value := m.draftConfig
 		selected := filtered[m.modelCursor]
+		if m.modelWorkspace {
+			return m.saveWorkspaceModel(m.modelTarget, selected)
+		}
 		if m.modelTarget == "" || m.modelTarget == defaultModelTarget {
 			value.Provider.Model = selected.ID
 			value.Provider.ContextWindow = selected.ContextLength
@@ -2024,7 +2068,7 @@ func (m model) updateModelPicker(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m model) updateModelTargetPicker(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
-	targets := modelTargets()
+	targets := m.modelTargets()
 	switch key.String() {
 	case "esc":
 		if m.isStandaloneScreen(screenModels) {
@@ -2044,6 +2088,10 @@ func (m model) updateModelTargetPicker(key tea.KeyPressMsg) (tea.Model, tea.Cmd)
 		if m.modelTargetCursor < len(targets)-1 {
 			m.modelTargetCursor++
 		}
+	case "left":
+		m.modelScopeCursor = modelScopeGlobal
+	case "right", "tab":
+		m.modelScopeCursor = modelScopeWorkspace
 	case "g":
 		m.modelPickerStage = modelPickerGroups
 		m.modelGroupDeleteArmed = false
@@ -2055,15 +2103,31 @@ func (m model) updateModelTargetPicker(key tea.KeyPressMsg) (tea.Model, tea.Cmd)
 			return m, nil
 		}
 		m.modelTarget = targets[m.modelTargetCursor]
+		m.modelWorkspace = m.modelScopeCursor == modelScopeWorkspace
+		if m.modelWorkspace && !workspace.ModelOverrideAllowed(m.modelTarget) {
+			m.status = modelTargetLabel(m.modelTarget) + " is shared globally and cannot be overridden per workspace"
+			return m, nil
+		}
 		m.modelPickerStage = modelPickerModels
 		m.modelFilter.Reset()
 		m.selectConfiguredModel()
 		return m, m.modelFilter.Focus()
 	case "i":
-		if len(targets) == 0 || targets[m.modelTargetCursor] == defaultModelTarget {
+		if len(targets) == 0 {
 			return m, nil
 		}
 		target := targets[m.modelTargetCursor]
+		if m.modelScopeCursor == modelScopeWorkspace {
+			if !workspace.ModelOverrideAllowed(target) {
+				m.status = modelTargetLabel(target) + " has no workspace override"
+				return m, nil
+			}
+			return m.clearWorkspaceModel(target)
+		}
+		if target == defaultModelTarget {
+			m.status = "The GLOBAL default model is required and cannot be reset"
+			return m, nil
+		}
 		value := m.draftConfig
 		if target == embeddingModelTarget {
 			value.Embedding = config.EmbeddingConfig{}
@@ -2116,7 +2180,13 @@ func (m model) updateModelGroups(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		name := names[m.modelGroupCursor]
-		if roles := rolesUsingModelGroup(m.draftConfig, name); len(roles) > 0 {
+		roles := rolesUsingModelGroup(m.draftConfig, name)
+		for role, override := range m.workspaceModel.Overrides {
+			if override.Model == "group/"+name {
+				roles = append(roles, "workspace "+role)
+			}
+		}
+		if len(roles) > 0 {
 			m.status = "Group is used by: " + strings.Join(roles, ", ")
 			m.modelGroupDeleteArmed = false
 			return m, nil
@@ -2767,7 +2837,7 @@ func (m model) submitChat() (tea.Model, tea.Cmd) {
 	m.messages = append(m.messages, userMessage)
 	learning := m.observeLearningMessage(userMessage)
 	if m.memory == nil {
-		m.memory = memory.New(memoryPolicy(m.config), nil)
+		m.memory = memory.New(memoryPolicy(m.activeConfig()), nil)
 	}
 	m.memory.Append(userMessage)
 	m.pendingMessage = userMessage
@@ -2941,12 +3011,13 @@ func (m *model) completeInterruptedToolCalls() {
 
 func (m model) compactContext(plan memory.Plan) tea.Cmd {
 	configuredClient := m.client
+	modelID := m.activeModel()
 	maxTokens := plan.OutputBudget
 	turnContext := m.activeTurnContext()
 	turnID := m.turnID
 	return func() tea.Msg {
 		response, err := chatWithConversationRecovery(turnContext, configuredClient, client.ChatRequest{
-			Messages: plan.RequestMessages(), MaxCompletionTokens: &maxTokens,
+			Model: modelID, Messages: plan.RequestMessages(), MaxCompletionTokens: &maxTokens,
 		})
 		return compactionResultMsg{turnID: turnID, response: response, plan: plan, err: err}
 	}
@@ -2957,20 +3028,21 @@ func (m *model) sendChatRequest() tea.Cmd {
 	m.requestEstimate = memory.CountMessages(history)
 	conversationID := m.conversationID
 	configuredClient := m.client
+	modelID := m.activeModel()
 	toolRuntime := scopeTools(m.toolRuntime, mcpconfig.RoleDefault)
 	turnContext := m.activeTurnContext()
 	turnID := m.turnID
 	if toolRuntime == nil {
 		return func() tea.Msg {
 			response, err := chatWithConversationRecovery(turnContext, configuredClient, client.ChatRequest{
-				Messages: providerMessages(history), ConversationID: conversationID,
+				Model: modelID, Messages: providerMessages(history), ConversationID: conversationID,
 			})
 			return chatResultMsg{turnID: turnID, response: response, requestEstimate: m.requestEstimate, err: err}
 		}
 	}
 	events := make(chan agentEvent)
 	return func() tea.Msg {
-		go streamAgentLoop(turnContext, configuredClient, toolRuntime, history, conversationID, events)
+		go streamAgentLoop(turnContext, configuredClient, toolRuntime, modelID, history, conversationID, events)
 		return waitAgentEvent(events, turnID)()
 	}
 }
@@ -2981,6 +3053,7 @@ func streamAgentLoop(
 	ctx context.Context,
 	configuredClient chatClient,
 	toolRuntime agentToolRuntime,
+	modelID string,
 	history []client.Message,
 	conversationID string,
 	events chan<- agentEvent,
@@ -2992,7 +3065,7 @@ func streamAgentLoop(
 	for round := 0; round < maximumToolRounds; round++ {
 		requestEstimate := memory.CountMessages(history)
 		response, err := chatWithConversationRecovery(ctx, configuredClient, client.ChatRequest{
-			Messages: providerMessages(history), ConversationID: conversationID, Tools: availableTools,
+			Model: modelID, Messages: providerMessages(history), ConversationID: conversationID, Tools: availableTools,
 		})
 		if err != nil {
 			emitAgentEvent(ctx, events, agentEvent{err: err})
@@ -3223,12 +3296,14 @@ func (m *model) enterChat(value config.Config, configuredClient chatClient) {
 	m.setupEdit = false
 	m.config = value
 	m.client = configuredClient
+	workspaceModelErr := m.restoreWorkspaceModel()
+	active := m.activeConfig()
 	m.messages = nil
 	if value.Provider.SystemPrompt != "" {
 		m.messages = append(m.messages, client.Message{Role: client.RoleSystem, Content: value.Provider.SystemPrompt})
 	}
 	m.appendRuntimeMessages()
-	m.memory = memory.New(memoryPolicy(value), m.messages)
+	m.memory = memory.New(memoryPolicy(active), m.messages)
 	m.conversationID = ""
 	m.runID = ""
 	m.waiting = false
@@ -3246,6 +3321,12 @@ func (m *model) enterChat(value config.Config, configuredClient chatClient) {
 	m.status = ""
 	m.input = newChatInput()
 	m.restoreWorkspaceSession()
+	if workspaceModelErr != nil {
+		if m.status != "" {
+			m.status += " · "
+		}
+		m.status += workspaceModelErr.Error()
+	}
 	m.ensureRunID()
 	m.offerPlanExecutionResume()
 	m.resize(m.width, m.height)
@@ -3398,6 +3479,8 @@ func (m *model) enterModelPicker(value config.Config, available []client.Model) 
 		m.modelPickerStage = modelPickerTargets
 		m.modelTarget = defaultModelTarget
 		m.modelTargetCursor = 0
+		m.modelScopeCursor = modelScopeGlobal
+		m.modelWorkspace = false
 		m.modelFilter.Blur()
 		return
 	}
@@ -3409,7 +3492,22 @@ func (m *model) enterModelPicker(value config.Config, available []client.Model) 
 
 func (m *model) selectConfiguredModel() {
 	modelID := m.draftConfig.Provider.Model
-	if m.modelTarget == embeddingModelTarget {
+	if m.modelWorkspace {
+		if override, found := m.workspaceOverride(m.modelTarget); found {
+			modelID = override.Model
+		} else if m.modelTarget != defaultModelTarget {
+			if agent, err := m.activeConfig().EffectiveAgent(m.modelTarget); err == nil {
+				if agent.Group != "" {
+					modelID = modelGroupChoicePrefix + agent.Group
+				} else {
+					modelID = agent.Model
+				}
+			}
+		}
+		if name, grouped := strings.CutPrefix(modelID, "group/"); grouped && m.modelTarget != defaultModelTarget {
+			modelID = modelGroupChoicePrefix + name
+		}
+	} else if m.modelTarget == embeddingModelTarget {
 		modelID = m.draftConfig.Embedding.Model
 	} else if m.modelTarget != "" && m.modelTarget != defaultModelTarget {
 		if agent, ok := m.draftConfig.Agents.Roles[m.modelTarget]; ok {
@@ -3452,8 +3550,82 @@ func (m *model) modelPickerFocus() tea.Cmd {
 	return nil
 }
 
-func modelTargets() []string {
+func (m model) modelTargets() []string {
 	return append([]string{defaultModelTarget, embeddingModelTarget}, config.AgentRoles()...)
+}
+
+func (m model) saveWorkspaceModel(target string, selected client.Model) (tea.Model, tea.Cmd) {
+	if m.workspaceStore == nil {
+		m.status = "Workspace model settings are unavailable"
+		return m, nil
+	}
+	if !workspace.ModelOverrideAllowed(target) {
+		m.status = modelTargetLabel(target) + " cannot be overridden per workspace"
+		return m, nil
+	}
+	modelID := selected.ID
+	if name, grouped := modelGroupChoice(m.draftConfig, selected.ID); grouped {
+		modelID = "group/" + name
+	}
+	value := cloneWorkspaceModelConfig(m.workspaceModel)
+	if value.Overrides == nil {
+		value.Overrides = make(map[string]workspace.ModelOverride)
+	}
+	value.Version = workspace.ModelConfigVersion
+	value.Overrides[target] = workspace.ModelOverride{Model: modelID, ContextWindow: selected.ContextLength}
+	if err := value.Validate(); err != nil {
+		m.status = err.Error()
+		return m, nil
+	}
+	m.status = "Saving workspace model…"
+	m.modelFilter.Blur()
+	store := *m.workspaceStore
+	return m, func() tea.Msg {
+		if err := store.SaveModelConfig(value); err != nil {
+			return workspaceModelConfiguredMsg{err: err}
+		}
+		return workspaceModelConfiguredMsg{config: value, target: target}
+	}
+}
+
+func (m model) clearWorkspaceModel(target string) (tea.Model, tea.Cmd) {
+	if m.workspaceStore == nil {
+		return m, nil
+	}
+	m.status = "Clearing workspace model…"
+	store := *m.workspaceStore
+	value := cloneWorkspaceModelConfig(m.workspaceModel)
+	delete(value.Overrides, target)
+	return m, func() tea.Msg {
+		var err error
+		if len(value.Overrides) == 0 {
+			err = store.ClearModelConfig()
+		} else {
+			err = store.SaveModelConfig(value)
+		}
+		if err != nil {
+			return workspaceModelConfiguredMsg{err: err}
+		}
+		return workspaceModelConfiguredMsg{
+			config: value, target: target, cleared: true,
+		}
+	}
+}
+
+func cloneWorkspaceModelConfig(value workspace.ModelConfig) workspace.ModelConfig {
+	result := value
+	if value.Overrides != nil {
+		result.Overrides = make(map[string]workspace.ModelOverride, len(value.Overrides))
+		for role, override := range value.Overrides {
+			result.Overrides[role] = override
+		}
+	}
+	return result
+}
+
+func (m model) workspaceOverride(target string) (workspace.ModelOverride, bool) {
+	override, found := m.workspaceModel.Overrides[target]
+	return override, found
 }
 
 func withAgentModel(value config.Config, role, modelID string) config.Config {
@@ -3592,10 +3764,11 @@ func (m *model) resetConversation() {
 		m.messages = append(m.messages, client.Message{Role: client.RoleSystem, Content: m.config.Provider.SystemPrompt})
 	}
 	m.appendRuntimeMessages()
+	active := m.activeConfig()
 	if m.memory == nil {
-		m.memory = memory.New(memoryPolicy(m.config), m.messages)
+		m.memory = memory.New(memoryPolicy(active), m.messages)
 	} else {
-		m.memory.Reset(m.messages)
+		m.memory = memory.New(memoryPolicy(active), m.messages)
 	}
 	m.conversationID = ""
 	m.runID = ""
@@ -3648,7 +3821,7 @@ func (m *model) restoreWorkspaceSession() {
 	if len(requestContext) == 0 {
 		requestContext = session.Transcript
 	}
-	m.memory = memory.New(memoryPolicy(m.config), mergeWorkspaceMessages(base, requestContext))
+	m.memory = memory.New(memoryPolicy(m.activeConfig()), mergeWorkspaceMessages(base, requestContext))
 	if learningErr := m.ensureLearningMachine(session.Learning, requestContext); learningErr != nil {
 		m.status = learningErr.Error()
 	}
@@ -3658,6 +3831,52 @@ func (m *model) restoreWorkspaceSession() {
 		m.status = fmt.Sprintf("Workspace session restored · %d messages", len(session.Transcript))
 	}
 }
+
+func (m *model) restoreWorkspaceModel() error {
+	if m.workspaceStore == nil || m.workspaceModelRestored {
+		return nil
+	}
+	m.workspaceModelRestored = true
+	value, err := m.workspaceStore.LoadModelConfig()
+	if err != nil {
+		return err
+	}
+	m.workspaceModel = value
+	return nil
+}
+
+// activeConfig applies the workspace's interactive model override while
+// pinning shared-state model roles to their global inheritance. Embedding
+// configuration is already independent from Provider.Model.
+func (m model) activeConfig() config.Config {
+	value := m.config
+	if override, found := m.workspaceOverride(defaultModelTarget); found {
+		value.Provider.Model = override.Model
+		value.Provider.ContextWindow = override.ContextWindow
+	}
+	if len(m.workspaceModel.Overrides) > 0 {
+		value.Agents.Roles = cloneAgentRoles(value.Agents.Roles)
+		for role, override := range m.workspaceModel.Overrides {
+			if role == defaultModelTarget || !workspace.ModelOverrideAllowed(role) {
+				continue
+			}
+			agent := value.Agents.Roles[role]
+			agent.Model = override.Model
+			agent.Group = ""
+			value.Agents.Roles[role] = agent
+		}
+		for _, role := range []string{config.AgentRoleThinker, config.AgentRoleLibrarian} {
+			agent := value.Agents.Roles[role]
+			if agent.Model == "" && agent.Group == "" {
+				agent.Model = m.config.Provider.Model
+				value.Agents.Roles[role] = agent
+			}
+		}
+	}
+	return value
+}
+
+func (m model) activeModel() string { return m.activeConfig().Provider.Model }
 
 func (m *model) saveWorkspaceSession() error {
 	if m.workspaceStore == nil || m.memory == nil {
@@ -4125,7 +4344,7 @@ func (m model) chatHeader() string {
 	if m.runtime != nil {
 		endpoint = m.runtime.Endpoint()
 	}
-	header := titleStyle.Render("q") + "  " + subtleStyle.Render(m.config.Provider.Model+" · "+endpoint+" · "+m.contextLabel())
+	header := titleStyle.Render("q") + "  " + subtleStyle.Render(m.activeModel()+" · "+endpoint+" · "+m.contextLabel())
 	if m.workspaceStore != nil {
 		header += "\n" + subtleStyle.Render("workspace · "+filepath.Clean(m.workspaceStore.Root))
 	}

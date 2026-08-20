@@ -368,11 +368,20 @@ func TestSetupMasksAndPersistsInlineKey(t *testing.T) {
 }
 
 func TestChatCompactsAtThresholdThenSendsPendingMessage(t *testing.T) {
+	workspaceStore := workspace.Store{Root: t.TempDir()}
+	if err := workspaceStore.SaveModelConfig(workspace.ModelConfig{
+		Overrides: map[string]workspace.ModelOverride{
+			defaultModelTarget: {Model: "workspace-model", ContextWindow: 1000},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
 	value := config.Default()
-	value.Provider.Model = "test-model"
-	value.Provider.ContextWindow = 1000
+	value.Provider.Model = "global-model"
+	value.Provider.ContextWindow = 2000
 	fake := &fakeClient{}
 	m := newModel(context.Background(), config.Store{Dir: t.TempDir()}, nil)
+	m.workspaceStore = &workspaceStore
 	m.enterChat(value, fake)
 	oldUser := client.Message{Role: client.RoleUser, Content: strings.Repeat("old context ", 180)}
 	oldAssistant := client.Message{Role: client.RoleAssistant, Content: strings.Repeat("old answer ", 120)}
@@ -398,7 +407,7 @@ func TestChatCompactsAtThresholdThenSendsPendingMessage(t *testing.T) {
 			found = true
 		}
 	}
-	if !found || len(fake.requests) != 1 || fake.requests[0].MaxCompletionTokens == nil {
+	if !found || len(fake.requests) != 1 || fake.requests[0].MaxCompletionTokens == nil || fake.requests[0].Model != "workspace-model" {
 		t.Fatalf("compaction request = %#v", fake.requests)
 	}
 
@@ -413,7 +422,7 @@ func TestChatCompactsAtThresholdThenSendsPendingMessage(t *testing.T) {
 	}
 	updated, _ = m.Update(result)
 	m = updated.(model)
-	if len(fake.requests) != 2 || fake.requests[1].ConversationID != "" {
+	if len(fake.requests) != 2 || fake.requests[1].ConversationID != "" || fake.requests[1].Model != "workspace-model" {
 		t.Fatalf("requests = %#v", fake.requests)
 	}
 	requestMessages := fake.requests[1].Messages
@@ -605,7 +614,7 @@ func TestSlashModelConfiguresCommitAgentModelAndReasoning(t *testing.T) {
 	updated, _ = m.Update(command())
 	m = updated.(model)
 
-	targets := modelTargets()
+	targets := m.modelTargets()
 	for index, target := range targets {
 		if target == config.AgentRoleCommit {
 			m.modelTargetCursor = index
@@ -663,16 +672,17 @@ func TestSlashModelConfiguresCommitAgentModelAndReasoning(t *testing.T) {
 }
 
 func TestModelTargetsIncludeLearningRoles(t *testing.T) {
+	m := model{}
 	for _, expected := range []string{config.AgentRoleThinker, config.AgentRoleLibrarian} {
 		found := false
-		for _, target := range modelTargets() {
+		for _, target := range m.modelTargets() {
 			if target == expected {
 				found = true
 				break
 			}
 		}
 		if !found {
-			t.Fatalf("model targets = %#v; missing %q", modelTargets(), expected)
+			t.Fatalf("model targets = %#v; missing %q", m.modelTargets(), expected)
 		}
 	}
 }
@@ -749,7 +759,7 @@ func TestModelPickerConfiguresEmbeddingModelAndDimensions(t *testing.T) {
 	m.modelChooseTarget = true
 	m.enterModelPicker(value, []client.Model{{ID: "default-model"}, {ID: "embed-model"}})
 
-	targets := modelTargets()
+	targets := m.modelTargets()
 	for index, target := range targets {
 		if target == embeddingModelTarget {
 			m.modelTargetCursor = index
@@ -807,7 +817,7 @@ func TestModelPickerCanClearEmbeddingConfiguration(t *testing.T) {
 	m.modelReturn = screenChat
 	m.modelChooseTarget = true
 	m.enterModelPicker(value, []client.Model{{ID: "default-model"}, {ID: "embed-model"}})
-	for index, target := range modelTargets() {
+	for index, target := range m.modelTargets() {
 		if target == embeddingModelTarget {
 			m.modelTargetCursor = index
 			break
@@ -837,7 +847,7 @@ func TestModelPickerCanRestoreSubagentDefaultInheritance(t *testing.T) {
 	m.modelReturn = screenChat
 	m.modelChooseTarget = true
 	m.enterModelPicker(value, []client.Model{{ID: "default-model"}, {ID: "coding-model"}})
-	for index, target := range modelTargets() {
+	for index, target := range m.modelTargets() {
 		if target == config.AgentRoleCoder {
 			m.modelTargetCursor = index
 			break
@@ -867,7 +877,8 @@ func TestAgentModelSelectionReplacesGroupAndSummaryShowsGroup(t *testing.T) {
 	value.Agents.Roles = map[string]config.AgentConfig{
 		config.AgentRolePlanner: {Group: "heavy", ReasoningEffort: "high"},
 	}
-	if summary := targetModelSummary(value, config.AgentRolePlanner); summary != "group heavy · 2 candidates · effort high" {
+	summaryModel := model{draftConfig: value}
+	if summary := summaryModel.globalModelSummary(config.AgentRolePlanner); summary != "group/heavy" {
 		t.Fatalf("summary = %q", summary)
 	}
 	updated := withAgentModel(value, config.AgentRolePlanner, "single-model")
@@ -2086,6 +2097,285 @@ func TestWorkspaceSessionPersistsAndRestoresWithGlobalChatConfig(t *testing.T) {
 	requestContext := restored.memory.Messages()
 	if len(requestContext) != 3 || requestContext[0].Content != "updated global prompt" {
 		t.Fatalf("restored request context = %#v", requestContext)
+	}
+}
+
+func TestWorkspaceModelOverridesInteractiveChatAndSurvivesClear(t *testing.T) {
+	workspaceStore := workspace.Store{Root: t.TempDir()}
+	if err := workspaceStore.SaveModelConfig(workspace.ModelConfig{
+		Overrides: map[string]workspace.ModelOverride{
+			defaultModelTarget: {Model: "workspace-model", ContextWindow: 32000},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	value := config.Default()
+	value.Provider.Model = "global-model"
+	value.Provider.ContextWindow = 16000
+	value.Embedding = config.EmbeddingConfig{Model: "global-embedding", Dimensions: 3}
+	fake := &fakeClient{}
+	m := newModel(context.Background(), config.Store{Dir: t.TempDir()}, nil)
+	m.workspaceStore = &workspaceStore
+	m.enterChat(value, fake)
+
+	if m.config.Provider.Model != "global-model" || m.activeModel() != "workspace-model" {
+		t.Fatalf("global = %q, active = %q", m.config.Provider.Model, m.activeModel())
+	}
+	if stats := m.memory.Stats(); stats.ContextWindow != 32000 {
+		t.Fatalf("active context window = %d", stats.ContextWindow)
+	}
+	m = submitAndReceive(t, m, "use the workspace model")
+	if len(fake.requests) != 1 || fake.requests[0].Model != "workspace-model" {
+		t.Fatalf("chat requests = %#v", fake.requests)
+	}
+
+	m.resetConversation()
+	stored, err := workspaceStore.LoadModelConfig()
+	if err != nil || stored.Overrides[defaultModelTarget].Model != "workspace-model" || m.activeModel() != "workspace-model" {
+		t.Fatalf("model after clear = %#v, active = %q, err = %v", stored, m.activeModel(), err)
+	}
+	if _, err := workspaceStore.Load(); !errors.Is(err, workspace.ErrNotFound) {
+		t.Fatalf("chat session survived clear: %v", err)
+	}
+}
+
+func TestWorkspaceModelPickerPersistsWithoutChangingGlobalConfig(t *testing.T) {
+	globalStore := config.Store{Dir: t.TempDir()}
+	workspaceStore := workspace.Store{Root: t.TempDir()}
+	value := config.Default()
+	value.Provider.Model = "global-model"
+	m := newModel(context.Background(), globalStore, nil)
+	m.workspaceStore = &workspaceStore
+	m.enterChat(value, &fakeClient{})
+	m.modelReturn = screenChat
+	m.modelChooseTarget = true
+	m.enterModelPicker(value, []client.Model{
+		{ID: "global-model", ContextLength: 16000},
+		{ID: "workspace-model", ContextLength: 32000},
+	})
+	m.modelTargetCursor = 0 // default role
+	m.modelScopeCursor = modelScopeWorkspace
+	updated, _ := m.updateModelPicker(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m = updated.(model)
+	for index, candidate := range m.filteredModels() {
+		if candidate.ID == "workspace-model" {
+			m.modelCursor = index
+			break
+		}
+	}
+	updated, command := m.updateModelPicker(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m = updated.(model)
+	if command == nil {
+		t.Fatal("workspace model save command is nil")
+	}
+	updated, _ = m.Update(command())
+	m = updated.(model)
+	stored, err := workspaceStore.LoadModelConfig()
+	if err != nil || stored.Overrides[defaultModelTarget].Model != "workspace-model" ||
+		stored.Overrides[defaultModelTarget].ContextWindow != 32000 {
+		t.Fatalf("workspace model = %#v, err = %v", stored, err)
+	}
+	if m.config.Provider.Model != "global-model" || m.activeModel() != "workspace-model" {
+		t.Fatalf("global = %q, active = %q", m.config.Provider.Model, m.activeModel())
+	}
+	if _, err := globalStore.Load(); !errors.Is(err, config.ErrNotFound) {
+		t.Fatalf("workspace selection wrote global config: %v", err)
+	}
+
+	m.modelTargetCursor = 0
+	m.modelScopeCursor = modelScopeWorkspace
+	updated, command = m.updateModelPicker(tea.KeyPressMsg{Code: 'i', Text: "i"})
+	m = updated.(model)
+	updated, _ = m.Update(command())
+	m = updated.(model)
+	if m.activeModel() != "global-model" || len(m.workspaceModel.Overrides) != 0 {
+		t.Fatalf("cleared active model = %q, workspace = %#v", m.activeModel(), m.workspaceModel)
+	}
+}
+
+func TestWorkspaceRoleTableCellCanBeChangedAndReset(t *testing.T) {
+	workspaceStore := workspace.Store{Root: t.TempDir()}
+	value := config.Default()
+	value.Provider.Model = "global-main"
+	value.Agents.Roles = map[string]config.AgentConfig{
+		config.AgentRolePlanner: {Model: "global-planner"},
+	}
+	m := newModel(context.Background(), config.Store{Dir: t.TempDir()}, nil)
+	m.workspaceStore = &workspaceStore
+	m.enterChat(value, &fakeClient{})
+	m.modelReturn = screenChat
+	m.modelChooseTarget = true
+	m.enterModelPicker(value, []client.Model{
+		{ID: "global-main"}, {ID: "global-planner"}, {ID: "workspace-planner"},
+	})
+	for index, target := range m.modelTargets() {
+		if target == config.AgentRolePlanner {
+			m.modelTargetCursor = index
+			break
+		}
+	}
+	updated, _ := m.updateModelPicker(tea.KeyPressMsg{Code: tea.KeyRight})
+	m = updated.(model)
+	if m.modelScopeCursor != modelScopeWorkspace {
+		t.Fatalf("scope cursor = %d", m.modelScopeCursor)
+	}
+	updated, _ = m.updateModelPicker(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m = updated.(model)
+	if !m.modelWorkspace || m.modelTarget != config.AgentRolePlanner || m.modelPickerStage != modelPickerModels {
+		t.Fatalf("workspace planner selection = target %q, workspace %v, stage %v", m.modelTarget, m.modelWorkspace, m.modelPickerStage)
+	}
+	for index, candidate := range m.filteredModels() {
+		if candidate.ID == "workspace-planner" {
+			m.modelCursor = index
+			break
+		}
+	}
+	updated, command := m.updateModelPicker(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m = updated.(model)
+	updated, _ = m.Update(command())
+	m = updated.(model)
+	planner, err := m.activeConfig().EffectiveAgent(config.AgentRolePlanner)
+	if err != nil || planner.Model != "workspace-planner" {
+		t.Fatalf("active planner = %#v, err = %v", planner, err)
+	}
+	if m.config.Agents.Roles[config.AgentRolePlanner].Model != "global-planner" {
+		t.Fatalf("global planner changed: %#v", m.config.Agents.Roles[config.AgentRolePlanner])
+	}
+	stored, err := workspaceStore.LoadModelConfig()
+	if err != nil || stored.Overrides[config.AgentRolePlanner].Model != "workspace-planner" {
+		t.Fatalf("workspace planner = %#v, err = %v", stored, err)
+	}
+
+	updated, command = m.updateModelPicker(tea.KeyPressMsg{Code: 'i', Text: "i"})
+	m = updated.(model)
+	if command == nil {
+		t.Fatal("workspace planner reset command is nil")
+	}
+	updated, _ = m.Update(command())
+	m = updated.(model)
+	planner, err = m.activeConfig().EffectiveAgent(config.AgentRolePlanner)
+	if err != nil || planner.Model != "global-planner" {
+		t.Fatalf("reset planner = %#v, err = %v", planner, err)
+	}
+}
+
+func TestModelPickerMakesWorkspaceAndGlobalScopesExplicit(t *testing.T) {
+	value := config.Default()
+	value.Provider.Model = "global-model"
+	m := newModel(context.Background(), config.Store{Dir: t.TempDir()}, nil)
+	m.workspaceStore = &workspace.Store{Root: t.TempDir()}
+	m.draftConfig = value
+	m.models = []client.Model{{ID: "global-model"}, {ID: "workspace-model"}}
+	m.modelPickerStage = modelPickerTargets
+	m.resize(120, 36)
+
+	targetsView := ansi.Strip(m.viewModels())
+	for _, expected := range []string{
+		"Role × Scope",
+		"GLOBAL",
+		"WORKSPACE",
+		"default",
+		"inherit → global-model",
+		"shared GLOBAL",
+	} {
+		if !strings.Contains(targetsView, expected) {
+			t.Fatalf("model targets omitted %q:\n%s", expected, targetsView)
+		}
+	}
+
+	m.modelPickerStage = modelPickerModels
+	m.modelTarget = defaultModelTarget
+	m.modelWorkspace = true
+	workspaceView := ansi.Strip(m.viewModels())
+	for _, expected := range []string{"WORKSPACE · default model", "saves this Role override to .q/model.json", "save workspace override"} {
+		if !strings.Contains(workspaceView, expected) {
+			t.Fatalf("workspace picker omitted %q:\n%s", expected, workspaceView)
+		}
+	}
+
+	m.modelTarget = defaultModelTarget
+	m.modelWorkspace = false
+	globalView := ansi.Strip(m.viewModels())
+	for _, expected := range []string{"GLOBAL · default model", "saves to ~/.q/config.yaml", "save global default"} {
+		if !strings.Contains(globalView, expected) {
+			t.Fatalf("global picker omitted %q:\n%s", expected, globalView)
+		}
+	}
+
+	m.modelPickerStage = modelPickerTargets
+	m.modelScopeCursor = modelScopeWorkspace
+	for index, target := range m.modelTargets() {
+		if target == config.AgentRoleThinker {
+			m.modelTargetCursor = index
+			break
+		}
+	}
+	updated, command := m.updateModelPicker(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m = updated.(model)
+	if command != nil || m.modelPickerStage != modelPickerTargets || !strings.Contains(m.status, "shared globally") {
+		t.Fatalf("Thinker workspace cell = command %v, stage %v, status %q", command != nil, m.modelPickerStage, m.status)
+	}
+}
+
+func TestWorkspaceModelDoesNotOverrideGlobalServiceModels(t *testing.T) {
+	value := config.Default()
+	value.Provider.Model = "global-main"
+	value.Provider.ContextWindow = 16000
+	value.Embedding = config.EmbeddingConfig{Model: "global-embedding", Dimensions: 1536}
+	m := model{
+		config: value,
+		workspaceModel: workspace.ModelConfig{
+			Version: workspace.ModelConfigVersion,
+			Overrides: map[string]workspace.ModelOverride{
+				defaultModelTarget:      {Model: "workspace-main", ContextWindow: 32000},
+				config.AgentRolePlanner: {Model: "workspace-planner"},
+			},
+		},
+		models: []client.Model{
+			{ID: "global-main", ContextLength: 16000},
+			{ID: "workspace-main", ContextLength: 32000},
+		},
+	}
+	active := m.activeConfig()
+	if active.Provider.Model != "workspace-main" || active.Embedding != value.Embedding {
+		t.Fatalf("active config = %#v", active)
+	}
+	for _, role := range []string{config.AgentRoleThinker, config.AgentRoleLibrarian} {
+		agent, err := active.EffectiveAgent(role)
+		if err != nil || agent.Model != "global-main" {
+			t.Fatalf("active shared-state %s = %#v, err = %v", role, agent, err)
+		}
+	}
+	if contextLength := m.learningContextLength(); contextLength != 16000 {
+		t.Fatalf("Thinker context length = %d", contextLength)
+	}
+	planner, err := active.EffectiveAgent(config.AgentRolePlanner)
+	if err != nil || planner.Model != "workspace-planner" {
+		t.Fatalf("active planner = %#v, err = %v", planner, err)
+	}
+}
+
+func TestEmbeddedCommitReceivesActiveConfig(t *testing.T) {
+	value := config.Default()
+	value.Provider.Model = "global-main"
+	m := model{
+		ctx: context.Background(), config: value,
+		workspaceStore: &workspace.Store{Root: t.TempDir()},
+		workspaceModel: workspace.ModelConfig{
+			Version: workspace.ModelConfigVersion,
+			Overrides: map[string]workspace.ModelOverride{
+				defaultModelTarget:     {Model: "workspace-main", ContextWindow: 32000},
+				config.AgentRoleCommit: {Model: "workspace-commit"},
+			},
+		},
+	}
+	command := m.newEmbeddedCommitCommand()
+	if command.config.Provider.Model != "workspace-main" || command.config.Provider.ContextWindow != 32000 {
+		t.Fatalf("commit config = %#v", command.config.Provider)
+	}
+	commit, err := command.config.EffectiveAgent(config.AgentRoleCommit)
+	if err != nil || commit.Model != "workspace-commit" {
+		t.Fatalf("commit role = %#v, err = %v", commit, err)
 	}
 }
 

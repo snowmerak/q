@@ -148,7 +148,7 @@ screen without discarding editor state or interrupting an active turn.
 |---|---|
 | `/plan [request]` | Grill, research, approve, and execute a work plan. Without an inline request, the next message becomes the request. |
 | `/commit` | Open the interactive commit workflow, then return to chat. |
-| `/model` | Configure the default, embedding, subagent role, and grouped fallback models. |
+| `/model` | Configure the workspace/default, embedding, subagent role, and grouped fallback models. |
 | `/gateway` | Configure Gateway network defaults, API keys, and providers. |
 | `/library` | Configure the global Library's default host and fixed port. |
 | `/loom` | Inspect Loom usage and configure or run garbage collection. |
@@ -335,9 +335,14 @@ standalone `q gateway`: the parent process injects the temporary key into its
 own clients automatically, so launching or replacing the child does not require
 the user to copy a key.
 
-`/model` lists the main `default` target, optional `embedding` target, and each
-subagent role. A role without an explicit model or group inherits the main
-model. An empty reasoning effort lets the provider choose its default; explicit
+`/model` shows a Role × Scope assignment table with `GLOBAL` and `WORKSPACE`
+columns. Use Left/Right to choose a scope, Up/Down to choose a role, Enter to
+change the selected assignment, and `i` to clear it. Workspace overrides for
+the default main model and non-shared roles are stored in `.q/model.json`; an
+empty workspace cell inherits its active/global assignment. Thinker, Librarian,
+and Embedding have disabled workspace cells because their state is shared
+across workspaces. An empty
+reasoning effort lets the provider choose its default; explicit
 efforts are accepted only when advertised by that model. The built-in roles are
 `griller`, `scout`, `research`, `planner`, `coder`, `commit`, `advisor`,
 `thinker`, and `librarian`. The `thinker` role performs durable proposition
@@ -445,6 +450,7 @@ state are local to the directory where q starts:
 | Path | Purpose |
 |---|---|
 | `.q/session.json` | Current transcript, compacted request-context projection, run identity, and durable Thinker learning queue. |
+| `.q/model.json` | Per-role workspace model overrides and the main model's cached context window. It is preserved by `/clear`. |
 | `.q/lsp.json` | Current workspace's language project roots and optional server overrides. |
 | `.q/plan-execution.json` | Durable checkpoint for an approved plan execution. |
 | `.q/data/records/` | Source records for durable workspace history. |

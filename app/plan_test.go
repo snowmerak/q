@@ -87,7 +87,12 @@ func TestPlanCommandExecutesApprovedPlanWithCoderAndPlannerReview(t *testing.T) 
 		}`)}},
 	}}
 	value := config.Default()
-	value.Provider.Model = "plan-model"
+	value.Provider.Model = "global-model"
+	if err := workspaceStore.SaveModelConfig(workspace.ModelConfig{Overrides: map[string]workspace.ModelOverride{
+		defaultModelTarget: {Model: "plan-model"},
+	}}); err != nil {
+		t.Fatal(err)
+	}
 	m := newModel(context.Background(), config.Store{Dir: t.TempDir()}, nil)
 	m.workspaceStore = &workspaceStore
 	m.toolRuntime = &fakeAgentTools{}

@@ -4,8 +4,10 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/charmbracelet/x/ansi"
 	"github.com/snowmerak/q/client"
 	"github.com/snowmerak/q/config"
+	"github.com/snowmerak/q/workspace"
 )
 
 func (m model) viewSetup() string {
@@ -175,13 +177,12 @@ func (m model) viewModels() string {
 	end := min(len(filtered), start+visible)
 
 	var body strings.Builder
-	title := "q · select model"
-	if m.modelTarget != "" {
-		title = "q · " + m.modelTarget + " model"
-	}
+	title := m.modelPickerTitle()
 	body.WriteString(titleStyle.Render(title))
 	body.WriteString("\n")
 	m.writeWorkspacePath(&body)
+	body.WriteString(subtleStyle.Render(m.modelTargetScope()))
+	body.WriteString("\n")
 	endpoint := m.draftConfig.Provider.BaseURL
 	if m.runtime != nil {
 		endpoint = m.runtime.Endpoint()
@@ -224,36 +225,47 @@ func (m model) viewModels() string {
 		body.WriteString(helpStyle.Render("loading models · ctrl+c quit"))
 	} else {
 		available := m.selectableModels()
-		help := fmt.Sprintf("%d/%d choices · type to filter · ↑/↓ select · ctrl+e context · enter save · esc back", len(filtered), len(available))
-		if m.modelTarget != "" && m.modelTarget != defaultModelTarget {
-			help = fmt.Sprintf("%d/%d choices · type to filter · ↑/↓ select · ctrl+e context · enter next/save · esc back", len(filtered), len(available))
-		}
+		help := fmt.Sprintf("%d/%d choices · type to filter · ↑/↓ select · ctrl+e GLOBAL context · enter %s · esc back", len(filtered), len(available), m.modelSaveLabel())
 		body.WriteString(helpStyle.Render(help))
 	}
 	return frameStyle.Width(max(36, m.width-4)).Render(body.String())
 }
 
 func (m model) viewModelTargets() string {
-	targets := modelTargets()
+	targets := m.modelTargets()
 	var body strings.Builder
-	body.WriteString(titleStyle.Render("q · model settings"))
+	body.WriteString(titleStyle.Render("q · model assignments"))
 	body.WriteString("\n")
 	m.writeWorkspacePath(&body)
-	body.WriteString(subtleStyle.Render("Choose the main loop, embedding model, or a subagent role"))
+	body.WriteString(subtleStyle.Render("Select a Role × Scope cell. GLOBAL writes ~/.q/config.yaml; WORKSPACE writes .q/model.json."))
 	body.WriteString("\n\n")
 	if m.discovering {
 		body.WriteString(subtleStyle.Render("Loading models…"))
 	} else {
+		roleWidth := 12
+		cellWidth := max(18, (max(52, m.width-10)-roleWidth)/2)
+		body.WriteString(subtleStyle.Render(padModelCell("ROLE", roleWidth)))
+		globalHeader := padModelCell("GLOBAL", cellWidth)
+		workspaceHeader := padModelCell("WORKSPACE", cellWidth)
+		if m.modelScopeCursor == modelScopeGlobal {
+			body.WriteString(activeLabelStyle.Render(globalHeader))
+			body.WriteString(subtleStyle.Render(workspaceHeader))
+		} else {
+			body.WriteString(subtleStyle.Render(globalHeader))
+			body.WriteString(activeLabelStyle.Render(workspaceHeader))
+		}
+		body.WriteString("\n")
 		for index, target := range targets {
-			prefix := "  "
-			style := subtleStyle
-			if index == m.modelTargetCursor {
-				prefix = "› "
-				style = activeLabelStyle
-			}
-			body.WriteString(prefix)
-			body.WriteString(style.Render(target))
-			body.WriteString(subtleStyle.Render("  " + targetModelSummary(m.draftConfig, target)))
+			body.WriteString(subtleStyle.Render(padModelCell(target, roleWidth)))
+			body.WriteString(m.renderModelTableCell(
+				m.globalModelSummary(target), cellWidth,
+				index == m.modelTargetCursor && m.modelScopeCursor == modelScopeGlobal, false,
+			))
+			body.WriteString(m.renderModelTableCell(
+				m.workspaceModelSummary(target), cellWidth,
+				index == m.modelTargetCursor && m.modelScopeCursor == modelScopeWorkspace,
+				!m.workspaceModelEditable(target),
+			))
 			body.WriteString("\n")
 		}
 	}
@@ -263,12 +275,59 @@ func (m model) viewModelTargets() string {
 		body.WriteString("\n")
 	}
 	body.WriteString("\n")
-	help := "↑/↓ select · enter edit · g model groups · i inherit/clear · esc chat"
+	help := "←/→ scope · ↑/↓ role · enter change · i reset selected cell · g global groups · esc chat"
 	if m.isStandaloneScreen(screenModels) {
-		help = "↑/↓ select · enter edit · g model groups · i inherit/clear · esc quit"
+		help = "←/→ scope · ↑/↓ role · enter change · i reset selected cell · g global groups · esc quit"
 	}
 	body.WriteString(helpStyle.Render(help))
 	return frameStyle.Width(max(36, m.width-4)).Render(body.String())
+}
+
+func (m model) modelPickerTitle() string {
+	scope := "GLOBAL"
+	if m.modelWorkspace {
+		scope = "WORKSPACE"
+	}
+	return "q · " + scope + " · " + m.modelTarget + " model"
+}
+
+func (m model) modelTargetScope() string {
+	if m.modelWorkspace {
+		return "Scope · WORKSPACE · Enter saves this Role override to .q/model.json"
+	}
+	return "Scope · GLOBAL · saves to ~/.q/config.yaml"
+}
+
+func (m model) modelSaveLabel() string {
+	if m.modelWorkspace {
+		return "save workspace override"
+	}
+	switch m.modelTarget {
+	case "", defaultModelTarget:
+		return "save global default"
+	case embeddingModelTarget:
+		return "continue global embedding setting"
+	default:
+		return "continue/save global role setting"
+	}
+}
+
+func (m model) renderModelTableCell(value string, width int, selected, disabled bool) string {
+	prefix := "  "
+	style := subtleStyle
+	if disabled {
+		value = "— " + value
+	}
+	if selected {
+		prefix = "› "
+		style = activeLabelStyle
+	}
+	return style.Render(padModelCell(prefix+value, width))
+}
+
+func padModelCell(value string, width int) string {
+	value = ansi.Truncate(value, max(1, width-1), "…")
+	return value + strings.Repeat(" ", max(0, width-ansi.StringWidth(value)))
 }
 
 func (m model) viewModelGroups() string {
@@ -277,6 +336,8 @@ func (m model) viewModelGroups() string {
 	body.WriteString(titleStyle.Render("q · model groups"))
 	body.WriteString("\n")
 	m.writeWorkspacePath(&body)
+	body.WriteString(subtleStyle.Render("Scope · GLOBAL · saves to ~/.q/config.yaml"))
+	body.WriteString("\n")
 	body.WriteString(subtleStyle.Render("Ordered Gateway models with transient fallback"))
 	body.WriteString("\n\n")
 	if len(names) == 0 {
@@ -570,9 +631,11 @@ func (m model) viewEmbeddingDimensions() string {
 }
 func (m model) viewContextWindow() string {
 	var body strings.Builder
-	body.WriteString(titleStyle.Render("q · Gateway model context"))
+	body.WriteString(titleStyle.Render("q · GLOBAL Gateway model context"))
 	body.WriteString("\n")
 	m.writeWorkspacePath(&body)
+	body.WriteString(subtleStyle.Render("Scope · GLOBAL provider metadata · applies wherever this Gateway model is used"))
+	body.WriteString("\n")
 	body.WriteString(subtleStyle.Render(m.modelSelection.ID))
 	body.WriteString("\n\n")
 	body.WriteString(m.modelContextWindow.View())
@@ -593,33 +656,57 @@ func (m model) viewContextWindow() string {
 	return frameStyle.Width(max(36, m.width-4)).Render(body.String())
 }
 
-func targetModelSummary(value config.Config, target string) string {
+func (m model) globalModelSummary(target string) string {
+	value := m.draftConfig
 	if target == defaultModelTarget {
-		return value.Provider.Model + " · main loop"
+		return value.Provider.Model
 	}
 	if target == embeddingModelTarget {
 		if value.Embedding.Model == "" {
 			return "not configured"
 		}
-		return fmt.Sprintf("%s · %d dimensions", value.Embedding.Model, value.Embedding.Dimensions)
+		return value.Embedding.Model
 	}
 	agent, configured := value.Agents.Roles[target]
 	if configured && agent.Group != "" {
-		summary := "group " + agent.Group
-		if group, found := value.ModelGroups[agent.Group]; found {
-			summary += fmt.Sprintf(" · %d candidates", len(group.Candidates))
-		}
-		if agent.ReasoningEffort != "" {
-			summary += " · effort " + agent.ReasoningEffort
-		}
-		return summary
+		return "group/" + agent.Group
 	}
-	if !configured || agent.Model == "" {
-		return "inherits default · " + value.Provider.Model
+	if configured && agent.Model != "" {
+		return agent.Model
 	}
-	summary := agent.Model
-	if agent.ReasoningEffort != "" {
-		summary += " · effort " + agent.ReasoningEffort
+	return "inherit → " + value.Provider.Model
+}
+
+func (m model) workspaceModelSummary(target string) string {
+	if !workspace.ModelOverrideAllowed(target) {
+		return "shared GLOBAL"
 	}
-	return summary
+	if m.workspaceStore == nil {
+		return "unavailable"
+	}
+	if override, found := m.workspaceOverride(target); found {
+		return override.Model
+	}
+	if target == defaultModelTarget {
+		return "inherit → " + m.draftConfig.Provider.Model
+	}
+	agent, err := m.activeConfig().EffectiveAgent(target)
+	if err != nil {
+		return "inherit"
+	}
+	if agent.Group != "" {
+		return "inherit → group/" + agent.Group
+	}
+	return "inherit → " + agent.Model
+}
+
+func (m model) workspaceModelEditable(target string) bool {
+	return m.workspaceStore != nil && workspace.ModelOverrideAllowed(target)
+}
+
+func modelTargetLabel(target string) string {
+	if target == defaultModelTarget {
+		return "default"
+	}
+	return target
 }

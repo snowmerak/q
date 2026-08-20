@@ -37,7 +37,7 @@ func (m model) startPlan(objective string) (tea.Model, tea.Cmd) {
 	m.messages = append(m.messages, message)
 	learning := m.observeLearningMessage(message)
 	if m.memory == nil {
-		m.memory = memoryForPlan(m.config)
+		m.memory = memoryForPlan(m.activeConfig())
 	}
 	m.memory.Append(message)
 	m.pendingMessage = message
@@ -191,7 +191,7 @@ func (m model) resumePlanExecution() (tea.Model, tea.Cmd) {
 func (m *model) sendPlanResumeRequest(checkpoint subagent.ExecutionCheckpoint) tea.Cmd {
 	configuredClient := m.client
 	toolRuntime := m.toolRuntime
-	value := m.config
+	value := m.activeConfig()
 	archive := m.archive
 	turnContext := m.activeTurnContext()
 	turnID := m.turnID
@@ -288,7 +288,7 @@ func renderPlanRecoveryContext(checkpoint subagent.ExecutionCheckpoint, detailed
 func (m *model) sendPlanRequest(objective string) tea.Cmd {
 	configuredClient := m.client
 	toolRuntime := m.toolRuntime
-	value := m.config
+	value := m.activeConfig()
 	runID := m.runID
 	archive := m.archive
 	turnContext := m.activeTurnContext()
