@@ -3232,8 +3232,6 @@ func streamSingleChat(
 	emitAgentEvent(ctx, events, agentEvent{response: response, requestEstimate: requestEstimate, err: err})
 }
 
-const maximumToolRounds = 32
-
 func streamAgentLoop(
 	ctx context.Context,
 	configuredClient chatClient,
@@ -3253,7 +3251,7 @@ func streamAgentLoop(
 	if activeTask != nil {
 		history = insertLeadingInstruction(history, activeTaskResumeMessage(*activeTask))
 	}
-	for round := 0; round < maximumToolRounds; round++ {
+	for round := 0; ; round++ {
 		requestEstimate := memory.CountMessages(history)
 		request := client.ChatRequest{
 			Model: modelID, Messages: providerMessages(history, coalesceInstructions), ConversationID: conversationID, Tools: availableTools,
@@ -3431,7 +3429,6 @@ func streamAgentLoop(
 			}
 		}
 	}
-	emitAgentEvent(ctx, events, agentEvent{err: fmt.Errorf("agent stopped after %d tool rounds", maximumToolRounds)})
 }
 
 func orchestrationToolResult(call client.ToolCall, content string, isError bool) client.Message {
