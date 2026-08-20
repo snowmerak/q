@@ -1804,6 +1804,39 @@ func modelSupportsChatStreaming(
 	}
 }
 
+// modelNeedsSystemInstructionCoalescing identifies OpenAI-compatible routes
+// whose downstream chat templates may treat developer messages as additional
+// system messages and reject them after the first message.
+func modelNeedsSystemInstructionCoalescing(
+	gatewayConfig gateway.Config,
+	groups map[string]config.ModelGroupConfig,
+	modelID string,
+	seen map[string]bool,
+) bool {
+	if name, grouped := strings.CutPrefix(modelID, "group/"); grouped {
+		if seen == nil {
+			seen = make(map[string]bool)
+		}
+		if seen[name] {
+			return false
+		}
+		seen[name] = true
+		defer delete(seen, name)
+		group, found := groups[name]
+		if !found {
+			return false
+		}
+		for _, candidate := range group.Candidates {
+			if modelNeedsSystemInstructionCoalescing(gatewayConfig, groups, candidate.Model, seen) {
+				return true
+			}
+		}
+		return false
+	}
+	providerIndex, _, found := gatewayModelLocation(gatewayConfig, modelID)
+	return found && gatewayConfig.Providers[providerIndex].Type == "openai-compatible"
+}
+
 func (m model) gatewayContextWindowOverride(modelID string) (int64, bool) {
 	providerIndex, upstreamID, found := gatewayModelLocation(m.gatewayConfig, modelID)
 	if !found {
@@ -3157,11 +3190,14 @@ func (m *model) sendChatRequest() tea.Cmd {
 	turnContext := m.activeTurnContext()
 	turnID := m.turnID
 	streamEnabled := m.streamsActiveChat()
+	coalesceInstructions := modelNeedsSystemInstructionCoalescing(
+		m.gatewayConfig, m.activeConfig().ModelGroups, modelID, nil,
+	)
 	activeTask := cloneActiveTask(m.activeTask)
 	if toolRuntime == nil && !streamEnabled {
 		return func() tea.Msg {
 			response, err := chatWithConversationRecovery(turnContext, configuredClient, client.ChatRequest{
-				Model: modelID, Messages: providerMessages(history), ConversationID: conversationID,
+				Model: modelID, Messages: providerMessages(history, coalesceInstructions), ConversationID: conversationID,
 			})
 			return chatResultMsg{turnID: turnID, response: response, requestEstimate: m.requestEstimate, err: err}
 		}
@@ -3169,9 +3205,9 @@ func (m *model) sendChatRequest() tea.Cmd {
 	events := make(chan agentEvent)
 	return func() tea.Msg {
 		if toolRuntime == nil && streamEnabled {
-			go streamSingleChat(turnContext, configuredClient, modelID, history, conversationID, m.requestEstimate, events)
+			go streamSingleChat(turnContext, configuredClient, modelID, history, conversationID, coalesceInstructions, m.requestEstimate, events)
 		} else {
-			go streamAgentLoop(turnContext, configuredClient, toolRuntime, modelID, history, conversationID, activeTask, streamEnabled, events)
+			go streamAgentLoop(turnContext, configuredClient, toolRuntime, modelID, history, conversationID, activeTask, streamEnabled, coalesceInstructions, events)
 		}
 		return waitAgentEvent(events, turnID)()
 	}
@@ -3183,12 +3219,13 @@ func streamSingleChat(
 	modelID string,
 	history []client.Message,
 	conversationID string,
+	coalesceInstructions bool,
 	requestEstimate int,
 	events chan<- agentEvent,
 ) {
 	defer close(events)
 	response, err := streamChatWithConversationRecovery(ctx, configuredClient, client.ChatRequest{
-		Model: modelID, Messages: providerMessages(history), ConversationID: conversationID,
+		Model: modelID, Messages: providerMessages(history, coalesceInstructions), ConversationID: conversationID,
 	}, func(delta chatStreamDelta) bool {
 		return emitAgentEvent(ctx, events, agentEvent{streamDelta: &delta})
 	})
@@ -3206,6 +3243,7 @@ func streamAgentLoop(
 	conversationID string,
 	activeTask *workspace.ActiveTask,
 	streamEnabled bool,
+	coalesceInstructions bool,
 	events chan<- agentEvent,
 ) {
 	defer close(events)
@@ -3213,12 +3251,12 @@ func streamAgentLoop(
 	toolCalls := 0
 	taskStarted := activeTask != nil
 	if activeTask != nil {
-		history = append(history, activeTaskResumeMessage(*activeTask))
+		history = insertLeadingInstruction(history, activeTaskResumeMessage(*activeTask))
 	}
 	for round := 0; round < maximumToolRounds; round++ {
 		requestEstimate := memory.CountMessages(history)
 		request := client.ChatRequest{
-			Model: modelID, Messages: providerMessages(history), ConversationID: conversationID, Tools: availableTools,
+			Model: modelID, Messages: providerMessages(history, coalesceInstructions), ConversationID: conversationID, Tools: availableTools,
 		}
 		var response *client.ChatResponse
 		var err error
@@ -3254,7 +3292,7 @@ func streamAgentLoop(
 				return
 			}
 			history = append(history, assistant, client.Message{
-				Role: client.RoleDeveloper,
+				Role: client.RoleUser,
 				Content: "This task was started with task_start and is not complete until you call task_complete. " +
 					"Call task_complete now with the final outcome and summary; " +
 					"if more work is required, continue the work first.",
@@ -3414,6 +3452,17 @@ func activeTaskResumeMessage(task workspace.ActiveTask) client.Message {
 	return client.Message{Role: client.RoleDeveloper, Content: content}
 }
 
+func insertLeadingInstruction(messages []client.Message, instruction client.Message) []client.Message {
+	index := 0
+	for index < len(messages) && (messages[index].Role == client.RoleSystem || messages[index].Role == client.RoleDeveloper) {
+		index++
+	}
+	result := make([]client.Message, 0, len(messages)+1)
+	result = append(result, messages[:index]...)
+	result = append(result, instruction)
+	return append(result, messages[index:]...)
+}
+
 func emitAgentEvent(ctx context.Context, events chan<- agentEvent, event agentEvent) bool {
 	select {
 	case events <- event:
@@ -3434,16 +3483,35 @@ func waitAgentEvent(events <-chan agentEvent, turnID uint64) tea.Cmd {
 }
 
 // providerMessages removes q-internal message names that some compatible APIs
-// reject outside the user role. Names remain in memory for summary detection
-// and transcript labels, but are not part of the provider wire request.
-func providerMessages(messages []client.Message) []client.Message {
+// reject outside the user role. For OpenAI-compatible routes it also combines
+// the leading system/developer instruction block because strict local chat
+// templates commonly treat every developer message as a system message while
+// allowing a system message only at the beginning.
+func providerMessages(messages []client.Message, coalesceInstructions bool) []client.Message {
 	result := append([]client.Message(nil), messages...)
 	for index := range result {
 		if result[index].Role != client.RoleUser {
 			result[index].Name = ""
 		}
 	}
-	return result
+	if !coalesceInstructions {
+		return result
+	}
+	leading := 0
+	var instructions []string
+	for leading < len(result) && (result[leading].Role == client.RoleSystem || result[leading].Role == client.RoleDeveloper) {
+		if content := strings.TrimSpace(result[leading].TextContent()); content != "" {
+			instructions = append(instructions, content)
+		}
+		leading++
+	}
+	if leading == 0 {
+		return result
+	}
+	merged := client.Message{Role: client.RoleSystem, Content: strings.Join(instructions, "\n\n")}
+	coalesced := make([]client.Message, 0, len(result)-leading+1)
+	coalesced = append(coalesced, merged)
+	return append(coalesced, result[leading:]...)
 }
 
 func (m *model) rollbackPendingMessage() {

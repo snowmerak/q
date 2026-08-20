@@ -2593,6 +2593,61 @@ func TestPromptCacheStatusReportsMissingProviderAccounting(t *testing.T) {
 	}
 }
 
+func TestProviderMessagesCoalesceLeadingInstructionsForCompatibleTemplates(t *testing.T) {
+	messages := []client.Message{
+		{Role: client.RoleSystem, Name: "configured", Content: "Configured system prompt."},
+		{Role: client.RoleDeveloper, Name: "workspace", Content: "Workspace instructions."},
+		{Role: client.RoleDeveloper, Name: "orchestration", Content: "Orchestration instructions."},
+		{Role: client.RoleUser, Content: "hello"},
+	}
+
+	coalesced := providerMessages(messages, true)
+	if len(coalesced) != 2 || coalesced[0].Role != client.RoleSystem || coalesced[0].Name != "" ||
+		coalesced[1].Role != client.RoleUser {
+		t.Fatalf("coalesced messages = %#v", coalesced)
+	}
+	for _, expected := range []string{"Configured system prompt.", "Workspace instructions.", "Orchestration instructions."} {
+		if !strings.Contains(coalesced[0].Content, expected) {
+			t.Fatalf("coalesced system prompt omitted %q: %q", expected, coalesced[0].Content)
+		}
+	}
+
+	preserved := providerMessages(messages, false)
+	if len(preserved) != len(messages) || preserved[1].Role != client.RoleDeveloper || preserved[1].Name != "" {
+		t.Fatalf("native provider messages = %#v", preserved)
+	}
+}
+
+func TestOpenAICompatibleChatCoalescesInitialRuntimeInstructions(t *testing.T) {
+	value := config.Default()
+	value.Provider.Model = "lms/local-model"
+	configuredClient := &fakeClient{}
+	m := newModel(context.Background(), config.Store{Dir: t.TempDir()}, nil)
+	workspaceStore := workspace.Store{Root: t.TempDir()}
+	m.workspaceStore = &workspaceStore
+	m.toolRuntime = &fakeAgentTools{}
+	m.enterChat(value, configuredClient)
+	m.gatewayConfig = gateway.Config{Providers: []gateway.ProviderConfig{{
+		ID: "lms", Prefix: "lms", Type: "openai-compatible", Enabled: true,
+	}}}
+	m.input.SetValue("hello")
+	updated, command := m.submitChat()
+	m = updated.(model)
+	updated, _ = m.Update(nextAgentMessage(t, command))
+	m = updated.(model)
+
+	if len(configuredClient.requests) != 1 || len(configuredClient.requests[0].Messages) != 2 {
+		t.Fatalf("compatible request messages = %#v", configuredClient.requests)
+	}
+	requestMessages := configuredClient.requests[0].Messages
+	if requestMessages[0].Role != client.RoleSystem || requestMessages[1].Role != client.RoleUser ||
+		!strings.Contains(requestMessages[0].Content, "You are a helpful assistant.") ||
+		!strings.Contains(requestMessages[0].Content, "Runtime environment:") ||
+		!strings.Contains(requestMessages[0].Content, "Use task_start") {
+		t.Fatalf("compatible request instructions = %#v", requestMessages)
+	}
+}
+
 func TestChatExecutesToolCallsAndContinuesTurn(t *testing.T) {
 	value := config.Default()
 	value.Provider.Model = "tool-model"
@@ -2681,9 +2736,9 @@ func TestChatExecutesToolCallsAndContinuesTurn(t *testing.T) {
 		t.Fatalf("tool continuation = %#v", continuation)
 	}
 	completionRequest := configuredClient.requests[2]
-	if len(completionRequest.Messages) < 2 || !strings.Contains(
-		completionRequest.Messages[len(completionRequest.Messages)-1].Content, "started with task_start",
-	) {
+	if len(completionRequest.Messages) < 2 ||
+		completionRequest.Messages[len(completionRequest.Messages)-1].Role != client.RoleUser ||
+		!strings.Contains(completionRequest.Messages[len(completionRequest.Messages)-1].Content, "started with task_start") {
 		t.Fatalf("completion enforcement request = %#v", completionRequest.Messages)
 	}
 	var assistantCall, toolResult client.Message
@@ -3048,9 +3103,16 @@ func TestRestoredActiveTaskCanCompleteInANewTurn(t *testing.T) {
 			len(configuredClient.requests), m.activeTask, m.messages)
 	}
 	resumePromptFound := false
+	conversationStarted := false
 	for _, message := range configuredClient.requests[0].Messages {
+		if message.Role == client.RoleUser || message.Role == client.RoleAssistant || message.Role == client.RoleTool {
+			conversationStarted = true
+		}
 		if message.Role == client.RoleDeveloper && strings.Contains(message.Content, "Finish durable work") &&
 			strings.Contains(message.Content, "verify it") {
+			if conversationStarted {
+				t.Fatalf("active task resume prompt appeared after conversation history: %#v", configuredClient.requests[0].Messages)
+			}
 			resumePromptFound = true
 			break
 		}

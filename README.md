@@ -185,6 +185,12 @@ fragments are assembled and executed through the ordinary tool lifecycle.
 Native Anthropic chat retains its one-shot behavior. A model group streams only
 when every candidate supports chat streaming.
 
+For OpenAI-compatible routes, q combines the leading system and developer
+instruction block into one wire-level system message. Internal instruction
+boundaries remain separate in workspace state, while strict local Jinja chat
+templates that permit a system message only at the beginning receive a
+compatible request shape.
+
 User input and tool output remain literal. Outside inline code and fenced code
 blocks, common display-math commands such as `$\rightarrow$`, `$\leq$`, and
 `$\infty$` are rendered as their terminal-friendly Unicode symbols.
