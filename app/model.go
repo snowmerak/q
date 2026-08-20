@@ -1145,6 +1145,12 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 				m.status = "Plan completed · ctrl+g inspect subagent trace"
 			}
 		}
+		if cacheStatus := promptCacheStatus(message.response.Usage); cacheStatus != "" {
+			if m.status != "" {
+				m.status += " · "
+			}
+			m.status += cacheStatus
+		}
 		m.compactionTarget = 0
 		m.resize(m.width, m.height)
 		if err := m.saveWorkspaceSession(); err != nil {
@@ -4659,6 +4665,18 @@ func (m model) contextLabel() string {
 
 func formatTokens(tokens int) string {
 	return formatTokenCount(int64(tokens))
+}
+
+func promptCacheStatus(usage client.Usage) string {
+	if usage.PromptTokens <= 0 {
+		return ""
+	}
+	if usage.PromptDetails == nil {
+		return fmt.Sprintf("Prompt cache not reported · prompt %s", formatTokens(usage.PromptTokens))
+	}
+	cached := max(0, usage.PromptDetails.CachedTokens)
+	percent := cached * 100 / usage.PromptTokens
+	return fmt.Sprintf("Prompt cache %d%% · %s/%s", percent, formatTokens(cached), formatTokens(usage.PromptTokens))
 }
 
 func formatTokenCount(tokens int64) string {

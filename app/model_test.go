@@ -117,6 +117,7 @@ func TestManagedClientFactoryUsesGatewayAPIKey(t *testing.T) {
 type fakeClient struct {
 	requests      []client.ChatRequest
 	models        []client.Model
+	usage         client.Usage
 	listModelsErr error
 	listCalls     int
 	closed        bool
@@ -317,6 +318,7 @@ func (f *fakeClient) Chat(_ context.Context, request client.ChatRequest) (*clien
 		Choices: []client.Choice{{Message: client.Message{
 			Role: client.RoleAssistant, Content: "reply " + string(rune('0'+n)),
 		}}},
+		Usage: f.usage,
 	}, nil
 }
 
@@ -2564,6 +2566,30 @@ func TestChatCarriesHistoryAcrossTurns(t *testing.T) {
 		fake.requests[1].Messages[2].Content != "reply 1" ||
 		fake.requests[1].ConversationID != "conversation-1" {
 		t.Fatalf("second request = %#v", fake.requests[1])
+	}
+}
+
+func TestChatStatusShowsPromptCacheUsage(t *testing.T) {
+	value := config.Default()
+	value.Provider.Model = "test-model"
+	fake := &fakeClient{usage: client.Usage{
+		PromptTokens:  31_000,
+		PromptDetails: &client.TokenDetails{CachedTokens: 24_800},
+	}}
+	m := newModel(context.Background(), config.Store{Dir: t.TempDir()}, nil)
+	m.enterChat(value, fake)
+	m = submitAndReceive(t, m, "measure cache usage")
+	if !strings.Contains(m.status, "Prompt cache 80% · 24.8k/31.0k") {
+		t.Fatalf("cache status = %q", m.status)
+	}
+}
+
+func TestPromptCacheStatusReportsMissingProviderAccounting(t *testing.T) {
+	if got := promptCacheStatus(client.Usage{PromptTokens: 31_000}); got != "Prompt cache not reported · prompt 31.0k" {
+		t.Fatalf("cache status = %q", got)
+	}
+	if got := promptCacheStatus(client.Usage{}); got != "" {
+		t.Fatalf("empty cache status = %q", got)
 	}
 }
 
