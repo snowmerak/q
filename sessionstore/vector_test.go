@@ -99,6 +99,66 @@ func TestHNSWVectorSearchPersistsUpdatesAndFilters(t *testing.T) {
 	}
 }
 
+func TestHNSWLoadedIndexRebuildsBeforeAppend(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		save func(*Store, Record) error
+	}{
+		{name: "Save", save: func(store *Store, record Record) error {
+			_, err := store.Save(record)
+			return err
+		}},
+		{name: "SaveBatch", save: func(store *Store, record Record) error {
+			_, err := store.SaveBatch([]Record{record})
+			return err
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			root := t.TempDir()
+			store, err := OpenWithOptions(root, OpenOptions{Vector: testVectorConfig()})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := test.save(store, Record{
+				ID: "before-reopen", Kind: KindMessage, Content: "first",
+				Embedding: &Embedding{Model: "embed-test", Vector: []float32{1, 0, 0}},
+			}); err != nil {
+				t.Fatal(err)
+			}
+			if err := store.Close(); err != nil {
+				t.Fatal(err)
+			}
+
+			reopened, err := OpenWithOptions(root, OpenOptions{Vector: testVectorConfig()})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer reopened.Close()
+			if reopened.vectors.appendable {
+				t.Fatal("loaded HNSW graph unexpectedly marked appendable")
+			}
+			if err := test.save(reopened, Record{
+				ID: "after-reopen", Kind: KindMessage, Content: "second",
+				Embedding: &Embedding{Model: "embed-test", Vector: []float32{0, 1, 0}},
+			}); err != nil {
+				t.Fatal(err)
+			}
+			if !reopened.vectors.appendable {
+				t.Fatal("rebuilt HNSW graph is not appendable")
+			}
+			result, err := reopened.Search(context.Background(), SearchOptions{
+				Vector: &VectorQuery{Embedding: []float32{0, 1, 0}}, Limit: 2,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if result.Total != 2 || len(result.Hits) != 2 || result.Hits[0].Record.ID != "after-reopen" {
+				t.Fatalf("rebuilt vector result = %#v", result)
+			}
+		})
+	}
+}
+
 func TestHNSWHybridSearchFusesTextAndVectorCandidates(t *testing.T) {
 	store, err := OpenWithOptions(t.TempDir(), OpenOptions{Vector: testVectorConfig()})
 	if err != nil {

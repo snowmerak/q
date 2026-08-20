@@ -101,6 +101,10 @@ type vectorIndex struct {
 	projectionToID map[string]uint64
 	nextID         uint64
 	dirty          bool
+	// goformersearch v0.1.0 does not restore the private RNG used by Add when
+	// loading an HNSW graph. A loaded graph remains searchable, but it must be
+	// rebuilt from source records before accepting another vector.
+	appendable bool
 }
 
 type vectorResult struct {
@@ -117,7 +121,7 @@ func newVectorIndex(config VectorConfig) *vectorIndex {
 	)
 	return &vectorIndex{
 		config: config, graph: graph, idToProjection: make(map[uint64]vectorProjectionRef),
-		projectionToID: make(map[string]uint64), nextID: 1,
+		projectionToID: make(map[string]uint64), nextID: 1, appendable: true,
 	}
 }
 
@@ -197,6 +201,9 @@ func (v *vectorIndex) addRecord(record Record) (bool, error) {
 	for _, projection := range recordEmbeddings(record) {
 		if !v.matches(&projection.Embedding) {
 			continue
+		}
+		if !v.appendable {
+			return added, errors.New("sessionstore: loaded HNSW index must be rebuilt before adding vectors")
 		}
 		if err := validateFiniteNonzeroVector(projection.Embedding.Vector); err != nil {
 			return added, fmt.Errorf("sessionstore: HNSW projection %q for record %q: %w", projection.ID, record.ID, err)

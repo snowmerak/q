@@ -278,8 +278,15 @@ func (s *Store) Save(record Record) (Record, error) {
 	}
 	if s.vectors != nil {
 		if previous == nil {
-			if _, err := s.vectors.addRecord(prepared); err != nil {
-				return cloneRecord(prepared), &IndexingError{RecordID: prepared.ID, Err: err}
+			if !s.vectors.appendable && len(recordEmbeddings(prepared)) > 0 {
+				if err := s.rebuildVectorsLocked(); err != nil {
+					s.vectors = nil
+					return cloneRecord(prepared), &IndexingError{RecordID: prepared.ID, Err: err}
+				}
+			} else {
+				if _, err := s.vectors.addRecord(prepared); err != nil {
+					return cloneRecord(prepared), &IndexingError{RecordID: prepared.ID, Err: err}
+				}
 			}
 		} else if !recordEmbeddingsEqual(*previous, prepared) {
 			if err := s.rebuildVectorsLocked(); err != nil {
@@ -366,7 +373,7 @@ func (s *Store) SaveBatch(records []Record) ([]Record, error) {
 	if err := s.index.Batch(batch); err != nil {
 		return cloneRecordSlice(prepared), fmt.Errorf("sessionstore: index record batch: %w", err)
 	}
-	if s.vectors != nil && vectorRebuild {
+	if s.vectors != nil && (vectorRebuild || (!s.vectors.appendable && len(vectorAdds) > 0)) {
 		if err := s.rebuildVectorsLocked(); err != nil {
 			s.vectors = nil
 			return cloneRecordSlice(prepared), &IndexingError{Err: err}
