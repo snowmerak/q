@@ -65,6 +65,11 @@ func TestRuntimeListsAndCallsBuiltinTools(t *testing.T) {
 			t.Fatalf("runtime tools are not sorted: %q before %q", tools[index-1].Function.Name, tools[index].Function.Name)
 		}
 	}
+	for _, tool := range tools {
+		if _, ok := tool.Function.Parameters["properties"].(map[string]any); !ok {
+			t.Fatalf("runtime tool %q has invalid properties: %#v", tool.Function.Name, tool.Function.Parameters["properties"])
+		}
+	}
 	if !runtimeHasTool(runtime, "search_skills") || !runtimeHasTool(runtime, "get_skill") || !runtimeHasTool(runtime, "learn") {
 		t.Fatalf("skill retrieval tools are unavailable: %#v", runtime.Tools())
 	}
@@ -694,6 +699,26 @@ func runtimeHasTool(runtime *Runtime, name string) bool {
 		}
 	}
 	return false
+}
+
+func TestSchemaObjectAddsPropertiesToEmptyObjectSchema(t *testing.T) {
+	schema, err := schemaObject(map[string]any{"type": "object"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	properties, ok := schema["properties"].(map[string]any)
+	if !ok || len(properties) != 0 {
+		t.Fatalf("properties = %#v", schema["properties"])
+	}
+
+	existing := map[string]any{"value": map[string]any{"type": "string"}}
+	schema, err = schemaObject(map[string]any{"type": "object", "properties": existing})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(schema["properties"], existing) {
+		t.Fatalf("existing properties changed: %#v", schema["properties"])
+	}
 }
 
 func seedGlobalLibraryRecords(t *testing.T, dir string, records ...sessionstore.Record) {

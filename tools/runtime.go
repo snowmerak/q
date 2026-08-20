@@ -551,6 +551,11 @@ func schemaObject(schema any) (map[string]any, error) {
 	if err := json.Unmarshal(body, &object); err != nil {
 		return nil, err
 	}
+	if object["type"] == "object" {
+		if properties, found := object["properties"]; !found || properties == nil {
+			object["properties"] = map[string]any{}
+		}
+	}
 	return object, nil
 }
 
