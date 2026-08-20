@@ -1,10 +1,11 @@
 # q
 
 `q` is a workspace-native terminal agent built with Bubble Tea. It combines a
-multi-provider chat client, approval-gated planning and execution, isolated
-subagents, ordered model fallback, durable workspace history, a shared Library
-for Agent Skills and propositions, read-only language-server queries, Loom
-artifacts, and an interactive Git commit workflow.
+multi-provider chat client with streamed reasoning and responses, approval-gated
+planning and execution, isolated subagents, ordered model fallback, durable
+workspace history, a shared Library for Agent Skills and propositions,
+read-only language-server queries, Loom artifacts, and an interactive Git
+commit workflow.
 
 `q` embeds [`snowmerak/llm-provider`](https://github.com/snowmerak/llm-provider)
 and supervises its OpenAI-compatible Gateway as a child of the current `q`
@@ -177,7 +178,16 @@ screen without discarding editor state or interrupting an active turn.
 | `Esc` | Leave the current screen or quit chat. |
 
 Assistant responses render as terminal Markdown using the detected terminal
-theme and current viewport width. User input and tool output remain literal.
+theme and current viewport width. OpenAI-compatible, OpenRouter, xAI/Grok, and
+Codex routes stream reasoning and response deltas into the chat; reasoning is
+shown separately from the assistant response, while streamed tool-call
+fragments are assembled and executed through the ordinary tool lifecycle.
+Native Anthropic chat retains its one-shot behavior. A model group streams only
+when every candidate supports chat streaming.
+
+User input and tool output remain literal. Outside inline code and fenced code
+blocks, common display-math commands such as `$\rightarrow$`, `$\leq$`, and
+`$\infty$` are rendered as their terminal-friendly Unicode symbols.
 
 ## Planning and execution
 
@@ -498,9 +508,21 @@ The main agent also receives orchestration tools:
 - `ask_to_user` pauses the current turn for a required decision. Choices return
   their stable ID; typing sends a free-form answer instead.
 
+An accepted `task_start` is written immediately to `.q/session.json`. If its
+turn is interrupted or q exits before `task_complete`, the objective,
+completion criteria, and start time are restored on the next launch. The model
+continues the existing lifecycle without calling `task_start` again; a
+successful `task_complete` or `/clear` removes it.
+
 The in-process chat runtime also exposes `learn`, which closes the current
 conversation's learning segment. The standalone `q-mcp` command deliberately
 omits it because an external MCP process does not own the active chat cursor.
+
+Builtin tools are ordered by function name before they enter a model request;
+external MCP server IDs and their imported tools are ordered as well. This
+keeps tool-bearing prompt prefixes stable across q restarts. MCP object schemas
+with no input fields are normalized to include `properties: {}` for strict
+OpenAI-compatible validators.
 
 ### External MCP tools
 
@@ -748,6 +770,14 @@ current q process and are never written to the workspace session, so a restart
 always begins a new conversation and cache lifecycle. They are also cleared on
 `/clear`, model/provider changes, and successful context compaction, where the
 request prefix begins a new lifecycle.
+
+After a completed chat response, the footer reports prompt-cache accounting
+when the provider supplies `prompt_tokens_details.cached_tokens`, for example
+`Prompt cache 82% · 49.2k/60.0k`. The numerator is cached prompt tokens and the
+denominator is the complete prompt, including both cached and newly processed
+tokens. When only the total is available, q instead shows
+`Prompt cache not reported · prompt 60.0k`; this means the upstream omitted
+cache accounting, not necessarily that it missed the cache.
 
 Each isolated subagent execution has its own conversation lifecycle. Scout,
 Griller, Planner, Coder, and Planner review reuse the ID returned by their first
