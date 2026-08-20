@@ -311,6 +311,8 @@ type model struct {
 	agentLogVisible    int
 	agentTraces        []agentTrace
 	agentTraceExpanded bool
+	transcriptThoughts []transcriptThought
+	streamResponse     string
 	turnContext        context.Context
 	turnCancel         context.CancelFunc
 	turnID             uint64
@@ -371,6 +373,7 @@ type agentEvent struct {
 	toolCalls       int
 	learningName    string
 	learningPayload json.RawMessage
+	streamDelta     *chatStreamDelta
 	err             error
 }
 
@@ -954,6 +957,25 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		event := message.event
+		if event.streamDelta != nil {
+			delta := *event.streamDelta
+			switch delta.Kind {
+			case chatStreamThinking:
+				if delta.Start || len(m.transcriptThoughts) == 0 {
+					m.transcriptThoughts = append(m.transcriptThoughts, transcriptThought{Before: len(m.messages)})
+				}
+				m.transcriptThoughts[len(m.transcriptThoughts)-1].Content += delta.Content
+				m.status = "Thinking…"
+			case chatStreamResponse:
+				if delta.Start {
+					m.streamResponse = ""
+				}
+				m.streamResponse += delta.Content
+				m.status = "Responding…"
+			}
+			m.refreshTranscript()
+			return m, tea.Batch(m.spinner.Tick, waitAgentEvent(message.events, message.turnID))
+		}
 		if event.learningName != "" {
 			command := m.enqueueLearningSpecial(event.learningName, event.learningPayload)
 			return m, tea.Batch(m.spinner.Tick, waitAgentEvent(message.events, message.turnID), command)
@@ -1001,6 +1023,7 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			return m, m.input.Focus()
 		}
 		if event.message != nil {
+			m.streamResponse = ""
 			m.messages = append(m.messages, *event.message)
 			learning := m.observeLearningMessage(*event.message)
 			if m.memory != nil {
@@ -1038,6 +1061,7 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		m.questionEvents = nil
 		m.questionTurnID = 0
 		m.pendingMessage = client.Message{}
+		m.streamResponse = ""
 		if message.err != nil {
 			m.compactionTarget = 0
 			m.archiveFailure("chat", message.err)
@@ -1710,6 +1734,51 @@ func gatewayModelLocation(value gateway.Config, modelID string) (int, string, bo
 		}
 	}
 	return 0, "", false
+}
+
+// streamsActiveChat limits token streaming to providers that use the shared
+// OpenAI-compatible HTTP transport or the native Codex stream. Native
+// Anthropic retains its existing one-shot chat behavior.
+func (m model) streamsActiveChat() bool {
+	return modelSupportsChatStreaming(m.gatewayConfig, m.activeConfig().ModelGroups, m.activeModel(), nil)
+}
+
+func modelSupportsChatStreaming(
+	gatewayConfig gateway.Config,
+	groups map[string]config.ModelGroupConfig,
+	modelID string,
+	seen map[string]bool,
+) bool {
+	if name, grouped := strings.CutPrefix(modelID, "group/"); grouped {
+		if seen == nil {
+			seen = make(map[string]bool)
+		}
+		if seen[name] {
+			return false
+		}
+		seen[name] = true
+		defer delete(seen, name)
+		group, found := groups[name]
+		if !found || len(group.Candidates) == 0 {
+			return false
+		}
+		for _, candidate := range group.Candidates {
+			if !modelSupportsChatStreaming(gatewayConfig, groups, candidate.Model, seen) {
+				return false
+			}
+		}
+		return true
+	}
+	providerIndex, _, found := gatewayModelLocation(gatewayConfig, modelID)
+	if !found {
+		return false
+	}
+	switch gatewayConfig.Providers[providerIndex].Type {
+	case "openai-compatible", "openrouter", "xai", "grok", "codex", "codex-app-server":
+		return true
+	default:
+		return false
+	}
 }
 
 func (m model) gatewayContextWindowOverride(modelID string) (int64, bool) {
@@ -2949,6 +3018,7 @@ func (m *model) beginTurn() {
 		m.turnCancel()
 	}
 	m.turnID++
+	m.streamResponse = ""
 	m.turnContext, m.turnCancel = context.WithCancel(m.ctx)
 }
 
@@ -2987,6 +3057,7 @@ func (m model) interruptTurn() (tea.Model, tea.Cmd) {
 	m.planArmed = false
 	m.submitPending = false
 	m.pendingMessage = client.Message{}
+	m.streamResponse = ""
 	m.pendingQuestion = askToUserInput{}
 	m.questionAnswer = nil
 	m.questionEvents = nil
@@ -3062,7 +3133,8 @@ func (m *model) sendChatRequest() tea.Cmd {
 	toolRuntime := scopeTools(m.toolRuntime, mcpconfig.RoleDefault)
 	turnContext := m.activeTurnContext()
 	turnID := m.turnID
-	if toolRuntime == nil {
+	streamEnabled := m.streamsActiveChat()
+	if toolRuntime == nil && !streamEnabled {
 		return func() tea.Msg {
 			response, err := chatWithConversationRecovery(turnContext, configuredClient, client.ChatRequest{
 				Model: modelID, Messages: providerMessages(history), ConversationID: conversationID,
@@ -3072,9 +3144,31 @@ func (m *model) sendChatRequest() tea.Cmd {
 	}
 	events := make(chan agentEvent)
 	return func() tea.Msg {
-		go streamAgentLoop(turnContext, configuredClient, toolRuntime, modelID, history, conversationID, events)
+		if toolRuntime == nil && streamEnabled {
+			go streamSingleChat(turnContext, configuredClient, modelID, history, conversationID, m.requestEstimate, events)
+		} else {
+			go streamAgentLoop(turnContext, configuredClient, toolRuntime, modelID, history, conversationID, streamEnabled, events)
+		}
 		return waitAgentEvent(events, turnID)()
 	}
+}
+
+func streamSingleChat(
+	ctx context.Context,
+	configuredClient chatClient,
+	modelID string,
+	history []client.Message,
+	conversationID string,
+	requestEstimate int,
+	events chan<- agentEvent,
+) {
+	defer close(events)
+	response, err := streamChatWithConversationRecovery(ctx, configuredClient, client.ChatRequest{
+		Model: modelID, Messages: providerMessages(history), ConversationID: conversationID,
+	}, func(delta chatStreamDelta) bool {
+		return emitAgentEvent(ctx, events, agentEvent{streamDelta: &delta})
+	})
+	emitAgentEvent(ctx, events, agentEvent{response: response, requestEstimate: requestEstimate, err: err})
 }
 
 const maximumToolRounds = 32
@@ -3086,6 +3180,7 @@ func streamAgentLoop(
 	modelID string,
 	history []client.Message,
 	conversationID string,
+	streamEnabled bool,
 	events chan<- agentEvent,
 ) {
 	defer close(events)
@@ -3094,9 +3189,18 @@ func streamAgentLoop(
 	taskStarted := false
 	for round := 0; round < maximumToolRounds; round++ {
 		requestEstimate := memory.CountMessages(history)
-		response, err := chatWithConversationRecovery(ctx, configuredClient, client.ChatRequest{
+		request := client.ChatRequest{
 			Model: modelID, Messages: providerMessages(history), ConversationID: conversationID, Tools: availableTools,
-		})
+		}
+		var response *client.ChatResponse
+		var err error
+		if streamEnabled {
+			response, err = streamChatWithConversationRecovery(ctx, configuredClient, request, func(delta chatStreamDelta) bool {
+				return emitAgentEvent(ctx, events, agentEvent{streamDelta: &delta})
+			})
+		} else {
+			response, err = chatWithConversationRecovery(ctx, configuredClient, request)
+		}
 		if err != nil {
 			emitAgentEvent(ctx, events, agentEvent{err: err})
 			return
@@ -3308,6 +3412,7 @@ func (m *model) rollbackPendingMessage() {
 		m.input.SetValue(m.pendingMessage.Content)
 	}
 	m.pendingMessage = client.Message{}
+	m.streamResponse = ""
 	m.waiting = false
 	m.compacting = false
 	m.asking = false
@@ -3330,6 +3435,8 @@ func (m *model) enterChat(value config.Config, configuredClient chatClient) {
 	workspaceLearningErr := m.restoreWorkspaceLearning()
 	active := m.activeConfig()
 	m.messages = nil
+	m.transcriptThoughts = nil
+	m.streamResponse = ""
 	if value.Provider.SystemPrompt != "" {
 		m.messages = append(m.messages, client.Message{Role: client.RoleSystem, Content: value.Provider.SystemPrompt})
 	}
@@ -3797,6 +3904,8 @@ func modelGroupChoice(value config.Config, choice string) (string, bool) {
 
 func (m *model) resetConversation() {
 	m.messages = nil
+	m.transcriptThoughts = nil
+	m.streamResponse = ""
 	if m.config.Provider.SystemPrompt != "" {
 		m.messages = append(m.messages, client.Message{Role: client.RoleSystem, Content: m.config.Provider.SystemPrompt})
 	}
@@ -4070,7 +4179,9 @@ func (m *model) refreshTranscript() {
 	if m.screen != screenChat {
 		return
 	}
-	m.viewport.SetContent(renderTranscriptWithStyle(m.messages, m.viewport.Width(), m.dark))
+	m.viewport.SetContent(renderStreamingTranscriptWithStyle(
+		m.messages, m.transcriptThoughts, m.streamResponse, m.viewport.Width(), m.dark,
+	))
 	m.viewport.GotoBottom()
 }
 

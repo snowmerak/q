@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"image/color"
+	"regexp"
 	"strings"
 
 	"charm.land/glamour/v2"
@@ -17,10 +18,39 @@ func renderTranscript(messages []client.Message, width int) string {
 }
 
 func renderTranscriptWithStyle(messages []client.Message, width int, dark bool) string {
+	return renderStreamingTranscriptWithStyle(messages, nil, "", width, dark)
+}
+
+type transcriptThought struct {
+	Before  int
+	Content string
+}
+
+func renderStreamingTranscriptWithStyle(
+	messages []client.Message,
+	thoughts []transcriptThought,
+	streamResponse string,
+	width int,
+	dark bool,
+) string {
 	bodyWidth := max(10, width-2)
 	markdownRenderer, _ := newMarkdownRenderer(bodyWidth, dark)
 	var blocks []string
-	for _, message := range messages {
+	thoughtIndex := 0
+	appendThoughts := func(before int) {
+		for thoughtIndex < len(thoughts) && thoughts[thoughtIndex].Before <= before {
+			content := thoughts[thoughtIndex].Content
+			if content != "" {
+				content = renderMarkdown(markdownRenderer, normalizeDisplaySymbols(content))
+				labelStyle := lipgloss.NewStyle().Bold(true).Foreground(themedColor(dark, "243", "245"))
+				bodyStyle := lipgloss.NewStyle().Italic(true).Foreground(themedColor(dark, "248", "241"))
+				blocks = append(blocks, labelStyle.Render("THINKING")+"\n"+bodyStyle.Width(bodyWidth).Render(content))
+			}
+			thoughtIndex++
+		}
+	}
+	for messageIndex, message := range messages {
+		appendThoughts(messageIndex)
 		if message.Role == client.RoleSystem || message.Role == client.RoleDeveloper {
 			continue
 		}
@@ -40,7 +70,7 @@ func renderTranscriptWithStyle(messages []client.Message, width int, dark bool) 
 		}
 		body := message.TextContent()
 		if message.Role == client.RoleAssistant && body != "" {
-			body = renderMarkdown(markdownRenderer, body)
+			body = renderMarkdown(markdownRenderer, normalizeDisplaySymbols(body))
 		}
 		if len(message.ToolCalls) > 0 {
 			calls := renderToolCalls(message.ToolCalls)
@@ -57,10 +87,87 @@ func renderTranscriptWithStyle(messages []client.Message, width int, dark bool) 
 		}
 		blocks = append(blocks, labelStyle.Render(label)+"\n"+bodyStyle.Width(bodyWidth).Render(body))
 	}
+	appendThoughts(len(messages))
+	if streamResponse != "" {
+		body := renderMarkdown(markdownRenderer, normalizeDisplaySymbols(streamResponse))
+		blocks = append(blocks, assistantLabelStyle.Render("ASSISTANT")+"\n"+assistantBodyStyle.Width(bodyWidth).Render(body))
+	}
 	if len(blocks) == 0 {
 		return emptyStyle.Render("Start a conversation. Your messages stay in memory for this run.")
 	}
 	return strings.Join(blocks, "\n\n")
+}
+
+var displayMathSymbol = regexp.MustCompile(`\$\s*\\(rightarrow|to|leftarrow|leftrightarrow|Rightarrow|Leftarrow|Leftrightarrow|leq|le|geq|ge|neq|times|cdot|pm|infty)\s*\$`)
+
+var displaySymbolReplacer = strings.NewReplacer(
+	`\rightarrow`, "→", `\to`, "→", `\leftarrow`, "←", `\leftrightarrow`, "↔",
+	`\Rightarrow`, "⇒", `\Leftarrow`, "⇐", `\Leftrightarrow`, "⇔",
+	`\leq`, "≤", `\le`, "≤", `\geq`, "≥", `\ge`, "≥", `\neq`, "≠",
+	`\times`, "×", `\cdot`, "·", `\pm`, "±", `\infty`, "∞",
+)
+
+func normalizeDisplaySymbols(source string) string {
+	var result strings.Builder
+	lines := strings.SplitAfter(source, "\n")
+	inFence := false
+	fenceMarker := ""
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "```") || strings.HasPrefix(trimmed, "~~~") {
+			marker := trimmed[:3]
+			if !inFence {
+				inFence, fenceMarker = true, marker
+			} else if marker == fenceMarker {
+				inFence, fenceMarker = false, ""
+			}
+			result.WriteString(line)
+			continue
+		}
+		if inFence {
+			result.WriteString(line)
+			continue
+		}
+		result.WriteString(normalizeInlineDisplaySymbols(line))
+	}
+	return result.String()
+}
+
+func normalizeInlineDisplaySymbols(line string) string {
+	var result strings.Builder
+	for len(line) > 0 {
+		start := strings.IndexByte(line, '`')
+		if start < 0 {
+			result.WriteString(replaceDisplaySymbols(line))
+			break
+		}
+		result.WriteString(replaceDisplaySymbols(line[:start]))
+		run := 1
+		for start+run < len(line) && line[start+run] == '`' {
+			run++
+		}
+		delimiter := strings.Repeat("`", run)
+		end := strings.Index(line[start+run:], delimiter)
+		if end < 0 {
+			result.WriteString(line[start:])
+			break
+		}
+		end += start + run + run
+		result.WriteString(line[start:end])
+		line = line[end:]
+	}
+	return result.String()
+}
+
+func replaceDisplaySymbols(value string) string {
+	value = displayMathSymbol.ReplaceAllStringFunc(value, func(match string) string {
+		parts := displayMathSymbol.FindStringSubmatch(match)
+		if len(parts) != 2 {
+			return match
+		}
+		return displaySymbolReplacer.Replace(`\` + parts[1])
+	})
+	return displaySymbolReplacer.Replace(value)
 }
 
 func newMarkdownRenderer(width int, dark bool) (*glamour.TermRenderer, error) {
