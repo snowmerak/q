@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	goruntime "runtime"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -160,6 +161,9 @@ func newRuntimeWithLSP(ctx context.Context, root string, archive builtin.Archive
 			},
 		})
 	}
+	sort.Slice(runtime.tools, func(i, j int) bool {
+		return runtime.tools[i].Function.Name < runtime.tools[j].Function.Name
+	})
 	return runtime, nil
 }
 

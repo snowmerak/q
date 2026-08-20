@@ -59,6 +59,12 @@ func TestRuntimeListsAndCallsBuiltinTools(t *testing.T) {
 	if len(runtime.Tools()) != 17 {
 		t.Fatalf("runtime tools = %d", len(runtime.Tools()))
 	}
+	tools := runtime.Tools()
+	for index := 1; index < len(tools); index++ {
+		if tools[index-1].Function.Name >= tools[index].Function.Name {
+			t.Fatalf("runtime tools are not sorted: %q before %q", tools[index-1].Function.Name, tools[index].Function.Name)
+		}
+	}
 	if !runtimeHasTool(runtime, "search_skills") || !runtimeHasTool(runtime, "get_skill") || !runtimeHasTool(runtime, "learn") {
 		t.Fatalf("skill retrieval tools are unavailable: %#v", runtime.Tools())
 	}
