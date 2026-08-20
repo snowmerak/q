@@ -8,6 +8,7 @@ import (
 	"reflect"
 	"runtime"
 	"testing"
+	"time"
 
 	"github.com/snowmerak/q/client"
 	"github.com/snowmerak/q/loom"
@@ -16,9 +17,13 @@ import (
 
 func TestStoreRoundTripAndClear(t *testing.T) {
 	store := Store{Root: t.TempDir()}
+	startedAt := time.Date(2026, time.August, 20, 12, 30, 0, 0, time.UTC)
 	want := Session{
 		Transcript: []client.Message{{Role: client.RoleUser, Content: "question"}},
 		Context:    []client.Message{{Role: client.RoleSystem, Name: "q_context_summary", Content: "summary"}},
+		ActiveTask: &ActiveTask{
+			Objective: "finish the durable task", CompletionCriteria: []string{"tests pass"}, StartedAt: startedAt,
+		},
 		Learning: thinker.LearningState{
 			Version: 1, StreamID: "stream", NextCursor: 2,
 			Events: []thinker.LearningEvent{{Cursor: 1, Message: client.Message{Role: client.RoleUser, Content: "durable decision"}}},
@@ -33,7 +38,9 @@ func TestStoreRoundTripAndClear(t *testing.T) {
 	}
 	if got.Version != CurrentVersion || len(got.Transcript) != 1 || got.Transcript[0].Content != "question" ||
 		len(got.Context) != 1 || got.Context[0].Content != "summary" ||
-		got.Learning.StreamID != "stream" || len(got.Learning.Events) != 1 || got.Learning.Events[0].Message.Content != "durable decision" {
+		got.Learning.StreamID != "stream" || len(got.Learning.Events) != 1 || got.Learning.Events[0].Message.Content != "durable decision" ||
+		got.ActiveTask == nil || got.ActiveTask.Objective != "finish the durable task" ||
+		!reflect.DeepEqual(got.ActiveTask.CompletionCriteria, []string{"tests pass"}) || !got.ActiveTask.StartedAt.Equal(startedAt) {
 		t.Fatalf("loaded session = %#v", got)
 	}
 	info, err := os.Stat(store.Path())

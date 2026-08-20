@@ -2609,6 +2609,13 @@ func TestChatExecutesToolCallsAndContinuesTurn(t *testing.T) {
 
 	updated, command = m.Update(nextAgentMessage(t, command))
 	m = updated.(model)
+	startedSession, err := workspaceStore.Load()
+	if err != nil || startedSession.ActiveTask == nil || startedSession.ActiveTask.Objective != "Create a Go project" {
+		t.Fatalf("persisted active task = %#v, err = %v", startedSession.ActiveTask, err)
+	}
+
+	updated, command = m.Update(nextAgentMessage(t, command))
+	m = updated.(model)
 	if !strings.Contains(m.status, "Running tool") || !strings.Contains(m.status, "write main.go") {
 		t.Fatalf("tool-start progress status = %q", m.status)
 	}
@@ -2677,6 +2684,10 @@ func TestChatExecutesToolCallsAndContinuesTurn(t *testing.T) {
 	if m.messages[len(m.messages)-1].Content != "Created main.go" || !strings.Contains(m.status, "Tools used · 1") {
 		t.Fatalf("final transcript = %#v, status = %q", m.messages, m.status)
 	}
+	completedSession, err := workspaceStore.Load()
+	if err != nil || completedSession.ActiveTask != nil {
+		t.Fatalf("completed active task = %#v, err = %v", completedSession.ActiveTask, err)
+	}
 	segment, learningMessages, ok := m.learning.Next()
 	if !ok || segment.Reason != thinker.BoundaryTaskComplete || len(learningMessages) != 2 ||
 		learningMessages[0].Role != client.RoleUser || learningMessages[1].Name != thinker.TaskCompleteEventName ||
@@ -2733,7 +2744,7 @@ func TestAskToUserPausesForAnswerAndResumesSameTask(t *testing.T) {
 	updated, command := m.submitChat()
 	m = updated.(model)
 
-	for index := 0; index < 5; index++ {
+	for index := 0; index < 6; index++ {
 		updated, command = m.Update(nextAgentMessage(t, command))
 		m = updated.(model)
 	}
@@ -2964,12 +2975,66 @@ func TestTaskCompleteIsRejectedWithoutTaskStart(t *testing.T) {
 	}
 	foundError := false
 	for _, message := range m.messages {
-		if message.Name == taskCompleteToolName && strings.Contains(message.Content, "requires a successful task_start") {
+		if message.Name == taskCompleteToolName && strings.Contains(message.Content, "requires an active task_start") {
 			foundError = true
 		}
 	}
 	if !foundError {
 		t.Fatalf("premature task_complete error missing from transcript: %#v", m.messages)
+	}
+}
+
+func TestRestoredActiveTaskCanCompleteInANewTurn(t *testing.T) {
+	workspaceStore := workspace.Store{Root: t.TempDir()}
+	startedAt := time.Date(2026, time.August, 20, 10, 0, 0, 0, time.UTC)
+	if err := workspaceStore.Save(workspace.Session{
+		Transcript: []client.Message{{Role: client.RoleUser, Content: "begin durable work"}},
+		Context:    []client.Message{{Role: client.RoleUser, Content: "begin durable work"}},
+		ActiveTask: &workspace.ActiveTask{
+			Objective: "Finish durable work", CompletionCriteria: []string{"verify it"}, StartedAt: startedAt,
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	value := config.Default()
+	value.Provider.Model = "tool-model"
+	configuredClient := &prematureCompletionClient{}
+	m := newModel(context.Background(), config.Store{Dir: t.TempDir()}, nil)
+	m.workspaceStore = &workspaceStore
+	m.toolRuntime = &fakeAgentTools{}
+	m.enterChat(value, configuredClient)
+	if m.activeTask == nil || m.activeTask.Objective != "Finish durable work" ||
+		!strings.Contains(m.status, "active task resumed") {
+		t.Fatalf("restored active task = %#v, status = %q", m.activeTask, m.status)
+	}
+
+	m.input.SetValue("continue")
+	updated, command := m.submitChat()
+	m = updated.(model)
+	for m.waiting {
+		updated, command = m.Update(nextAgentMessage(t, command))
+		m = updated.(model)
+	}
+	if len(configuredClient.requests) != 1 || m.activeTask != nil ||
+		!strings.Contains(m.messages[len(m.messages)-1].Content, "Too early") {
+		t.Fatalf("completed restored task: requests = %d, active = %#v, messages = %#v",
+			len(configuredClient.requests), m.activeTask, m.messages)
+	}
+	resumePromptFound := false
+	for _, message := range configuredClient.requests[0].Messages {
+		if message.Role == client.RoleDeveloper && strings.Contains(message.Content, "Finish durable work") &&
+			strings.Contains(message.Content, "verify it") {
+			resumePromptFound = true
+			break
+		}
+	}
+	if !resumePromptFound {
+		t.Fatalf("active task resume prompt missing: %#v", configuredClient.requests[0].Messages)
+	}
+	session, err := workspaceStore.Load()
+	if err != nil || session.ActiveTask != nil {
+		t.Fatalf("persisted completed task = %#v, err = %v", session.ActiveTask, err)
 	}
 }
 

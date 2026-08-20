@@ -282,6 +282,7 @@ type model struct {
 	messages           []client.Message
 	memory             *memory.Manager
 	conversationID     string
+	activeTask         *workspace.ActiveTask
 	pendingMessage     client.Message
 	requestEstimate    int
 	compactionTarget   int
@@ -374,6 +375,8 @@ type agentEvent struct {
 	learningName    string
 	learningPayload json.RawMessage
 	streamDelta     *chatStreamDelta
+	taskStarted     *workspace.ActiveTask
+	taskCompleted   bool
 	err             error
 }
 
@@ -957,6 +960,20 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		event := message.event
+		if event.taskStarted != nil {
+			m.activeTask = cloneActiveTask(event.taskStarted)
+			if err := m.saveWorkspaceSession(); err != nil {
+				m.status = err.Error()
+			}
+			return m, tea.Batch(m.spinner.Tick, waitAgentEvent(message.events, message.turnID))
+		}
+		if event.taskCompleted {
+			m.activeTask = nil
+			if err := m.saveWorkspaceSession(); err != nil {
+				m.status = err.Error()
+			}
+			return m, tea.Batch(m.spinner.Tick, waitAgentEvent(message.events, message.turnID))
+		}
 		if event.streamDelta != nil {
 			delta := *event.streamDelta
 			switch delta.Kind {
@@ -3134,6 +3151,7 @@ func (m *model) sendChatRequest() tea.Cmd {
 	turnContext := m.activeTurnContext()
 	turnID := m.turnID
 	streamEnabled := m.streamsActiveChat()
+	activeTask := cloneActiveTask(m.activeTask)
 	if toolRuntime == nil && !streamEnabled {
 		return func() tea.Msg {
 			response, err := chatWithConversationRecovery(turnContext, configuredClient, client.ChatRequest{
@@ -3147,7 +3165,7 @@ func (m *model) sendChatRequest() tea.Cmd {
 		if toolRuntime == nil && streamEnabled {
 			go streamSingleChat(turnContext, configuredClient, modelID, history, conversationID, m.requestEstimate, events)
 		} else {
-			go streamAgentLoop(turnContext, configuredClient, toolRuntime, modelID, history, conversationID, streamEnabled, events)
+			go streamAgentLoop(turnContext, configuredClient, toolRuntime, modelID, history, conversationID, activeTask, streamEnabled, events)
 		}
 		return waitAgentEvent(events, turnID)()
 	}
@@ -3180,13 +3198,17 @@ func streamAgentLoop(
 	modelID string,
 	history []client.Message,
 	conversationID string,
+	activeTask *workspace.ActiveTask,
 	streamEnabled bool,
 	events chan<- agentEvent,
 ) {
 	defer close(events)
 	availableTools := append(toolRuntime.Tools(), orchestrationTools()...)
 	toolCalls := 0
-	taskStarted := false
+	taskStarted := activeTask != nil
+	if activeTask != nil {
+		history = append(history, activeTaskResumeMessage(*activeTask))
+	}
 	for round := 0; round < maximumToolRounds; round++ {
 		requestEstimate := memory.CountMessages(history)
 		request := client.ChatRequest{
@@ -3250,7 +3272,7 @@ func streamAgentLoop(
 			if call.Function.Name == taskStartToolName {
 				input, parseErr := parseTaskStart(call.Function.Arguments)
 				if parseErr == nil && taskStarted {
-					parseErr = errors.New("task_start was already called for this turn")
+					parseErr = errors.New("another task_start lifecycle is already active")
 				}
 				if parseErr != nil {
 					message := orchestrationToolResult(call, "invalid task_start arguments: "+parseErr.Error(), true)
@@ -3265,6 +3287,13 @@ func streamAgentLoop(
 				message := orchestrationToolResult(call, string(body), false)
 				history = append(history, message)
 				if !emitAgentEvent(ctx, events, agentEvent{message: &message}) {
+					return
+				}
+				started := &workspace.ActiveTask{
+					Objective: input.Objective, CompletionCriteria: append([]string(nil), input.CompletionCriteria...),
+					StartedAt: time.Now().UTC(),
+				}
+				if !emitAgentEvent(ctx, events, agentEvent{taskStarted: started}) {
 					return
 				}
 				continue
@@ -3299,7 +3328,7 @@ func streamAgentLoop(
 			}
 			if call.Function.Name == taskCompleteToolName {
 				if !taskStarted {
-					message := orchestrationToolResult(call, "task_complete requires a successful task_start call in the same turn", true)
+					message := orchestrationToolResult(call, "task_complete requires an active task_start lifecycle", true)
 					history = append(history, message)
 					if !emitAgentEvent(ctx, events, agentEvent{message: &message, toolIsError: true}) {
 						return
@@ -3319,6 +3348,9 @@ func streamAgentLoop(
 				message := orchestrationToolResult(call, string(body), false)
 				history = append(history, message)
 				if !emitAgentEvent(ctx, events, agentEvent{message: &message}) {
+					return
+				}
+				if !emitAgentEvent(ctx, events, agentEvent{taskCompleted: true}) {
 					return
 				}
 				if !emitAgentEvent(ctx, events, agentEvent{
@@ -3366,6 +3398,14 @@ func orchestrationToolResult(call client.ToolCall, content string, isError bool)
 		Role: client.RoleTool, Name: call.Function.Name,
 		ToolCallID: call.ID, Content: content,
 	}
+}
+
+func activeTaskResumeMessage(task workspace.ActiveTask) client.Message {
+	content := "A task from an earlier turn is still active. Continue it without calling task_start again, and call task_complete exactly once when it succeeds or is genuinely blocked. Objective: " + task.Objective
+	if len(task.CompletionCriteria) > 0 {
+		content += " Completion criteria: " + strings.Join(task.CompletionCriteria, "; ")
+	}
+	return client.Message{Role: client.RoleDeveloper, Content: content}
 }
 
 func emitAgentEvent(ctx context.Context, events chan<- agentEvent, event agentEvent) bool {
@@ -3917,6 +3957,7 @@ func (m *model) resetConversation() {
 		m.memory = memory.New(memoryPolicy(active), m.messages)
 	}
 	m.conversationID = ""
+	m.activeTask = nil
 	m.runID = ""
 	m.ensureRunID()
 	m.thinkerBusy = false
@@ -3972,9 +4013,13 @@ func (m *model) restoreWorkspaceSession() {
 		m.status = learningErr.Error()
 	}
 	m.runID = session.RunID
+	m.activeTask = cloneActiveTask(session.ActiveTask)
 	m.ensureRunID()
 	if len(session.Transcript) > 0 {
 		m.status = fmt.Sprintf("Workspace session restored · %d messages", len(session.Transcript))
+		if m.activeTask != nil {
+			m.status += " · active task resumed"
+		}
 	}
 }
 
@@ -4048,6 +4093,7 @@ func (m *model) saveWorkspaceSession() error {
 		RunID:      m.runID,
 		Transcript: workspaceSessionMessages(m.messages),
 		Context:    workspaceSessionMessages(m.memory.Messages()),
+		ActiveTask: cloneActiveTask(m.activeTask),
 		Learning: func() thinker.LearningState {
 			if m.learning == nil {
 				return thinker.LearningState{}
@@ -4055,6 +4101,15 @@ func (m *model) saveWorkspaceSession() error {
 			return m.learning.State()
 		}(),
 	})
+}
+
+func cloneActiveTask(task *workspace.ActiveTask) *workspace.ActiveTask {
+	if task == nil {
+		return nil
+	}
+	cloned := *task
+	cloned.CompletionCriteria = append([]string(nil), task.CompletionCriteria...)
+	return &cloned
 }
 
 func workspaceSessionMessages(messages []client.Message) []client.Message {

@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/snowmerak/q/client"
 	"github.com/snowmerak/q/thinker"
@@ -28,6 +29,16 @@ type Session struct {
 	Transcript []client.Message      `json:"transcript,omitempty"`
 	Context    []client.Message      `json:"context,omitempty"`
 	Learning   thinker.LearningState `json:"learning,omitempty"`
+	ActiveTask *ActiveTask           `json:"active_task,omitempty"`
+}
+
+// ActiveTask is an explicit task lifecycle that survived beyond the turn in
+// which task_start was called. It remains present until task_complete succeeds
+// or the conversation is cleared.
+type ActiveTask struct {
+	Objective          string    `json:"objective"`
+	CompletionCriteria []string  `json:"completion_criteria,omitempty"`
+	StartedAt          time.Time `json:"started_at"`
 }
 
 type Store struct {
@@ -155,5 +166,10 @@ func cloneSession(session Session) Session {
 	session.Transcript = append([]client.Message(nil), session.Transcript...)
 	session.Context = append([]client.Message(nil), session.Context...)
 	session.Learning = session.Learning.Clone()
+	if session.ActiveTask != nil {
+		active := *session.ActiveTask
+		active.CompletionCriteria = append([]string(nil), active.CompletionCriteria...)
+		session.ActiveTask = &active
+	}
 	return session
 }

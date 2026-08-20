@@ -104,7 +104,7 @@ func orchestrationTools() []client.Tool {
 			Type: client.ToolTypeFunction,
 			Function: client.FunctionDefinition{
 				Name:        taskCompleteToolName,
-				Description: "Finish a task previously started with task_start and return its structured result. It cannot complete a turn that did not call task_start.",
+				Description: "Finish the active task previously started with task_start and return its structured result. A restored task may have started in an earlier turn.",
 				Parameters: map[string]any{
 					"type": "object",
 					"properties": map[string]any{

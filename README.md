@@ -452,7 +452,7 @@ state are local to the directory where q starts:
 
 | Path | Purpose |
 |---|---|
-| `.q/session.json` | Current transcript, compacted request-context projection, run identity, and durable Thinker learning queue. |
+| `.q/session.json` | Current transcript, compacted request-context projection, run identity, active task lifecycle, and durable Thinker learning queue. |
 | `.q/model.json` | Per-role workspace model overrides and the main model's cached context window. It is preserved by `/clear`. |
 | `.q/learning.json` | Workspace learning disable switch. Existing queued segments are preserved while learning is disabled, and the setting is preserved by `/clear`. |
 | `.q/lsp.json` | Current workspace's language project roots and optional server overrides. |

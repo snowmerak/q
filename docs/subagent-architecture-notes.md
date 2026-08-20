@@ -265,7 +265,9 @@ type TaskCompleteInput struct {
 }
 ```
 
-`task_complete`는 같은 turn에서 `task_start`가 성공한 경우에만 허용한다.
+`task_complete`는 현재 세션에 완료되지 않은 `task_start`가 있는 경우에만 허용한다.
+active task는 `.q/session.json`에 저장되므로 앱 재시작이나 다음 turn 이후에도
+복원된다.
 `Outcome`의 초기 후보는 `succeeded`와 `blocked`다. 시스템 오류나 취소는 모델이
 선언하는 outcome과 구분해 runner lifecycle에서 처리한다. `task_complete`가
 호출되면 해당 에이전트의 model/tool loop를 종료하고 입력을 `AgentResult`로
