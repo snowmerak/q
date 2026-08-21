@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"strings"
 
 	"github.com/snowmerak/q/client"
 )
@@ -197,7 +196,10 @@ func rawThinkingDelta(raw json.RawMessage) string {
 	}
 	for _, field := range []string{"reasoning_content", "reasoning", "thinking"} {
 		var value string
-		if json.Unmarshal(envelope.Choices[0].Delta[field], &value) == nil && strings.TrimSpace(value) != "" {
+		// Whitespace is content in a token stream. Compatible providers often
+		// emit spaces and newlines as standalone reasoning deltas; dropping them
+		// joins paragraphs and fenced code into a single unreadable line.
+		if json.Unmarshal(envelope.Choices[0].Delta[field], &value) == nil && value != "" {
 			return value
 		}
 	}

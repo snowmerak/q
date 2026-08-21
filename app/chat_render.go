@@ -41,9 +41,12 @@ func renderStreamingTranscriptWithStyle(
 		for thoughtIndex < len(thoughts) && thoughts[thoughtIndex].Before <= before {
 			content := thoughts[thoughtIndex].Content
 			if content != "" {
-				content = renderMarkdown(markdownRenderer, normalizeDisplaySymbols(content))
+				content = renderMarkdown(markdownRenderer, normalizeMarkdown(content))
 				labelStyle := lipgloss.NewStyle().Bold(true).Foreground(themedColor(dark, "243", "245"))
-				bodyStyle := lipgloss.NewStyle().Italic(true).Foreground(themedColor(dark, "248", "241"))
+				// Markdown already carries its own emphasis, headings, list indentation,
+				// and code colors. Applying an italic/foreground style to the rendered
+				// ANSI output flattens those distinctions and can make code unreadable.
+				bodyStyle := lipgloss.NewStyle()
 				blocks = append(blocks, labelStyle.Render("THINKING")+"\n"+bodyStyle.Width(bodyWidth).Render(content))
 			}
 			thoughtIndex++
@@ -70,7 +73,7 @@ func renderStreamingTranscriptWithStyle(
 		}
 		body := message.TextContent()
 		if message.Role == client.RoleAssistant && body != "" {
-			body = renderMarkdown(markdownRenderer, normalizeDisplaySymbols(body))
+			body = renderMarkdown(markdownRenderer, normalizeMarkdown(body))
 		}
 		if len(message.ToolCalls) > 0 {
 			calls := renderToolCalls(message.ToolCalls)
@@ -89,13 +92,25 @@ func renderStreamingTranscriptWithStyle(
 	}
 	appendThoughts(len(messages))
 	if streamResponse != "" {
-		body := renderMarkdown(markdownRenderer, normalizeDisplaySymbols(streamResponse))
+		body := renderMarkdown(markdownRenderer, normalizeMarkdown(streamResponse))
 		blocks = append(blocks, assistantLabelStyle.Render("ASSISTANT")+"\n"+assistantBodyStyle.Width(bodyWidth).Render(body))
 	}
 	if len(blocks) == 0 {
 		return emptyStyle.Render("Start a conversation. Your messages stay in memory for this run.")
 	}
 	return strings.Join(blocks, "\n\n")
+}
+
+var attachedMarkdownFence = regexp.MustCompile("(?m)([^\\r\\n])(?:[ \\t]+)(```|~~~)([A-Za-z0-9_.+#-]*)[ \\t]*(\\r?\\n)")
+
+// normalizeMarkdown makes common streamed-model Markdown a little more
+// forgiving. Models occasionally attach a fenced code block to the preceding
+// sentence ("example: ```go\n"), which CommonMark interprets as inline text and
+// then collapses all code lines into one paragraph. Moving only fence-shaped
+// sequences that end the line preserves ordinary inline backticks.
+func normalizeMarkdown(source string) string {
+	source = attachedMarkdownFence.ReplaceAllString(source, "$1\n\n$2$3$4")
+	return normalizeDisplaySymbols(source)
 }
 
 var displayMathSymbol = regexp.MustCompile(`\$\s*\\(rightarrow|to|leftarrow|leftrightarrow|Rightarrow|Leftarrow|Leftrightarrow|leq|le|geq|ge|neq|times|cdot|pm|infty)\s*\$`)

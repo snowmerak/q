@@ -112,6 +112,37 @@ func TestConsumeChatStreamReadsCompatibleReasoningAndMergesToolFragments(t *test
 	}
 }
 
+func TestConsumeChatStreamPreservesWhitespaceOnlyThinkingDeltas(t *testing.T) {
+	values := []string{"First paragraph.", "\n", "\n", "```lua", "\n", "local value = 1", "\n", "```"}
+	chunks := make([]*client.ChatChunk, 0, len(values))
+	for _, value := range values {
+		raw, err := json.Marshal(map[string]any{
+			"choices": []any{map[string]any{"delta": map[string]any{"reasoning_content": value}}},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		chunks = append(chunks, &client.ChatChunk{
+			Raw: raw, Choices: []client.Choice{{Delta: &client.Message{Role: client.RoleAssistant}}},
+		})
+	}
+	configured := &scriptedStreamingClient{stream: &scriptedChatStream{chunks: chunks}}
+	var thinking string
+	_, _, err := consumeChatStream(t.Context(), configured, client.ChatRequest{}, func(delta chatStreamDelta) bool {
+		if delta.Kind == chatStreamThinking {
+			thinking += delta.Content
+		}
+		return true
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "First paragraph.\n\n```lua\nlocal value = 1\n```"
+	if thinking != want {
+		t.Fatalf("thinking = %q, want %q", thinking, want)
+	}
+}
+
 func TestConsumeChatStreamSeparatesCodexGatewayPhases(t *testing.T) {
 	configured := &scriptedStreamingClient{stream: &scriptedChatStream{chunks: []*client.ChatChunk{
 		{

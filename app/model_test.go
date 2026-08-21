@@ -3359,6 +3359,28 @@ func TestTranscriptRendersAssistantMarkdownOnly(t *testing.T) {
 		}
 	}
 }
+
+func TestTranscriptRendersThinkingMarkdown(t *testing.T) {
+	transcript := renderStreamingTranscriptWithStyle(nil, []transcriptThought{{
+		Content: "# Approach\n\n- **partition** the input\n- keep `equals` together\n\nImplementation: ```lua\nlocal function sortRange()\nend\n```",
+	}}, "", 72, true)
+	plain := ansi.Strip(transcript)
+	for _, expected := range []string{"THINKING", "Approach", "partition", "equals", "local function sortRange()", "end"} {
+		if !strings.Contains(plain, expected) {
+			t.Fatalf("rendered thinking Markdown does not contain %q: %q", expected, plain)
+		}
+	}
+	for _, rawMarkdown := range []string{"# Approach", "**partition**", "`equals`", "```lua"} {
+		if strings.Contains(plain, rawMarkdown) {
+			t.Fatalf("thinking Markdown marker %q was not rendered: %q", rawMarkdown, plain)
+		}
+	}
+	normalized := normalizeMarkdown("Implementation: ```lua\nlocal function sortRange()\nend\n```")
+	if !strings.Contains(normalized, "Implementation:\n\n```lua\n") {
+		t.Fatalf("attached code fence was not separated from its paragraph: %q", normalized)
+	}
+}
+
 func TestTranscriptCodeBlockUsesHighContrastSurfaceForBothThemes(t *testing.T) {
 	message := client.Message{
 		Role:    client.RoleAssistant,
