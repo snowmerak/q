@@ -34,9 +34,10 @@ type askToUserChoice struct {
 }
 
 type askToUserInput struct {
-	Question string            `json:"question"`
-	Context  string            `json:"context,omitempty"`
-	Choices  []askToUserChoice `json:"choices,omitempty"`
+	Question   string            `json:"question"`
+	Context    string            `json:"context,omitempty"`
+	Choices    []askToUserChoice `json:"choices,omitempty"`
+	ChoiceOnly bool              `json:"-"`
 }
 
 type askToUserOutput struct {
@@ -265,7 +266,7 @@ func renderPendingQuestion(input askToUserInput, selected int) string {
 			body.WriteString(choice.Description)
 		}
 	}
-	if len(input.Choices) > 0 {
+	if len(input.Choices) > 0 && !input.ChoiceOnly {
 		body.WriteString("\n")
 		label := customAnswerLabel
 		if selected == len(input.Choices) {
@@ -282,9 +283,12 @@ func questionChoiceCount(input askToUserInput) int {
 	if len(input.Choices) == 0 {
 		return 0
 	}
+	if input.ChoiceOnly {
+		return len(input.Choices)
+	}
 	return len(input.Choices) + 1
 }
 
 func customAnswerSelected(input askToUserInput, selected int) bool {
-	return len(input.Choices) > 0 && selected == len(input.Choices)
+	return len(input.Choices) > 0 && !input.ChoiceOnly && selected == len(input.Choices)
 }

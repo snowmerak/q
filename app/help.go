@@ -111,12 +111,43 @@ func (m model) updateHelp(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 
 func (m *model) refreshHelp(gotoTop bool) {
 	wasAtBottom := m.helpViewport.AtBottom()
-	m.helpViewport.SetContent(renderHelpContent(m.dark))
+	if m.clientIsACPRemote() {
+		m.helpViewport.SetContent(renderACPClientHelpContent(m.dark))
+	} else {
+		m.helpViewport.SetContent(renderHelpContent(m.dark))
+	}
 	if gotoTop {
 		m.helpViewport.GotoTop()
 	} else if wasAtBottom {
 		m.helpViewport.GotoBottom()
 	}
+}
+
+func renderACPClientHelpContent(dark bool) string {
+	var body strings.Builder
+	body.WriteString(agentTraceTitleStyle(dark).Render("ACP CLIENT"))
+	body.WriteString("\n")
+	body.WriteString(activeLabelStyle.Render(fmt.Sprintf("  %-18s", "slash commands")))
+	body.WriteString(subtleStyle.Render("Forwarded unchanged to the connected agent."))
+	body.WriteString("\n")
+	body.WriteString(activeLabelStyle.Render(fmt.Sprintf("  %-18s", "/clear, /new")))
+	body.WriteString(subtleStyle.Render("Close the current session and start a new ACP session."))
+	body.WriteString("\n\n")
+	body.WriteString(agentTraceTitleStyle(dark).Render("CHAT"))
+	body.WriteString("\n")
+	for _, row := range [][2]string{
+		{"enter", "Send the current message."},
+		{"shift+enter", "Insert a newline."},
+		{"ctrl+l", "Close the current session and start a new ACP session."},
+		{"ctrl+h", "Open or close this local help screen."},
+		{"ctrl+c", "Interrupt the active ACP turn, or quit while idle."},
+		{"esc", "Quit the ACP client."},
+	} {
+		body.WriteString(activeLabelStyle.Render(fmt.Sprintf("  %-18s", row[0])))
+		body.WriteString(subtleStyle.Render(row[1]))
+		body.WriteString("\n")
+	}
+	return body.String()
 }
 
 func (m model) viewHelp() string {

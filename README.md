@@ -67,6 +67,30 @@ and xAI/Grok routes; native Anthropic and Codex routes remain text-only until th
 provider layer has a common multimodal representation. Provider setup must
 already exist before starting `q acp`.
 
+Use q in the opposite direction—as an ACP client with q's chat UI—by choosing
+an external agent:
+
+```powershell
+q acp connect codex [--root <workspace-path>] [--session <id>] [--auth <method>]
+q acp connect grok  [--root <workspace-path>] [--session <id>] [--auth <method>]
+```
+
+The Codex preset runs an installed `codex-acp`, or falls back to
+`npx -y @agentclientprotocol/codex-acp`. The adapter translates ACP to the
+Codex App Server and reuses Codex authentication. The Grok preset runs the
+Grok Build CLI's native `grok agent stdio` transport. Install and authenticate
+the selected agent before connecting; when an ACP agent explicitly requires an
+authentication method, q reports the offered IDs for use with `--auth`.
+
+Agent message and thought streams, tool lifecycle updates, plans, cancellation,
+and permission requests are connected to q's existing chat UI. Permission
+requests remain interactive. q does not advertise client-side filesystem or
+terminal capabilities, so Codex and Grok retain responsibility for executing
+their own tools. Slash commands are forwarded to the connected agent, while
+`/clear`, `/new`, and `ctrl+l` close the old ACP session and create a new one.
+If `--session` is supplied, q resumes it when supported and otherwise falls back
+to `session/load`.
+
 ### Standalone Gateway
 
 Run only the configured Gateway, without the TUI or workspace services:

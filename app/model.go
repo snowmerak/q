@@ -683,6 +683,16 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.BackgroundColorMsg:
 		m.applyColorScheme(message.IsDark())
 		return m, nil
+	case acpSessionResetMsg:
+		if message.err != nil {
+			m.status = "Start new ACP session: " + message.err.Error()
+			return m, m.input.Focus()
+		}
+		m.resetConversation()
+		m.memory = memory.New(memoryPolicy(m.activeConfig()), m.messages)
+		m.status = "New ACP session · " + string(message.sessionID)
+		m.resize(m.width, m.height)
+		return m, m.input.Focus()
 	case commitFinishedMsg:
 		m.commitRunning = false
 		if message.err != nil {
@@ -2844,11 +2854,19 @@ func (m model) updateChatKey(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, tea.Quit
 	case "ctrl+l":
 		if !m.waiting && !m.planResumePending {
+			if remote, ok := m.client.(*acpRemoteClient); ok {
+				m.status = "Starting new ACP session…"
+				return m, remote.resetSessionCommand(m.ctx)
+			}
 			m.resetConversation()
 		}
 		return m, nil
 	case "ctrl+p":
 		if !m.waiting {
+			if _, ok := m.client.(*acpRemoteClient); ok {
+				m.status = "Model and mode are controlled by the connected ACP agent"
+				return m, nil
+			}
 			if m.runtime != nil {
 				m.enterGatewaySettings()
 				return m, nil
@@ -2869,7 +2887,7 @@ func (m model) updateChatKey(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if !m.waiting || m.asking {
 		m.input, command = m.input.Update(key)
 		commands = append(commands, command)
-		if m.asking && len(m.pendingQuestion.Choices) > 0 && strings.TrimSpace(m.input.Value()) != "" &&
+		if m.asking && !m.pendingQuestion.ChoiceOnly && len(m.pendingQuestion.Choices) > 0 && strings.TrimSpace(m.input.Value()) != "" &&
 			!customAnswerSelected(m.pendingQuestion, m.questionChoice) {
 			m.questionChoice = len(m.pendingQuestion.Choices)
 			m.refreshQuestion()
@@ -2898,93 +2916,101 @@ func (m model) submitChat() (tea.Model, tea.Cmd) {
 	if m.waiting || content == "" || m.client == nil {
 		return m, nil
 	}
-	if updated, command, handled := m.startSkillCommand(content); handled {
-		return updated, command
+	_, remoteChat := m.client.(*acpRemoteClient)
+	if remoteChat && (content == "/clear" || content == "/new") {
+		m.input.Reset()
+		m.status = "Starting new ACP session…"
+		return m, m.client.(*acpRemoteClient).resetSessionCommand(m.ctx)
 	}
-	switch content {
-	case "/plan":
-		m.input.Reset()
-		m.planArmed = true
-		m.input.Placeholder = "Describe the work to plan…"
-		m.status = "Plan mode · enter a planning request"
-		m.resize(m.width, m.height)
-		return m, m.input.Focus()
-	case "/commit":
-		return m.startCommit()
-	case "/clear":
-		m.input.Reset()
-		m.resetConversation()
-		return m, m.input.Focus()
-	case "/learn":
-		m.input.Reset()
-		if m.learningDisabled() {
-			m.status = "Learning is disabled for this workspace · /learn on to enable"
+	if !remoteChat {
+		if updated, command, handled := m.startSkillCommand(content); handled {
+			return updated, command
+		}
+		switch content {
+		case "/plan":
+			m.input.Reset()
+			m.planArmed = true
+			m.input.Placeholder = "Describe the work to plan…"
+			m.status = "Plan mode · enter a planning request"
+			m.resize(m.width, m.height)
 			return m, m.input.Focus()
-		}
-		m.status = "Learning checkpoint enqueued"
-		return m, tea.Batch(m.input.Focus(), m.enqueueExplicitLearning())
-	case "/learn off":
-		m.input.Reset()
-		if err := m.setWorkspaceLearningDisabled(true); err != nil {
-			m.status = err.Error()
+		case "/commit":
+			return m.startCommit()
+		case "/clear":
+			m.input.Reset()
+			m.resetConversation()
 			return m, m.input.Focus()
-		}
-		m.status = "Learning disabled for this workspace"
-		return m, m.input.Focus()
-	case "/learn on":
-		m.input.Reset()
-		if err := m.setWorkspaceLearningDisabled(false); err != nil {
-			m.status = err.Error()
+		case "/learn":
+			m.input.Reset()
+			if m.learningDisabled() {
+				m.status = "Learning is disabled for this workspace · /learn on to enable"
+				return m, m.input.Focus()
+			}
+			m.status = "Learning checkpoint enqueued"
+			return m, tea.Batch(m.input.Focus(), m.enqueueExplicitLearning())
+		case "/learn off":
+			m.input.Reset()
+			if err := m.setWorkspaceLearningDisabled(true); err != nil {
+				m.status = err.Error()
+				return m, m.input.Focus()
+			}
+			m.status = "Learning disabled for this workspace"
 			return m, m.input.Focus()
+		case "/learn on":
+			m.input.Reset()
+			if err := m.setWorkspaceLearningDisabled(false); err != nil {
+				m.status = err.Error()
+				return m, m.input.Focus()
+			}
+			m.status = "Learning enabled for this workspace"
+			return m, tea.Batch(m.input.Focus(), m.startNextLearningSegment())
+		case "/learn status":
+			m.input.Reset()
+			if m.learningDisabled() {
+				m.status = "Learning is disabled for this workspace"
+			} else {
+				m.status = "Learning is enabled for this workspace"
+			}
+			return m, m.input.Focus()
+		case "/model":
+			m.input.Reset()
+			return m.discoverCurrentModels()
+		case "/gateway":
+			m.input.Reset()
+			if m.runtime != nil {
+				m.enterGatewaySettings()
+				return m, nil
+			}
+			m.enterSetup(m.config)
+			return m, m.setup[m.setupFocus].Focus()
+		case "/library":
+			m.input.Reset()
+			return m, m.enterLibrarySettings()
+		case "/loom":
+			m.input.Reset()
+			return m.enterLoom()
+		case "/ignore":
+			m.input.Reset()
+			return m.enterIgnore()
+		case "/skills":
+			m.input.Reset()
+			return m.enterSkills()
+		case "/lsp":
+			m.input.Reset()
+			return m.enterLSP()
+		case "/mcp":
+			m.input.Reset()
+			return m.enterMCP()
+		case "/help":
+			m.input.Reset()
+			return m.enterHelp()
 		}
-		m.status = "Learning enabled for this workspace"
-		return m, tea.Batch(m.input.Focus(), m.startNextLearningSegment())
-	case "/learn status":
-		m.input.Reset()
-		if m.learningDisabled() {
-			m.status = "Learning is disabled for this workspace"
-		} else {
-			m.status = "Learning is enabled for this workspace"
+		if strings.HasPrefix(content, "/plan ") {
+			return m.startPlan(strings.TrimSpace(strings.TrimPrefix(content, "/plan")))
 		}
-		return m, m.input.Focus()
-	case "/model":
-		m.input.Reset()
-		return m.discoverCurrentModels()
-	case "/gateway":
-		m.input.Reset()
-		if m.runtime != nil {
-			m.enterGatewaySettings()
-			return m, nil
+		if m.planArmed {
+			return m.startPlan(content)
 		}
-		m.enterSetup(m.config)
-		return m, m.setup[m.setupFocus].Focus()
-	case "/library":
-		m.input.Reset()
-		return m, m.enterLibrarySettings()
-	case "/loom":
-		m.input.Reset()
-		return m.enterLoom()
-	case "/ignore":
-		m.input.Reset()
-		return m.enterIgnore()
-	case "/skills":
-		m.input.Reset()
-		return m.enterSkills()
-	case "/lsp":
-		m.input.Reset()
-		return m.enterLSP()
-	case "/mcp":
-		m.input.Reset()
-		return m.enterMCP()
-	case "/help":
-		m.input.Reset()
-		return m.enterHelp()
-	}
-	if strings.HasPrefix(content, "/plan ") {
-		return m.startPlan(strings.TrimSpace(strings.TrimPrefix(content, "/plan")))
-	}
-	if m.planArmed {
-		return m.startPlan(content)
 	}
 	m.clearAgentActivities()
 	m.resize(m.width, m.height)
@@ -3004,7 +3030,7 @@ func (m model) submitChat() (tea.Model, tea.Cmd) {
 	m.input.Blur()
 	m.waiting = true
 	m.refreshTranscript()
-	if m.memory.ShouldCompact() {
+	if !remoteChat && m.memory.ShouldCompact() {
 		plan, err := m.memory.Plan()
 		if err != nil {
 			m.rollbackPendingMessage()
@@ -3046,6 +3072,11 @@ func (m model) submitQuestionAnswer(content string) (tea.Model, tea.Cmd) {
 		answer = askToUserOutput{Freeform: content}
 	} else {
 		answer = answerForQuestion(m.pendingQuestion, content)
+		if m.pendingQuestion.ChoiceOnly && answer.SelectedChoiceID == "" {
+			m.status = "Choose one of the available permission options"
+			m.input.Reset()
+			return m, m.input.Focus()
+		}
 	}
 	answerChannel := m.questionAnswer
 	events := m.questionEvents
@@ -3199,6 +3230,14 @@ func (m *model) sendChatRequest() tea.Cmd {
 		m.gatewayConfig, m.activeConfig().ModelGroups, modelID, nil,
 	)
 	activeTask := cloneActiveTask(m.activeTask)
+	if remote, ok := configuredClient.(*acpRemoteClient); ok {
+		events := make(chan agentEvent)
+		content := m.pendingMessage.TextContent()
+		return func() tea.Msg {
+			go remote.runPrompt(turnContext, content, events)
+			return waitAgentEvent(events, turnID)()
+		}
+	}
 	if toolRuntime == nil && !streamEnabled {
 		return func() tea.Msg {
 			response, err := chatWithConversationRecovery(turnContext, configuredClient, client.ChatRequest{
@@ -4280,7 +4319,7 @@ func (m *model) resize(width, height int) {
 	tracePanel := agentTracePanelStyle(m.chatFrameWidth(), m.dark)
 	m.agentTraceViewport.SetWidth(max(10, tracePanel.GetWidth()-tracePanel.GetHorizontalFrameSize()))
 	chromeHeight := 10
-	if m.workspaceStore != nil {
+	if m.workspaceStore != nil || m.clientIsACPRemote() {
 		chromeHeight += 3
 	}
 	dynamicHeight := max(2, m.height-chromeHeight)
@@ -4674,6 +4713,19 @@ func normalizeTextInputMessage(message tea.Msg) tea.Msg {
 }
 
 func (m model) chatHeader() string {
+	if remote, ok := m.client.(*acpRemoteClient); ok {
+		remote.mu.Lock()
+		display := remote.display
+		command := remote.command
+		root := remote.root
+		title := remote.title
+		remote.mu.Unlock()
+		header := titleStyle.Render("q") + "  " + subtleStyle.Render("ACP client · "+display+" · "+command)
+		if title != "" {
+			header += "\n" + subtleStyle.Render("session · "+title)
+		}
+		return header + "\n" + subtleStyle.Render("workspace · "+filepath.Clean(root))
+	}
 	endpoint := m.config.Provider.BaseURL
 	if m.runtime != nil {
 		endpoint = m.runtime.Endpoint()
@@ -4684,6 +4736,12 @@ func (m model) chatHeader() string {
 	}
 	return header
 }
+
+func (m model) clientIsACPRemote() bool {
+	_, ok := m.client.(*acpRemoteClient)
+	return ok
+}
+
 func (m model) chatFrameWidth() int {
 	return max(36, m.width-4)
 }
@@ -4718,6 +4776,9 @@ func (m model) viewChat() string {
 			footerText = "ctrl+g expand trace · enter send · shift+enter newline · ctrl+h help · ctrl+c quit"
 		}
 	}
+	if m.clientIsACPRemote() && !m.waiting && !m.initializing {
+		footerText = "enter send · shift+enter newline · ctrl+l new ACP session · ctrl+h help · ctrl+c quit"
+	}
 	footer := helpStyle.Render(footerText)
 	content := header + "\n\n" + m.viewport.View() + "\n"
 	if activities := m.renderedAgentActivities(); activities != "" {
@@ -4729,7 +4790,11 @@ func (m model) viewChat() string {
 	if m.asking {
 		content += m.renderedQuestionViewport() + "\n"
 		if len(m.pendingQuestion.Choices) > 0 {
-			footer = helpStyle.Render("↑/↓ select · enter choose · type for custom answer · pgup/pgdn review · ctrl+h help · ctrl+c interrupt")
+			if m.pendingQuestion.ChoiceOnly {
+				footer = helpStyle.Render("↑/↓ select · enter choose · pgup/pgdn review · ctrl+h help · ctrl+c interrupt")
+			} else {
+				footer = helpStyle.Render("↑/↓ select · enter choose · type for custom answer · pgup/pgdn review · ctrl+h help · ctrl+c interrupt")
+			}
 		} else {
 			footer = helpStyle.Render("pgup/pgdn scroll · enter answer · shift+enter newline · ctrl+h help · ctrl+c interrupt")
 		}
