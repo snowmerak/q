@@ -48,11 +48,12 @@ Store, and `.q/session.json` projection. It supports ACP `session/new`,
 updates, and `session/close`.
 
 q deliberately keeps its native session rule here: one ACP process is bound to
-one workspace and accepts only one active ACP session. Closing and reopening the
-session reconnects to the same workspace conversation; `session/list`,
-`session/load`, and `session/resume` are not advertised. Client-supplied MCP
-servers are currently ignored because q initializes the MCP servers configured
-through `q mcp`. Provider setup must already exist before starting `q acp`.
+one workspace and accepts only one active ACP session. `session/load` and
+`session/resume` are compatibility paths that reconnect only to that workspace's
+single persisted conversation; they never create or select another q session.
+`session/list` is not advertised. Client-supplied MCP servers are currently
+ignored because q initializes the MCP servers configured through `q mcp`.
+Provider setup must already exist before starting `q acp`.
 
 ### Standalone Gateway
 

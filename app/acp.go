@@ -224,8 +224,10 @@ func (a *acpAgent) Initialize(_ context.Context, request acp.InitializeRequest) 
 	return acp.InitializeResponse{
 		ProtocolVersion: acp.ProtocolVersionNumber,
 		AgentCapabilities: acp.AgentCapabilities{
+			LoadSession: true,
 			SessionCapabilities: acp.SessionCapabilities{
-				Close: &acp.SessionCloseCapabilities{},
+				Close:  &acp.SessionCloseCapabilities{},
+				Resume: &acp.SessionResumeCapabilities{},
 			},
 		},
 		AgentInfo:   &acp.Implementation{Name: "q", Version: "dev"},
@@ -242,25 +244,11 @@ func (a *acpAgent) Logout(context.Context, acp.LogoutRequest) (acp.LogoutRespons
 }
 
 func (a *acpAgent) NewSession(_ context.Context, request acp.NewSessionRequest) (acp.NewSessionResponse, error) {
-	requestedRoot, err := canonicalWorkspaceRoot(request.Cwd)
-	if err != nil {
+	if err := a.validateSessionWorkspace(request.Cwd, request.AdditionalDirectories); err != nil {
 		return acp.NewSessionResponse{}, err
 	}
-	if !sameWorkspaceRoot(requestedRoot, a.root) {
-		return acp.NewSessionResponse{}, fmt.Errorf("this ACP process is bound to %q, not %q", a.root, requestedRoot)
-	}
-	if len(request.AdditionalDirectories) > 0 {
-		return acp.NewSessionResponse{}, errors.New("additional workspace directories are not supported")
-	}
-
-	a.stateMu.Lock()
-	defer a.stateMu.Unlock()
-	if a.sessionOpen {
-		return acp.NewSessionResponse{}, errors.New("this workspace already has an active ACP session")
-	}
-	a.sessionOpen = true
-	if len(request.McpServers) > 0 && a.logger != nil {
-		a.logger.Warn("client-provided MCP servers are ignored; q uses the workspace MCP configuration", "count", len(request.McpServers))
+	if err := a.activateSession(a.sessionID, request.McpServers); err != nil {
+		return acp.NewSessionResponse{}, err
 	}
 	return acp.NewSessionResponse{SessionId: a.sessionID}, nil
 }
@@ -298,12 +286,103 @@ func (a *acpAgent) ListSessions(context.Context, acp.ListSessionsRequest) (acp.L
 	return acp.ListSessionsResponse{}, acp.NewMethodNotFound(acp.AgentMethodSessionList)
 }
 
-func (a *acpAgent) ResumeSession(context.Context, acp.ResumeSessionRequest) (acp.ResumeSessionResponse, error) {
-	return acp.ResumeSessionResponse{}, acp.NewMethodNotFound(acp.AgentMethodSessionResume)
+func (a *acpAgent) ResumeSession(_ context.Context, request acp.ResumeSessionRequest) (acp.ResumeSessionResponse, error) {
+	a.promptMu.Lock()
+	defer a.promptMu.Unlock()
+	if err := a.validateSessionWorkspace(request.Cwd, request.AdditionalDirectories); err != nil {
+		return acp.ResumeSessionResponse{}, err
+	}
+	if err := a.activateSession(request.SessionId, request.McpServers); err != nil {
+		return acp.ResumeSessionResponse{}, err
+	}
+	return acp.ResumeSessionResponse{}, nil
 }
 
-func (a *acpAgent) LoadSession(context.Context, acp.LoadSessionRequest) (acp.LoadSessionResponse, error) {
-	return acp.LoadSessionResponse{}, acp.NewMethodNotFound(acp.AgentMethodSessionLoad)
+func (a *acpAgent) LoadSession(ctx context.Context, request acp.LoadSessionRequest) (acp.LoadSessionResponse, error) {
+	a.promptMu.Lock()
+	defer a.promptMu.Unlock()
+	if err := a.validateSessionWorkspace(request.Cwd, request.AdditionalDirectories); err != nil {
+		return acp.LoadSessionResponse{}, err
+	}
+	if err := a.activateSession(request.SessionId, request.McpServers); err != nil {
+		return acp.LoadSessionResponse{}, err
+	}
+	if err := a.replayWorkspaceSession(ctx); err != nil {
+		a.deactivateSession()
+		return acp.LoadSessionResponse{}, err
+	}
+	return acp.LoadSessionResponse{}, nil
+}
+
+func (a *acpAgent) validateSessionWorkspace(cwd string, additionalDirectories []string) error {
+	requestedRoot, err := canonicalWorkspaceRoot(cwd)
+	if err != nil {
+		return err
+	}
+	if !sameWorkspaceRoot(requestedRoot, a.root) {
+		return fmt.Errorf("this ACP process is bound to %q, not %q", a.root, requestedRoot)
+	}
+	if len(additionalDirectories) > 0 {
+		return errors.New("additional workspace directories are not supported")
+	}
+	return nil
+}
+
+func (a *acpAgent) activateSession(sessionID acp.SessionId, mcpServers []acp.McpServer) error {
+	a.stateMu.Lock()
+	if sessionID != a.sessionID {
+		a.stateMu.Unlock()
+		return fmt.Errorf("unknown ACP session %q", sessionID)
+	}
+	if a.sessionOpen {
+		a.stateMu.Unlock()
+		return errors.New("this workspace already has an active ACP session")
+	}
+	a.sessionOpen = true
+	a.stateMu.Unlock()
+	if len(mcpServers) > 0 && a.logger != nil {
+		a.logger.Warn("client-provided MCP servers are ignored; q uses the workspace MCP configuration", "count", len(mcpServers))
+	}
+	return nil
+}
+
+func (a *acpAgent) deactivateSession() {
+	a.stateMu.Lock()
+	a.sessionOpen = false
+	a.stateMu.Unlock()
+}
+
+func (a *acpAgent) replayWorkspaceSession(ctx context.Context) error {
+	for _, message := range workspaceSessionMessages(a.state.messages) {
+		switch message.Role {
+		case client.RoleUser:
+			if message.Content != "" {
+				if err := a.updateContext(ctx, acp.UpdateUserMessageText(message.Content)); err != nil {
+					return err
+				}
+			}
+		case client.RoleAssistant:
+			if message.Content != "" {
+				if err := a.updateContext(ctx, acp.UpdateAgentMessageText(message.Content)); err != nil {
+					return err
+				}
+			}
+			for _, call := range message.ToolCalls {
+				if err := a.startToolCallContext(ctx, call); err != nil {
+					return err
+				}
+			}
+		case client.RoleTool:
+			if message.ToolCallID == "" {
+				continue
+			}
+			failed := strings.HasPrefix(message.Content, "Tool error:")
+			if err := a.finishToolCallContext(ctx, message, failed); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 func (a *acpAgent) SetSessionMode(context.Context, acp.SetSessionModeRequest) (acp.SetSessionModeResponse, error) {
@@ -559,11 +638,15 @@ func (a *acpAgent) emitMissingAssistantText(content string, streamed *string) er
 }
 
 func (a *acpAgent) startToolCall(call client.ToolCall) error {
+	return a.startToolCallContext(a.state.ctx, call)
+}
+
+func (a *acpAgent) startToolCallContext(ctx context.Context, call client.ToolCall) error {
 	title := describeToolCall(call)
 	if title == "" {
 		title = call.Function.Name
 	}
-	return a.update(acp.StartToolCall(
+	return a.updateContext(ctx, acp.StartToolCall(
 		acp.ToolCallId(call.ID),
 		title,
 		acp.WithStartKind(classifyACPTool(call.Function.Name)),
@@ -574,11 +657,15 @@ func (a *acpAgent) startToolCall(call client.ToolCall) error {
 }
 
 func (a *acpAgent) finishToolCall(message client.Message, failed bool) error {
+	return a.finishToolCallContext(a.state.ctx, message, failed)
+}
+
+func (a *acpAgent) finishToolCallContext(ctx context.Context, message client.Message, failed bool) error {
 	status := acp.ToolCallStatusCompleted
 	if failed {
 		status = acp.ToolCallStatusFailed
 	}
-	return a.update(acp.UpdateToolCall(
+	return a.updateContext(ctx, acp.UpdateToolCall(
 		acp.ToolCallId(message.ToolCallID),
 		acp.WithUpdateStatus(status),
 		acp.WithUpdateContent([]acp.ToolCallContent{acp.ToolContent(acp.TextBlock(message.Content))}),
@@ -626,13 +713,17 @@ func (a *acpAgent) elicitAnswer(ctx context.Context, question askToUserInput) as
 }
 
 func (a *acpAgent) update(update acp.SessionUpdate) error {
+	return a.updateContext(a.state.ctx, update)
+}
+
+func (a *acpAgent) updateContext(ctx context.Context, update acp.SessionUpdate) error {
 	a.stateMu.Lock()
 	connection := a.connection
 	a.stateMu.Unlock()
 	if connection == nil {
 		return errors.New("ACP connection is not initialized")
 	}
-	return connection.SessionUpdate(a.state.ctx, acp.SessionNotification{SessionId: a.sessionID, Update: update})
+	return connection.SessionUpdate(ctx, acp.SessionNotification{SessionId: a.sessionID, Update: update})
 }
 
 func (a *acpAgent) requireSession(sessionID acp.SessionId) error {

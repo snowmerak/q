@@ -99,8 +99,8 @@ func TestACPAgentKeepsOneSessionPerWorkspace(t *testing.T) {
 		t.Fatal(err)
 	}
 	capabilities := initialized.AgentCapabilities
-	if capabilities.LoadSession || capabilities.SessionCapabilities.List != nil || capabilities.SessionCapabilities.Resume != nil {
-		t.Fatalf("unexpected durable or multi-session capabilities: %#v", capabilities)
+	if !capabilities.LoadSession || capabilities.SessionCapabilities.Resume == nil || capabilities.SessionCapabilities.List != nil {
+		t.Fatalf("unexpected single-session compatibility capabilities: %#v", capabilities)
 	}
 	if capabilities.SessionCapabilities.Close == nil {
 		t.Fatal("session/close capability was not advertised")
@@ -124,6 +124,64 @@ func TestACPAgentKeepsOneSessionPerWorkspace(t *testing.T) {
 	reopened := openTestACPSession(t, agent, workspaceStore.Root)
 	if reopened != sessionID {
 		t.Fatalf("reopened session ID = %q, want %q", reopened, sessionID)
+	}
+}
+
+func TestACPAgentLoadsAndResumesTheWorkspaceSession(t *testing.T) {
+	agent, workspaceStore, _ := testACPAgent(t, &fakeClient{}, &fakeAgentTools{})
+	sessionID := openTestACPSession(t, agent, workspaceStore.Root)
+	if _, err := agent.Prompt(t.Context(), acp.PromptRequest{
+		SessionId: sessionID,
+		Prompt:    []acp.ContentBlock{acp.TextBlock("persist me")},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	restartedState := newModel(t.Context(), config.Store{Dir: t.TempDir()}, nil)
+	restartedState.workspaceStore = &workspaceStore
+	restartedState.toolRuntime = &fakeAgentTools{}
+	value := config.Default()
+	value.Provider.Model = "test-model"
+	restartedState.enterChat(value, &fakeClient{})
+	restartedConnection := &fakeACPConnection{}
+	restarted := newACPAgent(&restartedState, workspaceStore.Root, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	restarted.setConnection(restartedConnection)
+	if restarted.sessionID != sessionID {
+		t.Fatalf("restarted session ID = %q, want %q", restarted.sessionID, sessionID)
+	}
+	if _, err := restarted.LoadSession(t.Context(), acp.LoadSessionRequest{
+		SessionId:  sessionID,
+		Cwd:        workspaceStore.Root,
+		McpServers: []acp.McpServer{},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	var userText, assistantText string
+	for _, notification := range restartedConnection.snapshot() {
+		if chunk := notification.Update.UserMessageChunk; chunk != nil && chunk.Content.Text != nil {
+			userText += chunk.Content.Text.Text
+		}
+		if chunk := notification.Update.AgentMessageChunk; chunk != nil && chunk.Content.Text != nil {
+			assistantText += chunk.Content.Text.Text
+		}
+	}
+	if userText != "persist me" || assistantText != "reply 1" {
+		t.Fatalf("loaded transcript: user=%q assistant=%q", userText, assistantText)
+	}
+
+	if _, err := restarted.CloseSession(t.Context(), acp.CloseSessionRequest{SessionId: sessionID}); err != nil {
+		t.Fatal(err)
+	}
+	updatesBeforeResume := len(restartedConnection.snapshot())
+	if _, err := restarted.ResumeSession(t.Context(), acp.ResumeSessionRequest{
+		SessionId: sessionID,
+		Cwd:       workspaceStore.Root,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if updatesAfterResume := len(restartedConnection.snapshot()); updatesAfterResume != updatesBeforeResume {
+		t.Fatalf("resume replayed history: updates before=%d after=%d", updatesBeforeResume, updatesAfterResume)
 	}
 }
 
