@@ -2242,6 +2242,9 @@ func TestWorkspaceSessionPersistsAndRestoresWithGlobalChatConfig(t *testing.T) {
 	if session.RunID == "" || session.RunID != m.runID {
 		t.Fatalf("saved run ID = %q, model run ID = %q", session.RunID, m.runID)
 	}
+	if session.Title != "remember this folder" || session.UpdatedAt == nil || session.UpdatedAt.IsZero() {
+		t.Fatalf("saved session metadata = title %q updated %v", session.Title, session.UpdatedAt)
+	}
 	m.conversationID = "cache_workspace_test"
 	if err := m.saveWorkspaceSession(); err != nil {
 		t.Fatal(err)
@@ -2257,6 +2260,9 @@ func TestWorkspaceSessionPersistsAndRestoresWithGlobalChatConfig(t *testing.T) {
 	}
 	if restored.runID != session.RunID {
 		t.Fatalf("restored run ID = %q, want %q", restored.runID, session.RunID)
+	}
+	if restored.sessionTitle != session.Title || restored.sessionUpdatedAt.IsZero() {
+		t.Fatalf("restored session metadata = title %q updated %v", restored.sessionTitle, restored.sessionUpdatedAt)
 	}
 	if restored.conversationID != "" {
 		t.Fatalf("restored process-local conversation ID = %q, want empty", restored.conversationID)

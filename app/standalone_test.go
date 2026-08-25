@@ -94,6 +94,16 @@ func TestStandaloneDefaultModelSaveStaysInModelSettings(t *testing.T) {
 	}
 }
 
+func TestStandaloneModelAttachesCurrentWorkspace(t *testing.T) {
+	m := newModel(context.Background(), config.Store{Dir: t.TempDir()}, nil)
+	if err := attachStandaloneModelWorkspace(&m, workspace.Store{Root: t.TempDir()}); err != nil {
+		t.Fatal(err)
+	}
+	if got := m.workspaceModelSummary(defaultModelTarget); got == "unavailable" {
+		t.Fatalf("standalone workspace model summary = %q", got)
+	}
+}
+
 func TestStandaloneSkillsUsesLightweightRegistry(t *testing.T) {
 	root := t.TempDir()
 	registry, err := agentskills.Discover(root)

@@ -40,16 +40,18 @@ type Config struct {
 	Roles   map[string][]string     `json:"roles,omitempty"`
 }
 
-// ServerConfig contains no credentials. Env maps child variable names to
+// ServerConfig persists no credentials. Env maps child variable names to
 // parent environment variable names, and Headers maps HTTP header names to
-// environment variable names.
+// environment variable names. Resolved values are memory-only session inputs.
 type ServerConfig struct {
-	Transport string            `json:"transport"`
-	Command   string            `json:"command,omitempty"`
-	Args      []string          `json:"args,omitempty"`
-	Env       map[string]string `json:"env,omitempty"`
-	URL       string            `json:"url,omitempty"`
-	Headers   map[string]string `json:"headers,omitempty"`
+	Transport       string            `json:"transport"`
+	Command         string            `json:"command,omitempty"`
+	Args            []string          `json:"args,omitempty"`
+	Env             map[string]string `json:"env,omitempty"`
+	URL             string            `json:"url,omitempty"`
+	Headers         map[string]string `json:"headers,omitempty"`
+	ResolvedEnv     map[string]string `json:"-"`
+	ResolvedHeaders map[string]string `json:"-"`
 }
 
 func Default() Config {
@@ -92,7 +94,7 @@ func validateServer(id string, server ServerConfig) error {
 		if strings.TrimSpace(server.Command) == "" || server.Command != strings.TrimSpace(server.Command) {
 			return fmt.Errorf("mcpconfig: stdio server %q requires a command without surrounding whitespace", id)
 		}
-		if server.URL != "" || len(server.Headers) > 0 {
+		if server.URL != "" || len(server.Headers) > 0 || len(server.ResolvedHeaders) > 0 {
 			return fmt.Errorf("mcpconfig: stdio server %q cannot configure url or headers", id)
 		}
 	case TransportStreamableHTTP:
@@ -100,7 +102,7 @@ func validateServer(id string, server ServerConfig) error {
 		if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
 			return fmt.Errorf("mcpconfig: HTTP server %q requires an absolute HTTP(S) URL", id)
 		}
-		if server.Command != "" || len(server.Args) > 0 || len(server.Env) > 0 {
+		if server.Command != "" || len(server.Args) > 0 || len(server.Env) > 0 || len(server.ResolvedEnv) > 0 {
 			return fmt.Errorf("mcpconfig: HTTP server %q cannot configure command, args, or child env", id)
 		}
 	default:
@@ -111,12 +113,22 @@ func validateServer(id string, server ServerConfig) error {
 			return fmt.Errorf("mcpconfig: server %q env mapping %q -> %q must use environment variable names", id, target, source)
 		}
 	}
+	for target := range server.ResolvedEnv {
+		if !envPattern.MatchString(target) {
+			return fmt.Errorf("mcpconfig: server %q resolved env name %q is invalid", id, target)
+		}
+	}
 	for header, source := range server.Headers {
 		if !headerPattern.MatchString(header) || http.CanonicalHeaderKey(header) == "" {
 			return fmt.Errorf("mcpconfig: server %q has invalid HTTP header %q", id, header)
 		}
 		if !envPattern.MatchString(source) {
 			return fmt.Errorf("mcpconfig: server %q header %q must reference an environment variable", id, header)
+		}
+	}
+	for header := range server.ResolvedHeaders {
+		if !headerPattern.MatchString(header) || http.CanonicalHeaderKey(header) == "" {
+			return fmt.Errorf("mcpconfig: server %q has invalid resolved HTTP header %q", id, header)
 		}
 	}
 	return nil

@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,12 +12,14 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/coder/acp-go-sdk"
 	"github.com/snowmerak/q/client"
 	"github.com/snowmerak/q/config"
 	qlibrary "github.com/snowmerak/q/library"
+	"github.com/snowmerak/q/mcpconfig"
 	"github.com/snowmerak/q/providerhost"
 	"github.com/snowmerak/q/sessionstore"
 	"github.com/snowmerak/q/workspace"
@@ -207,8 +210,12 @@ func newACPAgent(state *model, root string, logger *slog.Logger) *acpAgent {
 		state:     state,
 		root:      root,
 		logger:    logger,
-		sessionID: acp.SessionId("q-" + strings.TrimPrefix(state.runID, "run-")),
+		sessionID: acpSessionID(state.runID),
 	}
+}
+
+func acpSessionID(runID string) acp.SessionId {
+	return acp.SessionId("q-" + strings.TrimPrefix(runID, "run-"))
 }
 
 func (a *acpAgent) setConnection(connection acpSessionConnection) {
@@ -225,8 +232,16 @@ func (a *acpAgent) Initialize(_ context.Context, request acp.InitializeRequest) 
 		ProtocolVersion: acp.ProtocolVersionNumber,
 		AgentCapabilities: acp.AgentCapabilities{
 			LoadSession: true,
+			McpCapabilities: acp.McpCapabilities{
+				Http: true,
+			},
+			PromptCapabilities: acp.PromptCapabilities{
+				Image: a.state.supportsACPImages(),
+			},
 			SessionCapabilities: acp.SessionCapabilities{
 				Close:  &acp.SessionCloseCapabilities{},
+				Delete: &acp.SessionDeleteCapabilities{},
+				List:   &acp.SessionListCapabilities{},
 				Resume: &acp.SessionResumeCapabilities{},
 			},
 		},
@@ -243,17 +258,19 @@ func (a *acpAgent) Logout(context.Context, acp.LogoutRequest) (acp.LogoutRespons
 	return acp.LogoutResponse{}, acp.NewMethodNotFound(acp.AgentMethodLogout)
 }
 
-func (a *acpAgent) NewSession(_ context.Context, request acp.NewSessionRequest) (acp.NewSessionResponse, error) {
+func (a *acpAgent) NewSession(ctx context.Context, request acp.NewSessionRequest) (acp.NewSessionResponse, error) {
+	a.promptMu.Lock()
+	defer a.promptMu.Unlock()
 	if err := a.validateSessionWorkspace(request.Cwd, request.AdditionalDirectories); err != nil {
 		return acp.NewSessionResponse{}, err
 	}
-	if err := a.activateSession(a.sessionID, request.McpServers); err != nil {
+	if err := a.activateSession(ctx, a.sessionID, request.McpServers); err != nil {
 		return acp.NewSessionResponse{}, err
 	}
 	return acp.NewSessionResponse{SessionId: a.sessionID}, nil
 }
 
-func (a *acpAgent) CloseSession(_ context.Context, request acp.CloseSessionRequest) (acp.CloseSessionResponse, error) {
+func (a *acpAgent) CloseSession(ctx context.Context, request acp.CloseSessionRequest) (acp.CloseSessionResponse, error) {
 	a.stateMu.Lock()
 	if !a.sessionOpen {
 		a.stateMu.Unlock()
@@ -263,14 +280,23 @@ func (a *acpAgent) CloseSession(_ context.Context, request acp.CloseSessionReque
 		a.stateMu.Unlock()
 		return acp.CloseSessionResponse{}, fmt.Errorf("unknown ACP session %q", request.SessionId)
 	}
-	a.sessionOpen = false
 	cancel := a.turnCancel
 	a.stateMu.Unlock()
 	if cancel != nil {
 		cancel()
 	}
 	a.promptMu.Lock()
-	a.promptMu.Unlock()
+	defer a.promptMu.Unlock()
+	a.stateMu.Lock()
+	if !a.sessionOpen || request.SessionId != a.sessionID {
+		a.stateMu.Unlock()
+		return acp.CloseSessionResponse{}, errors.New("ACP session closed while waiting for its active turn")
+	}
+	a.sessionOpen = false
+	a.stateMu.Unlock()
+	if err := a.restoreWorkspaceMCP(ctx); err != nil {
+		return acp.CloseSessionResponse{}, err
+	}
 	return acp.CloseSessionResponse{}, nil
 }
 
@@ -282,17 +308,101 @@ func (a *acpAgent) Cancel(_ context.Context, notification acp.CancelNotification
 	return nil
 }
 
-func (a *acpAgent) ListSessions(context.Context, acp.ListSessionsRequest) (acp.ListSessionsResponse, error) {
-	return acp.ListSessionsResponse{}, acp.NewMethodNotFound(acp.AgentMethodSessionList)
+func (a *acpAgent) ListSessions(_ context.Context, request acp.ListSessionsRequest) (acp.ListSessionsResponse, error) {
+	a.promptMu.Lock()
+	defer a.promptMu.Unlock()
+	response := acp.ListSessionsResponse{Sessions: []acp.SessionInfo{}}
+	if a.state.workspaceStore == nil {
+		return response, errors.New("workspace session storage is unavailable")
+	}
+	if request.Cursor != nil && *request.Cursor != "" {
+		return response, errors.New("this single-workspace agent does not use session list cursors")
+	}
+	if request.Cwd != nil {
+		requestedRoot, err := canonicalWorkspaceRoot(*request.Cwd)
+		if err != nil {
+			return response, err
+		}
+		if !sameWorkspaceRoot(requestedRoot, a.root) {
+			return response, nil
+		}
+	}
+	session, err := a.state.workspaceStore.Load()
+	if errors.Is(err, workspace.ErrNotFound) {
+		return response, nil
+	}
+	if err != nil {
+		return response, err
+	}
+	runID := session.RunID
+	if runID == "" {
+		runID = a.state.runID
+	}
+	info := acp.SessionInfo{SessionId: acpSessionID(runID), Cwd: a.root}
+	if title := strings.TrimSpace(session.Title); title != "" {
+		info.Title = acp.Ptr(title)
+	} else if title := sessionTitleFromMessages(session.Transcript); title != "" {
+		info.Title = acp.Ptr(title)
+	}
+	updatedAt := time.Time{}
+	if session.UpdatedAt != nil {
+		updatedAt = *session.UpdatedAt
+	}
+	if updatedAt.IsZero() {
+		if fileInfo, statErr := os.Stat(a.state.workspaceStore.Path()); statErr == nil {
+			updatedAt = fileInfo.ModTime().UTC()
+		}
+	}
+	if !updatedAt.IsZero() {
+		formatted := updatedAt.UTC().Format(time.RFC3339Nano)
+		info.UpdatedAt = &formatted
+	}
+	response.Sessions = append(response.Sessions, info)
+	return response, nil
 }
 
-func (a *acpAgent) ResumeSession(_ context.Context, request acp.ResumeSessionRequest) (acp.ResumeSessionResponse, error) {
+// UnstableDeleteSession implements the SDK's current name for ACP session/delete.
+func (a *acpAgent) UnstableDeleteSession(
+	ctx context.Context,
+	request acp.UnstableDeleteSessionRequest,
+) (acp.UnstableDeleteSessionResponse, error) {
+	a.stateMu.Lock()
+	known := request.SessionId == a.sessionID
+	cancel := a.turnCancel
+	a.stateMu.Unlock()
+	if !known {
+		return acp.UnstableDeleteSessionResponse{}, nil
+	}
+	if cancel != nil {
+		cancel()
+	}
+	a.promptMu.Lock()
+	defer a.promptMu.Unlock()
+	a.stateMu.Lock()
+	if request.SessionId != a.sessionID {
+		a.stateMu.Unlock()
+		return acp.UnstableDeleteSessionResponse{}, nil
+	}
+	a.stateMu.Unlock()
+	a.state.resetConversation()
+	a.stateMu.Lock()
+	a.sessionID = acpSessionID(a.state.runID)
+	a.sessionOpen = false
+	a.turnCancel = nil
+	a.stateMu.Unlock()
+	if err := a.restoreWorkspaceMCP(ctx); err != nil {
+		return acp.UnstableDeleteSessionResponse{}, err
+	}
+	return acp.UnstableDeleteSessionResponse{}, nil
+}
+
+func (a *acpAgent) ResumeSession(ctx context.Context, request acp.ResumeSessionRequest) (acp.ResumeSessionResponse, error) {
 	a.promptMu.Lock()
 	defer a.promptMu.Unlock()
 	if err := a.validateSessionWorkspace(request.Cwd, request.AdditionalDirectories); err != nil {
 		return acp.ResumeSessionResponse{}, err
 	}
-	if err := a.activateSession(request.SessionId, request.McpServers); err != nil {
+	if err := a.activateSession(ctx, request.SessionId, request.McpServers); err != nil {
 		return acp.ResumeSessionResponse{}, err
 	}
 	return acp.ResumeSessionResponse{}, nil
@@ -304,11 +414,12 @@ func (a *acpAgent) LoadSession(ctx context.Context, request acp.LoadSessionReque
 	if err := a.validateSessionWorkspace(request.Cwd, request.AdditionalDirectories); err != nil {
 		return acp.LoadSessionResponse{}, err
 	}
-	if err := a.activateSession(request.SessionId, request.McpServers); err != nil {
+	if err := a.activateSession(ctx, request.SessionId, request.McpServers); err != nil {
 		return acp.LoadSessionResponse{}, err
 	}
 	if err := a.replayWorkspaceSession(ctx); err != nil {
 		a.deactivateSession()
+		_ = a.restoreWorkspaceMCP(ctx)
 		return acp.LoadSessionResponse{}, err
 	}
 	return acp.LoadSessionResponse{}, nil
@@ -328,7 +439,7 @@ func (a *acpAgent) validateSessionWorkspace(cwd string, additionalDirectories []
 	return nil
 }
 
-func (a *acpAgent) activateSession(sessionID acp.SessionId, mcpServers []acp.McpServer) error {
+func (a *acpAgent) activateSession(ctx context.Context, sessionID acp.SessionId, mcpServers []acp.McpServer) error {
 	a.stateMu.Lock()
 	if sessionID != a.sessionID {
 		a.stateMu.Unlock()
@@ -340,10 +451,116 @@ func (a *acpAgent) activateSession(sessionID acp.SessionId, mcpServers []acp.Mcp
 	}
 	a.sessionOpen = true
 	a.stateMu.Unlock()
-	if len(mcpServers) > 0 && a.logger != nil {
-		a.logger.Warn("client-provided MCP servers are ignored; q uses the workspace MCP configuration", "count", len(mcpServers))
+	if err := a.configureSessionMCP(ctx, mcpServers); err != nil {
+		a.stateMu.Lock()
+		a.sessionOpen = false
+		a.stateMu.Unlock()
+		return err
 	}
 	return nil
+}
+
+func (a *acpAgent) configureSessionMCP(ctx context.Context, servers []acp.McpServer) error {
+	if len(servers) == 0 {
+		return nil
+	}
+	configurer, ok := a.state.toolRuntime.(externalMCPConfigurer)
+	if !ok || configurer == nil {
+		return errors.New("ACP-provided MCP servers require q's external MCP runtime")
+	}
+	base, err := a.state.mcpSettingsStore.LoadOrDefault()
+	if err != nil {
+		return err
+	}
+	merged, sessionIDs, err := mergeACPMCPServers(base, servers)
+	if err != nil {
+		return err
+	}
+	statuses := configurer.ConfigureExternal(ctx, a.root, merged)
+	for _, status := range statuses {
+		if _, supplied := sessionIDs[status.ID]; supplied && status.Error != "" {
+			_ = a.restoreWorkspaceMCP(ctx)
+			return fmt.Errorf("connect ACP MCP server %s: %s", status.ID, status.Error)
+		}
+	}
+	return nil
+}
+
+func (a *acpAgent) restoreWorkspaceMCP(ctx context.Context) error {
+	configurer, ok := a.state.toolRuntime.(externalMCPConfigurer)
+	if !ok || configurer == nil {
+		return nil
+	}
+	value, err := a.state.mcpSettingsStore.LoadOrDefault()
+	if err != nil {
+		return err
+	}
+	statuses := configurer.ConfigureExternal(ctx, a.root, value)
+	for _, status := range statuses {
+		if status.Error != "" && a.logger != nil {
+			a.logger.Warn("restore workspace MCP server", "server", status.ID, "error", status.Error)
+		}
+	}
+	return nil
+}
+
+func mergeACPMCPServers(base mcpconfig.Config, servers []acp.McpServer) (mcpconfig.Config, map[string]struct{}, error) {
+	value := cloneMCPConfig(base)
+	if value.Servers == nil {
+		value.Servers = make(map[string]mcpconfig.ServerConfig)
+	}
+	if value.Roles == nil {
+		value.Roles = make(map[string][]string)
+	}
+	sessionIDs := make(map[string]struct{}, len(servers))
+	nextID := 1
+	for _, server := range servers {
+		id := ""
+		for id == "" {
+			candidate := fmt.Sprintf("acp_session_%d", nextID)
+			nextID++
+			if _, exists := value.Servers[candidate]; !exists {
+				id = candidate
+			}
+		}
+		var configured mcpconfig.ServerConfig
+		switch {
+		case server.Stdio != nil:
+			configured = mcpconfig.ServerConfig{
+				Transport:   mcpconfig.TransportStdio,
+				Command:     server.Stdio.Command,
+				Args:        append([]string(nil), server.Stdio.Args...),
+				ResolvedEnv: make(map[string]string, len(server.Stdio.Env)),
+			}
+			for _, variable := range server.Stdio.Env {
+				configured.ResolvedEnv[variable.Name] = variable.Value
+			}
+		case server.Http != nil:
+			configured = mcpconfig.ServerConfig{
+				Transport:       mcpconfig.TransportStreamableHTTP,
+				URL:             server.Http.Url,
+				ResolvedHeaders: make(map[string]string, len(server.Http.Headers)),
+			}
+			for _, header := range server.Http.Headers {
+				configured.ResolvedHeaders[header.Name] = header.Value
+			}
+		case server.Sse != nil:
+			return mcpconfig.Config{}, nil, errors.New("ACP MCP SSE transport is not supported")
+		case server.Acp != nil:
+			return mcpconfig.Config{}, nil, errors.New("ACP-transport MCP servers are not supported")
+		default:
+			return mcpconfig.Config{}, nil, errors.New("ACP MCP server has no supported transport")
+		}
+		value.Servers[id] = configured
+		sessionIDs[id] = struct{}{}
+		for _, role := range mcpconfig.RoleIDs() {
+			value.Roles[role] = append(value.Roles[role], id)
+		}
+	}
+	if err := value.Validate(); err != nil {
+		return mcpconfig.Config{}, nil, err
+	}
+	return value, sessionIDs, nil
 }
 
 func (a *acpAgent) deactivateSession() {
@@ -356,8 +573,8 @@ func (a *acpAgent) replayWorkspaceSession(ctx context.Context) error {
 	for _, message := range workspaceSessionMessages(a.state.messages) {
 		switch message.Role {
 		case client.RoleUser:
-			if message.Content != "" {
-				if err := a.updateContext(ctx, acp.UpdateUserMessageText(message.Content)); err != nil {
+			for _, update := range replayACPUserMessage(message) {
+				if err := a.updateContext(ctx, update); err != nil {
 					return err
 				}
 			}
@@ -382,6 +599,17 @@ func (a *acpAgent) replayWorkspaceSession(ctx context.Context) error {
 			}
 		}
 	}
+	if err := a.emitSessionInfoContext(ctx, true); err != nil {
+		return err
+	}
+	if a.state.activeTask != nil {
+		if err := a.emitTaskPlanContext(ctx, a.state.activeTask.Objective, acp.PlanEntryStatusInProgress); err != nil {
+			return err
+		}
+	}
+	if err := a.emitAvailableCommandsContext(ctx); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -397,18 +625,28 @@ func (a *acpAgent) Prompt(ctx context.Context, request acp.PromptRequest) (acp.P
 	if err := a.requireSession(request.SessionId); err != nil {
 		return acp.PromptResponse{}, err
 	}
-	text, err := acpPromptText(request.Prompt)
+	userMessage, hasNonText, err := acpPromptMessage(request.Prompt, a.state.supportsACPImages())
 	if err != nil {
 		return acp.PromptResponse{}, err
 	}
-	if strings.TrimSpace(text) == "" {
-		return acp.PromptResponse{}, errors.New("prompt contains no text")
+	text := userMessage.TextContent()
+	if strings.TrimSpace(text) == "" && !hasNonText {
+		return acp.PromptResponse{}, errors.New("prompt contains no supported content")
 	}
 
 	a.promptMu.Lock()
 	defer a.promptMu.Unlock()
 	if err := a.requireSession(request.SessionId); err != nil {
 		return acp.PromptResponse{}, err
+	}
+	if err := a.emitAvailableCommandsContext(ctx); err != nil {
+		return acp.PromptResponse{}, err
+	}
+	if !hasNonText {
+		if response, handled, commandErr := a.runACPCommand(text); handled {
+			response.UserMessageId = request.MessageId
+			return response, commandErr
+		}
 	}
 
 	turnContext, cancel := context.WithCancel(ctx)
@@ -422,19 +660,26 @@ func (a *acpAgent) Prompt(ctx context.Context, request acp.PromptRequest) (acp.P
 		a.stateMu.Unlock()
 	}()
 
-	response, err := a.runPrompt(turnContext, text)
+	response, err := a.runPrompt(turnContext, userMessage)
 	response.UserMessageId = request.MessageId
 	return response, err
 }
 
-func (a *acpAgent) runPrompt(ctx context.Context, text string) (acp.PromptResponse, error) {
+func (a *acpAgent) runPrompt(ctx context.Context, userMessage client.Message) (acp.PromptResponse, error) {
 	a.state.turnMessageStart = len(a.state.messages)
-	userMessage := client.Message{Role: client.RoleUser, Content: text}
+	titleSource := userMessage.TextContent()
+	if titleSource == "" {
+		titleSource = "Image prompt"
+	}
+	titleChanged := a.state.touchSessionMetadata(titleSource)
 	a.state.archiveMessage(userMessage, sessionstore.StatusSubmitted, false)
 	a.state.messages = append(a.state.messages, userMessage)
 	a.state.memory.Append(userMessage)
 	a.launchLearning(a.state.observeLearningMessage(userMessage))
 	if err := a.state.saveWorkspaceSession(); err != nil {
+		return acp.PromptResponse{}, err
+	}
+	if err := a.emitSessionInfo(titleChanged); err != nil {
 		return acp.PromptResponse{}, err
 	}
 
@@ -448,7 +693,7 @@ func (a *acpAgent) runPrompt(ctx context.Context, text string) (acp.PromptRespon
 	go streamAgentLoop(
 		ctx,
 		a.state.client,
-		a.state.toolRuntime,
+		scopeTools(a.state.toolRuntime, mcpconfig.RoleDefault),
 		a.state.activeModel(),
 		a.state.memory.Messages(),
 		a.state.conversationID,
@@ -467,11 +712,23 @@ func (a *acpAgent) runPrompt(ctx context.Context, text string) (acp.PromptRespon
 			if err := a.state.saveWorkspaceSession(); err != nil {
 				return acp.PromptResponse{}, err
 			}
+			if err := a.emitTaskPlan(event.taskStarted.Objective, acp.PlanEntryStatusInProgress); err != nil {
+				return acp.PromptResponse{}, err
+			}
 		}
 		if event.taskCompleted {
+			objective := ""
+			if a.state.activeTask != nil {
+				objective = a.state.activeTask.Objective
+			}
 			a.state.activeTask = nil
 			if err := a.state.saveWorkspaceSession(); err != nil {
 				return acp.PromptResponse{}, err
+			}
+			if objective != "" {
+				if err := a.emitTaskPlan(objective, acp.PlanEntryStatusCompleted); err != nil {
+					return acp.PromptResponse{}, err
+				}
 			}
 		}
 		if event.learningName != "" {
@@ -554,8 +811,12 @@ func (a *acpAgent) finishCancelledPrompt() acp.PromptResponse {
 		}
 	}
 	a.state.archiveTurnCancelled("cancelled by ACP client")
+	a.state.sessionUpdatedAt = time.Now().UTC()
 	if err := a.state.saveWorkspaceSession(); err != nil && a.logger != nil {
 		a.logger.Error("persist cancelled ACP turn", "error", err)
+	}
+	if err := a.emitSessionInfo(false); err != nil && a.logger != nil {
+		a.logger.Error("emit cancelled ACP session metadata", "error", err)
 	}
 	if err := a.state.flushArchive(); err != nil && a.logger != nil {
 		a.logger.Error("flush cancelled ACP turn", "error", err)
@@ -580,7 +841,11 @@ func (a *acpAgent) finishPrompt(response client.ChatResponse, requestEstimate in
 	a.state.conversationID = response.ConversationID
 	a.state.archiveMessage(message, sessionstore.StatusSucceeded, false)
 	a.launchLearning(a.state.observeLearningMessage(message))
+	a.state.sessionUpdatedAt = time.Now().UTC()
 	if err := a.state.saveWorkspaceSession(); err != nil {
+		return acp.PromptResponse{}, err
+	}
+	if err := a.emitSessionInfo(false); err != nil {
 		return acp.PromptResponse{}, err
 	}
 	if err := a.state.flushArchive(); err != nil {
@@ -712,6 +977,95 @@ func (a *acpAgent) elicitAnswer(ctx context.Context, question askToUserInput) as
 	return answerForQuestion(question, answer)
 }
 
+func (a *acpAgent) emitSessionInfo(includeTitle bool) error {
+	return a.emitSessionInfoContext(a.state.ctx, includeTitle)
+}
+
+func (a *acpAgent) emitSessionInfoContext(ctx context.Context, includeTitle bool) error {
+	update := &acp.SessionSessionInfoUpdate{}
+	if includeTitle && a.state.sessionTitle != "" {
+		update.Title = acp.Ptr(a.state.sessionTitle)
+	}
+	if !a.state.sessionUpdatedAt.IsZero() {
+		formatted := a.state.sessionUpdatedAt.UTC().Format(time.RFC3339Nano)
+		update.UpdatedAt = &formatted
+	}
+	if update.Title == nil && update.UpdatedAt == nil {
+		return nil
+	}
+	return a.updateContext(ctx, acp.SessionUpdate{SessionInfoUpdate: update})
+}
+
+func (a *acpAgent) emitTaskPlan(objective string, status acp.PlanEntryStatus) error {
+	return a.emitTaskPlanContext(a.state.ctx, objective, status)
+}
+
+func (a *acpAgent) emitTaskPlanContext(ctx context.Context, objective string, status acp.PlanEntryStatus) error {
+	objective = strings.TrimSpace(objective)
+	if objective == "" {
+		return nil
+	}
+	return a.updateContext(ctx, acp.UpdatePlan(acp.PlanEntry{
+		Content: objective, Priority: acp.PlanEntryPriorityHigh, Status: status,
+	}))
+}
+
+func (a *acpAgent) emitAvailableCommandsContext(ctx context.Context) error {
+	commands := []acp.AvailableCommand{
+		{
+			Name: "learn", Description: "Checkpoint or control q learning for this workspace.",
+			Input: &acp.AvailableCommandInput{Unstructured: &acp.UnstructuredCommandInput{Hint: "on, off, or status"}},
+		},
+		{Name: "help", Description: "Show the slash commands available through ACP."},
+	}
+	return a.updateContext(ctx, acp.SessionUpdate{AvailableCommandsUpdate: &acp.SessionAvailableCommandsUpdate{
+		AvailableCommands: commands,
+	}})
+}
+
+func (a *acpAgent) runACPCommand(text string) (acp.PromptResponse, bool, error) {
+	command := strings.TrimSpace(text)
+	var output string
+	switch command {
+	case "/help":
+		output = "Available ACP commands:\n- /learn [on|off|status]\n- /help"
+	case "/learn":
+		if a.state.learningDisabled() {
+			output = "Learning is disabled for this workspace. Use /learn on to enable it."
+		} else {
+			output = "Learning checkpoint enqueued."
+			a.launchLearning(a.state.enqueueExplicitLearning())
+		}
+	case "/learn on":
+		if err := a.state.setWorkspaceLearningDisabled(false); err != nil {
+			return acp.PromptResponse{}, true, err
+		}
+		output = "Learning enabled for this workspace."
+		a.launchLearning(a.state.startNextLearningSegment())
+	case "/learn off":
+		if err := a.state.setWorkspaceLearningDisabled(true); err != nil {
+			return acp.PromptResponse{}, true, err
+		}
+		output = "Learning disabled for this workspace."
+	case "/learn status":
+		if a.state.learningDisabled() {
+			output = "Learning is disabled for this workspace."
+		} else {
+			output = "Learning is enabled for this workspace."
+		}
+	default:
+		if strings.HasPrefix(command, "/learn ") {
+			output = "Usage: /learn [on|off|status]"
+		} else {
+			return acp.PromptResponse{}, false, nil
+		}
+	}
+	if err := a.update(acp.UpdateAgentMessageText(output)); err != nil {
+		return acp.PromptResponse{}, true, err
+	}
+	return acp.PromptResponse{StopReason: acp.StopReasonEndTurn}, true, nil
+}
+
 func (a *acpAgent) update(update acp.SessionUpdate) error {
 	return a.updateContext(a.state.ctx, update)
 }
@@ -783,25 +1137,131 @@ func (a *acpAgent) launchLearning(command tea.Cmd) {
 	}()
 }
 
-func acpPromptText(blocks []acp.ContentBlock) (string, error) {
-	parts := make([]string, 0, len(blocks))
+func acpPromptMessage(blocks []acp.ContentBlock, imagesSupported bool) (client.Message, bool, error) {
+	message := client.Message{Role: client.RoleUser}
+	textParts := make([]string, 0, len(blocks))
+	contentParts := make([]client.MessageContentPart, 0, len(blocks))
+	hasNonText := false
+	appendText := func(value string) {
+		textParts = append(textParts, value)
+		contentParts = append(contentParts, client.MessageContentPart{"type": "text", "text": value})
+	}
 	for _, block := range blocks {
 		switch {
 		case block.Text != nil:
-			parts = append(parts, block.Text.Text)
+			appendText(block.Text.Text)
 		case block.ResourceLink != nil:
-			parts = append(parts, fmt.Sprintf("Resource: %s (%s)", block.ResourceLink.Name, block.ResourceLink.Uri))
+			appendText(fmt.Sprintf("Resource: %s (%s)", block.ResourceLink.Name, block.ResourceLink.Uri))
 		case block.Resource != nil && block.Resource.Resource.TextResourceContents != nil:
-			parts = append(parts, block.Resource.Resource.TextResourceContents.Text)
+			appendText(block.Resource.Resource.TextResourceContents.Text)
 		case block.Image != nil:
-			return "", errors.New("image prompt content is not supported yet")
+			if !imagesSupported {
+				return client.Message{}, false, errors.New("the active model route does not support ACP image prompts")
+			}
+			dataURI, err := acpImageDataURI(block.Image.Data, block.Image.MimeType)
+			if err != nil {
+				return client.Message{}, false, err
+			}
+			contentParts = append(contentParts, client.MessageContentPart{
+				"type":      "image_url",
+				"image_url": map[string]any{"url": dataURI},
+			})
+			hasNonText = true
 		case block.Audio != nil:
-			return "", errors.New("audio prompt content is not supported yet")
+			return client.Message{}, false, errors.New("audio prompt content is not supported")
 		default:
-			return "", errors.New("unsupported ACP prompt content")
+			return client.Message{}, false, errors.New("unsupported ACP prompt content")
 		}
 	}
-	return strings.Join(parts, "\n\n"), nil
+	message.Content = strings.Join(textParts, "\n\n")
+	if hasNonText {
+		message.ContentParts = contentParts
+	}
+	return message, hasNonText, nil
+}
+
+func acpImageDataURI(data, mimeType string) (string, error) {
+	mimeType = strings.ToLower(strings.TrimSpace(mimeType))
+	if !strings.HasPrefix(mimeType, "image/") {
+		return "", fmt.Errorf("invalid ACP image MIME type %q", mimeType)
+	}
+	const maximumImageBytes = 20 << 20
+	if base64.StdEncoding.DecodedLen(len(data)) > maximumImageBytes {
+		return "", fmt.Errorf("ACP image exceeds %d bytes", maximumImageBytes)
+	}
+	decoded, err := base64.StdEncoding.DecodeString(data)
+	if err != nil {
+		return "", fmt.Errorf("decode ACP image: %w", err)
+	}
+	if len(decoded) > maximumImageBytes {
+		return "", fmt.Errorf("ACP image exceeds %d bytes", maximumImageBytes)
+	}
+	return "data:" + mimeType + ";base64," + data, nil
+}
+
+func replayACPUserMessage(message client.Message) []acp.SessionUpdate {
+	if len(message.ContentParts) == 0 {
+		if message.Content == "" {
+			return nil
+		}
+		return []acp.SessionUpdate{acp.UpdateUserMessageText(message.Content)}
+	}
+	updates := make([]acp.SessionUpdate, 0, len(message.ContentParts))
+	for _, part := range message.ContentParts {
+		switch part["type"] {
+		case "text", "input_text", "output_text":
+			if value, ok := part["text"].(string); ok && value != "" {
+				updates = append(updates, acp.UpdateUserMessageText(value))
+			}
+		case "image_url":
+			image, ok := part["image_url"].(map[string]any)
+			if !ok {
+				continue
+			}
+			dataURI, _ := image["url"].(string)
+			prefix, data, found := strings.Cut(dataURI, ",")
+			if !found || !strings.HasPrefix(prefix, "data:image/") || !strings.HasSuffix(prefix, ";base64") {
+				continue
+			}
+			mimeType := strings.TrimSuffix(strings.TrimPrefix(prefix, "data:"), ";base64")
+			updates = append(updates, acp.UpdateUserMessage(acp.ImageBlock(data, mimeType)))
+		}
+	}
+	return updates
+}
+
+func (m model) supportsACPImages() bool {
+	var supports func(string, map[string]bool) bool
+	supports = func(modelID string, seen map[string]bool) bool {
+		if name, grouped := strings.CutPrefix(modelID, "group/"); grouped {
+			if seen[name] {
+				return false
+			}
+			seen[name] = true
+			defer delete(seen, name)
+			group, found := m.activeConfig().ModelGroups[name]
+			if !found || len(group.Candidates) == 0 {
+				return false
+			}
+			for _, candidate := range group.Candidates {
+				if !supports(candidate.Model, seen) {
+					return false
+				}
+			}
+			return true
+		}
+		providerIndex, _, found := gatewayModelLocation(m.gatewayConfig, modelID)
+		if !found {
+			return false
+		}
+		switch m.gatewayConfig.Providers[providerIndex].Type {
+		case "openai-compatible", "openrouter", "xai", "grok":
+			return true
+		default:
+			return false
+		}
+	}
+	return supports(m.activeModel(), make(map[string]bool))
 }
 
 func classifyACPTool(name string) acp.ToolKind {

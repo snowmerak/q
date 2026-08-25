@@ -42,18 +42,30 @@ Run q as an ACP agent over stdin/stdout, without the Bubble Tea UI:
 q acp [--root <workspace-path>]
 ```
 
+When `--root` is omitted, q uses the process's current working directory.
+
 The process owns the selected workspace's normal lock, runtime, tools, Session
 Store, and `.q/session.json` projection. It supports ACP `session/new`,
 `session/prompt`, `session/cancel`, streamed message/thought updates, tool-call
-updates, and `session/close`.
+updates, task-lifecycle plan updates, `session/list`, `session/delete`, and
+`session/close`. Session metadata uses the first meaningful prompt as its title
+and records the latest turn time. The `learn` and `help` commands are advertised
+to ACP clients and handled without the Bubble Tea UI.
 
 q deliberately keeps its native session rule here: one ACP process is bound to
 one workspace and accepts only one active ACP session. `session/load` and
 `session/resume` are compatibility paths that reconnect only to that workspace's
 single persisted conversation; they never create or select another q session.
-`session/list` is not advertised. Client-supplied MCP servers are currently
-ignored because q initializes the MCP servers configured through `q mcp`.
-Provider setup must already exist before starting `q acp`.
+`session/list` therefore returns either that one persisted projection or an
+empty list, and `session/delete` has the same projection-only semantics as
+`/clear` while invalidating the deleted ACP session ID.
+
+Client-supplied stdio and Streamable HTTP MCP servers are merged with q's
+configured MCP catalog for the lifetime of the active ACP session. SSE remains
+unsupported. ACP image prompts are advertised for OpenAI-compatible, OpenRouter,
+and xAI/Grok routes; native Anthropic and Codex routes remain text-only until the
+provider layer has a common multimodal representation. Provider setup must
+already exist before starting `q acp`.
 
 ### Standalone Gateway
 
@@ -108,7 +120,7 @@ The remaining settings screens can be opened without starting the main chat
 UI. Each command loads only the resources its screen needs:
 
 ```powershell
-q model   # managed Gateway + model discovery
+q model   # managed Gateway + model discovery + current-workspace overrides
 q mcp     # external MCP tool servers + per-role assignments
 q skills  # global and current-workspace Agent Skills
 q ignore  # current workspace's .qignore editor
@@ -492,7 +504,7 @@ state are local to the directory where q starts:
 
 | Path | Purpose |
 |---|---|
-| `.q/session.json` | Current transcript, compacted request-context projection, run identity, active task lifecycle, and durable Thinker learning queue. |
+| `.q/session.json` | Current transcript, compacted request-context projection, run identity, session title/activity metadata, active task lifecycle, and durable Thinker learning queue. |
 | `.q/model.json` | Per-role workspace model overrides. Model metadata remains in the global Gateway configuration. It is preserved by `/clear`. |
 | `.q/learning.json` | Workspace learning disable switch. Existing queued segments are preserved while learning is disabled, and the setting is preserved by `/clear`. |
 | `.q/lsp.json` | Current workspace's language project roots and optional server overrides. |

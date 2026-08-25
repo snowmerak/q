@@ -26,6 +26,8 @@ var ErrNotFound = errors.New("q workspace session not found")
 type Session struct {
 	Version    int                   `json:"version"`
 	RunID      string                `json:"run_id,omitempty"`
+	Title      string                `json:"title,omitempty"`
+	UpdatedAt  *time.Time            `json:"updated_at,omitempty"`
 	Transcript []client.Message      `json:"transcript,omitempty"`
 	Context    []client.Message      `json:"context,omitempty"`
 	Learning   thinker.LearningState `json:"learning,omitempty"`
@@ -166,6 +168,10 @@ func cloneSession(session Session) Session {
 	session.Transcript = append([]client.Message(nil), session.Transcript...)
 	session.Context = append([]client.Message(nil), session.Context...)
 	session.Learning = session.Learning.Clone()
+	if session.UpdatedAt != nil {
+		updatedAt := *session.UpdatedAt
+		session.UpdatedAt = &updatedAt
+	}
 	if session.ActiveTask != nil {
 		active := *session.ActiveTask
 		active.CompletionCriteria = append([]string(nil), active.CompletionCriteria...)

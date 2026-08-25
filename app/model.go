@@ -180,6 +180,8 @@ type model struct {
 	archiveSearch             *archiveembed.Archive
 	archiveErr                error
 	runID                     string
+	sessionTitle              string
+	sessionUpdatedAt          time.Time
 	standalone                bool
 	standaloneRoot            screen
 
@@ -1152,6 +1154,7 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			m.status += cacheStatus
 		}
 		m.compactionTarget = 0
+		m.sessionUpdatedAt = time.Now().UTC()
 		m.resize(m.width, m.height)
 		if err := m.saveWorkspaceSession(); err != nil {
 			m.status = err.Error()
@@ -2987,6 +2990,7 @@ func (m model) submitChat() (tea.Model, tea.Cmd) {
 	m.resize(m.width, m.height)
 	m.beginTurn()
 	m.turnMessageStart = len(m.messages)
+	m.touchSessionMetadata(content)
 	userMessage := client.Message{Role: client.RoleUser, Content: content}
 	m.archiveMessage(userMessage, sessionstore.StatusSubmitted, false)
 	m.messages = append(m.messages, userMessage)
@@ -3123,6 +3127,7 @@ func (m model) interruptTurn() (tea.Model, tea.Cmd) {
 	m.input.Reset()
 	m.input.Placeholder = "Type a message…"
 	m.status = "Turn interrupted"
+	m.sessionUpdatedAt = time.Now().UTC()
 	m.resize(m.width, m.height)
 	if err := m.saveWorkspaceSession(); err != nil {
 		m.status += " · " + err.Error()
@@ -3555,6 +3560,8 @@ func (m *model) enterChat(value config.Config, configuredClient chatClient) {
 	m.memory = memory.New(memoryPolicy(active), m.messages)
 	m.conversationID = ""
 	m.runID = ""
+	m.sessionTitle = ""
+	m.sessionUpdatedAt = time.Time{}
 	m.waiting = false
 	m.compacting = false
 	m.asking = false
@@ -4030,6 +4037,8 @@ func (m *model) resetConversation() {
 	m.conversationID = ""
 	m.activeTask = nil
 	m.runID = ""
+	m.sessionTitle = ""
+	m.sessionUpdatedAt = time.Time{}
 	m.ensureRunID()
 	m.thinkerBusy = false
 	m.thinkerJobID = ""
@@ -4084,6 +4093,13 @@ func (m *model) restoreWorkspaceSession() {
 		m.status = learningErr.Error()
 	}
 	m.runID = session.RunID
+	m.sessionTitle = session.Title
+	if m.sessionTitle == "" {
+		m.sessionTitle = sessionTitleFromMessages(session.Transcript)
+	}
+	if session.UpdatedAt != nil {
+		m.sessionUpdatedAt = *session.UpdatedAt
+	}
 	m.activeTask = cloneActiveTask(session.ActiveTask)
 	m.ensureRunID()
 	if len(session.Transcript) > 0 {
@@ -4180,6 +4196,8 @@ func (m *model) saveWorkspaceSession() error {
 	}
 	return m.workspaceStore.Save(workspace.Session{
 		RunID:      m.runID,
+		Title:      m.sessionTitle,
+		UpdatedAt:  workspaceTimePointer(m.sessionUpdatedAt),
 		Transcript: workspaceSessionMessages(m.messages),
 		Context:    workspaceSessionMessages(m.memory.Messages()),
 		ActiveTask: cloneActiveTask(m.activeTask),
@@ -4190,6 +4208,14 @@ func (m *model) saveWorkspaceSession() error {
 			return m.learning.State()
 		}(),
 	})
+}
+
+func workspaceTimePointer(value time.Time) *time.Time {
+	if value.IsZero() {
+		return nil
+	}
+	copy := value
+	return &copy
 }
 
 func cloneActiveTask(task *workspace.ActiveTask) *workspace.ActiveTask {

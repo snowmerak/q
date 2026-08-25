@@ -32,6 +32,7 @@ func (m model) startPlan(objective string) (tea.Model, tea.Cmd) {
 	m.input.Placeholder = "Type a message…"
 	m.beginTurn()
 	m.turnMessageStart = len(m.messages)
+	m.touchSessionMetadata(objective)
 	message := client.Message{Role: client.RoleUser, Content: objective}
 	m.archiveMessage(message, sessionstore.StatusSubmitted, false)
 	m.messages = append(m.messages, message)

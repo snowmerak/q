@@ -155,6 +155,9 @@ func externalTransport(root, id string, value mcpconfig.ServerConfig) (mcp.Trans
 			}
 			command.Env = replaceEnvironment(command.Env, target, secret)
 		}
+		for target, secret := range value.ResolvedEnv {
+			command.Env = replaceEnvironment(command.Env, target, secret)
+		}
 		return &mcp.CommandTransport{Command: command}, nil
 	case mcpconfig.TransportStreamableHTTP:
 		headers := make(http.Header, len(value.Headers))
@@ -163,6 +166,9 @@ func externalTransport(root, id string, value mcpconfig.ServerConfig) (mcp.Trans
 			if !found {
 				return nil, fmt.Errorf("server %s requires environment variable %s", id, source)
 			}
+			headers.Set(header, secret)
+		}
+		for header, secret := range value.ResolvedHeaders {
 			headers.Set(header, secret)
 		}
 		return &mcp.StreamableClientTransport{Endpoint: value.URL, HTTPClient: &http.Client{
@@ -246,6 +252,8 @@ func cloneMCPConfig(value mcpconfig.Config) mcpconfig.Config {
 		server.Args = append([]string(nil), server.Args...)
 		server.Env = cloneStrings(server.Env)
 		server.Headers = cloneStrings(server.Headers)
+		server.ResolvedEnv = cloneStrings(server.ResolvedEnv)
+		server.ResolvedHeaders = cloneStrings(server.ResolvedHeaders)
 		result.Servers[id] = server
 	}
 	for role, ids := range value.Roles {

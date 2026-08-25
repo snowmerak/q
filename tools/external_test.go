@@ -30,6 +30,9 @@ func TestExternalMCPToolsAreRoleScopedAndCaptured(t *testing.T) {
 		if request.Header.Get("Authorization") != "Bearer test-token" {
 			t.Errorf("Authorization = %q", request.Header.Get("Authorization"))
 		}
+		if request.Header.Get("X-ACP-Session") != "session-token" {
+			t.Errorf("X-ACP-Session = %q", request.Header.Get("X-ACP-Session"))
+		}
 		return server
 	}, &mcp.StreamableHTTPOptions{Stateless: true, JSONResponse: true})
 	httpServer := httptest.NewServer(handler)
@@ -45,7 +48,8 @@ func TestExternalMCPToolsAreRoleScopedAndCaptured(t *testing.T) {
 		Version: mcpconfig.CurrentVersion,
 		Servers: map[string]mcpconfig.ServerConfig{"docs": {
 			Transport: mcpconfig.TransportStreamableHTTP, URL: httpServer.URL,
-			Headers: map[string]string{"Authorization": "TEST_MCP_AUTH"},
+			Headers:         map[string]string{"Authorization": "TEST_MCP_AUTH"},
+			ResolvedHeaders: map[string]string{"X-ACP-Session": "session-token"},
 		}},
 		Roles: map[string][]string{mcpconfig.RoleDefault: {"docs"}},
 	}
@@ -111,10 +115,11 @@ func TestStdioTransportMapsEnvironmentReferencesAndWorkspace(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv("SOURCE_TOKEN", "secret-value")
 	transport, err := externalTransport(root, "local", mcpconfig.ServerConfig{
-		Transport: mcpconfig.TransportStdio,
-		Command:   "server-command",
-		Args:      []string{"serve"},
-		Env:       map[string]string{"TARGET_TOKEN": "SOURCE_TOKEN"},
+		Transport:   mcpconfig.TransportStdio,
+		Command:     "server-command",
+		Args:        []string{"serve"},
+		Env:         map[string]string{"TARGET_TOKEN": "SOURCE_TOKEN"},
+		ResolvedEnv: map[string]string{"TARGET_TOKEN": "session-secret"},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -129,7 +134,7 @@ func TestStdioTransportMapsEnvironmentReferencesAndWorkspace(t *testing.T) {
 	found := false
 	for _, item := range commandTransport.Command.Env {
 		if strings.HasPrefix(item, "TARGET_TOKEN=") {
-			found = item == "TARGET_TOKEN=secret-value"
+			found = item == "TARGET_TOKEN=session-secret"
 		}
 	}
 	if !found {

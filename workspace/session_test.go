@@ -19,6 +19,8 @@ func TestStoreRoundTripAndClear(t *testing.T) {
 	store := Store{Root: t.TempDir()}
 	startedAt := time.Date(2026, time.August, 20, 12, 30, 0, 0, time.UTC)
 	want := Session{
+		Title:      "Workspace session",
+		UpdatedAt:  &startedAt,
 		Transcript: []client.Message{{Role: client.RoleUser, Content: "question"}},
 		Context:    []client.Message{{Role: client.RoleSystem, Name: "q_context_summary", Content: "summary"}},
 		ActiveTask: &ActiveTask{
@@ -36,7 +38,8 @@ func TestStoreRoundTripAndClear(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Version != CurrentVersion || len(got.Transcript) != 1 || got.Transcript[0].Content != "question" ||
+	if got.Version != CurrentVersion || got.Title != "Workspace session" || got.UpdatedAt == nil || !got.UpdatedAt.Equal(startedAt) ||
+		len(got.Transcript) != 1 || got.Transcript[0].Content != "question" ||
 		len(got.Context) != 1 || got.Context[0].Content != "summary" ||
 		got.Learning.StreamID != "stream" || len(got.Learning.Events) != 1 || got.Learning.Events[0].Message.Content != "durable decision" ||
 		got.ActiveTask == nil || got.ActiveTask.Objective != "finish the durable task" ||

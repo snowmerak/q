@@ -118,6 +118,10 @@ func RunSkillsDefault(ctx context.Context) error {
 func RunModel(ctx context.Context, store config.Store) error {
 	runtimeContext, cancelRuntime := context.WithCancel(ctx)
 	defer cancelRuntime()
+	workspaceStore, err := workspace.DefaultStore()
+	if err != nil {
+		return err
+	}
 
 	loaded, configErr := store.Load()
 	if configErr != nil && !errors.Is(configErr, config.ErrNotFound) {
@@ -185,6 +189,10 @@ func RunModel(ctx context.Context, store config.Store) error {
 	m.config = loaded
 	m.client = configuredClient
 	m.gatewayConfig = manager.Config()
+	if err := attachStandaloneModelWorkspace(&m, workspaceStore); err != nil {
+		_ = configuredClient.Close()
+		return err
+	}
 	m.modelReturn = screenChat
 	m.modelChooseTarget = true
 	m.enterModelPicker(loaded, models)
@@ -196,6 +204,11 @@ func RunModel(ctx context.Context, store config.Store) error {
 	}
 	closeErr := clientToClose.Close()
 	return errors.Join(runErr, closeErr)
+}
+
+func attachStandaloneModelWorkspace(m *model, store workspace.Store) error {
+	m.workspaceStore = &store
+	return m.restoreWorkspaceModel()
 }
 
 func RunModelDefault(ctx context.Context) error {
