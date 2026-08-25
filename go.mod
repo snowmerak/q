@@ -11,6 +11,7 @@ require (
 	github.com/OneOfOne/xxhash v1.2.8
 	github.com/blevesearch/bleve/v2 v2.6.0
 	github.com/charmbracelet/x/ansi v0.11.7
+	github.com/coder/acp-go-sdk v0.13.5
 	github.com/dop251/goja v0.0.0-20260806115107-493f22071ef6
 	github.com/modelcontextprotocol/go-sdk v1.7.0
 	github.com/snowmerak/llm-provider v0.0.0-20260820114155-10d4fa7b5a80

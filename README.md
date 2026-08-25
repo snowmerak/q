@@ -34,6 +34,26 @@ waits up to 1.5 seconds for initial model discovery. If discovery finishes
 sooner, the TUI opens immediately; otherwise the same initialization continues
 in the background after the TUI renders.
 
+### Agent Client Protocol (ACP)
+
+Run q as an ACP agent over stdin/stdout, without the Bubble Tea UI:
+
+```powershell
+q acp [--root <workspace-path>]
+```
+
+The process owns the selected workspace's normal lock, runtime, tools, Session
+Store, and `.q/session.json` projection. It supports ACP `session/new`,
+`session/prompt`, `session/cancel`, streamed message/thought updates, tool-call
+updates, and `session/close`.
+
+q deliberately keeps its native session rule here: one ACP process is bound to
+one workspace and accepts only one active ACP session. Closing and reopening the
+session reconnects to the same workspace conversation; `session/list`,
+`session/load`, and `session/resume` are not advertised. Client-supplied MCP
+servers are currently ignored because q initializes the MCP servers configured
+through `q mcp`. Provider setup must already exist before starting `q acp`.
+
 ### Standalone Gateway
 
 Run only the configured Gateway, without the TUI or workspace services:
@@ -106,7 +126,7 @@ An ordinary `q` session coordinates four components with different lifetimes:
 |---|---|
 | Main TUI | Owns the active conversation, task lifecycle, and session-only `learn` tool. |
 | Managed Gateway child | Aggregates configured providers for that q process. It binds to loopback on an ephemeral port and uses a parent-injected temporary bearer key. |
-| Workspace runtime | Owns `.q/session.json`, the Session Store, Loom, LSP sessions, and the exclusive workspace writer lock. |
+| Workspace runtime | Owns `.q/session.json`, the Session Store, Loom, LSP sessions, and the exclusive workspace writer lock. The TUI and ACP server use the same runtime boundary. |
 | Global Library | Owns global Agent Skill projections, propositions, their search indexes, and the serialized proposition-judging queue under `~/.q/library/`. One process leads; other q processes connect over HTTP. |
 
 `q gateway` is a separate, user-addressable Gateway process. It uses the saved
@@ -484,10 +504,10 @@ state are local to the directory where q starts:
 | `.q/workspace.lock` | Diagnostic metadata for the current or most recent lock owner. |
 | `.qignore` | Workspace discovery exclusions. |
 
-Only one writer may own a workspace. The interactive app, `q commit`, `q-mcp`,
-and direct Session Store opens use an OS-backed exclusive lock for their full
-lifetime. Another writer exits with owner diagnostics instead of opening or
-rebuilding shared Bleve/HNSW state.
+Only one writer may own a workspace. The interactive app, `q acp`, `q commit`,
+`q-mcp`, and direct Session Store opens use an OS-backed exclusive lock for
+their full lifetime. Another writer exits with owner diagnostics instead of
+opening or rebuilding shared Bleve/HNSW state.
 
 `workspace.lock` is not a sentinel. The OS lock lives on the open file handle;
 after a crash or forced termination the handle closes automatically, while the
@@ -827,7 +847,7 @@ task build
 
 The two command entry points are:
 
-- `./cmd/q`: interactive chat plus the `commit`, `gateway`, `library`,
+- `./cmd/q`: interactive chat plus the `acp`, `commit`, `gateway`, `library`,
   `model`, `mcp`, `skills`, `ignore`, `lsp`, and `help` command surfaces.
 - `./cmd/q-mcp`: workspace MCP stdio server. It acquires the same exclusive
   workspace lock, opens archive/Loom/LSP/Library integrations, and excludes the
