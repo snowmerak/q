@@ -443,7 +443,7 @@ func (m model) viewModelGroupCandidates() string {
 		body.WriteString("\n")
 	}
 	body.WriteString("\n")
-	body.WriteString(helpStyle.Render("a add · enter edit · ctrl+↑/↓ reorder · d remove · s save · esc discard"))
+	body.WriteString(helpStyle.Render("a add · enter edit · ctrl+↑/↓ reorder · d remove · esc groups (auto-save)"))
 	return frameStyle.Width(max(36, m.width-4)).Render(body.String())
 }
 
@@ -607,7 +607,7 @@ func (m model) viewReasoningEfforts() string {
 		body.WriteString("\n")
 	}
 	body.WriteString("\n")
-	body.WriteString(helpStyle.Render("↑/↓ select · enter save · esc models"))
+	body.WriteString(helpStyle.Render("↑/↓ select · enter apply · esc models"))
 	return frameStyle.Width(max(36, m.width-4)).Render(body.String())
 }
 
@@ -626,7 +626,7 @@ func (m model) viewEmbeddingDimensions() string {
 		body.WriteString(errorStyle.Render(m.status))
 	}
 	body.WriteString("\n\n")
-	body.WriteString(helpStyle.Render("enter save · esc models"))
+	body.WriteString(helpStyle.Render("enter apply · esc models"))
 	return frameStyle.Width(max(36, m.width-4)).Render(body.String())
 }
 func (m model) viewContextWindow() string {

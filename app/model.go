@@ -79,7 +79,6 @@ const (
 	loomGCTrigger
 	loomGCTarget
 	loomGCGrace
-	loomSave
 	loomDryRun
 	loomCollect
 	loomControlCount
@@ -243,6 +242,7 @@ type model struct {
 	loomDraft                 config.LoomConfig
 	loomStats                 loom.Stats
 	loomBusy                  bool
+	loomExitAfterSave         bool
 	ignoreEditor              textarea.Model
 	ignoreOriginal            string
 	ignoreDiscardArmed        bool
@@ -1290,6 +1290,8 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.loomFocusCommand()
 	case loomActionMsg:
 		m.loomBusy = false
+		exitAfterSave := m.loomExitAfterSave
+		m.loomExitAfterSave = false
 		if message.config.Provider.Model != "" {
 			m.config = message.config
 			m.loomDraft = message.config.EffectiveLoom()
@@ -1306,6 +1308,11 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 				prefix = "GC completed"
 			}
 			m.status = fmt.Sprintf("%s · %d artifacts · %s reclaimed", prefix, message.result.ArtifactsRemoved, formatBytes(message.result.BytesReclaimed))
+		}
+		if exitAfterSave {
+			m.screen = screenChat
+			m.blurLoomInputs()
+			return m, m.input.Focus()
 		}
 		return m, m.loomFocusCommand()
 	case skillActionMsg:
@@ -2450,9 +2457,16 @@ func (m model) updateModelGroupCandidates(key tea.KeyPressMsg) (tea.Model, tea.C
 	}
 	switch key.String() {
 	case "esc":
-		m.modelPickerStage = modelPickerGroups
-		m.status = "Changes discarded"
-		return m, nil
+		if len(m.modelGroupDraft.Candidates) == 0 {
+			if _, existing := m.draftConfig.ModelGroups[m.modelGroupName]; existing {
+				m.status = "A model group requires at least one candidate"
+				return m, nil
+			}
+			m.modelPickerStage = modelPickerGroups
+			m.status = "Empty group discarded"
+			return m, nil
+		}
+		return m.saveCurrentModelGroup()
 	case "up":
 		if m.modelGroupCandidateCursor > 0 {
 			m.modelGroupCandidateCursor--
@@ -2486,21 +2500,27 @@ func (m model) updateModelGroupCandidates(key tea.KeyPressMsg) (tea.Model, tea.C
 		if len(candidates) == 0 {
 			return m, nil
 		}
+		if len(candidates) == 1 {
+			m.status = "A model group requires at least one candidate; delete the group from the previous screen instead"
+			return m, nil
+		}
 		index := m.modelGroupCandidateCursor
 		m.modelGroupDraft.Candidates = append(m.modelGroupDraft.Candidates[:index], m.modelGroupDraft.Candidates[index+1:]...)
 		m.modelGroupCandidateCursor = min(index, len(m.modelGroupDraft.Candidates)-1)
 		m.modelGroupCandidateCursor = max(0, m.modelGroupCandidateCursor)
-	case "s":
-		value := m.draftConfig
-		value.ModelGroups = cloneModelGroups(value.ModelGroups)
-		value.ModelGroups[m.modelGroupName] = cloneModelGroup(m.modelGroupDraft)
-		if err := subagent.ValidateModelGroup(m.modelGroupName, m.modelGroupDraft, m.models); err != nil {
-			m.status = err.Error()
-			return m, nil
-		}
-		return m.saveModelGroupsConfiguration(value, m.modelGroupName)
 	}
 	return m, nil
+}
+
+func (m model) saveCurrentModelGroup() (tea.Model, tea.Cmd) {
+	if err := subagent.ValidateModelGroup(m.modelGroupName, m.modelGroupDraft, m.models); err != nil {
+		m.status = err.Error()
+		return m, nil
+	}
+	value := m.draftConfig
+	value.ModelGroups = cloneModelGroups(value.ModelGroups)
+	value.ModelGroups[m.modelGroupName] = cloneModelGroup(m.modelGroupDraft)
+	return m.saveModelGroupsConfiguration(value, m.modelGroupName)
 }
 
 func (m model) beginModelGroupCandidateEdit(index int) (tea.Model, tea.Cmd) {
@@ -2633,7 +2653,7 @@ func (m model) updateModelGroupCandidateTimeout(key tea.KeyPressMsg) (tea.Model,
 		}
 		m.modelGroupTimeoutInput.Blur()
 		m.modelPickerStage = modelPickerGroupCandidates
-		m.status = "Candidate updated; press s to save the group"
+		m.status = "Candidate updated · changes save when leaving the group"
 		return m, nil
 	}
 	var command tea.Cmd

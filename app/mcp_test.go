@@ -22,15 +22,13 @@ func TestMCPSettingsAssignServerToRoleAndSave(t *testing.T) {
 	updated, _ := m.enterMCP()
 	m = updated.(model)
 	m.mcpDraft.Servers["docs"] = mcpconfig.ServerConfig{Transport: mcpconfig.TransportStdio, Command: "docs-server"}
-	updated, _ = m.toggleMCPAssignment()
+	updated, command := m.toggleMCPAssignment()
 	m = updated.(model)
 	if !containsMCPID(m.mcpDraft.Roles[mcpconfig.RoleDefault], "docs") {
 		t.Fatal("server was not assigned to selected role")
 	}
-	updated, command := m.saveMCPSettings()
-	m = updated.(model)
 	if command == nil {
-		t.Fatal("save command is nil")
+		t.Fatal("automatic save command is nil")
 	}
 	message := command()
 	updated, _ = m.Update(message)
@@ -41,6 +39,31 @@ func TestMCPSettingsAssignServerToRoleAndSave(t *testing.T) {
 	}
 	if !containsMCPID(loaded.Roles[mcpconfig.RoleDefault], "docs") || !strings.Contains(m.status, "restart q") {
 		t.Fatalf("loaded = %#v, status = %q", loaded, m.status)
+	}
+}
+
+func TestMCPCtrlSDoesNotApplyOrSave(t *testing.T) {
+	store := config.Store{Dir: t.TempDir()}
+	m := newModel(context.Background(), store, nil)
+	m.config = config.Default()
+	m.workspaceStore = &workspace.Store{Root: t.TempDir()}
+	updated, _ := m.enterMCP()
+	m = updated.(model)
+	m.mcpDraft.Servers["docs"] = mcpconfig.ServerConfig{Transport: mcpconfig.TransportStdio, Command: "docs-server"}
+	updated, command := m.updateMCP(tea.KeyPressMsg{Code: 's', Mod: tea.ModCtrl})
+	m = updated.(model)
+	if command != nil || m.mcpBusy {
+		t.Fatalf("ctrl+s started a save: command=%v busy=%v", command != nil, m.mcpBusy)
+	}
+	if _, err := (mcpconfig.Store{Dir: store.Dir}).Load(); err == nil {
+		t.Fatal("ctrl+s persisted the MCP draft")
+	}
+
+	m.mcpMode = mcpModeEditServer
+	updated, command = m.updateMCPForm(tea.KeyPressMsg{Code: 's', Mod: tea.ModCtrl})
+	m = updated.(model)
+	if command != nil || m.mcpMode != mcpModeEditServer {
+		t.Fatalf("ctrl+s applied the form: command=%v mode=%v", command != nil, m.mcpMode)
 	}
 }
 

@@ -53,8 +53,6 @@ func TestLSPSettingsAddDiscoverAndSave(t *testing.T) {
 	if len(m.lspDraftWorkspace.Roots) != 1 || m.lspDraftWorkspace.Roots[0].Path != "services/api" {
 		t.Fatalf("roots = %#v", m.lspDraftWorkspace.Roots)
 	}
-	updated, _ = m.saveLSPSettings()
-	m = updated.(model)
 	if !strings.Contains(m.status, "saved") {
 		t.Fatalf("status = %q", m.status)
 	}
@@ -72,6 +70,41 @@ func TestLSPSettingsAddDiscoverAndSave(t *testing.T) {
 	}
 	if len(roots.Roots) != 1 || roots.Roots[0].Source != qlsp.RootSourceDiscovered {
 		t.Fatalf("saved roots = %#v", roots)
+	}
+}
+
+func TestLSPCtrlSDoesNotApplyOrSave(t *testing.T) {
+	globalStore := config.Store{Dir: filepath.Join(t.TempDir(), ".q")}
+	value := config.Default()
+	value.Provider.Model = "test-model"
+	if err := globalStore.Save(value); err != nil {
+		t.Fatal(err)
+	}
+	workspaceStore := workspace.Store{Root: t.TempDir()}
+	m := newModel(context.Background(), globalStore, nil)
+	m.config = value
+	m.workspaceStore = &workspaceStore
+	updated, _ := m.enterLSP()
+	m = updated.(model)
+	m.lspDraftGlobal.Servers["gopls"] = qlsp.ServerConfig{Languages: []string{"go"}, Command: "gopls"}
+	updated, command := m.updateLSP(tea.KeyPressMsg{Code: 's', Mod: tea.ModCtrl})
+	m = updated.(model)
+	if command != nil {
+		t.Fatal("ctrl+s started an LSP save")
+	}
+	loaded, err := globalStore.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, found := loaded.LSP.Servers["gopls"]; found {
+		t.Fatal("ctrl+s persisted the LSP draft")
+	}
+
+	m.lspMode = lspModeEditServer
+	updated, command = m.updateLSPForm(tea.KeyPressMsg{Code: 's', Mod: tea.ModCtrl})
+	m = updated.(model)
+	if command != nil || m.lspMode != lspModeEditServer {
+		t.Fatalf("ctrl+s applied the form: command=%v mode=%v", command != nil, m.lspMode)
 	}
 }
 

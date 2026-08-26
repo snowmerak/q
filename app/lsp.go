@@ -88,12 +88,10 @@ func (m model) updateLSP(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 	case "r":
 		return m.startLSPDiscovery()
-	case "ctrl+s":
-		return m.saveLSPSettings()
 	case "esc":
 		if m.lspModified() && !m.lspDiscardArmed {
 			m.lspDiscardArmed = true
-			m.status = "Unsaved changes · press esc again to discard or ctrl+s to save"
+			m.status = "Settings were not saved · press esc again to discard the pending changes"
 			return m, nil
 		}
 		m.screen = screenChat
@@ -121,7 +119,7 @@ func (m model) updateLSPForm(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case "shift+tab", "up":
 		m.lspFormFocus = (m.lspFormFocus - 1 + fieldCount) % fieldCount
 		return m, m.focusLSPForm()
-	case "ctrl+s", "enter":
+	case "enter":
 		return m.acceptLSPForm()
 	}
 	var command tea.Cmd
@@ -277,8 +275,7 @@ func (m model) acceptLSPForm() (tea.Model, tea.Cmd) {
 	}
 	m.lspDiscardArmed = false
 	m.cancelLSPForm()
-	m.status = "Draft updated · ctrl+s to save"
-	return m, nil
+	return m.saveLSPSettings()
 }
 
 func (m *model) cancelLSPForm() {
@@ -299,6 +296,7 @@ func (m *model) focusLSPForm() tea.Cmd {
 }
 
 func (m model) deleteLSPEntry() (tea.Model, tea.Cmd) {
+	changed := false
 	if m.lspPanel == 0 {
 		ids := m.lspServerIDs()
 		if len(ids) == 0 {
@@ -320,20 +318,24 @@ func (m model) deleteLSPEntry() (tea.Model, tea.Cmd) {
 		if m.lspCursor[0] >= len(m.lspDraftGlobal.Servers) {
 			m.lspCursor[0] = max(0, len(m.lspDraftGlobal.Servers)-1)
 		}
-		m.status = "Server removed from draft · ctrl+s to save"
+		changed = true
 	} else if len(m.lspDraftWorkspace.Roots) > 0 {
 		index := min(m.lspCursor[1], len(m.lspDraftWorkspace.Roots)-1)
 		m.lspDraftWorkspace.Roots = append(m.lspDraftWorkspace.Roots[:index], m.lspDraftWorkspace.Roots[index+1:]...)
 		if m.lspCursor[1] >= len(m.lspDraftWorkspace.Roots) {
 			m.lspCursor[1] = max(0, len(m.lspDraftWorkspace.Roots)-1)
 		}
-		m.status = "Root removed from draft · ctrl+s to save"
+		changed = true
+	}
+	if !changed {
+		return m, nil
 	}
 	m.lspDiscardArmed = false
-	return m, nil
+	return m.saveLSPSettings()
 }
 
 func (m model) toggleLSPEntry() (tea.Model, tea.Cmd) {
+	changed := false
 	if m.lspPanel == 0 {
 		ids := m.lspServerIDs()
 		if len(ids) == 0 {
@@ -343,13 +345,17 @@ func (m model) toggleLSPEntry() (tea.Model, tea.Cmd) {
 		server := m.lspDraftGlobal.Servers[id]
 		server.Disabled = !server.Disabled
 		m.lspDraftGlobal.Servers[id] = server
+		changed = true
 	} else if len(m.lspDraftWorkspace.Roots) > 0 {
 		index := min(m.lspCursor[1], len(m.lspDraftWorkspace.Roots)-1)
 		m.lspDraftWorkspace.Roots[index].Disabled = !m.lspDraftWorkspace.Roots[index].Disabled
+		changed = true
+	}
+	if !changed {
+		return m, nil
 	}
 	m.lspDiscardArmed = false
-	m.status = "Enabled state changed · ctrl+s to save"
-	return m, nil
+	return m.saveLSPSettings()
 }
 
 func (m model) makeLSPServerDefault() (tea.Model, tea.Cmd) {
@@ -366,8 +372,7 @@ func (m model) makeLSPServerDefault() (tea.Model, tea.Cmd) {
 		m.lspDraftGlobal.Languages[strings.ToLower(language)] = id
 	}
 	m.lspDiscardArmed = false
-	m.status = "Selected server is now the global default for its languages · ctrl+s to save"
-	return m, nil
+	return m.saveLSPSettings()
 }
 
 func (m model) startLSPDiscovery() (tea.Model, tea.Cmd) {
@@ -437,6 +442,9 @@ func (m model) applyLSPDiscovery(message lspDiscoveryMsg) (tea.Model, tea.Cmd) {
 		m.status = fmt.Sprintf("Discovery found %d roots and %d installed servers · %d roots and %d servers added to draft", len(discovered), len(message.servers), addedRoots, addedServers)
 	} else {
 		m.status = fmt.Sprintf("Discovery found %d installed servers · %d added to draft", len(message.servers), addedServers)
+	}
+	if addedRoots > 0 || addedServers > 0 {
+		return m.saveLSPSettings()
 	}
 	return m, nil
 }
@@ -528,9 +536,9 @@ func (m model) viewLSP() string {
 		body.WriteString(subtleStyle.Render(m.status))
 	}
 	body.WriteString("\n\n")
-	help := "tab/←/→ panel · ↑/↓ select · a add · e/enter edit · d delete · space enable · m language default · r auto-detect · ctrl+s save · esc chat"
+	help := "tab/←/→ panel · ↑/↓ select · a add · e/enter edit · d delete · space enable · m language default · r auto-detect · esc chat"
 	if m.lspMode != lspModeList {
-		help = "tab/↑/↓ field · enter/ctrl+s apply draft · esc cancel"
+		help = "tab/↑/↓ field · enter apply · esc cancel"
 	} else if m.isStandaloneScreen(screenLSP) {
 		help = strings.TrimSuffix(help, "esc chat") + "esc quit"
 	}

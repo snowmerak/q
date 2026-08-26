@@ -31,18 +31,22 @@ func (m model) enterIgnore() (tea.Model, tea.Cmd) {
 
 func (m model) updateIgnore(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch key.String() {
-	case "ctrl+s":
-		return m.saveIgnore()
 	case "esc":
-		if m.ignoreEditor.Value() != m.ignoreOriginal && !m.ignoreDiscardArmed {
-			m.ignoreDiscardArmed = true
-			m.status = "Unsaved changes · press esc again to discard or ctrl+s to save"
-			return m, nil
+		savedOnExit := false
+		if m.ignoreEditor.Value() != m.ignoreOriginal {
+			updated, command := m.saveIgnore()
+			m = updated.(model)
+			if m.ignoreEditor.Value() != m.ignoreOriginal {
+				return m, command
+			}
+			savedOnExit = true
 		}
 		m.screen = screenChat
 		m.ignoreEditor.Blur()
 		m.ignoreDiscardArmed = false
-		m.status = ""
+		if !savedOnExit {
+			m.status = ""
+		}
 		if m.isStandaloneScreen(screenIgnore) {
 			return m, tea.Quit
 		}
@@ -111,9 +115,9 @@ func (m model) viewIgnore() string {
 		body.WriteString(style.Render(m.status))
 	}
 	body.WriteString("\n\n")
-	help := "ctrl+s save · enter newline · esc chat (press twice to discard changes) · ctrl+c quit"
+	help := "enter newline · esc chat (auto-save) · ctrl+c quit"
 	if m.isStandaloneScreen(screenIgnore) {
-		help = "ctrl+s save · enter newline · esc quit (press twice to discard changes) · ctrl+c quit"
+		help = "enter newline · esc quit (auto-save) · ctrl+c quit"
 	}
 	body.WriteString(helpStyle.Render(help))
 	return frameStyle.Width(max(36, m.width-4)).Render(body.String())

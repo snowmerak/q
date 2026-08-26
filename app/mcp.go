@@ -76,12 +76,10 @@ func (m model) updateMCP(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 	case " ":
 		return m.toggleMCPAssignment()
-	case "ctrl+s":
-		return m.saveMCPSettings()
 	case "esc":
 		if m.mcpModified() && !m.mcpDiscardArmed {
 			m.mcpDiscardArmed = true
-			m.status = "Unsaved changes · press esc again to discard or ctrl+s to save"
+			m.status = "Settings were not saved · press esc again to discard the pending changes"
 			return m, nil
 		}
 		m.screen = screenChat
@@ -105,7 +103,7 @@ func (m model) updateMCPForm(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case "shift+tab", "up":
 		m.mcpFormFocus = (m.mcpFormFocus - 1 + len(m.mcpInputs)) % len(m.mcpInputs)
 		return m, m.focusMCPForm()
-	case "ctrl+s", "enter":
+	case "enter":
 		return m.acceptMCPForm()
 	}
 	var command tea.Cmd
@@ -215,8 +213,7 @@ func (m model) acceptMCPForm() (tea.Model, tea.Cmd) {
 	m.mcpDraft = candidate
 	m.mcpDiscardArmed = false
 	m.cancelMCPForm()
-	m.status = "Draft updated · ctrl+s to save"
-	return m, nil
+	return m.saveMCPSettings()
 }
 
 func decodeMCPJSON(value string, output any) error {
@@ -273,8 +270,7 @@ func (m model) deleteMCPServer() (tea.Model, tea.Cmd) {
 	}
 	m.mcpCursor[1] = min(m.mcpCursor[1], max(0, len(ids)-2))
 	m.mcpDiscardArmed = false
-	m.status = "Server removed from draft · ctrl+s to save"
-	return m, nil
+	return m.saveMCPSettings()
 }
 
 func (m model) toggleMCPAssignment() (tea.Model, tea.Cmd) {
@@ -298,8 +294,7 @@ func (m model) toggleMCPAssignment() (tea.Model, tea.Cmd) {
 		m.mcpDraft.Roles[role] = assigned
 	}
 	m.mcpDiscardArmed = false
-	m.status = "Assignment draft updated · ctrl+s to save"
-	return m, nil
+	return m.saveMCPSettings()
 }
 
 func (m model) saveMCPSettings() (tea.Model, tea.Cmd) {
@@ -367,9 +362,9 @@ func (m model) viewMCP() string {
 		body.WriteString(subtleStyle.Render(m.status))
 	}
 	body.WriteString("\n\n")
-	help := "tab/←/→ panel · ↑/↓ select · space assign · a add · e/enter edit · d delete · ctrl+s save · esc chat"
+	help := "tab/←/→ panel · ↑/↓ select · space assign · a add · e/enter edit · d delete · esc chat"
 	if m.mcpMode != mcpModeList {
-		help = "tab/↑/↓ field · enter/ctrl+s apply draft · esc cancel"
+		help = "tab/↑/↓ field · enter apply · esc cancel"
 	} else if m.isStandaloneScreen(screenMCP) {
 		help = strings.TrimSuffix(help, "esc chat") + "esc quit"
 	}

@@ -994,7 +994,7 @@ func TestModelGroupsTUIShortcutCreatesOrderedGroup(t *testing.T) {
 	}
 	addCandidate(0, "60s")
 	addCandidate(1, "")
-	updated, command := m.updateModelPicker(tea.KeyPressMsg{Code: 's', Text: "s"})
+	updated, command := m.updateModelPicker(tea.KeyPressMsg{Code: tea.KeyEsc})
 	m = updated.(model)
 	if command == nil {
 		t.Fatal("save group command is nil")
@@ -1109,6 +1109,22 @@ func TestSlashLoomEditsSettingsAndPreviewsGC(t *testing.T) {
 	if tools.loomCollects != 1 || tools.loomOptions.MaximumStoreBytes != 128<<20 || !strings.Contains(m.status, "GC preview") {
 		t.Fatalf("Loom action = collects %d, options %#v, status %q", tools.loomCollects, tools.loomOptions, m.status)
 	}
+	m.loomInputs[0].SetValue("64")
+	m.loomFocus = loomMaximumArtifact
+	updated, command = m.updateLoom(tea.KeyPressMsg{Code: tea.KeyEsc})
+	m = updated.(model)
+	if command == nil || !m.loomExitAfterSave {
+		t.Fatalf("Loom exit did not start automatic save: command=%v pending=%v", command != nil, m.loomExitAfterSave)
+	}
+	updated, _ = m.Update(command())
+	m = updated.(model)
+	loaded, err = store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.screen != screenChat || loaded.Loom.MaximumArtifactMiB != 64 {
+		t.Fatalf("Loom automatic exit save: screen=%v config=%#v", m.screen, loaded.Loom)
+	}
 }
 
 func TestSlashIgnoreEditsAndSavesWorkspaceRules(t *testing.T) {
@@ -1133,7 +1149,7 @@ func TestSlashIgnoreEditsAndSavesWorkspaceRules(t *testing.T) {
 		t.Fatalf("ignore screen = %v, content %q", m.screen, m.ignoreEditor.Value())
 	}
 	view := ansi.Strip(m.View().Content)
-	for _, expected := range []string{"q · Discovery ignore", ".q/ is always excluded", "DISCOVERY PATTERNS", "ctrl+s save"} {
+	for _, expected := range []string{"q · Discovery ignore", ".q/ is always excluded", "DISCOVERY PATTERNS", "auto-save"} {
 		if !strings.Contains(view, expected) {
 			t.Fatalf("ignore view missing %q:\n%s", expected, view)
 		}
@@ -1143,7 +1159,19 @@ func TestSlashIgnoreEditsAndSavesWorkspaceRules(t *testing.T) {
 	}
 
 	m.ignoreEditor.SetValue(".gradle/\nbuild/\nvendor/")
-	updated, _ = m.updateIgnore(tea.KeyPressMsg{Code: 's', Mod: tea.ModCtrl})
+	updated, command := m.updateIgnore(tea.KeyPressMsg{Code: 's', Mod: tea.ModCtrl})
+	m = updated.(model)
+	if command != nil {
+		t.Fatal("ctrl+s started an ignore save")
+	}
+	unchanged, err := workspaceStore.LoadIgnore()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if unchanged != ".gradle/\n" {
+		t.Fatalf("ctrl+s changed ignore file to %q", unchanged)
+	}
+	updated, _ = m.updateIgnore(tea.KeyPressMsg{Code: tea.KeyEsc})
 	m = updated.(model)
 	saved, err := workspaceStore.LoadIgnore()
 	if err != nil {
@@ -1153,16 +1181,8 @@ func TestSlashIgnoreEditsAndSavesWorkspaceRules(t *testing.T) {
 		t.Fatalf("saved ignore = %q, status %q", saved, m.status)
 	}
 
-	m.ignoreEditor.SetValue(saved + "tmp/\n")
-	updated, _ = m.updateIgnore(tea.KeyPressMsg{Code: tea.KeyEsc})
-	m = updated.(model)
-	if m.screen != screenIgnore || !m.ignoreDiscardArmed {
-		t.Fatalf("dirty escape left screen: screen %v armed %v", m.screen, m.ignoreDiscardArmed)
-	}
-	updated, _ = m.updateIgnore(tea.KeyPressMsg{Code: tea.KeyEsc})
-	m = updated.(model)
 	if m.screen != screenChat {
-		t.Fatalf("second escape screen = %v", m.screen)
+		t.Fatalf("automatic-save escape screen = %v", m.screen)
 	}
 }
 
@@ -1698,6 +1718,11 @@ func TestGatewaySettingsSaveNetworkAndManageAPIKeys(t *testing.T) {
 	m.gatewayHostInput.SetValue("0.0.0.0")
 	m.gatewayPortInput.SetValue("18181")
 	updated, command := m.updateGatewayNetwork(tea.KeyPressMsg{Code: 's', Mod: tea.ModCtrl})
+	m = updated.(model)
+	if command != nil {
+		t.Fatal("ctrl+s started a Gateway save")
+	}
+	updated, command = m.updateGatewayNetwork(tea.KeyPressMsg{Code: tea.KeyEnter})
 	m = updated.(model)
 	if command == nil {
 		t.Fatal("network save command is nil")

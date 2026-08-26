@@ -51,7 +51,7 @@ func (m model) updateLibrary(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.libraryNetworkFocus = 1 - m.libraryNetworkFocus
 		command := m.libraryNetworkFocusCommand()
 		return m, command
-	case "ctrl+s", "enter":
+	case "enter":
 		host := strings.TrimSpace(m.libraryHostInput.Value())
 		if net.ParseIP(host) == nil {
 			m.status = "Host must be an IP address"
@@ -125,7 +125,7 @@ func (m model) viewLibrary() string {
 	if m.status != "" {
 		body.WriteString("\n" + subtleStyle.Render(m.status) + "\n")
 	}
-	body.WriteString("\n" + helpStyle.Render("tab/↑/↓ field · enter/ctrl+s save · esc back"))
+	body.WriteString("\n" + helpStyle.Render("tab/↑/↓ field · enter apply · esc back"))
 	return frameStyle.Width(max(36, m.width-4)).Render(body.String())
 }
 

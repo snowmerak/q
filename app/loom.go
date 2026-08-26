@@ -23,6 +23,7 @@ func (m model) enterLoom() (tea.Model, tea.Cmd) {
 	m.screen = screenLoom
 	m.input.Blur()
 	m.loomDraft = m.config.EffectiveLoom()
+	m.loomExitAfterSave = false
 	m.loomFocus = loomAutoGC
 	m.loomBusy = true
 	m.status = "Loading Loom storage…"
@@ -55,6 +56,20 @@ func (m model) updateLoom(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	}
 	switch key.String() {
 	case "esc":
+		parsed, err := m.parseLoomConfig()
+		if err != nil {
+			m.status = err.Error()
+			return m, m.loomFocusCommand()
+		}
+		if parsed != m.config.EffectiveLoom() {
+			m.loomExitAfterSave = true
+			updated, command := m.applyLoomAction("save")
+			m = updated.(model)
+			if command == nil {
+				m.loomExitAfterSave = false
+			}
+			return m, command
+		}
 		m.screen = screenChat
 		m.status = ""
 		m.blurLoomInputs()
@@ -75,8 +90,6 @@ func (m model) updateLoom(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		case loomAutoGC:
 			m.loomDraft.GC.Disabled = !m.loomDraft.GC.Disabled
 			return m, nil
-		case loomSave:
-			return m.applyLoomAction("save")
 		case loomDryRun:
 			return m.applyLoomAction("dry-run")
 		case loomCollect:
@@ -234,7 +247,6 @@ func (m model) viewLoom() string {
 		body.WriteString("\n")
 	}
 	body.WriteString("\n")
-	writeLoomControl(&body, m.loomFocus == loomSave, "Save settings", "")
 	writeLoomControl(&body, m.loomFocus == loomDryRun, "Preview GC", "keeps all files")
 	writeLoomControl(&body, m.loomFocus == loomCollect, "Run GC", "removes unreachable artifacts")
 	if m.status != "" {
@@ -247,7 +259,7 @@ func (m model) viewLoom() string {
 		body.WriteString("\n")
 	}
 	body.WriteString("\n")
-	body.WriteString(helpStyle.Render("tab/↑/↓ navigate · space toggle · enter apply · esc chat"))
+	body.WriteString(helpStyle.Render("tab/↑/↓ navigate · space toggle · enter action · esc chat (auto-save)"))
 	return frameStyle.Width(max(36, m.width-4)).Render(body.String())
 }
 

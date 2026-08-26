@@ -21,15 +21,13 @@ func TestAgentsSettingsAssignSearchConnectionAndSave(t *testing.T) {
 	updated, _ := m.enterAgents()
 	m = updated.(model)
 	m.agentsDraft.Agents.Connections["codex-main"] = config.AgentConnectionConfig{Preset: "codex"}
-	updated, _ = m.assignAgentRole()
+	updated, command := m.assignAgentRole()
 	m = updated.(model)
 	if m.agentsDraft.Agents.Roles[config.AgentRoleSearch].Agent != "codex-main" {
 		t.Fatalf("search role = %#v", m.agentsDraft.Agents.Roles[config.AgentRoleSearch])
 	}
-	updated, command := m.saveAgentsSettings()
-	m = updated.(model)
 	if command == nil {
-		t.Fatal("save command is nil")
+		t.Fatal("automatic save command is nil")
 	}
 	updated, _ = m.Update(command())
 	m = updated.(model)
@@ -45,6 +43,38 @@ func TestAgentsSettingsAssignSearchConnectionAndSave(t *testing.T) {
 	view := m.viewAgentsLists()
 	if !strings.Contains(view, "EXTERNAL ROLES") || !strings.Contains(view, "search") || !strings.Contains(view, "codex-main") {
 		t.Fatalf("agents view = %q", view)
+	}
+}
+
+func TestAgentsCtrlSDoesNotApplyOrSave(t *testing.T) {
+	store := config.Store{Dir: t.TempDir()}
+	value := config.Default()
+	value.Provider.Model = "test-model"
+	if err := store.Save(value); err != nil {
+		t.Fatal(err)
+	}
+	m := newModel(context.Background(), store, nil)
+	updated, _ := m.enterAgents()
+	m = updated.(model)
+	m.agentsDraft.Agents.Connections["codex"] = config.AgentConnectionConfig{Preset: "codex"}
+	updated, command := m.updateAgents(tea.KeyPressMsg{Code: 's', Mod: tea.ModCtrl})
+	m = updated.(model)
+	if command != nil || m.agentsBusy {
+		t.Fatalf("ctrl+s started a save: command=%v busy=%v", command != nil, m.agentsBusy)
+	}
+	loaded, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, found := loaded.Agents.Connections["codex"]; found {
+		t.Fatal("ctrl+s persisted the draft connection")
+	}
+
+	m.agentsMode = agentsModeEditConnection
+	updated, command = m.updateAgentsForm(tea.KeyPressMsg{Code: 's', Mod: tea.ModCtrl})
+	m = updated.(model)
+	if command != nil || m.agentsMode != agentsModeEditConnection {
+		t.Fatalf("ctrl+s applied the form: command=%v mode=%v", command != nil, m.agentsMode)
 	}
 }
 

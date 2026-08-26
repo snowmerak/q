@@ -28,6 +28,11 @@ func TestLibrarySettingsSaveNetworkPreservesAPIKeys(t *testing.T) {
 	m.libraryPortInput.SetValue("18182")
 	updated, command := m.updateLibrary(tea.KeyPressMsg{Code: 's', Mod: tea.ModCtrl})
 	m = updated.(model)
+	if command != nil {
+		t.Fatal("ctrl+s started a Library save")
+	}
+	updated, command = m.updateLibrary(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m = updated.(model)
 	if command == nil {
 		t.Fatal("Library network save command is nil")
 	}
