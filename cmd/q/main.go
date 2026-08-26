@@ -14,6 +14,7 @@ import (
 	qlibrary "github.com/snowmerak/q/library"
 	"github.com/snowmerak/q/loom"
 	"github.com/snowmerak/q/providerhost"
+	"github.com/snowmerak/q/workspacememory"
 )
 
 func main() {
@@ -91,6 +92,21 @@ func main() {
 		store, err := config.DefaultStore()
 		if err == nil {
 			err = qlibrary.Run(ctx, store.Dir, os.Stdout)
+		}
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
+	if len(os.Args) > 1 && os.Args[1] == "memory" {
+		if len(os.Args) != 2 {
+			fmt.Fprintln(os.Stderr, "usage: q memory")
+			os.Exit(2)
+		}
+		store, err := config.DefaultStore()
+		if err == nil {
+			err = workspacememory.Run(ctx, store.Dir, os.Stdout)
 		}
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)

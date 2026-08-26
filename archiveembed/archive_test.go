@@ -2,6 +2,7 @@ package archiveembed
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"sync"
 	"testing"
@@ -40,6 +41,87 @@ func (e *testEmbedder) Embed(_ context.Context, request client.EmbeddingRequest)
 type testError struct{ message string }
 
 func (e *testError) Error() string { return e.message }
+
+type interfaceArchiveStore struct {
+	configured sessionstore.VectorConfig
+	records    map[string]sessionstore.Record
+	search     sessionstore.SearchResult
+	options    sessionstore.SearchOptions
+}
+
+func (s *interfaceArchiveStore) ConfigureVector(config sessionstore.VectorConfig) error {
+	s.configured = config
+	return nil
+}
+
+func (s *interfaceArchiveStore) Save(record sessionstore.Record) (sessionstore.Record, error) {
+	if s.records == nil {
+		s.records = make(map[string]sessionstore.Record)
+	}
+	s.records[record.ID] = record
+	return record, nil
+}
+
+func (s *interfaceArchiveStore) SaveBatch(records []sessionstore.Record) ([]sessionstore.Record, error) {
+	for _, record := range records {
+		if _, err := s.Save(record); err != nil {
+			return nil, err
+		}
+	}
+	return records, nil
+}
+
+func (s *interfaceArchiveStore) Get(id string) (sessionstore.Record, error) {
+	record, ok := s.records[id]
+	if !ok {
+		return sessionstore.Record{}, sessionstore.ErrNotFound
+	}
+	return record, nil
+}
+
+func (s *interfaceArchiveStore) Delete(id string) error {
+	delete(s.records, id)
+	return nil
+}
+
+func (s *interfaceArchiveStore) Search(_ context.Context, options sessionstore.SearchOptions) (sessionstore.SearchResult, error) {
+	s.options = options
+	return s.search, nil
+}
+
+func TestArchiveUsesInterfaceBackedStore(t *testing.T) {
+	store := &interfaceArchiveStore{records: make(map[string]sessionstore.Record)}
+	archive := New(store)
+	embedder := &testEmbedder{}
+	if err := archive.Configure(embedder, "embed-test", 3); err != nil {
+		t.Fatal(err)
+	}
+	if store.configured.Model != "embed-test" || store.configured.Dimensions != 3 {
+		t.Fatalf("vector config = %#v", store.configured)
+	}
+
+	record := sessionstore.Record{ID: "remote-record", Kind: sessionstore.KindMessage, Content: "cat memory"}
+	if _, err := archive.Save(record); err != nil {
+		t.Fatal(err)
+	}
+	if stored, err := archive.Get(record.ID); err != nil || stored.Content != record.Content {
+		t.Fatalf("Get() = (%#v, %v)", stored, err)
+	}
+	if _, err := archive.Search(context.Background(), sessionstore.SearchOptions{
+		Text: "feline", Filters: sessionstore.Filters{Kinds: []string{sessionstore.KindMessage}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if store.options.Vector == nil || len(store.options.Vector.Embedding) != 3 {
+		t.Fatalf("semantic search options = %#v", store.options)
+	}
+	if err := archive.Delete(record.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := archive.Get(record.ID); !errors.Is(err, sessionstore.ErrNotFound) {
+		t.Fatalf("Get() error after delete = %v", err)
+	}
+}
 
 func TestBackfillAndSemanticSearch(t *testing.T) {
 	store, err := sessionstore.OpenWithOptions(t.TempDir(), sessionstore.OpenOptions{

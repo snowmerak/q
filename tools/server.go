@@ -19,6 +19,7 @@ import (
 	"github.com/snowmerak/q/sessionstore"
 	"github.com/snowmerak/q/tools/builtin"
 	"github.com/snowmerak/q/workspace"
+	"github.com/snowmerak/q/workspacememory"
 )
 
 const (
@@ -92,7 +93,7 @@ func RunStdio(ctx context.Context, root string) error {
 	return RunStdioWithLoomOptions(ctx, root, loom.StoreOptions{})
 }
 
-func RunStdioWithLoomOptions(ctx context.Context, root string, options loom.StoreOptions) error {
+func RunStdioWithLoomOptions(ctx context.Context, root string, options loom.StoreOptions) (runErr error) {
 	workspaceLock, err := workspace.AcquireLock(root, "q-mcp")
 	if err != nil {
 		return err
@@ -104,6 +105,15 @@ func RunStdioWithLoomOptions(ctx context.Context, root string, options loom.Stor
 	if err != nil {
 		return err
 	}
+	memoryContext, cancelMemory := context.WithCancel(context.WithoutCancel(ctx))
+	memoryDone := make(chan error, 1)
+	go func() {
+		memoryDone <- workspacememory.Run(memoryContext, configStore.Dir, nil)
+	}()
+	defer func() {
+		cancelMemory()
+		runErr = errors.Join(runErr, <-memoryDone)
+	}()
 	loaded, err := configStore.Load()
 	if err == nil {
 		globalLSP = loaded.LSP
@@ -116,13 +126,16 @@ func RunStdioWithLoomOptions(ctx context.Context, root string, options loom.Stor
 			Model: loaded.Embedding.Model, Dimensions: loaded.Embedding.Dimensions,
 		}
 	}
-	archive, err := sessionstore.OpenWithOptions(root, sessionstore.OpenOptions{
-		WorkspaceLock: workspaceLock, Vector: vectorConfig,
-	})
+	memoryRuntime, err := workspacememory.Ensure(memoryContext, configStore.Dir)
 	if err != nil {
 		return err
 	}
-	defer archive.Close()
+	defer func() { runErr = errors.Join(runErr, memoryRuntime.Close()) }()
+	archive, err := memoryRuntime.Client().OpenWorkspace(ctx, root, vectorConfig)
+	if err != nil {
+		return err
+	}
+	defer func() { runErr = errors.Join(runErr, archive.Close()) }()
 	semanticArchive := archiveembed.New(archive)
 	loomRuntime, err := newLoomRuntime(root, loom.NewProcessEvaluator(), withSessionRoots(options, root))
 	if err != nil {

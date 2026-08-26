@@ -30,11 +30,24 @@ var historyKinds = []string{
 	sessionstore.KindSummary,
 }
 
+// Store is the workspace archive boundary used by semantic retrieval. The
+// local sessionstore.Store and a remote workspace-memory client can both
+// implement it. Archive embeds the interface so record operations remain
+// available to Agent Skill synchronization and archive tools.
+type Store interface {
+	ConfigureVector(sessionstore.VectorConfig) error
+	Save(sessionstore.Record) (sessionstore.Record, error)
+	SaveBatch([]sessionstore.Record) ([]sessionstore.Record, error)
+	Get(string) (sessionstore.Record, error)
+	Delete(string) error
+	Search(context.Context, sessionstore.SearchOptions) (sessionstore.SearchResult, error)
+}
+
 // Archive adds semantic query and embedding preparation behavior to a Store.
 // Save, Delete, and Get are promoted from the embedded Store so project Agent
 // Skill synchronization continues to use the same archive.
 type Archive struct {
-	*sessionstore.Store
+	Store
 
 	mu         sync.RWMutex
 	vectorizer *embedding.Vectorizer
@@ -45,7 +58,7 @@ type BackfillStats struct {
 	Embedded int
 }
 
-func New(store *sessionstore.Store) *Archive {
+func New(store Store) *Archive {
 	return &Archive{Store: store}
 }
 

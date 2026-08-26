@@ -44,8 +44,10 @@ q acp [--root <workspace-path>]
 
 When `--root` is omitted, q uses the process's current working directory.
 
-The process owns the selected workspace's normal lock, runtime, tools, Session
-Store, and `.q/session.json` projection. It supports ACP `session/new`,
+The process owns the selected workspace's normal lock, local runtime and tools,
+and `.q/session.json` projection. Durable archive records and their indexes are
+accessed through a lease on the user-level Workspace Memory service. It
+supports ACP `session/new`,
 `session/prompt`, `session/cancel`, streamed message/thought updates, tool-call
 updates, task-lifecycle plan updates, `session/list`, `session/delete`, and
 `session/close`. Session metadata uses the first meaningful prompt as its title
@@ -153,6 +155,33 @@ compatible server is running, one session wins the user-level file lock and
 embeds the server until that q process exits. Other sessions connect over HTTP;
 use `q library` when its lifetime should be independent of a workspace TUI.
 
+### Workspace Memory
+
+Run Workspace Memory as a dedicated foreground service:
+
+```powershell
+q memory
+```
+
+Workspace Memory is a user-level, loopback-only HTTP service that owns each
+open workspace's durable records and Bleve/HNSW indexes. Ordinary `q`, `q acp`,
+and `q-mcp` processes ensure the service is available automatically; `q memory`
+keeps a leader or takeover participant alive independently of those clients.
+The default endpoint is `127.0.0.1:17892`. Requests are authenticated with an
+automatically generated bearer token stored in `~/.q/workspace-memory.token`
+with mode `0600` on POSIX.
+
+Canonical workspace roots are multiplexed through one service. Each client
+holds a renewable lease, and the server closes that workspace's records and
+indexes after the final lease is released or expires. See
+[Workspace Memory](docs/workspace-memory.md) for ownership and transitional
+locking details.
+
+During leader handoff, clients make a bounded five-second attempt to reopen the
+same workspace lease and retry the interrupted operation. Record IDs are
+assigned before transport, so retrying a mutation after a lost response does
+not create a duplicate archive record.
+
 ### Standalone settings screens
 
 The remaining settings screens can be opened without starting the main chat
@@ -168,18 +197,19 @@ q lsp     # global language servers and current-workspace project roots
 q help    # scrollable command and key reference
 ```
 
-The Session Store uses a pure-Go HNSW index, so q does not require CGO, FAISS,
-or a vector-specific build tag.
+Workspace Memory uses the Session Store's pure-Go HNSW index, so q does not
+require CGO, FAISS, or a vector-specific build tag.
 
 ## Runtime layout
 
-An ordinary `q` session coordinates four components with different lifetimes:
+An ordinary `q` session coordinates five components with different lifetimes:
 
 | Component | Scope and ownership |
 |---|---|
-| Main TUI | Owns the active conversation, task lifecycle, and session-only `learn` tool. |
+| Main TUI | Owns the active conversation, `.q/session.json`, `.q/plan-execution.json`, task lifecycle, and session-only `learn` tool. |
 | Managed Gateway child | Aggregates configured providers for that q process. It binds to loopback on an ephemeral port and uses a parent-injected temporary bearer key. |
-| Workspace runtime | Owns `.q/session.json`, the Session Store, Loom, LSP sessions, and the exclusive workspace writer lock. The TUI and ACP server use the same runtime boundary. |
+| Workspace process runtime | Owns Loom, LSP sessions, file tools, and the transitional `.q/workspace.lock`. These remain local to each TUI, ACP, or `q-mcp` process. |
+| Workspace Memory | A user-level loopback HTTP service that multiplexes canonical workspace roots and exclusively owns their durable records, Bleve indexes, and HNSW indexes while leases are active. |
 | Global Library | Owns global Agent Skill projections, propositions, their search indexes, and the serialized proposition-judging queue under `~/.q/library/`. One process leads; other q processes connect over HTTP. |
 
 `q gateway` is a separate, user-addressable Gateway process. It uses the saved
@@ -203,6 +233,8 @@ Personal configuration is stored in:
 ~/.q/gateway.key
 ~/.q/library.json
 ~/.q/library.key
+~/.q/workspace-memory.json
+~/.q/workspace-memory.token
 ~/.q/mcp.json
 ```
 
@@ -564,16 +596,24 @@ state are local to the directory where q starts:
 | `.q/loom/` | Immutable, content-addressed tool artifacts. |
 | `.q/skills/` | q-managed project Agent Skill checkouts. |
 | `.q/workspace.lock` | Diagnostic metadata for the current or most recent lock owner. |
+| `.q/workspace-memory.lock` | Diagnostic metadata for the Workspace Memory server that currently owns this workspace's records and indexes. |
 | `.qignore` | Workspace discovery exclusions. |
 
-Only one writer may own a workspace. The interactive app, `q acp`, `q commit`,
-`q-mcp`, and direct Session Store opens use an OS-backed exclusive lock for
-their full lifetime. Another writer exits with owner diagnostics instead of
-opening or rebuilding shared Bleve/HNSW state.
+Two independent OS-backed locks currently protect different boundaries.
+Workspace Memory alone holds `.q/workspace-memory.lock` while at least one
+lease exists for the canonical root; this makes it the sole process that opens
+or rebuilds the shared record, Bleve, and HNSW state. The interactive app,
+`q acp`, `q-mcp`, and commands that own the local workspace runtime continue to
+hold `.q/workspace.lock` for their full lifetime. That transitional lock still
+protects the single `.q/session.json` and `.q/plan-execution.json` projections,
+local Loom/LSP state, and existing workflow assumptions until session-UUID
+storage is split out.
 
-`workspace.lock` is not a sentinel. The OS lock lives on the open file handle;
+Neither lock file is a sentinel. The OS lock lives on the open file handle;
 after a crash or forced termination the handle closes automatically, while the
-file remains as reusable diagnostic metadata.
+file remains as reusable diagnostic metadata. Workspace Memory does not
+serialize or detect concurrent edits to project files; coordinating overlapping
+file mutations remains the responsibility of the sessions involved.
 
 `/clear` removes only the current chat projection. Durable archive records and
 workspace file changes remain intact.
@@ -664,7 +704,7 @@ and returns to the input prompt.
 q supports the [`SKILL.md` Agent Skills format](https://agentskills.io/specification)
 without injecting the complete skill catalog into model context. Global skill
 metadata is projected into q Library, while project metadata is projected into
-the workspace Session Store; both are indexed by Bleve. The main chat, Griller,
+Workspace Memory records; both are indexed by Bleve. The main chat, Griller,
 and Scout can use `search_skills`; global results come from q Library and
 project results come from the workspace index. `get_skill` stores the selected
 `SKILL.md` or relative resource as a Loom artifact without copying its body
@@ -878,7 +918,8 @@ group falls back to another candidate, the fallback request starts without the
 previous candidate's ID and retains the replacement candidate's returned ID.
 
 Chat messages, tool activity, subagent lifecycle events, questions, failures,
-results, and compaction summaries are written to the Session Store. The model
+results, and compaction summaries are written through Workspace Memory to the
+workspace's Session Store records. The model
 can search this durable history with `search_archive` and page selected records
 with `get_archive_record`. Text, metadata, time bounds, sorting, and recency
 weighting are supported. With an embedding model configured, new history
@@ -895,9 +936,12 @@ the complete message history supplied with the current request. Other provider
 errors and retry failures are returned normally rather than being hidden by
 recovery.
 
-The JSON records are the source of truth. Bleve and HNSW are derived indexes and
-can be rebuilt from those records. See
-[Session Store notes](docs/session-store-notes.md) for the storage design.
+The Workspace Memory server is the only process that opens these JSON records,
+Bleve, and HNSW while the workspace is leased. The JSON records remain the
+source of truth; Bleve and HNSW are derived indexes and can be rebuilt from
+those records. See [Workspace Memory](docs/workspace-memory.md) for service
+ownership and [Session Store notes](docs/session-store-notes.md) for the storage
+design.
 
 ## Development
 
@@ -910,11 +954,12 @@ task build
 The two command entry points are:
 
 - `./cmd/q`: interactive chat plus the `acp`, `agents`, `commit`, `gateway`,
-  `library`, `model`, `mcp`, `skills`, `ignore`, `lsp`, and `help` command
+  `library`, `memory`, `model`, `mcp`, `skills`, `ignore`, `lsp`, and `help` command
   surfaces.
 - `./cmd/q-mcp`: workspace MCP stdio server. It acquires the same exclusive
-  workspace lock, opens archive/Loom/LSP/Library integrations, and excludes the
-  chat-session-only `learn` tool.
+  transitional workspace lock, leases its archive records and indexes from
+  Workspace Memory, opens Loom/LSP/Library integrations locally, and excludes
+  the chat-session-only `learn` tool.
 
 Additional design and operational notes live in:
 
@@ -922,6 +967,7 @@ Additional design and operational notes live in:
 - [Plan orchestration](docs/plan-orchestration.md) and
   [execution orchestration](docs/execution-orchestration.md)
 - [Session Store](docs/session-store-notes.md)
+- [Workspace Memory](docs/workspace-memory.md)
 - [Agent Skills](docs/agent-skills.md)
 - [LSP integration](docs/lsp.md)
 - [Global Library](docs/library.md)

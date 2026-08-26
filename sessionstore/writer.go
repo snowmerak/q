@@ -32,10 +32,19 @@ type WriterOptions struct {
 	Prepare   RecordBatchPreparer
 }
 
+// WriterStore is the persistence boundary owned by Writer. Implementations
+// may be the local Store or a client for a process that owns the workspace
+// archive. Close releases that implementation when Writer is closed.
+type WriterStore interface {
+	Save(Record) (Record, error)
+	SaveBatch([]Record) ([]Record, error)
+	Close() error
+}
+
 // Writer serializes archive writes on a background goroutine. Append never
 // waits for disk I/O; Flush and Close provide explicit durability barriers.
 type Writer struct {
-	store     *Store
+	store     WriterStore
 	queue     chan writeRequest
 	done      chan struct{}
 	ctx       context.Context
@@ -48,11 +57,11 @@ type Writer struct {
 	firstErr error
 }
 
-func NewWriter(store *Store, buffer int) *Writer {
+func NewWriter(store WriterStore, buffer int) *Writer {
 	return NewWriterWithOptions(store, WriterOptions{Buffer: buffer})
 }
 
-func NewWriterWithOptions(store *Store, options WriterOptions) *Writer {
+func NewWriterWithOptions(store WriterStore, options WriterOptions) *Writer {
 	if options.Buffer <= 0 {
 		options.Buffer = defaultWriterBuffer
 	}
@@ -198,11 +207,19 @@ func (w *Writer) saveBatch(records []Record) {
 			prepared = candidate
 		}
 	}
-	if _, err := w.store.SaveBatch(prepared); err != nil {
+	saved, err := w.store.SaveBatch(prepared)
+	if err != nil {
 		w.rememberError(err)
 		// A malformed record or partial batch failure must not prevent unrelated
 		// archive entries from reaching their individual durability boundary.
-		for _, record := range prepared {
+		// Preserve IDs and timestamps assigned before a derived-index failure so
+		// the fallback updates those records instead of creating duplicates.
+		retry := make([]Record, len(prepared))
+		copy(retry, prepared)
+		for index := 0; index < len(saved) && index < len(retry); index++ {
+			retry[index] = saved[index]
+		}
+		for _, record := range retry {
 			if _, saveErr := w.store.Save(record); saveErr != nil {
 				w.rememberError(saveErr)
 			}

@@ -23,6 +23,7 @@ import (
 	"github.com/snowmerak/q/providerhost"
 	"github.com/snowmerak/q/sessionstore"
 	"github.com/snowmerak/q/workspace"
+	"github.com/snowmerak/q/workspacememory"
 )
 
 // RunACPDefault serves ACP over stdin/stdout for a single workspace.
@@ -73,15 +74,18 @@ func RunACP(ctx context.Context, store config.Store, root string, input io.Reade
 }
 
 type acpHost struct {
-	model       model
-	lifecycle   *startupLifecycle
-	manager     *providerhost.Manager
-	client      chatClient
-	lock        *workspace.Lock
-	cancel      context.CancelFunc
-	libraryDone <-chan error
-	closeOnce   sync.Once
-	closeErr    error
+	model          model
+	lifecycle      *startupLifecycle
+	manager        *providerhost.Manager
+	client         chatClient
+	lock           *workspace.Lock
+	cancel         context.CancelFunc
+	providerCancel context.CancelFunc
+	memoryCancel   context.CancelFunc
+	memoryDone     <-chan error
+	libraryDone    <-chan error
+	closeOnce      sync.Once
+	closeErr       error
 }
 
 func openACPHost(parent context.Context, store config.Store, root string) (*acpHost, error) {
@@ -97,6 +101,14 @@ func openACPHost(parent context.Context, store config.Store, root string) (*acpH
 	}
 	host.lock = lock
 
+	memoryContext, cancelMemory := context.WithCancel(context.WithoutCancel(parent))
+	host.memoryCancel = cancelMemory
+	memoryDone := make(chan error, 1)
+	host.memoryDone = memoryDone
+	go func() {
+		memoryDone <- workspacememory.Run(memoryContext, store.Dir, io.Discard)
+	}()
+
 	libraryDone := make(chan error, 1)
 	host.libraryDone = libraryDone
 	go func() {
@@ -107,7 +119,9 @@ func openACPHost(parent context.Context, store config.Store, root string) (*acpH
 	if loadErr != nil && !errors.Is(loadErr, config.ErrNotFound) {
 		return fail(loadErr)
 	}
-	manager, managerErr := providerhost.NewManager(runtimeContext, providerhost.Store{Dir: store.Dir})
+	providerContext, cancelProvider := context.WithCancel(context.WithoutCancel(parent))
+	host.providerCancel = cancelProvider
+	manager, managerErr := providerhost.NewManager(providerContext, providerhost.Store{Dir: store.Dir})
 	if managerErr != nil {
 		return fail(managerErr)
 	}
@@ -116,12 +130,12 @@ func openACPHost(parent context.Context, store config.Store, root string) (*acpH
 	host.lifecycle = lifecycle
 	initialized := (startupRequest{
 		ctx:            runtimeContext,
+		memoryCtx:      memoryContext,
 		loaded:         loaded,
 		configErr:      loadErr,
 		store:          store,
 		manager:        manager,
 		workspaceStore: workspace.Store{Root: root},
-		workspaceLock:  lock,
 		lifecycle:      lifecycle,
 		factory:        managedClientFactory(manager),
 	}).run(nil)
@@ -152,22 +166,29 @@ func openACPHost(parent context.Context, store config.Store, root string) (*acpH
 
 func (h *acpHost) Close() error {
 	h.closeOnce.Do(func() {
+		var closeErrors []error
 		if h.cancel != nil {
 			h.cancel()
 		}
-		var closeErrors []error
-		if h.libraryDone != nil {
-			closeErrors = append(closeErrors, <-h.libraryDone)
-		}
 		if h.lifecycle != nil {
 			h.lifecycle.waitIfStarted()
+			closeErrors = append(closeErrors, h.lifecycle.closeResources())
 		}
 
 		if h.client != nil {
 			closeErrors = append(closeErrors, h.client.Close())
 		}
-		if h.lifecycle != nil {
-			closeErrors = append(closeErrors, h.lifecycle.closeResources())
+		if h.providerCancel != nil {
+			h.providerCancel()
+		}
+		if h.memoryCancel != nil {
+			h.memoryCancel()
+		}
+		if h.memoryDone != nil {
+			closeErrors = append(closeErrors, <-h.memoryDone)
+		}
+		if h.libraryDone != nil {
+			closeErrors = append(closeErrors, <-h.libraryDone)
 		}
 		if h.manager != nil {
 			closeErrors = append(closeErrors, h.manager.Close())

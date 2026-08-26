@@ -15,6 +15,7 @@ import (
 	"github.com/snowmerak/q/providerhost"
 	qtools "github.com/snowmerak/q/tools"
 	"github.com/snowmerak/q/workspace"
+	"github.com/snowmerak/q/workspacememory"
 )
 
 type chatClient interface {
@@ -71,6 +72,14 @@ func managedClientFactory(runtime providerRuntime) clientFactory {
 func Run(ctx context.Context, store config.Store) error {
 	runtimeContext, cancelRuntime := context.WithCancel(ctx)
 	defer cancelRuntime()
+	providerContext, cancelProvider := context.WithCancel(context.WithoutCancel(ctx))
+	defer cancelProvider()
+	memoryContext, cancelMemory := context.WithCancel(context.WithoutCancel(ctx))
+	defer cancelMemory()
+	memoryDone := make(chan error, 1)
+	go func() {
+		memoryDone <- workspacememory.Run(memoryContext, store.Dir, io.Discard)
+	}()
 	libraryDone := make(chan error, 1)
 	go func() {
 		libraryDone <- qlibrary.Run(runtimeContext, store.Dir, io.Discard)
@@ -89,7 +98,7 @@ func Run(ctx context.Context, store config.Store) error {
 		return err
 	}
 
-	manager, managerErr := providerhost.NewManager(runtimeContext, providerhost.Store{Dir: store.Dir})
+	manager, managerErr := providerhost.NewManager(providerContext, providerhost.Store{Dir: store.Dir})
 	if managerErr != nil {
 		return managerErr
 	}
@@ -109,22 +118,26 @@ func Run(ctx context.Context, store config.Store) error {
 	initialModel.status = "Starting Gateway and workspace services…"
 	startup := startupRequest{
 		ctx: runtimeContext, store: store, workspaceStore: workspaceStore,
-		workspaceLock: workspaceLock, loaded: loaded, configErr: err,
+		memoryCtx: memoryContext, loaded: loaded, configErr: err,
 		manager: manager, factory: factory, lifecycle: lifecycle,
 	}
 	initialModel.startup = startStartup(startup.run, initialModelLoadWait)
 
 	final, runErr := tea.NewProgram(initialModel).Run()
 	cancelRuntime()
-	libraryErr := <-libraryDone
 	lifecycle.waitIfStarted()
+	resourcesCloseErr := lifecycle.closeResources()
 	var clientCloseErr error
 	if finalModel, ok := final.(model); ok && finalModel.client != nil {
 		clientCloseErr = finalModel.client.Close()
 	} else if startupClient := lifecycle.startupClient(); startupClient != nil {
 		clientCloseErr = startupClient.Close()
 	}
-	return errors.Join(runErr, clientCloseErr, libraryErr, lifecycle.closeResources())
+	cancelProvider()
+	cancelMemory()
+	memoryErr := <-memoryDone
+	libraryErr := <-libraryDone
+	return errors.Join(runErr, resourcesCloseErr, clientCloseErr, memoryErr, libraryErr)
 }
 
 func RunDefault(ctx context.Context) error {

@@ -18,6 +18,7 @@ import (
 	"github.com/snowmerak/q/sessionstore"
 	qtools "github.com/snowmerak/q/tools"
 	"github.com/snowmerak/q/workspace"
+	"github.com/snowmerak/q/workspacememory"
 )
 
 const initialModelLoadWait = 1500 * time.Millisecond
@@ -66,6 +67,7 @@ type startupLifecycle struct {
 	client    chatClient
 	tools     *qtools.Runtime
 	archive   *sessionstore.Writer
+	memory    *workspacememory.Runtime
 }
 
 func newStartupLifecycle() *startupLifecycle {
@@ -84,11 +86,13 @@ func (lifecycle *startupLifecycle) setResources(
 	configuredClient chatClient,
 	tools *qtools.Runtime,
 	archive *sessionstore.Writer,
+	memory *workspacememory.Runtime,
 ) {
 	lifecycle.mu.Lock()
 	lifecycle.client = configuredClient
 	lifecycle.tools = tools
 	lifecycle.archive = archive
+	lifecycle.memory = memory
 	lifecycle.mu.Unlock()
 }
 
@@ -110,26 +114,36 @@ func (lifecycle *startupLifecycle) closeResources() error {
 	lifecycle.mu.Lock()
 	archive := lifecycle.archive
 	tools := lifecycle.tools
+	memory := lifecycle.memory
 	lifecycle.archive = nil
 	lifecycle.tools = nil
+	lifecycle.memory = nil
 	lifecycle.mu.Unlock()
 
-	var archiveErr error
+	var flushErr error
 	if archive != nil {
-		archiveErr = archive.Close()
+		flushErr = archive.Flush()
 	}
 	var toolsErr error
 	if tools != nil {
 		toolsErr = tools.Close()
 	}
-	return errors.Join(archiveErr, toolsErr)
+	var archiveErr error
+	if archive != nil {
+		archiveErr = archive.Close()
+	}
+	var memoryErr error
+	if memory != nil {
+		memoryErr = memory.Close()
+	}
+	return errors.Join(flushErr, toolsErr, archiveErr, memoryErr)
 }
 
 type startupRequest struct {
 	ctx            context.Context
+	memoryCtx      context.Context
 	store          config.Store
 	workspaceStore workspace.Store
-	workspaceLock  *workspace.Lock
 	loaded         config.Config
 	configErr      error
 	manager        *providerhost.Manager
@@ -175,10 +189,18 @@ func (request startupRequest) run(modelReady chan<- struct{}) runtimeInitialized
 			Model: loaded.Embedding.Model, Dimensions: loaded.Embedding.Dimensions,
 		}
 	}
-	archiveStore, archiveOpenErr := sessionstore.OpenWithOptions(
-		request.workspaceStore.Root,
-		sessionstore.OpenOptions{WorkspaceLock: request.workspaceLock, Vector: vectorConfig},
-	)
+	memoryContext := request.memoryCtx
+	if memoryContext == nil {
+		memoryContext = request.ctx
+	}
+	memoryRuntime, archiveOpenErr := workspacememory.Ensure(memoryContext, request.store.Dir)
+	var archiveStore *workspacememory.Workspace
+	if archiveOpenErr == nil {
+		archiveStore, archiveOpenErr = memoryRuntime.Client().OpenWorkspace(
+			request.ctx, request.workspaceStore.Root, vectorConfig,
+		)
+	}
+	request.lifecycle.setResources(nil, nil, nil, memoryRuntime)
 	result.archiveErr = archiveOpenErr
 	if errors.Is(archiveOpenErr, sessionstore.ErrIndexLocked) {
 		result.err = archiveOpenErr
@@ -190,7 +212,7 @@ func (request startupRequest) run(modelReady chan<- struct{}) runtimeInitialized
 	if archiveOpenErr == nil {
 		semanticArchive = archiveembed.New(archiveStore)
 		archive = sessionstore.NewWriterWithOptions(archiveStore, sessionstore.WriterOptions{
-			Context: request.ctx, Prepare: semanticArchive.Prepare,
+			Context: memoryContext, Prepare: semanticArchive.Prepare,
 		})
 	}
 	workspaceLSP, toolsErr := request.workspaceStore.LoadLSP()
@@ -224,7 +246,7 @@ func (request startupRequest) run(modelReady chan<- struct{}) runtimeInitialized
 		result.err = toolsErr
 		return result
 	}
-	request.lifecycle.setResources(nil, tools, archive)
+	request.lifecycle.setResources(nil, tools, archive, memoryRuntime)
 	result.archive = archive
 	result.archiveSearch = semanticArchive
 
@@ -270,7 +292,7 @@ func (request startupRequest) run(modelReady chan<- struct{}) runtimeInitialized
 				_ = request.store.Save(loaded)
 			}
 		}
-		request.lifecycle.setResources(configuredClient, tools, archive)
+		request.lifecycle.setResources(configuredClient, tools, archive, memoryRuntime)
 		result.config = loaded
 		result.client = configuredClient
 	}
