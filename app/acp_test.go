@@ -33,6 +33,9 @@ type fakeACPConnection struct {
 	elicitationAction   string
 	elicitationErr      error
 	elicitationContents []map[string]any
+	blockUpdates        bool
+	updateEntered       chan struct{}
+	updateOnce          sync.Once
 }
 
 type fakeACPExternalTools struct {
@@ -62,6 +65,35 @@ type blockingACPClient struct {
 	once    sync.Once
 }
 
+type routingBlockingACPClient struct {
+	mu      sync.Mutex
+	started map[string]chan struct{}
+}
+
+func (b *routingBlockingACPClient) Chat(ctx context.Context, request client.ChatRequest) (*client.ChatResponse, error) {
+	key := ""
+	for index := len(request.Messages) - 1; index >= 0; index-- {
+		if request.Messages[index].Role == client.RoleUser {
+			key = request.Messages[index].TextContent()
+			break
+		}
+	}
+	b.mu.Lock()
+	started := b.started[key]
+	if started != nil {
+		close(started)
+		delete(b.started, key)
+	}
+	b.mu.Unlock()
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+func (b *routingBlockingACPClient) ListModels(context.Context) ([]client.Model, error) {
+	return nil, nil
+}
+func (b *routingBlockingACPClient) Close() error { return nil }
+
 func (b *blockingACPClient) Chat(ctx context.Context, _ client.ChatRequest) (*client.ChatResponse, error) {
 	b.once.Do(func() { close(b.started) })
 	<-ctx.Done()
@@ -71,10 +103,19 @@ func (b *blockingACPClient) Chat(ctx context.Context, _ client.ChatRequest) (*cl
 func (b *blockingACPClient) ListModels(context.Context) ([]client.Model, error) { return nil, nil }
 func (b *blockingACPClient) Close() error                                       { return nil }
 
-func (f *fakeACPConnection) SessionUpdate(_ context.Context, notification acp.SessionNotification) error {
+func (f *fakeACPConnection) SessionUpdate(ctx context.Context, notification acp.SessionNotification) error {
 	f.mu.Lock()
 	f.updates = append(f.updates, notification)
+	block := f.blockUpdates
+	entered := f.updateEntered
 	f.mu.Unlock()
+	if block {
+		if entered != nil {
+			f.updateOnce.Do(func() { close(entered) })
+		}
+		<-ctx.Done()
+		return ctx.Err()
+	}
 	return nil
 }
 
@@ -149,12 +190,36 @@ func testACPAgent(t *testing.T, configuredClient chatClient, tools agentToolRunt
 	return agent, workspaceStore, connection
 }
 
-func activeACPWorkspaceStore(t *testing.T, agent *acpAgent) workspace.Store {
+func activeACPRuntime(t *testing.T, agent *acpAgent, sessionIDs ...acp.SessionId) *acpAgent {
 	t.Helper()
-	if agent == nil || agent.state == nil || agent.state.workspaceStore == nil || agent.state.workspaceStore.SessionID == "" {
-		t.Fatal("ACP agent has no active session store")
+	if agent == nil {
+		t.Fatal("ACP agent is unavailable")
 	}
-	return *agent.state.workspaceStore
+	agent.stateMu.Lock()
+	defer agent.stateMu.Unlock()
+	if len(sessionIDs) == 1 {
+		if runtime := agent.sessions[sessionIDs[0]]; runtime != nil {
+			return runtime
+		}
+		t.Fatalf("ACP session %q is not active", sessionIDs[0])
+	}
+	if len(agent.sessions) != 1 {
+		t.Fatalf("ACP agent has %d active sessions; specify one", len(agent.sessions))
+	}
+	for _, runtime := range agent.sessions {
+		return runtime
+	}
+	t.Fatal("ACP agent has no active session")
+	return nil
+}
+
+func activeACPWorkspaceStore(t *testing.T, agent *acpAgent, sessionIDs ...acp.SessionId) workspace.Store {
+	t.Helper()
+	runtime := activeACPRuntime(t, agent, sessionIDs...)
+	if runtime.state == nil || runtime.state.workspaceStore == nil || runtime.state.workspaceStore.SessionID == "" {
+		t.Fatal("ACP session has no active workspace store")
+	}
+	return *runtime.state.workspaceStore
 }
 
 func openTestACPSession(t *testing.T, agent *acpAgent, root string) acp.SessionId {
@@ -169,7 +234,7 @@ func openTestACPSession(t *testing.T, agent *acpAgent, root string) acp.SessionI
 	return response.SessionId
 }
 
-func TestACPAgentKeepsOneActiveSessionPerProcess(t *testing.T) {
+func TestACPAgentKeepsMultipleActiveSessionsPerProcess(t *testing.T) {
 	agent, workspaceStore, _ := testACPAgent(t, &fakeClient{}, &fakeAgentTools{})
 	initialized, err := agent.Initialize(t.Context(), acp.InitializeRequest{})
 	if err != nil {
@@ -183,24 +248,48 @@ func TestACPAgentKeepsOneActiveSessionPerProcess(t *testing.T) {
 		t.Fatal("session close/delete or MCP HTTP capability was not advertised")
 	}
 
-	sessionID := openTestACPSession(t, agent, workspaceStore.Root)
-	if _, err := agent.NewSession(t.Context(), acp.NewSessionRequest{
+	first := openTestACPSession(t, agent, workspaceStore.Root)
+	secondResponse, err := agent.NewSession(t.Context(), acp.NewSessionRequest{
 		Cwd: workspaceStore.Root, McpServers: []acp.McpServer{},
-	}); err == nil {
-		t.Fatal("second ACP session for the same workspace was accepted")
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second := secondResponse.SessionId
+	if second == first {
+		t.Fatalf("second session reused ID %q", first)
 	}
 	if _, err := agent.NewSession(t.Context(), acp.NewSessionRequest{
 		Cwd: t.TempDir(), McpServers: []acp.McpServer{},
 	}); err == nil {
 		t.Fatal("session for a different workspace was accepted")
 	}
-
-	if _, err := agent.CloseSession(t.Context(), acp.CloseSessionRequest{SessionId: sessionID}); err != nil {
+	if _, err := agent.Prompt(t.Context(), acp.PromptRequest{
+		SessionId: first, Prompt: []acp.ContentBlock{acp.TextBlock("first session")},
+	}); err != nil {
 		t.Fatal(err)
 	}
-	reopened := openTestACPSession(t, agent, workspaceStore.Root)
-	if reopened == sessionID {
-		t.Fatalf("new session reused closed session ID %q", sessionID)
+	if _, err := agent.Prompt(t.Context(), acp.PromptRequest{
+		SessionId: second, Prompt: []acp.ContentBlock{acp.TextBlock("second session")},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	firstSaved, err := activeACPWorkspaceStore(t, agent, first).Load()
+	if err != nil || len(firstSaved.Transcript) != 2 || firstSaved.Transcript[0].Content != "first session" {
+		t.Fatalf("first session projection = %#v, %v", firstSaved.Transcript, err)
+	}
+	secondSaved, err := activeACPWorkspaceStore(t, agent, second).Load()
+	if err != nil || len(secondSaved.Transcript) != 2 || secondSaved.Transcript[0].Content != "second session" {
+		t.Fatalf("second session projection = %#v, %v", secondSaved.Transcript, err)
+	}
+
+	if _, err := agent.CloseSession(t.Context(), acp.CloseSessionRequest{SessionId: first}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := agent.Prompt(t.Context(), acp.PromptRequest{
+		SessionId: second, Prompt: []acp.ContentBlock{acp.TextBlock("second remains active")},
+	}); err != nil {
+		t.Fatalf("closing first session disrupted second: %v", err)
 	}
 	listed, err := agent.ListSessions(t.Context(), acp.ListSessionsRequest{Cwd: &workspaceStore.Root})
 	if err != nil {
@@ -210,14 +299,14 @@ func TestACPAgentKeepsOneActiveSessionPerProcess(t *testing.T) {
 	for _, session := range listed.Sessions {
 		listedIDs = append(listedIDs, session.SessionId)
 	}
-	if len(listedIDs) != 2 || !slices.Contains(listedIDs, sessionID) || !slices.Contains(listedIDs, reopened) {
+	if len(listedIDs) != 2 || !slices.Contains(listedIDs, first) || !slices.Contains(listedIDs, second) {
 		t.Fatalf("listed session IDs = %#v", listedIDs)
 	}
-	if _, err := agent.UnstableDeleteSession(t.Context(), acp.UnstableDeleteSessionRequest{SessionId: sessionID}); err != nil {
+	if _, err := agent.UnstableDeleteSession(t.Context(), acp.UnstableDeleteSessionRequest{SessionId: first}); err != nil {
 		t.Fatal(err)
 	}
 	listed, err = agent.ListSessions(t.Context(), acp.ListSessionsRequest{})
-	if err != nil || len(listed.Sessions) != 1 || listed.Sessions[0].SessionId != reopened {
+	if err != nil || len(listed.Sessions) != 1 || listed.Sessions[0].SessionId != second {
 		t.Fatalf("sessions after deleting inactive session = %#v, %v", listed.Sessions, err)
 	}
 }
@@ -243,6 +332,235 @@ func TestACPAgentRejectsNewLifecycleWorkAfterShutdown(t *testing.T) {
 	}
 }
 
+func TestACPAgentShutdownWaitsForUnpublishedSessionActivation(t *testing.T) {
+	tools := &fakeACPExternalTools{
+		blockCall: 1, blockEntered: make(chan struct{}), blockRelease: make(chan struct{}),
+	}
+	agent, workspaceStore, _ := testACPAgent(t, &fakeClient{}, tools)
+	created := make(chan error, 1)
+	go func() {
+		_, err := agent.NewSession(t.Context(), acp.NewSessionRequest{
+			Cwd:        workspaceStore.Root,
+			McpServers: []acp.McpServer{{Stdio: &acp.McpServerStdio{Name: "slow", Command: "slow-mcp"}}},
+		})
+		created <- err
+	}()
+	select {
+	case <-tools.blockEntered:
+	case <-time.After(time.Second):
+		t.Fatal("session activation did not reach the MCP barrier")
+	}
+	shutdownDone := make(chan error, 1)
+	go func() { shutdownDone <- agent.shutdown() }()
+	select {
+	case err := <-shutdownDone:
+		t.Fatalf("shutdown returned before activation released: %v", err)
+	default:
+	}
+	close(tools.blockRelease)
+	if err := <-created; err == nil || !strings.Contains(err.Error(), "shutting down") {
+		t.Fatalf("activation result after shutdown = %v", err)
+	}
+	if err := <-shutdownDone; err != nil {
+		t.Fatal(err)
+	}
+	agent.stateMu.Lock()
+	active := len(agent.sessions)
+	agent.stateMu.Unlock()
+	if active != 0 {
+		t.Fatalf("shutdown published %d late session runtimes", active)
+	}
+}
+
+func TestACPAgentShutdownCancelsTurnsBeforeWaitingForActivation(t *testing.T) {
+	tools := &fakeACPExternalTools{}
+	agent, workspaceStore, _ := testACPAgent(t, &fakeClient{}, tools)
+	activeID := openTestACPSession(t, agent, workspaceStore.Root)
+	servers := []acp.McpServer{{Stdio: &acp.McpServerStdio{Name: "session", Command: "session-mcp"}}}
+	created, err := agent.NewSession(t.Context(), acp.NewSessionRequest{Cwd: workspaceStore.Root, McpServers: servers})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := agent.CloseSession(t.Context(), acp.CloseSessionRequest{SessionId: created.SessionId}); err != nil {
+		t.Fatal(err)
+	}
+
+	agent.mcpMu.Lock()
+	locked := true
+	defer func() {
+		if locked {
+			agent.mcpMu.Unlock()
+		}
+	}()
+	promptDone := make(chan error, 1)
+	go func() {
+		_, err := agent.Prompt(t.Context(), acp.PromptRequest{
+			SessionId: activeID, Prompt: []acp.ContentBlock{acp.TextBlock("/help")},
+		})
+		promptDone <- err
+	}()
+	activeRuntime := activeACPRuntime(t, agent, activeID)
+	waitUntil := func(message string, predicate func() bool) {
+		t.Helper()
+		deadline := time.Now().Add(time.Second)
+		for !predicate() {
+			if time.Now().After(deadline) {
+				t.Fatal(message)
+			}
+			time.Sleep(time.Millisecond)
+		}
+	}
+	waitUntil("prompt did not install its turn cancellation", func() bool {
+		activeRuntime.stateMu.Lock()
+		defer activeRuntime.stateMu.Unlock()
+		return activeRuntime.turnCancel != nil
+	})
+	resumeDone := make(chan error, 1)
+	go func() {
+		_, err := agent.ResumeSession(t.Context(), acp.ResumeSessionRequest{
+			SessionId: created.SessionId, Cwd: workspaceStore.Root, McpServers: servers,
+		})
+		resumeDone <- err
+	}()
+	waitUntil("resume did not reserve its activation", func() bool {
+		agent.stateMu.Lock()
+		defer agent.stateMu.Unlock()
+		return agent.opening[created.SessionId] != nil
+	})
+	shutdownDone := make(chan error, 1)
+	go func() { shutdownDone <- agent.shutdown() }()
+	waitUntil("shutdown waited for activation before marking the active turn closing", func() bool {
+		activeRuntime.stateMu.Lock()
+		defer activeRuntime.stateMu.Unlock()
+		return activeRuntime.closing
+	})
+	agent.mcpMu.Unlock()
+	locked = false
+	if err := <-promptDone; err == nil && !activeRuntime.closing {
+		t.Fatalf("prompt unexpectedly continued through shutdown: %v", err)
+	}
+	if err := <-resumeDone; err == nil || !strings.Contains(err.Error(), "shutting down") {
+		t.Fatalf("resume result after shutdown = %v", err)
+	}
+	if err := <-shutdownDone; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestACPAgentActiveLoadAndResumeAreIdempotentForSameMCPServers(t *testing.T) {
+	tools := &fakeACPExternalTools{}
+	agent, workspaceStore, _ := testACPAgent(t, &fakeClient{}, tools)
+	servers := []acp.McpServer{{Stdio: &acp.McpServerStdio{Name: "client", Command: "client-mcp"}}}
+	created, err := agent.NewSession(t.Context(), acp.NewSessionRequest{
+		Cwd: workspaceStore.Root, McpServers: servers,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := agent.ResumeSession(t.Context(), acp.ResumeSessionRequest{
+		SessionId: created.SessionId, Cwd: workspaceStore.Root, McpServers: servers,
+	}); err != nil {
+		t.Fatalf("idempotent resume: %v", err)
+	}
+	if _, err := agent.LoadSession(t.Context(), acp.LoadSessionRequest{
+		SessionId: created.SessionId, Cwd: workspaceStore.Root, McpServers: servers,
+	}); err != nil {
+		t.Fatalf("idempotent load: %v", err)
+	}
+	if len(tools.configured) != 2 {
+		t.Fatalf("idempotent lifecycle reconfigured MCP %d times", len(tools.configured))
+	}
+	different := []acp.McpServer{{Stdio: &acp.McpServerStdio{Name: "other", Command: "other-mcp"}}}
+	if _, err := agent.ResumeSession(t.Context(), acp.ResumeSessionRequest{
+		SessionId: created.SessionId, Cwd: workspaceStore.Root, McpServers: different,
+	}); err == nil || !strings.Contains(err.Error(), "cannot be changed") {
+		t.Fatalf("different active MCP configuration error = %v", err)
+	}
+}
+
+func TestACPAgentConcurrentResumeSharesOneSessionRuntime(t *testing.T) {
+	agent, workspaceStore, _ := testACPAgent(t, &fakeClient{}, &fakeAgentTools{})
+	sessionID := openTestACPSession(t, agent, workspaceStore.Root)
+	if _, err := agent.CloseSession(t.Context(), acp.CloseSessionRequest{SessionId: sessionID}); err != nil {
+		t.Fatal(err)
+	}
+	start := make(chan struct{})
+	errors := make(chan error, 2)
+	for range 2 {
+		go func() {
+			<-start
+			_, err := agent.ResumeSession(t.Context(), acp.ResumeSessionRequest{
+				SessionId: sessionID, Cwd: workspaceStore.Root,
+			})
+			errors <- err
+		}()
+	}
+	close(start)
+	for range 2 {
+		if err := <-errors; err != nil {
+			t.Fatal(err)
+		}
+	}
+	agent.stateMu.Lock()
+	active := len(agent.sessions)
+	agent.stateMu.Unlock()
+	if active != 1 {
+		t.Fatalf("concurrent resume created %d runtimes", active)
+	}
+}
+
+func TestACPAgentCloseWaitsForSessionActivation(t *testing.T) {
+	tools := &fakeACPExternalTools{
+		blockCall: 3, blockEntered: make(chan struct{}), blockRelease: make(chan struct{}),
+	}
+	agent, workspaceStore, _ := testACPAgent(t, &fakeClient{}, tools)
+	servers := []acp.McpServer{{Stdio: &acp.McpServerStdio{Name: "session", Command: "session-mcp"}}}
+	created, err := agent.NewSession(t.Context(), acp.NewSessionRequest{
+		Cwd: workspaceStore.Root, McpServers: servers,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := agent.CloseSession(t.Context(), acp.CloseSessionRequest{SessionId: created.SessionId}); err != nil {
+		t.Fatal(err)
+	}
+	resumeDone := make(chan error, 1)
+	go func() {
+		_, err := agent.ResumeSession(t.Context(), acp.ResumeSessionRequest{
+			SessionId: created.SessionId, Cwd: workspaceStore.Root, McpServers: servers,
+		})
+		resumeDone <- err
+	}()
+	select {
+	case <-tools.blockEntered:
+	case <-time.After(time.Second):
+		t.Fatal("resume did not reach its activation barrier")
+	}
+	closeDone := make(chan error, 1)
+	go func() {
+		_, err := agent.CloseSession(t.Context(), acp.CloseSessionRequest{SessionId: created.SessionId})
+		closeDone <- err
+	}()
+	select {
+	case err := <-closeDone:
+		t.Fatalf("close returned before activation completed: %v", err)
+	default:
+	}
+	close(tools.blockRelease)
+	if err := <-resumeDone; err != nil {
+		t.Fatal(err)
+	}
+	if err := <-closeDone; err != nil {
+		t.Fatal(err)
+	}
+	agent.stateMu.Lock()
+	_, active := agent.sessions[created.SessionId]
+	agent.stateMu.Unlock()
+	if active {
+		t.Fatal("session became active after close returned")
+	}
+}
+
 func TestACPAgentLoadsAndResumesTheWorkspaceSession(t *testing.T) {
 	agent, workspaceStore, _ := testACPAgent(t, &fakeClient{}, &fakeAgentTools{})
 	sessionID := openTestACPSession(t, agent, workspaceStore.Root)
@@ -252,12 +570,13 @@ func TestACPAgentLoadsAndResumesTheWorkspaceSession(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
+	closedRuntime := activeACPRuntime(t, agent, sessionID)
 	if _, err := agent.CloseSession(t.Context(), acp.CloseSessionRequest{SessionId: sessionID}); err != nil {
 		t.Fatal(err)
 	}
-	if agent.state.memory != nil || agent.state.learning != nil || len(agent.state.messages) != 0 ||
-		agent.state.activeTask != nil || agent.state.workspaceStore == nil || agent.state.workspaceStore.SessionID != "" {
-		t.Fatalf("closed ACP session retained in-memory state: %#v", agent.state.workspaceStore)
+	if closedRuntime.state.memory != nil || closedRuntime.state.learning != nil || len(closedRuntime.state.messages) != 0 ||
+		closedRuntime.state.activeTask != nil || closedRuntime.state.workspaceStore == nil || closedRuntime.state.workspaceStore.SessionID != "" {
+		t.Fatalf("closed ACP session retained in-memory state: %#v", closedRuntime.state.workspaceStore)
 	}
 
 	restartedState := newModel(t.Context(), config.Store{Dir: t.TempDir()}, nil)
@@ -798,15 +1117,16 @@ func TestACPAgentClearKeepsSessionAndDropsConversationProjection(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	runID := agent.state.runID
+	runtime := activeACPRuntime(t, agent, sessionID)
+	runID := runtime.state.runID
 	if _, err := agent.Prompt(t.Context(), acp.PromptRequest{
 		SessionId: sessionID,
 		Prompt:    []acp.ContentBlock{acp.TextBlock("/clear")},
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if agent.sessionID != sessionID || agent.state.runID != runID || !agent.sessionOpen {
-		t.Fatalf("clear changed active session: id=%q run=%q open=%v", agent.sessionID, agent.state.runID, agent.sessionOpen)
+	if runtime.sessionID != sessionID || runtime.state.runID != runID || !runtime.sessionOpen {
+		t.Fatalf("clear changed active session: id=%q run=%q open=%v", runtime.sessionID, runtime.state.runID, runtime.sessionOpen)
 	}
 	if cleared, err := activeACPWorkspaceStore(t, agent).Load(); err != nil || len(cleared.Transcript) != 0 {
 		t.Fatalf("workspace projection after clear: saved=%#v err=%v", cleared, err)
@@ -860,7 +1180,7 @@ func TestACPAgentClearReportsPlanCheckpointRemovalFailure(t *testing.T) {
 	}
 }
 
-func TestACPAgentRestoresCapturedWorkspaceMCPOnClose(t *testing.T) {
+func TestACPAgentRestoresCapturedWorkspaceMCPAfterFallbackValidation(t *testing.T) {
 	tools := &fakeACPExternalTools{}
 	agent, workspaceStore, _ := testACPAgent(t, &fakeClient{}, tools)
 	base := mcpconfig.Default()
@@ -880,8 +1200,12 @@ func TestACPAgentRestoresCapturedWorkspaceMCPOnClose(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(tools.configured) != 1 || len(tools.configured[0].Servers) != 2 {
+	if len(tools.configured) != 2 || len(tools.configured[0].Servers) != 2 {
 		t.Fatalf("session MCP config = %#v", tools.configured)
+	}
+	restored := tools.configured[1]
+	if len(restored.Servers) != 1 || restored.Servers["workspace"].Command != "workspace-mcp" {
+		t.Fatalf("restored MCP config = %#v", restored)
 	}
 	if err := os.WriteFile(agent.state.mcpSettingsStore.Path(), []byte("{"), 0o600); err != nil {
 		t.Fatal(err)
@@ -892,11 +1216,7 @@ func TestACPAgentRestoresCapturedWorkspaceMCPOnClose(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(tools.configured) != 2 {
-		t.Fatalf("MCP configure calls = %d", len(tools.configured))
-	}
-	restored := tools.configured[1]
-	if len(restored.Servers) != 1 || restored.Servers["workspace"].Command != "workspace-mcp" {
-		t.Fatalf("restored MCP config = %#v", restored)
+		t.Fatalf("closing an idle session unexpectedly reconfigured MCP: %d calls", len(tools.configured))
 	}
 }
 
@@ -927,31 +1247,140 @@ func TestACPAgentRestoresWorkspaceMCPWhenActivationContextIsCancelled(t *testing
 	}
 }
 
-func TestACPAgentCancelsLearningBeforeSlowMCPCleanup(t *testing.T) {
-	tools := &fakeACPExternalTools{
-		blockCall: 2, blockEntered: make(chan struct{}), blockRelease: make(chan struct{}),
+func TestACPAgentFallbackMCPConfigurationFollowsPromptSession(t *testing.T) {
+	tools := &fakeACPExternalTools{}
+	agent, workspaceStore, _ := testACPAgent(t, &fakeClient{}, tools)
+	create := func(command string) acp.SessionId {
+		t.Helper()
+		response, err := agent.NewSession(t.Context(), acp.NewSessionRequest{
+			Cwd:        workspaceStore.Root,
+			McpServers: []acp.McpServer{{Stdio: &acp.McpServerStdio{Name: command, Command: command}}},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return response.SessionId
 	}
+	first := create("first-mcp")
+	second := create("second-mcp")
+	for _, sessionID := range []acp.SessionId{first, second} {
+		if _, err := agent.Prompt(t.Context(), acp.PromptRequest{
+			SessionId: sessionID, Prompt: []acp.ContentBlock{acp.TextBlock("/help")},
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(tools.configured) != 8 {
+		t.Fatalf("MCP configure calls = %d, want activation and prompt switch/restore pairs", len(tools.configured))
+	}
+	commandAt := func(index int) string {
+		for id, server := range tools.configured[index].Servers {
+			if strings.HasPrefix(id, "acp_session_") {
+				return server.Command
+			}
+		}
+		return ""
+	}
+	if commandAt(4) != "first-mcp" || commandAt(6) != "second-mcp" ||
+		len(tools.configured[5].Servers) != 0 || len(tools.configured[7].Servers) != 0 {
+		t.Fatalf("per-session MCP switches = %#v", tools.configured[4:])
+	}
+}
+
+func TestACPAgentCancelsSessionLearningOnClose(t *testing.T) {
+	tools := &fakeACPExternalTools{}
 	agent, workspaceStore, _ := testACPAgent(t, &fakeClient{}, tools)
 	sessionID := openTestACPSession(t, agent, workspaceStore.Root)
-	learningContext := agent.state.learningCtx
-	closed := make(chan error, 1)
-	go func() {
-		_, err := agent.CloseSession(context.Background(), acp.CloseSessionRequest{SessionId: sessionID})
-		closed <- err
-	}()
-	select {
-	case <-tools.blockEntered:
-	case <-time.After(time.Second):
-		t.Fatal("MCP cleanup did not start")
+	learningContext := activeACPRuntime(t, agent, sessionID).state.learningCtx
+	if _, err := agent.CloseSession(context.Background(), acp.CloseSessionRequest{SessionId: sessionID}); err != nil {
+		t.Fatal(err)
 	}
 	select {
 	case <-learningContext.Done():
 	default:
-		t.Fatal("session learning was still running when MCP cleanup began")
+		t.Fatal("session learning was still running after close")
 	}
-	close(tools.blockRelease)
-	if err := <-closed; err != nil {
+}
+
+func TestACPAgentLearningControlUpdatesEveryActiveSession(t *testing.T) {
+	agent, workspaceStore, _ := testACPAgent(t, &fakeClient{}, &fakeAgentTools{})
+	first := openTestACPSession(t, agent, workspaceStore.Root)
+	second := openTestACPSession(t, agent, workspaceStore.Root)
+	firstRuntime := activeACPRuntime(t, agent, first)
+	secondRuntime := activeACPRuntime(t, agent, second)
+	firstContext := firstRuntime.state.learningCtx
+	secondContext := secondRuntime.state.learningCtx
+	if _, err := agent.Prompt(t.Context(), acp.PromptRequest{
+		SessionId: first, Prompt: []acp.ContentBlock{acp.TextBlock("/learn off")},
+	}); err != nil {
 		t.Fatal(err)
+	}
+	for _, runtime := range []*acpAgent{firstRuntime, secondRuntime} {
+		if !runtime.state.learningDisabled() || runtime.state.learningCtx != nil {
+			t.Fatalf("learning was not disabled for session %q", runtime.sessionID)
+		}
+	}
+	for _, learningContext := range []context.Context{firstContext, secondContext} {
+		select {
+		case <-learningContext.Done():
+		default:
+			t.Fatal("an active session's Thinker context was not cancelled")
+		}
+	}
+	if _, err := agent.Prompt(t.Context(), acp.PromptRequest{
+		SessionId: second, Prompt: []acp.ContentBlock{acp.TextBlock("/learn on")},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for _, runtime := range []*acpAgent{firstRuntime, secondRuntime} {
+		if runtime.state.learningDisabled() || runtime.state.learningCtx == nil {
+			t.Fatalf("learning was not enabled for session %q", runtime.sessionID)
+		}
+		select {
+		case <-runtime.state.learningCtx.Done():
+			t.Fatalf("session %q received an already-cancelled Thinker context", runtime.sessionID)
+		default:
+		}
+	}
+}
+
+func TestACPAgentShutdownCancelsBlockedLearningStatusUpdate(t *testing.T) {
+	agent, workspaceStore, connection := testACPAgent(t, &fakeClient{}, &fakeAgentTools{})
+	sessionID := openTestACPSession(t, agent, workspaceStore.Root)
+	connection.mu.Lock()
+	connection.blockUpdates = true
+	connection.updateEntered = make(chan struct{})
+	entered := connection.updateEntered
+	connection.mu.Unlock()
+	promptDone := make(chan error, 1)
+	go func() {
+		_, err := agent.Prompt(context.Background(), acp.PromptRequest{
+			SessionId: sessionID, Prompt: []acp.ContentBlock{acp.TextBlock("/learn status")},
+		})
+		promptDone <- err
+	}()
+	select {
+	case <-entered:
+	case <-time.After(time.Second):
+		t.Fatal("learning status did not reach the blocked session update")
+	}
+	shutdownDone := make(chan error, 1)
+	go func() { shutdownDone <- agent.shutdown() }()
+	select {
+	case err := <-promptDone:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("blocked learning status error = %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("shutdown did not cancel the blocked learning status turn")
+	}
+	select {
+	case err := <-shutdownDone:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("shutdown remained blocked behind learning status")
 	}
 }
 
@@ -1071,6 +1500,118 @@ func TestACPAgentCancelsActivePrompt(t *testing.T) {
 	}
 	if len(saved.Transcript) != 1 || saved.Transcript[0].Role != client.RoleUser {
 		t.Fatalf("cancelled transcript = %#v", saved.Transcript)
+	}
+}
+
+func TestACPAgentCancelIsScopedToOneOfMultipleSessions(t *testing.T) {
+	firstStarted := make(chan struct{})
+	secondStarted := make(chan struct{})
+	configuredClient := &routingBlockingACPClient{started: map[string]chan struct{}{
+		"first turn": firstStarted, "second turn": secondStarted,
+	}}
+	agent, workspaceStore, _ := testACPAgent(t, configuredClient, &fakeAgentTools{})
+	first := openTestACPSession(t, agent, workspaceStore.Root)
+	second := openTestACPSession(t, agent, workspaceStore.Root)
+	type promptResult struct {
+		response acp.PromptResponse
+		err      error
+	}
+	run := func(sessionID acp.SessionId, text string) <-chan promptResult {
+		result := make(chan promptResult, 1)
+		go func() {
+			response, err := agent.Prompt(t.Context(), acp.PromptRequest{
+				SessionId: sessionID, Prompt: []acp.ContentBlock{acp.TextBlock(text)},
+			})
+			result <- promptResult{response: response, err: err}
+		}()
+		return result
+	}
+	firstResult := run(first, "first turn")
+	secondResult := run(second, "second turn")
+	for _, started := range []chan struct{}{firstStarted, secondStarted} {
+		select {
+		case <-started:
+		case <-time.After(2 * time.Second):
+			t.Fatal("one of the independent session turns did not start")
+		}
+	}
+	if err := agent.Cancel(t.Context(), acp.CancelNotification{SessionId: first}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case result := <-firstResult:
+		if result.err != nil || result.response.StopReason != acp.StopReasonCancelled {
+			t.Fatalf("first cancellation = %#v, %v", result.response, result.err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("first session did not cancel")
+	}
+	select {
+	case result := <-secondResult:
+		t.Fatalf("cancelling first session stopped second: %#v, %v", result.response, result.err)
+	default:
+	}
+	if err := agent.Cancel(t.Context(), acp.CancelNotification{SessionId: second}); err != nil {
+		t.Fatal(err)
+	}
+	result := <-secondResult
+	if result.err != nil || result.response.StopReason != acp.StopReasonCancelled {
+		t.Fatalf("second cancellation = %#v, %v", result.response, result.err)
+	}
+}
+
+func TestACPAgentCloseStopsPromptBeforeTurnCancelIsInstalled(t *testing.T) {
+	configuredClient := &blockingACPClient{started: make(chan struct{})}
+	agent, workspaceStore, _ := testACPAgent(t, configuredClient, &fakeAgentTools{})
+	sessionID := openTestACPSession(t, agent, workspaceStore.Root)
+	runtime := activeACPRuntime(t, agent, sessionID)
+	locked := make(chan struct{})
+	release := make(chan struct{})
+	runtime.promptLocked = func() {
+		close(locked)
+		<-release
+	}
+	promptDone := make(chan error, 1)
+	go func() {
+		_, err := agent.Prompt(t.Context(), acp.PromptRequest{
+			SessionId: sessionID, Prompt: []acp.ContentBlock{acp.TextBlock("must not start")},
+		})
+		promptDone <- err
+	}()
+	select {
+	case <-locked:
+	case <-time.After(time.Second):
+		t.Fatal("prompt did not reach the pre-turn barrier")
+	}
+	closeDone := make(chan error, 1)
+	go func() {
+		_, err := agent.CloseSession(t.Context(), acp.CloseSessionRequest{SessionId: sessionID})
+		closeDone <- err
+	}()
+	deadline := time.Now().Add(time.Second)
+	for {
+		runtime.stateMu.Lock()
+		closing := runtime.closing
+		runtime.stateMu.Unlock()
+		if closing {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("close did not mark the runtime before waiting for its prompt")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	close(release)
+	if err := <-promptDone; err == nil {
+		t.Fatal("prompt started after its session began closing")
+	}
+	if err := <-closeDone; err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-configuredClient.started:
+		t.Fatal("model turn started after close began")
+	default:
 	}
 }
 

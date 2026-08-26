@@ -88,6 +88,8 @@ func (m model) leaveHelp() (tea.Model, tea.Cmd) {
 	case screenLibrary:
 		command := m.libraryNetworkFocusCommand()
 		return m, command
+	case screenSessions:
+		return m, nil
 	case screenChat:
 		m.refreshTranscript()
 		m.refreshAgentTrace(false)
@@ -197,7 +199,7 @@ func renderHelpContent(dark bool) string {
 		{"/plan [request]", "Grill, research, approve, and execute a work plan."},
 		{"/agent:search <query>", "Run the configured ACP Search agent."},
 		{"/commit", "Open the interactive commit workflow."},
-		{"/new, /clear", "Create a session, or empty the current one without changing its ID."},
+		{"/sessions, /new, /clear", "Resume or create a session, or empty the current one in place."},
 		{"/learn [on|off|status]", "Checkpoint or control Thinker learning for this workspace."},
 		{"/model", "Choose workspace, default, subagent, and embedding models."},
 		{"/gateway", "Configure Gateway network, API keys, and providers."},
@@ -219,6 +221,13 @@ func renderHelpContent(dark bool) string {
 		{"ctrl+h", "Open or close this help screen."},
 		{"ctrl+c", "Interrupt the active turn, or quit while idle."},
 		{"esc", "Leave the current screen or quit chat."},
+	})
+	writeHelpSection("SESSIONS", [][2]string{
+		{"↑/↓ or j/k", "Move through saved workspace sessions."},
+		{"enter", "Resume the selected session."},
+		{"n", "Create and enter a new session."},
+		{"r", "Refresh titles and recent activity."},
+		{"esc", "Return to chat, or quit from the startup picker."},
 	})
 	writeHelpSection("SUBAGENTS AND QUESTIONS", [][2]string{
 		{"ctrl+g", "Expand or collapse the detailed subagent trace."},

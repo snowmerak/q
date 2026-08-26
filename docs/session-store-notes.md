@@ -65,8 +65,10 @@ agent message와 result를 같은 저장소에 기록할 수 있게 준비되어
 이력의 유일한 원본으로 사용하지 않는다.
 
 TUI와 ACP는 UUID별 lock을 잡아 서로 다른 세션을 같은 workspace에서 동시에 열 수
-있다. ACP의 list/load/resume/close/delete는 이 projection을 직접 대상으로 하며,
-close는 메모리와 session 제공 MCP 연결까지 해제한다. 구형 workspace-wide
+있다. 하나의 ACP 프로세스도 `session ID -> runtime` map으로 여러 세션을 동시에
+유지하며, 각 runtime은 conversation, Thinker context, lock, session MCP overlay를
+따로 소유한다. ACP의 list/load/resume/close/delete는 이 projection을 직접 대상으로 하며,
+close는 해당 메모리와 session 제공 MCP 연결만 해제한다. 구형 workspace-wide
 projection의 migration은 목적지 session lock을 잡은 상태에서 publish와 legacy
 cleanup을 마친다. 충돌한 기존 projection은 덮어쓰지 않고 stable digest로 정한
 sibling session에 legacy 데이터를 보존한다.
@@ -119,6 +121,11 @@ ID와 시간은 생성 후 바꾸지 않는다. record schema와 Bleve mapping�
 가져야 한다.
 
 ## 저장 및 복구 원칙
+
+메인 TUI는 시작할 때 최신 세션을 암묵적으로 여는 대신 세션 제목과 최근 갱신
+시각을 목록으로 표시한다. 사용자가 고른 세션의 lock을 획득한 뒤 projection을
+재검증하고 복원하며, `/sessions`로 실행 중에도 같은 선택 화면으로 돌아갈 수 있다.
+선택에 실패하면 기존 세션과 그 lock은 그대로 유지한다.
 
 1. lifecycle event를 `events.jsonl`에 append한다.
 2. task와 run의 현재 projection은 임시 파일을 쓴 뒤 atomic replace한다.

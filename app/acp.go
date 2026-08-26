@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -23,6 +24,7 @@ import (
 	"github.com/snowmerak/q/providerhost"
 	"github.com/snowmerak/q/sessionstore"
 	"github.com/snowmerak/q/subagent"
+	qtools "github.com/snowmerak/q/tools"
 	"github.com/snowmerak/q/workspace"
 	"github.com/snowmerak/q/workspacememory"
 )
@@ -37,8 +39,9 @@ func RunACPDefault(ctx context.Context, root string, input io.Reader, output, lo
 }
 
 // RunACP serves ACP over the supplied streams. A server process is bound to one
-// workspace and exposes at most one active ACP session at a time; other q
-// processes may concurrently own different sessions in the same workspace.
+// workspace and may keep multiple ACP sessions active concurrently. Each
+// session owns an independent conversation projection, learning lifecycle, and
+// workspace session lock.
 func RunACP(ctx context.Context, store config.Store, root string, input io.Reader, output, logOutput io.Writer) (runErr error) {
 	if input == nil || output == nil {
 		return errors.New("ACP input and output are required")
@@ -207,17 +210,35 @@ type acpAgent struct {
 	root   string
 	logger *slog.Logger
 
-	stateMu            sync.Mutex
-	promptMu           sync.Mutex
-	connection         acpSessionConnection
-	clientCapabilities acp.ClientCapabilities
-	sessionID          acp.SessionId
-	sessionOpen        bool
-	shuttingDown       bool
-	turnCancel         context.CancelFunc
-	sessionMCPBase     mcpconfig.Config
-	sessionMCPBaseSet  bool
-	commitSession      acpCommitSessionFactory
+	stateMu             sync.Mutex
+	activationWG        sync.WaitGroup
+	promptMu            sync.Mutex
+	mcpMu               sync.Mutex
+	learningMu          sync.Mutex
+	connection          acpSessionConnection
+	clientCapabilities  acp.ClientCapabilities
+	sessions            map[acp.SessionId]*acpAgent
+	opening             map[acp.SessionId]chan struct{}
+	closedSessions      map[acp.SessionId]struct{}
+	owner               *acpAgent
+	sessionID           acp.SessionId
+	sessionOpen         bool
+	closing             bool
+	shuttingDown        bool
+	turnCancel          context.CancelFunc
+	learningInterrupt   context.CancelFunc
+	learningVersion     uint64
+	learningPending     bool
+	learningDisabled    bool
+	sessionMCPBase      mcpconfig.Config
+	sessionMCPBaseSet   bool
+	sessionMCPConfig    mcpconfig.Config
+	sessionMCPIDs       map[string]struct{}
+	sessionMCPOverride  bool
+	sessionMCPSignature [sha256.Size]byte
+	sessionMCPScoped    *qtools.ExternalScope
+	commitSession       acpCommitSessionFactory
+	promptLocked        func()
 }
 
 var (
@@ -226,9 +247,106 @@ var (
 )
 
 func newACPAgent(state *model, root string, logger *slog.Logger) *acpAgent {
-	agent := &acpAgent{state: state, root: root, logger: logger}
-	agent.commitSession = newACPCommitSessionFactory(state, root)
-	return agent
+	return &acpAgent{
+		state: state, root: root, logger: logger,
+		sessions: make(map[acp.SessionId]*acpAgent), opening: make(map[acp.SessionId]chan struct{}),
+		closedSessions: make(map[acp.SessionId]struct{}),
+	}
+}
+
+// newSessionRuntime creates the mutable model projection owned by one ACP
+// session. Provider, archive, Library, and builtin tool services are shared;
+// conversation state, Thinker state, workspace lock, and optional ACP-provided
+// MCP connections are not.
+func (a *acpAgent) newSessionRuntime() *acpAgent {
+	template := a.state
+	state := newManagedModel(template.ctx, template.store, template.factory, template.runtime)
+	state.toolRuntime = template.toolRuntime
+	state.libraryClient = template.libraryClient
+	state.archive = template.archive
+	state.archiveSearch = template.archiveSearch
+	state.archiveErr = template.archiveErr
+	state.models = append([]client.Model(nil), template.models...)
+	state.gatewayConfig = template.gatewayConfig
+	state.config = template.config
+	state.client = template.client
+	state.workspaceStore = &workspace.Store{Root: a.root}
+
+	runtime := &acpAgent{
+		state: &state, root: a.root, logger: a.logger, owner: a,
+	}
+	if a.commitSession != nil {
+		runtime.commitSession = a.commitSession
+	} else {
+		runtime.commitSession = newACPCommitSessionFactory(&state, a.root)
+	}
+	return runtime
+}
+
+func (a *acpAgent) coordinator() *acpAgent {
+	if a.owner != nil {
+		return a.owner
+	}
+	return a
+}
+
+func (a *acpAgent) registerSession(runtime *acpAgent) error {
+	if runtime == nil || runtime.sessionID == "" {
+		return errors.New("ACP session runtime is unavailable")
+	}
+	a.learningMu.Lock()
+	defer a.learningMu.Unlock()
+	learning, err := (workspace.Store{Root: a.root}).LoadLearningConfig()
+	if err != nil {
+		return err
+	}
+	wasDisabled := runtime.state.learningDisabled()
+	runtime.state.workspaceLearning = learning
+	if learning.Disabled {
+		runtime.state.stopSessionLearning()
+	} else if wasDisabled {
+		runtime.state.resetSessionLearning()
+	}
+	runtime.syncLearningInterrupt()
+	a.stateMu.Lock()
+	defer a.stateMu.Unlock()
+	if a.shuttingDown {
+		return errors.New("ACP agent is shutting down")
+	}
+	if _, exists := a.sessions[runtime.sessionID]; exists {
+		return fmt.Errorf("ACP session %q is already active", runtime.sessionID)
+	}
+	runtime.learningVersion = a.learningVersion
+	runtime.learningDisabled = learning.Disabled
+	a.sessions[runtime.sessionID] = runtime
+	delete(a.closedSessions, runtime.sessionID)
+	return nil
+}
+
+func (a *acpAgent) sessionRuntime(sessionID acp.SessionId) (*acpAgent, error) {
+	a.stateMu.Lock()
+	defer a.stateMu.Unlock()
+	if a.shuttingDown {
+		return nil, errors.New("ACP agent is shutting down")
+	}
+	runtime := a.sessions[sessionID]
+	if runtime == nil {
+		return nil, fmt.Errorf("unknown ACP session %q", sessionID)
+	}
+	runtime.stateMu.Lock()
+	available := runtime.sessionOpen && !runtime.closing
+	runtime.stateMu.Unlock()
+	if !available {
+		return nil, fmt.Errorf("unknown ACP session %q", sessionID)
+	}
+	return runtime, nil
+}
+
+func (a *acpAgent) connectionState() (acpSessionConnection, acp.ClientCapabilities) {
+	coordinator := a.coordinator()
+	coordinator.stateMu.Lock()
+	defer coordinator.stateMu.Unlock()
+	return coordinator.connection, coordinator.clientCapabilities
 }
 
 func acpSessionID(sessionID string) acp.SessionId {
@@ -288,77 +406,82 @@ func (a *acpAgent) Logout(context.Context, acp.LogoutRequest) (acp.LogoutRespons
 }
 
 func (a *acpAgent) NewSession(ctx context.Context, request acp.NewSessionRequest) (acp.NewSessionResponse, error) {
-	a.promptMu.Lock()
-	defer a.promptMu.Unlock()
-	if err := a.requireRunning(); err != nil {
+	if err := a.beginActivation(); err != nil {
 		return acp.NewSessionResponse{}, err
 	}
+	defer a.activationWG.Done()
 	if err := a.validateSessionWorkspace(request.Cwd, request.AdditionalDirectories); err != nil {
 		return acp.NewSessionResponse{}, err
-	}
-	a.stateMu.Lock()
-	open := a.sessionOpen
-	a.stateMu.Unlock()
-	if open {
-		return acp.NewSessionResponse{}, errors.New("this ACP process already has an active session")
 	}
 	store, lock, err := workspace.CreateSession(a.root, "q acp")
 	if err != nil {
 		return acp.NewSessionResponse{}, err
 	}
-	if err := a.activateStore(ctx, store, lock, request.McpServers); err != nil {
+	runtime := a.newSessionRuntime()
+	if err := runtime.activateStore(ctx, store, lock, request.McpServers); err != nil {
 		_ = store.ClearSession()
 		_ = lock.Close()
 		return acp.NewSessionResponse{}, err
 	}
-	return acp.NewSessionResponse{SessionId: acpSessionID(store.SessionID)}, nil
+	if err := a.registerSession(runtime); err != nil {
+		_ = runtime.closeRuntime()
+		_ = store.ClearSession()
+		return acp.NewSessionResponse{}, err
+	}
+	_ = runtime.startLearningIfOpen()
+	return acp.NewSessionResponse{SessionId: runtime.sessionID}, nil
 }
 
-func (a *acpAgent) CloseSession(_ context.Context, request acp.CloseSessionRequest) (acp.CloseSessionResponse, error) {
+func (a *acpAgent) CloseSession(ctx context.Context, request acp.CloseSessionRequest) (acp.CloseSessionResponse, error) {
 	a.stateMu.Lock()
-	if !a.sessionOpen {
-		closed := request.SessionId != "" && request.SessionId == a.sessionID
+	runtime := a.sessions[request.SessionId]
+	pending := a.opening[request.SessionId]
+	_, closed := a.closedSessions[request.SessionId]
+	a.stateMu.Unlock()
+	if runtime == nil {
+		if pending != nil {
+			select {
+			case <-pending:
+				return a.CloseSession(ctx, request)
+			case <-ctx.Done():
+				return acp.CloseSessionResponse{}, ctx.Err()
+			}
+		}
+		if closed {
+			return acp.CloseSessionResponse{}, nil
+		}
+		return acp.CloseSessionResponse{}, fmt.Errorf("unknown ACP session %q", request.SessionId)
+	}
+	runtime.stateMu.Lock()
+	runtime.closing = true
+	cancel := runtime.turnCancel
+	runtime.stateMu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+	runtime.promptMu.Lock()
+	defer runtime.promptMu.Unlock()
+	a.stateMu.Lock()
+	if a.sessions[request.SessionId] != runtime {
+		_, closed = a.closedSessions[request.SessionId]
 		a.stateMu.Unlock()
 		if closed {
 			return acp.CloseSessionResponse{}, nil
 		}
-		return acp.CloseSessionResponse{}, errors.New("no ACP session is open for this workspace")
-	}
-	if request.SessionId != a.sessionID {
-		a.stateMu.Unlock()
 		return acp.CloseSessionResponse{}, fmt.Errorf("unknown ACP session %q", request.SessionId)
 	}
-	cancel := a.turnCancel
+	delete(a.sessions, request.SessionId)
+	a.closedSessions[request.SessionId] = struct{}{}
 	a.stateMu.Unlock()
-	if cancel != nil {
-		cancel()
-	}
-	a.promptMu.Lock()
-	defer a.promptMu.Unlock()
-	a.stateMu.Lock()
-	if !a.sessionOpen || request.SessionId != a.sessionID {
-		a.stateMu.Unlock()
-		return acp.CloseSessionResponse{}, errors.New("ACP session closed while waiting for its active turn")
-	}
-	a.sessionOpen = false
-	a.turnCancel = nil
-	a.stateMu.Unlock()
-	lock := a.state.workspaceLock
-	a.state.workspaceLock = nil
-	a.state.releaseConversationState(a.root)
-	var lockErr error
-	if lock != nil {
-		lockErr = lock.Close()
-	}
-	restoreErr := a.restoreWorkspaceMCP()
-	return acp.CloseSessionResponse{}, errors.Join(restoreErr, lockErr)
+	return acp.CloseSessionResponse{}, runtime.closeRuntime()
 }
 
 func (a *acpAgent) Cancel(_ context.Context, notification acp.CancelNotification) error {
-	if err := a.requireSession(notification.SessionId); err != nil {
+	runtime, err := a.sessionRuntime(notification.SessionId)
+	if err != nil {
 		return err
 	}
-	a.cancelActiveTurn()
+	runtime.cancelActiveTurn()
 	return nil
 }
 
@@ -396,7 +519,7 @@ func (a *acpAgent) ListSessions(_ context.Context, request acp.ListSessionsReque
 
 // UnstableDeleteSession implements the SDK's current name for ACP session/delete.
 func (a *acpAgent) UnstableDeleteSession(
-	_ context.Context,
+	ctx context.Context,
 	request acp.UnstableDeleteSessionRequest,
 ) (acp.UnstableDeleteSessionResponse, error) {
 	sessionID, err := workspaceSessionID(request.SessionId)
@@ -404,79 +527,135 @@ func (a *acpAgent) UnstableDeleteSession(
 		return acp.UnstableDeleteSessionResponse{}, nil
 	}
 	a.stateMu.Lock()
-	var cancel context.CancelFunc
-	if a.sessionOpen && request.SessionId == a.sessionID {
-		cancel = a.turnCancel
-	}
+	runtime := a.sessions[request.SessionId]
+	pending := a.opening[request.SessionId]
 	a.stateMu.Unlock()
-	if cancel != nil {
-		cancel()
+	if runtime == nil && pending != nil {
+		select {
+		case <-pending:
+			return a.UnstableDeleteSession(ctx, request)
+		case <-ctx.Done():
+			return acp.UnstableDeleteSessionResponse{}, ctx.Err()
+		}
 	}
-	a.promptMu.Lock()
-	defer a.promptMu.Unlock()
-	a.stateMu.Lock()
-	active := a.sessionOpen && request.SessionId == a.sessionID
-	current := request.SessionId == a.sessionID
-	a.stateMu.Unlock()
-	if active {
-		store := a.state.workspaceStore
+	if runtime != nil {
+		runtime.stateMu.Lock()
+		runtime.closing = true
+		cancel := runtime.turnCancel
+		runtime.stateMu.Unlock()
+		if cancel != nil {
+			cancel()
+		}
+		runtime.promptMu.Lock()
+		defer runtime.promptMu.Unlock()
+		a.stateMu.Lock()
+		if a.sessions[request.SessionId] != runtime {
+			a.stateMu.Unlock()
+			return acp.UnstableDeleteSessionResponse{}, fmt.Errorf("unknown ACP session %q", request.SessionId)
+		}
+		delete(a.sessions, request.SessionId)
+		delete(a.closedSessions, request.SessionId)
+		a.stateMu.Unlock()
+		store := runtime.state.workspaceStore
 		var clearErr error
 		if store == nil || store.SessionID != sessionID {
 			clearErr = errors.New("active ACP session storage is unavailable")
 		}
-		lock := a.state.workspaceLock
-		a.state.workspaceLock = nil
-		a.stateMu.Lock()
-		a.sessionOpen = false
-		a.turnCancel = nil
-		a.stateMu.Unlock()
-		a.state.releaseConversationState(a.root)
+		runtime.state.stopSessionLearning()
 		if clearErr == nil {
 			clearErr = store.ClearSession()
 		}
-		var lockErr error
-		if lock != nil {
-			lockErr = lock.Close()
-		}
-		restoreErr := a.restoreWorkspaceMCP()
-		return acp.UnstableDeleteSessionResponse{}, errors.Join(clearErr, restoreErr, lockErr)
+		return acp.UnstableDeleteSessionResponse{}, errors.Join(clearErr, runtime.closeRuntime())
 	}
 	if err := workspace.DeleteSession(a.root, sessionID, "q acp session/delete"); err != nil {
 		return acp.UnstableDeleteSessionResponse{}, err
 	}
-	if current {
-		a.state.workspaceLock = nil
-	}
+	a.stateMu.Lock()
+	delete(a.closedSessions, request.SessionId)
+	a.stateMu.Unlock()
 	return acp.UnstableDeleteSessionResponse{}, nil
 }
 
 func (a *acpAgent) ResumeSession(ctx context.Context, request acp.ResumeSessionRequest) (acp.ResumeSessionResponse, error) {
-	a.promptMu.Lock()
-	defer a.promptMu.Unlock()
 	if err := a.validateSessionWorkspace(request.Cwd, request.AdditionalDirectories); err != nil {
 		return acp.ResumeSessionResponse{}, err
 	}
-	if err := a.activateSession(ctx, request.SessionId, request.McpServers); err != nil {
+	if runtime, active := a.activeSession(request.SessionId); active {
+		if !runtime.matchesMCPServers(request.McpServers) {
+			return acp.ResumeSessionResponse{}, fmt.Errorf("ACP session %q is already active; its MCP servers cannot be changed", request.SessionId)
+		}
+		if err := runtime.requireSession(request.SessionId); err != nil {
+			return acp.ResumeSessionResponse{}, err
+		}
+		return acp.ResumeSessionResponse{}, nil
+	}
+	runtime, activated, err := a.activateSession(ctx, request.SessionId, request.McpServers)
+	if err != nil {
 		return acp.ResumeSessionResponse{}, err
+	}
+	if activated {
+		if err := runtime.startLearningIfOpen(); err != nil {
+			return acp.ResumeSessionResponse{}, err
+		}
 	}
 	return acp.ResumeSessionResponse{}, nil
 }
 
 func (a *acpAgent) LoadSession(ctx context.Context, request acp.LoadSessionRequest) (acp.LoadSessionResponse, error) {
-	a.promptMu.Lock()
-	defer a.promptMu.Unlock()
 	if err := a.validateSessionWorkspace(request.Cwd, request.AdditionalDirectories); err != nil {
 		return acp.LoadSessionResponse{}, err
 	}
-	if err := a.activateSession(ctx, request.SessionId, request.McpServers); err != nil {
+	if runtime, active := a.activeSession(request.SessionId); active {
+		if !runtime.matchesMCPServers(request.McpServers) {
+			return acp.LoadSessionResponse{}, fmt.Errorf("ACP session %q is already active; its MCP servers cannot be changed", request.SessionId)
+		}
+		runtime.promptMu.Lock()
+		defer runtime.promptMu.Unlock()
+		if err := runtime.requireSession(request.SessionId); err != nil {
+			return acp.LoadSessionResponse{}, err
+		}
+		if err := runtime.replayWorkspaceSession(ctx); err != nil {
+			return acp.LoadSessionResponse{}, err
+		}
+		return acp.LoadSessionResponse{}, nil
+	}
+	runtime, activated, err := a.activateSession(ctx, request.SessionId, request.McpServers)
+	if err != nil {
 		return acp.LoadSessionResponse{}, err
 	}
-	if err := a.replayWorkspaceSession(ctx); err != nil {
-		a.deactivateSession()
-		_ = a.restoreWorkspaceMCP()
+	runtime.promptMu.Lock()
+	defer runtime.promptMu.Unlock()
+	if err := runtime.requireSession(request.SessionId); err != nil {
 		return acp.LoadSessionResponse{}, err
+	}
+	if err := runtime.replayWorkspaceSession(ctx); err != nil {
+		a.stateMu.Lock()
+		delete(a.sessions, request.SessionId)
+		a.stateMu.Unlock()
+		_ = runtime.closeRuntime()
+		return acp.LoadSessionResponse{}, err
+	}
+	if activated {
+		runtime.launchLearning(runtime.state.startNextLearningSegment())
 	}
 	return acp.LoadSessionResponse{}, nil
+}
+
+func (a *acpAgent) startLearningIfOpen() error {
+	a.promptMu.Lock()
+	defer a.promptMu.Unlock()
+	if err := a.requireSession(a.sessionID); err != nil {
+		return err
+	}
+	a.launchLearning(a.state.startNextLearningSegment())
+	return nil
+}
+
+func (a *acpAgent) activeSession(sessionID acp.SessionId) (*acpAgent, bool) {
+	a.stateMu.Lock()
+	defer a.stateMu.Unlock()
+	runtime := a.sessions[sessionID]
+	return runtime, runtime != nil
 }
 
 func (a *acpAgent) validateSessionWorkspace(cwd string, additionalDirectories []string) error {
@@ -493,40 +672,83 @@ func (a *acpAgent) validateSessionWorkspace(cwd string, additionalDirectories []
 	return nil
 }
 
-func (a *acpAgent) activateSession(ctx context.Context, sessionID acp.SessionId, mcpServers []acp.McpServer) error {
-	if err := a.requireRunning(); err != nil {
-		return err
-	}
-	a.stateMu.Lock()
-	if a.sessionOpen {
+func (a *acpAgent) activateSession(
+	ctx context.Context,
+	sessionID acp.SessionId,
+	mcpServers []acp.McpServer,
+) (*acpAgent, bool, error) {
+	for {
+		if err := a.requireRunning(); err != nil {
+			return nil, false, err
+		}
+		a.stateMu.Lock()
+		if a.shuttingDown {
+			a.stateMu.Unlock()
+			return nil, false, errors.New("ACP agent is shutting down")
+		}
+		if runtime := a.sessions[sessionID]; runtime != nil {
+			a.stateMu.Unlock()
+			if !runtime.matchesMCPServers(mcpServers) {
+				return nil, false, fmt.Errorf("ACP session %q is already active; its MCP servers cannot be changed", sessionID)
+			}
+			if err := runtime.requireSession(sessionID); err != nil {
+				return nil, false, err
+			}
+			return runtime, false, nil
+		}
+		if pending := a.opening[sessionID]; pending != nil {
+			a.stateMu.Unlock()
+			select {
+			case <-pending:
+				continue
+			case <-ctx.Done():
+				return nil, false, ctx.Err()
+			}
+		}
+		pending := make(chan struct{})
+		a.opening[sessionID] = pending
+		a.activationWG.Add(1)
 		a.stateMu.Unlock()
-		return errors.New("this ACP process already has an active session")
+		defer a.activationWG.Done()
+		defer func() {
+			a.stateMu.Lock()
+			if a.opening[sessionID] == pending {
+				delete(a.opening, sessionID)
+				close(pending)
+			}
+			a.stateMu.Unlock()
+		}()
+		break
 	}
-	a.stateMu.Unlock()
 	workspaceID, err := workspaceSessionID(sessionID)
 	if err != nil {
-		return err
+		return nil, false, err
 	}
 	store, err := (workspace.Store{Root: a.root}).ForSession(workspaceID)
 	if err != nil {
-		return fmt.Errorf("unknown ACP session %q", sessionID)
+		return nil, false, fmt.Errorf("unknown ACP session %q", sessionID)
 	}
 	lock, err := workspace.AcquireSessionLock(a.root, workspaceID, "q acp")
 	if err != nil {
-		return err
+		return nil, false, err
 	}
 	if _, err := store.Load(); errors.Is(err, workspace.ErrNotFound) {
 		_ = lock.Close()
-		return fmt.Errorf("unknown ACP session %q", sessionID)
+		return nil, false, fmt.Errorf("unknown ACP session %q", sessionID)
 	} else if err != nil {
 		_ = lock.Close()
-		return err
+		return nil, false, err
 	}
-	if err := a.activateStore(ctx, store, lock, mcpServers); err != nil {
+	runtime := a.newSessionRuntime()
+	if err := runtime.activateStore(ctx, store, lock, mcpServers); err != nil {
 		_ = lock.Close()
-		return err
+		return nil, false, err
 	}
-	return nil
+	if err := a.registerSession(runtime); err != nil {
+		_ = runtime.closeRuntime()
+		return nil, false, err
+	}
+	return runtime, true, nil
 }
 
 func (a *acpAgent) activateStore(
@@ -555,35 +777,81 @@ func (a *acpAgent) activateStore(
 	a.stateMu.Lock()
 	a.sessionID = acpSessionID(store.SessionID)
 	a.sessionOpen = true
+	a.learningInterrupt = a.state.learningCancel
 	a.stateMu.Unlock()
-	a.launchLearning(a.state.startNextLearningSegment())
 	return nil
 }
 
 func (a *acpAgent) configureSessionMCP(ctx context.Context, servers []acp.McpServer) error {
-	configurer, ok := a.state.toolRuntime.(externalMCPConfigurer)
-	if !ok || configurer == nil {
-		if len(servers) == 0 {
-			return nil
+	signature, err := acpMCPServerSignature(servers)
+	if err != nil {
+		return err
+	}
+	a.sessionMCPSignature = signature
+	baseRuntime := a.coordinator().state.toolRuntime
+	if len(servers) == 0 {
+		_, configurable := baseRuntime.(externalMCPConfigurer)
+		_, scoped := baseRuntime.(interface {
+			NewExternalScope(context.Context, string, mcpconfig.Config) (*qtools.ExternalScope, []qtools.ExternalStatus)
+		})
+		if configurable && !scoped {
+			base, err := a.state.mcpSettingsStore.LoadOrDefault()
+			if err != nil {
+				return err
+			}
+			a.sessionMCPBase = cloneMCPConfig(base)
+			a.sessionMCPBaseSet = true
+			a.sessionMCPConfig = cloneMCPConfig(base)
 		}
-		return errors.New("ACP-provided MCP servers require q's external MCP runtime")
+		return nil
 	}
 	base, err := a.state.mcpSettingsStore.LoadOrDefault()
 	if err != nil {
 		return err
 	}
-	a.stateMu.Lock()
 	a.sessionMCPBase = cloneMCPConfig(base)
 	a.sessionMCPBaseSet = true
-	a.stateMu.Unlock()
-	merged := base
-	sessionIDs := map[string]struct{}{}
-	if len(servers) > 0 {
-		merged, sessionIDs, err = mergeACPMCPServers(base, servers)
-		if err != nil {
+	merged, sessionIDs, err := mergeACPMCPServers(base, servers)
+	if err != nil {
+		return err
+	}
+	a.sessionMCPConfig = cloneMCPConfig(merged)
+	a.sessionMCPIDs = sessionIDs
+	a.sessionMCPOverride = true
+
+	// The production qtools runtime can own ACP-provided MCP connections in a
+	// session overlay. This keeps server process state and routes alive without
+	// ever replacing another active session's configuration.
+	if scoper, ok := baseRuntime.(interface {
+		NewExternalScope(context.Context, string, mcpconfig.Config) (*qtools.ExternalScope, []qtools.ExternalStatus)
+	}); ok {
+		scopeConfig := acpSessionMCPConfig(merged, sessionIDs)
+		scope, statuses := scoper.NewExternalScope(ctx, a.root, scopeConfig)
+		if err := ctx.Err(); err != nil {
+			_ = scope.Close()
 			return err
 		}
+		for _, status := range statuses {
+			if status.Error != "" {
+				_ = scope.Close()
+				return fmt.Errorf("connect ACP MCP server %s: %s", status.ID, status.Error)
+			}
+		}
+		a.sessionMCPScoped = scope
+		a.state.toolRuntime = scope
+		return nil
 	}
+
+	// Custom runtimes used by embedders may only implement the legacy global
+	// replacement API. Validate here and context-switch under the coordinator's
+	// MCP mutex for each complete prompt turn.
+	configurer, ok := baseRuntime.(externalMCPConfigurer)
+	if !ok || configurer == nil {
+		return errors.New("ACP-provided MCP servers require q's external MCP runtime")
+	}
+	coordinator := a.coordinator()
+	coordinator.mcpMu.Lock()
+	defer coordinator.mcpMu.Unlock()
 	statuses := configurer.ConfigureExternal(ctx, a.root, merged)
 	if err := ctx.Err(); err != nil {
 		_ = a.restoreWorkspaceMCP()
@@ -595,11 +863,77 @@ func (a *acpAgent) configureSessionMCP(ctx context.Context, servers []acp.McpSer
 			return fmt.Errorf("connect ACP MCP server %s: %s", status.ID, status.Error)
 		}
 	}
-	return nil
+	return a.restoreWorkspaceMCP()
+}
+
+func acpMCPServerSignature(servers []acp.McpServer) ([sha256.Size]byte, error) {
+	body, err := json.Marshal(servers)
+	if err != nil {
+		return [sha256.Size]byte{}, fmt.Errorf("encode ACP MCP server configuration: %w", err)
+	}
+	return sha256.Sum256(body), nil
+}
+
+func (a *acpAgent) matchesMCPServers(servers []acp.McpServer) bool {
+	signature, err := acpMCPServerSignature(servers)
+	return err == nil && signature == a.sessionMCPSignature
+}
+
+func acpSessionMCPConfig(merged mcpconfig.Config, sessionIDs map[string]struct{}) mcpconfig.Config {
+	value := mcpconfig.Default()
+	for id := range sessionIDs {
+		value.Servers[id] = merged.Servers[id]
+	}
+	for _, role := range mcpconfig.RoleIDs() {
+		for _, id := range merged.Roles[role] {
+			if _, included := sessionIDs[id]; included {
+				value.Roles[role] = append(value.Roles[role], id)
+			}
+		}
+	}
+	return value
+}
+
+func (a *acpAgent) enterSessionMCP(ctx context.Context) (func(), error) {
+	if a.sessionMCPScoped != nil {
+		return func() {}, nil
+	}
+	coordinator := a.coordinator()
+	configurer, configurable := coordinator.state.toolRuntime.(externalMCPConfigurer)
+	_, scoped := coordinator.state.toolRuntime.(interface {
+		NewExternalScope(context.Context, string, mcpconfig.Config) (*qtools.ExternalScope, []qtools.ExternalStatus)
+	})
+	legacyGlobal := configurable && configurer != nil && !scoped
+	if !legacyGlobal {
+		if !a.sessionMCPOverride {
+			return func() {}, nil
+		}
+		return nil, errors.New("ACP-provided MCP servers require q's external MCP runtime")
+	}
+	coordinator.mcpMu.Lock()
+	statuses := configurer.ConfigureExternal(ctx, a.root, a.sessionMCPConfig)
+	if err := ctx.Err(); err != nil {
+		_ = a.restoreWorkspaceMCP()
+		coordinator.mcpMu.Unlock()
+		return nil, err
+	}
+	for _, status := range statuses {
+		if _, supplied := a.sessionMCPIDs[status.ID]; supplied && status.Error != "" {
+			_ = a.restoreWorkspaceMCP()
+			coordinator.mcpMu.Unlock()
+			return nil, fmt.Errorf("connect ACP MCP server %s: %s", status.ID, status.Error)
+		}
+	}
+	return func() {
+		if err := a.restoreWorkspaceMCP(); err != nil && a.logger != nil {
+			a.logger.Warn("restore workspace MCP after ACP turn", "error", err)
+		}
+		coordinator.mcpMu.Unlock()
+	}, nil
 }
 
 func (a *acpAgent) restoreWorkspaceMCP() error {
-	configurer, ok := a.state.toolRuntime.(externalMCPConfigurer)
+	configurer, ok := a.coordinator().state.toolRuntime.(externalMCPConfigurer)
 	if !ok || configurer == nil {
 		return nil
 	}
@@ -692,15 +1026,7 @@ func mergeACPMCPServers(base mcpconfig.Config, servers []acp.McpServer) (mcpconf
 }
 
 func (a *acpAgent) deactivateSession() {
-	a.stateMu.Lock()
-	a.sessionOpen = false
-	a.turnCancel = nil
-	a.stateMu.Unlock()
-	if a.state.workspaceLock != nil {
-		_ = a.state.workspaceLock.Close()
-		a.state.workspaceLock = nil
-	}
-	a.state.releaseConversationState(a.root)
+	_ = a.closeRuntime()
 }
 
 func (a *acpAgent) replayWorkspaceSession(ctx context.Context) error {
@@ -747,15 +1073,35 @@ func (a *acpAgent) replayWorkspaceSession(ctx context.Context) error {
 	return nil
 }
 
-func (a *acpAgent) SetSessionMode(context.Context, acp.SetSessionModeRequest) (acp.SetSessionModeResponse, error) {
+func (a *acpAgent) SetSessionMode(_ context.Context, request acp.SetSessionModeRequest) (acp.SetSessionModeResponse, error) {
+	if _, err := a.sessionRuntime(request.SessionId); err != nil {
+		return acp.SetSessionModeResponse{}, err
+	}
 	return acp.SetSessionModeResponse{}, acp.NewMethodNotFound(acp.AgentMethodSessionSetMode)
 }
 
-func (a *acpAgent) SetSessionConfigOption(context.Context, acp.SetSessionConfigOptionRequest) (acp.SetSessionConfigOptionResponse, error) {
+func (a *acpAgent) SetSessionConfigOption(_ context.Context, request acp.SetSessionConfigOptionRequest) (acp.SetSessionConfigOptionResponse, error) {
+	var sessionID acp.SessionId
+	if request.Boolean != nil {
+		sessionID = request.Boolean.SessionId
+	} else if request.ValueId != nil {
+		sessionID = request.ValueId.SessionId
+	}
+	if _, err := a.sessionRuntime(sessionID); err != nil {
+		return acp.SetSessionConfigOptionResponse{}, err
+	}
 	return acp.SetSessionConfigOptionResponse{}, acp.NewMethodNotFound(acp.AgentMethodSessionSetConfigOption)
 }
 
 func (a *acpAgent) Prompt(ctx context.Context, request acp.PromptRequest) (acp.PromptResponse, error) {
+	runtime, err := a.sessionRuntime(request.SessionId)
+	if err != nil {
+		return acp.PromptResponse{}, err
+	}
+	return runtime.prompt(ctx, request)
+}
+
+func (a *acpAgent) prompt(ctx context.Context, request acp.PromptRequest) (acp.PromptResponse, error) {
 	if err := a.requireSession(request.SessionId); err != nil {
 		return acp.PromptResponse{}, err
 	}
@@ -767,18 +1113,35 @@ func (a *acpAgent) Prompt(ctx context.Context, request acp.PromptRequest) (acp.P
 	if strings.TrimSpace(text) == "" && !hasNonText {
 		return acp.PromptResponse{}, errors.New("prompt contains no supported content")
 	}
+	if !hasNonText && isWorkspaceLearningControl(text) {
+		response, err := a.coordinator().runACPWorkspaceLearningControl(ctx, a, strings.TrimSpace(text))
+		response.UserMessageId = request.MessageId
+		return response, err
+	}
 
 	a.promptMu.Lock()
 	defer a.promptMu.Unlock()
-	if err := a.requireSession(request.SessionId); err != nil {
-		return acp.PromptResponse{}, err
+	if a.promptLocked != nil {
+		a.promptLocked()
 	}
-	if err := a.emitAvailableCommandsContext(ctx); err != nil {
-		return acp.PromptResponse{}, err
+	if next := a.applyPendingLearningLocked(); next != nil {
+		a.launchLearning(next)
 	}
-
 	turnContext, cancel := context.WithCancel(ctx)
+	coordinator := a.coordinator()
+	coordinator.stateMu.Lock()
+	shuttingDown := coordinator.shuttingDown
+	coordinator.stateMu.Unlock()
+	if shuttingDown {
+		cancel()
+		return acp.PromptResponse{}, errors.New("ACP agent is shutting down")
+	}
 	a.stateMu.Lock()
+	if a.closing || !a.sessionOpen || request.SessionId != a.sessionID {
+		a.stateMu.Unlock()
+		cancel()
+		return acp.PromptResponse{}, fmt.Errorf("unknown ACP session %q", request.SessionId)
+	}
 	a.turnCancel = cancel
 	a.stateMu.Unlock()
 	defer func() {
@@ -787,6 +1150,14 @@ func (a *acpAgent) Prompt(ctx context.Context, request acp.PromptRequest) (acp.P
 		a.turnCancel = nil
 		a.stateMu.Unlock()
 	}()
+	restoreMCP, err := a.enterSessionMCP(turnContext)
+	if err != nil {
+		return acp.PromptResponse{}, err
+	}
+	defer restoreMCP()
+	if err := a.emitAvailableCommandsContext(turnContext); err != nil {
+		return acp.PromptResponse{}, err
+	}
 	if !hasNonText {
 		if response, handled, commandErr := a.runACPCommand(turnContext, text); handled {
 			response.UserMessageId = request.MessageId
@@ -797,6 +1168,173 @@ func (a *acpAgent) Prompt(ctx context.Context, request acp.PromptRequest) (acp.P
 	response, err := a.runPrompt(turnContext, userMessage)
 	response.UserMessageId = request.MessageId
 	return response, err
+}
+
+func isWorkspaceLearningControl(command string) bool {
+	switch strings.TrimSpace(command) {
+	case "/learn on", "/learn off", "/learn status":
+		return true
+	default:
+		return false
+	}
+}
+
+func (a *acpAgent) runACPWorkspaceLearningControl(
+	ctx context.Context,
+	target *acpAgent,
+	command string,
+) (acp.PromptResponse, error) {
+	a.learningMu.Lock()
+	defer a.learningMu.Unlock()
+	target.promptMu.Lock()
+	defer target.promptMu.Unlock()
+	turnContext, cancel := context.WithCancel(ctx)
+	a.stateMu.Lock()
+	shuttingDown := a.shuttingDown
+	a.stateMu.Unlock()
+	if shuttingDown {
+		cancel()
+		return acp.PromptResponse{}, errors.New("ACP agent is shutting down")
+	}
+	target.stateMu.Lock()
+	if target.closing || !target.sessionOpen {
+		target.stateMu.Unlock()
+		cancel()
+		return acp.PromptResponse{}, fmt.Errorf("unknown ACP session %q", target.sessionID)
+	}
+	target.turnCancel = cancel
+	target.stateMu.Unlock()
+	defer func() {
+		cancel()
+		target.stateMu.Lock()
+		target.turnCancel = nil
+		target.stateMu.Unlock()
+	}()
+	if next := target.applyPendingLearningLocked(); next != nil {
+		target.launchLearning(next)
+	}
+	if err := target.emitAvailableCommandsContext(turnContext); err != nil {
+		return acp.PromptResponse{}, err
+	}
+
+	output := ""
+	var next tea.Cmd
+	switch command {
+	case "/learn status":
+		if target.state.learningDisabled() {
+			output = "Learning is disabled for this workspace."
+		} else {
+			output = "Learning is enabled for this workspace."
+		}
+	case "/learn off":
+		if err := turnContext.Err(); err != nil {
+			return acp.PromptResponse{}, err
+		}
+		if err := target.state.setWorkspaceLearningDisabled(true); err != nil {
+			return acp.PromptResponse{}, err
+		}
+		target.syncLearningInterrupt()
+		a.propagateLearningSetting(target, true)
+		output = "Learning disabled for this workspace."
+	case "/learn on":
+		if err := turnContext.Err(); err != nil {
+			return acp.PromptResponse{}, err
+		}
+		if err := target.state.setWorkspaceLearningDisabled(false); err != nil {
+			return acp.PromptResponse{}, err
+		}
+		target.syncLearningInterrupt()
+		a.propagateLearningSetting(target, false)
+		next = target.state.startNextLearningSegment()
+		output = "Learning enabled for this workspace."
+	}
+	if err := target.updateContext(turnContext, acp.UpdateAgentMessageText(output)); err != nil {
+		return acp.PromptResponse{}, err
+	}
+	target.launchLearning(next)
+	return acp.PromptResponse{StopReason: acp.StopReasonEndTurn}, nil
+}
+
+func (a *acpAgent) propagateLearningSetting(target *acpAgent, disabled bool) {
+	a.stateMu.Lock()
+	a.learningVersion++
+	version := a.learningVersion
+	runtimes := make([]*acpAgent, 0, len(a.sessions))
+	for _, runtime := range a.sessions {
+		runtimes = append(runtimes, runtime)
+	}
+	a.stateMu.Unlock()
+	target.stateMu.Lock()
+	target.learningVersion = version
+	target.learningPending = false
+	target.learningDisabled = disabled
+	target.stateMu.Unlock()
+	for _, runtime := range runtimes {
+		if runtime != target {
+			runtime.scheduleLearningSetting(version, disabled)
+		}
+	}
+}
+
+func (a *acpAgent) scheduleLearningSetting(version uint64, disabled bool) {
+	a.stateMu.Lock()
+	if version < a.learningVersion || a.closing || !a.sessionOpen {
+		a.stateMu.Unlock()
+		return
+	}
+	a.learningVersion = version
+	a.learningPending = true
+	a.learningDisabled = disabled
+	interrupt := a.learningInterrupt
+	a.stateMu.Unlock()
+	if disabled && interrupt != nil {
+		interrupt()
+	}
+	apply := func() {
+		a.promptMu.Lock()
+		next := a.applyPendingLearningLocked()
+		a.promptMu.Unlock()
+		a.launchLearning(next)
+	}
+	if a.promptMu.TryLock() {
+		next := a.applyPendingLearningLocked()
+		a.promptMu.Unlock()
+		a.launchLearning(next)
+		return
+	}
+	go apply()
+}
+
+// applyPendingLearningLocked reconciles the process-wide workspace setting
+// with one session model. The caller owns promptMu.
+func (a *acpAgent) applyPendingLearningLocked() tea.Cmd {
+	a.stateMu.Lock()
+	if !a.learningPending || a.closing || !a.sessionOpen {
+		a.stateMu.Unlock()
+		return nil
+	}
+	disabled := a.learningDisabled
+	a.learningPending = false
+	a.stateMu.Unlock()
+	a.state.workspaceLearning = workspace.LearningConfig{
+		Version: workspace.LearningConfigVersion, Disabled: disabled,
+	}
+	if disabled {
+		a.state.stopSessionLearning()
+	} else {
+		a.state.resetSessionLearning()
+	}
+	a.syncLearningInterrupt()
+	if disabled {
+		return nil
+	}
+	return a.state.startNextLearningSegment()
+}
+
+func (a *acpAgent) syncLearningInterrupt() {
+	a.stateMu.Lock()
+	a.learningInterrupt = a.state.learningCancel
+	a.stateMu.Unlock()
 }
 
 func (a *acpAgent) runPrompt(ctx context.Context, userMessage client.Message) (acp.PromptResponse, error) {
@@ -1082,11 +1620,9 @@ func (a *acpAgent) finishToolCallContext(ctx context.Context, message client.Mes
 }
 
 func (a *acpAgent) elicitAnswer(ctx context.Context, question askToUserInput) askToUserOutput {
-	a.stateMu.Lock()
-	connection := a.connection
+	connection, capabilities := a.connectionState()
 	sessionID := a.sessionID
-	supportsForm := a.clientCapabilities.Elicitation != nil && a.clientCapabilities.Elicitation.Form != nil
-	a.stateMu.Unlock()
+	supportsForm := capabilities.Elicitation != nil && capabilities.Elicitation.Form != nil
 	if connection == nil || !supportsForm {
 		return askToUserOutput{Err: errors.New("ACP client does not support form elicitation")}
 	}
@@ -1264,6 +1800,7 @@ func (a *acpAgent) runACPCommand(ctx context.Context, text string) (acp.PromptRe
 func (a *acpAgent) clearACPConversation(ctx context.Context) error {
 	runID := a.state.runID
 	a.state.resetConversationState(runID)
+	a.syncLearningInterrupt()
 	// An ACP slash command cannot replace the active client-side session ID.
 	// Keep its backing run stable while clearing only q's conversation projection.
 	if a.state.workspaceStore == nil {
@@ -1283,9 +1820,8 @@ func (a *acpAgent) runACPPlan(ctx context.Context, objective string) (acp.Prompt
 	if a.state.client == nil || a.state.toolRuntime == nil {
 		return acp.PromptResponse{}, errors.New("ACP plan requires an available model and tool runtime")
 	}
-	a.stateMu.Lock()
-	supportsForm := a.clientCapabilities.Elicitation != nil && a.clientCapabilities.Elicitation.Form != nil
-	a.stateMu.Unlock()
+	_, capabilities := a.connectionState()
+	supportsForm := capabilities.Elicitation != nil && capabilities.Elicitation.Form != nil
 	if !supportsForm {
 		message := "The ACP client must support form elicitation to answer /plan questions and approve execution."
 		if err := a.updateContext(ctx, acp.UpdateAgentMessageText(message)); err != nil {
@@ -1371,9 +1907,7 @@ func (a *acpAgent) update(update acp.SessionUpdate) error {
 }
 
 func (a *acpAgent) updateContext(ctx context.Context, update acp.SessionUpdate) error {
-	a.stateMu.Lock()
-	connection := a.connection
-	a.stateMu.Unlock()
+	connection, _ := a.connectionState()
 	if connection == nil {
 		return errors.New("ACP connection is not initialized")
 	}
@@ -1381,12 +1915,21 @@ func (a *acpAgent) updateContext(ctx context.Context, update acp.SessionUpdate) 
 }
 
 func (a *acpAgent) requireSession(sessionID acp.SessionId) error {
+	coordinator := a.coordinator()
+	if coordinator != a {
+		coordinator.stateMu.Lock()
+		shuttingDown := coordinator.shuttingDown
+		coordinator.stateMu.Unlock()
+		if shuttingDown {
+			return errors.New("ACP agent is shutting down")
+		}
+	}
 	a.stateMu.Lock()
 	defer a.stateMu.Unlock()
 	if a.shuttingDown {
 		return errors.New("ACP agent is shutting down")
 	}
-	if !a.sessionOpen {
+	if a.closing || !a.sessionOpen {
 		return errors.New("no ACP session is open for this workspace")
 	}
 	if sessionID != a.sessionID {
@@ -1401,6 +1944,16 @@ func (a *acpAgent) requireRunning() error {
 	if a.shuttingDown {
 		return errors.New("ACP agent is shutting down")
 	}
+	return nil
+}
+
+func (a *acpAgent) beginActivation() error {
+	a.stateMu.Lock()
+	defer a.stateMu.Unlock()
+	if a.shuttingDown {
+		return errors.New("ACP agent is shutting down")
+	}
+	a.activationWG.Add(1)
 	return nil
 }
 
@@ -1420,24 +1973,70 @@ func (a *acpAgent) shutdown() error {
 		return nil
 	}
 	a.shuttingDown = true
+	runtimes := make([]*acpAgent, 0, len(a.sessions))
+	for _, runtime := range a.sessions {
+		runtimes = append(runtimes, runtime)
+	}
+	a.sessions = make(map[acp.SessionId]*acpAgent)
+	a.stateMu.Unlock()
+	for _, runtime := range runtimes {
+		runtime.stateMu.Lock()
+		runtime.closing = true
+		cancel := runtime.turnCancel
+		runtime.stateMu.Unlock()
+		if cancel != nil {
+			cancel()
+		}
+	}
+	a.activationWG.Wait()
+	var closeErrors []error
+	for _, runtime := range runtimes {
+		runtime.promptMu.Lock()
+		closeErrors = append(closeErrors, runtime.closeRuntime())
+		runtime.promptMu.Unlock()
+	}
+	return errors.Join(closeErrors...)
+}
+
+// closeRuntime releases only resources owned by this session runtime. The
+// caller must prevent a new prompt from entering (normally by holding
+// promptMu or by keeping the runtime unpublished).
+func (a *acpAgent) closeRuntime() error {
+	a.stateMu.Lock()
+	if !a.sessionOpen {
+		a.stateMu.Unlock()
+		return nil
+	}
 	cancel := a.turnCancel
+	a.closing = true
+	a.sessionOpen = false
+	a.turnCancel = nil
+	a.learningInterrupt = nil
+	a.learningPending = false
 	a.stateMu.Unlock()
 	if cancel != nil {
 		cancel()
 	}
-	a.promptMu.Lock()
-	defer a.promptMu.Unlock()
-	a.stateMu.Lock()
-	a.sessionOpen = false
-	a.turnCancel = nil
-	a.stateMu.Unlock()
 	a.state.stopSessionLearning()
 	lock := a.state.workspaceLock
 	a.state.workspaceLock = nil
+	scope := a.sessionMCPScoped
+	a.sessionMCPScoped = nil
+	a.sessionMCPConfig = mcpconfig.Config{}
+	a.sessionMCPIDs = nil
+	a.sessionMCPBase = mcpconfig.Config{}
+	a.sessionMCPBaseSet = false
+	a.sessionMCPOverride = false
+	a.state.releaseConversationState(a.root)
+	var lockErr error
 	if lock != nil {
-		return lock.Close()
+		lockErr = lock.Close()
 	}
-	return nil
+	var scopeErr error
+	if scope != nil {
+		scopeErr = scope.Close()
+	}
+	return errors.Join(scopeErr, lockErr)
 }
 
 func (a *acpAgent) launchLearning(command tea.Cmd) {
@@ -1452,6 +2051,7 @@ func (a *acpAgent) launchLearning(command tea.Cmd) {
 		}
 
 		a.promptMu.Lock()
+		next := a.applyPendingLearningLocked()
 		matched := result.jobID == a.state.thinkerJobID && result.sessionGeneration == a.state.sessionGeneration
 		if matched {
 			a.state.thinkerBusy = false
@@ -1474,8 +2074,7 @@ func (a *acpAgent) launchLearning(command tea.Cmd) {
 		a.stateMu.Lock()
 		open := a.sessionOpen
 		a.stateMu.Unlock()
-		var next tea.Cmd
-		if matched && open {
+		if next == nil && matched && open {
 			next = a.state.startNextLearningSegment()
 		}
 		a.promptMu.Unlock()

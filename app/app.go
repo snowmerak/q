@@ -88,11 +88,13 @@ func Run(ctx context.Context, store config.Store) error {
 	if err != nil {
 		return err
 	}
-	workspaceStore, workspaceLock, err := workspace.OpenLatestSession(workspaceStore.Root, "q")
+	if err := workspaceStore.MigrateLegacySession(); err != nil {
+		return err
+	}
+	sessions, err := workspaceStore.ListSessions()
 	if err != nil {
 		return err
 	}
-	defer workspaceLock.Close()
 	loaded, err := store.Load()
 	if err != nil && !errors.Is(err, config.ErrNotFound) {
 		return err
@@ -108,8 +110,9 @@ func Run(ctx context.Context, store config.Store) error {
 	lifecycle := newStartupLifecycle()
 	initialModel := newManagedModel(runtimeContext, store, factory, manager)
 	initialModel.workspaceStore = &workspaceStore
-	initialModel.workspaceLock = workspaceLock
-	initialModel.screen = screenChat
+	initialModel.sessions = sessions
+	initialModel.sessionPickerRequired = true
+	initialModel.screen = screenSessions
 	initialModel.config = loaded
 	if err != nil {
 		initialModel.config = config.Default()
@@ -124,7 +127,7 @@ func Run(ctx context.Context, store config.Store) error {
 	initialModel.startup = startStartup(startup.run, initialModelLoadWait)
 
 	final, runErr := tea.NewProgram(initialModel).Run()
-	if finalModel, ok := final.(model); ok && finalModel.workspaceLock != nil && finalModel.workspaceLock != workspaceLock {
+	if finalModel, ok := final.(model); ok && finalModel.workspaceLock != nil {
 		runErr = errors.Join(runErr, finalModel.workspaceLock.Close())
 	}
 	cancelRuntime()

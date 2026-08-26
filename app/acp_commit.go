@@ -35,9 +35,8 @@ func newACPCommitSessionFactory(state *model, root string) acpCommitSessionFacto
 }
 
 func (a *acpAgent) runACPCommit(ctx context.Context) (response acp.PromptResponse, runErr error) {
-	a.stateMu.Lock()
-	supportsForm := a.clientCapabilities.Elicitation != nil && a.clientCapabilities.Elicitation.Form != nil
-	a.stateMu.Unlock()
+	_, capabilities := a.connectionState()
+	supportsForm := capabilities.Elicitation != nil && capabilities.Elicitation.Form != nil
 	if !supportsForm {
 		message := "The ACP client must support form elicitation to review and approve /commit."
 		if err := a.updateContext(ctx, acp.UpdateAgentMessageText(message)); err != nil {
@@ -142,10 +141,8 @@ func (a *acpAgent) finishACPCommit(content string) (acp.PromptResponse, error) {
 }
 
 func (a *acpAgent) elicitACPCommitAction(ctx context.Context, proposal string) (string, error) {
-	a.stateMu.Lock()
-	connection := a.connection
+	connection, _ := a.connectionState()
 	sessionID := a.sessionID
-	a.stateMu.Unlock()
 	if connection == nil {
 		return "", errors.New("ACP connection is unavailable")
 	}

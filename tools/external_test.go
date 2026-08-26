@@ -111,6 +111,74 @@ func TestConfigureExternalIsolatesServerFailures(t *testing.T) {
 	}
 }
 
+func TestExternalScopeKeepsSessionServersOutOfBaseRuntime(t *testing.T) {
+	server := mcp.NewServer(&mcp.Implementation{Name: "scope-test", Version: "1"}, nil)
+	type echoInput struct {
+		Value string `json:"value" jsonschema:"required"`
+	}
+	type echoOutput struct {
+		Value string `json:"value"`
+	}
+	mcp.AddTool(server, &mcp.Tool{Name: "echo", Description: "Echo a value."},
+		func(_ context.Context, _ *mcp.CallToolRequest, input echoInput) (*mcp.CallToolResult, echoOutput, error) {
+			return nil, echoOutput{Value: input.Value}, nil
+		})
+	httpServer := httptest.NewServer(mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server {
+		return server
+	}, &mcp.StreamableHTTPOptions{Stateless: true, JSONResponse: true}))
+	defer httpServer.Close()
+
+	root := t.TempDir()
+	runtime, err := NewRuntime(context.Background(), root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer runtime.Close()
+	base := mcpconfig.Config{
+		Version: mcpconfig.CurrentVersion,
+		Servers: map[string]mcpconfig.ServerConfig{"workspace": {
+			Transport: mcpconfig.TransportStreamableHTTP, URL: httpServer.URL,
+		}},
+		Roles: map[string][]string{mcpconfig.RoleDefault: {"workspace"}},
+	}
+	if statuses := runtime.ConfigureExternal(context.Background(), root, base); len(statuses) != 1 || statuses[0].Error != "" {
+		t.Fatalf("base statuses = %#v", statuses)
+	}
+	session := mcpconfig.Config{
+		Version: mcpconfig.CurrentVersion,
+		Servers: map[string]mcpconfig.ServerConfig{"acp_session_1": {
+			Transport: mcpconfig.TransportStreamableHTTP, URL: httpServer.URL,
+		}},
+		Roles: map[string][]string{mcpconfig.RoleDefault: {"acp_session_1"}},
+	}
+	scope, statuses := runtime.NewExternalScope(context.Background(), root, session)
+	if len(statuses) != 1 || statuses[0].Error != "" {
+		t.Fatalf("scope statuses = %#v", statuses)
+	}
+	if !hasNamedTool(scope.ToolsForRole(mcpconfig.RoleDefault), "mcp_workspace__echo") ||
+		!hasNamedTool(scope.ToolsForRole(mcpconfig.RoleDefault), "mcp_acp_session_1__echo") {
+		t.Fatalf("scoped tools = %#v", scope.ToolsForRole(mcpconfig.RoleDefault))
+	}
+	if hasNamedTool(runtime.ToolsForRole(mcpconfig.RoleDefault), "mcp_acp_session_1__echo") {
+		t.Fatal("session MCP tool leaked into the base runtime")
+	}
+	if _, err := scope.Call(context.Background(), client.ToolCall{
+		ID: "scope-1", Type: client.ToolTypeFunction,
+		Function: client.FunctionCall{Name: "mcp_acp_session_1__echo", Arguments: `{"value":"session"}`},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := scope.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runtime.Call(context.Background(), client.ToolCall{
+		ID: "base-1", Type: client.ToolTypeFunction,
+		Function: client.FunctionCall{Name: "mcp_workspace__echo", Arguments: `{"value":"workspace"}`},
+	}); err != nil {
+		t.Fatalf("closing scope disrupted base MCP: %v", err)
+	}
+}
+
 func TestStdioTransportMapsEnvironmentReferencesAndWorkspace(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv("SOURCE_TOKEN", "secret-value")

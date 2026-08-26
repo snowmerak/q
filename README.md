@@ -44,10 +44,10 @@ q acp [--root <workspace-path>]
 
 When `--root` is omitted, q uses the process's current working directory.
 
-The process owns one session-scoped lock, its local runtime and tools, and the
-selected `.q/sessions/<uuid>/session.json` projection. Durable archive records
-and their indexes are accessed through a lease on the user-level Workspace Memory service. It
-supports ACP `session/new`,
+Each active session owns a session-scoped lock, an independent conversation and
+learning runtime, and its selected `.q/sessions/<uuid>/session.json` projection.
+Durable archive records and their indexes are accessed through a lease on the
+user-level Workspace Memory service. It supports ACP `session/new`,
 `session/prompt`, `session/cancel`, streamed message/thought updates, tool-call
 updates, task-lifecycle plan updates, `session/list`, `session/delete`, and
 `session/close`. Session metadata uses the first meaningful prompt as its title
@@ -65,18 +65,18 @@ ID usable; `/new` creates another session. `/commit` shows the generated commit 
 through form elicitation, then accepts commit, commit-and-push, regenerate, or
 cancel. Clients without form elicitation support cannot run the commit workflow.
 
-One ACP process is bound to one workspace and accepts one active ACP session at
-a time, while that workspace may contain many persisted sessions and other q
-processes may own different sessions concurrently. `session/list` returns all
+One ACP process is bound to one workspace and may keep multiple ACP sessions
+active concurrently. `session/list` returns all
 persisted projections. `session/load` replays a selected session,
 `session/resume` reconnects without replay, `session/close` releases its session
 lock, in-memory conversation, and session-provided MCP connections, while
 `session/delete` removes only the selected conversation and plan
 projections. Durable archive records and project files are preserved.
 
-Client-supplied stdio and Streamable HTTP MCP servers are merged with q's
-configured MCP catalog for the lifetime of the active ACP session. SSE remains
-unsupported. ACP image prompts are advertised for OpenAI-compatible, OpenRouter,
+Client-supplied stdio and Streamable HTTP MCP servers are connected in a
+session-owned overlay over q's configured MCP catalog and closed with that
+session, so concurrently active sessions cannot replace each other's routes.
+SSE remains unsupported. ACP image prompts are advertised for OpenAI-compatible, OpenRouter,
 and xAI/Grok routes; native Anthropic and Codex routes remain text-only until the
 provider layer has a common multimodal representation. Provider setup must
 already exist before starting `q acp`.
@@ -256,6 +256,7 @@ screen without discarding editor state or interrupting an active turn.
 | `/plan [request]` | Grill, research, approve, and execute a work plan. Without an inline request, the next message becomes the request. |
 | `/agent:search <query>` | Explicitly run the configured ACP Search agent in an isolated read-only session and return its evidence report. |
 | `/commit` | Open the interactive commit workflow, then return to chat. |
+| `/sessions` | List workspace sessions by title and recent activity, then resume one or create another. |
 | `/new` | Create and switch to a new workspace session without deleting the previous one. |
 | `/model` | Configure the workspace/default, embedding, subagent role, and grouped fallback models. |
 | `/gateway` | Configure Gateway network defaults, API keys, and providers. |
@@ -629,8 +630,11 @@ file remains as reusable diagnostic metadata. Workspace Memory does not
 serialize or detect concurrent edits to project files; coordinating overlapping
 file mutations remains the responsibility of the sessions involved.
 
-`/clear` writes an empty projection for the same session UUID. `/new` creates a
-different UUID. Durable archive records and workspace file changes remain intact.
+The main TUI starts with a newest-first session picker that shows each saved
+title and activity time. It acquires and revalidates only the selected session's
+lock; `/sessions` returns to the same picker later. `/clear` writes an empty
+projection for the same session UUID. `/new` creates a different UUID. Durable
+archive records and workspace file changes remain intact.
 
 ## Tools and task lifecycle
 

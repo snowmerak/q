@@ -53,6 +53,7 @@ const (
 	screenGatewayKeys
 	screenLibrary
 	screenHelp
+	screenSessions
 	screenChat
 )
 
@@ -174,6 +175,9 @@ type model struct {
 
 	workspaceStore            *workspace.Store
 	workspaceLock             *workspace.Lock
+	sessions                  []workspace.SessionEntry
+	sessionCursor             int
+	sessionPickerRequired     bool
 	workspaceRestored         bool
 	workspaceModel            workspace.ModelConfig
 	workspaceModelRestored    bool
@@ -710,6 +714,9 @@ func (m model) Init() tea.Cmd {
 	if m.screen == screenHelp {
 		return tea.RequestBackgroundColor
 	}
+	if m.screen == screenSessions {
+		return tea.RequestBackgroundColor
+	}
 	return tea.Batch(m.setup[m.setupFocus].Focus(), tea.RequestBackgroundColor)
 }
 
@@ -751,7 +758,11 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		m.libraryClient = message.library
 		m.models = append([]client.Model(nil), message.models...)
 		m.gatewayConfig = message.gatewayConfig
-		if message.client != nil {
+		waitingForSession := m.sessionPickerRequired
+		if waitingForSession {
+			m.config = message.config
+			m.client = message.client
+		} else if message.client != nil {
 			m.enterChat(message.config, message.client)
 		} else if len(message.gatewayConfig.Providers) > 0 {
 			m.enterProviderList()
@@ -782,6 +793,12 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		m.resize(m.width, m.height)
 		if m.screen == screenChat {
 			return m, tea.Batch(m.input.Focus(), m.startNextLearningSegment())
+		}
+		if m.screen == screenSessions {
+			return m, nil
+		}
+		if m.screen == screenHelp {
+			return m, nil
 		}
 		if m.screen == screenProviders {
 			return m, nil
@@ -1431,6 +1448,9 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if m.screen == screenHelp {
 			return m.updateHelp(key)
+		}
+		if m.screen == screenSessions {
+			return m.updateSessions(key)
 		}
 		return m.updateChatKey(key)
 	}
@@ -3041,6 +3061,9 @@ func (m model) submitChat() (tea.Model, tea.Cmd) {
 				m.status = err.Error()
 			}
 			return m, m.input.Focus()
+		case "/sessions":
+			m.input.Reset()
+			return m.enterSessions()
 		case "/learn":
 			m.input.Reset()
 			if m.learningDisabled() {
@@ -4881,6 +4904,8 @@ func (m model) View() tea.View {
 		content = m.viewAgents()
 	} else if m.screen == screenHelp {
 		content = m.viewHelp()
+	} else if m.screen == screenSessions {
+		content = m.viewSessions()
 	} else if m.screen == screenChat {
 		content = m.viewChat()
 	}
