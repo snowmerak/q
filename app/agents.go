@@ -192,11 +192,13 @@ func (m model) acceptAgentsForm() (tea.Model, tea.Cmd) {
 			m.status = "Agent connection already exists · " + id
 			return m, m.agentsInputs[0].Focus()
 		}
-		delete(candidate.Agents.Connections, m.agentsEditID)
-		for role, assignment := range candidate.Agents.Roles {
-			if assignment.Agent == m.agentsEditID {
-				assignment.Agent = id
-				candidate.Agents.Roles[role] = assignment
+		if m.agentsEditID != "" {
+			delete(candidate.Agents.Connections, m.agentsEditID)
+			for role, assignment := range candidate.Agents.Roles {
+				if assignment.Agent == m.agentsEditID {
+					assignment.Agent = id
+					candidate.Agents.Roles[role] = assignment
+				}
 			}
 		}
 	}

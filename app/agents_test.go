@@ -64,6 +64,33 @@ func TestAgentsCustomCommandForm(t *testing.T) {
 	}
 }
 
+func TestAgentsAddingConnectionDoesNotAssignNativeRoles(t *testing.T) {
+	value := config.Default()
+	value.Provider.Model = "test-model"
+	value.Agents.Roles = map[string]config.AgentConfig{
+		config.AgentRolePlanner: {Model: "planner-model"},
+		config.AgentRoleGriller: {Model: "griller-model"},
+	}
+	m := newModel(context.Background(), config.Store{Dir: t.TempDir()}, nil)
+	m.agentsDraft = value
+	m.agentsMode = agentsModeEditConnection
+	fields := []string{"grok", "grok", "", `[]`, `{}`, ""}
+	for index, field := range fields {
+		m.agentsInputs[index].SetValue(field)
+	}
+	updated, _ := m.acceptAgentsForm()
+	m = updated.(model)
+	if m.agentsDraft.Agents.Connections["grok"].Preset != "grok" {
+		t.Fatalf("connection = %#v status=%q", m.agentsDraft.Agents.Connections["grok"], m.status)
+	}
+	for _, role := range []string{config.AgentRolePlanner, config.AgentRoleGriller} {
+		assignment := m.agentsDraft.Agents.Roles[role]
+		if assignment.Agent != "" {
+			t.Fatalf("native role %q was assigned ACP connection %#v", role, assignment)
+		}
+	}
+}
+
 func TestAgentConnectionProbeResultUpdatesStatus(t *testing.T) {
 	m := newModel(context.Background(), config.Store{Dir: t.TempDir()}, nil)
 	m.agentsBusy = true
