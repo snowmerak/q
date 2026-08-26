@@ -289,6 +289,7 @@ type model struct {
 	agentsInputs              [6]textinput.Model
 	agentsDiscardArmed        bool
 	agentsBusy                bool
+	agentsProbe               map[string]string
 
 	config             config.Config
 	client             chatClient
@@ -354,6 +355,11 @@ type mcpSettingsSavedMsg struct {
 type agentsSettingsSavedMsg struct {
 	config config.Config
 	err    error
+}
+
+type agentConnectionProbedMsg struct {
+	id  string
+	err error
 }
 
 type modelTargetConfiguredMsg struct {
@@ -916,6 +922,19 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		m.agentsOriginal = cloneConfigForAgents(message.config)
 		m.agentsDiscardArmed = false
 		m.status = "Agent settings saved"
+		return m, nil
+	case agentConnectionProbedMsg:
+		m.agentsBusy = false
+		if m.agentsProbe == nil {
+			m.agentsProbe = make(map[string]string)
+		}
+		if message.err != nil {
+			m.agentsProbe[message.id] = "failed"
+			m.status = message.id + " connection failed · " + message.err.Error()
+			return m, nil
+		}
+		m.agentsProbe[message.id] = "connected"
+		m.status = message.id + " connected · initialize/session lifecycle passed"
 		return m, nil
 	case modelGroupsConfiguredMsg:
 		if message.err != nil {

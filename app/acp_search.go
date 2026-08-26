@@ -53,6 +53,22 @@ func runACPExternalSearch(
 	return executeACPExternalSearch(ctx, remote, connectionID, input)
 }
 
+func probeACPAgentConnection(
+	ctx context.Context,
+	root, connectionID string,
+	connection config.AgentConnectionConfig,
+) error {
+	command, err := resolveConfiguredACPAgentCommand(connection, exec.LookPath)
+	if err != nil {
+		return fmt.Errorf("agent connection %q: %w", connectionID, err)
+	}
+	remote, err := startACPRemoteClient(ctx, command, root, "", connection.AuthMethod, io.Discard)
+	if err != nil {
+		return fmt.Errorf("agent connection %q: %w", connectionID, err)
+	}
+	return disposeACPRemote(remote)
+}
+
 func executeACPExternalSearch(
 	ctx context.Context,
 	remote *acpRemoteClient,
@@ -63,11 +79,7 @@ func executeACPExternalSearch(
 	remote.permissions = acpPermissionReadOnly
 	remote.mu.Unlock()
 	defer func() {
-		cleanupContext, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-		defer cancel()
-		disposeErr := remote.disposeSession(cleanupContext)
-		closeErr := remote.Close()
-		runErr = errors.Join(runErr, disposeErr, closeErr)
+		runErr = errors.Join(runErr, disposeACPRemote(remote))
 	}()
 
 	prompt, err := externalSearchPrompt(input)
@@ -82,6 +94,12 @@ func executeACPExternalSearch(
 	return subagent.ExternalSearchResult{
 		Agent: connectionID, Summary: report, Sources: externalSearchSources(report),
 	}, nil
+}
+
+func disposeACPRemote(remote *acpRemoteClient) error {
+	cleanupContext, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	return errors.Join(remote.disposeSession(cleanupContext), remote.Close())
 }
 
 func (r *acpRemoteClient) disposeSession(ctx context.Context) error {
@@ -106,6 +124,7 @@ func (r *acpRemoteClient) disposeSession(ctx context.Context) error {
 		_, closeErr := connection.CloseSession(ctx, acp.CloseSessionRequest{SessionId: sessionID})
 		if closeErr == nil {
 			r.clearDisposedSession(sessionID)
+			return nil
 		}
 		return errors.Join(disposeErr, closeErr)
 	}

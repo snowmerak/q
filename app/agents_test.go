@@ -63,3 +63,20 @@ func TestAgentsCustomCommandForm(t *testing.T) {
 		t.Fatalf("connection = %#v status=%q", connection, m.status)
 	}
 }
+
+func TestAgentConnectionProbeResultUpdatesStatus(t *testing.T) {
+	m := newModel(context.Background(), config.Store{Dir: t.TempDir()}, nil)
+	m.agentsBusy = true
+	m.agentsProbe = map[string]string{"codex": "testing"}
+	updated, _ := m.Update(agentConnectionProbedMsg{id: "codex"})
+	m = updated.(model)
+	if m.agentsBusy || m.agentsProbe["codex"] != "connected" || !strings.Contains(m.status, "lifecycle passed") {
+		t.Fatalf("busy=%v probe=%q status=%q", m.agentsBusy, m.agentsProbe["codex"], m.status)
+	}
+
+	updated, _ = m.Update(agentConnectionProbedMsg{id: "grok", err: context.DeadlineExceeded})
+	m = updated.(model)
+	if m.agentsProbe["grok"] != "failed" || !strings.Contains(m.status, "deadline exceeded") {
+		t.Fatalf("probe=%q status=%q", m.agentsProbe["grok"], m.status)
+	}
+}

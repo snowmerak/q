@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"sort"
 	"strings"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
@@ -36,6 +38,7 @@ func (m model) enterAgents() (tea.Model, tea.Cmd) {
 	m.agentsEditID = ""
 	m.agentsDiscardArmed = false
 	m.agentsBusy = false
+	m.agentsProbe = make(map[string]string)
 	m.status = ""
 	m.resize(m.width, m.height)
 	return m, nil
@@ -72,6 +75,8 @@ func (m model) updateAgents(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		if m.agentsPanel == 1 {
 			return m.toggleAgentConnection()
 		}
+	case "c":
+		return m.probeAgentConnection()
 	case "ctrl+s":
 		return m.saveAgentsSettings()
 	case "esc":
@@ -200,6 +205,8 @@ func (m model) acceptAgentsForm() (tea.Model, tea.Cmd) {
 		m.status = err.Error()
 		return m, m.agentsInputs[m.agentsFormFocus].Focus()
 	}
+	delete(m.agentsProbe, m.agentsEditID)
+	delete(m.agentsProbe, id)
 	m.agentsDraft = candidate
 	m.agentsDiscardArmed = false
 	m.cancelAgentsForm()
@@ -230,6 +237,7 @@ func (m model) deleteAgentConnection() (tea.Model, tea.Cmd) {
 	}
 	id := ids[min(m.agentsCursor[1], len(ids)-1)]
 	delete(m.agentsDraft.Agents.Connections, id)
+	delete(m.agentsProbe, id)
 	for role, assignment := range m.agentsDraft.Agents.Roles {
 		if assignment.Agent == id {
 			assignment.Agent = ""
@@ -283,6 +291,38 @@ func (m model) toggleAgentConnection() (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+func (m model) probeAgentConnection() (tea.Model, tea.Cmd) {
+	ids := agentConnectionIDs(m.agentsDraft.Agents)
+	if len(ids) == 0 {
+		m.status = "Add an ACP agent connection first"
+		return m, nil
+	}
+	id := ids[min(m.agentsCursor[1], len(ids)-1)]
+	connection := m.agentsDraft.Agents.Connections[id]
+	root, err := os.Getwd()
+	if err == nil {
+		root, err = canonicalWorkspaceRoot(root)
+	}
+	if err != nil {
+		m.status = "Resolve workspace for connection test · " + err.Error()
+		return m, nil
+	}
+	if m.agentsProbe == nil {
+		m.agentsProbe = make(map[string]string)
+	}
+	m.agentsProbe[id] = "testing"
+	m.agentsBusy = true
+	m.status = "Testing " + id + " · initialize/session lifecycle…"
+	parent := m.ctx
+	return m, func() tea.Msg {
+		ctx, cancel := context.WithTimeout(parent, 45*time.Second)
+		defer cancel()
+		return agentConnectionProbedMsg{
+			id: id, err: probeACPAgentConnection(ctx, root, id, connection),
+		}
+	}
+}
+
 func (m model) saveAgentsSettings() (tea.Model, tea.Cmd) {
 	if err := m.agentsDraft.Validate(); err != nil {
 		m.status = err.Error()
@@ -317,7 +357,7 @@ func (m model) viewAgents() string {
 		body.WriteString(subtleStyle.Render(m.status))
 	}
 	body.WriteString("\n\n")
-	help := "tab/←/→ panel · ↑/↓ select · space assign · a add · e/enter edit · t enable/disable · d delete · ctrl+s save · esc chat"
+	help := "tab/←/→ panel · ↑/↓ select · space assign · c test · a add · e/enter edit · t enable/disable · d delete · ctrl+s save · esc chat"
 	if m.agentsMode != agentsModeList {
 		help = "tab/↑/↓ field · enter/ctrl+s apply draft · esc cancel"
 	} else if m.isStandaloneScreen(screenAgents) {
@@ -375,6 +415,9 @@ func (m model) viewAgentsLists() string {
 		state := "enabled"
 		if connection.Disabled {
 			state = "disabled"
+		}
+		if probe := m.agentsProbe[id]; probe != "" {
+			state += " · " + probe
 		}
 		right.WriteString(fmt.Sprintf("%s[%s] %s\n", cursor, mark, id))
 		right.WriteString(subtleStyle.Render("    " + agentConnectionEndpoint(connection) + " · " + state + "\n"))

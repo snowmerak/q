@@ -15,6 +15,8 @@ type fakeACPRemoteConnection struct {
 	newSessionID acp.SessionId
 	closed       []acp.SessionId
 	deleted      []acp.SessionId
+	closeErr     error
+	deleteErr    error
 	prompt       func(context.Context, acp.PromptRequest) (acp.PromptResponse, error)
 }
 
@@ -39,12 +41,12 @@ func (f *fakeACPRemoteConnection) Prompt(ctx context.Context, request acp.Prompt
 
 func (f *fakeACPRemoteConnection) CloseSession(_ context.Context, request acp.CloseSessionRequest) (acp.CloseSessionResponse, error) {
 	f.closed = append(f.closed, request.SessionId)
-	return acp.CloseSessionResponse{}, nil
+	return acp.CloseSessionResponse{}, f.closeErr
 }
 
 func (f *fakeACPRemoteConnection) UnstableDeleteSession(_ context.Context, request acp.UnstableDeleteSessionRequest) (acp.UnstableDeleteSessionResponse, error) {
 	f.deleted = append(f.deleted, request.SessionId)
-	return acp.UnstableDeleteSessionResponse{}, nil
+	return acp.UnstableDeleteSessionResponse{}, f.deleteErr
 }
 
 func TestResolveACPAgentCommand(t *testing.T) {

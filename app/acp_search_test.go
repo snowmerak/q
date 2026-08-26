@@ -2,9 +2,12 @@ package app
 
 import (
 	"context"
+	"errors"
+	"os"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/coder/acp-go-sdk"
 	"github.com/snowmerak/q/config"
@@ -52,6 +55,23 @@ func TestExecuteACPExternalSearchPromptsAndDeletesSession(t *testing.T) {
 	}
 }
 
+func TestDisposeACPRemoteFallsBackToCloseWhenDeleteFails(t *testing.T) {
+	connection := &fakeACPRemoteConnection{deleteErr: errors.New("empty session cannot be archived")}
+	remote := &acpRemoteClient{
+		connection: connection, sessionID: "empty-session",
+		capabilities: acp.AgentCapabilities{SessionCapabilities: acp.SessionCapabilities{
+			Delete: &acp.SessionDeleteCapabilities{}, Close: &acp.SessionCloseCapabilities{},
+		}},
+	}
+	if err := disposeACPRemote(remote); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(connection.deleted, []acp.SessionId{"empty-session"}) ||
+		!slices.Equal(connection.closed, []acp.SessionId{"empty-session"}) || remote.sessionID != "" {
+		t.Fatalf("deleted=%#v closed=%#v session=%q", connection.deleted, connection.closed, remote.sessionID)
+	}
+}
+
 func TestConfiguredExternalSearchRequiresEnabledSearchAssignment(t *testing.T) {
 	value := config.Default()
 	if configuredExternalSearch(value, t.TempDir()) != nil {
@@ -67,5 +87,17 @@ func TestConfiguredExternalSearchRequiresEnabledSearchAssignment(t *testing.T) {
 	value.Agents.Connections["codex"] = connection
 	if configuredExternalSearch(value, t.TempDir()) == nil {
 		t.Fatal("enabled search assignment was not configured")
+	}
+}
+
+func TestACPConnectionProbeIntegration(t *testing.T) {
+	preset := strings.TrimSpace(os.Getenv("Q_TEST_ACP_PRESET"))
+	if preset == "" {
+		t.Skip("set Q_TEST_ACP_PRESET=codex or grok to probe an installed ACP agent")
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 90*time.Second)
+	defer cancel()
+	if err := probeACPAgentConnection(ctx, t.TempDir(), preset, config.AgentConnectionConfig{Preset: preset}); err != nil {
+		t.Fatal(err)
 	}
 }

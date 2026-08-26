@@ -91,9 +91,9 @@ edit, delete, move, and execute requests are rejected. The agent therefore uses
 its own authenticated subscription and search capabilities without becoming a
 persistent workspace writer.
 
-`q acp connect` remains available as an interactive transport diagnostic, but
-normal plan research uses the persistent Agents configuration rather than that
-chat surface.
+Select a connection in `q agents` and press `c` to test it. The probe performs
+ACP initialization, creates an isolated session, deletes or closes it, and then
+terminates the process without sending a model prompt.
 
 ### Standalone Gateway
 

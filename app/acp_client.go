@@ -22,15 +22,6 @@ import (
 	"github.com/snowmerak/q/config"
 )
 
-// ACPClientOptions configures q as an interactive ACP client for an external
-// coding agent. Agent is currently one of "codex" or "grok".
-type ACPClientOptions struct {
-	Agent      string
-	Root       string
-	SessionID  string
-	AuthMethod string
-}
-
 type acpAgentCommand struct {
 	name       string
 	args       []string
@@ -95,50 +86,6 @@ type acpSessionResetMsg struct {
 
 var _ chatClient = (*acpRemoteClient)(nil)
 var _ acp.Client = (*acpRemoteClient)(nil)
-
-// RunACPClientDefault starts q's chat UI backed by an external ACP agent.
-func RunACPClientDefault(ctx context.Context, options ACPClientOptions, logOutput io.Writer) error {
-	store, err := config.DefaultStore()
-	if err != nil {
-		return err
-	}
-	return RunACPClient(ctx, store, options, logOutput)
-}
-
-// RunACPClient starts q's chat UI backed by an external ACP agent.
-func RunACPClient(ctx context.Context, store config.Store, options ACPClientOptions, logOutput io.Writer) error {
-	root, err := canonicalWorkspaceRoot(options.Root)
-	if err != nil {
-		return err
-	}
-	command, err := resolveACPAgentCommand(options.Agent, exec.LookPath)
-	if err != nil {
-		return err
-	}
-	remote, err := startACPRemoteClient(ctx, command, root, options.SessionID, options.AuthMethod, logOutput)
-	if err != nil {
-		return err
-	}
-
-	value := config.Default()
-	value.Provider.Model = "acp/" + remote.agent
-	value.Provider.BaseURL = "stdio://" + filepath.Base(command.name)
-	value.Provider.SystemPrompt = ""
-
-	m := newModel(ctx, store, nil)
-	m.enterChat(value, remote)
-	m.status = "Connected · ACP session " + string(remote.sessionID)
-	m.resize(m.width, m.height)
-
-	final, runErr := tea.NewProgram(m).Run()
-	var closeErr error
-	if finalModel, ok := final.(model); ok && finalModel.client != nil {
-		closeErr = finalModel.client.Close()
-	} else {
-		closeErr = remote.Close()
-	}
-	return errors.Join(runErr, closeErr)
-}
 
 func resolveACPAgentCommand(agent string, lookPath func(string) (string, error)) (acpAgentCommand, error) {
 	switch strings.ToLower(strings.TrimSpace(agent)) {
@@ -286,7 +233,7 @@ func startACPRemoteClient(
 		available := formatACPAuthMethods(initialize.AuthMethods)
 		_ = remote.Close()
 		if requestError, ok := err.(*acp.RequestError); ok && requestError.Code == -32000 && available != "none" {
-			return nil, fmt.Errorf("ACP agent requires authentication; retry with --auth <method> (available: %s)", available)
+			return nil, fmt.Errorf("ACP agent requires authentication; configure auth_method for this connection (available: %s)", available)
 		}
 		return nil, remote.decorateError("open ACP session", err)
 	}
