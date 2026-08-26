@@ -7,7 +7,7 @@ import (
 	"strings"
 )
 
-const defaultTaskAttempts = 3
+const defaultTaskAttempts = 30
 
 type ExecutionPhase string
 

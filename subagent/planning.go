@@ -19,8 +19,8 @@ const (
 	DelegateScoutToolName = "delegate_scout"
 	SubmitBriefToolName   = "submit_brief"
 	SubmitPlanToolName    = "submit_plan"
-	defaultPlanningRounds = 32
-	defaultPlanningCycles = 6
+	defaultPlanningRounds = 320
+	defaultPlanningCycles = 60
 )
 
 type UserChoice struct {

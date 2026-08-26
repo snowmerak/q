@@ -16,7 +16,7 @@ import (
 
 const (
 	CoderCompleteToolName     = "task_complete"
-	defaultCoderRounds        = 48
+	defaultCoderRounds        = 480
 	maximumCoderReminders     = 3
 	maximumCoderListItems     = 32
 	maximumCoderTextBytes     = 32 << 10

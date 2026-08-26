@@ -15,8 +15,8 @@ import (
 )
 
 const (
-	DefaultMaximumPropositions = 8
-	DefaultMaximumRounds       = 12
+	DefaultMaximumPropositions = 80
+	DefaultMaximumRounds       = 120
 	ExtractorVersion           = "thinker-v1"
 	RegisterToolName           = "register_proposition"
 	CompleteToolName           = "thinking_complete"

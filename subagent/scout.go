@@ -17,7 +17,7 @@ import (
 
 const (
 	ScoutCompleteToolName = "task_complete"
-	defaultScoutRounds    = 24
+	defaultScoutRounds    = 240
 	maximumScoutReminders = 3
 	maximumScoutFindings  = 32
 	maximumScoutListItems = 16

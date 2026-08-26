@@ -12,7 +12,7 @@ import (
 )
 
 const (
-	maximumCommitRounds    = 24
+	maximumCommitRounds    = 240
 	maximumProposalPrompts = 3
 )
 

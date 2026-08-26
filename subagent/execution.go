@@ -17,7 +17,7 @@ const (
 	TargetSelectorPaths = "paths"
 	TargetSelectorLoom  = "loom"
 	ReviewTaskToolName  = "review_task"
-	maximumReviewRounds = 8
+	maximumReviewRounds = 80
 )
 
 // TargetCondition is a disjunctive normal form over file-set selectors.
