@@ -3295,7 +3295,13 @@ func (m *model) sendChatRequest() tea.Cmd {
 	conversationID := m.conversationID
 	configuredClient := m.client
 	modelID := m.activeModel()
-	toolRuntime := scopeTools(m.toolRuntime, mcpconfig.RoleDefault)
+	workingDirectory := ""
+	if m.workspaceStore != nil {
+		workingDirectory = m.workspaceStore.Root
+	}
+	toolRuntime, toolRuntimeErr := configuredAgentToolRuntime(
+		m.toolRuntime, mcpconfig.RoleDefault, m.activeConfig(), workingDirectory,
+	)
 	turnContext := m.activeTurnContext()
 	turnID := m.turnID
 	streamEnabled := m.streamsActiveChat()
@@ -3303,6 +3309,11 @@ func (m *model) sendChatRequest() tea.Cmd {
 		m.gatewayConfig, m.activeConfig().ModelGroups, modelID, nil,
 	)
 	activeTask := cloneActiveTask(m.activeTask)
+	if toolRuntimeErr != nil {
+		return func() tea.Msg {
+			return chatResultMsg{turnID: turnID, requestEstimate: m.requestEstimate, err: toolRuntimeErr}
+		}
+	}
 	if remote, ok := configuredClient.(*acpRemoteClient); ok {
 		events := make(chan agentEvent)
 		content := m.pendingMessage.TextContent()

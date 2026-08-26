@@ -124,9 +124,12 @@ Scout 결과는 먼저 Griller에게 돌아간다. Griller는 결과에 따라 �
 Scout 호출, Loom transform 또는 Planner handoff 중 다음 행동을 정한다.
 
 Scout의 bounded `summary`, `findings`, `evidence`, `risks`는 `delegate_scout`의
-구조화 JSON 결과로 Griller context에 직접 전달한다. Scout 응답을 Loom reference
-하나로 치환하지 않는다. Loom은 큰 원본 tool result와 Scout가 명시적으로 남긴
-supporting artifact를 보관할 때만 사용한다.
+구조화 JSON 결과로 Loom에 capture한 뒤 Griller context에 tool receipt로 전달한다.
+작은 결과는 receipt의 `result`에 구조화 보고서 전체와 `loom_ref`가 함께 들어가며,
+큰 결과는 bounded preview와 `loom_ref`를 반환한다. 따라서 보고서는 reference
+하나로만 치환되지 않으면서도 모든 model-visible subagent 호출 결과가 동일한
+capture 경계를 지킨다. 자세한 계약은
+[agent-invocation-runtime.md](agent-invocation-runtime.md)를 따른다.
 
 ## Planner와 확인 계약
 

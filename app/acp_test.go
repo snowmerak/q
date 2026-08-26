@@ -485,12 +485,12 @@ func TestACPAgentRunsExplicitSearchCommand(t *testing.T) {
 	parentClient := &fakeClient{}
 	agent, workspaceStore, connection := testACPAgent(t, parentClient, &fakeAgentTools{})
 	var received subagent.ExternalSearchInput
-	agent.externalSearch = func(_ context.Context, input subagent.ExternalSearchInput) (subagent.ExternalSearchResult, error) {
+	agent.state.toolRuntime = testAgentSearchRuntime(t, func(_ context.Context, input subagent.ExternalSearchInput) (subagent.ExternalSearchResult, error) {
 		received = input
 		return subagent.ExternalSearchResult{
 			Agent: "codex", Summary: "ACP evidence: https://agentclientprotocol.com",
 		}, nil
-	}
+	})
 	sessionID := openTestACPSession(t, agent, workspaceStore.Root)
 	response, err := agent.Prompt(t.Context(), acp.PromptRequest{
 		SessionId: sessionID,
@@ -517,7 +517,8 @@ func TestACPAgentRunsExplicitSearchCommand(t *testing.T) {
 		t.Fatalf("output = %q, thought = %q", output, thought)
 	}
 	if len(parentClient.requests) != 1 ||
-		!strings.Contains(parentClient.requests[0].Messages[len(parentClient.requests[0].Messages)-1].Content, "https://agentclientprotocol.com") {
+		!strings.Contains(parentClient.requests[0].Messages[len(parentClient.requests[0].Messages)-1].Content, "https://agentclientprotocol.com") ||
+		!strings.Contains(parentClient.requests[0].Messages[len(parentClient.requests[0].Messages)-1].Content, "loom_ref") {
 		t.Fatalf("parent requests = %#v", parentClient.requests)
 	}
 }

@@ -11,7 +11,9 @@ import (
 
 	"github.com/coder/acp-go-sdk"
 	"github.com/snowmerak/q/config"
+	"github.com/snowmerak/q/mcpconfig"
 	"github.com/snowmerak/q/subagent"
+	qtools "github.com/snowmerak/q/tools"
 )
 
 func TestExecuteACPExternalSearchPromptsAndDeletesSession(t *testing.T) {
@@ -74,19 +76,43 @@ func TestDisposeACPRemoteFallsBackToCloseWhenDeleteFails(t *testing.T) {
 
 func TestConfiguredExternalSearchRequiresEnabledSearchAssignment(t *testing.T) {
 	value := config.Default()
-	if configuredExternalSearch(value, t.TempDir()) != nil {
+	if _, configured := configuredExternalSearchInvocation(value, t.TempDir()); configured {
 		t.Fatal("unassigned search role was enabled")
 	}
 	value.Agents.Connections = map[string]config.AgentConnectionConfig{"codex": {Preset: "codex", Disabled: true}}
 	value.Agents.Roles = map[string]config.AgentConfig{config.AgentRoleSearch: {Agent: "codex"}}
-	if configuredExternalSearch(value, t.TempDir()) != nil {
+	if _, configured := configuredExternalSearchInvocation(value, t.TempDir()); configured {
 		t.Fatal("disabled search connection was enabled")
 	}
 	connection := value.Agents.Connections["codex"]
 	connection.Disabled = false
 	value.Agents.Connections["codex"] = connection
-	if configuredExternalSearch(value, t.TempDir()) == nil {
+	if _, configured := configuredExternalSearchInvocation(value, t.TempDir()); !configured {
 		t.Fatal("enabled search assignment was not configured")
+	}
+}
+
+func TestExternalSearchToolIsExposedOnlyToParentRoles(t *testing.T) {
+	value := config.Default()
+	value.Agents.Connections = map[string]config.AgentConnectionConfig{"codex": {Preset: "codex"}}
+	value.Agents.Roles = map[string]config.AgentConfig{config.AgentRoleSearch: {Agent: "codex"}}
+	for _, role := range []string{mcpconfig.RoleDefault, config.AgentRoleGriller, config.AgentRolePlanner} {
+		runtime, err := configuredAgentToolRuntime(&fakeAgentTools{}, role, value, t.TempDir())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !toolAvailable(runtime, subagent.ExternalSearchToolName) {
+			t.Fatalf("external_search was not exposed to %q", role)
+		}
+	}
+	for _, role := range []string{config.AgentRoleSearch, config.AgentRoleScout, config.AgentRoleCoder} {
+		runtime, err := configuredAgentToolRuntime(&fakeAgentTools{}, role, value, t.TempDir())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if toolAvailable(runtime, subagent.ExternalSearchToolName) {
+			t.Fatalf("external_search was exposed recursively to %q", role)
+		}
 	}
 }
 
@@ -112,6 +138,12 @@ func TestACPAgentExplicitSearchIntegration(t *testing.T) {
 	}
 	parentClient := &fakeClient{}
 	agent, workspaceStore, connection := testACPAgent(t, parentClient, &fakeAgentTools{})
+	toolRuntime, err := qtools.NewRuntime(t.Context(), workspaceStore.Root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = toolRuntime.Close() })
+	agent.state.toolRuntime = toolRuntime
 	value := agent.state.activeConfig()
 	value.Agents.Connections = map[string]config.AgentConnectionConfig{preset: {Preset: preset}}
 	value.Agents.Roles = map[string]config.AgentConfig{config.AgentRoleSearch: {Agent: preset}}
@@ -119,7 +151,6 @@ func TestACPAgentExplicitSearchIntegration(t *testing.T) {
 		t.Fatal(err)
 	}
 	agent.state.config = value
-	agent.externalSearch = configuredExternalSearch(value, workspaceStore.Root)
 
 	ctx, cancel := context.WithTimeout(t.Context(), 4*time.Minute)
 	defer cancel()
@@ -143,7 +174,8 @@ func TestACPAgentExplicitSearchIntegration(t *testing.T) {
 		t.Fatalf("real /agent:search returned stop reason %q without a parent response", response.StopReason)
 	}
 	if len(parentClient.requests) != 1 ||
-		!strings.Contains(parentClient.requests[0].Messages[len(parentClient.requests[0].Messages)-1].Content, "http") {
+		!strings.Contains(parentClient.requests[0].Messages[len(parentClient.requests[0].Messages)-1].Content, "http") ||
+		!strings.Contains(parentClient.requests[0].Messages[len(parentClient.requests[0].Messages)-1].Content, "loom_ref") {
 		t.Fatalf("real /agent:search did not return sourced evidence to the parent: %#v", parentClient.requests)
 	}
 }

@@ -193,6 +193,25 @@ func (f *fakeAgentTools) Call(_ context.Context, call client.ToolCall) (client.T
 	return client.ToolResult{Content: `{"loom_ref":"loom://0123456789abcdef0123456789abcdef","stored":true,"result":{"path":"main.go"}}`}, nil
 }
 
+func (f *fakeAgentTools) CaptureResult(
+	_ context.Context,
+	_ qtools.CaptureSource,
+	_ client.ToolCall,
+	result client.ToolResult,
+) (client.ToolResult, error) {
+	var value any
+	if err := json.Unmarshal([]byte(result.Content), &value); err != nil {
+		value = result.Content
+	}
+	body, err := json.Marshal(map[string]any{
+		"loom_ref": "loom://0123456789abcdef0123456789abcdef", "stored": true, "result": value,
+	})
+	if err != nil {
+		return client.ToolResult{}, err
+	}
+	return client.ToolResult{Content: string(body), IsError: result.IsError}, nil
+}
+
 type toolCallingClient struct {
 	requests []client.ChatRequest
 }

@@ -13,27 +13,45 @@ import (
 	"time"
 
 	"github.com/coder/acp-go-sdk"
+	"github.com/snowmerak/q/client"
 	"github.com/snowmerak/q/config"
 	"github.com/snowmerak/q/subagent"
 )
 
-const maximumExternalSearchReport = 64 << 10
-
 var externalSearchURL = regexp.MustCompile(`https?://[^\s\]\[()<>{}"']+`)
 
-func configuredExternalSearch(value config.Config, root string) subagent.ExternalSearchFunc {
+func configuredExternalSearchInvocation(value config.Config, root string) (subagent.Invocation, bool) {
 	role, configured := value.Agents.Roles[config.AgentRoleSearch]
 	if !configured || strings.TrimSpace(role.Agent) == "" {
-		return nil
+		return subagent.Invocation{}, false
 	}
 	connection, found := value.Agents.Connections[role.Agent]
 	if !found || connection.Disabled {
-		return nil
+		return subagent.Invocation{}, false
 	}
 	connectionID := role.Agent
-	return func(ctx context.Context, input subagent.ExternalSearchInput) (subagent.ExternalSearchResult, error) {
-		return runACPExternalSearch(ctx, root, connectionID, connection, input)
-	}
+	return subagent.Invocation{
+		Tool: subagent.ExternalSearchTool(),
+		Source: subagent.InvocationSource{
+			Protocol: "acp", Name: connectionID, Kind: "agent-result",
+			MediaType: "application/vnd.q.agent-result+json",
+		},
+		Handler: func(ctx context.Context, call client.ToolCall) (client.ToolResult, error) {
+			input, err := subagent.ParseExternalSearchInput(call.Function.Arguments)
+			if err != nil {
+				return client.ToolResult{}, err
+			}
+			result, err := runACPExternalSearch(ctx, root, connectionID, connection, input)
+			if err != nil {
+				return client.ToolResult{}, err
+			}
+			body, err := json.Marshal(result)
+			if err != nil {
+				return client.ToolResult{}, fmt.Errorf("encode external search result: %w", err)
+			}
+			return client.ToolResult{Content: string(body)}, nil
+		},
+	}, true
 }
 
 func runACPExternalSearch(
@@ -90,7 +108,7 @@ func executeACPExternalSearch(
 	if err != nil {
 		return subagent.ExternalSearchResult{}, fmt.Errorf("search agent %q: %w", connectionID, err)
 	}
-	report = boundedExternalSearchReport(report)
+	report = strings.TrimSpace(report)
 	return subagent.ExternalSearchResult{
 		Agent: connectionID, Summary: report, Sources: externalSearchSources(report),
 	}, nil
@@ -155,18 +173,6 @@ Rules:
 
 Request:
 ` + string(body), nil
-}
-
-func boundedExternalSearchReport(report string) string {
-	report = strings.TrimSpace(report)
-	if len(report) <= maximumExternalSearchReport {
-		return report
-	}
-	runes := []rune(report)
-	for len(string(runes)) > maximumExternalSearchReport {
-		runes = runes[:len(runes)*3/4]
-	}
-	return strings.TrimSpace(string(runes)) + "\n\n[report truncated by q]"
 }
 
 func externalSearchSources(report string) []string {

@@ -22,7 +22,6 @@ import (
 	"github.com/snowmerak/q/mcpconfig"
 	"github.com/snowmerak/q/providerhost"
 	"github.com/snowmerak/q/sessionstore"
-	"github.com/snowmerak/q/subagent"
 	"github.com/snowmerak/q/workspace"
 )
 
@@ -198,7 +197,6 @@ type acpAgent struct {
 	sessionID          acp.SessionId
 	sessionOpen        bool
 	turnCancel         context.CancelFunc
-	externalSearch     subagent.ExternalSearchFunc
 	commitSession      acpCommitSessionFactory
 }
 
@@ -210,11 +208,7 @@ var (
 func newACPAgent(state *model, root string, logger *slog.Logger) *acpAgent {
 	state.ensureRunID()
 	agent := &acpAgent{
-		state:          state,
-		root:           root,
-		logger:         logger,
-		sessionID:      acpSessionID(state.runID),
-		externalSearch: configuredExternalSearch(state.activeConfig(), root),
+		state: state, root: root, logger: logger, sessionID: acpSessionID(state.runID),
 	}
 	agent.commitSession = newACPCommitSessionFactory(state, root)
 	return agent
@@ -698,11 +692,17 @@ func (a *acpAgent) runPrompt(ctx context.Context, userMessage client.Message) (a
 }
 
 func (a *acpAgent) runAgentTurn(ctx context.Context, history []client.Message) (acp.PromptResponse, error) {
+	toolRuntime, err := configuredAgentToolRuntime(
+		a.state.toolRuntime, mcpconfig.RoleDefault, a.state.activeConfig(), a.root,
+	)
+	if err != nil {
+		return acp.PromptResponse{}, err
+	}
 	events := make(chan agentEvent)
 	go streamAgentLoop(
 		ctx,
 		a.state.client,
-		scopeTools(a.state.toolRuntime, mcpconfig.RoleDefault),
+		toolRuntime,
 		a.state.activeModel(),
 		history,
 		a.state.conversationID,

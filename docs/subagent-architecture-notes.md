@@ -320,6 +320,12 @@ root/orchestrator는 결과를 단순 연결하지 않고 다음 규칙으로 �
 6. advisor의 진단과 제안은 권고로 취급하며 root/orchestrator가 다음 행동을 결정한다.
 7. 완료 판단과 최종 사용자 응답은 root/orchestrator가 담당한다.
 
+모델이 `delegate_scout`, `external_search`처럼 tool call로 서브에이전트를 호출하는
+경우에는 [agent-invocation-runtime.md](agent-invocation-runtime.md)의 공통 runtime을
+사용한다. 반환 원문은 Loom에 capture하고 상위 agent에는 matching tool result
+receipt로 전달한다. Griller→Planner나 Coder→Planner Review처럼 타입이 정해진
+workflow 전이는 model-visible tool call이 아니므로 이 경계와 구분한다.
+
 ## TUI activity projection
 
 메인 transcript를 서브에이전트 로그로 채우지 않고 별도 scrollable trace panel에

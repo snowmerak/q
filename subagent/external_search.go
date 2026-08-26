@@ -25,7 +25,7 @@ type ExternalSearchResult struct {
 
 type ExternalSearchFunc func(context.Context, ExternalSearchInput) (ExternalSearchResult, error)
 
-func externalSearchTool() client.Tool {
+func ExternalSearchTool() client.Tool {
 	strict := true
 	stringsSchema := stringArraySchemaValue()
 	return client.Tool{Type: client.ToolTypeFunction, Function: client.FunctionDefinition{
@@ -42,7 +42,7 @@ func externalSearchTool() client.Tool {
 	}}
 }
 
-func parseExternalSearchInput(arguments string) (ExternalSearchInput, error) {
+func ParseExternalSearchInput(arguments string) (ExternalSearchInput, error) {
 	var input ExternalSearchInput
 	if err := decodeStrict(arguments, &input); err != nil {
 		return ExternalSearchInput{}, err

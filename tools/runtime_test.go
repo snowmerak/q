@@ -682,6 +682,50 @@ func TestCaptureMCPToolResultSupportsCustomServer(t *testing.T) {
 	}
 }
 
+func TestCaptureResultStoresCompleteACPAgentOutput(t *testing.T) {
+	store, err := loom.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	call := client.ToolCall{
+		ID: "agent-call-1", Type: client.ToolTypeFunction,
+		Function: client.FunctionCall{Name: "external_search", Arguments: `{"query":"loom"}`},
+	}
+	summary := strings.Repeat("evidence-", 12000) + "final-source-marker"
+	body, err := json.Marshal(map[string]any{"agent": "codex", "summary": summary})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := CaptureResult(context.Background(), store, CaptureSource{
+		Protocol: "acp", Name: "codex", Kind: "agent-result",
+		MediaType: "application/vnd.q.agent-result+json",
+	}, call, client.ToolResult{Content: string(body)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var receipt loomReceipt
+	if err := json.Unmarshal([]byte(result.Content), &receipt); err != nil {
+		t.Fatal(err)
+	}
+	if receipt.Result != nil || receipt.Preview == "" || receipt.Kind != "agent-result" {
+		t.Fatalf("receipt = %#v", receipt)
+	}
+	artifact, err := store.Inspect(context.Background(), receipt.LoomRef)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if artifact.Source["protocol"] != "acp" || artifact.Source["source"] != "codex" {
+		t.Fatalf("artifact source = %#v", artifact.Source)
+	}
+	stored, err := store.ReadAll(context.Background(), receipt.LoomRef, 2<<20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(stored), "final-source-marker") {
+		t.Fatal("captured ACP artifact was truncated")
+	}
+}
+
 func decodeReceiptResult(content string, output any) error {
 	var receipt struct {
 		Result json.RawMessage `json:"result"`

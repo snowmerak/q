@@ -386,7 +386,16 @@ func streamPlanWorkflow(
 		}
 		_ = emitAgentEvent(ctx, events, agentEvent{trace: &entry})
 	}
-	externalSearch := configuredExternalSearch(value, workingDirectory)
+	grillerTools, err := configuredAgentToolRuntime(toolRuntime, grillerSpec.Role, value, workingDirectory)
+	if err != nil {
+		emitAgentEvent(ctx, events, agentEvent{err: fmt.Errorf("plan: configure Griller tools: %w", err)})
+		return
+	}
+	plannerTools, err := configuredAgentToolRuntime(toolRuntime, plannerSpec.Role, value, workingDirectory)
+	if err != nil {
+		emitAgentEvent(ctx, events, agentEvent{err: fmt.Errorf("plan: configure Planner tools: %w", err)})
+		return
+	}
 
 	scoutRunID := runID
 	if archive == nil {
@@ -397,12 +406,12 @@ func streamPlanWorkflow(
 		Sink: archive, RunID: scoutRunID, WorkingDirectory: workingDirectory, Progress: progress, Trace: trace,
 	}
 	griller := subagent.GrillerRunner{
-		Client: configuredClient, Tools: scopeTools(toolRuntime, grillerSpec.Role), Scout: scout, Spec: grillerSpec,
-		Ask: ask, ExternalSearch: externalSearch, WorkingDirectory: workingDirectory, Progress: progress, Trace: trace,
+		Client: configuredClient, Tools: grillerTools, Scout: scout, Spec: grillerSpec,
+		Ask: ask, Capture: configuredInvocationCapture(toolRuntime), WorkingDirectory: workingDirectory, Progress: progress, Trace: trace,
 	}
 	planner := subagent.PlannerRunner{
-		Client: configuredClient, Tools: scopeTools(toolRuntime, plannerSpec.Role), Spec: plannerSpec, WorkingDirectory: workingDirectory,
-		ExternalSearch: externalSearch, Progress: progress, Trace: trace,
+		Client: configuredClient, Tools: plannerTools, Spec: plannerSpec, WorkingDirectory: workingDirectory,
+		Progress: progress, Trace: trace,
 	}
 	workflow := subagent.PlanWorkflow{
 		Griller: griller, Planner: planner, Ask: ask, Progress: progress,

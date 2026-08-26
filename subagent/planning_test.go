@@ -2,6 +2,7 @@ package subagent
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -10,7 +11,7 @@ import (
 	"github.com/snowmerak/q/config"
 )
 
-func TestGrillerReceivesScoutReportInline(t *testing.T) {
+func TestGrillerReceivesCapturedScoutReport(t *testing.T) {
 	scoutClient := &fakeScoutClient{responses: []client.Message{{
 		Role: client.RoleAssistant, ToolCalls: []client.ToolCall{scoutCall(ScoutCompleteToolName, `{
 			"outcome":"succeeded",
@@ -31,7 +32,8 @@ func TestGrillerReceivesScoutReportInline(t *testing.T) {
 	tools := &fakeScoutTools{}
 	runner := GrillerRunner{
 		Client: grillerClient, Tools: tools,
-		Spec: Spec{Role: config.AgentRoleGriller, Model: "griller-model"},
+		Capture: testInvocationCapture,
+		Spec:    Spec{Role: config.AgentRoleGriller, Model: "griller-model"},
 		Scout: ScoutRunner{
 			Client: scoutClient, Tools: tools,
 			Spec: Spec{Role: config.AgentRoleScout, Model: "scout-model"},
@@ -48,13 +50,13 @@ func TestGrillerReceivesScoutReportInline(t *testing.T) {
 		t.Fatalf("brief = %#v, requests = %d", brief, len(grillerClient.requests))
 	}
 	continuation := grillerClient.requests[1].Messages
-	inline := continuation[len(continuation)-1].Content
-	if !strings.Contains(inline, `"summary":"Located the plan command boundary"`) ||
-		!strings.Contains(inline, `"findings"`) {
-		t.Fatalf("Scout report was not returned inline: %s", inline)
+	receipt := continuation[len(continuation)-1].Content
+	if !strings.Contains(receipt, `"summary":"Located the plan command boundary"`) ||
+		!strings.Contains(receipt, `"findings"`) {
+		t.Fatalf("Scout report was not returned in the receipt: %s", receipt)
 	}
-	if strings.HasPrefix(strings.TrimSpace(inline), `{"loom_ref"`) {
-		t.Fatalf("Scout report was reduced to a Loom receipt: %s", inline)
+	if !strings.Contains(receipt, `"loom_ref"`) {
+		t.Fatalf("Scout report was not captured in Loom: %s", receipt)
 	}
 }
 
@@ -166,7 +168,7 @@ func TestGrillerQuestionChoicesAreNonExhaustive(t *testing.T) {
 	}
 }
 
-func TestGrillerCallsExternalSearchAndReceivesResultInline(t *testing.T) {
+func TestGrillerCallsExternalSearchAndReceivesCapturedResult(t *testing.T) {
 	grillerClient := &fakeScoutClient{responses: []client.Message{
 		{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{scoutCall(ExternalSearchToolName,
 			`{"query":"current ACP session lifecycle","completion_criteria":["cite the specification"]}`)}},
@@ -177,15 +179,14 @@ func TestGrillerCallsExternalSearchAndReceivesResultInline(t *testing.T) {
 		}`)}},
 	}}
 	var received ExternalSearchInput
+	tools := testExternalSearchRuntime(t, &received, ExternalSearchResult{
+		Agent: "codex", Summary: "ACP session/delete is advertised", Sources: []string{"https://agentclientprotocol.com"},
+	})
 	runner := GrillerRunner{
-		Client: grillerClient, Tools: &fakeScoutTools{},
+		Client: grillerClient, Tools: tools, Capture: testInvocationCapture,
 		Spec: Spec{Role: config.AgentRoleGriller, Model: "griller-model"},
 		Ask: func(context.Context, UserQuestion) (UserAnswer, error) {
 			return UserAnswer{}, errors.New("unexpected user question")
-		},
-		ExternalSearch: func(_ context.Context, input ExternalSearchInput) (ExternalSearchResult, error) {
-			received = input
-			return ExternalSearchResult{Agent: "codex", Summary: "ACP session/delete is advertised", Sources: []string{"https://agentclientprotocol.com"}}, nil
 		},
 	}
 	brief, err := runner.Run(t.Context(), GrillTask{Objective: "Use ACP search"})
@@ -196,12 +197,13 @@ func TestGrillerCallsExternalSearchAndReceivesResultInline(t *testing.T) {
 		t.Fatalf("input=%#v brief=%#v", received, brief)
 	}
 	if !hasTool(grillerClient.requests[0].Tools, ExternalSearchToolName) ||
-		!strings.Contains(grillerClient.requests[1].Messages[len(grillerClient.requests[1].Messages)-1].Content, "session/delete") {
+		!strings.Contains(grillerClient.requests[1].Messages[len(grillerClient.requests[1].Messages)-1].Content, "session/delete") ||
+		!strings.Contains(grillerClient.requests[1].Messages[len(grillerClient.requests[1].Messages)-1].Content, "loom_ref") {
 		t.Fatalf("requests = %#v", grillerClient.requests)
 	}
 }
 
-func TestPlannerCallsExternalSearchAndReceivesResultInline(t *testing.T) {
+func TestPlannerCallsExternalSearchAndReceivesCapturedResult(t *testing.T) {
 	plannerClient := &fakeScoutClient{responses: []client.Message{
 		{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{scoutCall(ExternalSearchToolName,
 			`{"query":"current ACP plan support","completion_criteria":["cite the specification"]}`)}},
@@ -214,13 +216,13 @@ func TestPlannerCallsExternalSearchAndReceivesResultInline(t *testing.T) {
 		}`)}},
 	}}
 	var received ExternalSearchInput
+	tools := testExternalSearchRuntime(t, &received, ExternalSearchResult{
+		Agent: "grok", Summary: "ACP plan updates are supported", Sources: []string{"https://agentclientprotocol.com"},
+	})
 	runner := PlannerRunner{
 		Client: plannerClient,
 		Spec:   Spec{Role: config.AgentRolePlanner, Model: "planner-model"},
-		ExternalSearch: func(_ context.Context, input ExternalSearchInput) (ExternalSearchResult, error) {
-			received = input
-			return ExternalSearchResult{Agent: "grok", Summary: "ACP plan updates are supported", Sources: []string{"https://agentclientprotocol.com"}}, nil
-		},
+		Tools:  tools,
 	}
 	proposal, err := runner.Run(t.Context(), GrillBrief{
 		Objective: "Use ACP plan evidence", Conditions: []string{"Preserve ACP compatibility"},
@@ -233,7 +235,51 @@ func TestPlannerCallsExternalSearchAndReceivesResultInline(t *testing.T) {
 		t.Fatalf("input=%#v proposal=%#v", received, proposal)
 	}
 	if !hasTool(plannerClient.requests[0].Tools, ExternalSearchToolName) ||
-		!strings.Contains(plannerClient.requests[1].Messages[len(plannerClient.requests[1].Messages)-1].Content, "plan updates") {
+		!strings.Contains(plannerClient.requests[1].Messages[len(plannerClient.requests[1].Messages)-1].Content, "plan updates") ||
+		!strings.Contains(plannerClient.requests[1].Messages[len(plannerClient.requests[1].Messages)-1].Content, "loom_ref") {
 		t.Fatalf("requests = %#v", plannerClient.requests)
 	}
+}
+
+func testExternalSearchRuntime(
+	t *testing.T,
+	received *ExternalSearchInput,
+	result ExternalSearchResult,
+) ToolRuntime {
+	t.Helper()
+	runtime, err := NewInvocationRuntime(&fakeScoutTools{}, testInvocationCapture, Invocation{
+		Tool:   ExternalSearchTool(),
+		Source: InvocationSource{Protocol: "acp", Name: result.Agent, Kind: "agent-result"},
+		Handler: func(_ context.Context, call client.ToolCall) (client.ToolResult, error) {
+			input, err := ParseExternalSearchInput(call.Function.Arguments)
+			if err != nil {
+				return client.ToolResult{}, err
+			}
+			*received = input
+			return jsonToolResult(result), nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return runtime
+}
+
+func testInvocationCapture(
+	_ context.Context,
+	_ InvocationSource,
+	_ client.ToolCall,
+	result client.ToolResult,
+) (client.ToolResult, error) {
+	var value any
+	if err := json.Unmarshal([]byte(result.Content), &value); err != nil {
+		value = result.Content
+	}
+	body, err := json.Marshal(map[string]any{
+		"loom_ref": "loom://0123456789abcdef0123456789abcdef", "stored": true, "result": value,
+	})
+	if err != nil {
+		return client.ToolResult{}, err
+	}
+	return client.ToolResult{Content: string(body), IsError: result.IsError}, nil
 }
