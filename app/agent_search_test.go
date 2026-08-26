@@ -5,6 +5,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/charmbracelet/x/ansi"
+	"github.com/snowmerak/q/client"
 	"github.com/snowmerak/q/config"
 	"github.com/snowmerak/q/subagent"
 )
@@ -28,14 +30,17 @@ func TestParseAgentSearchCommand(t *testing.T) {
 	}
 }
 
-func TestStreamAgentSearchReturnsACPReport(t *testing.T) {
+func TestStreamAgentSearchReturnsParentSynthesis(t *testing.T) {
 	var received subagent.ExternalSearchInput
 	search := func(_ context.Context, input subagent.ExternalSearchInput) (subagent.ExternalSearchResult, error) {
 		received = input
 		return subagent.ExternalSearchResult{Agent: "grok", Summary: "Evidence report"}, nil
 	}
+	parentClient := &fakeClient{}
 	events := make(chan agentEvent, 4)
-	streamAgentSearch(t.Context(), search, "latest API behavior", events)
+	streamAgentSearch(t.Context(), search, "latest API behavior", agentSearchParent{
+		client: parentClient, model: "main-model",
+	}, events)
 
 	var activities []agentActivity
 	var responseText string
@@ -49,8 +54,37 @@ func TestStreamAgentSearchReturnsACPReport(t *testing.T) {
 	}
 	if received.Query != "latest API behavior" || len(received.CompletionCriteria) == 0 ||
 		len(activities) != 2 || activities[0].Action != subagent.ProgressStarted ||
-		activities[1].Action != subagent.ProgressCompleted || responseText != "Evidence report" {
+		activities[1].Action != subagent.ProgressCompleted || responseText != "reply 1" {
 		t.Fatalf("input = %#v, activities = %#v, response = %q", received, activities, responseText)
+	}
+	if len(parentClient.requests) != 1 ||
+		!strings.Contains(parentClient.requests[0].Messages[len(parentClient.requests[0].Messages)-1].Content, "Evidence report") {
+		t.Fatalf("parent requests = %#v", parentClient.requests)
+	}
+}
+
+func TestAgentSearchParentResponseIsAddedToTUITranscript(t *testing.T) {
+	parentClient := &fakeClient{}
+	events := make(chan agentEvent, 4)
+	streamAgentSearch(t.Context(), func(_ context.Context, _ subagent.ExternalSearchInput) (subagent.ExternalSearchResult, error) {
+		return subagent.ExternalSearchResult{Agent: "codex", Summary: "Sourced evidence"}, nil
+	}, "explain the evidence", agentSearchParent{client: parentClient, model: "main-model"}, events)
+
+	m := newModel(t.Context(), config.Store{Dir: t.TempDir()}, nil)
+	m.enterChat(config.Default(), parentClient)
+	m.beginTurn()
+	m.waiting = true
+	user := client.Message{Role: client.RoleUser, Content: "explain the evidence"}
+	m.messages = append(m.messages, user)
+	m.memory.Append(user)
+	for event := range events {
+		updated, _ := m.Update(agentEventMsg{event: event})
+		m = updated.(model)
+	}
+	last := m.messages[len(m.messages)-1]
+	if m.waiting || last.Role != client.RoleAssistant ||
+		last.Content != "reply 1" || !strings.Contains(ansi.Strip(m.viewport.View()), "reply 1") {
+		t.Fatalf("waiting=%v messages=%#v transcript=%q", m.waiting, m.messages, m.viewport.View())
 	}
 }
 

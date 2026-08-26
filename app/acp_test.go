@@ -482,7 +482,8 @@ func TestACPAgentCommitRequiresFormElicitation(t *testing.T) {
 }
 
 func TestACPAgentRunsExplicitSearchCommand(t *testing.T) {
-	agent, workspaceStore, connection := testACPAgent(t, &fakeClient{}, &fakeAgentTools{})
+	parentClient := &fakeClient{}
+	agent, workspaceStore, connection := testACPAgent(t, parentClient, &fakeAgentTools{})
 	var received subagent.ExternalSearchInput
 	agent.externalSearch = func(_ context.Context, input subagent.ExternalSearchInput) (subagent.ExternalSearchResult, error) {
 		received = input
@@ -511,8 +512,13 @@ func TestACPAgentRunsExplicitSearchCommand(t *testing.T) {
 			thought += update.Content.Text.Text
 		}
 	}
-	if !strings.Contains(output, "https://agentclientprotocol.com") || !strings.Contains(thought, "Search agent started") {
+	if output != "reply 1" || !strings.Contains(thought, "Search agent started") ||
+		!strings.Contains(thought, "Main agent is preparing") {
 		t.Fatalf("output = %q, thought = %q", output, thought)
+	}
+	if len(parentClient.requests) != 1 ||
+		!strings.Contains(parentClient.requests[0].Messages[len(parentClient.requests[0].Messages)-1].Content, "https://agentclientprotocol.com") {
+		t.Fatalf("parent requests = %#v", parentClient.requests)
 	}
 }
 

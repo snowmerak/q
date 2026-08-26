@@ -200,3 +200,40 @@ func TestGrillerCallsExternalSearchAndReceivesResultInline(t *testing.T) {
 		t.Fatalf("requests = %#v", grillerClient.requests)
 	}
 }
+
+func TestPlannerCallsExternalSearchAndReceivesResultInline(t *testing.T) {
+	plannerClient := &fakeScoutClient{responses: []client.Message{
+		{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{scoutCall(ExternalSearchToolName,
+			`{"query":"current ACP plan support","completion_criteria":["cite the specification"]}`)}},
+		{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{scoutCall(SubmitPlanToolName, `{
+			"outcome":"succeeded",
+			"summary":"Use ACP plan evidence",
+			"conditions":["Preserve ACP compatibility"],
+			"steps":[{"title":"Use ACP evidence","description":"Apply the externally verified behavior","target":{"any":[{"all":[{"kind":"paths","paths":["app/acp.go"]}]}]}}],
+			"verification":["Run ACP tests"]
+		}`)}},
+	}}
+	var received ExternalSearchInput
+	runner := PlannerRunner{
+		Client: plannerClient,
+		Spec:   Spec{Role: config.AgentRolePlanner, Model: "planner-model"},
+		ExternalSearch: func(_ context.Context, input ExternalSearchInput) (ExternalSearchResult, error) {
+			received = input
+			return ExternalSearchResult{Agent: "grok", Summary: "ACP plan updates are supported", Sources: []string{"https://agentclientprotocol.com"}}, nil
+		},
+	}
+	proposal, err := runner.Run(t.Context(), GrillBrief{
+		Objective: "Use ACP plan evidence", Conditions: []string{"Preserve ACP compatibility"},
+		AcceptanceCriteria: []string{"The plan cites verified behavior"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if received.Query != "current ACP plan support" || proposal.Summary != "Use ACP plan evidence" || len(plannerClient.requests) != 2 {
+		t.Fatalf("input=%#v proposal=%#v", received, proposal)
+	}
+	if !hasTool(plannerClient.requests[0].Tools, ExternalSearchToolName) ||
+		!strings.Contains(plannerClient.requests[1].Messages[len(plannerClient.requests[1].Messages)-1].Content, "plan updates") {
+		t.Fatalf("requests = %#v", plannerClient.requests)
+	}
+}

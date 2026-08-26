@@ -694,14 +694,17 @@ func (a *acpAgent) runPrompt(ctx context.Context, userMessage client.Message) (a
 		_ = a.state.flushArchive()
 		return acp.PromptResponse{}, err
 	}
+	return a.runAgentTurn(ctx, a.state.memory.Messages())
+}
 
+func (a *acpAgent) runAgentTurn(ctx context.Context, history []client.Message) (acp.PromptResponse, error) {
 	events := make(chan agentEvent)
 	go streamAgentLoop(
 		ctx,
 		a.state.client,
 		scopeTools(a.state.toolRuntime, mcpconfig.RoleDefault),
 		a.state.activeModel(),
-		a.state.memory.Messages(),
+		history,
 		a.state.conversationID,
 		a.state.activeTask,
 		a.state.streamsActiveChat(),

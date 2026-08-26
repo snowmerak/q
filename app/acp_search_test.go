@@ -110,7 +110,8 @@ func TestACPAgentExplicitSearchIntegration(t *testing.T) {
 	if preset == "" {
 		t.Fatal("Q_TEST_ACP_PRESET must be codex or grok")
 	}
-	agent, workspaceStore, connection := testACPAgent(t, &fakeClient{}, &fakeAgentTools{})
+	parentClient := &fakeClient{}
+	agent, workspaceStore, connection := testACPAgent(t, parentClient, &fakeAgentTools{})
 	value := agent.state.activeConfig()
 	value.Agents.Connections = map[string]config.AgentConnectionConfig{preset: {Preset: preset}}
 	value.Agents.Roles = map[string]config.AgentConfig{config.AgentRoleSearch: {Agent: preset}}
@@ -138,7 +139,11 @@ func TestACPAgentExplicitSearchIntegration(t *testing.T) {
 			output += update.Content.Text.Text
 		}
 	}
-	if response.StopReason != acp.StopReasonEndTurn || !strings.Contains(output, "http") {
-		t.Fatalf("real /agent:search returned stop reason %q without a sourced report", response.StopReason)
+	if response.StopReason != acp.StopReasonEndTurn || strings.TrimSpace(output) == "" {
+		t.Fatalf("real /agent:search returned stop reason %q without a parent response", response.StopReason)
+	}
+	if len(parentClient.requests) != 1 ||
+		!strings.Contains(parentClient.requests[0].Messages[len(parentClient.requests[0].Messages)-1].Content, "http") {
+		t.Fatalf("real /agent:search did not return sourced evidence to the parent: %#v", parentClient.requests)
 	}
 }
