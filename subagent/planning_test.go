@@ -165,3 +165,38 @@ func TestGrillerQuestionChoicesAreNonExhaustive(t *testing.T) {
 		t.Fatalf("ask_to_user description = %q", description)
 	}
 }
+
+func TestGrillerCallsExternalSearchAndReceivesResultInline(t *testing.T) {
+	grillerClient := &fakeScoutClient{responses: []client.Message{
+		{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{scoutCall(ExternalSearchToolName,
+			`{"query":"current ACP session lifecycle","completion_criteria":["cite the specification"]}`)}},
+		{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{scoutCall(SubmitBriefToolName, `{
+			"objective":"Use ACP search",
+			"conditions":["Delete the isolated session"],
+			"acceptance_criteria":["Search evidence reaches Griller"]
+		}`)}},
+	}}
+	var received ExternalSearchInput
+	runner := GrillerRunner{
+		Client: grillerClient, Tools: &fakeScoutTools{},
+		Spec: Spec{Role: config.AgentRoleGriller, Model: "griller-model"},
+		Ask: func(context.Context, UserQuestion) (UserAnswer, error) {
+			return UserAnswer{}, errors.New("unexpected user question")
+		},
+		ExternalSearch: func(_ context.Context, input ExternalSearchInput) (ExternalSearchResult, error) {
+			received = input
+			return ExternalSearchResult{Agent: "codex", Summary: "ACP session/delete is advertised", Sources: []string{"https://agentclientprotocol.com"}}, nil
+		},
+	}
+	brief, err := runner.Run(t.Context(), GrillTask{Objective: "Use ACP search"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if received.Query != "current ACP session lifecycle" || brief.Objective != "Use ACP search" || len(grillerClient.requests) != 2 {
+		t.Fatalf("input=%#v brief=%#v", received, brief)
+	}
+	if !hasTool(grillerClient.requests[0].Tools, ExternalSearchToolName) ||
+		!strings.Contains(grillerClient.requests[1].Messages[len(grillerClient.requests[1].Messages)-1].Content, "session/delete") {
+		t.Fatalf("requests = %#v", grillerClient.requests)
+	}
+}

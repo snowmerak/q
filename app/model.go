@@ -47,6 +47,7 @@ const (
 	screenSkills
 	screenLSP
 	screenMCP
+	screenAgents
 	screenGateway
 	screenGatewayNetwork
 	screenGatewayKeys
@@ -278,6 +279,16 @@ type model struct {
 	mcpInputs                 [6]textinput.Model
 	mcpDiscardArmed           bool
 	mcpBusy                   bool
+	agentsDraft               config.Config
+	agentsOriginal            config.Config
+	agentsPanel               int
+	agentsCursor              [2]int
+	agentsMode                agentsScreenMode
+	agentsEditID              string
+	agentsFormFocus           int
+	agentsInputs              [6]textinput.Model
+	agentsDiscardArmed        bool
+	agentsBusy                bool
 
 	config             config.Config
 	client             chatClient
@@ -338,6 +349,11 @@ type mcpSettingsSavedMsg struct {
 	config   mcpconfig.Config
 	statuses []qtools.ExternalStatus
 	err      error
+}
+
+type agentsSettingsSavedMsg struct {
+	config config.Config
+	err    error
 }
 
 type modelTargetConfiguredMsg struct {
@@ -593,6 +609,15 @@ func newManagedModel(ctx context.Context, store config.Store, factory clientFact
 		field.CharLimit = 4096
 		m.mcpInputs[index] = field
 	}
+	agentsPlaceholders := []string{"connection ID", "codex or grok", "custom ACP command", `arguments as JSON, e.g. ["agent","stdio"]`, `environment as JSON, e.g. {"TOKEN":"value"}`, "authentication method ID"}
+	for index := range m.agentsInputs {
+		field := textinput.New()
+		field.Prompt = ""
+		field.Placeholder = agentsPlaceholders[index]
+		field.SetWidth(72)
+		field.CharLimit = 4096
+		m.agentsInputs[index] = field
+	}
 	if runtime != nil && len(m.gatewayConfig.Providers) == 0 {
 		m.enterProviderEditor(-1)
 	}
@@ -667,6 +692,9 @@ func (m model) Init() tea.Cmd {
 	}
 	if m.screen == screenMCP && m.mcpMode != mcpModeList {
 		return tea.Batch(m.mcpInputs[m.mcpFormFocus].Focus(), tea.RequestBackgroundColor)
+	}
+	if m.screen == screenAgents && m.agentsMode != agentsModeList {
+		return tea.Batch(m.agentsInputs[m.agentsFormFocus].Focus(), tea.RequestBackgroundColor)
 	}
 	if m.screen == screenHelp {
 		return tea.RequestBackgroundColor
@@ -876,6 +904,18 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		m.mcpOriginal = cloneMCPConfig(message.config)
 		m.mcpDiscardArmed = false
 		m.status = renderMCPSaveStatus(message.statuses, m.toolRuntime == nil)
+		return m, nil
+	case agentsSettingsSavedMsg:
+		m.agentsBusy = false
+		if message.err != nil {
+			m.status = message.err.Error()
+			return m, nil
+		}
+		m.config = message.config
+		m.agentsDraft = cloneConfigForAgents(message.config)
+		m.agentsOriginal = cloneConfigForAgents(message.config)
+		m.agentsDiscardArmed = false
+		m.status = "Agent settings saved"
 		return m, nil
 	case modelGroupsConfiguredMsg:
 		if message.err != nil {
@@ -1355,6 +1395,9 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		if m.screen == screenMCP {
 			return m.updateMCP(key)
 		}
+		if m.screen == screenAgents {
+			return m.updateAgents(key)
+		}
 		if m.screen == screenHelp {
 			return m.updateHelp(key)
 		}
@@ -1392,6 +1435,11 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	if m.screen == screenMCP && m.mcpMode != mcpModeList {
 		var command tea.Cmd
 		m.mcpInputs[m.mcpFormFocus], command = m.mcpInputs[m.mcpFormFocus].Update(message)
+		return m, command
+	}
+	if m.screen == screenAgents && m.agentsMode != agentsModeList {
+		var command tea.Cmd
+		m.agentsInputs[m.agentsFormFocus], command = m.agentsInputs[m.agentsFormFocus].Update(message)
 		return m, command
 	}
 	if m.screen == screenGatewayNetwork || (m.screen == screenGatewayKeys && m.gatewayKeyAdding) {
@@ -3001,6 +3049,9 @@ func (m model) submitChat() (tea.Model, tea.Cmd) {
 		case "/mcp":
 			m.input.Reset()
 			return m.enterMCP()
+		case "/agents":
+			m.input.Reset()
+			return m.enterAgents()
 		case "/help":
 			m.input.Reset()
 			return m.enterHelp()
@@ -4306,6 +4357,9 @@ func (m *model) resize(width, height int) {
 	for index := range m.mcpInputs {
 		m.mcpInputs[index].SetWidth(min(contentWidth-12, 84))
 	}
+	for index := range m.agentsInputs {
+		m.agentsInputs[index].SetWidth(min(contentWidth-12, 84))
+	}
 	ignorePanel := ignoreEditorPanelStyle(max(36, m.width-4), m.dark)
 	m.ignoreEditor.SetWidth(max(20, ignorePanel.GetWidth()-ignorePanel.GetHorizontalFrameSize()))
 	m.ignoreEditor.SetHeight(max(4, m.height-16))
@@ -4374,6 +4428,9 @@ func (m *model) applyColorScheme(dark bool) {
 	}
 	for index := range m.mcpInputs {
 		m.mcpInputs[index].SetStyles(textinput.DefaultStyles(dark))
+	}
+	for index := range m.agentsInputs {
+		m.agentsInputs[index].SetStyles(textinput.DefaultStyles(dark))
 	}
 	inputStyles := textarea.DefaultStyles(dark)
 	inputStyles.Cursor.Shape = tea.CursorBar
@@ -4557,7 +4614,7 @@ func (m model) renderedAgentActivities() string {
 
 func agentSummary(states map[string]string) string {
 	parts := []string{titleStyle.Render("agents")}
-	for _, role := range []string{"griller", "scout", "planner", "coder", "executor"} {
+	for _, role := range []string{"griller", "scout", "search", "planner", "coder", "executor"} {
 		state, exists := states[role]
 		if !exists {
 			continue
@@ -4664,6 +4721,8 @@ func (m model) View() tea.View {
 		content = m.viewLSP()
 	} else if m.screen == screenMCP {
 		content = m.viewMCP()
+	} else if m.screen == screenAgents {
+		content = m.viewAgents()
 	} else if m.screen == screenHelp {
 		content = m.viewHelp()
 	} else if m.screen == screenChat {

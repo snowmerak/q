@@ -67,29 +67,33 @@ and xAI/Grok routes; native Anthropic and Codex routes remain text-only until th
 provider layer has a common multimodal representation. Provider setup must
 already exist before starting `q acp`.
 
-Use q in the opposite direction—as an ACP client with q's chat UI—by choosing
-an external agent:
+Configure ACP agents for q's external Search role with the Agents settings
+screen:
 
 ```powershell
-q acp connect codex [--root <workspace-path>] [--session <id>] [--auth <method>]
-q acp connect grok  [--root <workspace-path>] [--session <id>] [--auth <method>]
+q agents
 ```
 
-The Codex preset runs an installed `codex-acp`, or falls back to
-`npx -y @agentclientprotocol/codex-acp`. The adapter translates ACP to the
-Codex App Server and reuses Codex authentication. The Grok preset runs the
-Grok Build CLI's native `grok agent stdio` transport. Install and authenticate
-the selected agent before connecting; when an ACP agent explicitly requires an
-authentication method, q reports the offered IDs for use with `--auth`.
+The screen manages named ACP process profiles and assigns one profile to the
+`search` role. The Codex preset runs an installed `codex-acp`, or falls back to
+`npx -y @agentclientprotocol/codex-acp`; the adapter translates ACP to the
+Codex App Server and reuses Codex authentication. The Grok preset runs the Grok
+Build CLI's native `grok agent stdio` transport. Custom stdio ACP commands are
+also supported.
 
-Agent message and thought streams, tool lifecycle updates, plans, cancellation,
-and permission requests are connected to q's existing chat UI. Permission
-requests remain interactive. q does not advertise client-side filesystem or
-terminal capabilities, so Codex and Grok retain responsibility for executing
-their own tools. Slash commands are forwarded to the connected agent, while
-`/clear`, `/new`, and `ctrl+l` close the old ACP session and create a new one.
-If `--session` is supplied, q resumes it when supported and otherwise falls back
-to `session/load`.
+When Griller or Planner calls `external_search`, q resolves
+`agents.roles.search.agent`, starts that ACP process, initializes it, creates an
+isolated session, sends the bounded research request, and returns the final
+report and source URLs as the tool result. q then calls `session/delete`, or
+`session/close` when deletion is not advertised, and terminates the process.
+Only read, search, fetch, and think permission requests can be allowed once;
+edit, delete, move, and execute requests are rejected. The agent therefore uses
+its own authenticated subscription and search capabilities without becoming a
+persistent workspace writer.
+
+`q acp connect` remains available as an interactive transport diagnostic, but
+normal plan research uses the persistent Agents configuration rather than that
+chat surface.
 
 ### Standalone Gateway
 
@@ -145,6 +149,7 @@ UI. Each command loads only the resources its screen needs:
 
 ```powershell
 q model   # managed Gateway + model discovery + current-workspace overrides
+q agents  # ACP agent connections + external Search role assignment
 q mcp     # external MCP tool servers + per-role assignments
 q skills  # global and current-workspace Agent Skills
 q ignore  # current workspace's .qignore editor
@@ -489,6 +494,12 @@ model_groups:
         timeout: 90s
 agents:
   max_parallel: 3
+  connections:
+    codex-search:
+      preset: codex
+    grok-search:
+      preset: grok
+      disabled: true
   roles:
     planner:
       group: heavy
@@ -498,6 +509,8 @@ agents:
     commit:
       model: codex/gpt-5.6-terra
       reasoning_effort: low
+    search:
+      agent: codex-search
 loom:
   maximum_artifact_mib: 64
   maximum_store_mib: 256
@@ -884,8 +897,9 @@ task build
 
 The two command entry points are:
 
-- `./cmd/q`: interactive chat plus the `acp`, `commit`, `gateway`, `library`,
-  `model`, `mcp`, `skills`, `ignore`, `lsp`, and `help` command surfaces.
+- `./cmd/q`: interactive chat plus the `acp`, `agents`, `commit`, `gateway`,
+  `library`, `model`, `mcp`, `skills`, `ignore`, `lsp`, and `help` command
+  surfaces.
 - `./cmd/q-mcp`: workspace MCP stdio server. It acquires the same exclusive
   workspace lock, opens archive/Loom/LSP/Library integrations, and excludes the
   chat-session-only `learn` tool.

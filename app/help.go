@@ -22,6 +22,9 @@ func (m model) enterHelp() (tea.Model, tea.Cmd) {
 	for index := range m.mcpInputs {
 		m.mcpInputs[index].Blur()
 	}
+	for index := range m.agentsInputs {
+		m.agentsInputs[index].Blur()
+	}
 	m.modelFilter.Blur()
 	m.embeddingDimensions.Blur()
 	m.modelContextWindow.Blur()
@@ -67,6 +70,11 @@ func (m model) leaveHelp() (tea.Model, tea.Cmd) {
 	case screenMCP:
 		if m.mcpMode != mcpModeList {
 			return m, m.mcpInputs[m.mcpFormFocus].Focus()
+		}
+		return m, nil
+	case screenAgents:
+		if m.agentsMode != agentsModeList {
+			return m, m.agentsInputs[m.agentsFormFocus].Focus()
 		}
 		return m, nil
 	case screenGatewayNetwork:
@@ -195,6 +203,7 @@ func renderHelpContent(dark bool) string {
 		{"/skills", "Interactively add, pull, remove, and reindex global/session skills."},
 		{"/lsp", "Configure global language servers and workspace project roots."},
 		{"/mcp", "Configure external MCP tool servers and per-role assignments."},
+		{"/agents", "Configure ACP agents and external role assignments."},
 		{"/help", "Open this help screen."},
 	})
 	writeHelpSection("CHAT", [][2]string{
@@ -221,6 +230,7 @@ func renderHelpContent(dark bool) string {
 		{"q gateway config", "Configure Gateway network, API keys, and providers."},
 		{"q model", "Configure main, embedding, and subagent models."},
 		{"q mcp", "Configure external MCP tool servers and per-role assignments."},
+		{"q agents", "Configure ACP agents and assign the Search role."},
 		{"q skills", "Manage global and current-workspace Agent Skills."},
 		{"q lsp", "Configure language servers and discover workspace roots."},
 		{"q ignore", "Edit the current workspace's .qignore rules."},

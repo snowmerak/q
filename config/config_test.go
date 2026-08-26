@@ -31,6 +31,11 @@ func TestStoreRoundTrip(t *testing.T) {
 		AgentRoleCommit:    {Model: "commit-model", ReasoningEffort: "low"},
 		AgentRoleThinker:   {Model: "thinking-model", ReasoningEffort: "high"},
 		AgentRoleLibrarian: {Model: "librarian-model", ReasoningEffort: "medium"},
+		AgentRoleSearch:    {Agent: "primary"},
+	}
+	want.Agents.Connections = map[string]AgentConnectionConfig{
+		"primary":  {Preset: "codex"},
+		"fallback": {Preset: "grok", AuthMethod: "local-subscription"},
 	}
 	want.LSP = lsp.GlobalConfig{
 		Servers:   map[string]lsp.ServerConfig{"gopls": {Languages: []string{"go"}, Command: "gopls"}},
@@ -219,6 +224,46 @@ func TestAgentRolesIncludesLearningRoles(t *testing.T) {
 		if !found {
 			t.Fatalf("agent roles = %#v; missing %q", roles, expected)
 		}
+	}
+}
+
+func TestValidateAgentConnectionsAndSearchRole(t *testing.T) {
+	tests := []struct {
+		name        string
+		connections map[string]AgentConnectionConfig
+		search      AgentConfig
+		want        string
+	}{
+		{name: "invalid id", connections: map[string]AgentConnectionConfig{"bad id": {Preset: "codex"}}, want: "connection ID"},
+		{name: "unknown preset", connections: map[string]AgentConnectionConfig{"other": {Preset: "claude"}}, want: "unsupported preset"},
+		{name: "missing command", connections: map[string]AgentConnectionConfig{"other": {}}, want: "requires preset or command"},
+		{name: "mixed command", connections: map[string]AgentConnectionConfig{"other": {Preset: "codex", Command: "agent"}}, want: "mutually exclusive"},
+		{name: "auth whitespace", connections: map[string]AgentConnectionConfig{"codex": {Preset: "codex", AuthMethod: " login "}}, want: "auth_method"},
+		{name: "unknown search assignment", search: AgentConfig{Agent: "missing"}, want: "unknown agent connection"},
+		{name: "search model", search: AgentConfig{Model: "model"}, want: "accepts agent only"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			value := Default()
+			value.Provider.Model = "active-model"
+			value.Agents.Connections = test.connections
+			if test.search != (AgentConfig{}) {
+				value.Agents.Roles = map[string]AgentConfig{AgentRoleSearch: test.search}
+			}
+			if err := value.Validate(); err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("error = %v; want containing %q", err, test.want)
+			}
+		})
+	}
+	value := Default()
+	value.Provider.Model = "active-model"
+	value.Agents.Connections = map[string]AgentConnectionConfig{
+		"codex-main":  {Preset: "codex"},
+		"grok.backup": {Preset: "grok"},
+	}
+	value.Agents.Roles = map[string]AgentConfig{AgentRoleSearch: {Agent: "codex-main"}}
+	if err := value.Validate(); err != nil {
+		t.Fatalf("valid ACP connections: %v", err)
 	}
 }
 

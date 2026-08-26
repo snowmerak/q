@@ -383,6 +383,7 @@ func streamPlanWorkflow(
 		}
 		_ = emitAgentEvent(ctx, events, agentEvent{trace: &entry})
 	}
+	externalSearch := configuredExternalSearch(value, workingDirectory)
 
 	scoutRunID := runID
 	if archive == nil {
@@ -394,11 +395,11 @@ func streamPlanWorkflow(
 	}
 	griller := subagent.GrillerRunner{
 		Client: configuredClient, Tools: scopeTools(toolRuntime, grillerSpec.Role), Scout: scout, Spec: grillerSpec,
-		Ask: ask, WorkingDirectory: workingDirectory, Progress: progress, Trace: trace,
+		Ask: ask, ExternalSearch: externalSearch, WorkingDirectory: workingDirectory, Progress: progress, Trace: trace,
 	}
 	planner := subagent.PlannerRunner{
 		Client: configuredClient, Tools: scopeTools(toolRuntime, plannerSpec.Role), Spec: plannerSpec, WorkingDirectory: workingDirectory,
-		Progress: progress, Trace: trace,
+		ExternalSearch: externalSearch, Progress: progress, Trace: trace,
 	}
 	workflow := subagent.PlanWorkflow{
 		Griller: griller, Planner: planner, Ask: ask, Progress: progress,

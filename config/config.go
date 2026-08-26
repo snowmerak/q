@@ -27,6 +27,7 @@ const (
 	AgentRoleGriller   = "griller"
 	AgentRoleScout     = "scout"
 	AgentRoleResearch  = "research"
+	AgentRoleSearch    = "search"
 	AgentRolePlanner   = "planner"
 	AgentRoleCoder     = "coder"
 	AgentRoleCommit    = "commit"
@@ -88,8 +89,21 @@ type EmbeddingConfig struct {
 }
 
 type AgentsConfig struct {
-	MaxParallel int                    `yaml:"max_parallel,omitempty"`
-	Roles       map[string]AgentConfig `yaml:"roles,omitempty"`
+	MaxParallel int                              `yaml:"max_parallel,omitempty"`
+	Connections map[string]AgentConnectionConfig `yaml:"connections,omitempty"`
+	Roles       map[string]AgentConfig           `yaml:"roles,omitempty"`
+}
+
+// AgentConnectionConfig describes one ACP agent process. Preset supplies the
+// built-in Codex or Grok command; Command and Args support another stdio ACP
+// implementation instead.
+type AgentConnectionConfig struct {
+	Preset     string            `yaml:"preset,omitempty"`
+	Command    string            `yaml:"command,omitempty"`
+	Args       []string          `yaml:"args,omitempty"`
+	Env        map[string]string `yaml:"env,omitempty"`
+	AuthMethod string            `yaml:"auth_method,omitempty"`
+	Disabled   bool              `yaml:"disabled,omitempty"`
 }
 
 type ModelGroupConfig struct {
@@ -102,14 +116,14 @@ type ModelCandidateConfig struct {
 	Timeout         time.Duration `yaml:"timeout,omitempty"`
 }
 
-// AgentConfig selects the model controls for one subagent role. Model and
-// Group are mutually exclusive. With neither set, the active chat model is
-// inherited. ReasoningEffort is also the default for group candidates that do
-// not provide their own effort.
+// AgentConfig selects either model controls for q-native roles or an ACP
+// connection for an external role such as Search. Model and Group are mutually
+// exclusive. With neither set, native roles inherit the active chat model.
 type AgentConfig struct {
 	Model           string `yaml:"model,omitempty"`
 	Group           string `yaml:"group,omitempty"`
 	ReasoningEffort string `yaml:"reasoning_effort,omitempty"`
+	Agent           string `yaml:"agent,omitempty"`
 }
 
 var agentRoles = []string{
@@ -226,9 +240,56 @@ func (c Config) Validate() error {
 			return fmt.Errorf("config: provider model references unknown model group %q", name)
 		}
 	}
+	for id, connection := range c.Agents.Connections {
+		if !validAgentConnectionID(id) {
+			return fmt.Errorf("config: agent connection ID %q must use only letters, digits, '.', '_', or '-'", id)
+		}
+		if connection.Preset != strings.TrimSpace(connection.Preset) || connection.Command != strings.TrimSpace(connection.Command) {
+			return fmt.Errorf("config: agent connection %q preset and command must not have surrounding whitespace", id)
+		}
+		if connection.Preset != "" && connection.Command != "" {
+			return fmt.Errorf("config: agent connection %q preset and command are mutually exclusive", id)
+		}
+		if connection.Preset == "" && connection.Command == "" {
+			return fmt.Errorf("config: agent connection %q requires preset or command", id)
+		}
+		if connection.Preset != "" && connection.Preset != "codex" && connection.Preset != "grok" {
+			return fmt.Errorf("config: agent connection %q uses unsupported preset %q", id, connection.Preset)
+		}
+		for index, argument := range connection.Args {
+			if strings.ContainsRune(argument, 0) {
+				return fmt.Errorf("config: agent connection %q argument %d contains NUL", id, index)
+			}
+		}
+		for name := range connection.Env {
+			if name == "" || strings.Contains(name, "=") {
+				return fmt.Errorf("config: agent connection %q has invalid environment variable name %q", id, name)
+			}
+		}
+		if connection.AuthMethod != strings.TrimSpace(connection.AuthMethod) {
+			return fmt.Errorf("config: agent connection %q auth_method must not have surrounding whitespace", id)
+		}
+	}
 	for role, agent := range c.Agents.Roles {
+		if role == AgentRoleSearch {
+			if agent.Model != "" || agent.Group != "" || strings.TrimSpace(agent.ReasoningEffort) != "" {
+				return fmt.Errorf("config: search role accepts agent only, not model controls")
+			}
+			if agent.Agent != strings.TrimSpace(agent.Agent) {
+				return fmt.Errorf("config: search role agent must not have surrounding whitespace")
+			}
+			if agent.Agent != "" {
+				if _, found := c.Agents.Connections[agent.Agent]; !found {
+					return fmt.Errorf("config: search role references unknown agent connection %q", agent.Agent)
+				}
+			}
+			continue
+		}
 		if !IsAgentRole(role) {
 			return fmt.Errorf("config: unsupported agent role %q", role)
+		}
+		if agent.Agent != "" {
+			return fmt.Errorf("config: native agent role %q does not accept an ACP agent connection", role)
 		}
 		if agent.Model != strings.TrimSpace(agent.Model) {
 			return fmt.Errorf("config: agent %q model must not have surrounding whitespace", role)
@@ -269,6 +330,20 @@ func (c Config) Validate() error {
 		return fmt.Errorf("config: %w", err)
 	}
 	return nil
+}
+
+func validAgentConnectionID(id string) bool {
+	if id == "" || id != strings.TrimSpace(id) {
+		return false
+	}
+	for _, value := range id {
+		if value >= 'a' && value <= 'z' || value >= 'A' && value <= 'Z' ||
+			value >= '0' && value <= '9' || value == '.' || value == '_' || value == '-' {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 // UseManagedGateway removes legacy endpoint credentials after they have been
@@ -368,6 +443,20 @@ func (c Config) EffectiveAgents() AgentsConfig {
 				agent.ReasoningEffort = ""
 			}
 			result.Roles[role] = agent
+		}
+	}
+	if c.Agents.Connections != nil {
+		result.Connections = make(map[string]AgentConnectionConfig, len(c.Agents.Connections))
+		for id, connection := range c.Agents.Connections {
+			connection.Args = append([]string(nil), connection.Args...)
+			if connection.Env != nil {
+				env := make(map[string]string, len(connection.Env))
+				for name, value := range connection.Env {
+					env[name] = value
+				}
+				connection.Env = env
+			}
+			result.Connections[id] = connection
 		}
 	}
 	return result

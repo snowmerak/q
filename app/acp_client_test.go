@@ -14,6 +14,7 @@ import (
 type fakeACPRemoteConnection struct {
 	newSessionID acp.SessionId
 	closed       []acp.SessionId
+	deleted      []acp.SessionId
 	prompt       func(context.Context, acp.PromptRequest) (acp.PromptResponse, error)
 }
 
@@ -39,6 +40,11 @@ func (f *fakeACPRemoteConnection) Prompt(ctx context.Context, request acp.Prompt
 func (f *fakeACPRemoteConnection) CloseSession(_ context.Context, request acp.CloseSessionRequest) (acp.CloseSessionResponse, error) {
 	f.closed = append(f.closed, request.SessionId)
 	return acp.CloseSessionResponse{}, nil
+}
+
+func (f *fakeACPRemoteConnection) UnstableDeleteSession(_ context.Context, request acp.UnstableDeleteSessionRequest) (acp.UnstableDeleteSessionResponse, error) {
+	f.deleted = append(f.deleted, request.SessionId)
+	return acp.UnstableDeleteSessionResponse{}, nil
 }
 
 func TestResolveACPAgentCommand(t *testing.T) {
@@ -181,5 +187,23 @@ func TestChoiceOnlyQuestionDoesNotOfferCustomAnswer(t *testing.T) {
 	}
 	if rendered := renderPendingQuestion(input, 0); strings.Contains(rendered, customAnswerLabel) {
 		t.Fatalf("choice-only question rendered custom answer: %q", rendered)
+	}
+}
+
+func TestACPReadOnlyPermissionAllowsSearchAndRejectsMutation(t *testing.T) {
+	allow := acp.PermissionOption{OptionId: "allow", Name: "Allow", Kind: acp.PermissionOptionKindAllowOnce}
+	search := acp.ToolKindSearch
+	response := readOnlyPermission(acp.RequestPermissionRequest{
+		ToolCall: acp.ToolCallUpdate{ToolCallId: "search", Kind: &search}, Options: []acp.PermissionOption{allow},
+	})
+	if response.Outcome.Selected == nil || response.Outcome.Selected.OptionId != "allow" {
+		t.Fatalf("search permission = %#v", response)
+	}
+	edit := acp.ToolKindEdit
+	response = readOnlyPermission(acp.RequestPermissionRequest{
+		ToolCall: acp.ToolCallUpdate{ToolCallId: "edit", Kind: &edit}, Options: []acp.PermissionOption{allow},
+	})
+	if response.Outcome.Cancelled == nil {
+		t.Fatalf("edit permission = %#v", response)
 	}
 }

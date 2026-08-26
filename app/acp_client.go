@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -33,6 +34,7 @@ type ACPClientOptions struct {
 type acpAgentCommand struct {
 	name       string
 	args       []string
+	env        map[string]string
 	display    string
 	installTip string
 }
@@ -43,7 +45,15 @@ type acpRemoteConnection interface {
 	ResumeSession(context.Context, acp.ResumeSessionRequest) (acp.ResumeSessionResponse, error)
 	Prompt(context.Context, acp.PromptRequest) (acp.PromptResponse, error)
 	CloseSession(context.Context, acp.CloseSessionRequest) (acp.CloseSessionResponse, error)
+	UnstableDeleteSession(context.Context, acp.UnstableDeleteSessionRequest) (acp.UnstableDeleteSessionResponse, error)
 }
+
+type acpPermissionMode uint8
+
+const (
+	acpPermissionInteractive acpPermissionMode = iota
+	acpPermissionReadOnly
+)
 
 type acpRemoteClient struct {
 	mu           sync.Mutex
@@ -56,6 +66,7 @@ type acpRemoteClient struct {
 	command      string
 	title        string
 	turn         *acpRemoteTurn
+	permissions  acpPermissionMode
 
 	stdin       io.WriteCloser
 	cancel      context.CancelFunc
@@ -154,6 +165,26 @@ func resolveACPAgentCommand(agent string, lookPath func(string) (string, error))
 	}
 }
 
+func resolveConfiguredACPAgentCommand(connection config.AgentConnectionConfig, lookPath func(string) (string, error)) (acpAgentCommand, error) {
+	if connection.Preset != "" {
+		command, err := resolveACPAgentCommand(connection.Preset, lookPath)
+		if err != nil {
+			return acpAgentCommand{}, err
+		}
+		command.env = cloneStringMap(connection.Env)
+		command.args = append(command.args, connection.Args...)
+		return command, nil
+	}
+	name, err := lookPath(connection.Command)
+	if err != nil {
+		return acpAgentCommand{}, fmt.Errorf("locate ACP agent command %q: %w", connection.Command, err)
+	}
+	return acpAgentCommand{
+		name: name, args: append([]string(nil), connection.Args...), env: cloneStringMap(connection.Env),
+		display: filepath.Base(connection.Command),
+	}, nil
+}
+
 func startACPRemoteClient(
 	ctx context.Context,
 	command acpAgentCommand,
@@ -164,7 +195,7 @@ func startACPRemoteClient(
 	processContext, cancel := context.WithCancel(ctx)
 	cmd := exec.CommandContext(processContext, command.name, command.args...)
 	cmd.Dir = root
-	cmd.Env = os.Environ()
+	cmd.Env = mergedProcessEnv(os.Environ(), command.env)
 	stderr := newSynchronizedTailBuffer(64 << 10)
 	cmd.Stderr = stderr
 	stdin, err := cmd.StdinPipe()
@@ -300,6 +331,15 @@ func (r *acpRemoteClient) Close() error {
 
 func (r *acpRemoteClient) runPrompt(ctx context.Context, content string, events chan<- agentEvent) {
 	defer close(events)
+	result, toolCalls, err := r.prompt(ctx, content, events)
+	if err != nil {
+		emitAgentEvent(ctx, events, agentEvent{err: err})
+		return
+	}
+	emitAgentEvent(ctx, events, agentEvent{response: result, toolCalls: toolCalls})
+}
+
+func (r *acpRemoteClient) prompt(ctx context.Context, content string, events chan<- agentEvent) (*client.ChatResponse, int, error) {
 	turn := &acpRemoteTurn{
 		ctx: ctx, events: events, display: r.display,
 		toolTitles: make(map[acp.ToolCallId]string), toolCalls: make(map[acp.ToolCallId]struct{}),
@@ -307,8 +347,7 @@ func (r *acpRemoteClient) runPrompt(ctx context.Context, content string, events 
 	r.mu.Lock()
 	if r.turn != nil {
 		r.mu.Unlock()
-		emitAgentEvent(ctx, events, agentEvent{err: errors.New("another ACP turn is already active")})
-		return
+		return nil, 0, errors.New("another ACP turn is already active")
 	}
 	r.turn = turn
 	connection := r.connection
@@ -327,8 +366,7 @@ func (r *acpRemoteClient) runPrompt(ctx context.Context, content string, events 
 		Prompt:    []acp.ContentBlock{acp.TextBlock(content)},
 	})
 	if err != nil {
-		emitAgentEvent(ctx, events, agentEvent{err: r.decorateError("ACP prompt", err)})
-		return
+		return nil, 0, r.decorateError("ACP prompt", err)
 	}
 	text, toolCalls := turn.result()
 	if strings.TrimSpace(text) == "" {
@@ -340,7 +378,18 @@ func (r *acpRemoteClient) runPrompt(ctx context.Context, content string, events 
 	result := &client.ChatResponse{Choices: []client.Choice{{Message: client.Message{
 		Role: client.RoleAssistant, Content: text,
 	}}}}
-	emitAgentEvent(ctx, events, agentEvent{response: result, toolCalls: toolCalls})
+	return result, toolCalls, nil
+}
+
+func (r *acpRemoteClient) promptText(ctx context.Context, content string) (string, error) {
+	response, _, err := r.prompt(ctx, content, nil)
+	if err != nil {
+		return "", err
+	}
+	if response == nil || len(response.Choices) == 0 {
+		return "", errors.New("ACP agent returned no response")
+	}
+	return response.Choices[0].Message.TextContent(), nil
 }
 
 func (r *acpRemoteClient) resetSession(ctx context.Context) (acp.SessionId, error) {
@@ -399,9 +448,13 @@ func (r *acpRemoteClient) SessionUpdate(ctx context.Context, notification acp.Se
 func (r *acpRemoteClient) RequestPermission(ctx context.Context, request acp.RequestPermissionRequest) (acp.RequestPermissionResponse, error) {
 	r.mu.Lock()
 	turn := r.turn
+	permissions := r.permissions
 	r.mu.Unlock()
 	if turn == nil {
 		return cancelledPermission(), nil
+	}
+	if permissions == acpPermissionReadOnly {
+		return readOnlyPermission(request), nil
 	}
 	title := "Allow this tool call?"
 	if request.ToolCall.Title != nil && strings.TrimSpace(*request.ToolCall.Title) != "" {
@@ -437,6 +490,23 @@ func (r *acpRemoteClient) RequestPermission(ctx context.Context, request acp.Req
 	case <-turn.ctx.Done():
 		return cancelledPermission(), nil
 	}
+}
+
+func readOnlyPermission(request acp.RequestPermissionRequest) acp.RequestPermissionResponse {
+	if request.ToolCall.Kind == nil {
+		return cancelledPermission()
+	}
+	switch *request.ToolCall.Kind {
+	case acp.ToolKindRead, acp.ToolKindSearch, acp.ToolKindFetch, acp.ToolKindThink:
+		for _, option := range request.Options {
+			if option.Kind == acp.PermissionOptionKindAllowOnce {
+				return acp.RequestPermissionResponse{Outcome: acp.RequestPermissionOutcome{
+					Selected: &acp.RequestPermissionOutcomeSelected{OptionId: option.OptionId},
+				}}
+			}
+		}
+	}
+	return cancelledPermission()
 }
 
 func cancelledPermission() acp.RequestPermissionResponse {
@@ -543,6 +613,9 @@ func (t *acpRemoteTurn) update(ctx context.Context, update acp.SessionUpdate) er
 }
 
 func (t *acpRemoteTurn) emit(event agentEvent) bool {
+	if t.events == nil {
+		return true
+	}
 	return emitAgentEvent(t.ctx, t.events, event)
 }
 
@@ -667,4 +740,33 @@ func (b *synchronizedTailBuffer) String() string {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return string(bytes.Clone(b.body))
+}
+
+func mergedProcessEnv(base []string, overrides map[string]string) []string {
+	if len(overrides) == 0 {
+		return base
+	}
+	result := append([]string(nil), base...)
+	for name, value := range overrides {
+		replaced := false
+		for index, current := range result {
+			currentName, _, found := strings.Cut(current, "=")
+			if found && environmentNameEqual(currentName, name) {
+				result[index] = name + "=" + value
+				replaced = true
+				break
+			}
+		}
+		if !replaced {
+			result = append(result, name+"="+value)
+		}
+	}
+	return result
+}
+
+func environmentNameEqual(left, right string) bool {
+	if runtime.GOOS == "windows" {
+		return strings.EqualFold(left, right)
+	}
+	return left == right
 }
