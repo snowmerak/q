@@ -101,3 +101,44 @@ func TestACPConnectionProbeIntegration(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestACPAgentExplicitSearchIntegration(t *testing.T) {
+	if strings.TrimSpace(os.Getenv("Q_TEST_ACP_SEARCH")) == "" {
+		t.Skip("set Q_TEST_ACP_SEARCH=1 and Q_TEST_ACP_PRESET=codex or grok to run a real /agent:search turn")
+	}
+	preset := strings.TrimSpace(os.Getenv("Q_TEST_ACP_PRESET"))
+	if preset == "" {
+		t.Fatal("Q_TEST_ACP_PRESET must be codex or grok")
+	}
+	agent, workspaceStore, connection := testACPAgent(t, &fakeClient{}, &fakeAgentTools{})
+	value := agent.state.activeConfig()
+	value.Agents.Connections = map[string]config.AgentConnectionConfig{preset: {Preset: preset}}
+	value.Agents.Roles = map[string]config.AgentConfig{config.AgentRoleSearch: {Agent: preset}}
+	if err := value.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	agent.state.config = value
+	agent.externalSearch = configuredExternalSearch(value, workspaceStore.Root)
+
+	ctx, cancel := context.WithTimeout(t.Context(), 4*time.Minute)
+	defer cancel()
+	sessionID := openTestACPSession(t, agent, workspaceStore.Root)
+	response, err := agent.Prompt(ctx, acp.PromptRequest{
+		SessionId: sessionID,
+		Prompt: []acp.ContentBlock{acp.TextBlock(
+			"/agent:search Find the official Agent Client Protocol overview and return at least one direct official URL.",
+		)},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var output string
+	for _, notification := range connection.snapshot() {
+		if update := notification.Update.AgentMessageChunk; update != nil && update.Content.Text != nil {
+			output += update.Content.Text.Text
+		}
+	}
+	if response.StopReason != acp.StopReasonEndTurn || !strings.Contains(output, "http") {
+		t.Fatalf("real /agent:search returned stop reason %q without a sourced report", response.StopReason)
+	}
+}

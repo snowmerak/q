@@ -16,6 +16,7 @@ import (
 	"github.com/coder/acp-go-sdk"
 	"github.com/snowmerak/llm-provider/gateway"
 	"github.com/snowmerak/q/client"
+	"github.com/snowmerak/q/commitagent"
 	"github.com/snowmerak/q/config"
 	"github.com/snowmerak/q/mcpconfig"
 	"github.com/snowmerak/q/subagent"
@@ -29,6 +30,7 @@ type fakeACPConnection struct {
 	answer              string
 	elicitationAction   string
 	elicitationErr      error
+	elicitationContents []map[string]any
 }
 
 type blockingACPClient struct {
@@ -61,6 +63,11 @@ func (f *fakeACPConnection) UnstableCreateElicitation(
 	action := f.elicitationAction
 	answer := f.answer
 	err := f.elicitationErr
+	var content map[string]any
+	if len(f.elicitationContents) > 0 {
+		content = f.elicitationContents[0]
+		f.elicitationContents = f.elicitationContents[1:]
+	}
 	f.mu.Unlock()
 	if err != nil {
 		return acp.UnstableCreateElicitationResponse{}, err
@@ -75,12 +82,13 @@ func (f *fakeACPConnection) UnstableCreateElicitation(
 			Cancel: &acp.UnstableCreateElicitationCancel{Action: "cancel"},
 		}, nil
 	}
+	if content == nil {
+		content = map[string]any{"answer": answer}
+	}
 	return acp.UnstableCreateElicitationResponse{
 		Accept: &acp.UnstableCreateElicitationAccept{
-			Action: "accept",
-			Content: map[string]any{
-				"answer": answer,
-			},
+			Action:  "accept",
+			Content: content,
 		},
 	}, nil
 }
@@ -354,10 +362,122 @@ func TestACPAgentAdvertisesAndHandlesHeadlessCommands(t *testing.T) {
 	for _, command := range commands {
 		commandNames = append(commandNames, command.Name)
 	}
-	if !slices.Equal(commandNames, []string{"plan", "agent:search", "learn", "clear", "help"}) ||
+	if !slices.Equal(commandNames, []string{"plan", "agent:search", "commit", "learn", "clear", "help"}) ||
 		!strings.Contains(output, "/plan") || !strings.Contains(output, "/agent:search") ||
-		!strings.Contains(output, "/learn") || !strings.Contains(output, "/clear") {
+		!strings.Contains(output, "/commit") || !strings.Contains(output, "/learn") || !strings.Contains(output, "/clear") {
 		t.Fatalf("commands = %#v, output = %q", commands, output)
+	}
+}
+
+type fakeACPCommitSession struct {
+	proposals   [][]commitagent.Proposal
+	proposal    int
+	autoStaged  bool
+	regenerated int
+	committed   int
+	pushed      int
+	closed      int
+	pushErr     error
+}
+
+func (f *fakeACPCommitSession) Proposals() []commitagent.Proposal {
+	if len(f.proposals) == 0 {
+		return nil
+	}
+	return append([]commitagent.Proposal(nil), f.proposals[min(f.proposal, len(f.proposals)-1)]...)
+}
+func (f *fakeACPCommitSession) AutoStaged() bool { return f.autoStaged }
+func (f *fakeACPCommitSession) Regenerate(context.Context) error {
+	f.regenerated++
+	f.proposal = min(f.proposal+1, len(f.proposals)-1)
+	return nil
+}
+func (f *fakeACPCommitSession) Commit(context.Context) (commitagent.Result, error) {
+	f.committed++
+	return commitagent.Result{Messages: []string{"feat(acp): add commit workflow"}}, nil
+}
+func (f *fakeACPCommitSession) Push(context.Context) error { f.pushed++; return f.pushErr }
+func (f *fakeACPCommitSession) Close() error               { f.closed++; return nil }
+
+func TestACPAgentRegeneratesThenCommitsAndPushes(t *testing.T) {
+	agent, workspaceStore, connection := testACPAgent(t, &fakeClient{}, &fakeAgentTools{})
+	commitSession := &fakeACPCommitSession{
+		autoStaged: true,
+		proposals: [][]commitagent.Proposal{
+			{{Type: "chore", Summary: "first proposal", Files: []string{"old.go"}}},
+			{{Type: "feat", Scope: "acp", Summary: "add commit workflow", Files: []string{"app/acp.go", "app/acp_commit.go"}}},
+		},
+	}
+	agent.commitSession = func(context.Context, commitagent.ProgressFunc) (acpCommitSession, error) {
+		return commitSession, nil
+	}
+	connection.elicitationContents = []map[string]any{
+		{"action": "regenerate"},
+		{"action": "commit_push"},
+	}
+	if _, err := agent.Initialize(t.Context(), acp.InitializeRequest{ClientCapabilities: acp.ClientCapabilities{
+		Elicitation: &acp.ElicitationCapabilities{Form: &acp.ElicitationFormCapabilities{}},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	sessionID := openTestACPSession(t, agent, workspaceStore.Root)
+	response, err := agent.Prompt(t.Context(), acp.PromptRequest{
+		SessionId: sessionID, Prompt: []acp.ContentBlock{acp.TextBlock("/commit")},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.StopReason != acp.StopReasonEndTurn || commitSession.regenerated != 1 ||
+		commitSession.committed != 1 || commitSession.pushed != 1 || commitSession.closed != 1 {
+		t.Fatalf("response = %#v, session = %#v", response, commitSession)
+	}
+	elicitations := connection.elicitationSnapshot()
+	if len(elicitations) != 2 || elicitations[1].Form == nil ||
+		!strings.Contains(elicitations[1].Form.Message, "feat(acp): add commit workflow") ||
+		!strings.Contains(elicitations[1].Form.Message, "app/acp_commit.go") ||
+		!strings.Contains(elicitations[1].Form.Message, "leaves them staged") {
+		t.Fatalf("commit elicitations = %#v", elicitations)
+	}
+	action, ok := elicitations[1].Form.RequestedSchema.Properties["action"].(map[string]any)
+	if !ok || action["type"] != "string" || action["oneOf"] == nil {
+		t.Fatalf("commit action schema = %#v", elicitations[1].Form.RequestedSchema.Properties)
+	}
+	if err := elicitations[1].Validate(); err != nil {
+		t.Fatalf("commit elicitation schema is invalid: %v", err)
+	}
+	var output string
+	for _, notification := range connection.snapshot() {
+		if update := notification.Update.AgentMessageChunk; update != nil && update.Content.Text != nil {
+			output += update.Content.Text.Text
+		}
+	}
+	if !strings.Contains(output, "Commit created") || !strings.Contains(output, "Push completed") {
+		t.Fatalf("commit output = %q", output)
+	}
+}
+
+func TestACPAgentCommitRequiresFormElicitation(t *testing.T) {
+	agent, workspaceStore, connection := testACPAgent(t, &fakeClient{}, &fakeAgentTools{})
+	called := false
+	agent.commitSession = func(context.Context, commitagent.ProgressFunc) (acpCommitSession, error) {
+		called = true
+		return nil, errors.New("must not prepare")
+	}
+	sessionID := openTestACPSession(t, agent, workspaceStore.Root)
+	response, err := agent.Prompt(t.Context(), acp.PromptRequest{
+		SessionId: sessionID, Prompt: []acp.ContentBlock{acp.TextBlock("/commit")},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var output string
+	for _, notification := range connection.snapshot() {
+		if update := notification.Update.AgentMessageChunk; update != nil && update.Content.Text != nil {
+			output += update.Content.Text.Text
+		}
+	}
+	if response.StopReason != acp.StopReasonEndTurn || called || !strings.Contains(output, "form elicitation") {
+		t.Fatalf("response = %#v, called = %v, output = %q", response, called, output)
 	}
 }
 

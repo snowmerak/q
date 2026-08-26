@@ -199,6 +199,7 @@ type acpAgent struct {
 	sessionOpen        bool
 	turnCancel         context.CancelFunc
 	externalSearch     subagent.ExternalSearchFunc
+	commitSession      acpCommitSessionFactory
 }
 
 var (
@@ -208,13 +209,15 @@ var (
 
 func newACPAgent(state *model, root string, logger *slog.Logger) *acpAgent {
 	state.ensureRunID()
-	return &acpAgent{
+	agent := &acpAgent{
 		state:          state,
 		root:           root,
 		logger:         logger,
 		sessionID:      acpSessionID(state.runID),
 		externalSearch: configuredExternalSearch(state.activeConfig(), root),
 	}
+	agent.commitSession = newACPCommitSessionFactory(state, root)
+	return agent
 }
 
 func acpSessionID(runID string) acp.SessionId {
@@ -1037,6 +1040,7 @@ func (a *acpAgent) emitAvailableCommandsContext(ctx context.Context) error {
 			Name: "agent:search", Description: "Run the configured ACP Search agent and return its evidence report.",
 			Input: &acp.AvailableCommandInput{Unstructured: &acp.UnstructuredCommandInput{Hint: "query"}},
 		},
+		{Name: "commit", Description: "Review generated commit proposals, then commit or commit and push after approval."},
 		{
 			Name: "learn", Description: "Checkpoint or control q learning for this workspace.",
 			Input: &acp.AvailableCommandInput{Unstructured: &acp.UnstructuredCommandInput{Hint: "on, off, or status"}},
@@ -1053,6 +1057,9 @@ func (a *acpAgent) runACPCommand(ctx context.Context, text string) (acp.PromptRe
 	command := strings.TrimSpace(text)
 	var output string
 	switch {
+	case command == "/commit":
+		response, err := a.runACPCommit(ctx)
+		return response, true, err
 	case command == agentSearchCommand:
 		output = "Usage: /agent:search <query>"
 	case strings.HasPrefix(command, agentSearchCommand+" "):
@@ -1074,7 +1081,7 @@ func (a *acpAgent) runACPCommand(ctx context.Context, text string) (acp.PromptRe
 		response, err := a.runACPPlan(ctx, objective)
 		return response, true, err
 	case command == "/help":
-		output = "Available ACP commands:\n- /plan <work to plan>\n- /agent:search <query>\n- /learn [on|off|status]\n- /clear\n- /help"
+		output = "Available ACP commands:\n- /plan <work to plan>\n- /agent:search <query>\n- /commit\n- /learn [on|off|status]\n- /clear\n- /help"
 	case command == "/learn":
 		if a.state.learningDisabled() {
 			output = "Learning is disabled for this workspace. Use /learn on to enable it."

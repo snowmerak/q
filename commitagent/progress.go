@@ -9,6 +9,7 @@ import (
 type progressLogger struct {
 	output io.Writer
 	events chan<- ProgressEvent
+	notify func(ProgressEvent)
 	mu     sync.Mutex
 }
 
@@ -23,6 +24,10 @@ func newProgressLogger(output io.Writer) *progressLogger {
 
 func newEventProgressLogger(events chan<- ProgressEvent) *progressLogger {
 	return &progressLogger{events: events}
+}
+
+func newCallbackProgressLogger(notify func(ProgressEvent)) *progressLogger {
+	return &progressLogger{notify: notify}
 }
 
 func (logger *progressLogger) step(stage, format string, arguments ...any) {
@@ -40,5 +45,8 @@ func (logger *progressLogger) step(stage, format string, arguments ...any) {
 		case logger.events <- event:
 		default:
 		}
+	}
+	if logger.notify != nil {
+		logger.notify(event)
 	}
 }

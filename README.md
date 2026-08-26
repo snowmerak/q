@@ -49,9 +49,9 @@ Store, and `.q/session.json` projection. It supports ACP `session/new`,
 `session/prompt`, `session/cancel`, streamed message/thought updates, tool-call
 updates, task-lifecycle plan updates, `session/list`, `session/delete`, and
 `session/close`. Session metadata uses the first meaningful prompt as its title
-and records the latest turn time. The `plan`, `agent:search`, `learn`, `clear`,
-and `help` commands are advertised to ACP clients and handled without the
-Bubble Tea UI. `/plan <request>` runs the same Griller, Planner,
+and records the latest turn time. The `plan`, `agent:search`, `commit`, `learn`,
+`clear`, and `help` commands are advertised to ACP clients and handled without
+the Bubble Tea UI. `/plan <request>` runs the same Griller, Planner,
 approval-gated Coder, and review
 workflow as the TUI while projecting bounded progress and plan status through
 ACP updates. Because execution always requires explicit approval, the ACP
@@ -59,7 +59,9 @@ client must advertise form elicitation support. `/agent:search <query>` creates
 an isolated session on the configured ACP Search agent, returns its evidence
 report, and then deletes or closes that session. `/clear` drops q's persisted
 conversation projection and model context while keeping the active ACP session
-ID usable.
+ID usable. `/commit` shows the generated commit messages and their staged files
+through form elicitation, then accepts commit, commit-and-push, regenerate, or
+cancel. Clients without form elicitation support cannot run the commit workflow.
 
 q deliberately keeps its native session rule here: one ACP process is bound to
 one workspace and accepts only one active ACP session. `session/load` and
@@ -317,8 +319,8 @@ contracts.
 
 ## Commit workflow
 
-Use `/commit` from the main TUI or run the standalone command inside a Git
-worktree:
+Use `/commit` from the main TUI or an ACP client with form elicitation support,
+or run the standalone command inside a Git worktree:
 
 ```powershell
 q commit
