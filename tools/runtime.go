@@ -198,16 +198,8 @@ func (r *Runtime) CollectLoom(ctx context.Context, dryRun bool) (loom.GCResult, 
 		return loom.GCResult{}, errors.New("tools: Loom runtime is unavailable")
 	}
 	options := r.loom.Store.Options()
-	var roots []loom.Ref
-	if options.Roots != nil {
-		var err error
-		roots, err = options.Roots(ctx)
-		if err != nil {
-			return loom.GCResult{}, err
-		}
-	}
-	return r.loom.Store.Collect(ctx, loom.GCOptions{
-		Roots: roots, ProtectNewerThan: time.Now().UTC().Add(-options.GCGracePeriod), DryRun: dryRun,
+	return r.loom.Store.CollectWithRootProvider(ctx, options.Roots, loom.GCOptions{
+		ProtectNewerThan: time.Now().UTC().Add(-options.GCGracePeriod), DryRun: dryRun,
 	})
 }
 

@@ -5,12 +5,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 
 	"github.com/snowmerak/q/loom"
 )
 
-// LoomReferencesAt returns Loom references present in the current workspace
-// session projection and active plan checkpoint. Durable archive records are
+// LoomReferencesAt returns Loom references present in every workspace session
+// projection and active plan checkpoint. Durable archive records are
 // intentionally not roots.
 func LoomReferencesAt(ctx context.Context, root string) ([]loom.Ref, error) {
 	if ctx == nil {
@@ -19,27 +20,51 @@ func LoomReferencesAt(ctx context.Context, root string) ([]loom.Ref, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	store := Store{Root: root}
-	values := make([]string, 0, 2)
-	session, err := store.Load()
-	if err == nil {
-		body, marshalErr := json.Marshal(session)
-		if marshalErr != nil {
-			return nil, fmt.Errorf("workspace: encode session for Loom references: %w", marshalErr)
-		}
-		values = append(values, string(body))
-	} else if !errors.Is(err, ErrNotFound) {
+	base := Store{Root: root}
+	entries, err := base.ListSessions()
+	if err != nil {
 		return nil, err
 	}
-	execution, err := store.LoadExecution()
-	if err == nil {
-		body, marshalErr := json.Marshal(execution)
-		if marshalErr != nil {
-			return nil, fmt.Errorf("workspace: encode plan execution for Loom references: %w", marshalErr)
-		}
-		values = append(values, string(body))
-	} else if !errors.Is(err, ErrExecutionNotFound) {
-		return nil, err
+	stores := make([]Store, 0, len(entries)+1)
+	for _, entry := range entries {
+		stores = append(stores, entry.Store)
 	}
-	return loom.ExtractReferences(values...), nil
+	// Include pre-migration projections so standalone q-mcp retains their Loom
+	// roots even before a TUI or ACP host performs the migration.
+	stores = append(stores, base)
+	references := make(map[loom.Ref]struct{})
+	collect := func(value any, label string) error {
+		body, err := json.Marshal(value)
+		if err != nil {
+			return fmt.Errorf("workspace: encode %s for Loom references: %w", label, err)
+		}
+		for _, ref := range loom.ExtractReferences(string(body)) {
+			references[ref] = struct{}{}
+		}
+		return nil
+	}
+	for _, store := range stores {
+		session, loadErr := store.Load()
+		if loadErr == nil {
+			if err := collect(session, "session"); err != nil {
+				return nil, err
+			}
+		} else if !errors.Is(loadErr, ErrNotFound) {
+			return nil, loadErr
+		}
+		execution, executionErr := store.LoadExecution()
+		if executionErr == nil {
+			if err := collect(execution, "plan execution"); err != nil {
+				return nil, err
+			}
+		} else if !errors.Is(executionErr, ErrExecutionNotFound) {
+			return nil, executionErr
+		}
+	}
+	result := make([]loom.Ref, 0, len(references))
+	for ref := range references {
+		result = append(result, ref)
+	}
+	sort.Slice(result, func(i, j int) bool { return result[i] < result[j] })
+	return result, nil
 }

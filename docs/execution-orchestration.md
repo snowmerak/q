@@ -168,7 +168,7 @@ Planner가 반환한 `facts`는 decision 적용 전에 Plan에 중복 제거하�
 - Coder/Planner의 실제 assistant note, tool arguments/result와 review payload를
   스크롤해서 보는 detailed trace (`Ctrl+G`로 compact activity 전환)
 - Coder attempt와 Planner review의 전체 message/tool lifecycle archive
-- 승인된 실행의 `.q/plan-execution.json` atomic checkpoint
+- 승인된 실행의 `.q/sessions/<uuid>/plan-execution.json` atomic checkpoint
 - 시작 시 중단 실행 감지와 Resume / Inspect / Discard recovery UI
 - target, Coder pending/running, Planner review, completed 단계별 재시작 복구
 - Coder running에서 끊겼을 때 기존 부작용을 먼저 검사하는 새 recovery attempt

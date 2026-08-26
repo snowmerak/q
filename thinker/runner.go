@@ -59,14 +59,25 @@ type Runner struct {
 
 // Serial executes Thinker jobs one at a time so proposition order and
 // idempotency slots remain stable even while the main chat continues.
-type Serial struct{ mu sync.Mutex }
+type Serial struct {
+	once sync.Once
+	gate chan struct{}
+}
 
 func (s *Serial) Run(ctx context.Context, runner Runner, job Job) (Result, error) {
 	if s == nil {
 		return runner.Run(ctx, job)
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.once.Do(func() {
+		s.gate = make(chan struct{}, 1)
+		s.gate <- struct{}{}
+	})
+	select {
+	case <-ctx.Done():
+		return Result{}, ctx.Err()
+	case <-s.gate:
+	}
+	defer func() { s.gate <- struct{}{} }()
 	return runner.Run(ctx, job)
 }
 

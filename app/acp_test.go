@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -20,6 +21,7 @@ import (
 	"github.com/snowmerak/q/config"
 	"github.com/snowmerak/q/mcpconfig"
 	"github.com/snowmerak/q/subagent"
+	qtools "github.com/snowmerak/q/tools"
 	"github.com/snowmerak/q/workspace"
 )
 
@@ -31,6 +33,28 @@ type fakeACPConnection struct {
 	elicitationAction   string
 	elicitationErr      error
 	elicitationContents []map[string]any
+}
+
+type fakeACPExternalTools struct {
+	fakeAgentTools
+	configured   []mcpconfig.Config
+	cancelFirst  context.CancelFunc
+	blockCall    int
+	blockEntered chan struct{}
+	blockRelease chan struct{}
+}
+
+func (f *fakeACPExternalTools) ConfigureExternal(_ context.Context, _ string, value mcpconfig.Config) []qtools.ExternalStatus {
+	f.configured = append(f.configured, cloneMCPConfig(value))
+	call := len(f.configured)
+	if call == 1 && f.cancelFirst != nil {
+		f.cancelFirst()
+	}
+	if call == f.blockCall {
+		close(f.blockEntered)
+		<-f.blockRelease
+	}
+	return nil
 }
 
 type blockingACPClient struct {
@@ -119,7 +143,18 @@ func testACPAgent(t *testing.T, configuredClient chatClient, tools agentToolRunt
 	connection := &fakeACPConnection{}
 	agent := newACPAgent(&state, root, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	agent.setConnection(connection)
+	t.Cleanup(func() {
+		_ = agent.shutdown()
+	})
 	return agent, workspaceStore, connection
+}
+
+func activeACPWorkspaceStore(t *testing.T, agent *acpAgent) workspace.Store {
+	t.Helper()
+	if agent == nil || agent.state == nil || agent.state.workspaceStore == nil || agent.state.workspaceStore.SessionID == "" {
+		t.Fatal("ACP agent has no active session store")
+	}
+	return *agent.state.workspaceStore
 }
 
 func openTestACPSession(t *testing.T, agent *acpAgent, root string) acp.SessionId {
@@ -134,7 +169,7 @@ func openTestACPSession(t *testing.T, agent *acpAgent, root string) acp.SessionI
 	return response.SessionId
 }
 
-func TestACPAgentKeepsOneSessionPerWorkspace(t *testing.T) {
+func TestACPAgentKeepsOneActiveSessionPerProcess(t *testing.T) {
 	agent, workspaceStore, _ := testACPAgent(t, &fakeClient{}, &fakeAgentTools{})
 	initialized, err := agent.Initialize(t.Context(), acp.InitializeRequest{})
 	if err != nil {
@@ -164,8 +199,47 @@ func TestACPAgentKeepsOneSessionPerWorkspace(t *testing.T) {
 		t.Fatal(err)
 	}
 	reopened := openTestACPSession(t, agent, workspaceStore.Root)
-	if reopened != sessionID {
-		t.Fatalf("reopened session ID = %q, want %q", reopened, sessionID)
+	if reopened == sessionID {
+		t.Fatalf("new session reused closed session ID %q", sessionID)
+	}
+	listed, err := agent.ListSessions(t.Context(), acp.ListSessionsRequest{Cwd: &workspaceStore.Root})
+	if err != nil {
+		t.Fatal(err)
+	}
+	listedIDs := make([]acp.SessionId, 0, len(listed.Sessions))
+	for _, session := range listed.Sessions {
+		listedIDs = append(listedIDs, session.SessionId)
+	}
+	if len(listedIDs) != 2 || !slices.Contains(listedIDs, sessionID) || !slices.Contains(listedIDs, reopened) {
+		t.Fatalf("listed session IDs = %#v", listedIDs)
+	}
+	if _, err := agent.UnstableDeleteSession(t.Context(), acp.UnstableDeleteSessionRequest{SessionId: sessionID}); err != nil {
+		t.Fatal(err)
+	}
+	listed, err = agent.ListSessions(t.Context(), acp.ListSessionsRequest{})
+	if err != nil || len(listed.Sessions) != 1 || listed.Sessions[0].SessionId != reopened {
+		t.Fatalf("sessions after deleting inactive session = %#v, %v", listed.Sessions, err)
+	}
+}
+
+func TestACPAgentRejectsNewLifecycleWorkAfterShutdown(t *testing.T) {
+	agent, workspaceStore, _ := testACPAgent(t, &fakeClient{}, &fakeAgentTools{})
+	sessionID := openTestACPSession(t, agent, workspaceStore.Root)
+	if err := agent.shutdown(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := agent.NewSession(t.Context(), acp.NewSessionRequest{Cwd: workspaceStore.Root}); err == nil {
+		t.Fatal("session/new succeeded after shutdown")
+	}
+	if _, err := agent.ResumeSession(t.Context(), acp.ResumeSessionRequest{
+		SessionId: sessionID, Cwd: workspaceStore.Root,
+	}); err == nil {
+		t.Fatal("session/resume succeeded after shutdown")
+	}
+	if _, err := agent.Prompt(t.Context(), acp.PromptRequest{
+		SessionId: sessionID, Prompt: []acp.ContentBlock{acp.TextBlock("late")},
+	}); err == nil {
+		t.Fatal("session/prompt succeeded after shutdown")
 	}
 }
 
@@ -178,6 +252,13 @@ func TestACPAgentLoadsAndResumesTheWorkspaceSession(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := agent.CloseSession(t.Context(), acp.CloseSessionRequest{SessionId: sessionID}); err != nil {
+		t.Fatal(err)
+	}
+	if agent.state.memory != nil || agent.state.learning != nil || len(agent.state.messages) != 0 ||
+		agent.state.activeTask != nil || agent.state.workspaceStore == nil || agent.state.workspaceStore.SessionID != "" {
+		t.Fatalf("closed ACP session retained in-memory state: %#v", agent.state.workspaceStore)
+	}
 
 	restartedState := newModel(t.Context(), config.Store{Dir: t.TempDir()}, nil)
 	restartedState.workspaceStore = &workspaceStore
@@ -188,8 +269,8 @@ func TestACPAgentLoadsAndResumesTheWorkspaceSession(t *testing.T) {
 	restartedConnection := &fakeACPConnection{}
 	restarted := newACPAgent(&restartedState, workspaceStore.Root, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	restarted.setConnection(restartedConnection)
-	if restarted.sessionID != sessionID {
-		t.Fatalf("restarted session ID = %q, want %q", restarted.sessionID, sessionID)
+	if restarted.sessionID != "" {
+		t.Fatalf("restarted agent selected a session before load: %q", restarted.sessionID)
 	}
 	if _, err := restarted.LoadSession(t.Context(), acp.LoadSessionRequest{
 		SessionId:  sessionID,
@@ -225,6 +306,9 @@ func TestACPAgentLoadsAndResumesTheWorkspaceSession(t *testing.T) {
 	if updatesAfterResume := len(restartedConnection.snapshot()); updatesAfterResume != updatesBeforeResume {
 		t.Fatalf("resume replayed history: updates before=%d after=%d", updatesBeforeResume, updatesAfterResume)
 	}
+	if _, err := restarted.CloseSession(t.Context(), acp.CloseSessionRequest{SessionId: sessionID}); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestACPAgentPromptStreamsAndPersistsWorkspaceSession(t *testing.T) {
@@ -256,7 +340,7 @@ func TestACPAgentPromptStreamsAndPersistsWorkspaceSession(t *testing.T) {
 		t.Fatalf("streamed response = %q", streamed)
 	}
 
-	saved, err := workspaceStore.Load()
+	saved, err := activeACPWorkspaceStore(t, agent).Load()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -601,7 +685,7 @@ func TestACPAgentRunsApprovedPlanThroughElicitation(t *testing.T) {
 	if len(statuses) != 2 || statuses[0] != acp.PlanEntryStatusInProgress || statuses[1] != acp.PlanEntryStatusCompleted {
 		t.Fatalf("plan statuses = %#v", statuses)
 	}
-	saved, err := workspaceStore.Load()
+	saved, err := activeACPWorkspaceStore(t, agent).Load()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -699,8 +783,8 @@ func TestACPAgentExplainsPlanElicitationRequirement(t *testing.T) {
 	if !strings.Contains(output, "form elicitation") {
 		t.Fatalf("unsupported client output = %q", output)
 	}
-	if _, err := workspaceStore.Load(); !errors.Is(err, workspace.ErrNotFound) {
-		t.Fatalf("unsupported plan created a session transcript: %v", err)
+	if saved, err := activeACPWorkspaceStore(t, agent).Load(); err != nil || len(saved.Transcript) != 0 {
+		t.Fatalf("unsupported plan changed the empty session: saved=%#v err=%v", saved, err)
 	}
 }
 
@@ -724,8 +808,8 @@ func TestACPAgentClearKeepsSessionAndDropsConversationProjection(t *testing.T) {
 	if agent.sessionID != sessionID || agent.state.runID != runID || !agent.sessionOpen {
 		t.Fatalf("clear changed active session: id=%q run=%q open=%v", agent.sessionID, agent.state.runID, agent.sessionOpen)
 	}
-	if _, err := workspaceStore.Load(); !errors.Is(err, workspace.ErrNotFound) {
-		t.Fatalf("workspace projection after clear: %v", err)
+	if cleared, err := activeACPWorkspaceStore(t, agent).Load(); err != nil || len(cleared.Transcript) != 0 {
+		t.Fatalf("workspace projection after clear: saved=%#v err=%v", cleared, err)
 	}
 	if _, err := agent.Prompt(t.Context(), acp.PromptRequest{
 		SessionId: sessionID,
@@ -733,7 +817,7 @@ func TestACPAgentClearKeepsSessionAndDropsConversationProjection(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	saved, err := workspaceStore.Load()
+	saved, err := activeACPWorkspaceStore(t, agent).Load()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -748,6 +832,126 @@ func TestACPAgentClearKeepsSessionAndDropsConversationProjection(t *testing.T) {
 	}
 	if !strings.Contains(output, "Conversation cleared for this workspace.") {
 		t.Fatalf("clear output = %q", output)
+	}
+}
+
+func TestACPAgentClearReportsPlanCheckpointRemovalFailure(t *testing.T) {
+	agent, workspaceStore, connection := testACPAgent(t, &fakeClient{}, &fakeAgentTools{})
+	sessionID := openTestACPSession(t, agent, workspaceStore.Root)
+	activeStore := activeACPWorkspaceStore(t, agent)
+	if err := os.MkdirAll(activeStore.ExecutionPath(), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(activeStore.ExecutionPath(), "blocked"), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	updatesBefore := len(connection.snapshot())
+	if _, err := agent.Prompt(t.Context(), acp.PromptRequest{
+		SessionId: sessionID,
+		Prompt:    []acp.ContentBlock{acp.TextBlock("/clear")},
+	}); err == nil {
+		t.Fatal("/clear hid the plan checkpoint removal failure")
+	}
+	for _, notification := range connection.snapshot()[updatesBefore:] {
+		if update := notification.Update.AgentMessageChunk; update != nil && update.Content.Text != nil &&
+			strings.Contains(update.Content.Text.Text, "Conversation cleared") {
+			t.Fatalf("/clear emitted a success message after failure: %#v", notification)
+		}
+	}
+}
+
+func TestACPAgentRestoresCapturedWorkspaceMCPOnClose(t *testing.T) {
+	tools := &fakeACPExternalTools{}
+	agent, workspaceStore, _ := testACPAgent(t, &fakeClient{}, tools)
+	base := mcpconfig.Default()
+	base.Servers["workspace"] = mcpconfig.ServerConfig{
+		Transport: mcpconfig.TransportStdio, Command: "workspace-mcp",
+	}
+	base.Roles[mcpconfig.RoleDefault] = []string{"workspace"}
+	if err := agent.state.mcpSettingsStore.Save(base); err != nil {
+		t.Fatal(err)
+	}
+	created, err := agent.NewSession(t.Context(), acp.NewSessionRequest{
+		Cwd: workspaceStore.Root,
+		McpServers: []acp.McpServer{{Stdio: &acp.McpServerStdio{
+			Name: "client", Command: "client-mcp",
+		}}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tools.configured) != 1 || len(tools.configured[0].Servers) != 2 {
+		t.Fatalf("session MCP config = %#v", tools.configured)
+	}
+	if err := os.WriteFile(agent.state.mcpSettingsStore.Path(), []byte("{"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := agent.CloseSession(cancelled, acp.CloseSessionRequest{SessionId: created.SessionId}); err != nil {
+		t.Fatal(err)
+	}
+	if len(tools.configured) != 2 {
+		t.Fatalf("MCP configure calls = %d", len(tools.configured))
+	}
+	restored := tools.configured[1]
+	if len(restored.Servers) != 1 || restored.Servers["workspace"].Command != "workspace-mcp" {
+		t.Fatalf("restored MCP config = %#v", restored)
+	}
+}
+
+func TestACPAgentRestoresWorkspaceMCPWhenActivationContextIsCancelled(t *testing.T) {
+	requestContext, cancel := context.WithCancel(context.Background())
+	tools := &fakeACPExternalTools{cancelFirst: cancel}
+	agent, workspaceStore, _ := testACPAgent(t, &fakeClient{}, tools)
+	base := mcpconfig.Default()
+	base.Servers["workspace"] = mcpconfig.ServerConfig{
+		Transport: mcpconfig.TransportStdio, Command: "workspace-mcp",
+	}
+	if err := agent.state.mcpSettingsStore.Save(base); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := agent.NewSession(requestContext, acp.NewSessionRequest{
+		Cwd: workspaceStore.Root,
+		McpServers: []acp.McpServer{{Stdio: &acp.McpServerStdio{
+			Name: "client", Command: "client-mcp",
+		}}},
+	}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("session/new error = %v, want context cancellation", err)
+	}
+	if len(tools.configured) != 2 || len(tools.configured[0].Servers) != 2 || len(tools.configured[1].Servers) != 1 {
+		t.Fatalf("MCP configs after cancelled activation = %#v", tools.configured)
+	}
+	if _, exists := tools.configured[1].Servers["workspace"]; !exists {
+		t.Fatalf("baseline MCP was not restored: %#v", tools.configured[1])
+	}
+}
+
+func TestACPAgentCancelsLearningBeforeSlowMCPCleanup(t *testing.T) {
+	tools := &fakeACPExternalTools{
+		blockCall: 2, blockEntered: make(chan struct{}), blockRelease: make(chan struct{}),
+	}
+	agent, workspaceStore, _ := testACPAgent(t, &fakeClient{}, tools)
+	sessionID := openTestACPSession(t, agent, workspaceStore.Root)
+	learningContext := agent.state.learningCtx
+	closed := make(chan error, 1)
+	go func() {
+		_, err := agent.CloseSession(context.Background(), acp.CloseSessionRequest{SessionId: sessionID})
+		closed <- err
+	}()
+	select {
+	case <-tools.blockEntered:
+	case <-time.After(time.Second):
+		t.Fatal("MCP cleanup did not start")
+	}
+	select {
+	case <-learningContext.Done():
+	default:
+		t.Fatal("session learning was still running when MCP cleanup began")
+	}
+	close(tools.blockRelease)
+	if err := <-closed; err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -861,7 +1065,7 @@ func TestACPAgentCancelsActivePrompt(t *testing.T) {
 		t.Fatalf("stop reason = %q", response.StopReason)
 	}
 
-	saved, err := workspaceStore.Load()
+	saved, err := activeACPWorkspaceStore(t, agent).Load()
 	if err != nil {
 		t.Fatal(err)
 	}

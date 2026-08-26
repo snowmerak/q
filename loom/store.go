@@ -90,11 +90,13 @@ type StoreOptions struct {
 }
 
 type Store struct {
-	root      string
-	artifacts string
-	blobs     string
-	options   StoreOptions
-	mu        sync.Mutex
+	root          string
+	artifacts     string
+	blobs         string
+	leases        string
+	options       StoreOptions
+	mu            sync.Mutex
+	operationGate chan struct{}
 }
 
 func Open(workspaceRoot string) (*Store, error) {
@@ -108,12 +110,15 @@ func OpenWithOptions(workspaceRoot string, options StoreOptions) (*Store, error)
 	}
 	root := filepath.Join(workspaceRoot, ".q", DirectoryName)
 	store := &Store{
-		root:      root,
-		artifacts: filepath.Join(root, "artifacts"),
-		blobs:     filepath.Join(root, "blobs"),
-		options:   options,
+		root:          root,
+		artifacts:     filepath.Join(root, "artifacts"),
+		blobs:         filepath.Join(root, "blobs"),
+		leases:        filepath.Join(root, "leases"),
+		options:       options,
+		operationGate: make(chan struct{}, 1),
 	}
-	for _, directory := range []string{root, store.artifacts, store.blobs} {
+	store.operationGate <- struct{}{}
+	for _, directory := range []string{root, store.artifacts, store.blobs, store.leases} {
 		if err := os.MkdirAll(directory, 0o700); err != nil {
 			return nil, fmt.Errorf("loom: create %s: %w", directory, err)
 		}
@@ -160,10 +165,13 @@ func (s *Store) Configure(options StoreOptions) error {
 	if err != nil {
 		return err
 	}
-	s.mu.Lock()
-	s.options = options
-	s.mu.Unlock()
-	return nil
+	_, err = withStoreOperation(context.Background(), s, func(context.Context) (struct{}, error) {
+		s.mu.Lock()
+		s.options = options
+		s.mu.Unlock()
+		return struct{}{}, nil
+	})
+	return err
 }
 
 func (s *Store) Options() StoreOptions {
@@ -177,12 +185,13 @@ func (s *Store) WorkspaceRoot() string {
 }
 
 func (s *Store) Put(ctx context.Context, content []byte, options PutOptions) (Artifact, error) {
+	if ctx == nil {
+		return Artifact{}, errors.New("loom: put context is nil")
+	}
 	if err := ctx.Err(); err != nil {
 		return Artifact{}, err
 	}
-	s.mu.Lock()
-	maximumArtifactBytes := s.options.MaximumArtifactBytes
-	s.mu.Unlock()
+	maximumArtifactBytes := s.Options().MaximumArtifactBytes
 	if int64(len(content)) > maximumArtifactBytes {
 		return Artifact{}, fmt.Errorf("loom: artifact exceeds %d bytes", maximumArtifactBytes)
 	}
@@ -200,35 +209,55 @@ func (s *Store) Put(ctx context.Context, content []byte, options PutOptions) (Ar
 
 	digestBytes := sha256.Sum256(content)
 	digest := hex.EncodeToString(digestBytes[:])
-	if err := s.maybeAutoCollect(ctx, digest, int64(len(content))); err != nil {
-		return Artifact{}, err
-	}
-	id, err := randomID()
-	if err != nil {
-		return Artifact{}, err
-	}
-	artifact := Artifact{
-		Ref: Ref("loom://" + id), Kind: options.Kind, MediaType: options.MediaType,
-		Bytes: int64(len(content)), Digest: digest, CreatedAt: time.Now().UTC(),
-		Parents: append([]Ref(nil), options.Parents...), Source: cloneSource(options.Source),
-	}
-	metadata, err := json.MarshalIndent(artifact, "", "  ")
-	if err != nil {
-		return Artifact{}, fmt.Errorf("loom: encode artifact metadata: %w", err)
-	}
-	metadata = append(metadata, '\n')
+	return withStoreOperation(ctx, s, func(operationCtx context.Context) (Artifact, error) {
+		storeOptions := s.Options()
+		if int64(len(content)) > storeOptions.MaximumArtifactBytes {
+			return Artifact{}, fmt.Errorf("loom: artifact exceeds %d bytes", storeOptions.MaximumArtifactBytes)
+		}
+		needsGC, err := s.needsAutoCollectLocked(storeOptions, digest, int64(len(content)))
+		if err != nil {
+			return Artifact{}, err
+		}
+		if needsGC {
+			roots, err := storeOptions.Roots(operationCtx)
+			if err != nil {
+				return Artifact{}, fmt.Errorf("loom: collect GC roots: %w", err)
+			}
+			if _, err := s.collectLocked(operationCtx, GCOptions{
+				Roots: roots, ProtectNewerThan: time.Now().UTC().Add(-storeOptions.GCGracePeriod),
+				TargetBytes: int64(float64(storeOptions.MaximumStoreBytes) * storeOptions.GCTargetRatio),
+			}); err != nil {
+				return Artifact{}, err
+			}
+		}
+		id, err := randomID()
+		if err != nil {
+			return Artifact{}, err
+		}
+		artifact := Artifact{
+			Ref: Ref("loom://" + id), Kind: options.Kind, MediaType: options.MediaType,
+			Bytes: int64(len(content)), Digest: digest, CreatedAt: time.Now().UTC(),
+			Parents: append([]Ref(nil), options.Parents...), Source: cloneSource(options.Source),
+		}
+		metadata, err := json.MarshalIndent(artifact, "", "  ")
+		if err != nil {
+			return Artifact{}, fmt.Errorf("loom: encode artifact metadata: %w", err)
+		}
+		metadata = append(metadata, '\n')
+		return s.putLocked(content, artifact, metadata, storeOptions.MaximumStoreBytes)
+	})
+}
 
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	blobPath := filepath.Join(s.blobs, digest)
+func (s *Store) putLocked(content []byte, artifact Artifact, metadata []byte, maximumStoreBytes int64) (Artifact, error) {
+	blobPath := filepath.Join(s.blobs, artifact.Digest)
 	blobCreated := false
 	if _, err := os.Lstat(blobPath); errors.Is(err, os.ErrNotExist) {
 		size, sizeErr := s.storeSizeLocked()
 		if sizeErr != nil {
 			return Artifact{}, sizeErr
 		}
-		if size+int64(len(content)) > s.options.MaximumStoreBytes {
-			return Artifact{}, fmt.Errorf("loom: workspace store would exceed %d bytes", s.options.MaximumStoreBytes)
+		if size+int64(len(content)) > maximumStoreBytes {
+			return Artifact{}, fmt.Errorf("loom: workspace store would exceed %d bytes", maximumStoreBytes)
 		}
 		if err := writeNewFile(blobPath, content); err != nil {
 			return Artifact{}, err
@@ -236,10 +265,10 @@ func (s *Store) Put(ctx context.Context, content []byte, options PutOptions) (Ar
 		blobCreated = true
 	} else if err != nil {
 		return Artifact{}, fmt.Errorf("loom: inspect existing blob: %w", err)
-	} else if err := validateBlob(blobPath, digest, int64(len(content))); err != nil {
+	} else if err := validateBlob(blobPath, artifact.Digest, int64(len(content))); err != nil {
 		return Artifact{}, err
 	}
-	if err := writeNewFile(filepath.Join(s.artifacts, id+".json"), metadata); err != nil {
+	if err := writeNewFile(filepath.Join(s.artifacts, artifact.Ref.ID()+".json"), metadata); err != nil {
 		if blobCreated {
 			_ = os.Remove(blobPath)
 		}
@@ -249,9 +278,9 @@ func (s *Store) Put(ctx context.Context, content []byte, options PutOptions) (Ar
 }
 
 func (s *Store) Inspect(ctx context.Context, ref Ref) (Artifact, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.inspectLocked(ctx, ref)
+	return withStoreOperation(ctx, s, func(operationCtx context.Context) (Artifact, error) {
+		return s.inspectLocked(operationCtx, ref)
+	})
 }
 
 func (s *Store) inspectLocked(ctx context.Context, ref Ref) (Artifact, error) {
@@ -292,8 +321,12 @@ func (s *Store) inspectLocked(ctx context.Context, ref Ref) (Artifact, error) {
 }
 
 func (s *Store) Read(ctx context.Context, ref Ref, offset, limit int64) (ReadResult, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	return withStoreOperation(ctx, s, func(operationCtx context.Context) (ReadResult, error) {
+		return s.readLocked(operationCtx, ref, offset, limit)
+	})
+}
+
+func (s *Store) readLocked(ctx context.Context, ref Ref, offset, limit int64) (ReadResult, error) {
 	artifact, err := s.inspectLocked(ctx, ref)
 	if err != nil {
 		return ReadResult{}, err
@@ -328,8 +361,12 @@ func (s *Store) Read(ctx context.Context, ref Ref, offset, limit int64) (ReadRes
 }
 
 func (s *Store) ReadAll(ctx context.Context, ref Ref, maximum int64) ([]byte, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	return withStoreOperation(ctx, s, func(operationCtx context.Context) ([]byte, error) {
+		return s.readAllLocked(operationCtx, ref, maximum)
+	})
+}
+
+func (s *Store) readAllLocked(ctx context.Context, ref Ref, maximum int64) ([]byte, error) {
 	artifact, err := s.inspectLocked(ctx, ref)
 	if err != nil {
 		return nil, err

@@ -9,7 +9,6 @@ import (
 	"io"
 	"os"
 	"os/exec"
-	"sort"
 	"time"
 )
 
@@ -48,6 +47,18 @@ func NewProcessEvaluator() ProcessEvaluator {
 }
 
 func (e ProcessEvaluator) Evaluate(ctx context.Context, store *Store, request EvalRequest) (EvalResult, error) {
+	if store == nil {
+		return EvalResult{}, errors.New("loom: script store is required")
+	}
+	inputRoots := make([]Ref, 0, len(request.Inputs))
+	for _, ref := range request.Inputs {
+		inputRoots = append(inputRoots, ref)
+	}
+	lease, err := store.acquireTransientRoots(ctx, inputRoots)
+	if err != nil {
+		return EvalResult{}, err
+	}
+	defer lease.Close()
 	executable := e.Executable
 	if executable == "" {
 		var err error
@@ -98,6 +109,14 @@ func (e ProcessEvaluator) Evaluate(ctx context.Context, store *Store, request Ev
 	if response.Error != "" {
 		return EvalResult{}, errors.New(response.Error)
 	}
+	artifact, err := store.Put(workerCtx, response.Result.Value, PutOptions{
+		Kind: response.Result.Artifact.Kind, MediaType: response.Result.Artifact.MediaType,
+		Parents: response.Result.Artifact.Parents, Source: response.Result.Artifact.Source,
+	})
+	if err != nil {
+		return EvalResult{}, err
+	}
+	response.Result.Artifact = artifact
 	return response.Result, nil
 }
 
@@ -112,7 +131,7 @@ func RunChild(ctx context.Context, input io.Reader, output io.Writer) error {
 	if err != nil {
 		return writeWorkerResponse(output, workerResponse{Error: err.Error()})
 	}
-	result, evalErr := (InProcessEvaluator{}).Evaluate(ctx, store, request.Eval)
+	result, evalErr := (InProcessEvaluator{deferStore: true}).Evaluate(ctx, store, request.Eval)
 	response := workerResponse{Result: result}
 	if evalErr != nil {
 		response.Error = evalErr.Error()
@@ -120,42 +139,20 @@ func RunChild(ctx context.Context, input io.Reader, output io.Writer) error {
 	return writeWorkerResponse(output, response)
 }
 
-func prepareWorkerRequest(ctx context.Context, store *Store, eval EvalRequest) (workerRequest, error) {
+func prepareWorkerRequest(_ context.Context, store *Store, eval EvalRequest) (workerRequest, error) {
 	options := store.Options()
 	request := workerRequest{
 		WorkspaceRoot: store.WorkspaceRoot(), Eval: eval,
 		Store: workerStoreOptions{
 			MaximumArtifactBytes: options.MaximumArtifactBytes,
 			MaximumStoreBytes:    options.MaximumStoreBytes,
-			AutoGC:               options.AutoGC, GCTriggerRatio: options.GCTriggerRatio,
+			// The parent owns transient input leases, but it cannot transfer its
+			// root-provider snapshot atomically with the child's file lock. Disable
+			// child auto-GC; normal parent operations will collect safely later.
+			AutoGC: false, GCTriggerRatio: options.GCTriggerRatio,
 			GCTargetRatio: options.GCTargetRatio, GCGracePeriod: options.GCGracePeriod,
 		},
 	}
-	if !options.AutoGC {
-		return request, nil
-	}
-	seen := make(map[Ref]struct{})
-	for _, ref := range eval.Inputs {
-		if parsed, err := ParseRef(ref.String()); err == nil {
-			seen[parsed] = struct{}{}
-		}
-	}
-	if options.Roots != nil {
-		roots, err := options.Roots(ctx)
-		if err != nil {
-			return workerRequest{}, fmt.Errorf("loom: collect worker GC roots: %w", err)
-		}
-		for _, ref := range roots {
-			if parsed, err := ParseRef(ref.String()); err == nil {
-				seen[parsed] = struct{}{}
-			}
-		}
-	}
-	request.Roots = make([]Ref, 0, len(seen))
-	for ref := range seen {
-		request.Roots = append(request.Roots, ref)
-	}
-	sort.Slice(request.Roots, func(i, j int) bool { return request.Roots[i] < request.Roots[j] })
 	return request, nil
 }
 

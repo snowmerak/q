@@ -118,13 +118,15 @@ provider connection.
 
 ## What remains process-local
 
-This first integration intentionally moves only records and their derived
-indexes. The following remain owned by the TUI, ACP, or `q-mcp` process:
+Workspace Memory intentionally owns only records and their derived indexes.
+The following remain outside the service:
 
-- `.q/session.json`, including the current transcript projection, run identity,
-  task lifecycle, and Thinker queue;
-- `.q/plan-execution.json`, the approved execution checkpoint;
-- `.q/loom/` and its garbage collection;
+- `.q/sessions/<uuid>/session.json`, including one session's transcript
+  projection, run identity, task lifecycle, and Thinker queue;
+- `.q/sessions/<uuid>/plan-execution.json`, that session's approved execution
+  checkpoint;
+- `.q/loom/` and its garbage collection, shared through a short-lived
+  cross-process operation lock also used by session root mutations;
 - LSP managers and `.q/lsp.json`;
 - workspace file tools and all project-file mutations.
 
@@ -132,20 +134,24 @@ Workspace Memory does not add write leases or path-level conflict detection for
 project files. If two sessions edit overlapping files, coordination is a user
 and workflow concern rather than a memory-service responsibility.
 
-## Transitional workspace lock
+## Session and operation locks
 
-The existing `.q/workspace.lock` remains separate from
-`.q/workspace-memory.lock`. TUI, ACP, and `q-mcp` startup still hold the former
-for the lifetime of their local workspace runtime. This preserves the current
-single-projection assumptions around `.q/session.json`,
-`.q/plan-execution.json`, Loom, and related workflow state until those files are
-split under session UUIDs. `q commit` and standalone settings commands that own
-workspace state also retain their existing lock behavior.
+`.q/workspace-memory.lock` still belongs exclusively to the service leader. TUI
+and ACP processes instead hold `.q/session-locks/<uuid>.lock` for their selected
+session. The same UUID cannot be opened twice, but different sessions in the
+same workspace can run concurrently. Each Loom filesystem operation takes
+`.q/loom/operation.lock`. Session and plan projection writes use the same lease,
+so a live root cannot appear or disappear between GC's root scan and sweep.
+Declared `loom_eval` inputs also receive an expiring transient root lease while
+the worker is running.
 
-Consequently, Workspace Memory's lease model is ready to share one archive
-owner across clients, but it does not yet by itself enable two full TUI/ACP
-runtimes to use the same workspace concurrently. Removing that remaining
-restriction belongs to the later session-UUID migration.
+The first launch after upgrading migrates legacy `.q/session.json` and
+`.q/plan-execution.json` files under `.q/sessions/`. Migration briefly acquires
+the legacy `.q/workspace.lock` so a running older q binary cannot recreate or
+overwrite the old projection during the handoff, including before that older
+process has written its first projection. This layout migration is one-way for
+older binaries. `q-mcp` performs the migration before startup but does not keep
+the legacy workspace lock; it does not own a chat session.
 
 ## Separation from the Global Library
 

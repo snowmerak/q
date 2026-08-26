@@ -153,21 +153,24 @@ var providerTypeOptions = []providerTypeOption{
 }
 
 type model struct {
-	ctx           context.Context
-	store         config.Store
-	factory       clientFactory
-	screen        screen
-	width         int
-	height        int
-	dark          bool
-	status        string
-	runtime       providerRuntime
-	toolRuntime   agentToolRuntime
-	libraryClient *qlibrary.Client
-	thinkerSerial *thinker.Serial
-	learning      *thinker.Machine
-	thinkerBusy   bool
-	thinkerJobID  string
+	ctx               context.Context
+	store             config.Store
+	factory           clientFactory
+	screen            screen
+	width             int
+	height            int
+	dark              bool
+	status            string
+	runtime           providerRuntime
+	toolRuntime       agentToolRuntime
+	libraryClient     *qlibrary.Client
+	thinkerSerial     *thinker.Serial
+	learning          *thinker.Machine
+	learningCtx       context.Context
+	learningCancel    context.CancelFunc
+	thinkerBusy       bool
+	thinkerJobID      string
+	sessionGeneration uint64
 
 	workspaceStore            *workspace.Store
 	workspaceLock             *workspace.Lock
@@ -443,9 +446,10 @@ type loomStatsMsg struct {
 }
 
 type thinkerResultMsg struct {
-	jobID  string
-	result thinker.Result
-	err    error
+	jobID             string
+	sessionGeneration uint64
+	result            thinker.Result
+	err               error
 }
 
 type loomActionMsg struct {
@@ -497,6 +501,7 @@ func newManagedModel(ctx context.Context, store config.Store, factory clientFact
 		spinner:            spinner.New(spinner.WithSpinner(spinner.Dot)),
 		thinkerSerial:      &thinker.Serial{},
 	}
+	m.resetSessionLearning()
 	if runtime != nil {
 		m.gatewayConfig = runtime.Config()
 	}
@@ -783,7 +788,7 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, m.setup[m.setupFocus].Focus()
 	case thinkerResultMsg:
-		if message.jobID == "" || message.jobID != m.thinkerJobID {
+		if message.jobID == "" || message.jobID != m.thinkerJobID || message.sessionGeneration != m.sessionGeneration {
 			return m, nil
 		}
 		m.thinkerBusy = false
@@ -3004,7 +3009,7 @@ func (m model) submitChat() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	_, remoteChat := m.client.(*acpRemoteClient)
-	if remoteChat && (content == "/clear" || content == "/new") {
+	if remoteChat && content == "/new" {
 		m.input.Reset()
 		m.status = "Starting new ACP session…"
 		return m, m.client.(*acpRemoteClient).resetSessionCommand(m.ctx)
@@ -3029,6 +3034,12 @@ func (m model) submitChat() (tea.Model, tea.Cmd) {
 		case "/clear":
 			m.input.Reset()
 			m.resetConversation()
+			return m, m.input.Focus()
+		case "/new":
+			m.input.Reset()
+			if err := m.startNewWorkspaceSession(); err != nil {
+				m.status = err.Error()
+			}
 			return m, m.input.Focus()
 		case "/learn":
 			m.input.Reset()
@@ -3709,6 +3720,7 @@ func (m *model) enterChat(value config.Config, configuredClient chatClient) {
 	m.runID = ""
 	m.sessionTitle = ""
 	m.sessionUpdatedAt = time.Time{}
+	m.resetSessionLearning()
 	m.waiting = false
 	m.compacting = false
 	m.asking = false
@@ -4167,7 +4179,17 @@ func modelGroupChoice(value config.Config, choice string) (string, bool) {
 	return name, found
 }
 
-func (m *model) resetConversation() {
+func (m *model) resetConversation(runIDs ...string) {
+	m.resetConversationState(runIDs...)
+	if m.workspaceStore != nil {
+		if err := errors.Join(m.workspaceStore.ClearExecution(), m.saveWorkspaceSession()); err != nil {
+			m.status = err.Error()
+		}
+	}
+	m.refreshTranscript()
+}
+
+func (m *model) resetConversationState(runIDs ...string) {
 	m.messages = nil
 	m.transcriptThoughts = nil
 	m.streamResponse = ""
@@ -4184,11 +4206,13 @@ func (m *model) resetConversation() {
 	m.conversationID = ""
 	m.activeTask = nil
 	m.runID = ""
+	if len(runIDs) > 0 {
+		m.runID = strings.TrimSpace(runIDs[0])
+	}
 	m.sessionTitle = ""
-	m.sessionUpdatedAt = time.Time{}
+	m.sessionUpdatedAt = time.Now().UTC()
 	m.ensureRunID()
-	m.thinkerBusy = false
-	m.thinkerJobID = ""
+	m.resetSessionLearning()
 	if err := m.ensureLearningMachine(thinker.LearningState{}, nil); err != nil {
 		m.status = err.Error()
 	}
@@ -4205,12 +4229,87 @@ func (m *model) resetConversation() {
 	m.status = "Conversation cleared"
 	m.clearAgentActivities()
 	m.resize(m.width, m.height)
-	if m.workspaceStore != nil {
-		if err := m.workspaceStore.Clear(); err != nil {
-			m.status = err.Error()
+}
+
+// releaseConversationState drops the in-memory projection owned by a closed
+// ACP session without changing its durable files or workspace-wide settings.
+func (m *model) releaseConversationState(root string) {
+	m.stopSessionLearning()
+	if m.turnCancel != nil {
+		m.turnCancel()
+	}
+	m.messages = nil
+	m.memory = nil
+	m.learning = nil
+	m.conversationID = ""
+	m.activeTask = nil
+	m.pendingMessage = client.Message{}
+	m.requestEstimate = 0
+	m.compactionTarget = 0
+	m.waiting = false
+	m.compacting = false
+	m.submitPending = false
+	m.asking = false
+	m.pendingQuestion = askToUserInput{}
+	m.questionAnswer = nil
+	m.questionEvents = nil
+	m.questionTurnID = 0
+	m.planArmed = false
+	m.planResumePending = false
+	m.planCheckpoint = subagent.ExecutionCheckpoint{}
+	m.transcriptThoughts = nil
+	m.streamResponse = ""
+	m.turnContext = nil
+	m.turnCancel = nil
+	m.turnMessageStart = 0
+	m.runID = ""
+	m.sessionTitle = ""
+	m.sessionUpdatedAt = time.Time{}
+	m.clearAgentActivities()
+	m.workspaceStore = &workspace.Store{Root: root}
+	m.workspaceRestored = true
+}
+
+func (m *model) startNewWorkspaceSession() error {
+	if m.workspaceStore == nil {
+		return errors.New("workspace session storage is unavailable")
+	}
+	store, lock, err := workspace.CreateSession(m.workspaceStore.Root, "q")
+	if err != nil {
+		return err
+	}
+	previousLock := m.workspaceLock
+	m.workspaceStore = &store
+	m.workspaceLock = lock
+	m.workspaceRestored = true
+	m.resetConversation("run-" + store.SessionID)
+	if previousLock != nil {
+		if err := previousLock.Close(); err != nil {
+			return err
 		}
 	}
-	m.refreshTranscript()
+	m.status = "New workspace session · " + store.SessionID
+	return nil
+}
+
+func (m *model) stopSessionLearning() {
+	if m.learningCancel != nil {
+		m.learningCancel()
+	}
+	m.learningCtx = nil
+	m.learningCancel = nil
+	m.sessionGeneration++
+	m.thinkerBusy = false
+	m.thinkerJobID = ""
+}
+
+func (m *model) resetSessionLearning() {
+	m.stopSessionLearning()
+	parent := m.ctx
+	if parent == nil {
+		parent = context.Background()
+	}
+	m.learningCtx, m.learningCancel = context.WithCancel(parent)
 }
 
 func (m *model) restoreWorkspaceSession() {

@@ -43,9 +43,9 @@ func (s *Store) Stats(ctx context.Context) (Stats, error) {
 	if err := ctx.Err(); err != nil {
 		return Stats{}, err
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.statsLocked()
+	return withStoreOperation(ctx, s, func(context.Context) (Stats, error) {
+		return s.statsLocked()
+	})
 }
 
 func (s *Store) Collect(ctx context.Context, options GCOptions) (GCResult, error) {
@@ -58,35 +58,53 @@ func (s *Store) Collect(ctx context.Context, options GCOptions) (GCResult, error
 	if options.TargetBytes < 0 {
 		return GCResult{}, errors.New("loom: GC target bytes must not be negative")
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.collectLocked(ctx, options)
+	return withStoreOperation(ctx, s, func(operationCtx context.Context) (GCResult, error) {
+		return s.collectLocked(operationCtx, options)
+	})
 }
 
-func (s *Store) maybeAutoCollect(ctx context.Context, digest string, incoming int64) error {
-	s.mu.Lock()
-	options := s.options
+// CollectWithRootProvider obtains the live root snapshot and sweeps artifacts
+// under one workspace operation lease. This is the safe form for roots backed
+// by mutable workspace projections.
+func (s *Store) CollectWithRootProvider(
+	ctx context.Context,
+	provider RootProvider,
+	options GCOptions,
+) (GCResult, error) {
+	if ctx == nil {
+		return GCResult{}, errors.New("loom: GC context is nil")
+	}
+	if err := ctx.Err(); err != nil {
+		return GCResult{}, err
+	}
+	if options.TargetBytes < 0 {
+		return GCResult{}, errors.New("loom: GC target bytes must not be negative")
+	}
+	return withStoreOperation(ctx, s, func(operationCtx context.Context) (GCResult, error) {
+		if provider != nil {
+			roots, err := provider(operationCtx)
+			if err != nil {
+				return GCResult{}, fmt.Errorf("loom: collect GC roots: %w", err)
+			}
+			options.Roots = roots
+		}
+		return s.collectLocked(operationCtx, options)
+	})
+}
+
+func (s *Store) needsAutoCollectLocked(options StoreOptions, digest string, incoming int64) (bool, error) {
 	_, blobErr := os.Lstat(filepath.Join(s.blobs, digest))
 	current, sizeErr := s.storeSizeLocked()
-	s.mu.Unlock()
 	if blobErr == nil || !errors.Is(blobErr, os.ErrNotExist) {
-		return nil
+		return false, nil
 	}
 	if sizeErr != nil {
-		return sizeErr
+		return false, sizeErr
 	}
 	if !options.AutoGC || options.Roots == nil || current+incoming <= int64(float64(options.MaximumStoreBytes)*options.GCTriggerRatio) {
-		return nil
+		return false, nil
 	}
-	roots, err := options.Roots(ctx)
-	if err != nil {
-		return fmt.Errorf("loom: collect GC roots: %w", err)
-	}
-	_, err = s.Collect(ctx, GCOptions{
-		Roots: roots, ProtectNewerThan: time.Now().UTC().Add(-options.GCGracePeriod),
-		TargetBytes: int64(float64(options.MaximumStoreBytes) * options.GCTargetRatio),
-	})
-	return err
+	return true, nil
 }
 
 func (s *Store) collectLocked(ctx context.Context, options GCOptions) (GCResult, error) {
@@ -103,7 +121,11 @@ func (s *Store) collectLocked(ctx context.Context, options GCOptions) (GCResult,
 		before.Bytes += size
 	}
 
-	marked := make(map[Ref]struct{}, len(options.Roots))
+	transientRoots, err := s.loadTransientRootsLocked(ctx, time.Now().UTC())
+	if err != nil {
+		return GCResult{}, err
+	}
+	marked := make(map[Ref]struct{}, len(options.Roots)+len(transientRoots))
 	var mark func(Ref)
 	mark = func(ref Ref) {
 		if _, exists := marked[ref]; exists {
@@ -119,6 +141,9 @@ func (s *Store) collectLocked(ctx context.Context, options GCOptions) (GCResult,
 		}
 	}
 	for _, root := range options.Roots {
+		mark(root)
+	}
+	for _, root := range transientRoots {
 		mark(root)
 	}
 	if !options.ProtectNewerThan.IsZero() {

@@ -138,7 +138,10 @@ func renderACPClientHelpContent(dark bool) string {
 	body.WriteString(activeLabelStyle.Render(fmt.Sprintf("  %-18s", "slash commands")))
 	body.WriteString(subtleStyle.Render("Forwarded unchanged to the connected agent."))
 	body.WriteString("\n")
-	body.WriteString(activeLabelStyle.Render(fmt.Sprintf("  %-18s", "/clear, /new")))
+	body.WriteString(activeLabelStyle.Render(fmt.Sprintf("  %-18s", "/clear")))
+	body.WriteString(subtleStyle.Render("Ask the connected agent to empty the current session."))
+	body.WriteString("\n")
+	body.WriteString(activeLabelStyle.Render(fmt.Sprintf("  %-18s", "/new")))
 	body.WriteString(subtleStyle.Render("Close the current session and start a new ACP session."))
 	body.WriteString("\n\n")
 	body.WriteString(agentTraceTitleStyle(dark).Render("CHAT"))
@@ -192,9 +195,9 @@ func renderHelpContent(dark bool) string {
 
 	writeHelpSection("SLASH COMMANDS", [][2]string{
 		{"/plan [request]", "Grill, research, approve, and execute a work plan."},
-		{"/agent:search <query>", "Run the configured ACP Search agent and return its evidence report."},
+		{"/agent:search <query>", "Run the configured ACP Search agent."},
 		{"/commit", "Open the interactive commit workflow."},
-		{"/clear", "Clear the current chat projection."},
+		{"/new, /clear", "Create a session, or empty the current one without changing its ID."},
 		{"/learn [on|off|status]", "Checkpoint or control Thinker learning for this workspace."},
 		{"/model", "Choose workspace, default, subagent, and embedding models."},
 		{"/gateway", "Configure Gateway network, API keys, and providers."},

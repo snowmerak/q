@@ -38,9 +38,14 @@ type Evaluator interface {
 	Evaluate(context.Context, *Store, EvalRequest) (EvalResult, error)
 }
 
-type InProcessEvaluator struct{}
+type InProcessEvaluator struct {
+	deferStore bool
+}
 
-func (InProcessEvaluator) Evaluate(ctx context.Context, store *Store, request EvalRequest) (EvalResult, error) {
+func (e InProcessEvaluator) Evaluate(ctx context.Context, store *Store, request EvalRequest) (EvalResult, error) {
+	if store == nil {
+		return EvalResult{}, errors.New("loom: script store is required")
+	}
 	if len(request.Code) == 0 {
 		return EvalResult{}, errors.New("loom: script code is required")
 	}
@@ -54,6 +59,19 @@ func (InProcessEvaluator) Evaluate(ctx context.Context, store *Store, request Ev
 		names = append(names, name)
 	}
 	sort.Strings(names)
+	inputRoots := make([]Ref, 0, len(names))
+	for _, name := range names {
+		ref, err := ParseRef(request.Inputs[name].String())
+		if err != nil {
+			return EvalResult{}, err
+		}
+		inputRoots = append(inputRoots, ref)
+	}
+	lease, err := store.acquireTransientRoots(ctx, inputRoots)
+	if err != nil {
+		return EvalResult{}, err
+	}
+	defer lease.Close()
 	for _, name := range names {
 		ref := request.Inputs[name]
 		if strings.TrimSpace(name) == "" {
@@ -112,10 +130,20 @@ func (InProcessEvaluator) Evaluate(ctx context.Context, store *Store, request Ev
 		return EvalResult{}, fmt.Errorf("loom: script result exceeds %d bytes", maximumScriptOutput)
 	}
 	scriptDigest := sha256.Sum256([]byte(request.Code))
-	artifact, err := store.Put(evalCtx, body, PutOptions{
+	putOptions := PutOptions{
 		Kind: "derived", MediaType: "application/json", Parents: parents,
 		Source: map[string]string{"language": "javascript", "script_digest": hex.EncodeToString(scriptDigest[:])},
-	})
+	}
+	if int64(len(body)) > store.Options().MaximumArtifactBytes {
+		return EvalResult{}, fmt.Errorf("loom: artifact exceeds %d bytes", store.Options().MaximumArtifactBytes)
+	}
+	if e.deferStore {
+		return EvalResult{Artifact: Artifact{
+			Kind: putOptions.Kind, MediaType: putOptions.MediaType,
+			Parents: append([]Ref(nil), putOptions.Parents...), Source: cloneSource(putOptions.Source),
+		}, Value: body}, nil
+	}
+	artifact, err := store.Put(evalCtx, body, putOptions)
 	if err != nil {
 		return EvalResult{}, err
 	}

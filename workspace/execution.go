@@ -23,12 +23,13 @@ var ErrExecutionNotFound = errors.New("q workspace plan execution not found")
 
 type executionFile struct {
 	Version    int                          `json:"version"`
+	SessionID  string                       `json:"session_id,omitempty"`
 	UpdatedAt  time.Time                    `json:"updated_at"`
 	Checkpoint subagent.ExecutionCheckpoint `json:"checkpoint"`
 }
 
 func (s Store) ExecutionPath() string {
-	return filepath.Join(s.Dir(), ExecutionFileName)
+	return filepath.Join(s.SessionDir(), ExecutionFileName)
 }
 
 func (s Store) LoadExecution() (subagent.ExecutionCheckpoint, error) {
@@ -63,6 +64,11 @@ func (s Store) LoadExecution() (subagent.ExecutionCheckpoint, error) {
 	if stored.Version != executionCurrentVersion {
 		return subagent.ExecutionCheckpoint{}, fmt.Errorf("workspace: unsupported plan execution version %d", stored.Version)
 	}
+	if s.SessionID != "" && stored.SessionID != "" && stored.SessionID != s.SessionID {
+		return subagent.ExecutionCheckpoint{}, fmt.Errorf(
+			"workspace: plan execution session ID %q does not match directory %q", stored.SessionID, s.SessionID,
+		)
+	}
 	if err := validateStoredExecution(stored.Checkpoint); err != nil {
 		return subagent.ExecutionCheckpoint{}, fmt.Errorf("workspace: invalid plan execution: %w", err)
 	}
@@ -74,7 +80,8 @@ func (s Store) SaveExecution(checkpoint subagent.ExecutionCheckpoint) error {
 		return fmt.Errorf("workspace: invalid plan execution: %w", err)
 	}
 	body, err := json.MarshalIndent(executionFile{
-		Version: executionCurrentVersion, UpdatedAt: time.Now().UTC(), Checkpoint: checkpoint,
+		Version: executionCurrentVersion, SessionID: s.SessionID,
+		UpdatedAt: time.Now().UTC(), Checkpoint: checkpoint,
 	}, "", "  ")
 	if err != nil {
 		return fmt.Errorf("workspace: encode plan execution: %w", err)
@@ -83,54 +90,58 @@ func (s Store) SaveExecution(checkpoint subagent.ExecutionCheckpoint) error {
 		return fmt.Errorf("workspace: plan execution exceeds %d bytes", maximumExecutionSize)
 	}
 	body = append(body, '\n')
-	if err := os.MkdirAll(s.Dir(), 0o700); err != nil {
-		return fmt.Errorf("workspace: create %s: %w", s.Dir(), err)
-	}
-	if err := os.Chmod(s.Dir(), 0o700); err != nil {
-		return fmt.Errorf("workspace: secure %s: %w", s.Dir(), err)
-	}
-	file, err := os.CreateTemp(s.Dir(), ".plan-execution-*.json")
-	if err != nil {
-		return fmt.Errorf("workspace: create temporary plan execution: %w", err)
-	}
-	temporaryPath := file.Name()
-	keep := false
-	defer func() {
-		if !keep {
-			_ = os.Remove(temporaryPath)
+	return withLoomRootMutation(s.Root, func() error {
+		if err := os.MkdirAll(s.SessionDir(), 0o700); err != nil {
+			return fmt.Errorf("workspace: create %s: %w", s.SessionDir(), err)
 		}
-	}()
-	if err := file.Chmod(0o600); err != nil {
-		_ = file.Close()
-		return fmt.Errorf("workspace: secure temporary plan execution: %w", err)
-	}
-	if _, err := file.Write(body); err != nil {
-		_ = file.Close()
-		return fmt.Errorf("workspace: write temporary plan execution: %w", err)
-	}
-	if err := file.Sync(); err != nil {
-		_ = file.Close()
-		return fmt.Errorf("workspace: sync temporary plan execution: %w", err)
-	}
-	if err := file.Close(); err != nil {
-		return fmt.Errorf("workspace: close temporary plan execution: %w", err)
-	}
-	if err := replaceFile(temporaryPath, s.ExecutionPath()); err != nil {
-		return fmt.Errorf("workspace: replace %s: %w", s.ExecutionPath(), err)
-	}
-	keep = true
-	return nil
+		if err := os.Chmod(s.SessionDir(), 0o700); err != nil {
+			return fmt.Errorf("workspace: secure %s: %w", s.SessionDir(), err)
+		}
+		file, err := os.CreateTemp(s.SessionDir(), ".plan-execution-*.json")
+		if err != nil {
+			return fmt.Errorf("workspace: create temporary plan execution: %w", err)
+		}
+		temporaryPath := file.Name()
+		keep := false
+		defer func() {
+			if !keep {
+				_ = os.Remove(temporaryPath)
+			}
+		}()
+		if err := file.Chmod(0o600); err != nil {
+			_ = file.Close()
+			return fmt.Errorf("workspace: secure temporary plan execution: %w", err)
+		}
+		if _, err := file.Write(body); err != nil {
+			_ = file.Close()
+			return fmt.Errorf("workspace: write temporary plan execution: %w", err)
+		}
+		if err := file.Sync(); err != nil {
+			_ = file.Close()
+			return fmt.Errorf("workspace: sync temporary plan execution: %w", err)
+		}
+		if err := file.Close(); err != nil {
+			return fmt.Errorf("workspace: close temporary plan execution: %w", err)
+		}
+		if err := replaceFile(temporaryPath, s.ExecutionPath()); err != nil {
+			return fmt.Errorf("workspace: replace %s: %w", s.ExecutionPath(), err)
+		}
+		keep = true
+		return nil
+	})
 }
 
 func (s Store) ClearExecution() error {
-	err := os.Remove(s.ExecutionPath())
-	if errors.Is(err, os.ErrNotExist) {
+	return withLoomRootMutation(s.Root, func() error {
+		err := os.Remove(s.ExecutionPath())
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		if err != nil {
+			return fmt.Errorf("workspace: remove %s: %w", s.ExecutionPath(), err)
+		}
 		return nil
-	}
-	if err != nil {
-		return fmt.Errorf("workspace: remove %s: %w", s.ExecutionPath(), err)
-	}
-	return nil
+	})
 }
 
 func validateStoredExecution(checkpoint subagent.ExecutionCheckpoint) error {

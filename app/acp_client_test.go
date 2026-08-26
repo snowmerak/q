@@ -13,6 +13,7 @@ import (
 
 type fakeACPRemoteConnection struct {
 	newSessionID acp.SessionId
+	newErr       error
 	closed       []acp.SessionId
 	deleted      []acp.SessionId
 	closeErr     error
@@ -21,7 +22,7 @@ type fakeACPRemoteConnection struct {
 }
 
 func (f *fakeACPRemoteConnection) NewSession(context.Context, acp.NewSessionRequest) (acp.NewSessionResponse, error) {
-	return acp.NewSessionResponse{SessionId: f.newSessionID}, nil
+	return acp.NewSessionResponse{SessionId: f.newSessionID}, f.newErr
 }
 
 func (*fakeACPRemoteConnection) LoadSession(context.Context, acp.LoadSessionRequest) (acp.LoadSessionResponse, error) {
@@ -176,6 +177,28 @@ func TestACPRemoteClientResetClosesOldSession(t *testing.T) {
 	}
 	if sessionID != "new-session" || !slices.Equal(connection.closed, []acp.SessionId{"old-session"}) || remote.sessionID != "new-session" {
 		t.Fatalf("reset: id=%q closed=%#v remote=%q", sessionID, connection.closed, remote.sessionID)
+	}
+}
+
+func TestACPRemoteClientResetCanRetryAfterNewSessionFailure(t *testing.T) {
+	connection := &fakeACPRemoteConnection{newErr: errors.New("temporary new failure")}
+	remote := &acpRemoteClient{
+		connection: connection, sessionID: "old-session", root: t.TempDir(),
+		capabilities: acp.AgentCapabilities{SessionCapabilities: acp.SessionCapabilities{Close: &acp.SessionCloseCapabilities{}}},
+	}
+	if _, err := remote.resetSession(t.Context()); err == nil {
+		t.Fatal("first reset unexpectedly succeeded")
+	}
+	if remote.sessionID != "" || !slices.Equal(connection.closed, []acp.SessionId{"old-session"}) {
+		t.Fatalf("failed reset: remote=%q closed=%#v", remote.sessionID, connection.closed)
+	}
+	connection.newErr = nil
+	connection.newSessionID = "new-session"
+	if sessionID, err := remote.resetSession(t.Context()); err != nil || sessionID != "new-session" {
+		t.Fatalf("retry reset = %q, %v", sessionID, err)
+	}
+	if !slices.Equal(connection.closed, []acp.SessionId{"old-session"}) {
+		t.Fatalf("retry re-closed old session: %#v", connection.closed)
 	}
 }
 

@@ -769,6 +769,32 @@ func TestExplicitLearningSegmentStartsThinkerExtractionThroughLibraryClient(t *t
 	}
 }
 
+func TestSessionLearningContextIsCancelledOnResetAndStop(t *testing.T) {
+	m := newModel(context.Background(), config.Store{Dir: t.TempDir()}, nil)
+	first := m.learningCtx
+	m.resetSessionLearning()
+	select {
+	case <-first.Done():
+	default:
+		t.Fatal("reset did not cancel the previous session learning context")
+	}
+	second := m.learningCtx
+	select {
+	case <-second.Done():
+		t.Fatal("replacement session learning context is already cancelled")
+	default:
+	}
+	m.stopSessionLearning()
+	select {
+	case <-second.Done():
+	default:
+		t.Fatal("stop did not cancel the active session learning context")
+	}
+	if m.learningCtx != nil || m.learningCancel != nil {
+		t.Fatal("stopped session retained its learning context")
+	}
+}
+
 func TestModelPickerConfiguresEmbeddingModelAndDimensions(t *testing.T) {
 	store := config.Store{Dir: t.TempDir()}
 	value := config.Default()
@@ -1210,7 +1236,7 @@ func TestHelpCommandAndShortcutKeepCommandsOutOfChatFooter(t *testing.T) {
 	}
 	help := ansi.Strip(m.View().Content)
 	for _, expected := range []string{
-		"q · Help", "SLASH COMMANDS", "/plan [request]", "/agent:search <query>", "/commit", "/clear", "/learn [on|off|status]", "/model",
+		"q · Help", "SLASH COMMANDS", "/plan [request]", "/agent:search <query>", "/commit", "/new", "/clear", "/learn [on|off|status]", "/model",
 		"/gateway", "/loom", "/ignore", "/skills",
 	} {
 		if !strings.Contains(help, expected) {
@@ -1326,6 +1352,7 @@ func TestWorkspaceLearningCanBeDisabledAndReenabled(t *testing.T) {
 	m.learning.AppendMessage(client.Message{Role: client.RoleUser, Content: "queued before disabling"})
 	m.learning.EnqueueExplicit()
 	before := m.learning.State()
+	learningContext := m.learningCtx
 	m.input.SetValue("/learn off")
 	updated, _ := m.submitChat()
 	m = updated.(model)
@@ -1335,6 +1362,14 @@ func TestWorkspaceLearningCanBeDisabledAndReenabled(t *testing.T) {
 	stored, err := workspaceStore.LoadLearningConfig()
 	if err != nil || !stored.Disabled {
 		t.Fatalf("stored learning config = %#v, %v", stored, err)
+	}
+	select {
+	case <-learningContext.Done():
+	default:
+		t.Fatal("disabling learning did not cancel current Thinker work")
+	}
+	if m.learningCtx != nil || m.thinkerBusy || m.thinkerJobID != "" {
+		t.Fatal("disabled learning retained an active Thinker session")
 	}
 	if command := m.observeLearningMessage(client.Message{Role: client.RoleUser, Content: "do not learn this"}); command != nil {
 		t.Fatal("disabled learning observed a conversation message")
@@ -1371,6 +1406,14 @@ func TestWorkspaceLearningCanBeDisabledAndReenabled(t *testing.T) {
 	}
 	if _, err := os.Stat(workspaceStore.LearningPath()); !os.IsNotExist(err) {
 		t.Fatalf("learning config after enabling: %v", err)
+	}
+	if m.learningCtx == nil {
+		t.Fatal("enabling learning did not create a fresh Thinker context")
+	}
+	select {
+	case <-m.learningCtx.Done():
+		t.Fatal("replacement Thinker context is already cancelled")
+	default:
 	}
 	if state := m.learning.State(); len(state.Queue) != len(before.Queue) {
 		t.Fatalf("enabling did not preserve queued segments: %#v", state)
@@ -2356,8 +2399,8 @@ func TestWorkspaceModelOverridesInteractiveChatAndSurvivesClear(t *testing.T) {
 	if err != nil || stored.Overrides[defaultModelTarget].Model != "workspace-model" || m.activeModel() != "workspace-model" {
 		t.Fatalf("model after clear = %#v, active = %q, err = %v", stored, m.activeModel(), err)
 	}
-	if _, err := workspaceStore.Load(); !errors.Is(err, workspace.ErrNotFound) {
-		t.Fatalf("chat session survived clear: %v", err)
+	if session, err := workspaceStore.Load(); err != nil || len(session.Transcript) != 0 || len(session.Context) != 0 {
+		t.Fatalf("chat session was not emptied: session=%#v err=%v", session, err)
 	}
 }
 
@@ -2614,7 +2657,7 @@ func TestChatHeaderShowsAbsoluteWorkspacePath(t *testing.T) {
 	}
 }
 
-func TestClearRemovesWorkspaceSession(t *testing.T) {
+func TestClearEmptiesWorkspaceSession(t *testing.T) {
 	workspaceStore := workspace.Store{Root: t.TempDir()}
 	if err := workspaceStore.SaveLearningConfig(workspace.LearningConfig{Disabled: true}); err != nil {
 		t.Fatal(err)
@@ -2631,12 +2674,46 @@ func TestClearRemovesWorkspaceSession(t *testing.T) {
 	m.workspaceStore = &workspaceStore
 	m.enterChat(value, &fakeClient{})
 	m.resetConversation()
-	if _, err := workspaceStore.Load(); !errors.Is(err, workspace.ErrNotFound) {
-		t.Fatalf("workspace session survived clear: %v", err)
+	if session, err := workspaceStore.Load(); err != nil || len(session.Transcript) != 0 || len(session.Context) != 0 {
+		t.Fatalf("workspace session was not emptied: session=%#v err=%v", session, err)
 	}
 	learning, err := workspaceStore.LoadLearningConfig()
 	if err != nil || !learning.Disabled {
 		t.Fatalf("workspace learning setting after clear = %#v, %v", learning, err)
+	}
+}
+
+func TestNewCommandCreatesAnotherWorkspaceSession(t *testing.T) {
+	root := t.TempDir()
+	first, firstLock, err := workspace.CreateSession(root, "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	value := config.Default()
+	value.Provider.Model = "global-model"
+	m := newModel(context.Background(), config.Store{Dir: t.TempDir()}, nil)
+	m.workspaceStore = &first
+	m.workspaceLock = firstLock
+	m.enterChat(value, &fakeClient{})
+	m = submitAndReceive(t, m, "keep the first session")
+	m.input.SetValue("/new")
+	updated, _ := m.submitChat()
+	m = updated.(model)
+	if m.workspaceStore == nil || m.workspaceStore.SessionID == "" || m.workspaceStore.SessionID == first.SessionID {
+		t.Fatalf("new session store = %#v", m.workspaceStore)
+	}
+	t.Cleanup(func() {
+		if m.workspaceLock != nil {
+			_ = m.workspaceLock.Close()
+		}
+	})
+	firstSaved, err := first.Load()
+	if err != nil || len(firstSaved.Transcript) != 2 || firstSaved.Transcript[0].Content != "keep the first session" {
+		t.Fatalf("first session = %#v, %v", firstSaved, err)
+	}
+	secondSaved, err := m.workspaceStore.Load()
+	if err != nil || len(secondSaved.Transcript) != 0 || secondSaved.RunID != "run-"+m.workspaceStore.SessionID {
+		t.Fatalf("new session = %#v, %v", secondSaved, err)
 	}
 }
 

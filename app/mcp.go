@@ -470,6 +470,8 @@ func cloneMCPConfig(value mcpconfig.Config) mcpconfig.Config {
 		server.Args = append([]string(nil), server.Args...)
 		server.Env = cloneStringMap(server.Env)
 		server.Headers = cloneStringMap(server.Headers)
+		server.ResolvedEnv = cloneStringMap(server.ResolvedEnv)
+		server.ResolvedHeaders = cloneStringMap(server.ResolvedHeaders)
 		result.Servers[id] = server
 	}
 	for role, servers := range value.Roles {

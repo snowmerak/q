@@ -353,6 +353,12 @@ func (r *acpRemoteClient) resetSession(ctx context.Context) (acp.SessionId, erro
 		if _, err := connection.CloseSession(ctx, acp.CloseSessionRequest{SessionId: oldSessionID}); err != nil {
 			return "", err
 		}
+		r.mu.Lock()
+		if r.sessionID == oldSessionID {
+			r.sessionID = ""
+			r.title = ""
+		}
+		r.mu.Unlock()
 	}
 	return r.newSession(ctx)
 }

@@ -78,6 +78,13 @@ func (m *model) offerPlanExecutionResume() {
 		m.status += err.Error()
 		return
 	}
+	if m.workspaceStore.SessionID != "" && m.runID != "" && checkpoint.RunID != m.runID {
+		if m.status != "" {
+			m.status += " · "
+		}
+		m.status += "saved plan belongs to a different session"
+		return
+	}
 	m.planCheckpoint = checkpoint
 	m.planResumePending = true
 	m.asking = true
@@ -90,9 +97,6 @@ func (m *model) offerPlanExecutionResume() {
 			{ID: "inspect", Label: "Inspect", Description: "Show the full saved plan and recovery state first."},
 			{ID: "discard", Label: "Discard", Description: "Remove the checkpoint without reverting workspace changes."},
 		},
-	}
-	if checkpoint.RunID != "" {
-		m.runID = checkpoint.RunID
 	}
 	m.input.Reset()
 	m.input.Placeholder = "Type a custom answer…"

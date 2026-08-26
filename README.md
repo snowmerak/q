@@ -44,9 +44,9 @@ q acp [--root <workspace-path>]
 
 When `--root` is omitted, q uses the process's current working directory.
 
-The process owns the selected workspace's normal lock, local runtime and tools,
-and `.q/session.json` projection. Durable archive records and their indexes are
-accessed through a lease on the user-level Workspace Memory service. It
+The process owns one session-scoped lock, its local runtime and tools, and the
+selected `.q/sessions/<uuid>/session.json` projection. Durable archive records
+and their indexes are accessed through a lease on the user-level Workspace Memory service. It
 supports ACP `session/new`,
 `session/prompt`, `session/cancel`, streamed message/thought updates, tool-call
 updates, task-lifecycle plan updates, `session/list`, `session/delete`, and
@@ -59,19 +59,20 @@ workflow as the TUI while projecting bounded progress and plan status through
 ACP updates. Because execution always requires explicit approval, the ACP
 client must advertise form elicitation support. `/agent:search <query>` creates
 an isolated session on the configured ACP Search agent, returns its evidence
-report, and then deletes or closes that session. `/clear` drops q's persisted
-conversation projection and model context while keeping the active ACP session
-ID usable. `/commit` shows the generated commit messages and their staged files
+report, and then deletes or closes that session. `/clear` replaces q's persisted
+conversation projection with an empty state while keeping the active ACP session
+ID usable; `/new` creates another session. `/commit` shows the generated commit messages and their staged files
 through form elicitation, then accepts commit, commit-and-push, regenerate, or
 cancel. Clients without form elicitation support cannot run the commit workflow.
 
-q deliberately keeps its native session rule here: one ACP process is bound to
-one workspace and accepts only one active ACP session. `session/load` and
-`session/resume` are compatibility paths that reconnect only to that workspace's
-single persisted conversation; they never create or select another q session.
-`session/list` therefore returns either that one persisted projection or an
-empty list, and `session/delete` has the same projection-only semantics as
-`/clear` while invalidating the deleted ACP session ID.
+One ACP process is bound to one workspace and accepts one active ACP session at
+a time, while that workspace may contain many persisted sessions and other q
+processes may own different sessions concurrently. `session/list` returns all
+persisted projections. `session/load` replays a selected session,
+`session/resume` reconnects without replay, `session/close` releases its session
+lock, in-memory conversation, and session-provided MCP connections, while
+`session/delete` removes only the selected conversation and plan
+projections. Durable archive records and project files are preserved.
 
 Client-supplied stdio and Streamable HTTP MCP servers are merged with q's
 configured MCP catalog for the lifetime of the active ACP session. SSE remains
@@ -206,9 +207,9 @@ An ordinary `q` session coordinates five components with different lifetimes:
 
 | Component | Scope and ownership |
 |---|---|
-| Main TUI | Owns the active conversation, `.q/session.json`, `.q/plan-execution.json`, task lifecycle, and session-only `learn` tool. |
+| Main TUI | Owns one active conversation under `.q/sessions/<uuid>/`, its session lock, task lifecycle, and session-only `learn` tool. |
 | Managed Gateway child | Aggregates configured providers for that q process. It binds to loopback on an ephemeral port and uses a parent-injected temporary bearer key. |
-| Workspace process runtime | Owns Loom, LSP sessions, file tools, and the transitional `.q/workspace.lock`. These remain local to each TUI, ACP, or `q-mcp` process. |
+| Workspace process runtime | Owns LSP sessions and file tools locally. Loom remains shared on disk and coordinates artifact operations, GC root scans, and session projection mutations through `.q/loom/operation.lock`. |
 | Workspace Memory | A user-level loopback HTTP service that multiplexes canonical workspace roots and exclusively owns their durable records, Bleve indexes, and HNSW indexes while leases are active. |
 | Global Library | Owns global Agent Skill projections, propositions, their search indexes, and the serialized proposition-judging queue under `~/.q/library/`. One process leads; other q processes connect over HTTP. |
 
@@ -255,6 +256,7 @@ screen without discarding editor state or interrupting an active turn.
 | `/plan [request]` | Grill, research, approve, and execute a work plan. Without an inline request, the next message becomes the request. |
 | `/agent:search <query>` | Explicitly run the configured ACP Search agent in an isolated read-only session and return its evidence report. |
 | `/commit` | Open the interactive commit workflow, then return to chat. |
+| `/new` | Create and switch to a new workspace session without deleting the previous one. |
 | `/model` | Configure the workspace/default, embedding, subagent role, and grouped fallback models. |
 | `/gateway` | Configure Gateway network defaults, API keys, and providers. |
 | `/library` | Configure the global Library's default host and fixed port. |
@@ -263,7 +265,7 @@ screen without discarding editor state or interrupting an active turn.
 | `/skills` | Interactively add, pull, remove, and reindex global/session Agent Skills. |
 | `/lsp` | Configure global language servers and current-workspace project roots. |
 | `/mcp` | Configure external MCP tool servers and per-role assignments. |
-| `/clear` | Clear the chat projection and remove the current workspace session. |
+| `/clear` | Empty the current session's conversation and plan checkpoint while retaining its session ID. |
 | `/learn` | Close the current learning segment and enqueue Thinker extraction when workspace learning is enabled. |
 | `/learn off` | Disable conversation collection and Thinker queue processing for this workspace. |
 | `/learn on` | Re-enable workspace learning and resume any previously queued segments. |
@@ -339,7 +341,8 @@ Planner can inspect selected files and Loom artifacts, query propositions and
 read-only LSP data, or run non-mutating verification commands before accepting
 the task or returning actionable retry feedback.
 
-Execution state is atomically checkpointed in `.q/plan-execution.json`. On the
+Execution state is atomically checkpointed in
+`.q/sessions/<uuid>/plan-execution.json`. On the
 next launch, interrupted work offers Resume, Inspect, and Discard. Resuming a
 Coder that may already have changed files starts a new recovery attempt that
 first inspects the workspace; a saved Coder result resumes at Planner review.
@@ -585,38 +588,49 @@ state are local to the directory where q starts:
 
 | Path | Purpose |
 |---|---|
-| `.q/session.json` | Current transcript, compacted request-context projection, run identity, session title/activity metadata, active task lifecycle, and durable Thinker learning queue. |
+| `.q/sessions/<uuid>/session.json` | One session's transcript, compacted request-context projection, run identity, title/activity metadata, active task lifecycle, and durable Thinker learning queue. |
 | `.q/model.json` | Per-role workspace model overrides. Model metadata remains in the global Gateway configuration. It is preserved by `/clear`. |
 | `.q/learning.json` | Workspace learning disable switch. Existing queued segments are preserved while learning is disabled, and the setting is preserved by `/clear`. |
 | `.q/lsp.json` | Current workspace's language project roots and optional server overrides. |
-| `.q/plan-execution.json` | Durable checkpoint for an approved plan execution. |
+| `.q/sessions/<uuid>/plan-execution.json` | Durable checkpoint for that session's approved plan execution. |
 | `.q/data/records/` | Source records for durable workspace history. |
 | `.q/index/bleve/` | Derived full-text index. |
 | `.q/index/vectors.hnsw`, `.q/index/vectors.ids.json`, `.q/index/state.json` | Derived semantic index and rebuild state when embeddings are available. |
 | `.q/loom/` | Immutable, content-addressed tool artifacts. |
+| `.q/loom/operation.lock` | Short-lived OS lock serializing shared Loom reads/writes, root scans, session projection mutations, and garbage collection. |
+| `.q/loom/leases/` | Expiring transient roots that protect declared `loom_eval` inputs across the worker-process boundary. |
 | `.q/skills/` | q-managed project Agent Skill checkouts. |
-| `.q/workspace.lock` | Diagnostic metadata for the current or most recent lock owner. |
+| `.q/session-locks/<uuid>.lock` | Diagnostic metadata for the process currently owning a session. |
+| `.q/workspace.lock` | Legacy/standalone workspace-owner metadata, also used briefly while migrating the old single-session layout. |
 | `.q/workspace-memory.lock` | Diagnostic metadata for the Workspace Memory server that currently owns this workspace's records and indexes. |
 | `.qignore` | Workspace discovery exclusions. |
 
-Two independent OS-backed locks currently protect different boundaries.
+OS-backed locks protect independent ownership boundaries.
 Workspace Memory alone holds `.q/workspace-memory.lock` while at least one
 lease exists for the canonical root; this makes it the sole process that opens
-or rebuilds the shared record, Bleve, and HNSW state. The interactive app,
-`q acp`, `q-mcp`, and commands that own the local workspace runtime continue to
-hold `.q/workspace.lock` for their full lifetime. That transitional lock still
-protects the single `.q/session.json` and `.q/plan-execution.json` projections,
-local Loom/LSP state, and existing workflow assumptions until session-UUID
-storage is split out.
+or rebuilds the shared record, Bleve, and HNSW state. The interactive app and
+`q acp` hold only their selected session lock: opening the same UUID twice is
+rejected, while different UUIDs can run together. Loom takes its operation lock
+around each filesystem transaction; session and plan projection writes share
+that lease so a root cannot change between GC's scan and sweep. `q-mcp` no
+longer owns the legacy workspace lock for its process lifetime.
 
-Neither lock file is a sentinel. The OS lock lives on the open file handle;
+The first new-version launch migrates `.q/session.json` and
+`.q/plan-execution.json` into the UUID layout while briefly coordinating with
+`.q/workspace.lock`, even when an older process has not yet written its first
+projection. Migration also holds each destination session lock through publish
+and legacy cleanup. If a retry finds divergent data at the preferred ID, both
+versions are preserved by placing the legacy projection in a deterministic
+conflict session. This is a one-way layout upgrade for older q binaries.
+
+Lock-file existence is never a sentinel. Each OS lock lives on an open file handle;
 after a crash or forced termination the handle closes automatically, while the
 file remains as reusable diagnostic metadata. Workspace Memory does not
 serialize or detect concurrent edits to project files; coordinating overlapping
 file mutations remains the responsibility of the sessions involved.
 
-`/clear` removes only the current chat projection. Durable archive records and
-workspace file changes remain intact.
+`/clear` writes an empty projection for the same session UUID. `/new` creates a
+different UUID. Durable archive records and workspace file changes remain intact.
 
 ## Tools and task lifecycle
 
@@ -639,7 +653,8 @@ The main agent also receives orchestration tools:
 - `ask_to_user` pauses the current turn for a required decision. Choices return
   their stable ID; typing sends a free-form answer instead.
 
-An accepted `task_start` is written immediately to `.q/session.json`. If its
+An accepted `task_start` is written immediately to the active session's
+`session.json`. If its
 turn is interrupted or q exits before `task_complete`, the objective,
 completion criteria, and start time are restored on the next launch. The model
 continues the existing lifecycle without calling `task_start` again; a
@@ -874,7 +889,7 @@ artifact and 256 MiB per workspace store. `/loom` displays artifact, blob, and
 byte usage and edits these limits and the automatic-GC policy.
 
 Automatic GC starts at the configured trigger ratio and aims for the target
-ratio. References from the current session and active plan checkpoint, including
+ratio. References from every persisted session and plan checkpoint, including
 their parent lineage, remain live. Durable archive records do not pin Loom
 artifacts. New artifacts remain protected for the configured grace period.
 Setting `loom.gc.disabled: true` disables automatic collection but leaves manual
@@ -956,10 +971,10 @@ The two command entry points are:
 - `./cmd/q`: interactive chat plus the `acp`, `agents`, `commit`, `gateway`,
   `library`, `memory`, `model`, `mcp`, `skills`, `ignore`, `lsp`, and `help` command
   surfaces.
-- `./cmd/q-mcp`: workspace MCP stdio server. It acquires the same exclusive
-  transitional workspace lock, leases its archive records and indexes from
-  Workspace Memory, opens Loom/LSP/Library integrations locally, and excludes
-  the chat-session-only `learn` tool.
+- `./cmd/q-mcp`: workspace MCP stdio server. It performs the one-way legacy
+  session migration, leases archive records and indexes from Workspace Memory,
+  opens Loom/LSP/Library integrations locally without a process-lifetime
+  workspace lock, and excludes the chat-session-only `learn` tool.
 
 Additional design and operational notes live in:
 

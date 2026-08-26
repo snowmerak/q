@@ -76,7 +76,7 @@ func (m *model) enqueueExplicitLearning() tea.Cmd {
 }
 
 func (m *model) startNextLearningSegment() tea.Cmd {
-	if m == nil || m.learningDisabled() || m.thinkerBusy || m.learning == nil || m.client == nil || m.libraryClient == nil || m.thinkerSerial == nil {
+	if m == nil || m.learningDisabled() || m.thinkerBusy || m.learning == nil || m.client == nil || m.libraryClient == nil || m.thinkerSerial == nil || m.learningCtx == nil {
 		return nil
 	}
 	m.refreshLearningContextLength()
@@ -99,18 +99,19 @@ func (m *model) startNextLearningSegment() tea.Cmd {
 	serial := m.thinkerSerial
 	value := m.config
 	models := append([]client.Model(nil), m.models...)
-	ctx := m.ctx
+	ctx := m.learningCtx
+	sessionGeneration := m.sessionGeneration
 	return func() tea.Msg {
 		if len(models) == 0 {
 			listed, err := configuredClient.ListModels(ctx)
 			if err != nil {
-				return thinkerResultMsg{jobID: job.ID, err: fmt.Errorf("resolve thinker model: %w", err)}
+				return thinkerResultMsg{jobID: job.ID, sessionGeneration: sessionGeneration, err: fmt.Errorf("resolve thinker model: %w", err)}
 			}
 			models = listed
 		}
 		spec, err := subagent.Resolve(value, config.AgentRoleThinker, models)
 		if err != nil {
-			return thinkerResultMsg{jobID: job.ID, err: err}
+			return thinkerResultMsg{jobID: job.ID, sessionGeneration: sessionGeneration, err: err}
 		}
 		if spec.Group == "" && spec.ContextLength <= 0 && spec.Model == value.Provider.Model {
 			spec.ContextLength = value.EffectiveContextWindow()
@@ -118,7 +119,7 @@ func (m *model) startNextLearningSegment() tea.Cmd {
 		result, err := serial.Run(ctx, thinker.Runner{
 			Client: configuredClient, Library: libraryClient, Spec: spec,
 		}, job)
-		return thinkerResultMsg{jobID: job.ID, result: result, err: err}
+		return thinkerResultMsg{jobID: job.ID, sessionGeneration: sessionGeneration, result: result, err: err}
 	}
 }
 
@@ -145,11 +146,15 @@ func (m *model) setWorkspaceLearningDisabled(disabled bool) error {
 			return err
 		}
 		m.workspaceLearning = value
+		// Leave the queue untouched so a cancelled in-flight segment can resume
+		// after learning is enabled again, but stop all current Thinker work now.
+		m.stopSessionLearning()
 		return nil
 	}
 	if err := m.workspaceStore.ClearLearningConfig(); err != nil {
 		return err
 	}
 	m.workspaceLearning = workspace.LearningConfig{Version: workspace.LearningConfigVersion}
+	m.resetSessionLearning()
 	return nil
 }

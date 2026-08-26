@@ -88,7 +88,7 @@ func Run(ctx context.Context, store config.Store) error {
 	if err != nil {
 		return err
 	}
-	workspaceLock, err := workspace.AcquireLock(workspaceStore.Root, "q")
+	workspaceStore, workspaceLock, err := workspace.OpenLatestSession(workspaceStore.Root, "q")
 	if err != nil {
 		return err
 	}
@@ -124,6 +124,9 @@ func Run(ctx context.Context, store config.Store) error {
 	initialModel.startup = startStartup(startup.run, initialModelLoadWait)
 
 	final, runErr := tea.NewProgram(initialModel).Run()
+	if finalModel, ok := final.(model); ok && finalModel.workspaceLock != nil && finalModel.workspaceLock != workspaceLock {
+		runErr = errors.Join(runErr, finalModel.workspaceLock.Close())
+	}
 	cancelRuntime()
 	lifecycle.waitIfStarted()
 	resourcesCloseErr := lifecycle.closeResources()

@@ -94,11 +94,9 @@ func RunStdio(ctx context.Context, root string) error {
 }
 
 func RunStdioWithLoomOptions(ctx context.Context, root string, options loom.StoreOptions) (runErr error) {
-	workspaceLock, err := workspace.AcquireLock(root, "q-mcp")
-	if err != nil {
+	if err := (workspace.Store{Root: root}).MigrateLegacySession(); err != nil {
 		return err
 	}
-	defer workspaceLock.Close()
 
 	globalLSP := lsp.GlobalConfig{}
 	configStore, err := config.DefaultStore()

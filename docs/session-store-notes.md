@@ -16,7 +16,7 @@ record로 기록한다. 저장은 background writer가 직렬화하고 chat turn
 embedding model이 설정되면 writer가 새 history record를 batch embedding하고,
 기존 record는 startup 이후 background backfill한다. `search_archive`의 relevance
 query는 같은 model로 query embedding을 생성해 BM25/HNSW RRF를 사용한다.
-workspace `session.json`에는 현재 archive `run_id`도 함께 보존한다. 실제 subagent
+각 workspace `.q/sessions/<uuid>/session.json`에는 현재 archive `run_id`도 함께 보존한다. 실제 subagent
 runner는 아직 없지만 `subagent.Lifecycle`이 task의 queued/running/terminal projection,
 agent message와 result를 같은 저장소에 기록할 수 있게 준비되어 있다.
 
@@ -36,8 +36,13 @@ agent message와 result를 같은 저장소에 기록할 수 있게 준비되어
 
 ```text
 .q/
-├─ session.json                 # 현재 채팅을 빠르게 복구하기 위한 projection
-├─ workspace.lock               # OS lock owner 진단 metadata; 존재 자체는 lock이 아님
+├─ sessions/
+│  └─ <session-uuid>/
+│     ├─ session.json           # 한 채팅을 빠르게 복구하기 위한 projection
+│     └─ plan-execution.json    # 해당 채팅의 승인된 실행 checkpoint
+├─ session-locks/
+│  └─ <session-uuid>.lock       # 활성 세션 owner 진단 metadata
+├─ workspace-memory.lock        # archive/index service owner metadata
 ├─ data/
 │  ├─ records/                  # 1차 구현의 공통 record 원본 JSON
 │  ├─ runs/
@@ -56,8 +61,15 @@ agent message와 result를 같은 저장소에 기록할 수 있게 준비되어
 ```
 
 `data`가 source of truth다. Bleve와 HNSW는 파생 데이터이며 언제든 삭제하고 다시
-만들 수 있어야 한다. `session.json`은 현재 UI용 projection으로 유지하되 장기
+만들 수 있어야 한다. 각 `session.json`은 현재 UI용 projection으로 유지하되 장기
 이력의 유일한 원본으로 사용하지 않는다.
+
+TUI와 ACP는 UUID별 lock을 잡아 서로 다른 세션을 같은 workspace에서 동시에 열 수
+있다. ACP의 list/load/resume/close/delete는 이 projection을 직접 대상으로 하며,
+close는 메모리와 session 제공 MCP 연결까지 해제한다. 구형 workspace-wide
+projection의 migration은 목적지 session lock을 잡은 상태에서 publish와 legacy
+cleanup을 마친다. 충돌한 기존 projection은 덮어쓰지 않고 stable digest로 정한
+sibling session에 legacy 데이터를 보존한다.
 
 1차 구현은 record ID의 SHA-256 값을 파일명으로 사용해 path traversal과 파일명
 충돌을 피한다. run별 `events.jsonl`과 projection이 추가되기 전까지 모든 공통
@@ -265,25 +277,28 @@ embedding이 변경되거나 제거되면 원본 record에서 vector graph만 �
 
 ## 동시성과 운영
 
-- workspace writer는 `.q/workspace.lock`의 OS exclusive lock을 프로세스 수명 동안
-  보유한다. 앱, `q commit`, `q-mcp`와 직접 `sessionstore.Open` 경로가 같은 정책을
-  사용한다.
+- Workspace Memory service만 `.q/workspace-memory.lock`을 보유하고 record, Bleve,
+  HNSW를 연다. TUI와 ACP는 선택한 `.q/session-locks/<uuid>.lock`만 보유하므로 서로
+  다른 세션은 같은 workspace에서 동시에 실행할 수 있다.
 - lock 파일의 존재 여부나 기록된 PID로 소유권을 판단하지 않는다. 강제 종료와
   crash 시 OS가 열린 handle을 닫아 실제 lock을 해제하며 다음 프로세스는 남은
   metadata 파일을 그대로 재사용한다.
-- lock contention은 `workspace.ErrLocked`로 반환하고 Bleve open 실패나 index
+- 같은 session의 lock contention은 `workspace.ErrLocked`로 반환하고 Bleve open 실패나 index
   corruption과 구분한다. contention 경로에서는 Bleve/HNSW rebuild나 파일 제거를
   시작하지 않는다.
 - workspace lock을 모르는 구버전 writer가 Bleve Bolt file을 보유한 경우에도 open
   timeout을 `sessionstore.ErrIndexLocked`로 구분하고 rebuild 없이 즉시 종료한다.
-- Bleve rebuild, HNSW rebuild/save와 Loom GC는 workspace lock owner만 실행한다.
-  따라서 프로세스별 HNSW memory snapshot이 서로의 변경을 덮어쓰지 않는다.
+- Bleve rebuild와 HNSW rebuild/save는 Workspace Memory 한 프로세스 안에서
+  직렬화한다. Loom Put/Read/GC와 session/plan projection mutation은 별도
+  `.q/loom/operation.lock`으로 직렬화해 GC root scan과 sweep 사이의 변경을 막는다.
+  `loom_eval`의 명시적 input은 worker 실행 동안 만료 가능한 transient root lease로
+  보호한다.
 - HNSW graph와 ID map 사이의 crash 시점 불일치는 다음 open에서 검증하고 source
   record로 rebuild한다. 두 파일 모두 파생 데이터이며 원본 record는 제거하지 않는다.
 - 원본 store write는 run 단위 sequence를 부여한다.
 - Bleve update와 HNSW graph 저장은 원본 write와 하나의 transaction으로 간주하지 않는다.
-- 프로세스 간에는 workspace single-writer lock, 프로세스 내부에서는 Store mutex와
-  background writer queue로 update를 직렬화한다.
+- 프로세스 간 record update는 Workspace Memory가, 프로세스 내부에서는 Store mutex와
+  background writer queue가 직렬화한다.
 - 검색은 index update와 병행할 수 있어야 한다.
 - 앱 비정상 종료 후 마지막 불완전 JSONL record를 감지할 수 있어야 한다.
 - index open 실패, mapping version 불일치와 sequence gap은 rebuild 대상으로 본다.
