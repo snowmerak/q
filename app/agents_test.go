@@ -5,6 +5,8 @@ import (
 	"strings"
 	"testing"
 
+	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/snowmerak/q/config"
 )
 
@@ -105,5 +107,42 @@ func TestAgentConnectionProbeResultUpdatesStatus(t *testing.T) {
 	m = updated.(model)
 	if m.agentsProbe["grok"] != "failed" || !strings.Contains(m.status, "deadline exceeded") {
 		t.Fatalf("probe=%q status=%q", m.agentsProbe["grok"], m.status)
+	}
+}
+
+func TestAgentsSpaceKeyAssignsSelectedConnection(t *testing.T) {
+	m := newModel(context.Background(), config.Store{Dir: t.TempDir()}, nil)
+	m.agentsDraft = config.Default()
+	m.agentsDraft.Agents.Connections = map[string]config.AgentConnectionConfig{
+		"codex": {Preset: "codex"},
+	}
+	m.agentsMode = agentsModeList
+	updated, _ := m.updateAgents(tea.KeyPressMsg{Code: tea.KeySpace})
+	m = updated.(model)
+	if assigned := m.agentsDraft.Agents.Roles[config.AgentRoleSearch].Agent; assigned != "codex" {
+		t.Fatalf("search role assignment = %q", assigned)
+	}
+}
+
+func TestAgentsConnectionRowsStayColumnAligned(t *testing.T) {
+	m := newModel(context.Background(), config.Store{Dir: t.TempDir()}, nil)
+	m.width, m.height = 160, 30
+	m.agentsDraft = config.Default()
+	m.agentsDraft.Agents.Connections = map[string]config.AgentConnectionConfig{
+		"codex": {Preset: "codex"},
+		"grok":  {Preset: "grok"},
+	}
+	m.agentsPanel = 1
+	plain := ansi.Strip(m.viewAgentsLists())
+	columns := make(map[string]int)
+	for _, line := range strings.Split(plain, "\n") {
+		for _, id := range []string{"codex", "grok"} {
+			if column := strings.Index(line, "[ ] "+id); column >= 0 {
+				columns[id] = ansi.StringWidth(line[:column])
+			}
+		}
+	}
+	if columns["codex"] != columns["grok"] {
+		t.Fatalf("connection columns = %#v\n%s", columns, plain)
 	}
 }

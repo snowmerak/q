@@ -69,7 +69,7 @@ func (m model) updateAgents(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		if m.agentsPanel == 1 {
 			return m.deleteAgentConnection()
 		}
-	case " ":
+	case " ", "space":
 		return m.assignAgentRole()
 	case "t":
 		if m.agentsPanel == 1 {
@@ -394,7 +394,8 @@ func (m model) viewAgentsLists() string {
 		if connection == "" {
 			connection = "not assigned"
 		}
-		left.WriteString(subtleStyle.Render("    " + connection + "\n"))
+		left.WriteString(subtleStyle.Render("    " + connection))
+		left.WriteString("\n")
 	}
 	var right strings.Builder
 	right.WriteString(agentTraceTitleStyle(m.dark).Render(connectionTitle))
@@ -422,7 +423,8 @@ func (m model) viewAgentsLists() string {
 			state += " · " + probe
 		}
 		right.WriteString(fmt.Sprintf("%s[%s] %s\n", cursor, mark, id))
-		right.WriteString(subtleStyle.Render("    " + agentConnectionEndpoint(connection) + " · " + state + "\n"))
+		right.WriteString(subtleStyle.Render("    " + agentConnectionEndpoint(connection) + " · " + state))
+		right.WriteString("\n")
 	}
 	panel := lipgloss.NewStyle().Width(panelWidth)
 	return lipgloss.JoinHorizontal(lipgloss.Top, panel.Render(left.String()), strings.Repeat(" ", gap), panel.Render(right.String()))
