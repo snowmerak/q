@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"path/filepath"
@@ -17,6 +18,7 @@ import (
 	"github.com/snowmerak/q/client"
 	"github.com/snowmerak/q/config"
 	"github.com/snowmerak/q/mcpconfig"
+	"github.com/snowmerak/q/subagent"
 	"github.com/snowmerak/q/workspace"
 )
 
@@ -320,8 +322,116 @@ func TestACPAgentAdvertisesAndHandlesHeadlessCommands(t *testing.T) {
 			output += update.Content.Text.Text
 		}
 	}
-	if len(commands) != 2 || commands[0].Name != "learn" || !strings.Contains(output, "/learn") {
+	if len(commands) != 3 || commands[0].Name != "plan" || !strings.Contains(output, "/plan") || !strings.Contains(output, "/learn") {
 		t.Fatalf("commands = %#v, output = %q", commands, output)
+	}
+}
+
+func TestACPAgentRunsApprovedPlanThroughElicitation(t *testing.T) {
+	configuredClient := &planningClient{responses: []client.Message{
+		{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{planToolCall(subagent.SubmitBriefToolName, `{
+			"objective":"Expose plan through ACP",
+			"conditions":["Execute only after approval"],
+			"acceptance_criteria":["ACP receives the completed result"]
+		}`)}},
+		{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{planToolCall(subagent.SubmitPlanToolName, `{
+			"outcome":"succeeded",
+			"summary":"Run the shared plan workflow through ACP",
+			"conditions":["Execute only after approval"],
+			"steps":[{"title":"Connect ACP","description":"Use the shared plan workflow","target":{"any":[{"all":[{"kind":"paths","paths":["app/acp.go"]}]}]}}],
+			"verification":["Complete the approved plan cycle"]
+		}`)}},
+		{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{planToolCall(subagent.CoderCompleteToolName, `{
+			"outcome":"succeeded",
+			"summary":"Connected ACP to the shared plan workflow",
+			"artifacts":["app/acp.go"],
+			"verification":["go test ./app"]
+		}`)}},
+		{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{planToolCall(subagent.ReviewTaskToolName, `{
+			"decision":"next",
+			"feedback":"",
+			"facts":["ACP plan execution completed"]
+		}`)}},
+	}}
+	agent, workspaceStore, connection := testACPAgent(t, configuredClient, &fakeAgentTools{})
+	agent.state.config.Provider.Model = "plan-model"
+	connection.answer = "approve"
+	if _, err := agent.Initialize(t.Context(), acp.InitializeRequest{
+		ClientCapabilities: acp.ClientCapabilities{
+			Elicitation: &acp.ElicitationCapabilities{Form: &acp.ElicitationFormCapabilities{}},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	sessionID := openTestACPSession(t, agent, workspaceStore.Root)
+	response, err := agent.Prompt(t.Context(), acp.PromptRequest{
+		SessionId: sessionID,
+		Prompt:    []acp.ContentBlock{acp.TextBlock("/plan expose plan through ACP")},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.StopReason != acp.StopReasonEndTurn || len(configuredClient.requests) != 4 {
+		t.Fatalf("response = %#v, requests = %d", response, len(configuredClient.requests))
+	}
+
+	var output, thought string
+	var statuses []acp.PlanEntryStatus
+	for _, notification := range connection.snapshot() {
+		if update := notification.Update.AgentMessageChunk; update != nil && update.Content.Text != nil {
+			output += update.Content.Text.Text
+		}
+		if update := notification.Update.AgentThoughtChunk; update != nil && update.Content.Text != nil {
+			thought += update.Content.Text.Text
+		}
+		if update := notification.Update.Plan; update != nil && len(update.Entries) == 1 && update.Entries[0].Content == "expose plan through ACP" {
+			statuses = append(statuses, update.Entries[0].Status)
+		}
+	}
+	if !strings.Contains(output, "Plan executed successfully.") || !strings.Contains(output, "Connected ACP to the shared plan workflow") {
+		t.Fatalf("plan output = %q", output)
+	}
+	if !strings.Contains(thought, "griller") || !strings.Contains(thought, "planner") || !strings.Contains(thought, "executor") {
+		t.Fatalf("plan progress = %q", thought)
+	}
+	if len(statuses) != 2 || statuses[0] != acp.PlanEntryStatusInProgress || statuses[1] != acp.PlanEntryStatusCompleted {
+		t.Fatalf("plan statuses = %#v", statuses)
+	}
+	saved, err := workspaceStore.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(saved.Transcript) != 2 || saved.Transcript[0].Content != "expose plan through ACP" ||
+		!strings.Contains(saved.Transcript[1].Content, "Plan executed successfully.") {
+		t.Fatalf("saved transcript = %#v", saved.Transcript)
+	}
+}
+
+func TestACPAgentExplainsPlanElicitationRequirement(t *testing.T) {
+	configuredClient := &fakeClient{}
+	agent, workspaceStore, connection := testACPAgent(t, configuredClient, &fakeAgentTools{})
+	sessionID := openTestACPSession(t, agent, workspaceStore.Root)
+	response, err := agent.Prompt(t.Context(), acp.PromptRequest{
+		SessionId: sessionID,
+		Prompt:    []acp.ContentBlock{acp.TextBlock("/plan make a change")},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.StopReason != acp.StopReasonEndTurn || len(configuredClient.requests) != 0 {
+		t.Fatalf("response = %#v, requests = %d", response, len(configuredClient.requests))
+	}
+	var output string
+	for _, notification := range connection.snapshot() {
+		if update := notification.Update.AgentMessageChunk; update != nil && update.Content.Text != nil {
+			output += update.Content.Text.Text
+		}
+	}
+	if !strings.Contains(output, "form elicitation") {
+		t.Fatalf("unsupported client output = %q", output)
+	}
+	if _, err := workspaceStore.Load(); !errors.Is(err, workspace.ErrNotFound) {
+		t.Fatalf("unsupported plan created a session transcript: %v", err)
 	}
 }
 

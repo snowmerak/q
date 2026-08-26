@@ -49,8 +49,12 @@ Store, and `.q/session.json` projection. It supports ACP `session/new`,
 `session/prompt`, `session/cancel`, streamed message/thought updates, tool-call
 updates, task-lifecycle plan updates, `session/list`, `session/delete`, and
 `session/close`. Session metadata uses the first meaningful prompt as its title
-and records the latest turn time. The `learn` and `help` commands are advertised
-to ACP clients and handled without the Bubble Tea UI.
+and records the latest turn time. The `plan`, `learn`, and `help` commands are
+advertised to ACP clients and handled without the Bubble Tea UI. `/plan
+<request>` runs the same Griller, Planner, approval-gated Coder, and review
+workflow as the TUI while projecting bounded progress and plan status through
+ACP updates. Because execution always requires explicit approval, the ACP
+client must advertise form elicitation support.
 
 q deliberately keeps its native session rule here: one ACP process is bound to
 one workspace and accepts only one active ACP session. `session/load` and

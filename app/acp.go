@@ -642,12 +642,6 @@ func (a *acpAgent) Prompt(ctx context.Context, request acp.PromptRequest) (acp.P
 	if err := a.emitAvailableCommandsContext(ctx); err != nil {
 		return acp.PromptResponse{}, err
 	}
-	if !hasNonText {
-		if response, handled, commandErr := a.runACPCommand(text); handled {
-			response.UserMessageId = request.MessageId
-			return response, commandErr
-		}
-	}
 
 	turnContext, cancel := context.WithCancel(ctx)
 	a.stateMu.Lock()
@@ -659,6 +653,12 @@ func (a *acpAgent) Prompt(ctx context.Context, request acp.PromptRequest) (acp.P
 		a.turnCancel = nil
 		a.stateMu.Unlock()
 	}()
+	if !hasNonText {
+		if response, handled, commandErr := a.runACPCommand(turnContext, text); handled {
+			response.UserMessageId = request.MessageId
+			return response, commandErr
+		}
+	}
 
 	response, err := a.runPrompt(turnContext, userMessage)
 	response.UserMessageId = request.MessageId
@@ -1013,6 +1013,10 @@ func (a *acpAgent) emitTaskPlanContext(ctx context.Context, objective string, st
 func (a *acpAgent) emitAvailableCommandsContext(ctx context.Context) error {
 	commands := []acp.AvailableCommand{
 		{
+			Name: "plan", Description: "Plan an implementation, request approval, then execute and review it.",
+			Input: &acp.AvailableCommandInput{Unstructured: &acp.UnstructuredCommandInput{Hint: "work to plan"}},
+		},
+		{
 			Name: "learn", Description: "Checkpoint or control q learning for this workspace.",
 			Input: &acp.AvailableCommandInput{Unstructured: &acp.UnstructuredCommandInput{Hint: "on, off, or status"}},
 		},
@@ -1023,31 +1027,41 @@ func (a *acpAgent) emitAvailableCommandsContext(ctx context.Context) error {
 	}})
 }
 
-func (a *acpAgent) runACPCommand(text string) (acp.PromptResponse, bool, error) {
+func (a *acpAgent) runACPCommand(ctx context.Context, text string) (acp.PromptResponse, bool, error) {
 	command := strings.TrimSpace(text)
 	var output string
-	switch command {
-	case "/help":
-		output = "Available ACP commands:\n- /learn [on|off|status]\n- /help"
-	case "/learn":
+	switch {
+	case command == "/plan":
+		output = "Usage: /plan <work to plan>"
+	case strings.HasPrefix(command, "/plan "):
+		objective := strings.TrimSpace(strings.TrimPrefix(command, "/plan "))
+		if objective == "" {
+			output = "Usage: /plan <work to plan>"
+			break
+		}
+		response, err := a.runACPPlan(ctx, objective)
+		return response, true, err
+	case command == "/help":
+		output = "Available ACP commands:\n- /plan <work to plan>\n- /learn [on|off|status]\n- /help"
+	case command == "/learn":
 		if a.state.learningDisabled() {
 			output = "Learning is disabled for this workspace. Use /learn on to enable it."
 		} else {
 			output = "Learning checkpoint enqueued."
 			a.launchLearning(a.state.enqueueExplicitLearning())
 		}
-	case "/learn on":
+	case command == "/learn on":
 		if err := a.state.setWorkspaceLearningDisabled(false); err != nil {
 			return acp.PromptResponse{}, true, err
 		}
 		output = "Learning enabled for this workspace."
 		a.launchLearning(a.state.startNextLearningSegment())
-	case "/learn off":
+	case command == "/learn off":
 		if err := a.state.setWorkspaceLearningDisabled(true); err != nil {
 			return acp.PromptResponse{}, true, err
 		}
 		output = "Learning disabled for this workspace."
-	case "/learn status":
+	case command == "/learn status":
 		if a.state.learningDisabled() {
 			output = "Learning is disabled for this workspace."
 		} else {
@@ -1060,10 +1074,97 @@ func (a *acpAgent) runACPCommand(text string) (acp.PromptResponse, bool, error) 
 			return acp.PromptResponse{}, false, nil
 		}
 	}
-	if err := a.update(acp.UpdateAgentMessageText(output)); err != nil {
+	if err := a.updateContext(ctx, acp.UpdateAgentMessageText(output)); err != nil {
 		return acp.PromptResponse{}, true, err
 	}
 	return acp.PromptResponse{StopReason: acp.StopReasonEndTurn}, true, nil
+}
+
+func (a *acpAgent) runACPPlan(ctx context.Context, objective string) (acp.PromptResponse, error) {
+	if a.state.client == nil || a.state.toolRuntime == nil {
+		return acp.PromptResponse{}, errors.New("ACP plan requires an available model and tool runtime")
+	}
+	a.stateMu.Lock()
+	supportsForm := a.clientCapabilities.Elicitation != nil && a.clientCapabilities.Elicitation.Form != nil
+	a.stateMu.Unlock()
+	if !supportsForm {
+		message := "The ACP client must support form elicitation to answer /plan questions and approve execution."
+		if err := a.updateContext(ctx, acp.UpdateAgentMessageText(message)); err != nil {
+			return acp.PromptResponse{}, err
+		}
+		return acp.PromptResponse{StopReason: acp.StopReasonEndTurn}, nil
+	}
+
+	a.state.turnMessageStart = len(a.state.messages)
+	titleChanged := a.state.touchSessionMetadata(objective)
+	message := client.Message{Role: client.RoleUser, Content: objective}
+	a.state.archiveMessage(message, sessionstore.StatusSubmitted, false)
+	a.state.messages = append(a.state.messages, message)
+	if a.state.memory == nil {
+		a.state.memory = memoryForPlan(a.state.activeConfig())
+	}
+	a.state.memory.Append(message)
+	a.launchLearning(a.state.observeLearningMessage(message))
+	if err := a.state.saveWorkspaceSession(); err != nil {
+		return acp.PromptResponse{}, err
+	}
+	if err := a.emitSessionInfoContext(ctx, titleChanged); err != nil {
+		return acp.PromptResponse{}, err
+	}
+	if err := a.emitTaskPlanContext(ctx, objective, acp.PlanEntryStatusInProgress); err != nil {
+		return acp.PromptResponse{}, err
+	}
+
+	workingDirectory := ""
+	var executionStore planExecutionStore
+	if a.state.workspaceStore != nil {
+		workingDirectory = a.state.workspaceStore.Root
+		executionStore = a.state.workspaceStore
+	}
+	events := make(chan agentEvent)
+	go streamPlanWorkflow(
+		ctx, a.state.client, a.state.toolRuntime, a.state.activeConfig(), a.state.runID, a.state.archive,
+		workingDirectory, objective, planContext(a.state.memory.Messages()), executionStore, events,
+	)
+
+	for event := range events {
+		if event.activity != nil {
+			progress := strings.TrimSpace(strings.Join([]string{event.activity.Agent, event.activity.Action, event.activity.Detail}, " · "))
+			if progress != "" {
+				if err := a.updateContext(ctx, acp.UpdateAgentThoughtText(progress+"\n")); err != nil {
+					return acp.PromptResponse{}, err
+				}
+			}
+		}
+		if event.question != nil {
+			event.answer <- a.elicitAnswer(ctx, *event.question)
+		}
+		if event.learningName != "" {
+			a.launchLearning(a.state.enqueueLearningSpecial(event.learningName, event.learningPayload))
+		}
+		if event.err != nil {
+			_ = a.emitTaskPlanContext(a.state.ctx, objective, acp.PlanEntryStatusCompleted)
+			if errors.Is(event.err, context.Canceled) || errors.Is(ctx.Err(), context.Canceled) {
+				return a.finishCancelledPrompt(), nil
+			}
+			a.state.archiveFailure("ACP plan failed", event.err)
+			_ = a.state.flushArchive()
+			return acp.PromptResponse{}, event.err
+		}
+		if event.response != nil {
+			if err := a.emitTaskPlanContext(ctx, objective, acp.PlanEntryStatusCompleted); err != nil {
+				return acp.PromptResponse{}, err
+			}
+			streamedResponse := ""
+			return a.finishPrompt(*event.response, event.requestEstimate, &streamedResponse)
+		}
+	}
+
+	if errors.Is(ctx.Err(), context.Canceled) {
+		_ = a.emitTaskPlanContext(a.state.ctx, objective, acp.PlanEntryStatusCompleted)
+		return a.finishCancelledPrompt(), nil
+	}
+	return acp.PromptResponse{}, errors.New("plan workflow ended without a response")
 }
 
 func (a *acpAgent) update(update acp.SessionUpdate) error {
