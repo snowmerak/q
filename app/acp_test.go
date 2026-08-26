@@ -350,9 +350,49 @@ func TestACPAgentAdvertisesAndHandlesHeadlessCommands(t *testing.T) {
 			output += update.Content.Text.Text
 		}
 	}
-	if len(commands) != 4 || commands[0].Name != "plan" || commands[2].Name != "clear" ||
-		!strings.Contains(output, "/plan") || !strings.Contains(output, "/learn") || !strings.Contains(output, "/clear") {
+	commandNames := make([]string, 0, len(commands))
+	for _, command := range commands {
+		commandNames = append(commandNames, command.Name)
+	}
+	if !slices.Equal(commandNames, []string{"plan", "agent:search", "learn", "clear", "help"}) ||
+		!strings.Contains(output, "/plan") || !strings.Contains(output, "/agent:search") ||
+		!strings.Contains(output, "/learn") || !strings.Contains(output, "/clear") {
 		t.Fatalf("commands = %#v, output = %q", commands, output)
+	}
+}
+
+func TestACPAgentRunsExplicitSearchCommand(t *testing.T) {
+	agent, workspaceStore, connection := testACPAgent(t, &fakeClient{}, &fakeAgentTools{})
+	var received subagent.ExternalSearchInput
+	agent.externalSearch = func(_ context.Context, input subagent.ExternalSearchInput) (subagent.ExternalSearchResult, error) {
+		received = input
+		return subagent.ExternalSearchResult{
+			Agent: "codex", Summary: "ACP evidence: https://agentclientprotocol.com",
+		}, nil
+	}
+	sessionID := openTestACPSession(t, agent, workspaceStore.Root)
+	response, err := agent.Prompt(t.Context(), acp.PromptRequest{
+		SessionId: sessionID,
+		Prompt:    []acp.ContentBlock{acp.TextBlock("/agent:search current ACP lifecycle")},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.StopReason != acp.StopReasonEndTurn || received.Query != "current ACP lifecycle" ||
+		len(received.CompletionCriteria) == 0 {
+		t.Fatalf("response = %#v, input = %#v", response, received)
+	}
+	var output, thought string
+	for _, notification := range connection.snapshot() {
+		if update := notification.Update.AgentMessageChunk; update != nil && update.Content.Text != nil {
+			output += update.Content.Text.Text
+		}
+		if update := notification.Update.AgentThoughtChunk; update != nil && update.Content.Text != nil {
+			thought += update.Content.Text.Text
+		}
+	}
+	if !strings.Contains(output, "https://agentclientprotocol.com") || !strings.Contains(thought, "Search agent started") {
+		t.Fatalf("output = %q, thought = %q", output, thought)
 	}
 }
 

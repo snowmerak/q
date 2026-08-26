@@ -192,6 +192,7 @@ func renderHelpContent(dark bool) string {
 
 	writeHelpSection("SLASH COMMANDS", [][2]string{
 		{"/plan [request]", "Grill, research, approve, and execute a work plan."},
+		{"/agent:search <query>", "Run the configured ACP Search agent and return its evidence report."},
 		{"/commit", "Open the interactive commit workflow."},
 		{"/clear", "Clear the current chat projection."},
 		{"/learn [on|off|status]", "Checkpoint or control Thinker learning for this workspace."},

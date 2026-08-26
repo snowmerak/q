@@ -22,6 +22,7 @@ import (
 	"github.com/snowmerak/q/mcpconfig"
 	"github.com/snowmerak/q/providerhost"
 	"github.com/snowmerak/q/sessionstore"
+	"github.com/snowmerak/q/subagent"
 	"github.com/snowmerak/q/workspace"
 )
 
@@ -197,6 +198,7 @@ type acpAgent struct {
 	sessionID          acp.SessionId
 	sessionOpen        bool
 	turnCancel         context.CancelFunc
+	externalSearch     subagent.ExternalSearchFunc
 }
 
 var (
@@ -207,10 +209,11 @@ var (
 func newACPAgent(state *model, root string, logger *slog.Logger) *acpAgent {
 	state.ensureRunID()
 	return &acpAgent{
-		state:     state,
-		root:      root,
-		logger:    logger,
-		sessionID: acpSessionID(state.runID),
+		state:          state,
+		root:           root,
+		logger:         logger,
+		sessionID:      acpSessionID(state.runID),
+		externalSearch: configuredExternalSearch(state.activeConfig(), root),
 	}
 }
 
@@ -1031,6 +1034,10 @@ func (a *acpAgent) emitAvailableCommandsContext(ctx context.Context) error {
 			Input: &acp.AvailableCommandInput{Unstructured: &acp.UnstructuredCommandInput{Hint: "work to plan"}},
 		},
 		{
+			Name: "agent:search", Description: "Run the configured ACP Search agent and return its evidence report.",
+			Input: &acp.AvailableCommandInput{Unstructured: &acp.UnstructuredCommandInput{Hint: "query"}},
+		},
+		{
 			Name: "learn", Description: "Checkpoint or control q learning for this workspace.",
 			Input: &acp.AvailableCommandInput{Unstructured: &acp.UnstructuredCommandInput{Hint: "on, off, or status"}},
 		},
@@ -1046,6 +1053,16 @@ func (a *acpAgent) runACPCommand(ctx context.Context, text string) (acp.PromptRe
 	command := strings.TrimSpace(text)
 	var output string
 	switch {
+	case command == agentSearchCommand:
+		output = "Usage: /agent:search <query>"
+	case strings.HasPrefix(command, agentSearchCommand+" "):
+		query := strings.TrimSpace(strings.TrimPrefix(command, agentSearchCommand))
+		if query == "" {
+			output = "Usage: /agent:search <query>"
+			break
+		}
+		response, err := a.runACPAgentSearch(ctx, query)
+		return response, true, err
 	case command == "/plan":
 		output = "Usage: /plan <work to plan>"
 	case strings.HasPrefix(command, "/plan "):
@@ -1057,7 +1074,7 @@ func (a *acpAgent) runACPCommand(ctx context.Context, text string) (acp.PromptRe
 		response, err := a.runACPPlan(ctx, objective)
 		return response, true, err
 	case command == "/help":
-		output = "Available ACP commands:\n- /plan <work to plan>\n- /learn [on|off|status]\n- /clear\n- /help"
+		output = "Available ACP commands:\n- /plan <work to plan>\n- /agent:search <query>\n- /learn [on|off|status]\n- /clear\n- /help"
 	case command == "/learn":
 		if a.state.learningDisabled() {
 			output = "Learning is disabled for this workspace. Use /learn on to enable it."

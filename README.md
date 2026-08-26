@@ -49,12 +49,15 @@ Store, and `.q/session.json` projection. It supports ACP `session/new`,
 `session/prompt`, `session/cancel`, streamed message/thought updates, tool-call
 updates, task-lifecycle plan updates, `session/list`, `session/delete`, and
 `session/close`. Session metadata uses the first meaningful prompt as its title
-and records the latest turn time. The `plan`, `learn`, `clear`, and `help`
-commands are advertised to ACP clients and handled without the Bubble Tea UI. `/plan
-<request>` runs the same Griller, Planner, approval-gated Coder, and review
+and records the latest turn time. The `plan`, `agent:search`, `learn`, `clear`,
+and `help` commands are advertised to ACP clients and handled without the
+Bubble Tea UI. `/plan <request>` runs the same Griller, Planner,
+approval-gated Coder, and review
 workflow as the TUI while projecting bounded progress and plan status through
 ACP updates. Because execution always requires explicit approval, the ACP
-client must advertise form elicitation support. `/clear` drops q's persisted
+client must advertise form elicitation support. `/agent:search <query>` creates
+an isolated session on the configured ACP Search agent, returns its evidence
+report, and then deletes or closes that session. `/clear` drops q's persisted
 conversation projection and model context while keeping the active ACP session
 ID usable.
 
@@ -216,6 +219,7 @@ screen without discarding editor state or interrupting an active turn.
 | Command | Action |
 |---|---|
 | `/plan [request]` | Grill, research, approve, and execute a work plan. Without an inline request, the next message becomes the request. |
+| `/agent:search <query>` | Explicitly run the configured ACP Search agent in an isolated read-only session and return its evidence report. |
 | `/commit` | Open the interactive commit workflow, then return to chat. |
 | `/model` | Configure the workspace/default, embedding, subagent role, and grouped fallback models. |
 | `/gateway` | Configure Gateway network defaults, API keys, and providers. |

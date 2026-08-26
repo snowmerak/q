@@ -1171,7 +1171,7 @@ func TestHelpCommandAndShortcutKeepCommandsOutOfChatFooter(t *testing.T) {
 	}
 	help := ansi.Strip(m.View().Content)
 	for _, expected := range []string{
-		"q · Help", "SLASH COMMANDS", "/plan [request]", "/commit", "/clear", "/learn [on|off|status]", "/model",
+		"q · Help", "SLASH COMMANDS", "/plan [request]", "/agent:search <query>", "/commit", "/clear", "/learn [on|off|status]", "/model",
 		"/gateway", "/loom", "/ignore", "/skills",
 	} {
 		if !strings.Contains(help, expected) {

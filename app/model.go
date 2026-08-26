@@ -2993,6 +2993,9 @@ func (m model) submitChat() (tea.Model, tea.Cmd) {
 		if updated, command, handled := m.startSkillCommand(content); handled {
 			return updated, command
 		}
+		if query, handled := parseAgentSearchCommand(content); handled {
+			return m.startAgentSearch(query)
+		}
 		switch content {
 		case "/plan":
 			m.input.Reset()
