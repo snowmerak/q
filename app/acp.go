@@ -941,10 +941,11 @@ func (a *acpAgent) finishToolCallContext(ctx context.Context, message client.Mes
 func (a *acpAgent) elicitAnswer(ctx context.Context, question askToUserInput) askToUserOutput {
 	a.stateMu.Lock()
 	connection := a.connection
+	sessionID := a.sessionID
 	supportsForm := a.clientCapabilities.Elicitation != nil && a.clientCapabilities.Elicitation.Form != nil
 	a.stateMu.Unlock()
 	if connection == nil || !supportsForm {
-		return askToUserOutput{Freeform: "The ACP client cannot answer inline. Ask the question in the final response and stop."}
+		return askToUserOutput{Err: errors.New("ACP client does not support form elicitation")}
 	}
 
 	description := question.Question
@@ -959,8 +960,9 @@ func (a *acpAgent) elicitAnswer(ctx context.Context, question askToUserInput) as
 	}
 	response, err := connection.UnstableCreateElicitation(ctx, acp.UnstableCreateElicitationRequest{
 		Form: &acp.UnstableCreateElicitationForm{
-			Message: question.Question,
-			Mode:    "form",
+			Message:   question.Question,
+			Mode:      "form",
+			SessionId: sessionID,
 			RequestedSchema: acp.UnstableElicitationSchema{
 				Type: "object",
 				Properties: map[string]any{
@@ -970,10 +972,22 @@ func (a *acpAgent) elicitAnswer(ctx context.Context, question askToUserInput) as
 			},
 		},
 	})
-	if err != nil || response.Accept == nil {
-		return askToUserOutput{Freeform: "The user did not provide an inline answer. Ask the question in the final response and stop."}
+	if err != nil {
+		return askToUserOutput{Err: fmt.Errorf("ACP elicitation failed: %w", err)}
 	}
-	answer, _ := response.Accept.Content["answer"].(string)
+	if response.Decline != nil {
+		return askToUserOutput{Err: fmt.Errorf("ACP elicitation declined: %w", context.Canceled)}
+	}
+	if response.Cancel != nil {
+		return askToUserOutput{Err: fmt.Errorf("ACP elicitation cancelled: %w", context.Canceled)}
+	}
+	if response.Accept == nil {
+		return askToUserOutput{Err: errors.New("ACP elicitation returned no outcome")}
+	}
+	answer, ok := response.Accept.Content["answer"].(string)
+	if !ok || strings.TrimSpace(answer) == "" {
+		return askToUserOutput{Err: errors.New("ACP elicitation returned no answer")}
+	}
 	return answerForQuestion(question, answer)
 }
 
@@ -1020,6 +1034,7 @@ func (a *acpAgent) emitAvailableCommandsContext(ctx context.Context) error {
 			Name: "learn", Description: "Checkpoint or control q learning for this workspace.",
 			Input: &acp.AvailableCommandInput{Unstructured: &acp.UnstructuredCommandInput{Hint: "on, off, or status"}},
 		},
+		{Name: "clear", Description: "Clear q's conversation context for this workspace."},
 		{Name: "help", Description: "Show the slash commands available through ACP."},
 	}
 	return a.updateContext(ctx, acp.SessionUpdate{AvailableCommandsUpdate: &acp.SessionAvailableCommandsUpdate{
@@ -1042,7 +1057,7 @@ func (a *acpAgent) runACPCommand(ctx context.Context, text string) (acp.PromptRe
 		response, err := a.runACPPlan(ctx, objective)
 		return response, true, err
 	case command == "/help":
-		output = "Available ACP commands:\n- /plan <work to plan>\n- /learn [on|off|status]\n- /help"
+		output = "Available ACP commands:\n- /plan <work to plan>\n- /learn [on|off|status]\n- /clear\n- /help"
 	case command == "/learn":
 		if a.state.learningDisabled() {
 			output = "Learning is disabled for this workspace. Use /learn on to enable it."
@@ -1067,6 +1082,11 @@ func (a *acpAgent) runACPCommand(ctx context.Context, text string) (acp.PromptRe
 		} else {
 			output = "Learning is enabled for this workspace."
 		}
+	case command == "/clear":
+		if err := a.clearACPConversation(ctx); err != nil {
+			return acp.PromptResponse{}, true, err
+		}
+		output = "Conversation cleared for this workspace."
 	default:
 		if strings.HasPrefix(command, "/learn ") {
 			output = "Usage: /learn [on|off|status]"
@@ -1078,6 +1098,20 @@ func (a *acpAgent) runACPCommand(ctx context.Context, text string) (acp.PromptRe
 		return acp.PromptResponse{}, true, err
 	}
 	return acp.PromptResponse{StopReason: acp.StopReasonEndTurn}, true, nil
+}
+
+func (a *acpAgent) clearACPConversation(ctx context.Context) error {
+	runID := a.state.runID
+	a.state.resetConversation()
+	// An ACP slash command cannot replace the active client-side session ID.
+	// Keep its backing run stable while clearing only q's conversation projection.
+	a.state.runID = runID
+	a.state.sessionUpdatedAt = time.Now().UTC()
+	emptyTitle := ""
+	updatedAt := a.state.sessionUpdatedAt.Format(time.RFC3339Nano)
+	return a.updateContext(ctx, acp.SessionUpdate{SessionInfoUpdate: &acp.SessionSessionInfoUpdate{
+		Title: &emptyTitle, UpdatedAt: &updatedAt,
+	}})
 }
 
 func (a *acpAgent) runACPPlan(ctx context.Context, objective string) (acp.PromptResponse, error) {

@@ -362,6 +362,9 @@ func streamPlanWorkflow(
 		}
 		select {
 		case answer := <-answerChannel:
+			if answer.Err != nil {
+				return subagent.UserAnswer{}, answer.Err
+			}
 			return subagent.UserAnswer{
 				SelectedChoiceID: answer.SelectedChoiceID, Freeform: answer.Freeform,
 			}, nil

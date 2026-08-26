@@ -43,6 +43,7 @@ type askToUserInput struct {
 type askToUserOutput struct {
 	SelectedChoiceID string `json:"selected_choice_id,omitempty"`
 	Freeform         string `json:"freeform,omitempty"`
+	Err              error  `json:"-"`
 }
 
 type taskCompleteInput struct {

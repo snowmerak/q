@@ -2,6 +2,8 @@ module github.com/snowmerak/q
 
 go 1.26.5
 
+replace github.com/coder/acp-go-sdk => ./third_party/acp-go-sdk
+
 require (
 	charm.land/bubbles/v2 v2.1.1
 	charm.land/bubbletea/v2 v2.0.8

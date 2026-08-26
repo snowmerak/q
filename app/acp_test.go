@@ -23,9 +23,12 @@ import (
 )
 
 type fakeACPConnection struct {
-	mu      sync.Mutex
-	updates []acp.SessionNotification
-	answer  string
+	mu                  sync.Mutex
+	updates             []acp.SessionNotification
+	elicitationRequests []acp.UnstableCreateElicitationRequest
+	answer              string
+	elicitationAction   string
+	elicitationErr      error
 }
 
 type blockingACPClient struct {
@@ -50,14 +53,33 @@ func (f *fakeACPConnection) SessionUpdate(_ context.Context, notification acp.Se
 }
 
 func (f *fakeACPConnection) UnstableCreateElicitation(
-	context.Context,
-	acp.UnstableCreateElicitationRequest,
+	_ context.Context,
+	request acp.UnstableCreateElicitationRequest,
 ) (acp.UnstableCreateElicitationResponse, error) {
+	f.mu.Lock()
+	f.elicitationRequests = append(f.elicitationRequests, request)
+	action := f.elicitationAction
+	answer := f.answer
+	err := f.elicitationErr
+	f.mu.Unlock()
+	if err != nil {
+		return acp.UnstableCreateElicitationResponse{}, err
+	}
+	switch action {
+	case "decline":
+		return acp.UnstableCreateElicitationResponse{
+			Decline: &acp.UnstableCreateElicitationDecline{Action: "decline"},
+		}, nil
+	case "cancel":
+		return acp.UnstableCreateElicitationResponse{
+			Cancel: &acp.UnstableCreateElicitationCancel{Action: "cancel"},
+		}, nil
+	}
 	return acp.UnstableCreateElicitationResponse{
 		Accept: &acp.UnstableCreateElicitationAccept{
 			Action: "accept",
 			Content: map[string]any{
-				"answer": f.answer,
+				"answer": answer,
 			},
 		},
 	}, nil
@@ -67,6 +89,12 @@ func (f *fakeACPConnection) snapshot() []acp.SessionNotification {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return append([]acp.SessionNotification(nil), f.updates...)
+}
+
+func (f *fakeACPConnection) elicitationSnapshot() []acp.UnstableCreateElicitationRequest {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]acp.UnstableCreateElicitationRequest(nil), f.elicitationRequests...)
 }
 
 func testACPAgent(t *testing.T, configuredClient chatClient, tools agentToolRuntime) (*acpAgent, workspace.Store, *fakeACPConnection) {
@@ -322,7 +350,8 @@ func TestACPAgentAdvertisesAndHandlesHeadlessCommands(t *testing.T) {
 			output += update.Content.Text.Text
 		}
 	}
-	if len(commands) != 3 || commands[0].Name != "plan" || !strings.Contains(output, "/plan") || !strings.Contains(output, "/learn") {
+	if len(commands) != 4 || commands[0].Name != "plan" || commands[2].Name != "clear" ||
+		!strings.Contains(output, "/plan") || !strings.Contains(output, "/learn") || !strings.Contains(output, "/clear") {
 		t.Fatalf("commands = %#v, output = %q", commands, output)
 	}
 }
@@ -374,6 +403,14 @@ func TestACPAgentRunsApprovedPlanThroughElicitation(t *testing.T) {
 	if response.StopReason != acp.StopReasonEndTurn || len(configuredClient.requests) != 4 {
 		t.Fatalf("response = %#v, requests = %d", response, len(configuredClient.requests))
 	}
+	elicitations := connection.elicitationSnapshot()
+	if len(elicitations) != 1 || elicitations[0].Form == nil || elicitations[0].Form.SessionId != sessionID {
+		t.Fatalf("elicitation scope = %#v, want session %q", elicitations, sessionID)
+	}
+	wireRequest, err := json.Marshal(elicitations[0])
+	if err != nil || !strings.Contains(string(wireRequest), `"sessionId":"`+string(sessionID)+`"`) {
+		t.Fatalf("elicitation wire request = %s, err = %v", wireRequest, err)
+	}
 
 	var output, thought string
 	var statuses []acp.PlanEntryStatus
@@ -407,6 +444,71 @@ func TestACPAgentRunsApprovedPlanThroughElicitation(t *testing.T) {
 	}
 }
 
+func TestACPAgentStopsPlanWhenElicitationFails(t *testing.T) {
+	configuredClient := &planningClient{responses: []client.Message{{
+		Role: client.RoleAssistant,
+		ToolCalls: []client.ToolCall{planToolCall(subagent.AskToUserToolName, `{
+			"question":"Which persistence should be used?",
+			"choices":[{"id":"sqlite","label":"SQLite"}]
+		}`)},
+	}}}
+	agent, workspaceStore, connection := testACPAgent(t, configuredClient, &fakeAgentTools{})
+	agent.state.config.Provider.Model = "plan-model"
+	connection.elicitationErr = errors.New("unknown elicitation scope")
+	if _, err := agent.Initialize(t.Context(), acp.InitializeRequest{
+		ClientCapabilities: acp.ClientCapabilities{
+			Elicitation: &acp.ElicitationCapabilities{Form: &acp.ElicitationFormCapabilities{}},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	sessionID := openTestACPSession(t, agent, workspaceStore.Root)
+	_, err := agent.Prompt(t.Context(), acp.PromptRequest{
+		SessionId: sessionID,
+		Prompt:    []acp.ContentBlock{acp.TextBlock("/plan add persistence")},
+	})
+	if err == nil || !strings.Contains(err.Error(), "unknown elicitation scope") {
+		t.Fatalf("plan elicitation error = %v", err)
+	}
+	if len(configuredClient.requests) != 1 {
+		t.Fatalf("plan continued after elicitation failure: %d requests", len(configuredClient.requests))
+	}
+	elicitations := connection.elicitationSnapshot()
+	if len(elicitations) != 1 || elicitations[0].Form == nil || elicitations[0].Form.SessionId != sessionID {
+		t.Fatalf("failed elicitation scope = %#v", elicitations)
+	}
+}
+
+func TestACPAgentCancelsPlanWhenElicitationIsCancelled(t *testing.T) {
+	configuredClient := &planningClient{responses: []client.Message{{
+		Role: client.RoleAssistant,
+		ToolCalls: []client.ToolCall{planToolCall(subagent.AskToUserToolName, `{
+			"question":"Which persistence should be used?"
+		}`)},
+	}}}
+	agent, workspaceStore, connection := testACPAgent(t, configuredClient, &fakeAgentTools{})
+	agent.state.config.Provider.Model = "plan-model"
+	connection.elicitationAction = "cancel"
+	if _, err := agent.Initialize(t.Context(), acp.InitializeRequest{
+		ClientCapabilities: acp.ClientCapabilities{
+			Elicitation: &acp.ElicitationCapabilities{Form: &acp.ElicitationFormCapabilities{}},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	sessionID := openTestACPSession(t, agent, workspaceStore.Root)
+	response, err := agent.Prompt(t.Context(), acp.PromptRequest{
+		SessionId: sessionID,
+		Prompt:    []acp.ContentBlock{acp.TextBlock("/plan add persistence")},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.StopReason != acp.StopReasonCancelled || len(configuredClient.requests) != 1 {
+		t.Fatalf("cancelled plan response = %#v, requests = %d", response, len(configuredClient.requests))
+	}
+}
+
 func TestACPAgentExplainsPlanElicitationRequirement(t *testing.T) {
 	configuredClient := &fakeClient{}
 	agent, workspaceStore, connection := testACPAgent(t, configuredClient, &fakeAgentTools{})
@@ -432,6 +534,53 @@ func TestACPAgentExplainsPlanElicitationRequirement(t *testing.T) {
 	}
 	if _, err := workspaceStore.Load(); !errors.Is(err, workspace.ErrNotFound) {
 		t.Fatalf("unsupported plan created a session transcript: %v", err)
+	}
+}
+
+func TestACPAgentClearKeepsSessionAndDropsConversationProjection(t *testing.T) {
+	configuredClient := &fakeClient{}
+	agent, workspaceStore, connection := testACPAgent(t, configuredClient, &fakeAgentTools{})
+	sessionID := openTestACPSession(t, agent, workspaceStore.Root)
+	if _, err := agent.Prompt(t.Context(), acp.PromptRequest{
+		SessionId: sessionID,
+		Prompt:    []acp.ContentBlock{acp.TextBlock("before clear")},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	runID := agent.state.runID
+	if _, err := agent.Prompt(t.Context(), acp.PromptRequest{
+		SessionId: sessionID,
+		Prompt:    []acp.ContentBlock{acp.TextBlock("/clear")},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if agent.sessionID != sessionID || agent.state.runID != runID || !agent.sessionOpen {
+		t.Fatalf("clear changed active session: id=%q run=%q open=%v", agent.sessionID, agent.state.runID, agent.sessionOpen)
+	}
+	if _, err := workspaceStore.Load(); !errors.Is(err, workspace.ErrNotFound) {
+		t.Fatalf("workspace projection after clear: %v", err)
+	}
+	if _, err := agent.Prompt(t.Context(), acp.PromptRequest{
+		SessionId: sessionID,
+		Prompt:    []acp.ContentBlock{acp.TextBlock("after clear")},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	saved, err := workspaceStore.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(saved.Transcript) != 2 || saved.Transcript[0].Content != "after clear" || saved.Transcript[1].Content != "reply 2" {
+		t.Fatalf("transcript after clear = %#v", saved.Transcript)
+	}
+	var output string
+	for _, notification := range connection.snapshot() {
+		if update := notification.Update.AgentMessageChunk; update != nil && update.Content.Text != nil {
+			output += update.Content.Text.Text
+		}
+	}
+	if !strings.Contains(output, "Conversation cleared for this workspace.") {
+		t.Fatalf("clear output = %q", output)
 	}
 }
 

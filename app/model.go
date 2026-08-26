@@ -3474,6 +3474,10 @@ func streamAgentLoop(
 				case <-ctx.Done():
 					return
 				}
+				if answer.Err != nil {
+					emitAgentEvent(ctx, events, agentEvent{err: answer.Err})
+					return
+				}
 				body, _ := json.Marshal(answer)
 				message := orchestrationToolResult(call, string(body), false)
 				history = append(history, message)
