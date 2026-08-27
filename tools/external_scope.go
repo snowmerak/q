@@ -8,7 +8,6 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/snowmerak/q/client"
 	"github.com/snowmerak/q/mcpconfig"
 )
@@ -133,7 +132,7 @@ func (s *ExternalScope) Call(ctx context.Context, call client.ToolCall) (client.
 				return client.ToolResult{Content: "invalid tool arguments: " + err.Error(), IsError: true}, nil
 			}
 		}
-		result, err := route.session.CallTool(callContext, &mcp.CallToolParams{Name: route.tool, Arguments: arguments})
+		result, err := route.callTool(callContext, arguments)
 		if err != nil {
 			return client.ToolResult{}, err
 		}

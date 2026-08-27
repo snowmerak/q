@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -188,7 +189,7 @@ func TestStdioTransportMapsEnvironmentReferencesAndWorkspace(t *testing.T) {
 		Args:        []string{"serve"},
 		Env:         map[string]string{"TARGET_TOKEN": "SOURCE_TOKEN"},
 		ResolvedEnv: map[string]string{"TARGET_TOKEN": "session-secret"},
-	})
+	}, io.Discard)
 	if err != nil {
 		t.Fatal(err)
 	}

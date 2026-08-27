@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -35,9 +36,10 @@ type externalServer struct {
 }
 
 type externalToolRoute struct {
-	server  string
-	tool    string
-	session *mcp.ClientSession
+	server      string
+	tool        string
+	session     *mcp.ClientSession
+	diagnostics *mcpDiagnostics
 }
 
 // ConfigureExternal atomically replaces the external MCP sessions. Individual
@@ -97,9 +99,10 @@ func (r *Runtime) ConfigureExternal(ctx context.Context, root string, value mcpc
 }
 
 func connectExternalServer(ctx context.Context, root, id string, value mcpconfig.ServerConfig) (*externalServer, map[string]externalToolRoute, error) {
-	transport, err := externalTransport(root, id, value)
+	diagnostics := newMCPDiagnostics(value)
+	transport, err := externalTransport(root, id, value, diagnostics)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, diagnostics.wrap(err)
 	}
 	connectContext, cancel := context.WithTimeout(ctx, externalConnectTimeout)
 	defer cancel()
@@ -107,14 +110,14 @@ func connectExternalServer(ctx context.Context, root, id string, value mcpconfig
 		Capabilities: &mcp.ClientCapabilities{},
 	}).Connect(connectContext, transport, nil)
 	if err != nil {
-		return nil, nil, fmt.Errorf("connect %s: %w", id, err)
+		return nil, nil, diagnostics.wrap(fmt.Errorf("connect %s: %w", id, err))
 	}
 	server := &externalServer{session: session}
 	routes := make(map[string]externalToolRoute)
 	for tool, listErr := range session.Tools(connectContext, nil) {
 		if listErr != nil {
 			_ = session.Close()
-			return nil, nil, fmt.Errorf("list tools from %s: %w", id, listErr)
+			return nil, nil, diagnostics.wrap(fmt.Errorf("list tools from %s: %w", id, listErr))
 		}
 		name := externalToolName(id, tool.Name)
 		if _, exists := routes[name]; exists {
@@ -135,18 +138,31 @@ func connectExternalServer(ctx context.Context, root, id string, value mcpconfig
 		server.tools = append(server.tools, client.Tool{Type: client.ToolTypeFunction, Function: client.FunctionDefinition{
 			Name: name, Description: description, Parameters: parameters,
 		}})
-		routes[name] = externalToolRoute{server: id, tool: tool.Name, session: session}
+		routes[name] = externalToolRoute{server: id, tool: tool.Name, session: session, diagnostics: diagnostics}
 	}
 	sort.Slice(server.tools, func(i, j int) bool { return server.tools[i].Function.Name < server.tools[j].Function.Name })
 	return server, routes, nil
 }
 
-func externalTransport(root, id string, value mcpconfig.ServerConfig) (mcp.Transport, error) {
+func (r externalToolRoute) callTool(ctx context.Context, arguments map[string]any) (*mcp.CallToolResult, error) {
+	result, err := r.session.CallTool(ctx, &mcp.CallToolParams{Name: r.tool, Arguments: arguments})
+	if err != nil {
+		if errors.Is(err, mcp.ErrConnectionClosed) {
+			// Wait for the subprocess and its stderr copy to finish before taking
+			// the diagnostic snapshot. Do not close a live peer on an RPC error.
+			_ = r.session.Close()
+		}
+		return nil, r.diagnostics.wrap(fmt.Errorf("call MCP tool %s/%s: %w", r.server, r.tool, err))
+	}
+	return result, nil
+}
+
+func externalTransport(root, id string, value mcpconfig.ServerConfig, stderr io.Writer) (mcp.Transport, error) {
 	switch value.Transport {
 	case mcpconfig.TransportStdio:
 		command := exec.Command(value.Command, value.Args...)
 		command.Dir = root
-		command.Stderr = io.Discard
+		command.Stderr = stderr
 		command.Env = command.Environ()
 		for target, source := range value.Env {
 			secret, found := os.LookupEnv(source)

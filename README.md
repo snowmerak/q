@@ -84,6 +84,11 @@ projections. Durable archive records and project files are preserved.
 Client-supplied stdio and Streamable HTTP MCP servers are connected in a
 session-owned overlay over q's configured MCP catalog and closed with that
 session, so concurrently active sessions cannot replace each other's routes.
+Stdio MCP connection, tool-discovery, and RPC failures include a bounded recent
+stderr tail in the error returned to the ACP client. Configured environment and
+header values and conventional inherited credential variables are redacted.
+Normal stderr logs do not by themselves fail a request, and subprocess stderr
+is never copied into the ACP stdout stream.
 SSE remains unsupported. ACP image prompts are advertised for OpenAI-compatible, OpenRouter,
 and xAI/Grok routes; native Anthropic and Codex routes remain text-only until the
 provider layer has a common multimodal representation. Provider setup must

@@ -355,7 +355,7 @@ func (r *Runtime) Call(ctx context.Context, call client.ToolCall) (client.ToolRe
 		defer r.externalMu.RUnlock()
 		callContext, cancel := context.WithTimeout(ctx, externalCallTimeout)
 		defer cancel()
-		result, err := route.session.CallTool(callContext, &mcp.CallToolParams{Name: route.tool, Arguments: arguments})
+		result, err := route.callTool(callContext, arguments)
 		if err != nil {
 			return client.ToolResult{}, err
 		}
