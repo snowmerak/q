@@ -50,14 +50,15 @@ type Config struct {
 }
 
 type ProviderConfig struct {
-	Managed       bool   `yaml:"managed,omitempty"`
-	Type          string `yaml:"type"`
-	BaseURL       string `yaml:"base_url"`
-	Model         string `yaml:"model"`
-	APIKeyEnv     string `yaml:"api_key_env,omitempty"`
-	APIKey        string `yaml:"api_key,omitempty"`
-	SystemPrompt  string `yaml:"system_prompt,omitempty"`
-	ContextWindow int64  `yaml:"context_window,omitempty"`
+	Managed         bool   `yaml:"managed,omitempty"`
+	Type            string `yaml:"type"`
+	BaseURL         string `yaml:"base_url"`
+	Model           string `yaml:"model"`
+	ReasoningEffort string `yaml:"reasoning_effort,omitempty"`
+	APIKeyEnv       string `yaml:"api_key_env,omitempty"`
+	APIKey          string `yaml:"api_key,omitempty"`
+	SystemPrompt    string `yaml:"system_prompt,omitempty"`
+	ContextWindow   int64  `yaml:"context_window,omitempty"`
 }
 
 type ContextConfig struct {
@@ -179,6 +180,9 @@ func (c Config) Validate() error {
 	}
 	if strings.TrimSpace(c.Provider.Model) == "" {
 		return fmt.Errorf("config: provider model is required")
+	}
+	if effort := c.Provider.EffectiveReasoningEffort(); effort != "" && c.Provider.ReasoningEffort != effort {
+		return fmt.Errorf("config: provider reasoning_effort must not have surrounding whitespace")
 	}
 	if strings.Contains(c.Provider.APIKeyEnv, "=") {
 		return fmt.Errorf("config: api_key_env must be an environment variable name")
@@ -499,6 +503,12 @@ func (c Config) EffectiveModelCandidates(role string) ([]ModelCandidateConfig, e
 	return result, nil
 }
 
+// EffectiveReasoningEffort treats an empty or whitespace-only effort as the
+// provider default. Native roles keep their own independent effort settings.
+func (p ProviderConfig) EffectiveReasoningEffort() string {
+	return strings.TrimSpace(p.ReasoningEffort)
+}
+
 // ResolveAPIKey returns the inline key first, then the configured environment
 // variable. The key itself is never included in errors or rendered output.
 func (p ProviderConfig) ResolveAPIKey() string {
@@ -556,6 +566,9 @@ func (s Store) Load() (Config, error) {
 
 func (s Store) Save(value Config) error {
 	value.Version = CurrentVersion
+	if value.Provider.EffectiveReasoningEffort() == "" {
+		value.Provider.ReasoningEffort = ""
+	}
 	value.Context = value.EffectiveContext()
 	value.Agents = value.EffectiveAgents()
 	value.Loom = value.EffectiveLoom()

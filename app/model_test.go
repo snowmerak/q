@@ -399,6 +399,7 @@ func TestChatCompactsAtThresholdThenSendsPendingMessage(t *testing.T) {
 	}
 	value := config.Default()
 	value.Provider.Model = "global-model"
+	value.Provider.ReasoningEffort = "high"
 	value.Provider.ContextWindow = 2000
 	fake := &fakeClient{}
 	m := newModel(context.Background(), config.Store{Dir: t.TempDir()}, nil)
@@ -446,6 +447,11 @@ func TestChatCompactsAtThresholdThenSendsPendingMessage(t *testing.T) {
 	m = updated.(model)
 	if len(fake.requests) != 2 || fake.requests[1].ConversationID != "" || fake.requests[1].Model != "workspace-model" {
 		t.Fatalf("requests = %#v", fake.requests)
+	}
+	for _, request := range fake.requests {
+		if request.ReasoningEffort != "high" {
+			t.Fatalf("compaction/pending chat effort = %q", request.ReasoningEffort)
+		}
 	}
 	requestMessages := fake.requests[1].Messages
 	if requestMessages[len(requestMessages)-1].Content != "latest request" {

@@ -14,13 +14,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/snowmerak/q/third_party/acp-go-sdk"
 	"github.com/snowmerak/llm-provider/gateway"
 	"github.com/snowmerak/q/client"
 	"github.com/snowmerak/q/commitagent"
 	"github.com/snowmerak/q/config"
 	"github.com/snowmerak/q/mcpconfig"
 	"github.com/snowmerak/q/subagent"
+	"github.com/snowmerak/q/third_party/acp-go-sdk"
 	qtools "github.com/snowmerak/q/tools"
 	"github.com/snowmerak/q/workspace"
 )
@@ -655,7 +655,9 @@ func TestACPAgentLoadsAndResumesTheWorkspaceSession(t *testing.T) {
 }
 
 func TestACPAgentPromptStreamsAndPersistsWorkspaceSession(t *testing.T) {
-	agent, workspaceStore, connection := testACPAgent(t, &fakeClient{}, &fakeAgentTools{})
+	configuredClient := &fakeClient{}
+	agent, workspaceStore, connection := testACPAgent(t, configuredClient, &fakeAgentTools{})
+	agent.state.config.Provider.ReasoningEffort = "high"
 	sessionID := openTestACPSession(t, agent, workspaceStore.Root)
 	messageID := "67a90de8-1f34-4f1f-9984-6ad8ff17c455"
 	response, err := agent.Prompt(t.Context(), acp.PromptRequest{
@@ -681,6 +683,9 @@ func TestACPAgentPromptStreamsAndPersistsWorkspaceSession(t *testing.T) {
 	}
 	if streamed != "reply 1" {
 		t.Fatalf("streamed response = %q", streamed)
+	}
+	if len(configuredClient.requests) != 1 || configuredClient.requests[0].ReasoningEffort != "high" {
+		t.Fatalf("ACP requests = %#v", configuredClient.requests)
 	}
 
 	saved, err := activeACPWorkspaceStore(t, agent).Load()

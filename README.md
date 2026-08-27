@@ -491,7 +491,10 @@ and Embedding have disabled workspace cells because their state is shared
 across workspaces. Workspace overrides store only the role-to-model assignment;
 context length and other model metadata always come from the global Gateway
 catalog. Version 1 workspace model files are accepted, but their legacy
-`context_window` cache is discarded. An empty
+`context_window` cache is discarded. Selecting a GLOBAL default model opens the
+same reasoning-effort picker as native roles when the model advertises effort
+controls. The default chat effort is saved as `provider.reasoning_effort` and
+does not replace role-specific efforts. An empty
 reasoning effort lets the provider choose its default; explicit
 efforts are accepted only when advertised by that model. The built-in roles are
 `griller`, `scout`, `research`, `planner`, `coder`, `commit`, `advisor`,
@@ -541,6 +544,7 @@ version: 1
 provider:
   managed: true
   model: codex/gpt-5.6-terra
+  reasoning_effort: medium
   system_prompt: You are a helpful assistant.
 embedding:
   model: openai/text-embedding-3-small

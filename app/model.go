@@ -2248,6 +2248,9 @@ func (m model) updateModelPicker(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch key.String() {
 	case "esc":
 		if m.modelChooseTarget {
+			if !m.modelWorkspace && m.modelTarget == defaultModelTarget {
+				m.draftConfig.Provider = m.config.Provider
+			}
 			m.modelPickerStage = modelPickerTargets
 			m.modelFilter.Blur()
 			m.status = ""
@@ -2298,11 +2301,6 @@ func (m model) updateModelPicker(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		if m.modelWorkspace {
 			return m.saveWorkspaceModel(m.modelTarget, selected)
 		}
-		if m.modelTarget == "" || m.modelTarget == defaultModelTarget {
-			value.Provider.Model = selected.ID
-			value.Provider.ContextWindow = selected.ContextLength
-			return m.saveConfiguration(value, m.modelReturn == screenChat)
-		}
 		if m.modelTarget == embeddingModelTarget {
 			value.Embedding.Model = selected.ID
 			m.draftConfig = value
@@ -2315,20 +2313,24 @@ func (m model) updateModelPicker(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.modelFilter.Blur()
 			return m, m.embeddingDimensions.Focus()
 		}
-		if group, grouped := modelGroupChoice(value, selected.ID); grouped {
+		if m.modelTarget == "" || m.modelTarget == defaultModelTarget {
+			value.Provider.Model = selected.ID
+			value.Provider.ContextWindow = selected.ContextLength
+		} else if group, grouped := modelGroupChoice(value, selected.ID); grouped {
 			value = withAgentGroup(value, m.modelTarget, group)
 			if _, err := subagent.Resolve(value, m.modelTarget, m.models); err != nil {
 				m.status = err.Error()
 				return m, nil
 			}
 			return m.saveModelTargetConfiguration(value, m.modelTarget)
+		} else {
+			value = withAgentModel(value, m.modelTarget, selected.ID)
 		}
-		value = withAgentModel(value, m.modelTarget, selected.ID)
 		m.draftConfig = value
 		m.modelSelection = selected
 		reasoning := selectedReasoning(selected)
 		if reasoning == nil || len(reasoning.SupportedEfforts) == 0 {
-			value = withAgentReasoningEffort(value, m.modelTarget, "")
+			value = withModelReasoningEffort(value, m.modelTarget, "")
 			return m.saveModelTargetConfiguration(value, m.modelTarget)
 		}
 		m.modelPickerStage = modelPickerReasoning
@@ -2843,7 +2845,7 @@ func (m model) updateReasoningPicker(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.reasoningCursor++
 		}
 	case "enter":
-		value := withAgentReasoningEffort(m.draftConfig, m.modelTarget, options[m.reasoningCursor])
+		value := withModelReasoningEffort(m.draftConfig, m.modelTarget, options[m.reasoningCursor])
 		return m.saveModelTargetConfiguration(value, m.modelTarget)
 	}
 	return m, nil
@@ -2951,6 +2953,9 @@ func (m model) saveConfiguration(value config.Config, preserveHistory bool) (tea
 }
 
 func (m model) saveModelTargetConfiguration(value config.Config, target string) (tea.Model, tea.Cmd) {
+	if target == "" || target == defaultModelTarget {
+		return m.saveConfiguration(value, m.modelReturn == screenChat)
+	}
 	if err := value.Validate(); err != nil {
 		m.status = err.Error()
 		return m, nil
@@ -3376,12 +3381,14 @@ func (m *model) completeInterruptedToolCalls() {
 func (m model) compactContext(plan memory.Plan) tea.Cmd {
 	configuredClient := m.client
 	modelID := m.activeModel()
+	reasoningEffort := m.activeConfig().Provider.EffectiveReasoningEffort()
 	maxTokens := plan.OutputBudget
 	turnContext := m.activeTurnContext()
 	turnID := m.turnID
 	return func() tea.Msg {
 		response, err := chatWithConversationRecovery(turnContext, configuredClient, client.ChatRequest{
 			Model: modelID, Messages: plan.RequestMessages(), MaxCompletionTokens: &maxTokens,
+			ReasoningEffort: reasoningEffort,
 		})
 		return compactionResultMsg{turnID: turnID, response: response, plan: plan, err: err}
 	}
@@ -3393,6 +3400,7 @@ func (m *model) sendChatRequest() tea.Cmd {
 	conversationID := m.conversationID
 	configuredClient := m.client
 	modelID := m.activeModel()
+	reasoningEffort := m.activeConfig().Provider.EffectiveReasoningEffort()
 	workingDirectory := ""
 	if m.workspaceStore != nil {
 		workingDirectory = m.workspaceStore.Root
@@ -3424,6 +3432,7 @@ func (m *model) sendChatRequest() tea.Cmd {
 		return func() tea.Msg {
 			response, err := chatWithConversationRecovery(turnContext, configuredClient, client.ChatRequest{
 				Model: modelID, Messages: providerMessages(history, coalesceInstructions), ConversationID: conversationID,
+				ReasoningEffort: reasoningEffort,
 			})
 			return chatResultMsg{turnID: turnID, response: response, requestEstimate: m.requestEstimate, err: err}
 		}
@@ -3431,9 +3440,9 @@ func (m *model) sendChatRequest() tea.Cmd {
 	events := make(chan agentEvent)
 	return func() tea.Msg {
 		if toolRuntime == nil && streamEnabled {
-			go streamSingleChat(turnContext, configuredClient, modelID, history, conversationID, coalesceInstructions, m.requestEstimate, events)
+			go streamSingleChat(turnContext, configuredClient, modelID, reasoningEffort, history, conversationID, coalesceInstructions, m.requestEstimate, events)
 		} else {
-			go streamAgentLoop(turnContext, configuredClient, toolRuntime, modelID, history, conversationID, activeTask, streamEnabled, coalesceInstructions, events)
+			go streamAgentLoop(turnContext, configuredClient, toolRuntime, modelID, reasoningEffort, history, conversationID, activeTask, streamEnabled, coalesceInstructions, events)
 		}
 		return waitAgentEvent(events, turnID)()
 	}
@@ -3442,7 +3451,7 @@ func (m *model) sendChatRequest() tea.Cmd {
 func streamSingleChat(
 	ctx context.Context,
 	configuredClient chatClient,
-	modelID string,
+	modelID, reasoningEffort string,
 	history []client.Message,
 	conversationID string,
 	coalesceInstructions bool,
@@ -3452,6 +3461,7 @@ func streamSingleChat(
 	defer close(events)
 	response, err := streamChatWithConversationRecovery(ctx, configuredClient, client.ChatRequest{
 		Model: modelID, Messages: providerMessages(history, coalesceInstructions), ConversationID: conversationID,
+		ReasoningEffort: reasoningEffort,
 	}, func(delta chatStreamDelta) bool {
 		return emitAgentEvent(ctx, events, agentEvent{streamDelta: &delta})
 	})
@@ -3462,7 +3472,7 @@ func streamAgentLoop(
 	ctx context.Context,
 	configuredClient chatClient,
 	toolRuntime agentToolRuntime,
-	modelID string,
+	modelID, reasoningEffort string,
 	history []client.Message,
 	conversationID string,
 	activeTask *workspace.ActiveTask,
@@ -3481,6 +3491,7 @@ func streamAgentLoop(
 		requestEstimate := memory.CountMessages(history)
 		request := client.ChatRequest{
 			Model: modelID, Messages: providerMessages(history, coalesceInstructions), ConversationID: conversationID, Tools: availableTools,
+			ReasoningEffort: reasoningEffort,
 		}
 		var response *client.ChatResponse
 		var err error
@@ -4135,7 +4146,11 @@ func withAgentGroup(value config.Config, role, group string) config.Config {
 	return value
 }
 
-func withAgentReasoningEffort(value config.Config, role, effort string) config.Config {
+func withModelReasoningEffort(value config.Config, role, effort string) config.Config {
+	if role == "" || role == defaultModelTarget {
+		value.Provider.ReasoningEffort = effort
+		return value
+	}
 	value.Agents.Roles = cloneAgentRoles(value.Agents.Roles)
 	agent := value.Agents.Roles[role]
 	agent.ReasoningEffort = effort
@@ -4170,12 +4185,10 @@ func selectedReasoning(model client.Model) *client.ReasoningCapabilities {
 
 func reasoningEffortCursor(value config.Config, role string, efforts []string) int {
 	configured := value.Agents.Roles[role].ReasoningEffort
-	for index, effort := range efforts {
-		if configured == effort {
-			return index + 1
-		}
+	if role == "" || role == defaultModelTarget {
+		configured = value.Provider.EffectiveReasoningEffort()
 	}
-	return 0
+	return effortCursor(configured, efforts)
 }
 
 func (m model) filteredModels() []client.Model {

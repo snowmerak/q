@@ -16,7 +16,6 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
-	"github.com/snowmerak/q/third_party/acp-go-sdk"
 	"github.com/snowmerak/q/client"
 	"github.com/snowmerak/q/config"
 	qlibrary "github.com/snowmerak/q/library"
@@ -24,6 +23,7 @@ import (
 	"github.com/snowmerak/q/providerhost"
 	"github.com/snowmerak/q/sessionstore"
 	"github.com/snowmerak/q/subagent"
+	"github.com/snowmerak/q/third_party/acp-go-sdk"
 	qtools "github.com/snowmerak/q/tools"
 	"github.com/snowmerak/q/workspace"
 	"github.com/snowmerak/q/workspacememory"
@@ -1387,6 +1387,7 @@ func (a *acpAgent) runAgentTurn(ctx context.Context, history []client.Message) (
 		a.state.client,
 		toolRuntime,
 		a.state.activeModel(),
+		a.state.activeConfig().Provider.EffectiveReasoningEffort(),
 		history,
 		a.state.conversationID,
 		a.state.activeTask,
@@ -1559,6 +1560,7 @@ func (a *acpAgent) compactIfNeeded(ctx context.Context) error {
 	maxCompletionTokens := plan.OutputBudget
 	response, err := chatWithConversationRecovery(ctx, a.state.client, client.ChatRequest{
 		Model:               a.state.activeModel(),
+		ReasoningEffort:     a.state.activeConfig().Provider.EffectiveReasoningEffort(),
 		Messages:            plan.RequestMessages(),
 		MaxCompletionTokens: &maxCompletionTokens,
 	})

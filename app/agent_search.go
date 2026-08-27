@@ -8,12 +8,12 @@ import (
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
-	"github.com/snowmerak/q/third_party/acp-go-sdk"
 	"github.com/snowmerak/q/client"
 	"github.com/snowmerak/q/mcpconfig"
 	"github.com/snowmerak/q/memory"
 	"github.com/snowmerak/q/sessionstore"
 	"github.com/snowmerak/q/subagent"
+	"github.com/snowmerak/q/third_party/acp-go-sdk"
 	"github.com/snowmerak/q/workspace"
 )
 
@@ -94,13 +94,14 @@ func (m *model) sendAgentSearch(toolRuntime agentToolRuntime, query string) tea.
 	turnContext := m.activeTurnContext()
 	turnID := m.turnID
 	parent := agentSearchParent{
-		client:         m.client,
-		tools:          toolRuntime,
-		model:          m.activeModel(),
-		history:        m.memory.Messages(),
-		conversationID: m.conversationID,
-		activeTask:     cloneActiveTask(m.activeTask),
-		streamEnabled:  m.streamsActiveChat(),
+		client:          m.client,
+		tools:           toolRuntime,
+		model:           m.activeModel(),
+		reasoningEffort: m.activeConfig().Provider.EffectiveReasoningEffort(),
+		history:         m.memory.Messages(),
+		conversationID:  m.conversationID,
+		activeTask:      cloneActiveTask(m.activeTask),
+		streamEnabled:   m.streamsActiveChat(),
 		coalesceInstructions: modelNeedsSystemInstructionCoalescing(
 			m.gatewayConfig, m.activeConfig().ModelGroups, m.activeModel(), nil,
 		),
@@ -116,6 +117,7 @@ type agentSearchParent struct {
 	client               chatClient
 	tools                agentToolRuntime
 	model                string
+	reasoningEffort      string
 	history              []client.Message
 	conversationID       string
 	activeTask           *workspace.ActiveTask
@@ -189,13 +191,13 @@ func streamAgentSearch(
 	}
 	if parent.tools == nil {
 		streamSingleChat(
-			ctx, parent.client, parent.model, history, parent.conversationID,
+			ctx, parent.client, parent.model, parent.reasoningEffort, history, parent.conversationID,
 			parent.coalesceInstructions, memory.CountMessages(history), events,
 		)
 		return
 	}
 	streamAgentLoop(
-		ctx, parent.client, parent.tools, parent.model, history, parent.conversationID,
+		ctx, parent.client, parent.tools, parent.model, parent.reasoningEffort, history, parent.conversationID,
 		parent.activeTask, parent.streamEnabled, parent.coalesceInstructions, events,
 	)
 }

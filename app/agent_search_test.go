@@ -43,6 +43,7 @@ func TestStreamAgentSearchReturnsParentSynthesis(t *testing.T) {
 	events := make(chan agentEvent, 8)
 	streamAgentSearch(t.Context(), toolRuntime, "latest API behavior", "search-call-1", agentSearchParent{
 		client: parentClient, model: "main-model", tools: toolRuntime,
+		reasoningEffort: "high",
 	}, events)
 
 	var activities []agentActivity
@@ -61,6 +62,7 @@ func TestStreamAgentSearchReturnsParentSynthesis(t *testing.T) {
 		t.Fatalf("input = %#v, activities = %#v, response = %q", received, activities, responseText)
 	}
 	if len(parentClient.requests) != 1 ||
+		parentClient.requests[0].ReasoningEffort != "high" ||
 		!strings.Contains(parentClient.requests[0].Messages[len(parentClient.requests[0].Messages)-1].Content, "Evidence report") ||
 		!strings.Contains(parentClient.requests[0].Messages[len(parentClient.requests[0].Messages)-1].Content, "loom_ref") {
 		t.Fatalf("parent requests = %#v", parentClient.requests)
@@ -98,6 +100,29 @@ func TestAgentSearchParentResponseIsAddedToTUITranscript(t *testing.T) {
 	if m.waiting || last.Role != client.RoleAssistant ||
 		last.Content != "reply 1" || !strings.Contains(ansi.Strip(m.viewport.View()), "reply 1") {
 		t.Fatalf("waiting=%v messages=%#v transcript=%q", m.waiting, m.messages, m.viewport.View())
+	}
+}
+
+func TestSendAgentSearchUsesDefaultReasoningEffort(t *testing.T) {
+	parentClient := &fakeClient{}
+	toolRuntime := testAgentSearchRuntime(t, func(_ context.Context, _ subagent.ExternalSearchInput) (subagent.ExternalSearchResult, error) {
+		return subagent.ExternalSearchResult{Agent: "codex", Summary: "Sourced evidence"}, nil
+	})
+	value := config.Default()
+	value.Provider.Model, value.Provider.ReasoningEffort = "main-model", "high"
+	m := newModel(t.Context(), config.Store{Dir: t.TempDir()}, nil)
+	m.enterChat(value, parentClient)
+	message := m.sendAgentSearch(toolRuntime, "explain the evidence")().(agentEventMsg)
+	if message.event.err != nil {
+		t.Fatal(message.event.err)
+	}
+	for event := range message.events {
+		if event.err != nil {
+			t.Fatal(event.err)
+		}
+	}
+	if len(parentClient.requests) != 1 || parentClient.requests[0].ReasoningEffort != "high" {
+		t.Fatalf("parent requests = %#v", parentClient.requests)
 	}
 }
 
@@ -146,7 +171,7 @@ func TestDefaultAgentCanCallCapturedExternalSearch(t *testing.T) {
 	configuredClient := &externalSearchCallingClient{}
 	events := make(chan agentEvent, 8)
 	streamAgentLoop(
-		t.Context(), configuredClient, toolRuntime, "main-model",
+		t.Context(), configuredClient, toolRuntime, "main-model", "high",
 		[]client.Message{{Role: client.RoleUser, Content: "What changed?"}}, "", nil, false, false, events,
 	)
 	var response string
@@ -157,6 +182,11 @@ func TestDefaultAgentCanCallCapturedExternalSearch(t *testing.T) {
 	}
 	if response != "Synthesized answer" || len(configuredClient.requests) != 2 {
 		t.Fatalf("response=%q requests=%#v", response, configuredClient.requests)
+	}
+	for _, request := range configuredClient.requests {
+		if request.ReasoningEffort != "high" {
+			t.Fatalf("tool continuation effort = %q", request.ReasoningEffort)
+		}
 	}
 	toolMessage := configuredClient.requests[1].Messages[len(configuredClient.requests[1].Messages)-1]
 	if toolMessage.Role != client.RoleTool || toolMessage.ToolCallID != "search-1" ||

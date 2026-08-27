@@ -17,6 +17,7 @@ func TestStoreRoundTrip(t *testing.T) {
 	store := Store{Dir: filepath.Join(t.TempDir(), ".q")}
 	want := Default()
 	want.Provider.Model = "test-model"
+	want.Provider.ReasoningEffort = "high"
 	want.Provider.APIKey = "secret"
 	want.Embedding = EmbeddingConfig{Model: "embed-model", Dimensions: 1536}
 	want.ModelGroups = map[string]ModelGroupConfig{
@@ -130,6 +131,7 @@ func TestEffectiveContextUsesDefaultsAndGatewayWindowFirst(t *testing.T) {
 func TestEffectiveAgentUsesRoleOverrideAndActiveModelFallback(t *testing.T) {
 	value := Default()
 	value.Provider.Model = "active-model"
+	value.Provider.ReasoningEffort = "low"
 	value.Agents.Roles = map[string]AgentConfig{
 		AgentRolePlanner: {Model: "planning-model", ReasoningEffort: "high"},
 		AgentRoleCoder:   {ReasoningEffort: "medium"},
@@ -405,5 +407,55 @@ func TestWhitespaceOnlyReasoningEffortIsCanonicalizedToEmpty(t *testing.T) {
 	}
 	if agent.ReasoningEffort != "" {
 		t.Fatalf("reasoning effort = %q", agent.ReasoningEffort)
+	}
+}
+
+func TestProviderReasoningEffortDefaultsAndPersistence(t *testing.T) {
+	for _, effort := range []string{"", " \t\n", "low", "high", "provider-specific"} {
+		t.Run(effort, func(t *testing.T) {
+			value := Default()
+			value.Provider.Model = "test-model"
+			value.Provider.ReasoningEffort = effort
+			store := Store{Dir: t.TempDir()}
+			if err := value.Validate(); err != nil {
+				t.Fatal(err)
+			}
+			if err := store.Save(value); err != nil {
+				t.Fatal(err)
+			}
+			loaded, err := store.Load()
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := strings.TrimSpace(effort)
+			if loaded.Provider.ReasoningEffort != want || value.Provider.EffectiveReasoningEffort() != want {
+				t.Fatalf("saved effort = %q, effective effort = %q; want %q", loaded.Provider.ReasoningEffort, value.Provider.EffectiveReasoningEffort(), want)
+			}
+			body, err := os.ReadFile(store.Path())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if want == "" && strings.Contains(string(body), "reasoning_effort") {
+				t.Fatal("provider-default effort should be omitted from YAML")
+			}
+			for _, role := range AgentRoles() {
+				agent, err := loaded.EffectiveAgent(role)
+				if err != nil || agent.ReasoningEffort != "" {
+					t.Fatalf("role %s inherited default chat effort: %#v, err = %v", role, agent, err)
+				}
+			}
+		})
+	}
+}
+
+func TestProviderReasoningEffortRejectsSurroundingWhitespace(t *testing.T) {
+	value := Default()
+	value.Provider.Model = "test-model"
+	value.Provider.ReasoningEffort = " high "
+	if err := value.Validate(); err == nil || !strings.Contains(err.Error(), "provider reasoning_effort") {
+		t.Fatalf("validation error = %v", err)
+	}
+	if err := (Store{Dir: t.TempDir()}).Save(value); err == nil {
+		t.Fatal("saving a padded reasoning effort should fail")
 	}
 }

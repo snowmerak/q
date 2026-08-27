@@ -304,7 +304,7 @@ func (m model) modelSaveLabel() string {
 	}
 	switch m.modelTarget {
 	case "", defaultModelTarget:
-		return "save global default"
+		return "continue/save global default"
 	case embeddingModelTarget:
 		return "continue global embedding setting"
 	default:
@@ -581,7 +581,11 @@ func (m model) viewReasoningEfforts() string {
 		efforts = append(efforts, reasoning.SupportedEfforts...)
 	}
 	var body strings.Builder
-	body.WriteString(titleStyle.Render("q · " + m.modelTarget + " reasoning effort"))
+	target := m.modelTarget
+	if target == "" {
+		target = defaultModelTarget
+	}
+	body.WriteString(titleStyle.Render("q · " + target + " reasoning effort"))
 	body.WriteString("\n")
 	m.writeWorkspacePath(&body)
 	body.WriteString(subtleStyle.Render(m.modelSelection.ID))
@@ -659,6 +663,9 @@ func (m model) viewContextWindow() string {
 func (m model) globalModelSummary(target string) string {
 	value := m.draftConfig
 	if target == defaultModelTarget {
+		if effort := value.Provider.EffectiveReasoningEffort(); effort != "" {
+			return value.Provider.Model + " · effort " + effort
+		}
 		return value.Provider.Model
 	}
 	if target == embeddingModelTarget {
