@@ -169,6 +169,7 @@ Planner가 반환한 `facts`는 decision 적용 전에 Plan에 중복 제거하�
   스크롤해서 보는 detailed trace (`Ctrl+G`로 compact activity 전환)
 - Coder attempt와 Planner review의 전체 message/tool lifecycle archive
 - 승인된 실행의 `.q/sessions/<uuid>/plan-execution.json` atomic checkpoint
+- 완료 실행을 `.q/plan-executions/`의 UTC 타임스탬프 JSON으로 보관
 - 시작 시 중단 실행 감지와 Resume / Inspect / Discard recovery UI
 - target, Coder pending/running, Planner review, completed 단계별 재시작 복구
 - Coder running에서 끊겼을 때 기존 부작용을 먼저 검사하는 새 recovery attempt
@@ -178,6 +179,17 @@ checkpoint는 Coder 호출 전에 `coder_running`으로 저장된다. 이 상태
 끝났다면 기존 호출을 그대로 replay하지 않는다. 재개 시 attempt 번호를 올리고 현재
 workspace 변경을 먼저 검사하라는 recovery feedback을 주입한다. 반면 Coder 결과가
 이미 저장된 `review_pending` 상태는 Coder를 다시 호출하지 않고 Planner review부터
-이어간다. 성공적으로 모든 task가 끝난 뒤에만 checkpoint 파일을 제거한다.
+이어간다. 성공적으로 모든 task가 끝나면 checkpoint를 삭제하지 않고
+`.q/plan-executions/plan-execution-<UTC timestamp>-<unique ID>.json`으로 옮긴다.
+파일명은 `plan-execution-20260828T033456.123456789Z-...json` 형식이며, 같은
+시각의 실행도 고유 ID로 구분한다. 저장된 JSON은 최종 Plan, task 결과와 시도
+횟수, session/run ID, `updated_at`을 그대로 보존한다.
+
+보관 실패 시 기존 completed checkpoint를 남기므로, 복구 재시도에서는 Coder를
+다시 호출하지 않고 보관을 완료할 수 있다. 실패·중단된 실행은 계속 기존 위치의
+checkpoint로 복구한다. 보관본은 `/clear`와 session 삭제로 지우지 않으며,
+자동 GC나 기간별 삭제는 하지 않는다. 사용자가 오래된 JSON을 직접 정리할 수 있다.
+완료 JSON은 Loom GC root가 아니므로, 참조된 원본 artifact에는 기존 GC 정책이
+적용된다. 이 변경은 JSON 보관이며 전체 tool-output 원문의 영구 보존은 아니다.
 
 아직 연결하지 않은 부분은 승인 이전 Griller/Planner planning state의 재시작 복구다.

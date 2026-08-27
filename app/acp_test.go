@@ -1072,6 +1072,7 @@ func TestACPAgentRunsApprovedPlanThroughElicitation(t *testing.T) {
 		t.Fatalf("saved transcript = %#v", saved.Transcript)
 	}
 	assertACPTraceLifecycles(t, connection.snapshot(), 6, 0)
+	assertArchivedPlanCheckpoint(t, activeACPWorkspaceStore(t, agent), 2)
 }
 
 func TestACPAgentStopsPlanWhenElicitationFails(t *testing.T) {

@@ -2,7 +2,10 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -237,6 +240,7 @@ func TestPlanCommandExecutesApprovedPlanWithCoderAndPlannerReview(t *testing.T) 
 	if _, err := workspaceStore.LoadExecution(); !errors.Is(err, workspace.ErrExecutionNotFound) {
 		t.Fatalf("successful plan left an execution checkpoint: %v", err)
 	}
+	assertArchivedPlanCheckpoint(t, workspaceStore, 1)
 }
 
 func TestInterruptedPlanRestoresInspectsAndResumesFromPlannerReview(t *testing.T) {
@@ -308,6 +312,73 @@ func TestInterruptedPlanRestoresInspectsAndResumesFromPlannerReview(t *testing.T
 	}
 	if _, err := workspaceStore.LoadExecution(); !errors.Is(err, workspace.ErrExecutionNotFound) {
 		t.Fatalf("completed checkpoint still exists: %v", err)
+	}
+	assertArchivedPlanCheckpoint(t, workspaceStore, 1)
+}
+
+func TestCompletedPlanRetriesArchivingWithoutRerunningAgents(t *testing.T) {
+	store := workspace.Store{Root: t.TempDir()}
+	checkpoint := resumablePlanCheckpoint(subagent.ExecutionPhaseCompleted)
+	checkpoint.TaskIndex, checkpoint.CompletedTasks, checkpoint.Attempts = 1, 1, 1
+	checkpoint.Tasks = []subagent.TaskExecutionResult{{
+		TaskIndex: 0, Title: checkpoint.Plan.Steps[0].Title, Attempts: 1,
+		Result: subagent.CoderResult{Outcome: "succeeded", Summary: "Already completed"},
+	}}
+	if err := store.SaveExecution(checkpoint); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(store.ExecutionHistoryDir(), []byte("history directory unavailable"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	configuredClient := &planningClient{}
+	tools := &fakeAgentTools{}
+	value := config.Default()
+	value.Provider.Model = "plan-model"
+	run := func() error {
+		_, err := executeApprovedPlan(t.Context(), configuredClient, tools, value,
+			[]client.Model{{ID: "plan-model"}}, nil, checkpoint.RunID, store.Root,
+			checkpoint, store, nil, nil, nil)
+		return err
+	}
+	if err := run(); err == nil || !strings.Contains(err.Error(), "history") {
+		t.Fatalf("expected archive failure: %v", err)
+	}
+	if got, err := store.LoadExecution(); err != nil || got.Phase != subagent.ExecutionPhaseCompleted {
+		t.Fatalf("archive failure lost completed checkpoint: got=%#v, err=%v", got, err)
+	}
+	if err := os.Remove(store.ExecutionHistoryDir()); err != nil {
+		t.Fatal(err)
+	}
+	if err := run(); err != nil {
+		t.Fatal(err)
+	}
+	if len(configuredClient.requests) != 0 || len(tools.calls) != 0 {
+		t.Fatalf("archive retry repeated model or tool calls: requests=%d calls=%d", len(configuredClient.requests), len(tools.calls))
+	}
+	assertArchivedPlanCheckpoint(t, store, 1)
+}
+
+func assertArchivedPlanCheckpoint(t *testing.T, store workspace.Store, completedTasks int) {
+	t.Helper()
+	paths, err := filepath.Glob(filepath.Join(store.ExecutionHistoryDir(), "plan-execution-*.json"))
+	if err != nil || len(paths) != 1 {
+		t.Fatalf("execution logs=%v, err=%v", paths, err)
+	}
+	body, err := os.ReadFile(paths[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	var stored struct {
+		SessionID  string                       `json:"session_id"`
+		Checkpoint subagent.ExecutionCheckpoint `json:"checkpoint"`
+	}
+	if err := json.Unmarshal(body, &stored); err != nil {
+		t.Fatal(err)
+	}
+	if stored.SessionID != store.SessionID || stored.Checkpoint.Phase != subagent.ExecutionPhaseCompleted ||
+		stored.Checkpoint.CompletedTasks != completedTasks || len(stored.Checkpoint.Tasks) != completedTasks ||
+		stored.Checkpoint.ExecutionID == "" || stored.Checkpoint.Objective == "" {
+		t.Fatalf("incomplete execution log: %s", body)
 	}
 }
 

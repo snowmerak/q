@@ -11,8 +11,8 @@ import (
 )
 
 // LoomReferencesAt returns Loom references present in every workspace session
-// projection and active plan checkpoint. Durable archive records are
-// intentionally not roots.
+// projection and active plan checkpoint. Durable archive records and completed
+// plan execution logs are intentionally not roots.
 func LoomReferencesAt(ctx context.Context, root string) ([]loom.Ref, error) {
 	if ctx == nil {
 		return nil, errors.New("workspace: Loom reference context is nil")

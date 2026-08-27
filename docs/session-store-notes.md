@@ -40,6 +40,8 @@ agent message와 result를 같은 저장소에 기록할 수 있게 준비되어
 │  └─ <session-uuid>/
 │     ├─ session.json           # 한 채팅을 빠르게 복구하기 위한 projection
 │     └─ plan-execution.json    # 해당 채팅의 승인된 실행 checkpoint
+├─ plan-executions/
+│  └─ plan-execution-<UTC timestamp>-<unique ID>.json # 완료 실행; 수동 정리
 ├─ session-locks/
 │  └─ <session-uuid>.lock       # 활성 세션 owner 진단 metadata
 ├─ workspace-memory.lock        # archive/index service owner metadata

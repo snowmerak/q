@@ -19,7 +19,7 @@ import (
 
 type planExecutionStore interface {
 	SaveExecution(subagent.ExecutionCheckpoint) error
-	ClearExecution() error
+	ArchiveExecution() (string, error)
 }
 
 func (m model) startPlan(objective string) (tea.Model, tea.Cmd) {
@@ -551,7 +551,7 @@ func executeApprovedPlan(
 		return execution, err
 	}
 	if executionStore != nil {
-		if err := executionStore.ClearExecution(); err != nil {
+		if _, err := executionStore.ArchiveExecution(); err != nil {
 			return execution, err
 		}
 	}

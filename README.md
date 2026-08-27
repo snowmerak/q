@@ -374,6 +374,17 @@ Coder that may already have changed files starts a new recovery attempt that
 first inspects the workspace; a saved Coder result resumes at Planner review.
 Discard removes the checkpoint but never reverts workspace changes.
 
+After successful execution, the completed checkpoint is moved to
+`.q/plan-executions/plan-execution-<UTC timestamp>-<unique ID>.json` instead of
+being deleted. The log retains the final plan, task results, attempt counts,
+session/run IDs, and original `updated_at`. For example, a filename starts with
+`plan-execution-20260828T033456.123456789Z-`. A failed archive leaves the completed
+checkpoint available for retry without rerunning Coder tasks. Execution logs
+survive `/clear` and session deletion; no automatic cleanup is performed, so old
+JSON files can be inspected and deleted manually. These logs do not pin Loom
+artifacts: referenced raw tool output remains subject to the existing Loom GC
+policy.
+
 See [plan orchestration](docs/plan-orchestration.md) and
 [execution orchestration](docs/execution-orchestration.md) for the detailed
 contracts.
@@ -623,6 +634,7 @@ state are local to the directory where q starts:
 | `.q/learning.json` | Workspace learning disable switch. Existing queued segments are preserved while learning is disabled, and the setting is preserved by `/clear`. |
 | `.q/lsp.json` | Current workspace's language project roots and optional server overrides. |
 | `.q/sessions/<uuid>/plan-execution.json` | Durable checkpoint for that session's approved plan execution. |
+| `.q/plan-executions/plan-execution-<UTC timestamp>-<unique ID>.json` | Completed plan snapshots for manual inspection and cleanup; preserved independently of sessions. |
 | `.q/data/records/` | Source records for durable workspace history. |
 | `.q/index/bleve/` | Derived full-text index. |
 | `.q/index/vectors.hnsw`, `.q/index/vectors.ids.json`, `.q/index/state.json` | Derived semantic index and rebuild state when embeddings are available. |
@@ -922,9 +934,10 @@ artifact and 256 MiB per workspace store. `/loom` displays artifact, blob, and
 byte usage and edits these limits and the automatic-GC policy.
 
 Automatic GC starts at the configured trigger ratio and aims for the target
-ratio. References from every persisted session and plan checkpoint, including
-their parent lineage, remain live. Durable archive records do not pin Loom
-artifacts. New artifacts remain protected for the configured grace period.
+ratio. References from every persisted session and active plan checkpoint,
+including their parent lineage, remain live. Durable archive records and
+completed plan JSON logs do not pin Loom artifacts. New artifacts remain
+protected for the configured grace period.
 Setting `loom.gc.disabled: true` disables automatic collection but leaves manual
 preview and collection available.
 
