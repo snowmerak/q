@@ -101,6 +101,7 @@ func (r CoderRunner) run(
 		)},
 	}
 	available := coderTools(r.Tools.Tools())
+	history := NewContextCompactor(r.Spec, messages, available, len(messages))
 	rounds := r.MaxRounds
 	if rounds <= 0 {
 		rounds = defaultCoderRounds
@@ -108,13 +109,16 @@ func (r CoderRunner) run(
 	reminders := 0
 	evidence := make([]CoderEvidence, 0)
 	for round := 0; round < rounds; round++ {
+		if err := history.CompactIfNeeded(ctx, &r.Spec, r.Client); err != nil {
+			return CoderResult{}, fmt.Errorf("subagent: coder context: %w", err)
+		}
 		reportProgress(r.Progress, ProgressEvent{
 			Agent: "coder", TaskID: taskID, ParentID: r.ExecutionID,
 			Action: ProgressThinking, Detail: fmt.Sprintf("model round %d", round+1),
 		})
 		parallel := false
 		request := client.ChatRequest{
-			Messages: messages, Tools: available, ToolChoice: client.ToolChoiceAuto,
+			Messages: history.RequestMessages(), Tools: available, ToolChoice: client.ToolChoiceAuto,
 			ParallelToolCalls: &parallel, WorkingDirectory: r.WorkingDirectory,
 		}
 		if reminders > 0 {
@@ -128,7 +132,8 @@ func (r CoderRunner) run(
 		if err != nil {
 			return CoderResult{}, fmt.Errorf("subagent: coder: %w", err)
 		}
-		messages = append(messages, assistant)
+		history.Observe(response.Usage)
+		history.Append(assistant)
 		traceAssistant(r.Trace, "coder", taskID, r.ExecutionID, assistant)
 		if lifecycle != nil {
 			if err := lifecycle.Message(assistant); err != nil {
@@ -140,7 +145,7 @@ func (r CoderRunner) run(
 				return CoderResult{}, errors.New("subagent: coder ended without task_complete")
 			}
 			reminders++
-			messages = append(messages, client.Message{Role: client.RoleSystem, Content: fmt.Sprintf(
+			history.Append(client.Message{Role: client.RoleSystem, Content: fmt.Sprintf(
 				"Reminder %d/%d: finish this Coder attempt by calling task_complete now; do not answer with plain text.",
 				reminders, maximumCoderReminders,
 			)})
@@ -182,7 +187,7 @@ func (r CoderRunner) run(
 				ToolCallID: call.ID, Content: toolResult.Content,
 			}
 			traceToolResult(r.Trace, "coder", taskID, r.ExecutionID, call.Function.Name, toolResult)
-			messages = append(messages, message)
+			history.Append(message)
 			if lifecycle != nil {
 				if err := lifecycle.Message(message); err != nil {
 					return CoderResult{}, err

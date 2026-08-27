@@ -15,6 +15,7 @@ require (
 	github.com/charmbracelet/x/ansi v0.11.7
 	github.com/coder/acp-go-sdk v0.13.5
 	github.com/dop251/goja v0.0.0-20260806115107-493f22071ef6
+	github.com/google/jsonschema-go v0.4.3
 	github.com/modelcontextprotocol/go-sdk v1.7.0
 	github.com/snowmerak/llm-provider v0.0.0-20260820114155-10d4fa7b5a80
 	github.com/zeebo/blake3 v0.2.4
@@ -62,7 +63,6 @@ require (
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/go-sourcemap/sourcemap v2.1.3+incompatible // indirect
 	github.com/golang/snappy v1.0.0 // indirect
-	github.com/google/jsonschema-go v0.4.3 // indirect
 	github.com/google/pprof v0.0.0-20260802141513-ef3492d7dac3 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/gorilla/css v1.0.1 // indirect

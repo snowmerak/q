@@ -22,6 +22,19 @@ type Policy struct {
 	RecentRatio   float64
 }
 
+// Retention controls which messages must survive a compaction verbatim.
+// Plan uses the default behavior of retaining every system/developer
+// instruction. Internal agent loops use ImmutablePrefix instead so transient
+// system reminders can be summarized while the role contract and current task
+// remain exact.
+type Retention struct {
+	ImmutablePrefix          int
+	PreserveInstructions     bool
+	PreserveToolNames        []string
+	AllowTargetGrowth        bool
+	SummarizeOversizedRecent bool
+}
+
 type Plan struct {
 	Immutable        []client.Message
 	Source           []client.Message
@@ -72,6 +85,16 @@ func (m *Manager) Append(message client.Message) {
 	m.messages = append(m.messages, message)
 }
 
+// Replace updates a live task anchor without discarding token calibration or
+// compaction statistics. Callers must keep anchor indexes stable across Apply.
+func (m *Manager) Replace(index int, message client.Message) error {
+	if index < 0 || index >= len(m.messages) {
+		return fmt.Errorf("memory: message index %d is out of range", index)
+	}
+	m.messages[index] = message
+	return nil
+}
+
 func (m *Manager) PopLast() {
 	if len(m.messages) > 0 {
 		m.messages = m.messages[:len(m.messages)-1]
@@ -120,19 +143,62 @@ func (m *Manager) Stats() Stats {
 }
 
 func (m *Manager) Plan() (Plan, error) {
+	return m.PlanWithRetention(Retention{PreserveInstructions: true})
+}
+
+// PlanWithRetention builds a compaction plan with caller-defined immutable
+// anchors. ImmutablePrefix is clamped to the current message count.
+func (m *Manager) PlanWithRetention(retention Retention) (Plan, error) {
 	if m.policy.ContextWindow <= 0 {
 		return Plan{}, errors.New("memory: context window is unknown")
+	}
+	immutablePrefix := min(max(retention.ImmutablePrefix, 0), len(m.messages))
+	immutable := make([]bool, len(m.messages))
+	for index, message := range m.messages {
+		immutable[index] = index < immutablePrefix || retention.PreserveInstructions && isImmutable(message)
+	}
+	// Retain a whole assistant/tool-result unit if a caller pins its tool or
+	// any result is still pending. Never move just one half of a tool exchange.
+	for start, message := range m.messages {
+		if len(message.ToolCalls) == 0 {
+			continue
+		}
+		end := start + 1
+		completed := make(map[string]bool, len(message.ToolCalls))
+		for end < len(m.messages) && m.messages[end].Role == client.RoleTool {
+			completed[m.messages[end].ToolCallID] = true
+			end++
+		}
+		keep := immutable[start]
+		for _, call := range message.ToolCalls {
+			keep = keep || !completed[call.ID]
+			for _, name := range retention.PreserveToolNames {
+				keep = keep || call.Function.Name == name
+			}
+		}
+		if keep {
+			for index := start; index < end; index++ {
+				immutable[index] = true
+			}
+		}
 	}
 	recentBudget := max(1, int(float64(m.policy.ContextWindow)*m.policy.RecentRatio))
 	recentStart := len(m.messages)
 	recentTokens := 0
 	for end := len(m.messages); end > 0; {
 		start := previousUnitStart(m.messages, end)
-		if start == end-1 && isImmutable(m.messages[start]) {
+		keep := true
+		for index := start; index < end; index++ {
+			keep = keep && immutable[index]
+		}
+		if keep {
 			end = start
 			continue
 		}
 		cost := CountMessages(m.messages[start:end])
+		if retention.SummarizeOversizedRecent && recentTokens == 0 && cost > recentBudget {
+			break
+		}
 		if recentTokens > 0 && recentTokens+cost > recentBudget {
 			break
 		}
@@ -148,7 +214,7 @@ func (m *Manager) Plan() (Plan, error) {
 	}
 	for index, message := range m.messages {
 		switch {
-		case isImmutable(message):
+		case immutable[index]:
 			plan.Immutable = append(plan.Immutable, message)
 		case index >= recentStart:
 			plan.Recent = append(plan.Recent, message)
@@ -160,10 +226,32 @@ func (m *Manager) Plan() (Plan, error) {
 		return Plan{}, ErrNothingToCompact
 	}
 
-	fixed := CountMessages(plan.Immutable) + CountMessages(plan.Recent) + m.providerOverhead
-	plan.OutputBudget = plan.TargetTokens - fixed
+	fixedTokens := CountMessages(plan.Immutable) + CountMessages(plan.Recent) + m.providerOverhead
+	plan.OutputBudget = plan.TargetTokens - fixedTokens
+	if retention.AllowTargetGrowth {
+		// A growing target must include the summary envelope and Apply's safety
+		// margin, not only raw summary text. Keep the main chat's existing fixed
+		// target budget unchanged; Apply still validates its final estimate.
+		fixed := append(cloneMessages(plan.Immutable), client.Message{
+			Role: client.RoleSystem, Name: SummaryName, Content: "Compressed conversation memory:\n",
+		})
+		fixed = append(fixed, plan.Recent...)
+		fixedTokens = CountMessages(fixed)
+		available := func(target int) int {
+			return max(0, (target-m.providerOverhead-8)*10/11) - fixedTokens
+		}
+		plan.OutputBudget = available(plan.TargetTokens)
+		if plan.OutputBudget < 128 {
+			minimumLocal := fixedTokens + 128
+			plan.TargetTokens = minimumLocal + m.providerOverhead + max(8, minimumLocal/10) + 16
+			plan.OutputBudget = available(plan.TargetTokens)
+		}
+	}
 	if plan.OutputBudget < 128 {
 		return Plan{}, fmt.Errorf("memory: immutable and recent context exceed the %d token target", plan.TargetTokens)
+	}
+	if plan.TargetTokens >= int(float64(m.policy.ContextWindow)*m.policy.TriggerRatio) {
+		return Plan{}, fmt.Errorf("memory: immutable and recent context leave no room below the compaction threshold of the %d token context window", m.policy.ContextWindow)
 	}
 	plan.OutputBudget = min(plan.OutputBudget, 8192)
 	return plan, nil

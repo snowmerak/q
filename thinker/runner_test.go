@@ -3,6 +3,7 @@ package thinker
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/snowmerak/q/client"
@@ -104,6 +105,39 @@ func TestRunnerRegistersOnePropositionPerRoundAndCompletes(t *testing.T) {
 	}
 	if configuredClient.requests[1].Messages[len(configuredClient.requests[1].Messages)-1].Role != client.RoleTool {
 		t.Fatalf("registration ACK was not fed back: %#v", configuredClient.requests[1].Messages)
+	}
+}
+
+func TestRunnerCompactsWhilePreservingSourceAndAcknowledgedPropositions(t *testing.T) {
+	registration := thinkerToolCall("register", RegisterToolName, `{"content":"Keep the exact durable fact.","queries":[],"confidence":0.9,"tags":[]}`)
+	registration.Content = strings.Repeat("x", 40_000)
+	fake := &fakeThinkerClient{responses: []client.Message{
+		registration,
+		{Role: client.RoleAssistant, Content: "The durable fact was processed; finish extraction when nothing else remains."},
+		thinkerToolCall("complete", CompleteToolName, `{}`),
+	}}
+	library := &fakePropositionLibrary{}
+	result, err := (Runner{
+		Client: fake, Library: library,
+		Spec: subagent.Spec{Role: config.AgentRoleThinker, Model: "thinker", ContextLength: 16_000},
+	}).Run(t.Context(), Job{ID: "compact-job", Messages: []client.Message{{Role: client.RoleUser, Content: "Keep the exact durable fact."}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(fake.requests) != 3 || fake.requests[1].MaxCompletionTokens == nil || result.Registered != 1 || result.Usage.TotalTokens != 36 {
+		t.Fatalf("result=%#v requests=%d", result, len(fake.requests))
+	}
+	initial, resumed := fake.requests[0].Messages, fake.requests[2].Messages
+	if initial[0].Content != resumed[0].Content || initial[1].Content != resumed[1].Content {
+		t.Fatal("extraction contract or original source was summarized")
+	}
+	for _, exact := range []string{"Keep the exact durable fact.", "prop-compact-job/0", `"action":"create"`} {
+		if !strings.Contains(resumed[2].Content, exact) {
+			t.Fatalf("acknowledged proposition lost %q: %s", exact, resumed[2].Content)
+		}
+	}
+	if len(resumed) != 4 || !strings.HasPrefix(resumed[3].Content, "Compressed conversation memory:") {
+		t.Fatalf("old extraction history was not compacted: %#v", resumed)
 	}
 }
 

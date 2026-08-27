@@ -39,11 +39,17 @@ func runCommitAgent(
 		{Role: client.RoleSystem, Content: commitAgentInstructions()},
 		{Role: client.RoleUser, Content: "Create the best commit or split-commit proposal for the prepared staged changes. Start by calling git_overview. The full diff is available only through the commit tools."},
 	}
+	available := commitTools()
+	history := subagent.NewContextCompactor(spec, messages, available, len(messages))
+	history.PreserveTools(toolGitOverview)
 	reminders := 0
 	for round := 0; round < maximumCommitRounds; round++ {
+		if err := history.CompactIfNeeded(ctx, &spec, configuredClient); err != nil {
+			return proposalState{}, false, fmt.Errorf("q commit: context: %w", err)
+		}
 		parallel := false
 		request := client.ChatRequest{
-			Messages: messages, Tools: commitTools(), ToolChoice: client.ToolChoiceAuto,
+			Messages: history.RequestMessages(), Tools: available, ToolChoice: client.ToolChoiceAuto,
 			ParallelToolCalls: &parallel, WorkingDirectory: state.root,
 		}
 		if !runtime.overviewed {
@@ -57,7 +63,8 @@ func runCommitAgent(
 		if err != nil {
 			return proposalState{}, false, err
 		}
-		messages = append(messages, assistant)
+		history.Observe(response.Usage)
+		history.Append(assistant)
 		if len(assistant.ToolCalls) == 0 {
 			if runtime.proposal.Single != nil || len(runtime.proposal.Split) > 0 {
 				return runtime.proposal, false, nil
@@ -68,7 +75,7 @@ func runCommitAgent(
 			}
 			reminders++
 			logger.step("agent", "sending proposal reminder %d/%d", reminders, maximumProposalPrompts)
-			messages = append(messages, client.Message{
+			history.Append(client.Message{
 				Role:    client.RoleSystem,
 				Content: fmt.Sprintf("Reminder %d/%d: a commit proposal is mandatory. Call propose_commit or split_commit now; do not answer with plain text.", reminders, maximumProposalPrompts),
 			})
@@ -80,7 +87,7 @@ func runCommitAgent(
 			if result.IsError {
 				logger.step("tool", "%s returned a validation error", call.Function.Name)
 			}
-			messages = append(messages, client.Message{
+			history.Append(client.Message{
 				Role: client.RoleTool, Name: call.Function.Name, ToolCallID: call.ID, Content: result.Content,
 			})
 		}

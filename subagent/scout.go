@@ -182,6 +182,7 @@ func (r ScoutRunner) run(ctx context.Context, task ScoutTask, prompt string, lif
 		{Role: client.RoleUser, Content: prompt},
 	}
 	tools := scoutTools(r.Tools.Tools())
+	history := NewContextCompactor(r.Spec, messages, tools, len(messages))
 	rounds := r.MaxRounds
 	if rounds <= 0 {
 		rounds = defaultScoutRounds
@@ -189,13 +190,16 @@ func (r ScoutRunner) run(ctx context.Context, task ScoutTask, prompt string, lif
 	reminders := 0
 	var usage client.Usage
 	for round := 0; round < rounds; round++ {
+		if err := history.CompactIfNeeded(ctx, &r.Spec, r.Client); err != nil {
+			return ScoutResult{}, fmt.Errorf("subagent: scout context: %w", err)
+		}
 		reportProgress(r.Progress, ProgressEvent{
 			Agent: "scout", TaskID: task.ID, ParentID: task.ParentID,
 			Action: ProgressThinking, Detail: fmt.Sprintf("model round %d", round+1),
 		})
 		parallel := false
 		request := client.ChatRequest{
-			Messages: messages, Tools: tools, ToolChoice: client.ToolChoiceAuto,
+			Messages: history.RequestMessages(), Tools: tools, ToolChoice: client.ToolChoiceAuto,
 			ParallelToolCalls: &parallel, WorkingDirectory: r.WorkingDirectory,
 		}
 		if reminders > 0 {
@@ -210,7 +214,8 @@ func (r ScoutRunner) run(ctx context.Context, task ScoutTask, prompt string, lif
 			return ScoutResult{}, err
 		}
 		usage = addUsage(usage, response.Usage)
-		messages = append(messages, assistant)
+		history.Observe(response.Usage)
+		history.Append(assistant)
 		traceAssistant(r.Trace, "scout", task.ID, task.ParentID, assistant)
 		if lifecycle != nil {
 			if err := lifecycle.Message(assistant); err != nil {
@@ -222,7 +227,7 @@ func (r ScoutRunner) run(ctx context.Context, task ScoutTask, prompt string, lif
 				return ScoutResult{}, errors.New("subagent: scout ended without task_complete")
 			}
 			reminders++
-			messages = append(messages, client.Message{Role: client.RoleSystem, Content: fmt.Sprintf(
+			history.Append(client.Message{Role: client.RoleSystem, Content: fmt.Sprintf(
 				"Reminder %d/%d: finish the scout by calling task_complete now; do not answer with plain text.",
 				reminders, maximumScoutReminders,
 			)})
@@ -245,7 +250,7 @@ func (r ScoutRunner) run(ctx context.Context, task ScoutTask, prompt string, lif
 							TaskID: task.ID, Status: sessionstore.StatusSucceeded,
 							Outcome: completion.Outcome, Summary: completion.Summary,
 							Findings: completion.Findings, Artifacts: completion.Artifacts,
-							Verification: completion.Verification, Blocker: completion.Blocker, Usage: usage,
+							Verification: completion.Verification, Blocker: completion.Blocker, Usage: addUsage(usage, history.CompactionUsage()),
 						}, nil
 					}
 					toolResult = scoutToolError(err)
@@ -263,7 +268,7 @@ func (r ScoutRunner) run(ctx context.Context, task ScoutTask, prompt string, lif
 				ToolCallID: call.ID, Content: toolResult.Content,
 			}
 			traceToolResult(r.Trace, "scout", task.ID, task.ParentID, call.Function.Name, toolResult)
-			messages = append(messages, message)
+			history.Append(message)
 			if lifecycle != nil {
 				if err := lifecycle.Message(message); err != nil {
 					return ScoutResult{}, err

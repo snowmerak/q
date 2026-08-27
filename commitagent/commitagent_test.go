@@ -225,6 +225,29 @@ func TestCommitAgentAcceptsToolProposal(t *testing.T) {
 	}
 }
 
+func TestCommitAgentCompactsAndRetainsStagedOverview(t *testing.T) {
+	fake := &fakeAgentClient{responses: []client.Message{
+		{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{toolCall(toolGitOverview, `{}`)}},
+		{Role: client.RoleAssistant, Content: strings.Repeat("x", 72_000)},
+		{Role: client.RoleAssistant, Content: "Staged evidence inspected. Submit the commit proposal."},
+		{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{toolCall(toolProposeCommit, `{"type":"feat","scope":"commit","summary":"added context compaction"}`)}},
+	}}
+	state := repositoryState{root: t.TempDir(), visibleFiles: []string{"commitagent/agent.go"}, fileDiffs: map[string]string{"commitagent/agent.go": "diff"}}
+	var progress bytes.Buffer
+	proposal, fallback, err := runCommitAgent(t.Context(), fake, subagent.Spec{Model: "commit", ContextLength: 32_000}, state, 2, loom.StoreOptions{}, newProgressLogger(&progress))
+	if err != nil || fallback || proposal.Single == nil {
+		t.Fatalf("proposal=%#v fallback=%v err=%v", proposal, fallback, err)
+	}
+	if len(fake.requests) != 4 || fake.requests[2].MaxCompletionTokens == nil {
+		t.Fatalf("compaction sequence has %d requests", len(fake.requests))
+	}
+	before, after := fake.requests[1].Messages, fake.requests[3].Messages
+	if before[0].Content != after[0].Content || before[1].Content != after[1].Content ||
+		after[2].ToolCalls[0].Function.Name != toolGitOverview || before[3].Content != after[3].Content {
+		t.Fatal("commit contract or staged overview changed across compaction")
+	}
+}
+
 func TestExecuteSplitCommitsPreservesFileGroups(t *testing.T) {
 	root := newTestRepository(t)
 	writeTestFile(t, root, "app.txt", "old app\n")

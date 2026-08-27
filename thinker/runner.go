@@ -88,6 +88,12 @@ type registerInput struct {
 	Tags       []string `json:"tags,omitempty"`
 }
 
+type acknowledgedProposition struct {
+	Content string `json:"content"`
+	ID      string `json:"id,omitempty"`
+	Action  string `json:"action"`
+}
+
 func (r Runner) Run(ctx context.Context, job Job) (Result, error) {
 	if ctx == nil || r.Client == nil || r.Library == nil {
 		return Result{}, errors.New("thinker: context, client, and Library are required")
@@ -114,14 +120,20 @@ func (r Runner) Run(ctx context.Context, job Job) (Result, error) {
 	messages := []client.Message{
 		{Role: client.RoleSystem, Content: thinkerInstructions(maximum)},
 		{Role: client.RoleUser, Content: chunk.Prompt},
+		{Role: client.RoleUser, Content: "No propositions have been processed in this learning segment yet."},
 	}
 	tools := thinkerTools()
+	history := subagent.NewContextCompactor(r.Spec, messages, tools, len(messages))
+	var acknowledged []acknowledgedProposition
 	parallel := false
 	result := Result{Truncated: chunk.Truncated}
 	proposalIndex := 0
 	for round := 0; round < rounds; round++ {
+		if err := history.CompactIfNeeded(ctx, &r.Spec, r.Client); err != nil {
+			return Result{}, fmt.Errorf("thinker: context: %w", err)
+		}
 		request := client.ChatRequest{
-			Messages: messages, Tools: tools, ToolChoice: client.ToolChoiceRequired,
+			Messages: history.RequestMessages(), Tools: tools, ToolChoice: client.ToolChoiceRequired,
 			ParallelToolCalls: &parallel, WorkingDirectory: job.WorkingDirectory,
 		}
 		response, err := r.Spec.Chat(ctx, r.Client, request)
@@ -136,7 +148,8 @@ func (r Runner) Run(ctx context.Context, job Job) (Result, error) {
 		if assistant.Role == "" {
 			assistant.Role = client.RoleAssistant
 		}
-		messages = append(messages, assistant)
+		history.Observe(response.Usage)
+		history.Append(assistant)
 		if len(assistant.ToolCalls) != 1 {
 			return Result{}, errors.New("thinker: model must call exactly one tool per round")
 		}
@@ -145,9 +158,10 @@ func (r Runner) Run(ctx context.Context, job Job) (Result, error) {
 		case CompleteToolName:
 			var input struct{}
 			if err := decodeStrictArguments(call.Function.Arguments, &input); err != nil {
-				messages = append(messages, thinkerToolError(call, fmt.Errorf("complete: %w", err)))
+				history.Append(thinkerToolError(call, fmt.Errorf("complete: %w", err)))
 				continue
 			}
+			result.Usage = addUsage(result.Usage, history.CompactionUsage())
 			return result, nil
 		case RegisterToolName:
 			if proposalIndex >= maximum {
@@ -155,7 +169,7 @@ func (r Runner) Run(ctx context.Context, job Job) (Result, error) {
 			}
 			var input registerInput
 			if err := decodeStrictArguments(call.Function.Arguments, &input); err != nil {
-				messages = append(messages, thinkerToolError(call, fmt.Errorf("register proposition: %w", err)))
+				history.Append(thinkerToolError(call, fmt.Errorf("register proposition: %w", err)))
 				continue
 			}
 			idempotencyKey := fmt.Sprintf("%s/%d", job.ID, proposalIndex)
@@ -175,7 +189,7 @@ func (r Runner) Run(ctx context.Context, job Job) (Result, error) {
 				if strings.Contains(err.Error(), "HTTP 409") {
 					return Result{}, fmt.Errorf("thinker: register proposition: %w", err)
 				}
-				messages = append(messages, thinkerToolError(call, fmt.Errorf("register proposition: %w", err)))
+				history.Append(thinkerToolError(call, fmt.Errorf("register proposition: %w", err)))
 				continue
 			}
 			result.Processed++
@@ -201,8 +215,16 @@ func (r Runner) Run(ctx context.Context, job Job) (Result, error) {
 			default:
 				return Result{}, fmt.Errorf("thinker: unsupported proposition action %q", action)
 			}
+			acknowledged = append(acknowledged, acknowledgedProposition{Content: input.Content, ID: registered.ID, Action: action})
+			ledger, _ := json.Marshal(acknowledged)
+			if err := history.SetAnchor(2, client.Message{
+				Role:    client.RoleUser,
+				Content: "Host-maintained record of propositions already processed in this learning segment. Do not register them again.\n" + string(ledger),
+			}); err != nil {
+				return Result{}, err
+			}
 			ack, _ := json.Marshal(registered)
-			messages = append(messages, client.Message{
+			history.Append(client.Message{
 				Role: client.RoleTool, Name: RegisterToolName, ToolCallID: call.ID, Content: string(ack),
 			})
 		default:

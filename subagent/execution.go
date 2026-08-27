@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/snowmerak/q/client"
@@ -14,10 +15,13 @@ import (
 )
 
 const (
-	TargetSelectorPaths = "paths"
-	TargetSelectorLoom  = "loom"
-	ReviewTaskToolName  = "review_task"
-	maximumReviewRounds = 80
+	TargetSelectorPaths    = "paths"
+	TargetSelectorLoom     = "loom"
+	ReviewTaskToolName     = "review_task"
+	maximumReviewRounds    = 80
+	maximumTargetGroups    = 16
+	maximumTargetSelectors = 16
+	maximumTargetCodeBytes = 256 << 10
 )
 
 // TargetCondition is a disjunctive normal form over file-set selectors.
@@ -132,6 +136,11 @@ func (r PlannerReviewRunner) Run(ctx context.Context, input TaskReviewRequest) (
 		{Role: client.RoleSystem, Content: plannerReviewInstructions()},
 		{Role: client.RoleUser, Content: prompt},
 	}
+	available := plannerReviewTools(nil)
+	if r.Tools != nil {
+		available = plannerReviewTools(r.Tools.Tools())
+	}
+	history := NewContextCompactor(r.Spec, messages, available, len(messages))
 	rounds := r.MaxRounds
 	if rounds <= 0 {
 		rounds = maximumReviewRounds
@@ -141,17 +150,16 @@ func (r PlannerReviewRunner) Run(ctx context.Context, input TaskReviewRequest) (
 		Action: ProgressStarted, Detail: "reviewing Coder result",
 	})
 	for round := 0; round < rounds; round++ {
+		if err := history.CompactIfNeeded(ctx, &r.Spec, r.Client); err != nil {
+			return TaskReview{}, fmt.Errorf("subagent: planner review context: %w", err)
+		}
 		reportProgress(r.Progress, ProgressEvent{
 			Agent: "planner", TaskID: taskID, ParentID: r.ExecutionID,
 			Action: ProgressThinking, Detail: fmt.Sprintf("review round %d", round+1),
 		})
-		available := plannerReviewTools(nil)
-		if r.Tools != nil {
-			available = plannerReviewTools(r.Tools.Tools())
-		}
 		parallel := false
 		request := client.ChatRequest{
-			Messages: messages, Tools: available,
+			Messages: history.RequestMessages(), Tools: available,
 			ToolChoice: client.ToolChoiceAuto, ParallelToolCalls: &parallel,
 			WorkingDirectory: r.WorkingDirectory,
 		}
@@ -166,7 +174,8 @@ func (r PlannerReviewRunner) Run(ctx context.Context, input TaskReviewRequest) (
 		if err != nil {
 			return TaskReview{}, fmt.Errorf("subagent: planner review: %w", err)
 		}
-		messages = append(messages, assistant)
+		history.Observe(response.Usage)
+		history.Append(assistant)
 		traceAssistant(r.Trace, "planner", taskID, r.ExecutionID, assistant)
 		if lifecycle != nil {
 			if err := lifecycle.Message(assistant); err != nil {
@@ -174,7 +183,7 @@ func (r PlannerReviewRunner) Run(ctx context.Context, input TaskReviewRequest) (
 			}
 		}
 		if len(assistant.ToolCalls) == 0 {
-			messages = append(messages, client.Message{Role: client.RoleSystem, Content: "Inspect evidence only when needed, then finish by calling review_task exactly once."})
+			history.Append(client.Message{Role: client.RoleSystem, Content: "Inspect evidence only when needed, then finish by calling review_task exactly once."})
 			continue
 		}
 		if len(assistant.ToolCalls) == 1 && assistant.ToolCalls[0].Function.Name == ReviewTaskToolName {
@@ -201,7 +210,7 @@ func (r PlannerReviewRunner) Run(ctx context.Context, input TaskReviewRequest) (
 				Content: scoutToolError(err).Content,
 			}
 			traceToolResult(r.Trace, "planner", taskID, r.ExecutionID, ReviewTaskToolName, scoutToolError(err))
-			messages = append(messages, message)
+			history.Append(message)
 			if lifecycle != nil {
 				if err := lifecycle.Message(message); err != nil {
 					return TaskReview{}, err
@@ -231,7 +240,7 @@ func (r PlannerReviewRunner) Run(ctx context.Context, input TaskReviewRequest) (
 				Content: toolResult.Content,
 			}
 			traceToolResult(r.Trace, "planner", taskID, r.ExecutionID, call.Function.Name, toolResult)
-			messages = append(messages, message)
+			history.Append(message)
 			if lifecycle != nil {
 				if err := lifecycle.Message(message); err != nil {
 					return TaskReview{}, err
@@ -281,61 +290,89 @@ func ApplyTaskReview(plan *PlanProposal, review TaskReview) error {
 }
 
 func validateTargetCondition(target *TargetCondition) error {
+	return errors.Join(targetValidationErrors(target)...)
+}
+
+func targetValidationErrors(target *TargetCondition) []error {
 	if target == nil || len(target.Any) == 0 {
-		return errors.New("target requires at least one any group")
+		return []error{errors.New("any: requires at least one group")}
 	}
-	if len(target.Any) > 16 {
-		return errors.New("target accepts at most 16 any groups")
+	var problems []error
+	if len(target.Any) > maximumTargetGroups {
+		problems = append(problems, fmt.Errorf("any: accepts at most %d groups", maximumTargetGroups))
 	}
 	for groupIndex := range target.Any {
 		group := &target.Any[groupIndex]
 		if len(group.All) == 0 {
-			return fmt.Errorf("any group %d requires at least one all selector", groupIndex+1)
+			problems = append(problems, fmt.Errorf("any[%d].all: requires at least one selector", groupIndex))
 		}
-		if len(group.All) > 16 {
-			return fmt.Errorf("any group %d accepts at most 16 selectors", groupIndex+1)
+		if len(group.All) > maximumTargetSelectors {
+			problems = append(problems, fmt.Errorf("any[%d].all: accepts at most %d selectors", groupIndex, maximumTargetSelectors))
 		}
 		for selectorIndex := range group.All {
 			selector := &group.All[selectorIndex]
+			field := fmt.Sprintf("any[%d].all[%d]", groupIndex, selectorIndex)
 			selector.Kind = strings.TrimSpace(selector.Kind)
+			originalPaths := selector.Paths
 			selector.Paths = cleanStrings(selector.Paths)
 			selector.Code = strings.TrimSpace(selector.Code)
 			switch selector.Kind {
 			case TargetSelectorPaths:
-				if len(selector.Paths) == 0 || selector.Code != "" || len(selector.Inputs) != 0 {
-					return fmt.Errorf("selector %d.%d paths kind requires only non-empty paths", groupIndex+1, selectorIndex+1)
+				if len(selector.Paths) == 0 {
+					problems = append(problems, fmt.Errorf("%s.paths: paths kind requires at least one workspace-relative file path; new files are allowed", field))
 				}
-				for _, path := range selector.Paths {
-					if !workspaceRelativePath(path) {
-						return fmt.Errorf("selector %d.%d path %q must stay workspace-relative", groupIndex+1, selectorIndex+1, path)
+				if selector.Code != "" || len(selector.Inputs) != 0 {
+					problems = append(problems, fmt.Errorf("%s: paths kind must not include code or inputs", field))
+				}
+				for pathIndex, path := range originalPaths {
+					path = strings.TrimSpace(path)
+					if path != "" && !workspaceRelativePath(path) {
+						problems = append(problems, fmt.Errorf("%s.paths[%d]: %q must stay workspace-relative", field, pathIndex, path))
 					}
 				}
 			case TargetSelectorLoom:
-				if selector.Code == "" || len(selector.Paths) != 0 || len(selector.Inputs) == 0 {
-					return fmt.Errorf("selector %d.%d loom kind requires code, inputs, and no paths", groupIndex+1, selectorIndex+1)
+				if selector.Code == "" {
+					problems = append(problems, fmt.Errorf("%s.code: loom kind requires a non-blank JavaScript function body returning file paths", field))
 				}
-				if len(selector.Code) > 256<<10 {
-					return fmt.Errorf("selector %d.%d Loom code exceeds 262144 bytes", groupIndex+1, selectorIndex+1)
+				if len(selector.Paths) != 0 {
+					problems = append(problems, fmt.Errorf("%s: loom kind must not include paths", field))
 				}
-				for name, value := range selector.Inputs {
+				if len(selector.Inputs) == 0 {
+					problems = append(problems, fmt.Errorf("%s.inputs: loom kind requires at least one named Loom reference from the brief", field))
+				}
+				if len(selector.Code) > maximumTargetCodeBytes {
+					problems = append(problems, fmt.Errorf("%s.code: exceeds %d UTF-8 bytes", field, maximumTargetCodeBytes))
+				}
+				names := make([]string, 0, len(selector.Inputs))
+				for name := range selector.Inputs {
+					names = append(names, name)
+				}
+				sort.Strings(names)
+				normalized := make(map[string]string, len(names))
+				inputProblemsBefore := len(problems)
+				for _, name := range names {
+					value := selector.Inputs[name]
 					cleanName, cleanValue := strings.TrimSpace(name), strings.TrimSpace(value)
 					if cleanName == "" {
-						return fmt.Errorf("selector %d.%d Loom input name is required", groupIndex+1, selectorIndex+1)
+						problems = append(problems, fmt.Errorf("%s.inputs: input name must be non-blank", field))
 					}
 					if _, err := loom.ParseRef(cleanValue); err != nil {
-						return fmt.Errorf("selector %d.%d Loom input %q: %w", groupIndex+1, selectorIndex+1, name, err)
+						problems = append(problems, fmt.Errorf("%s.inputs[%q]: %w", field, name, err))
 					}
-					if cleanName != name {
-						delete(selector.Inputs, name)
+					if _, duplicate := normalized[cleanName]; duplicate {
+						problems = append(problems, fmt.Errorf("%s.inputs[%q]: duplicate input name after trimming whitespace", field, name))
 					}
-					selector.Inputs[cleanName] = cleanValue
+					normalized[cleanName] = cleanValue
+				}
+				if len(problems) == inputProblemsBefore {
+					selector.Inputs = normalized
 				}
 			default:
-				return fmt.Errorf("selector %d.%d kind must be %q or %q", groupIndex+1, selectorIndex+1, TargetSelectorPaths, TargetSelectorLoom)
+				problems = append(problems, fmt.Errorf("%s.kind: must be %q or %q", field, TargetSelectorPaths, TargetSelectorLoom))
 			}
 		}
 	}
-	return nil
+	return problems
 }
 
 func workspaceRelativePath(value string) bool {

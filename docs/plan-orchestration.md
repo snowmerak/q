@@ -149,6 +149,42 @@ Planner는 완성된 Grill brief를 받아 다음을 하나의 proposal로 만�
 [execution-orchestration.md](execution-orchestration.md)를 따른다. Target condition은
 task의 파일 집합만 고르며 순차 조건이나 결과 조건으로 사용하지 않는다.
 
+### Planner 제출 형식과 오류 수정
+
+Planner의 system prompt에는 실제 validator와 schema 테스트를 통과하는
+`succeeded`/`blocked` JSON 예제를 함께 제공한다. 일반적인 task는
+`target.any[0].all[0]`에 `kind: paths`와 파일 목록 하나만 사용하면 된다.
+아직 생성하지 않은 파일도 workspace-relative 경로로 지정할 수 있다.
+Loom selector와 여러 OR/AND group은 필요한 경우에만 사용하며, Loom reference를
+임의로 만들지 않는다.
+
+`submit_plan`의 기본 object shape는 두 outcome에서 동일하다.
+
+- `outcome`, `summary`, `conditions`, `steps`, `verification`, `blocker`는 schema의
+  required field다. 저장된 이전 proposal에서 사용하지 않는 필드가 생략된 경우는
+  parser가 계속 허용한다.
+- `succeeded`에서는 conditions, steps, **전체 verification**이 각각 하나 이상
+  필요하다. task별 verification은 전체 verification을 대신하지 않는다.
+  blocker는 빈 문자열을 보낸다.
+- `blocked`에서는 구체적인 blocker가 필요하며 conditions, steps, verification은
+  빈 배열을 보낸다. 형식을 채우려고 실행 계획을 지어내지 않는다.
+- outcome별 non-empty 조건은 field description과 prompt에 명시하고 runtime에서
+  검사한다. 최상위 schema에 outcome union을 추가하지 않는다.
+- selector는 종류별 schema로 나눈다. `paths`는 비어 있지 않은 paths만,
+  `loom`은 code와 하나 이상의 유효한 Loom input만 받는다. 두 종류의 필드를
+  혼합하지 않는다. `any`와 `all`은 각각 1~16개다.
+- workspace 경로 안전성, UTF-8 byte 기준 code 크기 등 의미적 제약은 설명과
+  runtime validation으로 계속 보장한다.
+
+잘 구성된 JSON에서 독립적인 field/step/selector 검증 오류가 여러 개 발견되면
+한 번의 tool error에 모아 전달한다. 각 오류에는 0-based 경로
+(`steps[1].target.any[0].all[0].paths[0]` 등)를 붙인다. Planner는 모든 오류를
+수정한 **전체 proposal**을 다시 제출한다. JSON 문법/type 오류나 알 수 없는
+필드는 여전히 strict decoding 단계에서 거절한다.
+
+이 개선은 공통 PlannerRunner를 사용하는 TUI와 ACP 양쪽에 적용되며,
+계획/실행 기록의 저장 형식이나 Grill 과정의 저장 정책을 바꾸지 않는다.
+
 사용자가 거절하거나 수정 사항을 주거나 Planner가 유효한 계획을 만들지 못하면
 Planner만 반복하지 않는다. 기존 사용자 답변, Scout 결과, Loom reference, proposal과
 실패 근거를 보존한 채 `GRILLING`으로 돌아가 다시 Grill한다. 이미 확정된 질문을

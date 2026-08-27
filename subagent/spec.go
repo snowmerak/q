@@ -21,6 +21,7 @@ type Spec struct {
 	Reasoning       *client.ReasoningCapabilities
 	ContextLength   int64
 	MaxOutputTokens int64
+	ContextPolicy   config.ContextConfig
 	Candidates      []client.ModelCandidate
 	Router          *client.ModelRouter
 	activeCandidate int
@@ -73,6 +74,9 @@ func Resolve(value config.Config, role string, models []client.Model) (Spec, err
 	}
 	if !contextKnown {
 		minimumContext = 0
+		if agent.Group == "" && len(candidates) == 1 && candidates[0].Model == value.Provider.Model {
+			minimumContext = value.EffectiveContextWindow()
+		}
 	}
 	if !outputKnown {
 		minimumOutput = 0
@@ -81,7 +85,8 @@ func Resolve(value config.Config, role string, models []client.Model) (Spec, err
 		Role: role, Group: agent.Group,
 		Model: candidates[0].Model, ReasoningEffort: candidates[0].ReasoningEffort,
 		Reasoning: cloneReasoning(primary), ContextLength: minimumContext, MaxOutputTokens: minimumOutput,
-		Candidates: candidates,
+		ContextPolicy: value.EffectiveContext(),
+		Candidates:    candidates,
 	}, nil
 }
 

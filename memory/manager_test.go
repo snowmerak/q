@@ -71,3 +71,81 @@ func TestToolCallAndResultsFormOneRetentionUnit(t *testing.T) {
 		t.Fatalf("tool retention unit starts at %d", got)
 	}
 }
+
+func TestPlanWithRetentionKeepsPrefixAndCompactsLaterSystemMessages(t *testing.T) {
+	policy := Policy{ContextWindow: 4000, TriggerRatio: .85, TargetRatio: .22, RecentRatio: .07}
+	anchors := []client.Message{
+		{Role: client.RoleSystem, Content: "exact role contract"},
+		{Role: client.RoleUser, Content: "exact approved plan and feedback"},
+	}
+	m := New(policy, anchors)
+	reminder := client.Message{Role: client.RoleSystem, Content: strings.Repeat("transient reminder ", 120)}
+	m.Append(reminder)
+	for index := 0; index < 6; index++ {
+		m.Append(client.Message{Role: client.RoleAssistant, Content: strings.Repeat("working history ", 100)})
+	}
+	m.Append(client.Message{Role: client.RoleUser, Content: "latest loop state"})
+
+	plan, err := m.PlanWithRetention(Retention{ImmutablePrefix: len(anchors), AllowTargetGrowth: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(plan.Immutable) != len(anchors) {
+		t.Fatalf("immutable = %#v", plan.Immutable)
+	}
+	if plan.Immutable[0].Content != anchors[0].Content || plan.Immutable[1].Content != anchors[1].Content {
+		t.Fatalf("anchors changed: %#v", plan.Immutable)
+	}
+	for _, message := range plan.Immutable {
+		if message.Content == reminder.Content {
+			t.Fatal("transient system reminder became immutable")
+		}
+	}
+	if err := m.Apply(plan, "completed work and remaining state"); err != nil {
+		t.Fatal(err)
+	}
+	got := m.Messages()
+	if got[0].Content != anchors[0].Content || got[1].Content != anchors[1].Content {
+		t.Fatalf("compacted anchors changed: %#v", got[:2])
+	}
+}
+
+func TestAnchoredPlanCanGrowTargetWithoutChangingLargeTask(t *testing.T) {
+	policy := Policy{ContextWindow: 16_000, TriggerRatio: .80, TargetRatio: .22, RecentRatio: .07}
+	anchor := client.Message{Role: client.RoleSystem, Content: strings.Repeat("approved plan ", 1200)}
+	m := New(policy, []client.Message{anchor})
+	m.Append(client.Message{Role: client.RoleAssistant, Content: strings.Repeat("old analysis ", 1600)})
+	plan, err := m.PlanWithRetention(Retention{ImmutablePrefix: 1, AllowTargetGrowth: true, SummarizeOversizedRecent: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.TargetTokens <= int(float64(policy.ContextWindow)*policy.TargetRatio) {
+		t.Fatal("target did not grow around the exact task anchor")
+	}
+	if err := m.Apply(plan, "remaining verification"); err != nil {
+		t.Fatal(err)
+	}
+	if m.Messages()[0].Content != anchor.Content {
+		t.Fatal("large task anchor was truncated")
+	}
+}
+
+func TestRetentionPinsWholePendingToolExchange(t *testing.T) {
+	m := New(Policy{ContextWindow: 8000, TriggerRatio: .80, TargetRatio: .30, RecentRatio: .07}, nil)
+	call := client.Message{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{
+		{ID: "answered", Function: client.FunctionCall{Name: "read_file"}},
+		{ID: "pending", Function: client.FunctionCall{Name: "read_file"}},
+	}}
+	result := client.Message{Role: client.RoleTool, ToolCallID: "answered", Content: "exact result"}
+	m.Append(call)
+	m.Append(result)
+	m.Append(client.Message{Role: client.RoleAssistant, Content: strings.Repeat("old history ", 1000)})
+	m.Append(client.Message{Role: client.RoleUser, Content: "latest"})
+	plan, err := m.PlanWithRetention(Retention{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(plan.Immutable) != 2 || len(plan.Immutable[0].ToolCalls) != 2 || plan.Immutable[1].ToolCallID != "answered" {
+		t.Fatalf("pending tool exchange was separated: %#v", plan.Immutable)
+	}
+}
