@@ -586,7 +586,7 @@ func plannerTools(runtime ToolRuntime) []client.Tool {
 	var result []client.Tool
 	if runtime != nil {
 		for _, tool := range runtime.Tools() {
-			if tool.Function.Name == ExternalSearchToolName || externalMCPToolAllowed(tool.Function.Name) {
+			if tool.Function.Name == "loom_read" || tool.Function.Name == ExternalSearchToolName || externalMCPToolAllowed(tool.Function.Name) {
 				result = append(result, tool)
 			}
 		}

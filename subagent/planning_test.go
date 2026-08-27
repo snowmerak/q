@@ -241,6 +241,50 @@ func TestPlannerCallsExternalSearchAndReceivesCapturedResult(t *testing.T) {
 	}
 }
 
+func TestPlannerReadsLoomReportWithoutOtherBuiltinTools(t *testing.T) {
+	readCall := scoutCall("loom_read", `{"ref":"loom://0123456789abcdef0123456789abcdef"}`)
+	plannerClient := &fakeScoutClient{responses: []client.Message{
+		{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{readCall}},
+		{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{scoutCall(SubmitPlanToolName, plannerSucceededExample)}},
+	}}
+	tools := &fakeScoutTools{
+		available: []client.Tool{
+			scoutFunctionTool("loom_read"),
+			scoutFunctionTool("loom_inspect"),
+			scoutFunctionTool("loom_eval"),
+			scoutFunctionTool("read_file"),
+			scoutFunctionTool("run_command"),
+		},
+		result: &client.ToolResult{Content: `{"content":"Scout evidence: persist the counter across restarts.","more":false}`},
+	}
+	proposal, err := (PlannerRunner{
+		Client: plannerClient, Tools: tools, MaxRounds: 2,
+		Spec: Spec{Role: config.AgentRolePlanner, Model: "planner-model"},
+	}).Run(t.Context(), GrillBrief{
+		Objective:          "Add a persistent counter",
+		RepositoryEvidence: []string{"loom://0123456789abcdef0123456789abcdef"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if proposal.Outcome != "succeeded" || len(plannerClient.requests) != 2 {
+		t.Fatalf("proposal=%#v requests=%d", proposal, len(plannerClient.requests))
+	}
+	available := plannerClient.requests[0].Tools
+	if len(available) != 2 || !hasTool(available, "loom_read") || !hasTool(available, SubmitPlanToolName) {
+		t.Fatalf("expected only loom_read and submit_plan, got %#v", available)
+	}
+	if len(tools.calls) != 1 || tools.calls[0] != readCall {
+		t.Fatalf("loom_read was not dispatched unchanged: %#v", tools.calls)
+	}
+	messages := plannerClient.requests[1].Messages
+	result := messages[len(messages)-1]
+	if result.Role != client.RoleTool || result.Name != "loom_read" ||
+		result.ToolCallID != readCall.ID || result.Content != tools.result.Content {
+		t.Fatalf("Loom report was not returned to Planner: %#v", result)
+	}
+}
+
 func testExternalSearchRuntime(
 	t *testing.T,
 	received *ExternalSearchInput,
