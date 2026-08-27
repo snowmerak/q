@@ -842,7 +842,7 @@ type CancelNotification struct {
 	// See protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/extensibility)
 	Meta map[string]any `json:"_meta,omitempty"`
 	// The ID of the session to cancel operations for.
-	SessionId SessionId `json:"sessionId,omitempty"`
+	SessionId SessionId `json:"sessionId"`
 }
 
 func (v *CancelNotification) Validate() error {
@@ -2038,11 +2038,6 @@ func (u ErrorCode) MarshalJSON() ([]byte, error) {
 			return []byte{}, _e
 		}
 		return _b, nil
-		var m map[string]any
-		if json.Unmarshal(_b, &m) != nil {
-			return []byte{}, errors.New("invalid variant payload")
-		}
-		return json.Marshal(m)
 	}
 	if u.InvalidRequest != nil {
 		_b, _e := json.Marshal(*u.InvalidRequest)
@@ -2050,11 +2045,6 @@ func (u ErrorCode) MarshalJSON() ([]byte, error) {
 			return []byte{}, _e
 		}
 		return _b, nil
-		var m map[string]any
-		if json.Unmarshal(_b, &m) != nil {
-			return []byte{}, errors.New("invalid variant payload")
-		}
-		return json.Marshal(m)
 	}
 	if u.MethodNotFound != nil {
 		_b, _e := json.Marshal(*u.MethodNotFound)
@@ -2062,11 +2052,6 @@ func (u ErrorCode) MarshalJSON() ([]byte, error) {
 			return []byte{}, _e
 		}
 		return _b, nil
-		var m map[string]any
-		if json.Unmarshal(_b, &m) != nil {
-			return []byte{}, errors.New("invalid variant payload")
-		}
-		return json.Marshal(m)
 	}
 	if u.InvalidParams != nil {
 		_b, _e := json.Marshal(*u.InvalidParams)
@@ -2074,11 +2059,6 @@ func (u ErrorCode) MarshalJSON() ([]byte, error) {
 			return []byte{}, _e
 		}
 		return _b, nil
-		var m map[string]any
-		if json.Unmarshal(_b, &m) != nil {
-			return []byte{}, errors.New("invalid variant payload")
-		}
-		return json.Marshal(m)
 	}
 	if u.InternalError != nil {
 		_b, _e := json.Marshal(*u.InternalError)
@@ -2086,11 +2066,6 @@ func (u ErrorCode) MarshalJSON() ([]byte, error) {
 			return []byte{}, _e
 		}
 		return _b, nil
-		var m map[string]any
-		if json.Unmarshal(_b, &m) != nil {
-			return []byte{}, errors.New("invalid variant payload")
-		}
-		return json.Marshal(m)
 	}
 	if u.AuthenticationRequired != nil {
 		_b, _e := json.Marshal(*u.AuthenticationRequired)
@@ -2098,11 +2073,6 @@ func (u ErrorCode) MarshalJSON() ([]byte, error) {
 			return []byte{}, _e
 		}
 		return _b, nil
-		var m map[string]any
-		if json.Unmarshal(_b, &m) != nil {
-			return []byte{}, errors.New("invalid variant payload")
-		}
-		return json.Marshal(m)
 	}
 	if u.ResourceNotFound != nil {
 		_b, _e := json.Marshal(*u.ResourceNotFound)
@@ -2110,11 +2080,6 @@ func (u ErrorCode) MarshalJSON() ([]byte, error) {
 			return []byte{}, _e
 		}
 		return _b, nil
-		var m map[string]any
-		if json.Unmarshal(_b, &m) != nil {
-			return []byte{}, errors.New("invalid variant payload")
-		}
-		return json.Marshal(m)
 	}
 	if u.Other != nil {
 		_b, _e := json.Marshal(*u.Other)
@@ -2122,11 +2087,6 @@ func (u ErrorCode) MarshalJSON() ([]byte, error) {
 			return []byte{}, _e
 		}
 		return _b, nil
-		var m map[string]any
-		if json.Unmarshal(_b, &m) != nil {
-			return []byte{}, errors.New("invalid variant payload")
-		}
-		return json.Marshal(m)
 	}
 	return []byte{}, nil
 }
@@ -2708,7 +2668,7 @@ type McpServer struct {
 	//
 	// This capability is not part of the spec yet, and may be removed or changed at any point.
 	//
-	// # ACP transport configuration
+	// ACP transport configuration
 	//
 	// Only available when the Agent capabilities indicate 'mcp_capabilities.acp' is 'true'.
 	// The MCP server is provided by an ACP component and communicates over the ACP channel.
@@ -4077,11 +4037,6 @@ func (u RequestId) MarshalJSON() ([]byte, error) {
 			return []byte{}, _e
 		}
 		return _b, nil
-		var m map[string]any
-		if json.Unmarshal(_b, &m) != nil {
-			return []byte{}, errors.New("invalid variant payload")
-		}
-		return json.Marshal(m)
 	}
 	if u.Str != nil {
 		_b, _e := json.Marshal(*u.Str)
@@ -4089,11 +4044,6 @@ func (u RequestId) MarshalJSON() ([]byte, error) {
 			return []byte{}, _e
 		}
 		return _b, nil
-		var m map[string]any
-		if json.Unmarshal(_b, &m) != nil {
-			return []byte{}, errors.New("invalid variant payload")
-		}
-		return json.Marshal(m)
 	}
 	return []byte{}, nil
 }
@@ -4815,11 +4765,6 @@ func (u SessionConfigSelectOptions) MarshalJSON() ([]byte, error) {
 			return []byte{}, _e
 		}
 		return _b, nil
-		var m map[string]any
-		if json.Unmarshal(_b, &m) != nil {
-			return []byte{}, errors.New("invalid variant payload")
-		}
-		return json.Marshal(m)
 	}
 	if u.Grouped != nil {
 		_b, _e := json.Marshal(*u.Grouped)
@@ -4827,11 +4772,6 @@ func (u SessionConfigSelectOptions) MarshalJSON() ([]byte, error) {
 			return []byte{}, _e
 		}
 		return _b, nil
-		var m map[string]any
-		if json.Unmarshal(_b, &m) != nil {
-			return []byte{}, errors.New("invalid variant payload")
-		}
-		return json.Marshal(m)
 	}
 	return []byte{}, nil
 }
@@ -6780,11 +6720,14 @@ type UnstableCreateElicitationForm struct {
 	// A human-readable message describing what input is needed.
 	Message string `json:"message"`
 	Mode    string `json:"mode"`
-	// The session this elicitation belongs to. This compatibility field tracks
-	// the current ACP v1 wire shape while the v0.13.5 Go SDK omits its scope.
-	SessionId SessionId `json:"sessionId"`
+	// The originating request outside a session. Mutually exclusive with sessionId.
+	RequestId *RequestId `json:"requestId,omitempty"`
 	// A JSON Schema describing the form fields to present to the user.
 	RequestedSchema UnstableElicitationSchema `json:"requestedSchema"`
+	// The session this elicitation belongs to. Use either sessionId or requestId.
+	SessionId SessionId `json:"sessionId,omitempty"`
+	// The tool call this elicitation belongs to, when scoped to a session.
+	ToolCallId ToolCallId `json:"toolCallId,omitempty"`
 }
 
 // URL-based elicitation where the client directs the user to a URL.
@@ -6800,6 +6743,12 @@ type UnstableCreateElicitationUrl struct {
 	// A human-readable message describing what input is needed.
 	Message string `json:"message"`
 	Mode    string `json:"mode"`
+	// The originating request outside a session. Mutually exclusive with sessionId.
+	RequestId *RequestId `json:"requestId,omitempty"`
+	// The session this elicitation belongs to. Use either sessionId or requestId.
+	SessionId SessionId `json:"sessionId,omitempty"`
+	// The tool call this elicitation belongs to, when scoped to a session.
+	ToolCallId ToolCallId `json:"toolCallId,omitempty"`
 	// The URL to direct the user to.
 	Url string `json:"url"`
 }
@@ -7909,7 +7858,7 @@ type UnstableMcpServer struct {
 	//
 	// This capability is not part of the spec yet, and may be removed or changed at any point.
 	//
-	// # ACP transport configuration
+	// ACP transport configuration
 	//
 	// Only available when the Agent capabilities indicate 'mcp_capabilities.acp' is 'true'.
 	// The MCP server is provided by an ACP component and communicates over the ACP channel.

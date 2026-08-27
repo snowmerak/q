@@ -4,9 +4,8 @@ ACP_VERSION := $(file < ./schema/version)
 GOCACHE ?= $(CURDIR)/.gocache
 MDSH ?= mdsh
 
-version: README.md schema/meta.json schema/schema.json schema/meta.unstable.json schema/schema.unstable.json
-	cd cmd/generate && env -u GOPATH -u GOMODCACHE go run .
-	gofumpt -w .
+version: schema/meta.json schema/schema.json schema/meta.unstable.json schema/schema.unstable.json schema/q-overrides.json $(shell find cmd/generate -name '*.go' -type f)
+	go -C cmd/generate run .
 	touch $@
 	echo $(ACP_VERSION) > $@
 
@@ -48,10 +47,6 @@ schema/schema.unstable.json: schema/version
 			exit 1; \
 		fi
 
-README.md: schema/version
-	@command -v $(MDSH) >/dev/null || { echo "mdsh not found; run 'mise install' or install it." 1>&2; exit 1; }
-	$(MDSH) --input README.md
-
 .PHONY: fmt
 fmt:
 	treefmt
@@ -71,17 +66,26 @@ check:
 test: $(GO_FILES)
 	GOFLAGS=$(GOFLAGS) GOCACHE=$(GOCACHE) go test ./...
 	GOFLAGS=$(GOFLAGS) GOCACHE=$(GOCACHE) go build ./example/...
+	go -C cmd/generate test ./...
+	$(MAKE) check-generated
+
+.PHONY: generate check-generated
+generate:
+	go -C cmd/generate run .
+
+check-generated:
+	go -C cmd/generate run . -check
 
 .PHONY: clean
 clean:
 	rm -f schema/meta.json schema/schema.json schema/meta.unstable.json schema/schema.unstable.json version
 	mdsh --clean --input README.md
-	touch schema/version # Touching the schema version file ensures that the README.md is regenerated on next make.
+	touch schema/version # Re-fetch the pinned schema on the next make.
 
-.PHONY: release
-release:
+.PHONY: update-schema
+update-schema:
 	@if [ -z "$(VERSION)" ]; then \
-		echo "VERSION is required (e.g. 'make release VERSION=0.4.4')" 1>&2; \
+		echo "VERSION is required (e.g. 'make update-schema VERSION=0.13.5')" 1>&2; \
 		exit 1; \
 	fi
 	@printf '%s\n' "$(VERSION)" > schema/version
@@ -91,4 +95,9 @@ release:
 	$(MAKE) check
 	@cmp -s schema/version version || (echo "schema/version and version differ; rerun 'make version'" 1>&2; exit 1)
 	@echo
-	@echo "Release candidate for $(VERSION) is ready. Review changes, commit, then tag v$(VERSION)."
+	@echo "Schema candidate $(VERSION) is ready. Review the fork overlay and update UPSTREAM.json."
+
+.PHONY: release
+release: test
+	@echo "SDK checks passed. Commit and push the SDK, then update q's pseudo-version (RELEASING.md)."
+	@echo "No tag is required; this target does not commit or publish."

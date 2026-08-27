@@ -1,0 +1,20 @@
+{
+  "$defs": {
+    "CreateElicitationRequest": {
+      "properties": {
+        "sessionId": {
+          "$ref": "#/$defs/SessionId",
+          "description": "The session this elicitation belongs to. Use either sessionId or requestId."
+        },
+        "requestId": {
+          "anyOf": [{ "$ref": "#/$defs/RequestId" }, { "type": "null" }],
+          "description": "The originating request outside a session. Mutually exclusive with sessionId."
+        },
+        "toolCallId": {
+          "$ref": "#/$defs/ToolCallId",
+          "description": "The tool call this elicitation belongs to, when scoped to a session."
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,9 @@
+{
+  "repository": "https://github.com/coder/acp-go-sdk",
+  "tag": "v0.13.5",
+  "commit": "0845a3bb9eddda5bfc22a94dd3598c90cb842451",
+  "schema_version": "0.13.5",
+  "protocol_version": 1,
+  "fork_module": "github.com/snowmerak/q/third_party/acp-go-sdk",
+  "scope_reference": "https://github.com/agentclientprotocol/agent-client-protocol/blob/main/docs/rfds/elicitation.mdx"
+}

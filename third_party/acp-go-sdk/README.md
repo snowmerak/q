@@ -2,19 +2,29 @@
   <img alt="Agent Client Protocol" src="https://zed.dev/img/acp/banner-dark.webp">
 </a>
 
-# ACP Go SDK
+# Q ACP Go SDK
 
 Go library for the Agent Client Protocol (ACP) - a standardized communication protocol
 between code editors and AI‑powered coding agents.
 
 Learn more about the protocol itself at <https://agentclientprotocol.com>.
 
+This is Q's independently maintained fork of
+[coder/acp-go-sdk](https://github.com/coder/acp-go-sdk), based on v0.13.5.
+It lives in the q repository as a separate Go module. It is not an official
+ACP SDK and does not claim complete support for every ACP revision. Stable
+protocol behavior follows the pinned schema; draft features retain their
+`Unstable` names and capability negotiation. See [Q_PATCH.md](Q_PATCH.md) for
+the fork delta and [UPSTREAM.json](UPSTREAM.json) for its exact baseline.
+
 ## Installation
 
-<!-- `$ printf 'go get github.com/coder/acp-go-sdk@v%s\n' "$(cat schema/version)"` as bash -->
+The fork uses commit-based pseudo-versions. After the SDK changes are pushed,
+Go resolves the latest published commit and records its version automatically.
+No release tag is required. Source builds use q's checked-in `go.work`.
 
 ```bash
-go get github.com/coder/acp-go-sdk@v0.13.5
+go get github.com/snowmerak/q/third_party/acp-go-sdk@latest
 ```
 
 ## Get Started
@@ -26,7 +36,7 @@ to understand the core concepts and protocol specification.
 
 ### Try the Examples
 
-The [examples directory](https://github.com/coder/acp-go-sdk/tree/main/example)
+The [examples directory](example)
 contains simple implementations of both Agents and Clients in Go.
 You can run them from your terminal or connect to external ACP agents.
 
@@ -41,7 +51,7 @@ You can watch the interaction by running `go run ./example/client` locally.
 
 Browse the Go package docs on pkg.go.dev for detailed API documentation:
 
-- <https://pkg.go.dev/github.com/coder/acp-go-sdk>
+- <https://pkg.go.dev/github.com/snowmerak/q/third_party/acp-go-sdk> (after publication)
 
 If you're building an [Agent](https://agentclientprotocol.com/protocol/overview#agent):
 
@@ -138,8 +148,9 @@ to it via stdio.
 
 ## Resources
 
-- [Go package docs](https://pkg.go.dev/github.com/coder/acp-go-sdk)
-- [Examples (Go)](https://github.com/coder/acp-go-sdk/tree/main/example)
+- [Go package docs](https://pkg.go.dev/github.com/snowmerak/q/third_party/acp-go-sdk)
+- [Examples (Go)](example)
+- [Fork releases](RELEASING.md)
 - [Protocol Documentation](https://agentclientprotocol.com)
 - [Agent Client Protocol GitHub Repository](https://github.com/agentclientprotocol/agent-client-protocol)
 
