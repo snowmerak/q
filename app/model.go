@@ -395,6 +395,7 @@ type agentEvent struct {
 	status          string
 	activity        *agentActivity
 	trace           *agentTrace
+	plan            *agentPlanUpdate
 	message         *client.Message
 	call            *client.ToolCall
 	question        *askToUserInput
@@ -409,6 +410,33 @@ type agentEvent struct {
 	taskStarted     *workspace.ActiveTask
 	taskCompleted   bool
 	err             error
+}
+
+type agentPlanUpdate struct {
+	Entries []agentPlanEntry
+}
+
+type agentPlanEntry struct {
+	Content string
+	Status  string
+}
+
+const (
+	agentPlanPending    = "pending"
+	agentPlanInProgress = "in_progress"
+	agentPlanCompleted  = "completed"
+)
+
+func agentPlanStatus(update agentPlanUpdate) string {
+	for index, entry := range update.Entries {
+		if entry.Status == agentPlanInProgress {
+			return fmt.Sprintf("Plan task %d/%d · %s", index+1, len(update.Entries), entry.Content)
+		}
+	}
+	if len(update.Entries) > 0 {
+		return fmt.Sprintf("Plan tasks completed · %d/%d", len(update.Entries), len(update.Entries))
+	}
+	return "Plan updated"
 }
 
 type agentActivity struct {
@@ -1089,6 +1117,10 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		if event.learningName != "" {
 			command := m.enqueueLearningSpecial(event.learningName, event.learningPayload)
 			return m, tea.Batch(m.spinner.Tick, waitAgentEvent(message.events, message.turnID), command)
+		}
+		if event.plan != nil {
+			m.status = agentPlanStatus(*event.plan)
+			return m, tea.Batch(m.spinner.Tick, waitAgentEvent(message.events, message.turnID))
 		}
 		if event.activity != nil {
 			m.appendAgentActivity(*event.activity)

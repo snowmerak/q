@@ -247,6 +247,10 @@ func streamPlanResume(
 		}
 		_ = emitAgentEvent(ctx, events, agentEvent{trace: &entry})
 	}
+	if err := emitPlanCheckpoint(ctx, events, checkpoint); err != nil {
+		emitAgentEvent(ctx, events, agentEvent{err: err})
+		return
+	}
 	runID := checkpoint.RunID
 	if archive == nil {
 		runID = ""
@@ -255,6 +259,9 @@ func streamPlanResume(
 	execution, err := executeApprovedPlan(
 		ctx, configuredClient, toolRuntime, value, models, archive, runID,
 		workingDirectory, checkpoint, executionStore, progress, trace,
+		func(ctx context.Context, checkpoint subagent.ExecutionCheckpoint) error {
+			return emitPlanCheckpoint(ctx, events, checkpoint)
+		},
 	)
 	if err != nil {
 		progress(subagent.ProgressEvent{Agent: "executor", Action: subagent.ProgressFailed, Detail: err.Error()})
@@ -457,10 +464,17 @@ func streamPlanWorkflow(
 		}) {
 			return
 		}
+		if err := emitPlanCheckpoint(ctx, events, checkpoint); err != nil {
+			emitAgentEvent(ctx, events, agentEvent{err: err})
+			return
+		}
 		progress(subagent.ProgressEvent{Agent: "executor", Action: subagent.ProgressStarted, Detail: "executing approved plan"})
 		execution, executionErr := executeApprovedPlan(
 			ctx, configuredClient, toolRuntime, value, models, archive, scoutRunID,
 			workingDirectory, checkpoint, executionStore, progress, trace,
+			func(ctx context.Context, checkpoint subagent.ExecutionCheckpoint) error {
+				return emitPlanCheckpoint(ctx, events, checkpoint)
+			},
 		)
 		if executionErr != nil {
 			progress(subagent.ProgressEvent{Agent: "executor", Action: subagent.ProgressFailed, Detail: executionErr.Error()})
@@ -490,6 +504,7 @@ func executeApprovedPlan(
 	executionStore planExecutionStore,
 	progress subagent.ProgressFunc,
 	trace subagent.TraceFunc,
+	checkpointObserver func(context.Context, subagent.ExecutionCheckpoint) error,
 ) (subagent.PlanExecutionResult, error) {
 	coderSpec, err := subagent.Resolve(value, config.AgentRoleCoder, models)
 	if err != nil {
@@ -518,9 +533,17 @@ func executeApprovedPlan(
 		Resolver: subagent.TargetResolver{Tools: toolRuntime},
 		Coder:    coder.Run, Review: reviewer.Run, Progress: progress,
 	}
-	if executionStore != nil {
-		loop.Checkpoint = func(_ context.Context, checkpoint subagent.ExecutionCheckpoint) error {
-			return executionStore.SaveExecution(checkpoint)
+	if executionStore != nil || checkpointObserver != nil {
+		loop.Checkpoint = func(ctx context.Context, checkpoint subagent.ExecutionCheckpoint) error {
+			if executionStore != nil {
+				if err := executionStore.SaveExecution(checkpoint); err != nil {
+					return err
+				}
+			}
+			if checkpointObserver != nil {
+				return checkpointObserver(ctx, checkpoint)
+			}
+			return nil
 		}
 	}
 	execution, err := loop.RunFrom(ctx, checkpoint)
@@ -533,6 +556,46 @@ func executeApprovedPlan(
 		}
 	}
 	return execution, nil
+}
+
+func emitPlanCheckpoint(
+	ctx context.Context,
+	events chan<- agentEvent,
+	checkpoint subagent.ExecutionCheckpoint,
+) error {
+	update := planUpdateFromCheckpoint(checkpoint)
+	if len(update.Entries) == 0 {
+		return nil
+	}
+	if emitAgentEvent(ctx, events, agentEvent{plan: &update}) {
+		return nil
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return errors.New("plan event stream closed")
+}
+
+func planUpdateFromCheckpoint(checkpoint subagent.ExecutionCheckpoint) agentPlanUpdate {
+	entries := make([]agentPlanEntry, 0, len(checkpoint.Plan.Steps))
+	for index, step := range checkpoint.Plan.Steps {
+		content := strings.TrimSpace(step.Title)
+		if content == "" {
+			content = strings.TrimSpace(step.Description)
+		}
+		if content == "" {
+			content = fmt.Sprintf("Task %d", index+1)
+		}
+		status := agentPlanPending
+		switch {
+		case checkpoint.Phase == subagent.ExecutionPhaseCompleted || index < checkpoint.CompletedTasks:
+			status = agentPlanCompleted
+		case index == checkpoint.TaskIndex:
+			status = agentPlanInProgress
+		}
+		entries = append(entries, agentPlanEntry{Content: content, Status: status})
+	}
+	return agentPlanUpdate{Entries: entries}
 }
 
 func planContext(messages []client.Message) []string {

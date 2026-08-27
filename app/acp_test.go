@@ -570,6 +570,22 @@ func TestACPAgentLoadsAndResumesTheWorkspaceSession(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
+	activeStore := activeACPWorkspaceStore(t, agent)
+	savedSession, err := activeStore.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	checkpoint := resumablePlanCheckpoint(subagent.ExecutionPhaseTarget)
+	checkpoint.RunID = savedSession.RunID
+	checkpoint.Plan.Steps = append(checkpoint.Plan.Steps, subagent.PlanStep{
+		Title: "Verify restored TODOs", Description: "Replay every saved step",
+		Target: subagent.TargetCondition{Any: []subagent.TargetProduct{{All: []subagent.TargetSelector{{
+			Kind: subagent.TargetSelectorPaths, Paths: []string{"app/acp_test.go"},
+		}}}}},
+	})
+	if err := activeStore.SaveExecution(checkpoint); err != nil {
+		t.Fatal(err)
+	}
 	closedRuntime := activeACPRuntime(t, agent, sessionID)
 	if _, err := agent.CloseSession(t.Context(), acp.CloseSessionRequest{SessionId: sessionID}); err != nil {
 		t.Fatal(err)
@@ -600,6 +616,7 @@ func TestACPAgentLoadsAndResumesTheWorkspaceSession(t *testing.T) {
 	}
 
 	var userText, assistantText string
+	var restoredPlan bool
 	for _, notification := range restartedConnection.snapshot() {
 		if chunk := notification.Update.UserMessageChunk; chunk != nil && chunk.Content.Text != nil {
 			userText += chunk.Content.Text.Text
@@ -607,9 +624,16 @@ func TestACPAgentLoadsAndResumesTheWorkspaceSession(t *testing.T) {
 		if chunk := notification.Update.AgentMessageChunk; chunk != nil && chunk.Content.Text != nil {
 			assistantText += chunk.Content.Text.Text
 		}
+		if update := notification.Update.Plan; update != nil && len(update.Entries) == 2 &&
+			update.Entries[0].Content == "Connect persistence" &&
+			update.Entries[0].Status == acp.PlanEntryStatusInProgress &&
+			update.Entries[1].Content == "Verify restored TODOs" &&
+			update.Entries[1].Status == acp.PlanEntryStatusPending {
+			restoredPlan = true
+		}
 	}
-	if userText != "persist me" || assistantText != "reply 1" {
-		t.Fatalf("loaded transcript: user=%q assistant=%q", userText, assistantText)
+	if userText != "persist me" || assistantText != "reply 1" || !restoredPlan {
+		t.Fatalf("loaded session: user=%q assistant=%q restored_plan=%v", userText, assistantText, restoredPlan)
 	}
 
 	if _, err := restarted.CloseSession(t.Context(), acp.CloseSessionRequest{SessionId: sessionID}); err != nil {
@@ -937,13 +961,27 @@ func TestACPAgentRunsApprovedPlanThroughElicitation(t *testing.T) {
 			"outcome":"succeeded",
 			"summary":"Run the shared plan workflow through ACP",
 			"conditions":["Execute only after approval"],
-			"steps":[{"title":"Connect ACP","description":"Use the shared plan workflow","target":{"any":[{"all":[{"kind":"paths","paths":["app/acp.go"]}]}]}}],
+			"steps":[
+				{"title":"Connect ACP","description":"Use the shared plan workflow","target":{"any":[{"all":[{"kind":"paths","paths":["app/acp.go"]}]}]}},
+				{"title":"Verify TODOs","description":"Expose every plan step","target":{"any":[{"all":[{"kind":"paths","paths":["app/acp_test.go"]}]}]}}
+			],
 			"verification":["Complete the approved plan cycle"]
 		}`)}},
 		{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{planToolCall(subagent.CoderCompleteToolName, `{
 			"outcome":"succeeded",
 			"summary":"Connected ACP to the shared plan workflow",
 			"artifacts":["app/acp.go"],
+			"verification":["go test ./app"]
+		}`)}},
+		{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{planToolCall(subagent.ReviewTaskToolName, `{
+			"decision":"next",
+			"feedback":"",
+			"facts":["ACP plan execution advanced"]
+		}`)}},
+		{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{planToolCall(subagent.CoderCompleteToolName, `{
+			"outcome":"succeeded",
+			"summary":"Exposed every plan step as an ACP TODO",
+			"artifacts":["app/acp_test.go"],
 			"verification":["go test ./app"]
 		}`)}},
 		{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{planToolCall(subagent.ReviewTaskToolName, `{
@@ -970,7 +1008,7 @@ func TestACPAgentRunsApprovedPlanThroughElicitation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if response.StopReason != acp.StopReasonEndTurn || len(configuredClient.requests) != 4 {
+	if response.StopReason != acp.StopReasonEndTurn || len(configuredClient.requests) != 6 {
 		t.Fatalf("response = %#v, requests = %d", response, len(configuredClient.requests))
 	}
 	elicitations := connection.elicitationSnapshot()
@@ -983,7 +1021,8 @@ func TestACPAgentRunsApprovedPlanThroughElicitation(t *testing.T) {
 	}
 
 	var output, thought string
-	var statuses []acp.PlanEntryStatus
+	var objectiveStatuses []acp.PlanEntryStatus
+	var sawInitialSteps, sawAdvancedSteps, sawCompletedSteps bool
 	for _, notification := range connection.snapshot() {
 		if update := notification.Update.AgentMessageChunk; update != nil && update.Content.Text != nil {
 			output += update.Content.Text.Text
@@ -992,7 +1031,18 @@ func TestACPAgentRunsApprovedPlanThroughElicitation(t *testing.T) {
 			thought += update.Content.Text.Text
 		}
 		if update := notification.Update.Plan; update != nil && len(update.Entries) == 1 && update.Entries[0].Content == "expose plan through ACP" {
-			statuses = append(statuses, update.Entries[0].Status)
+			objectiveStatuses = append(objectiveStatuses, update.Entries[0].Status)
+		}
+		if update := notification.Update.Plan; update != nil && len(update.Entries) == 2 &&
+			update.Entries[0].Content == "Connect ACP" && update.Entries[1].Content == "Verify TODOs" {
+			switch {
+			case update.Entries[0].Status == acp.PlanEntryStatusInProgress && update.Entries[1].Status == acp.PlanEntryStatusPending:
+				sawInitialSteps = true
+			case update.Entries[0].Status == acp.PlanEntryStatusCompleted && update.Entries[1].Status == acp.PlanEntryStatusInProgress:
+				sawAdvancedSteps = true
+			case update.Entries[0].Status == acp.PlanEntryStatusCompleted && update.Entries[1].Status == acp.PlanEntryStatusCompleted:
+				sawCompletedSteps = true
+			}
 		}
 	}
 	if !strings.Contains(output, "Plan executed successfully.") || !strings.Contains(output, "Connected ACP to the shared plan workflow") {
@@ -1001,8 +1051,12 @@ func TestACPAgentRunsApprovedPlanThroughElicitation(t *testing.T) {
 	if !strings.Contains(thought, "griller") || !strings.Contains(thought, "planner") || !strings.Contains(thought, "executor") {
 		t.Fatalf("plan progress = %q", thought)
 	}
-	if len(statuses) != 2 || statuses[0] != acp.PlanEntryStatusInProgress || statuses[1] != acp.PlanEntryStatusCompleted {
-		t.Fatalf("plan statuses = %#v", statuses)
+	if len(objectiveStatuses) != 1 || objectiveStatuses[0] != acp.PlanEntryStatusInProgress ||
+		!sawInitialSteps || !sawAdvancedSteps || !sawCompletedSteps {
+		t.Fatalf(
+			"plan lifecycle: objective=%#v initial=%v advanced=%v completed=%v",
+			objectiveStatuses, sawInitialSteps, sawAdvancedSteps, sawCompletedSteps,
+		)
 	}
 	saved, err := activeACPWorkspaceStore(t, agent).Load()
 	if err != nil {

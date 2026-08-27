@@ -1067,6 +1067,17 @@ func (a *acpAgent) replayWorkspaceSession(ctx context.Context) error {
 			return err
 		}
 	}
+	if store := a.state.workspaceStore; store != nil {
+		checkpoint, err := store.LoadExecution()
+		switch {
+		case err == nil && checkpoint.RunID == a.state.runID:
+			if err := a.emitAgentPlanContext(ctx, planUpdateFromCheckpoint(checkpoint)); err != nil {
+				return err
+			}
+		case err != nil && !errors.Is(err, workspace.ErrExecutionNotFound):
+			a.logger.Warn("could not restore ACP plan projection", "session_id", store.SessionID, "error", err)
+		}
+	}
 	if err := a.emitAvailableCommandsContext(ctx); err != nil {
 		return err
 	}
@@ -1703,6 +1714,23 @@ func (a *acpAgent) emitTaskPlanContext(ctx context.Context, objective string, st
 	}))
 }
 
+func (a *acpAgent) emitAgentPlanContext(ctx context.Context, update agentPlanUpdate) error {
+	entries := make([]acp.PlanEntry, 0, len(update.Entries))
+	for _, entry := range update.Entries {
+		status := acp.PlanEntryStatusPending
+		switch entry.Status {
+		case agentPlanInProgress:
+			status = acp.PlanEntryStatusInProgress
+		case agentPlanCompleted:
+			status = acp.PlanEntryStatusCompleted
+		}
+		entries = append(entries, acp.PlanEntry{
+			Content: entry.Content, Priority: acp.PlanEntryPriorityMedium, Status: status,
+		})
+	}
+	return a.updateContext(ctx, acp.UpdatePlan(entries...))
+}
+
 func (a *acpAgent) emitAvailableCommandsContext(ctx context.Context) error {
 	commands := []acp.AvailableCommand{
 		{
@@ -1862,7 +1890,14 @@ func (a *acpAgent) runACPPlan(ctx context.Context, objective string) (acp.Prompt
 		workingDirectory, objective, planContext(a.state.memory.Messages()), executionStore, events,
 	)
 
+	detailedPlan := false
 	for event := range events {
+		if event.plan != nil {
+			detailedPlan = true
+			if err := a.emitAgentPlanContext(ctx, *event.plan); err != nil {
+				return acp.PromptResponse{}, err
+			}
+		}
 		if event.activity != nil {
 			progress := strings.TrimSpace(strings.Join([]string{event.activity.Agent, event.activity.Action, event.activity.Detail}, " · "))
 			if progress != "" {
@@ -1878,7 +1913,9 @@ func (a *acpAgent) runACPPlan(ctx context.Context, objective string) (acp.Prompt
 			a.launchLearning(a.state.enqueueLearningSpecial(event.learningName, event.learningPayload))
 		}
 		if event.err != nil {
-			_ = a.emitTaskPlanContext(a.state.ctx, objective, acp.PlanEntryStatusCompleted)
+			if !detailedPlan {
+				_ = a.emitTaskPlanContext(a.state.ctx, objective, acp.PlanEntryStatusCompleted)
+			}
 			if errors.Is(event.err, context.Canceled) || errors.Is(ctx.Err(), context.Canceled) {
 				return a.finishCancelledPrompt(), nil
 			}
@@ -1887,8 +1924,10 @@ func (a *acpAgent) runACPPlan(ctx context.Context, objective string) (acp.Prompt
 			return acp.PromptResponse{}, event.err
 		}
 		if event.response != nil {
-			if err := a.emitTaskPlanContext(ctx, objective, acp.PlanEntryStatusCompleted); err != nil {
-				return acp.PromptResponse{}, err
+			if !detailedPlan {
+				if err := a.emitTaskPlanContext(ctx, objective, acp.PlanEntryStatusCompleted); err != nil {
+					return acp.PromptResponse{}, err
+				}
 			}
 			streamedResponse := ""
 			return a.finishPrompt(*event.response, event.requestEstimate, &streamedResponse)
@@ -1896,7 +1935,9 @@ func (a *acpAgent) runACPPlan(ctx context.Context, objective string) (acp.Prompt
 	}
 
 	if errors.Is(ctx.Err(), context.Canceled) {
-		_ = a.emitTaskPlanContext(a.state.ctx, objective, acp.PlanEntryStatusCompleted)
+		if !detailedPlan {
+			_ = a.emitTaskPlanContext(a.state.ctx, objective, acp.PlanEntryStatusCompleted)
+		}
 		return a.finishCancelledPrompt(), nil
 	}
 	return acp.PromptResponse{}, errors.New("plan workflow ended without a response")
