@@ -21,6 +21,26 @@ executables and never runs a candidate merely to detect it.
 Language names are case-insensitive at input and persistence boundaries.
 `Go`, `GO`, and `go` are stored and routed as `go`.
 
+## Automatic discovery
+
+In the TUI, ACP, and standalone MCP server, a query that cannot find a project
+root or resolve its server triggers one automatic discovery pass per runtime,
+then retries routing. Workspace-symbol searches do the same when no enabled,
+resolved roots are available. Concurrent failures share the same scan, and a
+cancelled scan may be retried. `lsp_status` only reports state; it does not scan.
+
+Discovered project markers and known servers on `PATH` are merged into memory
+without writing `.q/lsp.json` or the global configuration. Existing roots,
+server profiles, overrides, and language defaults take precedence. Disabled
+roots and servers stay disabled; discovery does not add roots beneath a disabled
+root or select an alternative to a configured server. A disabled nested root
+also blocks file queries from falling back to an enabled ancestor.
+
+If discovery finds nothing usable, the query still reports its routing error.
+Invalid paths, ambiguous roots, and server startup or protocol errors do not
+trigger discovery. Explicit configuration changes still require a runtime
+restart; automatic discovery takes effect immediately in the current runtime.
+
 ## Session model and routing
 
 One LSP session is created lazily for each enabled `(project root, language)`

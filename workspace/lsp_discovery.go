@@ -1,6 +1,7 @@
 package workspace
 
 import (
+	"context"
 	"errors"
 	"io/fs"
 	"os"
@@ -27,12 +28,22 @@ type lspMarker struct {
 // workspace. Nested module markers are folded under language-level workspace
 // markers such as go.work and Cargo.toml files containing [workspace].
 func (s Store) DiscoverLSPRoots() ([]lsp.RootConfig, error) {
+	return s.DiscoverLSPRootsContext(context.Background())
+}
+
+func (s Store) DiscoverLSPRootsContext(ctx context.Context) ([]lsp.RootConfig, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	ignore, err := loadLSPIgnore(s.Root)
 	if err != nil {
 		return nil, err
 	}
 	var markers []lspMarker
 	err = filepath.WalkDir(s.Root, func(path string, entry fs.DirEntry, walkErr error) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		if walkErr != nil {
 			if entry != nil && entry.IsDir() {
 				return filepath.SkipDir

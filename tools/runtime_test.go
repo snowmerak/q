@@ -199,6 +199,52 @@ func TestRuntimeExposesConfiguredLSPTools(t *testing.T) {
 	}
 }
 
+func TestRuntimeAutomaticallyDiscoversLSPRoots(t *testing.T) {
+	for _, withLibrary := range []bool{false, true} {
+		name := "without library"
+		if withLibrary {
+			name = "with library"
+		}
+		t.Run(name, func(t *testing.T) {
+			root := t.TempDir()
+			for name, body := range map[string]string{"go.mod": "module example.test\n", "main.go": "package main\n"} {
+				if err := os.WriteFile(filepath.Join(root, name), []byte(body), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			global := lsp.GlobalConfig{
+				Servers:   map[string]lsp.ServerConfig{"test": {Languages: []string{"go"}, Command: "disabled-server", Disabled: true}},
+				Languages: map[string]string{"go": "test"},
+			}
+			var runtime *Runtime
+			var err error
+			if withLibrary {
+				runtime, err = NewRuntimeWithArchiveAndLoomOptionsAndLSPAndLibrary(t.Context(), root, nil, loom.StoreOptions{}, global, lsp.WorkspaceConfig{}, nil)
+			} else {
+				runtime, err = NewRuntimeWithArchiveAndLoomOptionsAndLSP(t.Context(), root, nil, loom.StoreOptions{}, global, lsp.WorkspaceConfig{})
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer runtime.Close()
+			result, err := runtime.Call(t.Context(), client.ToolCall{
+				ID: "auto-discover", Type: client.ToolTypeFunction,
+				Function: client.FunctionCall{Name: "lsp_document_symbols", Arguments: `{"path":"main.go"}`},
+			})
+			if err != nil || !result.IsError || !strings.Contains(result.Content, "no server resolved for go at .") {
+				t.Fatalf("expected discovered root with preserved disabled server: result=%+v err=%v", result, err)
+			}
+			status := runtime.lsp.Status(t.Context())
+			if len(status.Sessions) != 1 || status.Sessions[0].Root != "." || status.Sessions[0].Source != lsp.RootSourceDiscovered || status.Sessions[0].State == "running" {
+				t.Fatalf("discovered status = %+v", status)
+			}
+			if _, err := os.Stat((workspace.Store{Root: root}).LSPPath()); !os.IsNotExist(err) {
+				t.Fatalf("automatic discovery wrote workspace settings: %v", err)
+			}
+		})
+	}
+}
+
 func TestRuntimeExposesAndCallsArchiveTools(t *testing.T) {
 	root := t.TempDir()
 	skillDirectory := filepath.Join(root, ".agents", "skills", "archive-test-skill")

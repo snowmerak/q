@@ -24,15 +24,17 @@ const (
 )
 
 type Manager struct {
-	ctx       context.Context
-	cancel    context.CancelFunc
-	root      string
-	global    GlobalConfig
-	workspace WorkspaceConfig
-	mu        sync.Mutex
-	sessions  map[string]*sessionSlot
-	failures  map[string]string
-	closed    bool
+	ctx           context.Context
+	cancel        context.CancelFunc
+	root          string
+	global        GlobalConfig
+	workspace     WorkspaceConfig
+	mu            sync.Mutex
+	sessions      map[string]*sessionSlot
+	failures      map[string]string
+	closed        bool
+	discoverRoots func(context.Context) ([]RootConfig, error)
+	discovery     *discoveryAttempt
 }
 
 type sessionSlot struct {
@@ -112,7 +114,7 @@ type StatusResult struct {
 	Sessions  []SessionStatus `json:"sessions"`
 }
 
-func NewManager(ctx context.Context, root string, global GlobalConfig, workspace WorkspaceConfig) (*Manager, error) {
+func NewManager(ctx context.Context, root string, global GlobalConfig, workspace WorkspaceConfig, options ...ManagerOption) (*Manager, error) {
 	if ctx == nil {
 		return nil, errors.New("lsp: manager context is nil")
 	}
@@ -141,6 +143,7 @@ func NewManager(ctx context.Context, root string, global GlobalConfig, workspace
 	if workspace.Version == 0 {
 		workspace.Version = WorkspaceConfigVersion
 	}
+	workspace.Roots = append([]RootConfig(nil), workspace.Roots...)
 	for index := range workspace.Roots {
 		normalized, normalizeErr := NormalizeRoot(workspace.Roots[index])
 		if normalizeErr != nil {
@@ -152,10 +155,14 @@ func NewManager(ctx context.Context, root string, global GlobalConfig, workspace
 		return nil, err
 	}
 	managerCtx, cancel := context.WithCancel(ctx)
-	return &Manager{
+	manager := &Manager{
 		ctx: managerCtx, cancel: cancel, root: absRoot, global: global, workspace: workspace,
 		sessions: make(map[string]*sessionSlot), failures: make(map[string]string),
-	}, nil
+	}
+	for _, option := range options {
+		option(manager)
+	}
+	return manager, nil
 }
 
 func (m *Manager) Status(_ context.Context) StatusResult {
@@ -239,6 +246,12 @@ func (m *Manager) sessionForFile(ctx context.Context, path, language string) (*m
 		return nil, "", err
 	}
 	root, err := m.route(relative, language)
+	if errors.Is(err, errNoProjectRoot) || (err == nil && !m.hasServer(root)) {
+		if discoveryErr := m.autoDiscover(ctx); discoveryErr != nil {
+			return nil, "", errors.Join(err, discoveryErr)
+		}
+		root, err = m.route(relative, language)
+	}
 	if err != nil {
 		return nil, "", err
 	}
@@ -254,14 +267,12 @@ func (m *Manager) sessionsForWorkspace(ctx context.Context, path, language strin
 		}
 		return []*managedSession{session}, nil
 	}
-	var roots []RootConfig
-	for _, root := range m.workspace.Roots {
-		if root.Disabled || (language != "" && !strings.EqualFold(root.Language, language)) {
-			continue
+	roots := m.enabledRoots(language)
+	if len(roots) == 0 {
+		if err := m.autoDiscover(ctx); err != nil {
+			return nil, err
 		}
-		if _, ok := ResolveServer(m.global, root); ok {
-			roots = append(roots, root)
-		}
+		roots = m.enabledRoots(language)
 	}
 	if len(roots) == 0 {
 		return nil, errors.New("lsp: no enabled, resolved project roots")
@@ -332,11 +343,13 @@ func (m *Manager) getSession(ctx context.Context, root RootConfig) (*managedSess
 }
 
 func (m *Manager) startSession(ctx context.Context, root RootConfig) (*managedSession, error) {
+	m.mu.Lock()
 	serverID, ok := ResolveServer(m.global, root)
+	server := m.global.Servers[serverID]
+	m.mu.Unlock()
 	if !ok {
 		return nil, fmt.Errorf("lsp: no server resolved for %s at %s", root.Language, root.Path)
 	}
-	server := m.global.Servers[serverID]
 	absRoot := filepath.Join(m.root, filepath.FromSlash(root.Path))
 	evaluated, err := filepath.EvalSymlinks(absRoot)
 	if err != nil {
@@ -539,6 +552,8 @@ func (m *Manager) resolveFile(path string) (string, string, error) {
 }
 
 func (m *Manager) route(relative, language string) (RootConfig, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	language = strings.ToLower(strings.TrimSpace(language))
 	inferred := inferLanguage(relative)
 	type candidate struct {
@@ -547,9 +562,6 @@ func (m *Manager) route(relative, language string) (RootConfig, error) {
 	}
 	var candidates []candidate
 	for _, root := range m.workspace.Roots {
-		if root.Disabled {
-			continue
-		}
 		rootPath := filepath.Clean(filepath.FromSlash(root.Path))
 		filePath := filepath.Clean(filepath.FromSlash(relative))
 		rel, err := filepath.Rel(rootPath, filePath)
@@ -566,7 +578,7 @@ func (m *Manager) route(relative, language string) (RootConfig, error) {
 		candidates = append(candidates, candidate{root, depth})
 	}
 	if len(candidates) == 0 {
-		return RootConfig{}, fmt.Errorf("lsp: no configured project root contains %s", relative)
+		return RootConfig{}, fmt.Errorf("%w contains %s", errNoProjectRoot, relative)
 	}
 	maxDepth := 0
 	for _, candidate := range candidates {
@@ -581,12 +593,12 @@ func (m *Manager) route(relative, language string) (RootConfig, error) {
 		}
 	}
 	if len(deepest) == 1 {
-		return deepest[0], nil
+		return enabledRoot(deepest[0])
 	}
 	if inferred != "" {
 		for _, root := range deepest {
 			if root.Language == inferred {
-				return root, nil
+				return enabledRoot(root)
 			}
 		}
 	}

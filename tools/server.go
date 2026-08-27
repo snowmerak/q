@@ -143,7 +143,8 @@ func RunStdioWithLoomOptions(ctx context.Context, root string, options loom.Stor
 	if err != nil {
 		return err
 	}
-	lspManager, err := lsp.NewManager(ctx, root, globalLSP, workspaceLSP)
+	lspManager, err := lsp.NewManager(ctx, root, globalLSP, workspaceLSP,
+		lsp.WithRootDiscovery((workspace.Store{Root: root}).DiscoverLSPRootsContext))
 	if err != nil {
 		return err
 	}

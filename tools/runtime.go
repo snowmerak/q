@@ -19,6 +19,7 @@ import (
 	"github.com/snowmerak/q/lsp"
 	"github.com/snowmerak/q/mcpconfig"
 	"github.com/snowmerak/q/tools/builtin"
+	qworkspace "github.com/snowmerak/q/workspace"
 )
 
 const maximumInlineToolResult = 32 << 10
@@ -85,7 +86,8 @@ func NewRuntimeWithArchiveAndLoomOptionsAndLSP(
 	global lsp.GlobalConfig,
 	workspace lsp.WorkspaceConfig,
 ) (*Runtime, error) {
-	manager, err := lsp.NewManager(ctx, root, global, workspace)
+	manager, err := lsp.NewManager(ctx, root, global, workspace,
+		lsp.WithRootDiscovery((qworkspace.Store{Root: root}).DiscoverLSPRootsContext))
 	if err != nil {
 		return nil, err
 	}
@@ -108,7 +110,8 @@ func NewRuntimeWithArchiveAndLoomOptionsAndLSPAndLibrary(
 	workspace lsp.WorkspaceConfig,
 	globalSkills builtin.GlobalSkillLibrary,
 ) (*Runtime, error) {
-	manager, err := lsp.NewManager(ctx, root, global, workspace)
+	manager, err := lsp.NewManager(ctx, root, global, workspace,
+		lsp.WithRootDiscovery((qworkspace.Store{Root: root}).DiscoverLSPRootsContext))
 	if err != nil {
 		return nil, err
 	}

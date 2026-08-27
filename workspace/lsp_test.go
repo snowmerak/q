@@ -1,6 +1,8 @@
 package workspace
 
 import (
+	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -58,5 +60,13 @@ func TestDiscoverLSPRootsFoldsWorkspacesAndHonorsIgnore(t *testing.T) {
 	}
 	if !reflect.DeepEqual(roots, want) {
 		t.Fatalf("roots = %#v, want %#v", roots, want)
+	}
+}
+
+func TestDiscoverLSPRootsHonorsCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	if _, err := (Store{Root: t.TempDir()}).DiscoverLSPRootsContext(ctx); !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled discovery = %v", err)
 	}
 }
