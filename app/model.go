@@ -339,6 +339,8 @@ type model struct {
 	turnCancel         context.CancelFunc
 	turnID             uint64
 	turnMessageStart   int
+
+	toolResultsCollapsed bool
 }
 
 type configuredMsg struct {
@@ -2963,6 +2965,10 @@ func (m model) saveModelTargetConfiguration(value config.Config, target string) 
 }
 
 func (m model) updateChatKey(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	if key.String() == "ctrl+o" {
+		m.toggleToolResults()
+		return m, nil
+	}
 	if key.String() == "ctrl+g" && len(m.agentTraces) > 0 {
 		m.agentTraceExpanded = !m.agentTraceExpanded
 		m.resize(m.width, m.height)
@@ -4656,9 +4662,7 @@ func (m *model) refreshTranscript() {
 	if m.screen != screenChat {
 		return
 	}
-	m.viewport.SetContent(renderStreamingTranscriptWithStyle(
-		m.messages, m.transcriptThoughts, m.streamResponse, m.viewport.Width(), m.dark,
-	))
+	m.viewport.SetContent(strings.Join(m.transcriptBlocks(), "\n\n"))
 	m.viewport.GotoBottom()
 }
 
@@ -4728,7 +4732,7 @@ func (m *model) refreshAgentTrace(gotoBottom bool) {
 	if m.screen != screenChat {
 		return
 	}
-	m.agentTraceViewport.SetContent(renderAgentTraces(m.agentTraces))
+	m.agentTraceViewport.SetContent(strings.Join(m.agentTraceBlocks(), "\n\n"))
 	if gotoBottom {
 		m.agentTraceViewport.GotoBottom()
 	}
@@ -4850,9 +4854,9 @@ func agentSummary(states map[string]string) string {
 	return strings.Join(parts, subtleStyle.Render(" · "))
 }
 
-func renderAgentTraces(traces []agentTrace) string {
-	var body strings.Builder
-	for index, trace := range traces {
+func renderAgentTraceBlocks(traces []agentTrace, dark bool, width int, collapsed bool) []string {
+	blocks := make([]string, 0, len(traces))
+	for _, trace := range traces {
 		style := subtleStyle
 		if trace.IsError {
 			style = errorStyle
@@ -4860,16 +4864,23 @@ func renderAgentTraces(traces []agentTrace) string {
 			style = activeLabelStyle
 		}
 		label := agentTraceLabel(trace)
-		body.WriteString(style.Render(label))
-		if trace.Content != "" {
-			body.WriteString("\n")
-			body.WriteString(formatAgentTraceContent(trace.Content))
+		content := trace.Content
+		if collapsed && trace.Kind == "tool_result" {
+			label = "▸ " + label
+			if trace.IsError && !strings.HasPrefix(content, "Tool error: ") {
+				content = "Tool error: " + content
+			}
+			content = renderToolResult(client.Message{Name: trace.Name, Content: content}, dark, width, true)
+		} else {
+			content = formatAgentTraceContent(content)
 		}
-		if index < len(traces)-1 {
-			body.WriteString("\n\n")
+		block := style.Render(label)
+		if content != "" {
+			block += "\n" + content
 		}
+		blocks = append(blocks, block)
 	}
-	return body.String()
+	return blocks
 }
 
 func agentTraceLabel(trace agentTrace) string {
@@ -5051,7 +5062,6 @@ func (m model) viewChat() string {
 	if m.clientIsACPRemote() && !m.waiting && !m.initializing {
 		footerText = "enter send · shift+enter newline · ctrl+l new ACP session · ctrl+h help · ctrl+c quit"
 	}
-	footer := helpStyle.Render(footerText)
 	content := header + "\n\n" + m.viewport.View() + "\n"
 	if activities := m.renderedAgentActivities(); activities != "" {
 		content += activities + "\n"
@@ -5063,14 +5073,22 @@ func (m model) viewChat() string {
 		content += m.renderedQuestionViewport() + "\n"
 		if len(m.pendingQuestion.Choices) > 0 {
 			if m.pendingQuestion.ChoiceOnly {
-				footer = helpStyle.Render("↑/↓ select · enter choose · pgup/pgdn review · ctrl+h help · ctrl+c interrupt")
+				footerText = "↑/↓ select · enter choose · pgup/pgdn review · ctrl+h help · ctrl+c interrupt"
 			} else {
-				footer = helpStyle.Render("↑/↓ select · enter choose · type for custom answer · pgup/pgdn review · ctrl+h help · ctrl+c interrupt")
+				footerText = "↑/↓ select · enter choose · type for custom answer · pgup/pgdn review · ctrl+h help · ctrl+c interrupt"
 			}
 		} else {
-			footer = helpStyle.Render("pgup/pgdn scroll · enter answer · shift+enter newline · ctrl+h help · ctrl+c interrupt")
+			footerText = "pgup/pgdn scroll · enter answer · shift+enter newline · ctrl+h help · ctrl+c interrupt"
 		}
 	}
+	if !m.clientIsACPRemote() {
+		action := "collapse"
+		if m.toolResultsCollapsed {
+			action = "expand"
+		}
+		footerText = strings.Replace(footerText, "ctrl+h help", "ctrl+o "+action+" tools · ctrl+h help", 1)
+	}
+	footer := helpStyle.Render(ansi.Truncate(footerText, max(10, m.chatFrameWidth()-frameStyle.GetHorizontalFrameSize()), "…"))
 	content += m.input.View()
 	if status != "" {
 		statusWidth := max(10, m.chatFrameWidth()-frameStyle.GetHorizontalFrameSize())

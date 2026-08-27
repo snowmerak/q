@@ -215,6 +215,7 @@ func renderHelpContent(dark bool) string {
 	writeHelpSection("CHAT", [][2]string{
 		{"enter", "Send the current message."},
 		{"shift+enter", "Insert a newline."},
+		{"ctrl+o", "Collapse or expand all tool result bodies in chat and subagent traces."},
 		{"ctrl+s", "Send the current message."},
 		{"ctrl+l", "Clear the current chat projection."},
 		{"ctrl+p", "Open Gateway settings."},

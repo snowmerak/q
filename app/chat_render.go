@@ -10,6 +10,7 @@ import (
 	"charm.land/glamour/v2"
 	glamourstyles "charm.land/glamour/v2/styles"
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/snowmerak/q/client"
 )
 
@@ -33,6 +34,16 @@ func renderStreamingTranscriptWithStyle(
 	width int,
 	dark bool,
 ) string {
+	return strings.Join(renderTranscriptBlocks(messages, thoughts, streamResponse, width, dark, false), "\n\n")
+}
+
+func renderTranscriptBlocks(
+	messages []client.Message,
+	thoughts []transcriptThought,
+	streamResponse string,
+	width int,
+	dark, toolResultsCollapsed bool,
+) []string {
 	bodyWidth := max(10, width-2)
 	markdownRenderer, _ := newMarkdownRenderer(bodyWidth, dark)
 	var blocks []string
@@ -84,7 +95,10 @@ func renderStreamingTranscriptWithStyle(
 			}
 		}
 		if message.Role == client.RoleTool {
-			body = renderToolResult(message, dark, bodyWidth)
+			body = renderToolResult(message, dark, bodyWidth, toolResultsCollapsed)
+			if toolResultsCollapsed {
+				label = "▸ " + label
+			}
 			blocks = append(blocks, renderToolPanel(label, body, bodyWidth, dark))
 			continue
 		}
@@ -96,9 +110,9 @@ func renderStreamingTranscriptWithStyle(
 		blocks = append(blocks, assistantLabelStyle.Render("ASSISTANT")+"\n"+assistantBodyStyle.Width(bodyWidth).Render(body))
 	}
 	if len(blocks) == 0 {
-		return emptyStyle.Render("Start a conversation. Your messages stay in memory for this run.")
+		return []string{emptyStyle.Render("Start a conversation. Your messages stay in memory for this run.")}
 	}
-	return strings.Join(blocks, "\n\n")
+	return blocks
 }
 
 var attachedMarkdownFence = regexp.MustCompile("(?m)([^\\r\\n])(?:[ \\t]+)(```|~~~)([A-Za-z0-9_.+#-]*)[ \\t]*(\\r?\\n)")
@@ -372,7 +386,7 @@ func describeToolCall(call client.ToolCall) string {
 	return call.Function.Name
 }
 
-func renderToolResult(message client.Message, dark bool, width int) string {
+func renderToolResult(message client.Message, dark bool, width int, collapsed bool) string {
 	content := message.Content
 	isError := strings.HasPrefix(content, "Tool error: ")
 	if isError {
@@ -380,6 +394,9 @@ func renderToolResult(message client.Message, dark bool, width int) string {
 	}
 	var value map[string]any
 	if json.Unmarshal([]byte(content), &value) != nil {
+		if collapsed {
+			return collapsedToolSummary(message.Name, isError, content)
+		}
 		marker := "✓"
 		if isError {
 			marker = "✗"
@@ -393,6 +410,9 @@ func renderToolResult(message client.Message, dark bool, width int) string {
 			if resultObject, ok := result.(map[string]any); ok {
 				value = resultObject
 			} else {
+				if collapsed {
+					return collapsedToolSummary(message.Name, isError, result) + loomNote
+				}
 				body, _ := json.MarshalIndent(result, "", "  ")
 				marker := "✓"
 				if isError {
@@ -406,13 +426,16 @@ func renderToolResult(message client.Message, dark bool, width int) string {
 				marker = "✗"
 			}
 			rendered := marker + " " + message.Name + " · full result stored in Loom"
-			if preview := strings.TrimSpace(stringValue(value["preview"])); preview != "" {
+			if preview := strings.TrimSpace(stringValue(value["preview"])); preview != "" && !collapsed {
 				rendered += "\n" + limitToolOutput(preview)
 			}
 			return rendered + loomNote
 		}
 	}
 	if isError {
+		if collapsed {
+			return collapsedToolSummary(message.Name, true, value) + loomNote
+		}
 		body, _ := json.MarshalIndent(value, "", "  ")
 		return "✗ " + message.Name + "\n" + string(body) + loomNote
 	}
@@ -431,17 +454,17 @@ func renderToolResult(message client.Message, dark bool, width int) string {
 		if exitCode, ok := value["exit_code"]; ok {
 			rendered += " · exit " + stringValue(exitCode)
 		}
-		if output := strings.TrimRight(stringValue(value["output"]), "\r\n"); output != "" {
+		if output := strings.TrimRight(stringValue(value["output"]), "\r\n"); output != "" && !collapsed {
 			rendered += "\n" + limitToolOutput(output)
 		}
-		if more, _ := value["more_output"].(bool); more {
+		if more, _ := value["more_output"].(bool); more && !collapsed {
 			rendered += "\n… more output available"
 		}
 	case "write_file":
 		rendered = fmt.Sprintf("✓ wrote %s · %s", renderFilePath(stringValue(value["path"]), dark), formatByteValue(value["bytes"]))
 	case "edit_file":
 		rendered = fmt.Sprintf("✓ edited %s · %s change(s)", renderFilePath(stringValue(value["path"]), dark), stringValue(value["applied"]))
-		if diff := strings.TrimSpace(stringValue(value["diff"])); diff != "" {
+		if diff := strings.TrimSpace(stringValue(value["diff"])); diff != "" && !collapsed {
 			diff = limitToolOutput(diff)
 			formatted, added, removed := renderFileDiff(diff, dark, max(10, width-6))
 			counts := diffCountStyle(dark, true).Render(fmt.Sprintf("+%d", added)) + " " +
@@ -460,6 +483,9 @@ func renderToolResult(message client.Message, dark bool, width int) string {
 		entries, _ := value["entries"].([]any)
 		rendered = fmt.Sprintf("✓ listed %s · %d entries", stringValue(value["path"]), len(entries))
 	default:
+		if collapsed {
+			return collapsedToolSummary(message.Name, false, nil) + loomNote
+		}
 		body, err := json.MarshalIndent(value, "", "  ")
 		if err != nil {
 			rendered = "✓ " + message.Name
@@ -468,6 +494,33 @@ func renderToolResult(message client.Message, dark bool, width int) string {
 		}
 	}
 	return rendered + loomNote
+}
+
+// Keep failures identifiable without exposing the result body in collapsed mode.
+// Success text and arbitrary JSON are details, not a trustworthy short summary.
+func collapsedToolSummary(name string, isError bool, value any) string {
+	if !isError {
+		return "✓ " + name
+	}
+	summary := "✗ " + name
+	if object, ok := value.(map[string]any); ok {
+		value = object["error"]
+		if value == nil {
+			value = object["message"]
+		}
+		if object, ok := value.(map[string]any); ok {
+			value = object["message"]
+		}
+	}
+	if detail, ok := value.(string); ok {
+		detail = strings.TrimSpace(ansi.Strip(detail))
+		detail, _, _ = strings.Cut(detail, "\n")
+		detail = strings.Join(strings.Fields(detail), " ")
+		if detail != "" {
+			summary += " · " + ansi.Truncate(detail, 160, "…")
+		}
+	}
+	return summary
 }
 func renderFilePath(path string, dark bool) string {
 	return lipgloss.NewStyle().Bold(true).
