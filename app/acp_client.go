@@ -17,9 +17,9 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
-	"github.com/snowmerak/q/third_party/acp-go-sdk"
 	"github.com/snowmerak/q/client"
 	"github.com/snowmerak/q/config"
+	"github.com/snowmerak/q/third_party/acp-go-sdk"
 )
 
 type acpAgentCommand struct {
@@ -58,6 +58,8 @@ type acpRemoteClient struct {
 	title        string
 	turn         *acpRemoteTurn
 	permissions  acpPermissionMode
+
+	slashCommandsBySession map[acp.SessionId][]slashCommand
 
 	stdin       io.WriteCloser
 	cancel      context.CancelFunc
@@ -373,6 +375,11 @@ func (r *acpRemoteClient) newSession(ctx context.Context) (acp.SessionId, error)
 	r.mu.Lock()
 	r.sessionID = response.SessionId
 	r.title = ""
+	for sessionID := range r.slashCommandsBySession {
+		if sessionID != response.SessionId {
+			delete(r.slashCommandsBySession, sessionID)
+		}
+	}
 	r.mu.Unlock()
 	return response.SessionId, nil
 }
@@ -386,6 +393,12 @@ func (r *acpRemoteClient) resetSessionCommand(ctx context.Context) tea.Cmd {
 
 func (r *acpRemoteClient) SessionUpdate(ctx context.Context, notification acp.SessionNotification) error {
 	r.mu.Lock()
+	if update := notification.Update.AvailableCommandsUpdate; update != nil {
+		if r.slashCommandsBySession == nil {
+			r.slashCommandsBySession = make(map[acp.SessionId][]slashCommand)
+		}
+		r.slashCommandsBySession[notification.SessionId] = acpSlashCommands(update.AvailableCommands)
+	}
 	if notification.Update.SessionInfoUpdate != nil && notification.Update.SessionInfoUpdate.Title != nil {
 		r.title = strings.TrimSpace(*notification.Update.SessionInfoUpdate.Title)
 	}

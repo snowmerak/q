@@ -149,6 +149,8 @@ func renderACPClientHelpContent(dark bool) string {
 	body.WriteString(agentTraceTitleStyle(dark).Render("CHAT"))
 	body.WriteString("\n")
 	for _, row := range [][2]string{
+		{"/", "Show local session commands and commands advertised by the connected agent."},
+		{"↑/↓, tab / enter", "Select and complete a command; Escape dismisses the popup."},
 		{"enter", "Send the current message."},
 		{"shift+enter", "Insert a newline."},
 		{"ctrl+l", "Close the current session and start a new ACP session."},
@@ -195,22 +197,16 @@ func renderHelpContent(dark bool) string {
 		}
 	}
 
-	writeHelpSection("SLASH COMMANDS", [][2]string{
-		{"/plan [request]", "Grill, research, approve, and execute a work plan."},
-		{"/agent:search <query>", "Run the configured ACP Search agent."},
-		{"/commit", "Open the interactive commit workflow."},
-		{"/sessions, /new, /clear", "Resume or create a session, or empty the current one in place."},
-		{"/learn [on|off|status]", "Checkpoint or control Thinker learning for this workspace."},
-		{"/model", "Choose workspace, default, subagent, and embedding models."},
-		{"/gateway", "Configure Gateway network, API keys, and providers."},
-		{"/library", "Configure the global Library listener defaults."},
-		{"/loom", "Inspect Loom storage and garbage-collection settings."},
-		{"/ignore", "Edit workspace discovery rules in .qignore."},
-		{"/skills", "Interactively add, pull, remove, and reindex global/session skills."},
-		{"/lsp", "Configure global language servers and workspace project roots."},
-		{"/mcp", "Configure external MCP tool servers and per-role assignments."},
-		{"/agents", "Configure ACP agents and external role assignments."},
-		{"/help", "Open this help screen."},
+	var commands [][2]string
+	for _, command := range localSlashCommands {
+		commands = append(commands, [2]string{command.usage(), command.description})
+	}
+	writeHelpSection("SLASH COMMANDS", commands)
+	writeHelpSection("COMMAND COMPLETION", [][2]string{
+		{"/", "Show commands above the input; keep typing to filter."},
+		{"↑/↓", "Select a command without scrolling the transcript."},
+		{"tab / enter", "Complete the selection; Enter runs a fully typed command."},
+		{"esc", "Dismiss the command popup without quitting."},
 	})
 	writeHelpSection("CHAT", [][2]string{
 		{"enter", "Send the current message."},

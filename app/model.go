@@ -308,6 +308,7 @@ type model struct {
 	requestEstimate    int
 	compactionTarget   int
 	input              textarea.Model
+	slashCompletion    slashCompletionState
 	viewport           viewport.Model
 	questionViewport   viewport.Model
 	agentTraceViewport viewport.Model
@@ -1550,6 +1551,7 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			commands = append(commands, command)
 		} else {
 			m.input, command = m.input.Update(message)
+			m.syncSlashCompletion()
 			commands = append(commands, command)
 		}
 		return m, tea.Batch(commands...)
@@ -2965,6 +2967,9 @@ func (m model) saveModelTargetConfiguration(value config.Config, target string) 
 }
 
 func (m model) updateChatKey(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	if m.handleSlashCompletionKey(key) {
+		return m, nil
+	}
 	if key.String() == "ctrl+o" {
 		m.toggleToolResults()
 		return m, nil
@@ -3036,6 +3041,7 @@ func (m model) updateChatKey(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	commands = append(commands, command)
 	if !m.waiting || m.asking {
 		m.input, command = m.input.Update(key)
+		m.syncSlashCompletion()
 		commands = append(commands, command)
 		if m.asking && !m.pendingQuestion.ChoiceOnly && len(m.pendingQuestion.Choices) > 0 && strings.TrimSpace(m.input.Value()) != "" &&
 			!customAnswerSelected(m.pendingQuestion, m.questionChoice) {
@@ -4280,6 +4286,7 @@ func (m *model) resetConversationState(runIDs ...string) {
 	m.compactionTarget = 0
 	m.submitPending = false
 	m.asking = false
+	m.slashCompletion = slashCompletionState{}
 	m.planArmed = false
 	m.planResumePending = false
 	m.planCheckpoint = subagent.ExecutionCheckpoint{}
@@ -4585,8 +4592,11 @@ func (m *model) resize(width, height int) {
 	m.helpViewport.SetHeight(max(1, m.height-11))
 	m.refreshHelp(false)
 	m.refreshSkills(false)
-	m.input.SetWidth(contentWidth)
-	m.viewport.SetWidth(contentWidth)
+	// Match the frame's inner width so it cannot rewrap the transcript or
+	// textarea after their cursor and popup positions have been calculated.
+	chatContentWidth := m.chatFrameWidth() - frameStyle.GetHorizontalFrameSize()
+	m.input.SetWidth(chatContentWidth)
+	m.viewport.SetWidth(chatContentWidth)
 	tracePanel := agentTracePanelStyle(m.chatFrameWidth(), m.dark)
 	m.agentTraceViewport.SetWidth(max(10, tracePanel.GetWidth()-tracePanel.GetHorizontalFrameSize()))
 	chromeHeight := 10
@@ -4960,18 +4970,8 @@ func (m model) View() tea.View {
 	}
 	if m.screen == screenChat && ((!m.waiting && !m.initializing) || m.asking) {
 		if cursor := m.input.Cursor(); cursor != nil {
-			inputOffset := m.renderedChatHeaderHeight() + 1 + lipgloss.Height(m.viewport.View())
-			if activities := m.renderedAgentActivities(); activities != "" {
-				inputOffset += lipgloss.Height(activities) + 1
-				if m.asking {
-					inputOffset++
-				}
-			}
-			if m.asking {
-				inputOffset += lipgloss.Height(m.renderedQuestionViewport()) + 1
-			}
 			cursor.Position.X += frameStyle.GetPaddingLeft()
-			cursor.Position.Y += frameStyle.GetPaddingTop() + inputOffset
+			cursor.Position.Y += frameStyle.GetPaddingTop() + m.chatInputOffset()
 			view.Cursor = cursor
 		}
 	}
@@ -5034,8 +5034,28 @@ func (m model) renderedChatHeaderHeight() int {
 	return lipgloss.Height(rendered) - frameStyle.GetVerticalFrameSize()
 }
 
+func (m model) chatInputOffset() int {
+	// Measure the same prefix as the chat view, including any wrapping. The
+	// marker occupies the first input row, which is not part of the offset.
+	prefix := frameStyle.Width(m.chatFrameWidth()).Render(m.chatInputPrefix() + "x")
+	return lipgloss.Height(prefix) - frameStyle.GetVerticalFrameSize() - 1
+}
+
+func (m model) chatInputPrefix() string {
+	content := m.chatHeader() + "\n\n" + m.viewport.View() + "\n"
+	if activities := m.renderedAgentActivities(); activities != "" {
+		content += activities + "\n"
+		if m.asking {
+			content += "\n"
+		}
+	}
+	if m.asking {
+		content += m.renderedQuestionViewport() + "\n"
+	}
+	return content
+}
+
 func (m model) viewChat() string {
-	header := m.chatHeader()
 	status := m.status
 	if (m.waiting || m.initializing) && !m.asking {
 		status = m.spinner.View() + " " + status
@@ -5062,15 +5082,8 @@ func (m model) viewChat() string {
 	if m.clientIsACPRemote() && !m.waiting && !m.initializing {
 		footerText = "enter send · shift+enter newline · ctrl+l new ACP session · ctrl+h help · ctrl+c quit"
 	}
-	content := header + "\n\n" + m.viewport.View() + "\n"
-	if activities := m.renderedAgentActivities(); activities != "" {
-		content += activities + "\n"
-		if m.asking {
-			content += "\n"
-		}
-	}
+	content := m.chatInputPrefix()
 	if m.asking {
-		content += m.renderedQuestionViewport() + "\n"
 		if len(m.pendingQuestion.Choices) > 0 {
 			if m.pendingQuestion.ChoiceOnly {
 				footerText = "↑/↓ select · enter choose · pgup/pgdn review · ctrl+h help · ctrl+c interrupt"
@@ -5088,6 +5101,9 @@ func (m model) viewChat() string {
 		}
 		footerText = strings.Replace(footerText, "ctrl+h help", "ctrl+o "+action+" tools · ctrl+h help", 1)
 	}
+	if len(m.slashCompletionMatches()) > 0 {
+		footerText = "↑/↓ select · tab/enter complete · esc close · ctrl+h help"
+	}
 	footer := helpStyle.Render(ansi.Truncate(footerText, max(10, m.chatFrameWidth()-frameStyle.GetHorizontalFrameSize()), "…"))
 	content += m.input.View()
 	if status != "" {
@@ -5095,7 +5111,7 @@ func (m model) viewChat() string {
 		content += "\n" + subtleStyle.Render(ansi.Truncate(status, statusWidth, "…"))
 	}
 	content += "\n" + footer
-	return frameStyle.Width(m.chatFrameWidth()).Render(content)
+	return m.overlaySlashCompletion(frameStyle.Width(m.chatFrameWidth()).Render(content))
 }
 
 func (m model) writeWorkspacePath(body *strings.Builder) {

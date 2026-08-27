@@ -42,6 +42,11 @@ waits up to 1.5 seconds for initial model discovery. If discovery finishes
 sooner, the TUI opens immediately; otherwise the same initialization continues
 in the background after the TUI renders.
 
+Type `/` at the start of the chat input to open command completion. Keep typing
+to filter, use Up/Down to select, and Tab or Enter to complete the command.
+Enter runs a fully typed command; Escape closes the popup without quitting.
+The popup overlays the transcript without moving the input or its IME cursor.
+
 ### Agent Client Protocol (ACP)
 
 Run q as an ACP agent over stdin/stdout, without the Bubble Tea UI:

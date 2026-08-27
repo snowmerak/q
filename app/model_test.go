@@ -1237,7 +1237,7 @@ func TestHelpCommandAndShortcutKeepCommandsOutOfChatFooter(t *testing.T) {
 	help := ansi.Strip(m.View().Content)
 	for _, expected := range []string{
 		"q · Help", "SLASH COMMANDS", "/plan [request]", "/agent:search <query>", "/commit", "/new", "/clear", "/learn [on|off|status]", "/model",
-		"/gateway", "/loom", "/ignore", "/skills",
+		"/gateway", "/loom", "/ignore",
 	} {
 		if !strings.Contains(help, expected) {
 			t.Fatalf("help view missing %q:\n%s", expected, help)
@@ -1245,7 +1245,7 @@ func TestHelpCommandAndShortcutKeepCommandsOutOfChatFooter(t *testing.T) {
 	}
 	allHelp := ansi.Strip(renderHelpContent(m.dark))
 	for _, expected := range []string{
-		"/help", "/mcp", "SUBAGENTS AND QUESTIONS", "ctrl+g", "COMMAND LINE", "q commit", "q memory", "q gateway config",
+		"/help", "/skills", "/mcp", "COMMAND COMPLETION", "SUBAGENTS AND QUESTIONS", "ctrl+g", "COMMAND LINE", "q commit", "q memory", "q gateway config",
 		"q model", "q mcp", "q skills", "q ignore", "q help",
 	} {
 		if !strings.Contains(allHelp, expected) {
