@@ -37,6 +37,66 @@ func planExampleObject(t *testing.T, example string) map[string]any {
 	return value
 }
 
+func TestSubmitPlanSchemaPatternsAreAnchored(t *testing.T) {
+	body, err := json.Marshal(submitPlanTool().Function.Parameters)
+	if err != nil {
+		t.Fatal(err)
+	}
+	patterns := 0
+	var visit func(any)
+	visit = func(value any) {
+		switch value := value.(type) {
+		case map[string]any:
+			if raw, ok := value["pattern"]; ok {
+				patterns++
+				pattern, ok := raw.(string)
+				if !ok || !strings.HasPrefix(pattern, "^") || !strings.HasSuffix(pattern, "$") {
+					t.Errorf("schema pattern must be anchored for provider compatibility: %v", raw)
+				}
+			}
+			for _, child := range value {
+				visit(child)
+			}
+		case []any:
+			for _, child := range value {
+				visit(child)
+			}
+		}
+	}
+	visit(planExampleObject(t, string(body)))
+	if patterns == 0 {
+		t.Fatal("submit_plan schema has no patterns to check")
+	}
+}
+
+func TestSubmitPlanTextSchemaPreservesNonBlankText(t *testing.T) {
+	schema := resolvePlanSchema(t)
+	for _, test := range []struct {
+		name  string
+		text  string
+		valid bool
+	}{
+		{"empty", "", false},
+		{"spaces", "   ", false},
+		{"tabs", "\t\t", false},
+		{"multiline whitespace", " \t\r\n\f \n", false},
+		{"single character", "x", true},
+		{"multiple words", "Implement the counter", true},
+		{"surrounding whitespace", " \tImplement the counter\t ", true},
+		{"multiline text", "First line\nSecond line", true},
+		{"surrounding newlines", "\r\n\tx\r\n", true},
+		{"unicode text", "계획을 작성합니다", true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			value := planExampleObject(t, plannerSucceededExample)
+			value["summary"] = test.text
+			if err := schema.Validate(value); (err == nil) != test.valid {
+				t.Fatalf("summary %q: want valid=%v, error=%v", test.text, test.valid, err)
+			}
+		})
+	}
+}
+
 func TestPlannerContractExamplesAreValidAndIncludedInPrompt(t *testing.T) {
 	schema := resolvePlanSchema(t)
 	for _, example := range []string{plannerSucceededExample, plannerBlockedExample} {

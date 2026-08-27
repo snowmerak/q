@@ -109,7 +109,8 @@ func submitPlanTool() client.Tool {
 }
 
 func planTextSchema(description string) map[string]any {
-	return map[string]any{"type": "string", "minLength": 1, "pattern": `\S`, "description": description}
+	// Providers may require anchors; preserve non-blank matching across newlines.
+	return map[string]any{"type": "string", "minLength": 1, "pattern": `^[\s\S]*\S[\s\S]*$`, "description": description}
 }
 
 func planStringListSchema(description string, minimum int) map[string]any {
