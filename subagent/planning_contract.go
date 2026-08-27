@@ -109,8 +109,8 @@ func submitPlanTool() client.Tool {
 }
 
 func planTextSchema(description string) map[string]any {
-	// Providers may require anchors; preserve non-blank matching across newlines.
-	return map[string]any{"type": "string", "minLength": 1, "pattern": `^[\s\S]*\S[\s\S]*$`, "description": description}
+	// Validate blank text locally; regex shorthands can break provider grammars.
+	return map[string]any{"type": "string", "minLength": 1, "description": description}
 }
 
 func planStringListSchema(description string, minimum int) map[string]any {

@@ -37,7 +37,7 @@ func planExampleObject(t *testing.T, example string) map[string]any {
 	return value
 }
 
-func TestSubmitPlanSchemaPatternsAreAnchored(t *testing.T) {
+func TestSubmitPlanSchemaOnlyUsesLoomReferencePattern(t *testing.T) {
 	body, err := json.Marshal(submitPlanTool().Function.Parameters)
 	if err != nil {
 		t.Fatal(err)
@@ -50,8 +50,8 @@ func TestSubmitPlanSchemaPatternsAreAnchored(t *testing.T) {
 			if raw, ok := value["pattern"]; ok {
 				patterns++
 				pattern, ok := raw.(string)
-				if !ok || !strings.HasPrefix(pattern, "^") || !strings.HasSuffix(pattern, "$") {
-					t.Errorf("schema pattern must be anchored for provider compatibility: %v", raw)
+				if !ok || pattern != `^loom://[0-9a-fA-F]{32}$` {
+					t.Errorf("only the Loom reference pattern belongs in the wire schema; validate blank text locally: %v", raw)
 				}
 			}
 			for _, child := range value {
@@ -64,12 +64,12 @@ func TestSubmitPlanSchemaPatternsAreAnchored(t *testing.T) {
 		}
 	}
 	visit(planExampleObject(t, string(body)))
-	if patterns == 0 {
-		t.Fatal("submit_plan schema has no patterns to check")
+	if patterns != 1 {
+		t.Fatalf("want only the Loom reference pattern, got %d patterns", patterns)
 	}
 }
 
-func TestSubmitPlanTextSchemaPreservesNonBlankText(t *testing.T) {
+func TestSubmitPlanTextSchemaDefersWhitespaceValidation(t *testing.T) {
 	schema := resolvePlanSchema(t)
 	for _, test := range []struct {
 		name  string
@@ -80,6 +80,7 @@ func TestSubmitPlanTextSchemaPreservesNonBlankText(t *testing.T) {
 		{"spaces", "   ", false},
 		{"tabs", "\t\t", false},
 		{"multiline whitespace", " \t\r\n\f \n", false},
+		{"unicode whitespace", "\u00a0\u2003", false},
 		{"single character", "x", true},
 		{"multiple words", "Implement the counter", true},
 		{"surrounding whitespace", " \tImplement the counter\t ", true},
@@ -88,10 +89,70 @@ func TestSubmitPlanTextSchemaPreservesNonBlankText(t *testing.T) {
 		{"unicode text", "계획을 작성합니다", true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			value := planExampleObject(t, plannerSucceededExample)
-			value["summary"] = test.text
-			if err := schema.Validate(value); (err == nil) != test.valid {
-				t.Fatalf("summary %q: want valid=%v, error=%v", test.text, test.valid, err)
+			for _, field := range []string{"summary", "title", "description"} {
+				t.Run(field, func(t *testing.T) {
+					value := planExampleObject(t, plannerSucceededExample)
+					if field == "summary" {
+						value[field] = test.text
+					} else {
+						value["steps"].([]any)[0].(map[string]any)[field] = test.text
+					}
+					// The wire schema only rejects empty strings; runtime validation rejects blank text.
+					if err := schema.Validate(value); (err == nil) != (test.text != "") {
+						t.Fatalf("schema %s %q: error=%v", field, test.text, err)
+					}
+					body, err := json.Marshal(value)
+					if err != nil {
+						t.Fatal(err)
+					}
+					if _, err := parsePlanProposal(string(body)); (err == nil) != test.valid {
+						t.Fatalf("runtime %s %q: want valid=%v, error=%v", field, test.text, test.valid, err)
+					}
+				})
+			}
+		})
+	}
+}
+
+func TestPlanProposalCleansWhitespaceListItems(t *testing.T) {
+	schema := resolvePlanSchema(t)
+	for _, field := range []string{"conditions", "facts", "assumptions", "non_goals", "verification", "risks"} {
+		t.Run(field, func(t *testing.T) {
+			for _, allBlank := range []bool{false, true} {
+				value := planExampleObject(t, plannerSucceededExample)
+				items := []any{" \t\n", "\u00a0"}
+				if !allBlank {
+					items = append(items, "  Keep this item\n")
+				}
+				value[field] = items
+				if err := schema.Validate(value); err != nil {
+					t.Fatalf("wire schema rejected whitespace list items: %v", err)
+				}
+				body, err := json.Marshal(value)
+				if err != nil {
+					t.Fatal(err)
+				}
+				plan, err := parsePlanProposal(string(body))
+				if allBlank && (field == "conditions" || field == "verification") {
+					if err == nil || !strings.Contains(err.Error(), field+":") {
+						t.Fatalf("runtime must reject an empty required list: %v", err)
+					}
+					continue
+				}
+				if err != nil {
+					t.Fatal(err)
+				}
+				cleaned := map[string][]string{
+					"conditions": plan.Conditions, "facts": plan.Facts, "assumptions": plan.Assumptions,
+					"non_goals": plan.NonGoals, "verification": plan.Verification, "risks": plan.Risks,
+				}[field]
+				if allBlank {
+					if len(cleaned) != 0 {
+						t.Fatalf("runtime retained blank items: %q", cleaned)
+					}
+				} else if !reflect.DeepEqual(cleaned, []string{"Keep this item"}) {
+					t.Fatalf("runtime did not clean list items: %q", cleaned)
+				}
 			}
 		})
 	}
@@ -142,25 +203,26 @@ func TestSubmitPlanSchemaAndValidatorRejectMalformedTargets(t *testing.T) {
 	schema := resolvePlanSchema(t)
 	validRef := "loom://0123456789abcdef0123456789abcdef"
 	for _, test := range []struct {
-		name     string
-		selector map[string]any
-		valid    bool
+		name         string
+		selector     map[string]any
+		schemaValid  bool
+		runtimeValid bool
 	}{
-		{"paths", map[string]any{"kind": "paths", "paths": []string{"new/file.go"}}, true},
-		{"paths missing", map[string]any{"kind": "paths"}, false},
-		{"paths empty", map[string]any{"kind": "paths", "paths": []string{}}, false},
-		{"paths blank", map[string]any{"kind": "paths", "paths": []string{" "}}, false},
-		{"paths with code", map[string]any{"kind": "paths", "paths": []string{"a.go"}, "code": "return [];"}, false},
-		{"loom", map[string]any{"kind": "loom", "code": "return inputs.tree.files;", "inputs": map[string]string{"tree": validRef}}, true},
-		{"loom missing code", map[string]any{"kind": "loom", "inputs": map[string]string{"tree": validRef}}, false},
-		{"loom blank code", map[string]any{"kind": "loom", "code": " ", "inputs": map[string]string{"tree": validRef}}, false},
-		{"loom missing inputs", map[string]any{"kind": "loom", "code": "return [];"}, false},
-		{"loom empty inputs", map[string]any{"kind": "loom", "code": "return [];", "inputs": map[string]string{}}, false},
-		{"loom invalid ref", map[string]any{"kind": "loom", "code": "return [];", "inputs": map[string]string{"tree": "not-a-ref"}}, false},
-		{"loom blank name", map[string]any{"kind": "loom", "code": "return [];", "inputs": map[string]string{" ": validRef}}, false},
-		{"loom with paths", map[string]any{"kind": "loom", "code": "return [];", "inputs": map[string]string{"tree": validRef}, "paths": []string{"a.go"}}, false},
-		{"loom oversized code", map[string]any{"kind": "loom", "code": strings.Repeat("x", maximumTargetCodeBytes+1), "inputs": map[string]string{"tree": validRef}}, false},
-		{"unknown kind", map[string]any{"kind": "glob", "paths": []string{"*.go"}}, false},
+		{"paths", map[string]any{"kind": "paths", "paths": []string{"new/file.go"}}, true, true},
+		{"paths missing", map[string]any{"kind": "paths"}, false, false},
+		{"paths empty", map[string]any{"kind": "paths", "paths": []string{}}, false, false},
+		{"paths blank", map[string]any{"kind": "paths", "paths": []string{" \t\n"}}, true, false},
+		{"paths with code", map[string]any{"kind": "paths", "paths": []string{"a.go"}, "code": "return [];"}, false, false},
+		{"loom", map[string]any{"kind": "loom", "code": "return inputs.tree.files;", "inputs": map[string]string{"tree": validRef}}, true, true},
+		{"loom missing code", map[string]any{"kind": "loom", "inputs": map[string]string{"tree": validRef}}, false, false},
+		{"loom blank code", map[string]any{"kind": "loom", "code": " \t\n", "inputs": map[string]string{"tree": validRef}}, true, false},
+		{"loom missing inputs", map[string]any{"kind": "loom", "code": "return [];"}, false, false},
+		{"loom empty inputs", map[string]any{"kind": "loom", "code": "return [];", "inputs": map[string]string{}}, false, false},
+		{"loom invalid ref", map[string]any{"kind": "loom", "code": "return [];", "inputs": map[string]string{"tree": "not-a-ref"}}, false, false},
+		{"loom blank name", map[string]any{"kind": "loom", "code": "return [];", "inputs": map[string]string{" \t\n": validRef}}, true, false},
+		{"loom with paths", map[string]any{"kind": "loom", "code": "return [];", "inputs": map[string]string{"tree": validRef}, "paths": []string{"a.go"}}, false, false},
+		{"loom oversized code", map[string]any{"kind": "loom", "code": strings.Repeat("x", maximumTargetCodeBytes+1), "inputs": map[string]string{"tree": validRef}}, false, false},
+		{"unknown kind", map[string]any{"kind": "glob", "paths": []string{"*.go"}}, false, false},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			value := planExampleObject(t, plannerSucceededExample)
@@ -172,11 +234,11 @@ func TestSubmitPlanSchemaAndValidatorRejectMalformedTargets(t *testing.T) {
 			}
 			// Decode to ordinary JSON values for the schema validator.
 			value = planExampleObject(t, string(body))
-			if err := schema.Validate(value); (err == nil) != test.valid {
-				t.Fatalf("schema valid=%v, error=%v", test.valid, err)
+			if err := schema.Validate(value); (err == nil) != test.schemaValid {
+				t.Fatalf("schema valid=%v, error=%v", test.schemaValid, err)
 			}
-			if _, err := parsePlanProposal(string(body)); (err == nil) != test.valid {
-				t.Fatalf("runtime valid=%v, error=%v", test.valid, err)
+			if _, err := parsePlanProposal(string(body)); (err == nil) != test.runtimeValid {
+				t.Fatalf("runtime valid=%v, error=%v", test.runtimeValid, err)
 			}
 		})
 	}
