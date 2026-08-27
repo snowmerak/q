@@ -1846,7 +1846,7 @@ func (a *acpAgent) clearACPConversation(ctx context.Context) error {
 	}})
 }
 
-func (a *acpAgent) runACPPlan(ctx context.Context, objective string) (acp.PromptResponse, error) {
+func (a *acpAgent) runACPPlan(ctx context.Context, objective string) (response acp.PromptResponse, runErr error) {
 	if a.state.client == nil || a.state.toolRuntime == nil {
 		return acp.PromptResponse{}, errors.New("ACP plan requires an available model and tool runtime")
 	}
@@ -1886,9 +1886,35 @@ func (a *acpAgent) runACPPlan(ctx context.Context, objective string) (acp.Prompt
 		workingDirectory = a.state.workspaceStore.Root
 		executionStore = a.state.workspaceStore
 	}
+	traceID, err := sessionstore.NewID()
+	if err != nil {
+		return acp.PromptResponse{}, err
+	}
+	trace := newACPPlanTrace(a.root, traceID, a.updateContext)
+	workflowCtx, cancel := context.WithCancel(ctx)
+	defer func() {
+		cancel()
+		// Cancellation can interrupt an ACP update before the worker emits its
+		// terminal event. Report a cancelled prompt, not a transport failure.
+		if errors.Is(ctx.Err(), context.Canceled) && errors.Is(runErr, context.Canceled) {
+			response, runErr = a.finishCancelledPrompt(), nil
+		}
+		reason := "Plan workflow ended before the tool returned a result."
+		if runErr != nil {
+			reason = "Plan workflow stopped: " + runErr.Error()
+		}
+		if errors.Is(ctx.Err(), context.Canceled) || response.StopReason == acp.StopReasonCancelled {
+			reason = "Plan workflow cancelled before the tool returned a result."
+		}
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
+		defer cleanupCancel()
+		if err := trace.finishPending(cleanupCtx, reason); err != nil {
+			a.logger.Warn("finish ACP subagent tool calls", "error", err)
+		}
+	}()
 	events := make(chan agentEvent)
 	go streamPlanWorkflow(
-		ctx, a.state.client, a.state.toolRuntime, a.state.activeConfig(), a.state.runID, a.state.archive,
+		workflowCtx, a.state.client, a.state.toolRuntime, a.state.activeConfig(), a.state.runID, a.state.archive,
 		workingDirectory, objective, planContext(a.state.memory.Messages()), executionStore, events,
 	)
 
@@ -1901,11 +1927,16 @@ func (a *acpAgent) runACPPlan(ctx context.Context, objective string) (acp.Prompt
 			}
 		}
 		if event.activity != nil {
-			progress := strings.TrimSpace(strings.Join([]string{event.activity.Agent, event.activity.Action, event.activity.Detail}, " · "))
+			progress := strings.TrimSpace(strings.Join([]string{acpTraceAgentLabel(event.activity.Agent, event.activity.TaskID), event.activity.Action, event.activity.Detail}, " · "))
 			if progress != "" {
 				if err := a.updateContext(ctx, acp.UpdateAgentThoughtText(progress+"\n")); err != nil {
 					return acp.PromptResponse{}, err
 				}
+			}
+		}
+		if event.trace != nil {
+			if err := trace.handle(ctx, *event.trace); err != nil {
+				return acp.PromptResponse{}, err
 			}
 		}
 		if event.question != nil {

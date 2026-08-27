@@ -454,6 +454,7 @@ type agentTrace struct {
 	Agent    string
 	TaskID   string
 	ParentID string
+	CallID   string
 	Kind     string
 	Name     string
 	Content  string

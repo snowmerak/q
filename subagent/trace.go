@@ -13,12 +13,13 @@ const (
 )
 
 // TraceEvent is the inspectable, model-visible execution transcript projected
-// to the TUI. It includes assistant text and tool traffic, but never fabricates
+// to clients. It includes assistant text and tool traffic, but never fabricates
 // or exposes hidden chain-of-thought that the provider did not return.
 type TraceEvent struct {
 	Agent    string
 	TaskID   string
 	ParentID string
+	CallID   string
 	Kind     string
 	Name     string
 	Content  string
@@ -36,7 +37,6 @@ func reportTrace(trace TraceFunc, event TraceEvent) {
 	event.ParentID = strings.TrimSpace(event.ParentID)
 	event.Kind = strings.TrimSpace(event.Kind)
 	event.Name = strings.TrimSpace(event.Name)
-	event.Content = strings.TrimSpace(event.Content)
 	if event.Agent == "" || event.Kind == "" {
 		return
 	}
@@ -53,14 +53,14 @@ func traceAssistant(trace TraceFunc, agent, taskID, parentID string, message cli
 	for _, call := range message.ToolCalls {
 		reportTrace(trace, TraceEvent{
 			Agent: agent, TaskID: taskID, ParentID: parentID,
-			Kind: TraceToolCall, Name: call.Function.Name, Content: call.Function.Arguments,
+			Kind: TraceToolCall, CallID: call.ID, Name: call.Function.Name, Content: call.Function.Arguments,
 		})
 	}
 }
 
-func traceToolResult(trace TraceFunc, agent, taskID, parentID, name string, result client.ToolResult) {
+func traceToolResult(trace TraceFunc, agent, taskID, parentID string, call client.ToolCall, result client.ToolResult) {
 	reportTrace(trace, TraceEvent{
 		Agent: agent, TaskID: taskID, ParentID: parentID,
-		Kind: TraceToolResult, Name: name, Content: result.Content, IsError: result.IsError,
+		Kind: TraceToolResult, CallID: call.ID, Name: call.Function.Name, Content: result.Content, IsError: result.IsError,
 	})
 }

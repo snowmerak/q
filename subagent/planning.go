@@ -264,6 +264,7 @@ func (r GrillerRunner) Run(ctx context.Context, task GrillTask) (brief GrillBrie
 				})
 				answer, askErr := r.Ask(ctx, question)
 				if askErr != nil {
+					traceToolResult(r.Trace, "griller", task.ID, task.ParentID, call, scoutToolError(askErr))
 					return GrillBrief{}, askErr
 				}
 				reportProgress(r.Progress, ProgressEvent{
@@ -307,6 +308,7 @@ func (r GrillerRunner) Run(ctx context.Context, task GrillTask) (brief GrillBrie
 				}
 				brief, parseErr := parseGrillBrief(call.Function.Arguments)
 				if parseErr == nil {
+					traceToolResult(r.Trace, "griller", task.ID, task.ParentID, call, jsonToolResult(brief))
 					return brief, nil
 				}
 				result = scoutToolError(parseErr)
@@ -325,7 +327,7 @@ func (r GrillerRunner) Run(ctx context.Context, task GrillTask) (brief GrillBrie
 					result = scoutToolError(fmt.Errorf("tool %q is not available to griller", call.Function.Name))
 				}
 			}
-			traceToolResult(r.Trace, "griller", task.ID, task.ParentID, call.Function.Name, result)
+			traceToolResult(r.Trace, "griller", task.ID, task.ParentID, call, result)
 			history.Append(client.Message{
 				Role: client.RoleTool, Name: call.Function.Name,
 				ToolCallID: call.ID, Content: result.Content,
@@ -417,6 +419,7 @@ func (r PlannerRunner) Run(ctx context.Context, brief GrillBrief) (proposal Plan
 			} else if call.Function.Name == SubmitPlanToolName {
 				proposal, parseErr := parsePlanProposal(call.Function.Arguments)
 				if parseErr == nil {
+					traceToolResult(r.Trace, "planner", "", "", call, jsonToolResult(proposal))
 					return proposal, nil
 				}
 				result = scoutToolError(parseErr)
@@ -448,7 +451,7 @@ func (r PlannerRunner) Run(ctx context.Context, brief GrillBrief) (proposal Plan
 			} else {
 				result = scoutToolError(fmt.Errorf("tool %q is not available to planner", call.Function.Name))
 			}
-			traceToolResult(r.Trace, "planner", "", "", call.Function.Name, result)
+			traceToolResult(r.Trace, "planner", "", "", call, result)
 			history.Append(client.Message{
 				Role: client.RoleTool, Name: call.Function.Name,
 				ToolCallID: call.ID, Content: result.Content,

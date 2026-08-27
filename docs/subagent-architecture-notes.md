@@ -348,7 +348,7 @@ coder · tool result · read_file
 ```
 
 runner는 모델이 실제로 반환한 assistant text, tool name과 raw arguments, tool
-result/error를 `agent`, `task_id`, `parent_id`와 함께 trace event로 보낸다. JSON은
+result/error를 `agent`, `task_id`, `parent_id`, `call_id`와 함께 trace event로 보낸다. JSON은
 읽기 좋게 펼쳐 표시한다. `PgUp/PgDn`, `Ctrl+U/Ctrl+D`, `Home/End`로 스크롤하고
 `Ctrl+G`로 상세 trace와 compact activity를 전환한다. 새 이벤트가 들어올 때 사용자가
 과거 로그를 읽는 중이면 위치를 유지하고, bottom에 있을 때만 자동으로 따라간다.
@@ -363,6 +363,23 @@ provider가 반환하지 않은 hidden chain-of-thought는 표시하거나 추�
 event당 16 KiB로 제한하고, 전체 message/tool lifecycle은 Session Store archive에
 유지한다. 이 구조는 병렬 Scout도 task ID별로 구분할 수 있다. 전체 history 탐색용
 `/agents` 화면과 개별 agent 취소는 후속 범위다.
+
+## ACP trace projection
+
+`q acp`의 `/plan`도 같은 trace를 소비한다. 툴 호출은 `tool_call`, 결과는 같은
+ACP `toolCallId`의 `tool_call_update`로 전송한다. 제목에 role과 task ID를 넣고,
+`read_file`은 파일 경로도 표시한다. 입력은 `rawInput`, 결과는 `rawOutput`에
+담으며, 클라이언트의 raw 필드 표시 여부와 무관하게 카드의 `content`에도
+입력과 결과를 함께 유지한다. `_meta.q`는 원래 model call ID와 부모 task ID를
+보존한다. 원래 call ID가 비어 있거나 반복되어도 각 호출의 ACP ID는 별개다.
+
+Scout의 `task_complete`, Griller의 `submit_brief`, Planner의 `submit_plan`과
+`review_task`, Coder의 `task_complete`도 완료 결과를 보낸다. 오류는 `failed`로
+표시하고, workflow 중단 시 결과를 받지 못한 카드도 실패 상태로 종료한다.
+모델이 반환한 짧은 assistant note는 role/task가 붙은 thought update로 전송한다.
+이 경로는 클라이언트 표시용이며 상위 모델의 history나 prompt를 변경하지 않는다.
+Loom receipt는 모델이 받은 그대로 전달하고 전체 artifact를 자동으로 읽지는 않는다.
+세션 재연결 시 과거 trace의 재생은 이 변경의 범위가 아니다.
 
 ## 통합 라이브러리 확인 후 결정할 사항
 

@@ -246,12 +246,14 @@ func (r ScoutRunner) run(ctx context.Context, task ScoutTask, prompt string, lif
 				} else {
 					completion, err := parseScoutCompletion(call.Function.Arguments)
 					if err == nil {
-						return ScoutResult{
+						result := ScoutResult{
 							TaskID: task.ID, Status: sessionstore.StatusSucceeded,
 							Outcome: completion.Outcome, Summary: completion.Summary,
 							Findings: completion.Findings, Artifacts: completion.Artifacts,
 							Verification: completion.Verification, Blocker: completion.Blocker, Usage: addUsage(usage, history.CompactionUsage()),
-						}, nil
+						}
+						traceToolResult(r.Trace, "scout", task.ID, task.ParentID, call, jsonToolResult(result))
+						return result, nil
 					}
 					toolResult = scoutToolError(err)
 				}
@@ -267,7 +269,7 @@ func (r ScoutRunner) run(ctx context.Context, task ScoutTask, prompt string, lif
 				Role: client.RoleTool, Name: call.Function.Name,
 				ToolCallID: call.ID, Content: toolResult.Content,
 			}
-			traceToolResult(r.Trace, "scout", task.ID, task.ParentID, call.Function.Name, toolResult)
+			traceToolResult(r.Trace, "scout", task.ID, task.ParentID, call, toolResult)
 			history.Append(message)
 			if lifecycle != nil {
 				if err := lifecycle.Message(message); err != nil {

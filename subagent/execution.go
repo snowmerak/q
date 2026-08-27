@@ -203,13 +203,14 @@ func (r PlannerReviewRunner) Run(ctx context.Context, input TaskReviewRequest) (
 					Agent: "planner", TaskID: taskID, ParentID: r.ExecutionID,
 					Action: ProgressCompleted, Detail: review.Decision,
 				})
+				traceToolResult(r.Trace, "planner", taskID, r.ExecutionID, call, jsonToolResult(review))
 				return review, nil
 			}
 			message := client.Message{
 				Role: client.RoleTool, Name: ReviewTaskToolName, ToolCallID: assistant.ToolCalls[0].ID,
 				Content: scoutToolError(err).Content,
 			}
-			traceToolResult(r.Trace, "planner", taskID, r.ExecutionID, ReviewTaskToolName, scoutToolError(err))
+			traceToolResult(r.Trace, "planner", taskID, r.ExecutionID, call, scoutToolError(err))
 			history.Append(message)
 			if lifecycle != nil {
 				if err := lifecycle.Message(message); err != nil {
@@ -239,7 +240,7 @@ func (r PlannerReviewRunner) Run(ctx context.Context, input TaskReviewRequest) (
 				Role: client.RoleTool, Name: call.Function.Name, ToolCallID: call.ID,
 				Content: toolResult.Content,
 			}
-			traceToolResult(r.Trace, "planner", taskID, r.ExecutionID, call.Function.Name, toolResult)
+			traceToolResult(r.Trace, "planner", taskID, r.ExecutionID, call, toolResult)
 			history.Append(message)
 			if lifecycle != nil {
 				if err := lifecycle.Message(message); err != nil {

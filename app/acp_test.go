@@ -1071,6 +1071,7 @@ func TestACPAgentRunsApprovedPlanThroughElicitation(t *testing.T) {
 		!strings.Contains(saved.Transcript[1].Content, "Plan executed successfully.") {
 		t.Fatalf("saved transcript = %#v", saved.Transcript)
 	}
+	assertACPTraceLifecycles(t, connection.snapshot(), 6, 0)
 }
 
 func TestACPAgentStopsPlanWhenElicitationFails(t *testing.T) {
@@ -1102,6 +1103,7 @@ func TestACPAgentStopsPlanWhenElicitationFails(t *testing.T) {
 	if len(configuredClient.requests) != 1 {
 		t.Fatalf("plan continued after elicitation failure: %d requests", len(configuredClient.requests))
 	}
+	assertACPTraceLifecycles(t, connection.snapshot(), 1, 1)
 	elicitations := connection.elicitationSnapshot()
 	if len(elicitations) != 1 || elicitations[0].Form == nil || elicitations[0].Form.SessionId != sessionID {
 		t.Fatalf("failed elicitation scope = %#v", elicitations)
@@ -1136,6 +1138,7 @@ func TestACPAgentCancelsPlanWhenElicitationIsCancelled(t *testing.T) {
 	if response.StopReason != acp.StopReasonCancelled || len(configuredClient.requests) != 1 {
 		t.Fatalf("cancelled plan response = %#v, requests = %d", response, len(configuredClient.requests))
 	}
+	assertACPTraceLifecycles(t, connection.snapshot(), 1, 1)
 }
 
 func TestACPAgentExplainsPlanElicitationRequirement(t *testing.T) {

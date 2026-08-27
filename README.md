@@ -68,9 +68,16 @@ and records the latest turn time. The `plan`, `agent:search`, `commit`, `learn`,
 `clear`, and `help` commands are advertised to ACP clients and handled without
 the Bubble Tea UI. `/plan <request>` runs the same Griller, Planner,
 approval-gated Coder, and review
-workflow as the TUI while projecting bounded progress and plan status through
-ACP updates. Because execution always requires explicit approval, the ACP
-client must advertise form elicitation support. `/agent:search <query>` creates
+workflow as the TUI while projecting progress and plan status through ACP
+updates. Subagent tool calls are streamed as `tool_call` / `tool_call_update`
+with inputs, results (including Loom receipts), errors, and completion reports.
+Titles identify the role, task, and file when available; distinct ACP call IDs
+keep repeated reads separate even when a model reuses its own call IDs. Open a
+tool card in the client to inspect its input and result together. These live
+updates do not add subagent traffic to the main conversation transcript or
+expand Loom artifacts automatically. Because execution always requires explicit
+approval, the ACP client must advertise form elicitation support.
+`/agent:search <query>` creates
 an isolated session on the configured ACP Search agent, returns its evidence
 report, and then deletes or closes that session. `/clear` replaces q's persisted
 conversation projection with an empty state while keeping the active ACP session

@@ -77,6 +77,7 @@ func TestScoutRunnerUsesInvestigationToolsAndReturnsStructuredReport(t *testing.
 	}}
 	sink := &scoutRecordSink{}
 	var progress []ProgressEvent
+	var traces []TraceEvent
 	ref := loom.Ref("loom://0123456789abcdef0123456789abcdef")
 	runner := ScoutRunner{
 		Client: fakeClient, Tools: fakeTools,
@@ -85,6 +86,7 @@ func TestScoutRunnerUsesInvestigationToolsAndReturnsStructuredReport(t *testing.
 		Progress: func(event ProgressEvent) {
 			progress = append(progress, event)
 		},
+		Trace: func(event TraceEvent) { traces = append(traces, event) },
 	}
 	result, err := runner.Run(context.Background(), ScoutTask{
 		Objective:  "Find where a scout should connect to the plan flow",
@@ -99,6 +101,19 @@ func TestScoutRunnerUsesInvestigationToolsAndReturnsStructuredReport(t *testing.
 	}
 	if result.Usage.TotalTokens != 24 {
 		t.Fatalf("usage = %#v", result.Usage)
+	}
+	if len(traces) != 4 {
+		t.Fatalf("expected read and completion call/result pairs, got %#v", traces)
+	}
+	for i := 0; i < len(traces); i += 2 {
+		if traces[i].Kind != TraceToolCall || traces[i+1].Kind != TraceToolResult ||
+			traces[i].CallID == "" || traces[i].CallID != traces[i+1].CallID ||
+			traces[i].TaskID != result.TaskID || traces[i+1].TaskID != result.TaskID || traces[i+1].IsError {
+			t.Fatalf("unmatched tool trace: %#v", traces[i:i+2])
+		}
+	}
+	if traces[3].Content != jsonToolResult(result).Content {
+		t.Fatalf("completion trace = %s, want the returned Scout report", traces[3].Content)
 	}
 	if len(fakeClient.requests) != 2 || fakeClient.requests[0].Model != "scout-model" ||
 		fakeClient.requests[0].ReasoningEffort != "medium" || fakeClient.requests[0].WorkingDirectory != `C:\workspace` {

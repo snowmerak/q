@@ -243,7 +243,7 @@ func streamPlanResume(
 	trace := func(event subagent.TraceEvent) {
 		entry := agentTrace{
 			Agent: event.Agent, TaskID: event.TaskID, ParentID: event.ParentID,
-			Kind: event.Kind, Name: event.Name, Content: event.Content, IsError: event.IsError,
+			Kind: event.Kind, CallID: event.CallID, Name: event.Name, Content: event.Content, IsError: event.IsError,
 		}
 		_ = emitAgentEvent(ctx, events, agentEvent{trace: &entry})
 	}
@@ -393,7 +393,7 @@ func streamPlanWorkflow(
 	trace := func(event subagent.TraceEvent) {
 		entry := agentTrace{
 			Agent: event.Agent, TaskID: event.TaskID, ParentID: event.ParentID,
-			Kind: event.Kind, Name: event.Name, Content: event.Content, IsError: event.IsError,
+			Kind: event.Kind, CallID: event.CallID, Name: event.Name, Content: event.Content, IsError: event.IsError,
 		}
 		_ = emitAgentEvent(ctx, events, agentEvent{trace: &entry})
 	}

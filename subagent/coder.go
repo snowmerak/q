@@ -165,8 +165,10 @@ func (r CoderRunner) run(
 					if err == nil {
 						completion.Evidence = append([]CoderEvidence(nil), evidence...)
 						if err := validateCoderResult(completion); err != nil {
+							traceToolResult(r.Trace, "coder", taskID, r.ExecutionID, call, scoutToolError(err))
 							return CoderResult{}, err
 						}
+						traceToolResult(r.Trace, "coder", taskID, r.ExecutionID, call, jsonToolResult(completion))
 						return completion, nil
 					}
 					toolResult = scoutToolError(err)
@@ -186,7 +188,7 @@ func (r CoderRunner) run(
 				Role: client.RoleTool, Name: call.Function.Name,
 				ToolCallID: call.ID, Content: toolResult.Content,
 			}
-			traceToolResult(r.Trace, "coder", taskID, r.ExecutionID, call.Function.Name, toolResult)
+			traceToolResult(r.Trace, "coder", taskID, r.ExecutionID, call, toolResult)
 			history.Append(message)
 			if lifecycle != nil {
 				if err := lifecycle.Message(message); err != nil {
