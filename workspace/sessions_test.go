@@ -63,6 +63,9 @@ func TestSessionStoresIsolateConversationAndExecution(t *testing.T) {
 	if err := first.ClearSession(); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := os.Stat(first.SessionDir()); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("cleared session directory error = %v", err)
+	}
 	loaded, err := second.Load()
 	if err != nil || len(loaded.Transcript) != 1 || loaded.Transcript[0].Content != "second" {
 		t.Fatalf("second session after first clear = %#v, %v", loaded, err)
@@ -416,6 +419,9 @@ func TestDeleteSessionPreservesOtherSessions(t *testing.T) {
 	if _, err := first.Load(); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("deleted session load error = %v", err)
 	}
+	if _, err := os.Stat(first.SessionDir()); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("deleted session directory error = %v", err)
+	}
 	if _, err := second.Load(); err != nil {
 		t.Fatal(err)
 	}
@@ -443,5 +449,8 @@ func TestDeleteSessionRemovesOrphanExecution(t *testing.T) {
 	}
 	if _, err := store.LoadExecution(); !errors.Is(err, ErrExecutionNotFound) {
 		t.Fatalf("orphan execution load error after delete = %v", err)
+	}
+	if _, err := os.Stat(store.SessionDir()); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("orphan session directory error after delete = %v", err)
 	}
 }

@@ -270,7 +270,9 @@ func (s Store) ListSessions() ([]SessionEntry, error) {
 }
 
 // ClearSession removes the persisted conversation and execution projection for
-// one session. Its lock file is intentionally retained as reusable metadata.
+// one session, then removes its empty session directory. Its lock file lives
+// outside the session directory and is intentionally retained as reusable
+// metadata.
 func (s Store) ClearSession() error {
 	if s.SessionID == "" {
 		return errors.New("workspace: a session ID is required")
@@ -280,7 +282,19 @@ func (s Store) ClearSession() error {
 	if err := s.ClearExecution(); err != nil {
 		return err
 	}
-	return s.Clear()
+	if err := s.Clear(); err != nil {
+		return err
+	}
+	return withLoomRootMutation(s.Root, func() error {
+		err := os.Remove(s.SessionDir())
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		if err != nil {
+			return fmt.Errorf("workspace: remove session directory %s: %w", s.SessionDir(), err)
+		}
+		return nil
+	})
 }
 
 func validateSessionID(value string) error {
