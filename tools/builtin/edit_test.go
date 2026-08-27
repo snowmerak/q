@@ -90,6 +90,63 @@ func TestEditRejectsStaleAndOverlappingEdits(t *testing.T) {
 	}
 }
 
+func TestEditRejectsColonInAnchorsWithGuidance(t *testing.T) {
+	for _, test := range []struct {
+		name, op, field, suffix string
+	}{
+		{"replace pos trailing colon", "replace", "pos", ":"},
+		{"replace pos display line", "replace", "pos", ":\t\"fmt\""},
+		{"replace end trailing colon", "replace", "end", ":"},
+		{"replace end display line", "replace", "end", ":key: value"},
+		{"append pos display line", "append", "pos", ":two"},
+		{"prepend pos display line", "prepend", "pos", ":two"},
+		{"append invalid end", "append", "end", ":two"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			fs := newTestFS(t)
+			const original = "one\ntwo\nthree"
+			writeTestFile(t, fs, "sample.txt", original)
+			edit := EditOperation{Op: test.op, Pos: anchor(2, "two"), Lines: []string{"updated"}}
+			if test.field == "pos" {
+				edit.Pos += test.suffix
+			} else {
+				edit.End = anchor(2, "two") + test.suffix
+			}
+			_, err := fs.EditFile(EditFileInput{Path: "sample.txt", Edits: []EditOperation{
+				{Op: "replace", Pos: anchor(1, "one"), Lines: []string{"ONE"}},
+				edit,
+			}})
+			if err == nil {
+				t.Fatal("accepted a colon in an anchor")
+			}
+			for _, want := range []string{"[E_INVALID_PATCH]", "edit 1", "invalid " + test.field + " anchor", "contains ':'", "before the first ':'", "remove ':' and all following file content"} {
+				if !strings.Contains(err.Error(), want) {
+					t.Fatalf("error = %q, missing %q", err, want)
+				}
+			}
+			data, err := os.ReadFile(filepath.Join(fs.Root, "sample.txt"))
+			if err != nil || string(data) != original {
+				t.Fatalf("invalid batch changed the file: data=%q, err=%v", data, err)
+			}
+		})
+	}
+}
+
+func TestEditAllowsColonInReplacementContent(t *testing.T) {
+	fs := newTestFS(t)
+	writeTestFile(t, fs, "sample.txt", "one")
+	_, err := fs.EditFile(EditFileInput{Path: "sample.txt", Edits: []EditOperation{{
+		Op: "replace", Pos: anchor(1, "one"), Lines: []string{"url: https://example.test"},
+	}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(fs.Root, "sample.txt"))
+	if err != nil || string(data) != "url: https://example.test" {
+		t.Fatalf("replacement content = %q, err=%v", data, err)
+	}
+}
+
 func TestWorkspaceJailRejectsEscapes(t *testing.T) {
 	fs := newTestFS(t)
 	if _, err := fs.ReadFile(ReadFileInput{Path: "../outside.txt"}); err == nil {
@@ -106,6 +163,46 @@ func TestWorkspaceJailRejectsEscapes(t *testing.T) {
 	}
 	if _, err := fs.ReadFile(ReadFileInput{Path: "outside-link/secret.txt"}); err == nil {
 		t.Fatal("symlink workspace escape succeeded")
+	}
+}
+
+func TestCreateDirectoryAlwaysCreatesParents(t *testing.T) {
+	for _, input := range []CreateDirectoryInput{
+		{Path: "default/a/b"},
+		{Path: "parents/a/b", Parents: true},
+	} {
+		t.Run(input.Path, func(t *testing.T) {
+			fs := newTestFS(t)
+			for attempt := 0; attempt < 2; attempt++ {
+				output, err := fs.CreateDirectory(input)
+				if err != nil {
+					t.Fatalf("attempt %d: %v", attempt, err)
+				}
+				if output.Path != input.Path {
+					t.Fatalf("output path = %q; want %q", output.Path, input.Path)
+				}
+				info, err := os.Stat(filepath.Join(fs.Root, input.Path))
+				if err != nil || !info.IsDir() {
+					t.Fatalf("directory was not created: info=%v err=%v", info, err)
+				}
+			}
+		})
+	}
+}
+
+func TestCreateDirectoryRejectsInvalidPaths(t *testing.T) {
+	for _, path := range []string{"file.txt", "file.txt/child", "../outside/child", ""} {
+		t.Run(path, func(t *testing.T) {
+			fs := newTestFS(t)
+			writeTestFile(t, fs, "file.txt", "keep")
+			if _, err := fs.CreateDirectory(CreateDirectoryInput{Path: path}); err == nil {
+				t.Fatal("invalid directory path unexpectedly succeeded")
+			}
+			data, err := os.ReadFile(filepath.Join(fs.Root, "file.txt"))
+			if err != nil || string(data) != "keep" {
+				t.Fatalf("existing file changed: data=%q err=%v", data, err)
+			}
+		})
 	}
 }
 

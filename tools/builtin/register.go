@@ -31,7 +31,7 @@ func Register(server *mcp.Server, root string, dependencies Dependencies) (*FS, 
 
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "read_file",
-		Description: "Read a text file with LINE#HASH anchors. Use these exact anchors for edit_file; re-read after a stale-anchor error.",
+		Description: "Read a text file with lines displayed as LINE#HASH:CONTENT. For edit_file pos/end, copy only LINE#HASH before the first ':' (e.g. 4#BP from 4#BP:content); never include ':' or the following file content. Re-read after a stale-anchor error.",
 		Annotations: &mcp.ToolAnnotations{ReadOnlyHint: readOnly, IdempotentHint: true},
 	}, func(_ context.Context, _ *mcp.CallToolRequest, input ReadFileInput) (*mcp.CallToolResult, ReadFileOutput, error) {
 		output, err := fs.ReadFile(input)
@@ -43,7 +43,7 @@ func Register(server *mcp.Server, root string, dependencies Dependencies) (*FS, 
 
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "edit_file",
-		Description: "Atomically apply non-overlapping hash-anchored replace, append, or prepend edits. All anchors refer to one read_file snapshot.",
+		Description: "Atomically apply non-overlapping hash-anchored replace, append, or prepend edits. All anchors refer to one read_file snapshot. For pos/end, copy only LINE#HASH before the first ':' in read_file's LINE#HASH:CONTENT display (e.g. 4#BP); never include ':' or the following file content.",
 		Annotations: &mcp.ToolAnnotations{DestructiveHint: &destructive},
 	}, func(_ context.Context, _ *mcp.CallToolRequest, input EditFileInput) (*mcp.CallToolResult, EditFileOutput, error) {
 		output, err := fs.EditFile(input)
@@ -71,7 +71,7 @@ func Register(server *mcp.Server, root string, dependencies Dependencies) (*FS, 
 
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "create_directory",
-		Description: "Create a directory inside the workspace; set parents to create missing ancestors.",
+		Description: "Create a directory inside the workspace, including any missing ancestors. Succeeds if the directory already exists.",
 		Annotations: &mcp.ToolAnnotations{DestructiveHint: &nonDestructive, IdempotentHint: true},
 	}, valueHandler(fs.CreateDirectory))
 

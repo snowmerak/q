@@ -111,6 +111,60 @@ func TestRuntimeListsAndCallsBuiltinTools(t *testing.T) {
 	}
 }
 
+func TestRuntimeExplainsAnchorSeparatorsInToolSchemaAndErrors(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "sample.txt"), []byte("one"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runtime, err := NewRuntime(t.Context(), root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer runtime.Close()
+	found := 0
+	for _, tool := range runtime.Tools() {
+		if tool.Function.Name != "read_file" && tool.Function.Name != "edit_file" {
+			continue
+		}
+		found++
+		for _, want := range []string{"LINE#HASH:CONTENT", "before the first ':'", "never include ':' or the following file content"} {
+			if !strings.Contains(tool.Function.Description, want) {
+				t.Fatalf("%s description is missing %q: %s", tool.Function.Name, want, tool.Function.Description)
+			}
+		}
+		if tool.Function.Name == "edit_file" {
+			schema, err := json.Marshal(tool.Function.Parameters)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if strings.Count(string(schema), "Copy only the part before the first ':'") != 2 {
+				t.Fatalf("pos/end schema descriptions lost separator guidance: %s", schema)
+			}
+		}
+	}
+	if found != 2 {
+		t.Fatalf("expected read_file and edit_file, found %d", found)
+	}
+	arguments, err := json.Marshal(builtin.EditFileInput{Path: "sample.txt", Edits: []builtin.EditOperation{{
+		Op: "replace", Pos: "1#" + builtin.HashLine("one", 1) + ":one", Lines: []string{"updated"},
+	}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := runtime.Call(t.Context(), client.ToolCall{
+		ID: "colon-anchor", Type: client.ToolTypeFunction,
+		Function: client.FunctionCall{Name: "edit_file", Arguments: string(arguments)},
+	})
+	if err != nil || !result.IsError || !strings.Contains(result.Content, "anchor contains ':'") ||
+		!strings.Contains(result.Content, "remove ':' and all following file content") {
+		t.Fatalf("MCP result lost separator guidance: result=%#v, err=%v", result, err)
+	}
+	data, err := os.ReadFile(filepath.Join(root, "sample.txt"))
+	if err != nil || string(data) != "one" {
+		t.Fatalf("invalid MCP edit changed the file: data=%q, err=%v", data, err)
+	}
+}
+
 func TestRuntimeExposesConfiguredLSPTools(t *testing.T) {
 	root := t.TempDir()
 	runtime, err := NewRuntimeWithArchiveAndLoomOptionsAndLSP(

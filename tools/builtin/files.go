@@ -111,7 +111,7 @@ func (fsys *FS) ListDirectory(input ListDirectoryInput) (ListDirectoryOutput, er
 
 type CreateDirectoryInput struct {
 	Path    string `json:"path" jsonschema:"Directory path to create inside the workspace."`
-	Parents bool   `json:"parents,omitempty" jsonschema:"Create missing parents. Defaults to false."`
+	Parents bool   `json:"parents,omitempty" jsonschema:"Deprecated compatibility option; missing parents are always created regardless of this value."`
 }
 
 type PathOutput struct {
@@ -125,12 +125,7 @@ func (fs *FS) CreateDirectory(input CreateDirectoryInput) (PathOutput, error) {
 	}
 	fs.mu.Lock()
 	defer fs.mu.Unlock()
-	if input.Parents {
-		err = os.MkdirAll(path, 0o755)
-	} else {
-		err = os.Mkdir(path, 0o755)
-	}
-	if err != nil {
+	if err := os.MkdirAll(path, 0o755); err != nil {
 		return PathOutput{}, err
 	}
 	return PathOutput{Path: input.Path}, nil

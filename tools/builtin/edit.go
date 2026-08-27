@@ -68,8 +68,8 @@ func (fs *FS) ReadFile(input ReadFileInput) (ReadFileOutput, error) {
 
 type EditOperation struct {
 	Op    string   `json:"op" jsonschema:"Operation: replace, append, or prepend."`
-	Pos   string   `json:"pos,omitempty" jsonschema:"LINE#HASH anchor. Required for replace; optional for append/prepend."`
-	End   string   `json:"end,omitempty" jsonschema:"Inclusive ending LINE#HASH anchor for replace."`
+	Pos   string   `json:"pos,omitempty" jsonschema:"LINE#HASH anchor (e.g. 4#BP). Copy only the part before the first ':' in read_file's LINE#HASH:CONTENT display; never include ':' or the following file content. Required for replace; optional for append/prepend."`
+	End   string   `json:"end,omitempty" jsonschema:"Inclusive ending LINE#HASH anchor for replace (e.g. 4#BP). Copy only the part before the first ':' in read_file's LINE#HASH:CONTENT display; never include ':' or the following file content."`
 	Lines []string `json:"lines" jsonschema:"Literal replacement or inserted lines without hashline prefixes."`
 }
 
@@ -165,6 +165,11 @@ func (fs *FS) EditFile(input EditFileInput) (EditFileOutput, error) {
 }
 
 func resolveEdit(lines []string, edit EditOperation, index int) (resolvedEdit, error) {
+	for _, field := range []struct{ name, value string }{{"pos", edit.Pos}, {"end", edit.End}} {
+		if strings.Contains(field.value, ":") {
+			return resolvedEdit{}, fmt.Errorf("[E_INVALID_PATCH] edit %d has invalid %s anchor %q: anchor contains ':'; ':' separates LINE#HASH from file content in read_file output. Use only LINE#HASH before the first ':'; remove ':' and all following file content", index, field.name, field.value)
+		}
+	}
 	validate := func(raw, field string) (Anchor, error) {
 		anchor, ok := ParseAnchor(raw)
 		if !ok {
