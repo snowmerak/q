@@ -15,6 +15,12 @@ executable.
 
 q requires Go 1.26.5 or later.
 
+The repository's `go.work` connects q, the Q-maintained ACP SDK fork, and its
+generator for source builds. Keep workspace mode enabled when developing them
+together. The SDK is a separately versioned module, not a root `go.mod` replacement.
+See [ACP fork maintenance and release](docs/acp-go-sdk-patch.md) for the first SDK
+publication, upstream updates, and isolated installation checks.
+
 Run from source:
 
 ```powershell
@@ -27,6 +33,8 @@ With [Task](https://taskfile.dev/) installed:
 task install  # install q and q-mcp into the Go binary directory
 task build    # build both commands into ./bin
 task run      # run q from source
+task test     # test q, the ACP SDK, and its generator
+task dist:check # check versioned installation without publishing
 ```
 
 Run `q` inside the directory you want to use as the workspace. On startup, q
@@ -965,9 +973,10 @@ design.
 ## Development
 
 ```powershell
-go test ./...
+task test
 go vet ./...
 task build
+task dist:check
 ```
 
 The two command entry points are:

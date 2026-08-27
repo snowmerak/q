@@ -16,7 +16,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
-	"github.com/coder/acp-go-sdk"
+	"github.com/snowmerak/q/third_party/acp-go-sdk"
 	"github.com/snowmerak/q/client"
 	"github.com/snowmerak/q/config"
 	qlibrary "github.com/snowmerak/q/library"

@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/coder/acp-go-sdk"
+	"github.com/snowmerak/q/third_party/acp-go-sdk"
 	"github.com/snowmerak/llm-provider/gateway"
 	"github.com/snowmerak/q/client"
 	"github.com/snowmerak/q/commitagent"

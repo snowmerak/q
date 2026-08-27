@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/coder/acp-go-sdk"
+	"github.com/snowmerak/q/third_party/acp-go-sdk"
 	"github.com/snowmerak/q/config"
 	"github.com/snowmerak/q/mcpconfig"
 	"github.com/snowmerak/q/subagent"

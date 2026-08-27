@@ -2,8 +2,6 @@ module github.com/snowmerak/q
 
 go 1.26.5
 
-replace github.com/coder/acp-go-sdk => ./third_party/acp-go-sdk
-
 require (
 	charm.land/bubbles/v2 v2.1.1
 	charm.land/bubbletea/v2 v2.0.8
@@ -13,11 +11,11 @@ require (
 	github.com/OneOfOne/xxhash v1.2.8
 	github.com/blevesearch/bleve/v2 v2.6.0
 	github.com/charmbracelet/x/ansi v0.11.7
-	github.com/coder/acp-go-sdk v0.13.5
 	github.com/dop251/goja v0.0.0-20260806115107-493f22071ef6
 	github.com/google/jsonschema-go v0.4.3
 	github.com/modelcontextprotocol/go-sdk v1.7.0
 	github.com/snowmerak/llm-provider v0.0.0-20260820114155-10d4fa7b5a80
+	github.com/snowmerak/q/third_party/acp-go-sdk v0.0.0-20260827012000-155b26051836
 	github.com/zeebo/blake3 v0.2.4
 	go.etcd.io/bbolt v1.4.0
 	golang.org/x/sys v0.47.0

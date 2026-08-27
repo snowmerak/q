@@ -21,3 +21,26 @@ tasks:
     interactive: true
     cmds:
       - go run ./cmd/q {{.CLI_ARGS}}
+
+  test:
+    desc: Test q and both nested ACP modules, including generated binding drift
+    cmds:
+      - go test ./...
+      - go -C third_party/acp-go-sdk test ./...
+      - go -C third_party/acp-go-sdk/cmd/generate test ./...
+      - task: acp:check
+
+  acp:generate:
+    desc: Regenerate ACP bindings from pinned schemas and Q's overlay
+    cmds:
+      - go -C third_party/acp-go-sdk/cmd/generate run .
+
+  acp:check:
+    desc: Verify ACP bindings match the schemas without modifying files
+    cmds:
+      - go -C third_party/acp-go-sdk/cmd/generate run . -check
+
+  dist:check:
+    desc: Install snapshot modules through an isolated local proxy with GOWORK off
+    cmds:
+      - go run ./scripts/modulecheck
