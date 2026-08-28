@@ -161,6 +161,14 @@ func (r Runner) Run(ctx context.Context, job Job) (Result, error) {
 				history.Append(thinkerToolError(call, fmt.Errorf("complete: %w", err)))
 				continue
 			}
+			body, _ := json.Marshal(result)
+			history.Append(client.ToolResultMessage(call, client.ToolResult{Content: string(body)}))
+			request.Messages = history.RequestMessages()
+			finished, err := r.Spec.FinishToolTurn(ctx, r.Client, request, nil)
+			if err != nil {
+				return Result{}, fmt.Errorf("thinker: %w", err)
+			}
+			result.Usage = addUsage(result.Usage, finished.Usage)
 			result.Usage = addUsage(result.Usage, history.CompactionUsage())
 			return result, nil
 		case RegisterToolName:

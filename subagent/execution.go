@@ -194,6 +194,9 @@ func (r PlannerReviewRunner) Run(ctx context.Context, input TaskReviewRequest) (
 			})
 			review, err = parseTaskReview(call.Function.Arguments)
 			if err == nil {
+				if _, err := finishRoleTool(ctx, r.Client, &r.Spec, history, request, call, jsonToolResult(review), r.Trace, "planner", taskID, r.ExecutionID, lifecycle); err != nil {
+					return TaskReview{}, err
+				}
 				if lifecycle != nil {
 					if err := lifecycle.Succeeded(review.Decision, review.Decision, review); err != nil {
 						return TaskReview{}, err
@@ -203,7 +206,6 @@ func (r PlannerReviewRunner) Run(ctx context.Context, input TaskReviewRequest) (
 					Agent: "planner", TaskID: taskID, ParentID: r.ExecutionID,
 					Action: ProgressCompleted, Detail: review.Decision,
 				})
-				traceToolResult(r.Trace, "planner", taskID, r.ExecutionID, call, jsonToolResult(review))
 				return review, nil
 			}
 			message := client.Message{

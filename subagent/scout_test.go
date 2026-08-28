@@ -13,12 +13,17 @@ import (
 )
 
 type fakeScoutClient struct {
-	responses      []client.Message
-	requests       []client.ChatRequest
-	conversationID string
+	responses        []client.Message
+	requests         []client.ChatRequest
+	terminalRequests []client.ChatRequest
+	conversationID   string
 }
 
 func (f *fakeScoutClient) Chat(_ context.Context, request client.ChatRequest) (*client.ChatResponse, error) {
+	if request.ToolChoice == client.ToolChoiceNone && len(request.Messages) > 0 && request.Messages[len(request.Messages)-1].Role == client.RoleTool {
+		f.terminalRequests = append(f.terminalRequests, request)
+		return &client.ChatResponse{ConversationID: f.conversationID, Choices: []client.Choice{{Message: client.Message{Role: client.RoleAssistant}, FinishReason: "stop"}}}, nil
+	}
 	f.requests = append(f.requests, request)
 	if len(f.responses) == 0 {
 		return nil, errors.New("no scout response")

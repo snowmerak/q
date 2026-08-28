@@ -252,8 +252,9 @@ func (r ScoutRunner) run(ctx context.Context, task ScoutTask, prompt string, lif
 							Findings: completion.Findings, Artifacts: completion.Artifacts,
 							Verification: completion.Verification, Blocker: completion.Blocker, Usage: addUsage(usage, history.CompactionUsage()),
 						}
-						traceToolResult(r.Trace, "scout", task.ID, task.ParentID, call, jsonToolResult(result))
-						return result, nil
+						finalUsage, err := finishRoleTool(ctx, r.Client, &r.Spec, history, request, call, jsonToolResult(result), r.Trace, "scout", task.ID, task.ParentID, lifecycle)
+						result.Usage = addUsage(result.Usage, finalUsage)
+						return result, err
 					}
 					toolResult = scoutToolError(err)
 				}

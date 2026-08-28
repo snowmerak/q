@@ -20,14 +20,19 @@ import (
 )
 
 type planningClient struct {
-	mu        sync.Mutex
-	responses []client.Message
-	requests  []client.ChatRequest
+	mu               sync.Mutex
+	responses        []client.Message
+	requests         []client.ChatRequest
+	terminalRequests []client.ChatRequest
 }
 
 func (p *planningClient) Chat(_ context.Context, request client.ChatRequest) (*client.ChatResponse, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	if request.ToolChoice == client.ToolChoiceNone && len(request.Messages) > 0 && request.Messages[len(request.Messages)-1].Role == client.RoleTool {
+		p.terminalRequests = append(p.terminalRequests, request)
+		return terminalAcknowledgment(""), nil
+	}
 	p.requests = append(p.requests, request)
 	if len(p.responses) == 0 {
 		return nil, errors.New("no planning response")

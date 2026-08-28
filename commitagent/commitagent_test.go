@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -223,6 +224,41 @@ func TestCommitAgentAcceptsToolProposal(t *testing.T) {
 	if !strings.Contains(progress.String(), "accepted feat(commit): added commit generation") {
 		t.Fatalf("progress log = %q", progress.String())
 	}
+	if len(fake.terminalRequests) != 1 {
+		t.Fatalf("commit proposal result was not returned: %#v", fake.terminalRequests)
+	}
+	terminal := fake.terminalRequests[0]
+	last := terminal.Messages[len(terminal.Messages)-1]
+	if last.ToolCallID != "call-"+toolProposeCommit || !strings.Contains(last.Content, `"accepted":true`) {
+		t.Fatalf("terminal proposal result = %#v", last)
+	}
+}
+
+func TestCommitAgentDeliversSplitResultAndPropagatesDeliveryFailure(t *testing.T) {
+	for _, failed := range []bool{false, true} {
+		failure := errors.New("terminal delivery failed")
+		fake := &fakeAgentClient{responses: []client.Message{
+			{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{toolCall(toolGitOverview, `{}`)}},
+			{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{toolCall(toolSplitCommit, `{"commits":[{"type":"feat","summary":"updated application","files":["app.go"]},{"type":"docs","summary":"updated documentation","files":["readme.md"]}]}`)}},
+		}}
+		if failed {
+			fake.terminalErr = failure
+		}
+		state := repositoryState{visibleFiles: []string{"app.go", "readme.md"}, fileDiffs: map[string]string{"app.go": "diff", "readme.md": "diff"}}
+		var progress bytes.Buffer
+		proposal, fallback, err := runCommitAgent(t.Context(), fake, subagent.Spec{Model: "commit"}, state, 2, loom.StoreOptions{}, newProgressLogger(&progress))
+		if len(fake.terminalRequests) != 1 || fallback || (failed && !errors.Is(err, failure)) || (!failed && (err != nil || len(proposal.Split) != 2)) {
+			t.Fatalf("failed=%v proposal=%#v fallback=%v err=%v", failed, proposal, fallback, err)
+		}
+		terminal := fake.terminalRequests[0]
+		last := terminal.Messages[len(terminal.Messages)-1]
+		if last.ToolCallID != "call-"+toolSplitCommit || last.Name != toolSplitCommit || !strings.Contains(last.Content, `"accepted":true`) {
+			t.Fatalf("split result not returned upstream: %#v", last)
+		}
+		if failed && strings.Contains(progress.String(), "accepted") {
+			t.Fatalf("reported success before terminal delivery: %q", progress.String())
+		}
+	}
 }
 
 func TestCommitAgentCompactsAndRetainsStagedOverview(t *testing.T) {
@@ -421,14 +457,20 @@ func TestSessionPushesCommittedProposalToExistingUpstream(t *testing.T) {
 }
 
 type fakeAgentClient struct {
-	mu        sync.Mutex
-	responses []client.Message
-	requests  []client.ChatRequest
+	mu               sync.Mutex
+	responses        []client.Message
+	requests         []client.ChatRequest
+	terminalRequests []client.ChatRequest
+	terminalErr      error
 }
 
 func (fake *fakeAgentClient) Chat(_ context.Context, request client.ChatRequest) (*client.ChatResponse, error) {
 	fake.mu.Lock()
 	defer fake.mu.Unlock()
+	if request.ToolChoice == client.ToolChoiceNone && len(request.Messages) > 0 && request.Messages[len(request.Messages)-1].Role == client.RoleTool {
+		fake.terminalRequests = append(fake.terminalRequests, request)
+		return &client.ChatResponse{Choices: []client.Choice{{Message: client.Message{Role: client.RoleAssistant}, FinishReason: "stop"}}}, fake.terminalErr
+	}
 	fake.requests = append(fake.requests, request)
 	if len(fake.responses) == 0 {
 		return nil, os.ErrNotExist

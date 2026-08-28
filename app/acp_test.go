@@ -1697,7 +1697,7 @@ func TestACPAgentUsesClientElicitationForQuestions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if response.StopReason != acp.StopReasonEndTurn || len(configuredClient.requests) != 2 {
+	if response.StopReason != acp.StopReasonEndTurn || len(configuredClient.requests) != 3 {
 		t.Fatalf("response = %#v, requests = %d", response, len(configuredClient.requests))
 	}
 	var answer string

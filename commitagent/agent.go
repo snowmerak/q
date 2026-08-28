@@ -92,6 +92,10 @@ func runCommitAgent(
 			})
 		}
 		if runtime.proposal.Single != nil || len(runtime.proposal.Split) > 0 {
+			request.Messages = history.RequestMessages()
+			if _, err := spec.FinishToolTurn(ctx, configuredClient, request, nil); err != nil {
+				return proposalState{}, false, fmt.Errorf("q commit: %w", err)
+			}
 			if runtime.proposal.Single != nil {
 				logger.step("proposal", "accepted %s", formatSubject(*runtime.proposal.Single))
 			} else {

@@ -38,12 +38,17 @@ type fakeProviderRuntime struct {
 }
 
 type extractionClient struct {
-	responses  []client.Message
-	requests   []client.ChatRequest
-	embeddings [][]string
+	responses        []client.Message
+	requests         []client.ChatRequest
+	terminalRequests []client.ChatRequest
+	embeddings       [][]string
 }
 
 func (c *extractionClient) Chat(_ context.Context, request client.ChatRequest) (*client.ChatResponse, error) {
+	if request.ToolChoice == client.ToolChoiceNone && len(request.Messages) > 0 && request.Messages[len(request.Messages)-1].Role == client.RoleTool {
+		c.terminalRequests = append(c.terminalRequests, request)
+		return terminalAcknowledgment(""), nil
+	}
 	c.requests = append(c.requests, request)
 	if len(c.responses) == 0 {
 		return nil, errors.New("no extraction response")
@@ -224,6 +229,12 @@ type prematureCompletionClient struct {
 	requests []client.ChatRequest
 }
 
+func terminalAcknowledgment(conversationID string) *client.ChatResponse {
+	return &client.ChatResponse{ConversationID: conversationID, Choices: []client.Choice{{
+		Message: client.Message{Role: client.RoleAssistant}, FinishReason: "stop",
+	}}}
+}
+
 func (f *prematureCompletionClient) Chat(_ context.Context, request client.ChatRequest) (*client.ChatResponse, error) {
 	request.Messages = append([]client.Message(nil), request.Messages...)
 	f.requests = append(f.requests, request)
@@ -249,6 +260,9 @@ func (f *prematureCompletionClient) Close() error { return nil }
 func (f *askingClient) Chat(_ context.Context, request client.ChatRequest) (*client.ChatResponse, error) {
 	request.Messages = append([]client.Message(nil), request.Messages...)
 	f.requests = append(f.requests, request)
+	if request.ToolChoice == client.ToolChoiceNone {
+		return terminalAcknowledgment(""), nil
+	}
 	if len(f.requests) == 1 {
 		return &client.ChatResponse{Choices: []client.Choice{{Message: client.Message{
 			Role: client.RoleAssistant,
@@ -285,6 +299,9 @@ func (f *askingClient) Close() error                                       { ret
 func (f *toolCallingClient) Chat(_ context.Context, request client.ChatRequest) (*client.ChatResponse, error) {
 	request.Messages = append([]client.Message(nil), request.Messages...)
 	f.requests = append(f.requests, request)
+	if request.ToolChoice == client.ToolChoiceNone {
+		return terminalAcknowledgment("tool-conversation"), nil
+	}
 	if len(f.requests) == 1 {
 		return &client.ChatResponse{
 			ConversationID: "tool-conversation",
@@ -2906,7 +2923,7 @@ func TestChatExecutesToolCallsAndContinuesTurn(t *testing.T) {
 		m = updated.(model)
 	}
 
-	if len(configuredClient.requests) != 3 || len(configuredClient.requests[0].Tools) != 4 {
+	if len(configuredClient.requests) != 4 || len(configuredClient.requests[0].Tools) != 4 {
 		t.Fatalf("agent requests = %#v", configuredClient.requests)
 	}
 	if configuredClient.requests[0].Tools[1].Function.Name != taskStartToolName ||
@@ -3063,7 +3080,7 @@ func TestAskToUserPausesForAnswerAndResumesSameTask(t *testing.T) {
 		updated, command = m.Update(nextAgentMessage(t, command))
 		m = updated.(model)
 	}
-	if len(configuredClient.requests) != 2 {
+	if len(configuredClient.requests) != 3 {
 		t.Fatalf("requests = %#v", configuredClient.requests)
 	}
 	continuation := configuredClient.requests[1]
@@ -3291,7 +3308,7 @@ func TestRestoredActiveTaskCanCompleteInANewTurn(t *testing.T) {
 		updated, command = m.Update(nextAgentMessage(t, command))
 		m = updated.(model)
 	}
-	if len(configuredClient.requests) != 1 || m.activeTask != nil ||
+	if len(configuredClient.requests) != 2 || m.activeTask != nil ||
 		!strings.Contains(m.messages[len(m.messages)-1].Content, "Too early") {
 		t.Fatalf("completed restored task: requests = %d, active = %#v, messages = %#v",
 			len(configuredClient.requests), m.activeTask, m.messages)

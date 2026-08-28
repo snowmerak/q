@@ -205,6 +205,9 @@ func TestInternalRunnersCompactBetweenToolRoundsAndKeepContracts(t *testing.T) {
 			var first, resumed []client.Message
 			normalCalls, summaryCalls := 0, 0
 			fake := contextChatFunc(func(_ context.Context, request client.ChatRequest) (*client.ChatResponse, error) {
+				if request.ToolChoice == client.ToolChoiceNone {
+					return contextResponse(""), nil
+				}
 				if request.MaxCompletionTokens != nil && len(request.Tools) == 0 {
 					summaryCalls++
 					return contextResponse("Read the repository evidence. Continue from the exact role contract and task."), nil

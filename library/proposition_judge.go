@@ -158,10 +158,11 @@ func (j *modelPropositionJudge) JudgeProposition(
 		ToolChoice: client.ToolChoiceRequired, ParallelToolCalls: &parallel,
 	}
 	var response *client.ChatResponse
+	selected := 0
 	if j.group == "" {
 		response, err = j.client.Chat(ctx, request)
 	} else {
-		response, _, err = j.router.RouteChat(ctx, j.client, request, j.candidates, 0)
+		response, selected, err = j.router.RouteChat(ctx, j.client, request, j.candidates, 0)
 	}
 	if err != nil {
 		return PropositionDecision{}, fmt.Errorf("library: judge proposition: %w", err)
@@ -184,6 +185,27 @@ func (j *modelPropositionJudge) JudgeProposition(
 	decision.Reason = strings.TrimSpace(decision.Reason)
 	if err := validatePropositionDecision(decision, candidates); err != nil {
 		return PropositionDecision{}, err
+	}
+	assistant := response.Choices[0].Message
+	if assistant.Role == "" {
+		assistant.Role = client.RoleAssistant
+	}
+	body, _ := json.Marshal(decision)
+	request.Messages = append(request.Messages, assistant, client.ToolResultMessage(call, client.ToolResult{Content: string(body)}))
+	request.ConversationID = response.ConversationID
+	if j.group != "" {
+		request.Model = j.candidates[selected].Model
+		request.ReasoningEffort = j.candidates[selected].ReasoningEffort
+	}
+	if _, err := client.FinishToolTurn(ctx, request, func(ctx context.Context, request client.ChatRequest) (*client.ChatResponse, error) {
+		if j.group != "" && j.candidates[selected].Timeout > 0 {
+			var cancel context.CancelFunc
+			ctx, cancel = context.WithTimeout(ctx, j.candidates[selected].Timeout)
+			defer cancel()
+		}
+		return j.client.Chat(ctx, request)
+	}, nil); err != nil {
+		return PropositionDecision{}, fmt.Errorf("library: judge proposition: %w", err)
 	}
 	return decision, nil
 }

@@ -13,11 +13,18 @@ import (
 )
 
 type fakeThinkerClient struct {
-	responses []client.Message
-	requests  []client.ChatRequest
+	responses        []client.Message
+	requests         []client.ChatRequest
+	terminalRequests []client.ChatRequest
+	terminalUsage    client.Usage
+	terminalErr      error
 }
 
 func (f *fakeThinkerClient) Chat(_ context.Context, request client.ChatRequest) (*client.ChatResponse, error) {
+	if request.ToolChoice == client.ToolChoiceNone && len(request.Messages) > 0 && request.Messages[len(request.Messages)-1].Role == client.RoleTool {
+		f.terminalRequests = append(f.terminalRequests, request)
+		return &client.ChatResponse{Usage: f.terminalUsage, Choices: []client.Choice{{Message: client.Message{Role: client.RoleAssistant}, FinishReason: "stop"}}}, f.terminalErr
+	}
 	f.requests = append(f.requests, request)
 	if len(f.responses) == 0 {
 		return nil, errors.New("no thinker response")
@@ -105,6 +112,30 @@ func TestRunnerRegistersOnePropositionPerRoundAndCompletes(t *testing.T) {
 	}
 	if configuredClient.requests[1].Messages[len(configuredClient.requests[1].Messages)-1].Role != client.RoleTool {
 		t.Fatalf("registration ACK was not fed back: %#v", configuredClient.requests[1].Messages)
+	}
+	if len(configuredClient.terminalRequests) != 1 {
+		t.Fatalf("completion was not returned upstream: %#v", configuredClient.terminalRequests)
+	}
+	terminal := configuredClient.terminalRequests[0]
+	last := terminal.Messages[len(terminal.Messages)-1]
+	if last.ToolCallID != "complete" || last.Name != CompleteToolName || !strings.Contains(last.Content, `"registered":2`) {
+		t.Fatalf("completion result = %#v", last)
+	}
+}
+
+func TestRunnerWaitsForCompletionDeliveryAndCountsItsUsage(t *testing.T) {
+	for _, failed := range []bool{false, true} {
+		fake := &fakeThinkerClient{responses: []client.Message{thinkerToolCall("complete", CompleteToolName, `{}`)}, terminalUsage: client.Usage{TotalTokens: 5}}
+		failure := errors.New("completion delivery failed")
+		if failed {
+			fake.terminalErr = failure
+		}
+		result, err := (Runner{Client: fake, Library: &fakePropositionLibrary{}, Spec: subagent.Spec{Role: config.AgentRoleThinker, Model: "thinker", ContextLength: 16_000}}).Run(t.Context(), Job{
+			ID: "job", Messages: []client.Message{{Role: client.RoleUser, Content: "No new facts."}},
+		})
+		if len(fake.terminalRequests) != 1 || (failed && !errors.Is(err, failure)) || (!failed && (err != nil || result.Usage.TotalTokens != 17)) {
+			t.Fatalf("failed=%v result=%#v err=%v terminalRequests=%d", failed, result, err, len(fake.terminalRequests))
+		}
 	}
 }
 

@@ -308,8 +308,8 @@ func (r GrillerRunner) Run(ctx context.Context, task GrillTask) (brief GrillBrie
 				}
 				brief, parseErr := parseGrillBrief(call.Function.Arguments)
 				if parseErr == nil {
-					traceToolResult(r.Trace, "griller", task.ID, task.ParentID, call, jsonToolResult(brief))
-					return brief, nil
+					_, err := finishRoleTool(ctx, r.Client, &r.Spec, history, request, call, jsonToolResult(brief), r.Trace, "griller", task.ID, task.ParentID, nil)
+					return brief, err
 				}
 				result = scoutToolError(parseErr)
 			case DelegateScoutToolName, "loom_inspect", "loom_read", "loom_eval", "search_skills", "get_skill", "search_propositions", "get_proposition":
@@ -419,8 +419,8 @@ func (r PlannerRunner) Run(ctx context.Context, brief GrillBrief) (proposal Plan
 			} else if call.Function.Name == SubmitPlanToolName {
 				proposal, parseErr := parsePlanProposal(call.Function.Arguments)
 				if parseErr == nil {
-					traceToolResult(r.Trace, "planner", "", "", call, jsonToolResult(proposal))
-					return proposal, nil
+					_, err := finishRoleTool(ctx, r.Client, &r.Spec, history, request, call, jsonToolResult(proposal), r.Trace, "planner", "", "", nil)
+					return proposal, err
 				}
 				result = scoutToolError(parseErr)
 			} else if call.Function.Name == ExternalSearchToolName && r.Tools != nil && hasTool(available, ExternalSearchToolName) {

@@ -2,6 +2,7 @@ package library
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -13,12 +14,18 @@ import (
 )
 
 type fakePropositionJudgeClient struct {
-	requests []client.ChatRequest
-	message  client.Message
-	errors   map[string]error
+	requests         []client.ChatRequest
+	terminalRequests []client.ChatRequest
+	terminalErr      error
+	message          client.Message
+	errors           map[string]error
 }
 
 func (f *fakePropositionJudgeClient) Chat(_ context.Context, request client.ChatRequest) (*client.ChatResponse, error) {
+	if request.ToolChoice == client.ToolChoiceNone && len(request.Messages) > 0 && request.Messages[len(request.Messages)-1].Role == client.RoleTool {
+		f.terminalRequests = append(f.terminalRequests, request)
+		return &client.ChatResponse{Choices: []client.Choice{{Message: client.Message{Role: client.RoleAssistant}, FinishReason: "stop"}}}, f.terminalErr
+	}
 	f.requests = append(f.requests, request)
 	if err := f.errors[request.Model]; err != nil {
 		return nil, err
@@ -84,6 +91,14 @@ func TestModelPropositionJudgeUsesFreshStrictDecisionSession(t *testing.T) {
 	if len(configured.requests) != 1 {
 		t.Fatalf("requests = %d", len(configured.requests))
 	}
+	if len(configured.terminalRequests) != 1 {
+		t.Fatalf("decision result was not returned: %#v", configured.terminalRequests)
+	}
+	terminal := configured.terminalRequests[0]
+	last := terminal.Messages[len(terminal.Messages)-1]
+	if last.ToolCallID != "decision" || last.Name != "resolve_proposition" || !strings.Contains(last.Content, `"target_id":"prop-existing"`) {
+		t.Fatalf("decision result = %#v", last)
+	}
 	request := configured.requests[0]
 	if request.Model != "librarian-model" || request.ReasoningEffort != "high" ||
 		request.ToolChoice != client.ToolChoiceRequired || request.ParallelToolCalls == nil || *request.ParallelToolCalls ||
@@ -112,6 +127,20 @@ func TestModelPropositionJudgeFallsBackOnTransientModelFailure(t *testing.T) {
 	}
 	if len(configured.requests) != 2 || configured.requests[0].Model != "primary" || configured.requests[1].Model != "secondary" {
 		t.Fatalf("requests = %#v", configured.requests)
+	}
+	if len(configured.terminalRequests) != 1 || configured.terminalRequests[0].Model != "secondary" {
+		t.Fatalf("terminal result must stay on the selected provider: %#v", configured.terminalRequests)
+	}
+}
+
+func TestModelPropositionJudgePropagatesTerminalDeliveryFailure(t *testing.T) {
+	failure := errors.New("terminal delivery failed")
+	configured := &fakePropositionJudgeClient{terminalErr: failure, message: client.Message{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{{
+		ID: "decision", Function: client.FunctionCall{Name: "resolve_proposition", Arguments: `{"action":"create","target_id":"","reason":"distinct"}`},
+	}}}}
+	_, err := (&modelPropositionJudge{client: configured, model: "librarian"}).JudgeProposition(t.Context(), PropositionRegisterRequest{Content: "A fact."}, nil)
+	if !errors.Is(err, failure) || len(configured.terminalRequests) != 1 {
+		t.Fatalf("err=%v terminalRequests=%d", err, len(configured.terminalRequests))
 	}
 }
 

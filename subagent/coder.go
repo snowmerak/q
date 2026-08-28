@@ -168,8 +168,8 @@ func (r CoderRunner) run(
 							traceToolResult(r.Trace, "coder", taskID, r.ExecutionID, call, scoutToolError(err))
 							return CoderResult{}, err
 						}
-						traceToolResult(r.Trace, "coder", taskID, r.ExecutionID, call, jsonToolResult(completion))
-						return completion, nil
+						_, err := finishRoleTool(ctx, r.Client, &r.Spec, history, request, call, jsonToolResult(completion), r.Trace, "coder", taskID, r.ExecutionID, lifecycle)
+						return completion, err
 					}
 					toolResult = scoutToolError(err)
 				}

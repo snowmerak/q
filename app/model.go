@@ -3620,6 +3620,9 @@ func streamAgentLoop(
 					continue
 				}
 				completion, parseErr := parseTaskComplete(call.Function.Arguments)
+				if parseErr == nil && len(assistant.ToolCalls) != 1 {
+					parseErr = errors.New("task_complete must be the only tool call in its turn")
+				}
 				if parseErr != nil {
 					message := orchestrationToolResult(call, "invalid task_complete arguments: "+parseErr.Error(), true)
 					history = append(history, message)
@@ -3642,11 +3645,46 @@ func streamAgentLoop(
 				}) {
 					return
 				}
+				if !emitAgentEvent(ctx, events, agentEvent{status: "Finalizing task…"}) {
+					return
+				}
+				request.Messages = history
+				request.ConversationID = conversationID
+				finished, finishErr := client.FinishToolTurn(ctx, request, func(ctx context.Context, request client.ChatRequest) (*client.ChatResponse, error) {
+					requestEstimate = memory.CountMessages(request.Messages)
+					request.Messages = providerMessages(request.Messages, coalesceInstructions)
+					if streamEnabled {
+						return streamChatWithConversationRecovery(ctx, configuredClient, request, func(chatStreamDelta) bool { return true })
+					}
+					return chatWithConversationRecovery(ctx, configuredClient, request)
+				}, func(message client.Message) error {
+					// Keep the structured completion as the one user-visible final
+					// answer, but archive any extra calls and their rejection results.
+					if message.Role == client.RoleAssistant && len(message.ToolCalls) == 0 {
+						return nil
+					}
+					if !emitAgentEvent(ctx, events, agentEvent{message: &message, toolIsError: message.Role == client.RoleTool}) {
+						return ctx.Err()
+					}
+					for _, extra := range message.ToolCalls {
+						if !emitAgentEvent(ctx, events, agentEvent{call: &extra}) {
+							return ctx.Err()
+						}
+					}
+					return nil
+				})
+				if finishErr != nil {
+					emitAgentEvent(ctx, events, agentEvent{err: finishErr})
+					return
+				}
+				response = finished.Response
 				response.Choices[0].Message = client.Message{
 					Role: client.RoleAssistant, Name: thinker.TaskCompletionReplyName,
 					Content: renderTaskCompletion(completion),
 				}
-				response.ConversationID = conversationID
+				if response.ConversationID == "" {
+					response.ConversationID = conversationID
+				}
 				emitAgentEvent(ctx, events, agentEvent{
 					response: response, requestEstimate: requestEstimate, toolCalls: toolCalls,
 				})
