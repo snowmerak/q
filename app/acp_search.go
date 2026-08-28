@@ -162,7 +162,7 @@ func externalSearchPrompt(input subagent.ExternalSearchInput) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("encode external search request: %w", err)
 	}
-	return `You are q's isolated Search agent. Gather current public information for the supplied request.
+	return `You are q's isolated Search agent. Research ecosystems and information outside the repository for the supplied request.
 
 Rules:
 1. Use web search, fetch, and read-only research capabilities. Do not edit files, run mutating commands, or change the workspace.
