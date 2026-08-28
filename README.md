@@ -120,7 +120,7 @@ Codex App Server and reuses Codex authentication. The Grok preset runs the Grok
 Build CLI's native `grok agent stdio` transport. Custom stdio ACP commands are
 also supported.
 
-When Griller or Planner calls `external_search`, q resolves
+When Griller or Planner (including Coder-result review) calls `external_search`, q resolves
 `agents.roles.search.agent`, starts that ACP process, initializes it, creates an
 isolated session, sends the bounded research request, and returns the final
 report and source URLs as the tool result. q then calls `session/delete`, or

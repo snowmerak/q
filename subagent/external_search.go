@@ -30,7 +30,7 @@ func ExternalSearchTool() client.Tool {
 	stringsSchema := stringArraySchemaValue()
 	return client.Tool{Type: client.ToolTypeFunction, Function: client.FunctionDefinition{
 		Name:        ExternalSearchToolName,
-		Description: "Ask the Search role's configured ACP agent to gather current external information. The ACP session is isolated and deleted after this call.",
+		Description: "Collect data from the external web.",
 		Strict:      &strict,
 		Parameters: map[string]any{
 			"type": "object", "properties": map[string]any{

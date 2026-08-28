@@ -524,8 +524,12 @@ func executeApprovedPlan(
 			environment.OS, environment.Architecture, environment.Shell,
 		),
 	}
+	reviewerTools, err := configuredAgentToolRuntime(toolRuntime, plannerSpec.Role, value, workingDirectory)
+	if err != nil {
+		return subagent.PlanExecutionResult{}, fmt.Errorf("plan: configure Planner review tools: %w", err)
+	}
 	reviewer := subagent.PlannerReviewRunner{
-		Client: configuredClient, Tools: scopeTools(toolRuntime, plannerSpec.Role), Spec: plannerSpec,
+		Client: configuredClient, Tools: reviewerTools, Spec: plannerSpec,
 		Sink: archive, RunID: runID, ExecutionID: checkpoint.ExecutionID,
 		WorkingDirectory: workingDirectory, Progress: progress, Trace: trace,
 	}

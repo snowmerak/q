@@ -432,10 +432,44 @@ func TestPlannerReviewCanInspectBoundedCoderEvidence(t *testing.T) {
 			t.Fatalf("Planner review tool %q missing: %#v", name, clientFake.requests[0].Tools)
 		}
 	}
-	for _, name := range []string{"edit_file", "cmd_status"} {
+	for _, name := range []string{"edit_file", "cmd_status", ExternalSearchToolName} {
 		if hasScoutTool(clientFake.requests[0].Tools, name) {
 			t.Fatalf("Planner review received disallowed tool %q: %#v", name, clientFake.requests[0].Tools)
 		}
+	}
+}
+
+func TestPlannerReviewCallsExternalSearchAndReceivesCapturedResult(t *testing.T) {
+	model := &fakeScoutClient{responses: []client.Message{
+		{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{scoutCall(ExternalSearchToolName,
+			`{"query":"current protocol compatibility","completion_criteria":["cite the specification"]}`)}},
+		{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{scoutCall(ReviewTaskToolName,
+			`{"decision":"next","feedback":"","facts":["The implementation matches the current protocol"]}`)}},
+	}}
+	var received ExternalSearchInput
+	tools := testExternalSearchRuntime(t, &received, ExternalSearchResult{
+		Agent: "search-agent", Summary: "The current protocol supports this implementation", Sources: []string{"https://example.test/spec"},
+	})
+	review, err := (PlannerReviewRunner{
+		Client: model, Tools: tools, Spec: Spec{Role: config.AgentRolePlanner, Model: "planner-model"},
+	}).Run(t.Context(), TaskReviewRequest{
+		Plan: executableTestPlan(), TaskIndex: 0, Attempt: 1, Targets: []string{"app/model.go"},
+		Result: CoderResult{Outcome: "succeeded", Summary: "Implemented protocol support"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if received.Query != "current protocol compatibility" || review.Decision != "next" || len(model.requests) != 2 {
+		t.Fatalf("input=%+v review=%+v requests=%d", received, review, len(model.requests))
+	}
+	if !hasTool(model.requests[0].Tools, ExternalSearchToolName) {
+		t.Fatal("external_search was not exposed to Planner review")
+	}
+	messages := model.requests[1].Messages
+	result := messages[len(messages)-1]
+	if result.Role != client.RoleTool || result.Name != ExternalSearchToolName ||
+		!strings.Contains(result.Content, "current protocol supports") || !strings.Contains(result.Content, "loom_ref") {
+		t.Fatalf("review did not receive captured search evidence: %+v", result)
 	}
 }
 

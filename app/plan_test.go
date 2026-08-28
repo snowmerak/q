@@ -91,6 +91,8 @@ func TestPlanCommandExecutesApprovedPlanWithCoderAndPlannerReview(t *testing.T) 
 	}}
 	value := config.Default()
 	value.Provider.Model = "global-model"
+	value.Agents.Connections = map[string]config.AgentConnectionConfig{"search-agent": {Preset: "codex"}}
+	value.Agents.Roles = map[string]config.AgentConfig{config.AgentRoleSearch: {Agent: "search-agent"}}
 	if err := workspaceStore.SaveModelConfig(workspace.ModelConfig{Overrides: map[string]workspace.ModelOverride{
 		defaultModelTarget: {Model: "plan-model"},
 	}}); err != nil {
@@ -185,6 +187,16 @@ func TestPlanCommandExecutesApprovedPlanWithCoderAndPlannerReview(t *testing.T) 
 	if !hasPlanTool(configuredClient.requests[6].Tools, subagent.ReviewTaskToolName) ||
 		!hasPlanTool(configuredClient.requests[8].Tools, subagent.ReviewTaskToolName) {
 		t.Fatalf("Planner review requests = %#v / %#v", configuredClient.requests[6], configuredClient.requests[8])
+	}
+	for _, index := range []int{0, 3, 6, 8} {
+		if !hasPlanTool(configuredClient.requests[index].Tools, subagent.ExternalSearchToolName) {
+			t.Fatalf("parent/reviewer request %d is missing external_search", index)
+		}
+	}
+	for _, index := range []int{4, 7} {
+		if hasPlanTool(configuredClient.requests[index].Tools, subagent.ExternalSearchToolName) {
+			t.Fatalf("Coder request %d unexpectedly received external_search", index)
+		}
 	}
 	firstReviewInput := configuredClient.requests[6].Messages[1].Content
 	if !strings.Contains(firstReviewInput, `"evidence"`) ||

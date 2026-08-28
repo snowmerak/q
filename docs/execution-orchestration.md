@@ -115,6 +115,7 @@ Planner review에는 다음 도구만 제공한다.
 - `read_file`
 - `loom_inspect`, `loom_read`, `loom_eval`
 - 검증 명령을 위한 `run_command`, `wait`
+- 활성 Search ACP 연결이 설정된 경우 외부 사실 확인을 위한 `external_search`
 - 최종 전이 결정을 위한 `review_task`
 
 Planner는 Git 명령이나 workspace를 변경하는 명령을 실행하지 않도록 지시받으며,
