@@ -485,12 +485,22 @@ func TestEnterSendsAndShiftEnterAddsNewline(t *testing.T) {
 	fake := &fakeClient{}
 	m := newModel(context.Background(), config.Store{Dir: t.TempDir()}, nil)
 	m.enterChat(value, fake)
-	m.input.SetValue("first line")
 
-	updated, _ := m.updateChatKey(tea.KeyPressMsg{Code: tea.KeyEnter, Mod: tea.ModShift})
-	m = updated.(model)
-	if !strings.Contains(m.input.Value(), "\n") || len(fake.requests) != 0 {
-		t.Fatalf("shift+enter value = %q, requests = %d", m.input.Value(), len(fake.requests))
+	for _, test := range []struct {
+		name string
+		key  tea.KeyPressMsg
+	}{
+		{name: "modified-enter", key: tea.KeyPressMsg{Code: tea.KeyEnter, Mod: tea.ModShift}},
+		{name: "terminal-line-feed", key: tea.KeyPressMsg{Code: 'j', Mod: tea.ModCtrl}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			m.input.SetValue("first line")
+			updated, _ := m.updateChatKey(test.key)
+			m = updated.(model)
+			if !strings.Contains(m.input.Value(), "\n") || len(fake.requests) != 0 {
+				t.Fatalf("newline key value = %q, requests = %d", m.input.Value(), len(fake.requests))
+			}
+		})
 	}
 
 	m.input.SetValue("send me")

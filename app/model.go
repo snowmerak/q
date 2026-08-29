@@ -688,7 +688,11 @@ func newChatInput() textarea.Model {
 	input.SetHeight(4)
 	input.SetWidth(80)
 	input.CharLimit = 32_000
-	input.KeyMap.InsertNewline.SetKeys("shift+enter")
+	// Terminals with keyboard-disambiguation support report Shift+Enter as a
+	// modified Enter key. Others commonly encode the same gesture as LF, which
+	// Bubble Tea exposes as Ctrl+J. Accept both representations so the shortcut
+	// works without depending on a specific terminal keyboard protocol.
+	input.KeyMap.InsertNewline.SetKeys("shift+enter", "ctrl+j")
 	input.KeyMap.InsertNewline.SetHelp("shift+enter", "insert newline")
 	return input
 }
