@@ -9,6 +9,7 @@ require (
 	charm.land/lipgloss/v2 v2.0.5
 	github.com/MichaelAyles/goformersearch v0.1.0
 	github.com/OneOfOne/xxhash v1.2.8
+	github.com/alecthomas/chroma/v2 v2.14.0
 	github.com/blevesearch/bleve/v2 v2.6.0
 	github.com/charmbracelet/x/ansi v0.11.7
 	github.com/dop251/goja v0.0.0-20260806115107-493f22071ef6
@@ -26,7 +27,6 @@ require (
 
 require (
 	github.com/RoaringBitmap/roaring/v2 v2.14.5 // indirect
-	github.com/alecthomas/chroma/v2 v2.14.0 // indirect
 	github.com/atotto/clipboard v0.1.4 // indirect
 	github.com/aymerick/douceur v0.2.0 // indirect
 	github.com/bits-and-blooms/bitset v1.24.4 // indirect

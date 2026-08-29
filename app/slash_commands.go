@@ -28,6 +28,7 @@ var localSlashCommands = []slashCommand{
 	{"/plan", "[request]", "Grill, research, approve, and execute a work plan."},
 	{"/agent:search", "<query>", "Run the configured ACP Search agent."},
 	{"/commit", "", "Open the interactive commit workflow."},
+	{"/changes", "", "Browse file diffs with syntax highlighting (read only)."},
 	{"/sessions", "", "Resume a saved workspace session."},
 	{"/new", "", "Create a new session."},
 	{"/clear", "", "Empty the current session in place."},

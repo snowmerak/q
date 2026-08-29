@@ -54,6 +54,7 @@ const (
 	screenLibrary
 	screenHelp
 	screenSessions
+	screenChanges
 	screenChat
 )
 
@@ -313,6 +314,7 @@ type model struct {
 	questionViewport   viewport.Model
 	agentTraceViewport viewport.Model
 	helpViewport       viewport.Model
+	changes            changesViewState
 	spinner            spinner.Model
 	commitRunning      bool
 	initializing       bool
@@ -534,6 +536,7 @@ func newManagedModel(ctx context.Context, store config.Store, factory clientFact
 		questionViewport:   viewport.New(viewport.WithWidth(80), viewport.WithHeight(8)),
 		agentTraceViewport: viewport.New(viewport.WithWidth(80), viewport.WithHeight(8)),
 		helpViewport:       viewport.New(viewport.WithWidth(80), viewport.WithHeight(12)),
+		changes:            newChangesViewState(),
 		spinner:            spinner.New(spinner.WithSpinner(spinner.Dot)),
 		thinkerSerial:      &thinker.Serial{},
 	}
@@ -761,6 +764,10 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.BackgroundColorMsg:
 		m.applyColorScheme(message.IsDark())
 		return m, nil
+	case changesLoadedMsg:
+		return m.receiveChanges(message)
+	case changePreviewMsg:
+		return m.receiveChangePreview(message)
 	case acpSessionResetMsg:
 		if message.err != nil {
 			m.status = "Start new ACP session: " + message.err.Error()
@@ -1488,9 +1495,20 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		if m.screen == screenSessions {
 			return m.updateSessions(key)
 		}
+		if m.screen == screenChanges {
+			return m.updateChanges(key)
+		}
 		return m.updateChatKey(key)
 	}
 
+	if m.screen == screenChanges {
+		if m.changes.diffFocused {
+			var command tea.Cmd
+			m.changes.viewport, command = m.changes.viewport.Update(message)
+			return m, command
+		}
+		return m, nil
+	}
 	if m.screen == screenIgnore {
 		before := m.ignoreEditor.Value()
 		var command tea.Cmd
@@ -3101,6 +3119,8 @@ func (m model) submitChat() (tea.Model, tea.Cmd) {
 			return m, m.input.Focus()
 		case "/commit":
 			return m.startCommit()
+		case "/changes":
+			return m.enterChanges()
 		case "/clear":
 			m.input.Reset()
 			m.resetConversation()
@@ -4644,6 +4664,7 @@ func (m *model) resize(width, height int) {
 	m.helpViewport.SetHeight(max(1, m.height-11))
 	m.refreshHelp(false)
 	m.refreshSkills(false)
+	m.resizeChanges()
 	// Match the frame's inner width so it cannot rewrap the transcript or
 	// textarea after their cursor and popup positions have been calculated.
 	chatContentWidth := m.chatFrameWidth() - frameStyle.GetHorizontalFrameSize()
@@ -4718,6 +4739,7 @@ func (m *model) applyColorScheme(dark bool) {
 	m.refreshTranscript()
 	m.refreshQuestion()
 	m.refreshHelp(false)
+	m.resizeChanges()
 }
 
 func (m *model) refreshTranscript() {
@@ -5011,6 +5033,8 @@ func (m model) View() tea.View {
 		content = m.viewHelp()
 	} else if m.screen == screenSessions {
 		content = m.viewSessions()
+	} else if m.screen == screenChanges {
+		content = m.viewChanges()
 	} else if m.screen == screenChat {
 		content = m.viewChat()
 	}

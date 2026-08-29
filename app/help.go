@@ -226,6 +226,14 @@ func renderHelpContent(dark bool) string {
 		{"r", "Refresh titles and recent activity."},
 		{"esc", "Return to chat, or quit from the startup picker."},
 	})
+	writeHelpSection("CHANGES", [][2]string{
+		{"↑/↓ or j/k", "Select a changed file; staged and unstaged diffs are separate."},
+		{"tab / enter", "Switch file/diff panes, or focus the selected diff."},
+		{"pgup/pgdn", "Page through files or the focused diff."},
+		{"←/→", "Scroll the focused diff horizontally without wrapping code."},
+		{"r", "Reload repository changes and invalidate cached previews."},
+		{"esc", "Return to chat without staging or modifying files."},
+	})
 	writeHelpSection("SUBAGENTS AND QUESTIONS", [][2]string{
 		{"ctrl+g", "Expand or collapse the detailed subagent trace."},
 		{"pgup/pgdn", "Scroll the active trace, question, or help panel."},

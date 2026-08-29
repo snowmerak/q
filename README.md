@@ -281,6 +281,7 @@ screen without discarding editor state or interrupting an active turn.
 | `/plan [request]` | Grill, research, approve, and execute a work plan. Without an inline request, the next message becomes the request. |
 | `/agent:search <query>` | Explicitly run the configured ACP Search agent in an isolated read-only session and return its evidence report. |
 | `/commit` | Open the interactive commit workflow, then return to chat. |
+| `/changes` | Browse all current repository changes by file with syntax-highlighted diffs; never stage or modify files. |
 | `/sessions` | List workspace sessions by title and recent activity, then resume one or create another. |
 | `/new` | Create and switch to a new workspace session without deleting the previous one. |
 | `/model` | Configure the workspace/default, embedding, subagent role, and grouped fallback models. |
@@ -297,6 +298,28 @@ screen without discarding editor state or interrupting an active turn.
 | `/learn on` | Re-enable workspace learning and resume any previously queued segments. |
 | `/learn status` | Show whether learning is enabled for this workspace. |
 | `/help` | Open the command and shortcut guide. |
+
+### File changes
+
+`/changes` shows the enclosing Git repository's staged, unstaged, and untracked
+files, excluding q-owned `.q` metadata. This is the current repository state,
+including changes made before the current turn; it is not a per-turn history.
+The two status columns show index and working-tree state (`??` means untracked).
+Staged and unstaged patches for the same file are shown separately, so neither
+is hidden when the changes cancel out relative to HEAD.
+
+Use Up/Down or `j`/`k` to select a file, Enter to focus its diff, and Tab to
+switch panes. In the diff pane, Up/Down and PageUp/PageDown scroll vertically;
+Left/Right scroll horizontally without wrapping code. Narrow terminals show one
+pane at a time. `r` refreshes the file list and previews; Escape returns to chat.
+
+Known file types use Chroma syntax highlighting over addition/deletion
+backgrounds, with old/new line numbers and light/dark palettes. Unknown types
+fall back to plain text. Previews load on selection and are cached until refresh;
+binary files show a notice. Each patch is limited to 256 KiB or 4,000 lines,
+with an explicit partial-preview notice and counts for displayed lines only.
+Oversized code hunks fall back to plain text. No commit, staging, or external
+diff/text-conversion tools are invoked. Git must be available on PATH.
 
 ### Chat keys
 
