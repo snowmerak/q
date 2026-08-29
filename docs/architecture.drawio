@@ -1,0 +1,154 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mxfile host="app.diagrams.net" modified="2026-08-29T07:00:00.000Z" agent="Codex" version="26.0.9">
+  <diagram id="q-runtime-architecture" name="Runtime architecture">
+    <mxGraphModel dx="1800" dy="1180" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1800" pageHeight="1180" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+
+        <mxCell id="main-container" value="&lt;b&gt;q process · cmd/q&lt;/b&gt;" style="swimlane;html=1;rounded=1;startSize=42;horizontal=1;fillColor=#F8FAFC;strokeColor=#94A3B8;fontColor=#334155;fontSize=17;fontStyle=0;swimlaneFillColor=#F8FAFC;arcSize=12;" vertex="1" parent="1">
+          <mxGeometry x="300" y="140" width="900" height="740" as="geometry" />
+        </mxCell>
+        <mxCell id="state-container" value="&lt;b&gt;Durable and shared state&lt;/b&gt;" style="swimlane;html=1;rounded=1;startSize=40;horizontal=1;fillColor=#FFFBEB;strokeColor=#D6A844;fontColor=#713F12;fontSize=17;swimlaneFillColor=#FFFBEB;arcSize=12;" vertex="1" parent="1">
+          <mxGeometry x="300" y="920" width="1440" height="220" as="geometry" />
+        </mxCell>
+
+        <mxCell id="clients-label" value="&lt;b&gt;Clients and operators&lt;/b&gt;" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontColor=#475569;fontSize=16;" vertex="1" parent="1">
+          <mxGeometry x="30" y="165" width="230" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="integrations-label" value="&lt;b&gt;Local child processes and integrations&lt;/b&gt;" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontColor=#475569;fontSize=16;" vertex="1" parent="1">
+          <mxGeometry x="1260" y="165" width="480" height="30" as="geometry" />
+        </mxCell>
+
+        <mxCell id="terminal" value="&lt;b&gt;Terminal user&lt;/b&gt;&lt;br&gt;&lt;font color=&quot;#64748B&quot;&gt;interactive and standalone CLI&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#EFF6FF;strokeColor=#3B82F6;fontColor=#172033;fontSize=15;arcSize=14;" vertex="1" parent="1">
+          <mxGeometry x="30" y="220" width="220" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="acp-client" value="&lt;b&gt;ACP client&lt;/b&gt;&lt;br&gt;&lt;font color=&quot;#64748B&quot;&gt;stdin/stdout protocol&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#EFF6FF;strokeColor=#3B82F6;fontColor=#172033;fontSize=15;arcSize=14;" vertex="1" parent="1">
+          <mxGeometry x="30" y="350" width="220" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="mcp-client" value="&lt;b&gt;MCP client&lt;/b&gt;&lt;br&gt;&lt;font color=&quot;#64748B&quot;&gt;workspace tool consumer&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#EFF6FF;strokeColor=#3B82F6;fontColor=#172033;fontSize=15;arcSize=14;" vertex="1" parent="1">
+          <mxGeometry x="30" y="480" width="220" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="q-mcp" value="&lt;b&gt;q-mcp process&lt;/b&gt;&lt;br&gt;&lt;font color=&quot;#64748B&quot;&gt;stdio MCP server&lt;br&gt;dedicated tools stack&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ECFDF5;strokeColor=#059669;fontColor=#172033;fontSize=15;arcSize=14;" vertex="1" parent="1">
+          <mxGeometry x="30" y="610" width="220" height="100" as="geometry" />
+        </mxCell>
+
+        <mxCell id="tui" value="&lt;b&gt;Bubble Tea TUI&lt;/b&gt;&lt;br&gt;&lt;font color=&quot;#6D28D9&quot;&gt;app&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F5F3FF;strokeColor=#7C3AED;fontColor=#172033;fontSize=15;arcSize=14;" vertex="1" parent="1">
+          <mxGeometry x="330" y="205" width="220" height="85" as="geometry" />
+        </mxCell>
+        <mxCell id="acp-adapters" value="&lt;b&gt;ACP adapters&lt;/b&gt;&lt;br&gt;&lt;font color=&quot;#6D28D9&quot;&gt;agent server + remote client&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F5F3FF;strokeColor=#7C3AED;fontColor=#172033;fontSize=15;arcSize=14;" vertex="1" parent="1">
+          <mxGeometry x="575" y="205" width="220" height="85" as="geometry" />
+        </mxCell>
+        <mxCell id="standalone" value="&lt;b&gt;Standalone commands&lt;/b&gt;&lt;br&gt;&lt;font color=&quot;#6D28D9&quot;&gt;gateway · library · memory · commit · config&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F5F3FF;strokeColor=#7C3AED;fontColor=#172033;fontSize=15;arcSize=14;" vertex="1" parent="1">
+          <mxGeometry x="820" y="205" width="350" height="85" as="geometry" />
+        </mxCell>
+
+        <mxCell id="app-coordinator" value="&lt;b&gt;Application and session coordinator&lt;/b&gt;&lt;br&gt;&lt;font color=&quot;#0369A1&quot;&gt;app · workspace&lt;/font&gt;&lt;br&gt;&lt;font color=&quot;#64748B&quot;&gt;chat lifecycle · screens · locks · checkpoints&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E0F2FE;strokeColor=#0284C7;fontColor=#172033;fontSize=15;arcSize=14;" vertex="1" parent="1">
+          <mxGeometry x="330" y="330" width="380" height="100" as="geometry" />
+        </mxCell>
+        <mxCell id="chat-client" value="&lt;b&gt;LLM client and model routing&lt;/b&gt;&lt;br&gt;&lt;font color=&quot;#0369A1&quot;&gt;client · config · provider roles&lt;/font&gt;&lt;br&gt;&lt;font color=&quot;#64748B&quot;&gt;chat / griller / planner / coder / thinker / librarian&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E0F2FE;strokeColor=#0284C7;fontColor=#172033;fontSize=15;arcSize=14;" vertex="1" parent="1">
+          <mxGeometry x="750" y="330" width="420" height="100" as="geometry" />
+        </mxCell>
+
+        <mxCell id="plan" value="&lt;b&gt;Plan orchestration&lt;/b&gt;&lt;br&gt;&lt;font color=&quot;#7E22CE&quot;&gt;subagent&lt;/font&gt;&lt;br&gt;&lt;font color=&quot;#64748B&quot;&gt;Griller → Scout → Planner → Coder → review&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FAF5FF;strokeColor=#9333EA;fontColor=#172033;fontSize=15;arcSize=14;" vertex="1" parent="1">
+          <mxGeometry x="330" y="475" width="350" height="105" as="geometry" />
+        </mxCell>
+        <mxCell id="commit" value="&lt;b&gt;Repository review&lt;/b&gt;&lt;br&gt;&lt;font color=&quot;#7E22CE&quot;&gt;changes · commitagent&lt;/font&gt;&lt;br&gt;&lt;font color=&quot;#64748B&quot;&gt;diff browser · commits&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FAF5FF;strokeColor=#9333EA;fontColor=#172033;fontSize=15;arcSize=14;" vertex="1" parent="1">
+          <mxGeometry x="700" y="475" width="220" height="105" as="geometry" />
+        </mxCell>
+        <mxCell id="thinker" value="&lt;b&gt;Learning pipeline&lt;/b&gt;&lt;br&gt;&lt;font color=&quot;#7E22CE&quot;&gt;thinker&lt;/font&gt;&lt;br&gt;&lt;font color=&quot;#64748B&quot;&gt;segments → propositions&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FAF5FF;strokeColor=#9333EA;fontColor=#172033;fontSize=15;arcSize=14;" vertex="1" parent="1">
+          <mxGeometry x="940" y="475" width="230" height="105" as="geometry" />
+        </mxCell>
+
+        <mxCell id="tool-runtime" value="&lt;b&gt;Root-scoped tool runtime&lt;/b&gt; &lt;font color=&quot;#047857&quot;&gt;tools&lt;/font&gt;&lt;br&gt;&lt;font color=&quot;#64748B&quot;&gt;in-process MCP · capture boundary · role-scoped external routes&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#D1FAE5;strokeColor=#059669;fontColor=#172033;fontSize=16;arcSize=12;" vertex="1" parent="1">
+          <mxGeometry x="330" y="625" width="840" height="70" as="geometry" />
+        </mxCell>
+        <mxCell id="builtin-tools" value="&lt;b&gt;Workspace I/O&lt;/b&gt;&lt;br&gt;&lt;font color=&quot;#047857&quot;&gt;builtin&lt;/font&gt;&lt;br&gt;&lt;font color=&quot;#64748B&quot;&gt;FS · edit · commands&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ECFDF5;strokeColor=#10B981;fontColor=#172033;fontSize=13;arcSize=12;" vertex="1" parent="1">
+          <mxGeometry x="330" y="730" width="150" height="105" as="geometry" />
+        </mxCell>
+        <mxCell id="external-mcp" value="&lt;b&gt;External MCP&lt;/b&gt;&lt;br&gt;&lt;font color=&quot;#047857&quot;&gt;tools&lt;/font&gt;&lt;br&gt;&lt;font color=&quot;#64748B&quot;&gt;namespaced routes&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ECFDF5;strokeColor=#10B981;fontColor=#172033;fontSize=13;arcSize=12;" vertex="1" parent="1">
+          <mxGeometry x="500" y="730" width="150" height="105" as="geometry" />
+        </mxCell>
+        <mxCell id="lsp-manager" value="&lt;b&gt;Read-only LSP&lt;/b&gt;&lt;br&gt;&lt;font color=&quot;#047857&quot;&gt;lsp&lt;/font&gt;&lt;br&gt;&lt;font color=&quot;#64748B&quot;&gt;query tools&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ECFDF5;strokeColor=#10B981;fontColor=#172033;fontSize=13;arcSize=12;" vertex="1" parent="1">
+          <mxGeometry x="670" y="730" width="150" height="105" as="geometry" />
+        </mxCell>
+        <mxCell id="skills" value="&lt;b&gt;Skills and memory&lt;/b&gt;&lt;br&gt;&lt;font color=&quot;#047857&quot;&gt;agentskills&lt;/font&gt;&lt;br&gt;&lt;font color=&quot;#64748B&quot;&gt;Library client&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ECFDF5;strokeColor=#10B981;fontColor=#172033;fontSize=13;arcSize=12;" vertex="1" parent="1">
+          <mxGeometry x="840" y="730" width="150" height="105" as="geometry" />
+        </mxCell>
+        <mxCell id="loom-cap" value="&lt;b&gt;Bounded results&lt;/b&gt;&lt;br&gt;&lt;font color=&quot;#047857&quot;&gt;loom&lt;/font&gt;&lt;br&gt;&lt;font color=&quot;#64748B&quot;&gt;capture · inspect · eval&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ECFDF5;strokeColor=#10B981;fontColor=#172033;fontSize=13;arcSize=12;" vertex="1" parent="1">
+          <mxGeometry x="1010" y="730" width="160" height="105" as="geometry" />
+        </mxCell>
+
+        <mxCell id="gateway" value="&lt;b&gt;Managed Gateway child&lt;/b&gt;&lt;br&gt;&lt;font color=&quot;#C2410C&quot;&gt;providerhost&lt;/font&gt;&lt;br&gt;&lt;font color=&quot;#64748B&quot;&gt;private loopback OpenAI-compatible endpoint&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF7ED;strokeColor=#EA580C;fontColor=#172033;fontSize=15;arcSize=14;" vertex="1" parent="1">
+          <mxGeometry x="1260" y="220" width="480" height="90" as="geometry" />
+        </mxCell>
+        <mxCell id="providers" value="&lt;b&gt;Model providers&lt;/b&gt;&lt;br&gt;&lt;font color=&quot;#64748B&quot;&gt;OpenAI-compatible · OpenRouter · xAI · Anthropic · Codex App Server&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF7ED;strokeColor=#EA580C;fontColor=#172033;fontSize=15;arcSize=14;" vertex="1" parent="1">
+          <mxGeometry x="1260" y="350" width="480" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="external-servers" value="&lt;b&gt;External MCP servers&lt;/b&gt;&lt;br&gt;&lt;font color=&quot;#64748B&quot;&gt;stdio or Streamable HTTP&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF7ED;strokeColor=#EA580C;fontColor=#172033;fontSize=15;arcSize=14;" vertex="1" parent="1">
+          <mxGeometry x="1260" y="480" width="480" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="acp-agents" value="&lt;b&gt;External ACP agents&lt;/b&gt;&lt;br&gt;&lt;font color=&quot;#64748B&quot;&gt;configured agent processes · Search role&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF7ED;strokeColor=#EA580C;fontColor=#172033;fontSize=15;arcSize=14;" vertex="1" parent="1">
+          <mxGeometry x="1260" y="585" width="480" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="lsp-servers" value="&lt;b&gt;Language servers&lt;/b&gt;&lt;br&gt;&lt;font color=&quot;#64748B&quot;&gt;diagnostics · hover · symbols · references&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF7ED;strokeColor=#EA580C;fontColor=#172033;fontSize=15;arcSize=14;" vertex="1" parent="1">
+          <mxGeometry x="1260" y="690" width="480" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="git-workspace" value="&lt;b&gt;Git workspace&lt;/b&gt;&lt;br&gt;&lt;font color=&quot;#64748B&quot;&gt;repository files · index · working tree · shell&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF7ED;strokeColor=#EA580C;fontColor=#172033;fontSize=15;arcSize=14;" vertex="1" parent="1">
+          <mxGeometry x="1260" y="795" width="480" height="80" as="geometry" />
+        </mxCell>
+
+        <mxCell id="workspace-state" value="&lt;b&gt;Workspace session state&lt;/b&gt;&lt;br&gt;&lt;font color=&quot;#92400E&quot;&gt;workspace&lt;/font&gt;&lt;br&gt;&lt;font color=&quot;#64748B&quot;&gt;.q/sessions · plan checkpoints&lt;br&gt;model / LSP / learning config&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FEF3C7;strokeColor=#D97706;fontColor=#172033;fontSize=14;arcSize=12;" vertex="1" parent="1">
+          <mxGeometry x="330" y="970" width="300" height="120" as="geometry" />
+        </mxCell>
+        <mxCell id="workspace-memory" value="&lt;b&gt;Workspace Memory&lt;/b&gt;&lt;br&gt;&lt;font color=&quot;#92400E&quot;&gt;workspacememory · sessionstore&lt;/font&gt;&lt;br&gt;&lt;font color=&quot;#64748B&quot;&gt;.q/data · .q/index&lt;br&gt;records · BM25 / HNSW&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FEF3C7;strokeColor=#D97706;fontColor=#172033;fontSize=14;arcSize=12;" vertex="1" parent="1">
+          <mxGeometry x="665" y="970" width="300" height="120" as="geometry" />
+        </mxCell>
+        <mxCell id="global-library" value="&lt;b&gt;Global Library&lt;/b&gt;&lt;br&gt;&lt;font color=&quot;#92400E&quot;&gt;library&lt;/font&gt;&lt;br&gt;&lt;font color=&quot;#64748B&quot;&gt;~/.q · skills · propositions&lt;br&gt;SQLite queue · BM25 / HNSW&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FEF3C7;strokeColor=#D97706;fontColor=#172033;fontSize=14;arcSize=12;" vertex="1" parent="1">
+          <mxGeometry x="1000" y="970" width="330" height="120" as="geometry" />
+        </mxCell>
+        <mxCell id="loom-store" value="&lt;b&gt;Loom artifact store&lt;/b&gt;&lt;br&gt;&lt;font color=&quot;#92400E&quot;&gt;loom&lt;/font&gt;&lt;br&gt;&lt;font color=&quot;#64748B&quot;&gt;.q/loom · content-addressed results&lt;br&gt;leases · garbage collection&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FEF3C7;strokeColor=#D97706;fontColor=#172033;fontSize=14;arcSize=12;" vertex="1" parent="1">
+          <mxGeometry x="1365" y="970" width="340" height="120" as="geometry" />
+        </mxCell>
+
+        <mxCell id="edge-terminal-tui" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#64748B;strokeWidth=2;endArrow=block;endFill=1;" edge="1" parent="1" source="terminal" target="tui"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="edge-terminal-standalone" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#64748B;strokeWidth=2;endArrow=block;endFill=1;exitX=1;exitY=0.2;entryX=0.5;entryY=0;" edge="1" parent="1" source="terminal" target="standalone"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="edge-acp-client" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#64748B;strokeWidth=2;endArrow=block;endFill=1;" edge="1" parent="1" source="acp-client" target="acp-adapters"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="edge-mcp-client" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#64748B;strokeWidth=2;endArrow=block;endFill=1;" edge="1" parent="1" source="mcp-client" target="q-mcp"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="edge-qmcp-tools" value="same tools package" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#059669;strokeWidth=2;dashed=1;dashPattern=6 4;endArrow=open;endFill=0;fontColor=#047857;fontSize=12;" edge="1" parent="1" source="q-mcp" target="tool-runtime"><mxGeometry relative="1" as="geometry" /></mxCell>
+
+        <mxCell id="edge-tui-app" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#64748B;strokeWidth=2;endArrow=block;endFill=1;" edge="1" parent="1" source="tui" target="app-coordinator"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="edge-acp-app" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#64748B;strokeWidth=2;endArrow=block;endFill=1;" edge="1" parent="1" source="acp-adapters" target="app-coordinator"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="edge-standalone-app" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#64748B;strokeWidth=2;endArrow=block;endFill=1;" edge="1" parent="1" source="standalone" target="app-coordinator"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="edge-app-chat" value="prompts / streams" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#0284C7;strokeWidth=2;endArrow=block;endFill=1;fontColor=#0369A1;fontSize=12;" edge="1" parent="1" source="app-coordinator" target="chat-client"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="edge-app-plan" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#64748B;strokeWidth=2;endArrow=block;endFill=1;" edge="1" parent="1" source="app-coordinator" target="plan"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="edge-app-commit" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#64748B;strokeWidth=2;endArrow=block;endFill=1;" edge="1" parent="1" source="app-coordinator" target="commit"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="edge-app-thinker" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#64748B;strokeWidth=2;endArrow=block;endFill=1;" edge="1" parent="1" source="app-coordinator" target="thinker"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="edge-app-tools" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#64748B;strokeWidth=2;endArrow=block;endFill=1;" edge="1" parent="1" source="app-coordinator" target="tool-runtime"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="edge-plan-chat" value="role calls" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#9333EA;strokeWidth=2;endArrow=open;endFill=0;fontColor=#7E22CE;fontSize=12;" edge="1" parent="1" source="plan" target="chat-client"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="edge-plan-tools" value="isolated tasks" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#9333EA;strokeWidth=2;endArrow=open;endFill=0;fontColor=#7E22CE;fontSize=12;" edge="1" parent="1" source="plan" target="tool-runtime"><mxGeometry relative="1" as="geometry" /></mxCell>
+
+        <mxCell id="edge-chat-gateway" value="OpenAI-compatible HTTP" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#EA580C;strokeWidth=2;endArrow=block;endFill=1;fontColor=#C2410C;fontSize=12;" edge="1" parent="1" source="chat-client" target="gateway"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="edge-gateway-providers" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#EA580C;strokeWidth=2;endArrow=block;endFill=1;" edge="1" parent="1" source="gateway" target="providers"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="edge-acp-agents" value="remote sessions" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#EA580C;strokeWidth=2;endArrow=block;endFill=1;fontColor=#C2410C;fontSize=12;" edge="1" parent="1" source="acp-adapters" target="acp-agents"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="edge-commit-git" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#EA580C;strokeWidth=2;endArrow=block;endFill=1;" edge="1" parent="1" source="commit" target="git-workspace"><mxGeometry relative="1" as="geometry" /></mxCell>
+
+        <mxCell id="edge-tools-builtin" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#059669;strokeWidth=2;endArrow=block;endFill=1;" edge="1" parent="1" source="tool-runtime" target="builtin-tools"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="edge-tools-external" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#059669;strokeWidth=2;endArrow=block;endFill=1;" edge="1" parent="1" source="tool-runtime" target="external-mcp"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="edge-tools-lsp" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#059669;strokeWidth=2;endArrow=block;endFill=1;" edge="1" parent="1" source="tool-runtime" target="lsp-manager"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="edge-tools-skills" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#059669;strokeWidth=2;endArrow=block;endFill=1;" edge="1" parent="1" source="tool-runtime" target="skills"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="edge-tools-loom" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#059669;strokeWidth=2;endArrow=block;endFill=1;" edge="1" parent="1" source="tool-runtime" target="loom-cap"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="edge-builtin-git" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#EA580C;strokeWidth=2;endArrow=block;endFill=1;" edge="1" parent="1" source="builtin-tools" target="git-workspace"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="edge-external-servers" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#EA580C;strokeWidth=2;endArrow=block;endFill=1;" edge="1" parent="1" source="external-mcp" target="external-servers"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="edge-lsp-servers" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#EA580C;strokeWidth=2;endArrow=block;endFill=1;" edge="1" parent="1" source="lsp-manager" target="lsp-servers"><mxGeometry relative="1" as="geometry" /></mxCell>
+
+        <mxCell id="edge-app-workspace-state" value="JSON state" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#D97706;strokeWidth=2;dashed=1;dashPattern=6 4;endArrow=open;endFill=0;fontColor=#92400E;fontSize=12;" edge="1" parent="1" source="app-coordinator" target="workspace-state"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="edge-app-memory" value="durable events" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#D97706;strokeWidth=2;dashed=1;dashPattern=6 4;endArrow=open;endFill=0;fontColor=#92400E;fontSize=12;" edge="1" parent="1" source="app-coordinator" target="workspace-memory"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="edge-tools-memory" value="archive search" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#D97706;strokeWidth=2;dashed=1;dashPattern=6 4;endArrow=open;endFill=0;fontColor=#92400E;fontSize=12;" edge="1" parent="1" source="tool-runtime" target="workspace-memory"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="edge-thinker-library" value="register propositions" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#D97706;strokeWidth=2;dashed=1;dashPattern=6 4;endArrow=open;endFill=0;fontColor=#92400E;fontSize=12;" edge="1" parent="1" source="thinker" target="global-library"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="edge-skills-library" value="skills / retrieval" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#D97706;strokeWidth=2;dashed=1;dashPattern=6 4;endArrow=open;endFill=0;fontColor=#92400E;fontSize=12;" edge="1" parent="1" source="skills" target="global-library"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="edge-loom-store" value="immutable artifacts" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#D97706;strokeWidth=2;dashed=1;dashPattern=6 4;endArrow=open;endFill=0;fontColor=#92400E;fontSize=12;" edge="1" parent="1" source="loom-cap" target="loom-store"><mxGeometry relative="1" as="geometry" /></mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

@@ -398,6 +398,10 @@ projections and plan checkpoints, subject to its configured grace period.
 
 An interactive q process coordinates components with separate ownership:
 
+[![q runtime architecture](docs/architecture.svg)](docs/architecture.drawio)
+
+Editable source: [docs/architecture.drawio](docs/architecture.drawio).
+
 | Component | Lifetime and responsibility |
 |---|---|
 | TUI | One selected session, chat lifecycle, and user interaction. |

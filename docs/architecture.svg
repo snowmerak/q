@@ -1,0 +1,303 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1800" height="1180" viewBox="0 0 1800 1180" role="img" aria-labelledby="title desc">
+  <title id="title">q runtime architecture</title>
+  <desc id="desc">Architecture of q showing terminal, ACP and MCP entry points; the application, model, orchestration and tool layers; managed providers and integrations; and durable workspace, memory, library and Loom state.</desc>
+  <defs>
+    <filter id="shadow" x="-10%" y="-10%" width="120%" height="130%">
+      <feDropShadow dx="0" dy="2" stdDeviation="3" flood-color="#0F172A" flood-opacity="0.08" />
+    </filter>
+    <marker id="arrow-gray" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#64748B" />
+    </marker>
+    <marker id="arrow-blue" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#0284C7" />
+    </marker>
+    <marker id="arrow-purple" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#9333EA" />
+    </marker>
+    <marker id="arrow-green" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#059669" />
+    </marker>
+    <marker id="arrow-orange" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#EA580C" />
+    </marker>
+    <marker id="arrow-amber-open" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 1 1 L 9 5 L 1 9" fill="none" stroke="#D97706" stroke-width="1.8" />
+    </marker>
+    <marker id="arrow-green-open" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 1 1 L 9 5 L 1 9" fill="none" stroke="#059669" stroke-width="1.8" />
+    </marker>
+    <style>
+      text { font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+      .page-title { font-size: 30px; font-weight: 700; fill: #0F172A; }
+      .page-subtitle { font-size: 15px; fill: #64748B; }
+      .section-title { font-size: 16px; font-weight: 700; fill: #475569; }
+      .container-title { font-size: 17px; font-weight: 700; fill: #334155; }
+      .box-title { font-size: 15px; font-weight: 700; fill: #172033; }
+      .box-package { font-size: 13px; font-weight: 650; }
+      .box-sub { font-size: 13px; fill: #64748B; }
+      .small-title { font-size: 13px; font-weight: 700; fill: #172033; }
+      .small-package { font-size: 12px; font-weight: 650; fill: #047857; }
+      .small-sub { font-size: 11.5px; fill: #64748B; }
+      .state-title { font-size: 14px; font-weight: 700; fill: #172033; }
+      .state-package { font-size: 12.5px; font-weight: 650; fill: #92400E; }
+      .state-sub { font-size: 12px; fill: #64748B; }
+      .flow { fill: none; stroke: #64748B; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; marker-end: url(#arrow-gray); }
+      .blue-flow { fill: none; stroke: #0284C7; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; marker-end: url(#arrow-blue); }
+      .purple-flow { fill: none; stroke: #9333EA; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; marker-end: url(#arrow-purple); }
+      .green-flow { fill: none; stroke: #059669; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; marker-end: url(#arrow-green); }
+      .orange-flow { fill: none; stroke: #EA580C; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; marker-end: url(#arrow-orange); }
+      .state-flow { fill: none; stroke: #D97706; stroke-width: 2; stroke-dasharray: 7 6; stroke-linecap: round; stroke-linejoin: round; marker-end: url(#arrow-amber-open); }
+      .reuse-flow { fill: none; stroke: #059669; stroke-width: 2; stroke-dasharray: 7 6; stroke-linecap: round; stroke-linejoin: round; marker-end: url(#arrow-green-open); }
+      .edge-label { font-size: 11.5px; font-weight: 600; paint-order: stroke; stroke: #FFFFFF; stroke-width: 5px; stroke-linejoin: round; }
+    </style>
+  </defs>
+
+  <rect width="1800" height="1180" fill="#FFFFFF" />
+  <text class="page-title" x="40" y="52">q Runtime Architecture</text>
+  <text class="page-subtitle" x="40" y="80">Workspace-native agent runtime with shared model, tool, orchestration, and durable-service boundaries</text>
+
+  <g aria-label="Legend">
+    <path d="M 1370 54 H 1420" class="flow" />
+    <text class="page-subtitle" x="1435" y="59">runtime request / data flow</text>
+    <path d="M 1370 82 H 1420" class="state-flow" />
+    <text class="page-subtitle" x="1435" y="87">shared state or implementation reuse</text>
+  </g>
+
+  <rect x="300" y="140" width="900" height="740" rx="16" fill="#F8FAFC" stroke="#94A3B8" stroke-width="1.5" />
+  <path d="M 300 182 H 1200" stroke="#CBD5E1" stroke-width="1" />
+  <text class="container-title" x="324" y="168">q process · cmd/q</text>
+
+  <rect x="300" y="920" width="1440" height="220" rx="16" fill="#FFFBEB" stroke="#D6A844" stroke-width="1.5" />
+  <path d="M 300 960 H 1740" stroke="#E7C873" stroke-width="1" />
+  <text class="container-title" x="324" y="947" fill="#713F12">Durable and shared state</text>
+  <text class="page-subtitle" x="565" y="947" fill="#92400E">Workspace Memory and Global Library elect one leader across local q processes</text>
+
+  <text class="section-title" x="30" y="190">Clients and operators</text>
+  <text class="section-title" x="1260" y="190">Local child processes and integrations</text>
+
+  <!-- Edges are drawn before nodes so boxes remain visually dominant. -->
+  <g aria-label="Runtime flows">
+    <path d="M 250 260 H 280 V 248 H 330" class="flow" />
+    <path d="M 250 242 H 275 V 185 H 995 V 205" class="flow" />
+    <path d="M 250 390 H 275 V 315 H 685 V 290" class="flow" />
+    <path d="M 140 560 V 610" class="flow" />
+    <path d="M 250 660 H 330" class="reuse-flow" />
+
+    <path d="M 440 290 V 330" class="flow" />
+    <path d="M 685 290 V 312 H 590 V 330" class="flow" />
+    <path d="M 995 290 V 310 H 670 V 330" class="flow" />
+    <path d="M 710 380 H 750" class="blue-flow" />
+    <path d="M 450 430 V 475" class="flow" />
+    <path d="M 555 430 V 455 H 810 V 475" class="flow" />
+    <path d="M 625 430 V 445 H 1055 V 475" class="flow" />
+    <path d="M 350 430 H 315 V 660 H 330" class="flow" />
+    <path d="M 680 510 H 720 V 450 H 900 V 430" class="purple-flow" />
+    <text class="edge-label" x="737" y="443" fill="#7E22CE">role calls</text>
+    <path d="M 505 580 V 625" class="purple-flow" />
+
+    <path d="M 1170 380 H 1225 V 265 H 1260" class="orange-flow" />
+    <path d="M 1500 310 V 350" class="orange-flow" />
+    <path d="M 685 205 V 185 H 1225 V 625 H 1260" class="orange-flow" />
+    <text class="edge-label" x="1110" y="177" fill="#C2410C">remote ACP sessions</text>
+    <path d="M 920 527 H 1210 V 835 H 1260" class="orange-flow" />
+
+    <path d="M 405 695 V 730" class="green-flow" />
+    <path d="M 575 695 V 730" class="green-flow" />
+    <path d="M 745 695 V 730" class="green-flow" />
+    <path d="M 915 695 V 730" class="green-flow" />
+    <path d="M 1090 695 V 730" class="green-flow" />
+    <path d="M 405 835 V 862 H 1235 V 835 H 1260" class="orange-flow" />
+    <path d="M 575 835 V 865 H 1215 V 520 H 1260" class="orange-flow" />
+    <path d="M 745 835 V 850 H 1235 V 730 H 1260" class="orange-flow" />
+  </g>
+
+  <g aria-label="Durable state flows">
+    <path d="M 340 430 H 315 V 900 H 480 V 970" class="state-flow" />
+    <text class="edge-label" x="335" y="896" fill="#92400E">JSON state</text>
+    <path d="M 380 430 H 305 V 908 H 760 V 970" class="state-flow" />
+    <text class="edge-label" x="620" y="904" fill="#92400E">durable events</text>
+    <path d="M 830 695 V 910 H 815 V 970" class="state-flow" />
+    <text class="edge-label" x="837" y="898" fill="#92400E">archive search</text>
+    <path d="M 1055 580 V 910 H 1165 V 970" class="state-flow" />
+    <text class="edge-label" x="1066" y="900" fill="#92400E">register propositions</text>
+    <path d="M 915 835 V 900 H 1165 V 970" class="state-flow" />
+    <text class="edge-label" x="938" y="892" fill="#92400E">skills / retrieval</text>
+    <path d="M 1090 835 V 900 H 1535 V 970" class="state-flow" />
+    <text class="edge-label" x="1365" y="892" fill="#92400E">immutable artifacts</text>
+  </g>
+
+  <!-- Clients and operators -->
+  <g filter="url(#shadow)">
+    <rect x="30" y="220" width="220" height="80" rx="12" fill="#EFF6FF" stroke="#3B82F6" stroke-width="1.5" />
+    <text text-anchor="middle" x="140" y="253" class="box-title">Terminal user</text>
+    <text text-anchor="middle" x="140" y="278" class="box-sub">interactive and standalone CLI</text>
+  </g>
+  <g filter="url(#shadow)">
+    <rect x="30" y="350" width="220" height="80" rx="12" fill="#EFF6FF" stroke="#3B82F6" stroke-width="1.5" />
+    <text text-anchor="middle" x="140" y="383" class="box-title">ACP client</text>
+    <text text-anchor="middle" x="140" y="408" class="box-sub">stdin/stdout protocol</text>
+  </g>
+  <g filter="url(#shadow)">
+    <rect x="30" y="480" width="220" height="80" rx="12" fill="#EFF6FF" stroke="#3B82F6" stroke-width="1.5" />
+    <text text-anchor="middle" x="140" y="513" class="box-title">MCP client</text>
+    <text text-anchor="middle" x="140" y="538" class="box-sub">workspace tool consumer</text>
+  </g>
+  <g filter="url(#shadow)">
+    <rect x="30" y="610" width="220" height="100" rx="12" fill="#ECFDF5" stroke="#059669" stroke-width="1.5" />
+    <text text-anchor="middle" x="140" y="642" class="box-title">q-mcp process</text>
+    <text text-anchor="middle" x="140" y="667" class="box-sub">stdio MCP server</text>
+    <text text-anchor="middle" x="140" y="688" class="box-sub">dedicated tools stack</text>
+  </g>
+
+  <!-- q surfaces -->
+  <g filter="url(#shadow)">
+    <rect x="330" y="205" width="220" height="85" rx="12" fill="#F5F3FF" stroke="#7C3AED" stroke-width="1.5" />
+    <text text-anchor="middle" x="440" y="240" class="box-title">Bubble Tea TUI</text>
+    <text text-anchor="middle" x="440" y="267" class="box-package" fill="#6D28D9">app</text>
+  </g>
+  <g filter="url(#shadow)">
+    <rect x="575" y="205" width="220" height="85" rx="12" fill="#F5F3FF" stroke="#7C3AED" stroke-width="1.5" />
+    <text text-anchor="middle" x="685" y="240" class="box-title">ACP adapters</text>
+    <text text-anchor="middle" x="685" y="267" class="box-package" fill="#6D28D9">agent server + remote client</text>
+  </g>
+  <g filter="url(#shadow)">
+    <rect x="820" y="205" width="350" height="85" rx="12" fill="#F5F3FF" stroke="#7C3AED" stroke-width="1.5" />
+    <text text-anchor="middle" x="995" y="240" class="box-title">Standalone commands</text>
+    <text text-anchor="middle" x="995" y="267" class="box-package" fill="#6D28D9">gateway · library · memory · commit · config</text>
+  </g>
+
+  <!-- Application and model layer -->
+  <g filter="url(#shadow)">
+    <rect x="330" y="330" width="380" height="100" rx="12" fill="#E0F2FE" stroke="#0284C7" stroke-width="1.5" />
+    <text text-anchor="middle" x="520" y="359" class="box-title">Application and session coordinator</text>
+    <text text-anchor="middle" x="520" y="383" class="box-package" fill="#0369A1">app · workspace</text>
+    <text text-anchor="middle" x="520" y="408" class="box-sub">chat lifecycle · screens · locks · checkpoints</text>
+  </g>
+  <g filter="url(#shadow)">
+    <rect x="750" y="330" width="420" height="100" rx="12" fill="#E0F2FE" stroke="#0284C7" stroke-width="1.5" />
+    <text text-anchor="middle" x="960" y="359" class="box-title">LLM client and model routing</text>
+    <text text-anchor="middle" x="960" y="383" class="box-package" fill="#0369A1">client · config · provider roles</text>
+    <text text-anchor="middle" x="960" y="408" class="box-sub">chat / griller / planner / coder / thinker / librarian</text>
+  </g>
+
+  <!-- Workflows -->
+  <g filter="url(#shadow)">
+    <rect x="330" y="475" width="350" height="105" rx="12" fill="#FAF5FF" stroke="#9333EA" stroke-width="1.5" />
+    <text text-anchor="middle" x="505" y="505" class="box-title">Plan orchestration</text>
+    <text text-anchor="middle" x="505" y="529" class="box-package" fill="#7E22CE">subagent</text>
+    <text text-anchor="middle" x="505" y="554" class="box-sub">Griller → Scout → Planner → Coder → review</text>
+  </g>
+  <g filter="url(#shadow)">
+    <rect x="700" y="475" width="220" height="105" rx="12" fill="#FAF5FF" stroke="#9333EA" stroke-width="1.5" />
+    <text text-anchor="middle" x="810" y="505" class="box-title">Repository review</text>
+    <text text-anchor="middle" x="810" y="529" class="box-package" fill="#7E22CE">changes · commitagent</text>
+    <text text-anchor="middle" x="810" y="554" class="box-sub">diff browser · commits</text>
+  </g>
+  <g filter="url(#shadow)">
+    <rect x="940" y="475" width="230" height="105" rx="12" fill="#FAF5FF" stroke="#9333EA" stroke-width="1.5" />
+    <text text-anchor="middle" x="1055" y="505" class="box-title">Learning pipeline</text>
+    <text text-anchor="middle" x="1055" y="529" class="box-package" fill="#7E22CE">thinker</text>
+    <text text-anchor="middle" x="1055" y="554" class="box-sub">segments → propositions</text>
+  </g>
+
+  <!-- Tool runtime -->
+  <g filter="url(#shadow)">
+    <rect x="330" y="625" width="840" height="70" rx="11" fill="#D1FAE5" stroke="#059669" stroke-width="1.5" />
+    <text text-anchor="middle" x="750" y="654" class="box-title">Root-scoped tool runtime <tspan class="box-package" fill="#047857">· tools</tspan></text>
+    <text text-anchor="middle" x="750" y="680" class="box-sub">in-process MCP · capture boundary · role-scoped external routes</text>
+  </g>
+  <g filter="url(#shadow)">
+    <rect x="330" y="730" width="150" height="105" rx="10" fill="#ECFDF5" stroke="#10B981" stroke-width="1.3" />
+    <text text-anchor="middle" x="405" y="760" class="small-title">Workspace I/O</text>
+    <text text-anchor="middle" x="405" y="783" class="small-package">builtin</text>
+    <text text-anchor="middle" x="405" y="808" class="small-sub">FS · edit · commands</text>
+  </g>
+  <g filter="url(#shadow)">
+    <rect x="500" y="730" width="150" height="105" rx="10" fill="#ECFDF5" stroke="#10B981" stroke-width="1.3" />
+    <text text-anchor="middle" x="575" y="760" class="small-title">External MCP</text>
+    <text text-anchor="middle" x="575" y="783" class="small-package">tools</text>
+    <text text-anchor="middle" x="575" y="808" class="small-sub">namespaced routes</text>
+  </g>
+  <g filter="url(#shadow)">
+    <rect x="670" y="730" width="150" height="105" rx="10" fill="#ECFDF5" stroke="#10B981" stroke-width="1.3" />
+    <text text-anchor="middle" x="745" y="760" class="small-title">Read-only LSP</text>
+    <text text-anchor="middle" x="745" y="783" class="small-package">lsp</text>
+    <text text-anchor="middle" x="745" y="808" class="small-sub">query tools</text>
+  </g>
+  <g filter="url(#shadow)">
+    <rect x="840" y="730" width="150" height="105" rx="10" fill="#ECFDF5" stroke="#10B981" stroke-width="1.3" />
+    <text text-anchor="middle" x="915" y="760" class="small-title">Skills and memory</text>
+    <text text-anchor="middle" x="915" y="783" class="small-package">agentskills</text>
+    <text text-anchor="middle" x="915" y="808" class="small-sub">Library client</text>
+  </g>
+  <g filter="url(#shadow)">
+    <rect x="1010" y="730" width="160" height="105" rx="10" fill="#ECFDF5" stroke="#10B981" stroke-width="1.3" />
+    <text text-anchor="middle" x="1090" y="760" class="small-title">Bounded results</text>
+    <text text-anchor="middle" x="1090" y="783" class="small-package">loom</text>
+    <text text-anchor="middle" x="1090" y="808" class="small-sub">capture · inspect · eval</text>
+  </g>
+
+  <!-- Child processes and external integrations -->
+  <g filter="url(#shadow)">
+    <rect x="1260" y="220" width="480" height="90" rx="12" fill="#FFF7ED" stroke="#EA580C" stroke-width="1.5" />
+    <text text-anchor="middle" x="1500" y="250" class="box-title">Managed Gateway child</text>
+    <text text-anchor="middle" x="1500" y="273" class="box-package" fill="#C2410C">providerhost</text>
+    <text text-anchor="middle" x="1500" y="296" class="box-sub">private loopback OpenAI-compatible endpoint</text>
+  </g>
+  <g filter="url(#shadow)">
+    <rect x="1260" y="350" width="480" height="80" rx="12" fill="#FFF7ED" stroke="#EA580C" stroke-width="1.5" />
+    <text text-anchor="middle" x="1500" y="381" class="box-title">Model providers</text>
+    <text text-anchor="middle" x="1500" y="406" class="box-sub">OpenAI-compatible · OpenRouter · xAI · Anthropic · Codex App Server</text>
+  </g>
+  <g filter="url(#shadow)">
+    <rect x="1260" y="480" width="480" height="80" rx="12" fill="#FFF7ED" stroke="#EA580C" stroke-width="1.5" />
+    <text text-anchor="middle" x="1500" y="511" class="box-title">External MCP servers</text>
+    <text text-anchor="middle" x="1500" y="536" class="box-sub">stdio or Streamable HTTP</text>
+  </g>
+  <g filter="url(#shadow)">
+    <rect x="1260" y="585" width="480" height="80" rx="12" fill="#FFF7ED" stroke="#EA580C" stroke-width="1.5" />
+    <text text-anchor="middle" x="1500" y="616" class="box-title">External ACP agents</text>
+    <text text-anchor="middle" x="1500" y="641" class="box-sub">configured agent processes · Search role</text>
+  </g>
+  <g filter="url(#shadow)">
+    <rect x="1260" y="690" width="480" height="80" rx="12" fill="#FFF7ED" stroke="#EA580C" stroke-width="1.5" />
+    <text text-anchor="middle" x="1500" y="721" class="box-title">Language servers</text>
+    <text text-anchor="middle" x="1500" y="746" class="box-sub">diagnostics · hover · symbols · references</text>
+  </g>
+  <g filter="url(#shadow)">
+    <rect x="1260" y="795" width="480" height="80" rx="12" fill="#FFF7ED" stroke="#EA580C" stroke-width="1.5" />
+    <text text-anchor="middle" x="1500" y="826" class="box-title">Git workspace</text>
+    <text text-anchor="middle" x="1500" y="851" class="box-sub">repository files · index · working tree · shell</text>
+  </g>
+
+  <!-- Durable services and stores -->
+  <g filter="url(#shadow)">
+    <rect x="330" y="970" width="300" height="120" rx="11" fill="#FEF3C7" stroke="#D97706" stroke-width="1.4" />
+    <text text-anchor="middle" x="480" y="998" class="state-title">Workspace session state</text>
+    <text text-anchor="middle" x="480" y="1021" class="state-package">workspace</text>
+    <text text-anchor="middle" x="480" y="1046" class="state-sub">.q/sessions · plan checkpoints</text>
+    <text text-anchor="middle" x="480" y="1067" class="state-sub">model / LSP / learning config</text>
+  </g>
+  <g filter="url(#shadow)">
+    <rect x="665" y="970" width="300" height="120" rx="11" fill="#FEF3C7" stroke="#D97706" stroke-width="1.4" />
+    <text text-anchor="middle" x="815" y="998" class="state-title">Workspace Memory</text>
+    <text text-anchor="middle" x="815" y="1021" class="state-package">workspacememory · sessionstore</text>
+    <text text-anchor="middle" x="815" y="1046" class="state-sub">.q/data · .q/index</text>
+    <text text-anchor="middle" x="815" y="1067" class="state-sub">records · BM25 / HNSW</text>
+  </g>
+  <g filter="url(#shadow)">
+    <rect x="1000" y="970" width="330" height="120" rx="11" fill="#FEF3C7" stroke="#D97706" stroke-width="1.4" />
+    <text text-anchor="middle" x="1165" y="998" class="state-title">Global Library</text>
+    <text text-anchor="middle" x="1165" y="1021" class="state-package">library</text>
+    <text text-anchor="middle" x="1165" y="1046" class="state-sub">~/.q · skills · propositions</text>
+    <text text-anchor="middle" x="1165" y="1067" class="state-sub">SQLite queue · BM25 / HNSW</text>
+  </g>
+  <g filter="url(#shadow)">
+    <rect x="1365" y="970" width="340" height="120" rx="11" fill="#FEF3C7" stroke="#D97706" stroke-width="1.4" />
+    <text text-anchor="middle" x="1535" y="998" class="state-title">Loom artifact store</text>
+    <text text-anchor="middle" x="1535" y="1021" class="state-package">loom</text>
+    <text text-anchor="middle" x="1535" y="1046" class="state-sub">.q/loom · content-addressed results</text>
+    <text text-anchor="middle" x="1535" y="1067" class="state-sub">leases · garbage collection</text>
+  </g>
+</svg>
