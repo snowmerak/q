@@ -346,9 +346,10 @@ ACP mode shares q's sessions, workspace tools, planning, external Search, and
 commit workflow. The plan flags override persisted settings for only that ACP
 process; explicit values such as `--auto-approve=false` are also supported.
 `--autonomous` enables both plan flags, while an explicitly supplied individual
-flag takes precedence. `/plan` requires form elicitation unless both interactions
-are automated. `/commit` continues to require form elicitation because Git
-changes require explicit approval.
+flag takes precedence. `/plan` and `/commit` use form elicitation when available.
+Otherwise, plan and commit approvals use numbered actions, while planning and
+agent questions consume the next message as a free-form answer. Git changes and
+plan execution still require explicit approval.
 
 The TUI and ACP both expose `/auto-approve`, `/auto-resolve`, and `/autonomous`
 with `on`, `off`, and `status` actions. A bare command is equivalent to `status`;

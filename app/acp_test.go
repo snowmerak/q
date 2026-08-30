@@ -927,12 +927,17 @@ func TestACPAgentRegeneratesThenCommitsAndPushes(t *testing.T) {
 	}
 }
 
-func TestACPAgentCommitRequiresFormElicitation(t *testing.T) {
-	agent, workspaceStore, connection := testACPAgent(t, &fakeClient{}, &fakeAgentTools{})
-	called := false
+func TestACPAgentCommitFallbackRepromptsRegeneratesAndPushes(t *testing.T) {
+	configuredClient := &fakeClient{}
+	agent, workspaceStore, connection := testACPAgent(t, configuredClient, &fakeAgentTools{})
+	commitSession := &fakeACPCommitSession{
+		proposals: [][]commitagent.Proposal{
+			{{Type: "chore", Summary: "first proposal", Files: []string{"old.go"}}},
+			{{Type: "feat", Scope: "acp", Summary: "fallback approval", Files: []string{"app/acp_commit.go"}}},
+		},
+	}
 	agent.commitSession = func(context.Context, commitagent.ProgressFunc) (acpCommitSession, error) {
-		called = true
-		return nil, errors.New("must not prepare")
+		return commitSession, nil
 	}
 	sessionID := openTestACPSession(t, agent, workspaceStore.Root)
 	response, err := agent.Prompt(t.Context(), acp.PromptRequest{
@@ -941,14 +946,207 @@ func TestACPAgentCommitRequiresFormElicitation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if response.StopReason != acp.StopReasonEndTurn || commitSession.closed != 0 {
+		t.Fatalf("initial response = %#v, session = %#v", response, commitSession)
+	}
+	if _, err := agent.Prompt(t.Context(), acp.PromptRequest{
+		SessionId: sessionID, Prompt: []acp.ContentBlock{acp.TextBlock("yes please")},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if commitSession.regenerated != 0 || commitSession.committed != 0 || commitSession.closed != 0 {
+		t.Fatalf("invalid input changed commit state: %#v", commitSession)
+	}
+	for _, input := range []string{"", "/learn off"} {
+		if _, err := agent.Prompt(t.Context(), acp.PromptRequest{
+			SessionId: sessionID, Prompt: []acp.ContentBlock{acp.TextBlock(input)},
+		}); err != nil {
+			t.Fatalf("invalid input %q: %v", input, err)
+		}
+	}
+	if commitSession.regenerated != 0 || commitSession.committed != 0 || commitSession.closed != 0 {
+		t.Fatalf("empty or slash input escaped commit fallback: %#v", commitSession)
+	}
+	if _, err := agent.Prompt(t.Context(), acp.PromptRequest{
+		SessionId: sessionID, Prompt: []acp.ContentBlock{acp.TextBlock("3")},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if commitSession.regenerated != 1 || commitSession.committed != 0 || commitSession.closed != 0 {
+		t.Fatalf("revise input state = %#v", commitSession)
+	}
+	if _, err := agent.Prompt(t.Context(), acp.PromptRequest{
+		SessionId: sessionID, Prompt: []acp.ContentBlock{acp.TextBlock("approve-and-push")},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if commitSession.committed != 1 || commitSession.pushed != 1 || commitSession.closed != 1 {
+		t.Fatalf("approval input state = %#v", commitSession)
+	}
+	if len(configuredClient.requests) != 0 {
+		t.Fatalf("commit fallback sent %d requests to the chat model", len(configuredClient.requests))
+	}
+
 	var output string
 	for _, notification := range connection.snapshot() {
 		if update := notification.Update.AgentMessageChunk; update != nil && update.Content.Text != nil {
 			output += update.Content.Text.Text
 		}
 	}
-	if response.StopReason != acp.StopReasonEndTurn || called || !strings.Contains(output, "form elicitation") {
-		t.Fatalf("response = %#v, called = %v, output = %q", response, called, output)
+	if !strings.Contains(output, "1. approve") || !strings.Contains(output, "2. approve-and-push") ||
+		!strings.Contains(output, "Invalid commit action") ||
+		!strings.Contains(output, "feat(acp): fallback approval") ||
+		!strings.Contains(output, "Push completed") {
+		t.Fatalf("commit fallback output = %q", output)
+	}
+	saved, err := activeACPWorkspaceStore(t, agent, sessionID).Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(saved.Transcript) != 12 || saved.Transcript[0].Content != "/commit" ||
+		saved.Transcript[2].Content != "yes please" || saved.Transcript[4].Content != "" ||
+		saved.Transcript[6].Content != "/learn off" || saved.Transcript[8].Content != "3" ||
+		saved.Transcript[10].Content != "approve-and-push" {
+		t.Fatalf("commit fallback transcript = %#v", saved.Transcript)
+	}
+	if len(connection.elicitationSnapshot()) != 0 {
+		t.Fatalf("fallback unexpectedly used form elicitation: %#v", connection.elicitationSnapshot())
+	}
+}
+
+func TestACPAgentCommitFallbackCancelsAndClosesWithSession(t *testing.T) {
+	t.Run("cancel", func(t *testing.T) {
+		agent, workspaceStore, connection := testACPAgent(t, &fakeClient{}, &fakeAgentTools{})
+		commitSession := &fakeACPCommitSession{proposals: [][]commitagent.Proposal{{{
+			Type: "chore", Summary: "cancel me", Files: []string{"cancel.go"},
+		}}}}
+		agent.commitSession = func(context.Context, commitagent.ProgressFunc) (acpCommitSession, error) {
+			return commitSession, nil
+		}
+		sessionID := openTestACPSession(t, agent, workspaceStore.Root)
+		if _, err := agent.Prompt(t.Context(), acp.PromptRequest{
+			SessionId: sessionID, Prompt: []acp.ContentBlock{acp.TextBlock("/commit")},
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := agent.Prompt(t.Context(), acp.PromptRequest{
+			SessionId: sessionID, Prompt: []acp.ContentBlock{acp.TextBlock("4")},
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if commitSession.committed != 0 || commitSession.pushed != 0 || commitSession.closed != 1 {
+			t.Fatalf("cancel state = %#v", commitSession)
+		}
+		var output string
+		for _, notification := range connection.snapshot() {
+			if update := notification.Update.AgentMessageChunk; update != nil && update.Content.Text != nil {
+				output += update.Content.Text.Text
+			}
+		}
+		if !strings.Contains(output, "Commit cancelled") {
+			t.Fatalf("cancel output = %q", output)
+		}
+	})
+
+	t.Run("session close", func(t *testing.T) {
+		agent, workspaceStore, _ := testACPAgent(t, &fakeClient{}, &fakeAgentTools{})
+		commitSession := &fakeACPCommitSession{proposals: [][]commitagent.Proposal{{{
+			Type: "chore", Summary: "close me", Files: []string{"close.go"},
+		}}}}
+		agent.commitSession = func(context.Context, commitagent.ProgressFunc) (acpCommitSession, error) {
+			return commitSession, nil
+		}
+		sessionID := openTestACPSession(t, agent, workspaceStore.Root)
+		if _, err := agent.Prompt(t.Context(), acp.PromptRequest{
+			SessionId: sessionID, Prompt: []acp.ContentBlock{acp.TextBlock("/commit")},
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := agent.CloseSession(t.Context(), acp.CloseSessionRequest{SessionId: sessionID}); err != nil {
+			t.Fatal(err)
+		}
+		if commitSession.closed != 1 {
+			t.Fatalf("session close did not release pending commit: %#v", commitSession)
+		}
+	})
+}
+
+func TestACPAgentCommitFallbackIsScopedToSession(t *testing.T) {
+	agent, workspaceStore, _ := testACPAgent(t, &fakeClient{}, &fakeAgentTools{})
+	commitSessions := []*fakeACPCommitSession{
+		{proposals: [][]commitagent.Proposal{{{Type: "feat", Summary: "first session", Files: []string{"first.go"}}}}},
+		{proposals: [][]commitagent.Proposal{{{Type: "feat", Summary: "second session", Files: []string{"second.go"}}}}},
+	}
+	nextSession := 0
+	agent.commitSession = func(context.Context, commitagent.ProgressFunc) (acpCommitSession, error) {
+		session := commitSessions[nextSession]
+		nextSession++
+		return session, nil
+	}
+	firstID := openTestACPSession(t, agent, workspaceStore.Root)
+	secondID := openTestACPSession(t, agent, workspaceStore.Root)
+	for _, sessionID := range []acp.SessionId{firstID, secondID} {
+		if _, err := agent.Prompt(t.Context(), acp.PromptRequest{
+			SessionId: sessionID, Prompt: []acp.ContentBlock{acp.TextBlock("/commit")},
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := agent.Prompt(t.Context(), acp.PromptRequest{
+		SessionId: firstID, Prompt: []acp.ContentBlock{acp.TextBlock("approve")},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if commitSessions[0].committed != 1 || commitSessions[0].closed != 1 ||
+		commitSessions[1].committed != 0 || commitSessions[1].closed != 0 {
+		t.Fatalf("first approval crossed session boundary: first=%#v second=%#v", commitSessions[0], commitSessions[1])
+	}
+	if _, err := agent.Prompt(t.Context(), acp.PromptRequest{
+		SessionId: secondID, Prompt: []acp.ContentBlock{acp.TextBlock("cancel")},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if commitSessions[1].committed != 0 || commitSessions[1].closed != 1 {
+		t.Fatalf("second cancellation state = %#v", commitSessions[1])
+	}
+}
+
+func TestParseACPCommitFallbackAction(t *testing.T) {
+	tests := map[string]string{
+		"1": "commit", "approve": "commit", "commit": "commit", "1. approve": "commit",
+		"2": "commit_push", "approve-and-push": "commit_push", "push": "commit_push",
+		"3": "regenerate", "revise": "regenerate", "regenerate": "regenerate",
+		"4": "cancel", "cancel": "cancel",
+	}
+	for input, want := range tests {
+		got, ok := parseACPCommitFallbackAction(input)
+		if !ok || got != want {
+			t.Errorf("parseACPCommitFallbackAction(%q) = %q, %v; want %q, true", input, got, ok, want)
+		}
+	}
+	for _, input := range []string{"", "yes", "approve please", "5", "/commit"} {
+		if got, ok := parseACPCommitFallbackAction(input); ok {
+			t.Errorf("parseACPCommitFallbackAction(%q) = %q, true; want invalid", input, got)
+		}
+	}
+}
+
+func TestParseACPPlanApprovalAction(t *testing.T) {
+	tests := map[string]string{
+		"1": "approve", "approve": "approve", "1. approve": "approve",
+		"2": "revise", "revise": "revise", "2. revise": "revise",
+		"3": "cancel", "cancel": "cancel", "3. cancel": "cancel",
+	}
+	for input, want := range tests {
+		got, ok := parseACPPlanApprovalAction(input)
+		if !ok || got != want {
+			t.Errorf("parseACPPlanApprovalAction(%q) = %q, %v; want %q, true", input, got, ok, want)
+		}
+	}
+	for _, input := range []string{"", "yes", "approve please", "4", "/plan"} {
+		if got, ok := parseACPPlanApprovalAction(input); ok {
+			t.Errorf("parseACPPlanApprovalAction(%q) = %q, true; want invalid", input, got)
+		}
 	}
 }
 
@@ -1181,19 +1379,86 @@ func TestACPAgentCancelsPlanWhenElicitationIsCancelled(t *testing.T) {
 	assertACPTraceLifecycles(t, connection.snapshot(), 1, 1)
 }
 
-func TestACPAgentExplainsPlanElicitationRequirement(t *testing.T) {
-	configuredClient := &fakeClient{}
+func TestACPAgentPlanFallbackAcceptsFreeformThenRequiresExplicitApproval(t *testing.T) {
+	configuredClient := &planningClient{responses: []client.Message{
+		{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{planToolCall(subagent.AskToUserToolName, `{
+			"question":"Which persistence should be used?",
+			"context":"Choose the storage engine for the plan.",
+			"choices":[{"id":"sqlite","label":"SQLite"}]
+		}`)}},
+		{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{planToolCall(subagent.SubmitBriefToolName, `{
+			"objective":"Add persistence",
+			"conditions":["Use the user's storage choice"],
+			"acceptance_criteria":["Persistence is implemented"]
+		}`)}},
+		{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{planToolCall(subagent.SubmitPlanToolName, `{
+			"outcome":"succeeded",
+			"summary":"Add SQLite persistence",
+			"conditions":["Use SQLite"],
+			"steps":[{"title":"Add storage","description":"Implement SQLite persistence","target":{"any":[{"all":[{"kind":"paths","paths":["app/store.go"]}]}]}}],
+			"verification":["Run storage tests"]
+		}`)}},
+		{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{planToolCall(subagent.CoderCompleteToolName, `{
+			"outcome":"succeeded",
+			"summary":"Added SQLite persistence",
+			"artifacts":["app/store.go"],
+			"verification":["storage tests passed"]
+		}`)}},
+		{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{planToolCall(subagent.ReviewTaskToolName, `{
+			"decision":"next",
+			"feedback":"",
+			"fact_changes":[{"op":"add","value":"SQLite persistence added","reason":"task completed"}]
+		}`)}},
+	}}
 	agent, workspaceStore, connection := testACPAgent(t, configuredClient, &fakeAgentTools{})
+	agent.state.config.Provider.Model = "plan-model"
 	sessionID := openTestACPSession(t, agent, workspaceStore.Root)
 	response, err := agent.Prompt(t.Context(), acp.PromptRequest{
 		SessionId: sessionID,
-		Prompt:    []acp.ContentBlock{acp.TextBlock("/plan make a change")},
+		Prompt:    []acp.ContentBlock{acp.TextBlock("/plan add persistence")},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if response.StopReason != acp.StopReasonEndTurn || len(configuredClient.requests) != 0 {
+	if response.StopReason != acp.StopReasonEndTurn || len(configuredClient.requests) != 1 {
 		t.Fatalf("response = %#v, requests = %d", response, len(configuredClient.requests))
+	}
+	if _, err := agent.Prompt(t.Context(), acp.PromptRequest{
+		SessionId: sessionID,
+		Prompt:    []acp.ContentBlock{acp.TextBlock("Use SQLite with WAL mode")},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(configuredClient.requests) != 3 {
+		t.Fatalf("plan did not reach approval after freeform answer: requests = %d", len(configuredClient.requests))
+	}
+	var freeformAnswer string
+	for _, message := range configuredClient.requests[1].Messages {
+		if message.Role == client.RoleTool && message.Name == subagent.AskToUserToolName {
+			freeformAnswer = message.Content
+		}
+	}
+	if !strings.Contains(freeformAnswer, `"freeform":"Use SQLite with WAL mode"`) {
+		t.Fatalf("Griller answer = %q", freeformAnswer)
+	}
+	if _, err := agent.Prompt(t.Context(), acp.PromptRequest{
+		SessionId: sessionID,
+		Prompt:    []acp.ContentBlock{acp.TextBlock("yes please")},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(configuredClient.requests) != 3 {
+		t.Fatalf("invalid approval resumed plan: requests = %d", len(configuredClient.requests))
+	}
+	response, err = agent.Prompt(t.Context(), acp.PromptRequest{
+		SessionId: sessionID,
+		Prompt:    []acp.ContentBlock{acp.TextBlock("1")},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.StopReason != acp.StopReasonEndTurn || len(configuredClient.requests) != 5 {
+		t.Fatalf("approved fallback response = %#v, requests = %d", response, len(configuredClient.requests))
 	}
 	var output string
 	for _, notification := range connection.snapshot() {
@@ -1201,11 +1466,60 @@ func TestACPAgentExplainsPlanElicitationRequirement(t *testing.T) {
 			output += update.Content.Text.Text
 		}
 	}
-	if !strings.Contains(output, "form elicitation") {
-		t.Fatalf("unsupported client output = %q", output)
+	if !strings.Contains(output, "Which persistence should be used?") ||
+		!strings.Contains(output, "1. approve") ||
+		!strings.Contains(output, "Invalid plan action") ||
+		!strings.Contains(output, "Plan executed successfully") {
+		t.Fatalf("plan fallback output = %q", output)
 	}
-	if saved, err := activeACPWorkspaceStore(t, agent).Load(); err != nil || len(saved.Transcript) != 0 {
-		t.Fatalf("unsupported plan changed the empty session: saved=%#v err=%v", saved, err)
+	if len(connection.elicitationSnapshot()) != 0 {
+		t.Fatalf("plan fallback unexpectedly used form elicitation: %#v", connection.elicitationSnapshot())
+	}
+}
+
+func TestACPAgentPlanFallbackCancelsWithoutExecution(t *testing.T) {
+	configuredClient := &planningClient{responses: []client.Message{
+		{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{planToolCall(subagent.SubmitBriefToolName, `{
+			"objective":"Cancel safely",
+			"conditions":["Require approval"],
+			"acceptance_criteria":["No execution before approval"]
+		}`)}},
+		{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{planToolCall(subagent.SubmitPlanToolName, `{
+			"outcome":"succeeded",
+			"summary":"A cancellable plan",
+			"conditions":["Require approval"],
+			"steps":[{"title":"Wait","description":"Do nothing until approved","target":{"any":[{"all":[{"kind":"paths","paths":["app/acp.go"]}]}]}}],
+			"verification":["Confirm no execution"]
+		}`)}},
+	}}
+	agent, workspaceStore, connection := testACPAgent(t, configuredClient, &fakeAgentTools{})
+	agent.state.config.Provider.Model = "plan-model"
+	sessionID := openTestACPSession(t, agent, workspaceStore.Root)
+	if _, err := agent.Prompt(t.Context(), acp.PromptRequest{
+		SessionId: sessionID, Prompt: []acp.ContentBlock{acp.TextBlock("/plan cancel safely")},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	response, err := agent.Prompt(t.Context(), acp.PromptRequest{
+		SessionId: sessionID, Prompt: []acp.ContentBlock{acp.TextBlock("cancel")},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.StopReason != acp.StopReasonEndTurn || len(configuredClient.requests) != 2 {
+		t.Fatalf("cancel response = %#v, requests = %d", response, len(configuredClient.requests))
+	}
+	if activeACPRuntime(t, agent, sessionID).pendingQuestion != nil {
+		t.Fatal("cancelled plan retained its approval question")
+	}
+	var output string
+	for _, notification := range connection.snapshot() {
+		if update := notification.Update.AgentMessageChunk; update != nil && update.Content.Text != nil {
+			output += update.Content.Text.Text
+		}
+	}
+	if !strings.Contains(output, "Planning canceled") {
+		t.Fatalf("cancel output = %q", output)
 	}
 }
 
@@ -1747,5 +2061,89 @@ func TestACPAgentUsesClientElicitationForQuestions(t *testing.T) {
 	}
 	if !strings.Contains(answer, `"selected_choice_id":"green"`) {
 		t.Fatalf("ask_to_user result = %q", answer)
+	}
+}
+
+func TestACPAgentQuestionFallbackPassesNextMessageAsFreeform(t *testing.T) {
+	configuredClient := &askingClient{}
+	agent, workspaceStore, connection := testACPAgent(t, configuredClient, &fakeAgentTools{})
+	sessionID := openTestACPSession(t, agent, workspaceStore.Root)
+	response, err := agent.Prompt(t.Context(), acp.PromptRequest{
+		SessionId: sessionID,
+		Prompt:    []acp.ContentBlock{acp.TextBlock("choose a color")},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.StopReason != acp.StopReasonEndTurn || len(configuredClient.requests) != 1 {
+		t.Fatalf("question response = %#v, requests = %d", response, len(configuredClient.requests))
+	}
+	response, err = agent.Prompt(t.Context(), acp.PromptRequest{
+		SessionId: sessionID,
+		Prompt:    []acp.ContentBlock{acp.TextBlock("green")},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.StopReason != acp.StopReasonEndTurn || len(configuredClient.requests) != 3 {
+		t.Fatalf("resumed response = %#v, requests = %d", response, len(configuredClient.requests))
+	}
+	var answer string
+	for _, message := range configuredClient.requests[1].Messages {
+		if message.Role == client.RoleTool && message.ToolCallID == "ask-1" {
+			answer = message.Content
+		}
+	}
+	if !strings.Contains(answer, `"freeform":"green"`) || strings.Contains(answer, "selected_choice_id") {
+		t.Fatalf("fallback ask_to_user result = %q", answer)
+	}
+	var output string
+	for _, notification := range connection.snapshot() {
+		if update := notification.Update.AgentMessageChunk; update != nil && update.Content.Text != nil {
+			output += update.Content.Text.Text
+		}
+	}
+	if !strings.Contains(output, "Which color?") || !strings.Contains(output, "Reply with your answer") ||
+		!strings.Contains(output, "Selection recorded") {
+		t.Fatalf("question fallback output = %q", output)
+	}
+	if len(connection.elicitationSnapshot()) != 0 {
+		t.Fatalf("question fallback unexpectedly used form elicitation: %#v", connection.elicitationSnapshot())
+	}
+}
+
+func TestACPAgentCloseCancelsPendingQuestion(t *testing.T) {
+	configuredClient := &askingClient{}
+	agent, workspaceStore, _ := testACPAgent(t, configuredClient, &fakeAgentTools{})
+	sessionID := openTestACPSession(t, agent, workspaceStore.Root)
+	if _, err := agent.Prompt(t.Context(), acp.PromptRequest{
+		SessionId: sessionID,
+		Prompt:    []acp.ContentBlock{acp.TextBlock("choose a color")},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	runtime := activeACPRuntime(t, agent, sessionID)
+	savedStore := activeACPWorkspaceStore(t, agent, sessionID)
+	if runtime.pendingQuestion == nil {
+		t.Fatal("question fallback was not retained")
+	}
+	if _, err := agent.CloseSession(t.Context(), acp.CloseSessionRequest{SessionId: sessionID}); err != nil {
+		t.Fatal(err)
+	}
+	if runtime.pendingQuestion != nil {
+		t.Fatal("session close retained pending question")
+	}
+	saved, err := savedStore.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var completed bool
+	for _, message := range saved.Context {
+		if message.Role == client.RoleTool && message.ToolCallID == "ask-1" && strings.Contains(message.Content, "interrupted") {
+			completed = true
+		}
+	}
+	if !completed {
+		t.Fatalf("closed question context was left incomplete: %#v", saved.Context)
 	}
 }

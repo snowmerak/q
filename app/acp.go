@@ -259,6 +259,8 @@ type acpAgent struct {
 	sessionMCPSignature [sha256.Size]byte
 	sessionMCPScoped    *qtools.ExternalScope
 	commitSession       acpCommitSessionFactory
+	pendingCommit       *acpPendingCommit
+	pendingQuestion     *acpPendingQuestion
 	promptLocked        func()
 }
 
@@ -1187,9 +1189,6 @@ func (a *acpAgent) prompt(ctx context.Context, request acp.PromptRequest) (acp.P
 		return acp.PromptResponse{}, err
 	}
 	text := userMessage.TextContent()
-	if strings.TrimSpace(text) == "" && !hasNonText {
-		return acp.PromptResponse{}, errors.New("prompt contains no supported content")
-	}
 	if !hasNonText && isWorkspaceLearningControl(text) {
 		response, err := a.coordinator().runACPWorkspaceLearningControl(ctx, a, strings.TrimSpace(text))
 		response.UserMessageId = request.MessageId
@@ -1234,6 +1233,17 @@ func (a *acpAgent) prompt(ctx context.Context, request acp.PromptRequest) (acp.P
 	defer restoreMCP()
 	if err := a.emitAvailableCommandsContext(turnContext); err != nil {
 		return acp.PromptResponse{}, err
+	}
+	if response, handled, commitErr := a.runPendingACPCommit(turnContext, userMessage, hasNonText); handled {
+		response.UserMessageId = request.MessageId
+		return response, commitErr
+	}
+	if response, handled, questionErr := a.runPendingACPQuestion(turnContext, userMessage, hasNonText); handled {
+		response.UserMessageId = request.MessageId
+		return response, questionErr
+	}
+	if strings.TrimSpace(text) == "" && !hasNonText {
+		return acp.PromptResponse{}, errors.New("prompt contains no supported content")
 	}
 	if !hasNonText {
 		if response, handled, commandErr := a.runACPCommand(turnContext, text); handled {
@@ -1290,8 +1300,29 @@ func (a *acpAgent) runACPWorkspaceLearningControl(
 	if next := target.applyPendingLearningLocked(); next != nil {
 		target.launchLearning(next)
 	}
+	if target.pendingCommit != nil || target.pendingQuestion != nil {
+		restoreMCP, err := target.enterSessionMCP(turnContext)
+		if err != nil {
+			return acp.PromptResponse{}, err
+		}
+		defer restoreMCP()
+	}
 	if err := target.emitAvailableCommandsContext(turnContext); err != nil {
 		return acp.PromptResponse{}, err
+	}
+	if response, handled, commitErr := target.runPendingACPCommit(
+		turnContext,
+		client.Message{Role: client.RoleUser, Content: command},
+		false,
+	); handled {
+		return response, commitErr
+	}
+	if response, handled, questionErr := target.runPendingACPQuestion(
+		turnContext,
+		client.Message{Role: client.RoleUser, Content: command},
+		false,
+	); handled {
+		return response, questionErr
 	}
 
 	output := ""
@@ -1447,9 +1478,16 @@ func (a *acpAgent) runAgentTurn(ctx context.Context, history []client.Message) (
 	if err != nil {
 		return acp.PromptResponse{}, err
 	}
+	_, capabilities := a.connectionState()
+	persistent := capabilities.Elicitation == nil || capabilities.Elicitation.Form == nil
+	workflowCtx := ctx
+	cancelWorkflow := func() {}
+	if persistent {
+		workflowCtx, cancelWorkflow = context.WithCancel(a.state.ctx)
+	}
 	events := make(chan agentEvent)
 	go streamAgentLoop(
-		ctx,
+		workflowCtx,
 		a.state.client,
 		toolRuntime,
 		a.state.activeModel(),
@@ -1465,6 +1503,29 @@ func (a *acpAgent) runAgentTurn(ctx context.Context, history []client.Message) (
 	)
 
 	streamedResponse := ""
+	return a.continueACPAgentTurn(ctx, workflowCtx, cancelWorkflow, persistent, events, &streamedResponse)
+}
+
+func (a *acpAgent) continueACPAgentTurn(
+	ctx context.Context,
+	workflowCtx context.Context,
+	cancelWorkflow context.CancelFunc,
+	persistent bool,
+	events <-chan agentEvent,
+	streamedResponse *string,
+) (response acp.PromptResponse, runErr error) {
+	suspended := false
+	stopPromptCancel := func() bool { return true }
+	if persistent {
+		stopPromptCancel = context.AfterFunc(ctx, cancelWorkflow)
+	}
+	defer func() {
+		stopPromptCancel()
+		if persistent && !suspended {
+			cancelWorkflow()
+		}
+	}()
+
 	for event := range events {
 		if event.taskStarted != nil {
 			a.state.activeTask = event.taskStarted
@@ -1495,14 +1556,14 @@ func (a *acpAgent) runAgentTurn(ctx context.Context, history []client.Message) (
 		}
 		if event.streamDelta != nil {
 			if event.streamDelta.Start && event.streamDelta.Kind == chatStreamResponse {
-				streamedResponse = ""
+				*streamedResponse = ""
 			}
 			if event.streamDelta.Kind == chatStreamThinking {
 				if err := a.update(acp.UpdateAgentThoughtText(event.streamDelta.Content)); err != nil {
 					return acp.PromptResponse{}, err
 				}
 			} else {
-				streamedResponse += event.streamDelta.Content
+				*streamedResponse += event.streamDelta.Content
 				if err := a.update(acp.UpdateAgentMessageText(event.streamDelta.Content)); err != nil {
 					return acp.PromptResponse{}, err
 				}
@@ -1515,7 +1576,32 @@ func (a *acpAgent) runAgentTurn(ctx context.Context, history []client.Message) (
 			}
 		}
 		if event.question != nil {
-			event.answer <- a.elicitAnswer(ctx, *event.question)
+			if !persistent {
+				event.answer <- a.elicitAnswer(ctx, *event.question)
+			} else {
+				response, err := a.suspendACPQuestion(
+					ctx,
+					*event.question,
+					event.answer,
+					false,
+					false,
+					true,
+					func(nextCtx context.Context) (acp.PromptResponse, error) {
+						return a.continueACPAgentTurn(
+							nextCtx, workflowCtx, cancelWorkflow, true, events, streamedResponse,
+						)
+					},
+					func() error {
+						cancelWorkflow()
+						return nil
+					},
+				)
+				if err != nil {
+					return acp.PromptResponse{}, err
+				}
+				suspended = true
+				return response, nil
+			}
 		}
 		if event.message != nil {
 			message := *event.message
@@ -1531,10 +1617,10 @@ func (a *acpAgent) runAgentTurn(ctx context.Context, history []client.Message) (
 				if err := a.finishToolCall(message, event.toolIsError); err != nil {
 					return acp.PromptResponse{}, err
 				}
-				streamedResponse = ""
+				*streamedResponse = ""
 			} else if message.Role == client.RoleAssistant {
 				a.state.archiveMessage(message, sessionstore.StatusSucceeded, false)
-				if err := a.emitMissingAssistantText(message.Content, &streamedResponse); err != nil {
+				if err := a.emitMissingAssistantText(message.Content, streamedResponse); err != nil {
 					return acp.PromptResponse{}, err
 				}
 			}
@@ -1543,7 +1629,8 @@ func (a *acpAgent) runAgentTurn(ctx context.Context, history []client.Message) (
 			}
 		}
 		if event.err != nil {
-			if errors.Is(event.err, context.Canceled) || errors.Is(ctx.Err(), context.Canceled) {
+			if errors.Is(event.err, context.Canceled) || errors.Is(ctx.Err(), context.Canceled) ||
+				errors.Is(workflowCtx.Err(), context.Canceled) {
 				return a.finishCancelledPrompt(), nil
 			}
 			a.state.archiveFailure("ACP agent turn failed", event.err)
@@ -1551,11 +1638,11 @@ func (a *acpAgent) runAgentTurn(ctx context.Context, history []client.Message) (
 			return acp.PromptResponse{}, event.err
 		}
 		if event.response != nil {
-			return a.finishPrompt(*event.response, event.requestEstimate, &streamedResponse)
+			return a.finishPrompt(*event.response, event.requestEstimate, streamedResponse)
 		}
 	}
 
-	if errors.Is(ctx.Err(), context.Canceled) {
+	if errors.Is(ctx.Err(), context.Canceled) || errors.Is(workflowCtx.Err(), context.Canceled) {
 		return a.finishCancelledPrompt(), nil
 	}
 	return acp.PromptResponse{}, errors.New("agent turn ended without a response")
@@ -1962,7 +2049,7 @@ func (a *acpAgent) clearACPConversation(ctx context.Context) error {
 	}})
 }
 
-func (a *acpAgent) runACPPlan(ctx context.Context, objective string) (response acp.PromptResponse, runErr error) {
+func (a *acpAgent) runACPPlan(ctx context.Context, objective string) (acp.PromptResponse, error) {
 	if a.state.client == nil || a.state.toolRuntime == nil {
 		return acp.PromptResponse{}, errors.New("ACP plan requires an available model and tool runtime")
 	}
@@ -1970,13 +2057,6 @@ func (a *acpAgent) runACPPlan(ctx context.Context, objective string) (response a
 	value.Plan = a.effectivePlanConfig()
 	_, capabilities := a.connectionState()
 	supportsForm := capabilities.Elicitation != nil && capabilities.Elicitation.Form != nil
-	if !supportsForm && !(value.Plan.AutoApprove && value.Plan.AutoResolve) {
-		message := "The ACP client must support form elicitation to answer /plan questions and approve execution."
-		if err := a.updateContext(ctx, acp.UpdateAgentMessageText(message)); err != nil {
-			return acp.PromptResponse{}, err
-		}
-		return acp.PromptResponse{StopReason: acp.StopReasonEndTurn}, nil
-	}
 
 	a.state.turnMessageStart = len(a.state.messages)
 	titleChanged := a.state.touchSessionMetadata(objective)
@@ -2009,37 +2089,46 @@ func (a *acpAgent) runACPPlan(ctx context.Context, objective string) (response a
 		return acp.PromptResponse{}, err
 	}
 	trace := newACPPlanTrace(a.root, traceID, a.updateContext)
-	workflowCtx, cancel := context.WithCancel(ctx)
-	defer func() {
-		cancel()
-		// Cancellation can interrupt an ACP update before the worker emits its
-		// terminal event. Report a cancelled prompt, not a transport failure.
-		if errors.Is(ctx.Err(), context.Canceled) && errors.Is(runErr, context.Canceled) {
-			response, runErr = a.finishCancelledPrompt(), nil
-		}
-		reason := "Plan workflow ended before the tool returned a result."
-		if runErr != nil {
-			reason = "Plan workflow stopped: " + runErr.Error()
-		}
-		if errors.Is(ctx.Err(), context.Canceled) || response.StopReason == acp.StopReasonCancelled {
-			reason = "Plan workflow cancelled before the tool returned a result."
-		}
-		cleanupCtx, cleanupCancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
-		defer cleanupCancel()
-		if err := trace.finishPending(cleanupCtx, reason); err != nil {
-			a.logger.Warn("finish ACP subagent tool calls", "error", err)
-		}
-	}()
+	persistent := !supportsForm
+	workflowParent := ctx
+	if persistent {
+		workflowParent = a.state.ctx
+	}
+	workflowCtx, cancel := context.WithCancel(workflowParent)
 	events := make(chan agentEvent)
 	go streamPlanWorkflow(
 		workflowCtx, a.state.client, a.state.toolRuntime, value, a.state.runID, a.state.archive,
 		workingDirectory, objective, planContext(a.state.memory.Messages()), executionStore, events,
 	)
+	run := &acpPlanContinuation{
+		workflowCtx: workflowCtx, cancel: cancel, events: events, trace: trace, objective: objective,
+	}
+	return a.continueACPPlan(ctx, run, persistent)
+}
 
-	detailedPlan := false
-	for event := range events {
+func (a *acpAgent) continueACPPlan(
+	ctx context.Context,
+	run *acpPlanContinuation,
+	persistent bool,
+) (response acp.PromptResponse, runErr error) {
+	suspended := false
+	stopPromptCancel := func() bool { return true }
+	if persistent {
+		stopPromptCancel = context.AfterFunc(ctx, run.cancel)
+	}
+	defer func() {
+		stopPromptCancel()
+		if !suspended {
+			if errors.Is(ctx.Err(), context.Canceled) && errors.Is(runErr, context.Canceled) {
+				response, runErr = a.finishCancelledPrompt(), nil
+			}
+			runErr = errors.Join(runErr, run.finish(a, ctx, response, runErr))
+		}
+	}()
+
+	for event := range run.events {
 		if event.plan != nil {
-			detailedPlan = true
+			run.detailed = true
 			if err := a.emitAgentPlanContext(ctx, *event.plan); err != nil {
 				return acp.PromptResponse{}, err
 			}
@@ -2053,21 +2142,44 @@ func (a *acpAgent) runACPPlan(ctx context.Context, objective string) (response a
 			}
 		}
 		if event.trace != nil {
-			if err := trace.handle(ctx, *event.trace); err != nil {
+			if err := run.trace.handle(ctx, *event.trace); err != nil {
 				return acp.PromptResponse{}, err
 			}
 		}
 		if event.question != nil {
-			event.answer <- a.elicitAnswer(ctx, *event.question)
+			if !persistent {
+				event.answer <- a.elicitAnswer(ctx, *event.question)
+			} else {
+				response, err := a.suspendACPQuestion(
+					ctx,
+					*event.question,
+					event.answer,
+					isPlanApprovalQuestion(*event.question),
+					true,
+					false,
+					func(nextCtx context.Context) (acp.PromptResponse, error) {
+						return a.continueACPPlan(nextCtx, run, true)
+					},
+					func() error {
+						return run.finish(a, a.state.ctx, acp.PromptResponse{}, context.Canceled)
+					},
+				)
+				if err != nil {
+					return acp.PromptResponse{}, err
+				}
+				suspended = true
+				return response, nil
+			}
 		}
 		if event.learningName != "" {
 			a.launchLearning(a.state.enqueueLearningSpecial(event.learningName, event.learningPayload))
 		}
 		if event.err != nil {
-			if !detailedPlan {
-				_ = a.emitTaskPlanContext(a.state.ctx, objective, acp.PlanEntryStatusCompleted)
+			if !run.detailed {
+				_ = a.emitTaskPlanContext(a.state.ctx, run.objective, acp.PlanEntryStatusCompleted)
 			}
-			if errors.Is(event.err, context.Canceled) || errors.Is(ctx.Err(), context.Canceled) {
+			if errors.Is(event.err, context.Canceled) || errors.Is(ctx.Err(), context.Canceled) ||
+				errors.Is(run.workflowCtx.Err(), context.Canceled) {
 				return a.finishCancelledPrompt(), nil
 			}
 			a.state.archiveFailure("ACP plan failed", event.err)
@@ -2075,8 +2187,8 @@ func (a *acpAgent) runACPPlan(ctx context.Context, objective string) (response a
 			return acp.PromptResponse{}, event.err
 		}
 		if event.response != nil {
-			if !detailedPlan {
-				if err := a.emitTaskPlanContext(ctx, objective, acp.PlanEntryStatusCompleted); err != nil {
+			if !run.detailed {
+				if err := a.emitTaskPlanContext(ctx, run.objective, acp.PlanEntryStatusCompleted); err != nil {
 					return acp.PromptResponse{}, err
 				}
 			}
@@ -2085,9 +2197,9 @@ func (a *acpAgent) runACPPlan(ctx context.Context, objective string) (response a
 		}
 	}
 
-	if errors.Is(ctx.Err(), context.Canceled) {
-		if !detailedPlan {
-			_ = a.emitTaskPlanContext(a.state.ctx, objective, acp.PlanEntryStatusCompleted)
+	if errors.Is(ctx.Err(), context.Canceled) || errors.Is(run.workflowCtx.Err(), context.Canceled) {
+		if !run.detailed {
+			_ = a.emitTaskPlanContext(a.state.ctx, run.objective, acp.PlanEntryStatusCompleted)
 		}
 		return a.finishCancelledPrompt(), nil
 	}
@@ -2210,6 +2322,8 @@ func (a *acpAgent) closeRuntime() error {
 		cancel()
 	}
 	a.state.stopSessionLearning()
+	commitErr := a.closePendingACPCommit()
+	questionErr := a.closePendingACPQuestion()
 	lock := a.state.workspaceLock
 	a.state.workspaceLock = nil
 	scope := a.sessionMCPScoped
@@ -2228,7 +2342,7 @@ func (a *acpAgent) closeRuntime() error {
 	if scope != nil {
 		scopeErr = scope.Close()
 	}
-	return errors.Join(scopeErr, lockErr)
+	return errors.Join(commitErr, questionErr, scopeErr, lockErr)
 }
 
 func (a *acpAgent) launchLearning(command tea.Cmd) {
