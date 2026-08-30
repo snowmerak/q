@@ -1,6 +1,7 @@
 package app
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -36,6 +37,39 @@ type fakeACPConnection struct {
 	blockUpdates        bool
 	updateEntered       chan struct{}
 	updateOnce          sync.Once
+}
+
+func TestACPAgentSanitizesWorkspacePersistenceErrors(t *testing.T) {
+	var logs bytes.Buffer
+	agent := &acpAgent{
+		sessionID: "session-1",
+		logger:    slog.New(slog.NewTextHandler(&logs, nil)),
+	}
+	raw := `workspace: replace C:\secret\session.json: MoveFileExW: Access is denied.`
+	err := agent.sanitizeACPPromptError(&workspaceSessionSaveError{err: errors.New(raw)})
+	var requestErr *acp.RequestError
+	if !errors.As(err, &requestErr) {
+		t.Fatalf("error = %T %v, want ACP request error", err, err)
+	}
+	if requestErr.Message != "Internal error" {
+		t.Fatalf("message = %q, want Internal error", requestErr.Message)
+	}
+	data, ok := requestErr.Data.(map[string]any)
+	if !ok || data["error"] != "Q could not persist the session. Please retry." {
+		t.Fatalf("data = %#v", requestErr.Data)
+	}
+	if strings.Contains(err.Error(), `C:\secret`) {
+		t.Fatalf("ACP error leaked workspace path: %v", err)
+	}
+	if !strings.Contains(logs.String(), "MoveFileExW: Access is denied.") ||
+		!strings.Contains(logs.String(), "session_id=session-1") {
+		t.Fatalf("local log did not retain the persistence error: %s", logs.String())
+	}
+
+	want := errors.New("other")
+	if got := agent.sanitizeACPPromptError(want); got != want {
+		t.Fatalf("unrelated error = %v, want original", got)
+	}
 }
 
 type fakeACPExternalTools struct {

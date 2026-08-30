@@ -1157,7 +1157,24 @@ func (a *acpAgent) Prompt(ctx context.Context, request acp.PromptRequest) (acp.P
 	if err != nil {
 		return acp.PromptResponse{}, err
 	}
-	return runtime.prompt(ctx, request)
+	response, err := runtime.prompt(ctx, request)
+	if err != nil {
+		return response, runtime.sanitizeACPPromptError(err)
+	}
+	return response, nil
+}
+
+func (a *acpAgent) sanitizeACPPromptError(err error) error {
+	var persistenceErr *workspaceSessionSaveError
+	if !errors.As(err, &persistenceErr) {
+		return err
+	}
+	if a.logger != nil {
+		a.logger.Error("persist ACP session", "session_id", a.sessionID, "error", persistenceErr)
+	}
+	return acp.NewInternalError(map[string]any{
+		"error": "Q could not persist the session. Please retry.",
+	})
 }
 
 func (a *acpAgent) prompt(ctx context.Context, request acp.PromptRequest) (acp.PromptResponse, error) {

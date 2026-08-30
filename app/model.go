@@ -4585,11 +4585,18 @@ func (m model) contextWindowForModel(modelID string) int64 {
 	return 0
 }
 
+type workspaceSessionSaveError struct {
+	err error
+}
+
+func (e *workspaceSessionSaveError) Error() string { return e.err.Error() }
+func (e *workspaceSessionSaveError) Unwrap() error { return e.err }
+
 func (m *model) saveWorkspaceSession() error {
 	if m.workspaceStore == nil || m.memory == nil {
 		return nil
 	}
-	return m.workspaceStore.Save(workspace.Session{
+	err := m.workspaceStore.Save(workspace.Session{
 		RunID:      m.runID,
 		Title:      m.sessionTitle,
 		UpdatedAt:  workspaceTimePointer(m.sessionUpdatedAt),
@@ -4603,6 +4610,10 @@ func (m *model) saveWorkspaceSession() error {
 			return m.learning.State()
 		}(),
 	})
+	if err != nil {
+		return &workspaceSessionSaveError{err: err}
+	}
+	return nil
 }
 
 func workspaceTimePointer(value time.Time) *time.Time {
