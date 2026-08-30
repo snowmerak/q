@@ -145,6 +145,22 @@ Planner는 완성된 Grill brief를 받아 다음을 하나의 proposal로 만�
 사용자는 이 조합된 proposal 전체를 승인한다. 승인 전에는 coder나 변경 실행기로
 전달하지 않는다.
 
+### 자동화 정책
+
+`plan.auto_resolve`가 활성화되면 Griller의 `ask_to_user`는 사용자 UI로 전달되지
+않는다. 대신 질문과 context를 포함한 engineering default 답변을 돌려준다. 이
+답변은 Griller가 예상 가능한 구현을 교체하기 쉬운 최소의 안정적 추상
+인터페이스와, 현재 저장소에 가장 단순하고 효율적인 concrete implementation을
+모두 확정해 brief의 decisions와 assumptions에 기록하도록 요구한다. 선택지의 첫
+항목을 기계적으로 선택하거나 별도 model call을 추가하지 않는다.
+
+`plan.auto_approve`가 활성화되면 유효한 succeeded proposal의 확인 질문에만
+`approve`를 반환한다. Planner blocked 결과, proposal validation, Coder 실행과
+Planner review는 생략하지 않는다. 두 설정은 config에 저장할 수 있고 `q acp`의
+`--auto-resolve`, `--auto-approve`, `--autonomous`가 해당 프로세스에서만 override할
+수 있다. 자동 답변은 planning audit에 각각 `auto-resolve`, `auto-approve` source로
+기록한다.
+
 승인된 Plan의 task 실행과 Planner review 의미는
 [execution-orchestration.md](execution-orchestration.md)를 따른다. Target condition은
 task의 파일 집합만 고르며 순차 조건이나 결과 조건으로 사용하지 않는다.

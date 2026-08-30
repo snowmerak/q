@@ -87,7 +87,12 @@ func (r *auditLogRecorder) recordQuestion(question subagent.UserQuestion) {
 
 func (r *auditLogRecorder) recordAnswer(answer subagent.UserAnswer, err error) {
 	copy := answer
-	event := subagent.PlanningEvent{Type: subagent.PlanningEventAnswer, Agent: "user", Answer: &copy}
+	source := strings.TrimSpace(answer.Source)
+	if source == "" {
+		source = subagent.UserAnswerSourceUser
+		copy.Source = source
+	}
+	event := subagent.PlanningEvent{Type: subagent.PlanningEventAnswer, Agent: source, Answer: &copy}
 	if err != nil {
 		event.IsError = true
 		event.Content = err.Error()

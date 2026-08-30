@@ -64,6 +64,38 @@ func memoryForPlan(value config.Config) *memory.Manager {
 	return memory.New(memoryPolicy(value), nil)
 }
 
+func engineeringDefaultResolver(ctx context.Context, question subagent.UserQuestion) (subagent.UserAnswer, error) {
+	if err := ctx.Err(); err != nil {
+		return subagent.UserAnswer{Source: subagent.UserAnswerSourceAutoResolve}, err
+	}
+	parts := []string{
+		"Resolve this requirement autonomously instead of asking the user again.",
+		"Question: " + strings.TrimSpace(question.Question),
+	}
+	if contextValue := strings.TrimSpace(question.Context); contextValue != "" {
+		parts = append(parts, "Context: "+contextValue)
+	}
+	parts = append(parts,
+		"Define the smallest stable abstraction or interface that keeps foreseeable implementations replaceable and easy to extend.",
+		"Then choose the simplest and most efficient concrete implementation of that abstraction for the repository as it exists now.",
+		"Commit to both choices in the Grill brief, follow existing repository conventions, record material assumptions and trade-offs, and do not defer this decision back to the user.",
+	)
+	return subagent.UserAnswer{
+		Freeform: strings.Join(parts, "\n"),
+		Source:   subagent.UserAnswerSourceAutoResolve,
+	}, nil
+}
+
+func approvePlanAutomatically(ctx context.Context, _ subagent.UserQuestion) (subagent.UserAnswer, error) {
+	if err := ctx.Err(); err != nil {
+		return subagent.UserAnswer{Source: subagent.UserAnswerSourceAutoApprove}, err
+	}
+	return subagent.UserAnswer{
+		SelectedChoiceID: "approve",
+		Source:           subagent.UserAnswerSourceAutoApprove,
+	}, nil
+}
+
 func (m *model) offerPlanExecutionResume() {
 	if m.workspaceStore == nil || m.waiting || m.planResumePending {
 		return
@@ -375,8 +407,7 @@ func streamPlanWorkflow(
 		return
 	}
 
-	ask := func(ctx context.Context, question subagent.UserQuestion) (subagent.UserAnswer, error) {
-		planningRecorder.recordQuestion(question)
+	interactiveAsk := subagent.AskUserFunc(func(ctx context.Context, question subagent.UserQuestion) (subagent.UserAnswer, error) {
 		input := askToUserInput{Question: question.Question, Context: question.Context}
 		for _, choice := range question.Choices {
 			input.Choices = append(input.Choices, askToUserChoice{
@@ -389,26 +420,40 @@ func streamPlanWorkflow(
 			if err == nil {
 				err = errors.New("plan: user interaction ended")
 			}
-			planningRecorder.recordAnswer(subagent.UserAnswer{}, err)
-			return subagent.UserAnswer{}, err
+			return subagent.UserAnswer{Source: subagent.UserAnswerSourceUser}, err
 		}
 		select {
 		case answer := <-answerChannel:
 			if answer.Err != nil {
-				planningRecorder.recordAnswer(subagent.UserAnswer{}, answer.Err)
-				return subagent.UserAnswer{}, answer.Err
+				return subagent.UserAnswer{Source: subagent.UserAnswerSourceUser}, answer.Err
 			}
 			result := subagent.UserAnswer{
 				SelectedChoiceID: answer.SelectedChoiceID, Freeform: answer.Freeform,
+				Source: subagent.UserAnswerSourceUser,
 			}
-			planningRecorder.recordAnswer(result, nil)
 			return result, nil
 		case <-ctx.Done():
-			err := ctx.Err()
-			planningRecorder.recordAnswer(subagent.UserAnswer{}, err)
-			return subagent.UserAnswer{}, err
+			return subagent.UserAnswer{Source: subagent.UserAnswerSourceUser}, ctx.Err()
+		}
+	})
+	recordedAsk := func(delegate subagent.AskUserFunc) subagent.AskUserFunc {
+		return func(ctx context.Context, question subagent.UserQuestion) (subagent.UserAnswer, error) {
+			planningRecorder.recordQuestion(question)
+			answer, err := delegate(ctx, question)
+			planningRecorder.recordAnswer(answer, err)
+			return answer, err
 		}
 	}
+	clarificationDelegate := interactiveAsk
+	if value.Plan.AutoResolve {
+		clarificationDelegate = engineeringDefaultResolver
+	}
+	approvalDelegate := interactiveAsk
+	if value.Plan.AutoApprove {
+		approvalDelegate = approvePlanAutomatically
+	}
+	clarificationAsk := recordedAsk(clarificationDelegate)
+	approvalAsk := recordedAsk(approvalDelegate)
 	progress := func(progress subagent.ProgressEvent) {
 		planningRecorder.recordProgress(progress)
 		if executionRecorder != nil {
@@ -452,14 +497,15 @@ func streamPlanWorkflow(
 	}
 	griller := subagent.GrillerRunner{
 		Client: configuredClient, Tools: grillerTools, Scout: scout, Spec: grillerSpec,
-		Ask: ask, Capture: configuredInvocationCapture(toolRuntime), WorkingDirectory: workingDirectory, Progress: progress, Trace: trace,
+		Ask: clarificationAsk, Capture: configuredInvocationCapture(toolRuntime), WorkingDirectory: workingDirectory,
+		AutoResolve: value.Plan.AutoResolve, Progress: progress, Trace: trace,
 	}
 	planner := subagent.PlannerRunner{
 		Client: configuredClient, Tools: plannerTools, Spec: plannerSpec, WorkingDirectory: workingDirectory,
 		Progress: progress, Trace: trace,
 	}
 	workflow := subagent.PlanWorkflow{
-		Griller: griller, Planner: planner, Ask: ask, Progress: progress,
+		Griller: griller, Planner: planner, Ask: approvalAsk, Progress: progress,
 	}
 	result, err := workflow.Run(ctx, subagent.GrillTask{
 		ID: "grill-" + runID, Objective: objective, Context: contextValues,

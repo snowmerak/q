@@ -20,6 +20,7 @@ func TestStoreRoundTrip(t *testing.T) {
 	want.Provider.ReasoningEffort = "high"
 	want.Provider.APIKey = "secret"
 	want.Embedding = EmbeddingConfig{Model: "embed-model", Dimensions: 1536}
+	want.Plan = PlanConfig{AutoApprove: true, AutoResolve: true}
 	want.ModelGroups = map[string]ModelGroupConfig{
 		"heavy": {Candidates: []ModelCandidateConfig{
 			{Model: "planning-model", ReasoningEffort: "high", Timeout: 45 * time.Second},

@@ -43,6 +43,7 @@ type Config struct {
 	Provider    ProviderConfig              `yaml:"provider"`
 	Embedding   EmbeddingConfig             `yaml:"embedding,omitempty"`
 	Context     ContextConfig               `yaml:"context,omitempty"`
+	Plan        PlanConfig                  `yaml:"plan,omitempty"`
 	ModelGroups map[string]ModelGroupConfig `yaml:"model_groups,omitempty"`
 	Agents      AgentsConfig                `yaml:"agents,omitempty"`
 	Loom        LoomConfig                  `yaml:"loom,omitempty"`
@@ -66,6 +67,13 @@ type ContextConfig struct {
 	TriggerRatio float64 `yaml:"trigger_ratio,omitempty"`
 	TargetRatio  float64 `yaml:"target_ratio,omitempty"`
 	RecentRatio  float64 `yaml:"recent_ratio,omitempty"`
+}
+
+// PlanConfig controls persistent automation for the approval-gated /plan
+// workflow. Command-line overrides may replace these values for one process.
+type PlanConfig struct {
+	AutoApprove bool `yaml:"auto_approve,omitempty"`
+	AutoResolve bool `yaml:"auto_resolve,omitempty"`
 }
 
 type LoomConfig struct {

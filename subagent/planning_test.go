@@ -168,6 +168,20 @@ func TestGrillerQuestionChoicesAreNonExhaustive(t *testing.T) {
 	}
 }
 
+func TestAutoResolveGrillerInstructionsRequireConcreteDecision(t *testing.T) {
+	prompt := grillerInstructionsFor(true)
+	for _, expected := range []string{
+		`source "auto-resolve"`,
+		"smallest stable abstraction or interface",
+		"most efficient concrete implementation",
+		"Do not merely repeat the policy",
+	} {
+		if !strings.Contains(prompt, expected) {
+			t.Fatalf("auto-resolve prompt omitted %q: %q", expected, prompt)
+		}
+	}
+}
+
 func TestGrillerCallsExternalSearchAndReceivesCapturedResult(t *testing.T) {
 	grillerClient := &fakeScoutClient{responses: []client.Message{
 		{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{scoutCall(ExternalSearchToolName,

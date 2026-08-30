@@ -29,20 +29,38 @@ import (
 	"github.com/snowmerak/q/workspacememory"
 )
 
+// BooleanOverride distinguishes an omitted process option from an explicit
+// true or false value.
+type BooleanOverride struct {
+	Set   bool
+	Value bool
+}
+
+// PlanAutomationOverrides replace persistent plan settings for the lifetime
+// of one ACP process. They are never written back to config.yaml.
+type PlanAutomationOverrides struct {
+	AutoApprove BooleanOverride
+	AutoResolve BooleanOverride
+}
+
+type ACPOptions struct {
+	Plan PlanAutomationOverrides
+}
+
 // RunACPDefault serves ACP over stdin/stdout for a single workspace.
-func RunACPDefault(ctx context.Context, root string, input io.Reader, output, logOutput io.Writer) error {
+func RunACPDefault(ctx context.Context, root string, input io.Reader, output, logOutput io.Writer, options ...ACPOptions) error {
 	store, err := config.DefaultStore()
 	if err != nil {
 		return err
 	}
-	return RunACP(ctx, store, root, input, output, logOutput)
+	return RunACP(ctx, store, root, input, output, logOutput, options...)
 }
 
 // RunACP serves ACP over the supplied streams. A server process is bound to one
 // workspace and may keep multiple ACP sessions active concurrently. Each
 // session owns an independent conversation projection, learning lifecycle, and
 // workspace session lock.
-func RunACP(ctx context.Context, store config.Store, root string, input io.Reader, output, logOutput io.Writer) (runErr error) {
+func RunACP(ctx context.Context, store config.Store, root string, input io.Reader, output, logOutput io.Writer, options ...ACPOptions) (runErr error) {
 	if input == nil || output == nil {
 		return errors.New("ACP input and output are required")
 	}
@@ -63,6 +81,7 @@ func RunACP(ctx context.Context, store config.Store, root string, input io.Reade
 	defer func() { runErr = errors.Join(runErr, host.Close()) }()
 
 	agent := newACPAgent(&host.model, canonicalRoot, logger)
+	agent.planOverrides = mergeACPOptions(options).Plan
 	connection := acp.NewAgentSideConnection(agent, output, input)
 	connection.SetLogger(logger)
 	agent.setConnection(connection)
@@ -206,9 +225,10 @@ type acpSessionConnection interface {
 }
 
 type acpAgent struct {
-	state  *model
-	root   string
-	logger *slog.Logger
+	state         *model
+	root          string
+	logger        *slog.Logger
+	planOverrides PlanAutomationOverrides
 
 	stateMu             sync.Mutex
 	activationWG        sync.WaitGroup
@@ -254,6 +274,29 @@ func newACPAgent(state *model, root string, logger *slog.Logger) *acpAgent {
 	}
 }
 
+func mergeACPOptions(options []ACPOptions) ACPOptions {
+	var merged ACPOptions
+	for _, option := range options {
+		if option.Plan.AutoApprove.Set {
+			merged.Plan.AutoApprove = option.Plan.AutoApprove
+		}
+		if option.Plan.AutoResolve.Set {
+			merged.Plan.AutoResolve = option.Plan.AutoResolve
+		}
+	}
+	return merged
+}
+
+func applyPlanAutomationOverrides(value config.PlanConfig, overrides PlanAutomationOverrides) config.PlanConfig {
+	if overrides.AutoApprove.Set {
+		value.AutoApprove = overrides.AutoApprove.Value
+	}
+	if overrides.AutoResolve.Set {
+		value.AutoResolve = overrides.AutoResolve.Value
+	}
+	return value
+}
+
 // newSessionRuntime creates the mutable model projection owned by one ACP
 // session. Provider, archive, Library, and builtin tool services are shared;
 // conversation state, Thinker state, workspace lock, and optional ACP-provided
@@ -274,6 +317,7 @@ func (a *acpAgent) newSessionRuntime() *acpAgent {
 
 	runtime := &acpAgent{
 		state: &state, root: a.root, logger: a.logger, owner: a,
+		planOverrides: a.planOverrides,
 	}
 	if a.commitSession != nil {
 		runtime.commitSession = a.commitSession
@@ -1850,9 +1894,11 @@ func (a *acpAgent) runACPPlan(ctx context.Context, objective string) (response a
 	if a.state.client == nil || a.state.toolRuntime == nil {
 		return acp.PromptResponse{}, errors.New("ACP plan requires an available model and tool runtime")
 	}
+	value := a.state.activeConfig()
+	value.Plan = applyPlanAutomationOverrides(value.Plan, a.planOverrides)
 	_, capabilities := a.connectionState()
 	supportsForm := capabilities.Elicitation != nil && capabilities.Elicitation.Form != nil
-	if !supportsForm {
+	if !supportsForm && !(value.Plan.AutoApprove && value.Plan.AutoResolve) {
 		message := "The ACP client must support form elicitation to answer /plan questions and approve execution."
 		if err := a.updateContext(ctx, acp.UpdateAgentMessageText(message)); err != nil {
 			return acp.PromptResponse{}, err
@@ -1914,7 +1960,7 @@ func (a *acpAgent) runACPPlan(ctx context.Context, objective string) (response a
 	}()
 	events := make(chan agentEvent)
 	go streamPlanWorkflow(
-		workflowCtx, a.state.client, a.state.toolRuntime, a.state.activeConfig(), a.state.runID, a.state.archive,
+		workflowCtx, a.state.client, a.state.toolRuntime, value, a.state.runID, a.state.archive,
 		workingDirectory, objective, planContext(a.state.memory.Messages()), executionStore, events,
 	)
 

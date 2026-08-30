@@ -21,6 +21,10 @@ const (
 	SubmitPlanToolName    = "submit_plan"
 	defaultPlanningRounds = 320
 	defaultPlanningCycles = 60
+
+	UserAnswerSourceUser        = "user"
+	UserAnswerSourceAutoResolve = "auto-resolve"
+	UserAnswerSourceAutoApprove = "auto-approve"
 )
 
 type UserChoice struct {
@@ -38,6 +42,7 @@ type UserQuestion struct {
 type UserAnswer struct {
 	SelectedChoiceID string `json:"selected_choice_id,omitempty"`
 	Freeform         string `json:"freeform,omitempty"`
+	Source           string `json:"source,omitempty"`
 }
 
 type AskUserFunc func(context.Context, UserQuestion) (UserAnswer, error)
@@ -96,6 +101,7 @@ type GrillerRunner struct {
 	Ask              AskUserFunc
 	Capture          InvocationCaptureFunc
 	WorkingDirectory string
+	AutoResolve      bool
 	MaxRounds        int
 	Progress         ProgressFunc
 	Trace            TraceFunc
@@ -198,7 +204,7 @@ func (r GrillerRunner) Run(ctx context.Context, task GrillTask) (brief GrillBrie
 		return GrillBrief{}, err
 	}
 	messages := []client.Message{
-		{Role: client.RoleSystem, Content: withSkillCatalog(grillerInstructions(), invocationTools)},
+		{Role: client.RoleSystem, Content: withSkillCatalog(grillerInstructionsFor(r.AutoResolve), invocationTools)},
 		{Role: client.RoleUser, Content: "Grill this planning request.\n\n" + string(body)},
 	}
 	available := grillerTools(invocationTools.Tools())
@@ -262,7 +268,7 @@ func (r GrillerRunner) Run(ctx context.Context, task GrillTask) (brief GrillBrie
 				}
 				reportProgress(r.Progress, ProgressEvent{
 					Agent: "griller", TaskID: task.ID, ParentID: task.ParentID,
-					Action: ProgressWaiting, Detail: "user information",
+					Action: ProgressWaiting, Detail: "requirement clarification",
 				})
 				answer, askErr := r.Ask(ctx, question)
 				if askErr != nil {
@@ -271,7 +277,7 @@ func (r GrillerRunner) Run(ctx context.Context, task GrillTask) (brief GrillBrie
 				}
 				reportProgress(r.Progress, ProgressEvent{
 					Agent: "griller", TaskID: task.ID, ParentID: task.ParentID,
-					Action: ProgressResumed, Detail: "received user answer",
+					Action: ProgressResumed, Detail: "requirement decision received",
 				})
 				result = jsonToolResult(answer)
 			case ExternalSearchToolName:
@@ -565,7 +571,11 @@ func retainPlanningAttempt(task *GrillTask, brief GrillBrief, proposal PlanPropo
 }
 
 func grillerInstructions() string {
-	return `You are q's Griller for /plan mode. Your job is to remove critical ambiguity and produce a bounded brief for the Planner, not to write the plan yourself.
+	return grillerInstructionsFor(false)
+}
+
+func grillerInstructionsFor(autoResolve bool) string {
+	instructions := `You are q's Griller for /plan mode. Your job is to remove critical ambiguity and produce a bounded brief for the Planner, not to write the plan yourself.
 
 Rules:
 1. When an unknown can be answered from the repository, call delegate_scout instead of asking the user. You may call Scout repeatedly during the same Grill.
@@ -578,6 +588,17 @@ Rules:
 8. Separate confirmed facts from assumptions and explicitly state scope, non-goals, acceptance criteria, and repository evidence.
 9. On each tool-calling turn, include a concise user-visible progress note describing the immediate intent; do not expose or invent hidden chain-of-thought.
 10. Finish by calling submit_brief as the only tool call in that turn. Never return the brief as plain text.`
+	if autoResolve {
+		instructions += `
+
+Auto-resolve mode:
+- An ask_to_user result with source "auto-resolve" is the user's authorization for you to settle that requirement yourself.
+- Convert its engineering policy into a concrete decision for the question you asked. Do not merely repeat the policy and do not ask the same question again.
+- Define the smallest stable abstraction or interface that keeps foreseeable implementations replaceable or extensible.
+- Select the simplest and most efficient concrete implementation behind that abstraction for the repository as it exists now.
+- Record both the abstraction and concrete implementation in decisions, and record material trade-offs or uncertainty in assumptions.`
+	}
+	return instructions
 }
 
 func plannerInstructions() string {

@@ -168,6 +168,19 @@ targets, completion criteria, and verification. After approval, Coder executes
 one task at a time and Planner either accepts it or returns actionable retry
 feedback.
 
+Plan automation can be persisted in `~/.q/config.yaml`:
+
+```yaml
+plan:
+  auto_resolve: true
+  auto_approve: true
+```
+
+`auto_resolve` answers Griller requirement questions with an engineering policy
+that requires both a small extensible abstraction and an efficient concrete
+implementation. `auto_approve` mechanically approves a valid Planner proposal;
+it does not bypass proposal validation, Coder execution, or Planner review.
+
 Active execution is checkpointed under the selected session:
 
 ```text
@@ -311,12 +324,16 @@ an explicitly requested in-workspace path.
 Run q as an Agent Client Protocol server over stdin/stdout:
 
 ```powershell
-q acp [--root <workspace-path>]
+q acp [--root <workspace-path>] [--auto-resolve] [--auto-approve] [--autonomous]
 ```
 
 ACP mode shares q's sessions, workspace tools, planning, external Search, and
-commit workflow. `/plan` and `/commit` require an ACP client with form
-elicitation support because execution and Git changes require explicit approval.
+commit workflow. The plan flags override persisted settings for only that ACP
+process; explicit values such as `--auto-approve=false` are also supported.
+`--autonomous` enables both plan flags, while an explicitly supplied individual
+flag takes precedence. `/plan` requires form elicitation unless both interactions
+are automated. `/commit` continues to require form elicitation because Git
+changes require explicit approval.
 Client-provided stdio and Streamable HTTP MCP servers are scoped to their ACP
 session. SSE transport is not supported.
 
