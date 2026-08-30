@@ -51,6 +51,59 @@ func TestPlanAndApplyKeepSystemAndRecent(t *testing.T) {
 	}
 }
 
+func TestApplyAllowsCompactedContextUpToTwentyPercent(t *testing.T) {
+	policy := Policy{ContextWindow: 10_000, TriggerRatio: .80, TargetRatio: .15, RecentRatio: .05}
+	build := func() (*Manager, Plan) {
+		manager := New(policy, []client.Message{{Role: client.RoleSystem, Content: "keep system"}})
+		for index := 0; index < 16; index++ {
+			manager.Append(client.Message{Role: client.RoleUser, Content: strings.Repeat("old context ", 120)})
+			manager.Append(client.Message{Role: client.RoleAssistant, Content: strings.Repeat("old answer ", 120)})
+		}
+		manager.Append(client.Message{Role: client.RoleUser, Content: "latest request"})
+		plan, err := manager.Plan()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return manager, plan
+	}
+
+	manager, plan := build()
+	if plan.TargetTokens != 1_500 || plan.ApplyLimitTokens != 2_000 {
+		t.Fatalf("compaction bounds = target %d, apply limit %d", plan.TargetTokens, plan.ApplyLimitTokens)
+	}
+	acceptedSummary := summaryForCompactedRange(t, plan, plan.TargetTokens+1, plan.ApplyLimitTokens)
+	if err := manager.Apply(plan, acceptedSummary); err != nil {
+		t.Fatalf("context between 15%% and 20%% was rejected: %v", err)
+	}
+	if got := manager.PredictedTokens(); got <= plan.TargetTokens || got > plan.ApplyLimitTokens {
+		t.Fatalf("accepted compacted context = %d, target = %d, limit = %d", got, plan.TargetTokens, plan.ApplyLimitTokens)
+	}
+
+	manager, plan = build()
+	rejectedSummary := summaryForCompactedRange(t, plan, plan.ApplyLimitTokens+1, plan.ApplyLimitTokens+512)
+	if err := manager.Apply(plan, rejectedSummary); err == nil || !strings.Contains(err.Error(), "allowed maximum is 2000") {
+		t.Fatalf("context above 20%% was not rejected with its limit: %v", err)
+	}
+}
+
+func summaryForCompactedRange(t *testing.T, plan Plan, minimum, maximum int) string {
+	t.Helper()
+	for size := 64; size <= 64_000; size += 64 {
+		summary := strings.Repeat("x", size)
+		messages := append(cloneMessages(plan.Immutable), client.Message{
+			Role: client.RoleSystem, Name: SummaryName, Content: "Compressed conversation memory:\n" + summary,
+		})
+		messages = append(messages, cloneMessages(plan.Recent)...)
+		local := CountMessages(messages)
+		predicted := local + plan.ProviderOverhead + max(8, local/10)
+		if predicted >= minimum && predicted <= maximum {
+			return summary
+		}
+	}
+	t.Fatalf("could not construct compacted context between %d and %d tokens", minimum, maximum)
+	return ""
+}
+
 func TestUsageCalibratesProviderOverhead(t *testing.T) {
 	m := New(Policy{ContextWindow: 100000, TriggerRatio: .85, TargetRatio: .22, RecentRatio: .07}, []client.Message{{Role: client.RoleUser, Content: "hi"}})
 	estimate := m.LocalEstimate()

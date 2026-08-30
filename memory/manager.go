@@ -13,6 +13,8 @@ import (
 
 const SummaryName = "q_context_summary"
 
+const compactedContextApplyRatio = 0.20
+
 var ErrNothingToCompact = errors.New("memory: no older conversation to compact")
 
 type Policy struct {
@@ -41,6 +43,7 @@ type Plan struct {
 	Recent           []client.Message
 	BeforeTokens     int
 	TargetTokens     int
+	ApplyLimitTokens int
 	OutputBudget     int
 	ProviderOverhead int
 }
@@ -210,6 +213,7 @@ func (m *Manager) PlanWithRetention(retention Retention) (Plan, error) {
 	plan := Plan{
 		BeforeTokens:     m.PredictedTokens(),
 		TargetTokens:     int(float64(m.policy.ContextWindow) * m.policy.TargetRatio),
+		ApplyLimitTokens: int(float64(m.policy.ContextWindow) * compactedContextApplyRatio),
 		ProviderOverhead: m.providerOverhead,
 	}
 	for index, message := range m.messages {
@@ -253,6 +257,7 @@ func (m *Manager) PlanWithRetention(retention Retention) (Plan, error) {
 	if plan.TargetTokens >= int(float64(m.policy.ContextWindow)*m.policy.TriggerRatio) {
 		return Plan{}, fmt.Errorf("memory: immutable and recent context leave no room below the compaction threshold of the %d token context window", m.policy.ContextWindow)
 	}
+	plan.ApplyLimitTokens = max(plan.ApplyLimitTokens, plan.TargetTokens)
 	plan.OutputBudget = min(plan.OutputBudget, 8192)
 	return plan, nil
 }
@@ -281,8 +286,12 @@ func (m *Manager) Apply(plan Plan, summary string) error {
 	compacted = append(compacted, cloneMessages(plan.Recent)...)
 	local := CountMessages(compacted)
 	predicted := local + m.providerOverhead + max(8, local/10)
-	if predicted > plan.TargetTokens {
-		return fmt.Errorf("memory: compacted context is %d tokens, target is %d", predicted, plan.TargetTokens)
+	applyLimit := max(plan.TargetTokens, plan.ApplyLimitTokens)
+	if predicted > applyLimit {
+		return fmt.Errorf(
+			"memory: compacted context is %d tokens, allowed maximum is %d (compaction target is %d)",
+			predicted, applyLimit, plan.TargetTokens,
+		)
 	}
 	m.messages = compacted
 	m.compactions++

@@ -270,9 +270,10 @@ immutable system/tool context
 3. 나머지 오래된 메시지와 기존 누적 요약을 summary source로 선택한다.
 4. assistant tool call과 대응하는 tool result는 하나의 atomic turn으로 취급한다.
 5. summary source가 너무 크면 70% 이하의 chunk로 나눠 rolling summary를 만든다.
-6. summary output budget은 `22% - immutable - recent`로 제한한다.
-7. 결과를 다시 계산해 22%를 넘으면 더 작은 예산으로 한 번 재압축한다.
-8. 그래도 넘으면 recent tail부터 오래된 turn 단위로 줄이되 tool 묶음은 깨지 않는다.
+6. summary output budget은 설정된 `target_ratio - immutable - recent`로 제한한다.
+7. 결과를 다시 근사 계산한다. 설정 목표가 20% 미만이면 전체 압축 결과는 context
+   window의 20%까지 허용해 tokenizer/JSON 추정 오차를 흡수한다.
+8. 20% 또는 설정 목표 중 더 큰 적용 상한도 넘으면 원문 context를 유지하고 실패한다.
 
 immutable 영역만 이미 22%를 넘으면 목표 달성은 불가능하다. 이 경우 목표를
 `immutable + 최소 summary/recent budget`으로 올리고 UI에 경고한다.
@@ -337,6 +338,8 @@ context size unknown
 - usage 미제공: 추정치를 계속 사용하되 UI에 `estimated`를 표시한다.
 - context window 미제공: 설정 fallback이 없으면 자동 압축하지 않는다.
 - 빈 요약 또는 잘못된 응답: 적용하지 않는다.
+- 압축 결과 근사값: 설정 목표까지 압축을 요청하되 적용은 context window의 20%와
+  설정 목표 중 더 큰 값까지 허용한다.
 - context-length 오류: 강제 압축 후 요청을 한 번만 재시도한다.
 - 모델 변경: context window 재조회, token 보정 초기화, conversation ID 초기화.
 - provider 변경: 기존 정책대로 대화를 초기화하고 새 memory manager를 생성한다.
@@ -357,7 +360,8 @@ context size unknown
 단위 테스트:
 
 - 77.9%에서는 압축하지 않고 85% 이상에서 압축한다.
-- 압축 후 immutable + summary + recent가 22% 이하가 된다.
+- target 15%에서는 압축 후 immutable + summary + recent가 20% 이하면 적용되고,
+  20%를 넘으면 거절된다.
 - system prompt와 tool call/result 묶음이 보존된다.
 - 기존 summary가 다음 summary에 병합된다.
 - 실제 prompt usage가 estimator overhead를 보정한다.
@@ -374,7 +378,8 @@ context size unknown
   각각 검증한다.
 - `go test ./...`, `go vet ./...`, `go build ./...`를 통과한다.
 
-완료 기준은 자동 압축 이후 전송된 실제 prompt usage가 목표 22% 이하이거나,
+완료 기준은 자동 압축 이후 전송된 실제 prompt usage가 설정 목표에 가깝고 근사
+계산값이 설정 목표와 20% 중 더 큰 적용 상한 이하이거나,
 provider overhead/immutable context 때문에 달성할 수 없다는 경고가 명확히
 표시되는 것이다.
 
