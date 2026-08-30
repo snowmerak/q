@@ -75,6 +75,8 @@ type acpRemoteTurn struct {
 	display         string
 	mu              sync.Mutex
 	response        strings.Builder
+	contentParts    []client.MessageContentPart
+	structured      bool
 	responseStarted bool
 	thoughtStarted  bool
 	toolTitles      map[acp.ToolCallId]string
@@ -301,6 +303,8 @@ func (r *acpRemoteClient) prompt(ctx context.Context, content string, events cha
 	r.turn = turn
 	connection := r.connection
 	sessionID := r.sessionID
+	root := r.root
+	embeddedContext := r.capabilities.PromptCapabilities.EmbeddedContext
 	r.mu.Unlock()
 	defer func() {
 		r.mu.Lock()
@@ -310,23 +314,25 @@ func (r *acpRemoteClient) prompt(ctx context.Context, content string, events cha
 		r.mu.Unlock()
 	}()
 
+	promptBlocks, err := acpPromptBlocksForText(root, content, embeddedContext)
+	if err != nil {
+		return nil, 0, err
+	}
 	response, err := connection.Prompt(ctx, acp.PromptRequest{
 		SessionId: sessionID,
-		Prompt:    []acp.ContentBlock{acp.TextBlock(content)},
+		Prompt:    promptBlocks,
 	})
 	if err != nil {
 		return nil, 0, r.decorateError("ACP prompt", err)
 	}
-	text, toolCalls := turn.result()
-	if strings.TrimSpace(text) == "" {
-		text = "Agent turn completed without a textual response."
+	message, toolCalls := turn.result()
+	if strings.TrimSpace(message.TextContent()) == "" {
+		message.Content = "Agent turn completed without a textual response."
 		if response.StopReason != "" && response.StopReason != acp.StopReasonEndTurn {
-			text = "Agent stopped: " + string(response.StopReason)
+			message.Content = "Agent stopped: " + string(response.StopReason)
 		}
 	}
-	result := &client.ChatResponse{Choices: []client.Choice{{Message: client.Message{
-		Role: client.RoleAssistant, Content: text,
-	}}}}
+	result := &client.ChatResponse{Choices: []client.Choice{{Message: message}}}
 	return result, toolCalls, nil
 }
 
@@ -512,7 +518,10 @@ func (r *acpRemoteClient) WaitForTerminalExit(context.Context, acp.WaitForTermin
 func (t *acpRemoteTurn) update(ctx context.Context, update acp.SessionUpdate) error {
 	switch {
 	case update.AgentMessageChunk != nil:
-		content := acpContentText(update.AgentMessageChunk.Content)
+		part, content, structured, err := acpDisplayContentPart(update.AgentMessageChunk.Content)
+		if err != nil {
+			return err
+		}
 		if content == "" {
 			return nil
 		}
@@ -520,6 +529,8 @@ func (t *acpRemoteTurn) update(ctx context.Context, update acp.SessionUpdate) er
 		start := !t.responseStarted
 		t.responseStarted = true
 		t.response.WriteString(content)
+		t.contentParts = append(t.contentParts, part)
+		t.structured = t.structured || structured
 		t.mu.Unlock()
 		if !t.emit(agentEvent{streamDelta: &chatStreamDelta{Kind: chatStreamResponse, Start: start, Content: content}}) {
 			return ctx.Err()
@@ -585,27 +596,22 @@ func (t *acpRemoteTurn) emit(event agentEvent) bool {
 	return emitAgentEvent(t.ctx, t.events, event)
 }
 
-func (t *acpRemoteTurn) result() (string, int) {
+func (t *acpRemoteTurn) result() (client.Message, int) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	return t.response.String(), len(t.toolCalls)
+	message := client.Message{Role: client.RoleAssistant, Content: t.response.String()}
+	if t.structured {
+		message.ContentParts = append([]client.MessageContentPart(nil), t.contentParts...)
+	}
+	return message, len(t.toolCalls)
 }
 
 func acpContentText(block acp.ContentBlock) string {
-	switch {
-	case block.Text != nil:
-		return block.Text.Text
-	case block.Image != nil:
-		return "\n[image]\n"
-	case block.Audio != nil:
-		return "\n[audio]\n"
-	case block.ResourceLink != nil:
-		return fmt.Sprintf("\n[%s](%s)\n", block.ResourceLink.Name, block.ResourceLink.Uri)
-	case block.Resource != nil:
-		return "\n[embedded resource]\n"
-	default:
-		return ""
+	_, text, _, err := acpDisplayContentPart(block)
+	if err != nil {
+		return "\n[invalid ACP content: " + err.Error() + "]\n"
 	}
+	return text
 }
 
 func acpActivityAction(status acp.ToolCallStatus) string {

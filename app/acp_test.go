@@ -278,6 +278,9 @@ func TestACPAgentKeepsMultipleActiveSessionsPerProcess(t *testing.T) {
 	if !capabilities.LoadSession || capabilities.SessionCapabilities.Resume == nil || capabilities.SessionCapabilities.List == nil {
 		t.Fatalf("unexpected single-session compatibility capabilities: %#v", capabilities)
 	}
+	if !capabilities.PromptCapabilities.EmbeddedContext {
+		t.Fatal("embedded context capability was not advertised")
+	}
 	if capabilities.SessionCapabilities.Close == nil || capabilities.SessionCapabilities.Delete == nil || !capabilities.McpCapabilities.Http {
 		t.Fatal("session close/delete or MCP HTTP capability was not advertised")
 	}

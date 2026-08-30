@@ -3796,6 +3796,7 @@ func waitAgentEvent(events <-chan agentEvent, turnID uint64) tea.Cmd {
 func providerMessages(messages []client.Message, coalesceInstructions bool) []client.Message {
 	result := append([]client.Message(nil), messages...)
 	for index := range result {
+		result[index].ContentParts = providerSafeContentParts(result[index].ContentParts)
 		if result[index].Role != client.RoleUser {
 			result[index].Name = ""
 		}

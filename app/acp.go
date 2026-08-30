@@ -431,7 +431,8 @@ func (a *acpAgent) Initialize(_ context.Context, request acp.InitializeRequest) 
 				Http: true,
 			},
 			PromptCapabilities: acp.PromptCapabilities{
-				Image: a.state.supportsACPImages(),
+				EmbeddedContext: true,
+				Image:           a.state.supportsACPImages(),
 			},
 			SessionCapabilities: acp.SessionCapabilities{
 				Close:  &acp.SessionCloseCapabilities{},
@@ -2286,10 +2287,16 @@ func acpPromptMessage(blocks []acp.ContentBlock, imagesSupported bool) (client.M
 		switch {
 		case block.Text != nil:
 			appendText(block.Text.Text)
-		case block.ResourceLink != nil:
-			appendText(fmt.Sprintf("Resource: %s (%s)", block.ResourceLink.Name, block.ResourceLink.Uri))
-		case block.Resource != nil && block.Resource.Resource.TextResourceContents != nil:
-			appendText(block.Resource.Resource.TextResourceContents.Text)
+		case block.ResourceLink != nil || block.Resource != nil:
+			part, text, err := acpPromptResourcePart(block, imagesSupported)
+			if err != nil {
+				return client.Message{}, false, err
+			}
+			if text != "" {
+				textParts = append(textParts, text)
+			}
+			contentParts = append(contentParts, part)
+			hasNonText = true
 		case block.Image != nil:
 			if !imagesSupported {
 				return client.Message{}, false, errors.New("the active model route does not support ACP image prompts")
@@ -2298,10 +2305,12 @@ func acpPromptMessage(blocks []acp.ContentBlock, imagesSupported bool) (client.M
 			if err != nil {
 				return client.Message{}, false, err
 			}
-			contentParts = append(contentParts, client.MessageContentPart{
+			part := client.MessageContentPart{
 				"type":      "image_url",
 				"image_url": map[string]any{"url": dataURI},
-			})
+			}
+			storeACPContentBlock(part, block)
+			contentParts = append(contentParts, part)
 			hasNonText = true
 		case block.Audio != nil:
 			return client.Message{}, false, errors.New("audio prompt content is not supported")
@@ -2344,6 +2353,10 @@ func replayACPUserMessage(message client.Message) []acp.SessionUpdate {
 	}
 	updates := make([]acp.SessionUpdate, 0, len(message.ContentParts))
 	for _, part := range message.ContentParts {
+		if block, ok := storedACPContentBlock(part); ok {
+			updates = append(updates, acp.UpdateUserMessage(block))
+			continue
+		}
 		switch part["type"] {
 		case "text", "input_text", "output_text":
 			if value, ok := part["text"].(string); ok && value != "" {

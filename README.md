@@ -357,6 +357,12 @@ configuration from the effective value when a process-only CLI flag overrides it
 Client-provided stdio and Streamable HTTP MCP servers are scoped to their ACP
 session. SSE transport is not supported.
 
+q advertises ACP embedded-context support and preserves resource URI, MIME type,
+annotations, and contents when sessions are replayed. When the TUI is connected
+to an external ACP agent, `@relative/path` attaches an in-workspace file;
+`@"path with spaces"` is also accepted. q embeds the file when the remote agent
+advertises embedded context and otherwise sends an ACP resource link.
+
 ### Workspace MCP server
 
 Expose q's builtin workspace tools to another MCP client:
