@@ -91,9 +91,6 @@ func TestContextCompactorFailureLeavesHistoryAndBackendIntact(t *testing.T) {
 		{"empty", func(context.Context, client.ChatRequest) (*client.ChatResponse, error) {
 			return contextResponse(""), nil
 		}},
-		{"oversized", func(context.Context, client.ChatRequest) (*client.ChatResponse, error) {
-			return contextResponse(strings.Repeat("x", 40_000)), nil
-		}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			spec := Spec{Model: "scout", ContextLength: 16_000, conversationID: "keep-backend"}
@@ -107,6 +104,27 @@ func TestContextCompactorFailureLeavesHistoryAndBackendIntact(t *testing.T) {
 				t.Fatal("failed compaction mutated request state")
 			}
 		})
+	}
+}
+
+func TestContextCompactorAppliesSummaryAboveTarget(t *testing.T) {
+	spec := Spec{Model: "scout", ContextLength: 16_000, conversationID: "old-backend"}
+	anchor := client.Message{Role: client.RoleSystem, Content: "contract"}
+	history := NewContextCompactor(spec, []client.Message{anchor}, nil, 1)
+	history.Append(client.Message{Role: client.RoleAssistant, Content: strings.Repeat("old context ", 8_000)})
+	summary := strings.Repeat("x", 40_000)
+	if err := history.CompactIfNeeded(t.Context(), &spec, contextChatFunc(func(context.Context, client.ChatRequest) (*client.ChatResponse, error) {
+		return contextResponse(summary), nil
+	})); err != nil {
+		t.Fatalf("summary above target was rejected: %v", err)
+	}
+	if spec.conversationID != "" {
+		t.Fatalf("backend conversation was not reset: %q", spec.conversationID)
+	}
+	messages := history.Messages()
+	if len(messages) != 2 || !reflect.DeepEqual(messages[0], anchor) || messages[1].Name != memory.SummaryName ||
+		!strings.Contains(messages[1].Content, summary) {
+		t.Fatalf("oversized summary was not applied: %#v", messages)
 	}
 }
 
