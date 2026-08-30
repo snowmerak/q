@@ -11,20 +11,21 @@ import (
 )
 
 const (
-	maximumPlanningLogEvents       = 2048
-	maximumPlanningLogContentBytes = 3 << 20
-	maximumPlanningEventContent    = 256 << 10
+	maximumPlanningLogEvents       = 1024
+	maximumPlanningLogContentBytes = 1 << 20
+	maximumPlanningEventContent    = 128 << 10
 )
 
-type planningLogRecorder struct {
+type auditLogRecorder struct {
 	mu           sync.Mutex
 	log          subagent.PlanningLog
 	contentBytes int
 	finished     bool
+	completedAt  *time.Time
 }
 
-func newPlanningLogRecorder(runID, objective string, contextValues []string) *planningLogRecorder {
-	recorder := &planningLogRecorder{log: subagent.PlanningLog{
+func newPlanningLogRecorder(runID, objective string, contextValues []string) *auditLogRecorder {
+	recorder := &auditLogRecorder{log: subagent.PlanningLog{
 		RunID: strings.TrimSpace(runID), Objective: strings.TrimSpace(objective),
 		StartedAt: time.Now().UTC(),
 	}}
@@ -39,7 +40,31 @@ func newPlanningLogRecorder(runID, objective string, contextValues []string) *pl
 	return recorder
 }
 
-func (r *planningLogRecorder) recordProgress(progress subagent.ProgressEvent) {
+func newExecutionLogRecorder(existing *subagent.ExecutionLog) *auditLogRecorder {
+	startedAt := time.Now().UTC()
+	recorder := &auditLogRecorder{log: subagent.PlanningLog{StartedAt: startedAt}}
+	if existing == nil {
+		return recorder
+	}
+	recorder.log.StartedAt = existing.StartedAt
+	if recorder.log.StartedAt.IsZero() {
+		recorder.log.StartedAt = startedAt
+	}
+	recorder.log.Events = clonePlanningEvents(existing.Events)
+	recorder.log.Truncated = existing.Truncated
+	recorder.log.DroppedEvents = existing.DroppedEvents
+	if existing.CompletedAt != nil {
+		completedAt := existing.CompletedAt.UTC()
+		recorder.completedAt = &completedAt
+		recorder.finished = true
+	}
+	for _, event := range recorder.log.Events {
+		recorder.contentBytes += planningEventContentBytes(event)
+	}
+	return recorder
+}
+
+func (r *auditLogRecorder) recordProgress(progress subagent.ProgressEvent) {
 	r.append(subagent.PlanningEvent{
 		Type:  subagent.PlanningEventActivity,
 		Agent: progress.Agent, TaskID: progress.TaskID, ParentID: progress.ParentID,
@@ -47,20 +72,20 @@ func (r *planningLogRecorder) recordProgress(progress subagent.ProgressEvent) {
 	})
 }
 
-func (r *planningLogRecorder) recordTrace(trace subagent.TraceEvent) {
+func (r *auditLogRecorder) recordTrace(trace subagent.TraceEvent) {
 	r.append(subagent.PlanningEvent{
 		Type: trace.Kind, Agent: trace.Agent, TaskID: trace.TaskID, ParentID: trace.ParentID,
 		CallID: trace.CallID, Name: trace.Name, Content: trace.Content, IsError: trace.IsError,
 	})
 }
 
-func (r *planningLogRecorder) recordQuestion(question subagent.UserQuestion) {
+func (r *auditLogRecorder) recordQuestion(question subagent.UserQuestion) {
 	copy := question
 	copy.Choices = append([]subagent.UserChoice(nil), question.Choices...)
 	r.append(subagent.PlanningEvent{Type: subagent.PlanningEventQuestion, Agent: "user", Question: &copy})
 }
 
-func (r *planningLogRecorder) recordAnswer(answer subagent.UserAnswer, err error) {
+func (r *auditLogRecorder) recordAnswer(answer subagent.UserAnswer, err error) {
 	copy := answer
 	event := subagent.PlanningEvent{Type: subagent.PlanningEventAnswer, Agent: "user", Answer: &copy}
 	if err != nil {
@@ -70,7 +95,7 @@ func (r *planningLogRecorder) recordAnswer(answer subagent.UserAnswer, err error
 	r.append(event)
 }
 
-func (r *planningLogRecorder) append(event subagent.PlanningEvent) {
+func (r *auditLogRecorder) append(event subagent.PlanningEvent) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.finished {
@@ -115,7 +140,7 @@ func (r *planningLogRecorder) append(event subagent.PlanningEvent) {
 	r.log.Events = append(r.log.Events, event)
 }
 
-func (r *planningLogRecorder) boundString(value string) (string, bool) {
+func (r *auditLogRecorder) boundString(value string) (string, bool) {
 	value = strings.TrimSpace(value)
 	if value == "" {
 		return "", false
@@ -133,7 +158,7 @@ func (r *planningLogRecorder) boundString(value string) (string, bool) {
 	return value, truncated
 }
 
-func (r *planningLogRecorder) finish(result subagent.PlanWorkflowResult, outcome string, runErr error) subagent.PlanningLog {
+func (r *auditLogRecorder) finish(result subagent.PlanWorkflowResult, outcome string, runErr error) subagent.PlanningLog {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if !r.finished {
@@ -157,6 +182,26 @@ func (r *planningLogRecorder) finish(result subagent.PlanWorkflowResult, outcome
 	return clonePlanningLog(r.log)
 }
 
+func (r *auditLogRecorder) executionSnapshot(completed bool) *subagent.ExecutionLog {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if completed && r.completedAt == nil {
+		completedAt := time.Now().UTC()
+		r.completedAt = &completedAt
+		r.finished = true
+	}
+	var completedAt *time.Time
+	if r.completedAt != nil {
+		copy := *r.completedAt
+		completedAt = &copy
+	}
+	return &subagent.ExecutionLog{
+		StartedAt: r.log.StartedAt, CompletedAt: completedAt,
+		Events: clonePlanningEvents(r.log.Events), Truncated: r.log.Truncated,
+		DroppedEvents: r.log.DroppedEvents,
+	}
+}
+
 func truncateUTF8(value string, limit int) string {
 	if len(value) <= limit {
 		return value
@@ -169,6 +214,24 @@ func truncateUTF8(value string, limit int) string {
 }
 
 func clonePlanningLog(value subagent.PlanningLog) subagent.PlanningLog {
-	value.Events = append([]subagent.PlanningEvent(nil), value.Events...)
+	value.Events = clonePlanningEvents(value.Events)
 	return value
+}
+
+func clonePlanningEvents(events []subagent.PlanningEvent) []subagent.PlanningEvent {
+	return append([]subagent.PlanningEvent(nil), events...)
+}
+
+func planningEventContentBytes(event subagent.PlanningEvent) int {
+	total := len(event.Detail) + len(event.Content)
+	if event.Question != nil {
+		total += len(event.Question.Question) + len(event.Question.Context)
+		for _, choice := range event.Question.Choices {
+			total += len(choice.ID) + len(choice.Label) + len(choice.Description)
+		}
+	}
+	if event.Answer != nil {
+		total += len(event.Answer.SelectedChoiceID) + len(event.Answer.Freeform)
+	}
+	return total
 }

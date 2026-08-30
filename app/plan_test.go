@@ -259,6 +259,7 @@ func TestPlanCommandExecutesApprovedPlanWithCoderAndPlannerReview(t *testing.T) 
 	}
 	assertArchivedPlanCheckpoint(t, workspaceStore, 1)
 	assertArchivedPlanningAudit(t, workspaceStore, m.runID)
+	assertArchivedExecutionAuditIncludesFinalTask(t, workspaceStore)
 }
 
 func assertArchivedPlanningAudit(t *testing.T, store workspace.Store, runID string) {
@@ -320,6 +321,52 @@ func assertArchivedPlanningAudit(t *testing.T, store workspace.Store, runID stri
 	}
 	if !sawGriller || !sawScout || !sawPlanner || !sawDelegate || !sawScoutResult || !sawApproval {
 		t.Fatalf("planning audit omitted visible planning work: %#v", planning.Events)
+	}
+}
+
+func assertArchivedExecutionAuditIncludesFinalTask(t *testing.T, store workspace.Store) {
+	t.Helper()
+	paths, err := filepath.Glob(filepath.Join(store.ExecutionHistoryDir(), "plan-execution-*.json"))
+	if err != nil || len(paths) != 1 {
+		t.Fatalf("execution logs=%v, err=%v", paths, err)
+	}
+	body, err := os.ReadFile(paths[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	var stored struct {
+		Checkpoint subagent.ExecutionCheckpoint `json:"checkpoint"`
+	}
+	if err := json.Unmarshal(body, &stored); err != nil {
+		t.Fatal(err)
+	}
+	execution := stored.Checkpoint.ExecutionLog
+	if execution == nil || execution.StartedAt.IsZero() || execution.CompletedAt == nil ||
+		execution.CompletedAt.Before(execution.StartedAt) || len(execution.Events) == 0 {
+		t.Fatalf("execution audit is incomplete: %s", body)
+	}
+	var sawFinalCoderResult, sawFinalReview, sawFinalReviewCompleted bool
+	for index, event := range execution.Events {
+		if event.Sequence != index+1 || event.At.Before(execution.StartedAt) || event.At.After(*execution.CompletedAt) {
+			t.Fatalf("execution event is out of order: %#v", event)
+		}
+		if event.Agent == "coder" && strings.HasSuffix(event.TaskID, "-coder-1-2") &&
+			event.Type == subagent.PlanningEventToolCall && event.Name == subagent.CoderCompleteToolName &&
+			strings.Contains(event.Content, "Preserved the command boundary") {
+			sawFinalCoderResult = true
+		}
+		if event.Agent == "planner" && strings.HasSuffix(event.TaskID, "-planner-1-2") &&
+			event.Type == subagent.PlanningEventToolCall && event.Name == subagent.ReviewTaskToolName &&
+			strings.Contains(event.Content, `"decision":"next"`) {
+			sawFinalReview = true
+		}
+		if event.Agent == "planner" && strings.HasSuffix(event.TaskID, "-planner-1-2") &&
+			event.Type == subagent.PlanningEventActivity && event.Action == subagent.ProgressCompleted {
+			sawFinalReviewCompleted = true
+		}
+	}
+	if !sawFinalCoderResult || !sawFinalReview || !sawFinalReviewCompleted {
+		t.Fatalf("execution audit omitted the final task: %#v", execution.Events)
 	}
 }
 
@@ -553,7 +600,7 @@ func TestCompletedPlanRetriesArchivingWithoutRerunningAgents(t *testing.T) {
 	run := func() error {
 		_, err := executeApprovedPlan(t.Context(), configuredClient, tools, value,
 			[]client.Model{{ID: "plan-model"}}, nil, checkpoint.RunID, store.Root,
-			checkpoint, store, nil, nil, nil)
+			checkpoint, store, nil, nil, nil, nil)
 		return err
 	}
 	if err := run(); err == nil || !strings.Contains(err.Error(), "history") {

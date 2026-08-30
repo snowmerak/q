@@ -218,6 +218,8 @@ Planner만 반복하지 않는다. 기존 사용자 답변, Scout 결과, Loom r
 - Coder tool call의 Loom/path evidence를 자동 수집하고 Planner가 선택적으로 검토
 - task별 `retry | next`, feedback, facts 병합과 attempt 상한
 - Coder/Planner의 상세 trace와 완료 후 접힌 summary
+- 승인 후 Coder/Planner의 progress, assistant message, tool arguments/result를 마지막
+  task review까지 `checkpoint.execution_log.events`에 시간순으로 보관
 - 승인된 실행의 단계별 durable checkpoint와 재시작 recovery UI
 
 후속 구현 범위는 다음과 같다.

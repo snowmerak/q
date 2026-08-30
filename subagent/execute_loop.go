@@ -64,6 +64,7 @@ type ExecutionCheckpoint struct {
 	RunID          string                `json:"run_id,omitempty"`
 	Objective      string                `json:"objective,omitempty"`
 	Planning       *PlanningLog          `json:"planning,omitempty"`
+	ExecutionLog   *ExecutionLog         `json:"execution_log,omitempty"`
 	Phase          ExecutionPhase        `json:"phase"`
 	Plan           PlanProposal          `json:"plan"`
 	TaskIndex      int                   `json:"task_index"`

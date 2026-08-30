@@ -173,6 +173,9 @@ Planner가 반환한 `facts`는 decision 적용 전에 Plan에 중복 제거하�
 - 승인된 audit은 기존 execution JSON의 `checkpoint.planning`에 최종 brief/proposal과
   함께 들어가며, planning audit 자체는 재시작 복구 상태로 사용하지 않는다.
 - Coder attempt와 Planner review의 전체 message/tool lifecycle archive
+- Coder/Planner의 가시적 progress, assistant message, tool arguments/result를
+  `checkpoint.execution_log.events`에 시간순으로 보관하며 마지막 task의 최종
+  `review_task: next`와 Planner 완료 activity까지 포함
 - 승인된 실행의 `.q/sessions/<uuid>/plan-execution.json` atomic checkpoint
 - 완료 실행을 `.q/plan-executions/`의 UTC 타임스탬프 JSON으로 보관
 - 시작 시 중단 실행 감지와 Resume / Inspect / Discard recovery UI
@@ -193,6 +196,13 @@ workspace 변경을 먼저 검사하라는 recovery feedback을 주입한다. �
 어떤 가시적 메시지를 냈고 어떤 도구를 어떤 인자로 호출해 어떤 결과를 받았는지,
 사용자에게 무엇을 물어 어떤 답을 받았는지를 시간순으로 확인할 수 있다. provider가
 반환하지 않은 hidden chain-of-thought는 기록하거나 재구성하지 않는다.
+
+승인 후 실행 상세 기록은 같은 파일의 `checkpoint.execution_log`에 저장된다.
+`events`는 Coder와 review Planner의 가시적 메시지, 도구 인자/결과와 progress를
+시간순으로 담는다. 마지막 task가 `next` review를 받아 `completed`로 전환되는
+checkpoint 저장 때 `completed_at`과 마지막 review 로그도 함께 확정된다. 중단 후
+재개하면 기존 event sequence 뒤에 이어지며, 최종 task 결과 요약은 기존
+`checkpoint.tasks`에도 그대로 남는다.
 
 승인 전에 취소되거나 실패해 execution checkpoint가 생기지 않은 경우에는 같은
 `.q/plan-executions/` 디렉터리에

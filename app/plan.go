@@ -229,12 +229,14 @@ func streamPlanResume(
 	events chan<- agentEvent,
 ) {
 	defer close(events)
+	executionRecorder := newExecutionLogRecorder(checkpoint.ExecutionLog)
 	models, err := configuredClient.ListModels(ctx)
 	if err != nil {
 		emitAgentEvent(ctx, events, agentEvent{err: fmt.Errorf("resume plan: list models: %w", err)})
 		return
 	}
 	progress := func(event subagent.ProgressEvent) {
+		executionRecorder.recordProgress(event)
 		activity := agentActivity{
 			Agent: event.Agent, TaskID: event.TaskID, ParentID: event.ParentID,
 			Action: event.Action, Detail: event.Detail,
@@ -242,6 +244,7 @@ func streamPlanResume(
 		_ = emitAgentEvent(ctx, events, agentEvent{activity: &activity})
 	}
 	trace := func(event subagent.TraceEvent) {
+		executionRecorder.recordTrace(event)
 		entry := agentTrace{
 			Agent: event.Agent, TaskID: event.TaskID, ParentID: event.ParentID,
 			Kind: event.Kind, CallID: event.CallID, Name: event.Name, Content: event.Content, IsError: event.IsError,
@@ -259,7 +262,7 @@ func streamPlanResume(
 	progress(subagent.ProgressEvent{Agent: "executor", Action: subagent.ProgressStarted, Detail: "resuming approved plan"})
 	execution, err := executeApprovedPlan(
 		ctx, configuredClient, toolRuntime, value, models, archive, runID,
-		workingDirectory, checkpoint, executionStore, progress, trace,
+		workingDirectory, checkpoint, executionStore, progress, trace, executionRecorder.executionSnapshot,
 		func(ctx context.Context, checkpoint subagent.ExecutionCheckpoint) error {
 			return emitPlanCheckpoint(ctx, events, checkpoint)
 		},
@@ -341,6 +344,7 @@ func streamPlanWorkflow(
 ) {
 	defer close(events)
 	planningRecorder := newPlanningLogRecorder(runID, objective, contextValues)
+	var executionRecorder *auditLogRecorder
 	failPlanning := func(result subagent.PlanWorkflowResult, planErr error) {
 		planning := planningRecorder.finish(result, subagent.PlanningOutcomeFailed, planErr)
 		if executionStore != nil {
@@ -407,6 +411,9 @@ func streamPlanWorkflow(
 	}
 	progress := func(progress subagent.ProgressEvent) {
 		planningRecorder.recordProgress(progress)
+		if executionRecorder != nil {
+			executionRecorder.recordProgress(progress)
+		}
 		activity := agentActivity{
 			Agent: progress.Agent, TaskID: progress.TaskID, ParentID: progress.ParentID,
 			Action: progress.Action, Detail: progress.Detail,
@@ -415,6 +422,9 @@ func streamPlanWorkflow(
 	}
 	trace := func(event subagent.TraceEvent) {
 		planningRecorder.recordTrace(event)
+		if executionRecorder != nil {
+			executionRecorder.recordTrace(event)
+		}
 		entry := agentTrace{
 			Agent: event.Agent, TaskID: event.TaskID, ParentID: event.ParentID,
 			Kind: event.Kind, CallID: event.CallID, Name: event.Name, Content: event.Content, IsError: event.IsError,
@@ -493,6 +503,8 @@ func streamPlanWorkflow(
 		checkpoint.RunID = runID
 		checkpoint.Objective = objective
 		checkpoint.Planning = &planning
+		executionRecorder = newExecutionLogRecorder(nil)
+		checkpoint.ExecutionLog = executionRecorder.executionSnapshot(false)
 		if executionStore != nil {
 			if saveErr := executionStore.SaveExecution(checkpoint); saveErr != nil {
 				saveErr = archiveFinishedPlanningFailure(planning, saveErr)
@@ -519,7 +531,7 @@ func streamPlanWorkflow(
 		progress(subagent.ProgressEvent{Agent: "executor", Action: subagent.ProgressStarted, Detail: "executing approved plan"})
 		execution, executionErr := executeApprovedPlan(
 			ctx, configuredClient, toolRuntime, value, models, archive, scoutRunID,
-			workingDirectory, checkpoint, executionStore, progress, trace,
+			workingDirectory, checkpoint, executionStore, progress, trace, executionRecorder.executionSnapshot,
 			func(ctx context.Context, checkpoint subagent.ExecutionCheckpoint) error {
 				return emitPlanCheckpoint(ctx, events, checkpoint)
 			},
@@ -552,6 +564,7 @@ func executeApprovedPlan(
 	executionStore planExecutionStore,
 	progress subagent.ProgressFunc,
 	trace subagent.TraceFunc,
+	executionSnapshot func(bool) *subagent.ExecutionLog,
 	checkpointObserver func(context.Context, subagent.ExecutionCheckpoint) error,
 ) (subagent.PlanExecutionResult, error) {
 	coderSpec, err := subagent.Resolve(value, config.AgentRoleCoder, models)
@@ -587,6 +600,9 @@ func executeApprovedPlan(
 	}
 	if executionStore != nil || checkpointObserver != nil {
 		loop.Checkpoint = func(ctx context.Context, checkpoint subagent.ExecutionCheckpoint) error {
+			if executionSnapshot != nil {
+				checkpoint.ExecutionLog = executionSnapshot(checkpoint.Phase == subagent.ExecutionPhaseCompleted)
+			}
 			if executionStore != nil {
 				if err := executionStore.SaveExecution(checkpoint); err != nil {
 					return err

@@ -87,6 +87,13 @@ func testExecutionCheckpoint() subagent.ExecutionCheckpoint {
 				Agent: "planner", Content: "I found the execution boundary.",
 			}},
 		},
+		ExecutionLog: &subagent.ExecutionLog{
+			StartedAt: started.Add(2 * time.Second),
+			Events: []subagent.PlanningEvent{{
+				Sequence: 1, At: started.Add(2 * time.Second), Type: subagent.PlanningEventActivity,
+				Agent: "executor", Action: subagent.ProgressStarted, Detail: "executing approved plan",
+			}},
+		},
 		Phase: subagent.ExecutionPhaseTarget, Attempt: 1,
 		Plan: subagent.PlanProposal{
 			Outcome: "succeeded", Summary: "Persist execution",

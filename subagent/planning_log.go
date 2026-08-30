@@ -34,6 +34,18 @@ type PlanningLog struct {
 	DroppedEvents int             `json:"dropped_events,omitempty"`
 }
 
+// ExecutionLog is the human-readable transcript for the approved execution
+// phase. Task result summaries remain in ExecutionCheckpoint.Tasks; this log
+// preserves the visible Coder/Planner messages and tool traffic that produced
+// them, including the final task.
+type ExecutionLog struct {
+	StartedAt     time.Time       `json:"started_at"`
+	CompletedAt   *time.Time      `json:"completed_at,omitempty"`
+	Events        []PlanningEvent `json:"events,omitempty"`
+	Truncated     bool            `json:"truncated,omitempty"`
+	DroppedEvents int             `json:"dropped_events,omitempty"`
+}
+
 // PlanningEvent keeps planning activity, visible assistant messages, tool
 // traffic, and user interaction in one chronological sequence.
 type PlanningEvent struct {
