@@ -105,6 +105,8 @@ type PlannerRunner struct {
 	Client           AgentClient
 	Tools            ToolRuntime
 	Spec             Spec
+	TaskID           string
+	ParentID         string
 	WorkingDirectory string
 	MaxRounds        int
 	Progress         ProgressFunc
@@ -348,14 +350,21 @@ func (r PlannerRunner) Run(ctx context.Context, brief GrillBrief) (proposal Plan
 		return PlanProposal{}, fmt.Errorf("subagent: planner runner requires role %q", config.AgentRolePlanner)
 	}
 	reportProgress(r.Progress, ProgressEvent{
-		Agent: "planner", Action: ProgressStarted, Detail: brief.Objective,
+		Agent: "planner", TaskID: r.TaskID, ParentID: r.ParentID,
+		Action: ProgressStarted, Detail: brief.Objective,
 	})
 	defer func() {
 		if runErr != nil {
-			reportProgress(r.Progress, ProgressEvent{Agent: "planner", Action: ProgressFailed, Detail: runErr.Error()})
+			reportProgress(r.Progress, ProgressEvent{
+				Agent: "planner", TaskID: r.TaskID, ParentID: r.ParentID,
+				Action: ProgressFailed, Detail: runErr.Error(),
+			})
 			return
 		}
-		reportProgress(r.Progress, ProgressEvent{Agent: "planner", Action: ProgressCompleted, Detail: "approval-ready plan"})
+		reportProgress(r.Progress, ProgressEvent{
+			Agent: "planner", TaskID: r.TaskID, ParentID: r.ParentID,
+			Action: ProgressCompleted, Detail: "approval-ready plan",
+		})
 	}()
 	body, err := json.MarshalIndent(brief, "", "  ")
 	if err != nil {
@@ -377,7 +386,8 @@ func (r PlannerRunner) Run(ctx context.Context, brief GrillBrief) (proposal Plan
 			return PlanProposal{}, fmt.Errorf("subagent: planner context: %w", err)
 		}
 		reportProgress(r.Progress, ProgressEvent{
-			Agent: "planner", Action: ProgressThinking, Detail: fmt.Sprintf("model round %d", round+1),
+			Agent: "planner", TaskID: r.TaskID, ParentID: r.ParentID,
+			Action: ProgressThinking, Detail: fmt.Sprintf("model round %d", round+1),
 		})
 		parallel := false
 		request := client.ChatRequest{
@@ -397,7 +407,7 @@ func (r PlannerRunner) Run(ctx context.Context, brief GrillBrief) (proposal Plan
 		}
 		history.Observe(response.Usage)
 		history.Append(assistant)
-		traceAssistant(r.Trace, "planner", "", "", assistant)
+		traceAssistant(r.Trace, "planner", r.TaskID, r.ParentID, assistant)
 		if len(assistant.ToolCalls) == 0 {
 			if reminders == maximumScoutReminders {
 				return PlanProposal{}, errors.New("subagent: planner ended without submit_plan")
@@ -411,7 +421,8 @@ func (r PlannerRunner) Run(ctx context.Context, brief GrillBrief) (proposal Plan
 		}
 		for _, call := range assistant.ToolCalls {
 			reportProgress(r.Progress, ProgressEvent{
-				Agent: "planner", Action: ProgressTool, Detail: call.Function.Name,
+				Agent: "planner", TaskID: r.TaskID, ParentID: r.ParentID,
+				Action: ProgressTool, Detail: call.Function.Name,
 			})
 			var result client.ToolResult
 			if call.Function.Name == SubmitPlanToolName && len(assistant.ToolCalls) != 1 {
@@ -419,7 +430,7 @@ func (r PlannerRunner) Run(ctx context.Context, brief GrillBrief) (proposal Plan
 			} else if call.Function.Name == SubmitPlanToolName {
 				proposal, parseErr := parsePlanProposal(call.Function.Arguments)
 				if parseErr == nil {
-					_, err := finishRoleTool(ctx, r.Client, &r.Spec, history, request, call, jsonToolResult(proposal), r.Trace, "planner", "", "", nil)
+					_, err := finishRoleTool(ctx, r.Client, &r.Spec, history, request, call, jsonToolResult(proposal), r.Trace, "planner", r.TaskID, r.ParentID, nil)
 					return proposal, err
 				}
 				result = scoutToolError(parseErr)
@@ -451,11 +462,12 @@ func (r PlannerRunner) Run(ctx context.Context, brief GrillBrief) (proposal Plan
 			} else {
 				result = scoutToolError(fmt.Errorf("tool %q is not available to planner", call.Function.Name))
 			}
-			traceToolResult(r.Trace, "planner", "", "", call, result)
-			history.Append(client.Message{
+			traceToolResult(r.Trace, "planner", r.TaskID, r.ParentID, call, result)
+			message := client.Message{
 				Role: client.RoleTool, Name: call.Function.Name,
 				ToolCallID: call.ID, Content: result.Content,
-			})
+			}
+			history.Append(message)
 		}
 	}
 	return PlanProposal{}, fmt.Errorf("subagent: planner exceeded %d model rounds", rounds)
@@ -469,18 +481,32 @@ func (w PlanWorkflow) Run(ctx context.Context, task GrillTask) (PlanWorkflowResu
 	if cycles <= 0 {
 		cycles = defaultPlanningCycles
 	}
+	var last PlanWorkflowResult
 	for cycle := 1; cycle <= cycles; cycle++ {
 		reportProgress(w.Progress, ProgressEvent{
 			Agent: "plan", Action: ProgressStarted, Detail: fmt.Sprintf("Grill cycle %d", cycle),
 		})
-		brief, err := w.Griller.Run(ctx, task)
-		if err != nil {
-			return PlanWorkflowResult{}, err
+		cycleTask := task
+		cycleTask.ID = planningCycleTaskID(task.ID, "griller", cycle)
+		if strings.TrimSpace(task.ID) != "" {
+			cycleTask.ParentID = task.ID
 		}
-		proposal, err := w.Planner.Run(ctx, brief)
+		brief, err := w.Griller.Run(ctx, cycleTask)
 		if err != nil {
-			return PlanWorkflowResult{}, err
+			last.Cycles = cycle
+			return last, err
 		}
+		last = PlanWorkflowResult{Cycles: cycle, Brief: brief}
+		planner := w.Planner
+		planner.TaskID = planningCycleTaskID(task.ID, "planner", cycle)
+		if strings.TrimSpace(task.ID) != "" {
+			planner.ParentID = task.ID
+		}
+		proposal, err := planner.Run(ctx, brief)
+		if err != nil {
+			return last, err
+		}
+		last.Plan = proposal
 		if proposal.Outcome == "blocked" {
 			retainPlanningAttempt(&task, brief, proposal)
 			task.Feedback = append(task.Feedback, "Planner could not produce a valid plan: "+proposal.Blocker)
@@ -499,7 +525,7 @@ func (w PlanWorkflow) Run(ctx context.Context, task GrillTask) (PlanWorkflowResu
 			},
 		})
 		if err != nil {
-			return PlanWorkflowResult{}, err
+			return last, err
 		}
 		switch strings.ToLower(strings.TrimSpace(answer.SelectedChoiceID)) {
 		case "approve":
@@ -515,7 +541,15 @@ func (w PlanWorkflow) Run(ctx context.Context, task GrillTask) (PlanWorkflowResu
 			task.Feedback = append(task.Feedback, "User plan feedback: "+feedback)
 		}
 	}
-	return PlanWorkflowResult{}, fmt.Errorf("subagent: plan workflow exceeded %d Grill cycles", cycles)
+	return last, fmt.Errorf("subagent: plan workflow exceeded %d Grill cycles", cycles)
+}
+
+func planningCycleTaskID(root, role string, cycle int) string {
+	root = strings.TrimSpace(root)
+	if root == "" {
+		return ""
+	}
+	return fmt.Sprintf("%s-%s-%d", root, role, cycle)
 }
 
 func retainPlanningAttempt(task *GrillTask, brief GrillBrief, proposal PlanProposal) {

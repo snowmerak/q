@@ -20,6 +20,7 @@ import (
 type planExecutionStore interface {
 	SaveExecution(subagent.ExecutionCheckpoint) error
 	ArchiveExecution() (string, error)
+	ArchivePlanning(subagent.PlanningLog) (string, error)
 }
 
 func (m model) startPlan(objective string) (tea.Model, tea.Cmd) {
@@ -339,28 +340,39 @@ func streamPlanWorkflow(
 	events chan<- agentEvent,
 ) {
 	defer close(events)
+	planningRecorder := newPlanningLogRecorder(runID, objective, contextValues)
+	failPlanning := func(result subagent.PlanWorkflowResult, planErr error) {
+		planning := planningRecorder.finish(result, subagent.PlanningOutcomeFailed, planErr)
+		if executionStore != nil {
+			if _, archiveErr := executionStore.ArchivePlanning(planning); archiveErr != nil {
+				planErr = errors.Join(planErr, archiveErr)
+			}
+		}
+		emitAgentEvent(ctx, events, agentEvent{err: planErr})
+	}
 	models, err := configuredClient.ListModels(ctx)
 	if err != nil {
-		emitAgentEvent(ctx, events, agentEvent{err: fmt.Errorf("plan: list models: %w", err)})
+		failPlanning(subagent.PlanWorkflowResult{}, fmt.Errorf("plan: list models: %w", err))
 		return
 	}
 	grillerSpec, err := subagent.Resolve(value, config.AgentRoleGriller, models)
 	if err != nil {
-		emitAgentEvent(ctx, events, agentEvent{err: err})
+		failPlanning(subagent.PlanWorkflowResult{}, err)
 		return
 	}
 	scoutSpec, err := subagent.Resolve(value, config.AgentRoleScout, models)
 	if err != nil {
-		emitAgentEvent(ctx, events, agentEvent{err: err})
+		failPlanning(subagent.PlanWorkflowResult{}, err)
 		return
 	}
 	plannerSpec, err := subagent.Resolve(value, config.AgentRolePlanner, models)
 	if err != nil {
-		emitAgentEvent(ctx, events, agentEvent{err: err})
+		failPlanning(subagent.PlanWorkflowResult{}, err)
 		return
 	}
 
 	ask := func(ctx context.Context, question subagent.UserQuestion) (subagent.UserAnswer, error) {
+		planningRecorder.recordQuestion(question)
 		input := askToUserInput{Question: question.Question, Context: question.Context}
 		for _, choice := range question.Choices {
 			input.Choices = append(input.Choices, askToUserChoice{
@@ -369,21 +381,32 @@ func streamPlanWorkflow(
 		}
 		answerChannel := make(chan askToUserOutput, 1)
 		if !emitAgentEvent(ctx, events, agentEvent{question: &input, answer: answerChannel}) {
-			return subagent.UserAnswer{}, ctx.Err()
+			err := ctx.Err()
+			if err == nil {
+				err = errors.New("plan: user interaction ended")
+			}
+			planningRecorder.recordAnswer(subagent.UserAnswer{}, err)
+			return subagent.UserAnswer{}, err
 		}
 		select {
 		case answer := <-answerChannel:
 			if answer.Err != nil {
+				planningRecorder.recordAnswer(subagent.UserAnswer{}, answer.Err)
 				return subagent.UserAnswer{}, answer.Err
 			}
-			return subagent.UserAnswer{
+			result := subagent.UserAnswer{
 				SelectedChoiceID: answer.SelectedChoiceID, Freeform: answer.Freeform,
-			}, nil
+			}
+			planningRecorder.recordAnswer(result, nil)
+			return result, nil
 		case <-ctx.Done():
-			return subagent.UserAnswer{}, ctx.Err()
+			err := ctx.Err()
+			planningRecorder.recordAnswer(subagent.UserAnswer{}, err)
+			return subagent.UserAnswer{}, err
 		}
 	}
 	progress := func(progress subagent.ProgressEvent) {
+		planningRecorder.recordProgress(progress)
 		activity := agentActivity{
 			Agent: progress.Agent, TaskID: progress.TaskID, ParentID: progress.ParentID,
 			Action: progress.Action, Detail: progress.Detail,
@@ -391,6 +414,7 @@ func streamPlanWorkflow(
 		_ = emitAgentEvent(ctx, events, agentEvent{activity: &activity})
 	}
 	trace := func(event subagent.TraceEvent) {
+		planningRecorder.recordTrace(event)
 		entry := agentTrace{
 			Agent: event.Agent, TaskID: event.TaskID, ParentID: event.ParentID,
 			Kind: event.Kind, CallID: event.CallID, Name: event.Name, Content: event.Content, IsError: event.IsError,
@@ -399,12 +423,12 @@ func streamPlanWorkflow(
 	}
 	grillerTools, err := configuredAgentToolRuntime(toolRuntime, grillerSpec.Role, value, workingDirectory)
 	if err != nil {
-		emitAgentEvent(ctx, events, agentEvent{err: fmt.Errorf("plan: configure Griller tools: %w", err)})
+		failPlanning(subagent.PlanWorkflowResult{}, fmt.Errorf("plan: configure Griller tools: %w", err))
 		return
 	}
 	plannerTools, err := configuredAgentToolRuntime(toolRuntime, plannerSpec.Role, value, workingDirectory)
 	if err != nil {
-		emitAgentEvent(ctx, events, agentEvent{err: fmt.Errorf("plan: configure Planner tools: %w", err)})
+		failPlanning(subagent.PlanWorkflowResult{}, fmt.Errorf("plan: configure Planner tools: %w", err))
 		return
 	}
 
@@ -431,14 +455,36 @@ func streamPlanWorkflow(
 		ID: "grill-" + runID, Objective: objective, Context: contextValues,
 	})
 	if err != nil {
-		emitAgentEvent(ctx, events, agentEvent{err: err})
+		failPlanning(result, err)
 		return
 	}
 	content := "Planning canceled. No work was executed."
+	planningOutcome := subagent.PlanningOutcomeCanceled
+	if result.Approved {
+		planningOutcome = subagent.PlanningOutcomeApproved
+	}
+	planning := planningRecorder.finish(result, planningOutcome, nil)
+	archiveFinishedPlanningFailure := func(planning subagent.PlanningLog, planErr error) error {
+		planning.Outcome = subagent.PlanningOutcomeFailed
+		planning.Error = planErr.Error()
+		if executionStore != nil {
+			if _, archiveErr := executionStore.ArchivePlanning(planning); archiveErr != nil {
+				return errors.Join(planErr, archiveErr)
+			}
+		}
+		return planErr
+	}
+	if result.Canceled && executionStore != nil {
+		if _, archiveErr := executionStore.ArchivePlanning(planning); archiveErr != nil {
+			emitAgentEvent(ctx, events, agentEvent{err: archiveErr})
+			return
+		}
+	}
 	if result.Approved {
 		executionID, idErr := sessionstore.NewID()
 		if idErr != nil {
-			emitAgentEvent(ctx, events, agentEvent{err: fmt.Errorf("plan: create execution ID: %w", idErr)})
+			planErr := archiveFinishedPlanningFailure(planning, fmt.Errorf("plan: create execution ID: %w", idErr))
+			emitAgentEvent(ctx, events, agentEvent{err: planErr})
 			return
 		}
 		executionID = "plan-execution-" + executionID
@@ -446,8 +492,10 @@ func streamPlanWorkflow(
 		checkpoint.ExecutionID = executionID
 		checkpoint.RunID = runID
 		checkpoint.Objective = objective
+		checkpoint.Planning = &planning
 		if executionStore != nil {
 			if saveErr := executionStore.SaveExecution(checkpoint); saveErr != nil {
+				saveErr = archiveFinishedPlanningFailure(planning, saveErr)
 				emitAgentEvent(ctx, events, agentEvent{err: saveErr})
 				return
 			}

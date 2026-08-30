@@ -168,6 +168,10 @@ Planner가 반환한 `facts`는 decision 적용 전에 Plan에 중복 제거하�
   `run_command` 뒤에는 `next_offset`을 이어서 `wait`만 사용한다.
 - Coder/Planner의 실제 assistant note, tool arguments/result와 review payload를
   스크롤해서 보는 detailed trace (`Ctrl+G`로 compact activity 전환)
+- 승인 전 Griller/Scout/Planner의 progress, assistant message, tool arguments/result,
+  사용자 질문/답변을 시간순으로 담는 human-readable planning audit
+- 승인된 audit은 기존 execution JSON의 `checkpoint.planning`에 최종 brief/proposal과
+  함께 들어가며, planning audit 자체는 재시작 복구 상태로 사용하지 않는다.
 - Coder attempt와 Planner review의 전체 message/tool lifecycle archive
 - 승인된 실행의 `.q/sessions/<uuid>/plan-execution.json` atomic checkpoint
 - 완료 실행을 `.q/plan-executions/`의 UTC 타임스탬프 JSON으로 보관
@@ -184,7 +188,19 @@ workspace 변경을 먼저 검사하라는 recovery feedback을 주입한다. �
 `.q/plan-executions/plan-execution-<UTC timestamp>-<unique ID>.json`으로 옮긴다.
 파일명은 `plan-execution-20260828T033456.123456789Z-...json` 형식이며, 같은
 시각의 실행도 고유 ID로 구분한다. 저장된 JSON은 최종 Plan, task 결과와 시도
-횟수, session/run ID, `updated_at`을 그대로 보존한다.
+횟수, session/run ID, `updated_at`과 승인 전 planning audit을 그대로 보존한다.
+따라서 승인된 실행은 같은 파일의 `checkpoint.planning.events`에서 Griller/Scout/Planner가
+어떤 가시적 메시지를 냈고 어떤 도구를 어떤 인자로 호출해 어떤 결과를 받았는지,
+사용자에게 무엇을 물어 어떤 답을 받았는지를 시간순으로 확인할 수 있다. provider가
+반환하지 않은 hidden chain-of-thought는 기록하거나 재구성하지 않는다.
+
+승인 전에 취소되거나 실패해 execution checkpoint가 생기지 않은 경우에는 같은
+`.q/plan-executions/` 디렉터리에
+`plan-planning-<UTC timestamp>-<unique ID>.json`을 새로 쓴다. 이 파일은 최상위
+`planning` 필드에 동일한 event schema와 가능한 마지막 brief/proposal을 담는다.
+활성 `.q/sessions/<uuid>/plan-execution.json`은 만들지 않으므로 Grill 단계는
+복구 가능한 checkpoint가 아니다. 로그가 크면 `truncated`와 `dropped_events`로
+표시하고 bounded size로 저장한다.
 
 보관 실패 시 기존 completed checkpoint를 남기므로, 복구 재시도에서는 Coder를
 다시 호출하지 않고 보관을 완료할 수 있다. 실패·중단된 실행은 계속 기존 위치의

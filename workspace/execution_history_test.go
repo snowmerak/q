@@ -3,6 +3,7 @@ package workspace
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -74,6 +75,54 @@ func TestArchiveExecutionPreservesSnapshotAndUsesUniqueUTCTimestamps(t *testing.
 		if runtime.GOOS != "windows" && info.Mode().Perm()&0o077 != 0 {
 			t.Fatalf("history permissions are too broad: %o", info.Mode().Perm())
 		}
+	}
+}
+
+func TestArchivePlanningWritesReadableHistoryWithoutExecutionCheckpoint(t *testing.T) {
+	store := Store{Root: t.TempDir(), SessionID: "session-plan"}
+	started := time.Date(2026, time.August, 28, 3, 30, 0, 0, time.UTC)
+	planning := subagent.PlanningLog{
+		RunID: "run-plan", Objective: "Inspect then plan", StartedAt: started,
+		CompletedAt: started.Add(2 * time.Minute), Outcome: subagent.PlanningOutcomeCanceled, Cycles: 1,
+		Brief: &subagent.GrillBrief{Objective: "Inspect then plan", Conditions: []string{"Ask before execution"}},
+		Plan:  &subagent.PlanProposal{Outcome: "succeeded", Summary: "A readable proposal"},
+		Events: []subagent.PlanningEvent{
+			{Sequence: 1, At: started, Type: subagent.PlanningEventToolCall, Agent: "griller", Name: "loom_read", Content: `{"ref":"loom://example"}`},
+			{Sequence: 2, At: started.Add(time.Second), Type: subagent.PlanningEventToolResult, Agent: "griller", Name: "loom_read", Content: "repository evidence"},
+			{Sequence: 3, At: started.Add(2 * time.Second), Type: subagent.PlanningEventAnswer, Agent: "user", Answer: &subagent.UserAnswer{SelectedChoiceID: "cancel"}},
+		},
+	}
+	now := time.Date(2026, time.August, 28, 12, 34, 56, 123456789, time.FixedZone("KST", 9*60*60))
+	path, err := store.archivePlanningAt(planning, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if filepath.Dir(path) != store.ExecutionHistoryDir() ||
+		!strings.HasPrefix(filepath.Base(path), "plan-planning-20260828T033456.123456789Z-") {
+		t.Fatalf("planning history path = %s", path)
+	}
+	body, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var stored planningFile
+	if err := json.Unmarshal(body, &stored); err != nil {
+		t.Fatal(err)
+	}
+	if stored.Version != executionCurrentVersion || stored.SessionID != store.SessionID ||
+		!reflect.DeepEqual(stored.Planning, planning) || !strings.Contains(string(body), `"tool_result"`) ||
+		!strings.Contains(string(body), `"selected_choice_id": "cancel"`) {
+		t.Fatalf("planning history is incomplete: %s", body)
+	}
+	if _, err := store.LoadExecution(); !errors.Is(err, ErrExecutionNotFound) {
+		t.Fatalf("planning history created a recovery checkpoint: %v", err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runtime.GOOS != "windows" && info.Mode().Perm()&0o077 != 0 {
+		t.Fatalf("planning history permissions are too broad: %o", info.Mode().Perm())
 	}
 }
 

@@ -203,7 +203,11 @@ Planner만 반복하지 않는다. 기존 사용자 답변, Scout 결과, Loom r
 - Scout의 독립 model/tool loop와 inline structured report
 - 검증된 `task_complete` 결과
 - plain-text 종료 reminder
-- Session Store lifecycle 기록
+- Griller, Scout, Planner의 progress, assistant message, tool arguments/result,
+  사용자 질문/답변을 시간순으로 담는 사람이 읽을 수 있는 planning audit
+- re-grill cycle별 고유 task ID와 승인 후 execution까지 이어지는 공통 run ID
+- 승인 시 기존 execution JSON의 `checkpoint.planning`에 brief/proposal과 audit을 포함
+- 취소·실패 시 `.q/plan-executions/plan-planning-<UTC>-<ID>.json`에 별도 보관
 - Planner의 `submit_plan` validation
 - task별 OR-of-AND target condition validation
 - 조건과 계획을 조합한 사용자 confirmation
@@ -219,7 +223,6 @@ Planner만 반복하지 않는다. 기존 사용자 답변, Scout 결과, Loom r
 후속 구현 범위는 다음과 같다.
 
 - 승인 이전 Griller/Planner planning state의 재시작 복구
-- Griller와 Planner 내부 lifecycle archive
 - 전체 activity history를 탐색하는 `/agents` 상세 화면
 - Scout 시작 전 workspace baseline/fingerprint를 기록하고 command 실행 뒤 mutation을
   감지하는 harness guard

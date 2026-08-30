@@ -7,6 +7,7 @@ import (
 	"reflect"
 	"runtime"
 	"testing"
+	"time"
 
 	"github.com/snowmerak/q/loom"
 	"github.com/snowmerak/q/subagent"
@@ -75,8 +76,17 @@ func TestLoomReferencesAtIncludesActivePlanExecution(t *testing.T) {
 }
 
 func testExecutionCheckpoint() subagent.ExecutionCheckpoint {
+	started := time.Date(2026, time.August, 30, 1, 2, 3, 0, time.UTC)
 	return subagent.ExecutionCheckpoint{
 		ExecutionID: "plan-execution-1", RunID: "run-1", Objective: "Resume the plan",
+		Planning: &subagent.PlanningLog{
+			RunID: "run-1", Objective: "Resume the plan", StartedAt: started,
+			CompletedAt: started.Add(time.Second), Outcome: subagent.PlanningOutcomeApproved, Cycles: 1,
+			Events: []subagent.PlanningEvent{{
+				Sequence: 1, At: started, Type: subagent.PlanningEventAssistant,
+				Agent: "planner", Content: "I found the execution boundary.",
+			}},
+		},
 		Phase: subagent.ExecutionPhaseTarget, Attempt: 1,
 		Plan: subagent.PlanProposal{
 			Outcome: "succeeded", Summary: "Persist execution",

@@ -258,6 +258,205 @@ func TestPlanCommandExecutesApprovedPlanWithCoderAndPlannerReview(t *testing.T) 
 		t.Fatalf("successful plan left an execution checkpoint: %v", err)
 	}
 	assertArchivedPlanCheckpoint(t, workspaceStore, 1)
+	assertArchivedPlanningAudit(t, workspaceStore, m.runID)
+}
+
+func assertArchivedPlanningAudit(t *testing.T, store workspace.Store, runID string) {
+	t.Helper()
+	paths, err := filepath.Glob(filepath.Join(store.ExecutionHistoryDir(), "plan-execution-*.json"))
+	if err != nil || len(paths) != 1 {
+		t.Fatalf("execution logs=%v, err=%v", paths, err)
+	}
+	body, err := os.ReadFile(paths[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	var stored struct {
+		Checkpoint subagent.ExecutionCheckpoint `json:"checkpoint"`
+	}
+	if err := json.Unmarshal(body, &stored); err != nil {
+		t.Fatal(err)
+	}
+	planning := stored.Checkpoint.Planning
+	if planning == nil || planning.RunID != runID || planning.Outcome != subagent.PlanningOutcomeApproved ||
+		planning.Cycles != 1 || planning.Brief == nil || planning.Plan == nil ||
+		planning.Brief.Objective != "Add a plan flow" || !strings.Contains(planning.Plan.Summary, "approval-gated") ||
+		planning.StartedAt.IsZero() || planning.CompletedAt.Before(planning.StartedAt) {
+		t.Fatalf("incomplete planning audit: %s", body)
+	}
+	wantTypes := map[string]bool{
+		subagent.PlanningEventInput: false, subagent.PlanningEventActivity: false, subagent.PlanningEventToolCall: false,
+		subagent.PlanningEventToolResult: false, subagent.PlanningEventQuestion: false,
+		subagent.PlanningEventAnswer: false,
+	}
+	var sawGriller, sawScout, sawPlanner, sawDelegate, sawScoutResult, sawApproval bool
+	for index, event := range planning.Events {
+		if event.Sequence != index+1 || event.At.Before(planning.StartedAt) || event.At.After(planning.CompletedAt) {
+			t.Fatalf("planning event is out of order: %#v", event)
+		}
+		if _, tracked := wantTypes[event.Type]; tracked {
+			wantTypes[event.Type] = true
+		}
+		sawGriller = sawGriller || event.Agent == "griller" && event.TaskID == "grill-"+runID+"-griller-1"
+		sawScout = sawScout || event.Agent == "scout"
+		sawPlanner = sawPlanner || event.Agent == "planner" && event.TaskID == "grill-"+runID+"-planner-1"
+		if event.Type == subagent.PlanningEventToolCall && event.Name == subagent.DelegateScoutToolName {
+			sawDelegate = strings.Contains(event.Content, "Locate the plan command boundary")
+		}
+		if event.Type == subagent.PlanningEventToolResult && event.Name == subagent.DelegateScoutToolName {
+			sawScoutResult = strings.Contains(event.Content, "Located the plan command boundary")
+		}
+		if event.Type == subagent.PlanningEventAnswer && event.Answer != nil && event.Answer.SelectedChoiceID == "approve" {
+			sawApproval = true
+		}
+		if event.Agent == "coder" || event.Agent == "executor" {
+			t.Fatalf("execution event leaked into planning audit: %#v", event)
+		}
+	}
+	for eventType, found := range wantTypes {
+		if !found {
+			t.Fatalf("planning audit omitted %q event: %#v", eventType, planning.Events)
+		}
+	}
+	if !sawGriller || !sawScout || !sawPlanner || !sawDelegate || !sawScoutResult || !sawApproval {
+		t.Fatalf("planning audit omitted visible planning work: %#v", planning.Events)
+	}
+}
+
+func TestCanceledPlanArchivesReadablePlanningLogWithoutCheckpoint(t *testing.T) {
+	workspaceStore := workspace.Store{Root: t.TempDir()}
+	configuredClient := &planningClient{responses: []client.Message{
+		{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{planToolCall(subagent.SubmitBriefToolName, `{
+			"objective":"Inspect before changing anything",
+			"conditions":["Execute only after approval"],
+			"acceptance_criteria":["The proposed change is bounded"]
+		}`)}},
+		{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{planToolCall(subagent.SubmitPlanToolName, `{
+			"outcome":"succeeded",
+			"summary":"A bounded plan that will be canceled",
+			"conditions":["Execute only after approval"],
+			"steps":[{"title":"Do not execute","description":"Wait for approval","target":{"any":[{"all":[{"kind":"paths","paths":["app/plan.go"]}]}]}}],
+			"verification":["No work runs without approval"]
+		}`)}},
+	}}
+	value := config.Default()
+	value.Provider.Model = "plan-model"
+	m := newModel(context.Background(), config.Store{Dir: t.TempDir()}, nil)
+	m.workspaceStore = &workspaceStore
+	m.toolRuntime = &fakeAgentTools{}
+	m.enterChat(value, configuredClient)
+
+	m.input.SetValue("/plan")
+	updated, _ := m.submitChat()
+	m = updated.(model)
+	m.input.SetValue("Inspect before changing anything")
+	updated, command := m.submitChat()
+	m = updated.(model)
+	if command == nil {
+		t.Fatalf("canceled plan did not start: armed=%v waiting=%v status=%q client=%v tools=%v input=%q", m.planArmed, m.waiting, m.status, m.client != nil, m.toolRuntime != nil, m.input.Value())
+	}
+	for attempts := 0; !m.asking && m.waiting && attempts < 64; attempts++ {
+		updated, command = m.Update(nextAgentMessage(t, command))
+		m = updated.(model)
+	}
+	if !m.asking || m.pendingQuestion.Question != "Approve this plan?" {
+		t.Fatalf("plan did not reach approval: status=%q messages=%#v question=%#v", m.status, m.messages, m.pendingQuestion)
+	}
+	m.questionChoice = 2
+	m.input.Reset()
+	updated, command = m.submitChat()
+	m = updated.(model)
+	for attempts := 0; m.waiting && attempts < 64; attempts++ {
+		updated, command = m.Update(nextAgentMessage(t, command))
+		m = updated.(model)
+	}
+	if m.waiting || len(m.messages) == 0 || !strings.Contains(m.messages[len(m.messages)-1].Content, "Planning canceled") {
+		t.Fatalf("canceled plan did not finish: waiting=%v messages=%#v", m.waiting, m.messages)
+	}
+	if _, err := workspaceStore.LoadExecution(); !errors.Is(err, workspace.ErrExecutionNotFound) {
+		t.Fatalf("canceled Grill created a recovery checkpoint: %v", err)
+	}
+	paths, err := filepath.Glob(filepath.Join(workspaceStore.ExecutionHistoryDir(), "plan-planning-*.json"))
+	if err != nil || len(paths) != 1 {
+		t.Fatalf("planning logs=%v, err=%v", paths, err)
+	}
+	body, err := os.ReadFile(paths[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	var stored struct {
+		Planning subagent.PlanningLog `json:"planning"`
+	}
+	if err := json.Unmarshal(body, &stored); err != nil {
+		t.Fatal(err)
+	}
+	if stored.Planning.Outcome != subagent.PlanningOutcomeCanceled || stored.Planning.Plan == nil || stored.Planning.Brief == nil {
+		t.Fatalf("canceled planning log is incomplete: %s", body)
+	}
+	var sawCancel bool
+	for _, event := range stored.Planning.Events {
+		if event.Type == subagent.PlanningEventAnswer && event.Answer != nil && event.Answer.SelectedChoiceID == "cancel" {
+			sawCancel = true
+		}
+	}
+	if !sawCancel {
+		t.Fatalf("canceled planning log omitted the user decision: %s", body)
+	}
+}
+
+func TestFailedPlanArchivesPartialPlanningLogWithoutCheckpoint(t *testing.T) {
+	workspaceStore := workspace.Store{Root: t.TempDir()}
+	configuredClient := &planningClient{}
+	value := config.Default()
+	value.Provider.Model = "plan-model"
+	m := newModel(context.Background(), config.Store{Dir: t.TempDir()}, nil)
+	m.workspaceStore = &workspaceStore
+	m.toolRuntime = &fakeAgentTools{}
+	m.enterChat(value, configuredClient)
+
+	m.input.SetValue("/plan")
+	updated, _ := m.submitChat()
+	m = updated.(model)
+	m.input.SetValue("Record a failed planning attempt")
+	updated, command := m.submitChat()
+	m = updated.(model)
+	for attempts := 0; m.waiting && attempts < 64; attempts++ {
+		updated, command = m.Update(nextAgentMessage(t, command))
+		m = updated.(model)
+	}
+	if m.waiting || !strings.Contains(m.status, "no planning response") {
+		t.Fatalf("failed plan did not surface its error: waiting=%v status=%q", m.waiting, m.status)
+	}
+	if _, err := workspaceStore.LoadExecution(); !errors.Is(err, workspace.ErrExecutionNotFound) {
+		t.Fatalf("failed Grill created a recovery checkpoint: %v", err)
+	}
+	paths, err := filepath.Glob(filepath.Join(workspaceStore.ExecutionHistoryDir(), "plan-planning-*.json"))
+	if err != nil || len(paths) != 1 {
+		t.Fatalf("planning logs=%v, err=%v", paths, err)
+	}
+	body, err := os.ReadFile(paths[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	var stored struct {
+		Planning subagent.PlanningLog `json:"planning"`
+	}
+	if err := json.Unmarshal(body, &stored); err != nil {
+		t.Fatal(err)
+	}
+	if stored.Planning.Outcome != subagent.PlanningOutcomeFailed ||
+		!strings.Contains(stored.Planning.Error, "no planning response") || len(stored.Planning.Events) == 0 {
+		t.Fatalf("failed planning log is incomplete: %s", body)
+	}
+	var sawFailure bool
+	for _, event := range stored.Planning.Events {
+		if event.Type == subagent.PlanningEventActivity && event.Agent == "griller" && event.Action == subagent.ProgressFailed {
+			sawFailure = true
+		}
+	}
+	if !sawFailure {
+		t.Fatalf("failed planning log omitted Griller failure activity: %s", body)
+	}
 }
 
 func TestInterruptedPlanRestoresInspectsAndResumesFromPlannerReview(t *testing.T) {
