@@ -3113,6 +3113,11 @@ func (m model) submitChat() (tea.Model, tea.Cmd) {
 		if query, handled := parseAgentSearchCommand(content); handled {
 			return m.startAgentSearch(query)
 		}
+		if command, handled := parsePlanAutomationCommand(content); handled {
+			m.input.Reset()
+			m.status = m.runPlanAutomationCommand(command)
+			return m, m.input.Focus()
+		}
 		switch content {
 		case "/plan":
 			m.input.Reset()

@@ -161,6 +161,12 @@ Planner review는 생략하지 않는다. 두 설정은 config에 저장할 수 
 수 있다. 자동 답변은 planning audit에 각각 `auto-resolve`, `auto-approve` source로
 기록한다.
 
+TUI와 ACP에서 `/auto-approve`, `/auto-resolve`, `/autonomous` 명령은 각각
+`[on|off|status]`를 받는다. 인자가 없으면 status로 취급하고, on/off는
+`~/.q/config.yaml`에 영구 저장한다. `/autonomous on`과 `/autonomous off`는 두 값을
+한 번에 같은 값으로 저장한다. ACP의 process-only CLI override가 저장값과 다르면
+status와 저장 결과에 configured 값과 effective 값을 함께 표시한다.
+
 승인된 Plan의 task 실행과 Planner review 의미는
 [execution-orchestration.md](execution-orchestration.md)를 따른다. Target condition은
 task의 파일 집합만 고르며 순차 조건이나 결과 조건으로 사용하지 않는다.

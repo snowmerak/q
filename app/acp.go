@@ -235,6 +235,7 @@ type acpAgent struct {
 	promptMu            sync.Mutex
 	mcpMu               sync.Mutex
 	learningMu          sync.Mutex
+	planConfigMu        sync.Mutex
 	connection          acpSessionConnection
 	clientCapabilities  acp.ClientCapabilities
 	sessions            map[acp.SessionId]*acpAgent
@@ -311,7 +312,10 @@ func (a *acpAgent) newSessionRuntime() *acpAgent {
 	state.archiveErr = template.archiveErr
 	state.models = append([]client.Model(nil), template.models...)
 	state.gatewayConfig = template.gatewayConfig
+	coordinator := a.coordinator()
+	coordinator.planConfigMu.Lock()
 	state.config = template.config
+	coordinator.planConfigMu.Unlock()
 	state.client = template.client
 	state.workspaceStore = &workspace.Store{Root: a.root}
 
@@ -1784,6 +1788,18 @@ func (a *acpAgent) emitAvailableCommandsContext(ctx context.Context) error {
 			Input: &acp.AvailableCommandInput{Unstructured: &acp.UnstructuredCommandInput{Hint: "work to plan"}},
 		},
 		{
+			Name: "auto-approve", Description: "Persistently control automatic plan approval.",
+			Input: &acp.AvailableCommandInput{Unstructured: &acp.UnstructuredCommandInput{Hint: "on, off, or status"}},
+		},
+		{
+			Name: "auto-resolve", Description: "Persistently control automatic plan clarification.",
+			Input: &acp.AvailableCommandInput{Unstructured: &acp.UnstructuredCommandInput{Hint: "on, off, or status"}},
+		},
+		{
+			Name: "autonomous", Description: "Persistently control both plan automation settings.",
+			Input: &acp.AvailableCommandInput{Unstructured: &acp.UnstructuredCommandInput{Hint: "on, off, or status"}},
+		},
+		{
 			Name: "agent:search", Description: "Run the configured ACP Search agent and return its evidence report.",
 			Input: &acp.AvailableCommandInput{Unstructured: &acp.UnstructuredCommandInput{Hint: "query"}},
 		},
@@ -1802,8 +1818,19 @@ func (a *acpAgent) emitAvailableCommandsContext(ctx context.Context) error {
 
 func (a *acpAgent) runACPCommand(ctx context.Context, text string) (acp.PromptResponse, bool, error) {
 	command := strings.TrimSpace(text)
+	planCommand, planAutomationControl := parsePlanAutomationCommand(command)
 	var output string
 	switch {
+	case planAutomationControl:
+		if !planCommand.valid {
+			output = planCommand.usage()
+			break
+		}
+		var err error
+		output, err = a.runACPPlanAutomationCommand(planCommand)
+		if err != nil {
+			return acp.PromptResponse{}, true, err
+		}
 	case command == "/commit":
 		response, err := a.runACPCommit(ctx)
 		return response, true, err
@@ -1828,7 +1855,7 @@ func (a *acpAgent) runACPCommand(ctx context.Context, text string) (acp.PromptRe
 		response, err := a.runACPPlan(ctx, objective)
 		return response, true, err
 	case command == "/help":
-		output = "Available ACP commands:\n- /plan <work to plan>\n- /agent:search <query>\n- /commit\n- /learn [on|off|status]\n- /clear\n- /help"
+		output = "Available ACP commands:\n- /plan <work to plan>\n- /auto-approve [on|off|status]\n- /auto-resolve [on|off|status]\n- /autonomous [on|off|status]\n- /agent:search <query>\n- /commit\n- /learn [on|off|status]\n- /clear\n- /help"
 	case command == "/learn":
 		if a.state.learningDisabled() {
 			output = "Learning is disabled for this workspace. Use /learn on to enable it."
@@ -1871,6 +1898,33 @@ func (a *acpAgent) runACPCommand(ctx context.Context, text string) (acp.PromptRe
 	return acp.PromptResponse{StopReason: acp.StopReasonEndTurn}, true, nil
 }
 
+func (a *acpAgent) runACPPlanAutomationCommand(command planAutomationCommand) (string, error) {
+	coordinator := a.coordinator()
+	coordinator.planConfigMu.Lock()
+	defer coordinator.planConfigMu.Unlock()
+	configured := coordinator.state.config.Plan
+	next, save := command.apply(configured)
+	if save {
+		value := coordinator.state.config
+		value.Plan = next
+		if err := coordinator.state.store.Save(value); err != nil {
+			return "", err
+		}
+		coordinator.state.config = value
+		configured = next
+	}
+	effective := applyPlanAutomationOverrides(configured, a.planOverrides)
+	return renderPlanAutomationCommand(command, configured, effective, save), nil
+}
+
+func (a *acpAgent) effectivePlanConfig() config.PlanConfig {
+	coordinator := a.coordinator()
+	coordinator.planConfigMu.Lock()
+	configured := coordinator.state.config.Plan
+	coordinator.planConfigMu.Unlock()
+	return applyPlanAutomationOverrides(configured, a.planOverrides)
+}
+
 func (a *acpAgent) clearACPConversation(ctx context.Context) error {
 	runID := a.state.runID
 	a.state.resetConversationState(runID)
@@ -1895,7 +1949,7 @@ func (a *acpAgent) runACPPlan(ctx context.Context, objective string) (response a
 		return acp.PromptResponse{}, errors.New("ACP plan requires an available model and tool runtime")
 	}
 	value := a.state.activeConfig()
-	value.Plan = applyPlanAutomationOverrides(value.Plan, a.planOverrides)
+	value.Plan = a.effectivePlanConfig()
 	_, capabilities := a.connectionState()
 	supportsForm := capabilities.Elicitation != nil && capabilities.Elicitation.Form != nil
 	if !supportsForm && !(value.Plan.AutoApprove && value.Plan.AutoResolve) {

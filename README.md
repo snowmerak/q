@@ -83,6 +83,9 @@ screen and returns to the previous screen without discarding its state.
 | Command | Purpose |
 |---|---|
 | `/plan [request]` | Clarify, research, propose, approve, execute, and review a plan. |
+| `/auto-approve [on\|off\|status]` | Persistently control automatic approval of valid plan proposals. |
+| `/auto-resolve [on\|off\|status]` | Persistently control engineering-default answers to plan clarification. |
+| `/autonomous [on\|off\|status]` | Persistently control both plan automation settings together. |
 | `/agent:search <query>` | Run the configured external ACP Search agent in a temporary read-only session. |
 | `/changes` | Browse current staged, unstaged, and untracked repository changes. |
 | `/commit` | Generate and review a commit or split-commit proposal. |
@@ -334,6 +337,11 @@ process; explicit values such as `--auto-approve=false` are also supported.
 flag takes precedence. `/plan` requires form elicitation unless both interactions
 are automated. `/commit` continues to require form elicitation because Git
 changes require explicit approval.
+
+The TUI and ACP both expose `/auto-approve`, `/auto-resolve`, and `/autonomous`
+with `on`, `off`, and `status` actions. A bare command is equivalent to `status`;
+`on` and `off` persist to `~/.q/config.yaml`. ACP status distinguishes the saved
+configuration from the effective value when a process-only CLI flag overrides it.
 Client-provided stdio and Streamable HTTP MCP servers are scoped to their ACP
 session. SSE transport is not supported.
 

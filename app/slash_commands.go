@@ -26,6 +26,9 @@ func (c slashCommand) usage() string {
 // Keep the local help screen and completion menu on the same command catalog.
 var localSlashCommands = []slashCommand{
 	{"/plan", "[request]", "Grill, research, approve, and execute a work plan."},
+	{"/auto-approve", "[on|off|status]", "Persistently control automatic plan approval."},
+	{"/auto-resolve", "[on|off|status]", "Persistently control automatic plan clarification."},
+	{"/autonomous", "[on|off|status]", "Persistently control both plan automation settings."},
 	{"/agent:search", "<query>", "Run the configured ACP Search agent."},
 	{"/commit", "", "Open the interactive commit workflow."},
 	{"/changes", "", "Browse file diffs with syntax highlighting (read only)."},

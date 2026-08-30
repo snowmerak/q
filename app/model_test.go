@@ -1250,7 +1250,7 @@ func TestHelpCommandAndShortcutKeepCommandsOutOfChatFooter(t *testing.T) {
 	value.Provider.Model = "test-model"
 	m := newModel(context.Background(), config.Store{Dir: t.TempDir()}, nil)
 	m.enterChat(value, &fakeClient{})
-	m.resize(96, 24)
+	m.resize(96, 32)
 
 	chat := ansi.Strip(m.viewChat())
 	if !strings.Contains(chat, "ctrl+h help") {
@@ -1269,7 +1269,8 @@ func TestHelpCommandAndShortcutKeepCommandsOutOfChatFooter(t *testing.T) {
 	}
 	help := ansi.Strip(m.View().Content)
 	for _, expected := range []string{
-		"q · Help", "SLASH COMMANDS", "/plan [request]", "/agent:search <query>", "/commit", "/new", "/clear", "/learn [on|off|status]", "/model",
+		"q · Help", "SLASH COMMANDS", "/plan [request]", "/auto-approve [on|off|status]", "/auto-resolve [on|off|status]",
+		"/autonomous [on|off|status]", "/agent:search <query>", "/commit", "/new", "/clear", "/learn [on|off|status]", "/model",
 		"/gateway", "/changes",
 	} {
 		if !strings.Contains(help, expected) {

@@ -190,8 +190,12 @@ func renderHelpContent(dark bool) string {
 		}
 		body.WriteString(agentTraceTitleStyle(dark).Render(title))
 		body.WriteString("\n")
+		labelWidth := 18
 		for _, row := range rows {
-			body.WriteString(activeLabelStyle.Render(fmt.Sprintf("  %-18s", row[0])))
+			labelWidth = max(labelWidth, len([]rune(row[0])))
+		}
+		for _, row := range rows {
+			body.WriteString(activeLabelStyle.Render(fmt.Sprintf("  %-*s", labelWidth, row[0])))
 			body.WriteString(subtleStyle.Render(row[1]))
 			body.WriteString("\n")
 		}
