@@ -90,7 +90,7 @@ func TestACPAgentRunsAutonomousPlanWithoutFormElicitation(t *testing.T) {
 		{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{planToolCall(subagent.ReviewTaskToolName, `{
 			"decision":"next",
 			"feedback":"",
-			"facts":["The autonomous plan completed"]
+			"fact_changes":[{"op":"add","value":"The autonomous plan completed","reason":"the final task completed successfully"}]
 		}`)}},
 	}}
 	agent, workspaceStore, connection := testACPAgent(t, configuredClient, &fakeAgentTools{})

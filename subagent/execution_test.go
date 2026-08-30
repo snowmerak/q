@@ -119,9 +119,13 @@ func TestExecutionLoopRetriesSameTaskAndAdvancesOnNext(t *testing.T) {
 		Review: func(_ context.Context, request TaskReviewRequest) (TaskReview, error) {
 			switch {
 			case request.TaskIndex == 0 && request.Attempt == 1:
-				return TaskReview{Decision: "retry", Feedback: "", Facts: []string{"first fact"}}, nil
+				return TaskReview{Decision: "retry", Feedback: "", FactChanges: []FactChange{{
+					Op: FactChangeAdd, Value: "first fact", Reason: "first attempt established it",
+				}}}, nil
 			case request.TaskIndex == 0 && request.Attempt == 2:
-				return TaskReview{Decision: "retry", Feedback: "preserve generated code", Facts: []string{"second fact"}}, nil
+				return TaskReview{Decision: "retry", Feedback: "preserve generated code", FactChanges: []FactChange{{
+					Op: FactChangeAdd, Value: "second fact", Reason: "second attempt established it",
+				}}}, nil
 			default:
 				return TaskReview{Decision: "next", Feedback: ""}, nil
 			}
@@ -375,11 +379,20 @@ func TestPlannerTargetFeedsExecutionLoop(t *testing.T) {
 }
 
 func TestTaskReviewRequiresFeedbackButAllowsEmptyRetry(t *testing.T) {
-	review, err := parseTaskReview(`{"decision":"retry","feedback":"","facts":["The package uses generated files","The package uses generated files"]}`)
+	review, err := parseTaskReview(`{
+		"decision":"retry",
+		"feedback":"",
+		"fact_changes":[{
+			"op":"add",
+			"value":"The package uses generated files",
+			"reason":"The generated marker was inspected"
+		}]
+	}`)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if review.Decision != "retry" || review.Feedback != "" || len(review.Facts) != 1 {
+	if review.Decision != "retry" || review.Feedback != "" || len(review.FactChanges) != 1 ||
+		review.FactChanges[0].Op != FactChangeAdd || review.FactChanges[0].Value != "The package uses generated files" {
 		t.Fatalf("review = %#v", review)
 	}
 	if _, err := parseTaskReview(`{"decision":"retry"}`); err == nil || !strings.Contains(err.Error(), "feedback is required") {
@@ -387,6 +400,130 @@ func TestTaskReviewRequiresFeedbackButAllowsEmptyRetry(t *testing.T) {
 	}
 	if _, err := parseTaskReview(`{"decision":"retry_with_feedback","feedback":"fix it"}`); err == nil {
 		t.Fatal("a third review transition was accepted")
+	}
+	if _, err := parseTaskReview(`{"decision":"retry","feedback":"","facts":["legacy fact"]}`); err == nil {
+		t.Fatal("legacy facts field was accepted")
+	}
+}
+
+func TestReviewTaskToolUsesFactChangesContract(t *testing.T) {
+	tool := reviewTaskTool()
+	properties, ok := tool.Function.Parameters["properties"].(map[string]any)
+	if !ok {
+		t.Fatalf("review_task properties = %#v", tool.Function.Parameters["properties"])
+	}
+	if _, exists := properties["facts"]; exists {
+		t.Fatalf("review_task still exposes legacy facts: %#v", properties)
+	}
+	factChanges, ok := properties["fact_changes"].(map[string]any)
+	if !ok || factChanges["type"] != "array" {
+		t.Fatalf("review_task fact_changes = %#v", properties["fact_changes"])
+	}
+	items, ok := factChanges["items"].(map[string]any)
+	if !ok {
+		t.Fatalf("review_task fact_changes items = %#v", factChanges["items"])
+	}
+	variants, ok := items["anyOf"].([]map[string]any)
+	if !ok || len(variants) != 3 {
+		t.Fatalf("review_task fact change variants = %#v", items["anyOf"])
+	}
+}
+
+func TestApplyTaskReviewAppliesFactChangesAtomically(t *testing.T) {
+	plan := executableTestPlan()
+	plan.Facts = []string{"keep this fact", "replace this fact", "remove this fact"}
+	review := TaskReview{Decision: "retry", Feedback: "", FactChanges: []FactChange{
+		{Op: FactChangeReplace, Target: "replace this fact", Value: "replacement fact", Reason: "new evidence corrected it"},
+		{Op: FactChangeRemove, Target: "remove this fact", Reason: "verification disproved it"},
+		{Op: FactChangeAdd, Value: "new fact", Reason: "verification established it"},
+		{Op: FactChangeAdd, Value: "keep this fact", Reason: "the same fact was independently confirmed"},
+	}}
+	if err := ApplyTaskReview(&plan, review); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"keep this fact", "replacement fact", "new fact"}
+	if !reflect.DeepEqual(plan.Facts, want) {
+		t.Fatalf("facts = %#v, want %#v", plan.Facts, want)
+	}
+}
+
+func TestApplyTaskReviewRejectsInvalidFactChangesWithoutMutation(t *testing.T) {
+	tests := []struct {
+		name    string
+		changes []FactChange
+		wantErr string
+	}{
+		{
+			name: "missing target",
+			changes: []FactChange{{
+				Op: FactChangeRemove, Target: "unknown fact", Reason: "it was disproved",
+			}},
+			wantErr: "does not match an existing fact",
+		},
+		{
+			name: "same target twice",
+			changes: []FactChange{
+				{Op: FactChangeReplace, Target: "existing fact", Value: "corrected fact", Reason: "it was corrected"},
+				{Op: FactChangeRemove, Target: "existing fact", Reason: "it was disproved"},
+			},
+			wantErr: "targets a fact more than once",
+		},
+		{
+			name: "missing reason",
+			changes: []FactChange{{
+				Op: FactChangeAdd, Value: "new fact",
+			}},
+			wantErr: "reason is required",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			plan := executableTestPlan()
+			plan.Facts = []string{"existing fact"}
+			err := ApplyTaskReview(&plan, TaskReview{Decision: "retry", Feedback: "", FactChanges: tt.changes})
+			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("error = %v, want %q", err, tt.wantErr)
+			}
+			if !reflect.DeepEqual(plan.Facts, []string{"existing fact"}) {
+				t.Fatalf("facts mutated after failed change: %#v", plan.Facts)
+			}
+		})
+	}
+}
+
+func TestPlannerReviewRetriesFactChangeWithUnknownTarget(t *testing.T) {
+	clientFake := &fakeScoutClient{responses: []client.Message{
+		{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{scoutCall(ReviewTaskToolName, `{
+			"decision":"retry",
+			"feedback":"",
+			"fact_changes":[{
+				"op":"remove",
+				"target":"unknown fact",
+				"reason":"the attempt disproved it"
+			}]
+		}`)}},
+		{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{scoutCall(ReviewTaskToolName, `{
+			"decision":"next",
+			"feedback":""
+		}`)}},
+	}}
+	plan := executableTestPlan()
+	plan.Facts = []string{"known fact"}
+	review, err := (PlannerReviewRunner{
+		Client: clientFake, Spec: Spec{Role: config.AgentRolePlanner, Model: "planner-model"},
+	}).Run(t.Context(), TaskReviewRequest{
+		Plan: plan, TaskIndex: 0, Attempt: 1,
+		Result: CoderResult{Outcome: "succeeded", Summary: "Updated the target"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if review.Decision != "next" || len(clientFake.requests) != 2 {
+		t.Fatalf("review = %#v, requests = %#v", review, clientFake.requests)
+	}
+	messages := clientFake.requests[1].Messages
+	if len(messages) == 0 || !strings.Contains(messages[len(messages)-1].Content, "does not match an existing fact") {
+		t.Fatalf("Planner did not receive fact target error: %#v", messages)
 	}
 }
 
@@ -397,7 +534,11 @@ func TestPlannerReviewCanInspectBoundedCoderEvidence(t *testing.T) {
 		{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{scoutCall(ReviewTaskToolName, `{
 			"decision":"next",
 			"feedback":"",
-			"facts":["The edited file was inspected"]
+			"fact_changes":[{
+				"op":"add",
+				"value":"The edited file was inspected",
+				"reason":"bounded evidence identified the edited file"
+			}]
 		}`)}},
 	}}
 	toolResult := client.ToolResult{Content: `{"ref":"` + loomRef + `","bytes":128}`}
@@ -444,7 +585,7 @@ func TestPlannerReviewCallsExternalSearchAndReceivesCapturedResult(t *testing.T)
 		{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{scoutCall(ExternalSearchToolName,
 			`{"query":"current protocol compatibility","completion_criteria":["cite the specification"]}`)}},
 		{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{scoutCall(ReviewTaskToolName,
-			`{"decision":"next","feedback":"","facts":["The implementation matches the current protocol"]}`)}},
+			`{"decision":"next","feedback":"","fact_changes":[{"op":"add","value":"The implementation matches the current protocol","reason":"the current specification confirms compatibility"}]}`)}},
 	}}
 	var received ExternalSearchInput
 	tools := testExternalSearchRuntime(t, &received, ExternalSearchResult{
@@ -480,7 +621,11 @@ func TestPlannerReviewUpdatesPlanFactsAndCoderPromptCarriesCurrentPlan(t *testin
 		ToolCalls: []client.ToolCall{scoutCall(ReviewTaskToolName, `{
 			"decision":"retry",
 			"feedback":"Preserve the generated section",
-			"facts":["app/model.go contains a generated section"]
+			"fact_changes":[{
+				"op":"add",
+				"value":"app/model.go contains a generated section",
+				"reason":"the generated marker was inspected"
+			}]
 		}`)},
 	}}}
 	sink := &scoutRecordSink{}

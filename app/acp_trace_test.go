@@ -256,7 +256,7 @@ func TestACPAgentStreamsScoutInputsResultsAndCompletion(t *testing.T) {
 		{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{planToolCall(subagent.SubmitBriefToolName, `{"objective":"Inspect main.go","conditions":["Preserve main.go"],"acceptance_criteria":["Inspect entry point"]}`)}},
 		{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{planToolCall(subagent.SubmitPlanToolName, `{"outcome":"succeeded","summary":"Verify main.go","conditions":["Preserve main.go"],"steps":[{"title":"Verify entry point","description":"Inspect main.go","target":{"any":[{"all":[{"kind":"paths","paths":["main.go"]}]}]}}],"verification":["Inspect entry point"]}`)}},
 		{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{planToolCall(subagent.CoderCompleteToolName, `{"outcome":"succeeded","summary":"Verified main.go","verification":["Inspected entry point"]}`)}},
-		{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{planToolCall(subagent.ReviewTaskToolName, `{"decision":"next","feedback":"","facts":["Entry point inspected"]}`)}},
+		{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{planToolCall(subagent.ReviewTaskToolName, `{"decision":"next","feedback":"","fact_changes":[{"op":"add","value":"Entry point inspected","reason":"the task inspected the entry point"}]}`)}},
 	}}
 	tools := &acpScoutTraceTools{}
 	agent, workspaceStore, connection := testACPAgent(t, configuredClient, tools)

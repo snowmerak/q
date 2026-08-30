@@ -983,7 +983,7 @@ func TestACPAgentRunsApprovedPlanThroughElicitation(t *testing.T) {
 		{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{planToolCall(subagent.ReviewTaskToolName, `{
 			"decision":"next",
 			"feedback":"",
-			"facts":["ACP plan execution advanced"]
+			"fact_changes":[{"op":"add","value":"ACP plan execution advanced","reason":"the first task completed successfully"}]
 		}`)}},
 		{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{planToolCall(subagent.CoderCompleteToolName, `{
 			"outcome":"succeeded",
@@ -994,7 +994,7 @@ func TestACPAgentRunsApprovedPlanThroughElicitation(t *testing.T) {
 		{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{planToolCall(subagent.ReviewTaskToolName, `{
 			"decision":"next",
 			"feedback":"",
-			"facts":["ACP plan execution completed"]
+			"fact_changes":[{"op":"add","value":"ACP plan execution completed","reason":"the final task completed successfully"}]
 		}`)}},
 	}}
 	agent, workspaceStore, connection := testACPAgent(t, configuredClient, &fakeAgentTools{})

@@ -80,7 +80,7 @@ func TestPlanCommandExecutesApprovedPlanWithCoderAndPlannerReview(t *testing.T) 
 		{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{planToolCall(subagent.ReviewTaskToolName, `{
 			"decision":"retry",
 			"feedback":"Preserve the existing command boundary",
-			"facts":["app/plan.go owns the approved execution boundary"]
+			"fact_changes":[{"op":"add","value":"app/plan.go owns the approved execution boundary","reason":"the implementation identified the execution boundary"}]
 		}`)}},
 		{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{planToolCall(subagent.CoderCompleteToolName, `{
 			"outcome":"succeeded",
@@ -91,7 +91,7 @@ func TestPlanCommandExecutesApprovedPlanWithCoderAndPlannerReview(t *testing.T) 
 		{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{planToolCall(subagent.ReviewTaskToolName, `{
 			"decision":"next",
 			"feedback":"",
-			"facts":["The approved plan now enters the Coder loop"]
+			"fact_changes":[{"op":"add","value":"The approved plan now enters the Coder loop","reason":"the completed task connected the execution path"}]
 		}`)}},
 	}}
 	value := config.Default()
@@ -524,7 +524,7 @@ func TestInterruptedPlanRestoresInspectsAndResumesFromPlannerReview(t *testing.T
 		ToolCalls: []client.ToolCall{planToolCall(subagent.ReviewTaskToolName, `{
 			"decision":"next",
 			"feedback":"",
-			"facts":["The interrupted Coder result was reviewed after restart"]
+			"fact_changes":[{"op":"add","value":"The interrupted Coder result was reviewed after restart","reason":"the resumed review completed successfully"}]
 		}`)},
 	}}}
 	value := config.Default()

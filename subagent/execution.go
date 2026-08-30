@@ -71,12 +71,28 @@ type TaskReviewRequest struct {
 	Result    CoderResult  `json:"result"`
 }
 
+const (
+	FactChangeAdd     = "add"
+	FactChangeReplace = "replace"
+	FactChangeRemove  = "remove"
+)
+
+// FactChange is an explicit, auditable mutation to the current plan facts.
+// Replace and remove target an exact existing fact so a review cannot silently
+// rewrite or discard the complete fact set.
+type FactChange struct {
+	Op     string `json:"op"`
+	Target string `json:"target,omitempty"`
+	Value  string `json:"value,omitempty"`
+	Reason string `json:"reason"`
+}
+
 // TaskReview has only two transitions. Feedback is always present so retry
 // with and without additional guidance share the same shape.
 type TaskReview struct {
-	Decision string   `json:"decision"`
-	Feedback string   `json:"feedback"`
-	Facts    []string `json:"facts,omitempty"`
+	Decision    string       `json:"decision"`
+	Feedback    string       `json:"feedback"`
+	FactChanges []FactChange `json:"fact_changes,omitempty"`
 }
 
 type PlannerReviewRunner struct {
@@ -194,6 +210,10 @@ func (r PlannerReviewRunner) Run(ctx context.Context, input TaskReviewRequest) (
 			})
 			review, err = parseTaskReview(call.Function.Arguments)
 			if err == nil {
+				currentPlan := input.Plan
+				err = ApplyTaskReview(&currentPlan, review)
+			}
+			if err == nil {
 				if _, err := finishRoleTool(ctx, r.Client, &r.Spec, history, request, call, jsonToolResult(review), r.Trace, "planner", taskID, r.ExecutionID, lifecycle); err != nil {
 					return TaskReview{}, err
 				}
@@ -288,7 +308,43 @@ func ApplyTaskReview(plan *PlanProposal, review TaskReview) error {
 	if err := validateTaskReview(review); err != nil {
 		return err
 	}
-	plan.Facts = cleanStrings(append(plan.Facts, review.Facts...))
+
+	facts := cleanStrings(plan.Facts)
+	existing := make(map[string]struct{}, len(facts))
+	for _, fact := range facts {
+		existing[fact] = struct{}{}
+	}
+	edits := make(map[string]FactChange, len(review.FactChanges))
+	for index, change := range review.FactChanges {
+		if change.Op == FactChangeAdd {
+			continue
+		}
+		if _, ok := existing[change.Target]; !ok {
+			return fmt.Errorf("review_task fact_changes[%d] target does not match an existing fact", index)
+		}
+		if _, ok := edits[change.Target]; ok {
+			return fmt.Errorf("review_task fact_changes[%d] targets a fact more than once", index)
+		}
+		edits[change.Target] = change
+	}
+
+	updated := make([]string, 0, len(facts)+len(review.FactChanges))
+	for _, fact := range facts {
+		change, ok := edits[fact]
+		if !ok {
+			updated = append(updated, fact)
+			continue
+		}
+		if change.Op == FactChangeReplace {
+			updated = append(updated, change.Value)
+		}
+	}
+	for _, change := range review.FactChanges {
+		if change.Op == FactChangeAdd {
+			updated = append(updated, change.Value)
+		}
+	}
+	plan.Facts = cleanStrings(updated)
 	return nil
 }
 
@@ -430,9 +486,9 @@ func validateTaskReviewRequest(request TaskReviewRequest) error {
 
 func parseTaskReview(arguments string) (TaskReview, error) {
 	var wire struct {
-		Decision string   `json:"decision"`
-		Feedback *string  `json:"feedback"`
-		Facts    []string `json:"facts,omitempty"`
+		Decision    string       `json:"decision"`
+		Feedback    *string      `json:"feedback"`
+		FactChanges []FactChange `json:"fact_changes,omitempty"`
 	}
 	if err := decodeStrict(arguments, &wire); err != nil {
 		return TaskReview{}, err
@@ -441,7 +497,13 @@ func parseTaskReview(arguments string) (TaskReview, error) {
 		return TaskReview{}, errors.New("review_task feedback is required; use an empty string when no feedback is needed")
 	}
 	review := TaskReview{
-		Decision: strings.TrimSpace(wire.Decision), Feedback: strings.TrimSpace(*wire.Feedback), Facts: cleanStrings(wire.Facts),
+		Decision: strings.TrimSpace(wire.Decision), Feedback: strings.TrimSpace(*wire.Feedback), FactChanges: wire.FactChanges,
+	}
+	for index := range review.FactChanges {
+		review.FactChanges[index].Op = strings.TrimSpace(review.FactChanges[index].Op)
+		review.FactChanges[index].Target = strings.TrimSpace(review.FactChanges[index].Target)
+		review.FactChanges[index].Value = strings.TrimSpace(review.FactChanges[index].Value)
+		review.FactChanges[index].Reason = strings.TrimSpace(review.FactChanges[index].Reason)
 	}
 	if err := validateTaskReview(review); err != nil {
 		return TaskReview{}, err
@@ -452,6 +514,36 @@ func parseTaskReview(arguments string) (TaskReview, error) {
 func validateTaskReview(review TaskReview) error {
 	if review.Decision != "retry" && review.Decision != "next" {
 		return errors.New("review_task decision must be retry or next")
+	}
+	for index, change := range review.FactChanges {
+		if strings.TrimSpace(change.Reason) == "" {
+			return fmt.Errorf("review_task fact_changes[%d] reason is required", index)
+		}
+		switch change.Op {
+		case FactChangeAdd:
+			if strings.TrimSpace(change.Value) == "" {
+				return fmt.Errorf("review_task fact_changes[%d] add value is required", index)
+			}
+			if strings.TrimSpace(change.Target) != "" {
+				return fmt.Errorf("review_task fact_changes[%d] add must not specify target", index)
+			}
+		case FactChangeReplace:
+			if strings.TrimSpace(change.Target) == "" || strings.TrimSpace(change.Value) == "" {
+				return fmt.Errorf("review_task fact_changes[%d] replace requires target and value", index)
+			}
+			if strings.TrimSpace(change.Target) == strings.TrimSpace(change.Value) {
+				return fmt.Errorf("review_task fact_changes[%d] replace must change the fact", index)
+			}
+		case FactChangeRemove:
+			if strings.TrimSpace(change.Target) == "" {
+				return fmt.Errorf("review_task fact_changes[%d] remove target is required", index)
+			}
+			if strings.TrimSpace(change.Value) != "" {
+				return fmt.Errorf("review_task fact_changes[%d] remove must not specify value", index)
+			}
+		default:
+			return fmt.Errorf("review_task fact_changes[%d] op must be add, replace, or remove", index)
+		}
 	}
 	return nil
 }
@@ -467,7 +559,13 @@ Choose exactly one transition:
 - retry: run the same task again. Always provide feedback; use an empty string when no additional guidance is needed.
 - next: accept this task and advance to the next task (or finish after the final task).
 
-Add only durable facts newly learned from the attempt to facts. Those facts become part of the current plan before the next Coder invocation. Include a concise user-visible review note with the tool call, without exposing hidden chain-of-thought. Finish by calling review_task exactly once.`
+The current plan contains the complete existing facts. Express fact mutations only through fact_changes:
+- add only a durable fact newly learned from this attempt.
+- replace an existing fact only when new evidence shows that its exact text is inaccurate or incomplete.
+- remove an existing fact only when new evidence shows that it is false or no longer durable.
+For replace and remove, copy target exactly from the current plan. Give every change a concise evidence-based reason. Do not rewrite facts merely for style. Changes become part of the current plan before the next Coder invocation.
+
+Include a concise user-visible review note with the tool call, without exposing hidden chain-of-thought. Finish by calling review_task exactly once.`
 }
 
 func plannerReviewTools(available []client.Tool) []client.Tool {
@@ -497,13 +595,42 @@ func plannerReviewTools(available []client.Tool) []client.Tool {
 
 func reviewTaskTool() client.Tool {
 	strict := true
+	factChangeSchema := map[string]any{
+		"description": "Apply one explicit, evidence-based change to the current plan facts.",
+		"anyOf": []map[string]any{
+			{
+				"type": "object", "properties": map[string]any{
+					"op":     map[string]any{"type": "string", "enum": []string{FactChangeAdd}},
+					"value":  map[string]any{"type": "string"},
+					"reason": map[string]any{"type": "string"},
+				}, "required": []string{"op", "value", "reason"}, "additionalProperties": false,
+			},
+			{
+				"type": "object", "properties": map[string]any{
+					"op":     map[string]any{"type": "string", "enum": []string{FactChangeReplace}},
+					"target": map[string]any{"type": "string"},
+					"value":  map[string]any{"type": "string"},
+					"reason": map[string]any{"type": "string"},
+				}, "required": []string{"op", "target", "value", "reason"}, "additionalProperties": false,
+			},
+			{
+				"type": "object", "properties": map[string]any{
+					"op":     map[string]any{"type": "string", "enum": []string{FactChangeRemove}},
+					"target": map[string]any{"type": "string"},
+					"reason": map[string]any{"type": "string"},
+				}, "required": []string{"op", "target", "reason"}, "additionalProperties": false,
+			},
+		},
+	}
 	return client.Tool{Type: client.ToolTypeFunction, Function: client.FunctionDefinition{
 		Name: ReviewTaskToolName, Description: "Review one Coder attempt and choose retry or next.", Strict: &strict,
 		Parameters: map[string]any{
 			"type": "object", "properties": map[string]any{
 				"decision": map[string]any{"type": "string", "enum": []string{"retry", "next"}},
 				"feedback": map[string]any{"type": "string"},
-				"facts":    stringArraySchemaValue(),
+				"fact_changes": map[string]any{
+					"type": "array", "items": factChangeSchema,
+				},
 			}, "required": []string{"decision", "feedback"}, "additionalProperties": false,
 		},
 	}}

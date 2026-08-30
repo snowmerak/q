@@ -23,9 +23,9 @@ Plan
  └─ risks
 ```
 
-`facts`는 승인 시점의 확인된 사실과 실행 중 Planner가 새로 인정한 사실을 함께
-가진다. 다음 Coder 호출의 system prompt에는 일부 요약이 아니라 현재 Plan 전체가
-포함된다.
+`facts`는 승인 시점의 확인된 사실과 실행 중 Planner가 인정한 현재 사실을 함께
+가진다. Planner review는 명시적인 patch로 사실을 추가·교체·삭제할 수 있다. 다음
+Coder 호출의 system prompt에는 일부 요약이 아니라 현재 Plan 전체가 포함된다.
 
 ## Target condition
 
@@ -129,13 +129,23 @@ Planner는 매 Coder attempt 뒤 다음 구조를 반환한다.
 {
   "decision": "retry",
   "feedback": "",
-  "facts": []
+  "fact_changes": [
+    {
+      "op": "add",
+      "value": "새로 확인한 사실",
+      "reason": "검증에서 확인됨"
+    }
+  ]
 }
 ```
 
 - `decision`: `retry` 또는 `next`만 허용한다.
+- `fact_changes`: 기존 plan facts를 대상으로 하는 `add`, `replace`, `remove` patch다.
+  `replace`와 `remove`는 기존 fact의 정확한 문자열을 `target`으로 지정한다.
 - `feedback`: 항상 존재해야 한다. 추가 지시 없는 retry는 빈 문자열을 사용한다.
-- `facts`: 이번 attempt에서 새로 확인되어 이후 실행에도 유효한 사실이다.
+- 각 변경에는 근거를 설명하는 `reason`이 필요하다. `add`는 이번 attempt에서 새로
+  확인된 durable fact에만 사용하고, `replace`와 `remove`는 새 증거가 기존 fact를
+  부정하거나 정정할 때만 사용한다.
 
 `retry`는 같은 task와 같은 target condition을 다시 실행한다. `feedback`이 비어 있지
 않으면 다음 Coder system prompt에 그대로 추가한다. 별도
@@ -144,7 +154,7 @@ Planner는 매 Coder attempt 뒤 다음 구조를 반환한다.
 `next`는 현재 task를 인정하고 다음 task로 이동한다. 마지막 task에서 `next`가
 나오면 전체 실행이 끝난다.
 
-Planner가 반환한 `facts`는 decision 적용 전에 Plan에 중복 제거하여 추가한다.
+Planner가 반환한 `fact_changes`는 decision 적용 전에 Plan에 원자적으로 적용한다.
 따라서 retry와 next 모두 다음 Coder invocation에서 갱신된 Plan을 보게 된다.
 
 ## 현재 구현 상태
@@ -159,6 +169,7 @@ Planner가 반환한 `facts`는 decision 적용 전에 Plan에 중복 제거하�
 - 최종 전이를 강제하는 `review_task`
 - `decision: retry | next`
 - 필수지만 빈 문자열을 허용하는 `feedback`
+- 기존 plan facts를 수정하는 검증 가능한 `fact_changes`
 - review facts를 현재 Plan에 병합하는 처리
 - 현재 Plan 전체를 포함하는 Coder system prompt builder
 - task 순서, retry, next와 attempt 상한을 집행하는 execution loop
