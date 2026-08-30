@@ -68,6 +68,18 @@ cd C:\path\to\project
 q
 ```
 
+Run a complete plan non-interactively with both clarification resolution and
+plan approval forced on for that invocation:
+
+```powershell
+q sprint implement the requested feature
+```
+
+Sprint creates a fresh durable workspace session, runs the same
+Griller → Scout → Planner → Coder → Planner review workflow as `/plan`, and
+streams concise progress plus the final execution result to stdout. It does not
+change the persisted `plan.auto_resolve` or `plan.auto_approve` settings.
+
 On first launch, q opens provider setup. Prefer an environment variable for an
 API key instead of storing a key inline. After selecting a model, type a request
 normally or type `/` to open command completion.
@@ -360,6 +372,7 @@ omits the chat-only `learn` tool.
 
 | Command | Purpose |
 |---|---|
+| `q sprint <request...>` | Run one autonomous plan through execution and review. All trailing argv values are joined as the request. |
 | `q gateway [--host <ip>] [--port <port>]` | Run the OpenAI-compatible Gateway. |
 | `q gateway config` | Configure its listener, API keys, and providers. |
 | `q library` / `q library config` | Run or configure the global Library. |

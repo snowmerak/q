@@ -245,6 +245,7 @@ func renderHelpContent(dark bool) string {
 		{"type", "Write a custom answer instead of choosing an option."},
 	})
 	writeHelpSection("COMMAND LINE", [][2]string{
+		{"q sprint <request...>", "Run an autonomous plan from clarification through review."},
 		{"q commit", "Open the guided commit-message and commit TUI."},
 		{"q memory", "Run Workspace Memory as a dedicated foreground service."},
 		{"q library", "Run the global Library as a dedicated foreground service."},

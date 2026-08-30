@@ -167,6 +167,13 @@ TUI와 ACP에서 `/auto-approve`, `/auto-resolve`, `/autonomous` 명령은 각�
 한 번에 같은 값으로 저장한다. ACP의 process-only CLI override가 저장값과 다르면
 status와 저장 결과에 configured 값과 effective 값을 함께 표시한다.
 
+`q sprint <요구 사항...>`은 `sprint` 뒤의 모든 argv를 공백으로 합친 뒤 새로운
+durable workspace session을 만들고 같은 plan
+workflow를 headless로 실행한다. 해당 실행의 config 복사본에서 `auto_resolve`와
+`auto_approve`를 모두 강제로 활성화하므로 사용자 입력을 기다리지 않으며, 영구
+config는 수정하지 않는다. 기존 `/plan`과 같은 planning audit, execution checkpoint,
+Coder 실행, Planner review를 사용하고 진행 상태와 최종 결과를 stdout에 기록한다.
+
 승인된 Plan의 task 실행과 Planner review 의미는
 [execution-orchestration.md](execution-orchestration.md)를 따른다. Target condition은
 task의 파일 집합만 고르며 순차 조건이나 결과 조건으로 사용하지 않는다.
