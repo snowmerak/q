@@ -1893,6 +1893,10 @@ func (a *acpAgent) emitAvailableCommandsContext(ctx context.Context) error {
 			Input: &acp.AvailableCommandInput{Unstructured: &acp.UnstructuredCommandInput{Hint: "work to plan"}},
 		},
 		{
+			Name: "debug", Description: "Investigate an issue and return an evidence-backed diagnostic report.",
+			Input: &acp.AvailableCommandInput{Unstructured: &acp.UnstructuredCommandInput{Hint: "issue to investigate"}},
+		},
+		{
 			Name: "auto-approve", Description: "Persistently control automatic plan approval.",
 			Input: &acp.AvailableCommandInput{Unstructured: &acp.UnstructuredCommandInput{Hint: "on, off, or status"}},
 		},
@@ -1959,8 +1963,18 @@ func (a *acpAgent) runACPCommand(ctx context.Context, text string) (acp.PromptRe
 		}
 		response, err := a.runACPPlan(ctx, objective)
 		return response, true, err
+	case command == "/debug":
+		output = "Usage: /debug <issue to investigate>"
+	case strings.HasPrefix(command, "/debug "):
+		issue := strings.TrimSpace(strings.TrimPrefix(command, "/debug "))
+		if issue == "" {
+			output = "Usage: /debug <issue to investigate>"
+			break
+		}
+		response, err := a.runACPDebug(ctx, issue)
+		return response, true, err
 	case command == "/help":
-		output = "Available ACP commands:\n- /plan <work to plan>\n- /auto-approve [on|off|status]\n- /auto-resolve [on|off|status]\n- /autonomous [on|off|status]\n- /agent:search <query>\n- /commit\n- /learn [on|off|status]\n- /clear\n- /help"
+		output = "Available ACP commands:\n- /plan <work to plan>\n- /debug <issue to investigate>\n- /auto-approve [on|off|status]\n- /auto-resolve [on|off|status]\n- /autonomous [on|off|status]\n- /agent:search <query>\n- /commit\n- /learn [on|off|status]\n- /clear\n- /help"
 	case command == "/learn":
 		if a.state.learningDisabled() {
 			output = "Learning is disabled for this workspace. Use /learn on to enable it."
@@ -2101,7 +2115,63 @@ func (a *acpAgent) runACPPlan(ctx context.Context, objective string) (acp.Prompt
 		workingDirectory, objective, planContext(a.state.memory.Messages()), executionStore, events,
 	)
 	run := &acpPlanContinuation{
-		workflowCtx: workflowCtx, cancel: cancel, events: events, trace: trace, objective: objective,
+		workflowCtx: workflowCtx, cancel: cancel, events: events, trace: trace, objective: objective, workflow: "plan",
+	}
+	return a.continueACPPlan(ctx, run, persistent)
+}
+
+func (a *acpAgent) runACPDebug(ctx context.Context, issue string) (acp.PromptResponse, error) {
+	if a.state.client == nil || a.state.toolRuntime == nil {
+		return acp.PromptResponse{}, errors.New("ACP debug requires an available model and tool runtime")
+	}
+	value := a.state.activeConfig()
+	value.Plan = a.effectivePlanConfig()
+	_, capabilities := a.connectionState()
+	supportsForm := capabilities.Elicitation != nil && capabilities.Elicitation.Form != nil
+
+	a.state.turnMessageStart = len(a.state.messages)
+	titleChanged := a.state.touchSessionMetadata(issue)
+	message := client.Message{Role: client.RoleUser, Content: issue}
+	a.state.archiveMessage(message, sessionstore.StatusSubmitted, false)
+	a.state.messages = append(a.state.messages, message)
+	if a.state.memory == nil {
+		a.state.memory = memoryForPlan(a.state.activeConfig())
+	}
+	a.state.memory.Append(message)
+	a.launchLearning(a.state.observeLearningMessage(message))
+	if err := a.state.saveWorkspaceSession(); err != nil {
+		return acp.PromptResponse{}, err
+	}
+	if err := a.emitSessionInfoContext(ctx, titleChanged); err != nil {
+		return acp.PromptResponse{}, err
+	}
+	if err := a.emitTaskPlanContext(ctx, issue, acp.PlanEntryStatusInProgress); err != nil {
+		return acp.PromptResponse{}, err
+	}
+
+	workingDirectory := ""
+	if a.state.workspaceStore != nil {
+		workingDirectory = a.state.workspaceStore.Root
+	}
+	traceID, err := sessionstore.NewID()
+	if err != nil {
+		return acp.PromptResponse{}, err
+	}
+	trace := newACPPlanTrace(a.root, traceID, a.updateContext)
+	persistent := !supportsForm
+	workflowParent := ctx
+	if persistent {
+		workflowParent = a.state.ctx
+	}
+	workflowCtx, cancel := context.WithCancel(workflowParent)
+	events := make(chan agentEvent)
+	go streamDebugWorkflow(
+		workflowCtx, a.state.client, a.state.toolRuntime, value, a.state.runID, a.state.archive,
+		workingDirectory, issue, planContext(a.state.memory.Messages()), events,
+	)
+	run := &acpPlanContinuation{
+		workflowCtx: workflowCtx, cancel: cancel, events: events, trace: trace,
+		objective: issue, workflow: "debug",
 	}
 	return a.continueACPPlan(ctx, run, persistent)
 }
@@ -2182,7 +2252,7 @@ func (a *acpAgent) continueACPPlan(
 				errors.Is(run.workflowCtx.Err(), context.Canceled) {
 				return a.finishCancelledPrompt(), nil
 			}
-			a.state.archiveFailure("ACP plan failed", event.err)
+			a.state.archiveFailure("ACP "+run.workflowName()+" failed", event.err)
 			_ = a.state.flushArchive()
 			return acp.PromptResponse{}, event.err
 		}
@@ -2203,7 +2273,7 @@ func (a *acpAgent) continueACPPlan(
 		}
 		return a.finishCancelledPrompt(), nil
 	}
-	return acp.PromptResponse{}, errors.New("plan workflow ended without a response")
+	return acp.PromptResponse{}, fmt.Errorf("%s workflow ended without a response", run.workflowName())
 }
 
 func (a *acpAgent) update(update acp.SessionUpdate) error {

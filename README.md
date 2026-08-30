@@ -95,6 +95,7 @@ screen and returns to the previous screen without discarding its state.
 | Command | Purpose |
 |---|---|
 | `/plan [request]` | Clarify, research, propose, approve, execute, and review a plan. |
+| `/debug [issue]` | Clarify and research an issue, then have Planner return a diagnostic report without modifying the workspace. |
 | `/auto-approve [on\|off\|status]` | Persistently control automatic approval of valid plan proposals. |
 | `/auto-resolve [on\|off\|status]` | Persistently control engineering-default answers to plan clarification. |
 | `/autonomous [on\|off\|status]` | Persistently control both plan automation settings together. |

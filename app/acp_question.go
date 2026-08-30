@@ -30,9 +30,17 @@ type acpPlanContinuation struct {
 	events      <-chan agentEvent
 	trace       *acpPlanTrace
 	objective   string
+	workflow    string
 	detailed    bool
 	finishOnce  sync.Once
 	finishErr   error
+}
+
+func (run *acpPlanContinuation) workflowName() string {
+	if run == nil || strings.TrimSpace(run.workflow) == "" {
+		return "plan"
+	}
+	return strings.TrimSpace(run.workflow)
 }
 
 func (run *acpPlanContinuation) finish(
@@ -46,12 +54,13 @@ func (run *acpPlanContinuation) finish(
 	}
 	run.finishOnce.Do(func() {
 		run.cancel()
-		reason := "Plan workflow ended before the tool returned a result."
+		name := strings.ToUpper(run.workflowName()[:1]) + run.workflowName()[1:]
+		reason := name + " workflow ended before the tool returned a result."
 		if runErr != nil {
-			reason = "Plan workflow stopped: " + runErr.Error()
+			reason = name + " workflow stopped: " + runErr.Error()
 		}
 		if errors.Is(ctx.Err(), context.Canceled) || response.StopReason == acp.StopReasonCancelled {
-			reason = "Plan workflow cancelled before the tool returned a result."
+			reason = name + " workflow cancelled before the tool returned a result."
 		}
 		cleanupCtx, cleanupCancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
 		defer cleanupCancel()

@@ -30,6 +30,7 @@ func (m model) startPlan(objective string) (tea.Model, tea.Cmd) {
 		return m, m.input.Focus()
 	}
 	m.planArmed = false
+	m.debugArmed = false
 	m.input.Placeholder = "Type a message…"
 	m.beginTurn()
 	m.turnMessageStart = len(m.messages)

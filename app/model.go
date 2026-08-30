@@ -329,6 +329,7 @@ type model struct {
 	questionTurnID     uint64
 	questionChoice     int
 	planArmed          bool
+	debugArmed         bool
 	planResumePending  bool
 	planCheckpoint     subagent.ExecutionCheckpoint
 	agentActivities    []agentActivity
@@ -1282,7 +1283,7 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		if len(m.agentTraces) > 0 {
 			m.agentTraceExpanded = false
 			if m.status == "" {
-				m.status = "Plan completed · ctrl+g inspect subagent trace"
+				m.status = "Workflow completed · ctrl+g inspect subagent trace"
 			}
 		}
 		if cacheStatus := promptCacheStatus(message.response.Usage); cacheStatus != "" {
@@ -3122,8 +3123,17 @@ func (m model) submitChat() (tea.Model, tea.Cmd) {
 		case "/plan":
 			m.input.Reset()
 			m.planArmed = true
+			m.debugArmed = false
 			m.input.Placeholder = "Describe the work to plan…"
 			m.status = "Plan mode · enter a planning request"
+			m.resize(m.width, m.height)
+			return m, m.input.Focus()
+		case "/debug":
+			m.input.Reset()
+			m.debugArmed = true
+			m.planArmed = false
+			m.input.Placeholder = "Describe the issue to investigate…"
+			m.status = "Debug mode · enter an issue"
 			m.resize(m.width, m.height)
 			return m, m.input.Focus()
 		case "/commit":
@@ -3214,8 +3224,14 @@ func (m model) submitChat() (tea.Model, tea.Cmd) {
 		if strings.HasPrefix(content, "/plan ") {
 			return m.startPlan(strings.TrimSpace(strings.TrimPrefix(content, "/plan")))
 		}
+		if strings.HasPrefix(content, "/debug ") {
+			return m.startDebug(strings.TrimSpace(strings.TrimPrefix(content, "/debug")))
+		}
 		if m.planArmed {
 			return m.startPlan(content)
+		}
+		if m.debugArmed {
+			return m.startDebug(content)
 		}
 	}
 	m.clearAgentActivities()
@@ -3290,6 +3306,7 @@ func (m model) submitQuestionAnswer(content string) (tea.Model, tea.Cmd) {
 	turnContext := m.activeTurnContext()
 	m.asking = false
 	m.planArmed = false
+	m.debugArmed = false
 	m.pendingQuestion = askToUserInput{}
 	m.questionChoice = 0
 	m.questionAnswer = nil
@@ -3352,6 +3369,7 @@ func (m model) interruptTurn() (tea.Model, tea.Cmd) {
 	m.compacting = false
 	m.asking = false
 	m.planArmed = false
+	m.debugArmed = false
 	m.submitPending = false
 	m.pendingMessage = client.Message{}
 	m.streamResponse = ""
@@ -3838,6 +3856,7 @@ func (m *model) rollbackPendingMessage() {
 	m.compacting = false
 	m.asking = false
 	m.planArmed = false
+	m.debugArmed = false
 	m.pendingQuestion = askToUserInput{}
 	m.questionAnswer = nil
 	m.questionEvents = nil
@@ -4370,6 +4389,7 @@ func (m *model) resetConversationState(runIDs ...string) {
 	m.asking = false
 	m.slashCompletion = slashCompletionState{}
 	m.planArmed = false
+	m.debugArmed = false
 	m.planResumePending = false
 	m.planCheckpoint = subagent.ExecutionCheckpoint{}
 	m.pendingQuestion = askToUserInput{}
@@ -4405,6 +4425,7 @@ func (m *model) releaseConversationState(root string) {
 	m.questionEvents = nil
 	m.questionTurnID = 0
 	m.planArmed = false
+	m.debugArmed = false
 	m.planResumePending = false
 	m.planCheckpoint = subagent.ExecutionCheckpoint{}
 	m.transcriptThoughts = nil
