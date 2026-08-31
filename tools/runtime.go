@@ -100,7 +100,7 @@ func NewRuntimeWithArchiveAndLoomOptionsAndLSP(
 }
 
 // NewRuntimeWithArchiveAndLoomOptionsAndLSPAndLibrary routes global Agent
-// Skills through the shared Library while keeping project skills local.
+// Skills through the shared Library while keeping workspace skills local.
 func NewRuntimeWithArchiveAndLoomOptionsAndLSPAndLibrary(
 	ctx context.Context,
 	root string,
@@ -252,7 +252,7 @@ func (r *Runtime) ReloadSkills() error {
 	if err := r.skills.Reload(); err != nil {
 		return err
 	}
-	if err := r.syncProjectSkills(context.Background()); err != nil {
+	if err := r.syncWorkspaceSkills(context.Background()); err != nil {
 		return err
 	}
 	return r.reloadGlobalSkills(context.Background())
@@ -266,7 +266,7 @@ func (r *Runtime) InstallSkill(ctx context.Context, scope, repository string) (a
 	if err != nil {
 		return agentskills.Skill{}, err
 	}
-	if err := r.syncProjectSkills(ctx); err != nil {
+	if err := r.syncWorkspaceSkills(ctx); err != nil {
 		return agentskills.Skill{}, err
 	}
 	if skill.Scope == "global" {
@@ -285,7 +285,7 @@ func (r *Runtime) UpdateSkill(ctx context.Context, idOrName string) (agentskills
 	if err != nil {
 		return agentskills.Skill{}, err
 	}
-	if err := r.syncProjectSkills(ctx); err != nil {
+	if err := r.syncWorkspaceSkills(ctx); err != nil {
 		return agentskills.Skill{}, err
 	}
 	if skill.Scope == "global" {
@@ -304,7 +304,7 @@ func (r *Runtime) RemoveSkill(ctx context.Context, idOrName string) (agentskills
 	if err != nil {
 		return agentskills.Skill{}, err
 	}
-	if err := r.syncProjectSkills(ctx); err != nil {
+	if err := r.syncWorkspaceSkills(ctx); err != nil {
 		return agentskills.Skill{}, err
 	}
 	if skill.Scope == "global" {
@@ -315,7 +315,7 @@ func (r *Runtime) RemoveSkill(ctx context.Context, idOrName string) (agentskills
 	return skill, nil
 }
 
-func (r *Runtime) syncProjectSkills(ctx context.Context) error {
+func (r *Runtime) syncWorkspaceSkills(ctx context.Context) error {
 	if r.skillStore == nil {
 		return nil
 	}

@@ -59,6 +59,20 @@ func TestInstallAndUpdateGitSkill(t *testing.T) {
 	}
 }
 
+func TestManagedRootUsesWorkspaceTerminologyAndKeepsLegacyAliases(t *testing.T) {
+	root := t.TempDir()
+	registry := &Registry{root: root, home: t.TempDir()}
+	for _, scope := range []string{"workspace", "project", "session"} {
+		managed, source, err := registry.managedRoot(scope)
+		if err != nil {
+			t.Fatalf("scope %q: %v", scope, err)
+		}
+		if managed != filepath.Join(root, ".q", "skills") || source != SourceProjectQ {
+			t.Fatalf("scope %q resolved to %q, %q", scope, managed, source)
+		}
+	}
+}
+
 func writeGitSkill(t *testing.T, directory, description string) {
 	t.Helper()
 	body := "---\nname: git-managed-skill\ndescription: " + description + "\n---\n\n# Git managed\n"

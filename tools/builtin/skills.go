@@ -16,7 +16,7 @@ import (
 
 type SearchSkillsInput struct {
 	Query  string   `json:"query" jsonschema:"Keywords describing the procedure or expertise needed"`
-	Scopes []string `json:"scopes,omitempty" jsonschema:"Optional exact scopes: global or project"`
+	Scopes []string `json:"scopes,omitempty" jsonschema:"Optional exact scopes: global or workspace"`
 	Tags   []string `json:"tags,omitempty" jsonschema:"Optional tags; a skill must match at least one"`
 	Limit  int      `json:"limit,omitempty" jsonschema:"Maximum results; uses the Session Store default when omitted"`
 }
@@ -59,7 +59,7 @@ func searchSkills(ctx context.Context, archive Archive, global GlobalSkillLibrar
 		return SearchSkillsOutput{}, errors.New("[E_SKILLS] Session Store is unavailable")
 	}
 	if global == nil {
-		return searchLocalSkills(ctx, archive, input, input.Scopes)
+		return searchLocalSkills(ctx, archive, input, storedSkillScopes(input.Scopes))
 	}
 	limit := input.Limit
 	if limit == 0 {
@@ -68,9 +68,9 @@ func searchSkills(ctx context.Context, archive Archive, global GlobalSkillLibrar
 	if limit < 1 || limit > 100 {
 		return SearchSkillsOutput{}, errors.New("[E_SKILLS] limit must be between 1 and 100")
 	}
-	includeGlobal, includeProject := requestedSkillScopes(input.Scopes)
+	includeGlobal, includeWorkspace := requestedSkillScopes(input.Scopes)
 	output := SearchSkillsOutput{}
-	if includeProject {
+	if includeWorkspace {
 		local, err := searchLocalSkills(ctx, archive, SearchSkillsInput{
 			Query: input.Query, Tags: input.Tags, Limit: limit,
 		}, []string{"project"})
@@ -118,7 +118,7 @@ func collapseShadowedSkills(hits []SkillSearchHit) []SkillSearchHit {
 	for _, hit := range hits {
 		name := strings.ToLower(strings.TrimSpace(hit.Title))
 		if index, exists := byName[name]; exists {
-			if result[index].Scope != "project" && hit.Scope == "project" {
+			if result[index].Scope != "workspace" && hit.Scope == "workspace" {
 				result[index] = hit
 			}
 			continue
@@ -143,13 +143,13 @@ func searchLocalSkills(ctx context.Context, archive Archive, input SearchSkillsI
 	for _, hit := range result.Hits {
 		output.Hits = append(output.Hits, SkillSearchHit{
 			ID: hit.Record.ID, Title: hit.Record.Summary, Description: hit.Record.Content,
-			Tags: hit.Record.Tags, Scope: hit.Record.Scope, Location: hit.Record.Location, Score: hit.Score,
+			Tags: hit.Record.Tags, Scope: publicSkillScope(hit.Record.Scope), Location: hit.Record.Location, Score: hit.Score,
 		})
 	}
 	return output, nil
 }
 
-func requestedSkillScopes(scopes []string) (global, project bool) {
+func requestedSkillScopes(scopes []string) (global, workspace bool) {
 	if len(scopes) == 0 {
 		return true, true
 	}
@@ -157,11 +157,38 @@ func requestedSkillScopes(scopes []string) (global, project bool) {
 		switch strings.ToLower(strings.TrimSpace(scope)) {
 		case "global":
 			global = true
-		case "project":
-			project = true
+		case "workspace", "project", "session":
+			workspace = true
 		}
 	}
-	return global, project
+	return global, workspace
+}
+
+func storedSkillScopes(scopes []string) []string {
+	if len(scopes) == 0 {
+		return nil
+	}
+	global, workspace := requestedSkillScopes(scopes)
+	result := make([]string, 0, 2)
+	if global {
+		result = append(result, "global")
+	}
+	if workspace {
+		result = append(result, "project")
+	}
+	if len(result) == 0 {
+		return []string{"unknown"}
+	}
+	return result
+}
+
+func publicSkillScope(scope string) string {
+	switch strings.ToLower(strings.TrimSpace(scope)) {
+	case "project", "session", "workspace":
+		return "workspace"
+	default:
+		return scope
+	}
 }
 
 func getSkill(ctx context.Context, registry *agentskills.Registry, global GlobalSkillLibrary, runtime *LoomRuntime, input GetSkillInput) (GetSkillOutput, error) {
@@ -188,6 +215,7 @@ func getSkill(ctx context.Context, registry *agentskills.Registry, global Global
 		}
 		skill, path, content = resource.Skill, resource.Path, resource.Content
 	}
+	skill.Scope = publicSkillScope(skill.Scope)
 	mediaType := "text/plain"
 	if strings.EqualFold(filepath.Ext(path), ".md") {
 		mediaType = "text/markdown"

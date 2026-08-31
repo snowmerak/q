@@ -10,8 +10,11 @@ import (
 	"github.com/snowmerak/llm-provider/gateway"
 	"github.com/snowmerak/q/agentskills"
 	"github.com/snowmerak/q/config"
+	qlibrary "github.com/snowmerak/q/library"
 	"github.com/snowmerak/q/providerhost"
+	"github.com/snowmerak/q/sessionstore"
 	"github.com/snowmerak/q/workspace"
+	"github.com/snowmerak/q/workspacememory"
 )
 
 func (m model) isStandaloneScreen(value screen) bool {
@@ -63,25 +66,88 @@ func RunIgnoreDefault(ctx context.Context) error {
 }
 
 type standaloneSkillRegistry struct {
-	registry *agentskills.Registry
+	registry       *agentskills.Registry
+	workspaceStore agentskills.RecordStore
+	globalSkills   interface {
+		ReloadSkills(context.Context) (qlibrary.SkillReloadResponse, error)
+	}
+	globalErr error
 }
 
 func (r *standaloneSkillRegistry) Skills() []agentskills.Skill       { return r.registry.Skills() }
 func (r *standaloneSkillRegistry) SkillEntries() []agentskills.Skill { return r.registry.Entries() }
 func (r *standaloneSkillRegistry) SkillIssues() []agentskills.Issue  { return r.registry.Issues() }
-func (r *standaloneSkillRegistry) ReloadSkills() error               { return r.registry.Reload() }
+func (r *standaloneSkillRegistry) ReloadSkills() error {
+	if err := r.registry.Reload(); err != nil {
+		return err
+	}
+	ctx := context.Background()
+	return errors.Join(r.syncWorkspaceSkills(ctx), r.reloadGlobalSkills(ctx))
+}
 func (r *standaloneSkillRegistry) InstallSkill(ctx context.Context, scope, repository string) (agentskills.Skill, error) {
-	return r.registry.InstallGit(ctx, scope, repository)
+	skill, err := r.registry.InstallGit(ctx, scope, repository)
+	if err != nil {
+		return agentskills.Skill{}, err
+	}
+	if err := r.reconcile(ctx, skill.Scope); err != nil {
+		return agentskills.Skill{}, err
+	}
+	return skill, nil
 }
 func (r *standaloneSkillRegistry) UpdateSkill(ctx context.Context, identifier string) (agentskills.Skill, error) {
-	return r.registry.UpdateGit(ctx, identifier)
+	skill, err := r.registry.UpdateGit(ctx, identifier)
+	if err != nil {
+		return agentskills.Skill{}, err
+	}
+	if err := r.reconcile(ctx, skill.Scope); err != nil {
+		return agentskills.Skill{}, err
+	}
+	return skill, nil
 }
-func (r *standaloneSkillRegistry) RemoveSkill(_ context.Context, identifier string) (agentskills.Skill, error) {
-	return r.registry.RemoveGit(identifier)
+func (r *standaloneSkillRegistry) RemoveSkill(ctx context.Context, identifier string) (agentskills.Skill, error) {
+	skill, err := r.registry.RemoveGit(identifier)
+	if err != nil {
+		return agentskills.Skill{}, err
+	}
+	if err := r.reconcile(ctx, skill.Scope); err != nil {
+		return agentskills.Skill{}, err
+	}
+	return skill, nil
 }
 
-// RunSkills opens lightweight global/project skill management for the current workspace.
+func (r *standaloneSkillRegistry) reconcile(ctx context.Context, scope string) error {
+	if scope == "global" {
+		return r.reloadGlobalSkills(ctx)
+	}
+	return r.syncWorkspaceSkills(ctx)
+}
+
+func (r *standaloneSkillRegistry) syncWorkspaceSkills(ctx context.Context) error {
+	if r.workspaceStore == nil {
+		return nil
+	}
+	return r.registry.SyncRecordsForScopes(ctx, r.workspaceStore, "project")
+}
+
+func (r *standaloneSkillRegistry) reloadGlobalSkills(ctx context.Context) error {
+	if r.globalSkills != nil {
+		_, err := r.globalSkills.ReloadSkills(ctx)
+		return err
+	}
+	return r.globalErr
+}
+
+// RunSkills opens global/workspace skill management and keeps both derived
+// skill indexes synchronized for the current workspace.
 func RunSkills(ctx context.Context, store workspace.Store) error {
+	configStore, err := config.DefaultStore()
+	if err != nil {
+		return err
+	}
+	return runSkills(ctx, store, configStore)
+}
+
+func runSkills(ctx context.Context, store workspace.Store, configStore config.Store) error {
 	lock, err := workspace.AcquireLock(store.Root, "q skills")
 	if err != nil {
 		return err
@@ -91,16 +157,56 @@ func RunSkills(ctx context.Context, store workspace.Store) error {
 	if err != nil {
 		return err
 	}
+	loaded, configErr := configStore.Load()
+	if configErr != nil && !errors.Is(configErr, config.ErrNotFound) {
+		return configErr
+	}
+	vectorConfig := sessionstore.VectorConfig{}
+	if configErr == nil && loaded.Embedding.Model != "" {
+		vectorConfig = sessionstore.VectorConfig{
+			Model: loaded.Embedding.Model, Dimensions: loaded.Embedding.Dimensions,
+		}
+	}
+	memoryRuntime, err := workspacememory.Ensure(ctx, configStore.Dir)
+	if err != nil {
+		return err
+	}
+	workspaceStore, err := memoryRuntime.Client().OpenWorkspace(ctx, store.Root, vectorConfig)
+	if err != nil {
+		return errors.Join(err, memoryRuntime.Close())
+	}
+	libraryRuntime, libraryErr := qlibrary.Ensure(ctx, configStore.Dir)
+	registryRuntime := &standaloneSkillRegistry{
+		registry: registry, workspaceStore: workspaceStore, globalErr: libraryErr,
+	}
+	if libraryRuntime != nil {
+		registryRuntime.globalSkills = libraryRuntime.Client()
+	}
+	if err := registryRuntime.syncWorkspaceSkills(ctx); err != nil {
+		return errors.Join(err, closeStandaloneSkillServices(workspaceStore, memoryRuntime, libraryRuntime))
+	}
 	m := newModel(ctx, config.Store{}, nil)
 	m.workspaceStore = &store
-	m.skillRegistry = &standaloneSkillRegistry{registry: registry}
+	m.skillRegistry = registryRuntime
 	updated, _ := m.enterSkills()
 	m = updated.(model)
 	if m.screen != screenSkills {
-		return errors.New(m.status)
+		return errors.Join(errors.New(m.status), closeStandaloneSkillServices(workspaceStore, memoryRuntime, libraryRuntime))
 	}
-	_, err = runStandalone(m, screenSkills)
-	return err
+	_, runErr := runStandalone(m, screenSkills)
+	return errors.Join(runErr, closeStandaloneSkillServices(workspaceStore, memoryRuntime, libraryRuntime))
+}
+
+func closeStandaloneSkillServices(
+	workspaceStore *workspacememory.Workspace,
+	memoryRuntime *workspacememory.Runtime,
+	libraryRuntime *qlibrary.Runtime,
+) error {
+	var libraryCloseErr error
+	if libraryRuntime != nil {
+		libraryCloseErr = libraryRuntime.Close()
+	}
+	return errors.Join(workspaceStore.Close(), libraryCloseErr, memoryRuntime.Close())
 }
 
 func RunSkillsDefault(ctx context.Context) error {

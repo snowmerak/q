@@ -2,14 +2,27 @@ package app
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/snowmerak/q/agentskills"
 	"github.com/snowmerak/q/config"
+	qlibrary "github.com/snowmerak/q/library"
+	"github.com/snowmerak/q/sessionstore"
 	"github.com/snowmerak/q/workspace"
 )
+
+type fakeStandaloneSkillLibrary struct {
+	reloads int
+}
+
+func (f *fakeStandaloneSkillLibrary) ReloadSkills(context.Context) (qlibrary.SkillReloadResponse, error) {
+	f.reloads++
+	return qlibrary.SkillReloadResponse{Active: 1}, nil
+}
 
 func TestStandaloneRootScreensQuitOnEscape(t *testing.T) {
 	store := config.Store{Dir: t.TempDir()}
@@ -116,5 +129,50 @@ func TestStandaloneSkillsUsesLightweightRegistry(t *testing.T) {
 	m = updated.(model)
 	if m.screen != screenSkills || m.toolRuntime != nil || m.currentSkillRuntime() == nil {
 		t.Fatalf("standalone skills state = screen %v, tools %#v, skills %#v", m.screen, m.toolRuntime, m.currentSkillRuntime())
+	}
+}
+
+func TestStandaloneSkillsReloadSynchronizesWorkspaceAndGlobalIndexes(t *testing.T) {
+	root := t.TempDir()
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	directory := filepath.Join(root, ".agents", "skills", "workspace-skill")
+	if err := os.MkdirAll(directory, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	body := "---\nname: workspace-skill\ndescription: Indexed workspace instructions.\n---\n\n# Instructions\n"
+	if err := os.WriteFile(filepath.Join(directory, "SKILL.md"), []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	registry, err := agentskills.Discover(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	workspaceStore, err := sessionstore.Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = workspaceStore.Close() })
+	global := &fakeStandaloneSkillLibrary{}
+	runtime := &standaloneSkillRegistry{
+		registry: registry, workspaceStore: workspaceStore, globalSkills: global,
+	}
+	if err := runtime.ReloadSkills(); err != nil {
+		t.Fatal(err)
+	}
+	result, err := workspaceStore.Search(context.Background(), sessionstore.SearchOptions{
+		Filters: sessionstore.Filters{
+			Kinds: []string{sessionstore.KindSkill}, Scopes: []string{"project"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Total != 1 || len(result.Hits) != 1 || result.Hits[0].Record.Summary != "workspace-skill" {
+		t.Fatalf("workspace skill index = %#v", result)
+	}
+	if global.reloads != 1 {
+		t.Fatalf("global skill reloads = %d", global.reloads)
 	}
 }

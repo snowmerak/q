@@ -23,7 +23,7 @@ const (
 
 const (
 	skillScopeGlobal = iota
-	skillScopeProject
+	skillScopeWorkspace
 	skillScopeCount
 )
 
@@ -61,7 +61,7 @@ func (m model) startSkillCommand(content string) (model, tea.Cmd, bool) {
 	switch parts[1] {
 	case "add":
 		if len(parts) != 4 {
-			m.status = "usage: /skills add <global|project> <git-url>"
+			m.status = "usage: /skills add <global|workspace> <git-url>"
 			return m, nil, true
 		}
 		scope, repository := parts[2], parts[3]
@@ -96,21 +96,21 @@ func (m model) startSkillCommand(content string) (model, tea.Cmd, bool) {
 func installSkillCmd(ctx context.Context, runtime skillManageRuntime, scope, repository string) tea.Cmd {
 	return func() tea.Msg {
 		skill, err := runtime.InstallSkill(ctx, scope, repository)
-		return skillActionMsg{detail: fmt.Sprintf("Installed %s · %s", skill.Name, skill.Scope), err: err}
+		return skillActionMsg{detail: fmt.Sprintf("Installed %s · %s", skill.Name, skillScopeDisplayName(skill.Scope)), err: err}
 	}
 }
 
 func updateSkillCmd(ctx context.Context, runtime skillManageRuntime, identifier string) tea.Cmd {
 	return func() tea.Msg {
 		skill, err := runtime.UpdateSkill(ctx, identifier)
-		return skillActionMsg{detail: fmt.Sprintf("Pulled %s · %s", skill.Name, skill.Scope), err: err}
+		return skillActionMsg{detail: fmt.Sprintf("Pulled %s · %s", skill.Name, skillScopeDisplayName(skill.Scope)), err: err}
 	}
 }
 
 func removeSkillCmd(ctx context.Context, runtime skillManageRuntime, identifier string) tea.Cmd {
 	return func() tea.Msg {
 		skill, err := runtime.RemoveSkill(ctx, identifier)
-		return skillActionMsg{detail: fmt.Sprintf("Removed %s · %s", skill.Name, skill.Scope), err: err}
+		return skillActionMsg{detail: fmt.Sprintf("Removed %s · %s", skill.Name, skillScopeDisplayName(skill.Scope)), err: err}
 	}
 }
 
@@ -134,8 +134,8 @@ func (m model) enterSkills() (tea.Model, tea.Cmd) {
 	m.skillsStatusError = false
 	m.resize(m.width, m.height)
 	m.refreshSkills(true)
-	if len(m.skillsForScope(skillScopeGlobal)) == 0 && len(m.skillsForScope(skillScopeProject)) > 0 {
-		m.skillsScope = skillScopeProject
+	if len(m.skillsForScope(skillScopeGlobal)) == 0 && len(m.skillsForScope(skillScopeWorkspace)) > 0 {
+		m.skillsScope = skillScopeWorkspace
 	}
 	return m, nil
 }
@@ -221,7 +221,7 @@ func (m model) updateSkills(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.refreshSkills(false)
 		return m, nil
 	case "right", "l":
-		m.skillsScope = skillScopeProject
+		m.skillsScope = skillScopeWorkspace
 		m.refreshSkills(false)
 		return m, nil
 	case "up", "k":
@@ -327,7 +327,7 @@ func (m model) skillEntries() []agentskills.Skill {
 }
 
 func (m model) skillsForScope(scope int) []agentskills.Skill {
-	wanted := skillScopeName(scope)
+	wanted := skillStoredScopeName(scope)
 	var result []agentskills.Skill
 	for _, skill := range m.skillEntries() {
 		if skill.Scope == wanted {
@@ -357,17 +357,33 @@ func (m model) activeSkillIDs() map[string]bool {
 }
 
 func skillScopeName(scope int) string {
-	if scope == skillScopeProject {
+	if scope == skillScopeWorkspace {
+		return "workspace"
+	}
+	return "global"
+}
+
+func skillStoredScopeName(scope int) string {
+	if scope == skillScopeWorkspace {
 		return "project"
 	}
 	return "global"
 }
 
 func skillScopeLabel(scope int) string {
-	if scope == skillScopeProject {
-		return "SESSION"
+	if scope == skillScopeWorkspace {
+		return "WORKSPACE"
 	}
 	return "GLOBAL"
+}
+
+func skillScopeDisplayName(scope string) string {
+	switch strings.ToLower(strings.TrimSpace(scope)) {
+	case "project", "session", "workspace":
+		return "workspace"
+	default:
+		return scope
+	}
 }
 
 func skillIsManagedGit(skill agentskills.Skill) bool {
@@ -475,13 +491,13 @@ func (m model) viewSkills() string {
 	panelHeight := max(6, m.height-17)
 	active := m.activeSkillIDs()
 	left := m.renderSkillListPanel(skillScopeGlobal, panelWidth, panelHeight, active)
-	right := m.renderSkillListPanel(skillScopeProject, panelWidth, panelHeight, active)
+	right := m.renderSkillListPanel(skillScopeWorkspace, panelWidth, panelHeight, active)
 
 	var body strings.Builder
 	body.WriteString(titleStyle.Render("q · Agent Skills"))
 	body.WriteString("\n")
 	m.writeWorkspacePath(&body)
-	body.WriteString(subtleStyle.Render("GLOBAL · user-level  |  SESSION · current workspace  |  .agents entries are externally managed"))
+	body.WriteString(subtleStyle.Render("GLOBAL · user-level  |  WORKSPACE · current workspace  |  .agents entries are externally managed"))
 	body.WriteString("\n\n")
 	body.WriteString(lipgloss.JoinHorizontal(lipgloss.Top, left, strings.Repeat(" ", panelGap), right))
 	body.WriteString("\n")

@@ -141,7 +141,7 @@ screen and returns to the previous screen without discarding its state.
 | `/library` | Configure the global Library listener. |
 | `/loom` | Inspect Loom usage and configure or run garbage collection. |
 | `/ignore` | Edit workspace discovery rules in `.qignore`. |
-| `/skills` | Manage global and project Agent Skills. |
+| `/skills` | Manage global and workspace Agent Skills. |
 | `/lsp` | Configure language servers and project roots. |
 | `/mcp` | Configure external MCP servers and role assignments. |
 | `/agents` | Configure ACP agent processes and the external Search role. |
@@ -342,7 +342,7 @@ discovered, in increasing precedence, from:
 ```
 
 `/skills` can clone, fast-forward, remove, and reindex q-managed global or
-project skills. See [Agent Skills](docs/agent-skills.md) for validation,
+workspace skills. See [Agent Skills](docs/agent-skills.md) for validation,
 shadowing, indexing, and tool access rules.
 
 ### Language servers
@@ -465,7 +465,7 @@ manage ACLs.
 | `.q/lsp.json` | Workspace LSP roots and overrides. |
 | `.q/data/` and `.q/index/` | Durable history records and derived indexes. |
 | `.q/loom/` | Content-addressed tool artifacts and GC metadata. |
-| `.q/skills/` | q-managed project Agent Skills. |
+| `.q/skills/` | q-managed workspace Agent Skills. |
 | `.qignore` | Discovery exclusions. |
 
 The JSON records are the source of truth; Bleve and HNSW data are derived and

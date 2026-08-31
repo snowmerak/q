@@ -29,7 +29,7 @@ The initial Library owns:
 - the Bleve BM25 and HNSW projections used to retrieve those records.
 
 The initial Library does not own raw conversations, tool results, plan
-checkpoints, Loom artifacts, LSP state, or project-scoped Agent Skills. Those
+checkpoints, Loom artifacts, LSP state, or workspace-scoped Agent Skills. Those
 remain workspace-local where they already exist. q does not create or store
 workspace-specific propositions; proposition memory has one global scope only.
 
@@ -476,7 +476,7 @@ that global skill/proposition retrieval and extraction are unavailable.
 3. Add the global Store owner and read/write HTTP operations with persistent
    idempotency records.
 4. Move global Agent Skill synchronization and retrieval behind the Library;
-   keep project skills workspace-local and remove any per-query reconciliation.
+   keep workspace skills workspace-local and remove any per-query reconciliation.
 5. Add `KindProposition`, bounded extraction records, generated BM25 query
    text, and proposition search without vectors.
 6. Generalize HNSW projection IDs to support multiple vector variants per

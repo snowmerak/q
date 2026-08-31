@@ -42,7 +42,7 @@ var localSlashCommands = []slashCommand{
 	{"/library", "", "Configure the global Library listener defaults."},
 	{"/loom", "", "Inspect Loom storage and garbage-collection settings."},
 	{"/ignore", "", "Edit workspace discovery rules in .qignore."},
-	{"/skills", "", "Interactively add, pull, remove, and reindex global/session skills."},
+	{"/skills", "", "Interactively add, pull, remove, and reindex global/workspace skills."},
 	{"/lsp", "", "Configure global language servers and workspace project roots."},
 	{"/mcp", "", "Configure external MCP tool servers and per-role assignments."},
 	{"/agents", "", "Configure ACP agents and external role assignments."},

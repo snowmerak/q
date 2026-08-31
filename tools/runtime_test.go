@@ -307,7 +307,7 @@ func TestRuntimeExposesAndCallsArchiveTools(t *testing.T) {
 
 	found, err := runtime.Call(context.Background(), client.ToolCall{
 		ID: "call-skill-search", Type: client.ToolTypeFunction,
-		Function: client.FunctionCall{Name: "search_skills", Arguments: `{"query":"unique archive skill fixtures"}`},
+		Function: client.FunctionCall{Name: "search_skills", Arguments: `{"query":"unique archive skill fixtures","scopes":["workspace"]}`},
 	})
 	if err != nil || found.IsError {
 		t.Fatalf("search skills = %#v, err = %v", found, err)
@@ -316,7 +316,7 @@ func TestRuntimeExposesAndCallsArchiveTools(t *testing.T) {
 	if err := decodeReceiptResult(found.Content, &skills); err != nil {
 		t.Fatal(err)
 	}
-	if len(skills.Hits) == 0 || skills.Hits[0].Title != "archive-test-skill" {
+	if len(skills.Hits) == 0 || skills.Hits[0].Title != "archive-test-skill" || skills.Hits[0].Scope != "workspace" {
 		t.Fatalf("skill hits = %#v", skills.Hits)
 	}
 	loaded, err := runtime.Call(context.Background(), client.ToolCall{
@@ -330,7 +330,7 @@ func TestRuntimeExposesAndCallsArchiveTools(t *testing.T) {
 	if err := json.Unmarshal([]byte(loaded.Content), &skill); err != nil {
 		t.Fatal(err)
 	}
-	if !skill.Stored || skill.Artifact.Ref == "" || skill.Skill.Name != "archive-test-skill" {
+	if !skill.Stored || skill.Artifact.Ref == "" || skill.Skill.Name != "archive-test-skill" || skill.Skill.Scope != "workspace" {
 		t.Fatalf("loaded skill = %#v", skill)
 	}
 }
@@ -372,7 +372,7 @@ func TestSkillToolsMergeGlobalLibraryAndProjectStore(t *testing.T) {
 
 	found, err := runtime.Call(context.Background(), client.ToolCall{
 		ID: "call-merged-skills", Type: client.ToolTypeFunction,
-		Function: client.FunctionCall{Name: "search_skills", Arguments: `{"query":"procedure"}`},
+		Function: client.FunctionCall{Name: "search_skills", Arguments: `{"query":"procedure","scopes":["global","workspace"]}`},
 	})
 	if err != nil || found.IsError {
 		t.Fatalf("merged search = %#v, err = %v", found, err)
@@ -381,7 +381,7 @@ func TestSkillToolsMergeGlobalLibraryAndProjectStore(t *testing.T) {
 	if err := decodeReceiptResult(found.Content, &output); err != nil {
 		t.Fatal(err)
 	}
-	if output.Total != 2 || len(output.Hits) != 2 || output.Hits[0].Scope != "global" || output.Hits[1].Scope != "project" || global.searches != 1 {
+	if output.Total != 2 || len(output.Hits) != 2 || output.Hits[0].Scope != "global" || output.Hits[1].Scope != "workspace" || global.searches != 1 {
 		t.Fatalf("merged skill output = %#v, searches = %d", output, global.searches)
 	}
 	workspaceGlobals, err := archive.Search(context.Background(), sessionstore.SearchOptions{

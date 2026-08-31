@@ -1544,7 +1544,7 @@ func TestSkillsScreenManagesFocusedScope(t *testing.T) {
 	m = updated.(model)
 
 	view := ansi.Strip(m.View().Content)
-	for _, expected := range []string{"GLOBAL SKILLS · 1", "SESSION SKILLS · 1", "global-skill", "project-skill", "q-managed Git"} {
+	for _, expected := range []string{"GLOBAL SKILLS · 1", "WORKSPACE SKILLS · 1", "global-skill", "project-skill", "q-managed Git"} {
 		if !strings.Contains(view, expected) {
 			t.Fatalf("skills manager missing %q:\n%s", expected, view)
 		}
@@ -1603,8 +1603,8 @@ func TestSkillsScreenManagesFocusedScope(t *testing.T) {
 	m = updated.(model)
 	updated, _ = m.Update(command())
 	m = updated.(model)
-	if tools.installedScope != "project" {
-		t.Fatalf("session panel installed to %q", tools.installedScope)
+	if tools.installedScope != "workspace" {
+		t.Fatalf("workspace panel installed to %q", tools.installedScope)
 	}
 }
 

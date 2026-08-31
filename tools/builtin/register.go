@@ -157,7 +157,7 @@ func Register(server *mcp.Server, root string, dependencies Dependencies) (*FS, 
 	if dependencies.Skills != nil {
 		mcp.AddTool(server, &mcp.Tool{
 			Name:        "search_skills",
-			Description: "Search global Agent Skills through q Library and project skills through the workspace index, then merge the results. Use get_skill with a selected result ID.",
+			Description: "Search global Agent Skills through q Library and workspace skills through the workspace index, then merge the results. Use get_skill with a selected result ID.",
 			Annotations: &mcp.ToolAnnotations{ReadOnlyHint: readOnly, IdempotentHint: true},
 		}, contextValueHandler(func(ctx context.Context, input SearchSkillsInput) (SearchSkillsOutput, error) {
 			return searchSkills(ctx, dependencies.Archive, dependencies.GlobalSkills, input)
