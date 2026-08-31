@@ -154,6 +154,9 @@ type startupRequest struct {
 func (request startupRequest) run(modelReady chan<- struct{}) runtimeInitializedMsg {
 	request.lifecycle.begin()
 	defer request.lifecycle.finish()
+	if err := request.workspaceStore.EnsureQGitIgnored(request.ctx); err != nil {
+		return runtimeInitializedMsg{err: err}
+	}
 
 	loaded := request.loaded
 	startupErr := request.manager.LoadAndStart(request.ctx)
