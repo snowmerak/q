@@ -299,12 +299,17 @@ messages, tool activity, failures, lifecycle events, and search indexes.
 After successful turns, Thinker can extract reusable propositions. A successful
 task result may support durable project facts, reusable resolutions, and
 evidence-backed research findings without a separate user confirmation. Thinker
-preserves whether a result is merely recommended or actually adopted. Librarian
-decides whether each proposition should be created, merged, or discarded in the
-global Library. `/learn off` stops collection and queue processing without
-deleting already queued data. Each completed or failed Thinker invocation also
-writes a short-lived diagnostic JSON file below `~/.q/logs/thinker/`; files
-older than three days are removed when the next Thinker log is written.
+keeps only findings likely to influence future technical choices or actions and
+remain useful across multiple tasks, including established workflows and
+recurring behavior patterns. Project-specific propositions name their workspace,
+while run-specific test, formatting, audit, and build snapshots remain in task
+history. Thinker also preserves whether a result is merely recommended or
+actually adopted. Librarian decides whether each proposition should be created,
+merged, or discarded in the global Library. `/learn off` stops collection and
+queue processing without deleting already queued data. Each completed or failed
+Thinker invocation also writes a short-lived diagnostic JSON file below
+`~/.q/logs/thinker/`; files older than three days are removed when the next
+Thinker log is written.
 
 See [Session Store notes](docs/session-store-notes.md),
 [Workspace Memory](docs/workspace-memory.md), and

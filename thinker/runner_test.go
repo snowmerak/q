@@ -148,7 +148,7 @@ func TestRunnerTreatsSuccessfulTaskResearchAsEvidenceWithoutAdoptingRecommendati
 		Client: fake, Library: &fakePropositionLibrary{},
 		Spec: subagent.Spec{Role: config.AgentRoleThinker, Model: "thinker", ContextLength: 16_000},
 	}).Run(t.Context(), Job{
-		ID: "research-policy",
+		ID: "research-policy", WorkingDirectory: `C:\workspace\komika`,
 		Messages: []client.Message{
 			{Role: client.RoleUser, Content: "Inspect this project's desktop architecture."},
 			{Role: client.RoleSystem, Name: TaskCompleteEventName, Content: `{"outcome":"succeeded","findings":["The project uses Wails v3.","A single manifest is recommended."],"verification":["Inspected build files."]}`},
@@ -164,6 +164,12 @@ func TestRunnerTreatsSuccessfulTaskResearchAsEvidenceWithoutAdoptingRecommendati
 	for _, required := range []string{
 		"successful task-completion record as evidence",
 		"Without requiring separate user confirmation",
+		"change a future technical choice, decision, or action",
+		"technical choices and their rationale",
+		"established workflows, routes, or procedures",
+		"recurring behavior patterns that should guide future actions",
+		"smallest nonredundant set",
+		"run-specific snapshots likely to change after routine edits",
 		"record a recommendation as a recommendation",
 		"unless the user accepted it or the task record says it was implemented",
 	} {
@@ -171,8 +177,9 @@ func TestRunnerTreatsSuccessfulTaskResearchAsEvidenceWithoutAdoptingRecommendati
 			t.Fatalf("Thinker instructions lack %q: %s", required, instructions)
 		}
 	}
-	if prompt := fake.requests[0].Messages[1].Content; !strings.Contains(prompt, "supported by verified results in a successful task-completion record") ||
-		!strings.Contains(prompt, "The project uses Wails v3.") {
+	if prompt := fake.requests[0].Messages[1].Content; !strings.Contains(prompt, "future-actionable propositions") ||
+		!strings.Contains(prompt, "The project uses Wails v3.") || !strings.Contains(prompt, `C:\\workspace\\komika`) ||
+		!strings.Contains(prompt, "never use ambiguous references") {
 		t.Fatalf("Thinker context lacks task research evidence policy or result: %s", prompt)
 	}
 }

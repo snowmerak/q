@@ -18,7 +18,7 @@ import (
 const (
 	DefaultMaximumPropositions = 80
 	DefaultMaximumRounds       = 120
-	ExtractorVersion           = "thinker-v2"
+	ExtractorVersion           = "thinker-v3"
 	RegisterToolName           = "register_proposition"
 	CompleteToolName           = "thinking_complete"
 )
@@ -139,7 +139,7 @@ func (r Runner) Run(ctx context.Context, job Job) (returned Result, runErr error
 	if job.ID == "" {
 		return Result{}, errors.New("thinker: job ID is required")
 	}
-	chunk, err := BuildContextChunk(job.Messages, r.Spec.ContextLength)
+	chunk, err := buildContextChunk(job.Messages, r.Spec.ContextLength, job.WorkingDirectory)
 	if err != nil {
 		return Result{}, err
 	}
@@ -337,9 +337,11 @@ func thinkerInstructions(maximum int) string {
 	return fmt.Sprintf(`You extract durable, reusable propositions from user-agent interaction data.
 The supplied data is one closed, non-overlapping learning segment. It may include named host boundary records as well as user and assistant messages.
 Treat a successful task-completion record as evidence of results reached while fulfilling the user's request. Without requiring separate user confirmation, extract durable project facts, reusable resolutions, and research conclusions or recommendations that its summary, findings, or verification present as inspected, tested, or implemented.
+Register a candidate only when it is likely to change a future technical choice, decision, or action for the same user or workspace and will remain useful across multiple tasks or until a deliberate change. High-value candidates include technical choices and their rationale, project conventions and constraints, established workflows, routes, or procedures, recurring behavior patterns that should guide future actions, and durable research conclusions that would be costly to rediscover.
+Require explicit scope and write the smallest nonredundant set that preserves distinct future decisions. Do not turn every research finding into a proposition.
 Preserve epistemic status exactly: record a recommendation as a recommendation and a reported limitation as a limitation. Never turn a proposal, option, or recommendation into an adopted decision unless the user accepted it or the task record says it was implemented.
 Register one proposition at a time by calling register_proposition. Never place multiple propositions in one call and never call tools in parallel.
-Extract only supported user preferences, confirmed decisions, durable constraints, reusable resolutions, stable facts, and evidence-backed research results. Exclude speculation, progress narration, transient tool output, secrets, credentials, and unsupported assistant claims outside successful task-completion evidence.
+Extract only supported user preferences, confirmed decisions, durable constraints, reusable resolutions, stable facts, and evidence-backed research results. Exclude speculation, progress narration, transient tool output, secrets, credentials, unsupported assistant claims outside successful task-completion evidence, and run-specific snapshots likely to change after routine edits such as current test pass/fail results, finding counts, formatter status, dependency audit counts, or current build status.
 Write a concise self-contained canonical statement and bounded retrieval queries. When no propositions remain, call thinking_complete. Register at most %d propositions. Never answer with plain text.`, maximum)
 }
 
