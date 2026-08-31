@@ -15,7 +15,7 @@ require (
 	github.com/dop251/goja v0.0.0-20260806115107-493f22071ef6
 	github.com/google/jsonschema-go v0.4.3
 	github.com/modelcontextprotocol/go-sdk v1.7.0
-	github.com/snowmerak/llm-provider v0.0.0-20260820114155-10d4fa7b5a80
+	github.com/snowmerak/llm-provider v0.0.0-20260831014440-a58c61f61b7b
 	github.com/snowmerak/q/third_party/acp-go-sdk v0.0.0-20260827012000-155b26051836
 	github.com/zeebo/blake3 v0.2.4
 	go.etcd.io/bbolt v1.4.0
