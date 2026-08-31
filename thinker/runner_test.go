@@ -169,6 +169,8 @@ func TestRunnerTreatsSuccessfulTaskResearchAsEvidenceWithoutAdoptingRecommendati
 		"established workflows, routes, or procedures",
 		"recurring behavior patterns that should guide future actions",
 		"smallest nonredundant set",
+		"Never persist absolute filesystem paths, drive letters, or user-home components",
+		"workspace-relative paths",
 		"run-specific snapshots likely to change after routine edits",
 		"record a recommendation as a recommendation",
 		"unless the user accepted it or the task record says it was implemented",
@@ -179,6 +181,7 @@ func TestRunnerTreatsSuccessfulTaskResearchAsEvidenceWithoutAdoptingRecommendati
 	}
 	if prompt := fake.requests[0].Messages[1].Content; !strings.Contains(prompt, "future-actionable propositions") ||
 		!strings.Contains(prompt, "The project uses Wails v3.") || !strings.Contains(prompt, `C:\\workspace\\komika`) ||
+		!strings.Contains(prompt, "scope metadata only") || !strings.Contains(prompt, "never copy an absolute filesystem path") ||
 		!strings.Contains(prompt, "never use ambiguous references") {
 		t.Fatalf("Thinker context lacks task research evidence policy or result: %s", prompt)
 	}

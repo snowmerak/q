@@ -301,8 +301,10 @@ task result may support durable project facts, reusable resolutions, and
 evidence-backed research findings without a separate user confirmation. Thinker
 keeps only findings likely to influence future technical choices or actions and
 remain useful across multiple tasks, including established workflows and
-recurring behavior patterns. Project-specific propositions name their workspace,
-while run-specific test, formatting, audit, and build snapshots remain in task
+recurring behavior patterns. Project-specific propositions use a stable project
+name and workspace-relative file paths; the host's absolute working directory is
+scope input only and is never persisted in proposition content, queries, or
+tags. Run-specific test, formatting, audit, and build snapshots remain in task
 history. Thinker also preserves whether a result is merely recommended or
 actually adopted. Librarian decides whether each proposition should be created,
 merged, or discarded in the global Library. `/learn off` stops collection and
