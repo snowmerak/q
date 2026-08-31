@@ -154,7 +154,7 @@ func RunStdioWithLoomOptions(ctx context.Context, root string, options loom.Stor
 		libraryConfig = qlibrary.DefaultConfig()
 	}
 	libraryClient := qlibrary.NewClient(
-		libraryConfig.Endpoint(), libraryConfig.ResolveAPIKey(), 5*time.Second,
+		libraryConfig.Endpoint(), "", 5*time.Second,
 	)
 	var embeddingClient *client.Client
 	var embeddingManager *providerhost.Manager

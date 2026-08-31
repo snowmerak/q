@@ -443,13 +443,8 @@ func TestSkillToolsUseAuthenticatedGlobalLibraryAPIEndToEnd(t *testing.T) {
 		t.Fatal(err)
 	}
 	libraryConfig := qlibrary.Config{
-		Version: qlibrary.ConfigVersion, Host: "127.0.0.1", Port: port, APIKeyEnv: qlibrary.DefaultAPIKeyEnv,
+		Version: qlibrary.ConfigVersion, Host: "127.0.0.1", Port: port,
 	}
-	libraryConfig, generated, err := (qlibrary.ConfigStore{Dir: configDirectory}).CreateAPIKey(libraryConfig, "MCP test", time.Now())
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv(qlibrary.DefaultAPIKeyEnv, generated.Secret)
 	libraryRuntime, err := qlibrary.EnsureWithOptions(context.Background(), qlibrary.EnsureOptions{
 		Dir: configDirectory, Config: libraryConfig,
 		ProbeTimeout: 300 * time.Millisecond, StartupTimeout: 3 * time.Second,
@@ -465,7 +460,7 @@ func TestSkillToolsUseAuthenticatedGlobalLibraryAPIEndToEnd(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer archive.Close()
-	libraryClient := qlibrary.NewClient(libraryConfig.Endpoint(), generated.Secret, 5*time.Second)
+	libraryClient := qlibrary.NewClient(libraryConfig.Endpoint(), "", 5*time.Second)
 	runtime, err := NewRuntimeWithArchiveAndLoomOptionsAndLSPAndLibrary(
 		context.Background(), root, archive, loom.StoreOptions{}, lsp.GlobalConfig{}, lsp.WorkspaceConfig{}, libraryClient,
 	)

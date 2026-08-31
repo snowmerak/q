@@ -2,9 +2,12 @@ package thinker
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/snowmerak/q/client"
 	"github.com/snowmerak/q/config"
@@ -139,6 +142,62 @@ func TestRunnerWaitsForCompletionDeliveryAndCountsItsUsage(t *testing.T) {
 	}
 }
 
+func TestRunnerLogsZeroOutputInvocation(t *testing.T) {
+	now := time.Date(2026, time.September, 1, 1, 2, 3, 0, time.UTC)
+	store := NewLogStore(t.TempDir())
+	store.now = func() time.Time { return now }
+	fake := &fakeThinkerClient{responses: []client.Message{thinkerToolCall("complete", CompleteToolName, `{}`)}}
+	result, err := (Runner{
+		Client: fake, Library: &fakePropositionLibrary{}, Log: store,
+		Spec: subagent.Spec{
+			Role: config.AgentRoleThinker, Model: "thinker-model",
+			ReasoningEffort: "high", ContextLength: 16_000,
+		},
+	}).Run(t.Context(), Job{
+		ID: "learn-run-2", Boundary: BoundaryTaskComplete,
+		Messages: []client.Message{
+			{Role: client.RoleUser, Content: "Keep this conversation context."},
+			{Role: client.RoleSystem, Name: TaskCompleteEventName, Content: `{"summary":"task finished"}`},
+		},
+		Refs: []string{"run:two"}, WorkingDirectory: `C:\workspace`,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.LogPath == "" || result.LogError != "" || result.Proposed != 0 || result.Registered != 0 {
+		t.Fatalf("result = %#v", result)
+	}
+	logged := readInvocationLog(t, result.LogPath)
+	if logged.JobID != "learn-run-2" || logged.Boundary != BoundaryTaskComplete || logged.Model != "thinker-model" ||
+		logged.ModelGroup != "" || logged.ReasoningEffort != "high" || logged.ContextLength != 16_000 ||
+		logged.SourceMessages != 2 || len(logged.InputMessages) != 2 || logged.InputMessages[1].Name != TaskCompleteEventName ||
+		len(logged.Trace) != 1 || logged.Trace[0].Tool != CompleteToolName || logged.Trace[0].Outcome != "completed" || logged.Error != "" {
+		t.Fatalf("logged invocation = %#v", logged)
+	}
+}
+
+func TestRunnerLogsInvalidResponseFailure(t *testing.T) {
+	store := NewLogStore(t.TempDir())
+	result, err := (Runner{
+		Client:  &fakeThinkerClient{responses: []client.Message{{Role: client.RoleAssistant, Content: "plain text"}}},
+		Library: &fakePropositionLibrary{}, Log: store,
+		Spec: subagent.Spec{Role: config.AgentRoleThinker, Model: "thinker-model", ContextLength: 16_000},
+	}).Run(t.Context(), Job{
+		ID: "learn-failure", Messages: []client.Message{{Role: client.RoleUser, Content: "A durable fact."}},
+	})
+	if err == nil || !strings.Contains(err.Error(), "exactly one tool") {
+		t.Fatalf("error = %v", err)
+	}
+	if result.LogPath == "" || result.LogError != "" || result.Usage.TotalTokens != 0 {
+		t.Fatalf("result = %#v", result)
+	}
+	logged := readInvocationLog(t, result.LogPath)
+	if !strings.Contains(logged.Error, "exactly one tool") || logged.Result.Usage.TotalTokens != 12 ||
+		len(logged.Trace) != 1 || logged.Trace[0].Outcome != "invalid_response" {
+		t.Fatalf("logged invocation = %#v", logged)
+	}
+}
+
 func TestRunnerCompactsWhilePreservingSourceAndAcknowledgedPropositions(t *testing.T) {
 	registration := thinkerToolCall("register", RegisterToolName, `{"content":"Keep the exact durable fact.","queries":[],"confidence":0.9,"tags":[]}`)
 	registration.Content = strings.Repeat("x", 40_000)
@@ -237,4 +296,17 @@ func thinkerToolCall(id, name, arguments string) client.Message {
 	return client.Message{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{{
 		ID: id, Type: client.ToolTypeFunction, Function: client.FunctionCall{Name: name, Arguments: arguments},
 	}}}
+}
+
+func readInvocationLog(t *testing.T, path string) InvocationLog {
+	t.Helper()
+	body, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var logged InvocationLog
+	if err := json.Unmarshal(body, &logged); err != nil {
+		t.Fatal(err)
+	}
+	return logged
 }

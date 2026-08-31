@@ -299,7 +299,9 @@ messages, tool activity, failures, lifecycle events, and search indexes.
 After successful turns, Thinker can extract reusable propositions. Librarian
 decides whether each proposition should be created, merged, or discarded in the
 global Library. `/learn off` stops collection and queue processing without
-deleting already queued data.
+deleting already queued data. Each completed or failed Thinker invocation also
+writes a short-lived diagnostic JSON file below `~/.q/logs/thinker/`; files
+older than three days are removed when the next Thinker log is written.
 
 See [Session Store notes](docs/session-store-notes.md),
 [Workspace Memory](docs/workspace-memory.md), and
@@ -428,7 +430,9 @@ omits the chat-only `learn` tool.
 
 Ordinary q processes automatically ensure Workspace Memory and the global
 Library are available. Run the standalone service commands when their lifetime
-should not depend on an interactive session.
+should not depend on an interactive session. Both internal data services bind
+only to a loopback IP address and accept local HTTP requests without bearer
+authentication.
 
 The standalone Gateway initially binds to `127.0.0.1:0`. If it has no active
 API keys, authentication is disabled. Do not expose a no-key Gateway on a
@@ -443,15 +447,17 @@ non-loopback address unless the surrounding network already enforces access.
 | `~/.q/config.yaml` | Main model, roles, context, Loom, and LSP configuration. |
 | `~/.q/providers.json` | Managed Gateway providers and model metadata. |
 | `~/.q/gateway.json` | Standalone Gateway listener and key metadata. |
-| `~/.q/library.json` | Global Library listener settings. |
+| `~/.q/library.json` | Global Library loopback listener settings. |
 | `~/.q/workspace-memory.json` | Workspace Memory settings. |
 | `~/.q/mcp.json` | External MCP profiles and role assignments. |
 | `~/.q/skills/` | q-managed global Agent Skills. |
+| `~/.q/logs/thinker/` | Private Thinker invocation diagnostics retained for three days. |
 
-Authentication master keys and the Workspace Memory token are stored in
-separate files under `~/.q`. Prefer environment variables for provider and MCP
-credentials. POSIX permissions are restricted by q; Windows file modes do not
-manage ACLs.
+Gateway authentication master keys are stored separately under `~/.q`. Global
+Library and Workspace Memory do not create or require authentication keys;
+legacy `library.key` and `workspace-memory.token` files are ignored. Prefer
+environment variables for provider and MCP credentials. POSIX permissions are
+restricted by q; Windows file modes do not manage ACLs.
 
 ### Workspace state
 

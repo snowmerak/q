@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
-	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -27,7 +26,6 @@ const maximumRequestBody = 256 << 20
 var (
 	ErrWorkspaceClosed = errors.New("workspacememory: workspace handle is closed")
 	ErrLeaseExpired    = errors.New("workspacememory: workspace lease expired")
-	ErrUnauthorized    = errors.New("workspacememory: authentication failed")
 	ErrVectorConflict  = errors.New("workspacememory: workspace is open with a different vector configuration")
 )
 
@@ -421,18 +419,15 @@ type Status struct {
 	OpenWorkspaces int `json:"open_workspaces"`
 }
 
-func newHandler(health Health, credential string, manager *workspaceManager) http.Handler {
+func newHandler(health Health, manager *workspaceManager) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /v1/health", func(writer http.ResponseWriter, _ *http.Request) {
 		writeJSON(writer, http.StatusOK, health)
 	})
-	authenticated := func(handler http.HandlerFunc) http.Handler {
-		return authenticate(credential, handler)
-	}
-	mux.Handle("GET /v1/status", authenticated(func(writer http.ResponseWriter, _ *http.Request) {
+	mux.HandleFunc("GET /v1/status", func(writer http.ResponseWriter, _ *http.Request) {
 		writeJSON(writer, http.StatusOK, Status{Health: health, OpenWorkspaces: manager.count()})
-	}))
-	mux.Handle("POST /v1/workspaces/open", authenticated(func(writer http.ResponseWriter, request *http.Request) {
+	})
+	mux.HandleFunc("POST /v1/workspaces/open", func(writer http.ResponseWriter, request *http.Request) {
 		var input openWorkspaceRequest
 		if err := decodeJSON(writer, request, &input); err != nil {
 			writeServiceError(writer, err)
@@ -444,24 +439,24 @@ func newHandler(health Health, credential string, manager *workspaceManager) htt
 			return
 		}
 		writeJSON(writer, http.StatusOK, output)
-	}))
-	mux.Handle("POST /v1/workspaces/{workspace}/leases/{lease}/renew", authenticated(func(writer http.ResponseWriter, request *http.Request) {
+	})
+	mux.HandleFunc("POST /v1/workspaces/{workspace}/leases/{lease}/renew", func(writer http.ResponseWriter, request *http.Request) {
 		if err := manager.renew(request.PathValue("workspace"), request.PathValue("lease")); err != nil {
 			writeServiceError(writer, err)
 			return
 		}
 		writeJSON(writer, http.StatusOK, struct{}{})
-	}))
-	mux.Handle("DELETE /v1/workspaces/{workspace}/leases/{lease}", authenticated(func(writer http.ResponseWriter, request *http.Request) {
+	})
+	mux.HandleFunc("DELETE /v1/workspaces/{workspace}/leases/{lease}", func(writer http.ResponseWriter, request *http.Request) {
 		if err := manager.release(request.PathValue("workspace"), request.PathValue("lease")); err != nil {
 			writeServiceError(writer, err)
 			return
 		}
 		writeJSON(writer, http.StatusOK, struct{}{})
-	}))
+	})
 
 	withWorkspace := func(handler func(http.ResponseWriter, *http.Request, *workspaceEntry)) http.Handler {
-		return authenticated(func(writer http.ResponseWriter, request *http.Request) {
+		return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 			entry, release, err := manager.acquire(request.PathValue("workspace"), request.Header.Get(leaseHeader))
 			if err != nil {
 				writeServiceError(writer, err)
@@ -538,7 +533,7 @@ func newHandler(health Health, credential string, manager *workspaceManager) htt
 		}
 		writeJSON(writer, http.StatusOK, searchResponse{Result: result})
 	}))
-	mux.Handle("POST /v1/workspaces/{workspace}/vector/configure", authenticated(func(writer http.ResponseWriter, request *http.Request) {
+	mux.HandleFunc("POST /v1/workspaces/{workspace}/vector/configure", func(writer http.ResponseWriter, request *http.Request) {
 		var input configureVectorRequest
 		if err := decodeJSON(writer, request, &input); err != nil {
 			writeServiceError(writer, err)
@@ -552,27 +547,13 @@ func newHandler(health Health, credential string, manager *workspaceManager) htt
 			return
 		}
 		writeJSON(writer, http.StatusOK, configureVectorResponse{Vector: vector})
-	}))
+	})
 	mux.Handle("POST /v1/workspaces/{workspace}/flush", withWorkspace(func(writer http.ResponseWriter, _ *http.Request, _ *workspaceEntry) {
 		// Store writes are synchronous; this endpoint is a durability barrier for
 		// remote Writer implementations and intentionally has no extra work.
 		writeJSON(writer, http.StatusOK, struct{}{})
 	}))
 	return mux
-}
-
-func authenticate(credential string, next http.Handler) http.Handler {
-	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		scheme, presented, found := strings.Cut(request.Header.Get("Authorization"), " ")
-		valid := found && strings.EqualFold(scheme, "Bearer") &&
-			subtle.ConstantTimeCompare([]byte(presented), []byte(credential)) == 1
-		if !valid {
-			writer.Header().Set("WWW-Authenticate", "Bearer")
-			writeError(writer, http.StatusUnauthorized, "unauthorized", ErrUnauthorized.Error())
-			return
-		}
-		next.ServeHTTP(writer, request)
-	})
 }
 
 func decodeJSON(writer http.ResponseWriter, request *http.Request, output any) error {
@@ -661,7 +642,7 @@ type leader struct {
 	err       error
 }
 
-func startLeader(parent context.Context, options EnsureOptions, listener net.Listener, serviceLock *worklock.Lock, credential string) (*leader, error) {
+func startLeader(parent context.Context, options EnsureOptions, listener net.Listener, serviceLock *worklock.Lock) (*leader, error) {
 	generation, err := randomHexID()
 	if err != nil {
 		return nil, err
@@ -675,7 +656,7 @@ func startLeader(parent context.Context, options EnsureOptions, listener net.Lis
 	leader := &leader{
 		health: health, manager: manager, lock: serviceLock, cancel: cancel,
 		done: make(chan struct{}), shutdownDone: make(chan struct{}),
-		server: &http.Server{Handler: newHandler(health, credential, manager), ReadHeaderTimeout: 10 * time.Second},
+		server: &http.Server{Handler: newHandler(health, manager), ReadHeaderTimeout: 10 * time.Second},
 	}
 	sweepInterval := options.effectiveSweepInterval()
 	sweepDone := make(chan struct{})

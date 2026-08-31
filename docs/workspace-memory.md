@@ -28,7 +28,7 @@ q memory
 leader, connects as a follower if another compatible leader already exists,
 and can take over after that leader exits.
 
-## Endpoint and authentication
+## Endpoint and local trust boundary
 
 The default endpoint is:
 
@@ -41,16 +41,11 @@ is read from `~/.q/workspace-memory.json`; when that file is absent, q uses
 `127.0.0.1:17892`. The service uses a fixed rendezvous port rather than an
 ephemeral port so independently started q processes can find it.
 
-All operations except the compatibility health probe require a bearer token.
-q generates a 32-byte random token on first use, stores its hexadecimal form in
-`~/.q/workspace-memory.token`, and writes the file with mode `0600` on POSIX.
-The token is private to the local q installation and is not shared with Gateway
-or Library authentication. Windows file modes do not configure ACLs.
-
-Concurrent first-start token creation is serialized with
-`~/.q/workspace-memory-token.lock`. The winner writes a temporary file, syncs
-it, and atomically replaces the credential path; followers then load that one
-credential instead of generating divergent tokens.
+All Workspace Memory HTTP operations are unauthenticated. Loopback binding is
+the service boundary: remote hosts cannot connect, but another process running
+locally as the same user can call the API. q no longer creates
+`~/.q/workspace-memory.token` or its token lock; files left by an older version
+are ignored.
 
 The user-level leader election lock is `~/.q/workspace-memory.lock`. Like q's
 other lock files, it contains owner diagnostics, but exclusivity comes from the
@@ -68,7 +63,7 @@ independent lease to each client.
 ```text
 q / q acp / q-mcp clients
           |
-          | loopback HTTP + bearer token
+          | unauthenticated loopback HTTP
           v
 Workspace Memory leader
           |
@@ -101,10 +96,10 @@ Workspace Memory owns these paths while a root is leased:
   `.q/index/state.json`, the derived semantic index and rebuild state;
 - `.q/workspace-memory.lock`, the service's per-root ownership lock.
 
-The authenticated HTTP API covers workspace open/lease renewal/release, record
-save and batch save, get, delete, search, vector configuration, and a durability
-barrier. Store writes are synchronous, so the current flush endpoint is an
-explicit no-op barrier. Source records keep their existing durability rule:
+The local HTTP API covers workspace open/lease renewal/release, record save and
+batch save, get, delete, search, vector configuration, and a durability barrier.
+Store writes are synchronous, so the current flush endpoint is an explicit
+no-op barrier. Source records keep their existing durability rule:
 an indexing failure may be returned after the JSON record has already been
 saved. The client assigns a stable record ID before the first request, so a
 mutation retried after response loss overwrites that same record instead of

@@ -34,7 +34,6 @@ func TestLibraryCommandServesHealth(t *testing.T) {
 	configDir := filepath.Join(home, ".q")
 	value := qlibrary.Config{
 		Version: qlibrary.ConfigVersion, Host: "127.0.0.1", Port: port,
-		APIKeyEnv: qlibrary.DefaultAPIKeyEnv,
 	}
 	if err := (qlibrary.ConfigStore{Dir: configDir}).Save(value); err != nil {
 		t.Fatal(err)

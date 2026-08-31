@@ -63,7 +63,7 @@ func EnsureWithOptions(ctx context.Context, options EnsureOptions) (*Runtime, er
 	if startupTimeout <= 0 {
 		startupTimeout = 3 * time.Second
 	}
-	client := NewClient(value.Endpoint(), value.ResolveAPIKey(), probeTimeout)
+	client := NewClient(value.Endpoint(), "", probeTimeout)
 	deadline := time.Now().Add(startupTimeout)
 	delay := 20 * time.Millisecond
 	for {
@@ -88,7 +88,7 @@ func EnsureWithOptions(ctx context.Context, options EnsureOptions) (*Runtime, er
 				_ = lock.Close()
 				return nil, fmt.Errorf("library: configured address %s is unavailable: %w", value.ListenAddress(), listenErr)
 			}
-			leader, startErr := startLeader(ctx, options.Dir, value, options.Vector, options.Judge, listener, lock)
+			leader, startErr := startLeader(ctx, options.Dir, options.Vector, options.Judge, listener, lock)
 			if startErr != nil {
 				_ = listener.Close()
 				_ = lock.Close()

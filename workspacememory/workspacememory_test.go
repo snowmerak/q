@@ -10,7 +10,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -43,6 +42,9 @@ func TestWorkspaceServiceMultiplexesCanonicalRootsAndLeases(t *testing.T) {
 	if !service.IsLeader() {
 		t.Fatal("first runtime did not become leader")
 	}
+	if _, err := os.Stat(filepath.Join(configDir, "workspace-memory.token")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("Workspace Memory created authentication state: %v", err)
+	}
 
 	follower, err := EnsureWithOptions(context.Background(), options)
 	if err != nil {
@@ -60,8 +62,8 @@ func TestWorkspaceServiceMultiplexesCanonicalRootsAndLeases(t *testing.T) {
 	if err != nil || followerHealth.Generation != leaderHealth.Generation {
 		t.Fatalf("follower health = %#v, err = %v", followerHealth, err)
 	}
-	if _, err := NewClient(service.Endpoint(), "wrong", time.Second).Status(context.Background()); !errors.Is(err, ErrUnauthorized) {
-		t.Fatalf("wrong credential error = %v", err)
+	if _, err := NewClient(service.Endpoint(), "ignored-wrong-credential", time.Second).Status(context.Background()); err != nil {
+		t.Fatalf("status required authentication: %v", err)
 	}
 
 	first, err := service.Client().OpenWorkspace(context.Background(), firstRoot, sessionstore.VectorConfig{})
@@ -422,7 +424,7 @@ func TestSaveProtocolPreservesPreparedRecordsAndIndexingError(t *testing.T) {
 	manager.byKey[entry.key] = entry
 	defer manager.close()
 	health := Health{Service: ServiceName, ProtocolVersion: ProtocolVersion, Implementation: Implementation, Ready: true}
-	server := httptest.NewServer(newHandler(health, "test-secret", manager))
+	server := httptest.NewServer(newHandler(health, manager))
 	defer server.Close()
 	client := NewClient(server.URL+"/v1", "test-secret", time.Second)
 	workspace := &Workspace{client: client, id: entry.id, leaseID: "lease-id", root: entry.root}
@@ -451,7 +453,7 @@ func TestSaveProtocolPreservesPreparedRecordsAndIndexingError(t *testing.T) {
 	}
 }
 
-func TestConfigAndCredentialRoundTrip(t *testing.T) {
+func TestConfigRoundTrip(t *testing.T) {
 	dir := t.TempDir()
 	store := ConfigStore{Dir: dir}
 	config := testConfig(t)
@@ -464,51 +466,6 @@ func TestConfigAndCredentialRoundTrip(t *testing.T) {
 	loaded, err := store.LoadOrDefault()
 	if err != nil || loaded != config.Effective() {
 		t.Fatalf("loaded = %#v, err = %v", loaded, err)
-	}
-	first, err := store.EnsureCredential()
-	if err != nil {
-		t.Fatal(err)
-	}
-	second, err := store.EnsureCredential()
-	if err != nil || second != first || len(first) != 64 {
-		t.Fatalf("credentials = %q %q, err = %v", first, second, err)
-	}
-}
-
-func TestEnsureCredentialIsConcurrentAndAtomic(t *testing.T) {
-	store := ConfigStore{Dir: t.TempDir()}
-	const callers = 16
-	credentials := make(chan string, callers)
-	errorsFound := make(chan error, callers)
-	var group sync.WaitGroup
-	for range callers {
-		group.Add(1)
-		go func() {
-			defer group.Done()
-			credential, err := store.EnsureCredential()
-			credentials <- credential
-			errorsFound <- err
-		}()
-	}
-	group.Wait()
-	close(credentials)
-	close(errorsFound)
-	for err := range errorsFound {
-		if err != nil {
-			t.Fatal(err)
-		}
-	}
-	var expected string
-	for credential := range credentials {
-		if expected == "" {
-			expected = credential
-		}
-		if credential != expected {
-			t.Fatalf("credentials differ: %q != %q", credential, expected)
-		}
-	}
-	if loaded, err := store.LoadCredential(); err != nil || loaded != expected {
-		t.Fatalf("LoadCredential = (%q, %v), want %q", loaded, err, expected)
 	}
 }
 

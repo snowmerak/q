@@ -19,7 +19,7 @@ import (
 
 const (
 	ServiceName     = "q-workspace-memory"
-	ProtocolVersion = 1
+	ProtocolVersion = 2
 	Implementation  = "0.1.0"
 	leaseHeader     = "X-Q-Workspace-Lease"
 )
@@ -66,8 +66,6 @@ func (e *HTTPError) Unwrap() error {
 		return ErrWorkspaceClosed
 	case "lease_expired":
 		return ErrLeaseExpired
-	case "unauthorized":
-		return ErrUnauthorized
 	case "vector_conflict":
 		return ErrVectorConflict
 	case "workspace_locked":
@@ -83,18 +81,19 @@ func (e *HTTPError) Unwrap() error {
 
 type Client struct {
 	endpoint       string
-	credential     string
 	http           *http.Client
 	requestTimeout time.Duration
 }
 
-func NewClient(endpoint, credential string, timeout time.Duration) *Client {
+// NewClient retains the credential argument for source compatibility. The
+// loopback-only Workspace Memory server does not authenticate HTTP requests.
+func NewClient(endpoint, _ string, timeout time.Duration) *Client {
 	if timeout <= 0 {
 		timeout = 2 * time.Minute
 	}
 	return &Client{
-		endpoint: strings.TrimRight(endpoint, "/"), credential: strings.TrimSpace(credential),
-		http: &http.Client{Timeout: timeout}, requestTimeout: timeout,
+		endpoint: strings.TrimRight(endpoint, "/"),
+		http:     &http.Client{Timeout: timeout}, requestTimeout: timeout,
 	}
 }
 
@@ -107,7 +106,7 @@ func (c *Client) Endpoint() string {
 
 func (c *Client) Health(ctx context.Context) (Health, error) {
 	var output Health
-	if err := c.doJSON(ctx, http.MethodGet, "/health", nil, &output, "", false); err != nil {
+	if err := c.doJSON(ctx, http.MethodGet, "/health", nil, &output, ""); err != nil {
 		return Health{}, err
 	}
 	return output, nil
@@ -115,7 +114,7 @@ func (c *Client) Health(ctx context.Context) (Health, error) {
 
 func (c *Client) Status(ctx context.Context) (Status, error) {
 	var output Status
-	if err := c.doJSON(ctx, http.MethodGet, "/status", nil, &output, "", true); err != nil {
+	if err := c.doJSON(ctx, http.MethodGet, "/status", nil, &output, ""); err != nil {
 		return Status{}, err
 	}
 	return output, nil
@@ -158,7 +157,7 @@ func (c *Client) openWorkspace(ctx context.Context, input openWorkspaceRequest, 
 	defer cancel()
 	delay := 20 * time.Millisecond
 	for {
-		err := c.doJSON(openContext, http.MethodPost, "/workspaces/open", input, output, "", true)
+		err := c.doJSON(openContext, http.MethodPost, "/workspaces/open", input, output, "")
 		if err == nil {
 			return nil
 		}
@@ -179,7 +178,7 @@ func (c *Client) Open(ctx context.Context, root string, vector sessionstore.Vect
 	return c.OpenWorkspace(ctx, root, vector)
 }
 
-func (c *Client) doJSON(ctx context.Context, method, path string, input, output any, leaseID string, authenticated bool) error {
+func (c *Client) doJSON(ctx context.Context, method, path string, input, output any, leaseID string) error {
 	if c == nil {
 		return errors.New("workspacememory: client is nil")
 	}
@@ -203,9 +202,6 @@ func (c *Client) doJSON(ctx context.Context, method, path string, input, output 
 	request.Header.Set("Accept", "application/json")
 	if input != nil {
 		request.Header.Set("Content-Type", "application/json")
-	}
-	if authenticated {
-		request.Header.Set("Authorization", "Bearer "+c.credential)
 	}
 	if leaseID != "" {
 		request.Header.Set(leaseHeader, leaseID)
@@ -405,7 +401,7 @@ func (w *Workspace) callWithoutReconnect(ctx context.Context, method, suffix str
 	if w.closed {
 		return ErrWorkspaceClosed
 	}
-	return w.client.doJSON(ctx, method, "/workspaces/"+w.id+suffix, input, output, w.leaseID, true)
+	return w.client.doJSON(ctx, method, "/workspaces/"+w.id+suffix, input, output, w.leaseID)
 }
 
 func (w *Workspace) Flush() error { return w.FlushContext(context.Background()) }
@@ -424,14 +420,14 @@ func (w *Workspace) call(ctx context.Context, method, suffix string, input, outp
 		return ErrWorkspaceClosed
 	}
 	path := "/workspaces/" + w.id + suffix
-	err := w.client.doJSON(ctx, method, path, input, output, w.leaseID, true)
+	err := w.client.doJSON(ctx, method, path, input, output, w.leaseID)
 	if err == nil || !reconnectableWorkspaceError(err) {
 		return err
 	}
 	if reopenErr := w.reopen(ctx); reopenErr != nil {
 		return errors.Join(err, fmt.Errorf("workspacememory: reopen workspace: %w", reopenErr))
 	}
-	return w.client.doJSON(ctx, method, path, input, output, w.leaseID, true)
+	return w.client.doJSON(ctx, method, path, input, output, w.leaseID)
 }
 
 func reconnectableWorkspaceError(err error) bool {
@@ -461,7 +457,7 @@ func (w *Workspace) reopen(ctx context.Context) error {
 		w.vectorMu.RUnlock()
 		input := openWorkspaceRequest{Root: w.root, Vector: vector, LeaseID: w.leaseID}
 		var output OpenWorkspaceResponse
-		err := w.client.doJSON(reopenContext, http.MethodPost, "/workspaces/open", input, &output, "", true)
+		err := w.client.doJSON(reopenContext, http.MethodPost, "/workspaces/open", input, &output, "")
 		if err == nil {
 			if output.WorkspaceID != w.id || output.LeaseID != w.leaseID || output.Root == "" {
 				return errors.New("workspacememory: reopened workspace identity changed")
@@ -499,7 +495,7 @@ func (w *Workspace) heartbeat(ctx context.Context) {
 			return
 		case <-ticker.C:
 			requestContext, cancel := context.WithTimeout(ctx, min(w.client.requestTimeout, interval))
-			_ = w.client.doJSON(requestContext, http.MethodPost, path, struct{}{}, &struct{}{}, "", true)
+			_ = w.client.doJSON(requestContext, http.MethodPost, path, struct{}{}, &struct{}{}, "")
 			cancel()
 		}
 	}
@@ -526,7 +522,7 @@ func (w *Workspace) Close() error {
 		ctx, cancel := context.WithTimeout(context.Background(), timeout)
 		defer cancel()
 		path := "/workspaces/" + w.id + "/leases/" + w.leaseID
-		w.closeErr = w.client.doJSON(ctx, http.MethodDelete, path, nil, &struct{}{}, "", true)
+		w.closeErr = w.client.doJSON(ctx, http.MethodDelete, path, nil, &struct{}{}, "")
 		if reconnectableWorkspaceError(w.closeErr) {
 			// A failed leader has already discarded this lease; a replacement
 			// leader has nothing to release. Close remains a local idempotent

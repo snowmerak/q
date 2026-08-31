@@ -93,12 +93,8 @@ func EnsureWithOptions(ctx context.Context, options EnsureOptions) (*Runtime, er
 	if err := config.Validate(); err != nil {
 		return nil, err
 	}
-	credential, err := (ConfigStore{Dir: options.Dir}).EnsureCredential()
-	if err != nil {
-		return nil, err
-	}
-	probe := NewClient(config.Endpoint(), credential, options.effectiveProbeTimeout())
-	client := NewClient(config.Endpoint(), credential, options.effectiveRequestTimeout())
+	probe := NewClient(config.Endpoint(), "", options.effectiveProbeTimeout())
+	client := NewClient(config.Endpoint(), "", options.effectiveRequestTimeout())
 	deadline := time.Now().Add(options.effectiveStartupTimeout())
 	delay := 20 * time.Millisecond
 	for {
@@ -107,7 +103,7 @@ func EnsureWithOptions(ctx context.Context, options EnsureOptions) (*Runtime, er
 				return nil, incompatibleError(health)
 			}
 			if _, statusErr := probe.Status(ctx); statusErr != nil {
-				return nil, fmt.Errorf("workspacememory: authenticate existing service: %w", statusErr)
+				return nil, fmt.Errorf("workspacememory: inspect existing service: %w", statusErr)
 			}
 			return &Runtime{client: client}, nil
 		}
@@ -120,7 +116,7 @@ func EnsureWithOptions(ctx context.Context, options EnsureOptions) (*Runtime, er
 					return nil, incompatibleError(health)
 				}
 				if _, statusErr := probe.Status(ctx); statusErr != nil {
-					return nil, fmt.Errorf("workspacememory: authenticate existing service: %w", statusErr)
+					return nil, fmt.Errorf("workspacememory: inspect existing service: %w", statusErr)
 				}
 				return &Runtime{client: client}, nil
 			}
@@ -129,7 +125,7 @@ func EnsureWithOptions(ctx context.Context, options EnsureOptions) (*Runtime, er
 				_ = serviceLock.Close()
 				return nil, fmt.Errorf("workspacememory: configured address %s is unavailable: %w", config.ListenAddress(), listenErr)
 			}
-			leader, startErr := startLeader(ctx, options, listener, serviceLock, credential)
+			leader, startErr := startLeader(ctx, options, listener, serviceLock)
 			if startErr != nil {
 				_ = listener.Close()
 				_ = serviceLock.Close()

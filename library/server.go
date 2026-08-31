@@ -14,7 +14,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/snowmerak/q/gatewayconfig"
 	"github.com/snowmerak/q/sessionstore"
 	"github.com/snowmerak/q/worklock"
 )
@@ -38,26 +37,11 @@ type leader struct {
 func startLeader(
 	parent context.Context,
 	dir string,
-	value Config,
 	vector sessionstore.VectorConfig,
 	configuredJudge PropositionJudge,
 	listener net.Listener,
 	lock *worklock.Lock,
 ) (*leader, error) {
-	libraryStore := ConfigStore{Dir: dir}
-	var randomMaster [32]byte
-	if _, err := rand.Read(randomMaster[:]); err != nil {
-		return nil, fmt.Errorf("library: generate API-key master: %w", err)
-	}
-	master, err := libraryStore.EnsureMasterKey(randomMaster)
-	if err != nil {
-		return nil, fmt.Errorf("library: load API-key master: %w", err)
-	}
-	authenticator, err := gatewayconfig.NewAuthenticator(master, authenticationConfig(value))
-	if err != nil {
-		return nil, fmt.Errorf("library: initialize authentication: %w", err)
-	}
-
 	root := filepath.Join(dir, "library")
 	if err := os.MkdirAll(root, 0o700); err != nil {
 		return nil, fmt.Errorf("library: create store root: %w", err)
@@ -112,25 +96,19 @@ func startLeader(
 	mux.HandleFunc("GET /v1/health", func(writer http.ResponseWriter, _ *http.Request) {
 		writeJSON(writer, http.StatusOK, health)
 	})
-	mux.Handle("GET /v1/status", authenticateLibrary(authenticator, http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+	mux.HandleFunc("GET /v1/status", func(writer http.ResponseWriter, _ *http.Request) {
 		writeJSON(writer, http.StatusOK, health)
-	})))
-	registerSkillRoutes(mux, func(next http.Handler) http.Handler {
-		return authenticateLibrary(authenticator, next)
-	}, skills)
-	registerPropositionRoutes(mux, func(next http.Handler) http.Handler {
-		return authenticateLibrary(authenticator, next)
-	}, propositions)
+	})
+	registerSkillRoutes(mux, skills)
+	registerPropositionRoutes(mux, propositions)
 	l := &leader{
 		health: health, archive: archive, propositions: propositions, queue: queue, judge: modelJudge,
 		lock: lock, cancel: cancel, done: make(chan struct{}),
 		server: &http.Server{Handler: mux, ReadHeaderTimeout: 10 * time.Second},
 	}
-	watchDone := watchKeyring(ctx, libraryStore, authenticator)
 	go func() {
 		serveErr := l.server.Serve(listener)
 		cancel()
-		<-watchDone
 		l.propositions.close()
 		judgeErr := l.judge.Close()
 		queueErr := l.queue.close()
@@ -170,51 +148,6 @@ func writeJSON(writer http.ResponseWriter, status int, value any) {
 	writer.Header().Set("Content-Type", "application/json")
 	writer.WriteHeader(status)
 	_ = json.NewEncoder(writer).Encode(value)
-}
-
-func authenticateLibrary(authenticator *gatewayconfig.Authenticator, next http.Handler) http.Handler {
-	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		if !authenticator.Authorized(request.Header.Get("Authorization")) {
-			writer.Header().Set("WWW-Authenticate", "Bearer")
-			writeJSON(writer, http.StatusUnauthorized, map[string]any{"error": map[string]any{
-				"message": "invalid Library API key",
-				"type":    "authentication_error",
-				"code":    "invalid_api_key",
-			}})
-			return
-		}
-		next.ServeHTTP(writer, request)
-	})
-}
-
-func watchKeyring(ctx context.Context, store ConfigStore, authenticator *gatewayconfig.Authenticator) <-chan struct{} {
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		ticker := time.NewTicker(500 * time.Millisecond)
-		defer ticker.Stop()
-		var modified time.Time
-		if info, err := os.Stat(store.Path()); err == nil {
-			modified = info.ModTime()
-		}
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-				info, err := os.Stat(store.Path())
-				if err != nil || info.ModTime().Equal(modified) {
-					continue
-				}
-				value, err := store.LoadOrDefault()
-				if err != nil || authenticator.Reload(authenticationConfig(value)) != nil {
-					continue
-				}
-				modified = info.ModTime()
-			}
-		}
-	}()
-	return done
 }
 
 func loadOrCreateID(path string) (string, error) {

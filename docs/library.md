@@ -4,16 +4,15 @@
 
 The first runnable slice implements the shared server component, `q library`
 foreground hosting, ordinary q in-process hosting, fixed-port discovery,
-exclusive leader ownership, failure takeover, Gateway-compatible bearer
-authentication, configurable wildcard/non-loopback binding, and persistent
-global Session Store ownership. `/v1/health` and authenticated `/v1/status`
-are available for lifecycle verification. Authenticated global Agent Skill
+exclusive leader ownership, failure takeover, loopback-only unauthenticated
+HTTP, and persistent global Session Store ownership. `/v1/health` and
+`/v1/status` are available for lifecycle verification. Global Agent Skill
 search, resource reads, and explicit reconciliation are available through the
 `/v1/skills/*` routes and are consumed by the existing MCP skill tools.
 
-Proposition extraction, authenticated queued writes, persistent write
-idempotency, BM25 search, embedding generation, multi-vector hybrid search,
-and `created_at` recency ranking are implemented.
+Proposition extraction, queued writes, persistent write idempotency, BM25
+search, embedding generation, multi-vector hybrid search, and `created_at`
+recency ranking are implemented.
 
 ## Purpose and decisions
 
@@ -53,10 +52,11 @@ The same Library server component supports two hosting forms:
   no compatible service exists and that q process wins the leader lock.
 
 These are two entry points to the same server implementation, Store ownership,
-HTTP routes, authentication, and election protocol. An ordinary q installation
-therefore needs no second executable or separately installed daemon. Running
-only `q` is enough to make the Library available, while `q library` is the
-explicit form for users who want its lifetime independent of a workspace TUI.
+HTTP routes, local trust boundary, and election protocol. An ordinary q
+installation therefore needs no second executable or separately installed
+daemon. Running only `q` is enough to make the Library available, while
+`q library` is the explicit form for users who want its lifetime independent
+of a workspace TUI.
 
 ```text
 q workspace A (possible embedded leader) --\
@@ -70,7 +70,6 @@ The global files live below the personal q configuration directory:
 ```text
 ~/.q/
 |- library.json
-|- library.key
 |- library.lock
 `- library/
    |- data/records/
@@ -86,36 +85,21 @@ existence is diagnostic metadata only and never proves ownership. The metadata
 records the PID, host, start time, q version, configured listener, and leader
 generation for diagnostics.
 
-## Listener and authentication
+## Listener and local trust boundary
 
 The Library has a configured, stable TCP port so every q process has a common
-rendezvous point. Its listen host is configurable and may expose the Library
-outside the local machine. Wildcard and non-loopback addresses are supported;
-the implementation must not force `127.0.0.1`.
+rendezvous point. Both the bind host and optional probe host must be loopback IP
+addresses; wildcard and non-loopback addresses are rejected. Every Library HTTP
+route is unauthenticated. Loopback binding is therefore the service boundary:
+remote hosts cannot connect, but another local process can call the API.
 
-Library data endpoints use the existing Gateway API-key design:
-
-- `Authorization: Bearer <key>`;
-- keyed BLAKE3 hashes rather than plaintext server-side keys;
-- key IDs, aliases, creation time, and revocation time;
-- constant-time verification through the existing authenticator;
-- live keyring reload where practical;
-- the same JSON authentication-error shape as the Gateway.
-
-The implementation shares the Gateway authentication code and record format,
-not the Gateway's settings. Library key records live in `library.json`, and
-their keyed-hash master lives in `library.key`. The Library never reads or
-mutates `gateway.json` or `gateway.key`. `library.key` is server-side hashing
-material, not a bearer token; plaintext Library keys are shown only when they
-are generated and reach clients through an explicit client setting or
-environment variable such as `Q_LIBRARY_API_KEY`.
-
-The listener configuration must distinguish the bind address from the local
-rendezvous URL when necessary. For example, a server may bind to
-`0.0.0.0:<port>` while local election participants probe
-`http://127.0.0.1:<port>`. A q process configured to use a Library on another
-machine is client-only: it cannot participate in that machine's file-lock
-election or take over the remote service.
+Legacy `api_key_env` and `api_keys` fields in `library.json` remain readable so
+existing configuration files continue to load, but the server and client ignore
+them and the next config save drops them. q no longer creates `library.key`
+during Library startup; a file left by an older version is ignored. Gateway
+authentication remains independent and is unchanged. A valid wildcard or
+non-loopback address saved by an older release is localized to `127.0.0.1` when
+loaded.
 
 ## Discovery and leader election
 
@@ -169,9 +153,9 @@ failed readiness check, a local managed client discards its connection and
 runs the same connect-or-elect procedure again.
 
 Processes that fail to acquire the lock must not spin. They wait with short,
-bounded exponential backoff and jitter while the winner starts. A client-only
-remote configuration retries the remote endpoint but never attempts local
-leadership for it.
+bounded exponential backoff and jitter while the winner starts. All clients
+participate through the configured loopback endpoint; remote/client-only mode
+is not supported.
 
 Reads may be retried after reconnecting. Mutating requests need a caller-made
 idempotency key. The Library persists the relationship between that key and
@@ -224,6 +208,17 @@ their idempotency slots and source order remain stable. A segment checkpoint is
 committed only after the Thinker successfully calls `thinking_complete`; a
 failure leaves the same queue head and deterministic segment ID available for
 retry after restart or the next trigger.
+
+Every completed or failed Thinker invocation writes one private diagnostic JSON
+file below `~/.q/logs/thinker/`. The record includes the segment boundary, the
+effective model and reasoning effort, the filtered and size-bounded input
+messages actually supplied for extraction, per-round tool choices, aggregate
+result counts, and any terminal error. A zero-proposition run therefore still
+records its `thinking_complete` choice. Raw provider responses and hidden model
+reasoning are not logged. Before each new record is written, Thinker removes its
+own regular JSON log files whose modification time is strictly more than 72
+hours old; unrelated files, links, and the exact 72-hour boundary are retained.
+On POSIX systems the directory and files use modes `0700` and `0600`.
 
 The registration adjudicator uses the separate built-in `librarian` role. It
 is configurable from `/model` or `agents.roles.librarian` and independently
@@ -361,9 +356,9 @@ GET  /v1/skills/{id}/resources/{path...}
 POST /v1/skills/reload
 ```
 
-Health exposes no stored content. All content, search, extraction, and
-management routes require Gateway-compatible bearer authentication. Mutating
-routes require idempotency keys and bounded request bodies.
+All routes are available without a bearer key on the loopback-only listener.
+Mutating routes still require their existing idempotency keys and bounded
+request bodies where applicable.
 
 The global skill routes are implemented as the first data slice. Leader
 startup and `/skills/reload` reconcile file digests against the persisted
@@ -376,8 +371,7 @@ both canonical `content` and generated-query `search_text`. The default ranking
 applies a `created_at` boost with weight `0.25` and a 720-hour half-life. A
 request may override both values, and an explicit zero weight disables the
 boost. `GET /propositions/{id}` returns the canonical text, provenance refs,
-tags, and extraction payload. Both routes require Library API-key
-authentication.
+tags, and extraction payload.
 
 `POST /propositions` is also implemented for the Thinker-local
 `register_proposition` tool. It requires an `Idempotency-Key`, validates the
@@ -441,10 +435,10 @@ remains alive until that q process closes; another active session can take over
 after graceful shutdown or failure.
 
 Callers do not bypass HTTP merely because they host the embedded leader. Using
-the same authenticated client path avoids a separate in-process behavior and
-keeps dedicated, embedded, local, and remote operation equivalent. Internal
+the same client path avoids a separate in-process behavior and keeps dedicated
+and embedded operation equivalent. Internal
 health and lifecycle coordination may use direct handles, but data operations
-continue through the public Library service boundary.
+continue through the local Library service boundary.
 
 `q library config` opens the standalone Library listener settings, and
 `/library` opens the same settings from the regular q TUI. Both edit the
@@ -453,13 +447,10 @@ valid for the Library because every process must be able to find the same
 endpoint. Listener changes take effect after the current Library leader is
 restarted.
 
-Configuration includes the listen host, fixed port, local rendezvous URL when
-needed, remote/client-only mode, and API-key source. The Thinker model is
-configured through q's agent-role settings. The Library currently uses q's
-global embedding model and dimensions for its HNSW index; listener and
-index-shape changes require a Library restart. Library API-key changes use
-the same live-reload behavior as Gateway keys while remaining in the Library's
-independent configuration.
+Configuration includes a loopback listen host, fixed port, and optional
+loopback probe host. The Thinker model is configured through q's agent-role
+settings. The Library currently uses q's global embedding model and dimensions
+for its HNSW index; listener and index-shape changes require a Library restart.
 
 The Library must fail independently from workspace startup where possible. A
 workspace remains usable without global memory, while its status clearly says
@@ -467,9 +458,8 @@ that global skill/proposition retrieval and extraction are unavailable.
 
 ## Implementation stages
 
-1. Reuse the API-key authentication format and verifier, while keeping Library
-   and Gateway settings and master keys independent; extract the OS lock
-   primitive without changing existing Gateway or workspace behavior.
+1. Establish a loopback-only local trust boundary and extract the OS lock
+   primitive without changing existing Gateway behavior.
 2. Add the reusable Library server component, configuration, identity/health,
    fixed-port serving, connection, leader election, startup waiting, shutdown,
    and takeover tests; host the same component from `q library` and ordinary q.
@@ -500,9 +490,9 @@ The implementation is complete only when tests cover:
 - embedded-leader shutdown followed by takeover without Store corruption;
 - leader termination followed by bounded takeover and successful retry;
 - a fixed-port collision with a non-Library service;
-- non-loopback and wildcard binding with authenticated access;
-- missing, invalid, and revoked Gateway-compatible Library API keys, including
-  rejection of keys configured only for the Gateway;
+- rejection of non-loopback and wildcard bind or probe addresses;
+- unauthenticated status, skill, proposition read, and proposition mutation
+  requests on the loopback listener;
 - duplicate mutating requests before and after leader takeover;
 - Store/index recovery while the lock remains exclusively owned;
 - global skills changing only on startup or explicit management/reload;

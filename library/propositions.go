@@ -700,8 +700,8 @@ func (s *propositionService) get(id string) (Proposition, error) {
 	}, nil
 }
 
-func registerPropositionRoutes(mux *http.ServeMux, authenticator func(http.Handler) http.Handler, propositions *propositionService) {
-	mux.Handle("POST /v1/propositions", authenticator(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+func registerPropositionRoutes(mux *http.ServeMux, propositions *propositionService) {
+	mux.Handle("POST /v1/propositions", http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		var input PropositionRegisterRequest
 		if err := decodeLibraryJSON(writer, request, &input); err != nil {
 			writeLibraryError(writer, http.StatusBadRequest, err)
@@ -726,8 +726,8 @@ func registerPropositionRoutes(mux *http.ServeMux, authenticator func(http.Handl
 			status = http.StatusCreated
 		}
 		writeJSON(writer, status, output)
-	})))
-	mux.Handle("POST /v1/propositions/search", authenticator(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+	}))
+	mux.Handle("POST /v1/propositions/search", http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		var input PropositionSearchRequest
 		if err := decodeLibraryJSON(writer, request, &input); err != nil {
 			writeLibraryError(writer, http.StatusBadRequest, err)
@@ -739,8 +739,8 @@ func registerPropositionRoutes(mux *http.ServeMux, authenticator func(http.Handl
 			return
 		}
 		writeJSON(writer, http.StatusOK, output)
-	})))
-	mux.Handle("GET /v1/propositions/{id}", authenticator(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+	}))
+	mux.Handle("GET /v1/propositions/{id}", http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		output, err := propositions.get(request.PathValue("id"))
 		if err != nil {
 			status := http.StatusInternalServerError
@@ -751,8 +751,8 @@ func registerPropositionRoutes(mux *http.ServeMux, authenticator func(http.Handl
 			return
 		}
 		writeJSON(writer, http.StatusOK, output)
-	})))
-	mux.Handle("DELETE /v1/propositions/{id}", authenticator(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+	}))
+	mux.Handle("DELETE /v1/propositions/{id}", http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		output, err := propositions.delete(request.PathValue("id"))
 		if err != nil {
 			status := http.StatusInternalServerError
@@ -763,7 +763,7 @@ func registerPropositionRoutes(mux *http.ServeMux, authenticator func(http.Handl
 			return
 		}
 		writeJSON(writer, http.StatusOK, output)
-	})))
+	}))
 }
 
 func truncateRunes(value string, limit int) (string, bool) {

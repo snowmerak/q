@@ -8,6 +8,7 @@ import (
 	"io"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/snowmerak/q/client"
 	qlibrary "github.com/snowmerak/q/library"
@@ -32,6 +33,7 @@ type PropositionLibrary interface {
 
 type Job struct {
 	ID               string
+	Boundary         string
 	Messages         []client.Message
 	Refs             []string
 	WorkingDirectory string
@@ -47,12 +49,15 @@ type Result struct {
 	IDs        []string     `json:"ids,omitempty"`
 	Usage      client.Usage `json:"usage,omitempty"`
 	Truncated  bool         `json:"truncated,omitempty"`
+	LogPath    string       `json:"-"`
+	LogError   string       `json:"-"`
 }
 
 type Runner struct {
 	Client              ChatClient
 	Library             PropositionLibrary
 	Spec                subagent.Spec
+	Log                 *LogStore
 	MaximumPropositions int
 	MaximumRounds       int
 }
@@ -94,7 +99,36 @@ type acknowledgedProposition struct {
 	Action  string `json:"action"`
 }
 
-func (r Runner) Run(ctx context.Context, job Job) (Result, error) {
+func (r Runner) Run(ctx context.Context, job Job) (returned Result, runErr error) {
+	var result Result
+	clock := func() time.Time { return time.Now().UTC() }
+	if r.Log != nil {
+		clock = r.Log.currentTime
+	}
+	invocation := InvocationLog{
+		JobID: job.ID, Boundary: job.Boundary, StartedAt: clock(),
+		WorkingDirectory: job.WorkingDirectory, Refs: append([]string(nil), job.Refs...),
+		Model: r.Spec.Model, ModelGroup: r.Spec.Group, ReasoningEffort: r.Spec.ReasoningEffort,
+		ContextLength: r.Spec.ContextLength,
+	}
+	defer func() {
+		if r.Log == nil {
+			return
+		}
+		invocation.CompletedAt = clock()
+		invocation.Model = r.Spec.Model
+		invocation.ModelGroup = r.Spec.Group
+		invocation.ReasoningEffort = r.Spec.ReasoningEffort
+		invocation.Result = result
+		if runErr != nil {
+			invocation.Error = runErr.Error()
+		}
+		path, err := r.Log.Write(invocation)
+		returned.LogPath = path
+		if err != nil {
+			returned.LogError = err.Error()
+		}
+	}()
 	if ctx == nil || r.Client == nil || r.Library == nil {
 		return Result{}, errors.New("thinker: context, client, and Library are required")
 	}
@@ -109,6 +143,11 @@ func (r Runner) Run(ctx context.Context, job Job) (Result, error) {
 	if err != nil {
 		return Result{}, err
 	}
+	invocation.SourceMessages = chunk.SourceMessages
+	invocation.InputMessages = append([]client.Message(nil), chunk.Messages...)
+	invocation.InputTokens = chunk.Tokens
+	invocation.MaximumInputTokens = chunk.MaximumTokens
+	invocation.Truncated = chunk.Truncated
 	maximum := r.MaximumPropositions
 	if maximum <= 0 {
 		maximum = DefaultMaximumPropositions
@@ -126,10 +165,13 @@ func (r Runner) Run(ctx context.Context, job Job) (Result, error) {
 	history := subagent.NewContextCompactor(r.Spec, messages, tools, len(messages))
 	var acknowledged []acknowledgedProposition
 	parallel := false
-	result := Result{Truncated: chunk.Truncated}
+	result = Result{Truncated: chunk.Truncated}
 	proposalIndex := 0
 	for round := 0; round < rounds; round++ {
 		if err := history.CompactIfNeeded(ctx, &r.Spec, r.Client); err != nil {
+			invocation.Trace = append(invocation.Trace, InvocationTrace{
+				Round: round + 1, At: clock(), Outcome: "context_error", Error: err.Error(),
+			})
 			return Result{}, fmt.Errorf("thinker: context: %w", err)
 		}
 		request := client.ChatRequest{
@@ -138,9 +180,15 @@ func (r Runner) Run(ctx context.Context, job Job) (Result, error) {
 		}
 		response, err := r.Spec.Chat(ctx, r.Client, request)
 		if err != nil {
+			invocation.Trace = append(invocation.Trace, InvocationTrace{
+				Round: round + 1, At: clock(), Outcome: "model_error", Error: err.Error(),
+			})
 			return Result{}, fmt.Errorf("thinker: model: %w", err)
 		}
 		if response == nil || len(response.Choices) == 0 {
+			invocation.Trace = append(invocation.Trace, InvocationTrace{
+				Round: round + 1, At: clock(), Outcome: "invalid_response", Error: "model returned no choices",
+			})
 			return Result{}, errors.New("thinker: model returned no choices")
 		}
 		result.Usage = addUsage(result.Usage, response.Usage)
@@ -151,6 +199,9 @@ func (r Runner) Run(ctx context.Context, job Job) (Result, error) {
 		history.Observe(response.Usage)
 		history.Append(assistant)
 		if len(assistant.ToolCalls) != 1 {
+			invocation.Trace = append(invocation.Trace, InvocationTrace{
+				Round: round + 1, At: clock(), Outcome: "invalid_response", Error: "model must call exactly one tool per round",
+			})
 			return Result{}, errors.New("thinker: model must call exactly one tool per round")
 		}
 		call := assistant.ToolCalls[0]
@@ -158,9 +209,15 @@ func (r Runner) Run(ctx context.Context, job Job) (Result, error) {
 		case CompleteToolName:
 			var input struct{}
 			if err := decodeStrictArguments(call.Function.Arguments, &input); err != nil {
+				invocation.Trace = append(invocation.Trace, InvocationTrace{
+					Round: round + 1, At: clock(), Tool: CompleteToolName, Outcome: "invalid_arguments", Error: err.Error(),
+				})
 				history.Append(thinkerToolError(call, fmt.Errorf("complete: %w", err)))
 				continue
 			}
+			invocation.Trace = append(invocation.Trace, InvocationTrace{
+				Round: round + 1, At: clock(), Tool: CompleteToolName, Outcome: "completed",
+			})
 			body, _ := json.Marshal(result)
 			history.Append(client.ToolResultMessage(call, client.ToolResult{Content: string(body)}))
 			request.Messages = history.RequestMessages()
@@ -173,10 +230,17 @@ func (r Runner) Run(ctx context.Context, job Job) (Result, error) {
 			return result, nil
 		case RegisterToolName:
 			if proposalIndex >= maximum {
-				return Result{}, fmt.Errorf("thinker: proposition limit %d exceeded", maximum)
+				message := fmt.Sprintf("proposition limit %d exceeded", maximum)
+				invocation.Trace = append(invocation.Trace, InvocationTrace{
+					Round: round + 1, At: clock(), Tool: RegisterToolName, Outcome: "rejected", Error: message,
+				})
+				return Result{}, fmt.Errorf("thinker: %s", message)
 			}
 			var input registerInput
 			if err := decodeStrictArguments(call.Function.Arguments, &input); err != nil {
+				invocation.Trace = append(invocation.Trace, InvocationTrace{
+					Round: round + 1, At: clock(), Tool: RegisterToolName, Outcome: "invalid_arguments", Error: err.Error(),
+				})
 				history.Append(thinkerToolError(call, fmt.Errorf("register proposition: %w", err)))
 				continue
 			}
@@ -195,8 +259,14 @@ func (r Runner) Run(ctx context.Context, job Job) (Result, error) {
 			}
 			if err != nil {
 				if strings.Contains(err.Error(), "HTTP 409") {
+					invocation.Trace = append(invocation.Trace, InvocationTrace{
+						Round: round + 1, At: clock(), Tool: RegisterToolName, Outcome: "registration_error", Error: err.Error(),
+					})
 					return Result{}, fmt.Errorf("thinker: register proposition: %w", err)
 				}
+				invocation.Trace = append(invocation.Trace, InvocationTrace{
+					Round: round + 1, At: clock(), Tool: RegisterToolName, Outcome: "registration_error", Error: err.Error(),
+				})
 				history.Append(thinkerToolError(call, fmt.Errorf("register proposition: %w", err)))
 				continue
 			}
@@ -221,8 +291,16 @@ func (r Runner) Run(ctx context.Context, job Job) (Result, error) {
 			case qlibrary.PropositionActionDiscard:
 				result.Discarded++
 			default:
+				invocation.Trace = append(invocation.Trace, InvocationTrace{
+					Round: round + 1, At: clock(), Tool: RegisterToolName, Outcome: "registration_error",
+					Action: action, PropositionID: registered.ID, Error: "unsupported proposition action",
+				})
 				return Result{}, fmt.Errorf("thinker: unsupported proposition action %q", action)
 			}
+			invocation.Trace = append(invocation.Trace, InvocationTrace{
+				Round: round + 1, At: clock(), Tool: RegisterToolName, Outcome: "processed",
+				Action: action, PropositionID: registered.ID,
+			})
 			acknowledged = append(acknowledged, acknowledgedProposition{Content: input.Content, ID: registered.ID, Action: action})
 			ledger, _ := json.Marshal(acknowledged)
 			if err := history.SetAnchor(2, client.Message{
@@ -236,6 +314,9 @@ func (r Runner) Run(ctx context.Context, job Job) (Result, error) {
 				Role: client.RoleTool, Name: RegisterToolName, ToolCallID: call.ID, Content: string(ack),
 			})
 		default:
+			invocation.Trace = append(invocation.Trace, InvocationTrace{
+				Round: round + 1, At: clock(), Tool: call.Function.Name, Outcome: "unsupported_tool",
+			})
 			return Result{}, fmt.Errorf("thinker: unsupported tool %q", call.Function.Name)
 		}
 	}

@@ -2434,6 +2434,10 @@ func (a *acpAgent) launchLearning(command tea.Cmd) {
 		if matched {
 			a.state.thinkerBusy = false
 			a.state.thinkerJobID = ""
+			if result.result.LogError != "" {
+				a.state.archiveFailure("thinker log", errors.New(result.result.LogError))
+				_ = a.state.flushArchive()
+			}
 			if result.err != nil {
 				a.state.archiveFailure("learning update failed", result.err)
 				_ = a.state.flushArchive()

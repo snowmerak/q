@@ -2,7 +2,6 @@
 package library
 
 import (
-	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,7 +10,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
 
 	"github.com/snowmerak/q/gatewayconfig"
 )
@@ -19,32 +17,31 @@ import (
 const (
 	ConfigVersion       = 1
 	ConfigFileName      = "library.json"
-	MasterKeyFileName   = "library.key"
 	LockFileName        = "library.lock"
 	DefaultHost         = "127.0.0.1"
 	DefaultPort         = 17891
-	DefaultAPIKeyEnv    = "Q_LIBRARY_API_KEY"
 	defaultProbeTimeout = 300
 )
 
 type Config struct {
-	Version   int                    `json:"version"`
-	Host      string                 `json:"host"`
-	Port      int                    `json:"port"`
-	ProbeHost string                 `json:"probe_host,omitempty"`
-	APIKeyEnv string                 `json:"api_key_env,omitempty"`
-	APIKeys   []gatewayconfig.APIKey `json:"api_keys,omitempty"`
+	Version   int    `json:"version"`
+	Host      string `json:"host"`
+	Port      int    `json:"port"`
+	ProbeHost string `json:"probe_host,omitempty"`
+	// Deprecated: retained only so pre-local-only config files still decode.
+	APIKeyEnv string `json:"api_key_env,omitempty"`
+	// Deprecated: retained only so pre-local-only config files still decode.
+	APIKeys []gatewayconfig.APIKey `json:"api_keys,omitempty"`
 }
 
 func DefaultConfig() Config {
-	return Config{
-		Version: ConfigVersion, Host: DefaultHost, Port: DefaultPort,
-		APIKeyEnv: DefaultAPIKeyEnv,
-	}
+	return Config{Version: ConfigVersion, Host: DefaultHost, Port: DefaultPort}
 }
 
 func (c Config) Effective() Config {
-	c.APIKeys = append([]gatewayconfig.APIKey(nil), c.APIKeys...)
+	// Authentication fields from older config files are intentionally dropped.
+	c.APIKeyEnv = ""
+	c.APIKeys = nil
 	defaults := DefaultConfig()
 	if c.Version == 0 {
 		c.Version = defaults.Version
@@ -55,9 +52,6 @@ func (c Config) Effective() Config {
 	if c.Port == 0 {
 		c.Port = defaults.Port
 	}
-	if strings.TrimSpace(c.APIKeyEnv) == "" {
-		c.APIKeyEnv = defaults.APIKeyEnv
-	}
 	return c
 }
 
@@ -66,20 +60,18 @@ func (c Config) Validate() error {
 	if c.Version != ConfigVersion {
 		return fmt.Errorf("library: unsupported config version %d", c.Version)
 	}
-	if net.ParseIP(c.Host) == nil {
-		return fmt.Errorf("library: host %q is not an IP address", c.Host)
+	host := net.ParseIP(c.Host)
+	if host == nil || !host.IsLoopback() {
+		return fmt.Errorf("library: host %q must be a loopback IP address", c.Host)
 	}
 	if c.Port < 1 || c.Port > 65535 {
 		return errors.New("library: port must be between 1 and 65535")
 	}
-	if c.ProbeHost != "" && net.ParseIP(c.ProbeHost) == nil {
-		return fmt.Errorf("library: probe_host %q is not an IP address", c.ProbeHost)
-	}
-	if strings.Contains(c.APIKeyEnv, "=") {
-		return errors.New("library: api_key_env must be an environment variable name")
-	}
-	if err := authenticationConfig(c).Validate(); err != nil {
-		return fmt.Errorf("library: invalid API-key configuration: %w", err)
+	if c.ProbeHost != "" {
+		probe := net.ParseIP(c.ProbeHost)
+		if probe == nil || !probe.IsLoopback() {
+			return fmt.Errorf("library: probe_host %q must be a loopback IP address", c.ProbeHost)
+		}
 	}
 	return nil
 }
@@ -94,27 +86,13 @@ func (c Config) Endpoint() string {
 	host := c.ProbeHost
 	if host == "" {
 		host = c.Host
-		if host == "0.0.0.0" {
-			host = "127.0.0.1"
-		} else if host == "::" {
-			host = "::1"
-		}
 	}
 	return "http://" + net.JoinHostPort(host, fmt.Sprintf("%d", c.Port)) + "/v1"
-}
-
-func (c Config) ResolveAPIKey() string {
-	if c.APIKeyEnv == "" {
-		return ""
-	}
-	return os.Getenv(c.APIKeyEnv)
 }
 
 type ConfigStore struct{ Dir string }
 
 func (s ConfigStore) Path() string { return filepath.Join(s.Dir, ConfigFileName) }
-
-func (s ConfigStore) MasterKeyPath() string { return filepath.Join(s.Dir, MasterKeyFileName) }
 
 func (s ConfigStore) LoadOrDefault() (Config, error) {
 	file, err := os.Open(s.Path())
@@ -139,6 +117,16 @@ func (s ConfigStore) LoadOrDefault() (Config, error) {
 		return Config{}, fmt.Errorf("library: decode config: %w", err)
 	}
 	value = value.Effective()
+	// Older releases allowed wildcard and non-loopback listeners. Localize
+	// those valid legacy IPs during load so upgrading cannot reopen the service
+	// externally or leave the Library unavailable solely because of that old
+	// setting. Newly saved configurations are still validated strictly.
+	if host := net.ParseIP(value.Host); host != nil && !host.IsLoopback() {
+		value.Host = DefaultHost
+	}
+	if probe := net.ParseIP(value.ProbeHost); probe != nil && !probe.IsLoopback() {
+		value.ProbeHost = ""
+	}
 	if err := value.Validate(); err != nil {
 		return Config{}, err
 	}
@@ -187,105 +175,4 @@ func (s ConfigStore) Save(value Config) error {
 	}
 	keep = true
 	return nil
-}
-
-func (s ConfigStore) LoadMasterKey() ([32]byte, error) {
-	var result [32]byte
-	body, err := os.ReadFile(s.MasterKeyPath())
-	if err != nil {
-		return result, fmt.Errorf("library: read API-key master: %w", err)
-	}
-	if len(body) != len(result) {
-		return result, fmt.Errorf("library: API-key master must be %d bytes", len(result))
-	}
-	copy(result[:], body)
-	return result, nil
-}
-
-func (s ConfigStore) EnsureMasterKey(randomMaster [32]byte) ([32]byte, error) {
-	if existing, err := s.LoadMasterKey(); err == nil {
-		return existing, nil
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return [32]byte{}, err
-	}
-	if err := os.MkdirAll(s.Dir, 0o700); err != nil {
-		return [32]byte{}, fmt.Errorf("library: create config directory: %w", err)
-	}
-	if err := os.Chmod(s.Dir, 0o700); err != nil {
-		return [32]byte{}, fmt.Errorf("library: secure config directory: %w", err)
-	}
-	file, err := os.OpenFile(s.MasterKeyPath(), os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
-	if errors.Is(err, os.ErrExist) {
-		return s.LoadMasterKey()
-	}
-	if err != nil {
-		return [32]byte{}, fmt.Errorf("library: create API-key master: %w", err)
-	}
-	keep := false
-	defer func() {
-		_ = file.Close()
-		if !keep {
-			_ = os.Remove(s.MasterKeyPath())
-		}
-	}()
-	if err := file.Chmod(0o600); err != nil {
-		return [32]byte{}, fmt.Errorf("library: secure API-key master: %w", err)
-	}
-	if _, err := file.Write(randomMaster[:]); err != nil {
-		return [32]byte{}, fmt.Errorf("library: write API-key master: %w", err)
-	}
-	if err := file.Sync(); err != nil {
-		return [32]byte{}, fmt.Errorf("library: sync API-key master: %w", err)
-	}
-	if err := file.Close(); err != nil {
-		return [32]byte{}, fmt.Errorf("library: close API-key master: %w", err)
-	}
-	keep = true
-	return randomMaster, nil
-}
-
-func (s ConfigStore) CreateAPIKey(value Config, alias string, now time.Time) (Config, gatewayconfig.GeneratedAPIKey, error) {
-	var randomMaster [32]byte
-	if _, err := rand.Read(randomMaster[:]); err != nil {
-		return Config{}, gatewayconfig.GeneratedAPIKey{}, fmt.Errorf("library: generate API-key master: %w", err)
-	}
-	master, err := s.EnsureMasterKey(randomMaster)
-	if err != nil {
-		return Config{}, gatewayconfig.GeneratedAPIKey{}, err
-	}
-	generated, err := gatewayconfig.GenerateAPIKey(master, alias, now)
-	if err != nil {
-		return Config{}, gatewayconfig.GeneratedAPIKey{}, err
-	}
-	authentication, err := gatewayconfig.AddAPIKey(authenticationConfig(value), generated)
-	if err != nil {
-		return Config{}, gatewayconfig.GeneratedAPIKey{}, err
-	}
-	updated := value.Effective()
-	updated.APIKeys = authentication.APIKeys
-	if err := s.Save(updated); err != nil {
-		return Config{}, gatewayconfig.GeneratedAPIKey{}, err
-	}
-	return updated, generated, nil
-}
-
-func (s ConfigStore) RevokeAPIKey(value Config, id string, now time.Time) (Config, error) {
-	authentication, err := gatewayconfig.RevokeAPIKey(authenticationConfig(value), id, now)
-	if err != nil {
-		return Config{}, err
-	}
-	updated := value.Effective()
-	updated.APIKeys = authentication.APIKeys
-	if err := s.Save(updated); err != nil {
-		return Config{}, err
-	}
-	return updated, nil
-}
-
-func authenticationConfig(value Config) gatewayconfig.Config {
-	return gatewayconfig.Config{
-		Version: gatewayconfig.CurrentVersion,
-		Server:  gatewayconfig.Default().Server,
-		APIKeys: append([]gatewayconfig.APIKey(nil), value.APIKeys...),
-	}
 }

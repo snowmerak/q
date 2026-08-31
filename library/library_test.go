@@ -22,41 +22,26 @@ import (
 	"github.com/snowmerak/q/worklock"
 )
 
-func TestConfigSupportsWildcardBindAndLocalProbe(t *testing.T) {
-	value := Config{Version: ConfigVersion, Host: "0.0.0.0", Port: 17891}.Effective()
-	if err := value.Validate(); err != nil {
-		t.Fatal(err)
+func TestConfigAcceptsOnlyLoopbackAddresses(t *testing.T) {
+	for _, value := range []Config{
+		{Version: ConfigVersion, Host: "0.0.0.0", Port: 17891},
+		{Version: ConfigVersion, Host: "192.168.0.10", Port: 17891},
+		{Version: ConfigVersion, Host: "127.0.0.1", ProbeHost: "192.168.0.10", Port: 17891},
+	} {
+		if err := value.Validate(); err == nil {
+			t.Fatalf("non-loopback config was accepted: %#v", value)
+		}
 	}
-	if value.ListenAddress() != "0.0.0.0:17891" {
-		t.Fatalf("listen address = %q", value.ListenAddress())
-	}
-	if value.Endpoint() != "http://127.0.0.1:17891/v1" {
-		t.Fatalf("endpoint = %q", value.Endpoint())
-	}
-}
-
-func TestEnsureServesWildcardBindThroughLocalProbe(t *testing.T) {
-	dir := t.TempDir()
-	value := testConfig(t)
-	value.Host = "0.0.0.0"
-	runtime, err := EnsureWithOptions(context.Background(), testOptions(dir, value))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer runtime.Close()
-	if !runtime.IsLeader() {
-		t.Fatal("wildcard runtime did not become leader")
-	}
-	health, err := runtime.Client().Health(context.Background())
-	if err != nil || !health.Compatible() {
-		t.Fatalf("wildcard health = %#v, err = %v", health, err)
+	value := Config{Version: ConfigVersion, Host: "::1", Port: 17891}
+	if err := value.Validate(); err != nil || value.ListenAddress() != "[::1]:17891" || value.Endpoint() != "http://[::1]:17891/v1" {
+		t.Fatalf("IPv6 loopback config = %#v, err = %v", value, err)
 	}
 }
 
 func TestConfigStoreRoundTrip(t *testing.T) {
 	store := ConfigStore{Dir: t.TempDir()}
 	want := Config{
-		Version: ConfigVersion, Host: "0.0.0.0", Port: 19001,
+		Version: ConfigVersion, Host: "127.0.0.1", Port: 19001,
 		ProbeHost: "127.0.0.1", APIKeyEnv: "TEST_LIBRARY_KEY",
 	}
 	if err := store.Save(want); err != nil {
@@ -66,16 +51,30 @@ func TestConfigStoreRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	want.APIKeyEnv = ""
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("config = %#v, want %#v", got, want)
 	}
 }
 
-func TestEnsureElectsOneLeaderAndAuthenticatesStatus(t *testing.T) {
+func TestConfigStoreLocalizesLegacyExternalAddresses(t *testing.T) {
+	store := ConfigStore{Dir: t.TempDir()}
+	body := []byte(`{"version":1,"host":"0.0.0.0","port":19001,"probe_host":"192.168.0.10"}`)
+	if err := os.WriteFile(store.Path(), body, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got, err := store.LoadOrDefault()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Host != DefaultHost || got.ProbeHost != "" || got.Endpoint() != "http://127.0.0.1:19001/v1" {
+		t.Fatalf("localized config = %#v", got)
+	}
+}
+
+func TestEnsureElectsOneLeaderAndServesStatusWithoutAuthentication(t *testing.T) {
 	dir := t.TempDir()
 	value := testConfig(t)
-	value, secret := installTestAPIKey(t, dir, value)
-	t.Setenv(DefaultAPIKeyEnv, secret)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -93,10 +92,10 @@ func TestEnsureElectsOneLeaderAndAuthenticatesStatus(t *testing.T) {
 	}
 	status, err := first.Client().Status(ctx)
 	if err != nil || status.Generation != health.Generation {
-		t.Fatalf("authenticated status = %#v, err = %v", status, err)
+		t.Fatalf("status = %#v, err = %v", status, err)
 	}
-	if _, err := NewClient(value.Endpoint(), "", time.Second).Status(ctx); err == nil {
-		t.Fatal("status accepted a missing API key")
+	if _, err := NewClient(value.Endpoint(), "ignored-invalid-key", time.Second).Status(ctx); err != nil {
+		t.Fatalf("status required authentication: %v", err)
 	}
 
 	second, err := EnsureWithOptions(ctx, testOptions(dir, value))
@@ -113,7 +112,7 @@ func TestEnsureElectsOneLeaderAndAuthenticatesStatus(t *testing.T) {
 	}
 }
 
-func TestLibraryAuthenticationDoesNotUseGatewaySettings(t *testing.T) {
+func TestLibraryStartupDoesNotCreateAuthenticationStateOrModifyGatewaySettings(t *testing.T) {
 	dir := t.TempDir()
 	gatewayStore := gatewayconfig.Store{Dir: dir}
 	var gatewayMaster [32]byte
@@ -141,26 +140,18 @@ func TestLibraryAuthenticationDoesNotUseGatewaySettings(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	value, librarySecret := installTestAPIKey(t, dir, testConfig(t))
-	t.Setenv(DefaultAPIKeyEnv, librarySecret)
+	value := testConfig(t)
 	runtime, err := EnsureWithOptions(context.Background(), testOptions(dir, value))
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer runtime.Close()
-	if _, err := runtime.Client().Status(context.Background()); err != nil {
-		t.Fatalf("Library key was rejected: %v", err)
-	}
-	if _, err := NewClient(value.Endpoint(), gatewayKey.Secret, time.Second).Status(context.Background()); err == nil {
-		t.Fatal("Gateway key was accepted by the Library")
+	if _, err := NewClient(value.Endpoint(), gatewayKey.Secret, time.Second).Status(context.Background()); err != nil {
+		t.Fatalf("Library status required authentication: %v", err)
 	}
 
-	libraryStore := ConfigStore{Dir: dir}
-	if libraryStore.MasterKeyPath() == gatewayStore.MasterKeyPath() {
-		t.Fatal("Library and Gateway master-key paths are shared")
-	}
-	if _, err := os.Stat(libraryStore.MasterKeyPath()); err != nil {
-		t.Fatalf("Library master key was not created: %v", err)
+	if _, err := os.Stat(filepath.Join(dir, "library.key")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("Library created authentication state: %v", err)
 	}
 	gatewayConfigAfter, err := os.ReadFile(gatewayStore.Path())
 	if err != nil {
@@ -188,26 +179,23 @@ func TestGlobalSkillAPIReconcilesOnlyOnExplicitReload(t *testing.T) {
 		}
 	}
 	writeLibrarySkill("Initial global skill token.")
-	value, secret := installTestAPIKey(t, dir, testConfig(t))
-	t.Setenv(DefaultAPIKeyEnv, secret)
+	value := testConfig(t)
 	runtime, err := EnsureWithOptions(context.Background(), testOptions(dir, value))
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer runtime.Close()
 	client := runtime.Client()
-	if _, err := NewClient(value.Endpoint(), "", time.Second).SearchSkills(context.Background(), SkillSearchRequest{Query: "Initial"}); err == nil {
-		t.Fatal("global skill search accepted a missing Library API key")
-	}
+	publicClient := NewClient(value.Endpoint(), "", time.Second)
 
-	initial, err := client.SearchSkills(context.Background(), SkillSearchRequest{Query: "Initial global skill token"})
+	initial, err := publicClient.SearchSkills(context.Background(), SkillSearchRequest{Query: "Initial global skill token"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(initial.Hits) != 1 || initial.Hits[0].Scope != "global" {
 		t.Fatalf("initial global skill search = %#v", initial)
 	}
-	resource, err := client.GetSkill(context.Background(), initial.Hits[0].ID, "")
+	resource, err := publicClient.GetSkill(context.Background(), initial.Hits[0].ID, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -270,20 +258,13 @@ func TestGlobalPropositionAPIReadsStoredRecordsWithRecency(t *testing.T) {
 		},
 	)
 
-	value, secret := installTestAPIKey(t, dir, testConfig(t))
-	t.Setenv(DefaultAPIKeyEnv, secret)
+	value := testConfig(t)
 	runtime, err := EnsureWithOptions(context.Background(), testOptions(dir, value))
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer runtime.Close()
-	if _, err := NewClient(value.Endpoint(), "", time.Second).SearchPropositions(
-		context.Background(), PropositionSearchRequest{Query: "how should services emit logs"},
-	); err == nil {
-		t.Fatal("proposition search accepted a missing Library API key")
-	}
-
-	result, err := runtime.Client().SearchPropositions(context.Background(), PropositionSearchRequest{
+	result, err := NewClient(value.Endpoint(), "", time.Second).SearchPropositions(context.Background(), PropositionSearchRequest{
 		Query: "how should services emit logs", Tags: []string{"logging"},
 	})
 	if err != nil {
@@ -309,8 +290,7 @@ func TestGlobalPropositionAPIReadsStoredRecordsWithRecency(t *testing.T) {
 
 func TestGlobalPropositionAPIRegistersIdempotently(t *testing.T) {
 	dir := t.TempDir()
-	value, secret := installTestAPIKey(t, dir, testConfig(t))
-	t.Setenv(DefaultAPIKeyEnv, secret)
+	value := testConfig(t)
 	runtime, err := EnsureWithOptions(context.Background(), testOptions(dir, value))
 	if err != nil {
 		t.Fatal(err)
@@ -322,14 +302,12 @@ func TestGlobalPropositionAPIRegistersIdempotently(t *testing.T) {
 		Confidence: 0.95, Tags: []string{"thinker"}, Refs: []string{"run:test"},
 		ExtractorModel: "thinker-model", ExtractorVersion: "thinker-v1",
 	}
-	if _, err := NewClient(value.Endpoint(), "", time.Second).RegisterProposition(context.Background(), "job/0", input); err == nil {
-		t.Fatal("proposition registration accepted a missing Library API key")
-	}
-	created, err := runtime.Client().RegisterProposition(context.Background(), "job/0", input)
+	client := NewClient(value.Endpoint(), "", time.Second)
+	created, err := client.RegisterProposition(context.Background(), "job/0", input)
 	if err != nil || !created.Created || created.ID == "" {
 		t.Fatalf("created = %#v, err = %v", created, err)
 	}
-	retried, err := runtime.Client().RegisterProposition(context.Background(), "job/0", input)
+	retried, err := client.RegisterProposition(context.Background(), "job/0", input)
 	if err != nil || retried.Created || retried.ID != created.ID {
 		t.Fatalf("retried = %#v, err = %v", retried, err)
 	}
@@ -356,7 +334,6 @@ func TestGlobalPropositionAPIRegistersIdempotently(t *testing.T) {
 func TestPropositionQueueJudgesAndMergesDuplicateAcrossIdempotencyKeys(t *testing.T) {
 	dir := t.TempDir()
 	value := testConfig(t)
-	value, key := installTestAPIKey(t, dir, value)
 	judge := &mergeDuplicateTestJudge{}
 	options := testOptions(dir, value)
 	options.Judge = judge
@@ -365,7 +342,7 @@ func TestPropositionQueueJudgesAndMergesDuplicateAcrossIdempotencyKeys(t *testin
 		t.Fatal(err)
 	}
 	defer runtime.Close()
-	client := NewClient(runtime.Endpoint(), key, time.Second)
+	client := NewClient(runtime.Endpoint(), "", time.Second)
 	first, err := client.RegisterProposition(context.Background(), "duplicate/one", PropositionRegisterRequest{
 		Content: "The Library serializes proposition adjudication.",
 		Queries: []string{"how are proposition decisions ordered"}, Confidence: 0.8,
@@ -401,7 +378,6 @@ func TestPropositionQueueJudgesAndMergesDuplicateAcrossIdempotencyKeys(t *testin
 func TestPropositionReceiptSurvivesLeaderRestartWithoutRejudging(t *testing.T) {
 	dir := t.TempDir()
 	value := testConfig(t)
-	value, key := installTestAPIKey(t, dir, value)
 	firstJudge := &mergeDuplicateTestJudge{}
 	options := testOptions(dir, value)
 	options.Judge = firstJudge
@@ -409,7 +385,7 @@ func TestPropositionReceiptSurvivesLeaderRestartWithoutRejudging(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	client := NewClient(runtime.Endpoint(), key, time.Second)
+	client := NewClient(runtime.Endpoint(), "", time.Second)
 	input := PropositionRegisterRequest{
 		Content: "Completed proposition jobs retain compact receipts.", Confidence: 0.9,
 		ExtractorModel: "thinker", ExtractorVersion: "v1",
@@ -436,7 +412,7 @@ func TestPropositionReceiptSurvivesLeaderRestartWithoutRejudging(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer runtime.Close()
-	retried, err := NewClient(runtime.Endpoint(), key, time.Second).RegisterProposition(context.Background(), "receipt/restart", input)
+	retried, err := NewClient(runtime.Endpoint(), "", time.Second).RegisterProposition(context.Background(), "receipt/restart", input)
 	if err != nil || retried.Created || retried.ID != created.ID || retried.Action != PropositionActionCreate {
 		t.Fatalf("retried = %#v, %v", retried, err)
 	}
@@ -448,7 +424,6 @@ func TestPropositionReceiptSurvivesLeaderRestartWithoutRejudging(t *testing.T) {
 func TestPropositionQueueRunsJudgeSessionsSequentially(t *testing.T) {
 	dir := t.TempDir()
 	value := testConfig(t)
-	value, key := installTestAPIKey(t, dir, value)
 	judge := &serialTestPropositionJudge{}
 	options := testOptions(dir, value)
 	options.Judge = judge
@@ -457,7 +432,7 @@ func TestPropositionQueueRunsJudgeSessionsSequentially(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer runtime.Close()
-	client := NewClient(runtime.Endpoint(), key, time.Second)
+	client := NewClient(runtime.Endpoint(), "", time.Second)
 	var wait sync.WaitGroup
 	errorsByCall := make(chan error, 2)
 	for index := range 2 {
@@ -488,7 +463,6 @@ func TestPropositionQueueRunsJudgeSessionsSequentially(t *testing.T) {
 func TestFailedPropositionJobCanBeRetriedWithSameIdempotencyKey(t *testing.T) {
 	dir := t.TempDir()
 	value := testConfig(t)
-	value, key := installTestAPIKey(t, dir, value)
 	judge := &flakyTestPropositionJudge{}
 	options := testOptions(dir, value)
 	options.Judge = judge
@@ -497,7 +471,7 @@ func TestFailedPropositionJobCanBeRetriedWithSameIdempotencyKey(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer runtime.Close()
-	client := NewClient(runtime.Endpoint(), key, time.Second)
+	client := NewClient(runtime.Endpoint(), "", time.Second)
 	input := PropositionRegisterRequest{
 		Content: "Failed adjudication jobs are retryable.", Confidence: 0.9,
 		ExtractorModel: "thinker", ExtractorVersion: "v1",
@@ -569,8 +543,7 @@ func (j *mergeDuplicateTestJudge) JudgeProposition(
 
 func TestGlobalPropositionAPIPersistsSearchesAndDeletesVectorProjections(t *testing.T) {
 	dir := t.TempDir()
-	value, secret := installTestAPIKey(t, dir, testConfig(t))
-	t.Setenv(DefaultAPIKeyEnv, secret)
+	value := testConfig(t)
 	options := testOptions(dir, value)
 	options.Vector = sessionstore.VectorConfig{Model: "embed-test", Dimensions: 3}
 	runtime, err := EnsureWithOptions(context.Background(), options)
@@ -913,7 +886,7 @@ func testConfig(t *testing.T) Config {
 	if err := listener.Close(); err != nil {
 		t.Fatal(err)
 	}
-	return Config{Version: ConfigVersion, Host: "127.0.0.1", Port: port, APIKeyEnv: DefaultAPIKeyEnv}
+	return Config{Version: ConfigVersion, Host: "127.0.0.1", Port: port}
 }
 
 func testOptions(dir string, value Config) EnsureOptions {
@@ -931,15 +904,6 @@ func (createTestPropositionJudge) JudgeProposition(
 	_ []PropositionSearchHit,
 ) (PropositionDecision, error) {
 	return PropositionDecision{Action: PropositionActionCreate, Reason: "test fixture"}, nil
-}
-
-func installTestAPIKey(t *testing.T, dir string, value Config) (Config, string) {
-	t.Helper()
-	updated, generated, err := (ConfigStore{Dir: dir}).CreateAPIKey(value, "library test", time.Now())
-	if err != nil {
-		t.Fatal(err)
-	}
-	return updated, generated.Secret
 }
 
 func seedLibraryRecords(t *testing.T, dir string, records ...sessionstore.Record) {

@@ -18,7 +18,7 @@ import (
 
 const (
 	ServiceName         = "q-library"
-	ProtocolVersion     = 1
+	ProtocolVersion     = 2
 	Implementation      = "0.1.0"
 	registrationTimeout = 2 * time.Minute
 )
@@ -38,7 +38,6 @@ func (h Health) Compatible() bool {
 
 type Client struct {
 	endpoint string
-	apiKey   string
 	http     *http.Client
 	register *http.Client
 
@@ -58,13 +57,15 @@ type embeddingClientConfig struct {
 	dimensions int
 }
 
-func NewClient(endpoint, apiKey string, timeout time.Duration) *Client {
+// NewClient retains the API-key argument for source compatibility. Library
+// servers are loopback-only and do not authenticate HTTP requests.
+func NewClient(endpoint, _ string, timeout time.Duration) *Client {
 	if timeout <= 0 {
 		timeout = time.Duration(defaultProbeTimeout) * time.Millisecond
 	}
 	return &Client{
-		endpoint: strings.TrimRight(endpoint, "/"), apiKey: apiKey,
-		http: &http.Client{Timeout: timeout}, register: &http.Client{Timeout: max(timeout, registrationTimeout)},
+		endpoint: strings.TrimRight(endpoint, "/"),
+		http:     &http.Client{Timeout: timeout}, register: &http.Client{Timeout: max(timeout, registrationTimeout)},
 	}
 }
 
@@ -94,23 +95,20 @@ func (c *Client) ConfigureEmbedding(provider Embedder, model string, dimensions 
 }
 
 func (c *Client) Health(ctx context.Context) (Health, error) {
-	return c.getHealth(ctx, "/health", false)
+	return c.getHealth(ctx, "/health")
 }
 
 func (c *Client) Status(ctx context.Context) (Health, error) {
-	return c.getHealth(ctx, "/status", true)
+	return c.getHealth(ctx, "/status")
 }
 
-func (c *Client) getHealth(ctx context.Context, path string, authenticated bool) (Health, error) {
+func (c *Client) getHealth(ctx context.Context, path string) (Health, error) {
 	if c == nil {
 		return Health{}, errors.New("library: client is nil")
 	}
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, c.endpoint+path, nil)
 	if err != nil {
 		return Health{}, err
-	}
-	if authenticated && c.apiKey != "" {
-		request.Header.Set("Authorization", "Bearer "+c.apiKey)
 	}
 	response, err := c.http.Do(request)
 	if err != nil {
@@ -280,9 +278,6 @@ func (c *Client) doJSONWithClient(ctx context.Context, httpClient *http.Client, 
 	request.Header.Set("Accept", "application/json")
 	if input != nil {
 		request.Header.Set("Content-Type", "application/json")
-	}
-	if c.apiKey != "" {
-		request.Header.Set("Authorization", "Bearer "+c.apiKey)
 	}
 	for name, value := range headers {
 		request.Header.Set(name, value)

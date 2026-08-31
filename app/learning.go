@@ -88,7 +88,7 @@ func (m *model) startNextLearningSegment() tea.Cmd {
 	m.thinkerJobID = segment.ID
 	m.ensureRunID()
 	job := thinker.Job{
-		ID: segment.ID, Messages: messages,
+		ID: segment.ID, Boundary: segment.Reason, Messages: messages,
 		Refs: []string{"run:" + m.runID, "learning-segment:" + segment.ID},
 	}
 	if m.workspaceStore != nil {
@@ -101,6 +101,7 @@ func (m *model) startNextLearningSegment() tea.Cmd {
 	models := append([]client.Model(nil), m.models...)
 	ctx := m.learningCtx
 	sessionGeneration := m.sessionGeneration
+	logStore := thinker.NewLogStore(m.store.Dir)
 	return func() tea.Msg {
 		if len(models) == 0 {
 			listed, err := configuredClient.ListModels(ctx)
@@ -117,7 +118,7 @@ func (m *model) startNextLearningSegment() tea.Cmd {
 			spec.ContextLength = value.EffectiveContextWindow()
 		}
 		result, err := serial.Run(ctx, thinker.Runner{
-			Client: configuredClient, Library: libraryClient, Spec: spec,
+			Client: configuredClient, Library: libraryClient, Spec: spec, Log: logStore,
 		}, job)
 		return thinkerResultMsg{jobID: job.ID, sessionGeneration: sessionGeneration, result: result, err: err}
 	}

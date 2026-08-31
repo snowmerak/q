@@ -854,6 +854,10 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.thinkerBusy = false
 		m.thinkerJobID = ""
+		if message.result.LogError != "" {
+			m.archiveFailure("thinker log", errors.New(message.result.LogError))
+			_ = m.flushArchive()
+		}
 		if message.err != nil {
 			m.archiveFailure("thinker", message.err)
 			_ = m.flushArchive()

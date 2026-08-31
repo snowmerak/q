@@ -53,8 +53,8 @@ func (m model) updateLibrary(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, command
 	case "enter":
 		host := strings.TrimSpace(m.libraryHostInput.Value())
-		if net.ParseIP(host) == nil {
-			m.status = "Host must be an IP address"
+		if parsed := net.ParseIP(host); parsed == nil || !parsed.IsLoopback() {
+			m.status = "Host must be a loopback IP address"
 			command := m.libraryNetworkFocusCommand()
 			return m, command
 		}
@@ -120,7 +120,7 @@ func (m model) viewLibrary() string {
 	m.writeWorkspacePath(&body)
 	body.WriteString(subtleStyle.Render(m.librarySettingsStore.Path()))
 	body.WriteString("\n")
-	body.WriteString(subtleStyle.Render("Saved defaults are used by embedded and foreground Library servers. The port is a fixed rendezvous point."))
+	body.WriteString(subtleStyle.Render("Embedded and foreground Library servers are loopback-only and unauthenticated. The port is a fixed rendezvous point."))
 	body.WriteString("\n\n" + m.libraryHostInput.View() + "\n\n" + m.libraryPortInput.View() + "\n")
 	if m.status != "" {
 		body.WriteString("\n" + subtleStyle.Render(m.status) + "\n")

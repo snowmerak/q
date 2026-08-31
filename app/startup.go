@@ -226,7 +226,7 @@ func (request startupRequest) run(modelReady chan<- struct{}) runtimeInitialized
 		if libraryConfigErr != nil {
 			libraryConfig = qlibrary.DefaultConfig()
 		}
-		libraryClient = qlibrary.NewClient(libraryConfig.Endpoint(), libraryConfig.ResolveAPIKey(), 5*time.Second)
+		libraryClient = qlibrary.NewClient(libraryConfig.Endpoint(), "", 5*time.Second)
 		tools, toolsErr = qtools.NewRuntimeWithArchiveAndLoomOptionsAndLSPAndLibrary(
 			request.ctx, request.workspaceStore.Root, semanticArchive, loaded.LoomStoreOptions(nil), loaded.LSP, workspaceLSP, libraryClient,
 		)

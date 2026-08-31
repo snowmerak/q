@@ -3,28 +3,23 @@ package app
 import (
 	"context"
 	"testing"
-	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/snowmerak/q/config"
 	qlibrary "github.com/snowmerak/q/library"
 )
 
-func TestLibrarySettingsSaveNetworkPreservesAPIKeys(t *testing.T) {
+func TestLibrarySettingsSaveLoopbackNetwork(t *testing.T) {
 	directory := t.TempDir()
 	store := config.Store{Dir: directory}
 	libraryStore := qlibrary.ConfigStore{Dir: directory}
-	value, generated, err := libraryStore.CreateAPIKey(qlibrary.DefaultConfig(), "desktop", time.Now())
-	if err != nil {
-		t.Fatal(err)
-	}
 
 	m := newModel(context.Background(), store, nil)
 	m.enterLibrarySettings()
 	if m.screen != screenLibrary {
 		t.Fatalf("Library screen = %v", m.screen)
 	}
-	m.libraryHostInput.SetValue("0.0.0.0")
+	m.libraryHostInput.SetValue("127.0.0.1")
 	m.libraryPortInput.SetValue("18182")
 	updated, command := m.updateLibrary(tea.KeyPressMsg{Code: 's', Mod: tea.ModCtrl})
 	m = updated.(model)
@@ -43,14 +38,22 @@ func TestLibrarySettingsSaveNetworkPreservesAPIKeys(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if saved.Host != "0.0.0.0" || saved.Port != 18182 {
+	if saved.Host != "127.0.0.1" || saved.Port != 18182 {
 		t.Fatalf("saved Library network = %s:%d", saved.Host, saved.Port)
-	}
-	if len(saved.APIKeys) != 1 || saved.APIKeys[0].ID != generated.Record.ID || len(value.APIKeys) != 1 {
-		t.Fatalf("Library API keys changed while saving network: %#v", saved.APIKeys)
 	}
 	if m.librarySettings.Host != saved.Host || m.librarySettings.Port != saved.Port {
 		t.Fatalf("Library screen state = %#v", m.librarySettings)
+	}
+}
+
+func TestLibrarySettingsRejectNonLoopbackHost(t *testing.T) {
+	m := newModel(context.Background(), config.Store{Dir: t.TempDir()}, nil)
+	m.enterLibrarySettings()
+	m.libraryHostInput.SetValue("0.0.0.0")
+	updated, _ := m.updateLibrary(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m = updated.(model)
+	if m.status != "Host must be a loopback IP address" {
+		t.Fatalf("status = %q", m.status)
 	}
 }
 

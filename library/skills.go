@@ -135,8 +135,8 @@ func (s *skillService) reload(ctx context.Context) (SkillReloadResponse, error) 
 	return SkillReloadResponse{Active: len(s.registry.Skills()), Issues: s.registry.Issues()}, nil
 }
 
-func registerSkillRoutes(mux *http.ServeMux, authenticator func(http.Handler) http.Handler, skills *skillService) {
-	mux.Handle("POST /v1/skills/search", authenticator(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+func registerSkillRoutes(mux *http.ServeMux, skills *skillService) {
+	mux.Handle("POST /v1/skills/search", http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		var input SkillSearchRequest
 		if err := decodeLibraryJSON(writer, request, &input); err != nil {
 			writeLibraryError(writer, http.StatusBadRequest, err)
@@ -148,23 +148,23 @@ func registerSkillRoutes(mux *http.ServeMux, authenticator func(http.Handler) ht
 			return
 		}
 		writeJSON(writer, http.StatusOK, output)
-	})))
-	mux.Handle("GET /v1/skills/{id}/resources/{path...}", authenticator(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+	}))
+	mux.Handle("GET /v1/skills/{id}/resources/{path...}", http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		output, err := skills.get(request.PathValue("id"), request.PathValue("path"))
 		if err != nil {
 			writeLibraryError(writer, http.StatusNotFound, err)
 			return
 		}
 		writeJSON(writer, http.StatusOK, output)
-	})))
-	mux.Handle("POST /v1/skills/reload", authenticator(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+	}))
+	mux.Handle("POST /v1/skills/reload", http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		output, err := skills.reload(request.Context())
 		if err != nil {
 			writeLibraryError(writer, http.StatusInternalServerError, err)
 			return
 		}
 		writeJSON(writer, http.StatusOK, output)
-	})))
+	}))
 }
 
 func decodeLibraryJSON(writer http.ResponseWriter, request *http.Request, output any) error {

@@ -796,6 +796,9 @@ func TestExplicitLearningSegmentStartsThinkerExtractionThroughLibraryClient(t *t
 	if !ok || message.err != nil || message.result.Registered != 1 {
 		t.Fatalf("Thinker result = %#v", message)
 	}
+	if message.result.LogPath == "" || filepath.Dir(message.result.LogPath) != filepath.Join(m.store.Dir, "logs", "thinker") {
+		t.Fatalf("Thinker log path = %q", message.result.LogPath)
+	}
 	if registered.Content != "Use one proposition per call." || registered.ExtractorModel != "thinker-model" || registered.ExtractorVersion != thinker.ExtractorVersion ||
 		registered.Embeddings == nil || len(registered.Embeddings.Vectors) != 2 || len(configuredClient.embeddings) != 1 {
 		t.Fatalf("registered proposition = %#v", registered)
