@@ -7,12 +7,19 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/snowmerak/q/client"
 	"github.com/snowmerak/q/config"
 )
 
 const SubmitDebugReportToolName = "submit_debug_report"
+
+const (
+	DebugOutcomeSucceeded = "succeeded"
+	DebugOutcomeCanceled  = "canceled"
+	DebugOutcomeFailed    = "failed"
+)
 
 type DebugReport struct {
 	Summary        string   `json:"summary"`
@@ -28,6 +35,23 @@ type DebugReport struct {
 type DebugWorkflowResult struct {
 	Brief  GrillBrief  `json:"brief"`
 	Report DebugReport `json:"report"`
+}
+
+// DebugExecutionLog is the durable, human-readable audit trail for one
+// /debug investigation. It records only visible model output and tool traffic;
+// providers' hidden chain-of-thought is neither available nor reconstructed.
+type DebugExecutionLog struct {
+	RunID         string          `json:"run_id,omitempty"`
+	Objective     string          `json:"objective"`
+	StartedAt     time.Time       `json:"started_at"`
+	CompletedAt   time.Time       `json:"completed_at"`
+	Outcome       string          `json:"outcome"`
+	Error         string          `json:"error,omitempty"`
+	Brief         *GrillBrief     `json:"brief,omitempty"`
+	Report        *DebugReport    `json:"report,omitempty"`
+	Events        []PlanningEvent `json:"events,omitempty"`
+	Truncated     bool            `json:"truncated,omitempty"`
+	DroppedEvents int             `json:"dropped_events,omitempty"`
 }
 
 // DebugReporterRunner uses the configured Planner model to turn a bounded

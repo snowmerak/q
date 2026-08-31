@@ -13,6 +13,10 @@ import (
 	"github.com/snowmerak/q/subagent"
 )
 
+type debugExecutionStore interface {
+	ArchiveDebugExecution(subagent.DebugExecutionLog) (string, error)
+}
+
 func debugDefaultResolver(ctx context.Context, question subagent.UserQuestion) (subagent.UserAnswer, error) {
 	if err := ctx.Err(); err != nil {
 		return subagent.UserAnswer{Source: subagent.UserAnswerSourceAutoResolve}, err
@@ -84,8 +88,10 @@ func (m *model) sendDebugRequest(issue string) tea.Cmd {
 	turnContext := m.activeTurnContext()
 	turnID := m.turnID
 	workingDirectory := ""
+	var executionStore debugExecutionStore
 	if m.workspaceStore != nil {
 		workingDirectory = m.workspaceStore.Root
+		executionStore = m.workspaceStore
 	}
 	var history []client.Message
 	if m.memory != nil {
@@ -95,7 +101,7 @@ func (m *model) sendDebugRequest(issue string) tea.Cmd {
 	return func() tea.Msg {
 		go streamDebugWorkflow(
 			turnContext, configuredClient, toolRuntime, value, runID, archive,
-			workingDirectory, issue, planContext(history), events,
+			workingDirectory, issue, planContext(history), executionStore, events,
 		)
 		return waitAgentEvent(events, turnID)()
 	}
@@ -111,10 +117,23 @@ func streamDebugWorkflow(
 	workingDirectory string,
 	issue string,
 	contextValues []string,
+	executionStore debugExecutionStore,
 	events chan<- agentEvent,
 ) {
 	defer close(events)
+	debugRecorder := newDebugLogRecorder(runID, issue, contextValues)
+	var result subagent.DebugWorkflowResult
 	fail := func(err error) {
+		outcome := subagent.DebugOutcomeFailed
+		if errors.Is(err, context.Canceled) {
+			outcome = subagent.DebugOutcomeCanceled
+		}
+		execution := debugRecorder.finishDebug(result, outcome, err)
+		if executionStore != nil {
+			if _, archiveErr := executionStore.ArchiveDebugExecution(execution); archiveErr != nil {
+				err = errors.Join(err, archiveErr)
+			}
+		}
 		emitAgentEvent(ctx, events, agentEvent{err: err})
 	}
 	models, err := configuredClient.ListModels(ctx)
@@ -167,11 +186,18 @@ func streamDebugWorkflow(
 			return subagent.UserAnswer{Source: subagent.UserAnswerSourceUser}, ctx.Err()
 		}
 	})
-	clarificationAsk := interactiveAsk
+	clarificationDelegate := interactiveAsk
 	if value.Plan.AutoResolve {
-		clarificationAsk = debugDefaultResolver
+		clarificationDelegate = debugDefaultResolver
 	}
+	clarificationAsk := subagent.AskUserFunc(func(ctx context.Context, question subagent.UserQuestion) (subagent.UserAnswer, error) {
+		debugRecorder.recordQuestion(question)
+		answer, err := clarificationDelegate(ctx, question)
+		debugRecorder.recordAnswer(answer, err)
+		return answer, err
+	})
 	progress := func(progress subagent.ProgressEvent) {
+		debugRecorder.recordProgress(progress)
 		activity := agentActivity{
 			Agent: progress.Agent, TaskID: progress.TaskID, ParentID: progress.ParentID,
 			Action: progress.Action, Detail: progress.Detail,
@@ -179,6 +205,7 @@ func streamDebugWorkflow(
 		_ = emitAgentEvent(ctx, events, agentEvent{activity: &activity})
 	}
 	trace := func(event subagent.TraceEvent) {
+		debugRecorder.recordTrace(event)
 		entry := agentTrace{
 			Agent: event.Agent, TaskID: event.TaskID, ParentID: event.ParentID,
 			Kind: event.Kind, CallID: event.CallID, Name: event.Name, Content: event.Content, IsError: event.IsError,
@@ -220,7 +247,7 @@ func streamDebugWorkflow(
 	debugContext = append(debugContext,
 		"This is a /debug investigation. Bound the reported behavior, evidence needed for diagnosis, and safe verification criteria; do not turn it into an implementation plan.",
 	)
-	result, err := (subagent.DebugWorkflow{
+	result, err = (subagent.DebugWorkflow{
 		Griller: griller, Reporter: reporter, Progress: progress,
 	}).Run(ctx, subagent.GrillTask{
 		ID: taskID, Objective: issue, Context: debugContext,
@@ -228,6 +255,13 @@ func streamDebugWorkflow(
 	if err != nil {
 		fail(err)
 		return
+	}
+	execution := debugRecorder.finishDebug(result, subagent.DebugOutcomeSucceeded, nil)
+	if executionStore != nil {
+		if _, err := executionStore.ArchiveDebugExecution(execution); err != nil {
+			emitAgentEvent(ctx, events, agentEvent{err: err})
+			return
+		}
 	}
 	content := subagent.RenderDebugReport(result.Report)
 	emitAgentEvent(ctx, events, agentEvent{response: &client.ChatResponse{Choices: []client.Choice{{Message: client.Message{

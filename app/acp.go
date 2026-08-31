@@ -2150,8 +2150,10 @@ func (a *acpAgent) runACPDebug(ctx context.Context, issue string) (acp.PromptRes
 	}
 
 	workingDirectory := ""
+	var executionStore debugExecutionStore
 	if a.state.workspaceStore != nil {
 		workingDirectory = a.state.workspaceStore.Root
+		executionStore = a.state.workspaceStore
 	}
 	traceID, err := sessionstore.NewID()
 	if err != nil {
@@ -2167,7 +2169,7 @@ func (a *acpAgent) runACPDebug(ctx context.Context, issue string) (acp.PromptRes
 	events := make(chan agentEvent)
 	go streamDebugWorkflow(
 		workflowCtx, a.state.client, a.state.toolRuntime, value, a.state.runID, a.state.archive,
-		workingDirectory, issue, planContext(a.state.memory.Messages()), events,
+		workingDirectory, issue, planContext(a.state.memory.Messages()), executionStore, events,
 	)
 	run := &acpPlanContinuation{
 		workflowCtx: workflowCtx, cancel: cancel, events: events, trace: trace,

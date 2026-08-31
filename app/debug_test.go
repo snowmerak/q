@@ -2,6 +2,9 @@ package app
 
 import (
 	"context"
+	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -23,6 +26,27 @@ const testDebugReport = `{
 	"uncertainties":["The lock owner is not directly observed"]
 }`
 
+type collectingDebugExecutionStore struct {
+	executions []subagent.DebugExecutionLog
+}
+
+func (s *collectingDebugExecutionStore) ArchiveDebugExecution(execution subagent.DebugExecutionLog) (string, error) {
+	s.executions = append(s.executions, execution)
+	return "debug-execution.json", nil
+}
+
+type canceledDebugClient struct{}
+
+func (canceledDebugClient) Chat(context.Context, client.ChatRequest) (*client.ChatResponse, error) {
+	return nil, context.Canceled
+}
+
+func (canceledDebugClient) ListModels(context.Context) ([]client.Model, error) {
+	return nil, context.Canceled
+}
+
+func (canceledDebugClient) Close() error { return nil }
+
 func debugPlanningClient() *planningClient {
 	return &planningClient{responses: []client.Message{
 		{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{planToolCall(subagent.DelegateScoutToolName, `{
@@ -41,6 +65,25 @@ func debugPlanningClient() *planningClient {
 		}`)}},
 		{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{planToolCall(subagent.SubmitDebugReportToolName, testDebugReport)}},
 	}}
+}
+
+func readSingleDebugExecution(t *testing.T, store workspace.Store) subagent.DebugExecutionLog {
+	t.Helper()
+	paths, err := filepath.Glob(filepath.Join(store.DebugExecutionHistoryDir(), "debug-execution-*.json"))
+	if err != nil || len(paths) != 1 {
+		t.Fatalf("debug execution logs=%v, err=%v", paths, err)
+	}
+	body, err := os.ReadFile(paths[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	var stored struct {
+		Execution subagent.DebugExecutionLog `json:"execution"`
+	}
+	if err := json.Unmarshal(body, &stored); err != nil {
+		t.Fatal(err)
+	}
+	return stored.Execution
 }
 
 func TestDebugDefaultResolverCombinesRepositorySkillsAndGeneralSolutions(t *testing.T) {
@@ -66,6 +109,50 @@ func TestDebugDefaultResolverCombinesRepositorySkillsAndGeneralSolutions(t *test
 	}
 	if answer.Source != subagent.UserAnswerSourceAutoResolve || answer.SelectedChoiceID != "" {
 		t.Fatalf("debug auto-resolve answer = %#v", answer)
+	}
+}
+
+func TestDebugWorkflowArchivesFailedInvestigation(t *testing.T) {
+	configuredClient := &planningClient{}
+	value := config.Default()
+	value.Provider.Model = "plan-model"
+	store := &collectingDebugExecutionStore{}
+	events := make(chan agentEvent, 32)
+	streamDebugWorkflow(
+		t.Context(), configuredClient, &fakeAgentTools{}, value, "run-debug", nil,
+		t.TempDir(), "Investigate a failed diagnostic run", nil, store, events,
+	)
+	if len(store.executions) != 1 {
+		t.Fatalf("archived debug executions = %#v", store.executions)
+	}
+	execution := store.executions[0]
+	if execution.Outcome != subagent.DebugOutcomeFailed || execution.Error == "" || execution.Report != nil ||
+		execution.Objective != "Investigate a failed diagnostic run" {
+		t.Fatalf("failed debug execution = %#v", execution)
+	}
+	var emittedError bool
+	for event := range events {
+		if event.err != nil {
+			emittedError = true
+		}
+	}
+	if !emittedError {
+		t.Fatal("failed debug workflow did not return its error")
+	}
+}
+
+func TestDebugWorkflowArchivesCanceledInvestigation(t *testing.T) {
+	store := &collectingDebugExecutionStore{}
+	events := make(chan agentEvent, 4)
+	streamDebugWorkflow(
+		t.Context(), canceledDebugClient{}, &fakeAgentTools{}, config.Default(), "run-debug", nil,
+		t.TempDir(), "Cancel a diagnostic run", nil, store, events,
+	)
+	if len(store.executions) != 1 || store.executions[0].Outcome != subagent.DebugOutcomeCanceled ||
+		store.executions[0].Error == "" {
+		t.Fatalf("canceled debug execution = %#v", store.executions)
+	}
+	for range events {
 	}
 }
 
@@ -117,6 +204,22 @@ func TestDebugCommandReturnsReportWithoutApprovalOrExecution(t *testing.T) {
 				t.Fatalf("debug invoked Coder: %q", message.Content)
 			}
 		}
+	}
+	execution := readSingleDebugExecution(t, store)
+	if execution.Outcome != subagent.DebugOutcomeSucceeded || execution.Brief == nil || execution.Report == nil ||
+		execution.Report.LikelyCause != "A short-lived file handle blocks the atomic replacement." {
+		t.Fatalf("archived debug execution = %#v", execution)
+	}
+	agents := make(map[string]bool)
+	var sawToolTraffic bool
+	for _, event := range execution.Events {
+		agents[event.Agent] = true
+		if event.Type == subagent.PlanningEventToolCall || event.Type == subagent.PlanningEventToolResult {
+			sawToolTraffic = true
+		}
+	}
+	if !agents["debug"] || !agents["griller"] || !agents["scout"] || !agents["planner"] || !sawToolTraffic {
+		t.Fatalf("archived debug events omitted workflow activity: %#v", execution.Events)
 	}
 }
 
@@ -234,5 +337,16 @@ func TestACPDebugAutoResolveUsesDiagnosticResolverWithoutElicitation(t *testing.
 		if !strings.Contains(receivedAnswer, expected) {
 			t.Fatalf("debug auto-resolve tool answer omitted %q: %q", expected, receivedAnswer)
 		}
+	}
+	execution := readSingleDebugExecution(t, activeACPWorkspaceStore(t, agent))
+	var sawAutoResolve bool
+	for _, event := range execution.Events {
+		if event.Type == subagent.PlanningEventAnswer && event.Answer != nil &&
+			event.Answer.Source == subagent.UserAnswerSourceAutoResolve {
+			sawAutoResolve = true
+		}
+	}
+	if !sawAutoResolve {
+		t.Fatalf("archived debug execution omitted auto-resolve answer: %#v", execution.Events)
 	}
 }
