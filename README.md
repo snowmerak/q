@@ -296,7 +296,10 @@ separately. When context metadata is available, q compacts model context while
 leaving the complete visible transcript intact. Workspace Memory stores durable
 messages, tool activity, failures, lifecycle events, and search indexes.
 
-After successful turns, Thinker can extract reusable propositions. Librarian
+After successful turns, Thinker can extract reusable propositions. A successful
+task result may support durable project facts, reusable resolutions, and
+evidence-backed research findings without a separate user confirmation. Thinker
+preserves whether a result is merely recommended or actually adopted. Librarian
 decides whether each proposition should be created, merged, or discarded in the
 global Library. `/learn off` stops collection and queue processing without
 deleting already queued data. Each completed or failed Thinker invocation also

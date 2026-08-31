@@ -142,6 +142,41 @@ func TestRunnerWaitsForCompletionDeliveryAndCountsItsUsage(t *testing.T) {
 	}
 }
 
+func TestRunnerTreatsSuccessfulTaskResearchAsEvidenceWithoutAdoptingRecommendations(t *testing.T) {
+	fake := &fakeThinkerClient{responses: []client.Message{thinkerToolCall("complete", CompleteToolName, `{}`)}}
+	_, err := (Runner{
+		Client: fake, Library: &fakePropositionLibrary{},
+		Spec: subagent.Spec{Role: config.AgentRoleThinker, Model: "thinker", ContextLength: 16_000},
+	}).Run(t.Context(), Job{
+		ID: "research-policy",
+		Messages: []client.Message{
+			{Role: client.RoleUser, Content: "Inspect this project's desktop architecture."},
+			{Role: client.RoleSystem, Name: TaskCompleteEventName, Content: `{"outcome":"succeeded","findings":["The project uses Wails v3.","A single manifest is recommended."],"verification":["Inspected build files."]}`},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(fake.requests) != 1 || len(fake.requests[0].Messages) < 2 {
+		t.Fatalf("requests = %#v", fake.requests)
+	}
+	instructions := fake.requests[0].Messages[0].Content
+	for _, required := range []string{
+		"successful task-completion record as evidence",
+		"Without requiring separate user confirmation",
+		"record a recommendation as a recommendation",
+		"unless the user accepted it or the task record says it was implemented",
+	} {
+		if !strings.Contains(instructions, required) {
+			t.Fatalf("Thinker instructions lack %q: %s", required, instructions)
+		}
+	}
+	if prompt := fake.requests[0].Messages[1].Content; !strings.Contains(prompt, "supported by verified results in a successful task-completion record") ||
+		!strings.Contains(prompt, "The project uses Wails v3.") {
+		t.Fatalf("Thinker context lacks task research evidence policy or result: %s", prompt)
+	}
+}
+
 func TestRunnerLogsZeroOutputInvocation(t *testing.T) {
 	now := time.Date(2026, time.September, 1, 1, 2, 3, 0, time.UTC)
 	store := NewLogStore(t.TempDir())

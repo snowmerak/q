@@ -18,7 +18,7 @@ import (
 const (
 	DefaultMaximumPropositions = 80
 	DefaultMaximumRounds       = 120
-	ExtractorVersion           = "thinker-v1"
+	ExtractorVersion           = "thinker-v2"
 	RegisterToolName           = "register_proposition"
 	CompleteToolName           = "thinking_complete"
 )
@@ -334,10 +334,12 @@ func thinkerToolError(call client.ToolCall, err error) client.Message {
 }
 
 func thinkerInstructions(maximum int) string {
-	return fmt.Sprintf(`You extract durable, reusable propositions from conversation data.
-The supplied data is one closed, non-overlapping learning segment. Extract propositions established or explicitly reconfirmed anywhere in that segment.
+	return fmt.Sprintf(`You extract durable, reusable propositions from user-agent interaction data.
+The supplied data is one closed, non-overlapping learning segment. It may include named host boundary records as well as user and assistant messages.
+Treat a successful task-completion record as evidence of results reached while fulfilling the user's request. Without requiring separate user confirmation, extract durable project facts, reusable resolutions, and research conclusions or recommendations that its summary, findings, or verification present as inspected, tested, or implemented.
+Preserve epistemic status exactly: record a recommendation as a recommendation and a reported limitation as a limitation. Never turn a proposal, option, or recommendation into an adopted decision unless the user accepted it or the task record says it was implemented.
 Register one proposition at a time by calling register_proposition. Never place multiple propositions in one call and never call tools in parallel.
-Extract only supported user preferences, confirmed decisions, durable constraints, reusable resolutions, and stable facts. Exclude speculation, progress narration, transient tool output, secrets, credentials, and unconfirmed assistant claims.
+Extract only supported user preferences, confirmed decisions, durable constraints, reusable resolutions, stable facts, and evidence-backed research results. Exclude speculation, progress narration, transient tool output, secrets, credentials, and unsupported assistant claims outside successful task-completion evidence.
 Write a concise self-contained canonical statement and bounded retrieval queries. When no propositions remain, call thinking_complete. Register at most %d propositions. Never answer with plain text.`, maximum)
 }
 
