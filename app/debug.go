@@ -13,6 +13,30 @@ import (
 	"github.com/snowmerak/q/subagent"
 )
 
+func debugDefaultResolver(ctx context.Context, question subagent.UserQuestion) (subagent.UserAnswer, error) {
+	if err := ctx.Err(); err != nil {
+		return subagent.UserAnswer{Source: subagent.UserAnswerSourceAutoResolve}, err
+	}
+	parts := []string{
+		"Resolve this diagnostic uncertainty autonomously instead of asking the user again.",
+		"Question: " + strings.TrimSpace(question.Question),
+	}
+	if contextValue := strings.TrimSpace(question.Context); contextValue != "" {
+		parts = append(parts, "Context: "+contextValue)
+	}
+	parts = append(parts,
+		"Treat evidence from the current repository as primary: inspect the relevant code, configuration, tests, and history through Scout and the available repository tools before settling the answer.",
+		"When Agent Skills are available and relevant, search for and load the smallest applicable set, then use their procedural guidance as additional evidence.",
+		"Combine that repository- and skill-specific evidence with established general diagnostic patterns and common solutions, adapting the result to the repository's existing architecture and conventions rather than copying a generic fix blindly.",
+		"Prefer an evidence-backed likely cause, the smallest safe fix direction, and a concrete verification method. If a private organizational policy, internal API contract, or operational fact cannot be established, do not invent it; record a bounded assumption, the remaining uncertainty, and the evidence needed to confirm or refute it.",
+		"Continue the investigation as needed, then commit the concrete resolution to the debug brief and report instead of deferring the decision back to the user.",
+	)
+	return subagent.UserAnswer{
+		Freeform: strings.Join(parts, "\n"),
+		Source:   subagent.UserAnswerSourceAutoResolve,
+	}, nil
+}
+
 func (m model) startDebug(issue string) (tea.Model, tea.Cmd) {
 	issue = strings.TrimSpace(issue)
 	if issue == "" || m.client == nil || m.toolRuntime == nil {
@@ -145,7 +169,7 @@ func streamDebugWorkflow(
 	})
 	clarificationAsk := interactiveAsk
 	if value.Plan.AutoResolve {
-		clarificationAsk = engineeringDefaultResolver
+		clarificationAsk = debugDefaultResolver
 	}
 	progress := func(progress subagent.ProgressEvent) {
 		activity := agentActivity{

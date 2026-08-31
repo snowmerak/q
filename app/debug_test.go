@@ -43,6 +43,32 @@ func debugPlanningClient() *planningClient {
 	}}
 }
 
+func TestDebugDefaultResolverCombinesRepositorySkillsAndGeneralSolutions(t *testing.T) {
+	answer, err := debugDefaultResolver(t.Context(), subagent.UserQuestion{
+		Question: "What is the most likely cause?",
+		Context:  "The failure occurs while replacing session.json on Windows.",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, expected := range []string{
+		"What is the most likely cause?",
+		"replacing session.json on Windows",
+		"current repository as primary",
+		"Agent Skills",
+		"general diagnostic patterns and common solutions",
+		"do not invent it",
+		"evidence needed to confirm or refute it",
+	} {
+		if !strings.Contains(answer.Freeform, expected) {
+			t.Fatalf("debug auto-resolve answer omitted %q: %q", expected, answer.Freeform)
+		}
+	}
+	if answer.Source != subagent.UserAnswerSourceAutoResolve || answer.SelectedChoiceID != "" {
+		t.Fatalf("debug auto-resolve answer = %#v", answer)
+	}
+}
+
 func TestDebugCommandReturnsReportWithoutApprovalOrExecution(t *testing.T) {
 	configuredClient := debugPlanningClient()
 	value := config.Default()
@@ -160,5 +186,53 @@ func TestACPDebugCommandReturnsDiagnosticReport(t *testing.T) {
 	}
 	if len(statuses) != 2 || statuses[0] != acp.PlanEntryStatusInProgress || statuses[1] != acp.PlanEntryStatusCompleted {
 		t.Fatalf("ACP debug lifecycle = %#v", statuses)
+	}
+}
+
+func TestACPDebugAutoResolveUsesDiagnosticResolverWithoutElicitation(t *testing.T) {
+	configuredClient := &planningClient{responses: []client.Message{
+		{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{planToolCall(subagent.AskToUserToolName, `{
+			"question":"What is the most likely cause?",
+			"context":"Choose a diagnosis and fix direction"
+		}`)}},
+		{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{planToolCall(subagent.SubmitBriefToolName, `{
+			"objective":"Investigate session replacement failure",
+			"conditions":["Use repository evidence, skills, and established diagnostic patterns"],
+			"acceptance_criteria":["Explain a likely cause and safe fix"]
+		}`)}},
+		{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{planToolCall(subagent.SubmitDebugReportToolName, testDebugReport)}},
+	}}
+	agent, workspaceStore, connection := testACPAgent(t, configuredClient, &fakeAgentTools{})
+	agent.state.config.Provider.Model = "plan-model"
+	agent.state.config.Plan.AutoResolve = true
+	sessionID := openTestACPSession(t, agent, workspaceStore.Root)
+	response, err := agent.Prompt(t.Context(), acp.PromptRequest{
+		SessionId: sessionID,
+		Prompt:    []acp.ContentBlock{acp.TextBlock("/debug investigate session replacement failure")},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.StopReason != acp.StopReasonEndTurn || len(configuredClient.requests) != 3 {
+		t.Fatalf("response=%#v requests=%d", response, len(configuredClient.requests))
+	}
+	if len(connection.elicitationSnapshot()) != 0 {
+		t.Fatalf("auto-resolved debug elicitations = %#v", connection.elicitationSnapshot())
+	}
+	var receivedAnswer string
+	for _, message := range configuredClient.requests[1].Messages {
+		if message.Role == client.RoleTool && message.Name == subagent.AskToUserToolName {
+			receivedAnswer = message.Content
+		}
+	}
+	for _, expected := range []string{
+		`"source":"auto-resolve"`,
+		"current repository as primary",
+		"Agent Skills",
+		"general diagnostic patterns and common solutions",
+	} {
+		if !strings.Contains(receivedAnswer, expected) {
+			t.Fatalf("debug auto-resolve tool answer omitted %q: %q", expected, receivedAnswer)
+		}
 	}
 }
