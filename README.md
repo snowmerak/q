@@ -93,6 +93,23 @@ progress plus the final diagnostic report to stdout. It does not expose a
 `/diagnose` command, modify persisted automation settings, or execute a fix.
 Its audit log is written below `.q/debug-executions`.
 
+Review the current Git working-tree changes without opening the TUI:
+
+```powershell
+q review
+q review focus on concurrency and cancellation behavior
+```
+
+Review creates a fresh durable workspace session and asks the configured
+Advisor to inspect bounded staged, unstaged, and untracked evidence. The
+Advisor delegates repository questions to Scout and can use the configured
+external Search agent for public evidence; both results return as Loom
+receipts. The workflow reports actionable findings with file locations and
+never edits files, builds or tests the project, runs project scripts, or changes
+Git state. The optional trailing text narrows the review request. Its audit log
+is written below `.q/review-executions`; no `/review` command is exposed in the
+TUI or ACP.
+
 On first launch, q opens provider setup. Prefer an environment variable for an
 API key instead of storing a key inline. After selecting a model, type a request
 normally or type `/` to open command completion.
@@ -395,6 +412,7 @@ omits the chat-only `learn` tool.
 |---|---|
 | `q sprint <request...>` | Run one autonomous plan through execution and review. All trailing argv values are joined as the request. |
 | `q diagnose <issue...>` | Run one autonomous read-only investigation and archive its diagnostic report. |
+| `q review [request...]` | Review current working-tree changes with the read-only Advisor and archive the report. |
 | `q gateway [--host <ip>] [--port <port>]` | Run the OpenAI-compatible Gateway. |
 | `q gateway config` | Configure its listener, API keys, and providers. |
 | `q library` / `q library config` | Run or configure the global Library. |

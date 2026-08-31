@@ -9,10 +9,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/snowmerak/q/third_party/acp-go-sdk"
 	"github.com/snowmerak/q/config"
 	"github.com/snowmerak/q/mcpconfig"
 	"github.com/snowmerak/q/subagent"
+	"github.com/snowmerak/q/third_party/acp-go-sdk"
 	qtools "github.com/snowmerak/q/tools"
 )
 
@@ -96,7 +96,7 @@ func TestExternalSearchToolIsExposedOnlyToParentRoles(t *testing.T) {
 	value := config.Default()
 	value.Agents.Connections = map[string]config.AgentConnectionConfig{"codex": {Preset: "codex"}}
 	value.Agents.Roles = map[string]config.AgentConfig{config.AgentRoleSearch: {Agent: "codex"}}
-	for _, role := range []string{mcpconfig.RoleDefault, config.AgentRoleGriller, config.AgentRolePlanner} {
+	for _, role := range []string{mcpconfig.RoleDefault, config.AgentRoleGriller, config.AgentRolePlanner, config.AgentRoleAdvisor} {
 		runtime, err := configuredAgentToolRuntime(&fakeAgentTools{}, role, value, t.TempDir())
 		if err != nil {
 			t.Fatal(err)

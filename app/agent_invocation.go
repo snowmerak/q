@@ -44,7 +44,7 @@ func configuredAgentToolRuntime(
 		return nil, nil
 	}
 	var invocations []subagent.Invocation
-	if role == mcpconfig.RoleDefault || role == config.AgentRoleGriller || role == config.AgentRolePlanner {
+	if role == mcpconfig.RoleDefault || role == config.AgentRoleGriller || role == config.AgentRolePlanner || role == config.AgentRoleAdvisor {
 		if search, configured := configuredExternalSearchInvocation(value, root); configured {
 			invocations = append(invocations, search)
 		}
