@@ -200,7 +200,7 @@ func (r *auditLogRecorder) finishDebug(
 	outcome string,
 	runErr error,
 ) subagent.DebugExecutionLog {
-	planning := r.finish(subagent.PlanWorkflowResult{Brief: result.Brief}, outcome, runErr)
+	planning := r.finish(subagent.PlanWorkflowResult{}, outcome, runErr)
 	debug := subagent.DebugExecutionLog{
 		RunID: planning.RunID, Objective: planning.Objective,
 		StartedAt: planning.StartedAt, CompletedAt: planning.CompletedAt,

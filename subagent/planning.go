@@ -25,9 +25,6 @@ const (
 	UserAnswerSourceUser        = "user"
 	UserAnswerSourceAutoResolve = "auto-resolve"
 	UserAnswerSourceAutoApprove = "auto-approve"
-
-	GrillModePlan  = "plan"
-	GrillModeDebug = "debug"
 )
 
 type UserChoice struct {
@@ -104,7 +101,6 @@ type GrillerRunner struct {
 	Ask              AskUserFunc
 	Capture          InvocationCaptureFunc
 	WorkingDirectory string
-	Mode             string
 	AutoResolve      bool
 	MaxRounds        int
 	Progress         ProgressFunc
@@ -131,26 +127,52 @@ type PlanWorkflow struct {
 	MaxCycles int
 }
 
-func (r GrillerRunner) Run(ctx context.Context, task GrillTask) (brief GrillBrief, runErr error) {
+type grillerCompletion[T any] struct {
+	instructions    string
+	requestLabel    string
+	tool            client.Tool
+	parse           func(string) (T, error)
+	completedDetail string
+}
+
+func (r GrillerRunner) Run(ctx context.Context, task GrillTask) (GrillBrief, error) {
+	return runGriller(ctx, r, task, grillerCompletion[GrillBrief]{
+		instructions:    grillerInstructionsFor(r.AutoResolve),
+		requestLabel:    "Grill this planning request.",
+		tool:            submitBriefTool(),
+		parse:           parseGrillBrief,
+		completedDetail: "planning brief ready",
+	})
+}
+
+func (r GrillerRunner) RunDebug(ctx context.Context, task GrillTask) (DebugReport, error) {
+	return runGriller(ctx, r, task, grillerCompletion[DebugReport]{
+		instructions:    debugGrillerInstructions(),
+		requestLabel:    "Investigate this debugging request and write the final diagnostic report.",
+		tool:            submitDebugReportTool(),
+		parse:           parseDebugReport,
+		completedDetail: "diagnostic report ready",
+	})
+}
+
+func runGriller[T any](
+	ctx context.Context,
+	r GrillerRunner,
+	task GrillTask,
+	completion grillerCompletion[T],
+) (output T, runErr error) {
 	if ctx == nil {
-		return GrillBrief{}, errors.New("subagent: griller context is nil")
+		return output, errors.New("subagent: griller context is nil")
 	}
 	if r.Client == nil || r.Tools == nil || r.Ask == nil {
-		return GrillBrief{}, errors.New("subagent: griller requires client, tools, and user interaction")
+		return output, errors.New("subagent: griller requires client, tools, and user interaction")
 	}
 	if r.Spec.Role != config.AgentRoleGriller {
-		return GrillBrief{}, fmt.Errorf("subagent: griller runner requires role %q", config.AgentRoleGriller)
-	}
-	mode := strings.TrimSpace(r.Mode)
-	if mode == "" {
-		mode = GrillModePlan
-	}
-	if mode != GrillModePlan && mode != GrillModeDebug {
-		return GrillBrief{}, fmt.Errorf("subagent: unsupported Griller mode %q", mode)
+		return output, fmt.Errorf("subagent: griller runner requires role %q", config.AgentRoleGriller)
 	}
 	task.Objective = strings.TrimSpace(task.Objective)
 	if task.Objective == "" {
-		return GrillBrief{}, errors.New("subagent: Grill objective is required")
+		return output, errors.New("subagent: Grill objective is required")
 	}
 	task.Context = cleanStrings(task.Context)
 	task.Feedback = cleanStrings(task.Feedback)
@@ -168,12 +190,12 @@ func (r GrillerRunner) Run(ctx context.Context, task GrillTask) (brief GrillBrie
 		}
 		reportProgress(r.Progress, ProgressEvent{
 			Agent: "griller", TaskID: task.ID, ParentID: task.ParentID,
-			Action: ProgressCompleted, Detail: "planning brief ready",
+			Action: ProgressCompleted, Detail: completion.completedDetail,
 		})
 	}()
 	body, err := json.MarshalIndent(task, "", "  ")
 	if err != nil {
-		return GrillBrief{}, err
+		return output, err
 	}
 	invocationTools, err := NewInvocationRuntime(r.Tools, r.Capture, Invocation{
 		Tool: delegateScoutTool(),
@@ -212,18 +234,12 @@ func (r GrillerRunner) Run(ctx context.Context, task GrillTask) (brief GrillBrie
 		},
 	})
 	if err != nil {
-		return GrillBrief{}, err
+		return output, err
 	}
-	instructions := grillerInstructionsFor(r.AutoResolve)
-	requestLabel := "Grill this planning request."
-	available := grillerTools(invocationTools.Tools())
-	if mode == GrillModeDebug {
-		instructions = debugGrillerInstructions()
-		requestLabel = "Investigate and bound this debugging request."
-	}
+	available := grillerToolsWithCompletion(invocationTools.Tools(), completion.tool)
 	messages := []client.Message{
-		{Role: client.RoleSystem, Content: withSkillCatalog(instructions, invocationTools)},
-		{Role: client.RoleUser, Content: requestLabel + "\n\n" + string(body)},
+		{Role: client.RoleSystem, Content: withSkillCatalog(completion.instructions, invocationTools)},
+		{Role: client.RoleUser, Content: completion.requestLabel + "\n\n" + string(body)},
 	}
 	history := NewContextCompactor(r.Spec, messages, available, len(messages))
 	history.PreserveTools(AskToUserToolName)
@@ -234,7 +250,7 @@ func (r GrillerRunner) Run(ctx context.Context, task GrillTask) (brief GrillBrie
 	reminders := 0
 	for round := 0; round < rounds; round++ {
 		if err := history.CompactIfNeeded(ctx, &r.Spec, r.Client); err != nil {
-			return GrillBrief{}, fmt.Errorf("subagent: griller context: %w", err)
+			return output, fmt.Errorf("subagent: griller context: %w", err)
 		}
 		reportProgress(r.Progress, ProgressEvent{
 			Agent: "griller", TaskID: task.ID, ParentID: task.ParentID,
@@ -246,27 +262,27 @@ func (r GrillerRunner) Run(ctx context.Context, task GrillTask) (brief GrillBrie
 			ParallelToolCalls: &parallel, WorkingDirectory: r.WorkingDirectory,
 		}
 		if reminders > 0 {
-			request.ToolChoice = client.NamedToolChoice(SubmitBriefToolName)
+			request.ToolChoice = client.NamedToolChoice(completion.tool.Function.Name)
 		}
 		response, err := r.Spec.Chat(ctx, r.Client, request)
 		if err != nil {
-			return GrillBrief{}, fmt.Errorf("subagent: griller model: %w", err)
+			return output, fmt.Errorf("subagent: griller model: %w", err)
 		}
 		assistant, err := scoutAssistantMessage(response)
 		if err != nil {
-			return GrillBrief{}, fmt.Errorf("subagent: griller: %w", err)
+			return output, fmt.Errorf("subagent: griller: %w", err)
 		}
 		history.Observe(response.Usage)
 		history.Append(assistant)
 		traceAssistant(r.Trace, "griller", task.ID, task.ParentID, assistant)
 		if len(assistant.ToolCalls) == 0 {
 			if reminders == maximumScoutReminders {
-				return GrillBrief{}, errors.New("subagent: griller ended without submit_brief")
+				return output, fmt.Errorf("subagent: griller ended without %s", completion.tool.Function.Name)
 			}
 			reminders++
 			history.Append(client.Message{Role: client.RoleSystem, Content: fmt.Sprintf(
-				"Reminder %d/%d: submit the completed Grill brief with submit_brief; do not answer in plain text.",
-				reminders, maximumScoutReminders,
+				"Reminder %d/%d: submit the completed result with %s; do not answer in plain text.",
+				reminders, maximumScoutReminders, completion.tool.Function.Name,
 			)})
 			continue
 		}
@@ -290,7 +306,7 @@ func (r GrillerRunner) Run(ctx context.Context, task GrillTask) (brief GrillBrie
 				answer, askErr := r.Ask(ctx, question)
 				if askErr != nil {
 					traceToolResult(r.Trace, "griller", task.ID, task.ParentID, call, scoutToolError(askErr))
-					return GrillBrief{}, askErr
+					return output, askErr
 				}
 				reportProgress(r.Progress, ProgressEvent{
 					Agent: "griller", TaskID: task.ID, ParentID: task.ParentID,
@@ -326,15 +342,15 @@ func (r GrillerRunner) Run(ctx context.Context, task GrillTask) (brief GrillBrie
 						Action: ProgressCompleted, Detail: "external evidence received",
 					})
 				}
-			case SubmitBriefToolName:
+			case completion.tool.Function.Name:
 				if len(assistant.ToolCalls) != 1 {
-					result = scoutToolError(errors.New("submit_brief must be the only tool call in its turn"))
+					result = scoutToolError(fmt.Errorf("%s must be the only tool call in its turn", completion.tool.Function.Name))
 					break
 				}
-				brief, parseErr := parseGrillBrief(call.Function.Arguments)
+				completed, parseErr := completion.parse(call.Function.Arguments)
 				if parseErr == nil {
-					_, err := finishRoleTool(ctx, r.Client, &r.Spec, history, request, call, jsonToolResult(brief), r.Trace, "griller", task.ID, task.ParentID, nil)
-					return brief, err
+					_, err := finishRoleTool(ctx, r.Client, &r.Spec, history, request, call, jsonToolResult(completed), r.Trace, "griller", task.ID, task.ParentID, nil)
+					return completed, err
 				}
 				result = scoutToolError(parseErr)
 			case DelegateScoutToolName, "loom_inspect", "loom_read", "loom_eval", "search_skills", "get_skill", "search_propositions", "get_proposition":
@@ -359,7 +375,7 @@ func (r GrillerRunner) Run(ctx context.Context, task GrillTask) (brief GrillBrie
 			})
 		}
 	}
-	return GrillBrief{}, fmt.Errorf("subagent: griller exceeded %d model rounds", rounds)
+	return output, fmt.Errorf("subagent: griller exceeded %d model rounds", rounds)
 }
 
 func (r PlannerRunner) Run(ctx context.Context, brief GrillBrief) (proposal PlanProposal, runErr error) {
@@ -619,7 +635,7 @@ Auto-resolve mode:
 }
 
 func debugGrillerInstructions() string {
-	return `You are q's Griller for /debug mode. Investigate the reported issue and produce a bounded evidence brief for the Planner, which will write the final diagnostic report. Do not write an implementation plan or modify the workspace.
+	return `You are q's Griller for /debug mode. Investigate the reported issue and write the final evidence-backed diagnostic report yourself. Do not invoke or defer to a Planner, write an implementation plan, modify the workspace, or implement a fix.
 
 Rules:
 1. When an unknown can be answered from the repository, call delegate_scout instead of asking the user. You may call Scout repeatedly during the same investigation.
@@ -629,9 +645,13 @@ Rules:
 5. Do not ask the user to choose a technical design, implementation pattern, library, likely cause, or ordinary engineering trade-off. Investigate those, infer them with explicit uncertainty, or record what evidence would distinguish the remaining possibilities.
 6. If missing context is not necessary for a useful diagnosis, record it as an assumption or uncertainty and continue. Before asking, explain what is missing, what was investigated, and why the answer materially changes the diagnosis.
 7. Choices are optional, non-exhaustive suggestions. Do not imply that the user must pick one; free-form answers are always allowed.
-8. Separate observations from inferences and preserve concrete repository evidence, scope, non-goals, and verification criteria.
-9. On each tool-calling turn, include a concise user-visible progress note describing the immediate intent; do not expose or invent hidden chain-of-thought.
-10. Finish by calling submit_brief as the only tool call in that turn. Never return the brief as plain text.`
+8. Separate confirmed findings from inference. Never claim a cause as proven when the evidence only makes it likely.
+9. Explain the causal chain from observations to the likely cause, state confidence as exactly low, medium, or high, and preserve material uncertainty.
+10. Recommend the smallest plausible fix justified by the evidence. Mention alternatives only when they materially change the trade-off.
+11. Give concrete checks that would confirm both the diagnosis and the fix. Do not claim those checks were run unless a Scout report or tool result proves it.
+12. Write report fields in the language used by the issue request when practical.
+13. On each tool-calling turn, include a concise user-visible progress note describing the immediate intent; do not expose or invent hidden chain-of-thought.
+14. Finish by calling submit_debug_report as the only tool call in that turn. Never return the report as plain text. If validation fails, fix every reported field and resubmit the complete report, not a patch.`
 }
 
 func plannerInstructions() string {
@@ -658,6 +678,10 @@ Complete blocked submit_plan arguments:
 }
 
 func grillerTools(available []client.Tool) []client.Tool {
+	return grillerToolsWithCompletion(available, submitBriefTool())
+}
+
+func grillerToolsWithCompletion(available []client.Tool, completion client.Tool) []client.Tool {
 	result := make([]client.Tool, 0, 6)
 	for _, tool := range available {
 		switch {
@@ -669,7 +693,7 @@ func grillerTools(available []client.Tool) []client.Tool {
 			result = append(result, tool)
 		}
 	}
-	result = append(result, askUserTool(), delegateScoutTool(), submitBriefTool())
+	result = append(result, askUserTool(), delegateScoutTool(), completion)
 	return result
 }
 

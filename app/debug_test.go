@@ -57,12 +57,6 @@ func debugPlanningClient() *planningClient {
 			"summary":"The failure occurs in the atomic replacement step",
 			"findings":[{"path":"workspace/session.go","summary":"MoveFileExW replaces session.json"}]
 		}`)}},
-		{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{planToolCall(subagent.SubmitBriefToolName, `{
-			"objective":"Investigate session replacement failure",
-			"conditions":["The error occurs at MoveFileExW"],
-			"acceptance_criteria":["Explain a likely cause and safe fix"],
-			"repository_evidence":["session.json is replaced atomically"]
-		}`)}},
 		{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{planToolCall(subagent.SubmitDebugReportToolName, testDebugReport)}},
 	}}
 }
@@ -160,6 +154,9 @@ func TestDebugCommandReturnsReportWithoutApprovalOrExecution(t *testing.T) {
 	configuredClient := debugPlanningClient()
 	value := config.Default()
 	value.Provider.Model = "plan-model"
+	value.Agents.Roles = map[string]config.AgentConfig{
+		config.AgentRolePlanner: {Model: "missing-planner-model"},
+	}
 	m := newModel(context.Background(), config.Store{Dir: t.TempDir()}, nil)
 	store := workspace.Store{Root: t.TempDir()}
 	m.workspaceStore = &store
@@ -191,8 +188,8 @@ func TestDebugCommandReturnsReportWithoutApprovalOrExecution(t *testing.T) {
 	if !strings.Contains(final, "Likely cause") || !strings.Contains(final, "short-lived file handle") || !strings.Contains(final, "How to verify") {
 		t.Fatalf("debug report = %q", final)
 	}
-	if len(configuredClient.requests) != 4 {
-		t.Fatalf("model requests = %d, want Griller, Scout, resumed Griller, and Planner", len(configuredClient.requests))
+	if len(configuredClient.requests) != 3 {
+		t.Fatalf("model requests = %d, want Griller, Scout, and resumed Griller", len(configuredClient.requests))
 	}
 	for _, request := range configuredClient.requests {
 		if hasPlanTool(request.Tools, "write_file") || hasPlanTool(request.Tools, "edit_file") ||
@@ -203,10 +200,13 @@ func TestDebugCommandReturnsReportWithoutApprovalOrExecution(t *testing.T) {
 			if message.Role == client.RoleSystem && strings.Contains(message.Content, "q's Coder") {
 				t.Fatalf("debug invoked Coder: %q", message.Content)
 			}
+			if message.Role == client.RoleSystem && strings.Contains(message.Content, "q's Planner") {
+				t.Fatalf("debug invoked Planner: %q", message.Content)
+			}
 		}
 	}
 	execution := readSingleDebugExecution(t, store)
-	if execution.Outcome != subagent.DebugOutcomeSucceeded || execution.Brief == nil || execution.Report == nil ||
+	if execution.Outcome != subagent.DebugOutcomeSucceeded || execution.Brief != nil || execution.Report == nil ||
 		execution.Report.LikelyCause != "A short-lived file handle blocks the atomic replacement." {
 		t.Fatalf("archived debug execution = %#v", execution)
 	}
@@ -218,7 +218,7 @@ func TestDebugCommandReturnsReportWithoutApprovalOrExecution(t *testing.T) {
 			sawToolTraffic = true
 		}
 	}
-	if !agents["debug"] || !agents["griller"] || !agents["scout"] || !agents["planner"] || !sawToolTraffic {
+	if !agents["debug"] || !agents["griller"] || !agents["scout"] || agents["planner"] || !sawToolTraffic {
 		t.Fatalf("archived debug events omitted workflow activity: %#v", execution.Events)
 	}
 }
@@ -227,11 +227,6 @@ func TestACPDebugCommandReturnsDiagnosticReport(t *testing.T) {
 	configuredClient := &planningClient{responses: []client.Message{
 		{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{planToolCall(subagent.AskToUserToolName, `{
 			"question":"Which platform reproduces the failure?"
-		}`)}},
-		{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{planToolCall(subagent.SubmitBriefToolName, `{
-			"objective":"Investigate session replacement failure",
-			"conditions":["The failure reproduces on Windows"],
-			"acceptance_criteria":["Explain a likely cause and safe fix"]
 		}`)}},
 		{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{planToolCall(subagent.SubmitDebugReportToolName, testDebugReport)}},
 	}}
@@ -253,7 +248,7 @@ func TestACPDebugCommandReturnsDiagnosticReport(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if response.StopReason != acp.StopReasonEndTurn || len(configuredClient.requests) != 3 {
+	if response.StopReason != acp.StopReasonEndTurn || len(configuredClient.requests) != 2 {
 		t.Fatalf("response=%#v requests=%d", response, len(configuredClient.requests))
 	}
 	if len(connection.elicitationSnapshot()) != 1 {
@@ -284,7 +279,7 @@ func TestACPDebugCommandReturnsDiagnosticReport(t *testing.T) {
 	if !strings.Contains(output, "Likely cause") || !strings.Contains(output, "Suggested fix") {
 		t.Fatalf("ACP debug output = %q", output)
 	}
-	if !strings.Contains(thought, "griller") || !strings.Contains(thought, "planner") || strings.Contains(thought, "executor") {
+	if !strings.Contains(thought, "griller") || strings.Contains(thought, "planner") || strings.Contains(thought, "executor") {
 		t.Fatalf("ACP debug progress = %q", thought)
 	}
 	if len(statuses) != 2 || statuses[0] != acp.PlanEntryStatusInProgress || statuses[1] != acp.PlanEntryStatusCompleted {
@@ -297,11 +292,6 @@ func TestACPDebugAutoResolveUsesDiagnosticResolverWithoutElicitation(t *testing.
 		{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{planToolCall(subagent.AskToUserToolName, `{
 			"question":"What is the most likely cause?",
 			"context":"Choose a diagnosis and fix direction"
-		}`)}},
-		{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{planToolCall(subagent.SubmitBriefToolName, `{
-			"objective":"Investigate session replacement failure",
-			"conditions":["Use repository evidence, skills, and established diagnostic patterns"],
-			"acceptance_criteria":["Explain a likely cause and safe fix"]
 		}`)}},
 		{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{planToolCall(subagent.SubmitDebugReportToolName, testDebugReport)}},
 	}}
@@ -316,7 +306,7 @@ func TestACPDebugAutoResolveUsesDiagnosticResolverWithoutElicitation(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	if response.StopReason != acp.StopReasonEndTurn || len(configuredClient.requests) != 3 {
+	if response.StopReason != acp.StopReasonEndTurn || len(configuredClient.requests) != 2 {
 		t.Fatalf("response=%#v requests=%d", response, len(configuredClient.requests))
 	}
 	if len(connection.elicitationSnapshot()) != 0 {

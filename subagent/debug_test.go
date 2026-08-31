@@ -9,16 +9,8 @@ import (
 	"github.com/snowmerak/q/config"
 )
 
-func TestDebugWorkflowGrillsThenHasPlannerWriteReport(t *testing.T) {
+func TestDebugWorkflowHasGrillerWriteReport(t *testing.T) {
 	grillerClient := &fakeScoutClient{responses: []client.Message{{
-		Role: client.RoleAssistant, ToolCalls: []client.ToolCall{scoutCall(SubmitBriefToolName, `{
-			"objective":"Investigate denied session replacement",
-			"conditions":["The failure occurs during an atomic Windows replacement"],
-			"acceptance_criteria":["Explain the likely lock owner and a bounded retry"] ,
-			"repository_evidence":["session writes replace session.json with MoveFileExW"]
-		}`)},
-	}}}
-	reporterClient := &fakeScoutClient{responses: []client.Message{{
 		Role: client.RoleAssistant, ToolCalls: []client.ToolCall{scoutCall(SubmitDebugReportToolName, `{
 			"summary":"The session replacement is temporarily blocked.",
 			"findings":["MoveFileExW returns access denied while replacing session.json"],
@@ -40,10 +32,6 @@ func TestDebugWorkflowGrillsThenHasPlannerWriteReport(t *testing.T) {
 				return UserAnswer{}, nil
 			},
 		},
-		Reporter: DebugReporterRunner{
-			Client: reporterClient,
-			Spec:   Spec{Role: config.AgentRolePlanner, Model: "planner-model"},
-		},
 	}).Run(t.Context(), GrillTask{ID: "debug-1", Objective: "Investigate denied session replacement"})
 	if err != nil {
 		t.Fatal(err)
@@ -51,23 +39,23 @@ func TestDebugWorkflowGrillsThenHasPlannerWriteReport(t *testing.T) {
 	if result.Report.Confidence != "medium" || !strings.Contains(result.Report.LikelyCause, "Windows handle") {
 		t.Fatalf("result = %#v", result)
 	}
-	if len(grillerClient.requests) != 1 || len(reporterClient.requests) != 1 {
-		t.Fatalf("requests: griller=%d reporter=%d", len(grillerClient.requests), len(reporterClient.requests))
+	if len(grillerClient.requests) != 1 {
+		t.Fatalf("Griller requests = %d", len(grillerClient.requests))
 	}
+	request := grillerClient.requests[0]
 	grillerInstructions := grillerClient.requests[0].Messages[0].Content
 	if !strings.Contains(grillerInstructions, "Griller for /debug mode") ||
+		!strings.Contains(grillerInstructions, "write the final evidence-backed diagnostic report yourself") ||
 		!strings.Contains(grillerInstructions, "private organization policy") ||
 		!strings.Contains(grillerInstructions, "unpublished internal API") ||
 		!strings.Contains(grillerInstructions, "Do not ask the user to choose a technical design") ||
+		strings.Contains(grillerInstructions, "brief for the Planner") ||
 		strings.Contains(grillerInstructions, "Griller for /plan mode") {
 		t.Fatalf("debug Griller instructions = %q", grillerInstructions)
 	}
-	reporterRequest := reporterClient.requests[0]
-	if !hasTool(reporterRequest.Tools, SubmitDebugReportToolName) || hasTool(reporterRequest.Tools, SubmitPlanToolName) {
-		t.Fatalf("debug reporter tools = %#v", reporterRequest.Tools)
-	}
-	if !strings.Contains(reporterRequest.Messages[0].Content, "Do not ask the user, modify files, run commands, or implement a fix") {
-		t.Fatalf("debug reporter instructions = %q", reporterRequest.Messages[0].Content)
+	if !hasTool(request.Tools, SubmitDebugReportToolName) || hasTool(request.Tools, SubmitBriefToolName) ||
+		hasTool(request.Tools, SubmitPlanToolName) {
+		t.Fatalf("debug Griller tools = %#v", request.Tools)
 	}
 }
 

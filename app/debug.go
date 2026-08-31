@@ -151,12 +151,6 @@ func streamDebugWorkflow(
 		fail(err)
 		return
 	}
-	plannerSpec, err := subagent.Resolve(value, config.AgentRolePlanner, models)
-	if err != nil {
-		fail(err)
-		return
-	}
-
 	interactiveAsk := subagent.AskUserFunc(func(ctx context.Context, question subagent.UserQuestion) (subagent.UserAnswer, error) {
 		input := askToUserInput{Question: question.Question, Context: question.Context}
 		for _, choice := range question.Choices {
@@ -217,11 +211,6 @@ func streamDebugWorkflow(
 		fail(fmt.Errorf("debug: configure Griller tools: %w", err))
 		return
 	}
-	reporterTools, err := configuredAgentToolRuntime(toolRuntime, plannerSpec.Role, value, workingDirectory)
-	if err != nil {
-		fail(fmt.Errorf("debug: configure Planner tools: %w", err))
-		return
-	}
 	scoutRunID := runID
 	if archive == nil {
 		scoutRunID = ""
@@ -233,11 +222,7 @@ func streamDebugWorkflow(
 	griller := subagent.GrillerRunner{
 		Client: configuredClient, Tools: grillerTools, Scout: scout, Spec: grillerSpec,
 		Ask: clarificationAsk, Capture: configuredInvocationCapture(toolRuntime), WorkingDirectory: workingDirectory,
-		Mode: subagent.GrillModeDebug, AutoResolve: value.Plan.AutoResolve, Progress: progress, Trace: trace,
-	}
-	reporter := subagent.DebugReporterRunner{
-		Client: configuredClient, Tools: reporterTools, Spec: plannerSpec,
-		WorkingDirectory: workingDirectory, Progress: progress, Trace: trace,
+		AutoResolve: value.Plan.AutoResolve, Progress: progress, Trace: trace,
 	}
 	taskID := "debug"
 	if strings.TrimSpace(runID) != "" {
@@ -248,7 +233,7 @@ func streamDebugWorkflow(
 		"This is a /debug investigation. Bound the reported behavior, evidence needed for diagnosis, and safe verification criteria; do not turn it into an implementation plan.",
 	)
 	result, err = (subagent.DebugWorkflow{
-		Griller: griller, Reporter: reporter, Progress: progress,
+		Griller: griller, Progress: progress,
 	}).Run(ctx, subagent.GrillTask{
 		ID: taskID, Objective: issue, Context: debugContext,
 	})
