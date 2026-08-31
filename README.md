@@ -80,6 +80,19 @@ Griller → Scout → Planner → Coder → Planner review workflow as `/plan`, 
 streams concise progress plus the final execution result to stdout. It does not
 change the persisted `plan.auto_resolve` or `plan.auto_approve` settings.
 
+Run the `/debug` investigation workflow non-interactively with clarification
+auto-resolution forced for only that invocation:
+
+```powershell
+q diagnose investigate the session replacement failure
+```
+
+Diagnose creates a fresh durable workspace session, runs the same read-only
+Griller → Scout → Planner report workflow as `/debug`, and streams concise
+progress plus the final diagnostic report to stdout. It does not expose a
+`/diagnose` command, modify persisted automation settings, or execute a fix.
+Its audit log is written below `.q/debug-executions`.
+
 On first launch, q opens provider setup. Prefer an environment variable for an
 API key instead of storing a key inline. After selecting a model, type a request
 normally or type `/` to open command completion.
@@ -381,6 +394,7 @@ omits the chat-only `learn` tool.
 | Command | Purpose |
 |---|---|
 | `q sprint <request...>` | Run one autonomous plan through execution and review. All trailing argv values are joined as the request. |
+| `q diagnose <issue...>` | Run one autonomous read-only investigation and archive its diagnostic report. |
 | `q gateway [--host <ip>] [--port <port>]` | Run the OpenAI-compatible Gateway. |
 | `q gateway config` | Configure its listener, API keys, and providers. |
 | `q library` / `q library config` | Run or configure the global Library. |
