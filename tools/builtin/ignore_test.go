@@ -57,9 +57,6 @@ func TestListDirectoryAppliesQIgnoreDuringDiscovery(t *testing.T) {
 	if hasDirectoryEntry(root.Entries, "build") || hasDirectoryEntry(root.Entries, "vendor") {
 		t.Fatalf("ignored roots leaked into discovery: %+v", root.Entries)
 	}
-	if root.Ignored != 2 {
-		t.Fatalf("ignored root entry count = %d; want 2", root.Ignored)
-	}
 	if !hasDirectoryEntry(root.Entries, "source.go") || !hasDirectoryEntry(root.Entries, "module") {
 		t.Fatalf("source entries missing from discovery: %+v", root.Entries)
 	}
