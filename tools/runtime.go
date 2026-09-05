@@ -210,6 +210,23 @@ func (r *Runtime) Tools() []client.Tool {
 	return append([]client.Tool(nil), r.tools...)
 }
 
+// CustomTools includes all connected MCP servers for explicit profile selection.
+// Built-in role catalogs retain their existing assignments.
+func (r *Runtime) CustomTools() []client.Tool {
+	result := r.Tools()
+	r.externalMu.RLock()
+	defer r.externalMu.RUnlock()
+	var ids []string
+	for id := range r.external {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	for _, id := range ids {
+		result = append(result, r.external[id].tools...)
+	}
+	return result
+}
+
 // ToolsForRole returns builtin tools plus external MCP tools assigned to role.
 func (r *Runtime) ToolsForRole(role string) []client.Tool {
 	result := append([]client.Tool(nil), r.tools...)

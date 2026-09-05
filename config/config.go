@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -297,7 +298,7 @@ func (c Config) Validate() error {
 			}
 			continue
 		}
-		if !IsAgentRole(role) {
+		if !IsAgentRole(role) && !ValidCustomRoleName(role) {
 			return fmt.Errorf("config: unsupported agent role %q", role)
 		}
 		if agent.Agent != "" {
@@ -477,7 +478,7 @@ func (c Config) EffectiveAgents() AgentsConfig {
 // EffectiveAgent returns a role's configured model controls with an empty
 // model inherited from the active chat model.
 func (c Config) EffectiveAgent(role string) (AgentConfig, error) {
-	if !IsAgentRole(role) {
+	if !c.HasNativeRole(role) {
 		return AgentConfig{}, fmt.Errorf("config: unsupported agent role %q", role)
 	}
 	result := c.EffectiveAgents().Roles[role]
@@ -485,6 +486,46 @@ func (c Config) EffectiveAgent(role string) (AgentConfig, error) {
 		result.Model = c.Provider.Model
 	}
 	return result, nil
+}
+
+// ValidCustomName validates user-defined role and profile identifiers.
+func ValidCustomName(name string) bool {
+	if len(name) == 0 || len(name) > 64 || name[0] < 'a' || name[0] > 'z' {
+		return false
+	}
+	for _, c := range name {
+		if !(c >= 'a' && c <= 'z' || c >= '0' && c <= '9' || c == '-') {
+			return false
+		}
+	}
+	return true
+}
+
+// ValidCustomRoleName excludes identifiers reserved by the model settings UI
+// in addition to applying the shared custom identifier syntax.
+func ValidCustomRoleName(name string) bool {
+	return ValidCustomName(name) && name != "default" && name != "embedding" &&
+		name != AgentRoleSearch && !IsAgentRole(name)
+}
+
+func (c Config) HasNativeRole(role string) bool {
+	if IsAgentRole(role) {
+		return true
+	}
+	a, ok := c.Agents.Roles[role]
+	return ok && ValidCustomRoleName(role) && a.Agent == ""
+}
+
+func (c Config) NativeRoles() []string {
+	result := AgentRoles()
+	var custom []string
+	for role := range c.Agents.Roles {
+		if !IsAgentRole(role) && c.HasNativeRole(role) {
+			custom = append(custom, role)
+		}
+	}
+	sort.Strings(custom)
+	return append(result, custom...)
 }
 
 // EffectiveModelCandidates resolves a role to an ordered model list. A

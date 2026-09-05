@@ -149,6 +149,8 @@ func (m model) viewModels() string {
 	switch m.modelPickerStage {
 	case modelPickerTargets:
 		return m.viewModelTargets()
+	case modelPickerRoleName:
+		return m.viewModelRoleName()
 	case modelPickerGroups:
 		return m.viewModelGroups()
 	case modelPickerGroupName:
@@ -237,10 +239,52 @@ func (m model) viewModelTargets() string {
 	body.WriteString(titleStyle.Render("q · model assignments"))
 	body.WriteString("\n")
 	m.writeWorkspacePath(&body)
-	body.WriteString(subtleStyle.Render("Select a Role × Scope cell. GLOBAL writes ~/.q/config.yaml; WORKSPACE writes .q/model.json."))
+	narrow := m.width < 76
+	if narrow {
+		body.WriteString(subtleStyle.Render("Models for chat, embedding, and reusable subagent roles."))
+	} else {
+		body.WriteString(subtleStyle.Render("Assign models to chat, embedding, and reusable roles. Custom roles are available to subagents."))
+		body.WriteString("\n")
+		body.WriteString(subtleStyle.Render("Select a Role × Scope cell. GLOBAL writes ~/.q/config.yaml; WORKSPACE writes .q/model.json."))
+	}
 	body.WriteString("\n\n")
 	if m.discovering {
 		body.WriteString(subtleStyle.Render("Loading models…"))
+	} else if narrow {
+		scope := "GLOBAL"
+		if m.modelScopeCursor == modelScopeWorkspace {
+			scope = "WORKSPACE"
+		}
+		body.WriteString(activeLabelStyle.Render(scope + " ROLE ASSIGNMENTS"))
+		body.WriteString("\n")
+		visible := max(2, m.height-11)
+		if m.status != "" {
+			visible = max(2, visible-2)
+		}
+		start, end := lspVisibleRange(len(targets), m.modelTargetCursor, visible)
+		lineWidth := max(1, m.width-8)
+		for index := start; index < end; index++ {
+			target := targets[index]
+			summary := m.globalModelSummary(target)
+			if m.modelScopeCursor == modelScopeWorkspace {
+				summary = m.workspaceModelSummary(target)
+				if !m.workspaceModelEditable(target) {
+					summary = "— " + summary
+				}
+			}
+			label := target
+			if config.ValidCustomRoleName(target) {
+				label += " · custom"
+			}
+			prefix := "  "
+			style := subtleStyle
+			if index == m.modelTargetCursor {
+				prefix = "› "
+				style = activeLabelStyle
+			}
+			body.WriteString(style.Render(ansi.Truncate(prefix+label+" · "+summary, lineWidth, "…")))
+			body.WriteString("\n")
+		}
 	} else {
 		roleWidth := 12
 		cellWidth := max(18, (max(52, m.width-10)-roleWidth)/2)
@@ -271,15 +315,45 @@ func (m model) viewModelTargets() string {
 	}
 	if m.status != "" && !m.discovering {
 		body.WriteString("\n")
-		body.WriteString(subtleStyle.Render(m.status))
+		body.WriteString(subtleStyle.Render(ansi.Truncate(m.status, max(1, m.width-8), "…")))
 		body.WriteString("\n")
 	}
 	body.WriteString("\n")
-	help := "←/→ scope · ↑/↓ role · enter change · i reset selected cell · g global groups · esc chat"
+	help := "←/→ scope · ↑/↓ role · enter change · a add role · d delete custom role · i reset · g groups · esc chat"
+	if narrow {
+		help = "←/→ scope · ↑/↓ select · enter · a add · d delete · i reset · g groups · esc"
+	}
 	if m.isStandaloneScreen(screenModels) {
-		help = "←/→ scope · ↑/↓ role · enter change · i reset selected cell · g global groups · esc quit"
+		help = "←/→ scope · ↑/↓ role · enter change · a add role · d delete custom role · i reset · g groups · esc quit"
+		if narrow {
+			help = "←/→ scope · ↑/↓ select · enter · a add · d delete · i reset · g groups · esc quit"
+		}
+	}
+	if m.modelRoleDeleteArmed {
+		help = "d/y/enter confirm delete · n/esc cancel"
 	}
 	body.WriteString(helpStyle.Render(help))
+	return frameStyle.Width(max(36, m.width-4)).Render(body.String())
+}
+
+func (m model) viewModelRoleName() string {
+	var body strings.Builder
+	body.WriteString(titleStyle.Render("q · add model role"))
+	body.WriteString("\n")
+	m.writeWorkspacePath(&body)
+	body.WriteString(subtleStyle.Render("Scope · GLOBAL · saves to ~/.q/config.yaml"))
+	body.WriteString("\n")
+	body.WriteString(subtleStyle.Render("Create a reusable model and reasoning preset for one or more subagents."))
+	body.WriteString("\n\n")
+	body.WriteString(m.modelRoleNameInput.View())
+	body.WriteString("\n")
+	body.WriteString(subtleStyle.Render("Use lowercase letters, digits, and hyphens; start with a letter."))
+	if m.status != "" {
+		body.WriteString("\n\n")
+		body.WriteString(errorStyle.Render(m.status))
+	}
+	body.WriteString("\n\n")
+	body.WriteString(helpStyle.Render("enter create · esc cancel"))
 	return frameStyle.Width(max(36, m.width-4)).Render(body.String())
 }
 

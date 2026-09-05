@@ -93,6 +93,24 @@ func (s *ExternalScope) Tools() []client.Tool {
 	return s.base.Tools()
 }
 
+func (s *ExternalScope) CustomTools() []client.Tool {
+	if s == nil || s.base == nil {
+		return nil
+	}
+	result := s.base.CustomTools()
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	var ids []string
+	for id := range s.external {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	for _, id := range ids {
+		result = append(result, s.external[id].tools...)
+	}
+	return result
+}
+
 // ToolsForRole returns the base role catalog plus tools connected only for
 // this scope.
 func (s *ExternalScope) ToolsForRole(role string) []client.Tool {

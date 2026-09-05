@@ -24,13 +24,16 @@ type Lifecycle struct {
 	runID    string
 	taskID   string
 	parentID string
-	spec     Spec
+	spec     *Spec
 	prompt   string
 }
 
-func NewLifecycle(sink RecordSink, runID, taskID, parentID string, spec Spec) (*Lifecycle, error) {
+func NewLifecycle(sink RecordSink, runID, taskID, parentID string, spec *Spec) (*Lifecycle, error) {
 	if sink == nil {
 		return nil, errors.New("subagent: record sink is required")
+	}
+	if spec == nil {
+		return nil, errors.New("subagent: model spec is required")
 	}
 	if strings.TrimSpace(runID) == "" {
 		return nil, errors.New("subagent: run ID is required")

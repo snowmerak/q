@@ -313,7 +313,7 @@ func TestValidateAgentConfiguration(t *testing.T) {
 		want   string
 	}{
 		{name: "negative parallelism", agents: AgentsConfig{MaxParallel: -1}, want: "max_parallel"},
-		{name: "unknown role", agents: AgentsConfig{Roles: map[string]AgentConfig{"reviewer": {}}}, want: "unsupported agent role"},
+		{name: "invalid role", agents: AgentsConfig{Roles: map[string]AgentConfig{"invalid role": {}}}, want: "unsupported agent role"},
 		{name: "model whitespace", agents: AgentsConfig{Roles: map[string]AgentConfig{AgentRoleScout: {Model: " model"}}}, want: "model must not"},
 		{name: "effort whitespace", agents: AgentsConfig{Roles: map[string]AgentConfig{AgentRoleScout: {ReasoningEffort: " high "}}}, want: "reasoning_effort"},
 	}
@@ -324,6 +324,22 @@ func TestValidateAgentConfiguration(t *testing.T) {
 			value.Agents = test.agents
 			if err := value.Validate(); err == nil || !strings.Contains(err.Error(), test.want) {
 				t.Fatalf("error = %v; want containing %q", err, test.want)
+			}
+		})
+	}
+}
+
+func TestCustomAgentRolesRejectReservedModelTargets(t *testing.T) {
+	for _, role := range []string{"default", "embedding"} {
+		t.Run(role, func(t *testing.T) {
+			value := Default()
+			value.Provider.Model = "active-model"
+			value.Agents.Roles = map[string]AgentConfig{role: {}}
+			if err := value.Validate(); err == nil || !strings.Contains(err.Error(), "unsupported agent role") {
+				t.Fatalf("validation error = %v", err)
+			}
+			if value.HasNativeRole(role) {
+				t.Fatalf("reserved target %q was exposed as a native role", role)
 			}
 		})
 	}

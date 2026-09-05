@@ -38,7 +38,7 @@ var localSlashCommands = []slashCommand{
 	{"/new", "", "Create a new session."},
 	{"/clear", "", "Empty the current session in place."},
 	{"/learn", "[on|off|status]", "Checkpoint or control Thinker learning for this workspace."},
-	{"/model", "", "Choose workspace, default, subagent, and embedding models."},
+	{"/model", "", "Assign models, manage native roles, and configure fallback groups."},
 	{"/gateway", "", "Configure Gateway network, API keys, and providers."},
 	{"/library", "", "Configure the global Library listener defaults."},
 	{"/loom", "", "Inspect Loom storage and garbage-collection settings."},
@@ -47,6 +47,8 @@ var localSlashCommands = []slashCommand{
 	{"/lsp", "", "Configure global language servers and workspace project roots."},
 	{"/mcp", "", "Configure external MCP tool servers and per-role assignments."},
 	{"/agents", "", "Configure ACP agents and external role assignments."},
+	{"/subagents", "[list|show <name>]", "Manage custom subagent profiles, or list profiles."},
+	{"/subagent", "<name> <request>", "Run a custom subagent with an explicit request."},
 	{"/help", "", "Open this help screen."},
 }
 

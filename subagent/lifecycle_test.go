@@ -19,9 +19,10 @@ func (s *collectingSink) Append(record sessionstore.Record) error {
 
 func TestLifecycleRecordsTaskMessagesAndResult(t *testing.T) {
 	sink := &collectingSink{}
-	lifecycle, err := NewLifecycle(sink, "run-1", "task-1", "parent-1", Spec{
+	spec := Spec{
 		Role: "coder", Model: "coder-model", ReasoningEffort: "high",
-	})
+	}
+	lifecycle, err := NewLifecycle(sink, "run-1", "task-1", "parent-1", &spec)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -57,7 +58,8 @@ func TestLifecycleRecordsTaskMessagesAndResult(t *testing.T) {
 
 func TestLifecycleRecordsFailure(t *testing.T) {
 	sink := &collectingSink{}
-	lifecycle, err := NewLifecycle(sink, "run-1", "task-1", "", Spec{Role: "advisor", Model: "advisor-model"})
+	spec := Spec{Role: "advisor", Model: "advisor-model"}
+	lifecycle, err := NewLifecycle(sink, "run-1", "task-1", "", &spec)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -69,5 +71,27 @@ func TestLifecycleRecordsFailure(t *testing.T) {
 	}
 	if got := sink.records[len(sink.records)-1]; got.Status != sessionstore.StatusFailed || got.Role != "advisor" {
 		t.Fatalf("failure record = %#v", got)
+	}
+}
+
+func TestLifecycleRecordsActiveFallbackModel(t *testing.T) {
+	sink := &collectingSink{}
+	spec := Spec{Role: "analyst", Model: "primary", ReasoningEffort: "high"}
+	lifecycle, err := NewLifecycle(sink, "run-1", "task-1", "", &spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = lifecycle.Queued("inspect"); err != nil {
+		t.Fatal(err)
+	}
+	spec.Model = "secondary"
+	spec.ReasoningEffort = "medium"
+	if err = lifecycle.Succeeded("done", "done", nil); err != nil {
+		t.Fatal(err)
+	}
+	for _, record := range sink.records {
+		if record.Status == sessionstore.StatusSucceeded && record.Model != "secondary" {
+			t.Fatalf("fallback model was not recorded: %#v", record)
+		}
 	}
 }

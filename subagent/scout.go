@@ -149,7 +149,7 @@ func (r ScoutRunner) Run(ctx context.Context, task ScoutTask) (result ScoutResul
 	}
 	var lifecycle *Lifecycle
 	if r.Sink != nil || strings.TrimSpace(r.RunID) != "" {
-		lifecycle, err = NewLifecycle(r.Sink, r.RunID, prepared.ID, prepared.ParentID, r.Spec)
+		lifecycle, err = NewLifecycle(r.Sink, r.RunID, prepared.ID, prepared.ParentID, &r.Spec)
 		if err != nil {
 			return ScoutResult{}, err
 		}
@@ -176,7 +176,7 @@ func (r ScoutRunner) Run(ctx context.Context, task ScoutTask) (result ScoutResul
 	return result, nil
 }
 
-func (r ScoutRunner) run(ctx context.Context, task ScoutTask, prompt string, lifecycle *Lifecycle) (ScoutResult, error) {
+func (r *ScoutRunner) run(ctx context.Context, task ScoutTask, prompt string, lifecycle *Lifecycle) (ScoutResult, error) {
 	messages := []client.Message{
 		{Role: client.RoleSystem, Content: withSkillCatalog(scoutInstructions(), r.Tools)},
 		{Role: client.RoleUser, Content: prompt},

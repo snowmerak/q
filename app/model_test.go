@@ -25,6 +25,7 @@ import (
 	qlibrary "github.com/snowmerak/q/library"
 	"github.com/snowmerak/q/loom"
 	"github.com/snowmerak/q/sessionstore"
+	"github.com/snowmerak/q/subagent"
 	"github.com/snowmerak/q/thinker"
 	qtools "github.com/snowmerak/q/tools"
 	"github.com/snowmerak/q/workspace"
@@ -2578,6 +2579,7 @@ func TestModelPickerMakesWorkspaceAndGlobalScopesExplicit(t *testing.T) {
 		"default",
 		"inherit → global-model",
 		"shared GLOBAL",
+		"a add role",
 	} {
 		if !strings.Contains(targetsView, expected) {
 			t.Fatalf("model targets omitted %q:\n%s", expected, targetsView)
@@ -2615,6 +2617,104 @@ func TestModelPickerMakesWorkspaceAndGlobalScopesExplicit(t *testing.T) {
 	m = updated.(model)
 	if command != nil || m.modelPickerStage != modelPickerTargets || !strings.Contains(m.status, "shared globally") {
 		t.Fatalf("Thinker workspace cell = command %v, stage %v, status %q", command != nil, m.modelPickerStage, m.status)
+	}
+}
+
+func TestModelPickerCreatesAndDeletesCustomRoles(t *testing.T) {
+	store := config.Store{Dir: t.TempDir()}
+	value := config.Default()
+	value.Provider.Model = "global-model"
+	if err := store.Save(value); err != nil {
+		t.Fatal(err)
+	}
+	m := newModel(t.Context(), store, nil)
+	m.config = value
+	m.draftConfig = value
+	m.models = []client.Model{{ID: "global-model"}}
+	m.modelPickerStage = modelPickerTargets
+	m.screen = screenModels
+	m.resize(100, 30)
+
+	updated, command := m.updateModelPicker(tea.KeyPressMsg{Code: 'd', Text: "d"})
+	m = updated.(model)
+	if command != nil || m.modelRoleDeleteArmed || !strings.Contains(m.status, "Only custom roles") {
+		t.Fatalf("built-in target deletion was not rejected: %q", m.status)
+	}
+
+	updated, _ = m.updateModelPicker(tea.KeyPressMsg{Code: 'a', Text: "a"})
+	m = updated.(model)
+	if m.modelPickerStage != modelPickerRoleName || !strings.Contains(ansi.Strip(m.viewModels()), "add model role") {
+		t.Fatal("add role did not open the name editor")
+	}
+	m.modelRoleNameInput.SetValue("Analyst")
+	updated, command = m.updateModelPicker(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m = updated.(model)
+	if command != nil || !strings.Contains(m.status, "lowercase") {
+		t.Fatalf("invalid role accepted: command=%v status=%q", command != nil, m.status)
+	}
+	m.modelRoleNameInput.SetValue("analyst")
+	updated, command = m.updateModelPicker(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m = updated.(model)
+	if command == nil {
+		t.Fatal("create role command is nil")
+	}
+	updated, _ = m.Update(command())
+	m = updated.(model)
+	if !m.config.HasNativeRole("analyst") || m.modelTargets()[m.modelTargetCursor] != "analyst" {
+		t.Fatalf("created role not selected: target=%q status=%q", m.modelTargets()[m.modelTargetCursor], m.status)
+	}
+
+	profile := subagent.Profile{Version: 1, Name: "inspector", Role: "analyst", SystemPrompt: "Inspect", Tools: []string{}}
+	if err := m.customStore().Save(profile, "global", nil); err != nil {
+		t.Fatal(err)
+	}
+	updated, command = m.updateModelPicker(tea.KeyPressMsg{Code: 'd', Text: "d"})
+	m = updated.(model)
+	if command != nil || m.modelRoleDeleteArmed || !strings.Contains(m.status, "referencing subagents") || !strings.Contains(m.status, "inspector (global)") {
+		t.Fatalf("referenced role deletion was not blocked: armed=%v status=%q", m.modelRoleDeleteArmed, m.status)
+	}
+	entry, err := m.customStore().Get("inspector")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := m.customStore().Delete(entry); err != nil {
+		t.Fatal("remove referencing profile", err)
+	}
+
+	updated, _ = m.updateModelPicker(tea.KeyPressMsg{Code: 'd', Text: "d"})
+	m = updated.(model)
+	if !m.modelRoleDeleteArmed || !strings.Contains(ansi.Strip(m.viewModels()), "confirm delete") {
+		t.Fatal("custom role delete confirmation was not shown")
+	}
+	updated, command = m.updateModelPicker(tea.KeyPressMsg{Code: 'y', Text: "y"})
+	m = updated.(model)
+	if command == nil {
+		t.Fatal("delete role command is nil")
+	}
+	updated, _ = m.Update(command())
+	m = updated.(model)
+	if m.config.HasNativeRole("analyst") || !strings.Contains(m.status, "deleted") {
+		t.Fatalf("custom role was not deleted: %q", m.status)
+	}
+}
+
+func TestModelRoleManagementViewsFitTerminal(t *testing.T) {
+	value := config.Default()
+	value.Provider.Model = "global-model"
+	value.Agents.Roles = map[string]config.AgentConfig{"analyst": {}}
+	for _, size := range [][2]int{{100, 36}, {60, 28}, {40, 24}} {
+		m := newModel(t.Context(), config.Store{Dir: t.TempDir()}, nil)
+		m.config = value
+		m.draftConfig = value
+		m.models = []client.Model{{ID: "global-model"}}
+		m.resize(size[0], size[1])
+		for _, stage := range []modelPickerStage{modelPickerTargets, modelPickerRoleName} {
+			m.modelPickerStage = stage
+			view := m.viewModels()
+			if lipgloss.Width(view) > size[0] || lipgloss.Height(view) > size[1] {
+				t.Fatalf("stage %v overflows %dx%d: got %dx%d\n%s", stage, size[0], size[1], lipgloss.Width(view), lipgloss.Height(view), ansi.Strip(view))
+			}
+		}
 	}
 }
 

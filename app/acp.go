@@ -1888,6 +1888,8 @@ func (a *acpAgent) emitAgentPlanContext(ctx context.Context, update agentPlanUpd
 
 func (a *acpAgent) emitAvailableCommandsContext(ctx context.Context) error {
 	commands := []acp.AvailableCommand{
+		{Name: "subagents", Description: "List custom subagents or show a profile.", Input: &acp.AvailableCommandInput{Unstructured: &acp.UnstructuredCommandInput{Hint: "list | show <name>"}}},
+		{Name: "subagent", Description: "Run a custom subagent.", Input: &acp.AvailableCommandInput{Unstructured: &acp.UnstructuredCommandInput{Hint: "<name> <request>"}}},
 		{
 			Name: "plan", Description: "Plan an implementation, request approval, then execute and review it.",
 			Input: &acp.AvailableCommandInput{Unstructured: &acp.UnstructuredCommandInput{Hint: "work to plan"}},
@@ -1947,6 +1949,11 @@ func (a *acpAgent) runACPCommand(ctx context.Context, text string) (acp.PromptRe
 	case command == "/commit":
 		response, err := a.runACPCommit(ctx)
 		return response, true, err
+	case command == "/subagent" || strings.HasPrefix(command, "/subagent "):
+		response, err := a.runACPCustom(ctx, command)
+		return response, true, err
+	case command == "/subagents" || strings.HasPrefix(command, "/subagents "):
+		output = a.state.customInfo(command)
 	case command == agentSearchCommand:
 		output = "Usage: /agent:search <query>"
 	case strings.HasPrefix(command, agentSearchCommand+" "):
@@ -1986,6 +1993,7 @@ func (a *acpAgent) runACPCommand(ctx context.Context, text string) (acp.PromptRe
 		return response, true, err
 	case command == "/help":
 		output = "Available ACP commands:\n- /plan <work to plan>\n- /debug <issue to investigate>\n- /review [optional review focus]\n- /auto-approve [on|off|status]\n- /auto-resolve [on|off|status]\n- /autonomous [on|off|status]\n- /agent:search <query>\n- /commit\n- /learn [on|off|status]\n- /clear\n- /help"
+		output += "\n- /subagents [list|show <name>]\n- /subagent <name> <request>"
 	case command == "/learn":
 		if a.state.learningDisabled() {
 			output = "Learning is disabled for this workspace. Use /learn on to enable it."

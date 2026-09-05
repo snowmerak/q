@@ -48,6 +48,7 @@ const (
 	screenLSP
 	screenMCP
 	screenAgents
+	screenCustom
 	screenGateway
 	screenGatewayNetwork
 	screenGatewayKeys
@@ -63,6 +64,7 @@ type modelPickerStage uint8
 const (
 	modelPickerModels modelPickerStage = iota
 	modelPickerTargets
+	modelPickerRoleName
 	modelPickerReasoning
 	modelPickerEmbeddingDimensions
 	modelPickerContextWindow
@@ -155,6 +157,7 @@ var providerTypeOptions = []providerTypeOption{
 }
 
 type model struct {
+	custom            customManager
 	ctx               context.Context
 	store             config.Store
 	factory           clientFactory
@@ -230,6 +233,8 @@ type model struct {
 	modelTargetCursor         int
 	modelScopeCursor          int
 	modelWorkspace            bool
+	modelRoleNameInput        textinput.Model
+	modelRoleDeleteArmed      bool
 	reasoningCursor           int
 	modelSelection            client.Model
 	embeddingDimensions       textinput.Model
@@ -378,6 +383,13 @@ type agentConnectionProbedMsg struct {
 type modelTargetConfiguredMsg struct {
 	config config.Config
 	target string
+	err    error
+}
+
+type modelRoleConfiguredMsg struct {
+	config config.Config
+	target string
+	status string
 	err    error
 }
 
@@ -596,6 +608,11 @@ func newManagedModel(ctx context.Context, store config.Store, factory clientFact
 	m.modelContextWindow.Placeholder = "provider metadata"
 	m.modelContextWindow.CharLimit = 12
 	m.modelContextWindow.SetWidth(28)
+	m.modelRoleNameInput = textinput.New()
+	m.modelRoleNameInput.Prompt = "role name · "
+	m.modelRoleNameInput.Placeholder = "security-review"
+	m.modelRoleNameInput.CharLimit = 64
+	m.modelRoleNameInput.SetWidth(40)
 	m.modelGroupNameInput = textinput.New()
 	m.modelGroupNameInput.Prompt = "group name · "
 	m.modelGroupNameInput.Placeholder = "heavy"
@@ -948,6 +965,21 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		m.status = message.target + " model settings saved"
 		m.modelFilter.Blur()
 		m.embeddingDimensions.Blur()
+		return m, nil
+	case modelRoleConfiguredMsg:
+		if message.err != nil {
+			m.status = message.err.Error()
+			return m, m.modelPickerFocus()
+		}
+		m.config = message.config
+		m.draftConfig = message.config
+		m.refreshModelGroupCatalog()
+		m.screen = screenModels
+		m.modelPickerStage = modelPickerTargets
+		m.modelRoleDeleteArmed = false
+		m.modelRoleNameInput.Blur()
+		m.selectModelTarget(message.target)
+		m.status = message.status
 		return m, nil
 	case workspaceModelConfiguredMsg:
 		if message.err != nil {
@@ -1498,6 +1530,9 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		if m.screen == screenAgents {
 			return m.updateAgents(key)
 		}
+		if m.screen == screenCustom {
+			return m.updateCustom(key)
+		}
 		if m.screen == screenHelp {
 			return m.updateHelp(key)
 		}
@@ -1550,6 +1585,9 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		var command tea.Cmd
 		m.mcpInputs[m.mcpFormFocus], command = m.mcpInputs[m.mcpFormFocus].Update(message)
 		return m, command
+	}
+	if m.screen == screenCustom {
+		return m.updateCustomInput(message)
 	}
 	if m.screen == screenAgents && m.agentsMode != agentsModeList {
 		var command tea.Cmd
@@ -2253,6 +2291,8 @@ func (m model) updateModelPicker(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch m.modelPickerStage {
 	case modelPickerTargets:
 		return m.updateModelTargetPicker(key)
+	case modelPickerRoleName:
+		return m.updateModelRoleName(key)
 	case modelPickerGroups:
 		return m.updateModelGroups(key)
 	case modelPickerGroupName:
@@ -2374,6 +2414,35 @@ func (m model) updateModelPicker(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 
 func (m model) updateModelTargetPicker(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	targets := m.modelTargets()
+	if m.modelRoleDeleteArmed {
+		switch key.String() {
+		case "d", "y", "enter":
+			m.modelRoleDeleteArmed = false
+			if len(targets) == 0 {
+				return m, nil
+			}
+			target := targets[min(m.modelTargetCursor, len(targets)-1)]
+			if !config.ValidCustomRoleName(target) {
+				m.status = "Only custom roles can be deleted"
+				return m, nil
+			}
+			if refs := m.modelRoleReferences(target); len(refs) > 0 {
+				m.status = "Change referencing subagents first: " + strings.Join(refs, ", ")
+				return m, nil
+			}
+			value := m.draftConfig
+			value.Agents.Roles = cloneAgentRoles(value.Agents.Roles)
+			delete(value.Agents.Roles, target)
+			return m.saveModelRoleConfiguration(value, target, "Custom role "+target+" deleted")
+		case "n", "esc":
+			m.modelRoleDeleteArmed = false
+			m.status = "Delete canceled"
+			return m, nil
+		default:
+			m.modelRoleDeleteArmed = false
+			m.status = ""
+		}
+	}
 	switch key.String() {
 	case "esc":
 		if m.isStandaloneScreen(screenModels) {
@@ -2386,17 +2455,47 @@ func (m model) updateModelTargetPicker(key tea.KeyPressMsg) (tea.Model, tea.Cmd)
 		}
 		return m, m.setup[m.setupFocus].Focus()
 	case "up":
+		m.modelRoleDeleteArmed = false
+		m.status = ""
 		if m.modelTargetCursor > 0 {
 			m.modelTargetCursor--
 		}
 	case "down":
+		m.modelRoleDeleteArmed = false
+		m.status = ""
 		if m.modelTargetCursor < len(targets)-1 {
 			m.modelTargetCursor++
 		}
 	case "left":
+		m.modelRoleDeleteArmed = false
+		m.status = ""
 		m.modelScopeCursor = modelScopeGlobal
 	case "right", "tab":
+		m.modelRoleDeleteArmed = false
+		m.status = ""
 		m.modelScopeCursor = modelScopeWorkspace
+	case "a":
+		m.modelRoleDeleteArmed = false
+		m.modelRoleNameInput.SetValue("")
+		m.modelPickerStage = modelPickerRoleName
+		m.status = ""
+		m.modelFilter.Blur()
+		return m, m.modelRoleNameInput.Focus()
+	case "d":
+		if len(targets) == 0 {
+			return m, nil
+		}
+		target := targets[min(m.modelTargetCursor, len(targets)-1)]
+		if !config.ValidCustomRoleName(target) {
+			m.status = "Only custom roles can be deleted; press i to reset a model assignment"
+			return m, nil
+		}
+		if refs := m.modelRoleReferences(target); len(refs) > 0 {
+			m.status = "Change referencing subagents first: " + strings.Join(refs, ", ")
+			return m, nil
+		}
+		m.modelRoleDeleteArmed = true
+		m.status = "Delete custom role " + target + "?"
 	case "g":
 		m.modelPickerStage = modelPickerGroups
 		m.modelGroupDeleteArmed = false
@@ -2442,6 +2541,50 @@ func (m model) updateModelTargetPicker(key tea.KeyPressMsg) (tea.Model, tea.Cmd)
 		return m.saveModelTargetConfiguration(value, target)
 	}
 	return m, nil
+}
+
+func (m model) updateModelRoleName(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	switch key.String() {
+	case "esc":
+		m.modelRoleNameInput.Blur()
+		m.modelPickerStage = modelPickerTargets
+		m.status = ""
+		return m, nil
+	case "enter":
+		name := strings.TrimSpace(m.modelRoleNameInput.Value())
+		if !config.ValidCustomRoleName(name) {
+			m.status = "Use 1–64 lowercase letters, digits or hyphens; built-in and reserved names are unavailable"
+			return m, nil
+		}
+		if m.draftConfig.HasNativeRole(name) {
+			m.status = "Role already exists"
+			return m, nil
+		}
+		value := m.draftConfig
+		value.Agents.Roles = cloneAgentRoles(value.Agents.Roles)
+		value.Agents.Roles[name] = config.AgentConfig{}
+		m.modelRoleNameInput.Blur()
+		return m.saveModelRoleConfiguration(value, name, "Custom role "+name+" created")
+	}
+	var command tea.Cmd
+	m.modelRoleNameInput, command = m.modelRoleNameInput.Update(key)
+	return m, command
+}
+
+func (m model) modelRoleReferences(role string) []string {
+	var refs []string
+	for _, entry := range m.customStore().List() {
+		if entry.Profile.Role != role {
+			continue
+		}
+		name := entry.Profile.Name
+		if name == "" {
+			name = filepath.Base(entry.Path)
+		}
+		refs = append(refs, name+" ("+entry.Scope+")")
+	}
+	sort.Strings(refs)
+	return refs
 }
 
 func (m model) updateModelGroups(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
@@ -2999,6 +3142,28 @@ func (m model) saveModelTargetConfiguration(value config.Config, target string) 
 	}
 }
 
+func (m model) saveModelRoleConfiguration(value config.Config, target, status string) (tea.Model, tea.Cmd) {
+	if err := value.Validate(); err != nil {
+		m.status = err.Error()
+		return m, nil
+	}
+	if value.HasNativeRole(target) && len(m.models) > 0 {
+		if _, err := subagent.Resolve(value, target, m.models); err != nil {
+			m.status = err.Error()
+			return m, nil
+		}
+	}
+	m.status = "Saving role settings…"
+	m.modelFilter.Blur()
+	m.modelRoleNameInput.Blur()
+	return m, func() tea.Msg {
+		if err := m.store.Save(value); err != nil {
+			return modelRoleConfiguredMsg{err: err}
+		}
+		return modelRoleConfiguredMsg{config: value, target: target, status: status}
+	}
+}
+
 func (m model) updateChatKey(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if m.handleSlashCompletionKey(key) {
 		return m, nil
@@ -3122,6 +3287,9 @@ func (m model) submitChat() (tea.Model, tea.Cmd) {
 			m.input.Reset()
 			m.status = m.runPlanAutomationCommand(command)
 			return m, m.input.Focus()
+		}
+		if customCommand(content) {
+			return m.startCustom(content)
 		}
 		switch content {
 		case "/plan":
@@ -4070,6 +4238,8 @@ func (m *model) enterModelPicker(value config.Config, available []client.Model) 
 	m.draftConfig = value
 	m.modelCursor = 0
 	m.modelFilter.Reset()
+	m.modelRoleDeleteArmed = false
+	m.modelRoleNameInput.Blur()
 	m.status = ""
 	if m.modelChooseTarget {
 		m.modelPickerStage = modelPickerTargets
@@ -4127,6 +4297,8 @@ func (m *model) modelPickerFocus() tea.Cmd {
 	switch {
 	case m.modelPickerStage == modelPickerModels && !m.discovering:
 		return m.modelFilter.Focus()
+	case m.modelPickerStage == modelPickerRoleName:
+		return m.modelRoleNameInput.Focus()
 	case m.modelPickerStage == modelPickerGroupName:
 		return m.modelGroupNameInput.Focus()
 	case m.modelPickerStage == modelPickerGroupCandidateModels:
@@ -4139,6 +4311,7 @@ func (m *model) modelPickerFocus() tea.Cmd {
 		return m.modelContextWindow.Focus()
 	}
 	m.modelFilter.Blur()
+	m.modelRoleNameInput.Blur()
 	m.embeddingDimensions.Blur()
 	m.modelContextWindow.Blur()
 	m.modelGroupNameInput.Blur()
@@ -4147,7 +4320,17 @@ func (m *model) modelPickerFocus() tea.Cmd {
 }
 
 func (m model) modelTargets() []string {
-	return append([]string{defaultModelTarget, embeddingModelTarget}, config.AgentRoles()...)
+	return append([]string{defaultModelTarget, embeddingModelTarget}, m.activeConfig().NativeRoles()...)
+}
+
+func (m *model) selectModelTarget(target string) {
+	m.modelTargetCursor = 0
+	for index, candidate := range m.modelTargets() {
+		if candidate == target {
+			m.modelTargetCursor = index
+			return
+		}
+	}
 }
 
 func (m model) saveWorkspaceModel(target string, selected client.Model) (tea.Model, tea.Cmd) {
@@ -4689,6 +4872,16 @@ func mergeWorkspaceMessages(base, saved []client.Message) []client.Message {
 func (m *model) resize(width, height int) {
 	m.width, m.height = max(width, 40), max(height, 12)
 	contentWidth := max(20, m.width-4)
+	for i := range m.custom.inputs {
+		m.custom.inputs[i].SetWidth(max(20, contentWidth-8))
+	}
+	if m.custom.editing {
+		m.custom.prompt.SetWidth(max(20, contentWidth-8))
+		m.custom.prompt.SetHeight(max(3, min(10, m.height-15)))
+	}
+	if m.custom.picker {
+		m.custom.filter.SetWidth(max(20, contentWidth-8))
+	}
 	for index := range m.setup {
 		m.setup[index].SetWidth(min(contentWidth-2, 72))
 	}
@@ -4765,11 +4958,21 @@ func (m *model) resize(width, height int) {
 }
 
 func (m *model) applyColorScheme(dark bool) {
+	for i := range m.custom.inputs {
+		m.custom.inputs[i].SetStyles(textinput.DefaultStyles(dark))
+	}
+	if m.custom.editing {
+		m.custom.prompt.SetStyles(textarea.DefaultStyles(dark))
+	}
+	if m.custom.picker {
+		m.custom.filter.SetStyles(textinput.DefaultStyles(dark))
+	}
 	m.dark = dark
 	for index := range m.setup {
 		m.setup[index].SetStyles(textinput.DefaultStyles(dark))
 	}
 	m.modelFilter.SetStyles(textinput.DefaultStyles(dark))
+	m.modelRoleNameInput.SetStyles(textinput.DefaultStyles(dark))
 	m.embeddingDimensions.SetStyles(textinput.DefaultStyles(dark))
 	m.modelContextWindow.SetStyles(textinput.DefaultStyles(dark))
 	m.modelGroupNameInput.SetStyles(textinput.DefaultStyles(dark))
@@ -5080,6 +5283,8 @@ func (m model) View() tea.View {
 		content = m.viewMCP()
 	} else if m.screen == screenAgents {
 		content = m.viewAgents()
+	} else if m.screen == screenCustom {
+		content = m.viewCustom()
 	} else if m.screen == screenHelp {
 		content = m.viewHelp()
 	} else if m.screen == screenSessions {

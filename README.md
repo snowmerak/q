@@ -137,7 +137,7 @@ screen and returns to the previous screen without discarding its state.
 | `/new` | Create and switch to a new session. |
 | `/clear` | Clear the current conversation projection and plan checkpoint. |
 | `/learn [on\|off\|status]` | Checkpoint or control durable conversation learning. |
-| `/model` | Assign models or fallback groups to the default and agent roles. |
+| `/model` | Assign models, manage native roles, and configure fallback groups. |
 | `/gateway` | Configure Gateway providers, listener settings, and API keys. |
 | `/library` | Configure the global Library listener. |
 | `/loom` | Inspect Loom usage and configure or run garbage collection. |
@@ -276,6 +276,8 @@ user-addressable server with its own listener and API-key settings.
 
 `/model` assigns a model to the main chat and specialized roles such as
 `griller`, `scout`, `planner`, `coder`, `commit`, `thinker`, and `librarian`.
+Press `a` in the assignment table to create a reusable custom role and `d` to
+delete an unreferenced custom role after confirmation.
 Assignments may reference ordered model groups. A group can fall back after a
 candidate timeout or transient HTTP 5xx response; user cancellation, tool
 failure, and validation errors do not trigger fallback.
@@ -283,6 +285,61 @@ failure, and validation errors do not trigger fallback.
 Global configuration is stored under `~/.q`. Workspace model overrides are in
 `.q/model.json`. Use the TUI for normal configuration; edit YAML/JSON directly
 only when automation requires it.
+
+## Custom subagents
+
+Open `/subagents` in the TUI to manage runnable subagent profiles. `a` adds, `e`
+edits, and `d` deletes the selected profile after confirmation. Each list row
+summarizes its model role, scope, and tool state.
+In an editor, Tab or Up/Down selects fields, Enter advances from name and
+description or opens a model/role/tool picker, Ctrl+S saves, and Esc cancels.
+Inside the multiline prompt, Enter inserts a newline and arrows move the cursor;
+Tab moves to the next field; Shift+Tab, Esc, or Ctrl+Up returns to the previous
+field without discarding the prompt. Scope and Role cycle with Left/Right or
+Space; Enter opens their selection list. Tools opens a searchable list of built-in
+and connected external MCP tools; Space or Enter toggles selections. Tab/Shift+Tab
+leaves that list for the next/previous field, and Esc returns to the Tools field.
+Ctrl+S or F2 saves from any editor field or open selection list. You can also
+Tab to the final Save action and press Enter. Validation errors keep
+the draft available for correction. The system prompt supports multiple lines.
+
+A profile combines a system prompt, an explicit tool list, and a native model
+role. A custom role uses the existing model, model-group, and reasoning settings
+in `~/.q/config.yaml`. Manage role assignments from `/model`: `a` creates a
+custom role and `d` deletes one after confirmation. Built-in native roles can
+also be selected; selecting one uses its model settings without invoking its
+built-in workflow.
+The names `default`, `embedding`, `search`, and built-in role names are reserved
+and cannot be registered as custom roles.
+
+Profiles are YAML files in `~/.q/subagents/` or `<workspace>/.q/subagents/`.
+A workspace profile replaces the entire global profile with the same name.
+Changes apply on the next invocation. Existing profile and role names are fixed
+when editing. Changing a profile's scope moves its file without overwriting an
+existing profile at the destination. A referenced custom role must be reassigned
+in the known global and current-workspace profiles before deletion from `/model`.
+
+```yaml
+version: 1
+name: code-reader
+description: Explain the requested code.
+role: scout
+system_prompt: |
+  Read the requested code and explain its behavior with concrete file references.
+tools:
+  - list_directory
+  - read_file
+```
+
+TUI and ACP support `/subagents list`, `/subagents show code-reader`, and
+`/subagent code-reader explain the cancellation handling in app/debug.go`.
+In ACP, bare `/subagents` lists profiles. Creation, editing, and deletion use the
+TUI or profile files. Pass all necessary task context in the request: the child
+does not automatically inherit the parent conversation. `tools: []` runs without
+tools. Unavailable tools or roles produce an error before the model runs.
+
+Custom subagents use normal session progress, cancellation, and execution records.
+They do not change `/debug`, `/plan`, `/review`, or external ACP agent connections.
 
 ## Sessions, history, and learning
 

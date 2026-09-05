@@ -132,7 +132,7 @@ func (r PlannerReviewRunner) Run(ctx context.Context, input TaskReviewRequest) (
 	}
 	var lifecycle *Lifecycle
 	if r.Sink != nil || strings.TrimSpace(r.RunID) != "" {
-		lifecycle, err = NewLifecycle(r.Sink, r.RunID, taskID, r.ExecutionID, r.Spec)
+		lifecycle, err = NewLifecycle(r.Sink, r.RunID, taskID, r.ExecutionID, &r.Spec)
 		if err != nil {
 			return TaskReview{}, err
 		}

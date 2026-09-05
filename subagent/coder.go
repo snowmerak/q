@@ -60,7 +60,7 @@ func (r CoderRunner) Run(ctx context.Context, attempt CoderAttempt) (result Code
 	taskID := r.coderTaskID(attempt)
 	var lifecycle *Lifecycle
 	if r.Sink != nil || strings.TrimSpace(r.RunID) != "" {
-		lifecycle, err = NewLifecycle(r.Sink, r.RunID, taskID, r.ExecutionID, r.Spec)
+		lifecycle, err = NewLifecycle(r.Sink, r.RunID, taskID, r.ExecutionID, &r.Spec)
 		if err != nil {
 			return CoderResult{}, err
 		}
@@ -86,7 +86,7 @@ func (r CoderRunner) Run(ctx context.Context, attempt CoderAttempt) (result Code
 	return result, nil
 }
 
-func (r CoderRunner) run(
+func (r *CoderRunner) run(
 	ctx context.Context,
 	attempt CoderAttempt,
 	taskID string,
