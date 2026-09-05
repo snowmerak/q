@@ -7,10 +7,13 @@ import (
 	"io"
 	"strings"
 
+	tea "charm.land/bubbletea/v2"
 	"github.com/snowmerak/q/changes"
+	"github.com/snowmerak/q/client"
 	"github.com/snowmerak/q/config"
 	qlibrary "github.com/snowmerak/q/library"
 	"github.com/snowmerak/q/providerhost"
+	"github.com/snowmerak/q/sessionstore"
 	"github.com/snowmerak/q/subagent"
 	"github.com/snowmerak/q/workspace"
 	"github.com/snowmerak/q/workspacememory"
@@ -21,11 +24,20 @@ const (
 	maximumReviewPatchSet = 512 << 10
 )
 
-func collectReviewRequest(ctx context.Context, directory, objective, runID string) (subagent.ReviewRequest, error) {
-	objective = strings.TrimSpace(objective)
-	if objective == "" {
-		objective = defaultReviewRequest
+type reviewExecutionStore interface {
+	ArchiveReviewExecution(subagent.ReviewExecutionLog) (string, error)
+}
+
+func normalizeReviewRequest(request string) string {
+	request = strings.TrimSpace(request)
+	if request == "" {
+		return defaultReviewRequest
 	}
+	return request
+}
+
+func collectReviewRequest(ctx context.Context, directory, objective, runID string) (subagent.ReviewRequest, error) {
+	objective = normalizeReviewRequest(objective)
 	snapshot, err := changes.List(ctx, directory)
 	if err != nil {
 		return subagent.ReviewRequest{}, err
@@ -66,9 +78,167 @@ func collectReviewRequest(ctx context.Context, directory, objective, runID strin
 	return request, nil
 }
 
+func (m model) startReview(requestText string) (tea.Model, tea.Cmd) {
+	if m.client == nil || m.toolRuntime == nil || m.workspaceStore == nil {
+		m.status = "Review requires an available model, tool runtime, and workspace"
+		return m, m.input.Focus()
+	}
+	requestText = normalizeReviewRequest(requestText)
+	m.planArmed = false
+	m.debugArmed = false
+	m.input.Placeholder = "Type a message…"
+	m.beginTurn()
+	m.turnMessageStart = len(m.messages)
+	m.touchSessionMetadata(requestText)
+	message := client.Message{Role: client.RoleUser, Content: requestText}
+	m.archiveMessage(message, sessionstore.StatusSubmitted, false)
+	m.messages = append(m.messages, message)
+	learning := m.observeLearningMessage(message)
+	if m.memory == nil {
+		m.memory = memoryForPlan(m.activeConfig())
+	}
+	m.memory.Append(message)
+	m.pendingMessage = message
+	m.input.Reset()
+	m.input.Blur()
+	m.waiting = true
+	m.status = "Reviewing working-tree changes…"
+	m.clearAgentActivities()
+	m.resize(m.width, m.height)
+	m.refreshTranscript()
+	if err := m.saveWorkspaceSession(); err != nil {
+		m.finishTurn()
+		m.waiting = false
+		m.pendingMessage = client.Message{}
+		m.status = err.Error()
+		return m, m.input.Focus()
+	}
+	return m, tea.Batch(m.spinner.Tick, m.sendReviewRequest(requestText), learning)
+}
+
+func (m *model) sendReviewRequest(requestText string) tea.Cmd {
+	configuredClient := m.client
+	toolRuntime := m.toolRuntime
+	value := m.activeConfig()
+	runID := m.runID
+	archive := m.archive
+	turnContext := m.activeTurnContext()
+	turnID := m.turnID
+	workingDirectory := m.workspaceStore.Root
+	var executionStore reviewExecutionStore = m.workspaceStore
+	events := make(chan agentEvent)
+	return func() tea.Msg {
+		go streamReviewWorkflow(
+			turnContext, configuredClient, toolRuntime, value, runID, archive,
+			workingDirectory, requestText, executionStore, events,
+		)
+		return waitAgentEvent(events, turnID)()
+	}
+}
+
+func streamReviewWorkflow(
+	ctx context.Context,
+	configuredClient chatClient,
+	toolRuntime agentToolRuntime,
+	value config.Config,
+	runID string,
+	archive recordArchive,
+	workingDirectory string,
+	requestText string,
+	executionStore reviewExecutionStore,
+	events chan<- agentEvent,
+) {
+	defer close(events)
+	reviewRequest, err := collectReviewRequest(ctx, workingDirectory, requestText, runID)
+	if err != nil {
+		emitAgentEvent(ctx, events, agentEvent{err: err})
+		return
+	}
+	recorder := newReviewLogRecorder(runID, reviewRequest.Objective, reviewRequest.Files)
+	result := subagent.ReviewWorkflowResult{}
+	fail := func(err error) {
+		outcome := subagent.ReviewOutcomeFailed
+		if errors.Is(err, context.Canceled) {
+			outcome = subagent.ReviewOutcomeCanceled
+		}
+		execution := recorder.finishReview(result, outcome, err)
+		if executionStore != nil {
+			if _, archiveErr := executionStore.ArchiveReviewExecution(execution); archiveErr != nil {
+				err = errors.Join(err, archiveErr)
+			}
+		}
+		emitAgentEvent(ctx, events, agentEvent{err: err})
+	}
+	models, err := configuredClient.ListModels(ctx)
+	if err != nil {
+		fail(fmt.Errorf("review: list models: %w", err))
+		return
+	}
+	advisorSpec, err := subagent.Resolve(value, config.AgentRoleAdvisor, models)
+	if err != nil {
+		fail(err)
+		return
+	}
+	scoutSpec, err := subagent.Resolve(value, config.AgentRoleScout, models)
+	if err != nil {
+		fail(err)
+		return
+	}
+	advisorTools, err := configuredAgentToolRuntime(toolRuntime, advisorSpec.Role, value, workingDirectory)
+	if err != nil {
+		fail(fmt.Errorf("review: configure Advisor tools: %w", err))
+		return
+	}
+	progress := func(progress subagent.ProgressEvent) {
+		recorder.recordProgress(progress)
+		activity := agentActivity{
+			Agent: progress.Agent, TaskID: progress.TaskID, ParentID: progress.ParentID,
+			Action: progress.Action, Detail: progress.Detail,
+		}
+		_ = emitAgentEvent(ctx, events, agentEvent{activity: &activity})
+	}
+	trace := func(event subagent.TraceEvent) {
+		recorder.recordTrace(event)
+		entry := agentTrace{
+			Agent: event.Agent, TaskID: event.TaskID, ParentID: event.ParentID,
+			Kind: event.Kind, CallID: event.CallID, Name: event.Name, Content: event.Content, IsError: event.IsError,
+		}
+		_ = emitAgentEvent(ctx, events, agentEvent{trace: &entry})
+	}
+	scoutRunID := runID
+	if archive == nil {
+		scoutRunID = ""
+	}
+	scout := subagent.ScoutRunner{
+		Client: configuredClient, Tools: scopeTools(toolRuntime, scoutSpec.Role), Spec: scoutSpec,
+		Sink: archive, RunID: scoutRunID, WorkingDirectory: workingDirectory,
+		Progress: progress, Trace: trace,
+	}
+	report, err := (subagent.ReviewRunner{
+		Client: configuredClient, Tools: advisorTools, Scout: scout, Spec: advisorSpec,
+		Capture: configuredInvocationCapture(toolRuntime), WorkingDirectory: workingDirectory,
+		Progress: progress, Trace: trace,
+	}).Run(ctx, reviewRequest)
+	if err != nil {
+		fail(err)
+		return
+	}
+	result.Report = report
+	execution := recorder.finishReview(result, subagent.ReviewOutcomeSucceeded, nil)
+	if executionStore != nil {
+		if _, err := executionStore.ArchiveReviewExecution(execution); err != nil {
+			emitAgentEvent(ctx, events, agentEvent{err: err})
+			return
+		}
+	}
+	content := subagent.RenderReviewReport(report)
+	emitAgentEvent(ctx, events, agentEvent{response: &client.ChatResponse{Choices: []client.Choice{{Message: client.Message{
+		Role: client.RoleAssistant, Content: content,
+	}}}}})
+}
+
 // RunReview performs one read-only working-tree review in a fresh durable
-// session. It is deliberately a CLI workload and does not register a TUI or
-// ACP slash command.
+// session for the standalone CLI command.
 func RunReview(
 	ctx context.Context,
 	store config.Store,
@@ -76,10 +246,7 @@ func RunReview(
 	requestText string,
 	output io.Writer,
 ) (returnErr error) {
-	requestText = strings.TrimSpace(requestText)
-	if requestText == "" {
-		requestText = defaultReviewRequest
-	}
+	requestText = normalizeReviewRequest(requestText)
 	if output == nil {
 		output = io.Discard
 	}

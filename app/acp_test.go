@@ -831,8 +831,8 @@ func TestACPAgentAdvertisesAndHandlesHeadlessCommands(t *testing.T) {
 	for _, command := range commands {
 		commandNames = append(commandNames, command.Name)
 	}
-	if !slices.Equal(commandNames, []string{"plan", "debug", "auto-approve", "auto-resolve", "autonomous", "agent:search", "commit", "learn", "clear", "help"}) ||
-		!strings.Contains(output, "/plan") || !strings.Contains(output, "/debug") || !strings.Contains(output, "/agent:search") ||
+	if !slices.Equal(commandNames, []string{"plan", "debug", "review", "auto-approve", "auto-resolve", "autonomous", "agent:search", "commit", "learn", "clear", "help"}) ||
+		!strings.Contains(output, "/plan") || !strings.Contains(output, "/debug") || !strings.Contains(output, "/review") || !strings.Contains(output, "/agent:search") ||
 		!strings.Contains(output, "/auto-approve") || !strings.Contains(output, "/auto-resolve") ||
 		!strings.Contains(output, "/autonomous") || !strings.Contains(output, "/commit") ||
 		!strings.Contains(output, "/learn") || !strings.Contains(output, "/clear") {

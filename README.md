@@ -107,8 +107,8 @@ external Search agent for public evidence; both results return as Loom
 receipts. The workflow reports actionable findings with file locations and
 never edits files, builds or tests the project, runs project scripts, or changes
 Git state. The optional trailing text narrows the review request. Its audit log
-is written below `.q/review-executions`; no `/review` command is exposed in the
-TUI or ACP.
+is written below `.q/review-executions`. The same workflow is available in an
+active TUI or ACP session as `/review [request]`.
 
 On first launch, q opens provider setup. Prefer an environment variable for an
 API key instead of storing a key inline. After selecting a model, type a request
@@ -126,6 +126,7 @@ screen and returns to the previous screen without discarding its state.
 |---|---|
 | `/plan [request]` | Clarify, research, propose, approve, execute, and review a plan. |
 | `/debug [issue]` | Clarify and research an issue, then have Planner return a diagnostic report without modifying the workspace. |
+| `/review [request]` | Review current working-tree changes without modifying them. |
 | `/auto-approve [on\|off\|status]` | Persistently control automatic approval of valid plan proposals. |
 | `/auto-resolve [on\|off\|status]` | Persistently control engineering-default answers to plan clarification. |
 | `/autonomous [on\|off\|status]` | Persistently control both plan automation settings together. |

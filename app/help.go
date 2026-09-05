@@ -247,6 +247,7 @@ func renderHelpContent(dark bool) string {
 	writeHelpSection("COMMAND LINE", [][2]string{
 		{"q sprint <request...>", "Run an autonomous plan from clarification through review."},
 		{"q diagnose <issue...>", "Run an autonomous read-only investigation and print its report."},
+		{"q review [request...]", "Run the same read-only working-tree review without opening the TUI."},
 		{"q commit", "Open the guided commit-message and commit TUI."},
 		{"q memory", "Run Workspace Memory as a dedicated foreground service."},
 		{"q library", "Run the global Library as a dedicated foreground service."},

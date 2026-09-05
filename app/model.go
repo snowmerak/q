@@ -3140,6 +3140,8 @@ func (m model) submitChat() (tea.Model, tea.Cmd) {
 			m.status = "Debug mode · enter an issue"
 			m.resize(m.width, m.height)
 			return m, m.input.Focus()
+		case "/review":
+			return m.startReview("")
 		case "/commit":
 			return m.startCommit()
 		case "/changes":
@@ -3230,6 +3232,9 @@ func (m model) submitChat() (tea.Model, tea.Cmd) {
 		}
 		if strings.HasPrefix(content, "/debug ") {
 			return m.startDebug(strings.TrimSpace(strings.TrimPrefix(content, "/debug")))
+		}
+		if strings.HasPrefix(content, "/review ") {
+			return m.startReview(strings.TrimSpace(strings.TrimPrefix(content, "/review")))
 		}
 		if m.planArmed {
 			return m.startPlan(content)
