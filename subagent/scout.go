@@ -177,11 +177,11 @@ func (r ScoutRunner) Run(ctx context.Context, task ScoutTask) (result ScoutResul
 }
 
 func (r *ScoutRunner) run(ctx context.Context, task ScoutTask, prompt string, lifecycle *Lifecycle) (ScoutResult, error) {
+	tools := scoutTools(r.Tools.Tools())
 	messages := []client.Message{
-		{Role: client.RoleSystem, Content: withSkillCatalog(scoutInstructions(), r.Tools)},
+		{Role: client.RoleSystem, Content: withRetrievalCatalog(scoutInstructions(), tools)},
 		{Role: client.RoleUser, Content: prompt},
 	}
-	tools := scoutTools(r.Tools.Tools())
 	history := NewContextCompactor(r.Spec, messages, tools, len(messages))
 	rounds := r.MaxRounds
 	if rounds <= 0 {

@@ -238,7 +238,7 @@ func runGriller[T any](
 	}
 	available := grillerToolsWithCompletion(invocationTools.Tools(), completion.tool)
 	messages := []client.Message{
-		{Role: client.RoleSystem, Content: withSkillCatalog(completion.instructions, invocationTools)},
+		{Role: client.RoleSystem, Content: withRetrievalCatalog(completion.instructions, available)},
 		{Role: client.RoleUser, Content: completion.requestLabel + "\n\n" + string(body)},
 	}
 	history := NewContextCompactor(r.Spec, messages, available, len(messages))

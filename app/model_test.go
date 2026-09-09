@@ -131,6 +131,7 @@ type fakeClient struct {
 
 type fakeAgentTools struct {
 	calls          []client.ToolCall
+	tools          []client.Tool
 	loomOptions    loom.StoreOptions
 	loomStats      loom.Stats
 	loomCollects   int
@@ -185,6 +186,9 @@ func (f *fakeAgentTools) Environment() qtools.HostEnvironment {
 }
 
 func (f *fakeAgentTools) Tools() []client.Tool {
+	if f.tools != nil {
+		return append([]client.Tool(nil), f.tools...)
+	}
 	return []client.Tool{{
 		Type: client.ToolTypeFunction,
 		Function: client.FunctionDefinition{
@@ -197,6 +201,36 @@ func (f *fakeAgentTools) Tools() []client.Tool {
 func (f *fakeAgentTools) Call(_ context.Context, call client.ToolCall) (client.ToolResult, error) {
 	f.calls = append(f.calls, call)
 	return client.ToolResult{Content: `{"loom_ref":"loom://0123456789abcdef0123456789abcdef","stored":true,"result":{"path":"main.go"}}`}, nil
+}
+
+func TestAppendRuntimeMessagesRequiresBoundaryRetrievalForSubstantiveWork(t *testing.T) {
+	m := newModel(context.Background(), config.Store{Dir: t.TempDir()}, nil)
+	workspaceStore := workspace.Store{Root: t.TempDir()}
+	m.workspaceStore = &workspaceStore
+	m.archive = &collectingRecordArchive{}
+	m.toolRuntime = &fakeAgentTools{tools: []client.Tool{{
+		Type: client.ToolTypeFunction,
+		Function: client.FunctionDefinition{
+			Name: "search_skills", Parameters: map[string]any{"type": "object"},
+		},
+	}}}
+
+	m.appendRuntimeMessages()
+	prompts := make(map[string]string)
+	for _, message := range m.messages {
+		prompts[message.Name] = message.Content
+	}
+	for name, tool := range map[string]string{
+		"q_workspace":    "search_archive",
+		"q_agent_skills": "search_skills",
+	} {
+		prompt := prompts[name]
+		for _, required := range []string{"Before starting substantive work", "Before finalizing substantive work, search again", tool} {
+			if !strings.Contains(prompt, required) {
+				t.Fatalf("%s prompt does not require %q:\n%s", name, required, prompt)
+			}
+		}
+	}
 }
 
 func (f *fakeAgentTools) CaptureResult(

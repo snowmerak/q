@@ -4109,7 +4109,7 @@ func (m *model) appendRuntimeMessages() {
 			" For repository discovery, never traverse q's .q metadata directory and honor patterns in the workspace-root .qignore file, including when scanning through run_command. Explicit ignored-path access is allowed when the task requires it." +
 			" Non-Loom MCP tool results include a loom_ref to the immutable full result. For large results, use loom_inspect, loom_read, or loom_eval instead of copying the result through chat context."
 		if m.archive != nil {
-			workspacePrompt += " Use search_archive when prior workspace conversations, decisions, agent results, or tool failures may be relevant; use get_archive_record only for selected results that need more detail."
+			workspacePrompt += " Before starting substantive work that requires tools or multiple steps, call search_archive with concise, task-specific terms to check relevant prior workspace conversations, decisions, agent results, and tool failures. Before finalizing substantive work, search again using any new decision terms, failures, or verification questions revealed by the work. Use get_archive_record only for selected results that need more detail."
 		}
 		m.messages = append(m.messages, client.Message{
 			Role: client.RoleDeveloper, Name: "q_workspace",
@@ -4129,7 +4129,7 @@ func (m *model) appendRuntimeMessages() {
 			if tool.Function.Name == "search_skills" {
 				m.messages = append(m.messages, client.Message{
 					Role: client.RoleDeveloper, Name: "q_agent_skills",
-					Content: "Agent Skills are retrieved on demand from the global q Library and the workspace skill index rather than preloaded. When reusable procedural guidance may help, call search_skills with concise keywords, select a result, then call get_skill and inspect its Loom artifact. Search explicit $skill-name mentions by name.",
+					Content: "Agent Skills are retrieved on demand from the global q Library and the workspace skill index rather than preloaded. Before starting substantive work that requires tools or multiple steps, call search_skills with concise, task-specific keywords to identify applicable guidance, select a result, then call get_skill and inspect its Loom artifact. Before finalizing substantive work, search again using any new requirements, failures, or verification needs revealed by the work. Search explicit $skill-name mentions by name.",
 				})
 				break
 			}
