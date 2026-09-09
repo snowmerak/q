@@ -4,6 +4,8 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
+	"flag"
 	"io"
 	"net"
 	"net/http"
@@ -32,6 +34,20 @@ func TestParseGatewayOptions(t *testing.T) {
 	}
 	if configured.host != "0.0.0.0" || configured.port != 0 || !configured.hostSet || !configured.portSet {
 		t.Fatalf("configured = %#v", configured)
+	}
+}
+
+func TestParseGatewayOptionsDocumentsStartCommand(t *testing.T) {
+	var output strings.Builder
+	if _, err := parseGatewayOptions([]string{"--help"}, &output); !errors.Is(err, flag.ErrHelp) {
+		t.Fatalf("help error = %v", err)
+	}
+	help := output.String()
+	if !strings.Contains(help, "usage: q gateway start [--host <ip>] [--port <port>]") {
+		t.Fatalf("help = %q", help)
+	}
+	if strings.Contains(help, "q gateway config") {
+		t.Fatalf("help retains removed config command: %q", help)
 	}
 }
 

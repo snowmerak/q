@@ -144,7 +144,7 @@ func RunLibraryConfigDefault(ctx context.Context) error {
 		return err
 	}
 	if err := RunLibraryConfig(ctx, store); err != nil {
-		return fmt.Errorf("q library config: %w", err)
+		return fmt.Errorf("q library: %w", err)
 	}
 	return nil
 }

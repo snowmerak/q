@@ -77,38 +77,36 @@ func main() {
 		}
 	}
 	if len(os.Args) > 1 && os.Args[1] == "gateway" {
-		if len(os.Args) > 2 && os.Args[2] == "config" {
-			if len(os.Args) != 3 {
-				fmt.Fprintln(os.Stderr, "usage: q gateway config")
-				os.Exit(2)
-			}
+		mode, serviceArgs, ok := parseServiceCommand(os.Args[2:])
+		if !ok {
+			fmt.Fprintln(os.Stderr, "usage: q gateway | q gateway start [--host <ip>] [--port <port>]")
+			os.Exit(2)
+		}
+		if mode == serviceCommandConfigure {
 			if err := app.RunGatewayConfigDefault(ctx); err != nil {
 				fmt.Fprintln(os.Stderr, err)
 				os.Exit(1)
 			}
 			return
 		}
-		if err := runGatewayCommand(ctx, os.Args[2:], os.Stdout, os.Stderr); err != nil {
+		if err := runGatewayCommand(ctx, serviceArgs, os.Stdout, os.Stderr); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}
 		return
 	}
 	if len(os.Args) > 1 && os.Args[1] == "library" {
-		if len(os.Args) > 2 && os.Args[2] == "config" {
-			if len(os.Args) != 3 {
-				fmt.Fprintln(os.Stderr, "usage: q library config")
-				os.Exit(2)
-			}
+		mode, serviceArgs, ok := parseServiceCommand(os.Args[2:])
+		if !ok || (mode == serviceCommandStart && len(serviceArgs) != 0) {
+			fmt.Fprintln(os.Stderr, "usage: q library | q library start")
+			os.Exit(2)
+		}
+		if mode == serviceCommandConfigure {
 			if err := app.RunLibraryConfigDefault(ctx); err != nil {
 				fmt.Fprintln(os.Stderr, err)
 				os.Exit(1)
 			}
 			return
-		}
-		if len(os.Args) != 2 {
-			fmt.Fprintln(os.Stderr, "usage: q library | q library config")
-			os.Exit(2)
 		}
 		store, err := config.DefaultStore()
 		if err == nil {
@@ -154,6 +152,23 @@ func main() {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
+}
+
+type serviceCommandMode uint8
+
+const (
+	serviceCommandConfigure serviceCommandMode = iota
+	serviceCommandStart
+)
+
+func parseServiceCommand(args []string) (serviceCommandMode, []string, bool) {
+	if len(args) == 0 {
+		return serviceCommandConfigure, nil, true
+	}
+	if args[0] != "start" {
+		return 0, nil, false
+	}
+	return serviceCommandStart, args[1:], true
 }
 
 func standaloneUICommand(name string) func(context.Context) error {

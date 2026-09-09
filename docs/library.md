@@ -2,8 +2,8 @@
 
 ## Current implementation baseline
 
-The first runnable slice implements the shared server component, `q library`
-foreground hosting, ordinary q in-process hosting, fixed-port discovery,
+The first runnable slice implements the shared server component, foreground
+hosting via `q library start`, ordinary q in-process hosting, fixed-port discovery,
 exclusive leader ownership, failure takeover, loopback-only unauthenticated
 HTTP, and persistent global Session Store ownership. `/v1/health` and
 `/v1/status` are available for lifecycle verification. Global Agent Skill
@@ -16,7 +16,7 @@ recency ranking are implemented.
 
 ## Purpose and decisions
 
-`q library` provides one user-level service for durable information that must
+The Library provides one user-level service for durable information that must
 be available across workspaces. It is not a replacement for the workspace
 Session Store.
 
@@ -47,7 +47,7 @@ processes are HTTP clients and never open the Store directly.
 
 The same Library server component supports two hosting forms:
 
-- `q library` runs it as a dedicated foreground service;
+- `q library start` runs it as a dedicated foreground service;
 - an ordinary `q` session embeds it in-process on a background goroutine when
   no compatible service exists and that q process wins the leader lock.
 
@@ -55,13 +55,13 @@ These are two entry points to the same server implementation, Store ownership,
 HTTP routes, local trust boundary, and election protocol. An ordinary q
 installation therefore needs no second executable or separately installed
 daemon. Running only `q` is enough to make the Library available, while
-`q library` is the explicit form for users who want its lifetime independent
-of a workspace TUI.
+`q library start` is the explicit form for users who want its lifetime
+independent of a workspace TUI.
 
 ```text
 q workspace A (possible embedded leader) --\
 q workspace B -------------------------+-- HTTP --> global Store
-q library (possible dedicated leader) ----/           |
+q library start (possible dedicated leader) ----/     |
                                                 library.lock
 ```
 
@@ -112,8 +112,8 @@ Both hosting forms use one connect-first, elect-second protocol:
    between the first probe and lock acquisition.
 5. If no compatible server exists, bind the configured port, open the global
    Store, finish index recovery, start the shared Library server component,
-   and then advertise readiness. An ordinary q hosts it in-process; `q
-   library` hosts it in the foreground.
+   and then advertise readiness. An ordinary q hosts it in-process;
+   `q library start` hosts it in the foreground.
 6. A process that loses the lock race waits for the winner to become ready,
    using bounded exponential backoff with jitter, and then connects.
 
@@ -140,10 +140,11 @@ resources and release the lock before returning an error.
 
 An embedded leader is intentionally tied to its owning q session. When that q
 process exits, it gracefully closes the Library, and another active or newly
-started q process may take over. A dedicated `q library` process is the way to
-keep the service available without keeping a workspace session open. The
-initial implementation does not need to spawn a child process: embedding and
-foreground hosting share the same Go component directly.
+started q process may take over. A dedicated process started with
+`q library start` is the way to keep the service available without keeping a
+workspace session open. The initial implementation does not need to spawn a
+child process: embedding and foreground hosting share the same Go component
+directly.
 
 ## Failure detection and takeover
 
@@ -425,7 +426,7 @@ still define request identity.
 
 ## CLI and runtime integration
 
-`q library` runs the shared Library component as a dedicated foreground
+`q library start` runs the shared Library component as a dedicated foreground
 service. If another compatible leader is already serving the configured
 address, it reports that instance instead of opening a second Store. Ordinary
 q sessions call the same ensure-and-connect component during startup. If no
@@ -440,7 +441,7 @@ and embedded operation equivalent. Internal
 health and lifecycle coordination may use direct handles, but data operations
 continue through the local Library service boundary.
 
-`q library config` opens the standalone Library listener settings, and
+`q library` opens the standalone Library listener settings, and
 `/library` opens the same settings from the regular q TUI. Both edit the
 default bind host and fixed rendezvous port in `library.json`. Port `0` is not
 valid for the Library because every process must be able to find the same
@@ -462,7 +463,8 @@ that global skill/proposition retrieval and extraction are unavailable.
    primitive without changing existing Gateway behavior.
 2. Add the reusable Library server component, configuration, identity/health,
    fixed-port serving, connection, leader election, startup waiting, shutdown,
-   and takeover tests; host the same component from `q library` and ordinary q.
+   and takeover tests; host the same component from `q library start` and
+   ordinary q.
 3. Add the global Store owner and read/write HTTP operations with persistent
    idempotency records.
 4. Move global Agent Skill synchronization and retrieval behind the Library;
@@ -484,8 +486,8 @@ The implementation is complete only when tests cover:
 
 - two processes starting concurrently and exactly one becoming leader;
 - an ordinary q session becoming an embedded leader without another binary;
-- `q library` hosting the same server as a dedicated foreground process;
-- a second `q library` detecting and reporting the existing compatible leader;
+- `q library start` hosting the same server as a dedicated foreground process;
+- a second `q library start` detecting and reporting the existing compatible leader;
 - losers connecting while the winner is still initializing;
 - embedded-leader shutdown followed by takeover without Store corruption;
 - leader termination followed by bounded takeover and successful retry;

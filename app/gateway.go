@@ -292,7 +292,7 @@ func (m model) viewGatewayNetwork() string {
 	body.WriteString(titleStyle.Render("q · Gateway network"))
 	body.WriteString("\n")
 	m.writeWorkspacePath(&body)
-	body.WriteString(subtleStyle.Render("Saved defaults are used by `q gateway`; port conflicts fall back to a random port."))
+	body.WriteString(subtleStyle.Render("Saved defaults are used by `q gateway start`; port conflicts fall back to a random port."))
 	body.WriteString("\n\n" + m.gatewayHostInput.View() + "\n\n" + m.gatewayPortInput.View() + "\n")
 	if m.status != "" {
 		body.WriteString("\n" + subtleStyle.Render(m.status) + "\n")
@@ -306,7 +306,7 @@ func (m model) viewGatewayKeys() string {
 	body.WriteString(titleStyle.Render("q · Gateway API keys"))
 	body.WriteString("\n")
 	m.writeWorkspacePath(&body)
-	body.WriteString(subtleStyle.Render("These keys authenticate standalone `q gateway`; q's supervised child uses its own temporary key."))
+	body.WriteString(subtleStyle.Render("These keys authenticate `q gateway start`; q's supervised child uses its own temporary key."))
 	body.WriteString("\n")
 	if m.generatedGatewayKey != "" {
 		body.WriteString(subtleStyle.Render("Copy this key now. It will not be shown again."))

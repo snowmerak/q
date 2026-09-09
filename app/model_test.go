@@ -1317,7 +1317,7 @@ func TestHelpCommandAndShortcutKeepCommandsOutOfChatFooter(t *testing.T) {
 	}
 	allHelp := ansi.Strip(renderHelpContent(m.dark))
 	for _, expected := range []string{
-		"/help", "/skills", "/mcp", "/loom", "/ignore", "CHANGES", "COMMAND COMPLETION", "SUBAGENTS AND QUESTIONS", "ctrl+g", "COMMAND LINE", "q commit", "q memory", "q gateway config",
+		"/help", "/skills", "/mcp", "/loom", "/ignore", "CHANGES", "COMMAND COMPLETION", "SUBAGENTS AND QUESTIONS", "ctrl+g", "COMMAND LINE", "q commit", "q memory", "q gateway start",
 		"q sprint <request...>", "q diagnose <issue...>", "q model", "q mcp", "q skills", "q ignore", "q help",
 	} {
 		if !strings.Contains(allHelp, expected) {

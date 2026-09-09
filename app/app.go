@@ -192,7 +192,7 @@ func RunGatewayConfigDefault(ctx context.Context) error {
 		return err
 	}
 	if err := RunGatewayConfig(ctx, store); err != nil {
-		return fmt.Errorf("q gateway config: %w", err)
+		return fmt.Errorf("q gateway: %w", err)
 	}
 	return nil
 }

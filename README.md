@@ -271,7 +271,7 @@ Provider setup supports:
 An ordinary q session supervises a managed Gateway child bound to an ephemeral
 loopback port. `/gateway` edits providers and starts a replacement before it
 activates new settings, so a failed replacement does not discard the running
-configuration. The standalone `q gateway` command is a separate,
+configuration. The standalone `q gateway start` command is a separate,
 user-addressable server with its own listener and API-key settings.
 
 `/model` assigns a model to the main chat and specialized roles such as
@@ -483,9 +483,10 @@ omits the chat-only `learn` tool.
 | `q sprint <request...>` | Run one autonomous plan through execution and review. All trailing argv values are joined as the request. |
 | `q diagnose <issue...>` | Run one autonomous read-only investigation and archive its diagnostic report. |
 | `q review [request...]` | Review current working-tree changes with the read-only Advisor and archive the report. |
-| `q gateway [--host <ip>] [--port <port>]` | Run the OpenAI-compatible Gateway. |
-| `q gateway config` | Configure its listener, API keys, and providers. |
-| `q library` / `q library config` | Run or configure the global Library. |
+| `q gateway` | Configure the Gateway listener, API keys, and providers. |
+| `q gateway start [--host <ip>] [--port <port>]` | Run the OpenAI-compatible Gateway. |
+| `q library` | Configure the global Library listener. |
+| `q library start` | Run the global Library as a dedicated foreground service. |
 | `q memory` | Keep Workspace Memory running independently of a TUI. |
 | `q commit` | Open the commit workflow in the current repository. |
 | `q model` | Configure model and role assignments. |

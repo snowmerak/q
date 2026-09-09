@@ -51,7 +51,7 @@ func TestLibraryCommandServesHealth(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
-	command := exec.CommandContext(ctx, binary, "library")
+	command := exec.CommandContext(ctx, binary, "library", "start")
 	command.Env = environmentWithHome(os.Environ(), home)
 	stdout, err := command.StdoutPipe()
 	if err != nil {

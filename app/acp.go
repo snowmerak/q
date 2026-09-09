@@ -165,7 +165,7 @@ func openACPHost(parent context.Context, store config.Store, root string) (*acpH
 		return fail(initialized.startupErr)
 	}
 	if initialized.client == nil {
-		return fail(errors.New("no model provider is configured; run `q gateway config` first"))
+		return fail(errors.New("no model provider is configured; run `q gateway` first"))
 	}
 
 	host.model = newManagedModel(runtimeContext, store, managedClientFactory(manager), manager)

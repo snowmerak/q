@@ -261,12 +261,12 @@ func RunModel(ctx context.Context, store config.Store) error {
 	}
 	if startupErr != nil {
 		if errors.Is(startupErr, providerhost.ErrNotFound) {
-			return errors.New("no Gateway providers configured; run `q gateway config`")
+			return errors.New("no Gateway providers configured; run `q gateway`")
 		}
 		return startupErr
 	}
 	if manager.Endpoint() == "" {
-		return errors.New("managed Gateway is not running; run `q gateway config`")
+		return errors.New("managed Gateway is not running; run `q gateway`")
 	}
 	if errors.Is(configErr, config.ErrNotFound) {
 		loaded = config.Default()

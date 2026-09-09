@@ -124,12 +124,10 @@ func runGatewayWithStore(
 
 func parseGatewayOptions(args []string, output io.Writer) (gatewayCommandOptions, error) {
 	options := gatewayCommandOptions{port: -1}
-	flags := flag.NewFlagSet("q gateway", flag.ContinueOnError)
+	flags := flag.NewFlagSet("q gateway start", flag.ContinueOnError)
 	flags.SetOutput(output)
 	flags.Usage = func() {
-		_, _ = fmt.Fprintln(output, "usage:")
-		_, _ = fmt.Fprintln(output, "  q gateway [--host <ip>] [--port <port>]")
-		_, _ = fmt.Fprintln(output, "  q gateway config")
+		_, _ = fmt.Fprintln(output, "usage: q gateway start [--host <ip>] [--port <port>]")
 		flags.PrintDefaults()
 	}
 	flags.StringVar(&options.host, "host", "", "override the configured listen IP address")
