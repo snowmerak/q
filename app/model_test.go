@@ -17,6 +17,7 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/snowmerak/llm-provider/gateway"
+	"github.com/snowmerak/q/agentinstructions"
 	"github.com/snowmerak/q/agentskills"
 	"github.com/snowmerak/q/client"
 	"github.com/snowmerak/q/commitagent"
@@ -230,6 +231,23 @@ func TestAppendRuntimeMessagesRequiresBoundaryRetrievalForSubstantiveWork(t *tes
 				t.Fatalf("%s prompt does not require %q:\n%s", name, required, prompt)
 			}
 		}
+	}
+}
+
+func TestAppendRuntimeMessagesLoadsWorkspaceRootAGENTS(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "AGENTS.md"), []byte("Run the focused tests."), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	m := newModel(context.Background(), config.Store{Dir: t.TempDir()}, nil)
+	workspaceStore := workspace.Store{Root: root}
+	m.workspaceStore = &workspaceStore
+
+	m.appendRuntimeMessages()
+
+	if len(m.messages) != 1 || !agentinstructions.IsMessage(m.messages[0]) ||
+		m.messages[0].Role != client.RoleDeveloper || !strings.Contains(m.messages[0].Content, "Run the focused tests.") {
+		t.Fatalf("runtime messages = %#v", m.messages)
 	}
 }
 

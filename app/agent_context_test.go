@@ -3,11 +3,14 @@ package app
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
 
 	"github.com/snowmerak/q/client"
+	"github.com/snowmerak/q/config"
 	"github.com/snowmerak/q/memory"
 	qtools "github.com/snowmerak/q/tools"
 )
@@ -61,6 +64,87 @@ type largeResultRuntime struct {
 	content string
 }
 
+type instructionLoopClient struct {
+	requests []client.ChatRequest
+}
+
+func (c *instructionLoopClient) Chat(_ context.Context, request client.ChatRequest) (*client.ChatResponse, error) {
+	request.Messages = append([]client.Message(nil), request.Messages...)
+	c.requests = append(c.requests, request)
+	if len(c.requests) <= 2 {
+		return &client.ChatResponse{Choices: []client.Choice{{Message: client.Message{
+			Role: client.RoleAssistant,
+			ToolCalls: []client.ToolCall{{
+				ID: "nested-write", Type: client.ToolTypeFunction,
+				Function: client.FunctionCall{Name: "write_file", Arguments: `{"path":"app/model.go","content":"updated"}`},
+			}},
+		}}}}, nil
+	}
+	return &client.ChatResponse{Choices: []client.Choice{{Message: client.Message{
+		Role: client.RoleAssistant, Content: "done",
+	}}}}, nil
+}
+
+func (*instructionLoopClient) ListModels(context.Context) ([]client.Model, error) { return nil, nil }
+func (*instructionLoopClient) Close() error                                       { return nil }
+
+type instructionRuntime struct {
+	calls []client.ToolCall
+}
+
+func (r *instructionRuntime) Tools() []client.Tool {
+	return []client.Tool{{Type: client.ToolTypeFunction, Function: client.FunctionDefinition{
+		Name: "write_file", Parameters: map[string]any{"type": "object"},
+	}}}
+}
+
+func (*instructionRuntime) Environment() qtools.HostEnvironment {
+	return qtools.HostEnvironment{OS: "test", Architecture: "test", Shell: "test"}
+}
+
+func (r *instructionRuntime) Call(_ context.Context, call client.ToolCall) (client.ToolResult, error) {
+	r.calls = append(r.calls, call)
+	return client.ToolResult{Content: `{"updated":true}`}, nil
+}
+
+func TestStreamAgentLoopLoadsNestedInstructionsBeforeToolExecution(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "app"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "app", "AGENTS.md"), []byte("Never edit generated files."), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	configuredClient := &instructionLoopClient{}
+	runtime := &instructionRuntime{}
+	events := make(chan agentEvent)
+	go streamAgentLoop(
+		t.Context(), configuredClient, runtime, "test-model", "low",
+		[]client.Message{{Role: client.RoleUser, Content: "update app/model.go"}}, "", root, nil, false, true,
+		memoryPolicy(config.Default()), events,
+	)
+	var toolErrors int
+	for event := range events {
+		if event.err != nil {
+			t.Fatal(event.err)
+		}
+		if event.toolIsError {
+			toolErrors++
+		}
+	}
+	if len(configuredClient.requests) != 3 || len(runtime.calls) != 1 || toolErrors != 1 {
+		t.Fatalf("requests=%d runtime calls=%d tool errors=%d", len(configuredClient.requests), len(runtime.calls), toolErrors)
+	}
+	firstContent := joinedMessageContent(configuredClient.requests[0].Messages)
+	secondContent := joinedMessageContent(configuredClient.requests[1].Messages)
+	if strings.Contains(firstContent, "Never edit generated files.") || !strings.Contains(secondContent, "Never edit generated files.") {
+		t.Fatalf("first=%q\nsecond=%q", firstContent, secondContent)
+	}
+	if configuredClient.requests[1].Messages[0].Role != client.RoleSystem {
+		t.Fatalf("nested instruction was not moved to the leading block: %#v", configuredClient.requests[1].Messages)
+	}
+}
+
 func (r largeResultRuntime) Tools() []client.Tool {
 	return []client.Tool{{
 		Type: client.ToolTypeFunction,
@@ -89,7 +173,7 @@ func TestStreamAgentLoopCompactsBetweenToolRounds(t *testing.T) {
 			{Role: client.RoleSystem, Content: "keep this system contract exactly"},
 			{Role: client.RoleUser, Content: "read the large result"},
 		},
-		"initial-conversation", nil, false, false,
+		"initial-conversation", "", nil, false, false,
 		memory.Policy{ContextWindow: 16_000, TriggerRatio: .85, TargetRatio: .22, RecentRatio: .07},
 		events,
 	)
@@ -169,7 +253,7 @@ func TestStreamAgentLoopCompactionFailureStopsBeforeNextRound(t *testing.T) {
 	go streamAgentLoop(
 		t.Context(), configuredClient, largeResultRuntime{content: strings.Repeat("large result ", 5_000)},
 		"test-model", "low", []client.Message{{Role: client.RoleUser, Content: "read"}},
-		"initial-conversation", nil, false, false,
+		"initial-conversation", "", nil, false, false,
 		memory.Policy{ContextWindow: 16_000, TriggerRatio: .85, TargetRatio: .22, RecentRatio: .07},
 		events,
 	)

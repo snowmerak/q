@@ -19,6 +19,7 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/snowmerak/llm-provider/gateway"
+	"github.com/snowmerak/q/agentinstructions"
 	"github.com/snowmerak/q/archiveembed"
 	"github.com/snowmerak/q/client"
 	"github.com/snowmerak/q/config"
@@ -3665,8 +3666,8 @@ func (m *model) sendChatRequest() tea.Cmd {
 	if toolRuntime == nil && !streamEnabled {
 		return func() tea.Msg {
 			response, err := chatWithConversationRecovery(turnContext, configuredClient, client.ChatRequest{
-				Model: modelID, Messages: providerMessages(history, coalesceInstructions), ConversationID: conversationID,
-				ReasoningEffort: reasoningEffort,
+				Model: modelID, Messages: providerMessages(agentinstructions.Normalize(history), coalesceInstructions), ConversationID: conversationID,
+				ReasoningEffort: reasoningEffort, WorkingDirectory: workingDirectory,
 			})
 			return chatResultMsg{turnID: turnID, response: response, requestEstimate: m.requestEstimate, err: err}
 		}
@@ -3674,11 +3675,11 @@ func (m *model) sendChatRequest() tea.Cmd {
 	events := make(chan agentEvent)
 	return func() tea.Msg {
 		if toolRuntime == nil && streamEnabled {
-			go streamSingleChat(turnContext, configuredClient, modelID, reasoningEffort, history, conversationID, coalesceInstructions, m.requestEstimate, events)
+			go streamSingleChat(turnContext, configuredClient, modelID, reasoningEffort, history, conversationID, workingDirectory, coalesceInstructions, m.requestEstimate, events)
 		} else {
 			go streamAgentLoop(
 				turnContext, configuredClient, toolRuntime, modelID, reasoningEffort, history, conversationID,
-				activeTask, streamEnabled, coalesceInstructions, memoryPolicy(m.activeConfig()), events,
+				workingDirectory, activeTask, streamEnabled, coalesceInstructions, memoryPolicy(m.activeConfig()), events,
 			)
 		}
 		return waitAgentEvent(events, turnID)()
@@ -3691,14 +3692,15 @@ func streamSingleChat(
 	modelID, reasoningEffort string,
 	history []client.Message,
 	conversationID string,
+	workingDirectory string,
 	coalesceInstructions bool,
 	requestEstimate int,
 	events chan<- agentEvent,
 ) {
 	defer close(events)
 	response, err := streamChatWithConversationRecovery(ctx, configuredClient, client.ChatRequest{
-		Model: modelID, Messages: providerMessages(history, coalesceInstructions), ConversationID: conversationID,
-		ReasoningEffort: reasoningEffort,
+		Model: modelID, Messages: providerMessages(agentinstructions.Normalize(history), coalesceInstructions), ConversationID: conversationID,
+		ReasoningEffort: reasoningEffort, WorkingDirectory: workingDirectory,
 	}, func(delta chatStreamDelta) bool {
 		return emitAgentEvent(ctx, events, agentEvent{streamDelta: &delta})
 	})
@@ -3712,6 +3714,7 @@ func streamAgentLoop(
 	modelID, reasoningEffort string,
 	history []client.Message,
 	conversationID string,
+	workingDirectory string,
 	activeTask *workspace.ActiveTask,
 	streamEnabled bool,
 	coalesceInstructions bool,
@@ -3750,8 +3753,8 @@ func streamAgentLoop(
 		}
 		requestEstimate := memory.CountMessages(roundHistory)
 		request := client.ChatRequest{
-			Model: modelID, Messages: providerMessages(roundHistory, coalesceInstructions), ConversationID: conversationID, Tools: availableTools,
-			ReasoningEffort: reasoningEffort,
+			Model: modelID, Messages: providerMessages(agentinstructions.Normalize(roundHistory), coalesceInstructions), ConversationID: conversationID, Tools: availableTools,
+			ReasoningEffort: reasoningEffort, WorkingDirectory: workingDirectory,
 		}
 		var response *client.ChatResponse
 		err = nil
@@ -3801,6 +3804,38 @@ func streamAgentLoop(
 			if assistant.ToolCalls[index].ID == "" {
 				assistant.ToolCalls[index].ID = fmt.Sprintf("q-call-%d-%d", round+1, index+1)
 			}
+		}
+		instructionLoader := agentinstructions.New(workingDirectory, loopContext.Messages())
+		newInstructions := instructionLoader.ForToolCalls(assistant.ToolCalls)
+		if len(newInstructions) > 0 {
+			appendHistory(newInstructions...)
+			for index := range newInstructions {
+				message := newInstructions[index]
+				if !emitAgentEvent(ctx, events, agentEvent{message: &message}) {
+					return
+				}
+			}
+			appendHistory(assistant)
+			if !emitAgentEvent(ctx, events, agentEvent{message: &assistant}) {
+				return
+			}
+			sources := strings.Join(agentinstructions.Sources(newInstructions), ", ")
+			for _, call := range assistant.ToolCalls {
+				callCopy := call
+				if !emitAgentEvent(ctx, events, agentEvent{call: &callCopy}) {
+					return
+				}
+				message := orchestrationToolResult(
+					call,
+					"workspace instructions were loaded from "+sources+"; review them and retry any still-appropriate tool call",
+					true,
+				)
+				appendHistory(message)
+				if !emitAgentEvent(ctx, events, agentEvent{message: &message, toolIsError: true}) {
+					return
+				}
+			}
+			continue
 		}
 		appendHistory(assistant)
 		if !emitAgentEvent(ctx, events, agentEvent{message: &assistant}) {
@@ -3915,7 +3950,7 @@ func streamAgentLoop(
 				request.ConversationID = conversationID
 				finished, finishErr := client.FinishToolTurn(ctx, request, func(ctx context.Context, request client.ChatRequest) (*client.ChatResponse, error) {
 					requestEstimate = memory.CountMessages(request.Messages)
-					request.Messages = providerMessages(request.Messages, coalesceInstructions)
+					request.Messages = providerMessages(agentinstructions.Normalize(request.Messages), coalesceInstructions)
 					if streamEnabled {
 						return streamChatWithConversationRecovery(ctx, configuredClient, request, func(chatStreamDelta) bool { return true })
 					}
@@ -4138,6 +4173,10 @@ func (m *model) enterChat(value config.Config, configuredClient chatClient) {
 }
 
 func (m *model) appendRuntimeMessages() {
+	if m.workspaceStore != nil {
+		loader := agentinstructions.New(m.workspaceStore.Root, m.messages)
+		m.messages = append(m.messages, loader.Root()...)
+	}
 	if m.toolRuntime != nil && m.workspaceStore != nil {
 		environment := m.toolRuntime.Environment()
 		workspacePrompt := fmt.Sprintf(

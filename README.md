@@ -415,6 +415,15 @@ discovered, in increasing precedence, from:
 workspace skills. See [Agent Skills](docs/agent-skills.md) for validation,
 shadowing, indexing, and tool access rules.
 
+### Workspace instructions
+
+q automatically loads a workspace-root `AGENTS.md` as a bounded developer
+instruction. Structured tool paths activate nested `AGENTS.md` files from the
+root toward the target; the primary agent pauses the first affected tool batch
+so it can review newly loaded rules before retrying. See [Workspace
+instructions](docs/workspace-instructions.md) for precedence, subagent behavior,
+path detection, and safety limits.
+
 ### Language servers
 
 `/lsp` or `q lsp` configures global language-server profiles and workspace
@@ -541,6 +550,7 @@ restricted by q; Windows file modes do not manage ACLs.
 | `.q/data/` and `.q/index/` | Durable history records and derived indexes. |
 | `.q/loom/` | Content-addressed tool artifacts and GC metadata. |
 | `.q/skills/` | q-managed workspace Agent Skills. |
+| `AGENTS.md` | Automatically loaded repository instructions; nested files scope descendants. |
 | `.qignore` | Discovery exclusions. |
 
 The JSON records are the source of truth; Bleve and HNSW data are derived and
@@ -595,4 +605,5 @@ publishing the fork.
 - [Workspace Memory](docs/workspace-memory.md)
 - [Global Library](docs/library.md)
 - [Agent Skills](docs/agent-skills.md)
+- [Workspace instructions](docs/workspace-instructions.md)
 - [LSP integration](docs/lsp.md)

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"slices"
 
+	"github.com/snowmerak/q/agentinstructions"
 	"github.com/snowmerak/q/client"
 	"github.com/snowmerak/q/config"
 )
@@ -152,6 +153,7 @@ func (s *Spec) Chat(ctx context.Context, configured client.ModelChatClient, requ
 	if request.ConversationID == "" {
 		request.ConversationID = s.conversationID
 	}
+	request.Messages = agentinstructions.Prepare(request.Messages, request.WorkingDirectory)
 	if s.Group == "" {
 		s.Apply(&request)
 		response, err := configured.Chat(ctx, request)

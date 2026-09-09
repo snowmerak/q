@@ -1500,6 +1500,7 @@ func (a *acpAgent) runAgentTurn(ctx context.Context, history []client.Message) (
 		a.state.activeConfig().Provider.EffectiveReasoningEffort(),
 		history,
 		a.state.conversationID,
+		a.root,
 		a.state.activeTask,
 		a.state.streamsActiveChat(),
 		modelNeedsSystemInstructionCoalescing(

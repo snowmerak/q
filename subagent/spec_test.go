@@ -3,6 +3,8 @@ package subagent
 import (
 	"context"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -58,6 +60,27 @@ func TestSpecChatReusesConversationIDWithinExecution(t *testing.T) {
 	if len(configured.requests) != 2 || configured.requests[0].ConversationID != "" ||
 		configured.requests[1].ConversationID != "cache_subagent" {
 		t.Fatalf("requests = %#v", configured.requests)
+	}
+}
+
+func TestSpecChatLoadsWorkspaceInstructions(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "AGENTS.md"), []byte("Keep generated clients unchanged."), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	configured := &conversationChatClient{}
+	spec := Spec{Role: config.AgentRoleScout, Model: "scout-model"}
+	_, err := spec.Chat(t.Context(), configured, client.ChatRequest{
+		Messages:         []client.Message{{Role: client.RoleUser, Content: "inspect the repository"}},
+		WorkingDirectory: root,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(configured.requests) != 1 || len(configured.requests[0].Messages) != 2 ||
+		configured.requests[0].Messages[0].Role != client.RoleDeveloper ||
+		!strings.Contains(configured.requests[0].Messages[0].Content, "Keep generated clients unchanged.") {
+		t.Fatalf("request = %#v", configured.requests)
 	}
 }
 

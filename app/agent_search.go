@@ -93,16 +93,21 @@ func (m model) startAgentSearch(query string) (tea.Model, tea.Cmd) {
 func (m *model) sendAgentSearch(toolRuntime agentToolRuntime, query string) tea.Cmd {
 	turnContext := m.activeTurnContext()
 	turnID := m.turnID
+	workingDirectory := ""
+	if m.workspaceStore != nil {
+		workingDirectory = m.workspaceStore.Root
+	}
 	parent := agentSearchParent{
-		client:          m.client,
-		tools:           toolRuntime,
-		model:           m.activeModel(),
-		reasoningEffort: m.activeConfig().Provider.EffectiveReasoningEffort(),
-		history:         m.memory.Messages(),
-		conversationID:  m.conversationID,
-		activeTask:      cloneActiveTask(m.activeTask),
-		streamEnabled:   m.streamsActiveChat(),
-		contextPolicy:   memoryPolicy(m.activeConfig()),
+		client:           m.client,
+		tools:            toolRuntime,
+		model:            m.activeModel(),
+		reasoningEffort:  m.activeConfig().Provider.EffectiveReasoningEffort(),
+		history:          m.memory.Messages(),
+		conversationID:   m.conversationID,
+		workingDirectory: workingDirectory,
+		activeTask:       cloneActiveTask(m.activeTask),
+		streamEnabled:    m.streamsActiveChat(),
+		contextPolicy:    memoryPolicy(m.activeConfig()),
 		coalesceInstructions: modelNeedsSystemInstructionCoalescing(
 			m.gatewayConfig, m.activeConfig().ModelGroups, m.activeModel(), nil,
 		),
@@ -121,6 +126,7 @@ type agentSearchParent struct {
 	reasoningEffort      string
 	history              []client.Message
 	conversationID       string
+	workingDirectory     string
 	activeTask           *workspace.ActiveTask
 	streamEnabled        bool
 	coalesceInstructions bool
@@ -194,13 +200,13 @@ func streamAgentSearch(
 	if parent.tools == nil {
 		streamSingleChat(
 			ctx, parent.client, parent.model, parent.reasoningEffort, history, parent.conversationID,
-			parent.coalesceInstructions, memory.CountMessages(history), events,
+			parent.workingDirectory, parent.coalesceInstructions, memory.CountMessages(history), events,
 		)
 		return
 	}
 	streamAgentLoop(
 		ctx, parent.client, parent.tools, parent.model, parent.reasoningEffort, history, parent.conversationID,
-		parent.activeTask, parent.streamEnabled, parent.coalesceInstructions, parent.contextPolicy, events,
+		parent.workingDirectory, parent.activeTask, parent.streamEnabled, parent.coalesceInstructions, parent.contextPolicy, events,
 	)
 }
 

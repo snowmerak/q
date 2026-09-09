@@ -192,7 +192,7 @@ func TestTaskCompletionRejectsExtraToolsAndPropagatesDeliveryFailure(t *testing.
 			events := make(chan agentEvent)
 			go streamAgentLoop(
 				t.Context(), p, runtime, "test/model", "", []client.Message{{Role: client.RoleUser, Content: "Inspect"}},
-				"", nil, true, false, memoryPolicy(config.Default()), events,
+				"", "", nil, true, false, memoryPolicy(config.Default()), events,
 			)
 			var final *client.ChatResponse
 			var receivedErr error
