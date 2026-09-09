@@ -169,7 +169,11 @@ func (a *acpAgent) beginACPPendingQuestionInput(
 	if err := a.state.saveWorkspaceSession(); err != nil {
 		return err
 	}
-	return a.emitSessionInfoContext(ctx, false)
+	if err := a.emitSessionInfoContext(ctx, false); err != nil {
+		return err
+	}
+	a.publishUsageUpdate()
+	return nil
 }
 
 func (a *acpAgent) finishACPPendingQuestionPrompt(
@@ -196,6 +200,7 @@ func (a *acpAgent) finishACPPendingQuestionPrompt(
 	if err := a.emitSessionInfoContext(ctx, false); err != nil {
 		return acp.PromptResponse{}, err
 	}
+	a.publishUsageUpdate()
 	if err := a.state.flushArchive(); err != nil && a.logger != nil {
 		a.logger.Error("flush ACP pending question", "error", err)
 	}

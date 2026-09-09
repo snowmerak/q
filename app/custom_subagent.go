@@ -199,6 +199,7 @@ func (a *acpAgent) runACPCustom(ctx context.Context, command string) (acp.Prompt
 	if err = a.emitSessionInfoContext(ctx, changed); err != nil {
 		return acp.PromptResponse{}, err
 	}
+	a.publishUsageUpdate()
 	if err = a.emitTaskPlanContext(ctx, input, acp.PlanEntryStatusInProgress); err != nil {
 		return acp.PromptResponse{}, err
 	}

@@ -262,6 +262,7 @@ type acpAgent struct {
 	pendingCommit       *acpPendingCommit
 	pendingQuestion     *acpPendingQuestion
 	promptLocked        func()
+	usagePublisher      *acpUsagePublisher
 }
 
 var (
@@ -1197,9 +1198,10 @@ func (a *acpAgent) prompt(ctx context.Context, request acp.PromptRequest) (acp.P
 
 	a.promptMu.Lock()
 	defer a.promptMu.Unlock()
-	// Keep promptMu held while the deferred update snapshots this session so a
-	// following prompt cannot publish an older usage value after a newer one.
-	defer a.emitUsageUpdateBestEffort()
+	// Keep promptMu held while the publisher flushes this session so a following
+	// prompt cannot publish an older usage value after a newer one.
+	a.startUsageUpdates()
+	defer a.finishUsageUpdates()
 	if a.promptLocked != nil {
 		a.promptLocked()
 	}
@@ -1465,6 +1467,7 @@ func (a *acpAgent) runPrompt(ctx context.Context, userMessage client.Message) (a
 	if err := a.emitSessionInfo(titleChanged); err != nil {
 		return acp.PromptResponse{}, err
 	}
+	a.publishUsageUpdate()
 
 	if err := a.compactIfNeeded(ctx); err != nil {
 		a.state.archiveFailure("ACP context compaction failed", err)
@@ -1538,6 +1541,7 @@ func (a *acpAgent) continueACPAgentTurn(
 			if err := a.state.saveWorkspaceSession(); err != nil {
 				return acp.PromptResponse{}, err
 			}
+			a.publishUsageUpdate()
 		}
 		if event.taskStarted != nil {
 			a.state.activeTask = event.taskStarted
@@ -1639,6 +1643,7 @@ func (a *acpAgent) continueACPAgentTurn(
 			if err := a.state.saveWorkspaceSession(); err != nil {
 				return acp.PromptResponse{}, err
 			}
+			a.publishUsageUpdate()
 		}
 		if event.err != nil {
 			if errors.Is(event.err, context.Canceled) || errors.Is(ctx.Err(), context.Canceled) ||
@@ -1706,6 +1711,7 @@ func (a *acpAgent) finishPrompt(response client.ChatResponse, requestEstimate in
 	if err := a.emitSessionInfo(false); err != nil {
 		return acp.PromptResponse{}, err
 	}
+	a.publishUsageUpdate()
 	if err := a.state.flushArchive(); err != nil {
 		if a.logger != nil {
 			a.logger.Error("flush ACP session archive", "error", err)
@@ -1741,7 +1747,11 @@ func (a *acpAgent) compactIfNeeded(ctx context.Context) error {
 	}
 	a.state.conversationID = ""
 	a.state.archiveSummary(summary)
-	return a.state.saveWorkspaceSession()
+	if err := a.state.saveWorkspaceSession(); err != nil {
+		return err
+	}
+	a.publishUsageUpdate()
+	return nil
 }
 
 func (a *acpAgent) emitMissingAssistantText(content string, streamed *string) error {
@@ -2089,9 +2099,13 @@ func (a *acpAgent) clearACPConversation(ctx context.Context) error {
 	}
 	emptyTitle := ""
 	updatedAt := a.state.sessionUpdatedAt.Format(time.RFC3339Nano)
-	return a.updateContext(ctx, acp.SessionUpdate{SessionInfoUpdate: &acp.SessionSessionInfoUpdate{
+	if err := a.updateContext(ctx, acp.SessionUpdate{SessionInfoUpdate: &acp.SessionSessionInfoUpdate{
 		Title: &emptyTitle, UpdatedAt: &updatedAt,
-	}})
+	}}); err != nil {
+		return err
+	}
+	a.publishUsageUpdate()
+	return nil
 }
 
 func (a *acpAgent) runACPPlan(ctx context.Context, objective string) (acp.PromptResponse, error) {
@@ -2119,6 +2133,7 @@ func (a *acpAgent) runACPPlan(ctx context.Context, objective string) (acp.Prompt
 	if err := a.emitSessionInfoContext(ctx, titleChanged); err != nil {
 		return acp.PromptResponse{}, err
 	}
+	a.publishUsageUpdate()
 	if err := a.emitTaskPlanContext(ctx, objective, acp.PlanEntryStatusInProgress); err != nil {
 		return acp.PromptResponse{}, err
 	}
@@ -2176,6 +2191,7 @@ func (a *acpAgent) runACPDebug(ctx context.Context, issue string) (acp.PromptRes
 	if err := a.emitSessionInfoContext(ctx, titleChanged); err != nil {
 		return acp.PromptResponse{}, err
 	}
+	a.publishUsageUpdate()
 	if err := a.emitTaskPlanContext(ctx, issue, acp.PlanEntryStatusInProgress); err != nil {
 		return acp.PromptResponse{}, err
 	}
@@ -2230,6 +2246,7 @@ func (a *acpAgent) runACPReview(ctx context.Context, requestText string) (acp.Pr
 	if err := a.emitSessionInfoContext(ctx, titleChanged); err != nil {
 		return acp.PromptResponse{}, err
 	}
+	a.publishUsageUpdate()
 	if err := a.emitTaskPlanContext(ctx, requestText, acp.PlanEntryStatusInProgress); err != nil {
 		return acp.PromptResponse{}, err
 	}

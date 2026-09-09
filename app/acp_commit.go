@@ -207,7 +207,11 @@ func (a *acpAgent) beginACPCommitInputTurn(message client.Message) error {
 	if err := a.state.saveWorkspaceSession(); err != nil {
 		return err
 	}
-	return a.emitSessionInfo(false)
+	if err := a.emitSessionInfo(false); err != nil {
+		return err
+	}
+	a.publishUsageUpdate()
+	return nil
 }
 
 func (a *acpAgent) closePendingACPCommit() error {
@@ -239,7 +243,11 @@ func (a *acpAgent) beginACPCommitTurn() error {
 	if err := a.state.saveWorkspaceSession(); err != nil {
 		return err
 	}
-	return a.emitSessionInfo(titleChanged)
+	if err := a.emitSessionInfo(titleChanged); err != nil {
+		return err
+	}
+	a.publishUsageUpdate()
+	return nil
 }
 
 func (a *acpAgent) finishACPCommit(content string) (acp.PromptResponse, error) {

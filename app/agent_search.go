@@ -276,6 +276,7 @@ func (a *acpAgent) runACPAgentSearch(ctx context.Context, query string) (acp.Pro
 	if err := a.emitSessionInfo(titleChanged); err != nil {
 		return acp.PromptResponse{}, err
 	}
+	a.publishUsageUpdate()
 	if err := a.updateContext(ctx, acp.UpdateAgentThoughtText("Search agent started.\n")); err != nil {
 		return acp.PromptResponse{}, err
 	}
@@ -299,6 +300,7 @@ func (a *acpAgent) runACPAgentSearch(ctx context.Context, query string) (acp.Pro
 	if err := a.startToolCallContext(ctx, call); err != nil {
 		return acp.PromptResponse{}, err
 	}
+	a.publishUsageUpdate()
 	result, err := toolRuntime.Call(ctx, call)
 	if err != nil {
 		a.state.archiveFailure("ACP agent search failed", err)
@@ -321,6 +323,7 @@ func (a *acpAgent) runACPAgentSearch(ctx context.Context, query string) (acp.Pro
 	if err := a.finishToolCallContext(ctx, toolMessage, result.IsError); err != nil {
 		return acp.PromptResponse{}, err
 	}
+	a.publishUsageUpdate()
 	if err := a.updateContext(ctx, acp.UpdateAgentThoughtText("Search evidence received. Main agent is preparing the answer.\n")); err != nil {
 		return acp.PromptResponse{}, err
 	}
