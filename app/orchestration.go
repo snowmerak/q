@@ -11,10 +11,11 @@ import (
 )
 
 const (
-	askToUserToolName    = "ask_to_user"
-	taskStartToolName    = "task_start"
-	taskCompleteToolName = "task_complete"
-	customAnswerLabel    = "Write a custom answer"
+	askToUserToolName       = "ask_to_user"
+	taskStartToolName       = "task_start"
+	taskCompleteToolName    = "task_complete"
+	customAnswerLabel       = "Write a custom answer"
+	maximumAskToUserChoices = 9
 )
 
 type taskStartInput struct {
@@ -84,7 +85,7 @@ func orchestrationTools() []client.Tool {
 						"question": map[string]any{"type": "string"},
 						"context":  map[string]any{"type": "string"},
 						"choices": map[string]any{
-							"type": "array", "maxItems": 3,
+							"type": "array", "maxItems": maximumAskToUserChoices,
 							"items": map[string]any{
 								"type": "object",
 								"properties": map[string]any{
@@ -154,8 +155,8 @@ func parseAskToUser(arguments string) (askToUserInput, error) {
 	if input.Question == "" {
 		return askToUserInput{}, errors.New("question is required")
 	}
-	if len(input.Choices) > 3 {
-		return askToUserInput{}, errors.New("choices must contain at most 3 items")
+	if len(input.Choices) > maximumAskToUserChoices {
+		return askToUserInput{}, fmt.Errorf("choices must contain at most %d items", maximumAskToUserChoices)
 	}
 	seen := make(map[string]struct{}, len(input.Choices))
 	for index := range input.Choices {

@@ -15,12 +15,13 @@ import (
 )
 
 const (
-	AskToUserToolName     = "ask_to_user"
-	DelegateScoutToolName = "delegate_scout"
-	SubmitBriefToolName   = "submit_brief"
-	SubmitPlanToolName    = "submit_plan"
-	defaultPlanningRounds = 320
-	defaultPlanningCycles = 60
+	AskToUserToolName       = "ask_to_user"
+	DelegateScoutToolName   = "delegate_scout"
+	SubmitBriefToolName     = "submit_brief"
+	SubmitPlanToolName      = "submit_plan"
+	defaultPlanningRounds   = 320
+	defaultPlanningCycles   = 60
+	maximumAskToUserChoices = 9
 
 	UserAnswerSourceUser        = "user"
 	UserAnswerSourceAutoResolve = "auto-resolve"
@@ -717,7 +718,7 @@ func askUserTool() client.Tool {
 		Parameters: map[string]any{
 			"type": "object", "properties": map[string]any{
 				"question": map[string]any{"type": "string"}, "context": map[string]any{"type": "string"},
-				"choices": map[string]any{"type": "array", "maxItems": 3, "items": map[string]any{
+				"choices": map[string]any{"type": "array", "maxItems": maximumAskToUserChoices, "items": map[string]any{
 					"type": "object", "properties": map[string]any{
 						"id": map[string]any{"type": "string"}, "label": map[string]any{"type": "string"},
 						"description": map[string]any{"type": "string"},
@@ -767,8 +768,8 @@ func parseUserQuestion(arguments string) (UserQuestion, error) {
 	if value.Question == "" {
 		return UserQuestion{}, errors.New("ask_to_user question is required")
 	}
-	if len(value.Choices) > 3 {
-		return UserQuestion{}, errors.New("ask_to_user accepts at most 3 choices")
+	if len(value.Choices) > maximumAskToUserChoices {
+		return UserQuestion{}, fmt.Errorf("ask_to_user accepts at most %d choices", maximumAskToUserChoices)
 	}
 	seen := make(map[string]struct{}, len(value.Choices))
 	for index := range value.Choices {

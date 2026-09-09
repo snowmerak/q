@@ -168,6 +168,37 @@ func TestGrillerQuestionChoicesAreNonExhaustive(t *testing.T) {
 	}
 }
 
+func TestGrillerAcceptsAtMostNineQuestionChoices(t *testing.T) {
+	properties := askUserTool().Function.Parameters["properties"].(map[string]any)
+	choiceSchema := properties["choices"].(map[string]any)
+	if got := choiceSchema["maxItems"]; got != maximumAskToUserChoices {
+		t.Fatalf("ask_to_user maxItems = %v; want %d", got, maximumAskToUserChoices)
+	}
+
+	choices := make([]UserChoice, maximumAskToUserChoices)
+	for index := range choices {
+		id := string(rune('a' + index))
+		choices[index] = UserChoice{ID: id, Label: "Choice " + id}
+	}
+	arguments, err := json.Marshal(UserQuestion{Question: "Choose", Choices: choices})
+	if err != nil {
+		t.Fatal(err)
+	}
+	question, err := parseUserQuestion(string(arguments))
+	if err != nil || len(question.Choices) != maximumAskToUserChoices {
+		t.Fatalf("nine choices = %#v, err = %v", question.Choices, err)
+	}
+
+	choices = append(choices, UserChoice{ID: "j", Label: "Choice j"})
+	arguments, err = json.Marshal(UserQuestion{Question: "Choose", Choices: choices})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := parseUserQuestion(string(arguments)); err == nil || !strings.Contains(err.Error(), "at most 9") {
+		t.Fatalf("ten choices error = %v", err)
+	}
+}
+
 func TestAutoResolveGrillerInstructionsRequireConcreteDecision(t *testing.T) {
 	prompt := grillerInstructionsFor(true)
 	for _, expected := range []string{

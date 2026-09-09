@@ -1,6 +1,7 @@
 package app
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 )
@@ -49,6 +50,37 @@ func TestAskToUserArgumentsAndChoiceAnswer(t *testing.T) {
 	}
 	if _, err := parseAskToUser(`{"question":"","unexpected":true}`); err == nil {
 		t.Fatal("invalid ask_to_user arguments were accepted")
+	}
+}
+
+func TestAskToUserAcceptsAtMostNineChoices(t *testing.T) {
+	properties := orchestrationTools()[1].Function.Parameters["properties"].(map[string]any)
+	choiceSchema := properties["choices"].(map[string]any)
+	if got := choiceSchema["maxItems"]; got != maximumAskToUserChoices {
+		t.Fatalf("ask_to_user maxItems = %v; want %d", got, maximumAskToUserChoices)
+	}
+
+	choices := make([]askToUserChoice, maximumAskToUserChoices)
+	for index := range choices {
+		id := string(rune('a' + index))
+		choices[index] = askToUserChoice{ID: id, Label: "Choice " + id}
+	}
+	arguments, err := json.Marshal(askToUserInput{Question: "Choose", Choices: choices})
+	if err != nil {
+		t.Fatal(err)
+	}
+	input, err := parseAskToUser(string(arguments))
+	if err != nil || len(input.Choices) != maximumAskToUserChoices {
+		t.Fatalf("nine choices = %#v, err = %v", input.Choices, err)
+	}
+
+	choices = append(choices, askToUserChoice{ID: "j", Label: "Choice j"})
+	arguments, err = json.Marshal(askToUserInput{Question: "Choose", Choices: choices})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := parseAskToUser(string(arguments)); err == nil || !strings.Contains(err.Error(), "at most 9") {
+		t.Fatalf("ten choices error = %v", err)
 	}
 }
 
