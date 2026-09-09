@@ -172,7 +172,8 @@ func TestDefaultAgentCanCallCapturedExternalSearch(t *testing.T) {
 	events := make(chan agentEvent, 8)
 	streamAgentLoop(
 		t.Context(), configuredClient, toolRuntime, "main-model", "high",
-		[]client.Message{{Role: client.RoleUser, Content: "What changed?"}}, "", nil, false, false, events,
+		[]client.Message{{Role: client.RoleUser, Content: "What changed?"}}, "", nil, false, false,
+		memoryPolicy(config.Default()), events,
 	)
 	var response string
 	for event := range events {

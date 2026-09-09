@@ -102,6 +102,7 @@ func (m *model) sendAgentSearch(toolRuntime agentToolRuntime, query string) tea.
 		conversationID:  m.conversationID,
 		activeTask:      cloneActiveTask(m.activeTask),
 		streamEnabled:   m.streamsActiveChat(),
+		contextPolicy:   memoryPolicy(m.activeConfig()),
 		coalesceInstructions: modelNeedsSystemInstructionCoalescing(
 			m.gatewayConfig, m.activeConfig().ModelGroups, m.activeModel(), nil,
 		),
@@ -123,6 +124,7 @@ type agentSearchParent struct {
 	activeTask           *workspace.ActiveTask
 	streamEnabled        bool
 	coalesceInstructions bool
+	contextPolicy        memory.Policy
 }
 
 func streamAgentSearch(
@@ -198,7 +200,7 @@ func streamAgentSearch(
 	}
 	streamAgentLoop(
 		ctx, parent.client, parent.tools, parent.model, parent.reasoningEffort, history, parent.conversationID,
-		parent.activeTask, parent.streamEnabled, parent.coalesceInstructions, events,
+		parent.activeTask, parent.streamEnabled, parent.coalesceInstructions, parent.contextPolicy, events,
 	)
 }
 

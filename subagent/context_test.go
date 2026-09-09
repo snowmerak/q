@@ -159,7 +159,7 @@ func TestContextCompactorUsesRoleLimitAndConfiguredPolicy(t *testing.T) {
 		t.Fatalf("policy = %#v", policy)
 	}
 	spec.ContextPolicy = config.ContextConfig{}
-	if got := spec.memoryPolicy().TriggerRatio; got != .80 {
+	if got := spec.memoryPolicy().TriggerRatio; got != .85 {
 		t.Fatalf("internal default trigger = %v", got)
 	}
 }
@@ -169,7 +169,7 @@ func TestContextCompactorIncludesToolSchemasAndModelOutputLimit(t *testing.T) {
 	history := NewContextCompactor(spec, []client.Message{{Role: client.RoleSystem, Content: "contract"}}, []client.Tool{{
 		Type: client.ToolTypeFunction, Function: client.FunctionDefinition{Name: "large_schema", Description: strings.Repeat("x", 28_000)},
 	}}, 1)
-	history.Append(client.Message{Role: client.RoleAssistant, Content: strings.Repeat("x", 10_000)})
+	history.Append(client.Message{Role: client.RoleAssistant, Content: strings.Repeat("x", 15_000)})
 	called := false
 	if err := history.CompactIfNeeded(t.Context(), &spec, contextChatFunc(func(_ context.Context, request client.ChatRequest) (*client.ChatResponse, error) {
 		called = true

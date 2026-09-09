@@ -419,6 +419,7 @@ type agentEvent struct {
 	question        *askToUserInput
 	answer          chan askToUserOutput
 	toolIsError     bool
+	compaction      *agentContextCompaction
 	response        *client.ChatResponse
 	requestEstimate int
 	toolCalls       int
@@ -1187,6 +1188,14 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if event.status != "" {
 			m.status = event.status
+			return m, tea.Batch(m.spinner.Tick, waitAgentEvent(message.events, message.turnID))
+		}
+		if event.compaction != nil {
+			if err := m.applyAgentContextCompaction(*event.compaction); err != nil {
+				m.status = "apply agent context compaction: " + err.Error()
+			} else {
+				m.status = "Context compacted · continuing…"
+			}
 			return m, tea.Batch(m.spinner.Tick, waitAgentEvent(message.events, message.turnID))
 		}
 		if event.call != nil {
@@ -3667,7 +3676,10 @@ func (m *model) sendChatRequest() tea.Cmd {
 		if toolRuntime == nil && streamEnabled {
 			go streamSingleChat(turnContext, configuredClient, modelID, reasoningEffort, history, conversationID, coalesceInstructions, m.requestEstimate, events)
 		} else {
-			go streamAgentLoop(turnContext, configuredClient, toolRuntime, modelID, reasoningEffort, history, conversationID, activeTask, streamEnabled, coalesceInstructions, events)
+			go streamAgentLoop(
+				turnContext, configuredClient, toolRuntime, modelID, reasoningEffort, history, conversationID,
+				activeTask, streamEnabled, coalesceInstructions, memoryPolicy(m.activeConfig()), events,
+			)
 		}
 		return waitAgentEvent(events, turnID)()
 	}
@@ -3703,23 +3715,46 @@ func streamAgentLoop(
 	activeTask *workspace.ActiveTask,
 	streamEnabled bool,
 	coalesceInstructions bool,
+	contextPolicy memory.Policy,
 	events chan<- agentEvent,
 ) {
 	defer close(events)
 	availableTools := append(toolRuntime.Tools(), orchestrationTools()...)
+	loopContext := newAgentLoopContext(contextPolicy, history, availableTools)
 	toolCalls := 0
 	taskStarted := activeTask != nil
-	if activeTask != nil {
-		history = insertLeadingInstruction(history, activeTaskResumeMessage(*activeTask))
-	}
 	for round := 0; ; round++ {
-		requestEstimate := memory.CountMessages(history)
+		if loopContext.ShouldCompact() {
+			if !emitAgentEvent(ctx, events, agentEvent{status: "Compacting context…"}) {
+				return
+			}
+		}
+		compaction, err := loopContext.CompactIfNeeded(ctx, configuredClient, modelID, reasoningEffort)
+		if err != nil {
+			emitAgentEvent(ctx, events, agentEvent{err: err})
+			return
+		}
+		if compaction != nil {
+			conversationID = ""
+			if !emitAgentEvent(ctx, events, agentEvent{compaction: compaction}) {
+				return
+			}
+		}
+		roundHistory := loopContext.Messages()
+		if activeTask != nil {
+			roundHistory = insertLeadingInstruction(roundHistory, activeTaskResumeMessage(*activeTask))
+		}
+		appendHistory := func(messages ...client.Message) {
+			loopContext.Append(messages...)
+			roundHistory = append(roundHistory, messages...)
+		}
+		requestEstimate := memory.CountMessages(roundHistory)
 		request := client.ChatRequest{
-			Model: modelID, Messages: providerMessages(history, coalesceInstructions), ConversationID: conversationID, Tools: availableTools,
+			Model: modelID, Messages: providerMessages(roundHistory, coalesceInstructions), ConversationID: conversationID, Tools: availableTools,
 			ReasoningEffort: reasoningEffort,
 		}
 		var response *client.ChatResponse
-		var err error
+		err = nil
 		if streamEnabled {
 			response, err = streamChatWithConversationRecovery(ctx, configuredClient, request, func(delta chatStreamDelta) bool {
 				return emitAgentEvent(ctx, events, agentEvent{streamDelta: &delta})
@@ -3730,6 +3765,9 @@ func streamAgentLoop(
 		if err != nil {
 			emitAgentEvent(ctx, events, agentEvent{err: err})
 			return
+		}
+		if response != nil {
+			loopContext.Observe(response.Usage, requestEstimate)
 		}
 		if response == nil || len(response.Choices) == 0 {
 			emitAgentEvent(ctx, events, agentEvent{response: response})
@@ -3751,7 +3789,7 @@ func streamAgentLoop(
 				})
 				return
 			}
-			history = append(history, assistant, client.Message{
+			appendHistory(assistant, client.Message{
 				Role: client.RoleUser,
 				Content: "This task was started with task_start and is not complete until you call task_complete. " +
 					"Call task_complete now with the final outcome and summary; " +
@@ -3764,7 +3802,7 @@ func streamAgentLoop(
 				assistant.ToolCalls[index].ID = fmt.Sprintf("q-call-%d-%d", round+1, index+1)
 			}
 		}
-		history = append(history, assistant)
+		appendHistory(assistant)
 		if !emitAgentEvent(ctx, events, agentEvent{message: &assistant}) {
 			return
 		}
@@ -3780,7 +3818,7 @@ func streamAgentLoop(
 				}
 				if parseErr != nil {
 					message := orchestrationToolResult(call, "invalid task_start arguments: "+parseErr.Error(), true)
-					history = append(history, message)
+					appendHistory(message)
 					if !emitAgentEvent(ctx, events, agentEvent{message: &message, toolIsError: true}) {
 						return
 					}
@@ -3789,7 +3827,7 @@ func streamAgentLoop(
 				taskStarted = true
 				body, _ := json.Marshal(taskStartOutput{Started: true, Objective: input.Objective})
 				message := orchestrationToolResult(call, string(body), false)
-				history = append(history, message)
+				appendHistory(message)
 				if !emitAgentEvent(ctx, events, agentEvent{message: &message}) {
 					return
 				}
@@ -3797,6 +3835,7 @@ func streamAgentLoop(
 					Objective: input.Objective, CompletionCriteria: append([]string(nil), input.CompletionCriteria...),
 					StartedAt: time.Now().UTC(),
 				}
+				activeTask = started
 				if !emitAgentEvent(ctx, events, agentEvent{taskStarted: started}) {
 					return
 				}
@@ -3806,7 +3845,7 @@ func streamAgentLoop(
 				input, parseErr := parseAskToUser(call.Function.Arguments)
 				if parseErr != nil {
 					message := orchestrationToolResult(call, "invalid ask_to_user arguments: "+parseErr.Error(), true)
-					history = append(history, message)
+					appendHistory(message)
 					if !emitAgentEvent(ctx, events, agentEvent{message: &message, toolIsError: true}) {
 						return
 					}
@@ -3828,7 +3867,7 @@ func streamAgentLoop(
 				}
 				body, _ := json.Marshal(answer)
 				message := orchestrationToolResult(call, string(body), false)
-				history = append(history, message)
+				appendHistory(message)
 				if !emitAgentEvent(ctx, events, agentEvent{message: &message}) {
 					return
 				}
@@ -3837,7 +3876,7 @@ func streamAgentLoop(
 			if call.Function.Name == taskCompleteToolName {
 				if !taskStarted {
 					message := orchestrationToolResult(call, "task_complete requires an active task_start lifecycle", true)
-					history = append(history, message)
+					appendHistory(message)
 					if !emitAgentEvent(ctx, events, agentEvent{message: &message, toolIsError: true}) {
 						return
 					}
@@ -3849,7 +3888,7 @@ func streamAgentLoop(
 				}
 				if parseErr != nil {
 					message := orchestrationToolResult(call, "invalid task_complete arguments: "+parseErr.Error(), true)
-					history = append(history, message)
+					appendHistory(message)
 					if !emitAgentEvent(ctx, events, agentEvent{message: &message, toolIsError: true}) {
 						return
 					}
@@ -3857,7 +3896,7 @@ func streamAgentLoop(
 				}
 				body, _ := json.Marshal(completion)
 				message := orchestrationToolResult(call, string(body), false)
-				history = append(history, message)
+				appendHistory(message)
 				if !emitAgentEvent(ctx, events, agentEvent{message: &message}) {
 					return
 				}
@@ -3872,7 +3911,7 @@ func streamAgentLoop(
 				if !emitAgentEvent(ctx, events, agentEvent{status: "Finalizing task…"}) {
 					return
 				}
-				request.Messages = history
+				request.Messages = roundHistory
 				request.ConversationID = conversationID
 				finished, finishErr := client.FinishToolTurn(ctx, request, func(ctx context.Context, request client.ChatRequest) (*client.ChatResponse, error) {
 					requestEstimate = memory.CountMessages(request.Messages)
@@ -3926,7 +3965,7 @@ func streamAgentLoop(
 				Role: client.RoleTool, Name: call.Function.Name,
 				ToolCallID: call.ID, Content: content,
 			}
-			history = append(history, message)
+			appendHistory(message)
 			toolCalls++
 			if !emitAgentEvent(ctx, events, agentEvent{message: &message, toolIsError: result.IsError}) {
 				return

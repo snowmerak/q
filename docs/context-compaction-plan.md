@@ -25,6 +25,7 @@
 - 보수적 token 추정과 실제 `prompt_tokens` 기반 provider overhead 보정
 - 오래된 context의 구조화된 rolling summary와 최근 원문 보존
 - assistant tool call과 연속된 tool result를 같은 보존 단위로 처리
+- 메인 TUI/ACP와 서브에이전트 도구 루프에서 각 모델 라운드 직전 압축 검사
 - 압축 성공 후 `conversation_id` 초기화 및 보류한 사용자 요청 자동 전송
 - 압축 실패 시 context를 유지하고 사용자 입력 복구
 - TUI header의 예상 context 사용량 표시
@@ -33,13 +34,13 @@
 수동 `/compact`, `/context`, context-length 오류의 단일 자동 재시도와 모델별
 정확한 tokenizer는 후속 단계로 남아 있다.
 
-### 내부 에이전트 루프 (2026-08-27)
+### 에이전트 도구 루프 (2026-09-09)
 
-`subagent.ContextCompactor`가 기존 `memory.Manager`의 요약/적용 경로를
-재사용한다. Griller, Planner, Scout, Coder, Planner review, Commit, Thinker는
-각 모델 라운드 **직전**에 압축 여부를 검사한다. TUI와 ACP는 동일한 runner를
-사용하므로 이 동작도 동일하다. 전체 transcript, lifecycle archive와 실행
-checkpoint는 지우지 않고 모델에 보내는 loop-local 메시지만 교체한다.
+`subagent.ContextCompactor`와 메인 `streamAgentLoop`가 기존 `memory.Manager`의
+요약/적용 경로를 재사용한다. Griller, Planner, Scout, Coder, Planner review,
+Commit, Thinker뿐 아니라 메인 TUI/ACP의 도구 루프도 각 모델 라운드 **직전**에
+압축 여부를 검사한다. 전체 transcript, lifecycle archive와 실행 checkpoint는
+지우지 않고 모델에 보내는 loop-local 메시지만 교체한다.
 
 역할별 초기 메시지를 immutable prefix로 보존한다.
 
@@ -59,12 +60,11 @@ assistant/tool-result 묶음은 통째로 보존하거나 통째로 요약한다
 하나가 recent 예산보다 큰 경우 내부 루프에서는 그 묶음 전체를 요약할 수
 있다. 이는 큰 툴 결과 하나 때문에 압축 자체가 불가능해지는 것을 막는다.
 
-정책은 config의 `context` 비율을 계승하고 context window는 해당 역할의
-`Spec.ContextLength`를 사용한다. 기본 trigger는 내부 루프의 여유를 위해
-80%로 앞당기며, 사용자 설정이 더 낮으면 그 값을 사용한다. target/recent는
-기존 기본값 22%/7%이다. 명시적으로 target을 80% 이상으로 설정했다면 유효한
-target < trigger 관계를 지키기 위해 설정된 trigger를 유지한다. 툴 스키마
-크기를 초기 overhead로 계산하고 이후 실제 `prompt_tokens`로 보정한다.
+정책은 config의 `context` 비율을 계승한다. 메인 TUI/ACP와 서브에이전트 도구
+루프 모두 설정값을 그대로 사용하므로 기본 trigger는 85%이고 target/recent는
+22%/7%이다. 툴 스키마 크기를 초기 overhead로 계산하고 실제 `prompt_tokens`로
+보정하며, 보수적 추정기의 안전 여유도 별도로 반영한다. 서브에이전트 context
+window는 해당 역할의 `Spec.ContextLength`를 사용한다.
 
 원문 앵커가 22%를 넘으면 앵커를 자르는 대신 요약 envelope와 최소 요약
 예산을 포함하도록 target을 늘린다. 보존 대상 자체가 trigger까지 채우거나
@@ -78,9 +78,10 @@ target < trigger 관계를 지키기 위해 설정된 trigger를 유지한다. �
 새 backend 대화에서 압축된 기록으로 이어간다. 실패하면 기존 메시지와 ID를
 보존하며, 요약 호출은 에이전트의 작업 라운드 제한을 소비하지 않는다.
 
-이번 변경은 위 내부 역할들의 루프에 적용된다. 기본 채팅의 기존 TUI/ACP
-압축은 사용자 turn 경계에서 동작하며 `streamAgentLoop`의 turn 내부 압축과
-외부 ACP search 서버의 내부 컨텍스트 관리는 별도 범위다.
+기본 채팅의 사용자 turn 경계 압축은 그대로 유지된다. 한 turn 안에서 툴 결과가
+커지는 경우에는 TUI와 ACP가 공유하는 `streamAgentLoop`가 추가로 압축하고,
+성공한 plan과 summary를 세션 memory에 반영한다. 외부 ACP search 서버가 자체
+대화를 관리하는 방식은 이 범위에 포함하지 않는다.
 
 ## 2026-08-02 로컬 API 조사 결과
 

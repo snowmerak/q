@@ -1499,6 +1499,7 @@ func (a *acpAgent) runAgentTurn(ctx context.Context, history []client.Message) (
 		modelNeedsSystemInstructionCoalescing(
 			a.state.gatewayConfig, a.state.activeConfig().ModelGroups, a.state.activeModel(), nil,
 		),
+		memoryPolicy(a.state.activeConfig()),
 		events,
 	)
 
@@ -1527,6 +1528,14 @@ func (a *acpAgent) continueACPAgentTurn(
 	}()
 
 	for event := range events {
+		if event.compaction != nil {
+			if err := a.state.applyAgentContextCompaction(*event.compaction); err != nil {
+				return acp.PromptResponse{}, fmt.Errorf("apply agent context compaction: %w", err)
+			}
+			if err := a.state.saveWorkspaceSession(); err != nil {
+				return acp.PromptResponse{}, err
+			}
+		}
 		if event.taskStarted != nil {
 			a.state.activeTask = event.taskStarted
 			if err := a.state.saveWorkspaceSession(); err != nil {

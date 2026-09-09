@@ -280,6 +280,7 @@ func (m *Manager) Apply(plan Plan, summary string) error {
 	})
 	compacted = append(compacted, cloneMessages(plan.Recent)...)
 	m.messages = compacted
+	m.providerOverhead = max(m.providerOverhead, plan.ProviderOverhead)
 	m.compactions++
 	return nil
 }
@@ -293,6 +294,19 @@ func CountMessages(messages []client.Message) int {
 		return len(messages) * 8
 	}
 	return int(math.Ceil(float64(len(body))/3.0)) + len(messages)*4
+}
+
+// CountTools estimates the request cost of tool definitions using the same
+// conservative byte-based approximation as CountMessages.
+func CountTools(tools []client.Tool) int {
+	if len(tools) == 0 {
+		return 0
+	}
+	body, err := json.Marshal(tools)
+	if err != nil {
+		return len(tools) * 32
+	}
+	return (len(body)+2)/3 + len(tools)*4
 }
 
 func isImmutable(message client.Message) bool {

@@ -84,6 +84,29 @@ func TestUsageCalibratesProviderOverhead(t *testing.T) {
 	}
 }
 
+func TestApplyCarriesHigherPlanOverhead(t *testing.T) {
+	policy := Policy{ContextWindow: 100_000, TriggerRatio: .85, TargetRatio: .22, RecentRatio: .07}
+	history := []client.Message{{Role: client.RoleSystem, Content: "keep system"}}
+	for index := 0; index < 8; index++ {
+		history = append(history, client.Message{Role: client.RoleUser, Content: strings.Repeat("old context ", 1_000)})
+	}
+	source := New(policy, history)
+	local := source.LocalEstimate()
+	source.ObserveUsage(local+3_000, local)
+	plan, err := source.Plan()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	destination := New(policy, history)
+	if err := destination.Apply(plan, "durable state"); err != nil {
+		t.Fatal(err)
+	}
+	if got := destination.Stats().ProviderOverhead; got != 3_000 {
+		t.Fatalf("provider overhead = %d", got)
+	}
+}
+
 func TestToolCallAndResultsFormOneRetentionUnit(t *testing.T) {
 	messages := []client.Message{
 		{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{{ID: "call-1"}}},

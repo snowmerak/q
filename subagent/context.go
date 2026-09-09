@@ -2,7 +2,6 @@ package subagent
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -35,7 +34,7 @@ func NewContextCompactor(spec Spec, initial []client.Message, tools []client.Too
 	manager := memory.New(spec.memoryPolicy(), initial)
 	// Tool definitions consume prompt tokens on every role request. Seed them as
 	// provider overhead so compaction still triggers when usage is unavailable.
-	if toolTokens := countTools(tools); toolTokens > 0 {
+	if toolTokens := memory.CountTools(tools); toolTokens > 0 {
 		local := manager.LocalEstimate()
 		manager.ObserveUsage(local+toolTokens, local)
 	}
@@ -151,25 +150,8 @@ func (s Spec) memoryPolicy() memory.Policy {
 	if contextConfig.RecentRatio == 0 {
 		contextConfig.RecentRatio = defaults.RecentRatio
 	}
-	// Leave more headroom for the next tool result without invalidating an
-	// explicitly configured target at or above 80%.
-	triggerRatio := contextConfig.TriggerRatio
-	if contextConfig.TargetRatio < .80 {
-		triggerRatio = min(triggerRatio, .80)
-	}
 	return memory.Policy{
-		ContextWindow: int(s.ContextLength), TriggerRatio: triggerRatio,
+		ContextWindow: int(s.ContextLength), TriggerRatio: contextConfig.TriggerRatio,
 		TargetRatio: contextConfig.TargetRatio, RecentRatio: contextConfig.RecentRatio,
 	}
-}
-
-func countTools(tools []client.Tool) int {
-	if len(tools) == 0 {
-		return 0
-	}
-	body, err := json.Marshal(tools)
-	if err != nil {
-		return len(tools) * 32
-	}
-	return (len(body)+2)/3 + len(tools)*4
 }
