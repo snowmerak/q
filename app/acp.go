@@ -1197,6 +1197,9 @@ func (a *acpAgent) prompt(ctx context.Context, request acp.PromptRequest) (acp.P
 
 	a.promptMu.Lock()
 	defer a.promptMu.Unlock()
+	// Keep promptMu held while the deferred update snapshots this session so a
+	// following prompt cannot publish an older usage value after a newer one.
+	defer a.emitUsageUpdateBestEffort()
 	if a.promptLocked != nil {
 		a.promptLocked()
 	}
