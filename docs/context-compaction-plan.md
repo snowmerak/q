@@ -3,7 +3,7 @@
 ## 목적
 
 대화 요청에 사용될 입력 컨텍스트가 선택한 모델의 context window 중 85%에
-도달하면, 오래된 대화를 누적 요약으로 교체해 다음 요청의 입력 컨텍스트를
+도달하면, 오래된 대화를 누적 session checkpoint로 교체해 다음 요청의 입력 컨텍스트를
 전체 window의 22% 이하로 줄인다.
 
 이 기능은 다음 원칙을 지킨다.
@@ -11,7 +11,7 @@
 - 사용자가 보는 전체 transcript는 삭제하지 않는다.
 - LLM에 전송하는 context만 압축한다.
 - system prompt, tool schema와 아직 끝나지 않은 tool call은 보존한다.
-- 오래된 대화는 구조화된 누적 요약으로 만들고 최근 대화는 원문으로 남긴다.
+- 오래된 대화는 구조화된 누적 checkpoint JSON으로 만들고 최근 대화는 원문으로 남긴다.
 - 압축 후 stateful provider의 `conversation_id`는 초기화한다.
 - 모델의 context window를 알 수 없으면 임의의 크기를 추측하지 않는다.
 
@@ -23,7 +23,8 @@
 - Gateway 모델의 `context_length` 우선 적용, 시작 및 설정 변경 시 cache 갱신
 - 전체 transcript와 API request context 분리
 - 보수적 token 추정과 실제 `prompt_tokens` 기반 provider overhead 보정
-- 오래된 context의 구조화된 rolling summary와 최근 원문 보존
+- 오래된 context의 구조화된 session checkpoint와 최근 원문 보존
+- 작은 모델의 복구 가능한 JSON 변형을 정규화하고 누락 섹션은 기존 checkpoint에서 계승
 - assistant tool call과 연속된 tool result를 같은 보존 단위로 처리
 - 메인 TUI/ACP와 서브에이전트 도구 루프에서 각 모델 라운드 직전 압축 검사
 - 압축 성공 후 `conversation_id` 초기화 및 보류한 사용자 요청 자동 전송
@@ -37,7 +38,7 @@
 ### 에이전트 도구 루프 (2026-09-09)
 
 `subagent.ContextCompactor`와 메인 `streamAgentLoop`가 기존 `memory.Manager`의
-요약/적용 경로를 재사용한다. Griller, Planner, Scout, Coder, Planner review,
+checkpoint 생성/적용 경로를 재사용한다. Griller, Planner, Scout, Coder, Planner review,
 Commit, Thinker뿐 아니라 메인 TUI/ACP의 도구 루프도 각 모델 라운드 **직전**에
 압축 여부를 검사한다. 전체 transcript, lifecycle archive와 실행 checkpoint는
 지우지 않고 모델에 보내는 loop-local 메시지만 교체한다.
@@ -66,21 +67,21 @@ assistant/tool-result 묶음은 통째로 보존하거나 통째로 요약한다
 보정하며, 보수적 추정기의 안전 여유도 별도로 반영한다. 서브에이전트 context
 window는 해당 역할의 `Spec.ContextLength`를 사용한다.
 
-원문 앵커가 22%를 넘으면 앵커를 자르는 대신 요약 envelope와 최소 요약
+원문 앵커가 22%를 넘으면 앵커를 자르는 대신 checkpoint envelope와 최소 checkpoint
 예산을 포함하도록 target을 늘린다. 보존 대상 자체가 trigger까지 채우거나
 요약할 과거 기록이 없으면 명시적인 context 오류로 멈춘다. 고정 데이터를
 무제한으로 보존하면서 계속 실행하는 것은 지원하지 않는다. 모델 크기가
 알려지지 않은 경우 임의 추정 없이 압축을 건너뛴다. 기본 모델을 상속한
 역할은 기본 모델의 명시적 context fallback도 사용할 수 있다.
 
-요약 호출에는 역할의 모델/모델 그룹을 쓰되 툴과 기존 `conversation_id`를
-전달하지 않는다. 요약 적용에 성공한 뒤 실행 쪽 `conversation_id`도 비워
+checkpoint 호출에는 역할의 모델/모델 그룹을 쓰되 툴과 기존 `conversation_id`를
+전달하지 않는다. checkpoint 적용에 성공한 뒤 실행 쪽 `conversation_id`도 비워
 새 backend 대화에서 압축된 기록으로 이어간다. 실패하면 기존 메시지와 ID를
-보존하며, 요약 호출은 에이전트의 작업 라운드 제한을 소비하지 않는다.
+보존하며, checkpoint 호출은 에이전트의 작업 라운드 제한을 소비하지 않는다.
 
 기본 채팅의 사용자 turn 경계 압축은 그대로 유지된다. 한 turn 안에서 툴 결과가
 커지는 경우에는 TUI와 ACP가 공유하는 `streamAgentLoop`가 추가로 압축하고,
-성공한 plan과 summary를 세션 memory에 반영한다. 외부 ACP search 서버가 자체
+성공한 plan과 정규화된 checkpoint를 세션 memory에 반영한다. 외부 ACP search 서버가 자체
 대화를 관리하는 방식은 이 범위에 포함하지 않는다.
 
 ## 2026-08-02 로컬 API 조사 결과
@@ -184,13 +185,15 @@ type Plan struct {
 }
 ```
 
-`Manager`의 주요 API 초안은 다음과 같다.
+`Manager`의 현재 주요 API는 다음과 같다.
 
 ```go
-func (m *Manager) Plan(next client.Message, immutable []client.Message) Plan
+func (m *Manager) Plan() (Plan, error)
+func (m *Manager) PlanWithRetention(retention Retention) (Plan, error)
 func (m *Manager) ObserveUsage(actualPromptTokens, localEstimate int)
-func (m *Manager) Apply(summary client.Message, recent []client.Message)
-func (m *Manager) Messages(immutable []client.Message, next client.Message) []client.Message
+func (p Plan) RequestMessages() []client.Message
+func (m *Manager) ApplyCheckpoint(plan Plan, response string) (canonicalJSON string, err error)
+func (m *Manager) Messages() []client.Message
 ```
 
 ## context window 결정
@@ -261,41 +264,58 @@ type TokenCounter interface {
 
 ```text
 immutable system/tool context
-+ structured cumulative summary
++ structured session checkpoint JSON
 + recent raw turns
 <= context window의 22%
 ```
 
 1. system/developer prompt와 tool schema를 immutable 영역으로 분리한다.
 2. 최근 원문은 최대 context window의 7%만 남긴다.
-3. 나머지 오래된 메시지와 기존 누적 요약을 summary source로 선택한다.
+3. 나머지 오래된 메시지와 기존 누적 checkpoint를 source로 선택한다.
 4. assistant tool call과 대응하는 tool result는 하나의 atomic turn으로 취급한다.
-5. summary source가 너무 크면 70% 이하의 chunk로 나눠 rolling summary를 만든다.
-6. summary output budget은 설정된 `target_ratio - immutable - recent`로 제한한다.
-7. 비어 있지 않은 요약 결과를 적용한다. target은 요약 품질과 다음 요청의 여유를
+5. source 전체를 한 번의 checkpoint 요청으로 보내며 output budget은 설정된
+   `target_ratio - immutable - recent`로 제한한다.
+6. 응답에서 인식 가능한 JSON 객체를 복구하고 네 섹션을 정규화한다. 모델이
+   생략한 섹션은 기존 구조화 checkpoint에서 계승한다.
+7. 정규화된 checkpoint를 원자적으로 적용한다. target은 품질과 다음 요청의 여유를
    위한 목표이지 적용 결과의 유효성 상한이 아니다.
 8. 적용 결과가 여전히 trigger 이상이면 다음 요청 경계에서 다시 압축 여부를
    평가한다. target 미달성만으로 현재 Coder나 대화 turn을 실패시키지 않는다.
 
 immutable 영역만 이미 22%를 넘으면 목표 달성은 불가능하다. 이 경우 목표를
-`immutable + 최소 summary/recent budget`으로 올리고 UI에 경고한다.
+`immutable + 최소 checkpoint/recent budget`으로 올리고 UI에 경고한다.
 
-### 요약 형식
+source가 요약 모델의 입력 한도를 넘을 때 여러 chunk로 나누는 처리는 아직
+구현하지 않았다. 현재는 provider 오류로 실패하고 기존 context를 그대로 보존한다.
 
-자유로운 산문 대신 다음 섹션을 가진 구조화된 텍스트를 사용한다.
+### Session checkpoint 형식
 
-```text
-## User goals
-## Confirmed decisions
-## Current state
-## Important files, identifiers, and exact values
-## Constraints
-## Unresolved work
-## Recent outcomes and errors
+자유로운 산문 대신 다음 네 섹션을 가진 얕은 JSON 객체 하나를 요청한다.
+
+```json
+{
+  "current_request": [],
+  "active_work": [],
+  "previous_work": [],
+  "facts": []
+}
 ```
 
-요약 요청에는 사실을 만들지 말 것, 완료와 미완료를 구분할 것, 경로·명령·오류·
-식별자를 정확히 보존할 것, 지정 token budget을 넘지 말 것을 명시한다.
+`current_request`는 지금 받은 요청과 완료 조건, `active_work`는 현재 작업·최신
+결과·다음 행동·blocker, `previous_work`는 이전 작업과 결과, `facts`는 다음
+압축 뒤에도 유지할 확정 사실·결정·경로·식별자·명령·값·오류를 담는다. 일반
+tool 출력은 원문을 복사하지 않고 지속적으로 필요한 결과나 사실만 남긴다.
+
+정상 형태는 문자열 배열이지만 작은 모델을 위해 문자열, 배열, 작은 객체를 모두
+문자열 배열로 정규화한다. 설명문이나 Markdown fence 안의 객체, trailing comma,
+문자열 안의 raw control character, single quote와 unquoted key 같은 JSON-like
+문법도 완전한 객체이고 섹션을 식별할 수 있으면 복구한다. 응답에 관련 없는 JSON
+객체가 먼저 있어도 checkpoint 섹션을 가진 객체를 계속 찾는다. 복구 후에는
+canonical JSON만 저장하고 archive에도 같은 값을 넘긴다.
+
+기존 자유 텍스트 요약은 source로 계속 읽을 수 있지만, 새 응답은 인식 가능한
+checkpoint 객체여야 한다. 이전 checkpoint가 구조화되어 있고 새 응답에서 섹션을
+생략하면 그 섹션은 이전 값을 유지한다. 명시적인 빈 값은 해당 섹션을 비운다.
 
 ## 전송 상태 흐름
 
@@ -336,12 +356,12 @@ context size unknown
 
 ## 오류 정책
 
-- 요약 API 실패: context와 transcript를 변경하지 않고 입력을 복구한다.
+- checkpoint API 실패: context와 transcript를 변경하지 않고 입력을 복구한다.
 - usage 미제공: 추정치를 계속 사용하되 UI에 `estimated`를 표시한다.
 - context window 미제공: 설정 fallback이 없으면 자동 압축하지 않는다.
-- 빈 요약 또는 잘못된 응답: 적용하지 않는다.
+- 복구할 수 없는 JSON, 인식 가능한 섹션이 없는 응답 또는 빈 checkpoint: 적용하지 않는다.
 - 압축 결과 근사값: 설정 목표까지 압축을 요청하되 목표 초과만으로 적용을
-  거절하지 않는다. 비어 있지 않은 요약은 적용하고 다음 요청에서 다시 평가한다.
+  거절하지 않는다. 유효한 checkpoint는 적용하고 다음 요청에서 다시 평가한다.
 - context-length 오류: 강제 압축 후 요청을 한 번만 재시도한다.
 - 모델 변경: context window 재조회, token 보정 초기화, conversation ID 초기화.
 - provider 변경: 기존 정책대로 대화를 초기화하고 새 memory manager를 생성한다.
@@ -362,10 +382,12 @@ context size unknown
 단위 테스트:
 
 - 77.9%에서는 압축하지 않고 85% 이상에서 압축한다.
-- target을 초과한 immutable + summary + recent도 적용되며, 목표 미달성만으로
+- target을 초과한 immutable + checkpoint + recent도 적용되며, 목표 미달성만으로
   실행을 실패시키지 않는다.
 - system prompt와 tool call/result 묶음이 보존된다.
-- 기존 summary가 다음 summary에 병합된다.
+- 누락된 checkpoint 섹션이 기존 값에서 계승되고 명시적인 새 값은 교체된다.
+- code fence, trailing comma, raw control character, JSON-like key/quote를 복구한다.
+- 복구 불가능한 응답은 기존 memory를 변경하지 않는다.
 - 실제 prompt usage가 estimator overhead를 보정한다.
 - reasoning 모델의 `total_tokens`가 임계치 계산에 사용되지 않는다.
 - context window가 없을 때 자동 압축이 비활성화된다.
@@ -381,7 +403,7 @@ context size unknown
 - `go test ./...`, `go vet ./...`, `go build ./...`를 통과한다.
 
 완료 기준은 자동 압축 이후 전송된 실제 prompt usage가 설정 목표에 가까워지는
-것이다. provider overhead, immutable context 또는 요약 편차로 목표를 달성하지
+것이다. provider overhead, immutable context 또는 checkpoint 편차로 목표를 달성하지
 못해도 압축 결과는 적용하며, 다음 요청 경계에서 다시 압축 여부를 평가한다.
 
 ## 부록: 모델별 최소 요청 결과

@@ -1742,12 +1742,12 @@ func (a *acpAgent) compactIfNeeded(ctx context.Context) error {
 	if len(response.Choices) == 0 {
 		return errors.New("context compaction returned no response choices")
 	}
-	summary := response.Choices[0].Message.Content
-	if err := a.state.memory.Apply(plan, summary); err != nil {
+	checkpoint, err := a.state.memory.ApplyCheckpoint(plan, response.Choices[0].Message.TextContent())
+	if err != nil {
 		return err
 	}
 	a.state.conversationID = ""
-	a.state.archiveSummary(summary)
+	a.state.archiveSummary(checkpoint)
 	if err := a.state.saveWorkspaceSession(); err != nil {
 		return err
 	}

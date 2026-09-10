@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
 
 	"github.com/snowmerak/q/client"
 	"github.com/snowmerak/q/config"
@@ -50,8 +49,8 @@ func (c *ContextCompactor) Messages() []client.Message {
 	return c.memory.Messages()
 }
 
-// RequestMessages projects q's internal summary into ordinary conversation
-// data. Anchored tasks include user/tool messages before the summary; sending
+// RequestMessages projects q's internal checkpoint into ordinary conversation
+// data. Anchored tasks include user/tool messages before the checkpoint; sending
 // a named system message there would break stricter provider chat templates.
 func (c *ContextCompactor) RequestMessages() []client.Message {
 	messages := c.Messages()
@@ -129,8 +128,8 @@ func (c *ContextCompactor) CompactIfNeeded(ctx context.Context, spec *Spec, conf
 	if response == nil || len(response.Choices) == 0 {
 		return errors.New("subagent: compact context returned no choices")
 	}
-	summary := strings.TrimSpace(response.Choices[0].Message.TextContent())
-	if err := c.memory.Apply(plan, summary); err != nil {
+	_, err = c.memory.ApplyCheckpoint(plan, response.Choices[0].Message.TextContent())
+	if err != nil {
 		return fmt.Errorf("subagent: compact context: %w", err)
 	}
 	c.usage = addUsage(c.usage, response.Usage)

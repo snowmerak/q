@@ -248,7 +248,7 @@ func TestRunnerCompactsWhilePreservingSourceAndAcknowledgedPropositions(t *testi
 	registration.Content = strings.Repeat("x", 40_000)
 	fake := &fakeThinkerClient{responses: []client.Message{
 		registration,
-		{Role: client.RoleAssistant, Content: "The durable fact was processed; finish extraction when nothing else remains."},
+		{Role: client.RoleAssistant, Content: `{"active_work":["The durable fact was processed; finish extraction when nothing else remains."],"facts":["Keep the exact durable fact."]}`},
 		thinkerToolCall("complete", CompleteToolName, `{}`),
 	}}
 	library := &fakePropositionLibrary{}
@@ -271,7 +271,7 @@ func TestRunnerCompactsWhilePreservingSourceAndAcknowledgedPropositions(t *testi
 			t.Fatalf("acknowledged proposition lost %q: %s", exact, resumed[2].Content)
 		}
 	}
-	if len(resumed) != 4 || !strings.HasPrefix(resumed[3].Content, "Compressed conversation memory:") {
+	if len(resumed) != 4 || !strings.HasPrefix(resumed[3].Content, "Session continuation checkpoint:") {
 		t.Fatalf("old extraction history was not compacted: %#v", resumed)
 	}
 }

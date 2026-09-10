@@ -402,10 +402,14 @@ func (f *fakeClient) Chat(_ context.Context, request client.ChatRequest) (*clien
 	request.Messages = append([]client.Message(nil), request.Messages...)
 	f.requests = append(f.requests, request)
 	n := len(f.requests)
+	content := "reply " + string(rune('0'+n))
+	if request.MaxCompletionTokens != nil && len(request.Tools) == 0 {
+		content = testCheckpointJSON("preserve the pending request")
+	}
 	return &client.ChatResponse{
 		ConversationID: "conversation-1",
 		Choices: []client.Choice{{Message: client.Message{
-			Role: client.RoleAssistant, Content: "reply " + string(rune('0'+n)),
+			Role: client.RoleAssistant, Content: content,
 		}}},
 		Usage: f.usage,
 	}, nil

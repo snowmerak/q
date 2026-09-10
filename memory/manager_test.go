@@ -1,6 +1,7 @@
 package memory
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -39,7 +40,7 @@ func TestPlanAndApplyKeepSystemAndRecent(t *testing.T) {
 	if len(plan.Source) == 0 || len(plan.Recent) == 0 {
 		t.Fatalf("plan = %#v", plan)
 	}
-	if err := m.Apply(plan, "goals and decisions"); err != nil {
+	if err := m.Apply(plan, checkpointResponse("goals and decisions")); err != nil {
 		t.Fatal(err)
 	}
 	messages := m.Messages()
@@ -66,7 +67,7 @@ func TestApplyAcceptsCompactedContextAboveTarget(t *testing.T) {
 	if plan.TargetTokens != 1_500 {
 		t.Fatalf("compaction target = %d", plan.TargetTokens)
 	}
-	if err := manager.Apply(plan, strings.Repeat("x", 9_000)); err != nil {
+	if err := manager.Apply(plan, checkpointResponse(strings.Repeat("x", 9_000))); err != nil {
 		t.Fatalf("context above target was rejected: %v", err)
 	}
 	if got := manager.PredictedTokens(); got <= plan.TargetTokens {
@@ -99,7 +100,7 @@ func TestApplyCarriesHigherPlanOverhead(t *testing.T) {
 	}
 
 	destination := New(policy, history)
-	if err := destination.Apply(plan, "durable state"); err != nil {
+	if err := destination.Apply(plan, checkpointResponse("durable state")); err != nil {
 		t.Fatal(err)
 	}
 	if got := destination.Stats().ProviderOverhead; got != 3_000 {
@@ -147,7 +148,7 @@ func TestPlanWithRetentionKeepsPrefixAndCompactsLaterSystemMessages(t *testing.T
 			t.Fatal("transient system reminder became immutable")
 		}
 	}
-	if err := m.Apply(plan, "completed work and remaining state"); err != nil {
+	if err := m.Apply(plan, checkpointResponse("completed work and remaining state")); err != nil {
 		t.Fatal(err)
 	}
 	got := m.Messages()
@@ -168,12 +169,17 @@ func TestAnchoredPlanCanGrowTargetWithoutChangingLargeTask(t *testing.T) {
 	if plan.TargetTokens <= int(float64(policy.ContextWindow)*policy.TargetRatio) {
 		t.Fatal("target did not grow around the exact task anchor")
 	}
-	if err := m.Apply(plan, "remaining verification"); err != nil {
+	if err := m.Apply(plan, checkpointResponse("remaining verification")); err != nil {
 		t.Fatal(err)
 	}
 	if m.Messages()[0].Content != anchor.Content {
 		t.Fatal("large task anchor was truncated")
 	}
+}
+
+func checkpointResponse(activeWork string) string {
+	body, _ := json.Marshal(Checkpoint{ActiveWork: []string{activeWork}})
+	return string(body)
 }
 
 func TestRetentionPinsWholePendingToolExchange(t *testing.T) {

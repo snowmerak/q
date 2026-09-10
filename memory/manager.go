@@ -229,11 +229,11 @@ func (m *Manager) PlanWithRetention(retention Retention) (Plan, error) {
 	fixedTokens := CountMessages(plan.Immutable) + CountMessages(plan.Recent) + m.providerOverhead
 	plan.OutputBudget = plan.TargetTokens - fixedTokens
 	if retention.AllowTargetGrowth {
-		// A growing target must include the summary envelope and Apply's safety
-		// margin, not only raw summary text. Keep the main chat's existing fixed
+		// A growing target must include the checkpoint envelope and Apply's safety
+		// margin, not only the raw checkpoint body. Keep the main chat's existing fixed
 		// target budget unchanged; Apply still validates its final estimate.
 		fixed := append(cloneMessages(plan.Immutable), client.Message{
-			Role: client.RoleSystem, Name: SummaryName, Content: "Compressed conversation memory:\n",
+			Role: client.RoleSystem, Name: SummaryName, Content: checkpointHeading,
 		})
 		fixed = append(fixed, plan.Recent...)
 		fixedTokens = CountMessages(fixed)
@@ -258,9 +258,15 @@ func (m *Manager) PlanWithRetention(retention Retention) (Plan, error) {
 }
 
 func (p Plan) RequestMessages() []client.Message {
-	instructions := fmt.Sprintf(`Compress the supplied conversation into durable context using no more than %d tokens.
-Preserve user goals, confirmed decisions, current state, constraints, unresolved work, exact paths, identifiers, commands, values, and errors.
-Do not invent facts or mark unfinished work complete. Return only a structured summary with concise sections.`, p.OutputBudget)
+	instructions := fmt.Sprintf(`Update the session continuation checkpoint from the supplied conversation using no more than %d tokens.
+Return one JSON object with exactly these four useful sections. Prefer short arrays of strings, but a string or small object is acceptable and q will normalize it:
+{"current_request":[],"active_work":[],"previous_work":[],"facts":[]}
+current_request: what the user currently asked for, including completion conditions and constraints.
+active_work: what is being done now, the latest outcome, next action, and any blocker.
+previous_work: earlier completed or abandoned work and its outcome. Do not copy raw tool output.
+facts: confirmed facts, decisions, exact paths, identifiers, commands, values, and errors that must survive later compactions.
+Merge any existing checkpoint with newer evidence. Keep still-relevant facts, distinguish unfinished work from completed work, and do not invent facts.
+Return JSON only, without Markdown fences or explanatory prose.`, p.OutputBudget)
 	source, _ := json.Marshal(p.Source)
 	return []client.Message{
 		{Role: client.RoleSystem, Content: instructions},
@@ -268,21 +274,30 @@ Do not invent facts or mark unfinished work complete. Return only a structured s
 	}
 }
 
-func (m *Manager) Apply(plan Plan, summary string) error {
-	if summary == "" {
-		return errors.New("memory: provider returned an empty summary")
+func (m *Manager) Apply(plan Plan, response string) error {
+	_, err := m.ApplyCheckpoint(plan, response)
+	return err
+}
+
+// ApplyCheckpoint recovers and normalizes a provider-produced checkpoint before
+// atomically replacing the request context. It returns the canonical JSON that
+// callers should archive or forward to another context owner.
+func (m *Manager) ApplyCheckpoint(plan Plan, response string) (string, error) {
+	checkpoint, err := normalizeCheckpoint(plan, response)
+	if err != nil {
+		return "", err
 	}
 	compacted := make([]client.Message, 0, len(plan.Immutable)+len(plan.Recent)+1)
 	compacted = append(compacted, cloneMessages(plan.Immutable)...)
 	compacted = append(compacted, client.Message{
 		Role: client.RoleSystem, Name: SummaryName,
-		Content: "Compressed conversation memory:\n" + summary,
+		Content: checkpointHeading + checkpoint,
 	})
 	compacted = append(compacted, cloneMessages(plan.Recent)...)
 	m.messages = compacted
 	m.providerOverhead = max(m.providerOverhead, plan.ProviderOverhead)
 	m.compactions++
-	return nil
+	return checkpoint, nil
 }
 
 func CountMessages(messages []client.Message) int {

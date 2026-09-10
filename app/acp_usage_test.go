@@ -287,7 +287,7 @@ func (c *stagedCompactingACPClient) Chat(ctx context.Context, request client.Cha
 			return nil, ctx.Err()
 		}
 		return &client.ChatResponse{Choices: []client.Choice{{Message: client.Message{
-			Role: client.RoleAssistant, Content: "condensed tool evidence",
+			Role: client.RoleAssistant, Content: testCheckpointJSON("condensed tool evidence"),
 		}}}}, nil
 	}
 

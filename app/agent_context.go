@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
 
 	"github.com/snowmerak/q/client"
 	"github.com/snowmerak/q/memory"
@@ -25,11 +24,12 @@ func (m *model) applyAgentContextCompaction(compaction agentContextCompaction) e
 	if m.memory == nil {
 		m.memory = memory.New(memoryPolicy(m.activeConfig()), nil)
 	}
-	if err := m.memory.Apply(compaction.Plan, compaction.Summary); err != nil {
+	checkpoint, err := m.memory.ApplyCheckpoint(compaction.Plan, compaction.Summary)
+	if err != nil {
 		return err
 	}
 	m.conversationID = ""
-	m.archiveSummary(compaction.Summary)
+	m.archiveSummary(checkpoint)
 	return nil
 }
 
@@ -104,9 +104,9 @@ func (c *agentLoopContext) CompactIfNeeded(
 	if response == nil || len(response.Choices) == 0 {
 		return nil, errors.New("agent loop: compact context returned no choices")
 	}
-	summary := strings.TrimSpace(response.Choices[0].Message.TextContent())
-	if err := c.manager.Apply(plan, summary); err != nil {
+	checkpoint, err := c.manager.ApplyCheckpoint(plan, response.Choices[0].Message.TextContent())
+	if err != nil {
 		return nil, fmt.Errorf("agent loop: compact context: %w", err)
 	}
-	return &agentContextCompaction{Plan: plan, Summary: summary}, nil
+	return &agentContextCompaction{Plan: plan, Summary: checkpoint}, nil
 }

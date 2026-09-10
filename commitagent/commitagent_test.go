@@ -265,7 +265,7 @@ func TestCommitAgentCompactsAndRetainsStagedOverview(t *testing.T) {
 	fake := &fakeAgentClient{responses: []client.Message{
 		{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{toolCall(toolGitOverview, `{}`)}},
 		{Role: client.RoleAssistant, Content: strings.Repeat("x", 72_000)},
-		{Role: client.RoleAssistant, Content: "Staged evidence inspected. Submit the commit proposal."},
+		{Role: client.RoleAssistant, Content: `{"active_work":["Staged evidence inspected. Submit the commit proposal."]}`},
 		{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{toolCall(toolProposeCommit, `{"type":"feat","scope":"commit","summary":"added context compaction"}`)}},
 	}}
 	state := repositoryState{root: t.TempDir(), visibleFiles: []string{"commitagent/agent.go"}, fileDiffs: map[string]string{"commitagent/agent.go": "diff"}}

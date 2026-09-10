@@ -1373,8 +1373,8 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, m.input.Focus()
 		}
-		summary := strings.TrimSpace(message.response.Choices[0].Message.TextContent())
-		if err := m.memory.Apply(message.plan, summary); err != nil {
+		checkpoint, err := m.memory.ApplyCheckpoint(message.plan, message.response.Choices[0].Message.TextContent())
+		if err != nil {
 			m.rollbackPendingMessage()
 			m.archiveFailure("context_compaction", err)
 			m.status = "compact context: " + err.Error()
@@ -1384,7 +1384,7 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			return m, m.input.Focus()
 		}
 		m.conversationID = ""
-		m.archiveSummary(summary)
+		m.archiveSummary(checkpoint)
 		m.compacting = false
 		m.compactionTarget = message.plan.TargetTokens
 		m.status = fmt.Sprintf("Context compacted · %s → %s", formatTokens(message.plan.BeforeTokens), formatTokens(m.memory.PredictedTokens()))

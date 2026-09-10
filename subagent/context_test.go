@@ -23,6 +23,11 @@ func contextResponse(content string) *client.ChatResponse {
 	return &client.ChatResponse{Choices: []client.Choice{{Message: client.Message{Role: client.RoleAssistant, Content: content}}}}
 }
 
+func contextCheckpointJSON(activeWork string) string {
+	body, _ := json.Marshal(memory.Checkpoint{ActiveWork: []string{activeWork}})
+	return string(body)
+}
+
 func TestContextCompactorKeepsAnchorsAndUserAnswersAcrossCompactions(t *testing.T) {
 	spec := Spec{Role: config.AgentRoleGriller, Model: "griller", ContextLength: 16_000, conversationID: "old-backend"}
 	anchors := []client.Message{
@@ -43,7 +48,7 @@ func TestContextCompactorKeepsAnchorsAndUserAnswersAcrossCompactions(t *testing.
 		if strings.Contains(request.Messages[1].Content, "SQLite only") {
 			t.Fatal("authoritative user answer was sent to the summarizer instead of retained verbatim")
 		}
-		response := contextResponse("Repository investigated. Remaining work is to submit the brief. Keep the Loom references.")
+		response := contextResponse(contextCheckpointJSON("Repository investigated. Remaining work is to submit the brief. Keep the Loom references."))
 		response.ConversationID = "summary-backend"
 		return response, nil
 	})
@@ -114,7 +119,7 @@ func TestContextCompactorAppliesSummaryAboveTarget(t *testing.T) {
 	history.Append(client.Message{Role: client.RoleAssistant, Content: strings.Repeat("old context ", 8_000)})
 	summary := strings.Repeat("x", 40_000)
 	if err := history.CompactIfNeeded(t.Context(), &spec, contextChatFunc(func(context.Context, client.ChatRequest) (*client.ChatResponse, error) {
-		return contextResponse(summary), nil
+		return contextResponse(contextCheckpointJSON(summary)), nil
 	})); err != nil {
 		t.Fatalf("summary above target was rejected: %v", err)
 	}
@@ -176,7 +181,7 @@ func TestContextCompactorIncludesToolSchemasAndModelOutputLimit(t *testing.T) {
 		if request.MaxCompletionTokens == nil || *request.MaxCompletionTokens != 64 {
 			t.Fatalf("summary ignored model output limit: %#v", request.MaxCompletionTokens)
 		}
-		return contextResponse("continue from the contract"), nil
+		return contextResponse(contextCheckpointJSON("continue from the contract")), nil
 	})); err != nil {
 		t.Fatal(err)
 	}
@@ -190,7 +195,7 @@ func TestGrillerRetainsActualUserAnswerAfterToolHistoryCompaction(t *testing.T) 
 	fake := &fakeScoutClient{conversationID: "griller-cache", responses: []client.Message{
 		{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{question}},
 		{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{scoutCall("loom_read", `{}`)}},
-		{Role: client.RoleAssistant, Content: "Repository inspected; submit the brief from the confirmed user answer."},
+		{Role: client.RoleAssistant, Content: contextCheckpointJSON("Repository inspected; submit the brief from the confirmed user answer.")},
 		{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{scoutCall(SubmitBriefToolName, `{"objective":"task","conditions":["SQLite only"],"acceptance_criteria":["durable"]}`)}},
 	}}
 	tools := &fakeScoutTools{available: []client.Tool{scoutFunctionTool("loom_read")}, result: &client.ToolResult{Content: strings.Repeat("x", 72_000)}}
@@ -228,7 +233,7 @@ func TestInternalRunnersCompactBetweenToolRoundsAndKeepContracts(t *testing.T) {
 				}
 				if request.MaxCompletionTokens != nil && len(request.Tools) == 0 {
 					summaryCalls++
-					return contextResponse("Read the repository evidence. Continue from the exact role contract and task."), nil
+					return contextResponse(contextCheckpointJSON("Read the repository evidence. Continue from the exact role contract and task.")), nil
 				}
 				normalCalls++
 				if normalCalls == 1 {
@@ -282,7 +287,7 @@ func TestInternalRunnersCompactBetweenToolRoundsAndKeepContracts(t *testing.T) {
 				t.Fatalf("summary calls=%d, normal calls=%d", summaryCalls, normalCalls)
 			}
 			if len(resumed) < 3 || !reflect.DeepEqual(first[:2], resumed[:2]) ||
-				resumed[2].Role != client.RoleUser || !strings.HasPrefix(resumed[2].Content, "Compressed conversation memory:") {
+				resumed[2].Role != client.RoleUser || !strings.HasPrefix(resumed[2].Content, "Session continuation checkpoint:") {
 				t.Fatalf("exact role/task contract did not survive compaction: %#v", resumed)
 			}
 		})

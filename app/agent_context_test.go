@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -22,6 +23,11 @@ type compactingLoopClient struct {
 	compactionErr error
 }
 
+func testCheckpointJSON(activeWork string) string {
+	body, _ := json.Marshal(memory.Checkpoint{ActiveWork: []string{activeWork}})
+	return string(body)
+}
+
 func (c *compactingLoopClient) Chat(_ context.Context, request client.ChatRequest) (*client.ChatResponse, error) {
 	request.Messages = append([]client.Message(nil), request.Messages...)
 	request.Tools = append([]client.Tool(nil), request.Tools...)
@@ -32,7 +38,7 @@ func (c *compactingLoopClient) Chat(_ context.Context, request client.ChatReques
 			return nil, c.compactionErr
 		}
 		return &client.ChatResponse{Choices: []client.Choice{{Message: client.Message{
-			Role: client.RoleAssistant, Content: "condensed tool evidence",
+			Role: client.RoleAssistant, Content: testCheckpointJSON("condensed tool evidence"),
 		}}}}, nil
 	}
 
@@ -186,7 +192,7 @@ func TestStreamAgentLoopCompactsBetweenToolRounds(t *testing.T) {
 		}
 		if event.compaction != nil {
 			compactions++
-			if event.compaction.Summary != "condensed tool evidence" {
+			if !strings.Contains(event.compaction.Summary, "condensed tool evidence") {
 				t.Fatalf("summary = %q", event.compaction.Summary)
 			}
 		}
@@ -219,7 +225,7 @@ func TestStreamAgentLoopCompactsBetweenToolRounds(t *testing.T) {
 		t.Fatal("no fresh post-compaction request")
 	}
 	resumedContent := joinedMessageContent(resumedRequest.Messages)
-	if !strings.Contains(resumedContent, "Compressed conversation memory:\ncondensed tool evidence") {
+	if !strings.Contains(resumedContent, "Session continuation checkpoint:") || !strings.Contains(resumedContent, "condensed tool evidence") {
 		t.Fatalf("post-compaction messages do not contain summary: %#v", resumedRequest.Messages)
 	}
 	if strings.Contains(resumedContent, hugeResult) {
@@ -296,7 +302,7 @@ func TestApplyAgentContextCompactionPreservesTranscript(t *testing.T) {
 	archive := &collectingRecordArchive{}
 	m := model{messages: transcript, memory: manager, conversationID: "old-provider-state", archive: archive}
 
-	if err := m.applyAgentContextCompaction(agentContextCompaction{Plan: plan, Summary: "durable state"}); err != nil {
+	if err := m.applyAgentContextCompaction(agentContextCompaction{Plan: plan, Summary: testCheckpointJSON("durable state")}); err != nil {
 		t.Fatal(err)
 	}
 	if !reflect.DeepEqual(m.messages, history) {
@@ -308,7 +314,7 @@ func TestApplyAgentContextCompactionPreservesTranscript(t *testing.T) {
 	if !hasMessageNamed(m.memory.Messages(), memory.SummaryName) || m.memory.Stats().Compactions != 1 {
 		t.Fatalf("memory was not compacted: %#v, stats = %#v", m.memory.Messages(), m.memory.Stats())
 	}
-	if len(archive.records) != 1 || archive.records[0].Content != "durable state" {
+	if len(archive.records) != 1 || !strings.Contains(archive.records[0].Content, "durable state") {
 		t.Fatalf("archive records = %#v", archive.records)
 	}
 }
