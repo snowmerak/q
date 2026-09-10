@@ -3165,7 +3165,7 @@ func TestChatExecutesToolCallsAndContinuesTurn(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(archived.Hits) != 10 {
+	if len(archived.Hits) != 9 {
 		t.Fatalf("archived records = %#v", archived.Hits)
 	}
 	var archivedToolCall, archivedToolResult, archivedCompletionCall, archivedCompletionResult *sessionstore.Record
@@ -3187,8 +3187,8 @@ func TestChatExecutesToolCallsAndContinuesTurn(t *testing.T) {
 	if archivedToolCall == nil || archivedToolCall.Status != sessionstore.StatusRunning || archivedToolCall.Summary != "write_file" {
 		t.Fatalf("tool call record = %#v", archivedToolCall)
 	}
-	if archivedToolResult == nil || archivedToolResult.Status != sessionstore.StatusSucceeded || archivedToolResult.ParentID != archivedToolCall.ID {
-		t.Fatalf("tool result record = %#v", archivedToolResult)
+	if archivedToolResult != nil {
+		t.Fatalf("Loom-backed tool result record = %#v", archivedToolResult)
 	}
 	if archivedCompletionCall == nil || archivedCompletionResult == nil || archivedCompletionResult.ParentID != archivedCompletionCall.ID {
 		t.Fatalf("completion records = call %#v, result %#v", archivedCompletionCall, archivedCompletionResult)

@@ -65,6 +65,10 @@ func (l *Lifecycle) Started(prompt string) error {
 }
 
 func (l *Lifecycle) Message(message client.Message) error {
+	content := message.TextContent()
+	if message.Role == client.RoleTool && len(sessionstore.ExtractLoomReferences(content)) > 0 {
+		return nil
+	}
 	payload, err := json.Marshal(message)
 	if err != nil {
 		return err
@@ -81,7 +85,7 @@ func (l *Lifecycle) Message(message client.Message) error {
 	return l.sink.Append(sessionstore.Record{
 		Kind: kind, RunID: l.runID, TaskID: l.taskID, ParentID: l.taskRecordID(),
 		Role: role, Model: l.spec.Model, Effort: l.spec.ReasoningEffort, Status: status,
-		Content: message.TextContent(), Tags: []string{"subagent", l.spec.Role}, Payload: payload,
+		Content: content, Tags: []string{"subagent", l.spec.Role}, Payload: payload,
 	})
 }
 

@@ -59,6 +59,12 @@ func (m *model) archiveMessage(message client.Message, status string, isError bo
 			payloadMessage.Content = ""
 			tags = append(tags, "archive-read")
 		}
+		// Loom-backed results are only useful while their session projection pins
+		// the artifact. Do not leave an archive record whose sole durable value is
+		// a reference that GC may later reclaim.
+		if len(sessionstore.ExtractLoomReferences(content)) > 0 {
+			return
+		}
 	}
 	for _, call := range message.ToolCalls {
 		refs = append(refs, toolCallRecordID(m.runID, call.ID))

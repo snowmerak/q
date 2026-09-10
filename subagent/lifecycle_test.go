@@ -74,6 +74,30 @@ func TestLifecycleRecordsFailure(t *testing.T) {
 	}
 }
 
+func TestLifecycleOmitsLoomBackedToolResult(t *testing.T) {
+	sink := &collectingSink{}
+	spec := Spec{Role: "coder", Model: "coder-model"}
+	lifecycle, err := NewLifecycle(sink, "run-1", "task-1", "", &spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := lifecycle.Message(client.Message{
+		Role: client.RoleTool, Name: "read_file", ToolCallID: "call-1",
+		Content: `{"loom_ref":"loom://0123456789abcdef0123456789abcdef","kind":"mcp-result","stored":true}`,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := lifecycle.Message(client.Message{
+		Role: client.RoleTool, Name: "task_complete", ToolCallID: "complete-1", Content: `{"outcome":"succeeded"}`,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if len(sink.records) != 1 || sink.records[0].Content != `{"outcome":"succeeded"}` {
+		t.Fatalf("records = %#v", sink.records)
+	}
+}
+
 func TestLifecycleRecordsActiveFallbackModel(t *testing.T) {
 	sink := &collectingSink{}
 	spec := Spec{Role: "analyst", Model: "primary", ReasoningEffort: "high"}
