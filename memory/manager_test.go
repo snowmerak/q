@@ -182,6 +182,25 @@ func checkpointResponse(activeWork string) string {
 	return string(body)
 }
 
+func TestPlanDoesNotApplySeparateCheckpointOutputCeiling(t *testing.T) {
+	manager := New(Policy{
+		ContextWindow: 1_000_000,
+		TriggerRatio:  .85,
+		TargetRatio:   .22,
+		RecentRatio:   .01,
+	}, []client.Message{
+		{Role: client.RoleUser, Content: strings.Repeat("old context ", 50_000)},
+		{Role: client.RoleUser, Content: "recent request"},
+	})
+	plan, err := manager.Plan()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.OutputBudget <= 65_536 {
+		t.Fatalf("output budget = %d; want dynamic target above the former ceiling", plan.OutputBudget)
+	}
+}
+
 func TestRetentionPinsWholePendingToolExchange(t *testing.T) {
 	m := New(Policy{ContextWindow: 8000, TriggerRatio: .80, TargetRatio: .30, RecentRatio: .07}, nil)
 	call := client.Message{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{

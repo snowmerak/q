@@ -259,7 +259,9 @@ func TestRunnerCompactsWhilePreservingSourceAndAcknowledgedPropositions(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(fake.requests) != 3 || fake.requests[1].MaxCompletionTokens == nil || result.Registered != 1 || result.Usage.TotalTokens != 36 {
+	if len(fake.requests) != 3 || fake.requests[1].MaxCompletionTokens != nil ||
+		len(fake.requests[1].Messages) == 0 || !strings.Contains(fake.requests[1].Messages[0].Content, "session continuation checkpoint") ||
+		result.Registered != 1 || result.Usage.TotalTokens != 36 {
 		t.Fatalf("result=%#v requests=%d", result, len(fake.requests))
 	}
 	initial, resumed := fake.requests[0].Messages, fake.requests[2].Messages

@@ -28,11 +28,16 @@ func testCheckpointJSON(activeWork string) string {
 	return string(body)
 }
 
+func isCheckpointRequestForTest(request client.ChatRequest) bool {
+	return len(request.Tools) == 0 && len(request.Messages) > 0 &&
+		strings.Contains(request.Messages[0].Content, "session continuation checkpoint")
+}
+
 func (c *compactingLoopClient) Chat(_ context.Context, request client.ChatRequest) (*client.ChatResponse, error) {
 	request.Messages = append([]client.Message(nil), request.Messages...)
 	request.Tools = append([]client.Tool(nil), request.Tools...)
 	c.requests = append(c.requests, request)
-	if request.MaxCompletionTokens != nil && len(request.Tools) == 0 {
+	if isCheckpointRequestForTest(request) {
 		c.compactCalls++
 		if c.compactionErr != nil {
 			return nil, c.compactionErr
@@ -211,7 +216,7 @@ func TestStreamAgentLoopCompactsBetweenToolRounds(t *testing.T) {
 	var compactRequest, resumedRequest *client.ChatRequest
 	for index := range configuredClient.requests {
 		request := &configuredClient.requests[index]
-		if request.MaxCompletionTokens != nil && len(request.Tools) == 0 {
+		if isCheckpointRequestForTest(*request) {
 			compactRequest = request
 		}
 		if len(request.Tools) > 0 && request.ConversationID == "" {

@@ -115,7 +115,7 @@ func TestCheckpointRequestUsesSimpleSessionStateContract(t *testing.T) {
 	if len(request) != 2 {
 		t.Fatalf("request messages = %#v", request)
 	}
-	for _, required := range []string{"current_request", "active_work", "previous_work", "facts", "Do not copy raw tool output"} {
+	for _, required := range []string{"current_request", "active_work", "previous_work", "facts", "Never copy raw tool output", "identifiers that matter only inside them"} {
 		if !strings.Contains(request[0].Content, required) {
 			t.Fatalf("checkpoint prompt is missing %q:\n%s", required, request[0].Content)
 		}

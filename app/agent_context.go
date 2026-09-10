@@ -93,9 +93,8 @@ func (c *agentLoopContext) CompactIfNeeded(
 	if err != nil {
 		return nil, fmt.Errorf("agent loop: plan context compaction: %w", err)
 	}
-	maxTokens := plan.OutputBudget
 	response, err := chatWithConversationRecovery(ctx, configuredClient, client.ChatRequest{
-		Model: modelID, Messages: plan.RequestMessages(), MaxCompletionTokens: &maxTokens,
+		Model: modelID, Messages: plan.RequestMessages(),
 		ReasoningEffort: reasoningEffort,
 	})
 	if err != nil {

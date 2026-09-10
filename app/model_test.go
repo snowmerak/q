@@ -403,7 +403,7 @@ func (f *fakeClient) Chat(_ context.Context, request client.ChatRequest) (*clien
 	f.requests = append(f.requests, request)
 	n := len(f.requests)
 	content := "reply " + string(rune('0'+n))
-	if request.MaxCompletionTokens != nil && len(request.Tools) == 0 {
+	if isCheckpointRequestForTest(request) {
 		content = testCheckpointJSON("preserve the pending request")
 	}
 	return &client.ChatResponse{
@@ -504,7 +504,8 @@ func TestChatCompactsAtThresholdThenSendsPendingMessage(t *testing.T) {
 			found = true
 		}
 	}
-	if !found || len(fake.requests) != 1 || fake.requests[0].MaxCompletionTokens == nil || fake.requests[0].Model != "workspace-model" {
+	if !found || len(fake.requests) != 1 || fake.requests[0].MaxCompletionTokens != nil ||
+		!isCheckpointRequestForTest(fake.requests[0]) || fake.requests[0].Model != "workspace-model" {
 		t.Fatalf("compaction request = %#v", fake.requests)
 	}
 

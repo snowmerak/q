@@ -113,14 +113,10 @@ func (c *ContextCompactor) CompactIfNeeded(ctx context.Context, spec *Spec, conf
 	if err != nil {
 		return err
 	}
-	maxTokens := plan.OutputBudget
-	if spec.MaxOutputTokens > 0 {
-		maxTokens = min(maxTokens, int(spec.MaxOutputTokens))
-	}
 	compactor := *spec
 	compactor.conversationID = ""
 	response, err := compactor.Chat(ctx, configured, client.ChatRequest{
-		Messages: plan.RequestMessages(), MaxCompletionTokens: &maxTokens,
+		Messages: plan.RequestMessages(),
 	})
 	if err != nil {
 		return fmt.Errorf("subagent: compact context: %w", err)

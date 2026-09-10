@@ -274,7 +274,8 @@ func TestCommitAgentCompactsAndRetainsStagedOverview(t *testing.T) {
 	if err != nil || fallback || proposal.Single == nil {
 		t.Fatalf("proposal=%#v fallback=%v err=%v", proposal, fallback, err)
 	}
-	if len(fake.requests) != 4 || fake.requests[2].MaxCompletionTokens == nil {
+	if len(fake.requests) != 4 || fake.requests[2].MaxCompletionTokens != nil ||
+		len(fake.requests[2].Messages) == 0 || !strings.Contains(fake.requests[2].Messages[0].Content, "session continuation checkpoint") {
 		t.Fatalf("compaction sequence has %d requests", len(fake.requests))
 	}
 	before, after := fake.requests[1].Messages, fake.requests[3].Messages

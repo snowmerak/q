@@ -279,7 +279,7 @@ type stagedCompactingACPClient struct {
 }
 
 func (c *stagedCompactingACPClient) Chat(ctx context.Context, request client.ChatRequest) (*client.ChatResponse, error) {
-	if request.MaxCompletionTokens != nil && len(request.Tools) == 0 {
+	if isCheckpointRequestForTest(request) {
 		close(c.compactionStarted)
 		select {
 		case <-c.releaseCompaction:

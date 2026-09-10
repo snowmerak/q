@@ -1729,12 +1729,10 @@ func (a *acpAgent) compactIfNeeded(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	maxCompletionTokens := plan.OutputBudget
 	response, err := chatWithConversationRecovery(ctx, a.state.client, client.ChatRequest{
-		Model:               a.state.activeModel(),
-		ReasoningEffort:     a.state.activeConfig().Provider.EffectiveReasoningEffort(),
-		Messages:            plan.RequestMessages(),
-		MaxCompletionTokens: &maxCompletionTokens,
+		Model:           a.state.activeModel(),
+		ReasoningEffort: a.state.activeConfig().Provider.EffectiveReasoningEffort(),
+		Messages:        plan.RequestMessages(),
 	})
 	if err != nil {
 		return err

@@ -253,7 +253,6 @@ func (m *Manager) PlanWithRetention(retention Retention) (Plan, error) {
 	if plan.TargetTokens >= int(float64(m.policy.ContextWindow)*m.policy.TriggerRatio) {
 		return Plan{}, fmt.Errorf("memory: immutable and recent context leave no room below the compaction threshold of the %d token context window", m.policy.ContextWindow)
 	}
-	plan.OutputBudget = min(plan.OutputBudget, 8192)
 	return plan, nil
 }
 
@@ -263,8 +262,9 @@ Return one JSON object with exactly these four useful sections. Prefer short arr
 {"current_request":[],"active_work":[],"previous_work":[],"facts":[]}
 current_request: what the user currently asked for, including completion conditions and constraints.
 active_work: what is being done now, the latest outcome, next action, and any blocker.
-previous_work: earlier completed or abandoned work and its outcome. Do not copy raw tool output.
-facts: confirmed facts, decisions, exact paths, identifiers, commands, values, and errors that must survive later compactions.
+previous_work: earlier completed or abandoned work and its outcome.
+facts: confirmed, user-relevant facts, decisions, exact paths, identifiers, commands, values, and errors that must survive later compactions. Preserve an identifier only when it is needed to continue the current request.
+Never copy raw tool output, debug dumps, transient observations, or identifiers that matter only inside them. Keep only their durable, user-relevant conclusions in previous_work or facts; otherwise omit them.
 Merge any existing checkpoint with newer evidence. Keep still-relevant facts, distinguish unfinished work from completed work, and do not invent facts.
 Return JSON only, without Markdown fences or explanatory prose.`, p.OutputBudget)
 	source, _ := json.Marshal(p.Source)

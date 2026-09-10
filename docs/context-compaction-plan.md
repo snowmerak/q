@@ -274,7 +274,10 @@ immutable system/tool context
 3. 나머지 오래된 메시지와 기존 누적 checkpoint를 source로 선택한다.
 4. assistant tool call과 대응하는 tool result는 하나의 atomic turn으로 취급한다.
 5. source 전체를 한 번의 checkpoint 요청으로 보내며 output budget은 설정된
-   `target_ratio - immutable - recent`로 제한한다.
+   `target_ratio - immutable - recent`에서 동적으로 계산하고 별도 고정 상한을
+   두지 않는다. 이 값은 checkpoint 크기를 유도하는 prompt target이다. 압축 요청에는
+   `max_completion_tokens`를 보내지 않으며 실제 reasoning/output 한도는 provider와
+   모델이 관리한다.
 6. 응답에서 인식 가능한 JSON 객체를 복구하고 네 섹션을 정규화한다. 모델이
    생략한 섹션은 기존 구조화 checkpoint에서 계승한다.
 7. 정규화된 checkpoint를 원자적으로 적용한다. target은 품질과 다음 요청의 여유를
@@ -305,6 +308,8 @@ source가 요약 모델의 입력 한도를 넘을 때 여러 chunk로 나누는
 결과·다음 행동·blocker, `previous_work`는 이전 작업과 결과, `facts`는 다음
 압축 뒤에도 유지할 확정 사실·결정·경로·식별자·명령·값·오류를 담는다. 일반
 tool 출력은 원문을 복사하지 않고 지속적으로 필요한 결과나 사실만 남긴다.
+현재 요청을 이어가는 데 필요하지 않은 debug dump, transient observation과 그
+내부에서만 의미가 있는 식별자는 버린다.
 
 정상 형태는 문자열 배열이지만 작은 모델을 위해 문자열, 배열, 작은 객체를 모두
 문자열 배열로 정규화한다. 설명문이나 Markdown fence 안의 객체, trailing comma,

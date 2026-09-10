@@ -3617,12 +3617,11 @@ func (m model) compactContext(plan memory.Plan) tea.Cmd {
 	configuredClient := m.client
 	modelID := m.activeModel()
 	reasoningEffort := m.activeConfig().Provider.EffectiveReasoningEffort()
-	maxTokens := plan.OutputBudget
 	turnContext := m.activeTurnContext()
 	turnID := m.turnID
 	return func() tea.Msg {
 		response, err := chatWithConversationRecovery(turnContext, configuredClient, client.ChatRequest{
-			Model: modelID, Messages: plan.RequestMessages(), MaxCompletionTokens: &maxTokens,
+			Model: modelID, Messages: plan.RequestMessages(),
 			ReasoningEffort: reasoningEffort,
 		})
 		return compactionResultMsg{turnID: turnID, response: response, plan: plan, err: err}

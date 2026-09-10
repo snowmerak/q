@@ -28,6 +28,11 @@ func contextCheckpointJSON(activeWork string) string {
 	return string(body)
 }
 
+func isContextCheckpointRequest(request client.ChatRequest) bool {
+	return len(request.Tools) == 0 && len(request.Messages) > 0 &&
+		strings.Contains(request.Messages[0].Content, "session continuation checkpoint")
+}
+
 func TestContextCompactorKeepsAnchorsAndUserAnswersAcrossCompactions(t *testing.T) {
 	spec := Spec{Role: config.AgentRoleGriller, Model: "griller", ContextLength: 16_000, conversationID: "old-backend"}
 	anchors := []client.Message{
@@ -42,7 +47,7 @@ func TestContextCompactorKeepsAnchorsAndUserAnswersAcrossCompactions(t *testing.
 	compactions := 0
 	fake := contextChatFunc(func(_ context.Context, request client.ChatRequest) (*client.ChatResponse, error) {
 		compactions++
-		if request.ConversationID != "" || len(request.Tools) != 0 || request.MaxCompletionTokens == nil || request.Model != "griller" {
+		if request.ConversationID != "" || request.MaxCompletionTokens != nil || !isContextCheckpointRequest(request) || request.Model != "griller" {
 			t.Fatalf("summary request reused execution state: %#v", request)
 		}
 		if strings.Contains(request.Messages[1].Content, "SQLite only") {
@@ -169,7 +174,7 @@ func TestContextCompactorUsesRoleLimitAndConfiguredPolicy(t *testing.T) {
 	}
 }
 
-func TestContextCompactorIncludesToolSchemasAndModelOutputLimit(t *testing.T) {
+func TestContextCompactorIncludesToolSchemasWithoutHardOutputLimit(t *testing.T) {
 	spec := Spec{Model: "scout", ContextLength: 16_000, MaxOutputTokens: 64}
 	history := NewContextCompactor(spec, []client.Message{{Role: client.RoleSystem, Content: "contract"}}, []client.Tool{{
 		Type: client.ToolTypeFunction, Function: client.FunctionDefinition{Name: "large_schema", Description: strings.Repeat("x", 28_000)},
@@ -178,8 +183,8 @@ func TestContextCompactorIncludesToolSchemasAndModelOutputLimit(t *testing.T) {
 	called := false
 	if err := history.CompactIfNeeded(t.Context(), &spec, contextChatFunc(func(_ context.Context, request client.ChatRequest) (*client.ChatResponse, error) {
 		called = true
-		if request.MaxCompletionTokens == nil || *request.MaxCompletionTokens != 64 {
-			t.Fatalf("summary ignored model output limit: %#v", request.MaxCompletionTokens)
+		if request.MaxCompletionTokens != nil || !isContextCheckpointRequest(request) {
+			t.Fatalf("checkpoint request imposed a hard output limit: %#v", request)
 		}
 		return contextResponse(contextCheckpointJSON("continue from the contract")), nil
 	})); err != nil {
@@ -208,7 +213,8 @@ func TestGrillerRetainsActualUserAnswerAfterToolHistoryCompaction(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(fake.requests) != 4 || fake.requests[2].MaxCompletionTokens == nil || fake.requests[3].ConversationID != "" {
+	if len(fake.requests) != 4 || fake.requests[2].MaxCompletionTokens != nil ||
+		!isContextCheckpointRequest(fake.requests[2]) || fake.requests[3].ConversationID != "" {
 		t.Fatalf("unexpected compaction sequence: %#v", fake.requests)
 	}
 	got := fake.requests[3].Messages
@@ -231,7 +237,7 @@ func TestInternalRunnersCompactBetweenToolRoundsAndKeepContracts(t *testing.T) {
 				if request.ToolChoice == client.ToolChoiceNone {
 					return contextResponse(""), nil
 				}
-				if request.MaxCompletionTokens != nil && len(request.Tools) == 0 {
+				if isContextCheckpointRequest(request) {
 					summaryCalls++
 					return contextResponse(contextCheckpointJSON("Read the repository evidence. Continue from the exact role contract and task.")), nil
 				}
