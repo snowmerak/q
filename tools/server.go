@@ -18,6 +18,7 @@ import (
 	"github.com/snowmerak/q/providerhost"
 	"github.com/snowmerak/q/sessionstore"
 	"github.com/snowmerak/q/tools/builtin"
+	"github.com/snowmerak/q/usagelog"
 	"github.com/snowmerak/q/workspace"
 	"github.com/snowmerak/q/workspacememory"
 )
@@ -158,6 +159,8 @@ func RunStdioWithLoomOptions(ctx context.Context, root string, options loom.Stor
 	)
 	var embeddingClient *client.Client
 	var embeddingManager *providerhost.Manager
+	usageRecorder := usagelog.New(configStore.Dir)
+	defer usageRecorder.Close()
 	if loaded.Embedding.Model != "" {
 		if loaded.Provider.Managed {
 			embeddingManager, err = providerhost.NewManager(ctx, providerhost.Store{Dir: configStore.Dir})
@@ -170,13 +173,15 @@ func RunStdioWithLoomOptions(ctx context.Context, root string, options loom.Stor
 			}
 			embeddingClient, err = client.New(client.Config{
 				BaseURL: embeddingManager.Endpoint(), APIKey: embeddingManager.APIKey(),
-				DefaultModel: loaded.Provider.Model,
+				DefaultModel:  loaded.Provider.Model,
+				UsageRecorder: usageRecorder,
 			})
 		} else {
 			apiKey := loaded.Provider.ResolveAPIKey()
 			embeddingClient, err = client.New(client.Config{
 				BaseURL: loaded.Provider.BaseURL, APIKey: apiKey, DefaultModel: loaded.Provider.Model,
 				DisableAPIKey: apiKey == "",
+				UsageRecorder: usageRecorder,
 			})
 		}
 		if err != nil {

@@ -1,0 +1,29 @@
+{
+  "openapi": "3.1.0",
+  "info": {"title": "q Usage API", "version": "1.0.0", "description": "Loopback-only token count storage and dashboard queries."},
+  "servers": [{"url": "http://127.0.0.1:17893"}],
+  "paths": {
+    "/v1/health": {
+      "get": {"summary": "Inspect service compatibility", "responses": {"200": {"description": "Healthy Usage service", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Health"}}}}}}
+    },
+    "/v1/events": {
+      "post": {"summary": "Idempotently append one token-only event", "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/UsageEvent"}}}}, "responses": {"200": {"description": "Event accepted or already present"}, "400": {"description": "Invalid event"}, "403": {"description": "Cross-origin write rejected"}}}
+    },
+    "/api/v1/usage": {
+      "get": {"summary": "Query token rollups", "parameters": [
+        {"name": "from", "in": "query", "schema": {"type": "string", "format": "date-time"}},
+        {"name": "to", "in": "query", "schema": {"type": "string", "format": "date-time"}},
+        {"name": "model", "in": "query", "schema": {"type": "string", "maxLength": 256}},
+        {"name": "role", "in": "query", "schema": {"type": "string", "maxLength": 64}}
+      ], "responses": {"200": {"description": "Aggregated usage", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/UsageView"}}}}, "400": {"description": "Invalid filter"}}}
+    }
+  },
+  "components": {"schemas": {
+    "Health": {"type": "object", "required": ["service", "protocol_version", "implementation", "generation", "ready"], "properties": {"service": {"type": "string"}, "protocol_version": {"type": "integer"}, "implementation": {"type": "string"}, "generation": {"type": "string"}, "ready": {"type": "boolean"}}},
+    "UsageEvent": {"type": "object", "additionalProperties": false, "required": ["event_id", "at", "model", "role", "prompt_tokens", "completion_tokens", "total_tokens", "cached_tokens", "cache_write_tokens"], "properties": {
+      "event_id": {"type": "string", "pattern": "^[0-9a-f]{32}([0-9a-f]{32})?$"}, "at": {"type": "string", "format": "date-time"}, "model": {"type": "string", "maxLength": 256}, "role": {"type": "string", "maxLength": 64},
+      "prompt_tokens": {"type": "integer", "minimum": 0}, "completion_tokens": {"type": "integer", "minimum": 0}, "total_tokens": {"type": "integer", "minimum": 0}, "cached_tokens": {"type": "integer", "minimum": 0}, "cache_write_tokens": {"type": "integer", "minimum": 0}, "estimated": {"type": "boolean"}, "cache_estimated": {"type": "boolean"}
+    }},
+    "UsageView": {"type": "object", "required": ["from", "to", "resolution", "totals", "series", "models", "roles"], "properties": {"from": {"type": "string", "format": "date-time"}, "to": {"type": "string", "format": "date-time"}, "resolution": {"enum": ["hour", "day"]}, "totals": {"type": "object"}, "series": {"type": "array", "items": {"type": "object"}}, "models": {"type": "array", "items": {"type": "object"}}, "roles": {"type": "array", "items": {"type": "object"}}}}
+  }}
+}

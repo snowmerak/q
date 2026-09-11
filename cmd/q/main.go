@@ -133,6 +133,17 @@ func main() {
 		}
 		return
 	}
+	if len(os.Args) > 1 && os.Args[1] == "usage" {
+		if len(os.Args) != 2 {
+			fmt.Fprintln(os.Stderr, "usage: q usage")
+			os.Exit(2)
+		}
+		if err := runUsageCommand(ctx, os.Stdout, os.Stderr); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
 	if len(os.Args) > 1 && os.Args[1] == "commit" {
 		if len(os.Args) != 2 {
 			fmt.Fprintln(os.Stderr, "usage: q commit")

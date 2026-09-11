@@ -11,6 +11,7 @@ import (
 	"github.com/snowmerak/q/loom"
 	"github.com/snowmerak/q/providerhost"
 	"github.com/snowmerak/q/subagent"
+	"github.com/snowmerak/q/usagelog"
 	"github.com/snowmerak/q/workspace"
 )
 
@@ -169,6 +170,7 @@ func prepareSession(
 func resolveCommitRuntime(ctx context.Context, store config.Store, value config.Config) (resolvedRuntime, error) {
 	var configuredClient *client.Client
 	var closeRuntime func() error
+	usageRecorder := usagelog.New(store.Dir)
 	if value.Provider.Managed {
 		manager, err := providerhost.NewManager(ctx, providerhost.Store{Dir: store.Dir})
 		if err != nil {
@@ -180,24 +182,26 @@ func resolveCommitRuntime(ctx context.Context, store config.Store, value config.
 		}
 		configuredClient, err = client.New(client.Config{
 			BaseURL: manager.Endpoint(), APIKey: manager.APIKey(), DefaultModel: value.Provider.Model,
+			UsageRecorder: usageRecorder,
 		})
 		if err != nil {
 			_ = manager.Close()
 			return resolvedRuntime{}, err
 		}
 		closeRuntime = func() error {
-			return errors.Join(configuredClient.Close(), manager.Close())
+			return errors.Join(configuredClient.Close(), manager.Close(), usageRecorder.Close())
 		}
 	} else {
 		apiKey := value.Provider.ResolveAPIKey()
 		var err error
 		configuredClient, err = client.New(client.Config{
 			BaseURL: value.Provider.BaseURL, APIKey: apiKey, DefaultModel: value.Provider.Model, DisableAPIKey: apiKey == "",
+			UsageRecorder: usageRecorder,
 		})
 		if err != nil {
 			return resolvedRuntime{}, err
 		}
-		closeRuntime = configuredClient.Close
+		closeRuntime = func() error { return errors.Join(configuredClient.Close(), usageRecorder.Close()) }
 	}
 
 	models, err := configuredClient.ListModels(ctx)

@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>{{.Title}}</title>
+  <link rel="stylesheet" href="/assets/dashboard.css">
+  <script src="/assets/dashboard.js" defer></script>
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="/" aria-label="q usage home"><span class="qmark">q</span><span>usage</span></a>
+    <p>Local model telemetry</p>
+    <span class="live"><i aria-hidden="true"></i> loopback only</span>
+  </header>
+
+  <main>
+    <section class="hero" aria-labelledby="page-title">
+      <div>
+        <p class="eyebrow">MODEL USAGE</p>
+        <h1 id="page-title">Token traffic, without the payload.</h1>
+        <p class="lede">Provider-reported counts and bounded estimates from this machine. Prompts, responses, endpoints and credentials never enter this store.</p>
+      </div>
+      <div class="controls" aria-label="Usage filters">
+        <div class="range" role="group" aria-label="Time range">
+          <button type="button" data-range="24h" class="active">24h</button>
+          <button type="button" data-range="7d">7d</button>
+          <button type="button" data-range="30d">30d</button>
+          <button type="button" data-range="90d">90d</button>
+          <button type="button" data-range="all">All</button>
+        </div>
+        <label><span>Model</span><select id="model-filter"><option value="">All models</option></select></label>
+        <label><span>Role</span><select id="role-filter"><option value="">All roles</option></select></label>
+      </div>
+    </section>
+
+    <p id="status" class="status" role="status">Loading local usage…</p>
+
+    <section class="metrics" aria-label="Usage summary">
+      <article><span>Total tokens</span><strong id="total-tokens">—</strong><small id="period-label">last 24 hours</small></article>
+      <article><span>API calls</span><strong id="calls">—</strong><small id="tokens-per-call">— per call</small></article>
+      <article><span>Cache read</span><strong id="cache-rate">—</strong><small id="cached-tokens">— cached tokens</small></article>
+      <article><span>Estimated calls</span><strong id="estimate-rate">—</strong><small id="estimated-calls">— calls</small></article>
+    </section>
+
+    <section class="panel chart-panel" aria-labelledby="traffic-heading">
+      <div class="panel-heading">
+        <div><p class="eyebrow">TRAFFIC</p><h2 id="traffic-heading">Tokens over time</h2></div>
+        <div class="legend"><span><i class="prompt"></i>Prompt</span><span><i class="cached"></i>Cached</span><span><i class="completion"></i>Completion</span></div>
+      </div>
+      <div id="chart" class="chart" role="img" aria-label="Token usage over time"></div>
+    </section>
+
+    <section class="panel" aria-labelledby="roles-heading">
+      <div class="panel-heading"><div><p class="eyebrow">ROLES</p><h2 id="roles-heading">Where tokens were spent</h2></div></div>
+      <div id="role-strip" class="role-strip"></div>
+      <div id="role-legend" class="role-legend"></div>
+    </section>
+
+    <section class="panel" aria-labelledby="models-heading">
+      <div class="panel-heading"><div><p class="eyebrow">MODELS</p><h2 id="models-heading">Model ledger</h2></div></div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Model</th><th>Calls</th><th>Prompt</th><th>Completion</th><th>Cached</th><th>Total</th><th>Estimated</th></tr></thead>
+          <tbody id="model-rows"></tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+
+  <footer><span>SQLite hot store · daily Parquet archive</span><a href="/openapi.json">OpenAPI</a></footer>
+</body>
+</html>

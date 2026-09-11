@@ -157,7 +157,9 @@ func RunDiagnose(
 	if err != nil {
 		return err
 	}
-	factory := managedClientFactory(manager)
+	usageRecorder := newUsageRecorder(store)
+	defer usageRecorder.Close()
+	factory := managedClientFactory(manager, usageRecorder)
 	startup := startupRequest{
 		ctx: runtimeContext, store: store, workspaceStore: workspaceStore,
 		memoryCtx: memoryContext, loaded: loaded, manager: manager,

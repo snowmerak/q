@@ -15,6 +15,7 @@ func (s *Spec) FinishToolTurn(ctx context.Context, configured client.ModelChatCl
 	if s == nil {
 		return client.ToolTurnResult{}, errors.New("subagent: model spec is nil")
 	}
+	ctx = client.WithUsageRole(ctx, s.Role)
 	s.Apply(&request)
 	if request.ConversationID == "" {
 		request.ConversationID = s.conversationID

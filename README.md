@@ -516,6 +516,7 @@ omits the chat-only `learn` tool.
 | `q library` | Configure the global Library listener. |
 | `q library start` | Run the global Library as a dedicated foreground service. |
 | `q memory` | Keep Workspace Memory running independently of a TUI. |
+| `q usage` | Open the local token-usage dashboard and host its service when needed. |
 | `q commit` | Open the commit workflow in the current repository. |
 | `q model` | Configure model and role assignments. |
 | `q agents` | Configure ACP agent connections and external Search/Web Tester roles. |
@@ -525,11 +526,11 @@ omits the chat-only `learn` tool.
 | `q ignore` | Edit `.qignore`. |
 | `q help` | Open the TUI help without starting chat services. |
 
-Ordinary q processes automatically ensure Workspace Memory and the global
-Library are available. Run the standalone service commands when their lifetime
-should not depend on an interactive session. Both internal data services bind
-only to a loopback IP address and accept local HTTP requests without bearer
-authentication.
+Ordinary q processes automatically ensure Workspace Memory, the global Library,
+and token Usage storage are available when needed. Run the standalone service
+commands when their lifetime should not depend on an interactive session. The
+internal data services bind only to a loopback IP address and accept local HTTP
+requests without bearer authentication.
 
 The standalone Gateway initially binds to `127.0.0.1:0`. If it has no active
 API keys, authentication is disabled. Do not expose a no-key Gateway on a
@@ -546,9 +547,13 @@ non-loopback address unless the surrounding network already enforces access.
 | `~/.q/gateway.json` | Standalone Gateway listener and key metadata. |
 | `~/.q/library.json` | Global Library loopback listener settings. |
 | `~/.q/workspace-memory.json` | Workspace Memory settings. |
+| `~/.q/usage.json` | Token Usage service loopback endpoint settings. |
 | `~/.q/mcp.json` | External MCP profiles and role assignments. |
 | `~/.q/skills/` | q-managed global Agent Skills. |
 | `~/.q/logs/thinker/` | Private Thinker invocation diagnostics retained for three days. |
+| `~/.q/usage/usage.sqlite` | Recent token-only events and all-time daily rollups. |
+| `~/.q/usage/archive/` | Daily Parquet archives for raw events older than 90 days. |
+| `~/.q/logs/model-usage/` | Legacy JSONL import source; successful import does not delete it. |
 
 Gateway authentication master keys are stored separately under `~/.q`. Global
 Library and Workspace Memory do not create or require authentication keys;
@@ -591,6 +596,7 @@ Editable source: [docs/architecture.drawio](docs/architecture.drawio).
 | Workspace runtime | Root-scoped tools and local LSP sessions. |
 | Workspace Memory | Durable records and Bleve/HNSW indexes for leased workspace roots. |
 | Global Library | Shared skills, propositions, search indexes, and judging queue. |
+| Usage service | Token-only SQLite hot store, daily rollups, Parquet archive, and local dashboard. |
 
 This separation allows several q processes to share durable services without
 sharing a chat session or provider conversation lifecycle.
@@ -626,3 +632,5 @@ publishing the fork.
 - [Agent Skills](docs/agent-skills.md)
 - [Workspace instructions](docs/workspace-instructions.md)
 - [LSP integration](docs/lsp.md)
+- [Model token usage tracing](docs/model-usage-tracing.md)
+- [Model Usage storage and dashboard](docs/model-usage-dashboard.md)

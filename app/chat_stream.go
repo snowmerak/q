@@ -31,6 +31,7 @@ func streamChatWithEmptyResponseRecovery(
 	request client.ChatRequest,
 	emit func(chatStreamDelta) bool,
 ) (*client.ChatResponse, error) {
+	ctx = client.WithUsageRole(ctx, "main")
 	return recoverEmptyChatResponse(ctx, request, func(ctx context.Context, request client.ChatRequest) (*client.ChatResponse, error) {
 		return streamChatWithConversationRecovery(ctx, configuredClient, request, emit)
 	})

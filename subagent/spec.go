@@ -153,6 +153,7 @@ func (s *Spec) Chat(ctx context.Context, configured client.ModelChatClient, requ
 	if request.ConversationID == "" {
 		request.ConversationID = s.conversationID
 	}
+	ctx = client.WithUsageRole(ctx, s.Role)
 	request.Messages = agentinstructions.Prepare(request.Messages, request.WorkingDirectory)
 	if s.Group == "" {
 		s.Apply(&request)

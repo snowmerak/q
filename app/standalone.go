@@ -276,7 +276,9 @@ func RunModel(ctx context.Context, store config.Store) error {
 		loaded.UseManagedGateway()
 	}
 
-	factory := managedClientFactory(manager)
+	usageRecorder := newUsageRecorder(store)
+	defer usageRecorder.Close()
+	factory := managedClientFactory(manager, usageRecorder)
 	configuredClient, err := factory(loaded)
 	if err != nil {
 		return err

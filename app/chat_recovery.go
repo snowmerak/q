@@ -24,6 +24,7 @@ func chatWithEmptyResponseRecovery(
 	configuredClient chatClient,
 	request client.ChatRequest,
 ) (*client.ChatResponse, error) {
+	ctx = client.WithUsageRole(ctx, "main")
 	return recoverEmptyChatResponse(ctx, request, func(ctx context.Context, request client.ChatRequest) (*client.ChatResponse, error) {
 		return chatWithConversationRecovery(ctx, configuredClient, request)
 	})
@@ -96,6 +97,7 @@ func chatWithConversationRecovery(
 	configuredClient chatClient,
 	request client.ChatRequest,
 ) (*client.ChatResponse, error) {
+	ctx = client.WithUsageRole(ctx, "main")
 	response, err := configuredClient.Chat(ctx, request)
 	if err == nil || request.ConversationID == "" || !isMissingCodexRollout(err) {
 		return response, err

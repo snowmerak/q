@@ -10,6 +10,7 @@ import (
 	"github.com/snowmerak/q/client"
 	"github.com/snowmerak/q/config"
 	"github.com/snowmerak/q/providerhost"
+	"github.com/snowmerak/q/usagelog"
 )
 
 const (
@@ -43,6 +44,7 @@ type modelPropositionJudge struct {
 	group      string
 	candidates []client.ModelCandidate
 	router     *client.ModelRouter
+	usage      *usagelog.Recorder
 }
 
 func newConfiguredPropositionJudge(ctx context.Context, dir string) (*modelPropositionJudge, error) {
@@ -68,9 +70,10 @@ func newConfiguredPropositionJudge(ctx context.Context, dir string) (*modelPropo
 		}
 	}
 	var configured *client.Client
+	usageRecorder := usagelog.New(dir)
 	judge := &modelPropositionJudge{
 		model: candidates[0].Model, effort: candidates[0].ReasoningEffort,
-		group: agent.Group, candidates: candidates,
+		group: agent.Group, candidates: candidates, usage: usageRecorder,
 	}
 	if value.Provider.Managed {
 		manager, err := providerhost.NewManager(ctx, providerhost.Store{Dir: dir})
@@ -83,6 +86,7 @@ func newConfiguredPropositionJudge(ctx context.Context, dir string) (*modelPropo
 		}
 		configured, err = client.New(client.Config{
 			BaseURL: manager.Endpoint(), APIKey: manager.APIKey(), DefaultModel: value.Provider.Model,
+			UsageRecorder: usageRecorder,
 		})
 		if err != nil {
 			_ = manager.Close()
@@ -94,6 +98,7 @@ func newConfiguredPropositionJudge(ctx context.Context, dir string) (*modelPropo
 		configured, err = client.New(client.Config{
 			BaseURL: value.Provider.BaseURL, APIKey: apiKey, DefaultModel: value.Provider.Model,
 			DisableAPIKey: apiKey == "",
+			UsageRecorder: usageRecorder,
 		})
 		if err != nil {
 			return nil, err
@@ -114,7 +119,11 @@ func (j *modelPropositionJudge) Close() error {
 	if j.manager != nil {
 		managerErr = j.manager.Close()
 	}
-	return errors.Join(clientErr, managerErr)
+	var usageErr error
+	if j.usage != nil {
+		usageErr = j.usage.Close()
+	}
+	return errors.Join(clientErr, managerErr, usageErr)
 }
 
 func (j *modelPropositionJudge) JudgeProposition(
@@ -125,6 +134,7 @@ func (j *modelPropositionJudge) JudgeProposition(
 	if j == nil || j.client == nil {
 		return PropositionDecision{}, errors.New("library: proposition judge is unavailable")
 	}
+	ctx = client.WithUsageRole(ctx, config.AgentRoleLibrarian)
 	// Embeddings are used for retrieval but are large derived data and do not
 	// help the model compare proposition semantics.
 	proposal.Embeddings = nil

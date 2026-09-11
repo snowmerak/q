@@ -17,12 +17,13 @@ import (
 // values let llm-provider use OPENAI_BASE_URL, OPENAI_API_KEY, and its standard
 // OpenAI endpoint defaults.
 type Config struct {
-	BaseURL      string
-	APIKey       string
-	DefaultModel string
-	HTTPClient   *http.Client
-	Headers      http.Header
-	BodyFields   map[string]any
+	BaseURL       string
+	APIKey        string
+	DefaultModel  string
+	HTTPClient    *http.Client
+	Headers       http.Header
+	BodyFields    map[string]any
+	UsageRecorder UsageRecorder
 
 	// DisableAPIKey explicitly suppresses OPENAI_API_KEY. This is useful for
 	// local compatible servers when the environment contains an unrelated key.
@@ -32,9 +33,10 @@ type Config struct {
 // Client is an OpenAI-compatible client backed by llm-provider's OpenAI
 // implementation. It is safe for concurrent calls when its HTTPClient is safe.
 type Client struct {
-	inner        *llmprovider.Client
-	provider     *provideropenai.Provider
-	defaultModel string
+	inner         *llmprovider.Client
+	provider      *provideropenai.Provider
+	defaultModel  string
+	usageRecorder UsageRecorder
 }
 
 // New validates config and constructs an OpenAI-compatible client.
@@ -78,9 +80,10 @@ func New(config Config) (*Client, error) {
 
 	provider := provideropenai.New(options...)
 	return &Client{
-		inner:        llmprovider.New(provider),
-		provider:     provider,
-		defaultModel: config.DefaultModel,
+		inner:         llmprovider.New(provider),
+		provider:      provider,
+		defaultModel:  config.DefaultModel,
+		usageRecorder: config.UsageRecorder,
 	}, nil
 }
 
@@ -116,14 +119,29 @@ func validateConfig(config Config) error {
 // request omits Model.
 func (c *Client) Chat(ctx context.Context, request ChatRequest) (*ChatResponse, error) {
 	request.Model = c.model(request.Model)
-	return c.inner.Chat(ctx, request)
+	response, err := c.inner.Chat(ctx, request)
+	if response != nil {
+		c.recordChatUsage(ctx, request, response.Model, response.Usage, estimateResponseTokens(response))
+	}
+	return response, err
 }
 
 // ChatStream creates a streaming chat completion. The caller must close the
 // returned stream.
 func (c *Client) ChatStream(ctx context.Context, request ChatRequest) (Stream, error) {
 	request.Model = c.model(request.Model)
-	return c.inner.ChatStream(ctx, request)
+	stream, err := c.inner.ChatStream(ctx, request)
+	if err != nil {
+		return nil, err
+	}
+	if c.usageRecorder == nil {
+		return stream, nil
+	}
+	tracked := &usageStream{inner: stream, client: c, request: request, role: usageRole(ctx)}
+	if headers, ok := stream.(ResponseHeaderer); ok {
+		return &usageHeaderStream{usageStream: tracked, headers: headers}, nil
+	}
+	return tracked, nil
 }
 
 // ListModels returns models exposed by the compatible endpoint.
@@ -134,7 +152,11 @@ func (c *Client) ListModels(ctx context.Context) ([]Model, error) {
 // Embed creates embeddings, using DefaultModel when request.Model is empty.
 func (c *Client) Embed(ctx context.Context, request EmbeddingRequest) (*EmbeddingResponse, error) {
 	request.Model = c.model(request.Model)
-	return c.provider.Embed(ctx, request)
+	response, err := c.provider.Embed(ctx, request)
+	if response != nil {
+		c.recordEmbeddingUsage(ctx, request, response)
+	}
+	return response, err
 }
 
 // CreateResponse sends a native Responses API JSON object. If DefaultModel is

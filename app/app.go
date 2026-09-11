@@ -14,6 +14,7 @@ import (
 	qlibrary "github.com/snowmerak/q/library"
 	"github.com/snowmerak/q/providerhost"
 	qtools "github.com/snowmerak/q/tools"
+	"github.com/snowmerak/q/usagelog"
 	"github.com/snowmerak/q/workspace"
 	"github.com/snowmerak/q/workspacememory"
 )
@@ -39,17 +40,18 @@ type agentToolRuntime interface {
 	Call(context.Context, client.ToolCall) (client.ToolResult, error)
 }
 
-func defaultClientFactory(value config.Config) (chatClient, error) {
+func defaultClientFactory(value config.Config, recorder client.UsageRecorder) (chatClient, error) {
 	apiKey := value.Provider.ResolveAPIKey()
 	return client.New(client.Config{
 		BaseURL:       value.Provider.BaseURL,
 		APIKey:        apiKey,
 		DefaultModel:  value.Provider.Model,
 		DisableAPIKey: apiKey == "",
+		UsageRecorder: recorder,
 	})
 }
 
-func managedClientFactory(runtime providerRuntime) clientFactory {
+func managedClientFactory(runtime providerRuntime, recorder client.UsageRecorder) clientFactory {
 	return func(value config.Config) (chatClient, error) {
 		endpoint := runtime.Endpoint()
 		if endpoint == "" {
@@ -60,11 +62,16 @@ func managedClientFactory(runtime providerRuntime) clientFactory {
 			return nil, errors.New("internal LLM Gateway API key is unavailable")
 		}
 		return client.New(client.Config{
-			BaseURL:      endpoint,
-			APIKey:       apiKey,
-			DefaultModel: value.Provider.Model,
+			BaseURL:       endpoint,
+			APIKey:        apiKey,
+			DefaultModel:  value.Provider.Model,
+			UsageRecorder: recorder,
 		})
 	}
+}
+
+func newUsageRecorder(store config.Store) *usagelog.Recorder {
+	return usagelog.New(store.Dir)
 }
 
 // Run loads personal configuration and starts the interactive application.
@@ -106,7 +113,9 @@ func Run(ctx context.Context, store config.Store) error {
 	}
 	defer manager.Close()
 
-	factory := managedClientFactory(manager)
+	usageRecorder := newUsageRecorder(store)
+	defer usageRecorder.Close()
+	factory := managedClientFactory(manager, usageRecorder)
 	lifecycle := newStartupLifecycle()
 	initialModel := newManagedModel(runtimeContext, store, factory, manager)
 	initialModel.workspaceStore = &workspaceStore
@@ -173,7 +182,9 @@ func RunGatewayConfig(ctx context.Context, store config.Store) error {
 	if errors.Is(startupErr, providerhost.ErrNotFound) {
 		startupErr = nil
 	}
-	m := newManagedModel(runtimeContext, store, managedClientFactory(manager), manager)
+	usageRecorder := newUsageRecorder(store)
+	defer usageRecorder.Close()
+	m := newManagedModel(runtimeContext, store, managedClientFactory(manager, usageRecorder), manager)
 	m.gatewayConfigOnly = true
 	m.config = config.Default()
 	m.enterGatewaySettings()

@@ -25,6 +25,7 @@ import (
 	"github.com/snowmerak/q/subagent"
 	"github.com/snowmerak/q/third_party/acp-go-sdk"
 	qtools "github.com/snowmerak/q/tools"
+	"github.com/snowmerak/q/usagelog"
 	"github.com/snowmerak/q/workspace"
 	"github.com/snowmerak/q/workspacememory"
 )
@@ -98,6 +99,7 @@ type acpHost struct {
 	lifecycle      *startupLifecycle
 	manager        *providerhost.Manager
 	client         chatClient
+	usageRecorder  *usagelog.Recorder
 	cancel         context.CancelFunc
 	providerCancel context.CancelFunc
 	memoryCancel   context.CancelFunc
@@ -146,6 +148,9 @@ func openACPHost(parent context.Context, store config.Store, root string) (*acpH
 	host.manager = manager
 	lifecycle := newStartupLifecycle()
 	host.lifecycle = lifecycle
+	usageRecorder := newUsageRecorder(store)
+	host.usageRecorder = usageRecorder
+	factory := managedClientFactory(manager, usageRecorder)
 	initialized := (startupRequest{
 		ctx:            runtimeContext,
 		memoryCtx:      memoryContext,
@@ -155,7 +160,7 @@ func openACPHost(parent context.Context, store config.Store, root string) (*acpH
 		manager:        manager,
 		workspaceStore: workspaceStore,
 		lifecycle:      lifecycle,
-		factory:        managedClientFactory(manager),
+		factory:        factory,
 	}).run(nil)
 	host.client = initialized.client
 	if initialized.err != nil {
@@ -168,7 +173,7 @@ func openACPHost(parent context.Context, store config.Store, root string) (*acpH
 		return fail(errors.New("no model provider is configured; run `q gateway` first"))
 	}
 
-	host.model = newManagedModel(runtimeContext, store, managedClientFactory(manager), manager)
+	host.model = newManagedModel(runtimeContext, store, factory, manager)
 	host.model.workspaceStore = &workspaceStore
 	host.model.toolRuntime = initialized.tools
 	host.model.archive = initialized.archive
@@ -194,6 +199,9 @@ func (h *acpHost) Close() error {
 
 		if h.client != nil {
 			closeErrors = append(closeErrors, h.client.Close())
+		}
+		if h.usageRecorder != nil {
+			closeErrors = append(closeErrors, h.usageRecorder.Close())
 		}
 		if h.providerCancel != nil {
 			h.providerCancel()

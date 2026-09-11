@@ -39,6 +39,15 @@ type fakeProviderRuntime struct {
 	applies  int
 }
 
+type appUsageRecorder struct {
+	records []client.UsageRecord
+}
+
+func (r *appUsageRecorder) RecordUsage(record client.UsageRecord) error {
+	r.records = append(r.records, record)
+	return nil
+}
+
 type extractionClient struct {
 	responses        []client.Message
 	requests         []client.ChatRequest
@@ -105,12 +114,24 @@ func TestManagedClientFactoryUsesGatewayAPIKey(t *testing.T) {
 			writer.WriteHeader(http.StatusUnauthorized)
 			return
 		}
-		_, _ = writer.Write([]byte(`{"object":"list","data":[]}`))
+		switch request.URL.Path {
+		case "/v1/models":
+			_, _ = writer.Write([]byte(`{"object":"list","data":[]}`))
+		case "/v1/chat/completions":
+			_, _ = writer.Write([]byte(`{
+				"model":"gateway-model",
+				"choices":[{"index":0,"message":{"role":"assistant","content":"ok"}}],
+				"usage":{"prompt_tokens":4,"completion_tokens":1,"total_tokens":5}
+			}`))
+		default:
+			http.NotFound(writer, request)
+		}
 	}))
 	defer server.Close()
 
 	runtime := &fakeProviderRuntime{endpoint: server.URL + "/v1", apiKey: "temporary-gateway-key"}
-	factory := managedClientFactory(runtime)
+	recorder := &appUsageRecorder{}
+	factory := managedClientFactory(runtime, recorder)
 	configuredClient, err := factory(config.Default())
 	if err != nil {
 		t.Fatal(err)
@@ -118,6 +139,14 @@ func TestManagedClientFactoryUsesGatewayAPIKey(t *testing.T) {
 	defer configuredClient.Close()
 	if _, err := configuredClient.ListModels(t.Context()); err != nil {
 		t.Fatal(err)
+	}
+	if _, err := configuredClient.Chat(t.Context(), client.ChatRequest{
+		Model: "request-model", Messages: []client.Message{{Role: client.RoleUser, Content: "hi"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(recorder.records) != 1 || recorder.records[0].Model != "gateway-model" || recorder.records[0].TotalTokens != 5 {
+		t.Fatalf("usage records = %#v", recorder.records)
 	}
 }
 

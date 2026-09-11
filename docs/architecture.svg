@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" width="1800" height="1180" viewBox="0 0 1800 1180" role="img" aria-labelledby="title desc">
   <title id="title">q runtime architecture</title>
-  <desc id="desc">Architecture of q showing terminal, ACP and MCP entry points; the application, model, orchestration and tool layers; managed providers and integrations; and durable workspace, memory, library and Loom state.</desc>
+  <desc id="desc">Architecture of q showing terminal, ACP and MCP entry points; the application, model, orchestration and tool layers; managed providers and integrations; and durable workspace, memory, library, usage and Loom state.</desc>
   <defs>
     <filter id="shadow" x="-10%" y="-10%" width="120%" height="130%">
       <feDropShadow dx="0" dy="2" stdDeviation="3" flood-color="#0F172A" flood-opacity="0.08" />
@@ -71,7 +71,7 @@
   <rect x="300" y="920" width="1440" height="220" rx="16" fill="#FFFBEB" stroke="#D6A844" stroke-width="1.5" />
   <path d="M 300 960 H 1740" stroke="#E7C873" stroke-width="1" />
   <text class="container-title" x="324" y="947" fill="#713F12">Durable and shared state</text>
-  <text class="page-subtitle" x="565" y="947" fill="#92400E">Workspace Memory and Global Library elect one leader across local q processes</text>
+  <text class="page-subtitle" x="565" y="947" fill="#92400E">Memory, Library and Usage services elect one leader across local q processes</text>
 
   <text class="section-title" x="30" y="190">Clients and operators</text>
   <text class="section-title" x="1260" y="190">Local child processes and integrations</text>
@@ -113,18 +113,20 @@
   </g>
 
   <g aria-label="Durable state flows">
-    <path d="M 340 430 H 315 V 900 H 480 V 970" class="state-flow" />
+    <path d="M 340 430 H 315 V 900 H 442 V 970" class="state-flow" />
     <text class="edge-label" x="335" y="896" fill="#92400E">JSON state</text>
-    <path d="M 380 430 H 305 V 908 H 760 V 970" class="state-flow" />
+    <path d="M 380 430 H 305 V 908 H 707 V 970" class="state-flow" />
     <text class="edge-label" x="620" y="904" fill="#92400E">durable events</text>
-    <path d="M 830 695 V 910 H 815 V 970" class="state-flow" />
+    <path d="M 830 695 V 910 H 707 V 970" class="state-flow" />
     <text class="edge-label" x="837" y="898" fill="#92400E">archive search</text>
-    <path d="M 1055 580 V 910 H 1165 V 970" class="state-flow" />
-    <text class="edge-label" x="1066" y="900" fill="#92400E">register propositions</text>
-    <path d="M 915 835 V 900 H 1165 V 970" class="state-flow" />
+    <path d="M 1055 580 V 910 H 985 V 970" class="state-flow" />
+    <text class="edge-label" x="1015" y="875" fill="#92400E">register propositions</text>
+    <path d="M 915 835 V 900 H 985 V 970" class="state-flow" />
     <text class="edge-label" x="938" y="892" fill="#92400E">skills / retrieval</text>
-    <path d="M 1090 835 V 900 H 1535 V 970" class="state-flow" />
+    <path d="M 1090 835 V 900 H 1570 V 970" class="state-flow" />
     <text class="edge-label" x="1365" y="892" fill="#92400E">immutable artifacts</text>
+    <path d="M 1120 430 H 1225 V 914 H 1275 V 970" class="state-flow" />
+    <text class="edge-label" x="1160" y="938" fill="#92400E">token-only events</text>
   </g>
 
   <!-- Clients and operators -->
@@ -164,7 +166,7 @@
   <g filter="url(#shadow)">
     <rect x="820" y="205" width="350" height="85" rx="12" fill="#F5F3FF" stroke="#7C3AED" stroke-width="1.5" />
     <text text-anchor="middle" x="995" y="240" class="box-title">Standalone commands</text>
-    <text text-anchor="middle" x="995" y="267" class="box-package" fill="#6D28D9">gateway · library · memory · commit · config</text>
+    <text text-anchor="middle" x="995" y="267" class="box-package" fill="#6D28D9">gateway · library · memory · usage · commit · config</text>
   </g>
 
   <!-- Application and model layer -->
@@ -273,31 +275,38 @@
 
   <!-- Durable services and stores -->
   <g filter="url(#shadow)">
-    <rect x="330" y="970" width="300" height="120" rx="11" fill="#FEF3C7" stroke="#D97706" stroke-width="1.4" />
-    <text text-anchor="middle" x="480" y="998" class="state-title">Workspace session state</text>
-    <text text-anchor="middle" x="480" y="1021" class="state-package">workspace</text>
-    <text text-anchor="middle" x="480" y="1046" class="state-sub">.q/sessions · plan checkpoints</text>
-    <text text-anchor="middle" x="480" y="1067" class="state-sub">model / LSP / learning config</text>
+    <rect x="320" y="970" width="245" height="120" rx="11" fill="#FEF3C7" stroke="#D97706" stroke-width="1.4" />
+    <text text-anchor="middle" x="442" y="998" class="state-title">Workspace session state</text>
+    <text text-anchor="middle" x="442" y="1021" class="state-package">workspace</text>
+    <text text-anchor="middle" x="442" y="1046" class="state-sub">.q/sessions · checkpoints</text>
+    <text text-anchor="middle" x="442" y="1067" class="state-sub">model / LSP / learning config</text>
   </g>
   <g filter="url(#shadow)">
-    <rect x="665" y="970" width="300" height="120" rx="11" fill="#FEF3C7" stroke="#D97706" stroke-width="1.4" />
-    <text text-anchor="middle" x="815" y="998" class="state-title">Workspace Memory</text>
-    <text text-anchor="middle" x="815" y="1021" class="state-package">workspacememory · sessionstore</text>
-    <text text-anchor="middle" x="815" y="1046" class="state-sub">.q/data · .q/index</text>
-    <text text-anchor="middle" x="815" y="1067" class="state-sub">records · BM25 / HNSW</text>
+    <rect x="585" y="970" width="245" height="120" rx="11" fill="#FEF3C7" stroke="#D97706" stroke-width="1.4" />
+    <text text-anchor="middle" x="707" y="998" class="state-title">Workspace Memory</text>
+    <text text-anchor="middle" x="707" y="1021" class="state-package">workspacememory</text>
+    <text text-anchor="middle" x="707" y="1046" class="state-sub">.q/data · .q/index</text>
+    <text text-anchor="middle" x="707" y="1067" class="state-sub">records · BM25 / HNSW</text>
   </g>
   <g filter="url(#shadow)">
-    <rect x="1000" y="970" width="330" height="120" rx="11" fill="#FEF3C7" stroke="#D97706" stroke-width="1.4" />
-    <text text-anchor="middle" x="1165" y="998" class="state-title">Global Library</text>
-    <text text-anchor="middle" x="1165" y="1021" class="state-package">library</text>
-    <text text-anchor="middle" x="1165" y="1046" class="state-sub">~/.q · skills · propositions</text>
-    <text text-anchor="middle" x="1165" y="1067" class="state-sub">SQLite queue · BM25 / HNSW</text>
+    <rect x="850" y="970" width="270" height="120" rx="11" fill="#FEF3C7" stroke="#D97706" stroke-width="1.4" />
+    <text text-anchor="middle" x="985" y="998" class="state-title">Global Library</text>
+    <text text-anchor="middle" x="985" y="1021" class="state-package">library</text>
+    <text text-anchor="middle" x="985" y="1046" class="state-sub">~/.q · skills · propositions</text>
+    <text text-anchor="middle" x="985" y="1067" class="state-sub">SQLite queue · BM25 / HNSW</text>
   </g>
   <g filter="url(#shadow)">
-    <rect x="1365" y="970" width="340" height="120" rx="11" fill="#FEF3C7" stroke="#D97706" stroke-width="1.4" />
-    <text text-anchor="middle" x="1535" y="998" class="state-title">Loom artifact store</text>
-    <text text-anchor="middle" x="1535" y="1021" class="state-package">loom</text>
-    <text text-anchor="middle" x="1535" y="1046" class="state-sub">.q/loom · content-addressed results</text>
-    <text text-anchor="middle" x="1535" y="1067" class="state-sub">leases · garbage collection</text>
+    <rect x="1140" y="970" width="270" height="120" rx="11" fill="#FEF3C7" stroke="#D97706" stroke-width="1.4" />
+    <text text-anchor="middle" x="1275" y="998" class="state-title">Usage service</text>
+    <text text-anchor="middle" x="1275" y="1021" class="state-package">usagelog</text>
+    <text text-anchor="middle" x="1275" y="1046" class="state-sub">~/.q/usage · dashboard</text>
+    <text text-anchor="middle" x="1275" y="1067" class="state-sub">SQLite hot · Parquet archive</text>
+  </g>
+  <g filter="url(#shadow)">
+    <rect x="1430" y="970" width="280" height="120" rx="11" fill="#FEF3C7" stroke="#D97706" stroke-width="1.4" />
+    <text text-anchor="middle" x="1570" y="998" class="state-title">Loom artifact store</text>
+    <text text-anchor="middle" x="1570" y="1021" class="state-package">loom</text>
+    <text text-anchor="middle" x="1570" y="1046" class="state-sub">.q/loom · addressed results</text>
+    <text text-anchor="middle" x="1570" y="1067" class="state-sub">leases · garbage collection</text>
   </g>
 </svg>
