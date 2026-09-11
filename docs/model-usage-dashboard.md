@@ -170,6 +170,10 @@ dashboard는 24h, 7d, 30d, 90d range와 model/role filter를 제공하고 다음
 - role별 token strip.
 - model별 calls와 token breakdown table.
 
+화면이 보이는 동안 dashboard는 5초마다 현재 filter로 usage를 다시 조회한다. 진행 중인
+요청은 다음 조회 전에 취소해 느린 응답이 쌓이거나 최신 filter 결과를 덮어쓰지 않게 한다.
+숨겨졌던 화면이 다시 보이면 즉시 한 번 갱신한다.
+
 UI는 Q binary 안에 embedded된 `html/template`, CSS와 dependency-free JavaScript로
 구성한다. React build chain이나 외부 CDN은 추가하지 않는다. read-only 화면이며 HTML
 escape, CSP, `nosniff`, `no-store` header를 적용한다.
@@ -212,7 +216,8 @@ Acceptance criteria:
 - browser console warning/error는 0건이었다.
 - 생성한 visual concept의 dark graphite hierarchy, metric band, stacked traffic chart,
   role strip와 model ledger를 유지했다. 구현에서는 privacy 설명과 `All` range를 추가하고,
-  장식적 refresh/search/pagination은 실제 데이터 규모에 필요하지 않아 제외했다.
+  장식적 search/pagination은 실제 데이터 규모에 필요하지 않아 제외했다. refresh는 새
+  model 호출을 열린 화면에 반영하기 위해 5초 자동 주기로 제공한다.
 - `BenchmarkSQLiteUsageAggregate`가 187,000행의 DB byte/row와 aggregate 시간을 함께
   출력하며, 160K-token single-call test는 한 event만 생기는 것을 검증한다.
 

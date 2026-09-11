@@ -1,8 +1,10 @@
 const state = { range: "24h", model: "", role: "", models: new Set(), roles: new Set() };
 const colors = ["#5f8cff", "#42c8e9", "#a678f5", "#59d39b", "#edae61", "#e87a90", "#7fb36a"];
+const refreshIntervalMs = 5000;
 const byId = (id) => document.getElementById(id);
 const compact = new Intl.NumberFormat(undefined, { notation: "compact", maximumFractionDigits: 2 });
 const integer = new Intl.NumberFormat();
+let activeRequest;
 
 function rangeStart(range, now) {
   const durations = { "24h": 864e5, "7d": 7 * 864e5, "30d": 30 * 864e5, "90d": 90 * 864e5 };
@@ -22,27 +24,39 @@ function updateSelect(select, values, selected, allLabel) {
   select.value = selected;
 }
 
-async function loadUsage() {
+async function loadUsage({ background = false } = {}) {
   const status = byId("status");
-  status.className = "status";
-  status.textContent = "Refreshing local usage…";
+  if (activeRequest) activeRequest.abort();
+  const controller = new AbortController();
+  activeRequest = controller;
+  if (!background) {
+    status.className = "status";
+    status.textContent = "Refreshing local usage…";
+  }
   const now = new Date();
   const params = new URLSearchParams({ from: rangeStart(state.range, now).toISOString(), to: now.toISOString() });
   if (state.model) params.set("model", state.model);
   if (state.role) params.set("role", state.role);
   try {
-    const response = await fetch(`/api/v1/usage?${params}`, { headers: { Accept: "application/json" }, cache: "no-store" });
+    const response = await fetch(`/api/v1/usage?${params}`, { headers: { Accept: "application/json" }, cache: "no-store", signal: controller.signal });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const data = await response.json();
+    if (controller !== activeRequest) return;
     data.models.forEach((item) => state.models.add(item.name));
     data.roles.forEach((item) => state.roles.add(item.name));
     updateSelect(byId("model-filter"), state.models, state.model, "All models");
     updateSelect(byId("role-filter"), state.roles, state.role, "All roles");
     render(data);
-    status.textContent = `${data.resolution === "hour" ? "Hourly" : "Daily"} rollup · updated ${now.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`;
+    if (!background || status.classList.contains("error")) {
+      status.className = "status";
+      status.textContent = `${data.resolution === "hour" ? "Hourly" : "Daily"} rollup · auto-refreshes every 5 seconds`;
+    }
   } catch (error) {
+    if (error.name === "AbortError" || controller !== activeRequest) return;
     status.className = "status error";
     status.textContent = `Usage service unavailable: ${error.message}`;
+  } finally {
+    if (controller === activeRequest) activeRequest = undefined;
   }
 }
 
@@ -155,3 +169,9 @@ document.querySelectorAll("[data-range]").forEach((button) => button.addEventLis
 byId("model-filter").addEventListener("change", (event) => { state.model = event.target.value; loadUsage(); });
 byId("role-filter").addEventListener("change", (event) => { state.role = event.target.value; loadUsage(); });
 loadUsage();
+window.setInterval(() => {
+  if (!document.hidden) loadUsage({ background: true });
+}, refreshIntervalMs);
+document.addEventListener("visibilitychange", () => {
+  if (!document.hidden) loadUsage({ background: true });
+});
