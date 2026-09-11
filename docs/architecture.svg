@@ -186,7 +186,7 @@
     <rect x="330" y="475" width="350" height="105" rx="12" fill="#FAF5FF" stroke="#9333EA" stroke-width="1.5" />
     <text text-anchor="middle" x="505" y="505" class="box-title">Plan orchestration</text>
     <text text-anchor="middle" x="505" y="529" class="box-package" fill="#7E22CE">subagent</text>
-    <text text-anchor="middle" x="505" y="554" class="box-sub">Griller → Scout → Planner → Coder → review</text>
+    <text text-anchor="middle" x="505" y="554" class="box-sub">Planner → Coder/Web Tester → review</text>
   </g>
   <g filter="url(#shadow)">
     <rect x="700" y="475" width="220" height="105" rx="12" fill="#FAF5FF" stroke="#9333EA" stroke-width="1.5" />
@@ -258,7 +258,7 @@
   <g filter="url(#shadow)">
     <rect x="1260" y="585" width="480" height="80" rx="12" fill="#FFF7ED" stroke="#EA580C" stroke-width="1.5" />
     <text text-anchor="middle" x="1500" y="616" class="box-title">External ACP agents</text>
-    <text text-anchor="middle" x="1500" y="641" class="box-sub">configured agent processes · Search role</text>
+    <text text-anchor="middle" x="1500" y="641" class="box-sub">configured processes · Search/Web Tester roles</text>
   </g>
   <g filter="url(#shadow)">
     <rect x="1260" y="690" width="480" height="80" rx="12" fill="#FFF7ED" stroke="#EA580C" stroke-width="1.5" />

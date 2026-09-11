@@ -2,6 +2,7 @@ package workspace
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"reflect"
@@ -59,6 +60,75 @@ func TestExecutionStoreRejectsInvalidAndUnknownFields(t *testing.T) {
 	}
 }
 
+func TestExecutionStoreMigratesVersionOneCoderCheckpoint(t *testing.T) {
+	store := Store{Root: t.TempDir(), SessionID: "session-1"}
+	legacy := testExecutionCheckpoint()
+	legacy.Plan.Steps[0].Executor = ""
+	legacy.Phase = subagent.ExecutionPhase("coder_running")
+	legacy.ActiveExecutor = ""
+	legacy.Targets = []string{"app/model.go"}
+	body, err := json.Marshal(executionFile{
+		Version: 1, SessionID: store.SessionID, UpdatedAt: time.Now().UTC(), Checkpoint: legacy,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(store.SessionDir(), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(store.ExecutionPath(), body, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	checkpoint, err := store.LoadExecution()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if checkpoint.Phase != subagent.ExecutionPhaseExecutorRunning ||
+		checkpoint.ActiveExecutor != subagent.PlanExecutorCoder ||
+		checkpoint.Plan.Steps[0].Executor != subagent.PlanExecutorCoder {
+		t.Fatalf("migrated checkpoint = %#v", checkpoint)
+	}
+	resumed, err := subagent.PrepareExecutionResume(checkpoint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resumed.Phase != subagent.ExecutionPhaseExecutorPending || resumed.Attempt != 2 {
+		t.Fatalf("resumed checkpoint = %#v", resumed)
+	}
+}
+
+func TestExecutionStoreMigratesVersionOnePendingCoderResult(t *testing.T) {
+	store := Store{Root: t.TempDir(), SessionID: "session-1"}
+	legacy := testExecutionCheckpoint()
+	legacy.Plan.Steps[0].Executor = ""
+	legacy.Phase = subagent.ExecutionPhaseReviewPending
+	legacy.ActiveExecutor = ""
+	legacy.Targets = []string{"app/model.go"}
+	legacy.TaskAttempts = 1
+	legacy.Attempts = 1
+	legacy.PendingResult = &subagent.TaskResult{Outcome: "succeeded", Summary: "legacy coder result"}
+	body, err := json.Marshal(executionFile{
+		Version: 1, SessionID: store.SessionID, UpdatedAt: time.Now().UTC(), Checkpoint: legacy,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(store.SessionDir(), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(store.ExecutionPath(), body, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	checkpoint, err := store.LoadExecution()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if checkpoint.ActiveExecutor != subagent.PlanExecutorCoder || checkpoint.PendingResult == nil ||
+		checkpoint.PendingResult.Executor != subagent.PlanExecutorCoder || checkpoint.PendingResult.Summary != "legacy coder result" {
+		t.Fatalf("migrated review checkpoint = %#v", checkpoint)
+	}
+}
+
 func TestLoomReferencesAtIncludesActivePlanExecution(t *testing.T) {
 	store := Store{Root: t.TempDir()}
 	checkpoint := testExecutionCheckpoint()
@@ -98,7 +168,7 @@ func testExecutionCheckpoint() subagent.ExecutionCheckpoint {
 		Plan: subagent.PlanProposal{
 			Outcome: "succeeded", Summary: "Persist execution",
 			Steps: []subagent.PlanStep{{
-				Title: "Update files", Description: "Apply the change",
+				Title: "Update files", Description: "Apply the change", Executor: subagent.PlanExecutorCoder,
 				Target: subagent.TargetCondition{Any: []subagent.TargetProduct{{All: []subagent.TargetSelector{{
 					Kind: subagent.TargetSelectorLoom, Code: `return ["app/model.go"];`,
 					Inputs: map[string]string{"tree": "loom://0123456789abcdef0123456789abcdef"},

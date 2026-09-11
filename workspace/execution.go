@@ -15,7 +15,7 @@ import (
 
 const (
 	ExecutionFileName       = "plan-execution.json"
-	executionCurrentVersion = 1
+	executionCurrentVersion = 2
 	maximumExecutionSize    = 8 << 20
 )
 
@@ -61,13 +61,19 @@ func (s Store) LoadExecution() (subagent.ExecutionCheckpoint, error) {
 		}
 		return subagent.ExecutionCheckpoint{}, fmt.Errorf("workspace: decode %s: %w", s.ExecutionPath(), err)
 	}
-	if stored.Version != executionCurrentVersion {
+	if stored.Version != 1 && stored.Version != executionCurrentVersion {
 		return subagent.ExecutionCheckpoint{}, fmt.Errorf("workspace: unsupported plan execution version %d", stored.Version)
 	}
 	if s.SessionID != "" && stored.SessionID != "" && stored.SessionID != s.SessionID {
 		return subagent.ExecutionCheckpoint{}, fmt.Errorf(
 			"workspace: plan execution session ID %q does not match directory %q", stored.SessionID, s.SessionID,
 		)
+	}
+	if stored.Version == 1 {
+		stored.Checkpoint, err = subagent.MigrateExecutionCheckpointV1(stored.Checkpoint)
+		if err != nil {
+			return subagent.ExecutionCheckpoint{}, fmt.Errorf("workspace: migrate plan execution version 1: %w", err)
+		}
 	}
 	if err := validateStoredExecution(stored.Checkpoint); err != nil {
 		return subagent.ExecutionCheckpoint{}, fmt.Errorf("workspace: invalid plan execution: %w", err)
@@ -76,6 +82,11 @@ func (s Store) LoadExecution() (subagent.ExecutionCheckpoint, error) {
 }
 
 func (s Store) SaveExecution(checkpoint subagent.ExecutionCheckpoint) error {
+	var err error
+	checkpoint, err = subagent.NormalizeExecutionCheckpoint(checkpoint)
+	if err != nil {
+		return fmt.Errorf("workspace: invalid plan execution: %w", err)
+	}
 	if err := validateStoredExecution(checkpoint); err != nil {
 		return fmt.Errorf("workspace: invalid plan execution: %w", err)
 	}

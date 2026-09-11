@@ -35,6 +35,35 @@ func completionKey(m model, key tea.KeyPressMsg) (model, tea.Cmd) {
 	return updated.(model), command
 }
 
+func TestExternalSlashCommandsFollowEnabledConnections(t *testing.T) {
+	m := newSlashCompletionModel(t)
+	if names := completionNames(m.slashCommands()); slices.Contains(names, agentSearchCommand) || slices.Contains(names, agentWebTesterCommand) {
+		t.Fatalf("unconfigured external commands were discovered: %v", names)
+	}
+	m.config.Agents.Connections = map[string]config.AgentConnectionConfig{
+		"search": {Preset: "codex"}, "browser": {Preset: "codex"},
+	}
+	m.config.Agents.Roles = map[string]config.AgentConfig{
+		config.AgentRoleSearch:            {Agent: "search"},
+		config.AgentRoleExternalWebTester: {Agent: "browser"},
+	}
+	names := completionNames(m.slashCommands())
+	if !slices.Contains(names, agentSearchCommand) || !slices.Contains(names, agentWebTesterCommand) {
+		t.Fatalf("configured external commands were not discovered: %v", names)
+	}
+	connection := m.config.Agents.Connections["browser"]
+	connection.Disabled = true
+	m.config.Agents.Connections["browser"] = connection
+	names = completionNames(m.slashCommands())
+	if !slices.Contains(names, agentSearchCommand) || slices.Contains(names, agentWebTesterCommand) {
+		t.Fatalf("disabled command discovery = %v", names)
+	}
+	help := ansi.Strip(renderHelpContent(m.dark, m.slashCommands()))
+	if !strings.Contains(help, agentSearchCommand) || strings.Contains(help, agentWebTesterCommand) {
+		t.Fatalf("conditional help = %q", help)
+	}
+}
+
 func TestSlashCompletionOpensAndFiltersWhileTyping(t *testing.T) {
 	m := newSlashCompletionModel(t)
 	m, _ = completionKey(m, tea.KeyPressMsg{Code: '/', Text: "/"})
@@ -114,6 +143,8 @@ func TestSlashCompletionKeepsArgumentsEditable(t *testing.T) {
 	for _, key := range []tea.KeyPressMsg{{Code: tea.KeyTab}, {Code: tea.KeyEnter}} {
 		t.Run(key.String(), func(t *testing.T) {
 			m := newSlashCompletionModel(t)
+			m.config.Agents.Connections = map[string]config.AgentConnectionConfig{"search": {Preset: "codex"}}
+			m.config.Agents.Roles = map[string]config.AgentConfig{config.AgentRoleSearch: {Agent: "search"}}
 			m.input.SetValue("/agent:se")
 			m, _ = completionKey(m, key)
 			if m.input.Value() != "/agent:search " || m.input.Column() != len("/agent:search ") || m.submitPending {

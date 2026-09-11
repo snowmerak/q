@@ -25,16 +25,17 @@ const (
 	DefaultLoomStoreMiB     = 256
 	DefaultLoomGCGraceHours = 1
 
-	AgentRoleGriller   = "griller"
-	AgentRoleScout     = "scout"
-	AgentRoleResearch  = "research"
-	AgentRoleSearch    = "search"
-	AgentRolePlanner   = "planner"
-	AgentRoleCoder     = "coder"
-	AgentRoleCommit    = "commit"
-	AgentRoleAdvisor   = "advisor"
-	AgentRoleThinker   = "thinker"
-	AgentRoleLibrarian = "librarian"
+	AgentRoleGriller           = "griller"
+	AgentRoleScout             = "scout"
+	AgentRoleResearch          = "research"
+	AgentRoleSearch            = "search"
+	AgentRoleExternalWebTester = "external_web_tester"
+	AgentRolePlanner           = "planner"
+	AgentRoleCoder             = "coder"
+	AgentRoleCommit            = "commit"
+	AgentRoleAdvisor           = "advisor"
+	AgentRoleThinker           = "thinker"
+	AgentRoleLibrarian         = "librarian"
 )
 
 var ErrNotFound = errors.New("q config not found")
@@ -146,6 +147,11 @@ var agentRoles = []string{
 	AgentRoleAdvisor,
 	AgentRoleThinker,
 	AgentRoleLibrarian,
+}
+
+var externalAgentRoles = []string{
+	AgentRoleSearch,
+	AgentRoleExternalWebTester,
 }
 
 func Default() Config {
@@ -284,16 +290,16 @@ func (c Config) Validate() error {
 		}
 	}
 	for role, agent := range c.Agents.Roles {
-		if role == AgentRoleSearch {
+		if IsExternalAgentRole(role) {
 			if agent.Model != "" || agent.Group != "" || strings.TrimSpace(agent.ReasoningEffort) != "" {
-				return fmt.Errorf("config: search role accepts agent only, not model controls")
+				return fmt.Errorf("config: external agent role %q accepts agent only, not model controls", role)
 			}
 			if agent.Agent != strings.TrimSpace(agent.Agent) {
-				return fmt.Errorf("config: search role agent must not have surrounding whitespace")
+				return fmt.Errorf("config: external agent role %q agent must not have surrounding whitespace", role)
 			}
 			if agent.Agent != "" {
 				if _, found := c.Agents.Connections[agent.Agent]; !found {
-					return fmt.Errorf("config: search role references unknown agent connection %q", agent.Agent)
+					return fmt.Errorf("config: external agent role %q references unknown agent connection %q", role, agent.Agent)
 				}
 			}
 			continue
@@ -443,6 +449,39 @@ func IsAgentRole(role string) bool {
 	return false
 }
 
+// ExternalAgentRoles returns built-in roles backed by configured ACP
+// connections rather than q-native models.
+func ExternalAgentRoles() []string {
+	return append([]string(nil), externalAgentRoles...)
+}
+
+func IsExternalAgentRole(role string) bool {
+	for _, candidate := range externalAgentRoles {
+		if role == candidate {
+			return true
+		}
+	}
+	return false
+}
+
+// ExternalAgentConnection resolves a usable external role. A missing role,
+// blank assignment, missing connection, or disabled connection is unavailable
+// and therefore must not be advertised by discovery surfaces.
+func (c Config) ExternalAgentConnection(role string) (string, AgentConnectionConfig, bool) {
+	if !IsExternalAgentRole(role) {
+		return "", AgentConnectionConfig{}, false
+	}
+	agent, found := c.Agents.Roles[role]
+	if !found || strings.TrimSpace(agent.Agent) == "" || agent.Agent != strings.TrimSpace(agent.Agent) {
+		return "", AgentConnectionConfig{}, false
+	}
+	connection, found := c.Agents.Connections[agent.Agent]
+	if !found || connection.Disabled {
+		return "", AgentConnectionConfig{}, false
+	}
+	return agent.Agent, connection, true
+}
+
 // EffectiveAgents fills defaults omitted by older or hand-written configs.
 func (c Config) EffectiveAgents() AgentsConfig {
 	result := c.Agents
@@ -505,7 +544,7 @@ func ValidCustomName(name string) bool {
 // in addition to applying the shared custom identifier syntax.
 func ValidCustomRoleName(name string) bool {
 	return ValidCustomName(name) && name != "default" && name != "embedding" &&
-		name != AgentRoleSearch && !IsAgentRole(name)
+		!IsExternalAgentRole(name) && !IsAgentRole(name)
 }
 
 func (c Config) HasNativeRole(role string) bool {

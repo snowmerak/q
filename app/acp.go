@@ -1935,10 +1935,6 @@ func (a *acpAgent) emitAvailableCommandsContext(ctx context.Context) error {
 			Name: "autonomous", Description: "Persistently control both plan automation settings.",
 			Input: &acp.AvailableCommandInput{Unstructured: &acp.UnstructuredCommandInput{Hint: "on, off, or status"}},
 		},
-		{
-			Name: "agent:search", Description: "Run the configured ACP Search agent and return its evidence report.",
-			Input: &acp.AvailableCommandInput{Unstructured: &acp.UnstructuredCommandInput{Hint: "query"}},
-		},
 		{Name: "commit", Description: "Review generated commit proposals, then commit or commit and push after approval."},
 		{
 			Name: "learn", Description: "Checkpoint or control q learning for this workspace.",
@@ -1946,6 +1942,19 @@ func (a *acpAgent) emitAvailableCommandsContext(ctx context.Context) error {
 		},
 		{Name: "clear", Description: "Clear q's conversation context for this workspace."},
 		{Name: "help", Description: "Show the slash commands available through ACP."},
+	}
+	value := a.state.activeConfig()
+	if _, _, available := value.ExternalAgentConnection(config.AgentRoleSearch); available {
+		commands = append(commands, acp.AvailableCommand{
+			Name: "agent:search", Description: "Run the configured ACP Search agent and return its evidence report.",
+			Input: &acp.AvailableCommandInput{Unstructured: &acp.UnstructuredCommandInput{Hint: "query"}},
+		})
+	}
+	if _, _, available := value.ExternalAgentConnection(config.AgentRoleExternalWebTester); available {
+		commands = append(commands, acp.AvailableCommand{
+			Name: "agent:web-tester", Description: "Run the configured ACP Web Tester agent and return its verification report.",
+			Input: &acp.AvailableCommandInput{Unstructured: &acp.UnstructuredCommandInput{Hint: "request"}},
+		})
 	}
 	return a.updateContext(ctx, acp.SessionUpdate{AvailableCommandsUpdate: &acp.SessionAvailableCommandsUpdate{
 		AvailableCommands: commands,
@@ -1955,6 +1964,9 @@ func (a *acpAgent) emitAvailableCommandsContext(ctx context.Context) error {
 func (a *acpAgent) runACPCommand(ctx context.Context, text string) (acp.PromptResponse, bool, error) {
 	command := strings.TrimSpace(text)
 	planCommand, planAutomationControl := parsePlanAutomationCommand(command)
+	value := a.state.activeConfig()
+	_, _, searchAvailable := value.ExternalAgentConnection(config.AgentRoleSearch)
+	_, _, webTesterAvailable := value.ExternalAgentConnection(config.AgentRoleExternalWebTester)
 	var output string
 	switch {
 	case planAutomationControl:
@@ -1975,15 +1987,25 @@ func (a *acpAgent) runACPCommand(ctx context.Context, text string) (acp.PromptRe
 		return response, true, err
 	case command == "/subagents" || strings.HasPrefix(command, "/subagents "):
 		output = a.state.customInfo(command)
-	case command == agentSearchCommand:
+	case searchAvailable && command == agentSearchCommand:
 		output = "Usage: /agent:search <query>"
-	case strings.HasPrefix(command, agentSearchCommand+" "):
+	case searchAvailable && strings.HasPrefix(command, agentSearchCommand+" "):
 		query := strings.TrimSpace(strings.TrimPrefix(command, agentSearchCommand))
 		if query == "" {
 			output = "Usage: /agent:search <query>"
 			break
 		}
 		response, err := a.runACPAgentSearch(ctx, query)
+		return response, true, err
+	case webTesterAvailable && command == agentWebTesterCommand:
+		output = "Usage: /agent:web-tester <request>"
+	case webTesterAvailable && strings.HasPrefix(command, agentWebTesterCommand+" "):
+		request := strings.TrimSpace(strings.TrimPrefix(command, agentWebTesterCommand))
+		if request == "" {
+			output = "Usage: /agent:web-tester <request>"
+			break
+		}
+		response, err := a.runACPAgentWebTester(ctx, request)
 		return response, true, err
 	case command == "/plan":
 		output = "Usage: /plan <work to plan>"
@@ -2013,8 +2035,7 @@ func (a *acpAgent) runACPCommand(ctx context.Context, text string) (acp.PromptRe
 		response, err := a.runACPReview(ctx, request)
 		return response, true, err
 	case command == "/help":
-		output = "Available ACP commands:\n- /plan <work to plan>\n- /debug <issue to investigate>\n- /review [optional review focus]\n- /auto-approve [on|off|status]\n- /auto-resolve [on|off|status]\n- /autonomous [on|off|status]\n- /agent:search <query>\n- /commit\n- /learn [on|off|status]\n- /clear\n- /help"
-		output += "\n- /subagents [list|show <name>]\n- /subagent <name> <request>"
+		output = renderACPCommandHelp(value)
 	case command == "/learn":
 		if a.state.learningDisabled() {
 			output = "Learning is disabled for this workspace. Use /learn on to enable it."
@@ -2055,6 +2076,33 @@ func (a *acpAgent) runACPCommand(ctx context.Context, text string) (acp.PromptRe
 		return acp.PromptResponse{}, true, err
 	}
 	return acp.PromptResponse{StopReason: acp.StopReasonEndTurn}, true, nil
+}
+
+func renderACPCommandHelp(value config.Config) string {
+	lines := []string{
+		"Available ACP commands:",
+		"- /plan <work to plan>",
+		"- /debug <issue to investigate>",
+		"- /review [optional review focus]",
+		"- /auto-approve [on|off|status]",
+		"- /auto-resolve [on|off|status]",
+		"- /autonomous [on|off|status]",
+	}
+	if _, _, available := value.ExternalAgentConnection(config.AgentRoleSearch); available {
+		lines = append(lines, "- /agent:search <query>")
+	}
+	if _, _, available := value.ExternalAgentConnection(config.AgentRoleExternalWebTester); available {
+		lines = append(lines, "- /agent:web-tester <request>")
+	}
+	lines = append(lines,
+		"- /commit",
+		"- /learn [on|off|status]",
+		"- /clear",
+		"- /help",
+		"- /subagents [list|show <name>]",
+		"- /subagent <name> <request>",
+	)
+	return strings.Join(lines, "\n")
 }
 
 func (a *acpAgent) runACPPlanAutomationCommand(command planAutomationCommand) (string, error) {

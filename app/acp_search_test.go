@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/snowmerak/q/client"
 	"github.com/snowmerak/q/config"
 	"github.com/snowmerak/q/mcpconfig"
 	"github.com/snowmerak/q/subagent"
@@ -113,6 +114,40 @@ func TestExternalSearchToolIsExposedOnlyToParentRoles(t *testing.T) {
 		if toolAvailable(runtime, subagent.ExternalSearchToolName) {
 			t.Fatalf("external_search was exposed recursively to %q", role)
 		}
+	}
+}
+
+func TestExternalWebTesterToolIsExposedOnlyToConfiguredDefaultParent(t *testing.T) {
+	value := config.Default()
+	value.Agents.Connections = map[string]config.AgentConnectionConfig{"browser": {Preset: "codex"}}
+	value.Agents.Roles = map[string]config.AgentConfig{
+		config.AgentRoleExternalWebTester: {Agent: "browser"},
+	}
+	for _, role := range []string{config.AgentRoleGriller, config.AgentRolePlanner, config.AgentRoleAdvisor, config.AgentRoleScout, config.AgentRoleCoder, config.AgentRoleExternalWebTester} {
+		runtime, err := configuredAgentToolRuntime(&fakeAgentTools{}, role, value, t.TempDir())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if toolAvailable(runtime, subagent.ExternalWebTesterToolName) {
+			t.Fatalf("external_web_tester was exposed to %q", role)
+		}
+	}
+	runtime, err := configuredAgentToolRuntime(&fakeAgentTools{}, mcpconfig.RoleDefault, value, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !toolAvailable(runtime, subagent.ExternalWebTesterToolName) {
+		t.Fatal("configured external_web_tester was not exposed to Default")
+	}
+	delete(value.Agents.Roles, config.AgentRoleExternalWebTester)
+	runtime, err = configuredAgentToolRuntime(&fakeAgentTools{tools: []client.Tool{
+		subagent.ExternalWebTesterTool(),
+	}}, mcpconfig.RoleDefault, value, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if toolAvailable(runtime, subagent.ExternalWebTesterToolName) {
+		t.Fatal("unconfigured external_web_tester was exposed to Default")
 	}
 }
 

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -166,6 +167,144 @@ func TestExecutionLoopStopsAfterRetryLimit(t *testing.T) {
 	}
 	if result.Attempts != 2 || result.CompletedTasks != 0 {
 		t.Fatalf("execution result = %#v", result)
+	}
+}
+
+func TestExecutionLoopSwitchesBetweenWebTesterAndCoderBeforeAcceptance(t *testing.T) {
+	plan := executableTestPlan()
+	plan.Steps[0].Executor = PlanExecutorExternalWebTester
+	var sequence []string
+	webRuns := 0
+	loop := ExecutionLoop{
+		Resolver: TargetResolver{},
+		Executors: map[string]TaskRunFunc{
+			PlanExecutorCoder: func(_ context.Context, attempt TaskAttempt) (TaskResult, error) {
+				sequence = append(sequence, attempt.Executor)
+				return TaskResult{Outcome: "succeeded", Summary: "repaired login"}, nil
+			},
+			PlanExecutorExternalWebTester: func(_ context.Context, attempt TaskAttempt) (TaskResult, error) {
+				sequence = append(sequence, attempt.Executor)
+				webRuns++
+				if webRuns == 1 {
+					return TaskResult{Outcome: "failed", Summary: "cookie missing"}, nil
+				}
+				return TaskResult{Outcome: "succeeded", Summary: "login verified"}, nil
+			},
+		},
+		Review: func(_ context.Context, request TaskReviewRequest) (TaskReview, error) {
+			switch {
+			case request.Executor == PlanExecutorExternalWebTester && request.Result.Outcome == "failed":
+				return TaskReview{Decision: "retry", Feedback: "repair the cookie", NextExecutor: PlanExecutorCoder}, nil
+			case request.Executor == PlanExecutorCoder:
+				return TaskReview{Decision: "retry", Feedback: "retest the repair", NextExecutor: PlanExecutorExternalWebTester}, nil
+			default:
+				return TaskReview{Decision: "next", Feedback: ""}, nil
+			}
+		},
+	}
+	result, err := loop.Run(t.Context(), plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{PlanExecutorExternalWebTester, PlanExecutorCoder, PlanExecutorExternalWebTester}
+	if !reflect.DeepEqual(sequence, want) || result.Attempts != 3 || result.CompletedTasks != 1 ||
+		result.Tasks[0].Executor != PlanExecutorExternalWebTester || result.Tasks[0].Result.Outcome != "succeeded" {
+		t.Fatalf("sequence=%v result=%#v", sequence, result)
+	}
+}
+
+func TestExecutionLoopRetainsCheckpointWhenExternalExecutorIsUnavailable(t *testing.T) {
+	plan := executableTestPlan()
+	plan.Steps[0].Executor = PlanExecutorExternalWebTester
+	var persisted ExecutionCheckpoint
+	loop := ExecutionLoop{
+		Resolver: TargetResolver{},
+		Executors: map[string]TaskRunFunc{
+			PlanExecutorCoder: func(context.Context, TaskAttempt) (TaskResult, error) {
+				return TaskResult{Outcome: "succeeded", Summary: "unexpected"}, nil
+			},
+		},
+		Review: func(context.Context, TaskReviewRequest) (TaskReview, error) {
+			return TaskReview{}, errors.New("review should not run")
+		},
+		Checkpoint: func(_ context.Context, checkpoint ExecutionCheckpoint) error {
+			persisted = checkpoint
+			return nil
+		},
+	}
+	_, err := loop.Run(t.Context(), plan)
+	if err == nil || !strings.Contains(err.Error(), `unavailable executor "external_web_tester"`) {
+		t.Fatalf("error = %v", err)
+	}
+	if persisted.Phase != ExecutionPhaseExecutorPending || persisted.ActiveExecutor != PlanExecutorExternalWebTester {
+		t.Fatalf("persisted checkpoint = %#v", persisted)
+	}
+}
+
+func TestExecutionLoopRejectsFailedWebTestAcceptance(t *testing.T) {
+	plan := executableTestPlan()
+	plan.Steps[0].Executor = PlanExecutorExternalWebTester
+	loop := ExecutionLoop{
+		Resolver: TargetResolver{},
+		Executors: map[string]TaskRunFunc{
+			PlanExecutorExternalWebTester: func(context.Context, TaskAttempt) (TaskResult, error) {
+				return TaskResult{Outcome: "failed", Summary: "page is broken"}, nil
+			},
+		},
+		Review: func(context.Context, TaskReviewRequest) (TaskReview, error) {
+			return TaskReview{Decision: "next", Feedback: "", FactChanges: []FactChange{{
+				Op: FactChangeAdd, Value: "must not be committed", Reason: "invalid acceptance transition",
+			}}}, nil
+		},
+	}
+	result, err := loop.Run(t.Context(), plan)
+	if err == nil || !strings.Contains(err.Error(), "must succeed before next") {
+		t.Fatalf("error = %v", err)
+	}
+	if slices.Contains(result.Plan.Facts, "must not be committed") {
+		t.Fatalf("invalid transition mutated plan facts: %#v", result.Plan.Facts)
+	}
+}
+
+func TestPlannerReviewExecutorDiscoveryAndTransitionAreDynamic(t *testing.T) {
+	defaultTool, err := json.Marshal(reviewTaskTool().Function.Parameters)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(defaultTool), PlanExecutorExternalWebTester) ||
+		strings.Contains(plannerReviewInstructions(), PlanExecutorExternalWebTester) {
+		t.Fatal("unavailable external_web_tester leaked into Planner review discovery")
+	}
+	externalTool, err := json.Marshal(reviewTaskTool(PlanExecutorExternalWebTester).Function.Parameters)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(externalTool), PlanExecutorExternalWebTester) ||
+		!strings.Contains(plannerReviewInstructions(PlanExecutorExternalWebTester), PlanExecutorExternalWebTester) {
+		t.Fatal("available external_web_tester was not advertised to Planner review")
+	}
+	transition := `{"decision":"retry","feedback":"repair","next_executor":"external_web_tester"}`
+	if _, err := parseTaskReview(transition); err == nil {
+		t.Fatal("unavailable next_executor was accepted")
+	}
+	if review, err := parseTaskReview(transition, PlanExecutorExternalWebTester); err != nil || review.NextExecutor != PlanExecutorExternalWebTester {
+		t.Fatalf("available next_executor = %#v, %v", review, err)
+	}
+}
+
+func TestPrepareExecutionResumeKeepsExternalExecutor(t *testing.T) {
+	checkpoint := NewExecutionCheckpoint(executableTestPlan())
+	checkpoint.Plan.Steps[0].Executor = PlanExecutorExternalWebTester
+	checkpoint.Phase = ExecutionPhaseExecutorRunning
+	checkpoint.ActiveExecutor = PlanExecutorExternalWebTester
+	checkpoint.Targets = []string{"app/model.go"}
+	resumed, err := PrepareExecutionResume(checkpoint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resumed.Phase != ExecutionPhaseExecutorPending || resumed.ActiveExecutor != PlanExecutorExternalWebTester ||
+		resumed.Attempt != 2 || !strings.Contains(resumed.Feedback, "Web Tester") {
+		t.Fatalf("resumed checkpoint = %#v", resumed)
 	}
 }
 

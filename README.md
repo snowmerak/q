@@ -13,8 +13,8 @@ the resulting diff, and create a commit without leaving the terminal.
 - **Workspace tools** — anchored reads and edits, complete-file writes,
   directory operations, asynchronous commands, archive search, and optional
   read-only LSP queries.
-- **Explicit orchestration** — Griller, Scout, Planner, Coder, and review roles
-  with user approval before a `/plan` starts modifying files.
+- **Explicit orchestration** — Griller, Scout, Planner, Coder, optional external
+  Web Tester, and review roles with user approval before a `/plan` executes.
 - **Provider choice** — OpenAI-compatible APIs and local servers, OpenRouter,
   xAI, Anthropic, and the Codex App Server, all exposed through q's managed
   Gateway.
@@ -76,7 +76,7 @@ q sprint implement the requested feature
 ```
 
 Sprint creates a fresh durable workspace session, runs the same
-Griller → Scout → Planner → Coder → Planner review workflow as `/plan`, and
+Griller → Scout → Planner → task executor → Planner review workflow as `/plan`, and
 streams concise progress plus the final execution result to stdout. It does not
 change the persisted `plan.auto_resolve` or `plan.auto_approve` settings.
 
@@ -131,6 +131,7 @@ screen and returns to the previous screen without discarding its state.
 | `/auto-resolve [on\|off\|status]` | Persistently control engineering-default answers to plan clarification. |
 | `/autonomous [on\|off\|status]` | Persistently control both plan automation settings together. |
 | `/agent:search <query>` | Run the configured external ACP Search agent in a temporary read-only session. |
+| `/agent:web-tester <request>` | Run the configured external ACP Web Tester autonomously and return its captured verification report. |
 | `/changes` | Browse current staged, unstaged, and untracked repository changes. |
 | `/commit` | Generate and review a commit or split-commit proposal. |
 | `/sessions` | Open another saved workspace session. |
@@ -145,12 +146,24 @@ screen and returns to the previous screen without discarding its state.
 | `/skills` | Manage global and workspace Agent Skills. |
 | `/lsp` | Configure language servers and project roots. |
 | `/mcp` | Configure external MCP servers and role assignments. |
-| `/agents` | Configure ACP agent processes and the external Search role. |
+| `/agents` | Configure ACP agent processes and external Search/Web Tester roles. |
 | `/help` | Open the scrollable command and key guide. |
 
 Start typing a slash command to filter the catalog. Up/Down selects an entry;
 Tab or Enter completes it. Enter runs a command that is already complete, and
 Escape closes the completion popup.
+
+External `agent:*` commands are listed only when their role is assigned to an
+existing enabled connection. The same availability rule controls general-chat
+tools, ACP command discovery/help, and Planner executor choices. An unavailable
+external capability is not advertised; entering its hidden command text is
+handled as ordinary chat input.
+
+Web Tester invocations run in an isolated ACP process/session with a fixed
+15-minute deadline. q automatically selects `allow_once`, falling back to an
+offered `allow_always`; if neither is available, the invocation fails. Assigning
+the Web Tester role therefore marks that executable as trusted for autonomous
+verification. Search keeps its read-only permission policy.
 
 ### Chat keys
 
@@ -202,18 +215,22 @@ flowchart LR
     G --> P[Planner]
     P --> A{User approval}
     A -->|revise| G
-    A -->|approve| C[Coder task]
+    A -->|approve| E{Task executor}
+    E -->|coder| C[Coder task]
+    E -->|configured| W[External Web Tester]
     C --> R{Planner review}
-    R -->|retry| C
-    R -->|next task| C
+    W --> R
+    R -->|retry with executor| E
+    R -->|next task| E
     R -->|all accepted| D[Complete]
 ```
 
 The Griller asks only for decisions that repository evidence cannot answer.
 Scout performs bounded, non-mutating investigation. Planner produces conditions,
-targets, completion criteria, and verification. After approval, Coder executes
-one task at a time and Planner either accepts it or returns actionable retry
-feedback.
+targets, executors, completion criteria, and verification. After approval, each
+task starts with its planned executor. Planner can send a failed Web Tester result
+to Coder for repair and then back to Web Tester for acceptance; tasks still run
+sequentially and share the existing bounded attempt count.
 
 Plan automation can be persisted in `~/.q/config.yaml`:
 
@@ -226,7 +243,7 @@ plan:
 `auto_resolve` answers Griller requirement questions with an engineering policy
 that requires both a small extensible abstraction and an efficient concrete
 implementation. `auto_approve` mechanically approves a valid Planner proposal;
-it does not bypass proposal validation, Coder execution, or Planner review.
+it does not bypass proposal validation, executor execution, or Planner review.
 
 Active execution is checkpointed under the selected session:
 
@@ -309,7 +326,7 @@ in `~/.q/config.yaml`. Manage role assignments from `/model`: `a` creates a
 custom role and `d` deletes one after confirmation. Built-in native roles can
 also be selected; selecting one uses its model settings without invoking its
 built-in workflow.
-The names `default`, `embedding`, `search`, and built-in role names are reserved
+The names `default`, `embedding`, `search`, `external_web_tester`, and built-in role names are reserved
 and cannot be registered as custom roles.
 
 Profiles are YAML files in `~/.q/subagents/` or `<workspace>/.q/subagents/`.
@@ -452,7 +469,7 @@ Run q as an Agent Client Protocol server over stdin/stdout:
 q acp [--root <workspace-path>] [--auto-resolve] [--auto-approve] [--autonomous]
 ```
 
-ACP mode shares q's sessions, workspace tools, planning, external Search, and
+ACP mode shares q's sessions, workspace tools, planning, external Search/Web Tester, and
 commit workflow. The plan flags override persisted settings for only that ACP
 process; explicit values such as `--auto-approve=false` are also supported.
 `--autonomous` enables both plan flags, while an explicitly supplied individual
@@ -499,7 +516,7 @@ omits the chat-only `learn` tool.
 | `q memory` | Keep Workspace Memory running independently of a TUI. |
 | `q commit` | Open the commit workflow in the current repository. |
 | `q model` | Configure model and role assignments. |
-| `q agents` | Configure ACP agent connections and Search. |
+| `q agents` | Configure ACP agent connections and external Search/Web Tester roles. |
 | `q mcp` | Configure external MCP servers. |
 | `q skills` | Manage Agent Skills. |
 | `q lsp` | Configure language servers. |

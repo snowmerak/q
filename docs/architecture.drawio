@@ -50,7 +50,7 @@
           <mxGeometry x="750" y="330" width="420" height="100" as="geometry" />
         </mxCell>
 
-        <mxCell id="plan" value="&lt;b&gt;Plan orchestration&lt;/b&gt;&lt;br&gt;&lt;font color=&quot;#7E22CE&quot;&gt;subagent&lt;/font&gt;&lt;br&gt;&lt;font color=&quot;#64748B&quot;&gt;Griller → Scout → Planner → Coder → review&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FAF5FF;strokeColor=#9333EA;fontColor=#172033;fontSize=15;arcSize=14;" vertex="1" parent="1">
+        <mxCell id="plan" value="&lt;b&gt;Plan orchestration&lt;/b&gt;&lt;br&gt;&lt;font color=&quot;#7E22CE&quot;&gt;subagent&lt;/font&gt;&lt;br&gt;&lt;font color=&quot;#64748B&quot;&gt;Planner → Coder/Web Tester → review&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FAF5FF;strokeColor=#9333EA;fontColor=#172033;fontSize=15;arcSize=14;" vertex="1" parent="1">
           <mxGeometry x="330" y="475" width="350" height="105" as="geometry" />
         </mxCell>
         <mxCell id="commit" value="&lt;b&gt;Repository review&lt;/b&gt;&lt;br&gt;&lt;font color=&quot;#7E22CE&quot;&gt;changes · commitagent&lt;/font&gt;&lt;br&gt;&lt;font color=&quot;#64748B&quot;&gt;diff browser · commits&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FAF5FF;strokeColor=#9333EA;fontColor=#172033;fontSize=15;arcSize=14;" vertex="1" parent="1">
@@ -88,7 +88,7 @@
         <mxCell id="external-servers" value="&lt;b&gt;External MCP servers&lt;/b&gt;&lt;br&gt;&lt;font color=&quot;#64748B&quot;&gt;stdio or Streamable HTTP&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF7ED;strokeColor=#EA580C;fontColor=#172033;fontSize=15;arcSize=14;" vertex="1" parent="1">
           <mxGeometry x="1260" y="480" width="480" height="80" as="geometry" />
         </mxCell>
-        <mxCell id="acp-agents" value="&lt;b&gt;External ACP agents&lt;/b&gt;&lt;br&gt;&lt;font color=&quot;#64748B&quot;&gt;configured agent processes · Search role&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF7ED;strokeColor=#EA580C;fontColor=#172033;fontSize=15;arcSize=14;" vertex="1" parent="1">
+        <mxCell id="acp-agents" value="&lt;b&gt;External ACP agents&lt;/b&gt;&lt;br&gt;&lt;font color=&quot;#64748B&quot;&gt;configured processes · Search/Web Tester roles&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF7ED;strokeColor=#EA580C;fontColor=#172033;fontSize=15;arcSize=14;" vertex="1" parent="1">
           <mxGeometry x="1260" y="585" width="480" height="80" as="geometry" />
         </mxCell>
         <mxCell id="lsp-servers" value="&lt;b&gt;Language servers&lt;/b&gt;&lt;br&gt;&lt;font color=&quot;#64748B&quot;&gt;diagnostics · hover · symbols · references&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF7ED;strokeColor=#EA580C;fontColor=#172033;fontSize=15;arcSize=14;" vertex="1" parent="1">

@@ -262,6 +262,9 @@ func parseCoderCompletion(arguments string) (CoderResult, error) {
 		if _, exists := supplied["evidence"]; exists {
 			return CoderResult{}, errors.New("task_complete evidence is collected automatically and must not be supplied by Coder")
 		}
+		if _, exists := supplied["executor"]; exists {
+			return CoderResult{}, errors.New("task_complete executor is assigned by q and must not be supplied by Coder")
+		}
 	}
 	var result CoderResult
 	if err := decodeStrict(arguments, &result); err != nil {
@@ -280,6 +283,9 @@ func parseCoderCompletion(arguments string) (CoderResult, error) {
 }
 
 func validateCoderResult(result CoderResult) error {
+	if result.Executor != "" && result.Executor != PlanExecutorCoder {
+		return errors.New("task_complete executor must be coder")
+	}
 	if result.Outcome != "succeeded" && result.Outcome != "blocked" {
 		return errors.New("task_complete outcome must be succeeded or blocked")
 	}
@@ -292,29 +298,64 @@ func validateCoderResult(result CoderResult) error {
 	if result.Outcome == "blocked" && result.Blocker == "" {
 		return errors.New("task_complete blocker is required for blocked outcome")
 	}
+	return validateTaskResultBounds(result)
+}
+
+func validateTaskResultBounds(result TaskResult) error {
+	if len(result.Summary) > maximumCoderTextBytes || len(result.Blocker) > maximumCoderTextBytes ||
+		!boundedAgentStrings(result.Findings) || !boundedAgentStrings(result.Artifacts) ||
+		!boundedAgentStrings(result.Verification) {
+		return fmt.Errorf("executor result text must not exceed %d bytes", maximumCoderTextBytes)
+	}
 	if len(result.Findings) > maximumCoderListItems || len(result.Artifacts) > maximumCoderListItems ||
 		len(result.Verification) > maximumCoderListItems {
-		return fmt.Errorf("task_complete lists must contain at most %d items", maximumCoderListItems)
+		return fmt.Errorf("executor result lists must contain at most %d items", maximumCoderListItems)
 	}
 	if len(result.Evidence) > maximumCoderEvidenceItems {
-		return fmt.Errorf("Coder evidence must contain at most %d items", maximumCoderEvidenceItems)
+		return fmt.Errorf("executor evidence must contain at most %d items", maximumCoderEvidenceItems)
 	}
 	for index, evidence := range result.Evidence {
-		if strings.TrimSpace(evidence.Tool) == "" {
-			return fmt.Errorf("Coder evidence %d tool is required", index+1)
+		if strings.TrimSpace(evidence.Tool) == "" || len(evidence.Tool) > maximumCoderTextBytes {
+			return fmt.Errorf("executor evidence %d tool is required", index+1)
 		}
 		if evidence.LoomRef != "" {
 			if _, err := loom.ParseRef(evidence.LoomRef); err != nil {
-				return fmt.Errorf("Coder evidence %d: %w", index+1, err)
+				return fmt.Errorf("executor evidence %d: %w", index+1, err)
 			}
 		}
 		for _, path := range evidence.Paths {
-			if !workspaceRelativePath(path) {
-				return fmt.Errorf("Coder evidence %d path %q must stay workspace-relative", index+1, path)
+			if len(path) > maximumCoderTextBytes || !workspaceRelativePath(path) {
+				return fmt.Errorf("executor evidence %d path %q must stay workspace-relative", index+1, path)
 			}
 		}
 	}
 	return nil
+}
+
+func validateTaskResult(result TaskResult) error {
+	result.Executor = strings.TrimSpace(result.Executor)
+	if result.Executor == "" {
+		result.Executor = PlanExecutorCoder
+	}
+	if result.Executor == PlanExecutorCoder {
+		return validateCoderResult(result)
+	}
+	if result.Executor != PlanExecutorExternalWebTester {
+		return fmt.Errorf("executor result uses unsupported executor %q", result.Executor)
+	}
+	if result.Outcome != "succeeded" && result.Outcome != "failed" && result.Outcome != "blocked" {
+		return errors.New("external_web_tester result outcome must be succeeded, failed, or blocked")
+	}
+	if strings.TrimSpace(result.Summary) == "" {
+		return errors.New("external_web_tester result summary is required")
+	}
+	if result.Outcome == "blocked" && strings.TrimSpace(result.Blocker) == "" {
+		return errors.New("external_web_tester result blocker is required for blocked outcome")
+	}
+	if result.Outcome != "blocked" && strings.TrimSpace(result.Blocker) != "" {
+		return errors.New("external_web_tester result blocker is valid only for blocked outcome")
+	}
+	return validateTaskResultBounds(result)
 }
 
 func coderEvidence(call client.ToolCall, result client.ToolResult, workingDirectory string) CoderEvidence {

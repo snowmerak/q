@@ -28,6 +28,51 @@ func resolvePlanSchema(t *testing.T) *jsonschema.Resolved {
 	return resolved
 }
 
+func TestPlannerExecutorCapabilityIsDynamicAndLegacyPlansDefaultToCoder(t *testing.T) {
+	properties := submitPlanTool().Function.Parameters["properties"].(map[string]any)
+	stepSchema := properties["steps"].(map[string]any)["items"].(map[string]any)
+	required := stepSchema["required"].([]string)
+	foundExecutor := false
+	for _, field := range required {
+		foundExecutor = foundExecutor || field == "executor"
+	}
+	if !foundExecutor {
+		t.Fatalf("new Planner schema does not require executor: %v", required)
+	}
+	defaultSchema, err := json.Marshal(submitPlanTool().Function.Parameters)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(defaultSchema), PlanExecutorExternalWebTester) ||
+		strings.Contains(plannerInstructions(), PlanExecutorExternalWebTester) {
+		t.Fatal("unavailable external_web_tester leaked into Planner discovery")
+	}
+	capabilitySchema, err := json.Marshal(submitPlanTool(PlanExecutorExternalWebTester).Function.Parameters)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(capabilitySchema), PlanExecutorExternalWebTester) ||
+		!strings.Contains(plannerInstructions(PlanExecutorExternalWebTester), PlanExecutorExternalWebTester) {
+		t.Fatal("available external_web_tester was not advertised to Planner")
+	}
+
+	legacy := `{"outcome":"succeeded","summary":"legacy","conditions":["c"],"steps":[{"title":"t","description":"d","target":{"any":[{"all":[{"kind":"paths","paths":["app.go"]}]}]}}],"verification":["test"],"blocker":""}`
+	proposal, err := parsePlanProposal(legacy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if proposal.Steps[0].Executor != PlanExecutorCoder {
+		t.Fatalf("legacy executor = %q", proposal.Steps[0].Executor)
+	}
+	external := strings.Replace(legacy, `"target"`, `"executor":"external_web_tester","target"`, 1)
+	if _, err := parsePlanProposal(external); err == nil {
+		t.Fatal("unavailable executor was accepted")
+	}
+	if _, err := parsePlanProposal(external, PlanExecutorExternalWebTester); err != nil {
+		t.Fatalf("available executor was rejected: %v", err)
+	}
+}
+
 func planExampleObject(t *testing.T, example string) map[string]any {
 	t.Helper()
 	var value map[string]any

@@ -16,8 +16,8 @@
   질문이나 다음 agent의 bounded context를 만드는 내부 과정이다.
 - **Scout**: Griller가 위임한 저장소 질문을 workspace 비변경 방식으로 조사하는
   subagent다.
-- **Planner**: Grill이 완성한 brief를 조건, 완료 기준, 검증 방법과 실행 단계로
-  변환하는 역할이다.
+- **Planner**: Grill이 완성한 brief를 조건, 완료 기준, 검증 방법, task별 executor와
+  실행 단계로 변환하는 역할이다.
 
 Grill은 Scout보다 먼저 끝나는 별도 전처리 단계가 아니다. Griller는 Grill 도중
 저장소 근거가 필요할 때 Scout를 호출하고, 결과를 자기 컨텍스트에 합친 뒤 다시
@@ -139,6 +139,7 @@ Planner는 완성된 Grill brief를 받아 다음을 하나의 proposal로 만�
 - 명시적 가정과 위험
 - 범위와 비범위
 - 순서가 있는 실행 계획
+- 각 task를 수행하고 acceptance를 확인할 executor
 - 각 task의 Loom/static path 기반 target condition
 - 완료 기준과 검증 방법
 
@@ -155,7 +156,7 @@ Planner는 완성된 Grill brief를 받아 다음을 하나의 proposal로 만�
 항목을 기계적으로 선택하거나 별도 model call을 추가하지 않는다.
 
 `plan.auto_approve`가 활성화되면 유효한 succeeded proposal의 확인 질문에만
-`approve`를 반환한다. Planner blocked 결과, proposal validation, Coder 실행과
+`approve`를 반환한다. Planner blocked 결과, proposal validation, executor 실행과
 Planner review는 생략하지 않는다. 두 설정은 config에 저장할 수 있고 `q acp`의
 `--auto-resolve`, `--auto-approve`, `--autonomous`가 해당 프로세스에서만 override할
 수 있다. 자동 답변은 planning audit에 각각 `auto-resolve`, `auto-approve` source로
@@ -172,7 +173,7 @@ durable workspace session을 만들고 같은 plan
 workflow를 headless로 실행한다. 해당 실행의 config 복사본에서 `auto_resolve`와
 `auto_approve`를 모두 강제로 활성화하므로 사용자 입력을 기다리지 않으며, 영구
 config는 수정하지 않는다. 기존 `/plan`과 같은 planning audit, execution checkpoint,
-Coder 실행, Planner review를 사용하고 진행 상태와 최종 결과를 stdout에 기록한다.
+executor 실행, Planner review를 사용하고 진행 상태와 최종 결과를 stdout에 기록한다.
 
 승인된 Plan의 task 실행과 Planner review 의미는
 [execution-orchestration.md](execution-orchestration.md)를 따른다. Target condition은
@@ -184,6 +185,13 @@ Planner의 system prompt에는 실제 validator와 schema 테스트를 통과하
 `succeeded`/`blocked` JSON 예제를 함께 제공한다. 일반적인 task는
 `target.any[0].all[0]`에 `kind: paths`와 파일 목록 하나만 사용하면 된다.
 아직 생성하지 않은 파일도 workspace-relative 경로로 지정할 수 있다.
+
+각 succeeded task의 `executor`는 required다. `coder`는 항상 enum에 들어가며,
+`agents.roles.external_web_tester`가 enabled connection에 연결된 planning snapshot에서만
+`external_web_tester`가 추가된다. 연결되지 않은 외부 executor 이름은 Planner
+instructions와 schema에 나타나지 않는다. legacy proposal에서 executor가 누락되면
+`coder`로 정규화한다. Web Tester는 Planner가 호출하는 도구가 아니라 승인 이후
+Coder와 같은 execution-loop 레벨에서 dispatch되는 executor다.
 Loom selector와 여러 OR/AND group은 필요한 경우에만 사용하며, Loom reference를
 임의로 만들지 않는다.
 
@@ -238,14 +246,16 @@ Planner만 반복하지 않는다. 기존 사용자 답변, Scout 결과, Loom r
 - 승인 시 기존 execution JSON의 `checkpoint.planning`에 brief/proposal과 audit을 포함
 - 취소·실패 시 `.q/plan-executions/plan-planning-<UTC>-<ID>.json`에 별도 보관
 - Planner의 `submit_plan` validation
+- 설정 snapshot에 따른 required `PlanStep.executor` enum
 - task별 OR-of-AND target condition validation
 - 조건과 계획을 조합한 사용자 confirmation
 - 거절 또는 Planner `blocked` 시 이전 brief/proposal/feedback을 보존한 re-grill
 - Griller, Scout, Planner의 구조화된 progress event와 채팅 TUI activity panel
 - role별 현재 상태와 최근 `started/thinking/tool/delegated/waiting/completed/failed` 로그
-- 승인 직후 Loom/static target을 해석하고 Coder/Planner review execution loop 실행
+- 승인 직후 Loom/static target을 해석하고 executor/Planner review execution loop 실행
 - Coder tool call의 Loom/path evidence를 자동 수집하고 Planner가 선택적으로 검토
-- task별 `retry | next`, feedback, facts 병합과 attempt 상한
+- task별 `retry | next`, optional `next_executor`, feedback, facts 병합과 executor 간
+  공유 attempt 상한
 - Coder/Planner의 상세 trace와 완료 후 접힌 summary
 - 승인 후 Coder/Planner의 progress, assistant message, tool arguments/result를 마지막
   task review까지 `checkpoint.execution_log.events`에 시간순으로 보관

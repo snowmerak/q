@@ -124,7 +124,7 @@ func (m *model) refreshHelp(gotoTop bool) {
 	if m.clientIsACPRemote() {
 		m.helpViewport.SetContent(renderACPClientHelpContent(m.dark))
 	} else {
-		m.helpViewport.SetContent(renderHelpContent(m.dark))
+		m.helpViewport.SetContent(renderHelpContent(m.dark, m.slashCommands()))
 	}
 	if gotoTop {
 		m.helpViewport.GotoTop()
@@ -182,7 +182,7 @@ func (m model) viewHelp() string {
 	return frameStyle.Width(max(36, m.width-4)).Render(body.String())
 }
 
-func renderHelpContent(dark bool) string {
+func renderHelpContent(dark bool, commandSets ...[]slashCommand) string {
 	var body strings.Builder
 	writeHelpSection := func(title string, rows [][2]string) {
 		if body.Len() > 0 {
@@ -201,8 +201,12 @@ func renderHelpContent(dark bool) string {
 		}
 	}
 
+	catalog := localSlashCommands
+	if len(commandSets) > 0 {
+		catalog = commandSets[0]
+	}
 	var commands [][2]string
-	for _, command := range localSlashCommands {
+	for _, command := range catalog {
 		commands = append(commands, [2]string{command.usage(), command.description})
 	}
 	writeHelpSection("SLASH COMMANDS", commands)

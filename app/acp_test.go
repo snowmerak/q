@@ -806,6 +806,11 @@ func TestACPAgentReportsToolLifecycle(t *testing.T) {
 func TestACPAgentAdvertisesAndHandlesHeadlessCommands(t *testing.T) {
 	configuredClient := &fakeClient{}
 	agent, workspaceStore, connection := testACPAgent(t, configuredClient, &fakeAgentTools{})
+	for _, command := range []string{"/agent:search hidden", "/agent:web-tester hidden"} {
+		if _, handled, err := agent.runACPCommand(t.Context(), command); err != nil || handled {
+			t.Fatalf("unconfigured command %q = handled %v, error %v", command, handled, err)
+		}
+	}
 	sessionID := openTestACPSession(t, agent, workspaceStore.Root)
 	response, err := agent.Prompt(t.Context(), acp.PromptRequest{
 		SessionId: sessionID,
@@ -831,12 +836,46 @@ func TestACPAgentAdvertisesAndHandlesHeadlessCommands(t *testing.T) {
 	for _, command := range commands {
 		commandNames = append(commandNames, command.Name)
 	}
-	if !slices.Equal(commandNames, []string{"subagents", "subagent", "plan", "debug", "review", "auto-approve", "auto-resolve", "autonomous", "agent:search", "commit", "learn", "clear", "help"}) ||
-		!strings.Contains(output, "/plan") || !strings.Contains(output, "/debug") || !strings.Contains(output, "/review") || !strings.Contains(output, "/agent:search") ||
+	if !slices.Equal(commandNames, []string{"subagents", "subagent", "plan", "debug", "review", "auto-approve", "auto-resolve", "autonomous", "commit", "learn", "clear", "help"}) ||
+		!strings.Contains(output, "/plan") || !strings.Contains(output, "/debug") || !strings.Contains(output, "/review") || strings.Contains(output, "/agent:search") ||
 		!strings.Contains(output, "/auto-approve") || !strings.Contains(output, "/auto-resolve") ||
 		!strings.Contains(output, "/autonomous") || !strings.Contains(output, "/commit") ||
 		!strings.Contains(output, "/learn") || !strings.Contains(output, "/clear") {
 		t.Fatalf("commands = %#v, output = %q", commands, output)
+	}
+}
+
+func TestACPAgentDiscoversOnlyConfiguredExternalCommands(t *testing.T) {
+	agent, workspaceStore, connection := testACPAgent(t, &fakeClient{}, &fakeAgentTools{})
+	agent.state.config.Agents.Connections = map[string]config.AgentConnectionConfig{
+		"search": {Preset: "codex"}, "browser": {Preset: "codex"},
+	}
+	agent.state.config.Agents.Roles = map[string]config.AgentConfig{
+		config.AgentRoleSearch:            {Agent: "search"},
+		config.AgentRoleExternalWebTester: {Agent: "browser"},
+	}
+	sessionID := openTestACPSession(t, agent, workspaceStore.Root)
+	if _, err := agent.Prompt(t.Context(), acp.PromptRequest{
+		SessionId: sessionID, Prompt: []acp.ContentBlock{acp.TextBlock("/help")},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var commands []string
+	var output string
+	for _, notification := range connection.snapshot() {
+		if update := notification.Update.AvailableCommandsUpdate; update != nil {
+			commands = commands[:0]
+			for _, command := range update.AvailableCommands {
+				commands = append(commands, command.Name)
+			}
+		}
+		if update := notification.Update.AgentMessageChunk; update != nil && update.Content.Text != nil {
+			output += update.Content.Text.Text
+		}
+	}
+	if !slices.Contains(commands, "agent:search") || !slices.Contains(commands, "agent:web-tester") ||
+		!strings.Contains(output, "/agent:search") || !strings.Contains(output, "/agent:web-tester") {
+		t.Fatalf("commands=%v output=%q", commands, output)
 	}
 }
 
@@ -1160,6 +1199,8 @@ func TestACPAgentRunsExplicitSearchCommand(t *testing.T) {
 			Agent: "codex", Summary: "ACP evidence: https://agentclientprotocol.com",
 		}, nil
 	})
+	agent.state.config.Agents.Connections = map[string]config.AgentConnectionConfig{"search": {Preset: "codex"}}
+	agent.state.config.Agents.Roles = map[string]config.AgentConfig{config.AgentRoleSearch: {Agent: "search"}}
 	sessionID := openTestACPSession(t, agent, workspaceStore.Root)
 	response, err := agent.Prompt(t.Context(), acp.PromptRequest{
 		SessionId: sessionID,

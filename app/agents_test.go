@@ -40,9 +40,25 @@ func TestAgentsSettingsAssignSearchConnectionAndSave(t *testing.T) {
 		!strings.Contains(m.status, "saved") {
 		t.Fatalf("loaded=%#v status=%q", loaded.Agents, m.status)
 	}
+	m.width, m.height = 160, 30
 	view := m.viewAgentsLists()
-	if !strings.Contains(view, "EXTERNAL ROLES") || !strings.Contains(view, "search") || !strings.Contains(view, "codex-main") {
+	if !strings.Contains(view, "EXTERNAL ROLES") || !strings.Contains(view, "search") ||
+		!strings.Contains(view, "external_web_tester") || !strings.Contains(view, "codex-main") {
 		t.Fatalf("agents view = %q", view)
+	}
+}
+
+func TestAgentsSettingsAssignExternalWebTesterConnection(t *testing.T) {
+	m := newModel(context.Background(), config.Store{Dir: t.TempDir()}, nil)
+	m.agentsDraft = config.Default()
+	m.agentsDraft.Agents.Connections = map[string]config.AgentConnectionConfig{
+		"browser": {Preset: "codex"},
+	}
+	m.agentsCursor[0] = 1
+	updated, _ := m.assignAgentRole()
+	m = updated.(model)
+	if assigned := m.agentsDraft.Agents.Roles[config.AgentRoleExternalWebTester].Agent; assigned != "browser" {
+		t.Fatalf("external_web_tester role assignment = %q", assigned)
 	}
 }
 

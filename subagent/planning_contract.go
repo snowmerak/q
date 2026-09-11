@@ -11,6 +11,7 @@ const plannerSucceededExample = `{
   "steps": [{
     "title": "Implement and test the counter",
     "description": "Add durable counter storage, expose the agreed API, and test persistence across restarts.",
+	"executor": "coder",
     "target": {"any": [{"all": [{"kind": "paths", "paths": ["src/counter.py", "tests/test_counter.py"]}]}]}
   }],
   "verification": ["Run the counter tests, including the restart persistence case"],
@@ -26,7 +27,8 @@ const plannerBlockedExample = `{
   "blocker": "Confirm whether every page request or each unique visitor increments the counter."
 }`
 
-func submitPlanTool() client.Tool {
+func submitPlanTool(executors ...string) client.Tool {
+	executors = normalizePlanExecutors(executors)
 	strict := true
 	codeSchema := planTextSchema("JavaScript function body returning an array of workspace-relative file paths; at most 262144 UTF-8 bytes.")
 	codeSchema["maxLength"] = maximumTargetCodeBytes
@@ -95,9 +97,10 @@ func submitPlanTool() client.Tool {
 						"type": "object", "properties": map[string]any{
 							"title":        planTextSchema("Short task title."),
 							"description":  planTextSchema("Concrete work and expected result for this task."),
+							"executor":     map[string]any{"type": "string", "enum": executors, "description": "Executor assigned to implement or verify this task."},
 							"target":       targetSchema,
 							"verification": planStringListSchema("Optional task-specific checks. These do not replace top-level verification.", 0),
-						}, "required": []string{"title", "description", "target"}, "additionalProperties": false,
+						}, "required": []string{"title", "description", "executor", "target"}, "additionalProperties": false,
 					},
 				},
 				"verification": planStringListSchema("Overall acceptance checks. At least one item for succeeded even when steps have their own checks; empty for blocked.", 0),

@@ -8,6 +8,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/snowmerak/q/config"
 )
 
 type slashCommand struct {
@@ -31,7 +32,6 @@ var localSlashCommands = []slashCommand{
 	{"/auto-approve", "[on|off|status]", "Persistently control automatic plan approval."},
 	{"/auto-resolve", "[on|off|status]", "Persistently control automatic plan clarification."},
 	{"/autonomous", "[on|off|status]", "Persistently control both plan automation settings."},
-	{"/agent:search", "<query>", "Run the configured ACP Search agent."},
 	{"/commit", "", "Open the interactive commit workflow."},
 	{"/changes", "", "Browse file diffs with syntax highlighting (read only)."},
 	{"/sessions", "", "Resume a saved workspace session."},
@@ -52,6 +52,27 @@ var localSlashCommands = []slashCommand{
 	{"/help", "", "Open this help screen."},
 }
 
+var externalSlashCommands = map[string]slashCommand{
+	config.AgentRoleSearch:            {"/agent:search", "<query>", "Run the configured ACP Search agent."},
+	config.AgentRoleExternalWebTester: {"/agent:web-tester", "<request>", "Run the configured ACP Web Tester agent."},
+}
+
+func localSlashCommandsFor(value config.Config) []slashCommand {
+	result := make([]slashCommand, 0, len(localSlashCommands)+len(externalSlashCommands))
+	for _, command := range localSlashCommands {
+		result = append(result, command)
+		if command.name != "/autonomous" {
+			continue
+		}
+		for _, role := range config.ExternalAgentRoles() {
+			if _, _, available := value.ExternalAgentConnection(role); available {
+				result = append(result, externalSlashCommands[role])
+			}
+		}
+	}
+	return result
+}
+
 type slashCompletionState struct {
 	query     string
 	selected  int
@@ -68,7 +89,7 @@ func (m model) slashCommands() []slashCommand {
 	if remote, ok := m.client.(*acpRemoteClient); ok {
 		return remote.slashCommands()
 	}
-	return localSlashCommands
+	return localSlashCommandsFor(m.activeConfig())
 }
 
 func (m model) slashCompletionMatches() []slashCommand {

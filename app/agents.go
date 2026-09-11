@@ -438,7 +438,7 @@ func (m model) viewAgentsForm() string {
 	return body.String()
 }
 
-func agentExternalRoles() []string { return []string{config.AgentRoleSearch} }
+func agentExternalRoles() []string { return config.ExternalAgentRoles() }
 
 func agentConnectionIDs(value config.AgentsConfig) []string {
 	ids := make([]string, 0, len(value.Connections))

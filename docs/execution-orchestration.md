@@ -3,11 +3,11 @@
 ## 목적
 
 승인된 Plan은 단순한 설명문이나 데이터플로 그래프가 아니다. 전체 목표, 제약,
-현재까지 확인된 사실과 순서가 있는 Coder task 목록을 보존하는 실행 문서다.
+현재까지 확인된 사실과 순서가 있는 executor task 목록을 보존하는 실행 문서다.
 
-각 task는 자신이 수정할 파일 집합을 고르는 target condition을 가진다. Coder가 한
-번 실행된 뒤에는 Planner가 결과를 검토해 같은 task를 다시 실행할지 다음 task로
-넘어갈지만 결정한다.
+각 task는 `coder` 또는, 설정된 경우 `external_web_tester` executor를 명시하고 관련
+파일 집합을 고르는 target condition을 가진다. executor가 한 번 실행된 뒤에는
+Planner가 결과를 검토해 같은 task를 다시 실행할지 다음 task로 넘길지 결정한다.
 
 ## Plan과 task
 
@@ -17,6 +17,7 @@ Plan
  ├─ facts
  ├─ tasks[]
  │    ├─ title / description
+ │    ├─ executor
  │    ├─ target condition
  │    └─ verification
  ├─ overall verification
@@ -25,12 +26,13 @@ Plan
 
 `facts`는 승인 시점의 확인된 사실과 실행 중 Planner가 인정한 현재 사실을 함께
 가진다. Planner review는 명시적인 patch로 사실을 추가·교체·삭제할 수 있다. 다음
-Coder 호출의 system prompt에는 일부 요약이 아니라 현재 Plan 전체가 포함된다.
+executor 호출 context에는 일부 요약이 아니라 현재 Plan 전체가 포함된다.
 
 ## Target condition
 
 Target condition은 한 task가 다룰 파일 집합만 계산한다. 조건 간 실행 순서,
-이전 task 결과의 전달, Coder 결과 판정에는 사용하지 않는다.
+이전 task 결과의 전달, executor 결과 판정에는 사용하지 않는다. Coder에게 target은
+변경 범위이고 Web Tester에게는 검증과 관련된 workspace context다.
 
 표현은 OR-of-AND 정규형이다.
 
@@ -82,20 +84,26 @@ Target condition은 한 task가 다룰 파일 집합만 계산한다. 조건 간
 현재 Plan 전체 + resolved targets + retry feedback
                 │
                 ▼
-             Coder 실행
+       active executor 실행
                 │
                 ▼
      자동 evidence 수집 + Planner review
           ┌─────┴─────┐
         retry        next
           │            │
-   같은 task 재실행    다음 task 또는 전체 완료
+ 선택 executor로 재실행 다음 task 또는 전체 완료
 ```
 
 Task는 배열 순서대로 실행하지만 target condition 자체에는 순차 의미가 없다.
-결과 조건식도 없다. Coder 결과의 수용 여부는 Planner의 review가 판단한다.
+결과 조건식도 없다. executor 결과의 수용 여부는 Planner의 review가 판단한다.
 
-## Coder evidence와 review 도구
+`PlanStep.executor`는 최초 executor이자 acceptance executor다. `coder`는 항상
+가능하고 `external_web_tester`는 enabled ACP connection이 연결된 planning run에서만
+Planner schema에 나타난다. legacy plan에서 executor가 없으면 `coder`로 정규화한다.
+등록되지 않았거나 실행 시점에 unavailable인 executor는 Coder로 대체하지 않고,
+복구 가능한 checkpoint를 남긴 채 actionable error를 반환한다.
+
+## Executor evidence와 review 도구
 
 Coder가 호출한 non-Loom 도구 결과는 기존 runtime 경계에서 Loom artifact로 저장된다.
 각 Coder attempt는 이 receipt와 도구 호출 인자에서 다음의 제한된 evidence만 자동으로
@@ -110,6 +118,11 @@ Coder가 호출한 non-Loom 도구 결과는 기존 runtime 경계에서 Loom ar
 `task_complete` 인자로 evidence를 직접 작성할 수도 없다. Planner는 필요한 근거만
 Loom에서 선택적으로 읽는다.
 
+Web Tester는 ACP child가 반환한 `succeeded | failed | blocked` structured result를
+공통 TaskResult로 변환한다. 제품 검증 실패인 `failed`는 transport error가 아니라
+Planner가 검토할 정상 결과다. 원본 result는 Loom에 capture하고 review에는 summary,
+findings, verification, artifacts, blocker와 bounded Loom evidence만 전달한다.
+
 Planner review에는 다음 도구만 제공한다.
 
 - `read_file`
@@ -123,11 +136,12 @@ Planner는 Git 명령이나 workspace를 변경하는 명령을 실행하지 않
 
 ## Planner review
 
-Planner는 매 Coder attempt 뒤 다음 구조를 반환한다.
+Planner는 매 executor attempt 뒤 다음 구조를 반환한다.
 
 ```json
 {
   "decision": "retry",
+  "next_executor": "coder",
   "feedback": "",
   "fact_changes": [
     {
@@ -143,28 +157,39 @@ Planner는 매 Coder attempt 뒤 다음 구조를 반환한다.
 - `fact_changes`: 기존 plan facts를 대상으로 하는 `add`, `replace`, `remove` patch다.
   `replace`와 `remove`는 기존 fact의 정확한 문자열을 `target`으로 지정한다.
 - `feedback`: 항상 존재해야 한다. 추가 지시 없는 retry는 빈 문자열을 사용한다.
+- `next_executor`: `retry`에서만 선택적으로 사용한다. 없으면 현재 executor를
+  반복하고, 있으면 현재 capability set의 executor여야 한다.
 - 각 변경에는 근거를 설명하는 `reason`이 필요하다. `add`는 이번 attempt에서 새로
   확인된 durable fact에만 사용하고, `replace`와 `remove`는 새 증거가 기존 fact를
   부정하거나 정정할 때만 사용한다.
 
-`retry`는 같은 task와 같은 target condition을 다시 실행한다. `feedback`이 비어 있지
-않으면 다음 Coder system prompt에 그대로 추가한다. 별도
+`retry`는 같은 task와 같은 target condition을 유지하면서 현재 또는
+`next_executor`를 실행한다. `feedback`이 비어 있지 않으면 다음 executor context에
+그대로 추가한다. 별도
 `retry_with_feedback` 상태는 없다.
 
 `next`는 현재 task를 인정하고 다음 task로 이동한다. 마지막 task에서 `next`가
-나오면 전체 실행이 끝난다.
+나오면 전체 실행이 끝난다. planned acceptance executor와 active executor가 같아야
+하며, Web Tester task는 active executor가 `external_web_tester`이고 result가
+`succeeded`일 때만 `next`가 유효하다. 따라서 tester 실패 → coder 수정 → tester
+재검증 전이를 같은 task의 bounded attempt 안에서 표현할 수 있다.
 
-Planner가 반환한 `fact_changes`는 decision 적용 전에 Plan에 원자적으로 적용한다.
-따라서 retry와 next 모두 다음 Coder invocation에서 갱신된 Plan을 보게 된다.
+Planner가 반환한 `fact_changes`와 요청한 전이가 모두 유효한지 먼저 검사한 뒤 Plan에
+원자적으로 반영한다. 유효하지 않은 `next`나 unavailable `next_executor`는 Plan을
+변경하지 않는다. 유효한 retry와 next에서는 다음 executor invocation이 갱신된 Plan을
+보게 된다.
 
 ## 현재 구현 상태
 
 현재 코드에는 다음 기반이 구현되어 있다.
 
 - Plan task별 OR-of-AND target condition schema와 validation
+- task별 required executor schema와 configuration-dependent enum
 - 정적 path selector와 실제 `loom_eval`/`loom_read`를 사용하는 Loom transform selector
 - product 내부 파일 집합 교집합과 product 간 합집합 evaluator
 - Coder tool call의 bounded Loom/path evidence 자동 수집
+- 자동 permission과 15분 deadline을 적용하는 ACP Web Tester executor adapter
+- tester 실패 → coder 수정 → tester 재검증 dispatch와 공통 attempt 상한
 - `read_file`, Loom 조회와 검증 명령만 허용하는 Planner review tool loop
 - 최종 전이를 강제하는 `review_task`
 - `decision: retry | next`
@@ -190,15 +215,18 @@ Planner가 반환한 `fact_changes`는 decision 적용 전에 Plan에 원자적�
 - 승인된 실행의 `.q/sessions/<uuid>/plan-execution.json` atomic checkpoint
 - 완료 실행을 `.q/plan-executions/`의 UTC 타임스탬프 JSON으로 보관
 - 시작 시 중단 실행 감지와 Resume / Inspect / Discard recovery UI
-- target, Coder pending/running, Planner review, completed 단계별 재시작 복구
-- Coder running에서 끊겼을 때 기존 부작용을 먼저 검사하는 새 recovery attempt
+- `target`, `executor_pending`, `executor_running`, `review_pending`, `completed`
+  단계별 재시작 복구
+- executor running에서 끊겼을 때 기존 부작용을 먼저 검사하는 새 recovery attempt
+- v1 `coder_pending`/`coder_running` checkpoint를 v2 executor phase로 읽는 migration
 - checkpoint가 참조하는 Loom artifact를 live GC root로 유지
 
-checkpoint는 Coder 호출 전에 `coder_running`으로 저장된다. 이 상태에서 프로세스가
-끝났다면 기존 호출을 그대로 replay하지 않는다. 재개 시 attempt 번호를 올리고 현재
-workspace 변경을 먼저 검사하라는 recovery feedback을 주입한다. 반면 Coder 결과가
-이미 저장된 `review_pending` 상태는 Coder를 다시 호출하지 않고 Planner review부터
-이어간다. 성공적으로 모든 task가 끝나면 checkpoint를 삭제하지 않고
+checkpoint는 executor 호출 전에 `executor_running`으로 저장된다. 이 상태에서
+프로세스가 끝났다면 기존 호출을 그대로 replay하지 않는다. 재개 시 attempt 번호를
+올리고 현재 workspace 또는 외부 상태를 먼저 검사하라는 recovery feedback을
+주입한다. 반면 executor 결과가 이미 저장된 `review_pending` 상태는 executor를 다시
+호출하지 않고 Planner review부터 이어간다. 성공적으로 모든 task가 끝나면
+checkpoint를 삭제하지 않고
 `.q/plan-executions/plan-execution-<UTC timestamp>-<unique ID>.json`으로 옮긴다.
 파일명은 `plan-execution-20260828T033456.123456789Z-...json` 형식이며, 같은
 시각의 실행도 고유 ID로 구분한다. 저장된 JSON은 최종 Plan, task 결과와 시도
@@ -209,7 +237,7 @@ workspace 변경을 먼저 검사하라는 recovery feedback을 주입한다. �
 반환하지 않은 hidden chain-of-thought는 기록하거나 재구성하지 않는다.
 
 승인 후 실행 상세 기록은 같은 파일의 `checkpoint.execution_log`에 저장된다.
-`events`는 Coder와 review Planner의 가시적 메시지, 도구 인자/결과와 progress를
+`events`는 executor와 review Planner의 가시적 메시지, 도구 인자/결과와 progress를
 시간순으로 담는다. 마지막 task가 `next` review를 받아 `completed`로 전환되는
 checkpoint 저장 때 `completed_at`과 마지막 review 로그도 함께 확정된다. 중단 후
 재개하면 기존 event sequence 뒤에 이어지며, 최종 task 결과 요약은 기존
@@ -223,7 +251,7 @@ checkpoint 저장 때 `completed_at`과 마지막 review 로그도 함께 확정
 복구 가능한 checkpoint가 아니다. 로그가 크면 `truncated`와 `dropped_events`로
 표시하고 bounded size로 저장한다.
 
-보관 실패 시 기존 completed checkpoint를 남기므로, 복구 재시도에서는 Coder를
+보관 실패 시 기존 completed checkpoint를 남기므로, 복구 재시도에서는 executor를
 다시 호출하지 않고 보관을 완료할 수 있다. 실패·중단된 실행은 계속 기존 위치의
 checkpoint로 복구한다. 보관본은 `/clear`와 session 삭제로 지우지 않으며,
 자동 GC나 기간별 삭제는 하지 않는다. 사용자가 오래된 JSON을 직접 정리할 수 있다.

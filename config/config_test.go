@@ -70,6 +70,57 @@ func TestStoreRoundTrip(t *testing.T) {
 	}
 }
 
+func TestExternalAgentConnectionRequiresCompleteEnabledAssignment(t *testing.T) {
+	value := Default()
+	for _, role := range ExternalAgentRoles() {
+		if _, _, available := value.ExternalAgentConnection(role); available {
+			t.Fatalf("unassigned role %q is available", role)
+		}
+	}
+	value.Agents.Roles = map[string]AgentConfig{
+		AgentRoleSearch:            {Agent: "missing"},
+		AgentRoleExternalWebTester: {Agent: "disabled"},
+	}
+	value.Agents.Connections = map[string]AgentConnectionConfig{
+		"disabled": {Preset: "codex", Disabled: true},
+		"enabled":  {Preset: "codex"},
+	}
+	if _, _, available := value.ExternalAgentConnection(AgentRoleSearch); available {
+		t.Fatal("missing connection was available")
+	}
+	if _, _, available := value.ExternalAgentConnection(AgentRoleExternalWebTester); available {
+		t.Fatal("disabled connection was available")
+	}
+	role := value.Agents.Roles[AgentRoleExternalWebTester]
+	role.Agent = "enabled"
+	value.Agents.Roles[AgentRoleExternalWebTester] = role
+	id, connection, available := value.ExternalAgentConnection(AgentRoleExternalWebTester)
+	if !available || id != "enabled" || connection.Preset != "codex" {
+		t.Fatalf("enabled connection = %q, %#v, %v", id, connection, available)
+	}
+}
+
+func TestExternalWebTesterRoleValidation(t *testing.T) {
+	value := Default()
+	value.Provider.Model = "test-model"
+	value.Agents.Connections = map[string]AgentConnectionConfig{"browser": {Preset: "codex"}}
+	value.Agents.Roles = map[string]AgentConfig{
+		AgentRoleExternalWebTester: {Agent: "browser"},
+	}
+	if err := value.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	if ValidCustomRoleName(AgentRoleExternalWebTester) {
+		t.Fatal("external_web_tester was accepted as a custom native role")
+	}
+	role := value.Agents.Roles[AgentRoleExternalWebTester]
+	role.Model = "native-model"
+	value.Agents.Roles[AgentRoleExternalWebTester] = role
+	if err := value.Validate(); err == nil || !strings.Contains(err.Error(), "accepts agent only") {
+		t.Fatalf("invalid external role error = %v", err)
+	}
+}
+
 func TestStoreNotFound(t *testing.T) {
 	_, err := (Store{Dir: t.TempDir()}).Load()
 	if !errors.Is(err, ErrNotFound) {

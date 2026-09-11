@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/snowmerak/q/third_party/acp-go-sdk"
 	"github.com/snowmerak/q/client"
+	"github.com/snowmerak/q/third_party/acp-go-sdk"
 )
 
 type fakeACPRemoteConnection struct {
@@ -230,5 +230,26 @@ func TestACPReadOnlyPermissionAllowsSearchAndRejectsMutation(t *testing.T) {
 	})
 	if response.Outcome.Cancelled == nil {
 		t.Fatalf("edit permission = %#v", response)
+	}
+}
+
+func TestACPAutomaticPermissionPrefersOnceThenAlwaysAndFailsClosed(t *testing.T) {
+	options := []acp.PermissionOption{
+		{OptionId: "always", Name: "Always", Kind: acp.PermissionOptionKindAllowAlways},
+		{OptionId: "once", Name: "Once", Kind: acp.PermissionOptionKindAllowOnce},
+	}
+	response := automaticPermission(acp.RequestPermissionRequest{Options: options})
+	if response.Outcome.Selected == nil || response.Outcome.Selected.OptionId != "once" {
+		t.Fatalf("preferred permission = %#v", response)
+	}
+	response = automaticPermission(acp.RequestPermissionRequest{Options: options[:1]})
+	if response.Outcome.Selected == nil || response.Outcome.Selected.OptionId != "always" {
+		t.Fatalf("fallback permission = %#v", response)
+	}
+	response = automaticPermission(acp.RequestPermissionRequest{Options: []acp.PermissionOption{{
+		OptionId: "reject", Name: "Reject", Kind: acp.PermissionOptionKindRejectOnce,
+	}}})
+	if response.Outcome.Cancelled == nil {
+		t.Fatalf("no-allow permission = %#v", response)
 	}
 }

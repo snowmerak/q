@@ -44,6 +44,7 @@ type acpPermissionMode uint8
 const (
 	acpPermissionInteractive acpPermissionMode = iota
 	acpPermissionReadOnly
+	acpPermissionAutomatic
 )
 
 type acpRemoteClient struct {
@@ -428,6 +429,9 @@ func (r *acpRemoteClient) RequestPermission(ctx context.Context, request acp.Req
 	if permissions == acpPermissionReadOnly {
 		return readOnlyPermission(request), nil
 	}
+	if permissions == acpPermissionAutomatic {
+		return automaticPermission(request), nil
+	}
 	title := "Allow this tool call?"
 	if request.ToolCall.Title != nil && strings.TrimSpace(*request.ToolCall.Title) != "" {
 		title = strings.TrimSpace(*request.ToolCall.Title)
@@ -472,6 +476,22 @@ func readOnlyPermission(request acp.RequestPermissionRequest) acp.RequestPermiss
 	case acp.ToolKindRead, acp.ToolKindSearch, acp.ToolKindFetch, acp.ToolKindThink:
 		for _, option := range request.Options {
 			if option.Kind == acp.PermissionOptionKindAllowOnce {
+				return acp.RequestPermissionResponse{Outcome: acp.RequestPermissionOutcome{
+					Selected: &acp.RequestPermissionOutcomeSelected{OptionId: option.OptionId},
+				}}
+			}
+		}
+	}
+	return cancelledPermission()
+}
+
+func automaticPermission(request acp.RequestPermissionRequest) acp.RequestPermissionResponse {
+	for _, kind := range []acp.PermissionOptionKind{
+		acp.PermissionOptionKindAllowOnce,
+		acp.PermissionOptionKindAllowAlways,
+	} {
+		for _, option := range request.Options {
+			if option.Kind == kind {
 				return acp.RequestPermissionResponse{Outcome: acp.RequestPermissionOutcome{
 					Selected: &acp.RequestPermissionOutcomeSelected{OptionId: option.OptionId},
 				}}

@@ -12,24 +12,19 @@ import (
 	"strings"
 	"time"
 
-	"github.com/snowmerak/q/third_party/acp-go-sdk"
 	"github.com/snowmerak/q/client"
 	"github.com/snowmerak/q/config"
 	"github.com/snowmerak/q/subagent"
+	"github.com/snowmerak/q/third_party/acp-go-sdk"
 )
 
 var externalSearchURL = regexp.MustCompile(`https?://[^\s\]\[()<>{}"']+`)
 
 func configuredExternalSearchInvocation(value config.Config, root string) (subagent.Invocation, bool) {
-	role, configured := value.Agents.Roles[config.AgentRoleSearch]
-	if !configured || strings.TrimSpace(role.Agent) == "" {
+	connectionID, connection, configured := value.ExternalAgentConnection(config.AgentRoleSearch)
+	if !configured {
 		return subagent.Invocation{}, false
 	}
-	connection, found := value.Agents.Connections[role.Agent]
-	if !found || connection.Disabled {
-		return subagent.Invocation{}, false
-	}
-	connectionID := role.Agent
 	return subagent.Invocation{
 		Tool: subagent.ExternalSearchTool(),
 		Source: subagent.InvocationSource{

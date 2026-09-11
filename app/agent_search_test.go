@@ -153,13 +153,18 @@ func testAgentSearchRuntime(t *testing.T, search subagent.ExternalSearchFunc) ag
 	return &agentInvocationToolRuntime{base: base, invocation: invocation}
 }
 
-func TestAgentSearchWithoutAssignmentShowsConfigurationHint(t *testing.T) {
+func TestAgentSearchWithoutAssignmentIsNotDiscoveredOrHandledAsCommand(t *testing.T) {
 	m := newModel(t.Context(), config.Store{Dir: t.TempDir()}, nil)
 	m.enterChat(config.Default(), &fakeClient{})
+	for _, command := range m.slashCommands() {
+		if command.name == agentSearchCommand {
+			t.Fatal("unconfigured search command was discovered")
+		}
+	}
 	m.input.SetValue("/agent:search current API behavior")
 	updated, command := m.submitChat()
 	m = updated.(model)
-	if command != nil || !strings.Contains(m.status, "Search agent is not configured") {
+	if command == nil || m.status != "Thinking…" {
 		t.Fatalf("command = %v, status = %q", command, m.status)
 	}
 }

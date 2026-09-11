@@ -318,7 +318,7 @@ func renderPlanRecoveryContext(checkpoint subagent.ExecutionCheckpoint, detailed
 		task = fmt.Sprintf("%d/%d · %s", checkpoint.TaskIndex+1, len(checkpoint.Plan.Steps), checkpoint.Plan.Steps[checkpoint.TaskIndex].Title)
 	}
 	body := fmt.Sprintf(
-		"A durable plan checkpoint was found.\n\nSummary: %s\nTask: %s\nPhase: %s\nCompleted: %d/%d\nCoder results: %d\nRecovery count: %d\n\nDiscarding removes only the checkpoint; it does not revert files or commands already changed by a Coder.",
+		"A durable plan checkpoint was found.\n\nSummary: %s\nTask: %s\nPhase: %s\nCompleted: %d/%d\nExecutor attempts: %d\nRecovery count: %d\n\nDiscarding removes only the checkpoint; it does not revert workspace or external changes already made by an executor.",
 		checkpoint.Plan.Summary, task, checkpoint.Phase, checkpoint.CompletedTasks,
 		len(checkpoint.Plan.Steps), checkpoint.Attempts, checkpoint.ResumeCount,
 	)
@@ -503,7 +503,7 @@ func streamPlanWorkflow(
 	}
 	planner := subagent.PlannerRunner{
 		Client: configuredClient, Tools: plannerTools, Spec: plannerSpec, WorkingDirectory: workingDirectory,
-		Progress: progress, Trace: trace,
+		Progress: progress, Trace: trace, Executors: configuredPlanExecutors(value),
 	}
 	workflow := subagent.PlanWorkflow{
 		Griller: griller, Planner: planner, Ask: approvalAsk, Progress: progress,
@@ -640,10 +640,19 @@ func executeApprovedPlan(
 		Client: configuredClient, Tools: reviewerTools, Spec: plannerSpec,
 		Sink: archive, RunID: runID, ExecutionID: checkpoint.ExecutionID,
 		WorkingDirectory: workingDirectory, Progress: progress, Trace: trace,
+		Executors: configuredPlanExecutors(value),
+	}
+	executors := map[string]subagent.TaskRunFunc{subagent.PlanExecutorCoder: coder.Run}
+	webTester, configured, err := configuredExternalWebTesterTaskRunner(value, workingDirectory, toolRuntime)
+	if err != nil {
+		return subagent.PlanExecutionResult{}, err
+	}
+	if configured {
+		executors[subagent.PlanExecutorExternalWebTester] = webTester
 	}
 	loop := subagent.ExecutionLoop{
-		Resolver: subagent.TargetResolver{Tools: toolRuntime},
-		Coder:    coder.Run, Review: reviewer.Run, Progress: progress,
+		Resolver:  subagent.TargetResolver{Tools: toolRuntime},
+		Executors: executors, Review: reviewer.Run, Progress: progress,
 	}
 	if executionStore != nil || checkpointObserver != nil {
 		loop.Checkpoint = func(ctx context.Context, checkpoint subagent.ExecutionCheckpoint) error {
