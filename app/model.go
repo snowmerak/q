@@ -501,6 +501,7 @@ type loomStatsMsg struct {
 type thinkerResultMsg struct {
 	jobID             string
 	sessionGeneration uint64
+	checkpointStore   *workspace.Store
 	result            thinker.Result
 	err               error
 }
@@ -894,6 +895,15 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			if err := m.saveWorkspaceSession(); err != nil {
 				m.status = err.Error()
 				return m, nil
+			}
+		}
+		if message.checkpointStore != nil {
+			if err := message.checkpointStore.ClearThinkerCheckpoint(message.jobID); err != nil {
+				m.archiveFailure("clear thinker checkpoint", err)
+				_ = m.flushArchive()
+				m.status = "Thinker checkpoint cleanup: " + err.Error()
+				m.resize(m.width, m.height)
+				return m, m.startNextLearningSegment()
 			}
 		}
 		if !m.waiting && message.result.Processed > 0 {
@@ -4626,7 +4636,11 @@ func modelGroupChoice(value config.Config, choice string) (string, bool) {
 func (m *model) resetConversation(runIDs ...string) {
 	m.resetConversationState(runIDs...)
 	if m.workspaceStore != nil {
-		if err := errors.Join(m.workspaceStore.ClearExecution(), m.saveWorkspaceSession()); err != nil {
+		err := errors.Join(m.workspaceStore.ClearExecution(), m.saveWorkspaceSession())
+		if err == nil {
+			err = m.workspaceStore.ClearThinkerCheckpointAny()
+		}
+		if err != nil {
 			m.status = err.Error()
 		}
 	}

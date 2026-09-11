@@ -386,7 +386,9 @@ merged, or discarded in the global Library. `/learn off` stops collection and
 queue processing without deleting already queued data. Each completed or failed
 Thinker invocation also writes a short-lived diagnostic JSON file below
 `~/.q/logs/thinker/`; files older than three days are removed when the next
-Thinker log is written.
+Thinker log is written. In-flight proposition writes use a private per-session
+write-ahead checkpoint, so a restart replays the exact payload and idempotency
+key before the model can generate another proposition for that slot.
 
 See [Session Store notes](docs/session-store-notes.md),
 [Workspace Memory](docs/workspace-memory.md), and

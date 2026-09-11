@@ -210,6 +210,18 @@ committed only after the Thinker successfully calls `thinking_complete`; a
 failure leaves the same queue head and deterministic segment ID available for
 retry after restart or the next trigger.
 
+Each active segment also has a private write-ahead checkpoint at
+`.q/sessions/<session-id>/thinker-checkpoint.json`. Before calling Library,
+Thinker atomically stores the exact normalized proposition request, a random
+checkpoint generation, and its stable slot key. An ambiguous transport failure
+therefore resumes by replaying the same payload and key before asking the model
+for more output. After a successful response, the disposition and processed
+ledger are atomically advanced. `thinking_complete` marks the checkpoint
+complete; q removes it only after the learning queue commit has been saved in
+`session.json`. A completed checkpoint can finish that commit after a host
+restart without repeating model or Library work. Explicit conversation reset
+and session deletion remove the checkpoint as part of their projection cleanup.
+
 Every completed or failed Thinker invocation writes one private diagnostic JSON
 file below `~/.q/logs/thinker/`. The record includes the segment boundary, the
 effective model and reasoning effort, the filtered and size-bounded input
@@ -384,7 +396,16 @@ session to choose `create`, `merge`, or `discard`. Create persists a new global
 record; merge unions bounded refs, queries, tags, confidence, and matching query
 vectors into the selected record; discard writes no proposition. Reusing a key
 with identical input returns the stored decision; different input returns HTTP
-409.
+409. Thinker keys include a per-checkpoint random generation and monotonic slot,
+so a missing legacy checkpoint cannot reuse an older segment key with newly
+generated content. Within a checkpoint, the key is never advanced until the
+stored request receives a Library disposition.
+
+On the first run after this checkpoint format is introduced, an already
+partially applied legacy segment has no recoverable payload. Its new generation
+avoids the old conflicting key; if the model proposes an earlier fact again,
+the normal Librarian duplicate decision merges or discards it instead of
+silently accepting a mismatched idempotency request.
 
 Queue state progresses through `queued`, `running`, `decided`, `applying`, and
 `succeeded` or `failed`. A decision is persisted before its mutation so leader
@@ -479,6 +500,9 @@ that global skill/proposition retrieval and extraction are unavailable.
 8. Serialize proposition registration through a durable SQLite queue and use a
    fresh Library-owned Thinker session to create, merge, or discard hybrid
    duplicate candidates. Implemented.
+9. Add per-session Thinker write-ahead checkpoints so an interrupted slot
+   replays its exact proposition payload and idempotency key, and clear the
+   checkpoint only after the segment commit is durable. Implemented.
 
 ## Verification
 
@@ -500,6 +524,9 @@ The implementation is complete only when tests cover:
 - global skills changing only on startup or explicit management/reload;
 - no filesystem work during a skill search;
 - proposition extraction bounds and sensitive-data rejection;
+- interruption before a Library response, interruption after Library success
+  but before checkpoint advancement, completed-checkpoint replay, and guarded
+  cleanup after the durable learning-segment commit;
 - BM25 query expansion, multiple HNSW variants, result collapsing, RRF, and
   deterministic `created_at` decay;
 - Library unavailability degrading workspace startup without corrupting the

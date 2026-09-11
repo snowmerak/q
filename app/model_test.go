@@ -803,7 +803,7 @@ func TestModelTargetsIncludeLearningRoles(t *testing.T) {
 func TestExplicitLearningSegmentStartsThinkerExtractionThroughLibraryClient(t *testing.T) {
 	var registered qlibrary.PropositionRegisterRequest
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		if request.URL.Path != "/v1/propositions" || !strings.HasPrefix(request.Header.Get("Idempotency-Key"), "learn-") || !strings.HasSuffix(request.Header.Get("Idempotency-Key"), "/0") {
+		if request.URL.Path != "/v1/propositions" || !strings.HasPrefix(request.Header.Get("Idempotency-Key"), "thinker-v1/") || !strings.HasSuffix(request.Header.Get("Idempotency-Key"), "/0") {
 			t.Errorf("registration request = %s %s, key %q", request.Method, request.URL.Path, request.Header.Get("Idempotency-Key"))
 		}
 		if err := json.NewDecoder(request.Body).Decode(&registered); err != nil {
@@ -827,6 +827,8 @@ func TestExplicitLearningSegmentStartsThinkerExtractionThroughLibraryClient(t *t
 	value.Provider.Model = "thinker-model"
 	value.Embedding = config.EmbeddingConfig{Model: "embed-model", Dimensions: 3}
 	m := newModel(context.Background(), config.Store{Dir: t.TempDir()}, nil)
+	workspaceStore := workspace.Store{Root: t.TempDir(), SessionID: "11111111-1111-4111-8111-111111111111"}
+	m.workspaceStore = &workspaceStore
 	m.config = value
 	m.client = configuredClient
 	m.libraryClient = qlibrary.NewClient(server.URL+"/v1", "test-key", time.Second)
@@ -853,6 +855,17 @@ func TestExplicitLearningSegmentStartsThinkerExtractionThroughLibraryClient(t *t
 	message, ok := command().(thinkerResultMsg)
 	if !ok || message.err != nil || message.result.Registered != 1 {
 		t.Fatalf("Thinker result = %#v", message)
+	}
+	if checkpoint, found, err := workspaceStore.LoadThinkerCheckpoint(); err != nil || !found || !checkpoint.Completed {
+		t.Fatalf("completed Thinker checkpoint = %#v, found=%v, err=%v", checkpoint, found, err)
+	}
+	updated, _ := m.Update(message)
+	m = updated.(model)
+	if _, found, err := workspaceStore.LoadThinkerCheckpoint(); err != nil || found {
+		t.Fatalf("Thinker checkpoint after durable segment commit: found=%v err=%v", found, err)
+	}
+	if _, _, queued := m.learning.Next(); queued {
+		t.Fatal("completed learning segment remained queued")
 	}
 	if message.result.LogPath == "" || filepath.Dir(message.result.LogPath) != filepath.Join(m.store.Dir, "logs", "thinker") {
 		t.Fatalf("Thinker log path = %q", message.result.LogPath)

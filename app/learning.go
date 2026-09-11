@@ -102,25 +102,30 @@ func (m *model) startNextLearningSegment() tea.Cmd {
 	ctx := m.learningCtx
 	sessionGeneration := m.sessionGeneration
 	logStore := thinker.NewLogStore(m.store.Dir)
+	checkpointStore := m.workspaceStore
+	var checkpointPersistence thinker.JobCheckpointStore
+	if checkpointStore != nil {
+		checkpointPersistence = checkpointStore
+	}
 	return func() tea.Msg {
 		if len(models) == 0 {
 			listed, err := configuredClient.ListModels(ctx)
 			if err != nil {
-				return thinkerResultMsg{jobID: job.ID, sessionGeneration: sessionGeneration, err: fmt.Errorf("resolve thinker model: %w", err)}
+				return thinkerResultMsg{jobID: job.ID, sessionGeneration: sessionGeneration, checkpointStore: checkpointStore, err: fmt.Errorf("resolve thinker model: %w", err)}
 			}
 			models = listed
 		}
 		spec, err := subagent.Resolve(value, config.AgentRoleThinker, models)
 		if err != nil {
-			return thinkerResultMsg{jobID: job.ID, sessionGeneration: sessionGeneration, err: err}
+			return thinkerResultMsg{jobID: job.ID, sessionGeneration: sessionGeneration, checkpointStore: checkpointStore, err: err}
 		}
 		if spec.Group == "" && spec.ContextLength <= 0 && spec.Model == value.Provider.Model {
 			spec.ContextLength = value.EffectiveContextWindow()
 		}
 		result, err := serial.Run(ctx, thinker.Runner{
-			Client: configuredClient, Library: libraryClient, Spec: spec, Log: logStore,
+			Client: configuredClient, Library: libraryClient, Checkpoints: checkpointPersistence, Spec: spec, Log: logStore,
 		}, job)
-		return thinkerResultMsg{jobID: job.ID, sessionGeneration: sessionGeneration, result: result, err: err}
+		return thinkerResultMsg{jobID: job.ID, sessionGeneration: sessionGeneration, checkpointStore: checkpointStore, result: result, err: err}
 	}
 }
 

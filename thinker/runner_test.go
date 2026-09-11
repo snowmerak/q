@@ -50,16 +50,39 @@ type dispositionPropositionLibrary struct {
 }
 
 type failedThenCreatedPropositionLibrary struct {
-	keys  []string
-	calls int
+	keys   []string
+	inputs []qlibrary.PropositionRegisterRequest
+	calls  int
+}
+
+type memoryJobCheckpointStore struct {
+	checkpoint JobCheckpoint
+	found      bool
+	saveCalls  int
+	failSaveAt int
+}
+
+func (s *memoryJobCheckpointStore) LoadThinkerCheckpoint() (JobCheckpoint, bool, error) {
+	return CloneJobCheckpoint(s.checkpoint), s.found, nil
+}
+
+func (s *memoryJobCheckpointStore) SaveThinkerCheckpoint(checkpoint JobCheckpoint) error {
+	s.saveCalls++
+	if s.saveCalls == s.failSaveAt {
+		return errors.New("injected checkpoint failure")
+	}
+	s.checkpoint = CloneJobCheckpoint(checkpoint)
+	s.found = true
+	return nil
 }
 
 func (f *failedThenCreatedPropositionLibrary) RegisterProposition(
 	_ context.Context,
 	key string,
-	_ qlibrary.PropositionRegisterRequest,
+	input qlibrary.PropositionRegisterRequest,
 ) (qlibrary.PropositionRegisterResponse, error) {
 	f.keys = append(f.keys, key)
+	f.inputs = append(f.inputs, input)
 	f.calls++
 	if f.calls <= 2 {
 		return qlibrary.PropositionRegisterResponse{}, errors.New("temporary registration failure")
@@ -104,7 +127,9 @@ func TestRunnerRegistersOnePropositionPerRoundAndCompletes(t *testing.T) {
 		len(result.IDs) != 2 || result.Usage.TotalTokens != 36 {
 		t.Fatalf("result = %#v", result)
 	}
-	if len(library.keys) != 2 || library.keys[0] != "job-1/0" || library.keys[1] != "job-1/1" {
+	if len(library.keys) != 2 || library.keys[0] == library.keys[1] ||
+		!strings.HasPrefix(library.keys[0], "thinker-v1/") || !strings.HasSuffix(library.keys[0], "/0") ||
+		!strings.HasPrefix(library.keys[1], "thinker-v1/") || !strings.HasSuffix(library.keys[1], "/1") {
 		t.Fatalf("idempotency keys = %#v", library.keys)
 	}
 	if library.inputs[0].ExtractorModel != "thinker-model" || library.inputs[0].ExtractorVersion != ExtractorVersion || library.inputs[0].Refs[0] != "run:one" {
@@ -268,7 +293,7 @@ func TestRunnerCompactsWhilePreservingSourceAndAcknowledgedPropositions(t *testi
 	if initial[0].Content != resumed[0].Content || initial[1].Content != resumed[1].Content {
 		t.Fatal("extraction contract or original source was summarized")
 	}
-	for _, exact := range []string{"Keep the exact durable fact.", "prop-compact-job/0", `"action":"create"`} {
+	for _, exact := range []string{"Keep the exact durable fact.", "prop-" + library.keys[0], `"action":"create"`} {
 		if !strings.Contains(resumed[2].Content, exact) {
 			t.Fatalf("acknowledged proposition lost %q: %s", exact, resumed[2].Content)
 		}
@@ -317,25 +342,120 @@ func TestRunnerCountsLibraryMergeAndDiscardDecisions(t *testing.T) {
 	}
 }
 
-func TestRunnerConsumesIdempotencySlotAfterFailedProposal(t *testing.T) {
-	configuredClient := &fakeThinkerClient{responses: []client.Message{
+func TestRunnerResumesFailedIdempotencySlotBeforeGeneratingAnotherProposal(t *testing.T) {
+	firstClient := &fakeThinkerClient{responses: []client.Message{
 		thinkerToolCall("failed", RegisterToolName, `{"content":"Failed proposal.","queries":[],"confidence":0.9,"tags":[]}`),
+	}}
+	secondClient := &fakeThinkerClient{responses: []client.Message{
 		thinkerToolCall("next", RegisterToolName, `{"content":"Next proposal.","queries":[],"confidence":0.8,"tags":[]}`),
 		thinkerToolCall("complete", CompleteToolName, `{}`),
 	}}
 	library := &failedThenCreatedPropositionLibrary{}
-	result, err := (Runner{
-		Client: configuredClient, Library: library,
+	checkpoints := &memoryJobCheckpointStore{}
+	job := Job{ID: "job-slots", Messages: []client.Message{{Role: client.RoleUser, Content: "Remember facts."}}}
+	_, err := (Runner{
+		Client: firstClient, Library: library, Checkpoints: checkpoints,
 		Spec: subagent.Spec{Role: config.AgentRoleThinker, Model: "thinker-model", ContextLength: 16_000},
-	}).Run(context.Background(), Job{
-		ID: "job-slots", Messages: []client.Message{{Role: client.RoleUser, Content: "Remember facts."}},
-	})
+	}).Run(context.Background(), job)
+	if err == nil || !checkpoints.found || checkpoints.checkpoint.Pending == nil {
+		t.Fatalf("first run error = %v, checkpoint = %#v", err, checkpoints.checkpoint)
+	}
+	result, err := (Runner{
+		Client: secondClient, Library: library, Checkpoints: checkpoints,
+		Spec: subagent.Spec{Role: config.AgentRoleThinker, Model: "thinker-model", ContextLength: 16_000},
+	}).Run(context.Background(), job)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Proposed != 2 || result.Processed != 1 || len(library.keys) != 3 ||
-		library.keys[0] != "job-slots/0" || library.keys[1] != "job-slots/0" || library.keys[2] != "job-slots/1" {
+	if result.Proposed != 2 || result.Processed != 2 || len(library.keys) != 4 ||
+		library.keys[0] != library.keys[1] || library.keys[1] != library.keys[2] || library.keys[2] == library.keys[3] ||
+		library.inputs[0].Content != "Failed proposal." || library.inputs[1].Content != "Failed proposal." ||
+		library.inputs[2].Content != "Failed proposal." || library.inputs[3].Content != "Next proposal." {
 		t.Fatalf("result = %#v, keys = %#v", result, library.keys)
+	}
+	if len(secondClient.requests) == 0 || !strings.Contains(secondClient.requests[0].Messages[2].Content, "Failed proposal.") {
+		t.Fatalf("recovered acknowledgement missing from resumed model context: %#v", secondClient.requests)
+	}
+	if !checkpoints.checkpoint.Completed || checkpoints.checkpoint.Pending != nil {
+		t.Fatalf("completed checkpoint = %#v", checkpoints.checkpoint)
+	}
+}
+
+func TestRunnerReplaysExactRequestAfterLibrarySuccessCheckpointFailure(t *testing.T) {
+	job := Job{ID: "job-lost-receipt", Messages: []client.Message{{Role: client.RoleUser, Content: "Remember this."}}}
+	checkpoints := &memoryJobCheckpointStore{failSaveAt: 3}
+	library := &fakePropositionLibrary{}
+	firstClient := &fakeThinkerClient{responses: []client.Message{
+		thinkerToolCall("register", RegisterToolName, `{"content":"Durable fact.","queries":["durable"],"confidence":0.9,"tags":[]}`),
+	}}
+	_, err := (Runner{
+		Client: firstClient, Library: library, Checkpoints: checkpoints,
+		Spec: subagent.Spec{Role: config.AgentRoleThinker, Model: "thinker-model", ContextLength: 16_000},
+	}).Run(t.Context(), job)
+	if err == nil || !strings.Contains(err.Error(), "injected checkpoint failure") || checkpoints.checkpoint.Pending == nil {
+		t.Fatalf("first run error = %v, checkpoint = %#v", err, checkpoints.checkpoint)
+	}
+
+	secondClient := &fakeThinkerClient{responses: []client.Message{thinkerToolCall("complete", CompleteToolName, `{}`)}}
+	result, err := (Runner{
+		Client: secondClient, Library: library, Checkpoints: checkpoints,
+		Spec: subagent.Spec{Role: config.AgentRoleThinker, Model: "thinker-model", ContextLength: 16_000},
+	}).Run(t.Context(), job)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Processed != 1 || len(library.keys) != 2 || library.keys[0] != library.keys[1] ||
+		library.inputs[0].Content != library.inputs[1].Content || library.inputs[1].Content != "Durable fact." {
+		t.Fatalf("result=%#v keys=%#v inputs=%#v", result, library.keys, library.inputs)
+	}
+	if len(secondClient.requests) != 1 || !strings.Contains(secondClient.requests[0].Messages[2].Content, "Durable fact.") {
+		t.Fatalf("resumed request = %#v", secondClient.requests)
+	}
+}
+
+func TestRunnerReturnsCompletedCheckpointWithoutRepeatingWork(t *testing.T) {
+	job := Job{ID: "job-complete", Messages: []client.Message{{Role: client.RoleUser, Content: "Nothing durable."}}}
+	checkpoints := &memoryJobCheckpointStore{}
+	firstClient := &fakeThinkerClient{responses: []client.Message{thinkerToolCall("complete", CompleteToolName, `{}`)}}
+	first, err := (Runner{
+		Client: firstClient, Library: &fakePropositionLibrary{}, Checkpoints: checkpoints,
+		Spec: subagent.Spec{Role: config.AgentRoleThinker, Model: "thinker-model", ContextLength: 16_000},
+	}).Run(t.Context(), job)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondClient := &fakeThinkerClient{}
+	secondLibrary := &fakePropositionLibrary{}
+	second, err := (Runner{
+		Client: secondClient, Library: secondLibrary, Checkpoints: checkpoints,
+		Spec: subagent.Spec{Role: config.AgentRoleThinker, Model: "thinker-model", ContextLength: 16_000},
+	}).Run(t.Context(), job)
+	if err != nil || second.Usage != first.Usage || len(secondClient.requests) != 0 || len(secondLibrary.keys) != 0 {
+		t.Fatalf("first=%#v second=%#v err=%v requests=%d registrations=%d", first, second, err, len(secondClient.requests), len(secondLibrary.keys))
+	}
+}
+
+func TestRunnerRejectsInvalidPayloadBeforeReservingLibrarySlot(t *testing.T) {
+	configuredClient := &fakeThinkerClient{responses: []client.Message{
+		thinkerToolCall("invalid", RegisterToolName, `{"content":"   ","queries":[],"confidence":0.9,"tags":[]}`),
+		thinkerToolCall("valid", RegisterToolName, `{"content":"Valid fact.","queries":[],"confidence":0.9,"tags":[]}`),
+		thinkerToolCall("complete", CompleteToolName, `{}`),
+	}}
+	library := &fakePropositionLibrary{}
+	checkpoints := &memoryJobCheckpointStore{}
+	result, err := (Runner{
+		Client: configuredClient, Library: library, Checkpoints: checkpoints,
+		Spec: subagent.Spec{Role: config.AgentRoleThinker, Model: "thinker-model", ContextLength: 16_000},
+	}).Run(t.Context(), Job{ID: "job-invalid", Messages: []client.Message{{Role: client.RoleUser, Content: "Remember a fact."}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Proposed != 2 || result.Processed != 1 || len(library.keys) != 1 || !strings.HasSuffix(library.keys[0], "/0") {
+		t.Fatalf("result=%#v keys=%#v", result, library.keys)
+	}
+	if len(configuredClient.requests) < 2 || configuredClient.requests[1].Messages[len(configuredClient.requests[1].Messages)-1].Role != client.RoleTool ||
+		!strings.Contains(configuredClient.requests[1].Messages[len(configuredClient.requests[1].Messages)-1].Content, "content is required") {
+		t.Fatalf("invalid proposition feedback = %#v", configuredClient.requests)
 	}
 }
 

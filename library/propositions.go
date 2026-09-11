@@ -334,6 +334,14 @@ func normalizePropositionRegisterRequest(request PropositionRegisterRequest) (Pr
 	return request, nil
 }
 
+// ValidatePropositionRegisterRequest checks the logical proposition payload
+// before a caller assigns a durable idempotency slot. Embeddings remain derived
+// data and may be omitted by callers that configure them on Client.
+func ValidatePropositionRegisterRequest(request PropositionRegisterRequest) error {
+	_, err := normalizePropositionRegisterRequest(request)
+	return err
+}
+
 func normalizeBoundedStrings(values []string, maximumItems, maximumRunes int, field string) ([]string, error) {
 	if len(values) > maximumItems {
 		return nil, fmt.Errorf("library: proposition %ss exceed %d items", field, maximumItems)

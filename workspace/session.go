@@ -269,17 +269,20 @@ func (s Store) ListSessions() ([]SessionEntry, error) {
 	return result, nil
 }
 
-// ClearSession removes the persisted conversation and execution projection for
-// one session, then removes its empty session directory. Its lock file lives
-// outside the session directory and is intentionally retained as reusable
-// metadata.
+// ClearSession removes the persisted conversation, execution projection, and
+// Thinker write-ahead checkpoint for one session, then removes its empty
+// session directory. Its lock file lives outside the session directory and is
+// intentionally retained as reusable metadata.
 func (s Store) ClearSession() error {
 	if s.SessionID == "" {
 		return errors.New("workspace: a session ID is required")
 	}
 	// Remove the execution checkpoint first so a partial failure keeps the
-	// session discoverable and a later delete can safely retry both removals.
+	// session discoverable and a later delete can safely retry every removal.
 	if err := s.ClearExecution(); err != nil {
+		return err
+	}
+	if err := s.ClearThinkerCheckpointAny(); err != nil {
 		return err
 	}
 	if err := s.Clear(); err != nil {

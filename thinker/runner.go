@@ -56,6 +56,7 @@ type Result struct {
 type Runner struct {
 	Client              ChatClient
 	Library             PropositionLibrary
+	Checkpoints         JobCheckpointStore
 	Spec                subagent.Spec
 	Log                 *LogStore
 	MaximumPropositions int
@@ -93,14 +94,9 @@ type registerInput struct {
 	Tags       []string `json:"tags,omitempty"`
 }
 
-type acknowledgedProposition struct {
-	Content string `json:"content"`
-	ID      string `json:"id,omitempty"`
-	Action  string `json:"action"`
-}
-
 func (r Runner) Run(ctx context.Context, job Job) (returned Result, runErr error) {
 	var result Result
+	var checkpoint JobCheckpoint
 	clock := func() time.Time { return time.Now().UTC() }
 	if r.Log != nil {
 		clock = r.Log.currentTime
@@ -156,17 +152,49 @@ func (r Runner) Run(ctx context.Context, job Job) (returned Result, runErr error
 	if rounds <= 0 {
 		rounds = DefaultMaximumRounds
 	}
+	checkpoint, err = r.loadOrCreateCheckpoint(job, chunk.Truncated)
+	if err != nil {
+		return Result{}, err
+	}
+	result = checkpoint.Result
+	if checkpoint.Completed {
+		return result, nil
+	}
+	if checkpoint.Pending != nil {
+		pending := *CloneJobCheckpoint(checkpoint).Pending
+		registered, registrationErr := registerPropositionWithRetry(ctx, r.Library, pending)
+		if registrationErr != nil {
+			invocation.Trace = append(invocation.Trace, InvocationTrace{
+				At: clock(), Tool: RegisterToolName, Outcome: "recovery_error", Error: registrationErr.Error(),
+			})
+			return Result{}, fmt.Errorf("thinker: recover proposition slot %d: %w", pending.Slot, registrationErr)
+		}
+		if err := ctx.Err(); err != nil {
+			return Result{}, err
+		}
+		if err := applyRegistration(&checkpoint, registered); err != nil {
+			return Result{}, err
+		}
+		if err := r.saveCheckpoint(checkpoint); err != nil {
+			return Result{}, err
+		}
+		result = checkpoint.Result
+		invocation.Trace = append(invocation.Trace, InvocationTrace{
+			At: clock(), Tool: RegisterToolName, Outcome: "recovered",
+			Action: checkpoint.Acknowledged[len(checkpoint.Acknowledged)-1].Action, PropositionID: registered.ID,
+		})
+	}
+	if result.Proposed > maximum {
+		maximum = result.Proposed
+	}
 	messages := []client.Message{
 		{Role: client.RoleSystem, Content: thinkerInstructions(maximum)},
 		{Role: client.RoleUser, Content: chunk.Prompt},
-		{Role: client.RoleUser, Content: "No propositions have been processed in this learning segment yet."},
+		processedPropositionsMessage(checkpoint.Acknowledged),
 	}
 	tools := thinkerTools()
 	history := subagent.NewContextCompactor(r.Spec, messages, tools, len(messages))
-	var acknowledged []acknowledgedProposition
 	parallel := false
-	result = Result{Truncated: chunk.Truncated}
-	proposalIndex := 0
 	for round := 0; round < rounds; round++ {
 		if err := history.CompactIfNeeded(ctx, &r.Spec, r.Client); err != nil {
 			invocation.Trace = append(invocation.Trace, InvocationTrace{
@@ -227,9 +255,17 @@ func (r Runner) Run(ctx context.Context, job Job) (returned Result, runErr error
 			}
 			result.Usage = addUsage(result.Usage, finished.Usage)
 			result.Usage = addUsage(result.Usage, history.CompactionUsage())
+			if err := ctx.Err(); err != nil {
+				return Result{}, err
+			}
+			checkpoint.Result = result
+			checkpoint.Completed = true
+			if err := r.saveCheckpoint(checkpoint); err != nil {
+				return Result{}, err
+			}
 			return result, nil
 		case RegisterToolName:
-			if proposalIndex >= maximum {
+			if result.Proposed >= maximum {
 				message := fmt.Sprintf("proposition limit %d exceeded", maximum)
 				invocation.Trace = append(invocation.Trace, InvocationTrace{
 					Round: round + 1, At: clock(), Tool: RegisterToolName, Outcome: "rejected", Error: message,
@@ -244,69 +280,56 @@ func (r Runner) Run(ctx context.Context, job Job) (returned Result, runErr error
 				history.Append(thinkerToolError(call, fmt.Errorf("register proposition: %w", err)))
 				continue
 			}
-			idempotencyKey := fmt.Sprintf("%s/%d", job.ID, proposalIndex)
-			proposalIndex++
-			result.Proposed = proposalIndex
+			result.Proposed++
 			registration := qlibrary.PropositionRegisterRequest{
 				Content: input.Content, Queries: input.Queries, Confidence: input.Confidence, Tags: input.Tags,
 				Refs: job.Refs, ExtractorModel: r.Spec.Model, ExtractorVersion: ExtractorVersion,
 			}
-			registered, err := r.Library.RegisterProposition(ctx, idempotencyKey, registration)
-			if err != nil {
-				// A lost HTTP response may follow a successful write. Retrying the
-				// identical request is safe because the Library owns idempotency.
-				registered, err = r.Library.RegisterProposition(ctx, idempotencyKey, registration)
-			}
-			if err != nil {
-				if strings.Contains(err.Error(), "HTTP 409") {
-					invocation.Trace = append(invocation.Trace, InvocationTrace{
-						Round: round + 1, At: clock(), Tool: RegisterToolName, Outcome: "registration_error", Error: err.Error(),
-					})
-					return Result{}, fmt.Errorf("thinker: register proposition: %w", err)
-				}
+			if err := qlibrary.ValidatePropositionRegisterRequest(registration); err != nil {
 				invocation.Trace = append(invocation.Trace, InvocationTrace{
-					Round: round + 1, At: clock(), Tool: RegisterToolName, Outcome: "registration_error", Error: err.Error(),
+					Round: round + 1, At: clock(), Tool: RegisterToolName, Outcome: "invalid_proposition", Error: err.Error(),
 				})
+				checkpoint.Result = result
+				if saveErr := r.saveCheckpoint(checkpoint); saveErr != nil {
+					return Result{}, saveErr
+				}
 				history.Append(thinkerToolError(call, fmt.Errorf("register proposition: %w", err)))
 				continue
 			}
-			result.Processed++
-			action := registered.Action
-			if action == "" {
-				action = qlibrary.PropositionActionCreate
+			checkpoint.Result = result
+			checkpoint.Pending = &RegistrationCheckpoint{
+				Slot: checkpoint.NextSlot, Key: checkpointIdempotencyKey(checkpoint, checkpoint.NextSlot), Request: registration,
 			}
-			switch action {
-			case qlibrary.PropositionActionCreate:
-				result.Registered++
-				result.Created++
-				if registered.ID != "" {
-					result.IDs = append(result.IDs, registered.ID)
-				}
-			case qlibrary.PropositionActionMerge:
-				result.Registered++
-				result.Merged++
-				if registered.ID != "" {
-					result.IDs = append(result.IDs, registered.ID)
-				}
-			case qlibrary.PropositionActionDiscard:
-				result.Discarded++
-			default:
+			if err := r.saveCheckpoint(checkpoint); err != nil {
+				return Result{}, err
+			}
+			registered, err := registerPropositionWithRetry(ctx, r.Library, *checkpoint.Pending)
+			if err != nil {
+				invocation.Trace = append(invocation.Trace, InvocationTrace{
+					Round: round + 1, At: clock(), Tool: RegisterToolName, Outcome: "registration_error", Error: err.Error(),
+				})
+				return Result{}, fmt.Errorf("thinker: register proposition slot %d: %w", checkpoint.Pending.Slot, err)
+			}
+			if err := ctx.Err(); err != nil {
+				return Result{}, err
+			}
+			if err := applyRegistration(&checkpoint, registered); err != nil {
 				invocation.Trace = append(invocation.Trace, InvocationTrace{
 					Round: round + 1, At: clock(), Tool: RegisterToolName, Outcome: "registration_error",
-					Action: action, PropositionID: registered.ID, Error: "unsupported proposition action",
+					Action: registered.Action, PropositionID: registered.ID, Error: err.Error(),
 				})
-				return Result{}, fmt.Errorf("thinker: unsupported proposition action %q", action)
+				return Result{}, err
 			}
+			if err := r.saveCheckpoint(checkpoint); err != nil {
+				return Result{}, err
+			}
+			result = checkpoint.Result
+			action := checkpoint.Acknowledged[len(checkpoint.Acknowledged)-1].Action
 			invocation.Trace = append(invocation.Trace, InvocationTrace{
 				Round: round + 1, At: clock(), Tool: RegisterToolName, Outcome: "processed",
 				Action: action, PropositionID: registered.ID,
 			})
-			acknowledged = append(acknowledged, acknowledgedProposition{Content: input.Content, ID: registered.ID, Action: action})
-			ledger, _ := json.Marshal(acknowledged)
-			if err := history.SetAnchor(2, client.Message{
-				Role:    client.RoleUser,
-				Content: "Host-maintained record of propositions already processed in this learning segment. Do not register them again.\n" + string(ledger),
-			}); err != nil {
+			if err := history.SetAnchor(2, processedPropositionsMessage(checkpoint.Acknowledged)); err != nil {
 				return Result{}, err
 			}
 			ack, _ := json.Marshal(registered)
@@ -321,6 +344,112 @@ func (r Runner) Run(ctx context.Context, job Job) (returned Result, runErr error
 		}
 	}
 	return Result{}, fmt.Errorf("thinker: exceeded %d model rounds", rounds)
+}
+
+func (r Runner) loadOrCreateCheckpoint(job Job, truncated bool) (JobCheckpoint, error) {
+	digest, err := thinkerJobDigest(job)
+	if err != nil {
+		return JobCheckpoint{}, err
+	}
+	if r.Checkpoints != nil {
+		stored, found, loadErr := r.Checkpoints.LoadThinkerCheckpoint()
+		if loadErr != nil {
+			return JobCheckpoint{}, fmt.Errorf("thinker: load job checkpoint: %w", loadErr)
+		}
+		if found {
+			if err := ValidateJobCheckpoint(stored); err != nil {
+				return JobCheckpoint{}, fmt.Errorf("thinker: invalid job checkpoint: %w", err)
+			}
+			if stored.JobID == job.ID {
+				if stored.InputDigest != digest {
+					return JobCheckpoint{}, errors.New("thinker: checkpoint input does not match learning segment")
+				}
+				return CloneJobCheckpoint(stored), nil
+			}
+			// The persisted learning queue is authoritative. A different head
+			// means the previous job was cleared or committed, so this fixed file
+			// can be replaced by the new head's checkpoint.
+		}
+	}
+	checkpoint, err := newJobCheckpoint(job, truncated)
+	if err != nil {
+		return JobCheckpoint{}, err
+	}
+	if err := r.saveCheckpoint(checkpoint); err != nil {
+		return JobCheckpoint{}, err
+	}
+	return checkpoint, nil
+}
+
+func (r Runner) saveCheckpoint(checkpoint JobCheckpoint) error {
+	if err := ValidateJobCheckpoint(checkpoint); err != nil {
+		return fmt.Errorf("thinker: invalid job checkpoint: %w", err)
+	}
+	if r.Checkpoints == nil {
+		return nil
+	}
+	if err := r.Checkpoints.SaveThinkerCheckpoint(CloneJobCheckpoint(checkpoint)); err != nil {
+		return fmt.Errorf("thinker: save job checkpoint: %w", err)
+	}
+	return nil
+}
+
+func registerPropositionWithRetry(
+	ctx context.Context,
+	library PropositionLibrary,
+	pending RegistrationCheckpoint,
+) (qlibrary.PropositionRegisterResponse, error) {
+	registered, err := library.RegisterProposition(ctx, pending.Key, pending.Request)
+	if err != nil && ctx.Err() == nil {
+		// The first response may have been lost after a successful write. The
+		// persisted request and key make this exact replay safe.
+		registered, err = library.RegisterProposition(ctx, pending.Key, pending.Request)
+	}
+	return registered, err
+}
+
+func applyRegistration(checkpoint *JobCheckpoint, registered qlibrary.PropositionRegisterResponse) error {
+	if checkpoint == nil || checkpoint.Pending == nil {
+		return errors.New("thinker: no proposition registration is pending")
+	}
+	action := registered.Action
+	if action == "" {
+		action = qlibrary.PropositionActionCreate
+	}
+	if !supportedPropositionAction(action) {
+		return fmt.Errorf("thinker: unsupported proposition action %q", action)
+	}
+	checkpoint.Result.Processed++
+	switch action {
+	case qlibrary.PropositionActionCreate:
+		checkpoint.Result.Registered++
+		checkpoint.Result.Created++
+	case qlibrary.PropositionActionMerge:
+		checkpoint.Result.Registered++
+		checkpoint.Result.Merged++
+	case qlibrary.PropositionActionDiscard:
+		checkpoint.Result.Discarded++
+	}
+	if action != qlibrary.PropositionActionDiscard && registered.ID != "" {
+		checkpoint.Result.IDs = append(checkpoint.Result.IDs, registered.ID)
+	}
+	checkpoint.Acknowledged = append(checkpoint.Acknowledged, AcknowledgedProposition{
+		Content: checkpoint.Pending.Request.Content, ID: registered.ID, Action: action,
+	})
+	checkpoint.NextSlot++
+	checkpoint.Pending = nil
+	return nil
+}
+
+func processedPropositionsMessage(acknowledged []AcknowledgedProposition) client.Message {
+	if len(acknowledged) == 0 {
+		return client.Message{Role: client.RoleUser, Content: "No propositions have been processed in this learning segment yet."}
+	}
+	ledger, _ := json.Marshal(acknowledged)
+	return client.Message{
+		Role:    client.RoleUser,
+		Content: "Host-maintained record of propositions already processed in this learning segment. Do not register them again.\n" + string(ledger),
+	}
 }
 
 func thinkerToolError(call client.ToolCall, err error) client.Message {

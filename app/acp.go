@@ -2141,7 +2141,11 @@ func (a *acpAgent) clearACPConversation(ctx context.Context) error {
 	if a.state.workspaceStore == nil {
 		return errors.New("workspace session storage is unavailable")
 	}
-	if err := errors.Join(a.state.workspaceStore.ClearExecution(), a.state.saveWorkspaceSession()); err != nil {
+	err := errors.Join(a.state.workspaceStore.ClearExecution(), a.state.saveWorkspaceSession())
+	if err == nil {
+		err = a.state.workspaceStore.ClearThinkerCheckpointAny()
+	}
+	if err != nil {
 		return err
 	}
 	emptyTitle := ""
@@ -2569,6 +2573,7 @@ func (a *acpAgent) launchLearning(command tea.Cmd) {
 		a.promptMu.Lock()
 		next := a.applyPendingLearningLocked()
 		matched := result.jobID == a.state.thinkerJobID && result.sessionGeneration == a.state.sessionGeneration
+		canLaunchNext := true
 		if matched {
 			a.state.thinkerBusy = false
 			a.state.thinkerJobID = ""
@@ -2583,9 +2588,15 @@ func (a *acpAgent) launchLearning(command tea.Cmd) {
 				if a.state.learning != nil {
 					if err := a.state.learning.Commit(result.jobID); err != nil {
 						a.state.archiveFailure("learning checkpoint failed", err)
+						canLaunchNext = false
 					} else {
 						if err := a.state.saveWorkspaceSession(); err != nil {
 							a.state.archiveFailure("persist learning checkpoint failed", err)
+							canLaunchNext = false
+						} else if result.checkpointStore != nil {
+							if err := result.checkpointStore.ClearThinkerCheckpoint(result.jobID); err != nil {
+								a.state.archiveFailure("clear Thinker checkpoint failed", err)
+							}
 						}
 					}
 				}
@@ -2594,7 +2605,9 @@ func (a *acpAgent) launchLearning(command tea.Cmd) {
 		a.stateMu.Lock()
 		open := a.sessionOpen
 		a.stateMu.Unlock()
-		if next == nil && matched && open {
+		if !canLaunchNext {
+			next = nil
+		} else if next == nil && matched && open {
 			next = a.state.startNextLearningSegment()
 		}
 		a.promptMu.Unlock()
