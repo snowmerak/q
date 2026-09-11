@@ -187,6 +187,9 @@ func streamDebugWorkflow(
 	clarificationAsk := subagent.AskUserFunc(func(ctx context.Context, question subagent.UserQuestion) (subagent.UserAnswer, error) {
 		debugRecorder.recordQuestion(question)
 		answer, err := clarificationDelegate(ctx, question)
+		if err == nil {
+			answer, err = subagent.ResolveUserAnswer(question, answer)
+		}
 		debugRecorder.recordAnswer(answer, err)
 		return answer, err
 	})

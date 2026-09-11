@@ -143,6 +143,11 @@ Planner는 완성된 Grill brief를 받아 다음을 하나의 proposal로 만�
 - 각 task의 Loom/static path 기반 target condition
 - 완료 기준과 검증 방법
 
+Griller의 `ask_to_user`에서 사용자가 선택지를 고르면 응답 영수증에는 질문 원문을
+반복하지 않고 선택 ID, 표시명, 서브 설명만 보강한다. Griller는 이를 brief의
+`confirmed_choices`에 그대로 보존해야 하며, 누락·변경된 brief는 거부하고 다시
+제출하게 한다. Planner는 이 검증된 선택을 다른 서술형 필드보다 우선한다.
+
 사용자는 이 조합된 proposal 전체를 승인한다. 승인 전에는 coder나 변경 실행기로
 전달하지 않는다.
 

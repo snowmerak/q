@@ -164,6 +164,10 @@ func (r *auditLogRecorder) append(event subagent.PlanningEvent) {
 	if event.Answer != nil {
 		event.Answer.SelectedChoiceID, truncated = r.boundString(event.Answer.SelectedChoiceID)
 		event.Truncated = event.Truncated || truncated
+		event.Answer.SelectedChoiceLabel, truncated = r.boundString(event.Answer.SelectedChoiceLabel)
+		event.Truncated = event.Truncated || truncated
+		event.Answer.SelectedChoiceDescription, truncated = r.boundString(event.Answer.SelectedChoiceDescription)
+		event.Truncated = event.Truncated || truncated
 		event.Answer.Freeform, truncated = r.boundString(event.Answer.Freeform)
 		event.Truncated = event.Truncated || truncated
 	}
@@ -314,7 +318,8 @@ func planningEventContentBytes(event subagent.PlanningEvent) int {
 		}
 	}
 	if event.Answer != nil {
-		total += len(event.Answer.SelectedChoiceID) + len(event.Answer.Freeform)
+		total += len(event.Answer.SelectedChoiceID) + len(event.Answer.SelectedChoiceLabel) +
+			len(event.Answer.SelectedChoiceDescription) + len(event.Answer.Freeform)
 	}
 	return total
 }

@@ -232,8 +232,10 @@ type AskToUserInput struct {
 }
 
 type AskToUserOutput struct {
-    SelectedChoiceID string
-    Freeform         string
+    SelectedChoiceID          string
+    SelectedChoiceLabel       string
+    SelectedChoiceDescription string
+    Freeform                  string
 }
 ```
 
@@ -243,6 +245,10 @@ type AskToUserOutput struct {
 Enter를 누르면 `selected_choice_id`를 반환한다. 텍스트를 입력하면 선택 대신
 `freeform`으로 전달한다. planner의 계획 승인/수정 요청은 이 일반 형식의 한 사용
 사례다.
+선택 응답은 질문 원문을 반복하지 않고 선택 ID, 표시명, 서브 설명을 함께 반환한다.
+Griller는 이 영수증을 `submit_brief.confirmed_choices`에 순서대로 보존해야 하며,
+누락·변경된 brief는 완료로 인정하지 않는다. Planner는 이 호스트 검증 필드를 다른
+서술형 필드보다 우선하는 사용자 결정으로 취급한다.
 질문을 기다리는 동안 전체 orchestration을 멈출지 해당 의존성 branch만 멈출지는
 통합 라이브러리의 pause/resume 방식 확인 후 결정한다.
 

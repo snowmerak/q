@@ -196,12 +196,12 @@ func TestContextCompactorIncludesToolSchemasWithoutHardOutputLimit(t *testing.T)
 }
 
 func TestGrillerRetainsActualUserAnswerAfterToolHistoryCompaction(t *testing.T) {
-	question := scoutCall(AskToUserToolName, `{"question":"Which storage?","choices":[{"id":"sqlite","label":"SQLite"}]}`)
+	question := scoutCall(AskToUserToolName, `{"question":"Which storage?","choices":[{"id":"sqlite","label":"SQLite","description":"Use the embedded database."}]}`)
 	fake := &fakeScoutClient{conversationID: "griller-cache", responses: []client.Message{
 		{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{question}},
 		{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{scoutCall("loom_read", `{}`)}},
 		{Role: client.RoleAssistant, Content: contextCheckpointJSON("Repository inspected; submit the brief from the confirmed user answer.")},
-		{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{scoutCall(SubmitBriefToolName, `{"objective":"task","conditions":["SQLite only"],"acceptance_criteria":["durable"]}`)}},
+		{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{scoutCall(SubmitBriefToolName, `{"objective":"task","conditions":["SQLite only"],"acceptance_criteria":["durable"],"confirmed_choices":[{"id":"sqlite","label":"SQLite","description":"Use the embedded database."}]}`)}},
 	}}
 	tools := &fakeScoutTools{available: []client.Tool{scoutFunctionTool("loom_read")}, result: &client.ToolResult{Content: strings.Repeat("x", 72_000)}}
 	_, err := (GrillerRunner{
@@ -219,7 +219,7 @@ func TestGrillerRetainsActualUserAnswerAfterToolHistoryCompaction(t *testing.T) 
 	}
 	got := fake.requests[3].Messages
 	if len(got) < 5 || !reflect.DeepEqual(got[2].ToolCalls, []client.ToolCall{question}) ||
-		got[3].ToolCallID != question.ID || got[3].Content != `{"selected_choice_id":"sqlite","freeform":"No Redis."}` {
+		got[3].ToolCallID != question.ID || got[3].Content != `{"selected_choice_id":"sqlite","selected_choice_label":"SQLite","selected_choice_description":"Use the embedded database.","freeform":"No Redis."}` {
 		t.Fatalf("confirmed answer was summarized or detached: %#v", got)
 	}
 }

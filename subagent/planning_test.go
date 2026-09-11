@@ -117,12 +117,13 @@ func TestPlanWorkflowRegrillsAfterUserRevision(t *testing.T) {
 func TestGrillerAsksUserAndContinuesSameContext(t *testing.T) {
 	grillerClient := &fakeScoutClient{responses: []client.Message{
 		{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{scoutCall(AskToUserToolName,
-			`{"question":"Which compatibility target matters?","choices":[{"id":"windows","label":"Windows"}]}`)}},
+			`{"question":"Which compatibility target matters?","choices":[{"id":"windows","label":"Windows","description":"Support Windows terminals first."}]}`)}},
 		{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{scoutCall(SubmitBriefToolName, `{
 			"objective":"Add plan mode",
 			"conditions":["Support Windows terminals"],
 			"decisions":["Windows is the compatibility target"],
-			"acceptance_criteria":["The plan flow works on Windows"]
+			"acceptance_criteria":["The plan flow works on Windows"],
+			"confirmed_choices":[{"id":"windows","label":"Windows","description":"Support Windows terminals first."}]
 		}`)}},
 	}}
 	runner := GrillerRunner{
@@ -143,8 +144,80 @@ func TestGrillerAsksUserAndContinuesSameContext(t *testing.T) {
 		t.Fatalf("brief = %#v, requests = %d", brief, len(grillerClient.requests))
 	}
 	continuation := grillerClient.requests[1].Messages
-	if !strings.Contains(continuation[len(continuation)-1].Content, `"selected_choice_id":"windows"`) {
+	receipt := continuation[len(continuation)-1].Content
+	for _, expected := range []string{
+		`"selected_choice_id":"windows"`, `"selected_choice_label":"Windows"`,
+		`"selected_choice_description":"Support Windows terminals first."`,
+	} {
+		if !strings.Contains(receipt, expected) {
+			t.Fatalf("Griller receipt omitted %q: %s", expected, receipt)
+		}
+	}
+	if strings.Contains(receipt, "Which compatibility target matters?") {
+		t.Fatalf("Griller receipt repeated the question: %s", receipt)
+	}
+	if len(brief.ConfirmedChoices) != 1 || brief.ConfirmedChoices[0].ID != "windows" {
 		t.Fatalf("Griller did not receive the user answer: %#v", continuation)
+	}
+}
+
+func TestGrillerRejectsBriefThatOmitsConfirmedChoice(t *testing.T) {
+	grillerClient := &fakeScoutClient{responses: []client.Message{
+		{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{scoutCall(AskToUserToolName, `{
+			"question":"Which milestone?",
+			"choices":[{"id":"smallest_demo","label":"Smallest demo","description":"Render and navigate a sample document only."}]
+		}`)}},
+		{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{scoutCall(SubmitBriefToolName, `{
+			"objective":"Build the full core path",
+			"conditions":["Include fullscreen and themes"],
+			"acceptance_criteria":["The core path works"]
+		}`)}},
+		{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{scoutCall(SubmitBriefToolName, `{
+			"objective":"Build the smallest demo",
+			"conditions":["Render and navigate a sample document only"],
+			"decisions":["Use the Smallest demo milestone"],
+			"acceptance_criteria":["The sample document renders and navigates"],
+			"confirmed_choices":[{"id":"smallest_demo","label":"Smallest demo","description":"Render and navigate a sample document only."}]
+		}`)}},
+	}}
+	runner := GrillerRunner{
+		Client: grillerClient, Tools: &fakeScoutTools{},
+		Spec: Spec{Role: config.AgentRoleGriller, Model: "griller-model"},
+		Ask: func(context.Context, UserQuestion) (UserAnswer, error) {
+			return UserAnswer{SelectedChoiceID: "smallest_demo"}, nil
+		},
+	}
+	brief, err := runner.Run(context.Background(), GrillTask{Objective: "Build a milestone"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if brief.Objective != "Build the smallest demo" || len(grillerClient.requests) != 3 {
+		t.Fatalf("brief = %#v, requests = %d", brief, len(grillerClient.requests))
+	}
+	retryMessages := grillerClient.requests[2].Messages
+	result := retryMessages[len(retryMessages)-1]
+	if result.Role != client.RoleTool || !strings.Contains(result.Content, "confirmed_choices must exactly match") ||
+		!strings.Contains(result.Content, "smallest_demo") {
+		t.Fatalf("missing-choice brief was not rejected with the authoritative receipt: %#v", result)
+	}
+}
+
+func TestResolveUserAnswerUsesOfferedChoiceMetadata(t *testing.T) {
+	question := UserQuestion{Choices: []UserChoice{{
+		ID: "small", Label: "Small", Description: "Only the smallest stable slice.",
+	}}}
+	answer, err := ResolveUserAnswer(question, UserAnswer{
+		SelectedChoiceID: " small ", SelectedChoiceLabel: "spoofed", SelectedChoiceDescription: "spoofed",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if answer.SelectedChoiceID != "small" || answer.SelectedChoiceLabel != "Small" ||
+		answer.SelectedChoiceDescription != "Only the smallest stable slice." {
+		t.Fatalf("resolved answer = %#v", answer)
+	}
+	if _, err := ResolveUserAnswer(question, UserAnswer{SelectedChoiceID: "unknown"}); err == nil {
+		t.Fatal("unknown selected choice was accepted")
 	}
 }
 
@@ -159,12 +232,32 @@ func TestPlanningValidationRequiresExecutableContract(t *testing.T) {
 
 func TestGrillerQuestionChoicesAreNonExhaustive(t *testing.T) {
 	if prompt := grillerInstructions(); !strings.Contains(prompt, "non-exhaustive") ||
-		!strings.Contains(prompt, "free-form answer") || !strings.Contains(prompt, "not treat every choice as an action") {
+		!strings.Contains(prompt, "free-form answer") || !strings.Contains(prompt, "not treat every choice as an action") ||
+		!strings.Contains(prompt, "never claim that the user did not answer") || !strings.Contains(prompt, "confirmed_choices") {
 		t.Fatalf("Griller prompt does not preserve free-form answers:\n%s", prompt)
 	}
 	if description := askUserTool().Function.Description; !strings.Contains(description, "non-exhaustive") ||
 		!strings.Contains(description, "free-form") {
 		t.Fatalf("ask_to_user description = %q", description)
+	}
+}
+
+func TestSubmitBriefExposesConfirmedChoiceReceipt(t *testing.T) {
+	properties := submitBriefTool().Function.Parameters["properties"].(map[string]any)
+	choices, ok := properties["confirmed_choices"].(map[string]any)
+	if !ok {
+		t.Fatalf("submit_brief schema omitted confirmed_choices: %#v", properties)
+	}
+	items := choices["items"].(map[string]any)
+	choiceProperties := items["properties"].(map[string]any)
+	for _, name := range []string{"id", "label", "description"} {
+		if _, ok := choiceProperties[name]; !ok {
+			t.Fatalf("confirmed choice schema omitted %q: %#v", name, choiceProperties)
+		}
+	}
+	if prompt := plannerInstructions(); !strings.Contains(prompt, "host-validated user decisions") ||
+		!strings.Contains(prompt, "authoritative over any contradictory narrative field") {
+		t.Fatalf("Planner prompt does not prioritize confirmed choices:\n%s", prompt)
 	}
 }
 

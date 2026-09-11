@@ -308,7 +308,8 @@ func assertArchivedPlanningAudit(t *testing.T, store workspace.Store, runID stri
 			sawScoutResult = strings.Contains(event.Content, "Located the plan command boundary")
 		}
 		if event.Type == subagent.PlanningEventAnswer && event.Answer != nil && event.Answer.SelectedChoiceID == "approve" {
-			sawApproval = true
+			sawApproval = event.Answer.SelectedChoiceLabel == "Approve" &&
+				event.Answer.SelectedChoiceDescription == "Accept the conditions and execute the approved plan."
 		}
 		if event.Agent == "coder" || event.Agent == "executor" {
 			t.Fatalf("execution event leaked into planning audit: %#v", event)

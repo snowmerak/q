@@ -441,6 +441,9 @@ func streamPlanWorkflow(
 		return func(ctx context.Context, question subagent.UserQuestion) (subagent.UserAnswer, error) {
 			planningRecorder.recordQuestion(question)
 			answer, err := delegate(ctx, question)
+			if err == nil {
+				answer, err = subagent.ResolveUserAnswer(question, answer)
+			}
 			planningRecorder.recordAnswer(answer, err)
 			return answer, err
 		}
