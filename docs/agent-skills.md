@@ -25,9 +25,10 @@ use the same `skill` record shape:
 The record contains no `SKILL.md` body. `search_skills` performs one bounded
 Library query for global scope and one workspace Bleve query for workspace
 scope, then merges the results inside the existing MCP tool. A workspace
-definition shadows a same-named global result. `get_skill` routes the selected ID to the
-Library or local registry, then stores the returned bytes as an immutable
-workspace `agent-skill` Loom artifact. There is no separate Library MCP tool.
+definition shadows a same-named global result. `get_skill` routes the selected
+ID to the Library or local registry and always returns the complete resource
+text directly in its `content` field, whether or not Loom is available. It does
+not create a Loom artifact. There is no separate Library MCP tool.
 
 Main chat and Griller receive `search_skills` and `get_skill`; Scout receives
 the same tools in its non-mutating investigation allowlist and is the preferred repository
@@ -86,5 +87,9 @@ after explicit reload or Library/workspace restart.
 Resource paths cannot escape the resolved skill directory through `..` or
 symlinks, and individual files are size bounded. The experimental
 `allowed-tools` field is informational and cannot expand a role's tool set.
-Skill content returned by `get_skill` passes through Loom and remains subject
-to normal artifact retention and garbage collection.
+A successful `get_skill` result is appended to the current model context without
+modifying any earlier message. Context compaction keeps the newest result for
+each `(skill ID, resource path)` verbatim, newest first, up to an independent
+10% of the model context window. The newest resource is kept whole even when it
+alone exceeds that soft budget; resource text is never truncated. Older copies
+and resources outside the budget are omitted only when compaction is applied.

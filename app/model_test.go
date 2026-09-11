@@ -261,6 +261,9 @@ func TestAppendRuntimeMessagesRequiresBoundaryRetrievalForSubstantiveWork(t *tes
 			}
 		}
 	}
+	if prompt := prompts["q_agent_skills"]; !strings.Contains(prompt, "returned directly in content") || strings.Contains(prompt, "Loom artifact") {
+		t.Fatalf("skill prompt does not describe direct retrieval:\n%s", prompt)
+	}
 }
 
 func TestAppendRuntimeMessagesLoadsWorkspaceRootAGENTS(t *testing.T) {

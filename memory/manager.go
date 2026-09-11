@@ -36,13 +36,14 @@ type Retention struct {
 }
 
 type Plan struct {
-	Immutable        []client.Message
-	Source           []client.Message
-	Recent           []client.Message
-	BeforeTokens     int
-	TargetTokens     int
-	OutputBudget     int
-	ProviderOverhead int
+	Immutable              []client.Message
+	Source                 []client.Message
+	RetainedSkillResources []client.Message
+	Recent                 []client.Message
+	BeforeTokens           int
+	TargetTokens           int
+	OutputBudget           int
+	ProviderOverhead       int
 }
 
 type Stats struct {
@@ -153,20 +154,21 @@ func (m *Manager) PlanWithRetention(retention Retention) (Plan, error) {
 		return Plan{}, errors.New("memory: context window is unknown")
 	}
 	immutablePrefix := min(max(retention.ImmutablePrefix, 0), len(m.messages))
-	immutable := make([]bool, len(m.messages))
-	for index, message := range m.messages {
+	messages, retainedSkillResources := splitSkillResourceReads(m.messages, immutablePrefix, m.policy.ContextWindow)
+	immutable := make([]bool, len(messages))
+	for index, message := range messages {
 		immutable[index] = index < immutablePrefix || retention.PreserveInstructions && isImmutable(message)
 	}
 	// Retain a whole assistant/tool-result unit if a caller pins its tool or
 	// any result is still pending. Never move just one half of a tool exchange.
-	for start, message := range m.messages {
+	for start, message := range messages {
 		if len(message.ToolCalls) == 0 {
 			continue
 		}
 		end := start + 1
 		completed := make(map[string]bool, len(message.ToolCalls))
-		for end < len(m.messages) && m.messages[end].Role == client.RoleTool {
-			completed[m.messages[end].ToolCallID] = true
+		for end < len(messages) && messages[end].Role == client.RoleTool {
+			completed[messages[end].ToolCallID] = true
 			end++
 		}
 		keep := immutable[start]
@@ -183,10 +185,10 @@ func (m *Manager) PlanWithRetention(retention Retention) (Plan, error) {
 		}
 	}
 	recentBudget := max(1, int(float64(m.policy.ContextWindow)*m.policy.RecentRatio))
-	recentStart := len(m.messages)
+	recentStart := len(messages)
 	recentTokens := 0
-	for end := len(m.messages); end > 0; {
-		start := previousUnitStart(m.messages, end)
+	for end := len(messages); end > 0; {
+		start := previousUnitStart(messages, end)
 		keep := true
 		for index := start; index < end; index++ {
 			keep = keep && immutable[index]
@@ -195,7 +197,7 @@ func (m *Manager) PlanWithRetention(retention Retention) (Plan, error) {
 			end = start
 			continue
 		}
-		cost := CountMessages(m.messages[start:end])
+		cost := CountMessages(messages[start:end])
 		if retention.SummarizeOversizedRecent && recentTokens == 0 && cost > recentBudget {
 			break
 		}
@@ -208,11 +210,12 @@ func (m *Manager) PlanWithRetention(retention Retention) (Plan, error) {
 	}
 
 	plan := Plan{
-		BeforeTokens:     m.PredictedTokens(),
-		TargetTokens:     int(float64(m.policy.ContextWindow) * m.policy.TargetRatio),
-		ProviderOverhead: m.providerOverhead,
+		BeforeTokens:           m.PredictedTokens(),
+		TargetTokens:           int(float64(m.policy.ContextWindow) * m.policy.TargetRatio),
+		ProviderOverhead:       m.providerOverhead,
+		RetainedSkillResources: retainedSkillResources,
 	}
-	for index, message := range m.messages {
+	for index, message := range messages {
 		switch {
 		case immutable[index]:
 			plan.Immutable = append(plan.Immutable, message)
@@ -224,6 +227,13 @@ func (m *Manager) PlanWithRetention(retention Retention) (Plan, error) {
 	}
 	if len(plan.Source) == 0 {
 		return Plan{}, ErrNothingToCompact
+	}
+	// Skill resources have an independent 10% soft budget and therefore do not
+	// reduce the ordinary 22% compaction target. Only the model's hard context
+	// window can force that soft target lower.
+	maximumOrdinaryTarget := m.policy.ContextWindow - CountMessages(plan.RetainedSkillResources)
+	if maximumOrdinaryTarget < plan.TargetTokens {
+		plan.TargetTokens = maximumOrdinaryTarget
 	}
 
 	fixedTokens := CountMessages(plan.Immutable) + CountMessages(plan.Recent) + m.providerOverhead
@@ -243,7 +253,11 @@ func (m *Manager) PlanWithRetention(retention Retention) (Plan, error) {
 		plan.OutputBudget = available(plan.TargetTokens)
 		if plan.OutputBudget < 128 {
 			minimumLocal := fixedTokens + 128
-			plan.TargetTokens = minimumLocal + m.providerOverhead + max(8, minimumLocal/10) + 16
+			minimumTarget := minimumLocal + m.providerOverhead + max(8, minimumLocal/10) + 16
+			if minimumTarget > maximumOrdinaryTarget {
+				return Plan{}, fmt.Errorf("memory: retained skill resources leave no room in the %d token context window", m.policy.ContextWindow)
+			}
+			plan.TargetTokens = minimumTarget
 			plan.OutputBudget = available(plan.TargetTokens)
 		}
 	}
@@ -287,12 +301,13 @@ func (m *Manager) ApplyCheckpoint(plan Plan, response string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	compacted := make([]client.Message, 0, len(plan.Immutable)+len(plan.Recent)+1)
+	compacted := make([]client.Message, 0, len(plan.Immutable)+len(plan.RetainedSkillResources)+len(plan.Recent)+1)
 	compacted = append(compacted, cloneMessages(plan.Immutable)...)
 	compacted = append(compacted, client.Message{
 		Role: client.RoleSystem, Name: SummaryName,
 		Content: checkpointHeading + checkpoint,
 	})
+	compacted = append(compacted, cloneMessages(plan.RetainedSkillResources)...)
 	compacted = append(compacted, cloneMessages(plan.Recent)...)
 	m.messages = compacted
 	m.providerOverhead = max(m.providerOverhead, plan.ProviderOverhead)

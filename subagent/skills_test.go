@@ -22,10 +22,14 @@ func TestRetrievalCatalogRequiresBoundaryChecksForAvailableSources(t *testing.T)
 		"get_skill",
 		"search_archive",
 		"get_archive_record",
+		"returned directly in content",
 	} {
 		if !strings.Contains(prompt, required) {
 			t.Fatalf("retrieval guidance does not require %q:\n%s", required, prompt)
 		}
+	}
+	if strings.Contains(prompt, "Loom artifact") {
+		t.Fatalf("skill retrieval guidance still routes through Loom:\n%s", prompt)
 	}
 }
 

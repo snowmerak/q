@@ -319,6 +319,10 @@ func TestRuntimeExposesAndCallsArchiveTools(t *testing.T) {
 	if len(skills.Hits) == 0 || skills.Hits[0].Title != "archive-test-skill" || skills.Hits[0].Scope != "workspace" {
 		t.Fatalf("skill hits = %#v", skills.Hits)
 	}
+	loomBefore, err := runtime.LoomStats(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
 	loaded, err := runtime.Call(context.Background(), client.ToolCall{
 		ID: "call-skill-get", Type: client.ToolTypeFunction,
 		Function: client.FunctionCall{Name: "get_skill", Arguments: `{"id":"` + skills.Hits[0].ID + `"}`},
@@ -330,8 +334,16 @@ func TestRuntimeExposesAndCallsArchiveTools(t *testing.T) {
 	if err := json.Unmarshal([]byte(loaded.Content), &skill); err != nil {
 		t.Fatal(err)
 	}
-	if !skill.Stored || skill.Artifact.Ref == "" || skill.Skill.Name != "archive-test-skill" || skill.Skill.Scope != "workspace" {
+	if skill.Skill.Name != "archive-test-skill" || skill.Skill.Scope != "workspace" ||
+		!strings.Contains(skill.Content, "Follow the archived skill.") {
 		t.Fatalf("loaded skill = %#v", skill)
+	}
+	loomAfter, err := runtime.LoomStats(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loomAfter != loomBefore {
+		t.Fatalf("get_skill changed Loom stats: before %#v after %#v", loomBefore, loomAfter)
 	}
 }
 
@@ -405,7 +417,7 @@ func TestSkillToolsMergeGlobalLibraryAndProjectStore(t *testing.T) {
 	if err := json.Unmarshal([]byte(loaded.Content), &skill); err != nil {
 		t.Fatal(err)
 	}
-	if !skill.Stored || skill.Skill.Scope != "global" || skill.Artifact.Ref == "" || global.gets != 1 {
+	if skill.Skill.Scope != "global" || skill.Content != "# Global body\n" || global.gets != 1 {
 		t.Fatalf("global skill output = %#v, gets = %d", skill, global.gets)
 	}
 }
@@ -497,7 +509,7 @@ func TestSkillToolsUseAuthenticatedGlobalLibraryAPIEndToEnd(t *testing.T) {
 	if err := json.Unmarshal([]byte(loaded.Content), &skill); err != nil {
 		t.Fatal(err)
 	}
-	if !skill.Stored || skill.Skill.Name != "global-e2e-skill" || skill.Artifact.Ref == "" {
+	if skill.Skill.Name != "global-e2e-skill" || !strings.Contains(skill.Content, "# End-to-end body") {
 		t.Fatalf("end-to-end Library skill = %#v", skill)
 	}
 

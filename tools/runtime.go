@@ -420,6 +420,9 @@ func CaptureMCPToolResult(
 	if err != nil {
 		return client.ToolResult{}, err
 	}
+	// get_skill is deliberately direct even when Loom is available: rewriting a
+	// skill body as an artifact would defeat prompt-prefix caching and exact
+	// retention across context compaction.
 	if strings.HasPrefix(call.Function.Name, "loom_") || (server == ServerName && call.Function.Name == "get_skill") {
 		return client.ToolResult{Content: content, IsError: result.IsError}, nil
 	}

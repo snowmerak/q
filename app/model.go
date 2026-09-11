@@ -4223,7 +4223,7 @@ func (m *model) appendRuntimeMessages() {
 			if tool.Function.Name == "search_skills" {
 				m.messages = append(m.messages, client.Message{
 					Role: client.RoleDeveloper, Name: "q_agent_skills",
-					Content: "Agent Skills are retrieved on demand from the global q Library and the workspace skill index rather than preloaded. Before starting substantive work that requires tools or multiple steps, call search_skills with concise, task-specific keywords to identify applicable guidance, select a result, then call get_skill and inspect its Loom artifact. Before finalizing substantive work, search again using any new requirements, failures, or verification needs revealed by the work. Search explicit $skill-name mentions by name.",
+					Content: "Agent Skills are retrieved on demand from the global q Library and the workspace skill index rather than preloaded. Before starting substantive work that requires tools or multiple steps, call search_skills with concise, task-specific keywords to identify applicable guidance, select a result, then call get_skill and follow the complete resource text returned directly in content. Before finalizing substantive work, search again using any new requirements, failures, or verification needs revealed by the work. Search explicit $skill-name mentions by name.",
 				})
 				break
 			}

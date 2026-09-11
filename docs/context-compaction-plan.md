@@ -24,6 +24,7 @@
 - 전체 transcript와 API request context 분리
 - 보수적 token 추정과 실제 `prompt_tokens` 기반 provider overhead 보정
 - 오래된 context의 구조화된 session checkpoint와 최근 원문 보존
+- `get_skill`로 읽은 resource별 최신 전문을 별도 10% soft budget으로 보존
 - 작은 모델의 복구 가능한 JSON 변형을 정규화하고 누락 섹션은 기존 checkpoint에서 계승
 - assistant tool call과 연속된 tool result를 같은 보존 단위로 처리
 - 메인 TUI/ACP와 서브에이전트 도구 루프에서 각 모델 라운드 직전 압축 검사
@@ -78,6 +79,27 @@ checkpoint 호출에는 역할의 모델/모델 그룹을 쓰되 툴과 기존 `
 전달하지 않는다. checkpoint 적용에 성공한 뒤 실행 쪽 `conversation_id`도 비워
 새 backend 대화에서 압축된 기록으로 이어간다. 실패하면 기존 메시지와 ID를
 보존하며, checkpoint 호출은 에이전트의 작업 라운드 제한을 소비하지 않는다.
+
+### Agent Skill resource 보존
+
+`get_skill` 결과는 Loom artifact로 바꾸지 않고 `content` 전문을 tool result에
+직접 넣는다. 같은 resource를 다시 읽어도 기존 메시지는 수정하지 않으며 새
+tool call/result만 끝에 추가한다. 따라서 압축 전 provider prompt prefix는
+append-only이고 재조회 때문에 prompt cache가 무효화되지 않는다.
+
+압축할 때만 `(skill ID, 정규화된 resource path)`별 최신 성공 결과를 고른다.
+`SKILL.md`와 각 `references/*` 파일은 서로 독립된 resource다. 최근 resource부터
+원문 단위로 선택해 전체 context window의 10%까지 남기며 중간에서 자르지 않는다.
+가장 최근 resource 하나가 10%보다 크면 그 전문은 그대로 보존한다. 과거 사본과
+예산 밖 resource는 checkpoint source에도 넣지 않아 변형된 중복 요약을 만들지
+않는다.
+
+이 10%는 기존 22% 일반 압축 목표와 별개다. 일반 checkpoint/recent 계산에서
+보존된 skill resource token을 차감하지 않으므로 압축 결과는 개념적으로 다음과
+같이 최대 `32% + a`까지 커질 수 있다. 여기서 `a`는 immutable instruction, tool
+schema와 provider overhead처럼 일반 압축으로 줄일 수 없는 영역이다. 22%와 10%는
+soft budget이며, 둘의 합이 실제 model context window를 넘는 경우에만 일반 압축
+목표를 줄인다.
 
 기본 채팅의 사용자 turn 경계 압축은 그대로 유지된다. 한 turn 안에서 툴 결과가
 커지는 경우에는 TUI와 ACP가 공유하는 `streamAgentLoop`가 추가로 압축하고,

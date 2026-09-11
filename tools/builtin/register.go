@@ -164,10 +164,10 @@ func Register(server *mcp.Server, root string, dependencies Dependencies) (*FS, 
 		}))
 		mcp.AddTool(server, &mcp.Tool{
 			Name:        "get_skill",
-			Description: "Store one selected SKILL.md or skill-relative resource as an immutable Loom artifact. Read or transform the returned artifact with Loom tools.",
+			Description: "Get the complete text of one selected SKILL.md or skill-relative resource directly. The response is never replaced by a Loom artifact.",
 			Annotations: &mcp.ToolAnnotations{ReadOnlyHint: readOnly, IdempotentHint: true},
 		}, contextValueHandler(func(ctx context.Context, input GetSkillInput) (GetSkillOutput, error) {
-			return getSkill(ctx, dependencies.Skills, dependencies.GlobalSkills, dependencies.Loom, input)
+			return getSkill(ctx, dependencies.Skills, dependencies.GlobalSkills, input)
 		}))
 	}
 	if dependencies.Propositions != nil {

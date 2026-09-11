@@ -4,13 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"path/filepath"
 	"sort"
 	"strings"
 
 	"github.com/snowmerak/q/agentskills"
 	qlibrary "github.com/snowmerak/q/library"
-	"github.com/snowmerak/q/loom"
 	"github.com/snowmerak/q/sessionstore"
 )
 
@@ -48,10 +46,9 @@ type GetSkillInput struct {
 }
 
 type GetSkillOutput struct {
-	Skill    agentskills.Skill `json:"skill"`
-	Path     string            `json:"path"`
-	Artifact loom.Artifact     `json:"artifact"`
-	Stored   bool              `json:"stored"`
+	Skill   agentskills.Skill `json:"skill"`
+	Path    string            `json:"path"`
+	Content string            `json:"content"`
 }
 
 func searchSkills(ctx context.Context, archive Archive, global GlobalSkillLibrary, input SearchSkillsInput) (SearchSkillsOutput, error) {
@@ -191,9 +188,9 @@ func publicSkillScope(scope string) string {
 	}
 }
 
-func getSkill(ctx context.Context, registry *agentskills.Registry, global GlobalSkillLibrary, runtime *LoomRuntime, input GetSkillInput) (GetSkillOutput, error) {
-	if registry == nil || runtime == nil || runtime.Store == nil {
-		return GetSkillOutput{}, errors.New("[E_SKILLS] skill or Loom runtime is unavailable")
+func getSkill(ctx context.Context, registry *agentskills.Registry, global GlobalSkillLibrary, input GetSkillInput) (GetSkillOutput, error) {
+	if registry == nil {
+		return GetSkillOutput{}, errors.New("[E_SKILLS] skill registry is unavailable")
 	}
 	var skill agentskills.Skill
 	var path string
@@ -216,19 +213,5 @@ func getSkill(ctx context.Context, registry *agentskills.Registry, global Global
 		skill, path, content = resource.Skill, resource.Path, resource.Content
 	}
 	skill.Scope = publicSkillScope(skill.Scope)
-	mediaType := "text/plain"
-	if strings.EqualFold(filepath.Ext(path), ".md") {
-		mediaType = "text/markdown"
-	}
-	artifact, err := runtime.Store.Put(ctx, content, loom.PutOptions{
-		Kind: "agent-skill", MediaType: mediaType,
-		Source: map[string]string{
-			"skill_id": skill.ID, "skill": skill.Name, "scope": skill.Scope,
-			"location": skill.Directory, "path": path,
-		},
-	})
-	if err != nil {
-		return GetSkillOutput{}, err
-	}
-	return GetSkillOutput{Skill: skill, Path: path, Artifact: artifact, Stored: true}, nil
+	return GetSkillOutput{Skill: skill, Path: path, Content: string(content)}, nil
 }
