@@ -46,6 +46,84 @@ func (c *scriptedStreamingClient) ListModels(context.Context) ([]client.Model, e
 }
 func (c *scriptedStreamingClient) Close() error { return nil }
 
+type recoveringStreamingClient struct {
+	requests []client.ChatRequest
+}
+
+func (c *recoveringStreamingClient) Chat(context.Context, client.ChatRequest) (*client.ChatResponse, error) {
+	return nil, nil
+}
+
+func (c *recoveringStreamingClient) ChatStream(_ context.Context, request client.ChatRequest) (client.Stream, error) {
+	request.Messages = append([]client.Message(nil), request.Messages...)
+	c.requests = append(c.requests, request)
+	if len(c.requests) < 4 {
+		return &scriptedChatStream{chunks: []*client.ChatChunk{{
+			ConversationID: "empty-thread",
+			Choices: []client.Choice{{
+				Delta: &client.Message{Role: client.RoleAssistant}, FinishReason: "stop",
+			}},
+		}}}, nil
+	}
+	return &scriptedChatStream{chunks: []*client.ChatChunk{{
+		ConversationID: "recovered-thread",
+		Choices: []client.Choice{{
+			Delta: &client.Message{Role: client.RoleAssistant, Content: "recovered"}, FinishReason: "stop",
+		}},
+	}}}, nil
+}
+
+func (c *recoveringStreamingClient) ListModels(context.Context) ([]client.Model, error) {
+	return nil, nil
+}
+func (c *recoveringStreamingClient) Close() error { return nil }
+
+func TestStreamChatRetriesEmptyResponseThenDropsToolCallHistory(t *testing.T) {
+	configured := &recoveringStreamingClient{}
+	tools := []client.Tool{{Type: client.ToolTypeFunction, Function: client.FunctionDefinition{Name: "inspect"}}}
+	response, err := streamChatWithEmptyResponseRecovery(t.Context(), configured, client.ChatRequest{
+		Model: "codex/test", ConversationID: "existing-thread", Tools: tools,
+		Messages: []client.Message{
+			{Role: client.RoleUser, Content: "inspect the repository"},
+			{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{{
+				ID: "call-1", Type: client.ToolTypeFunction, Function: client.FunctionCall{Name: "inspect"},
+			}}},
+			{Role: client.RoleTool, ToolCallID: "call-1", Content: "large tool output"},
+			{Role: client.RoleAssistant, Content: "I found a clue.", ToolCalls: []client.ToolCall{{
+				ID: "call-2", Type: client.ToolTypeFunction, Function: client.FunctionCall{Name: "inspect"},
+			}}},
+			{Role: client.RoleTool, ToolCallID: "call-2", Content: "more tool output"},
+			{Role: client.RoleUser, Content: "continue"},
+		},
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.Choices[0].Message.Content != "recovered" || response.ConversationID != "recovered-thread" {
+		t.Fatalf("response = %#v", response)
+	}
+	if len(configured.requests) != 4 {
+		t.Fatalf("requests = %d, want 4", len(configured.requests))
+	}
+	if configured.requests[0].ConversationID != "existing-thread" {
+		t.Fatalf("first conversation = %q", configured.requests[0].ConversationID)
+	}
+	for index, request := range configured.requests[1:] {
+		if request.ConversationID != "" {
+			t.Fatalf("retry %d conversation = %q, want fresh", index+1, request.ConversationID)
+		}
+	}
+	recovery := configured.requests[3]
+	if len(recovery.Tools) != 1 || recovery.Tools[0].Function.Name != "inspect" {
+		t.Fatalf("recovery tools = %#v", recovery.Tools)
+	}
+	if len(recovery.Messages) != 3 || recovery.Messages[0].Role != client.RoleUser ||
+		recovery.Messages[1].Role != client.RoleAssistant || recovery.Messages[1].Content != "I found a clue." ||
+		len(recovery.Messages[1].ToolCalls) != 0 || recovery.Messages[2].Content != "continue" {
+		t.Fatalf("recovery messages = %#v", recovery.Messages)
+	}
+}
+
 func TestConsumeChatStreamSeparatesThinkingAndResponse(t *testing.T) {
 	usage := client.Usage{PromptTokens: 12, CompletionTokens: 7, TotalTokens: 19}
 	configured := &scriptedStreamingClient{stream: &scriptedChatStream{chunks: []*client.ChatChunk{

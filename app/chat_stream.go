@@ -25,6 +25,17 @@ type streamingChatClient interface {
 	ChatStream(context.Context, client.ChatRequest) (client.Stream, error)
 }
 
+func streamChatWithEmptyResponseRecovery(
+	ctx context.Context,
+	configuredClient chatClient,
+	request client.ChatRequest,
+	emit func(chatStreamDelta) bool,
+) (*client.ChatResponse, error) {
+	return recoverEmptyChatResponse(ctx, request, func(ctx context.Context, request client.ChatRequest) (*client.ChatResponse, error) {
+		return streamChatWithConversationRecovery(ctx, configuredClient, request, emit)
+	})
+}
+
 // streamChatWithConversationRecovery consumes provider deltas while retaining
 // the complete ChatResponse shape expected by the existing agent loop. Clients
 // without streaming support keep the previous one-shot behavior.

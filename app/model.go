@@ -3637,7 +3637,7 @@ func (m model) compactContext(plan memory.Plan) tea.Cmd {
 	turnContext := m.activeTurnContext()
 	turnID := m.turnID
 	return func() tea.Msg {
-		response, err := chatWithConversationRecovery(turnContext, configuredClient, client.ChatRequest{
+		response, err := chatWithEmptyResponseRecovery(turnContext, configuredClient, client.ChatRequest{
 			Model: modelID, Messages: plan.RequestMessages(),
 			ReasoningEffort: reasoningEffort,
 		})
@@ -3681,7 +3681,7 @@ func (m *model) sendChatRequest() tea.Cmd {
 	}
 	if toolRuntime == nil && !streamEnabled {
 		return func() tea.Msg {
-			response, err := chatWithConversationRecovery(turnContext, configuredClient, client.ChatRequest{
+			response, err := chatWithEmptyResponseRecovery(turnContext, configuredClient, client.ChatRequest{
 				Model: modelID, Messages: providerMessages(agentinstructions.Normalize(history), coalesceInstructions), ConversationID: conversationID,
 				ReasoningEffort: reasoningEffort, WorkingDirectory: workingDirectory,
 			})
@@ -3714,7 +3714,7 @@ func streamSingleChat(
 	events chan<- agentEvent,
 ) {
 	defer close(events)
-	response, err := streamChatWithConversationRecovery(ctx, configuredClient, client.ChatRequest{
+	response, err := streamChatWithEmptyResponseRecovery(ctx, configuredClient, client.ChatRequest{
 		Model: modelID, Messages: providerMessages(agentinstructions.Normalize(history), coalesceInstructions), ConversationID: conversationID,
 		ReasoningEffort: reasoningEffort, WorkingDirectory: workingDirectory,
 	}, func(delta chatStreamDelta) bool {
@@ -3775,11 +3775,11 @@ func streamAgentLoop(
 		var response *client.ChatResponse
 		err = nil
 		if streamEnabled {
-			response, err = streamChatWithConversationRecovery(ctx, configuredClient, request, func(delta chatStreamDelta) bool {
+			response, err = streamChatWithEmptyResponseRecovery(ctx, configuredClient, request, func(delta chatStreamDelta) bool {
 				return emitAgentEvent(ctx, events, agentEvent{streamDelta: &delta})
 			})
 		} else {
-			response, err = chatWithConversationRecovery(ctx, configuredClient, request)
+			response, err = chatWithEmptyResponseRecovery(ctx, configuredClient, request)
 		}
 		if err != nil {
 			emitAgentEvent(ctx, events, agentEvent{err: err})

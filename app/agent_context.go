@@ -93,7 +93,7 @@ func (c *agentLoopContext) CompactIfNeeded(
 	if err != nil {
 		return nil, fmt.Errorf("agent loop: plan context compaction: %w", err)
 	}
-	response, err := chatWithConversationRecovery(ctx, configuredClient, client.ChatRequest{
+	response, err := chatWithEmptyResponseRecovery(ctx, configuredClient, client.ChatRequest{
 		Model: modelID, Messages: plan.RequestMessages(),
 		ReasoningEffort: reasoningEffort,
 	})

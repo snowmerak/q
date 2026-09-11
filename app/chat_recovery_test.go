@@ -85,6 +85,63 @@ func (c *singleErrorClient) Chat(context.Context, client.ChatRequest) (*client.C
 func (c *singleErrorClient) ListModels(context.Context) ([]client.Model, error) { return nil, nil }
 func (c *singleErrorClient) Close() error                                       { return nil }
 
+type emptyResponseClient struct {
+	requests      []client.ChatRequest
+	nonEmptyAfter int
+}
+
+func (c *emptyResponseClient) Chat(_ context.Context, request client.ChatRequest) (*client.ChatResponse, error) {
+	request.Messages = append([]client.Message(nil), request.Messages...)
+	c.requests = append(c.requests, request)
+	if len(c.requests) < c.nonEmptyAfter {
+		return chatResponse("empty-thread", " \n\t"), nil
+	}
+	return chatResponse("recovered-thread", "recovered reply"), nil
+}
+
+func (c *emptyResponseClient) ListModels(context.Context) ([]client.Model, error) { return nil, nil }
+func (c *emptyResponseClient) Close() error                                       { return nil }
+
+func TestChatRetriesEmptyResponseWithoutPersistingBlankAssistant(t *testing.T) {
+	value := config.Default()
+	value.Provider.Model = "test-model"
+	configuredClient := &emptyResponseClient{nonEmptyAfter: 2}
+	m := newModel(context.Background(), config.Store{Dir: t.TempDir()}, nil)
+	m.enterChat(value, configuredClient)
+
+	m = submitAndReceive(t, m, "hello")
+
+	if len(configuredClient.requests) != 2 {
+		t.Fatalf("requests = %d, want 2", len(configuredClient.requests))
+	}
+	if len(m.messages) != 3 || m.messages[1].Role != client.RoleUser ||
+		m.messages[2].Role != client.RoleAssistant || m.messages[2].Content != "recovered reply" {
+		t.Fatalf("persisted messages = %#v", m.messages)
+	}
+}
+
+func TestChatEmptyResponseRecoveryIsBoundedWithoutToolHistory(t *testing.T) {
+	configuredClient := &emptyResponseClient{nonEmptyAfter: 100}
+	_, err := chatWithEmptyResponseRecovery(t.Context(), configuredClient, client.ChatRequest{
+		ConversationID: "existing-thread",
+		Messages:       []client.Message{{Role: client.RoleUser, Content: "hello"}},
+	})
+	if !errors.Is(err, errEmptyChatResponse) {
+		t.Fatalf("error = %v, want empty response error", err)
+	}
+	if len(configuredClient.requests) != 3 {
+		t.Fatalf("requests = %d, want 3", len(configuredClient.requests))
+	}
+	if configuredClient.requests[0].ConversationID != "existing-thread" {
+		t.Fatalf("first conversation = %q", configuredClient.requests[0].ConversationID)
+	}
+	for index, request := range configuredClient.requests[1:] {
+		if request.ConversationID != "" {
+			t.Fatalf("retry %d conversation = %q, want fresh", index+1, request.ConversationID)
+		}
+	}
+}
+
 func chatResponse(conversationID, content string) *client.ChatResponse {
 	return &client.ChatResponse{
 		ConversationID: conversationID,
