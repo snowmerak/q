@@ -1421,6 +1421,7 @@ func TestSlashSkillsShowsCatalogAndReloads(t *testing.T) {
 		skills: []agentskills.Skill{{
 			Name: "review-go", Description: "Review Go changes.", Source: agentskills.SourceProjectPortable,
 			Scope: "project", Directory: filepath.Join(t.TempDir(), ".agents", "skills", "review-go"),
+			GitCommit: "0123456789abcdef0123456789abcdef01234567",
 		}},
 		skillIssues: []agentskills.Issue{{Path: "bad-skill", Message: "invalid frontmatter"}},
 	}
@@ -1435,7 +1436,7 @@ func TestSlashSkillsShowsCatalogAndReloads(t *testing.T) {
 		t.Fatalf("screen = %v", m.screen)
 	}
 	view := ansi.Strip(m.View().Content)
-	for _, expected := range []string{"q · Agent Skills", "review-go", "Review Go changes", "DISCOVERY NOTES", "invalid frontmatter"} {
+	for _, expected := range []string{"q · Agent Skills", "review-go", "Review Go changes", "commit 0123456789ab", "DISCOVERY NOTES", "invalid frontmatter"} {
 		if !strings.Contains(view, expected) {
 			t.Fatalf("skills view missing %q:\n%s", expected, view)
 		}

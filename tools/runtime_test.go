@@ -545,6 +545,9 @@ func TestSkillToolsUseAuthenticatedGlobalLibraryAPIEndToEnd(t *testing.T) {
 
 func TestSearchSkillsUsesSessionStoreSnapshotUntilReload(t *testing.T) {
 	root := t.TempDir()
+	home := t.TempDir()
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("HOME", home)
 	initialDirectory := filepath.Join(root, ".agents", "skills", "initial-skill")
 	if err := os.MkdirAll(initialDirectory, 0o755); err != nil {
 		t.Fatal(err)

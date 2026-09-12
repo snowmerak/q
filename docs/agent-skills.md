@@ -19,8 +19,8 @@ use the same `skill` record shape:
   commands and tools
 - `location`: absolute checkout directory, stored in the source JSON record and
   not indexed
-- `payload`: source kind, content digest, compatibility, license, metadata, and
-  informational `allowed-tools`
+- `payload`: source kind, `SKILL.md` content digest, Git commit when available,
+  compatibility, license, metadata, and informational `allowed-tools`
 
 The record contains no `SKILL.md` body. `search_skills` performs one bounded
 Library query for global scope and one workspace Bleve query for workspace
@@ -73,12 +73,17 @@ The cloned repository must have `SKILL.md` at its root. The destination name is
 taken from validated frontmatter, not from the repository URL. Updates refuse
 non-fast-forward integration.
 
-The indexes are derived projections. The Library reconciles global roots when
+The indexes are derived projections. For a skill inside a Git work tree, q
+records the checked-out `HEAD` commit in addition to the `SKILL.md` content
+digest. The Library reconciles global roots when
 the leader starts, after explicit reload, and after managed global Git
 operations. The workspace reconciles workspace roots at workspace startup and
-its explicit management points. Reconciliation compares content digests:
-unchanged records are not saved or reindexed, while added, changed, and deleted
-skills are applied. Search only queries the existing projections and never
+its explicit management points. Reconciliation compares both values: unchanged
+records are not saved or reindexed, while a changed `SKILL.md` digest or Git
+commit causes the skill record to be reindexed. Added and deleted skills are
+also applied. Git detection is best-effort, so a non-Git skill, an unborn
+repository, or an unavailable Git executable leaves the commit empty without
+blocking discovery. Search only queries the existing projections and never
 scans directories or parses YAML. External filesystem changes become visible
 after explicit reload or Library/workspace restart.
 

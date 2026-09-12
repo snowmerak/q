@@ -2,6 +2,7 @@ package agentskills
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -116,6 +117,74 @@ func TestSyncRecordsDoesNotRewriteUnchangedSkills(t *testing.T) {
 	}
 	if !after.UpdatedAt.Equal(before.UpdatedAt) {
 		t.Fatalf("unchanged skill was rewritten: before %s after %s", before.UpdatedAt, after.UpdatedAt)
+	}
+}
+
+func TestSyncRecordsReindexesWhenGitCommitChanges(t *testing.T) {
+	root := t.TempDir()
+	home := t.TempDir()
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("HOME", home)
+	directory := writeSkill(t, root, ".agents", "git-indexed-skill", "Stable indexed description.")
+	skillsRoot := filepath.Dir(directory)
+	runGit(t, skillsRoot, "init", "-b", "main")
+	runGit(t, skillsRoot, "config", "user.email", "skills@example.test")
+	runGit(t, skillsRoot, "config", "user.name", "Skills Test")
+	runGit(t, skillsRoot, "add", "git-indexed-skill/SKILL.md", "git-indexed-skill/references/guide.md")
+	runGit(t, skillsRoot, "commit", "-m", "initial")
+
+	registry, err := Discover(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	initial := registry.Skills()[0]
+	if initial.GitCommit == "" {
+		t.Fatal("Git skill has no commit")
+	}
+	store, err := sessionstore.Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	if err := registry.SyncRecords(context.Background(), store); err != nil {
+		t.Fatal(err)
+	}
+	before, err := store.Get(initial.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := os.WriteFile(filepath.Join(directory, "references", "guide.md"), []byte("updated reference body"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, skillsRoot, "add", "git-indexed-skill/references/guide.md")
+	runGit(t, skillsRoot, "commit", "-m", "update reference")
+	if err := registry.Reload(); err != nil {
+		t.Fatal(err)
+	}
+	updated := registry.Skills()[0]
+	if updated.Digest != initial.Digest {
+		t.Fatalf("SKILL.md digest changed: before %q after %q", initial.Digest, updated.Digest)
+	}
+	if updated.GitCommit == "" || updated.GitCommit == initial.GitCommit {
+		t.Fatalf("Git commit was not refreshed: before %q after %q", initial.GitCommit, updated.GitCommit)
+	}
+	if err := registry.SyncRecords(context.Background(), store); err != nil {
+		t.Fatal(err)
+	}
+	after, err := store.Get(initial.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(after.Payload) == string(before.Payload) {
+		t.Fatal("Git-only change did not update the indexed record")
+	}
+	var payload recordPayload
+	if err := json.Unmarshal(after.Payload, &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload.GitCommit != updated.GitCommit {
+		t.Fatalf("indexed commit = %q, want %q", payload.GitCommit, updated.GitCommit)
 	}
 }
 

@@ -48,6 +48,7 @@ type Skill struct {
 	Scope         string            `json:"scope"`
 	Tags          []string          `json:"tags,omitempty"`
 	Digest        string            `json:"digest"`
+	GitCommit     string            `json:"git_commit,omitempty"`
 }
 
 type Issue struct {
@@ -131,6 +132,7 @@ func (r *Registry) Reload() error {
 	skills := make(map[string]Skill)
 	var discovered []Skill
 	var issues []Issue
+	gitCommits := newGitCommitResolver()
 	for _, location := range locations {
 		entries, err := os.ReadDir(location.path)
 		if errors.Is(err, os.ErrNotExist) {
@@ -150,6 +152,7 @@ func (r *Registry) Reload() error {
 				issues = append(issues, Issue{Path: directory, Message: err.Error()})
 				continue
 			}
+			skill.GitCommit = gitCommits.commit(directory)
 			if previous, exists := skills[skill.Name]; exists {
 				issues = append(issues, Issue{Path: previous.Directory, Message: fmt.Sprintf("shadowed by %s", directory)})
 			}

@@ -2,6 +2,7 @@ package agentskills
 
 import (
 	"context"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
@@ -54,7 +55,7 @@ func (r *Registry) InstallGit(ctx context.Context, scope, repository string) (Sk
 	if err := r.Reload(); err != nil {
 		return Skill{}, err
 	}
-	return skill, nil
+	return r.resolve(skill.ID)
 }
 
 func (r *Registry) UpdateGit(ctx context.Context, idOrName string) (Skill, error) {
@@ -140,4 +141,59 @@ func skillName(path string) (string, error) {
 		return "", errors.New("agent skills: cloned skill has an invalid name")
 	}
 	return name, nil
+}
+
+type gitCommitResolver struct {
+	commits map[string]string
+}
+
+func newGitCommitResolver() *gitCommitResolver {
+	return &gitCommitResolver{commits: make(map[string]string)}
+}
+
+// commit returns the checked-out commit for a skill inside a normal Git work
+// tree. Discovery remains usable when Git is unavailable or HEAD is unborn.
+func (r *gitCommitResolver) commit(directory string) string {
+	root := gitWorkTreeRoot(directory)
+	if root == "" {
+		return ""
+	}
+	if commit, ok := r.commits[root]; ok {
+		return commit
+	}
+	commit := readGitCommit(root)
+	r.commits[root] = commit
+	return commit
+}
+
+func gitWorkTreeRoot(directory string) string {
+	if resolved, err := filepath.EvalSymlinks(directory); err == nil {
+		directory = resolved
+	}
+	for current := filepath.Clean(directory); ; current = filepath.Dir(current) {
+		if _, err := os.Stat(filepath.Join(current, ".git")); err == nil {
+			return current
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return ""
+		}
+		parent := filepath.Dir(current)
+		if parent == current {
+			return ""
+		}
+	}
+}
+
+func readGitCommit(root string) string {
+	output, err := exec.Command("git", "-C", root, "rev-parse", "--verify", "HEAD^{commit}").Output()
+	if err != nil {
+		return ""
+	}
+	commit := strings.ToLower(strings.TrimSpace(string(output)))
+	if len(commit) != 40 && len(commit) != 64 {
+		return ""
+	}
+	if _, err := hex.DecodeString(commit); err != nil {
+		return ""
+	}
+	return commit
 }

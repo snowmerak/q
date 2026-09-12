@@ -19,6 +19,7 @@ type RecordStore interface {
 type recordPayload struct {
 	Source        Source            `json:"source"`
 	Digest        string            `json:"digest"`
+	GitCommit     string            `json:"git_commit,omitempty"`
 	License       string            `json:"license,omitempty"`
 	Compatibility string            `json:"compatibility,omitempty"`
 	AllowedTools  string            `json:"allowed_tools,omitempty"`
@@ -62,7 +63,7 @@ func (r *Registry) SyncRecordsForScopes(ctx context.Context, store RecordStore, 
 			}
 		}
 		payload := recordPayload{
-			Source: skill.Source, Digest: skill.Digest, License: skill.License,
+			Source: skill.Source, Digest: skill.Digest, GitCommit: skill.GitCommit, License: skill.License,
 			Compatibility: skill.Compatibility, AllowedTools: skill.AllowedTools, Metadata: skill.Metadata,
 		}
 		encoded, err := json.Marshal(payload)
@@ -75,7 +76,7 @@ func (r *Registry) SyncRecordsForScopes(ctx context.Context, store RecordStore, 
 			Content: skill.Description, SearchText: skill.Description + " " + strings.Join(skill.Tags, " "),
 			Tags: append([]string(nil), skill.Tags...), Payload: encoded,
 		}
-		if previous, ok := old[skill.ID]; ok && sameRecord(previous, record, skill.Digest) {
+		if previous, ok := old[skill.ID]; ok && sameRecord(previous, record, skill.Digest, skill.GitCommit) {
 			delete(old, skill.ID)
 			continue
 		}
@@ -118,9 +119,9 @@ func existingSkillRecords(ctx context.Context, store RecordStore, scopes ...stri
 	}
 }
 
-func sameRecord(previous, current sessionstore.Record, digest string) bool {
+func sameRecord(previous, current sessionstore.Record, digest, gitCommit string) bool {
 	var payload recordPayload
-	if json.Unmarshal(previous.Payload, &payload) != nil || payload.Digest != digest {
+	if json.Unmarshal(previous.Payload, &payload) != nil || payload.Digest != digest || payload.GitCommit != gitCommit {
 		return false
 	}
 	return previous.Kind == current.Kind && previous.Scope == current.Scope &&

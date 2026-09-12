@@ -474,9 +474,16 @@ func (m model) renderSelectedSkill(width int) string {
 	if !m.activeSkillIDs()[skill.ID] {
 		active = "shadowed · excluded from search index"
 	}
+	commit := skill.GitCommit
+	if len(commit) > 12 {
+		commit = commit[:12]
+	}
 	var body strings.Builder
 	body.WriteString(activeLabelStyle.Render(skill.Name))
 	body.WriteString(subtleStyle.Render(" · " + state + " · " + active))
+	if commit != "" {
+		body.WriteString(subtleStyle.Render(" · commit " + commit))
+	}
 	body.WriteString("\n")
 	body.WriteString(ansi.Truncate(strings.ReplaceAll(skill.Description, "\n", " "), max(20, width-2), "…"))
 	body.WriteString("\n")
