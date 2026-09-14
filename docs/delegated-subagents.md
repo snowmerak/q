@@ -182,7 +182,9 @@ Delegates picker는 registry에서 현재 선택 가능한 canonical ID와 설�
 `/subagents list`와 `/subagents show`는 kind, source, model role 또는 ACP connection,
 변경 가능 여부, 도구 및 delegation 정보를 표시한다. `/subagent`는 공개 builtin의
 canonical ID와 기존 custom profile 이름을 실행할 수 있다. Builtin external의 직접
-실행은 기존 `/agent:search` 또는 `/agent:web-tester` 경로로 연결한다.
+실행은 `/subagent builtin/web-search <query>` 또는
+`/subagent builtin/web-tester <request>`로 정규화하며, 기존 전용 실행 lifecycle을
+내부적으로 재사용한다.
 
 ## 제거하는 전용 workflow
 

@@ -16,19 +16,6 @@ import (
 	"github.com/snowmerak/q/third_party/acp-go-sdk"
 )
 
-const agentWebTesterCommand = "/agent:web-tester"
-
-func parseAgentWebTesterCommand(command string) (request string, handled bool) {
-	command = strings.TrimSpace(command)
-	if command == agentWebTesterCommand {
-		return "", true
-	}
-	if !strings.HasPrefix(command, agentWebTesterCommand+" ") {
-		return "", false
-	}
-	return strings.TrimSpace(strings.TrimPrefix(command, agentWebTesterCommand)), true
-}
-
 func explicitAgentWebTesterInput(request string) subagent.ExternalWebTesterInput {
 	return subagent.ExternalWebTesterInput{
 		Request: strings.TrimSpace(request),
@@ -41,7 +28,7 @@ func explicitAgentWebTesterInput(request string) subagent.ExternalWebTesterInput
 func (m model) startAgentWebTester(request string) (tea.Model, tea.Cmd) {
 	request = strings.TrimSpace(request)
 	if request == "" {
-		m.status = "Usage: /agent:web-tester <request>"
+		m.status = "Usage: /subagent builtin/web-tester <request>"
 		return m, m.input.Focus()
 	}
 	workingDirectory := ""

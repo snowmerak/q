@@ -35,11 +35,8 @@ func completionKey(m model, key tea.KeyPressMsg) (model, tea.Cmd) {
 	return updated.(model), command
 }
 
-func TestExternalSlashCommandsFollowEnabledConnections(t *testing.T) {
+func TestLegacyExternalSlashCommandsAreNotDiscovered(t *testing.T) {
 	m := newSlashCompletionModel(t)
-	if names := completionNames(m.slashCommands()); slices.Contains(names, agentSearchCommand) || slices.Contains(names, agentWebTesterCommand) {
-		t.Fatalf("unconfigured external commands were discovered: %v", names)
-	}
 	m.config.Agents.Connections = map[string]config.AgentConnectionConfig{
 		"search": {Preset: "codex"}, "browser": {Preset: "codex"},
 	}
@@ -48,19 +45,13 @@ func TestExternalSlashCommandsFollowEnabledConnections(t *testing.T) {
 		config.AgentRoleExternalWebTester: {Agent: "browser"},
 	}
 	names := completionNames(m.slashCommands())
-	if !slices.Contains(names, agentSearchCommand) || !slices.Contains(names, agentWebTesterCommand) {
-		t.Fatalf("configured external commands were not discovered: %v", names)
+	for _, legacy := range []string{"/agent:search", "/agent:web-tester"} {
+		if slices.Contains(names, legacy) {
+			t.Fatalf("legacy command %q was discovered: %v", legacy, names)
+		}
 	}
-	connection := m.config.Agents.Connections["browser"]
-	connection.Disabled = true
-	m.config.Agents.Connections["browser"] = connection
-	names = completionNames(m.slashCommands())
-	if !slices.Contains(names, agentSearchCommand) || slices.Contains(names, agentWebTesterCommand) {
-		t.Fatalf("disabled command discovery = %v", names)
-	}
-	help := ansi.Strip(renderHelpContent(m.dark, m.slashCommands()))
-	if !strings.Contains(help, agentSearchCommand) || strings.Contains(help, agentWebTesterCommand) {
-		t.Fatalf("conditional help = %q", help)
+	if !slices.Contains(names, "/subagent") {
+		t.Fatalf("canonical subagent command missing: %v", names)
 	}
 }
 
@@ -143,16 +134,14 @@ func TestSlashCompletionKeepsArgumentsEditable(t *testing.T) {
 	for _, key := range []tea.KeyPressMsg{{Code: tea.KeyTab}, {Code: tea.KeyEnter}} {
 		t.Run(key.String(), func(t *testing.T) {
 			m := newSlashCompletionModel(t)
-			m.config.Agents.Connections = map[string]config.AgentConnectionConfig{"search": {Preset: "codex"}}
-			m.config.Agents.Roles = map[string]config.AgentConfig{config.AgentRoleSearch: {Agent: "search"}}
-			m.input.SetValue("/agent:se")
+			m.input.SetValue("/pl")
 			m, _ = completionKey(m, key)
-			if m.input.Value() != "/agent:search " || m.input.Column() != len("/agent:search ") || m.submitPending {
+			if m.input.Value() != "/plan " || m.input.Column() != len("/plan ") || m.submitPending {
 				t.Fatalf("completion did not leave room for arguments: %q", m.input.Value())
 			}
 			updated, _ := m.Update(tea.PasteMsg{Content: "한글 query"})
 			m = updated.(model)
-			if m.input.Value() != "/agent:search 한글 query" || len(m.slashCompletionMatches()) != 0 {
+			if m.input.Value() != "/plan 한글 query" || len(m.slashCompletionMatches()) != 0 {
 				t.Fatalf("arguments were changed or reopened completion: %q", m.input.Value())
 			}
 		})

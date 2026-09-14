@@ -98,8 +98,6 @@ screen and returns to the previous screen without discarding its state.
 | `/auto-approve [on\|off\|status]` | Persistently control automatic approval of valid plan proposals. |
 | `/auto-resolve [on\|off\|status]` | Persistently control engineering-default answers to plan clarification. |
 | `/autonomous [on\|off\|status]` | Persistently control both plan automation settings together. |
-| `/agent:search <query>` | Run the configured external ACP Search agent in a temporary read-only session. |
-| `/agent:web-tester <request>` | Run the configured external ACP Web Tester autonomously and return its captured verification report. |
 | `/changes` | Browse current staged, unstaged, and untracked repository changes. |
 | `/commit` | Generate and review a commit or split-commit proposal. |
 | `/sessions` | Open another saved workspace session. |
@@ -122,11 +120,10 @@ Start typing a slash command to filter the catalog. Up/Down selects an entry;
 Tab or Enter completes it. Enter runs a command that is already complete, and
 Escape closes the completion popup.
 
-External `agent:*` commands are listed only when their role is assigned to an
-existing enabled connection. The same availability rule controls general-chat
-tools, ACP command discovery/help, and Planner executor choices. An unavailable
-external capability is not advertised; entering its hidden command text is
-handled as ordinary chat input.
+External subagents are invoked through `/subagent builtin/web-search <query>` or
+`/subagent builtin/web-tester <request>`. Availability depends on assigning the
+builtin to an existing enabled ACP connection in `/subagents`. The same rule
+controls general-chat tools and Planner executor choices.
 
 Web Tester invocations run in an isolated ACP process/session with a fixed
 15-minute deadline. q automatically selects `allow_once`, falling back to an

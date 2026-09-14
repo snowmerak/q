@@ -3289,16 +3289,6 @@ func (m model) submitChat() (tea.Model, tea.Cmd) {
 		if updated, command, handled := m.startSkillCommand(content); handled {
 			return updated, command
 		}
-		if _, _, available := m.activeConfig().ExternalAgentConnection(config.AgentRoleSearch); available {
-			if query, handled := parseAgentSearchCommand(content); handled {
-				return m.startAgentSearch(query)
-			}
-		}
-		if _, _, available := m.activeConfig().ExternalAgentConnection(config.AgentRoleExternalWebTester); available {
-			if request, handled := parseAgentWebTesterCommand(content); handled {
-				return m.startAgentWebTester(request)
-			}
-		}
 		if command, handled := parsePlanAutomationCommand(content); handled {
 			m.input.Reset()
 			m.status = m.runPlanAutomationCommand(command)

@@ -17,19 +17,6 @@ import (
 	"github.com/snowmerak/q/workspace"
 )
 
-const agentSearchCommand = "/agent:search"
-
-func parseAgentSearchCommand(command string) (query string, handled bool) {
-	command = strings.TrimSpace(command)
-	if command == agentSearchCommand {
-		return "", true
-	}
-	if !strings.HasPrefix(command, agentSearchCommand+" ") {
-		return "", false
-	}
-	return strings.TrimSpace(strings.TrimPrefix(command, agentSearchCommand)), true
-}
-
 func explicitAgentSearchInput(query string) subagent.ExternalSearchInput {
 	return subagent.ExternalSearchInput{
 		Query: strings.TrimSpace(query),
@@ -42,7 +29,7 @@ func explicitAgentSearchInput(query string) subagent.ExternalSearchInput {
 func (m model) startAgentSearch(query string) (tea.Model, tea.Cmd) {
 	query = strings.TrimSpace(query)
 	if query == "" {
-		m.status = "Usage: /agent:search <query>"
+		m.status = "Usage: /subagent builtin/web-search <query>"
 		return m, m.input.Focus()
 	}
 	workingDirectory := ""

@@ -845,7 +845,7 @@ func TestACPAgentAdvertisesAndHandlesHeadlessCommands(t *testing.T) {
 	}
 }
 
-func TestACPAgentDiscoversOnlyConfiguredExternalCommands(t *testing.T) {
+func TestACPAgentDoesNotAdvertiseLegacyExternalCommands(t *testing.T) {
 	agent, workspaceStore, connection := testACPAgent(t, &fakeClient{}, &fakeAgentTools{})
 	agent.state.config.Agents.Connections = map[string]config.AgentConnectionConfig{
 		"search": {Preset: "codex"}, "browser": {Preset: "codex"},
@@ -860,6 +860,11 @@ func TestACPAgentDiscoversOnlyConfiguredExternalCommands(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
+	for _, legacy := range []string{"/agent:search current behavior", "/agent:web-tester verify login"} {
+		if _, handled, err := agent.runACPCommand(t.Context(), legacy); err != nil || handled {
+			t.Fatalf("legacy command %q = handled %v, error %v", legacy, handled, err)
+		}
+	}
 	var commands []string
 	var output string
 	for _, notification := range connection.snapshot() {
@@ -873,8 +878,9 @@ func TestACPAgentDiscoversOnlyConfiguredExternalCommands(t *testing.T) {
 			output += update.Content.Text.Text
 		}
 	}
-	if !slices.Contains(commands, "agent:search") || !slices.Contains(commands, "agent:web-tester") ||
-		!strings.Contains(output, "/agent:search") || !strings.Contains(output, "/agent:web-tester") {
+	if slices.Contains(commands, "agent:search") || slices.Contains(commands, "agent:web-tester") ||
+		strings.Contains(output, "/agent:search") || strings.Contains(output, "/agent:web-tester") ||
+		!slices.Contains(commands, "subagent") || !strings.Contains(output, "/subagent <name> <request>") {
 		t.Fatalf("commands=%v output=%q", commands, output)
 	}
 }
@@ -1189,7 +1195,7 @@ func TestParseACPPlanApprovalAction(t *testing.T) {
 	}
 }
 
-func TestACPAgentRunsExplicitSearchCommand(t *testing.T) {
+func TestACPAgentRunsCanonicalSearchSubagentCommand(t *testing.T) {
 	parentClient := &fakeClient{}
 	agent, workspaceStore, connection := testACPAgent(t, parentClient, &fakeAgentTools{})
 	var received subagent.ExternalSearchInput
@@ -1204,7 +1210,7 @@ func TestACPAgentRunsExplicitSearchCommand(t *testing.T) {
 	sessionID := openTestACPSession(t, agent, workspaceStore.Root)
 	response, err := agent.Prompt(t.Context(), acp.PromptRequest{
 		SessionId: sessionID,
-		Prompt:    []acp.ContentBlock{acp.TextBlock("/agent:search current ACP lifecycle")},
+		Prompt:    []acp.ContentBlock{acp.TextBlock("/subagent builtin/web-search current ACP lifecycle")},
 	})
 	if err != nil {
 		t.Fatal(err)

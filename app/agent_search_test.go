@@ -13,25 +13,6 @@ import (
 	"github.com/snowmerak/q/subagent"
 )
 
-func TestParseAgentSearchCommand(t *testing.T) {
-	tests := []struct {
-		command string
-		query   string
-		handled bool
-	}{
-		{command: "/agent:search", handled: true},
-		{command: "/agent:search ACP session lifecycle", query: "ACP session lifecycle", handled: true},
-		{command: "/agent:search-other", handled: false},
-		{command: "research ACP", handled: false},
-	}
-	for _, test := range tests {
-		query, handled := parseAgentSearchCommand(test.command)
-		if query != test.query || handled != test.handled {
-			t.Fatalf("parseAgentSearchCommand(%q) = %q, %v", test.command, query, handled)
-		}
-	}
-}
-
 func TestStreamAgentSearchReturnsParentSynthesis(t *testing.T) {
 	var received subagent.ExternalSearchInput
 	search := func(_ context.Context, input subagent.ExternalSearchInput) (subagent.ExternalSearchResult, error) {
@@ -153,12 +134,15 @@ func testAgentSearchRuntime(t *testing.T, search subagent.ExternalSearchFunc) ag
 	return &agentInvocationToolRuntime{base: base, invocation: invocation}
 }
 
-func TestAgentSearchWithoutAssignmentIsNotDiscoveredOrHandledAsCommand(t *testing.T) {
+func TestLegacyAgentSearchCommandIsNotDiscoveredOrHandled(t *testing.T) {
 	m := newModel(t.Context(), config.Store{Dir: t.TempDir()}, nil)
-	m.enterChat(config.Default(), &fakeClient{})
+	value := config.Default()
+	value.Agents.Connections = map[string]config.AgentConnectionConfig{"search": {Preset: "codex"}}
+	value.Agents.Roles = map[string]config.AgentConfig{config.AgentRoleSearch: {Agent: "search"}}
+	m.enterChat(value, &fakeClient{})
 	for _, command := range m.slashCommands() {
-		if command.name == agentSearchCommand {
-			t.Fatal("unconfigured search command was discovered")
+		if command.name == "/agent:search" {
+			t.Fatal("legacy search command was discovered")
 		}
 	}
 	m.input.SetValue("/agent:search current API behavior")

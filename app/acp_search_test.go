@@ -165,7 +165,7 @@ func TestACPConnectionProbeIntegration(t *testing.T) {
 
 func TestACPAgentExplicitSearchIntegration(t *testing.T) {
 	if strings.TrimSpace(os.Getenv("Q_TEST_ACP_SEARCH")) == "" {
-		t.Skip("set Q_TEST_ACP_SEARCH=1 and Q_TEST_ACP_PRESET=codex or grok to run a real /agent:search turn")
+		t.Skip("set Q_TEST_ACP_SEARCH=1 and Q_TEST_ACP_PRESET=codex or grok to run a real builtin/web-search subagent turn")
 	}
 	preset := strings.TrimSpace(os.Getenv("Q_TEST_ACP_PRESET"))
 	if preset == "" {
@@ -193,7 +193,7 @@ func TestACPAgentExplicitSearchIntegration(t *testing.T) {
 	response, err := agent.Prompt(ctx, acp.PromptRequest{
 		SessionId: sessionID,
 		Prompt: []acp.ContentBlock{acp.TextBlock(
-			"/agent:search Find the official Agent Client Protocol overview and return at least one direct official URL.",
+			"/subagent builtin/web-search Find the official Agent Client Protocol overview and return at least one direct official URL.",
 		)},
 	})
 	if err != nil {
@@ -206,11 +206,11 @@ func TestACPAgentExplicitSearchIntegration(t *testing.T) {
 		}
 	}
 	if response.StopReason != acp.StopReasonEndTurn || strings.TrimSpace(output) == "" {
-		t.Fatalf("real /agent:search returned stop reason %q without a parent response", response.StopReason)
+		t.Fatalf("real builtin/web-search returned stop reason %q without a parent response", response.StopReason)
 	}
 	if len(parentClient.requests) != 1 ||
 		!strings.Contains(parentClient.requests[0].Messages[len(parentClient.requests[0].Messages)-1].Content, "http") ||
 		!strings.Contains(parentClient.requests[0].Messages[len(parentClient.requests[0].Messages)-1].Content, "loom_ref") {
-		t.Fatalf("real /agent:search did not return sourced evidence to the parent: %#v", parentClient.requests)
+		t.Fatalf("real builtin/web-search did not return sourced evidence to the parent: %#v", parentClient.requests)
 	}
 }

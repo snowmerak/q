@@ -7,6 +7,10 @@
 `agent-invocation-runtime.md`, `plan-orchestration.md`,
 `execution-orchestration.md`다.
 
+역사 참고: 이 문서에서 사용하는 `/agent:search`와 `/agent:web-tester` 명령은 이후
+제거되었다. 현재 직접 호출 표면은 `/subagent builtin/web-search <query>`와
+`/subagent builtin/web-tester <request>`다.
+
 대상 독자: Q의 agent connection, `/plan`, ACP 및 실행 checkpoint를 변경하는 구현자와
 리뷰어.
 

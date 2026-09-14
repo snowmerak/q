@@ -12,29 +12,15 @@ import (
 	"github.com/snowmerak/q/third_party/acp-go-sdk"
 )
 
-func TestParseAgentWebTesterCommand(t *testing.T) {
-	for _, test := range []struct {
-		command string
-		request string
-		handled bool
-	}{
-		{command: "/agent:web-tester", handled: true},
-		{command: "/agent:web-tester verify login", request: "verify login", handled: true},
-		{command: "/agent:web-tester-other", handled: false},
-	} {
-		request, handled := parseAgentWebTesterCommand(test.command)
-		if request != test.request || handled != test.handled {
-			t.Fatalf("parseAgentWebTesterCommand(%q) = %q, %v", test.command, request, handled)
-		}
-	}
-}
-
-func TestAgentWebTesterWithoutAssignmentIsNotDiscoveredOrHandledAsCommand(t *testing.T) {
+func TestLegacyAgentWebTesterCommandIsNotDiscoveredOrHandled(t *testing.T) {
 	m := newModel(t.Context(), config.Store{Dir: t.TempDir()}, nil)
-	m.enterChat(config.Default(), &fakeClient{})
+	value := config.Default()
+	value.Agents.Connections = map[string]config.AgentConnectionConfig{"browser": {Preset: "codex"}}
+	value.Agents.Roles = map[string]config.AgentConfig{config.AgentRoleExternalWebTester: {Agent: "browser"}}
+	m.enterChat(value, &fakeClient{})
 	for _, command := range m.slashCommands() {
-		if command.name == agentWebTesterCommand {
-			t.Fatal("unconfigured web tester command was discovered")
+		if command.name == "/agent:web-tester" {
+			t.Fatal("legacy web tester command was discovered")
 		}
 	}
 	m.input.SetValue("/agent:web-tester verify login")
@@ -79,7 +65,7 @@ func TestStreamAgentWebTesterReturnsParentSynthesis(t *testing.T) {
 	}
 }
 
-func TestACPAgentRunsExplicitWebTesterCommand(t *testing.T) {
+func TestACPAgentRunsCanonicalWebTesterSubagentCommand(t *testing.T) {
 	parentClient := &fakeClient{}
 	agent, workspaceStore, connection := testACPAgent(t, parentClient, &fakeAgentTools{})
 	var received subagent.ExternalWebTesterInput
@@ -93,7 +79,7 @@ func TestACPAgentRunsExplicitWebTesterCommand(t *testing.T) {
 	}
 	sessionID := openTestACPSession(t, agent, workspaceStore.Root)
 	response, err := agent.Prompt(t.Context(), acp.PromptRequest{
-		SessionId: sessionID, Prompt: []acp.ContentBlock{acp.TextBlock("/agent:web-tester verify login")},
+		SessionId: sessionID, Prompt: []acp.ContentBlock{acp.TextBlock("/subagent builtin/web-tester verify login")},
 	})
 	if err != nil {
 		t.Fatal(err)
