@@ -108,7 +108,17 @@ func (m model) viewCustom() string {
 		return frameStyle.Render(header.String() + body + "\n" + subtleStyle.Render(customLine(status, width)) + "\n" + helpStyle.Render(customLine(help, width)))
 	}
 	body := m.viewCustomLists(width, height)
-	help := "↑/↓ select · a add · e edit · d delete · c ACP connections · r reload · esc back"
+	help := "↑/↓ select · tab/→ details · a add · e edit · d delete · c ACP · esc back"
+	if definition, fixed := m.custom.selectedFixed(); fixed {
+		if definition.Info.Kind == subagent.AgentKindExternal {
+			help = "↑/↓ select · tab/→ details · e change ACP · c ACP connections · esc back"
+		} else {
+			help = "↑/↓ select · tab/→ details · builtin read-only · esc back"
+		}
+	}
+	if m.custom.panelFocused {
+		help = "↑/↓/j/k scroll · pgup/pgdn page · home/end jump · tab/← list"
+	}
 	if m.custom.detail != "" {
 		body = customWindow(m.custom.detail, width, height, m.custom.detailOffset)
 		help = "↑/↓ scroll · pgup/pgdn page · home/end jump · esc back"
@@ -128,7 +138,15 @@ func (m model) viewCustom() string {
 	}
 	status := m.status
 	if status == "" {
-		status = "pgup/pgdn scroll details"
+		definition, fixed := m.custom.selectedFixed()
+		switch {
+		case m.custom.panelFocused:
+			status = "Details focused"
+		case fixed && definition.Info.Kind == subagent.AgentKindInner:
+			status = "Builtin inner definitions are read-only"
+		default:
+			status = "Tab or → focuses the details panel"
+		}
 	}
 	if width < 70 {
 		switch {
@@ -142,7 +160,11 @@ func (m model) viewCustom() string {
 				help = "tab next · shift+tab/esc back"
 			}
 		default:
-			help = "a add · e edit · d del · c ACP · esc"
+			if m.custom.panelFocused {
+				help = "↑/↓ scroll · pgup/pgdn · tab/← list"
+			} else {
+				help = "tab/→ details · a add · e edit · c ACP · esc"
+			}
 		}
 	}
 	if m.custom.confirmDelete {
@@ -408,13 +430,19 @@ func (m model) customList(width, height int) string {
 
 func (m model) viewCustomLists(width, height int) string {
 	heading := agentTraceTitleStyle(m.dark)
+	listHeading := "› LIST"
+	detailHeading := "DETAILS"
+	if m.custom.panelFocused {
+		listHeading = "LIST"
+		detailHeading = "› DETAILS"
+	}
 	if width >= 76 {
 		left := max(24, width/3)
 		right := width - left - 2
-		return lipgloss.JoinHorizontal(lipgloss.Top, heading.Render("LIST")+"\n"+m.customList(left, height-1), "  ", heading.Render("DETAILS")+"\n"+customWindow(m.customSelectionDetail(), right, height-1, m.custom.panelOffset))
+		return lipgloss.JoinHorizontal(lipgloss.Top, heading.Render(listHeading)+"\n"+m.customList(left, height-1), "  ", heading.Render(detailHeading)+"\n"+customWindow(m.customSelectionDetail(), right, height-1, m.custom.panelOffset))
 	}
 	listHeight := min(4, max(1, (height-2)/3))
-	return heading.Render("LIST") + "\n" + m.customList(width, listHeight) + "\n" + heading.Render("DETAILS") + "\n" + customWindow(m.customSelectionDetail(), width, max(1, height-listHeight-3), m.custom.panelOffset)
+	return heading.Render(listHeading) + "\n" + m.customList(width, listHeight) + "\n" + heading.Render(detailHeading) + "\n" + customWindow(m.customSelectionDetail(), width, max(1, height-listHeight-3), m.custom.panelOffset)
 }
 
 func (m model) viewCustomPicker(width, height int) string {

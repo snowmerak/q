@@ -218,18 +218,28 @@ func TestCustomDetailsScrollWithoutMovingSelection(t *testing.T) {
 	if strings.Contains(before, "FINAL DETAIL") {
 		t.Fatal("fixture should require scrolling")
 	}
-	for range 8 {
-		updated, _ := m.updateCustom(tea.KeyPressMsg{Code: tea.KeyPgDown})
+	updated, _ := m.updateCustom(tea.KeyPressMsg{Code: tea.KeyRight})
+	m = updated.(model)
+	if !m.custom.panelFocused || !strings.Contains(ansi.Strip(m.viewCustom()), "› DETAILS") {
+		t.Fatal("right did not focus details")
+	}
+	for range 40 {
+		updated, _ := m.updateCustom(tea.KeyPressMsg{Code: tea.KeyDown})
 		m = updated.(model)
 	}
 	if m.custom.cursor != 0 || !strings.Contains(m.viewCustom(), "FINAL DETAIL") {
 		t.Fatal("details did not scroll independently")
 	}
 	bottom := m.custom.panelOffset
-	updated, _ := m.updateCustom(tea.KeyPressMsg{Code: tea.KeyPgUp})
+	updated, _ = m.updateCustom(tea.KeyPressMsg{Code: tea.KeyPgUp})
 	m = updated.(model)
 	if m.custom.panelOffset >= bottom {
 		t.Fatal("overscrolling prevented paging up")
+	}
+	updated, _ = m.updateCustom(tea.KeyPressMsg{Code: tea.KeyTab})
+	m = updated.(model)
+	if m.custom.panelFocused {
+		t.Fatal("tab did not return focus to list")
 	}
 }
 

@@ -49,6 +49,7 @@ type customManager struct {
 	detail          string
 	detailOffset    int
 	panelOffset     int
+	panelFocused    bool
 	validationError string
 	confirmDelete   bool
 }
@@ -90,6 +91,7 @@ func (m *model) reloadCustom() {
 		}
 	}
 	m.custom.panelOffset = 0
+	m.custom.panelFocused = false
 	m.custom.confirmDelete = false
 }
 func (m model) customCount() int {
@@ -111,6 +113,7 @@ func (c customManager) selectedProfileIndex() (int, bool) {
 func (m model) beginCustomEdit(create bool) (tea.Model, tea.Cmd) {
 	c := &m.custom
 	c.confirmDelete = false
+	c.panelFocused = false
 	c.original = nil
 	c.fixedExternal = nil
 	c.field = 0
@@ -384,6 +387,31 @@ func (c customManager) matches() []string {
 	}
 	return out
 }
+
+func (m *model) scrollCustomPanel(key string) bool {
+	text, width, height := m.customPanelContent()
+	lines := strings.Split(ansi.Wrap(text, width, ""), "\n")
+	maximum := max(0, len(lines)-height)
+	switch key {
+	case "up", "k":
+		m.custom.panelOffset--
+	case "down", "j":
+		m.custom.panelOffset++
+	case "pgup":
+		m.custom.panelOffset -= max(1, height-1)
+	case "pgdown":
+		m.custom.panelOffset += max(1, height-1)
+	case "home":
+		m.custom.panelOffset = 0
+	case "end":
+		m.custom.panelOffset = maximum
+	default:
+		return false
+	}
+	m.custom.panelOffset = max(0, min(maximum, m.custom.panelOffset))
+	return true
+}
+
 func (m model) updateCustom(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	c := &m.custom
 	if c.connections {
@@ -395,14 +423,20 @@ func (m model) updateCustom(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if c.editing && (k == "ctrl+s" || k == "f2") {
 		return m.saveCustom()
 	}
-	if c.detail == "" && (k == "pgdown" || k == "pgup") {
-		text, width, height := m.customPanelContent()
-		delta := max(1, height/2)
-		if k == "pgup" {
-			delta = -delta
+	if c.detail == "" && c.panelFocused && !c.editing && !c.picker {
+		switch k {
+		case "esc", "left", "tab", "shift+tab":
+			c.panelFocused = false
+			m.status = ""
+			return m, nil
 		}
-		maximum := max(0, len(strings.Split(ansi.Wrap(text, width, ""), "\n"))-height)
-		c.panelOffset = max(0, min(maximum, c.panelOffset+delta))
+		if m.scrollCustomPanel(k) {
+			return m, nil
+		}
+		return m, nil
+	}
+	if c.detail == "" && (k == "pgdown" || k == "pgup") {
+		m.scrollCustomPanel(k)
 		return m, nil
 	}
 	if c.detail != "" {
@@ -586,9 +620,16 @@ func (m model) updateCustom(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		c.panelOffset = 0
 		c.cursor = max(0, c.cursor-1)
 		m.status = ""
-	case "down":
+	case "down", "j":
 		c.panelOffset = 0
 		c.cursor = min(max(0, m.customCount()-1), c.cursor+1)
+		m.status = ""
+	case "k":
+		c.panelOffset = 0
+		c.cursor = max(0, c.cursor-1)
+		m.status = ""
+	case "right", "tab":
+		c.panelFocused = true
 		m.status = ""
 	case "a":
 		return m.beginCustomEdit(true)
@@ -779,6 +820,7 @@ func (m model) deleteCustom() (tea.Model, tea.Cmd) {
 
 func (m model) enterCustomConnections() (tea.Model, tea.Cmd) {
 	m.custom.connections = true
+	m.custom.panelFocused = false
 	m.custom.editing = false
 	m.custom.picker = false
 	m.custom.confirmDelete = false
