@@ -26,8 +26,7 @@ func TestSupervisorStartsAndStopsCurrentExecutableChild(t *testing.T) {
 	defer upstream.Close()
 
 	t.Setenv("Q_GATEWAY_HELPER_PROCESS", "1")
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	store := Store{Dir: t.TempDir()}
 	supervisor := &Supervisor{
 		ctx: ctx, store: store, executable: os.Args[0],
@@ -98,8 +97,7 @@ func TestSupervisorAllowsUnavailableProvider(t *testing.T) {
 	defer upstream.Close()
 
 	t.Setenv("Q_GATEWAY_HELPER_PROCESS", "1")
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	supervisor := &Supervisor{
 		ctx: ctx, store: Store{Dir: t.TempDir()}, executable: os.Args[0],
 		argsPrefix: []string{"-test.run=TestGatewayChildProcess", "--"},

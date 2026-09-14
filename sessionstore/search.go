@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -320,12 +321,7 @@ func recordMatchesSearch(record Record, options SearchOptions) bool {
 		if len(allowed) == 0 {
 			return true
 		}
-		for _, candidate := range allowed {
-			if value == candidate {
-				return true
-			}
-		}
-		return false
+		return slices.Contains(allowed, value)
 	}
 	intersects := func(values, allowed []string) bool {
 		if len(allowed) == 0 {
@@ -415,10 +411,7 @@ func rerankByRecency(hits []Hit, options Recency) {
 		now = time.Now().UTC()
 	}
 	for index := range hits {
-		age := now.Sub(hits[index].Record.CreatedAt)
-		if age < 0 {
-			age = 0
-		}
+		age := max(now.Sub(hits[index].Record.CreatedAt), 0)
 		decay := math.Exp(-math.Ln2 * float64(age) / float64(options.HalfLife))
 		hits[index].Score = hits[index].BaseScore * (1 + options.Weight*decay)
 	}

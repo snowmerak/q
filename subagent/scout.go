@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 	"sort"
 	"strings"
 
@@ -80,7 +81,7 @@ type ScoutResult struct {
 	Artifacts    []string       `json:"artifacts,omitempty"`
 	Verification []string       `json:"verification,omitempty"`
 	Blocker      string         `json:"blocker,omitempty"`
-	Usage        client.Usage   `json:"usage,omitempty"`
+	Usage        client.Usage   `json:"usage"`
 }
 
 type scoutCompletion struct {
@@ -311,7 +312,7 @@ func normalizeScoutTask(task ScoutTask) (ScoutTask, error) {
 			refs = append(refs, parsed)
 		}
 	}
-	sort.Slice(refs, func(i, j int) bool { return refs[i] < refs[j] })
+	slices.Sort(refs)
 	task.LoomInputs = refs
 	return task, nil
 }

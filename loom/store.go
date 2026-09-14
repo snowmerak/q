@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"path/filepath"
 	"strings"
@@ -495,8 +496,6 @@ func cloneSource(source map[string]string) map[string]string {
 		return nil
 	}
 	result := make(map[string]string, len(source))
-	for key, value := range source {
-		result[key] = value
-	}
+	maps.Copy(result, source)
 	return result
 }

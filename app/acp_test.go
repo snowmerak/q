@@ -106,9 +106,9 @@ type routingBlockingACPClient struct {
 
 func (b *routingBlockingACPClient) Chat(ctx context.Context, request client.ChatRequest) (*client.ChatResponse, error) {
 	key := ""
-	for index := len(request.Messages) - 1; index >= 0; index-- {
-		if request.Messages[index].Role == client.RoleUser {
-			key = request.Messages[index].TextContent()
+	for _, v := range slices.Backward(request.Messages) {
+		if v.Role == client.RoleUser {
+			key = v.TextContent()
 			break
 		}
 	}
@@ -737,7 +737,7 @@ func TestACPAgentPromptStreamsAndPersistsWorkspaceSession(t *testing.T) {
 		t.Fatalf("persisted session metadata = title %q updated %v", saved.Title, saved.UpdatedAt)
 	}
 
-	listed, err := agent.ListSessions(t.Context(), acp.ListSessionsRequest{Cwd: acp.Ptr(workspaceStore.Root)})
+	listed, err := agent.ListSessions(t.Context(), acp.ListSessionsRequest{Cwd: new(workspaceStore.Root)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -836,8 +836,8 @@ func TestACPAgentAdvertisesAndHandlesHeadlessCommands(t *testing.T) {
 	for _, command := range commands {
 		commandNames = append(commandNames, command.Name)
 	}
-	if !slices.Equal(commandNames, []string{"subagents", "subagent", "plan", "debug", "review", "auto-approve", "auto-resolve", "autonomous", "commit", "learn", "clear", "help"}) ||
-		!strings.Contains(output, "/plan") || !strings.Contains(output, "/debug") || !strings.Contains(output, "/review") || strings.Contains(output, "/agent:search") ||
+	if !slices.Equal(commandNames, []string{"subagents", "subagent", "plan", "auto-approve", "auto-resolve", "autonomous", "commit", "learn", "clear", "help"}) ||
+		!strings.Contains(output, "/plan") || strings.Contains(output, "/debug") || strings.Contains(output, "/review") || strings.Contains(output, "/agent:search") ||
 		!strings.Contains(output, "/auto-approve") || !strings.Contains(output, "/auto-resolve") ||
 		!strings.Contains(output, "/autonomous") || !strings.Contains(output, "/commit") ||
 		!strings.Contains(output, "/learn") || !strings.Contains(output, "/clear") {

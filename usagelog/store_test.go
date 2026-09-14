@@ -68,13 +68,11 @@ func TestStoreConcurrentAppend(t *testing.T) {
 	var group sync.WaitGroup
 	errorsByCall := make(chan error, count)
 	for index := range count {
-		group.Add(1)
-		go func() {
-			defer group.Done()
+		group.Go(func() {
 			id := strings.Repeat(string(rune('a'+index%6)), 31) + string("0123456789abcdef"[index%16])
 			_, err := store.Append(context.Background(), usageRecord(id, now, "model", "coder", index+10))
 			errorsByCall <- err
-		}()
+		})
 	}
 	group.Wait()
 	close(errorsByCall)

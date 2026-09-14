@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
+	"slices"
 	"sort"
 	"strings"
 
@@ -485,19 +487,12 @@ func cloneStringMap(value map[string]string) map[string]string {
 		return nil
 	}
 	result := make(map[string]string, len(value))
-	for key, item := range value {
-		result[key] = item
-	}
+	maps.Copy(result, value)
 	return result
 }
 
 func containsMCPID(values []string, target string) bool {
-	for _, value := range values {
-		if value == target {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(values, target)
 }
 
 func removeMCPID(values []string, target string) []string {

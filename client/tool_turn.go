@@ -49,7 +49,7 @@ func FinishToolTurn(
 	request.ToolChoice = ToolChoiceNone
 	parallel := false
 	request.ParallelToolCalls = &parallel
-	for round := 0; round < maximumTerminalRounds; round++ {
+	for round := range maximumTerminalRounds {
 		if err := ctx.Err(); err != nil {
 			return result, err
 		}

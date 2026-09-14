@@ -4,9 +4,11 @@ package config
 import (
 	"errors"
 	"fmt"
+	"maps"
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -441,12 +443,7 @@ func AgentRoles() []string {
 }
 
 func IsAgentRole(role string) bool {
-	for _, candidate := range agentRoles {
-		if role == candidate {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(agentRoles, role)
 }
 
 // ExternalAgentRoles returns built-in roles backed by configured ACP
@@ -456,12 +453,7 @@ func ExternalAgentRoles() []string {
 }
 
 func IsExternalAgentRole(role string) bool {
-	for _, candidate := range externalAgentRoles {
-		if role == candidate {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(externalAgentRoles, role)
 }
 
 // ExternalAgentConnection resolves a usable external role. A missing role,
@@ -503,9 +495,7 @@ func (c Config) EffectiveAgents() AgentsConfig {
 			connection.Args = append([]string(nil), connection.Args...)
 			if connection.Env != nil {
 				env := make(map[string]string, len(connection.Env))
-				for name, value := range connection.Env {
-					env[name] = value
-				}
+				maps.Copy(env, connection.Env)
 				connection.Env = env
 			}
 			result.Connections[id] = connection

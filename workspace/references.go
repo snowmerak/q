@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"sort"
+	"slices"
 
 	"github.com/snowmerak/q/loom"
 )
@@ -65,6 +65,6 @@ func LoomReferencesAt(ctx context.Context, root string) ([]loom.Ref, error) {
 	for ref := range references {
 		result = append(result, ref)
 	}
-	sort.Slice(result, func(i, j int) bool { return result[i] < result[j] })
+	slices.Sort(result)
 	return result, nil
 }

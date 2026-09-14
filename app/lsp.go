@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -674,9 +675,7 @@ func cloneLSPGlobal(value qlsp.GlobalConfig) qlsp.GlobalConfig {
 		server.Args = append([]string(nil), server.Args...)
 		result.Servers[id] = server
 	}
-	for language, server := range value.Languages {
-		result.Languages[language] = server
-	}
+	maps.Copy(result.Languages, value.Languages)
 	return result
 }
 func cloneLSPWorkspace(value qlsp.WorkspaceConfig) qlsp.WorkspaceConfig {

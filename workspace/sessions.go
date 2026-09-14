@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"time"
 
@@ -123,7 +124,7 @@ func (s Store) MigrateLegacySession() (returnErr error) {
 	// This makes the layout upgrade a clean one-way handoff.
 	var legacyLock *worklock.Lock
 	var err error
-	for attempt := 0; attempt < 100; attempt++ {
+	for range 100 {
 		legacyLock, err = worklock.Acquire(s.Root, "q session migration")
 		if err == nil {
 			break
@@ -151,7 +152,7 @@ func (s Store) MigrateLegacySession() (returnErr error) {
 	}
 
 	var migrationLock *worklock.Lock
-	for attempt := 0; attempt < 100; attempt++ {
+	for range 100 {
 		migrationLock, err = worklock.AcquireFile(
 			s.Root, filepath.Join(DirectoryName, migrationLockName), "q session migration",
 		)
@@ -191,8 +192,8 @@ func (s Store) MigrateLegacySession() (returnErr error) {
 	targets := make([]legacyMigrationTarget, 0, 2)
 	reserved := make(map[string]struct{}, 2)
 	defer func() {
-		for index := len(targets) - 1; index >= 0; index-- {
-			returnErr = errors.Join(returnErr, targets[index].lock.Close())
+		for _, target := range slices.Backward(targets) {
+			returnErr = errors.Join(returnErr, target.lock.Close())
 		}
 	}()
 
@@ -284,7 +285,7 @@ func prepareLegacyMigrationTarget(
 		session.RunID = "run-" + preferredID
 	}
 
-	for collision := 0; collision < 64; collision++ {
+	for collision := range 64 {
 		sessionID := preferredID
 		if collision > 0 {
 			var err error
@@ -361,7 +362,7 @@ func inspectLegacyMigrationTarget(
 func acquireMigrationSessionLock(root, sessionID string) (*Lock, error) {
 	var lock *Lock
 	var err error
-	for attempt := 0; attempt < 100; attempt++ {
+	for range 100 {
 		lock, err = AcquireSessionLock(root, sessionID, "q session migration")
 		if err == nil {
 			return lock, nil

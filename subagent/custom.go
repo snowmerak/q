@@ -2,13 +2,11 @@ package subagent
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
 
 	"github.com/snowmerak/q/client"
-	"github.com/snowmerak/q/sessionstore"
 )
 
 type CustomRunner struct {
@@ -17,6 +15,7 @@ type CustomRunner struct {
 	Spec                                 Spec
 	Profile                              Profile
 	Source                               string
+	AgentID                              string
 	WorkingDirectory, Environment, RunID string
 	Sink                                 RecordSink
 	Progress                             ProgressFunc
@@ -26,7 +25,7 @@ type CustomRunner struct {
 
 func CustomToolAllowed(name string) bool {
 	switch name {
-	case "task_complete", "submit_plan", "submit_brief", "submit_debug_report", "submit_review_report", "review_task", "ask_to_user", "delegate_scout":
+	case "task_start", "task_complete", "submit_plan", "submit_brief", "review_task", "ask_to_user", "delegate", "delegate_list", "delegate_scout":
 		return false
 	}
 	return !strings.HasPrefix(name, "delegate_")
@@ -63,130 +62,35 @@ func (r CustomRunner) Run(ctx context.Context, input string) (output string, run
 	if r.Spec.Role != r.Profile.Role {
 		return "", errors.New("profile role does not match resolved model")
 	}
-	available, err := SelectCustomTools(r.Profile, r.Tools)
+	id := strings.TrimSpace(r.AgentID)
+	if id == "" {
+		id = CanonicalProfileID("global", r.Profile.Name)
+	}
+	definition := AgentDefinition{
+		Info:         DelegateInfo{Name: id, Description: r.Profile.Description, Source: r.Source, Role: r.Profile.Role, MutatesWorkspace: profileMayMutate(r.Profile.Tools)},
+		SystemPrompt: r.Profile.SystemPrompt, Tools: append([]string(nil), r.Profile.Tools...),
+		Delegates: append([]string(nil), r.Profile.Delegates...), StrictTools: true,
+	}
+	result, err := (GeneralRunner{
+		Client: r.Client, Tools: r.Tools, Spec: r.Spec, Definition: definition,
+		WorkingDirectory: r.WorkingDirectory, Environment: r.Environment, RunID: r.RunID,
+		Sink: r.Sink, Progress: r.Progress, Trace: r.Trace, MaxRounds: r.MaxRounds,
+	}).Run(ctx, input)
 	if err != nil {
 		return "", err
 	}
-	id, err := sessionstore.NewID()
-	if err != nil {
-		return "", err
+	return RenderTaskResult(result), nil
+}
+
+func RenderTaskResult(result TaskResult) string {
+	var body strings.Builder
+	body.WriteString(result.Summary)
+	writePlanList(&body, "Findings", result.Findings)
+	writePlanList(&body, "Artifacts", result.Artifacts)
+	writePlanList(&body, "Verification", result.Verification)
+	if result.Blocker != "" {
+		body.WriteString("\n\nBlocker: ")
+		body.WriteString(result.Blocker)
 	}
-	id = "custom-" + r.Profile.Name + "-" + id
-	progress := func(action, detail string) {
-		reportProgress(r.Progress, ProgressEvent{Agent: r.Profile.Name, TaskID: id, Action: action, Detail: detail})
-	}
-	progress(ProgressStarted, input)
-	var lifecycle *Lifecycle
-	if r.Sink != nil {
-		lifecycle, err = NewLifecycle(r.Sink, r.RunID, id, "", &r.Spec)
-		if err != nil {
-			return "", err
-		}
-		snapshot, _ := json.Marshal(map[string]any{"profile": r.Profile, "source": r.Source, "request": input, "model": r.Spec.Model, "candidates": r.Spec.Candidates})
-		if err = lifecycle.Queued(string(snapshot)); err != nil {
-			return "", err
-		}
-		if err = lifecycle.Started(""); err != nil {
-			return "", err
-		}
-	}
-	defer func() {
-		if runErr != nil {
-			progress(ProgressFailed, runErr.Error())
-			if lifecycle != nil {
-				if errors.Is(runErr, context.Canceled) {
-					runErr = errors.Join(runErr, lifecycle.Cancelled("Canceled"))
-				} else {
-					runErr = errors.Join(runErr, lifecycle.Failed(runErr))
-				}
-			}
-		} else {
-			if lifecycle != nil {
-				runErr = lifecycle.Succeeded(output, output, map[string]any{"profile": r.Profile, "output": output})
-			}
-			if runErr != nil {
-				progress(ProgressFailed, runErr.Error())
-			} else {
-				progress(ProgressCompleted, "Completed")
-			}
-		}
-	}()
-	systemPrompt := r.Profile.SystemPrompt + "\n\nRuntime environment: " + r.Environment + "\nWorking directory: " + r.WorkingDirectory
-	messages := []client.Message{{Role: client.RoleSystem, Content: systemPrompt}, {Role: client.RoleUser, Content: input}}
-	history := NewContextCompactor(r.Spec, messages, available, len(messages))
-	rounds := r.MaxRounds
-	if rounds <= 0 {
-		rounds = 320
-	}
-	empty := false
-	for round := 0; round < rounds; round++ {
-		if err = ctx.Err(); err != nil {
-			return "", err
-		}
-		if err = history.CompactIfNeeded(ctx, &r.Spec, r.Client); err != nil {
-			return "", err
-		}
-		progress(ProgressThinking, fmt.Sprintf("model round %d", round+1))
-		request := client.ChatRequest{Messages: history.RequestMessages(), WorkingDirectory: r.WorkingDirectory}
-		if len(available) > 0 {
-			parallel := false
-			request.Tools = available
-			request.ToolChoice = client.ToolChoiceAuto
-			request.ParallelToolCalls = &parallel
-		}
-		response, err := r.Spec.Chat(ctx, r.Client, request)
-		if err != nil {
-			return "", err
-		}
-		assistant, err := scoutAssistantMessage(response)
-		if err != nil {
-			return "", err
-		}
-		history.Observe(response.Usage)
-		history.Append(assistant)
-		traceAssistant(r.Trace, r.Profile.Name, id, "", assistant)
-		if lifecycle != nil {
-			if err = lifecycle.Message(assistant); err != nil {
-				return "", err
-			}
-		}
-		if len(assistant.ToolCalls) == 0 {
-			if strings.TrimSpace(assistant.TextContent()) != "" {
-				return assistant.TextContent(), nil
-			}
-			if empty {
-				return "", errors.New("custom subagent returned repeated empty responses")
-			}
-			empty = true
-			history.Append(client.Message{Role: client.RoleSystem, Content: "Return a non-empty final response or call an available tool."})
-			continue
-		}
-		for _, call := range assistant.ToolCalls {
-			if err = ctx.Err(); err != nil {
-				return "", err
-			}
-			progress(ProgressTool, call.Function.Name)
-			var result client.ToolResult
-			if !hasTool(available, call.Function.Name) {
-				result = scoutToolError(fmt.Errorf("tool %q is not selected", call.Function.Name))
-			} else {
-				result, err = r.Tools.Call(ctx, call)
-				if err != nil {
-					if ctx.Err() != nil {
-						return "", ctx.Err()
-					}
-					result = scoutToolError(err)
-				}
-			}
-			traceToolResult(r.Trace, r.Profile.Name, id, "", call, result)
-			message := client.Message{Role: client.RoleTool, Name: call.Function.Name, ToolCallID: call.ID, Content: result.Content}
-			history.Append(message)
-			if lifecycle != nil {
-				if err = lifecycle.Message(message); err != nil {
-					return "", err
-				}
-			}
-		}
-	}
-	return "", fmt.Errorf("custom subagent exceeded %d model rounds", rounds)
+	return body.String()
 }

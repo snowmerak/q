@@ -342,11 +342,9 @@ func TestConcurrentStoreInstancesSerializePutReadAndCollect(t *testing.T) {
 	errorsFound := make(chan error, writerCount*putsPerWriter+readerCount*readsPerReader+collectCount)
 	refs := make(chan Ref, writerCount*putsPerWriter)
 	var group sync.WaitGroup
-	for writer := 0; writer < writerCount; writer++ {
+	for writer := range writerCount {
 		store := stores[writer]
-		group.Add(1)
-		go func() {
-			defer group.Done()
+		group.Go(func() {
 			<-start
 			for range putsPerWriter {
 				artifact, err := store.Put(context.Background(), sharedContent, PutOptions{Kind: "test"})
@@ -362,13 +360,11 @@ func TestConcurrentStoreInstancesSerializePutReadAndCollect(t *testing.T) {
 					errorsFound <- errors.New("loom: concurrent read returned unexpected content")
 				}
 			}
-		}()
+		})
 	}
-	for reader := 0; reader < readerCount; reader++ {
+	for reader := range readerCount {
 		store := stores[writerCount+reader]
-		group.Add(1)
-		go func() {
-			defer group.Done()
+		group.Go(func() {
 			<-start
 			for range readsPerReader {
 				content, err := store.ReadAll(context.Background(), kept.Ref, 1<<20)
@@ -378,12 +374,10 @@ func TestConcurrentStoreInstancesSerializePutReadAndCollect(t *testing.T) {
 					errorsFound <- errors.New("loom: rooted read returned unexpected content")
 				}
 			}
-		}()
+		})
 	}
 	collector := stores[len(stores)-1]
-	group.Add(1)
-	go func() {
-		defer group.Done()
+	group.Go(func() {
 		<-start
 		for range collectCount {
 			if _, err := collector.Collect(context.Background(), GCOptions{
@@ -392,7 +386,7 @@ func TestConcurrentStoreInstancesSerializePutReadAndCollect(t *testing.T) {
 				errorsFound <- err
 			}
 		}
-	}()
+	})
 	close(start)
 	group.Wait()
 	close(errorsFound)

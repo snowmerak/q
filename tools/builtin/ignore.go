@@ -33,7 +33,7 @@ func loadDiscoveryIgnore(root string) (discoveryIgnore, error) {
 
 func parseDiscoveryIgnore(body string) discoveryIgnore {
 	var result discoveryIgnore
-	for _, raw := range strings.Split(strings.ReplaceAll(body, "\r\n", "\n"), "\n") {
+	for raw := range strings.SplitSeq(strings.ReplaceAll(body, "\r\n", "\n"), "\n") {
 		line := strings.TrimSpace(raw)
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue

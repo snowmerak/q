@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/snowmerak/q/client"
@@ -112,8 +113,8 @@ func (m *Machine) Initialize(messages []client.Message) []LearningSegment {
 	}
 	filtered := thinkerContextMessages(messages)
 	start := -1
-	for index := len(filtered) - 1; index >= 0; index-- {
-		if filtered[index].Name == "q_context_summary" {
+	for index, f := range slices.Backward(filtered) {
+		if f.Name == "q_context_summary" {
 			start = index
 			break
 		}

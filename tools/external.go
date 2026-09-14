@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"os"
 	"os/exec"
@@ -78,9 +79,7 @@ func (r *Runtime) ConfigureExternal(ctx context.Context, root string, value mcpc
 			continue
 		}
 		servers[id] = server
-		for name, route := range serverRoutes {
-			routes[name] = route
-		}
+		maps.Copy(routes, serverRoutes)
 		status.Tools = len(server.tools)
 		statuses = append(statuses, status)
 	}
@@ -283,8 +282,6 @@ func cloneStrings(value map[string]string) map[string]string {
 		return nil
 	}
 	result := make(map[string]string, len(value))
-	for key, item := range value {
-		result[key] = item
-	}
+	maps.Copy(result, value)
 	return result
 }

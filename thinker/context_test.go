@@ -9,7 +9,7 @@ import (
 
 func TestBuildContextChunkUsesClosedSegmentAndCapsFortyFivePercent(t *testing.T) {
 	messages := make([]client.Message, 0, 12)
-	for index := 0; index < 12; index++ {
+	for index := range 12 {
 		role := client.RoleUser
 		if index%2 == 1 {
 			role = client.RoleAssistant

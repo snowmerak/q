@@ -75,8 +75,7 @@ func TestConfigStoreLocalizesLegacyExternalAddresses(t *testing.T) {
 func TestEnsureElectsOneLeaderAndServesStatusWithoutAuthentication(t *testing.T) {
 	dir := t.TempDir()
 	value := testConfig(t)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	first, err := EnsureWithOptions(ctx, testOptions(dir, value))
 	if err != nil {
@@ -624,7 +623,8 @@ func TestGlobalPropositionAPIPersistsSearchesAndDeletesVectorProjections(t *test
 	}
 }
 
-func floatPointer(value float64) *float64 { return &value }
+//go:fix inline
+func floatPointer(value float64) *float64 { return new(value) }
 
 type testPropositionEmbedder struct{ inputs [][]string }
 
@@ -650,8 +650,7 @@ func (e *testPropositionEmbedder) Embed(_ context.Context, request llmclient.Emb
 func TestEnsureConcurrentElectionAndTakeover(t *testing.T) {
 	dir := t.TempDir()
 	value := testConfig(t)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	start := make(chan struct{})
 	type result struct {
 		runtime *Runtime
@@ -724,8 +723,7 @@ func TestEnsureTakesOverWhenStartingOwnerReleasesLock(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	result := make(chan struct {
 		runtime *Runtime
 		err     error

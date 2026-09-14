@@ -604,8 +604,7 @@ func writeServiceError(writer http.ResponseWriter, err error) {
 		// Request decoding and validation failures have no useful typed marker.
 		// Session Store indexing failures remain server errors because the source
 		// record may already have crossed its durability boundary.
-		var indexing *sessionstore.IndexingError
-		if errors.As(err, &indexing) {
+		if _, ok := errors.AsType[*sessionstore.IndexingError](err); ok {
 			writeJSON(writer, http.StatusInternalServerError, map[string]any{"error": encodeStoreError(err)})
 			return
 		}
@@ -617,8 +616,7 @@ func encodeStoreError(err error) *storeError {
 	if err == nil {
 		return nil
 	}
-	var indexing *sessionstore.IndexingError
-	if errors.As(err, &indexing) {
+	if indexing, ok := errors.AsType[*sessionstore.IndexingError](err); ok {
 		message := indexing.Error()
 		if indexing.Err != nil {
 			message = indexing.Err.Error()

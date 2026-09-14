@@ -20,8 +20,8 @@ func FileURI(path string) (DocumentURI, error) {
 	}
 	slashed := filepath.ToSlash(filepath.Clean(absolute))
 	uri := url.URL{Scheme: "file"}
-	if strings.HasPrefix(slashed, "//") {
-		hostAndPath := strings.TrimPrefix(slashed, "//")
+	if after, ok := strings.CutPrefix(slashed, "//"); ok {
+		hostAndPath := after
 		host, uriPath, found := strings.Cut(hostAndPath, "/")
 		if !found || host == "" {
 			return "", fmt.Errorf("lsp: invalid UNC file path %q", path)

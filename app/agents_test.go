@@ -181,7 +181,7 @@ func TestAgentsConnectionRowsStayColumnAligned(t *testing.T) {
 	m.agentsPanel = 1
 	plain := ansi.Strip(m.viewAgentsLists())
 	columns := make(map[string]int)
-	for _, line := range strings.Split(plain, "\n") {
+	for line := range strings.SplitSeq(plain, "\n") {
 		for _, id := range []string{"codex", "grok"} {
 			if column := strings.Index(line, "[ ] "+id); column >= 0 {
 				columns[id] = ansi.StringWidth(line[:column])

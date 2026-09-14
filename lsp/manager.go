@@ -284,13 +284,10 @@ func (m *Manager) sessionsForWorkspace(ctx context.Context, path, language strin
 	outcomes := make(chan outcome, len(roots))
 	var wait sync.WaitGroup
 	for _, root := range roots {
-		root := root
-		wait.Add(1)
-		go func() {
-			defer wait.Done()
+		wait.Go(func() {
 			session, err := m.getSession(ctx, root)
 			outcomes <- outcome{session: session, err: err}
-		}()
+		})
 	}
 	wait.Wait()
 	close(outcomes)

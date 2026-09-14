@@ -225,7 +225,7 @@ func TestToolResultTogglePreservesBothViewportAnchors(t *testing.T) {
 	m := newModel(context.Background(), config.Store{Dir: t.TempDir()}, nil)
 	m.screen = screenChat
 	m.agentTraceExpanded = true
-	for index := 0; index < 12; index++ {
+	for index := range 12 {
 		m.messages = append(m.messages, client.Message{Role: client.RoleTool, Name: "search", Content: strings.Repeat(fmt.Sprintf("chat %d detail\n", index), 4)})
 		m.agentTraces = append(m.agentTraces, agentTrace{Agent: "coder", Kind: "tool_result", Name: fmt.Sprintf("tool_%d", index), Content: strings.Repeat("trace detail\n", 4)})
 	}

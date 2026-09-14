@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"unicode"
@@ -286,10 +287,8 @@ func checkpointJSONCandidates(response string) []string {
 		if candidate == "" {
 			return
 		}
-		for _, existing := range candidates {
-			if existing == candidate {
-				return
-			}
+		if slices.Contains(candidates, candidate) {
+			return
 		}
 		candidates = append(candidates, candidate)
 	}

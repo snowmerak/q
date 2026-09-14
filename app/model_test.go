@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -819,13 +820,7 @@ func TestSlashModelConfiguresCommitAgentModelAndReasoning(t *testing.T) {
 func TestModelTargetsIncludeLearningRoles(t *testing.T) {
 	m := model{}
 	for _, expected := range []string{config.AgentRoleThinker, config.AgentRoleLibrarian} {
-		found := false
-		for _, target := range m.modelTargets() {
-			if target == expected {
-				found = true
-				break
-			}
-		}
+		found := slices.Contains(m.modelTargets(), expected)
 		if !found {
 			t.Fatalf("model targets = %#v; missing %q", m.modelTargets(), expected)
 		}
@@ -1386,7 +1381,7 @@ func TestHelpCommandAndShortcutKeepCommandsOutOfChatFooter(t *testing.T) {
 	allHelp := ansi.Strip(renderHelpContent(m.dark))
 	for _, expected := range []string{
 		"/help", "/skills", "/mcp", "/loom", "/ignore", "CHANGES", "COMMAND COMPLETION", "SUBAGENTS AND QUESTIONS", "ctrl+g", "COMMAND LINE", "q commit", "q memory", "q gateway start",
-		"q sprint <request...>", "q diagnose <issue...>", "q model", "q mcp", "q skills", "q ignore", "q help",
+		"q sprint <request...>", "q model", "q mcp", "q skills", "q ignore", "q help",
 	} {
 		if !strings.Contains(allHelp, expected) {
 			t.Fatalf("help content missing %q:\n%s", expected, allHelp)
@@ -3140,13 +3135,13 @@ func TestChatExecutesToolCallsAndContinuesTurn(t *testing.T) {
 		m = updated.(model)
 	}
 
-	if len(configuredClient.requests) != 4 || len(configuredClient.requests[0].Tools) != 4 {
+	if len(configuredClient.requests) != 4 {
 		t.Fatalf("agent requests = %#v", configuredClient.requests)
 	}
-	if configuredClient.requests[0].Tools[1].Function.Name != taskStartToolName ||
-		configuredClient.requests[0].Tools[2].Function.Name != askToUserToolName ||
-		configuredClient.requests[0].Tools[3].Function.Name != taskCompleteToolName {
-		t.Fatalf("orchestration tools = %#v", configuredClient.requests[0].Tools)
+	for _, name := range []string{"write_file", subagent.DelegateListToolName, subagent.DelegateToolName, taskStartToolName, askToUserToolName, taskCompleteToolName} {
+		if !requestHasTool(configuredClient.requests[0].Tools, name) {
+			t.Fatalf("orchestration tools missing %s: %#v", name, configuredClient.requests[0].Tools)
+		}
 	}
 	runtimePromptFound := false
 	for _, message := range configuredClient.requests[0].Messages {
@@ -3253,7 +3248,7 @@ func TestAskToUserPausesForAnswerAndResumesSameTask(t *testing.T) {
 	updated, command := m.submitChat()
 	m = updated.(model)
 
-	for index := 0; index < 6; index++ {
+	for range 6 {
 		updated, command = m.Update(nextAgentMessage(t, command))
 		m = updated.(model)
 	}
@@ -3370,7 +3365,7 @@ func TestDetailedAgentTraceIsScrollableAndCollapsible(t *testing.T) {
 	m.waiting = true
 	m.agentTraceExpanded = true
 	m.agentStates = map[string]string{"coder": "running"}
-	for index := 0; index < 12; index++ {
+	for index := range 12 {
 		m.appendAgentTrace(agentTrace{
 			Agent: "coder", Kind: "tool_call", Name: "read_file",
 			Content: fmt.Sprintf(`{"path":"app/file-%02d.go","detail":"%s"}`, index, strings.Repeat("evidence ", 20)),
@@ -3415,7 +3410,7 @@ func TestAgentTraceNeverPushesQuestionInputBelowTerminal(t *testing.T) {
 		},
 	}
 	m.input.Placeholder = "Type a custom answer…"
-	for index := 0; index < 8; index++ {
+	for range 8 {
 		m.appendAgentTrace(agentTrace{
 			Agent: "scout", Kind: "tool_result", Name: "read_file",
 			Content: fmt.Sprintf(`{"content":%q,"path":"benchmark_test.go"}`, strings.Repeat("line content with wrapping ", 80)),
@@ -3786,7 +3781,7 @@ func TestTranscriptMarkdownWrapsAndTracksTerminalTheme(t *testing.T) {
 	if dark == light {
 		t.Fatal("dark and light Markdown styles rendered identically")
 	}
-	for _, line := range strings.Split(dark, "\n") {
+	for line := range strings.SplitSeq(dark, "\n") {
 		if width := ansi.StringWidth(line); width > 42 {
 			t.Fatalf("rendered line width = %d, want <= 42: %q", width, ansi.Strip(line))
 		}

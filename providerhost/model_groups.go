@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"sort"
@@ -333,9 +334,7 @@ func (w *groupCandidateWriter) recorder() *httptest.ResponseRecorder {
 
 func rewriteGroupRequest(fields map[string]json.RawMessage, candidate config.ModelCandidateConfig) ([]byte, error) {
 	copyFields := make(map[string]json.RawMessage, len(fields)+1)
-	for key, value := range fields {
-		copyFields[key] = value
-	}
+	maps.Copy(copyFields, fields)
 	model, _ := json.Marshal(candidate.Model)
 	copyFields["model"] = model
 	if candidate.ReasoningEffort != "" {

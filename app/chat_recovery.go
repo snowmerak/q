@@ -116,8 +116,7 @@ func isMissingCodexRollout(err error) bool {
 		return false
 	}
 	message := err.Error()
-	var apiError *client.APIError
-	if errors.As(err, &apiError) {
+	if apiError, ok := errors.AsType[*client.APIError](err); ok {
 		if apiError.StatusCode != 502 {
 			return false
 		}

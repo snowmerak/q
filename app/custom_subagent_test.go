@@ -28,8 +28,34 @@ func TestCustomUsesSessionMCPCatalog(t *testing.T) {
 	}
 }
 
+func TestCustomInfoShowsExactCanonicalProfile(t *testing.T) {
+	m := newModel(t.Context(), config.Store{Dir: t.TempDir()}, nil)
+	workspaceStore := workspace.Store{Root: t.TempDir()}
+	m.workspaceStore = &workspaceStore
+	store := m.customStore()
+	for scope, prompt := range map[string]string{"global": "Global prompt", "workspace": "Workspace prompt"} {
+		if err := store.Save(subagent.Profile{
+			Version: 1, Name: "reader", Role: "scout", SystemPrompt: prompt,
+			Tools: []string{}, Delegates: []string{},
+		}, scope, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	global := m.customInfo("/subagents show global/reader")
+	workspace := m.customInfo("/subagents show workspace/reader")
+	if !strings.Contains(global, "Global prompt") || strings.Contains(global, "Workspace prompt") ||
+		!strings.Contains(workspace, "Workspace prompt") || strings.Contains(workspace, "Global prompt") {
+		t.Fatalf("global = %q, workspace = %q", global, workspace)
+	}
+}
+
 func TestCustomACPExecuteAndList(t *testing.T) {
-	c := &planningClient{responses: []client.Message{{Role: client.RoleAssistant, Content: "ACP custom result"}}}
+	c := &planningClient{responses: []client.Message{
+		{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{planToolCall(subagent.TaskStartToolName, `{"objective":"inspect"}`)}},
+		{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{planToolCall(subagent.TaskCompleteToolName, `{"outcome":"succeeded","summary":"ACP custom result"}`)}},
+		{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{planToolCall(subagent.TaskStartToolName, `{"objective":"inspect builtin"}`)}},
+		{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{planToolCall(subagent.TaskCompleteToolName, `{"outcome":"succeeded","summary":"ACP builtin result"}`)}},
+	}}
 	agent, ws, connection := testACPAgent(t, c, &fakeAgentTools{})
 	agent.state.config.Provider.Model = "plan-model"
 	profiles := subagent.ProfileStore{Workspace: ws.Root + "/.q/subagents"}
@@ -37,13 +63,16 @@ func TestCustomACPExecuteAndList(t *testing.T) {
 		t.Fatal(err)
 	}
 	id := openTestACPSession(t, agent, ws.Root)
-	for _, command := range []string{"/subagents list", "/subagents show inspector", "/subagent inspector explicit context"} {
+	for _, command := range []string{
+		"/subagents list", "/subagents show inspector", "/subagents show builtin/scout",
+		"/subagent inspector explicit context", "/subagent builtin/scout inspect builtin context",
+	} {
 		response, err := agent.Prompt(t.Context(), acp.PromptRequest{SessionId: id, Prompt: []acp.ContentBlock{acp.TextBlock(command)}})
 		if err != nil || response.StopReason != acp.StopReasonEndTurn {
 			t.Fatalf("%s: %+v %v", command, response, err)
 		}
 	}
-	if len(c.requests) != 1 || len(c.requests[0].Messages) != 2 ||
+	if len(c.requests) != 4 || len(c.requests[0].Messages) != 2 ||
 		!strings.HasPrefix(c.requests[0].Messages[0].Content, "ACP profile prompt\n\nRuntime environment:") {
 		t.Fatal(c.requests)
 	}
@@ -53,7 +82,8 @@ func TestCustomACPExecuteAndList(t *testing.T) {
 			output += u.Content.Text.Text
 		}
 	}
-	if !strings.Contains(output, "ACP custom result") || !strings.Contains(output, "inspector") {
+	if !strings.Contains(output, "ACP custom result") || !strings.Contains(output, "ACP builtin result") ||
+		!strings.Contains(output, "inspector") || !strings.Contains(output, subagent.BuiltinScoutID) {
 		t.Fatal(output)
 	}
 }
@@ -90,7 +120,10 @@ func TestCustomTUIExecute(t *testing.T) {
 	store := workspace.Store{Root: t.TempDir()}
 	m.workspaceStore = &store
 	m.toolRuntime = &fakeAgentTools{}
-	c := &planningClient{responses: []client.Message{{Role: client.RoleAssistant, Content: "custom result"}}}
+	c := &planningClient{responses: []client.Message{
+		{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{planToolCall(subagent.TaskStartToolName, `{"objective":"inspect"}`)}},
+		{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{planToolCall(subagent.TaskCompleteToolName, `{"outcome":"succeeded","summary":"custom result"}`)}},
+	}}
 	m.enterChat(value, c)
 	m.resize(100, 36)
 	if err := m.customStore().Save(subagent.Profile{Version: 1, Name: "inspector", Role: "analyst", SystemPrompt: "custom prompt", Tools: []string{}}, "workspace", nil); err != nil {
@@ -109,7 +142,7 @@ func TestCustomTUIExecute(t *testing.T) {
 	if m.waiting || m.messages[len(m.messages)-1].Content != "custom result" {
 		t.Fatalf("%s %+v", m.status, m.messages)
 	}
-	if len(c.requests) != 1 || len(c.requests[0].Messages) != 2 ||
+	if len(c.requests) != 2 || len(c.requests[0].Messages) != 2 ||
 		!strings.HasPrefix(c.requests[0].Messages[0].Content, "custom prompt\n\nRuntime environment:") {
 		t.Fatal(c.requests)
 	}
@@ -138,10 +171,11 @@ func TestCustomTUIManageProfile(t *testing.T) {
 	if err != nil || e.Profile.SystemPrompt != "First\nSecond" {
 		t.Fatalf("%+v %v %s", e, err, m.status)
 	}
-	if m.custom.entries[m.custom.cursor].Profile.Name != "inspector" {
+	index, found := m.custom.selectedProfileIndex()
+	if !found || m.custom.entries[index].Profile.Name != "inspector" {
 		t.Fatal("saved profile was not selected")
 	}
-	m.custom.cursor = 0
+	m.custom.cursor = len(m.custom.builtins)
 	updated, _ = m.beginCustomEdit(false)
 	m = updated.(model)
 	m.custom.prompt.SetValue("Updated")

@@ -19,7 +19,6 @@ const (
 type auditLogRecorder struct {
 	mu           sync.Mutex
 	log          subagent.PlanningLog
-	reviewFiles  []subagent.ReviewFile
 	contentBytes int
 	finished     bool
 	completedAt  *time.Time
@@ -36,33 +35,6 @@ func newPlanningLogRecorder(runID, objective string, contextValues []string) *au
 	if err == nil {
 		recorder.append(subagent.PlanningEvent{
 			Type: subagent.PlanningEventInput, Agent: "plan", Content: string(input),
-		})
-	}
-	return recorder
-}
-
-func newDebugLogRecorder(runID, objective string, contextValues []string) *auditLogRecorder {
-	recorder := newPlanningLogRecorder(runID, objective, contextValues)
-	if len(recorder.log.Events) > 0 && recorder.log.Events[0].Type == subagent.PlanningEventInput {
-		recorder.log.Events[0].Agent = "debug"
-	}
-	return recorder
-}
-
-func newReviewLogRecorder(runID, objective string, files []subagent.ReviewFile) *auditLogRecorder {
-	recorder := &auditLogRecorder{
-		log: subagent.PlanningLog{
-			RunID: strings.TrimSpace(runID), Objective: strings.TrimSpace(objective),
-			StartedAt: time.Now().UTC(),
-		},
-		reviewFiles: cloneReviewFiles(files),
-	}
-	input, err := json.MarshalIndent(subagent.ReviewRequest{
-		ID: runID, Objective: objective, Files: cloneReviewFiles(files),
-	}, "", "  ")
-	if err == nil {
-		recorder.append(subagent.PlanningEvent{
-			Type: subagent.PlanningEventInput, Agent: "review", Content: string(input),
 		})
 	}
 	return recorder
@@ -217,56 +189,6 @@ func (r *auditLogRecorder) finish(result subagent.PlanWorkflowResult, outcome st
 		}
 	}
 	return clonePlanningLog(r.log)
-}
-
-func (r *auditLogRecorder) finishDebug(
-	result subagent.DebugWorkflowResult,
-	outcome string,
-	runErr error,
-) subagent.DebugExecutionLog {
-	planning := r.finish(subagent.PlanWorkflowResult{}, outcome, runErr)
-	debug := subagent.DebugExecutionLog{
-		RunID: planning.RunID, Objective: planning.Objective,
-		StartedAt: planning.StartedAt, CompletedAt: planning.CompletedAt,
-		Outcome: planning.Outcome, Error: planning.Error,
-		Brief: planning.Brief, Events: planning.Events,
-		Truncated: planning.Truncated, DroppedEvents: planning.DroppedEvents,
-	}
-	if strings.TrimSpace(result.Report.Summary) != "" || strings.TrimSpace(result.Report.LikelyCause) != "" ||
-		len(result.Report.Findings) > 0 || len(result.Report.SuggestedFixes) > 0 {
-		report := result.Report
-		debug.Report = &report
-	}
-	return debug
-}
-
-func (r *auditLogRecorder) finishReview(
-	result subagent.ReviewWorkflowResult,
-	outcome string,
-	runErr error,
-) subagent.ReviewExecutionLog {
-	planning := r.finish(subagent.PlanWorkflowResult{}, outcome, runErr)
-	review := subagent.ReviewExecutionLog{
-		RunID: planning.RunID, Objective: planning.Objective,
-		StartedAt: planning.StartedAt, CompletedAt: planning.CompletedAt,
-		Outcome: planning.Outcome, Error: planning.Error,
-		Files: cloneReviewFiles(r.reviewFiles), Events: planning.Events,
-		Truncated: planning.Truncated, DroppedEvents: planning.DroppedEvents,
-	}
-	if strings.TrimSpace(result.Report.Summary) != "" || strings.TrimSpace(result.Report.Verdict) != "" || len(result.Report.Findings) > 0 {
-		report := result.Report
-		review.Report = &report
-	}
-	return review
-}
-
-func cloneReviewFiles(files []subagent.ReviewFile) []subagent.ReviewFile {
-	result := make([]subagent.ReviewFile, len(files))
-	for index, file := range files {
-		result[index] = file
-		result[index].Sections = append([]subagent.ReviewPatch(nil), file.Sections...)
-	}
-	return result
 }
 
 func (r *auditLogRecorder) executionSnapshot(completed bool) *subagent.ExecutionLog {

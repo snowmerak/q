@@ -174,8 +174,7 @@ func TestSaveKeepsSourceWhenIndexingFailsAndOpenCatchesUp(t *testing.T) {
 		t.Fatal(err)
 	}
 	record, err := store.Save(Record{ID: "recover-me", Kind: KindResult, Content: "durable result"})
-	var indexingError *IndexingError
-	if !errors.As(err, &indexingError) {
+	if _, ok := errors.AsType[*IndexingError](err); !ok {
 		t.Fatalf("Save() error = %v, want IndexingError", err)
 	}
 	if record.ID != "recover-me" {

@@ -290,7 +290,7 @@ func TestStreamAgentLoopCompactionFailureStopsBeforeNextRound(t *testing.T) {
 func TestApplyAgentContextCompactionPreservesTranscript(t *testing.T) {
 	policy := memory.Policy{ContextWindow: 12_000, TriggerRatio: .85, TargetRatio: .22, RecentRatio: .07}
 	history := []client.Message{{Role: client.RoleSystem, Content: "system contract"}}
-	for index := 0; index < 12; index++ {
+	for range 12 {
 		history = append(history,
 			client.Message{Role: client.RoleUser, Content: strings.Repeat("old request ", 120)},
 			client.Message{Role: client.RoleAssistant, Content: strings.Repeat("old response ", 120)},

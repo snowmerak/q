@@ -48,36 +48,87 @@ func parseCustomRun(command string) (string, string, error) {
 	}
 	return fields[0], strings.TrimSpace(fields[1]), nil
 }
+
+func (m model) resolvePublicAgent(name string) (subagent.AgentDefinition, error) {
+	name = strings.TrimSpace(name)
+	registry, err := buildSubagentRegistry(m.customStore())
+	if err != nil {
+		return subagent.AgentDefinition{}, err
+	}
+	if definition, found := registry.Get(name); found {
+		return definition, nil
+	}
+	entry, err := m.customStore().Get(name)
+	if err != nil {
+		return subagent.AgentDefinition{}, err
+	}
+	return subagent.DefinitionForProfile(entry)
+}
+
 func (m model) customInfo(command string) string {
 	if command == "/subagents" || command == "/subagents list" {
 		var b strings.Builder
-		b.WriteString("Custom subagents\n")
-		for _, e := range m.customStore().List() {
-			if e.Shadowed {
-				continue
-			}
-			if e.Err != nil {
-				fmt.Fprintf(&b, "%s: %v\n", e.Path, e.Err)
-				continue
-			}
-			fmt.Fprintf(&b, "%s · %s · %s\n  %s\n  %s\n", e.Profile.Name, e.Profile.Role, e.Scope, e.Profile.Description, e.Path)
-		}
-		return b.String()
-	}
-	if strings.HasPrefix(command, "/subagents show ") {
-		e, err := m.customStore().Get(strings.TrimSpace(strings.TrimPrefix(command, "/subagents show ")))
+		b.WriteString("Subagents\n")
+		registry, err := buildSubagentRegistry(m.customStore())
 		if err != nil {
 			return err.Error()
 		}
-		raw, _ := yaml.Marshal(e.Profile)
-		return e.Path + "\n" + string(raw)
+		for _, info := range registry.List() {
+			access := "read-only"
+			if info.MutatesWorkspace {
+				access = "mutates workspace"
+			}
+			definition, _ := registry.Get(info.Name)
+			fmt.Fprintf(&b, "%s · %s · %s · %s\n  %s\n", info.Name, info.Role, info.Source, access, info.Description)
+			if len(definition.Delegates) > 0 {
+				fmt.Fprintf(&b, "  delegates: %s\n", strings.Join(definition.Delegates, ", "))
+			}
+		}
+		for _, entry := range m.customStore().List() {
+			if entry.Err != nil {
+				fmt.Fprintf(&b, "%s: %v\n", entry.Path, entry.Err)
+			}
+		}
+		return b.String()
+	}
+	if after, ok := strings.CutPrefix(command, "/subagents show "); ok {
+		name := strings.TrimSpace(after)
+		definition, err := m.resolvePublicAgent(name)
+		if err != nil {
+			return err.Error()
+		}
+		if definition.Info.Source == "builtin" {
+			raw, _ := yaml.Marshal(map[string]any{
+				"name": definition.Info.Name, "description": definition.Info.Description,
+				"role": definition.Info.Role, "mutates_workspace": definition.Info.MutatesWorkspace,
+				"tools": definition.Tools, "delegates": definition.Delegates,
+			})
+			return "builtin (read-only)\n" + string(raw)
+		}
+		profileName := strings.TrimPrefix(definition.Info.Name, definition.Info.Source+"/")
+		var entry subagent.ProfileEntry
+		found := false
+		for _, candidate := range m.customStore().List() {
+			if candidate.Scope == definition.Info.Source && candidate.Profile.Name == profileName {
+				entry, found = candidate, true
+				break
+			}
+		}
+		if !found {
+			return fmt.Sprintf("unknown subagent %q", name)
+		}
+		if entry.Err != nil {
+			return entry.Err.Error()
+		}
+		raw, _ := yaml.Marshal(entry.Profile)
+		return entry.Path + "\n" + string(raw)
 	}
 	return "Usage: /subagents list | /subagents show <name> | /subagent <name> <request>"
 }
 func (m model) streamCustom(ctx context.Context, name, input string, events chan<- agentEvent) {
 	defer close(events)
 	fail := func(err error) { emitAgentEvent(ctx, events, agentEvent{err: err}) }
-	e, err := m.customStore().Get(name)
+	definition, err := m.resolvePublicAgent(name)
 	if err != nil {
 		fail(err)
 		return
@@ -91,7 +142,7 @@ func (m model) streamCustom(ctx context.Context, name, input string, events chan
 		fail(err)
 		return
 	}
-	spec, err := subagent.Resolve(m.activeConfig(), e.Profile.Role, models)
+	spec, err := subagent.Resolve(m.activeConfig(), definition.Info.Role, models)
 	if err != nil {
 		fail(err)
 		return
@@ -103,7 +154,12 @@ func (m model) streamCustom(ctx context.Context, name, input string, events chan
 	if m.toolRuntime != nil {
 		environment = fmt.Sprintf("%+v", m.toolRuntime.Environment())
 	}
-	runner := subagent.CustomRunner{Client: m.client, Tools: m.customTools(), Spec: spec, Profile: e.Profile, Source: e.Path, WorkingDirectory: root, Environment: environment, Sink: m.archive, RunID: m.runID,
+	runtime, err := m.configuredDelegationRuntimeFor(m.customTools(), root, definition.Info.Name, []string{definition.Info.Name})
+	if err != nil {
+		fail(err)
+		return
+	}
+	runner := subagent.GeneralRunner{Client: m.client, Tools: runtime, Spec: spec, Definition: definition, WorkingDirectory: root, Environment: environment, Sink: m.archive, RunID: m.runID,
 		Progress: func(p subagent.ProgressEvent) {
 			activity := agentActivity{Agent: p.Agent, TaskID: p.TaskID, ParentID: p.ParentID, Action: p.Action, Detail: p.Detail}
 			emitAgentEvent(ctx, events, agentEvent{activity: &activity})
@@ -112,12 +168,12 @@ func (m model) streamCustom(ctx context.Context, name, input string, events chan
 			trace := agentTrace{Agent: t.Agent, TaskID: t.TaskID, ParentID: t.ParentID, Kind: t.Kind, CallID: t.CallID, Name: t.Name, Content: t.Content, IsError: t.IsError}
 			emitAgentEvent(ctx, events, agentEvent{trace: &trace})
 		}}
-	output, err := runner.Run(ctx, input)
+	result, err := runner.Run(ctx, input)
 	if err != nil {
 		fail(err)
 		return
 	}
-	emitAgentEvent(ctx, events, agentEvent{response: &client.ChatResponse{Choices: []client.Choice{{Message: client.Message{Role: client.RoleAssistant, Content: output}}}}})
+	emitAgentEvent(ctx, events, agentEvent{response: &client.ChatResponse{Choices: []client.Choice{{Message: client.Message{Role: client.RoleAssistant, Content: subagent.RenderTaskResult(result)}}}}})
 }
 func (m model) startCustom(command string) (tea.Model, tea.Cmd) {
 	if command == "/subagents" {
@@ -136,12 +192,11 @@ func (m model) startCustom(command string) (tea.Model, tea.Cmd) {
 		m.status = err.Error()
 		return m, nil
 	}
-	if _, err = m.customStore().Get(name); err != nil {
+	if _, err = m.resolvePublicAgent(name); err != nil {
 		m.status = err.Error()
 		return m, nil
 	}
 	m.planArmed = false
-	m.debugArmed = false
 	m.beginTurn()
 	m.turnMessageStart = len(m.messages)
 	m.touchSessionMetadata(input)
@@ -181,7 +236,7 @@ func (a *acpAgent) runACPCustom(ctx context.Context, command string) (acp.Prompt
 	if err != nil {
 		return acp.PromptResponse{}, err
 	}
-	if _, err = a.state.customStore().Get(name); err != nil {
+	if _, err = a.state.resolvePublicAgent(name); err != nil {
 		return acp.PromptResponse{}, err
 	}
 	a.state.turnMessageStart = len(a.state.messages)

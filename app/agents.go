@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"sort"
 	"strings"
@@ -465,9 +466,7 @@ func (m model) agentsModified() bool {
 func cloneConfigForAgents(value config.Config) config.Config {
 	result := value
 	result.Agents.Roles = make(map[string]config.AgentConfig, len(value.Agents.Roles))
-	for role, assignment := range value.Agents.Roles {
-		result.Agents.Roles[role] = assignment
-	}
+	maps.Copy(result.Agents.Roles, value.Agents.Roles)
 	result.Agents.Connections = make(map[string]config.AgentConnectionConfig, len(value.Agents.Connections))
 	for id, connection := range value.Agents.Connections {
 		connection.Args = append([]string(nil), connection.Args...)

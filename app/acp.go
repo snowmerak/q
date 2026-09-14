@@ -568,7 +568,7 @@ func (a *acpAgent) ListSessions(_ context.Context, request acp.ListSessionsReque
 	for _, entry := range entries {
 		info := acp.SessionInfo{SessionId: acpSessionID(entry.Store.SessionID), Cwd: a.root}
 		if title := strings.TrimSpace(entry.Title); title != "" {
-			info.Title = acp.Ptr(title)
+			info.Title = new(title)
 		}
 		formatted := entry.UpdatedAt.UTC().Format(time.RFC3339Nano)
 		info.UpdatedAt = &formatted
@@ -1492,6 +1492,10 @@ func (a *acpAgent) runAgentTurn(ctx context.Context, history []client.Message) (
 	if err != nil {
 		return acp.PromptResponse{}, err
 	}
+	toolRuntime, err = a.state.configuredDelegationRuntime(toolRuntime, a.root)
+	if err != nil {
+		return acp.PromptResponse{}, err
+	}
 	_, capabilities := a.connectionState()
 	persistent := capabilities.Elicitation == nil || capabilities.Elicitation.Form == nil
 	workflowCtx := ctx
@@ -1766,8 +1770,8 @@ func (a *acpAgent) emitMissingAssistantText(content string, streamed *string) er
 		return nil
 	}
 	missing := content
-	if strings.HasPrefix(content, *streamed) {
-		missing = strings.TrimPrefix(content, *streamed)
+	if after, ok := strings.CutPrefix(content, *streamed); ok {
+		missing = after
 	}
 	if missing != "" {
 		if err := a.update(acp.UpdateAgentMessageText(missing)); err != nil {
@@ -1822,14 +1826,15 @@ func (a *acpAgent) elicitAnswer(ctx context.Context, question askToUserInput) as
 		return askToUserOutput{Err: errors.New("ACP client does not support form elicitation")}
 	}
 
-	description := question.Question
+	var description strings.Builder
+	description.WriteString(question.Question)
 	if question.Context != "" {
-		description += "\n\nContext: " + question.Context
+		description.WriteString("\n\nContext: " + question.Context)
 	}
 	if len(question.Choices) > 0 {
-		description += "\n\nChoices:"
+		description.WriteString("\n\nChoices:")
 		for _, choice := range question.Choices {
-			description += fmt.Sprintf("\n- %s: %s", choice.ID, choice.Label)
+			description.WriteString(fmt.Sprintf("\n- %s: %s", choice.ID, choice.Label))
 		}
 	}
 	response, err := connection.UnstableCreateElicitation(ctx, acp.UnstableCreateElicitationRequest{
@@ -1840,7 +1845,7 @@ func (a *acpAgent) elicitAnswer(ctx context.Context, question askToUserInput) as
 			RequestedSchema: acp.UnstableElicitationSchema{
 				Type: "object",
 				Properties: map[string]any{
-					"answer": map[string]any{"type": "string", "description": description},
+					"answer": map[string]any{"type": "string", "description": description.String()},
 				},
 				Required: []string{"answer"},
 			},
@@ -1872,7 +1877,7 @@ func (a *acpAgent) emitSessionInfo(includeTitle bool) error {
 func (a *acpAgent) emitSessionInfoContext(ctx context.Context, includeTitle bool) error {
 	update := &acp.SessionSessionInfoUpdate{}
 	if includeTitle && a.state.sessionTitle != "" {
-		update.Title = acp.Ptr(a.state.sessionTitle)
+		update.Title = new(a.state.sessionTitle)
 	}
 	if !a.state.sessionUpdatedAt.IsZero() {
 		formatted := a.state.sessionUpdatedAt.UTC().Format(time.RFC3339Nano)
@@ -1917,19 +1922,11 @@ func (a *acpAgent) emitAgentPlanContext(ctx context.Context, update agentPlanUpd
 
 func (a *acpAgent) emitAvailableCommandsContext(ctx context.Context) error {
 	commands := []acp.AvailableCommand{
-		{Name: "subagents", Description: "List custom subagents or show a profile.", Input: &acp.AvailableCommandInput{Unstructured: &acp.UnstructuredCommandInput{Hint: "list | show <name>"}}},
-		{Name: "subagent", Description: "Run a custom subagent.", Input: &acp.AvailableCommandInput{Unstructured: &acp.UnstructuredCommandInput{Hint: "<name> <request>"}}},
+		{Name: "subagents", Description: "List available subagents or show a definition.", Input: &acp.AvailableCommandInput{Unstructured: &acp.UnstructuredCommandInput{Hint: "list | show <name>"}}},
+		{Name: "subagent", Description: "Run a builtin or custom subagent.", Input: &acp.AvailableCommandInput{Unstructured: &acp.UnstructuredCommandInput{Hint: "<name> <request>"}}},
 		{
 			Name: "plan", Description: "Plan an implementation, request approval, then execute and review it.",
 			Input: &acp.AvailableCommandInput{Unstructured: &acp.UnstructuredCommandInput{Hint: "work to plan"}},
-		},
-		{
-			Name: "debug", Description: "Investigate an issue and return an evidence-backed diagnostic report.",
-			Input: &acp.AvailableCommandInput{Unstructured: &acp.UnstructuredCommandInput{Hint: "issue to investigate"}},
-		},
-		{
-			Name: "review", Description: "Review current working-tree changes without modifying them.",
-			Input: &acp.AvailableCommandInput{Unstructured: &acp.UnstructuredCommandInput{Hint: "optional review focus"}},
 		},
 		{
 			Name: "auto-approve", Description: "Persistently control automatic plan approval.",
@@ -2025,23 +2022,6 @@ func (a *acpAgent) runACPCommand(ctx context.Context, text string) (acp.PromptRe
 		}
 		response, err := a.runACPPlan(ctx, objective)
 		return response, true, err
-	case command == "/debug":
-		output = "Usage: /debug <issue to investigate>"
-	case strings.HasPrefix(command, "/debug "):
-		issue := strings.TrimSpace(strings.TrimPrefix(command, "/debug "))
-		if issue == "" {
-			output = "Usage: /debug <issue to investigate>"
-			break
-		}
-		response, err := a.runACPDebug(ctx, issue)
-		return response, true, err
-	case command == "/review":
-		response, err := a.runACPReview(ctx, "")
-		return response, true, err
-	case strings.HasPrefix(command, "/review "):
-		request := strings.TrimSpace(strings.TrimPrefix(command, "/review "))
-		response, err := a.runACPReview(ctx, request)
-		return response, true, err
 	case command == "/help":
 		output = renderACPCommandHelp(value)
 	case command == "/learn":
@@ -2090,8 +2070,6 @@ func renderACPCommandHelp(value config.Config) string {
 	lines := []string{
 		"Available ACP commands:",
 		"- /plan <work to plan>",
-		"- /debug <issue to investigate>",
-		"- /review [optional review focus]",
 		"- /auto-approve [on|off|status]",
 		"- /auto-resolve [on|off|status]",
 		"- /autonomous [on|off|status]",
@@ -2223,109 +2201,6 @@ func (a *acpAgent) runACPPlan(ctx context.Context, objective string) (acp.Prompt
 		workflowCtx: workflowCtx, cancel: cancel, events: events, trace: trace, objective: objective, workflow: "plan",
 	}
 	return a.continueACPPlan(ctx, run, persistent)
-}
-
-func (a *acpAgent) runACPDebug(ctx context.Context, issue string) (acp.PromptResponse, error) {
-	if a.state.client == nil || a.state.toolRuntime == nil {
-		return acp.PromptResponse{}, errors.New("ACP debug requires an available model and tool runtime")
-	}
-	value := a.state.activeConfig()
-	value.Plan = a.effectivePlanConfig()
-	_, capabilities := a.connectionState()
-	supportsForm := capabilities.Elicitation != nil && capabilities.Elicitation.Form != nil
-
-	a.state.turnMessageStart = len(a.state.messages)
-	titleChanged := a.state.touchSessionMetadata(issue)
-	message := client.Message{Role: client.RoleUser, Content: issue}
-	a.state.archiveMessage(message, sessionstore.StatusSubmitted, false)
-	a.state.messages = append(a.state.messages, message)
-	if a.state.memory == nil {
-		a.state.memory = memoryForPlan(a.state.activeConfig())
-	}
-	a.state.memory.Append(message)
-	a.launchLearning(a.state.observeLearningMessage(message))
-	if err := a.state.saveWorkspaceSession(); err != nil {
-		return acp.PromptResponse{}, err
-	}
-	if err := a.emitSessionInfoContext(ctx, titleChanged); err != nil {
-		return acp.PromptResponse{}, err
-	}
-	a.publishUsageUpdate()
-	if err := a.emitTaskPlanContext(ctx, issue, acp.PlanEntryStatusInProgress); err != nil {
-		return acp.PromptResponse{}, err
-	}
-
-	workingDirectory := ""
-	var executionStore debugExecutionStore
-	if a.state.workspaceStore != nil {
-		workingDirectory = a.state.workspaceStore.Root
-		executionStore = a.state.workspaceStore
-	}
-	traceID, err := sessionstore.NewID()
-	if err != nil {
-		return acp.PromptResponse{}, err
-	}
-	trace := newACPPlanTrace(a.root, traceID, a.updateContext)
-	persistent := !supportsForm
-	workflowParent := ctx
-	if persistent {
-		workflowParent = a.state.ctx
-	}
-	workflowCtx, cancel := context.WithCancel(workflowParent)
-	events := make(chan agentEvent)
-	go streamDebugWorkflow(
-		workflowCtx, a.state.client, a.state.toolRuntime, value, a.state.runID, a.state.archive,
-		workingDirectory, issue, planContext(a.state.memory.Messages()), executionStore, events,
-	)
-	run := &acpPlanContinuation{
-		workflowCtx: workflowCtx, cancel: cancel, events: events, trace: trace,
-		objective: issue, workflow: "debug",
-	}
-	return a.continueACPPlan(ctx, run, persistent)
-}
-
-func (a *acpAgent) runACPReview(ctx context.Context, requestText string) (acp.PromptResponse, error) {
-	if a.state.client == nil || a.state.toolRuntime == nil || a.state.workspaceStore == nil {
-		return acp.PromptResponse{}, errors.New("ACP review requires an available model, tool runtime, and workspace")
-	}
-	requestText = normalizeReviewRequest(requestText)
-	a.state.turnMessageStart = len(a.state.messages)
-	titleChanged := a.state.touchSessionMetadata(requestText)
-	message := client.Message{Role: client.RoleUser, Content: requestText}
-	a.state.archiveMessage(message, sessionstore.StatusSubmitted, false)
-	a.state.messages = append(a.state.messages, message)
-	if a.state.memory == nil {
-		a.state.memory = memoryForPlan(a.state.activeConfig())
-	}
-	a.state.memory.Append(message)
-	a.launchLearning(a.state.observeLearningMessage(message))
-	if err := a.state.saveWorkspaceSession(); err != nil {
-		return acp.PromptResponse{}, err
-	}
-	if err := a.emitSessionInfoContext(ctx, titleChanged); err != nil {
-		return acp.PromptResponse{}, err
-	}
-	a.publishUsageUpdate()
-	if err := a.emitTaskPlanContext(ctx, requestText, acp.PlanEntryStatusInProgress); err != nil {
-		return acp.PromptResponse{}, err
-	}
-
-	traceID, err := sessionstore.NewID()
-	if err != nil {
-		return acp.PromptResponse{}, err
-	}
-	trace := newACPPlanTrace(a.root, traceID, a.updateContext)
-	workflowCtx, cancel := context.WithCancel(ctx)
-	events := make(chan agentEvent)
-	go streamReviewWorkflow(
-		workflowCtx, a.state.client, a.state.toolRuntime, a.state.activeConfig(), a.state.runID, a.state.archive,
-		a.state.workspaceStore.Root, requestText, a.state.workspaceStore, events,
-	)
-	run := &acpPlanContinuation{
-		workflowCtx: workflowCtx, cancel: cancel, events: events, trace: trace,
-		objective: requestText, workflow: "review",
-	}
-	return a.continueACPPlan(ctx, run, false)
 }
 
 func (a *acpAgent) continueACPPlan(

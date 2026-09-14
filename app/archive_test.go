@@ -2,6 +2,7 @@ package app
 
 import (
 	"encoding/json"
+	"slices"
 	"testing"
 
 	"github.com/snowmerak/q/client"
@@ -68,10 +69,5 @@ func TestArchiveOmitsLoomBackedToolResult(t *testing.T) {
 }
 
 func containsString(values []string, target string) bool {
-	for _, value := range values {
-		if value == target {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(values, target)
 }

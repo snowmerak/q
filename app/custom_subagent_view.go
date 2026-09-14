@@ -44,10 +44,10 @@ func (m model) customRoleModelSummary(name string) string {
 }
 
 func (c customManager) customDeleteTarget() string {
-	if c.cursor >= 0 && c.cursor < len(c.entries) {
-		name := c.entries[c.cursor].Profile.Name
+	if index, found := c.selectedProfileIndex(); found {
+		name := c.entries[index].Profile.Name
 		if name == "" {
-			name = filepath.Base(c.entries[c.cursor].Path)
+			name = filepath.Base(c.entries[index].Path)
 		}
 		return "profile " + name
 	}
@@ -85,7 +85,7 @@ func (m model) viewCustom() string {
 		path = "workspace · " + filepath.Clean(m.workspaceStore.Root)
 	}
 	header.WriteString(subtleStyle.Render(customLine(path, width)) + "\n")
-	header.WriteString(activeLabelStyle.Render(fmt.Sprintf("› Subagents %d", len(m.custom.entries))) + "\n\n")
+	header.WriteString(activeLabelStyle.Render(fmt.Sprintf("› Subagents %d", m.customCount())) + "\n\n")
 	body := m.viewCustomLists(width, height)
 	help := "↑/↓ select · a add · e edit · d delete · r reload · esc back"
 	if m.custom.detail != "" {
@@ -93,7 +93,7 @@ func (m model) viewCustom() string {
 		help = "↑/↓ scroll · pgup/pgdn page · home/end jump · esc back"
 	} else if m.custom.picker {
 		body = m.viewCustomPicker(width, height)
-		if m.custom.field == 5 {
+		if m.custom.field == customFieldTools || m.custom.field == customFieldDelegates {
 			help = "↑/↓ select · space/enter toggle · tab done · ctrl+s save"
 		} else {
 			help = "↑/↓ select · enter choose · type filter · esc back"
@@ -101,7 +101,7 @@ func (m model) viewCustom() string {
 	} else if m.custom.editing {
 		body = m.viewCustomForm(width, height)
 		help = "tab/↑/↓ field · enter next/choose · ctrl+s/F2 save · esc cancel"
-		if m.custom.field == 4 {
+		if m.custom.field == customFieldPrompt {
 			help = "tab next · shift+tab/esc previous · ctrl+s save"
 		}
 	}
@@ -117,7 +117,7 @@ func (m model) viewCustom() string {
 			help = "enter select · ctrl+s save · esc"
 		case m.custom.editing:
 			help = "tab/↑/↓ · enter · F2 save · esc"
-			if m.custom.field == 4 {
+			if m.custom.field == customFieldPrompt {
 				help = "tab next · shift+tab/esc back"
 			}
 		default:
@@ -138,10 +138,42 @@ func (m model) viewCustom() string {
 
 func (m model) customSelectionDetail() string {
 	c := m.custom
-	if c.cursor >= len(c.entries) {
+	if definition, found := c.selectedBuiltin(); found {
+		info := definition.Info
+		access := "READ-ONLY"
+		if info.MutatesWorkspace {
+			access = "MUTATES WORKSPACE"
+		}
+		var b strings.Builder
+		b.WriteString(activeLabelStyle.Render(info.Name) + "\n")
+		b.WriteString(subtleStyle.Render("BUILTIN · "+access) + "\n")
+		if info.Description != "" {
+			b.WriteString("\n" + info.Description + "\n")
+		}
+		b.WriteString("\n" + agentTraceTitleStyle(m.dark).Render("CONFIGURATION") + "\n")
+		b.WriteString("Role    " + info.Role + "\n")
+		b.WriteString("Model   " + m.customRoleModelSummary(info.Role) + "\n")
+		b.WriteString(fmt.Sprintf("Tools      %d available\n", len(definition.Tools)))
+		b.WriteString(fmt.Sprintf("Delegates  %d granted\n", len(definition.Delegates)))
+		b.WriteString("\n" + agentTraceTitleStyle(m.dark).Render("TOOLS") + "\n")
+		if len(definition.Tools) == 0 {
+			b.WriteString("No tools")
+		} else {
+			b.WriteString(strings.Join(definition.Tools, "\n"))
+		}
+		b.WriteString("\n\n" + agentTraceTitleStyle(m.dark).Render("DELEGATES") + "\n")
+		if len(definition.Delegates) == 0 {
+			b.WriteString("No delegates")
+		} else {
+			b.WriteString(strings.Join(definition.Delegates, "\n"))
+		}
+		return b.String()
+	}
+	index, found := c.selectedProfileIndex()
+	if !found {
 		return "Add a profile with a, then choose its role, prompt, and tools."
 	}
-	e := c.entries[c.cursor]
+	e := c.entries[index]
 	p := e.Profile
 	state := e.Scope
 	if e.Shadowed {
@@ -165,13 +197,20 @@ func (m model) customSelectionDetail() string {
 	b.WriteString("\n" + agentTraceTitleStyle(m.dark).Render("CONFIGURATION") + "\n")
 	b.WriteString("Role    " + p.Role + "\n")
 	b.WriteString("Model   " + m.customRoleModelSummary(p.Role) + "\n")
-	b.WriteString(fmt.Sprintf("Tools   %d selected\n", len(p.Tools)))
+	b.WriteString(fmt.Sprintf("Tools      %d selected\n", len(p.Tools)))
+	b.WriteString(fmt.Sprintf("Delegates  %d selected\n", len(p.Delegates)))
 	b.WriteString(subtleStyle.Render("Source  "+e.Path) + "\n")
 	b.WriteString("\n" + agentTraceTitleStyle(m.dark).Render("SYSTEM PROMPT") + "\n" + p.SystemPrompt + "\n\n" + agentTraceTitleStyle(m.dark).Render("TOOLS") + "\n")
 	if len(p.Tools) == 0 {
 		b.WriteString("No tools")
 	} else {
 		b.WriteString(strings.Join(p.Tools, "\n"))
+	}
+	b.WriteString("\n\n" + agentTraceTitleStyle(m.dark).Render("DELEGATES") + "\n")
+	if len(p.Delegates) == 0 {
+		b.WriteString("No delegates")
+	} else {
+		b.WriteString(strings.Join(p.Delegates, "\n"))
 	}
 	return b.String()
 }
@@ -182,7 +221,25 @@ func (m model) customList(width, height int) string {
 	visibleItems := max(1, height/2)
 	start, end := lspVisibleRange(count, m.custom.cursor, visibleItems)
 	for i := start; i < end; i++ {
-		e := m.custom.entries[i]
+		if i < len(m.custom.builtins) {
+			definition := m.custom.builtins[i]
+			access := "read-only"
+			if definition.Info.MutatesWorkspace {
+				access = "mutates workspace"
+			}
+			prefix := "  "
+			if i == m.custom.cursor {
+				prefix = "› "
+			}
+			line := customLine(prefix+definition.Info.Name, width)
+			if i == m.custom.cursor {
+				line = activeLabelStyle.Render(line)
+			}
+			meta := subtleStyle.Render(customLine("    "+definition.Info.Role+" · builtin · "+access, width))
+			lines = append(lines, line, meta)
+			continue
+		}
+		e := m.custom.entries[i-len(m.custom.builtins)]
 		label := e.Profile.Name
 		if label == "" {
 			label = filepath.Base(e.Path)
@@ -191,7 +248,8 @@ func (m model) customList(width, height int) string {
 		if len(e.Profile.Tools) == 1 {
 			toolLabel = "1 tool"
 		}
-		meta := strings.Trim(strings.Join([]string{e.Profile.Role, e.Scope, toolLabel}, " · "), " ·")
+		delegateLabel := fmt.Sprintf("%d delegates", len(e.Profile.Delegates))
+		meta := strings.Trim(strings.Join([]string{e.Profile.Role, e.Scope, toolLabel, delegateLabel}, " · "), " ·")
 		if e.Shadowed {
 			meta += " · shadowed"
 		}
@@ -247,8 +305,12 @@ func (m model) viewCustomPicker(width, height int) string {
 			cursor = "› "
 		}
 		mark := "○ "
-		if c.field == 5 {
-			if c.tools[name] {
+		if c.field == customFieldTools || c.field == customFieldDelegates {
+			selected := c.tools[name]
+			if c.field == customFieldDelegates {
+				selected = c.delegates[name]
+			}
+			if selected {
 				mark = "[x] "
 			} else {
 				mark = "[ ] "
@@ -276,7 +338,7 @@ func (m model) viewCustomPicker(width, height int) string {
 func (m model) viewCustomForm(width, height int) string {
 	c := m.custom
 	formWidth := width
-	labels := []string{"Name *", "Description", "Scope", "Role *", "System prompt *", "Tools", "Save profile"}
+	labels := []string{"Name *", "Description", "Scope", "Role *", "System prompt *", "Tools", "Delegates", "Save profile"}
 	formTitle := "NEW PROFILE"
 	formDescription := "Define a runnable subagent with instructions, a model role, and an explicit tool set."
 	if c.original != nil {
@@ -302,10 +364,10 @@ func (m model) viewCustomForm(width, height int) string {
 			continue
 		}
 		value := c.inputs[i].Value()
-		if i == 4 {
+		if i == customFieldPrompt {
 			value = strings.ReplaceAll(c.prompt.Value(), "\n", " ")
 		}
-		if i == 5 {
+		if i == customFieldTools {
 			var names []string
 			for n, on := range c.tools {
 				if on {
@@ -318,6 +380,19 @@ func (m model) viewCustomForm(width, height int) string {
 				value = "No tools"
 			}
 		}
+		if i == customFieldDelegates {
+			var names []string
+			for n, on := range c.delegates {
+				if on {
+					names = append(names, n)
+				}
+			}
+			sort.Strings(names)
+			value = strings.Join(names, ", ")
+			if value == "" {
+				value = "No delegates"
+			}
+		}
 		if i != c.field {
 			lines = append(lines, subtleStyle.Render(customLine("  "+label+": "+value, formWidth)))
 			continue
@@ -327,15 +402,17 @@ func (m model) viewCustomForm(width, height int) string {
 		if c.validationError != "" {
 			lines = append(lines, activeLabelStyle.Render(customLine(c.validationError, formWidth)))
 		}
-		if i == 4 {
+		if i == customFieldPrompt {
 			prompt := c.prompt
 			prompt.SetWidth(max(1, formWidth-2))
 			prompt.SetHeight(max(2, height-len(labels)-3))
 			lines = append(lines, strings.Split(prompt.View(), "\n")...)
 			lines = append(lines, subtleStyle.Render(customLine("Tab: next · Shift+Tab/Esc: previous", formWidth)))
-		} else if i == 5 {
+		} else if i == customFieldTools {
 			lines = append(lines, customLine(value, formWidth), subtleStyle.Render(customLine("Enter: select built-in / MCP tools", formWidth)))
-		} else if i == 2 || i == 3 {
+		} else if i == customFieldDelegates {
+			lines = append(lines, customLine(value, formWidth), subtleStyle.Render(customLine("Enter: select callable subagents", formWidth)))
+		} else if i == customFieldScope || i == customFieldRole {
 			lines = append(lines, activeLabelStyle.Render(customLine("‹ "+value+" ›", formWidth)))
 			hint := "←/→: cycle · Enter: list"
 			lines = append(lines, subtleStyle.Render(customLine(hint, formWidth)))

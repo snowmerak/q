@@ -106,7 +106,7 @@ func validPath(path string) bool {
 }
 
 func metadataPath(path string) bool {
-	for _, part := range strings.Split(filepath.ToSlash(path), "/") {
+	for part := range strings.SplitSeq(filepath.ToSlash(path), "/") {
 		if part == ".q" || part == ".git" {
 			return true
 		}

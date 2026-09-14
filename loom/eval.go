@@ -228,7 +228,7 @@ func selectPointer(value any, pointer string) (any, error) {
 		return nil, fmt.Errorf("loom: JSON pointer must be empty or start with /")
 	}
 	current := value
-	for _, encoded := range strings.Split(pointer[1:], "/") {
+	for encoded := range strings.SplitSeq(pointer[1:], "/") {
 		part := strings.ReplaceAll(strings.ReplaceAll(encoded, "~1", "/"), "~0", "~")
 		switch typed := current.(type) {
 		case map[string]any:

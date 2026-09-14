@@ -15,14 +15,14 @@ import (
 
 func TestACPPromptResourcesPreserveProvenanceAndReplay(t *testing.T) {
 	link := acp.ResourceLinkBlock("guide.md", "file:///workspace/guide.md")
-	link.ResourceLink.MimeType = acp.Ptr("text/markdown")
-	link.ResourceLink.Description = acp.Ptr("Project guide")
+	link.ResourceLink.MimeType = new("text/markdown")
+	link.ResourceLink.Description = new("Project guide")
 	textResource := acp.ResourceBlock(acp.EmbeddedResourceResource{TextResourceContents: &acp.TextResourceContents{
-		Uri: "file:///workspace/main.go", MimeType: acp.Ptr("text/x-go"), Text: "package main\n",
+		Uri: "file:///workspace/main.go", MimeType: new("text/x-go"), Text: "package main\n",
 	}})
 	binaryBody := []byte{0x00, 0x01, 0x02, 0xff}
 	binaryResource := acp.ResourceBlock(acp.EmbeddedResourceResource{BlobResourceContents: &acp.BlobResourceContents{
-		Uri: "file:///workspace/data.bin", MimeType: acp.Ptr("application/octet-stream"),
+		Uri: "file:///workspace/data.bin", MimeType: new("application/octet-stream"),
 		Blob: base64.StdEncoding.EncodeToString(binaryBody),
 	}})
 	blocks := []acp.ContentBlock{acp.TextBlock("inspect these resources"), link, textResource, binaryResource}
@@ -92,7 +92,7 @@ func TestACPPromptResourcesPreserveProvenanceAndReplay(t *testing.T) {
 
 func TestACPPromptImageResourceKeepsResourceIdentity(t *testing.T) {
 	resource := acp.ResourceBlock(acp.EmbeddedResourceResource{BlobResourceContents: &acp.BlobResourceContents{
-		Uri: "file:///workspace/diagram.png", MimeType: acp.Ptr("image/png"),
+		Uri: "file:///workspace/diagram.png", MimeType: new("image/png"),
 		Blob: base64.StdEncoding.EncodeToString([]byte("image bytes")),
 	}})
 	message, nonText, err := acpPromptMessage([]acp.ContentBlock{resource}, true)
@@ -166,7 +166,7 @@ func TestACPRemoteClientSendsAndRetainsResources(t *testing.T) {
 		capabilities: acp.AgentCapabilities{PromptCapabilities: acp.PromptCapabilities{EmbeddedContext: true}},
 	}
 	responseResource := acp.ResourceBlock(acp.EmbeddedResourceResource{TextResourceContents: &acp.TextResourceContents{
-		Uri: "memory://result", MimeType: acp.Ptr("text/markdown"), Text: "# Result\nPreserved\n",
+		Uri: "memory://result", MimeType: new("text/markdown"), Text: "# Result\nPreserved\n",
 	}})
 	connection.prompt = func(ctx context.Context, request acp.PromptRequest) (acp.PromptResponse, error) {
 		if len(request.Prompt) != 2 || request.Prompt[1].Resource == nil {
@@ -182,7 +182,7 @@ func TestACPRemoteClientSendsAndRetainsResources(t *testing.T) {
 			return acp.PromptResponse{}, err
 		}
 		link := acp.ResourceLinkBlock("artifact.md", "file:///workspace/artifact.md")
-		link.ResourceLink.MimeType = acp.Ptr("text/markdown")
+		link.ResourceLink.MimeType = new("text/markdown")
 		if err := remote.SessionUpdate(ctx, acp.SessionNotification{SessionId: "session-1", Update: acp.SessionUpdate{
 			AgentMessageChunk: &acp.SessionUpdateAgentMessageChunk{Content: link},
 		}}); err != nil {

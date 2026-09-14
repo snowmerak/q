@@ -131,7 +131,7 @@ type Proposition struct {
 	UpdatedAt time.Time          `json:"updated_at"`
 	Refs      []string           `json:"refs,omitempty"`
 	Tags      []string           `json:"tags,omitempty"`
-	Payload   PropositionPayload `json:"payload,omitempty"`
+	Payload   PropositionPayload `json:"payload"`
 }
 
 type propositionService struct {
@@ -721,8 +721,7 @@ func registerPropositionRoutes(mux *http.ServeMux, propositions *propositionServ
 			if errors.Is(err, errPropositionIdempotencyConflict) {
 				status = http.StatusConflict
 			} else {
-				var jobFailure *propositionJobFailure
-				if errors.As(err, &jobFailure) {
+				if _, ok := errors.AsType[*propositionJobFailure](err); ok {
 					status = http.StatusServiceUnavailable
 				}
 			}

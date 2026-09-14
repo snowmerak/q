@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -335,7 +336,6 @@ type model struct {
 	questionTurnID     uint64
 	questionChoice     int
 	planArmed          bool
-	debugArmed         bool
 	planResumePending  bool
 	planCheckpoint     subagent.ExecutionCheckpoint
 	agentActivities    []agentActivity
@@ -1951,9 +1951,7 @@ func cloneGatewayConfig(value gateway.Config) gateway.Config {
 			continue
 		}
 		result.Providers[index].ModelMetadata = make(map[string]client.ModelMetadata, len(source))
-		for modelID, metadata := range source {
-			result.Providers[index].ModelMetadata[modelID] = metadata
-		}
+		maps.Copy(result.Providers[index].ModelMetadata, source)
 	}
 	return result
 }
@@ -3322,21 +3320,10 @@ func (m model) submitChat() (tea.Model, tea.Cmd) {
 		case "/plan":
 			m.input.Reset()
 			m.planArmed = true
-			m.debugArmed = false
 			m.input.Placeholder = "Describe the work to plan…"
 			m.status = "Plan mode · enter a planning request"
 			m.resize(m.width, m.height)
 			return m, m.input.Focus()
-		case "/debug":
-			m.input.Reset()
-			m.debugArmed = true
-			m.planArmed = false
-			m.input.Placeholder = "Describe the issue to investigate…"
-			m.status = "Debug mode · enter an issue"
-			m.resize(m.width, m.height)
-			return m, m.input.Focus()
-		case "/review":
-			return m.startReview("")
 		case "/commit":
 			return m.startCommit()
 		case "/changes":
@@ -3425,17 +3412,8 @@ func (m model) submitChat() (tea.Model, tea.Cmd) {
 		if strings.HasPrefix(content, "/plan ") {
 			return m.startPlan(strings.TrimSpace(strings.TrimPrefix(content, "/plan")))
 		}
-		if strings.HasPrefix(content, "/debug ") {
-			return m.startDebug(strings.TrimSpace(strings.TrimPrefix(content, "/debug")))
-		}
-		if strings.HasPrefix(content, "/review ") {
-			return m.startReview(strings.TrimSpace(strings.TrimPrefix(content, "/review")))
-		}
 		if m.planArmed {
 			return m.startPlan(content)
-		}
-		if m.debugArmed {
-			return m.startDebug(content)
 		}
 	}
 	m.clearAgentActivities()
@@ -3510,7 +3488,6 @@ func (m model) submitQuestionAnswer(content string) (tea.Model, tea.Cmd) {
 	turnContext := m.activeTurnContext()
 	m.asking = false
 	m.planArmed = false
-	m.debugArmed = false
 	m.pendingQuestion = askToUserInput{}
 	m.questionChoice = 0
 	m.questionAnswer = nil
@@ -3573,7 +3550,6 @@ func (m model) interruptTurn() (tea.Model, tea.Cmd) {
 	m.compacting = false
 	m.asking = false
 	m.planArmed = false
-	m.debugArmed = false
 	m.submitPending = false
 	m.pendingMessage = client.Message{}
 	m.streamResponse = ""
@@ -3659,6 +3635,9 @@ func (m *model) sendChatRequest() tea.Cmd {
 	toolRuntime, toolRuntimeErr := configuredAgentToolRuntime(
 		m.toolRuntime, mcpconfig.RoleDefault, m.activeConfig(), workingDirectory,
 	)
+	if toolRuntimeErr == nil {
+		toolRuntime, toolRuntimeErr = m.configuredDelegationRuntime(toolRuntime, workingDirectory)
+	}
 	turnContext := m.activeTurnContext()
 	turnID := m.turnID
 	streamEnabled := m.streamsActiveChat()
@@ -4123,7 +4102,6 @@ func (m *model) rollbackPendingMessage() {
 	m.compacting = false
 	m.asking = false
 	m.planArmed = false
-	m.debugArmed = false
 	m.pendingQuestion = askToUserInput{}
 	m.questionAnswer = nil
 	m.questionEvents = nil
@@ -4489,9 +4467,7 @@ func cloneWorkspaceModelConfig(value workspace.ModelConfig) workspace.ModelConfi
 	result := value
 	if value.Overrides != nil {
 		result.Overrides = make(map[string]workspace.ModelOverride, len(value.Overrides))
-		for role, override := range value.Overrides {
-			result.Overrides[role] = override
-		}
+		maps.Copy(result.Overrides, value.Overrides)
 	}
 	return result
 }
@@ -4540,9 +4516,7 @@ func withoutAgentOverride(value config.Config, role string) config.Config {
 
 func cloneAgentRoles(source map[string]config.AgentConfig) map[string]config.AgentConfig {
 	result := make(map[string]config.AgentConfig, len(source)+1)
-	for role, agent := range source {
-		result[role] = agent
-	}
+	maps.Copy(result, source)
 	return result
 }
 
@@ -4679,7 +4653,6 @@ func (m *model) resetConversationState(runIDs ...string) {
 	m.asking = false
 	m.slashCompletion = slashCompletionState{}
 	m.planArmed = false
-	m.debugArmed = false
 	m.planResumePending = false
 	m.planCheckpoint = subagent.ExecutionCheckpoint{}
 	m.pendingQuestion = askToUserInput{}
@@ -4715,7 +4688,6 @@ func (m *model) releaseConversationState(root string) {
 	m.questionEvents = nil
 	m.questionTurnID = 0
 	m.planArmed = false
-	m.debugArmed = false
 	m.planResumePending = false
 	m.planCheckpoint = subagent.ExecutionCheckpoint{}
 	m.transcriptThoughts = nil

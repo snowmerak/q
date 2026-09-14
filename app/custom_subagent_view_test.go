@@ -98,7 +98,7 @@ func TestCustomDeleteRequiresConfirmation(t *testing.T) {
 	m.reloadCustom()
 	for index, entry := range m.custom.entries {
 		if entry.Profile.Name == p.Name {
-			m.custom.cursor = index
+			m.custom.cursor = len(m.custom.builtins) + index
 		}
 	}
 
@@ -125,6 +125,48 @@ func TestCustomDeleteRequiresConfirmation(t *testing.T) {
 	}
 }
 
+func TestCustomDeleteRejectsReferencedProfile(t *testing.T) {
+	m := customViewFixture(t, 60, 28, true)
+	store := m.customStore()
+	target := subagent.Profile{Version: 1, Name: "target", Role: "analyst", SystemPrompt: "Target.", Tools: []string{}, Delegates: []string{}}
+	caller := subagent.Profile{Version: 1, Name: "caller", Role: "analyst", SystemPrompt: "Caller.", Tools: []string{}, Delegates: []string{"global/target"}}
+	if err := store.Save(target, "global", nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Save(caller, "global", nil); err != nil {
+		t.Fatal(err)
+	}
+	m.reloadCustom()
+	for index, entry := range m.custom.entries {
+		if entry.Profile.Name == target.Name {
+			m.custom.cursor = len(m.custom.builtins) + index
+		}
+	}
+	updated, _ := m.deleteCustom()
+	m = updated.(model)
+	if !strings.Contains(m.status, "referenced by global/caller") {
+		t.Fatalf("status = %s", m.status)
+	}
+	if _, err := store.Get(target.Name); err != nil {
+		t.Fatal("referenced profile was deleted", err)
+	}
+}
+
+func TestCustomScreenListsBuiltinDefinitionsAsReadOnly(t *testing.T) {
+	m := customViewFixture(t, 100, 36, true)
+	m.reloadCustom()
+	plain := ansi.Strip(m.viewCustom())
+	if !strings.Contains(plain, subagent.BuiltinScoutID) || !strings.Contains(plain, "builtin · read-only") {
+		t.Fatalf("builtin definitions missing:\n%s", plain)
+	}
+	m.custom.cursor = 0
+	updated, _ := m.beginCustomEdit(false)
+	m = updated.(model)
+	if m.custom.editing || !strings.Contains(m.status, "built-in and read-only") {
+		t.Fatalf("builtin edit state = %v, status = %s", m.custom.editing, m.status)
+	}
+}
+
 func TestCustomReloadKeepsSelectedEntry(t *testing.T) {
 	m := customViewFixture(t, 100, 36, true)
 	for _, name := range []string{"alpha", "omega"} {
@@ -135,11 +177,12 @@ func TestCustomReloadKeepsSelectedEntry(t *testing.T) {
 	m.reloadCustom()
 	for index, entry := range m.custom.entries {
 		if entry.Profile.Name == "omega" {
-			m.custom.cursor = index
+			m.custom.cursor = len(m.custom.builtins) + index
 		}
 	}
 	m.reloadCustom()
-	if m.custom.entries[m.custom.cursor].Profile.Name != "omega" {
+	index, found := m.custom.selectedProfileIndex()
+	if !found || m.custom.entries[index].Profile.Name != "omega" {
 		t.Fatal("reload moved the profile selection")
 	}
 }
@@ -151,7 +194,7 @@ func TestCustomDetailsScrollWithoutMovingSelection(t *testing.T) {
 	if strings.Contains(before, "FINAL DETAIL") {
 		t.Fatal("fixture should require scrolling")
 	}
-	for i := 0; i < 8; i++ {
+	for range 8 {
 		updated, _ := m.updateCustom(tea.KeyPressMsg{Code: tea.KeyPgDown})
 		m = updated.(model)
 	}

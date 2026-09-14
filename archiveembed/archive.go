@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -161,10 +162,8 @@ func (a *Archive) Search(ctx context.Context, options sessionstore.SearchOptions
 
 func searchesHistory(kinds []string) bool {
 	for _, wanted := range kinds {
-		for _, kind := range historyKinds {
-			if wanted == kind {
-				return true
-			}
+		if slices.Contains(historyKinds, wanted) {
+			return true
 		}
 	}
 	return false
@@ -225,17 +224,10 @@ func (a *Archive) configuredVectorizer() *embedding.Vectorizer {
 }
 
 func isHistoryRecord(record sessionstore.Record) bool {
-	for _, tag := range record.Tags {
-		if tag == "archive-read" {
-			return false
-		}
+	if slices.Contains(record.Tags, "archive-read") {
+		return false
 	}
-	for _, kind := range historyKinds {
-		if record.Kind == kind {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(historyKinds, record.Kind)
 }
 
 func recordText(record sessionstore.Record) string {
@@ -256,12 +248,7 @@ func recordText(record sessionstore.Record) string {
 }
 
 func containsString(values []string, wanted string) bool {
-	for _, value := range values {
-		if value == wanted {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(values, wanted)
 }
 
 func embeddingMatches(value *sessionstore.Embedding, vectorizer *embedding.Vectorizer) bool {

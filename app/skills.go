@@ -308,7 +308,7 @@ func (m model) startSelectedSkillUpdate() (tea.Model, tea.Cmd) {
 }
 
 func (m *model) refreshSkills(gotoTop bool) {
-	for scope := 0; scope < skillScopeCount; scope++ {
+	for scope := range skillScopeCount {
 		count := len(m.skillsForScope(scope))
 		if gotoTop || count == 0 {
 			m.skillsCursor[scope] = 0

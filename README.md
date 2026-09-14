@@ -80,36 +80,6 @@ Griller → Scout → Planner → task executor → Planner review workflow as `
 streams concise progress plus the final execution result to stdout. It does not
 change the persisted `plan.auto_resolve` or `plan.auto_approve` settings.
 
-Run the `/debug` investigation workflow non-interactively with clarification
-auto-resolution forced for only that invocation:
-
-```powershell
-q diagnose investigate the session replacement failure
-```
-
-Diagnose creates a fresh durable workspace session, runs the same read-only
-Griller → Scout → Planner report workflow as `/debug`, and streams concise
-progress plus the final diagnostic report to stdout. It does not expose a
-`/diagnose` command, modify persisted automation settings, or execute a fix.
-Its audit log is written below `.q/debug-executions`.
-
-Review the current Git working-tree changes without opening the TUI:
-
-```powershell
-q review
-q review focus on concurrency and cancellation behavior
-```
-
-Review creates a fresh durable workspace session and asks the configured
-Advisor to inspect bounded staged, unstaged, and untracked evidence. The
-Advisor delegates repository questions to Scout and can use the configured
-external Search agent for public evidence; both results return as Loom
-receipts. The workflow reports actionable findings with file locations and
-never edits files, builds or tests the project, runs project scripts, or changes
-Git state. The optional trailing text narrows the review request. Its audit log
-is written below `.q/review-executions`. The same workflow is available in an
-active TUI or ACP session as `/review [request]`.
-
 On first launch, q opens provider setup. Prefer an environment variable for an
 API key instead of storing a key inline. After selecting a model, type a request
 normally or type `/` to open command completion.
@@ -125,8 +95,6 @@ screen and returns to the previous screen without discarding its state.
 | Command | Purpose |
 |---|---|
 | `/plan [request]` | Clarify, research, propose, approve, execute, and review a plan. |
-| `/debug [issue]` | Clarify and research an issue, then have Planner return a diagnostic report without modifying the workspace. |
-| `/review [request]` | Review current working-tree changes without modifying them. |
 | `/auto-approve [on\|off\|status]` | Persistently control automatic approval of valid plan proposals. |
 | `/auto-resolve [on\|off\|status]` | Persistently control engineering-default answers to plan clarification. |
 | `/autonomous [on\|off\|status]` | Persistently control both plan automation settings together. |
@@ -147,6 +115,8 @@ screen and returns to the previous screen without discarding its state.
 | `/lsp` | Configure language servers and project roots. |
 | `/mcp` | Configure external MCP servers and role assignments. |
 | `/agents` | Configure ACP agent processes and external Search/Web Tester roles. |
+| `/subagents [list\|show <name>]` | Manage custom profiles and inspect builtin or custom subagents. |
+| `/subagent <name> <request>` | Run a public builtin or custom subagent. |
 | `/help` | Open the scrollable command and key guide. |
 
 Start typing a slash command to filter the catalog. Up/Down selects an entry;
@@ -303,25 +273,27 @@ Global configuration is stored under `~/.q`. Workspace model overrides are in
 `.q/model.json`. Use the TUI for normal configuration; edit YAML/JSON directly
 only when automation requires it.
 
-## Custom subagents
+## Subagents
 
-Open `/subagents` in the TUI to manage runnable subagent profiles. `a` adds, `e`
-edits, and `d` deletes the selected profile after confirmation. Each list row
-summarizes its model role, scope, and tool state.
+Open `/subagents` in the TUI to inspect builtin definitions and manage runnable
+custom profiles. Builtins are read-only. For custom entries, `a` adds, `e` edits,
+and `d` deletes the selected profile after confirmation. Each list row summarizes
+its model role, scope, tool state, and delegation grants.
 In an editor, Tab or Up/Down selects fields, Enter advances from name and
-description or opens a model/role/tool picker, Ctrl+S saves, and Esc cancels.
+description or opens a scope/role/tool/delegate picker, Ctrl+S saves, and Esc cancels.
 Inside the multiline prompt, Enter inserts a newline and arrows move the cursor;
 Tab moves to the next field; Shift+Tab, Esc, or Ctrl+Up returns to the previous
 field without discarding the prompt. Scope and Role cycle with Left/Right or
-Space; Enter opens their selection list. Tools opens a searchable list of built-in
-and connected external MCP tools; Space or Enter toggles selections. Tab/Shift+Tab
-leaves that list for the next/previous field, and Esc returns to the Tools field.
+Space; Enter opens their selection list. Tools and Delegates open searchable lists;
+Space or Enter toggles selections. Tab/Shift+Tab leaves a list for the next/previous
+field, and Esc returns to that field.
 Ctrl+S or F2 saves from any editor field or open selection list. You can also
 Tab to the final Save action and press Enter. Validation errors keep
 the draft available for correction. The system prompt supports multiple lines.
 
-A profile combines a system prompt, an explicit tool list, and a native model
-role. A custom role uses the existing model, model-group, and reasoning settings
+A profile combines a system prompt, an explicit tool list, directly callable
+subagents, and a native model role. A custom role uses the existing model,
+model-group, and reasoning settings
 in `~/.q/config.yaml`. Manage role assignments from `/model`: `a` creates a
 custom role and `d` deletes one after confirmation. Built-in native roles can
 also be selected; selecting one uses its model settings without invoking its
@@ -335,6 +307,8 @@ Changes apply on the next invocation. Existing profile and role names are fixed
 when editing. Changing a profile's scope moves its file without overwriting an
 existing profile at the destination. A referenced custom role must be reassigned
 in the known global and current-workspace profiles before deletion from `/model`.
+A profile referenced by another profile's `delegates` cannot be deleted from the
+TUI until that grant is removed.
 
 ```yaml
 version: 1
@@ -346,17 +320,25 @@ system_prompt: |
 tools:
   - list_directory
   - read_file
+delegates:
+  - builtin/scout
 ```
 
 TUI and ACP support `/subagents list`, `/subagents show code-reader`, and
-`/subagent code-reader explain the cancellation handling in app/debug.go`.
-In ACP, bare `/subagents` lists profiles. Creation, editing, and deletion use the
-TUI or profile files. Pass all necessary task context in the request: the child
-does not automatically inherit the parent conversation. `tools: []` runs without
-tools. Unavailable tools or roles produce an error before the model runs.
+`/subagent code-reader explain the cancellation handling in app/model.go`.
+The public builtin IDs are `builtin/scout`, `builtin/griller`, `builtin/planner`,
+`builtin/reviewer`, and `builtin/coder`. Bare `/subagents` opens the profile UI
+in the TUI and lists all available definitions in ACP. Creation, editing, and
+deletion use the TUI or profile files. Pass all necessary task context in the
+request: the child does not automatically inherit the parent conversation.
+`tools: []` and `delegates: []` grant nothing. Delegation grants use canonical
+IDs (`builtin/...`, `global/...`, or `workspace/...`). Unavailable tools, roles,
+or delegates produce an error before the model runs.
 
-Custom subagents use normal session progress, cancellation, and execution records.
-They do not change `/debug`, `/plan`, `/review`, or external ACP agent connections.
+Delegated agents share the host-provided `task_start` and `task_complete`
+lifecycle. General chat receives `delegate_list` and `delegate`; custom agents
+receive them only when their profile has direct grants. `/plan` and `q sprint`
+retain their approval-gated Go workflow and internal Coder/Planner review.
 
 ## Sessions, history, and learning
 
@@ -509,8 +491,6 @@ omits the chat-only `learn` tool.
 | Command | Purpose |
 |---|---|
 | `q sprint <request...>` | Run one autonomous plan through execution and review. All trailing argv values are joined as the request. |
-| `q diagnose <issue...>` | Run one autonomous read-only investigation and archive its diagnostic report. |
-| `q review [request...]` | Review current working-tree changes with the read-only Advisor and archive the report. |
 | `q gateway` | Configure the Gateway listener, API keys, and providers. |
 | `q gateway start [--host <ip>] [--port <port>]` | Run the OpenAI-compatible Gateway. |
 | `q library` | Configure the global Library listener. |
@@ -622,6 +602,7 @@ publishing the fork.
 ### Design notes
 
 - [Agent invocation runtime](docs/agent-invocation-runtime.md)
+- [Delegated subagents](docs/delegated-subagents.md)
 - [Subagent architecture](docs/subagent-architecture-notes.md)
 - [Plan orchestration](docs/plan-orchestration.md)
 - [Execution orchestration](docs/execution-orchestration.md)

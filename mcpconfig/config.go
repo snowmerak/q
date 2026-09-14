@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 
@@ -154,12 +155,7 @@ func RoleIDs() []string {
 }
 
 func IsRole(role string) bool {
-	for _, candidate := range RoleIDs() {
-		if role == candidate {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(RoleIDs(), role)
 }
 
 func (c Config) ServersForRole(role string) []string {

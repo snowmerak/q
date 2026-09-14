@@ -99,7 +99,7 @@ func ensureQGitIgnore(path string) error {
 }
 
 func hasQGitIgnoreRule(body []byte) bool {
-	for _, rawLine := range bytes.Split(body, []byte{'\n'}) {
+	for rawLine := range bytes.SplitSeq(body, []byte{'\n'}) {
 		line := strings.TrimSuffix(string(rawLine), "\r")
 		switch line {
 		case DirectoryName, DirectoryName + "/", "**/" + DirectoryName, "**/" + DirectoryName + "/":

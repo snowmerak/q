@@ -27,8 +27,6 @@ func (c slashCommand) usage() string {
 // Keep the local help screen and completion menu on the same command catalog.
 var localSlashCommands = []slashCommand{
 	{"/plan", "[request]", "Grill, research, approve, and execute a work plan."},
-	{"/debug", "[issue]", "Grill and research an issue, then return a diagnostic report."},
-	{"/review", "[request]", "Review current working-tree changes without modifying them."},
 	{"/auto-approve", "[on|off|status]", "Persistently control automatic plan approval."},
 	{"/auto-resolve", "[on|off|status]", "Persistently control automatic plan clarification."},
 	{"/autonomous", "[on|off|status]", "Persistently control both plan automation settings."},
@@ -47,8 +45,8 @@ var localSlashCommands = []slashCommand{
 	{"/lsp", "", "Configure global language servers and workspace project roots."},
 	{"/mcp", "", "Configure external MCP tool servers and per-role assignments."},
 	{"/agents", "", "Configure ACP agents and external role assignments."},
-	{"/subagents", "[list|show <name>]", "Manage custom subagent profiles, or list profiles."},
-	{"/subagent", "<name> <request>", "Run a custom subagent with an explicit request."},
+	{"/subagents", "[list|show <name>]", "Manage profiles and inspect available subagents."},
+	{"/subagent", "<name> <request>", "Run a builtin or custom subagent with an explicit request."},
 	{"/help", "", "Open this help screen."},
 }
 

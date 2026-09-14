@@ -55,11 +55,9 @@ func startLeader(parent context.Context, dir string, listener net.Listener, lock
 		Handler: handler, ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout: 10 * time.Second, WriteTimeout: 15 * time.Second, IdleTimeout: 60 * time.Second,
 	}
-	l.wg.Add(1)
-	go func() {
-		defer l.wg.Done()
+	l.wg.Go(func() {
 		maintenance(ctx, store)
-	}()
+	})
 	go func() {
 		serveErr := l.server.Serve(listener)
 		cancel()

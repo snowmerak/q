@@ -227,10 +227,7 @@ func (m *Manager) WorkspaceSymbols(ctx context.Context, request WorkspaceSymbols
 	outcomes := make(chan outcome, len(sessions))
 	var wait sync.WaitGroup
 	for _, session := range sessions {
-		session := session
-		wait.Add(1)
-		go func() {
-			defer wait.Done()
+		wait.Go(func() {
 			var raw json.RawMessage
 			err := session.client.Request(ctx, "workspace/symbol", map[string]any{"query": request.Query}, &raw)
 			if err != nil {
@@ -239,7 +236,7 @@ func (m *Manager) WorkspaceSymbols(ctx context.Context, request WorkspaceSymbols
 			}
 			symbols, err := m.normalizeSymbols(raw, "")
 			outcomes <- outcome{symbols: symbols, err: err}
-		}()
+		})
 	}
 	wait.Wait()
 	close(outcomes)

@@ -183,7 +183,7 @@ func startACPRemoteClient(
 	initialize, err := connection.Initialize(ctx, acp.InitializeRequest{
 		ProtocolVersion: acp.ProtocolVersionNumber,
 		ClientInfo: &acp.Implementation{
-			Name: "q", Title: acp.Ptr("q ACP Client"), Version: "dev",
+			Name: "q", Title: new("q ACP Client"), Version: "dev",
 		},
 		ClientCapabilities: acp.ClientCapabilities{
 			Fs: acp.FileSystemCapabilities{}, Terminal: false,

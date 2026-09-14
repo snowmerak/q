@@ -154,7 +154,7 @@ func OpenWithOptions(root string, options OpenOptions) (*Store, error) {
 	_ = os.Chmod(store.indexRoot, 0o700)
 
 	if store.indexStateIsCurrent() {
-		opened, openErr := bleve.OpenUsing(store.indexPath, map[string]interface{}{
+		opened, openErr := bleve.OpenUsing(store.indexPath, map[string]any{
 			"bolt_timeout": bleveOpenTimeout.String(),
 		})
 		if errors.Is(openErr, bolt.ErrTimeout) {

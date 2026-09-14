@@ -6,7 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -150,12 +152,8 @@ func functionTool(name, description string, parameters map[string]any, strict *b
 
 func mergeSchema(left, right map[string]any) map[string]any {
 	result := make(map[string]any, len(left)+len(right))
-	for key, value := range left {
-		result[key] = value
-	}
-	for key, value := range right {
-		result[key] = value
-	}
+	maps.Copy(result, left)
+	maps.Copy(result, right)
 	return result
 }
 
@@ -293,10 +291,8 @@ func (runtime *commitToolRuntime) gitHunk(arguments string) (any, error) {
 
 func (runtime *commitToolRuntime) visibleDiff(requested string) (string, string, error) {
 	path := filepathSlashClean(requested)
-	for _, visible := range runtime.state.visibleFiles {
-		if path == visible {
-			return path, runtime.state.fileDiffs[path], nil
-		}
+	if slices.Contains(runtime.state.visibleFiles, path) {
+		return path, runtime.state.fileDiffs[path], nil
 	}
 	return "", "", fmt.Errorf("%q is not a visible staged file", requested)
 }
@@ -391,18 +387,13 @@ func (runtime *commitToolRuntime) analyzeFiles(ctx context.Context, arguments st
 		}
 	}
 
-	limit := runtime.maxParallel
-	if limit < 1 {
-		limit = 1
-	}
+	limit := max(runtime.maxParallel, 1)
 	semaphore := make(chan struct{}, limit)
 	results := make([]fileAnalysis, len(paths))
 	errorsByPath := make([]string, len(paths))
 	var group sync.WaitGroup
 	for index, path := range paths {
-		group.Add(1)
-		go func() {
-			defer group.Done()
+		group.Go(func() {
 			select {
 			case semaphore <- struct{}{}:
 				defer func() { <-semaphore }()
@@ -416,7 +407,7 @@ func (runtime *commitToolRuntime) analyzeFiles(ctx context.Context, arguments st
 				return
 			}
 			results[index] = analysis
-		}()
+		})
 	}
 	group.Wait()
 	output := make([]fileAnalysis, 0, len(results))

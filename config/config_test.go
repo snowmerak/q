@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -268,13 +269,7 @@ func TestAgentRolesIncludesLearningRoles(t *testing.T) {
 		if !IsAgentRole(expected) {
 			t.Fatalf("%s is not recognized as an agent role", expected)
 		}
-		found := false
-		for _, role := range roles {
-			if role == expected {
-				found = true
-				break
-			}
-		}
+		found := slices.Contains(roles, expected)
 		if !found {
 			t.Fatalf("agent roles = %#v; missing %q", roles, expected)
 		}

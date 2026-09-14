@@ -5,6 +5,7 @@ import (
 	"fmt"
 	uv "github.com/charmbracelet/ultraviolet"
 	"github.com/snowmerak/q/client"
+	"github.com/snowmerak/q/subagent"
 	"github.com/snowmerak/q/workspace"
 	"strings"
 	"testing"
@@ -18,7 +19,7 @@ func TestCustomSaveTerminalInputBytes(t *testing.T) {
 			m = updated.(model)
 			m.custom.inputs[0].SetValue("save-from-terminal")
 			m.custom.prompt.SetValue("Keep my prompt")
-			m.custom.field = 5
+			m.custom.field = customFieldSave
 			decoder := uv.EventDecoder{}
 			n, event := decoder.Decode([]byte(input))
 			key, ok := event.(uv.KeyPressEvent)
@@ -40,11 +41,11 @@ func TestCustomSaveActionWithoutControlKey(t *testing.T) {
 	m = updated.(model)
 	m.custom.inputs[0].SetValue("save-action")
 	m.custom.prompt.SetValue("Keep my prompt")
-	m.custom.field = 5
+	m.custom.field = customFieldDelegates
 	updated, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyTab})
 	m = updated.(model)
 	if m.custom.field != len(m.custom.inputs)-1 {
-		t.Fatal("Tools Tab did not select Save")
+		t.Fatal("Delegates Tab did not select Save")
 	}
 	updated, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	m = updated.(model)
@@ -54,9 +55,9 @@ func TestCustomSaveActionWithoutControlKey(t *testing.T) {
 }
 
 func TestCustomSaveFromEveryEditorState(t *testing.T) {
-	for field := 0; field < 6; field++ {
+	for field := range customFieldCount {
 		for _, picker := range []bool{false, true} {
-			if picker && (field == 0 || field == 1 || field == 4) {
+			if picker && field != customFieldTools && field != customFieldDelegates {
 				continue
 			}
 			t.Run(fmt.Sprintf("field=%d/picker=%v", field, picker), func(t *testing.T) {
@@ -89,12 +90,12 @@ func TestCustomPickerSaveValidationPreservesDraft(t *testing.T) {
 	updated, _ := m.beginCustomEdit(true)
 	m = updated.(model)
 	m.custom.inputs[0].SetValue("draft")
-	m.custom.field = 5
+	m.custom.field = customFieldTools
 	updated, _ = m.openCustomPicker()
 	m = updated.(model)
 	updated, _ = m.Update(tea.KeyPressMsg{Code: 's', Mod: tea.ModCtrl})
 	m = updated.(model)
-	if !m.custom.editing || m.custom.inputs[0].Value() != "draft" || !strings.Contains(m.status, "system_prompt") {
+	if !m.custom.editing || m.custom.inputs[0].Value() != "draft" || !strings.Contains(m.status, "system prompt") {
 		t.Fatalf("validation feedback missing: %s", m.status)
 	}
 }
@@ -107,7 +108,7 @@ func TestCustomScreenshotSaveShowsNameErrorAtField(t *testing.T) {
 	m.custom.inputs[1].SetValue("Apple Developer")
 	m.custom.prompt.SetValue("You are a Apple Developer.")
 	m.custom.tools["read_file"] = true
-	m.custom.field = 5
+	m.custom.field = customFieldSave
 	updated, _ = m.Update(tea.KeyPressMsg{Code: 's', Mod: tea.ModCtrl})
 	m = updated.(model)
 	if !m.custom.editing || m.custom.field != 0 || !strings.Contains(m.status, "apple-developer") {
@@ -131,7 +132,7 @@ func TestCustomSaveKeyWithTextPayload(t *testing.T) {
 	m = updated.(model)
 	m.custom.inputs[0].SetValue("apple-developer")
 	m.custom.prompt.SetValue("You are an Apple Developer.")
-	m.custom.field = 5
+	m.custom.field = customFieldSave
 	updated, _ = m.Update(tea.KeyPressMsg{Code: 's', Mod: tea.ModCtrl, Text: "s"})
 	m = updated.(model)
 	if m.custom.editing || m.status != "Saved" {
@@ -145,7 +146,7 @@ func TestCustomToolPickerSelectsBuiltinAndMCP(t *testing.T) {
 	m.toolRuntime = &roleCatalogTools{toolsByRole: map[string][]client.Tool{"default": {tool("read_file"), tool("mcp_docs__read")}}}
 	updated, _ := m.beginCustomEdit(true)
 	m = updated.(model)
-	m.custom.field = 5
+	m.custom.field = customFieldTools
 	updated, _ = m.openCustomPicker()
 	m = updated.(model)
 	for _, name := range []string{"read_file", "mcp_docs__read"} {
@@ -167,12 +168,64 @@ func TestCustomToolPickerSelectsBuiltinAndMCP(t *testing.T) {
 	}
 }
 
+func TestCustomDelegatePickerSavesCanonicalGrant(t *testing.T) {
+	m := customViewFixture(t, 100, 36, true)
+	updated, _ := m.beginCustomEdit(true)
+	m = updated.(model)
+	m.custom.inputs[customFieldName].SetValue("delegator")
+	m.custom.inputs[customFieldRole].SetValue("analyst")
+	m.custom.prompt.SetValue("Delegate repository investigation when useful.")
+	m.custom.field = customFieldDelegates
+	updated, _ = m.openCustomPicker()
+	m = updated.(model)
+	found := false
+	for index, option := range m.custom.options {
+		if option == subagent.BuiltinScoutID {
+			m.custom.pickCursor = index
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("builtin scout missing from delegate picker: %#v", m.custom.options)
+	}
+	updated, _ = m.Update(tea.KeyPressMsg{Code: tea.KeySpace, Text: " "})
+	m = updated.(model)
+	updated, _ = m.saveCustom()
+	m = updated.(model)
+	entry, err := m.customStore().Get("delegator")
+	if err != nil || len(entry.Profile.Delegates) != 1 || entry.Profile.Delegates[0] != subagent.BuiltinScoutID {
+		t.Fatalf("profile = %#v, err = %v, status = %s", entry.Profile, err, m.status)
+	}
+}
+
+func TestCustomDelegateValidationRejectsCycles(t *testing.T) {
+	m := customViewFixture(t, 100, 36, true)
+	store := m.customStore()
+	b := subagent.Profile{Version: 1, Name: "b-agent", Role: "analyst", SystemPrompt: "B.", Tools: []string{}, Delegates: []string{}}
+	if err := store.Save(b, "global", nil); err != nil {
+		t.Fatal(err)
+	}
+	a := subagent.Profile{Version: 1, Name: "a-agent", Role: "analyst", SystemPrompt: "A.", Tools: []string{}, Delegates: []string{"global/b-agent"}}
+	if err := store.Save(a, "global", nil); err != nil {
+		t.Fatal(err)
+	}
+	b.Delegates = []string{"global/a-agent"}
+	original, err := store.Get("b-agent")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := m.validateCustomDelegates(b, "global", &original); err == nil || !strings.Contains(err.Error(), "delegation cycle") {
+		t.Fatalf("cycle error = %v", err)
+	}
+}
+
 func TestCustomSelectorsAndPromptExit(t *testing.T) {
 	m := customViewFixture(t, 100, 36, true)
 	m.workspaceStore = &workspace.Store{Root: t.TempDir()}
 	send := func(k tea.KeyPressMsg) { t.Helper(); updated, _ := m.Update(k); m = updated.(model) }
 	send(tea.KeyPressMsg{Code: 'a', Text: "a"})
-	for i := 0; i < 2; i++ {
+	for range 2 {
 		send(tea.KeyPressMsg{Code: tea.KeyTab})
 	}
 	before := m.custom.inputs[2].Value()
@@ -238,7 +291,7 @@ func TestCustomEditorKeyboardInput(t *testing.T) {
 	if m.custom.field != 1 {
 		t.Fatal("up did not return to description")
 	}
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		send(tea.KeyPressMsg{Code: tea.KeyTab})
 	}
 	if m.custom.field != 4 {

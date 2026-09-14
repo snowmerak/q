@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 
@@ -59,9 +60,9 @@ func (p *parkedTerminalClient) Chat(_ context.Context, request client.ChatReques
 		response.Choices[0].Message.Content = "Old task acknowledgment from provider"
 		return response, nil
 	}
-	for index := len(request.Messages) - 1; index >= 0; index-- {
-		if request.Messages[index].Role == client.RoleUser {
-			response.Choices[0].Message.Content = "New answer: " + request.Messages[index].Content
+	for _, v := range slices.Backward(request.Messages) {
+		if v.Role == client.RoleUser {
+			response.Choices[0].Message.Content = "New answer: " + v.Content
 			return response, nil
 		}
 	}

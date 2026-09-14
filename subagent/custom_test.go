@@ -13,15 +13,24 @@ import (
 )
 
 type fallbackCustomClient struct {
-	models []string
+	models         []string
+	secondaryCalls int
 }
 
 func (c *fallbackCustomClient) Chat(_ context.Context, request client.ChatRequest) (*client.ChatResponse, error) {
+	if request.ToolChoice == client.ToolChoiceNone {
+		return &client.ChatResponse{Choices: []client.Choice{{Message: client.Message{Role: client.RoleAssistant}, FinishReason: "stop"}}}, nil
+	}
 	c.models = append(c.models, request.Model)
 	if request.Model == "primary" {
 		return nil, &client.APIError{StatusCode: http.StatusServiceUnavailable, Message: "temporary"}
 	}
-	return &client.ChatResponse{Choices: []client.Choice{{Message: client.Message{Role: client.RoleAssistant, Content: "fallback result"}}}}, nil
+	c.secondaryCalls++
+	message := client.Message{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{scoutCall(TaskStartToolName, `{"objective":"inspect"}`)}}
+	if c.secondaryCalls > 1 {
+		message = client.Message{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{scoutCall(TaskCompleteToolName, `{"outcome":"succeeded","summary":"fallback result"}`)}}
+	}
+	return &client.ChatResponse{Choices: []client.Choice{{Message: message}}}, nil
 }
 
 func customProfile() Profile {
@@ -130,7 +139,11 @@ func TestCustomProfileScopeMove(t *testing.T) {
 func TestCustomRunnerSelectedToolsAndArchive(t *testing.T) {
 	p := customProfile()
 	p.Tools = []string{"read_file"}
-	c := &fakeScoutClient{responses: []client.Message{{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{scoutCall("write_file", "{}"), scoutCall("read_file", "{}")}}, {Role: client.RoleAssistant, Content: "done"}}}
+	c := &fakeScoutClient{responses: []client.Message{
+		{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{scoutCall(TaskStartToolName, `{"objective":"inspect"}`)}},
+		{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{scoutCall("write_file", "{}"), scoutCall("read_file", "{}")}},
+		{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{scoutCall(TaskCompleteToolName, `{"outcome":"succeeded","summary":"done"}`)}},
+	}}
 	tools := &fakeScoutTools{available: []client.Tool{scoutFunctionTool("read_file"), scoutFunctionTool("write_file")}}
 	sink := &scoutRecordSink{}
 	out, err := (CustomRunner{Client: c, Tools: tools, Profile: p, Spec: Spec{Role: p.Role, Model: "test"}, Sink: sink, RunID: "test"}).Run(t.Context(), "inspect")
@@ -140,8 +153,8 @@ func TestCustomRunnerSelectedToolsAndArchive(t *testing.T) {
 	if len(tools.calls) != 1 || tools.calls[0].Function.Name != "read_file" {
 		t.Fatal(tools.calls)
 	}
-	if len(c.requests[0].Tools) != 1 || len(c.requests[0].Messages) < 2 ||
-		c.requests[0].Messages[0].Content != p.SystemPrompt+"\n\nRuntime environment: \nWorking directory: " ||
+	if len(c.requests[0].Tools) != 3 || len(c.requests[0].Messages) < 2 ||
+		!strings.HasPrefix(c.requests[0].Messages[0].Content, p.SystemPrompt+"\n\nRuntime environment: \nWorking directory: ") ||
 		c.requests[0].Messages[1].Role != client.RoleUser {
 		t.Fatal("incorrect profile injection")
 	}
@@ -166,7 +179,7 @@ func TestCustomRunnerRecordsSelectedFallbackModel(t *testing.T) {
 	if err != nil || out != "fallback result" {
 		t.Fatalf("%q %v", out, err)
 	}
-	if len(c.models) != 2 || c.models[0] != "primary" || c.models[1] != "secondary" {
+	if len(c.models) != 3 || c.models[0] != "primary" || c.models[1] != "secondary" || c.models[2] != "secondary" {
 		t.Fatalf("models = %#v", c.models)
 	}
 	for _, record := range sink.records {
@@ -182,7 +195,7 @@ func TestCustomRunnerEmptyLimitAndCancellation(t *testing.T) {
 		responses []client.Message
 		rounds    int
 		want      string
-	}{{"empty", []client.Message{{Role: client.RoleAssistant}, {Role: client.RoleAssistant}}, 3, "empty"}, {"limit", []client.Message{{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{scoutCall("nope", "{}")}}}, 1, "exceeded"}} {
+	}{{"empty", []client.Message{{Role: client.RoleAssistant}, {Role: client.RoleAssistant}, {Role: client.RoleAssistant}, {Role: client.RoleAssistant}}, 4, "without task_complete"}, {"limit", []client.Message{{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{scoutCall("nope", "{}")}}}, 1, "exceeded"}} {
 		t.Run(tc.name, func(t *testing.T) {
 			_, err := (CustomRunner{Client: &fakeScoutClient{responses: tc.responses}, Profile: p, Spec: Spec{Role: p.Role, Model: "test"}, MaxRounds: tc.rounds}).Run(t.Context(), "test")
 			if err == nil || !strings.Contains(err.Error(), tc.want) {

@@ -140,7 +140,7 @@ func (c *Client) GetSkill(ctx context.Context, id, path string) (SkillResource, 
 		path = "SKILL.md"
 	}
 	escapedPath := make([]string, 0)
-	for _, part := range strings.Split(strings.ReplaceAll(path, "\\", "/"), "/") {
+	for part := range strings.SplitSeq(strings.ReplaceAll(path, "\\", "/"), "/") {
 		escapedPath = append(escapedPath, url.PathEscape(part))
 	}
 	endpoint := "/skills/" + url.PathEscape(strings.TrimSpace(id)) + "/resources/" + strings.Join(escapedPath, "/")

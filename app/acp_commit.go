@@ -270,7 +270,7 @@ func (a *acpAgent) elicitACPCommitAction(ctx context.Context, proposal string) (
 			SessionId: sessionID,
 			RequestedSchema: acp.UnstableElicitationSchema{
 				Type:  acp.UnstableElicitationSchemaTypeObject,
-				Title: acp.Ptr("Commit proposal"),
+				Title: new("Commit proposal"),
 				Properties: map[string]any{
 					"action": map[string]any{
 						"type":        "string",

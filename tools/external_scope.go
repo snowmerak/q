@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"maps"
 	"sort"
 	"strings"
 	"sync"
@@ -74,9 +75,7 @@ func (r *Runtime) NewExternalScope(ctx context.Context, root string, value mcpco
 			continue
 		}
 		servers[id] = server
-		for name, route := range serverRoutes {
-			routes[name] = route
-		}
+		maps.Copy(routes, serverRoutes)
 		status.Tools = len(server.tools)
 		statuses = append(statuses, status)
 	}

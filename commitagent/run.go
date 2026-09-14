@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"strings"
 
 	"github.com/snowmerak/q/client"
@@ -52,9 +53,7 @@ func prepareSessionDefault(ctx context.Context, directory string, logger *progre
 	}
 	if override, found := workspaceModel.Overrides[config.AgentRoleCommit]; found {
 		roles := make(map[string]config.AgentConfig, len(value.Agents.Roles)+1)
-		for role, agent := range value.Agents.Roles {
-			roles[role] = agent
-		}
+		maps.Copy(roles, value.Agents.Roles)
 		agent := roles[config.AgentRoleCommit]
 		agent.Model = override.Model
 		agent.Group = ""

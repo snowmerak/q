@@ -151,7 +151,7 @@ func TestSkillRetentionBudgetDoesNotReduceOrdinaryCompactionTarget(t *testing.T)
 func BenchmarkPlanWithSkillResourceRetention160K(b *testing.B) {
 	policy := Policy{ContextWindow: 258_400, TriggerRatio: .85, TargetRatio: .22, RecentRatio: .07}
 	messages := []client.Message{{Role: client.RoleSystem, Content: "role contract"}}
-	for index := 0; index < 120; index++ {
+	for index := range 120 {
 		messages = append(messages, client.Message{Role: client.RoleAssistant, Content: strings.Repeat("history ", 450)})
 		if index%12 == 0 {
 			messages = append(messages, skillReadMessages(

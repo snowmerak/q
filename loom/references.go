@@ -2,7 +2,7 @@ package loom
 
 import (
 	"regexp"
-	"sort"
+	"slices"
 )
 
 var referencePattern = regexp.MustCompile(`loom://[0-9a-fA-F]{32}`)
@@ -23,6 +23,6 @@ func ExtractReferences(values ...string) []Ref {
 	for ref := range seen {
 		result = append(result, ref)
 	}
-	sort.Slice(result, func(i, j int) bool { return result[i] < result[j] })
+	slices.Sort(result)
 	return result
 }

@@ -437,8 +437,7 @@ func reconnectableWorkspaceError(err error) bool {
 	if errors.Is(err, ErrWorkspaceClosed) || errors.Is(err, ErrLeaseExpired) {
 		return true
 	}
-	var protocolError *HTTPError
-	if errors.As(err, &protocolError) {
+	if _, ok := errors.AsType[*HTTPError](err); ok {
 		return false
 	}
 	var networkError net.Error
@@ -464,8 +463,7 @@ func (w *Workspace) reopen(ctx context.Context) error {
 			}
 			return nil
 		}
-		var protocolError *HTTPError
-		if errors.As(err, &protocolError) {
+		if _, ok := errors.AsType[*HTTPError](err); ok {
 			return err
 		}
 		select {
@@ -479,10 +477,7 @@ func (w *Workspace) reopen(ctx context.Context) error {
 
 func (w *Workspace) heartbeat(ctx context.Context) {
 	defer close(w.heartbeatDone)
-	interval := w.leaseTTL / 3
-	if interval < 10*time.Millisecond {
-		interval = 10 * time.Millisecond
-	}
+	interval := max(w.leaseTTL/3, 10*time.Millisecond)
 	if interval > 30*time.Second {
 		interval = 30 * time.Second
 	}

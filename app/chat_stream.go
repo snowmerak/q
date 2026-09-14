@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 
 	"github.com/snowmerak/q/client"
 )
@@ -136,15 +137,11 @@ func consumeChatStream(
 
 func withStreamUsage(request client.ChatRequest) client.ChatRequest {
 	extra := make(map[string]any, len(request.Extra)+1)
-	for key, value := range request.Extra {
-		extra[key] = value
-	}
+	maps.Copy(extra, request.Extra)
 	options := map[string]any{"include_usage": true}
 	if configured, ok := extra["stream_options"].(map[string]any); ok {
 		options = make(map[string]any, len(configured)+1)
-		for key, value := range configured {
-			options[key] = value
-		}
+		maps.Copy(options, configured)
 		options["include_usage"] = true
 	}
 	extra["stream_options"] = options
@@ -169,10 +166,7 @@ func mergeChunkMetadata(response *client.ChatResponse, chunk *client.ChatChunk) 
 
 func mergeToolCallFragments(message *client.Message, fragments []client.ToolCall) {
 	for _, fragment := range fragments {
-		index := fragment.Index
-		if index < 0 {
-			index = 0
-		}
+		index := max(fragment.Index, 0)
 		for len(message.ToolCalls) <= index {
 			message.ToolCalls = append(message.ToolCalls, client.ToolCall{Index: len(message.ToolCalls)})
 		}

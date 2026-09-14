@@ -62,7 +62,6 @@ func TestClientMatchesConcurrentResponsesByID(t *testing.T) {
 	results := make(chan string, 2)
 	errorsChannel := make(chan error, 2)
 	for _, method := range []string{"first", "second"} {
-		method := method
 		go func() {
 			var result string
 			err := client.Request(context.Background(), method, nil, &result)

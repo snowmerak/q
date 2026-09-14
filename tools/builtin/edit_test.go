@@ -173,7 +173,7 @@ func TestCreateDirectoryAlwaysCreatesParents(t *testing.T) {
 	} {
 		t.Run(input.Path, func(t *testing.T) {
 			fs := newTestFS(t)
-			for attempt := 0; attempt < 2; attempt++ {
+			for attempt := range 2 {
 				output, err := fs.CreateDirectory(input)
 				if err != nil {
 					t.Fatalf("attempt %d: %v", attempt, err)

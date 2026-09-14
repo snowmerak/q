@@ -129,8 +129,7 @@ func transientModelError(err error, attemptErr error) bool {
 	if errors.Is(attemptErr, context.DeadlineExceeded) || errors.Is(err, context.DeadlineExceeded) {
 		return true
 	}
-	var apiError *APIError
-	if errors.As(err, &apiError) {
+	if apiError, ok := errors.AsType[*APIError](err); ok {
 		return apiError.StatusCode >= http.StatusInternalServerError && apiError.StatusCode <= 599
 	}
 	var networkError net.Error

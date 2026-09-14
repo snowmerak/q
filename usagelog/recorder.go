@@ -80,7 +80,7 @@ func (r *Recorder) recordUsage(ctx context.Context, record client.UsageRecord) e
 	if record.Role == "" {
 		record.Role = client.UsageRoleUnknown
 	}
-	for attempt := 0; attempt < 2; attempt++ {
+	for attempt := range 2 {
 		if r.runtime == nil {
 			if r.lifetime == nil {
 				r.lifetime, r.cancel = context.WithCancel(context.Background())

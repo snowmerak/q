@@ -48,20 +48,6 @@ func main() {
 		}
 		return
 	}
-	if len(os.Args) > 1 && os.Args[1] == "diagnose" {
-		if err := runDiagnoseCommand(ctx, os.Args[2:], os.Stdout); err != nil {
-			fmt.Fprintln(os.Stderr, err)
-			os.Exit(1)
-		}
-		return
-	}
-	if len(os.Args) > 1 && os.Args[1] == "review" {
-		if err := runReviewCommand(ctx, os.Args[2:], os.Stdout); err != nil {
-			fmt.Fprintln(os.Stderr, err)
-			os.Exit(1)
-		}
-		return
-	}
 	if len(os.Args) > 1 {
 		runStandalone := standaloneUICommand(os.Args[1])
 		if runStandalone != nil {
@@ -158,6 +144,10 @@ func main() {
 			os.Exit(1)
 		}
 		return
+	}
+	if len(os.Args) > 1 {
+		fmt.Fprintf(os.Stderr, "unknown command %q\n", os.Args[1])
+		os.Exit(2)
 	}
 	if err := app.RunDefault(ctx); err != nil {
 		fmt.Fprintln(os.Stderr, err)

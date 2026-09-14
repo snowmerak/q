@@ -41,7 +41,7 @@ func buildChangePreview(path string, detail changes.Detail) changePreview {
 			}
 			hunkStart = -1
 		}
-		for _, line := range strings.Split(strings.TrimSuffix(section.Patch, "\n"), "\n") {
+		for line := range strings.SplitSeq(strings.TrimSuffix(section.Patch, "\n"), "\n") {
 			line = strings.TrimSuffix(line, "\r")
 			if match := changeHunkHeader.FindStringSubmatch(line); match != nil {
 				preview.hasLineDiff = true

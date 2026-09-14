@@ -47,7 +47,7 @@ type Result struct {
 	Merged     int          `json:"merged,omitempty"`
 	Discarded  int          `json:"discarded,omitempty"`
 	IDs        []string     `json:"ids,omitempty"`
-	Usage      client.Usage `json:"usage,omitempty"`
+	Usage      client.Usage `json:"usage"`
 	Truncated  bool         `json:"truncated,omitempty"`
 	LogPath    string       `json:"-"`
 	LogError   string       `json:"-"`

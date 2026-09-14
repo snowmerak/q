@@ -112,7 +112,7 @@ func stageWorkingTree(ctx context.Context, root string) (bool, error) {
 	seen := make(map[string]struct{})
 	paths := make([]string, 0)
 	for _, body := range [][]byte{tracked, untracked} {
-		for _, value := range bytes.Split(body, []byte{0}) {
+		for value := range bytes.SplitSeq(body, []byte{0}) {
 			if len(value) == 0 {
 				continue
 			}
@@ -200,7 +200,7 @@ func detectTrivialChange(ctx context.Context, state repositoryState) (trivialCha
 
 func importsOnly(diff string) bool {
 	var removed, added []string
-	for _, line := range strings.Split(diff, "\n") {
+	for line := range strings.SplitSeq(diff, "\n") {
 		if strings.HasPrefix(line, "---") || strings.HasPrefix(line, "+++") || len(line) == 0 {
 			continue
 		}

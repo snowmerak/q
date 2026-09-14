@@ -35,7 +35,7 @@ type Session struct {
 	UpdatedAt  *time.Time            `json:"updated_at,omitempty"`
 	Transcript []client.Message      `json:"transcript,omitempty"`
 	Context    []client.Message      `json:"context,omitempty"`
-	Learning   thinker.LearningState `json:"learning,omitempty"`
+	Learning   thinker.LearningState `json:"learning"`
 	ActiveTask *ActiveTask           `json:"active_task,omitempty"`
 }
 

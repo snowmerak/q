@@ -45,7 +45,7 @@ func run() error {
 		return err
 	}
 	var files []string
-	for _, name := range strings.Split(string(listing), "\x00") {
+	for name := range strings.SplitSeq(string(listing), "\x00") {
 		if name == "" {
 			continue
 		}

@@ -57,7 +57,7 @@ func TestContextCompactorKeepsAnchorsAndUserAnswersAcrossCompactions(t *testing.
 		response.ConversationID = "summary-backend"
 		return response, nil
 	})
-	for index := 0; index < 2; index++ {
+	for range 2 {
 		call := scoutCall("loom_read", `{}`)
 		history.Append(
 			client.Message{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{call}},

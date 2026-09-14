@@ -21,6 +21,7 @@ type Profile struct {
 	Role         string   `yaml:"role" json:"role"`
 	SystemPrompt string   `yaml:"system_prompt" json:"system_prompt"`
 	Tools        []string `yaml:"tools" json:"tools"`
+	Delegates    []string `yaml:"delegates" json:"delegates"`
 }
 
 func (p Profile) Validate() error {
@@ -40,6 +41,13 @@ func (p Profile) Validate() error {
 	for _, name := range p.Tools {
 		if strings.TrimSpace(name) == "" || name != strings.TrimSpace(name) || seen[name] {
 			return fmt.Errorf("profile: invalid or duplicate tool %q", name)
+		}
+		seen[name] = true
+	}
+	seen = map[string]bool{}
+	for _, name := range p.Delegates {
+		if !ValidAgentID(name) || seen[name] {
+			return fmt.Errorf("profile: invalid or duplicate delegate %q", name)
 		}
 		seen[name] = true
 	}

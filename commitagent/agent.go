@@ -43,7 +43,7 @@ func runCommitAgent(
 	history := subagent.NewContextCompactor(spec, messages, available, len(messages))
 	history.PreserveTools(toolGitOverview)
 	reminders := 0
-	for round := 0; round < maximumCommitRounds; round++ {
+	for range maximumCommitRounds {
 		if err := history.CompactIfNeeded(ctx, &spec, configuredClient); err != nil {
 			return proposalState{}, false, fmt.Errorf("q commit: context: %w", err)
 		}
@@ -71,7 +71,7 @@ func runCommitAgent(
 			}
 			if reminders == maximumProposalPrompts {
 				logger.step("agent", "proposal reminders exhausted")
-				return proposalState{Single: pointerProposal(mechanicalFallback(state))}, true, nil
+				return proposalState{Single: new(mechanicalFallback(state))}, true, nil
 			}
 			reminders++
 			logger.step("agent", "sending proposal reminder %d/%d", reminders, maximumProposalPrompts)
@@ -104,7 +104,7 @@ func runCommitAgent(
 			return runtime.proposal, false, nil
 		}
 	}
-	return proposalState{Single: pointerProposal(mechanicalFallback(state))}, true, nil
+	return proposalState{Single: new(mechanicalFallback(state))}, true, nil
 }
 
 func commitAgentInstructions() string {
@@ -139,4 +139,5 @@ func assistantContent(response *client.ChatResponse) (string, error) {
 	return strings.TrimSpace(message.TextContent()), nil
 }
 
-func pointerProposal(value Proposal) *Proposal { return &value }
+//go:fix inline
+func pointerProposal(value Proposal) *Proposal { return new(value) }

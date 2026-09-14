@@ -2,6 +2,7 @@ package app
 
 import (
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 
@@ -13,14 +14,28 @@ import (
 	"github.com/snowmerak/q/subagent"
 )
 
+const (
+	customFieldName = iota
+	customFieldDescription
+	customFieldScope
+	customFieldRole
+	customFieldPrompt
+	customFieldTools
+	customFieldDelegates
+	customFieldSave
+	customFieldCount
+)
+
 type customManager struct {
 	cursor, field   int
+	builtins        []subagent.AgentDefinition
 	entries         []subagent.ProfileEntry
 	editing         bool
 	original        *subagent.ProfileEntry
 	inputs          []textinput.Model
 	prompt          textarea.Model
 	tools           map[string]bool
+	delegates       map[string]bool
 	picker          bool
 	options         []string
 	descriptions    map[string]string
@@ -42,17 +57,30 @@ func (m model) enterCustom() (tea.Model, tea.Cmd) {
 	return m, nil
 }
 func (m *model) reloadCustom() {
-	selectedProfilePath := ""
-	if m.custom.cursor >= 0 && m.custom.cursor < len(m.custom.entries) {
-		selectedProfilePath = m.custom.entries[m.custom.cursor].Path
+	selectedID := ""
+	if definition, ok := m.custom.selectedBuiltin(); ok {
+		selectedID = definition.Info.Name
+	} else if index, ok := m.custom.selectedProfileIndex(); ok {
+		selectedID = m.custom.entries[index].Path
 	}
+	m.custom.builtins = subagent.BuiltinAgentDefinitions()
 	m.custom.entries = m.customStore().List()
 	m.custom.cursor = 0
-	if selectedProfilePath != "" {
-		for index, entry := range m.custom.entries {
-			if entry.Path == selectedProfilePath {
+	if selectedID != "" {
+		matched := false
+		for index, definition := range m.custom.builtins {
+			if definition.Info.Name == selectedID {
 				m.custom.cursor = index
+				matched = true
 				break
+			}
+		}
+		if !matched {
+			for index, entry := range m.custom.entries {
+				if entry.Path == selectedID {
+					m.custom.cursor = len(m.custom.builtins) + index
+					break
+				}
 			}
 		}
 	}
@@ -60,16 +88,30 @@ func (m *model) reloadCustom() {
 	m.custom.confirmDelete = false
 }
 func (m model) customCount() int {
-	return len(m.custom.entries)
+	return len(m.custom.builtins) + len(m.custom.entries)
 }
+
+func (c customManager) selectedBuiltin() (subagent.AgentDefinition, bool) {
+	if c.cursor >= 0 && c.cursor < len(c.builtins) {
+		return c.builtins[c.cursor], true
+	}
+	return subagent.AgentDefinition{}, false
+}
+
+func (c customManager) selectedProfileIndex() (int, bool) {
+	index := c.cursor - len(c.builtins)
+	return index, index >= 0 && index < len(c.entries)
+}
+
 func (m model) beginCustomEdit(create bool) (tea.Model, tea.Cmd) {
 	c := &m.custom
 	c.confirmDelete = false
 	c.original = nil
 	c.field = 0
 	c.tools = map[string]bool{}
+	c.delegates = map[string]bool{}
 	c.inputs = nil
-	for i := 0; i < 7; i++ {
+	for range customFieldCount {
 		t := textinput.New()
 		t.SetStyles(textinput.DefaultStyles(m.dark))
 		t.CharLimit = 0
@@ -81,32 +123,40 @@ func (m model) beginCustomEdit(create bool) (tea.Model, tea.Cmd) {
 	c.prompt.CharLimit = 0
 	c.prompt.SetWidth(max(20, m.width-12))
 	c.prompt.SetHeight(max(3, min(10, m.height-15)))
-	c.inputs[0].Placeholder = "code-reader"
-	c.inputs[1].Placeholder = "What this subagent is for"
+	c.inputs[customFieldName].Placeholder = "code-reader"
+	c.inputs[customFieldDescription].Placeholder = "What this subagent is for"
 	c.prompt.Placeholder = "Describe the subagent's responsibilities and expected output."
-	c.inputs[2].SetValue("global")
+	c.inputs[customFieldScope].SetValue("global")
 	if m.workspaceStore != nil {
-		c.inputs[2].SetValue("workspace")
+		c.inputs[customFieldScope].SetValue("workspace")
 	}
-	c.inputs[3].SetValue("scout")
+	c.inputs[customFieldRole].SetValue("scout")
 	if !create {
-		if c.cursor >= len(c.entries) {
+		if definition, builtin := c.selectedBuiltin(); builtin {
+			m.status = definition.Info.Name + " is built-in and read-only"
 			return m, nil
 		}
-		e := c.entries[c.cursor]
+		index, found := c.selectedProfileIndex()
+		if !found {
+			return m, nil
+		}
+		e := c.entries[index]
 		if e.Err != nil {
 			m.status = e.Err.Error()
 			return m, nil
 		}
 		c.original = &e
 		p := e.Profile
-		c.inputs[0].SetValue(p.Name)
-		c.inputs[1].SetValue(p.Description)
-		c.inputs[2].SetValue(e.Scope)
-		c.inputs[3].SetValue(p.Role)
+		c.inputs[customFieldName].SetValue(p.Name)
+		c.inputs[customFieldDescription].SetValue(p.Description)
+		c.inputs[customFieldScope].SetValue(e.Scope)
+		c.inputs[customFieldRole].SetValue(p.Role)
 		c.prompt.SetValue(p.SystemPrompt)
 		for _, t := range p.Tools {
 			c.tools[t] = true
+		}
+		for _, delegate := range p.Delegates {
+			c.delegates[delegate] = true
 		}
 	}
 	c.editing = true
@@ -122,17 +172,17 @@ func (m *model) focusCustom() tea.Cmd {
 	if m.custom.field == len(m.custom.inputs)-1 {
 		return nil
 	}
-	if m.custom.field == 5 || m.custom.field == 2 || m.custom.field == 3 {
+	if m.custom.field == customFieldTools || m.custom.field == customFieldDelegates || m.custom.field == customFieldScope || m.custom.field == customFieldRole {
 		return nil
 	}
-	if m.custom.field == 4 {
+	if m.custom.field == customFieldPrompt {
 		return m.custom.prompt.Focus()
 	}
 	return m.custom.inputs[m.custom.field].Focus()
 }
 
 func (m model) customFieldOptions() []string {
-	if m.custom.field == 3 {
+	if m.custom.field == customFieldRole {
 		return m.activeConfig().NativeRoles()
 	}
 	options := []string{"global"}
@@ -157,12 +207,12 @@ func (m model) openCustomPicker() (tea.Model, tea.Cmd) {
 	c.filter.Placeholder = "Search…"
 	c.filter.SetWidth(max(20, m.width-12))
 	switch {
-	case c.field == 2:
+	case c.field == customFieldScope:
 		c.options = m.customFieldOptions()
 		c.descriptions["global"] = "Available in every workspace"
 		c.descriptions["workspace"] = "Overrides a global profile with the same name here"
 		c.filter.Placeholder = "Search scopes…"
-	case c.field == 3:
+	case c.field == customFieldRole:
 		c.options = m.customFieldOptions()
 		for _, role := range c.options {
 			kind := "Custom model role"
@@ -172,7 +222,7 @@ func (m model) openCustomPicker() (tea.Model, tea.Cmd) {
 			c.descriptions[role] = kind + " · " + m.customRoleModelSummary(role)
 		}
 		c.filter.Placeholder = "Search roles…"
-	case c.field == 5:
+	case c.field == customFieldTools:
 		seen := map[string]bool{}
 		if runtime := m.customTools(); runtime != nil {
 			for _, t := range runtime.Tools() {
@@ -195,11 +245,37 @@ func (m model) openCustomPicker() (tea.Model, tea.Cmd) {
 		}
 		sort.Strings(c.options)
 		c.filter.Placeholder = "Search tools…"
+	case c.field == customFieldDelegates:
+		registry, err := buildSubagentRegistry(m.customStore())
+		if err != nil {
+			m.status = err.Error()
+			return m, nil
+		}
+		self := subagent.CanonicalProfileID(c.inputs[customFieldScope].Value(), strings.TrimSpace(c.inputs[customFieldName].Value()))
+		for _, info := range registry.List() {
+			if info.Name == self || c.inputs[customFieldScope].Value() == "global" && strings.HasPrefix(info.Name, "workspace/") {
+				continue
+			}
+			c.options = append(c.options, info.Name)
+			access := "read-only"
+			if info.MutatesWorkspace {
+				access = "mutates workspace"
+			}
+			c.descriptions[info.Name] = info.Source + " · " + access + "\n" + info.Description
+		}
+		for name := range c.delegates {
+			if _, found := c.descriptions[name]; !found {
+				c.options = append(c.options, name)
+				c.descriptions[name] = "Unavailable in current registry"
+			}
+		}
+		sort.Strings(c.options)
+		c.filter.Placeholder = "Search delegates…"
 	default:
 		return m, nil
 	}
 	c.picker = true
-	if c.field == 2 || c.field == 3 {
+	if c.field == customFieldScope || c.field == customFieldRole {
 		for i, value := range c.options {
 			if value == c.inputs[c.field].Value() {
 				c.pickCursor = i
@@ -287,9 +363,13 @@ func (m model) updateCustom(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			}
 			return m.moveCustomField(delta)
 		case "space":
-			if c.field == 5 && len(matches) > 0 {
+			if (c.field == customFieldTools || c.field == customFieldDelegates) && len(matches) > 0 {
 				choice := matches[min(c.pickCursor, len(matches)-1)]
-				c.tools[choice] = !c.tools[choice]
+				if c.field == customFieldTools {
+					c.tools[choice] = !c.tools[choice]
+				} else {
+					c.delegates[choice] = !c.delegates[choice]
+				}
 				return m, nil
 			}
 		case "esc":
@@ -306,8 +386,12 @@ func (m model) updateCustom(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		case "enter":
 			if len(matches) > 0 {
 				choice := matches[min(c.pickCursor, len(matches)-1)]
-				if c.field == 5 {
-					c.tools[choice] = !c.tools[choice]
+				if c.field == customFieldTools || c.field == customFieldDelegates {
+					if c.field == customFieldTools {
+						c.tools[choice] = !c.tools[choice]
+					} else {
+						c.delegates[choice] = !c.delegates[choice]
+					}
 					return m, nil
 				}
 				c.inputs[c.field].SetValue(choice)
@@ -327,7 +411,7 @@ func (m model) updateCustom(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		if k == "ctrl+down" {
 			return m.moveCustomField(1)
 		}
-		if (c.field == 2 || c.field == 3) && (k == "left" || k == "right" || k == "space") {
+		if (c.field == customFieldScope || c.field == customFieldRole) && (k == "left" || k == "right" || k == "space") {
 			options := m.customFieldOptions()
 			index := 0
 			for i, value := range options {
@@ -347,7 +431,7 @@ func (m model) updateCustom(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 		// Arrow keys match the other settings forms. Inside the multiline
 		// prompt they remain text-navigation keys; Tab always changes fields.
-		if (k == "up" || k == "down") && c.field != 4 {
+		if (k == "up" || k == "down") && c.field != customFieldPrompt {
 			delta := 1
 			if k == "up" {
 				delta = -1
@@ -358,7 +442,7 @@ func (m model) updateCustom(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 		switch k {
 		case "esc":
-			if c.field == 4 {
+			if c.field == customFieldPrompt {
 				return m.moveCustomField(-1)
 			}
 			c.editing = false
@@ -375,16 +459,16 @@ func (m model) updateCustom(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			if c.field == len(c.inputs)-1 {
 				return m.saveCustom()
 			}
-			if c.field == 0 || c.field == 1 {
+			if c.field == customFieldName || c.field == customFieldDescription {
 				c.field++
 				command := m.focusCustom()
 				return m, command
 			}
-			if c.field == 2 || c.field == 3 || c.field == 5 {
+			if c.field == customFieldScope || c.field == customFieldRole || c.field == customFieldTools || c.field == customFieldDelegates {
 				return m.openCustomPicker()
 			}
 		}
-		if c.field == 0 && c.original != nil || c.field == 2 && c.original != nil {
+		if c.field == customFieldName && c.original != nil || c.field == customFieldScope && c.original != nil {
 			return m, nil
 		}
 		return m.updateCustomInput(key)
@@ -425,12 +509,12 @@ func (m model) updateCustomInput(message tea.Msg) (tea.Model, tea.Cmd) {
 		if c.field == len(c.inputs)-1 {
 			return m, nil
 		}
-		if c.field == 5 || c.field == 2 || c.field == 3 {
+		if c.field == customFieldTools || c.field == customFieldDelegates || c.field == customFieldScope || c.field == customFieldRole {
 			return m, nil
 		}
-		if c.field == 4 {
+		if c.field == customFieldPrompt {
 			c.prompt, cmd = c.prompt.Update(message)
-		} else if !(c.field == 0 && c.original != nil) && !(c.field == 2 && c.original != nil) {
+		} else if !(c.field == customFieldName && c.original != nil) && !(c.field == customFieldScope && c.original != nil) {
 			c.inputs[c.field], cmd = c.inputs[c.field].Update(message)
 		}
 	}
@@ -439,7 +523,7 @@ func (m model) updateCustomInput(message tea.Msg) (tea.Model, tea.Cmd) {
 func (m model) saveCustom() (tea.Model, tea.Cmd) {
 	c := &m.custom
 	c.validationError = ""
-	name := strings.TrimSpace(c.inputs[0].Value())
+	name := strings.TrimSpace(c.inputs[customFieldName].Value())
 	savedScope := ""
 	if !config.ValidCustomName(name) {
 		message := "Name: use 1–64 lowercase letters, digits or hyphens; start with a letter."
@@ -455,7 +539,7 @@ func (m model) saveCustom() (tea.Model, tea.Cmd) {
 		if config.ValidCustomName(candidate) {
 			message = "Name: use lowercase letters, digits or hyphens. Try " + candidate + "."
 		}
-		c.field = 0
+		c.field = customFieldName
 		c.picker = false
 		c.validationError = message
 		m.status = "Not saved · " + message
@@ -463,18 +547,26 @@ func (m model) saveCustom() (tea.Model, tea.Cmd) {
 		return m, command
 	}
 	var err error
-	p := subagent.Profile{Version: 1, Name: name, Description: c.inputs[1].Value(), Role: strings.TrimSpace(c.inputs[3].Value()), SystemPrompt: c.prompt.Value(), Tools: []string{}}
+	p := subagent.Profile{Version: 1, Name: name, Description: c.inputs[customFieldDescription].Value(), Role: strings.TrimSpace(c.inputs[customFieldRole].Value()), SystemPrompt: c.prompt.Value(), Tools: []string{}, Delegates: []string{}}
 	for toolName, selected := range c.tools {
 		if selected {
 			p.Tools = append(p.Tools, toolName)
 		}
 	}
 	sort.Strings(p.Tools)
+	for delegate, selected := range c.delegates {
+		if selected {
+			p.Delegates = append(p.Delegates, delegate)
+		}
+	}
+	sort.Strings(p.Delegates)
 	if !m.activeConfig().HasNativeRole(p.Role) {
 		err = fmt.Errorf("unknown native role %q", p.Role)
 	} else {
-		savedScope = c.inputs[2].Value()
-		err = m.customStore().Save(p, savedScope, c.original)
+		savedScope = c.inputs[customFieldScope].Value()
+		if err = m.validateCustomDelegates(p, savedScope, c.original); err == nil {
+			err = m.customStore().Save(p, savedScope, c.original)
+		}
 	}
 	if err != nil {
 		m.status = err.Error()
@@ -487,19 +579,52 @@ func (m model) saveCustom() (tea.Model, tea.Cmd) {
 	m.reloadCustom()
 	for index, entry := range c.entries {
 		if entry.Profile.Name == name && entry.Scope == savedScope {
-			c.cursor = index
+			c.cursor = len(c.builtins) + index
 			break
 		}
 	}
 	m.status = "Saved"
 	return m, nil
 }
+
+func (m model) validateCustomDelegates(profile subagent.Profile, scope string, original *subagent.ProfileEntry) error {
+	definitions := subagent.BuiltinAgentDefinitions()
+	for _, entry := range m.customStore().List() {
+		if entry.Err != nil || original != nil && entry.Path == original.Path {
+			continue
+		}
+		definition, err := subagent.DefinitionForProfile(entry)
+		if err != nil {
+			return err
+		}
+		definitions = append(definitions, definition)
+	}
+	definition, err := subagent.DefinitionForProfile(subagent.ProfileEntry{Profile: profile, Scope: scope})
+	if err != nil {
+		return err
+	}
+	definitions = append(definitions, definition)
+	_, err = subagent.NewRegistry(definitions)
+	return err
+}
 func (m model) deleteCustom() (tea.Model, tea.Cmd) {
 	c := &m.custom
-	if c.cursor >= len(c.entries) {
+	index, found := c.selectedProfileIndex()
+	if !found {
 		return m, nil
 	}
-	err := m.customStore().Delete(c.entries[c.cursor])
+	target := c.entries[index]
+	targetID := subagent.CanonicalProfileID(target.Scope, target.Profile.Name)
+	for _, entry := range m.customStore().List() {
+		if entry.Err != nil || entry.Path == target.Path {
+			continue
+		}
+		if slices.Contains(entry.Profile.Delegates, targetID) {
+			m.status = fmt.Sprintf("Cannot delete %s; referenced by %s/%s", targetID, entry.Scope, entry.Profile.Name)
+			return m, nil
+		}
+	}
+	err := m.customStore().Delete(target)
 	if err != nil {
 		m.status = err.Error()
 		return m, nil

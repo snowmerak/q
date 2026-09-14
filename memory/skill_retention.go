@@ -97,8 +97,8 @@ func retainRecentSkillResources(reads []skillResourceRead, contextWindow int) []
 	seen := make(map[string]struct{}, len(reads))
 	selected := make([]skillResourceRead, 0, len(reads))
 	used := 0
-	for index := len(reads) - 1; index >= 0; index-- {
-		read := reads[index]
+	for _, read := range slices.Backward(reads) {
+
 		if _, found := seen[read.key]; found {
 			continue
 		}

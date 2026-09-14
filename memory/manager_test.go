@@ -26,7 +26,7 @@ func TestPlanAndApplyKeepSystemAndRecent(t *testing.T) {
 	policy := Policy{ContextWindow: 4000, TriggerRatio: .85, TargetRatio: .22, RecentRatio: .07}
 	system := client.Message{Role: client.RoleSystem, Content: "keep system"}
 	m := New(policy, []client.Message{system})
-	for index := 0; index < 8; index++ {
+	for range 8 {
 		m.Append(client.Message{Role: client.RoleUser, Content: strings.Repeat("old context ", 80)})
 		m.Append(client.Message{Role: client.RoleAssistant, Content: strings.Repeat("answer ", 80)})
 	}
@@ -55,7 +55,7 @@ func TestPlanAndApplyKeepSystemAndRecent(t *testing.T) {
 func TestApplyAcceptsCompactedContextAboveTarget(t *testing.T) {
 	policy := Policy{ContextWindow: 10_000, TriggerRatio: .80, TargetRatio: .15, RecentRatio: .05}
 	manager := New(policy, []client.Message{{Role: client.RoleSystem, Content: "keep system"}})
-	for index := 0; index < 16; index++ {
+	for range 16 {
 		manager.Append(client.Message{Role: client.RoleUser, Content: strings.Repeat("old context ", 120)})
 		manager.Append(client.Message{Role: client.RoleAssistant, Content: strings.Repeat("old answer ", 120)})
 	}
@@ -88,7 +88,7 @@ func TestUsageCalibratesProviderOverhead(t *testing.T) {
 func TestApplyCarriesHigherPlanOverhead(t *testing.T) {
 	policy := Policy{ContextWindow: 100_000, TriggerRatio: .85, TargetRatio: .22, RecentRatio: .07}
 	history := []client.Message{{Role: client.RoleSystem, Content: "keep system"}}
-	for index := 0; index < 8; index++ {
+	for range 8 {
 		history = append(history, client.Message{Role: client.RoleUser, Content: strings.Repeat("old context ", 1_000)})
 	}
 	source := New(policy, history)
@@ -128,7 +128,7 @@ func TestPlanWithRetentionKeepsPrefixAndCompactsLaterSystemMessages(t *testing.T
 	m := New(policy, anchors)
 	reminder := client.Message{Role: client.RoleSystem, Content: strings.Repeat("transient reminder ", 120)}
 	m.Append(reminder)
-	for index := 0; index < 6; index++ {
+	for range 6 {
 		m.Append(client.Message{Role: client.RoleAssistant, Content: strings.Repeat("working history ", 100)})
 	}
 	m.Append(client.Message{Role: client.RoleUser, Content: "latest loop state"})
