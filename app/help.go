@@ -72,9 +72,12 @@ func (m model) leaveHelp() (tea.Model, tea.Cmd) {
 			return m, m.mcpInputs[m.mcpFormFocus].Focus()
 		}
 		return m, nil
-	case screenAgents:
-		if m.agentsMode != agentsModeList {
+	case screenCustom:
+		if m.custom.connections && m.agentsMode != agentsModeList {
 			return m, m.agentsInputs[m.agentsFormFocus].Focus()
+		}
+		if m.custom.editing {
+			return m, m.focusCustom()
 		}
 		return m, nil
 	case screenGatewayNetwork:
@@ -258,7 +261,7 @@ func renderHelpContent(dark bool, commandSets ...[]slashCommand) string {
 		{"q gateway start", "Run only the standalone OpenAI-compatible Gateway."},
 		{"q model", "Configure main, embedding, and subagent models."},
 		{"q mcp", "Configure external MCP tool servers and per-role assignments."},
-		{"q agents", "Configure ACP agents and assign the Search role."},
+		{"q subagents", "Manage subagents, ACP connections, and external bindings."},
 		{"q skills", "Manage global and current-workspace Agent Skills."},
 		{"q lsp", "Configure language servers and discover workspace roots."},
 		{"q ignore", "Edit the current workspace's .qignore rules."},

@@ -114,8 +114,7 @@ screen and returns to the previous screen without discarding its state.
 | `/skills` | Manage global and workspace Agent Skills. |
 | `/lsp` | Configure language servers and project roots. |
 | `/mcp` | Configure external MCP servers and role assignments. |
-| `/agents` | Configure ACP agent processes and external Search/Web Tester roles. |
-| `/subagents [list\|show <name>]` | Manage custom profiles and inspect builtin or custom subagents. |
+| `/subagents [list\|show <name>]` | Manage builtin/custom subagents, external bindings, and ACP connections. |
 | `/subagent <name> <request>` | Run a public builtin or custom subagent. |
 | `/help` | Open the scrollable command and key guide. |
 
@@ -275,12 +274,15 @@ only when automation requires it.
 
 ## Subagents
 
-Open `/subagents` in the TUI to inspect builtin definitions and manage runnable
-custom profiles. Builtins are read-only. For custom entries, `a` adds, `e` edits,
+Open `/subagents` in the TUI to inspect builtin definitions and manage runnable custom
+profiles. Inner and external execution are shown by the stored `kind`, not by an ID namespace.
+Builtin inner entries are read-only. Pressing `e` on a builtin external entry changes only
+its ACP binding; its built-in system prompt remains fixed. Press `c` to register, edit, test,
+enable, disable, or delete shared ACP connections. For custom entries, `a` adds, `e` edits,
 and `d` deletes the selected profile after confirmation. Each list row summarizes
 its model role, scope, tool state, and delegation grants.
 In an editor, Tab or Up/Down selects fields, Enter advances from name and
-description or opens a scope/role/tool/delegate picker, Ctrl+S saves, and Esc cancels.
+description or opens a scope/kind/role/ACP/tool/delegate picker, Ctrl+S saves, and Esc cancels.
 Inside the multiline prompt, Enter inserts a newline and arrows move the cursor;
 Tab moves to the next field; Shift+Tab, Esc, or Ctrl+Up returns to the previous
 field without discarding the prompt. Scope and Role cycle with Left/Right or
@@ -291,8 +293,8 @@ Ctrl+S or F2 saves from any editor field or open selection list. You can also
 Tab to the final Save action and press Enter. Validation errors keep
 the draft available for correction. The system prompt supports multiple lines.
 
-A profile combines a system prompt, an explicit tool list, directly callable
-subagents, and a native model role. A custom role uses the existing model,
+A profile is either `inner` or `external`. An inner profile combines a system prompt, an
+explicit tool list, directly callable subagents, and a native model role. A custom role uses the existing model,
 model-group, and reasoning settings
 in `~/.q/config.yaml`. Manage role assignments from `/model`: `a` creates a
 custom role and `d` deletes one after confirmation. Built-in native roles can
@@ -310,10 +312,17 @@ in the known global and current-workspace profiles before deletion from `/model`
 A profile referenced by another profile's `delegates` cannot be deleted from the
 TUI until that grant is removed.
 
+An external profile instead stores an ACP connection, a system prompt, and whether the
+connection may mutate the workspace. It does not select a q model role, q tools, or delegates.
+ACP has no system-message field in its session-creation contract, so q prepends the stored
+system prompt to the first ordinary ACP prompt before the explicit request. Disabled or missing
+connections make the profile unavailable without deleting it.
+
 ```yaml
 version: 1
 name: code-reader
 description: Explain the requested code.
+kind: inner
 role: scout
 system_prompt: |
   Read the requested code and explain its behavior with concrete file references.
@@ -324,10 +333,25 @@ delegates:
   - builtin/scout
 ```
 
+```yaml
+version: 1
+name: browser-check
+description: Verify browser behavior through an ACP agent.
+kind: external
+agent: browser
+system_prompt: |
+  Verify only the requested browser behavior and report observed evidence.
+mutates_workspace: true
+tools: []
+delegates: []
+```
+
 TUI and ACP support `/subagents list`, `/subagents show code-reader`, and
 `/subagent code-reader explain the cancellation handling in app/model.go`.
 The public builtin IDs are `builtin/scout`, `builtin/griller`, `builtin/planner`,
-`builtin/reviewer`, and `builtin/coder`. Bare `/subagents` opens the profile UI
+`builtin/reviewer`, `builtin/coder`, `builtin/web-search`, and `builtin/web-tester`.
+The latter two have `kind: external`; other external agents use their normal
+`global/...` or `workspace/...` profile ID. Bare `/subagents` opens the profile UI
 in the TUI and lists all available definitions in ACP. Creation, editing, and
 deletion use the TUI or profile files. Pass all necessary task context in the
 request: the child does not automatically inherit the parent conversation.
@@ -335,8 +359,9 @@ request: the child does not automatically inherit the parent conversation.
 IDs (`builtin/...`, `global/...`, or `workspace/...`). Unavailable tools, roles,
 or delegates produce an error before the model runs.
 
-Delegated agents share the host-provided `task_start` and `task_complete`
-lifecycle. General chat receives `delegate_list` and `delegate`; custom agents
+Inner delegated agents share the host-provided `task_start` and `task_complete`
+lifecycle. External delegates bypass native model and tool scoping and use their existing ACP
+invocation adapter and Loom capture. General chat receives `delegate_list` and `delegate`; custom agents
 receive them only when their profile has direct grants. `/plan` and `q sprint`
 retain their approval-gated Go workflow and internal Coder/Planner review.
 
@@ -499,7 +524,7 @@ omits the chat-only `learn` tool.
 | `q usage` | Open the local token-usage dashboard and host its service when needed. |
 | `q commit` | Open the commit workflow in the current repository. |
 | `q model` | Configure model and role assignments. |
-| `q agents` | Configure ACP agent connections and external Search/Web Tester roles. |
+| `q subagents` | Manage subagents, external bindings, and ACP connections. (`q agents` is a compatibility alias.) |
 | `q mcp` | Configure external MCP servers. |
 | `q skills` | Manage Agent Skills. |
 | `q lsp` | Configure language servers. |

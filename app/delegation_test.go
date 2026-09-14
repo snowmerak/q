@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"encoding/json"
 	"strings"
 	"testing"
@@ -62,6 +63,14 @@ func TestRootDelegationListContainsBuiltinsAndCanonicalProfiles(t *testing.T) {
 	store := config.Store{Dir: t.TempDir()}
 	value := config.Default()
 	value.Provider.Model = "test-model"
+	value.Agents.Connections = map[string]config.AgentConnectionConfig{
+		"search-agent": {Preset: "codex"},
+		"web-agent":    {Preset: "codex"},
+	}
+	value.Agents.Roles = map[string]config.AgentConfig{
+		config.AgentRoleSearch:            {Agent: "search-agent"},
+		config.AgentRoleExternalWebTester: {Agent: "web-agent"},
+	}
 	m := newModel(t.Context(), store, nil)
 	m.config = value
 	m.client = &fakeClient{models: []client.Model{{ID: "test-model"}}}
@@ -89,9 +98,176 @@ func TestRootDelegationListContainsBuiltinsAndCanonicalProfiles(t *testing.T) {
 		t.Fatal(err)
 	}
 	names := delegateInfoNames(listed)
-	for _, expected := range []string{subagent.BuiltinScoutID, subagent.BuiltinCoderID, "global/reader"} {
+	for _, expected := range []string{subagent.BuiltinScoutID, subagent.BuiltinCoderID, subagent.BuiltinWebSearchID, subagent.BuiltinWebTesterID, "global/reader"} {
 		if !containsAgentName(names, expected) {
 			t.Fatalf("missing %s from %#v", expected, listed)
+		}
+	}
+	for _, info := range listed {
+		if strings.HasPrefix(info.Name, "external/") {
+			t.Fatalf("kind leaked into subagent ID = %#v", info)
+		}
+	}
+}
+
+func TestExternalDelegationUsesACPInvocationWithoutCallingNativeModel(t *testing.T) {
+	registry, err := subagent.NewRegistry(subagent.PublicAgentDefinitions())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var received subagent.ExternalSearchInput
+	var captured subagent.InvocationSource
+	dispatcher := &delegationDispatcher{
+		registry: registry,
+		external: map[string]subagent.Invocation{
+			subagent.BuiltinWebSearchID: {
+				Tool: subagent.ExternalSearchTool(),
+				Source: subagent.InvocationSource{
+					Protocol: "acp", Name: "search-agent", Kind: "agent-result",
+					MediaType: "application/vnd.q.agent-result+json",
+				},
+				Handler: func(_ context.Context, call client.ToolCall) (client.ToolResult, error) {
+					var parseErr error
+					received, parseErr = subagent.ParseExternalSearchInput(call.Function.Arguments)
+					return client.ToolResult{Content: `{"agent":"search-agent","summary":"found it"}`}, parseErr
+				},
+			},
+		},
+		capture: func(_ context.Context, source subagent.InvocationSource, _ client.ToolCall, result client.ToolResult) (client.ToolResult, error) {
+			captured = source
+			return result, nil
+		},
+	}
+	runtime := &delegationRuntime{base: &fakeAgentTools{}, dispatcher: dispatcher}
+	result, err := runtime.Call(t.Context(), client.ToolCall{
+		ID: "delegate-external", Function: client.FunctionCall{Name: subagent.DelegateToolName,
+			Arguments: `{"subagent_name":"builtin/web-search","prompt":"find current release notes"}`},
+	})
+	if err != nil || result.IsError {
+		t.Fatalf("result = %#v, err = %v", result, err)
+	}
+	if received.Query != "find current release notes" || captured.Protocol != "acp" || captured.Name != "search-agent" {
+		t.Fatalf("input = %#v, source = %#v", received, captured)
+	}
+}
+
+func TestExternalWebTesterDelegationUsesRequestAdapter(t *testing.T) {
+	registry, err := subagent.NewRegistry(subagent.PublicAgentDefinitions())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var received subagent.ExternalWebTesterInput
+	dispatcher := &delegationDispatcher{
+		registry: registry,
+		external: map[string]subagent.Invocation{
+			subagent.BuiltinWebTesterID: {
+				Tool: subagent.ExternalWebTesterTool(),
+				Source: subagent.InvocationSource{
+					Protocol: "acp", Name: "web-agent", Kind: "agent-result",
+					MediaType: "application/vnd.q.agent-result+json",
+				},
+				Handler: func(_ context.Context, call client.ToolCall) (client.ToolResult, error) {
+					var parseErr error
+					received, parseErr = subagent.ParseExternalWebTesterInput(call.Function.Arguments)
+					return client.ToolResult{Content: `{"agent":"web-agent","outcome":"succeeded","summary":"verified"}`}, parseErr
+				},
+			},
+		},
+		capture: func(_ context.Context, _ subagent.InvocationSource, _ client.ToolCall, result client.ToolResult) (client.ToolResult, error) {
+			return result, nil
+		},
+	}
+	runtime := &delegationRuntime{base: &fakeAgentTools{}, dispatcher: dispatcher}
+	result, err := runtime.Call(t.Context(), client.ToolCall{
+		ID: "delegate-web", Function: client.FunctionCall{Name: subagent.DelegateToolName,
+			Arguments: `{"subagent_name":"builtin/web-tester","prompt":"verify login"}`},
+	})
+	if err != nil || result.IsError || received.Request != "verify login" {
+		t.Fatalf("result = %#v, input = %#v, err = %v", result, received, err)
+	}
+}
+
+func TestCustomExternalDelegationUsesGenericACPAdapter(t *testing.T) {
+	definition := subagent.AgentDefinition{
+		Info:         subagent.DelegateInfo{Name: "global/researcher", Source: "global", Kind: subagent.AgentKindExternal},
+		SystemPrompt: "Research primary sources.", Connection: "research-acp",
+	}
+	registry, err := subagent.NewRegistry(append(subagent.PublicAgentDefinitions(), definition))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var received externalSubagentInput
+	dispatcher := &delegationDispatcher{
+		registry: registry,
+		external: map[string]subagent.Invocation{
+			definition.Info.Name: {
+				Tool:   configuredExternalSubagentInvocation("", "research-acp", config.AgentConnectionConfig{Preset: "codex"}, definition).Tool,
+				Source: subagent.InvocationSource{Protocol: "acp", Name: "research-acp", Kind: "agent-result"},
+				Handler: func(_ context.Context, call client.ToolCall) (client.ToolResult, error) {
+					if err := decodeDelegationArguments(call.Function.Arguments, &received); err != nil {
+						return client.ToolResult{}, err
+					}
+					return client.ToolResult{Content: "researched"}, nil
+				},
+			},
+		},
+		capture: func(_ context.Context, _ subagent.InvocationSource, _ client.ToolCall, result client.ToolResult) (client.ToolResult, error) {
+			return result, nil
+		},
+	}
+	runtime := &delegationRuntime{base: &fakeAgentTools{}, dispatcher: dispatcher}
+	result, err := runtime.Call(t.Context(), client.ToolCall{Function: client.FunctionCall{
+		Name: subagent.DelegateToolName, Arguments: `{"subagent_name":"global/researcher","prompt":"find the release"}`,
+	}})
+	if err != nil || result.IsError || received.Request != "find the release" {
+		t.Fatalf("result = %#v, input = %#v, err = %v", result, received, err)
+	}
+	if prompt := externalSubagentPrompt(definition.SystemPrompt, received.Request); !strings.HasPrefix(prompt, definition.SystemPrompt+"\n\nRequest:\n") {
+		t.Fatalf("prompt = %q", prompt)
+	}
+}
+
+func TestConfiguredExternalDelegatesIncludesCustomProfileConnection(t *testing.T) {
+	definition := subagent.AgentDefinition{
+		Info:         subagent.DelegateInfo{Name: "workspace/researcher", Source: "workspace", Kind: subagent.AgentKindExternal},
+		SystemPrompt: "Research the explicit request.", Connection: "research-acp",
+	}
+	registry, err := subagent.NewRegistry(append(subagent.PublicAgentDefinitions(), definition))
+	if err != nil {
+		t.Fatal(err)
+	}
+	value := config.Default()
+	value.Agents.Connections = map[string]config.AgentConnectionConfig{"research-acp": {Preset: "codex"}}
+	configured := configuredExternalDelegates(value, t.TempDir(), registry)
+	invocation, found := configured[definition.Info.Name]
+	if !found || invocation.Source.Protocol != "acp" || invocation.Source.Name != "research-acp" || invocation.Source.MediaType != "text/plain" {
+		t.Fatalf("invocation = %#v, found = %v", invocation, found)
+	}
+	connection := value.Agents.Connections["research-acp"]
+	connection.Disabled = true
+	value.Agents.Connections["research-acp"] = connection
+	if _, found = configuredExternalDelegates(value, t.TempDir(), registry)[definition.Info.Name]; found {
+		t.Fatal("disabled custom external connection remained available")
+	}
+}
+
+func TestUnconfiguredExternalDelegatesAreNotAdvertised(t *testing.T) {
+	registry, err := subagent.NewRegistry(subagent.PublicAgentDefinitions())
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime := &delegationRuntime{
+		base: &fakeAgentTools{},
+		dispatcher: &delegationDispatcher{
+			registry: registry, value: config.Default(), tools: &fakeAgentTools{},
+			capture: func(_ context.Context, _ subagent.InvocationSource, _ client.ToolCall, result client.ToolResult) (client.ToolResult, error) {
+				return result, nil
+			},
+		},
+	}
+	for _, info := range runtime.available() {
+		if info.Kind == subagent.AgentKindExternal {
+			t.Fatalf("unconfigured external delegate advertised: %#v", info)
 		}
 	}
 }

@@ -163,7 +163,7 @@ func TestCustomTUIManageProfile(t *testing.T) {
 	updated, _ = m.beginCustomEdit(true)
 	m = updated.(model)
 	m.custom.inputs[0].SetValue("inspector")
-	m.custom.inputs[3].SetValue("analyst")
+	m.custom.inputs[customFieldRole].SetValue("analyst")
 	m.custom.prompt.SetValue("First\nSecond")
 	updated, _ = m.saveCustom()
 	m = updated.(model)
@@ -175,7 +175,7 @@ func TestCustomTUIManageProfile(t *testing.T) {
 	if !found || m.custom.entries[index].Profile.Name != "inspector" {
 		t.Fatal("saved profile was not selected")
 	}
-	m.custom.cursor = len(m.custom.builtins)
+	m.custom.cursor = len(m.custom.fixed)
 	updated, _ = m.beginCustomEdit(false)
 	m = updated.(model)
 	m.custom.prompt.SetValue("Updated")

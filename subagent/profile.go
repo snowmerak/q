@@ -15,27 +15,64 @@ import (
 )
 
 type Profile struct {
-	Version      int      `yaml:"version" json:"version"`
-	Name         string   `yaml:"name" json:"name"`
-	Description  string   `yaml:"description,omitempty" json:"description,omitempty"`
-	Role         string   `yaml:"role" json:"role"`
-	SystemPrompt string   `yaml:"system_prompt" json:"system_prompt"`
-	Tools        []string `yaml:"tools" json:"tools"`
-	Delegates    []string `yaml:"delegates" json:"delegates"`
+	Version          int      `yaml:"version" json:"version"`
+	Name             string   `yaml:"name" json:"name"`
+	Description      string   `yaml:"description,omitempty" json:"description,omitempty"`
+	Kind             string   `yaml:"kind,omitempty" json:"kind,omitempty"`
+	Role             string   `yaml:"role,omitempty" json:"role,omitempty"`
+	Agent            string   `yaml:"agent,omitempty" json:"agent,omitempty"`
+	SystemPrompt     string   `yaml:"system_prompt" json:"system_prompt"`
+	MutatesWorkspace bool     `yaml:"mutates_workspace,omitempty" json:"mutates_workspace,omitempty"`
+	Tools            []string `yaml:"tools" json:"tools"`
+	Delegates        []string `yaml:"delegates" json:"delegates"`
+}
+
+func (p Profile) EffectiveKind() string {
+	if strings.TrimSpace(p.Kind) == "" {
+		return AgentKindInner
+	}
+	return strings.TrimSpace(p.Kind)
 }
 
 func (p Profile) Validate() error {
 	if p.Version != 1 {
 		return errors.New("profile: version must be 1")
 	}
-	if !config.ValidCustomName(p.Name) || !config.ValidCustomName(p.Role) {
-		return errors.New("profile: invalid name or role")
+	if !config.ValidCustomName(p.Name) {
+		return errors.New("profile: invalid name")
+	}
+	if p.Kind != strings.TrimSpace(p.Kind) {
+		return errors.New("profile: kind must not have surrounding whitespace")
 	}
 	if strings.TrimSpace(p.SystemPrompt) == "" {
 		return errors.New("profile: system_prompt is required")
 	}
-	if p.Tools == nil {
-		return errors.New("profile: tools is required (use [] for none)")
+	switch p.EffectiveKind() {
+	case AgentKindInner:
+		if !config.ValidCustomName(p.Role) {
+			return errors.New("profile: invalid role")
+		}
+		if p.Agent != "" {
+			return errors.New("profile: inner subagent does not accept an ACP agent")
+		}
+		if p.MutatesWorkspace {
+			return errors.New("profile: inner subagent mutation access is derived from tools")
+		}
+		if p.Tools == nil {
+			return errors.New("profile: tools is required for inner subagents (use [] for none)")
+		}
+	case AgentKindExternal:
+		if p.Role != "" {
+			return errors.New("profile: external subagent does not accept a model role")
+		}
+		if !config.ValidAgentConnectionID(p.Agent) {
+			return errors.New("profile: external subagent requires a valid ACP agent connection")
+		}
+		if len(p.Tools) != 0 || len(p.Delegates) != 0 {
+			return errors.New("profile: external subagent cannot select q tools or delegates")
+		}
+	default:
+		return fmt.Errorf("profile: invalid kind %q", p.Kind)
 	}
 	seen := map[string]bool{}
 	for _, name := range p.Tools {
@@ -73,6 +110,9 @@ func ParseProfile(raw []byte) (Profile, error) {
 	var extra any
 	if err := d.Decode(&extra); err != io.EOF {
 		return p, errors.New("profile: expected one YAML document")
+	}
+	if p.Kind == "" {
+		p.Kind = AgentKindInner
 	}
 	return p, p.Validate()
 }
@@ -145,6 +185,7 @@ func (s ProfileStore) Get(name string) (ProfileEntry, error) {
 	return ProfileEntry{}, fmt.Errorf("unknown subagent %q", name)
 }
 func (s ProfileStore) Save(p Profile, scope string, original *ProfileEntry) error {
+	p.Kind = p.EffectiveKind()
 	if err := p.Validate(); err != nil {
 		return err
 	}

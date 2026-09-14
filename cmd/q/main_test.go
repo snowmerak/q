@@ -30,7 +30,7 @@ func TestParseServiceCommand(t *testing.T) {
 }
 
 func TestStandaloneUICommandNames(t *testing.T) {
-	for _, name := range []string{"model", "mcp", "agents", "skills", "ignore", "lsp", "help"} {
+	for _, name := range []string{"model", "mcp", "subagents", "agents", "skills", "ignore", "lsp", "help"} {
 		if standaloneUICommand(name) == nil {
 			t.Fatalf("standalone command %q is not registered", name)
 		}

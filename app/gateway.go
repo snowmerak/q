@@ -278,12 +278,18 @@ func (m model) viewGateway() string {
 			prefix = "› "
 			style = activeLabelStyle
 		}
-		body.WriteString(prefix + style.Render(label) + subtleStyle.Render(" · "+details[index]) + "\n")
+		body.WriteString(prefix)
+		body.WriteString(style.Render(label))
+		body.WriteString(subtleStyle.Render(" · " + details[index]))
+		body.WriteString("\n")
 	}
 	if m.status != "" {
-		body.WriteString("\n" + errorStyle.Render(m.status) + "\n")
+		body.WriteString("\n")
+		body.WriteString(errorStyle.Render(m.status))
+		body.WriteString("\n")
 	}
-	body.WriteString("\n" + helpStyle.Render("↑/↓ select · enter open · esc back"))
+	body.WriteString("\n")
+	body.WriteString(helpStyle.Render("↑/↓ select · enter open · esc back"))
 	return frameStyle.Width(max(36, m.width-4)).Render(body.String())
 }
 
@@ -293,11 +299,18 @@ func (m model) viewGatewayNetwork() string {
 	body.WriteString("\n")
 	m.writeWorkspacePath(&body)
 	body.WriteString(subtleStyle.Render("Saved defaults are used by `q gateway start`; port conflicts fall back to a random port."))
-	body.WriteString("\n\n" + m.gatewayHostInput.View() + "\n\n" + m.gatewayPortInput.View() + "\n")
+	body.WriteString("\n\n")
+	body.WriteString(m.gatewayHostInput.View())
+	body.WriteString("\n\n")
+	body.WriteString(m.gatewayPortInput.View())
+	body.WriteString("\n")
 	if m.status != "" {
-		body.WriteString("\n" + subtleStyle.Render(m.status) + "\n")
+		body.WriteString("\n")
+		body.WriteString(subtleStyle.Render(m.status))
+		body.WriteString("\n")
 	}
-	body.WriteString("\n" + helpStyle.Render("tab/↑/↓ field · enter apply · esc back"))
+	body.WriteString("\n")
+	body.WriteString(helpStyle.Render("tab/↑/↓ field · enter apply · esc back"))
 	return frameStyle.Width(max(36, m.width-4)).Render(body.String())
 }
 
@@ -310,21 +323,30 @@ func (m model) viewGatewayKeys() string {
 	body.WriteString("\n")
 	if m.generatedGatewayKey != "" {
 		body.WriteString(subtleStyle.Render("Copy this key now. It will not be shown again."))
-		body.WriteString("\n\n" + activeLabelStyle.Render(m.generatedGatewayKey) + "\n\n")
+		body.WriteString("\n\n")
+		body.WriteString(activeLabelStyle.Render(m.generatedGatewayKey))
+		body.WriteString("\n\n")
 		body.WriteString(helpStyle.Render("enter/esc dismiss"))
 		return frameStyle.Width(max(36, m.width-4)).Render(body.String())
 	}
 	if m.gatewayKeyAdding {
 		body.WriteString(subtleStyle.Render("Choose a unique alias."))
-		body.WriteString("\n\n" + m.gatewayKeyAlias.View() + "\n")
+		body.WriteString("\n\n")
+		body.WriteString(m.gatewayKeyAlias.View())
+		body.WriteString("\n")
 		if m.status != "" {
-			body.WriteString("\n" + errorStyle.Render(m.status) + "\n")
+			body.WriteString("\n")
+			body.WriteString(errorStyle.Render(m.status))
+			body.WriteString("\n")
 		}
-		body.WriteString("\n" + helpStyle.Render("enter generate · esc cancel"))
+		body.WriteString("\n")
+		body.WriteString(helpStyle.Render("enter generate · esc cancel"))
 		return frameStyle.Width(max(36, m.width-4)).Render(body.String())
 	}
 	if len(m.gatewaySettings.APIKeys) == 0 {
-		body.WriteString("\n" + emptyStyle.Render("No API keys configured") + "\n")
+		body.WriteString("\n")
+		body.WriteString(emptyStyle.Render("No API keys configured"))
+		body.WriteString("\n")
 	} else {
 		body.WriteString("\n")
 		for index, key := range m.gatewaySettings.APIKeys {
@@ -342,12 +364,18 @@ func (m model) viewGatewayKeys() string {
 			if len(shortID) > 8 {
 				shortID = shortID[:8]
 			}
-			body.WriteString(prefix + style.Render(key.Alias) + subtleStyle.Render(" · "+shortID+" · "+state) + "\n")
+			body.WriteString(prefix)
+			body.WriteString(style.Render(key.Alias))
+			body.WriteString(subtleStyle.Render(" · " + shortID + " · " + state))
+			body.WriteString("\n")
 		}
 	}
 	if m.status != "" {
-		body.WriteString("\n" + subtleStyle.Render(m.status) + "\n")
+		body.WriteString("\n")
+		body.WriteString(subtleStyle.Render(m.status))
+		body.WriteString("\n")
 	}
-	body.WriteString("\n" + helpStyle.Render("↑/↓ select · a generate · r revoke · esc back"))
+	body.WriteString("\n")
+	body.WriteString(helpStyle.Render("↑/↓ select · a generate · r revoke · esc back"))
 	return frameStyle.Width(max(36, m.width-4)).Render(body.String())
 }

@@ -3,8 +3,6 @@ package app
 import (
 	"context"
 	"encoding/json"
-	"errors"
-	"fmt"
 	"maps"
 	"os"
 	"sort"
@@ -12,8 +10,8 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
-	"charm.land/lipgloss/v2"
 	"github.com/snowmerak/q/config"
+	"github.com/snowmerak/q/subagent"
 )
 
 type agentsScreenMode uint8
@@ -22,77 +20,6 @@ const (
 	agentsModeList agentsScreenMode = iota
 	agentsModeEditConnection
 )
-
-func (m model) enterAgents() (tea.Model, tea.Cmd) {
-	value, err := m.store.Load()
-	if err != nil {
-		m.status = err.Error()
-		return m, m.input.Focus()
-	}
-	m.screen = screenAgents
-	m.input.Blur()
-	m.agentsDraft = cloneConfigForAgents(value)
-	m.agentsOriginal = cloneConfigForAgents(value)
-	m.agentsPanel = 0
-	m.agentsCursor = [2]int{}
-	m.agentsMode = agentsModeList
-	m.agentsEditID = ""
-	m.agentsDiscardArmed = false
-	m.agentsBusy = false
-	m.agentsProbe = make(map[string]string)
-	m.status = ""
-	m.resize(m.width, m.height)
-	return m, nil
-}
-
-func (m model) updateAgents(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
-	if m.agentsBusy {
-		return m, nil
-	}
-	if m.agentsMode != agentsModeList {
-		return m.updateAgentsForm(key)
-	}
-	switch key.String() {
-	case "tab", "left", "right":
-		m.agentsPanel = 1 - m.agentsPanel
-		m.status = ""
-	case "up", "k":
-		m.moveAgentsCursor(-1)
-	case "down", "j":
-		m.moveAgentsCursor(1)
-	case "a":
-		return m.beginAgentConnectionAdd()
-	case "e", "enter":
-		if m.agentsPanel == 1 {
-			return m.beginAgentConnectionEdit()
-		}
-	case "d", "delete", "backspace":
-		if m.agentsPanel == 1 {
-			return m.deleteAgentConnection()
-		}
-	case " ", "space":
-		return m.assignAgentRole()
-	case "t":
-		if m.agentsPanel == 1 {
-			return m.toggleAgentConnection()
-		}
-	case "c":
-		return m.probeAgentConnection()
-	case "esc":
-		if m.agentsModified() && !m.agentsDiscardArmed {
-			m.agentsDiscardArmed = true
-			m.status = "Settings were not saved · press esc again to discard the pending changes"
-			return m, nil
-		}
-		m.screen = screenChat
-		m.status = ""
-		if m.isStandaloneScreen(screenAgents) {
-			return m, tea.Quit
-		}
-		return m, m.input.Focus()
-	}
-	return m, nil
-}
 
 func (m model) updateAgentsForm(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch key.String() {
@@ -111,18 +38,6 @@ func (m model) updateAgentsForm(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	var command tea.Cmd
 	m.agentsInputs[m.agentsFormFocus], command = m.agentsInputs[m.agentsFormFocus].Update(key)
 	return m, command
-}
-
-func (m *model) moveAgentsCursor(delta int) {
-	length := len(agentExternalRoles())
-	if m.agentsPanel == 1 {
-		length = len(agentConnectionIDs(m.agentsDraft.Agents))
-	}
-	if length == 0 {
-		m.agentsCursor[m.agentsPanel] = 0
-		return
-	}
-	m.agentsCursor[m.agentsPanel] = (m.agentsCursor[m.agentsPanel] + delta + length) % length
 }
 
 func (m model) beginAgentConnectionAdd() (tea.Model, tea.Cmd) {
@@ -182,23 +97,18 @@ func (m model) acceptAgentsForm() (tea.Model, tea.Cmd) {
 	if previous, found := m.agentsDraft.Agents.Connections[m.agentsEditID]; found {
 		connection.Disabled = previous.Disabled
 	}
+	if m.agentsEditID != "" && id != m.agentsEditID {
+		m.status = "Connection ID cannot change; add a new connection instead"
+		return m, m.agentsInputs[0].Focus()
+	}
 	candidate := cloneConfigForAgents(m.agentsDraft)
 	if candidate.Agents.Connections == nil {
 		candidate.Agents.Connections = make(map[string]config.AgentConnectionConfig)
 	}
-	if id != m.agentsEditID {
+	if m.agentsEditID == "" {
 		if _, exists := candidate.Agents.Connections[id]; exists {
 			m.status = "Agent connection already exists · " + id
 			return m, m.agentsInputs[0].Focus()
-		}
-		if m.agentsEditID != "" {
-			delete(candidate.Agents.Connections, m.agentsEditID)
-			for role, assignment := range candidate.Agents.Roles {
-				if assignment.Agent == m.agentsEditID {
-					assignment.Agent = id
-					candidate.Agents.Roles[role] = assignment
-				}
-			}
 		}
 	}
 	candidate.Agents.Connections[id] = connection
@@ -209,7 +119,6 @@ func (m model) acceptAgentsForm() (tea.Model, tea.Cmd) {
 	delete(m.agentsProbe, m.agentsEditID)
 	delete(m.agentsProbe, id)
 	m.agentsDraft = candidate
-	m.agentsDiscardArmed = false
 	m.cancelAgentsForm()
 	return m.saveAgentsSettings()
 }
@@ -236,38 +145,25 @@ func (m model) deleteAgentConnection() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	id := ids[min(m.agentsCursor[1], len(ids)-1)]
-	delete(m.agentsDraft.Agents.Connections, id)
-	delete(m.agentsProbe, id)
-	for role, assignment := range m.agentsDraft.Agents.Roles {
-		if assignment.Agent == id {
-			assignment.Agent = ""
-			m.agentsDraft.Agents.Roles[role] = assignment
+	var references []string
+	for _, definition := range subagent.ExternalAgentDefinitions() {
+		if m.agentsDraft.Agents.Roles[definition.Info.Role].Agent == id {
+			references = append(references, definition.Info.Name)
 		}
 	}
-	m.agentsCursor[1] = min(m.agentsCursor[1], max(0, len(ids)-2))
-	m.agentsDiscardArmed = false
-	return m.saveAgentsSettings()
-}
-
-func (m model) assignAgentRole() (tea.Model, tea.Cmd) {
-	roles, ids := agentExternalRoles(), agentConnectionIDs(m.agentsDraft.Agents)
-	if len(ids) == 0 {
-		m.status = "Add an ACP agent connection first"
+	for _, entry := range m.customStore().List() {
+		if entry.Err == nil && entry.Profile.EffectiveKind() == subagent.AgentKindExternal && entry.Profile.Agent == id {
+			references = append(references, subagent.CanonicalProfileID(entry.Scope, entry.Profile.Name))
+		}
+	}
+	if len(references) > 0 {
+		sort.Strings(references)
+		m.status = "Connection is used by subagents: " + strings.Join(references, ", ")
 		return m, nil
 	}
-	role := roles[min(m.agentsCursor[0], len(roles)-1)]
-	id := ids[min(m.agentsCursor[1], len(ids)-1)]
-	assignment := m.agentsDraft.Agents.Roles[role]
-	if assignment.Agent == id {
-		assignment.Agent = ""
-	} else {
-		assignment.Agent = id
-	}
-	if m.agentsDraft.Agents.Roles == nil {
-		m.agentsDraft.Agents.Roles = make(map[string]config.AgentConfig)
-	}
-	m.agentsDraft.Agents.Roles[role] = assignment
-	m.agentsDiscardArmed = false
+	delete(m.agentsDraft.Agents.Connections, id)
+	delete(m.agentsProbe, id)
+	m.agentsCursor[1] = min(m.agentsCursor[1], max(0, len(ids)-2))
 	return m.saveAgentsSettings()
 }
 
@@ -280,7 +176,6 @@ func (m model) toggleAgentConnection() (tea.Model, tea.Cmd) {
 	connection := m.agentsDraft.Agents.Connections[id]
 	connection.Disabled = !connection.Disabled
 	m.agentsDraft.Agents.Connections[id] = connection
-	m.agentsDiscardArmed = false
 	return m.saveAgentsSettings()
 }
 
@@ -333,95 +228,7 @@ func (m model) saveAgentsSettings() (tea.Model, tea.Cmd) {
 	}
 }
 
-func (m model) viewAgents() string {
-	var body strings.Builder
-	body.WriteString(titleStyle.Render("q · Agents"))
-	body.WriteString("\n")
-	m.writeWorkspacePath(&body)
-	body.WriteString(subtleStyle.Render("ACP connections and external role assignments · " + m.store.Path()))
-	body.WriteString("\n\n")
-	if m.agentsMode == agentsModeEditConnection {
-		body.WriteString(m.viewAgentsForm())
-	} else {
-		body.WriteString(m.viewAgentsLists())
-	}
-	if m.status != "" {
-		body.WriteString("\n\n")
-		body.WriteString(subtleStyle.Render(m.status))
-	}
-	body.WriteString("\n\n")
-	help := "tab/←/→ panel · ↑/↓ select · space assign · c test · a add · e/enter edit · t enable/disable · d delete · esc chat"
-	if m.agentsMode != agentsModeList {
-		help = "tab/↑/↓ field · enter apply · esc cancel"
-	} else if m.isStandaloneScreen(screenAgents) {
-		help = strings.TrimSuffix(help, "esc chat") + "esc quit"
-	}
-	body.WriteString(helpStyle.Render(help))
-	return frameStyle.Width(max(36, m.width-4)).Render(body.String())
-}
-
-func (m model) viewAgentsLists() string {
-	width, gap := max(36, m.width-4), 2
-	panelWidth := max(16, (width-gap)/2)
-	roleTitle, connectionTitle := "EXTERNAL ROLES", "ACP AGENTS"
-	if m.agentsPanel == 0 {
-		roleTitle = "› " + roleTitle
-	} else {
-		connectionTitle = "› " + connectionTitle
-	}
-	roles, ids := agentExternalRoles(), agentConnectionIDs(m.agentsDraft.Agents)
-	selectedRole := roles[min(m.agentsCursor[0], len(roles)-1)]
-	assigned := m.agentsDraft.Agents.Roles[selectedRole].Agent
-	var left strings.Builder
-	left.WriteString(agentTraceTitleStyle(m.dark).Render(roleTitle))
-	left.WriteString("\n")
-	for index, role := range roles {
-		cursor := "  "
-		if m.agentsPanel == 0 && index == m.agentsCursor[0] {
-			cursor = "› "
-		}
-		left.WriteString(cursor + role + "\n")
-		connection := m.agentsDraft.Agents.Roles[role].Agent
-		if connection == "" {
-			connection = "not assigned"
-		}
-		left.WriteString(subtleStyle.Render("    " + connection))
-		left.WriteString("\n")
-	}
-	var right strings.Builder
-	right.WriteString(agentTraceTitleStyle(m.dark).Render(connectionTitle))
-	right.WriteString("\n")
-	if len(ids) == 0 {
-		right.WriteString(subtleStyle.Render("  No connections · press a"))
-	}
-	start, end := lspVisibleRange(len(ids), m.agentsCursor[1], max(2, m.height-14))
-	for index := start; index < end; index++ {
-		id := ids[index]
-		cursor := "  "
-		if m.agentsPanel == 1 && index == m.agentsCursor[1] {
-			cursor = "› "
-		}
-		mark := " "
-		if id == assigned {
-			mark = "x"
-		}
-		connection := m.agentsDraft.Agents.Connections[id]
-		state := "enabled"
-		if connection.Disabled {
-			state = "disabled"
-		}
-		if probe := m.agentsProbe[id]; probe != "" {
-			state += " · " + probe
-		}
-		right.WriteString(fmt.Sprintf("%s[%s] %s\n", cursor, mark, id))
-		right.WriteString(subtleStyle.Render("    " + agentConnectionEndpoint(connection) + " · " + state))
-		right.WriteString("\n")
-	}
-	panel := lipgloss.NewStyle().Width(panelWidth)
-	return lipgloss.JoinHorizontal(lipgloss.Top, panel.Render(left.String()), strings.Repeat(" ", gap), panel.Render(right.String()))
-}
-
-func (m model) viewAgentsForm() string {
+func (m model) viewACPConnectionForm() string {
 	labels := []string{"Connection ID", "Preset (codex/grok; empty for custom)", "Custom command", "Arguments (JSON array)", "Child environment (JSON object)", "ACP auth method (optional)"}
 	var body strings.Builder
 	body.WriteString(agentTraceTitleStyle(m.dark).Render("ACP AGENT CONNECTION"))
@@ -439,8 +246,6 @@ func (m model) viewAgentsForm() string {
 	return body.String()
 }
 
-func agentExternalRoles() []string { return config.ExternalAgentRoles() }
-
 func agentConnectionIDs(value config.AgentsConfig) []string {
 	ids := make([]string, 0, len(value.Connections))
 	for id := range value.Connections {
@@ -457,12 +262,6 @@ func agentConnectionEndpoint(connection config.AgentConnectionConfig) string {
 	return strings.Join(append([]string{connection.Command}, connection.Args...), " ")
 }
 
-func (m model) agentsModified() bool {
-	left, _ := json.Marshal(m.agentsDraft.Agents)
-	right, _ := json.Marshal(m.agentsOriginal.Agents)
-	return string(left) != string(right)
-}
-
 func cloneConfigForAgents(value config.Config) config.Config {
 	result := value
 	result.Agents.Roles = make(map[string]config.AgentConfig, len(value.Agents.Roles))
@@ -474,27 +273,4 @@ func cloneConfigForAgents(value config.Config) config.Config {
 		result.Agents.Connections[id] = connection
 	}
 	return result
-}
-
-// RunAgents opens ACP connection and external role assignment settings.
-func RunAgents(ctx context.Context, store config.Store) error {
-	m := newModel(ctx, store, nil)
-	updated, _ := m.enterAgents()
-	m = updated.(model)
-	if m.screen != screenAgents {
-		return errors.New(m.status)
-	}
-	_, err := runStandalone(m, screenAgents)
-	return err
-}
-
-func RunAgentsDefault(ctx context.Context) error {
-	store, err := config.DefaultStore()
-	if err != nil {
-		return err
-	}
-	if err := RunAgents(ctx, store); err != nil {
-		return fmt.Errorf("q agents: %w", err)
-	}
-	return nil
 }

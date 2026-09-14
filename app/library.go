@@ -121,11 +121,18 @@ func (m model) viewLibrary() string {
 	body.WriteString(subtleStyle.Render(m.librarySettingsStore.Path()))
 	body.WriteString("\n")
 	body.WriteString(subtleStyle.Render("Embedded and foreground Library servers are loopback-only and unauthenticated. The port is a fixed rendezvous point."))
-	body.WriteString("\n\n" + m.libraryHostInput.View() + "\n\n" + m.libraryPortInput.View() + "\n")
+	body.WriteString("\n\n")
+	body.WriteString(m.libraryHostInput.View())
+	body.WriteString("\n\n")
+	body.WriteString(m.libraryPortInput.View())
+	body.WriteString("\n")
 	if m.status != "" {
-		body.WriteString("\n" + subtleStyle.Render(m.status) + "\n")
+		body.WriteString("\n")
+		body.WriteString(subtleStyle.Render(m.status))
+		body.WriteString("\n")
 	}
-	body.WriteString("\n" + helpStyle.Render("tab/↑/↓ field · enter apply · esc back"))
+	body.WriteString("\n")
+	body.WriteString(helpStyle.Render("tab/↑/↓ field · enter apply · esc back"))
 	return frameStyle.Width(max(36, m.width-4)).Render(body.String())
 }
 

@@ -184,8 +184,8 @@ func standaloneUICommand(name string) func(context.Context) error {
 		return app.RunLSPDefault
 	case "mcp":
 		return app.RunMCPDefault
-	case "agents":
-		return app.RunAgentsDefault
+	case "subagents", "agents":
+		return app.RunSubagentsDefault
 	case "help":
 		return app.RunHelp
 	default:

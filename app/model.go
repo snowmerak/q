@@ -49,7 +49,6 @@ const (
 	screenSkills
 	screenLSP
 	screenMCP
-	screenAgents
 	screenCustom
 	screenGateway
 	screenGatewayNetwork
@@ -295,14 +294,11 @@ type model struct {
 	mcpDiscardArmed           bool
 	mcpBusy                   bool
 	agentsDraft               config.Config
-	agentsOriginal            config.Config
-	agentsPanel               int
 	agentsCursor              [2]int
 	agentsMode                agentsScreenMode
 	agentsEditID              string
 	agentsFormFocus           int
 	agentsInputs              [6]textinput.Model
-	agentsDiscardArmed        bool
 	agentsBusy                bool
 	agentsProbe               map[string]string
 
@@ -768,7 +764,7 @@ func (m model) Init() tea.Cmd {
 	if m.screen == screenMCP && m.mcpMode != mcpModeList {
 		return tea.Batch(m.mcpInputs[m.mcpFormFocus].Focus(), tea.RequestBackgroundColor)
 	}
-	if m.screen == screenAgents && m.agentsMode != agentsModeList {
+	if m.screen == screenCustom && m.custom.connections && m.agentsMode != agentsModeList {
 		return tea.Batch(m.agentsInputs[m.agentsFormFocus].Focus(), tea.RequestBackgroundColor)
 	}
 	if m.screen == screenHelp {
@@ -1033,8 +1029,6 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.config = message.config
 		m.agentsDraft = cloneConfigForAgents(message.config)
-		m.agentsOriginal = cloneConfigForAgents(message.config)
-		m.agentsDiscardArmed = false
 		m.status = "Agent settings saved"
 		return m, nil
 	case agentConnectionProbedMsg:
@@ -1547,9 +1541,6 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		if m.screen == screenMCP {
 			return m.updateMCP(key)
 		}
-		if m.screen == screenAgents {
-			return m.updateAgents(key)
-		}
 		if m.screen == screenCustom {
 			return m.updateCustom(key)
 		}
@@ -1607,12 +1598,12 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		return m, command
 	}
 	if m.screen == screenCustom {
+		if m.custom.connections && m.agentsMode != agentsModeList {
+			var command tea.Cmd
+			m.agentsInputs[m.agentsFormFocus], command = m.agentsInputs[m.agentsFormFocus].Update(message)
+			return m, command
+		}
 		return m.updateCustomInput(message)
-	}
-	if m.screen == screenAgents && m.agentsMode != agentsModeList {
-		var command tea.Cmd
-		m.agentsInputs[m.agentsFormFocus], command = m.agentsInputs[m.agentsFormFocus].Update(message)
-		return m, command
 	}
 	if m.screen == screenGatewayNetwork || (m.screen == screenGatewayKeys && m.gatewayKeyAdding) {
 		return m.updateGatewayInput(message)
@@ -3402,9 +3393,6 @@ func (m model) submitChat() (tea.Model, tea.Cmd) {
 		case "/mcp":
 			m.input.Reset()
 			return m.enterMCP()
-		case "/agents":
-			m.input.Reset()
-			return m.enterAgents()
 		case "/help":
 			m.input.Reset()
 			return m.enterHelp()
@@ -5351,8 +5339,6 @@ func (m model) View() tea.View {
 		content = m.viewLSP()
 	} else if m.screen == screenMCP {
 		content = m.viewMCP()
-	} else if m.screen == screenAgents {
-		content = m.viewAgents()
 	} else if m.screen == screenCustom {
 		content = m.viewCustom()
 	} else if m.screen == screenHelp {

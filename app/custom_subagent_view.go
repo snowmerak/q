@@ -3,11 +3,13 @@ package app
 import (
 	"fmt"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/snowmerak/q/subagent"
 )
 
 func customLine(s string, width int) string {
@@ -79,15 +81,34 @@ func (m model) customPanelContent() (string, int, int) {
 func (m model) viewCustom() string {
 	width, height := m.customBodySize()
 	var header strings.Builder
-	header.WriteString(titleStyle.Render("q · Subagents") + "\n")
+	header.WriteString(titleStyle.Render("q · Subagents"))
+	header.WriteString("\n")
 	path := m.store.Path()
 	if m.workspaceStore != nil {
 		path = "workspace · " + filepath.Clean(m.workspaceStore.Root)
 	}
-	header.WriteString(subtleStyle.Render(customLine(path, width)) + "\n")
-	header.WriteString(activeLabelStyle.Render(fmt.Sprintf("› Subagents %d", m.customCount())) + "\n\n")
+	header.WriteString(subtleStyle.Render(customLine(path, width)))
+	header.WriteString("\n")
+	section := fmt.Sprintf("› Subagents %d", m.customCount())
+	if m.custom.connections {
+		section = "› ACP Connections"
+	}
+	header.WriteString(activeLabelStyle.Render(section))
+	header.WriteString("\n\n")
+	if m.custom.connections {
+		body := m.viewCustomConnections(width, height)
+		status := m.status
+		if status == "" {
+			status = "Connections are shared by external subagents"
+		}
+		help := "↑/↓ select · c test · a add · e edit · t enable/disable · d delete · esc subagents"
+		if m.agentsMode != agentsModeList {
+			help = "tab/↑/↓ field · enter save · esc cancel"
+		}
+		return frameStyle.Render(header.String() + body + "\n" + subtleStyle.Render(customLine(status, width)) + "\n" + helpStyle.Render(customLine(help, width)))
+	}
 	body := m.viewCustomLists(width, height)
-	help := "↑/↓ select · a add · e edit · d delete · r reload · esc back"
+	help := "↑/↓ select · a add · e edit · d delete · c ACP connections · r reload · esc back"
 	if m.custom.detail != "" {
 		body = customWindow(m.custom.detail, width, height, m.custom.detailOffset)
 		help = "↑/↓ scroll · pgup/pgdn page · home/end jump · esc back"
@@ -121,7 +142,7 @@ func (m model) viewCustom() string {
 				help = "tab next · shift+tab/esc back"
 			}
 		default:
-			help = "a add · e edit · d del · esc"
+			help = "a add · e edit · d del · c ACP · esc"
 		}
 	}
 	if m.custom.confirmDelete {
@@ -136,32 +157,93 @@ func (m model) viewCustom() string {
 	return frameStyle.Render(header.String() + body + "\n" + statusStyle.Render(customLine(status, width)) + "\n" + helpStyle.Render(customLine(help, width)))
 }
 
+func (m model) viewCustomConnections(width, height int) string {
+	if m.agentsMode == agentsModeEditConnection {
+		return customWindow(m.viewACPConnectionForm(), width, height, 0)
+	}
+	ids := agentConnectionIDs(m.agentsDraft.Agents)
+	if len(ids) == 0 {
+		return customWindow(subtleStyle.Render("No ACP connections · press a to register one"), width, height, 0)
+	}
+	var lines []string
+	start, end := lspVisibleRange(len(ids), m.agentsCursor[1], max(1, height/2))
+	for index := start; index < end; index++ {
+		id := ids[index]
+		connection := m.agentsDraft.Agents.Connections[id]
+		state := "enabled"
+		if connection.Disabled {
+			state = "disabled"
+		}
+		if probe := m.agentsProbe[id]; probe != "" {
+			state += " · " + probe
+		}
+		prefix := "  "
+		if index == m.agentsCursor[1] {
+			prefix = "› "
+		}
+		lines = append(lines, activeLabelStyle.Render(customLine(prefix+id, width)))
+		lines = append(lines, subtleStyle.Render(customLine("    "+agentConnectionEndpoint(connection)+" · "+state, width)))
+	}
+	return customWindow(strings.Join(lines, "\n"), width, height, 0)
+}
+
 func (m model) customSelectionDetail() string {
 	c := m.custom
-	if definition, found := c.selectedBuiltin(); found {
+	if definition, found := c.selectedFixed(); found {
 		info := definition.Info
 		access := "READ-ONLY"
 		if info.MutatesWorkspace {
 			access = "MUTATES WORKSPACE"
 		}
 		var b strings.Builder
-		b.WriteString(activeLabelStyle.Render(info.Name) + "\n")
-		b.WriteString(subtleStyle.Render("BUILTIN · "+access) + "\n")
+		b.WriteString(activeLabelStyle.Render(info.Name))
+		b.WriteString("\n")
+		b.WriteString(subtleStyle.Render(strings.ToUpper(info.Kind) + " · " + access))
+		b.WriteString("\n")
 		if info.Description != "" {
-			b.WriteString("\n" + info.Description + "\n")
+			b.WriteString("\n")
+			b.WriteString(info.Description)
+			b.WriteString("\n")
 		}
-		b.WriteString("\n" + agentTraceTitleStyle(m.dark).Render("CONFIGURATION") + "\n")
-		b.WriteString("Role    " + info.Role + "\n")
-		b.WriteString("Model   " + m.customRoleModelSummary(info.Role) + "\n")
+		b.WriteString("\n")
+		b.WriteString(agentTraceTitleStyle(m.dark).Render("CONFIGURATION"))
+		b.WriteString("\n")
+		b.WriteString("Kind    ")
+		b.WriteString(info.Kind)
+		b.WriteString("\n")
+		b.WriteString("Role    ")
+		b.WriteString(info.Role)
+		b.WriteString("\n")
+		if info.Kind == subagent.AgentKindExternal {
+			connection, _, available := externalDefinitionConnection(m.activeConfig(), definition)
+			if !available {
+				connection = "unavailable"
+			}
+			b.WriteString("ACP     ")
+			b.WriteString(connection)
+			b.WriteString("\n")
+		} else {
+			b.WriteString("Model   ")
+			b.WriteString(m.customRoleModelSummary(info.Role))
+			b.WriteString("\n")
+		}
 		b.WriteString(fmt.Sprintf("Tools      %d available\n", len(definition.Tools)))
 		b.WriteString(fmt.Sprintf("Delegates  %d granted\n", len(definition.Delegates)))
-		b.WriteString("\n" + agentTraceTitleStyle(m.dark).Render("TOOLS") + "\n")
+		b.WriteString("\n")
+		b.WriteString(agentTraceTitleStyle(m.dark).Render("SYSTEM PROMPT"))
+		b.WriteString("\n")
+		b.WriteString(definition.SystemPrompt)
+		b.WriteString("\n")
+		b.WriteString(lipgloss.NewStyle().Bold(true).Foreground(themedColor(m.dark, "99", "61")).Render("TOOLS"))
+		b.WriteString("\n")
 		if len(definition.Tools) == 0 {
 			b.WriteString("No tools")
 		} else {
 			b.WriteString(strings.Join(definition.Tools, "\n"))
 		}
-		b.WriteString("\n\n" + agentTraceTitleStyle(m.dark).Render("DELEGATES") + "\n")
+		b.WriteString("\n\n")
+		b.WriteString(agentTraceTitleStyle(m.dark).Render("DELEGATES"))
+		b.WriteString("\n")
 		if len(definition.Delegates) == 0 {
 			b.WriteString("No delegates")
 		} else {
@@ -182,31 +264,65 @@ func (m model) customSelectionDetail() string {
 		state += " · active"
 	}
 	var b strings.Builder
-	b.WriteString(activeLabelStyle.Render(p.Name) + "\n")
+	b.WriteString(activeLabelStyle.Render(p.Name))
+	b.WriteString("\n")
 	if e.Err != nil {
-		b.WriteString(errorStyle.Render(strings.ToUpper(state)+" · INVALID") + "\n")
+		b.WriteString(errorStyle.Render(strings.ToUpper(state) + " · INVALID"))
+		b.WriteString("\n")
 	} else {
-		b.WriteString(subtleStyle.Render(strings.ToUpper(state)+" PROFILE") + "\n")
+		b.WriteString(subtleStyle.Render(strings.ToUpper(state) + " PROFILE"))
+		b.WriteString("\n")
 	}
 	if e.Err != nil {
-		b.WriteString("\n" + errorStyle.Render("Definition error: "+e.Err.Error()) + "\n")
+		b.WriteString("\n")
+		b.WriteString(errorStyle.Render("Definition error: " + e.Err.Error()))
+		b.WriteString("\n")
 	}
 	if p.Description != "" {
-		b.WriteString("\n" + p.Description + "\n")
+		b.WriteString("\n")
+		b.WriteString(p.Description)
+		b.WriteString("\n")
 	}
-	b.WriteString("\n" + agentTraceTitleStyle(m.dark).Render("CONFIGURATION") + "\n")
-	b.WriteString("Role    " + p.Role + "\n")
-	b.WriteString("Model   " + m.customRoleModelSummary(p.Role) + "\n")
-	b.WriteString(fmt.Sprintf("Tools      %d selected\n", len(p.Tools)))
-	b.WriteString(fmt.Sprintf("Delegates  %d selected\n", len(p.Delegates)))
-	b.WriteString(subtleStyle.Render("Source  "+e.Path) + "\n")
-	b.WriteString("\n" + agentTraceTitleStyle(m.dark).Render("SYSTEM PROMPT") + "\n" + p.SystemPrompt + "\n\n" + agentTraceTitleStyle(m.dark).Render("TOOLS") + "\n")
+	b.WriteString("\n")
+	b.WriteString(agentTraceTitleStyle(m.dark).Render("CONFIGURATION"))
+	b.WriteString("\n")
+	b.WriteString("Kind    ")
+	b.WriteString(p.EffectiveKind())
+	b.WriteString("\n")
+	if p.EffectiveKind() == subagent.AgentKindExternal {
+		b.WriteString("ACP     ")
+		b.WriteString(p.Agent)
+		if _, _, available := externalDefinitionConnection(m.activeConfig(), subagent.AgentDefinition{Info: subagent.DelegateInfo{Kind: subagent.AgentKindExternal}, Connection: p.Agent}); !available {
+			b.WriteString(" · unavailable")
+		}
+		b.WriteString("\n")
+	} else {
+		b.WriteString("Role    ")
+		b.WriteString(p.Role)
+		b.WriteString("\n")
+		b.WriteString("Model   ")
+		b.WriteString(m.customRoleModelSummary(p.Role))
+		b.WriteString("\n")
+	}
+	fmt.Fprintf(&b, "Tools      %d selected\n", len(p.Tools))
+	fmt.Fprintf(&b, "Delegates  %d selected\n", len(p.Delegates))
+	b.WriteString(subtleStyle.Render("Source  " + e.Path))
+	b.WriteString("\n")
+	b.WriteString("\n")
+	b.WriteString(agentTraceTitleStyle(m.dark).Render("SYSTEM PROMPT"))
+	b.WriteString("\n")
+	b.WriteString(p.SystemPrompt)
+	b.WriteString("\n\n")
+	b.WriteString(agentTraceTitleStyle(m.dark).Render("TOOLS"))
+	b.WriteString("\n")
 	if len(p.Tools) == 0 {
 		b.WriteString("No tools")
 	} else {
 		b.WriteString(strings.Join(p.Tools, "\n"))
 	}
-	b.WriteString("\n\n" + agentTraceTitleStyle(m.dark).Render("DELEGATES") + "\n")
+	b.WriteString("\n\n")
+	b.WriteString(agentTraceTitleStyle(m.dark).Render("DELEGATES"))
+	b.WriteString("\n")
 	if len(p.Delegates) == 0 {
 		b.WriteString("No delegates")
 	} else {
@@ -221,8 +337,8 @@ func (m model) customList(width, height int) string {
 	visibleItems := max(1, height/2)
 	start, end := lspVisibleRange(count, m.custom.cursor, visibleItems)
 	for i := start; i < end; i++ {
-		if i < len(m.custom.builtins) {
-			definition := m.custom.builtins[i]
+		if i < len(m.custom.fixed) {
+			definition := m.custom.fixed[i]
 			access := "read-only"
 			if definition.Info.MutatesWorkspace {
 				access = "mutates workspace"
@@ -235,11 +351,17 @@ func (m model) customList(width, height int) string {
 			if i == m.custom.cursor {
 				line = activeLabelStyle.Render(line)
 			}
-			meta := subtleStyle.Render(customLine("    "+definition.Info.Role+" · builtin · "+access, width))
+			state := definition.Info.Kind
+			if definition.Info.Kind == subagent.AgentKindExternal {
+				if _, _, available := externalDefinitionConnection(m.activeConfig(), definition); !available {
+					state += " · unavailable"
+				}
+			}
+			meta := subtleStyle.Render(customLine("    "+definition.Info.Role+" · "+state+" · "+access, width))
 			lines = append(lines, line, meta)
 			continue
 		}
-		e := m.custom.entries[i-len(m.custom.builtins)]
+		e := m.custom.entries[i-len(m.custom.fixed)]
 		label := e.Profile.Name
 		if label == "" {
 			label = filepath.Base(e.Path)
@@ -249,7 +371,14 @@ func (m model) customList(width, height int) string {
 			toolLabel = "1 tool"
 		}
 		delegateLabel := fmt.Sprintf("%d delegates", len(e.Profile.Delegates))
-		meta := strings.Trim(strings.Join([]string{e.Profile.Role, e.Scope, toolLabel, delegateLabel}, " · "), " ·")
+		identity := e.Profile.Role
+		kind := e.Profile.EffectiveKind()
+		if kind == subagent.AgentKindExternal {
+			identity = "ACP " + e.Profile.Agent
+			toolLabel = "host tools"
+			delegateLabel = "no delegates"
+		}
+		meta := strings.Trim(strings.Join([]string{identity, kind, e.Scope, toolLabel, delegateLabel}, " · "), " ·")
 		if e.Shadowed {
 			meta += " · shadowed"
 		}
@@ -298,7 +427,7 @@ func (m model) viewCustomPicker(width, height int) string {
 		name := matches[i]
 		label := name
 		if label == "" {
-			label = "Inherit / default"
+			label = "Unassigned"
 		}
 		cursor := "  "
 		if i == c.pickCursor {
@@ -330,7 +459,11 @@ func (m model) viewCustomPicker(width, height int) string {
 	detail := ""
 	if len(matches) > 0 {
 		name := matches[min(c.pickCursor, len(matches)-1)]
-		detail = name + "\n" + c.descriptions[name]
+		label := name
+		if label == "" {
+			label = "Unassigned"
+		}
+		detail = label + "\n" + c.descriptions[name]
 	}
 	return c.filter.View() + "\n" + customWindow(strings.Join(lines, "\n"), width, listHeight, 0) + "\n" + agentTraceTitleStyle(m.dark).Render("DETAILS") + "\n" + customWindow(detail, width, max(1, height-listHeight-3), c.panelOffset)
 }
@@ -338,9 +471,19 @@ func (m model) viewCustomPicker(width, height int) string {
 func (m model) viewCustomForm(width, height int) string {
 	c := m.custom
 	formWidth := width
-	labels := []string{"Name *", "Description", "Scope", "Role *", "System prompt *", "Tools", "Delegates", "Save profile"}
+	labels := map[int]string{
+		customFieldName: "Name *", customFieldDescription: "Description", customFieldScope: "Scope",
+		customFieldKind: "Kind *", customFieldRole: "Role *", customFieldACP: "ACP connection *",
+		customFieldPrompt: "System prompt *", customFieldAccess: "Workspace access",
+		customFieldTools: "Tools", customFieldDelegates: "Delegates", customFieldSave: "Save profile",
+	}
 	formTitle := "NEW PROFILE"
-	formDescription := "Define a runnable subagent with instructions, a model role, and an explicit tool set."
+	formDescription := "Inner subagents use q models and tools; external subagents forward the prompt to a registered ACP connection."
+	if c.fixedExternal != nil {
+		formTitle = "EDIT " + strings.ToUpper(c.fixedExternal.Info.Name)
+		formDescription = "Builtin instructions are fixed. Only its ACP connection can be changed."
+		labels[customFieldSave] = "Save connection"
+	}
 	if c.original != nil {
 		formTitle = strings.Replace(formTitle, "NEW ", "EDIT ", 1)
 	}
@@ -350,8 +493,10 @@ func (m model) viewCustomForm(width, height int) string {
 		"",
 	}
 	focusLine := len(lines)
-	for i, label := range labels {
-		if i == len(labels)-1 {
+	fields := m.customVisibleFields()
+	for _, i := range fields {
+		label := labels[i]
+		if i == customFieldSave {
 			line := "  [ " + label + " ] · Enter"
 			if c.field == i {
 				focusLine = len(lines)
@@ -393,6 +538,9 @@ func (m model) viewCustomForm(width, height int) string {
 				value = "No delegates"
 			}
 		}
+		if i == customFieldACP && value == "" {
+			value = "Unassigned"
+		}
 		if i != c.field {
 			lines = append(lines, subtleStyle.Render(customLine("  "+label+": "+value, formWidth)))
 			continue
@@ -405,14 +553,14 @@ func (m model) viewCustomForm(width, height int) string {
 		if i == customFieldPrompt {
 			prompt := c.prompt
 			prompt.SetWidth(max(1, formWidth-2))
-			prompt.SetHeight(max(2, height-len(labels)-3))
+			prompt.SetHeight(max(2, height-len(fields)-3))
 			lines = append(lines, strings.Split(prompt.View(), "\n")...)
 			lines = append(lines, subtleStyle.Render(customLine("Tab: next · Shift+Tab/Esc: previous", formWidth)))
 		} else if i == customFieldTools {
 			lines = append(lines, customLine(value, formWidth), subtleStyle.Render(customLine("Enter: select built-in / MCP tools", formWidth)))
 		} else if i == customFieldDelegates {
 			lines = append(lines, customLine(value, formWidth), subtleStyle.Render(customLine("Enter: select callable subagents", formWidth)))
-		} else if i == customFieldScope || i == customFieldRole {
+		} else if slices.Contains([]int{customFieldScope, customFieldKind, customFieldRole, customFieldACP, customFieldAccess}, i) {
 			lines = append(lines, activeLabelStyle.Render(customLine("‹ "+value+" ›", formWidth)))
 			hint := "←/→: cycle · Enter: list"
 			lines = append(lines, subtleStyle.Render(customLine(hint, formWidth)))

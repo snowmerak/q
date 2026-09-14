@@ -1829,7 +1829,8 @@ func (a *acpAgent) elicitAnswer(ctx context.Context, question askToUserInput) as
 	var description strings.Builder
 	description.WriteString(question.Question)
 	if question.Context != "" {
-		description.WriteString("\n\nContext: " + question.Context)
+		description.WriteString("\n\nContext: ")
+		description.WriteString(question.Context)
 	}
 	if len(question.Choices) > 0 {
 		description.WriteString("\n\nChoices:")

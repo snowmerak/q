@@ -59,7 +59,7 @@ func TestCustomViewsFollowLayoutAndExposeDetails(t *testing.T) {
 						t.Fatalf("overflow %dx%d:\n%s", lipgloss.Width(view), lipgloss.Height(view), plain)
 					}
 					if mode == "list" {
-						for _, s := range []string{"Subagents 1", "LIST", "DETAILS", "security-reviewer", "analyst · workspace"} {
+						for _, s := range []string{"Subagents 1", "LIST", "DETAILS", "security-reviewer", "analyst · inner · workspace"} {
 							if !strings.Contains(plain, s) {
 								t.Fatalf("missing %s:\n%s", s, plain)
 							}
@@ -98,7 +98,7 @@ func TestCustomDeleteRequiresConfirmation(t *testing.T) {
 	m.reloadCustom()
 	for index, entry := range m.custom.entries {
 		if entry.Profile.Name == p.Name {
-			m.custom.cursor = len(m.custom.builtins) + index
+			m.custom.cursor = len(m.custom.fixed) + index
 		}
 	}
 
@@ -139,7 +139,7 @@ func TestCustomDeleteRejectsReferencedProfile(t *testing.T) {
 	m.reloadCustom()
 	for index, entry := range m.custom.entries {
 		if entry.Profile.Name == target.Name {
-			m.custom.cursor = len(m.custom.builtins) + index
+			m.custom.cursor = len(m.custom.fixed) + index
 		}
 	}
 	updated, _ := m.deleteCustom()
@@ -156,14 +156,38 @@ func TestCustomScreenListsBuiltinDefinitionsAsReadOnly(t *testing.T) {
 	m := customViewFixture(t, 100, 36, true)
 	m.reloadCustom()
 	plain := ansi.Strip(m.viewCustom())
-	if !strings.Contains(plain, subagent.BuiltinScoutID) || !strings.Contains(plain, "builtin · read-only") {
+	if !strings.Contains(plain, subagent.BuiltinScoutID) || !strings.Contains(plain, "inner · read-only") {
 		t.Fatalf("builtin definitions missing:\n%s", plain)
 	}
 	m.custom.cursor = 0
 	updated, _ := m.beginCustomEdit(false)
 	m = updated.(model)
-	if m.custom.editing || !strings.Contains(m.status, "built-in and read-only") {
+	if m.custom.editing || !strings.Contains(m.status, "inner and read-only") {
 		t.Fatalf("builtin edit state = %v, status = %s", m.custom.editing, m.status)
+	}
+}
+
+func TestCustomScreenLetsBuiltinExternalChangeOnlyACP(t *testing.T) {
+	m := customViewFixture(t, 100, 36, true)
+	m.reloadCustom()
+	for index, definition := range m.custom.fixed {
+		if definition.Info.Name == subagent.BuiltinWebSearchID {
+			m.custom.cursor = index
+			break
+		}
+	}
+	plain := ansi.Strip(m.viewCustom())
+	if !strings.Contains(plain, subagent.BuiltinWebSearchID) || !strings.Contains(plain, "EXTERNAL · READ-ONLY") || !strings.Contains(plain, "ACP     unavailable") {
+		t.Fatalf("external definitions missing:\n%s", plain)
+	}
+	updated, _ := m.beginCustomEdit(false)
+	m = updated.(model)
+	if !m.custom.editing || m.custom.fixedExternal == nil || m.custom.field != customFieldACP {
+		t.Fatalf("external edit state = %v, field = %d, status = %s", m.custom.editing, m.custom.field, m.status)
+	}
+	form := ansi.Strip(m.viewCustom())
+	if !strings.Contains(form, "ACP connection") || strings.Contains(form, "Name *") || strings.Contains(form, "System prompt *") {
+		t.Fatalf("builtin external editor exposed fixed fields:\n%s", form)
 	}
 }
 
@@ -177,7 +201,7 @@ func TestCustomReloadKeepsSelectedEntry(t *testing.T) {
 	m.reloadCustom()
 	for index, entry := range m.custom.entries {
 		if entry.Profile.Name == "omega" {
-			m.custom.cursor = len(m.custom.builtins) + index
+			m.custom.cursor = len(m.custom.fixed) + index
 		}
 	}
 	m.reloadCustom()

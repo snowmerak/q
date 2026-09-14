@@ -262,7 +262,7 @@ func (c Config) Validate() error {
 		}
 	}
 	for id, connection := range c.Agents.Connections {
-		if !validAgentConnectionID(id) {
+		if !ValidAgentConnectionID(id) {
 			return fmt.Errorf("config: agent connection ID %q must use only letters, digits, '.', '_', or '-'", id)
 		}
 		if connection.Preset != strings.TrimSpace(connection.Preset) || connection.Command != strings.TrimSpace(connection.Command) {
@@ -353,7 +353,8 @@ func (c Config) Validate() error {
 	return nil
 }
 
-func validAgentConnectionID(id string) bool {
+// ValidAgentConnectionID reports whether id can name a persisted ACP connection.
+func ValidAgentConnectionID(id string) bool {
 	if id == "" || id != strings.TrimSpace(id) {
 		return false
 	}

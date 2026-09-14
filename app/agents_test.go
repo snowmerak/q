@@ -6,28 +6,36 @@ import (
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
-	"github.com/charmbracelet/x/ansi"
 	"github.com/snowmerak/q/config"
+	"github.com/snowmerak/q/subagent"
 )
 
-func TestAgentsSettingsAssignSearchConnectionAndSave(t *testing.T) {
+func TestSubagentScreenBindsBuiltinExternalAndSaves(t *testing.T) {
 	store := config.Store{Dir: t.TempDir()}
 	value := config.Default()
 	value.Provider.Model = "test-model"
+	value.Agents.Connections = map[string]config.AgentConnectionConfig{"codex-main": {Preset: "codex"}}
 	if err := store.Save(value); err != nil {
 		t.Fatal(err)
 	}
-	m := newModel(context.Background(), store, nil)
-	updated, _ := m.enterAgents()
+	m := newModel(t.Context(), store, nil)
+	m.config = value
+	m.resize(100, 36)
+	updated, _ := m.enterCustom()
 	m = updated.(model)
-	m.agentsDraft.Agents.Connections["codex-main"] = config.AgentConnectionConfig{Preset: "codex"}
-	updated, command := m.assignAgentRole()
-	m = updated.(model)
-	if m.agentsDraft.Agents.Roles[config.AgentRoleSearch].Agent != "codex-main" {
-		t.Fatalf("search role = %#v", m.agentsDraft.Agents.Roles[config.AgentRoleSearch])
+	for index, definition := range m.custom.fixed {
+		if definition.Info.Name == subagent.BuiltinWebSearchID {
+			m.custom.cursor = index
+			break
+		}
 	}
+	updated, _ = m.beginCustomEdit(false)
+	m = updated.(model)
+	m.custom.inputs[customFieldACP].SetValue("codex-main")
+	updated, command := m.saveCustom()
+	m = updated.(model)
 	if command == nil {
-		t.Fatal("automatic save command is nil")
+		t.Fatal("binding save command is nil")
 	}
 	updated, _ = m.Update(command())
 	m = updated.(model)
@@ -35,107 +43,92 @@ func TestAgentsSettingsAssignSearchConnectionAndSave(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if loaded.Agents.Roles[config.AgentRoleSearch].Agent != "codex-main" ||
-		loaded.Agents.Connections["codex-main"].Preset != "codex" ||
-		!strings.Contains(m.status, "saved") {
-		t.Fatalf("loaded=%#v status=%q", loaded.Agents, m.status)
+	if loaded.Agents.Roles[config.AgentRoleSearch].Agent != "codex-main" {
+		t.Fatalf("search binding = %#v", loaded.Agents.Roles[config.AgentRoleSearch])
 	}
-	m.width, m.height = 160, 30
-	view := m.viewAgentsLists()
-	if !strings.Contains(view, "EXTERNAL ROLES") || !strings.Contains(view, "search") ||
-		!strings.Contains(view, "external_web_tester") || !strings.Contains(view, "codex-main") {
-		t.Fatalf("agents view = %q", view)
+	if !strings.Contains(m.customSelectionDetail(), "ACP     codex-main") {
+		t.Fatal(m.customSelectionDetail())
 	}
 }
 
-func TestAgentsSettingsAssignExternalWebTesterConnection(t *testing.T) {
-	m := newModel(context.Background(), config.Store{Dir: t.TempDir()}, nil)
-	m.agentsDraft = config.Default()
-	m.agentsDraft.Agents.Connections = map[string]config.AgentConnectionConfig{
-		"browser": {Preset: "codex"},
-	}
-	m.agentsCursor[0] = 1
-	updated, _ := m.assignAgentRole()
-	m = updated.(model)
-	if assigned := m.agentsDraft.Agents.Roles[config.AgentRoleExternalWebTester].Agent; assigned != "browser" {
-		t.Fatalf("external_web_tester role assignment = %q", assigned)
-	}
-}
-
-func TestAgentsCtrlSDoesNotApplyOrSave(t *testing.T) {
+func TestSubagentScreenRegistersACPConnection(t *testing.T) {
 	store := config.Store{Dir: t.TempDir()}
 	value := config.Default()
 	value.Provider.Model = "test-model"
 	if err := store.Save(value); err != nil {
 		t.Fatal(err)
 	}
-	m := newModel(context.Background(), store, nil)
-	updated, _ := m.enterAgents()
+	m := newModel(t.Context(), store, nil)
+	m.config = value
+	m.resize(100, 36)
+	updated, _ := m.enterCustom()
 	m = updated.(model)
-	m.agentsDraft.Agents.Connections["codex"] = config.AgentConnectionConfig{Preset: "codex"}
-	updated, command := m.updateAgents(tea.KeyPressMsg{Code: 's', Mod: tea.ModCtrl})
+	updated, _ = m.enterCustomConnections()
 	m = updated.(model)
-	if command != nil || m.agentsBusy {
-		t.Fatalf("ctrl+s started a save: command=%v busy=%v", command != nil, m.agentsBusy)
+	updated, _ = m.beginAgentConnectionAdd()
+	m = updated.(model)
+	fields := []string{"custom", "", "my-acp", `["stdio"]`, `{"TOKEN":"value"}`, ""}
+	for index, field := range fields {
+		m.agentsInputs[index].SetValue(field)
 	}
-	loaded, err := store.Load()
-	if err != nil {
-		t.Fatal(err)
+	updated, command := m.acceptAgentsForm()
+	m = updated.(model)
+	if command == nil {
+		t.Fatal("connection save command is nil")
 	}
-	if _, found := loaded.Agents.Connections["codex"]; found {
-		t.Fatal("ctrl+s persisted the draft connection")
+	updated, _ = m.Update(command())
+	m = updated.(model)
+	connection := m.config.Agents.Connections["custom"]
+	if connection.Command != "my-acp" || len(connection.Args) != 1 || connection.Env["TOKEN"] != "value" {
+		t.Fatalf("connection = %#v status=%q", connection, m.status)
 	}
+	if !strings.Contains(m.viewCustom(), "ACP Connections") || !strings.Contains(m.viewCustom(), "custom") {
+		t.Fatal(m.viewCustom())
+	}
+}
 
+func TestACPConnectionFormCtrlSDoesNotSave(t *testing.T) {
+	m := newModel(context.Background(), config.Store{Dir: t.TempDir()}, nil)
 	m.agentsMode = agentsModeEditConnection
-	updated, command = m.updateAgentsForm(tea.KeyPressMsg{Code: 's', Mod: tea.ModCtrl})
+	updated, command := m.updateAgentsForm(tea.KeyPressMsg{Code: 's', Mod: tea.ModCtrl})
 	m = updated.(model)
 	if command != nil || m.agentsMode != agentsModeEditConnection {
 		t.Fatalf("ctrl+s applied the form: command=%v mode=%v", command != nil, m.agentsMode)
 	}
 }
 
-func TestAgentsCustomCommandForm(t *testing.T) {
-	value := config.Default()
-	value.Provider.Model = "test-model"
+func TestACPConnectionIDIsImmutable(t *testing.T) {
 	m := newModel(context.Background(), config.Store{Dir: t.TempDir()}, nil)
-	m.agentsDraft = value
+	m.agentsDraft = config.Default()
+	m.agentsDraft.Agents.Connections = map[string]config.AgentConnectionConfig{"original": {Preset: "codex"}}
+	m.agentsEditID = "original"
 	m.agentsMode = agentsModeEditConnection
-	fields := []string{"custom", "", "my-acp", `["stdio"]`, `{"TOKEN":"value"}`, ""}
+	fields := []string{"renamed", "codex", "", `[]`, `{}`, ""}
 	for index, field := range fields {
 		m.agentsInputs[index].SetValue(field)
 	}
-	updated, _ := m.acceptAgentsForm()
+	updated, command := m.acceptAgentsForm()
 	m = updated.(model)
-	connection := m.agentsDraft.Agents.Connections["custom"]
-	if connection.Command != "my-acp" || len(connection.Args) != 1 || connection.Env["TOKEN"] != "value" {
-		t.Fatalf("connection = %#v status=%q", connection, m.status)
+	if !strings.Contains(m.status, "cannot change") || m.agentsDraft.Agents.Connections["original"].Preset != "codex" {
+		t.Fatalf("rename accepted: command=%v status=%q", command != nil, m.status)
 	}
 }
 
-func TestAgentsAddingConnectionDoesNotAssignNativeRoles(t *testing.T) {
-	value := config.Default()
-	value.Provider.Model = "test-model"
-	value.Agents.Roles = map[string]config.AgentConfig{
-		config.AgentRolePlanner: {Model: "planner-model"},
-		config.AgentRoleGriller: {Model: "griller-model"},
+func TestACPConnectionDeleteRejectsSubagentReference(t *testing.T) {
+	m := customViewFixture(t, 100, 36, true)
+	m.config.Agents.Connections = map[string]config.AgentConnectionConfig{"browser": {Preset: "codex"}}
+	m.agentsDraft = cloneConfigForAgents(m.config)
+	profile := subagent.Profile{
+		Version: 1, Name: "browser-check", Kind: subagent.AgentKindExternal, Agent: "browser",
+		SystemPrompt: "Check the browser.", Tools: []string{}, Delegates: []string{},
 	}
-	m := newModel(context.Background(), config.Store{Dir: t.TempDir()}, nil)
-	m.agentsDraft = value
-	m.agentsMode = agentsModeEditConnection
-	fields := []string{"grok", "grok", "", `[]`, `{}`, ""}
-	for index, field := range fields {
-		m.agentsInputs[index].SetValue(field)
+	if err := m.customStore().Save(profile, "global", nil); err != nil {
+		t.Fatal(err)
 	}
-	updated, _ := m.acceptAgentsForm()
+	updated, command := m.deleteAgentConnection()
 	m = updated.(model)
-	if m.agentsDraft.Agents.Connections["grok"].Preset != "grok" {
-		t.Fatalf("connection = %#v status=%q", m.agentsDraft.Agents.Connections["grok"], m.status)
-	}
-	for _, role := range []string{config.AgentRolePlanner, config.AgentRoleGriller} {
-		assignment := m.agentsDraft.Agents.Roles[role]
-		if assignment.Agent != "" {
-			t.Fatalf("native role %q was assigned ACP connection %#v", role, assignment)
-		}
+	if command != nil || !strings.Contains(m.status, "global/browser-check") {
+		t.Fatalf("referenced connection deleted: command=%v status=%q", command != nil, m.status)
 	}
 }
 
@@ -147,48 +140,5 @@ func TestAgentConnectionProbeResultUpdatesStatus(t *testing.T) {
 	m = updated.(model)
 	if m.agentsBusy || m.agentsProbe["codex"] != "connected" || !strings.Contains(m.status, "lifecycle passed") {
 		t.Fatalf("busy=%v probe=%q status=%q", m.agentsBusy, m.agentsProbe["codex"], m.status)
-	}
-
-	updated, _ = m.Update(agentConnectionProbedMsg{id: "grok", err: context.DeadlineExceeded})
-	m = updated.(model)
-	if m.agentsProbe["grok"] != "failed" || !strings.Contains(m.status, "deadline exceeded") {
-		t.Fatalf("probe=%q status=%q", m.agentsProbe["grok"], m.status)
-	}
-}
-
-func TestAgentsSpaceKeyAssignsSelectedConnection(t *testing.T) {
-	m := newModel(context.Background(), config.Store{Dir: t.TempDir()}, nil)
-	m.agentsDraft = config.Default()
-	m.agentsDraft.Agents.Connections = map[string]config.AgentConnectionConfig{
-		"codex": {Preset: "codex"},
-	}
-	m.agentsMode = agentsModeList
-	updated, _ := m.updateAgents(tea.KeyPressMsg{Code: tea.KeySpace})
-	m = updated.(model)
-	if assigned := m.agentsDraft.Agents.Roles[config.AgentRoleSearch].Agent; assigned != "codex" {
-		t.Fatalf("search role assignment = %q", assigned)
-	}
-}
-
-func TestAgentsConnectionRowsStayColumnAligned(t *testing.T) {
-	m := newModel(context.Background(), config.Store{Dir: t.TempDir()}, nil)
-	m.width, m.height = 160, 30
-	m.agentsDraft = config.Default()
-	m.agentsDraft.Agents.Connections = map[string]config.AgentConnectionConfig{
-		"codex": {Preset: "codex"},
-		"grok":  {Preset: "grok"},
-	}
-	m.agentsPanel = 1
-	plain := ansi.Strip(m.viewAgentsLists())
-	columns := make(map[string]int)
-	for line := range strings.SplitSeq(plain, "\n") {
-		for _, id := range []string{"codex", "grok"} {
-			if column := strings.Index(line, "[ ] "+id); column >= 0 {
-				columns[id] = ansi.StringWidth(line[:column])
-			}
-		}
-	}
-	if columns["codex"] != columns["grok"] {
-		t.Fatalf("connection columns = %#v\n%s", columns, plain)
 	}
 }

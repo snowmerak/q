@@ -5,6 +5,7 @@ import (
 	"fmt"
 	uv "github.com/charmbracelet/ultraviolet"
 	"github.com/snowmerak/q/client"
+	"github.com/snowmerak/q/config"
 	"github.com/snowmerak/q/subagent"
 	"github.com/snowmerak/q/workspace"
 	"strings"
@@ -100,6 +101,28 @@ func TestCustomPickerSaveValidationPreservesDraft(t *testing.T) {
 	}
 }
 
+func TestCustomExternalProfileSelectsACPAndStoresSystemPrompt(t *testing.T) {
+	m := customViewFixture(t, 100, 36, true)
+	m.config.Agents.Connections = map[string]config.AgentConnectionConfig{"browser": {Preset: "codex"}}
+	updated, _ := m.beginCustomEdit(true)
+	m = updated.(model)
+	m.custom.inputs[customFieldName].SetValue("browser-check")
+	m.custom.inputs[customFieldKind].SetValue(subagent.AgentKindExternal)
+	m.custom.inputs[customFieldACP].SetValue("browser")
+	m.custom.inputs[customFieldAccess].SetValue("mutates workspace")
+	m.custom.prompt.SetValue("Verify the requested browser behavior.")
+	updated, _ = m.saveCustom()
+	m = updated.(model)
+	entry, err := m.customStore().Get("browser-check")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if entry.Profile.Kind != subagent.AgentKindExternal || entry.Profile.Agent != "browser" ||
+		entry.Profile.SystemPrompt != "Verify the requested browser behavior." || !entry.Profile.MutatesWorkspace {
+		t.Fatalf("profile = %#v", entry.Profile)
+	}
+}
+
 func TestCustomScreenshotSaveShowsNameErrorAtField(t *testing.T) {
 	m := customViewFixture(t, 180, 36, true)
 	updated, _ := m.beginCustomEdit(true)
@@ -163,7 +186,7 @@ func TestCustomToolPickerSelectsBuiltinAndMCP(t *testing.T) {
 	}
 	updated, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyTab, Mod: tea.ModShift})
 	m = updated.(model)
-	if m.custom.picker || m.custom.field != 4 {
+	if m.custom.picker || m.custom.field != customFieldPrompt {
 		t.Fatal("picker backward exit failed")
 	}
 }
@@ -178,23 +201,25 @@ func TestCustomDelegatePickerSavesCanonicalGrant(t *testing.T) {
 	m.custom.field = customFieldDelegates
 	updated, _ = m.openCustomPicker()
 	m = updated.(model)
-	found := false
-	for index, option := range m.custom.options {
-		if option == subagent.BuiltinScoutID {
-			m.custom.pickCursor = index
-			found = true
-			break
+	for _, wanted := range []string{subagent.BuiltinScoutID, subagent.BuiltinWebSearchID} {
+		found := false
+		for index, option := range m.custom.options {
+			if option == wanted {
+				m.custom.pickCursor = index
+				found = true
+				break
+			}
 		}
+		if !found {
+			t.Fatalf("delegate %s missing from picker: %#v", wanted, m.custom.options)
+		}
+		updated, _ = m.Update(tea.KeyPressMsg{Code: tea.KeySpace, Text: " "})
+		m = updated.(model)
 	}
-	if !found {
-		t.Fatalf("builtin scout missing from delegate picker: %#v", m.custom.options)
-	}
-	updated, _ = m.Update(tea.KeyPressMsg{Code: tea.KeySpace, Text: " "})
-	m = updated.(model)
 	updated, _ = m.saveCustom()
 	m = updated.(model)
 	entry, err := m.customStore().Get("delegator")
-	if err != nil || len(entry.Profile.Delegates) != 1 || entry.Profile.Delegates[0] != subagent.BuiltinScoutID {
+	if err != nil || len(entry.Profile.Delegates) != 2 || entry.Profile.Delegates[0] != subagent.BuiltinScoutID || entry.Profile.Delegates[1] != subagent.BuiltinWebSearchID {
 		t.Fatalf("profile = %#v, err = %v, status = %s", entry.Profile, err, m.status)
 	}
 }
@@ -242,29 +267,39 @@ func TestCustomSelectorsAndPromptExit(t *testing.T) {
 		t.Fatal("selector accepted free text")
 	}
 	send(tea.KeyPressMsg{Code: tea.KeyTab})
-	before = m.custom.inputs[3].Value()
+	before = m.custom.inputs[customFieldKind].Value()
 	send(tea.KeyPressMsg{Code: tea.KeyRight})
-	if m.custom.inputs[3].Value() == before {
+	if m.custom.inputs[customFieldKind].Value() == before {
+		t.Fatal("kind did not cycle")
+	}
+	send(tea.KeyPressMsg{Code: tea.KeyLeft})
+	if m.custom.inputs[customFieldKind].Value() != before {
+		t.Fatal("kind reverse cycle failed")
+	}
+	send(tea.KeyPressMsg{Code: tea.KeyTab})
+	before = m.custom.inputs[customFieldRole].Value()
+	send(tea.KeyPressMsg{Code: tea.KeyRight})
+	if m.custom.inputs[customFieldRole].Value() == before {
 		t.Fatal("role did not cycle")
 	}
 	send(tea.KeyPressMsg{Code: tea.KeyLeft})
-	if m.custom.inputs[3].Value() != before {
+	if m.custom.inputs[customFieldRole].Value() != before {
 		t.Fatal("role reverse cycle failed")
 	}
 	send(tea.KeyPressMsg{Code: tea.KeyTab})
 	m.custom.prompt.SetValue("keep this")
 	send(tea.KeyPressMsg{Code: tea.KeyTab, Mod: tea.ModShift})
-	if m.custom.field != 3 {
+	if m.custom.field != customFieldRole {
 		t.Fatal("shift-tab did not exit prompt backwards")
 	}
 	send(tea.KeyPressMsg{Code: tea.KeyTab})
 	send(tea.KeyPressMsg{Code: tea.KeyEscape})
-	if !m.custom.editing || m.custom.field != 3 || m.custom.prompt.Value() != "keep this" {
+	if !m.custom.editing || m.custom.field != customFieldRole || m.custom.prompt.Value() != "keep this" {
 		t.Fatal("escape discarded prompt")
 	}
 	send(tea.KeyPressMsg{Code: tea.KeyTab})
 	send(tea.KeyPressMsg{Code: tea.KeyUp, Mod: tea.ModCtrl})
-	if m.custom.field != 3 {
+	if m.custom.field != customFieldRole {
 		t.Fatal("ctrl-up did not exit prompt")
 	}
 }
@@ -291,10 +326,10 @@ func TestCustomEditorKeyboardInput(t *testing.T) {
 	if m.custom.field != 1 {
 		t.Fatal("up did not return to description")
 	}
-	for range 3 {
+	for range 4 {
 		send(tea.KeyPressMsg{Code: tea.KeyTab})
 	}
-	if m.custom.field != 4 {
+	if m.custom.field != customFieldPrompt {
 		t.Fatal("tab did not navigate")
 	}
 	for _, r := range "Write a novel" {
@@ -305,7 +340,7 @@ func TestCustomEditorKeyboardInput(t *testing.T) {
 	}
 	send(tea.KeyPressMsg{Code: tea.KeyEnter})
 	send(tea.KeyPressMsg{Code: 'x', Text: "x"})
-	if m.custom.prompt.Value() != "Write a novel\nx" || m.custom.field != 4 {
+	if m.custom.prompt.Value() != "Write a novel\nx" || m.custom.field != customFieldPrompt {
 		t.Fatal("multiline editing broken")
 	}
 	send(tea.KeyPressMsg{Code: 's', Mod: tea.ModCtrl})

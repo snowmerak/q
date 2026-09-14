@@ -56,6 +56,9 @@ func (r CustomRunner) Run(ctx context.Context, input string) (output string, run
 	if err := r.Profile.Validate(); err != nil {
 		return "", err
 	}
+	if r.Profile.EffectiveKind() != AgentKindInner {
+		return "", errors.New("custom runner requires an inner subagent profile")
+	}
 	if strings.TrimSpace(input) == "" {
 		return "", errors.New("subagent request is required")
 	}
@@ -67,7 +70,7 @@ func (r CustomRunner) Run(ctx context.Context, input string) (output string, run
 		id = CanonicalProfileID("global", r.Profile.Name)
 	}
 	definition := AgentDefinition{
-		Info:         DelegateInfo{Name: id, Description: r.Profile.Description, Source: r.Source, Role: r.Profile.Role, MutatesWorkspace: profileMayMutate(r.Profile.Tools)},
+		Info:         DelegateInfo{Name: id, Description: r.Profile.Description, Source: r.Source, Kind: AgentKindInner, Role: r.Profile.Role, MutatesWorkspace: profileMayMutate(r.Profile.Tools)},
 		SystemPrompt: r.Profile.SystemPrompt, Tools: append([]string(nil), r.Profile.Tools...),
 		Delegates: append([]string(nil), r.Profile.Delegates...), StrictTools: true,
 	}

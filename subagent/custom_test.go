@@ -92,6 +92,41 @@ func TestCustomProfileStorage(t *testing.T) {
 	}
 }
 
+func TestExternalProfileStoresKindConnectionAndPrompt(t *testing.T) {
+	store := ProfileStore{Global: filepath.Join(t.TempDir(), "global")}
+	profile := Profile{
+		Version: 1, Name: "browser-check", Kind: AgentKindExternal, Agent: "browser",
+		SystemPrompt: "Inspect the requested page.", MutatesWorkspace: true,
+		Tools: []string{}, Delegates: []string{},
+	}
+	if err := store.Save(profile, "global", nil); err != nil {
+		t.Fatal(err)
+	}
+	entry, err := store.Get(profile.Name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	definition, err := DefinitionForProfile(entry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if entry.Profile.Kind != AgentKindExternal || entry.Profile.Agent != "browser" ||
+		definition.Info.Kind != AgentKindExternal || definition.Connection != "browser" ||
+		definition.SystemPrompt != profile.SystemPrompt || !definition.Info.MutatesWorkspace {
+		t.Fatalf("profile = %#v, definition = %#v", entry.Profile, definition)
+	}
+	if !strings.Contains(string(entry.Raw), "kind: external") || !strings.Contains(string(entry.Raw), "agent: browser") {
+		t.Fatalf("external fields were not stored:\n%s", entry.Raw)
+	}
+}
+
+func TestLegacyProfileWithoutKindLoadsAsInner(t *testing.T) {
+	profile, err := ParseProfile([]byte("version: 1\nname: reader\nrole: scout\nsystem_prompt: Read.\ntools: []\ndelegates: []\n"))
+	if err != nil || profile.Kind != AgentKindInner {
+		t.Fatalf("profile = %#v, err = %v", profile, err)
+	}
+}
+
 func TestCustomProfileUnknownWorkspaceIdentityBlocksGlobalFallback(t *testing.T) {
 	s := ProfileStore{Global: filepath.Join(t.TempDir(), "global"), Workspace: filepath.Join(t.TempDir(), "workspace")}
 	p := customProfile()

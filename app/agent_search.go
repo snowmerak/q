@@ -57,7 +57,7 @@ func (m model) startAgentSearch(query string) (tea.Model, tea.Cmd) {
 		return m, m.input.Focus()
 	}
 	if !toolAvailable(toolRuntime, subagent.ExternalSearchToolName) {
-		m.status = "Search agent is not configured · assign it with /agents"
+		m.status = "Search agent is not configured · assign it in /subagents"
 		return m, m.input.Focus()
 	}
 
@@ -259,7 +259,7 @@ func (a *acpAgent) runACPAgentSearch(ctx context.Context, query string) (acp.Pro
 		return acp.PromptResponse{}, err
 	}
 	if !toolAvailable(toolRuntime, subagent.ExternalSearchToolName) {
-		message := "Search agent is not configured. Assign an enabled ACP connection to the search role with q agents."
+		message := "Search agent is not configured. Assign an enabled ACP connection to builtin/web-search with /subagents."
 		if err := a.updateContext(ctx, acp.UpdateAgentMessageText(message)); err != nil {
 			return acp.PromptResponse{}, err
 		}

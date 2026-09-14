@@ -8,10 +8,12 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/snowmerak/q/client"
+	"github.com/snowmerak/q/config"
 	"github.com/snowmerak/q/mcpconfig"
 	"github.com/snowmerak/q/sessionstore"
 	"github.com/snowmerak/q/subagent"
 	acp "github.com/snowmerak/q/third_party/acp-go-sdk"
+	"github.com/snowmerak/q/workspace"
 	"gopkg.in/yaml.v3"
 )
 
@@ -78,8 +80,20 @@ func (m model) customInfo(command string) string {
 			if info.MutatesWorkspace {
 				access = "mutates workspace"
 			}
+			if info.Kind == subagent.AgentKindExternal {
+				definition, _ := registry.Get(info.Name)
+				if connection, _, available := externalDefinitionConnection(m.activeConfig(), definition); available {
+					access += " · ACP " + connection
+				} else {
+					access += " · unavailable"
+				}
+			}
 			definition, _ := registry.Get(info.Name)
-			fmt.Fprintf(&b, "%s · %s · %s · %s\n  %s\n", info.Name, info.Role, info.Source, access, info.Description)
+			target := info.Role
+			if info.Kind == subagent.AgentKindExternal {
+				target = "ACP " + definition.Connection
+			}
+			fmt.Fprintf(&b, "%s · %s · %s · %s · %s\n  %s\n", info.Name, info.Kind, target, info.Source, access, info.Description)
 			if len(definition.Delegates) > 0 {
 				fmt.Fprintf(&b, "  delegates: %s\n", strings.Join(definition.Delegates, ", "))
 			}
@@ -98,12 +112,23 @@ func (m model) customInfo(command string) string {
 			return err.Error()
 		}
 		if definition.Info.Source == "builtin" {
+			connection, _, _ := externalDefinitionConnection(m.activeConfig(), definition)
 			raw, _ := yaml.Marshal(map[string]any{
 				"name": definition.Info.Name, "description": definition.Info.Description,
-				"role": definition.Info.Role, "mutates_workspace": definition.Info.MutatesWorkspace,
+				"kind": definition.Info.Kind, "role": definition.Info.Role, "mutates_workspace": definition.Info.MutatesWorkspace,
+				"agent": connection, "system_prompt": definition.SystemPrompt,
 				"tools": definition.Tools, "delegates": definition.Delegates,
 			})
-			return "builtin (read-only)\n" + string(raw)
+			state := "editable profile"
+			if definition.Info.Source == "builtin" {
+				state = "builtin"
+				if definition.Info.Kind == subagent.AgentKindExternal {
+					state += " (ACP binding editable)"
+				} else {
+					state += " (read-only)"
+				}
+			}
+			return state + "\n" + string(raw)
 		}
 		profileName := strings.TrimPrefix(definition.Info.Name, definition.Info.Source+"/")
 		var entry subagent.ProfileEntry
@@ -131,6 +156,24 @@ func (m model) streamCustom(ctx context.Context, name, input string, events chan
 	definition, err := m.resolvePublicAgent(name)
 	if err != nil {
 		fail(err)
+		return
+	}
+	if definition.Info.Kind == subagent.AgentKindExternal {
+		connectionID, connection, available := externalDefinitionConnection(m.activeConfig(), definition)
+		if !available {
+			fail(fmt.Errorf("subagent %q has no enabled ACP connection", name))
+			return
+		}
+		root := ""
+		if m.workspaceStore != nil {
+			root = m.workspaceStore.Root
+		}
+		report, runErr := runACPExternalSubagent(ctx, root, connectionID, connection, definition, input)
+		if runErr != nil {
+			fail(runErr)
+			return
+		}
+		emitAgentEvent(ctx, events, agentEvent{response: &client.ChatResponse{Choices: []client.Choice{{Message: client.Message{Role: client.RoleAssistant, Content: report}}}}})
 		return
 	}
 	if m.client == nil {
@@ -192,9 +235,18 @@ func (m model) startCustom(command string) (tea.Model, tea.Cmd) {
 		m.status = err.Error()
 		return m, nil
 	}
-	if _, err = m.resolvePublicAgent(name); err != nil {
+	definition, err := m.resolvePublicAgent(name)
+	if err != nil {
 		m.status = err.Error()
 		return m, nil
+	}
+	if definition.Info.Kind == subagent.AgentKindExternal {
+		switch definition.Info.Name {
+		case subagent.BuiltinWebSearchID:
+			return m.startAgentSearch(input)
+		case subagent.BuiltinWebTesterID:
+			return m.startAgentWebTester(input)
+		}
 	}
 	m.planArmed = false
 	m.beginTurn()
@@ -236,8 +288,17 @@ func (a *acpAgent) runACPCustom(ctx context.Context, command string) (acp.Prompt
 	if err != nil {
 		return acp.PromptResponse{}, err
 	}
-	if _, err = a.state.resolvePublicAgent(name); err != nil {
+	definition, err := a.state.resolvePublicAgent(name)
+	if err != nil {
 		return acp.PromptResponse{}, err
+	}
+	if definition.Info.Kind == subagent.AgentKindExternal {
+		switch definition.Info.Name {
+		case subagent.BuiltinWebSearchID:
+			return a.runACPAgentSearch(ctx, input)
+		case subagent.BuiltinWebTesterID:
+			return a.runACPAgentWebTester(ctx, input)
+		}
 	}
 	a.state.turnMessageStart = len(a.state.messages)
 	changed := a.state.touchSessionMetadata(input)
@@ -267,4 +328,38 @@ func (a *acpAgent) runACPCustom(ctx context.Context, command string) (acp.Prompt
 	events := make(chan agentEvent)
 	go a.state.streamCustom(runCtx, name, input, events)
 	return a.continueACPPlan(ctx, &acpPlanContinuation{workflowCtx: runCtx, cancel: cancel, events: events, trace: trace, objective: input, workflow: "custom"}, false)
+}
+
+// RunSubagents opens subagent profiles, external bindings, and ACP connection
+// management without starting the chat runtime.
+func RunSubagents(ctx context.Context, store config.Store, workspaceStore workspace.Store) error {
+	value, err := store.Load()
+	if err != nil {
+		return err
+	}
+	m := newModel(ctx, store, nil)
+	m.config = value
+	m.workspaceStore = &workspaceStore
+	updated, _ := m.enterCustom()
+	m = updated.(model)
+	if m.screen != screenCustom {
+		return fmt.Errorf("open subagents: %s", m.status)
+	}
+	_, err = runStandalone(m, screenCustom)
+	return err
+}
+
+func RunSubagentsDefault(ctx context.Context) error {
+	store, err := config.DefaultStore()
+	if err != nil {
+		return err
+	}
+	workspaceStore, err := workspace.DefaultStore()
+	if err != nil {
+		return err
+	}
+	if err := RunSubagents(ctx, store, workspaceStore); err != nil {
+		return fmt.Errorf("q subagents: %w", err)
+	}
+	return nil
 }

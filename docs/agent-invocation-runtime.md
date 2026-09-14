@@ -90,13 +90,18 @@ call, capture된 tool result, 최종 상위 agent 응답을 workspace session과
 ## 구성과 갱신
 
 Invocation runtime은 현재 turn 또는 planning run을 시작할 때 만든 configuration
-snapshot을 사용한다. `/agents` 설정을 저장하면 workspace runtime을 재시작하지 않아도
+snapshot을 사용한다. `/subagents`에서 ACP connection이나 external binding을 저장하면 workspace runtime을 재시작하지 않아도
 다음 invocation부터 반영된다. 외부 role이 존재하고, `agent`가 비어 있지 않고,
 참조한 connection이 존재하며 enabled일 때만 available이다. 이 조건이 아니면 해당
 `external_*` tool, TUI completion/help, ACP `AvailableCommands`/`/help`, Planner executor
 enum에서 모두 사라진다. 사용자가 숨겨진 `/agent:*` 문자열을 직접 입력해도 설정
-안내로 존재를 드러내지 않고 일반 입력으로 처리한다. `q agents`의 role 행은 연결을
-설정해야 하므로 항상 표시한다.
+안내로 존재를 드러내지 않고 일반 입력으로 처리한다. Builtin external binding과 shared
+ACP connection은 `/subagents` 또는 standalone `q subagents`에서 관리한다.
+
+Custom external subagent는 profile에 `kind: external`, ACP `agent`, `system_prompt`,
+`mutates_workspace`를 저장한다. ACP NewSession에는 system-message 필드가 없으므로 저장된
+system prompt는 첫 ordinary ACP prompt의 앞부분으로 전송된다. Builtin external의 prompt는
+builtin definition이 소유하며 `/subagents`에서는 ACP binding만 바꿀 수 있다.
 
 ## 필수 검증
 

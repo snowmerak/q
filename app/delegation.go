@@ -32,6 +32,7 @@ type delegationDispatcher struct {
 	runID            string
 	sink             subagent.RecordSink
 	capture          subagent.InvocationCaptureFunc
+	external         map[string]subagent.Invocation
 
 	mu       sync.Mutex
 	calls    int
@@ -53,7 +54,7 @@ type delegateInput struct {
 }
 
 func buildSubagentRegistry(store subagent.ProfileStore) (*subagent.Registry, error) {
-	definitions := subagent.BuiltinAgentDefinitions()
+	definitions := subagent.PublicAgentDefinitions()
 	for _, entry := range store.List() {
 		if entry.Err != nil {
 			continue
@@ -87,7 +88,7 @@ func (m model) configuredDelegationRuntimeFor(base agentToolRuntime, root, calle
 	dispatcher := &delegationDispatcher{
 		registry: registry, client: m.client, tools: catalog, value: m.activeConfig(),
 		workingDirectory: root, environment: environment, runID: m.runID,
-		capture: configuredInvocationCapture(m.toolRuntime),
+		capture: configuredInvocationCapture(m.toolRuntime), external: configuredExternalDelegates(m.activeConfig(), root, registry),
 	}
 	if strings.TrimSpace(m.runID) != "" {
 		dispatcher.sink = m.archive
@@ -168,7 +169,14 @@ func (r *delegationRuntime) available() []subagent.DelegateInfo {
 
 func (d *delegationDispatcher) available(name string) bool {
 	definition, found := d.registry.Get(name)
-	if !found || !d.value.HasNativeRole(definition.Info.Role) {
+	if !found {
+		return false
+	}
+	if definition.Info.Kind == subagent.AgentKindExternal {
+		_, configured := d.external[name]
+		return configured && d.capture != nil
+	}
+	if definition.Info.Kind != subagent.AgentKindInner || !d.value.HasNativeRole(definition.Info.Role) {
 		return false
 	}
 	if !definition.StrictTools {
@@ -211,6 +219,9 @@ func (d *delegationDispatcher) dispatch(
 	d.mu.Unlock()
 
 	definition, _ := d.registry.Get(input.SubagentName)
+	if definition.Info.Kind == subagent.AgentKindExternal {
+		return d.dispatchExternal(ctx, definition, call, input.Prompt)
+	}
 	models, err := d.loadModels(ctx)
 	if err != nil {
 		return client.ToolResult{Content: err.Error(), IsError: true}, nil
@@ -241,6 +252,81 @@ func (d *delegationDispatcher) dispatch(
 		Protocol: "q-subagent", Name: input.SubagentName, Kind: "agent-result",
 		MediaType: "application/vnd.q.agent-result+json",
 	}, call, raw)
+}
+
+func configuredExternalDelegates(value config.Config, root string, registry *subagent.Registry) map[string]subagent.Invocation {
+	result := make(map[string]subagent.Invocation)
+	for _, info := range registry.List() {
+		if info.Kind != subagent.AgentKindExternal {
+			continue
+		}
+		definition, _ := registry.Get(info.Name)
+		connectionID, connection, configured := externalDefinitionConnection(value, definition)
+		if !configured {
+			continue
+		}
+		switch info.Name {
+		case subagent.BuiltinWebSearchID:
+			if invocation, available := configuredExternalSearchInvocation(value, root); available {
+				result[info.Name] = invocation
+			}
+		case subagent.BuiltinWebTesterID:
+			if invocation, available := configuredExternalWebTesterInvocation(value, root); available {
+				result[info.Name] = invocation
+			}
+		default:
+			result[info.Name] = configuredExternalSubagentInvocation(root, connectionID, connection, definition)
+		}
+	}
+	return result
+}
+
+func externalDefinitionConnection(value config.Config, definition subagent.AgentDefinition) (string, config.AgentConnectionConfig, bool) {
+	if definition.Info.Kind != subagent.AgentKindExternal {
+		return "", config.AgentConnectionConfig{}, false
+	}
+	if definition.Connection == "" {
+		return value.ExternalAgentConnection(definition.Info.Role)
+	}
+	connection, found := value.Agents.Connections[definition.Connection]
+	if !found || connection.Disabled {
+		return "", config.AgentConnectionConfig{}, false
+	}
+	return definition.Connection, connection, true
+}
+
+func (d *delegationDispatcher) dispatchExternal(
+	ctx context.Context,
+	definition subagent.AgentDefinition,
+	parentCall client.ToolCall,
+	prompt string,
+) (client.ToolResult, error) {
+	invocation, configured := d.external[definition.Info.Name]
+	if !configured || d.capture == nil {
+		return client.ToolResult{Content: fmt.Sprintf("subagent %q is unavailable", definition.Info.Name), IsError: true}, nil
+	}
+	var input any
+	switch definition.Info.Name {
+	case subagent.BuiltinWebSearchID:
+		input = subagent.ExternalSearchInput{Query: prompt}
+	case subagent.BuiltinWebTesterID:
+		input = subagent.ExternalWebTesterInput{Request: prompt}
+	default:
+		input = externalSubagentInput{Request: prompt}
+	}
+	arguments, err := json.Marshal(input)
+	if err != nil {
+		return client.ToolResult{}, fmt.Errorf("encode %s delegation: %w", definition.Info.Name, err)
+	}
+	externalCall := client.ToolCall{
+		ID: parentCall.ID, Type: client.ToolTypeFunction,
+		Function: client.FunctionCall{Name: invocation.Tool.Function.Name, Arguments: string(arguments)},
+	}
+	runtime, err := subagent.NewInvocationRuntime(nil, d.capture, invocation)
+	if err != nil {
+		return client.ToolResult{}, err
+	}
+	return runtime.Call(ctx, externalCall)
 }
 
 func (d *delegationDispatcher) loadModels(ctx context.Context) ([]client.Model, error) {
