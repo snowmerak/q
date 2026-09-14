@@ -13,7 +13,7 @@ import (
 )
 
 type SearchSkillsInput struct {
-	Query  string   `json:"query" jsonschema:"Keywords describing the procedure or expertise needed"`
+	Query  string   `json:"query" jsonschema:"Concise English keywords describing the procedure or expertise needed; translate non-English requests"`
 	Scopes []string `json:"scopes,omitempty" jsonschema:"Optional exact scopes: global or workspace"`
 	Tags   []string `json:"tags,omitempty" jsonschema:"Optional tags; a skill must match at least one"`
 	Limit  int      `json:"limit,omitempty" jsonschema:"Maximum results; uses the Session Store default when omitted"`
