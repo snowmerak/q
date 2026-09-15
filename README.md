@@ -428,9 +428,41 @@ than storing credential values inline.
 ### Agent Skills
 
 q implements the portable [`SKILL.md` Agent Skills
-format](https://agentskills.io/specification). It searches indexed metadata
-instead of injecting the complete catalog into every prompt. Skills are
-discovered, in increasing precedence, from:
+format](https://agentskills.io/specification) as an on-demand retrieval layer.
+It keeps the full catalog and skill bodies out of the base prompt. For roles
+with both skill tools, a new user turn or new information from `task_start` and
+`ask_to_user` triggers a bounded metadata search that adds up to four
+previously unseen candidate skills to the new context:
+
+```text
+new user/task information
+  -> BM25 or hybrid metadata search
+  -> bounded candidate hints
+  -> get_skill for an applicable candidate
+  -> full SKILL.md/resource in model context
+```
+
+Candidate metadata is not treated as an instruction: the model must call
+`get_skill` before following a skill. Automatic search failure never blocks the
+turn, and roles with skill tools can still call `search_skills` whenever later
+work needs more guidance. Already hinted or loaded skill IDs are not suggested
+again in the same context.
+
+Without an embedding model, retrieval is BM25-only. With one, q combines BM25
+and HNSW vector results; assigning a new embedding model rebuilds and backfills
+the vector projection. Lexical matches rank skill name above tags and
+description. Global and workspace results receive no scope bonus; when both
+bounded result sets contain the same skill name, the workspace hit wins, and
+`total` is computed after merging and de-duplication but before applying the
+requested limit.
+
+Dynamic hints are appended to the current user message or the new tool result,
+never inserted ahead of an already-sent conversation prefix. The visible
+transcript retains the original user text. This keeps earlier prompt content
+eligible for provider prefix caching, although individual cache hits remain
+provider-managed.
+
+Skills are discovered, in increasing precedence, from:
 
 ```text
 ~/.agents/skills/
@@ -441,7 +473,7 @@ discovered, in increasing precedence, from:
 
 `/skills` can clone, fast-forward, remove, and reindex q-managed global or
 workspace skills. See [Agent Skills](docs/agent-skills.md) for validation,
-shadowing, indexing, and tool access rules.
+contextual hint bounds, indexing, prompt placement, and tool access rules.
 
 ### Workspace instructions
 

@@ -38,6 +38,42 @@ the same tools in its non-mutating investigation allowlist and is the preferred 
 research role for skill discovery. Planner, Coder, and commit sessions do not
 receive them.
 
+## Contextual discovery
+
+When a role exposes both `search_skills` and `get_skill`, q performs host-side
+candidate retrieval at the points where new task information becomes
+available:
+
+- a new user turn, using the user text and any active task objective and
+  completion criteria;
+- a successful `task_start`, using its objective and completion criteria;
+- an `ask_to_user` answer, using the question and context together with the
+  selected choice label and description or the free-form answer.
+
+The normalized query is limited to 4,000 runes and requests at most eight
+search hits. q adds at most four candidates after removing skill IDs already
+hinted or loaded in the current context. Candidate descriptions are limited to
+600 runes; each candidate retains at most twelve tags of at most 80 runes each.
+Previously seen IDs are recovered from earlier contextual hints,
+`task_start`/`ask_to_user` tool results, and successful `get_skill` results.
+
+Only candidate metadata is injected. It is explicitly marked as
+non-instructional, and the model must call `get_skill` with an exact candidate
+ID before following that skill. If no candidate applies, or later work reveals
+a different information need, the stable agent instructions continue to direct
+the model to call `search_skills` itself. Automatic retrieval errors are
+non-blocking and leave that model-driven fallback available.
+
+For a new user turn, the hint is appended to the current model-facing user
+message before its first provider request. The visible transcript retains the
+original user text. Hints found after `task_start` or `ask_to_user` are fields
+inside those new tool results. No path inserts a dynamic developer message or
+rewrites an earlier request prefix. This append-only placement preserves the
+existing prefix for provider prompt caching; an actual cache hit still depends
+on provider routing, retention, and model support. Codex App Server routes keep
+the same conversation/thread ID across ordinary follow-up turns and delegated
+tool callbacks, and contextual hinting does not reset that ID.
+
 ## Discovery and precedence
 
 From lowest to highest precedence:
