@@ -125,7 +125,7 @@ func (m model) customInfo(command string) string {
 				if definition.Info.Kind == subagent.AgentKindExternal {
 					state += " (ACP binding editable)"
 				} else {
-					state += " (read-only)"
+					state += " (fixed)"
 				}
 			}
 			return state + "\n" + string(raw)

@@ -98,7 +98,7 @@ func TestRootDelegationListContainsBuiltinsAndCanonicalProfiles(t *testing.T) {
 		t.Fatal(err)
 	}
 	names := delegateInfoNames(listed)
-	for _, expected := range []string{subagent.BuiltinScoutID, subagent.BuiltinCoderID, subagent.BuiltinWebSearchID, subagent.BuiltinWebTesterID, "global/reader"} {
+	for _, expected := range []string{subagent.BuiltinScoutID, subagent.BuiltinExecutorID, subagent.BuiltinCoderID, subagent.BuiltinWebSearchID, subagent.BuiltinWebTesterID, "global/reader"} {
 		if !containsAgentName(names, expected) {
 			t.Fatalf("missing %s from %#v", expected, listed)
 		}

@@ -33,6 +33,7 @@ const (
 	AgentRoleSearch            = "search"
 	AgentRoleExternalWebTester = "external_web_tester"
 	AgentRolePlanner           = "planner"
+	AgentRoleExecutor          = "executor"
 	AgentRoleCoder             = "coder"
 	AgentRoleCommit            = "commit"
 	AgentRoleAdvisor           = "advisor"
@@ -144,6 +145,7 @@ var agentRoles = []string{
 	AgentRoleScout,
 	AgentRoleResearch,
 	AgentRolePlanner,
+	AgentRoleExecutor,
 	AgentRoleCoder,
 	AgentRoleCommit,
 	AgentRoleAdvisor,

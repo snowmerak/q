@@ -152,7 +152,7 @@ func TestCustomDeleteRejectsReferencedProfile(t *testing.T) {
 	}
 }
 
-func TestCustomScreenListsBuiltinDefinitionsAsReadOnly(t *testing.T) {
+func TestCustomScreenListsBuiltinDefinitionsAsFixed(t *testing.T) {
 	m := customViewFixture(t, 100, 36, true)
 	m.reloadCustom()
 	plain := ansi.Strip(m.viewCustom())
@@ -162,8 +162,35 @@ func TestCustomScreenListsBuiltinDefinitionsAsReadOnly(t *testing.T) {
 	m.custom.cursor = 0
 	updated, _ := m.beginCustomEdit(false)
 	m = updated.(model)
-	if m.custom.editing || !strings.Contains(m.status, "inner and read-only") {
+	if m.custom.editing || !strings.Contains(m.status, "fixed inner definition") {
 		t.Fatalf("builtin edit state = %v, status = %s", m.custom.editing, m.status)
+	}
+}
+
+func TestCustomScreenShowsExecutorMutationAuthority(t *testing.T) {
+	m := customViewFixture(t, 100, 36, true)
+	m.reloadCustom()
+	found := false
+	for index, definition := range m.custom.fixed {
+		if definition.Info.Name == subagent.BuiltinExecutorID {
+			m.custom.cursor = index
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatal("executor definition is missing")
+	}
+	plain := ansi.Strip(m.customSelectionDetail())
+	for _, wanted := range []string{"INNER · MUTATES WORKSPACE", "read_file", "list_directory", "loom_read", subagent.BuiltinCoderID, subagent.BuiltinReviewerID, subagent.BuiltinWebTesterID} {
+		if !strings.Contains(plain, wanted) {
+			t.Fatalf("executor detail missing %q:\n%s", wanted, plain)
+		}
+	}
+	for _, forbidden := range []string{"edit_file", "write_file", "run_command"} {
+		if strings.Contains(plain, forbidden) {
+			t.Fatalf("executor detail exposed %q:\n%s", forbidden, plain)
+		}
 	}
 }
 

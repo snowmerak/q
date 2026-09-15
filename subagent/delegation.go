@@ -23,6 +23,7 @@ const (
 	BuiltinScoutID     = "builtin/scout"
 	BuiltinGrillerID   = "builtin/griller"
 	BuiltinPlannerID   = "builtin/planner"
+	BuiltinExecutorID  = "builtin/executor"
 	BuiltinReviewerID  = "builtin/reviewer"
 	BuiltinCoderID     = "builtin/coder"
 	BuiltinWebSearchID = "builtin/web-search"
@@ -143,6 +144,27 @@ func NewRegistry(definitions []AgentDefinition) (*Registry, error) {
 			return nil, err
 		}
 	}
+	// A delegation grant carries the target's authority, so discovery surfaces
+	// must not label an indirect workspace mutator as read-only.
+	mutation := make(map[string]bool, len(registry.definitions))
+	var mayMutate func(string) bool
+	mayMutate = func(name string) bool {
+		if value, found := mutation[name]; found {
+			return value
+		}
+		definition := registry.definitions[name]
+		value := definition.Info.MutatesWorkspace
+		for _, target := range definition.Delegates {
+			value = value || mayMutate(target)
+		}
+		mutation[name] = value
+		definition.Info.MutatesWorkspace = value
+		registry.definitions[name] = definition
+		return value
+	}
+	for name := range registry.definitions {
+		mayMutate(name)
+	}
 	return registry, nil
 }
 
@@ -239,9 +261,16 @@ func BuiltinAgentDefinitions() []AgentDefinition {
 		},
 		{
 			Info: DelegateInfo{Name: BuiltinPlannerID, Source: "builtin", Kind: AgentKindInner, Role: config.AgentRolePlanner,
-				Description: "Turn a bounded request into an actionable implementation approach."},
-			SystemPrompt: "Produce an actionable approach for the explicit request. Do not read files or directories directly; delegate repository inspection to the scout and ground repository claims in its evidence. Keep scope bounded, include verification, and do not modify the workspace. This is advice for the caller, not an approved q /plan proposal.",
-			Tools:        delegatedReadTools, Delegates: []string{BuiltinScoutID},
+				Description: "Plan a bounded request and execute it through the executor only when explicitly requested."},
+			SystemPrompt: "Produce an actionable approach for the explicit request. Do not read files or directories directly; delegate repository inspection to the scout and ground repository claims in its evidence. Keep scope bounded and include concrete completion criteria and verification. If the request asks only for a plan or advice, return the plan without executing it. If the request explicitly asks to implement or execute through completion, first form the bounded plan and then delegate that plan to builtin/executor; report the executor outcome. Never infer execution authority from a planning-only request. This is not the approval-gated q /plan workflow.",
+			Tools:        delegatedReadTools, Delegates: []string{BuiltinScoutID, BuiltinExecutorID},
+		},
+		{
+			Info: DelegateInfo{Name: BuiltinExecutorID, Source: "builtin", Kind: AgentKindInner, Role: config.AgentRoleExecutor,
+				Description: "Execute a supplied bounded plan by coordinating Coder attempts and independent review."},
+			SystemPrompt: "Execute the supplied bounded plan through the same control loop as q's plan workflow. You may inspect the workspace but must not modify it yourself. Delegate the current bounded task, its resolved scope, completion criteria, and any retry feedback to builtin/coder. Inspect the returned TaskResult and any referenced Loom evidence, then delegate the original criteria and Coder result to builtin/reviewer. If Reviewer reports an actionable defect or missing verification, pass that exact feedback into a new Coder attempt and review the new result again. Advance only when Reviewer accepts the result. Use builtin/web-tester when it is granted and the plan requires external behavior verification. Keep attempts bounded, preserve the approved scope, and report a blocker instead of inventing authority. Call task_complete only after every required task is accepted.",
+			Tools:        append([]string(nil), readTools...),
+			Delegates:    []string{BuiltinCoderID, BuiltinReviewerID},
 		},
 		{
 			Info: DelegateInfo{Name: BuiltinReviewerID, Source: "builtin", Kind: AgentKindInner, Role: config.AgentRoleAdvisor,
@@ -265,6 +294,8 @@ func PublicAgentDefinitions() []AgentDefinition {
 		switch definitions[index].Info.Name {
 		case BuiltinGrillerID, BuiltinPlannerID, BuiltinReviewerID:
 			definitions[index].Delegates = append(definitions[index].Delegates, BuiltinWebSearchID)
+		case BuiltinExecutorID:
+			definitions[index].Delegates = append(definitions[index].Delegates, BuiltinWebTesterID)
 		}
 	}
 	return append(definitions, ExternalAgentDefinitions()...)

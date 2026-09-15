@@ -113,7 +113,7 @@ func (m model) viewCustom() string {
 		if definition.Info.Kind == subagent.AgentKindExternal {
 			help = "↑/↓ select · tab/→ details · e change ACP · c ACP connections · esc back"
 		} else {
-			help = "↑/↓ select · tab/→ details · builtin read-only · esc back"
+			help = "↑/↓ select · tab/→ details · builtin fixed · esc back"
 		}
 	}
 	if m.custom.panelFocused {
@@ -143,7 +143,7 @@ func (m model) viewCustom() string {
 		case m.custom.panelFocused:
 			status = "Details focused"
 		case fixed && definition.Info.Kind == subagent.AgentKindInner:
-			status = "Builtin inner definitions are read-only"
+			status = "Builtin inner definitions are fixed"
 		default:
 			status = "Tab or → focuses the details panel"
 		}

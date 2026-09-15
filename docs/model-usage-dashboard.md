@@ -103,7 +103,7 @@ compatible protocol을 확인한 follower client가 된다. SQLite는 leader 한
 | `cache_estimated` | cache breakdown이 없었는지 여부 |
 
 role은 model client를 복제하지 않고 request context에 붙인다. 기본값은 `unknown`이며,
-공통 orchestration 경계에서 `main`, `planner`, `griller`, `scout`, `coder`, `thinker`,
+공통 orchestration 경계에서 `main`, `planner`, `executor`, `griller`, `scout`, `coder`, `thinker`,
 `librarian`, `commit`, `embedding`처럼 bounded label을 지정한다. 임의 사용자 입력을 role로
 저장하지 않는다.
 

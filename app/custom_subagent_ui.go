@@ -70,6 +70,13 @@ func (m *model) reloadCustom() {
 		selectedID = m.custom.entries[index].Path
 	}
 	m.custom.fixed = subagent.PublicAgentDefinitions()
+	if registry, err := subagent.NewRegistry(m.custom.fixed); err == nil {
+		for index := range m.custom.fixed {
+			if definition, found := registry.Get(m.custom.fixed[index].Info.Name); found {
+				m.custom.fixed[index] = definition
+			}
+		}
+	}
 	m.custom.entries = m.customStore().List()
 	m.custom.cursor = 0
 	if selectedID != "" {
@@ -145,7 +152,7 @@ func (m model) beginCustomEdit(create bool) (tea.Model, tea.Cmd) {
 	if !create {
 		if definition, fixed := c.selectedFixed(); fixed {
 			if definition.Info.Kind != subagent.AgentKindExternal {
-				m.status = definition.Info.Name + " is inner and read-only"
+				m.status = definition.Info.Name + " is a fixed inner definition"
 				return m, nil
 			}
 			copy := definition

@@ -265,7 +265,7 @@ func TestLibrarianUsesRoleOverrideAndActiveModelFallback(t *testing.T) {
 
 func TestAgentRolesIncludesLearningRoles(t *testing.T) {
 	roles := AgentRoles()
-	for _, expected := range []string{AgentRoleThinker, AgentRoleLibrarian} {
+	for _, expected := range []string{AgentRoleExecutor, AgentRoleThinker, AgentRoleLibrarian} {
 		if !IsAgentRole(expected) {
 			t.Fatalf("%s is not recognized as an agent role", expected)
 		}

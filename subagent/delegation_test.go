@@ -1,22 +1,24 @@
 package subagent
 
 import (
+	"slices"
 	"strings"
 	"testing"
 
+	"github.com/snowmerak/q/client"
 	"github.com/snowmerak/q/config"
 )
 
 func TestBuiltinAgentDefinitionsArePublicAndBounded(t *testing.T) {
 	definitions := BuiltinAgentDefinitions()
-	if len(definitions) != 5 {
+	if len(definitions) != 6 {
 		t.Fatalf("builtins = %#v", definitions)
 	}
 	registry, err := NewRegistry(definitions)
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{BuiltinCoderID, BuiltinGrillerID, BuiltinPlannerID, BuiltinReviewerID, BuiltinScoutID}
+	want := []string{BuiltinCoderID, BuiltinExecutorID, BuiltinGrillerID, BuiltinPlannerID, BuiltinReviewerID, BuiltinScoutID}
 	listed := registry.List()
 	for index, name := range want {
 		if listed[index].Name != name {
@@ -26,7 +28,13 @@ func TestBuiltinAgentDefinitionsArePublicAndBounded(t *testing.T) {
 	if got := delegateNames(registry.Allowed(BuiltinCoderID)); strings.Join(got, ",") != BuiltinReviewerID+","+BuiltinScoutID {
 		t.Fatalf("coder grants = %v", got)
 	}
-	for _, name := range []string{BuiltinGrillerID, BuiltinPlannerID, BuiltinReviewerID} {
+	if got := delegateNames(registry.Allowed(BuiltinExecutorID)); strings.Join(got, ",") != BuiltinCoderID+","+BuiltinReviewerID {
+		t.Fatalf("executor grants = %v", got)
+	}
+	if got := delegateNames(registry.Allowed(BuiltinPlannerID)); strings.Join(got, ",") != BuiltinExecutorID+","+BuiltinScoutID {
+		t.Fatalf("planner grants = %v", got)
+	}
+	for _, name := range []string{BuiltinGrillerID, BuiltinReviewerID} {
 		if got := delegateNames(registry.Allowed(name)); len(got) != 1 || got[0] != BuiltinScoutID {
 			t.Fatalf("%s grants = %v", name, got)
 		}
@@ -45,7 +53,19 @@ func TestBuiltinAgentDefinitionsArePublicAndBounded(t *testing.T) {
 			}
 		}
 	}
-	for _, name := range []string{BuiltinScoutID, BuiltinCoderID} {
+	executor, found := registry.Get(BuiltinExecutorID)
+	if !found {
+		t.Fatal("executor definition is missing")
+	}
+	if !slices.Contains(executor.Tools, "loom_read") {
+		t.Fatalf("executor evidence tools = %v", executor.Tools)
+	}
+	for _, forbidden := range []string{"edit_file", "write_file", "create_directory", "move_path", "copy_path", "remove_path", "run_command"} {
+		if slices.Contains(executor.Tools, forbidden) {
+			t.Fatalf("executor received workspace mutation tool %q", forbidden)
+		}
+	}
+	for _, name := range []string{BuiltinScoutID, BuiltinExecutorID, BuiltinCoderID} {
 		definition, found := registry.Get(name)
 		if !found {
 			t.Fatalf("missing definition %q", name)
@@ -67,7 +87,8 @@ func TestBuiltinAgentDefinitionsArePublicAndBounded(t *testing.T) {
 		if info.Kind != AgentKindInner {
 			t.Fatalf("builtin kind = %#v", info)
 		}
-		if info.MutatesWorkspace != (info.Name == BuiltinCoderID) {
+		mayMutate := info.Name == BuiltinCoderID || info.Name == BuiltinExecutorID || info.Name == BuiltinPlannerID
+		if info.MutatesWorkspace != mayMutate {
 			t.Fatalf("mutation capability = %#v", info)
 		}
 	}
@@ -91,6 +112,52 @@ func TestPublicAgentDefinitionsIncludeExternalACPAdapters(t *testing.T) {
 		if got := delegateNames(registry.Allowed(name)); !strings.Contains(strings.Join(got, ","), BuiltinWebSearchID) {
 			t.Fatalf("%s grants = %v", name, got)
 		}
+	}
+	if got := delegateNames(registry.Allowed(BuiltinExecutorID)); !strings.Contains(strings.Join(got, ","), BuiltinWebTesterID) {
+		t.Fatalf("executor web tester grant = %v", got)
+	}
+}
+
+func TestExecutorToolSurfaceDelegatesWithoutDirectMutation(t *testing.T) {
+	registry, err := NewRegistry(PublicAgentDefinitions())
+	if err != nil {
+		t.Fatal(err)
+	}
+	executor, found := registry.Get(BuiltinExecutorID)
+	if !found {
+		t.Fatal("executor definition is missing")
+	}
+	runtime := &fakeScoutTools{available: append(DelegateTools(),
+		client.Tool{Type: client.ToolTypeFunction, Function: client.FunctionDefinition{Name: "read_file"}},
+		client.Tool{Type: client.ToolTypeFunction, Function: client.FunctionDefinition{Name: "loom_read"}},
+		client.Tool{Type: client.ToolTypeFunction, Function: client.FunctionDefinition{Name: "edit_file"}},
+	)}
+	tools, err := selectDefinitionTools(executor, runtime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, required := range []string{DelegateListToolName, DelegateToolName, TaskStartToolName, TaskCompleteToolName, "read_file", "loom_read"} {
+		if !hasTool(tools, required) {
+			t.Fatalf("executor runtime is missing %q: %#v", required, tools)
+		}
+	}
+	if hasTool(tools, "edit_file") {
+		t.Fatalf("executor runtime exposed edit_file: %#v", tools)
+	}
+}
+
+func TestRegistryPropagatesMutationCapabilityThroughDelegates(t *testing.T) {
+	definitions := append(BuiltinAgentDefinitions(), AgentDefinition{
+		Info:         DelegateInfo{Name: "global/coordinator", Role: config.AgentRoleScout},
+		SystemPrompt: "Coordinate.", Delegates: []string{BuiltinCoderID},
+	})
+	registry, err := NewRegistry(definitions)
+	if err != nil {
+		t.Fatal(err)
+	}
+	definition, found := registry.Get("global/coordinator")
+	if !found || !definition.Info.MutatesWorkspace {
+		t.Fatalf("transitive mutation capability = %#v, %v", definition, found)
 	}
 }
 

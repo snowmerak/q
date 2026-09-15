@@ -258,7 +258,7 @@ configuration. The standalone `q gateway start` command is a separate,
 user-addressable server with its own listener and API-key settings.
 
 `/model` assigns a model to the main chat and specialized roles such as
-`griller`, `scout`, `planner`, `coder`, `commit`, `thinker`, and `librarian`.
+`griller`, `scout`, `planner`, `executor`, `coder`, `commit`, `thinker`, and `librarian`.
 Press `a` in the assignment table to create a reusable custom role and `d` to
 delete an unreferenced custom role after confirmation.
 Assignments may reference ordered model groups. A group can fall back after a
@@ -273,7 +273,8 @@ only when automation requires it.
 
 Open `/subagents` in the TUI to inspect builtin definitions and manage runnable custom
 profiles. Inner and external execution are shown by the stored `kind`, not by an ID namespace.
-Builtin inner entries are read-only. Pressing `e` on a builtin external entry changes only
+Builtin inner entries are fixed definitions; their access label reflects both direct tools and
+delegates. Pressing `e` on a builtin external entry changes only
 its ACP binding; its built-in system prompt remains fixed. Press `c` to register, edit, test,
 enable, disable, or delete shared ACP connections. For custom entries, `a` adds, `e` edits,
 and `d` deletes the selected profile after confirmation. Each list row summarizes
@@ -346,7 +347,8 @@ delegates: []
 TUI and ACP support `/subagents list`, `/subagents show code-reader`, and
 `/subagent code-reader explain the cancellation handling in app/model.go`.
 The public builtin IDs are `builtin/scout`, `builtin/griller`, `builtin/planner`,
-`builtin/reviewer`, `builtin/coder`, `builtin/web-search`, and `builtin/web-tester`.
+`builtin/executor`, `builtin/reviewer`, `builtin/coder`, `builtin/web-search`, and
+`builtin/web-tester`.
 The latter two have `kind: external`; other external agents use their normal
 `global/...` or `workspace/...` profile ID. Bare `/subagents` opens the profile UI
 in the TUI and lists all available definitions in ACP. Creation, editing, and
@@ -361,6 +363,9 @@ lifecycle. External delegates bypass native model and tool scoping and use their
 invocation adapter and Loom capture. General chat receives `delegate_list` and `delegate`; custom agents
 receive them only when their profile has direct grants. `/plan` and `q sprint`
 retain their approval-gated Go workflow and internal Coder/Planner review.
+The public Planner delegates an explicitly execution-bearing request to the public Executor;
+planning-only requests stop after the plan. The Executor runs Coder attempts, sends their results
+to Reviewer, and passes retry feedback back to Coder without holding workspace mutation tools itself.
 
 ## Sessions, history, and learning
 

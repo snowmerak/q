@@ -25,7 +25,7 @@ external agent의 내부 호출은 Q가 provider 응답을 소유하지 않으�
 | `event_id` | transport retry에서 재사용하는 random idempotency ID |
 | `at` | 응답을 관측한 UTC 시각 |
 | `model` | 응답 model, 없으면 요청 model |
-| `role` | `main`, `planner`, `griller`, `scout`, `coder`, `thinker`, `librarian`, `commit`, `embedding` 또는 `unknown` |
+| `role` | `main`, `planner`, `executor`, `griller`, `scout`, `coder`, `thinker`, `librarian`, `commit`, `embedding` 또는 `unknown` |
 | `prompt_tokens` | 입력 token 수 |
 | `completion_tokens` | 출력 token 수. embedding은 `0` |
 | `total_tokens` | 전체 token 수 |

@@ -25,7 +25,10 @@ ID만 받는다. 호출 결과는 다른 큰 도구 결과와 마찬가지로 Lo
 
 - `builtin/scout`: 저장소와 제공된 자료를 조사한다.
 - `builtin/griller`: 요청의 모호함, 빠진 조건, 위험을 찾는다.
-- `builtin/planner`: 요청을 실행 가능한 접근법과 단계로 정리한다.
+- `builtin/planner`: 요청을 실행 가능한 접근법과 단계로 정리하고, 명시적으로 실행까지
+  요청된 경우에만 Executor로 넘긴다.
+- `builtin/executor`: Coder 실행 결과를 Reviewer에 넘기고 retry feedback을 다시 Coder에
+  전달하며 계획을 끝까지 조율한다.
 - `builtin/reviewer`: 요청한 코드나 결과를 수정하지 않고 검토한다.
 - `builtin/coder`: 요청 범위에서 workspace를 수정하고 검증한다.
 
@@ -88,14 +91,23 @@ Builtin의 초기 delegation 관계는 다음과 같다.
 ```text
 builtin/scout    -> []
 builtin/griller  -> [builtin/scout, builtin/web-search]
-builtin/planner  -> [builtin/scout, builtin/web-search]
+builtin/planner  -> [builtin/scout, builtin/executor, builtin/web-search]
+builtin/executor -> [builtin/coder, builtin/reviewer, builtin/web-tester]
 builtin/reviewer -> [builtin/scout, builtin/web-search]
 builtin/coder    -> [builtin/scout, builtin/reviewer]
 ```
 
 `builtin/web-search` grant는 ACP Search connection이 unavailable이면 목록에서 자동으로
-비활성화된다. 자동 permission을 사용하는 `builtin/web-tester`는 builtin에 기본 grant
-하지 않고 root 또는 명시적으로 선택한 custom profile에서만 호출한다.
+비활성화된다. 자동 permission을 사용하는 `builtin/web-tester`는 Executor, root 또는
+명시적으로 선택한 custom profile에서만 호출한다.
+
+Planner는 planning-only 요청에서 계획을 반환하고 멈춘다. 구현 또는 끝까지 실행하라는
+권한이 요청에 명시된 경우에만 완성한 계획과 completion criteria를 Executor에 전달한다.
+Executor는 `/plan`의 ExecutionLoop처럼 현재 task와 feedback을 Coder에 전달하고, 반환된
+TaskResult와 원래 completion criteria를 Reviewer에 전달한다. Reviewer가 retry를 요구하면
+그 feedback을 다음 Coder attempt에 그대로 넘긴 뒤 새 결과를 다시 검토시킨다. Executor
+자신은 workspace를 수정하지 않는다. 이 왕복은 task가 승인되거나 실제 blocker가 생길
+때까지 계속된다. 이 경로는 `/plan`의 승인 state machine을 대신하지 않는다.
 
 Custom profile은 `delegates`로 직접 호출 가능한 agent를 선택한다.
 
@@ -138,25 +150,31 @@ tool scope는 적용하지 않는다. Connection이 꺼지거나 빠지면 저�
 
 ## 도구와 변경 권한
 
-`builtin/scout`, `builtin/griller`, `builtin/planner`, `builtin/reviewer`는 파일 변경
-도구를 받지 않는다. `run_command`는 파일을 변경할 수 있으므로 이 네 builtin의 기본
-도구에서 제외한다. `builtin/coder`만 파일 변경과 command 도구를 받는다.
+`builtin/scout`, `builtin/griller`, `builtin/planner`, `builtin/executor`,
+`builtin/reviewer`는 파일 변경 도구를 받지 않는다. `run_command`는 파일을 변경할 수
+있으므로 이 다섯 builtin의 기본 도구에서 제외한다. `builtin/coder`만 파일 변경과
+command 도구를 직접 받는다.
 
 `builtin/griller`, `builtin/planner`, `builtin/reviewer`는 `read_file`과
 `list_directory`도 받지 않는다. 저장소의 파일이나 디렉터리 원문이 필요하면 직접
-읽지 않고 `builtin/scout`에 위임한다. `builtin/scout`와 `builtin/coder`는 두 읽기
-도구를 유지한다.
+읽지 않고 위임한다. `builtin/scout`, `builtin/executor`, `builtin/coder`는 두 workspace
+읽기 도구를 유지하며 Executor는 delegate 결과의 Loom evidence도 확인할 수 있다.
 
 `builtin/coder`는 명시적인 delegation grant가 있을 때만 발견되고 호출된다.
 Reviewer는 Coder를 호출할 수 없으므로 검토가 자동 수정으로 바뀌지 않는다.
+Registry의 mutation 표시는 직접 변경 도구뿐 아니라 변경 가능한 delegate까지 전파한다.
+따라서 Planner와 Executor는 직접 수정 도구가 없어도 Coder를 통한 간접 workspace
+mutation 가능성이 표시된다.
 
 ## TUI와 명령
 
 `/subagents` 화면은 builtin과 custom agent를 같은 목록에서 보여 주고 실행 방식은
-`kind: inner|external`로 표시한다. Builtin inner는 read-only다. Builtin external은
+`kind: inner|external`로 표시한다. Builtin inner definition은 고정이며 access label은
+직접 도구와 delegate 권한을 함께 반영한다. Builtin external은
 system prompt를 definition에 포함하며 화면에서는 연결된 ACP만 바꿀 수 있다.
 `c`에서 shared ACP connection을 등록·편집·검사·활성화·삭제한다. 별도 `/agents` 화면은 없다.
-`builtin/coder`와 `builtin/web-tester`에는 workspace mutation 가능성 표시를 붙인다.
+`builtin/planner`, `builtin/executor`, `builtin/coder`, `builtin/web-tester`에는 workspace
+mutation 가능성 표시를 붙인다.
 
 새 custom external profile은 Scope 아래에서 Kind를 external로 선택한 뒤 ACP connection,
 System Prompt, workspace access를 저장한다. q model Role, Tools, Delegates는 비활성화된다.
