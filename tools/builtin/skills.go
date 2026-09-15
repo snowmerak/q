@@ -108,6 +108,13 @@ func searchSkills(ctx context.Context, archive Archive, global GlobalSkillLibrar
 	return output, nil
 }
 
+// SearchSkills exposes the same merged lookup used by the MCP tool to trusted
+// host orchestration that needs candidate metadata without fabricating a tool
+// call in the model-visible conversation.
+func SearchSkills(ctx context.Context, archive Archive, global GlobalSkillLibrary, input SearchSkillsInput) (SearchSkillsOutput, error) {
+	return searchSkills(ctx, archive, global, input)
+}
+
 func collapseShadowedSkills(hits []SkillSearchHit) []SkillSearchHit {
 	result := make([]SkillSearchHit, 0, len(hits))
 	byName := make(map[string]int, len(hits))

@@ -30,6 +30,8 @@ type HostEnvironment struct {
 	Shell        string
 }
 
+type SkillHintSearchResult = builtin.SearchSkillsOutput
+
 // CaptureSource describes the transport and artifact identity for a result
 // that enters q through a tool-shaped runtime boundary.
 type CaptureSource struct {
@@ -47,6 +49,7 @@ type Runtime struct {
 	loom           *builtin.LoomRuntime
 	lsp            *lsp.Manager
 	skills         *agentskills.Registry
+	skillArchive   builtin.Archive
 	skillStore     agentskills.RecordStore
 	globalSkills   builtin.GlobalSkillLibrary
 	tools          []client.Tool
@@ -152,7 +155,7 @@ func newRuntimeWithLSP(ctx context.Context, root string, archive builtin.Archive
 	store, _ := archive.(agentskills.RecordStore)
 	runtime := &Runtime{
 		client: clientSession, server: serverSession, fs: fs, loom: loomRuntime, lsp: lspManager,
-		skills: skills, skillStore: store, globalSkills: globalSkills,
+		skills: skills, skillArchive: archive, skillStore: store, globalSkills: globalSkills,
 	}
 	listed, err := clientSession.ListTools(ctx, nil)
 	if err != nil {
@@ -260,6 +263,18 @@ func (r *Runtime) SkillIssues() []agentskills.Issue {
 		return nil
 	}
 	return r.skills.Issues()
+}
+
+// SearchSkillHints performs host-side candidate retrieval without passing the
+// result through Loom or creating a synthetic tool exchange. Callers must add
+// any selected metadata to the model context as an append-only suffix.
+func (r *Runtime) SearchSkillHints(ctx context.Context, query string, limit int) (SkillHintSearchResult, error) {
+	if r == nil || r.skills == nil || r.skillArchive == nil {
+		return SkillHintSearchResult{}, errors.New("tools: Agent Skills search is unavailable")
+	}
+	return builtin.SearchSkills(ctx, r.skillArchive, r.globalSkills, builtin.SearchSkillsInput{
+		Query: query, Limit: limit,
+	})
 }
 
 func (r *Runtime) ReloadSkills() error {

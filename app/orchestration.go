@@ -24,8 +24,10 @@ type taskStartInput struct {
 }
 
 type taskStartOutput struct {
-	Started   bool   `json:"started"`
-	Objective string `json:"objective"`
+	Started            bool          `json:"started"`
+	Objective          string        `json:"objective"`
+	CompletionCriteria []string      `json:"completion_criteria,omitempty"`
+	SkillHints         *skillHintSet `json:"skill_hints,omitempty"`
 }
 
 type askToUserChoice struct {
@@ -42,9 +44,10 @@ type askToUserInput struct {
 }
 
 type askToUserOutput struct {
-	SelectedChoiceID string `json:"selected_choice_id,omitempty"`
-	Freeform         string `json:"freeform,omitempty"`
-	Err              error  `json:"-"`
+	SelectedChoiceID string        `json:"selected_choice_id,omitempty"`
+	Freeform         string        `json:"freeform,omitempty"`
+	SkillHints       *skillHintSet `json:"skill_hints,omitempty"`
+	Err              error         `json:"-"`
 }
 
 type taskCompleteInput struct {

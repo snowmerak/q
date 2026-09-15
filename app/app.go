@@ -40,6 +40,10 @@ type agentToolRuntime interface {
 	Call(context.Context, client.ToolCall) (client.ToolResult, error)
 }
 
+type skillHintSearcher interface {
+	SearchSkillHints(context.Context, string, int) (qtools.SkillHintSearchResult, error)
+}
+
 func defaultClientFactory(value config.Config, recorder client.UsageRecorder) (chatClient, error) {
 	apiKey := value.Provider.ResolveAPIKey()
 	return client.New(client.Config{

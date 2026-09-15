@@ -396,6 +396,10 @@ func TestSkillToolsMergeGlobalLibraryAndProjectStore(t *testing.T) {
 	if output.Total != 2 || len(output.Hits) != 2 || output.Hits[0].Scope != "global" || output.Hits[1].Scope != "workspace" || global.searches != 1 {
 		t.Fatalf("merged skill output = %#v, searches = %d", output, global.searches)
 	}
+	hints, err := runtime.SearchSkillHints(context.Background(), "procedure", 2)
+	if err != nil || hints.Total != 2 || len(hints.Hits) != 2 || global.searches != 2 {
+		t.Fatalf("host skill hints = %#v, searches = %d, err = %v", hints, global.searches, err)
+	}
 	workspaceGlobals, err := archive.Search(context.Background(), sessionstore.SearchOptions{
 		Filters: sessionstore.Filters{Kinds: []string{sessionstore.KindSkill}, Scopes: []string{"global"}}, Limit: 20,
 	})

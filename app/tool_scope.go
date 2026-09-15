@@ -44,3 +44,14 @@ func (r *scopedAgentToolRuntime) Call(ctx context.Context, call client.ToolCall)
 	}
 	return client.ToolResult{}, fmt.Errorf("tool %q is not assigned to role %q", call.Function.Name, r.role)
 }
+
+func (r *scopedAgentToolRuntime) SearchSkillHints(ctx context.Context, query string, limit int) (qtools.SkillHintSearchResult, error) {
+	if !toolAvailable(r, "search_skills") {
+		return qtools.SkillHintSearchResult{}, fmt.Errorf("tool %q is not assigned to role %q", "search_skills", r.role)
+	}
+	searcher, ok := r.base.(skillHintSearcher)
+	if !ok {
+		return qtools.SkillHintSearchResult{}, fmt.Errorf("Agent Skills hint search is unavailable")
+	}
+	return searcher.SearchSkillHints(ctx, query, limit)
+}

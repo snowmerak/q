@@ -30,6 +30,7 @@ import (
 	"github.com/snowmerak/q/subagent"
 	"github.com/snowmerak/q/thinker"
 	qtools "github.com/snowmerak/q/tools"
+	"github.com/snowmerak/q/tools/builtin"
 	"github.com/snowmerak/q/workspace"
 )
 
@@ -161,18 +162,21 @@ type fakeClient struct {
 }
 
 type fakeAgentTools struct {
-	calls          []client.ToolCall
-	tools          []client.Tool
-	loomOptions    loom.StoreOptions
-	loomStats      loom.Stats
-	loomCollects   int
-	skills         []agentskills.Skill
-	skillIssues    []agentskills.Issue
-	skillReloads   int
-	installedScope string
-	installedRepo  string
-	updatedSkill   string
-	removedSkill   string
+	calls            []client.ToolCall
+	tools            []client.Tool
+	loomOptions      loom.StoreOptions
+	loomStats        loom.Stats
+	loomCollects     int
+	skills           []agentskills.Skill
+	skillIssues      []agentskills.Issue
+	skillReloads     int
+	installedScope   string
+	installedRepo    string
+	updatedSkill     string
+	removedSkill     string
+	skillHintResults []qtools.SkillHintSearchResult
+	skillHintQueries []string
+	skillHintErr     error
 }
 
 func (f *fakeAgentTools) Skills() []agentskills.Skill {
@@ -234,6 +238,19 @@ func (f *fakeAgentTools) Call(_ context.Context, call client.ToolCall) (client.T
 	return client.ToolResult{Content: `{"loom_ref":"loom://0123456789abcdef0123456789abcdef","stored":true,"result":{"path":"main.go"}}`}, nil
 }
 
+func (f *fakeAgentTools) SearchSkillHints(_ context.Context, query string, _ int) (qtools.SkillHintSearchResult, error) {
+	f.skillHintQueries = append(f.skillHintQueries, query)
+	if f.skillHintErr != nil {
+		return qtools.SkillHintSearchResult{}, f.skillHintErr
+	}
+	if len(f.skillHintResults) == 0 {
+		return qtools.SkillHintSearchResult{}, nil
+	}
+	result := f.skillHintResults[0]
+	f.skillHintResults = f.skillHintResults[1:]
+	return result, nil
+}
+
 func TestAppendRuntimeMessagesGuidesSkillLookupWhenMoreInformationIsNeeded(t *testing.T) {
 	m := newModel(context.Background(), config.Store{Dir: t.TempDir()}, nil)
 	workspaceStore := workspace.Store{Root: t.TempDir()}
@@ -266,6 +283,181 @@ func TestAppendRuntimeMessagesGuidesSkillLookupWhenMoreInformationIsNeeded(t *te
 	if prompt := skillPrompt; !strings.Contains(prompt, "returned directly in content") || strings.Contains(prompt, "Loom artifact") {
 		t.Fatalf("skill prompt does not describe direct retrieval:\n%s", prompt)
 	}
+}
+
+func TestAutomaticSkillHintsAreAppendedWithoutChangingTheTranscriptOrEarlierPrefix(t *testing.T) {
+	value := config.Default()
+	value.Provider.Model = "tool-model"
+	configuredClient := &fakeClient{}
+	agentTools := &fakeAgentTools{
+		tools: []client.Tool{
+			{Type: client.ToolTypeFunction, Function: client.FunctionDefinition{Name: "search_skills"}},
+			{Type: client.ToolTypeFunction, Function: client.FunctionDefinition{Name: "get_skill"}},
+		},
+		skillHintResults: []qtools.SkillHintSearchResult{
+			{Hits: []builtin.SkillSearchHit{{
+				ID: "skill-go-review", Title: "go-review", Description: "Review Go changes safely.", Scope: "global",
+			}}},
+			{Hits: []builtin.SkillSearchHit{{
+				ID: "skill-go-review", Title: "go-review", Description: "Review Go changes safely.", Scope: "global",
+			}}},
+		},
+	}
+	m := newModel(context.Background(), config.Store{Dir: t.TempDir()}, nil)
+	m.toolRuntime = agentTools
+	m.enterChat(value, configuredClient)
+
+	m.input.SetValue("review this Go change")
+	updated, command := m.submitChat()
+	m = updated.(model)
+	for m.waiting {
+		updated, command = m.Update(nextAgentMessage(t, command))
+		m = updated.(model)
+	}
+
+	if len(configuredClient.requests) != 1 || len(agentTools.skillHintQueries) != 1 ||
+		agentTools.skillHintQueries[0] != "review this Go change" {
+		t.Fatalf("hint requests = %#v, chat requests = %#v", agentTools.skillHintQueries, configuredClient.requests)
+	}
+	request := configuredClient.requests[0]
+	last := request.Messages[len(request.Messages)-1]
+	if last.Role != client.RoleUser || !strings.HasPrefix(last.Content, "review this Go change\n\n"+skillHintsTag) ||
+		!strings.Contains(last.Content, `"id":"skill-go-review"`) || !strings.Contains(last.Content, "call get_skill") {
+		t.Fatalf("model-facing user suffix = %#v", last)
+	}
+	conversationStarted := false
+	for _, message := range request.Messages {
+		if message.Role == client.RoleUser || message.Role == client.RoleAssistant || message.Role == client.RoleTool {
+			conversationStarted = true
+		}
+		if conversationStarted && message.Role == client.RoleDeveloper {
+			t.Fatalf("dynamic developer instruction appeared after conversation history: %#v", request.Messages)
+		}
+	}
+	if m.messages[len(m.messages)-2].Content != "review this Go change" ||
+		strings.Contains(renderTranscript(m.messages, 80), skillHintsTag) {
+		t.Fatalf("visible transcript contains host hint context: %#v", m.messages)
+	}
+	memoryMessages := m.memory.Messages()
+	if !strings.Contains(memoryMessages[len(memoryMessages)-2].TextContent(), `"id":"skill-go-review"`) {
+		t.Fatalf("model memory did not retain hint suffix: %#v", memoryMessages)
+	}
+
+	firstPrefix, err := json.Marshal(request.Messages)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.input.SetValue("and check the tests")
+	updated, command = m.submitChat()
+	m = updated.(model)
+	for m.waiting {
+		updated, command = m.Update(nextAgentMessage(t, command))
+		m = updated.(model)
+	}
+	second := configuredClient.requests[1]
+	secondPrefix, err := json.Marshal(second.Messages[:len(request.Messages)])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(firstPrefix) != string(secondPrefix) {
+		t.Fatalf("prior request prefix changed:\nfirst  %s\nsecond %s", firstPrefix, secondPrefix)
+	}
+	if len(agentTools.skillHintQueries) != 2 || strings.Contains(second.Messages[len(second.Messages)-1].Content, skillHintsTag) {
+		t.Fatalf("previously hinted skill was injected again: queries %#v, last %#v",
+			agentTools.skillHintQueries, second.Messages[len(second.Messages)-1])
+	}
+}
+
+func TestAutomaticSkillHintsUseTaskStartAndUserAnswerSuffixes(t *testing.T) {
+	value := config.Default()
+	value.Provider.Model = "tool-model"
+	configuredClient := &askingClient{}
+	agentTools := &fakeAgentTools{
+		tools: []client.Tool{
+			{Type: client.ToolTypeFunction, Function: client.FunctionDefinition{Name: "search_skills"}},
+			{Type: client.ToolTypeFunction, Function: client.FunctionDefinition{Name: "get_skill"}},
+		},
+		skillHintResults: []qtools.SkillHintSearchResult{
+			{Hits: []builtin.SkillSearchHit{{ID: "initial", Title: "initial", Scope: "global"}}},
+			{Hits: []builtin.SkillSearchHit{{ID: "task", Title: "task", Scope: "workspace"}}},
+			{Hits: []builtin.SkillSearchHit{{ID: "answer", Title: "answer", Scope: "global"}}},
+		},
+	}
+	m := newModel(context.Background(), config.Store{Dir: t.TempDir()}, nil)
+	m.toolRuntime = agentTools
+	m.enterChat(value, configuredClient)
+	m.input.SetValue("choose a color")
+	updated, command := m.submitChat()
+	m = updated.(model)
+	for !m.asking {
+		updated, command = m.Update(nextAgentMessage(t, command))
+		m = updated.(model)
+	}
+	m.questionChoice = 1
+	updated, command = m.submitQuestionAnswer("")
+	m = updated.(model)
+	for m.waiting {
+		updated, command = m.Update(nextAgentMessage(t, command))
+		m = updated.(model)
+	}
+
+	if len(agentTools.skillHintQueries) != 3 || agentTools.skillHintQueries[1] != "Choose an accent color" ||
+		!strings.Contains(agentTools.skillHintQueries[2], "Which color?") ||
+		!strings.Contains(agentTools.skillHintQueries[2], "Green") {
+		t.Fatalf("hint queries = %#v", agentTools.skillHintQueries)
+	}
+	var taskResult, answerResult string
+	for _, message := range m.messages {
+		switch message.Name {
+		case taskStartToolName:
+			taskResult = message.Content
+		case askToUserToolName:
+			answerResult = message.Content
+		}
+	}
+	if !strings.Contains(taskResult, `"trigger":"task_start"`) || !strings.Contains(taskResult, `"id":"task"`) {
+		t.Fatalf("task_start hint result = %q", taskResult)
+	}
+	if !strings.Contains(answerResult, `"trigger":"user_answer"`) || !strings.Contains(answerResult, `"id":"answer"`) {
+		t.Fatalf("ask_to_user hint result = %q", answerResult)
+	}
+}
+
+func TestAutomaticSkillHintFailureFallsBackToModelSearch(t *testing.T) {
+	value := config.Default()
+	value.Provider.Model = "tool-model"
+	configuredClient := &fakeClient{}
+	agentTools := &fakeAgentTools{
+		tools: []client.Tool{
+			{Type: client.ToolTypeFunction, Function: client.FunctionDefinition{Name: "search_skills"}},
+			{Type: client.ToolTypeFunction, Function: client.FunctionDefinition{Name: "get_skill"}},
+		},
+		skillHintErr: errors.New("embedding unavailable"),
+	}
+	m := newModel(context.Background(), config.Store{Dir: t.TempDir()}, nil)
+	m.toolRuntime = agentTools
+	m.enterChat(value, configuredClient)
+	m.input.SetValue("answer directly")
+	updated, command := m.submitChat()
+	m = updated.(model)
+	for m.waiting {
+		updated, command = m.Update(nextAgentMessage(t, command))
+		m = updated.(model)
+	}
+
+	last := configuredClient.requests[0].Messages[len(configuredClient.requests[0].Messages)-1]
+	if last.Content != "answer directly" || !strings.Contains(modelInstruction(m.messages, "q_agent_skills"), "call search_skills") {
+		t.Fatalf("fallback context = last %#v, messages %#v", last, m.messages)
+	}
+}
+
+func modelInstruction(messages []client.Message, name string) string {
+	for _, message := range messages {
+		if message.Name == name {
+			return message.Content
+		}
+	}
+	return ""
 }
 
 func TestAppendRuntimeMessagesLoadsWorkspaceRootAGENTS(t *testing.T) {
@@ -3597,16 +3789,10 @@ func TestRestoredActiveTaskCanCompleteInANewTurn(t *testing.T) {
 			len(configuredClient.requests), m.activeTask, m.messages)
 	}
 	resumePromptFound := false
-	conversationStarted := false
 	for _, message := range configuredClient.requests[0].Messages {
-		if message.Role == client.RoleUser || message.Role == client.RoleAssistant || message.Role == client.RoleTool {
-			conversationStarted = true
-		}
-		if message.Role == client.RoleDeveloper && strings.Contains(message.Content, "Finish durable work") &&
+		if message.Role == client.RoleUser && strings.Contains(message.Content, activeTaskTag) &&
+			strings.HasPrefix(message.Content, "continue\n\n") && strings.Contains(message.Content, "Finish durable work") &&
 			strings.Contains(message.Content, "verify it") {
-			if conversationStarted {
-				t.Fatalf("active task resume prompt appeared after conversation history: %#v", configuredClient.requests[0].Messages)
-			}
 			resumePromptFound = true
 			break
 		}

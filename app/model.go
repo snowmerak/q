@@ -426,7 +426,13 @@ type agentEvent struct {
 	streamDelta     *chatStreamDelta
 	taskStarted     *workspace.ActiveTask
 	taskCompleted   bool
+	contextReplace  *agentContextReplacement
 	err             error
+}
+
+type agentContextReplacement struct {
+	Index   int
+	Message client.Message
 }
 
 type agentPlanUpdate struct {
@@ -1207,6 +1213,14 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 				m.status = "apply agent context compaction: " + err.Error()
 			} else {
 				m.status = "Context compacted · continuing…"
+			}
+			return m, tea.Batch(m.spinner.Tick, waitAgentEvent(message.events, message.turnID))
+		}
+		if event.contextReplace != nil {
+			if m.memory != nil {
+				if err := m.memory.Replace(event.contextReplace.Index, event.contextReplace.Message); err != nil {
+					m.status = "update model context: " + err.Error()
+				}
 			}
 			return m, tea.Batch(m.spinner.Tick, waitAgentEvent(message.events, message.turnID))
 		}
@@ -3703,6 +3717,30 @@ func streamAgentLoop(
 ) {
 	defer close(events)
 	availableTools := append(toolRuntime.Tools(), orchestrationTools()...)
+	hintedSkillIDs := knownSkillIDs(history)
+	if len(history) > 0 && history[len(history)-1].Role == client.RoleUser {
+		index := len(history) - 1
+		original := history[index]
+		updated := original
+		if activeTask != nil {
+			updated = appendActiveTaskContext(updated, *activeTask)
+		}
+		if !strings.Contains(updated.TextContent(), skillHintsTag) {
+			query := original.TextContent()
+			if activeTask != nil {
+				query = skillHintQueryForActiveTask(*activeTask, query)
+			}
+			hints := automaticSkillHints(ctx, toolRuntime, query, "user_input", hintedSkillIDs)
+			updated = appendSkillHintContext(updated, hints)
+		}
+		if updated.TextContent() != original.TextContent() {
+			history[index] = updated
+			replacement := &agentContextReplacement{Index: index, Message: updated}
+			if !emitAgentEvent(ctx, events, agentEvent{contextReplace: replacement}) {
+				return
+			}
+		}
+	}
 	loopContext := newAgentLoopContext(contextPolicy, history, availableTools)
 	toolCalls := 0
 	taskStarted := activeTask != nil
@@ -3724,9 +3762,6 @@ func streamAgentLoop(
 			}
 		}
 		roundHistory := loopContext.Messages()
-		if activeTask != nil {
-			roundHistory = insertLeadingInstruction(roundHistory, activeTaskResumeMessage(*activeTask))
-		}
 		appendHistory := func(messages ...client.Message) {
 			loopContext.Append(messages...)
 			roundHistory = append(roundHistory, messages...)
@@ -3840,7 +3875,11 @@ func streamAgentLoop(
 					continue
 				}
 				taskStarted = true
-				body, _ := json.Marshal(taskStartOutput{Started: true, Objective: input.Objective})
+				hints := automaticSkillHints(ctx, toolRuntime, skillHintQueryForTask(input), "task_start", hintedSkillIDs)
+				body, _ := json.Marshal(taskStartOutput{
+					Started: true, Objective: input.Objective,
+					CompletionCriteria: append([]string(nil), input.CompletionCriteria...), SkillHints: hints,
+				})
 				message := orchestrationToolResult(call, string(body), false)
 				appendHistory(message)
 				if !emitAgentEvent(ctx, events, agentEvent{message: &message}) {
@@ -3880,6 +3919,9 @@ func streamAgentLoop(
 					emitAgentEvent(ctx, events, agentEvent{err: answer.Err})
 					return
 				}
+				answer.SkillHints = automaticSkillHints(
+					ctx, toolRuntime, skillHintQueryForAnswer(input, answer), "user_answer", hintedSkillIDs,
+				)
 				body, _ := json.Marshal(answer)
 				message := orchestrationToolResult(call, string(body), false)
 				appendHistory(message)
@@ -3997,25 +4039,6 @@ func orchestrationToolResult(call client.ToolCall, content string, isError bool)
 		Role: client.RoleTool, Name: call.Function.Name,
 		ToolCallID: call.ID, Content: content,
 	}
-}
-
-func activeTaskResumeMessage(task workspace.ActiveTask) client.Message {
-	content := "A task from an earlier turn is still active. Continue it without calling task_start again, and call task_complete exactly once when it succeeds or is genuinely blocked. Objective: " + task.Objective
-	if len(task.CompletionCriteria) > 0 {
-		content += " Completion criteria: " + strings.Join(task.CompletionCriteria, "; ")
-	}
-	return client.Message{Role: client.RoleDeveloper, Content: content}
-}
-
-func insertLeadingInstruction(messages []client.Message, instruction client.Message) []client.Message {
-	index := 0
-	for index < len(messages) && (messages[index].Role == client.RoleSystem || messages[index].Role == client.RoleDeveloper) {
-		index++
-	}
-	result := make([]client.Message, 0, len(messages)+1)
-	result = append(result, messages[:index]...)
-	result = append(result, instruction)
-	return append(result, messages[index:]...)
 }
 
 func emitAgentEvent(ctx context.Context, events chan<- agentEvent, event agentEvent) bool {

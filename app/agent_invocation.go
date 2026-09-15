@@ -49,6 +49,14 @@ func (r *reservedInvocationToolRuntime) Call(ctx context.Context, call client.To
 	return r.base.Call(ctx, call)
 }
 
+func (r *reservedInvocationToolRuntime) SearchSkillHints(ctx context.Context, query string, limit int) (qtools.SkillHintSearchResult, error) {
+	searcher, ok := r.base.(skillHintSearcher)
+	if !ok {
+		return qtools.SkillHintSearchResult{}, errors.New("Agent Skills hint search is unavailable")
+	}
+	return searcher.SearchSkillHints(ctx, query, limit)
+}
+
 func (r *agentInvocationToolRuntime) Tools() []client.Tool {
 	return r.invocation.Tools()
 }
@@ -59,6 +67,14 @@ func (r *agentInvocationToolRuntime) Environment() qtools.HostEnvironment {
 
 func (r *agentInvocationToolRuntime) Call(ctx context.Context, call client.ToolCall) (client.ToolResult, error) {
 	return r.invocation.Call(ctx, call)
+}
+
+func (r *agentInvocationToolRuntime) SearchSkillHints(ctx context.Context, query string, limit int) (qtools.SkillHintSearchResult, error) {
+	searcher, ok := r.base.(skillHintSearcher)
+	if !ok {
+		return qtools.SkillHintSearchResult{}, errors.New("Agent Skills hint search is unavailable")
+	}
+	return searcher.SearchSkillHints(ctx, query, limit)
 }
 
 func configuredAgentToolRuntime(

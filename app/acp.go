@@ -1547,6 +1547,11 @@ func (a *acpAgent) continueACPAgentTurn(
 	}()
 
 	for event := range events {
+		if event.contextReplace != nil {
+			if err := a.state.memory.Replace(event.contextReplace.Index, event.contextReplace.Message); err != nil {
+				return acp.PromptResponse{}, fmt.Errorf("update model context: %w", err)
+			}
+		}
 		if event.compaction != nil {
 			if err := a.state.applyAgentContextCompaction(*event.compaction); err != nil {
 				return acp.PromptResponse{}, fmt.Errorf("apply agent context compaction: %w", err)
