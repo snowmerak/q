@@ -48,16 +48,17 @@ type Recency struct {
 }
 
 type SearchOptions struct {
-	Text          string
-	TextBoosts    *TextFieldBoosts
-	Vector        *VectorQuery
-	Filters       Filters
-	CreatedAfter  *time.Time
-	CreatedBefore *time.Time
-	Sort          SortOrder
-	Limit         int
-	Offset        int
-	Recency       *Recency
+	Text           string
+	TextBoosts     *TextFieldBoosts
+	Vector         *VectorQuery
+	HybridTextGate *HybridTextGate
+	Filters        Filters
+	CreatedAfter   *time.Time
+	CreatedBefore  *time.Time
+	Sort           SortOrder
+	Limit          int
+	Offset         int
+	Recency        *Recency
 }
 
 // TextFieldBoosts adjusts the relative contribution of the three full-text
@@ -76,6 +77,15 @@ type VectorQuery struct {
 	Embedding      []float32
 	Weight         float64
 	CandidateLimit int
+}
+
+// HybridTextGate drops weak lexical hits from reciprocal-rank fusion when the
+// vector branch has a confident result. MinimumTextScore uses the raw Bleve
+// score; MinimumVectorScore uses normalized cosine similarity in [0, 1].
+// A nil gate preserves unconditional text/vector fusion.
+type HybridTextGate struct {
+	MinimumTextScore   float64
+	MinimumVectorScore float64
 }
 
 type Hit struct {
@@ -230,6 +240,16 @@ func validateSearchOptions(options *SearchOptions) error {
 			return errors.New("sessionstore: vector candidate limit is smaller than requested result window")
 		}
 	}
+	if options.HybridTextGate != nil {
+		gate := *options.HybridTextGate
+		if math.IsNaN(gate.MinimumTextScore) || math.IsInf(gate.MinimumTextScore, 0) || gate.MinimumTextScore < 0 {
+			return errors.New("sessionstore: hybrid minimum text score must be finite and non-negative")
+		}
+		if math.IsNaN(gate.MinimumVectorScore) || math.IsInf(gate.MinimumVectorScore, 0) ||
+			gate.MinimumVectorScore < 0 || gate.MinimumVectorScore > 1 {
+			return errors.New("sessionstore: hybrid minimum vector score must be between 0 and 1")
+		}
+	}
 	return nil
 }
 
@@ -261,6 +281,7 @@ func (s *Store) searchWithVectorLocked(ctx context.Context, options SearchOption
 	}
 	candidates := make(map[string]*fusedCandidate, len(vectorResults)+candidateLimit)
 	vectorRank := 0
+	bestVectorScore := 0.0
 	for _, result := range vectorResults {
 		if err := ctx.Err(); err != nil {
 			return SearchResult{}, err
@@ -274,14 +295,18 @@ func (s *Store) searchWithVectorLocked(ctx context.Context, options SearchOption
 		}
 		vectorRank++
 		similarity := min(1, max(-1, result.Similarity))
-		candidate := &fusedCandidate{
-			record: record, vectorScore: (similarity + 1) / 2, hasVector: true, vectorRank: vectorRank,
-		}
+		vectorScore := (similarity + 1) / 2
+		bestVectorScore = max(bestVectorScore, vectorScore)
+		candidate := &fusedCandidate{record: record, vectorScore: vectorScore, hasVector: true, vectorRank: vectorRank}
 		candidates[record.ID] = candidate
 	}
 
 	text := strings.TrimSpace(options.Text)
 	if text != "" {
+		minimumTextScore := 0.0
+		if gate := options.HybridTextGate; gate != nil && bestVectorScore >= gate.MinimumVectorScore {
+			minimumTextScore = gate.MinimumTextScore
+		}
 		request := bleve.NewSearchRequestOptions(buildQuery(options), candidateLimit, 0, false)
 		request.SortBy([]string{"-_score", "-created_at", "_id"})
 		result, err := s.index.SearchInContext(ctx, request)
@@ -289,6 +314,9 @@ func (s *Store) searchWithVectorLocked(ctx context.Context, options SearchOption
 			return SearchResult{}, fmt.Errorf("sessionstore: search Bleve index for hybrid search: %w", err)
 		}
 		for rank, indexed := range result.Hits {
+			if indexed.Score < minimumTextScore {
+				break
+			}
 			candidate := candidates[indexed.ID]
 			if candidate == nil {
 				record, err := s.loadRecordLocked(indexed.ID)

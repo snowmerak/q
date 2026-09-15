@@ -3,6 +3,7 @@ package sessionstore
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -191,6 +192,74 @@ func TestHNSWHybridSearchFusesTextAndVectorCandidates(t *testing.T) {
 	}
 }
 
+func TestHNSWHybridSearchGatesWeakTextForConfidentSemanticMatch(t *testing.T) {
+	store, err := OpenWithOptions(t.TempDir(), OpenOptions{Vector: testVectorConfig()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	if _, err := store.Save(Record{
+		ID: "semantic", Kind: KindSkill, Summary: "action-writing", Content: "Write kinetic action scenes with clear physical objectives.",
+		Embedding: &Embedding{Model: "embed-test", Vector: []float32{1, 0, 0}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for index := range 50 {
+		vector := []float32{0, 1, 0}
+		if index == 0 {
+			vector = []float32{0.95, 0.31, 0}
+		}
+		if _, err := store.Save(Record{
+			ID: fmt.Sprintf("decoy-%03d", index), Kind: KindSkill,
+			Summary: "general-writing", Content: "문서 작성 도우미",
+			Embedding: &Embedding{Model: "embed-test", Vector: vector},
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	textOnly, err := store.Search(context.Background(), SearchOptions{
+		Text: "긴장감 있는 액션 장면 작성", Limit: 1,
+		TextBoosts:     &TextFieldBoosts{Summary: 4, Content: 2, SearchText: 3},
+		HybridTextGate: &HybridTextGate{MinimumTextScore: 0.05, MinimumVectorScore: 0.8},
+		Filters:        Filters{Kinds: []string{KindSkill}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(textOnly.Hits) == 0 || textOnly.Hits[0].Record.ID == "semantic" {
+		t.Fatalf("text-only fallback hits = %#v", textOnly.Hits)
+	}
+
+	result, err := store.Search(context.Background(), SearchOptions{
+		Text: "긴장감 있는 액션 장면 작성", Vector: &VectorQuery{Embedding: []float32{1, 0, 0}}, Limit: 5,
+		TextBoosts:     &TextFieldBoosts{Summary: 4, Content: 2, SearchText: 3},
+		HybridTextGate: &HybridTextGate{MinimumTextScore: 0.05, MinimumVectorScore: 0.8},
+		Filters:        Filters{Kinds: []string{KindSkill}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Hits) == 0 || result.Hits[0].Record.ID != "semantic" {
+		t.Fatalf("gated hybrid hits = %#v", result.Hits)
+	}
+	if result.Hits[0].TextScore != 0 || result.Hits[0].VectorScore != 1 {
+		t.Fatalf("semantic branch scores = %#v", result.Hits[0])
+	}
+
+	lexicalFallback, err := store.Search(context.Background(), SearchOptions{
+		Text: "긴장감 있는 액션 장면 작성", Vector: &VectorQuery{Embedding: []float32{0, 0, 1}}, Limit: 1,
+		TextBoosts:     &TextFieldBoosts{Summary: 4, Content: 2, SearchText: 3},
+		HybridTextGate: &HybridTextGate{MinimumTextScore: 0.05, MinimumVectorScore: 0.8},
+		Filters:        Filters{Kinds: []string{KindSkill}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(lexicalFallback.Hits) == 0 || lexicalFallback.Hits[0].TextScore == 0 {
+		t.Fatalf("weak semantic fallback hits = %#v", lexicalFallback.Hits)
+	}
+}
+
 func TestHNSWMultipleProjectionsCollapseUpdateAndDelete(t *testing.T) {
 	store, err := OpenWithOptions(t.TempDir(), OpenOptions{Vector: testVectorConfig()})
 	if err != nil {
@@ -339,5 +408,17 @@ func TestEmbeddingAndVectorQueryValidation(t *testing.T) {
 		Vector: &VectorQuery{Embedding: []float32{1, 0}},
 	}); err == nil {
 		t.Fatal("Search accepted a dimension mismatch")
+	}
+	for name, gate := range map[string]HybridTextGate{
+		"negative text": {MinimumTextScore: -1, MinimumVectorScore: 0.8},
+		"large vector":  {MinimumTextScore: 0.05, MinimumVectorScore: 1.1},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := store.Search(context.Background(), SearchOptions{
+				Vector: &VectorQuery{Embedding: []float32{1, 0, 0}}, HybridTextGate: &gate,
+			}); err == nil {
+				t.Fatalf("Search accepted hybrid gate %#v", gate)
+			}
+		})
 	}
 }

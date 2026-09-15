@@ -66,4 +66,8 @@ func TestSearchLocalSkillsUsesSkillFieldBoosts(t *testing.T) {
 	if boosts == nil || boosts.Summary <= boosts.SearchText || boosts.SearchText <= boosts.Content {
 		t.Fatalf("skill text boosts = %#v", boosts)
 	}
+	gate := archive.options.HybridTextGate
+	if gate == nil || gate.MinimumTextScore <= 0 || gate.MinimumVectorScore <= 0 {
+		t.Fatalf("skill hybrid text gate = %#v", gate)
+	}
 }

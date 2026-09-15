@@ -9,7 +9,6 @@ import (
 
 	"github.com/snowmerak/q/agentskills"
 	qlibrary "github.com/snowmerak/q/library"
-	"github.com/snowmerak/q/sessionstore"
 )
 
 type SearchSkillsInput struct {
@@ -133,13 +132,7 @@ func collapseShadowedSkills(hits []SkillSearchHit) []SkillSearchHit {
 }
 
 func searchLocalSkills(ctx context.Context, archive Archive, input SearchSkillsInput, scopes []string) (SearchSkillsOutput, error) {
-	result, err := archive.Search(ctx, sessionstore.SearchOptions{
-		Text: input.Query, Sort: sessionstore.SortRelevance, Limit: input.Limit,
-		TextBoosts: &sessionstore.TextFieldBoosts{Summary: 4, Content: 2, SearchText: 3},
-		Filters: sessionstore.Filters{
-			Kinds: []string{sessionstore.KindSkill}, Scopes: scopes, Tags: input.Tags,
-		},
-	})
+	result, err := archive.Search(ctx, agentskills.SearchOptions(input.Query, input.Limit, scopes, input.Tags))
 	if err != nil {
 		return SearchSkillsOutput{}, fmt.Errorf("[E_SKILLS] search: %w", err)
 	}

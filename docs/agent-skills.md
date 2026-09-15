@@ -28,6 +28,10 @@ scope, then merges the results inside the existing MCP tool. If both queries
 return the same name, the workspace hit is retained, and `total` is recomputed
 from the merged, de-duplicated result set before the requested limit is applied.
 Lexical ranking weights the skill name highest, then tags, then description.
+When embeddings are available, lexical and semantic candidates use
+reciprocal-rank fusion. A skill-specific confidence gate removes extremely weak
+lexical hits only when the semantic branch has a confident candidate; otherwise
+the complete lexical branch remains in the fusion.
 `get_skill` routes the selected ID to the Library or local registry and always
 returns the complete resource text directly in its `content` field, whether or
 not Loom is available. It does not create a Loom artifact. There is no separate

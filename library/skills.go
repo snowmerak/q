@@ -133,13 +133,7 @@ func (s *skillService) search(ctx context.Context, request SkillSearchRequest) (
 	if request.Limit < 1 || request.Limit > maximumSkillSearchLimit {
 		return SkillSearchResponse{}, fmt.Errorf("library: skill search limit must be between 1 and %d", maximumSkillSearchLimit)
 	}
-	options := sessionstore.SearchOptions{
-		Text: request.Query, Sort: sessionstore.SortRelevance, Limit: request.Limit,
-		TextBoosts: &sessionstore.TextFieldBoosts{Summary: 4, Content: 2, SearchText: 3},
-		Filters: sessionstore.Filters{
-			Kinds: []string{sessionstore.KindSkill}, Scopes: []string{"global"}, Tags: request.Tags,
-		},
-	}
+	options := agentskills.SearchOptions(request.Query, request.Limit, []string{"global"}, request.Tags)
 	if len(request.Embedding) > 0 && skillVectorMatches(
 		s.archive.VectorConfig(), strings.TrimSpace(request.EmbeddingModel), len(request.Embedding),
 	) {
