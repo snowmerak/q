@@ -81,16 +81,27 @@ From lowest to highest precedence:
 ```text
 ~/.agents/skills
 ~/.q/skills
+<nearest-git-root>/.agents/skills  # when distinct from <workspace>
 <workspace>/.agents/skills
 <workspace>/.q/skills
 ```
 
-Each direct child is one skill and must contain `SKILL.md`. The later valid
-definition wins when names collide. The `/skills` management catalog retains
-all valid entries so a shadowed global checkout can still be pulled or removed;
-each scope keeps its own projection, and merged search suppresses same-named
-hits when both appear in the bounded result sets. Validation and shadowing notes
-remain visible in the manager.
+For the interactive app, `<workspace>` remains the directory where q was
+started. When that directory is inside a Git work tree, q additionally reads
+the nearest Git root's portable `.agents/skills` directory at lower precedence.
+This does not expand the workspace root used by file tools, sessions, or other
+workspace state. An ACP process applies the same rule relative to its explicit
+`--root`.
+
+Each direct child is one skill and must contain `SKILL.md`. Frontmatter `name`
+is still required, must be a valid lowercase kebab-case name, and remains the
+canonical identity, but it does not have to match the directory name.
+`description` is optional and has no separate length limit inside the bounded
+`SKILL.md` file. The later valid definition wins when names collide. The
+`/skills` management catalog retains all valid entries so a shadowed global
+checkout can still be pulled or removed; each scope keeps its own projection,
+and merged search suppresses same-named hits when both appear in the bounded
+result sets. Validation and shadowing notes remain visible in the manager.
 
 ## Git management
 
@@ -114,21 +125,27 @@ non-fast-forward integration.
 
 The indexes are derived projections. For a skill inside a Git work tree, q
 records the checked-out `HEAD` commit in addition to the `SKILL.md` content
-digest. The Library reconciles global roots when
-the leader starts, after explicit reload, and after managed global Git
-operations. The workspace reconciles workspace roots at workspace startup and
-its explicit management points. Reconciliation compares both values: unchanged
-records are not saved or reindexed, while a changed `SKILL.md` digest or Git
-commit causes the skill record to be reindexed. Added and deleted skills are
-also applied. When an embedding model is configured, active skill metadata is
-embedded and searched through the rebuildable HNSW index together with BM25;
-without one, search remains BM25-only. Assigning a new model reconfigures the
-vector index and backfills active skills for that model. Git detection is
-best-effort, so a non-Git skill, an unborn repository, or an unavailable Git
-executable leaves the commit empty without blocking discovery. Search only
-queries the existing projections and never scans directories or parses YAML.
-External filesystem changes become visible after explicit reload or
-Library/workspace restart.
+digest. The Library reconciles global roots when the leader starts, after
+explicit reload, and after managed global Git operations. The workspace
+reconciles at startup and after workspace skill management. During a running
+session, the next contextual hint, `search_skills`, or `get_skill` operation
+also reconciles workspace sources when the previous successful check is at
+least 30 seconds old. This check is demand-driven rather than a background
+scan. A failed automatic reconciliation leaves the existing projection usable
+and becomes eligible to retry after five seconds; `/skills` reload still forces
+an immediate check and reports errors.
+
+Reconciliation compares both the digest and Git commit: unchanged records are
+not saved or reindexed, while a changed `SKILL.md` digest or Git commit causes
+the skill record to be reindexed. Added and deleted skills are also applied.
+When an embedding model is configured, active skill metadata is embedded and
+searched through the rebuildable HNSW index together with BM25; without one,
+search remains BM25-only. Assigning a new model reconfigures the vector index
+and backfills active skills for that model. Git detection is best-effort, so a
+non-Git skill, an unborn repository, or an unavailable Git executable leaves
+the commit empty without blocking discovery. Each search still queries only
+the existing projection after any due reconciliation; it does not perform an
+unbounded directory scan.
 
 ## Capability boundary
 

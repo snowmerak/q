@@ -22,7 +22,11 @@ import (
 	qworkspace "github.com/snowmerak/q/workspace"
 )
 
-const maximumInlineToolResult = 32 << 10
+const (
+	maximumInlineToolResult = 32 << 10
+	skillRefreshInterval    = 30 * time.Second
+	skillRefreshRetry       = 5 * time.Second
+)
 
 type HostEnvironment struct {
 	OS           string
@@ -52,6 +56,8 @@ type Runtime struct {
 	skillArchive   builtin.Archive
 	skillStore     agentskills.RecordStore
 	globalSkills   builtin.GlobalSkillLibrary
+	skillRefreshMu sync.Mutex
+	skillRefreshAt time.Time
 	tools          []client.Tool
 	externalMu     sync.RWMutex
 	external       map[string]*externalServer
@@ -156,6 +162,7 @@ func newRuntimeWithLSP(ctx context.Context, root string, archive builtin.Archive
 	runtime := &Runtime{
 		client: clientSession, server: serverSession, fs: fs, loom: loomRuntime, lsp: lspManager,
 		skills: skills, skillArchive: archive, skillStore: store, globalSkills: globalSkills,
+		skillRefreshAt: time.Now().Add(skillRefreshInterval),
 	}
 	listed, err := clientSession.ListTools(ctx, nil)
 	if err != nil {
@@ -272,6 +279,7 @@ func (r *Runtime) SearchSkillHints(ctx context.Context, query string, limit int)
 	if r == nil || r.skills == nil || r.skillArchive == nil {
 		return SkillHintSearchResult{}, errors.New("tools: Agent Skills search is unavailable")
 	}
+	_ = r.refreshSkillsIfDue(ctx)
 	return builtin.SearchSkills(ctx, r.skillArchive, r.globalSkills, builtin.SearchSkillsInput{
 		Query: query, Limit: limit,
 	})
@@ -281,10 +289,7 @@ func (r *Runtime) ReloadSkills() error {
 	if r == nil || r.skills == nil {
 		return errors.New("tools: Agent Skills registry is unavailable")
 	}
-	if err := r.skills.Reload(); err != nil {
-		return err
-	}
-	if err := r.syncWorkspaceSkills(context.Background()); err != nil {
+	if err := r.refreshSkills(context.Background(), true); err != nil {
 		return err
 	}
 	return r.reloadGlobalSkills(context.Background())
@@ -294,6 +299,8 @@ func (r *Runtime) InstallSkill(ctx context.Context, scope, repository string) (a
 	if r == nil || r.skills == nil {
 		return agentskills.Skill{}, errors.New("tools: Agent Skills registry is unavailable")
 	}
+	r.skillRefreshMu.Lock()
+	defer r.skillRefreshMu.Unlock()
 	skill, err := r.skills.InstallGit(ctx, scope, repository)
 	if err != nil {
 		return agentskills.Skill{}, err
@@ -306,6 +313,7 @@ func (r *Runtime) InstallSkill(ctx context.Context, scope, repository string) (a
 			return agentskills.Skill{}, err
 		}
 	}
+	r.skillRefreshAt = time.Now().Add(skillRefreshInterval)
 	return skill, nil
 }
 
@@ -313,6 +321,8 @@ func (r *Runtime) UpdateSkill(ctx context.Context, idOrName string) (agentskills
 	if r == nil || r.skills == nil {
 		return agentskills.Skill{}, errors.New("tools: Agent Skills registry is unavailable")
 	}
+	r.skillRefreshMu.Lock()
+	defer r.skillRefreshMu.Unlock()
 	skill, err := r.skills.UpdateGit(ctx, idOrName)
 	if err != nil {
 		return agentskills.Skill{}, err
@@ -325,6 +335,7 @@ func (r *Runtime) UpdateSkill(ctx context.Context, idOrName string) (agentskills
 			return agentskills.Skill{}, err
 		}
 	}
+	r.skillRefreshAt = time.Now().Add(skillRefreshInterval)
 	return skill, nil
 }
 
@@ -332,6 +343,8 @@ func (r *Runtime) RemoveSkill(ctx context.Context, idOrName string) (agentskills
 	if r == nil || r.skills == nil {
 		return agentskills.Skill{}, errors.New("tools: Agent Skills registry is unavailable")
 	}
+	r.skillRefreshMu.Lock()
+	defer r.skillRefreshMu.Unlock()
 	skill, err := r.skills.RemoveGit(idOrName)
 	if err != nil {
 		return agentskills.Skill{}, err
@@ -344,7 +357,36 @@ func (r *Runtime) RemoveSkill(ctx context.Context, idOrName string) (agentskills
 			return agentskills.Skill{}, err
 		}
 	}
+	r.skillRefreshAt = time.Now().Add(skillRefreshInterval)
 	return skill, nil
+}
+
+func (r *Runtime) refreshSkillsIfDue(ctx context.Context) error {
+	return r.refreshSkills(ctx, false)
+}
+
+// refreshSkills reconciles the derived workspace projection at most once per
+// interval. Search paths treat refresh failure as non-fatal so an existing
+// projection remains usable; explicit reload continues to report the error.
+func (r *Runtime) refreshSkills(ctx context.Context, force bool) error {
+	if r == nil || r.skills == nil {
+		return errors.New("tools: Agent Skills registry is unavailable")
+	}
+	r.skillRefreshMu.Lock()
+	defer r.skillRefreshMu.Unlock()
+	now := time.Now()
+	if !force && !r.skillRefreshAt.IsZero() && now.Before(r.skillRefreshAt) {
+		return nil
+	}
+	r.skillRefreshAt = now.Add(skillRefreshRetry)
+	if err := r.skills.Reload(); err != nil {
+		return err
+	}
+	if err := r.syncWorkspaceSkills(ctx); err != nil {
+		return err
+	}
+	r.skillRefreshAt = time.Now().Add(skillRefreshInterval)
+	return nil
 }
 
 func (r *Runtime) syncWorkspaceSkills(ctx context.Context) error {
@@ -383,6 +425,9 @@ func (r *Runtime) Call(ctx context.Context, call client.ToolCall) (client.ToolRe
 		if err := json.Unmarshal([]byte(call.Function.Arguments), &arguments); err != nil {
 			return client.ToolResult{Content: "invalid tool arguments: " + err.Error(), IsError: true}, nil
 		}
+	}
+	if call.Function.Name == "search_skills" || call.Function.Name == "get_skill" {
+		_ = r.refreshSkillsIfDue(ctx)
 	}
 	r.externalMu.RLock()
 	route, external := r.externalRoutes[call.Function.Name]

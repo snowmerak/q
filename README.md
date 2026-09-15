@@ -467,9 +467,17 @@ Skills are discovered, in increasing precedence, from:
 ```text
 ~/.agents/skills/
 ~/.q/skills/
+<nearest-git-root>/.agents/skills/  # when distinct from the active workspace
 <workspace>/.agents/skills/
 <workspace>/.q/skills/
 ```
+
+The Git-root lookup lets a q session started in a repository subdirectory use
+the repository's portable skills without expanding the session's file-tool
+jail. While q is running, skill use triggers a workspace reconciliation when
+the previous check is at least 30 seconds old. Frontmatter `name` remains the
+canonical skill name but does not have to match the directory, and
+`description` is optional.
 
 `/skills` can clone, fast-forward, remove, and reindex q-managed global or
 workspace skills. See [Agent Skills](docs/agent-skills.md) for validation,

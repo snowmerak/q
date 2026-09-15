@@ -118,6 +118,12 @@ func (r *Registry) Reload() error {
 		locations[1].path = filepath.Join(r.qDir, "skills")
 	}
 	if !r.global {
+		if repositoryRoot := gitWorkTreeRoot(r.root); repositoryRoot != "" && !sameDirectory(repositoryRoot, r.root) {
+			locations = append(locations, struct {
+				path   string
+				source Source
+			}{filepath.Join(repositoryRoot, ".agents", "skills"), SourceProjectPortable})
+		}
 		locations = append(locations,
 			struct {
 				path   string
@@ -285,13 +291,6 @@ func loadSkill(directory string, source Source) (Skill, error) {
 	if len(header.Name) < 1 || len(header.Name) > 64 || !validName.MatchString(header.Name) {
 		return Skill{}, errors.New("name must be 1-64 lowercase letters, digits, or single hyphen-separated segments")
 	}
-	if header.Name != filepath.Base(directory) {
-		return Skill{}, fmt.Errorf("name %q must match directory %q", header.Name, filepath.Base(directory))
-	}
-	descriptionLength := utf8.RuneCountInString(header.Description)
-	if descriptionLength < 1 || descriptionLength > 1024 {
-		return Skill{}, errors.New("description must be 1-1024 characters")
-	}
 	if utf8.RuneCountInString(header.Compatibility) > 500 {
 		return Skill{}, errors.New("compatibility must be at most 500 characters")
 	}
@@ -303,6 +302,12 @@ func loadSkill(directory string, source Source) (Skill, error) {
 		Metadata: header.Metadata, Directory: directory, Source: source, Scope: sourceScope(source),
 		Tags: skillTags(header), Digest: hex.EncodeToString(digest[:]),
 	}, nil
+}
+
+func sameDirectory(left, right string) bool {
+	leftInfo, leftErr := os.Stat(left)
+	rightInfo, rightErr := os.Stat(right)
+	return leftErr == nil && rightErr == nil && os.SameFile(leftInfo, rightInfo)
 }
 
 func skillID(directory string) string {

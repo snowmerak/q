@@ -83,12 +83,43 @@ func TestProjectSkillShadowsUserSkill(t *testing.T) {
 	}
 }
 
-func TestInvalidSkillBecomesIssue(t *testing.T) {
+func TestDiscoveryAcceptsDirectoryNameMismatchAndOptionalDescription(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv("USERPROFILE", t.TempDir())
 	writeSkill(t, root, ".agents", "folder-name", "Valid description.")
 	path := filepath.Join(root, ".agents", "skills", "folder-name", "SKILL.md")
-	if err := os.WriteFile(path, []byte("---\nname: other-name\ndescription: mismatch\n---\n"), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte("---\nname: declared-name\n---\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	registry, err := Discover(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(registry.Skills()) != 1 || registry.Skills()[0].Name != "declared-name" || registry.Skills()[0].Description != "" || len(registry.Issues()) != 0 {
+		t.Fatalf("skills=%#v issues=%#v", registry.Skills(), registry.Issues())
+	}
+}
+
+func TestDiscoveryAcceptsLongDescription(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("USERPROFILE", t.TempDir())
+	description := strings.Repeat("long searchable description ", 80)
+	writeSkill(t, root, ".agents", "long-description", description)
+	registry, err := Discover(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(registry.Skills()) != 1 || registry.Skills()[0].Description != strings.TrimSpace(description) {
+		t.Fatalf("skills=%#v issues=%#v", registry.Skills(), registry.Issues())
+	}
+}
+
+func TestInvalidSkillNameBecomesIssue(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("USERPROFILE", t.TempDir())
+	writeSkill(t, root, ".agents", "folder-name", "Valid description.")
+	path := filepath.Join(root, ".agents", "skills", "folder-name", "SKILL.md")
+	if err := os.WriteFile(path, []byte("---\nname: Invalid Name\n---\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	registry, err := Discover(root)
@@ -97,6 +128,47 @@ func TestInvalidSkillBecomesIssue(t *testing.T) {
 	}
 	if len(registry.Skills()) != 0 || len(registry.Issues()) != 1 {
 		t.Fatalf("skills=%#v issues=%#v", registry.Skills(), registry.Issues())
+	}
+}
+
+func TestDiscoverPortableSkillFromGitRootWhenStartedInSubdirectory(t *testing.T) {
+	repositoryRoot := t.TempDir()
+	t.Setenv("USERPROFILE", t.TempDir())
+	if err := os.Mkdir(filepath.Join(repositoryRoot, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	directory := writeSkill(t, repositoryRoot, ".agents", "repository-skill", "Repository-wide guidance.")
+	workingDirectory := filepath.Join(repositoryRoot, "nested", "package")
+	if err := os.MkdirAll(workingDirectory, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	registry, err := Discover(workingDirectory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(registry.Skills()) != 1 || registry.Skills()[0].Directory != directory || registry.Skills()[0].Scope != "project" {
+		t.Fatalf("skills=%#v issues=%#v", registry.Skills(), registry.Issues())
+	}
+}
+
+func TestCurrentDirectoryPortableSkillShadowsGitRootSkill(t *testing.T) {
+	repositoryRoot := t.TempDir()
+	t.Setenv("USERPROFILE", t.TempDir())
+	if err := os.Mkdir(filepath.Join(repositoryRoot, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeSkill(t, repositoryRoot, ".agents", "shared-skill", "Repository description.")
+	workingDirectory := filepath.Join(repositoryRoot, "nested", "package")
+	current := writeSkill(t, workingDirectory, ".agents", "shared-skill", "Current directory description.")
+	registry, err := Discover(workingDirectory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(registry.Skills()) != 1 || registry.Skills()[0].Directory != current || registry.Skills()[0].Description != "Current directory description." {
+		t.Fatalf("skills=%#v issues=%#v", registry.Skills(), registry.Issues())
+	}
+	if len(registry.Entries()) != 2 || len(registry.Issues()) != 1 || !strings.Contains(registry.Issues()[0].Message, "shadowed") {
+		t.Fatalf("entries=%#v issues=%#v", registry.Entries(), registry.Issues())
 	}
 }
 

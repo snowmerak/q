@@ -547,7 +547,7 @@ func TestSkillToolsUseAuthenticatedGlobalLibraryAPIEndToEnd(t *testing.T) {
 	}
 }
 
-func TestSearchSkillsUsesSessionStoreSnapshotUntilReload(t *testing.T) {
+func TestSearchSkillsRefreshesSessionStoreSnapshotWhenDue(t *testing.T) {
 	root := t.TempDir()
 	home := t.TempDir()
 	t.Setenv("USERPROFILE", home)
@@ -615,11 +615,21 @@ func TestSearchSkillsUsesSessionStoreSnapshotUntilReload(t *testing.T) {
 	if before := search(); len(before.Hits) != 0 {
 		t.Fatalf("search unexpectedly refreshed skill index: %#v", before.Hits)
 	}
-	if err := runtime.ReloadSkills(); err != nil {
+	runtime.skillRefreshMu.Lock()
+	runtime.skillRefreshAt = time.Time{}
+	runtime.skillRefreshMu.Unlock()
+	if after := search(); len(after.Hits) != 1 || after.Hits[0].Title != "late-skill" {
+		t.Fatalf("automatically refreshed skill hits = %#v", after.Hits)
+	}
+
+	if err := os.RemoveAll(lateDirectory); err != nil {
 		t.Fatal(err)
 	}
-	if after := search(); len(after.Hits) != 1 || after.Hits[0].Title != "late-skill" {
-		t.Fatalf("reloaded skill hits = %#v", after.Hits)
+	runtime.skillRefreshMu.Lock()
+	runtime.skillRefreshAt = time.Time{}
+	runtime.skillRefreshMu.Unlock()
+	if after := search(); len(after.Hits) != 0 {
+		t.Fatalf("deleted skill remained after automatic refresh: %#v", after.Hits)
 	}
 }
 
