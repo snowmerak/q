@@ -49,6 +49,7 @@ type Recency struct {
 
 type SearchOptions struct {
 	Text          string
+	TextBoosts    *TextFieldBoosts
 	Vector        *VectorQuery
 	Filters       Filters
 	CreatedAfter  *time.Time
@@ -57,6 +58,14 @@ type SearchOptions struct {
 	Limit         int
 	Offset        int
 	Recency       *Recency
+}
+
+// TextFieldBoosts adjusts the relative contribution of the three full-text
+// fields. A nil value keeps the default weight of 1 for every field.
+type TextFieldBoosts struct {
+	Summary    float64
+	Content    float64
+	SearchText float64
 }
 
 // VectorQuery enables HNSW semantic search. CandidateLimit bounds the
@@ -145,6 +154,19 @@ func (s *Store) Search(ctx context.Context, options SearchOptions) (SearchResult
 }
 
 func validateSearchOptions(options *SearchOptions) error {
+	if options.TextBoosts != nil {
+		boosts := *options.TextBoosts
+		for name, value := range map[string]float64{
+			"summary": boosts.Summary, "content": boosts.Content, "search_text": boosts.SearchText,
+		} {
+			if math.IsNaN(value) || math.IsInf(value, 0) || value < 0 {
+				return fmt.Errorf("sessionstore: %s text boost must be finite and non-negative", name)
+			}
+		}
+		if strings.TrimSpace(options.Text) != "" && boosts.Summary == 0 && boosts.Content == 0 && boosts.SearchText == 0 {
+			return errors.New("sessionstore: at least one text field boost must be positive")
+		}
+	}
 	if options.Vector != nil {
 		vector := *options.Vector
 		vector.Embedding = cloneFloats(vector.Embedding)
@@ -355,13 +377,28 @@ func recordMatchesSearch(record Record, options SearchOptions) bool {
 func buildQuery(options SearchOptions) blevequery.Query {
 	conjuncts := make([]blevequery.Query, 0, 12)
 	if text := strings.TrimSpace(options.Text); text != "" {
-		summary := bleve.NewMatchQuery(text)
-		summary.SetField("summary")
-		content := bleve.NewMatchQuery(text)
-		content.SetField("content")
-		searchText := bleve.NewMatchQuery(text)
-		searchText.SetField("search_text")
-		conjuncts = append(conjuncts, bleve.NewDisjunctionQuery(summary, content, searchText))
+		boosts := TextFieldBoosts{Summary: 1, Content: 1, SearchText: 1}
+		if options.TextBoosts != nil {
+			boosts = *options.TextBoosts
+		}
+		fields := make([]blevequery.Query, 0, 3)
+		for _, field := range []struct {
+			name  string
+			boost float64
+		}{
+			{name: "summary", boost: boosts.Summary},
+			{name: "content", boost: boosts.Content},
+			{name: "search_text", boost: boosts.SearchText},
+		} {
+			if field.boost == 0 {
+				continue
+			}
+			query := bleve.NewMatchQuery(text)
+			query.SetField(field.name)
+			query.SetBoost(field.boost)
+			fields = append(fields, query)
+		}
+		conjuncts = append(conjuncts, bleve.NewDisjunctionQuery(fields...))
 	}
 	for field, values := range map[string][]string{
 		"run_id": options.Filters.RunIDs, "task_id": options.Filters.TaskIDs,

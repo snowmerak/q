@@ -12,7 +12,7 @@ use the same `skill` record shape:
 
 - `summary`: skill title/name, full-text indexed
 - `content`: description, full-text indexed
-- `search_text`: description plus tags, full-text indexed
+- `search_text`: tags, full-text indexed
 - `tags`: exact tag filter
 - `scope`: `global` or `project`, exact filter but not full-text search input;
   `project` is the persisted compatibility value exposed as `workspace` by
@@ -24,11 +24,14 @@ use the same `skill` record shape:
 
 The record contains no `SKILL.md` body. `search_skills` performs one bounded
 Library query for global scope and one workspace Bleve query for workspace
-scope, then merges the results inside the existing MCP tool. A workspace
-definition shadows a same-named global result. `get_skill` routes the selected
-ID to the Library or local registry and always returns the complete resource
-text directly in its `content` field, whether or not Loom is available. It does
-not create a Loom artifact. There is no separate Library MCP tool.
+scope, then merges the results inside the existing MCP tool. If both queries
+return the same name, the workspace hit is retained, and `total` is recomputed
+from the merged, de-duplicated result set before the requested limit is applied.
+Lexical ranking weights the skill name highest, then tags, then description.
+`get_skill` routes the selected ID to the Library or local registry and always
+returns the complete resource text directly in its `content` field, whether or
+not Loom is available. It does not create a Loom artifact. There is no separate
+Library MCP tool.
 
 Main chat and Griller receive `search_skills` and `get_skill`; Scout receives
 the same tools in its non-mutating investigation allowlist and is the preferred repository
@@ -49,8 +52,8 @@ From lowest to highest precedence:
 Each direct child is one skill and must contain `SKILL.md`. The later valid
 definition wins when names collide. The `/skills` management catalog retains
 all valid entries so a shadowed global checkout can still be pulled or removed;
-each scope keeps its own projection, and merged search suppresses a same-named
-global result when a workspace definition exists. Validation and shadowing notes
+each scope keeps its own projection, and merged search suppresses same-named
+hits when both appear in the bounded result sets. Validation and shadowing notes
 remain visible in the manager.
 
 ## Git management
@@ -81,11 +84,15 @@ operations. The workspace reconciles workspace roots at workspace startup and
 its explicit management points. Reconciliation compares both values: unchanged
 records are not saved or reindexed, while a changed `SKILL.md` digest or Git
 commit causes the skill record to be reindexed. Added and deleted skills are
-also applied. Git detection is best-effort, so a non-Git skill, an unborn
-repository, or an unavailable Git executable leaves the commit empty without
-blocking discovery. Search only queries the existing projections and never
-scans directories or parses YAML. External filesystem changes become visible
-after explicit reload or Library/workspace restart.
+also applied. When an embedding model is configured, active skill metadata is
+embedded and searched through the rebuildable HNSW index together with BM25;
+without one, search remains BM25-only. Assigning a new model reconfigures the
+vector index and backfills active skills for that model. Git detection is
+best-effort, so a non-Git skill, an unborn repository, or an unavailable Git
+executable leaves the commit empty without blocking discovery. Search only
+queries the existing projections and never scans directories or parses YAML.
+External filesystem changes become visible after explicit reload or
+Library/workspace restart.
 
 ## Capability boundary
 

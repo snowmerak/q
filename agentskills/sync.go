@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 
@@ -14,6 +15,10 @@ type RecordStore interface {
 	Search(context.Context, sessionstore.SearchOptions) (sessionstore.SearchResult, error)
 	Save(sessionstore.Record) (sessionstore.Record, error)
 	Delete(string) error
+}
+
+type recordPreparer interface {
+	Prepare(context.Context, []sessionstore.Record) ([]sessionstore.Record, error)
 }
 
 type recordPayload struct {
@@ -73,12 +78,22 @@ func (r *Registry) SyncRecordsForScopes(ctx context.Context, store RecordStore, 
 		record := sessionstore.Record{
 			ID: skill.ID, Kind: sessionstore.KindSkill, Role: "skill", Status: sessionstore.StatusSucceeded,
 			Scope: skill.Scope, Location: skill.Directory, Summary: skill.Name,
-			Content: skill.Description, SearchText: skill.Description + " " + strings.Join(skill.Tags, " "),
+			Content: skill.Description, SearchText: strings.Join(skill.Tags, " "),
 			Tags: append([]string(nil), skill.Tags...), Payload: encoded,
 		}
 		if previous, ok := old[skill.ID]; ok && sameRecord(previous, record, skill.Digest, skill.GitCommit) {
 			delete(old, skill.ID)
 			continue
+		}
+		if preparer, ok := store.(recordPreparer); ok {
+			prepared, err := preparer.Prepare(ctx, []sessionstore.Record{record})
+			if err != nil {
+				return fmt.Errorf("agent skills: prepare search record %q: %w", skill.Name, err)
+			}
+			if len(prepared) != 1 {
+				return fmt.Errorf("agent skills: prepare search record %q returned %d records", skill.Name, len(prepared))
+			}
+			record = prepared[0]
 		}
 		if _, err := store.Save(record); err != nil {
 			return err

@@ -276,6 +276,9 @@ func (request startupRequest) run(modelReady chan<- struct{}) runtimeInitialized
 				result.err = embeddingErr
 				return result
 			}
+			if _, embeddingErr := libraryClient.SyncSkillEmbeddings(request.ctx); embeddingErr != nil {
+				result.startupErr = errors.Join(result.startupErr, embeddingErr)
+			}
 			if semanticArchive != nil {
 				if embeddingErr := semanticArchive.Configure(
 					embedder, loaded.Embedding.Model, loaded.Embedding.Dimensions,

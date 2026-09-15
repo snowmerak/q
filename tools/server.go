@@ -222,6 +222,9 @@ func RunStdioWithLoomOptions(ctx context.Context, root string, options loom.Stor
 	}
 	if libraryRuntime != nil {
 		defer libraryRuntime.Close()
+		if loaded.Embedding.Model != "" {
+			go func() { _, _ = libraryClient.SyncSkillEmbeddings(ctx) }()
+		}
 	}
 	server, fs, _, err := newServer(root, semanticArchive, loomRuntime, lspManager, globalSkills)
 	if err != nil {

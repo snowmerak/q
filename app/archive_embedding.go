@@ -23,6 +23,9 @@ func (m model) configureEmbeddingRuntime(value config.Config, configuredClient c
 			}
 			if libraryClient != nil {
 				libraryErr = libraryClient.ConfigureEmbedding(nil, "", 0)
+				if libraryErr == nil {
+					_, libraryErr = libraryClient.SyncSkillEmbeddings(ctx)
+				}
 			}
 			return archiveEmbeddingConfiguredMsg{err: errors.Join(archiveErr, libraryErr)}
 		}
@@ -30,20 +33,26 @@ func (m model) configureEmbeddingRuntime(value config.Config, configuredClient c
 		if !ok {
 			return archiveEmbeddingConfiguredMsg{err: errors.New("configured LLM client does not support embeddings")}
 		}
+		var libraryStats qlibrary.SkillEmbeddingSyncStats
+		var libraryErr error
 		if libraryClient != nil {
 			if err := libraryClient.ConfigureEmbedding(
 				embedder, value.Embedding.Model, value.Embedding.Dimensions,
 			); err != nil {
-				return archiveEmbeddingConfiguredMsg{err: err}
+				libraryErr = err
+			} else {
+				libraryStats, libraryErr = libraryClient.SyncSkillEmbeddings(ctx)
 			}
 		}
 		if archive == nil {
-			return archiveEmbeddingConfiguredMsg{}
+			return archiveEmbeddingConfiguredMsg{globalSkills: libraryStats.Embedded, err: libraryErr}
 		}
 		if err := archive.Configure(embedder, value.Embedding.Model, value.Embedding.Dimensions); err != nil {
-			return archiveEmbeddingConfiguredMsg{err: err}
+			return archiveEmbeddingConfiguredMsg{globalSkills: libraryStats.Embedded, err: errors.Join(libraryErr, err)}
 		}
 		stats, err := archive.Backfill(ctx)
-		return archiveEmbeddingConfiguredMsg{stats: stats, err: err}
+		return archiveEmbeddingConfiguredMsg{
+			stats: stats, globalSkills: libraryStats.Embedded, err: errors.Join(libraryErr, err),
+		}
 	}
 }

@@ -357,8 +357,9 @@ type configuredMsg struct {
 }
 
 type archiveEmbeddingConfiguredMsg struct {
-	stats archiveembed.BackfillStats
-	err   error
+	stats        archiveembed.BackfillStats
+	globalSkills int
+	err          error
 }
 
 type mcpSettingsSavedMsg struct {
@@ -956,8 +957,11 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	case archiveEmbeddingConfiguredMsg:
 		if message.err != nil {
 			m.status = "Embedding: " + message.err.Error()
-		} else if message.stats.Embedded > 0 {
-			m.status = fmt.Sprintf("Embedded %d workspace history record(s)", message.stats.Embedded)
+		} else if message.stats.Embedded > 0 || message.globalSkills > 0 {
+			m.status = fmt.Sprintf(
+				"Embedded %d workspace record(s) and %d global skill(s)",
+				message.stats.Embedded, message.globalSkills,
+			)
 		}
 		return m, nil
 	case modelTargetConfiguredMsg:
@@ -973,6 +977,9 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		m.status = message.target + " model settings saved"
 		m.modelFilter.Blur()
 		m.embeddingDimensions.Blur()
+		if message.target == embeddingModelTarget && m.client != nil {
+			return m, m.configureEmbeddingRuntime(message.config, m.client)
+		}
 		return m, nil
 	case modelRoleConfiguredMsg:
 		if message.err != nil {
@@ -4179,7 +4186,7 @@ func (m *model) appendRuntimeMessages() {
 			if tool.Function.Name == "search_skills" {
 				m.messages = append(m.messages, client.Message{
 					Role: client.RoleDeveloper, Name: "q_agent_skills",
-					Content: "Agent Skills are retrieved on demand from the global q Library and the workspace skill index rather than preloaded. Before starting substantive work that requires tools or multiple steps, call search_skills with concise, task-specific keywords to identify applicable guidance, select a result, then call get_skill and follow the complete resource text returned directly in content. Before finalizing substantive work, search again using any new requirements, failures, or verification needs revealed by the work. Search explicit $skill-name mentions by name.",
+					Content: "Agent Skills are retrieved on demand from the global q Library and the workspace skill index rather than preloaded. At the start of work, or after receiving new information, call search_skills with concise, task-specific keywords when additional guidance is needed to perform the work or handle that information. Select a relevant result, then call get_skill and follow the complete resource text returned directly in content. Search explicit $skill-name mentions by name.",
 				})
 				break
 			}

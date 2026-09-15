@@ -226,6 +226,90 @@ func TestGlobalSkillAPIReconcilesOnlyOnExplicitReload(t *testing.T) {
 	}
 }
 
+func TestGlobalSkillSearchBackfillsAndReassignsEmbeddingModel(t *testing.T) {
+	dir := t.TempDir()
+	skillDirectory := filepath.Join(dir, "skills", "animal-care")
+	if err := os.MkdirAll(skillDirectory, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	body := "---\nname: animal-care\ndescription: Care for a cat.\ntags: [pets]\n---\n\n# Animal care\n"
+	if err := os.WriteFile(filepath.Join(skillDirectory, "SKILL.md"), []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	value := testConfig(t)
+	runtime, err := EnsureWithOptions(context.Background(), testOptions(dir, value))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer runtime.Close()
+	client := runtime.Client()
+
+	lexical, err := client.SearchSkills(context.Background(), SkillSearchRequest{Query: "feline"})
+	if err != nil || len(lexical.Hits) != 0 {
+		t.Fatalf("BM25-only search = %#v, %v", lexical, err)
+	}
+	embedder := &semanticSkillEmbedder{}
+	if err := client.ConfigureEmbedding(embedder, "embed-v1", 3); err != nil {
+		t.Fatal(err)
+	}
+	stats, err := client.SyncSkillEmbeddings(context.Background())
+	if err != nil || stats.Embedded != 1 {
+		t.Fatalf("initial skill embedding sync = %#v, %v", stats, err)
+	}
+	semantic, err := client.SearchSkills(context.Background(), SkillSearchRequest{Query: "feline"})
+	if err != nil || len(semantic.Hits) != 1 || semantic.Hits[0].Title != "animal-care" {
+		t.Fatalf("semantic skill search = %#v, %v", semantic, err)
+	}
+	record, err := runtime.leader.archive.Get(semantic.Hits[0].ID)
+	if err != nil || record.Embedding == nil || record.Embedding.Model != "embed-v1" {
+		t.Fatalf("initial skill record = %#v, %v", record, err)
+	}
+
+	if err := client.ConfigureEmbedding(embedder, "embed-v2", 3); err != nil {
+		t.Fatal(err)
+	}
+	stats, err = client.SyncSkillEmbeddings(context.Background())
+	if err != nil || stats.Embedded != 1 {
+		t.Fatalf("reassigned skill embedding sync = %#v, %v", stats, err)
+	}
+	record, err = runtime.leader.archive.Get(semantic.Hits[0].ID)
+	if err != nil || record.Embedding == nil || record.Embedding.Model != "embed-v2" {
+		t.Fatalf("reassigned skill record = %#v, %v", record, err)
+	}
+
+	if err := client.ConfigureEmbedding(nil, "", 0); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.SyncSkillEmbeddings(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if runtime.leader.archive.VectorConfig().Enabled() {
+		t.Fatalf("disabled vector config = %#v", runtime.leader.archive.VectorConfig())
+	}
+	lexical, err = client.SearchSkills(context.Background(), SkillSearchRequest{Query: "feline"})
+	if err != nil || len(lexical.Hits) != 0 {
+		t.Fatalf("search after disabling embeddings = %#v, %v", lexical, err)
+	}
+}
+
+type semanticSkillEmbedder struct{}
+
+func (*semanticSkillEmbedder) Embed(_ context.Context, request llmclient.EmbeddingRequest) (*llmclient.EmbeddingResponse, error) {
+	inputs, ok := request.Input.([]string)
+	if !ok {
+		return nil, fmt.Errorf("embedding input = %T", request.Input)
+	}
+	response := &llmclient.EmbeddingResponse{Model: request.Model, Data: make([]llmclient.Embedding, len(inputs))}
+	for index, input := range inputs {
+		vector := []float64{0, 1, 0}
+		if strings.Contains(input, "cat") || strings.Contains(input, "feline") {
+			vector = []float64{1, 0, 0}
+		}
+		response.Data[index] = llmclient.Embedding{Index: index, Embedding: vector}
+	}
+	return response, nil
+}
+
 func TestGlobalPropositionAPIReadsStoredRecordsWithRecency(t *testing.T) {
 	dir := t.TempDir()
 	now := time.Date(2026, time.August, 13, 12, 0, 0, 0, time.UTC)

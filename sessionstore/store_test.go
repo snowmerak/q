@@ -152,6 +152,32 @@ func TestSearchFiltersDatesAndSorts(t *testing.T) {
 	}
 }
 
+func TestSearchAppliesTextFieldBoosts(t *testing.T) {
+	store, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	for _, record := range []Record{
+		{ID: "summary", Kind: KindSkill, Summary: "deployment", Content: "unrelated"},
+		{ID: "content", Kind: KindSkill, Summary: "unrelated", Content: "deployment"},
+	} {
+		if _, err := store.Save(record); err != nil {
+			t.Fatal(err)
+		}
+	}
+	result, err := store.Search(context.Background(), SearchOptions{
+		Text: "deployment", Filters: Filters{Kinds: []string{KindSkill}},
+		TextBoosts: &TextFieldBoosts{Summary: 4, Content: 1, SearchText: 1},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Hits) != 2 || result.Hits[0].Record.ID != "summary" {
+		t.Fatalf("boosted results = %#v", result.Hits)
+	}
+}
+
 func TestRecencyRerankingUsesHalfLifeDecay(t *testing.T) {
 	now := time.Date(2026, time.January, 10, 0, 0, 0, 0, time.UTC)
 	hits := []Hit{

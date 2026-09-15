@@ -74,7 +74,6 @@ func searchSkills(ctx context.Context, archive Archive, global GlobalSkillLibrar
 		if err != nil {
 			return SearchSkillsOutput{}, err
 		}
-		output.Total += local.Total
 		output.Hits = append(output.Hits, local.Hits...)
 	}
 	if includeGlobal {
@@ -84,7 +83,6 @@ func searchSkills(ctx context.Context, archive Archive, global GlobalSkillLibrar
 		if err != nil {
 			output.Warnings = append(output.Warnings, "global Library skills unavailable: "+err.Error())
 		} else {
-			output.Total += remote.Total
 			for _, hit := range remote.Hits {
 				output.Hits = append(output.Hits, SkillSearchHit{
 					ID: hit.ID, Title: hit.Title, Description: hit.Description, Tags: hit.Tags,
@@ -94,6 +92,7 @@ func searchSkills(ctx context.Context, archive Archive, global GlobalSkillLibrar
 		}
 	}
 	output.Hits = collapseShadowedSkills(output.Hits)
+	output.Total = uint64(len(output.Hits))
 	sort.SliceStable(output.Hits, func(i, j int) bool {
 		if output.Hits[i].Score != output.Hits[j].Score {
 			return output.Hits[i].Score > output.Hits[j].Score
@@ -129,6 +128,7 @@ func collapseShadowedSkills(hits []SkillSearchHit) []SkillSearchHit {
 func searchLocalSkills(ctx context.Context, archive Archive, input SearchSkillsInput, scopes []string) (SearchSkillsOutput, error) {
 	result, err := archive.Search(ctx, sessionstore.SearchOptions{
 		Text: input.Query, Sort: sessionstore.SortRelevance, Limit: input.Limit,
+		TextBoosts: &sessionstore.TextFieldBoosts{Summary: 4, Content: 2, SearchText: 3},
 		Filters: sessionstore.Filters{
 			Kinds: []string{sessionstore.KindSkill}, Scopes: scopes, Tags: input.Tags,
 		},

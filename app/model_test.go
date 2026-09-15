@@ -234,7 +234,7 @@ func (f *fakeAgentTools) Call(_ context.Context, call client.ToolCall) (client.T
 	return client.ToolResult{Content: `{"loom_ref":"loom://0123456789abcdef0123456789abcdef","stored":true,"result":{"path":"main.go"}}`}, nil
 }
 
-func TestAppendRuntimeMessagesRequiresBoundaryRetrievalForSubstantiveWork(t *testing.T) {
+func TestAppendRuntimeMessagesGuidesSkillLookupWhenMoreInformationIsNeeded(t *testing.T) {
 	m := newModel(context.Background(), config.Store{Dir: t.TempDir()}, nil)
 	workspaceStore := workspace.Store{Root: t.TempDir()}
 	m.workspaceStore = &workspaceStore
@@ -251,18 +251,19 @@ func TestAppendRuntimeMessagesRequiresBoundaryRetrievalForSubstantiveWork(t *tes
 	for _, message := range m.messages {
 		prompts[message.Name] = message.Content
 	}
-	for name, tool := range map[string]string{
-		"q_workspace":    "search_archive",
-		"q_agent_skills": "search_skills",
-	} {
-		prompt := prompts[name]
-		for _, required := range []string{"Before starting substantive work", "Before finalizing substantive work, search again", tool} {
-			if !strings.Contains(prompt, required) {
-				t.Fatalf("%s prompt does not require %q:\n%s", name, required, prompt)
-			}
+	skillPrompt := prompts["q_agent_skills"]
+	for _, required := range []string{"At the start of work", "after receiving new information", "when additional guidance is needed", "search_skills"} {
+		if !strings.Contains(skillPrompt, required) {
+			t.Fatalf("skill prompt does not contain %q:\n%s", required, skillPrompt)
 		}
 	}
-	if prompt := prompts["q_agent_skills"]; !strings.Contains(prompt, "returned directly in content") || strings.Contains(prompt, "Loom artifact") {
+	if strings.Contains(skillPrompt, "Before finalizing substantive work") {
+		t.Fatalf("skill prompt still requires unconditional final lookup:\n%s", skillPrompt)
+	}
+	if !strings.Contains(prompts["q_workspace"], "search_archive") {
+		t.Fatalf("workspace prompt does not describe archive retrieval:\n%s", prompts["q_workspace"])
+	}
+	if prompt := skillPrompt; !strings.Contains(prompt, "returned directly in content") || strings.Contains(prompt, "Loom artifact") {
 		t.Fatalf("skill prompt does not describe direct retrieval:\n%s", prompt)
 	}
 }
@@ -986,6 +987,76 @@ func TestModelPickerConfiguresEmbeddingModelAndDimensions(t *testing.T) {
 	loaded, err := store.Load()
 	if err != nil || loaded.Embedding != m.config.Embedding {
 		t.Fatalf("loaded config = %#v, err = %v", loaded, err)
+	}
+}
+
+func TestEmbeddingModelAssignmentIndexesExistingGlobalSkills(t *testing.T) {
+	var configured qlibrary.SkillVectorConfigRequest
+	var applied bool
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Content-Type", "application/json")
+		switch request.URL.Path {
+		case "/v1/skills/embeddings/configure":
+			if err := json.NewDecoder(request.Body).Decode(&configured); err != nil {
+				t.Error(err)
+			}
+			_, _ = writer.Write([]byte(`{}`))
+		case "/v1/skills/embeddings/sources":
+			var input qlibrary.SkillEmbeddingSourceRequest
+			if err := json.NewDecoder(request.Body).Decode(&input); err != nil {
+				t.Error(err)
+			}
+			if input.Model != "embed-model" || input.Dimensions != 3 {
+				t.Errorf("embedding source request = %#v", input)
+			}
+			if applied {
+				_ = json.NewEncoder(writer).Encode(qlibrary.SkillEmbeddingSourceResponse{})
+				return
+			}
+			_ = json.NewEncoder(writer).Encode(qlibrary.SkillEmbeddingSourceResponse{
+				Remaining: 1,
+				Sources: []qlibrary.SkillEmbeddingSource{{
+					ID: "skill-one", Digest: "digest-one", Text: "cat care",
+				}},
+			})
+		case "/v1/skills/embeddings":
+			var input qlibrary.SkillEmbeddingApplyRequest
+			if err := json.NewDecoder(request.Body).Decode(&input); err != nil {
+				t.Error(err)
+			}
+			if input.Model != "embed-model" || input.Dimensions != 3 || len(input.Items) != 1 ||
+				input.Items[0].ID != "skill-one" || len(input.Items[0].Embedding) != 3 {
+				t.Errorf("embedding apply request = %#v", input)
+			}
+			applied = true
+			_ = json.NewEncoder(writer).Encode(qlibrary.SkillEmbeddingApplyResponse{Updated: 1})
+		default:
+			http.NotFound(writer, request)
+		}
+	}))
+	defer server.Close()
+
+	embedder := &extractionClient{}
+	value := config.Default()
+	value.Embedding = config.EmbeddingConfig{Model: "embed-model", Dimensions: 3}
+	m := newModel(context.Background(), config.Store{Dir: t.TempDir()}, nil)
+	m.client = embedder
+	m.libraryClient = qlibrary.NewClient(server.URL+"/v1", "", time.Second)
+
+	updated, command := m.Update(modelTargetConfiguredMsg{config: value, target: embeddingModelTarget})
+	m = updated.(model)
+	if command == nil {
+		t.Fatal("embedding model assignment did not start indexing")
+	}
+	message, ok := command().(archiveEmbeddingConfiguredMsg)
+	if !ok || message.err != nil || message.globalSkills != 1 {
+		t.Fatalf("embedding configuration result = %#v", message)
+	}
+	if configured.Model != "embed-model" || configured.Dimensions != 3 || !applied {
+		t.Fatalf("configured = %#v, applied = %v", configured, applied)
+	}
+	if len(embedder.embeddings) != 1 || len(embedder.embeddings[0]) != 1 {
+		t.Fatalf("embedding calls = %#v", embedder.embeddings)
 	}
 }
 

@@ -20,6 +20,29 @@ type pagedSkillRecordStore struct {
 	deleted []string
 }
 
+type preparingSkillRecordStore struct {
+	saved    sessionstore.Record
+	prepared int
+}
+
+func (s *preparingSkillRecordStore) Search(context.Context, sessionstore.SearchOptions) (sessionstore.SearchResult, error) {
+	return sessionstore.SearchResult{}, nil
+}
+
+func (s *preparingSkillRecordStore) Save(record sessionstore.Record) (sessionstore.Record, error) {
+	s.saved = record
+	return record, nil
+}
+
+func (s *preparingSkillRecordStore) Delete(string) error { return nil }
+
+func (s *preparingSkillRecordStore) Prepare(_ context.Context, records []sessionstore.Record) ([]sessionstore.Record, error) {
+	s.prepared += len(records)
+	result := append([]sessionstore.Record(nil), records...)
+	result[0].Embedding = &sessionstore.Embedding{Model: "embed-test", Dimensions: 2, Vector: []float32{1, 0}}
+	return result, nil
+}
+
 func (s *pagedSkillRecordStore) Search(_ context.Context, options sessionstore.SearchOptions) (sessionstore.SearchResult, error) {
 	s.offsets = append(s.offsets, options.Offset)
 	start := min(options.Offset, len(s.records))
@@ -83,6 +106,28 @@ func TestSyncRecordsTracksAddUpdateAndDelete(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertSkillSearchCount(t, store, "Updated searchable", 0)
+}
+
+func TestSyncRecordsPreparesSkillSearchProjection(t *testing.T) {
+	root := t.TempDir()
+	home := t.TempDir()
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("HOME", home)
+	writeSkill(t, root, ".agents", "prepared-skill", "Description is indexed once.")
+	registry, err := Discover(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := &preparingSkillRecordStore{}
+	if err := registry.SyncRecords(context.Background(), store); err != nil {
+		t.Fatal(err)
+	}
+	if store.prepared != 1 || store.saved.Embedding == nil {
+		t.Fatalf("prepared=%d saved=%#v", store.prepared, store.saved)
+	}
+	if store.saved.Content != "Description is indexed once." || store.saved.SearchText != "" {
+		t.Fatalf("skill search projection = %#v", store.saved)
+	}
 }
 
 func TestSyncRecordsDoesNotRewriteUnchangedSkills(t *testing.T) {

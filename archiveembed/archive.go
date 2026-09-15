@@ -31,6 +31,8 @@ var historyKinds = []string{
 	sessionstore.KindSummary,
 }
 
+var semanticKinds = append(append([]string(nil), historyKinds...), sessionstore.KindSkill)
+
 // Store is the workspace archive boundary used by semantic retrieval. The
 // local sessionstore.Store and a remote workspace-memory client can both
 // implement it. Archive embeds the interface so record operations remain
@@ -113,7 +115,7 @@ func (a *Archive) Prepare(ctx context.Context, records []sessionstore.Record) ([
 	positions := make([]int, 0, len(records))
 	texts := make([]string, 0, len(records))
 	for index := range records {
-		if embeddingMatches(records[index].Embedding, vectorizer) || !isHistoryRecord(records[index]) {
+		if embeddingMatches(records[index].Embedding, vectorizer) || !isSemanticRecord(records[index]) {
 			continue
 		}
 		text := recordText(records[index])
@@ -151,7 +153,7 @@ func (a *Archive) Search(ctx context.Context, options sessionstore.SearchOptions
 	defer a.mu.RUnlock()
 	vectorizer := a.vectorizer
 	if vectorizer != nil && options.Vector == nil && strings.TrimSpace(options.Text) != "" &&
-		(options.Sort == "" || options.Sort == sessionstore.SortRelevance) && searchesHistory(options.Filters.Kinds) {
+		(options.Sort == "" || options.Sort == sessionstore.SortRelevance) && searchesSemanticRecords(options.Filters.Kinds) {
 		vectors, err := vectorizer.Embed(ctx, []string{strings.TrimSpace(options.Text)})
 		if err == nil {
 			options.Vector = &sessionstore.VectorQuery{Embedding: vectors[0]}
@@ -160,9 +162,9 @@ func (a *Archive) Search(ctx context.Context, options sessionstore.SearchOptions
 	return a.Store.Search(ctx, options)
 }
 
-func searchesHistory(kinds []string) bool {
+func searchesSemanticRecords(kinds []string) bool {
 	for _, wanted := range kinds {
-		if slices.Contains(historyKinds, wanted) {
+		if slices.Contains(semanticKinds, wanted) {
 			return true
 		}
 	}
@@ -181,7 +183,7 @@ func (a *Archive) Backfill(ctx context.Context) (BackfillStats, error) {
 	stats := BackfillStats{}
 	for offset := 0; ; offset += backfillPageSize {
 		result, err := a.Store.Search(ctx, sessionstore.SearchOptions{
-			Filters: sessionstore.Filters{Kinds: historyKinds},
+			Filters: sessionstore.Filters{Kinds: semanticKinds},
 			Sort:    sessionstore.SortOldest, Limit: backfillPageSize, Offset: offset,
 		})
 		if err != nil {
@@ -223,11 +225,11 @@ func (a *Archive) configuredVectorizer() *embedding.Vectorizer {
 	return a.vectorizer
 }
 
-func isHistoryRecord(record sessionstore.Record) bool {
+func isSemanticRecord(record sessionstore.Record) bool {
 	if slices.Contains(record.Tags, "archive-read") {
 		return false
 	}
-	return slices.Contains(historyKinds, record.Kind)
+	return slices.Contains(semanticKinds, record.Kind)
 }
 
 func recordText(record sessionstore.Record) string {

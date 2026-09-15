@@ -170,7 +170,7 @@ func TestBackfillAndSemanticSearch(t *testing.T) {
 	}
 }
 
-func TestPrepareSkipsArchiveReadsAndNonHistoryRecords(t *testing.T) {
+func TestPrepareIncludesSkillsAndSkipsArchiveReads(t *testing.T) {
 	store, err := sessionstore.OpenWithOptions(t.TempDir(), sessionstore.OpenOptions{
 		Vector: sessionstore.VectorConfig{Model: "embed-test", Dimensions: 3},
 	})
@@ -191,12 +191,59 @@ func TestPrepareSkipsArchiveReadsAndNonHistoryRecords(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if records[0].Embedding == nil || records[1].Embedding != nil || records[2].Embedding != nil {
+	if records[0].Embedding == nil || records[1].Embedding != nil || records[2].Embedding == nil {
 		t.Fatalf("prepared records = %#v", records)
 	}
 	embedder.mu.Lock()
 	defer embedder.mu.Unlock()
-	if len(embedder.calls) != 1 || len(embedder.calls[0]) != 1 {
+	if len(embedder.calls) != 1 || len(embedder.calls[0]) != 2 {
 		t.Fatalf("embedding calls = %#v", embedder.calls)
+	}
+}
+
+func TestBackfillAndSemanticSearchIncludesSkills(t *testing.T) {
+	store, err := sessionstore.OpenWithOptions(t.TempDir(), sessionstore.OpenOptions{
+		Vector: sessionstore.VectorConfig{Model: "embed-test", Dimensions: 3},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	skill, err := store.Save(sessionstore.Record{
+		Kind: sessionstore.KindSkill, Summary: "animal-care", Content: "care for a cat",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	archive := New(store)
+	if err := archive.Configure(&testEmbedder{}, "embed-test", 3); err != nil {
+		t.Fatal(err)
+	}
+	stats, err := archive.Backfill(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats.Scanned != 1 || stats.Embedded != 1 {
+		t.Fatalf("skill backfill stats = %#v", stats)
+	}
+	result, err := archive.Search(context.Background(), sessionstore.SearchOptions{
+		Text: "feline", Filters: sessionstore.Filters{Kinds: []string{sessionstore.KindSkill}}, Limit: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Hits) != 1 || result.Hits[0].Record.ID != skill.ID || result.Hits[0].VectorScore == 0 {
+		t.Fatalf("semantic skill hits = %#v", result.Hits)
+	}
+	if err := archive.Configure(&testEmbedder{}, "embed-test-v2", 3); err != nil {
+		t.Fatal(err)
+	}
+	stats, err = archive.Backfill(context.Background())
+	if err != nil || stats.Embedded != 1 {
+		t.Fatalf("reassigned skill backfill stats = %#v, %v", stats, err)
+	}
+	reassigned, err := store.Get(skill.ID)
+	if err != nil || reassigned.Embedding == nil || reassigned.Embedding.Model != "embed-test-v2" {
+		t.Fatalf("reassigned skill record = %#v, %v", reassigned, err)
 	}
 }

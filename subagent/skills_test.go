@@ -7,7 +7,7 @@ import (
 	"github.com/snowmerak/q/client"
 )
 
-func TestRetrievalCatalogRequiresBoundaryChecksForAvailableSources(t *testing.T) {
+func TestRetrievalCatalogGuidesSkillLookupWhenMoreInformationIsNeeded(t *testing.T) {
 	tools := []client.Tool{
 		scoutFunctionTool("search_skills"),
 		scoutFunctionTool("get_skill"),
@@ -16,8 +16,9 @@ func TestRetrievalCatalogRequiresBoundaryChecksForAvailableSources(t *testing.T)
 	}
 	prompt := withRetrievalCatalog("base prompt", tools)
 	for _, required := range []string{
-		"Before starting substantive work",
-		"Before finalizing substantive work, search again",
+		"At the start of work",
+		"after receiving new information",
+		"when additional guidance is needed",
 		"search_skills",
 		"get_skill",
 		"search_archive",
@@ -27,6 +28,9 @@ func TestRetrievalCatalogRequiresBoundaryChecksForAvailableSources(t *testing.T)
 		if !strings.Contains(prompt, required) {
 			t.Fatalf("retrieval guidance does not require %q:\n%s", required, prompt)
 		}
+	}
+	if strings.Contains(prompt, "Before finalizing substantive work, search again using any new requirements") {
+		t.Fatalf("skill retrieval guidance still requires unconditional final lookup:\n%s", prompt)
 	}
 	if strings.Contains(prompt, "Loom artifact") {
 		t.Fatalf("skill retrieval guidance still routes through Loom:\n%s", prompt)
