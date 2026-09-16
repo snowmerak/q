@@ -1556,9 +1556,6 @@ func (a *acpAgent) continueACPAgentTurn(
 			if err := a.state.applyAgentContextCompaction(*event.compaction); err != nil {
 				return acp.PromptResponse{}, fmt.Errorf("apply agent context compaction: %w", err)
 			}
-			if err := a.state.saveWorkspaceSession(); err != nil {
-				return acp.PromptResponse{}, err
-			}
 			a.publishUsageUpdate()
 		}
 		if event.taskStarted != nil {

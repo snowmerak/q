@@ -26,6 +26,7 @@ import (
 	"github.com/snowmerak/q/gatewayconfig"
 	qlibrary "github.com/snowmerak/q/library"
 	"github.com/snowmerak/q/loom"
+	"github.com/snowmerak/q/memory"
 	"github.com/snowmerak/q/sessionstore"
 	"github.com/snowmerak/q/subagent"
 	"github.com/snowmerak/q/thinker"
@@ -739,6 +740,10 @@ func TestChatCompactsAtThresholdThenSendsPendingMessage(t *testing.T) {
 	m = updated.(model)
 	if m.compacting || command == nil {
 		t.Fatalf("post-compaction state = compacting %v, command nil %v", m.compacting, command == nil)
+	}
+	saved, err := workspaceStore.Load()
+	if err != nil || !hasMessageNamed(saved.Context, memory.SummaryName) {
+		t.Fatalf("compacted context was not saved before continuation: %#v, %v", saved.Context, err)
 	}
 	result, ok := command().(chatResultMsg)
 	if !ok {

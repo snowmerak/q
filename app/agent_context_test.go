@@ -14,6 +14,7 @@ import (
 	"github.com/snowmerak/q/config"
 	"github.com/snowmerak/q/memory"
 	qtools "github.com/snowmerak/q/tools"
+	"github.com/snowmerak/q/workspace"
 )
 
 type compactingLoopClient struct {
@@ -200,6 +201,10 @@ func TestStreamAgentLoopCompactsBetweenToolRounds(t *testing.T) {
 			if !strings.Contains(event.compaction.Summary, "condensed tool evidence") {
 				t.Fatalf("summary = %q", event.compaction.Summary)
 			}
+			recent := event.compaction.Plan.Recent
+			if len(recent) == 0 || recent[len(recent)-1].Role != client.RoleUser || recent[len(recent)-1].Content != "keep going" {
+				t.Fatalf("compaction continuation = %#v", recent)
+			}
 		}
 		if event.response != nil {
 			final = event.response
@@ -238,6 +243,10 @@ func TestStreamAgentLoopCompactsBetweenToolRounds(t *testing.T) {
 	}
 	if resumedRequest.Messages[0].Content != "keep this system contract exactly" {
 		t.Fatalf("system contract changed: %#v", resumedRequest.Messages)
+	}
+	last := resumedRequest.Messages[len(resumedRequest.Messages)-1]
+	if last.Role != client.RoleUser || last.Content != "keep going" {
+		t.Fatalf("post-compaction continuation = %#v", last)
 	}
 }
 
@@ -299,13 +308,15 @@ func TestApplyAgentContextCompactionPreservesTranscript(t *testing.T) {
 	manager := memory.New(policy, history)
 	plan, err := manager.PlanWithRetention(memory.Retention{
 		PreserveInstructions: true, AllowTargetGrowth: true, SummarizeOversizedRecent: true,
+		ContinuationMessage: "keep going",
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	transcript := append([]client.Message(nil), history...)
 	archive := &collectingRecordArchive{}
-	m := model{messages: transcript, memory: manager, conversationID: "old-provider-state", archive: archive}
+	store := &workspace.Store{Root: t.TempDir()}
+	m := model{messages: transcript, memory: manager, conversationID: "old-provider-state", archive: archive, workspaceStore: store}
 
 	if err := m.applyAgentContextCompaction(agentContextCompaction{Plan: plan, Summary: testCheckpointJSON("durable state")}); err != nil {
 		t.Fatal(err)
@@ -318,6 +329,15 @@ func TestApplyAgentContextCompactionPreservesTranscript(t *testing.T) {
 	}
 	if !hasMessageNamed(m.memory.Messages(), memory.SummaryName) || m.memory.Stats().Compactions != 1 {
 		t.Fatalf("memory was not compacted: %#v, stats = %#v", m.memory.Messages(), m.memory.Stats())
+	}
+	saved, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	last := saved.Context[len(saved.Context)-1]
+	if last.Role != client.RoleUser || last.Content != "keep going" ||
+		!reflect.DeepEqual(saved.Transcript, workspaceSessionMessages(history)) {
+		t.Fatalf("saved continuation = %#v; transcript messages = %d", last, len(saved.Transcript))
 	}
 	if len(archive.records) != 1 || !strings.Contains(archive.records[0].Content, "durable state") {
 		t.Fatalf("archive records = %#v", archive.records)

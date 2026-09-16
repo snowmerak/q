@@ -1416,6 +1416,10 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		m.compacting = false
 		m.compactionTarget = message.plan.TargetTokens
 		m.status = fmt.Sprintf("Context compacted · %s → %s", formatTokens(message.plan.BeforeTokens), formatTokens(m.memory.PredictedTokens()))
+		if err := m.saveWorkspaceSession(); err != nil {
+			m.archiveFailure("context_compaction", err)
+			m.status += " · save: " + err.Error()
+		}
 		return m, m.sendChatRequest()
 	case deferredSubmitMsg:
 		if !m.submitPending {

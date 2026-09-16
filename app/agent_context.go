@@ -30,7 +30,7 @@ func (m *model) applyAgentContextCompaction(compaction agentContextCompaction) e
 	}
 	m.conversationID = ""
 	m.archiveSummary(checkpoint)
-	return nil
+	return m.saveWorkspaceSession()
 }
 
 func newAgentLoopContext(policy memory.Policy, initial []client.Message, tools []client.Tool) *agentLoopContext {
@@ -89,6 +89,8 @@ func (c *agentLoopContext) CompactIfNeeded(
 		PreserveToolNames:        []string{askToUserToolName},
 		AllowTargetGrowth:        true,
 		SummarizeOversizedRecent: true,
+		// Strict chat templates need a user turn even when the latest real one was summarized.
+		ContinuationMessage: "keep going",
 	})
 	if err != nil {
 		return nil, fmt.Errorf("agent loop: plan context compaction: %w", err)

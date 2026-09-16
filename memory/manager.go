@@ -33,6 +33,9 @@ type Retention struct {
 	PreserveToolNames        []string
 	AllowTargetGrowth        bool
 	SummarizeOversizedRecent bool
+	// ContinuationMessage becomes the final user turn in the compacted context.
+	// It is not part of the conversation source sent to the checkpoint model.
+	ContinuationMessage string
 }
 
 type Plan struct {
@@ -227,6 +230,11 @@ func (m *Manager) PlanWithRetention(retention Retention) (Plan, error) {
 	}
 	if len(plan.Source) == 0 {
 		return Plan{}, ErrNothingToCompact
+	}
+	if retention.ContinuationMessage != "" {
+		plan.Recent = append(plan.Recent, client.Message{
+			Role: client.RoleUser, Content: retention.ContinuationMessage,
+		})
 	}
 	// Skill resources have an independent 10% soft budget and therefore do not
 	// reduce the ordinary 22% compaction target. Only the model's hard context
