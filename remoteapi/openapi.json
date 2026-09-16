@@ -1,0 +1,95 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "q Remote API",
+    "version": "1.0.0"
+  },
+  "paths": {
+    "/v1/health": {
+      "get": {
+        "responses": {
+          "200": {"description": "Service health"}
+        }
+      }
+    },
+    "/openapi.json": {
+      "get": {
+        "responses": {
+          "200": {"description": "This OpenAPI document"}
+        }
+      }
+    },
+    "/v1/sessions": {
+      "get": {
+        "security": [{"bearerAuth": []}],
+        "parameters": [
+          {"name": "working_directory", "in": "query", "required": true, "schema": {"type": "string"}}
+        ],
+        "responses": {
+          "200": {"description": "Newest-first workspace sessions"},
+          "401": {"$ref": "#/components/responses/Unauthorized"}
+        }
+      }
+    },
+    "/v1/subagents": {
+      "get": {
+        "security": [{"bearerAuth": []}],
+        "parameters": [
+          {"name": "working_directory", "in": "query", "required": true, "schema": {"type": "string"}}
+        ],
+        "responses": {
+          "200": {"description": "Subagents effective for the workspace"},
+          "401": {"$ref": "#/components/responses/Unauthorized"}
+        }
+      }
+    },
+    "/v1/subagent-runs": {
+      "post": {
+        "security": [{"bearerAuth": []}],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {"$ref": "#/components/schemas/RunRequest"}
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Line-delimited execution events. An omitted or empty subagent runs the default main agent loop.",
+            "headers": {
+              "X-Q-Session-ID": {"schema": {"type": "string"}}
+            },
+            "content": {
+              "application/x-ndjson": {"schema": {"type": "string"}}
+            }
+          },
+          "401": {"$ref": "#/components/responses/Unauthorized"},
+          "409": {"description": "Session busy"},
+          "429": {"description": "Run capacity exhausted"}
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "bearerAuth": {"type": "http", "scheme": "bearer"}
+    },
+    "schemas": {
+      "RunRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["working_directory", "prompt"],
+        "properties": {
+          "working_directory": {"type": "string"},
+          "session_id": {"type": "string"},
+          "subagent": {"type": "string", "description": "Optional. Empty selects the default main agent loop."},
+          "prompt": {"type": "string", "description": "UTF-8 input limited to 32768 bytes by the server", "x-q-maxBytes": 32768}
+        }
+      }
+    },
+    "responses": {
+      "Unauthorized": {"description": "Missing or invalid Remote API key"}
+    }
+  }
+}

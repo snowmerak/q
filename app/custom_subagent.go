@@ -216,7 +216,10 @@ func (m model) streamCustom(ctx context.Context, name, input string, events chan
 		fail(err)
 		return
 	}
-	emitAgentEvent(ctx, events, agentEvent{response: &client.ChatResponse{Choices: []client.Choice{{Message: client.Message{Role: client.RoleAssistant, Content: subagent.RenderTaskResult(result)}}}}})
+	emitAgentEvent(ctx, events, agentEvent{
+		response: &client.ChatResponse{Choices: []client.Choice{{Message: client.Message{Role: client.RoleAssistant, Content: subagent.RenderTaskResult(result)}}}},
+		outcome:  result.Outcome,
+	})
 }
 func (m model) startCustom(command string) (tea.Model, tea.Cmd) {
 	if command == "/subagents" {

@@ -48,6 +48,24 @@ func main() {
 		}
 		return
 	}
+	if len(os.Args) > 1 && os.Args[1] == "remote" {
+		if len(os.Args) == 3 && os.Args[2] == "config" {
+			if err := app.RunRemoteConfigDefault(ctx); err != nil {
+				fmt.Fprintln(os.Stderr, err)
+				os.Exit(1)
+			}
+			return
+		}
+		if len(os.Args) != 2 {
+			fmt.Fprintln(os.Stderr, "usage: q remote | q remote config")
+			os.Exit(2)
+		}
+		if err := runRemoteCommand(ctx, os.Stdout, os.Stderr); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
 	if len(os.Args) > 1 {
 		runStandalone := standaloneUICommand(os.Args[1])
 		if runStandalone != nil {

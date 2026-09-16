@@ -259,6 +259,8 @@ func renderHelpContent(dark bool, commandSets ...[]slashCommand) string {
 		{"q library start", "Run the global Library as a dedicated foreground service."},
 		{"q gateway", "Configure Gateway network, API keys, and providers."},
 		{"q gateway start", "Run only the standalone OpenAI-compatible Gateway."},
+		{"q remote", "Run the REST host for workspace sessions and agent execution."},
+		{"q remote config", "Configure Remote network and Remote-only API keys."},
 		{"q model", "Configure main, embedding, and subagent models."},
 		{"q mcp", "Configure external MCP tool servers and per-role assignments."},
 		{"q subagents", "Manage subagents, ACP connections, and external bindings."},

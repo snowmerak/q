@@ -419,6 +419,7 @@ type agentEvent struct {
 	toolIsError     bool
 	compaction      *agentContextCompaction
 	response        *client.ChatResponse
+	outcome         string
 	requestEstimate int
 	toolCalls       int
 	learningName    string
@@ -429,6 +430,8 @@ type agentEvent struct {
 	contextReplace  *agentContextReplacement
 	err             error
 }
+
+var errRemoteInteractionUnavailable = errors.New("interactive input is unavailable in q remote mode")
 
 type agentContextReplacement struct {
 	Index   int
@@ -3415,6 +3418,14 @@ func (m model) submitChat() (tea.Model, tea.Cmd) {
 			return m.startPlan(content)
 		}
 	}
+	return m.startChatTurn(content, !remoteChat)
+}
+
+func (m model) startChatTurn(content string, compact bool) (tea.Model, tea.Cmd) {
+	content = strings.TrimSpace(norm.NFC.String(content))
+	if m.waiting || content == "" || m.client == nil {
+		return m, nil
+	}
 	m.clearAgentActivities()
 	m.resize(m.width, m.height)
 	m.beginTurn()
@@ -3433,7 +3444,7 @@ func (m model) submitChat() (tea.Model, tea.Cmd) {
 	m.input.Blur()
 	m.waiting = true
 	m.refreshTranscript()
-	if !remoteChat && m.memory.ShouldCompact() {
+	if compact && m.memory.ShouldCompact() {
 		plan, err := m.memory.Plan()
 		if err != nil {
 			m.rollbackPendingMessage()
@@ -3916,6 +3927,18 @@ func streamAgentLoop(
 					return
 				}
 				if answer.Err != nil {
+					if errors.Is(answer.Err, errRemoteInteractionUnavailable) {
+						message := orchestrationToolResult(
+							call,
+							"interaction_unavailable: interactive input is unavailable in q remote mode; continue with the available information or finish the task as blocked",
+							true,
+						)
+						appendHistory(message)
+						if !emitAgentEvent(ctx, events, agentEvent{message: &message, toolIsError: true}) {
+							return
+						}
+						continue
+					}
 					emitAgentEvent(ctx, events, agentEvent{err: answer.Err})
 					return
 				}
@@ -4006,7 +4029,7 @@ func streamAgentLoop(
 					response.ConversationID = conversationID
 				}
 				emitAgentEvent(ctx, events, agentEvent{
-					response: response, requestEstimate: requestEstimate, toolCalls: toolCalls,
+					response: response, outcome: completion.Outcome, requestEstimate: requestEstimate, toolCalls: toolCalls,
 				})
 				return
 			}

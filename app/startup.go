@@ -149,6 +149,7 @@ type startupRequest struct {
 	manager        *providerhost.Manager
 	factory        clientFactory
 	lifecycle      *startupLifecycle
+	providerReady  bool
 }
 
 func (request startupRequest) run(modelReady chan<- struct{}) runtimeInitializedMsg {
@@ -159,25 +160,9 @@ func (request startupRequest) run(modelReady chan<- struct{}) runtimeInitialized
 	}
 
 	loaded := request.loaded
-	startupErr := request.manager.LoadAndStart(request.ctx)
-	if errors.Is(startupErr, providerhost.ErrNotFound) && request.configErr == nil && !loaded.Provider.Managed {
-		legacy, legacyErr := providerhost.LegacyProvider(
-			"default", loaded.Provider.BaseURL, loaded.Provider.APIKeyEnv, loaded.Provider.APIKey,
-		)
-		if legacyErr == nil {
-			startupErr = request.manager.Apply(request.ctx, gateway.Config{Providers: []gateway.ProviderConfig{legacy}})
-			if startupErr == nil {
-				if !strings.HasPrefix(loaded.Provider.Model, "default/") {
-					loaded.Provider.Model = "default/" + loaded.Provider.Model
-				}
-				loaded.UseManagedGateway()
-				startupErr = request.store.Save(loaded)
-			}
-		} else {
-			startupErr = legacyErr
-		}
-	} else if errors.Is(startupErr, providerhost.ErrNotFound) {
-		startupErr = nil
+	var startupErr error
+	if !request.providerReady {
+		loaded, startupErr = initializeManagedProvider(request.ctx, request.store, request.manager, loaded, request.configErr)
 	}
 	if modelReady != nil {
 		close(modelReady)
@@ -303,4 +288,34 @@ func (request startupRequest) run(modelReady chan<- struct{}) runtimeInitialized
 		result.client = configuredClient
 	}
 	return result
+}
+
+func initializeManagedProvider(
+	ctx context.Context,
+	store config.Store,
+	manager *providerhost.Manager,
+	loaded config.Config,
+	configErr error,
+) (config.Config, error) {
+	startupErr := manager.LoadAndStart(ctx)
+	if errors.Is(startupErr, providerhost.ErrNotFound) && configErr == nil && !loaded.Provider.Managed {
+		legacy, legacyErr := providerhost.LegacyProvider(
+			"default", loaded.Provider.BaseURL, loaded.Provider.APIKeyEnv, loaded.Provider.APIKey,
+		)
+		if legacyErr == nil {
+			startupErr = manager.Apply(ctx, gateway.Config{Providers: []gateway.ProviderConfig{legacy}})
+			if startupErr == nil {
+				if !strings.HasPrefix(loaded.Provider.Model, "default/") {
+					loaded.Provider.Model = "default/" + loaded.Provider.Model
+				}
+				loaded.UseManagedGateway()
+				startupErr = store.Save(loaded)
+			}
+		} else {
+			startupErr = legacyErr
+		}
+	} else if errors.Is(startupErr, providerhost.ErrNotFound) {
+		startupErr = nil
+	}
+	return loaded, startupErr
 }

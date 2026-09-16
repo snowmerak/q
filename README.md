@@ -560,6 +560,8 @@ omits the chat-only `learn` tool.
 | `q sprint <request...>` | Run one autonomous plan through execution and review. All trailing argv values are joined as the request. |
 | `q gateway` | Configure the Gateway listener, API keys, and providers. |
 | `q gateway start [--host <ip>] [--port <port>]` | Run the OpenAI-compatible Gateway. |
+| `q remote` | Run the foreground REST host for workspace sessions and agent execution. |
+| `q remote config` | Configure the Remote listener, authentication switch, and Remote-only API keys. |
 | `q library` | Configure the global Library listener. |
 | `q library start` | Run the global Library as a dedicated foreground service. |
 | `q memory` | Keep Workspace Memory running independently of a TUI. |
@@ -583,6 +585,27 @@ The standalone Gateway initially binds to `127.0.0.1:0`. If it has no active
 API keys, authentication is disabled. Do not expose a no-key Gateway on a
 non-loopback address unless the surrounding network already enforces access.
 
+The standalone Remote host also defaults to `127.0.0.1:0`, but uses an
+independent keyring because a Remote key can select any working directory the
+q process account can access and can run workspace-mutating tools. Configure it
+with `q remote config`, then start it with `q remote`. `GET /v1/sessions` and
+`GET /v1/subagents` discover workspace state; `POST /v1/subagent-runs` streams
+execution as `application/x-ndjson`. The request requires `working_directory`
+and `prompt`; `session_id` resumes a session, while omission creates one. The
+`subagent` field is optional: an empty or omitted value runs the ordinary main
+agent loop, and a value such as `builtin/scout` runs the existing direct
+`/subagent` flow. Remote prompts are always model input; TUI-only slash commands
+such as `/new` are not executed through the API.
+
+Remote requests preserve `ask_to_user` in the model-visible tool catalog. Since
+the HTTP stream is one-way, a call immediately receives an
+`interaction_unavailable`-style tool error and the agent may continue with the
+available information or finish blocked. Remote does not provide built-in TLS,
+path allowlists, background jobs, reconnect, or interactive answers. Keep it on
+loopback unless authentication and a trusted confidential network or reverse
+proxy are in place. The exact wire contract is served from `/openapi.json` and
+described in [the Remote API implementation note](docs/remote-subagent-api-plan.md).
+
 ## Data and configuration
 
 ### Personal state
@@ -592,6 +615,8 @@ non-loopback address unless the surrounding network already enforces access.
 | `~/.q/config.yaml` | Main model, roles, context, Loom, and LSP configuration. |
 | `~/.q/providers.json` | Managed Gateway providers and model metadata. |
 | `~/.q/gateway.json` | Standalone Gateway listener and key metadata. |
+| `~/.q/remote.json` | Standalone Remote listener, authentication switch, and Remote key metadata. |
+| `~/.q/remote.key` | Private master key used only to verify Remote API keys. |
 | `~/.q/library.json` | Global Library loopback listener settings. |
 | `~/.q/workspace-memory.json` | Workspace Memory settings. |
 | `~/.q/usage.json` | Token Usage service loopback endpoint settings. |
@@ -671,6 +696,7 @@ publishing the fork.
 - [Agent invocation runtime](docs/agent-invocation-runtime.md)
 - [Delegated subagents](docs/delegated-subagents.md)
 - [Subagent architecture](docs/subagent-architecture-notes.md)
+- [Remote agent API](docs/remote-subagent-api-plan.md)
 - [Plan orchestration](docs/plan-orchestration.md)
 - [Execution orchestration](docs/execution-orchestration.md)
 - [Context compaction](docs/context-compaction-plan.md)
