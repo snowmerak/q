@@ -1,0 +1,20 @@
+{% from "icons.njk" import icon %}
+<aside class="docs-sidebar" id="docs-navigation" data-docs-sidebar>
+  <nav aria-label="Documentation navigation">
+    {% for group in navigation %}
+      <section class="docs-nav__group">
+        <h2>{{ group.label }}</h2>
+        <ul>
+          {% for item in group.items %}
+            <li>
+              <a class="docs-nav__link{% if page.url == item.url %} is-active{% endif %}" href="{{ item.url }}"{% if page.url == item.url %} aria-current="page"{% endif %}>
+                <span class="docs-nav__icon">{{ icon(item.icon) }}</span>
+                <span>{{ item.title }}</span>
+              </a>
+            </li>
+          {% endfor %}
+        </ul>
+      </section>
+    {% endfor %}
+  </nav>
+</aside>

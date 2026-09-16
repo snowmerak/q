@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{% if title %}{{ title }} · {% endif %}q</title>
+    <meta name="description" content="{{ description or site.description }}">
+    <meta name="theme-color" content="#12161f">
+    <link rel="canonical" href="{{ site.url }}{{ page.url }}">
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+    <link rel="stylesheet" href="/assets/site.css">
+    <script src="/assets/site.js" defer></script>
+  </head>
+  <body class="{{ bodyClass or '' }}">
+    {% include "partials/header.njk" %}
+    <main id="main-content">{{ content | safe }}</main>
+    {% if not hideFooter %}
+      <footer class="site-footer">
+        <div><a class="site-brand site-brand--small" href="/">q</a><span>A workspace-native coding agent.</span></div>
+        <div><a href="/guide/introduction/">Guide</a><a href="{{ site.repository }}">GitHub</a></div>
+      </footer>
+    {% endif %}
+    <div class="mp-toast-region mp-toast-region--bottom-right" aria-live="polite" aria-relevant="additions text" data-toast-region></div>
+  </body>
+</html>

@@ -1,0 +1,19 @@
+<header class="site-header">
+  <a class="skip-link" href="#main-content">Skip to content</a>
+  <div class="site-header__inner">
+    <a class="site-brand" href="/" aria-label="q home">q</a>
+    <nav class="top-nav" aria-label="Primary navigation" data-top-nav>
+      <a href="/guide/introduction/"{% if page.url | startsWith('/guide/') or page.url | startsWith('/workflows/') %} aria-current="page"{% endif %}>Guide</a>
+      <a href="/concepts/runtime/"{% if page.url | startsWith('/concepts/') %} aria-current="page"{% endif %}>Concepts</a>
+      <a href="/reference/commands/"{% if page.url | startsWith('/reference/') %} aria-current="page"{% endif %}>Reference</a>
+      <a href="{{ site.repository }}">GitHub<span class="sr-only"> (opens repository)</span></a>
+    </nav>
+    <a class="header-github mp-button mp-button--secondary mp-button--sm" href="{{ site.repository }}" aria-label="View q on GitHub">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2.8a9.2 9.2 0 0 0-2.9 17.9c.5.1.6-.2.6-.5v-2c-2.8.6-3.4-1.2-3.4-1.2-.5-1.2-1.1-1.5-1.1-1.5-.9-.6.1-.6.1-.6 1 .1 1.6 1 1.6 1 .9 1.6 2.4 1.1 3 .9.1-.7.4-1.1.7-1.4-2.2-.3-4.6-1.1-4.6-5a3.9 3.9 0 0 1 1-2.7c-.1-.3-.4-1.3.1-2.7 0 0 .9-.3 2.8 1A9.7 9.7 0 0 1 12 5.6a9.7 9.7 0 0 1 2.5.4c2-1.3 2.8-1 2.8-1 .6 1.4.2 2.4.1 2.7a3.9 3.9 0 0 1 1 2.7c0 3.9-2.4 4.7-4.6 5 .4.3.7.9.7 1.8v3c0 .4.1.6.7.5A9.2 9.2 0 0 0 12 2.8Z"></path></svg>
+      GitHub
+    </a>
+    <button class="nav-toggle" type="button" aria-label="Toggle navigation" aria-expanded="false" data-nav-toggle>
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16"></path></svg>
+    </button>
+  </div>
+</header>

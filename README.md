@@ -8,6 +8,8 @@ binary.
 Use it for ordinary repository work, run a reviewed multi-agent plan, inspect
 the resulting diff, and create a commit without leaving the terminal.
 
+[Documentation](https://q.saturday.ne.kr) · [Source](https://github.com/snowmerak/q)
+
 ## What q includes
 
 - **Workspace tools** — anchored reads and edits, complete-file writes,

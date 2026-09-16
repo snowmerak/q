@@ -1,0 +1,20 @@
+---
+permalink: /llms.txt
+eleventyExcludeFromCollections: true
+---
+# q
+
+> q is a workspace-native coding agent for the terminal. It combines multi-provider model access, approval-gated planning, bounded subagents, durable sessions, Agent Skills, repository review, and a root-scoped tool runtime.
+
+## Documentation
+
+{% for group in navigation %}### {{ group.label }}
+
+{% for item in group.items %}- [{{ item.title }}]({{ site.url }}{{ item.url }})
+{% endfor %}
+{% endfor %}
+Each documentation page exposes its source Markdown below `/md/` and provides a Copy as MD action in the page header.
+
+## Source
+
+- [GitHub repository]({{ site.repository }})
