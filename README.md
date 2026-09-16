@@ -41,7 +41,19 @@ be run directly with Go.
 
 ## Install and run
 
-From a source checkout:
+Install the latest q binary directly from the Go module:
+
+```powershell
+go install github.com/snowmerak/q/cmd/q@latest
+```
+
+Install the optional `q-mcp` companion the same way:
+
+```powershell
+go install github.com/snowmerak/q/cmd/q-mcp@latest
+```
+
+From a source checkout, install both commands together:
 
 ```powershell
 go install ./cmd/q ./cmd/q-mcp

@@ -5,6 +5,8 @@ sectionLabel: Guide
 toc:
   - id: requirements
     label: Requirements
+  - id: install-with-go
+    label: Install with Go
   - id: install-from-source
     label: Install from source
   - id: run-without-installing
@@ -24,9 +26,25 @@ Before installing q, make sure the following are available:
 
 [Task](https://taskfile.dev/) is optional. Every required build and test command can run directly through Go.
 
+## Install with Go
+
+Install q directly from its Go module:
+
+```powershell
+go install github.com/snowmerak/q/cmd/q@latest
+```
+
+The optional `q-mcp` companion exposes q's workspace tools to another MCP client over stdio:
+
+```powershell
+go install github.com/snowmerak/q/cmd/q-mcp@latest
+```
+
+Go writes the binaries to `GOBIN`, or to `GOPATH/bin` when `GOBIN` is unset. Make sure that directory is on `PATH`.
+
 ## Install from source
 
-Clone the repository, enter it, and install both q commands:
+Clone the repository when you want to build the current source tree or contribute to q:
 
 ```powershell
 git clone https://github.com/snowmerak/q.git
@@ -34,7 +52,7 @@ cd q
 go install ./cmd/q ./cmd/q-mcp
 ```
 
-`q` is the interactive agent and standalone service host. `q-mcp` exposes q's workspace tools to another MCP client over stdio.
+This installs both commands from the checked-out source rather than resolving `@latest` through the Go module proxy.
 
 ## Run without installing
 
