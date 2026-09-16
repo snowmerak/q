@@ -1,0 +1,78 @@
+export default {
+  en: {
+    heading: "A workspace-native coding agent.", lead: "Plan, execute, review, and remember—without leaving the terminal.", start: "Get started →", github: "View on GitHub",
+    terminalLabel: "q sprint execution trace", copy: "Copy",
+    traces: [
+      { state: "is-done", agent: "Griller", detail: "Clarifying the request and gathering context…", status: "✓ Done" },
+      { state: "is-done", agent: "Scout", detail: "Exploring the codebase and relevant files…", status: "✓ Done" },
+      { state: "is-done", agent: "Planner", detail: "Drafting an implementation plan…", status: "✓ Done" },
+      { state: "is-active", agent: "Executor", detail: "Making changes and running checks…", status: "Running" },
+      { state: "", agent: "Review", detail: "Summarizing results and next steps…", status: "Pending" },
+    ],
+    featureHeading: "One workspace, the whole loop", featureLead: "From request to reviewed change, q keeps the work in your terminal and the context in your workspace.",
+    features: [
+      { icon: "plan", title: "Plan with intent", body: "Turn a request into a clear, executable plan that fits the repository before files change." },
+      { icon: "delegate", title: "Delegate with boundaries", body: "Give focused work to built-in, custom, or external agents with explicit tools and scope." },
+      { icon: "remember", title: "Remember what matters", body: "Keep durable sessions, task history, and reusable project knowledge without bloating every prompt." },
+    ],
+    workflowHeading: "Visible work, deliberate transitions", workflowLead: "q makes the orchestration path inspectable. Each role has a bounded job, and approval remains an explicit transition.",
+    steps: ["Clarify", "Explore", "Plan", "Execute", "Review"], ctaHeading: "Start with one workspace.", ctaBody: "Install q, choose a provider, and send the first request.", cta: "Open the guide →",
+  },
+  ko: {
+    heading: "워크스페이스 중심 코딩 에이전트.", lead: "터미널을 떠나지 않고 계획하고, 실행하고, 검토하고, 기억하세요.", start: "시작하기 →", github: "GitHub에서 보기",
+    terminalLabel: "q sprint 실행 추적", copy: "복사",
+    traces: [
+      { state: "is-done", agent: "Griller", detail: "요청을 명확히 하고 컨텍스트를 수집하는 중…", status: "✓ 완료" },
+      { state: "is-done", agent: "Scout", detail: "코드베이스와 관련 파일을 탐색하는 중…", status: "✓ 완료" },
+      { state: "is-done", agent: "Planner", detail: "구현 계획을 작성하는 중…", status: "✓ 완료" },
+      { state: "is-active", agent: "Executor", detail: "변경을 적용하고 검사를 실행하는 중…", status: "실행 중" },
+      { state: "", agent: "Review", detail: "결과와 다음 단계를 정리할 예정…", status: "대기" },
+    ],
+    featureHeading: "하나의 워크스페이스에서 전체 루프를", featureLead: "요청부터 검토된 변경까지, q는 작업은 터미널에 두고 컨텍스트는 워크스페이스에 보존합니다.",
+    features: [
+      { icon: "plan", title: "의도를 담아 계획", body: "파일을 바꾸기 전에 요청을 저장소에 맞는 명확하고 실행 가능한 계획으로 만듭니다." },
+      { icon: "delegate", title: "경계를 정해 위임", body: "명시적인 도구와 범위로 내장·사용자 정의·외부 에이전트에 집중된 작업을 맡깁니다." },
+      { icon: "remember", title: "중요한 것만 기억", body: "매 프롬프트를 비대하게 만들지 않고 세션, 작업 기록, 재사용 가능한 프로젝트 지식을 보존합니다." },
+    ],
+    workflowHeading: "보이는 작업, 의도적인 전환", workflowLead: "q는 오케스트레이션 경로를 확인 가능하게 유지합니다. 각 역할에는 경계가 있는 임무가 있고, 승인은 명시적인 전환으로 남습니다.",
+    steps: ["명확화", "탐색", "계획", "실행", "검토"], ctaHeading: "하나의 워크스페이스에서 시작하세요.", ctaBody: "q를 설치하고 공급자를 선택한 뒤 첫 요청을 보내세요.", cta: "가이드 열기 →",
+  },
+  ja: {
+    heading: "ワークスペースネイティブなコーディングエージェント。", lead: "ターミナルを離れずに、計画・実行・レビュー・記憶まで。", start: "はじめる →", github: "GitHub で見る",
+    terminalLabel: "q sprint 実行トレース", copy: "コピー",
+    traces: [
+      { state: "is-done", agent: "Griller", detail: "依頼を明確化し、コンテキストを収集中…", status: "✓ 完了" },
+      { state: "is-done", agent: "Scout", detail: "コードベースと関連ファイルを調査中…", status: "✓ 完了" },
+      { state: "is-done", agent: "Planner", detail: "実装計画を作成中…", status: "✓ 完了" },
+      { state: "is-active", agent: "Executor", detail: "変更を加え、チェックを実行中…", status: "実行中" },
+      { state: "", agent: "Review", detail: "結果と次の手順をまとめる予定…", status: "待機中" },
+    ],
+    featureHeading: "一つのワークスペースで、すべての工程を", featureLead: "依頼からレビュー済みの変更まで、q は作業をターミナルに、コンテキストをワークスペースに保ちます。",
+    features: [
+      { icon: "plan", title: "意図を持って計画", body: "ファイルを変更する前に、依頼をリポジトリに合った明確で実行可能な計画へ変換します。" },
+      { icon: "delegate", title: "境界を定めて委任", body: "明示的なツールとスコープを使い、組み込み・カスタム・外部エージェントに作業を任せます。" },
+      { icon: "remember", title: "重要なことを記憶", body: "毎回のプロンプトを肥大化させず、セッション、タスク履歴、再利用可能なプロジェクト知識を保持します。" },
+    ],
+    workflowHeading: "見える作業、意図的な遷移", workflowLead: "q はオーケストレーション経路を確認可能にします。各ロールには境界のある役割があり、承認は明示的な遷移として残ります。",
+    steps: ["明確化", "調査", "計画", "実行", "レビュー"], ctaHeading: "一つのワークスペースから始めましょう。", ctaBody: "q をインストールし、プロバイダーを選んで最初の依頼を送信します。", cta: "ガイドを開く →",
+  },
+  "zh-cn": {
+    heading: "工作区原生编码代理。", lead: "无需离开终端，即可完成规划、执行、审查与记忆。", start: "开始使用 →", github: "在 GitHub 上查看",
+    terminalLabel: "q sprint 执行跟踪", copy: "复制",
+    traces: [
+      { state: "is-done", agent: "Griller", detail: "正在澄清需求并收集上下文…", status: "✓ 完成" },
+      { state: "is-done", agent: "Scout", detail: "正在探索代码库和相关文件…", status: "✓ 完成" },
+      { state: "is-done", agent: "Planner", detail: "正在制定实现计划…", status: "✓ 完成" },
+      { state: "is-active", agent: "Executor", detail: "正在修改并运行检查…", status: "运行中" },
+      { state: "", agent: "Review", detail: "准备汇总结果和后续步骤…", status: "等待中" },
+    ],
+    featureHeading: "一个工作区，覆盖完整闭环", featureLead: "从需求到审查后的变更，q 将工作留在终端，将上下文保存在工作区。",
+    features: [
+      { icon: "plan", title: "带着意图规划", body: "在修改文件前，将需求转化为符合代码仓库情况、清晰且可执行的计划。" },
+      { icon: "delegate", title: "在边界内委派", body: "通过明确的工具与范围，把聚焦的任务交给内置、自定义或外部代理。" },
+      { icon: "remember", title: "只记住重要内容", body: "无需让每次提示不断膨胀，也能保留持久会话、任务历史和可复用的项目知识。" },
+    ],
+    workflowHeading: "过程可见，转换明确", workflowLead: "q 让编排路径保持可检查。每个角色都有边界清晰的职责，审批仍是明确的状态转换。",
+    steps: ["澄清", "探索", "规划", "执行", "审查"], ctaHeading: "从一个工作区开始。", ctaBody: "安装 q，选择提供商，然后发送第一个请求。", cta: "打开指南 →",
+  },
+};

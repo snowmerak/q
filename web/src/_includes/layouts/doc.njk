@@ -1,16 +1,21 @@
 ---
 layout: layouts/base.njk
 ---
+{% set activeLocale = locale or "en" %}
+{% set t = i18n[activeLocale] or i18n.en %}
+{% set rootPath = '/guide/introduction/' %}
+{% if page.url | stripLocale | startsWith('/concepts/') %}{% set rootPath = '/concepts/runtime/' %}{% endif %}
+{% if page.url | stripLocale | startsWith('/reference/') %}{% set rootPath = '/reference/commands/' %}{% endif %}
 <button class="docs-mobile-toggle mp-button mp-button--secondary mp-button--sm" type="button" aria-controls="docs-navigation" aria-expanded="false" data-docs-toggle>
   <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h10"></path></svg>
-  Browse docs
+  {{ t.browseDocs }}
 </button>
 <div class="docs-shell">
   {% include "partials/docs-sidebar.njk" %}
   <article class="doc-article">
-    <nav class="mp-breadcrumb doc-breadcrumb" aria-label="Breadcrumb">
+    <nav class="mp-breadcrumb doc-breadcrumb" aria-label="{{ t.breadcrumb }}">
       <ol class="mp-breadcrumb__list">
-        <li class="mp-breadcrumb__item"><a class="mp-breadcrumb__link" href="/guide/introduction/">{{ sectionLabel or "Guide" }}</a></li>
+        <li class="mp-breadcrumb__item"><a class="mp-breadcrumb__link" href="{{ rootPath | localeUrl(activeLocale) }}">{{ sectionLabel or t.guide }}</a></li>
         <li class="mp-breadcrumb__item"><span class="mp-breadcrumb__separator" aria-hidden="true">/</span><span class="mp-breadcrumb__current" aria-current="page">{{ title }}</span></li>
       </ol>
     </nav>
@@ -22,20 +27,20 @@ layout: layouts/base.njk
       <div class="doc-actions">
         <button class="mp-button mp-button--primary mp-button--sm" type="button" data-copy-markdown data-raw-url="{{ rawUrl }}" data-title="{{ title }}" data-description="{{ description }}">
           <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="8" width="11" height="11" rx="2"></rect><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"></path></svg>
-          <span data-copy-label>Copy as MD</span>
+          <span data-copy-label>{{ t.copyMarkdown }}</span>
         </button>
-        <a class="mp-button mp-button--secondary mp-button--sm" href="{{ rawUrl }}">View Markdown</a>
+        <a class="mp-button mp-button--secondary mp-button--sm" href="{{ rawUrl }}">{{ t.viewMarkdown }}</a>
       </div>
     </header>
     <div class="mp-markdown doc-content">{{ content | safe }}</div>
-    {% set neighbors = page.url | navNeighbors %}
-    <nav class="doc-pager" aria-label="Previous and next pages">
-      {% if neighbors.previous %}<a class="doc-pager__link" href="{{ neighbors.previous.url }}"><span>Previous</span><strong>← {{ neighbors.previous.title }}</strong></a>{% else %}<span></span>{% endif %}
-      {% if neighbors.next %}<a class="doc-pager__link doc-pager__link--next" href="{{ neighbors.next.url }}"><span>Next</span><strong>{{ neighbors.next.title }} →</strong></a>{% endif %}
+    {% set neighbors = page.url | navNeighbors(activeLocale) %}
+    <nav class="doc-pager" aria-label="{{ t.pageNav }}">
+      {% if neighbors.previous %}<a class="doc-pager__link" href="{{ neighbors.previous.url }}"><span>{{ t.previous }}</span><strong>← {{ neighbors.previous.title }}</strong></a>{% else %}<span></span>{% endif %}
+      {% if neighbors.next %}<a class="doc-pager__link doc-pager__link--next" href="{{ neighbors.next.url }}"><span>{{ t.next }}</span><strong>{{ neighbors.next.title }} →</strong></a>{% endif %}
     </nav>
   </article>
-  <aside class="doc-toc" aria-label="On this page">
-    <strong>On this page</strong>
+  <aside class="doc-toc" aria-label="{{ t.onPage }}">
+    <strong>{{ t.onPage }}</strong>
     <ol>
       {% for item in toc %}<li><a href="#{{ item.id }}">{{ item.label }}</a></li>{% endfor %}
     </ol>

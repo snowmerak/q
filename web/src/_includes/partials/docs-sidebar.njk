@@ -1,7 +1,10 @@
 {% from "icons.njk" import icon %}
+{% set activeLocale = locale or "en" %}
+{% set t = i18n[activeLocale] or i18n.en %}
+{% set activeNavigation = activeLocale | localizedNavigation %}
 <aside class="docs-sidebar" id="docs-navigation" data-docs-sidebar>
-  <nav aria-label="Documentation navigation">
-    {% for group in navigation %}
+  <nav aria-label="{{ t.docsNav }}">
+    {% for group in activeNavigation %}
       <section class="docs-nav__group">
         <h2>{{ group.label }}</h2>
         <ul>

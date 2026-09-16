@@ -8,11 +8,13 @@ eleventyExcludeFromCollections: true
 
 ## Documentation
 
-{% for group in navigation %}### {{ group.label }}
+{% for language in locales %}### {{ language.label }}
+
+{% for group in language.id | localizedNavigation %}#### {{ group.label }}
 
 {% for item in group.items %}- [{{ item.title }}]({{ site.url }}{{ item.url }})
 {% endfor %}
-{% endfor %}
+{% endfor %}{% endfor %}
 Each documentation page exposes its source Markdown below `/md/` and provides a Copy as MD action in the page header.
 
 ## Source

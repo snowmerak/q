@@ -1,6 +1,21 @@
 import markdownIt from "markdown-it";
 import markdownItAnchor from "markdown-it-anchor";
-import navigation from "./src/_data/navigation.js";
+import { navigationFor } from "./src/_data/navigation.js";
+
+const localeIds = ["ko", "ja", "zh-cn"];
+const stripLocale = (value = "/") => {
+  const normalized = value.startsWith("/") ? value : `/${value}`;
+  const match = normalized.match(/^\/(ko|ja|zh-cn)(?=\/|$)/);
+  if (!match) return normalized;
+  const stripped = normalized.slice(match[0].length);
+  return stripped === "" ? "/" : stripped;
+};
+
+const localeUrl = (value = "/", locale = "en") => {
+  const path = stripLocale(value);
+  if (!localeIds.includes(locale)) return path;
+  return path === "/" ? `/${locale}/` : `/${locale}${path}`;
+};
 
 const escapeAttribute = (value) =>
   String(value).replace(/[&<>"']/g, (character) => ({
@@ -57,10 +72,18 @@ export default function (eleventyConfig) {
   eleventyConfig.addPassthroughCopy({ "src/docs/workflows": "md/workflows" });
   eleventyConfig.addPassthroughCopy({ "src/docs/concepts": "md/concepts" });
   eleventyConfig.addPassthroughCopy({ "src/docs/reference": "md/reference" });
+  eleventyConfig.addPassthroughCopy({ "src/docs/ko": "md/ko" });
+  eleventyConfig.addPassthroughCopy({ "src/docs/ja": "md/ja" });
+  eleventyConfig.addPassthroughCopy({ "src/docs/zh-cn": "md/zh-cn" });
 
   eleventyConfig.addFilter("startsWith", (value = "", prefix = "") => value.startsWith(prefix));
-  eleventyConfig.addFilter("navNeighbors", (url) => {
-    const items = navigation.flatMap((group) => group.items);
+  eleventyConfig.addFilter("stripLocale", stripLocale);
+  eleventyConfig.addFilter("localeUrl", localeUrl);
+  eleventyConfig.addFilter("htmlLang", (locale = "en") => locale === "zh-cn" ? "zh-CN" : locale);
+  eleventyConfig.addFilter("localeShort", (locale = "en") => ({ en: "EN", ko: "KO", ja: "JA", "zh-cn": "简中" })[locale] || "EN");
+  eleventyConfig.addFilter("localizedNavigation", (locale = "en") => navigationFor(locale));
+  eleventyConfig.addFilter("navNeighbors", (url, locale = "en") => {
+    const items = navigationFor(locale).flatMap((group) => group.items);
     const current = items.findIndex((item) => item.url === url);
     return {
       previous: current > 0 ? items[current - 1] : null,

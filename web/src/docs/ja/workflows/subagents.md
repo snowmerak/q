@@ -1,0 +1,67 @@
+---
+locale: ja
+title: サブエージェント
+description: 隠れた会話状態を継承しない、範囲付きの組み込み・カスタム・外部エージェントを実行します。
+sectionLabel: ガイド
+toc:
+  - id: 利用可能なエージェントを確認
+    label: 利用可能なエージェントを確認
+  - id: 一つの依頼を実行
+    label: 一つの依頼を実行
+  - id: 内部エージェントを定義
+    label: 内部エージェントを定義
+  - id: 外部エージェント
+    label: 外部エージェント
+---
+
+## 利用可能なエージェントを確認
+
+`/subagents` を開いて組み込み定義を確認し、カスタムプロファイルを管理します。一覧には実行種別、モデルロール、スコープ、ツール、委任許可が表示されます。
+
+公開されている組み込み ID は次のとおりです。
+
+- `builtin/scout`
+- `builtin/griller`
+- `builtin/planner`
+- `builtin/executor`
+- `builtin/reviewer`
+- `builtin/coder`
+- `builtin/web-search`
+- `builtin/web-tester`
+
+## 一つの依頼を実行
+
+子エージェントは親の会話を自動継承しないため、必要なコンテキストを依頼にすべて含めます。
+
+```text
+/subagent builtin/scout app/model.go のキャンセル処理を説明して
+```
+
+TUI ではカスタムプロファイルの短い名前を使います。プロファイルに保存する委任許可には `builtin/scout`、`global/code-reader`、`workspace/browser-check` のような正規 ID を使います。
+
+## 内部エージェントを定義
+
+内部プロファイルは q のモデルロール、明示的なツール一覧、直接呼び出せる委任先を選択します。
+
+```yaml
+version: 1
+name: code-reader
+description: 依頼されたコードを説明します。
+kind: inner
+role: scout
+system_prompt: |
+  依頼されたコードを読み、具体的なファイル参照とともに動作を説明してください。
+tools:
+  - list_directory
+  - read_file
+delegates:
+  - builtin/scout
+```
+
+プロファイルは `~/.q/subagents/` または `<workspace>/.q/subagents/` に置きます。同名のワークスペースプロファイルはグローバルプロファイル全体を置き換えます。
+
+## 外部エージェント
+
+外部プロファイルは有効な ACP 接続へバインドします。システムプロンプトと、リモートエージェントがワークスペースを変更できるかを保存しますが、q のツール、委任先、モデルロールは選びません。
+
+ACP のセッション作成にはシステムメッセージ欄がないため、q は保存したシステムプロンプトを最初の通常 ACP リクエストへ追加します。接続がないか無効な場合、プロファイルを削除せず利用不可になります。

@@ -11,9 +11,19 @@ const copyText = async (value) => {
   input.style.opacity = "0";
   document.body.append(input);
   input.select();
-  document.execCommand("copy");
+  const copied = document.execCommand("copy");
   input.remove();
+  if (!copied) throw new Error("Clipboard copy failed");
 };
+
+const locale = document.body.dataset.locale || "en";
+const messages = ({
+  en: { copy: "Copy", copied: "Copied", copiedMd: "Copied MD", copyFailed: "Copy failed", markdownCopied: "Markdown copied.", markdownFailed: "Markdown could not be copied.", codeCopied: "Code copied.", commandCopied: "Command copied." },
+  ko: { copy: "복사", copied: "복사됨", copiedMd: "Markdown 복사됨", copyFailed: "복사 실패", markdownCopied: "Markdown을 복사했습니다.", markdownFailed: "Markdown을 복사하지 못했습니다.", codeCopied: "코드를 복사했습니다.", commandCopied: "명령어를 복사했습니다." },
+  ja: { copy: "コピー", copied: "コピー済み", copiedMd: "Markdown をコピー済み", copyFailed: "コピー失敗", markdownCopied: "Markdown をコピーしました。", markdownFailed: "Markdown をコピーできませんでした。", codeCopied: "コードをコピーしました。", commandCopied: "コマンドをコピーしました。" },
+  "zh-cn": { copy: "复制", copied: "已复制", copiedMd: "已复制 Markdown", copyFailed: "复制失败", markdownCopied: "已复制 Markdown。", markdownFailed: "无法复制 Markdown。", codeCopied: "已复制代码。", commandCopied: "已复制命令。" },
+})[locale] || null;
+const text = messages || { copy: "Copy", copied: "Copied", copiedMd: "Copied MD", copyFailed: "Copy failed", markdownCopied: "Markdown copied.", markdownFailed: "Markdown could not be copied.", codeCopied: "Code copied.", commandCopied: "Command copied." };
 
 const showToast = (message) => {
   const region = document.querySelector("[data-toast-region]");
@@ -27,7 +37,7 @@ const showToast = (message) => {
 
 const setTemporaryLabel = (button, label, temporary) => {
   label.textContent = temporary;
-  window.setTimeout(() => { label.textContent = button.dataset.originalLabel || "Copy"; }, 1800);
+  window.setTimeout(() => { label.textContent = button.dataset.originalLabel || text.copy; }, 1800);
 };
 
 document.querySelectorAll("[data-copy-markdown]").forEach((button) => {
@@ -44,35 +54,37 @@ document.querySelectorAll("[data-copy-markdown]").forEach((button) => {
         .trim();
       const markdown = `# ${button.dataset.title}\n\n${button.dataset.description}\n\n${body}\n`;
       await copyText(markdown);
-      setTemporaryLabel(button, label, "Copied MD");
-      showToast("Markdown copied.");
+      setTemporaryLabel(button, label, text.copiedMd);
+      showToast(text.markdownCopied);
     } catch {
-      setTemporaryLabel(button, label, "Copy failed");
-      showToast("Markdown could not be copied.");
+      setTemporaryLabel(button, label, text.copyFailed);
+      showToast(text.markdownFailed);
     }
   });
 });
 
 document.querySelectorAll("[data-copy-code]").forEach((button) => {
   const label = button.querySelector("span");
-  button.dataset.originalLabel = label?.textContent || "Copy";
+  if (label) label.textContent = text.copy;
+  button.setAttribute("aria-label", ({ en: "Copy code", ko: "코드 복사", ja: "コードをコピー", "zh-cn": "复制代码" })[locale] || "Copy code");
+  button.dataset.originalLabel = label?.textContent || text.copy;
   button.addEventListener("click", async () => {
     const code = button.closest("[data-code-block]")?.querySelector("code")?.textContent;
     if (!code || !label) return;
     await copyText(code);
-    setTemporaryLabel(button, label, "Copied");
-    showToast("Code copied.");
+    setTemporaryLabel(button, label, text.copied);
+    showToast(text.codeCopied);
   });
 });
 
 document.querySelectorAll("[data-copy-value]").forEach((button) => {
   const label = button.querySelector("span");
-  button.dataset.originalLabel = label?.textContent || "Copy";
+  button.dataset.originalLabel = label?.textContent || text.copy;
   button.addEventListener("click", async () => {
     if (!label) return;
     await copyText(button.dataset.copyValue || "");
-    setTemporaryLabel(button, label, "Copied");
-    showToast("Command copied.");
+    setTemporaryLabel(button, label, text.copied);
+    showToast(text.commandCopied);
   });
 });
 
