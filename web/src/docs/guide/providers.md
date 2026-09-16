@@ -9,6 +9,8 @@ toc:
     label: Configure the Gateway
   - id: assign-model-roles
     label: Assign model roles
+  - id: configure-embeddings
+    label: Configure embeddings
   - id: fallback-groups
     label: Fallback groups
 ---
@@ -38,6 +40,14 @@ Open `/model` to assign a model to the main chat and specialized roles such as `
 Press `a` in the assignment table to create a reusable custom role. Custom subagents can select that role while keeping their own tools and delegation grants.
 
 Workspace overrides are stored in `.q/model.json`; global assignments remain in `~/.q/config.yaml`.
+
+## Configure embeddings
+
+The model assignment screen also has a global `embedding` target. Select an embedding-capable model and enter the vector dimensions expected by that model. q accepts dimensions from 1 through 4096.
+
+Embedding configuration is global because Workspace Memory and the Library maintain shared derived indexes. It cannot be overridden per workspace. Assigning or changing the model reconfigures the rebuildable HNSW projections and backfills active Agent Skills for the new model. Clearing the target leaves skill and history retrieval on BM25 only.
+
+The configured provider must support embedding requests, and the dimensions must match the selected model. An embedding setup error is reported without making the underlying JSON records unavailable.
 
 ## Fallback groups
 

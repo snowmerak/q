@@ -18,12 +18,19 @@ toc:
 | `~/.q/config.yaml` | Main model, roles, context, Loom, and LSP configuration. |
 | `~/.q/providers.json` | Managed Gateway providers and model metadata. |
 | `~/.q/gateway.json` | Standalone Gateway listener and key metadata. |
+| `~/.q/gateway.key` | Private master key used to verify Gateway API keys. |
 | `~/.q/remote.json` | Remote listener, authentication switch, and key metadata. |
 | `~/.q/remote.key` | Private master key used to verify Remote API keys. |
+| `~/.q/library.json` | Global Library loopback listener settings. |
+| `~/.q/workspace-memory.json` | Workspace Memory loopback listener settings. |
+| `~/.q/usage.json` | Token Usage service loopback listener settings. |
 | `~/.q/mcp.json` | External MCP profiles and role assignments. |
+| `~/.agents/skills/` | Portable global Agent Skills discovered but not managed by q. |
 | `~/.q/skills/` | q-managed global Agent Skills. |
 | `~/.q/subagents/` | Global custom subagent profiles. |
+| `~/.q/logs/thinker/` | Short-lived Thinker invocation diagnostics. |
 | `~/.q/usage/usage.sqlite` | Recent token events and daily rollups. |
+| `~/.q/usage/archive/` | Parquet archives for older raw usage events. |
 
 Use the TUI for ordinary configuration. Edit these files directly only when automation requires it.
 
@@ -39,6 +46,7 @@ Use the TUI for ordinary configuration. Edit these files directly only when auto
 | `.q/lsp.json` | Workspace LSP roots and overrides. |
 | `.q/data/` and `.q/index/` | Durable records and derived indexes. |
 | `.q/loom/` | Content-addressed tool artifacts and GC metadata. |
+| `.agents/skills/` | Portable workspace Agent Skills discovered but not managed by q. |
 | `.q/skills/` | q-managed workspace Agent Skills. |
 | `.q/subagents/` | Workspace custom subagent profiles. |
 | `AGENTS.md` | Workspace and nested path instructions. |

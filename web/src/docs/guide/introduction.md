@@ -41,4 +41,4 @@ q also supports Agent Skills. Skill metadata is searched on demand; a full `SKIL
 
 ## Next step
 
-Install q from the repository, then start it in the project you want it to understand.
+Install q with `go install` or from a source checkout, then start it in the project you want it to understand.

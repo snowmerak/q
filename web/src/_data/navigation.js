@@ -14,6 +14,8 @@ export default [
       { title: "Plan and execute", url: "/workflows/planning/", icon: "play" },
       { title: "Subagents", url: "/workflows/subagents/", icon: "agents" },
       { title: "Agent Skills", url: "/workflows/agent-skills/", icon: "grid" },
+      { title: "Review and commit", url: "/workflows/review-and-commit/", icon: "document" },
+      { title: "ACP and MCP", url: "/workflows/acp-and-mcp/", icon: "nodes" },
       { title: "Remote API", url: "/workflows/remote-api/", icon: "cloud" },
     ],
   },
@@ -22,6 +24,7 @@ export default [
     items: [
       { title: "Runtime model", url: "/concepts/runtime/", icon: "graph" },
       { title: "Sessions and memory", url: "/concepts/sessions/", icon: "archive" },
+      { title: "Workspace guidance", url: "/concepts/workspace-guidance/", icon: "document" },
       { title: "Security boundaries", url: "/concepts/security/", icon: "gate" },
     ],
   },

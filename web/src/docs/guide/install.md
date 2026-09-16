@@ -1,6 +1,6 @@
 ---
 title: Install q
-description: Build q from source and start it in the workspace you want it to understand.
+description: Install q with Go or build it from source, then start it in the workspace you want it to understand.
 sectionLabel: Guide
 toc:
   - id: requirements
