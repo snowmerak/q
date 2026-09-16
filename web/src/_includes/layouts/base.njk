@@ -12,8 +12,8 @@
     {% for language in locales %}<link rel="alternate" hreflang="{{ language.htmlLang }}" href="{{ site.url }}{{ page.url | localeUrl(language.id) }}">
     {% endfor %}<link rel="alternate" hreflang="x-default" href="{{ site.url }}{{ page.url | localeUrl('en') }}">
     <link rel="icon" href="/favicon.svg" type="image/svg+xml">
-    <link rel="stylesheet" href="/assets/site.css">
-    <script src="/assets/site.js" defer></script>
+    <link rel="stylesheet" href="{{ assetPaths.siteCss }}">
+    <script src="{{ assetPaths.siteJs }}" defer></script>
   </head>
   <body class="{{ bodyClass or '' }}" data-locale="{{ activeLocale }}">
     {% include "partials/header.njk" %}
