@@ -179,7 +179,7 @@ func openACPHost(parent context.Context, store config.Store, root string) (*acpH
 	host.model = newManagedModel(runtimeContext, store, factory, manager)
 	host.model.workspaceStore = &workspaceStore
 	host.model.toolRuntime = initialized.tools
-	host.model.archive = initialized.archive
+	host.model.setArchiveWriter(initialized.archive)
 	host.model.archiveSearch = initialized.archiveSearch
 	host.model.archiveErr = initialized.archiveErr
 	host.model.libraryClient = initialized.library

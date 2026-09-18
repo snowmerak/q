@@ -17,6 +17,7 @@ import (
 	"github.com/snowmerak/q/providerhost"
 	"github.com/snowmerak/q/sessionstore"
 	qtools "github.com/snowmerak/q/tools"
+	"github.com/snowmerak/q/tools/builtin"
 	"github.com/snowmerak/q/workspace"
 	"github.com/snowmerak/q/workspacememory"
 )
@@ -212,8 +213,12 @@ func (request startupRequest) run(modelReady chan<- struct{}) runtimeInitialized
 			libraryConfig = qlibrary.DefaultConfig()
 		}
 		libraryClient = qlibrary.NewClient(libraryConfig.Endpoint(), "", 5*time.Second)
+		var toolArchive builtin.Archive
+		if semanticArchive != nil {
+			toolArchive = semanticArchive
+		}
 		tools, toolsErr = qtools.NewRuntimeWithArchiveAndLoomOptionsAndLSPAndLibrary(
-			request.ctx, request.workspaceStore.Root, semanticArchive, loaded.LoomStoreOptions(nil), loaded.LSP, workspaceLSP, libraryClient,
+			request.ctx, request.workspaceStore.Root, toolArchive, loaded.LoomStoreOptions(nil), loaded.LSP, workspaceLSP, libraryClient,
 		)
 		result.tools = tools
 		result.library = libraryClient

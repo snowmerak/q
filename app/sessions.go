@@ -204,12 +204,21 @@ func (m model) viewSessions() string {
 		description += fmt.Sprintf(" · %d/%d", m.sessionCursor+1, len(m.sessions))
 	}
 	body.WriteString(subtleStyle.Render(ansi.Truncate(description, contentWidth, "…")))
+	warning := m.archiveUnavailableWarning()
+	if warning != "" {
+		body.WriteString("\n")
+		body.WriteString(errorStyle.Render(ansi.Truncate(warning, contentWidth, "…")))
+	}
 	body.WriteString("\n\n")
 
 	if len(m.sessions) == 0 {
 		body.WriteString(emptyStyle.Render("No saved sessions yet. Press enter or n to create one."))
 	} else {
-		visible := sessionVisibleRows(m.height, m.status != "")
+		availableHeight := m.height
+		if warning != "" {
+			availableHeight--
+		}
+		visible := sessionVisibleRows(availableHeight, m.status != "")
 		start, end := sessionWindow(m.sessionCursor, len(m.sessions), visible)
 		for index := start; index < end; index++ {
 			entry := m.sessions[index]

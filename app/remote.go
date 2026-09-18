@@ -312,7 +312,7 @@ func (h *RemoteHost) Run(
 	state.workspaceLock = sessionLock
 	state.toolRuntime = startup.tools
 	state.libraryClient = startup.library
-	state.archive = startup.archive
+	state.setArchiveWriter(startup.archive)
 	state.archiveSearch = startup.archiveSearch
 	state.archiveErr = startup.archiveErr
 	state.models = append(state.models, startup.models...)

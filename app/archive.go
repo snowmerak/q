@@ -18,6 +18,20 @@ type recordArchive interface {
 	Flush() error
 }
 
+func (m *model) setArchiveWriter(writer *sessionstore.Writer) {
+	m.archive = nil
+	if writer != nil {
+		m.archive = writer
+	}
+}
+
+func (m model) archiveUnavailableWarning() string {
+	if m.archive == nil && m.archiveErr != nil {
+		return "Warning: workspace archive unavailable; archive search and indexing are disabled"
+	}
+	return ""
+}
+
 type archivedMessagePayload struct {
 	ConversationID string         `json:"conversation_id,omitempty"`
 	Message        client.Message `json:"message"`

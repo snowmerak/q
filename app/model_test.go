@@ -2076,6 +2076,28 @@ func TestFailedRuntimeInitializationLeavesNoToolRuntime(t *testing.T) {
 	}
 }
 
+func TestArchiveStartupFailureShowsPersistentWarning(t *testing.T) {
+	m := newModel(context.Background(), config.Store{Dir: t.TempDir()}, nil)
+	m.workspaceStore = &workspace.Store{Root: t.TempDir()}
+	updated, _ := m.Update(runtimeInitializedMsg{
+		config: config.Default(), client: &fakeClient{},
+		archiveErr: errors.New("context deadline exceeded"),
+	})
+	m = updated.(model)
+	if m.archive != nil || !strings.Contains(m.status, "Warning: workspace archive unavailable") {
+		t.Fatalf("archive state = %T, status = %q", m.archive, m.status)
+	}
+	m.status = ""
+	m.resize(100, 30)
+	for _, screen := range []screen{screenChat, screenSessions} {
+		m.screen = screen
+		view := ansi.Strip(m.View().Content)
+		if !strings.Contains(view, "Warning: workspace archive unavailable") {
+			t.Fatalf("screen %v has no archive warning: %s", screen, view)
+		}
+	}
+}
+
 func TestHelpScrollsAndRestoresDirtyIgnoreEditor(t *testing.T) {
 	root := t.TempDir()
 	workspaceStore := workspace.Store{Root: root}

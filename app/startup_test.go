@@ -1,16 +1,81 @@
 package app
 
 import (
+	"encoding/json"
 	"errors"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/snowmerak/q/config"
+	"github.com/snowmerak/q/providerhost"
+	"github.com/snowmerak/q/workspace"
+	"github.com/snowmerak/q/workspacememory"
 )
+
+func TestStartupKeepsToolsWhenArchiveOpenFails(t *testing.T) {
+	root := t.TempDir()
+	settingsDir := t.TempDir()
+	health := workspacememory.Health{
+		Service: workspacememory.ServiceName, ProtocolVersion: workspacememory.ProtocolVersion, Ready: true,
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Content-Type", "application/json")
+		switch request.URL.Path {
+		case "/v1/health":
+			_ = json.NewEncoder(writer).Encode(health)
+		case "/v1/status":
+			_ = json.NewEncoder(writer).Encode(workspacememory.Status{Health: health})
+		case "/v1/workspaces/open":
+			writer.WriteHeader(http.StatusBadRequest)
+			_, _ = writer.Write([]byte(`{"error":{"code":"invalid_request","message":"archive open failed"}}`))
+		default:
+			http.NotFound(writer, request)
+		}
+	}))
+	defer server.Close()
+	endpoint, err := url.Parse(server.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	port, err := strconv.Atoi(endpoint.Port())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := (workspacememory.ConfigStore{Dir: settingsDir}).Save(workspacememory.Config{
+		Host: "127.0.0.1", Port: port,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	manager, err := providerhost.NewManager(t.Context(), providerhost.Store{Dir: settingsDir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Close()
+	request := startupRequest{
+		ctx: t.Context(), memoryCtx: t.Context(), store: config.Store{Dir: settingsDir},
+		workspaceStore: workspace.Store{Root: root}, loaded: config.Default(),
+		configErr: config.ErrNotFound, manager: manager, lifecycle: newStartupLifecycle(), providerReady: true,
+	}
+	result := request.run(nil)
+	defer request.lifecycle.closeResources()
+	if result.err != nil || result.archiveErr == nil || !strings.Contains(result.archiveErr.Error(), "archive open failed") {
+		t.Fatalf("startup errors = (%v, %v)", result.err, result.archiveErr)
+	}
+	if result.tools == nil || result.archive != nil || result.archiveSearch != nil {
+		t.Fatalf("startup resources = tools %p, archive %p, search %p", result.tools, result.archive, result.archiveSearch)
+	}
+	if len(result.tools.Tools()) == 0 {
+		t.Fatal("archive failure left the builtin tool runtime empty")
+	}
+}
 
 func TestRunFromHomeFailsBeforeWorkspaceStartup(t *testing.T) {
 	home := t.TempDir()

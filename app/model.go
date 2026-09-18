@@ -825,7 +825,7 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		if message.tools != nil {
 			m.toolRuntime = message.tools
 		}
-		m.archive = message.archive
+		m.setArchiveWriter(message.archive)
 		m.archiveSearch = message.archiveSearch
 		m.archiveErr = message.archiveErr
 		m.libraryClient = message.library
@@ -850,7 +850,7 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			statuses = append(statuses, message.startupErr.Error())
 		}
 		if message.archiveErr != nil {
-			statuses = append(statuses, "archive: "+message.archiveErr.Error())
+			statuses = append(statuses, "Warning: workspace archive unavailable (archive search and indexing disabled): "+message.archiveErr.Error())
 		}
 		if message.mcpErr != nil {
 			statuses = append(statuses, "MCP: "+message.mcpErr.Error())
@@ -5445,7 +5445,11 @@ func (m model) chatHeader() string {
 		if title != "" {
 			header += "\n" + subtleStyle.Render("session · "+title)
 		}
-		return header + "\n" + subtleStyle.Render("workspace · "+filepath.Clean(root))
+		header += "\n" + subtleStyle.Render("workspace · "+filepath.Clean(root))
+		if warning := m.archiveUnavailableWarning(); warning != "" {
+			header += "\n" + errorStyle.Render(warning)
+		}
+		return header
 	}
 	endpoint := m.config.Provider.BaseURL
 	if m.runtime != nil {
@@ -5454,6 +5458,9 @@ func (m model) chatHeader() string {
 	header := titleStyle.Render("q") + "  " + subtleStyle.Render(m.activeModel()+" · "+endpoint+" · "+m.contextLabel())
 	if m.workspaceStore != nil {
 		header += "\n" + subtleStyle.Render("workspace · "+filepath.Clean(m.workspaceStore.Root))
+	}
+	if warning := m.archiveUnavailableWarning(); warning != "" {
+		header += "\n" + errorStyle.Render(warning)
 	}
 	return header
 }
