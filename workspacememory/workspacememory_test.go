@@ -26,6 +26,20 @@ var (
 	_ agentskills.RecordStore  = (*Workspace)(nil)
 )
 
+func TestOpenWorkspaceUsesConfiguredRequestDeadline(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		time.Sleep(150 * time.Millisecond)
+		writer.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer server.Close()
+	client := NewClient(server.URL+"/v1", "", 50*time.Millisecond)
+	client.http.Timeout = 0 // Exercise the open request's own context deadline.
+	_, err := client.OpenWorkspace(context.Background(), t.TempDir(), sessionstore.VectorConfig{})
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("OpenWorkspace error = %v, want request deadline", err)
+	}
+}
+
 func TestWorkspaceServiceMultiplexesCanonicalRootsAndLeases(t *testing.T) {
 	configDir := t.TempDir()
 	firstRoot := t.TempDir()

@@ -393,6 +393,59 @@ func TestHNSWCorruptionAndModelChangesRebuildFromRecords(t *testing.T) {
 	}
 }
 
+func TestVectorConfigurationChangesPreserveTextIndex(t *testing.T) {
+	root := t.TempDir()
+	store, err := OpenWithOptions(root, OpenOptions{Vector: testVectorConfig()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Save(Record{
+		ID: "kept", Kind: KindSummary, Content: "retained archive term",
+		Embedding: &Embedding{Model: "embed-test", Vector: []float32{1, 0, 0}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	marker := filepath.Join(store.IndexPath(), "text-index-preserved")
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(marker, []byte("marker"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	withoutVectors, err := Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(marker); err != nil {
+		t.Fatalf("disabling embeddings rebuilt the text index: %v", err)
+	}
+	if _, err := os.Stat(withoutVectors.VectorIndexPath()); !os.IsNotExist(err) {
+		t.Fatalf("disabled vector index remains on disk: %v", err)
+	}
+	result, err := withoutVectors.Search(context.Background(), SearchOptions{Text: "retained archive term"})
+	if err != nil || len(result.Hits) != 1 || result.Hits[0].Record.ID != "kept" {
+		t.Fatalf("text search after disabling vectors = %#v, %v", result, err)
+	}
+	if err := withoutVectors.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	other := testVectorConfig()
+	other.Model = "embed-other"
+	withOtherModel, err := OpenWithOptions(root, OpenOptions{Vector: other})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer withOtherModel.Close()
+	if _, err := os.Stat(marker); err != nil {
+		t.Fatalf("changing embedding model rebuilt the text index: %v", err)
+	}
+	if _, err := withOtherModel.Get("kept"); err != nil {
+		t.Fatalf("source record was lost: %v", err)
+	}
+}
+
 func TestEmbeddingAndVectorQueryValidation(t *testing.T) {
 	store, err := OpenWithOptions(t.TempDir(), OpenOptions{Vector: testVectorConfig()})
 	if err != nil {

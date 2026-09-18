@@ -153,7 +153,9 @@ func OpenWithOptions(root string, options OpenOptions) (*Store, error) {
 	_ = os.Chmod(store.recordsDir, 0o700)
 	_ = os.Chmod(store.indexRoot, 0o700)
 
-	if store.indexStateIsCurrent() {
+	// Vector settings do not invalidate the text index. Reuse Bleve and repair
+	// only the derived vector files when the embedding configuration changes.
+	if state, ok := store.readIndexState(); ok && store.textIndexStateIsCurrent(state) {
 		opened, openErr := bleve.OpenUsing(store.indexPath, map[string]any{
 			"bolt_timeout": bleveOpenTimeout.String(),
 		})
@@ -163,11 +165,25 @@ func OpenWithOptions(root string, options OpenOptions) (*Store, error) {
 		if openErr == nil {
 			store.index = opened
 			if vectorConfig.Enabled() {
-				store.vectors, openErr = loadVectorIndex(store.vectorPath, store.vectorIDsPath, vectorConfig)
-				if openErr != nil {
-					_ = store.index.Close()
-					store.index = nil
+				if store.vectorIndexStateIsCurrent(state) {
+					store.vectors, openErr = loadVectorIndex(store.vectorPath, store.vectorIDsPath, vectorConfig)
 				}
+				if store.vectors == nil {
+					openErr = store.rebuildVectorsLocked()
+					if openErr == nil {
+						openErr = store.writeStateLocked()
+					}
+				}
+			} else if state.Vector != nil {
+				openErr = store.removeVectorIndexFiles()
+				if openErr == nil {
+					openErr = store.writeStateLocked()
+				}
+			}
+			if openErr != nil {
+				_ = store.index.Close()
+				store.index = nil
+				return nil, fmt.Errorf("sessionstore: update derived vector index: %w", openErr)
 			}
 		}
 	}
@@ -626,32 +642,20 @@ func (s *Store) loadRecordFileLocked(path string) (Record, error) {
 	return record, nil
 }
 
-func (s *Store) indexStateIsCurrent() bool {
+func (s *Store) readIndexState() (indexState, bool) {
 	body, err := os.ReadFile(s.statePath)
 	if err != nil {
-		return false
+		return indexState{}, false
 	}
 	var state indexState
 	if json.Unmarshal(body, &state) != nil {
-		return false
+		return indexState{}, false
 	}
+	return state, true
+}
+
+func (s *Store) textIndexStateIsCurrent(state indexState) bool {
 	if state.MappingVersion != MappingVersion || state.RecordVersion != RecordVersion {
-		return false
-	}
-	if s.vectorCfg.Enabled() {
-		if state.Vector == nil || state.Vector.IndexVersion != VectorIndexVersion ||
-			state.Vector.Model != s.vectorCfg.Model || state.Vector.Dimensions != s.vectorCfg.Dimensions ||
-			state.Vector.M != s.vectorCfg.M || state.Vector.EfConstruction != s.vectorCfg.EfConstruction ||
-			state.Vector.EfSearch != s.vectorCfg.EfSearch {
-			return false
-		}
-		if _, err := os.Stat(s.vectorPath); err != nil {
-			return false
-		}
-		if _, err := os.Stat(s.vectorIDsPath); err != nil {
-			return false
-		}
-	} else if state.Vector != nil {
 		return false
 	}
 	fingerprint, sourceCount, err := s.sourceFingerprint()
@@ -659,6 +663,34 @@ func (s *Store) indexStateIsCurrent() bool {
 		return false
 	}
 	return state.RecordCount == sourceCount && state.SourceFingerprint == fingerprint
+}
+
+func (s *Store) vectorIndexStateIsCurrent(state indexState) bool {
+	if !s.vectorCfg.Enabled() {
+		return state.Vector == nil
+	}
+	if state.Vector == nil || state.Vector.IndexVersion != VectorIndexVersion ||
+		state.Vector.Model != s.vectorCfg.Model || state.Vector.Dimensions != s.vectorCfg.Dimensions ||
+		state.Vector.M != s.vectorCfg.M || state.Vector.EfConstruction != s.vectorCfg.EfConstruction ||
+		state.Vector.EfSearch != s.vectorCfg.EfSearch {
+		return false
+	}
+	if _, err := os.Stat(s.vectorPath); err != nil {
+		return false
+	}
+	if _, err := os.Stat(s.vectorIDsPath); err != nil {
+		return false
+	}
+	return true
+}
+
+func (s *Store) removeVectorIndexFiles() error {
+	for _, path := range []string{s.vectorPath, s.vectorIDsPath} {
+		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("remove derived vector index %s: %w", path, err)
+		}
+	}
+	return nil
 }
 
 func (s *Store) writeStateLocked() error {

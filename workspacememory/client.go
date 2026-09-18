@@ -153,7 +153,9 @@ func (c *Client) OpenWorkspace(ctx context.Context, root string, vector sessions
 }
 
 func (c *Client) openWorkspace(ctx context.Context, input openWorkspaceRequest, output *OpenWorkspaceResponse) error {
-	openContext, cancel := context.WithTimeout(ctx, 5*time.Second)
+	// Opening an existing workspace may need to repair derived indexes from its
+	// source records. Give that work the same deadline as other Store requests.
+	openContext, cancel := context.WithTimeout(ctx, c.requestTimeout)
 	defer cancel()
 	delay := 20 * time.Millisecond
 	for {
