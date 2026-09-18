@@ -2054,6 +2054,28 @@ func TestRuntimeInitializationRendersBeforeServicesAreReady(t *testing.T) {
 	}
 }
 
+func TestFailedRuntimeInitializationLeavesNoToolRuntime(t *testing.T) {
+	value := config.Default()
+	value.Agents.Connections = map[string]config.AgentConnectionConfig{"search": {Preset: "codex"}}
+	value.Agents.Roles = map[string]config.AgentConfig{
+		config.AgentRoleSearch: {Agent: "search"},
+	}
+	m := newModel(context.Background(), config.Store{Dir: t.TempDir()}, nil)
+	updated, _ := m.Update(runtimeInitializedMsg{
+		config: value, client: &fakeClient{}, err: errors.New("tool initialization failed"),
+	})
+	m = updated.(model)
+	if m.toolRuntime != nil {
+		t.Fatalf("failed startup left tool runtime %T", m.toolRuntime)
+	}
+	if !strings.Contains(m.status, "tool initialization failed") {
+		t.Fatalf("startup error was lost: %q", m.status)
+	}
+	if command := m.sendChatRequest(); command == nil {
+		t.Fatal("chat request was not scheduled")
+	}
+}
+
 func TestHelpScrollsAndRestoresDirtyIgnoreEditor(t *testing.T) {
 	root := t.TempDir()
 	workspaceStore := workspace.Store{Root: root}

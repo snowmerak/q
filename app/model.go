@@ -821,7 +821,10 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	case runtimeInitializedMsg:
 		m.initializing = false
 		m.startup = nil
-		m.toolRuntime = message.tools
+		m.toolRuntime = nil
+		if message.tools != nil {
+			m.toolRuntime = message.tools
+		}
 		m.archive = message.archive
 		m.archiveSearch = message.archiveSearch
 		m.archiveErr = message.archiveErr
