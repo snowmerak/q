@@ -70,6 +70,9 @@ func RunACP(ctx context.Context, store config.Store, root string, input io.Reade
 	if err != nil {
 		return err
 	}
+	if err := workspace.RejectHomeDirectory(canonicalRoot); err != nil {
+		return err
+	}
 	if logOutput == nil {
 		logOutput = io.Discard
 	}

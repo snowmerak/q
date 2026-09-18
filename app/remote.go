@@ -212,6 +212,9 @@ func (h *RemoteHost) Run(
 	if h == nil {
 		return errors.New("remote host is unavailable")
 	}
+	if err := workspace.RejectHomeDirectory(workspaceStore.Root); err != nil {
+		return err
+	}
 	prompt = strings.TrimSpace(prompt)
 	if prompt == "" {
 		return errors.New("prompt is required")

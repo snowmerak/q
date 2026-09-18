@@ -2,9 +2,39 @@ package app
 
 import (
 	"errors"
+	"os"
+	"path/filepath"
+	"runtime"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/snowmerak/q/config"
 )
+
+func TestRunFromHomeFailsBeforeWorkspaceStartup(t *testing.T) {
+	home := t.TempDir()
+	if runtime.GOOS == "windows" {
+		t.Setenv("USERPROFILE", home)
+	} else {
+		t.Setenv("HOME", home)
+	}
+	previous, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(previous) })
+	if err := os.Chdir(home); err != nil {
+		t.Fatal(err)
+	}
+	err = Run(t.Context(), config.Store{Dir: filepath.Join(home, ".q")})
+	if err == nil || !strings.Contains(err.Error(), "home directory") {
+		t.Fatalf("Run() from home error = %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".q")); !os.IsNotExist(err) {
+		t.Fatalf("home workspace metadata was created: %v", err)
+	}
+}
 
 func TestInitialModelLoadWait(t *testing.T) {
 	if initialModelLoadWait != 1500*time.Millisecond {

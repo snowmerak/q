@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"strings"
 	"testing"
 	"time"
 
@@ -14,6 +15,58 @@ import (
 	"github.com/snowmerak/q/loom"
 	"github.com/snowmerak/q/thinker"
 )
+
+func TestDefaultStoreRejectsHomeDirectory(t *testing.T) {
+	home := t.TempDir()
+	if runtime.GOOS == "windows" {
+		t.Setenv("USERPROFILE", home)
+	} else {
+		t.Setenv("HOME", home)
+	}
+	previous, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(previous) })
+	if err := os.Chdir(home); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := DefaultStore(); err == nil || !strings.Contains(err.Error(), "home directory") {
+		t.Fatalf("DefaultStore() from home error = %v", err)
+	}
+
+	project := filepath.Join(home, "project")
+	if err := os.Mkdir(project, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(project); err != nil {
+		t.Fatal(err)
+	}
+	store, err := DefaultStore()
+	if err != nil || store.Root != project {
+		t.Fatalf("DefaultStore() from subdirectory = %#v, %v", store, err)
+	}
+}
+
+func TestRejectHomeDirectoryFollowsSymlink(t *testing.T) {
+	parent := t.TempDir()
+	home := filepath.Join(parent, "home")
+	alias := filepath.Join(parent, "alias")
+	if err := os.Mkdir(home, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(home, alias); err != nil {
+		t.Skipf("directory symlinks unavailable: %v", err)
+	}
+	if runtime.GOOS == "windows" {
+		t.Setenv("USERPROFILE", home)
+	} else {
+		t.Setenv("HOME", home)
+	}
+	if err := RejectHomeDirectory(alias); err == nil || !strings.Contains(err.Error(), "home directory") {
+		t.Fatalf("RejectHomeDirectory(symlink) error = %v", err)
+	}
+}
 
 func TestStoreRoundTripAndClear(t *testing.T) {
 	store := Store{Root: t.TempDir()}

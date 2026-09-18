@@ -95,6 +95,9 @@ func RunStdio(ctx context.Context, root string) error {
 }
 
 func RunStdioWithLoomOptions(ctx context.Context, root string, options loom.StoreOptions) (runErr error) {
+	if err := workspace.RejectHomeDirectory(root); err != nil {
+		return err
+	}
 	if err := (workspace.Store{Root: root}).MigrateLegacySession(); err != nil {
 		return err
 	}

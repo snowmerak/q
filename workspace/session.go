@@ -71,7 +71,34 @@ func DefaultStore() (Store, error) {
 	if err != nil {
 		return Store{}, fmt.Errorf("workspace: resolve current directory: %w", err)
 	}
+	if err := RejectHomeDirectory(root); err != nil {
+		return Store{}, err
+	}
 	return Store{Root: root}, nil
+}
+
+// RejectHomeDirectory prevents personal ~/.q data from also becoming workspace
+// metadata when the workspace root is the user's home directory.
+func RejectHomeDirectory(root string) error {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return fmt.Errorf("workspace: find home directory: %w", err)
+	}
+	homeInfo, err := os.Stat(home)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("workspace: inspect home directory: %w", err)
+	}
+	rootInfo, err := os.Stat(root)
+	if err != nil {
+		return fmt.Errorf("workspace: inspect workspace root: %w", err)
+	}
+	if os.SameFile(rootInfo, homeInfo) {
+		return fmt.Errorf("workspace: home directory %q cannot be used as a workspace; run q from a project directory or another subdirectory", home)
+	}
+	return nil
 }
 
 func (s Store) Dir() string {

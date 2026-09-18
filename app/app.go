@@ -81,6 +81,10 @@ func newUsageRecorder(store config.Store) *usagelog.Recorder {
 // Run loads personal configuration and starts the interactive application.
 // A missing configuration opens the first-run provider setup screen.
 func Run(ctx context.Context, store config.Store) error {
+	workspaceStore, err := workspace.DefaultStore()
+	if err != nil {
+		return err
+	}
 	runtimeContext, cancelRuntime := context.WithCancel(ctx)
 	defer cancelRuntime()
 	providerContext, cancelProvider := context.WithCancel(context.WithoutCancel(ctx))
@@ -95,10 +99,6 @@ func Run(ctx context.Context, store config.Store) error {
 	go func() {
 		libraryDone <- qlibrary.Run(runtimeContext, store.Dir, io.Discard)
 	}()
-	workspaceStore, err := workspace.DefaultStore()
-	if err != nil {
-		return err
-	}
 	if err := workspaceStore.MigrateLegacySession(); err != nil {
 		return err
 	}
