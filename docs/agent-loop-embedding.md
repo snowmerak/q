@@ -1,0 +1,265 @@
+# Embedding Q's Agent Loop in a Go application
+
+Q exposes the same Agent Loop used by its TUI, ACP host, and internal Search/Web
+Tester continuations through `github.com/snowmerak/q/app`. An embedding
+application supplies a model client, a workspace-scoped tool runtime, initial
+messages, and an event consumer. The host retains ownership of configuration,
+authorization, persistence, and dependency lifetimes.
+
+The implementation boundary is deliberately narrow: `app.RunAgentLoop` is the
+existing loop, not a second implementation. Do not copy it into another
+package or build a parallel state machine around it.
+
+## Install and import
+
+Pin Q to the version your application has tested:
+
+```powershell
+go get github.com/snowmerak/q@<version>
+```
+
+The minimum standard integration uses these packages:
+
+```go
+import (
+	"context"
+	"fmt"
+
+	"github.com/snowmerak/q/app"
+	"github.com/snowmerak/q/client"
+	"github.com/snowmerak/q/tools"
+)
+```
+
+Importing `app` also builds its existing TUI dependencies. This is an
+intentional consequence of exposing the current implementation in place; Q
+does not maintain a duplicate lightweight loop package.
+
+## Run a minimal workspace turn
+
+Create the model client and tool runtime once for the lifetime chosen by the
+host. `RunAgentLoop` does not close either dependency.
+
+```go
+func runTurn(ctx context.Context, root, prompt string) error {
+	modelClient, err := client.FromEnvironment("gpt-5")
+	if err != nil {
+		return err
+	}
+	defer modelClient.Close()
+
+	toolRuntime, err := tools.NewRuntime(ctx, root)
+	if err != nil {
+		return err
+	}
+	defer toolRuntime.Close()
+
+	messages := app.PrepareWorkspaceMessages(nil, app.WorkspaceMessageOptions{
+		Root:  root,
+		Tools: toolRuntime,
+	})
+	messages = append(messages, client.Message{
+		Role: client.RoleUser, Content: prompt,
+	})
+
+	events := make(chan app.AgentEvent)
+	go app.RunAgentLoop(ctx, app.AgentLoopRequest{
+		Client:           modelClient,
+		Tools:            toolRuntime,
+		Model:            "gpt-5",
+		Messages:         messages,
+		WorkingDirectory: root,
+	}, events)
+
+	resultSeen := false
+	for event := range events {
+		if question, answers, ok := event.Question(); ok {
+			fmt.Printf("input unavailable: %s\n", question.Question)
+			answers <- app.AgentAnswer{Err: app.ErrInteractionUnavailable}
+		}
+		if call, ok := event.ToolCall(); ok {
+			fmt.Printf("tool: %s\n", call.Function.Name)
+		}
+		if result, ok := event.Result(); ok {
+			resultSeen = true
+			if result.Response == nil || len(result.Response.Choices) == 0 {
+				return fmt.Errorf("model returned no response choices")
+			}
+			fmt.Println(result.Response.Choices[0].Message.Content)
+		}
+		if err := event.Err(); err != nil {
+			return err
+		}
+	}
+	if !resultSeen {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		return fmt.Errorf("agent loop ended without a result")
+	}
+	return nil
+}
+```
+
+`RunAgentLoop` is synchronous and owns the event channel: normally call it in
+a goroutine, continuously drain the channel, and never close that channel from
+the host. Cancellation and deadlines come from `ctx`. There is no separate
+round-limit option, so externally reachable services should apply an
+appropriate context deadline.
+
+The loop requires both `Client` and `Tools`. For a completion with no tool
+runtime, call the model client directly instead of manufacturing an empty Agent
+Loop integration.
+
+## Prepare workspace context once
+
+`PrepareWorkspaceMessages` copies the input slice and appends the pieces that
+make a Q workspace behave like a Q workspace:
+
+- root `AGENTS.md` instructions;
+- host OS, architecture, shell, workspace root, and `.qignore` guidance;
+- Agent Skill and proposition guidance when the corresponding tools exist;
+- archive guidance only when `ArchiveAvailable` is true;
+- the `task_start`, `ask_to_user`, and `task_complete` contract.
+
+Call it when creating the initial context for a session. Do not run it again on
+already prepared history, or the developer instructions will be duplicated.
+Append each later user turn and the ordered loop events to the retained context.
+
+Set `WorkingDirectory` to the same authorized root. The loop uses it to load
+nested `AGENTS.md` files before relevant tool calls. The host remains
+responsible for deciding which directory is authorized; the loop does not
+change process working directory.
+
+## Model and tool interfaces
+
+The standard `*client.Client` and `*tools.Runtime` satisfy the public
+interfaces. Custom adapters implement:
+
+```go
+type ChatClient interface {
+	Chat(context.Context, client.ChatRequest) (*client.ChatResponse, error)
+	ListModels(context.Context) ([]client.Model, error)
+	Close() error
+}
+
+type AgentToolRuntime interface {
+	Tools() []client.Tool
+	Environment() tools.HostEnvironment
+	Call(context.Context, client.ToolCall) (client.ToolResult, error)
+}
+```
+
+When `AgentLoopRequest.Stream` is true, a client that also implements
+`ChatStream(context.Context, client.ChatRequest) (client.Stream, error)` is
+used for streaming. Other clients automatically fall back to `Chat`.
+
+The runtime catalog is both advertisement and authorization. Advertise only
+tools the host will execute. Do not advertise `task_start`, `ask_to_user`, or
+`task_complete`; the loop owns and intercepts those names. An error returned by
+`Call`, or a `ToolResult` with `IsError`, becomes a model-visible tool error so
+the model can recover. Use context cancellation for a terminal stop.
+
+## Use builtin and external MCP tools
+
+`tools.Runtime` connects Q's builtin server in-process with the official Go MCP
+SDK. It can also own configured stdio and Streamable HTTP MCP sessions:
+
+```go
+statuses := toolRuntime.ConfigureExternal(ctx, root, mcpSettings)
+for _, status := range statuses {
+	if status.Error != "" {
+		return fmt.Errorf("connect MCP server %s: %s", status.ID, status.Error)
+	}
+}
+
+roleTools := app.ScopeTools(toolRuntime, mcpconfig.RoleDefault)
+messages := app.PrepareWorkspaceMessages(nil, app.WorkspaceMessageOptions{
+	Root: root,
+	Tools: roleTools,
+})
+```
+
+Pass the same scoped runtime to `AgentLoopRequest.Tools`. `ScopeTools` uses a
+runtime's `ToolsForRole` catalog when available and rejects calls to tools not
+advertised for that role. The parent runtime owns every MCP session and must
+outlive all scoped views.
+
+`ConfigureExternal` reports failures per server. A failed server does not
+disable builtin tools or other successfully connected servers, so the host
+must decide whether a partial connection is acceptable.
+
+## Consume events and persist state
+
+Events are ordered and apply to the context used inside the loop:
+
+| Accessor | Host action |
+|---|---|
+| `Status` | Update transient UI status. |
+| `ToolCall` | Record or display the call before execution. |
+| `Message` | Append intermediate assistant/tool messages in order. Use `MessageIsToolError` for presentation or audit status. |
+| `Question` | Send exactly one `AgentAnswer`, or `ErrInteractionUnavailable` for a headless host. |
+| `StreamDelta` | Render partial thinking/response text; do not also treat it as durable final content. |
+| `ContextReplacement` | Replace the indexed message in the retained model context. |
+| `Compaction` | Apply the plan and summary to the retained model context. |
+| `TaskStarted` | Persist the active task and supply it as `ActiveTask` on a later turn. |
+| `TaskCompleted` | Clear the persisted active task. |
+| `Result` | Append the final assistant message and retain the returned conversation ID. |
+| `Err` | Abort the host turn and report the terminal failure. |
+
+A final assistant message is carried by `Result`, not necessarily by a
+`Message` event. A durable consumer therefore needs both. Streaming deltas are
+for live presentation; persist the complete assistant message from the result.
+
+Keep the user-visible transcript separate from the compact model context. A
+simple host can maintain the latter with `memory.Manager`:
+
+```go
+manager := memory.New(policy, preparedMessages)
+
+// In the event loop:
+if replacement, ok := event.ContextReplacement(); ok {
+	if err := manager.Replace(replacement.Index, replacement.Message); err != nil {
+		return err
+	}
+}
+if compaction, ok := event.Compaction(); ok {
+	if _, err := manager.ApplyCheckpoint(compaction.Plan, compaction.Summary); err != nil {
+		return err
+	}
+}
+if message, ok := event.Message(); ok {
+	manager.Append(message)
+}
+if result, ok := event.Result(); ok && result.Response != nil && len(result.Response.Choices) > 0 {
+	manager.Append(result.Response.Choices[0].Message)
+}
+```
+
+Initialize the manager with the exact messages passed to the loop and mirror
+events in order. A zero `memory.Policy.ContextWindow` disables compaction.
+`workspace.Session` can persist the full `Transcript`, compact `Context`, and
+`ActiveTask`, but `RunAgentLoop` never saves it automatically.
+
+Carry `Result.Response.ConversationID` into the next request when the provider
+supports stateful conversations. After compaction, the loop clears its local
+conversation ID because the request context has changed; the host should use
+the ID from the terminal response rather than retaining an older value.
+
+## Verification checklist
+
+- Exercise the integration from an external test package or downstream module
+  so private Q symbols cannot leak into it.
+- Cover a direct response, one ordinary tool round, a question, cancellation,
+  a tool error, and compaction when those paths are supported by the host.
+- Assert that the initial message slice is not changed by
+  `PrepareWorkspaceMessages` and that it is not applied twice.
+- Verify role scoping with both advertised and rejected MCP calls.
+- Run `gofmt`, focused tests, `go test ./...`, and `go vet ./...`.
+- When changing Q's public API, also run `go run ./scripts/modulecheck`.
+
+The public declarations live in [`app/agent_public.go`](../app/agent_public.go),
+the single loop body remains in [`app/model.go`](../app/model.go), and
+[`app/agent_public_test.go`](../app/agent_public_test.go) is the downstream-style
+reference test. The design constraints and implementation record are in the
+[public API plan](embedded-agent-loop-public-api-plan.md).

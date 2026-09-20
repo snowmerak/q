@@ -157,7 +157,7 @@ the injected client or tool runtime. Consume message, context-replacement, and
 compaction events when the host persists conversations. Use `ScopeTools` to
 apply a role-aware tool catalog. The exact public contract, optional features,
 and ownership boundaries are documented in the
-[embedded Agent Loop API plan](docs/embedded-agent-loop-public-api-plan.md).
+[Agent Loop embedding guide](docs/agent-loop-embedding.md).
 
 ## TUI guide
 
@@ -773,6 +773,7 @@ publishing the fork.
 
 ### Design notes
 
+- [Agent Loop embedding guide](docs/agent-loop-embedding.md)
 - [Embedded Agent Loop public API](docs/embedded-agent-loop-public-api-plan.md)
 - [Agent invocation runtime](docs/agent-invocation-runtime.md)
 - [Delegated subagents](docs/delegated-subagents.md)
