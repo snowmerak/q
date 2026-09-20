@@ -30,25 +30,36 @@ type taskStartOutput struct {
 	SkillHints         *skillHintSet `json:"skill_hints,omitempty"`
 }
 
-type askToUserChoice struct {
+// AgentQuestionChoice is one suggested answer to an AgentQuestion.
+type AgentQuestionChoice struct {
 	ID          string `json:"id"`
 	Label       string `json:"label"`
 	Description string `json:"description,omitempty"`
 }
 
-type askToUserInput struct {
-	Question   string            `json:"question"`
-	Context    string            `json:"context,omitempty"`
-	Choices    []askToUserChoice `json:"choices,omitempty"`
-	ChoiceOnly bool              `json:"-"`
+type askToUserChoice = AgentQuestionChoice
+
+// AgentQuestion describes a model-requested interaction. ChoiceOnly is used
+// by permission-style hosts that cannot accept a free-form answer.
+type AgentQuestion struct {
+	Question   string                `json:"question"`
+	Context    string                `json:"context,omitempty"`
+	Choices    []AgentQuestionChoice `json:"choices,omitempty"`
+	ChoiceOnly bool                  `json:"-"`
 }
 
-type askToUserOutput struct {
+type askToUserInput = AgentQuestion
+
+// AgentAnswer resumes an AgentQuestion. ErrInteractionUnavailable asks the
+// loop to return a recoverable tool error to the model; other errors abort it.
+type AgentAnswer struct {
 	SelectedChoiceID string        `json:"selected_choice_id,omitempty"`
 	Freeform         string        `json:"freeform,omitempty"`
-	SkillHints       *skillHintSet `json:"skill_hints,omitempty"`
+	SkillHints       *SkillHintSet `json:"skill_hints,omitempty"`
 	Err              error         `json:"-"`
 }
+
+type askToUserOutput = AgentAnswer
 
 type taskCompleteInput struct {
 	Outcome      string   `json:"outcome"`

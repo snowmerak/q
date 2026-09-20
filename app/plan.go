@@ -495,7 +495,7 @@ func streamPlanWorkflow(
 		scoutRunID = ""
 	}
 	scout := subagent.ScoutRunner{
-		Client: configuredClient, Tools: scopeTools(toolRuntime, scoutSpec.Role), Spec: scoutSpec,
+		Client: configuredClient, Tools: ScopeTools(toolRuntime, scoutSpec.Role), Spec: scoutSpec,
 		Sink: archive, RunID: scoutRunID, WorkingDirectory: workingDirectory, Progress: progress, Trace: trace,
 	}
 	griller := subagent.GrillerRunner{
@@ -626,7 +626,7 @@ func executeApprovedPlan(
 	}
 	environment := toolRuntime.Environment()
 	coder := subagent.CoderRunner{
-		Client: configuredClient, Tools: scopeTools(toolRuntime, coderSpec.Role), Spec: coderSpec,
+		Client: configuredClient, Tools: ScopeTools(toolRuntime, coderSpec.Role), Spec: coderSpec,
 		Sink: archive, RunID: runID, ExecutionID: checkpoint.ExecutionID,
 		WorkingDirectory: workingDirectory, Progress: progress, Trace: trace,
 		Environment: fmt.Sprintf(

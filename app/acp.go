@@ -1507,23 +1507,16 @@ func (a *acpAgent) runAgentTurn(ctx context.Context, history []client.Message) (
 		workflowCtx, cancelWorkflow = context.WithCancel(a.state.ctx)
 	}
 	events := make(chan agentEvent)
-	go streamAgentLoop(
-		workflowCtx,
-		a.state.client,
-		toolRuntime,
-		a.state.activeModel(),
-		a.state.activeConfig().Provider.EffectiveReasoningEffort(),
-		history,
-		a.state.conversationID,
-		a.root,
-		a.state.activeTask,
-		a.state.streamsActiveChat(),
-		modelNeedsSystemInstructionCoalescing(
+	go RunAgentLoop(workflowCtx, AgentLoopRequest{
+		Client: a.state.client, Tools: toolRuntime, Model: a.state.activeModel(),
+		ReasoningEffort: a.state.activeConfig().Provider.EffectiveReasoningEffort(),
+		Messages:        history, ConversationID: a.state.conversationID, WorkingDirectory: a.root,
+		ActiveTask: a.state.activeTask, Stream: a.state.streamsActiveChat(),
+		CoalesceInstructions: modelNeedsSystemInstructionCoalescing(
 			a.state.gatewayConfig, a.state.activeConfig().ModelGroups, a.state.activeModel(), nil,
 		),
-		memoryPolicy(a.state.activeConfig()),
-		events,
-	)
+		ContextPolicy: memoryPolicy(a.state.activeConfig()),
+	}, events)
 
 	streamedResponse := ""
 	return a.continueACPAgentTurn(ctx, workflowCtx, cancelWorkflow, persistent, events, &streamedResponse)

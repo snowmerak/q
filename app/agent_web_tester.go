@@ -173,10 +173,12 @@ func streamAgentWebTester(
 		)
 		return
 	}
-	streamAgentLoop(
-		ctx, parent.client, parent.tools, parent.model, parent.reasoningEffort, history, parent.conversationID,
-		parent.workingDirectory, parent.activeTask, parent.streamEnabled, parent.coalesceInstructions, parent.contextPolicy, events,
-	)
+	RunAgentLoop(ctx, AgentLoopRequest{
+		Client: parent.client, Tools: parent.tools, Model: parent.model, ReasoningEffort: parent.reasoningEffort,
+		Messages: history, ConversationID: parent.conversationID, WorkingDirectory: parent.workingDirectory,
+		ActiveTask: parent.activeTask, Stream: parent.streamEnabled,
+		CoalesceInstructions: parent.coalesceInstructions, ContextPolicy: parent.contextPolicy,
+	}, events)
 }
 
 func agentWebTesterToolCall(request, callID string) (client.ToolCall, error) {

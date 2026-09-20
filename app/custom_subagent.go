@@ -23,7 +23,7 @@ func (m model) customTools() agentToolRuntime {
 	if catalog, ok := m.toolRuntime.(interface{ CustomTools() []client.Tool }); ok {
 		return customCatalogRuntime{agentToolRuntime: m.toolRuntime, catalog: catalog}
 	}
-	return scopeTools(m.toolRuntime, mcpconfig.RoleDefault)
+	return ScopeTools(m.toolRuntime, mcpconfig.RoleDefault)
 }
 
 type customCatalogRuntime struct {

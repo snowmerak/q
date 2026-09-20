@@ -1,4 +1,4 @@
-// Package app implements q's interactive Bubble Tea application.
+// Package app implements q's interactive application and embeddable Agent Loop.
 package app
 
 import (
@@ -19,11 +19,15 @@ import (
 	"github.com/snowmerak/q/workspacememory"
 )
 
-type chatClient interface {
+// ChatClient is the model capability used by Q's application and public agent
+// loop. The component that creates a client owns its lifetime.
+type ChatClient interface {
 	Chat(context.Context, client.ChatRequest) (*client.ChatResponse, error)
 	ListModels(context.Context) ([]client.Model, error)
 	Close() error
 }
+
+type chatClient = ChatClient
 
 type clientFactory func(config.Config) (chatClient, error)
 
@@ -34,11 +38,15 @@ type providerRuntime interface {
 	Apply(context.Context, gateway.Config) error
 }
 
-type agentToolRuntime interface {
+// AgentToolRuntime exposes the workspace tools and host environment consumed
+// by Q's agent loop. The component that creates a runtime owns its lifetime.
+type AgentToolRuntime interface {
 	Tools() []client.Tool
 	Environment() qtools.HostEnvironment
 	Call(context.Context, client.ToolCall) (client.ToolResult, error)
 }
+
+type agentToolRuntime = AgentToolRuntime
 
 type skillHintSearcher interface {
 	SearchSkillHints(context.Context, string, int) (qtools.SkillHintSearchResult, error)

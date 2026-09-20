@@ -9,12 +9,14 @@ import (
 	"github.com/snowmerak/q/memory"
 )
 
-// agentContextCompaction transfers a loop-local compaction to the owning TUI
-// or ACP session memory without changing the full transcript.
-type agentContextCompaction struct {
+// AgentContextCompaction transfers a loop-local compaction to the embedding
+// host without changing the full transcript.
+type AgentContextCompaction struct {
 	Plan    memory.Plan
 	Summary string
 }
+
+type agentContextCompaction = AgentContextCompaction
 
 type agentLoopContext struct {
 	manager *memory.Manager

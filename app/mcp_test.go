@@ -129,7 +129,7 @@ func TestScopedToolRuntimeRejectsToolsFromOtherRoles(t *testing.T) {
 	base := &roleCatalogTools{toolsByRole: map[string][]client.Tool{
 		"coder": {tool("coder_tool")}, "scout": {tool("scout_tool")},
 	}}
-	scoped := scopeTools(base, "coder")
+	scoped := ScopeTools(base, "coder")
 	if len(scoped.Tools()) != 1 || scoped.Tools()[0].Function.Name != "coder_tool" {
 		t.Fatalf("Tools() = %#v", scoped.Tools())
 	}

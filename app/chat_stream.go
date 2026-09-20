@@ -12,15 +12,23 @@ import (
 )
 
 const (
-	chatStreamThinking = "thinking"
-	chatStreamResponse = "response"
+	// AgentStreamThinking identifies a model reasoning delta.
+	AgentStreamThinking = "thinking"
+	// AgentStreamResponse identifies a model response delta.
+	AgentStreamResponse = "response"
+
+	chatStreamThinking = AgentStreamThinking
+	chatStreamResponse = AgentStreamResponse
 )
 
-type chatStreamDelta struct {
+// AgentStreamDelta is a partial model response emitted by RunAgentLoop.
+type AgentStreamDelta struct {
 	Kind    string
 	Content string
 	Start   bool
 }
+
+type chatStreamDelta = AgentStreamDelta
 
 type streamingChatClient interface {
 	ChatStream(context.Context, client.ChatRequest) (client.Stream, error)

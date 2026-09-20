@@ -14,11 +14,13 @@ type roleToolCatalog interface {
 }
 
 type scopedAgentToolRuntime struct {
-	base agentToolRuntime
+	base AgentToolRuntime
 	role string
 }
 
-func scopeTools(base agentToolRuntime, role string) agentToolRuntime {
+// ScopeTools exposes only the tools assigned to role when the underlying
+// runtime supports role-aware catalogs. Calls to hidden tools are rejected.
+func ScopeTools(base AgentToolRuntime, role string) AgentToolRuntime {
 	if base == nil {
 		return nil
 	}

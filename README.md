@@ -98,6 +98,67 @@ On first launch, q opens provider setup. Prefer an environment variable for an
 API key instead of storing a key inline. After selecting a model, type a request
 normally or type `/` to open command completion.
 
+## Embed the Agent Loop in Go
+
+External Go applications can call the same Agent Loop used by q's TUI and ACP
+without starting the Gateway, TUI, session store, Library, or workspace memory.
+The host owns the client, workspace root, event handling, persistence, and
+dependency lifetimes:
+
+```go
+ctx := context.Background()
+root := `C:\path\to\workspace`
+
+modelClient, err := client.FromEnvironment("gpt-5")
+if err != nil {
+	log.Fatal(err)
+}
+defer modelClient.Close()
+
+toolRuntime, err := tools.NewRuntime(ctx, root)
+if err != nil {
+	log.Fatal(err)
+}
+defer toolRuntime.Close()
+
+messages := app.PrepareWorkspaceMessages(nil, app.WorkspaceMessageOptions{
+	Root: root,
+	Tools: toolRuntime,
+})
+messages = append(messages, client.Message{
+	Role: client.RoleUser, Content: "Inspect this workspace and explain its entry points.",
+})
+
+events := make(chan app.AgentEvent)
+go app.RunAgentLoop(ctx, app.AgentLoopRequest{
+	Client: modelClient,
+	Tools: toolRuntime,
+	Model: "gpt-5",
+	Messages: messages,
+	WorkingDirectory: root,
+}, events)
+
+for event := range events {
+	if question, answers, ok := event.Question(); ok {
+		fmt.Println(question.Question)
+		answers <- app.AgentAnswer{Err: app.ErrInteractionUnavailable}
+	}
+	if result, ok := event.Result(); ok && result.Response != nil {
+		fmt.Println(result.Response.Choices[0].Message.Content)
+	}
+	if err := event.Err(); err != nil {
+		log.Fatal(err)
+	}
+}
+```
+
+`RunAgentLoop` closes the event channel when it returns, but it does not close
+the injected client or tool runtime. Consume message, context-replacement, and
+compaction events when the host persists conversations. Use `ScopeTools` to
+apply a role-aware tool catalog. The exact public contract, optional features,
+and ownership boundaries are documented in the
+[embedded Agent Loop API plan](docs/embedded-agent-loop-public-api-plan.md).
+
 ## TUI guide
 
 The main screen keeps the transcript, active agent progress, input, and status
@@ -712,6 +773,7 @@ publishing the fork.
 
 ### Design notes
 
+- [Embedded Agent Loop public API](docs/embedded-agent-loop-public-api-plan.md)
 - [Agent invocation runtime](docs/agent-invocation-runtime.md)
 - [Delegated subagents](docs/delegated-subagents.md)
 - [Subagent architecture](docs/subagent-architecture-notes.md)

@@ -130,11 +130,11 @@ func TestStreamAgentLoopLoadsNestedInstructionsBeforeToolExecution(t *testing.T)
 	configuredClient := &instructionLoopClient{}
 	runtime := &instructionRuntime{}
 	events := make(chan agentEvent)
-	go streamAgentLoop(
-		t.Context(), configuredClient, runtime, "test-model", "low",
-		[]client.Message{{Role: client.RoleUser, Content: "update app/model.go"}}, "", root, nil, false, true,
-		memoryPolicy(config.Default()), events,
-	)
+	go RunAgentLoop(t.Context(), AgentLoopRequest{
+		Client: configuredClient, Tools: runtime, Model: "test-model", ReasoningEffort: "low",
+		Messages:         []client.Message{{Role: client.RoleUser, Content: "update app/model.go"}},
+		WorkingDirectory: root, CoalesceInstructions: true, ContextPolicy: memoryPolicy(config.Default()),
+	}, events)
 	var toolErrors int
 	for event := range events {
 		if event.err != nil {
@@ -179,16 +179,15 @@ func TestStreamAgentLoopCompactsBetweenToolRounds(t *testing.T) {
 	configuredClient := &compactingLoopClient{}
 	hugeResult := strings.Repeat("large tool output ", 4_000)
 	events := make(chan agentEvent)
-	go streamAgentLoop(
-		t.Context(), configuredClient, largeResultRuntime{content: hugeResult}, "test-model", "low",
-		[]client.Message{
+	go RunAgentLoop(t.Context(), AgentLoopRequest{
+		Client: configuredClient, Tools: largeResultRuntime{content: hugeResult}, Model: "test-model", ReasoningEffort: "low",
+		Messages: []client.Message{
 			{Role: client.RoleSystem, Content: "keep this system contract exactly"},
 			{Role: client.RoleUser, Content: "read the large result"},
 		},
-		"initial-conversation", "", nil, false, false,
-		memory.Policy{ContextWindow: 16_000, TriggerRatio: .85, TargetRatio: .22, RecentRatio: .07},
-		events,
-	)
+		ConversationID: "initial-conversation",
+		ContextPolicy:  memory.Policy{ContextWindow: 16_000, TriggerRatio: .85, TargetRatio: .22, RecentRatio: .07},
+	}, events)
 
 	compactions := 0
 	var final *client.ChatResponse
@@ -270,13 +269,13 @@ func TestStreamAgentLoopCompactionFailureStopsBeforeNextRound(t *testing.T) {
 	compactErr := errors.New("summary backend unavailable")
 	configuredClient := &compactingLoopClient{compactionErr: compactErr}
 	events := make(chan agentEvent)
-	go streamAgentLoop(
-		t.Context(), configuredClient, largeResultRuntime{content: strings.Repeat("large result ", 5_000)},
-		"test-model", "low", []client.Message{{Role: client.RoleUser, Content: "read"}},
-		"initial-conversation", "", nil, false, false,
-		memory.Policy{ContextWindow: 16_000, TriggerRatio: .85, TargetRatio: .22, RecentRatio: .07},
-		events,
-	)
+	go RunAgentLoop(t.Context(), AgentLoopRequest{
+		Client: configuredClient, Tools: largeResultRuntime{content: strings.Repeat("large result ", 5_000)},
+		Model: "test-model", ReasoningEffort: "low",
+		Messages:       []client.Message{{Role: client.RoleUser, Content: "read"}},
+		ConversationID: "initial-conversation",
+		ContextPolicy:  memory.Policy{ContextWindow: 16_000, TriggerRatio: .85, TargetRatio: .22, RecentRatio: .07},
+	}, events)
 
 	var gotErr error
 	compactions := 0

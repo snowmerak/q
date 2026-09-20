@@ -83,7 +83,7 @@ func configuredAgentToolRuntime(
 	value config.Config,
 	root string,
 ) (agentToolRuntime, error) {
-	scoped := scopeTools(base, role)
+	scoped := ScopeTools(base, role)
 	if scoped == nil {
 		return nil, nil
 	}

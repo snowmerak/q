@@ -20,7 +20,8 @@ const (
 	activeTaskTag                = "<q_active_task>"
 )
 
-type skillHint struct {
+// SkillHint describes an Agent Skill candidate discovered for the current turn.
+type SkillHint struct {
 	ID          string   `json:"id"`
 	Name        string   `json:"name"`
 	Description string   `json:"description,omitempty"`
@@ -28,10 +29,15 @@ type skillHint struct {
 	Scope       string   `json:"scope"`
 }
 
-type skillHintSet struct {
+type skillHint = SkillHint
+
+// SkillHintSet records the trigger and candidate skills presented to the agent.
+type SkillHintSet struct {
 	Trigger    string      `json:"trigger"`
-	Candidates []skillHint `json:"candidates"`
+	Candidates []SkillHint `json:"candidates"`
 }
+
+type skillHintSet = SkillHintSet
 
 func knownSkillIDs(messages []client.Message) map[string]struct{} {
 	known := make(map[string]struct{})
