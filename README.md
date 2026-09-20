@@ -159,6 +159,12 @@ apply a role-aware tool catalog. The exact public contract, optional features,
 and ownership boundaries are documented in the
 [Agent Loop embedding guide](docs/agent-loop-embedding.md).
 
+The minimal `tools.NewRuntime` does not expose Agent Skill tools. Embedded
+hosts that need Skill search and automatic hints without the Workspace Archive
+or Q Library can provide only `Search`, `Save`, and `Delete` through
+`tools.SkillStore` and construct the runtime with
+`tools.NewRuntimeWithSkillStore`.
+
 ## TUI guide
 
 The main screen keeps the transcript, active agent progress, input, and status
@@ -775,6 +781,7 @@ publishing the fork.
 
 - [Agent Loop embedding guide](docs/agent-loop-embedding.md)
 - [Embedded Agent Loop public API](docs/embedded-agent-loop-public-api-plan.md)
+- [Agent Skill Store decoupling](docs/skill-store-decoupling-plan.md)
 - [Agent invocation runtime](docs/agent-invocation-runtime.md)
 - [Delegated subagents](docs/delegated-subagents.md)
 - [Subagent architecture](docs/subagent-architecture-notes.md)

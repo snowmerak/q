@@ -11,8 +11,15 @@ import (
 	"github.com/snowmerak/q/sessionstore"
 )
 
-type RecordStore interface {
+// SearchStore is the read-only index capability used by Agent Skill search.
+type SearchStore interface {
 	Search(context.Context, sessionstore.SearchOptions) (sessionstore.SearchResult, error)
+}
+
+// RecordStore is the writable derived-index capability used to reconcile
+// discovered Agent Skills. Skill bodies remain in their source directories.
+type RecordStore interface {
+	SearchStore
 	Save(sessionstore.Record) (sessionstore.Record, error)
 	Delete(string) error
 }

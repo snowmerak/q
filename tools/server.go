@@ -34,7 +34,7 @@ func NewServer(root string) (*mcp.Server, error) {
 	if err != nil {
 		return nil, err
 	}
-	server, _, _, err := newServer(root, nil, loomRuntime, nil, nil)
+	server, _, _, err := newServer(root, nil, nil, loomRuntime, nil, nil)
 	return server, err
 }
 
@@ -45,21 +45,28 @@ func NewServerWithArchive(root string, archive builtin.Archive) (*mcp.Server, er
 	if err != nil {
 		return nil, err
 	}
-	server, _, _, err := newServer(root, archive, loomRuntime, nil, nil)
+	server, _, _, err := newServer(root, archive, skillStoreFromArchive(archive), loomRuntime, nil, nil)
 	return server, err
 }
 
-func newServer(root string, archive builtin.Archive, loomRuntime *builtin.LoomRuntime, lspManager *lsp.Manager, globalSkills builtin.GlobalSkillLibrary) (*mcp.Server, *builtin.FS, *agentskills.Registry, error) {
+func newServer(
+	root string,
+	archive builtin.Archive,
+	skillStore SkillStore,
+	loomRuntime *builtin.LoomRuntime,
+	lspManager *lsp.Manager,
+	globalSkills builtin.GlobalSkillLibrary,
+) (*mcp.Server, *builtin.FS, *agentskills.Registry, error) {
 	skills, err := agentskills.Discover(root)
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	if store, ok := archive.(agentskills.RecordStore); ok {
+	if skillStore != nil {
 		var syncErr error
 		if globalSkills == nil {
-			syncErr = skills.SyncRecords(context.Background(), store)
+			syncErr = skills.SyncRecords(context.Background(), skillStore)
 		} else {
-			syncErr = skills.SyncRecordsForScopes(context.Background(), store, "project")
+			syncErr = skills.SyncRecordsForScopes(context.Background(), skillStore, "project")
 		}
 		if syncErr != nil {
 			return nil, nil, nil, fmt.Errorf("tools: index Agent Skills: %w", syncErr)
@@ -71,7 +78,7 @@ func newServer(root string, archive builtin.Archive, loomRuntime *builtin.LoomRu
 	}, nil)
 	propositions, _ := globalSkills.(builtin.PropositionLibrary)
 	fs, err := builtin.Register(server, root, builtin.Dependencies{
-		Archive: archive, Loom: loomRuntime, Skills: skills, GlobalSkills: globalSkills,
+		Archive: archive, Loom: loomRuntime, Skills: skills, SkillStore: skillStore, GlobalSkills: globalSkills,
 		Propositions: propositions, LSP: lspManager,
 	})
 	if err != nil {
@@ -229,7 +236,7 @@ func RunStdioWithLoomOptions(ctx context.Context, root string, options loom.Stor
 			go func() { _, _ = libraryClient.SyncSkillEmbeddings(ctx) }()
 		}
 	}
-	server, fs, _, err := newServer(root, semanticArchive, loomRuntime, lspManager, globalSkills)
+	server, fs, _, err := newServer(root, semanticArchive, semanticArchive, loomRuntime, lspManager, globalSkills)
 	if err != nil {
 		return err
 	}

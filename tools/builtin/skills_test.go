@@ -57,6 +57,22 @@ func TestSearchSkillsRecomputesTotalAfterCollapsingReturnedHits(t *testing.T) {
 	}
 }
 
+func TestSearchSkillsAllowsGlobalLibraryWithoutWorkspaceStore(t *testing.T) {
+	global := &globalSkillSearch{result: qlibrary.SkillSearchResponse{
+		Total: 1,
+		Hits: []qlibrary.SkillSearchHit{{
+			ID: "global", Title: "global-skill", Scope: "global", Score: 1,
+		}},
+	}}
+	output, err := searchSkills(context.Background(), nil, global, SearchSkillsInput{Query: "global"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if output.Total != 1 || len(output.Hits) != 1 || output.Hits[0].ID != "global" || len(output.Warnings) != 1 {
+		t.Fatalf("global-only skill output = %#v", output)
+	}
+}
+
 func TestSearchLocalSkillsUsesSkillFieldBoosts(t *testing.T) {
 	archive := &skillSearchArchive{}
 	if _, err := searchLocalSkills(context.Background(), archive, SearchSkillsInput{Query: "review"}, []string{"project"}); err != nil {

@@ -56,7 +56,7 @@ func TestRuntimeListsAndCallsBuiltinTools(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer runtime.Close()
-	if len(runtime.Tools()) != 17 {
+	if len(runtime.Tools()) != 15 {
 		t.Fatalf("runtime tools = %d", len(runtime.Tools()))
 	}
 	tools := runtime.Tools()
@@ -70,8 +70,8 @@ func TestRuntimeListsAndCallsBuiltinTools(t *testing.T) {
 			t.Fatalf("runtime tool %q has invalid properties: %#v", tool.Function.Name, tool.Function.Parameters["properties"])
 		}
 	}
-	if !runtimeHasTool(runtime, "search_skills") || !runtimeHasTool(runtime, "get_skill") || !runtimeHasTool(runtime, "learn") {
-		t.Fatalf("skill retrieval tools are unavailable: %#v", runtime.Tools())
+	if runtimeHasTool(runtime, "search_skills") || runtimeHasTool(runtime, "get_skill") || !runtimeHasTool(runtime, "learn") {
+		t.Fatalf("default runtime advertised unavailable skill tools or omitted learn: %#v", runtime.Tools())
 	}
 	learned, err := runtime.client.CallTool(context.Background(), &mcp.CallToolParams{Name: "learn"})
 	if err != nil {

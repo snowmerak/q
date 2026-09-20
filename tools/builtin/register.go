@@ -13,6 +13,7 @@ type Dependencies struct {
 	Archive      Archive
 	Loom         *LoomRuntime
 	Skills       *agentskills.Registry
+	SkillStore   agentskills.SearchStore
 	GlobalSkills GlobalSkillLibrary
 	Propositions PropositionLibrary
 	LSP          *lsp.Manager
@@ -154,13 +155,13 @@ func Register(server *mcp.Server, root string, dependencies Dependencies) (*FS, 
 			Annotations: &mcp.ToolAnnotations{ReadOnlyHint: readOnly},
 		}, contextValueHandler(dependencies.Loom.Eval))
 	}
-	if dependencies.Skills != nil {
+	if dependencies.Skills != nil && (dependencies.SkillStore != nil || dependencies.GlobalSkills != nil) {
 		mcp.AddTool(server, &mcp.Tool{
 			Name:        "search_skills",
 			Description: "Search global Agent Skills through q Library and workspace skills through the workspace index, then merge the results. Translate the user's need into concise English keywords for the query. Use get_skill with a selected result ID.",
 			Annotations: &mcp.ToolAnnotations{ReadOnlyHint: readOnly, IdempotentHint: true},
 		}, contextValueHandler(func(ctx context.Context, input SearchSkillsInput) (SearchSkillsOutput, error) {
-			return searchSkills(ctx, dependencies.Archive, dependencies.GlobalSkills, input)
+			return searchSkills(ctx, dependencies.SkillStore, dependencies.GlobalSkills, input)
 		}))
 		mcp.AddTool(server, &mcp.Tool{
 			Name:        "get_skill",

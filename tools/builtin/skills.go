@@ -50,12 +50,12 @@ type GetSkillOutput struct {
 	Content string            `json:"content"`
 }
 
-func searchSkills(ctx context.Context, archive Archive, global GlobalSkillLibrary, input SearchSkillsInput) (SearchSkillsOutput, error) {
-	if archive == nil {
-		return SearchSkillsOutput{}, errors.New("[E_SKILLS] Session Store is unavailable")
+func searchSkills(ctx context.Context, store agentskills.SearchStore, global GlobalSkillLibrary, input SearchSkillsInput) (SearchSkillsOutput, error) {
+	if store == nil && global == nil {
+		return SearchSkillsOutput{}, errors.New("[E_SKILLS] Skill Store is unavailable")
 	}
 	if global == nil {
-		return searchLocalSkills(ctx, archive, input, storedSkillScopes(input.Scopes))
+		return searchLocalSkills(ctx, store, input, storedSkillScopes(input.Scopes))
 	}
 	limit := input.Limit
 	if limit == 0 {
@@ -67,13 +67,17 @@ func searchSkills(ctx context.Context, archive Archive, global GlobalSkillLibrar
 	includeGlobal, includeWorkspace := requestedSkillScopes(input.Scopes)
 	output := SearchSkillsOutput{}
 	if includeWorkspace {
-		local, err := searchLocalSkills(ctx, archive, SearchSkillsInput{
-			Query: input.Query, Tags: input.Tags, Limit: limit,
-		}, []string{"project"})
-		if err != nil {
-			return SearchSkillsOutput{}, err
+		if store == nil {
+			output.Warnings = append(output.Warnings, "workspace Agent Skills unavailable: Skill Store is not configured")
+		} else {
+			local, err := searchLocalSkills(ctx, store, SearchSkillsInput{
+				Query: input.Query, Tags: input.Tags, Limit: limit,
+			}, []string{"project"})
+			if err != nil {
+				return SearchSkillsOutput{}, err
+			}
+			output.Hits = append(output.Hits, local.Hits...)
 		}
-		output.Hits = append(output.Hits, local.Hits...)
 	}
 	if includeGlobal {
 		remote, err := global.SearchSkills(ctx, qlibrary.SkillSearchRequest{
@@ -110,8 +114,8 @@ func searchSkills(ctx context.Context, archive Archive, global GlobalSkillLibrar
 // SearchSkills exposes the same merged lookup used by the MCP tool to trusted
 // host orchestration that needs candidate metadata without fabricating a tool
 // call in the model-visible conversation.
-func SearchSkills(ctx context.Context, archive Archive, global GlobalSkillLibrary, input SearchSkillsInput) (SearchSkillsOutput, error) {
-	return searchSkills(ctx, archive, global, input)
+func SearchSkills(ctx context.Context, store agentskills.SearchStore, global GlobalSkillLibrary, input SearchSkillsInput) (SearchSkillsOutput, error) {
+	return searchSkills(ctx, store, global, input)
 }
 
 func collapseShadowedSkills(hits []SkillSearchHit) []SkillSearchHit {
@@ -131,8 +135,8 @@ func collapseShadowedSkills(hits []SkillSearchHit) []SkillSearchHit {
 	return result
 }
 
-func searchLocalSkills(ctx context.Context, archive Archive, input SearchSkillsInput, scopes []string) (SearchSkillsOutput, error) {
-	result, err := archive.Search(ctx, agentskills.SearchOptions(input.Query, input.Limit, scopes, input.Tags))
+func searchLocalSkills(ctx context.Context, store agentskills.SearchStore, input SearchSkillsInput, scopes []string) (SearchSkillsOutput, error) {
+	result, err := store.Search(ctx, agentskills.SearchOptions(input.Query, input.Limit, scopes, input.Tags))
 	if err != nil {
 		return SearchSkillsOutput{}, fmt.Errorf("[E_SKILLS] search: %w", err)
 	}

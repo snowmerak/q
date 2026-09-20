@@ -36,6 +36,10 @@ type HostEnvironment struct {
 
 type SkillHintSearchResult = builtin.SearchSkillsOutput
 
+// SkillStore is the minimal writable index used to reconcile and search Agent
+// Skills. The caller owns its lifetime.
+type SkillStore = agentskills.RecordStore
+
 // CaptureSource describes the transport and artifact identity for a result
 // that enters q through a tool-shaped runtime boundary.
 type CaptureSource struct {
@@ -53,8 +57,7 @@ type Runtime struct {
 	loom           *builtin.LoomRuntime
 	lsp            *lsp.Manager
 	skills         *agentskills.Registry
-	skillArchive   builtin.Archive
-	skillStore     agentskills.RecordStore
+	skillStore     SkillStore
 	globalSkills   builtin.GlobalSkillLibrary
 	skillRefreshMu sync.Mutex
 	skillRefreshAt time.Time
@@ -68,6 +71,19 @@ type Runtime struct {
 
 func NewRuntime(ctx context.Context, root string) (*Runtime, error) {
 	return NewRuntimeWithArchive(ctx, root, nil)
+}
+
+// NewRuntimeWithSkillStore connects the builtin tool runtime to an Agent Skill
+// index without enabling workspace archive tools. The caller owns store.
+func NewRuntimeWithSkillStore(ctx context.Context, root string, store SkillStore) (*Runtime, error) {
+	return newRuntimeWithLSP(
+		ctx, root, nil, store, loom.NewProcessEvaluator(), loom.StoreOptions{}, nil, nil,
+	)
+}
+
+func skillStoreFromArchive(archive builtin.Archive) SkillStore {
+	store, _ := archive.(SkillStore)
+	return store
 }
 
 // NewRuntimeWithArchive connects the chat loop to filesystem, command,
@@ -100,7 +116,9 @@ func NewRuntimeWithArchiveAndLoomOptionsAndLSP(
 	if err != nil {
 		return nil, err
 	}
-	runtime, err := newRuntimeWithLSP(ctx, root, archive, loom.NewProcessEvaluator(), options, manager, nil)
+	runtime, err := newRuntimeWithLSP(
+		ctx, root, archive, skillStoreFromArchive(archive), loom.NewProcessEvaluator(), options, manager, nil,
+	)
 	if err != nil {
 		_ = manager.Close()
 		return nil, err
@@ -124,7 +142,9 @@ func NewRuntimeWithArchiveAndLoomOptionsAndLSPAndLibrary(
 	if err != nil {
 		return nil, err
 	}
-	runtime, err := newRuntimeWithLSP(ctx, root, archive, loom.NewProcessEvaluator(), options, manager, globalSkills)
+	runtime, err := newRuntimeWithLSP(
+		ctx, root, archive, skillStoreFromArchive(archive), loom.NewProcessEvaluator(), options, manager, globalSkills,
+	)
 	if err != nil {
 		_ = manager.Close()
 		return nil, err
@@ -133,15 +153,24 @@ func NewRuntimeWithArchiveAndLoomOptionsAndLSPAndLibrary(
 }
 
 func newRuntime(ctx context.Context, root string, archive builtin.Archive, evaluator loom.Evaluator, options loom.StoreOptions) (*Runtime, error) {
-	return newRuntimeWithLSP(ctx, root, archive, evaluator, options, nil, nil)
+	return newRuntimeWithLSP(ctx, root, archive, skillStoreFromArchive(archive), evaluator, options, nil, nil)
 }
 
-func newRuntimeWithLSP(ctx context.Context, root string, archive builtin.Archive, evaluator loom.Evaluator, options loom.StoreOptions, lspManager *lsp.Manager, globalSkills builtin.GlobalSkillLibrary) (*Runtime, error) {
+func newRuntimeWithLSP(
+	ctx context.Context,
+	root string,
+	archive builtin.Archive,
+	skillStore SkillStore,
+	evaluator loom.Evaluator,
+	options loom.StoreOptions,
+	lspManager *lsp.Manager,
+	globalSkills builtin.GlobalSkillLibrary,
+) (*Runtime, error) {
 	loomRuntime, err := newLoomRuntime(root, evaluator, withSessionRoots(options, root))
 	if err != nil {
 		return nil, err
 	}
-	server, fs, skills, err := newServer(root, archive, loomRuntime, lspManager, globalSkills)
+	server, fs, skills, err := newServer(root, archive, skillStore, loomRuntime, lspManager, globalSkills)
 	if err != nil {
 		return nil, err
 	}
@@ -158,10 +187,9 @@ func newRuntimeWithLSP(ctx context.Context, root string, archive builtin.Archive
 		fs.Close()
 		return nil, fmt.Errorf("tools: connect builtin MCP client: %w", err)
 	}
-	store, _ := archive.(agentskills.RecordStore)
 	runtime := &Runtime{
 		client: clientSession, server: serverSession, fs: fs, loom: loomRuntime, lsp: lspManager,
-		skills: skills, skillArchive: archive, skillStore: store, globalSkills: globalSkills,
+		skills: skills, skillStore: skillStore, globalSkills: globalSkills,
 		skillRefreshAt: time.Now().Add(skillRefreshInterval),
 	}
 	listed, err := clientSession.ListTools(ctx, nil)
@@ -276,11 +304,11 @@ func (r *Runtime) SkillIssues() []agentskills.Issue {
 // result through Loom or creating a synthetic tool exchange. Callers must add
 // any selected metadata to the model context as an append-only suffix.
 func (r *Runtime) SearchSkillHints(ctx context.Context, query string, limit int) (SkillHintSearchResult, error) {
-	if r == nil || r.skills == nil || r.skillArchive == nil {
+	if r == nil || r.skills == nil || (r.skillStore == nil && r.globalSkills == nil) {
 		return SkillHintSearchResult{}, errors.New("tools: Agent Skills search is unavailable")
 	}
 	_ = r.refreshSkillsIfDue(ctx)
-	return builtin.SearchSkills(ctx, r.skillArchive, r.globalSkills, builtin.SearchSkillsInput{
+	return builtin.SearchSkills(ctx, r.skillStore, r.globalSkills, builtin.SearchSkillsInput{
 		Query: query, Limit: limit,
 	})
 }

@@ -111,6 +111,55 @@ The loop requires both `Client` and `Tools`. For a completion with no tool
 runtime, call the model client directly instead of manufacturing an empty Agent
 Loop integration.
 
+## Enable Agent Skills without Archive or Library
+
+`tools.NewRuntime` is the smallest builtin runtime. It does not advertise
+`search_skills` or `get_skill`, because it has no searchable Skill index. To
+enable local Agent Skills without starting the Workspace Archive, Session
+Store, workspace memory, or Q Library, inject the smaller Skill-only store:
+
+```go
+skillStore := newMySkillStore() // implements tools.SkillStore
+
+toolRuntime, err := tools.NewRuntimeWithSkillStore(ctx, root, skillStore)
+if err != nil {
+	return err
+}
+defer toolRuntime.Close()
+defer skillStore.Close() // when the implementation has a Close method
+```
+
+`tools.SkillStore` is the following persistence boundary (expressed with
+`sessionstore` record types so it can also be satisfied by Q's existing
+stores):
+
+```go
+type SkillStore interface {
+	Search(context.Context, sessionstore.SearchOptions) (sessionstore.SearchResult, error)
+	Save(sessionstore.Record) (sessionstore.Record, error)
+	Delete(string) error
+}
+```
+
+At startup and refresh, the runtime discovers Agent Skills for the workspace
+and reconciles their searchable metadata through `Search`, `Save`, and
+`Delete`. A store may additionally implement `Prepare(context.Context,
+[]sessionstore.Record)` to attach embeddings before records are saved. Skill
+bodies remain in their source directories and `get_skill` reads them through
+the existing registry, so the store does not need a `Get` method.
+
+The injected store enables all three consumers of the same index:
+
+- the model-visible `search_skills` tool;
+- direct `get_skill` body loading for returned IDs;
+- automatic Skill hints added by `RunAgentLoop` for user input, `task_start`,
+  and answers returned from `ask_to_user`.
+
+The Skill store does not enable `search_archive` or `get_archive_record`.
+Conversely, existing `NewRuntimeWithArchive` constructors preserve their
+behavior when the supplied archive also implements `tools.SkillStore`. The
+caller owns the injected store and must close it separately when applicable.
+
 ## Prepare workspace context once
 
 `PrepareWorkspaceMessages` copies the input slice and appends the pieces that
@@ -255,6 +304,8 @@ the ID from the terminal response rather than retaining an older value.
 - Assert that the initial message slice is not changed by
   `PrepareWorkspaceMessages` and that it is not applied twice.
 - Verify role scoping with both advertised and rejected MCP calls.
+- When enabling Agent Skills without an archive, test a `tools.SkillStore`
+  implementation from an external package and verify automatic hint search.
 - Run `gofmt`, focused tests, `go test ./...`, and `go vet ./...`.
 - When changing Q's public API, also run `go run ./scripts/modulecheck`.
 

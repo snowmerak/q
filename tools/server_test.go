@@ -37,12 +37,15 @@ func TestServerListsAndCallsBuiltinTools(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(listed.Tools) != 16 {
-		t.Fatalf("listed %d tools; want 16", len(listed.Tools))
+	if len(listed.Tools) != 14 {
+		t.Fatalf("listed %d tools; want 14", len(listed.Tools))
 	}
 	for _, tool := range listed.Tools {
 		if tool.Name == "learn" {
 			t.Fatal("standalone MCP server exposed session-only learn tool")
+		}
+		if tool.Name == "search_skills" || tool.Name == "get_skill" {
+			t.Fatalf("standalone MCP server exposed unavailable skill tool %q", tool.Name)
 		}
 	}
 	result, err := clientSession.CallTool(context.Background(), &mcp.CallToolParams{

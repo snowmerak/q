@@ -21,6 +21,10 @@ an external-package tool round.
   satisfies it.
 - Create a workspace-rooted `app.AgentToolRuntime`; normally use
   `tools.NewRuntime(ctx, root)`.
+- If the embedded host needs Agent Skills without the Workspace Archive or Q
+  Library, implement `tools.SkillStore` (`Search`, `Save`, and `Delete`) and use
+  `tools.NewRuntimeWithSkillStore(ctx, root, store)`. The plain constructor does
+  not advertise `search_skills` or `get_skill` because it has no Skill index.
 - Call `app.PrepareWorkspaceMessages` once when initializing the session, then
   append user turns and ordered events. Never apply it repeatedly to retained
   history.
@@ -33,6 +37,14 @@ an external-package tool round.
 
 `RunAgentLoop` requires a client and tool runtime and owns neither lifetime.
 For a plain model completion without tools, use the model client directly.
+The runtime also does not close an injected Skill store; the host owns it.
+
+With `NewRuntimeWithSkillStore`, keep Skill discovery and hint orchestration in
+Q. The runtime reconciles metadata into the store, `get_skill` reads bodies
+from the existing registry, and the loop uses the same store for automatic
+hints on user input, `task_start`, and `ask_to_user` answers. Do not add a
+second Skill scanner or hint injector in the embedding host. A custom store may
+optionally implement `Prepare` to add embeddings; it does not need `Get`.
 
 ## Preserve event and session semantics
 
