@@ -250,6 +250,22 @@ func TestStreamAgentLoopCompactsBetweenToolRounds(t *testing.T) {
 	}
 }
 
+func TestMainAgentLoopUsesConfiguredTrigger(t *testing.T) {
+	history := []client.Message{{Role: client.RoleUser, Content: strings.Repeat("context ", 1_000)}}
+	probe := newAgentLoopContext(memory.Policy{}, history, largeResultRuntime{}.Tools())
+	predicted := probe.manager.PredictedTokens()
+	contextWindowAtEightyTwoPercent := (predicted*100 + 81) / 82
+	loopContext := newAgentLoopContext(memory.Policy{
+		ContextWindow: contextWindowAtEightyTwoPercent,
+		TriggerRatio:  .85,
+		TargetRatio:   .22,
+		RecentRatio:   .07,
+	}, history, largeResultRuntime{}.Tools())
+	if loopContext.ShouldCompact() {
+		t.Fatalf("main loop compacted at about 82%% with configured 85%% trigger: predicted = %d, window = %d", predicted, contextWindowAtEightyTwoPercent)
+	}
+}
+
 func TestStreamAgentLoopCompactionFailureStopsBeforeNextRound(t *testing.T) {
 	compactErr := errors.New("summary backend unavailable")
 	configuredClient := &compactingLoopClient{compactionErr: compactErr}

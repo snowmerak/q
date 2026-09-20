@@ -525,53 +525,6 @@ negation, root anchoring, directory suffixes, and `*`, `**`, and `?` wildcards.
 It is a discovery aid, **not an access-control boundary**: a tool can still read
 an explicitly requested in-workspace path.
 
-## Embedding the agent loop in Go
-
-`agentloop.Run` exposes the same synchronous model/tool state machine used by
-the TUI, ACP, and remote hosts. The embedding application supplies a
-`ModelClient`, a `ToolRuntime`, history, and optional event/question hooks; it
-retains ownership of dependency lifetimes and persistence.
-
-```go
-model, err := client.FromEnvironment("gpt-5")
-if err != nil {
-	return err
-}
-defer model.Close()
-
-runtime, err := tools.NewRuntime(ctx, workspaceRoot)
-if err != nil {
-	return err
-}
-defer runtime.Close()
-
-result, err := agentloop.Run(ctx, agentloop.Request{
-	Client: model,
-	Tools: runtime.ForRole(mcpconfig.RoleDefault),
-	Messages: history,
-	Model: "gpt-5",
-	ContextPolicy: memory.Policy{
-		ContextWindow: 128_000,
-		TriggerRatio:  .85,
-		TargetRatio:   .22,
-		RecentRatio:   .07,
-	},
-}, agentloop.Hooks{})
-```
-
-`client.Client` implements `ModelClient`, including optional streaming.
-`tools.Runtime` dispatches builtin tools through the Go MCP SDK, while
-`ConfigureExternal` connects stdio or Streamable HTTP MCP servers. Pass
-`runtime.ForRole(...)` to expose and enforce only the external MCP tools
-assigned to that role. `Run` never closes these dependencies or writes session
-state; persist `Result.Context` and selected events according to the host's own
-session model. A zero `ContextPolicy.ContextWindow` disables automatic
-compaction.
-
-See [Embedding q's agent loop in Go](docs/agent-loop-embedding.md) for custom
-model and tool adapters, MCP configuration, events, interactive questions, and
-session ownership.
-
 ## ACP and standalone services
 
 ### ACP agent mode
@@ -760,7 +713,6 @@ publishing the fork.
 ### Design notes
 
 - [Agent invocation runtime](docs/agent-invocation-runtime.md)
-- [Agent-loop embedding](docs/agent-loop-embedding.md)
 - [Delegated subagents](docs/delegated-subagents.md)
 - [Subagent architecture](docs/subagent-architecture-notes.md)
 - [Remote agent API](docs/remote-subagent-api-plan.md)

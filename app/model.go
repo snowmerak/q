@@ -3719,6 +3719,358 @@ func streamSingleChat(
 	emitAgentEvent(ctx, events, agentEvent{response: response, requestEstimate: requestEstimate, err: err})
 }
 
+func streamAgentLoop(
+	ctx context.Context,
+	configuredClient chatClient,
+	toolRuntime agentToolRuntime,
+	modelID, reasoningEffort string,
+	history []client.Message,
+	conversationID string,
+	workingDirectory string,
+	activeTask *workspace.ActiveTask,
+	streamEnabled bool,
+	coalesceInstructions bool,
+	contextPolicy memory.Policy,
+	events chan<- agentEvent,
+) {
+	defer close(events)
+	availableTools := append(toolRuntime.Tools(), orchestrationTools()...)
+	hintedSkillIDs := knownSkillIDs(history)
+	if len(history) > 0 && history[len(history)-1].Role == client.RoleUser {
+		index := len(history) - 1
+		original := history[index]
+		updated := original
+		if activeTask != nil {
+			updated = appendActiveTaskContext(updated, *activeTask)
+		}
+		if !strings.Contains(updated.TextContent(), skillHintsTag) {
+			query := original.TextContent()
+			if activeTask != nil {
+				query = skillHintQueryForActiveTask(*activeTask, query)
+			}
+			hints := automaticSkillHints(ctx, toolRuntime, query, "user_input", hintedSkillIDs)
+			updated = appendSkillHintContext(updated, hints)
+		}
+		if updated.TextContent() != original.TextContent() {
+			history[index] = updated
+			replacement := &agentContextReplacement{Index: index, Message: updated}
+			if !emitAgentEvent(ctx, events, agentEvent{contextReplace: replacement}) {
+				return
+			}
+		}
+	}
+	loopContext := newAgentLoopContext(contextPolicy, history, availableTools)
+	toolCalls := 0
+	taskStarted := activeTask != nil
+	for round := 0; ; round++ {
+		if loopContext.ShouldCompact() {
+			if !emitAgentEvent(ctx, events, agentEvent{status: "Compacting context…"}) {
+				return
+			}
+		}
+		compaction, err := loopContext.CompactIfNeeded(ctx, configuredClient, modelID, reasoningEffort)
+		if err != nil {
+			emitAgentEvent(ctx, events, agentEvent{err: err})
+			return
+		}
+		if compaction != nil {
+			conversationID = ""
+			if !emitAgentEvent(ctx, events, agentEvent{compaction: compaction}) {
+				return
+			}
+		}
+		roundHistory := loopContext.Messages()
+		appendHistory := func(messages ...client.Message) {
+			loopContext.Append(messages...)
+			roundHistory = append(roundHistory, messages...)
+		}
+		requestEstimate := memory.CountMessages(roundHistory)
+		request := client.ChatRequest{
+			Model: modelID, Messages: providerMessages(agentinstructions.Normalize(roundHistory), coalesceInstructions), ConversationID: conversationID, Tools: availableTools,
+			ReasoningEffort: reasoningEffort, WorkingDirectory: workingDirectory,
+		}
+		var response *client.ChatResponse
+		err = nil
+		if streamEnabled {
+			response, err = streamChatWithEmptyResponseRecovery(ctx, configuredClient, request, func(delta chatStreamDelta) bool {
+				return emitAgentEvent(ctx, events, agentEvent{streamDelta: &delta})
+			})
+		} else {
+			response, err = chatWithEmptyResponseRecovery(ctx, configuredClient, request)
+		}
+		if err != nil {
+			emitAgentEvent(ctx, events, agentEvent{err: err})
+			return
+		}
+		if response != nil {
+			loopContext.Observe(response.Usage, requestEstimate)
+		}
+		if response == nil || len(response.Choices) == 0 {
+			emitAgentEvent(ctx, events, agentEvent{response: response})
+			return
+		}
+		assistant := response.Choices[0].Message
+		if assistant.Role == "" {
+			assistant.Role = client.RoleAssistant
+		}
+		if response.ConversationID != "" {
+			conversationID = response.ConversationID
+		}
+		if len(assistant.ToolCalls) == 0 {
+			if !taskStarted {
+				response.Choices[0].Message = assistant
+				response.ConversationID = conversationID
+				emitAgentEvent(ctx, events, agentEvent{
+					response: response, requestEstimate: requestEstimate, toolCalls: toolCalls,
+				})
+				return
+			}
+			appendHistory(assistant, client.Message{
+				Role: client.RoleUser,
+				Content: "This task was started with task_start and is not complete until you call task_complete. " +
+					"Call task_complete now with the final outcome and summary; " +
+					"if more work is required, continue the work first.",
+			})
+			continue
+		}
+		for index := range assistant.ToolCalls {
+			if assistant.ToolCalls[index].ID == "" {
+				assistant.ToolCalls[index].ID = fmt.Sprintf("q-call-%d-%d", round+1, index+1)
+			}
+		}
+		instructionLoader := agentinstructions.New(workingDirectory, loopContext.Messages())
+		newInstructions := instructionLoader.ForToolCalls(assistant.ToolCalls)
+		if len(newInstructions) > 0 {
+			appendHistory(newInstructions...)
+			for index := range newInstructions {
+				message := newInstructions[index]
+				if !emitAgentEvent(ctx, events, agentEvent{message: &message}) {
+					return
+				}
+			}
+			appendHistory(assistant)
+			if !emitAgentEvent(ctx, events, agentEvent{message: &assistant}) {
+				return
+			}
+			sources := strings.Join(agentinstructions.Sources(newInstructions), ", ")
+			for _, call := range assistant.ToolCalls {
+				callCopy := call
+				if !emitAgentEvent(ctx, events, agentEvent{call: &callCopy}) {
+					return
+				}
+				message := orchestrationToolResult(
+					call,
+					"workspace instructions were loaded from "+sources+"; review them and retry any still-appropriate tool call",
+					true,
+				)
+				appendHistory(message)
+				if !emitAgentEvent(ctx, events, agentEvent{message: &message, toolIsError: true}) {
+					return
+				}
+			}
+			continue
+		}
+		appendHistory(assistant)
+		if !emitAgentEvent(ctx, events, agentEvent{message: &assistant}) {
+			return
+		}
+		for _, call := range assistant.ToolCalls {
+			callCopy := call
+			if !emitAgentEvent(ctx, events, agentEvent{call: &callCopy}) {
+				return
+			}
+			if call.Function.Name == taskStartToolName {
+				input, parseErr := parseTaskStart(call.Function.Arguments)
+				if parseErr == nil && taskStarted {
+					parseErr = errors.New("another task_start lifecycle is already active")
+				}
+				if parseErr != nil {
+					message := orchestrationToolResult(call, "invalid task_start arguments: "+parseErr.Error(), true)
+					appendHistory(message)
+					if !emitAgentEvent(ctx, events, agentEvent{message: &message, toolIsError: true}) {
+						return
+					}
+					continue
+				}
+				taskStarted = true
+				hints := automaticSkillHints(ctx, toolRuntime, skillHintQueryForTask(input), "task_start", hintedSkillIDs)
+				body, _ := json.Marshal(taskStartOutput{
+					Started: true, Objective: input.Objective,
+					CompletionCriteria: append([]string(nil), input.CompletionCriteria...), SkillHints: hints,
+				})
+				message := orchestrationToolResult(call, string(body), false)
+				appendHistory(message)
+				if !emitAgentEvent(ctx, events, agentEvent{message: &message}) {
+					return
+				}
+				started := &workspace.ActiveTask{
+					Objective: input.Objective, CompletionCriteria: append([]string(nil), input.CompletionCriteria...),
+					StartedAt: time.Now().UTC(),
+				}
+				activeTask = started
+				if !emitAgentEvent(ctx, events, agentEvent{taskStarted: started}) {
+					return
+				}
+				continue
+			}
+			if call.Function.Name == askToUserToolName {
+				input, parseErr := parseAskToUser(call.Function.Arguments)
+				if parseErr != nil {
+					message := orchestrationToolResult(call, "invalid ask_to_user arguments: "+parseErr.Error(), true)
+					appendHistory(message)
+					if !emitAgentEvent(ctx, events, agentEvent{message: &message, toolIsError: true}) {
+						return
+					}
+					continue
+				}
+				answerChannel := make(chan askToUserOutput, 1)
+				if !emitAgentEvent(ctx, events, agentEvent{question: &input, answer: answerChannel}) {
+					return
+				}
+				var answer askToUserOutput
+				select {
+				case answer = <-answerChannel:
+				case <-ctx.Done():
+					return
+				}
+				if answer.Err != nil {
+					if errors.Is(answer.Err, errRemoteInteractionUnavailable) {
+						message := orchestrationToolResult(
+							call,
+							"interaction_unavailable: interactive input is unavailable in q remote mode; continue with the available information or finish the task as blocked",
+							true,
+						)
+						appendHistory(message)
+						if !emitAgentEvent(ctx, events, agentEvent{message: &message, toolIsError: true}) {
+							return
+						}
+						continue
+					}
+					emitAgentEvent(ctx, events, agentEvent{err: answer.Err})
+					return
+				}
+				answer.SkillHints = automaticSkillHints(
+					ctx, toolRuntime, skillHintQueryForAnswer(input, answer), "user_answer", hintedSkillIDs,
+				)
+				body, _ := json.Marshal(answer)
+				message := orchestrationToolResult(call, string(body), false)
+				appendHistory(message)
+				if !emitAgentEvent(ctx, events, agentEvent{message: &message}) {
+					return
+				}
+				continue
+			}
+			if call.Function.Name == taskCompleteToolName {
+				if !taskStarted {
+					message := orchestrationToolResult(call, "task_complete requires an active task_start lifecycle", true)
+					appendHistory(message)
+					if !emitAgentEvent(ctx, events, agentEvent{message: &message, toolIsError: true}) {
+						return
+					}
+					continue
+				}
+				completion, parseErr := parseTaskComplete(call.Function.Arguments)
+				if parseErr == nil && len(assistant.ToolCalls) != 1 {
+					parseErr = errors.New("task_complete must be the only tool call in its turn")
+				}
+				if parseErr != nil {
+					message := orchestrationToolResult(call, "invalid task_complete arguments: "+parseErr.Error(), true)
+					appendHistory(message)
+					if !emitAgentEvent(ctx, events, agentEvent{message: &message, toolIsError: true}) {
+						return
+					}
+					continue
+				}
+				body, _ := json.Marshal(completion)
+				message := orchestrationToolResult(call, string(body), false)
+				appendHistory(message)
+				if !emitAgentEvent(ctx, events, agentEvent{message: &message}) {
+					return
+				}
+				if !emitAgentEvent(ctx, events, agentEvent{taskCompleted: true}) {
+					return
+				}
+				if !emitAgentEvent(ctx, events, agentEvent{
+					learningName: thinker.TaskCompleteEventName, learningPayload: append(json.RawMessage(nil), body...),
+				}) {
+					return
+				}
+				if !emitAgentEvent(ctx, events, agentEvent{status: "Finalizing task…"}) {
+					return
+				}
+				request.Messages = roundHistory
+				request.ConversationID = conversationID
+				finished, finishErr := client.FinishToolTurn(ctx, request, func(ctx context.Context, request client.ChatRequest) (*client.ChatResponse, error) {
+					requestEstimate = memory.CountMessages(request.Messages)
+					request.Messages = providerMessages(agentinstructions.Normalize(request.Messages), coalesceInstructions)
+					if streamEnabled {
+						return streamChatWithConversationRecovery(ctx, configuredClient, request, func(chatStreamDelta) bool { return true })
+					}
+					return chatWithConversationRecovery(ctx, configuredClient, request)
+				}, func(message client.Message) error {
+					// Keep the structured completion as the one user-visible final
+					// answer, but archive any extra calls and their rejection results.
+					if message.Role == client.RoleAssistant && len(message.ToolCalls) == 0 {
+						return nil
+					}
+					if !emitAgentEvent(ctx, events, agentEvent{message: &message, toolIsError: message.Role == client.RoleTool}) {
+						return ctx.Err()
+					}
+					for _, extra := range message.ToolCalls {
+						if !emitAgentEvent(ctx, events, agentEvent{call: &extra}) {
+							return ctx.Err()
+						}
+					}
+					return nil
+				})
+				if finishErr != nil {
+					emitAgentEvent(ctx, events, agentEvent{err: finishErr})
+					return
+				}
+				response = finished.Response
+				response.Choices[0].Message = client.Message{
+					Role: client.RoleAssistant, Name: thinker.TaskCompletionReplyName,
+					Content: renderTaskCompletion(completion),
+				}
+				if response.ConversationID == "" {
+					response.ConversationID = conversationID
+				}
+				emitAgentEvent(ctx, events, agentEvent{
+					response: response, outcome: completion.Outcome, requestEstimate: requestEstimate, toolCalls: toolCalls,
+				})
+				return
+			}
+			result, callErr := toolRuntime.Call(ctx, call)
+			if callErr != nil {
+				result = client.ToolResult{Content: callErr.Error(), IsError: true}
+			}
+			content := result.Content
+			if result.IsError {
+				content = "Tool error: " + content
+			}
+			message := client.Message{
+				Role: client.RoleTool, Name: call.Function.Name,
+				ToolCallID: call.ID, Content: content,
+			}
+			appendHistory(message)
+			toolCalls++
+			if !emitAgentEvent(ctx, events, agentEvent{message: &message, toolIsError: result.IsError}) {
+				return
+			}
+		}
+	}
+}
+
+func orchestrationToolResult(call client.ToolCall, content string, isError bool) client.Message {
+	if isError {
+		content = "Tool error: " + content
+	}
+	return client.Message{
+		Role: client.RoleTool, Name: call.Function.Name,
+		ToolCallID: call.ID, Content: content,
+	}
+}
+
 func emitAgentEvent(ctx context.Context, events chan<- agentEvent, event agentEvent) bool {
 	select {
 	case events <- event:
