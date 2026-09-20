@@ -24,6 +24,9 @@ type Config struct {
 	Headers       http.Header
 	BodyFields    map[string]any
 	UsageRecorder UsageRecorder
+	// ForwardUsageMetadata sends Q's bounded role and event ID headers. Enable
+	// it only when BaseURL is a trusted Q Gateway, not an arbitrary provider.
+	ForwardUsageMetadata bool
 
 	// DisableAPIKey explicitly suppresses OPENAI_API_KEY. This is useful for
 	// local compatible servers when the environment contains an unrelated key.
@@ -33,10 +36,11 @@ type Config struct {
 // Client is an OpenAI-compatible client backed by llm-provider's OpenAI
 // implementation. It is safe for concurrent calls when its HTTPClient is safe.
 type Client struct {
-	inner         *llmprovider.Client
-	provider      *provideropenai.Provider
-	defaultModel  string
-	usageRecorder UsageRecorder
+	inner                *llmprovider.Client
+	provider             *provideropenai.Provider
+	defaultModel         string
+	usageRecorder        UsageRecorder
+	forwardUsageMetadata bool
 }
 
 // New validates config and constructs an OpenAI-compatible client.
@@ -80,10 +84,11 @@ func New(config Config) (*Client, error) {
 
 	provider := provideropenai.New(options...)
 	return &Client{
-		inner:         llmprovider.New(provider),
-		provider:      provider,
-		defaultModel:  config.DefaultModel,
-		usageRecorder: config.UsageRecorder,
+		inner:                llmprovider.New(provider),
+		provider:             provider,
+		defaultModel:         config.DefaultModel,
+		usageRecorder:        config.UsageRecorder,
+		forwardUsageMetadata: config.ForwardUsageMetadata,
 	}, nil
 }
 
@@ -119,6 +124,7 @@ func validateConfig(config Config) error {
 // request omits Model.
 func (c *Client) Chat(ctx context.Context, request ChatRequest) (*ChatResponse, error) {
 	request.Model = c.model(request.Model)
+	ctx, request.Headers = c.withUsageMetadata(ctx, request.Headers, "")
 	response, err := c.inner.Chat(ctx, request)
 	if response != nil {
 		c.recordChatUsage(ctx, request, response.Model, response.Usage, estimateResponseTokens(response))
@@ -130,6 +136,7 @@ func (c *Client) Chat(ctx context.Context, request ChatRequest) (*ChatResponse, 
 // returned stream.
 func (c *Client) ChatStream(ctx context.Context, request ChatRequest) (Stream, error) {
 	request.Model = c.model(request.Model)
+	ctx, request.Headers = c.withUsageMetadata(ctx, request.Headers, "")
 	stream, err := c.inner.ChatStream(ctx, request)
 	if err != nil {
 		return nil, err
@@ -137,7 +144,10 @@ func (c *Client) ChatStream(ctx context.Context, request ChatRequest) (Stream, e
 	if c.usageRecorder == nil {
 		return stream, nil
 	}
-	tracked := &usageStream{inner: stream, client: c, request: request, role: usageRole(ctx)}
+	tracked := &usageStream{
+		inner: stream, client: c, request: request,
+		role: usageRole(ctx), eventID: usageEventID(ctx),
+	}
 	if headers, ok := stream.(ResponseHeaderer); ok {
 		return &usageHeaderStream{usageStream: tracked, headers: headers}, nil
 	}
@@ -152,6 +162,7 @@ func (c *Client) ListModels(ctx context.Context) ([]Model, error) {
 // Embed creates embeddings, using DefaultModel when request.Model is empty.
 func (c *Client) Embed(ctx context.Context, request EmbeddingRequest) (*EmbeddingResponse, error) {
 	request.Model = c.model(request.Model)
+	ctx, request.Headers = c.withUsageMetadata(ctx, request.Headers, "embedding")
 	response, err := c.provider.Embed(ctx, request)
 	if response != nil {
 		c.recordEmbeddingUsage(ctx, request, response)
@@ -166,6 +177,7 @@ func (c *Client) CreateResponse(ctx context.Context, body json.RawMessage, heade
 	if err != nil {
 		return nil, err
 	}
+	_, headers = c.withUsageMetadata(ctx, headers, "")
 	return c.provider.CreateResponse(ctx, prepared, headers)
 }
 
@@ -176,7 +188,28 @@ func (c *Client) CreateResponseStream(ctx context.Context, body json.RawMessage,
 	if err != nil {
 		return nil, err
 	}
+	_, headers = c.withUsageMetadata(ctx, headers, "")
 	return c.provider.CreateResponseStream(ctx, prepared, headers)
+}
+
+func (c *Client) withUsageMetadata(ctx context.Context, headers http.Header, defaultRole string) (context.Context, http.Header) {
+	if c == nil || !c.forwardUsageMetadata {
+		return ctx, headers
+	}
+	role := usageRole(ctx)
+	if role == UsageRoleUnknown && defaultRole != "" {
+		ctx = WithUsageRole(ctx, defaultRole)
+		role = usageRole(ctx)
+	}
+	eventID := NewUsageEventID()
+	ctx = withUsageEventID(ctx, eventID)
+	forwarded := headers.Clone()
+	if forwarded == nil {
+		forwarded = make(http.Header)
+	}
+	forwarded.Set(UsageEventIDHeader, eventID)
+	forwarded.Set(UsageRoleHeader, role)
+	return ctx, forwarded
 }
 
 // Close releases provider resources.

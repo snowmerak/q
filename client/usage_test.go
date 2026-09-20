@@ -98,6 +98,73 @@ func TestChatRecordsBoundedUsageRoleFromContext(t *testing.T) {
 	}
 }
 
+func TestForwardUsageMetadataReusesEventIDForLocalFallback(t *testing.T) {
+	var received http.Header
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		received = request.Header.Clone()
+		writer.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(writer, `{
+			"model":"gateway/model","choices":[{"index":0,"message":{"role":"assistant","content":"ok"}}],
+			"usage":{"prompt_tokens":8,"completion_tokens":2,"total_tokens":10}
+		}`)
+	}))
+	defer server.Close()
+
+	recorder := &captureUsageRecorder{}
+	configured, err := New(Config{
+		BaseURL: server.URL, DisableAPIKey: true, UsageRecorder: recorder,
+		ForwardUsageMetadata: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer configured.Close()
+	requestHeaders := http.Header{"X-Caller": {"kept"}}
+	ctx := WithUsageRole(t.Context(), "Planner")
+	if _, err := configured.Chat(ctx, ChatRequest{
+		Model: "gateway/model", Headers: requestHeaders,
+		Messages: []Message{{Role: RoleUser, Content: "hello"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	eventID := received.Get(UsageEventIDHeader)
+	if !ValidUsageEventID(eventID) || received.Get(UsageRoleHeader) != "planner" {
+		t.Fatalf("forwarded metadata = %#v", received)
+	}
+	if requestHeaders.Get(UsageEventIDHeader) != "" || requestHeaders.Get(UsageRoleHeader) != "" {
+		t.Fatalf("caller headers were mutated: %#v", requestHeaders)
+	}
+	records := recorder.snapshot()
+	if len(records) != 1 || records[0].EventID != eventID || records[0].Role != "planner" {
+		t.Fatalf("fallback record = %#v, event_id = %q", records, eventID)
+	}
+}
+
+func TestUsageMetadataForwardingIsOptIn(t *testing.T) {
+	var received http.Header
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		received = request.Header.Clone()
+		writer.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(writer, `{"choices":[{"index":0,"message":{"role":"assistant","content":"ok"}}]}`)
+	}))
+	defer server.Close()
+
+	configured, err := New(Config{BaseURL: server.URL, DisableAPIKey: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer configured.Close()
+	if _, err := configured.Chat(WithUsageRole(t.Context(), "planner"), ChatRequest{
+		Messages: []Message{{Role: RoleUser, Content: "hello"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if received.Get(UsageEventIDHeader) != "" || received.Get(UsageRoleHeader) != "" {
+		t.Fatalf("unexpected Q usage metadata = %#v", received)
+	}
+}
+
 func TestNormalizedUsageDerivesMissingRemoteTotalsWithoutEstimating(t *testing.T) {
 	record := normalizedUsageRecord("model", Usage{PromptTokens: 9, CompletionTokens: 2}, 100, 100)
 	if record.PromptTokens != 9 || record.CompletionTokens != 2 || record.TotalTokens != 11 || record.Estimated {

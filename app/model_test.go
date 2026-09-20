@@ -121,6 +121,11 @@ func TestManagedClientFactoryUsesGatewayAPIKey(t *testing.T) {
 		case "/v1/models":
 			_, _ = writer.Write([]byte(`{"object":"list","data":[]}`))
 		case "/v1/chat/completions":
+			if !client.ValidUsageEventID(request.Header.Get(client.UsageEventIDHeader)) ||
+				request.Header.Get(client.UsageRoleHeader) != client.UsageRoleUnknown {
+				writer.WriteHeader(http.StatusBadRequest)
+				return
+			}
 			_, _ = writer.Write([]byte(`{
 				"model":"gateway-model",
 				"choices":[{"index":0,"message":{"role":"assistant","content":"ok"}}],

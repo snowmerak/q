@@ -17,6 +17,7 @@ import (
 	"github.com/snowmerak/q/config"
 	"github.com/snowmerak/q/gatewayconfig"
 	"github.com/snowmerak/q/providerhost"
+	"github.com/snowmerak/q/usagelog"
 )
 
 type gatewayCommandOptions struct {
@@ -84,10 +85,13 @@ func runGatewayWithStore(
 		return fmt.Errorf("q gateway: initialize: %w", err)
 	}
 	defer instance.Close()
+	usageRecorder := usagelog.New(providerStore.Dir)
+	defer usageRecorder.Close()
 
 	server := &http.Server{
 		Handler: authenticator.OptionalHandler(providerhost.ModelGroupHandler(
-			instance.Handler(), config.Store{Dir: providerStore.Dir},
+			providerhost.UsageTrackingHandler(usageRecorder, instance.Handler()),
+			config.Store{Dir: providerStore.Dir},
 		)),
 		ReadHeaderTimeout: 10 * time.Second,
 	}

@@ -11,10 +11,12 @@ q usage
 service가 없으면 현재 process가 leader가 되어 Ctrl-C까지 SQLite와 dashboard를
 소유하고, 있으면 같은 service에 연결한다.
 
-대상은 main loop, ACP, Q 내부 subagent, Thinker, Librarian, commit agent와 embedding
-호출이다. `codex`, `lms`, `ollama`, `grok` 같은 provider를 이름으로 분기하지 않고
-OpenAI 호환 응답으로 들어오는 동일한 `usage` 계약을 사용한다. Q 밖에서 실행되는
-external agent의 내부 호출은 Q가 provider 응답을 소유하지 않으므로 기록하지 않는다.
+대상은 main loop, ACP, Q 내부 subagent, Thinker, Librarian, commit agent, embedding
+호출과 managed/standalone Q Gateway를 통과한 호출이다. `codex`, `lms`, `ollama`,
+`grok` 같은 provider를 이름으로 분기하지 않고 OpenAI 호환 응답으로 들어오는 동일한
+`usage` 계약을 사용한다. Q 밖에서 실행되는 external agent도 `q gateway start`를
+provider endpoint로 사용하면 Gateway가 관측한 usage가 기록된다. Q Gateway를 거치지
+않는 외부 호출은 Q가 provider 응답을 소유하지 않으므로 기록하지 않는다.
 
 ## 기록 계약
 
@@ -22,10 +24,10 @@ external agent의 내부 호출은 Q가 provider 응답을 소유하지 않으�
 
 | 필드 | 의미 |
 | --- | --- |
-| `event_id` | transport retry에서 재사용하는 random idempotency ID |
+| `event_id` | Gateway 우선 기록과 client fallback이 공유하는 random idempotency ID |
 | `at` | 응답을 관측한 UTC 시각 |
 | `model` | 응답 model, 없으면 요청 model |
-| `role` | `main`, `planner`, `executor`, `griller`, `scout`, `coder`, `thinker`, `librarian`, `commit`, `embedding` 또는 `unknown` |
+| `role` | bounded Q role. 예: `main`, `planner`, `executor`, `scout`, `embedding`, `gateway`, `unknown` |
 | `prompt_tokens` | 입력 token 수 |
 | `completion_tokens` | 출력 token 수. embedding은 `0` |
 | `total_tokens` | 전체 token 수 |
@@ -40,6 +42,20 @@ token 호출도 본문을 복사하지 않으므로 정수 count를 가진 event
 정상 chat 응답과 생성된 뒤 종료되거나 닫힌 stream은 각각 한 번 기록한다. 빈 stream도
 prompt 추정값을 남기므로 상위 retry가 버린 호출을 확인할 수 있다. HTTP 단계에서
 거절되어 model 응답 자체가 없는 호출은 기록하지 않는다.
+
+## Gateway 귀속
+
+Q가 관리하는 model client는 trusted Q Gateway를 호출할 때만
+`X-Q-Usage-Event-ID`와 `X-Q-Usage-Role`을 보낸다. Gateway는 두 값을 검증한 뒤
+provider handler 전에 제거하며, provider가 보고한 usage를 downstream에 쓰기 전에
+같은 event ID로 기록한다. 기존 client Recorder는 같은 ID를 사용하는 fallback이므로
+두 process가 모두 기록해도 SQLite unique constraint에 의해 한 호출로 집계된다.
+
+metadata가 없는 standalone Gateway 호출에는 새 event ID와 `gateway` role이
+배정된다. caller가 보낸 role은 최대 64자의 lowercase ASCII 문자, 숫자, `_`, `-`로
+정규화된다. 이 role은 bounded 운영 분류이지 인증된 사용자 identity나 과금 권한이
+아니다. 정확한 header 및 실패 계약은
+[`gateway-usage-attribution-plan.md`](gateway-usage-attribution-plan.md)를 참고한다.
 
 ## 원격값과 추정값
 
@@ -66,5 +82,7 @@ idempotent하게 import하지만 자동 삭제하지 않는다.
 
 recording에는 최대 250ms deadline이 있고 실패는 model call의 결과를 바꾸지 않는다.
 service가 내려갔거나 leader가 교체된 경우 Recorder는 stable event ID로 한 번 다시
-연결을 시도한다. 자세한 storage, archive recovery, API와 dashboard 계약은
+연결을 시도한다. Gateway가 기록하지 못한 Q-owned 호출은 client fallback이 채울 수
+있지만 외부 client만 존재하는 호출은 이 diagnostic event를 잃을 수 있다. 자세한
+storage, archive recovery, API와 dashboard 계약은
 [`model-usage-dashboard.md`](model-usage-dashboard.md)를 참고한다.

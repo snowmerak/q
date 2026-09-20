@@ -15,8 +15,10 @@ import (
 	"time"
 
 	"github.com/snowmerak/llm-provider/gateway"
+	"github.com/snowmerak/q/client"
 	"github.com/snowmerak/q/gatewayconfig"
 	"github.com/snowmerak/q/providerhost"
+	"github.com/snowmerak/q/usagelog"
 )
 
 func TestParseGatewayOptions(t *testing.T) {
@@ -91,18 +93,31 @@ func TestParseGatewayOptionsRejectsInvalidValues(t *testing.T) {
 
 func TestRunGatewayWithStoreServesConfiguredProviders(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		if request.URL.Path != "/v1/models" {
+		switch request.URL.Path {
+		case "/v1/models":
+			_ = json.NewEncoder(writer).Encode(map[string]any{
+				"object": "list",
+				"data":   []map[string]any{{"id": "test-model", "object": "model"}},
+			})
+		case "/v1/chat/completions":
+			writer.Header().Set("Content-Type", "application/json")
+			_, _ = io.WriteString(writer, `{
+				"model":"test-model",
+				"choices":[{"index":0,"message":{"role":"assistant","content":"ok"}}],
+				"usage":{"prompt_tokens":11,"completion_tokens":2,"total_tokens":13}
+			}`)
+		default:
 			http.NotFound(writer, request)
-			return
 		}
-		_ = json.NewEncoder(writer).Encode(map[string]any{
-			"object": "list",
-			"data":   []map[string]any{{"id": "test-model", "object": "model"}},
-		})
 	}))
 	defer upstream.Close()
 
 	directory := t.TempDir()
+	if err := (usagelog.ConfigStore{Dir: directory}).Save(usagelog.Config{
+		Version: usagelog.ConfigVersion, Host: "127.0.0.1", Port: availableUsagePort(t),
+	}); err != nil {
+		t.Fatal(err)
+	}
 	providerStore := providerhost.Store{Dir: directory}
 	if err := providerStore.Save(gateway.Config{Providers: []gateway.ProviderConfig{{
 		ID: "local", Type: "openai-compatible", Enabled: true, BaseURL: upstream.URL + "/v1",
@@ -178,6 +193,30 @@ func TestRunGatewayWithStoreServesConfiguredProviders(t *testing.T) {
 	}
 	_ = response.Body.Close()
 
+	eventID := strings.Repeat("c", 32)
+	request, err = http.NewRequest(http.MethodPost, endpoint+"/chat/completions", strings.NewReader(
+		`{"model":"local/test-model","messages":[{"role":"user","content":"hello"}]}`,
+	))
+	if err != nil {
+		cancel()
+		t.Fatal(err)
+	}
+	request.Header.Set("Authorization", "Bearer "+generated.Secret)
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set(client.UsageEventIDHeader, eventID)
+	request.Header.Set(client.UsageRoleHeader, "Planner")
+	response, err = http.DefaultClient.Do(request)
+	if err != nil {
+		cancel()
+		t.Fatal(err)
+	}
+	_, readErr := io.Copy(io.Discard, response.Body)
+	_ = response.Body.Close()
+	if readErr != nil || response.StatusCode != http.StatusOK {
+		cancel()
+		t.Fatalf("chat status=%d readErr=%v", response.StatusCode, readErr)
+	}
+
 	if _, err := settingsStore.RevokeAPIKey(settings, generated.Record.ID, time.Now()); err != nil {
 		cancel()
 		t.Fatal(err)
@@ -208,6 +247,22 @@ func TestRunGatewayWithStoreServesConfiguredProviders(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("gateway did not stop after cancellation")
+	}
+
+	usageStore, err := usagelog.OpenStore(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer usageStore.Close()
+	view, err := usageStore.Query(t.Context(), usagelog.Filter{
+		From: time.Now().Add(-time.Hour), To: time.Now().Add(time.Hour),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if view.Totals.Calls != 1 || view.Totals.TotalTokens != 13 || len(view.Models) != 1 ||
+		view.Models[0].Name != "local/test-model" || len(view.Roles) != 1 || view.Roles[0].Name != "planner" {
+		t.Fatalf("standalone Gateway usage = %#v", view)
 	}
 }
 

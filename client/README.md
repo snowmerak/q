@@ -26,3 +26,9 @@ response, err := c.Chat(ctx, client.ChatRequest{
 When `BaseURL` and `APIKey` are empty, the underlying provider uses
 `OPENAI_BASE_URL`, `OPENAI_API_KEY`, and its standard endpoint defaults. Set
 `DisableAPIKey` for a local server that must not receive an environment key.
+
+When this client targets a trusted Q Gateway, `ForwardUsageMetadata` sends the
+bounded role from `WithUsageRole` and a per-call event ID. The Gateway consumes
+these headers for `q usage`, removes them before provider dispatch, and uses the
+event ID to deduplicate its record from an optional client-side
+`UsageRecorder`. Leave this option disabled for direct provider endpoints.

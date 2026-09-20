@@ -269,7 +269,8 @@ An ordinary q session supervises a managed Gateway child bound to an ephemeral
 loopback port. `/gateway` edits providers and starts a replacement before it
 activates new settings, so a failed replacement does not discard the running
 configuration. The standalone `q gateway start` command is a separate,
-user-addressable server with its own listener and API-key settings.
+user-addressable server with its own listener and API-key settings. Both forms
+record provider-reported token usage in the user-level `q usage` service.
 
 `/model` assigns a model to the main chat and specialized roles such as
 `griller`, `scout`, `planner`, `executor`, `coder`, `commit`, `thinker`, and `librarian`.
@@ -645,6 +646,10 @@ requests without bearer authentication.
 The standalone Gateway initially binds to `127.0.0.1:0`. If it has no active
 API keys, authentication is disabled. Do not expose a no-key Gateway on a
 non-loopback address unless the surrounding network already enforces access.
+Calls without Q usage metadata appear under the bounded `gateway` role. A Q
+client can opt in to role/event-ID forwarding; those headers are telemetry
+classification, not authenticated caller identity, and the Gateway removes
+them before provider dispatch.
 
 The standalone Remote host also defaults to `127.0.0.1:0`, but uses an
 independent keyring because a Remote key can select any working directory the
@@ -769,4 +774,5 @@ publishing the fork.
 - [Workspace instructions](docs/workspace-instructions.md)
 - [LSP integration](docs/lsp.md)
 - [Model token usage tracing](docs/model-usage-tracing.md)
+- [Gateway usage attribution](docs/gateway-usage-attribution-plan.md)
 - [Model Usage storage and dashboard](docs/model-usage-dashboard.md)

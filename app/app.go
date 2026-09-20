@@ -66,10 +66,11 @@ func managedClientFactory(runtime providerRuntime, recorder client.UsageRecorder
 			return nil, errors.New("internal LLM Gateway API key is unavailable")
 		}
 		return client.New(client.Config{
-			BaseURL:       endpoint,
-			APIKey:        apiKey,
-			DefaultModel:  value.Provider.Model,
-			UsageRecorder: recorder,
+			BaseURL:              endpoint,
+			APIKey:               apiKey,
+			DefaultModel:         value.Provider.Model,
+			UsageRecorder:        recorder,
+			ForwardUsageMetadata: true,
 		})
 	}
 }

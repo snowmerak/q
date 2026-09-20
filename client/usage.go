@@ -14,9 +14,18 @@ import (
 	"time"
 )
 
-const UsageRoleUnknown = "unknown"
+const (
+	UsageRoleUnknown = "unknown"
+	UsageRoleGateway = "gateway"
+
+	// UsageEventIDHeader and UsageRoleHeader carry Q usage attribution to a
+	// trusted Q Gateway. They are telemetry metadata, not authorization claims.
+	UsageEventIDHeader = "X-Q-Usage-Event-ID"
+	UsageRoleHeader    = "X-Q-Usage-Role"
+)
 
 type usageRoleContextKey struct{}
+type usageEventIDContextKey struct{}
 
 var usageIDFallback atomic.Uint64
 
@@ -44,7 +53,7 @@ func WithUsageRole(ctx context.Context, role string) context.Context {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	return context.WithValue(ctx, usageRoleContextKey{}, normalizeUsageRole(role))
+	return context.WithValue(ctx, usageRoleContextKey{}, NormalizeUsageRole(role))
 }
 
 func usageRole(ctx context.Context) string {
@@ -52,7 +61,28 @@ func usageRole(ctx context.Context) string {
 		return UsageRoleUnknown
 	}
 	role, _ := ctx.Value(usageRoleContextKey{}).(string)
-	return normalizeUsageRole(role)
+	return NormalizeUsageRole(role)
+}
+
+func withUsageEventID(ctx context.Context, eventID string) context.Context {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if !ValidUsageEventID(eventID) {
+		return ctx
+	}
+	return context.WithValue(ctx, usageEventIDContextKey{}, eventID)
+}
+
+func usageEventID(ctx context.Context) string {
+	if ctx == nil {
+		return ""
+	}
+	eventID, _ := ctx.Value(usageEventIDContextKey{}).(string)
+	if !ValidUsageEventID(eventID) {
+		return ""
+	}
+	return eventID
 }
 
 // UsageRecorder receives token-only records after provider responses. Recorder
@@ -70,6 +100,9 @@ func (c *Client) recordChatUsage(ctx context.Context, request ChatRequest, respo
 		model = strings.TrimSpace(request.Model)
 	}
 	record := normalizedUsageRecord(model, usage, estimateRequestTokens(request), completionEstimate)
+	if eventID := usageEventID(ctx); eventID != "" {
+		record.EventID = eventID
+	}
 	record.Role = usageRole(ctx)
 	_ = c.usageRecorder.RecordUsage(record)
 }
@@ -87,6 +120,9 @@ func (c *Client) recordEmbeddingUsage(ctx context.Context, request EmbeddingRequ
 		TotalTokens:  response.Usage.TotalTokens,
 	}
 	record := normalizedUsageRecord(model, reported, estimateEmbeddingTokens(request.Input), 0)
+	if eventID := usageEventID(ctx); eventID != "" {
+		record.EventID = eventID
+	}
 	record.Role = usageRole(ctx)
 	if record.Role == UsageRoleUnknown {
 		record.Role = "embedding"
@@ -96,7 +132,7 @@ func (c *Client) recordEmbeddingUsage(ctx context.Context, request EmbeddingRequ
 
 func normalizedUsageRecord(model string, reported Usage, promptEstimate, completionEstimate int) UsageRecord {
 	record := UsageRecord{
-		EventID: newUsageEventID(), At: time.Now().UTC(), Model: strings.TrimSpace(model), Role: UsageRoleUnknown,
+		EventID: NewUsageEventID(), At: time.Now().UTC(), Model: strings.TrimSpace(model), Role: UsageRoleUnknown,
 	}
 	record.PromptTokens = max(0, reported.PromptTokens)
 	if record.PromptTokens == 0 {
@@ -171,6 +207,7 @@ type usageStream struct {
 	usage           Usage
 	completionBytes int
 	role            string
+	eventID         string
 	once            sync.Once
 }
 
@@ -238,11 +275,14 @@ func (s *usageStream) finish() {
 			completionEstimate = int(math.Ceil(float64(s.completionBytes)/3.0)) + 4
 		}
 		ctx := WithUsageRole(context.Background(), s.role)
+		ctx = withUsageEventID(ctx, s.eventID)
 		s.client.recordChatUsage(ctx, s.request, model, s.usage, completionEstimate)
 	})
 }
 
-func normalizeUsageRole(role string) string {
+// NormalizeUsageRole returns a bounded low-cardinality role suitable for Q's
+// usage dimension. Invalid values become UsageRoleUnknown.
+func NormalizeUsageRole(role string) string {
 	role = strings.TrimSpace(strings.ToLower(role))
 	if role == "" || len(role) > 64 {
 		return UsageRoleUnknown
@@ -255,12 +295,23 @@ func normalizeUsageRole(role string) string {
 	return role
 }
 
-func newUsageEventID() string {
+// NewUsageEventID returns a random lowercase hexadecimal idempotency ID.
+func NewUsageEventID() string {
 	var value [16]byte
 	if _, err := rand.Read(value[:]); err == nil {
 		return hex.EncodeToString(value[:])
 	}
 	return fmt.Sprintf("%016x%016x", time.Now().UTC().UnixNano(), usageIDFallback.Add(1))
+}
+
+// ValidUsageEventID reports whether value is a supported lowercase
+// hexadecimal usage event ID.
+func ValidUsageEventID(value string) bool {
+	if value == "" || value != strings.ToLower(value) {
+		return false
+	}
+	decoded, err := hex.DecodeString(value)
+	return err == nil && (len(decoded) == 16 || len(decoded) == 32)
 }
 
 var _ Stream = (*usageStream)(nil)

@@ -12,6 +12,7 @@ import (
 
 	"github.com/snowmerak/llm-provider/gateway"
 	qconfig "github.com/snowmerak/q/config"
+	"github.com/snowmerak/q/usagelog"
 )
 
 const ChildCommand = "__gateway-child"
@@ -39,10 +40,13 @@ func RunChild(ctx context.Context, configPath, apiKey string, ready func(ReadyMe
 		return err
 	}
 	defer instance.Close()
+	configDir := filepath.Dir(filepath.Dir(configPath))
+	usageRecorder := usagelog.New(configDir)
+	defer usageRecorder.Close()
 
 	server := &http.Server{
 		Handler: AuthenticatedHandler(apiKey, ModelGroupHandler(
-			instance.Handler(), qconfig.Store{Dir: filepath.Dir(filepath.Dir(configPath))},
+			UsageTrackingHandler(usageRecorder, instance.Handler()), qconfig.Store{Dir: configDir},
 		)),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
