@@ -1499,6 +1499,11 @@ func (a *acpAgent) runAgentTurn(ctx context.Context, history []client.Message) (
 	if err != nil {
 		return acp.PromptResponse{}, err
 	}
+	var diffRuntime *acpFileDiffRuntime
+	if toolRuntime != nil {
+		diffRuntime = newACPFileDiffRuntime(toolRuntime, a.root)
+		toolRuntime = diffRuntime
+	}
 	_, capabilities := a.connectionState()
 	persistent := capabilities.Elicitation == nil || capabilities.Elicitation.Form == nil
 	workflowCtx := ctx
@@ -1519,7 +1524,7 @@ func (a *acpAgent) runAgentTurn(ctx context.Context, history []client.Message) (
 	}, events)
 
 	streamedResponse := ""
-	return a.continueACPAgentTurn(ctx, workflowCtx, cancelWorkflow, persistent, events, &streamedResponse)
+	return a.continueACPAgentTurn(ctx, workflowCtx, cancelWorkflow, persistent, events, &streamedResponse, diffRuntime)
 }
 
 func (a *acpAgent) continueACPAgentTurn(
@@ -1529,6 +1534,7 @@ func (a *acpAgent) continueACPAgentTurn(
 	persistent bool,
 	events <-chan agentEvent,
 	streamedResponse *string,
+	diffRuntime *acpFileDiffRuntime,
 ) (response acp.PromptResponse, runErr error) {
 	suspended := false
 	stopPromptCancel := func() bool { return true }
@@ -1615,7 +1621,7 @@ func (a *acpAgent) continueACPAgentTurn(
 					true,
 					func(nextCtx context.Context) (acp.PromptResponse, error) {
 						return a.continueACPAgentTurn(
-							nextCtx, workflowCtx, cancelWorkflow, true, events, streamedResponse,
+							nextCtx, workflowCtx, cancelWorkflow, true, events, streamedResponse, diffRuntime,
 						)
 					},
 					func() error {
@@ -1641,7 +1647,11 @@ func (a *acpAgent) continueACPAgentTurn(
 				} else {
 					a.state.archiveMessage(message, sessionstore.StatusSucceeded, false)
 				}
-				if err := a.finishToolCall(message, event.toolIsError); err != nil {
+				var diffs []acp.ToolCallContent
+				if diffRuntime != nil {
+					diffs = diffRuntime.take(message.ToolCallID)
+				}
+				if err := a.finishToolCallDiffContext(a.state.ctx, message, event.toolIsError, diffs); err != nil {
 					return acp.PromptResponse{}, err
 				}
 				*streamedResponse = ""
@@ -1804,14 +1814,21 @@ func (a *acpAgent) finishToolCall(message client.Message, failed bool) error {
 }
 
 func (a *acpAgent) finishToolCallContext(ctx context.Context, message client.Message, failed bool) error {
+	return a.finishToolCallDiffContext(ctx, message, failed, nil)
+}
+
+func (a *acpAgent) finishToolCallDiffContext(ctx context.Context, message client.Message, failed bool, diffs []acp.ToolCallContent) error {
 	status := acp.ToolCallStatusCompleted
 	if failed {
 		status = acp.ToolCallStatusFailed
 	}
+	content := make([]acp.ToolCallContent, 0, 1+len(diffs))
+	content = append(content, acp.ToolContent(acp.TextBlock(message.Content)))
+	content = append(content, diffs...)
 	return a.updateContext(ctx, acp.UpdateToolCall(
 		acp.ToolCallId(message.ToolCallID),
 		acp.WithUpdateStatus(status),
-		acp.WithUpdateContent([]acp.ToolCallContent{acp.ToolContent(acp.TextBlock(message.Content))}),
+		acp.WithUpdateContent(content),
 		acp.WithUpdateRawOutput(decodeJSONValue(message.Content)),
 	))
 }
