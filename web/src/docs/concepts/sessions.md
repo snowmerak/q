@@ -15,7 +15,7 @@ toc:
 
 ## Durable sessions
 
-Each workspace can hold multiple UUID-based sessions under `.q/sessions/`. The startup picker shows their titles and recent activity.
+Each workspace can hold multiple UUID-based sessions under `.q/sessions/`. The startup picker shows their titles and recent activity. Press `d` on an inactive session and `y` to delete it; `n` or Esc cancels. The current session and sessions open in another process cannot be deleted. Deletion removes the conversation and resumable plan checkpoint, but preserves durable Workspace Memory archive records.
 
 One process owns a selected session. Another q process may open a different session in the same workspace, but session locks do not serialize edits to the repository itself.
 

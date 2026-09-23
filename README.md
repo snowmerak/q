@@ -452,9 +452,14 @@ to Reviewer, and passes retry feedback back to Coder without holding workspace m
 ## Sessions, history, and learning
 
 Each workspace can hold multiple UUID-based sessions. The startup picker shows
-their titles and recent activity. One process owns a selected session, while a
-different session in the same workspace may be opened concurrently. Session
-locks coordinate conversation state; they do not serialize edits to project
+their titles and recent activity. Press `d` on a selected inactive session, then `y`
+to delete it (`n` or Esc cancels). The current session and sessions owned by
+another process cannot be deleted. Deletion removes the conversation projection
+and resumable checkpoint, but leaves durable Workspace Memory archive records.
+
+One process owns a selected session, while a different session in the same
+workspace may be opened concurrently. Session locks coordinate conversation
+state; they do not serialize edits to project
 files.
 
 The current transcript and the compacted request context are persisted

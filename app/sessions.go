@@ -38,6 +38,7 @@ func (m model) enterSessions() (tea.Model, tea.Cmd) {
 		m.status = err.Error()
 		return m, m.input.Focus()
 	}
+	m.sessionDeleteID = ""
 	m.screen = screenSessions
 	m.status = ""
 	m.input.Blur()
@@ -67,6 +68,16 @@ func (m *model) refreshSessions() error {
 }
 
 func (m model) updateSessions(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	if m.sessionDeleteID != "" {
+		switch key.String() {
+		case "y":
+			return m.deleteSelectedSession()
+		case "n", "esc":
+			m.sessionDeleteID = ""
+			m.status = "Session deletion cancelled"
+		}
+		return m, nil
+	}
 	switch key.String() {
 	case "up", "k", "shift+tab":
 		if m.sessionCursor > 0 {
@@ -85,6 +96,8 @@ func (m model) updateSessions(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.status = "Session list refreshed"
 		}
 		return m, nil
+	case "d", "delete":
+		return m.requestSessionDeletion()
 	case "n":
 		return m.createSessionFromPicker()
 	case "enter", " ":
@@ -102,6 +115,46 @@ func (m model) updateSessions(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, tea.Quit
 	}
+	return m, nil
+}
+
+func (m model) requestSessionDeletion() (tea.Model, tea.Cmd) {
+	if m.workspaceStore == nil || len(m.sessions) == 0 {
+		return m, nil
+	}
+	entry := m.sessions[m.sessionCursor]
+	if entry.Store.SessionID == m.workspaceStore.SessionID {
+		m.status = "Current session cannot be deleted while open; switch to another session first"
+		return m, nil
+	}
+	m.sessionDeleteID = entry.Store.SessionID
+	m.status = ""
+	return m, nil
+}
+
+func (m model) deleteSelectedSession() (tea.Model, tea.Cmd) {
+	sessionID := m.sessionDeleteID
+	m.sessionDeleteID = ""
+	if m.workspaceStore == nil || sessionID == "" {
+		return m, nil
+	}
+	if sessionID == m.workspaceStore.SessionID {
+		m.status = "Current session cannot be deleted while open; switch to another session first"
+		return m, nil
+	}
+	if err := workspace.DeleteSession(m.workspaceStore.Root, sessionID, "q session picker"); err != nil {
+		if errors.Is(err, workspace.ErrLocked) {
+			m.status = "Session is open in another q process"
+		} else {
+			m.status = err.Error()
+		}
+		return m, nil
+	}
+	if err := m.refreshSessions(); err != nil {
+		m.status = "Session deleted, but could not refresh list: " + err.Error()
+		return m, nil
+	}
+	m.status = "Session deleted · " + shortSessionID(sessionID)
 	return m, nil
 }
 
@@ -153,6 +206,7 @@ func (m model) activatePickedSession(store workspace.Store, lock *workspace.Lock
 	previousLock := m.workspaceLock
 	m.workspaceStore = &store
 	m.workspaceLock = lock
+	m.sessionDeleteID = ""
 	m.sessionPickerRequired = false
 	m.workspaceRestored = false
 
@@ -252,9 +306,18 @@ func (m model) viewSessions() string {
 		body.WriteString(subtleStyle.Render(ansi.Truncate(status, max(20, m.width-8), "…")))
 	}
 	body.WriteString("\n\n")
-	footer := "↑/↓ select · enter resume · n new · r refresh · esc quit · ctrl+h help"
+	footer := "↑/↓ select · enter resume · n new · d delete · r refresh · esc quit · ctrl+h help"
 	if m.workspaceStore != nil && m.workspaceStore.SessionID != "" && m.client != nil {
-		footer = "↑/↓ select · enter resume · n new · r refresh · esc back · ctrl+h help"
+		footer = "↑/↓ select · enter resume · n new · d delete · r refresh · esc back · ctrl+h help"
+	}
+	if m.sessionDeleteID != "" {
+		footer = "y delete · n/esc cancel · " + shortSessionID(m.sessionDeleteID)
+		for _, entry := range m.sessions {
+			if entry.Store.SessionID == m.sessionDeleteID {
+				footer += " · " + sessionDisplayTitle(entry.Title)
+				break
+			}
+		}
 	}
 	body.WriteString(helpStyle.Render(ansi.Truncate(footer, contentWidth, "…")))
 	return frameStyle.Width(viewWidth).Render(body.String())

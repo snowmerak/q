@@ -182,6 +182,7 @@ type model struct {
 	workspaceLock             *workspace.Lock
 	sessions                  []workspace.SessionEntry
 	sessionCursor             int
+	sessionDeleteID           string
 	sessionPickerRequired     bool
 	workspaceRestored         bool
 	workspaceModel            workspace.ModelConfig

@@ -291,6 +291,125 @@ func TestSessionWindowKeepsCursorVisible(t *testing.T) {
 	if height := lipgloss.Height(ansi.Strip(m.View().Content)); height > m.height {
 		t.Fatalf("minimum-size picker height = %d, terminal height = %d\n%s", height, m.height, ansi.Strip(m.View().Content))
 	}
+	m.sessionDeleteID = m.sessions[m.sessionCursor].Store.SessionID
+	view := ansi.Strip(m.View().Content)
+	if height := lipgloss.Height(view); height > m.height {
+		t.Fatalf("minimum-size confirmation height = %d, terminal height = %d\n%s", height, m.height, view)
+	}
+	if !strings.Contains(view, "y delete") || !strings.Contains(view, "n/esc cancel") {
+		t.Fatalf("minimum-size confirmation controls are not visible:\n%s", view)
+	}
+}
+
+func TestSessionPickerDeletesSelectedSessionOnlyAfterConfirmation(t *testing.T) {
+	root := t.TempDir()
+	older := savePickerSession(t, root, "older", "Keep this", time.Now().Add(-time.Hour))
+	selected := savePickerSession(t, root, "selected", "Delete this", time.Now())
+	m := newModel(context.Background(), config.Store{Dir: t.TempDir()}, nil)
+	m.workspaceStore = &workspace.Store{Root: root}
+	m.screen = screenSessions
+	m.sessions = []workspace.SessionEntry{selected, older}
+	m.resize(90, 24)
+
+	updated, _ := m.updateSessions(tea.KeyPressMsg{Code: 'd', Text: "d"})
+	m = updated.(model)
+	if m.sessionDeleteID != selected.Store.SessionID {
+		t.Fatalf("delete target = %q, want %q", m.sessionDeleteID, selected.Store.SessionID)
+	}
+	if _, err := selected.Store.Load(); err != nil {
+		t.Fatalf("session deleted before confirmation: %v", err)
+	}
+	if view := ansi.Strip(m.View().Content); !strings.Contains(view, "y delete") || !strings.Contains(view, "n/esc cancel") {
+		t.Fatalf("delete confirmation missing from picker:\n%s", view)
+	}
+	updated, _ = m.updateSessions(tea.KeyPressMsg{Code: tea.KeyDown})
+	m = updated.(model)
+	if m.sessionCursor != 0 || m.sessionDeleteID != selected.Store.SessionID {
+		t.Fatalf("confirmation allowed cursor movement: cursor %d target %q", m.sessionCursor, m.sessionDeleteID)
+	}
+	updated, _ = m.updateSessions(tea.KeyPressMsg{Code: tea.KeyEsc})
+	m = updated.(model)
+	if m.sessionDeleteID != "" || m.screen != screenSessions {
+		t.Fatalf("escape did not cancel confirmation: target %q screen %v", m.sessionDeleteID, m.screen)
+	}
+	if _, err := selected.Store.Load(); err != nil {
+		t.Fatalf("cancelled deletion removed session: %v", err)
+	}
+
+	updated, _ = m.updateSessions(tea.KeyPressMsg{Code: 'd', Text: "d"})
+	m = updated.(model)
+	updated, _ = m.updateSessions(tea.KeyPressMsg{Code: 'n', Text: "n"})
+	m = updated.(model)
+	if m.sessionDeleteID != "" || len(m.sessions) != 2 {
+		t.Fatalf("n did not cancel deletion: target %q sessions %#v", m.sessionDeleteID, m.sessions)
+	}
+
+	updated, _ = m.updateSessions(tea.KeyPressMsg{Code: 'd', Text: "d"})
+	m = updated.(model)
+	updated, _ = m.updateSessions(tea.KeyPressMsg{Code: 'y', Text: "y"})
+	m = updated.(model)
+	if m.sessionDeleteID != "" || len(m.sessions) != 1 || m.sessions[0].Store.SessionID != older.Store.SessionID {
+		t.Fatalf("picker after deletion: target %q sessions %#v", m.sessionDeleteID, m.sessions)
+	}
+	if _, err := selected.Store.Load(); !errors.Is(err, workspace.ErrNotFound) {
+		t.Fatalf("deleted session load = %v", err)
+	}
+	if _, err := older.Store.Load(); err != nil {
+		t.Fatalf("other session was affected: %v", err)
+	}
+}
+
+func TestSessionPickerDoesNotDeleteLockedSession(t *testing.T) {
+	root := t.TempDir()
+	store, lock, err := workspace.CreateSession(root, "other process")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lock.Close()
+	entries, err := (workspace.Store{Root: root}).ListSessions()
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := newModel(context.Background(), config.Store{Dir: t.TempDir()}, nil)
+	m.workspaceStore = &workspace.Store{Root: root}
+	m.screen = screenSessions
+	m.sessions = entries
+	updated, _ := m.updateSessions(tea.KeyPressMsg{Code: 'd', Text: "d"})
+	m = updated.(model)
+	updated, _ = m.updateSessions(tea.KeyPressMsg{Code: 'y', Text: "y"})
+	m = updated.(model)
+	if !strings.Contains(m.status, "another q process") || m.sessionDeleteID != "" {
+		t.Fatalf("locked deletion state = status %q target %q", m.status, m.sessionDeleteID)
+	}
+	if _, err := store.Load(); err != nil {
+		t.Fatalf("locked session was deleted: %v", err)
+	}
+}
+
+func TestSessionPickerDoesNotDeleteCurrentSession(t *testing.T) {
+	root := t.TempDir()
+	store, lock, err := workspace.CreateSession(root, "current")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lock.Close()
+	entries, err := (workspace.Store{Root: root}).ListSessions()
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := newModel(context.Background(), config.Store{Dir: t.TempDir()}, nil)
+	m.workspaceStore = &store
+	m.workspaceLock = lock
+	m.screen = screenSessions
+	m.sessions = entries
+	updated, _ := m.updateSessions(tea.KeyPressMsg{Code: 'd', Text: "d"})
+	m = updated.(model)
+	if m.sessionDeleteID != "" || !strings.Contains(m.status, "Current session cannot be deleted") {
+		t.Fatalf("current deletion state = target %q status %q", m.sessionDeleteID, m.status)
+	}
+	if _, err := store.Load(); err != nil {
+		t.Fatalf("current session was deleted: %v", err)
+	}
 }
 
 func savePickerSession(t *testing.T, root, id, title string, updatedAt time.Time) workspace.SessionEntry {

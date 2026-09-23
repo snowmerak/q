@@ -234,6 +234,7 @@ func renderHelpContent(dark bool, commandSets ...[]slashCommand) string {
 		{"↑/↓ or j/k", "Move through saved workspace sessions."},
 		{"enter", "Resume the selected session."},
 		{"n", "Create and enter a new session."},
+		{"d / delete", "Delete the selected inactive session after y confirmation (n/Esc cancels)."},
 		{"r", "Refresh titles and recent activity."},
 		{"esc", "Return to chat, or quit from the startup picker."},
 	})
