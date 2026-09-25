@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+
+	"github.com/snowmerak/q/internal/fsreplace"
 )
 
 const (
@@ -71,7 +73,7 @@ func (s Store) SaveIgnore(content string) error {
 	if err := file.Close(); err != nil {
 		return fmt.Errorf("workspace: close temporary %s: %w", IgnoreFileName, err)
 	}
-	if err := replaceFile(temporaryPath, s.IgnorePath()); err != nil {
+	if err := fsreplace.Replace(temporaryPath, s.IgnorePath()); err != nil {
 		return fmt.Errorf("workspace: replace %s: %w", s.IgnorePath(), err)
 	}
 	keep = true

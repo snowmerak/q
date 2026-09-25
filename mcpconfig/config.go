@@ -16,6 +16,7 @@ import (
 	"strings"
 
 	"github.com/snowmerak/q/config"
+	"github.com/snowmerak/q/internal/fsreplace"
 )
 
 const (
@@ -281,7 +282,7 @@ func (s Store) Save(value Config) error {
 	if err := temporary.Close(); err != nil {
 		return err
 	}
-	if err := replaceFile(temporaryPath, s.Path()); err != nil {
+	if err := fsreplace.Replace(temporaryPath, s.Path()); err != nil {
 		return fmt.Errorf("mcpconfig: replace %s: %w", s.Path(), err)
 	}
 	keep = true

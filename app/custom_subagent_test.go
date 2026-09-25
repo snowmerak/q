@@ -14,7 +14,7 @@ import (
 func TestCustomUsesSessionMCPCatalog(t *testing.T) {
 	tool := client.Tool{Type: client.ToolTypeFunction, Function: client.FunctionDefinition{Name: "mcp_docs__read"}}
 	base := &roleCatalogTools{toolsByRole: map[string][]client.Tool{"default": {tool}}}
-	m := model{toolRuntime: base}
+	m := model{hostState: hostState{toolRuntime: base}}
 	p := subagent.Profile{Version: 1, Name: "reader", Role: "scout", SystemPrompt: "Read", Tools: []string{tool.Function.Name}}
 	selected, err := subagent.SelectCustomTools(p, m.customTools())
 	if err != nil || len(selected) != 1 {

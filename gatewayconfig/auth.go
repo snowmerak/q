@@ -5,6 +5,8 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+
+	"github.com/snowmerak/q/internal/authkey"
 )
 
 type Authenticator struct {
@@ -51,13 +53,7 @@ func activeAPIKeys(value Config) (map[string]APIKey, error) {
 	if err := value.Validate(); err != nil {
 		return nil, err
 	}
-	keys := make(map[string]APIKey, value.ActiveKeyCount())
-	for _, key := range value.APIKeys {
-		if key.RevokedAt == nil {
-			keys[key.ID] = key
-		}
-	}
-	return keys, nil
+	return authkey.Active(value.APIKeys), nil
 }
 
 func (a *Authenticator) Authorized(authorization string) bool {

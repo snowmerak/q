@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 
 	"github.com/snowmerak/llm-provider/gateway"
+	"github.com/snowmerak/q/internal/fsreplace"
 )
 
 const FileName = "providers.json"
@@ -122,7 +123,7 @@ func (s Store) writeAtomic(path string, body []byte) error {
 	if err := file.Close(); err != nil {
 		return fmt.Errorf("providerhost: close temporary config: %w", err)
 	}
-	if err := replaceFile(temporaryPath, path); err != nil {
+	if err := fsreplace.Replace(temporaryPath, path); err != nil {
 		return fmt.Errorf("providerhost: replace %s: %w", path, err)
 	}
 	keep = true

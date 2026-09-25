@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"io"
+	"net"
 	"net/http"
 	"strings"
 	"sync"
@@ -11,6 +12,8 @@ import (
 	"time"
 
 	"github.com/snowmerak/q/config"
+	qlibrary "github.com/snowmerak/q/library"
+	"github.com/snowmerak/q/workspacememory"
 )
 
 type notifyWriter struct {
@@ -44,6 +47,7 @@ func TestRemoteServiceHealthAndShutdownSmoke(t *testing.T) {
 	diagnostics := newNotifyWriter()
 	done := make(chan error, 1)
 	store := config.Store{Dir: t.TempDir()}
+	configureRemoteTestServices(t, store.Dir)
 	go func() {
 		done <- runRemoteWithStore(ctx, store, output, diagnostics)
 	}()
@@ -88,5 +92,36 @@ func TestRemoteServiceHealthAndShutdownSmoke(t *testing.T) {
 		}
 	case <-time.After(10 * time.Second):
 		t.Fatal("q remote did not shut down")
+	}
+}
+
+func configureRemoteTestServices(t *testing.T, directory string) {
+	t.Helper()
+	listeners := make([]net.Listener, 2)
+	for index := range listeners {
+		listener, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		listeners[index] = listener
+	}
+	ports := []int{
+		listeners[0].Addr().(*net.TCPAddr).Port,
+		listeners[1].Addr().(*net.TCPAddr).Port,
+	}
+	for _, listener := range listeners {
+		if err := listener.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := (qlibrary.ConfigStore{Dir: directory}).Save(qlibrary.Config{
+		Version: qlibrary.ConfigVersion, Host: qlibrary.DefaultHost, Port: ports[0],
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := (workspacememory.ConfigStore{Dir: directory}).Save(workspacememory.Config{
+		Version: workspacememory.ConfigVersion, Host: workspacememory.DefaultHost, Port: ports[1],
+	}); err != nil {
+		t.Fatal(err)
 	}
 }

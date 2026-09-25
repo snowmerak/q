@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+
+	"github.com/snowmerak/q/internal/fsreplace"
 )
 
 const codePath = "E_PATH"
@@ -213,7 +215,7 @@ func atomicWriteFile(path string, body []byte, perm os.FileMode) error {
 	if err := os.Chmod(tempPath, perm); err != nil {
 		return fmt.Errorf("set temporary file mode: %w", err)
 	}
-	if err := replaceFile(tempPath, path); err != nil {
+	if err := fsreplace.Replace(tempPath, path); err != nil {
 		return fmt.Errorf("replace file: %w", err)
 	}
 	keep = true

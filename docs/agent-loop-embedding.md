@@ -1,14 +1,14 @@
 # Embedding Q's Agent Loop in a Go application
 
 Q exposes the same Agent Loop used by its TUI, ACP host, and internal Search/Web
-Tester continuations through `github.com/snowmerak/q/app`. An embedding
+Tester continuations through `github.com/snowmerak/q/agentloop`. An embedding
 application supplies a model client, a workspace-scoped tool runtime, initial
 messages, and an event consumer. The host retains ownership of configuration,
 authorization, persistence, and dependency lifetimes.
 
-The implementation boundary is deliberately narrow: `app.RunAgentLoop` is the
-existing loop, not a second implementation. Do not copy it into another
-package or build a parallel state machine around it.
+`agentloop.RunAgentLoop` owns the single model/tool round implementation.
+`app.RunAgentLoop` remains a compatibility facade for existing callers and
+projects core events into the TUI/ACP event shape.
 
 ## Install and import
 
@@ -25,15 +25,15 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/snowmerak/q/app"
+	"github.com/snowmerak/q/agentloop"
 	"github.com/snowmerak/q/client"
 	"github.com/snowmerak/q/tools"
 )
 ```
 
-Importing `app` also builds its existing TUI dependencies. This is an
-intentional consequence of exposing the current implementation in place; Q
-does not maintain a duplicate lightweight loop package.
+Import `agentloop` for an embedding that does not need Q's Bubble Tea or ACP
+host. It still uses Q's `tools` and `workspace` contracts. Existing callers
+may continue importing `app` without changing their request or event handling.
 
 ## Run a minimal workspace turn
 
@@ -54,7 +54,7 @@ func runTurn(ctx context.Context, root, prompt string) error {
 	}
 	defer toolRuntime.Close()
 
-	messages := app.PrepareWorkspaceMessages(nil, app.WorkspaceMessageOptions{
+	messages := agentloop.PrepareWorkspaceMessages(nil, agentloop.WorkspaceMessageOptions{
 		Root:  root,
 		Tools: toolRuntime,
 	})
@@ -62,8 +62,8 @@ func runTurn(ctx context.Context, root, prompt string) error {
 		Role: client.RoleUser, Content: prompt,
 	})
 
-	events := make(chan app.AgentEvent)
-	go app.RunAgentLoop(ctx, app.AgentLoopRequest{
+	events := make(chan agentloop.Event)
+	go agentloop.RunAgentLoop(ctx, agentloop.Request{
 		Client:           modelClient,
 		Tools:            toolRuntime,
 		Model:            "gpt-5",
@@ -75,7 +75,7 @@ func runTurn(ctx context.Context, root, prompt string) error {
 	for event := range events {
 		if question, answers, ok := event.Question(); ok {
 			fmt.Printf("input unavailable: %s\n", question.Question)
-			answers <- app.AgentAnswer{Err: app.ErrInteractionUnavailable}
+			answers <- agentloop.AgentAnswer{Err: agentloop.ErrInteractionUnavailable}
 		}
 		if call, ok := event.ToolCall(); ok {
 			fmt.Printf("tool: %s\n", call.Function.Name)
@@ -188,18 +188,16 @@ interfaces. Custom adapters implement:
 ```go
 type ChatClient interface {
 	Chat(context.Context, client.ChatRequest) (*client.ChatResponse, error)
-	ListModels(context.Context) ([]client.Model, error)
-	Close() error
 }
 
-type AgentToolRuntime interface {
+type ToolRuntime interface {
 	Tools() []client.Tool
 	Environment() tools.HostEnvironment
 	Call(context.Context, client.ToolCall) (client.ToolResult, error)
 }
 ```
 
-When `AgentLoopRequest.Stream` is true, a client that also implements
+When `Request.Stream` is true, a client that also implements
 `ChatStream(context.Context, client.ChatRequest) (client.Stream, error)` is
 used for streaming. Other clients automatically fall back to `Chat`.
 
@@ -222,14 +220,14 @@ for _, status := range statuses {
 	}
 }
 
-roleTools := app.ScopeTools(toolRuntime, mcpconfig.RoleDefault)
-messages := app.PrepareWorkspaceMessages(nil, app.WorkspaceMessageOptions{
+roleTools := agentloop.ScopeTools(toolRuntime, mcpconfig.RoleDefault)
+messages := agentloop.PrepareWorkspaceMessages(nil, agentloop.WorkspaceMessageOptions{
 	Root: root,
 	Tools: roleTools,
 })
 ```
 
-Pass the same scoped runtime to `AgentLoopRequest.Tools`. `ScopeTools` uses a
+Pass the same scoped runtime to `Request.Tools`. `ScopeTools` uses a
 runtime's `ToolsForRole` catalog when available and rejects calls to tools not
 advertised for that role. The parent runtime owns every MCP session and must
 outlive all scoped views.
@@ -309,8 +307,9 @@ the ID from the terminal response rather than retaining an older value.
 - Run `gofmt`, focused tests, `go test ./...`, and `go vet ./...`.
 - When changing Q's public API, also run `go run ./scripts/modulecheck`.
 
-The public declarations live in [`app/agent_public.go`](../app/agent_public.go),
-the single loop body remains in [`app/model.go`](../app/model.go), and
-[`app/agent_public_test.go`](../app/agent_public_test.go) is the downstream-style
-reference test. The design constraints and implementation record are in the
+The public declarations and single loop body live in
+[`agentloop`](../agentloop). [`agentloop/agentloop_test.go`](../agentloop/agentloop_test.go)
+exercises the API from an external package. [`app/agent_public.go`](../app/agent_public.go)
+and [`app/agent_loop_facade.go`](../app/agent_loop_facade.go) preserve the old
+entry point. The initial API record is in the
 [public API plan](embedded-agent-loop-public-api-plan.md).

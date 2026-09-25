@@ -1332,7 +1332,7 @@ func TestAgentModelSelectionReplacesGroupAndSummaryShowsGroup(t *testing.T) {
 	value.Agents.Roles = map[string]config.AgentConfig{
 		config.AgentRolePlanner: {Group: "heavy", ReasoningEffort: "high"},
 	}
-	summaryModel := model{draftConfig: value}
+	summaryModel := model{modelSettingsState: modelSettingsState{draftConfig: value}}
 	if summary := summaryModel.globalModelSummary(config.AgentRolePlanner); summary != "group/heavy" {
 		t.Fatalf("summary = %q", summary)
 	}
@@ -1342,8 +1342,10 @@ func TestAgentModelSelectionReplacesGroupAndSummaryShowsGroup(t *testing.T) {
 		t.Fatalf("agent = %#v", agent)
 	}
 	m := model{
-		draftConfig: value, modelTarget: config.AgentRolePlanner,
-		models: []client.Model{{ID: "primary"}, {ID: "secondary"}},
+		modelSettingsState: modelSettingsState{
+			draftConfig: value, modelTarget: config.AgentRolePlanner,
+			models: []client.Model{{ID: "primary"}, {ID: "secondary"}},
+		},
 	}
 	choices := m.selectableModels()
 	if len(choices) != 3 || choices[2].ID != "group:heavy" {
@@ -1463,7 +1465,7 @@ func TestModelGroupCatalogKeepsAvailableGroupWithUnknownLimits(t *testing.T) {
 	if contextLength, output := modelGroupLimits(group, models); contextLength != 0 || output != 0 {
 		t.Fatalf("unknown limits must stay unknown, got %d/%d", contextLength, output)
 	}
-	m := model{draftConfig: config.Config{ModelGroups: map[string]config.ModelGroupConfig{"heavy": group}}, models: models}
+	m := model{modelSettingsState: modelSettingsState{draftConfig: config.Config{ModelGroups: map[string]config.ModelGroupConfig{"heavy": group}}, models: models}}
 	m.refreshModelGroupCatalog()
 	found := false
 	for _, model := range m.models {
@@ -3139,18 +3141,18 @@ func TestWorkspaceModelDoesNotOverrideGlobalServiceModels(t *testing.T) {
 	value.Provider.ContextWindow = 16000
 	value.Embedding = config.EmbeddingConfig{Model: "global-embedding", Dimensions: 1536}
 	m := model{
-		config: value,
-		workspaceModel: workspace.ModelConfig{
+		chatState: chatState{config: value},
+		sessionState: sessionState{workspaceModel: workspace.ModelConfig{
 			Version: workspace.ModelConfigVersion,
 			Overrides: map[string]workspace.ModelOverride{
 				defaultModelTarget:      {Model: "workspace-main"},
 				config.AgentRolePlanner: {Model: "workspace-planner"},
 			},
-		},
-		models: []client.Model{
+		}},
+		modelSettingsState: modelSettingsState{models: []client.Model{
 			{ID: "global-main", ContextLength: 16000},
 			{ID: "workspace-main", ContextLength: 32000},
-		},
+		}},
 	}
 	active := m.activeConfig()
 	if active.Provider.Model != "workspace-main" || active.Embedding != value.Embedding {
@@ -3175,16 +3177,19 @@ func TestEmbeddedCommitReceivesActiveConfig(t *testing.T) {
 	value := config.Default()
 	value.Provider.Model = "global-main"
 	m := model{
-		ctx: context.Background(), config: value,
-		workspaceStore: &workspace.Store{Root: t.TempDir()},
-		workspaceModel: workspace.ModelConfig{
-			Version: workspace.ModelConfigVersion,
-			Overrides: map[string]workspace.ModelOverride{
-				defaultModelTarget:     {Model: "workspace-main"},
-				config.AgentRoleCommit: {Model: "workspace-commit"},
+		hostState: hostState{ctx: context.Background()},
+		chatState: chatState{config: value},
+		sessionState: sessionState{
+			workspaceStore: &workspace.Store{Root: t.TempDir()},
+			workspaceModel: workspace.ModelConfig{
+				Version: workspace.ModelConfigVersion,
+				Overrides: map[string]workspace.ModelOverride{
+					defaultModelTarget:     {Model: "workspace-main"},
+					config.AgentRoleCommit: {Model: "workspace-commit"},
+				},
 			},
 		},
-		models: []client.Model{{ID: "workspace-main", ContextLength: 32000}},
+		modelSettingsState: modelSettingsState{models: []client.Model{{ID: "workspace-main", ContextLength: 32000}}},
 	}
 	command := m.newEmbeddedCommitCommand()
 	if command.config.Provider.Model != "workspace-main" || command.config.Provider.ContextWindow != 32000 {

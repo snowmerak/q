@@ -5,24 +5,23 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/snowmerak/llm-provider/gateway"
+	"github.com/snowmerak/q/agentloop"
 	"github.com/snowmerak/q/client"
 	"github.com/snowmerak/q/config"
-	qlibrary "github.com/snowmerak/q/library"
+	"github.com/snowmerak/q/internal/hostruntime"
 	"github.com/snowmerak/q/providerhost"
 	qtools "github.com/snowmerak/q/tools"
 	"github.com/snowmerak/q/usagelog"
 	"github.com/snowmerak/q/workspace"
-	"github.com/snowmerak/q/workspacememory"
 )
 
-// ChatClient is the model capability used by Q's application and public agent
-// loop. The component that creates a client owns its lifetime.
+// ChatClient is the application client's chat, model discovery, and lifetime
+// contract. It satisfies agentloop.ChatClient for loop requests.
 type ChatClient interface {
-	Chat(context.Context, client.ChatRequest) (*client.ChatResponse, error)
+	agentloop.ChatClient
 	ListModels(context.Context) ([]client.Model, error)
 	Close() error
 }
@@ -40,11 +39,7 @@ type providerRuntime interface {
 
 // AgentToolRuntime exposes the workspace tools and host environment consumed
 // by Q's agent loop. The component that creates a runtime owns its lifetime.
-type AgentToolRuntime interface {
-	Tools() []client.Tool
-	Environment() qtools.HostEnvironment
-	Call(context.Context, client.ToolCall) (client.ToolResult, error)
-}
+type AgentToolRuntime = agentloop.ToolRuntime
 
 type agentToolRuntime = AgentToolRuntime
 
@@ -89,25 +84,11 @@ func newUsageRecorder(store config.Store) *usagelog.Recorder {
 
 // Run loads personal configuration and starts the interactive application.
 // A missing configuration opens the first-run provider setup screen.
-func Run(ctx context.Context, store config.Store) error {
+func Run(ctx context.Context, store config.Store) (returnErr error) {
 	workspaceStore, err := workspace.DefaultStore()
 	if err != nil {
 		return err
 	}
-	runtimeContext, cancelRuntime := context.WithCancel(ctx)
-	defer cancelRuntime()
-	providerContext, cancelProvider := context.WithCancel(context.WithoutCancel(ctx))
-	defer cancelProvider()
-	memoryContext, cancelMemory := context.WithCancel(context.WithoutCancel(ctx))
-	defer cancelMemory()
-	memoryDone := make(chan error, 1)
-	go func() {
-		memoryDone <- workspacememory.Run(memoryContext, store.Dir, io.Discard)
-	}()
-	libraryDone := make(chan error, 1)
-	go func() {
-		libraryDone <- qlibrary.Run(runtimeContext, store.Dir, io.Discard)
-	}()
 	if err := workspaceStore.MigrateLegacySession(); err != nil {
 		return err
 	}
@@ -120,15 +101,16 @@ func Run(ctx context.Context, store config.Store) error {
 		return err
 	}
 
-	manager, managerErr := providerhost.NewManager(providerContext, providerhost.Store{Dir: store.Dir})
-	if managerErr != nil {
-		return managerErr
+	host, err := hostruntime.Open(ctx, hostruntime.Options{Directory: store.Dir})
+	if err != nil {
+		return err
 	}
-	defer manager.Close()
+	defer func() { returnErr = errors.Join(returnErr, host.Close()) }()
 
-	usageRecorder := newUsageRecorder(store)
-	defer usageRecorder.Close()
-	factory := managedClientFactory(manager, usageRecorder)
+	runtimeContext := host.Context()
+	memoryContext := host.MemoryContext()
+	manager := host.Manager()
+	factory := managedClientFactory(manager, host.Recorder())
 	lifecycle := newStartupLifecycle()
 	initialModel := newManagedModel(runtimeContext, store, factory, manager)
 	initialModel.workspaceStore = &workspaceStore
@@ -152,7 +134,7 @@ func Run(ctx context.Context, store config.Store) error {
 	if finalModel, ok := final.(model); ok && finalModel.workspaceLock != nil {
 		runErr = errors.Join(runErr, finalModel.workspaceLock.Close())
 	}
-	cancelRuntime()
+	host.Cancel()
 	lifecycle.waitIfStarted()
 	resourcesCloseErr := lifecycle.closeResources()
 	var clientCloseErr error
@@ -161,11 +143,7 @@ func Run(ctx context.Context, store config.Store) error {
 	} else if startupClient := lifecycle.startupClient(); startupClient != nil {
 		clientCloseErr = startupClient.Close()
 	}
-	cancelProvider()
-	cancelMemory()
-	memoryErr := <-memoryDone
-	libraryErr := <-libraryDone
-	return errors.Join(runErr, resourcesCloseErr, clientCloseErr, memoryErr, libraryErr)
+	return errors.Join(runErr, resourcesCloseErr, clientCloseErr)
 }
 
 func RunDefault(ctx context.Context) error {

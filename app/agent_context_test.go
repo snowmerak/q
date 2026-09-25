@@ -252,7 +252,7 @@ func TestStreamAgentLoopCompactsBetweenToolRounds(t *testing.T) {
 func TestMainAgentLoopUsesConfiguredTrigger(t *testing.T) {
 	history := []client.Message{{Role: client.RoleUser, Content: strings.Repeat("context ", 1_000)}}
 	probe := newAgentLoopContext(memory.Policy{}, history, largeResultRuntime{}.Tools())
-	predicted := probe.manager.PredictedTokens()
+	predicted := probe.PredictedTokens()
 	contextWindowAtEightyTwoPercent := (predicted*100 + 81) / 82
 	loopContext := newAgentLoopContext(memory.Policy{
 		ContextWindow: contextWindowAtEightyTwoPercent,
@@ -315,7 +315,7 @@ func TestApplyAgentContextCompactionPreservesTranscript(t *testing.T) {
 	transcript := append([]client.Message(nil), history...)
 	archive := &collectingRecordArchive{}
 	store := &workspace.Store{Root: t.TempDir()}
-	m := model{messages: transcript, memory: manager, conversationID: "old-provider-state", archive: archive, workspaceStore: store}
+	m := model{chatState: chatState{messages: transcript, memory: manager, conversationID: "old-provider-state"}, sessionState: sessionState{archive: archive, workspaceStore: store}}
 
 	if err := m.applyAgentContextCompaction(agentContextCompaction{Plan: plan, Summary: testCheckpointJSON("durable state")}); err != nil {
 		t.Fatal(err)

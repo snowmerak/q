@@ -113,7 +113,7 @@ func TestACPUsagePublisherCoalescesPendingUpdate(t *testing.T) {
 }
 
 func TestACPUsageUpdateSkipsNilMemory(t *testing.T) {
-	agent := &acpAgent{state: &model{ctx: t.Context()}}
+	agent := &acpAgent{state: &model{hostState: hostState{ctx: t.Context()}}}
 	if update, ok := agent.currentUsageUpdate(); ok || update.UsageUpdate != nil {
 		t.Fatalf("nil memory usage update = %#v, %t", update, ok)
 	}

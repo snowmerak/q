@@ -7,6 +7,9 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+
+	"github.com/snowmerak/q/internal/authkey"
+	"github.com/snowmerak/q/internal/fsreplace"
 )
 
 const (
@@ -73,52 +76,13 @@ func (s Store) Save(value Config) error {
 }
 
 func (s Store) LoadMasterKey() ([32]byte, error) {
-	var result [32]byte
-	body, err := os.ReadFile(s.MasterKeyPath())
-	if err != nil {
-		return result, fmt.Errorf("remoteconfig: read master key: %w", err)
-	}
-	if len(body) != len(result) {
-		return result, fmt.Errorf("remoteconfig: master key must be %d bytes", len(result))
-	}
-	copy(result[:], body)
-	return result, nil
+	return authkey.LoadMasterKey(s.MasterKeyPath(), "remoteconfig")
 }
 
 func (s Store) EnsureMasterKey(random [32]byte) ([32]byte, error) {
-	if existing, err := s.LoadMasterKey(); err == nil {
-		return existing, nil
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return [32]byte{}, err
-	}
-	if err := secureDirectory(s.Dir); err != nil {
-		return [32]byte{}, err
-	}
-	file, err := os.OpenFile(s.MasterKeyPath(), os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
-	if errors.Is(err, os.ErrExist) {
-		return s.LoadMasterKey()
-	}
-	if err != nil {
-		return [32]byte{}, fmt.Errorf("remoteconfig: create master key: %w", err)
-	}
-	keep := false
-	defer func() {
-		_ = file.Close()
-		if !keep {
-			_ = os.Remove(s.MasterKeyPath())
-		}
-	}()
-	if _, err := file.Write(random[:]); err != nil {
-		return [32]byte{}, fmt.Errorf("remoteconfig: write master key: %w", err)
-	}
-	if err := file.Sync(); err != nil {
-		return [32]byte{}, fmt.Errorf("remoteconfig: sync master key: %w", err)
-	}
-	if err := file.Close(); err != nil {
-		return [32]byte{}, fmt.Errorf("remoteconfig: close master key: %w", err)
-	}
-	keep = true
-	return random, nil
+	return authkey.EnsureMasterKey(s.MasterKeyPath(), "remoteconfig", random, func() error {
+		return secureDirectory(s.Dir)
+	})
 }
 
 func (s Store) writeAtomic(path, pattern string, body []byte) error {
@@ -149,7 +113,7 @@ func (s Store) writeAtomic(path, pattern string, body []byte) error {
 	if err := file.Close(); err != nil {
 		return fmt.Errorf("remoteconfig: close temporary file: %w", err)
 	}
-	if err := replaceFile(temporaryPath, path); err != nil {
+	if err := fsreplace.Replace(temporaryPath, path); err != nil {
 		return fmt.Errorf("remoteconfig: replace %s: %w", path, err)
 	}
 	keep = true

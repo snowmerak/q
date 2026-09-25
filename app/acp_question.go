@@ -16,7 +16,7 @@ import (
 
 type acpPendingQuestion struct {
 	input           askToUserInput
-	answer          chan askToUserOutput
+	answer          chan<- askToUserOutput
 	planApproval    bool
 	includeInMemory bool
 	toolBacked      bool
@@ -77,7 +77,7 @@ func (run *acpPlanContinuation) finish(
 func (a *acpAgent) suspendACPQuestion(
 	ctx context.Context,
 	input askToUserInput,
-	answer chan askToUserOutput,
+	answer chan<- askToUserOutput,
 	planApproval bool,
 	includeInMemory bool,
 	toolBacked bool,

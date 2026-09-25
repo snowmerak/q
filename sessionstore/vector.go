@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	goformersearch "github.com/MichaelAyles/goformersearch"
+	"github.com/snowmerak/q/internal/fsreplace"
 	"github.com/snowmerak/q/worklock"
 )
 
@@ -344,7 +345,7 @@ func writeIndexAtomic(path string, encode func(*bufio.Writer) error) error {
 	if err := file.Close(); err != nil {
 		return err
 	}
-	if err := replaceFile(temporary, path); err != nil {
+	if err := fsreplace.Replace(temporary, path); err != nil {
 		return err
 	}
 	keep = true

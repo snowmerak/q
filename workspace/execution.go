@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/snowmerak/q/internal/fsreplace"
 	"github.com/snowmerak/q/subagent"
 )
 
@@ -134,7 +135,7 @@ func (s Store) SaveExecution(checkpoint subagent.ExecutionCheckpoint) error {
 		if err := file.Close(); err != nil {
 			return fmt.Errorf("workspace: close temporary plan execution: %w", err)
 		}
-		if err := replaceFile(temporaryPath, s.ExecutionPath()); err != nil {
+		if err := fsreplace.Replace(temporaryPath, s.ExecutionPath()); err != nil {
 			return fmt.Errorf("workspace: replace %s: %w", s.ExecutionPath(), err)
 		}
 		keep = true

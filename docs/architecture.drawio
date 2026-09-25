@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<mxfile host="app.diagrams.net" modified="2026-08-29T07:00:00.000Z" agent="Codex" version="26.0.9">
+<mxfile host="app.diagrams.net" modified="2026-09-25T00:00:00.000Z" agent="Codex" version="26.0.9">
   <diagram id="q-runtime-architecture" name="Runtime architecture">
     <mxGraphModel dx="1800" dy="1180" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1800" pageHeight="1180" math="0" shadow="0">
       <root>
@@ -43,10 +43,10 @@
           <mxGeometry x="820" y="205" width="350" height="85" as="geometry" />
         </mxCell>
 
-        <mxCell id="app-coordinator" value="&lt;b&gt;Application and session coordinator&lt;/b&gt;&lt;br&gt;&lt;font color=&quot;#0369A1&quot;&gt;app · workspace&lt;/font&gt;&lt;br&gt;&lt;font color=&quot;#64748B&quot;&gt;chat lifecycle · screens · locks · checkpoints&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E0F2FE;strokeColor=#0284C7;fontColor=#172033;fontSize=15;arcSize=14;" vertex="1" parent="1">
+        <mxCell id="app-coordinator" value="&lt;b&gt;Host adapters and service lifecycle&lt;/b&gt;&lt;br&gt;&lt;font color=&quot;#0369A1&quot;&gt;app · internal/hostruntime&lt;/font&gt;&lt;br&gt;&lt;font color=&quot;#64748B&quot;&gt;screens · sessions · managed services&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E0F2FE;strokeColor=#0284C7;fontColor=#172033;fontSize=15;arcSize=14;" vertex="1" parent="1">
           <mxGeometry x="330" y="330" width="380" height="100" as="geometry" />
         </mxCell>
-        <mxCell id="chat-client" value="&lt;b&gt;LLM client and model routing&lt;/b&gt;&lt;br&gt;&lt;font color=&quot;#0369A1&quot;&gt;client · config · provider roles&lt;/font&gt;&lt;br&gt;&lt;font color=&quot;#64748B&quot;&gt;chat / griller / planner / coder / thinker / librarian&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E0F2FE;strokeColor=#0284C7;fontColor=#172033;fontSize=15;arcSize=14;" vertex="1" parent="1">
+        <mxCell id="chat-client" value="&lt;b&gt;Agent Loop and model client&lt;/b&gt;&lt;br&gt;&lt;font color=&quot;#0369A1&quot;&gt;agentloop · client&lt;/font&gt;&lt;br&gt;&lt;font color=&quot;#64748B&quot;&gt;model/tool rounds · context · streams&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E0F2FE;strokeColor=#0284C7;fontColor=#172033;fontSize=15;arcSize=14;" vertex="1" parent="1">
           <mxGeometry x="750" y="330" width="420" height="100" as="geometry" />
         </mxCell>
 
@@ -123,7 +123,7 @@
         <mxCell id="edge-tui-app" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#64748B;strokeWidth=2;endArrow=block;endFill=1;" edge="1" parent="1" source="tui" target="app-coordinator"><mxGeometry relative="1" as="geometry" /></mxCell>
         <mxCell id="edge-acp-app" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#64748B;strokeWidth=2;endArrow=block;endFill=1;" edge="1" parent="1" source="acp-adapters" target="app-coordinator"><mxGeometry relative="1" as="geometry" /></mxCell>
         <mxCell id="edge-standalone-app" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#64748B;strokeWidth=2;endArrow=block;endFill=1;" edge="1" parent="1" source="standalone" target="app-coordinator"><mxGeometry relative="1" as="geometry" /></mxCell>
-        <mxCell id="edge-app-chat" value="prompts / streams" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#0284C7;strokeWidth=2;endArrow=block;endFill=1;fontColor=#0369A1;fontSize=12;" edge="1" parent="1" source="app-coordinator" target="chat-client"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="edge-app-chat" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#0284C7;strokeWidth=2;endArrow=block;endFill=1;fontColor=#0369A1;fontSize=12;" edge="1" parent="1" source="app-coordinator" target="chat-client"><mxGeometry relative="1" as="geometry" /></mxCell>
         <mxCell id="edge-app-plan" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#64748B;strokeWidth=2;endArrow=block;endFill=1;" edge="1" parent="1" source="app-coordinator" target="plan"><mxGeometry relative="1" as="geometry" /></mxCell>
         <mxCell id="edge-app-commit" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#64748B;strokeWidth=2;endArrow=block;endFill=1;" edge="1" parent="1" source="app-coordinator" target="commit"><mxGeometry relative="1" as="geometry" /></mxCell>
         <mxCell id="edge-app-thinker" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#64748B;strokeWidth=2;endArrow=block;endFill=1;" edge="1" parent="1" source="app-coordinator" target="thinker"><mxGeometry relative="1" as="geometry" /></mxCell>

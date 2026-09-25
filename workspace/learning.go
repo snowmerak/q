@@ -7,6 +7,8 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+
+	"github.com/snowmerak/q/internal/fsreplace"
 )
 
 const (
@@ -111,7 +113,7 @@ func (s Store) SaveLearningConfig(value LearningConfig) error {
 	if err := file.Close(); err != nil {
 		return fmt.Errorf("workspace: close temporary learning settings: %w", err)
 	}
-	if err := replaceFile(temporaryPath, s.LearningPath()); err != nil {
+	if err := fsreplace.Replace(temporaryPath, s.LearningPath()); err != nil {
 		return fmt.Errorf("workspace: replace %s: %w", s.LearningPath(), err)
 	}
 	keep = true

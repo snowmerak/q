@@ -10,6 +10,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/snowmerak/q/internal/fsreplace"
 )
 
 const (
@@ -155,7 +157,7 @@ func (s ConfigStore) Save(value Config) error {
 	if err := file.Close(); err != nil {
 		return fmt.Errorf("workspacememory: close temporary config: %w", err)
 	}
-	if err := replaceFile(temporary, s.Path()); err != nil {
+	if err := fsreplace.Replace(temporary, s.Path()); err != nil {
 		return fmt.Errorf("workspacememory: replace config: %w", err)
 	}
 	keep = true

@@ -146,25 +146,6 @@ func storedACPContentBlock(part client.MessageContentPart) (acp.ContentBlock, bo
 	return block, true
 }
 
-func providerSafeContentParts(parts []client.MessageContentPart) []client.MessageContentPart {
-	if len(parts) == 0 {
-		return nil
-	}
-	result := make([]client.MessageContentPart, 0, len(parts))
-	for _, part := range parts {
-		clean := make(client.MessageContentPart, len(part))
-		for key, value := range part {
-			if key != acpContentBlockMetadataKey {
-				clean[key] = value
-			}
-		}
-		if len(clean) > 0 {
-			result = append(result, clean)
-		}
-	}
-	return result
-}
-
 func formatACPResourceLink(link acp.ContentBlockResourceLink) string {
 	var body strings.Builder
 	body.WriteString("\n[BEGIN ACP RESOURCE LINK]\n")

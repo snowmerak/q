@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/snowmerak/q/client"
+	"github.com/snowmerak/q/internal/fsreplace"
 	"github.com/snowmerak/q/thinker"
 )
 
@@ -229,7 +230,7 @@ func (s Store) Save(session Session) error {
 		if err := file.Close(); err != nil {
 			return fmt.Errorf("workspace: close temporary session: %w", err)
 		}
-		if err := replaceFile(temporaryPath, s.Path()); err != nil {
+		if err := fsreplace.Replace(temporaryPath, s.Path()); err != nil {
 			return fmt.Errorf("workspace: replace %s: %w", s.Path(), err)
 		}
 		keep = true

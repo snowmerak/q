@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/snowmerak/q/internal/fsreplace"
 	"github.com/snowmerak/q/subagent"
 )
 
@@ -105,7 +106,7 @@ func (s Store) archivePlanningAt(planning subagent.PlanningLog, now time.Time) (
 			} else if !errors.Is(err, os.ErrNotExist) {
 				return fmt.Errorf("workspace: inspect planning history: %w", err)
 			}
-			if err := replaceFile(temporaryPath, target); err != nil {
+			if err := fsreplace.Replace(temporaryPath, target); err != nil {
 				return fmt.Errorf("workspace: archive planning history: %w", err)
 			}
 			keep = true
@@ -151,7 +152,7 @@ func (s Store) archiveExecutionAt(now time.Time) (string, error) {
 			} else if !errors.Is(err, os.ErrNotExist) {
 				return fmt.Errorf("workspace: inspect plan execution log: %w", err)
 			}
-			if err := replaceFile(s.ExecutionPath(), target); err != nil {
+			if err := fsreplace.Replace(s.ExecutionPath(), target); err != nil {
 				return fmt.Errorf("workspace: archive plan execution: %w", err)
 			}
 			archivedPath = target

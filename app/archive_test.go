@@ -22,7 +22,7 @@ func (a *collectingRecordArchive) Flush() error { return nil }
 
 func TestArchiveReadToolRecordsMetadataWithoutRetrievedContent(t *testing.T) {
 	archive := &collectingRecordArchive{}
-	m := model{archive: archive, runID: "run-1"}
+	m := model{sessionState: sessionState{archive: archive, runID: "run-1"}}
 	call := client.ToolCall{
 		ID: "call-1", Type: client.ToolTypeFunction,
 		Function: client.FunctionCall{Name: "search_archive", Arguments: `{"query":"prior decision"}`},
@@ -52,7 +52,7 @@ func TestArchiveReadToolRecordsMetadataWithoutRetrievedContent(t *testing.T) {
 
 func TestArchiveOmitsLoomBackedToolResult(t *testing.T) {
 	archive := &collectingRecordArchive{}
-	m := model{archive: archive, runID: "run-1"}
+	m := model{sessionState: sessionState{archive: archive, runID: "run-1"}}
 	call := client.ToolCall{
 		ID: "call-1", Type: client.ToolTypeFunction,
 		Function: client.FunctionCall{Name: "read_file", Arguments: `{"path":"main.go"}`},

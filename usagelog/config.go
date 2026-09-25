@@ -9,6 +9,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/snowmerak/q/internal/fsreplace"
 )
 
 const (
@@ -149,7 +151,7 @@ func (s ConfigStore) Save(value Config) error {
 	if err := temporary.Close(); err != nil {
 		return err
 	}
-	if err := replaceFile(path, s.Path()); err != nil {
+	if err := fsreplace.Replace(path, s.Path()); err != nil {
 		return fmt.Errorf("usage: replace config: %w", err)
 	}
 	keep = true

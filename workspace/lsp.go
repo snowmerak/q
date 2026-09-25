@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/snowmerak/q/internal/fsreplace"
 	"github.com/snowmerak/q/lsp"
 )
 
@@ -106,7 +107,7 @@ func (s Store) SaveLSP(value lsp.WorkspaceConfig, global lsp.GlobalConfig) error
 	if err := file.Close(); err != nil {
 		return err
 	}
-	if err := replaceFile(temporaryPath, s.LSPPath()); err != nil {
+	if err := fsreplace.Replace(temporaryPath, s.LSPPath()); err != nil {
 		return fmt.Errorf("workspace: replace %s: %w", s.LSPPath(), err)
 	}
 	keep = true

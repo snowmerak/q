@@ -15,6 +15,7 @@ import (
 
 	"github.com/parquet-go/parquet-go"
 	"github.com/parquet-go/parquet-go/compress/zstd"
+	"github.com/snowmerak/q/internal/fsreplace"
 )
 
 type archiveRow struct {
@@ -127,7 +128,7 @@ func (s *Store) archiveDay(ctx context.Context, day string) error {
 	if !sameArchiveRows(merged, verified) {
 		return fmt.Errorf("usage: Parquet verification mismatch for %s", day)
 	}
-	if err := replaceFile(temporaryPath, finalPath); err != nil {
+	if err := fsreplace.Replace(temporaryPath, finalPath); err != nil {
 		return fmt.Errorf("usage: publish Parquet for %s: %w", day, err)
 	}
 	keep = true

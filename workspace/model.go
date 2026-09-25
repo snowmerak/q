@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/snowmerak/q/config"
+	"github.com/snowmerak/q/internal/fsreplace"
 )
 
 const (
@@ -171,7 +172,7 @@ func (s Store) SaveModelConfig(value ModelConfig) error {
 	if err := file.Close(); err != nil {
 		return fmt.Errorf("workspace: close temporary model settings: %w", err)
 	}
-	if err := replaceFile(temporaryPath, s.ModelPath()); err != nil {
+	if err := fsreplace.Replace(temporaryPath, s.ModelPath()); err != nil {
 		return fmt.Errorf("workspace: replace %s: %w", s.ModelPath(), err)
 	}
 	keep = true

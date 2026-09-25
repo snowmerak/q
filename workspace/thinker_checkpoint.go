@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/snowmerak/q/internal/fsreplace"
 	"github.com/snowmerak/q/thinker"
 )
 
@@ -124,7 +125,7 @@ func (s Store) SaveThinkerCheckpoint(checkpoint thinker.JobCheckpoint) error {
 		if err := file.Close(); err != nil {
 			return fmt.Errorf("workspace: close temporary Thinker checkpoint: %w", err)
 		}
-		if err := replaceFile(temporaryPath, s.ThinkerCheckpointPath()); err != nil {
+		if err := fsreplace.Replace(temporaryPath, s.ThinkerCheckpointPath()); err != nil {
 			return fmt.Errorf("workspace: replace %s: %w", s.ThinkerCheckpointPath(), err)
 		}
 		keep = true

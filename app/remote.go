@@ -9,11 +9,10 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/snowmerak/q/config"
-	qlibrary "github.com/snowmerak/q/library"
+	"github.com/snowmerak/q/internal/hostruntime"
 	"github.com/snowmerak/q/providerhost"
 	"github.com/snowmerak/q/subagent"
 	"github.com/snowmerak/q/workspace"
-	"github.com/snowmerak/q/workspacememory"
 )
 
 type RemoteRunErrorKind string
@@ -77,20 +76,13 @@ type RemoteSubagentIssue struct {
 // that the existing interactive path would create.
 type RemoteHost struct {
 	ctx            context.Context
-	cancelRuntime  context.CancelFunc
-	cancelProvider context.CancelFunc
-	cancelMemory   context.CancelFunc
+	runtime        *hostruntime.Runtime
 	store          config.Store
 	manager        *providerhost.Manager
-	recorder       io.Closer
 	factory        clientFactory
-	memoryDone     <-chan error
-	libraryDone    <-chan error
 	providerMu     sync.Mutex
 	providerReady  bool
 	providerConfig config.Config
-	closeOnce      sync.Once
-	closeErr       error
 }
 
 func (h *RemoteHost) ensureProvider(loaded config.Config) (config.Config, error) {
@@ -114,31 +106,15 @@ func NewRemoteHost(parent context.Context, store config.Store) (*RemoteHost, err
 	if parent == nil {
 		parent = context.Background()
 	}
-	runtimeContext, cancelRuntime := context.WithCancel(parent)
-	providerContext, cancelProvider := context.WithCancel(context.WithoutCancel(parent))
-	memoryContext, cancelMemory := context.WithCancel(context.WithoutCancel(parent))
-
-	memoryDone := make(chan error, 1)
-	go func() { memoryDone <- workspacememory.Run(memoryContext, store.Dir, io.Discard) }()
-	libraryDone := make(chan error, 1)
-	go func() { libraryDone <- qlibrary.Run(runtimeContext, store.Dir, io.Discard) }()
-
-	manager, err := providerhost.NewManager(providerContext, providerhost.Store{Dir: store.Dir})
+	runtime, err := hostruntime.Open(parent, hostruntime.Options{Directory: store.Dir})
 	if err != nil {
-		cancelRuntime()
-		cancelProvider()
-		cancelMemory()
-		<-memoryDone
-		<-libraryDone
 		return nil, err
 	}
-	usageRecorder := newUsageRecorder(store)
+	manager := runtime.Manager()
 	return &RemoteHost{
-		ctx: runtimeContext, cancelRuntime: cancelRuntime, cancelProvider: cancelProvider, cancelMemory: cancelMemory,
+		ctx: runtime.Context(), runtime: runtime,
 		store: store, manager: manager,
-		recorder:   usageRecorder,
-		factory:    managedClientFactory(manager, usageRecorder),
-		memoryDone: memoryDone, libraryDone: libraryDone,
+		factory: managedClientFactory(manager, runtime.Recorder()),
 	}, nil
 }
 
@@ -146,24 +122,7 @@ func (h *RemoteHost) Close() error {
 	if h == nil {
 		return nil
 	}
-	h.closeOnce.Do(func() {
-		h.cancelRuntime()
-		managerErr := h.manager.Close()
-		recorderErr := h.recorder.Close()
-		h.cancelProvider()
-		h.cancelMemory()
-		memoryErr := ignoreRemoteCancellation(<-h.memoryDone)
-		libraryErr := ignoreRemoteCancellation(<-h.libraryDone)
-		h.closeErr = errors.Join(managerErr, recorderErr, memoryErr, libraryErr)
-	})
-	return h.closeErr
-}
-
-func ignoreRemoteCancellation(err error) error {
-	if errors.Is(err, context.Canceled) {
-		return nil
-	}
-	return err
+	return h.runtime.Close()
 }
 
 func (h *RemoteHost) ListSubagents(root string) ([]RemoteSubagentInfo, []RemoteSubagentIssue, error) {

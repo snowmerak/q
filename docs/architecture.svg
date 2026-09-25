@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" width="1800" height="1180" viewBox="0 0 1800 1180" role="img" aria-labelledby="title desc">
   <title id="title">q runtime architecture</title>
-  <desc id="desc">Architecture of q showing terminal, ACP and MCP entry points; the application, model, orchestration and tool layers; managed providers and integrations; and durable workspace, memory, library, usage and Loom state.</desc>
+  <desc id="desc">Architecture of q showing terminal, ACP and MCP entry points; app host adapters and hostruntime service lifecycle; the agentloop and model client; orchestration and tool layers; managed providers and integrations; and durable state.</desc>
   <defs>
     <filter id="shadow" x="-10%" y="-10%" width="120%" height="130%">
       <feDropShadow dx="0" dy="2" stdDeviation="3" flood-color="#0F172A" flood-opacity="0.08" />
@@ -55,7 +55,7 @@
 
   <rect width="1800" height="1180" fill="#FFFFFF" />
   <text class="page-title" x="40" y="52">q Runtime Architecture</text>
-  <text class="page-subtitle" x="40" y="80">Workspace-native agent runtime with shared model, tool, orchestration, and durable-service boundaries</text>
+  <text class="page-subtitle" x="40" y="80">Workspace agent runtime with explicit host lifecycle, Agent Loop, tool, and durable state boundaries</text>
 
   <g aria-label="Legend">
     <path d="M 1370 54 H 1420" class="flow" />
@@ -169,18 +169,18 @@
     <text text-anchor="middle" x="995" y="267" class="box-package" fill="#6D28D9">gateway · library · memory · usage · commit · config</text>
   </g>
 
-  <!-- Application and model layer -->
+  <!-- Host adapters, service lifecycle, and Agent Loop -->
   <g filter="url(#shadow)">
     <rect x="330" y="330" width="380" height="100" rx="12" fill="#E0F2FE" stroke="#0284C7" stroke-width="1.5" />
-    <text text-anchor="middle" x="520" y="359" class="box-title">Application and session coordinator</text>
-    <text text-anchor="middle" x="520" y="383" class="box-package" fill="#0369A1">app · workspace</text>
-    <text text-anchor="middle" x="520" y="408" class="box-sub">chat lifecycle · screens · locks · checkpoints</text>
+    <text text-anchor="middle" x="520" y="359" class="box-title">Host adapters and service lifecycle</text>
+    <text text-anchor="middle" x="520" y="383" class="box-package" fill="#0369A1">app · internal/hostruntime</text>
+    <text text-anchor="middle" x="520" y="408" class="box-sub">screens · sessions · managed services</text>
   </g>
   <g filter="url(#shadow)">
     <rect x="750" y="330" width="420" height="100" rx="12" fill="#E0F2FE" stroke="#0284C7" stroke-width="1.5" />
-    <text text-anchor="middle" x="960" y="359" class="box-title">LLM client and model routing</text>
-    <text text-anchor="middle" x="960" y="383" class="box-package" fill="#0369A1">client · config · provider roles</text>
-    <text text-anchor="middle" x="960" y="408" class="box-sub">chat / griller / planner / coder / thinker / librarian</text>
+    <text text-anchor="middle" x="960" y="359" class="box-title">Agent Loop and model client</text>
+    <text text-anchor="middle" x="960" y="383" class="box-package" fill="#0369A1">agentloop · client</text>
+    <text text-anchor="middle" x="960" y="408" class="box-sub">model/tool rounds · context · streams</text>
   </g>
 
   <!-- Workflows -->

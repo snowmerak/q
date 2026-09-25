@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/blevesearch/bleve/v2"
+	"github.com/snowmerak/q/internal/fsreplace"
 	"github.com/snowmerak/q/worklock"
 	bolt "go.etcd.io/bbolt"
 )
@@ -827,7 +828,7 @@ func writeAtomic(path string, body []byte, mode os.FileMode) error {
 	if err := file.Close(); err != nil {
 		return err
 	}
-	if err := replaceFile(temporary, path); err != nil {
+	if err := fsreplace.Replace(temporary, path); err != nil {
 		return err
 	}
 	keep = true

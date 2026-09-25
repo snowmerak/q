@@ -18,16 +18,13 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/snowmerak/q/client"
 	"github.com/snowmerak/q/config"
-	qlibrary "github.com/snowmerak/q/library"
+	"github.com/snowmerak/q/internal/hostruntime"
 	"github.com/snowmerak/q/mcpconfig"
-	"github.com/snowmerak/q/providerhost"
 	"github.com/snowmerak/q/sessionstore"
 	"github.com/snowmerak/q/subagent"
 	"github.com/snowmerak/q/third_party/acp-go-sdk"
 	qtools "github.com/snowmerak/q/tools"
-	"github.com/snowmerak/q/usagelog"
 	"github.com/snowmerak/q/workspace"
-	"github.com/snowmerak/q/workspacememory"
 )
 
 // BooleanOverride distinguishes an omitted process option from an explicit
@@ -98,23 +95,16 @@ func RunACP(ctx context.Context, store config.Store, root string, input io.Reade
 }
 
 type acpHost struct {
-	model          model
-	lifecycle      *startupLifecycle
-	manager        *providerhost.Manager
-	client         chatClient
-	usageRecorder  *usagelog.Recorder
-	cancel         context.CancelFunc
-	providerCancel context.CancelFunc
-	memoryCancel   context.CancelFunc
-	memoryDone     <-chan error
-	libraryDone    <-chan error
-	closeOnce      sync.Once
-	closeErr       error
+	model     model
+	lifecycle *startupLifecycle
+	runtime   *hostruntime.Runtime
+	client    chatClient
+	closeOnce sync.Once
+	closeErr  error
 }
 
 func openACPHost(parent context.Context, store config.Store, root string) (*acpHost, error) {
-	runtimeContext, cancel := context.WithCancel(parent)
-	host := &acpHost{cancel: cancel}
+	host := &acpHost{}
 	fail := func(err error) (*acpHost, error) {
 		return nil, errors.Join(err, host.Close())
 	}
@@ -124,36 +114,22 @@ func openACPHost(parent context.Context, store config.Store, root string) (*acpH
 		return fail(err)
 	}
 
-	memoryContext, cancelMemory := context.WithCancel(context.WithoutCancel(parent))
-	host.memoryCancel = cancelMemory
-	memoryDone := make(chan error, 1)
-	host.memoryDone = memoryDone
-	go func() {
-		memoryDone <- workspacememory.Run(memoryContext, store.Dir, io.Discard)
-	}()
-
-	libraryDone := make(chan error, 1)
-	host.libraryDone = libraryDone
-	go func() {
-		libraryDone <- qlibrary.Run(runtimeContext, store.Dir, io.Discard)
-	}()
+	runtime, err := hostruntime.Open(parent, hostruntime.Options{Directory: store.Dir})
+	if err != nil {
+		return fail(err)
+	}
+	host.runtime = runtime
+	runtimeContext := runtime.Context()
+	memoryContext := runtime.MemoryContext()
 
 	loaded, loadErr := store.Load()
 	if loadErr != nil && !errors.Is(loadErr, config.ErrNotFound) {
 		return fail(loadErr)
 	}
-	providerContext, cancelProvider := context.WithCancel(context.WithoutCancel(parent))
-	host.providerCancel = cancelProvider
-	manager, managerErr := providerhost.NewManager(providerContext, providerhost.Store{Dir: store.Dir})
-	if managerErr != nil {
-		return fail(managerErr)
-	}
-	host.manager = manager
+	manager := runtime.Manager()
 	lifecycle := newStartupLifecycle()
 	host.lifecycle = lifecycle
-	usageRecorder := newUsageRecorder(store)
-	host.usageRecorder = usageRecorder
-	factory := managedClientFactory(manager, usageRecorder)
+	factory := managedClientFactory(manager, runtime.Recorder())
 	initialized := (startupRequest{
 		ctx:            runtimeContext,
 		memoryCtx:      memoryContext,
@@ -192,8 +168,8 @@ func openACPHost(parent context.Context, store config.Store, root string) (*acpH
 func (h *acpHost) Close() error {
 	h.closeOnce.Do(func() {
 		var closeErrors []error
-		if h.cancel != nil {
-			h.cancel()
+		if h.runtime != nil {
+			h.runtime.Cancel()
 		}
 		if h.lifecycle != nil {
 			h.lifecycle.waitIfStarted()
@@ -203,23 +179,8 @@ func (h *acpHost) Close() error {
 		if h.client != nil {
 			closeErrors = append(closeErrors, h.client.Close())
 		}
-		if h.usageRecorder != nil {
-			closeErrors = append(closeErrors, h.usageRecorder.Close())
-		}
-		if h.providerCancel != nil {
-			h.providerCancel()
-		}
-		if h.memoryCancel != nil {
-			h.memoryCancel()
-		}
-		if h.memoryDone != nil {
-			closeErrors = append(closeErrors, <-h.memoryDone)
-		}
-		if h.libraryDone != nil {
-			closeErrors = append(closeErrors, <-h.libraryDone)
-		}
-		if h.manager != nil {
-			closeErrors = append(closeErrors, h.manager.Close())
+		if h.runtime != nil {
+			closeErrors = append(closeErrors, h.runtime.Close())
 		}
 		if h.model.workspaceLock != nil {
 			closeErrors = append(closeErrors, h.model.workspaceLock.Close())

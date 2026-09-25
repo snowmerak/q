@@ -105,6 +105,9 @@ without starting the Gateway, TUI, session store, Library, or workspace memory.
 The host owns the client, workspace root, event handling, persistence, and
 dependency lifetimes:
 
+Import `github.com/snowmerak/q/agentloop`, `github.com/snowmerak/q/client`,
+and `github.com/snowmerak/q/tools` for this example.
+
 ```go
 ctx := context.Background()
 root := `C:\path\to\workspace`
@@ -121,7 +124,7 @@ if err != nil {
 }
 defer toolRuntime.Close()
 
-messages := app.PrepareWorkspaceMessages(nil, app.WorkspaceMessageOptions{
+messages := agentloop.PrepareWorkspaceMessages(nil, agentloop.WorkspaceMessageOptions{
 	Root: root,
 	Tools: toolRuntime,
 })
@@ -129,8 +132,8 @@ messages = append(messages, client.Message{
 	Role: client.RoleUser, Content: "Inspect this workspace and explain its entry points.",
 })
 
-events := make(chan app.AgentEvent)
-go app.RunAgentLoop(ctx, app.AgentLoopRequest{
+events := make(chan agentloop.Event)
+go agentloop.RunAgentLoop(ctx, agentloop.Request{
 	Client: modelClient,
 	Tools: toolRuntime,
 	Model: "gpt-5",
@@ -141,7 +144,7 @@ go app.RunAgentLoop(ctx, app.AgentLoopRequest{
 for event := range events {
 	if question, answers, ok := event.Question(); ok {
 		fmt.Println(question.Question)
-		answers <- app.AgentAnswer{Err: app.ErrInteractionUnavailable}
+		answers <- agentloop.AgentAnswer{Err: agentloop.ErrInteractionUnavailable}
 	}
 	if result, ok := event.Result(); ok && result.Response != nil {
 		fmt.Println(result.Response.Choices[0].Message.Content)
@@ -154,7 +157,7 @@ for event := range events {
 
 `RunAgentLoop` closes the event channel when it returns, but it does not close
 the injected client or tool runtime. Consume message, context-replacement, and
-compaction events when the host persists conversations. Use `ScopeTools` to
+compaction events when the host persists conversations. Use `agentloop.ScopeTools` to
 apply a role-aware tool catalog. The exact public contract, optional features,
 and ownership boundaries are documented in the
 [Agent Loop embedding guide](docs/agent-loop-embedding.md).
@@ -785,6 +788,7 @@ publishing the fork.
 ### Design notes
 
 - [Agent Loop embedding guide](docs/agent-loop-embedding.md)
+- [Architecture refactoring roadmap](docs/refactoring-roadmap.md)
 - [Embedded Agent Loop public API](docs/embedded-agent-loop-public-api-plan.md)
 - [Agent Skill Store decoupling](docs/skill-store-decoupling-plan.md)
 - [Agent invocation runtime](docs/agent-invocation-runtime.md)

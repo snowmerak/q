@@ -2,6 +2,11 @@
 
 상태: 구현 완료
 
+후속 변경: 이 문서는 최초 `app` 공개 API 작업의 기록이다. 2026-09-25의
+[구조 리팩터링 로드맵](refactoring-roadmap.md) M4에서 실행 본문을 단일
+`agentloop` 패키지로 이동했고, `app` API는 호환 facade로 유지한다. 현재
+임베딩 방법은 [Agent Loop 가이드](agent-loop-embedding.md)를 따른다.
+
 ## 목적
 
 외부 Go 애플리케이션이 Q의 실제 Agent Loop를 워크스페이스 단위로

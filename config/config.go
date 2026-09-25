@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/snowmerak/q/internal/fsreplace"
 	"github.com/snowmerak/q/loom"
 	"github.com/snowmerak/q/lsp"
 	"gopkg.in/yaml.v3"
@@ -698,7 +699,7 @@ func (s Store) Save(value Config) error {
 	if err := temporary.Close(); err != nil {
 		return fmt.Errorf("config: close temporary file: %w", err)
 	}
-	if err := replaceFile(temporaryPath, s.Path()); err != nil {
+	if err := fsreplace.Replace(temporaryPath, s.Path()); err != nil {
 		return fmt.Errorf("config: replace %s: %w", s.Path(), err)
 	}
 	keep = true

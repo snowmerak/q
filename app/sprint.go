@@ -9,10 +9,8 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/snowmerak/q/config"
-	qlibrary "github.com/snowmerak/q/library"
-	"github.com/snowmerak/q/providerhost"
+	"github.com/snowmerak/q/internal/hostruntime"
 	"github.com/snowmerak/q/workspace"
-	"github.com/snowmerak/q/workspacememory"
 )
 
 // sprintModel runs the ordinary plan state machine without rendering the TUI.
@@ -118,20 +116,18 @@ func RunSprint(
 		return err
 	}
 
-	runtimeContext, cancelRuntime := context.WithCancel(ctx)
-	providerContext, cancelProvider := context.WithCancel(context.WithoutCancel(ctx))
-	memoryContext, cancelMemory := context.WithCancel(context.WithoutCancel(ctx))
-	memoryDone := make(chan error, 1)
-	go func() { memoryDone <- workspacememory.Run(memoryContext, store.Dir, io.Discard) }()
-	libraryDone := make(chan error, 1)
-	go func() { libraryDone <- qlibrary.Run(runtimeContext, store.Dir, io.Discard) }()
+	host, err := hostruntime.Open(ctx, hostruntime.Options{Directory: store.Dir})
+	if err != nil {
+		return err
+	}
+	runtimeContext := host.Context()
+	memoryContext := host.MemoryContext()
 
 	lifecycle := newStartupLifecycle()
 	var configuredClient chatClient
 	var sessionLock *workspace.Lock
-	var manager *providerhost.Manager
 	defer func() {
-		cancelRuntime()
+		host.Cancel()
 		lifecycle.waitIfStarted()
 		resourcesErr := lifecycle.closeResources()
 		var clientErr error
@@ -140,27 +136,16 @@ func RunSprint(
 		} else if startupClient := lifecycle.startupClient(); startupClient != nil {
 			clientErr = startupClient.Close()
 		}
-		cancelProvider()
-		cancelMemory()
-		memoryErr := <-memoryDone
-		libraryErr := <-libraryDone
-		var lockErr, managerErr error
+		var lockErr error
 		if sessionLock != nil {
 			lockErr = sessionLock.Close()
 		}
-		if manager != nil {
-			managerErr = manager.Close()
-		}
-		returnErr = errors.Join(returnErr, resourcesErr, clientErr, memoryErr, libraryErr, lockErr, managerErr)
+		runtimeErr := host.Close()
+		returnErr = errors.Join(returnErr, resourcesErr, clientErr, lockErr, runtimeErr)
 	}()
 
-	manager, err = providerhost.NewManager(providerContext, providerhost.Store{Dir: store.Dir})
-	if err != nil {
-		return err
-	}
-	usageRecorder := newUsageRecorder(store)
-	defer usageRecorder.Close()
-	factory := managedClientFactory(manager, usageRecorder)
+	manager := host.Manager()
+	factory := managedClientFactory(manager, host.Recorder())
 	startup := startupRequest{
 		ctx: runtimeContext, store: store, workspaceStore: workspaceStore,
 		memoryCtx: memoryContext, loaded: loaded, manager: manager,
