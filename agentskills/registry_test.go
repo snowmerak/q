@@ -23,9 +23,15 @@ func writeSkill(t *testing.T, root, scope, name, description string) string {
 	return directory
 }
 
+func setTestHome(t *testing.T, home string) {
+	t.Helper()
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("HOME", home)
+}
+
 func TestDiscoverProjectSkillAndReadLazily(t *testing.T) {
 	root := t.TempDir()
-	t.Setenv("USERPROFILE", t.TempDir())
+	setTestHome(t, t.TempDir())
 	writeSkill(t, root, ".agents", "review-go", "Review Go changes when correctness matters.")
 	registry, err := Discover(root)
 	if err != nil {
@@ -54,7 +60,7 @@ func TestDiscoverProjectSkillAndReadLazily(t *testing.T) {
 func TestProjectSkillShadowsUserSkill(t *testing.T) {
 	root := t.TempDir()
 	home := t.TempDir()
-	t.Setenv("USERPROFILE", home)
+	setTestHome(t, home)
 	writeSkill(t, home, ".agents", "shared", "User description.")
 	project := writeSkill(t, root, ".q", "shared", "Project description.")
 	registry, err := Discover(root)
@@ -85,7 +91,7 @@ func TestProjectSkillShadowsUserSkill(t *testing.T) {
 
 func TestDiscoveryAcceptsDirectoryNameMismatchAndOptionalDescription(t *testing.T) {
 	root := t.TempDir()
-	t.Setenv("USERPROFILE", t.TempDir())
+	setTestHome(t, t.TempDir())
 	writeSkill(t, root, ".agents", "folder-name", "Valid description.")
 	path := filepath.Join(root, ".agents", "skills", "folder-name", "SKILL.md")
 	if err := os.WriteFile(path, []byte("---\nname: declared-name\n---\n"), 0o644); err != nil {
@@ -102,7 +108,7 @@ func TestDiscoveryAcceptsDirectoryNameMismatchAndOptionalDescription(t *testing.
 
 func TestDiscoveryAcceptsLongDescription(t *testing.T) {
 	root := t.TempDir()
-	t.Setenv("USERPROFILE", t.TempDir())
+	setTestHome(t, t.TempDir())
 	description := strings.Repeat("long searchable description ", 80)
 	writeSkill(t, root, ".agents", "long-description", description)
 	registry, err := Discover(root)
@@ -116,7 +122,7 @@ func TestDiscoveryAcceptsLongDescription(t *testing.T) {
 
 func TestInvalidSkillNameBecomesIssue(t *testing.T) {
 	root := t.TempDir()
-	t.Setenv("USERPROFILE", t.TempDir())
+	setTestHome(t, t.TempDir())
 	writeSkill(t, root, ".agents", "folder-name", "Valid description.")
 	path := filepath.Join(root, ".agents", "skills", "folder-name", "SKILL.md")
 	if err := os.WriteFile(path, []byte("---\nname: Invalid Name\n---\n"), 0o644); err != nil {
@@ -133,7 +139,7 @@ func TestInvalidSkillNameBecomesIssue(t *testing.T) {
 
 func TestDiscoverPortableSkillFromGitRootWhenStartedInSubdirectory(t *testing.T) {
 	repositoryRoot := t.TempDir()
-	t.Setenv("USERPROFILE", t.TempDir())
+	setTestHome(t, t.TempDir())
 	if err := os.Mkdir(filepath.Join(repositoryRoot, ".git"), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -153,7 +159,7 @@ func TestDiscoverPortableSkillFromGitRootWhenStartedInSubdirectory(t *testing.T)
 
 func TestCurrentDirectoryPortableSkillShadowsGitRootSkill(t *testing.T) {
 	repositoryRoot := t.TempDir()
-	t.Setenv("USERPROFILE", t.TempDir())
+	setTestHome(t, t.TempDir())
 	if err := os.Mkdir(filepath.Join(repositoryRoot, ".git"), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -174,7 +180,7 @@ func TestCurrentDirectoryPortableSkillShadowsGitRootSkill(t *testing.T) {
 
 func TestReadResourceRejectsTraversal(t *testing.T) {
 	root := t.TempDir()
-	t.Setenv("USERPROFILE", t.TempDir())
+	setTestHome(t, t.TempDir())
 	writeSkill(t, root, ".agents", "safe-skill", "Safe resource reads.")
 	registry, err := Discover(root)
 	if err != nil {

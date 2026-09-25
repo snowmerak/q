@@ -102,6 +102,12 @@ func TestTargetResolverEvaluatesUnionOfIntersections(t *testing.T) {
 	}
 }
 
+func TestResolvedTargetRejectsBackslashTraversal(t *testing.T) {
+	if _, err := normalizeResolvedPaths([]string{`..\outside.go`}); err == nil {
+		t.Fatal("backslash traversal was accepted")
+	}
+}
+
 func TestExecutionLoopRetriesSameTaskAndAdvancesOnNext(t *testing.T) {
 	plan := executableTestPlan()
 	plan.Steps = append(plan.Steps, PlanStep{

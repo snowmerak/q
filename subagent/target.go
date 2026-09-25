@@ -152,10 +152,11 @@ func (r TargetResolver) readArtifact(ctx context.Context, ref loom.Ref) ([]byte,
 func normalizeResolvedPaths(paths []string) ([]string, error) {
 	result := make(map[string]struct{}, len(paths))
 	for _, path := range cleanStrings(paths) {
-		if !workspaceRelativePath(path) {
+		canonical := strings.ReplaceAll(path, "\\", "/")
+		if !workspaceRelativePath(canonical) {
 			return nil, fmt.Errorf("resolved target path %q must stay workspace-relative", path)
 		}
-		result[filepath.ToSlash(filepath.Clean(path))] = struct{}{}
+		result[filepath.ToSlash(filepath.Clean(filepath.FromSlash(canonical)))] = struct{}{}
 	}
 	return sortedSet(result), nil
 }

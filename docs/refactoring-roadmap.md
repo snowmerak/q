@@ -2,8 +2,8 @@
 
 작성일: 2026-09-25
 
-상태: M0~M6을 2026-09-25 작업 트리에서 구현하고 Windows 로컬 검증을 마쳤다.
-Linux/macOS 환경 검증과 코드 리뷰는 남아 있다. 현재 동작의 계약은 README, 기능 문서와 코드가 소유한다.
+상태: M0~M6을 구현하고 Windows 및 WSL Linux ARM64 로컬 검증을 마쳤다.
+macOS 환경 검증과 코드 리뷰는 남아 있다. 현재 동작의 계약은 README, 기능 문서와 코드가 소유한다.
 
 대상 독자: Q의 TUI, ACP, Remote, Sprint, Agent Loop, 설정 저장소와 런타임 생명주기를
 변경하는 구현자와 리뷰어.
@@ -352,12 +352,12 @@ compaction, cancellation과 terminal result를 검증한다. 실제 provider 연
 | 마일스톤 | 상태 | 구현 PR/commit | 검증 기록 | 남은 작업 |
 | --- | --- | --- | --- | --- |
 | M0 기준선과 테스트 격리 | 완료 | 본 변경 | Remote smoke 20회, ACP 취소 50회, 전체 테스트 통과 | 없음 |
-| M1 플랫폼 파일 교체 | 구현 완료 | 본 변경 | 저장 패키지 focused test, Windows 재시도 test, 전체 테스트 통과 | Linux/macOS 환경 확인 |
+| M1 플랫폼 파일 교체 | 구현 완료 | 본 변경 | Windows 재시도 test와 WSL Linux ARM64 전체 테스트 통과 | macOS 환경 확인 |
 | M2 host runtime | 완료 | 본 변경 | 부분 시작 실패 정리, `Close` 10회 반복, `app` 및 전체 테스트 통과 | 없음 |
 | M3 API key primitive | 완료 | 본 변경 | Gateway/Remote 및 교차 인증 거부 test, 전체 테스트 통과 | 없음 |
 | M4 Agent Loop 패키지 | 구현 완료 | 본 변경 | 외부 `agentloop_test`의 workspace/tool/question/compaction/stream test, 기존 `app` test, 직접 import 경계 검사 통과 | 호스트 호출자는 호환 facade를 통해 단일 실행 본문 사용 |
 | M5 TUI model 분해 | 구현 완료 | 본 변경 | `app` 및 전체 테스트 통과; 화면 입력, 질문, 세션, 취소 회귀 포함 | 화면별 view와 controller는 기능별 파일군으로 유지 |
-| M6 문서와 경계 정리 | 구현 완료 | 본 변경 | Draw.io/XML 및 SVG 갱신, SVG 렌더 확인, `go test ./... -count=1`, `go vet ./...`, modulecheck 통과 | Linux/macOS 환경 확인과 코드 리뷰 |
+| M6 문서와 경계 정리 | 구현 완료 | 본 변경 | Draw.io/XML 및 SVG 갱신, SVG 렌더 확인, Windows와 WSL Linux 전체 테스트, `go vet ./...`, modulecheck 통과 | macOS 환경 확인과 코드 리뷰 |
 
 ## 11. 구현 및 검증 기록
 
@@ -380,4 +380,7 @@ compaction, cancellation과 terminal result를 검증한다. 실제 provider 연
   `go run ./scripts/modulecheck`와 `git diff --check`를 통과했다. 첫 전체 테스트를
   modulecheck와 동시에 실행했을 때 Library 임베딩 테스트 한 건이 HTTP 응답 시간
   초과로 실패했다. 해당 테스트를 단독 5회 재실행하고 전체 테스트를 순차 재실행해
-  모두 통과했다. Linux/macOS 환경 검증은 실행하지 않았다.
+  모두 통과했다. WSL Debian 13 Linux ARM64에서 Go 1.26.5와 linuxbrew Go 1.27.1로
+  `go test ./... -count=1`을 각각 통과했다. 첫 WSL 실행에서 발견한 두 이식성 문제는
+  `agentskills` 테스트의 `HOME` 격리와 `subagent`의 역슬래시 경로 정규화로 수정했다.
+  macOS 환경 검증은 실행하지 않았다.
