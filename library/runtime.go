@@ -66,6 +66,7 @@ func EnsureWithOptions(ctx context.Context, options EnsureOptions) (*Runtime, er
 	client := NewClient(value.Endpoint(), "", probeTimeout)
 	deadline := time.Now().Add(startupTimeout)
 	delay := 20 * time.Millisecond
+	var lastListenErr error
 	for {
 		if err := ctx.Err(); err != nil {
 			return nil, err
@@ -97,20 +98,23 @@ func EnsureWithOptions(ctx context.Context, options EnsureOptions) (*Runtime, er
 			listener, listenErr := net.Listen("tcp", value.ListenAddress())
 			if listenErr != nil {
 				_ = lock.Close()
-				return nil, fmt.Errorf("library: configured address %s is unavailable: %w", value.ListenAddress(), listenErr)
+				lastListenErr = listenErr
+			} else {
+				leader, startErr := startLeader(ctx, options.Dir, options.Vector, options.Judge, listener, lock)
+				if startErr != nil {
+					_ = listener.Close()
+					_ = lock.Close()
+					return nil, startErr
+				}
+				return &Runtime{client: client, leader: leader}, nil
 			}
-			leader, startErr := startLeader(ctx, options.Dir, options.Vector, options.Judge, listener, lock)
-			if startErr != nil {
-				_ = listener.Close()
-				_ = lock.Close()
-				return nil, startErr
-			}
-			return &Runtime{client: client, leader: leader}, nil
-		}
-		if !errors.Is(err, worklock.ErrLocked) {
+		} else if !errors.Is(err, worklock.ErrLocked) {
 			return nil, err
 		}
 		if time.Now().After(deadline) {
+			if lastListenErr != nil {
+				return nil, fmt.Errorf("library: configured address %s is unavailable: %w", value.ListenAddress(), lastListenErr)
+			}
 			return nil, fmt.Errorf("library: leader did not become ready within %s", startupTimeout)
 		}
 		jitter := time.Duration(rand.IntN(max(1, int(delay/3))))

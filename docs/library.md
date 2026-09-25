@@ -116,6 +116,9 @@ Both hosting forms use one connect-first, elect-second protocol:
    `q library start` hosts it in the foreground.
 6. A process that loses the lock race waits for the winner to become ready,
    using bounded exponential backoff with jitter, and then connects.
+7. If binding the configured port fails, release the lock, wait briefly, and
+   restart at the health probe. A compatible server that became ready during
+   the bind race is then reused. Retries stop at the startup deadline.
 
 The health response identifies the service, protocol version, store ID,
 instance generation, readiness, and q version. Merely accepting TCP

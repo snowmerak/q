@@ -2,6 +2,7 @@ package workspacememory
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"net"
@@ -569,6 +570,64 @@ func testEnsureOptions(t *testing.T, dir string) EnsureOptions {
 		Dir: dir, Config: testConfig(t), ProbeTimeout: time.Second,
 		StartupTimeout: 3 * time.Second, RequestTimeout: 10 * time.Second,
 		LeaseTTL: 2 * time.Second, SweepInterval: 100 * time.Millisecond,
+	}
+}
+
+func TestEnsureRetriesHealthAfterListenCollision(t *testing.T) {
+	var healthCalls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		health := Health{Service: ServiceName, ProtocolVersion: ProtocolVersion, Ready: true}
+		switch request.URL.Path {
+		case "/v1/health":
+			if healthCalls.Add(1) <= 2 {
+				writer.WriteHeader(http.StatusServiceUnavailable)
+				return
+			}
+			if err := json.NewEncoder(writer).Encode(health); err != nil {
+				t.Error(err)
+			}
+		case "/v1/status":
+			if err := json.NewEncoder(writer).Encode(Status{Health: health}); err != nil {
+				t.Error(err)
+			}
+		default:
+			http.NotFound(writer, request)
+		}
+	}))
+	defer server.Close()
+	value := Config{Version: ConfigVersion, Host: "127.0.0.1", Port: server.Listener.Addr().(*net.TCPAddr).Port}
+	options := testEnsureOptions(t, t.TempDir())
+	options.Config = value
+	runtime, err := EnsureWithOptions(t.Context(), options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := runtime.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
+	if runtime.IsLeader() || healthCalls.Load() < 3 {
+		t.Fatalf("runtime leader = %t, health calls = %d; want follower after listen collision", runtime.IsLeader(), healthCalls.Load())
+	}
+}
+
+func TestEnsureRejectsUnrelatedServiceOnConfiguredPort(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		writer.WriteHeader(http.StatusNoContent)
+	}))
+	defer server.Close()
+	value := Config{Version: ConfigVersion, Host: "127.0.0.1", Port: server.Listener.Addr().(*net.TCPAddr).Port}
+	options := testEnsureOptions(t, t.TempDir())
+	options.Config = value
+	options.StartupTimeout = 150 * time.Millisecond
+	runtime, err := EnsureWithOptions(t.Context(), options)
+	if runtime != nil {
+		_ = runtime.Close()
+		t.Fatal("runtime started on an occupied port")
+	}
+	if err == nil || !IsAddressInUse(errors.Unwrap(err)) {
+		t.Fatalf("collision error = %v", err)
 	}
 }
 

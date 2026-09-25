@@ -97,6 +97,7 @@ func EnsureWithOptions(ctx context.Context, options EnsureOptions) (*Runtime, er
 	client := NewClient(config.Endpoint(), "", options.effectiveRequestTimeout())
 	deadline := time.Now().Add(options.effectiveStartupTimeout())
 	delay := 20 * time.Millisecond
+	var lastListenErr error
 	for {
 		if err := ctx.Err(); err != nil {
 			return nil, err
@@ -134,20 +135,23 @@ func EnsureWithOptions(ctx context.Context, options EnsureOptions) (*Runtime, er
 			listener, listenErr := net.Listen("tcp", config.ListenAddress())
 			if listenErr != nil {
 				_ = serviceLock.Close()
-				return nil, fmt.Errorf("workspacememory: configured address %s is unavailable: %w", config.ListenAddress(), listenErr)
+				lastListenErr = listenErr
+			} else {
+				leader, startErr := startLeader(ctx, options, listener, serviceLock)
+				if startErr != nil {
+					_ = listener.Close()
+					_ = serviceLock.Close()
+					return nil, startErr
+				}
+				return &Runtime{client: client, leader: leader}, nil
 			}
-			leader, startErr := startLeader(ctx, options, listener, serviceLock)
-			if startErr != nil {
-				_ = listener.Close()
-				_ = serviceLock.Close()
-				return nil, startErr
-			}
-			return &Runtime{client: client, leader: leader}, nil
-		}
-		if !errors.Is(lockErr, worklock.ErrLocked) {
+		} else if !errors.Is(lockErr, worklock.ErrLocked) {
 			return nil, lockErr
 		}
 		if time.Now().After(deadline) {
+			if lastListenErr != nil {
+				return nil, fmt.Errorf("workspacememory: configured address %s is unavailable: %w", config.ListenAddress(), lastListenErr)
+			}
 			return nil, fmt.Errorf("workspacememory: leader did not become ready within %s", options.effectiveStartupTimeout())
 		}
 		jitter := time.Duration(rand.IntN(max(1, int(delay/3))))

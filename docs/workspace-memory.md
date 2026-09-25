@@ -169,6 +169,8 @@ that SQLite database nor introduces a workspace SQLite database.
 - If no leader answers, it attempts the user-level service lock and listener.
 - If another process owns the lock, the client waits briefly for that leader to
   become ready rather than starting a competing server.
+- If listener binding fails, the client releases the service lock, waits
+  briefly, and retries from the health probe until the startup deadline.
 - An occupied port serving an incompatible protocol is reported as an error.
 - A network disconnect, leader handoff, closed workspace, or expired lease
   triggers a bounded five-second automatic reopen using the same workspace and

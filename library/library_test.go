@@ -14,6 +14,7 @@ import (
 	"reflect"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -919,15 +920,49 @@ func TestEnsureRejectsUnrelatedServiceOnConfiguredPort(t *testing.T) {
 		Version: ConfigVersion, Host: "127.0.0.1",
 		Port: listener.Addr().(*net.TCPAddr).Port,
 	}.Effective()
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer cancel()
-	runtime, err := EnsureWithOptions(ctx, testOptions(t.TempDir(), value))
+	options := testOptions(t.TempDir(), value)
+	options.StartupTimeout = 150 * time.Millisecond
+	runtime, err := EnsureWithOptions(t.Context(), options)
 	if runtime != nil {
 		_ = runtime.Close()
 		t.Fatal("runtime started on an occupied port")
 	}
 	if err == nil || !IsAddressInUse(errors.Unwrap(err)) {
 		t.Fatalf("collision error = %v", err)
+	}
+}
+
+func TestEnsureRetriesHealthAfterListenCollision(t *testing.T) {
+	var healthCalls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.URL.Path != "/v1/health" {
+			http.NotFound(writer, request)
+			return
+		}
+		if healthCalls.Add(1) <= 2 {
+			writer.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		if err := json.NewEncoder(writer).Encode(Health{
+			Service: ServiceName, ProtocolVersion: ProtocolVersion, Ready: true,
+		}); err != nil {
+			t.Error(err)
+		}
+	}))
+	defer server.Close()
+	value := Config{Version: ConfigVersion, Host: "127.0.0.1", Port: server.Listener.Addr().(*net.TCPAddr).Port}
+	options := testOptions(t.TempDir(), value)
+	runtime, err := EnsureWithOptions(t.Context(), options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := runtime.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
+	if runtime.IsLeader() || healthCalls.Load() < 3 {
+		t.Fatalf("runtime leader = %t, health calls = %d; want follower after listen collision", runtime.IsLeader(), healthCalls.Load())
 	}
 }
 
