@@ -115,7 +115,7 @@ func (c *Client) getHealth(ctx context.Context, path string) (Health, error) {
 	if err != nil {
 		return Health{}, err
 	}
-	defer response.Body.Close()
+	defer func() { _ = response.Body.Close() }()
 	if response.StatusCode != http.StatusOK {
 		return Health{}, fmt.Errorf("library: %s returned HTTP %d", path, response.StatusCode)
 	}
@@ -357,7 +357,7 @@ func (c *Client) doJSONWithClient(ctx context.Context, httpClient *http.Client, 
 	if err != nil {
 		return err
 	}
-	defer response.Body.Close()
+	defer func() { _ = response.Body.Close() }()
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		var envelope struct {
 			Error struct {

@@ -45,7 +45,7 @@ func runGatewayWithStore(
 	stderr io.Writer,
 	providerStore providerhost.Store,
 	settingsStore gatewayconfig.Store,
-) error {
+) (returnErr error) {
 	options, err := parseGatewayOptions(args, stderr)
 	if errors.Is(err, flag.ErrHelp) {
 		return nil
@@ -79,14 +79,14 @@ func runGatewayWithStore(
 	if err != nil {
 		return err
 	}
-	defer listener.Close()
+	defer func() { _ = listener.Close() }() // Serve closes the listener too.
 	instance, err := gateway.NewContext(ctx, value)
 	if err != nil {
 		return fmt.Errorf("q gateway: initialize: %w", err)
 	}
-	defer instance.Close()
+	defer func() { returnErr = errors.Join(returnErr, instance.Close()) }()
 	usageRecorder := usagelog.New(providerStore.Dir)
-	defer usageRecorder.Close()
+	defer func() { returnErr = errors.Join(returnErr, usageRecorder.Close()) }()
 
 	server := &http.Server{
 		Handler: authenticator.OptionalHandler(providerhost.ModelGroupHandler(

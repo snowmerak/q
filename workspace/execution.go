@@ -41,7 +41,7 @@ func (s Store) LoadExecution() (subagent.ExecutionCheckpoint, error) {
 	if err != nil {
 		return subagent.ExecutionCheckpoint{}, fmt.Errorf("workspace: open %s: %w", s.ExecutionPath(), err)
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 	info, err := file.Stat()
 	if err != nil {
 		return subagent.ExecutionCheckpoint{}, fmt.Errorf("workspace: inspect %s: %w", s.ExecutionPath(), err)

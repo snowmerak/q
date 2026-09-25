@@ -449,13 +449,13 @@ func (c ExecutionCheckpoint) result() PlanExecutionResult {
 func RenderPlanExecutionResult(result PlanExecutionResult) string {
 	var body strings.Builder
 	body.WriteString("Plan executed successfully.")
-	body.WriteString(fmt.Sprintf("\n\nCompleted %d task(s) in %d executor attempt(s).", result.CompletedTasks, result.Attempts))
+	fmt.Fprintf(&body, "\n\nCompleted %d task(s) in %d executor attempt(s).", result.CompletedTasks, result.Attempts)
 	for _, task := range result.Tasks {
-		body.WriteString(fmt.Sprintf("\n\n%d. %s", task.TaskIndex+1, task.Title))
-		body.WriteString(fmt.Sprintf("\n   %s", task.Result.Summary))
-		body.WriteString(fmt.Sprintf("\n   executor: %s", task.Executor))
+		fmt.Fprintf(&body, "\n\n%d. %s", task.TaskIndex+1, task.Title)
+		fmt.Fprintf(&body, "\n   %s", task.Result.Summary)
+		fmt.Fprintf(&body, "\n   executor: %s", task.Executor)
 		if task.Attempts > 1 {
-			body.WriteString(fmt.Sprintf("\n   attempts: %d", task.Attempts))
+			fmt.Fprintf(&body, "\n   attempts: %d", task.Attempts)
 		}
 		for _, verification := range task.Result.Verification {
 			body.WriteString("\n   verification: ")

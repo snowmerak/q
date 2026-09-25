@@ -101,7 +101,11 @@ func TestRuntimeUsesInjectedSkillStoreWithoutArchive(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer runtime.Close()
+	defer func() {
+		if err := runtime.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 
 	for _, name := range []string{"search_skills", "get_skill"} {
 		if !hasTool(runtime, name) {

@@ -157,9 +157,10 @@ func renderChangePreview(preview changePreview, dark bool, width int) string {
 	lines := make([]string, 0, len(preview.rows))
 	for _, row := range preview.rows {
 		bg := background
-		if row.kind == '+' {
+		switch row.kind {
+		case '+':
 			bg = addedBackground
-		} else if row.kind == '-' {
+		case '-':
 			bg = removedBackground
 		}
 		base := lipgloss.NewStyle().Foreground(lipgloss.Color(foreground)).Background(lipgloss.Color(bg))

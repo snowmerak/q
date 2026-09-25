@@ -47,17 +47,6 @@ type skillHintSearcher interface {
 	SearchSkillHints(context.Context, string, int) (qtools.SkillHintSearchResult, error)
 }
 
-func defaultClientFactory(value config.Config, recorder client.UsageRecorder) (chatClient, error) {
-	apiKey := value.Provider.ResolveAPIKey()
-	return client.New(client.Config{
-		BaseURL:       value.Provider.BaseURL,
-		APIKey:        apiKey,
-		DefaultModel:  value.Provider.Model,
-		DisableAPIKey: apiKey == "",
-		UsageRecorder: recorder,
-	})
-}
-
 func managedClientFactory(runtime providerRuntime, recorder client.UsageRecorder) clientFactory {
 	return func(value config.Config) (chatClient, error) {
 		endpoint := runtime.Endpoint()
@@ -159,7 +148,7 @@ func RunDefault(ctx context.Context) error {
 
 // RunGatewayConfig opens only the Gateway settings UI. It does not
 // acquire a workspace lock or initialize chat, Session Store, Loom, or tools.
-func RunGatewayConfig(ctx context.Context, store config.Store) error {
+func RunGatewayConfig(ctx context.Context, store config.Store) (returnErr error) {
 	runtimeContext, cancelRuntime := context.WithCancel(ctx)
 	defer cancelRuntime()
 
@@ -167,14 +156,14 @@ func RunGatewayConfig(ctx context.Context, store config.Store) error {
 	if err != nil {
 		return err
 	}
-	defer manager.Close()
+	defer func() { returnErr = errors.Join(returnErr, manager.Close()) }()
 
 	startupErr := manager.LoadAndStart(runtimeContext)
 	if errors.Is(startupErr, providerhost.ErrNotFound) {
 		startupErr = nil
 	}
 	usageRecorder := newUsageRecorder(store)
-	defer usageRecorder.Close()
+	defer func() { returnErr = errors.Join(returnErr, usageRecorder.Close()) }()
 	m := newManagedModel(runtimeContext, store, managedClientFactory(manager, usageRecorder), manager)
 	m.gatewayConfigOnly = true
 	m.config = config.Default()

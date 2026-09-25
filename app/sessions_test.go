@@ -100,7 +100,11 @@ func TestSessionPickerKeepsCurrentSessionWhenTargetIsLocked(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer targetLock.Close()
+	defer func() {
+		if err := targetLock.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	targetSession, err := targetStore.Load()
 	if err != nil {
 		t.Fatal(err)
@@ -115,7 +119,11 @@ func TestSessionPickerKeepsCurrentSessionWhenTargetIsLocked(t *testing.T) {
 	m.sessions = []workspace.SessionEntry{target}
 	updated, _ := m.updateSessions(tea.KeyPressMsg{Code: tea.KeyEnter})
 	m = updated.(model)
-	defer m.workspaceLock.Close()
+	defer func() {
+		if err := m.workspaceLock.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 
 	if m.screen != screenSessions || m.workspaceStore.SessionID != current.SessionID || m.workspaceLock != currentLock {
 		t.Fatalf("locked selection replaced current state: screen %v store %#v", m.screen, m.workspaceStore)
@@ -144,7 +152,11 @@ func TestSessionsCommandOpensPickerOnCurrentSession(t *testing.T) {
 
 	updated, _ := m.submitChat()
 	m = updated.(model)
-	defer m.workspaceLock.Close()
+	defer func() {
+		if err := m.workspaceLock.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	if m.screen != screenSessions || len(m.sessions) != 1 ||
 		m.sessions[m.sessionCursor].Store.SessionID != current.SessionID {
 		t.Fatalf("/sessions state = screen %v cursor %d sessions %#v", m.screen, m.sessionCursor, m.sessions)
@@ -183,7 +195,11 @@ func TestSessionPickerSelectionDuringStartupRestoresAfterRuntimeReady(t *testing
 	configuredClient := &fakeClient{}
 	updated, _ = m.Update(runtimeInitializedMsg{config: value, client: configuredClient})
 	m = updated.(model)
-	defer m.workspaceLock.Close()
+	defer func() {
+		if err := m.workspaceLock.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	if m.initializing || m.screen != screenChat || m.client != configuredClient ||
 		m.sessionTitle != "Resume after startup" || !containsMessageText(m.messages, "persisted startup message") {
 		t.Fatalf("runtime restore = initializing %v screen %v client %#v title %q messages %#v", m.initializing, m.screen, m.client, m.sessionTitle, m.messages)
@@ -210,7 +226,11 @@ func TestRuntimeReadyWaitsForStartupSessionSelection(t *testing.T) {
 	}
 	updated, _ = m.updateSessions(tea.KeyPressMsg{Code: tea.KeyEnter})
 	m = updated.(model)
-	defer m.workspaceLock.Close()
+	defer func() {
+		if err := m.workspaceLock.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	if m.screen != screenChat || m.workspaceStore.SessionID != entry.Store.SessionID || m.sessionTitle != "Choose me" {
 		t.Fatalf("post-runtime selection = screen %v store %#v title %q", m.screen, m.workspaceStore, m.sessionTitle)
 	}
@@ -249,11 +269,15 @@ func TestNewSessionFailureLeavesCurrentStateAndLock(t *testing.T) {
 	sessionsDir := filepath.Join(root, workspace.DirectoryName, workspace.SessionsName)
 	movedSessionsDir := sessionsDir + "-held"
 	if err := os.Rename(sessionsDir, movedSessionsDir); err != nil {
-		currentLock.Close()
+		if closeErr := currentLock.Close(); closeErr != nil {
+			t.Error(closeErr)
+		}
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(sessionsDir, []byte("block directory creation"), 0o600); err != nil {
-		currentLock.Close()
+		if closeErr := currentLock.Close(); closeErr != nil {
+			t.Error(closeErr)
+		}
 		t.Fatal(err)
 	}
 
@@ -263,7 +287,11 @@ func TestNewSessionFailureLeavesCurrentStateAndLock(t *testing.T) {
 	m.screen = screenSessions
 	updated, _ := m.updateSessions(tea.KeyPressMsg{Code: 'n', Text: "n"})
 	m = updated.(model)
-	defer m.workspaceLock.Close()
+	defer func() {
+		if err := m.workspaceLock.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	if m.workspaceStore.SessionID != current.SessionID || m.workspaceLock != currentLock || m.status == "" {
 		t.Fatalf("failed creation replaced current state: store %#v lock %p status %q", m.workspaceStore, m.workspaceLock, m.status)
 	}
@@ -365,7 +393,11 @@ func TestSessionPickerDoesNotDeleteLockedSession(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer lock.Close()
+	defer func() {
+		if err := lock.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	entries, err := (workspace.Store{Root: root}).ListSessions()
 	if err != nil {
 		t.Fatal(err)
@@ -392,7 +424,11 @@ func TestSessionPickerDoesNotDeleteCurrentSession(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer lock.Close()
+	defer func() {
+		if err := lock.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	entries, err := (workspace.Store{Root: root}).ListSessions()
 	if err != nil {
 		t.Fatal(err)

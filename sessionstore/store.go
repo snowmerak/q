@@ -16,7 +16,7 @@ import (
 	"github.com/blevesearch/bleve/v2"
 	"github.com/snowmerak/q/internal/fsreplace"
 	"github.com/snowmerak/q/worklock"
-	bolt "go.etcd.io/bbolt"
+	bolterrors "go.etcd.io/bbolt/errors"
 )
 
 const (
@@ -160,7 +160,7 @@ func OpenWithOptions(root string, options OpenOptions) (*Store, error) {
 		opened, openErr := bleve.OpenUsing(store.indexPath, map[string]any{
 			"bolt_timeout": bleveOpenTimeout.String(),
 		})
-		if errors.Is(openErr, bolt.ErrTimeout) {
+		if errors.Is(openErr, bolterrors.ErrTimeout) {
 			return nil, fmt.Errorf("%w: %s", ErrIndexLocked, store.indexPath)
 		}
 		if openErr == nil {
@@ -467,7 +467,7 @@ func (s *Store) loadRecordLocked(id string) (Record, error) {
 	if err != nil {
 		return Record{}, fmt.Errorf("sessionstore: open record %q: %w", id, err)
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 	info, err := file.Stat()
 	if err != nil {
 		return Record{}, fmt.Errorf("sessionstore: inspect record %q: %w", id, err)
@@ -616,7 +616,7 @@ func (s *Store) loadRecordFileLocked(path string) (Record, error) {
 	if err != nil {
 		return Record{}, fmt.Errorf("sessionstore: open source record %s: %w", path, err)
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 	info, err := file.Stat()
 	if err != nil {
 		return Record{}, fmt.Errorf("sessionstore: inspect source record %s: %w", path, err)

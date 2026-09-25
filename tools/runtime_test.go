@@ -55,7 +55,11 @@ func TestRuntimeListsAndCallsBuiltinTools(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer runtime.Close()
+	defer func() {
+		if err := runtime.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	if len(runtime.Tools()) != 15 {
 		t.Fatalf("runtime tools = %d", len(runtime.Tools()))
 	}
@@ -120,7 +124,11 @@ func TestRuntimeExplainsAnchorSeparatorsInToolSchemaAndErrors(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer runtime.Close()
+	defer func() {
+		if err := runtime.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	found := 0
 	for _, tool := range runtime.Tools() {
 		if tool.Function.Name != "read_file" && tool.Function.Name != "edit_file" {
@@ -174,7 +182,11 @@ func TestRuntimeExposesConfiguredLSPTools(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer runtime.Close()
+	defer func() {
+		if err := runtime.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	for _, name := range []string{
 		"lsp_status", "lsp_diagnostics", "lsp_hover", "lsp_definition",
 		"lsp_references", "lsp_document_symbols", "lsp_workspace_symbols",
@@ -226,7 +238,11 @@ func TestRuntimeAutomaticallyDiscoversLSPRoots(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			defer runtime.Close()
+			defer func() {
+				if err := runtime.Close(); err != nil {
+					t.Error(err)
+				}
+			}()
 			result, err := runtime.Call(t.Context(), client.ToolCall{
 				ID: "auto-discover", Type: client.ToolTypeFunction,
 				Function: client.FunctionCall{Name: "lsp_document_symbols", Arguments: `{"path":"main.go"}`},
@@ -258,7 +274,11 @@ func TestRuntimeExposesAndCallsArchiveTools(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer archive.Close()
+	defer func() {
+		if err := archive.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	if _, err := archive.Save(sessionstore.Record{
 		ID: "decision-1", Kind: sessionstore.KindMessage, Role: "planner",
 		Status: sessionstore.StatusSucceeded, Summary: "approved storage design",
@@ -270,7 +290,11 @@ func TestRuntimeExposesAndCallsArchiveTools(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer runtime.Close()
+	defer func() {
+		if err := runtime.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	if len(runtime.Tools()) != 19 || !runtimeHasTool(runtime, "search_archive") || !runtimeHasTool(runtime, "get_archive_record") {
 		t.Fatalf("runtime tools = %#v", runtime.Tools())
 	}
@@ -363,7 +387,11 @@ func TestSkillToolsMergeGlobalLibraryAndProjectStore(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer archive.Close()
+	defer func() {
+		if err := archive.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	globalID := "skill-global-library"
 	global := &fakeGlobalSkillLibrary{
 		search: qlibrary.SkillSearchResponse{Total: 1, Hits: []qlibrary.SkillSearchHit{{
@@ -380,7 +408,11 @@ func TestSkillToolsMergeGlobalLibraryAndProjectStore(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer runtime.Close()
+	defer func() {
+		if err := runtime.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 
 	found, err := runtime.Call(context.Background(), client.ToolCall{
 		ID: "call-merged-skills", Type: client.ToolTypeFunction,
@@ -468,14 +500,22 @@ func TestSkillToolsUseAuthenticatedGlobalLibraryAPIEndToEnd(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer libraryRuntime.Close()
+	defer func() {
+		if err := libraryRuntime.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 
 	root := t.TempDir()
 	archive, err := sessionstore.Open(root)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer archive.Close()
+	defer func() {
+		if err := archive.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	libraryClient := qlibrary.NewClient(libraryConfig.Endpoint(), "", 5*time.Second)
 	runtime, err := NewRuntimeWithArchiveAndLoomOptionsAndLSPAndLibrary(
 		context.Background(), root, archive, loom.StoreOptions{}, lsp.GlobalConfig{}, lsp.WorkspaceConfig{}, libraryClient,
@@ -483,7 +523,11 @@ func TestSkillToolsUseAuthenticatedGlobalLibraryAPIEndToEnd(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer runtime.Close()
+	defer func() {
+		if err := runtime.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	if !runtimeHasTool(runtime, "search_propositions") || !runtimeHasTool(runtime, "get_proposition") {
 		t.Fatalf("proposition tools are missing: %#v", runtime.Tools())
 	}
@@ -563,12 +607,20 @@ func TestSearchSkillsRefreshesSessionStoreSnapshotWhenDue(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer archive.Close()
+	defer func() {
+		if err := archive.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	runtime, err := NewRuntimeWithArchive(context.Background(), root, archive)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer runtime.Close()
+	defer func() {
+		if err := runtime.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 
 	listed, err := runtime.Call(context.Background(), client.ToolCall{
 		ID: "call-list-skills", Type: client.ToolTypeFunction,
@@ -646,7 +698,11 @@ func TestRuntimeRootsComeFromCurrentSessionNotArchive(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer archive.Close()
+	defer func() {
+		if err := archive.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	if _, err := archive.Save(sessionstore.Record{
 		Kind: sessionstore.KindResult, Refs: []string{archiveRef}, Content: archiveRef,
 	}); err != nil {
@@ -656,7 +712,11 @@ func TestRuntimeRootsComeFromCurrentSessionNotArchive(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer runtime.Close()
+	defer func() {
+		if err := runtime.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 
 	refs, err := runtime.loom.Store.Options().Roots(context.Background())
 	if err != nil {
@@ -679,7 +739,11 @@ func TestRuntimeEvaluatesCapturedMCPResult(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer runtime.Close()
+	defer func() {
+		if err := runtime.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	listed, err := runtime.Call(context.Background(), client.ToolCall{
 		ID: "call-list", Type: client.ToolTypeFunction,
 		Function: client.FunctionCall{Name: "list_directory", Arguments: `{}`},
@@ -726,7 +790,11 @@ func TestTargetResolverUsesRealLoomRuntime(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer runtime.Close()
+	defer func() {
+		if err := runtime.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	listed, err := runtime.Call(context.Background(), client.ToolCall{
 		ID: "target-list", Type: client.ToolTypeFunction,
 		Function: client.FunctionCall{Name: "list_directory", Arguments: `{}`},

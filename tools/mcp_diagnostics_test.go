@@ -119,7 +119,7 @@ func TestExternalMCPCallFailuresIncludeStderrInBaseAndSessionScope(t *testing.T)
 			if err != nil {
 				t.Fatal(err)
 			}
-			defer runtime.Close()
+			defer func() { _ = runtime.Close() }()
 			value := mcpconfig.Default()
 			value.Servers["test"] = diagnosticMCPServer(t, "call")
 			value.Roles[mcpconfig.RoleDefault] = []string{"test"}
@@ -127,7 +127,8 @@ func TestExternalMCPCallFailuresIncludeStderrInBaseAndSessionScope(t *testing.T)
 			var statuses []ExternalStatus
 			if scoped {
 				scope, connected := runtime.NewExternalScope(t.Context(), root, value)
-				defer scope.Close()
+				// The synthetic call failure exits the child with status 1.
+				defer func() { _ = scope.Close() }()
 				call, statuses = scope.Call, connected
 			} else {
 				statuses = runtime.ConfigureExternal(t.Context(), root, value)
@@ -148,7 +149,11 @@ func TestExternalMCPSuccessfulStderrDoesNotBecomeAnError(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer server.session.Close()
+	defer func() {
+		if err := server.session.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	result, err := routes["mcp_test__echo"].callTool(t.Context(), map[string]any{})
 	if err != nil || result.IsError {
 		t.Fatalf("normal stderr turned into a failure: result=%v err=%v", result, err)

@@ -101,7 +101,7 @@ func OpenLatestSession(root, command string) (Store, *Lock, error) {
 
 // DeleteSession removes one inactive session's conversation and execution
 // projections. Durable archive records are intentionally preserved.
-func DeleteSession(root, sessionID, command string) error {
+func DeleteSession(root, sessionID, command string) (returnErr error) {
 	store, err := (Store{Root: root}).ForSession(sessionID)
 	if err != nil {
 		return err
@@ -110,7 +110,7 @@ func DeleteSession(root, sessionID, command string) error {
 	if err != nil {
 		return err
 	}
-	defer lock.Close()
+	defer func() { returnErr = errors.Join(returnErr, lock.Close()) }()
 	return store.ClearSession()
 }
 
@@ -137,7 +137,7 @@ func (s Store) MigrateLegacySession() (returnErr error) {
 	if legacyLock == nil {
 		return fmt.Errorf("workspace: wait for legacy session owner: %w", err)
 	}
-	defer legacyLock.Close()
+	defer func() { returnErr = errors.Join(returnErr, legacyLock.Close()) }()
 
 	_, sessionStatErr := os.Stat(legacy.Path())
 	_, executionStatErr := os.Stat(legacy.ExecutionPath())
@@ -167,7 +167,7 @@ func (s Store) MigrateLegacySession() (returnErr error) {
 	if migrationLock == nil {
 		return fmt.Errorf("workspace: wait for session migration: %w", err)
 	}
-	defer migrationLock.Close()
+	defer func() { returnErr = errors.Join(returnErr, migrationLock.Close()) }()
 
 	session, sessionErr := legacy.Load()
 	if sessionErr != nil && !errors.Is(sessionErr, ErrNotFound) {

@@ -184,7 +184,7 @@ func (s Store) Load() (Config, error) {
 	if err != nil {
 		return Config{}, fmt.Errorf("mcpconfig: open %s: %w", s.Path(), err)
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 	info, err := file.Stat()
 	if err != nil {
 		return Config{}, fmt.Errorf("mcpconfig: inspect %s: %w", s.Path(), err)

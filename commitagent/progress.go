@@ -38,7 +38,7 @@ func (logger *progressLogger) step(stage, format string, arguments ...any) {
 	logger.mu.Lock()
 	defer logger.mu.Unlock()
 	if logger.output != nil {
-		fmt.Fprintf(logger.output, "q commit · %s · %s\n", event.Stage, event.Message)
+		_, _ = fmt.Fprintf(logger.output, "q commit · %s · %s\n", event.Stage, event.Message)
 	}
 	if logger.events != nil {
 		select {

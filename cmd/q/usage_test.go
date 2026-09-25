@@ -75,7 +75,11 @@ func TestUsageCommandKeepsMonitoringExistingLeader(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer leader.Close()
+	defer func() {
+		if err := leader.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan error, 1)
 	go func() {

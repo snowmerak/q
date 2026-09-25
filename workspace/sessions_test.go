@@ -81,7 +81,11 @@ func TestSessionLocksAllowDifferentSessionsOnly(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer firstLock.Close()
+	defer func() {
+		if err := firstLock.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	if contender, err := AcquireSessionLock(root, first.SessionID, "contender"); !errors.Is(err, ErrLocked) {
 		if contender != nil {
 			_ = contender.Close()
@@ -92,7 +96,11 @@ func TestSessionLocksAllowDifferentSessionsOnly(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer secondLock.Close()
+	defer func() {
+		if err := secondLock.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	if second.SessionID == first.SessionID {
 		t.Fatal("different sessions reused an ID")
 	}
@@ -104,7 +112,11 @@ func TestOpenLatestSessionCreatesWhenNewestIsActive(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer firstLock.Close()
+	defer func() {
+		if err := firstLock.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	second, secondLock, err := OpenLatestSession(root, "second")
 	if err != nil {
 		t.Fatal(err)
@@ -119,7 +131,11 @@ func TestOpenLatestSessionCreatesWhenNewestIsActive(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer reopenedLock.Close()
+	defer func() {
+		if err := reopenedLock.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	if reopened.SessionID != second.SessionID {
 		t.Fatalf("reopened session = %q, want newest inactive %q", reopened.SessionID, second.SessionID)
 	}

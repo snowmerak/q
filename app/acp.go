@@ -1049,10 +1049,6 @@ func mergeACPMCPServers(base mcpconfig.Config, servers []acp.McpServer) (mcpconf
 	return value, sessionIDs, nil
 }
 
-func (a *acpAgent) deactivateSession() {
-	_ = a.closeRuntime()
-}
-
 func (a *acpAgent) replayWorkspaceSession(ctx context.Context) error {
 	for _, message := range workspaceSessionMessages(a.state.messages) {
 		switch message.Role {
@@ -1602,7 +1598,8 @@ func (a *acpAgent) continueACPAgentTurn(
 			a.state.messages = append(a.state.messages, message)
 			a.state.memory.Append(message)
 			a.launchLearning(a.state.observeLearningMessage(message))
-			if message.Role == client.RoleTool {
+			switch message.Role {
+			case client.RoleTool:
 				if event.toolIsError {
 					a.state.archiveMessage(message, sessionstore.StatusFailed, true)
 				} else {
@@ -1616,7 +1613,7 @@ func (a *acpAgent) continueACPAgentTurn(
 					return acp.PromptResponse{}, err
 				}
 				*streamedResponse = ""
-			} else if message.Role == client.RoleAssistant {
+			case client.RoleAssistant:
 				a.state.archiveMessage(message, sessionstore.StatusSucceeded, false)
 				if err := a.emitMissingAssistantText(message.Content, streamedResponse); err != nil {
 					return acp.PromptResponse{}, err
@@ -1811,7 +1808,7 @@ func (a *acpAgent) elicitAnswer(ctx context.Context, question askToUserInput) as
 	if len(question.Choices) > 0 {
 		description.WriteString("\n\nChoices:")
 		for _, choice := range question.Choices {
-			description.WriteString(fmt.Sprintf("\n- %s: %s", choice.ID, choice.Label))
+			fmt.Fprintf(&description, "\n- %s: %s", choice.ID, choice.Label)
 		}
 	}
 	response, err := connection.UnstableCreateElicitation(ctx, acp.UnstableCreateElicitationRequest{

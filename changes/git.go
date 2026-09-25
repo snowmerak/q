@@ -174,7 +174,7 @@ func readUntracked(root, path string) (Section, error) {
 	if err != nil {
 		return section, err
 	}
-	defer fs.Close()
+	defer func() { _ = fs.Close() }()
 	path = filepath.FromSlash(path)
 	info, err := fs.Lstat(path)
 	if err != nil {
@@ -193,7 +193,7 @@ func readUntracked(root, path string) (Section, error) {
 		if err != nil {
 			return section, err
 		}
-		defer file.Close()
+		defer func() { _ = file.Close() }()
 		body, err = io.ReadAll(io.LimitReader(file, maximumPatchBytes+1))
 		if err != nil {
 			return section, err

@@ -154,7 +154,7 @@ func (r *delegationRuntime) Call(ctx context.Context, call client.ToolCall) (cli
 func (r *delegationRuntime) SearchSkillHints(ctx context.Context, query string, limit int) (qtools.SkillHintSearchResult, error) {
 	searcher, ok := r.base.(skillHintSearcher)
 	if !ok {
-		return qtools.SkillHintSearchResult{}, errors.New("Agent Skills hint search is unavailable")
+		return qtools.SkillHintSearchResult{}, errors.New("agent skills hint search is unavailable")
 	}
 	return searcher.SearchSkillHints(ctx, query, limit)
 }

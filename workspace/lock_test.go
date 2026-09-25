@@ -64,7 +64,11 @@ func TestNamedLockUsesRequestedPath(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer lock.Close()
+	defer func() {
+		if err := lock.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	if lock.Path() != filepath.Join(root, "library.lock") {
 		t.Fatalf("lock path = %q", lock.Path())
 	}
@@ -139,7 +143,11 @@ func TestWorkspaceLockProcessHelper(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer lock.Close()
+	defer func() {
+		if err := lock.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	ready := os.Getenv(lockHelperReady)
 	if err := os.WriteFile(ready, []byte(strconv.Itoa(os.Getpid())), 0o600); err != nil {
 		t.Fatal(err)

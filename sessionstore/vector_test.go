@@ -80,7 +80,11 @@ func TestHNSWVectorSearchPersistsUpdatesAndFilters(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer reopened.Close()
+	defer func() {
+		if err := reopened.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	persisted, err := reopened.Search(context.Background(), SearchOptions{
 		Vector: &VectorQuery{Embedding: []float32{1, 0, 0}}, Limit: 1,
 	})
@@ -134,7 +138,11 @@ func TestHNSWLoadedIndexRebuildsBeforeAppend(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			defer reopened.Close()
+			defer func() {
+				if err := reopened.Close(); err != nil {
+					t.Error(err)
+				}
+			}()
 			if reopened.vectors.appendable {
 				t.Fatal("loaded HNSW graph unexpectedly marked appendable")
 			}
@@ -165,7 +173,11 @@ func TestHNSWHybridSearchFusesTextAndVectorCandidates(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer store.Close()
+	defer func() {
+		if err := store.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	for _, record := range []Record{
 		{ID: "text", Kind: KindResult, Content: "exact compiler diagnostic", Embedding: &Embedding{Model: "embed-test", Vector: []float32{0, 1, 0}}},
 		{ID: "semantic", Kind: KindSummary, Content: "build investigation", Embedding: &Embedding{Model: "embed-test", Vector: []float32{1, 0, 0}}},
@@ -197,7 +209,11 @@ func TestHNSWHybridSearchGatesWeakTextForConfidentSemanticMatch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer store.Close()
+	defer func() {
+		if err := store.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	if _, err := store.Save(Record{
 		ID: "semantic", Kind: KindSkill, Summary: "action-writing", Content: "Write kinetic action scenes with clear physical objectives.",
 		Embedding: &Embedding{Model: "embed-test", Vector: []float32{1, 0, 0}},
@@ -265,7 +281,11 @@ func TestHNSWMultipleProjectionsCollapseUpdateAndDelete(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer store.Close()
+	defer func() {
+		if err := store.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	created := time.Date(2026, time.August, 13, 12, 0, 0, 0, time.UTC)
 	proposition := Record{
 		ID: "prop", Kind: KindProposition, Scope: "global", Content: "canonical", CreatedAt: created, UpdatedAt: created,
@@ -370,7 +390,11 @@ func TestHNSWCorruptionAndModelChangesRebuildFromRecords(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer changed.Close()
+	defer func() {
+		if err := changed.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	empty, err := changed.Search(context.Background(), SearchOptions{
 		Vector: &VectorQuery{Embedding: []float32{1, 0, 0}},
 	})
@@ -437,7 +461,11 @@ func TestVectorConfigurationChangesPreserveTextIndex(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer withOtherModel.Close()
+	defer func() {
+		if err := withOtherModel.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	if _, err := os.Stat(marker); err != nil {
 		t.Fatalf("changing embedding model rebuilt the text index: %v", err)
 	}
@@ -451,7 +479,11 @@ func TestEmbeddingAndVectorQueryValidation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer store.Close()
+	defer func() {
+		if err := store.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	if _, err := store.Save(Record{
 		ID: "zero", Kind: KindMessage, Embedding: &Embedding{Model: "embed-test", Vector: []float32{0, 0, 0}},
 	}); err == nil {

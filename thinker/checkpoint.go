@@ -118,39 +118,39 @@ func CloneJobCheckpoint(checkpoint JobCheckpoint) JobCheckpoint {
 // state before it can select an idempotency key or suppress model work.
 func ValidateJobCheckpoint(checkpoint JobCheckpoint) error {
 	if checkpoint.Version != JobCheckpointVersion {
-		return fmt.Errorf("unsupported Thinker checkpoint version %d", checkpoint.Version)
+		return fmt.Errorf("unsupported thinker checkpoint version %d", checkpoint.Version)
 	}
 	if strings.TrimSpace(checkpoint.JobID) == "" {
-		return errors.New("Thinker checkpoint job ID is required")
+		return errors.New("thinker checkpoint job ID is required")
 	}
 	if !validHex(checkpoint.InputDigest, sha256.Size) {
-		return errors.New("Thinker checkpoint input digest is invalid")
+		return errors.New("thinker checkpoint input digest is invalid")
 	}
 	if !validHex(checkpoint.Generation, 12) {
-		return errors.New("Thinker checkpoint generation is invalid")
+		return errors.New("thinker checkpoint generation is invalid")
 	}
 	if checkpoint.NextSlot < 0 || checkpoint.NextSlot > maximumCheckpointSlot {
-		return errors.New("Thinker checkpoint slot is invalid")
+		return errors.New("thinker checkpoint slot is invalid")
 	}
 	if checkpoint.Result.Proposed < checkpoint.Result.Processed || checkpoint.Result.Processed != checkpoint.NextSlot ||
 		checkpoint.Result.Registered != checkpoint.Result.Created+checkpoint.Result.Merged ||
 		checkpoint.Result.Processed != checkpoint.Result.Registered+checkpoint.Result.Discarded ||
 		len(checkpoint.Acknowledged) != checkpoint.Result.Processed ||
 		len(checkpoint.Result.IDs) > checkpoint.Result.Registered {
-		return errors.New("Thinker checkpoint result counters are inconsistent")
+		return errors.New("thinker checkpoint result counters are inconsistent")
 	}
 	if checkpoint.Completed && checkpoint.Pending != nil {
-		return errors.New("completed Thinker checkpoint has a pending registration")
+		return errors.New("completed thinker checkpoint has a pending registration")
 	}
 	for _, acknowledged := range checkpoint.Acknowledged {
 		if strings.TrimSpace(acknowledged.Content) == "" || !supportedPropositionAction(acknowledged.Action) {
-			return errors.New("Thinker checkpoint acknowledgement is invalid")
+			return errors.New("thinker checkpoint acknowledgement is invalid")
 		}
 	}
 	if checkpoint.Pending != nil {
 		if checkpoint.Pending.Slot != checkpoint.NextSlot || checkpoint.Pending.Key != checkpointIdempotencyKey(checkpoint, checkpoint.NextSlot) ||
 			checkpoint.Result.Proposed <= checkpoint.Result.Processed || strings.TrimSpace(checkpoint.Pending.Request.Content) == "" {
-			return errors.New("Thinker checkpoint pending registration is invalid")
+			return errors.New("thinker checkpoint pending registration is invalid")
 		}
 	}
 	return nil

@@ -148,7 +148,7 @@ func (s *Store) archiveDay(ctx context.Context, day string) error {
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 	_, err = tx.ExecContext(ctx, `
 INSERT INTO usage_archives(day, path, sha256, rows, total_tokens, archived_at_ms)
 VALUES(?, ?, ?, ?, ?, ?)
@@ -197,7 +197,7 @@ func (s *Store) validateExistingArchive(ctx context.Context, day, path string, r
 	return nil
 }
 
-func (s *Store) rawRowsForDay(ctx context.Context, day string) ([]archiveRow, error) {
+func (s *Store) rawRowsForDay(ctx context.Context, day string) (values []archiveRow, returnErr error) {
 	start, end, err := dayBounds(day)
 	if err != nil {
 		return nil, err
@@ -209,8 +209,7 @@ FROM usage_events WHERE occurred_at_ms >= ? AND occurred_at_ms < ? ORDER BY even
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	var values []archiveRow
+	defer func() { returnErr = errors.Join(returnErr, rows.Close()) }()
 	for rows.Next() {
 		var value archiveRow
 		if err := rows.Scan(&value.EventID, &value.OccurredAtMillis, &value.Model, &value.Role,
@@ -276,7 +275,7 @@ func fileSHA256(path string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 	hash := sha256.New()
 	if _, err := io.Copy(hash, file); err != nil {
 		return "", err

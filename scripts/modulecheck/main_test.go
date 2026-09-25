@@ -52,7 +52,11 @@ func TestWriteModuleArchive(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer zr.Close()
+	defer func() {
+		if err := zr.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	if len(zr.File) != 2 {
 		t.Fatalf("nested module included: %v", zr.File)
 	}

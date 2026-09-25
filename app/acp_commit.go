@@ -344,7 +344,7 @@ func renderACPCommitProposal(proposals []commitagent.Proposal, autoStaged bool) 
 		body.WriteString("\nNote: the Git index was initially empty, so q staged all working-tree changes before generating this proposal. Cancelling leaves them staged.\n")
 	}
 	for index, proposal := range proposals {
-		body.WriteString(fmt.Sprintf("\n%d. %s\n", index+1, acpCommitSubject(proposal)))
+		fmt.Fprintf(&body, "\n%d. %s\n", index+1, acpCommitSubject(proposal))
 		for _, line := range proposal.Body {
 			body.WriteString("   - ")
 			body.WriteString(line)
@@ -377,7 +377,7 @@ func renderACPCommitResult(result commitagent.Result, pushed bool, pushErr error
 	if len(result.Messages) == 1 {
 		body.WriteString("Commit created.\n")
 	} else {
-		body.WriteString(fmt.Sprintf("%d commits created.\n", len(result.Messages)))
+		fmt.Fprintf(&body, "%d commits created.\n", len(result.Messages))
 	}
 	for _, message := range result.Messages {
 		body.WriteString("\n- ")

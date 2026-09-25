@@ -19,7 +19,11 @@ func TestStoreSaveGetUpdateAndReopen(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer store.Close()
+	defer func() {
+		if err := store.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	created := time.Date(2026, time.July, 1, 12, 0, 0, 0, time.FixedZone("KST", 9*60*60))
 	saved, err := store.Save(Record{
 		Kind: KindMessage, RunID: "run-1", Role: "user", CreatedAt: created,
@@ -77,7 +81,11 @@ func TestStoreSaveGetUpdateAndReopen(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer reopened.Close()
+	defer func() {
+		if err := reopened.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	result, err := reopened.Search(context.Background(), SearchOptions{Text: "confirmed"})
 	if err != nil {
 		t.Fatal(err)
@@ -92,7 +100,11 @@ func TestSearchFiltersDatesAndSorts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer store.Close()
+	defer func() {
+		if err := store.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	old := time.Date(2025, time.January, 1, 0, 0, 0, 0, time.UTC)
 	newer := old.AddDate(1, 0, 0)
 	oldRecord, err := store.Save(Record{
@@ -157,7 +169,11 @@ func TestSearchAppliesTextFieldBoosts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer store.Close()
+	defer func() {
+		if err := store.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	for _, record := range []Record{
 		{ID: "summary", Kind: KindSkill, Summary: "deployment", Content: "unrelated"},
 		{ID: "content", Kind: KindSkill, Summary: "unrelated", Content: "deployment"},
@@ -220,7 +236,11 @@ func TestSaveKeepsSourceWhenIndexingFailsAndOpenCatchesUp(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer reopened.Close()
+	defer func() {
+		if err := reopened.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	result, err := reopened.Search(context.Background(), SearchOptions{Text: "durable"})
 	if err != nil {
 		t.Fatal(err)
@@ -251,7 +271,11 @@ func TestRebuildRestoresDeletedDerivedIndex(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer rebuilt.Close()
+	defer func() {
+		if err := rebuilt.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	if err := rebuilt.Rebuild(); err != nil {
 		t.Fatal(err)
 	}
@@ -389,7 +413,11 @@ func TestOpenWithCustomStoreDirectory(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer owner.Close()
+	defer func() {
+		if err := owner.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	store, err := OpenWithOptions(root, OpenOptions{WorkspaceLock: owner, Directory: "library"})
 	if err != nil {
 		t.Fatal(err)
@@ -414,13 +442,18 @@ func TestSearchValidation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer store.Close()
+	defer func() {
+		if err := store.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	_, err = store.Search(context.Background(), SearchOptions{
 		Sort: SortNewest, Recency: &Recency{Weight: 1, HalfLife: time.Hour},
 	})
 	if err == nil {
 		t.Fatal("Search accepted recency weighting with newest sort")
 	}
+	//nolint:staticcheck // The nil context is the contract under test.
 	if _, err := store.Search(nil, SearchOptions{}); err == nil {
 		t.Fatal("Search accepted a nil context")
 	}
@@ -431,7 +464,11 @@ func TestLoomReferencesIncludesExplicitAndLegacyRecords(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer store.Close()
+	defer func() {
+		if err := store.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	first := "loom://0123456789abcdef0123456789abcdef"
 	second := "loom://fedcba9876543210fedcba9876543210"
 	if _, err := store.Save(Record{Kind: KindResult, Refs: []string{first}, Content: `{"loom_ref":"` + second + `"}`}); err != nil {

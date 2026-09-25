@@ -249,8 +249,8 @@ func (m model) customSelectionDetail() string {
 			b.WriteString(m.customRoleModelSummary(info.Role))
 			b.WriteString("\n")
 		}
-		b.WriteString(fmt.Sprintf("Tools      %d available\n", len(definition.Tools)))
-		b.WriteString(fmt.Sprintf("Delegates  %d granted\n", len(definition.Delegates)))
+		fmt.Fprintf(&b, "Tools      %d available\n", len(definition.Tools))
+		fmt.Fprintf(&b, "Delegates  %d granted\n", len(definition.Delegates))
 		b.WriteString("\n")
 		b.WriteString(agentTraceTitleStyle(m.dark).Render("SYSTEM PROMPT"))
 		b.WriteString("\n")

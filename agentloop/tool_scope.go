@@ -53,7 +53,7 @@ func (r *scopedToolRuntime) SearchSkillHints(ctx context.Context, query string, 
 	}
 	searcher, ok := r.base.(skillHintSearcher)
 	if !ok {
-		return qtools.SkillHintSearchResult{}, fmt.Errorf("Agent Skills hint search is unavailable")
+		return qtools.SkillHintSearchResult{}, fmt.Errorf("agent skills hint search is unavailable")
 	}
 	return searcher.SearchSkillHints(ctx, query, limit)
 }

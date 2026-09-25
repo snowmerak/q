@@ -7,6 +7,7 @@ import (
 	"archive/zip"
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/url"
@@ -32,7 +33,7 @@ func main() {
 	}
 }
 
-func run() error {
+func run() (returnErr error) {
 	rootBytes, err := exec.Command("git", "rev-parse", "--show-toplevel").Output()
 	if err != nil {
 		return err
@@ -75,7 +76,7 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	defer os.RemoveAll(tempDir)
+	defer func() { returnErr = errors.Join(returnErr, os.RemoveAll(tempDir)) }()
 	proxy := filepath.Join(tempDir, "proxy")
 	for _, m := range []struct{ dir, module, version string }{
 		{"", qModule, qVersion},

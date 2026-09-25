@@ -58,14 +58,22 @@ func TestStartupKeepsToolsWhenArchiveOpenFails(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer manager.Close()
+	defer func() {
+		if err := manager.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	request := startupRequest{
 		ctx: t.Context(), memoryCtx: t.Context(), store: config.Store{Dir: settingsDir},
 		workspaceStore: workspace.Store{Root: root}, loaded: config.Default(),
 		configErr: config.ErrNotFound, manager: manager, lifecycle: newStartupLifecycle(), providerReady: true,
 	}
 	result := request.run(nil)
-	defer request.lifecycle.closeResources()
+	defer func() {
+		if err := request.lifecycle.closeResources(); err != nil {
+			t.Error(err)
+		}
+	}()
 	if result.err != nil || result.archiveErr == nil || !strings.Contains(result.archiveErr.Error(), "archive open failed") {
 		t.Fatalf("startup errors = (%v, %v)", result.err, result.archiveErr)
 	}

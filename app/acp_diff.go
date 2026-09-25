@@ -46,7 +46,7 @@ func (r *acpFileDiffRuntime) Environment() qtools.HostEnvironment { return r.bas
 func (r *acpFileDiffRuntime) SearchSkillHints(ctx context.Context, query string, limit int) (qtools.SkillHintSearchResult, error) {
 	searcher, ok := r.base.(skillHintSearcher)
 	if !ok {
-		return qtools.SkillHintSearchResult{}, errors.New("Agent Skills hint search is unavailable")
+		return qtools.SkillHintSearchResult{}, errors.New("agent skills hint search is unavailable")
 	}
 	return searcher.SearchSkillHints(ctx, query, limit)
 }
@@ -130,7 +130,7 @@ func readACPFileSnapshot(root *os.Root, relative string) (acpFileSnapshot, bool)
 	if err != nil {
 		return acpFileSnapshot{}, false
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 	info, err := file.Stat()
 	if err != nil || !info.Mode().IsRegular() || info.Size() > maxACPFileDiffBytes {
 		return acpFileSnapshot{}, false

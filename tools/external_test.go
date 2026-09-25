@@ -25,7 +25,7 @@ func TestExternalMCPToolsAreRoleScopedAndCaptured(t *testing.T) {
 	}
 	mcp.AddTool(server, &mcp.Tool{Name: "echo.value", Description: "Echo a value."},
 		func(_ context.Context, _ *mcp.CallToolRequest, input echoInput) (*mcp.CallToolResult, echoOutput, error) {
-			return nil, echoOutput{Value: input.Value}, nil
+			return nil, echoOutput(input), nil
 		})
 	handler := mcp.NewStreamableHTTPHandler(func(request *http.Request) *mcp.Server {
 		if request.Header.Get("Authorization") != "Bearer test-token" {
@@ -44,7 +44,11 @@ func TestExternalMCPToolsAreRoleScopedAndCaptured(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer runtime.Close()
+	defer func() {
+		if err := runtime.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	value := mcpconfig.Config{
 		Version: mcpconfig.CurrentVersion,
 		Servers: map[string]mcpconfig.ServerConfig{"docs": {
@@ -97,7 +101,11 @@ func TestConfigureExternalIsolatesServerFailures(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer runtime.Close()
+	defer func() {
+		if err := runtime.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	value := mcpconfig.Config{
 		Version: mcpconfig.CurrentVersion,
 		Servers: map[string]mcpconfig.ServerConfig{"missing": {Transport: mcpconfig.TransportStdio, Command: "definitely-not-a-q-test-command"}},
@@ -122,7 +130,7 @@ func TestExternalScopeKeepsSessionServersOutOfBaseRuntime(t *testing.T) {
 	}
 	mcp.AddTool(server, &mcp.Tool{Name: "echo", Description: "Echo a value."},
 		func(_ context.Context, _ *mcp.CallToolRequest, input echoInput) (*mcp.CallToolResult, echoOutput, error) {
-			return nil, echoOutput{Value: input.Value}, nil
+			return nil, echoOutput(input), nil
 		})
 	httpServer := httptest.NewServer(mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server {
 		return server
@@ -134,7 +142,11 @@ func TestExternalScopeKeepsSessionServersOutOfBaseRuntime(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer runtime.Close()
+	defer func() {
+		if err := runtime.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	base := mcpconfig.Config{
 		Version: mcpconfig.CurrentVersion,
 		Servers: map[string]mcpconfig.ServerConfig{"workspace": {

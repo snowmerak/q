@@ -103,7 +103,7 @@ func (s ConfigStore) LoadOrDefault() (Config, error) {
 	if err != nil {
 		return Config{}, fmt.Errorf("library: open config: %w", err)
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 	decoder := json.NewDecoder(io.LimitReader(file, 1<<20))
 	decoder.DisallowUnknownFields()
 	var value Config

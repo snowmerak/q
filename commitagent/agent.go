@@ -140,4 +140,3 @@ func assistantContent(response *client.ChatResponse) (string, error) {
 }
 
 //go:fix inline
-func pointerProposal(value Proposal) *Proposal { return new(value) }

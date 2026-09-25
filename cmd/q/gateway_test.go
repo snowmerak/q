@@ -58,7 +58,11 @@ func TestListenGatewayFallsBackOnlyForConfiguredPort(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer occupied.Close()
+	defer func() {
+		if err := occupied.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	port := occupied.Addr().(*net.TCPAddr).Port
 	configured := gatewayconfig.ServerConfig{Host: "127.0.0.1", Port: port}
 
@@ -66,7 +70,11 @@ func TestListenGatewayFallsBackOnlyForConfiguredPort(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer listener.Close()
+	defer func() {
+		if err := listener.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	if !fallback || listener.Addr().(*net.TCPAddr).Port == port {
 		t.Fatalf("fallback=%v address=%s", fallback, listener.Addr())
 	}
@@ -253,7 +261,11 @@ func TestRunGatewayWithStoreServesConfiguredProviders(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer usageStore.Close()
+	defer func() {
+		if err := usageStore.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	view, err := usageStore.Query(t.Context(), usagelog.Filter{
 		From: time.Now().Add(-time.Hour), To: time.Now().Add(time.Hour),
 	})

@@ -52,7 +52,11 @@ func TestWorkspaceServiceMultiplexesCanonicalRootsAndLeases(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer service.Close()
+	defer func() {
+		if err := service.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	if !service.IsLeader() {
 		t.Fatal("first runtime did not become leader")
 	}
@@ -64,7 +68,11 @@ func TestWorkspaceServiceMultiplexesCanonicalRootsAndLeases(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer follower.Close()
+	defer func() {
+		if err := follower.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	if follower.IsLeader() {
 		t.Fatal("second runtime unexpectedly became leader")
 	}
@@ -84,13 +92,21 @@ func TestWorkspaceServiceMultiplexesCanonicalRootsAndLeases(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer first.Close()
+	defer func() {
+		if err := first.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	alias := filepath.Join(firstRoot, "nested", "..")
 	secondLease, err := follower.Client().OpenWorkspace(context.Background(), alias, sessionstore.VectorConfig{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer secondLease.Close()
+	defer func() {
+		if err := secondLease.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	if first.ID() != secondLease.ID() || first.Root() != secondLease.Root() {
 		t.Fatalf("canonical handles differ: %#v %#v", first, secondLease)
 	}
@@ -98,7 +114,11 @@ func TestWorkspaceServiceMultiplexesCanonicalRootsAndLeases(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer other.Close()
+	defer func() {
+		if err := other.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	if other.ID() == first.ID() {
 		t.Fatal("distinct roots received the same workspace ID")
 	}
@@ -153,14 +173,22 @@ func TestWorkspaceVectorConfigurationAndSearch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer service.Close()
+	defer func() {
+		if err := service.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	root := t.TempDir()
 	config := sessionstore.VectorConfig{Model: "test-embedding", Dimensions: 2}
 	workspace, err := service.Client().OpenWorkspace(context.Background(), root, config)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer workspace.Close()
+	defer func() {
+		if err := workspace.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	if !workspace.VectorConfig().Enabled() {
 		t.Fatalf("vector config = %#v", workspace.VectorConfig())
 	}
@@ -168,7 +196,11 @@ func TestWorkspaceVectorConfigurationAndSearch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("same vector configuration was not idempotent: %v", err)
 	}
-	defer shared.Close()
+	defer func() {
+		if err := shared.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	if _, err := service.Client().OpenWorkspace(context.Background(), root, sessionstore.VectorConfig{Model: "other", Dimensions: 2}); !errors.Is(err, ErrVectorConflict) {
 		t.Fatalf("vector conflict error = %v", err)
 	}
@@ -232,12 +264,20 @@ func TestWorkspaceOpenPreservesLegacyIndexLockError(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer direct.Close()
+	defer func() {
+		if err := direct.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	service, err := EnsureWithOptions(context.Background(), testEnsureOptions(t, t.TempDir()))
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer service.Close()
+	defer func() {
+		if err := service.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	if _, err := service.Client().OpenWorkspace(context.Background(), root, sessionstore.VectorConfig{}); !errors.Is(err, sessionstore.ErrIndexLocked) {
 		t.Fatalf("OpenWorkspace error = %v, want ErrIndexLocked", err)
 	}
@@ -270,12 +310,20 @@ func TestWriterDrainsBeforeServiceShutdown(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer restarted.Close()
+	defer func() {
+		if err := restarted.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	reopened, err := restarted.Client().OpenWorkspace(ctx, root, sessionstore.VectorConfig{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer reopened.Close()
+	defer func() {
+		if err := reopened.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	result, err := reopened.Search(ctx, sessionstore.SearchOptions{Text: "drained before shutdown", Limit: 5})
 	if err != nil || len(result.Hits) != 1 {
 		t.Fatalf("restarted search = %#v, err = %v", result, err)
@@ -297,7 +345,11 @@ func TestWorkspaceReconnectsAfterLeaderHandoff(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer follower.Close()
+	defer func() {
+		if err := follower.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	workspace, err := follower.Client().OpenWorkspace(ctx, t.TempDir(), sessionstore.VectorConfig{})
 	if err != nil {
 		t.Fatal(err)
@@ -316,7 +368,11 @@ func TestWorkspaceReconnectsAfterLeaderHandoff(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenWorkspace during leader handoff: %v", err)
 	}
-	defer openedDuringHandoff.Close()
+	defer func() {
+		if err := openedDuringHandoff.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	loaded, err := workspace.Get(saved.ID)
 	if err != nil || loaded.Content != saved.Content {
 		t.Fatalf("Get after leader handoff = (%#v, %v)", loaded, err)
@@ -353,14 +409,22 @@ func TestSaveBatchResponseLossDoesNotDuplicateRecords(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer service.Close()
+	defer func() {
+		if err := service.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	client := service.Client()
 	client.http.Transport = &loseFirstResponse{next: http.DefaultTransport, suffix: "/records/save-batch"}
 	workspace, err := client.OpenWorkspace(ctx, t.TempDir(), sessionstore.VectorConfig{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer workspace.Close()
+	defer func() {
+		if err := workspace.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	records, err := workspace.SaveBatch([]sessionstore.Record{{Kind: sessionstore.KindMessage, Content: "exactly once archive write"}})
 	if err != nil || len(records) != 1 || records[0].ID == "" {
 		t.Fatalf("SaveBatch = (%#v, %v)", records, err)
@@ -378,7 +442,11 @@ func TestOpenWorkspaceResponseLossReusesLease(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer service.Close()
+	defer func() {
+		if err := service.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	client := service.Client()
 	client.http.Transport = &loseFirstResponse{next: http.DefaultTransport, suffix: "/workspaces/open"}
 	workspace, err := client.OpenWorkspace(ctx, root, sessionstore.VectorConfig{})
@@ -401,13 +469,21 @@ func TestDeleteResponseLossRemainsIdempotent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer service.Close()
+	defer func() {
+		if err := service.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	client := service.Client()
 	workspace, err := client.OpenWorkspace(ctx, t.TempDir(), sessionstore.VectorConfig{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer workspace.Close()
+	defer func() {
+		if err := workspace.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	record, err := workspace.Save(sessionstore.Record{Kind: sessionstore.KindMessage, Content: "delete exactly once"})
 	if err != nil {
 		t.Fatal(err)
@@ -436,7 +512,11 @@ func TestSaveProtocolPreservesPreparedRecordsAndIndexingError(t *testing.T) {
 	}
 	manager.entries[entry.id] = entry
 	manager.byKey[entry.key] = entry
-	defer manager.close()
+	defer func() {
+		if err := manager.close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	health := Health{Service: ServiceName, ProtocolVersion: ProtocolVersion, Implementation: Implementation, Ready: true}
 	server := httptest.NewServer(newHandler(health, manager))
 	defer server.Close()

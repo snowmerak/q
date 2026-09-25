@@ -32,7 +32,7 @@ func (s Store) Load() (Config, error) {
 	if err != nil {
 		return Config{}, fmt.Errorf("remoteconfig: open %s: %w", s.Path(), err)
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 	var value Config
 	decoder := json.NewDecoder(file)
 	decoder.DisallowUnknownFields()

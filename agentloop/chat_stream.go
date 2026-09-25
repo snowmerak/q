@@ -102,7 +102,7 @@ func consumeChatStream(
 	if err != nil {
 		return nil, false, err
 	}
-	defer stream.Close()
+	defer func() { _ = stream.Close() }()
 
 	response := &client.ChatResponse{
 		Object: "chat.completion",

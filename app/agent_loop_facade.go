@@ -4,7 +4,6 @@ import (
 	"context"
 
 	"github.com/snowmerak/q/agentloop"
-	"github.com/snowmerak/q/client"
 )
 
 // RunAgentLoop preserves the original app event contract while using the
@@ -59,16 +58,6 @@ func projectAgentLoopEvent(source agentloop.Event) agentEvent {
 		event.toolCalls = result.ToolCalls
 	}
 	return event
-}
-
-func orchestrationToolResult(call client.ToolCall, content string, isError bool) client.Message {
-	if isError {
-		content = "Tool error: " + content
-	}
-	return client.Message{
-		Role: client.RoleTool, Name: call.Function.Name,
-		ToolCallID: call.ID, Content: content,
-	}
 }
 
 func emitAgentEvent(ctx context.Context, events chan<- agentEvent, event agentEvent) bool {

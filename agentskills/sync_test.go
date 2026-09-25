@@ -77,7 +77,11 @@ func TestSyncRecordsTracksAddUpdateAndDelete(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer store.Close()
+	defer func() {
+		if err := store.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	if err := registry.SyncRecords(context.Background(), store); err != nil {
 		t.Fatal(err)
 	}
@@ -144,7 +148,11 @@ func TestSyncRecordsDoesNotRewriteUnchangedSkills(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer store.Close()
+	defer func() {
+		if err := store.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	if err := registry.SyncRecords(context.Background(), store); err != nil {
 		t.Fatal(err)
 	}
@@ -190,7 +198,11 @@ func TestSyncRecordsReindexesWhenGitCommitChanges(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer store.Close()
+	defer func() {
+		if err := store.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	if err := registry.SyncRecords(context.Background(), store); err != nil {
 		t.Fatal(err)
 	}
@@ -262,7 +274,11 @@ func TestSyncRecordsForScopesLeavesOtherScopeUntouched(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer store.Close()
+	defer func() {
+		if err := store.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	for _, record := range []sessionstore.Record{
 		{ID: "global-skill", Kind: sessionstore.KindSkill, Scope: "global", Summary: "global"},
 		{ID: "project-skill", Kind: sessionstore.KindSkill, Scope: "project", Summary: "project"},

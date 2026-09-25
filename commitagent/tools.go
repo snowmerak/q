@@ -199,7 +199,7 @@ func (runtime *commitToolRuntime) callUncaptured(ctx context.Context, call clien
 		var input builtin.LoomInspectInput
 		if err = decodeArguments(call.Function.Arguments, &input); err == nil {
 			if runtime.loom == nil {
-				err = errors.New("Loom is unavailable")
+				err = errors.New("loom is unavailable")
 			} else {
 				output, err = runtime.loom.Inspect(ctx, input)
 			}
@@ -208,7 +208,7 @@ func (runtime *commitToolRuntime) callUncaptured(ctx context.Context, call clien
 		var input builtin.LoomReadInput
 		if err = decodeArguments(call.Function.Arguments, &input); err == nil {
 			if runtime.loom == nil {
-				err = errors.New("Loom is unavailable")
+				err = errors.New("loom is unavailable")
 			} else {
 				output, err = runtime.loom.Read(ctx, input)
 			}
@@ -217,7 +217,7 @@ func (runtime *commitToolRuntime) callUncaptured(ctx context.Context, call clien
 		var input builtin.LoomEvalInput
 		if err = decodeArguments(call.Function.Arguments, &input); err == nil {
 			if runtime.loom == nil {
-				err = errors.New("Loom is unavailable")
+				err = errors.New("loom is unavailable")
 			} else {
 				output, err = runtime.loom.Eval(ctx, input)
 			}

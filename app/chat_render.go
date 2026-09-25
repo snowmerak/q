@@ -445,9 +445,10 @@ func renderToolResult(message client.Message, dark bool, width int, collapsed bo
 		id := stringValue(value["command_id"])
 		status := stringValue(value["status"])
 		marker := "•"
-		if status == "succeeded" {
+		switch status {
+		case "succeeded":
 			marker = "✓"
-		} else if status == "failed" {
+		case "failed":
 			marker = "✗"
 		}
 		rendered = strings.TrimSpace(strings.Join([]string{marker, id, "·", status}, " "))

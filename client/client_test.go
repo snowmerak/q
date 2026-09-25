@@ -66,7 +66,11 @@ func TestChatUsesProviderConfigurationAndDefaultModel(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer c.Close()
+	defer func() {
+		if err := c.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	response, err := c.Chat(context.Background(), ChatRequest{
 		Messages: []Message{{Role: RoleUser, Content: "hi"}},
 		Extra:    map[string]any{"route": "request"}, Headers: http.Header{"X-Request": {"turn"}},

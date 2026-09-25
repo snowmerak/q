@@ -24,12 +24,12 @@ type ReadyMessage struct {
 
 // RunChild serves one immutable Gateway configuration until ctx is cancelled.
 // The first stdout line is a machine-readable readiness handshake.
-func RunChild(ctx context.Context, configPath, apiKey string, ready func(ReadyMessage) error) error {
+func RunChild(ctx context.Context, configPath, apiKey string, ready func(ReadyMessage) error) (returnErr error) {
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		return fmt.Errorf("providerhost: listen: %w", err)
 	}
-	defer listener.Close()
+	defer func() { _ = listener.Close() }() // Serve closes the listener too.
 
 	value, err := gateway.LoadConfig(configPath)
 	if err != nil {
@@ -39,10 +39,10 @@ func RunChild(ctx context.Context, configPath, apiKey string, ready func(ReadyMe
 	if err != nil {
 		return err
 	}
-	defer instance.Close()
+	defer func() { returnErr = errors.Join(returnErr, instance.Close()) }()
 	configDir := filepath.Dir(filepath.Dir(configPath))
 	usageRecorder := usagelog.New(configDir)
-	defer usageRecorder.Close()
+	defer func() { returnErr = errors.Join(returnErr, usageRecorder.Close()) }()
 
 	server := &http.Server{
 		Handler: AuthenticatedHandler(apiKey, ModelGroupHandler(

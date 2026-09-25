@@ -42,7 +42,7 @@ type InProcessEvaluator struct {
 	deferStore bool
 }
 
-func (e InProcessEvaluator) Evaluate(ctx context.Context, store *Store, request EvalRequest) (EvalResult, error) {
+func (e InProcessEvaluator) Evaluate(ctx context.Context, store *Store, request EvalRequest) (_ EvalResult, returnErr error) {
 	if store == nil {
 		return EvalResult{}, errors.New("loom: script store is required")
 	}
@@ -71,7 +71,7 @@ func (e InProcessEvaluator) Evaluate(ctx context.Context, store *Store, request 
 	if err != nil {
 		return EvalResult{}, err
 	}
-	defer lease.Close()
+	defer func() { returnErr = errors.Join(returnErr, lease.Close()) }()
 	for _, name := range names {
 		ref := request.Inputs[name]
 		if strings.TrimSpace(name) == "" {

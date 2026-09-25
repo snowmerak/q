@@ -45,7 +45,7 @@ func runRemoteWithStore(ctx context.Context, store config.Store, stdout, stderr 
 	if err != nil {
 		return fmt.Errorf("q remote: listen: %w", err)
 	}
-	defer listener.Close()
+	defer func() { _ = listener.Close() }() // Serve closes the listener too.
 
 	host, err := app.NewRemoteHost(ctx, store)
 	if err != nil {

@@ -399,7 +399,7 @@ func (m model) viewMCPLists() string {
 		} else if index == m.mcpCursor[0] {
 			cursor = "• "
 		}
-		left.WriteString(fmt.Sprintf("%s%s\n", cursor, mcpRoleLabel(roles[index])))
+		fmt.Fprintf(&left, "%s%s\n", cursor, mcpRoleLabel(roles[index]))
 		left.WriteString(subtleStyle.Render(fmt.Sprintf("    %d server(s)\n", len(m.mcpDraft.Roles[roles[index]]))))
 	}
 	var right strings.Builder
@@ -420,7 +420,7 @@ func (m model) viewMCPLists() string {
 			mark = "x"
 		}
 		server := m.mcpDraft.Servers[id]
-		right.WriteString(fmt.Sprintf("%s[%s] %s\n", cursor, mark, id))
+		fmt.Fprintf(&right, "%s[%s] %s\n", cursor, mark, id)
 		endpoint := server.Command
 		if server.Transport == mcpconfig.TransportStreamableHTTP {
 			endpoint = server.URL

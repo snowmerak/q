@@ -58,7 +58,11 @@ func TestRunChildReportsRandomLoopbackEndpoint(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer response.Body.Close()
+	defer func() {
+		if err := response.Body.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	var payload struct {
 		Data []struct {
 			ID string `json:"id"`

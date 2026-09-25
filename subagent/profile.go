@@ -130,7 +130,7 @@ func (s ProfileStore) List() []ProfileEntry {
 			continue
 		}
 		for _, f := range files {
-			if f.IsDir() || !(strings.HasSuffix(f.Name(), ".yaml") || strings.HasSuffix(f.Name(), ".yml")) {
+			if f.IsDir() || (!strings.HasSuffix(f.Name(), ".yaml") && !strings.HasSuffix(f.Name(), ".yml")) {
 				continue
 			}
 			e := ProfileEntry{Path: filepath.Join(scope.dir, f.Name()), Scope: scope.name}
@@ -146,9 +146,10 @@ func (s ProfileStore) List() []ProfileEntry {
 			if i == j || result[i].Profile.Name == "" || result[i].Profile.Name != result[j].Profile.Name {
 				continue
 			}
-			if result[i].Scope == result[j].Scope {
+			switch result[i].Scope {
+			case result[j].Scope:
 				result[i].Err = errors.New("duplicate profile name in scope")
-			} else if result[i].Scope == "global" {
+			case "global":
 				result[i].Shadowed = true
 			}
 		}
@@ -184,7 +185,7 @@ func (s ProfileStore) Get(name string) (ProfileEntry, error) {
 	}
 	return ProfileEntry{}, fmt.Errorf("unknown subagent %q", name)
 }
-func (s ProfileStore) Save(p Profile, scope string, original *ProfileEntry) error {
+func (s ProfileStore) Save(p Profile, scope string, original *ProfileEntry) (returnErr error) {
 	p.Kind = p.EffectiveKind()
 	if err := p.Validate(); err != nil {
 		return err
@@ -252,14 +253,16 @@ func (s ProfileStore) Save(p Profile, scope string, original *ProfileEntry) erro
 		return err
 	}
 	tmp := f.Name()
-	defer os.Remove(tmp)
+	defer func() {
+		if removeErr := os.Remove(tmp); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
+			returnErr = errors.Join(returnErr, removeErr)
+		}
+	}()
 	if _, err = f.Write(raw); err != nil {
-		f.Close()
-		return err
+		return errors.Join(err, f.Close())
 	}
 	if err = f.Sync(); err != nil {
-		f.Close()
-		return err
+		return errors.Join(err, f.Close())
 	}
 	if err = f.Close(); err != nil {
 		return err

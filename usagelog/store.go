@@ -94,7 +94,7 @@ func (s *Store) initialize() error {
 	if err != nil {
 		return fmt.Errorf("usage: begin schema migration: %w", err)
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 	_, err = tx.Exec(`
 CREATE TABLE IF NOT EXISTS usage_events (
   event_id TEXT PRIMARY KEY,
@@ -171,7 +171,7 @@ func (s *Store) Append(ctx context.Context, record client.UsageRecord) (bool, er
 	if err != nil {
 		return false, err
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 	inserted, err := appendRecord(ctx, tx, record)
 	if err != nil {
 		return false, err
@@ -372,12 +372,12 @@ COALESCE(SUM(estimated_calls),0), COALESCE(SUM(cache_estimated_calls),0)`
 const rollupColumnsSQL = `calls, prompt_tokens, completion_tokens, total_tokens, cached_tokens,
 cache_write_tokens, estimated_calls, cache_estimated_calls`
 
-func scanGroupedView(ctx context.Context, db *sql.DB, query string, args []any, view *UsageView) error {
+func scanGroupedView(ctx context.Context, db *sql.DB, query string, args []any, view *UsageView) (returnErr error) {
 	rows, err := db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return err
 	}
-	defer rows.Close()
+	defer func() { returnErr = errors.Join(returnErr, rows.Close()) }()
 	series := make(map[string]Totals)
 	models := make(map[string]Totals)
 	roles := make(map[string]Totals)

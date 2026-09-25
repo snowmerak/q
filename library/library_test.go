@@ -81,7 +81,11 @@ func TestEnsureElectsOneLeaderAndServesStatusWithoutAuthentication(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer first.Close()
+	defer func() {
+		if err := first.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	if !first.IsLeader() {
 		t.Fatal("first runtime did not become leader")
 	}
@@ -101,7 +105,11 @@ func TestEnsureElectsOneLeaderAndServesStatusWithoutAuthentication(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer second.Close()
+	defer func() {
+		if err := second.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	if second.IsLeader() {
 		t.Fatal("second runtime also became leader")
 	}
@@ -144,7 +152,11 @@ func TestLibraryStartupDoesNotCreateAuthenticationStateOrModifyGatewaySettings(t
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer runtime.Close()
+	defer func() {
+		if err := runtime.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	if _, err := NewClient(value.Endpoint(), gatewayKey.Secret, time.Second).Status(context.Background()); err != nil {
 		t.Fatalf("Library status required authentication: %v", err)
 	}
@@ -183,7 +195,11 @@ func TestGlobalSkillAPIReconcilesOnlyOnExplicitReload(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer runtime.Close()
+	defer func() {
+		if err := runtime.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	client := runtime.Client()
 	publicClient := NewClient(value.Endpoint(), "", time.Second)
 
@@ -241,7 +257,11 @@ func TestGlobalSkillSearchBackfillsAndReassignsEmbeddingModel(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer runtime.Close()
+	defer func() {
+		if err := runtime.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	client := runtime.Client()
 
 	lexical, err := client.SearchSkills(context.Background(), SkillSearchRequest{Query: "feline"})
@@ -346,7 +366,11 @@ func TestGlobalPropositionAPIReadsStoredRecordsWithRecency(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer runtime.Close()
+	defer func() {
+		if err := runtime.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	result, err := NewClient(value.Endpoint(), "", time.Second).SearchPropositions(context.Background(), PropositionSearchRequest{
 		Query: "how should services emit logs", Tags: []string{"logging"},
 	})
@@ -378,7 +402,11 @@ func TestGlobalPropositionAPIRegistersIdempotently(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer runtime.Close()
+	defer func() {
+		if err := runtime.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	input := PropositionRegisterRequest{
 		Content:    "The Thinker registers one proposition per tool call.",
 		Queries:    []string{"how does thinker register propositions", "proposition tool granularity"},
@@ -424,7 +452,11 @@ func TestPropositionQueueJudgesAndMergesDuplicateAcrossIdempotencyKeys(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer runtime.Close()
+	defer func() {
+		if err := runtime.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	client := NewClient(runtime.Endpoint(), "", time.Second)
 	first, err := client.RegisterProposition(context.Background(), "duplicate/one", PropositionRegisterRequest{
 		Content: "The Library serializes proposition adjudication.",
@@ -494,7 +526,11 @@ func TestPropositionReceiptSurvivesLeaderRestartWithoutRejudging(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer runtime.Close()
+	defer func() {
+		if err := runtime.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	retried, err := NewClient(runtime.Endpoint(), "", time.Second).RegisterProposition(context.Background(), "receipt/restart", input)
 	if err != nil || retried.Created || retried.ID != created.ID || retried.Action != PropositionActionCreate {
 		t.Fatalf("retried = %#v, %v", retried, err)
@@ -514,7 +550,11 @@ func TestPropositionQueueRunsJudgeSessionsSequentially(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer runtime.Close()
+	defer func() {
+		if err := runtime.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	client := NewClient(runtime.Endpoint(), "", time.Second)
 	var wait sync.WaitGroup
 	errorsByCall := make(chan error, 2)
@@ -553,7 +593,11 @@ func TestFailedPropositionJobCanBeRetriedWithSameIdempotencyKey(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer runtime.Close()
+	defer func() {
+		if err := runtime.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	client := NewClient(runtime.Endpoint(), "", time.Second)
 	input := PropositionRegisterRequest{
 		Content: "Failed adjudication jobs are retryable.", Confidence: 0.9,
@@ -633,7 +677,11 @@ func TestGlobalPropositionAPIPersistsSearchesAndDeletesVectorProjections(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer runtime.Close()
+	defer func() {
+		if err := runtime.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	embedder := &testPropositionEmbedder{}
 	if err := runtime.Client().ConfigureEmbedding(embedder, "embed-test", 3); err != nil {
 		t.Fatal(err)
@@ -660,7 +708,7 @@ func TestGlobalPropositionAPIPersistsSearchesAndDeletesVectorProjections(t *test
 		t.Fatal(err)
 	}
 	result, err := runtime.Client().SearchPropositions(context.Background(), PropositionSearchRequest{
-		Query: "unseen semantic lookup", RecencyWeight: floatPointer(0), Limit: 10,
+		Query: "unseen semantic lookup", RecencyWeight: new(float64(0)), Limit: 10,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -675,12 +723,16 @@ func TestGlobalPropositionAPIPersistsSearchesAndDeletesVectorProjections(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer runtime.Close()
+	defer func() {
+		if err := runtime.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	if err := runtime.Client().ConfigureEmbedding(embedder, "embed-test", 3); err != nil {
 		t.Fatal(err)
 	}
 	persisted, err := runtime.Client().SearchPropositions(context.Background(), PropositionSearchRequest{
-		Query: "unseen semantic lookup", RecencyWeight: floatPointer(0), Limit: 10,
+		Query: "unseen semantic lookup", RecencyWeight: new(float64(0)), Limit: 10,
 	})
 	if err != nil || persisted.Total != 2 || persisted.Hits[0].ID != first.ID {
 		t.Fatalf("persisted vector proposition search = %#v, %v", persisted, err)
@@ -694,7 +746,7 @@ func TestGlobalPropositionAPIPersistsSearchesAndDeletesVectorProjections(t *test
 		t.Fatalf("idempotent delete = %#v, %v", removedAgain, err)
 	}
 	after, err := runtime.Client().SearchPropositions(context.Background(), PropositionSearchRequest{
-		Query: "unseen semantic lookup", RecencyWeight: floatPointer(0), Limit: 10,
+		Query: "unseen semantic lookup", RecencyWeight: new(float64(0)), Limit: 10,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -708,7 +760,6 @@ func TestGlobalPropositionAPIPersistsSearchesAndDeletesVectorProjections(t *test
 }
 
 //go:fix inline
-func floatPointer(value float64) *float64 { return new(value) }
 
 type testPropositionEmbedder struct{ inputs [][]string }
 
@@ -784,7 +835,11 @@ func TestEnsureConcurrentElectionAndTakeover(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer replacement.Close()
+	defer func() {
+		if err := replacement.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	if !replacement.IsLeader() {
 		t.Fatal("replacement did not take over leadership")
 	}
@@ -828,7 +883,11 @@ func TestEnsureTakesOverWhenStartingOwnerReleasesLock(t *testing.T) {
 		if got.err != nil {
 			t.Fatal(got.err)
 		}
-		defer got.runtime.Close()
+		defer func() {
+			if err := got.runtime.Close(); err != nil {
+				t.Error(err)
+			}
+		}()
 		if !got.runtime.IsLeader() {
 			t.Fatal("contender did not take over after the stalled owner released the lock")
 		}
@@ -845,8 +904,16 @@ func TestEnsureRejectsUnrelatedServiceOnConfiguredPort(t *testing.T) {
 	server := &http.Server{Handler: http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
 		writer.WriteHeader(http.StatusNoContent)
 	})}
-	go server.Serve(listener)
-	defer server.Close()
+	serveDone := make(chan error, 1)
+	go func() { serveDone <- server.Serve(listener) }()
+	defer func() {
+		if err := server.Close(); err != nil {
+			t.Error(err)
+		}
+		if err := <-serveDone; err != nil && !errors.Is(err, http.ErrServerClosed) {
+			t.Error(err)
+		}
+	}()
 	value := Config{
 		Version: ConfigVersion, Host: "127.0.0.1",
 		Port: listener.Addr().(*net.TCPAddr).Port,

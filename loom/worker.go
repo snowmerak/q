@@ -46,7 +46,7 @@ func NewProcessEvaluator() ProcessEvaluator {
 	return ProcessEvaluator{Timeout: defaultEvalTimeout + time.Second}
 }
 
-func (e ProcessEvaluator) Evaluate(ctx context.Context, store *Store, request EvalRequest) (EvalResult, error) {
+func (e ProcessEvaluator) Evaluate(ctx context.Context, store *Store, request EvalRequest) (_ EvalResult, returnErr error) {
 	if store == nil {
 		return EvalResult{}, errors.New("loom: script store is required")
 	}
@@ -58,7 +58,7 @@ func (e ProcessEvaluator) Evaluate(ctx context.Context, store *Store, request Ev
 	if err != nil {
 		return EvalResult{}, err
 	}
-	defer lease.Close()
+	defer func() { returnErr = errors.Join(returnErr, lease.Close()) }()
 	executable := e.Executable
 	if executable == "" {
 		var err error

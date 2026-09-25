@@ -55,7 +55,9 @@ func (m sprintModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		content := strings.TrimSpace(event.response.Choices[0].Message.TextContent())
 		if content != "" && m.output != nil {
-			fmt.Fprintln(m.output, content)
+			if _, err := fmt.Fprintln(m.output, content); err != nil {
+				m.err = err
+			}
 		}
 		return m, tea.Quit
 	}
@@ -63,7 +65,10 @@ func (m sprintModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	updated, command := m.state.Update(message)
 	m.state = updated.(model)
 	if progress := sprintProgress(event); progress != "" && m.output != nil {
-		fmt.Fprintln(m.output, progress)
+		if _, err := fmt.Fprintln(m.output, progress); err != nil {
+			m.err = err
+			return m, tea.Quit
+		}
 	}
 	return m, command
 }
@@ -159,7 +164,9 @@ func RunSprint(
 	}
 	configuredClient = startup.client
 	for _, warning := range sprintStartupWarnings(startup) {
-		fmt.Fprintln(output, "Warning:", warning)
+		if _, err := fmt.Fprintln(output, "Warning:", warning); err != nil {
+			return err
+		}
 	}
 
 	sessionStore, lock, err := workspace.CreateSession(workspaceStore.Root, "q sprint")
@@ -187,7 +194,9 @@ func RunSprint(
 		return errors.New(state.status)
 	}
 
-	fmt.Fprintf(output, "Sprint started · %s\n", objective)
+	if _, err := fmt.Fprintf(output, "Sprint started · %s\n", objective); err != nil {
+		return err
+	}
 	final, runErr := tea.NewProgram(
 		sprintModel{state: state, initial: planCommand, output: output},
 		tea.WithContext(runtimeContext), tea.WithInput(nil), tea.WithOutput(output),

@@ -220,7 +220,7 @@ func runGatewayChild(parent context.Context, args []string) error {
 	apiKey := os.Getenv(providerhost.ChildAPIKeyEnv)
 	_ = os.Unsetenv(providerhost.ChildAPIKeyEnv)
 	if apiKey == "" {
-		return fmt.Errorf("Gateway child API key is missing")
+		return fmt.Errorf("gateway child API key is missing")
 	}
 	go func() {
 		_, _ = io.Copy(io.Discard, os.Stdin)

@@ -159,7 +159,7 @@ func RunStdioWithLoomOptions(ctx context.Context, root string, options loom.Stor
 	if err != nil {
 		return err
 	}
-	defer lspManager.Close()
+	defer func() { runErr = errors.Join(runErr, lspManager.Close()) }()
 	libraryConfig, libraryConfigErr := (qlibrary.ConfigStore{Dir: configStore.Dir}).LoadOrDefault()
 	if libraryConfigErr != nil {
 		libraryConfig = qlibrary.DefaultConfig()
@@ -170,7 +170,7 @@ func RunStdioWithLoomOptions(ctx context.Context, root string, options loom.Stor
 	var embeddingClient *client.Client
 	var embeddingManager *providerhost.Manager
 	usageRecorder := usagelog.New(configStore.Dir)
-	defer usageRecorder.Close()
+	defer func() { runErr = errors.Join(runErr, usageRecorder.Close()) }()
 	if loaded.Embedding.Model != "" {
 		if loaded.Provider.Managed {
 			embeddingManager, err = providerhost.NewManager(ctx, providerhost.Store{Dir: configStore.Dir})
@@ -219,9 +219,9 @@ func RunStdioWithLoomOptions(ctx context.Context, root string, options loom.Stor
 			return err
 		}
 		go func() { _, _ = semanticArchive.Backfill(ctx) }()
-		defer embeddingClient.Close()
+		defer func() { runErr = errors.Join(runErr, embeddingClient.Close()) }()
 		if embeddingManager != nil {
-			defer embeddingManager.Close()
+			defer func() { runErr = errors.Join(runErr, embeddingManager.Close()) }()
 		}
 	}
 	var globalSkills builtin.GlobalSkillLibrary = libraryClient
@@ -231,7 +231,7 @@ func RunStdioWithLoomOptions(ctx context.Context, root string, options loom.Stor
 		libraryRuntime = nil
 	}
 	if libraryRuntime != nil {
-		defer libraryRuntime.Close()
+		defer func() { runErr = errors.Join(runErr, libraryRuntime.Close()) }()
 		if loaded.Embedding.Model != "" {
 			go func() { _, _ = libraryClient.SyncSkillEmbeddings(ctx) }()
 		}

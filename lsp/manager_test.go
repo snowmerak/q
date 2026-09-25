@@ -128,7 +128,11 @@ func TestManagerAutomaticallyDiscoversMissingRoots(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			defer manager.Close()
+			defer func() {
+				if err := manager.Close(); err != nil {
+					t.Error(err)
+				}
+			}()
 			if status := manager.Status(t.Context()); len(status.Sessions) != 0 || scans.Load() != 0 {
 				t.Fatalf("status triggered discovery: %+v", status)
 			}
@@ -226,7 +230,11 @@ func TestManagerDiscoveryRunsOnceForConcurrentFailures(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer manager.Close()
+	defer func() {
+		if err := manager.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 	defer cancel()
 	var workers sync.WaitGroup
@@ -265,7 +273,11 @@ func TestManagerCancelledDiscoveryCanRetry(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer manager.Close()
+	defer func() {
+		if err := manager.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 	if err := manager.autoDiscover(ctx); !errors.Is(err, context.Canceled) {
@@ -294,7 +306,11 @@ func TestManagerDoesNotDiscoverForDisabledRootsOrProcessFailures(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			defer manager.Close()
+			defer func() {
+				if err := manager.Close(); err != nil {
+					t.Error(err)
+				}
+			}()
 			if _, err := manager.DocumentSymbols(t.Context(), FileRequest{Path: "main.go"}); err == nil {
 				t.Fatal("expected disabled root or failed server start")
 			}

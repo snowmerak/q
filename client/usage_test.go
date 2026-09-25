@@ -48,7 +48,11 @@ func TestChatRecordsRemoteTokenUsage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer configured.Close()
+	defer func() {
+		if err := configured.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	if _, err := configured.Chat(t.Context(), ChatRequest{
 		Messages: []Message{{Role: RoleUser, Content: "hello"}},
 	}); err != nil {
@@ -83,7 +87,11 @@ func TestChatRecordsBoundedUsageRoleFromContext(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer configured.Close()
+	defer func() {
+		if err := configured.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	if _, err := configured.Chat(WithUsageRole(t.Context(), "Planner"), ChatRequest{Messages: []Message{{Role: RoleUser, Content: "hi"}}}); err != nil {
 		t.Fatal(err)
 	}
@@ -118,7 +126,11 @@ func TestForwardUsageMetadataReusesEventIDForLocalFallback(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer configured.Close()
+	defer func() {
+		if err := configured.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	requestHeaders := http.Header{"X-Caller": {"kept"}}
 	ctx := WithUsageRole(t.Context(), "Planner")
 	if _, err := configured.Chat(ctx, ChatRequest{
@@ -154,7 +166,11 @@ func TestUsageMetadataForwardingIsOptIn(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer configured.Close()
+	defer func() {
+		if err := configured.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	if _, err := configured.Chat(WithUsageRole(t.Context(), "planner"), ChatRequest{
 		Messages: []Message{{Role: RoleUser, Content: "hello"}},
 	}); err != nil {
@@ -194,7 +210,11 @@ func TestChatEstimatesMissingUsageAndIgnoresRecorderFailure(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer configured.Close()
+	defer func() {
+		if err := configured.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	response, err := configured.Chat(t.Context(), ChatRequest{
 		Messages: []Message{{Role: RoleUser, Content: "estimate this request"}},
 	})
@@ -228,7 +248,11 @@ func TestChatDoesNotRecordRejectedCall(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer configured.Close()
+	defer func() {
+		if err := configured.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	if _, err := configured.Chat(t.Context(), ChatRequest{
 		Messages: []Message{{Role: RoleUser, Content: "hello"}},
 	}); err == nil {
@@ -256,7 +280,11 @@ func TestChatStreamRecordsUsageExactlyOnce(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer configured.Close()
+	defer func() {
+		if err := configured.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	stream, err := configured.ChatStream(t.Context(), ChatRequest{
 		Messages: []Message{{Role: RoleUser, Content: "hello"}},
 	})
@@ -309,7 +337,11 @@ func TestChatStreamRecordsAnEmptyProviderResponse(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer configured.Close()
+	defer func() {
+		if err := configured.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	stream, err := configured.ChatStream(t.Context(), ChatRequest{
 		Messages: []Message{{Role: RoleUser, Content: "hello"}},
 	})
@@ -360,7 +392,11 @@ func TestEmbedRecordsReportedAndEstimatedUsage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer configured.Close()
+	defer func() {
+		if err := configured.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	if _, err := configured.Embed(context.Background(), EmbeddingRequest{Input: "first"}); err != nil {
 		t.Fatal(err)
 	}

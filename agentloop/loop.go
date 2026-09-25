@@ -98,7 +98,6 @@ func RunAgentLoop(ctx context.Context, request Request, events chan<- Event) {
 			ReasoningEffort: reasoningEffort, WorkingDirectory: workingDirectory,
 		}
 		var response *client.ChatResponse
-		err = nil
 		if streamEnabled {
 			response, err = streamChatWithEmptyResponseRecovery(ctx, configuredClient, request, func(delta chatStreamDelta) bool {
 				return emitEvent(ctx, events, Event{streamDelta: &delta})
@@ -215,7 +214,6 @@ func RunAgentLoop(ctx context.Context, request Request, events chan<- Event) {
 					Objective: input.Objective, CompletionCriteria: append([]string(nil), input.CompletionCriteria...),
 					StartedAt: time.Now().UTC(),
 				}
-				activeTask = started
 				if !emitEvent(ctx, events, Event{taskStarted: started}) {
 					return
 				}

@@ -2167,9 +2167,10 @@ func agentSummary(states map[string]string) string {
 			marker = "waiting"
 		}
 		style := subtleStyle
-		if state == "running" || state == "waiting" {
+		switch state {
+		case "running", "waiting":
 			style = activeLabelStyle
-		} else if state == "failed" {
+		case "failed":
 			style = errorStyle
 		}
 		parts = append(parts, style.Render(role+" "+marker))
@@ -2244,37 +2245,38 @@ func isAgentTraceScrollKey(key string) bool {
 
 func (m model) View() tea.View {
 	content := m.viewSetup()
-	if m.screen == screenProviders {
+	switch m.screen {
+	case screenProviders:
 		content = m.viewProviders()
-	} else if m.screen == screenGateway {
+	case screenGateway:
 		content = m.viewGateway()
-	} else if m.screen == screenGatewayNetwork {
+	case screenGatewayNetwork:
 		content = m.viewGatewayNetwork()
-	} else if m.screen == screenGatewayKeys {
+	case screenGatewayKeys:
 		content = m.viewGatewayKeys()
-	} else if m.screen == screenLibrary {
+	case screenLibrary:
 		content = m.viewLibrary()
-	} else if m.screen == screenModels {
+	case screenModels:
 		content = m.viewModels()
-	} else if m.screen == screenLoom {
+	case screenLoom:
 		content = m.viewLoom()
-	} else if m.screen == screenIgnore {
+	case screenIgnore:
 		content = m.viewIgnore()
-	} else if m.screen == screenSkills {
+	case screenSkills:
 		content = m.viewSkills()
-	} else if m.screen == screenLSP {
+	case screenLSP:
 		content = m.viewLSP()
-	} else if m.screen == screenMCP {
+	case screenMCP:
 		content = m.viewMCP()
-	} else if m.screen == screenCustom {
+	case screenCustom:
 		content = m.viewCustom()
-	} else if m.screen == screenHelp {
+	case screenHelp:
 		content = m.viewHelp()
-	} else if m.screen == screenSessions {
+	case screenSessions:
 		content = m.viewSessions()
-	} else if m.screen == screenChanges {
+	case screenChanges:
 		content = m.viewChanges()
-	} else if m.screen == screenChat {
+	case screenChat:
 		content = m.viewChat()
 	}
 	view := tea.NewView(content)
@@ -2285,8 +2287,8 @@ func (m model) View() tea.View {
 	}
 	if m.screen == screenChat && ((!m.waiting && !m.initializing) || m.asking) {
 		if cursor := m.input.Cursor(); cursor != nil {
-			cursor.Position.X += frameStyle.GetPaddingLeft()
-			cursor.Position.Y += frameStyle.GetPaddingTop() + m.chatInputOffset()
+			cursor.X += frameStyle.GetPaddingLeft()
+			cursor.Y += frameStyle.GetPaddingTop() + m.chatInputOffset()
 			view.Cursor = cursor
 		}
 	}

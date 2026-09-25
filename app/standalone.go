@@ -147,12 +147,12 @@ func RunSkills(ctx context.Context, store workspace.Store) error {
 	return runSkills(ctx, store, configStore)
 }
 
-func runSkills(ctx context.Context, store workspace.Store, configStore config.Store) error {
+func runSkills(ctx context.Context, store workspace.Store, configStore config.Store) (returnErr error) {
 	lock, err := workspace.AcquireLock(store.Root, "q skills")
 	if err != nil {
 		return err
 	}
-	defer lock.Close()
+	defer func() { returnErr = errors.Join(returnErr, lock.Close()) }()
 	registry, err := agentskills.Discover(store.Root)
 	if err != nil {
 		return err
@@ -221,7 +221,7 @@ func RunSkillsDefault(ctx context.Context) error {
 }
 
 // RunModel opens model selection using only personal config and q's managed Gateway.
-func RunModel(ctx context.Context, store config.Store) error {
+func RunModel(ctx context.Context, store config.Store) (returnErr error) {
 	runtimeContext, cancelRuntime := context.WithCancel(ctx)
 	defer cancelRuntime()
 	workspaceStore, err := workspace.DefaultStore()
@@ -237,7 +237,7 @@ func RunModel(ctx context.Context, store config.Store) error {
 	if err != nil {
 		return err
 	}
-	defer manager.Close()
+	defer func() { returnErr = errors.Join(returnErr, manager.Close()) }()
 
 	startupErr := manager.LoadAndStart(runtimeContext)
 	if errors.Is(startupErr, providerhost.ErrNotFound) && configErr == nil && !loaded.Provider.Managed {
@@ -277,7 +277,7 @@ func RunModel(ctx context.Context, store config.Store) error {
 	}
 
 	usageRecorder := newUsageRecorder(store)
-	defer usageRecorder.Close()
+	defer func() { returnErr = errors.Join(returnErr, usageRecorder.Close()) }()
 	factory := managedClientFactory(manager, usageRecorder)
 	configuredClient, err := factory(loaded)
 	if err != nil {
@@ -290,7 +290,7 @@ func RunModel(ctx context.Context, store config.Store) error {
 	}
 	if len(models) == 0 {
 		_ = configuredClient.Close()
-		return errors.New("Gateway returned no models")
+		return errors.New("gateway returned no models")
 	}
 
 	m := newManagedModel(runtimeContext, store, factory, manager)

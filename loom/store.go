@@ -299,7 +299,7 @@ func (s *Store) inspectLocked(ctx context.Context, ref Ref) (Artifact, error) {
 	if err != nil {
 		return Artifact{}, fmt.Errorf("loom: open artifact metadata: %w", err)
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 	var artifact Artifact
 	decoder := json.NewDecoder(io.LimitReader(file, 1<<20))
 	decoder.DisallowUnknownFields()
@@ -348,7 +348,7 @@ func (s *Store) readLocked(ctx context.Context, ref Ref, offset, limit int64) (R
 	if err != nil {
 		return ReadResult{}, fmt.Errorf("loom: open artifact blob: %w", err)
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 	if _, err := file.Seek(offset, io.SeekStart); err != nil {
 		return ReadResult{}, fmt.Errorf("loom: seek artifact blob: %w", err)
 	}
@@ -382,7 +382,7 @@ func (s *Store) readAllLocked(ctx context.Context, ref Ref, maximum int64) ([]by
 	if err != nil {
 		return nil, fmt.Errorf("loom: open artifact blob: %w", err)
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 	body, err := io.ReadAll(io.LimitReader(file, artifact.Bytes+1))
 	if err != nil {
 		return nil, fmt.Errorf("loom: read artifact blob: %w", err)
@@ -449,7 +449,7 @@ func validateBlob(path, expectedDigest string, expectedSize int64) error {
 	if err != nil {
 		return fmt.Errorf("loom: open existing blob: %w", err)
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 	info, err := file.Stat()
 	if err != nil {
 		return fmt.Errorf("loom: inspect existing blob: %w", err)

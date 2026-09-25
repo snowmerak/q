@@ -77,7 +77,7 @@ func (a *Archive) Configure(provider embedding.Provider, model string, dimension
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	if err := a.Store.ConfigureVector(sessionstore.VectorConfig{
+	if err := a.ConfigureVector(sessionstore.VectorConfig{
 		Model: vectorizer.Model(), Dimensions: vectorizer.Dimensions(),
 	}); err != nil {
 		return fmt.Errorf("archive embedding: configure vector index: %w", err)
@@ -93,7 +93,7 @@ func (a *Archive) Disable() error {
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	if err := a.Store.ConfigureVector(sessionstore.VectorConfig{}); err != nil {
+	if err := a.ConfigureVector(sessionstore.VectorConfig{}); err != nil {
 		return fmt.Errorf("archive embedding: disable vector index: %w", err)
 	}
 	a.vectorizer = nil
@@ -208,7 +208,7 @@ func (a *Archive) Backfill(ctx context.Context) (BackfillStats, error) {
 			}
 		}
 		if len(changed) > 0 {
-			if _, err := a.Store.SaveBatch(changed); err != nil {
+			if _, err := a.SaveBatch(changed); err != nil {
 				return stats, fmt.Errorf("archive embedding: save backfill: %w", err)
 			}
 			stats.Embedded += len(changed)

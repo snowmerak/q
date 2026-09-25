@@ -47,7 +47,7 @@ func (s *Store) importLegacyFile(path string) error {
 	if err != nil {
 		return fmt.Errorf("usage: open legacy log: %w", err)
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 	hash := sha256.New()
 	if _, err := io.Copy(hash, file); err != nil {
 		return fmt.Errorf("usage: hash legacy log: %w", err)
@@ -73,7 +73,7 @@ func (s *Store) importLegacyFile(path string) error {
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 	scanner := bufio.NewScanner(file)
 	scanner.Buffer(make([]byte, 4096), 1<<20)
 	rows := 0

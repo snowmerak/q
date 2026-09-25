@@ -152,7 +152,7 @@ func (s Store) Load() (Session, error) {
 	if err != nil {
 		return Session{}, fmt.Errorf("workspace: open %s: %w", s.Path(), err)
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 	info, err := file.Stat()
 	if err != nil {
 		return Session{}, fmt.Errorf("workspace: inspect %s: %w", s.Path(), err)

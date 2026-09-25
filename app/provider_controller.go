@@ -632,7 +632,7 @@ func (m model) discoverModels() (tea.Model, tea.Cmd) {
 		if err != nil {
 			return modelsResultMsg{err: err}
 		}
-		defer discoveryClient.Close()
+		defer func() { _ = discoveryClient.Close() }()
 		models, err := discoveryClient.ListModels(m.ctx)
 		if err != nil {
 			return modelsResultMsg{err: fmt.Errorf("load models: %w", err)}

@@ -15,7 +15,11 @@ func TestSearchArchiveFiltersAndBoundsResults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer store.Close()
+	defer func() {
+		if err := store.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	created := time.Date(2026, time.August, 1, 12, 0, 0, 0, time.UTC)
 	if _, err := store.Save(sessionstore.Record{
 		ID: "old", Kind: sessionstore.KindMessage, RunID: "run-1", Role: "coder",
@@ -61,7 +65,11 @@ func TestGetArchiveRecordPaginatesContentAndIncludesBoundedPayload(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer store.Close()
+	defer func() {
+		if err := store.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	payload := json.RawMessage(`{"choice":"approved"}`)
 	if _, err := store.Save(sessionstore.Record{
 		ID: "record-1", Kind: sessionstore.KindResult, Content: "가나다라마바사", Payload: payload,
@@ -89,7 +97,11 @@ func TestArchiveToolsRejectInvalidBounds(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer store.Close()
+	defer func() {
+		if err := store.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	if _, err := SearchArchive(context.Background(), store, SearchArchiveInput{CreatedAfter: "yesterday"}); err == nil {
 		t.Fatal("SearchArchive accepted a non-RFC3339 date")
 	}

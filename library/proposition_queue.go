@@ -120,7 +120,7 @@ func (q *propositionQueue) submit(ctx context.Context, key, digest string, reque
 	if err != nil {
 		return PropositionRegisterResponse{}, err
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 	if response, found, err := receiptFromQuerier(ctx, tx, key, digest); err != nil {
 		return PropositionRegisterResponse{}, err
 	} else if found {
@@ -229,7 +229,7 @@ func (q *propositionQueue) claim(ctx context.Context) (propositionJob, bool, err
 	if err != nil {
 		return propositionJob{}, false, err
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 	row := tx.QueryRowContext(ctx, `
 SELECT idempotency_key, request_digest, request_json, state, decision_json, attempts, created_at
 FROM proposition_jobs
@@ -292,7 +292,7 @@ func (q *propositionQueue) complete(ctx context.Context, job propositionJob, res
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 	if _, err := tx.ExecContext(ctx, `
 INSERT INTO proposition_receipts(idempotency_key, request_digest, result_json, completed_at)
 VALUES(?, ?, ?, ?)

@@ -273,18 +273,18 @@ func (m model) openCustomPicker() (tea.Model, tea.Cmd) {
 	c.filter.SetStyles(textinput.DefaultStyles(m.dark))
 	c.filter.Placeholder = "Search…"
 	c.filter.SetWidth(max(20, m.width-12))
-	switch {
-	case c.field == customFieldScope:
+	switch c.field {
+	case customFieldScope:
 		c.options = m.customFieldOptions()
 		c.descriptions["global"] = "Available in every workspace"
 		c.descriptions["workspace"] = "Overrides a global profile with the same name here"
 		c.filter.Placeholder = "Search scopes…"
-	case c.field == customFieldKind:
+	case customFieldKind:
 		c.options = m.customFieldOptions()
 		c.descriptions[subagent.AgentKindInner] = "Run with a q-native model role and explicitly selected q tools"
 		c.descriptions[subagent.AgentKindExternal] = "Forward the request and this profile's system prompt to an ACP connection"
 		c.filter.Placeholder = "Search kinds…"
-	case c.field == customFieldRole:
+	case customFieldRole:
 		c.options = m.customFieldOptions()
 		for _, role := range c.options {
 			kind := "Custom model role"
@@ -294,7 +294,7 @@ func (m model) openCustomPicker() (tea.Model, tea.Cmd) {
 			c.descriptions[role] = kind + " · " + m.customRoleModelSummary(role)
 		}
 		c.filter.Placeholder = "Search roles…"
-	case c.field == customFieldACP:
+	case customFieldACP:
 		c.options = m.customFieldOptions()
 		c.descriptions[""] = "Leave this builtin external subagent unavailable"
 		for _, id := range c.options {
@@ -309,12 +309,12 @@ func (m model) openCustomPicker() (tea.Model, tea.Cmd) {
 			c.descriptions[id] = agentConnectionEndpoint(connection) + " · " + state
 		}
 		c.filter.Placeholder = "Search ACP connections…"
-	case c.field == customFieldAccess:
+	case customFieldAccess:
 		c.options = m.customFieldOptions()
 		c.descriptions["read-only"] = "Reject ACP permission requests that can mutate the workspace"
 		c.descriptions["mutates workspace"] = "Automatically accept allowed ACP permission options"
 		c.filter.Placeholder = "Search access modes…"
-	case c.field == customFieldTools:
+	case customFieldTools:
 		seen := map[string]bool{}
 		if runtime := m.customTools(); runtime != nil {
 			for _, t := range runtime.Tools() {
@@ -337,7 +337,7 @@ func (m model) openCustomPicker() (tea.Model, tea.Cmd) {
 		}
 		sort.Strings(c.options)
 		c.filter.Placeholder = "Search tools…"
-	case c.field == customFieldDelegates:
+	case customFieldDelegates:
 		registry, err := buildSubagentRegistry(m.customStore())
 		if err != nil {
 			m.status = err.Error()
@@ -669,7 +669,7 @@ func (m model) updateCustomInput(message tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if c.field == customFieldPrompt {
 			c.prompt, cmd = c.prompt.Update(message)
-		} else if !(c.field == customFieldName && c.original != nil) && !(c.field == customFieldScope && c.original != nil) {
+		} else if (c.field != customFieldName || c.original == nil) && (c.field != customFieldScope || c.original == nil) {
 			c.inputs[c.field], cmd = c.inputs[c.field].Update(message)
 		}
 	}

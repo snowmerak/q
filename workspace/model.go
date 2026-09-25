@@ -57,7 +57,7 @@ func (s Store) LoadModelConfig() (ModelConfig, error) {
 	if err != nil {
 		return ModelConfig{}, fmt.Errorf("workspace: open %s: %w", s.ModelPath(), err)
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 	info, err := file.Stat()
 	if err != nil {
 		return ModelConfig{}, fmt.Errorf("workspace: inspect %s: %w", s.ModelPath(), err)

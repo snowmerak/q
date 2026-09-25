@@ -36,7 +36,7 @@ func (s Store) Load() (gateway.Config, error) {
 	if err != nil {
 		return gateway.Config{}, fmt.Errorf("providerhost: open %s: %w", s.Path(), err)
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 
 	var value gateway.Config
 	decoder := json.NewDecoder(file)

@@ -93,12 +93,18 @@ func TestRemoteHostReturnsBusyBeforeRuntimeInitialization(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer lock.Close()
+	defer func() {
+		if err := lock.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	host, err := NewRemoteHost(t.Context(), globalStore)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer host.Close()
+	// This test exits before service startup; Close can report an unrelated
+	// background service bind failure when the user's local q is running.
+	defer func() { _ = host.Close() }()
 	err = host.Run(t.Context(), workspace.Store{Root: root}, sessionStore.SessionID, "", "continue", nil)
 	if !errors.Is(err, workspace.ErrLocked) {
 		t.Fatalf("run error = %v, want ErrLocked", err)
@@ -125,7 +131,11 @@ func TestRemoteHostReleasesSessionAfterStartupFailure(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer host.Close()
+	defer func() {
+		if err := host.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	if err := host.Run(t.Context(), workspace.Store{Root: root}, sessionStore.SessionID, "", "continue", nil); err == nil {
 		t.Fatal("run unexpectedly succeeded without a configured provider")
 	}

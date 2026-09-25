@@ -225,7 +225,9 @@ func (m *workspaceManager) acquire(id, leaseID string) (*workspaceEntry, func(),
 			delete(entry.leases, strings.TrimSpace(leaseID))
 		}
 		if len(entry.leases) == 0 {
-			m.removeAndCloseLocked(entry)
+			closeErr := m.removeAndCloseLocked(entry)
+			m.mu.Unlock()
+			return nil, nil, errors.Join(ErrLeaseExpired, closeErr)
 		}
 		m.mu.Unlock()
 		return nil, nil, ErrLeaseExpired

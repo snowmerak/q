@@ -100,7 +100,7 @@ func resolveACPAgentCommand(agent string, lookPath func(string) (string, error))
 		}
 		name, err := lookPath("npx")
 		if err != nil {
-			return acpAgentCommand{}, errors.New("Codex ACP requires codex-acp or npx; install @agentclientprotocol/codex-acp")
+			return acpAgentCommand{}, errors.New("codex ACP requires codex-acp or npx; install @agentclientprotocol/codex-acp")
 		}
 		return acpAgentCommand{
 			name: name, args: []string{"-y", "@agentclientprotocol/codex-acp"}, display: "Codex",
@@ -109,7 +109,7 @@ func resolveACPAgentCommand(agent string, lookPath func(string) (string, error))
 	case "grok":
 		name, err := lookPath("grok")
 		if err != nil {
-			return acpAgentCommand{}, errors.New("Grok ACP requires the Grok Build CLI; install it from https://x.ai/cli")
+			return acpAgentCommand{}, errors.New("grok ACP requires the Grok Build CLI; install it from https://x.ai/cli")
 		}
 		return acpAgentCommand{name: name, args: []string{"agent", "stdio"}, display: "Grok"}, nil
 	default:

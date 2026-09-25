@@ -144,7 +144,11 @@ func TestManagedClientFactoryUsesGatewayAPIKey(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer configuredClient.Close()
+	defer func() {
+		if err := configuredClient.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	if _, err := configuredClient.ListModels(t.Context()); err != nil {
 		t.Fatal(err)
 	}
@@ -841,8 +845,8 @@ func TestUnicodeInputUsesNFCAndRealCursor(t *testing.T) {
 			break
 		}
 	}
-	if inputRow < 0 || view.Cursor.Position.Y != inputRow {
-		t.Fatalf("cursor row = %d, input row = %d", view.Cursor.Position.Y, inputRow)
+	if inputRow < 0 || view.Cursor.Y != inputRow {
+		t.Fatalf("cursor row = %d, input row = %d", view.Cursor.Y, inputRow)
 	}
 	m.messages = m.messages[:1]
 	m.memory.Reset(m.messages)
@@ -3589,7 +3593,7 @@ func TestAskToUserPausesForAnswerAndResumesSameTask(t *testing.T) {
 	if m.questionChoice != 2 || !strings.Contains(m.View().Content, "› "+customAnswerLabel) {
 		t.Fatalf("custom answer choice = %d, view %q", m.questionChoice, m.View().Content)
 	}
-	updated, command = m.submitQuestionAnswer("")
+	updated, _ = m.submitQuestionAnswer("")
 	m = updated.(model)
 	if !m.asking || m.status != "Type a custom answer below" {
 		t.Fatalf("empty custom answer submitted: asking %v status %q", m.asking, m.status)

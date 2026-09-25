@@ -2,6 +2,7 @@ package commitagent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"path/filepath"
@@ -348,8 +349,8 @@ func (model commitUIModel) View() tea.View {
 	view.WindowTitle = "q commit"
 	if model.phase == commitUIEditing {
 		if cursor := model.editor.Cursor(); cursor != nil {
-			cursor.Position.X += commitFrameStyle.GetPaddingLeft()
-			cursor.Position.Y += commitFrameStyle.GetPaddingTop() + editorOffsetY
+			cursor.X += commitFrameStyle.GetPaddingLeft()
+			cursor.Y += commitFrameStyle.GetPaddingTop() + editorOffsetY
 			view.Cursor = cursor
 		}
 	}
@@ -465,7 +466,7 @@ func runEmbedded(
 	output io.Writer,
 	existingLock *workspace.Lock,
 	value *config.Config,
-) (Result, error) {
+) (_ Result, returnErr error) {
 	root, err := repositoryRoot(ctx, directory)
 	if err != nil {
 		return Result{}, err
@@ -475,7 +476,7 @@ func runEmbedded(
 		if lockErr != nil {
 			return Result{}, lockErr
 		}
-		defer repositoryLock.Close()
+		defer func() { returnErr = errors.Join(returnErr, repositoryLock.Close()) }()
 	}
 	return runCommitUI(ctx, directory, input, output, value)
 }

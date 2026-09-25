@@ -40,8 +40,6 @@ type AgentQuestionChoice struct {
 	Description string `json:"description,omitempty"`
 }
 
-type askToUserChoice = AgentQuestionChoice
-
 // AgentQuestion describes a model-requested interaction. ChoiceOnly is used
 // by permission-style hosts that cannot accept a free-form answer.
 type AgentQuestion struct {

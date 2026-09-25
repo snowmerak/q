@@ -46,7 +46,7 @@ func LoomReferencesAt(ctx context.Context, root string) ([]string, error) {
 		if err != nil {
 			return Record{}, err
 		}
-		defer file.Close()
+		defer func() { _ = file.Close() }()
 		var record Record
 		if err := json.NewDecoder(file).Decode(&record); err != nil {
 			return Record{}, err

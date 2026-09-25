@@ -37,7 +37,11 @@ func TestStoreAppendIsIdempotentAndUpdatesRollups(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer store.Close()
+	defer func() {
+		if err := store.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	record := usageRecord(strings.Repeat("a", 32), now.Add(-time.Hour), "codex/gpt", "planner", 160_000)
 	for index, want := range []bool{true, false} {
 		inserted, err := store.Append(t.Context(), record)
@@ -63,7 +67,11 @@ func TestStoreConcurrentAppend(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer store.Close()
+	defer func() {
+		if err := store.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	const count = 48
 	var group sync.WaitGroup
 	errorsByCall := make(chan error, count)
@@ -93,7 +101,11 @@ func TestHotDailyQueryKeepsExactTimestampBoundaries(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer store.Close()
+	defer func() {
+		if err := store.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	from := now.Add(-7 * 24 * time.Hour)
 	outside := usageRecord(strings.Repeat("a", 32), from.Add(-time.Hour), "model", "main", 100)
 	inside := usageRecord(strings.Repeat("b", 32), from.Add(time.Hour), "model", "main", 200)
@@ -135,7 +147,11 @@ func TestLegacyImportSkipsCorruptRowsAndReplaysIdempotently(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer store.Close()
+	defer func() {
+		if err := store.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	var events, imports, invalid int
 	_ = store.db.QueryRow(`SELECT COUNT(*) FROM usage_events`).Scan(&events)
 	_ = store.db.QueryRow(`SELECT COUNT(*), COALESCE(SUM(invalid_rows),0) FROM usage_imports`).Scan(&imports, &invalid)
@@ -154,7 +170,11 @@ func TestArchivePreservesRollupAndMergesLateRows(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer store.Close()
+	defer func() {
+		if err := store.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	day := time.Date(2026, 1, 2, 8, 0, 0, 0, time.UTC)
 	for index := range 3 {
 		id := strings.Repeat(string(rune('a'+index)), 32)
@@ -203,7 +223,11 @@ func TestArchiveDoesNotReplaceAFileMissingBehindItsManifest(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer store.Close()
+	defer func() {
+		if err := store.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	day := time.Date(2026, 1, 2, 8, 0, 0, 0, time.UTC)
 	if _, err := store.Append(t.Context(), usageRecord(strings.Repeat("a", 32), day, "model", "scout", 100)); err != nil {
 		t.Fatal(err)
@@ -232,7 +256,11 @@ func TestHTTPBoundaryAndDashboard(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer store.Close()
+	defer func() {
+		if err := store.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	testServer := httptest.NewUnstartedServer(nil)
 	allowedHost := testServer.Listener.Addr().String()
 	testServer.Config.Handler = newHTTPHandler(store, Health{Service: ServiceName, ProtocolVersion: ProtocolVersion, Ready: true}, allowedHost)
@@ -326,12 +354,20 @@ func TestEnsureElectsOneLeaderAndFollowerSharesStore(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer first.Close()
+	defer func() {
+		if err := first.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	second, err := EnsureWithOptions(t.Context(), EnsureOptions{Dir: dir, Config: config})
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer second.Close()
+	defer func() {
+		if err := second.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	if !first.IsLeader() || second.IsLeader() {
 		t.Fatalf("leader states first=%v second=%v", first.IsLeader(), second.IsLeader())
 	}
@@ -396,7 +432,11 @@ func TestRecorderWritesThroughService(t *testing.T) {
 		t.Fatal(err)
 	}
 	recorder := New(dir)
-	defer recorder.Close()
+	defer func() {
+		if err := recorder.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	if err := recorder.RecordUsage(client.UsageRecord{Model: "local", Role: "coder", TotalTokens: 12}); err != nil {
 		t.Fatal(err)
 	}
@@ -444,7 +484,11 @@ func TestRecorderRetryReusesEventIDAndDeadlineIsBounded(t *testing.T) {
 		t.Fatal(err)
 	}
 	recorder := New(dir)
-	defer recorder.Close()
+	defer func() {
+		if err := recorder.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	if err := recorder.RecordUsage(client.UsageRecord{Model: "model", TotalTokens: 1}); err != nil {
 		t.Fatal(err)
 	}
@@ -495,7 +539,11 @@ func availableConfig(t *testing.T) Config {
 
 func readBody(t *testing.T, response *http.Response) string {
 	t.Helper()
-	defer response.Body.Close()
+	defer func() {
+		if err := response.Body.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	scanner := bufio.NewScanner(response.Body)
 	var body strings.Builder
 	for scanner.Scan() {
@@ -514,7 +562,11 @@ func BenchmarkSQLiteUsageAggregate(b *testing.B) {
 	if err != nil {
 		b.Fatal(err)
 	}
-	defer store.Close()
+	defer func() {
+		if err := store.Close(); err != nil {
+			b.Error(err)
+		}
+	}()
 	tx, err := store.db.Begin()
 	if err != nil {
 		b.Fatal(err)

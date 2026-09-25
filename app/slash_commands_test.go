@@ -251,12 +251,12 @@ func TestSlashCompletionOverlayKeepsLayoutAndCursor(t *testing.T) {
 				}
 				baseLines := strings.Split(ansi.Strip(base.Content), "\n")
 				popupLines := strings.Split(ansi.Strip(popup.Content), "\n")
-				for row := popup.Cursor.Position.Y; row < popup.Cursor.Position.Y+lipgloss.Height(m.input.View()); row++ {
+				for row := popup.Cursor.Y; row < popup.Cursor.Y+lipgloss.Height(m.input.View()); row++ {
 					if baseLines[row] != popupLines[row] {
 						t.Fatalf("popup covered input at row %d:\n%s", row, ansi.Strip(popup.Content))
 					}
 				}
-				if !strings.Contains(popupLines[popup.Cursor.Position.Y], "│ /m") || !strings.Contains(ansi.Strip(popup.Content), "› /model") {
+				if !strings.Contains(popupLines[popup.Cursor.Y], "│ /m") || !strings.Contains(ansi.Strip(popup.Content), "› /model") {
 					t.Fatalf("popup or input cursor is misplaced:\n%s", ansi.Strip(popup.Content))
 				}
 			})
@@ -316,7 +316,7 @@ func TestSlashCompletionOverlayWithAgentTrace(t *testing.T) {
 			m.input.SetValue("/")
 			view := m.View()
 			rows := strings.Split(ansi.Strip(view.Content), "\n")
-			if view.Cursor == nil || !strings.Contains(rows[view.Cursor.Position.Y], "│ /") || !strings.Contains(view.Content, "Commands") {
+			if view.Cursor == nil || !strings.Contains(rows[view.Cursor.Y], "│ /") || !strings.Contains(view.Content, "Commands") {
 				t.Fatalf("popup misplaced input below the agent trace:\n%s", ansi.Strip(view.Content))
 			}
 		})

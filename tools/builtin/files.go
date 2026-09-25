@@ -163,7 +163,7 @@ func (fs *FS) MovePath(input MovePathInput) (MovePathOutput, error) {
 	if err := os.Rename(source, destination); err != nil {
 		return MovePathOutput{}, err
 	}
-	return MovePathOutput{Source: input.Source, Destination: input.Destination}, nil
+	return MovePathOutput(input), nil
 }
 
 type CopyPathInput struct {

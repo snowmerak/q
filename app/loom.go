@@ -126,9 +126,10 @@ func (m model) applyLoomAction(action string) (tea.Model, tea.Cmd) {
 	}
 	m.loomBusy = true
 	m.status = "Saving Loom settings…"
-	if action == "dry-run" {
+	switch action {
+	case "dry-run":
 		m.status = "Previewing Loom GC…"
-	} else if action == "collect" {
+	case "collect":
 		m.status = "Running Loom GC…"
 	}
 	m.blurLoomInputs()

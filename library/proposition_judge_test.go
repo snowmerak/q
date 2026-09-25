@@ -61,7 +61,11 @@ func TestConfiguredPropositionJudgeUsesLibrarianRole(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer judge.Close()
+	defer func() {
+		if err := judge.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	if judge.model != "librarian-model" || judge.effort != "medium" || judge.group != "library" ||
 		len(judge.candidates) != 2 || judge.candidates[0].Timeout != 20*time.Second {
 		t.Fatalf("configured judge = %#v", judge)

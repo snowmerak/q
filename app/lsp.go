@@ -580,7 +580,7 @@ func (m model) viewLSPLists() string {
 		if server.Disabled {
 			state = "off"
 		}
-		servers.WriteString(fmt.Sprintf("%s%s  [%s]\n", cursor, id, state))
+		fmt.Fprintf(&servers, "%s%s  [%s]\n", cursor, id, state)
 		languages := make([]string, 0, len(server.Languages))
 		for _, language := range server.Languages {
 			if m.lspDraftGlobal.Languages[language] == id {
@@ -618,7 +618,7 @@ func (m model) viewLSPLists() string {
 		if !ok {
 			server = "unresolved"
 		}
-		roots.WriteString(fmt.Sprintf("%s%s  [%s]\n", cursor, root.Path, state))
+		fmt.Fprintf(&roots, "%s%s  [%s]\n", cursor, root.Path, state)
 		roots.WriteString(subtleStyle.Render("    " + root.Language + " · " + server + " · " + root.Source))
 		roots.WriteString("\n")
 	}
@@ -715,12 +715,12 @@ func lspVisibleRange(length, cursor, maximum int) (int, int) {
 
 // RunLSP opens lightweight global server and workspace root settings without
 // starting Gateway, Session Store, Loom, or the agent tool runtime.
-func RunLSP(ctx context.Context, globalStore config.Store, workspaceStore workspace.Store) error {
+func RunLSP(ctx context.Context, globalStore config.Store, workspaceStore workspace.Store) (returnErr error) {
 	lock, err := workspace.AcquireLock(workspaceStore.Root, "q lsp")
 	if err != nil {
 		return err
 	}
-	defer lock.Close()
+	defer func() { returnErr = errors.Join(returnErr, lock.Close()) }()
 	loaded, err := globalStore.Load()
 	if err != nil {
 		if errors.Is(err, config.ErrNotFound) {

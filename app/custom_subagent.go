@@ -46,7 +46,7 @@ func customCommand(command string) bool {
 func parseCustomRun(command string) (string, string, error) {
 	fields := strings.SplitN(strings.TrimSpace(strings.TrimPrefix(command, "/subagent")), " ", 2)
 	if len(fields) != 2 || strings.TrimSpace(fields[1]) == "" {
-		return "", "", fmt.Errorf("Usage: /subagent <name> <request>")
+		return "", "", fmt.Errorf("usage: /subagent <name> <request>")
 	}
 	return fields[0], strings.TrimSpace(fields[1]), nil
 }

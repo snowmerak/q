@@ -13,7 +13,7 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-func (r *Registry) InstallGit(ctx context.Context, scope, repository string) (Skill, error) {
+func (r *Registry) InstallGit(ctx context.Context, scope, repository string) (_ Skill, returnErr error) {
 	root, source, err := r.managedRoot(scope)
 	if err != nil {
 		return Skill{}, err
@@ -29,7 +29,7 @@ func (r *Registry) InstallGit(ctx context.Context, scope, repository string) (Sk
 	if err != nil {
 		return Skill{}, err
 	}
-	defer os.RemoveAll(temporary)
+	defer func() { returnErr = errors.Join(returnErr, os.RemoveAll(temporary)) }()
 	checkout := filepath.Join(temporary, "checkout")
 	if output, err := exec.CommandContext(ctx, "git", "clone", "--", repository, checkout).CombinedOutput(); err != nil {
 		return Skill{}, fmt.Errorf("agent skills: git clone: %w: %s", err, strings.TrimSpace(string(output)))

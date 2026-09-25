@@ -27,7 +27,7 @@ func (s Store) LoadLSP() (lsp.WorkspaceConfig, error) {
 	if err != nil {
 		return lsp.WorkspaceConfig{}, fmt.Errorf("workspace: open %s: %w", s.LSPPath(), err)
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 	info, err := file.Stat()
 	if err != nil {
 		return lsp.WorkspaceConfig{}, fmt.Errorf("workspace: inspect %s: %w", s.LSPPath(), err)
