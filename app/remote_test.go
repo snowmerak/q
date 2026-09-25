@@ -102,9 +102,11 @@ func TestRemoteHostReturnsBusyBeforeRuntimeInitialization(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// This test exits before service startup; Close can report an unrelated
-	// background service bind failure when the user's local q is running.
-	defer func() { _ = host.Close() }()
+	defer func() {
+		if err := host.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	err = host.Run(t.Context(), workspace.Store{Root: root}, sessionStore.SessionID, "", "continue", nil)
 	if !errors.Is(err, workspace.ErrLocked) {
 		t.Fatalf("run error = %v, want ErrLocked", err)

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -927,6 +928,41 @@ func TestEnsureRejectsUnrelatedServiceOnConfiguredPort(t *testing.T) {
 	}
 	if err == nil || !IsAddressInUse(errors.Unwrap(err)) {
 		t.Fatalf("collision error = %v", err)
+	}
+}
+
+func TestEnsureCancellationDuringProbeDoesNotBindOccupiedPort(t *testing.T) {
+	probeStarted := make(chan struct{}, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, request *http.Request) {
+		select {
+		case probeStarted <- struct{}{}:
+		default:
+		}
+		<-request.Context().Done()
+	}))
+	defer server.Close()
+	value := Config{Version: ConfigVersion, Host: "127.0.0.1", Port: server.Listener.Addr().(*net.TCPAddr).Port}
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	options := testOptions(t.TempDir(), value)
+	result := make(chan error, 1)
+	go func() {
+		_, err := EnsureWithOptions(ctx, options)
+		result <- err
+	}()
+	select {
+	case <-probeStarted:
+	case <-time.After(5 * time.Second):
+		t.Fatal("health probe did not start")
+	}
+	cancel()
+	select {
+	case err := <-result:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("Ensure error = %v, want context cancellation", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Ensure did not stop after cancellation")
 	}
 }
 

@@ -67,11 +67,17 @@ func EnsureWithOptions(ctx context.Context, options EnsureOptions) (*Runtime, er
 	deadline := time.Now().Add(startupTimeout)
 	delay := 20 * time.Millisecond
 	for {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		if health, err := client.Health(ctx); err == nil {
 			if !health.Compatible() {
 				return nil, incompatibleError(health)
 			}
 			return &Runtime{client: client}, nil
+		}
+		if err := ctx.Err(); err != nil {
+			return nil, err
 		}
 
 		lock, err := worklock.AcquireFile(options.Dir, LockFileName, "q library")
@@ -82,6 +88,11 @@ func EnsureWithOptions(ctx context.Context, options EnsureOptions) (*Runtime, er
 					return nil, incompatibleError(health)
 				}
 				return &Runtime{client: client}, nil
+			}
+			// A canceled probe must not fall through to binding the configured port.
+			if err := ctx.Err(); err != nil {
+				_ = lock.Close()
+				return nil, err
 			}
 			listener, listenErr := net.Listen("tcp", value.ListenAddress())
 			if listenErr != nil {

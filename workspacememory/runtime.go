@@ -98,6 +98,9 @@ func EnsureWithOptions(ctx context.Context, options EnsureOptions) (*Runtime, er
 	deadline := time.Now().Add(options.effectiveStartupTimeout())
 	delay := 20 * time.Millisecond
 	for {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		if health, healthErr := probe.Health(ctx); healthErr == nil {
 			if !health.Compatible() {
 				return nil, incompatibleError(health)
@@ -106,6 +109,9 @@ func EnsureWithOptions(ctx context.Context, options EnsureOptions) (*Runtime, er
 				return nil, fmt.Errorf("workspacememory: inspect existing service: %w", statusErr)
 			}
 			return &Runtime{client: client}, nil
+		}
+		if err := ctx.Err(); err != nil {
+			return nil, err
 		}
 
 		serviceLock, lockErr := worklock.AcquireFile(options.Dir, ServiceLockFileName, "q workspace memory service")
@@ -119,6 +125,11 @@ func EnsureWithOptions(ctx context.Context, options EnsureOptions) (*Runtime, er
 					return nil, fmt.Errorf("workspacememory: inspect existing service: %w", statusErr)
 				}
 				return &Runtime{client: client}, nil
+			}
+			// A canceled probe must not fall through to binding the configured port.
+			if err := ctx.Err(); err != nil {
+				_ = serviceLock.Close()
+				return nil, err
 			}
 			listener, listenErr := net.Listen("tcp", config.ListenAddress())
 			if listenErr != nil {
