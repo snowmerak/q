@@ -1848,38 +1848,42 @@ func TestACPAgentShutdownCancelsBlockedLearningStatusUpdate(t *testing.T) {
 }
 
 func TestACPAgentAcceptsImagesForCompatibleRoutes(t *testing.T) {
-	configuredClient := &fakeClient{}
-	agent, workspaceStore, _ := testACPAgent(t, configuredClient, &fakeAgentTools{})
-	agent.state.config.Provider.Model = "openai/test-model"
-	agent.state.gatewayConfig = gateway.Config{Providers: []gateway.ProviderConfig{{
-		ID: "openai", Prefix: "openai", Type: "openai-compatible", Enabled: true,
-	}}}
-	initialized, err := agent.Initialize(t.Context(), acp.InitializeRequest{})
-	if err != nil || !initialized.AgentCapabilities.PromptCapabilities.Image {
-		t.Fatalf("image capability = %#v, err = %v", initialized.AgentCapabilities.PromptCapabilities, err)
-	}
-	sessionID := openTestACPSession(t, agent, workspaceStore.Root)
-	imageData := "iVBORw0KGgo="
-	if _, err := agent.Prompt(t.Context(), acp.PromptRequest{
-		SessionId: sessionID,
-		Prompt: []acp.ContentBlock{
-			acp.TextBlock("inspect this"),
-			acp.ImageBlock(imageData, "image/png"),
-		},
-	}); err != nil {
-		t.Fatal(err)
-	}
-	if len(configuredClient.requests) != 1 {
-		t.Fatalf("model requests = %d", len(configuredClient.requests))
-	}
-	var prompt client.Message
-	for _, message := range configuredClient.requests[0].Messages {
-		if message.Role == client.RoleUser {
-			prompt = message
-		}
-	}
-	if len(prompt.ContentParts) != 2 || prompt.ContentParts[1]["type"] != "image_url" {
-		t.Fatalf("image prompt = %#v", prompt)
+	for _, providerType := range []string{"openai-compatible", "codex", "codex-app-server"} {
+		t.Run(providerType, func(t *testing.T) {
+			configuredClient := &fakeClient{}
+			agent, workspaceStore, _ := testACPAgent(t, configuredClient, &fakeAgentTools{})
+			agent.state.config.Provider.Model = "route/test-model"
+			agent.state.gatewayConfig = gateway.Config{Providers: []gateway.ProviderConfig{{
+				ID: "route", Prefix: "route", Type: providerType, Enabled: true,
+			}}}
+			initialized, err := agent.Initialize(t.Context(), acp.InitializeRequest{})
+			if err != nil || !initialized.AgentCapabilities.PromptCapabilities.Image {
+				t.Fatalf("image capability = %#v, err = %v", initialized.AgentCapabilities.PromptCapabilities, err)
+			}
+			sessionID := openTestACPSession(t, agent, workspaceStore.Root)
+			imageData := "iVBORw0KGgo="
+			if _, err := agent.Prompt(t.Context(), acp.PromptRequest{
+				SessionId: sessionID,
+				Prompt: []acp.ContentBlock{
+					acp.TextBlock("inspect this"),
+					acp.ImageBlock(imageData, "image/png"),
+				},
+			}); err != nil {
+				t.Fatal(err)
+			}
+			if len(configuredClient.requests) != 1 {
+				t.Fatalf("model requests = %d", len(configuredClient.requests))
+			}
+			var prompt client.Message
+			for _, message := range configuredClient.requests[0].Messages {
+				if message.Role == client.RoleUser {
+					prompt = message
+				}
+			}
+			if len(prompt.ContentParts) != 2 || prompt.ContentParts[1]["type"] != "image_url" {
+				t.Fatalf("image prompt = %#v", prompt)
+			}
+		})
 	}
 }
 

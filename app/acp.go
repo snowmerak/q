@@ -2560,7 +2560,7 @@ func (m model) supportsACPImages() bool {
 			return false
 		}
 		switch m.gatewayConfig.Providers[providerIndex].Type {
-		case "openai-compatible", "openrouter", "xai", "grok":
+		case "openai-compatible", "openrouter", "xai", "grok", "codex", "codex-app-server":
 			return true
 		default:
 			return false
