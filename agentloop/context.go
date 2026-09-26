@@ -86,8 +86,10 @@ func (c *Context) CompactIfNeeded(
 		return nil, errors.New("agent loop: context compaction requires a model client")
 	}
 	plan, err := c.manager.PlanWithRetention(memory.Retention{
-		PreserveInstructions:     true,
-		PreserveToolNames:        []string{askToUserToolName},
+		PreserveInstructions: true,
+		// The lifecycle state is host-owned. Keep its opening exchange exact so
+		// a compacted model context does not try to start the active task again.
+		PreserveToolNames:        []string{askToUserToolName, taskStartToolName},
 		AllowTargetGrowth:        true,
 		SummarizeOversizedRecent: true,
 		// Strict chat templates need a user turn even when the latest real one was summarized.

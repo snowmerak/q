@@ -554,6 +554,9 @@ func (r GeneralRunner) Run(ctx context.Context, prompt string) (result TaskResul
 		}
 	}
 	history := NewContextCompactor(r.Spec, state.Context, available, 2)
+	// GeneralRunState.Started remains authoritative across compaction and
+	// restart. Preserve the matching exchange so the model sees the same state.
+	history.PreserveTools(TaskStartToolName)
 	checkpoint := func() error {
 		state.Context = history.Messages()
 		state.Spec = r.Spec.Checkpoint()

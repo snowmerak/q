@@ -3,6 +3,7 @@ package subagent
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/snowmerak/q/client"
@@ -68,5 +69,57 @@ func TestGeneralRunnerAssignsStableIDsBeforeCheckpoint(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("no task start checkpoint")
+	}
+}
+
+func TestGeneralRunnerPreservesStartedLifecycleAcrossCompaction(t *testing.T) {
+	start := client.ToolCall{ID: "start", Type: client.ToolTypeFunction, Function: client.FunctionCall{Name: TaskStartToolName, Arguments: `{"objective":"do work"}`}}
+	read := client.ToolCall{ID: "read", Type: client.ToolTypeFunction, Function: client.FunctionCall{Name: "read_file", Arguments: `{"path":"large.txt"}`}}
+	messages := []client.Message{
+		{Role: client.RoleSystem, Content: "system"},
+		{Role: client.RoleUser, Content: "do work"},
+		{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{start}},
+		client.ToolResultMessage(start, client.ToolResult{Content: `{"started":true}`}),
+		{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{read}},
+		client.ToolResultMessage(read, client.ToolResult{Content: strings.Repeat("large result ", 6_000)}),
+	}
+	modelRequests := 0
+	configured := contextChatFunc(func(_ context.Context, request client.ChatRequest) (*client.ChatResponse, error) {
+		if isContextCheckpointRequest(request) {
+			return contextResponse(contextCheckpointJSON("continue the active task")), nil
+		}
+		if request.ToolChoice == client.ToolChoiceNone {
+			return contextResponse("ack"), nil
+		}
+		modelRequests++
+		var callKept, resultKept bool
+		for _, message := range request.Messages {
+			for _, call := range message.ToolCalls {
+				callKept = callKept || call.Function.Name == TaskStartToolName && call.ID == start.ID
+			}
+			resultKept = resultKept || message.Role == client.RoleTool && message.Name == TaskStartToolName && message.ToolCallID == start.ID
+		}
+		if !callKept || !resultKept {
+			t.Fatalf("compacted request lost task_start exchange: %#v", request.Messages)
+		}
+		complete := client.ToolCall{ID: "complete", Type: client.ToolTypeFunction, Function: client.FunctionCall{Name: TaskCompleteToolName, Arguments: `{"outcome":"succeeded","summary":"done"}`}}
+		return &client.ChatResponse{Choices: []client.Choice{{Message: client.Message{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{complete}}}}}, nil
+	})
+	state := GeneralRunState{
+		Transcript: messages, Context: messages, Round: 2, Started: true,
+		Spec: SpecCheckpoint{Model: "model", Candidate: 0},
+	}
+	definition := AgentDefinition{
+		Info:         DelegateInfo{Name: "workspace/worker", Kind: AgentKindInner, Role: config.AgentRoleScout},
+		SystemPrompt: "Work.", Tools: []string{"read_file"}, StrictTools: true,
+	}
+	runtime := &fakeScoutTools{available: []client.Tool{{Type: client.ToolTypeFunction, Function: client.FunctionDefinition{Name: "read_file"}}}}
+	result, err := (GeneralRunner{
+		Client: configured, Tools: runtime,
+		Spec:       Spec{Role: config.AgentRoleScout, Model: "model", ContextLength: 16_000, Candidates: []client.ModelCandidate{{Model: "model"}}},
+		Definition: definition, Resume: &state,
+	}).Run(t.Context(), "do work")
+	if err != nil || result.Outcome != "succeeded" || modelRequests != 1 {
+		t.Fatalf("result=%#v err=%v modelRequests=%d", result, err, modelRequests)
 	}
 }

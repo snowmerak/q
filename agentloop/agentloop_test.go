@@ -366,6 +366,40 @@ func TestCompactionResumesWithCheckpoint(t *testing.T) {
 	}
 }
 
+func TestCompactionPreservesActiveTaskStartExchange(t *testing.T) {
+	configured := &scriptedClient{chat: func(request client.ChatRequest) *client.ChatResponse {
+		body, _ := json.Marshal(memory.Checkpoint{ActiveWork: []string{"continue active task"}})
+		return finalResponse(string(body))
+	}}
+	policy := memory.Policy{ContextWindow: 16_000, TriggerRatio: .85, TargetRatio: .22, RecentRatio: .07}
+	context := agentloop.NewContext(policy, []client.Message{
+		{Role: client.RoleSystem, Content: "system"},
+		{Role: client.RoleUser, Content: "inspect"},
+	}, nil)
+	start := client.ToolCall{ID: "start", Type: client.ToolTypeFunction, Function: client.FunctionCall{
+		Name: "task_start", Arguments: `{"objective":"inspect"}`,
+	}}
+	context.Append(
+		client.Message{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{start}},
+		client.ToolResultMessage(start, client.ToolResult{Content: `{"started":true}`}),
+		client.Message{Role: client.RoleAssistant, Content: strings.Repeat("old work ", 8_000)},
+	)
+	compaction, err := context.CompactIfNeeded(t.Context(), configured, "test", "")
+	if err != nil || compaction == nil {
+		t.Fatalf("compaction=%#v err=%v", compaction, err)
+	}
+	var callKept, resultKept bool
+	for _, message := range context.Messages() {
+		for _, call := range message.ToolCalls {
+			callKept = callKept || call.Function.Name == "task_start" && call.ID == start.ID
+		}
+		resultKept = resultKept || message.Role == client.RoleTool && message.Name == "task_start" && message.ToolCallID == start.ID
+	}
+	if !callKept || !resultKept {
+		t.Fatalf("task_start exchange was compacted: %#v", context.Messages())
+	}
+}
+
 type chunkStream struct {
 	chunks []*client.ChatChunk
 	index  int
