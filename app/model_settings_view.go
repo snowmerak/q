@@ -207,6 +207,9 @@ func (m model) viewModels() string {
 			}
 			body.WriteString(prefix)
 			body.WriteString(style.Render(filtered[index].ID))
+			if _, grouped := modelGroupChoice(m.draftConfig, filtered[index].ID); !grouped {
+				body.WriteString(subtleStyle.Render("  · " + m.preferredModelAPIMode(filtered[index].ID)))
+			}
 			if group, grouped := modelGroupChoice(m.draftConfig, filtered[index].ID); grouped {
 				body.WriteString(subtleStyle.Render(fmt.Sprintf("  · %d ordered candidates", len(m.draftConfig.ModelGroups[group].Candidates))))
 			} else if filtered[index].ContextLength > 0 {
@@ -227,7 +230,7 @@ func (m model) viewModels() string {
 		body.WriteString(helpStyle.Render("loading models · ctrl+c quit"))
 	} else {
 		available := m.selectableModels()
-		help := fmt.Sprintf("%d/%d choices · type to filter · ↑/↓ select · ctrl+e GLOBAL context · enter %s · esc back", len(filtered), len(available), m.modelSaveLabel())
+		help := fmt.Sprintf("%d/%d · ↑/↓ select · ctrl+r GLOBAL API · ctrl+e context · enter %s · esc back", len(filtered), len(available), m.modelSaveLabel())
 		body.WriteString(helpStyle.Render(help))
 	}
 	return frameStyle.Width(max(36, m.width-4)).Render(body.String())

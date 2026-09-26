@@ -133,6 +133,9 @@ func (m model) updateAgentEvent(message agentEventMsg) (tea.Model, tea.Cmd) {
 			m.status = "Thinking… · " + event.message.Name + " completed"
 		}
 		m.refreshTranscript()
+		if err := m.saveWorkspaceSession(); err != nil {
+			m.status = err.Error()
+		}
 		return m, tea.Batch(m.spinner.Tick, waitAgentEvent(message.events, message.turnID), learning)
 	}
 	return m.Update(chatResultMsg{

@@ -136,6 +136,13 @@ func consumeChatStream(
 			}
 			delta := choice.Delta
 			mergeToolCallFragments(&response.Choices[0].Message, delta.ToolCalls)
+			if choice.Phase != "commentary" && delta.Phase != "" {
+				response.Choices[0].Message.Phase = delta.Phase
+			}
+			if len(delta.ResponseOutput) > 0 {
+				response.Choices[0].Message.ResponseOutput = append(response.Choices[0].Message.ResponseOutput[:0], delta.ResponseOutput...)
+				response.Choices[0].Message.ResponseModel = delta.ResponseModel
+			}
 
 			thinking := ""
 			content := delta.Content

@@ -19,7 +19,7 @@ import (
 )
 
 const (
-	CurrentVersion = 1
+	CurrentVersion = 2
 	DirectoryName  = ".q"
 	SessionsName   = "sessions"
 	FileName       = "session.json"
@@ -29,15 +29,30 @@ const (
 var ErrNotFound = errors.New("q workspace session not found")
 
 type Session struct {
-	Version    int                   `json:"version"`
-	ID         string                `json:"id,omitempty"`
-	RunID      string                `json:"run_id,omitempty"`
-	Title      string                `json:"title,omitempty"`
-	UpdatedAt  *time.Time            `json:"updated_at,omitempty"`
-	Transcript []client.Message      `json:"transcript,omitempty"`
-	Context    []client.Message      `json:"context,omitempty"`
-	Learning   thinker.LearningState `json:"learning"`
-	ActiveTask *ActiveTask           `json:"active_task,omitempty"`
+	Version    int              `json:"version"`
+	ID         string           `json:"id,omitempty"`
+	RunID      string           `json:"run_id,omitempty"`
+	Title      string           `json:"title,omitempty"`
+	UpdatedAt  *time.Time       `json:"updated_at,omitempty"`
+	Transcript []client.Message `json:"transcript,omitempty"`
+	Context    []client.Message `json:"context,omitempty"`
+	// ResponseReplay is private provider state aligned to Context indexes. It
+	// is not included in the searchable conversation archive.
+	ResponseReplay   []ResponseReplayItem  `json:"response_replay,omitempty"`
+	ResponseAffinity *ResponseAffinity     `json:"response_affinity,omitempty"`
+	Learning         thinker.LearningState `json:"learning"`
+	ActiveTask       *ActiveTask           `json:"active_task,omitempty"`
+}
+
+type ResponseReplayItem struct {
+	Index  int               `json:"index"`
+	Model  string            `json:"model"`
+	Output []json.RawMessage `json:"output"`
+}
+
+type ResponseAffinity struct {
+	Model string `json:"model"`
+	Key   string `json:"key"`
 }
 
 // ActiveTask is an explicit task lifecycle that survived beyond the turn in
@@ -360,6 +375,10 @@ func cloneSession(session Session) Session {
 		active := *session.ActiveTask
 		active.CompletionCriteria = append([]string(nil), active.CompletionCriteria...)
 		session.ActiveTask = &active
+	}
+	if session.ResponseAffinity != nil {
+		affinity := *session.ResponseAffinity
+		session.ResponseAffinity = &affinity
 	}
 	return session
 }

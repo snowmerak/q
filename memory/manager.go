@@ -109,6 +109,15 @@ func (m *Manager) Messages() []client.Message {
 	return cloneMessages(m.messages)
 }
 
+// ClearResponseReplay drops provider-private continuation items when the
+// selected model or API mode changes while preserving visible conversation.
+func (m *Manager) ClearResponseReplay() {
+	for index := range m.messages {
+		m.messages[index].ResponseOutput = nil
+		m.messages[index].ResponseModel = ""
+	}
+}
+
 func (m *Manager) LocalEstimate() int {
 	return CountMessages(m.messages)
 }

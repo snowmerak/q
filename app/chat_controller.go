@@ -262,6 +262,7 @@ func (m model) startChatTurn(content string, compact bool) (tea.Model, tea.Cmd) 
 	m.input.Blur()
 	m.waiting = true
 	m.refreshTranscript()
+	var compactionPlan *memory.Plan
 	if compact && m.memory.ShouldCompact() {
 		plan, err := m.memory.Plan()
 		if err != nil {
@@ -273,9 +274,21 @@ func (m model) startChatTurn(content string, compact bool) (tea.Model, tea.Cmd) 
 			}
 			return m, m.input.Focus()
 		}
+		compactionPlan = &plan
+	}
+	if err := m.saveWorkspaceSession(); err != nil {
+		m.rollbackPendingMessage()
+		m.archiveFailure("session_save", err)
+		m.status = err.Error()
+		if archiveErr := m.flushArchive(); archiveErr != nil {
+			m.status += " · archive: " + archiveErr.Error()
+		}
+		return m, m.input.Focus()
+	}
+	if compactionPlan != nil {
 		m.compacting = true
 		m.status = "Compacting context…"
-		return m, tea.Batch(m.spinner.Tick, m.compactContext(plan), learning)
+		return m, tea.Batch(m.spinner.Tick, m.compactContext(*compactionPlan), learning)
 	}
 	m.status = "Thinking…"
 	return m, tea.Batch(m.spinner.Tick, m.sendChatRequest(), learning)

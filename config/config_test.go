@@ -522,3 +522,32 @@ func TestProviderReasoningEffortRejectsSurroundingWhitespace(t *testing.T) {
 		t.Fatal("saving a padded reasoning effort should fail")
 	}
 }
+
+func TestModelAPIModesDefaultAndGroupValidation(t *testing.T) {
+	value := Default()
+	value.Provider.Model = "group/main"
+	value.ModelGroups = map[string]ModelGroupConfig{"main": {Candidates: []ModelCandidateConfig{{Model: "a"}, {Model: "b"}}}}
+	if value.ModelAPIMode("a") != "chat_completions" {
+		t.Fatal("missing mode must default to Chat Completions")
+	}
+	value.ModelAPIModes = map[string]string{"a": "responses", "b": "responses"}
+	if err := value.Validate(); err == nil || !strings.Contains(err.Error(), "multiple candidates") {
+		t.Fatalf("multi-candidate Responses default group error = %v", err)
+	}
+	value.ModelGroups["main"] = ModelGroupConfig{Candidates: []ModelCandidateConfig{{Model: "a"}}}
+	if err := value.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	if value.EffectiveModelAPIModes()["group/main"] != "responses" {
+		t.Fatal("single-candidate Responses group was not routed to Responses")
+	}
+	value.ModelGroups["main"] = ModelGroupConfig{Candidates: []ModelCandidateConfig{{Model: "a"}, {Model: "b"}}}
+	value.ModelAPIModes["b"] = "chat_completions"
+	if err := value.Validate(); err == nil || !strings.Contains(err.Error(), "mixes") {
+		t.Fatalf("mixed default group error = %v", err)
+	}
+	value.ModelAPIModes["b"] = "unknown"
+	if err := value.Validate(); err == nil || !strings.Contains(err.Error(), "model_api_modes") {
+		t.Fatalf("invalid API mode error = %v", err)
+	}
+}

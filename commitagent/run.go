@@ -181,6 +181,7 @@ func resolveCommitRuntime(ctx context.Context, store config.Store, value config.
 		}
 		configuredClient, err = client.New(client.Config{
 			BaseURL: manager.Endpoint(), APIKey: manager.APIKey(), DefaultModel: value.Provider.Model,
+			ModelAPIModes: value.EffectiveModelAPIModes(), ForwardUsageMetadata: true,
 			UsageRecorder: usageRecorder,
 		})
 		if err != nil {
@@ -195,6 +196,7 @@ func resolveCommitRuntime(ctx context.Context, store config.Store, value config.
 		var err error
 		configuredClient, err = client.New(client.Config{
 			BaseURL: value.Provider.BaseURL, APIKey: apiKey, DefaultModel: value.Provider.Model, DisableAPIKey: apiKey == "",
+			ModelAPIModes: value.EffectiveModelAPIModes(),
 			UsageRecorder: usageRecorder,
 		})
 		if err != nil {

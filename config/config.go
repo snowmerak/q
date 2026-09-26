@@ -45,15 +45,16 @@ const (
 var ErrNotFound = errors.New("q config not found")
 
 type Config struct {
-	Version     int                         `yaml:"version"`
-	Provider    ProviderConfig              `yaml:"provider"`
-	Embedding   EmbeddingConfig             `yaml:"embedding,omitempty"`
-	Context     ContextConfig               `yaml:"context,omitempty"`
-	Plan        PlanConfig                  `yaml:"plan,omitempty"`
-	ModelGroups map[string]ModelGroupConfig `yaml:"model_groups,omitempty"`
-	Agents      AgentsConfig                `yaml:"agents,omitempty"`
-	Loom        LoomConfig                  `yaml:"loom,omitempty"`
-	LSP         lsp.GlobalConfig            `yaml:"lsp,omitempty"`
+	Version       int                         `yaml:"version"`
+	Provider      ProviderConfig              `yaml:"provider"`
+	Embedding     EmbeddingConfig             `yaml:"embedding,omitempty"`
+	Context       ContextConfig               `yaml:"context,omitempty"`
+	Plan          PlanConfig                  `yaml:"plan,omitempty"`
+	ModelGroups   map[string]ModelGroupConfig `yaml:"model_groups,omitempty"`
+	ModelAPIModes map[string]string           `yaml:"model_api_modes,omitempty"`
+	Agents        AgentsConfig                `yaml:"agents,omitempty"`
+	Loom          LoomConfig                  `yaml:"loom,omitempty"`
+	LSP           lsp.GlobalConfig            `yaml:"lsp,omitempty"`
 }
 
 type ProviderConfig struct {
@@ -141,6 +142,41 @@ type AgentConfig struct {
 	Agent           string `yaml:"agent,omitempty"`
 }
 
+// ModelAPIMode returns the selected API for a concrete model. Existing
+// configuration defaults to Chat Completions.
+func (c Config) ModelAPIMode(model string) string {
+	if mode := c.ModelAPIModes[model]; mode != "" {
+		return mode
+	}
+	return "chat_completions"
+}
+
+// EffectiveModelAPIModes includes homogeneous model groups for Q's Gateway
+// endpoint. Role-specific groups still route each concrete candidate.
+func (c Config) EffectiveModelAPIModes() map[string]string {
+	modes := make(map[string]string, len(c.ModelAPIModes)+len(c.ModelGroups))
+	for model, mode := range c.ModelAPIModes {
+		modes[model] = mode
+	}
+	for name, group := range c.ModelGroups {
+		if len(group.Candidates) == 0 {
+			continue
+		}
+		mode := c.ModelAPIMode(group.Candidates[0].Model)
+		homogeneous := true
+		for _, candidate := range group.Candidates[1:] {
+			if c.ModelAPIMode(candidate.Model) != mode {
+				homogeneous = false
+				break
+			}
+		}
+		if homogeneous && (mode != "responses" || len(group.Candidates) == 1) {
+			modes["group/"+name] = mode
+		}
+	}
+	return modes
+}
+
 var agentRoles = []string{
 	AgentRoleGriller,
 	AgentRoleScout,
@@ -201,6 +237,14 @@ func (c Config) Validate() error {
 	if strings.TrimSpace(c.Provider.Model) == "" {
 		return fmt.Errorf("config: provider model is required")
 	}
+	for model, mode := range c.ModelAPIModes {
+		if model == "" || model != strings.TrimSpace(model) || strings.HasPrefix(model, "group/") {
+			return fmt.Errorf("config: model_api_modes key %q must be a concrete model ID without surrounding whitespace", model)
+		}
+		if mode != "chat_completions" && mode != "responses" {
+			return fmt.Errorf("config: model_api_modes[%q] must be chat_completions or responses", model)
+		}
+	}
 	if effort := c.Provider.EffectiveReasoningEffort(); effort != "" && c.Provider.ReasoningEffort != effort {
 		return fmt.Errorf("config: provider reasoning_effort must not have surrounding whitespace")
 	}
@@ -256,6 +300,19 @@ func (c Config) Validate() error {
 			}
 			if candidate.Timeout < 0 {
 				return fmt.Errorf("config: model group %q candidate %d timeout must not be negative", name, index)
+			}
+		}
+	}
+	if name, grouped := strings.CutPrefix(c.Provider.Model, "group/"); grouped {
+		if group, found := c.ModelGroups[name]; found && len(group.Candidates) > 0 {
+			first := c.ModelAPIMode(group.Candidates[0].Model)
+			for _, candidate := range group.Candidates[1:] {
+				if c.ModelAPIMode(candidate.Model) != first {
+					return fmt.Errorf("config: default model group %q mixes Chat Completions and Responses candidates", name)
+				}
+			}
+			if first == "responses" && len(group.Candidates) > 1 {
+				return fmt.Errorf("config: default model group %q cannot use Responses with multiple candidates", name)
 			}
 		}
 	}

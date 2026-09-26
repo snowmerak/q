@@ -86,6 +86,7 @@ func newConfiguredPropositionJudge(ctx context.Context, dir string) (*modelPropo
 		}
 		configured, err = client.New(client.Config{
 			BaseURL: manager.Endpoint(), APIKey: manager.APIKey(), DefaultModel: value.Provider.Model,
+			ModelAPIModes: value.EffectiveModelAPIModes(), ForwardUsageMetadata: true,
 			UsageRecorder: usageRecorder,
 		})
 		if err != nil {
@@ -97,6 +98,7 @@ func newConfiguredPropositionJudge(ctx context.Context, dir string) (*modelPropo
 		apiKey := value.Provider.ResolveAPIKey()
 		configured, err = client.New(client.Config{
 			BaseURL: value.Provider.BaseURL, APIKey: apiKey, DefaultModel: value.Provider.Model,
+			ModelAPIModes: value.EffectiveModelAPIModes(),
 			DisableAPIKey: apiKey == "",
 			UsageRecorder: usageRecorder,
 		})

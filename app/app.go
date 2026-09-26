@@ -57,10 +57,13 @@ func managedClientFactory(runtime providerRuntime, recorder client.UsageRecorder
 		if apiKey == "" {
 			return nil, errors.New("internal LLM Gateway API key is unavailable")
 		}
+		providerModes := providerhost.PreferredProviderAPIModes(runtime.Config())
 		return client.New(client.Config{
 			BaseURL:              endpoint,
 			APIKey:               apiKey,
 			DefaultModel:         value.Provider.Model,
+			ModelAPIModes:        value.EffectiveModelAPIModes(),
+			ProviderAPIModes:     providerModes,
 			UsageRecorder:        recorder,
 			ForwardUsageMetadata: true,
 		})

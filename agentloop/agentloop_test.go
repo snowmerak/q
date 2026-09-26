@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -14,6 +16,80 @@ import (
 	"github.com/snowmerak/q/memory"
 	qtools "github.com/snowmerak/q/tools"
 )
+
+func TestConsumeChatStreamRetainsResponsesReplayItems(t *testing.T) {
+	output := json.RawMessage(`{"type":"reasoning","encrypted_content":"opaque"}`)
+	configured := &scriptedClient{stream: &chunkStream{chunks: []*client.ChatChunk{{
+		Choices: []client.Choice{{Delta: &client.Message{Role: client.RoleAssistant, Phase: "final_answer", Content: "answer", ResponseOutput: []json.RawMessage{output}, ResponseModel: "native/model"}}},
+	}}}}
+	response, _, err := agentloop.ConsumeChatStream(t.Context(), configured, client.ChatRequest{Model: "native/model"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	message := response.Choices[0].Message
+	if message.Content != "answer" || message.Phase != "final_answer" || len(message.ResponseOutput) != 1 || message.ResponseModel != "native/model" || string(message.ResponseOutput[0]) != string(output) {
+		t.Fatalf("streamed response = %#v", message)
+	}
+}
+
+func TestResponsesStreamingToolRoundThroughAgentLoop(t *testing.T) {
+	var bodies []map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			t.Errorf("decode request: %v", err)
+			return
+		}
+		bodies = append(bodies, body)
+		writer.Header().Set("Content-Type", "text/event-stream")
+		if len(bodies) == 1 {
+			_, _ = io.WriteString(writer, "event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_1\",\"model\":\"native/model\",\"status\":\"completed\",\"output\":[{\"type\":\"reasoning\",\"encrypted_content\":\"opaque\"},{\"type\":\"function_call\",\"call_id\":\"call_1\",\"name\":\"lookup\",\"arguments\":\"{}\"}]}}\n\n")
+		} else {
+			_, _ = io.WriteString(writer, "event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_2\",\"model\":\"native/model\",\"status\":\"completed\",\"output\":[{\"type\":\"message\",\"content\":[{\"type\":\"output_text\",\"text\":\"done\"}]}]}}\n\n")
+		}
+	}))
+	t.Cleanup(server.Close)
+	configured, err := client.New(client.Config{BaseURL: server.URL + "/v1", APIKey: "test", ModelAPIModes: map[string]string{"native/model": "responses"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = configured.Close() })
+	runtime := &scriptedTools{name: "lookup", content: "found"}
+	events := make(chan agentloop.Event)
+	go agentloop.RunAgentLoop(t.Context(), agentloop.Request{
+		Client: configured, Tools: runtime, Model: "native/model", Stream: true,
+		Messages: []client.Message{{Role: client.RoleUser, Content: "look up"}},
+	}, events)
+	var final agentloop.Result
+	for event := range events {
+		if err := event.Err(); err != nil {
+			t.Fatal(err)
+		}
+		if result, ok := event.Result(); ok {
+			final = result
+		}
+	}
+	if len(runtime.calls) != 1 || len(bodies) != 2 || final.Response == nil || final.Response.Choices[0].Message.Content != "done" {
+		t.Fatalf("tool calls = %d, requests = %d, result = %#v", len(runtime.calls), len(bodies), final)
+	}
+	input := bodies[1]["input"].([]any)
+	var reasoning, result bool
+	for _, raw := range input {
+		item, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		if item["encrypted_content"] == "opaque" {
+			reasoning = true
+		}
+		if item["type"] == "function_call_output" && item["call_id"] == "call_1" && item["output"] == "found" {
+			result = true
+		}
+	}
+	if !reasoning || !result || bodies[0]["store"] != false || bodies[1]["store"] != false {
+		t.Fatalf("Responses replay lost provider state or tool output: %#v", input)
+	}
+}
 
 type scriptedClient struct {
 	requests []client.ChatRequest

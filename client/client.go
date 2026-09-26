@@ -20,10 +20,14 @@ type Config struct {
 	BaseURL       string
 	APIKey        string
 	DefaultModel  string
-	HTTPClient    *http.Client
-	Headers       http.Header
-	BodyFields    map[string]any
-	UsageRecorder UsageRecorder
+	ModelAPIModes map[string]string
+	// ProviderAPIModes selects a default for models under a Gateway prefix.
+	// An exact ModelAPIModes entry always takes precedence.
+	ProviderAPIModes map[string]string
+	HTTPClient       *http.Client
+	Headers          http.Header
+	BodyFields       map[string]any
+	UsageRecorder    UsageRecorder
 	// ForwardUsageMetadata sends Q's bounded role and event ID headers. Enable
 	// it only when BaseURL is a trusted Q Gateway, not an arbitrary provider.
 	ForwardUsageMetadata bool
@@ -41,6 +45,8 @@ type Client struct {
 	defaultModel         string
 	usageRecorder        UsageRecorder
 	forwardUsageMetadata bool
+	modelAPIModes        map[string]string
+	providerAPIModes     map[string]string
 }
 
 // New validates config and constructs an OpenAI-compatible client.
@@ -89,6 +95,8 @@ func New(config Config) (*Client, error) {
 		defaultModel:         config.DefaultModel,
 		usageRecorder:        config.UsageRecorder,
 		forwardUsageMetadata: config.ForwardUsageMetadata,
+		modelAPIModes:        config.ModelAPIModes,
+		providerAPIModes:     config.ProviderAPIModes,
 	}, nil
 }
 
@@ -124,6 +132,9 @@ func validateConfig(config Config) error {
 // request omits Model.
 func (c *Client) Chat(ctx context.Context, request ChatRequest) (*ChatResponse, error) {
 	request.Model = c.model(request.Model)
+	if c.apiMode(request.Model) == "responses" {
+		return c.responsesChat(ctx, request)
+	}
 	ctx, request.Headers = c.withUsageMetadata(ctx, request.Headers, "")
 	response, err := c.inner.Chat(ctx, request)
 	if response != nil {
@@ -136,6 +147,9 @@ func (c *Client) Chat(ctx context.Context, request ChatRequest) (*ChatResponse, 
 // returned stream.
 func (c *Client) ChatStream(ctx context.Context, request ChatRequest) (Stream, error) {
 	request.Model = c.model(request.Model)
+	if c.apiMode(request.Model) == "responses" {
+		return c.responsesChatStream(ctx, request)
+	}
 	ctx, request.Headers = c.withUsageMetadata(ctx, request.Headers, "")
 	stream, err := c.inner.ChatStream(ctx, request)
 	if err != nil {
@@ -152,6 +166,18 @@ func (c *Client) ChatStream(ctx context.Context, request ChatRequest) (Stream, e
 		return &usageHeaderStream{usageStream: tracked, headers: headers}, nil
 	}
 	return tracked, nil
+}
+
+func (c *Client) apiMode(model string) string {
+	if mode := c.modelAPIModes[model]; mode != "" {
+		return mode
+	}
+	if prefix, _, found := strings.Cut(model, "/"); found {
+		if mode := c.providerAPIModes[prefix]; mode != "" {
+			return mode
+		}
+	}
+	return "chat_completions"
 }
 
 // ListModels returns models exposed by the compatible endpoint.

@@ -188,6 +188,13 @@ type modelTargetConfiguredMsg struct {
 	err    error
 }
 
+type modelAPIModeConfiguredMsg struct {
+	config  config.Config
+	client  chatClient
+	modelID string
+	err     error
+}
+
 type modelRoleConfiguredMsg struct {
 	config config.Config
 	target string
@@ -767,6 +774,7 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			m.config = message.config
 			m.client = message.client
 			m.conversationID = ""
+			m.clearResponseReplay()
 			m.compactionTarget = 0
 			if m.memory != nil {
 				m.memory.Configure(memoryPolicy(m.activeConfig()))
@@ -809,6 +817,19 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			return m, m.configureEmbeddingRuntime(message.config, m.client)
 		}
 		return m, nil
+	case modelAPIModeConfiguredMsg:
+		if message.err != nil {
+			m.status = message.err.Error()
+			return m, m.modelFilter.Focus()
+		}
+		if m.client != nil && m.client != message.client {
+			_ = m.client.Close()
+		}
+		m.config, m.draftConfig, m.client = message.config, message.config, message.client
+		m.conversationID = ""
+		m.clearResponseReplay()
+		m.status = message.modelID + " · " + m.preferredModelAPIMode(message.modelID)
+		return m, m.modelFilter.Focus()
 	case modelRoleConfiguredMsg:
 		if message.err != nil {
 			m.status = message.err.Error()
@@ -831,6 +852,7 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.workspaceModel = message.config
 		m.conversationID = ""
+		m.clearResponseReplay()
 		m.compactionTarget = 0
 		if m.memory != nil {
 			m.memory.Configure(memoryPolicy(m.activeConfig()))
@@ -945,6 +967,7 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 		m.conversationID = ""
+		m.clearResponseReplay()
 		m.compactionTarget = 0
 		if message.openModels {
 			m.enterModelPicker(message.config, message.models)
@@ -1677,16 +1700,25 @@ func (m *model) restoreWorkspaceSession() {
 		return
 	}
 	base := append([]client.Message(nil), m.messages...)
-	m.messages = mergeWorkspaceMessages(base, session.Transcript)
+	transcript, interruptedCalls := reconcileInterruptedToolCalls(session.Transcript)
+	m.messages = mergeWorkspaceMessages(base, transcript)
 	requestContext := session.Context
 	if len(requestContext) == 0 {
 		requestContext = session.Transcript
 	}
+	requestContext = restoreResponseReplay(requestContext, session.ResponseReplay)
+	var contextInterruptedCalls int
+	requestContext, contextInterruptedCalls = reconcileInterruptedToolCalls(requestContext)
 	m.memory = memory.New(memoryPolicy(m.activeConfig()), mergeWorkspaceMessages(base, requestContext))
 	if learningErr := m.ensureLearningMachine(session.Learning, requestContext); learningErr != nil {
 		m.status = learningErr.Error()
 	}
 	m.runID = session.RunID
+	if affinity := session.ResponseAffinity; affinity != nil &&
+		affinity.Model == m.activeModel() && strings.HasPrefix(affinity.Key, "cache_") &&
+		m.activeModelAPIMode(affinity.Model) == "responses" {
+		m.conversationID = affinity.Key
+	}
 	m.sessionTitle = session.Title
 	if m.sessionTitle == "" {
 		m.sessionTitle = sessionTitleFromMessages(session.Transcript)
@@ -1702,6 +1734,42 @@ func (m *model) restoreWorkspaceSession() {
 			m.status += " · active task resumed"
 		}
 	}
+	if interruptedCalls > 0 || contextInterruptedCalls > 0 {
+		m.status += " · interrupted tool call recovered"
+		if err := m.saveWorkspaceSession(); err != nil {
+			m.status += " · " + err.Error()
+		}
+	}
+}
+
+func reconcileInterruptedToolCalls(messages []client.Message) ([]client.Message, int) {
+	var recovered []client.Message
+	interrupted := 0
+	for index := 0; index < len(messages); index++ {
+		message := messages[index]
+		recovered = append(recovered, message)
+		if len(message.ToolCalls) == 0 {
+			continue
+		}
+		completed := make(map[string]bool, len(message.ToolCalls))
+		for index+1 < len(messages) && messages[index+1].Role == client.RoleTool {
+			index++
+			result := messages[index]
+			recovered = append(recovered, result)
+			completed[result.ToolCallID] = true
+		}
+		for _, call := range message.ToolCalls {
+			if call.ID == "" || completed[call.ID] {
+				continue
+			}
+			recovered = append(recovered, client.Message{
+				Role: client.RoleTool, Name: call.Function.Name, ToolCallID: call.ID,
+				Content: "Tool error: interrupted by session restart; execution outcome unknown",
+			})
+			interrupted++
+		}
+	}
+	return recovered, interrupted
 }
 
 func (m *model) restoreWorkspaceModel() error {
@@ -1795,13 +1863,20 @@ func (m *model) saveWorkspaceSession() error {
 	if m.workspaceStore == nil || m.memory == nil {
 		return nil
 	}
+	requestContext := workspaceSessionMessages(m.memory.Messages())
+	var responseAffinity *workspace.ResponseAffinity
+	if strings.HasPrefix(m.conversationID, "cache_") && m.activeModelAPIMode(m.activeModel()) == "responses" {
+		responseAffinity = &workspace.ResponseAffinity{Model: m.activeModel(), Key: m.conversationID}
+	}
 	err := m.workspaceStore.Save(workspace.Session{
-		RunID:      m.runID,
-		Title:      m.sessionTitle,
-		UpdatedAt:  workspaceTimePointer(m.sessionUpdatedAt),
-		Transcript: workspaceSessionMessages(m.messages),
-		Context:    workspaceSessionMessages(m.memory.Messages()),
-		ActiveTask: cloneActiveTask(m.activeTask),
+		RunID:            m.runID,
+		Title:            m.sessionTitle,
+		UpdatedAt:        workspaceTimePointer(m.sessionUpdatedAt),
+		Transcript:       workspaceSessionMessages(m.messages),
+		Context:          requestContext,
+		ResponseReplay:   collectResponseReplay(requestContext),
+		ResponseAffinity: responseAffinity,
+		ActiveTask:       cloneActiveTask(m.activeTask),
 		Learning: func() thinker.LearningState {
 			if m.learning == nil {
 				return thinker.LearningState{}
@@ -1813,6 +1888,40 @@ func (m *model) saveWorkspaceSession() error {
 		return &workspaceSessionSaveError{err: err}
 	}
 	return nil
+}
+
+func (m *model) clearResponseReplay() {
+	if m.memory != nil {
+		m.memory.ClearResponseReplay()
+	}
+	for index := range m.messages {
+		m.messages[index].ResponseOutput = nil
+		m.messages[index].ResponseModel = ""
+	}
+}
+
+func collectResponseReplay(messages []client.Message) []workspace.ResponseReplayItem {
+	var replay []workspace.ResponseReplayItem
+	for index, message := range messages {
+		if len(message.ResponseOutput) > 0 {
+			replay = append(replay, workspace.ResponseReplayItem{Index: index, Model: message.ResponseModel, Output: message.ResponseOutput})
+		}
+	}
+	return replay
+}
+
+func restoreResponseReplay(messages []client.Message, replay []workspace.ResponseReplayItem) []client.Message {
+	if len(replay) == 0 {
+		return messages
+	}
+	restored := append([]client.Message(nil), messages...)
+	for _, item := range replay {
+		if item.Index >= 0 && item.Index < len(restored) && restored[item.Index].Role == client.RoleAssistant {
+			restored[item.Index].ResponseOutput = append([]json.RawMessage(nil), item.Output...)
+			restored[item.Index].ResponseModel = item.Model
+		}
+	}
+	return restored
 }
 
 func workspaceTimePointer(value time.Time) *time.Time {

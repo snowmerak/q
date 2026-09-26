@@ -4,6 +4,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/snowmerak/q/client"
 	"github.com/snowmerak/q/config"
+	"github.com/snowmerak/q/providerhost"
 	"github.com/snowmerak/q/subagent"
 	"github.com/snowmerak/q/workspace"
 	"path/filepath"
@@ -89,6 +90,15 @@ func (m model) updateModelPicker(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		return m.enterContextWindowPicker(filtered[m.modelCursor])
+	case "ctrl+r":
+		if len(filtered) == 0 {
+			return m, nil
+		}
+		if _, grouped := modelGroupChoice(m.draftConfig, filtered[m.modelCursor].ID); grouped {
+			m.status = "Choose a concrete model to set its API"
+			return m, nil
+		}
+		return m.saveModelAPIMode(filtered[m.modelCursor].ID)
 	case "enter":
 		if len(filtered) == 0 {
 			return m, nil
@@ -139,6 +149,45 @@ func (m model) updateModelPicker(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	m.modelFilter, command = m.modelFilter.Update(key)
 	m.modelCursor = 0
 	return m, command
+}
+
+func (m model) saveModelAPIMode(modelID string) (tea.Model, tea.Cmd) {
+	value := m.draftConfig
+	value.ModelAPIModes = make(map[string]string, len(m.draftConfig.ModelAPIModes)+1)
+	for id, mode := range m.draftConfig.ModelAPIModes {
+		value.ModelAPIModes[id] = mode
+	}
+	if m.preferredModelAPIMode(modelID) == "responses" {
+		value.ModelAPIModes[modelID] = "chat_completions"
+	} else {
+		value.ModelAPIModes[modelID] = "responses"
+	}
+	if err := value.Validate(); err != nil {
+		m.status = err.Error()
+		return m, nil
+	}
+	m.status = "Saving model API selection…"
+	return m, func() tea.Msg {
+		if err := m.store.Save(value); err != nil {
+			return modelAPIModeConfiguredMsg{err: err}
+		}
+		configuredClient, err := m.factory(value)
+		return modelAPIModeConfiguredMsg{config: value, client: configuredClient, modelID: modelID, err: err}
+	}
+}
+
+func (m model) preferredModelAPIMode(modelID string) string {
+	if m.runtime == nil {
+		return m.draftConfig.ModelAPIMode(modelID)
+	}
+	return providerhost.PreferredModelAPIMode(m.draftConfig, providerhost.PreferredProviderAPIModes(m.runtime.Config()), modelID)
+}
+
+func (m model) activeModelAPIMode(modelID string) string {
+	if m.runtime == nil {
+		return m.activeConfig().ModelAPIMode(modelID)
+	}
+	return providerhost.PreferredModelAPIMode(m.activeConfig(), providerhost.PreferredProviderAPIModes(m.runtime.Config()), modelID)
 }
 
 func (m model) updateModelTargetPicker(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {

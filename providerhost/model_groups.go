@@ -70,6 +70,8 @@ func (h *modelGroupHandler) ServeHTTP(writer http.ResponseWriter, request *http.
 		h.serveModel(writer, request, groups)
 	case request.Method == http.MethodPost && request.URL.Path == "/v1/chat/completions":
 		h.serveChat(writer, request, groups)
+	case request.Method == http.MethodPost && request.URL.Path == "/v1/responses":
+		h.serveResponses(writer, request, groups)
 	default:
 		h.inner.ServeHTTP(writer, request)
 	}
@@ -191,6 +193,14 @@ func minimumModelLimit(models []client.Model, selectLimit func(client.Model) int
 }
 
 func (h *modelGroupHandler) serveChat(writer http.ResponseWriter, request *http.Request, groups map[string]config.ModelGroupConfig) {
+	h.serveGroupRequest(writer, request, groups, false)
+}
+
+func (h *modelGroupHandler) serveResponses(writer http.ResponseWriter, request *http.Request, groups map[string]config.ModelGroupConfig) {
+	h.serveGroupRequest(writer, request, groups, true)
+}
+
+func (h *modelGroupHandler) serveGroupRequest(writer http.ResponseWriter, request *http.Request, groups map[string]config.ModelGroupConfig, responses bool) {
 	body, err := io.ReadAll(io.LimitReader(request.Body, 16<<20))
 	if err != nil {
 		writeGroupError(writer, http.StatusBadRequest, fmt.Errorf("model groups: read request: %w", err))
@@ -212,13 +222,30 @@ func (h *modelGroupHandler) serveChat(writer http.ResponseWriter, request *http.
 		h.serveInnerBody(writer, request, body)
 		return
 	}
+	if responses {
+		if len(group.Candidates) != 1 {
+			writeGroupError(writer, http.StatusBadRequest, fmt.Errorf("model group %q cannot use Responses with multiple candidates", name))
+			return
+		}
+		value, err := h.store.Load()
+		if err != nil {
+			writeGroupError(writer, http.StatusInternalServerError, err)
+			return
+		}
+		for _, candidate := range group.Candidates {
+			if value.ModelAPIMode(candidate.Model) != "responses" {
+				writeGroupError(writer, http.StatusBadRequest, fmt.Errorf("model group %q contains a candidate without Responses mode", name))
+				return
+			}
+		}
+	}
 
 	var last *httptest.ResponseRecorder
 	for _, candidate := range group.Candidates {
 		if !h.allow(candidate.Model) {
 			continue
 		}
-		attemptBody, err := rewriteGroupRequest(fields, candidate)
+		attemptBody, err := rewriteGroupRequest(fields, candidate, responses)
 		if err != nil {
 			writeGroupError(writer, http.StatusInternalServerError, err)
 			return
@@ -332,14 +359,25 @@ func (w *groupCandidateWriter) recorder() *httptest.ResponseRecorder {
 	return recorded
 }
 
-func rewriteGroupRequest(fields map[string]json.RawMessage, candidate config.ModelCandidateConfig) ([]byte, error) {
+func rewriteGroupRequest(fields map[string]json.RawMessage, candidate config.ModelCandidateConfig, responses bool) ([]byte, error) {
 	copyFields := make(map[string]json.RawMessage, len(fields)+1)
 	maps.Copy(copyFields, fields)
 	model, _ := json.Marshal(candidate.Model)
 	copyFields["model"] = model
 	if candidate.ReasoningEffort != "" {
 		effort, _ := json.Marshal(candidate.ReasoningEffort)
-		copyFields["reasoning_effort"] = effort
+		if responses {
+			reasoning := make(map[string]json.RawMessage)
+			if raw := fields["reasoning"]; len(raw) > 0 {
+				if err := json.Unmarshal(raw, &reasoning); err != nil {
+					return nil, fmt.Errorf("model groups: decode Responses reasoning: %w", err)
+				}
+			}
+			reasoning["effort"] = effort
+			copyFields["reasoning"], _ = json.Marshal(reasoning)
+		} else {
+			copyFields["reasoning_effort"] = effort
+		}
 	}
 	return json.Marshal(copyFields)
 }
@@ -381,6 +419,9 @@ func rewriteSSEModels(body []byte, externalModel string) []byte {
 			continue
 		}
 		value["model"] = externalModel
+		if response, ok := value["response"].(map[string]any); ok {
+			response["model"] = externalModel
+		}
 		encoded, err := json.Marshal(value)
 		if err == nil {
 			lines[index] = append([]byte("data: "), encoded...)

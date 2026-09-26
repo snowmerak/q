@@ -90,6 +90,58 @@ func TestSyntheticGroupModelsKeepsUnknownLimitUnknown(t *testing.T) {
 	}
 }
 
+func TestModelGroupResponsesUsesSingleResponsesCandidate(t *testing.T) {
+	store := config.Store{Dir: t.TempDir()}
+	value := config.Default()
+	value.Provider.Model = "group/heavy"
+	value.ModelGroups = map[string]config.ModelGroupConfig{"heavy": {Candidates: []config.ModelCandidateConfig{
+		{Model: "primary/model", ReasoningEffort: "high"},
+	}}}
+	value.ModelAPIModes = map[string]string{"primary/model": "responses"}
+	if err := store.Save(value); err != nil {
+		t.Fatal(err)
+	}
+	var seen []map[string]any
+	inner := http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.URL.Path != "/v1/responses" {
+			t.Errorf("path = %q", request.URL.Path)
+		}
+		var body map[string]any
+		_ = json.NewDecoder(request.Body).Decode(&body)
+		seen = append(seen, body)
+		writer.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(writer, `{"id":"resp","model":"primary/model","status":"completed","output":[]}`)
+	})
+	response := httptest.NewRecorder()
+	ModelGroupHandler(inner, store).ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(
+		`{"model":"group/heavy","input":"hi","reasoning":{"summary":"auto"}}`)))
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"model":"group/heavy"`) || len(seen) != 1 {
+		t.Fatalf("response = %d %s, calls = %#v", response.Code, response.Body.String(), seen)
+	}
+	reasoning := seen[0]["reasoning"].(map[string]any)
+	if reasoning["effort"] != "high" || reasoning["summary"] != "auto" {
+		t.Fatalf("reasoning = %#v", reasoning)
+	}
+}
+
+func TestModelGroupResponsesRejectsMultipleCandidates(t *testing.T) {
+	store := config.Store{Dir: t.TempDir()}
+	value := config.Default()
+	value.Provider.Model = "primary/model"
+	value.ModelGroups = map[string]config.ModelGroupConfig{"heavy": {Candidates: []config.ModelCandidateConfig{{Model: "primary/model"}, {Model: "backup/model"}}}}
+	value.ModelAPIModes = map[string]string{"primary/model": "responses", "backup/model": "responses"}
+	if err := store.Save(value); err != nil {
+		t.Fatal(err)
+	}
+	called := false
+	inner := http.HandlerFunc(func(http.ResponseWriter, *http.Request) { called = true })
+	response := httptest.NewRecorder()
+	ModelGroupHandler(inner, store).ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"group/heavy","input":"hi"}`)))
+	if response.Code != http.StatusBadRequest || !strings.Contains(response.Body.String(), "multiple candidates") || called {
+		t.Fatalf("response = %d %s, inner called = %v", response.Code, response.Body.String(), called)
+	}
+}
+
 func TestModelGroupHandlerFallsBackAndRewritesExternalModel(t *testing.T) {
 	store := config.Store{Dir: t.TempDir()}
 	writeModelGroupConfig(t, store, config.ModelGroupConfig{Candidates: []config.ModelCandidateConfig{

@@ -162,6 +162,53 @@ func TestManagedClientFactoryUsesGatewayAPIKey(t *testing.T) {
 	}
 }
 
+func TestManagedClientFactoryPrefersResponsesForKnownProvider(t *testing.T) {
+	var paths []string
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		paths = append(paths, request.URL.Path)
+		switch request.URL.Path {
+		case "/v1/responses":
+			_, _ = writer.Write([]byte(`{"id":"resp_1","model":"openai/gpt-5-nano","status":"completed","output":[{"type":"message","content":[{"type":"output_text","text":"response"}]}]}`))
+		case "/v1/chat/completions":
+			_, _ = writer.Write([]byte(`{"model":"openai/gpt-5-nano","choices":[{"index":0,"message":{"role":"assistant","content":"chat"}}]}`))
+		default:
+			http.NotFound(writer, request)
+		}
+	}))
+	defer server.Close()
+	runtime := &fakeProviderRuntime{endpoint: server.URL + "/v1", apiKey: "test", config: gateway.Config{Providers: []gateway.ProviderConfig{
+		{ID: "openai", Type: "openai-compatible", Enabled: true, BaseURL: "https://api.openai.com/v1"},
+		{ID: "codex", Type: "codex", Enabled: true},
+	}}}
+	value := config.Default()
+	value.Provider.Model = "openai/gpt-5-nano"
+	factory := managedClientFactory(runtime, nil)
+	configured, err := factory(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = configured.Close() })
+	request := client.ChatRequest{Messages: []client.Message{{Role: client.RoleUser, Content: "hi"}}}
+	first, err := configured.Chat(t.Context(), request)
+	if err != nil || first.Choices[0].Message.Content != "response" {
+		t.Fatalf("preferred Responses call: reply=%#v err=%v", first, err)
+	}
+	_ = configured.Close()
+	value.ModelAPIModes = map[string]string{"openai/gpt-5-nano": "chat_completions"}
+	configured, err = factory(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = configured.Close() })
+	second, err := configured.Chat(t.Context(), request)
+	if err != nil || second.Choices[0].Message.Content != "chat" {
+		t.Fatalf("explicit Chat call: reply=%#v err=%v", second, err)
+	}
+	if len(paths) != 2 || paths[0] != "/v1/responses" || paths[1] != "/v1/chat/completions" {
+		t.Fatalf("request paths = %#v", paths)
+	}
+}
+
 type fakeClient struct {
 	requests      []client.ChatRequest
 	models        []client.Model
