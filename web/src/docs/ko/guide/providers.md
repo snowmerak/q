@@ -10,6 +10,8 @@ toc:
     label: Gateway 구성
   - id: 모델-역할-할당
     label: 모델 역할 할당
+  - id: 모델-api-선택
+    label: 모델 API 선택
   - id: 임베딩-구성
     label: 임베딩 구성
   - id: 폴백-그룹
@@ -41,6 +43,14 @@ q 안에서 `/gateway`를 열어 공급자와 리스너 설정을 추가하세�
 할당 표에서 `a`를 누르면 재사용 가능한 사용자 정의 역할을 만들 수 있습니다. 사용자 정의 서브에이전트는 자체 도구와 위임 권한을 유지하면서 이 역할을 선택할 수 있습니다.
 
 워크스페이스 오버라이드는 `.q/model.json`에, 전역 할당은 `~/.q/config.yaml`에 저장됩니다.
+
+## 모델 API 선택
+
+q는 구체적인 모델별로 Chat Completions 또는 Responses를 선택합니다. 네이티브 Responses를 지원하는 것으로 확인된 OpenAI, xAI, OpenRouter Gateway 경로는 Responses를 우선합니다. Codex App Server, Anthropic 네이티브 및 알 수 없는 호환 엔드포인트는 기존 API를 사용합니다. Gateway는 두 입력 경로를 계속 받습니다.
+
+Codex App Server에서는 q의 minimal agent가 `node_repl` 같은 상속된 비공개 MCP 도구를 비활성화합니다. Q 자체 도구는 계속 사용할 수 있고 세션 추적에 표시됩니다.
+
+`/model`에서 선택하거나 `~/.q/config.yaml`의 `model_api_modes`에 전체 모델 ID와 `chat_completions` 또는 `responses`를 지정할 수 있습니다. 기본 모델 그룹에 후보가 여러 개면 Responses를 사용할 수 없습니다. 역할별 그룹은 각 후보 모델의 API를 따릅니다. 저장된 세션은 두 API에서 공통 메시지 형식을 사용합니다.
 
 ## 임베딩 구성
 

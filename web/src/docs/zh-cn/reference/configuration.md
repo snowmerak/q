@@ -16,7 +16,7 @@ toc:
 
 | 路径 | 用途 |
 | --- | --- |
-| `~/.q/config.yaml` | 主要模型、角色、上下文、Loom 与 LSP 配置。 |
+| `~/.q/config.yaml` | 主要模型、角色、各模型的 API 模式、上下文、Loom 与 LSP 配置。 |
 | `~/.q/providers.json` | 受管理 Gateway 的提供商与模型元数据。 |
 | `~/.q/gateway.json` | 独立 Gateway 监听地址与密钥元数据。 |
 | `~/.q/gateway.key` | 用于验证 Gateway API 密钥的私有主密钥。 |
@@ -40,6 +40,8 @@ toc:
 | 路径 | 用途 |
 | --- | --- |
 | `.q/sessions/<uuid>/session.json` | 会话记录、上下文、标题、生命周期与学习状态。 |
+| `.q/sessions/<uuid>/delegations.json` | 子代理调用的书签。 |
+| `.q/sessions/<uuid>/delegates/<invocation-id>/` | 子会话、执行状态和嵌套委派树。 |
 | `.q/sessions/<uuid>/plan-execution.json` | 可恢复的获批计划检查点。 |
 | `.q/plan-executions/` | 已完成的执行快照。 |
 | `.q/model.json` | 工作区模型角色覆盖设置。 |

@@ -16,7 +16,7 @@ toc:
 
 | 경로 | 용도 |
 | --- | --- |
-| `~/.q/config.yaml` | 기본 모델, 역할, 컨텍스트, Loom, LSP 구성 |
+| `~/.q/config.yaml` | 기본 모델, 역할, 모델별 API 모드, 컨텍스트, Loom, LSP 구성 |
 | `~/.q/providers.json` | 관리형 Gateway 공급자와 모델 메타데이터 |
 | `~/.q/gateway.json` | 독립 Gateway 리스너와 키 메타데이터 |
 | `~/.q/gateway.key` | Gateway API 키 검증용 비공개 마스터 키 |
@@ -40,6 +40,8 @@ toc:
 | 경로 | 용도 |
 | --- | --- |
 | `.q/sessions/<uuid>/session.json` | 대화, 컨텍스트, 제목, 생명주기, 학습 상태 |
+| `.q/sessions/<uuid>/delegations.json` | 위임된 자식 호출의 북마크 |
+| `.q/sessions/<uuid>/delegates/<invocation-id>/` | 자식 세션, 실행 상태, 중첩 위임 트리 |
 | `.q/sessions/<uuid>/plan-execution.json` | 재개 가능한 승인 계획 체크포인트 |
 | `.q/plan-executions/` | 완료된 실행 스냅샷 |
 | `.q/model.json` | 워크스페이스 모델 역할 오버라이드 |

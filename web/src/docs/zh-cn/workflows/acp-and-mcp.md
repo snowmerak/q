@@ -24,7 +24,7 @@ toc:
 q acp --root C:\work\project
 ```
 
-ACP 模式使用与终端 UI 相同的持久工作区会话、受根目录限制的工具、规划工作流、子代理、学习和提交工作流。它向已连接客户端通告 `/plan`、`/commit`、`/subagents`、`/subagent`、`/learn`、`/clear` 和 `/help` 等命令。
+ACP 模式使用与终端 UI 相同的持久工作区会话、受根目录限制的工具、规划工作流、子代理、学习和提交工作流。它向已连接客户端通告 `/mode`、`/plan`、`/commit`、`/subagents`、`/subagent`、`/learn`、`/clear` 和 `/help` 等命令。委派模式还会发送子代理进度和工具调用。
 
 `--root` 默认为当前目录，定义文件、会话、指令、技能和工作区配置的边界。
 

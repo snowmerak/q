@@ -15,7 +15,7 @@ toc:
 
 | Path | Purpose |
 | --- | --- |
-| `~/.q/config.yaml` | Main model, roles, context, Loom, and LSP configuration. |
+| `~/.q/config.yaml` | Main model, roles, per-model API modes, context, Loom, and LSP configuration. |
 | `~/.q/providers.json` | Managed Gateway providers and model metadata. |
 | `~/.q/gateway.json` | Standalone Gateway listener and key metadata. |
 | `~/.q/gateway.key` | Private master key used to verify Gateway API keys. |
@@ -39,6 +39,8 @@ Use the TUI for ordinary configuration. Edit these files directly only when auto
 | Path | Purpose |
 | --- | --- |
 | `.q/sessions/<uuid>/session.json` | Transcript, context, title, lifecycle, and learning state. |
+| `.q/sessions/<uuid>/delegations.json` | Bookmarks for delegated child calls. |
+| `.q/sessions/<uuid>/delegates/<invocation-id>/` | Child session, execution state, and nested delegates. |
 | `.q/sessions/<uuid>/plan-execution.json` | Resumable approved-plan checkpoint. |
 | `.q/plan-executions/` | Completed execution snapshots. |
 | `.q/model.json` | Workspace model-role overrides. |

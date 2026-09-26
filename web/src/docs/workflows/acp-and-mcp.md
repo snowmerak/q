@@ -23,7 +23,7 @@ Start q as an Agent Client Protocol server over stdin/stdout:
 q acp --root C:\work\project
 ```
 
-ACP mode uses the same durable workspace sessions, root-scoped tools, planning workflow, subagents, learning, and commit workflow as the terminal UI. It advertises commands including `/plan`, `/commit`, `/subagents`, `/subagent`, `/learn`, `/clear`, and `/help` to the connected client.
+ACP mode uses the same durable workspace sessions, root-scoped tools, planning workflow, subagents, learning, and commit workflow as the terminal UI. It advertises commands including `/mode`, `/plan`, `/commit`, `/subagents`, `/subagent`, `/learn`, `/clear`, and `/help` to the connected client. Delegation mode also streams child progress and tool calls to the client.
 
 `--root` defaults to the current directory. It defines the workspace boundary used for files, sessions, instructions, skills, and workspace configuration.
 

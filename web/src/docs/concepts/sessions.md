@@ -7,6 +7,8 @@ toc:
     label: Durable sessions
   - id: transcript-and-context
     label: Transcript and context
+  - id: delegated-recovery
+    label: Delegated recovery
   - id: workspace-memory
     label: Workspace Memory
   - id: learning
@@ -29,7 +31,15 @@ The primary session record is:
 .q/sessions/<uuid>/session.json
 ```
 
+Session v2 stores messages in a common format for Chat Completions and Responses. Existing v1 Chat Completions sessions are converted on load and saved in the new format on the next write. The record also keeps the selected chat loop mode and Responses replay state when applicable.
+
 Approved plan execution adds a resumable `plan-execution.json` beside it.
+
+## Delegated recovery
+
+In delegation mode, each child call has a bookmark in `delegations.json` and its own session under `delegates/<invocation-id>/`. Children may have their own nested delegation tree. After a restart, q restores the deepest child first and returns its stored result to the parent call before continuing the parent turn.
+
+If q stopped while a general tool call had no recorded result, recovery reports that call as `unknown` to its agent and does not run it again automatically. An interrupted external ACP child also returns `unknown`; q cannot resume the remote agent's internal turn. `/plan` retains its separate execution checkpoint.
 
 ## Workspace Memory
 

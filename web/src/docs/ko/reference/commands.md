@@ -17,6 +17,7 @@ toc:
 | 명령 | 용도 |
 | --- | --- |
 | `/plan [request]` | 계획을 명확화하고 제안, 승인, 실행, 검토합니다. |
+| `/mode [default\|delegation]` | 현재 채팅 루프 모드를 확인하거나 변경합니다. |
 | `/auto-resolve [on\|off\|status]` | 계획 질문에 엔지니어링 기본값으로 답할지 제어합니다. |
 | `/auto-approve [on\|off\|status]` | 유효한 계획 제안의 자동 승인을 제어합니다. |
 | `/autonomous [on\|off\|status]` | 두 계획 자동화 설정을 함께 제어합니다. |

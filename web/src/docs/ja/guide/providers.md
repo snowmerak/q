@@ -10,6 +10,8 @@ toc:
     label: Gateway を設定
   - id: モデルロールを割り当て
     label: モデルロールを割り当て
+  - id: モデル-api-を選ぶ
+    label: モデル API を選ぶ
   - id: 埋め込みを設定
     label: 埋め込みを設定
   - id: フォールバックグループ
@@ -41,6 +43,14 @@ q 内で `/gateway` を開き、プロバイダーとリスナー設定を追加
 割り当て表で `a` を押すと再利用可能なカスタムロールを作成できます。カスタムサブエージェントは自身のツールと委任許可を保ったまま、そのロールを選択できます。
 
 ワークスペース上書きは `.q/model.json`、グローバル割り当ては `~/.q/config.yaml` に保存されます。
+
+## モデル API を選ぶ
+
+q は具体的なモデルごとに Chat Completions または Responses を選びます。ネイティブ Responses が確認された OpenAI、xAI、OpenRouter の Gateway 経路は Responses を優先します。Codex App Server、Anthropic ネイティブ、未知の互換エンドポイントは既存の API を使います。Gateway は両方の入力経路を引き続き受け付けます。
+
+Codex App Server では q の minimal agent が `node_repl` など継承された非公開 MCP ツールを無効にします。Q 自身のツールは引き続き使え、セッショントレースに表示されます。
+
+`/model` で選ぶか、`~/.q/config.yaml` の `model_api_modes` に完全なモデル ID と `chat_completions` または `responses` を指定できます。既定モデルのグループに候補が複数ある場合、Responses は使えません。ロール別グループは各候補モデルの API を選びます。保存済みセッションは両 API で共通のメッセージ形式を使います。
 
 ## 埋め込みを設定
 

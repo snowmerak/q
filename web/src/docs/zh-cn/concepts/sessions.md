@@ -8,6 +8,8 @@ toc:
     label: 持久会话
   - id: 记录与上下文
     label: 记录与上下文
+  - id: 委派恢复
+    label: 委派恢复
   - id: workspace-memory
     label: Workspace Memory
   - id: 学习
@@ -31,6 +33,14 @@ q 将用户可见的完整记录与发给模型的压缩请求上下文分别保
 ```
 
 获批计划的执行还会在旁边写入可恢复的 `plan-execution.json`。
+
+会话 v2 使用 Chat Completions 和 Responses 共用的消息格式。现有 v1 Chat Completions 会话在读取时转换，并在下次保存时写入新格式。选定的聊天循环模式和适用时的 Responses 重放状态也会保存。
+
+## 委派恢复
+
+委派模式下，每个子调用的书签保存在 `delegations.json`，子会话保存在 `delegates/<invocation-id>/`。子代理也可以继续委派。重启后，q 从最深层的子会话开始恢复，再将保存的结果返回给父调用。
+
+没有记录结果的普通工具调用会以 `unknown` 返回给代理，不会自动重试。中断的外部 ACP 子代理也会返回 `unknown`，因为其内部轮次无法恢复。`/plan` 仍使用独立的执行检查点。
 
 ## Workspace Memory
 

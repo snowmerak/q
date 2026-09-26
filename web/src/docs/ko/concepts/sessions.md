@@ -8,6 +8,8 @@ toc:
     label: 영구 세션
   - id: 대화와-컨텍스트
     label: 대화와 컨텍스트
+  - id: 위임-복구
+    label: 위임 복구
   - id: workspace-memory
     label: Workspace Memory
   - id: 학습
@@ -31,6 +33,14 @@ q는 보이는 전체 대화와 모델에 보내는 압축된 요청 컨텍스�
 ```
 
 승인된 계획 실행은 같은 위치에 재개 가능한 `plan-execution.json`을 추가합니다.
+
+세션 v2는 Chat Completions와 Responses에 공통 메시지 형식을 사용합니다. 기존 v1 Chat Completions 세션은 불러올 때 변환되고 다음 저장 시 새 형식으로 기록됩니다. 선택한 채팅 루프 모드와 적용 가능한 Responses 재생 상태도 저장합니다.
+
+## 위임 복구
+
+위임 모드에서는 각 자식 호출의 북마크를 `delegations.json`에 기록하고, 자식 세션을 `delegates/<invocation-id>/` 아래에 저장합니다. 자식도 다시 위임할 수 있습니다. 재시작하면 가장 깊은 자식을 먼저 복구하고 저장된 결과를 부모의 호출에 반환합니다.
+
+결과가 기록되지 않은 일반 도구 호출은 `unknown`으로 에이전트에 전달하며 자동 재실행하지 않습니다. 중단된 외부 ACP 자식도 내부 턴을 재개할 수 없어 `unknown`으로 반환합니다. `/plan`은 별도의 실행 체크포인트를 유지합니다.
 
 ## Workspace Memory
 

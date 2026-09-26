@@ -17,6 +17,7 @@ toc:
 | 命令 | 用途 |
 | --- | --- |
 | `/plan [request]` | 明确、提议、批准、执行和审查计划。 |
+| `/mode [default\|delegation]` | 查看或切换当前聊天循环模式。 |
 | `/auto-resolve [on\|off\|status]` | 控制计划澄清问题的工程默认回答。 |
 | `/auto-approve [on\|off\|status]` | 控制有效计划提案的自动批准。 |
 | `/autonomous [on\|off\|status]` | 同时控制上述两项计划自动化设置。 |

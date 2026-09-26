@@ -10,6 +10,8 @@ toc:
     label: 配置 Gateway
   - id: 分配模型角色
     label: 分配模型角色
+  - id: 选择模型-api
+    label: 选择模型 API
   - id: 配置嵌入模型
     label: 配置嵌入模型
   - id: 回退组
@@ -41,6 +43,14 @@ q 管理的 Gateway 支持：
 在分配表中按 `a` 可以创建可复用的自定义角色。自定义子代理可以选用该角色，同时保留自身的工具与委派许可。
 
 工作区覆盖设置存于 `.q/model.json`，全局分配存于 `~/.q/config.yaml`。
+
+## 选择模型 API
+
+q 可针对每个具体模型选择 Chat Completions 或 Responses。已确认支持原生 Responses 的 OpenAI、xAI、OpenRouter Gateway 路由优先使用 Responses。Codex App Server、Anthropic 原生和未知的兼容端点继续使用现有 API。Gateway 仍接收两种传入路由。
+
+通过 Codex App Server 使用 q 的 minimal agent 时，会禁用包括 `node_repl` 在内的继承私有 MCP 工具。Q 自身的工具仍可使用，并显示在会话记录中。
+
+可以在 `/model` 中选择，或在 `~/.q/config.yaml` 的 `model_api_modes` 中指定完整模型 ID，并设置为 `chat_completions` 或 `responses`。默认模型组有多个候选模型时不能使用 Responses；各角色的模型组为每个具体候选模型选择 API。保存的会话在两种 API 之间使用共同消息格式。
 
 ## 配置嵌入模型
 

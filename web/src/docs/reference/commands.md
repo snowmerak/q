@@ -16,6 +16,7 @@ toc:
 | Command | Purpose |
 | --- | --- |
 | `/plan [request]` | Clarify, propose, approve, execute, and review a plan. |
+| `/mode [default\|delegation]` | Show or change the current chat loop mode. |
 | `/auto-resolve [on\|off\|status]` | Control engineering-default answers to plan clarification. |
 | `/auto-approve [on\|off\|status]` | Control automatic approval of valid plan proposals. |
 | `/autonomous [on\|off\|status]` | Control both plan automation settings together. |

@@ -7,6 +7,8 @@ toc:
     label: Inspect available agents
   - id: run-one-request
     label: Run one request
+  - id: delegate-from-chat
+    label: Delegate from chat
   - id: define-an-inner-agent
     label: Define an inner agent
   - id: external-agents
@@ -37,6 +39,18 @@ Pass the complete task context in the request. A child does not automatically in
 ```
 
 Custom profiles use their bare name in the TUI. Delegation grants stored inside profiles use canonical IDs such as `builtin/scout`, `global/code-reader`, or `workspace/browser-check`.
+
+## Delegate from chat
+
+Ordinary chat starts in `default` mode, where the main agent can use its tools directly. Switch the current session to `delegation` mode when you want the main agent to coordinate bounded subagents for substantive repository work:
+
+```text
+/mode delegation
+```
+
+The mode is saved with the session. `/mode default` restores the direct-tool loop. This choice is separate from `/plan`, which retains its proposal approval and execution workflow.
+
+The transcript shows child progress and tool calls; press `Ctrl+G` to expand or collapse the trace. Each call saves a child session and a bookmark under the parent. On restart, q recovers nested children before continuing the parent. A tool call with no recorded result returns `unknown` and is not run again automatically. An interrupted external ACP invocation also returns `unknown` because its internal turn cannot be resumed.
 
 ## Define an inner agent
 

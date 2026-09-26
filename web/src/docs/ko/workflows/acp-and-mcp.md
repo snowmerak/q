@@ -24,7 +24,7 @@ q를 stdin/stdout 기반 Agent Client Protocol 서버로 시작합니다.
 q acp --root C:\work\project
 ```
 
-ACP 모드는 터미널 UI와 같은 영구 워크스페이스 세션, 루트 제한 도구, 계획 워크플로, 서브에이전트, 학습, 커밋 워크플로를 사용합니다. 연결된 클라이언트에 `/plan`, `/commit`, `/subagents`, `/subagent`, `/learn`, `/clear`, `/help` 같은 명령을 알립니다.
+ACP 모드는 터미널 UI와 같은 영구 워크스페이스 세션, 루트 제한 도구, 계획 워크플로, 서브에이전트, 학습, 커밋 워크플로를 사용합니다. 연결된 클라이언트에 `/mode`, `/plan`, `/commit`, `/subagents`, `/subagent`, `/learn`, `/clear`, `/help` 같은 명령을 알립니다. 위임 모드에서는 자식의 진행 상황과 도구 호출도 전달합니다.
 
 `--root`의 기본값은 현재 디렉터리입니다. 파일, 세션, 지침, 스킬, 워크스페이스 구성의 경계를 정의합니다.
 

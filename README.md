@@ -15,13 +15,13 @@ the resulting diff, and create a commit without leaving the terminal.
 - **Workspace tools** — anchored reads and edits, complete-file writes,
   directory operations, asynchronous commands, archive search, and optional
   read-only LSP queries.
-- **Explicit orchestration** — Griller, Scout, Planner, Coder, optional external
-  Web Tester, and review roles with user approval before a `/plan` executes.
+- **Selectable orchestration** — ordinary chat can use direct tools or a
+  delegation mode with bounded subagents; `/plan` remains approval-gated.
 - **Provider choice** — OpenAI-compatible APIs and local servers, OpenRouter,
   xAI, Anthropic, and the Codex App Server, all exposed through q's managed
   Gateway.
-- **Durable sessions** — independent conversation projections, resumable plan
-  checkpoints, searchable history, and optional semantic retrieval.
+- **Durable sessions** — API-independent conversation records, recoverable
+  delegation trees, resumable plan checkpoints, and searchable history.
 - **Bounded tool output** — large tool results are captured as immutable Loom
   artifacts instead of being copied through every prompt.
 - **Repository review** — a syntax-highlighted `/changes` browser and a guided
@@ -179,6 +179,7 @@ screen and returns to the previous screen without discarding its state.
 | Command | Purpose |
 |---|---|
 | `/plan [request]` | Clarify, research, propose, approve, execute, and review a plan. |
+| `/mode [default\|delegation]` | Show or change the current chat loop mode. |
 | `/auto-approve [on\|off\|status]` | Persistently control automatic approval of valid plan proposals. |
 | `/auto-resolve [on\|off\|status]` | Persistently control engineering-default answers to plan clarification. |
 | `/autonomous [on\|off\|status]` | Persistently control both plan automation settings together. |
@@ -253,9 +254,9 @@ does not stage, commit, or modify files.
 
 ## Planning and execution
 
-Use `/plan` when work should be clarified, explicitly approved, divided into
-reviewed tasks, or recoverable after interruption. Ordinary chat requests can
-still use tools directly; they do not enter this workflow automatically.
+Use `/plan` when work should be clarified, explicitly approved, or divided into
+reviewed tasks. Ordinary chat uses direct tools in `default` mode or bounded
+subagents in `delegation` mode; neither enters `/plan` automatically.
 
 ```mermaid
 flowchart LR
@@ -350,11 +351,38 @@ Assignments may reference ordered model groups. A group can fall back after a
 candidate timeout or transient HTTP 5xx response; user cancellation, tool
 failure, and validation errors do not trigger fallback.
 
+Q selects Chat Completions or Responses per model. Known native OpenAI, xAI,
+and OpenRouter Gateway routes prefer Responses; Codex App Server, Anthropic,
+and unknown compatible endpoints use their existing route. Override a concrete
+model in `/model` or `~/.q/config.yaml` with `model_api_modes`, using
+`chat_completions` or `responses`. The Gateway accepts both API routes. Session
+messages use a common format so saved conversations can continue across a
+model API change; older Chat Completions sessions migrate when loaded and saved.
+For Codex App Server, q's minimal agent keeps Q tools visible while excluding
+inherited private MCP tools such as `node_repl` from the Codex session.
+
 Global configuration is stored under `~/.q`. Workspace model overrides are in
 `.q/model.json`. Use the TUI for normal configuration; edit YAML/JSON directly
 only when automation requires it.
 
 ## Subagents
+
+### Delegation mode
+
+Use `/mode delegation` in ordinary chat to have the main agent assign substantive
+repository work to available built-in, custom, or external subagents. The root
+keeps coordination and tools that its built-in delegates cannot perform. Use
+`/mode default` to return to the direct-tool loop. The selected mode is saved
+with the session; new sessions start in `default` mode. This is separate from
+the approval-gated `/plan` workflow.
+
+Child progress and tool activity appear in the transcript; `Ctrl+G` expands or
+collapses the trace. Each delegation has a saved child session and bookmark.
+After an interruption, Q restores nested children before continuing the parent.
+An in-flight tool with no recorded result is reported as `unknown` and is not
+automatically run again. External ACP children cannot resume their internal
+turn; an interrupted invocation is returned as `unknown`.
+
 
 Open `/subagents` in the TUI to inspect builtin definitions and manage runnable custom
 profiles. Inner and external execution are shown by the stored `kind`, not by an ID namespace.
@@ -732,6 +760,8 @@ restricted by q; Windows file modes do not manage ACLs.
 | Path | Purpose |
 |---|---|
 | `.q/sessions/<uuid>/session.json` | Transcript, compacted context, title, task lifecycle, and learning state. |
+| `.q/sessions/<uuid>/delegations.json` | Bookmarks linking this session to its delegated child calls. |
+| `.q/sessions/<uuid>/delegates/<invocation-id>/` | Child session, execution state, and nested delegation tree. |
 | `.q/sessions/<uuid>/plan-execution.json` | Resumable approved-plan checkpoint. |
 | `.q/plan-executions/` | Completed execution snapshots. |
 | `.q/model.json` | Workspace model-role overrides. |
@@ -793,6 +823,8 @@ publishing the fork.
 - [Agent Skill Store decoupling](docs/skill-store-decoupling-plan.md)
 - [Agent invocation runtime](docs/agent-invocation-runtime.md)
 - [Delegated subagents](docs/delegated-subagents.md)
+- [Delegation session recovery](docs/delegation-session-recovery.md)
+- [Model API modes and portable sessions](docs/model-api-mode-responses-plan.md)
 - [Subagent architecture](docs/subagent-architecture-notes.md)
 - [Remote agent API](docs/remote-subagent-api-plan.md)
 - [Plan orchestration](docs/plan-orchestration.md)

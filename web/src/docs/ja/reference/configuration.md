@@ -16,7 +16,7 @@ toc:
 
 | パス | 用途 |
 | --- | --- |
-| `~/.q/config.yaml` | メインモデル、ロール、コンテキスト、Loom、LSP の設定 |
+| `~/.q/config.yaml` | メインモデル、ロール、モデル別 API モード、コンテキスト、Loom、LSP の設定 |
 | `~/.q/providers.json` | 管理対象 Gateway のプロバイダーとモデルメタデータ |
 | `~/.q/gateway.json` | 単独 Gateway のリスナーとキーメタデータ |
 | `~/.q/gateway.key` | Gateway API キー検証用の非公開マスターキー |
@@ -40,6 +40,8 @@ toc:
 | パス | 用途 |
 | --- | --- |
 | `.q/sessions/<uuid>/session.json` | 会話、コンテキスト、タイトル、ライフサイクル、学習状態 |
+| `.q/sessions/<uuid>/delegations.json` | 委任した子呼び出しのブックマーク |
+| `.q/sessions/<uuid>/delegates/<invocation-id>/` | 子セッション、実行状態、入れ子の委任ツリー |
 | `.q/sessions/<uuid>/plan-execution.json` | 再開可能な承認済み計画チェックポイント |
 | `.q/plan-executions/` | 完了した実行スナップショット |
 | `.q/model.json` | ワークスペースのモデルロール上書き |

@@ -8,6 +8,8 @@ toc:
     label: 永続セッション
   - id: 会話とコンテキスト
     label: 会話とコンテキスト
+  - id: 委任の復元
+    label: 委任の復元
   - id: workspace-memory
     label: Workspace Memory
   - id: 学習
@@ -31,6 +33,14 @@ q は表示される会話全文とモデルへ送る圧縮コンテキストを
 ```
 
 承認済みの計画実行は同じ場所に再開可能な `plan-execution.json` を追加します。
+
+セッション v2 は Chat Completions と Responses に共通のメッセージ形式を使います。既存の v1 Chat Completions セッションは読み込み時に変換され、次の保存で新形式になります。選択したチャットループモードと、該当する場合の Responses 再生状態も保存します。
+
+## 委任の復元
+
+委任モードでは、各子呼び出しのブックマークを `delegations.json` に、子セッションを `delegates/<invocation-id>/` に保存します。子もさらに委任できます。再起動後は最も深い子から復元し、保存済みの結果を親の呼び出しへ返します。
+
+結果が記録されていない通常のツール呼び出しは `unknown` としてエージェントに返し、自動再実行しません。中断された外部 ACP の子も内部ターンを再開できないため `unknown` を返します。`/plan` は別の実行チェックポイントを維持します。
 
 ## Workspace Memory
 

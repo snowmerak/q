@@ -9,6 +9,8 @@ toc:
     label: Configure the Gateway
   - id: assign-model-roles
     label: Assign model roles
+  - id: choose-a-model-api
+    label: Choose a model API
   - id: configure-embeddings
     label: Configure embeddings
   - id: fallback-groups
@@ -40,6 +42,22 @@ Open `/model` to assign a model to the main chat and specialized roles such as `
 Press `a` in the assignment table to create a reusable custom role. Custom subagents can select that role while keeping their own tools and delegation grants.
 
 Workspace overrides are stored in `.q/model.json`; global assignments remain in `~/.q/config.yaml`.
+
+## Choose a model API
+
+q can call Chat Completions or Responses for each concrete model. Known native OpenAI, xAI, and OpenRouter Gateway routes prefer Responses. Codex App Server, Anthropic native, and unknown compatible routes keep their existing API. The Gateway continues accepting both incoming routes.
+
+The Codex App Server runs q's minimal agent with inherited private MCP tools, including `node_repl`, disabled. Q's own tools remain available and visible in its session trace.
+
+Use `/model` or set `model_api_modes` in `~/.q/config.yaml` to override a model:
+
+```yaml
+model_api_modes:
+  openai/gpt-5: responses
+  local/example: chat_completions
+```
+
+The override key is the full model ID. A default model group with multiple candidates cannot use Responses; role-specific groups select the API for each concrete candidate. Saved sessions use a common message format across both API choices.
 
 ## Configure embeddings
 

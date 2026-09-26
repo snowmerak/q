@@ -17,6 +17,7 @@ toc:
 | コマンド | 用途 |
 | --- | --- |
 | `/plan [request]` | 計画を明確化、提案、承認、実行、レビューします。 |
+| `/mode [default\|delegation]` | 現在のチャットループモードを確認または変更します。 |
 | `/auto-resolve [on\|off\|status]` | 計画上の質問への既定回答を制御します。 |
 | `/auto-approve [on\|off\|status]` | 有効な計画案の自動承認を制御します。 |
 | `/autonomous [on\|off\|status]` | 両方の計画自動化設定をまとめて制御します。 |
