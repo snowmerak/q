@@ -22,6 +22,7 @@ import (
 	"github.com/snowmerak/q/loom"
 	"github.com/snowmerak/q/mcpconfig"
 	"github.com/snowmerak/q/memory"
+	"github.com/snowmerak/q/sessionstore"
 	"github.com/snowmerak/q/subagent"
 	"github.com/snowmerak/q/thinker"
 	qtools "github.com/snowmerak/q/tools"
@@ -221,6 +222,7 @@ type chatResultMsg struct {
 // AgentEvent reports progress and results from RunAgentLoop. Embedders should
 // inspect events through the exported accessor methods.
 type AgentEvent struct {
+	persistenceAck  chan struct{}
 	status          string
 	activity        *agentActivity
 	trace           *agentTrace
@@ -620,6 +622,9 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case changesLoadedMsg:
 		return m.receiveChanges(message)
+	case delegationRecoveryMsg:
+		command := m.acceptDelegationRecovery(message)
+		return m, command
 	case changePreviewMsg:
 		return m.receiveChangePreview(message)
 	case acpSessionResetMsg:
@@ -688,7 +693,8 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.resize(m.width, m.height)
 		if m.screen == screenChat {
-			return m, tea.Batch(m.input.Focus(), m.startNextLearningSegment())
+			resume := m.continueRecoveredSession()
+			return m, tea.Batch(m.input.Focus(), m.startNextLearningSegment(), resume)
 		}
 		if m.screen == screenSessions {
 			return m, nil
@@ -789,7 +795,8 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			m.enterChat(message.config, message.client)
 		}
-		return m, tea.Batch(m.input.Focus(), m.startNextLearningSegment(), embeddingCommand)
+		resume := m.continueRecoveredSession()
+		return m, tea.Batch(m.input.Focus(), m.startNextLearningSegment(), embeddingCommand, resume)
 	case archiveEmbeddingConfiguredMsg:
 		if message.err != nil {
 			m.status = "Embedding: " + message.err.Error()
@@ -1102,6 +1109,7 @@ func (m *model) enterChat(value config.Config, configuredClient chatClient) {
 	m.setupEdit = false
 	m.config = value
 	m.client = configuredClient
+	m.loopMode = loopModeDefault
 	workspaceModelErr := m.restoreWorkspaceModel()
 	workspaceLearningErr := m.restoreWorkspaceLearning()
 	active := m.activeConfig()
@@ -1112,6 +1120,7 @@ func (m *model) enterChat(value config.Config, configuredClient chatClient) {
 		m.messages = append(m.messages, client.Message{Role: client.RoleSystem, Content: value.Provider.SystemPrompt})
 	}
 	m.appendRuntimeMessages()
+	m.messages = withLoopModePrompt(m.messages, m.loopMode)
 	m.memory = memory.New(memoryPolicy(active), m.messages)
 	m.conversationID = ""
 	m.runID = ""
@@ -1567,6 +1576,7 @@ func (m *model) resetConversationState(runIDs ...string) {
 		m.messages = append(m.messages, client.Message{Role: client.RoleSystem, Content: m.config.Provider.SystemPrompt})
 	}
 	m.appendRuntimeMessages()
+	m.messages = withLoopModePrompt(m.messages, m.loopMode)
 	active := m.activeConfig()
 	if m.memory == nil {
 		m.memory = memory.New(memoryPolicy(active), m.messages)
@@ -1575,6 +1585,8 @@ func (m *model) resetConversationState(runIDs ...string) {
 	}
 	m.conversationID = ""
 	m.activeTask = nil
+	m.delegationRecoveryPending = false
+	m.recoverDelegationTurn = false
 	m.runID = ""
 	if len(runIDs) > 0 {
 		m.runID = strings.TrimSpace(runIDs[0])
@@ -1613,7 +1625,10 @@ func (m *model) releaseConversationState(root string) {
 	m.memory = nil
 	m.learning = nil
 	m.conversationID = ""
+	m.loopMode = loopModeDefault
 	m.activeTask = nil
+	m.delegationRecoveryPending = false
+	m.recoverDelegationTurn = false
 	m.pendingMessage = client.Message{}
 	m.requestEstimate = 0
 	m.compactionTarget = 0
@@ -1653,6 +1668,7 @@ func (m *model) startNewWorkspaceSession() error {
 	m.workspaceStore = &store
 	m.workspaceLock = lock
 	m.workspaceRestored = true
+	m.loopMode = loopModeDefault
 	m.resetConversation("run-" + store.SessionID)
 	if previousLock != nil {
 		if err := previousLock.Close(); err != nil {
@@ -1688,6 +1704,8 @@ func (m *model) restoreWorkspaceSession() {
 		return
 	}
 	m.workspaceRestored = true
+	m.delegationRecoveryPending = false
+	m.recoverDelegationTurn = false
 	session, err := m.workspaceStore.Load()
 	if errors.Is(err, workspace.ErrNotFound) {
 		if learningErr := m.ensureLearningMachine(thinker.LearningState{}, nil); learningErr != nil {
@@ -1699,8 +1717,31 @@ func (m *model) restoreWorkspaceSession() {
 		m.status = err.Error()
 		return
 	}
-	base := append([]client.Message(nil), m.messages...)
-	transcript, interruptedCalls := reconcileInterruptedToolCalls(session.Transcript)
+	m.runID = session.RunID
+	if m.runID == "" {
+		m.ensureRunID()
+		session.RunID = m.runID
+		if saveErr := m.workspaceStore.Save(session); saveErr != nil {
+			m.status = saveErr.Error()
+			return
+		}
+	}
+	pendingCalls, pendingCompleted := pendingSessionCalls(session.Transcript)
+	hadPendingDelegate := false
+	for _, call := range pendingCalls[pendingCompleted:] {
+		if call.Function.Name == subagent.DelegateToolName {
+			hadPendingDelegate = true
+		}
+	}
+	m.delegationRecoveryPending = hadPendingDelegate
+	m.loopMode = normalizedLoopMode(session.LoopMode)
+	base := withLoopModePrompt(m.messages, m.loopMode)
+	transcript := session.Transcript
+	var interruptedResults []interruptedToolResult
+	if !hadPendingDelegate {
+		transcript, interruptedResults = reconcileInterruptedToolCallsDetailed(transcript)
+	}
+	interruptedCalls := len(interruptedResults)
 	m.messages = mergeWorkspaceMessages(base, transcript)
 	requestContext := session.Context
 	if len(requestContext) == 0 {
@@ -1708,7 +1749,9 @@ func (m *model) restoreWorkspaceSession() {
 	}
 	requestContext = restoreResponseReplay(requestContext, session.ResponseReplay)
 	var contextInterruptedCalls int
-	requestContext, contextInterruptedCalls = reconcileInterruptedToolCalls(requestContext)
+	if !hadPendingDelegate {
+		requestContext, contextInterruptedCalls = reconcileInterruptedToolCalls(requestContext)
+	}
 	m.memory = memory.New(memoryPolicy(m.activeConfig()), mergeWorkspaceMessages(base, requestContext))
 	if learningErr := m.ensureLearningMachine(session.Learning, requestContext); learningErr != nil {
 		m.status = learningErr.Error()
@@ -1738,35 +1781,54 @@ func (m *model) restoreWorkspaceSession() {
 		m.status += " · interrupted tool call recovered"
 		if err := m.saveWorkspaceSession(); err != nil {
 			m.status += " · " + err.Error()
+		} else {
+			for _, recovered := range interruptedResults {
+				m.archiveToolCall(recovered.call)
+				m.archiveMessage(recovered.message, sessionstore.StatusUnknown, true)
+			}
 		}
+	}
+	if hadPendingDelegate {
+		m.status += " · delegated task recovery pending"
 	}
 }
 
 func reconcileInterruptedToolCalls(messages []client.Message) ([]client.Message, int) {
+	recovered, results := reconcileInterruptedToolCallsDetailed(messages)
+	return recovered, len(results)
+}
+
+type interruptedToolResult struct {
+	call    client.ToolCall
+	message client.Message
+}
+
+func reconcileInterruptedToolCallsDetailed(messages []client.Message) ([]client.Message, []interruptedToolResult) {
 	var recovered []client.Message
-	interrupted := 0
+	var interrupted []interruptedToolResult
 	for index := 0; index < len(messages); index++ {
 		message := messages[index]
 		recovered = append(recovered, message)
 		if len(message.ToolCalls) == 0 {
 			continue
 		}
-		completed := make(map[string]bool, len(message.ToolCalls))
+		completed := 0
 		for index+1 < len(messages) && messages[index+1].Role == client.RoleTool {
 			index++
 			result := messages[index]
 			recovered = append(recovered, result)
-			completed[result.ToolCallID] = true
+			completed++
 		}
-		for _, call := range message.ToolCalls {
-			if call.ID == "" || completed[call.ID] {
+		for toolIndex, call := range message.ToolCalls {
+			if call.ID == "" || toolIndex < completed || call.Function.Name == subagent.DelegateToolName {
 				continue
 			}
-			recovered = append(recovered, client.Message{
+			result := client.Message{
 				Role: client.RoleTool, Name: call.Function.Name, ToolCallID: call.ID,
-				Content: "Tool error: interrupted by session restart; execution outcome unknown",
-			})
-			interrupted++
+				Content: `Tool error: {"status":"unknown","detail":"execution outcome unknown after session restart"}`,
+			}
+			recovered = append(recovered, result)
+			interrupted = append(interrupted, interruptedToolResult{call: call, message: result})
 		}
 	}
 	return recovered, interrupted
@@ -1870,6 +1932,7 @@ func (m *model) saveWorkspaceSession() error {
 	}
 	err := m.workspaceStore.Save(workspace.Session{
 		RunID:            m.runID,
+		LoopMode:         normalizedLoopMode(m.loopMode),
 		Title:            m.sessionTitle,
 		UpdatedAt:        workspaceTimePointer(m.sessionUpdatedAt),
 		Transcript:       workspaceSessionMessages(m.messages),
@@ -2189,15 +2252,19 @@ func (m *model) appendAgentActivity(activity agentActivity) {
 	if m.agentStates == nil {
 		m.agentStates = make(map[string]string)
 	}
+	stateKey := activity.Agent
+	if activity.TaskID != "" && strings.Contains(activity.Agent, "/") {
+		stateKey += "\x00" + activity.TaskID
+	}
 	switch activity.Action {
 	case "completed":
-		m.agentStates[activity.Agent] = "succeeded"
+		m.agentStates[stateKey] = "succeeded"
 	case "failed":
-		m.agentStates[activity.Agent] = "failed"
+		m.agentStates[stateKey] = "failed"
 	case "waiting":
-		m.agentStates[activity.Agent] = "waiting"
+		m.agentStates[stateKey] = "waiting"
 	default:
-		m.agentStates[activity.Agent] = "running"
+		m.agentStates[stateKey] = "running"
 	}
 }
 
@@ -2261,7 +2328,20 @@ func (m model) renderedAgentActivities() string {
 
 func agentSummary(states map[string]string) string {
 	parts := []string{titleStyle.Render("agents")}
-	for _, role := range []string{"griller", "scout", "search", "planner", "coder", "executor"} {
+	roles := []string{"griller", "scout", "search", "planner", "coder", "executor"}
+	known := make(map[string]bool, len(roles))
+	for _, role := range roles {
+		known[role] = true
+	}
+	var remaining []string
+	for role := range states {
+		if !known[role] {
+			remaining = append(remaining, role)
+		}
+	}
+	sort.Strings(remaining)
+	roles = append(roles, remaining...)
+	for _, role := range roles {
 		state, exists := states[role]
 		if !exists {
 			continue
@@ -2282,7 +2362,11 @@ func agentSummary(states map[string]string) string {
 		case "failed":
 			style = errorStyle
 		}
-		parts = append(parts, style.Render(role+" "+marker))
+		label := role
+		if agent, taskID, found := strings.Cut(role, "\x00"); found {
+			label = agent + " [" + shortAgentTaskID(taskID) + "]"
+		}
+		parts = append(parts, style.Render(label+" "+marker))
 	}
 	return strings.Join(parts, subtleStyle.Render(" · "))
 }
@@ -2317,11 +2401,25 @@ func renderAgentTraceBlocks(traces []agentTrace, dark bool, width int, collapsed
 }
 
 func agentTraceLabel(trace agentTrace) string {
-	label := trace.Agent + " · " + strings.ReplaceAll(trace.Kind, "_", " ")
+	label := trace.Agent
+	if trace.TaskID != "" {
+		label += " [" + shortAgentTaskID(trace.TaskID) + "]"
+	}
+	if trace.ParentID != "" {
+		label += " ← " + shortAgentTaskID(trace.ParentID)
+	}
+	label += " · " + strings.ReplaceAll(trace.Kind, "_", " ")
 	if trace.Name != "" {
 		label += " · " + trace.Name
 	}
 	return label
+}
+
+func shortAgentTaskID(id string) string {
+	if len(id) <= 12 {
+		return id
+	}
+	return "…" + id[len(id)-11:]
 }
 
 func formatAgentTraceContent(content string) string {

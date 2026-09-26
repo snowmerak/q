@@ -231,7 +231,8 @@ func (m model) activatePickedSession(store workspace.Store, lock *workspace.Lock
 		m.status = status + " · " + sessionDisplayTitle(m.sessionTitle)
 		m.resize(m.width, m.height)
 		closePrevious()
-		return m, tea.Batch(m.input.Focus(), m.startNextLearningSegment())
+		resume := m.continueRecoveredSession()
+		return m, tea.Batch(m.input.Focus(), m.startNextLearningSegment(), resume)
 	}
 	closePrevious()
 	if len(m.gatewayConfig.Providers) > 0 {

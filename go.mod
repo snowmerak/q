@@ -17,7 +17,7 @@ require (
 	github.com/google/jsonschema-go v0.4.3
 	github.com/modelcontextprotocol/go-sdk v1.7.0
 	github.com/parquet-go/parquet-go v0.32.0
-	github.com/snowmerak/llm-provider v0.0.0-20260926051342-77ae84990108
+	github.com/snowmerak/llm-provider v0.0.0-20260926090044-3043c15ef8b3
 	github.com/snowmerak/q/third_party/acp-go-sdk v0.0.0-20260827012000-155b26051836
 	github.com/zeebo/blake3 v0.2.4
 	go.etcd.io/bbolt v1.4.0

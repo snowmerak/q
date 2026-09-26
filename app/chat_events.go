@@ -135,6 +135,12 @@ func (m model) updateAgentEvent(message agentEventMsg) (tea.Model, tea.Cmd) {
 		m.refreshTranscript()
 		if err := m.saveWorkspaceSession(); err != nil {
 			m.status = err.Error()
+			if event.persistenceAck != nil && m.turnCancel != nil {
+				m.turnCancel()
+			}
+		}
+		if event.persistenceAck != nil {
+			close(event.persistenceAck)
 		}
 		return m, tea.Batch(m.spinner.Tick, waitAgentEvent(message.events, message.turnID), learning)
 	}

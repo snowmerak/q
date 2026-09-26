@@ -32,6 +32,7 @@ type Session struct {
 	Version    int              `json:"version"`
 	ID         string           `json:"id,omitempty"`
 	RunID      string           `json:"run_id,omitempty"`
+	LoopMode   string           `json:"loop_mode,omitempty"`
 	Title      string           `json:"title,omitempty"`
 	UpdatedAt  *time.Time       `json:"updated_at,omitempty"`
 	Transcript []client.Message `json:"transcript,omitempty"`
@@ -51,8 +52,10 @@ type ResponseReplayItem struct {
 }
 
 type ResponseAffinity struct {
-	Model string `json:"model"`
-	Key   string `json:"key"`
+	Model     string `json:"model"`
+	Key       string `json:"key"`
+	APIMode   string `json:"api_mode,omitempty"`
+	Candidate int    `json:"candidate,omitempty"`
 }
 
 // ActiveTask is an explicit task lifecycle that survived beyond the turn in
@@ -67,6 +70,8 @@ type ActiveTask struct {
 type Store struct {
 	Root      string
 	SessionID string
+	// nestedDir is set only for child sessions below a delegation bookmark.
+	nestedDir string
 }
 
 // SessionEntry describes one persisted session projection. Sessions are
@@ -126,6 +131,9 @@ func (s Store) SessionsDir() string {
 }
 
 func (s Store) SessionDir() string {
+	if s.nestedDir != "" {
+		return s.nestedDir
+	}
 	if s.SessionID == "" {
 		return s.Dir()
 	}
@@ -160,6 +168,11 @@ func NewSessionID() (string, error) {
 }
 
 func (s Store) Load() (Session, error) {
+	if s.nestedDir != "" {
+		if err := rejectSymlinks(s.Root, s.Path()); err != nil {
+			return Session{}, err
+		}
+	}
 	file, err := os.Open(s.Path())
 	if errors.Is(err, os.ErrNotExist) {
 		return Session{}, ErrNotFound
@@ -213,6 +226,11 @@ func (s Store) Save(session Session) error {
 	}
 	body = append(body, '\n')
 	return withLoomRootMutation(s.Root, func() error {
+		if s.nestedDir != "" {
+			if err := rejectSymlinks(s.Root, s.Path()); err != nil {
+				return err
+			}
+		}
 		if err := os.MkdirAll(s.SessionDir(), 0o700); err != nil {
 			return fmt.Errorf("workspace: create %s: %w", s.SessionDir(), err)
 		}
@@ -320,12 +338,18 @@ func (s Store) ClearSession() error {
 	if s.SessionID == "" {
 		return errors.New("workspace: a session ID is required")
 	}
+	if err := validateSessionID(s.SessionID); err != nil {
+		return err
+	}
 	// Remove the execution checkpoint first so a partial failure keeps the
 	// session discoverable and a later delete can safely retry every removal.
 	if err := s.ClearExecution(); err != nil {
 		return err
 	}
 	if err := s.ClearThinkerCheckpointAny(); err != nil {
+		return err
+	}
+	if err := s.ClearDelegations(); err != nil {
 		return err
 	}
 	if err := s.Clear(); err != nil {

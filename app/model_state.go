@@ -76,6 +76,8 @@ type sessionState struct {
 	sessionDeleteID           string
 	sessionPickerRequired     bool
 	workspaceRestored         bool
+	delegationRecoveryPending bool
+	recoverDelegationTurn     bool
 	workspaceModel            workspace.ModelConfig
 	workspaceModelRestored    bool
 	workspaceLearning         workspace.LearningConfig
@@ -237,6 +239,7 @@ type chatState struct {
 	messages             []client.Message
 	memory               *memory.Manager
 	conversationID       string
+	loopMode             string
 	activeTask           *workspace.ActiveTask
 	pendingMessage       client.Message
 	requestEstimate      int

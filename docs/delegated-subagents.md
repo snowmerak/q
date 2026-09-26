@@ -14,6 +14,32 @@ delegate(subagent_name, prompt) -> TaskResult | captured ACP result
 `DelegateInfo.kind`는 `inner` 또는 `external`이다. `inner`는 q의 model runner를
 실행하고, `external`은 기존 ACP adapter를 호출한다.
 
+## 일반 루프의 위임 모드
+
+`/mode delegation`은 현재 세션의 default role 루프를 위임 중심으로 전환한다.
+`/mode default`는 원래 루프로 돌아가며, `/mode`는 현재 값을 보여준다. 이는 `/plan`의
+승인 및 실행 절차와 별개다. 새 세션과 모드 필드가 없는 기존 세션은 `default`로 시작한다.
+`/clear`는 현재 세션의 모드를 유지한다.
+
+위임 모드에서는 루트의 시스템 프롬프트가 조정자 역할을 설명한다. 루트는
+`delegate_list`로 사용 가능한 에이전트를 확인하고, 조사·구현·검토·연구를 범위가
+명확한 `delegate` 호출로 맡긴다. 결과를 확인하고 후속 작업을 조율한 뒤 사용자에게
+보고한다. 간단한 대화에는 바로 답할 수 있다.
+
+도구 목록에서 사용 가능한 builtin subagent가 가진 도구는 루트에 직접 노출하지 않는다.
+해당 도구의 직접 호출도 거절한다. 위임 가능한 builtin이 없는 기능을 위한 도구와
+루프의 `task_start`, `task_complete`, `ask_to_user`는 루트에 남는다. 자식 에이전트의
+도구 범위는 변경하지 않는다. `builtin/web-search` 또는 `builtin/web-tester`를 실제로
+사용할 수 있으면 대응하는 루트의 외부 도구도 위임 경로로만 사용한다.
+시작된 작업을 `succeeded`로 끝내려면 그 작업에서 `delegate` 또는 직접 작업 도구가
+한 번 이상 성공해야 한다. `delegate_list` 조회와 실패한 호출은 실작업 증거로 세지
+않는다. 사용할 수 있는 경로가 없으면 실제 장애를 `blocked`로 보고한다. 재시작한
+작업에서는 축약되지 않은 세션 transcript의 도구 결과를 확인한다.
+
+세션 파일의 `loop_mode` 필드에 값을 저장한다. 시스템 프롬프트는 복구할 때 모드에서
+재구성하여 한 번만 넣는다. 모드 전환 시 이전 Responses continuation 키와 replay를
+비우므로 새 시스템 프롬프트로 과거 provider continuation을 이어 붙이지 않는다.
+
 `delegate_list`는 전체 등록 목록이 아니라 현재 호출자가 실제로 호출할 수 있고 현재
 runtime에서 실행 가능한 agent만 반환한다. `delegate`는 그 목록에 포함된 canonical
 ID만 받는다. 호출 결과는 다른 큰 도구 결과와 마찬가지로 Loom에 저장될 수 있으며,
@@ -146,7 +172,19 @@ tool scope는 적용하지 않는다. Connection이 꺼지거나 빠지면 저�
 호출은 fail-closed한다.
 
 초기 구현은 동기 호출만 제공한다. 같은 tool turn의 여러 `delegate` 호출은 병렬로
-실행하지 않는다.
+실행하지 않는다. 부모의 도구 호출은 순서대로 저장하고, 각 호출은 순번과 고유
+`invocation_id`의 자식 세션을 가진다. 같은 에이전트를 두 번 호출하거나 모델이
+`call_id`를 재사용해도 진행 상태와 북마크는 서로 구분된다.
+
+일반 채팅의 `delegate` 실행 중 TUI는 자식의 시작·모델 라운드·도구 호출·완료 상태와
+assistant/도구 추적을 표시한다. `ctrl+g`로 추적을 접거나 펼칠 수 있다. ACP는 같은
+진행을 thought update로, 자식 도구 호출과 결과를 고유 ACP tool call ID로 전달한다.
+중첩 호출은 `task_id`와 `parent_id`로 연결되며, 부모의 대화 문맥에는 기존처럼
+자식의 최종 결과만 들어간다. 외부 ACP 자식은 내부 도구 추적을 제공하지 않으므로
+시작과 최종 상태를 표시한다.
+
+진행 중인 일반 `delegate` 호출은 부모·자식 세션 트리와 북마크로 복구한다.
+저장 형식과 재시작 순서는 [중첩 delegate 세션과 재귀 복구](delegation-session-recovery.md)에 정리했다.
 
 ## 도구와 변경 권한
 

@@ -29,6 +29,29 @@ type Spec struct {
 	conversationID  string
 }
 
+// SpecCheckpoint retains the selected backend and stateful conversation of a
+// delegated run. A recovered run must not silently switch model candidates.
+type SpecCheckpoint struct {
+	Model          string `json:"model"`
+	Candidate      int    `json:"candidate"`
+	ConversationID string `json:"conversation_id,omitempty"`
+}
+
+func (s Spec) Checkpoint() SpecCheckpoint {
+	return SpecCheckpoint{Model: s.Model, Candidate: s.activeCandidate, ConversationID: s.conversationID}
+}
+
+func (s *Spec) Restore(checkpoint SpecCheckpoint) error {
+	if checkpoint.Candidate < 0 || checkpoint.Candidate >= len(s.Candidates) || s.Candidates[checkpoint.Candidate].Model != checkpoint.Model {
+		return fmt.Errorf("subagent: saved model %q is unavailable", checkpoint.Model)
+	}
+	s.activeCandidate = checkpoint.Candidate
+	s.Model = checkpoint.Model
+	s.ReasoningEffort = s.Candidates[checkpoint.Candidate].ReasoningEffort
+	s.conversationID = checkpoint.ConversationID
+	return nil
+}
+
 // Resolve combines a role override with the active chat model and validates
 // an explicit reasoning effort against /v1/models metadata.
 func Resolve(value config.Config, role string, models []client.Model) (Spec, error) {

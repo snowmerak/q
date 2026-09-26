@@ -56,6 +56,23 @@ func TestLifecycleRecordsTaskMessagesAndResult(t *testing.T) {
 	}
 }
 
+func TestLifecycleRecordsUnknownToolOutcomeSeparately(t *testing.T) {
+	sink := &collectingSink{}
+	spec := Spec{Role: "coder", Model: "model"}
+	lifecycle, err := NewLifecycle(sink, "run", "task", "parent", &spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	call := client.ToolCall{ID: "call", Function: client.FunctionCall{Name: "write_file"}}
+	message := client.ToolResultMessage(call, client.ToolResult{Content: `{"status":"unknown","detail":"unconfirmed"}`, IsError: true})
+	if err := lifecycle.Message(message); err != nil {
+		t.Fatal(err)
+	}
+	if len(sink.records) != 1 || sink.records[0].Status != sessionstore.StatusUnknown {
+		t.Fatalf("records=%#v", sink.records)
+	}
+}
+
 func TestLifecycleRecordsFailure(t *testing.T) {
 	sink := &collectingSink{}
 	spec := Spec{Role: "advisor", Model: "advisor-model"}

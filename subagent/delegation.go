@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"reflect"
 	"sort"
 	"strings"
 
@@ -448,6 +449,20 @@ type GeneralRunner struct {
 	Progress                             ProgressFunc
 	Trace                                TraceFunc
 	MaxRounds                            int
+	TaskID                               string
+	Resume                               *GeneralRunState
+	Checkpoint                           func(GeneralRunState) error
+}
+
+// GeneralRunState is a full, provider-neutral child checkpoint. Transcript is
+// append-only; Context may be compacted for the next model request.
+type GeneralRunState struct {
+	Transcript []client.Message
+	Context    []client.Message
+	Round      int
+	Started    bool
+	Reminders  int
+	Spec       SpecCheckpoint
 }
 
 func (r GeneralRunner) Run(ctx context.Context, prompt string) (result TaskResult, runErr error) {
@@ -474,11 +489,19 @@ func (r GeneralRunner) Run(ctx context.Context, prompt string) (result TaskResul
 	if err != nil {
 		return TaskResult{}, err
 	}
-	taskID, err := sessionstore.NewID()
-	if err != nil {
-		return TaskResult{}, err
+	if r.Resume != nil {
+		if err := r.Spec.Restore(r.Resume.Spec); err != nil {
+			return TaskResult{}, err
+		}
 	}
-	taskID = strings.ReplaceAll(r.Definition.Info.Name, "/", "-") + "-" + taskID
+	taskID := r.TaskID
+	if taskID == "" {
+		generated, idErr := sessionstore.NewID()
+		if idErr != nil {
+			return TaskResult{}, idErr
+		}
+		taskID = strings.ReplaceAll(r.Definition.Info.Name, "/", "-") + "-" + generated
+	}
 	progress := func(action, detail string) {
 		reportProgress(r.Progress, ProgressEvent{Agent: r.Definition.Info.Name, TaskID: taskID, ParentID: r.ParentID, Action: action, Detail: detail})
 	}
@@ -523,20 +546,85 @@ func (r GeneralRunner) Run(ctx context.Context, prompt string) (result TaskResul
 	systemPrompt := r.Definition.SystemPrompt + "\n\nRuntime environment: " + r.Environment + "\nWorking directory: " + r.WorkingDirectory +
 		"\n\nStart by calling task_start. Do not call any other tool before task_start succeeds. Finish with task_complete as the only tool call in that turn. task_complete uses the common schema exactly; do not invent agent-specific fields."
 	messages := []client.Message{{Role: client.RoleSystem, Content: systemPrompt}, {Role: client.RoleUser, Content: prompt}}
-	history := NewContextCompactor(r.Spec, messages, available, len(messages))
+	state := GeneralRunState{Transcript: append([]client.Message(nil), messages...), Context: append([]client.Message(nil), messages...), Spec: r.Spec.Checkpoint()}
+	if r.Resume != nil {
+		state = *r.Resume
+		if len(state.Transcript) < 2 || len(state.Context) < 2 || state.Transcript[1].TextContent() != prompt {
+			return TaskResult{}, errors.New("subagent: saved child conversation does not match request")
+		}
+	}
+	history := NewContextCompactor(r.Spec, state.Context, available, 2)
+	checkpoint := func() error {
+		state.Context = history.Messages()
+		state.Spec = r.Spec.Checkpoint()
+		if r.Checkpoint != nil {
+			return r.Checkpoint(state)
+		}
+		return nil
+	}
+	if r.Resume == nil {
+		if err := checkpoint(); err != nil {
+			return TaskResult{}, err
+		}
+	} else if completed, found := savedGeneralCompletion(state.Transcript); found {
+		return completed, nil
+	}
 	rounds := r.MaxRounds
 	if rounds <= 0 {
 		rounds = defaultGeneralRounds
 	}
-	started, reminders := false, 0
-	for round := 0; round < rounds; round++ {
+	started, reminders := state.Started, state.Reminders
+	appendReminder := func() error {
+		if reminders >= maximumGeneralReminders {
+			return errors.New("subagent: agent ended without task_complete")
+		}
+		reminders++
+		state.Reminders = reminders
+		instruction := "Call task_start before doing work."
+		if started {
+			instruction = "Continue the work if needed, then call task_complete."
+		}
+		reminder := client.Message{Role: client.RoleSystem, Content: instruction}
+		history.Append(reminder)
+		state.Transcript = append(state.Transcript, reminder)
+		return checkpoint()
+	}
+	for {
 		if err = ctx.Err(); err != nil {
 			return TaskResult{}, err
 		}
+		// A saved assistant turn must be drained before another model request.
+		if pending, completed := pendingGeneralTools(state.Transcript); len(pending) > completed {
+			if result, done, runErr := r.completeGeneralCalls(ctx, &state, history, available, taskID, lifecycle, &started, checkpoint); runErr != nil {
+				return TaskResult{}, runErr
+			} else if done {
+				return result, nil
+			}
+			continue
+		}
+		if len(state.Transcript) > 0 {
+			last := state.Transcript[len(state.Transcript)-1]
+			if last.Role == client.RoleAssistant && len(last.ToolCalls) == 0 {
+				if err := appendReminder(); err != nil {
+					return TaskResult{}, err
+				}
+				continue
+			}
+		}
+		if state.Round >= rounds {
+			break
+		}
+		beforeContext := history.Messages()
+		beforeSpec := r.Spec.Checkpoint()
 		if err = history.CompactIfNeeded(ctx, &r.Spec, r.Client); err != nil {
 			return TaskResult{}, fmt.Errorf("subagent: context: %w", err)
 		}
-		progress(ProgressThinking, fmt.Sprintf("model round %d", round+1))
+		if !reflect.DeepEqual(beforeContext, history.Messages()) || beforeSpec != r.Spec.Checkpoint() {
+			if err = checkpoint(); err != nil {
+				return TaskResult{}, err
+			}
+		}
+		progress(ProgressThinking, fmt.Sprintf("model round %d", state.Round+1))
 		parallel := false
 		request := client.ChatRequest{Messages: history.RequestMessages(), Tools: available, ToolChoice: client.ToolChoiceAuto, ParallelToolCalls: &parallel, WorkingDirectory: r.WorkingDirectory}
 		response, err := r.Spec.Chat(ctx, r.Client, request)
@@ -547,8 +635,21 @@ func (r GeneralRunner) Run(ctx context.Context, prompt string) (result TaskResul
 		if err != nil {
 			return TaskResult{}, err
 		}
+		for index := range assistant.ToolCalls {
+			if assistant.ToolCalls[index].ID == "" {
+				assistant.ToolCalls[index].ID = fmt.Sprintf("q-subagent-%d-%d", state.Round+1, index+1)
+			}
+		}
+		if assistant.ResponseModel == "" {
+			assistant.ResponseModel = r.Spec.Model
+		}
 		history.Observe(response.Usage)
 		history.Append(assistant)
+		state.Transcript = append(state.Transcript, assistant)
+		state.Round++
+		if err = checkpoint(); err != nil {
+			return TaskResult{}, err
+		}
 		traceAssistant(r.Trace, r.Definition.Info.Name, taskID, r.ParentID, assistant)
 		if lifecycle != nil {
 			if err = lifecycle.Message(assistant); err != nil {
@@ -556,77 +657,136 @@ func (r GeneralRunner) Run(ctx context.Context, prompt string) (result TaskResul
 			}
 		}
 		if len(assistant.ToolCalls) == 0 {
-			if reminders >= maximumGeneralReminders {
-				return TaskResult{}, errors.New("subagent: agent ended without task_complete")
+			if err = appendReminder(); err != nil {
+				return TaskResult{}, err
 			}
-			reminders++
-			instruction := "Call task_start before doing work."
-			if started {
-				instruction = "Continue the work if needed, then call task_complete."
-			}
-			history.Append(client.Message{Role: client.RoleSystem, Content: instruction})
 			continue
 		}
-		for _, call := range assistant.ToolCalls {
-			progress(ProgressTool, call.Function.Name)
-			var toolResult client.ToolResult
-			switch call.Function.Name {
-			case TaskStartToolName:
-				input, parseErr := parseGeneralTaskStart(call.Function.Arguments)
-				if parseErr == nil && started {
-					parseErr = errors.New("another task_start lifecycle is already active")
-				}
-				if parseErr != nil {
-					toolResult = scoutToolError(parseErr)
-				} else {
-					started = true
-					body, _ := json.Marshal(map[string]any{"started": true, "objective": input.Objective})
-					toolResult = client.ToolResult{Content: string(body)}
-				}
-			case TaskCompleteToolName:
-				if !started {
-					toolResult = scoutToolError(errors.New("task_complete requires task_start"))
-				} else if len(assistant.ToolCalls) != 1 {
-					toolResult = scoutToolError(errors.New("task_complete must be the only tool call in its turn"))
-				} else {
-					completed, parseErr := parseGeneralTaskComplete(call.Function.Arguments)
-					if parseErr != nil {
-						toolResult = scoutToolError(parseErr)
-					} else {
-						body, _ := json.Marshal(completed)
-						_, finishErr := finishRoleTool(ctx, r.Client, &r.Spec, history, request, call, client.ToolResult{Content: string(body)}, r.Trace, r.Definition.Info.Name, taskID, r.ParentID, lifecycle)
-						if finishErr != nil {
-							return TaskResult{}, finishErr
-						}
-						return completed, nil
-					}
-				}
-			default:
-				if !started {
-					toolResult = scoutToolError(errors.New("call task_start before using tools"))
-				} else if !hasTool(available, call.Function.Name) {
-					toolResult = scoutToolError(fmt.Errorf("tool %q is unavailable", call.Function.Name))
-				} else {
-					toolResult, err = r.Tools.Call(ctx, call)
-					if err != nil {
-						if ctx.Err() != nil {
-							return TaskResult{}, ctx.Err()
-						}
-						toolResult = scoutToolError(err)
-					}
-				}
-			}
-			traceToolResult(r.Trace, r.Definition.Info.Name, taskID, r.ParentID, call, toolResult)
-			message := client.ToolResultMessage(call, toolResult)
-			history.Append(message)
-			if lifecycle != nil {
-				if err = lifecycle.Message(message); err != nil {
-					return TaskResult{}, err
-				}
-			}
+		if result, done, runErr := r.completeGeneralCalls(ctx, &state, history, available, taskID, lifecycle, &started, checkpoint); runErr != nil {
+			return TaskResult{}, runErr
+		} else if done {
+			return result, nil
 		}
 	}
 	return TaskResult{}, fmt.Errorf("subagent: agent exceeded %d model rounds", rounds)
+}
+
+func savedGeneralCompletion(messages []client.Message) (TaskResult, bool) {
+	for index := len(messages) - 1; index >= 0; index-- {
+		message := messages[index]
+		if message.Role != client.RoleAssistant || len(message.ToolCalls) != 1 || message.ToolCalls[0].Function.Name != TaskCompleteToolName {
+			continue
+		}
+		if len(messages[index+1:]) < 2 || messages[index+1].Role != client.RoleTool || messages[index+1].ToolCallID != message.ToolCalls[0].ID {
+			return TaskResult{}, false
+		}
+		last := messages[len(messages)-1]
+		if last.Role != client.RoleAssistant || len(last.ToolCalls) != 0 {
+			return TaskResult{}, false
+		}
+		result, err := parseGeneralTaskComplete(message.ToolCalls[0].Function.Arguments)
+		return result, err == nil
+	}
+	return TaskResult{}, false
+}
+
+// pendingGeneralTools returns the last assistant's calls and the number of
+// results saved directly after it. This ordinal survives repeated call IDs.
+func pendingGeneralTools(messages []client.Message) ([]client.ToolCall, int) {
+	for i := len(messages) - 1; i >= 0; i-- {
+		if messages[i].Role != client.RoleAssistant || len(messages[i].ToolCalls) == 0 {
+			continue
+		}
+		completed := 0
+		for _, message := range messages[i+1:] {
+			if message.Role != client.RoleTool {
+				return nil, 0
+			}
+			completed++
+		}
+		return messages[i].ToolCalls, completed
+	}
+	return nil, 0
+}
+
+func (r *GeneralRunner) completeGeneralCalls(ctx context.Context, state *GeneralRunState, history *ContextCompactor, available []client.Tool, taskID string, lifecycle *Lifecycle, started *bool, checkpoint func() error) (TaskResult, bool, error) {
+	calls, completed := pendingGeneralTools(state.Transcript)
+	for index := completed; index < len(calls); index++ {
+		call := calls[index]
+		recovering := r.Resume != nil && index == completed && state.Round <= r.Resume.Round
+		reportProgress(r.Progress, ProgressEvent{Agent: r.Definition.Info.Name, TaskID: taskID, ParentID: r.ParentID, Action: ProgressTool, Detail: call.Function.Name})
+		var toolResult client.ToolResult
+		switch call.Function.Name {
+		case TaskStartToolName:
+			input, parseErr := parseGeneralTaskStart(call.Function.Arguments)
+			if parseErr == nil && *started {
+				parseErr = errors.New("another task_start lifecycle is already active")
+			}
+			if parseErr != nil {
+				toolResult = scoutToolError(parseErr)
+			} else {
+				*started = true
+				state.Started = true
+				body, _ := json.Marshal(map[string]any{"started": true, "objective": input.Objective})
+				toolResult = client.ToolResult{Content: string(body)}
+			}
+		case TaskCompleteToolName:
+			if !*started {
+				toolResult = scoutToolError(errors.New("task_complete requires task_start"))
+			} else if len(calls) != 1 {
+				toolResult = scoutToolError(errors.New("task_complete must be the only tool call in its turn"))
+			} else {
+				completed, parseErr := parseGeneralTaskComplete(call.Function.Arguments)
+				if parseErr != nil {
+					toolResult = scoutToolError(parseErr)
+				} else {
+					body, _ := json.Marshal(completed)
+					parallel := false
+					request := client.ChatRequest{Messages: history.RequestMessages(), Tools: available, ToolChoice: client.ToolChoiceAuto, ParallelToolCalls: &parallel, WorkingDirectory: r.WorkingDirectory}
+					before := len(history.Messages())
+					_, finishErr := finishRoleTool(ctx, r.Client, &r.Spec, history, request, call, client.ToolResult{Content: string(body)}, r.Trace, r.Definition.Info.Name, taskID, r.ParentID, lifecycle)
+					if finishErr != nil {
+						return TaskResult{}, false, finishErr
+					}
+					state.Transcript = append(state.Transcript, history.Messages()[before:]...)
+					if err := checkpoint(); err != nil {
+						return TaskResult{}, false, err
+					}
+					return completed, true, nil
+				}
+			}
+		default:
+			if !*started {
+				toolResult = scoutToolError(errors.New("call task_start before using tools"))
+			} else if recovering && call.Function.Name != DelegateToolName {
+				toolResult = client.ToolResult{Content: `{"status":"unknown","detail":"tool execution outcome could not be confirmed after session restart"}`, IsError: true}
+			} else if !hasTool(available, call.Function.Name) && !(recovering && call.Function.Name == DelegateToolName) {
+				toolResult = scoutToolError(fmt.Errorf("tool %q is unavailable", call.Function.Name))
+			} else {
+				var callErr error
+				toolResult, callErr = r.Tools.Call(ctx, call)
+				if callErr != nil {
+					if ctx.Err() != nil {
+						return TaskResult{}, false, ctx.Err()
+					}
+					toolResult = scoutToolError(callErr)
+				}
+			}
+		}
+		traceToolResult(r.Trace, r.Definition.Info.Name, taskID, r.ParentID, call, toolResult)
+		message := client.ToolResultMessage(call, toolResult)
+		history.Append(message)
+		state.Transcript = append(state.Transcript, message)
+		if err := checkpoint(); err != nil {
+			return TaskResult{}, false, err
+		}
+		if lifecycle != nil {
+			if err := lifecycle.Message(message); err != nil {
+				return TaskResult{}, false, err
+			}
+		}
+	}
+	return TaskResult{}, false, nil
 }
 
 type emptyToolRuntime struct{}

@@ -117,6 +117,34 @@ func TestWriterAppendsAndFlushesRecordsInOrder(t *testing.T) {
 	}
 }
 
+func TestWriterCoalescesTaskStateUpdatesWithinOneBatch(t *testing.T) {
+	store, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	writer := NewWriterWithOptions(store, WriterOptions{Buffer: 8, BatchSize: 8})
+	defer func() { _ = writer.Close() }()
+	for _, status := range []string{StatusQueued, StatusRunning, StatusSucceeded} {
+		if err := writer.Append(Record{ID: "task-1", Kind: KindTask, RunID: "run-1", Status: status}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := writer.Append(Record{ID: "result-1", Kind: KindResult, RunID: "run-1", ParentID: "task-1", Content: "done"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Flush(); err != nil {
+		t.Fatal(err)
+	}
+	task, err := store.Get("task-1")
+	if err != nil || task.Status != StatusSucceeded {
+		t.Fatalf("task status=%q err=%v", task.Status, err)
+	}
+	result, err := store.Get("result-1")
+	if err != nil || result.ParentID != task.ID {
+		t.Fatalf("result=%#v err=%v", result, err)
+	}
+}
+
 func TestWriterPersistsRecordsWhenOptionalPreparationFails(t *testing.T) {
 	store, err := Open(t.TempDir())
 	if err != nil {

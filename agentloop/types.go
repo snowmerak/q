@@ -33,14 +33,18 @@ type skillHintSearcher interface {
 // Request contains host-owned dependencies and conversation state. RunAgentLoop
 // copies Messages and does not close Client or Tools.
 type Request struct {
-	Client               ChatClient
-	Tools                ToolRuntime
-	Model                string
-	ReasoningEffort      string
-	Messages             []client.Message
-	ConversationID       string
-	WorkingDirectory     string
-	ActiveTask           *workspace.ActiveTask
+	Client           ChatClient
+	Tools            ToolRuntime
+	Model            string
+	ReasoningEffort  string
+	Messages         []client.Message
+	ConversationID   string
+	WorkingDirectory string
+	ActiveTask       *workspace.ActiveTask
+	// RequireTaskAction prevents a started task from reporting success before
+	// any non-orchestration tool has completed successfully.
+	RequireTaskAction    bool
+	PriorTaskAction      bool
 	Stream               bool
 	CoalesceInstructions bool
 	ContextPolicy        memory.Policy

@@ -9,6 +9,17 @@ import (
 // RunAgentLoop preserves the original app event contract while using the
 // standalone agentloop package as the sole loop implementation.
 func RunAgentLoop(ctx context.Context, request AgentLoopRequest, events chan<- AgentEvent) {
+	runAgentLoop(ctx, request, events, false)
+}
+
+// runPersistedAgentLoop waits for the host to save each assistant tool turn
+// and tool result before the core loop can dispatch the next tool. The core
+// and UI use two event channels, so an ordinary unbuffered send is insufficient.
+func runPersistedAgentLoop(ctx context.Context, request AgentLoopRequest, events chan<- AgentEvent) {
+	runAgentLoop(ctx, request, events, true)
+}
+
+func runAgentLoop(ctx context.Context, request AgentLoopRequest, events chan<- AgentEvent, persisted bool) {
 	if events == nil {
 		return
 	}
@@ -16,8 +27,20 @@ func RunAgentLoop(ctx context.Context, request AgentLoopRequest, events chan<- A
 	source := make(chan agentloop.Event)
 	go agentloop.RunAgentLoop(ctx, request, source)
 	for event := range source {
-		if !emitAgentEvent(ctx, events, projectAgentLoopEvent(event)) {
+		projected := projectAgentLoopEvent(event)
+		if persisted && projected.message != nil &&
+			((projected.message.Role == "assistant" && len(projected.message.ToolCalls) > 0) || projected.message.Role == "tool") {
+			projected.persistenceAck = make(chan struct{})
+		}
+		if !emitAgentEvent(ctx, events, projected) {
 			return
+		}
+		if projected.persistenceAck != nil {
+			select {
+			case <-projected.persistenceAck:
+			case <-ctx.Done():
+				return
+			}
 		}
 	}
 }

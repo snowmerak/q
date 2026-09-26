@@ -85,6 +85,7 @@ const (
 	StatusSucceeded = "succeeded"
 	StatusFailed    = "failed"
 	StatusCancelled = "cancelled"
+	StatusUnknown   = "unknown"
 )
 
 // NewID returns an archive-safe, time-sortable identifier. Callers can use it

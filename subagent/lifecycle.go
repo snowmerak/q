@@ -81,6 +81,9 @@ func (l *Lifecycle) Message(message client.Message) error {
 	}
 	if message.Role == client.RoleTool {
 		kind = sessionstore.KindResult
+		if strings.HasPrefix(content, "Tool error:") && strings.Contains(content, `"status":"unknown"`) {
+			status = sessionstore.StatusUnknown
+		}
 	}
 	return l.sink.Append(sessionstore.Record{
 		Kind: kind, RunID: l.runID, TaskID: l.taskID, ParentID: l.taskRecordID(),

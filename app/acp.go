@@ -1207,6 +1207,49 @@ func (a *acpAgent) prompt(ctx context.Context, request acp.PromptRequest) (acp.P
 	if err := a.emitAvailableCommandsContext(turnContext); err != nil {
 		return acp.PromptResponse{}, err
 	}
+	if a.state.delegationRecoveryPending {
+		saved, err := a.state.workspaceStore.Load()
+		if err != nil {
+			return acp.PromptResponse{}, fmt.Errorf("load delegated task: %w", err)
+		}
+		previous := len(workspaceSessionMessages(a.state.messages))
+		traceID, err := sessionstore.NewID()
+		if err != nil {
+			return acp.PromptResponse{}, err
+		}
+		trace := newACPPlanTrace(a.root, traceID, a.updateContext)
+		var observationErr error
+		recovered, recoveryErr := a.state.recoverPendingWorkspaceCalls(turnContext, &saved, func(event agentEvent) {
+			if observationErr != nil {
+				return
+			}
+			if event.activity != nil {
+				progress := strings.TrimSpace(strings.Join([]string{acpTraceAgentLabel(event.activity.Agent, event.activity.TaskID), event.activity.Action, event.activity.Detail}, " · "))
+				if progress != "" {
+					observationErr = a.updateContext(turnContext, acp.UpdateAgentThoughtText(progress+"\n"))
+				}
+			}
+			if event.trace != nil && observationErr == nil {
+				observationErr = trace.handle(turnContext, *event.trace)
+			}
+		})
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.WithoutCancel(turnContext), 3*time.Second)
+		observationErr = errors.Join(observationErr, trace.finishPending(cleanupCtx, "Delegated task recovery ended before the tool returned a result."))
+		cleanupCancel()
+		recoveryErr = errors.Join(recoveryErr, observationErr)
+		a.state.appendRecoveredTranscript(saved, previous)
+		a.state.delegationRecoveryPending = recoveryErr != nil
+		if recoveryErr != nil {
+			return acp.PromptResponse{}, fmt.Errorf("recover delegated task: %w", recoveryErr)
+		}
+		a.state.recoverDelegationTurn = recovered > 0 || len(saved.Transcript) > previous
+	}
+	if a.state.recoverDelegationTurn {
+		if _, err := a.runAgentTurn(turnContext, a.state.memory.Messages()); err != nil {
+			return acp.PromptResponse{}, fmt.Errorf("resume delegated task: %w", err)
+		}
+		a.state.recoverDelegationTurn = false
+	}
 	if response, handled, commitErr := a.runPendingACPCommit(turnContext, userMessage, hasNonText); handled {
 		response.UserMessageId = request.MessageId
 		return response, commitErr
@@ -1456,6 +1499,10 @@ func (a *acpAgent) runAgentTurn(ctx context.Context, history []client.Message) (
 	if err != nil {
 		return acp.PromptResponse{}, err
 	}
+	var delegation *delegationRuntime
+	if runtime, ok := toolRuntime.(*delegationRuntime); ok {
+		delegation = runtime
+	}
 	var diffRuntime *acpFileDiffRuntime
 	if toolRuntime != nil {
 		diffRuntime = newACPFileDiffRuntime(toolRuntime, a.root)
@@ -1469,11 +1516,23 @@ func (a *acpAgent) runAgentTurn(ctx context.Context, history []client.Message) (
 		workflowCtx, cancelWorkflow = context.WithCancel(a.state.ctx)
 	}
 	events := make(chan agentEvent)
-	go RunAgentLoop(workflowCtx, AgentLoopRequest{
+	var trace *acpPlanTrace
+	if delegation != nil {
+		traceID, err := sessionstore.NewID()
+		if err != nil {
+			cancelWorkflow()
+			return acp.PromptResponse{}, err
+		}
+		trace = newACPPlanTrace(a.root, traceID, a.updateContext)
+		delegation.observeDelegation(workflowCtx, events)
+	}
+	go runPersistedAgentLoop(workflowCtx, AgentLoopRequest{
 		Client: a.state.client, Tools: toolRuntime, Model: a.state.activeModel(),
 		ReasoningEffort: a.state.activeConfig().Provider.EffectiveReasoningEffort(),
 		Messages:        history, ConversationID: a.state.conversationID, WorkingDirectory: a.root,
 		ActiveTask: a.state.activeTask, Stream: a.state.streamsActiveChat(),
+		RequireTaskAction: a.state.loopMode == loopModeDelegation,
+		PriorTaskAction:   a.state.activeTask != nil && priorTaskAction(a.state.messages),
 		CoalesceInstructions: modelNeedsSystemInstructionCoalescing(
 			a.state.gatewayConfig, a.state.activeConfig().ModelGroups, a.state.activeModel(), nil,
 		),
@@ -1481,7 +1540,7 @@ func (a *acpAgent) runAgentTurn(ctx context.Context, history []client.Message) (
 	}, events)
 
 	streamedResponse := ""
-	return a.continueACPAgentTurn(ctx, workflowCtx, cancelWorkflow, persistent, events, &streamedResponse, diffRuntime)
+	return a.continueACPAgentTurn(ctx, workflowCtx, cancelWorkflow, persistent, events, &streamedResponse, diffRuntime, trace)
 }
 
 func (a *acpAgent) continueACPAgentTurn(
@@ -1492,6 +1551,7 @@ func (a *acpAgent) continueACPAgentTurn(
 	events <-chan agentEvent,
 	streamedResponse *string,
 	diffRuntime *acpFileDiffRuntime,
+	trace *acpPlanTrace,
 ) (response acp.PromptResponse, runErr error) {
 	suspended := false
 	stopPromptCancel := func() bool { return true }
@@ -1504,8 +1564,29 @@ func (a *acpAgent) continueACPAgentTurn(
 			cancelWorkflow()
 		}
 	}()
+	defer func() {
+		if trace == nil || suspended {
+			return
+		}
+		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
+		defer cancel()
+		runErr = errors.Join(runErr, trace.finishPending(cleanupCtx, "Delegated task ended before the tool returned a result."))
+	}()
 
 	for event := range events {
+		if event.activity != nil {
+			progress := strings.TrimSpace(strings.Join([]string{acpTraceAgentLabel(event.activity.Agent, event.activity.TaskID), event.activity.Action, event.activity.Detail}, " · "))
+			if progress != "" {
+				if err := a.updateContext(ctx, acp.UpdateAgentThoughtText(progress+"\n")); err != nil {
+					return acp.PromptResponse{}, err
+				}
+			}
+		}
+		if event.trace != nil && trace != nil {
+			if err := trace.handle(ctx, *event.trace); err != nil {
+				return acp.PromptResponse{}, err
+			}
+		}
 		if event.contextReplace != nil {
 			if err := a.state.memory.Replace(event.contextReplace.Index, event.contextReplace.Message); err != nil {
 				return acp.PromptResponse{}, fmt.Errorf("update model context: %w", err)
@@ -1578,7 +1659,7 @@ func (a *acpAgent) continueACPAgentTurn(
 					true,
 					func(nextCtx context.Context) (acp.PromptResponse, error) {
 						return a.continueACPAgentTurn(
-							nextCtx, workflowCtx, cancelWorkflow, true, events, streamedResponse, diffRuntime,
+							nextCtx, workflowCtx, cancelWorkflow, true, events, streamedResponse, diffRuntime, trace,
 						)
 					},
 					func() error {
@@ -1621,6 +1702,9 @@ func (a *acpAgent) continueACPAgentTurn(
 			}
 			if err := a.state.saveWorkspaceSession(); err != nil {
 				return acp.PromptResponse{}, err
+			}
+			if event.persistenceAck != nil {
+				close(event.persistenceAck)
 			}
 			a.publishUsageUpdate()
 		}
@@ -1896,6 +1980,7 @@ func (a *acpAgent) emitAgentPlanContext(ctx context.Context, update agentPlanUpd
 
 func (a *acpAgent) emitAvailableCommandsContext(ctx context.Context) error {
 	commands := []acp.AvailableCommand{
+		{Name: "mode", Description: "Set this session's default-loop mode.", Input: &acp.AvailableCommandInput{Unstructured: &acp.UnstructuredCommandInput{Hint: "default | delegation"}}},
 		{Name: "subagents", Description: "List available subagents or show a definition.", Input: &acp.AvailableCommandInput{Unstructured: &acp.UnstructuredCommandInput{Hint: "list | show <name>"}}},
 		{Name: "subagent", Description: "Run a builtin or custom subagent.", Input: &acp.AvailableCommandInput{Unstructured: &acp.UnstructuredCommandInput{Hint: "<name> <request>"}}},
 		{
@@ -1945,6 +2030,8 @@ func (a *acpAgent) runACPCommand(ctx context.Context, text string) (acp.PromptRe
 	case command == "/commit":
 		response, err := a.runACPCommit(ctx)
 		return response, true, err
+	case command == "/mode" || strings.HasPrefix(command, "/mode "):
+		output = a.state.runLoopModeCommand(command)
 	case command == "/subagent" || strings.HasPrefix(command, "/subagent "):
 		response, err := a.runACPCustom(ctx, command)
 		return response, true, err
@@ -2008,6 +2095,7 @@ func renderACPCommandHelp() string {
 	lines := []string{
 		"Available ACP commands:",
 		"- /plan <work to plan>",
+		"- /mode [default|delegation]",
 		"- /auto-approve [on|off|status]",
 		"- /auto-resolve [on|off|status]",
 		"- /autonomous [on|off|status]",

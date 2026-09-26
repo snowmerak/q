@@ -39,6 +39,7 @@ func RunAgentLoop(ctx context.Context, request Request, events chan<- Event) {
 	conversationID := request.ConversationID
 	workingDirectory := request.WorkingDirectory
 	activeTask := cloneActiveTask(request.ActiveTask)
+	requireTaskAction := request.RequireTaskAction
 	streamEnabled := request.Stream
 	coalesceInstructions := request.CoalesceInstructions
 	contextPolicy := request.ContextPolicy
@@ -70,6 +71,7 @@ func RunAgentLoop(ctx context.Context, request Request, events chan<- Event) {
 	loopContext := newAgentLoopContext(contextPolicy, history, availableTools)
 	toolCalls := 0
 	taskStarted := activeTask != nil
+	taskAction := request.PriorTaskAction
 	for round := 0; ; round++ {
 		if loopContext.ShouldCompact() {
 			if !emitEvent(ctx, events, Event{status: "Compacting context…"}) {
@@ -200,6 +202,7 @@ func RunAgentLoop(ctx context.Context, request Request, events chan<- Event) {
 					continue
 				}
 				taskStarted = true
+				taskAction = false
 				hints := automaticSkillHints(ctx, toolRuntime, skillHintQueryForTask(input), "task_start", hintedSkillIDs)
 				body, _ := json.Marshal(taskStartOutput{
 					Started: true, Objective: input.Objective,
@@ -279,6 +282,9 @@ func RunAgentLoop(ctx context.Context, request Request, events chan<- Event) {
 				if parseErr == nil && len(assistant.ToolCalls) != 1 {
 					parseErr = errors.New("task_complete must be the only tool call in its turn")
 				}
+				if parseErr == nil && requireTaskAction && completion.Outcome == "succeeded" && !taskAction {
+					parseErr = errors.New("task_complete requires a successful Q delegate or directly available Q work tool after task_start; provider-private tools do not count. For workspace inspection, call delegate_list then delegate, or report a genuine blocker")
+				}
 				if parseErr != nil {
 					message := orchestrationToolResult(call, "invalid task_complete arguments: "+parseErr.Error(), true)
 					appendHistory(message)
@@ -349,6 +355,9 @@ func RunAgentLoop(ctx context.Context, request Request, events chan<- Event) {
 			result, callErr := toolRuntime.Call(ctx, call)
 			if callErr != nil {
 				result = client.ToolResult{Content: callErr.Error(), IsError: true}
+			}
+			if taskStarted && !result.IsError && call.Function.Name != "delegate_list" {
+				taskAction = true
 			}
 			content := result.Content
 			if result.IsError {

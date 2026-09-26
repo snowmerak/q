@@ -139,6 +139,11 @@ func (m model) submitChat() (tea.Model, tea.Cmd) {
 		if customCommand(content) {
 			return m.startCustom(content)
 		}
+		if content == "/mode" || strings.HasPrefix(content, "/mode ") {
+			m.input.Reset()
+			m.status = m.runLoopModeCommand(content)
+			return m, m.input.Focus()
+		}
 		switch content {
 		case "/plan":
 			m.input.Reset()
@@ -241,6 +246,10 @@ func (m model) submitChat() (tea.Model, tea.Cmd) {
 
 func (m model) startChatTurn(content string, compact bool) (tea.Model, tea.Cmd) {
 	content = strings.TrimSpace(norm.NFC.String(content))
+	if m.delegationRecoveryPending && !m.waiting {
+		command := m.startDelegationRecovery()
+		return m, command
+	}
 	if m.waiting || content == "" || m.client == nil {
 		return m, nil
 	}
@@ -292,6 +301,21 @@ func (m model) startChatTurn(content string, compact bool) (tea.Model, tea.Cmd) 
 	}
 	m.status = "Thinking…"
 	return m, tea.Batch(m.spinner.Tick, m.sendChatRequest(), learning)
+}
+
+// resumeRecoveredTurn continues the parent model after its saved delegate
+// result has been restored. No new user message is inserted.
+func (m *model) resumeRecoveredTurn() tea.Cmd {
+	if !m.recoverDelegationTurn || m.waiting || m.client == nil || m.planResumePending {
+		return nil
+	}
+	m.recoverDelegationTurn = false
+	m.beginTurn()
+	m.turnMessageStart = len(m.messages)
+	m.waiting = true
+	m.input.Blur()
+	m.status = "Resuming delegated task…"
+	return tea.Batch(m.spinner.Tick, m.sendChatRequest())
 }
 
 func (m model) submitQuestionAnswer(content string) (tea.Model, tea.Cmd) {
@@ -473,14 +497,18 @@ func (m *model) sendChatRequest() tea.Cmd {
 	if m.workspaceStore != nil {
 		workingDirectory = m.workspaceStore.Root
 	}
+	turnContext := m.activeTurnContext()
+	turnID := m.turnID
+	events := make(chan agentEvent)
 	toolRuntime, toolRuntimeErr := configuredAgentToolRuntime(
 		m.toolRuntime, mcpconfig.RoleDefault, m.activeConfig(), workingDirectory,
 	)
 	if toolRuntimeErr == nil {
 		toolRuntime, toolRuntimeErr = m.configuredDelegationRuntime(toolRuntime, workingDirectory)
+		if delegation, ok := toolRuntime.(*delegationRuntime); ok {
+			delegation.observeDelegation(turnContext, events)
+		}
 	}
-	turnContext := m.activeTurnContext()
-	turnID := m.turnID
 	streamEnabled := m.streamsActiveChat()
 	coalesceInstructions := modelNeedsSystemInstructionCoalescing(
 		m.gatewayConfig, m.activeConfig().ModelGroups, modelID, nil,
@@ -492,7 +520,6 @@ func (m *model) sendChatRequest() tea.Cmd {
 		}
 	}
 	if remote, ok := configuredClient.(*acpRemoteClient); ok {
-		events := make(chan agentEvent)
 		content := m.pendingMessage.TextContent()
 		return func() tea.Msg {
 			go remote.runPrompt(turnContext, content, events)
@@ -508,16 +535,17 @@ func (m *model) sendChatRequest() tea.Cmd {
 			return chatResultMsg{turnID: turnID, response: response, requestEstimate: m.requestEstimate, err: err}
 		}
 	}
-	events := make(chan agentEvent)
 	return func() tea.Msg {
 		if toolRuntime == nil && streamEnabled {
 			go streamSingleChat(turnContext, configuredClient, modelID, reasoningEffort, history, conversationID, workingDirectory, coalesceInstructions, m.requestEstimate, events)
 		} else {
-			go RunAgentLoop(turnContext, AgentLoopRequest{
+			go runPersistedAgentLoop(turnContext, AgentLoopRequest{
 				Client: configuredClient, Tools: toolRuntime, Model: modelID, ReasoningEffort: reasoningEffort,
 				Messages: history, ConversationID: conversationID, WorkingDirectory: workingDirectory,
 				ActiveTask: activeTask, Stream: streamEnabled, CoalesceInstructions: coalesceInstructions,
-				ContextPolicy: memoryPolicy(m.activeConfig()),
+				RequireTaskAction: m.loopMode == loopModeDelegation,
+				PriorTaskAction:   activeTask != nil && priorTaskAction(m.messages),
+				ContextPolicy:     memoryPolicy(m.activeConfig()),
 			}, events)
 		}
 		return waitAgentEvent(events, turnID)()

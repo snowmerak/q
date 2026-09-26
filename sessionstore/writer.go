@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 )
 
@@ -192,17 +193,20 @@ func (w *Writer) run() {
 }
 
 func (w *Writer) saveBatch(records []Record) {
-	prepared := records
+	// Repeated IDs are updates to one record (for example, queued -> running
+	// -> succeeded for a subagent task). SaveBatch accepts one value per ID,
+	// so retain the last update at the first occurrence's position.
+	prepared := coalesceRecordUpdates(records)
 	if w.prepare != nil {
-		copies := make([]Record, len(records))
-		for index, record := range records {
+		copies := make([]Record, len(prepared))
+		for index, record := range prepared {
 			copies[index] = cloneRecord(record)
 		}
 		candidate, err := w.prepare(w.ctx, copies)
 		if err != nil {
 			w.rememberError(fmt.Errorf("sessionstore: prepare archive records: %w", err))
-		} else if len(candidate) != len(records) {
-			w.rememberError(fmt.Errorf("sessionstore: prepared %d archive records; want %d", len(candidate), len(records)))
+		} else if len(candidate) != len(prepared) {
+			w.rememberError(fmt.Errorf("sessionstore: prepared %d archive records; want %d", len(candidate), len(prepared)))
 		} else {
 			prepared = candidate
 		}
@@ -225,6 +229,23 @@ func (w *Writer) saveBatch(records []Record) {
 			}
 		}
 	}
+}
+
+func coalesceRecordUpdates(records []Record) []Record {
+	result := make([]Record, 0, len(records))
+	positions := make(map[string]int, len(records))
+	for _, record := range records {
+		id := strings.TrimSpace(record.ID)
+		if id != "" {
+			if index, found := positions[id]; found {
+				result[index] = record
+				continue
+			}
+			positions[id] = len(result)
+		}
+		result = append(result, record)
+	}
+	return result
 }
 
 func (w *Writer) rememberError(err error) {
