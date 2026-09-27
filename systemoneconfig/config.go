@@ -16,10 +16,11 @@ import (
 )
 
 const (
-	FileName     = "systemone.json"
-	DefaultURI   = "https://api.typesafe.ai/v1/systemone"
-	DefaultModel = "jev-latest"
-	Version      = 1
+	FileName               = "systemone.json"
+	DefaultURI             = "https://api.typesafe.ai/v1/systemone"
+	DefaultModel           = "jev-latest"
+	Version                = 2
+	RoleAgentSkillDecision = "agent_skill_decision"
 )
 
 type ServerConfig struct {
@@ -33,23 +34,23 @@ type ProviderConfig struct {
 	URI       string `json:"uri"`
 	APIKey    string `json:"api_key,omitempty"`
 	APIKeyEnv string `json:"api_key_env,omitempty"`
-	Model     string `json:"model"`
 }
 
 type Config struct {
-	Version   int              `json:"version"`
-	Server    ServerConfig     `json:"server"`
-	Selected  string           `json:"selected"`
-	Providers []ProviderConfig `json:"providers"`
+	Version      int               `json:"version"`
+	Server       ServerConfig      `json:"server"`
+	Providers    []ProviderConfig  `json:"providers"`
+	DefaultModel string            `json:"default_model"`
+	RoleModels   map[string]string `json:"role_models,omitempty"`
 }
 
 func Default() Config {
 	return Config{
-		Version:  Version,
-		Server:   ServerConfig{Host: "127.0.0.1"},
-		Selected: "typesafe",
+		Version:      Version,
+		Server:       ServerConfig{Host: "127.0.0.1"},
+		DefaultModel: "typesafe/" + DefaultModel,
 		Providers: []ProviderConfig{{
-			ID: "typesafe", URI: DefaultURI, APIKeyEnv: "TYPESAFE_API_KEY", Model: DefaultModel,
+			ID: "typesafe", URI: DefaultURI, APIKeyEnv: "TYPESAFE_API_KEY",
 		}},
 	}
 }
@@ -75,7 +76,6 @@ func (c Config) Validate() error {
 		return errors.New("systemone: at least one provider is required")
 	}
 	seen := make(map[string]bool, len(c.Providers))
-	selected := false
 	for _, provider := range c.Providers {
 		if err := provider.Validate(); err != nil {
 			return err
@@ -84,10 +84,25 @@ func (c Config) Validate() error {
 			return fmt.Errorf("systemone: duplicate provider ID %q", provider.ID)
 		}
 		seen[provider.ID] = true
-		selected = selected || provider.ID == c.Selected
 	}
-	if !selected {
-		return fmt.Errorf("systemone: selected provider %q does not exist", c.Selected)
+	if err := validateModelReference(c.DefaultModel, seen); err != nil {
+		return fmt.Errorf("systemone: default model: %w", err)
+	}
+	for role, model := range c.RoleModels {
+		if role == "" || strings.ContainsAny(role, " \t\r\n") {
+			return fmt.Errorf("systemone: invalid role %q", role)
+		}
+		if err := validateModelReference(model, seen); err != nil {
+			return fmt.Errorf("systemone: role %q model: %w", role, err)
+		}
+	}
+	return nil
+}
+
+func validateModelReference(model string, providers map[string]bool) error {
+	id, name, qualified := strings.Cut(model, "/")
+	if !qualified || !providers[id] || name == "" || strings.TrimSpace(model) != model || strings.ContainsAny(model, "\r\n") {
+		return fmt.Errorf("%q must name a configured provider and model as provider-id/model-name", model)
 	}
 	return nil
 }
@@ -101,9 +116,6 @@ func (p ProviderConfig) Validate() error {
 		parsed.Host == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" ||
 		parsed.Opaque != "" || !strings.HasSuffix(strings.TrimRight(parsed.Path, "/"), "/systemone") {
 		return fmt.Errorf("systemone: provider %q URI must be an HTTP(S) /systemone endpoint without credentials, query, or fragment", p.ID)
-	}
-	if p.Model == "" || p.Model != strings.TrimSpace(p.Model) || strings.ContainsAny(p.Model, "\r\n") {
-		return fmt.Errorf("systemone: provider %q model is required without surrounding whitespace", p.ID)
 	}
 	if strings.ContainsAny(p.APIKey, "\r\n") || strings.ContainsAny(p.APIKeyEnv, "\r\n") {
 		return fmt.Errorf("systemone: provider %q API key settings must be single lines", p.ID)
@@ -139,21 +151,41 @@ func (p ProviderConfig) NewClient() (*systemone.Client, error) {
 	return systemone.New(systemone.Config{BaseURL: p.BaseURL(), APIKey: key})
 }
 
-func (c Config) SelectedProvider() (ProviderConfig, error) {
+// ModelForRole returns the role override, or the representative model.
+func (c Config) ModelForRole(role string) string {
+	if model := c.RoleModels[role]; model != "" {
+		return model
+	}
+	return c.DefaultModel
+}
+
+// ResolveModel locates the provider and native model for an assignment.
+func (c Config) ResolveModel(role string) (ProviderConfig, string, error) {
+	id, model, qualified := strings.Cut(c.ModelForRole(role), "/")
+	if !qualified || model == "" {
+		return ProviderConfig{}, "", errors.New("systemone: model assignment must use provider-id/model-name")
+	}
 	for _, provider := range c.Providers {
-		if provider.ID == c.Selected {
-			return provider, nil
+		if provider.ID == id {
+			return provider, model, nil
 		}
 	}
-	return ProviderConfig{}, fmt.Errorf("systemone: selected provider %q does not exist", c.Selected)
+	return ProviderConfig{}, "", fmt.Errorf("systemone: provider %q does not exist", id)
 }
 
 func (c Config) NewClient() (*systemone.Client, error) {
-	provider, err := c.SelectedProvider()
+	client, _, err := c.NewClientForRole("")
+	return client, err
+}
+
+// NewClientForRole returns a native client and model for the role assignment.
+func (c Config) NewClientForRole(role string) (*systemone.Client, string, error) {
+	provider, model, err := c.ResolveModel(role)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
-	return provider.NewClient()
+	client, err := provider.NewClient()
+	return client, model, err
 }
 
 type Store struct{ Dir string }
@@ -187,7 +219,38 @@ func (s Store) LoadOrDefault() (Config, error) {
 		value := Default()
 		value.Providers[0].URI = old.URI
 		value.Providers[0].APIKey = old.APIKey
-		value.Providers[0].Model = old.Model
+		value.DefaultModel = "typesafe/" + old.Model
+		if err := value.Validate(); err != nil {
+			return Config{}, err
+		}
+		return value, nil
+	}
+	var version struct {
+		Version int `json:"version"`
+	}
+	if err := json.Unmarshal(data, &version); err != nil {
+		return Config{}, fmt.Errorf("systemone: decode settings: %w", err)
+	}
+	if version.Version == 1 {
+		// Migrate the earlier multi-provider schema, which assigned one model per provider.
+		var old struct {
+			Server    ServerConfig `json:"server"`
+			Selected  string       `json:"selected"`
+			Providers []struct {
+				ProviderConfig
+				Model string `json:"model"`
+			} `json:"providers"`
+		}
+		if err := json.Unmarshal(data, &old); err != nil {
+			return Config{}, fmt.Errorf("systemone: decode previous settings: %w", err)
+		}
+		value := Config{Version: Version, Server: old.Server}
+		for _, provider := range old.Providers {
+			value.Providers = append(value.Providers, provider.ProviderConfig)
+			if provider.ID == old.Selected {
+				value.DefaultModel = provider.ID + "/" + provider.Model
+			}
+		}
 		if err := value.Validate(); err != nil {
 			return Config{}, err
 		}
@@ -204,16 +267,15 @@ func (s Store) LoadOrDefault() (Config, error) {
 }
 
 func (s Store) NewClient() (*systemone.Client, string, error) {
+	return s.NewClientForRole("")
+}
+
+func (s Store) NewClientForRole(role string) (*systemone.Client, string, error) {
 	value, err := s.LoadOrDefault()
 	if err != nil {
 		return nil, "", err
 	}
-	provider, err := value.SelectedProvider()
-	if err != nil {
-		return nil, "", err
-	}
-	client, err := provider.NewClient()
-	return client, provider.Model, err
+	return value.NewClientForRole(role)
 }
 
 func (s Store) Save(value Config) error {

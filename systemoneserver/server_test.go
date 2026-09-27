@@ -20,10 +20,10 @@ func TestServerRoutesModelsAndDecisionsAcrossProviders(t *testing.T) {
 
 	value := systemoneconfig.Default()
 	value.Providers = []systemoneconfig.ProviderConfig{
-		{ID: "first", URI: first.URL + "/v1/systemone", APIKey: "first-key", Model: "jev"},
-		{ID: "second", URI: second.URL + "/v1/systemone", APIKey: "second-key", Model: "jev"},
+		{ID: "first", URI: first.URL + "/v1/systemone", APIKey: "first-key"},
+		{ID: "second", URI: second.URL + "/v1/systemone", APIKey: "second-key"},
 	}
-	value.Selected = "first"
+	value.DefaultModel = "first/jev"
 	value.Server.APIKey = "client-key"
 	instance, err := New(value)
 	if err != nil {
@@ -43,7 +43,9 @@ func TestServerRoutesModelsAndDecisionsAcrossProviders(t *testing.T) {
 		t.Fatal(err)
 	}
 	response.Body.Close()
-	if len(catalog.Models) != 2 || catalog.Models[0].Name != "first/jev" || catalog.Models[1].Name != "second/jev" {
+	if len(catalog.Models) != 4 || catalog.Models[0].Name != "first/jev" ||
+		catalog.Models[1].Name != "first/jev-preview" || catalog.Models[2].Name != "second/jev" ||
+		catalog.Models[3].Name != "second/jev-preview" {
 		t.Fatalf("models = %#v", catalog.Models)
 	}
 
@@ -51,6 +53,7 @@ func TestServerRoutesModelsAndDecisionsAcrossProviders(t *testing.T) {
 		model, wantProvider string
 	}{
 		{"first/jev", "first"},
+		{"first/jev-preview", "first"},
 		{"second/jev", "second"},
 		{"jev", "first"},
 	} {
@@ -83,8 +86,8 @@ func TestServerRejectsMissingClientKeyAndUnknownProvider(t *testing.T) {
 	upstream := testUpstream(t, "provider-key", "first")
 	defer upstream.Close()
 	value := systemoneconfig.Default()
-	value.Providers[0] = systemoneconfig.ProviderConfig{ID: "first", URI: upstream.URL + "/v1/systemone", APIKey: "provider-key", Model: "jev"}
-	value.Selected = "first"
+	value.Providers[0] = systemoneconfig.ProviderConfig{ID: "first", URI: upstream.URL + "/v1/systemone", APIKey: "provider-key"}
+	value.DefaultModel = "first/jev"
 	value.Server.APIKey = "client-key"
 	instance, err := New(value)
 	if err != nil {
@@ -150,13 +153,13 @@ func testUpstream(t *testing.T, key, name string) *httptest.Server {
 		}
 		switch request.URL.Path {
 		case "/v1/models":
-			_, _ = io.WriteString(writer, `{"models":[{"name":"jev"}]}`)
+			_, _ = io.WriteString(writer, `{"models":[{"name":"jev"},{"name":"jev-preview"}]}`)
 		case "/v1/systemone":
 			if request.Header.Get("Idempotency-Key") != "once-123" {
 				t.Errorf("%s upstream idempotency key = %q", name, request.Header.Get("Idempotency-Key"))
 			}
 			data, _ := io.ReadAll(request.Body)
-			if !bytes.Contains(data, []byte(`"model":"jev"`)) {
+			if !bytes.Contains(data, []byte(`"model":"jev"`)) && !bytes.Contains(data, []byte(`"model":"jev-preview"`)) {
 				t.Errorf("%s upstream body = %s", name, data)
 			}
 			writer.Header().Set("X-Request-Id", name+"-request")

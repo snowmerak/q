@@ -268,7 +268,7 @@ func renderHelpContent(dark bool, commandSets ...[]slashCommand) string {
 		{"q remote", "Run the REST host for workspace sessions and agent execution."},
 		{"q remote config", "Configure Remote network and Remote-only API keys."},
 		{"q model", "Configure main, embedding, and subagent models."},
-		{"q systemone", "Configure System One providers, models, and listener."},
+		{"q systemone", "Configure System One providers, model assignments, and listener."},
 		{"q systemone start", "Run the standalone System One API server."},
 		{"q mcp", "Configure external MCP tool servers and per-role assignments."},
 		{"q subagents", "Manage subagents, ACP connections, and external bindings."},

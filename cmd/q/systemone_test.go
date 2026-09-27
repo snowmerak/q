@@ -51,9 +51,9 @@ func TestRunSystemOneWithStoreServesAndStops(t *testing.T) {
 	store := systemoneconfig.Store{Dir: t.TempDir()}
 	value := systemoneconfig.Default()
 	value.Providers[0] = systemoneconfig.ProviderConfig{
-		ID: "provider", URI: upstream.URL + "/v1/systemone", APIKey: "provider-key", Model: "jev",
+		ID: "provider", URI: upstream.URL + "/v1/systemone", APIKey: "provider-key",
 	}
-	value.Selected = "provider"
+	value.DefaultModel = "provider/jev"
 	value.Server.APIKey = "client-key"
 	if err := store.Save(value); err != nil {
 		t.Fatal(err)

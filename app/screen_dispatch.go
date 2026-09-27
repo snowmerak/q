@@ -122,6 +122,9 @@ func (m model) updateScreenMessage(message tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m.updateCustomInput(message)
 	}
+	if m.screen == screenSystemOne {
+		return m.updateSystemOneInput(message)
+	}
 	if m.screen == screenGatewayNetwork || (m.screen == screenGatewayKeys && m.gatewayKeyAdding) {
 		return m.updateGatewayInput(message)
 	}

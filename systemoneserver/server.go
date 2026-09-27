@@ -137,7 +137,11 @@ func (s *Server) routeModel(model string) (string, string) {
 	if qualified {
 		return providerID, backendModel
 	}
-	return s.config.Selected, model
+	provider, _, err := s.config.ResolveModel("")
+	if err != nil {
+		return "", ""
+	}
+	return provider.ID, model
 }
 
 func copyHeaders(destination, source http.Header) {

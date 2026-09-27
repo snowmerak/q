@@ -658,16 +658,21 @@ omits the chat-only `learn` tool.
 | `q help` | Open the TUI help without starting chat services. |
 
 System One runs independently of Q's chat Gateway. In `q systemone`, use
-`Ctrl+N` to add a provider, `Ctrl+P` to switch providers, `Ctrl+D` to remove
-one, and `Ctrl+S` to save. Each provider has its own endpoint URI, API key (or
-environment variable), and selected model. The listen host, port, and optional
-client-facing API key are stored in the same settings file. Existing
-single-provider `systemone.json` files are read automatically and rewritten in
-the new format on save.
+↑/↓ or Tab to select a setting, Enter to edit it, `a` to add a provider, and `d` to
+remove the selected provider. Valid changes are saved as they are made, including
+model selections. Providers contain only endpoint and credential settings.
+The representative `default_model` and optional
+`agent_skill_decision` role assignment are separate `provider-id/model-name`
+values; clear the role assignment in its model picker to use the default.
+Press Enter on either assignment to pick from all configured providers. The listen host,
+port, and optional client-facing API key are stored in the same settings file.
+Existing single-provider settings are converted when loaded and saved in the
+new format on the next change.
 
 `q systemone start` serves `GET /v1/models` and `POST /v1/systemone`.
 Discovered models and routed requests use `provider-id/model-name`; a model
-name without a provider ID goes to the selected provider for compatibility.
+name without a provider ID goes to the provider named by `default_model` for
+compatibility. Each provider may serve multiple models.
 The server listens on `127.0.0.1` with a random port by default. Setting a
 non-loopback listen host requires a server API key, which clients send as a
 Bearer token. `--host` and `--port` override the saved listen address for one
@@ -723,7 +728,7 @@ described in [the Remote API implementation note](docs/remote-subagent-api-plan.
 | `~/.q/workspace-memory.json` | Workspace Memory settings. |
 | `~/.q/usage.json` | Token Usage service loopback endpoint settings. |
 | `~/.q/mcp.json` | External MCP profiles and role assignments. |
-| `~/.q/systemone.json` | System One providers, selected provider, and standalone listener settings (saved with private file permissions). |
+| `~/.q/systemone.json` | System One providers, model assignments, and standalone listener settings (saved with private file permissions). |
 | `~/.q/skills/` | q-managed global Agent Skills. |
 | `~/.q/logs/thinker/` | Private Thinker invocation diagnostics retained for three days. |
 | `~/.q/usage/usage.sqlite` | Recent token-only events and all-time daily rollups. |

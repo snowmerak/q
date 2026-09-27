@@ -15,54 +15,237 @@ import (
 	"github.com/snowmerak/q/systemoneconfig"
 )
 
-func TestSystemOneSettingsOpenSaveAndReload(t *testing.T) {
-	store := config.Store{Dir: t.TempDir()}
-	m := newModel(context.Background(), store, nil)
+func systemOneTestKey(code rune, text string) tea.KeyPressMsg {
+	return tea.KeyPressMsg{Code: code, Text: text}
+}
+
+func TestSystemOneEditsSaveAsTheyChange(t *testing.T) {
+	store := systemoneconfig.Store{Dir: t.TempDir()}
+	m := newModel(t.Context(), config.Store{Dir: store.Dir}, nil)
 	updated, _ := m.enterSystemOne()
 	m = updated.(model)
-	if m.screen != screenSystemOne || m.systemOneInputs[0].Value() != systemoneconfig.DefaultURI {
-		t.Fatalf("initial screen = %v, URI = %q", m.screen, m.systemOneInputs[0].Value())
+	if m.screen != screenSystemOne || m.systemOnePage != systemOnePageList || m.systemOneListCursor != systemOneProviderRow {
+		t.Fatalf("initial screen = %v, page = %v, cursor = %d", m.screen, m.systemOnePage, m.systemOneListCursor)
 	}
-	m.systemOneInputs[0].SetValue("https://example.test/v1/systemone")
-	m.systemOneInputs[1].SetValue("private-test-key")
-	m.systemOneInputs[2].SetValue("jev-preview")
+	updated, _ = m.updateSystemOne(tea.KeyPressMsg{Code: tea.KeyTab})
+	m = updated.(model)
+	if m.systemOneListCursor != 0 {
+		t.Fatalf("Tab did not wrap list selection: %d", m.systemOneListCursor)
+	}
+	updated, _ = m.updateSystemOne(tea.KeyPressMsg{Code: tea.KeyUp})
+	m = updated.(model)
+	updated, _ = m.updateSystemOne(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m = updated.(model)
+	updated, _ = m.updateSystemOne(tea.KeyPressMsg{Code: tea.KeyDown})
+	m = updated.(model)
+	m.systemOneInputs[systemOneFieldURI].SetValue("https://example.test/v1/systemon")
+	updated, _ = m.updateSystemOne(systemOneTestKey('e', "e"))
+	m = updated.(model)
+	loaded, err := store.LoadOrDefault()
+	if err != nil || loaded.Providers[0].URI != "https://example.test/v1/systemone" {
+		t.Fatalf("URI was not saved on edit: %#v, %v", loaded, err)
+	}
+	updated, _ = m.updateSystemOne(tea.KeyPressMsg{Code: tea.KeyDown})
+	m = updated.(model)
+	m.systemOneInputs[systemOneFieldProviderKey].SetValue("private-test-ke")
+	updated, _ = m.updateSystemOne(systemOneTestKey('y', "y"))
+	m = updated.(model)
+	loaded, err = store.LoadOrDefault()
+	if err != nil || loaded.Providers[0].APIKey != "private-test-key" {
+		t.Fatalf("API key was not saved on edit: %#v, %v", loaded, err)
+	}
 	if strings.Contains(ansi.Strip(m.viewSystemOne()), "private-test-key") {
 		t.Fatal("API key appeared in the settings screen")
 	}
-	updated, _ = m.updateSystemOne(tea.KeyPressMsg{Code: 's', Mod: tea.ModCtrl})
+	updated, _ = m.Update(tea.PasteMsg{Content: "-pasted"})
 	m = updated.(model)
-	if !strings.Contains(m.status, "saved") {
-		t.Fatalf("save status = %q", m.status)
-	}
-	loaded, err := (systemoneconfig.Store{Dir: store.Dir}).LoadOrDefault()
-	if err != nil || loaded.Providers[0].URI != "https://example.test/v1/systemone" || loaded.Providers[0].APIKey != "private-test-key" || loaded.Providers[0].Model != "jev-preview" {
-		t.Fatalf("saved settings = %#v, %v", loaded, err)
-	}
-	m.systemOneInputs[1].SetValue("unsaved-key")
-	updated, _ = m.enterSystemOne()
-	m = updated.(model)
-	if m.systemOneInputs[1].Value() != "private-test-key" {
-		t.Fatal("reopening did not reload the saved API key")
+	loaded, err = store.LoadOrDefault()
+	if err != nil || loaded.Providers[0].APIKey != "private-test-key-pasted" {
+		t.Fatalf("pasted API key was not saved: %#v, %v", loaded, err)
 	}
 	updated, _ = m.updateSystemOne(tea.KeyPressMsg{Code: tea.KeyEsc})
-	if updated.(model).screen != screenChat {
-		t.Fatal("escape did not return to chat")
+	m = updated.(model)
+	updated, _ = m.updateSystemOne(tea.KeyPressMsg{Code: tea.KeyUp})
+	m = updated.(model)
+	updated, _ = m.updateSystemOne(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m = updated.(model)
+	if m.systemOnePage != systemOnePageNetwork {
+		t.Fatal("Enter did not open network settings")
+	}
+	updated, _ = m.updateSystemOne(tea.KeyPressMsg{Code: tea.KeyDown})
+	m = updated.(model)
+	m.systemOneInputs[systemOneFieldPort].SetValue("878")
+	m.systemOneInputs[systemOneFieldPort].CursorEnd()
+	updated, _ = m.updateSystemOne(systemOneTestKey('7', "7"))
+	m = updated.(model)
+	loaded, err = store.LoadOrDefault()
+	if err != nil || loaded.Server.Port != 8787 {
+		t.Fatalf("port was not saved on edit: %#v, %v", loaded, err)
 	}
 }
 
-func TestSystemOneInvalidURIDoesNotOverwriteSettings(t *testing.T) {
-	store := config.Store{Dir: t.TempDir()}
-	m := newModel(context.Background(), store, nil)
+func TestSystemOneInvalidEditDoesNotOverwriteSettings(t *testing.T) {
+	store := systemoneconfig.Store{Dir: t.TempDir()}
+	m := newModel(t.Context(), config.Store{Dir: store.Dir}, nil)
 	updated, _ := m.enterSystemOne()
 	m = updated.(model)
-	m.systemOneInputs[0].SetValue("https://example.test/v1/models")
-	updated, _ = m.saveSystemOne()
+	updated, _ = m.updateSystemOne(tea.KeyPressMsg{Code: tea.KeyEnter})
 	m = updated.(model)
-	if !strings.Contains(m.status, "URI") {
-		t.Fatalf("validation status = %q", m.status)
+	updated, _ = m.updateSystemOne(tea.KeyPressMsg{Code: tea.KeyDown})
+	m = updated.(model)
+	m.systemOneInputs[systemOneFieldURI].SetValue("https://example.test/v1/model")
+	updated, _ = m.updateSystemOne(systemOneTestKey('s', "s"))
+	m = updated.(model)
+	if !m.systemOnePending || !strings.Contains(m.status, "URI") {
+		t.Fatalf("invalid edit status = %q, pending = %v", m.status, m.systemOnePending)
 	}
-	if _, err := os.Stat((systemoneconfig.Store{Dir: store.Dir}).Path()); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("invalid settings wrote a file: %v", err)
+	if _, err := os.Stat(store.Path()); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("invalid edit wrote a file: %v", err)
+	}
+	updated, _ = m.updateSystemOne(tea.KeyPressMsg{Code: tea.KeyEsc})
+	m = updated.(model)
+	if m.systemOnePage != systemOnePageList || m.systemOneConfig.Providers[0].URI != systemoneconfig.DefaultURI {
+		t.Fatal("Escape did not discard the invalid draft")
+	}
+}
+
+func TestSystemOneProviderListUsesGatewayKeysAndPersists(t *testing.T) {
+	store := systemoneconfig.Store{Dir: t.TempDir()}
+	m := newModel(t.Context(), config.Store{Dir: store.Dir}, nil)
+	updated, _ := m.enterSystemOne()
+	m = updated.(model)
+	updated, _ = m.updateSystemOne(systemOneTestKey('a', "a"))
+	m = updated.(model)
+	loaded, err := store.LoadOrDefault()
+	if err != nil || len(loaded.Providers) != 2 || m.systemOnePage != systemOnePageProvider {
+		t.Fatalf("provider was not added immediately: %#v, %v", loaded, err)
+	}
+	m.systemOneInputs[systemOneFieldProviderID].SetValue("secon")
+	updated, _ = m.updateSystemOne(systemOneTestKey('d', "d"))
+	m = updated.(model)
+	loaded, err = store.LoadOrDefault()
+	if err != nil || loaded.Providers[1].ID != "second" {
+		t.Fatalf("provider edit was not saved: %#v, %v", loaded, err)
+	}
+	updated, _ = m.updateSystemOne(tea.KeyPressMsg{Code: tea.KeyEsc})
+	m = updated.(model)
+	if m.systemOneListCursor != systemOneProviderRow+1 {
+		t.Fatalf("provider list cursor = %d", m.systemOneListCursor)
+	}
+	updated, _ = m.updateSystemOne(systemOneTestKey('d', "d"))
+	m = updated.(model)
+	loaded, err = store.LoadOrDefault()
+	if err != nil || len(loaded.Providers) != 1 || m.systemOnePage != systemOnePageList {
+		t.Fatalf("provider was not deleted immediately: %#v, %v", loaded, err)
+	}
+	updated, _ = m.updateSystemOne(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m = updated.(model)
+	if m.systemOnePage != systemOnePageProvider || m.systemOneInputs[systemOneFieldProviderID].Value() != "typesafe" {
+		t.Fatal("Enter did not reopen selected provider")
+	}
+}
+
+func TestSystemOneModelPickerSavesDefaultAndRoleSelection(t *testing.T) {
+	first := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.Method != http.MethodGet || request.URL.Path != "/v1/models" || request.Header.Get("Authorization") != "Bearer first-key" {
+			t.Errorf("first model request = %s %s, auth %q", request.Method, request.URL.Path, request.Header.Get("Authorization"))
+		}
+		_, _ = writer.Write([]byte(`{"models":[{"name":"first-model"}]}`))
+	}))
+	defer first.Close()
+	second := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.Header.Get("Authorization") != "Bearer second-key" {
+			t.Errorf("second authorization = %q", request.Header.Get("Authorization"))
+		}
+		_, _ = writer.Write([]byte(`{"models":[{"name":"second-model"}]}`))
+	}))
+	defer second.Close()
+
+	store := systemoneconfig.Store{Dir: t.TempDir()}
+	value := systemoneconfig.Default()
+	value.Providers[0].URI = first.URL + "/v1/systemone"
+	value.Providers[0].APIKey = "first-key"
+	value.DefaultModel = "typesafe/first-model"
+	value.Providers = append(value.Providers, systemoneconfig.ProviderConfig{
+		ID: "second", URI: second.URL + "/v1/systemone", APIKey: "second-key",
+	})
+	if err := store.Save(value); err != nil {
+		t.Fatal(err)
+	}
+	m := newModel(t.Context(), config.Store{Dir: store.Dir}, nil)
+	updated, _ := m.enterSystemOne()
+	m = updated.(model)
+	m.systemOneListCursor = 0
+	updated, command := m.updateSystemOne(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m = updated.(model)
+	if !m.systemOneLoading || command == nil {
+		t.Fatal("Enter did not start model discovery")
+	}
+	updated, _ = m.Update(command())
+	m = updated.(model)
+	if !m.systemOnePicking || len(m.systemOneModels) != 2 {
+		t.Fatalf("default models = %#v, status = %q", m.systemOneModels, m.status)
+	}
+	updated, _ = m.updateSystemOne(tea.KeyPressMsg{Code: tea.KeyDown})
+	m = updated.(model)
+	updated, _ = m.updateSystemOne(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m = updated.(model)
+	loaded, err := store.LoadOrDefault()
+	if err != nil || loaded.DefaultModel != "second/second-model" {
+		t.Fatalf("default choice was not saved: %#v, %v", loaded, err)
+	}
+	m.systemOneListCursor = 1
+	updated, command = m.updateSystemOne(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m = updated.(model)
+	updated, _ = m.Update(command())
+	m = updated.(model)
+	if len(m.systemOneModels) != 3 || m.systemOneModels[0].Name != "" {
+		t.Fatalf("role models = %#v", m.systemOneModels)
+	}
+	updated, _ = m.updateSystemOne(tea.KeyPressMsg{Code: tea.KeyDown})
+	m = updated.(model)
+	updated, _ = m.updateSystemOne(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m = updated.(model)
+	loaded, err = store.LoadOrDefault()
+	if err != nil || loaded.RoleModels[systemoneconfig.RoleAgentSkillDecision] != "typesafe/first-model" {
+		t.Fatalf("role choice was not saved: %#v, %v", loaded, err)
+	}
+}
+
+func TestSystemOneProviderRenameUpdatesAssignmentsOnEdit(t *testing.T) {
+	store := systemoneconfig.Store{Dir: t.TempDir()}
+	value := systemoneconfig.Default()
+	value.RoleModels = map[string]string{systemoneconfig.RoleAgentSkillDecision: "typesafe/skill-model"}
+	if err := store.Save(value); err != nil {
+		t.Fatal(err)
+	}
+	m := newModel(t.Context(), config.Store{Dir: store.Dir}, nil)
+	updated, _ := m.enterSystemOne()
+	m = updated.(model)
+	updated, _ = m.updateSystemOne(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m = updated.(model)
+	updated, _ = m.updateSystemOne(systemOneTestKey('x', "x"))
+	m = updated.(model)
+	loaded, err := store.LoadOrDefault()
+	if err != nil || loaded.Providers[0].ID != "typesafex" || loaded.DefaultModel != "typesafex/jev-latest" ||
+		loaded.RoleModels[systemoneconfig.RoleAgentSkillDecision] != "typesafex/skill-model" {
+		t.Fatalf("renamed assignments = %#v, %v", loaded, err)
+	}
+}
+
+func TestSystemOneModelPickerCancelIgnoresLateResult(t *testing.T) {
+	m := newModel(t.Context(), config.Store{Dir: t.TempDir()}, nil)
+	updated, _ := m.enterSystemOne()
+	m = updated.(model)
+	m.systemOneLoading = true
+	m.systemOneRequestID = 7
+	m.systemOneFocus = systemOneFieldDefaultModel
+	updated, _ = m.updateSystemOne(tea.KeyPressMsg{Code: tea.KeyEsc})
+	m = updated.(model)
+	updated, _ = m.Update(systemOneModelsMsg{requestID: 7})
+	m = updated.(model)
+	if m.systemOnePicking || m.systemOneLoading || m.screen != screenSystemOne {
+		t.Fatal("canceled model request changed the settings screen")
 	}
 }
 
@@ -84,111 +267,5 @@ func TestSystemOneStandaloneEscapeQuits(t *testing.T) {
 	_, command := m.updateSystemOne(tea.KeyPressMsg{Code: tea.KeyEsc})
 	if command == nil {
 		t.Fatal("standalone settings did not quit on Escape")
-	}
-}
-
-func TestSystemOneModelPickerUsesDraftConnectionAndSavesSelection(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		if request.Method != http.MethodGet || request.URL.Path != "/v1/models" || request.Header.Get("Authorization") != "Bearer draft-key" {
-			t.Errorf("model request = %s %s, auth %q", request.Method, request.URL.Path, request.Header.Get("Authorization"))
-		}
-		writer.Header().Set("Content-Type", "application/json")
-		_, _ = writer.Write([]byte(`{"models":[{"name":"jev-latest","description":"Stable"},{"name":"jev-preview","description":"Preview"}]}`))
-	}))
-	defer server.Close()
-
-	store := config.Store{Dir: t.TempDir()}
-	m := newModel(t.Context(), store, nil)
-	updated, _ := m.enterSystemOne()
-	m = updated.(model)
-	m.systemOneInputs[0].SetValue(server.URL + "/v1/systemone")
-	m.systemOneInputs[1].SetValue("draft-key")
-	m.systemOneFocus = 2
-	updated, command := m.updateSystemOne(tea.KeyPressMsg{Code: tea.KeyEnter})
-	m = updated.(model)
-	if !m.systemOneLoading || command == nil {
-		t.Fatal("Enter did not start model discovery")
-	}
-	updated, _ = m.Update(command())
-	m = updated.(model)
-	if !m.systemOnePicking || len(m.systemOneModels) != 2 || !strings.Contains(ansi.Strip(m.viewSystemOne()), "jev-preview") {
-		t.Fatalf("model picker = picking %v, models %#v, status %q", m.systemOnePicking, m.systemOneModels, m.status)
-	}
-	updated, _ = m.updateSystemOne(tea.KeyPressMsg{Code: tea.KeyDown})
-	m = updated.(model)
-	updated, _ = m.updateSystemOne(tea.KeyPressMsg{Code: tea.KeyEnter})
-	m = updated.(model)
-	if m.systemOnePicking || m.systemOneInputs[2].Value() != "jev-preview" {
-		t.Fatalf("selected model = %q", m.systemOneInputs[2].Value())
-	}
-	updated, _ = m.updateSystemOne(tea.KeyPressMsg{Code: 's', Mod: tea.ModCtrl})
-	m = updated.(model)
-	value, err := (systemoneconfig.Store{Dir: store.Dir}).LoadOrDefault()
-	if err != nil || value.Providers[0].Model != "jev-preview" || value.Providers[0].URI != server.URL+"/v1/systemone" || value.Providers[0].APIKey != "draft-key" {
-		t.Fatalf("saved model selection = %#v, %v", value, err)
-	}
-}
-
-func TestSystemOneModelPickerCancelIgnoresLateResult(t *testing.T) {
-	m := newModel(t.Context(), config.Store{Dir: t.TempDir()}, nil)
-	updated, _ := m.enterSystemOne()
-	m = updated.(model)
-	m.systemOneLoading = true
-	m.systemOneRequestID = 7
-	m.systemOneFocus = 2
-	updated, _ = m.updateSystemOne(tea.KeyPressMsg{Code: tea.KeyEsc})
-	m = updated.(model)
-	updated, _ = m.Update(systemOneModelsMsg{requestID: 7})
-	m = updated.(model)
-	if m.systemOnePicking || m.systemOneLoading || m.screen != screenSystemOne {
-		t.Fatal("canceled model request changed the settings screen")
-	}
-}
-
-func TestSystemOneSettingsManageMultipleProvidersAndServer(t *testing.T) {
-	store := config.Store{Dir: t.TempDir()}
-	m := newModel(t.Context(), store, nil)
-	updated, _ := m.enterSystemOne()
-	m = updated.(model)
-	updated, _ = m.updateSystemOne(tea.KeyPressMsg{Code: 'n', Mod: tea.ModCtrl})
-	m = updated.(model)
-	if len(m.systemOneConfig.Providers) != 2 || m.systemOneProvider != 1 {
-		t.Fatalf("added providers = %#v", m.systemOneConfig.Providers)
-	}
-	m.systemOneInputs[3].SetValue("second")
-	m.systemOneInputs[0].SetValue("https://second.example/v1/systemone")
-	m.systemOneInputs[1].SetValue("second-key")
-	m.systemOneInputs[2].SetValue("second-model")
-	m.systemOneInputs[5].SetValue("127.0.0.1")
-	m.systemOneInputs[6].SetValue("8787")
-	m.systemOneInputs[7].SetValue("client-key")
-	if strings.Contains(ansi.Strip(m.viewSystemOne()), "second-key") || strings.Contains(ansi.Strip(m.viewSystemOne()), "client-key") {
-		t.Fatal("a secret appeared in the System One screen")
-	}
-	updated, _ = m.updateSystemOne(tea.KeyPressMsg{Code: 'p', Mod: tea.ModCtrl})
-	m = updated.(model)
-	if m.systemOneProvider != 0 {
-		t.Fatalf("provider switch = %d", m.systemOneProvider)
-	}
-	updated, _ = m.updateSystemOne(tea.KeyPressMsg{Code: 'p', Mod: tea.ModCtrl})
-	m = updated.(model)
-	if m.systemOneInputs[3].Value() != "second" || m.systemOneInputs[1].Value() != "second-key" {
-		t.Fatal("provider draft was lost while switching")
-	}
-	updated, _ = m.updateSystemOne(tea.KeyPressMsg{Code: 's', Mod: tea.ModCtrl})
-	m = updated.(model)
-	value, err := (systemoneconfig.Store{Dir: store.Dir}).LoadOrDefault()
-	if err != nil || len(value.Providers) != 2 || value.Selected != "second" ||
-		value.Server.Port != 8787 || value.Server.APIKey != "client-key" ||
-		value.Providers[1].URI != "https://second.example/v1/systemone" {
-		t.Fatalf("saved settings = %#v, %v", value, err)
-	}
-	updated, _ = m.updateSystemOne(tea.KeyPressMsg{Code: 'd', Mod: tea.ModCtrl})
-	m = updated.(model)
-	updated, _ = m.updateSystemOne(tea.KeyPressMsg{Code: 's', Mod: tea.ModCtrl})
-	m = updated.(model)
-	value, err = (systemoneconfig.Store{Dir: store.Dir}).LoadOrDefault()
-	if err != nil || len(value.Providers) != 1 || value.Selected != "typesafe" {
-		t.Fatalf("provider removal = %#v, %v", value, err)
 	}
 }

@@ -21,15 +21,37 @@ type systemOneModelsMsg struct {
 	err       error
 }
 
+type systemOnePage uint8
+
+const (
+	systemOnePageList systemOnePage = iota
+	systemOnePageProvider
+	systemOnePageNetwork
+)
+
+const systemOneProviderRow = 3
+
+const (
+	systemOneFieldProviderID = iota
+	systemOneFieldURI
+	systemOneFieldProviderKey
+	systemOneFieldKeyEnv
+	systemOneFieldDefaultModel
+	systemOneFieldAgentSkillModel
+	systemOneFieldHost
+	systemOneFieldPort
+	systemOneFieldServerKey
+)
+
 func (m *model) initSystemOne(dir string) {
 	m.systemOneStore = systemoneconfig.Store{Dir: dir}
-	for index, prompt := range []string{"URI", "API key", "Model", "Provider ID", "API key environment variable", "Listen host", "Listen port", "Server API key"} {
+	for index, prompt := range []string{"Provider ID", "URI", "Provider API key", "API key environment variable", "Default model", "Agent Skill Decision model", "Listen host", "Listen port", "Server API key"} {
 		field := textinput.New()
 		field.Prompt = ""
 		field.Placeholder = prompt
 		field.SetWidth(72)
 		field.CharLimit = 4096
-		if index == 1 || index == 7 {
+		if index == systemOneFieldProviderKey || index == systemOneFieldServerKey {
 			field.EchoMode = textinput.EchoPassword
 		}
 		m.systemOneInputs[index] = field
@@ -44,10 +66,12 @@ func (m model) enterSystemOne() (tea.Model, tea.Cmd) {
 	}
 	m.systemOneConfig = value
 	m.systemOneProvider = 0
-	for index, provider := range value.Providers {
-		if provider.ID == value.Selected {
-			m.systemOneProvider = index
-			break
+	if provider, _, err := value.ResolveModel(""); err == nil {
+		for index, candidate := range value.Providers {
+			if candidate.ID == provider.ID {
+				m.systemOneProvider = index
+				break
+			}
 		}
 	}
 	m.loadSystemOneFields()
@@ -60,18 +84,22 @@ func (m model) enterSystemOne() (tea.Model, tea.Cmd) {
 	m.systemOneLoading = false
 	m.systemOnePicking = false
 	m.systemOneCursor = 0
+	m.systemOnePage = systemOnePageList
+	m.systemOneListCursor = systemOneProviderRow + m.systemOneProvider
+	m.systemOnePending = false
 	m.systemOneFocus = 0
 	m.screen = screenSystemOne
 	m.input.Blur()
 	m.status = ""
 	m.resize(m.width, m.height)
-	return m, m.focusSystemOne()
+	return m, nil
 }
 
 func (m *model) loadSystemOneFields() {
 	provider := m.systemOneConfig.Providers[m.systemOneProvider]
 	for index, value := range []string{
-		provider.URI, provider.APIKey, provider.Model, provider.ID, provider.APIKeyEnv,
+		provider.ID, provider.URI, provider.APIKey, provider.APIKeyEnv,
+		m.systemOneConfig.DefaultModel, m.systemOneConfig.RoleModels[systemoneconfig.RoleAgentSkillDecision],
 		m.systemOneConfig.Server.Host, strconv.Itoa(m.systemOneConfig.Server.Port), m.systemOneConfig.Server.APIKey,
 	} {
 		m.systemOneInputs[index].SetValue(value)
@@ -82,23 +110,50 @@ func (m *model) captureSystemOneFields() {
 	oldID := m.systemOneConfig.Providers[m.systemOneProvider].ID
 	provider := m.systemOneProviderDraft()
 	m.systemOneConfig.Providers[m.systemOneProvider] = provider
-	if m.systemOneConfig.Selected == oldID {
-		m.systemOneConfig.Selected = provider.ID
+	defaultModel := strings.TrimSpace(m.systemOneInputs[systemOneFieldDefaultModel].Value())
+	roleModel := strings.TrimSpace(m.systemOneInputs[systemOneFieldAgentSkillModel].Value())
+	if oldID != provider.ID {
+		replacePrefix := func(model string) string {
+			if strings.HasPrefix(model, oldID+"/") {
+				return provider.ID + strings.TrimPrefix(model, oldID)
+			}
+			return model
+		}
+		defaultModel = replacePrefix(defaultModel)
+		roleModel = replacePrefix(roleModel)
+		for role, model := range m.systemOneConfig.RoleModels {
+			m.systemOneConfig.RoleModels[role] = replacePrefix(model)
+		}
+		m.systemOneInputs[systemOneFieldDefaultModel].SetValue(defaultModel)
+		m.systemOneInputs[systemOneFieldAgentSkillModel].SetValue(roleModel)
 	}
-	m.systemOneConfig.Server.Host = strings.TrimSpace(m.systemOneInputs[5].Value())
-	if port, err := strconv.Atoi(strings.TrimSpace(m.systemOneInputs[6].Value())); err == nil {
+	m.systemOneConfig.DefaultModel = defaultModel
+	if roleModel != "" {
+		if m.systemOneConfig.RoleModels == nil {
+			m.systemOneConfig.RoleModels = make(map[string]string)
+		}
+		m.systemOneConfig.RoleModels[systemoneconfig.RoleAgentSkillDecision] = roleModel
+	} else {
+		delete(m.systemOneConfig.RoleModels, systemoneconfig.RoleAgentSkillDecision)
+	}
+	m.systemOneConfig.Server.Host = strings.TrimSpace(m.systemOneInputs[systemOneFieldHost].Value())
+	if port, err := strconv.Atoi(strings.TrimSpace(m.systemOneInputs[systemOneFieldPort].Value())); err == nil {
 		m.systemOneConfig.Server.Port = port
 	} else {
 		m.systemOneConfig.Server.Port = -1
 	}
-	m.systemOneConfig.Server.APIKey = m.systemOneInputs[7].Value()
+	m.systemOneConfig.Server.APIKey = m.systemOneInputs[systemOneFieldServerKey].Value()
 }
 
 func (m *model) focusSystemOne() tea.Cmd {
 	for index := range m.systemOneInputs {
 		m.systemOneInputs[index].Blur()
 	}
-	if m.systemOneFocus == 2 || m.systemOneLoading || m.systemOnePicking {
+	if m.systemOnePage == systemOnePageList {
+		return nil
+	}
+	if m.systemOneFocus == systemOneFieldDefaultModel || m.systemOneFocus == systemOneFieldAgentSkillModel ||
+		m.systemOneLoading || m.systemOnePicking {
 		return nil
 	}
 	return m.systemOneInputs[m.systemOneFocus].Focus()
@@ -108,90 +163,169 @@ func (m model) updateSystemOne(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if m.systemOneLoading || m.systemOnePicking {
 		return m.updateSystemOneModels(key)
 	}
+	if m.systemOnePage == systemOnePageList {
+		return m.updateSystemOneList(key)
+	}
+	return m.updateSystemOneEditor(key)
+}
+
+func (m model) updateSystemOneList(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	rowCount := systemOneProviderRow + len(m.systemOneConfig.Providers)
 	switch key.String() {
 	case "esc":
-		for index := range m.systemOneInputs {
-			m.systemOneInputs[index].Blur()
-		}
 		if m.isStandaloneScreen(screenSystemOne) {
 			return m, tea.Quit
 		}
 		m.screen = screenChat
 		m.status = ""
 		return m, m.input.Focus()
-	case "tab", "down":
-		m.systemOneFocus = (m.systemOneFocus + 1) % len(m.systemOneInputs)
-		return m, m.focusSystemOne()
-	case "shift+tab", "up":
-		m.systemOneFocus = (m.systemOneFocus - 1 + len(m.systemOneInputs)) % len(m.systemOneInputs)
-		return m, m.focusSystemOne()
+	case "down", "tab":
+		m.systemOneListCursor = (m.systemOneListCursor + 1) % rowCount
+		return m, nil
+	case "up":
+		m.systemOneListCursor = (m.systemOneListCursor - 1 + rowCount) % rowCount
+		return m, nil
 	case "enter":
-		if m.systemOneFocus != 2 {
-			if m.systemOneFocus == len(m.systemOneInputs)-1 {
-				m.systemOneFocus = 0
-			} else {
-				m.systemOneFocus++
-			}
+		switch m.systemOneListCursor {
+		case 0:
+			m.systemOneFocus = systemOneFieldDefaultModel
+			return m.loadSystemOneModels()
+		case 1:
+			m.systemOneFocus = systemOneFieldAgentSkillModel
+			return m.loadSystemOneModels()
+		case 2:
+			m.systemOnePage = systemOnePageNetwork
+			m.systemOneFocus = systemOneFieldHost
+			m.status = ""
+			return m, m.focusSystemOne()
+		default:
+			m.systemOneProvider = m.systemOneListCursor - systemOneProviderRow
+			m.loadSystemOneFields()
+			m.systemOnePage = systemOnePageProvider
+			m.systemOneFocus = systemOneFieldProviderID
+			m.status = ""
 			return m, m.focusSystemOne()
 		}
-		return m.loadSystemOneModels()
-	case "ctrl+n":
-		m.captureSystemOneFields()
+	case "a":
 		id := fmt.Sprintf("provider-%d", len(m.systemOneConfig.Providers)+1)
 		for m.systemOneIDExists(id) {
 			id += "-new"
 		}
-		m.systemOneConfig.Providers = append(m.systemOneConfig.Providers, systemoneconfig.ProviderConfig{
-			ID: id, URI: systemoneconfig.DefaultURI, Model: systemoneconfig.DefaultModel,
+		candidate := m.systemOneConfig
+		candidate.Providers = append(append([]systemoneconfig.ProviderConfig(nil), candidate.Providers...), systemoneconfig.ProviderConfig{
+			ID: id, URI: systemoneconfig.DefaultURI,
 		})
+		if err := m.systemOneStore.Save(candidate); err != nil {
+			m.status = err.Error()
+			return m, nil
+		}
+		m.systemOneConfig = candidate
 		m.systemOneProvider = len(m.systemOneConfig.Providers) - 1
-		m.systemOneConfig.Selected = id
+		m.systemOneListCursor = systemOneProviderRow + m.systemOneProvider
 		m.loadSystemOneFields()
-		m.systemOneFocus = 3
-		m.status = "Provider added · configure its API key and press ctrl+s to save"
+		m.systemOnePage = systemOnePageProvider
+		m.systemOneFocus = systemOneFieldProviderID
+		m.status = "Provider added"
 		return m, m.focusSystemOne()
-	case "ctrl+p":
-		m.captureSystemOneFields()
-		m.systemOneProvider = (m.systemOneProvider + 1) % len(m.systemOneConfig.Providers)
-		m.systemOneConfig.Selected = m.systemOneConfig.Providers[m.systemOneProvider].ID
-		m.loadSystemOneFields()
-		m.status = ""
-		return m, m.focusSystemOne()
-	case "ctrl+d":
+	case "d":
+		if m.systemOneListCursor < systemOneProviderRow {
+			return m, nil
+		}
 		if len(m.systemOneConfig.Providers) == 1 {
 			m.status = "At least one provider is required"
 			return m, nil
 		}
-		m.captureSystemOneFields()
-		m.systemOneConfig.Providers = append(
-			m.systemOneConfig.Providers[:m.systemOneProvider],
-			m.systemOneConfig.Providers[m.systemOneProvider+1:]...,
+		index := m.systemOneListCursor - systemOneProviderRow
+		candidate := m.systemOneConfig
+		candidate.Providers = append(
+			append([]systemoneconfig.ProviderConfig(nil), candidate.Providers[:index]...),
+			candidate.Providers[index+1:]...,
 		)
-		if m.systemOneProvider >= len(m.systemOneConfig.Providers) {
-			m.systemOneProvider = len(m.systemOneConfig.Providers) - 1
+		if err := m.systemOneStore.Save(candidate); err != nil {
+			m.status = err.Error()
+			return m, nil
 		}
-		m.systemOneConfig.Selected = m.systemOneConfig.Providers[m.systemOneProvider].ID
+		m.systemOneConfig = candidate
+		m.systemOneProvider = min(index, len(candidate.Providers)-1)
+		m.systemOneListCursor = systemOneProviderRow + m.systemOneProvider
 		m.loadSystemOneFields()
-		m.status = "Provider removed · press ctrl+s to save"
-		return m, m.focusSystemOne()
-	case "ctrl+s":
-		return m.saveSystemOne()
-	}
-	if m.systemOneFocus == 2 {
+		m.status = "Provider removed"
 		return m, nil
 	}
+	return m, nil
+}
+
+func (m model) updateSystemOneEditor(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	first, last := systemOneFieldProviderID, systemOneFieldKeyEnv
+	if m.systemOnePage == systemOnePageNetwork {
+		first, last = systemOneFieldHost, systemOneFieldServerKey
+	}
+	switch key.String() {
+	case "esc":
+		value, err := m.systemOneStore.LoadOrDefault()
+		if err != nil {
+			m.status = err.Error()
+			return m, nil
+		}
+		m.systemOneConfig = value
+		m.systemOnePending = false
+		m.systemOneProvider = min(m.systemOneProvider, len(value.Providers)-1)
+		m.loadSystemOneFields()
+		m.systemOnePage = systemOnePageList
+		m.status = ""
+		return m, m.focusSystemOne()
+	case "enter":
+		if m.systemOneFocus == last {
+			if m.systemOnePending {
+				return m, nil
+			}
+			m.systemOnePage = systemOnePageList
+			return m, m.focusSystemOne()
+		}
+		m.systemOneFocus++
+		return m, m.focusSystemOne()
+	case "tab", "down":
+		m.systemOneFocus++
+		if m.systemOneFocus > last {
+			m.systemOneFocus = first
+		}
+		return m, m.focusSystemOne()
+	case "shift+tab", "up":
+		m.systemOneFocus--
+		if m.systemOneFocus < first {
+			m.systemOneFocus = last
+		}
+		return m, m.focusSystemOne()
+	}
+	return m.updateSystemOneInput(key)
+}
+
+func (m model) updateSystemOneInput(message tea.Msg) (tea.Model, tea.Cmd) {
+	if m.systemOneLoading || m.systemOnePicking || m.systemOnePage == systemOnePageList {
+		return m, nil
+	}
+	first, last := systemOneFieldProviderID, systemOneFieldKeyEnv
+	if m.systemOnePage == systemOnePageNetwork {
+		first, last = systemOneFieldHost, systemOneFieldServerKey
+	}
+	if m.systemOneFocus < first || m.systemOneFocus > last {
+		return m, nil
+	}
+	before := m.systemOneInputs[m.systemOneFocus].Value()
 	var command tea.Cmd
-	m.systemOneInputs[m.systemOneFocus], command = m.systemOneInputs[m.systemOneFocus].Update(key)
+	m.systemOneInputs[m.systemOneFocus], command = m.systemOneInputs[m.systemOneFocus].Update(message)
+	if m.systemOneInputs[m.systemOneFocus].Value() != before {
+		m.persistSystemOne()
+	}
 	return m, command
 }
 
 func (m model) systemOneProviderDraft() systemoneconfig.ProviderConfig {
 	return systemoneconfig.ProviderConfig{
-		ID:        strings.TrimSpace(m.systemOneInputs[3].Value()),
-		URI:       strings.TrimSpace(m.systemOneInputs[0].Value()),
-		APIKey:    m.systemOneInputs[1].Value(),
-		APIKeyEnv: strings.TrimSpace(m.systemOneInputs[4].Value()),
-		Model:     strings.TrimSpace(m.systemOneInputs[2].Value()),
+		ID:        strings.TrimSpace(m.systemOneInputs[systemOneFieldProviderID].Value()),
+		URI:       strings.TrimSpace(m.systemOneInputs[systemOneFieldURI].Value()),
+		APIKey:    m.systemOneInputs[systemOneFieldProviderKey].Value(),
+		APIKeyEnv: strings.TrimSpace(m.systemOneInputs[systemOneFieldKeyEnv].Value()),
 	}
 }
 
@@ -205,26 +339,40 @@ func (m model) systemOneIDExists(id string) bool {
 }
 
 func (m model) loadSystemOneModels() (tea.Model, tea.Cmd) {
-	client, err := m.systemOneProviderDraft().NewClient()
-	if err != nil {
-		m.status = err.Error()
-		return m, nil
-	}
+	providers := append([]systemoneconfig.ProviderConfig(nil), m.systemOneConfig.Providers...)
 	ctx, cancel := context.WithTimeout(m.ctx, 20*time.Second)
 	m.systemOneCancel = cancel
 	m.systemOneRequestID++
 	requestID := m.systemOneRequestID
+	m.systemOneModelTarget = m.systemOneFocus
 	m.systemOneLoading = true
 	m.systemOneModels = nil
-	m.status = "Loading System One models…"
+	m.status = "Loading models from System One providers…"
 	m.focusSystemOne()
 	return m, func() tea.Msg {
 		defer cancel()
-		result, err := client.ListModels(ctx)
-		if err != nil {
-			return systemOneModelsMsg{requestID: requestID, err: err}
+		models := make([]systemone.Model, 0)
+		var firstError error
+		for _, provider := range providers {
+			client, err := provider.NewClient()
+			if err == nil {
+				var result *systemone.ModelsResult
+				result, err = client.ListModels(ctx)
+				if err == nil {
+					for _, candidate := range result.Models {
+						candidate.Name = provider.ID + "/" + candidate.Name
+						models = append(models, candidate)
+					}
+				}
+			}
+			if err != nil && firstError == nil {
+				firstError = fmt.Errorf("%s: %w", provider.ID, err)
+			}
 		}
-		return systemOneModelsMsg{requestID: requestID, models: result.Models}
+		if len(models) == 0 && firstError != nil {
+			return systemOneModelsMsg{requestID: requestID, err: firstError}
+		}
+		return systemOneModelsMsg{requestID: requestID, models: models}
 	}
 }
 
@@ -239,13 +387,16 @@ func (m model) receiveSystemOneModels(message systemOneModelsMsg) (tea.Model, te
 		return m, m.focusSystemOne()
 	}
 	if len(message.models) == 0 {
-		m.status = "No models returned by the System One endpoint"
+		m.status = "No models returned by the configured System One providers"
 		return m, m.focusSystemOne()
+	}
+	if m.systemOneModelTarget == systemOneFieldAgentSkillModel {
+		message.models = append([]systemone.Model{{Description: "Use default model"}}, message.models...)
 	}
 	m.systemOneModels = message.models
 	m.systemOneCursor = 0
 	for index, candidate := range message.models {
-		if candidate.Name == m.systemOneInputs[2].Value() {
+		if candidate.Name == m.systemOneInputs[m.systemOneModelTarget].Value() {
 			m.systemOneCursor = index
 			break
 		}
@@ -280,72 +431,123 @@ func (m model) updateSystemOneModels(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.systemOneCursor = (m.systemOneCursor + 1) % len(m.systemOneModels)
 	case "enter":
 		selected := m.systemOneModels[m.systemOneCursor].Name
-		m.systemOneInputs[2].SetValue(selected)
+		m.systemOneInputs[m.systemOneModelTarget].SetValue(selected)
 		m.systemOnePicking = false
-		m.status = "Selected " + selected + " · press ctrl+s to save"
-		return m, m.focusSystemOne()
+		if m.persistSystemOne() {
+			if selected == "" {
+				m.status = "Agent Skill Decision uses the default model"
+			} else {
+				m.status = "Selected " + selected
+			}
+		}
+		return m, nil
 	}
 	return m, nil
 }
 
-func (m model) saveSystemOne() (tea.Model, tea.Cmd) {
+func (m *model) persistSystemOne() bool {
 	m.captureSystemOneFields()
 	if err := m.systemOneStore.Save(m.systemOneConfig); err != nil {
+		m.systemOnePending = true
 		m.status = err.Error()
-		return m, nil
+		return false
 	}
+	m.systemOnePending = false
 	m.status = "System One settings saved"
-	return m, nil
+	return true
 }
 
 func (m model) viewSystemOne() string {
-	labels := []string{"Endpoint URI", "Provider API key", "Model", "Provider ID", "API key env", "Listen host", "Listen port", "Server API key"}
 	var body strings.Builder
 	body.WriteString(titleStyle.Render("q · System One"))
 	body.WriteString("\n")
 	body.WriteString(subtleStyle.Render("settings · " + m.systemOneStore.Path()))
-	body.WriteString("\n")
-	body.WriteString(activeLabelStyle.Render(fmt.Sprintf("Provider %d/%d · %s", m.systemOneProvider+1, len(m.systemOneConfig.Providers), m.systemOneInputs[3].Value())))
 	body.WriteString("\n\n")
 	if m.systemOnePicking {
 		body.WriteString(m.viewSystemOneModels())
 	} else if m.systemOneLoading {
-		body.WriteString(subtleStyle.Render("Loading available models from the configured endpoint…"))
+		body.WriteString(subtleStyle.Render("Loading models from configured providers…"))
+	} else if m.systemOnePage == systemOnePageList {
+		body.WriteString(m.viewSystemOneList())
 	} else {
-		for index, label := range labels {
-			m.systemOneInputs[index].SetWidth(max(16, min(72, m.width-28)))
-			style := subtleStyle
-			if index == m.systemOneFocus {
-				style = activeLabelStyle
-			}
-			body.WriteString(style.Render(fmt.Sprintf("%-18s", label)))
-			if index == 2 {
-				body.WriteString(activeLabelStyle.Render("‹ " + m.systemOneInputs[index].Value() + " ›"))
-			} else {
-				body.WriteString(m.systemOneInputs[index].View())
-			}
-			body.WriteString("\n")
-		}
-		body.WriteString("\n")
-		body.WriteString(subtleStyle.Render("Enter on Model loads the provider's model list. A public listen host requires a server API key."))
-		body.WriteString("\n")
-	}
-	if m.systemOneInputs[1].Value() == "" && os.Getenv(m.systemOneInputs[4].Value()) != "" {
-		body.WriteString(subtleStyle.Render("Provider API key: using " + m.systemOneInputs[4].Value() + " from the environment"))
-		body.WriteString("\n")
+		body.WriteString(m.viewSystemOneEditor())
 	}
 	if m.status != "" {
+		body.WriteString("\n")
 		body.WriteString(subtleStyle.Render(m.status))
 		body.WriteString("\n")
 	}
-	help := "tab/↑/↓ field · enter next/list models · ctrl+n add · ctrl+p next provider · ctrl+d remove · ctrl+s save · esc back"
+	help := "↑/↓/tab select · enter open · a add provider · d delete provider · esc back"
+	if m.systemOnePage != systemOnePageList {
+		help = "tab/↑/↓ field · enter next/back · esc back"
+	}
 	if m.systemOnePicking {
-		help = "↑/↓ select · enter choose · esc back"
+		help = "↑/↓ select · enter choose and save · esc back"
 	} else if m.systemOneLoading {
 		help = "esc cancel"
 	}
+	body.WriteString("\n")
 	body.WriteString(helpStyle.Render(help))
 	return frameStyle.Width(max(36, m.width-4)).Render(body.String())
+}
+
+func (m model) viewSystemOneList() string {
+	var body strings.Builder
+	rows := []string{
+		"Default model · " + m.systemOneConfig.DefaultModel,
+		"Agent Skill Decision · " + m.systemOneConfig.ModelForRole(systemoneconfig.RoleAgentSkillDecision),
+		"Network · " + m.systemOneConfig.Server.Host + ":" + strconv.Itoa(m.systemOneConfig.Server.Port),
+	}
+	for _, provider := range m.systemOneConfig.Providers {
+		rows = append(rows, "Provider · "+provider.ID+" · "+provider.URI)
+	}
+	for index, row := range rows {
+		prefix := "  "
+		style := subtleStyle
+		if index == m.systemOneListCursor {
+			prefix = "› "
+			style = activeLabelStyle
+		}
+		body.WriteString(style.Render(prefix + row))
+		body.WriteString("\n")
+	}
+	return body.String()
+}
+
+func (m model) viewSystemOneEditor() string {
+	var body strings.Builder
+	first, last := systemOneFieldProviderID, systemOneFieldKeyEnv
+	labels := []string{"Provider ID", "Endpoint URI", "Provider API key", "API key env"}
+	if m.systemOnePage == systemOnePageNetwork {
+		first, last = systemOneFieldHost, systemOneFieldServerKey
+		labels = []string{"Listen host", "Listen port", "Server API key"}
+		body.WriteString(agentTraceTitleStyle(m.dark).Render("NETWORK"))
+	} else {
+		body.WriteString(agentTraceTitleStyle(m.dark).Render(fmt.Sprintf(
+			"PROVIDER %d/%d", m.systemOneProvider+1, len(m.systemOneConfig.Providers),
+		)))
+	}
+	body.WriteString("\n\n")
+	for index := first; index <= last; index++ {
+		label := labels[index-first]
+		m.systemOneInputs[index].SetWidth(max(16, min(72, m.width-28)))
+		style := subtleStyle
+		if index == m.systemOneFocus {
+			style = activeLabelStyle
+		}
+		body.WriteString(style.Render(fmt.Sprintf("%-18s", label)))
+		body.WriteString(m.systemOneInputs[index].View())
+		body.WriteString("\n")
+	}
+	if m.systemOnePage == systemOnePageNetwork {
+		body.WriteString("\n")
+		body.WriteString(subtleStyle.Render("A public listen host requires a server API key."))
+	} else if m.systemOneInputs[systemOneFieldProviderKey].Value() == "" &&
+		os.Getenv(m.systemOneInputs[systemOneFieldKeyEnv].Value()) != "" {
+		body.WriteString("\n")
+		body.WriteString(subtleStyle.Render("Using " + m.systemOneInputs[systemOneFieldKeyEnv].Value() + " from the environment"))
+	}
+	return body.String()
 }
 
 func (m model) viewSystemOneModels() string {
@@ -362,6 +564,9 @@ func (m model) viewSystemOneModels() string {
 			style = activeLabelStyle
 		}
 		line := prefix + candidate.Name
+		if candidate.Name == "" {
+			line += candidate.Description
+		}
 		if candidate.ReleaseDate != "" {
 			line += " · " + candidate.ReleaseDate
 		}
