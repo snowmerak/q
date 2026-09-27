@@ -23,17 +23,19 @@ delegate(subagent_name, prompt) -> TaskResult | captured ACP result
 
 위임 모드에서는 루트의 시스템 프롬프트가 조정자 역할을 설명한다. 루트는
 `delegate_list`로 사용 가능한 에이전트를 확인하고, 조사·구현·검토·연구를 범위가
-명확한 `delegate` 호출로 맡긴다. 결과를 확인하고 후속 작업을 조율한 뒤 사용자에게
-보고한다. 간단한 대화에는 바로 답할 수 있다.
+명확한 `delegate` 호출로 맡기는 것을 우선한다. 결과를 확인하고 후속 작업을
+조율한 뒤 사용자에게 보고한다. 간단한 대화에는 바로 답할 수 있다.
 
-도구 목록에서 사용 가능한 builtin subagent가 가진 도구는 루트에 직접 노출하지 않는다.
-해당 도구의 직접 호출도 거절한다. 위임 가능한 builtin이 없는 기능을 위한 도구와
-루프의 `task_start`, `task_complete`, `ask_to_user`는 루트에 남는다. 자식 에이전트의
-도구 범위는 변경하지 않는다. `builtin/web-search` 또는 `builtin/web-tester`를 실제로
-사용할 수 있으면 대응하는 루트의 외부 도구도 위임 경로로만 사용한다.
+루트는 현재 default role에 설정된 Q 도구를 그대로 받는다. 메인 루프가
+`task_start`, `ask_to_user`, `task_complete`와 세 `memory_*` 도구를 추가하고,
+호출 가능한 subagent가 있으면 `delegate_list`와 `delegate`를 추가한다.
+하위 에이전트의 도구 목록을 근거로 루트 도구를 빼거나 직접 호출을 막지 않는다.
+따라서 스킬, Loom, workspace, 외부 도구도 default role 설정에서 허용한 범위에
+따라 루트가 사용할 수 있다. 각 하위 에이전트의 도구 범위는 해당 정의와 역할
+설정이 독립적으로 결정한다.
 시작된 작업을 `succeeded`로 끝내려면 그 작업에서 `delegate` 또는 직접 작업 도구가
-한 번 이상 성공해야 한다. `delegate_list` 조회와 실패한 호출은 실작업 증거로 세지
-않는다. 사용할 수 있는 경로가 없으면 실제 장애를 `blocked`로 보고한다. 재시작한
+한 번 이상 성공해야 한다. `delegate_list` 조회, 메모리 갱신과 실패한 호출은 실작업
+증거로 세지 않는다. 사용할 수 있는 경로가 없으면 실제 장애를 `blocked`로 보고한다. 재시작한
 작업에서는 축약되지 않은 세션 transcript의 도구 결과를 확인한다.
 
 세션 파일의 `loop_mode` 필드에 값을 저장한다. 시스템 프롬프트는 복구할 때 모드에서

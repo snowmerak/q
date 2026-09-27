@@ -50,13 +50,12 @@ type delegationDispatcher struct {
 }
 
 type delegationRuntime struct {
-	base           agentToolRuntime
-	dispatcher     *delegationDispatcher
-	caller         string
-	stack          []string
-	store          *workspace.Store
-	taskID         string
-	delegatedTools map[string]bool
+	base       agentToolRuntime
+	dispatcher *delegationDispatcher
+	caller     string
+	stack      []string
+	store      *workspace.Store
+	taskID     string
 }
 
 type delegateInput struct {
@@ -136,28 +135,6 @@ func (m model) configuredDelegationRuntimeFor(base agentToolRuntime, root, calle
 		dispatcher.sink = m.archive
 	}
 	runtime := &delegationRuntime{base: base, dispatcher: dispatcher, caller: caller, stack: append([]string(nil), stack...), store: dispatcher.store}
-	if caller == "" && m.loopMode == loopModeDelegation {
-		runtime.delegatedTools = make(map[string]bool)
-		for _, definition := range subagent.PublicAgentDefinitions() {
-			if definition.Info.Source != "builtin" || !dispatcher.available(definition.Info.Name) {
-				continue
-			}
-			for _, name := range definition.Tools {
-				// The coordinator needs both tools for automatic task_start
-				// hints and for reading a selected skill itself.
-				if name == "search_skills" || name == "get_skill" {
-					continue
-				}
-				runtime.delegatedTools[name] = true
-			}
-			switch definition.Info.Name {
-			case subagent.BuiltinWebSearchID:
-				runtime.delegatedTools[subagent.ExternalSearchToolName] = true
-			case subagent.BuiltinWebTesterID:
-				runtime.delegatedTools[subagent.ExternalWebTesterToolName] = true
-			}
-		}
-	}
 	return runtime, nil
 }
 
@@ -192,12 +169,7 @@ func (r *delegationRuntime) Tools() []client.Tool {
 	if r == nil {
 		return nil
 	}
-	result := make([]client.Tool, 0, len(r.base.Tools())+2)
-	for _, tool := range r.base.Tools() {
-		if !r.delegatedTools[tool.Function.Name] {
-			result = append(result, tool)
-		}
-	}
+	result := append([]client.Tool(nil), r.base.Tools()...)
 	if len(r.available()) > 0 {
 		result = append(result, subagent.DelegateTools()...)
 	}
@@ -244,9 +216,6 @@ func (r *delegationRuntime) Call(ctx context.Context, call client.ToolCall) (cli
 		}
 		return r.dispatcher.dispatch(ctx, r.caller, r.stack, r.store, r.taskID, call, input)
 	default:
-		if r.delegatedTools[call.Function.Name] {
-			return client.ToolResult{Content: fmt.Sprintf("%s is delegated in this mode; use delegate", call.Function.Name), IsError: true}, nil
-		}
 		return r.base.Call(ctx, call)
 	}
 }

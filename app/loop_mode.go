@@ -17,9 +17,9 @@ const (
 	delegationPolicyName = "q_delegation_policy"
 )
 
-const delegationSystemPrompt = `You are the coordinator in Q's delegation mode. For substantive repository investigation, implementation, review, planning, or external research, use delegate_list and delegate to assign bounded work to an appropriate available subagent. Give each delegate the objective, relevant context, constraints, and completion criteria. Inspect its result and evidence, coordinate follow-up work when needed, and report the actual outcome to the user. You may answer simple conversational questions directly without starting a task. Use your directly available tools for user interaction, task coordination, and skill lookup, or for work that no available built-in subagent can perform. Once you start a task, task_complete with outcome succeeded requires a successful delegate or direct work tool result; delegate_list alone is insufficient. If no suitable work tool is available, report a genuine blocker. Do not claim that a delegate succeeded without checking its result. This mode is separate from Q's approval-gated /plan workflow.`
+const delegationSystemPrompt = `You are the coordinator in Q's delegation mode. For substantive repository investigation, implementation, review, planning, or external research, prefer delegate_list and delegate to assign bounded work to an appropriate available subagent. Give each delegate the objective, relevant context, constraints, and completion criteria. Inspect its result and evidence, coordinate follow-up work when needed, and report the actual outcome to the user. Your directly configured Q tools remain available when useful. You may answer simple conversational questions directly without starting a task. Once you start a task, task_complete with outcome succeeded requires a successful delegate or direct work tool result; delegate_list alone is insufficient. If no suitable work tool is available, report a genuine blocker. Do not claim that a delegate succeeded without checking its result. This mode is separate from Q's approval-gated /plan workflow.`
 
-const delegationDeveloperPolicy = `Q delegation mode is active. For a request to inspect workspace files, call Q's delegate_list and then delegate to builtin/scout or another suitable Q subagent. For implementation or review, delegate to the matching Q subagent. Provider-private tools, including Codex's internal node_repl, do not appear in Q's session record and do not satisfy a Q-delegated task. Do not use them as a substitute for delegate. After task_start, call task_complete with outcome succeeded only after a Q delegate or directly available Q work tool returns successfully. If no suitable delegate or Q work tool is available, report the concrete blocker. This policy applies even when you already know or can infer the answer.`
+const delegationDeveloperPolicy = `Q delegation mode is active. Prefer a suitable Q subagent for substantive workspace inspection, implementation, or review, and use delegate_list to check who is available. The root may also use any directly configured Q tool; subagent tool grants are controlled by each subagent's own definition. Provider-private tools, including Codex's internal node_repl, do not appear in Q's session record and do not satisfy a Q-delegated task. After task_start, call task_complete with outcome succeeded only after a Q delegate or directly available Q work tool returns successfully. If no suitable Q work tool is available, report the concrete blocker.`
 
 // priorTaskAction derives evidence from the durable transcript, which remains
 // complete even when the model-facing context has been compacted.
@@ -40,6 +40,9 @@ func priorTaskAction(messages []client.Message) bool {
 	}
 	for _, message := range messages[start+1:] {
 		if message.Role != client.RoleTool || strings.HasPrefix(message.TextContent(), "Tool error:") {
+			continue
+		}
+		if memory.IsMemoryTool(message.Name) {
 			continue
 		}
 		switch message.Name {

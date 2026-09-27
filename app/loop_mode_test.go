@@ -107,7 +107,7 @@ func TestACPModeCommandPersistsForSession(t *testing.T) {
 	}
 }
 
-func TestDelegationModeReservesBuiltinToolsForSubagents(t *testing.T) {
+func TestDelegationModeKeepsConfiguredRootTools(t *testing.T) {
 	value := config.Default()
 	value.Provider.Model = "test-model"
 	m := newModel(context.Background(), config.Store{Dir: t.TempDir()}, nil)
@@ -118,6 +118,9 @@ func TestDelegationModeReservesBuiltinToolsForSubagents(t *testing.T) {
 		{Type: client.ToolTypeFunction, Function: client.FunctionDefinition{Name: "write_file"}},
 		{Type: client.ToolTypeFunction, Function: client.FunctionDefinition{Name: "search_skills"}},
 		{Type: client.ToolTypeFunction, Function: client.FunctionDefinition{Name: "get_skill"}},
+		{Type: client.ToolTypeFunction, Function: client.FunctionDefinition{Name: "loom_inspect"}},
+		{Type: client.ToolTypeFunction, Function: client.FunctionDefinition{Name: "loom_read"}},
+		{Type: client.ToolTypeFunction, Function: client.FunctionDefinition{Name: "loom_eval"}},
 		{Type: client.ToolTypeFunction, Function: client.FunctionDefinition{Name: "residual_tool"}},
 	}}
 	m.toolRuntime = base
@@ -135,12 +138,21 @@ func TestDelegationModeReservesBuiltinToolsForSubagents(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if toolAvailable(runtime, "read_file") || toolAvailable(runtime, "write_file") || !toolAvailable(runtime, "search_skills") || !toolAvailable(runtime, "get_skill") || !toolAvailable(runtime, "residual_tool") || !toolAvailable(runtime, subagent.DelegateToolName) {
-		t.Fatalf("unexpected delegation tools: %#v", runtime.Tools())
+	for _, tool := range base.Tools() {
+		if !toolAvailable(runtime, tool.Function.Name) {
+			t.Fatalf("delegation mode removed configured root tool %q", tool.Function.Name)
+		}
+	}
+	if !toolAvailable(runtime, subagent.DelegateToolName) || !toolAvailable(runtime, subagent.DelegateListToolName) {
+		t.Fatalf("delegation tools are missing: %#v", runtime.Tools())
 	}
 	result, err := runtime.Call(context.Background(), client.ToolCall{Function: client.FunctionCall{Name: "write_file"}})
-	if err != nil || !result.IsError || len(base.calls) != 0 {
-		t.Fatalf("reserved tool reached base: result=%#v err=%v calls=%d", result, err, len(base.calls))
+	if err != nil || result.IsError || len(base.calls) != 1 || base.calls[0].Function.Name != "write_file" {
+		t.Fatalf("configured root tool did not reach base: result=%#v err=%v calls=%#v", result, err, base.calls)
+	}
+	result, err = runtime.Call(context.Background(), client.ToolCall{Function: client.FunctionCall{Name: "loom_read"}})
+	if err != nil || result.IsError || len(base.calls) != 2 || base.calls[1].Function.Name != "loom_read" {
+		t.Fatalf("coordinator evidence read did not reach base: result=%#v err=%v calls=%#v", result, err, base.calls)
 	}
 	child, err := m.configuredDelegationRuntimeFor(base, root, subagent.BuiltinCoderID, []string{subagent.BuiltinCoderID})
 	if err != nil {
@@ -219,6 +231,10 @@ func TestPriorTaskActionUsesLatestStartedTask(t *testing.T) {
 	failed := client.Message{Role: client.RoleTool, Name: subagent.DelegateToolName, Content: "Tool error: unavailable"}
 	if priorTaskAction([]client.Message{start, list, failed}) {
 		t.Fatal("listing and failed delegation counted as completed work")
+	}
+	memoryUpdate := client.Message{Role: client.RoleTool, Name: "memory_record_fact", Content: `{"ok":true}`}
+	if priorTaskAction([]client.Message{start, memoryUpdate}) {
+		t.Fatal("memory update counted as prior work")
 	}
 	if !priorTaskAction([]client.Message{start, delegate}) {
 		t.Fatal("successful delegation was not retained across turns")
