@@ -10,6 +10,7 @@ import (
 	"github.com/snowmerak/q/config"
 	"github.com/snowmerak/q/loom"
 	"github.com/snowmerak/q/sessionstore"
+	"github.com/snowmerak/q/tools/builtin"
 )
 
 type fakeScoutClient struct {
@@ -43,7 +44,19 @@ type fakeScoutTools struct {
 	result    *client.ToolResult
 }
 
-func (f *fakeScoutTools) Tools() []client.Tool { return append([]client.Tool(nil), f.available...) }
+func (f *fakeScoutTools) Tools() []client.Tool {
+	result := append([]client.Tool(nil), f.available...)
+	for _, tool := range skillTestTools() {
+		if !hasTool(result, tool.Function.Name) {
+			result = append(result, tool)
+		}
+	}
+	return result
+}
+
+func (*fakeScoutTools) SearchSkillHints(context.Context, string, int) (builtin.SearchSkillsOutput, error) {
+	return builtin.SearchSkillsOutput{}, nil
+}
 
 func (f *fakeScoutTools) Call(_ context.Context, call client.ToolCall) (client.ToolResult, error) {
 	f.calls = append(f.calls, call)

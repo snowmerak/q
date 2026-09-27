@@ -107,7 +107,7 @@ func TestCustomACPExecuteAndList(t *testing.T) {
 		}
 	}
 	if len(c.requests) != 4 || len(c.requests[0].Messages) != 2 ||
-		!strings.HasPrefix(c.requests[0].Messages[0].Content, "ACP profile prompt\n\nRuntime environment:") {
+		!strings.HasPrefix(c.requests[0].Messages[0].Content, "ACP profile prompt\n\nAgent Skills are retrieved") {
 		t.Fatal(c.requests)
 	}
 	var output string
@@ -177,7 +177,7 @@ func TestCustomTUIExecute(t *testing.T) {
 		t.Fatalf("%s %+v", m.status, m.messages)
 	}
 	if len(c.requests) != 2 || len(c.requests[0].Messages) != 2 ||
-		!strings.HasPrefix(c.requests[0].Messages[0].Content, "custom prompt\n\nRuntime environment:") {
+		!strings.HasPrefix(c.requests[0].Messages[0].Content, "custom prompt\n\nAgent Skills are retrieved") {
 		t.Fatal(c.requests)
 	}
 }

@@ -631,6 +631,9 @@ func (r GeneralRunner) Run(ctx context.Context, prompt string) (result TaskResul
 		progress(ProgressThinking, fmt.Sprintf("model round %d", state.Round+1))
 		parallel := false
 		request := client.ChatRequest{Messages: history.RequestMessages(), Tools: available, ToolChoice: client.ToolChoiceAuto, ParallelToolCalls: &parallel, WorkingDirectory: r.WorkingDirectory}
+		if !started {
+			request.ToolChoice = client.NamedToolChoice(TaskStartToolName)
+		}
 		response, err := r.Spec.Chat(ctx, r.Client, request)
 		if err != nil {
 			return TaskResult{}, fmt.Errorf("subagent: model: %w", err)
@@ -826,6 +829,11 @@ func selectDefinitionTools(definition AgentDefinition, runtime ToolRuntime) ([]c
 				return nil, fmt.Errorf("subagent %s: unavailable tool %q", definition.Info.Name, name)
 			}
 		}
+	}
+	var err error
+	result, err = withRequiredSkillTools(runtime, result)
+	if err != nil {
+		return nil, fmt.Errorf("subagent %s: %w", definition.Info.Name, err)
 	}
 	result = append(result, TaskLifecycleTools()...)
 	sort.Slice(result, func(i, j int) bool { return result[i].Function.Name < result[j].Function.Name })

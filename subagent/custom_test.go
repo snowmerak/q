@@ -179,7 +179,7 @@ func TestCustomRunnerSelectedToolsAndArchive(t *testing.T) {
 		{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{scoutCall("write_file", "{}"), scoutCall("read_file", "{}")}},
 		{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{scoutCall(TaskCompleteToolName, `{"outcome":"succeeded","summary":"done"}`)}},
 	}}
-	tools := &fakeScoutTools{available: []client.Tool{scoutFunctionTool("read_file"), scoutFunctionTool("write_file")}}
+	tools := &fakeScoutTools{available: append(skillTestTools(), scoutFunctionTool("read_file"), scoutFunctionTool("write_file"))}
 	sink := &scoutRecordSink{}
 	out, err := (CustomRunner{Client: c, Tools: tools, Profile: p, Spec: Spec{Role: p.Role, Model: "test"}, Sink: sink, RunID: "test"}).Run(t.Context(), "inspect")
 	if err != nil || out != "done" {
@@ -188,10 +188,11 @@ func TestCustomRunnerSelectedToolsAndArchive(t *testing.T) {
 	if len(tools.calls) != 1 || tools.calls[0].Function.Name != "read_file" {
 		t.Fatal(tools.calls)
 	}
-	if len(c.requests[0].Tools) != 6 || !hasTool(c.requests[0].Tools, "memory_set_active_work") ||
+	if len(c.requests[0].Tools) != 8 || !hasTool(c.requests[0].Tools, "memory_set_active_work") ||
 		!hasTool(c.requests[0].Tools, "memory_complete_work") || !hasTool(c.requests[0].Tools, "memory_record_fact") ||
 		len(c.requests[0].Messages) < 2 ||
-		!strings.HasPrefix(c.requests[0].Messages[0].Content, p.SystemPrompt+"\n\nRuntime environment: \nWorking directory: ") ||
+		!strings.HasPrefix(c.requests[0].Messages[0].Content, p.SystemPrompt+"\n\nAgent Skills are retrieved") ||
+		!strings.Contains(c.requests[0].Messages[0].Content, "Runtime environment: \nWorking directory: ") ||
 		c.requests[0].Messages[1].Role != client.RoleUser {
 		t.Fatal("incorrect profile injection")
 	}
@@ -212,7 +213,7 @@ func TestCustomRunnerRecordsSelectedFallbackModel(t *testing.T) {
 			{Model: "secondary", ReasoningEffort: "medium"},
 		},
 	}
-	out, err := (CustomRunner{Client: c, Profile: p, Spec: spec, Sink: sink, RunID: "test"}).Run(t.Context(), "inspect")
+	out, err := (CustomRunner{Client: c, Tools: &fakeScoutTools{available: skillTestTools()}, Profile: p, Spec: spec, Sink: sink, RunID: "test"}).Run(t.Context(), "inspect")
 	if err != nil || out != "fallback result" {
 		t.Fatalf("%q %v", out, err)
 	}
@@ -234,7 +235,7 @@ func TestCustomRunnerEmptyLimitAndCancellation(t *testing.T) {
 		want      string
 	}{{"empty", []client.Message{{Role: client.RoleAssistant}, {Role: client.RoleAssistant}, {Role: client.RoleAssistant}, {Role: client.RoleAssistant}}, 4, "without task_complete"}, {"limit", []client.Message{{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{scoutCall("nope", "{}")}}}, 1, "exceeded"}} {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := (CustomRunner{Client: &fakeScoutClient{responses: tc.responses}, Profile: p, Spec: Spec{Role: p.Role, Model: "test"}, MaxRounds: tc.rounds}).Run(t.Context(), "test")
+			_, err := (CustomRunner{Client: &fakeScoutClient{responses: tc.responses}, Tools: &fakeScoutTools{available: skillTestTools()}, Profile: p, Spec: Spec{Role: p.Role, Model: "test"}, MaxRounds: tc.rounds}).Run(t.Context(), "test")
 			if err == nil || !strings.Contains(err.Error(), tc.want) {
 				t.Fatal(err)
 			}
@@ -242,7 +243,7 @@ func TestCustomRunnerEmptyLimitAndCancellation(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
-	_, err := (CustomRunner{Client: &fakeScoutClient{}, Profile: p, Spec: Spec{Role: p.Role}}).Run(ctx, "test")
+	_, err := (CustomRunner{Client: &fakeScoutClient{}, Tools: &fakeScoutTools{available: skillTestTools()}, Profile: p, Spec: Spec{Role: p.Role}}).Run(ctx, "test")
 	if err == nil {
 		t.Fatal("cancel ignored")
 	}

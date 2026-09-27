@@ -478,6 +478,7 @@ func TestPlannerTargetFeedsExecutionLoop(t *testing.T) {
 	}}}
 	planner := PlannerRunner{
 		Client: plannerClient,
+		Tools:  &fakeScoutTools{},
 		Spec:   Spec{Role: config.AgentRolePlanner, Model: "planner-model"},
 	}
 	plan, err := planner.Run(context.Background(), GrillBrief{
@@ -655,7 +656,7 @@ func TestPlannerReviewRetriesFactChangeWithUnknownTarget(t *testing.T) {
 	plan := executableTestPlan()
 	plan.Facts = []string{"known fact"}
 	review, err := (PlannerReviewRunner{
-		Client: clientFake, Spec: Spec{Role: config.AgentRolePlanner, Model: "planner-model"},
+		Client: clientFake, Tools: &fakeScoutTools{}, Spec: Spec{Role: config.AgentRolePlanner, Model: "planner-model"},
 	}).Run(t.Context(), TaskReviewRequest{
 		Plan: plan, TaskIndex: 0, Attempt: 1,
 		Result: CoderResult{Outcome: "succeeded", Summary: "Updated the target"},
@@ -775,7 +776,7 @@ func TestPlannerReviewUpdatesPlanFactsAndCoderPromptCarriesCurrentPlan(t *testin
 	}}}
 	sink := &scoutRecordSink{}
 	runner := PlannerReviewRunner{
-		Client: fake, Spec: Spec{Role: config.AgentRolePlanner, Model: "planner-model"},
+		Client: fake, Tools: &fakeScoutTools{}, Spec: Spec{Role: config.AgentRolePlanner, Model: "planner-model"},
 		Sink: sink, RunID: "run-review-1", ExecutionID: "execution-review-1",
 	}
 	review, err := runner.Run(context.Background(), TaskReviewRequest{

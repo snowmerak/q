@@ -405,7 +405,9 @@ Tab to the final Save action and press Enter. Validation errors keep
 the draft available for correction. The system prompt supports multiple lines.
 
 A profile is either `inner` or `external`. An inner profile combines a system prompt, an
-explicit tool list, directly callable subagents, and a native model role. A custom role uses the existing model,
+explicit tool list, directly callable subagents, and a native model role. Every inner subagent also receives
+`task_start`, `search_skills`, and `get_skill` as fixed tools.
+A custom role uses the existing model,
 model-group, and reasoning settings
 in `~/.q/config.yaml`. Manage role assignments from `/model`: `a` creates a
 custom role and `d` deletes one after confirmation. Built-in native roles can

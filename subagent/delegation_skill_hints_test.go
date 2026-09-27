@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -48,6 +49,9 @@ func TestGeneralScoutTaskStartReceivesSkillHints(t *testing.T) {
 		}
 		switch rounds {
 		case 0:
+			if !reflect.DeepEqual(request.ToolChoice, client.NamedToolChoice(TaskStartToolName)) {
+				t.Fatalf("initial tool choice = %#v", request.ToolChoice)
+			}
 			if !strings.Contains(request.Messages[0].Content, "call search_skills") {
 				t.Fatal("scout did not receive skill retrieval guidance")
 			}
@@ -83,7 +87,7 @@ func TestGeneralScoutTaskStartReceivesSkillHints(t *testing.T) {
 		Client: configured, Tools: runtime,
 		Spec: Spec{Role: config.AgentRoleScout, Model: "model", Candidates: []client.ModelCandidate{{Model: "model"}}},
 		Definition: AgentDefinition{Info: DelegateInfo{Name: BuiltinScoutID, Kind: AgentKindInner, Role: config.AgentRoleScout},
-			SystemPrompt: "Inspect repository evidence.", Tools: []string{"search_skills", "get_skill"}, StrictTools: true},
+			SystemPrompt: "Inspect repository evidence.", StrictTools: true},
 	}).Run(t.Context(), "Inspect the repository")
 	if err != nil || result.Outcome != "blocked" || rounds != 2 || len(runtime.queries) != 1 || runtime.queries[0] != "Inspect Go code Review tests" || len(runtime.calls) != 0 {
 		t.Fatalf("result=%#v err=%v rounds=%d queries=%#v calls=%#v", result, err, rounds, runtime.queries, runtime.calls)

@@ -166,7 +166,14 @@ func (r PlannerReviewRunner) Run(ctx context.Context, input TaskReviewRequest) (
 		available = plannerReviewTools(r.Tools.Tools(), r.Executors...)
 	}
 	available = IncludeMemoryTools(available)
+	available, err = withRequiredSkillTools(r.Tools, available)
+	if err != nil {
+		return TaskReview{}, err
+	}
+	available = withDedicatedTaskStart(available, ReviewTaskToolName)
+	messages[0].Content = withRetrievalCatalog(messages[0].Content, available) + "\n\nStart by calling task_start to receive task-specific skill candidates."
 	history := NewContextCompactor(r.Spec, messages, available, len(messages))
+	started := false
 	rounds := r.MaxRounds
 	if rounds <= 0 {
 		rounds = maximumReviewRounds
@@ -189,7 +196,9 @@ func (r PlannerReviewRunner) Run(ctx context.Context, input TaskReviewRequest) (
 			ToolChoice: client.ToolChoiceAuto, ParallelToolCalls: &parallel,
 			WorkingDirectory: r.WorkingDirectory,
 		}
-		if len(available) == 1 {
+		if !started {
+			request.ToolChoice = client.NamedToolChoice(TaskStartToolName)
+		} else if len(available) == 1 {
 			request.ToolChoice = client.NamedToolChoice(ReviewTaskToolName)
 		}
 		response, err := r.Spec.Chat(ctx, r.Client, request)
@@ -258,6 +267,8 @@ func (r PlannerReviewRunner) Run(ctx context.Context, input TaskReviewRequest) (
 			})
 			var toolResult client.ToolResult
 			switch {
+			case call.Function.Name == TaskStartToolName:
+				toolResult = dedicatedTaskStartResult(ctx, r.Tools, available, call, &started, len(assistant.ToolCalls))
 			case call.Function.Name == ReviewTaskToolName:
 				toolResult = scoutToolError(errors.New("review_task must be the only tool call in its turn"))
 			case IsMemoryTool(call.Function.Name):

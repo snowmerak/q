@@ -248,8 +248,13 @@ func runGriller[T any](
 		return output, err
 	}
 	available := IncludeMemoryTools(grillerToolsWithCompletion(invocationTools.Tools(), completion.tool))
+	available, err = withRequiredSkillTools(r.Tools, available)
+	if err != nil {
+		return output, err
+	}
+	available = withDedicatedTaskStart(available, completion.tool.Function.Name)
 	messages := []client.Message{
-		{Role: client.RoleSystem, Content: withRetrievalCatalog(completion.instructions, available)},
+		{Role: client.RoleSystem, Content: withRetrievalCatalog(completion.instructions, available) + "\n\nStart by calling task_start to receive task-specific skill candidates."},
 		{Role: client.RoleUser, Content: completion.requestLabel + "\n\n" + string(body)},
 	}
 	history := NewContextCompactor(r.Spec, messages, available, len(messages))
@@ -259,6 +264,7 @@ func runGriller[T any](
 		rounds = defaultPlanningRounds
 	}
 	reminders := 0
+	started := false
 	var confirmedChoices []UserChoice
 	for round := 0; round < rounds; round++ {
 		if err := history.CompactIfNeeded(ctx, &r.Spec, r.Client); err != nil {
@@ -273,7 +279,9 @@ func runGriller[T any](
 			Messages: history.RequestMessages(), Tools: available, ToolChoice: client.ToolChoiceAuto,
 			ParallelToolCalls: &parallel, WorkingDirectory: r.WorkingDirectory,
 		}
-		if reminders > 0 {
+		if !started {
+			request.ToolChoice = client.NamedToolChoice(TaskStartToolName)
+		} else if reminders > 0 {
 			request.ToolChoice = client.NamedToolChoice(completion.tool.Function.Name)
 		}
 		response, err := r.Spec.Chat(ctx, r.Client, request)
@@ -310,6 +318,8 @@ func runGriller[T any](
 			}
 			result := client.ToolResult{}
 			switch call.Function.Name {
+			case TaskStartToolName:
+				result = dedicatedTaskStartResult(ctx, r.Tools, available, call, &started, len(assistant.ToolCalls))
 			case AskToUserToolName:
 				question, parseErr := parseUserQuestion(call.Function.Arguments)
 				if parseErr != nil {
@@ -441,8 +451,14 @@ func (r PlannerRunner) Run(ctx context.Context, brief GrillBrief) (proposal Plan
 		return PlanProposal{}, err
 	}
 	executors := normalizePlanExecutors(r.Executors)
+	available := IncludeMemoryTools(plannerTools(r.Tools, executors...))
+	available, err = withRequiredSkillTools(r.Tools, available)
+	if err != nil {
+		return PlanProposal{}, err
+	}
+	available = withDedicatedTaskStart(available, SubmitPlanToolName)
 	messages := []client.Message{
-		{Role: client.RoleSystem, Content: plannerInstructions(executors...)},
+		{Role: client.RoleSystem, Content: withRetrievalCatalog(plannerInstructions(executors...), available) + "\n\nStart by calling task_start to receive task-specific skill candidates."},
 		{Role: client.RoleUser, Content: "Create an approval-ready plan from this Grill brief.\n\n" + string(body)},
 	}
 	rounds := r.MaxRounds
@@ -450,7 +466,7 @@ func (r PlannerRunner) Run(ctx context.Context, brief GrillBrief) (proposal Plan
 		rounds = defaultPlanningRounds
 	}
 	reminders := 0
-	available := IncludeMemoryTools(plannerTools(r.Tools, executors...))
+	started := false
 	history := NewContextCompactor(r.Spec, messages, available, len(messages))
 	for round := 0; round < rounds; round++ {
 		if err := history.CompactIfNeeded(ctx, &r.Spec, r.Client); err != nil {
@@ -465,7 +481,9 @@ func (r PlannerRunner) Run(ctx context.Context, brief GrillBrief) (proposal Plan
 			Messages: history.RequestMessages(), Tools: available, ToolChoice: client.ToolChoiceAuto,
 			ParallelToolCalls: &parallel, WorkingDirectory: r.WorkingDirectory,
 		}
-		if reminders > 0 {
+		if !started {
+			request.ToolChoice = client.NamedToolChoice(TaskStartToolName)
+		} else if reminders > 0 {
 			request.ToolChoice = client.NamedToolChoice(SubmitPlanToolName)
 		}
 		response, err := r.Spec.Chat(ctx, r.Client, request)
@@ -496,7 +514,9 @@ func (r PlannerRunner) Run(ctx context.Context, brief GrillBrief) (proposal Plan
 				Action: ProgressTool, Detail: call.Function.Name,
 			})
 			var result client.ToolResult
-			if call.Function.Name == SubmitPlanToolName && len(assistant.ToolCalls) != 1 {
+			if call.Function.Name == TaskStartToolName {
+				result = dedicatedTaskStartResult(ctx, r.Tools, available, call, &started, len(assistant.ToolCalls))
+			} else if call.Function.Name == SubmitPlanToolName && len(assistant.ToolCalls) != 1 {
 				result = scoutToolError(errors.New("submit_plan must be the only tool call in its turn"))
 			} else if call.Function.Name == SubmitPlanToolName {
 				proposal, parseErr := parsePlanProposal(call.Function.Arguments, executors...)

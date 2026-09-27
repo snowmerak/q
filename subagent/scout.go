@@ -179,8 +179,13 @@ func (r ScoutRunner) Run(ctx context.Context, task ScoutTask) (result ScoutResul
 
 func (r *ScoutRunner) run(ctx context.Context, task ScoutTask, prompt string, lifecycle *Lifecycle) (ScoutResult, error) {
 	tools := IncludeMemoryTools(scoutTools(r.Tools.Tools()))
+	tools, err := withRequiredSkillTools(r.Tools, tools)
+	if err != nil {
+		return ScoutResult{}, err
+	}
+	tools = withDedicatedTaskStart(tools, ScoutCompleteToolName)
 	messages := []client.Message{
-		{Role: client.RoleSystem, Content: withRetrievalCatalog(scoutInstructions(), tools)},
+		{Role: client.RoleSystem, Content: withRetrievalCatalog(scoutInstructions(), tools) + "\n\nStart by calling task_start to receive task-specific skill candidates."},
 		{Role: client.RoleUser, Content: prompt},
 	}
 	history := NewContextCompactor(r.Spec, messages, tools, len(messages))
@@ -189,6 +194,7 @@ func (r *ScoutRunner) run(ctx context.Context, task ScoutTask, prompt string, li
 		rounds = defaultScoutRounds
 	}
 	reminders := 0
+	started := false
 	var usage client.Usage
 	for round := 0; round < rounds; round++ {
 		if err := history.CompactIfNeeded(ctx, &r.Spec, r.Client); err != nil {
@@ -203,7 +209,9 @@ func (r *ScoutRunner) run(ctx context.Context, task ScoutTask, prompt string, li
 			Messages: history.RequestMessages(), Tools: tools, ToolChoice: client.ToolChoiceAuto,
 			ParallelToolCalls: &parallel, WorkingDirectory: r.WorkingDirectory,
 		}
-		if reminders > 0 {
+		if !started {
+			request.ToolChoice = client.NamedToolChoice(TaskStartToolName)
+		} else if reminders > 0 {
 			request.ToolChoice = client.NamedToolChoice(ScoutCompleteToolName)
 		}
 		response, err := r.Spec.Chat(ctx, r.Client, request)
@@ -241,7 +249,9 @@ func (r *ScoutRunner) run(ctx context.Context, task ScoutTask, prompt string, li
 				Action: ProgressTool, Detail: call.Function.Name,
 			})
 			var toolResult client.ToolResult
-			if call.Function.Name == ScoutCompleteToolName {
+			if call.Function.Name == TaskStartToolName {
+				toolResult = dedicatedTaskStartResult(ctx, r.Tools, tools, call, &started, len(assistant.ToolCalls))
+			} else if call.Function.Name == ScoutCompleteToolName {
 				if len(assistant.ToolCalls) != 1 {
 					toolResult = scoutToolError(errors.New("task_complete must be the only tool call in its turn"))
 				} else {

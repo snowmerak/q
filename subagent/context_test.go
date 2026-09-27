@@ -242,6 +242,11 @@ func TestInternalRunnersCompactBetweenToolRoundsAndKeepContracts(t *testing.T) {
 					return contextResponse(contextCheckpointJSON("Read the repository evidence. Continue from the exact role contract and task.")), nil
 				}
 				normalCalls++
+				for _, required := range []string{TaskStartToolName, "search_skills", "get_skill"} {
+					if !hasTool(request.Tools, required) {
+						t.Fatalf("%s missing fixed subagent tool %q", role, required)
+					}
+				}
 				if normalCalls == 1 {
 					first = request.Messages
 					return &client.ChatResponse{ConversationID: "old-role", Choices: []client.Choice{{Message: client.Message{

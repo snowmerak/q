@@ -95,6 +95,7 @@ func TestPlanWorkflowRegrillsAfterUserRevision(t *testing.T) {
 		},
 		Planner: PlannerRunner{
 			Client: plannerClient,
+			Tools:  tools,
 			Spec:   Spec{Role: config.AgentRolePlanner, Model: "planner-model"},
 		},
 		Ask: ask,
@@ -409,7 +410,8 @@ func TestPlannerReadsLoomReportWithoutOtherBuiltinTools(t *testing.T) {
 		t.Fatalf("proposal=%#v requests=%d", proposal, len(plannerClient.requests))
 	}
 	available := plannerClient.requests[0].Tools
-	if len(available) != 5 || !hasTool(available, "loom_read") || !hasTool(available, SubmitPlanToolName) ||
+	if len(available) != 8 || !hasTool(available, "loom_read") || !hasTool(available, SubmitPlanToolName) ||
+		!hasTool(available, TaskStartToolName) || !hasTool(available, "search_skills") || !hasTool(available, "get_skill") ||
 		!hasTool(available, "memory_set_active_work") || !hasTool(available, "memory_complete_work") || !hasTool(available, "memory_record_fact") {
 		t.Fatalf("expected planner and default memory tools, got %#v", available)
 	}

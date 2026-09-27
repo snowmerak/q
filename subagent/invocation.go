@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/snowmerak/q/client"
+	"github.com/snowmerak/q/tools/builtin"
 )
 
 type InvocationSource struct {
@@ -79,6 +80,17 @@ func (r *InvocationRuntime) Tools() []client.Tool {
 		return nil
 	}
 	return append([]client.Tool(nil), r.tools...)
+}
+
+func (r *InvocationRuntime) SearchSkillHints(ctx context.Context, query string, limit int) (builtin.SearchSkillsOutput, error) {
+	if r == nil {
+		return builtin.SearchSkillsOutput{}, errors.New("subagent: invocation runtime is unavailable")
+	}
+	searcher, ok := r.base.(delegatedSkillHintSearcher)
+	if !ok {
+		return builtin.SearchSkillsOutput{}, errors.New("subagent: host-side skill hint search is unavailable")
+	}
+	return searcher.SearchSkillHints(ctx, query, limit)
 }
 
 func (r *InvocationRuntime) Call(ctx context.Context, call client.ToolCall) (client.ToolResult, error) {

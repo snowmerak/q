@@ -37,10 +37,14 @@ returns the complete resource text directly in its `content` field, whether or
 not Loom is available. It does not create a Loom artifact. There is no separate
 Library MCP tool.
 
-Main chat, plan Griller, and plan Scout receive `search_skills` and `get_skill`.
-General delegated agents receive the pair when their agent definition grants it;
-all six built-in inner agents currently grant both. The separate plan Planner,
-plan Coder, and commit agent do not receive them.
+The model-facing search tool is named `search_skills` (plural). `SearchSkillHints`
+is a host-side method that retrieves candidate metadata; it is not a model tool.
+Every q-owned inner subagent receives `task_start`, `search_skills`, and
+`get_skill` as fixed tools. This includes custom profiles, the six built-in
+delegated agents, and the dedicated plan Scout, Griller, Planner, Coder, and
+Planner review runners. A profile's `tools` list controls its additional tools,
+not this fixed set. An inner subagent cannot start when either skill tool is
+missing from its runtime catalog.
 
 ## Contextual discovery
 
@@ -53,16 +57,18 @@ retrieval at the points where new task information becomes available:
 - an `ask_to_user` answer, using the question and context together with the
   selected choice label and description or the free-form answer.
 
-The general delegated agent loop also searches automatically after a successful
-`task_start` when its definition grants both tools and the runtime supports
-host-side search. This includes delegated Scout, Griller, Planner, Executor,
-Reviewer, and Coder. Their `task_start` results carry
-the candidate metadata, and their stable system prompts explain how to call
-`search_skills` and `get_skill` later.
+Every inner subagent loop searches automatically after a successful
+`task_start`. When relevant hits exist, the tool result carries bounded
+candidate metadata and tells the model to load an applicable candidate with
+`get_skill`. Q requests `task_start` by name until the model starts the task.
+The dedicated plan runners keep their existing completion tools
+(`submit_brief`, `submit_plan`, `review_task`, or `task_complete`) and use
+`task_start` for the same skill discovery step. Their stable system prompts
+also explain how to call `search_skills` and `get_skill` later.
 
 The normalized query is limited to 4,000 runes and requests at most eight
 search hits. q adds at most four candidates. In the main chat it removes skill
-IDs already hinted or loaded in the current context; a delegated `task_start`
+IDs already hinted or loaded in the current context; a subagent `task_start`
 removes duplicate IDs from that search result. Candidate descriptions are limited to
 600 runes; each candidate retains at most twelve tags of at most 80 runes each.
 In the main chat, previously seen IDs are recovered from earlier contextual hints,

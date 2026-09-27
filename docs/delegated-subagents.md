@@ -190,6 +190,9 @@ assistant/도구 추적을 표시한다. `ctrl+g`로 추적을 접거나 펼칠 
 
 ## 도구와 변경 권한
 
+모든 inner subagent는 정의나 custom profile의 도구 목록과 관계없이
+`task_start`, `search_skills`, `get_skill`을 고정으로 받는다. `task_start`
+결과에 관련 스킬 후보가 들어오며, 전문이 필요하면 `get_skill`로 읽는다.
 `builtin/scout`, `builtin/griller`, `builtin/planner`, `builtin/executor`,
 `builtin/reviewer`는 파일 변경 도구를 받지 않는다. `run_command`는 파일을 변경할 수
 있으므로 이 다섯 builtin의 기본 도구에서 제외한다. `builtin/coder`만 파일 변경과

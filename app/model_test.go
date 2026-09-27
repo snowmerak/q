@@ -278,16 +278,26 @@ func (f *fakeAgentTools) Environment() qtools.HostEnvironment {
 }
 
 func (f *fakeAgentTools) Tools() []client.Tool {
-	if f.tools != nil {
-		return append([]client.Tool(nil), f.tools...)
+	skillTools := []client.Tool{
+		{Type: client.ToolTypeFunction, Function: client.FunctionDefinition{Name: "search_skills", Parameters: map[string]any{"type": "object"}}},
+		{Type: client.ToolTypeFunction, Function: client.FunctionDefinition{Name: "get_skill", Parameters: map[string]any{"type": "object"}}},
 	}
-	return []client.Tool{{
+	if f.tools != nil {
+		result := append([]client.Tool(nil), f.tools...)
+		for _, skill := range skillTools {
+			if !slices.ContainsFunc(result, func(tool client.Tool) bool { return tool.Function.Name == skill.Function.Name }) {
+				result = append(result, skill)
+			}
+		}
+		return result
+	}
+	return append(skillTools, client.Tool{
 		Type: client.ToolTypeFunction,
 		Function: client.FunctionDefinition{
 			Name: "write_file", Description: "write a file",
 			Parameters: map[string]any{"type": "object"},
 		},
-	}}
+	})
 }
 
 func (f *fakeAgentTools) Call(_ context.Context, call client.ToolCall) (client.ToolResult, error) {

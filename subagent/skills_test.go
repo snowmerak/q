@@ -7,6 +7,10 @@ import (
 	"github.com/snowmerak/q/client"
 )
 
+func skillTestTools() []client.Tool {
+	return []client.Tool{scoutFunctionTool("search_skills"), scoutFunctionTool("get_skill")}
+}
+
 func TestRetrievalCatalogGuidesSkillLookupWhenMoreInformationIsNeeded(t *testing.T) {
 	tools := []client.Tool{
 		scoutFunctionTool("search_skills"),

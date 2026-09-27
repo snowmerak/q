@@ -127,7 +127,7 @@ func TestExecutorToolSurfaceDelegatesWithoutDirectMutation(t *testing.T) {
 	if !found {
 		t.Fatal("executor definition is missing")
 	}
-	runtime := &fakeScoutTools{available: append(DelegateTools(),
+	runtime := &fakeScoutTools{available: append(append(DelegateTools(), skillTestTools()...),
 		client.Tool{Type: client.ToolTypeFunction, Function: client.FunctionDefinition{Name: "read_file"}},
 		client.Tool{Type: client.ToolTypeFunction, Function: client.FunctionDefinition{Name: "loom_read"}},
 		client.Tool{Type: client.ToolTypeFunction, Function: client.FunctionDefinition{Name: "edit_file"}},

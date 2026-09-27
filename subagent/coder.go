@@ -93,20 +93,26 @@ func (r *CoderRunner) run(
 	prompt string,
 	lifecycle *Lifecycle,
 ) (CoderResult, error) {
+	available := IncludeMemoryTools(coderTools(r.Tools.Tools()))
+	available, err := withRequiredSkillTools(r.Tools, available)
+	if err != nil {
+		return CoderResult{}, err
+	}
+	available = withDedicatedTaskStart(available, CoderCompleteToolName)
 	messages := []client.Message{
-		{Role: client.RoleSystem, Content: prompt},
+		{Role: client.RoleSystem, Content: withRetrievalCatalog(prompt, available) + "\n\nStart by calling task_start to receive task-specific skill candidates."},
 		{Role: client.RoleUser, Content: fmt.Sprintf(
 			"Execute approved task %d of %d now. Finish with task_complete.",
 			attempt.TaskIndex+1, len(attempt.Plan.Steps),
 		)},
 	}
-	available := IncludeMemoryTools(coderTools(r.Tools.Tools()))
 	history := NewContextCompactor(r.Spec, messages, available, len(messages))
 	rounds := r.MaxRounds
 	if rounds <= 0 {
 		rounds = defaultCoderRounds
 	}
 	reminders := 0
+	started := false
 	evidence := make([]CoderEvidence, 0)
 	for round := 0; round < rounds; round++ {
 		if err := history.CompactIfNeeded(ctx, &r.Spec, r.Client); err != nil {
@@ -121,7 +127,9 @@ func (r *CoderRunner) run(
 			Messages: history.RequestMessages(), Tools: available, ToolChoice: client.ToolChoiceAuto,
 			ParallelToolCalls: &parallel, WorkingDirectory: r.WorkingDirectory,
 		}
-		if reminders > 0 {
+		if !started {
+			request.ToolChoice = client.NamedToolChoice(TaskStartToolName)
+		} else if reminders > 0 {
 			request.ToolChoice = client.NamedToolChoice(CoderCompleteToolName)
 		}
 		response, err := r.Spec.Chat(ctx, r.Client, request)
@@ -157,7 +165,9 @@ func (r *CoderRunner) run(
 				Action: ProgressTool, Detail: call.Function.Name,
 			})
 			var toolResult client.ToolResult
-			if call.Function.Name == CoderCompleteToolName {
+			if call.Function.Name == TaskStartToolName {
+				toolResult = dedicatedTaskStartResult(ctx, r.Tools, available, call, &started, len(assistant.ToolCalls))
+			} else if call.Function.Name == CoderCompleteToolName {
 				if len(assistant.ToolCalls) != 1 {
 					toolResult = scoutToolError(errors.New("task_complete must be the only tool call in its turn"))
 				} else {
@@ -183,7 +193,7 @@ func (r *CoderRunner) run(
 					toolResult = scoutToolError(err)
 				}
 			}
-			if call.Function.Name != CoderCompleteToolName && !IsMemoryTool(call.Function.Name) && len(evidence) < maximumCoderEvidenceItems {
+			if call.Function.Name != CoderCompleteToolName && call.Function.Name != TaskStartToolName && !IsMemoryTool(call.Function.Name) && len(evidence) < maximumCoderEvidenceItems {
 				evidence = append(evidence, coderEvidence(call, toolResult, r.WorkingDirectory))
 			}
 			message := client.Message{

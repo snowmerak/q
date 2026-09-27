@@ -389,7 +389,7 @@ func TestPlannerRetryReceivesCompleteValidationFeedback(t *testing.T) {
 		{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{scoutCall(SubmitPlanToolName, plannerSucceededExample)}},
 	}}
 	plan, err := (PlannerRunner{
-		Client: fake, Spec: Spec{Role: config.AgentRolePlanner, Model: "planner"}, MaxRounds: 2,
+		Client: fake, Tools: &fakeScoutTools{}, Spec: Spec{Role: config.AgentRolePlanner, Model: "planner"}, MaxRounds: 2,
 	}).Run(t.Context(), GrillBrief{Objective: "Implement a durable counter", Conditions: []string{"Keep the count across restarts"}})
 	if err != nil {
 		t.Fatal(err)
@@ -397,8 +397,11 @@ func TestPlannerRetryReceivesCompleteValidationFeedback(t *testing.T) {
 	if len(fake.requests) != 2 || plan.Outcome != "succeeded" {
 		t.Fatalf("requests=%d outcome=%s", len(fake.requests), plan.Outcome)
 	}
-	if fake.requests[0].Messages[0].Content != plannerInstructions() ||
-		!reflect.DeepEqual(fake.requests[0].Tools, IncludeMemoryTools([]client.Tool{submitPlanTool()})) {
+	if !strings.HasPrefix(fake.requests[0].Messages[0].Content, plannerInstructions()) ||
+		!hasTool(fake.requests[0].Tools, SubmitPlanToolName) ||
+		!hasTool(fake.requests[0].Tools, TaskStartToolName) ||
+		!hasTool(fake.requests[0].Tools, "search_skills") ||
+		!hasTool(fake.requests[0].Tools, "get_skill") {
 		t.Fatal("planner did not receive the instructions and tool contract")
 	}
 	messages := fake.requests[1].Messages
