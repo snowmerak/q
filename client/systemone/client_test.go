@@ -132,8 +132,11 @@ func TestAPIErrorRetainsClassificationWithoutPrintingBody(t *testing.T) {
 
 func TestNewValidatesConfigurationAndIdempotencyKey(t *testing.T) {
 	t.Setenv("SYSTEM_ONE_API_KEY", "")
-	if _, err := New(Config{}); err == nil {
-		t.Fatal("missing API key was accepted")
+	if _, err := New(Config{}); err != nil {
+		t.Fatalf("missing API key was rejected: %v", err)
+	}
+	if _, err := New(Config{APIKey: " \t"}); err == nil {
+		t.Fatal("blank API key was accepted")
 	}
 	if _, err := New(Config{BaseURL: "https://user:password@example.com/v1", APIKey: "test-key"}); err == nil {
 		t.Fatal("URL credentials were accepted")
@@ -142,6 +145,34 @@ func TestNewValidatesConfigurationAndIdempotencyKey(t *testing.T) {
 		if err := validateIdempotencyKey(key); err == nil {
 			t.Fatalf("invalid idempotency key %q was accepted", key)
 		}
+	}
+}
+
+func TestClientWithoutKeyOmitsAuthorization(t *testing.T) {
+	t.Setenv("SYSTEM_ONE_API_KEY", "unrelated-key")
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if _, present := request.Header["Authorization"]; present {
+			t.Errorf("unexpected authorization header on %s: %q", request.URL.Path, request.Header.Get("Authorization"))
+		}
+		switch request.URL.Path {
+		case "/v1/models":
+			_, _ = io.WriteString(writer, `{"models":[{"name":"jev"}]}`)
+		case "/v1/systemone":
+			_, _ = io.WriteString(writer, `{"model":"jev","answers":{"q":{"type":"noul","noul":0.8}}}`)
+		default:
+			http.NotFound(writer, request)
+		}
+	}))
+	defer server.Close()
+	client, err := New(Config{BaseURL: server.URL + "/v1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.ListModels(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.EvaluateRaw(t.Context(), json.RawMessage(`{"model":"jev","state":"x","questions":{"q":{"type":"noul"}}}`), CallOptions{}); err != nil {
+		t.Fatal(err)
 	}
 }
 

@@ -2,7 +2,6 @@
 package systemoneserver
 
 import (
-	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -19,13 +18,25 @@ const maxRequestBytes = 65536
 type Server struct {
 	config  systemoneconfig.Config
 	clients map[string]*systemone.Client
+	auth    *systemoneconfig.Authenticator
 }
 
 func New(config systemoneconfig.Config) (*Server, error) {
+	if config.ActiveGeneratedKeyCount() != 0 {
+		return nil, errors.New("systemone: a master key is required for managed API keys")
+	}
+	return NewWithMasterKey(config, [32]byte{})
+}
+
+func NewWithMasterKey(config systemoneconfig.Config, masterKey [32]byte) (*Server, error) {
 	if err := config.Validate(); err != nil {
 		return nil, err
 	}
-	server := &Server{config: config, clients: make(map[string]*systemone.Client, len(config.Providers))}
+	authenticator, err := systemoneconfig.NewAuthenticator(masterKey, config)
+	if err != nil {
+		return nil, err
+	}
+	server := &Server{config: config, clients: make(map[string]*systemone.Client, len(config.Providers)), auth: authenticator}
 	for _, provider := range config.Providers {
 		client, err := provider.NewClient()
 		if err != nil {
@@ -36,22 +47,15 @@ func New(config systemoneconfig.Config) (*Server, error) {
 	return server, nil
 }
 
+func (s *Server) ReloadAuthentication(config systemoneconfig.Config, masterKey [32]byte) error {
+	return s.auth.ReloadWithMasterKey(masterKey, config)
+}
+
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /v1/models", s.models)
 	mux.HandleFunc("POST /v1/systemone", s.evaluate)
-	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		if key := s.config.Server.APIKey; key != "" {
-			scheme, token, found := strings.Cut(request.Header.Get("Authorization"), " ")
-			if !found || !strings.EqualFold(scheme, "Bearer") ||
-				subtle.ConstantTimeCompare([]byte(token), []byte(key)) != 1 {
-				writer.Header().Set("WWW-Authenticate", "Bearer")
-				writeError(writer, http.StatusUnauthorized, "invalid System One API key")
-				return
-			}
-		}
-		mux.ServeHTTP(writer, request)
-	})
+	return s.auth.OptionalHandler(mux)
 }
 
 func (s *Server) models(writer http.ResponseWriter, request *http.Request) {

@@ -117,7 +117,7 @@ func TestProviderClientUsesEndpointAndKey(t *testing.T) {
 	}
 }
 
-func TestValidateRejectsInvalidProviderAndPublicServerWithoutKey(t *testing.T) {
+func TestValidateRejectsInvalidProvider(t *testing.T) {
 	for _, uri := range []string{"", "https://user:pass@example.test/v1/systemone", "https://example.test/v1/systemone?key=secret", "https://example.test/v1/models"} {
 		value := Default()
 		value.Providers[0].URI = uri
@@ -132,8 +132,8 @@ func TestValidateRejectsInvalidProviderAndPublicServerWithoutKey(t *testing.T) {
 	}
 	value = Default()
 	value.Server.Host = "0.0.0.0"
-	if err := value.Validate(); err == nil {
-		t.Fatal("public server without API key was accepted")
+	if err := value.Validate(); err != nil {
+		t.Fatalf("public server without API key was rejected: %v", err)
 	}
 	value.Server.APIKey = "client-key"
 	if err := value.Validate(); err != nil {

@@ -10,7 +10,6 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"os"
 	"strings"
 	"time"
 )
@@ -21,8 +20,8 @@ const (
 	maxResponseBytes = 1 << 20
 )
 
-// Config selects a System One endpoint and its platform API key. If APIKey is
-// empty, New reads SYSTEM_ONE_API_KEY. BaseURL defaults to DefaultBaseURL.
+// Config selects a System One endpoint and an optional platform API key.
+// BaseURL defaults to DefaultBaseURL. An empty APIKey sends no authorization.
 type Config struct {
 	BaseURL    string
 	APIKey     string
@@ -46,11 +45,8 @@ func New(config Config) (*Client, error) {
 		return nil, errors.New("systemone: BaseURL must be an HTTP(S) URL without credentials, query, or fragment")
 	}
 	key := config.APIKey
-	if key == "" {
-		key = os.Getenv("SYSTEM_ONE_API_KEY")
-	}
-	if strings.TrimSpace(key) == "" || strings.ContainsAny(key, "\r\n") {
-		return nil, errors.New("systemone: a valid API key is required")
+	if key != "" && (strings.TrimSpace(key) == "" || strings.ContainsAny(key, "\r\n")) {
+		return nil, errors.New("systemone: API key must be nonblank and contain no newline")
 	}
 	httpClient := config.HTTPClient
 	if httpClient == nil {
@@ -130,7 +126,9 @@ func (c *Client) do(ctx context.Context, method, path string, body []byte, idemp
 		// GetBody is set. Leave recovery decisions to the caller.
 		request.GetBody = nil
 	}
-	request.Header.Set("Authorization", "Bearer "+c.apiKey)
+	if c.apiKey != "" {
+		request.Header.Set("Authorization", "Bearer "+c.apiKey)
+	}
 	request.Header.Set("Accept", "application/json")
 	if method == http.MethodPost {
 		request.Header.Set("Content-Type", "application/json")

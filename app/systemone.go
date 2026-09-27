@@ -27,9 +27,10 @@ const (
 	systemOnePageList systemOnePage = iota
 	systemOnePageProvider
 	systemOnePageNetwork
+	systemOnePageKeys
 )
 
-const systemOneProviderRow = 3
+const systemOneProviderRow = 4
 
 const (
 	systemOneFieldProviderID = iota
@@ -40,22 +41,25 @@ const (
 	systemOneFieldAgentSkillModel
 	systemOneFieldHost
 	systemOneFieldPort
-	systemOneFieldServerKey
 )
 
 func (m *model) initSystemOne(dir string) {
 	m.systemOneStore = systemoneconfig.Store{Dir: dir}
-	for index, prompt := range []string{"Provider ID", "URI", "Provider API key", "API key environment variable", "Default model", "Agent Skill Decision model", "Listen host", "Listen port", "Server API key"} {
+	for index, prompt := range []string{"Provider ID", "URI", "Provider API key", "API key environment variable", "Default model", "Agent Skill Decision model", "Listen host", "Listen port"} {
 		field := textinput.New()
 		field.Prompt = ""
 		field.Placeholder = prompt
 		field.SetWidth(72)
 		field.CharLimit = 4096
-		if index == systemOneFieldProviderKey || index == systemOneFieldServerKey {
+		if index == systemOneFieldProviderKey {
 			field.EchoMode = textinput.EchoPassword
 		}
 		m.systemOneInputs[index] = field
 	}
+	m.systemOneKeyAlias = textinput.New()
+	m.systemOneKeyAlias.Prompt = "alias · "
+	m.systemOneKeyAlias.CharLimit = 64
+	m.systemOneKeyAlias.SetWidth(48)
 }
 
 func (m model) enterSystemOne() (tea.Model, tea.Cmd) {
@@ -88,6 +92,11 @@ func (m model) enterSystemOne() (tea.Model, tea.Cmd) {
 	m.systemOneListCursor = systemOneProviderRow + m.systemOneProvider
 	m.systemOnePending = false
 	m.systemOneFocus = 0
+	m.systemOneKeyAdding = false
+	m.systemOneKeyRevokeArmed = false
+	m.generatedSystemOneKey = ""
+	m.systemOneKeyAlias.Reset()
+	m.systemOneKeyAlias.Blur()
 	m.screen = screenSystemOne
 	m.input.Blur()
 	m.status = ""
@@ -100,7 +109,7 @@ func (m *model) loadSystemOneFields() {
 	for index, value := range []string{
 		provider.ID, provider.URI, provider.APIKey, provider.APIKeyEnv,
 		m.systemOneConfig.DefaultModel, m.systemOneConfig.RoleModels[systemoneconfig.RoleAgentSkillDecision],
-		m.systemOneConfig.Server.Host, strconv.Itoa(m.systemOneConfig.Server.Port), m.systemOneConfig.Server.APIKey,
+		m.systemOneConfig.Server.Host, strconv.Itoa(m.systemOneConfig.Server.Port),
 	} {
 		m.systemOneInputs[index].SetValue(value)
 	}
@@ -142,7 +151,6 @@ func (m *model) captureSystemOneFields() {
 	} else {
 		m.systemOneConfig.Server.Port = -1
 	}
-	m.systemOneConfig.Server.APIKey = m.systemOneInputs[systemOneFieldServerKey].Value()
 }
 
 func (m *model) focusSystemOne() tea.Cmd {
@@ -165,6 +173,9 @@ func (m model) updateSystemOne(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	}
 	if m.systemOnePage == systemOnePageList {
 		return m.updateSystemOneList(key)
+	}
+	if m.systemOnePage == systemOnePageKeys {
+		return m.updateSystemOneKeys(key)
 	}
 	return m.updateSystemOneEditor(key)
 }
@@ -198,6 +209,16 @@ func (m model) updateSystemOneList(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.systemOneFocus = systemOneFieldHost
 			m.status = ""
 			return m, m.focusSystemOne()
+		case 3:
+			m.systemOnePage = systemOnePageKeys
+			m.systemOneKeyAdding = false
+			m.systemOneKeyRevokeArmed = false
+			m.generatedSystemOneKey = ""
+			m.systemOneKeyAlias.Blur()
+			m.systemOneKeyCursor = min(m.systemOneKeyCursor, m.systemOneKeyCount()-1)
+			m.systemOneKeyCursor = max(0, m.systemOneKeyCursor)
+			m.status = ""
+			return m, nil
 		default:
 			m.systemOneProvider = m.systemOneListCursor - systemOneProviderRow
 			m.loadSystemOneFields()
@@ -255,10 +276,116 @@ func (m model) updateSystemOneList(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+func (m model) systemOneKeyCount() int {
+	count := len(m.systemOneConfig.APIKeys)
+	if m.systemOneConfig.Server.APIKey != "" {
+		count++
+	}
+	return count
+}
+
+func (m model) updateSystemOneKeys(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	if m.generatedSystemOneKey != "" {
+		if key.String() == "enter" || key.String() == "esc" {
+			m.generatedSystemOneKey = ""
+			m.status = "API key generated"
+		}
+		return m, nil
+	}
+	if m.systemOneKeyAdding {
+		switch key.String() {
+		case "esc":
+			m.systemOneKeyAdding = false
+			m.systemOneKeyAlias.Reset()
+			m.systemOneKeyAlias.Blur()
+			m.status = ""
+			return m, nil
+		case "enter":
+			alias := strings.TrimSpace(m.systemOneKeyAlias.Value())
+			if err := systemoneconfig.ValidateAlias(alias); err != nil {
+				m.status = err.Error()
+				return m, m.systemOneKeyAlias.Focus()
+			}
+			updated, generated, err := m.systemOneStore.CreateAPIKey(m.systemOneConfig, alias, time.Now())
+			if err != nil {
+				m.status = err.Error()
+				return m, m.systemOneKeyAlias.Focus()
+			}
+			m.systemOneConfig = updated
+			m.systemOneKeyAdding = false
+			m.systemOneKeyAlias.Reset()
+			m.systemOneKeyAlias.Blur()
+			m.generatedSystemOneKey = generated.Secret
+			m.systemOneKeyCursor = m.systemOneKeyCount() - 1
+			m.status = ""
+			return m, nil
+		}
+		var command tea.Cmd
+		m.systemOneKeyAlias, command = m.systemOneKeyAlias.Update(key)
+		return m, command
+	}
+
+	switch key.String() {
+	case "esc":
+		m.systemOnePage = systemOnePageList
+		m.systemOneKeyRevokeArmed = false
+		m.status = ""
+		return m, nil
+	case "up":
+		m.systemOneKeyRevokeArmed = false
+		m.systemOneKeyCursor = max(0, m.systemOneKeyCursor-1)
+	case "down":
+		m.systemOneKeyRevokeArmed = false
+		m.systemOneKeyCursor = min(m.systemOneKeyCount()-1, m.systemOneKeyCursor+1)
+		m.systemOneKeyCursor = max(0, m.systemOneKeyCursor)
+	case "a":
+		m.systemOneKeyAdding = true
+		m.systemOneKeyRevokeArmed = false
+		m.systemOneKeyAlias.Reset()
+		m.status = "Enter an alias for the new API key"
+		return m, m.systemOneKeyAlias.Focus()
+	case "r":
+		if m.systemOneKeyCount() == 0 {
+			return m, nil
+		}
+		id, alias := "legacy", "legacy"
+		if m.systemOneConfig.Server.APIKey == "" || m.systemOneKeyCursor != 0 {
+			index := m.systemOneKeyCursor
+			if m.systemOneConfig.Server.APIKey != "" {
+				index--
+			}
+			key := m.systemOneConfig.APIKeys[index]
+			if key.RevokedAt != nil {
+				return m, nil
+			}
+			id, alias = key.ID, key.Alias
+		}
+		if !m.systemOneKeyRevokeArmed {
+			m.systemOneKeyRevokeArmed = true
+			m.status = "Press r again to revoke " + alias
+			return m, nil
+		}
+		updated, err := m.systemOneStore.RevokeAPIKey(m.systemOneConfig, id, time.Now())
+		m.systemOneKeyRevokeArmed = false
+		if err != nil {
+			m.status = err.Error()
+			return m, nil
+		}
+		m.systemOneConfig = updated
+		m.systemOneKeyCursor = min(m.systemOneKeyCursor, m.systemOneKeyCount()-1)
+		m.systemOneKeyCursor = max(0, m.systemOneKeyCursor)
+		m.status = "API key revoked"
+		return m, nil
+	default:
+		m.systemOneKeyRevokeArmed = false
+	}
+	return m, nil
+}
+
 func (m model) updateSystemOneEditor(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	first, last := systemOneFieldProviderID, systemOneFieldKeyEnv
 	if m.systemOnePage == systemOnePageNetwork {
-		first, last = systemOneFieldHost, systemOneFieldServerKey
+		first, last = systemOneFieldHost, systemOneFieldPort
 	}
 	switch key.String() {
 	case "esc":
@@ -304,9 +431,17 @@ func (m model) updateSystemOneInput(message tea.Msg) (tea.Model, tea.Cmd) {
 	if m.systemOneLoading || m.systemOnePicking || m.systemOnePage == systemOnePageList {
 		return m, nil
 	}
+	if m.systemOnePage == systemOnePageKeys {
+		if !m.systemOneKeyAdding {
+			return m, nil
+		}
+		var command tea.Cmd
+		m.systemOneKeyAlias, command = m.systemOneKeyAlias.Update(message)
+		return m, command
+	}
 	first, last := systemOneFieldProviderID, systemOneFieldKeyEnv
 	if m.systemOnePage == systemOnePageNetwork {
-		first, last = systemOneFieldHost, systemOneFieldServerKey
+		first, last = systemOneFieldHost, systemOneFieldPort
 	}
 	if m.systemOneFocus < first || m.systemOneFocus > last {
 		return m, nil
@@ -469,6 +604,8 @@ func (m model) viewSystemOne() string {
 		body.WriteString(subtleStyle.Render("Loading models from configured providers…"))
 	} else if m.systemOnePage == systemOnePageList {
 		body.WriteString(m.viewSystemOneList())
+	} else if m.systemOnePage == systemOnePageKeys {
+		body.WriteString(m.viewSystemOneKeys())
 	} else {
 		body.WriteString(m.viewSystemOneEditor())
 	}
@@ -480,6 +617,14 @@ func (m model) viewSystemOne() string {
 	help := "↑/↓/tab select · enter open · a add provider · d delete provider · esc back"
 	if m.systemOnePage != systemOnePageList {
 		help = "tab/↑/↓ field · enter next/back · esc back"
+	}
+	if m.systemOnePage == systemOnePageKeys {
+		help = "↑/↓ select · a generate · r revoke · esc back"
+		if m.systemOneKeyAdding {
+			help = "enter generate · esc cancel"
+		} else if m.generatedSystemOneKey != "" {
+			help = "enter/esc dismiss"
+		}
 	}
 	if m.systemOnePicking {
 		help = "↑/↓ select · enter choose and save · esc back"
@@ -497,6 +642,7 @@ func (m model) viewSystemOneList() string {
 		"Default model · " + m.systemOneConfig.DefaultModel,
 		"Agent Skill Decision · " + m.systemOneConfig.ModelForRole(systemoneconfig.RoleAgentSkillDecision),
 		"Network · " + m.systemOneConfig.Server.Host + ":" + strconv.Itoa(m.systemOneConfig.Server.Port),
+		fmt.Sprintf("API keys · %d active · %d total", m.systemOneConfig.ActiveKeyCount(), m.systemOneKeyCount()),
 	}
 	for _, provider := range m.systemOneConfig.Providers {
 		rows = append(rows, "Provider · "+provider.ID+" · "+provider.URI)
@@ -514,13 +660,71 @@ func (m model) viewSystemOneList() string {
 	return body.String()
 }
 
+func (m model) viewSystemOneKeys() string {
+	var body strings.Builder
+	body.WriteString(agentTraceTitleStyle(m.dark).Render("API KEYS"))
+	body.WriteString("\n")
+	body.WriteString(subtleStyle.Render("These keys authenticate `q systemone start`; without active keys, authentication is disabled."))
+	body.WriteString("\n")
+	if m.generatedSystemOneKey != "" {
+		body.WriteString("\n")
+		body.WriteString(subtleStyle.Render("Copy this key now. It will not be shown again."))
+		body.WriteString("\n\n")
+		body.WriteString(activeLabelStyle.Render(m.generatedSystemOneKey))
+		body.WriteString("\n")
+		return body.String()
+	}
+	if m.systemOneKeyAdding {
+		body.WriteString("\n")
+		body.WriteString(subtleStyle.Render("Choose a unique alias."))
+		body.WriteString("\n\n")
+		body.WriteString(m.systemOneKeyAlias.View())
+		body.WriteString("\n")
+		return body.String()
+	}
+	if m.systemOneKeyCount() == 0 {
+		body.WriteString("\n")
+		body.WriteString(emptyStyle.Render("No API keys configured"))
+		body.WriteString("\n")
+		return body.String()
+	}
+	body.WriteString("\n")
+	index := 0
+	if m.systemOneConfig.Server.APIKey != "" {
+		body.WriteString(m.systemOneKeyRow(index, "legacy", "legacy", "active"))
+		index++
+	}
+	for _, key := range m.systemOneConfig.APIKeys {
+		state := "active"
+		if key.RevokedAt != nil {
+			state = "revoked"
+		}
+		body.WriteString(m.systemOneKeyRow(index, key.Alias, key.ID, state))
+		index++
+	}
+	return body.String()
+}
+
+func (m model) systemOneKeyRow(index int, alias, id, state string) string {
+	prefix := "  "
+	style := subtleStyle
+	if index == m.systemOneKeyCursor {
+		prefix = "› "
+		style = activeLabelStyle
+	}
+	if len(id) > 8 {
+		id = id[:8]
+	}
+	return prefix + style.Render(alias) + subtleStyle.Render(" · "+id+" · "+state) + "\n"
+}
+
 func (m model) viewSystemOneEditor() string {
 	var body strings.Builder
 	first, last := systemOneFieldProviderID, systemOneFieldKeyEnv
 	labels := []string{"Provider ID", "Endpoint URI", "Provider API key", "API key env"}
 	if m.systemOnePage == systemOnePageNetwork {
-		first, last = systemOneFieldHost, systemOneFieldServerKey
-		labels = []string{"Listen host", "Listen port", "Server API key"}
+		first, last = systemOneFieldHost, systemOneFieldPort
+		labels = []string{"Listen host", "Listen port"}
 		body.WriteString(agentTraceTitleStyle(m.dark).Render("NETWORK"))
 	} else {
 		body.WriteString(agentTraceTitleStyle(m.dark).Render(fmt.Sprintf(
@@ -541,11 +745,14 @@ func (m model) viewSystemOneEditor() string {
 	}
 	if m.systemOnePage == systemOnePageNetwork {
 		body.WriteString("\n")
-		body.WriteString(subtleStyle.Render("A public listen host requires a server API key."))
+		body.WriteString(subtleStyle.Render("Manage client authentication in API keys."))
 	} else if m.systemOneInputs[systemOneFieldProviderKey].Value() == "" &&
 		os.Getenv(m.systemOneInputs[systemOneFieldKeyEnv].Value()) != "" {
 		body.WriteString("\n")
 		body.WriteString(subtleStyle.Render("Using " + m.systemOneInputs[systemOneFieldKeyEnv].Value() + " from the environment"))
+	} else if m.systemOneInputs[systemOneFieldProviderKey].Value() == "" {
+		body.WriteString("\n")
+		body.WriteString(subtleStyle.Render("No provider API key; requests omit Authorization."))
 	}
 	return body.String()
 }

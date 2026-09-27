@@ -8,6 +8,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
@@ -53,7 +54,16 @@ func runSystemOneWithStore(
 		port = options.port
 	}
 	value.Server.Host, value.Server.Port = host, port
-	instance, err := systemoneserver.New(value)
+	var masterKey [32]byte
+	if value.ActiveGeneratedKeyCount() > 0 {
+		masterKey, err = store.LoadMasterKey()
+		if err != nil {
+			return fmt.Errorf("q systemone: load API key master: %w", err)
+		}
+	} else if value.ActiveKeyCount() == 0 {
+		_, _ = fmt.Fprintln(stderr, "q systemone: no active API keys; authentication disabled")
+	}
+	instance, err := systemoneserver.NewWithMasterKey(value, masterKey)
 	if err != nil {
 		return fmt.Errorf("q systemone: initialize: %w", err)
 	}
@@ -76,21 +86,68 @@ func runSystemOneWithStore(
 		defer cancel()
 		_ = server.Shutdown(shutdownCtx)
 	}()
+	watchDone := watchSystemOneKeyring(serverContext, store, instance, stderr)
 	if fallback {
 		_, _ = fmt.Fprintf(stderr, "q systemone: configured port %d is unavailable; using %s\n", port, listener.Addr())
 	}
 	if _, err := fmt.Fprintf(stdout, "q systemone listening on http://%s/v1\n", listener.Addr()); err != nil {
 		cancelServer()
 		<-shutdownDone
+		<-watchDone
 		return fmt.Errorf("q systemone: report listen address: %w", err)
 	}
 	serveErr := server.Serve(listener)
 	cancelServer()
 	<-shutdownDone
+	<-watchDone
 	if errors.Is(serveErr, http.ErrServerClosed) {
 		return nil
 	}
 	return fmt.Errorf("q systemone: serve: %w", serveErr)
+}
+
+func watchSystemOneKeyring(ctx context.Context, store systemoneconfig.Store, server *systemoneserver.Server, output io.Writer) <-chan struct{} {
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		ticker := time.NewTicker(500 * time.Millisecond)
+		defer ticker.Stop()
+		var lastModified time.Time
+		if info, err := os.Stat(store.Path()); err == nil {
+			lastModified = info.ModTime()
+		}
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				info, err := os.Stat(store.Path())
+				if err != nil || info.ModTime().Equal(lastModified) {
+					continue
+				}
+				lastModified = info.ModTime()
+				value, err := store.LoadOrDefault()
+				if err != nil {
+					_, _ = fmt.Fprintf(output, "q systemone: API key reload skipped: %v\n", err)
+					continue
+				}
+				var masterKey [32]byte
+				if value.ActiveGeneratedKeyCount() > 0 {
+					masterKey, err = store.LoadMasterKey()
+					if err != nil {
+						_, _ = fmt.Fprintf(output, "q systemone: API key reload skipped: %v\n", err)
+						continue
+					}
+				}
+				if err := server.ReloadAuthentication(value, masterKey); err != nil {
+					_, _ = fmt.Fprintf(output, "q systemone: API key reload skipped: %v\n", err)
+					continue
+				}
+				_, _ = fmt.Fprintln(output, "q systemone: API keys reloaded")
+			}
+		}
+	}()
+	return done
 }
 
 func parseSystemOneOptions(args []string, output io.Writer) (systemOneCommandOptions, error) {

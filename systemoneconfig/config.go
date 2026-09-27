@@ -12,11 +12,13 @@ import (
 	"strings"
 
 	"github.com/snowmerak/q/client/systemone"
+	"github.com/snowmerak/q/internal/authkey"
 	"github.com/snowmerak/q/internal/fsreplace"
 )
 
 const (
 	FileName               = "systemone.json"
+	MasterKeyName          = "systemone.key"
 	DefaultURI             = "https://api.typesafe.ai/v1/systemone"
 	DefaultModel           = "jev-latest"
 	Version                = 2
@@ -24,10 +26,13 @@ const (
 )
 
 type ServerConfig struct {
-	Host   string `json:"host"`
-	Port   int    `json:"port"`
+	Host string `json:"host"`
+	Port int    `json:"port"`
+	// APIKey is retained for existing settings. New keys are stored in Config.APIKeys.
 	APIKey string `json:"api_key,omitempty"`
 }
+
+type APIKey = authkey.Record
 
 type ProviderConfig struct {
 	ID        string `json:"id"`
@@ -39,6 +44,7 @@ type ProviderConfig struct {
 type Config struct {
 	Version      int               `json:"version"`
 	Server       ServerConfig      `json:"server"`
+	APIKeys      []APIKey          `json:"api_keys,omitempty"`
 	Providers    []ProviderConfig  `json:"providers"`
 	DefaultModel string            `json:"default_model"`
 	RoleModels   map[string]string `json:"role_models,omitempty"`
@@ -59,8 +65,7 @@ func (c Config) Validate() error {
 	if c.Version != Version {
 		return fmt.Errorf("systemone: unsupported config version %d", c.Version)
 	}
-	address := net.ParseIP(c.Server.Host)
-	if address == nil {
+	if net.ParseIP(c.Server.Host) == nil {
 		return errors.New("systemone: server host must be an IP address")
 	}
 	if c.Server.Port < 0 || c.Server.Port > 65535 {
@@ -69,8 +74,8 @@ func (c Config) Validate() error {
 	if strings.ContainsAny(c.Server.APIKey, "\r\n") {
 		return errors.New("systemone: server API key must be a single line")
 	}
-	if !address.IsLoopback() && c.Server.APIKey == "" {
-		return errors.New("systemone: a server API key is required outside loopback")
+	if err := authkey.ValidateRecords(c.APIKeys, "systemone"); err != nil {
+		return err
 	}
 	if len(c.Providers) == 0 {
 		return errors.New("systemone: at least one provider is required")
@@ -144,11 +149,7 @@ func (p ProviderConfig) NewClient() (*systemone.Client, error) {
 	if err := p.Validate(); err != nil {
 		return nil, err
 	}
-	key := p.ResolveAPIKey()
-	if key == "" {
-		return nil, fmt.Errorf("systemone: provider %q requires an API key or a populated API key environment variable", p.ID)
-	}
-	return systemone.New(systemone.Config{BaseURL: p.BaseURL(), APIKey: key})
+	return systemone.New(systemone.Config{BaseURL: p.BaseURL(), APIKey: p.ResolveAPIKey()})
 }
 
 // ModelForRole returns the role override, or the representative model.
@@ -191,6 +192,8 @@ func (c Config) NewClientForRole(role string) (*systemone.Client, string, error)
 type Store struct{ Dir string }
 
 func (s Store) Path() string { return filepath.Join(s.Dir, FileName) }
+
+func (s Store) MasterKeyPath() string { return filepath.Join(s.Dir, MasterKeyName) }
 
 func (s Store) LoadOrDefault() (Config, error) {
 	data, err := os.ReadFile(s.Path())

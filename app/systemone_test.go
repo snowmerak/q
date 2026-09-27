@@ -67,6 +67,8 @@ func TestSystemOneEditsSaveAsTheyChange(t *testing.T) {
 	m = updated.(model)
 	updated, _ = m.updateSystemOne(tea.KeyPressMsg{Code: tea.KeyUp})
 	m = updated.(model)
+	updated, _ = m.updateSystemOne(tea.KeyPressMsg{Code: tea.KeyUp})
+	m = updated.(model)
 	updated, _ = m.updateSystemOne(tea.KeyPressMsg{Code: tea.KeyEnter})
 	m = updated.(model)
 	if m.systemOnePage != systemOnePageNetwork {
@@ -81,6 +83,93 @@ func TestSystemOneEditsSaveAsTheyChange(t *testing.T) {
 	loaded, err = store.LoadOrDefault()
 	if err != nil || loaded.Server.Port != 8787 {
 		t.Fatalf("port was not saved on edit: %#v, %v", loaded, err)
+	}
+}
+
+func TestSystemOnePublicHostSavesWithoutServerKey(t *testing.T) {
+	store := systemoneconfig.Store{Dir: t.TempDir()}
+	m := newModel(t.Context(), config.Store{Dir: store.Dir}, nil)
+	updated, _ := m.enterSystemOne()
+	m = updated.(model)
+	updated, _ = m.updateSystemOne(tea.KeyPressMsg{Code: tea.KeyUp})
+	m = updated.(model)
+	updated, _ = m.updateSystemOne(tea.KeyPressMsg{Code: tea.KeyUp})
+	m = updated.(model)
+	updated, _ = m.updateSystemOne(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m = updated.(model)
+	m.systemOneInputs[systemOneFieldHost].SetValue("0.0.0.")
+	m.systemOneInputs[systemOneFieldHost].CursorEnd()
+	updated, _ = m.updateSystemOne(systemOneTestKey('0', "0"))
+	m = updated.(model)
+	loaded, err := store.LoadOrDefault()
+	if err != nil || loaded.Server.Host != "0.0.0.0" || loaded.Server.APIKey != "" {
+		t.Fatalf("public host without server key was not saved: %#v, %v", loaded.Server, err)
+	}
+}
+
+func TestSystemOneManagedAPIKeysGenerateAndRevoke(t *testing.T) {
+	store := systemoneconfig.Store{Dir: t.TempDir()}
+	m := newModel(t.Context(), config.Store{Dir: store.Dir}, nil)
+	updated, _ := m.enterSystemOne()
+	m = updated.(model)
+	updated, _ = m.updateSystemOne(tea.KeyPressMsg{Code: tea.KeyUp})
+	m = updated.(model)
+	updated, _ = m.updateSystemOne(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m = updated.(model)
+	if m.systemOnePage != systemOnePageKeys {
+		t.Fatal("API keys did not open")
+	}
+	updated, _ = m.updateSystemOne(systemOneTestKey('a', "a"))
+	m = updated.(model)
+	m.systemOneKeyAlias.SetValue("desktop")
+	updated, _ = m.updateSystemOne(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m = updated.(model)
+	secret := m.generatedSystemOneKey
+	if !strings.HasPrefix(secret, "qso_") || m.systemOneConfig.ActiveKeyCount() != 1 {
+		t.Fatalf("generated key state = %q, %#v", secret, m.systemOneConfig.APIKeys)
+	}
+	body, err := os.ReadFile(store.Path())
+	if err != nil || strings.Contains(string(body), secret) {
+		t.Fatalf("plaintext key was persisted: %v", err)
+	}
+	updated, _ = m.updateSystemOne(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m = updated.(model)
+	updated, _ = m.updateSystemOne(systemOneTestKey('r', "r"))
+	m = updated.(model)
+	if !m.systemOneKeyRevokeArmed {
+		t.Fatal("revoke confirmation was not armed")
+	}
+	updated, _ = m.updateSystemOne(systemOneTestKey('r', "r"))
+	m = updated.(model)
+	if m.systemOneConfig.ActiveKeyCount() != 0 || m.systemOneConfig.APIKeys[0].RevokedAt == nil {
+		t.Fatalf("key was not revoked: %#v", m.systemOneConfig.APIKeys)
+	}
+}
+
+func TestSystemOneLegacyServerKeyCanBeRevoked(t *testing.T) {
+	store := systemoneconfig.Store{Dir: t.TempDir()}
+	value := systemoneconfig.Default()
+	value.Server.APIKey = "old-client-key"
+	if err := store.Save(value); err != nil {
+		t.Fatal(err)
+	}
+	m := newModel(t.Context(), config.Store{Dir: store.Dir}, nil)
+	updated, _ := m.enterSystemOne()
+	m = updated.(model)
+	updated, _ = m.updateSystemOne(tea.KeyPressMsg{Code: tea.KeyUp})
+	m = updated.(model)
+	updated, _ = m.updateSystemOne(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m = updated.(model)
+	if m.systemOnePage != systemOnePageKeys || m.systemOneConfig.ActiveKeyCount() != 1 {
+		t.Fatal("legacy key did not appear in API keys")
+	}
+	updated, _ = m.updateSystemOne(systemOneTestKey('r', "r"))
+	m = updated.(model)
+	updated, _ = m.updateSystemOne(systemOneTestKey('r', "r"))
+	m = updated.(model)
+	loaded, err := store.LoadOrDefault()
+	if err != nil || loaded.Server.APIKey != "" || loaded.ActiveKeyCount() != 0 {
+		t.Fatalf("legacy key was not revoked: %#v, %v", loaded, err)
 	}
 }
 

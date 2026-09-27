@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/snowmerak/q/systemoneconfig"
 )
@@ -112,6 +113,61 @@ func TestServerRejectsMissingClientKeyAndUnknownProvider(t *testing.T) {
 		t.Fatalf("invalid idempotency key status = %d", response.StatusCode)
 	}
 	response.Body.Close()
+}
+
+func TestServerManagedKeysEnableAndDisableAuthentication(t *testing.T) {
+	upstream := testUpstream(t, "provider-key", "first")
+	defer upstream.Close()
+	store := systemoneconfig.Store{Dir: t.TempDir()}
+	value := systemoneconfig.Default()
+	value.Providers[0] = systemoneconfig.ProviderConfig{ID: "first", URI: upstream.URL + "/v1/systemone", APIKey: "provider-key"}
+	value.DefaultModel = "first/jev"
+	var err error
+	value, first, err := store.CreateAPIKey(value, "first client", time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	value, second, err := store.CreateAPIKey(value, "second client", time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	masterKey, err := store.LoadMasterKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	instance, err := NewWithMasterKey(value, masterKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(instance.Handler())
+	defer server.Close()
+	checkStatus := func(key string, want int) {
+		t.Helper()
+		response := send(t, http.MethodGet, server.URL+"/v1/models", nil, key, "")
+		response.Body.Close()
+		if response.StatusCode != want {
+			t.Fatalf("key %q: status = %d, want %d", key, response.StatusCode, want)
+		}
+	}
+	checkStatus("", http.StatusUnauthorized)
+	checkStatus(first.Secret, http.StatusOK)
+	value, err = store.RevokeAPIKey(value, first.Record.ID, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := instance.ReloadAuthentication(value, masterKey); err != nil {
+		t.Fatal(err)
+	}
+	checkStatus(first.Secret, http.StatusUnauthorized)
+	checkStatus(second.Secret, http.StatusOK)
+	value, err = store.RevokeAPIKey(value, second.Record.ID, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := instance.ReloadAuthentication(value, masterKey); err != nil {
+		t.Fatal(err)
+	}
+	checkStatus("", http.StatusOK)
 }
 
 func TestServerPreservesProviderErrorAndRateLimitHeaders(t *testing.T) {

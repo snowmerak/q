@@ -157,21 +157,26 @@ type modelSettingsState struct {
 }
 
 type systemOneState struct {
-	systemOneStore       systemoneconfig.Store
-	systemOneConfig      systemoneconfig.Config
-	systemOneProvider    int
-	systemOnePage        systemOnePage
-	systemOneListCursor  int
-	systemOnePending     bool
-	systemOneInputs      [9]textinput.Model
-	systemOneFocus       int
-	systemOneModelTarget int
-	systemOneModels      []systemone.Model
-	systemOneCursor      int
-	systemOneLoading     bool
-	systemOnePicking     bool
-	systemOneRequestID   uint64
-	systemOneCancel      context.CancelFunc
+	systemOneStore          systemoneconfig.Store
+	systemOneConfig         systemoneconfig.Config
+	systemOneProvider       int
+	systemOnePage           systemOnePage
+	systemOneListCursor     int
+	systemOnePending        bool
+	systemOneInputs         [8]textinput.Model
+	systemOneFocus          int
+	systemOneModelTarget    int
+	systemOneModels         []systemone.Model
+	systemOneCursor         int
+	systemOneLoading        bool
+	systemOnePicking        bool
+	systemOneRequestID      uint64
+	systemOneCancel         context.CancelFunc
+	systemOneKeyAlias       textinput.Model
+	systemOneKeyCursor      int
+	systemOneKeyAdding      bool
+	systemOneKeyRevokeArmed bool
+	generatedSystemOneKey   string
 }
 
 // loomState owns one copyable part of the Bubble Tea model.
