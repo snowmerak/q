@@ -52,6 +52,35 @@ func TestPlanAndApplyKeepSystemAndRecent(t *testing.T) {
 	}
 }
 
+func TestCheckpointCopyKeepsOriginalUntilCommit(t *testing.T) {
+	policy := Policy{ContextWindow: 4000, TriggerRatio: .85, TargetRatio: .22, RecentRatio: .07}
+	m := New(policy, []client.Message{{Role: client.RoleSystem, Content: "keep system"}})
+	for range 8 {
+		m.Append(client.Message{Role: client.RoleUser, Content: strings.Repeat("old context ", 80)})
+		m.Append(client.Message{Role: client.RoleAssistant, Content: strings.Repeat("answer ", 80)})
+	}
+	m.Append(client.Message{Role: client.RoleUser, Content: "latest request"})
+	m.ObserveUsage(m.LocalEstimate()+100, m.LocalEstimate())
+	plan, err := m.Plan()
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := m.Messages()
+	compacted, checkpoint, err := m.CheckpointCopy(plan, checkpointResponse("durable state"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if checkpoint == "" || len(m.Messages()) != len(before) || m.Stats().Compactions != 0 {
+		t.Fatalf("live manager changed before commit: %#v", m.Stats())
+	}
+	if compacted.Stats().Compactions != 1 || compacted.Stats().ProviderOverhead != m.Stats().ProviderOverhead {
+		t.Fatalf("staged manager lost statistics: %#v", compacted.Stats())
+	}
+	if len(compacted.Messages()) >= len(before) {
+		t.Fatalf("staged manager was not compacted: %d >= %d", len(compacted.Messages()), len(before))
+	}
+}
+
 func TestApplyAcceptsCompactedContextAboveTarget(t *testing.T) {
 	policy := Policy{ContextWindow: 10_000, TriggerRatio: .80, TargetRatio: .15, RecentRatio: .05}
 	manager := New(policy, []client.Message{{Role: client.RoleSystem, Content: "keep system"}})

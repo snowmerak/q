@@ -3,6 +3,8 @@ package app
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -66,7 +68,7 @@ func TestTUICompactCommandPreservesTranscriptWithoutSendingChat(t *testing.T) {
 	}
 	updated, _ = m.Update(result)
 	m = updated.(model)
-	if m.waiting || m.compacting || m.turnCancel != nil || len(fake.requests) != 1 || len(m.messages) != before {
+	if m.waiting || m.compacting || m.turnCancel != nil || m.compactionTarget != 0 || len(fake.requests) != 1 || len(m.messages) != before {
 		t.Fatalf("manual compaction continued chat or changed transcript: waiting=%v requests=%d transcript=%d", m.waiting, len(fake.requests), len(m.messages))
 	}
 	if !hasMessageNamed(m.memory.Messages(), memory.SummaryName) || m.conversationID != "" {
@@ -240,5 +242,122 @@ func TestTUICompactCommandCancelledResultIsIgnored(t *testing.T) {
 	m = updated.(model)
 	if m.waiting || m.conversationID != "previous-conversation" || hasMessageNamed(m.memory.Messages(), memory.SummaryName) || len(m.memory.Messages()) != len(before) {
 		t.Fatalf("cancelled checkpoint changed context: waiting=%v conversation=%q context=%#v", m.waiting, m.conversationID, m.memory.Messages())
+	}
+}
+
+func TestTUICompactCommandSaveFailureKeepsContext(t *testing.T) {
+	value := config.Default()
+	value.Provider.Model = "test-model"
+	value.Provider.ContextWindow = 4000
+	fake := &fakeClient{}
+	m := newModel(context.Background(), config.Store{Dir: t.TempDir()}, nil)
+	m.enterChat(value, fake)
+	for _, message := range compactCommandHistory() {
+		m.messages = append(m.messages, message)
+		m.memory.Append(message)
+	}
+	before := m.memory.Messages()
+	m.conversationID = "previous-conversation"
+	blockedRoot := filepath.Join(t.TempDir(), "blocked-root")
+	if err := os.WriteFile(blockedRoot, []byte("file"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	m.workspaceStore = &workspace.Store{Root: blockedRoot}
+	m.input.SetValue("/compact")
+	updated, command := m.submitChat()
+	m = updated.(model)
+	batch, ok := command().(tea.BatchMsg)
+	if !ok {
+		t.Fatal("manual compaction did not start")
+	}
+	var result compactionResultMsg
+	for _, child := range batch {
+		if message, ok := child().(compactionResultMsg); ok {
+			result = message
+		}
+	}
+	if !result.manual || result.err != nil {
+		t.Fatalf("checkpoint request failed before save: %#v", result)
+	}
+	updated, _ = m.Update(result)
+	m = updated.(model)
+	if m.waiting || m.compacting || m.turnCancel != nil || m.conversationID != "previous-conversation" || m.compactionTarget != 0 || !strings.Contains(m.status, "compact context:") {
+		t.Fatalf("save failure changed TUI state: waiting=%v conversation=%q status=%q", m.waiting, m.conversationID, m.status)
+	}
+	if got := m.memory.Messages(); len(got) != len(before) || hasMessageNamed(got, memory.SummaryName) || m.memory.Stats().Compactions != 0 {
+		t.Fatalf("save failure changed TUI context: %#v", got)
+	}
+	if len(fake.requests) != 1 {
+		t.Fatalf("save failure sent another chat request: %d", len(fake.requests))
+	}
+}
+
+func TestACPCompactCommandSaveFailureKeepsContext(t *testing.T) {
+	fake := &fakeClient{}
+	agent, store, _ := testACPAgent(t, fake, &fakeAgentTools{})
+	sessionID := openTestACPSession(t, agent, store.Root)
+	runtime := activeACPRuntime(t, agent, sessionID)
+	value := runtime.state.activeConfig()
+	value.Provider.ContextWindow = 8000
+	runtime.state.config = value
+	runtime.state.memory.Configure(memoryPolicy(value))
+	for _, message := range compactCommandHistory() {
+		runtime.state.messages = append(runtime.state.messages, message)
+		runtime.state.memory.Append(message)
+	}
+	before := runtime.state.memory.Messages()
+	runtime.state.conversationID = "previous-conversation"
+	blockedRoot := filepath.Join(t.TempDir(), "blocked-root")
+	if err := os.WriteFile(blockedRoot, []byte("file"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runtime.state.workspaceStore = &workspace.Store{Root: blockedRoot, SessionID: string(sessionID)}
+	_, err := agent.Prompt(t.Context(), acp.PromptRequest{
+		SessionId: sessionID, Prompt: []acp.ContentBlock{acp.TextBlock("/compact")},
+	})
+	if err == nil || len(fake.requests) != 1 || !isCheckpointRequestForTest(fake.requests[0]) {
+		t.Fatalf("ACP save failure: err=%v requests=%#v", err, fake.requests)
+	}
+	if got := runtime.state.memory.Messages(); len(got) != len(before) || hasMessageNamed(got, memory.SummaryName) || runtime.state.memory.Stats().Compactions != 0 || runtime.state.conversationID != "previous-conversation" {
+		t.Fatalf("save failure changed ACP context: %#v, conversation=%q", got, runtime.state.conversationID)
+	}
+}
+
+type cancelAfterCheckpointClient struct {
+	fakeClient
+	cancel context.CancelFunc
+}
+
+func (c *cancelAfterCheckpointClient) Chat(ctx context.Context, request client.ChatRequest) (*client.ChatResponse, error) {
+	response, err := c.fakeClient.Chat(ctx, request)
+	c.cancel()
+	return response, err
+}
+
+func TestACPCompactCommandCancelledProviderResultKeepsContext(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	fake := &cancelAfterCheckpointClient{cancel: cancel}
+	agent, store, _ := testACPAgent(t, fake, &fakeAgentTools{})
+	sessionID := openTestACPSession(t, agent, store.Root)
+	runtime := activeACPRuntime(t, agent, sessionID)
+	value := runtime.state.activeConfig()
+	value.Provider.ContextWindow = 8000
+	runtime.state.config = value
+	runtime.state.memory.Configure(memoryPolicy(value))
+	for _, message := range compactCommandHistory() {
+		runtime.state.messages = append(runtime.state.messages, message)
+		runtime.state.memory.Append(message)
+	}
+	before := runtime.state.memory.Messages()
+	runtime.state.conversationID = "previous-conversation"
+	if err := runtime.compactContext(ctx, true); !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled checkpoint error = %v", err)
+	}
+	if len(fake.requests) != 1 || !isCheckpointRequestForTest(fake.requests[0]) {
+		t.Fatalf("checkpoint request = %#v", fake.requests)
+	}
+	if got := runtime.state.memory.Messages(); len(got) != len(before) || hasMessageNamed(got, memory.SummaryName) || runtime.state.memory.Stats().Compactions != 0 || runtime.state.conversationID != "previous-conversation" {
+		t.Fatalf("cancelled ACP checkpoint changed context: %#v, conversation=%q", got, runtime.state.conversationID)
 	}
 }

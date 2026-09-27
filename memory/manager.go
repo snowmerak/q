@@ -333,6 +333,21 @@ func (m *Manager) Apply(plan Plan, response string) error {
 	return err
 }
 
+// CheckpointCopy prepares a compacted context without changing the live manager.
+// Callers can persist the copy before replacing their active context.
+func (m *Manager) CheckpointCopy(plan Plan, response string) (*Manager, string, error) {
+	next := *m
+	next.messages = cloneMessages(m.messages)
+	next.taskMemory.active = append([]memoryEntry(nil), m.taskMemory.active...)
+	next.taskMemory.previous = append([]memoryEntry(nil), m.taskMemory.previous...)
+	next.taskMemory.facts = append([]memoryEntry(nil), m.taskMemory.facts...)
+	checkpoint, err := next.ApplyCheckpoint(plan, response)
+	if err != nil {
+		return nil, "", err
+	}
+	return &next, checkpoint, nil
+}
+
 // ApplyCheckpoint recovers and normalizes a provider-produced checkpoint before
 // atomically replacing the request context. It returns the canonical JSON that
 // callers should archive or forward to another context owner.

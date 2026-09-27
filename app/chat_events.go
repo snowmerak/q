@@ -274,7 +274,7 @@ func (m model) updateCompactionResult(message compactionResultMsg) (tea.Model, t
 		}
 		return m, m.input.Focus()
 	}
-	checkpoint, err := m.memory.ApplyCheckpoint(message.plan, message.response.Choices[0].Message.TextContent())
+	compactedMemory, checkpoint, err := m.memory.CheckpointCopy(message.plan, message.response.Choices[0].Message.TextContent())
 	if err != nil {
 		m.rollbackPendingMessage()
 		m.archiveFailure("context_compaction", err)
@@ -284,15 +284,28 @@ func (m model) updateCompactionResult(message compactionResultMsg) (tea.Model, t
 		}
 		return m, m.input.Focus()
 	}
+	candidate := m
+	candidate.memory = compactedMemory
+	candidate.conversationID = ""
+	if err := candidate.saveWorkspaceSession(); err != nil {
+		m.rollbackPendingMessage()
+		m.archiveFailure("context_compaction", err)
+		m.status = "compact context: " + err.Error()
+		if archiveErr := m.flushArchive(); archiveErr != nil {
+			m.status += " · archive: " + archiveErr.Error()
+		}
+		return m, m.input.Focus()
+	}
+	m.memory = compactedMemory
 	m.conversationID = ""
 	m.archiveSummary(checkpoint)
 	m.compacting = false
-	m.compactionTarget = message.plan.TargetTokens
-	m.status = fmt.Sprintf("Context compacted · %s → %s", formatTokens(message.plan.BeforeTokens), formatTokens(m.memory.PredictedTokens()))
-	if err := m.saveWorkspaceSession(); err != nil {
-		m.archiveFailure("context_compaction", err)
-		m.status += " · save: " + err.Error()
+	if message.manual {
+		m.compactionTarget = 0
+	} else {
+		m.compactionTarget = message.plan.TargetTokens
 	}
+	m.status = fmt.Sprintf("Context compacted · %s → %s", formatTokens(message.plan.BeforeTokens), formatTokens(m.memory.PredictedTokens()))
 	if message.manual {
 		m.finishTurn()
 		m.waiting = false

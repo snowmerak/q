@@ -1807,15 +1807,25 @@ func (a *acpAgent) compactContext(ctx context.Context, force bool) error {
 	if response == nil || len(response.Choices) == 0 {
 		return errors.New("context compaction returned no response choices")
 	}
-	checkpoint, err := a.state.memory.ApplyCheckpoint(plan, response.Choices[0].Message.TextContent())
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	compactedMemory, checkpoint, err := a.state.memory.CheckpointCopy(plan, response.Choices[0].Message.TextContent())
 	if err != nil {
 		return err
 	}
-	a.state.conversationID = ""
-	a.state.archiveSummary(checkpoint)
-	if err := a.state.saveWorkspaceSession(); err != nil {
+	if err := ctx.Err(); err != nil {
 		return err
 	}
+	candidate := *a.state
+	candidate.memory = compactedMemory
+	candidate.conversationID = ""
+	if err := candidate.saveWorkspaceSession(); err != nil {
+		return err
+	}
+	a.state.memory = compactedMemory
+	a.state.conversationID = ""
+	a.state.archiveSummary(checkpoint)
 	a.publishUsageUpdate()
 	return nil
 }
@@ -2094,10 +2104,10 @@ func (a *acpAgent) runACPCommand(ctx context.Context, text string) (acp.PromptRe
 			_ = a.state.flushArchive()
 			return acp.PromptResponse{}, true, err
 		}
-		if err := a.state.flushArchive(); err != nil {
-			return acp.PromptResponse{}, true, err
-		}
 		output = fmt.Sprintf("Context compacted · %s → %s", formatTokens(before), formatTokens(a.state.memory.PredictedTokens()))
+		if err := a.state.flushArchive(); err != nil {
+			output += " · archive: " + err.Error()
+		}
 	case command == "/clear":
 		if err := a.clearACPConversation(ctx); err != nil {
 			return acp.PromptResponse{}, true, err
