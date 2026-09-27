@@ -1391,20 +1391,20 @@ func TestAgentModelSelectionReplacesGroupAndSummaryShowsGroup(t *testing.T) {
 		"heavy": {Candidates: []config.ModelCandidateConfig{{Model: "primary"}, {Model: "secondary"}}},
 	}
 	value.Agents.Roles = map[string]config.AgentConfig{
-		config.AgentRolePlanner: {Group: "heavy", ReasoningEffort: "high"},
+		config.AgentRoleManager: {Group: "heavy", ReasoningEffort: "high"},
 	}
 	summaryModel := model{modelSettingsState: modelSettingsState{draftConfig: value}}
-	if summary := summaryModel.globalModelSummary(config.AgentRolePlanner); summary != "group/heavy" {
+	if summary := summaryModel.globalModelSummary(config.AgentRoleManager); summary != "group/heavy" {
 		t.Fatalf("summary = %q", summary)
 	}
-	updated := withAgentModel(value, config.AgentRolePlanner, "single-model")
-	agent := updated.Agents.Roles[config.AgentRolePlanner]
+	updated := withAgentModel(value, config.AgentRoleManager, "single-model")
+	agent := updated.Agents.Roles[config.AgentRoleManager]
 	if agent.Model != "single-model" || agent.Group != "" || agent.ReasoningEffort != "high" {
 		t.Fatalf("agent = %#v", agent)
 	}
 	m := model{
 		modelSettingsState: modelSettingsState{
-			draftConfig: value, modelTarget: config.AgentRolePlanner,
+			draftConfig: value, modelTarget: config.AgentRoleManager,
 			models: []client.Model{{ID: "primary"}, {ID: "secondary"}},
 		},
 	}
@@ -1412,8 +1412,8 @@ func TestAgentModelSelectionReplacesGroupAndSummaryShowsGroup(t *testing.T) {
 	if len(choices) != 3 || choices[2].ID != "group:heavy" {
 		t.Fatalf("choices = %#v", choices)
 	}
-	grouped := withAgentGroup(updated, config.AgentRolePlanner, "heavy")
-	agent = grouped.Agents.Roles[config.AgentRolePlanner]
+	grouped := withAgentGroup(updated, config.AgentRoleManager, "heavy")
+	agent = grouped.Agents.Roles[config.AgentRoleManager]
 	if agent.Model != "" || agent.Group != "heavy" {
 		t.Fatalf("grouped agent = %#v", agent)
 	}
@@ -1424,7 +1424,7 @@ func TestModelGroupsTUIShortcutCreatesOrderedGroup(t *testing.T) {
 	value := config.Default()
 	value.Provider.Model = "primary"
 	value.Agents.Roles = map[string]config.AgentConfig{
-		config.AgentRolePlanner: {Model: "primary", ReasoningEffort: "high"},
+		config.AgentRoleManager: {Model: "primary", ReasoningEffort: "high"},
 	}
 	m := newModel(context.Background(), store, nil)
 	m.draftConfig = value
@@ -1506,7 +1506,7 @@ func TestModelGroupsTUIShortcutCreatesOrderedGroup(t *testing.T) {
 	if contextLength, output := modelGroupLimits(group, m.models); contextLength != 128_000 || output != 8_000 {
 		t.Fatalf("limits = %d/%d", contextLength, output)
 	}
-	planner := m.config.Agents.Roles[config.AgentRolePlanner]
+	planner := m.config.Agents.Roles[config.AgentRoleManager]
 	if planner.Model != "primary" || planner.Group != "" || planner.ReasoningEffort != "high" {
 		t.Fatalf("saving group changed planner = %#v", planner)
 	}
@@ -1706,8 +1706,8 @@ func TestHelpCommandAndShortcutKeepCommandsOutOfChatFooter(t *testing.T) {
 	}
 	help := ansi.Strip(m.View().Content)
 	for _, expected := range []string{
-		"q · Help", "SLASH COMMANDS", "/plan [request]", "/auto-approve [on|off|status]", "/auto-resolve [on|off|status]",
-		"/autonomous [on|off|status]", "/commit", "/new", "/clear", "/learn [on|off|status]", "/model",
+		"q · Help", "SLASH COMMANDS", "/mode [default|delegation]",
+		"/commit", "/new", "/clear", "/learn [on|off|status]", "/model",
 		"/gateway", "/changes",
 	} {
 		if !strings.Contains(help, expected) {
@@ -2978,7 +2978,7 @@ func TestWorkspaceRoleTableCellCanBeChangedAndReset(t *testing.T) {
 	value := config.Default()
 	value.Provider.Model = "global-main"
 	value.Agents.Roles = map[string]config.AgentConfig{
-		config.AgentRolePlanner: {Model: "global-planner"},
+		config.AgentRoleManager: {Model: "global-planner"},
 	}
 	m := newModel(context.Background(), config.Store{Dir: t.TempDir()}, nil)
 	m.workspaceStore = &workspaceStore
@@ -2989,7 +2989,7 @@ func TestWorkspaceRoleTableCellCanBeChangedAndReset(t *testing.T) {
 		{ID: "global-main"}, {ID: "global-planner"}, {ID: "workspace-planner"},
 	})
 	for index, target := range m.modelTargets() {
-		if target == config.AgentRolePlanner {
+		if target == config.AgentRoleManager {
 			m.modelTargetCursor = index
 			break
 		}
@@ -3001,7 +3001,7 @@ func TestWorkspaceRoleTableCellCanBeChangedAndReset(t *testing.T) {
 	}
 	updated, _ = m.updateModelPicker(tea.KeyPressMsg{Code: tea.KeyEnter})
 	m = updated.(model)
-	if !m.modelWorkspace || m.modelTarget != config.AgentRolePlanner || m.modelPickerStage != modelPickerModels {
+	if !m.modelWorkspace || m.modelTarget != config.AgentRoleManager || m.modelPickerStage != modelPickerModels {
 		t.Fatalf("workspace planner selection = target %q, workspace %v, stage %v", m.modelTarget, m.modelWorkspace, m.modelPickerStage)
 	}
 	for index, candidate := range m.filteredModels() {
@@ -3014,15 +3014,15 @@ func TestWorkspaceRoleTableCellCanBeChangedAndReset(t *testing.T) {
 	m = updated.(model)
 	updated, _ = m.Update(command())
 	m = updated.(model)
-	planner, err := m.activeConfig().EffectiveAgent(config.AgentRolePlanner)
+	planner, err := m.activeConfig().EffectiveAgent(config.AgentRoleManager)
 	if err != nil || planner.Model != "workspace-planner" {
 		t.Fatalf("active planner = %#v, err = %v", planner, err)
 	}
-	if m.config.Agents.Roles[config.AgentRolePlanner].Model != "global-planner" {
-		t.Fatalf("global planner changed: %#v", m.config.Agents.Roles[config.AgentRolePlanner])
+	if m.config.Agents.Roles[config.AgentRoleManager].Model != "global-planner" {
+		t.Fatalf("global planner changed: %#v", m.config.Agents.Roles[config.AgentRoleManager])
 	}
 	stored, err := workspaceStore.LoadModelConfig()
-	if err != nil || stored.Overrides[config.AgentRolePlanner].Model != "workspace-planner" {
+	if err != nil || stored.Overrides[config.AgentRoleManager].Model != "workspace-planner" {
 		t.Fatalf("workspace planner = %#v, err = %v", stored, err)
 	}
 
@@ -3033,7 +3033,7 @@ func TestWorkspaceRoleTableCellCanBeChangedAndReset(t *testing.T) {
 	}
 	updated, _ = m.Update(command())
 	m = updated.(model)
-	planner, err = m.activeConfig().EffectiveAgent(config.AgentRolePlanner)
+	planner, err = m.activeConfig().EffectiveAgent(config.AgentRoleManager)
 	if err != nil || planner.Model != "global-planner" {
 		t.Fatalf("reset planner = %#v, err = %v", planner, err)
 	}
@@ -3207,7 +3207,7 @@ func TestWorkspaceModelDoesNotOverrideGlobalServiceModels(t *testing.T) {
 			Version: workspace.ModelConfigVersion,
 			Overrides: map[string]workspace.ModelOverride{
 				defaultModelTarget:      {Model: "workspace-main"},
-				config.AgentRolePlanner: {Model: "workspace-planner"},
+				config.AgentRoleManager: {Model: "workspace-planner"},
 			},
 		}},
 		modelSettingsState: modelSettingsState{models: []client.Model{
@@ -3228,7 +3228,7 @@ func TestWorkspaceModelDoesNotOverrideGlobalServiceModels(t *testing.T) {
 	if contextLength := m.learningContextLength(); contextLength != 16000 {
 		t.Fatalf("Thinker context length = %d", contextLength)
 	}
-	planner, err := active.EffectiveAgent(config.AgentRolePlanner)
+	planner, err := active.EffectiveAgent(config.AgentRoleManager)
 	if err != nil || planner.Model != "workspace-planner" {
 		t.Fatalf("active planner = %#v, err = %v", planner, err)
 	}

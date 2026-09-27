@@ -1131,8 +1131,6 @@ func (m *model) enterChat(value config.Config, configuredClient chatClient) {
 	m.waiting = false
 	m.compacting = false
 	m.asking = false
-	m.planResumePending = false
-	m.planCheckpoint = subagent.ExecutionCheckpoint{}
 	m.pendingQuestion = askToUserInput{}
 	m.questionAnswer = nil
 	m.questionEvents = nil
@@ -1156,7 +1154,6 @@ func (m *model) enterChat(value config.Config, configuredClient chatClient) {
 		m.status += workspaceLearningErr.Error()
 	}
 	m.ensureRunID()
-	m.offerPlanExecutionResume()
 	m.resize(m.width, m.height)
 	m.input.Focus()
 	m.refreshTranscript()
@@ -1603,9 +1600,6 @@ func (m *model) resetConversationState(runIDs ...string) {
 	m.submitPending = false
 	m.asking = false
 	m.slashCompletion = slashCompletionState{}
-	m.planArmed = false
-	m.planResumePending = false
-	m.planCheckpoint = subagent.ExecutionCheckpoint{}
 	m.pendingQuestion = askToUserInput{}
 	m.questionAnswer = nil
 	m.questionEvents = nil
@@ -1641,9 +1635,6 @@ func (m *model) releaseConversationState(root string) {
 	m.questionAnswer = nil
 	m.questionEvents = nil
 	m.questionTurnID = 0
-	m.planArmed = false
-	m.planResumePending = false
-	m.planCheckpoint = subagent.ExecutionCheckpoint{}
 	m.transcriptThoughts = nil
 	m.streamResponse = ""
 	m.turnContext = nil
@@ -2247,9 +2238,6 @@ func (m *model) appendAgentActivity(activity agentActivity) {
 	if len(m.agentActivities) > 200 {
 		m.agentActivities = append([]agentActivity(nil), m.agentActivities[len(m.agentActivities)-200:]...)
 	}
-	if activity.Agent == "plan" {
-		return
-	}
 	if m.agentStates == nil {
 		m.agentStates = make(map[string]string)
 	}
@@ -2329,7 +2317,12 @@ func (m model) renderedAgentActivities() string {
 
 func agentSummary(states map[string]string) string {
 	parts := []string{titleStyle.Render("agents")}
-	roles := []string{"griller", "scout", "search", "planner", "coder", "executor"}
+	roles := []string{
+		subagent.BuiltinManagerID, subagent.BuiltinInterviewerID,
+		subagent.BuiltinResearchID, subagent.BuiltinSeniorDeveloperID,
+		subagent.BuiltinJuniorDeveloperID,
+		subagent.BuiltinWebSearchID, subagent.BuiltinWebTesterID,
+	}
 	known := make(map[string]bool, len(roles))
 	for _, role := range roles {
 		known[role] = true

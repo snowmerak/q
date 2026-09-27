@@ -62,7 +62,7 @@ func TestSlashCompletionOpensAndFiltersWhileTyping(t *testing.T) {
 		t.Fatalf("slash matches = %#v", matches)
 	}
 	view := ansi.Strip(m.View().Content)
-	for _, expected := range []string{"Commands", "/plan [request]", "Grill, research", "tab/enter complete", "esc close"} {
+	for _, expected := range []string{"Commands", "/mode [default|delegation]", "tab/enter complete", "esc close"} {
 		if !strings.Contains(view, expected) {
 			t.Fatalf("popup missing %q:\n%s", expected, view)
 		}
@@ -134,14 +134,14 @@ func TestSlashCompletionKeepsArgumentsEditable(t *testing.T) {
 	for _, key := range []tea.KeyPressMsg{{Code: tea.KeyTab}, {Code: tea.KeyEnter}} {
 		t.Run(key.String(), func(t *testing.T) {
 			m := newSlashCompletionModel(t)
-			m.input.SetValue("/pl")
+			m.input.SetValue("/lea")
 			m, _ = completionKey(m, key)
-			if m.input.Value() != "/plan " || m.input.Column() != len("/plan ") || m.submitPending {
+			if m.input.Value() != "/learn " || m.input.Column() != len("/learn ") || m.submitPending {
 				t.Fatalf("completion did not leave room for arguments: %q", m.input.Value())
 			}
 			updated, _ := m.Update(tea.PasteMsg{Content: "한글 query"})
 			m = updated.(model)
-			if m.input.Value() != "/plan 한글 query" || len(m.slashCompletionMatches()) != 0 {
+			if m.input.Value() != "/learn 한글 query" || len(m.slashCompletionMatches()) != 0 {
 				t.Fatalf("arguments were changed or reopened completion: %q", m.input.Value())
 			}
 		})

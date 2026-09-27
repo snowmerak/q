@@ -21,14 +21,13 @@ const (
 	TaskStartToolName    = "task_start"
 	TaskCompleteToolName = "task_complete"
 
-	BuiltinScoutID     = "builtin/scout"
-	BuiltinGrillerID   = "builtin/griller"
-	BuiltinPlannerID   = "builtin/planner"
-	BuiltinExecutorID  = "builtin/executor"
-	BuiltinReviewerID  = "builtin/reviewer"
-	BuiltinCoderID     = "builtin/coder"
-	BuiltinWebSearchID = "builtin/web-search"
-	BuiltinWebTesterID = "builtin/web-tester"
+	BuiltinInterviewerID     = "builtin/interviewer"
+	BuiltinManagerID         = "builtin/manager"
+	BuiltinSeniorDeveloperID = "builtin/senior-developer"
+	BuiltinJuniorDeveloperID = "builtin/junior-developer"
+	BuiltinResearchID        = "builtin/research"
+	BuiltinWebSearchID       = "builtin/web-search"
+	BuiltinWebTesterID       = "builtin/web-tester"
 
 	AgentKindInner    = "inner"
 	AgentKindExternal = "external"
@@ -196,6 +195,9 @@ func (r *Registry) Allowed(caller string) []DelegateInfo {
 	var names []string
 	if caller == "" {
 		for name := range r.definitions {
+			if name == BuiltinJuniorDeveloperID {
+				continue
+			}
 			names = append(names, name)
 		}
 	} else if definition, found := r.definitions[caller]; found {
@@ -246,45 +248,39 @@ func BuiltinAgentDefinitions() []AgentDefinition {
 		"lsp_hover", "lsp_definition", "lsp_references", "lsp_document_symbols",
 		"lsp_workspace_symbols",
 	}
-	delegatedReadTools := readTools[2:]
 	return []AgentDefinition{
 		{
-			Info: DelegateInfo{Name: BuiltinScoutID, Source: "builtin", Kind: AgentKindInner, Role: config.AgentRoleScout,
-				Description: "Investigate repository evidence and report bounded findings."},
-			SystemPrompt: "Investigate the explicit request using repository evidence. Do not modify the workspace. Distinguish observations from inference, cite relevant paths or symbols in findings, and report a concrete blocker when evidence is unavailable.",
-			Tools:        readTools,
-		},
-		{
-			Info: DelegateInfo{Name: BuiltinGrillerID, Source: "builtin", Kind: AgentKindInner, Role: config.AgentRoleGriller,
-				Description: "Find ambiguity, missing constraints, assumptions, and risks in a request."},
-			SystemPrompt: "Interrogate the explicit request for ambiguity, missing constraints, unsafe assumptions, and acceptance gaps. Do not modify the workspace, read files or directories directly, or ask the user directly. Delegate repository questions to the scout, then return the questions or constraints the caller should resolve.",
-			Tools:        delegatedReadTools, Delegates: []string{BuiltinScoutID},
-		},
-		{
-			Info: DelegateInfo{Name: BuiltinPlannerID, Source: "builtin", Kind: AgentKindInner, Role: config.AgentRolePlanner,
-				Description: "Plan a bounded request and execute it through the executor only when explicitly requested."},
-			SystemPrompt: "Produce an actionable approach for the explicit request. Do not read files or directories directly; delegate repository inspection to the scout and ground repository claims in its evidence. Keep scope bounded and include concrete completion criteria and verification. If the request asks only for a plan or advice, return the plan without executing it. If the request explicitly asks to implement or execute through completion, first form the bounded plan and then delegate that plan to builtin/executor; report the executor outcome. Never infer execution authority from a planning-only request. This is not the approval-gated q /plan workflow.",
-			Tools:        delegatedReadTools, Delegates: []string{BuiltinScoutID, BuiltinExecutorID},
-		},
-		{
-			Info: DelegateInfo{Name: BuiltinExecutorID, Source: "builtin", Kind: AgentKindInner, Role: config.AgentRoleExecutor,
-				Description: "Execute a supplied bounded plan by coordinating Coder attempts and independent review."},
-			SystemPrompt: "Execute the supplied bounded plan through the same control loop as q's plan workflow. You may inspect the workspace but must not modify it yourself. Delegate the current bounded task, its resolved scope, completion criteria, and any retry feedback to builtin/coder. Inspect the returned TaskResult and any referenced Loom evidence, then delegate the original criteria and Coder result to builtin/reviewer. If Reviewer reports an actionable defect or missing verification, pass that exact feedback into a new Coder attempt and review the new result again. Advance only when Reviewer accepts the result. Use builtin/web-tester when it is granted and the plan requires external behavior verification. Keep attempts bounded, preserve the approved scope, and report a blocker instead of inventing authority. Call task_complete only after every required task is accepted.",
+			Info: DelegateInfo{Name: BuiltinInterviewerID, Source: "builtin", Kind: AgentKindInner, Role: config.AgentRoleInterviewer,
+				Description: "Clarify consequential ambiguity in requirements and report focused questions and confirmed decisions."},
+			SystemPrompt: "You are an interviewer responsible for understanding the user's actual requirements. Read relevant context and delegate focused investigation when needed. Ask only questions whose answers materially change the work. You cannot directly question the user in this child session: return the exact questions and why they matter to the caller. Distinguish confirmed answers from assumptions. Do not edit the workspace.",
 			Tools:        append([]string(nil), readTools...),
-			Delegates:    []string{BuiltinCoderID, BuiltinReviewerID},
+			Delegates:    []string{BuiltinResearchID},
 		},
 		{
-			Info: DelegateInfo{Name: BuiltinReviewerID, Source: "builtin", Kind: AgentKindInner, Role: config.AgentRoleAdvisor,
-				Description: "Review requested code or results without modifying the workspace."},
-			SystemPrompt: "Review only the code, changes, or result named in the explicit request. Do not read files or directories directly; delegate repository inspection to the scout. Do not modify the workspace. Prioritize concrete correctness, security, data-loss, concurrency, and regression risks; avoid style-only comments and identify evidence locations.",
-			Tools:        delegatedReadTools, Delegates: []string{BuiltinScoutID},
+			Info: DelegateInfo{Name: BuiltinManagerID, Source: "builtin", Kind: AgentKindInner, Role: config.AgentRoleManager,
+				Description: "Own product requirements, priorities, acceptance criteria, and the work plan; coordinate specialists as needed."},
+			SystemPrompt: "You are the project manager. Read the request and relevant workspace evidence yourself. Own the objective, priorities, dependencies, acceptance criteria, and a concise actionable plan. Delegate interviewing, research, or technical assessment only when needed; inspect their results before deciding. Record unresolved questions and assumptions explicitly. Coordinate work rather than treating planning as a mandatory separate mode. Do not edit the workspace.",
+			Tools:        append([]string(nil), readTools...),
+			Delegates:    []string{BuiltinInterviewerID, BuiltinResearchID, BuiltinSeniorDeveloperID},
 		},
 		{
-			Info: DelegateInfo{Name: BuiltinCoderID, Source: "builtin", Kind: AgentKindInner, Role: config.AgentRoleCoder,
-				Description: "Implement a bounded request in the workspace and verify it.", MutatesWorkspace: true},
-			SystemPrompt: "Implement only the explicit bounded request. Inspect before editing, preserve unrelated changes, use the smallest coherent changes, and perform proportionate verification. Report exactly what changed and what verification ran.",
-			Tools:        append(append([]string(nil), readTools...), "edit_file", "write_file", "create_directory", "move_path", "copy_path", "remove_path", "run_command", "wait"),
-			Delegates:    []string{BuiltinScoutID, BuiltinReviewerID},
+			Info: DelegateInfo{Name: BuiltinSeniorDeveloperID, Source: "builtin", Kind: AgentKindInner, Role: config.AgentRoleReviewer,
+				Description: "Own the technical approach, delegate bounded implementation, inspect changes and verification, and return actionable review."},
+			SystemPrompt: "You are the senior developer accountable for the technical result. Inspect the relevant code, select a coherent approach, and delegate bounded implementation to the junior developer when useful. Give concrete scope, constraints, and acceptance criteria. Review the actual changes and verification evidence, return specific corrections to the junior developer, and recheck the revised result. Report what was verified and what remains uncertain. Do not claim work is complete from a delegate summary alone. Do not edit the workspace yourself.",
+			Tools:        append([]string(nil), readTools...),
+			Delegates:    []string{BuiltinJuniorDeveloperID, BuiltinResearchID},
+		},
+		{
+			Info: DelegateInfo{Name: BuiltinJuniorDeveloperID, Source: "builtin", Kind: AgentKindInner, Role: config.AgentRoleCoder,
+				Description: "Read and modify the code for an assigned task, run relevant checks, and revise it after review.", MutatesWorkspace: true},
+			SystemPrompt: "You are the junior developer responsible for an assigned implementation. Inspect the relevant code and instructions, make the requested change, run focused verification, and report changed files, results, and remaining risks. When the senior developer returns feedback, revise the implementation and verify again. Stay within the assigned scope and do not delegate your implementation.",
+			Tools:        append(append([]string(nil), readTools...), "edit_file", "write_file", "create_directory", "move_path", "copy_path", "remove_path", "run_command", "cmd_status", "wait"),
+		},
+		{
+			Info: DelegateInfo{Name: BuiltinResearchID, Source: "builtin", Kind: AgentKindInner, Role: config.AgentRoleResearch,
+				Description: "Investigate a focused problem using repository and external evidence, compare options, and recommend a supported approach."},
+			SystemPrompt: "You are a researcher. Investigate the assigned question using relevant local evidence and, when needed, delegate external research to the configured web search agent. Compare viable options, cite evidence, separate facts from inference, and recommend an approach with uncertainties. Do not modify the workspace.",
+			Tools:        append([]string(nil), readTools...),
 		},
 	}
 }
@@ -292,11 +288,8 @@ func BuiltinAgentDefinitions() []AgentDefinition {
 func PublicAgentDefinitions() []AgentDefinition {
 	definitions := BuiltinAgentDefinitions()
 	for index := range definitions {
-		switch definitions[index].Info.Name {
-		case BuiltinGrillerID, BuiltinPlannerID, BuiltinReviewerID:
+		if definitions[index].Info.Name == BuiltinSeniorDeveloperID || definitions[index].Info.Name == BuiltinResearchID {
 			definitions[index].Delegates = append(definitions[index].Delegates, BuiltinWebSearchID)
-		case BuiltinExecutorID:
-			definitions[index].Delegates = append(definitions[index].Delegates, BuiltinWebTesterID)
 		}
 	}
 	return append(definitions, ExternalAgentDefinitions()...)

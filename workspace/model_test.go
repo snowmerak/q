@@ -15,7 +15,7 @@ func TestModelConfigRoundTripAndClear(t *testing.T) {
 	}
 	want := ModelConfig{Overrides: map[string]ModelOverride{
 		"default": {Model: "local/qwen"},
-		"planner": {Model: "local/planner"},
+		"manager": {Model: "local/planner"},
 	}}
 	if err := store.SaveModelConfig(want); err != nil {
 		t.Fatal(err)
@@ -25,7 +25,7 @@ func TestModelConfigRoundTripAndClear(t *testing.T) {
 		t.Fatal(err)
 	}
 	if got.Version != ModelConfigVersion || len(got.Overrides) != 2 ||
-		got.Overrides["default"] != want.Overrides["default"] || got.Overrides["planner"] != want.Overrides["planner"] {
+		got.Overrides["default"] != want.Overrides["default"] || got.Overrides["manager"] != want.Overrides["manager"] {
 		t.Fatalf("model config = %#v", got)
 	}
 	if err := store.ClearModelConfig(); err != nil {
@@ -76,7 +76,7 @@ func TestLoadModelConfigMigratesVersionOneWithoutContextWindow(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Version != ModelConfigVersion || got.Overrides["default"].Model != "local/qwen" || got.Overrides["planner"].Model != "local/planner" {
+	if got.Version != ModelConfigVersion || got.Overrides["default"].Model != "local/qwen" || got.Overrides["manager"].Model != "local/planner" {
 		t.Fatalf("migrated model config = %#v", got)
 	}
 	if err := store.SaveModelConfig(got); err != nil {
@@ -88,6 +88,32 @@ func TestLoadModelConfigMigratesVersionOneWithoutContextWindow(t *testing.T) {
 	}
 	if string(body) == legacy || containsJSONField(body, "context_window") {
 		t.Fatalf("legacy context window survived migration: %s", body)
+	}
+}
+
+func TestLoadModelConfigMigratesRetiredRolesWithoutOverridingNewAssignments(t *testing.T) {
+	store := Store{Root: t.TempDir()}
+	if err := os.MkdirAll(store.Dir(), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	legacy := `{"version":2,"overrides":{"griller":{"model":"old-interviewer"},"planner":{"model":"old-manager"},"manager":{"model":"new-manager"},"junior-developer":{"model":"old-junior"},"senior-developer":{"model":"old-senior"},"reviewer":{"model":"new-reviewer"},"scout":{"model":"old-researcher"}}}`
+	if err := os.WriteFile(store.ModelPath(), []byte(legacy), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got, err := store.LoadModelConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for role, want := range map[string]string{
+		"interviewer": "old-interviewer", "manager": "new-manager",
+		"coder": "old-junior", "reviewer": "new-reviewer", "research": "old-researcher",
+	} {
+		if got.Overrides[role].Model != want {
+			t.Fatalf("%s model = %q; want %q", role, got.Overrides[role].Model, want)
+		}
+	}
+	if len(got.Overrides) != 5 {
+		t.Fatalf("retired roles survived migration: %#v", got.Overrides)
 	}
 }
 

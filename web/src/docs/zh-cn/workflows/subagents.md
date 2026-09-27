@@ -22,12 +22,11 @@ toc:
 
 公开的内置 ID 包括：
 
-- `builtin/scout`
-- `builtin/griller`
-- `builtin/planner`
-- `builtin/executor`
-- `builtin/reviewer`
-- `builtin/coder`
+- `builtin/interviewer`
+- `builtin/manager`
+- `builtin/senior-developer`
+- `builtin/junior-developer`
+- `builtin/research`
 - `builtin/web-search`
 - `builtin/web-tester`
 
@@ -36,14 +35,14 @@ toc:
 请在请求中提供全部必要上下文。子代理不会自动继承父对话。
 
 ```text
-/subagent builtin/scout 解释 app/model.go 中的取消处理
+/subagent builtin/senior-developer 审查 app/model.go 中的取消处理
 ```
 
-在 TUI 中，自定义配置使用简短名称。配置中存储的委派许可则使用 `builtin/scout`、`global/code-reader` 或 `workspace/browser-check` 等规范 ID。
+在 TUI 中，自定义配置使用简短名称。配置中存储的委派许可则使用 `builtin/senior-developer`、`global/code-reader` 或 `workspace/browser-check` 等规范 ID。
 
 ## 在聊天中委派
 
-普通聊天默认使用 `default` 模式，主代理可直接调用工具。要将工作交给有明确范围的子代理，请在当前会话输入 `/mode delegation`。输入 `/mode default` 可恢复直接使用工具的循环。模式会保存在会话中，独立于需要提案批准和执行的 `/plan`。
+普通聊天默认使用 `default` 模式，主代理可直接调用工具。要将工作交给有明确范围的子代理，请在当前会话输入 `/mode delegation`。输入 `/mode default` 可恢复直接使用工具的循环。模式会保存在会话中。manager 作为 PM 负责需求和计划，senior developer 将实现委派给 junior developer 并审查修改。
 
 对话中会显示子代理进度和工具调用；按 `Ctrl+G` 展开或收起详细记录。每次调用都会保存父会话书签和子会话。重启后，q 先恢复最深层的子会话，再继续父会话。没有记录结果的工具调用会返回 `unknown`，不会自动重试。中断的外部 ACP 调用也会返回 `unknown`，因为其内部轮次无法恢复。
 
@@ -56,17 +55,18 @@ version: 1
 name: code-reader
 description: 解释所请求的代码。
 kind: inner
-role: scout
+role: advisor
 system_prompt: |
   阅读所请求的代码，并通过具体文件位置解释其行为。
 tools:
   - list_directory
   - read_file
-delegates:
-  - builtin/scout
+delegates: []
 ```
 
 配置文件存放在 `~/.q/subagents/` 或 `<workspace>/.q/subagents/`。同名的工作区配置会整体替代全局配置。
+
+指向已移除内置代理的已保存委派许可不会生效。编辑现有配置时须删除这些许可才能保存，新配置也不能添加它们。
 
 ## 外部代理
 

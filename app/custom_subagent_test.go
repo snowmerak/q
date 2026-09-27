@@ -49,7 +49,7 @@ func TestCustomUsesSessionMCPCatalog(t *testing.T) {
 	tool := client.Tool{Type: client.ToolTypeFunction, Function: client.FunctionDefinition{Name: "mcp_docs__read"}}
 	base := &roleCatalogTools{toolsByRole: map[string][]client.Tool{"default": {tool}}}
 	m := model{hostState: hostState{toolRuntime: base}}
-	p := subagent.Profile{Version: 1, Name: "reader", Role: "scout", SystemPrompt: "Read", Tools: []string{tool.Function.Name}}
+	p := subagent.Profile{Version: 1, Name: "reader", Role: config.AgentRoleResearch, SystemPrompt: "Read", Tools: []string{tool.Function.Name}}
 	selected, err := subagent.SelectCustomTools(p, m.customTools())
 	if err != nil || len(selected) != 1 {
 		t.Fatalf("%+v %v", selected, err)
@@ -69,7 +69,7 @@ func TestCustomInfoShowsExactCanonicalProfile(t *testing.T) {
 	store := m.customStore()
 	for scope, prompt := range map[string]string{"global": "Global prompt", "workspace": "Workspace prompt"} {
 		if err := store.Save(subagent.Profile{
-			Version: 1, Name: "reader", Role: "scout", SystemPrompt: prompt,
+			Version: 1, Name: "reader", Role: config.AgentRoleResearch, SystemPrompt: prompt,
 			Tools: []string{}, Delegates: []string{},
 		}, scope, nil); err != nil {
 			t.Fatal(err)
@@ -93,13 +93,13 @@ func TestCustomACPExecuteAndList(t *testing.T) {
 	agent, ws, connection := testACPAgent(t, c, &fakeAgentTools{})
 	agent.state.config.Provider.Model = "plan-model"
 	profiles := subagent.ProfileStore{Workspace: ws.Root + "/.q/subagents"}
-	if err := profiles.Save(subagent.Profile{Version: 1, Name: "inspector", Role: "scout", SystemPrompt: "ACP profile prompt", Tools: []string{}}, "workspace", nil); err != nil {
+	if err := profiles.Save(subagent.Profile{Version: 1, Name: "inspector", Role: config.AgentRoleResearch, SystemPrompt: "ACP profile prompt", Tools: []string{}}, "workspace", nil); err != nil {
 		t.Fatal(err)
 	}
 	id := openTestACPSession(t, agent, ws.Root)
 	for _, command := range []string{
-		"/subagents list", "/subagents show inspector", "/subagents show builtin/scout",
-		"/subagent inspector explicit context", "/subagent builtin/scout inspect builtin context",
+		"/subagents list", "/subagents show inspector", "/subagents show builtin/senior-developer",
+		"/subagent inspector explicit context", "/subagent builtin/senior-developer inspect builtin context",
 	} {
 		response, err := agent.Prompt(t.Context(), acp.PromptRequest{SessionId: id, Prompt: []acp.ContentBlock{acp.TextBlock(command)}})
 		if err != nil || response.StopReason != acp.StopReasonEndTurn {
@@ -117,7 +117,7 @@ func TestCustomACPExecuteAndList(t *testing.T) {
 		}
 	}
 	if !strings.Contains(output, "ACP custom result") || !strings.Contains(output, "ACP builtin result") ||
-		!strings.Contains(output, "inspector") || !strings.Contains(output, subagent.BuiltinScoutID) {
+		!strings.Contains(output, "inspector") || !strings.Contains(output, subagent.BuiltinSeniorDeveloperID) {
 		t.Fatal(output)
 	}
 }

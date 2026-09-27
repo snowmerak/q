@@ -201,7 +201,7 @@ func TestCustomDelegatePickerSavesCanonicalGrant(t *testing.T) {
 	m.custom.field = customFieldDelegates
 	updated, _ = m.openCustomPicker()
 	m = updated.(model)
-	for _, wanted := range []string{subagent.BuiltinScoutID, subagent.BuiltinWebSearchID} {
+	for _, wanted := range []string{subagent.BuiltinSeniorDeveloperID, subagent.BuiltinWebSearchID} {
 		found := false
 		for index, option := range m.custom.options {
 			if option == wanted {
@@ -219,7 +219,7 @@ func TestCustomDelegatePickerSavesCanonicalGrant(t *testing.T) {
 	updated, _ = m.saveCustom()
 	m = updated.(model)
 	entry, err := m.customStore().Get("delegator")
-	if err != nil || len(entry.Profile.Delegates) != 2 || entry.Profile.Delegates[0] != subagent.BuiltinScoutID || entry.Profile.Delegates[1] != subagent.BuiltinWebSearchID {
+	if err != nil || len(entry.Profile.Delegates) != 2 || entry.Profile.Delegates[0] != subagent.BuiltinSeniorDeveloperID || entry.Profile.Delegates[1] != subagent.BuiltinWebSearchID {
 		t.Fatalf("profile = %#v, err = %v, status = %s", entry.Profile, err, m.status)
 	}
 }

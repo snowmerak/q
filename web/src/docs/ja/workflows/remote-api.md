@@ -60,7 +60,7 @@ curl.exe -N `
   http://127.0.0.1:8080/v1/subagent-runs
 ```
 
-`working_directory` と `prompt` は必須です。`session_id` を省けば新しいセッションを作成し、指定すると占有されていない既存セッションを再開します。`subagent` を省くか空にするとデフォルトのメインループを実行します。`builtin/scout` のような ID を指定すると直接サブエージェントフローになります。
+`working_directory` と `prompt` は必須です。`session_id` を省けば新しいセッションを作成し、指定すると占有されていない既存セッションを再開します。`subagent` を省くか空にするとデフォルトのメインループを実行します。`builtin/senior-developer` のような ID を指定すると直接サブエージェントフローになります。
 
 プロンプトの上限は UTF-8 で 32 KiB、JSON リクエスト本文全体は 256 KiB です。未知の JSON フィールドは拒否されます。レスポンスは `Cache-Control: no-store` を使い、`X-Q-Session-ID` ヘッダーで選択セッションを示します。
 

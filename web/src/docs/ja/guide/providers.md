@@ -38,7 +38,7 @@ q 内で `/gateway` を開き、プロバイダーとリスナー設定を追加
 
 ## モデルロールを割り当て
 
-`/model` でメインチャットと `griller`、`scout`、`planner`、`executor`、`coder`、`commit`、`thinker`、`librarian` などの専門ロールにモデルを割り当てます。
+`/model` でメインチャットと `interviewer`、`manager`、`research`、`reviewer`、`coder`、`commit`、`thinker`、`librarian` などの専門ロールにモデルを割り当てます。senior developer は `reviewer`、junior developer は `coder` のモデルロールを使います。
 
 割り当て表で `a` を押すと再利用可能なカスタムロールを作成できます。カスタムサブエージェントは自身のツールと委任許可を保ったまま、そのロールを選択できます。
 

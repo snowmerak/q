@@ -42,8 +42,8 @@ toc:
 | `.q/sessions/<uuid>/session.json` | 会話、コンテキスト、タイトル、ライフサイクル、学習状態 |
 | `.q/sessions/<uuid>/delegations.json` | 委任した子呼び出しのブックマーク |
 | `.q/sessions/<uuid>/delegates/<invocation-id>/` | 子セッション、実行状態、入れ子の委任ツリー |
-| `.q/sessions/<uuid>/plan-execution.json` | 再開可能な承認済み計画チェックポイント |
-| `.q/plan-executions/` | 完了した実行スナップショット |
+| `.q/sessions/<uuid>/plan-execution.json` | 旧バージョンの plan チェックポイント |
+| `.q/plan-executions/` | 旧バージョンの実行スナップショット |
 | `.q/model.json` | ワークスペースのモデルロール上書き |
 | `.q/learning.json` | ワークスペース学習スイッチ |
 | `.q/lsp.json` | ワークスペース LSP ルートと上書き |

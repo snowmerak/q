@@ -39,7 +39,7 @@ Approved plan execution adds a resumable `plan-execution.json` beside it.
 
 In delegation mode, each child call has a bookmark in `delegations.json` and its own session under `delegates/<invocation-id>/`. Children may have their own nested delegation tree. After a restart, q restores the deepest child first and returns its stored result to the parent call before continuing the parent turn.
 
-If q stopped while a general tool call had no recorded result, recovery reports that call as `unknown` to its agent and does not run it again automatically. An interrupted external ACP child also returns `unknown`; q cannot resume the remote agent's internal turn. `/plan` retains its separate execution checkpoint.
+If q stopped while a general tool call had no recorded result, recovery reports that call as `unknown` to its agent and does not run it again automatically. An interrupted external ACP child also returns `unknown`; q cannot resume the remote agent's internal turn. Older plan checkpoints remain as legacy data.
 
 ## Workspace Memory
 

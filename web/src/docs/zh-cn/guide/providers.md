@@ -38,7 +38,7 @@ q 管理的 Gateway 支持：
 
 ## 分配模型角色
 
-打开 `/model`，为主对话和 `griller`、`scout`、`planner`、`executor`、`coder`、`commit`、`thinker`、`librarian` 等专门角色分配模型。
+打开 `/model`，为主对话和 `interviewer`、`manager`、`research`、`reviewer`、`coder`、`commit`、`thinker`、`librarian` 等专门角色分配模型。senior developer 使用 `reviewer`，junior developer 使用 `coder` 模型角色。
 
 在分配表中按 `a` 可以创建可复用的自定义角色。自定义子代理可以选用该角色，同时保留自身的工具与委派许可。
 

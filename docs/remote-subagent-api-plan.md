@@ -228,7 +228,7 @@ Working directory는 workspace profile root를 결정하므로 필수다. 응답
   "working_directory": "C:\\work\\project",
   "subagents": [
     {
-      "name": "builtin/scout",
+      "name": "builtin/senior-developer",
       "description": "Investigate repository evidence and report bounded findings.",
       "source": "builtin",
       "kind": "inner",
@@ -257,7 +257,7 @@ Accept: application/x-ndjson
 {
   "working_directory": "C:\\work\\project",
   "session_id": "optional-session-id",
-  "subagent": "builtin/scout",
+  "subagent": "builtin/senior-developer",
   "prompt": "인증 흐름을 조사하고 관련 파일과 위험을 정리해줘"
 }
 ```
@@ -278,9 +278,9 @@ ID는 response header `X-Q-Session-ID`와 첫 `session` event에 모두 포함�
 
 ```json
 {"type":"session","working_directory":"C:\\work\\project","session_id":"2cf6...","created":true}
-{"type":"activity","agent":"builtin/scout","task_id":"builtin-scout-...","action":"started","detail":"..."}
-{"type":"trace","agent":"builtin/scout","kind":"tool_call","call_id":"call-1","name":"read_file","content":"{...}"}
-{"type":"trace","agent":"builtin/scout","kind":"tool_result","call_id":"call-1","name":"read_file","content":"...","is_error":false}
+{"type":"activity","agent":"builtin/senior-developer","task_id":"builtin-senior-developer-...","action":"started","detail":"..."}
+{"type":"trace","agent":"builtin/senior-developer","kind":"tool_call","call_id":"call-1","name":"read_file","content":"{...}"}
+{"type":"trace","agent":"builtin/senior-developer","kind":"tool_result","call_id":"call-1","name":"read_file","content":"...","is_error":false}
 {"type":"result","session_id":"2cf6...","outcome":"succeeded","content":"조사 결과 ..."}
 ```
 

@@ -22,12 +22,11 @@ toc:
 
 公開されている組み込み ID は次のとおりです。
 
-- `builtin/scout`
-- `builtin/griller`
-- `builtin/planner`
-- `builtin/executor`
-- `builtin/reviewer`
-- `builtin/coder`
+- `builtin/interviewer`
+- `builtin/manager`
+- `builtin/senior-developer`
+- `builtin/junior-developer`
+- `builtin/research`
 - `builtin/web-search`
 - `builtin/web-tester`
 
@@ -36,14 +35,14 @@ toc:
 子エージェントは親の会話を自動継承しないため、必要なコンテキストを依頼にすべて含めます。
 
 ```text
-/subagent builtin/scout app/model.go のキャンセル処理を説明して
+/subagent builtin/senior-developer app/model.go のキャンセル処理をレビューして
 ```
 
-TUI ではカスタムプロファイルの短い名前を使います。プロファイルに保存する委任許可には `builtin/scout`、`global/code-reader`、`workspace/browser-check` のような正規 ID を使います。
+TUI ではカスタムプロファイルの短い名前を使います。プロファイルに保存する委任許可には `builtin/senior-developer`、`global/code-reader`、`workspace/browser-check` のような正規 ID を使います。
 
 ## チャットから委任
 
-通常のチャットは、メインエージェントがツールを直接使う `default` モードで始まります。作業を範囲の定まったサブエージェントへ委任するには、現在のセッションで `/mode delegation` を入力します。`/mode default` で直接ツールを使うループに戻せます。モードはセッションに保存され、提案の承認と実行を伴う `/plan` とは別です。
+通常のチャットは、メインエージェントがツールを直接使う `default` モードで始まります。作業を範囲の定まったサブエージェントへ委任するには、現在のセッションで `/mode delegation` を入力します。`/mode default` で直接ツールを使うループに戻せます。モードはセッションに保存されます。manager は PM として要件と計画を担当し、senior developer は junior developer に実装を任せて変更をレビューします。
 
 会話には子の進行状況とツール呼び出しが表示され、`Ctrl+G` で詳細トレースを切り替えられます。各呼び出しは親のブックマークと子セッションに保存されます。再起動後は最も深い子から復元し、親を続行します。結果の記録がないツール呼び出しは自動再実行せず、`unknown` として返します。中断された外部 ACP 呼び出しも内部ターンを再開できないため `unknown` を返します。
 
@@ -56,17 +55,18 @@ version: 1
 name: code-reader
 description: 依頼されたコードを説明します。
 kind: inner
-role: scout
+role: advisor
 system_prompt: |
   依頼されたコードを読み、具体的なファイル参照とともに動作を説明してください。
 tools:
   - list_directory
   - read_file
-delegates:
-  - builtin/scout
+delegates: []
 ```
 
 プロファイルは `~/.q/subagents/` または `<workspace>/.q/subagents/` に置きます。同名のワークスペースプロファイルはグローバルプロファイル全体を置き換えます。
+
+削除された組み込みエージェントへの保存済みの委任許可は無効です。既存のプロファイルを編集するときは、その許可を削除してから保存してください。新しいプロファイルには追加できません。
 
 ## 外部エージェント
 

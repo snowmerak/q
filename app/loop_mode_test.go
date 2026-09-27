@@ -219,7 +219,7 @@ func TestDelegationModeRestrictsRootToolsButNotChildTools(t *testing.T) {
 	if err != nil || result.IsError || len(base.calls) != 1 || base.calls[0].Function.Name != "loom_read" {
 		t.Fatalf("coordinator evidence read did not reach base: result=%#v err=%v calls=%#v", result, err, base.calls)
 	}
-	child, err := m.configuredDelegationRuntimeFor(base, root, subagent.BuiltinCoderID, []string{subagent.BuiltinCoderID})
+	child, err := m.configuredDelegationRuntimeFor(base, root, "workspace/worker", []string{"workspace/worker"})
 	if err != nil {
 		t.Fatal(err)
 	}

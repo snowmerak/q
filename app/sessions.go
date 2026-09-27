@@ -24,7 +24,7 @@ func (m model) enterSessions() (tea.Model, tea.Cmd) {
 		m.status = "Workspace session storage is unavailable"
 		return m, m.input.Focus()
 	}
-	if m.waiting || m.planResumePending {
+	if m.waiting {
 		m.status = "Finish or interrupt the active turn before switching sessions"
 		return m, nil
 	}

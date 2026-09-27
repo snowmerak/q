@@ -37,7 +37,7 @@ Use environment-variable references for provider credentials whenever possible. 
 
 ## Assign model roles
 
-Open `/model` to assign a model to the main chat and specialized roles such as `griller`, `scout`, `planner`, `executor`, `coder`, `commit`, `thinker`, and `librarian`.
+Open `/model` to assign a model to the main chat and specialized roles such as `interviewer`, `manager`, `research`, `reviewer`, `coder`, `commit`, `thinker`, and `librarian`. The senior developer uses `reviewer`; the junior developer uses `coder`.
 
 Press `a` in the assignment table to create a reusable custom role. Custom subagents can select that role while keeping their own tools and delegation grants.
 

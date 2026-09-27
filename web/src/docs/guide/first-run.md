@@ -38,10 +38,11 @@ Begin with a concrete repository question so you can see how q gathers evidence:
 Explain how this project starts and identify the main runtime components.
 ```
 
-For a change that deserves an approved plan, use:
+For a change that benefits from delegated roles, use:
 
 ```text
-/plan add a health endpoint and cover it with tests
+/mode delegation
+add a health endpoint and cover it with tests
 ```
 
 `Ctrl+C` interrupts an active turn. `Ctrl+H` opens the complete key reference without discarding the current screen.

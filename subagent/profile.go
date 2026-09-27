@@ -49,7 +49,7 @@ func (p Profile) Validate() error {
 	}
 	switch p.EffectiveKind() {
 	case AgentKindInner:
-		if !config.ValidCustomName(p.Role) {
+		if !config.IsAgentRole(p.Role) && !config.ValidCustomRoleName(p.Role) {
 			return errors.New("profile: invalid role")
 		}
 		if p.Agent != "" {
@@ -113,6 +113,9 @@ func ParseProfile(raw []byte) (Profile, error) {
 	}
 	if p.Kind == "" {
 		p.Kind = AgentKindInner
+	}
+	if p.EffectiveKind() == AgentKindInner {
+		p.Role = config.CanonicalAgentRole(p.Role)
 	}
 	return p, p.Validate()
 }

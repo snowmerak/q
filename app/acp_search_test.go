@@ -97,7 +97,7 @@ func TestExternalSearchToolIsExposedOnlyToParentRoles(t *testing.T) {
 	value := config.Default()
 	value.Agents.Connections = map[string]config.AgentConnectionConfig{"codex": {Preset: "codex"}}
 	value.Agents.Roles = map[string]config.AgentConfig{config.AgentRoleSearch: {Agent: "codex"}}
-	for _, role := range []string{mcpconfig.RoleDefault, config.AgentRoleGriller, config.AgentRolePlanner, config.AgentRoleAdvisor} {
+	for _, role := range []string{mcpconfig.RoleDefault, config.AgentRoleManager, config.AgentRoleResearch, config.AgentRoleAdvisor} {
 		runtime, err := configuredAgentToolRuntime(&fakeAgentTools{}, role, value, t.TempDir())
 		if err != nil {
 			t.Fatal(err)
@@ -106,7 +106,7 @@ func TestExternalSearchToolIsExposedOnlyToParentRoles(t *testing.T) {
 			t.Fatalf("external_search was not exposed to %q", role)
 		}
 	}
-	for _, role := range []string{config.AgentRoleSearch, config.AgentRoleScout, config.AgentRoleCoder} {
+	for _, role := range []string{config.AgentRoleSearch, config.AgentRoleInterviewer, config.AgentRoleReviewer, config.AgentRoleCoder} {
 		runtime, err := configuredAgentToolRuntime(&fakeAgentTools{}, role, value, t.TempDir())
 		if err != nil {
 			t.Fatal(err)
@@ -123,7 +123,7 @@ func TestExternalWebTesterToolIsExposedOnlyToConfiguredDefaultParent(t *testing.
 	value.Agents.Roles = map[string]config.AgentConfig{
 		config.AgentRoleExternalWebTester: {Agent: "browser"},
 	}
-	for _, role := range []string{config.AgentRoleGriller, config.AgentRolePlanner, config.AgentRoleAdvisor, config.AgentRoleScout, config.AgentRoleCoder, config.AgentRoleExternalWebTester} {
+	for _, role := range []string{config.AgentRoleInterviewer, config.AgentRoleManager, config.AgentRoleReviewer, config.AgentRoleCoder, config.AgentRoleResearch, config.AgentRoleAdvisor, config.AgentRoleExternalWebTester} {
 		runtime, err := configuredAgentToolRuntime(&fakeAgentTools{}, role, value, t.TempDir())
 		if err != nil {
 			t.Fatal(err)

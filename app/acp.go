@@ -22,44 +22,25 @@ import (
 	"github.com/snowmerak/q/mcpconfig"
 	"github.com/snowmerak/q/memory"
 	"github.com/snowmerak/q/sessionstore"
-	"github.com/snowmerak/q/subagent"
 	"github.com/snowmerak/q/third_party/acp-go-sdk"
 	qtools "github.com/snowmerak/q/tools"
 	"github.com/snowmerak/q/workspace"
 )
 
-// BooleanOverride distinguishes an omitted process option from an explicit
-// true or false value.
-type BooleanOverride struct {
-	Set   bool
-	Value bool
-}
-
-// PlanAutomationOverrides replace persistent plan settings for the lifetime
-// of one ACP process. They are never written back to config.yaml.
-type PlanAutomationOverrides struct {
-	AutoApprove BooleanOverride
-	AutoResolve BooleanOverride
-}
-
-type ACPOptions struct {
-	Plan PlanAutomationOverrides
-}
-
 // RunACPDefault serves ACP over stdin/stdout for a single workspace.
-func RunACPDefault(ctx context.Context, root string, input io.Reader, output, logOutput io.Writer, options ...ACPOptions) error {
+func RunACPDefault(ctx context.Context, root string, input io.Reader, output, logOutput io.Writer) error {
 	store, err := config.DefaultStore()
 	if err != nil {
 		return err
 	}
-	return RunACP(ctx, store, root, input, output, logOutput, options...)
+	return RunACP(ctx, store, root, input, output, logOutput)
 }
 
 // RunACP serves ACP over the supplied streams. A server process is bound to one
 // workspace and may keep multiple ACP sessions active concurrently. Each
 // session owns an independent conversation projection, learning lifecycle, and
 // workspace session lock.
-func RunACP(ctx context.Context, store config.Store, root string, input io.Reader, output, logOutput io.Writer, options ...ACPOptions) (runErr error) {
+func RunACP(ctx context.Context, store config.Store, root string, input io.Reader, output, logOutput io.Writer) (runErr error) {
 	if input == nil || output == nil {
 		return errors.New("ACP input and output are required")
 	}
@@ -83,7 +64,6 @@ func RunACP(ctx context.Context, store config.Store, root string, input io.Reade
 	defer func() { runErr = errors.Join(runErr, host.Close()) }()
 
 	agent := newACPAgent(&host.model, canonicalRoot, logger)
-	agent.planOverrides = mergeACPOptions(options).Plan
 	connection := acp.NewAgentSideConnection(agent, output, input)
 	connection.SetLogger(logger)
 	agent.setConnection(connection)
@@ -198,17 +178,15 @@ type acpSessionConnection interface {
 }
 
 type acpAgent struct {
-	state         *model
-	root          string
-	logger        *slog.Logger
-	planOverrides PlanAutomationOverrides
+	state  *model
+	root   string
+	logger *slog.Logger
 
 	stateMu             sync.Mutex
 	activationWG        sync.WaitGroup
 	promptMu            sync.Mutex
 	mcpMu               sync.Mutex
 	learningMu          sync.Mutex
-	planConfigMu        sync.Mutex
 	connection          acpSessionConnection
 	clientCapabilities  acp.ClientCapabilities
 	sessions            map[acp.SessionId]*acpAgent
@@ -251,29 +229,6 @@ func newACPAgent(state *model, root string, logger *slog.Logger) *acpAgent {
 	}
 }
 
-func mergeACPOptions(options []ACPOptions) ACPOptions {
-	var merged ACPOptions
-	for _, option := range options {
-		if option.Plan.AutoApprove.Set {
-			merged.Plan.AutoApprove = option.Plan.AutoApprove
-		}
-		if option.Plan.AutoResolve.Set {
-			merged.Plan.AutoResolve = option.Plan.AutoResolve
-		}
-	}
-	return merged
-}
-
-func applyPlanAutomationOverrides(value config.PlanConfig, overrides PlanAutomationOverrides) config.PlanConfig {
-	if overrides.AutoApprove.Set {
-		value.AutoApprove = overrides.AutoApprove.Value
-	}
-	if overrides.AutoResolve.Set {
-		value.AutoResolve = overrides.AutoResolve.Value
-	}
-	return value
-}
-
 // newSessionRuntime creates the mutable model projection owned by one ACP
 // session. Provider, archive, Library, and builtin tool services are shared;
 // conversation state, Thinker state, workspace lock, and optional ACP-provided
@@ -288,16 +243,12 @@ func (a *acpAgent) newSessionRuntime() *acpAgent {
 	state.archiveErr = template.archiveErr
 	state.models = append([]client.Model(nil), template.models...)
 	state.gatewayConfig = template.gatewayConfig
-	coordinator := a.coordinator()
-	coordinator.planConfigMu.Lock()
 	state.config = template.config
-	coordinator.planConfigMu.Unlock()
 	state.client = template.client
 	state.workspaceStore = &workspace.Store{Root: a.root}
 
 	runtime := &acpAgent{
 		state: &state, root: a.root, logger: a.logger, owner: a,
-		planOverrides: a.planOverrides,
 	}
 	if a.commitSession != nil {
 		runtime.commitSession = a.commitSession
@@ -795,10 +746,8 @@ func (a *acpAgent) activateStore(
 	// TUI recovery is an interactive panel, not an ACP lifecycle response. Keep
 	// the checkpoint on disk but do not leave the headless model waiting on an
 	// invisible TUI question.
-	a.state.planResumePending = false
 	a.state.asking = false
 	a.state.pendingQuestion = askToUserInput{}
-	a.state.planCheckpoint = subagent.ExecutionCheckpoint{}
 	a.stateMu.Lock()
 	a.sessionID = acpSessionID(store.SessionID)
 	a.sessionOpen = true
@@ -1086,17 +1035,6 @@ func (a *acpAgent) replayWorkspaceSession(ctx context.Context) error {
 	if a.state.activeTask != nil {
 		if err := a.emitTaskPlanContext(ctx, a.state.activeTask.Objective, acp.PlanEntryStatusInProgress); err != nil {
 			return err
-		}
-	}
-	if store := a.state.workspaceStore; store != nil {
-		checkpoint, err := store.LoadExecution()
-		switch {
-		case err == nil && checkpoint.RunID == a.state.runID:
-			if err := a.emitAgentPlanContext(ctx, planUpdateFromCheckpoint(checkpoint)); err != nil {
-				return err
-			}
-		case err != nil && !errors.Is(err, workspace.ErrExecutionNotFound):
-			a.logger.Warn("could not restore ACP plan projection", "session_id", store.SessionID, "error", err)
 		}
 	}
 	if err := a.emitAvailableCommandsContext(ctx); err != nil {
@@ -1998,22 +1936,6 @@ func (a *acpAgent) emitAvailableCommandsContext(ctx context.Context) error {
 		{Name: "mode", Description: "Set this session's default-loop mode.", Input: &acp.AvailableCommandInput{Unstructured: &acp.UnstructuredCommandInput{Hint: "default | delegation"}}},
 		{Name: "subagents", Description: "List available subagents or show a definition.", Input: &acp.AvailableCommandInput{Unstructured: &acp.UnstructuredCommandInput{Hint: "list | show <name>"}}},
 		{Name: "subagent", Description: "Run a builtin or custom subagent.", Input: &acp.AvailableCommandInput{Unstructured: &acp.UnstructuredCommandInput{Hint: "<name> <request>"}}},
-		{
-			Name: "plan", Description: "Plan an implementation, request approval, then execute and review it.",
-			Input: &acp.AvailableCommandInput{Unstructured: &acp.UnstructuredCommandInput{Hint: "work to plan"}},
-		},
-		{
-			Name: "auto-approve", Description: "Persistently control automatic plan approval.",
-			Input: &acp.AvailableCommandInput{Unstructured: &acp.UnstructuredCommandInput{Hint: "on, off, or status"}},
-		},
-		{
-			Name: "auto-resolve", Description: "Persistently control automatic plan clarification.",
-			Input: &acp.AvailableCommandInput{Unstructured: &acp.UnstructuredCommandInput{Hint: "on, off, or status"}},
-		},
-		{
-			Name: "autonomous", Description: "Persistently control both plan automation settings.",
-			Input: &acp.AvailableCommandInput{Unstructured: &acp.UnstructuredCommandInput{Hint: "on, off, or status"}},
-		},
 		{Name: "commit", Description: "Review generated commit proposals, then commit or commit and push after approval."},
 		{
 			Name: "learn", Description: "Checkpoint or control q learning for this workspace.",
@@ -2030,19 +1952,10 @@ func (a *acpAgent) emitAvailableCommandsContext(ctx context.Context) error {
 
 func (a *acpAgent) runACPCommand(ctx context.Context, text string) (acp.PromptResponse, bool, error) {
 	command := strings.TrimSpace(text)
-	planCommand, planAutomationControl := parsePlanAutomationCommand(command)
 	var output string
 	switch {
-	case planAutomationControl:
-		if !planCommand.valid {
-			output = planCommand.usage()
-			break
-		}
-		var err error
-		output, err = a.runACPPlanAutomationCommand(planCommand)
-		if err != nil {
-			return acp.PromptResponse{}, true, err
-		}
+	case retiredPlanCommand(command):
+		output = "Plan mode was removed. Use /mode delegation or /subagent builtin/manager."
 	case command == "/commit":
 		response, err := a.runACPCommit(ctx)
 		return response, true, err
@@ -2053,16 +1966,6 @@ func (a *acpAgent) runACPCommand(ctx context.Context, text string) (acp.PromptRe
 		return response, true, err
 	case command == "/subagents" || strings.HasPrefix(command, "/subagents "):
 		output = a.state.customInfo(command)
-	case command == "/plan":
-		output = "Usage: /plan <work to plan>"
-	case strings.HasPrefix(command, "/plan "):
-		objective := strings.TrimSpace(strings.TrimPrefix(command, "/plan "))
-		if objective == "" {
-			output = "Usage: /plan <work to plan>"
-			break
-		}
-		response, err := a.runACPPlan(ctx, objective)
-		return response, true, err
 	case command == "/help":
 		output = renderACPCommandHelp()
 	case command == "/learn":
@@ -2129,11 +2032,7 @@ func (a *acpAgent) runACPCommand(ctx context.Context, text string) (acp.PromptRe
 func renderACPCommandHelp() string {
 	lines := []string{
 		"Available ACP commands:",
-		"- /plan <work to plan>",
 		"- /mode [default|delegation]",
-		"- /auto-approve [on|off|status]",
-		"- /auto-resolve [on|off|status]",
-		"- /autonomous [on|off|status]",
 	}
 	lines = append(lines,
 		"- /commit",
@@ -2145,33 +2044,6 @@ func renderACPCommandHelp() string {
 		"- /subagent <name> <request>",
 	)
 	return strings.Join(lines, "\n")
-}
-
-func (a *acpAgent) runACPPlanAutomationCommand(command planAutomationCommand) (string, error) {
-	coordinator := a.coordinator()
-	coordinator.planConfigMu.Lock()
-	defer coordinator.planConfigMu.Unlock()
-	configured := coordinator.state.config.Plan
-	next, save := command.apply(configured)
-	if save {
-		value := coordinator.state.config
-		value.Plan = next
-		if err := coordinator.state.store.Save(value); err != nil {
-			return "", err
-		}
-		coordinator.state.config = value
-		configured = next
-	}
-	effective := applyPlanAutomationOverrides(configured, a.planOverrides)
-	return renderPlanAutomationCommand(command, configured, effective, save), nil
-}
-
-func (a *acpAgent) effectivePlanConfig() config.PlanConfig {
-	coordinator := a.coordinator()
-	coordinator.planConfigMu.Lock()
-	configured := coordinator.state.config.Plan
-	coordinator.planConfigMu.Unlock()
-	return applyPlanAutomationOverrides(configured, a.planOverrides)
 }
 
 func (a *acpAgent) clearACPConversation(ctx context.Context) error {
@@ -2201,67 +2073,9 @@ func (a *acpAgent) clearACPConversation(ctx context.Context) error {
 	return nil
 }
 
-func (a *acpAgent) runACPPlan(ctx context.Context, objective string) (acp.PromptResponse, error) {
-	if a.state.client == nil || a.state.toolRuntime == nil {
-		return acp.PromptResponse{}, errors.New("ACP plan requires an available model and tool runtime")
-	}
-	value := a.state.activeConfig()
-	value.Plan = a.effectivePlanConfig()
-	_, capabilities := a.connectionState()
-	supportsForm := capabilities.Elicitation != nil && capabilities.Elicitation.Form != nil
-
-	a.state.turnMessageStart = len(a.state.messages)
-	titleChanged := a.state.touchSessionMetadata(objective)
-	message := client.Message{Role: client.RoleUser, Content: objective}
-	a.state.archiveMessage(message, sessionstore.StatusSubmitted, false)
-	a.state.messages = append(a.state.messages, message)
-	if a.state.memory == nil {
-		a.state.memory = memoryForPlan(a.state.activeConfig())
-	}
-	a.state.memory.Append(message)
-	a.launchLearning(a.state.observeLearningMessage(message))
-	if err := a.state.saveWorkspaceSession(); err != nil {
-		return acp.PromptResponse{}, err
-	}
-	if err := a.emitSessionInfoContext(ctx, titleChanged); err != nil {
-		return acp.PromptResponse{}, err
-	}
-	a.publishUsageUpdate()
-	if err := a.emitTaskPlanContext(ctx, objective, acp.PlanEntryStatusInProgress); err != nil {
-		return acp.PromptResponse{}, err
-	}
-
-	workingDirectory := ""
-	var executionStore planExecutionStore
-	if a.state.workspaceStore != nil {
-		workingDirectory = a.state.workspaceStore.Root
-		executionStore = a.state.workspaceStore
-	}
-	traceID, err := sessionstore.NewID()
-	if err != nil {
-		return acp.PromptResponse{}, err
-	}
-	trace := newACPPlanTrace(a.root, traceID, a.updateContext)
-	persistent := !supportsForm
-	workflowParent := ctx
-	if persistent {
-		workflowParent = a.state.ctx
-	}
-	workflowCtx, cancel := context.WithCancel(workflowParent)
-	events := make(chan agentEvent)
-	go streamPlanWorkflow(
-		workflowCtx, a.state.client, a.state.toolRuntime, value, a.state.runID, a.state.archive,
-		workingDirectory, objective, planContext(a.state.memory.Messages()), executionStore, events,
-	)
-	run := &acpPlanContinuation{
-		workflowCtx: workflowCtx, cancel: cancel, events: events, trace: trace, objective: objective, workflow: "plan",
-	}
-	return a.continueACPPlan(ctx, run, persistent)
-}
-
-func (a *acpAgent) continueACPPlan(
+func (a *acpAgent) continueACPSubagent(
 	ctx context.Context,
-	run *acpPlanContinuation,
+	run *acpSubagentContinuation,
 	persistent bool,
 ) (response acp.PromptResponse, runErr error) {
 	suspended := false
@@ -2311,7 +2125,7 @@ func (a *acpAgent) continueACPPlan(
 					true,
 					false,
 					func(nextCtx context.Context) (acp.PromptResponse, error) {
-						return a.continueACPPlan(nextCtx, run, true)
+						return a.continueACPSubagent(nextCtx, run, true)
 					},
 					func() error {
 						return run.finish(a, a.state.ctx, acp.PromptResponse{}, context.Canceled)

@@ -16,16 +16,12 @@ toc:
 
 | 명령 | 용도 |
 | --- | --- |
-| `/plan [request]` | 계획을 명확화하고 제안, 승인, 실행, 검토합니다. |
 | `/mode [default\|delegation]` | 현재 채팅 루프 모드를 확인하거나 변경합니다. |
-| `/auto-resolve [on\|off\|status]` | 계획 질문에 엔지니어링 기본값으로 답할지 제어합니다. |
-| `/auto-approve [on\|off\|status]` | 유효한 계획 제안의 자동 승인을 제어합니다. |
-| `/autonomous [on\|off\|status]` | 두 계획 자동화 설정을 함께 제어합니다. |
 | `/changes` | 스테이징, 비스테이징, 미추적 변경을 살펴봅니다. |
 | `/commit` | 커밋 제안을 생성하고 검토합니다. |
 | `/sessions` | 다른 저장된 워크스페이스 세션을 엽니다. |
 | `/new` | 새 세션을 만들어 전환합니다. |
-| `/clear` | 현재 대화 프로젝션과 계획 체크포인트를 지웁니다. |
+| `/clear` | 현재 대화 프로젝션을 지웁니다. |
 | `/learn [on\|off\|status]` | 워크스페이스 영구 학습을 체크포인트하거나 제어합니다. |
 | `/model` | 모델을 할당하고 폴백 그룹을 구성합니다. |
 | `/gateway` | 공급자와 Gateway 리스너를 구성합니다. |
@@ -43,7 +39,7 @@ toc:
 
 | 명령 | 용도 |
 | --- | --- |
-| `q sprint <request...>` | 자율 계획 워크플로 하나를 실행합니다. |
+| `q sprint <request...>` | delegation 모드에서 작업 하나를 실행합니다. |
 | `q remote` | 포그라운드 Remote REST 호스트를 시작합니다. |
 | `q remote config` | Remote 리스너와 API 키를 구성합니다. |
 | `q gateway` | 독립 Gateway를 구성합니다. |

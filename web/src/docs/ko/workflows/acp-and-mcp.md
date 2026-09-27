@@ -6,8 +6,6 @@ sectionLabel: 가이드
 toc:
   - id: acp로-q-실행
     label: ACP로 q 실행
-  - id: 계획-자동화-제어
-    label: 계획 자동화 제어
   - id: 상호작용과-컨텍스트
     label: 상호작용과 컨텍스트
   - id: 외부-mcp-서버-연결
@@ -24,26 +22,13 @@ q를 stdin/stdout 기반 Agent Client Protocol 서버로 시작합니다.
 q acp --root C:\work\project
 ```
 
-ACP 모드는 터미널 UI와 같은 영구 워크스페이스 세션, 루트 제한 도구, 계획 워크플로, 서브에이전트, 학습, 커밋 워크플로를 사용합니다. 연결된 클라이언트에 `/mode`, `/plan`, `/commit`, `/subagents`, `/subagent`, `/learn`, `/clear`, `/help` 같은 명령을 알립니다. 위임 모드에서는 자식의 진행 상황과 도구 호출도 전달합니다.
+ACP 모드는 터미널 UI와 같은 영구 워크스페이스 세션, 루트 제한 도구, 서브에이전트, 학습, 커밋 워크플로를 사용합니다. 연결된 클라이언트에 `/mode`, `/commit`, `/subagents`, `/subagent`, `/learn`, `/clear`, `/help` 같은 명령을 알립니다. 위임 모드에서는 자식의 진행 상황과 도구 호출도 전달합니다.
 
 `--root`의 기본값은 현재 디렉터리입니다. 파일, 세션, 지침, 스킬, 워크스페이스 구성의 경계를 정의합니다.
 
-## 계획 자동화 제어
-
-프로세스 전용 플래그로 저장된 설정을 바꾸지 않고 계획 질문과 제안 승인을 자동화할 수 있습니다.
-
-```powershell
-q acp --root C:\work\project --auto-resolve --auto-approve
-q acp --root C:\work\project --autonomous
-```
-
-`--autonomous`는 두 동작을 모두 켭니다. `--auto-approve=false`처럼 명시한 개별 플래그가 우선합니다. 이 플래그는 `/plan`에 적용되며 제안 검증, 작업 실행, 검토, 커밋 확인을 건너뛰지 않습니다.
-
-슬래시 명령 `/auto-resolve`, `/auto-approve`, `/autonomous`는 `on`, `off`, `status`를 지원합니다. 프로세스 플래그와 달리 `on`과 `off`는 `~/.q/config.yaml`에 저장됩니다.
-
 ## 상호작용과 컨텍스트
 
-클라이언트가 폼 요청을 지원하면 q는 계획과 커밋 선택에 이를 사용합니다. 그렇지 않으면 번호가 있는 승인 동작을 표시합니다. 계획 및 에이전트 질문은 다음 클라이언트 메시지를 자유 형식 답변으로 사용할 수 있습니다.
+클라이언트가 폼 요청을 지원하면 q는 커밋 선택에 이를 사용합니다. 그렇지 않으면 번호가 있는 승인 동작을 표시합니다. 에이전트 질문은 다음 클라이언트 메시지를 자유 형식 답변으로 사용할 수 있습니다.
 
 q는 ACP 임베디드 컨텍스트 지원을 알리고, 세션 재생 시 리소스 URI, MIME 형식, 주석, 내용을 보존합니다. q TUI가 다른 ACP 에이전트에 연결된 경우 `@relative/path` 또는 `@"path with spaces"`로 워크스페이스 파일을 첨부할 수 있습니다. 원격 에이전트가 임베디드 컨텍스트를 지원하면 파일을 포함하고, 아니면 리소스 링크를 보냅니다.
 

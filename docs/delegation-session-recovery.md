@@ -8,7 +8,7 @@
 
 일반 `delegate` 호출이 진행 중에 Q가 종료되어도 호출 트리와 각 에이전트의 대화를 복원한다. 부모 세션은 자식 세션을 가리키는 북마크를 저장한다. 재시작하면 북마크를 따라 가장 깊은 자식부터 복구하고, 자식의 결과를 원래 `delegate` 도구 호출의 결과로 부모에게 돌려주며 올라온다.
 
-이 문서는 [일반 delegated subagents](delegated-subagents.md)의 세션 복구 형식과 동작을 설명한다. `/plan`의 승인된 실행은 기존 [ExecutionCheckpoint](../subagent/execute_loop.go)를 계속 사용한다.
+이 문서는 [일반 delegated subagents](delegated-subagents.md)의 세션 복구 형식과 동작을 설명한다. 이전 plan 실행 체크포인트는 기존 데이터로 보존하지만 새 plan 실행은 시작하지 않는다.
 
 ## 구현 기준선
 
@@ -69,7 +69,7 @@
 
 `unknown`은 **도구 실행의 결과 상태**다. 자식의 `TaskResult`에 있는 `succeeded`·`blocked`와 혼동하지 않는다. 검색 아카이브에도 별도 상태로 남겨 사후 확인이 가능해야 한다.
 
-예를 들어 `root → executor → coder` 위임 중 `coder`의 `run_command`에서 종료되었다면, 복구는 `coder` 세션에 그 명령의 `unknown` 결과를 기록한다. `coder`가 그 결과를 보고 확인하거나 `blocked`를 반환하면, 저장된 결과가 `executor`의 `delegate` 결과가 되고 마지막으로 `root`에 전달된다. 복구 코드가 `run_command`를 다시 실행하지는 않는다.
+예를 들어 `root → coder` 위임 중 `coder`의 `run_command`에서 종료되었다면, 복구는 `coder` 세션에 그 명령의 `unknown` 결과를 기록한다. `coder`가 그 결과를 보고 확인하거나 `blocked`를 반환하면, 저장된 결과가 `root`에 전달된다. 복구 코드가 `run_command`를 다시 실행하지는 않는다.
 
 ## 보존과 정리
 
@@ -80,6 +80,6 @@
 - `workspace`: 부모 아래 자식 Store 경로, 북마크·실행 상태의 버전 검증과 원자적 저장, 트리 삭제를 담당한다.
 - `subagent.GeneralRunner`: 새 실행과 저장 문맥에서의 재개를 같은 루프로 처리하고, 각 메시지·도구 경계에 체크포인트를 요청한다.
 - `app.delegationDispatcher`: 부모 호출과 자식 세션을 연결하고, 재귀 복구로 얻은 결과를 원래 `call_id`에 반환한다. 기본 대화의 미완료 호출 정리는 `delegate` 북마크 복구 후 수행한다.
-- TUI와 ACP: 같은 복구 로직을 호출한다. TUI는 별도 명령으로 실행하고 늦게 도착한 취소 결과를 무시한다. ACP는 첫 후속 요청 전에 복구한다. `/plan`의 별도 체크포인트는 유지한다.
+- TUI와 ACP: 같은 복구 로직을 호출한다. TUI는 별도 명령으로 실행하고 늦게 도착한 취소 결과를 무시한다. ACP는 첫 후속 요청 전에 복구한다.
 
 검증은 부모→자식→손자 트리를 실제 파일에 저장하고 새 실행 상태에서 복원한다. [앱 복구 테스트](../app/delegation_recovery_test.go)는 북마크만 저장된 경우, 자식 상태는 있고 세션이 없는 경우, 자식 완료 후 부모 결과 저장 전, 일반 도구 실행 중, 상태 파일보다 앞선 세션 결과, 손자 완료 후 부모 재개, 외부 ACP의 확인불가, 반복된 `call_id`, 모델·API 종류·에이전트 설정 변경, Responses 재생 항목과 캐시 친화성 키, 호출 수 제한, 터미널 응답 저장 후 종료, 취소 후 늦게 도착한 결과와 재시도를 다룬다. [하위 실행 테스트](../subagent/delegation_recovery_test.go)는 체크포인트 실패 시 도구가 실행되지 않음을 확인한다. [저장소 테스트](../workspace/delegation_test.go)는 경로 검증, 북마크 충돌, 손상된 상태, 세션 트리 삭제를 확인한다.

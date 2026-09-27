@@ -42,8 +42,8 @@ toc:
 | `.q/sessions/<uuid>/session.json` | 대화, 컨텍스트, 제목, 생명주기, 학습 상태 |
 | `.q/sessions/<uuid>/delegations.json` | 위임된 자식 호출의 북마크 |
 | `.q/sessions/<uuid>/delegates/<invocation-id>/` | 자식 세션, 실행 상태, 중첩 위임 트리 |
-| `.q/sessions/<uuid>/plan-execution.json` | 재개 가능한 승인 계획 체크포인트 |
-| `.q/plan-executions/` | 완료된 실행 스냅샷 |
+| `.q/sessions/<uuid>/plan-execution.json` | 이전 버전의 plan 체크포인트 |
+| `.q/plan-executions/` | 이전 버전의 실행 스냅샷 |
 | `.q/model.json` | 워크스페이스 모델 역할 오버라이드 |
 | `.q/learning.json` | 워크스페이스 학습 스위치 |
 | `.q/lsp.json` | 워크스페이스 LSP 루트와 오버라이드 |

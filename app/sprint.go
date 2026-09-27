@@ -13,7 +13,7 @@ import (
 	"github.com/snowmerak/q/workspace"
 )
 
-// sprintModel runs the ordinary plan state machine without rendering the TUI.
+// sprintModel runs one delegated turn without rendering the TUI.
 // It terminates on the first final response or error and treats any unexpected
 // user question as a failed autonomous run instead of hanging for input.
 type sprintModel struct {
@@ -34,7 +34,7 @@ func (m sprintModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	}
 	event := eventMessage.event
 	if event.question != nil {
-		m.err = errors.New("autonomous plan unexpectedly requested user input")
+		m.err = errors.New("sprint requires user input")
 		if event.answer != nil {
 			event.answer <- askToUserOutput{Err: m.err}
 		}
@@ -50,7 +50,7 @@ func (m sprintModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Quit
 		}
 		if event.response == nil || len(event.response.Choices) == 0 {
-			m.err = errors.New("plan returned no response")
+			m.err = errors.New("sprint returned no response")
 			return m, tea.Quit
 		}
 		content := strings.TrimSpace(event.response.Choices[0].Message.TextContent())
@@ -88,14 +88,7 @@ func sprintProgress(event agentEvent) string {
 	}
 }
 
-func sprintConfig(value config.Config) config.Config {
-	value.Plan.AutoApprove = true
-	value.Plan.AutoResolve = true
-	return value
-}
-
-// RunSprint executes one autonomous plan in a fresh durable workspace session.
-// Plan automation is applied only to the in-memory config used by this run.
+// RunSprint executes one delegated task in a fresh durable workspace session.
 func RunSprint(
 	ctx context.Context,
 	store config.Store,
@@ -174,7 +167,7 @@ func RunSprint(
 		return err
 	}
 	sessionLock = lock
-	value := sprintConfig(startup.config)
+	value := startup.config
 	state := newManagedModel(runtimeContext, store, factory, manager)
 	state.workspaceStore = &sessionStore
 	state.toolRuntime = startup.tools
@@ -185,11 +178,14 @@ func RunSprint(
 	state.models = append(state.models, startup.models...)
 	state.gatewayConfig = startup.gatewayConfig
 	state.enterChat(value, configuredClient)
-	updated, planCommand := state.startPlan(objective)
+	if err := state.setLoopMode(loopModeDelegation); err != nil {
+		return err
+	}
+	updated, turnCommand := state.startChatTurn(objective, true)
 	state = updated.(model)
-	if !state.waiting || planCommand == nil {
+	if !state.waiting || turnCommand == nil {
 		if state.status == "" {
-			state.status = "plan did not start"
+			state.status = "delegated task did not start"
 		}
 		return errors.New(state.status)
 	}
@@ -198,7 +194,7 @@ func RunSprint(
 		return err
 	}
 	final, runErr := tea.NewProgram(
-		sprintModel{state: state, initial: planCommand, output: output},
+		sprintModel{state: state, initial: turnCommand, output: output},
 		tea.WithContext(runtimeContext), tea.WithInput(nil), tea.WithOutput(output),
 		tea.WithoutRenderer(), tea.WithoutSignalHandler(),
 	).Run()

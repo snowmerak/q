@@ -16,16 +16,12 @@ toc:
 
 | 命令 | 用途 |
 | --- | --- |
-| `/plan [request]` | 明确、提议、批准、执行和审查计划。 |
 | `/mode [default\|delegation]` | 查看或切换当前聊天循环模式。 |
-| `/auto-resolve [on\|off\|status]` | 控制计划澄清问题的工程默认回答。 |
-| `/auto-approve [on\|off\|status]` | 控制有效计划提案的自动批准。 |
-| `/autonomous [on\|off\|status]` | 同时控制上述两项计划自动化设置。 |
 | `/changes` | 浏览已暂存、未暂存和未跟踪的更改。 |
 | `/commit` | 生成并审查提交提案。 |
 | `/sessions` | 打开另一个已保存的工作区会话。 |
 | `/new` | 创建并切换到新会话。 |
-| `/clear` | 清除当前会话视图和计划检查点。 |
+| `/clear` | 清除当前会话视图。 |
 | `/learn [on\|off\|status]` | 检查点或控制此工作区的持久学习。 |
 | `/model` | 分配模型并配置回退组。 |
 | `/gateway` | 配置提供商和 Gateway 监听设置。 |
@@ -43,7 +39,7 @@ toc:
 
 | 命令 | 用途 |
 | --- | --- |
-| `q sprint <request...>` | 运行一次自主的计划工作流。 |
+| `q sprint <request...>` | 在委派模式下运行一项任务。 |
 | `q remote` | 启动前台 Remote REST 服务。 |
 | `q remote config` | 配置 Remote 监听地址和 API 密钥。 |
 | `q gateway` | 配置独立 Gateway。 |

@@ -25,7 +25,7 @@ type fakeHost struct {
 }
 
 func (h *fakeHost) ListSubagents(string) ([]app.RemoteSubagentInfo, []app.RemoteSubagentIssue, error) {
-	return []app.RemoteSubagentInfo{{Name: "builtin/scout", Available: true}}, nil, nil
+	return []app.RemoteSubagentInfo{{Name: "builtin/senior-developer", Available: true}}, nil, nil
 }
 
 func (h *fakeHost) Run(_ context.Context, store workspace.Store, _ string, subagent, _ string, emit app.RemoteEventSink) error {

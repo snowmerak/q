@@ -15,7 +15,7 @@ toc:
 
 ## What q is
 
-q is a workspace-native coding agent for the terminal. Start it inside a repository or project directory and it combines conversation, file tools, shell commands, model providers, planning, subagents, review, and durable history in one Go binary.
+q is a workspace-native coding agent for the terminal. Start it inside a repository or project directory and it combines conversation, file tools, shell commands, model providers, subagents, review, and durable history in one Go binary.
 
 The workspace is the operating boundary for q's file tools. Shell commands start there too, but they are **not** an operating-system sandbox. Review commands and approvals with the same care you would use for a local development shell.
 
@@ -23,9 +23,9 @@ The workspace is the operating boundary for q's file tools. Shell commands start
 
 Use ordinary chat when the request is focused and you want q to inspect or edit directly.
 
-Use `/plan` when the work needs clarification, an explicit proposal, approval before execution, or a resumable checkpoint. q moves through Griller, Scout, Planner, execution, and Planner review.
+Use `/mode delegation` when the main agent should coordinate occupational subagents. The manager handles requirements and planning; the senior developer assigns and reviews implementation.
 
-Use `q sprint` for the same planned workflow without the interactive approval steps:
+Use `q sprint` for one delegated task without the interactive UI:
 
 ```powershell
 q sprint implement the requested feature
@@ -35,7 +35,7 @@ Use `/subagent` when a bounded specialist should handle one request. Use `q remo
 
 ## What q keeps
 
-Each workspace can contain multiple durable sessions. The visible transcript, compacted model context, task lifecycle, plan checkpoints, and searchable workspace history are stored separately so long-running work can remain inspectable without sending the entire past on every turn.
+Each workspace can contain multiple durable sessions. The visible transcript, compacted model context, task lifecycle, delegation state, and searchable workspace history are stored separately so long-running work can remain inspectable without sending the entire past on every turn.
 
 q also supports Agent Skills. Skill metadata is searched on demand; a full `SKILL.md` enters model context only after the agent loads an applicable skill.
 

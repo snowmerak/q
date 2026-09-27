@@ -41,8 +41,8 @@ Use the TUI for ordinary configuration. Edit these files directly only when auto
 | `.q/sessions/<uuid>/session.json` | Transcript, context, title, lifecycle, and learning state. |
 | `.q/sessions/<uuid>/delegations.json` | Bookmarks for delegated child calls. |
 | `.q/sessions/<uuid>/delegates/<invocation-id>/` | Child session, execution state, and nested delegates. |
-| `.q/sessions/<uuid>/plan-execution.json` | Resumable approved-plan checkpoint. |
-| `.q/plan-executions/` | Completed execution snapshots. |
+| `.q/sessions/<uuid>/plan-execution.json` | Legacy plan checkpoint from an earlier version. |
+| `.q/plan-executions/` | Legacy execution snapshots. |
 | `.q/model.json` | Workspace model-role overrides. |
 | `.q/learning.json` | Workspace learning switch. |
 | `.q/lsp.json` | Workspace LSP roots and overrides. |
@@ -58,4 +58,4 @@ Use the TUI for ordinary configuration. Edit these files directly only when auto
 
 JSON records are the source of truth. Bleve and HNSW indexes are derived and rebuildable.
 
-Loom garbage collection protects references from active session projections and plan checkpoints, subject to its configured grace period. Deleting workspace `.q` state removes durable q history for that workspace; it does not revert repository files.
+Loom garbage collection protects references from active session projections and saved records, subject to its configured grace period. Deleting workspace `.q` state removes durable q history for that workspace; it does not revert repository files.

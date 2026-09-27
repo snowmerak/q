@@ -147,7 +147,7 @@ func (m model) beginCustomEdit(create bool) (tea.Model, tea.Cmd) {
 		c.inputs[customFieldScope].SetValue("workspace")
 	}
 	c.inputs[customFieldKind].SetValue(subagent.AgentKindInner)
-	c.inputs[customFieldRole].SetValue("scout")
+	c.inputs[customFieldRole].SetValue(config.AgentRoleResearch)
 	c.inputs[customFieldAccess].SetValue("read-only")
 	if !create {
 		if definition, fixed := c.selectedFixed(); fixed {
@@ -535,7 +535,7 @@ func (m model) updateCustom(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 					c.tools = map[string]bool{}
 					c.delegates = map[string]bool{}
 					if choice == subagent.AgentKindInner && c.inputs[customFieldRole].Value() == "" {
-						c.inputs[customFieldRole].SetValue(config.AgentRoleScout)
+						c.inputs[customFieldRole].SetValue(config.AgentRoleAdvisor)
 					}
 				}
 			}
@@ -784,7 +784,7 @@ func (m model) validateCustomDelegates(profile subagent.Profile, scope string, o
 		if entry.Err != nil || original != nil && entry.Path == original.Path {
 			continue
 		}
-		definition, err := subagent.DefinitionForProfile(entry)
+		definition, err := definitionForStoredProfile(entry)
 		if err != nil {
 			return err
 		}

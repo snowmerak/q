@@ -17,8 +17,8 @@ delegate(subagent_name, prompt) -> TaskResult | captured ACP result
 ## 일반 루프의 위임 모드
 
 `/mode delegation`은 현재 세션의 default role 루프를 위임 중심으로 전환한다.
-`/mode default`는 원래 루프로 돌아가며, `/mode`는 현재 값을 보여준다. 이는 `/plan`의
-승인 및 실행 절차와 별개다. 새 세션과 모드 필드가 없는 기존 세션은 `default`로 시작한다.
+`/mode default`는 원래 루프로 돌아가며, `/mode`는 현재 값을 보여준다.
+새 세션과 모드 필드가 없는 기존 세션은 `default`로 시작한다.
 `/clear`는 현재 세션의 모드를 유지한다.
 
 위임 모드에서는 루트의 시스템 프롬프트가 조정자 역할을 설명한다. 루트는
@@ -47,22 +47,17 @@ runtime에서 실행 가능한 agent만 반환한다. `delegate`는 그 목록�
 ID만 받는다. 호출 결과는 다른 큰 도구 결과와 마찬가지로 Loom에 저장될 수 있으며,
 호출자에게는 bounded receipt가 전달된다.
 
-## 공개 agent와 plan 내부 agent
+## 공개 직업형 agent
 
 일반 delegation registry에는 다음 q builtin을 등록한다.
 
-- `builtin/scout`: 저장소와 제공된 자료를 조사한다.
-- `builtin/griller`: 요청의 모호함, 빠진 조건, 위험을 찾는다.
-- `builtin/planner`: 요청을 실행 가능한 접근법과 단계로 정리하고, 명시적으로 실행까지
-  요청된 경우에만 Executor로 넘긴다.
-- `builtin/executor`: Coder 실행 결과를 Reviewer에 넘기고 retry feedback을 다시 Coder에
-  전달하며 계획을 끝까지 조율한다.
-- `builtin/reviewer`: 요청한 코드나 결과를 수정하지 않고 검토한다.
-- `builtin/coder`: 요청 범위에서 workspace를 수정하고 검증한다.
+- `builtin/interviewer`: 요구사항의 중요한 불확실성을 확인하고 질문을 상위 agent에 전달한다.
+- `builtin/manager`: PM으로서 요구사항, 우선순위, 수용 기준과 계획을 맡는다.
+- `builtin/senior-developer`: `reviewer` 모델 role로 기술적 접근을 정하고 junior에게 구현을 맡긴 뒤 변경을 직접 검토한다.
+- `builtin/junior-developer`: `coder` 모델 role로 senior developer가 할당한 코드를 읽고 수정하며 검증 및 피드백 반영을 수행한다. 루트에서 직접 호출할 수 없다.
+- `builtin/research`: 저장소와 외부 자료를 조사하고 근거 있는 대안을 제시한다.
 
-`/plan`과 `q sprint`의 Griller, Planner, Coder, Planner review는 승인된 계획과
-구조화된 중간 결과를 사용하는 별도 Go workflow다. 특히 plan Coder와 plan reviewer는
-일반 registry에 공개하지 않으며 `delegate_list`에도 나타나지 않는다.
+`q sprint`는 새 세션에서 delegation 모드의 일반 작업 턴을 실행한다.
 
 ACP Search와 External Web Tester는 다음 fixed builtin registry entry로도 등록한다. 실제
 ACP connection이 role에 할당되어 있고 enabled일 때만 `delegate_list`에 나타난다.
@@ -70,7 +65,7 @@ ACP connection이 role에 할당되어 있고 enabled일 때만 `delegate_list`�
 - `builtin/web-search`: `agents.roles.search`의 ACP connection
 - `builtin/web-tester`: `agents.roles.external_web_tester`의 ACP connection
 
-`research`는 실행 runner가 없고, `commit`, `thinker`, `librarian`은 독립 workflow 또는
+`commit`, `thinker`, `librarian`은 독립 workflow 또는
 내부 처리기이므로 일반 delegation registry에 등록하지 않는다.
 
 ## 공통 lifecycle
@@ -114,28 +109,25 @@ builtin/web-tester
 따라서 workspace profile이 같은 이름의 global agent에 부여된 delegation 권한을
 가로챌 수 없다.
 
-Builtin의 초기 delegation 관계는 다음과 같다.
+Builtin의 delegation 관계는 다음과 같다.
 
 ```text
-builtin/scout    -> []
-builtin/griller  -> [builtin/scout, builtin/web-search]
-builtin/planner  -> [builtin/scout, builtin/executor, builtin/web-search]
-builtin/executor -> [builtin/coder, builtin/reviewer, builtin/web-tester]
-builtin/reviewer -> [builtin/scout, builtin/web-search]
-builtin/coder    -> [builtin/scout, builtin/reviewer]
+builtin/manager -> [builtin/interviewer, builtin/research, builtin/senior-developer]
+builtin/interviewer -> [builtin/research]
+builtin/senior-developer -> [builtin/junior-developer, builtin/research, builtin/web-search]
+builtin/research -> [builtin/web-search]
 ```
 
 `builtin/web-search` grant는 ACP Search connection이 unavailable이면 목록에서 자동으로
-비활성화된다. 자동 permission을 사용하는 `builtin/web-tester`는 Executor, root 또는
-명시적으로 선택한 custom profile에서만 호출한다.
+비활성화된다. 자동 permission을 사용하는 `builtin/web-tester`는 root 또는 명시적으로
+선택한 custom profile에서 호출한다.
 
-Planner는 planning-only 요청에서 계획을 반환하고 멈춘다. 구현 또는 끝까지 실행하라는
-권한이 요청에 명시된 경우에만 완성한 계획과 completion criteria를 Executor에 전달한다.
-Executor는 `/plan`의 ExecutionLoop처럼 현재 task와 feedback을 Coder에 전달하고, 반환된
-TaskResult와 원래 completion criteria를 Reviewer에 전달한다. Reviewer가 retry를 요구하면
-그 feedback을 다음 Coder attempt에 그대로 넘긴 뒤 새 결과를 다시 검토시킨다. Executor
-자신은 workspace를 수정하지 않는다. 이 왕복은 task가 승인되거나 실제 blocker가 생길
-때까지 계속된다. 이 경로는 `/plan`의 승인 state machine을 대신하지 않는다.
+기존 profile에 저장된 `builtin/scout`, `builtin/griller`, `builtin/planner`,
+`builtin/executor`, `builtin/coder`, `builtin/reviewer` grant는 실행 시 무시한다. 이 grant를 새 profile에 저장할 수는 없으며,
+기존 profile을 편집할 때도 제거해야 저장할 수 있다. 완료 결과가 저장된 이전 호출은
+재시작 후에도 해당 결과를 복구한다.
+기존 profile의 `scout`, `griller`, `planner`, `senior-developer`, `junior-developer` 모델 role은 읽을 때 각각
+`research`, `interviewer`, `manager`, `reviewer`, `coder`로 변환한다.
 
 Custom profile은 `delegates`로 직접 호출 가능한 agent를 선택한다.
 
@@ -153,8 +145,7 @@ tools:
   - run_command
   - wait
 delegates:
-  - builtin/scout
-  - builtin/reviewer
+  - builtin/senior-developer
 ```
 
 이전 version 1 profile에서 `delegates`가 빠졌으면 빈 목록으로 해석한다. UI로 저장하면
@@ -193,21 +184,10 @@ assistant/도구 추적을 표시한다. `ctrl+g`로 추적을 접거나 펼칠 
 모든 inner subagent는 정의나 custom profile의 도구 목록과 관계없이
 `task_start`, `search_skills`, `get_skill`을 고정으로 받는다. `task_start`
 결과에 관련 스킬 후보가 들어오며, 전문이 필요하면 `get_skill`로 읽는다.
-`builtin/scout`, `builtin/griller`, `builtin/planner`, `builtin/executor`,
-`builtin/reviewer`는 파일 변경 도구를 받지 않는다. `run_command`는 파일을 변경할 수
-있으므로 이 다섯 builtin의 기본 도구에서 제외한다. `builtin/coder`만 파일 변경과
-command 도구를 직접 받는다.
-
-`builtin/griller`, `builtin/planner`, `builtin/reviewer`는 `read_file`과
-`list_directory`도 받지 않는다. 저장소의 파일이나 디렉터리 원문이 필요하면 직접
-읽지 않고 위임한다. `builtin/scout`, `builtin/executor`, `builtin/coder`는 두 workspace
-읽기 도구를 유지하며 Executor는 delegate 결과의 Loom evidence도 확인할 수 있다.
-
-`builtin/coder`는 명시적인 delegation grant가 있을 때만 발견되고 호출된다.
-Reviewer는 Coder를 호출할 수 없으므로 검토가 자동 수정으로 바뀌지 않는다.
-Registry의 mutation 표시는 직접 변경 도구뿐 아니라 변경 가능한 delegate까지 전파한다.
-따라서 Planner와 Executor는 직접 수정 도구가 없어도 Coder를 통한 간접 workspace
-mutation 가능성이 표시된다.
+`builtin/senior-developer`는 `read_file`, `list_directory`, Loom 조회 도구를 직접 사용하지만
+파일 변경과 `run_command` 도구를 받지 않는다. 변경 작업은 junior developer에 위임할 수 있다. 파일 변경이 필요한 custom profile은
+도구를 명시적으로 선택한다. Registry의 mutation 표시는 직접 변경 도구뿐 아니라
+변경 가능한 delegate까지 전파한다.
 
 ## TUI와 명령
 
@@ -216,7 +196,7 @@ mutation 가능성이 표시된다.
 직접 도구와 delegate 권한을 함께 반영한다. Builtin external은
 system prompt를 definition에 포함하며 화면에서는 연결된 ACP만 바꿀 수 있다.
 `c`에서 shared ACP connection을 등록·편집·검사·활성화·삭제한다. 별도 `/agents` 화면은 없다.
-`builtin/planner`, `builtin/executor`, `builtin/coder`, `builtin/web-tester`에는 workspace
+`builtin/web-tester`에는 workspace
 mutation 가능성 표시를 붙인다.
 
 새 custom external profile은 Scope 아래에서 Kind를 external로 선택한 뒤 ACP connection,
@@ -256,13 +236,13 @@ canonical ID와 기존 custom profile 이름을 실행할 수 있다. Builtin ex
 - 전용 Debug와 Advisor Review runner 및 새 실행 기록 작성 경로
 
 기존 `.q/debug-executions`와 `.q/review-executions` 파일은 사용자 데이터이므로 삭제하지
-않는다. `/plan`, `q sprint`, plan 실행 checkpoint와 Planner review는 유지한다.
+않는다. 기존 plan 실행 checkpoint는 데이터 호환성을 위해 읽을 수 있지만 새 plan 작업은 시작하지 않는다.
 
 ## 구현 순서
 
 1. Registry, dispatcher, 공통 lifecycle 및 delegate 도구를 추가한다.
-2. Scout, Griller, Planner builtin과 일반 대화를 연결한다.
+2. 직업형 builtin과 일반 대화를 연결한다.
 3. Profile schema와 `/subagents` 편집 UI에 Delegates를 추가한다.
-4. 일반 Reviewer와 Coder를 등록한다.
+4. Senior developer와 junior developer를 포함한 직업형 역할을 등록한다.
 5. `/debug`, `/review`, `q diagnose`, `q review`와 전용 runner를 제거한다.
-6. Registry 권한, cycle, lifecycle, TUI 저장, TUI·ACP 호출 및 plan 회귀를 검증한다.
+6. Registry 권한, cycle, lifecycle, TUI 저장, TUI·ACP 호출을 검증한다.

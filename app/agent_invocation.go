@@ -89,7 +89,7 @@ func configuredAgentToolRuntime(
 	}
 	_, _, searchConfigured := value.ExternalAgentConnection(config.AgentRoleSearch)
 	_, _, webTesterConfigured := value.ExternalAgentConnection(config.AgentRoleExternalWebTester)
-	searchAuthorized := searchConfigured && (role == mcpconfig.RoleDefault || role == config.AgentRoleGriller || role == config.AgentRolePlanner || role == config.AgentRoleAdvisor)
+	searchAuthorized := searchConfigured && (role == mcpconfig.RoleDefault || role == config.AgentRoleManager || role == config.AgentRoleResearch || role == config.AgentRoleAdvisor)
 	webTesterAuthorized := webTesterConfigured && role == mcpconfig.RoleDefault
 	_, alreadyConfigured := base.(*agentInvocationToolRuntime)
 	preserve := map[string]bool{

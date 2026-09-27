@@ -193,7 +193,7 @@ func TestDelegationModeRejectsSuccessUntilWorkToolSucceeds(t *testing.T) {
 		toolResponseWithArguments("delegate_list", `{}`),
 		toolResponseWithArguments(memory.RecordFactTool, `{"fact":"inspection remains pending"}`),
 		toolResponseWithArguments("task_complete", `{"outcome":"succeeded","summary":"read files"}`),
-		toolResponseWithArguments("delegate", `{"subagent_name":"builtin/scout","prompt":"inspect project"}`),
+		toolResponseWithArguments("delegate", `{"subagent_name":"builtin/senior-developer","prompt":"inspect project"}`),
 		toolResponseWithArguments("task_complete", `{"outcome":"succeeded","summary":"inspected project"}`),
 		finalResponse("done"),
 	}

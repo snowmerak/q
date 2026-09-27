@@ -15,7 +15,7 @@ import (
 
 func recoveryDefinition(name string, delegates ...string) subagent.AgentDefinition {
 	return subagent.AgentDefinition{
-		Info:         subagent.DelegateInfo{Name: name, Kind: subagent.AgentKindInner, Role: config.AgentRoleScout},
+		Info:         subagent.DelegateInfo{Name: name, Kind: subagent.AgentKindInner, Role: config.AgentRoleResearch},
 		SystemPrompt: "Complete the request.", Tools: []string{"write_file"}, Delegates: delegates, StrictTools: true,
 	}
 }
@@ -285,10 +285,12 @@ func TestInterruptedOrdinaryCallsUseOrdinalWhenIDsRepeat(t *testing.T) {
 }
 
 func TestWorkspaceRestartRestoresCompletedDelegateExactlyOnce(t *testing.T) {
-	store, call := recoveryParent(t, subagent.BuiltinScoutID, "inspect")
-	child := addRecoveryBookmark(t, store, call, subagent.BuiltinScoutID, "inspect", "saved-scout")
+	// A completed result from a removed builtin remains recoverable.
+	const retiredAgent = "builtin/scout"
+	store, call := recoveryParent(t, retiredAgent, "inspect")
+	child := addRecoveryBookmark(t, store, call, retiredAgent, "inspect", "saved-scout")
 	result := client.ToolResult{Content: `{"outcome":"succeeded","summary":"inspected"}`}
-	if err := child.SaveDelegationState(workspace.DelegationState{Agent: subagent.BuiltinScoutID, Prompt: "inspect", RunID: "run-test", Model: "plan-model", Status: "completed", Result: &result}); err != nil {
+	if err := child.SaveDelegationState(workspace.DelegationState{Agent: retiredAgent, Prompt: "inspect", RunID: "run-test", Model: "plan-model", Status: "completed", Result: &result}); err != nil {
 		t.Fatal(err)
 	}
 	value := config.Default()
@@ -328,7 +330,7 @@ func TestWorkspaceRestartRestoresCompletedDelegateExactlyOnce(t *testing.T) {
 }
 
 func TestRecoveryReloadsParentResultSavedBeforeUIAcknowledgment(t *testing.T) {
-	store, call := recoveryParent(t, subagent.BuiltinScoutID, "inspect")
+	store, call := recoveryParent(t, subagent.BuiltinSeniorDeveloperID, "inspect")
 	value := config.Default()
 	value.Provider.Model = "plan-model"
 	m := newModel(t.Context(), config.Store{Dir: t.TempDir()}, nil)
@@ -359,10 +361,10 @@ func TestRecoveryReloadsParentResultSavedBeforeUIAcknowledgment(t *testing.T) {
 }
 
 func TestCancelledRecoveryIgnoresLateEventAndReusesCompletedChild(t *testing.T) {
-	store, call := recoveryParent(t, subagent.BuiltinScoutID, "inspect")
-	child := addRecoveryBookmark(t, store, call, subagent.BuiltinScoutID, "inspect", "cancel-child")
+	store, call := recoveryParent(t, subagent.BuiltinSeniorDeveloperID, "inspect")
+	child := addRecoveryBookmark(t, store, call, subagent.BuiltinSeniorDeveloperID, "inspect", "cancel-child")
 	result := client.ToolResult{Content: `{"outcome":"succeeded","summary":"done"}`}
-	if err := child.SaveDelegationState(workspace.DelegationState{Agent: subagent.BuiltinScoutID, Prompt: "inspect", RunID: "run-test", Model: "plan-model", Status: "completed", Result: &result}); err != nil {
+	if err := child.SaveDelegationState(workspace.DelegationState{Agent: subagent.BuiltinSeniorDeveloperID, Prompt: "inspect", RunID: "run-test", Model: "plan-model", Status: "completed", Result: &result}); err != nil {
 		t.Fatal(err)
 	}
 	value := config.Default()

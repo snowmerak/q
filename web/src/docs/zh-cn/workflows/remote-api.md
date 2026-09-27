@@ -60,7 +60,7 @@ curl.exe -N `
   http://127.0.0.1:8080/v1/subagent-runs
 ```
 
-必须提供 `working_directory` 和 `prompt`。省略 `session_id` 会创建新会话；提供它会恢复未被占用的现有会话。省略 `subagent` 或发送空值会运行默认主循环。设置为 `builtin/scout` 等 ID 则使用直接子代理流程。
+必须提供 `working_directory` 和 `prompt`。省略 `session_id` 会创建新会话；提供它会恢复未被占用的现有会话。省略 `subagent` 或发送空值会运行默认主循环。设置为 `builtin/senior-developer` 等 ID 则使用直接子代理流程。
 
 提示上限为 32 KiB UTF-8 数据，完整 JSON 请求正文上限为 256 KiB。未知 JSON 字段会被拒绝。响应使用 `Cache-Control: no-store`，`X-Q-Session-ID` 标头给出所选会话。
 

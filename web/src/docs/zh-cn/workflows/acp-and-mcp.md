@@ -6,8 +6,6 @@ sectionLabel: 指南
 toc:
   - id: 通过acp运行q
     label: 通过 ACP 运行 q
-  - id: 控制规划自动化
-    label: 控制规划自动化
   - id: 交互与上下文
     label: 交互与上下文
   - id: 连接外部mcp服务器
@@ -24,26 +22,13 @@ toc:
 q acp --root C:\work\project
 ```
 
-ACP 模式使用与终端 UI 相同的持久工作区会话、受根目录限制的工具、规划工作流、子代理、学习和提交工作流。它向已连接客户端通告 `/mode`、`/plan`、`/commit`、`/subagents`、`/subagent`、`/learn`、`/clear` 和 `/help` 等命令。委派模式还会发送子代理进度和工具调用。
+ACP 模式使用与终端 UI 相同的持久工作区会话、受根目录限制的工具、子代理、学习和提交工作流。它向已连接客户端通告 `/mode`、`/commit`、`/subagents`、`/subagent`、`/learn`、`/clear` 和 `/help` 等命令。委派模式还会发送子代理进度和工具调用。
 
 `--root` 默认为当前目录，定义文件、会话、指令、技能和工作区配置的边界。
 
-## 控制规划自动化
-
-进程级标志可以自动处理规划澄清与方案审批，而不更改持久配置：
-
-```powershell
-q acp --root C:\work\project --auto-resolve --auto-approve
-q acp --root C:\work\project --autonomous
-```
-
-`--autonomous` 同时启用两项行为。明确提供的单独标志优先，包括 `--auto-approve=false`。这些标志作用于 `/plan`，不会跳过方案验证、任务执行、审查或提交确认。
-
-斜杠命令 `/auto-resolve`、`/auto-approve`、`/autonomous` 支持 `on`、`off`、`status`。与进程标志不同，`on` 和 `off` 会保存到 `~/.q/config.yaml`。
-
 ## 交互与上下文
 
-客户端支持表单式询问时，q 会将其用于规划与提交选择。否则会呈现编号审批选项。规划与代理问题可以把下一条客户端消息作为自由格式回答。
+客户端支持表单式询问时，q 会将其用于提交选择。否则会呈现编号审批选项。代理问题可以把下一条客户端消息作为自由格式回答。
 
 q 会通告 ACP 嵌入式上下文支持，并在回放会话时保留资源 URI、MIME 类型、注释和内容。当 q TUI 连接到另一个 ACP 代理时，可用 `@relative/path` 或 `@"path with spaces"` 附加工作区内文件。远端支持嵌入上下文时会发送文件内容，否则发送资源链接。
 

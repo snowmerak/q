@@ -10,6 +10,7 @@ import (
 	"github.com/snowmerak/q/client"
 	"github.com/snowmerak/q/config"
 	"github.com/snowmerak/q/mcpconfig"
+	"github.com/snowmerak/q/memory"
 	"github.com/snowmerak/q/sessionstore"
 	"github.com/snowmerak/q/subagent"
 	acp "github.com/snowmerak/q/third_party/acp-go-sdk"
@@ -76,7 +77,7 @@ func (m model) resolvePublicAgent(name string) (subagent.AgentDefinition, error)
 	if err != nil {
 		return subagent.AgentDefinition{}, err
 	}
-	return subagent.DefinitionForProfile(entry)
+	return definitionForStoredProfile(entry)
 }
 
 func (m model) customInfo(command string) string {
@@ -263,7 +264,6 @@ func (m model) startCustom(command string) (tea.Model, tea.Cmd) {
 			return m.startAgentWebTester(input)
 		}
 	}
-	m.planArmed = false
 	m.beginTurn()
 	m.turnMessageStart = len(m.messages)
 	m.touchSessionMetadata(input)
@@ -271,7 +271,7 @@ func (m model) startCustom(command string) (tea.Model, tea.Cmd) {
 	m.archiveMessage(message, sessionstore.StatusSubmitted, false)
 	m.messages = append(m.messages, message)
 	if m.memory == nil {
-		m.memory = memoryForPlan(m.activeConfig())
+		m.memory = memory.New(memoryPolicy(m.activeConfig()), nil)
 	}
 	m.memory.Append(message)
 	m.pendingMessage = message
@@ -321,7 +321,7 @@ func (a *acpAgent) runACPCustom(ctx context.Context, command string) (acp.Prompt
 	a.state.archiveMessage(message, sessionstore.StatusSubmitted, false)
 	a.state.messages = append(a.state.messages, message)
 	if a.state.memory == nil {
-		a.state.memory = memoryForPlan(a.state.activeConfig())
+		a.state.memory = memory.New(memoryPolicy(a.state.activeConfig()), nil)
 	}
 	a.state.memory.Append(message)
 	if err = a.state.saveWorkspaceSession(); err != nil {
@@ -342,7 +342,7 @@ func (a *acpAgent) runACPCustom(ctx context.Context, command string) (acp.Prompt
 	runCtx, cancel := context.WithCancel(ctx)
 	events := make(chan agentEvent)
 	go a.state.streamCustom(runCtx, name, input, events)
-	return a.continueACPPlan(ctx, &acpPlanContinuation{workflowCtx: runCtx, cancel: cancel, events: events, trace: trace, objective: input, workflow: "custom"}, false)
+	return a.continueACPSubagent(ctx, &acpSubagentContinuation{workflowCtx: runCtx, cancel: cancel, events: events, trace: trace, objective: input, workflow: "custom"}, false)
 }
 
 // RunSubagents opens subagent profiles, external bindings, and ACP connection

@@ -24,7 +24,7 @@ type acpPendingQuestion struct {
 	abort           func() error
 }
 
-type acpPlanContinuation struct {
+type acpSubagentContinuation struct {
 	workflowCtx context.Context
 	cancel      context.CancelFunc
 	events      <-chan agentEvent
@@ -36,14 +36,14 @@ type acpPlanContinuation struct {
 	finishErr   error
 }
 
-func (run *acpPlanContinuation) workflowName() string {
+func (run *acpSubagentContinuation) workflowName() string {
 	if run == nil || strings.TrimSpace(run.workflow) == "" {
-		return "plan"
+		return "subagent"
 	}
 	return strings.TrimSpace(run.workflow)
 }
 
-func (run *acpPlanContinuation) finish(
+func (run *acpSubagentContinuation) finish(
 	a *acpAgent,
 	ctx context.Context,
 	response acp.PromptResponse,

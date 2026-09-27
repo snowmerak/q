@@ -59,7 +59,7 @@ curl.exe -N `
   http://127.0.0.1:8080/v1/subagent-runs
 ```
 
-`working_directory` and `prompt` are required. Omit `session_id` to create a session; provide it to resume an existing unoccupied session. Omit `subagent` or send an empty value to run the default main loop. Set it to an ID such as `builtin/scout` to use the direct subagent flow.
+`working_directory` and `prompt` are required. Omit `session_id` to create a session; provide it to resume an existing unoccupied session. Omit `subagent` or send an empty value to run the default main loop. Set it to an ID such as `builtin/senior-developer` to use the direct subagent flow.
 
 The prompt is limited to 32 KiB of UTF-8 data, and the complete JSON request body is limited to 256 KiB. Unknown JSON fields are rejected. The response uses `Cache-Control: no-store`, and the `X-Q-Session-ID` header exposes the selected session.
 

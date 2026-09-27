@@ -148,9 +148,10 @@ func (c Config) ServerIDs() []string {
 func RoleIDs() []string {
 	return []string{
 		RoleDefault,
-		config.AgentRoleGriller,
-		config.AgentRoleScout,
-		config.AgentRolePlanner,
+		config.AgentRoleInterviewer,
+		config.AgentRoleManager,
+		config.AgentRoleResearch,
+		config.AgentRoleReviewer,
 		config.AgentRoleCoder,
 	}
 }
@@ -210,6 +211,21 @@ func (s Store) Load() (Config, error) {
 	}
 	if value.Roles == nil {
 		value.Roles = make(map[string][]string)
+	}
+	// Migrate saved grants while an explicit current-role assignment takes precedence.
+	for _, pair := range []struct{ old, current string }{
+		{config.AgentRoleGriller, config.AgentRoleInterviewer},
+		{config.AgentRolePlanner, config.AgentRoleManager},
+		{config.AgentRoleScout, config.AgentRoleResearch},
+		{config.AgentRoleSeniorDeveloper, config.AgentRoleReviewer},
+		{config.AgentRoleJuniorDeveloper, config.AgentRoleCoder},
+	} {
+		if servers, found := value.Roles[pair.old]; found {
+			if _, explicit := value.Roles[pair.current]; !explicit {
+				value.Roles[pair.current] = servers
+			}
+			delete(value.Roles, pair.old)
+		}
 	}
 	if err := value.Validate(); err != nil {
 		return Config{}, err

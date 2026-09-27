@@ -5,8 +5,6 @@ sectionLabel: Guide
 toc:
   - id: run-q-over-acp
     label: Run q over ACP
-  - id: control-plan-automation
-    label: Control plan automation
   - id: interaction-and-context
     label: Interaction and context
   - id: attach-external-mcp-servers
@@ -23,26 +21,13 @@ Start q as an Agent Client Protocol server over stdin/stdout:
 q acp --root C:\work\project
 ```
 
-ACP mode uses the same durable workspace sessions, root-scoped tools, planning workflow, subagents, learning, and commit workflow as the terminal UI. It advertises commands including `/mode`, `/plan`, `/commit`, `/subagents`, `/subagent`, `/learn`, `/clear`, and `/help` to the connected client. Delegation mode also streams child progress and tool calls to the client.
+ACP mode uses the same durable workspace sessions, root-scoped tools, subagents, learning, and commit workflow as the terminal UI. It advertises commands including `/mode`, `/commit`, `/subagents`, `/subagent`, `/learn`, `/clear`, and `/help` to the connected client. Delegation mode also streams child progress and tool calls to the client.
 
 `--root` defaults to the current directory. It defines the workspace boundary used for files, sessions, instructions, skills, and workspace configuration.
 
-## Control plan automation
-
-Process-only flags can automate plan clarification and proposal approval without changing the persisted settings:
-
-```powershell
-q acp --root C:\work\project --auto-resolve --auto-approve
-q acp --root C:\work\project --autonomous
-```
-
-`--autonomous` enables both behaviors. An explicitly supplied individual flag takes precedence, including forms such as `--auto-approve=false`. These flags affect `/plan`; they do not bypass proposal validation, task execution, review, or commit confirmation.
-
-The slash forms `/auto-resolve`, `/auto-approve`, and `/autonomous` support `on`, `off`, and `status`. Unlike the process flags, `on` and `off` persist to `~/.q/config.yaml`.
-
 ## Interaction and context
 
-When the client supports form elicitation, q uses it for plan and commit choices. Otherwise it presents numbered approval actions. Planning and agent questions can consume the next client message as a free-form answer.
+When the client supports form elicitation, q uses it for commit choices. Otherwise it presents numbered approval actions. Agent questions can consume the next client message as a free-form answer.
 
 q advertises ACP embedded-context support. It preserves resource URI, MIME type, annotations, and content when a session is replayed. When q's TUI is connected to another ACP agent, `@relative/path` and `@"path with spaces"` attach an in-workspace file. q embeds the file if the remote agent supports embedded context and otherwise sends a resource link.
 

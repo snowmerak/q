@@ -57,7 +57,7 @@ func (m model) updateChatKey(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case "esc":
 		return m, tea.Quit
 	case "ctrl+l":
-		if !m.waiting && !m.planResumePending {
+		if !m.waiting {
 			if remote, ok := m.client.(*acpRemoteClient); ok {
 				m.status = "Starting new ACP session…"
 				return m, remote.resetSessionCommand(m.ctx)
@@ -128,13 +128,13 @@ func (m model) submitChat() (tea.Model, tea.Cmd) {
 		return m, m.client.(*acpRemoteClient).resetSessionCommand(m.ctx)
 	}
 	if !remoteChat {
+		if retiredPlanCommand(content) {
+			m.input.Reset()
+			m.status = "Plan mode was removed. Use /mode delegation or /subagent builtin/manager."
+			return m, m.input.Focus()
+		}
 		if updated, command, handled := m.startSkillCommand(content); handled {
 			return updated, command
-		}
-		if command, handled := parsePlanAutomationCommand(content); handled {
-			m.input.Reset()
-			m.status = m.runPlanAutomationCommand(command)
-			return m, m.input.Focus()
 		}
 		if customCommand(content) {
 			return m.startCustom(content)
@@ -145,13 +145,6 @@ func (m model) submitChat() (tea.Model, tea.Cmd) {
 			return m, m.input.Focus()
 		}
 		switch content {
-		case "/plan":
-			m.input.Reset()
-			m.planArmed = true
-			m.input.Placeholder = "Describe the work to plan…"
-			m.status = "Plan mode · enter a planning request"
-			m.resize(m.width, m.height)
-			return m, m.input.Focus()
 		case "/commit":
 			return m.startCommit()
 		case "/changes":
@@ -236,14 +229,17 @@ func (m model) submitChat() (tea.Model, tea.Cmd) {
 			m.input.Reset()
 			return m.enterHelp()
 		}
-		if strings.HasPrefix(content, "/plan ") {
-			return m.startPlan(strings.TrimSpace(strings.TrimPrefix(content, "/plan")))
-		}
-		if m.planArmed {
-			return m.startPlan(content)
-		}
 	}
 	return m.startChatTurn(content, !remoteChat)
+}
+
+func retiredPlanCommand(command string) bool {
+	for _, name := range []string{"/plan", "/auto-approve", "/auto-resolve", "/autonomous"} {
+		if command == name || strings.HasPrefix(command, name+" ") {
+			return true
+		}
+	}
+	return false
 }
 
 func (m model) startChatTurn(content string, compact bool) (tea.Model, tea.Cmd) {
@@ -308,7 +304,7 @@ func (m model) startChatTurn(content string, compact bool) (tea.Model, tea.Cmd) 
 // resumeRecoveredTurn continues the parent model after its saved delegate
 // result has been restored. No new user message is inserted.
 func (m *model) resumeRecoveredTurn() tea.Cmd {
-	if !m.recoverDelegationTurn || m.waiting || m.client == nil || m.planResumePending {
+	if !m.recoverDelegationTurn || m.waiting || m.client == nil {
 		return nil
 	}
 	m.recoverDelegationTurn = false
@@ -321,9 +317,6 @@ func (m *model) resumeRecoveredTurn() tea.Cmd {
 }
 
 func (m model) submitQuestionAnswer(content string) (tea.Model, tea.Cmd) {
-	if m.planResumePending {
-		return m.submitPlanResumeAnswer(content)
-	}
 	if m.questionAnswer == nil || m.questionEvents == nil {
 		return m, nil
 	}
@@ -354,7 +347,6 @@ func (m model) submitQuestionAnswer(content string) (tea.Model, tea.Cmd) {
 	turnID := m.questionTurnID
 	turnContext := m.activeTurnContext()
 	m.asking = false
-	m.planArmed = false
 	m.pendingQuestion = askToUserInput{}
 	m.questionChoice = 0
 	m.questionAnswer = nil
@@ -417,7 +409,6 @@ func (m model) interruptTurn() (tea.Model, tea.Cmd) {
 	m.waiting = false
 	m.compacting = false
 	m.asking = false
-	m.planArmed = false
 	m.submitPending = false
 	m.pendingMessage = client.Message{}
 	m.streamResponse = ""
@@ -440,7 +431,6 @@ func (m model) interruptTurn() (tea.Model, tea.Cmd) {
 	if err := m.flushArchive(); err != nil {
 		m.status += " · archive: " + err.Error()
 	}
-	m.offerPlanExecutionResume()
 	return m, m.input.Focus()
 }
 
@@ -643,7 +633,6 @@ func (m *model) rollbackPendingMessage() {
 	m.waiting = false
 	m.compacting = false
 	m.asking = false
-	m.planArmed = false
 	m.pendingQuestion = askToUserInput{}
 	m.questionAnswer = nil
 	m.questionEvents = nil

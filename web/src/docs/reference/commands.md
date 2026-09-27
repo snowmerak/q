@@ -15,16 +15,12 @@ toc:
 
 | Command | Purpose |
 | --- | --- |
-| `/plan [request]` | Clarify, propose, approve, execute, and review a plan. |
 | `/mode [default\|delegation]` | Show or change the current chat loop mode. |
-| `/auto-resolve [on\|off\|status]` | Control engineering-default answers to plan clarification. |
-| `/auto-approve [on\|off\|status]` | Control automatic approval of valid plan proposals. |
-| `/autonomous [on\|off\|status]` | Control both plan automation settings together. |
 | `/changes` | Browse staged, unstaged, and untracked changes. |
 | `/commit` | Generate and review a commit proposal. |
 | `/sessions` | Open another saved workspace session. |
 | `/new` | Create and switch to a new session. |
-| `/clear` | Clear the current conversation projection and plan checkpoint. |
+| `/clear` | Clear the current conversation projection. |
 | `/learn [on\|off\|status]` | Checkpoint or control durable learning for this workspace. |
 | `/model` | Assign models and configure fallback groups. |
 | `/gateway` | Configure providers and Gateway listener settings. |
@@ -42,7 +38,7 @@ toc:
 
 | Command | Purpose |
 | --- | --- |
-| `q sprint <request...>` | Run one autonomous planned workflow. |
+| `q sprint <request...>` | Run one task in delegation mode. |
 | `q remote` | Start the foreground Remote REST host. |
 | `q remote config` | Configure Remote listener and API keys. |
 | `q gateway` | Configure the standalone Gateway. |

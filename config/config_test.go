@@ -198,8 +198,48 @@ func TestEffectiveAgentUsesRoleOverrideAndActiveModelFallback(t *testing.T) {
 	if err != nil || coder.Model != "active-model" || coder.ReasoningEffort != "medium" {
 		t.Fatalf("coder = %#v, err = %v", coder, err)
 	}
-	if _, err := value.EffectiveAgent("reviewer"); err == nil {
+	if _, err := value.EffectiveAgent("unknown-role"); err == nil {
 		t.Fatal("unknown role unexpectedly resolved")
+	}
+}
+
+func TestRetiredModelSettingsFeedNewRolesWithoutAppearingInRolePicker(t *testing.T) {
+	value := Default()
+	value.Provider.Model = "default-model"
+	value.Agents.Roles = map[string]AgentConfig{
+		AgentRoleGriller:         {Model: "interview-model"},
+		AgentRolePlanner:         {Model: "manager-model"},
+		AgentRoleJuniorDeveloper: {Model: "junior-model"},
+		AgentRoleSeniorDeveloper: {Model: "review-model"},
+		AgentRoleScout:           {Model: "research-model"},
+	}
+	for role, want := range map[string]string{
+		AgentRoleInterviewer: "interview-model",
+		AgentRoleManager:     "manager-model",
+		AgentRoleCoder:       "junior-model",
+		AgentRoleReviewer:    "review-model",
+		AgentRoleResearch:    "research-model",
+	} {
+		got, err := value.EffectiveAgent(role)
+		if err != nil || got.Model != want {
+			t.Fatalf("%s = %#v, %v; want %q", role, got, err, want)
+		}
+	}
+	for _, old := range []string{AgentRoleGriller, AgentRoleScout, AgentRolePlanner, AgentRoleSeniorDeveloper, AgentRoleJuniorDeveloper} {
+		if slices.Contains(value.NativeRoles(), old) {
+			t.Fatalf("retired role %q is still selectable", old)
+		}
+		if CanonicalAgentRole(old) == old {
+			t.Fatalf("retired role %q was not mapped", old)
+		}
+	}
+	value.Agents.Roles[AgentRoleReviewer] = AgentConfig{Model: "explicit-reviewer"}
+	value.Agents.Roles[AgentRoleCoder] = AgentConfig{Model: "explicit-coder"}
+	for role, want := range map[string]string{AgentRoleReviewer: "explicit-reviewer", AgentRoleCoder: "explicit-coder"} {
+		got, err := value.EffectiveAgent(role)
+		if err != nil || got.Model != want {
+			t.Fatalf("explicit %s = %#v, %v; want %q", role, got, err, want)
+		}
 	}
 }
 
@@ -265,7 +305,10 @@ func TestLibrarianUsesRoleOverrideAndActiveModelFallback(t *testing.T) {
 
 func TestAgentRolesIncludesLearningRoles(t *testing.T) {
 	roles := AgentRoles()
-	for _, expected := range []string{AgentRoleExecutor, AgentRoleThinker, AgentRoleLibrarian} {
+	if IsAgentRole("executor") || slices.Contains(roles, "executor") {
+		t.Fatalf("retired executor role is still built in: %v", roles)
+	}
+	for _, expected := range []string{AgentRoleThinker, AgentRoleLibrarian} {
 		if !IsAgentRole(expected) {
 			t.Fatalf("%s is not recognized as an agent role", expected)
 		}

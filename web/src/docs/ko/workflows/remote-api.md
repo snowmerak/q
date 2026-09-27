@@ -60,7 +60,7 @@ curl.exe -N `
   http://127.0.0.1:8080/v1/subagent-runs
 ```
 
-`working_directory`와 `prompt`는 필수입니다. `session_id`를 생략하면 새 세션을 만들고, 점유되지 않은 기존 세션을 재개하려면 값을 보냅니다. `subagent`를 생략하거나 빈 값으로 보내면 기본 메인 루프를 실행합니다. `builtin/scout` 같은 ID를 보내면 직접 서브에이전트 흐름을 사용합니다.
+`working_directory`와 `prompt`는 필수입니다. `session_id`를 생략하면 새 세션을 만들고, 점유되지 않은 기존 세션을 재개하려면 값을 보냅니다. `subagent`를 생략하거나 빈 값으로 보내면 기본 메인 루프를 실행합니다. `builtin/senior-developer` 같은 ID를 보내면 직접 서브에이전트 흐름을 사용합니다.
 
 프롬프트는 UTF-8 32 KiB, 전체 JSON 요청 본문은 256 KiB로 제한됩니다. 알 수 없는 JSON 필드는 거부됩니다. 응답은 `Cache-Control: no-store`를 사용하며 `X-Q-Session-ID` 헤더에 선택된 세션을 제공합니다.
 

@@ -34,8 +34,12 @@ const (
 	AgentRoleSearch            = "search"
 	AgentRoleExternalWebTester = "external_web_tester"
 	AgentRolePlanner           = "planner"
-	AgentRoleExecutor          = "executor"
 	AgentRoleCoder             = "coder"
+	AgentRoleInterviewer       = "interviewer"
+	AgentRoleManager           = "manager"
+	AgentRoleSeniorDeveloper   = "senior-developer"
+	AgentRoleJuniorDeveloper   = "junior-developer"
+	AgentRoleReviewer          = "reviewer"
 	AgentRoleCommit            = "commit"
 	AgentRoleAdvisor           = "advisor"
 	AgentRoleThinker           = "thinker"
@@ -76,8 +80,7 @@ type ContextConfig struct {
 	RecentRatio  float64 `yaml:"recent_ratio,omitempty"`
 }
 
-// PlanConfig controls persistent automation for the approval-gated /plan
-// workflow. Command-line overrides may replace these values for one process.
+// PlanConfig is retained to load settings written by the retired /plan mode.
 type PlanConfig struct {
 	AutoApprove bool `yaml:"auto_approve,omitempty"`
 	AutoResolve bool `yaml:"auto_resolve,omitempty"`
@@ -178,16 +181,22 @@ func (c Config) EffectiveModelAPIModes() map[string]string {
 }
 
 var agentRoles = []string{
-	AgentRoleGriller,
-	AgentRoleScout,
+	AgentRoleInterviewer,
+	AgentRoleManager,
 	AgentRoleResearch,
-	AgentRolePlanner,
-	AgentRoleExecutor,
+	AgentRoleReviewer,
 	AgentRoleCoder,
 	AgentRoleCommit,
 	AgentRoleAdvisor,
 	AgentRoleThinker,
 	AgentRoleLibrarian,
+}
+
+// Legacy roles remain resolvable for saved configuration and execution records.
+// They are intentionally absent from model and subagent discovery.
+var legacyAgentRoles = []string{
+	AgentRoleGriller, AgentRoleScout, AgentRolePlanner,
+	AgentRoleSeniorDeveloper, AgentRoleJuniorDeveloper,
 }
 
 var externalAgentRoles = []string{
@@ -366,7 +375,7 @@ func (c Config) Validate() error {
 			}
 			continue
 		}
-		if !IsAgentRole(role) && !ValidCustomRoleName(role) {
+		if !IsAgentRole(role) && !slices.Contains(legacyAgentRoles, role) && !ValidCustomRoleName(role) {
 			return fmt.Errorf("config: unsupported agent role %q", role)
 		}
 		if agent.Agent != "" {
@@ -507,6 +516,24 @@ func IsAgentRole(role string) bool {
 	return slices.Contains(agentRoles, role)
 }
 
+// CanonicalAgentRole translates saved role names retired from model settings.
+func CanonicalAgentRole(role string) string {
+	switch role {
+	case AgentRoleGriller:
+		return AgentRoleInterviewer
+	case AgentRoleScout:
+		return AgentRoleResearch
+	case AgentRolePlanner:
+		return AgentRoleManager
+	case AgentRoleSeniorDeveloper:
+		return AgentRoleReviewer
+	case AgentRoleJuniorDeveloper:
+		return AgentRoleCoder
+	default:
+		return role
+	}
+}
+
 // ExternalAgentRoles returns built-in roles backed by configured ACP
 // connections rather than q-native models.
 func ExternalAgentRoles() []string {
@@ -571,7 +598,26 @@ func (c Config) EffectiveAgent(role string) (AgentConfig, error) {
 	if !c.HasNativeRole(role) {
 		return AgentConfig{}, fmt.Errorf("config: unsupported agent role %q", role)
 	}
-	result := c.EffectiveAgents().Roles[role]
+	roles := c.EffectiveAgents().Roles
+	result, configured := roles[role]
+	if !configured {
+		var legacy string
+		switch role {
+		case AgentRoleInterviewer:
+			legacy = AgentRoleGriller
+		case AgentRoleManager:
+			legacy = AgentRolePlanner
+		case AgentRoleReviewer:
+			legacy = AgentRoleSeniorDeveloper
+		case AgentRoleCoder:
+			legacy = AgentRoleJuniorDeveloper
+		case AgentRoleResearch:
+			legacy = AgentRoleScout
+		}
+		if legacy != "" {
+			result = roles[legacy]
+		}
+	}
 	if result.Model == "" && result.Group == "" {
 		result.Model = c.Provider.Model
 	}
@@ -595,11 +641,11 @@ func ValidCustomName(name string) bool {
 // in addition to applying the shared custom identifier syntax.
 func ValidCustomRoleName(name string) bool {
 	return ValidCustomName(name) && name != "default" && name != "embedding" &&
-		!IsExternalAgentRole(name) && !IsAgentRole(name)
+		!IsExternalAgentRole(name) && !IsAgentRole(name) && !slices.Contains(legacyAgentRoles, name)
 }
 
 func (c Config) HasNativeRole(role string) bool {
-	if IsAgentRole(role) {
+	if IsAgentRole(role) || slices.Contains(legacyAgentRoles, role) {
 		return true
 	}
 	a, ok := c.Agents.Roles[role]
@@ -610,7 +656,7 @@ func (c Config) NativeRoles() []string {
 	result := AgentRoles()
 	var custom []string
 	for role := range c.Agents.Roles {
-		if !IsAgentRole(role) && c.HasNativeRole(role) {
+		if !IsAgentRole(role) && !slices.Contains(legacyAgentRoles, role) && c.HasNativeRole(role) {
 			custom = append(custom, role)
 		}
 	}

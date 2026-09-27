@@ -156,7 +156,7 @@ func TestCustomScreenListsBuiltinDefinitionsAsFixed(t *testing.T) {
 	m := customViewFixture(t, 100, 36, true)
 	m.reloadCustom()
 	plain := ansi.Strip(m.viewCustom())
-	if !strings.Contains(plain, subagent.BuiltinScoutID) || !strings.Contains(plain, "inner · read-only") {
+	if !strings.Contains(plain, subagent.BuiltinSeniorDeveloperID) || !strings.Contains(plain, "inner · read-only") {
 		t.Fatalf("builtin definitions missing:\n%s", plain)
 	}
 	m.custom.cursor = 0
@@ -167,29 +167,29 @@ func TestCustomScreenListsBuiltinDefinitionsAsFixed(t *testing.T) {
 	}
 }
 
-func TestCustomScreenShowsExecutorMutationAuthority(t *testing.T) {
+func TestCustomScreenShowsSeniorDeveloperReviewRoleAndIndirectMutation(t *testing.T) {
 	m := customViewFixture(t, 100, 36, true)
 	m.reloadCustom()
 	found := false
 	for index, definition := range m.custom.fixed {
-		if definition.Info.Name == subagent.BuiltinExecutorID {
+		if definition.Info.Name == subagent.BuiltinSeniorDeveloperID {
 			m.custom.cursor = index
 			found = true
 			break
 		}
 	}
 	if !found {
-		t.Fatal("executor definition is missing")
+		t.Fatal("senior developer definition is missing")
 	}
 	plain := ansi.Strip(m.customSelectionDetail())
-	for _, wanted := range []string{"INNER · MUTATES WORKSPACE", "read_file", "list_directory", "loom_read", subagent.BuiltinCoderID, subagent.BuiltinReviewerID, subagent.BuiltinWebTesterID} {
+	for _, wanted := range []string{"INNER · MUTATES WORKSPACE", "Role    reviewer", "read_file", "list_directory", "loom_read", subagent.BuiltinJuniorDeveloperID, subagent.BuiltinWebSearchID} {
 		if !strings.Contains(plain, wanted) {
-			t.Fatalf("executor detail missing %q:\n%s", wanted, plain)
+			t.Fatalf("senior developer detail missing %q:\n%s", wanted, plain)
 		}
 	}
 	for _, forbidden := range []string{"edit_file", "write_file", "run_command"} {
 		if strings.Contains(plain, forbidden) {
-			t.Fatalf("executor detail exposed %q:\n%s", forbidden, plain)
+			t.Fatalf("senior developer detail exposed direct mutation tool %q:\n%s", forbidden, plain)
 		}
 	}
 }

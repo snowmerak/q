@@ -23,8 +23,8 @@ func TestDelegationRuntimeListsOnlyDirectGrantsForCustomCaller(t *testing.T) {
 	workspaceStore := workspace.Store{Root: t.TempDir()}
 	m.workspaceStore = &workspaceStore
 	profile := subagent.Profile{
-		Version: 1, Name: "reader", Role: config.AgentRoleScout,
-		SystemPrompt: "Read.", Tools: []string{}, Delegates: []string{subagent.BuiltinScoutID},
+		Version: 1, Name: "reader", Role: config.AgentRoleResearch,
+		SystemPrompt: "Read.", Tools: []string{}, Delegates: []string{subagent.BuiltinSeniorDeveloperID},
 	}
 	if err := m.customStore().Save(profile, "workspace", nil); err != nil {
 		t.Fatal(err)
@@ -44,7 +44,7 @@ func TestDelegationRuntimeListsOnlyDirectGrantsForCustomCaller(t *testing.T) {
 	if err := json.Unmarshal([]byte(result.Content), &listed); err != nil {
 		t.Fatal(err)
 	}
-	if len(listed) != 1 || listed[0].Name != subagent.BuiltinScoutID {
+	if len(listed) != 1 || listed[0].Name != subagent.BuiltinSeniorDeveloperID {
 		t.Fatalf("listed = %#v", listed)
 	}
 	result, err = runtime.Call(t.Context(), client.ToolCall{Function: client.FunctionCall{
@@ -78,7 +78,7 @@ func TestRootDelegationListContainsBuiltinsAndCanonicalProfiles(t *testing.T) {
 	workspaceStore := workspace.Store{Root: t.TempDir()}
 	m.workspaceStore = &workspaceStore
 	if err := m.customStore().Save(subagent.Profile{
-		Version: 1, Name: "reader", Role: config.AgentRoleScout,
+		Version: 1, Name: "reader", Role: config.AgentRoleResearch,
 		SystemPrompt: "Read.", Tools: []string{}, Delegates: []string{},
 	}, "global", nil); err != nil {
 		t.Fatal(err)
@@ -98,14 +98,50 @@ func TestRootDelegationListContainsBuiltinsAndCanonicalProfiles(t *testing.T) {
 		t.Fatal(err)
 	}
 	names := delegateInfoNames(listed)
-	for _, expected := range []string{subagent.BuiltinScoutID, subagent.BuiltinExecutorID, subagent.BuiltinCoderID, subagent.BuiltinWebSearchID, subagent.BuiltinWebTesterID, "global/reader"} {
+	for _, expected := range []string{subagent.BuiltinSeniorDeveloperID, subagent.BuiltinWebSearchID, subagent.BuiltinWebTesterID, "global/reader"} {
 		if !containsAgentName(names, expected) {
 			t.Fatalf("missing %s from %#v", expected, listed)
+		}
+	}
+	for _, removed := range []string{"builtin/scout", "builtin/griller", "builtin/planner", "builtin/executor", "builtin/coder"} {
+		if containsAgentName(names, removed) {
+			t.Fatalf("removed subagent %s remains in %#v", removed, listed)
 		}
 	}
 	for _, info := range listed {
 		if strings.HasPrefix(info.Name, "external/") {
 			t.Fatalf("kind leaked into subagent ID = %#v", info)
+		}
+	}
+}
+
+func TestStoredProfileRetiredGrantsAreInactiveButNewGrantsAreRejected(t *testing.T) {
+	m := newModel(t.Context(), config.Store{Dir: t.TempDir()}, nil)
+	m.workspaceStore = &workspace.Store{Root: t.TempDir()}
+	legacy := subagent.Profile{
+		Version: 1, Name: "legacy-reader", Role: config.AgentRoleAdvisor,
+		SystemPrompt: "Read.", Tools: []string{},
+		Delegates: []string{"builtin/scout", "builtin/griller", "builtin/planner", "builtin/executor", "builtin/coder", "builtin/reviewer", subagent.BuiltinSeniorDeveloperID},
+	}
+	if err := m.customStore().Save(legacy, "workspace", nil); err != nil {
+		t.Fatal(err)
+	}
+	registry, err := buildSubagentRegistry(m.customStore())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, found := registry.Get("builtin/scout"); found {
+		t.Fatal("retired builtin is still registered")
+	}
+	if grants := delegateInfoNames(registry.Allowed("workspace/legacy-reader")); len(grants) != 1 || grants[0] != subagent.BuiltinSeniorDeveloperID {
+		t.Fatalf("effective legacy grants = %v", grants)
+	}
+	for _, retired := range legacy.Delegates[:len(legacy.Delegates)-1] {
+		newProfile := legacy
+		newProfile.Name = "new-reader"
+		newProfile.Delegates = []string{retired}
+		if err := m.validateCustomDelegates(newProfile, "workspace", nil); err == nil || !strings.Contains(err.Error(), "unknown delegate") {
+			t.Fatalf("new retired grant %s was accepted: %v", retired, err)
 		}
 	}
 }
@@ -288,8 +324,8 @@ func TestAllowedDelegationRunsLifecycleAndCapturesResult(t *testing.T) {
 	m.workspaceStore = &workspaceStore
 	caller := "workspace/reader"
 	if err := m.customStore().Save(subagent.Profile{
-		Version: 1, Name: "reader", Role: config.AgentRoleScout,
-		SystemPrompt: "Read.", Tools: []string{}, Delegates: []string{subagent.BuiltinScoutID},
+		Version: 1, Name: "reader", Role: config.AgentRoleResearch,
+		SystemPrompt: "Read.", Tools: []string{}, Delegates: []string{subagent.BuiltinSeniorDeveloperID},
 	}, "workspace", nil); err != nil {
 		t.Fatal(err)
 	}
@@ -299,7 +335,7 @@ func TestAllowedDelegationRunsLifecycleAndCapturesResult(t *testing.T) {
 	}
 	result, err := runtime.Call(t.Context(), client.ToolCall{
 		ID: "delegate-1", Function: client.FunctionCall{Name: subagent.DelegateToolName,
-			Arguments: `{"subagent_name":"builtin/scout","prompt":"inspect model handling"}`},
+			Arguments: `{"subagent_name":"builtin/senior-developer","prompt":"inspect model handling"}`},
 	})
 	if err != nil || result.IsError || !strings.Contains(result.Content, `"loom_ref"`) {
 		t.Fatalf("result = %#v, err = %v", result, err)

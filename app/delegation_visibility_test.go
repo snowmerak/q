@@ -129,7 +129,7 @@ func TestLiveTUIDelegationShowsChildBeforeParentResult(t *testing.T) {
 	value := config.Default()
 	value.Provider.Model = "plan-model"
 	configured := &planningClient{responses: []client.Message{
-		{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{planToolCall(subagent.DelegateToolName, `{"subagent_name":"builtin/scout","prompt":"inspect"}`)}},
+		{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{planToolCall(subagent.DelegateToolName, `{"subagent_name":"builtin/senior-developer","prompt":"inspect"}`)}},
 		{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{planToolCall(subagent.TaskStartToolName, `{"objective":"inspect"}`)}},
 		{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{planToolCall(subagent.TaskCompleteToolName, `{"outcome":"succeeded","summary":"inspected"}`)}},
 		{Role: client.RoleAssistant, Content: "Inspection complete."},
@@ -145,7 +145,7 @@ func TestLiveTUIDelegationShowsChildBeforeParentResult(t *testing.T) {
 	seenActive := false
 	for i := 0; i < 50 && m.waiting; i++ {
 		message := nextAgentMessage(t, command)
-		if message.event.activity != nil && message.event.activity.Agent == subagent.BuiltinScoutID && message.event.activity.Action == subagent.ProgressStarted {
+		if message.event.activity != nil && message.event.activity.Agent == subagent.BuiltinSeniorDeveloperID && message.event.activity.Action == subagent.ProgressStarted {
 			parentResultSeen := false
 			for _, saved := range m.messages {
 				parentResultSeen = parentResultSeen || saved.Role == client.RoleTool && saved.Name == subagent.DelegateToolName
@@ -164,8 +164,8 @@ func TestLiveTUIDelegationShowsChildBeforeParentResult(t *testing.T) {
 }
 
 func TestLiveTurnWithTwoDelegateCallsKeepsBothChildren(t *testing.T) {
-	first := planToolCall(subagent.DelegateToolName, `{"subagent_name":"builtin/scout","prompt":"first task"}`)
-	second := planToolCall(subagent.DelegateToolName, `{"subagent_name":"builtin/scout","prompt":"second task"}`)
+	first := planToolCall(subagent.DelegateToolName, `{"subagent_name":"builtin/senior-developer","prompt":"first task"}`)
+	second := planToolCall(subagent.DelegateToolName, `{"subagent_name":"builtin/senior-developer","prompt":"second task"}`)
 	second.ID = first.ID
 	value := config.Default()
 	value.Provider.Model = "plan-model"
@@ -206,7 +206,7 @@ func TestLiveTurnWithTwoDelegateCallsKeepsBothChildren(t *testing.T) {
 
 func TestACPDelegationProjectsChildToolLifecycle(t *testing.T) {
 	configured := &planningClient{responses: []client.Message{
-		{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{planToolCall(subagent.DelegateToolName, `{"subagent_name":"builtin/scout","prompt":"inspect"}`)}},
+		{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{planToolCall(subagent.DelegateToolName, `{"subagent_name":"builtin/senior-developer","prompt":"inspect"}`)}},
 		{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{planToolCall(subagent.TaskStartToolName, `{"objective":"inspect"}`)}},
 		{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{planToolCall(subagent.TaskCompleteToolName, `{"outcome":"succeeded","summary":"inspected"}`)}},
 		{Role: client.RoleAssistant, Content: "Inspection complete."},
@@ -234,7 +234,7 @@ func TestACPDelegationProjectsChildToolLifecycle(t *testing.T) {
 }
 
 func TestRecoveryStreamsChildProgressBeforeResumingParent(t *testing.T) {
-	store, _ := recoveryParent(t, subagent.BuiltinScoutID, "inspect")
+	store, _ := recoveryParent(t, subagent.BuiltinSeniorDeveloperID, "inspect")
 	value := config.Default()
 	value.Provider.Model = "plan-model"
 	configured := &planningClient{responses: []client.Message{

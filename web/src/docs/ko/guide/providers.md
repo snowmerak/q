@@ -38,7 +38,7 @@ q 안에서 `/gateway`를 열어 공급자와 리스너 설정을 추가하세�
 
 ## 모델 역할 할당
 
-`/model`을 열어 기본 채팅과 `griller`, `scout`, `planner`, `executor`, `coder`, `commit`, `thinker`, `librarian` 같은 전문 역할에 모델을 할당합니다.
+`/model`을 열어 기본 채팅과 `interviewer`, `manager`, `research`, `reviewer`, `coder`, `commit`, `thinker`, `librarian` 같은 전문 역할에 모델을 할당합니다. senior developer는 `reviewer`, junior developer는 `coder` 모델 역할을 사용합니다.
 
 할당 표에서 `a`를 누르면 재사용 가능한 사용자 정의 역할을 만들 수 있습니다. 사용자 정의 서브에이전트는 자체 도구와 위임 권한을 유지하면서 이 역할을 선택할 수 있습니다.
 

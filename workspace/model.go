@@ -92,12 +92,44 @@ func (s Store) LoadModelConfig() (ModelConfig, error) {
 		if override.ContextWindow != nil && *override.ContextWindow < 0 {
 			return ModelConfig{}, fmt.Errorf("workspace: decode %s: model context window for role %q must not be negative", s.ModelPath(), role)
 		}
-		value.Overrides[role] = ModelOverride{Model: override.Model}
+		if ModelOverrideAllowed(role) {
+			value.Overrides[role] = ModelOverride{Model: override.Model}
+		}
+	}
+	// Preserve a new role's explicit assignment when both old and new names
+	// exist, then migrate settings from retired role names in stable order.
+	for _, old := range []struct{ from, to string }{
+		{config.AgentRoleGriller, config.AgentRoleInterviewer},
+		{config.AgentRolePlanner, config.AgentRoleManager},
+		{config.AgentRoleSeniorDeveloper, config.AgentRoleReviewer},
+		{config.AgentRoleJuniorDeveloper, config.AgentRoleCoder},
+		{config.AgentRoleScout, config.AgentRoleResearch},
+	} {
+		if override, exists := persisted.Overrides[old.from]; exists {
+			if _, explicit := value.Overrides[old.to]; !explicit {
+				value.Overrides[old.to] = ModelOverride{Model: override.Model}
+			}
+		}
+	}
+	for role := range persisted.Overrides {
+		if !ModelOverrideAllowed(role) && !legacyModelRole(role) {
+			return ModelConfig{}, fmt.Errorf("workspace: decode %s: workspace model role %q is shared globally or unsupported", s.ModelPath(), role)
+		}
 	}
 	if err := value.Validate(); err != nil {
 		return ModelConfig{}, fmt.Errorf("workspace: decode %s: %w", s.ModelPath(), err)
 	}
 	return value, nil
+}
+
+func legacyModelRole(role string) bool {
+	switch role {
+	case config.AgentRoleGriller, config.AgentRoleScout, config.AgentRolePlanner,
+		config.AgentRoleSeniorDeveloper, config.AgentRoleJuniorDeveloper:
+		return true
+	default:
+		return false
+	}
 }
 
 func (c ModelConfig) Validate() error {

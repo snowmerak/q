@@ -67,8 +67,8 @@ func TestGeneralRunnerMemoryToolsAcrossTaskLifecycle(t *testing.T) {
 	})
 	var last GeneralRunState
 	result, err := (GeneralRunner{
-		Client: configured, Tools: &fakeScoutTools{available: skillTestTools()}, Spec: Spec{Role: config.AgentRoleScout, Model: "model", Candidates: []client.ModelCandidate{{Model: "model"}}},
-		Definition: AgentDefinition{Info: DelegateInfo{Name: "workspace/worker", Kind: AgentKindInner, Role: config.AgentRoleScout}, SystemPrompt: "Work.", StrictTools: true},
+		Client: configured, Tools: &fakeScoutTools{available: skillTestTools()}, Spec: Spec{Role: config.AgentRoleResearch, Model: "model", Candidates: []client.ModelCandidate{{Model: "model"}}},
+		Definition: AgentDefinition{Info: DelegateInfo{Name: "workspace/worker", Kind: AgentKindInner, Role: config.AgentRoleResearch}, SystemPrompt: "Work.", StrictTools: true},
 		Checkpoint: func(state GeneralRunState) error { last = state; return nil },
 	}).Run(t.Context(), "inspect")
 	if err != nil || result.Outcome != "succeeded" || steps != 5 {
@@ -108,7 +108,7 @@ func TestGeneralRunnerDoesNotExecuteToolAfterCheckpointFailure(t *testing.T) {
 		return &client.ChatResponse{Choices: []client.Choice{{Message: client.Message{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{write}}}}}, nil
 	})
 	state := GeneralRunState{Transcript: initial, Context: initial, Round: 1, Started: true, Spec: SpecCheckpoint{Model: "model", Candidate: 0}}
-	_, err := (GeneralRunner{Client: configured, Tools: tool, Spec: Spec{Role: config.AgentRoleScout, Model: "model", Candidates: []client.ModelCandidate{{Model: "model"}}}, Definition: AgentDefinition{Info: DelegateInfo{Name: "workspace/worker", Kind: AgentKindInner, Role: config.AgentRoleScout}, SystemPrompt: "Work.", Tools: []string{"write_file"}, StrictTools: true}, Resume: &state, Checkpoint: func(GeneralRunState) error { return checkpointErr }}).Run(t.Context(), "do work")
+	_, err := (GeneralRunner{Client: configured, Tools: tool, Spec: Spec{Role: config.AgentRoleResearch, Model: "model", Candidates: []client.ModelCandidate{{Model: "model"}}}, Definition: AgentDefinition{Info: DelegateInfo{Name: "workspace/worker", Kind: AgentKindInner, Role: config.AgentRoleResearch}, SystemPrompt: "Work.", Tools: []string{"write_file"}, StrictTools: true}, Resume: &state, Checkpoint: func(GeneralRunState) error { return checkpointErr }}).Run(t.Context(), "do work")
 	if !errors.Is(err, checkpointErr) || modelCalls != 1 || tool.calls != 0 {
 		t.Fatalf("err=%v modelCalls=%d toolCalls=%d", err, modelCalls, tool.calls)
 	}
@@ -128,7 +128,7 @@ func TestGeneralRunnerAssignsStableIDsBeforeCheckpoint(t *testing.T) {
 		return &client.ChatResponse{Choices: []client.Choice{{Message: client.Message{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{{Type: client.ToolTypeFunction, Function: client.FunctionCall{Name: name, Arguments: args}}}}}}}, nil
 	})
 	var checkpoints []GeneralRunState
-	result, err := (GeneralRunner{Client: configured, Tools: &fakeScoutTools{available: skillTestTools()}, Spec: Spec{Role: config.AgentRoleScout, Model: "model", Candidates: []client.ModelCandidate{{Model: "model"}}}, Definition: AgentDefinition{Info: DelegateInfo{Name: "workspace/worker", Kind: AgentKindInner, Role: config.AgentRoleScout}, SystemPrompt: "Work."}, Checkpoint: func(state GeneralRunState) error { checkpoints = append(checkpoints, state); return nil }}).Run(t.Context(), "do")
+	result, err := (GeneralRunner{Client: configured, Tools: &fakeScoutTools{available: skillTestTools()}, Spec: Spec{Role: config.AgentRoleResearch, Model: "model", Candidates: []client.ModelCandidate{{Model: "model"}}}, Definition: AgentDefinition{Info: DelegateInfo{Name: "workspace/worker", Kind: AgentKindInner, Role: config.AgentRoleResearch}, SystemPrompt: "Work."}, Checkpoint: func(state GeneralRunState) error { checkpoints = append(checkpoints, state); return nil }}).Run(t.Context(), "do")
 	if err != nil || result.Outcome != "succeeded" {
 		t.Fatalf("result=%#v err=%v", result, err)
 	}
@@ -186,13 +186,13 @@ func TestGeneralRunnerPreservesStartedLifecycleAcrossCompaction(t *testing.T) {
 		Spec: SpecCheckpoint{Model: "model", Candidate: 0},
 	}
 	definition := AgentDefinition{
-		Info:         DelegateInfo{Name: "workspace/worker", Kind: AgentKindInner, Role: config.AgentRoleScout},
+		Info:         DelegateInfo{Name: "workspace/worker", Kind: AgentKindInner, Role: config.AgentRoleResearch},
 		SystemPrompt: "Work.", Tools: []string{"read_file"}, StrictTools: true,
 	}
 	runtime := &fakeScoutTools{available: append(skillTestTools(), client.Tool{Type: client.ToolTypeFunction, Function: client.FunctionDefinition{Name: "read_file"}})}
 	result, err := (GeneralRunner{
 		Client: configured, Tools: runtime,
-		Spec:       Spec{Role: config.AgentRoleScout, Model: "model", ContextLength: 16_000, Candidates: []client.ModelCandidate{{Model: "model"}}},
+		Spec:       Spec{Role: config.AgentRoleResearch, Model: "model", ContextLength: 16_000, Candidates: []client.ModelCandidate{{Model: "model"}}},
 		Definition: definition, Resume: &state,
 	}).Run(t.Context(), "do work")
 	if err != nil || result.Outcome != "succeeded" || modelRequests != 1 {

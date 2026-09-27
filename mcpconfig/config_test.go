@@ -66,11 +66,29 @@ func TestServersForRoleReturnsSortedServers(t *testing.T) {
 }
 
 func TestRoleIDsContainOnlyToolUsingRoles(t *testing.T) {
-	want := []string{"default", "griller", "scout", "planner", "coder"}
+	want := []string{"default", "interviewer", "manager", "research", "reviewer", "coder"}
 	if got := RoleIDs(); !reflect.DeepEqual(got, want) {
 		t.Fatalf("RoleIDs() = %v; want %v", got, want)
 	}
 	if IsRole("thinker") {
 		t.Fatal("role without a tool runtime was accepted")
+	}
+}
+
+func TestLoadMigratesDeveloperToolRoles(t *testing.T) {
+	store := Store{Dir: t.TempDir()}
+	raw := `{"version":1,"servers":{"old":{"transport":"stdio","command":"server"},"new":{"transport":"stdio","command":"server"}},"roles":{"griller":["old"],"planner":["old"],"scout":["old"],"senior-developer":["old"],"reviewer":["new"],"junior-developer":["old"]}}`
+	if err := os.WriteFile(store.Path(), []byte(raw), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(got.Roles, map[string][]string{
+		"interviewer": {"old"}, "manager": {"old"}, "research": {"old"},
+		"reviewer": {"new"}, "coder": {"old"},
+	}) {
+		t.Fatalf("migrated roles = %#v", got.Roles)
 	}
 }

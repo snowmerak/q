@@ -11,61 +11,52 @@ import (
 
 func TestBuiltinAgentDefinitionsArePublicAndBounded(t *testing.T) {
 	definitions := BuiltinAgentDefinitions()
-	if len(definitions) != 6 {
+	if len(definitions) != 5 {
 		t.Fatalf("builtins = %#v", definitions)
 	}
 	registry, err := NewRegistry(definitions)
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{BuiltinCoderID, BuiltinExecutorID, BuiltinGrillerID, BuiltinPlannerID, BuiltinReviewerID, BuiltinScoutID}
+	want := []string{BuiltinInterviewerID, BuiltinJuniorDeveloperID, BuiltinManagerID, BuiltinResearchID, BuiltinSeniorDeveloperID}
 	listed := registry.List()
+	if _, found := registry.Get("builtin/reviewer"); found {
+		t.Fatal("separate reviewer subagent is still registered")
+	}
+	if slices.Contains(delegateNames(registry.Allowed("")), BuiltinJuniorDeveloperID) {
+		t.Fatal("junior developer must be assigned by a senior developer")
+	}
 	for index, name := range want {
 		if listed[index].Name != name {
 			t.Fatalf("builtin order = %#v", listed)
 		}
 	}
-	if got := delegateNames(registry.Allowed(BuiltinCoderID)); strings.Join(got, ",") != BuiltinReviewerID+","+BuiltinScoutID {
-		t.Fatalf("coder grants = %v", got)
-	}
-	if got := delegateNames(registry.Allowed(BuiltinExecutorID)); strings.Join(got, ",") != BuiltinCoderID+","+BuiltinReviewerID {
-		t.Fatalf("executor grants = %v", got)
-	}
-	if got := delegateNames(registry.Allowed(BuiltinPlannerID)); strings.Join(got, ",") != BuiltinExecutorID+","+BuiltinScoutID {
-		t.Fatalf("planner grants = %v", got)
-	}
-	for _, name := range []string{BuiltinGrillerID, BuiltinReviewerID} {
-		if got := delegateNames(registry.Allowed(name)); len(got) != 1 || got[0] != BuiltinScoutID {
-			t.Fatalf("%s grants = %v", name, got)
+	for name, wantGrants := range map[string][]string{
+		BuiltinInterviewerID:     {BuiltinResearchID},
+		BuiltinManagerID:         {BuiltinInterviewerID, BuiltinResearchID, BuiltinSeniorDeveloperID},
+		BuiltinSeniorDeveloperID: {BuiltinJuniorDeveloperID, BuiltinResearchID},
+		BuiltinJuniorDeveloperID: {},
+		BuiltinResearchID:        {},
+	} {
+		got := delegateNames(registry.Allowed(name))
+		if !slices.Equal(got, wantGrants) {
+			t.Fatalf("%s delegates = %v; want %v", name, got, wantGrants)
 		}
 	}
-	if len(registry.Allowed(BuiltinScoutID)) != 0 {
-		t.Fatal("scout unexpectedly delegates")
+	junior, found := registry.Get(BuiltinJuniorDeveloperID)
+	if !found || junior.Info.Role != config.AgentRoleCoder || !slices.Contains(junior.Tools, "write_file") || !slices.Contains(junior.Tools, "run_command") {
+		t.Fatalf("junior implementation surface = %#v", junior)
 	}
-	for _, name := range []string{BuiltinGrillerID, BuiltinPlannerID, BuiltinReviewerID} {
-		definition, found := registry.Get(name)
-		if !found {
-			t.Fatalf("missing definition %q", name)
-		}
-		for _, tool := range definition.Tools {
-			if tool == "read_file" || tool == "list_directory" {
-				t.Fatalf("%s directly reads the workspace with %q", name, tool)
-			}
-		}
-	}
-	executor, found := registry.Get(BuiltinExecutorID)
-	if !found {
-		t.Fatal("executor definition is missing")
-	}
-	if !slices.Contains(executor.Tools, "loom_read") {
-		t.Fatalf("executor evidence tools = %v", executor.Tools)
+	senior, found := registry.Get(BuiltinSeniorDeveloperID)
+	if !found || senior.Info.Role != config.AgentRoleReviewer || !slices.Contains(senior.Tools, "loom_read") {
+		t.Fatalf("senior developer evidence tools = %#v", senior)
 	}
 	for _, forbidden := range []string{"edit_file", "write_file", "create_directory", "move_path", "copy_path", "remove_path", "run_command"} {
-		if slices.Contains(executor.Tools, forbidden) {
-			t.Fatalf("executor received workspace mutation tool %q", forbidden)
+		if slices.Contains(senior.Tools, forbidden) {
+			t.Fatalf("senior developer received direct workspace mutation tool %q", forbidden)
 		}
 	}
-	for _, name := range []string{BuiltinScoutID, BuiltinExecutorID, BuiltinCoderID} {
+	for _, name := range want {
 		definition, found := registry.Get(name)
 		if !found {
 			t.Fatalf("missing definition %q", name)
@@ -87,9 +78,9 @@ func TestBuiltinAgentDefinitionsArePublicAndBounded(t *testing.T) {
 		if info.Kind != AgentKindInner {
 			t.Fatalf("builtin kind = %#v", info)
 		}
-		mayMutate := info.Name == BuiltinCoderID || info.Name == BuiltinExecutorID || info.Name == BuiltinPlannerID
-		if info.MutatesWorkspace != mayMutate {
-			t.Fatalf("mutation capability = %#v", info)
+		wantMutation := info.Name == BuiltinJuniorDeveloperID || info.Name == BuiltinSeniorDeveloperID || info.Name == BuiltinManagerID
+		if info.MutatesWorkspace != wantMutation {
+			t.Fatalf("mutation capability = %#v; want %v", info, wantMutation)
 		}
 	}
 }
@@ -108,48 +99,49 @@ func TestPublicAgentDefinitionsIncludeExternalACPAdapters(t *testing.T) {
 			t.Fatalf("external definition uses inner execution fields: %#v", definition)
 		}
 	}
-	for _, name := range []string{BuiltinGrillerID, BuiltinPlannerID, BuiltinReviewerID} {
-		if got := delegateNames(registry.Allowed(name)); !strings.Contains(strings.Join(got, ","), BuiltinWebSearchID) {
-			t.Fatalf("%s grants = %v", name, got)
-		}
+	if got := delegateNames(registry.Allowed(BuiltinSeniorDeveloperID)); !slices.Contains(got, BuiltinWebSearchID) {
+		t.Fatalf("senior developer web search grant = %v", got)
 	}
-	if got := delegateNames(registry.Allowed(BuiltinExecutorID)); !strings.Contains(strings.Join(got, ","), BuiltinWebTesterID) {
-		t.Fatalf("executor web tester grant = %v", got)
+	if got := delegateNames(registry.Allowed(BuiltinResearchID)); !slices.Contains(got, BuiltinWebSearchID) {
+		t.Fatalf("research web search grant = %v", got)
 	}
 }
 
-func TestExecutorToolSurfaceDelegatesWithoutDirectMutation(t *testing.T) {
+func TestSeniorDeveloperToolSurfaceReadsWithoutDirectMutation(t *testing.T) {
 	registry, err := NewRegistry(PublicAgentDefinitions())
 	if err != nil {
 		t.Fatal(err)
 	}
-	executor, found := registry.Get(BuiltinExecutorID)
+	senior, found := registry.Get(BuiltinSeniorDeveloperID)
 	if !found {
-		t.Fatal("executor definition is missing")
+		t.Fatal("senior developer definition is missing")
 	}
 	runtime := &fakeScoutTools{available: append(append(DelegateTools(), skillTestTools()...),
 		client.Tool{Type: client.ToolTypeFunction, Function: client.FunctionDefinition{Name: "read_file"}},
 		client.Tool{Type: client.ToolTypeFunction, Function: client.FunctionDefinition{Name: "loom_read"}},
 		client.Tool{Type: client.ToolTypeFunction, Function: client.FunctionDefinition{Name: "edit_file"}},
 	)}
-	tools, err := selectDefinitionTools(executor, runtime)
+	tools, err := selectDefinitionTools(senior, runtime)
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, required := range []string{DelegateListToolName, DelegateToolName, TaskStartToolName, TaskCompleteToolName, "read_file", "loom_read"} {
 		if !hasTool(tools, required) {
-			t.Fatalf("executor runtime is missing %q: %#v", required, tools)
+			t.Fatalf("senior developer runtime is missing %q: %#v", required, tools)
 		}
 	}
 	if hasTool(tools, "edit_file") {
-		t.Fatalf("executor runtime exposed edit_file: %#v", tools)
+		t.Fatalf("senior developer runtime exposed edit_file: %#v", tools)
 	}
 }
 
 func TestRegistryPropagatesMutationCapabilityThroughDelegates(t *testing.T) {
 	definitions := append(BuiltinAgentDefinitions(), AgentDefinition{
-		Info:         DelegateInfo{Name: "global/coordinator", Role: config.AgentRoleScout},
-		SystemPrompt: "Coordinate.", Delegates: []string{BuiltinCoderID},
+		Info:         DelegateInfo{Name: "global/implementer", Role: config.AgentRoleCoder, MutatesWorkspace: true},
+		SystemPrompt: "Implement.", Tools: []string{"write_file"},
+	}, AgentDefinition{
+		Info:         DelegateInfo{Name: "global/coordinator", Role: config.AgentRoleResearch},
+		SystemPrompt: "Coordinate.", Delegates: []string{"global/implementer"},
 	})
 	registry, err := NewRegistry(definitions)
 	if err != nil {
@@ -164,7 +156,7 @@ func TestRegistryPropagatesMutationCapabilityThroughDelegates(t *testing.T) {
 func TestRegistryRejectsInvalidDelegationGraphs(t *testing.T) {
 	definition := func(name string, delegates ...string) AgentDefinition {
 		return AgentDefinition{
-			Info:         DelegateInfo{Name: name, Role: config.AgentRoleScout},
+			Info:         DelegateInfo{Name: name, Role: config.AgentRoleResearch},
 			SystemPrompt: "Inspect.", Delegates: delegates,
 		}
 	}
@@ -178,7 +170,7 @@ func TestRegistryRejectsInvalidDelegationGraphs(t *testing.T) {
 		{"cycle", []AgentDefinition{definition("global/a", "global/b"), definition("global/b", "global/a")}, "delegation cycle"},
 		{"global-to-workspace", []AgentDefinition{definition("global/a", "workspace/b"), definition("workspace/b")}, "cannot delegate to workspace"},
 		{"duplicate", []AgentDefinition{definition("global/a"), definition("global/a")}, "duplicate agent ID"},
-		{"invalid-kind", []AgentDefinition{{Info: DelegateInfo{Name: "global/a", Kind: "remote", Role: config.AgentRoleScout}, SystemPrompt: "Inspect."}}, "invalid kind"},
+		{"invalid-kind", []AgentDefinition{{Info: DelegateInfo{Name: "global/a", Kind: "remote", Role: config.AgentRoleResearch}, SystemPrompt: "Inspect."}}, "invalid kind"},
 		{"external-missing-prompt", []AgentDefinition{{Info: DelegateInfo{Name: "global/a", Kind: AgentKindExternal, Role: config.AgentRoleSearch}}}, "requires a system prompt"},
 		{"external-tools", []AgentDefinition{{Info: DelegateInfo{Name: "global/a", Kind: AgentKindExternal, Role: config.AgentRoleSearch}, SystemPrompt: "Inspect.", Tools: []string{"read_file"}}}, "cannot use q tools"},
 		{"external-bad-connection", []AgentDefinition{{Info: DelegateInfo{Name: "global/a", Kind: AgentKindExternal}, SystemPrompt: "Inspect.", Connection: "bad id"}}, "invalid ACP connection"},
@@ -196,7 +188,7 @@ func TestDefinitionForProfileUsesCanonicalScope(t *testing.T) {
 	profile := Profile{
 		Version: 1, Name: "implementer", Role: config.AgentRoleCoder,
 		SystemPrompt: "Implement.", Tools: []string{"read_file", "write_file"},
-		Delegates: []string{BuiltinScoutID, BuiltinWebSearchID},
+		Delegates: []string{BuiltinSeniorDeveloperID, BuiltinWebSearchID},
 	}
 	definition, err := DefinitionForProfile(ProfileEntry{Profile: profile, Scope: "workspace"})
 	if err != nil {
@@ -233,9 +225,9 @@ func TestCommonTaskCompleteSchemaRejectsExecutorFields(t *testing.T) {
 func TestGeneralRunnerRejectsOversizedPromptBeforeCallingModel(t *testing.T) {
 	configuredClient := &fakeScoutClient{}
 	definition, _ := NewRegistry(BuiltinAgentDefinitions())
-	scout, _ := definition.Get(BuiltinScoutID)
+	senior, _ := definition.Get(BuiltinSeniorDeveloperID)
 	_, err := (GeneralRunner{
-		Client: configuredClient, Spec: Spec{Role: config.AgentRoleScout, Model: "test"}, Definition: scout,
+		Client: configuredClient, Spec: Spec{Role: config.AgentRoleAdvisor, Model: "test"}, Definition: senior,
 	}).Run(t.Context(), strings.Repeat("x", MaximumDelegatePromptBytes+1))
 	if err == nil || !strings.Contains(err.Error(), "must not exceed") {
 		t.Fatalf("error = %v", err)

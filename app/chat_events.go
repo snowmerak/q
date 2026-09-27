@@ -170,11 +170,9 @@ func (m model) updateChatResult(message chatResultMsg) (tea.Model, tea.Cmd) {
 		m.archiveFailure("chat", message.err)
 		if archiveErr := m.flushArchive(); archiveErr != nil {
 			m.status = message.err.Error() + " · archive: " + archiveErr.Error()
-			m.offerPlanExecutionResume()
 			return m, m.input.Focus()
 		}
 		m.status = message.err.Error()
-		m.offerPlanExecutionResume()
 		return m, m.input.Focus()
 	}
 	if message.response == nil || len(message.response.Choices) == 0 {
@@ -185,7 +183,6 @@ func (m model) updateChatResult(message chatResultMsg) (tea.Model, tea.Cmd) {
 		if archiveErr := m.flushArchive(); archiveErr != nil {
 			m.status += " · archive: " + archiveErr.Error()
 		}
-		m.offerPlanExecutionResume()
 		return m, m.input.Focus()
 	}
 	assistant := message.response.Choices[0].Message

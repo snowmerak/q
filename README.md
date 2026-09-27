@@ -1,11 +1,11 @@
 # q
 
 `q` is a workspace-native coding agent for the terminal. It combines a Bubble
-Tea chat interface, a managed multi-provider LLM gateway, approval-gated plan
-execution, durable workspace history, and a root-scoped tool runtime in one Go
+Tea chat interface, a managed multi-provider LLM gateway, delegated subagents,
+durable workspace history, and a root-scoped tool runtime in one Go
 binary.
 
-Use it for ordinary repository work, run a reviewed multi-agent plan, inspect
+Use it for ordinary repository work, delegate reviewed implementation, inspect
 the resulting diff, and create a commit without leaving the terminal.
 
 [Documentation](https://q.saturday.ne.kr) · [Source](https://github.com/snowmerak/q)
@@ -16,12 +16,12 @@ the resulting diff, and create a commit without leaving the terminal.
   directory operations, asynchronous commands, archive search, and optional
   read-only LSP queries.
 - **Selectable orchestration** — ordinary chat can use direct tools or a
-  delegation mode with bounded subagents; `/plan` remains approval-gated.
+  delegation mode with profession-based subagents.
 - **Provider choice** — OpenAI-compatible APIs and local servers, OpenRouter,
   xAI, Anthropic, and the Codex App Server, all exposed through q's managed
   Gateway.
 - **Durable sessions** — API-independent conversation records, recoverable
-  delegation trees, resumable plan checkpoints, and searchable history.
+  delegation trees, legacy plan records, and searchable history.
 - **Bounded tool output** — large tool results are captured as immutable Loom
   artifacts instead of being copied through every prompt.
 - **Repository review** — a syntax-highlighted `/changes` browser and a guided
@@ -82,17 +82,14 @@ cd C:\path\to\project
 q
 ```
 
-Run a complete plan non-interactively with both clarification resolution and
-plan approval forced on for that invocation:
+Run one delegated task without the interactive UI:
 
 ```powershell
 q sprint implement the requested feature
 ```
 
-Sprint creates a fresh durable workspace session, runs the same
-Griller → Scout → Planner → task executor → Planner review workflow as `/plan`, and
-streams concise progress plus the final execution result to stdout. It does not
-change the persisted `plan.auto_resolve` or `plan.auto_approve` settings.
+Sprint creates a fresh durable workspace session, runs in delegation mode, and
+streams progress plus the final result to stdout.
 
 On first launch, q opens provider setup. Prefer an environment variable for an
 API key instead of storing a key inline. After selecting a model, type a request
@@ -178,16 +175,12 @@ screen and returns to the previous screen without discarding its state.
 
 | Command | Purpose |
 |---|---|
-| `/plan [request]` | Clarify, research, propose, approve, execute, and review a plan. |
 | `/mode [default\|delegation]` | Show or change the current chat loop mode. |
-| `/auto-approve [on\|off\|status]` | Persistently control automatic approval of valid plan proposals. |
-| `/auto-resolve [on\|off\|status]` | Persistently control engineering-default answers to plan clarification. |
-| `/autonomous [on\|off\|status]` | Persistently control both plan automation settings together. |
 | `/changes` | Browse current staged, unstaged, and untracked repository changes. |
 | `/commit` | Generate and review a commit or split-commit proposal. |
 | `/sessions` | Open another saved workspace session. |
 | `/new` | Create and switch to a new session. |
-| `/clear` | Clear the current conversation projection and plan checkpoint. |
+| `/clear` | Clear the current conversation projection. |
 | `/compact` | Summarize older model context without deleting the transcript (TUI and ACP). |
 | `/learn [on\|off\|status]` | Checkpoint or control durable conversation learning. |
 | `/model` | Assign models, manage native roles, and configure fallback groups. |
@@ -209,7 +202,7 @@ Escape closes the completion popup.
 External subagents are invoked through `/subagent builtin/web-search <query>` or
 `/subagent builtin/web-tester <request>`. Availability depends on assigning the
 builtin to an existing enabled ACP connection in `/subagents`. The same rule
-controls general-chat tools and Planner executor choices.
+controls availability in general chat and delegation.
 
 Web Tester invocations run in an isolated ACP process/session with a fixed
 15-minute deadline. q automatically selects `allow_once`, falling back to an
@@ -253,62 +246,29 @@ plain text. Binary files show a notice. Each selected patch preview is limited
 to 256 KiB or 4,000 lines and is clearly marked when partial. Opening this view
 does not stage, commit, or modify files.
 
-## Planning and execution
+## Delegated work
 
-Use `/plan` when work should be clarified, explicitly approved, or divided into
-reviewed tasks. Ordinary chat uses direct tools in `default` mode or bounded
-subagents in `delegation` mode; neither enters `/plan` automatically.
+Use `/mode delegation` to have the main agent coordinate bounded subagents.
+The manager owns product requirements and the work plan. The senior developer
+assigns implementation to a junior developer, inspects the changes, and asks
+for corrections when needed. The interviewer clarifies consequential questions;
+the researcher compares approaches. The senior developer also reviews concrete results.
+Each role can read relevant workspace evidence directly. The junior developer
+has workspace editing and command tools.
 
 ```mermaid
 flowchart LR
-    U[Request] --> G[Griller]
-    G -->|repository question| S[Scout]
-    S --> G
-    G --> P[Planner]
-    P --> A{User approval}
-    A -->|revise| G
-    A -->|approve| E{Task executor}
-    E -->|coder| C[Coder task]
-    E -->|configured| W[External Web Tester]
-    C --> R{Planner review}
-    W --> R
-    R -->|retry with executor| E
-    R -->|next task| E
-    R -->|all accepted| D[Complete]
+    U[Request] --> M[Manager]
+    M --> I[Interviewer]
+    M --> R[Researcher]
+    M --> S[Senior developer]
+    S --> J[Junior developer]
+    J --> S
 ```
 
-The Griller asks only for decisions that repository evidence cannot answer.
-Scout performs bounded, non-mutating investigation. Planner produces conditions,
-targets, executors, completion criteria, and verification. After approval, each
-task starts with its planned executor. Planner can send a failed Web Tester result
-to Coder for repair and then back to Web Tester for acceptance; tasks still run
-sequentially and share the existing bounded attempt count.
-
-Plan automation can be persisted in `~/.q/config.yaml`:
-
-```yaml
-plan:
-  auto_resolve: true
-  auto_approve: true
-```
-
-`auto_resolve` answers Griller requirement questions with an engineering policy
-that requires both a small extensible abstraction and an efficient concrete
-implementation. `auto_approve` mechanically approves a valid Planner proposal;
-it does not bypass proposal validation, executor execution, or Planner review.
-
-Active execution is checkpointed under the selected session:
-
-```text
-.q/sessions/<uuid>/plan-execution.json
-```
-
-After an interruption, q offers Resume, Inspect, and Discard. Discarding a
-checkpoint never reverts files already changed. Completed snapshots move to
-`.q/plan-executions/` for manual inspection and cleanup.
-
-Detailed contracts live in [plan orchestration](docs/plan-orchestration.md) and
-[execution orchestration](docs/execution-orchestration.md).
+The main agent can delegate directly to a suitable role. In `default` mode it
+can also use its own tools. `q sprint` starts one delegation mode turn in a
+fresh workspace session.
 
 ## Commit workflow
 
@@ -345,7 +305,9 @@ user-addressable server with its own listener and API-key settings. Both forms
 record provider-reported token usage in the user-level `q usage` service.
 
 `/model` assigns a model to the main chat and specialized roles such as
-`griller`, `scout`, `planner`, `executor`, `coder`, `commit`, `thinker`, and `librarian`.
+`interviewer`, `manager`, `research`, `reviewer`, `coder`, `commit`, `thinker`,
+and `librarian`. The senior developer uses `reviewer`; the junior developer
+uses `coder`.
 Press `a` in the assignment table to create a reusable custom role and `d` to
 delete an unreferenced custom role after confirmation.
 Assignments may reference ordered model groups. A group can fall back after a
@@ -375,8 +337,7 @@ repository work to available built-in, custom, or external subagents. The root
 can coordinate and inspect saved evidence, but has no direct workspace file,
 shell, LSP, or arbitrary external MCP tools in this mode. Use
 `/mode default` to return to the direct-tool loop. The selected mode is saved
-with the session; new sessions start in `default` mode. This is separate from
-the approval-gated `/plan` workflow.
+with the session; new sessions start in `default` mode.
 
 Child progress and tool activity appear in the transcript; `Ctrl+G` expands or
 collapses the trace. Each delegation has a saved child session and bookmark.
@@ -438,14 +399,13 @@ version: 1
 name: code-reader
 description: Explain the requested code.
 kind: inner
-role: scout
+role: advisor
 system_prompt: |
   Read the requested code and explain its behavior with concrete file references.
 tools:
   - list_directory
   - read_file
-delegates:
-  - builtin/scout
+delegates: []
 ```
 
 ```yaml
@@ -463,10 +423,11 @@ delegates: []
 
 TUI and ACP support `/subagents list`, `/subagents show code-reader`, and
 `/subagent code-reader explain the cancellation handling in app/model.go`.
-The public builtin IDs are `builtin/scout`, `builtin/griller`, `builtin/planner`,
-`builtin/executor`, `builtin/reviewer`, `builtin/coder`, `builtin/web-search`, and
-`builtin/web-tester`.
-The latter two have `kind: external`; other external agents use their normal
+The public builtin IDs are `builtin/interviewer`, `builtin/manager`,
+`builtin/senior-developer`, `builtin/junior-developer`, `builtin/research`,
+`builtin/web-search`, and `builtin/web-tester`.
+The junior developer is assigned through the senior developer and is not a
+root delegation target. The latter two have `kind: external`; other external agents use their normal
 `global/...` or `workspace/...` profile ID. Bare `/subagents` opens the profile UI
 in the TUI and lists all available definitions in ACP. Creation, editing, and
 deletion use the TUI or profile files. Pass all necessary task context in the
@@ -478,11 +439,10 @@ or delegates produce an error before the model runs.
 Inner delegated agents share the host-provided `task_start` and `task_complete`
 lifecycle. External delegates bypass native model and tool scoping and use their existing ACP
 invocation adapter and Loom capture. General chat receives `delegate_list` and `delegate`; custom agents
-receive them only when their profile has direct grants. `/plan` and `q sprint`
-retain their approval-gated Go workflow and internal Coder/Planner review.
-The public Planner delegates an explicitly execution-bearing request to the public Executor;
-planning-only requests stop after the plan. The Executor runs Coder attempts, sends their results
-to Reviewer, and passes retry feedback back to Coder without holding workspace mutation tools itself.
+receive them only when their profile has direct grants. The manager can delegate
+to the interviewer, researcher, and senior developer. The senior
+developer can assign implementation to the junior developer and review its
+result. The researcher can delegate to configured web search.
 
 ## Sessions, history, and learning
 
@@ -639,22 +599,14 @@ an explicitly requested in-workspace path.
 Run q as an Agent Client Protocol server over stdin/stdout:
 
 ```powershell
-q acp [--root <workspace-path>] [--auto-resolve] [--auto-approve] [--autonomous]
+q acp [--root <workspace-path>]
 ```
 
-ACP mode shares q's sessions, workspace tools, planning, external Search/Web Tester, and
-commit workflow. The plan flags override persisted settings for only that ACP
-process; explicit values such as `--auto-approve=false` are also supported.
-`--autonomous` enables both plan flags, while an explicitly supplied individual
-flag takes precedence. `/plan` and `/commit` use form elicitation when available.
-Otherwise, plan and commit approvals use numbered actions, while planning and
-agent questions consume the next message as a free-form answer. Git changes and
-plan execution still require explicit approval.
+ACP mode shares q's sessions, workspace tools, delegation, external Search/Web
+Tester, and commit workflow. `/commit` uses form elicitation when available.
+Otherwise, approval uses numbered actions, and agent questions consume the next
+message as a free-form answer. Git changes still require explicit approval.
 
-The TUI and ACP both expose `/auto-approve`, `/auto-resolve`, and `/autonomous`
-with `on`, `off`, and `status` actions. A bare command is equivalent to `status`;
-`on` and `off` persist to `~/.q/config.yaml`. ACP status distinguishes the saved
-configuration from the effective value when a process-only CLI flag overrides it.
 Client-provided stdio and Streamable HTTP MCP servers are scoped to their ACP
 session. SSE transport is not supported.
 
@@ -679,7 +631,7 @@ omits the chat-only `learn` tool.
 
 | Command | Purpose |
 |---|---|
-| `q sprint <request...>` | Run one autonomous plan through execution and review. All trailing argv values are joined as the request. |
+| `q sprint <request...>` | Run one task in delegation mode. All trailing argv values are joined as the request. |
 | `q gateway` | Configure the Gateway listener, API keys, and providers. |
 | `q gateway start [--host <ip>] [--port <port>]` | Run the OpenAI-compatible Gateway. |
 | `q remote` | Run the foreground REST host for workspace sessions and agent execution. |
@@ -719,7 +671,7 @@ with `q remote config`, then start it with `q remote`. `GET /v1/sessions` and
 execution as `application/x-ndjson`. The request requires `working_directory`
 and `prompt`; `session_id` resumes a session, while omission creates one. The
 `subagent` field is optional: an empty or omitted value runs the ordinary main
-agent loop, and a value such as `builtin/scout` runs the existing direct
+agent loop, and a value such as `builtin/senior-developer` runs the existing direct
 `/subagent` flow. Remote prompts are always model input; TUI-only slash commands
 such as `/new` are not executed through the API.
 
@@ -766,8 +718,8 @@ restricted by q; Windows file modes do not manage ACLs.
 | `.q/sessions/<uuid>/session.json` | Transcript, compacted context, title, task lifecycle, and learning state. |
 | `.q/sessions/<uuid>/delegations.json` | Bookmarks linking this session to its delegated child calls. |
 | `.q/sessions/<uuid>/delegates/<invocation-id>/` | Child session, execution state, and nested delegation tree. |
-| `.q/sessions/<uuid>/plan-execution.json` | Resumable approved-plan checkpoint. |
-| `.q/plan-executions/` | Completed execution snapshots. |
+| `.q/sessions/<uuid>/plan-execution.json` | Legacy plan checkpoint, retained for existing data. |
+| `.q/plan-executions/` | Legacy execution snapshots. |
 | `.q/model.json` | Workspace model-role overrides. |
 | `.q/learning.json` | Workspace learning switch. |
 | `.q/lsp.json` | Workspace LSP roots and overrides. |
@@ -831,8 +783,6 @@ publishing the fork.
 - [Model API modes and portable sessions](docs/model-api-mode-responses-plan.md)
 - [Subagent architecture](docs/subagent-architecture-notes.md)
 - [Remote agent API](docs/remote-subagent-api-plan.md)
-- [Plan orchestration](docs/plan-orchestration.md)
-- [Execution orchestration](docs/execution-orchestration.md)
 - [Context compaction](docs/context-compaction-plan.md)
 - [Session Store](docs/session-store-notes.md)
 - [Workspace Memory](docs/workspace-memory.md)

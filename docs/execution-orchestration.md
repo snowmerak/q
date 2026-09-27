@@ -1,5 +1,7 @@
 # Execution orchestration contract
 
+> 역사 문서: 이전 `/plan` 실행기의 계약을 설명한다. 새 작업은 delegation 모드를 사용한다.
+
 ## 목적
 
 승인된 Plan은 단순한 설명문이나 데이터플로 그래프가 아니다. 전체 목표, 제약,

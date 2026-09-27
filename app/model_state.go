@@ -19,7 +19,6 @@ import (
 	qlsp "github.com/snowmerak/q/lsp"
 	"github.com/snowmerak/q/mcpconfig"
 	"github.com/snowmerak/q/memory"
-	"github.com/snowmerak/q/subagent"
 	"github.com/snowmerak/q/thinker"
 	"github.com/snowmerak/q/workspace"
 )
@@ -264,9 +263,6 @@ type chatState struct {
 	questionEvents       <-chan agentEvent
 	questionTurnID       uint64
 	questionChoice       int
-	planArmed            bool
-	planResumePending    bool
-	planCheckpoint       subagent.ExecutionCheckpoint
 	agentActivities      []agentActivity
 	agentStates          map[string]string
 	agentLogVisible      int

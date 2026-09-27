@@ -122,8 +122,28 @@ func TestExternalProfileStoresKindConnectionAndPrompt(t *testing.T) {
 
 func TestLegacyProfileWithoutKindLoadsAsInner(t *testing.T) {
 	profile, err := ParseProfile([]byte("version: 1\nname: reader\nrole: scout\nsystem_prompt: Read.\ntools: []\ndelegates: []\n"))
-	if err != nil || profile.Kind != AgentKindInner {
+	if err != nil || profile.Kind != AgentKindInner || profile.Role != config.AgentRoleResearch {
 		t.Fatalf("profile = %#v, err = %v", profile, err)
+	}
+	profile.Role = config.AgentRoleScout
+	if err := profile.Validate(); err == nil {
+		t.Fatal("new profile accepted a retired role")
+	}
+}
+
+func TestLegacyDeveloperModelRolesMapToReviewerAndCoder(t *testing.T) {
+	for old, want := range map[string]string{
+		config.AgentRoleSeniorDeveloper: config.AgentRoleReviewer,
+		config.AgentRoleJuniorDeveloper: config.AgentRoleCoder,
+	} {
+		profile, err := ParseProfile([]byte("version: 1\nname: reader\nrole: " + old + "\nsystem_prompt: Read.\ntools: []\ndelegates: []\n"))
+		if err != nil || profile.Role != want {
+			t.Fatalf("role %q migrated to %#v: %v", old, profile, err)
+		}
+		profile.Role = old
+		if err := profile.Validate(); err == nil {
+			t.Fatalf("new profile accepted retired role %q", old)
+		}
 	}
 }
 

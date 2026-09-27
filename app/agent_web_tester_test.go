@@ -98,46 +98,6 @@ func TestACPAgentRunsCanonicalWebTesterSubagentCommand(t *testing.T) {
 	}
 }
 
-func TestExternalWebTesterPlanAdapterCapturesRawResultAndReturnsCommonResult(t *testing.T) {
-	var received subagent.ExternalWebTesterInput
-	invocation := subagent.Invocation{
-		Tool:   subagent.ExternalWebTesterTool(),
-		Source: subagent.InvocationSource{Protocol: "acp", Name: "browser", Kind: "agent-result"},
-		Handler: func(_ context.Context, call client.ToolCall) (client.ToolResult, error) {
-			var err error
-			received, err = subagent.ParseExternalWebTesterInput(call.Function.Arguments)
-			if err != nil {
-				return client.ToolResult{}, err
-			}
-			return client.ToolResult{Content: `{"agent":"ignored","outcome":"failed","summary":"cookie missing","verification":["login submitted"]}`}, nil
-		},
-	}
-	captured := false
-	runner := externalWebTesterTaskRunner(invocation, func(
-		_ context.Context, _ subagent.InvocationSource, _ client.ToolCall, result client.ToolResult,
-	) (client.ToolResult, error) {
-		captured = strings.Contains(result.Content, "cookie missing")
-		return client.ToolResult{Content: `{"loom_ref":"loom://0123456789abcdef0123456789abcdef","stored":true}`}, nil
-	})
-	plan := subagent.PlanProposal{Summary: "verify auth", Facts: []string{"local app"}, Verification: []string{"auth works"}, Steps: []subagent.PlanStep{{
-		Title: "Test login", Description: "Use the browser", Executor: subagent.PlanExecutorExternalWebTester,
-		Verification: []string{"dashboard appears"},
-	}}}
-	result, err := runner(t.Context(), subagent.TaskAttempt{
-		Plan: plan, TaskIndex: 0, Attempt: 2, Executor: subagent.PlanExecutorExternalWebTester,
-		Targets: []string{"web/login.go"}, Feedback: "retest the fix",
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !captured || received.Request != "Test login\n\nUse the browser" ||
-		!strings.Contains(strings.Join(received.Context, "\n"), "retest the fix") ||
-		result.Executor != subagent.PlanExecutorExternalWebTester || result.Outcome != "failed" ||
-		len(result.Evidence) != 1 || result.Evidence[0].LoomRef == "" {
-		t.Fatalf("captured=%v input=%#v result=%#v", captured, received, result)
-	}
-}
-
 func testAgentWebTesterRuntime(
 	t *testing.T,
 	run func(context.Context, subagent.ExternalWebTesterInput) (subagent.ExternalWebTesterResult, error),

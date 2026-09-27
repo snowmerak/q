@@ -1,5 +1,7 @@
 # Role-based subagent architecture notes
 
+> 역사 문서: 아래 Scout/Griller/Planner/Coder 구조는 현재 공개 delegation 구조가 아니다.
+
 ## 상태
 
 이 문서는 역할별 모델 할당과 서브에이전트 orchestration의 전체 메모다.

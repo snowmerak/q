@@ -42,8 +42,8 @@ toc:
 | `.q/sessions/<uuid>/session.json` | 会话记录、上下文、标题、生命周期与学习状态。 |
 | `.q/sessions/<uuid>/delegations.json` | 子代理调用的书签。 |
 | `.q/sessions/<uuid>/delegates/<invocation-id>/` | 子会话、执行状态和嵌套委派树。 |
-| `.q/sessions/<uuid>/plan-execution.json` | 可恢复的获批计划检查点。 |
-| `.q/plan-executions/` | 已完成的执行快照。 |
+| `.q/sessions/<uuid>/plan-execution.json` | 旧版 plan 检查点。 |
+| `.q/plan-executions/` | 旧版执行快照。 |
 | `.q/model.json` | 工作区模型角色覆盖设置。 |
 | `.q/learning.json` | 工作区学习开关。 |
 | `.q/lsp.json` | 工作区 LSP 根目录与覆盖设置。 |

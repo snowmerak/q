@@ -85,8 +85,8 @@ func TestGeneralScoutTaskStartReceivesSkillHints(t *testing.T) {
 	})
 	result, err := (GeneralRunner{
 		Client: configured, Tools: runtime,
-		Spec: Spec{Role: config.AgentRoleScout, Model: "model", Candidates: []client.ModelCandidate{{Model: "model"}}},
-		Definition: AgentDefinition{Info: DelegateInfo{Name: BuiltinScoutID, Kind: AgentKindInner, Role: config.AgentRoleScout},
+		Spec: Spec{Role: config.AgentRoleResearch, Model: "model", Candidates: []client.ModelCandidate{{Model: "model"}}},
+		Definition: AgentDefinition{Info: DelegateInfo{Name: "workspace/inspector", Kind: AgentKindInner, Role: config.AgentRoleResearch},
 			SystemPrompt: "Inspect repository evidence.", StrictTools: true},
 	}).Run(t.Context(), "Inspect the repository")
 	if err != nil || result.Outcome != "blocked" || rounds != 2 || len(runtime.queries) != 1 || runtime.queries[0] != "Inspect Go code Review tests" || len(runtime.calls) != 0 {
