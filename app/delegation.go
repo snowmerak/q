@@ -143,6 +143,11 @@ func (m model) configuredDelegationRuntimeFor(base agentToolRuntime, root, calle
 				continue
 			}
 			for _, name := range definition.Tools {
+				// The coordinator needs both tools for automatic task_start
+				// hints and for reading a selected skill itself.
+				if name == "search_skills" || name == "get_skill" {
+					continue
+				}
 				runtime.delegatedTools[name] = true
 			}
 			switch definition.Info.Name {

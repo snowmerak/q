@@ -3,12 +3,15 @@ package app
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/snowmerak/q/client"
 	"github.com/snowmerak/q/config"
 	"github.com/snowmerak/q/subagent"
 	acp "github.com/snowmerak/q/third_party/acp-go-sdk"
+	qtools "github.com/snowmerak/q/tools"
+	"github.com/snowmerak/q/tools/builtin"
 	"github.com/snowmerak/q/workspace"
 )
 
@@ -113,6 +116,8 @@ func TestDelegationModeReservesBuiltinToolsForSubagents(t *testing.T) {
 	base := &fakeAgentTools{tools: []client.Tool{
 		{Type: client.ToolTypeFunction, Function: client.FunctionDefinition{Name: "read_file"}},
 		{Type: client.ToolTypeFunction, Function: client.FunctionDefinition{Name: "write_file"}},
+		{Type: client.ToolTypeFunction, Function: client.FunctionDefinition{Name: "search_skills"}},
+		{Type: client.ToolTypeFunction, Function: client.FunctionDefinition{Name: "get_skill"}},
 		{Type: client.ToolTypeFunction, Function: client.FunctionDefinition{Name: "residual_tool"}},
 	}}
 	m.toolRuntime = base
@@ -130,7 +135,7 @@ func TestDelegationModeReservesBuiltinToolsForSubagents(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if toolAvailable(runtime, "read_file") || toolAvailable(runtime, "write_file") || !toolAvailable(runtime, "residual_tool") || !toolAvailable(runtime, subagent.DelegateToolName) {
+	if toolAvailable(runtime, "read_file") || toolAvailable(runtime, "write_file") || !toolAvailable(runtime, "search_skills") || !toolAvailable(runtime, "get_skill") || !toolAvailable(runtime, "residual_tool") || !toolAvailable(runtime, subagent.DelegateToolName) {
 		t.Fatalf("unexpected delegation tools: %#v", runtime.Tools())
 	}
 	result, err := runtime.Call(context.Background(), client.ToolCall{Function: client.FunctionCall{Name: "write_file"}})
@@ -144,6 +149,47 @@ func TestDelegationModeReservesBuiltinToolsForSubagents(t *testing.T) {
 	if !toolAvailable(child, "write_file") {
 		t.Fatal("delegation mode removed a child tool")
 	}
+}
+
+func TestDelegationModeTaskStartSearchesSkills(t *testing.T) {
+	value := config.Default()
+	value.Provider.Model = "test-model"
+	tools := &fakeAgentTools{
+		tools: []client.Tool{
+			{Type: client.ToolTypeFunction, Function: client.FunctionDefinition{Name: "search_skills"}},
+			{Type: client.ToolTypeFunction, Function: client.FunctionDefinition{Name: "get_skill"}},
+		},
+		skillHintResults: []qtools.SkillHintSearchResult{
+			{Hits: []builtin.SkillSearchHit{{ID: "initial", Title: "initial", Scope: "global"}}},
+			{Hits: []builtin.SkillSearchHit{{ID: "task", Title: "task", Scope: "workspace"}}},
+		},
+	}
+	m := newModel(t.Context(), config.Store{Dir: t.TempDir()}, nil)
+	m.toolRuntime = tools
+	m.workspaceStore = &workspace.Store{Root: t.TempDir()}
+	m.enterChat(value, &askingClient{})
+	if err := m.setLoopMode(loopModeDelegation); err != nil {
+		t.Fatal(err)
+	}
+	m.input.SetValue("choose a color")
+	updated, command := m.submitChat()
+	m = updated.(model)
+	for !m.asking {
+		updated, command = m.Update(nextAgentMessage(t, command))
+		m = updated.(model)
+	}
+	if len(tools.skillHintQueries) != 2 || tools.skillHintQueries[0] != "choose a color" || tools.skillHintQueries[1] != "Choose an accent color" {
+		t.Fatalf("skill searches = %#v", tools.skillHintQueries)
+	}
+	for _, message := range m.messages {
+		if message.Name == taskStartToolName {
+			if !strings.Contains(message.Content, `"trigger":"task_start"`) || !strings.Contains(message.Content, `"id":"task"`) {
+				t.Fatalf("task_start result lacks skill hint: %q", message.Content)
+			}
+			return
+		}
+	}
+	t.Fatal("task_start result was not recorded")
 }
 
 func countModePrompt(messages []client.Message) int {
