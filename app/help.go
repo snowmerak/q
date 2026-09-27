@@ -22,6 +22,9 @@ func (m model) enterHelp() (tea.Model, tea.Cmd) {
 	for index := range m.mcpInputs {
 		m.mcpInputs[index].Blur()
 	}
+	for index := range m.systemOneInputs {
+		m.systemOneInputs[index].Blur()
+	}
 	for index := range m.agentsInputs {
 		m.agentsInputs[index].Blur()
 	}
@@ -53,6 +56,8 @@ func (m model) leaveHelp() (tea.Model, tea.Cmd) {
 		return m, m.setup[m.setupFocus].Focus()
 	case screenModels:
 		return m, m.modelPickerFocus()
+	case screenSystemOne:
+		return m, m.systemOneInputs[m.systemOneFocus].Focus()
 	case screenLoom:
 		return m, m.loomFocusCommand()
 	case screenIgnore:
@@ -263,6 +268,7 @@ func renderHelpContent(dark bool, commandSets ...[]slashCommand) string {
 		{"q remote", "Run the REST host for workspace sessions and agent execution."},
 		{"q remote config", "Configure Remote network and Remote-only API keys."},
 		{"q model", "Configure main, embedding, and subagent models."},
+		{"q systemone", "Configure the System One URI, API key, and model."},
 		{"q mcp", "Configure external MCP tool servers and per-role assignments."},
 		{"q subagents", "Manage subagents, ACP connections, and external bindings."},
 		{"q skills", "Manage global and current-workspace Agent Skills."},

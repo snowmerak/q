@@ -41,6 +41,7 @@ const (
 	screenSetup screen = iota
 	screenProviders
 	screenModels
+	screenSystemOne
 	screenLoom
 	screenIgnore
 	screenSkills
@@ -472,6 +473,7 @@ func newManagedModel(ctx context.Context, store config.Store, factory clientFact
 	m.gatewayKeyAlias.SetWidth(48)
 	m.librarySettingsStore = qlibrary.ConfigStore{Dir: store.Dir}
 	m.mcpSettingsStore = mcpconfig.Store{Dir: store.Dir}
+	m.initSystemOne(store.Dir)
 	m.libraryHostInput = textinput.New()
 	m.libraryHostInput.Prompt = "host · "
 	m.libraryHostInput.SetWidth(40)
@@ -572,6 +574,9 @@ func (m model) Init() tea.Cmd {
 	}
 	if m.screen == screenModels {
 		return tea.Batch(m.modelPickerFocus(), tea.RequestBackgroundColor)
+	}
+	if m.screen == screenSystemOne {
+		return tea.Batch(m.systemOneInputs[m.systemOneFocus].Focus(), tea.RequestBackgroundColor)
 	}
 	if m.screen == screenProviders {
 		return tea.RequestBackgroundColor
@@ -2459,6 +2464,8 @@ func (m model) View() tea.View {
 		content = m.viewLibrary()
 	case screenModels:
 		content = m.viewModels()
+	case screenSystemOne:
+		content = m.viewSystemOne()
 	case screenLoom:
 		content = m.viewLoom()
 	case screenIgnore:

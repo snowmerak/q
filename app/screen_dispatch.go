@@ -40,6 +40,9 @@ func (m model) updateScreenMessage(message tea.Msg) (tea.Model, tea.Cmd) {
 		if m.screen == screenModels {
 			return m.updateModelPicker(key)
 		}
+		if m.screen == screenSystemOne {
+			return m.updateSystemOne(key)
+		}
 		if m.screen == screenLoom {
 			return m.updateLoom(key)
 		}

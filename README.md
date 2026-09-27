@@ -184,6 +184,7 @@ screen and returns to the previous screen without discarding its state.
 | `/compact` | Summarize older model context without deleting the transcript (TUI and ACP). |
 | `/learn [on\|off\|status]` | Checkpoint or control durable conversation learning. |
 | `/model` | Assign models, manage native roles, and configure fallback groups. |
+| `/systemone` | Configure the System One endpoint URI, API key, and model. |
 | `/gateway` | Configure Gateway providers, listener settings, and API keys. |
 | `/library` | Configure the global Library listener. |
 | `/loom` | Inspect Loom usage and configure or run garbage collection. |
@@ -647,6 +648,7 @@ omits the chat-only `learn` tool.
 | `q usage` | Open the local token-usage dashboard and host its service when needed. |
 | `q commit` | Open the commit workflow in the current repository. |
 | `q model` | Configure model and role assignments. |
+| `q systemone` | Configure the System One endpoint URI, API key, and model. |
 | `q subagents` | Manage subagents, external bindings, and ACP connections. (`q agents` is a compatibility alias.) |
 | `q mcp` | Configure external MCP servers. |
 | `q skills` | Manage Agent Skills. |
@@ -704,6 +706,7 @@ described in [the Remote API implementation note](docs/remote-subagent-api-plan.
 | `~/.q/workspace-memory.json` | Workspace Memory settings. |
 | `~/.q/usage.json` | Token Usage service loopback endpoint settings. |
 | `~/.q/mcp.json` | External MCP profiles and role assignments. |
+| `~/.q/systemone.json` | System One endpoint, model, and optional API key (saved with private file permissions). |
 | `~/.q/skills/` | q-managed global Agent Skills. |
 | `~/.q/logs/thinker/` | Private Thinker invocation diagnostics retained for three days. |
 | `~/.q/usage/usage.sqlite` | Recent token-only events and all-time daily rollups. |

@@ -19,6 +19,7 @@ import (
 	qlsp "github.com/snowmerak/q/lsp"
 	"github.com/snowmerak/q/mcpconfig"
 	"github.com/snowmerak/q/memory"
+	"github.com/snowmerak/q/systemoneconfig"
 	"github.com/snowmerak/q/thinker"
 	"github.com/snowmerak/q/workspace"
 )
@@ -29,6 +30,7 @@ type model struct {
 	sessionState
 	providerState
 	modelSettingsState
+	systemOneState
 	loomState
 	ignoreState
 	helpState
@@ -151,6 +153,12 @@ type modelSettingsState struct {
 	modelGroupDeleteArmed     bool
 	draftConfig               config.Config
 	modelReturn               screen
+}
+
+type systemOneState struct {
+	systemOneStore  systemoneconfig.Store
+	systemOneInputs [3]textinput.Model
+	systemOneFocus  int
 }
 
 // loomState owns one copyable part of the Bubble Tea model.

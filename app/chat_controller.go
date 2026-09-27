@@ -199,6 +199,9 @@ func (m model) submitChat() (tea.Model, tea.Cmd) {
 		case "/model":
 			m.input.Reset()
 			return m.discoverCurrentModels()
+		case "/systemone":
+			m.input.Reset()
+			return m.enterSystemOne()
 		case "/gateway":
 			m.input.Reset()
 			if m.runtime != nil {

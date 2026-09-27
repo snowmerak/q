@@ -194,6 +194,8 @@ func standaloneUICommand(name string) func(context.Context) error {
 	switch name {
 	case "model":
 		return app.RunModelDefault
+	case "systemone":
+		return app.RunSystemOneDefault
 	case "skills":
 		return app.RunSkillsDefault
 	case "ignore":

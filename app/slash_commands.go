@@ -34,6 +34,7 @@ var localSlashCommands = []slashCommand{
 	{"/compact", "", "Summarize older context while keeping the transcript."},
 	{"/learn", "[on|off|status]", "Checkpoint or control Thinker learning for this workspace."},
 	{"/model", "", "Assign models, manage native roles, and configure fallback groups."},
+	{"/systemone", "", "Configure the System One URI, API key, and model."},
 	{"/gateway", "", "Configure Gateway network, API keys, and providers."},
 	{"/library", "", "Configure the global Library listener defaults."},
 	{"/loom", "", "Inspect Loom storage and garbage-collection settings."},
