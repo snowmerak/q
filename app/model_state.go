@@ -12,6 +12,7 @@ import (
 	"github.com/snowmerak/llm-provider/gateway"
 	"github.com/snowmerak/q/archiveembed"
 	"github.com/snowmerak/q/client"
+	"github.com/snowmerak/q/client/systemone"
 	"github.com/snowmerak/q/config"
 	"github.com/snowmerak/q/gatewayconfig"
 	qlibrary "github.com/snowmerak/q/library"
@@ -156,9 +157,17 @@ type modelSettingsState struct {
 }
 
 type systemOneState struct {
-	systemOneStore  systemoneconfig.Store
-	systemOneInputs [3]textinput.Model
-	systemOneFocus  int
+	systemOneStore     systemoneconfig.Store
+	systemOneConfig    systemoneconfig.Config
+	systemOneProvider  int
+	systemOneInputs    [8]textinput.Model
+	systemOneFocus     int
+	systemOneModels    []systemone.Model
+	systemOneCursor    int
+	systemOneLoading   bool
+	systemOnePicking   bool
+	systemOneRequestID uint64
+	systemOneCancel    context.CancelFunc
 }
 
 // loomState owns one copyable part of the Bubble Tea model.

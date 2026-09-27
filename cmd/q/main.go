@@ -66,6 +66,25 @@ func main() {
 		}
 		return
 	}
+	if len(os.Args) > 1 && os.Args[1] == "systemone" {
+		mode, serviceArgs, ok := parseServiceCommand(os.Args[2:])
+		if !ok {
+			fmt.Fprintln(os.Stderr, "usage: q systemone | q systemone start [--host <ip>] [--port <port>]")
+			os.Exit(2)
+		}
+		if mode == serviceCommandConfigure {
+			if err := app.RunSystemOneDefault(ctx); err != nil {
+				fmt.Fprintln(os.Stderr, err)
+				os.Exit(1)
+			}
+			return
+		}
+		if err := runSystemOneCommand(ctx, serviceArgs, os.Stdout, os.Stderr); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
 	if len(os.Args) > 1 {
 		runStandalone := standaloneUICommand(os.Args[1])
 		if runStandalone != nil {

@@ -1,10 +1,11 @@
-// Package systemoneconfig stores the independent System One endpoint settings.
+// Package systemoneconfig stores the independent System One providers and server settings.
 package systemoneconfig
 
 import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -15,39 +16,103 @@ import (
 )
 
 const (
-	FileName   = "systemone.json"
-	DefaultURI = "https://api.typesafe.ai/v1/systemone"
+	FileName     = "systemone.json"
+	DefaultURI   = "https://api.typesafe.ai/v1/systemone"
+	DefaultModel = "jev-latest"
+	Version      = 1
 )
 
-type Config struct {
-	URI    string `json:"uri"`
+type ServerConfig struct {
+	Host   string `json:"host"`
+	Port   int    `json:"port"`
 	APIKey string `json:"api_key,omitempty"`
-	Model  string `json:"model"`
+}
+
+type ProviderConfig struct {
+	ID        string `json:"id"`
+	URI       string `json:"uri"`
+	APIKey    string `json:"api_key,omitempty"`
+	APIKeyEnv string `json:"api_key_env,omitempty"`
+	Model     string `json:"model"`
+}
+
+type Config struct {
+	Version   int              `json:"version"`
+	Server    ServerConfig     `json:"server"`
+	Selected  string           `json:"selected"`
+	Providers []ProviderConfig `json:"providers"`
 }
 
 func Default() Config {
-	return Config{URI: DefaultURI, Model: "jev-latest"}
+	return Config{
+		Version:  Version,
+		Server:   ServerConfig{Host: "127.0.0.1"},
+		Selected: "typesafe",
+		Providers: []ProviderConfig{{
+			ID: "typesafe", URI: DefaultURI, APIKeyEnv: "TYPESAFE_API_KEY", Model: DefaultModel,
+		}},
+	}
 }
 
 func (c Config) Validate() error {
-	parsed, err := url.Parse(c.URI)
-	if err != nil || parsed == nil || (parsed.Scheme != "http" && parsed.Scheme != "https") ||
-		parsed.Host == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" ||
-		parsed.Opaque != "" || !strings.HasSuffix(strings.TrimRight(parsed.Path, "/"), "/systemone") {
-		return errors.New("systemone: URI must be an HTTP(S) /systemone endpoint without credentials, query, or fragment")
+	if c.Version != Version {
+		return fmt.Errorf("systemone: unsupported config version %d", c.Version)
 	}
-	if c.Model == "" || c.Model != strings.TrimSpace(c.Model) || strings.ContainsAny(c.Model, "\r\n") {
-		return errors.New("systemone: model is required without surrounding whitespace")
+	address := net.ParseIP(c.Server.Host)
+	if address == nil {
+		return errors.New("systemone: server host must be an IP address")
 	}
-	if strings.ContainsAny(c.APIKey, "\r\n") {
-		return errors.New("systemone: API key must be a single line")
+	if c.Server.Port < 0 || c.Server.Port > 65535 {
+		return errors.New("systemone: server port must be between 0 and 65535")
+	}
+	if strings.ContainsAny(c.Server.APIKey, "\r\n") {
+		return errors.New("systemone: server API key must be a single line")
+	}
+	if !address.IsLoopback() && c.Server.APIKey == "" {
+		return errors.New("systemone: a server API key is required outside loopback")
+	}
+	if len(c.Providers) == 0 {
+		return errors.New("systemone: at least one provider is required")
+	}
+	seen := make(map[string]bool, len(c.Providers))
+	selected := false
+	for _, provider := range c.Providers {
+		if err := provider.Validate(); err != nil {
+			return err
+		}
+		if seen[provider.ID] {
+			return fmt.Errorf("systemone: duplicate provider ID %q", provider.ID)
+		}
+		seen[provider.ID] = true
+		selected = selected || provider.ID == c.Selected
+	}
+	if !selected {
+		return fmt.Errorf("systemone: selected provider %q does not exist", c.Selected)
 	}
 	return nil
 }
 
-// BaseURL converts the configured endpoint URI to the native client's root.
-func (c Config) BaseURL() string {
-	parsed, err := url.Parse(c.URI)
+func (p ProviderConfig) Validate() error {
+	if p.ID == "" || strings.ContainsAny(p.ID, "/ \t\r\n") {
+		return errors.New("systemone: provider ID must be nonempty and contain no slash or whitespace")
+	}
+	parsed, err := url.Parse(p.URI)
+	if err != nil || parsed == nil || (parsed.Scheme != "http" && parsed.Scheme != "https") ||
+		parsed.Host == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" ||
+		parsed.Opaque != "" || !strings.HasSuffix(strings.TrimRight(parsed.Path, "/"), "/systemone") {
+		return fmt.Errorf("systemone: provider %q URI must be an HTTP(S) /systemone endpoint without credentials, query, or fragment", p.ID)
+	}
+	if p.Model == "" || p.Model != strings.TrimSpace(p.Model) || strings.ContainsAny(p.Model, "\r\n") {
+		return fmt.Errorf("systemone: provider %q model is required without surrounding whitespace", p.ID)
+	}
+	if strings.ContainsAny(p.APIKey, "\r\n") || strings.ContainsAny(p.APIKeyEnv, "\r\n") {
+		return fmt.Errorf("systemone: provider %q API key settings must be single lines", p.ID)
+	}
+	return nil
+}
+
+func (p ProviderConfig) BaseURL() string {
+	parsed, err := url.Parse(p.URI)
 	if err != nil || parsed == nil {
 		return ""
 	}
@@ -56,12 +121,39 @@ func (c Config) BaseURL() string {
 	return parsed.String()
 }
 
-// ResolveAPIKey prefers the saved key and otherwise reads TYPESAFE_API_KEY.
-func (c Config) ResolveAPIKey() string {
-	if c.APIKey != "" {
-		return c.APIKey
+func (p ProviderConfig) ResolveAPIKey() string {
+	if p.APIKey != "" {
+		return p.APIKey
 	}
-	return os.Getenv("TYPESAFE_API_KEY")
+	return os.Getenv(p.APIKeyEnv)
+}
+
+func (p ProviderConfig) NewClient() (*systemone.Client, error) {
+	if err := p.Validate(); err != nil {
+		return nil, err
+	}
+	key := p.ResolveAPIKey()
+	if key == "" {
+		return nil, fmt.Errorf("systemone: provider %q requires an API key or a populated API key environment variable", p.ID)
+	}
+	return systemone.New(systemone.Config{BaseURL: p.BaseURL(), APIKey: key})
+}
+
+func (c Config) SelectedProvider() (ProviderConfig, error) {
+	for _, provider := range c.Providers {
+		if provider.ID == c.Selected {
+			return provider, nil
+		}
+	}
+	return ProviderConfig{}, fmt.Errorf("systemone: selected provider %q does not exist", c.Selected)
+}
+
+func (c Config) NewClient() (*systemone.Client, error) {
+	provider, err := c.SelectedProvider()
+	if err != nil {
+		return nil, err
+	}
+	return provider.NewClient()
 }
 
 type Store struct{ Dir string }
@@ -76,7 +168,32 @@ func (s Store) LoadOrDefault() (Config, error) {
 	if err != nil {
 		return Config{}, fmt.Errorf("systemone: read settings: %w", err)
 	}
-	value := Default()
+	var shape struct {
+		URI string `json:"uri"`
+	}
+	if err := json.Unmarshal(data, &shape); err != nil {
+		return Config{}, fmt.Errorf("systemone: decode settings: %w", err)
+	}
+	if shape.URI != "" {
+		// Files written by the original single-provider screen remain readable.
+		var old struct {
+			URI    string `json:"uri"`
+			APIKey string `json:"api_key"`
+			Model  string `json:"model"`
+		}
+		if err := json.Unmarshal(data, &old); err != nil {
+			return Config{}, fmt.Errorf("systemone: decode legacy settings: %w", err)
+		}
+		value := Default()
+		value.Providers[0].URI = old.URI
+		value.Providers[0].APIKey = old.APIKey
+		value.Providers[0].Model = old.Model
+		if err := value.Validate(); err != nil {
+			return Config{}, err
+		}
+		return value, nil
+	}
+	var value Config
 	if err := json.Unmarshal(data, &value); err != nil {
 		return Config{}, fmt.Errorf("systemone: decode settings: %w", err)
 	}
@@ -86,18 +203,17 @@ func (s Store) LoadOrDefault() (Config, error) {
 	return value, nil
 }
 
-// NewClient loads the saved endpoint and returns the selected model for
-// requests. A blank saved key falls back to TYPESAFE_API_KEY.
 func (s Store) NewClient() (*systemone.Client, string, error) {
 	value, err := s.LoadOrDefault()
 	if err != nil {
 		return nil, "", err
 	}
-	client, err := systemone.New(systemone.Config{BaseURL: value.BaseURL(), APIKey: value.ResolveAPIKey()})
+	provider, err := value.SelectedProvider()
 	if err != nil {
 		return nil, "", err
 	}
-	return client, value.Model, nil
+	client, err := provider.NewClient()
+	return client, provider.Model, err
 }
 
 func (s Store) Save(value Config) error {

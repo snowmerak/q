@@ -96,6 +96,7 @@ type APIError struct {
 	Source     string
 	RequestID  string
 	RetryAfter string
+	Header     http.Header
 	Body       []byte
 }
 

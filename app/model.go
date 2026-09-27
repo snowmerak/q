@@ -576,7 +576,7 @@ func (m model) Init() tea.Cmd {
 		return tea.Batch(m.modelPickerFocus(), tea.RequestBackgroundColor)
 	}
 	if m.screen == screenSystemOne {
-		return tea.Batch(m.systemOneInputs[m.systemOneFocus].Focus(), tea.RequestBackgroundColor)
+		return tea.Batch(m.focusSystemOne(), tea.RequestBackgroundColor)
 	}
 	if m.screen == screenProviders {
 		return tea.RequestBackgroundColor
@@ -946,6 +946,8 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			return m, m.input.Focus()
 		}
 		return m, m.modelPickerFocus()
+	case systemOneModelsMsg:
+		return m.receiveSystemOneModels(message)
 	case providersAppliedMsg:
 		m.discovering = false
 		if message.err != nil {

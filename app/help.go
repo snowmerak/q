@@ -57,7 +57,7 @@ func (m model) leaveHelp() (tea.Model, tea.Cmd) {
 	case screenModels:
 		return m, m.modelPickerFocus()
 	case screenSystemOne:
-		return m, m.systemOneInputs[m.systemOneFocus].Focus()
+		return m, m.focusSystemOne()
 	case screenLoom:
 		return m, m.loomFocusCommand()
 	case screenIgnore:
@@ -268,7 +268,8 @@ func renderHelpContent(dark bool, commandSets ...[]slashCommand) string {
 		{"q remote", "Run the REST host for workspace sessions and agent execution."},
 		{"q remote config", "Configure Remote network and Remote-only API keys."},
 		{"q model", "Configure main, embedding, and subagent models."},
-		{"q systemone", "Configure the System One URI, API key, and model."},
+		{"q systemone", "Configure System One providers, models, and listener."},
+		{"q systemone start", "Run the standalone System One API server."},
 		{"q mcp", "Configure external MCP tool servers and per-role assignments."},
 		{"q subagents", "Manage subagents, ACP connections, and external bindings."},
 		{"q skills", "Manage global and current-workspace Agent Skills."},

@@ -50,10 +50,12 @@ idempotency key when recovering an uncertain outcome. A missing key makes each
 call a separate operation. Custom System One hosts, including Jev-compatible
 services, can be selected with `Config.BaseURL` and an explicit API key.
 
-In q, `/systemone` or `q systemone` stores the endpoint URI, API key, and model
-in `~/.q/systemone.json`. `systemoneconfig.Store.NewClient()` loads those
-settings and returns the client and selected model. A blank saved key uses
-`TYPESAFE_API_KEY` from the environment.
+In q, `/systemone` or `q systemone` stores multiple providers and standalone
+server settings in `~/.q/systemone.json`. `systemoneconfig.Store.NewClient()`
+returns a native client and model for the selected provider. The initial
+TypeSafe provider reads `TYPESAFE_API_KEY` when no key is saved. Run
+`q systemone start` to serve the native API locally; model IDs in its catalog
+use `provider-id/model-name`.
 
 Wire behavior follows the [System One API reference](https://docs.system-one.dev/en/docs/api)
 and its [idempotency rules](https://docs.system-one.dev/en/docs/api/idempotency).

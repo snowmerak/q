@@ -184,7 +184,7 @@ screen and returns to the previous screen without discarding its state.
 | `/compact` | Summarize older model context without deleting the transcript (TUI and ACP). |
 | `/learn [on\|off\|status]` | Checkpoint or control durable conversation learning. |
 | `/model` | Assign models, manage native roles, and configure fallback groups. |
-| `/systemone` | Configure the System One endpoint URI, API key, and model. |
+| `/systemone` | Configure System One providers, models, and its standalone server. |
 | `/gateway` | Configure Gateway providers, listener settings, and API keys. |
 | `/library` | Configure the global Library listener. |
 | `/loom` | Inspect Loom usage and configure or run garbage collection. |
@@ -648,13 +648,30 @@ omits the chat-only `learn` tool.
 | `q usage` | Open the local token-usage dashboard and host its service when needed. |
 | `q commit` | Open the commit workflow in the current repository. |
 | `q model` | Configure model and role assignments. |
-| `q systemone` | Configure the System One endpoint URI, API key, and model. |
+| `q systemone` | Configure System One providers, models, and its standalone server. |
+| `q systemone start [--host <ip>] [--port <port>]` | Run the standalone System One API server. |
 | `q subagents` | Manage subagents, external bindings, and ACP connections. (`q agents` is a compatibility alias.) |
 | `q mcp` | Configure external MCP servers. |
 | `q skills` | Manage Agent Skills. |
 | `q lsp` | Configure language servers. |
 | `q ignore` | Edit `.qignore`. |
 | `q help` | Open the TUI help without starting chat services. |
+
+System One runs independently of Q's chat Gateway. In `q systemone`, use
+`Ctrl+N` to add a provider, `Ctrl+P` to switch providers, `Ctrl+D` to remove
+one, and `Ctrl+S` to save. Each provider has its own endpoint URI, API key (or
+environment variable), and selected model. The listen host, port, and optional
+client-facing API key are stored in the same settings file. Existing
+single-provider `systemone.json` files are read automatically and rewritten in
+the new format on save.
+
+`q systemone start` serves `GET /v1/models` and `POST /v1/systemone`.
+Discovered models and routed requests use `provider-id/model-name`; a model
+name without a provider ID goes to the selected provider for compatibility.
+The server listens on `127.0.0.1` with a random port by default. Setting a
+non-loopback listen host requires a server API key, which clients send as a
+Bearer token. `--host` and `--port` override the saved listen address for one
+run.
 
 Ordinary q processes automatically ensure Workspace Memory, the global Library,
 and token Usage storage are available when needed. Run the standalone service
@@ -706,7 +723,7 @@ described in [the Remote API implementation note](docs/remote-subagent-api-plan.
 | `~/.q/workspace-memory.json` | Workspace Memory settings. |
 | `~/.q/usage.json` | Token Usage service loopback endpoint settings. |
 | `~/.q/mcp.json` | External MCP profiles and role assignments. |
-| `~/.q/systemone.json` | System One endpoint, model, and optional API key (saved with private file permissions). |
+| `~/.q/systemone.json` | System One providers, selected provider, and standalone listener settings (saved with private file permissions). |
 | `~/.q/skills/` | q-managed global Agent Skills. |
 | `~/.q/logs/thinker/` | Private Thinker invocation diagnostics retained for three days. |
 | `~/.q/usage/usage.sqlite` | Recent token-only events and all-time daily rollups. |

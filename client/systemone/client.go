@@ -158,6 +158,7 @@ func (c *Client) do(ctx context.Context, method, path string, body []byte, idemp
 			Source:     header.Get("X-System-One-Error-Source"),
 			RequestID:  header.Get("X-Request-Id"),
 			RetryAfter: header.Get("Retry-After"),
+			Header:     header,
 			Body:       responseBody,
 		}
 	}
@@ -179,4 +180,9 @@ func validateIdempotencyKey(key string) error {
 		}
 	}
 	return nil
+}
+
+// ValidateIdempotencyKey applies the native request header rules.
+func ValidateIdempotencyKey(key string) error {
+	return validateIdempotencyKey(key)
 }
