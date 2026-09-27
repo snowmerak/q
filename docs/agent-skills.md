@@ -37,16 +37,15 @@ returns the complete resource text directly in its `content` field, whether or
 not Loom is available. It does not create a Loom artifact. There is no separate
 Library MCP tool.
 
-Main chat and Griller receive `search_skills` and `get_skill`; Scout receives
-the same tools in its non-mutating investigation allowlist and is the preferred repository
-research role for skill discovery. Planner, Coder, and commit sessions do not
-receive them.
+Main chat, plan Griller, and plan Scout receive `search_skills` and `get_skill`.
+General delegated agents receive the pair when their agent definition grants it;
+all six built-in inner agents currently grant both. The separate plan Planner,
+plan Coder, and commit agent do not receive them.
 
 ## Contextual discovery
 
-When a role exposes both `search_skills` and `get_skill`, q performs host-side
-candidate retrieval at the points where new task information becomes
-available:
+In the main chat, when both tools are available, q performs host-side candidate
+retrieval at the points where new task information becomes available:
 
 - a new user turn, using the user text and any active task objective and
   completion criteria;
@@ -54,11 +53,19 @@ available:
 - an `ask_to_user` answer, using the question and context together with the
   selected choice label and description or the free-form answer.
 
+The general delegated agent loop also searches automatically after a successful
+`task_start` when its definition grants both tools and the runtime supports
+host-side search. This includes delegated Scout, Griller, Planner, Executor,
+Reviewer, and Coder. Their `task_start` results carry
+the candidate metadata, and their stable system prompts explain how to call
+`search_skills` and `get_skill` later.
+
 The normalized query is limited to 4,000 runes and requests at most eight
-search hits. q adds at most four candidates after removing skill IDs already
-hinted or loaded in the current context. Candidate descriptions are limited to
+search hits. q adds at most four candidates. In the main chat it removes skill
+IDs already hinted or loaded in the current context; a delegated `task_start`
+removes duplicate IDs from that search result. Candidate descriptions are limited to
 600 runes; each candidate retains at most twelve tags of at most 80 runes each.
-Previously seen IDs are recovered from earlier contextual hints,
+In the main chat, previously seen IDs are recovered from earlier contextual hints,
 `task_start`/`ask_to_user` tool results, and successful `get_skill` results.
 
 Only candidate metadata is injected. It is explicitly marked as

@@ -1,6 +1,84 @@
 package subagent
 
-import "github.com/snowmerak/q/client"
+import (
+	"context"
+	"strings"
+
+	"github.com/snowmerak/q/client"
+	"github.com/snowmerak/q/tools/builtin"
+)
+
+type delegatedSkillHintSearcher interface {
+	SearchSkillHints(context.Context, string, int) (builtin.SearchSkillsOutput, error)
+}
+
+type delegatedSkillHint struct {
+	ID          string   `json:"id"`
+	Name        string   `json:"name"`
+	Description string   `json:"description,omitempty"`
+	Tags        []string `json:"tags,omitempty"`
+	Scope       string   `json:"scope"`
+}
+
+type delegatedSkillHintSet struct {
+	Trigger    string               `json:"trigger"`
+	Candidates []delegatedSkillHint `json:"candidates"`
+}
+
+func taskStartSkillHints(ctx context.Context, runtime ToolRuntime, available []client.Tool, input taskStartInput) *delegatedSkillHintSet {
+	searcher, ok := runtime.(delegatedSkillHintSearcher)
+	if !ok || !hasTool(available, "search_skills") || !hasTool(available, "get_skill") {
+		return nil
+	}
+	query := strings.Join(append([]string{input.Objective}, input.CompletionCriteria...), "\n")
+	query = strings.Join(strings.Fields(query), " ")
+	queryRunes := []rune(query)
+	if len(queryRunes) > 4000 {
+		query = string(queryRunes[:4000])
+	}
+	if query == "" {
+		return nil
+	}
+	result, err := searcher.SearchSkillHints(ctx, query, 8)
+	if err != nil {
+		return nil
+	}
+	hints := &delegatedSkillHintSet{Trigger: "task_start"}
+	seen := make(map[string]bool)
+	for _, hit := range result.Hits {
+		if hit.ID == "" || seen[hit.ID] {
+			continue
+		}
+		seen[hit.ID] = true
+		description := []rune(hit.Description)
+		if len(description) > 600 {
+			description = description[:600]
+		}
+		tags := make([]string, 0, min(len(hit.Tags), 12))
+		for _, tag := range hit.Tags {
+			if len(tags) == 12 {
+				break
+			}
+			value := []rune(strings.TrimSpace(tag))
+			if len(value) > 80 {
+				value = value[:80]
+			}
+			if len(value) > 0 {
+				tags = append(tags, string(value))
+			}
+		}
+		hints.Candidates = append(hints.Candidates, delegatedSkillHint{
+			ID: hit.ID, Name: hit.Title, Description: string(description), Tags: tags, Scope: hit.Scope,
+		})
+		if len(hints.Candidates) == 4 {
+			break
+		}
+	}
+	if len(hints.Candidates) == 0 {
+		return nil
+	}
+	return hints
+}
 
 func withRetrievalCatalog(prompt string, tools []client.Tool) string {
 	if hasTool(tools, "search_skills") && hasTool(tools, "get_skill") {

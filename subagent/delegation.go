@@ -544,7 +544,7 @@ func (r GeneralRunner) Run(ctx context.Context, prompt string) (result TaskResul
 		}
 	}()
 
-	systemPrompt := r.Definition.SystemPrompt + "\n\nRuntime environment: " + r.Environment + "\nWorking directory: " + r.WorkingDirectory +
+	systemPrompt := withRetrievalCatalog(r.Definition.SystemPrompt, available) + "\n\nRuntime environment: " + r.Environment + "\nWorking directory: " + r.WorkingDirectory +
 		"\n\nStart by calling task_start. Do not call any other tool before task_start succeeds. Finish with task_complete as the only tool call in that turn. task_complete uses the common schema exactly; do not invent agent-specific fields."
 	messages := []client.Message{{Role: client.RoleSystem, Content: systemPrompt}, {Role: client.RoleUser, Content: prompt}}
 	state := GeneralRunState{Transcript: append([]client.Message(nil), messages...), Context: append([]client.Message(nil), messages...), Spec: r.Spec.Checkpoint()}
@@ -731,7 +731,11 @@ func (r *GeneralRunner) completeGeneralCalls(ctx context.Context, state *General
 			} else {
 				*started = true
 				state.Started = true
-				body, _ := json.Marshal(map[string]any{"started": true, "objective": input.Objective})
+				output := map[string]any{"started": true, "objective": input.Objective}
+				if hints := taskStartSkillHints(ctx, r.Tools, available, input); hints != nil {
+					output["skill_hints"] = hints
+				}
+				body, _ := json.Marshal(output)
 				toolResult = client.ToolResult{Content: string(body)}
 			}
 		case TaskCompleteToolName:

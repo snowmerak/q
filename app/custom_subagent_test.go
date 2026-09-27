@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"strings"
 	"testing"
 
@@ -8,8 +9,41 @@ import (
 	"github.com/snowmerak/q/config"
 	"github.com/snowmerak/q/subagent"
 	acp "github.com/snowmerak/q/third_party/acp-go-sdk"
+	qtools "github.com/snowmerak/q/tools"
+	"github.com/snowmerak/q/tools/builtin"
 	"github.com/snowmerak/q/workspace"
 )
+
+type customSkillCatalogTools struct {
+	*fakeAgentTools
+	catalog []client.Tool
+}
+
+func (r *customSkillCatalogTools) CustomTools() []client.Tool { return r.catalog }
+
+func TestCustomCatalogForwardsDelegatedSkillHintSearch(t *testing.T) {
+	base := &customSkillCatalogTools{
+		fakeAgentTools: &fakeAgentTools{skillHintResults: []qtools.SkillHintSearchResult{{
+			Hits: []builtin.SkillSearchHit{{ID: "skill-go", Title: "go-review"}},
+		}}},
+		catalog: []client.Tool{
+			{Type: client.ToolTypeFunction, Function: client.FunctionDefinition{Name: "search_skills"}},
+			{Type: client.ToolTypeFunction, Function: client.FunctionDefinition{Name: "get_skill"}},
+		},
+	}
+	m := model{hostState: hostState{toolRuntime: base}}
+	runtime := &delegationRuntime{base: m.customTools()}
+	hints, err := runtime.SearchSkillHints(t.Context(), "inspect Go tests", 8)
+	if err != nil || len(hints.Hits) != 1 || hints.Hits[0].ID != "skill-go" ||
+		len(base.skillHintQueries) != 1 || base.skillHintQueries[0] != "inspect Go tests" {
+		t.Fatalf("hints=%#v err=%v queries=%#v", hints, err, base.skillHintQueries)
+	}
+
+	base.catalog = nil
+	if _, err := runtime.SearchSkillHints(context.Background(), "hidden skill", 8); err == nil {
+		t.Fatal("skill search succeeded after removal from custom tool catalog")
+	}
+}
 
 func TestCustomUsesSessionMCPCatalog(t *testing.T) {
 	tool := client.Tool{Type: client.ToolTypeFunction, Function: client.FunctionDefinition{Name: "mcp_docs__read"}}

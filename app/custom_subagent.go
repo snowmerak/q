@@ -13,6 +13,7 @@ import (
 	"github.com/snowmerak/q/sessionstore"
 	"github.com/snowmerak/q/subagent"
 	acp "github.com/snowmerak/q/third_party/acp-go-sdk"
+	qtools "github.com/snowmerak/q/tools"
 	"github.com/snowmerak/q/workspace"
 	"gopkg.in/yaml.v3"
 )
@@ -32,6 +33,17 @@ type customCatalogRuntime struct {
 }
 
 func (r customCatalogRuntime) Tools() []client.Tool { return r.catalog.CustomTools() }
+
+func (r customCatalogRuntime) SearchSkillHints(ctx context.Context, query string, limit int) (qtools.SkillHintSearchResult, error) {
+	if !toolAvailable(r, "search_skills") {
+		return qtools.SkillHintSearchResult{}, fmt.Errorf("agent skills search is unavailable in the custom tool catalog")
+	}
+	searcher, ok := r.agentToolRuntime.(skillHintSearcher)
+	if !ok {
+		return qtools.SkillHintSearchResult{}, fmt.Errorf("agent skills hint search is unavailable")
+	}
+	return searcher.SearchSkillHints(ctx, query, limit)
+}
 
 func (m model) customStore() subagent.ProfileStore {
 	s := subagent.ProfileStore{Global: filepath.Join(filepath.Dir(m.store.Path()), "subagents")}
