@@ -47,21 +47,22 @@ func TestSystemOneEditsSaveAsTheyChange(t *testing.T) {
 	}
 	updated, _ = m.updateSystemOne(tea.KeyPressMsg{Code: tea.KeyDown})
 	m = updated.(model)
-	m.systemOneInputs[systemOneFieldProviderKey].SetValue("private-test-ke")
-	updated, _ = m.updateSystemOne(systemOneTestKey('y', "y"))
+	m.systemOneInputs[systemOneFieldKeyEnv].SetValue("PRIVATE_TEST_KE")
+	m.systemOneInputs[systemOneFieldKeyEnv].CursorEnd()
+	updated, _ = m.updateSystemOne(systemOneTestKey('Y', "Y"))
 	m = updated.(model)
 	loaded, err = store.LoadOrDefault()
-	if err != nil || loaded.Providers[0].APIKey != "private-test-key" {
-		t.Fatalf("API key was not saved on edit: %#v, %v", loaded, err)
+	if err != nil || loaded.Providers[0].APIKeyEnv != "PRIVATE_TEST_KEY" {
+		t.Fatalf("API key env was not saved on edit: %#v, %v", loaded, err)
 	}
-	if strings.Contains(ansi.Strip(m.viewSystemOne()), "private-test-key") {
-		t.Fatal("API key appeared in the settings screen")
+	if strings.Contains(ansi.Strip(m.viewSystemOne()), "Provider API key") {
+		t.Fatal("inline provider API key field remains in the settings screen")
 	}
-	updated, _ = m.Update(tea.PasteMsg{Content: "-pasted"})
+	updated, _ = m.Update(tea.PasteMsg{Content: "_EXTRA"})
 	m = updated.(model)
 	loaded, err = store.LoadOrDefault()
-	if err != nil || loaded.Providers[0].APIKey != "private-test-key-pasted" {
-		t.Fatalf("pasted API key was not saved: %#v, %v", loaded, err)
+	if err != nil || loaded.Providers[0].APIKeyEnv != "PRIVATE_TEST_KEY_EXTRA" {
+		t.Fatalf("pasted API key env was not saved: %#v, %v", loaded, err)
 	}
 	updated, _ = m.updateSystemOne(tea.KeyPressMsg{Code: tea.KeyEsc})
 	m = updated.(model)
@@ -235,6 +236,8 @@ func TestSystemOneProviderListUsesGatewayKeysAndPersists(t *testing.T) {
 }
 
 func TestSystemOneModelPickerSavesDefaultAndRoleSelection(t *testing.T) {
+	t.Setenv("SYSTEMONE_FIRST_MODEL_KEY", "first-key")
+	t.Setenv("SYSTEMONE_SECOND_MODEL_KEY", "second-key")
 	first := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		if request.Method != http.MethodGet || request.URL.Path != "/v1/models" || request.Header.Get("Authorization") != "Bearer first-key" {
 			t.Errorf("first model request = %s %s, auth %q", request.Method, request.URL.Path, request.Header.Get("Authorization"))
@@ -253,10 +256,10 @@ func TestSystemOneModelPickerSavesDefaultAndRoleSelection(t *testing.T) {
 	store := systemoneconfig.Store{Dir: t.TempDir()}
 	value := systemoneconfig.Default()
 	value.Providers[0].URI = first.URL + "/v1/systemone"
-	value.Providers[0].APIKey = "first-key"
+	value.Providers[0].APIKeyEnv = "SYSTEMONE_FIRST_MODEL_KEY"
 	value.DefaultModel = "typesafe/first-model"
 	value.Providers = append(value.Providers, systemoneconfig.ProviderConfig{
-		ID: "second", URI: second.URL + "/v1/systemone", APIKey: "second-key",
+		ID: "second", URI: second.URL + "/v1/systemone", APIKeyEnv: "SYSTEMONE_SECOND_MODEL_KEY",
 	})
 	if err := store.Save(value); err != nil {
 		t.Fatal(err)

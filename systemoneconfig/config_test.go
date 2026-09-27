@@ -20,9 +20,10 @@ func TestStoreRoundTripAndSelectedClient(t *testing.T) {
 		t.Fatalf("default key = %q", got)
 	}
 	value := Default()
+	t.Setenv("SECOND_SYSTEMONE_API_KEY", "saved-key")
 	value.Providers = append(value.Providers, ProviderConfig{
 		ID: "second", URI: "https://api.example.test/v2/systemone",
-		APIKey: "saved-key",
+		APIKeyEnv: "SECOND_SYSTEMONE_API_KEY",
 	})
 	value.DefaultModel = "second/jev-preview"
 	value.RoleModels = map[string]string{RoleAgentSkillDecision: "typesafe/jev-special"}
@@ -41,8 +42,9 @@ func TestStoreRoundTripAndSelectedClient(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(body), `"api_key": "saved-key"`) || strings.Contains(string(body), "environment-key") {
-		t.Fatal("saved settings did not preserve only the configured API key")
+	if !strings.Contains(string(body), `"api_key_env": "SECOND_SYSTEMONE_API_KEY"`) ||
+		strings.Contains(string(body), "saved-key") || strings.Contains(string(body), "environment-key") {
+		t.Fatal("provider secret was stored in settings")
 	}
 	client, model, err := store.NewClient()
 	if err != nil || client == nil || model != "jev-preview" {
@@ -66,15 +68,34 @@ func TestLegacySingleProviderSettingsMigrateOnLoad(t *testing.T) {
 	value, err := store.LoadOrDefault()
 	if err != nil || len(value.Providers) != 1 || value.DefaultModel != "typesafe/jev-preview" ||
 		value.Providers[0].URI != "https://example.test/v1/systemone" ||
-		value.Providers[0].APIKey != "old-key" {
+		value.Providers[0].APIKeyEnv != "TYPESAFE_API_KEY" {
 		t.Fatalf("migrated = %#v, %v", value, err)
 	}
 	if err := store.Save(value); err != nil {
 		t.Fatal(err)
 	}
 	body, _ := os.ReadFile(store.Path())
-	if !strings.Contains(string(body), `"providers"`) {
+	if !strings.Contains(string(body), `"providers"`) || strings.Contains(string(body), "old-key") {
 		t.Fatalf("saved shape = %s", body)
+	}
+}
+
+func TestSavedInlineProviderKeyIsIgnoredAndRemovedOnSave(t *testing.T) {
+	store := Store{Dir: t.TempDir()}
+	data := []byte(`{"version":2,"server":{"host":"127.0.0.1","port":0},"providers":[{"id":"old","uri":"https://example.test/v1/systemone","api_key":"old-secret"}],"default_model":"old/jev"}`)
+	if err := os.WriteFile(store.Path(), data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	value, err := store.LoadOrDefault()
+	if err != nil || value.Providers[0].ResolveAPIKey() != "" {
+		t.Fatalf("inline provider key was used: %#v, %v", value, err)
+	}
+	if err := store.Save(value); err != nil {
+		t.Fatal(err)
+	}
+	body, err := os.ReadFile(store.Path())
+	if err != nil || strings.Contains(string(body), "old-secret") {
+		t.Fatalf("inline provider key remained in settings: %v", err)
 	}
 }
 
@@ -99,6 +120,7 @@ func TestPreviousMultiProviderSettingsMigrateAssignments(t *testing.T) {
 }
 
 func TestProviderClientUsesEndpointAndKey(t *testing.T) {
+	t.Setenv("TEST_SYSTEMONE_API_KEY", "saved-key")
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		if request.URL.Path != "/v1/models" || request.Header.Get("Authorization") != "Bearer saved-key" {
 			t.Errorf("request path = %q, authorization = %q", request.URL.Path, request.Header.Get("Authorization"))
@@ -106,7 +128,7 @@ func TestProviderClientUsesEndpointAndKey(t *testing.T) {
 		_, _ = writer.Write([]byte(`{"models":[{"name":"jev-preview"}]}`))
 	}))
 	defer server.Close()
-	provider := ProviderConfig{ID: "test", URI: server.URL + "/v1/systemone", APIKey: "saved-key"}
+	provider := ProviderConfig{ID: "test", URI: server.URL + "/v1/systemone", APIKeyEnv: "TEST_SYSTEMONE_API_KEY"}
 	client, err := provider.NewClient()
 	if err != nil {
 		t.Fatal(err)
@@ -126,7 +148,7 @@ func TestValidateRejectsInvalidProvider(t *testing.T) {
 		}
 	}
 	value := Default()
-	value.Providers[0].APIKey = "secret\nother"
+	value.Providers[0].APIKeyEnv = "secret\nother"
 	if err := value.Validate(); err == nil || strings.Contains(err.Error(), "secret\nother") {
 		t.Fatalf("API key validation = %v", err)
 	}

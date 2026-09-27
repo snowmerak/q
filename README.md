@@ -660,7 +660,11 @@ omits the chat-only `learn` tool.
 System One runs independently of Q's chat Gateway. In `q systemone`, use
 ↑/↓ or Tab to select a setting, Enter to edit it, `a` to add a provider, and `d` to
 remove the selected provider. Valid changes are saved as they are made, including
-model selections. Providers contain only endpoint and optional credential settings.
+model selections. Providers contain an endpoint and an optional API key environment
+variable name; q reads provider keys from the environment and does not write them
+to `systemone.json`.
+Older inline provider keys are ignored; set the named environment variable to
+keep authenticating with the provider. The old field is removed on the next save.
 The API keys screen uses `a` to generate a client key and `r` twice to revoke one.
 Generated keys are shown once; only their hashes are stored. With no active keys,
 `q systemone start` accepts requests without authentication.

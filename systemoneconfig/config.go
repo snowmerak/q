@@ -37,7 +37,6 @@ type APIKey = authkey.Record
 type ProviderConfig struct {
 	ID        string `json:"id"`
 	URI       string `json:"uri"`
-	APIKey    string `json:"api_key,omitempty"`
 	APIKeyEnv string `json:"api_key_env,omitempty"`
 }
 
@@ -122,8 +121,8 @@ func (p ProviderConfig) Validate() error {
 		parsed.Opaque != "" || !strings.HasSuffix(strings.TrimRight(parsed.Path, "/"), "/systemone") {
 		return fmt.Errorf("systemone: provider %q URI must be an HTTP(S) /systemone endpoint without credentials, query, or fragment", p.ID)
 	}
-	if strings.ContainsAny(p.APIKey, "\r\n") || strings.ContainsAny(p.APIKeyEnv, "\r\n") {
-		return fmt.Errorf("systemone: provider %q API key settings must be single lines", p.ID)
+	if strings.ContainsAny(p.APIKeyEnv, "\r\n") {
+		return fmt.Errorf("systemone: provider %q API key environment variable must be a single line", p.ID)
 	}
 	return nil
 }
@@ -139,9 +138,6 @@ func (p ProviderConfig) BaseURL() string {
 }
 
 func (p ProviderConfig) ResolveAPIKey() string {
-	if p.APIKey != "" {
-		return p.APIKey
-	}
 	return os.Getenv(p.APIKeyEnv)
 }
 
@@ -212,16 +208,14 @@ func (s Store) LoadOrDefault() (Config, error) {
 	if shape.URI != "" {
 		// Files written by the original single-provider screen remain readable.
 		var old struct {
-			URI    string `json:"uri"`
-			APIKey string `json:"api_key"`
-			Model  string `json:"model"`
+			URI   string `json:"uri"`
+			Model string `json:"model"`
 		}
 		if err := json.Unmarshal(data, &old); err != nil {
 			return Config{}, fmt.Errorf("systemone: decode legacy settings: %w", err)
 		}
 		value := Default()
 		value.Providers[0].URI = old.URI
-		value.Providers[0].APIKey = old.APIKey
 		value.DefaultModel = "typesafe/" + old.Model
 		if err := value.Validate(); err != nil {
 			return Config{}, err

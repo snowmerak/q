@@ -14,6 +14,8 @@ import (
 )
 
 func TestServerRoutesModelsAndDecisionsAcrossProviders(t *testing.T) {
+	t.Setenv("SYSTEMONE_FIRST_PROVIDER_KEY", "first-key")
+	t.Setenv("SYSTEMONE_SECOND_PROVIDER_KEY", "second-key")
 	first := testUpstream(t, "first-key", "first")
 	defer first.Close()
 	second := testUpstream(t, "second-key", "second")
@@ -21,8 +23,8 @@ func TestServerRoutesModelsAndDecisionsAcrossProviders(t *testing.T) {
 
 	value := systemoneconfig.Default()
 	value.Providers = []systemoneconfig.ProviderConfig{
-		{ID: "first", URI: first.URL + "/v1/systemone", APIKey: "first-key"},
-		{ID: "second", URI: second.URL + "/v1/systemone", APIKey: "second-key"},
+		{ID: "first", URI: first.URL + "/v1/systemone", APIKeyEnv: "SYSTEMONE_FIRST_PROVIDER_KEY"},
+		{ID: "second", URI: second.URL + "/v1/systemone", APIKeyEnv: "SYSTEMONE_SECOND_PROVIDER_KEY"},
 	}
 	value.DefaultModel = "first/jev"
 	value.Server.APIKey = "client-key"
@@ -84,10 +86,11 @@ func TestServerRoutesModelsAndDecisionsAcrossProviders(t *testing.T) {
 }
 
 func TestServerRejectsMissingClientKeyAndUnknownProvider(t *testing.T) {
+	t.Setenv("SYSTEMONE_PROVIDER_KEY", "provider-key")
 	upstream := testUpstream(t, "provider-key", "first")
 	defer upstream.Close()
 	value := systemoneconfig.Default()
-	value.Providers[0] = systemoneconfig.ProviderConfig{ID: "first", URI: upstream.URL + "/v1/systemone", APIKey: "provider-key"}
+	value.Providers[0] = systemoneconfig.ProviderConfig{ID: "first", URI: upstream.URL + "/v1/systemone", APIKeyEnv: "SYSTEMONE_PROVIDER_KEY"}
 	value.DefaultModel = "first/jev"
 	value.Server.APIKey = "client-key"
 	instance, err := New(value)
@@ -116,11 +119,12 @@ func TestServerRejectsMissingClientKeyAndUnknownProvider(t *testing.T) {
 }
 
 func TestServerManagedKeysEnableAndDisableAuthentication(t *testing.T) {
+	t.Setenv("SYSTEMONE_PROVIDER_KEY", "provider-key")
 	upstream := testUpstream(t, "provider-key", "first")
 	defer upstream.Close()
 	store := systemoneconfig.Store{Dir: t.TempDir()}
 	value := systemoneconfig.Default()
-	value.Providers[0] = systemoneconfig.ProviderConfig{ID: "first", URI: upstream.URL + "/v1/systemone", APIKey: "provider-key"}
+	value.Providers[0] = systemoneconfig.ProviderConfig{ID: "first", URI: upstream.URL + "/v1/systemone", APIKeyEnv: "SYSTEMONE_PROVIDER_KEY"}
 	value.DefaultModel = "first/jev"
 	var err error
 	value, first, err := store.CreateAPIKey(value, "first client", time.Now())
@@ -171,6 +175,7 @@ func TestServerManagedKeysEnableAndDisableAuthentication(t *testing.T) {
 }
 
 func TestServerPreservesProviderErrorAndRateLimitHeaders(t *testing.T) {
+	t.Setenv("SYSTEMONE_PROVIDER_KEY", "provider-key")
 	upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		writer.Header().Set("X-System-One-Error-Code", "rate_limited")
 		writer.Header().Set("X-RateLimit-Remaining", "0")
@@ -181,7 +186,7 @@ func TestServerPreservesProviderErrorAndRateLimitHeaders(t *testing.T) {
 	defer upstream.Close()
 	value := systemoneconfig.Default()
 	value.Providers[0].URI = upstream.URL + "/v1/systemone"
-	value.Providers[0].APIKey = "provider-key"
+	value.Providers[0].APIKeyEnv = "SYSTEMONE_PROVIDER_KEY"
 	instance, err := New(value)
 	if err != nil {
 		t.Fatal(err)

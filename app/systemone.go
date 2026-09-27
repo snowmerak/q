@@ -35,7 +35,6 @@ const systemOneProviderRow = 4
 const (
 	systemOneFieldProviderID = iota
 	systemOneFieldURI
-	systemOneFieldProviderKey
 	systemOneFieldKeyEnv
 	systemOneFieldDefaultModel
 	systemOneFieldAgentSkillModel
@@ -45,15 +44,12 @@ const (
 
 func (m *model) initSystemOne(dir string) {
 	m.systemOneStore = systemoneconfig.Store{Dir: dir}
-	for index, prompt := range []string{"Provider ID", "URI", "Provider API key", "API key environment variable", "Default model", "Agent Skill Decision model", "Listen host", "Listen port"} {
+	for index, prompt := range []string{"Provider ID", "URI", "API key environment variable", "Default model", "Agent Skill Decision model", "Listen host", "Listen port"} {
 		field := textinput.New()
 		field.Prompt = ""
 		field.Placeholder = prompt
 		field.SetWidth(72)
 		field.CharLimit = 4096
-		if index == systemOneFieldProviderKey {
-			field.EchoMode = textinput.EchoPassword
-		}
 		m.systemOneInputs[index] = field
 	}
 	m.systemOneKeyAlias = textinput.New()
@@ -107,7 +103,7 @@ func (m model) enterSystemOne() (tea.Model, tea.Cmd) {
 func (m *model) loadSystemOneFields() {
 	provider := m.systemOneConfig.Providers[m.systemOneProvider]
 	for index, value := range []string{
-		provider.ID, provider.URI, provider.APIKey, provider.APIKeyEnv,
+		provider.ID, provider.URI, provider.APIKeyEnv,
 		m.systemOneConfig.DefaultModel, m.systemOneConfig.RoleModels[systemoneconfig.RoleAgentSkillDecision],
 		m.systemOneConfig.Server.Host, strconv.Itoa(m.systemOneConfig.Server.Port),
 	} {
@@ -459,7 +455,6 @@ func (m model) systemOneProviderDraft() systemoneconfig.ProviderConfig {
 	return systemoneconfig.ProviderConfig{
 		ID:        strings.TrimSpace(m.systemOneInputs[systemOneFieldProviderID].Value()),
 		URI:       strings.TrimSpace(m.systemOneInputs[systemOneFieldURI].Value()),
-		APIKey:    m.systemOneInputs[systemOneFieldProviderKey].Value(),
 		APIKeyEnv: strings.TrimSpace(m.systemOneInputs[systemOneFieldKeyEnv].Value()),
 	}
 }
@@ -721,7 +716,7 @@ func (m model) systemOneKeyRow(index int, alias, id, state string) string {
 func (m model) viewSystemOneEditor() string {
 	var body strings.Builder
 	first, last := systemOneFieldProviderID, systemOneFieldKeyEnv
-	labels := []string{"Provider ID", "Endpoint URI", "Provider API key", "API key env"}
+	labels := []string{"Provider ID", "Endpoint URI", "API key env"}
 	if m.systemOnePage == systemOnePageNetwork {
 		first, last = systemOneFieldHost, systemOneFieldPort
 		labels = []string{"Listen host", "Listen port"}
@@ -746,13 +741,13 @@ func (m model) viewSystemOneEditor() string {
 	if m.systemOnePage == systemOnePageNetwork {
 		body.WriteString("\n")
 		body.WriteString(subtleStyle.Render("Manage client authentication in API keys."))
-	} else if m.systemOneInputs[systemOneFieldProviderKey].Value() == "" &&
+	} else if m.systemOneInputs[systemOneFieldKeyEnv].Value() != "" &&
 		os.Getenv(m.systemOneInputs[systemOneFieldKeyEnv].Value()) != "" {
 		body.WriteString("\n")
-		body.WriteString(subtleStyle.Render("Using " + m.systemOneInputs[systemOneFieldKeyEnv].Value() + " from the environment"))
-	} else if m.systemOneInputs[systemOneFieldProviderKey].Value() == "" {
+		body.WriteString(subtleStyle.Render("Using " + m.systemOneInputs[systemOneFieldKeyEnv].Value() + " for upstream authentication."))
+	} else {
 		body.WriteString("\n")
-		body.WriteString(subtleStyle.Render("No provider API key; requests omit Authorization."))
+		body.WriteString(subtleStyle.Render("No environment key is set; upstream requests omit Authorization."))
 	}
 	return body.String()
 }
