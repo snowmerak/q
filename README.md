@@ -250,11 +250,11 @@ does not stage, commit, or modify files.
 
 Use `/mode delegation` to have the main agent coordinate bounded subagents.
 The manager owns product requirements and the work plan. The senior developer
-assigns implementation to a junior developer, inspects the changes, and asks
-for corrections when needed. The interviewer clarifies consequential questions;
-the researcher compares approaches. The senior developer also reviews concrete results.
-Each role can read relevant workspace evidence directly. The junior developer
-has workspace editing and command tools.
+can edit and verify changes directly or assign bounded implementation to a junior
+developer, then inspect the result and request corrections when needed. The
+interviewer clarifies consequential questions; the researcher compares approaches.
+Each role can read relevant workspace evidence directly. Both developers have
+workspace editing and command tools.
 
 ```mermaid
 flowchart LR
@@ -445,9 +445,9 @@ Inner delegated agents share the host-provided `task_start` and `task_complete`
 lifecycle. External delegates bypass native model and tool scoping and use their existing ACP
 invocation adapter and Loom capture. General chat receives `delegate_list` and `delegate`; custom agents
 receive them only when their profile has direct grants. The manager can delegate
-to the interviewer, researcher, and senior developer. The senior
-developer can assign implementation to the junior developer and review its
-result. The researcher can delegate to configured web search.
+to the interviewer, researcher, and senior developer. The senior developer can
+implement directly or assign work to the junior developer and review its result.
+The researcher can delegate to configured web search.
 
 ## Sessions, history, and learning
 

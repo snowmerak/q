@@ -23,7 +23,7 @@ The workspace is the operating boundary for q's file tools. Shell commands start
 
 Use ordinary chat when the request is focused and you want q to inspect or edit directly.
 
-Use `/mode delegation` when the main agent should coordinate occupational subagents. The manager handles requirements and planning; the senior developer assigns and reviews implementation.
+Use `/mode delegation` when the main agent should coordinate occupational subagents. The manager handles requirements and planning; the senior developer can implement directly or assign and review implementation.
 
 Use `q sprint` for one delegated task without the interactive UI:
 

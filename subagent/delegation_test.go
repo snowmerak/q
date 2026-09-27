@@ -48,12 +48,12 @@ func TestBuiltinAgentDefinitionsArePublicAndBounded(t *testing.T) {
 		t.Fatalf("junior implementation surface = %#v", junior)
 	}
 	senior, found := registry.Get(BuiltinSeniorDeveloperID)
-	if !found || senior.Info.Role != config.AgentRoleReviewer || !slices.Contains(senior.Tools, "loom_read") {
-		t.Fatalf("senior developer evidence tools = %#v", senior)
+	if !found || senior.Info.Role != config.AgentRoleReviewer || !senior.Info.MutatesWorkspace {
+		t.Fatalf("senior developer definition = %#v", senior)
 	}
-	for _, forbidden := range []string{"edit_file", "write_file", "create_directory", "move_path", "copy_path", "remove_path", "run_command"} {
-		if slices.Contains(senior.Tools, forbidden) {
-			t.Fatalf("senior developer received direct workspace mutation tool %q", forbidden)
+	for _, required := range []string{"loom_read", "edit_file", "write_file", "create_directory", "move_path", "copy_path", "remove_path", "run_command"} {
+		if !slices.Contains(senior.Tools, required) {
+			t.Fatalf("senior developer missing workspace tool %q", required)
 		}
 	}
 	for _, name := range want {
@@ -107,7 +107,7 @@ func TestPublicAgentDefinitionsIncludeExternalACPAdapters(t *testing.T) {
 	}
 }
 
-func TestSeniorDeveloperToolSurfaceReadsWithoutDirectMutation(t *testing.T) {
+func TestSeniorDeveloperToolSurfaceAllowsDirectMutation(t *testing.T) {
 	registry, err := NewRegistry(PublicAgentDefinitions())
 	if err != nil {
 		t.Fatal(err)
@@ -120,18 +120,17 @@ func TestSeniorDeveloperToolSurfaceReadsWithoutDirectMutation(t *testing.T) {
 		client.Tool{Type: client.ToolTypeFunction, Function: client.FunctionDefinition{Name: "read_file"}},
 		client.Tool{Type: client.ToolTypeFunction, Function: client.FunctionDefinition{Name: "loom_read"}},
 		client.Tool{Type: client.ToolTypeFunction, Function: client.FunctionDefinition{Name: "edit_file"}},
+		client.Tool{Type: client.ToolTypeFunction, Function: client.FunctionDefinition{Name: "write_file"}},
+		client.Tool{Type: client.ToolTypeFunction, Function: client.FunctionDefinition{Name: "run_command"}},
 	)}
 	tools, err := selectDefinitionTools(senior, runtime)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, required := range []string{DelegateListToolName, DelegateToolName, TaskStartToolName, TaskCompleteToolName, "read_file", "loom_read"} {
+	for _, required := range []string{DelegateListToolName, DelegateToolName, TaskStartToolName, TaskCompleteToolName, "read_file", "loom_read", "edit_file", "write_file", "run_command"} {
 		if !hasTool(tools, required) {
 			t.Fatalf("senior developer runtime is missing %q: %#v", required, tools)
 		}
-	}
-	if hasTool(tools, "edit_file") {
-		t.Fatalf("senior developer runtime exposed edit_file: %#v", tools)
 	}
 }
 

@@ -47,7 +47,7 @@ Ordinary chat starts in `default` mode, where the main agent can use its tools d
 /mode delegation
 ```
 
-The mode is saved with the session. `/mode default` restores the direct-tool loop. The manager owns requirements and planning; the senior developer assigns implementation to the junior developer and reviews its changes.
+The mode is saved with the session. `/mode default` restores the direct-tool loop. The manager owns requirements and planning; the senior developer can edit directly or assign implementation to the junior developer, then reviews the result.
 
 The transcript shows child progress and tool calls; press `Ctrl+G` to expand or collapse the trace. Each call saves a child session and a bookmark under the parent. On restart, q recovers nested children before continuing the parent. A tool call with no recorded result returns `unknown` and is not run again automatically. An interrupted external ACP invocation also returns `unknown` because its internal turn cannot be resumed.
 

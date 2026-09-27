@@ -167,7 +167,7 @@ func TestCustomScreenListsBuiltinDefinitionsAsFixed(t *testing.T) {
 	}
 }
 
-func TestCustomScreenShowsSeniorDeveloperReviewRoleAndIndirectMutation(t *testing.T) {
+func TestCustomScreenShowsSeniorDeveloperReviewRoleAndDirectMutation(t *testing.T) {
 	m := customViewFixture(t, 100, 36, true)
 	m.reloadCustom()
 	found := false
@@ -182,14 +182,9 @@ func TestCustomScreenShowsSeniorDeveloperReviewRoleAndIndirectMutation(t *testin
 		t.Fatal("senior developer definition is missing")
 	}
 	plain := ansi.Strip(m.customSelectionDetail())
-	for _, wanted := range []string{"INNER · MUTATES WORKSPACE", "Role    reviewer", "read_file", "list_directory", "loom_read", subagent.BuiltinJuniorDeveloperID, subagent.BuiltinWebSearchID} {
+	for _, wanted := range []string{"INNER · MUTATES WORKSPACE", "Role    reviewer", "read_file", "list_directory", "loom_read", "edit_file", "write_file", "run_command", subagent.BuiltinJuniorDeveloperID, subagent.BuiltinWebSearchID} {
 		if !strings.Contains(plain, wanted) {
 			t.Fatalf("senior developer detail missing %q:\n%s", wanted, plain)
-		}
-	}
-	for _, forbidden := range []string{"edit_file", "write_file", "run_command"} {
-		if strings.Contains(plain, forbidden) {
-			t.Fatalf("senior developer detail exposed direct mutation tool %q:\n%s", forbidden, plain)
 		}
 	}
 }

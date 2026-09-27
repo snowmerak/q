@@ -343,10 +343,8 @@ func TestAllowedDelegationRunsLifecycleAndCapturesResult(t *testing.T) {
 	if len(configuredClient.requests) != 2 || len(configuredClient.terminalRequests) != 1 {
 		t.Fatalf("requests = %#v, terminal = %#v", configuredClient.requests, configuredClient.terminalRequests)
 	}
-	for _, tool := range configuredClient.requests[0].Tools {
-		if tool.Function.Name == "write_file" {
-			t.Fatalf("Scout received a mutation tool: %#v", configuredClient.requests[0].Tools)
-		}
+	if !requestHasTool(configuredClient.requests[0].Tools, "write_file") {
+		t.Fatalf("senior developer is missing write_file: %#v", configuredClient.requests[0].Tools)
 	}
 	for _, required := range []string{subagent.TaskStartToolName, subagent.TaskCompleteToolName} {
 		if !requestHasTool(configuredClient.requests[0].Tools, required) {

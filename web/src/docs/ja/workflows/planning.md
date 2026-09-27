@@ -22,7 +22,7 @@ toc:
 
 manager は PM として要件、優先順位、受け入れ基準、必要な作業計画を担当します。interviewer はユーザーの判断が必要な質問を整理し、research は特定の問題を調査します。各ロールは関連するワークスペースの根拠を直接読めます。
 
-senior developer は `reviewer` モデルロールを使います。junior developer に範囲を決めた実装を任せ、実際の変更と検証結果を直接レビューし、必要なら修正を依頼します。junior developer は `coder` モデルロールと編集・コマンドツールを使います。独立した `builtin/reviewer` サブエージェントは廃止されたため、技術レビューは `builtin/senior-developer` に依頼します。
+senior developer は `reviewer` モデルロールと編集・コマンドツールを使います。自分でコードを変更するか、junior developer に範囲を決めた実装を任せ、実際の変更と検証結果をレビューして必要なら修正を依頼できます。junior developer も `coder` モデルロールと編集・コマンドツールを使います。独立した `builtin/reviewer` サブエージェントは廃止されたため、技術レビューは `builtin/senior-developer` に依頼します。
 
 ## 以前の plan モード
 

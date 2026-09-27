@@ -42,7 +42,7 @@ toc:
 
 ## 在聊天中委派
 
-普通聊天默认使用 `default` 模式，主代理可直接调用工具。要将工作交给有明确范围的子代理，请在当前会话输入 `/mode delegation`。输入 `/mode default` 可恢复直接使用工具的循环。模式会保存在会话中。manager 作为 PM 负责需求和计划，senior developer 将实现委派给 junior developer 并审查修改。
+普通聊天默认使用 `default` 模式，主代理可直接调用工具。要将工作交给有明确范围的子代理，请在当前会话输入 `/mode delegation`。输入 `/mode default` 可恢复直接使用工具的循环。模式会保存在会话中。manager 作为 PM 负责需求和计划，senior developer 可以直接修改，也可以将实现委派给 junior developer，然后审查结果。
 
 对话中会显示子代理进度和工具调用；按 `Ctrl+G` 展开或收起详细记录。每次调用都会保存父会话书签和子会话。重启后，q 先恢复最深层的子会话，再继续父会话。没有记录结果的工具调用会返回 `unknown`，不会自动重试。中断的外部 ACP 调用也会返回 `unknown`，因为其内部轮次无法恢复。
 

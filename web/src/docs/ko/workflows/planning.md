@@ -22,7 +22,7 @@ toc:
 
 manager는 PM 직책으로 요구사항, 우선순위, 수용 기준과 필요한 작업 계획을 맡습니다. interviewer는 사용자 결정이 필요한 질문을 가려내고 research는 특정 문제를 조사합니다. 각 역할은 필요한 워크스페이스 근거를 직접 읽을 수 있습니다.
 
-senior developer는 `reviewer` 모델 역할을 사용합니다. junior developer에게 범위가 정해진 구현을 맡기고 실제 변경과 검증 결과를 직접 검토하며 필요하면 수정을 요청합니다. junior developer는 `coder` 모델 역할과 수정·명령 도구를 사용합니다. 별도 `builtin/reviewer` 서브에이전트는 제거되었으므로 기술 검토는 `builtin/senior-developer`에 요청하세요.
+senior developer는 `reviewer` 모델 역할과 수정·명령 도구를 사용합니다. 직접 코드를 수정하거나 junior developer에게 범위가 정해진 구현을 맡길 수 있으며, 실제 변경과 검증 결과를 검토하고 필요하면 수정을 요청합니다. junior developer도 `coder` 모델 역할과 수정·명령 도구를 사용합니다. 별도 `builtin/reviewer` 서브에이전트는 제거되었으므로 기술 검토는 `builtin/senior-developer`에 요청하세요.
 
 ## 이전 plan 모드
 

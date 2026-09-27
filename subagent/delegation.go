@@ -248,6 +248,8 @@ func BuiltinAgentDefinitions() []AgentDefinition {
 		"lsp_hover", "lsp_definition", "lsp_references", "lsp_document_symbols",
 		"lsp_workspace_symbols",
 	}
+	developerTools := append(append([]string(nil), readTools...),
+		"edit_file", "write_file", "create_directory", "move_path", "copy_path", "remove_path", "run_command", "cmd_status", "wait")
 	return []AgentDefinition{
 		{
 			Info: DelegateInfo{Name: BuiltinInterviewerID, Source: "builtin", Kind: AgentKindInner, Role: config.AgentRoleInterviewer,
@@ -265,16 +267,16 @@ func BuiltinAgentDefinitions() []AgentDefinition {
 		},
 		{
 			Info: DelegateInfo{Name: BuiltinSeniorDeveloperID, Source: "builtin", Kind: AgentKindInner, Role: config.AgentRoleReviewer,
-				Description: "Own the technical approach, delegate bounded implementation, inspect changes and verification, and return actionable review."},
-			SystemPrompt: "You are the senior developer accountable for the technical result. Inspect the relevant code, select a coherent approach, and delegate bounded implementation to the junior developer when useful. Give concrete scope, constraints, and acceptance criteria. Review the actual changes and verification evidence, return specific corrections to the junior developer, and recheck the revised result. Report what was verified and what remains uncertain. Do not claim work is complete from a delegate summary alone. Do not edit the workspace yourself.",
-			Tools:        append([]string(nil), readTools...),
+				Description: "Own the technical approach, implement directly or delegate bounded work, and review changes and verification.", MutatesWorkspace: true},
+			SystemPrompt: "You are the senior developer accountable for the technical result. Inspect the relevant code and select a coherent approach. Make focused changes yourself when appropriate, or delegate bounded implementation to the junior developer when useful. Give the junior developer concrete scope, constraints, and acceptance criteria. Review actual changes and verification evidence, return specific corrections when needed, and recheck the result. Report what was verified and what remains uncertain. Do not claim work is complete from a delegate summary alone.",
+			Tools:        append([]string(nil), developerTools...),
 			Delegates:    []string{BuiltinJuniorDeveloperID, BuiltinResearchID},
 		},
 		{
 			Info: DelegateInfo{Name: BuiltinJuniorDeveloperID, Source: "builtin", Kind: AgentKindInner, Role: config.AgentRoleCoder,
 				Description: "Read and modify the code for an assigned task, run relevant checks, and revise it after review.", MutatesWorkspace: true},
 			SystemPrompt: "You are the junior developer responsible for an assigned implementation. Inspect the relevant code and instructions, make the requested change, run focused verification, and report changed files, results, and remaining risks. When the senior developer returns feedback, revise the implementation and verify again. Stay within the assigned scope and do not delegate your implementation.",
-			Tools:        append(append([]string(nil), readTools...), "edit_file", "write_file", "create_directory", "move_path", "copy_path", "remove_path", "run_command", "cmd_status", "wait"),
+			Tools:        append([]string(nil), developerTools...),
 		},
 		{
 			Info: DelegateInfo{Name: BuiltinResearchID, Source: "builtin", Kind: AgentKindInner, Role: config.AgentRoleResearch,
