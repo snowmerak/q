@@ -30,7 +30,7 @@
   <h2>{{ copy.featureHeading }}</h2><p class="feature-band__lead">{{ copy.featureLead }}</p>
   <div class="feature-columns">
     {% for feature in copy.features %}<article class="feature-item"><span class="feature-item__icon">
-      {% if feature.icon == 'plan' %}<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3h9l4 4v14H6zM15 3v5h5M9 12h7M9 16h5"></path></svg>{% endif %}
+      {% if feature.icon == 'scope' %}<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3h9l4 4v14H6zM15 3v5h5M9 12h7M9 16h5"></path></svg>{% endif %}
       {% if feature.icon == 'delegate' %}<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 7 5 5-5 5m8 0h6"></path></svg>{% endif %}
       {% if feature.icon == 'remember' %}<svg viewBox="0 0 24 24" aria-hidden="true"><ellipse cx="12" cy="6" rx="7" ry="3"></ellipse><path d="M5 6v6c0 1.7 3.1 3 7 3s7-1.3 7-3V6M5 12v6c0 1.7 3.1 3 7 3s7-1.3 7-3v-6"></path></svg>{% endif %}
     </span><h3>{{ feature.title }}</h3><p>{{ feature.body }}</p></article>{% endfor %}

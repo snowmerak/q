@@ -34,6 +34,8 @@ toc:
 | `/lsp` | Configure language-server profiles and roots. |
 | `/help` | Open the complete command and key guide. |
 
+The former `/plan`, `/auto-approve`, `/auto-resolve`, and `/autonomous` commands have been removed. Use `/mode delegation` to coordinate work or `/subagent builtin/manager <request>` for a focused PM request.
+
 ## Standalone commands
 
 | Command | Purpose |

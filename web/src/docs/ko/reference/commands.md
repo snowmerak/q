@@ -35,6 +35,8 @@ toc:
 | `/lsp` | 언어 서버 프로필과 루트를 구성합니다. |
 | `/help` | 전체 명령 및 키 도움말을 엽니다. |
 
+기존 `/plan`, `/auto-approve`, `/auto-resolve`, `/autonomous` 명령은 제거되었습니다. 작업을 조율하려면 `/mode delegation`을, PM 업무만 요청하려면 `/subagent builtin/manager <request>`를 사용하세요.
+
 ## 독립 실행 명령
 
 | 명령 | 용도 |

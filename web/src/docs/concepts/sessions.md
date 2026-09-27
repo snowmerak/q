@@ -17,7 +17,7 @@ toc:
 
 ## Durable sessions
 
-Each workspace can hold multiple UUID-based sessions under `.q/sessions/`. The startup picker shows their titles and recent activity. Press `d` on an inactive session and `y` to delete it; `n` or Esc cancels. The current session and sessions open in another process cannot be deleted. Deletion removes the conversation and resumable plan checkpoint, but preserves durable Workspace Memory archive records.
+Each workspace can hold multiple UUID-based sessions under `.q/sessions/`. The startup picker shows their titles and recent activity. Press `d` on an inactive session and `y` to delete it; `n` or Esc cancels. The current session and sessions open in another process cannot be deleted. Deletion removes the session and its delegated child state, but preserves durable Workspace Memory archive records.
 
 One process owns a selected session. Another q process may open a different session in the same workspace, but session locks do not serialize edits to the repository itself.
 
@@ -33,7 +33,7 @@ The primary session record is:
 
 Session v2 stores messages in a common format for Chat Completions and Responses. Existing v1 Chat Completions sessions are converted on load and saved in the new format on the next write. The record also keeps the selected chat loop mode and Responses replay state when applicable.
 
-Approved plan execution adds a resumable `plan-execution.json` beside it.
+Earlier versions could store `plan-execution.json` beside the session. It remains legacy data; the removed `/plan` workflow does not create new checkpoints.
 
 ## Delegated recovery
 

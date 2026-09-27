@@ -35,6 +35,8 @@ toc:
 | `/lsp` | 配置语言服务器配置文件和根目录。 |
 | `/help` | 打开完整的命令和按键指南。 |
 
+旧版 `/plan`、`/auto-approve`、`/auto-resolve` 和 `/autonomous` 命令已移除。协调工作请使用 `/mode delegation`；仅请求 PM 工作时使用 `/subagent builtin/manager <request>`。
+
 ## 独立命令
 
 | 命令 | 用途 |

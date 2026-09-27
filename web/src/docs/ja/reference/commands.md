@@ -35,6 +35,8 @@ toc:
 | `/lsp` | 言語サーバーのプロファイルとルートを設定します。 |
 | `/help` | コマンドとキーのガイドを開きます。 |
 
+以前の `/plan`、`/auto-approve`、`/auto-resolve`、`/autonomous` コマンドは廃止されました。作業の調整には `/mode delegation`、PM の作業だけを依頼する場合は `/subagent builtin/manager <request>` を使います。
+
 ## 単独コマンド
 
 | コマンド | 用途 |

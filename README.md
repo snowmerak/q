@@ -21,7 +21,7 @@ the resulting diff, and create a commit without leaving the terminal.
   xAI, Anthropic, and the Codex App Server, all exposed through q's managed
   Gateway.
 - **Durable sessions** — API-independent conversation records, recoverable
-  delegation trees, legacy plan records, and searchable history.
+  delegation trees, and searchable history.
 - **Bounded tool output** — large tool results are captured as immutable Loom
   artifacts instead of being copied through every prompt.
 - **Repository review** — a syntax-highlighted `/changes` browser and a guided
@@ -269,6 +269,11 @@ flowchart LR
 The main agent can delegate directly to a suitable role. In `default` mode it
 can also use its own tools. `q sprint` starts one delegation mode turn in a
 fresh workspace session.
+
+The former `/plan` command and its approval automation have been removed. Use
+`/subagent builtin/manager <request>` for a focused PM task, or `/mode delegation`
+to let the main agent coordinate specialists. Existing plan checkpoints remain
+on disk as legacy data; new work does not resume that workflow.
 
 ## Commit workflow
 
@@ -731,7 +736,7 @@ restricted by q; Windows file modes do not manage ACLs.
 
 The JSON records are the source of truth; Bleve and HNSW data are derived and
 rebuildable. Loom garbage collection protects references from active session
-projections and plan checkpoints, subject to its configured grace period.
+projections and saved records, subject to its configured grace period.
 
 ## Runtime layout
 

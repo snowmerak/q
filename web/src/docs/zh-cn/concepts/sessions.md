@@ -32,7 +32,7 @@ q 将用户可见的完整记录与发给模型的压缩请求上下文分别保
 .q/sessions/<uuid>/session.json
 ```
 
-获批计划的执行还会在旁边写入可恢复的 `plan-execution.json`。
+旧版本可能在会话旁保存 `plan-execution.json`。已移除的 `/plan` 工作流不再创建新检查点，现有文件仅作为历史数据保留。
 
 会话 v2 使用 Chat Completions 和 Responses 共用的消息格式。现有 v1 Chat Completions 会话在读取时转换，并在下次保存时写入新格式。选定的聊天循环模式和适用时的 Responses 重放状态也会保存。
 
