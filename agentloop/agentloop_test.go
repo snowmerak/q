@@ -149,11 +149,49 @@ func toolResponseWithArguments(name, arguments string) *client.ChatResponse {
 	return response
 }
 
+func TestMainLoopExposesAndExecutesMemoryToolWithoutCallingWorkspaceRuntime(t *testing.T) {
+	configured := &scriptedClient{}
+	configured.chat = func(request client.ChatRequest) *client.ChatResponse {
+		for _, name := range []string{memory.SetActiveWorkTool, memory.CompleteWorkTool, memory.RecordFactTool} {
+			found := false
+			for _, tool := range request.Tools {
+				found = found || tool.Function.Name == name
+			}
+			if !found {
+				t.Fatalf("model request missing %s", name)
+			}
+		}
+		if len(configured.requests) == 1 {
+			return toolResponseWithArguments(memory.SetActiveWorkTool, `{"description":"Inspect project files"}`)
+		}
+		return finalResponse("done")
+	}
+	runtime := &scriptedTools{}
+	events := make(chan agentloop.Event)
+	go agentloop.RunAgentLoop(t.Context(), agentloop.Request{
+		Client: configured, Tools: runtime, Model: "test-model",
+		Messages: []client.Message{{Role: client.RoleUser, Content: "Inspect the project"}},
+	}, events)
+	var memoryResult client.Message
+	for event := range events {
+		if err := event.Err(); err != nil {
+			t.Fatal(err)
+		}
+		if message, ok := event.Message(); ok && message.Role == client.RoleTool && message.Name == memory.SetActiveWorkTool {
+			memoryResult = message
+		}
+	}
+	if len(runtime.calls) != 0 || memoryResult.Name != memory.SetActiveWorkTool || !strings.Contains(memoryResult.Content, "Inspect project files") {
+		t.Fatalf("memory tool was not handled by the loop: runtime calls=%d result=%#v", len(runtime.calls), memoryResult)
+	}
+}
+
 func TestDelegationModeRejectsSuccessUntilWorkToolSucceeds(t *testing.T) {
 	responses := []*client.ChatResponse{
 		toolResponseWithArguments("task_start", `{"objective":"inspect project"}`),
 		toolResponseWithArguments("task_complete", `{"outcome":"succeeded","summary":"read files"}`),
 		toolResponseWithArguments("delegate_list", `{}`),
+		toolResponseWithArguments(memory.RecordFactTool, `{"fact":"inspection remains pending"}`),
 		toolResponseWithArguments("task_complete", `{"outcome":"succeeded","summary":"read files"}`),
 		toolResponseWithArguments("delegate", `{"subagent_name":"builtin/scout","prompt":"inspect project"}`),
 		toolResponseWithArguments("task_complete", `{"outcome":"succeeded","summary":"inspected project"}`),

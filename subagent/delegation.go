@@ -489,6 +489,7 @@ func (r GeneralRunner) Run(ctx context.Context, prompt string) (result TaskResul
 	if err != nil {
 		return TaskResult{}, err
 	}
+	available = IncludeMemoryTools(available)
 	if r.Resume != nil {
 		if err := r.Spec.Restore(r.Resume.Spec); err != nil {
 			return TaskResult{}, err
@@ -759,7 +760,9 @@ func (r *GeneralRunner) completeGeneralCalls(ctx context.Context, state *General
 				}
 			}
 		default:
-			if !*started {
+			if result, handled := history.CallMemoryTool(call); handled {
+				toolResult = result
+			} else if !*started {
 				toolResult = scoutToolError(errors.New("call task_start before using tools"))
 			} else if recovering && call.Function.Name != DelegateToolName {
 				toolResult = client.ToolResult{Content: `{"status":"unknown","detail":"tool execution outcome could not be confirmed after session restart"}`, IsError: true}

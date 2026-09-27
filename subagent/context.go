@@ -20,6 +20,14 @@ type ContextCompactor struct {
 	usage          client.Usage
 }
 
+// IncludeMemoryTools adds Q's session-memory tools to every role catalog,
+// including strict custom roles that restrict workspace tools.
+func IncludeMemoryTools(tools []client.Tool) []client.Tool {
+	return memory.AppendMemoryTools(tools)
+}
+
+func IsMemoryTool(name string) bool { return memory.IsMemoryTool(name) }
+
 // PreserveTools keeps complete exchanges for semantically authoritative data
 // such as a user's answer, a staged repository snapshot, or an acknowledged
 // proposition. Other completed tool results remain eligible for summarization.
@@ -72,6 +80,15 @@ func (c *ContextCompactor) Append(messages ...client.Message) {
 	}
 }
 
+// CallMemoryTool handles a session-memory tool without using the workspace
+// runtime. Its result must still be appended to the context and lifecycle.
+func (c *ContextCompactor) CallMemoryTool(call client.ToolCall) (client.ToolResult, bool) {
+	if c == nil || c.memory == nil {
+		return client.ToolResult{}, false
+	}
+	return c.memory.CallMemoryTool(call)
+}
+
 // SetAnchor refreshes structured state that is maintained by the host, such
 // as Thinker's acknowledged proposition ledger. It cannot replace history.
 func (c *ContextCompactor) SetAnchor(index int, message client.Message) error {
@@ -111,6 +128,9 @@ func (c *ContextCompactor) CompactIfNeeded(ctx context.Context, spec *Spec, conf
 		SummarizeOversizedRecent: true,
 	})
 	if err != nil {
+		if errors.Is(err, memory.ErrNothingToCompact) {
+			return nil
+		}
 		return err
 	}
 	compactor := *spec

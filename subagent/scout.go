@@ -178,7 +178,7 @@ func (r ScoutRunner) Run(ctx context.Context, task ScoutTask) (result ScoutResul
 }
 
 func (r *ScoutRunner) run(ctx context.Context, task ScoutTask, prompt string, lifecycle *Lifecycle) (ScoutResult, error) {
-	tools := scoutTools(r.Tools.Tools())
+	tools := IncludeMemoryTools(scoutTools(r.Tools.Tools()))
 	messages := []client.Message{
 		{Role: client.RoleSystem, Content: withRetrievalCatalog(scoutInstructions(), tools)},
 		{Role: client.RoleUser, Content: prompt},
@@ -259,6 +259,8 @@ func (r *ScoutRunner) run(ctx context.Context, task ScoutTask, prompt string, li
 					}
 					toolResult = scoutToolError(err)
 				}
+			} else if memoryResult, handled := history.CallMemoryTool(call); handled {
+				toolResult = memoryResult
 			} else if !scoutToolAllowed(call.Function.Name) {
 				toolResult = scoutToolError(fmt.Errorf("tool %q is not available to scout", call.Function.Name))
 			} else {

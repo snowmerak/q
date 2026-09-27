@@ -247,7 +247,7 @@ func runGriller[T any](
 	if err != nil {
 		return output, err
 	}
-	available := grillerToolsWithCompletion(invocationTools.Tools(), completion.tool)
+	available := IncludeMemoryTools(grillerToolsWithCompletion(invocationTools.Tools(), completion.tool))
 	messages := []client.Message{
 		{Role: client.RoleSystem, Content: withRetrievalCatalog(completion.instructions, available)},
 		{Role: client.RoleUser, Content: completion.requestLabel + "\n\n" + string(body)},
@@ -303,6 +303,11 @@ func runGriller[T any](
 				Agent: "griller", TaskID: task.ID, ParentID: task.ParentID,
 				Action: ProgressTool, Detail: call.Function.Name,
 			})
+			if memoryResult, handled := history.CallMemoryTool(call); handled {
+				traceToolResult(r.Trace, "griller", task.ID, task.ParentID, call, memoryResult)
+				history.Append(client.ToolResultMessage(call, memoryResult))
+				continue
+			}
 			result := client.ToolResult{}
 			switch call.Function.Name {
 			case AskToUserToolName:
@@ -445,7 +450,7 @@ func (r PlannerRunner) Run(ctx context.Context, brief GrillBrief) (proposal Plan
 		rounds = defaultPlanningRounds
 	}
 	reminders := 0
-	available := plannerTools(r.Tools, executors...)
+	available := IncludeMemoryTools(plannerTools(r.Tools, executors...))
 	history := NewContextCompactor(r.Spec, messages, available, len(messages))
 	for round := 0; round < rounds; round++ {
 		if err := history.CompactIfNeeded(ctx, &r.Spec, r.Client); err != nil {
@@ -500,6 +505,8 @@ func (r PlannerRunner) Run(ctx context.Context, brief GrillBrief) (proposal Plan
 					return proposal, err
 				}
 				result = scoutToolError(parseErr)
+			} else if memoryResult, handled := history.CallMemoryTool(call); handled {
+				result = memoryResult
 			} else if call.Function.Name == ExternalSearchToolName && r.Tools != nil && hasTool(available, ExternalSearchToolName) {
 				input, parseErr := ParseExternalSearchInput(call.Function.Arguments)
 				if parseErr != nil {

@@ -59,6 +59,13 @@ func (c *Context) Append(messages ...client.Message) {
 	}
 }
 
+func (c *Context) CallMemoryTool(call client.ToolCall) (client.ToolResult, bool) {
+	if c == nil || c.manager == nil {
+		return client.ToolResult{}, false
+	}
+	return c.manager.CallMemoryTool(call)
+}
+
 func (c *Context) Observe(usage client.Usage, requestEstimate int) {
 	if c == nil || c.manager == nil {
 		return
@@ -96,6 +103,9 @@ func (c *Context) CompactIfNeeded(
 		ContinuationMessage: "keep going",
 	})
 	if err != nil {
+		if errors.Is(err, memory.ErrNothingToCompact) {
+			return nil, nil
+		}
 		return nil, fmt.Errorf("agent loop: plan context compaction: %w", err)
 	}
 	response, err := chatWithEmptyResponseRecovery(ctx, configuredClient, client.ChatRequest{

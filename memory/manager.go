@@ -60,6 +60,7 @@ type Stats struct {
 type Manager struct {
 	policy           Policy
 	messages         []client.Message
+	taskMemory       taskMemory
 	lastPromptTokens int
 	providerOverhead int
 	compactions      int
@@ -80,6 +81,8 @@ func (m *Manager) Configure(policy Policy) {
 
 func (m *Manager) Reset(messages []client.Message) {
 	m.messages = cloneMessages(messages)
+	m.taskMemory = taskMemory{}
+	m.taskMemory.replay(messages)
 	m.lastPromptTokens = 0
 	m.providerOverhead = 0
 	m.compactions = 0
@@ -87,6 +90,26 @@ func (m *Manager) Reset(messages []client.Message) {
 
 func (m *Manager) Append(message client.Message) {
 	m.messages = append(m.messages, message)
+	if message.Role == client.RoleTool && IsMemoryTool(message.Name) {
+		m.taskMemory.replay([]client.Message{message})
+	}
+}
+
+// CallMemoryTool applies one built-in memory update for this context. The
+// caller must append and persist the returned tool result like any other tool.
+func (m *Manager) CallMemoryTool(call client.ToolCall) (client.ToolResult, bool) {
+	if !IsMemoryTool(call.Function.Name) {
+		return client.ToolResult{}, false
+	}
+	result, err := m.taskMemory.call(call)
+	if err == nil {
+		return result, true
+	}
+	body, marshalErr := json.Marshal(map[string]string{"error": err.Error()})
+	if marshalErr != nil {
+		return client.ToolResult{Content: `{"error":"memory update failed"}`, IsError: true}, true
+	}
+	return client.ToolResult{Content: string(body), IsError: true}, true
 }
 
 // Replace updates a live task anchor without discarding token calibration or
@@ -318,6 +341,18 @@ func (m *Manager) ApplyCheckpoint(plan Plan, response string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	if m.taskMemory.touchedActive || m.taskMemory.touchedPrevious || m.taskMemory.touchedFacts {
+		var value Checkpoint
+		if err := json.Unmarshal([]byte(checkpoint), &value); err != nil {
+			return "", fmt.Errorf("memory: decode normalized checkpoint: %w", err)
+		}
+		value = m.taskMemory.overlay(value)
+		body, err := json.Marshal(value)
+		if err != nil {
+			return "", fmt.Errorf("memory: encode maintained checkpoint: %w", err)
+		}
+		checkpoint = string(body)
+	}
 	compacted := make([]client.Message, 0, len(plan.Immutable)+len(plan.RetainedSkillResources)+len(plan.Recent)+1)
 	compacted = append(compacted, cloneMessages(plan.Immutable)...)
 	compacted = append(compacted, client.Message{
@@ -327,6 +362,8 @@ func (m *Manager) ApplyCheckpoint(plan Plan, response string) (string, error) {
 	compacted = append(compacted, cloneMessages(plan.RetainedSkillResources)...)
 	compacted = append(compacted, cloneMessages(plan.Recent)...)
 	m.messages = compacted
+	m.taskMemory = taskMemory{}
+	m.taskMemory.replay(compacted)
 	m.providerOverhead = max(m.providerOverhead, plan.ProviderOverhead)
 	m.compactions++
 	return checkpoint, nil

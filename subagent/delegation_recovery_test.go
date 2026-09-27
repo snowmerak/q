@@ -2,15 +2,87 @@ package subagent
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
 
 	"github.com/snowmerak/q/client"
 	"github.com/snowmerak/q/config"
+	"github.com/snowmerak/q/memory"
 )
 
 type recoveryToolRuntime struct{ calls int }
+
+func TestGeneralRunnerMemoryToolsAcrossTaskLifecycle(t *testing.T) {
+	steps := 0
+	configured := contextChatFunc(func(_ context.Context, request client.ChatRequest) (*client.ChatResponse, error) {
+		if request.ToolChoice == client.ToolChoiceNone {
+			return contextResponse("ack"), nil
+		}
+		for _, name := range []string{memory.SetActiveWorkTool, memory.CompleteWorkTool, memory.RecordFactTool} {
+			if !hasTool(request.Tools, name) {
+				t.Fatalf("general agent missing default tool %s", name)
+			}
+		}
+		var name, arguments string
+		switch steps {
+		case 0:
+			name, arguments = TaskStartToolName, `{"objective":"inspect"}`
+		case 1:
+			name, arguments = memory.SetActiveWorkTool, `{"description":"Read entrypoint"}`
+		case 2:
+			name, arguments = memory.RecordFactTool, `{"fact":"main.go is the entrypoint"}`
+		case 3:
+			var workID string
+			for _, message := range request.Messages {
+				if message.Role != client.RoleTool || message.Name != memory.SetActiveWorkTool {
+					continue
+				}
+				var result struct {
+					Entry struct {
+						ID string `json:"id"`
+					} `json:"entry"`
+				}
+				if err := json.Unmarshal([]byte(message.Content), &result); err != nil {
+					t.Fatal(err)
+				}
+				workID = result.Entry.ID
+			}
+			if workID == "" {
+				t.Fatal("active work ID was not returned")
+			}
+			body, _ := json.Marshal(map[string]string{"work_id": workID, "result": "Entry point verified"})
+			name, arguments = memory.CompleteWorkTool, string(body)
+		case 4:
+			name, arguments = TaskCompleteToolName, `{"outcome":"succeeded","summary":"inspection done"}`
+		default:
+			t.Fatalf("unexpected model round %d", steps)
+		}
+		steps++
+		return &client.ChatResponse{Choices: []client.Choice{{Message: client.Message{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{{
+			ID: name, Type: client.ToolTypeFunction, Function: client.FunctionCall{Name: name, Arguments: arguments},
+		}}}}}}, nil
+	})
+	var last GeneralRunState
+	result, err := (GeneralRunner{
+		Client: configured, Spec: Spec{Role: config.AgentRoleScout, Model: "model", Candidates: []client.ModelCandidate{{Model: "model"}}},
+		Definition: AgentDefinition{Info: DelegateInfo{Name: "workspace/worker", Kind: AgentKindInner, Role: config.AgentRoleScout}, SystemPrompt: "Work.", StrictTools: true},
+		Checkpoint: func(state GeneralRunState) error { last = state; return nil },
+	}).Run(t.Context(), "inspect")
+	if err != nil || result.Outcome != "succeeded" || steps != 5 {
+		t.Fatalf("result=%#v err=%v steps=%d", result, err, steps)
+	}
+	for _, name := range []string{memory.SetActiveWorkTool, memory.RecordFactTool, memory.CompleteWorkTool} {
+		found := false
+		for _, message := range last.Transcript {
+			found = found || message.Role == client.RoleTool && message.Name == name
+		}
+		if !found {
+			t.Fatalf("transcript lost %s", name)
+		}
+	}
+}
 
 func (r *recoveryToolRuntime) Tools() []client.Tool {
 	return []client.Tool{{Type: client.ToolTypeFunction, Function: client.FunctionDefinition{Name: "write_file", Parameters: map[string]any{"type": "object"}}}}

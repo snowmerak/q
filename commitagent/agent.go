@@ -39,7 +39,7 @@ func runCommitAgent(
 		{Role: client.RoleSystem, Content: commitAgentInstructions()},
 		{Role: client.RoleUser, Content: "Create the best commit or split-commit proposal for the prepared staged changes. Start by calling git_overview. The full diff is available only through the commit tools."},
 	}
-	available := commitTools()
+	available := subagent.IncludeMemoryTools(commitTools())
 	history := subagent.NewContextCompactor(spec, messages, available, len(messages))
 	history.PreserveTools(toolGitOverview)
 	reminders := 0
@@ -83,7 +83,10 @@ func runCommitAgent(
 		}
 		for _, call := range assistant.ToolCalls {
 			logger.step("tool", "calling %s", call.Function.Name)
-			result := runtime.call(ctx, call)
+			result, handled := history.CallMemoryTool(call)
+			if !handled {
+				result = runtime.call(ctx, call)
+			}
 			if result.IsError {
 				logger.step("tool", "%s returned a validation error", call.Function.Name)
 			}
@@ -108,7 +111,7 @@ func runCommitAgent(
 }
 
 func commitAgentInstructions() string {
-	return `You are q's isolated commit agent. You have no direct filesystem, shell, external MCP server, LSP, skill, or extension access. Use only the supplied commit and Loom tools.
+	return `You are q's isolated commit agent. You have no direct filesystem, shell, external MCP server, LSP, skill, or extension access. Use only the supplied commit, Loom, and session-memory tools.
 
 Rules:
 1. Your first tool call must be git_overview.

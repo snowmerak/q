@@ -398,7 +398,7 @@ func TestPlannerRetryReceivesCompleteValidationFeedback(t *testing.T) {
 		t.Fatalf("requests=%d outcome=%s", len(fake.requests), plan.Outcome)
 	}
 	if fake.requests[0].Messages[0].Content != plannerInstructions() ||
-		!reflect.DeepEqual(fake.requests[0].Tools, []client.Tool{submitPlanTool()}) {
+		!reflect.DeepEqual(fake.requests[0].Tools, IncludeMemoryTools([]client.Tool{submitPlanTool()})) {
 		t.Fatal("planner did not receive the instructions and tool contract")
 	}
 	messages := fake.requests[1].Messages

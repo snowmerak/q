@@ -192,7 +192,7 @@ func (r Runner) Run(ctx context.Context, job Job) (returned Result, runErr error
 		{Role: client.RoleUser, Content: chunk.Prompt},
 		processedPropositionsMessage(checkpoint.Acknowledged),
 	}
-	tools := thinkerTools()
+	tools := subagent.IncludeMemoryTools(thinkerTools())
 	history := subagent.NewContextCompactor(r.Spec, messages, tools, len(messages))
 	parallel := false
 	for round := 0; round < rounds; round++ {
@@ -233,6 +233,10 @@ func (r Runner) Run(ctx context.Context, job Job) (returned Result, runErr error
 			return Result{}, errors.New("thinker: model must call exactly one tool per round")
 		}
 		call := assistant.ToolCalls[0]
+		if memoryResult, handled := history.CallMemoryTool(call); handled {
+			history.Append(client.ToolResultMessage(call, memoryResult))
+			continue
+		}
 		switch call.Function.Name {
 		case CompleteToolName:
 			var input struct{}

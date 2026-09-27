@@ -165,6 +165,7 @@ func (r PlannerReviewRunner) Run(ctx context.Context, input TaskReviewRequest) (
 	if r.Tools != nil {
 		available = plannerReviewTools(r.Tools.Tools(), r.Executors...)
 	}
+	available = IncludeMemoryTools(available)
 	history := NewContextCompactor(r.Spec, messages, available, len(messages))
 	rounds := r.MaxRounds
 	if rounds <= 0 {
@@ -259,6 +260,8 @@ func (r PlannerReviewRunner) Run(ctx context.Context, input TaskReviewRequest) (
 			switch {
 			case call.Function.Name == ReviewTaskToolName:
 				toolResult = scoutToolError(errors.New("review_task must be the only tool call in its turn"))
+			case IsMemoryTool(call.Function.Name):
+				toolResult, _ = history.CallMemoryTool(call)
 			case r.Tools == nil || !hasTool(available, call.Function.Name):
 				toolResult = scoutToolError(fmt.Errorf("tool %q is not available to planner review", call.Function.Name))
 			default:

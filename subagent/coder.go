@@ -100,7 +100,7 @@ func (r *CoderRunner) run(
 			attempt.TaskIndex+1, len(attempt.Plan.Steps),
 		)},
 	}
-	available := coderTools(r.Tools.Tools())
+	available := IncludeMemoryTools(coderTools(r.Tools.Tools()))
 	history := NewContextCompactor(r.Spec, messages, available, len(messages))
 	rounds := r.MaxRounds
 	if rounds <= 0 {
@@ -173,6 +173,8 @@ func (r *CoderRunner) run(
 					}
 					toolResult = scoutToolError(err)
 				}
+			} else if memoryResult, handled := history.CallMemoryTool(call); handled {
+				toolResult = memoryResult
 			} else if !hasTool(available, call.Function.Name) {
 				toolResult = scoutToolError(fmt.Errorf("tool %q is not available to coder", call.Function.Name))
 			} else {
@@ -181,7 +183,7 @@ func (r *CoderRunner) run(
 					toolResult = scoutToolError(err)
 				}
 			}
-			if call.Function.Name != CoderCompleteToolName && len(evidence) < maximumCoderEvidenceItems {
+			if call.Function.Name != CoderCompleteToolName && !IsMemoryTool(call.Function.Name) && len(evidence) < maximumCoderEvidenceItems {
 				evidence = append(evidence, coderEvidence(call, toolResult, r.WorkingDirectory))
 			}
 			message := client.Message{

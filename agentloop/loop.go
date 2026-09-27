@@ -43,7 +43,7 @@ func RunAgentLoop(ctx context.Context, request Request, events chan<- Event) {
 	streamEnabled := request.Stream
 	coalesceInstructions := request.CoalesceInstructions
 	contextPolicy := request.ContextPolicy
-	availableTools := append(append([]client.Tool(nil), toolRuntime.Tools()...), orchestrationTools()...)
+	availableTools := memory.AppendMemoryTools(append(append([]client.Tool(nil), toolRuntime.Tools()...), orchestrationTools()...))
 	hintedSkillIDs := knownSkillIDs(history)
 	if len(history) > 0 && history[len(history)-1].Role == client.RoleUser {
 		index := len(history) - 1
@@ -352,11 +352,15 @@ func RunAgentLoop(ctx context.Context, request Request, events chan<- Event) {
 				})
 				return
 			}
-			result, callErr := toolRuntime.Call(ctx, call)
+			result, handled := loopContext.CallMemoryTool(call)
+			var callErr error
+			if !handled {
+				result, callErr = toolRuntime.Call(ctx, call)
+			}
 			if callErr != nil {
 				result = client.ToolResult{Content: callErr.Error(), IsError: true}
 			}
-			if taskStarted && !result.IsError && call.Function.Name != "delegate_list" {
+			if taskStarted && !result.IsError && call.Function.Name != "delegate_list" && !memory.IsMemoryTool(call.Function.Name) {
 				taskAction = true
 			}
 			content := result.Content

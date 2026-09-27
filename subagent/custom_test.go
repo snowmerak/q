@@ -188,7 +188,9 @@ func TestCustomRunnerSelectedToolsAndArchive(t *testing.T) {
 	if len(tools.calls) != 1 || tools.calls[0].Function.Name != "read_file" {
 		t.Fatal(tools.calls)
 	}
-	if len(c.requests[0].Tools) != 3 || len(c.requests[0].Messages) < 2 ||
+	if len(c.requests[0].Tools) != 6 || !hasTool(c.requests[0].Tools, "memory_set_active_work") ||
+		!hasTool(c.requests[0].Tools, "memory_complete_work") || !hasTool(c.requests[0].Tools, "memory_record_fact") ||
+		len(c.requests[0].Messages) < 2 ||
 		!strings.HasPrefix(c.requests[0].Messages[0].Content, p.SystemPrompt+"\n\nRuntime environment: \nWorking directory: ") ||
 		c.requests[0].Messages[1].Role != client.RoleUser {
 		t.Fatal("incorrect profile injection")

@@ -409,8 +409,9 @@ func TestPlannerReadsLoomReportWithoutOtherBuiltinTools(t *testing.T) {
 		t.Fatalf("proposal=%#v requests=%d", proposal, len(plannerClient.requests))
 	}
 	available := plannerClient.requests[0].Tools
-	if len(available) != 2 || !hasTool(available, "loom_read") || !hasTool(available, SubmitPlanToolName) {
-		t.Fatalf("expected only loom_read and submit_plan, got %#v", available)
+	if len(available) != 5 || !hasTool(available, "loom_read") || !hasTool(available, SubmitPlanToolName) ||
+		!hasTool(available, "memory_set_active_work") || !hasTool(available, "memory_complete_work") || !hasTool(available, "memory_record_fact") {
+		t.Fatalf("expected planner and default memory tools, got %#v", available)
 	}
 	if len(tools.calls) != 1 || tools.calls[0] != readCall {
 		t.Fatalf("loom_read was not dispatched unchanged: %#v", tools.calls)
