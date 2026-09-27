@@ -92,7 +92,8 @@ func TestLoopModeCommandAndNewSessionReset(t *testing.T) {
 }
 
 func TestACPModeCommandPersistsForSession(t *testing.T) {
-	agent, store, _ := testACPAgent(t, &fakeClient{}, &fakeAgentTools{})
+	configuredClient := &fakeClient{}
+	agent, store, _ := testACPAgent(t, configuredClient, &fakeAgentTools{})
 	sessionID := openTestACPSession(t, agent, store.Root)
 	response, err := agent.Prompt(t.Context(), acp.PromptRequest{
 		SessionId: sessionID, Prompt: []acp.ContentBlock{acp.TextBlock("/mode delegation")},
@@ -105,9 +106,56 @@ func TestACPModeCommandPersistsForSession(t *testing.T) {
 	if err != nil || saved.LoopMode != loopModeDelegation || countModePrompt(runtime.state.memory.Messages()) != 1 {
 		t.Fatalf("ACP saved mode=%q prompt count=%d err=%v", saved.LoopMode, countModePrompt(runtime.state.memory.Messages()), err)
 	}
+	if _, err := agent.Prompt(t.Context(), acp.PromptRequest{
+		SessionId: sessionID, Prompt: []acp.ContentBlock{acp.TextBlock("inspect the repository")},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(configuredClient.requests) != 1 {
+		t.Fatalf("ACP model requests = %d", len(configuredClient.requests))
+	}
+	assertDelegationRootCatalog(t, configuredClient.requests[0].Tools)
 }
 
-func TestDelegationModeKeepsConfiguredRootTools(t *testing.T) {
+func TestTUIDelegationModeDoesNotAdvertiseFileTools(t *testing.T) {
+	value := config.Default()
+	value.Provider.Model = "test-model"
+	configuredClient := &fakeClient{}
+	m := newModel(t.Context(), config.Store{Dir: t.TempDir()}, nil)
+	m.toolRuntime = &fakeAgentTools{}
+	m.workspaceStore = &workspace.Store{Root: t.TempDir()}
+	m.enterChat(value, configuredClient)
+	if err := m.setLoopMode(loopModeDelegation); err != nil {
+		t.Fatal(err)
+	}
+	m.input.SetValue("inspect the repository")
+	updated, command := m.submitChat()
+	m = updated.(model)
+	for m.waiting {
+		updated, command = m.Update(nextAgentMessage(t, command))
+		m = updated.(model)
+	}
+	if len(configuredClient.requests) != 1 {
+		t.Fatalf("TUI model requests = %d", len(configuredClient.requests))
+	}
+	assertDelegationRootCatalog(t, configuredClient.requests[0].Tools)
+}
+
+func assertDelegationRootCatalog(t *testing.T, tools []client.Tool) {
+	t.Helper()
+	available := make(map[string]bool, len(tools))
+	for _, tool := range tools {
+		available[tool.Function.Name] = true
+	}
+	if !available["search_skills"] || !available["get_skill"] {
+		t.Fatalf("skill tools missing from root catalog: %#v", available)
+	}
+	if available["write_file"] || available["read_file"] || available["run_command"] {
+		t.Fatalf("workspace tools advertised to root: %#v", available)
+	}
+}
+
+func TestDelegationModeRestrictsRootToolsButNotChildTools(t *testing.T) {
 	value := config.Default()
 	value.Provider.Model = "test-model"
 	m := newModel(context.Background(), config.Store{Dir: t.TempDir()}, nil)
@@ -116,6 +164,11 @@ func TestDelegationModeKeepsConfiguredRootTools(t *testing.T) {
 	base := &fakeAgentTools{tools: []client.Tool{
 		{Type: client.ToolTypeFunction, Function: client.FunctionDefinition{Name: "read_file"}},
 		{Type: client.ToolTypeFunction, Function: client.FunctionDefinition{Name: "write_file"}},
+		{Type: client.ToolTypeFunction, Function: client.FunctionDefinition{Name: "list_directory"}},
+		{Type: client.ToolTypeFunction, Function: client.FunctionDefinition{Name: "run_command"}},
+		{Type: client.ToolTypeFunction, Function: client.FunctionDefinition{Name: "cmd_status"}},
+		{Type: client.ToolTypeFunction, Function: client.FunctionDefinition{Name: "lsp_diagnostics"}},
+		{Type: client.ToolTypeFunction, Function: client.FunctionDefinition{Name: "mcp_docs__read"}},
 		{Type: client.ToolTypeFunction, Function: client.FunctionDefinition{Name: "search_skills"}},
 		{Type: client.ToolTypeFunction, Function: client.FunctionDefinition{Name: "get_skill"}},
 		{Type: client.ToolTypeFunction, Function: client.FunctionDefinition{Name: "loom_inspect"}},
@@ -133,33 +186,50 @@ func TestDelegationModeKeepsConfiguredRootTools(t *testing.T) {
 	if !toolAvailable(defaultRuntime, "read_file") || !toolAvailable(defaultRuntime, "write_file") {
 		t.Fatal("default mode changed its direct tools")
 	}
+	if _, err := defaultRuntime.Call(context.Background(), client.ToolCall{Function: client.FunctionCall{Name: "read_file"}}); err != nil || len(base.calls) != 1 {
+		t.Fatalf("default mode file call was blocked: err=%v calls=%#v", err, base.calls)
+	}
+	base.calls = nil
 	m.loopMode = loopModeDelegation
 	runtime, err := m.configuredDelegationRuntime(base, root)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, tool := range base.Tools() {
-		if !toolAvailable(runtime, tool.Function.Name) {
-			t.Fatalf("delegation mode removed configured root tool %q", tool.Function.Name)
+	for _, name := range []string{"search_skills", "get_skill", "loom_inspect", "loom_read", "loom_eval"} {
+		if !toolAvailable(runtime, name) {
+			t.Fatalf("delegation mode removed coordination tool %q", name)
 		}
+	}
+	for _, name := range []string{"read_file", "write_file", "list_directory", "run_command", "cmd_status", "lsp_diagnostics", "mcp_docs__read", "residual_tool"} {
+		if toolAvailable(runtime, name) {
+			t.Fatalf("delegation mode advertised direct workspace tool %q", name)
+		}
+		result, err := runtime.Call(context.Background(), client.ToolCall{Function: client.FunctionCall{Name: name}})
+		if err == nil || !strings.Contains(err.Error(), "delegation-mode root") || result.Content != "" {
+			t.Fatalf("root tool %q was not rejected: result=%#v err=%v", name, result, err)
+		}
+	}
+	if len(base.calls) != 0 {
+		t.Fatalf("denied root calls reached the base runtime: %#v", base.calls)
 	}
 	if !toolAvailable(runtime, subagent.DelegateToolName) || !toolAvailable(runtime, subagent.DelegateListToolName) {
 		t.Fatalf("delegation tools are missing: %#v", runtime.Tools())
 	}
-	result, err := runtime.Call(context.Background(), client.ToolCall{Function: client.FunctionCall{Name: "write_file"}})
-	if err != nil || result.IsError || len(base.calls) != 1 || base.calls[0].Function.Name != "write_file" {
-		t.Fatalf("configured root tool did not reach base: result=%#v err=%v calls=%#v", result, err, base.calls)
-	}
-	result, err = runtime.Call(context.Background(), client.ToolCall{Function: client.FunctionCall{Name: "loom_read"}})
-	if err != nil || result.IsError || len(base.calls) != 2 || base.calls[1].Function.Name != "loom_read" {
+	result, err := runtime.Call(context.Background(), client.ToolCall{Function: client.FunctionCall{Name: "loom_read"}})
+	if err != nil || result.IsError || len(base.calls) != 1 || base.calls[0].Function.Name != "loom_read" {
 		t.Fatalf("coordinator evidence read did not reach base: result=%#v err=%v calls=%#v", result, err, base.calls)
 	}
 	child, err := m.configuredDelegationRuntimeFor(base, root, subagent.BuiltinCoderID, []string{subagent.BuiltinCoderID})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !toolAvailable(child, "write_file") {
-		t.Fatal("delegation mode removed a child tool")
+	for _, name := range []string{"read_file", "write_file", "list_directory", "run_command", "mcp_docs__read"} {
+		if !toolAvailable(child, name) {
+			t.Fatalf("delegation mode removed child tool %q", name)
+		}
+	}
+	if _, err := child.Call(context.Background(), client.ToolCall{Function: client.FunctionCall{Name: "write_file"}}); err != nil || len(base.calls) != 2 || base.calls[1].Function.Name != "write_file" {
+		t.Fatalf("child file call was blocked: err=%v calls=%#v", err, base.calls)
 	}
 }
 

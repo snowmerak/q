@@ -56,6 +56,8 @@ type delegationRuntime struct {
 	stack      []string
 	store      *workspace.Store
 	taskID     string
+	// The delegation-mode root coordinates work but cannot call workspace tools.
+	restrictRootTools bool
 }
 
 type delegateInput struct {
@@ -134,8 +136,27 @@ func (m model) configuredDelegationRuntimeFor(base agentToolRuntime, root, calle
 	if strings.TrimSpace(m.runID) != "" {
 		dispatcher.sink = m.archive
 	}
-	runtime := &delegationRuntime{base: base, dispatcher: dispatcher, caller: caller, stack: append([]string(nil), stack...), store: dispatcher.store}
+	runtime := &delegationRuntime{
+		base: base, dispatcher: dispatcher, caller: caller,
+		stack: append([]string(nil), stack...), store: dispatcher.store,
+		restrictRootTools: m.loopMode == loopModeDelegation && caller == "",
+	}
 	return runtime, nil
+}
+
+// Root coordination tools may inspect saved evidence and skills. Keep this an
+// allowlist so a newly configured MCP tool cannot reintroduce filesystem or
+// shell access to the delegation-mode root.
+func rootDelegationToolAllowed(name string) bool {
+	switch name {
+	case "search_archive", "get_archive_record",
+		"search_skills", "get_skill",
+		"search_propositions", "get_proposition",
+		"loom_inspect", "loom_read", "loom_eval":
+		return true
+	default:
+		return false
+	}
 }
 
 func countSavedDelegations(store workspace.Store, runID string, depth int) (int, error) {
@@ -169,7 +190,13 @@ func (r *delegationRuntime) Tools() []client.Tool {
 	if r == nil {
 		return nil
 	}
-	result := append([]client.Tool(nil), r.base.Tools()...)
+	var result []client.Tool
+	for _, tool := range r.base.Tools() {
+		if r.restrictRootTools && !rootDelegationToolAllowed(tool.Function.Name) {
+			continue
+		}
+		result = append(result, tool)
+	}
 	if len(r.available()) > 0 {
 		result = append(result, subagent.DelegateTools()...)
 	}
@@ -216,6 +243,9 @@ func (r *delegationRuntime) Call(ctx context.Context, call client.ToolCall) (cli
 		}
 		return r.dispatcher.dispatch(ctx, r.caller, r.stack, r.store, r.taskID, call, input)
 	default:
+		if r.restrictRootTools && !toolAvailable(r, call.Function.Name) {
+			return client.ToolResult{}, fmt.Errorf("tool %q is not available to the delegation-mode root", call.Function.Name)
+		}
 		return r.base.Call(ctx, call)
 	}
 }

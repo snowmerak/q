@@ -33,8 +33,17 @@
 - TUI header의 예상 context 사용량 표시
 - TUI 모델 catalog의 context length 표시 및 Gateway override 편집
 
-수동 `/compact`, `/context`, context-length 오류의 단일 자동 재시도와 모델별
-정확한 tokenizer는 후속 단계로 남아 있다.
+`/context`, context-length 오류의 단일 자동 재시도와 모델별 정확한 tokenizer는
+후속 단계로 남아 있다.
+
+### 수동 `/compact` (TUI 및 ACP)
+
+- TUI의 slash catalog/dispatch와 ACP의 advertised commands/dispatch에 같은 명령을 등록한다.
+- 자동 임계치 검사만 건너뛰고 기존 `memory.Manager.Plan` 및 checkpoint 생성·적용 경로를 재사용한다.
+- 명령 자체는 사용자 대화 메시지로 기록하지 않는다. 전체 transcript는 유지하고 모델 context만 교체한다.
+- 성공 시 checkpoint를 저장·archive하고 provider `conversation_id`를 초기화한다. TUI는 후속 채팅 요청을 보내지 않으며 ACP는 명령 응답만 반환한다.
+- 압축 가능한 이전 대화가 없으면 모델을 호출하지 않고 안내한다. 취소나 실패 시 기존 context를 유지한다.
+- 검증: TUI/ACP 명령 발견, 임계치 이전 수동 압축, transcript 보존, 빈 대화, 실패 경로 및 기존 자동 압축 회귀 테스트.
 
 ### 에이전트 도구 루프 (2026-09-09)
 

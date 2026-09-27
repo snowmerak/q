@@ -26,13 +26,13 @@ delegate(subagent_name, prompt) -> TaskResult | captured ACP result
 명확한 `delegate` 호출로 맡기는 것을 우선한다. 결과를 확인하고 후속 작업을
 조율한 뒤 사용자에게 보고한다. 간단한 대화에는 바로 답할 수 있다.
 
-루트는 현재 default role에 설정된 Q 도구를 그대로 받는다. 메인 루프가
-`task_start`, `ask_to_user`, `task_complete`와 세 `memory_*` 도구를 추가하고,
-호출 가능한 subagent가 있으면 `delegate_list`와 `delegate`를 추가한다.
-하위 에이전트의 도구 목록을 근거로 루트 도구를 빼거나 직접 호출을 막지 않는다.
-따라서 스킬, Loom, workspace, 외부 도구도 default role 설정에서 허용한 범위에
-따라 루트가 사용할 수 있다. 각 하위 에이전트의 도구 범위는 해당 정의와 역할
-설정이 독립적으로 결정한다.
+위임 모드의 루트에는 workspace 파일·디렉터리 도구, 셸 명령, LSP 도구 및 임의의
+외부 MCP 도구를 노출하지 않는다. 도구 이름을 직접 지정해 호출해도 거부한다.
+루트는 `delegate_list`와 `delegate`로 작업을 맡기고, 허용된 archive, Loom,
+skill 및 proposition 조회 도구로 저장된 증거를 확인할 수 있다. 메인 루프의
+`task_start`, `ask_to_user`, `task_complete`와 세 `memory_*` 도구는 계속 사용할
+수 있다. 하위 에이전트는 루트의 제한을 상속하지 않으며 해당 정의와 역할
+설정에 따라 도구를 받는다. `default` 모드의 도구 범위도 그대로 유지한다.
 시작된 작업을 `succeeded`로 끝내려면 그 작업에서 `delegate` 또는 직접 작업 도구가
 한 번 이상 성공해야 한다. `delegate_list` 조회, 메모리 갱신과 실패한 호출은 실작업
 증거로 세지 않는다. 사용할 수 있는 경로가 없으면 실제 장애를 `blocked`로 보고한다. 재시작한

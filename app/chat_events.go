@@ -293,5 +293,13 @@ func (m model) updateCompactionResult(message compactionResultMsg) (tea.Model, t
 		m.archiveFailure("context_compaction", err)
 		m.status += " · save: " + err.Error()
 	}
+	if message.manual {
+		m.finishTurn()
+		m.waiting = false
+		if err := m.flushArchive(); err != nil {
+			m.status += " · archive: " + err.Error()
+		}
+		return m, m.input.Focus()
+	}
 	return m, m.sendChatRequest()
 }

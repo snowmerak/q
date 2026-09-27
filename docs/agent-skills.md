@@ -63,8 +63,12 @@ candidate metadata and tells the model to load an applicable candidate with
 `get_skill`. Q requests `task_start` by name until the model starts the task.
 The dedicated plan runners keep their existing completion tools
 (`submit_brief`, `submit_plan`, `review_task`, or `task_complete`) and use
-`task_start` for the same skill discovery step. Their stable system prompts
-also explain how to call `search_skills` and `get_skill` later.
+`task_start` for the same skill discovery step. The main chat instructions
+require an initial `search_skills` query for guidance suited to the work
+environment, project, and request before substantive work. Inner subagents
+receive the same instruction after `task_start` for their assigned task. They
+load applicable instructions with `get_skill` and search again when new
+information calls for more guidance.
 
 The normalized query is limited to 4,000 runes and requests at most eight
 search hits. q adds at most four candidates. In the main chat it removes skill

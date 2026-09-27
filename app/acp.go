@@ -20,6 +20,7 @@ import (
 	"github.com/snowmerak/q/config"
 	"github.com/snowmerak/q/internal/hostruntime"
 	"github.com/snowmerak/q/mcpconfig"
+	"github.com/snowmerak/q/memory"
 	"github.com/snowmerak/q/sessionstore"
 	"github.com/snowmerak/q/subagent"
 	"github.com/snowmerak/q/third_party/acp-go-sdk"
@@ -1784,7 +1785,11 @@ func (a *acpAgent) finishPrompt(response client.ChatResponse, requestEstimate in
 }
 
 func (a *acpAgent) compactIfNeeded(ctx context.Context) error {
-	if !a.state.memory.ShouldCompact() {
+	return a.compactContext(ctx, false)
+}
+
+func (a *acpAgent) compactContext(ctx context.Context, force bool) error {
+	if !force && !a.state.memory.ShouldCompact() {
 		return nil
 	}
 	plan, err := a.state.memory.Plan()
@@ -1799,7 +1804,7 @@ func (a *acpAgent) compactIfNeeded(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if len(response.Choices) == 0 {
+	if response == nil || len(response.Choices) == 0 {
 		return errors.New("context compaction returned no response choices")
 	}
 	checkpoint, err := a.state.memory.ApplyCheckpoint(plan, response.Choices[0].Message.TextContent())
@@ -2005,6 +2010,7 @@ func (a *acpAgent) emitAvailableCommandsContext(ctx context.Context) error {
 			Input: &acp.AvailableCommandInput{Unstructured: &acp.UnstructuredCommandInput{Hint: "on, off, or status"}},
 		},
 		{Name: "clear", Description: "Clear q's conversation context for this workspace."},
+		{Name: "compact", Description: "Summarize older context while keeping the transcript."},
 		{Name: "help", Description: "Show the slash commands available through ACP."},
 	}
 	return a.updateContext(ctx, acp.SessionUpdate{AvailableCommandsUpdate: &acp.SessionAvailableCommandsUpdate{
@@ -2073,6 +2079,25 @@ func (a *acpAgent) runACPCommand(ctx context.Context, text string) (acp.PromptRe
 		} else {
 			output = "Learning is enabled for this workspace."
 		}
+	case command == "/compact":
+		if !hasCompactionHistory(a.state.memory.Messages()) {
+			output = "Nothing to compact."
+			break
+		}
+		before := a.state.memory.PredictedTokens()
+		if err := a.compactContext(ctx, true); err != nil {
+			if errors.Is(err, memory.ErrNothingToCompact) {
+				output = "Nothing to compact."
+				break
+			}
+			a.state.archiveFailure("ACP context compaction failed", err)
+			_ = a.state.flushArchive()
+			return acp.PromptResponse{}, true, err
+		}
+		if err := a.state.flushArchive(); err != nil {
+			return acp.PromptResponse{}, true, err
+		}
+		output = fmt.Sprintf("Context compacted · %s → %s", formatTokens(before), formatTokens(a.state.memory.PredictedTokens()))
 	case command == "/clear":
 		if err := a.clearACPConversation(ctx); err != nil {
 			return acp.PromptResponse{}, true, err
@@ -2104,6 +2129,7 @@ func renderACPCommandHelp() string {
 		"- /commit",
 		"- /learn [on|off|status]",
 		"- /clear",
+		"- /compact",
 		"- /help",
 		"- /subagents [list|show <name>]",
 		"- /subagent <name> <request>",

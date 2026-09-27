@@ -37,6 +37,19 @@ type acpDiffTestTools struct {
 	fail    bool
 }
 
+func TestACPFileDiffRuntimeRejectsHiddenFileToolBeforeSnapshot(t *testing.T) {
+	root := t.TempDir()
+	base := &fakeAgentTools{}
+	restricted := &delegationRuntime{base: base, restrictRootTools: true}
+	runtime := newACPFileDiffRuntime(restricted, root)
+	_, err := runtime.Call(t.Context(), client.ToolCall{
+		ID: "hidden-write", Function: client.FunctionCall{Name: "write_file", Arguments: `{"path":"sample.txt"}`},
+	})
+	if err == nil || len(runtime.pending) != 0 || len(base.calls) != 0 {
+		t.Fatalf("hidden file tool reached diff snapshot or base: err=%v pending=%#v calls=%#v", err, runtime.pending, base.calls)
+	}
+}
+
 func (*acpDiffTestTools) Tools() []client.Tool {
 	return []client.Tool{
 		{Type: client.ToolTypeFunction, Function: client.FunctionDefinition{Name: "write_file"}},

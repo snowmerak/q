@@ -35,6 +35,7 @@ var localSlashCommands = []slashCommand{
 	{"/sessions", "", "Resume a saved workspace session."},
 	{"/new", "", "Create a new session."},
 	{"/clear", "", "Empty the current session in place."},
+	{"/compact", "", "Summarize older context while keeping the transcript."},
 	{"/learn", "[on|off|status]", "Checkpoint or control Thinker learning for this workspace."},
 	{"/model", "", "Assign models, manage native roles, and configure fallback groups."},
 	{"/gateway", "", "Configure Gateway network, API keys, and providers."},

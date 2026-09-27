@@ -318,7 +318,7 @@ func (f *fakeAgentTools) SearchSkillHints(_ context.Context, query string, _ int
 	return result, nil
 }
 
-func TestAppendRuntimeMessagesGuidesSkillLookupWhenMoreInformationIsNeeded(t *testing.T) {
+func TestAppendRuntimeMessagesRequiresInitialSkillLookup(t *testing.T) {
 	m := newModel(context.Background(), config.Store{Dir: t.TempDir()}, nil)
 	workspaceStore := workspace.Store{Root: t.TempDir()}
 	m.workspaceStore = &workspaceStore
@@ -336,7 +336,7 @@ func TestAppendRuntimeMessagesGuidesSkillLookupWhenMoreInformationIsNeeded(t *te
 		prompts[message.Name] = message.Content
 	}
 	skillPrompt := prompts["q_agent_skills"]
-	for _, required := range []string{"At the start of work", "after receiving new information", "when additional guidance is needed", "search_skills"} {
+	for _, required := range []string{"Before substantive work", "current work environment", "project's nature", "user request", "call search_skills", "Call get_skill", "After receiving new information", "when additional guidance is needed"} {
 		if !strings.Contains(skillPrompt, required) {
 			t.Fatalf("skill prompt does not contain %q:\n%s", required, skillPrompt)
 		}

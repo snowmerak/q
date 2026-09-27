@@ -188,6 +188,7 @@ screen and returns to the previous screen without discarding its state.
 | `/sessions` | Open another saved workspace session. |
 | `/new` | Create and switch to a new session. |
 | `/clear` | Clear the current conversation projection and plan checkpoint. |
+| `/compact` | Summarize older model context without deleting the transcript (TUI and ACP). |
 | `/learn [on\|off\|status]` | Checkpoint or control durable conversation learning. |
 | `/model` | Assign models, manage native roles, and configure fallback groups. |
 | `/gateway` | Configure Gateway providers, listener settings, and API keys. |
@@ -371,7 +372,8 @@ only when automation requires it.
 
 Use `/mode delegation` in ordinary chat to have the main agent assign substantive
 repository work to available built-in, custom, or external subagents. The root
-keeps coordination and tools that its built-in delegates cannot perform. Use
+can coordinate and inspect saved evidence, but has no direct workspace file,
+shell, LSP, or arbitrary external MCP tools in this mode. Use
 `/mode default` to return to the direct-tool loop. The selected mode is saved
 with the session; new sessions start in `default` mode. This is separate from
 the approval-gated `/plan` workflow.

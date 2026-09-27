@@ -160,6 +160,8 @@ func (m model) submitChat() (tea.Model, tea.Cmd) {
 			m.input.Reset()
 			m.resetConversation()
 			return m, m.input.Focus()
+		case "/compact":
+			return m.startManualCompaction()
 		case "/new":
 			m.input.Reset()
 			if err := m.startNewWorkspaceSession(); err != nil {
@@ -297,7 +299,7 @@ func (m model) startChatTurn(content string, compact bool) (tea.Model, tea.Cmd) 
 	if compactionPlan != nil {
 		m.compacting = true
 		m.status = "Compacting context…"
-		return m, tea.Batch(m.spinner.Tick, m.compactContext(*compactionPlan), learning)
+		return m, tea.Batch(m.spinner.Tick, m.compactContext(*compactionPlan, false), learning)
 	}
 	m.status = "Thinking…"
 	return m, tea.Batch(m.spinner.Tick, m.sendChatRequest(), learning)
@@ -402,6 +404,7 @@ func (m model) interruptTurn() (tea.Model, tea.Cmd) {
 	if !m.waiting {
 		return m, nil
 	}
+	manualCompaction := m.compacting && m.pendingMessage.Content == ""
 	if m.turnCancel != nil {
 		m.turnCancel()
 	}
@@ -422,7 +425,9 @@ func (m model) interruptTurn() (tea.Model, tea.Cmd) {
 	m.questionAnswer = nil
 	m.questionEvents = nil
 	m.questionTurnID = 0
-	m.conversationID = ""
+	if !manualCompaction {
+		m.conversationID = ""
+	}
 	m.compactionTarget = 0
 	m.input.Reset()
 	m.input.Placeholder = "Type a message…"
@@ -471,7 +476,42 @@ func (m *model) completeInterruptedToolCalls() {
 	m.refreshTranscript()
 }
 
-func (m model) compactContext(plan memory.Plan) tea.Cmd {
+func hasCompactionHistory(messages []client.Message) bool {
+	for _, message := range messages {
+		if message.Role == client.RoleUser || message.Role == client.RoleAssistant || message.Role == client.RoleTool {
+			return true
+		}
+	}
+	return false
+}
+
+// startManualCompaction uses the automatic checkpoint path without adding a user turn.
+func (m model) startManualCompaction() (tea.Model, tea.Cmd) {
+	m.input.Reset()
+	if m.memory == nil || !hasCompactionHistory(m.memory.Messages()) {
+		m.status = "Nothing to compact"
+		return m, m.input.Focus()
+	}
+	plan, err := m.memory.Plan()
+	if err != nil {
+		if errors.Is(err, memory.ErrNothingToCompact) {
+			m.status = "Nothing to compact"
+		} else {
+			m.status = "compact context: " + err.Error()
+		}
+		return m, m.input.Focus()
+	}
+	m.beginTurn()
+	m.turnMessageStart = len(m.messages)
+	m.pendingMessage = client.Message{}
+	m.waiting = true
+	m.compacting = true
+	m.input.Blur()
+	m.status = "Compacting context…"
+	return m, tea.Batch(m.spinner.Tick, m.compactContext(plan, true))
+}
+
+func (m model) compactContext(plan memory.Plan, manual bool) tea.Cmd {
 	configuredClient := m.client
 	modelID := m.activeModel()
 	reasoningEffort := m.activeConfig().Provider.EffectiveReasoningEffort()
@@ -482,7 +522,7 @@ func (m model) compactContext(plan memory.Plan) tea.Cmd {
 			Model: modelID, Messages: plan.RequestMessages(),
 			ReasoningEffort: reasoningEffort,
 		})
-		return compactionResultMsg{turnID: turnID, response: response, plan: plan, err: err}
+		return compactionResultMsg{turnID: turnID, response: response, plan: plan, err: err, manual: manual}
 	}
 }
 

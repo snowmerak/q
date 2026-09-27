@@ -11,7 +11,7 @@ func skillTestTools() []client.Tool {
 	return []client.Tool{scoutFunctionTool("search_skills"), scoutFunctionTool("get_skill")}
 }
 
-func TestRetrievalCatalogGuidesSkillLookupWhenMoreInformationIsNeeded(t *testing.T) {
+func TestRetrievalCatalogRequiresInitialSkillLookup(t *testing.T) {
 	tools := []client.Tool{
 		scoutFunctionTool("search_skills"),
 		scoutFunctionTool("get_skill"),
@@ -20,8 +20,13 @@ func TestRetrievalCatalogGuidesSkillLookupWhenMoreInformationIsNeeded(t *testing
 	}
 	prompt := withRetrievalCatalog("base prompt", tools)
 	for _, required := range []string{
-		"At the start of work",
-		"after receiving new information",
+		"After task_start and before substantive work",
+		"current work environment",
+		"project's nature",
+		"assigned task",
+		"call search_skills",
+		"Call get_skill",
+		"After receiving new information",
 		"when additional guidance is needed",
 		"search_skills",
 		"get_skill",

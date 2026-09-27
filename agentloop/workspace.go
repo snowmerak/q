@@ -49,7 +49,7 @@ func PrepareWorkspaceMessages(messages []client.Message, options WorkspaceMessag
 		if tool.Function.Name == "search_skills" {
 			result = append(result, client.Message{
 				Role: client.RoleDeveloper, Name: "q_agent_skills",
-				Content: "Agent Skills are retrieved on demand from the global q Library and the workspace skill index rather than preloaded. At the start of work, or after receiving new information, call search_skills with concise, task-specific keywords when additional guidance is needed to perform the work or handle that information. Select a relevant result, then call get_skill and follow the complete resource text returned directly in content. Search explicit $skill-name mentions by name.",
+				Content: "Agent Skills are retrieved on demand from the global q Library and the workspace skill index rather than preloaded. Before substantive work, call search_skills to find instructions suited to the current work environment, the project's nature, and the user request. Inspect the workspace just enough to choose useful search terms if its nature is not yet clear. Call get_skill for each applicable result and follow the complete resource text returned directly in content. After receiving new information, search again when additional guidance is needed. Search explicit $skill-name mentions by name.",
 			})
 			break
 		}

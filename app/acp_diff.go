@@ -52,6 +52,11 @@ func (r *acpFileDiffRuntime) SearchSkillHints(ctx context.Context, query string,
 }
 
 func (r *acpFileDiffRuntime) Call(ctx context.Context, call client.ToolCall) (client.ToolResult, error) {
+	// A hidden file tool must be rejected by the scoped runtime before this
+	// display adapter opens the target file for a before/after snapshot.
+	if !toolAvailable(r.base, call.Function.Name) {
+		return r.base.Call(ctx, call)
+	}
 	if call.Function.Name != "write_file" && call.Function.Name != "edit_file" {
 		return r.base.Call(ctx, call)
 	}

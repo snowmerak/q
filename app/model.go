@@ -318,6 +318,7 @@ type compactionResultMsg struct {
 	response *client.ChatResponse
 	plan     memory.Plan
 	err      error
+	manual   bool
 }
 
 type deferredSubmitMsg struct{}
