@@ -704,15 +704,20 @@ them before provider dispatch.
 `q studio` starts a user-level loopback server on a random port and opens its
 embedded Svelte interface. `--port` selects a fixed development port and
 `--no-open` leaves the browser closed. Studio does not treat the launch directory
-as a workspace: each future Studio session selects and retains its own workspace
-root. The current slice provides the application shell and global Settings for
+as a workspace. In Sessions, enter a repository path to list or create its
+persisted Q sessions, restore a transcript, and run the ordinary default loop
+with that repository as its tool and workspace root. The chat streams response,
+reasoning, tool, and agent activity events while the request is connected.
+
+Studio also provides the application shell and global Settings for
 runtime, context, Loom, and service listeners. Changes save automatically through
 the same validated stores used by the TUI. Gateway providers and global model
 assignments use discovery-backed editors. System One providers, decision model
 routing, listener settings, and server API key lifecycle are also available;
 provider authentication uses environment variables only. Workspace model overrides remain in the
-TUI. MCP and LSP are currently summaries. Session and agent surfaces are tracked in the
-[Q Studio blueprint](docs/studio-blueprint.md).
+TUI. MCP and LSP are currently summaries. Session questions, durable event
+reconnection, explicit turn cancellation, and repository change review remain
+tracked in the [Q Studio blueprint](docs/studio-blueprint.md).
 
 ## Data and configuration
 

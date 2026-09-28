@@ -1,6 +1,7 @@
 package studio
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -9,6 +10,7 @@ import (
 	"path"
 	"strings"
 
+	"github.com/snowmerak/q/app"
 	"github.com/snowmerak/q/config"
 )
 
@@ -20,17 +22,49 @@ type statusResponse struct {
 	Ready   bool   `json:"ready"`
 }
 
-// NewHandler returns the user-level Studio HTTP surface. Workspace context is
-// deliberately absent here; sessions will resolve and own their workspace roots.
-func NewHandler() (http.Handler, error) {
+// Server is the user-level Studio HTTP surface and its shared agent runtime.
+// Individual sessions resolve and own their workspace roots.
+type Server struct {
+	http.Handler
+	host *app.SessionHost
+}
+
+// NewServer returns a Studio server whose runtime follows parent cancellation.
+func NewServer(parent context.Context) (*Server, error) {
 	store, err := config.DefaultStore()
 	if err != nil {
 		return nil, fmt.Errorf("locate Studio settings: %w", err)
 	}
-	return newHandler(store)
+	host, err := app.NewSessionHost(parent, store)
+	if err != nil {
+		return nil, fmt.Errorf("open Studio session runtime: %w", err)
+	}
+	handler, err := newHandlerWithRunner(store, host)
+	if err != nil {
+		_ = host.Close()
+		return nil, err
+	}
+	return &Server{Handler: handler, host: host}, nil
+}
+
+// NewHandler is retained for embedders that only need an http.Handler.
+// Command owners should prefer NewServer so they can close its runtime.
+func NewHandler() (http.Handler, error) {
+	return NewServer(context.Background())
+}
+
+func (server *Server) Close() error {
+	if server == nil || server.host == nil {
+		return nil
+	}
+	return server.host.Close()
 }
 
 func newHandler(store config.Store) (http.Handler, error) {
+	return newHandlerWithRunner(store, nil)
+}
+
+func newHandlerWithRunner(store config.Store, runner sessionRunner) (http.Handler, error) {
 	assets, err := frontend()
 	if err != nil {
 		return nil, fmt.Errorf("open embedded Studio frontend: %w", err)
@@ -57,6 +91,10 @@ func newHandler(store config.Store) (http.Handler, error) {
 	mux.HandleFunc("DELETE /api/v1/settings/system-one/api-keys/{key}", settings.serveSystemOneAPIKeyRevoke)
 	mux.HandleFunc("PUT /api/v1/settings/runtime", settings.serveRuntimeUpdate)
 	mux.HandleFunc("PUT /api/v1/settings/services/{service}", settings.serveServiceUpdate)
+	sessions := newSessionsService(runner)
+	mux.HandleFunc("/api/v1/sessions", sessions.serveCollection)
+	mux.HandleFunc("GET /api/v1/sessions/{session}", sessions.serveDetail)
+	mux.HandleFunc("POST /api/v1/sessions/{session}/messages", sessions.serveMessage)
 	mux.Handle("/api/", http.NotFoundHandler())
 	mux.Handle("/", spa)
 	return securityHeaders(mux), nil

@@ -10,8 +10,11 @@
 System One provider·decision model routing·server API key lifecycle,
 runtime/context/Loom과 Gateway·System One listener를 기존 store의
 검증·원자적 저장 계약으로 편집하며 MCP/LSP 현황을 조회한다. workspace model
-override는 아직 TUI가 소유한다. session 목록, workspace 선택과 agent 실행은 아직
-Studio로 이전되지 않았다.
+override는 아직 TUI가 소유한다. Sessions 화면은 사용자가 입력한 canonical repository
+root에서 기존 session을 조회하거나 새 session을 만들고, transcript를 복원해 공통
+default loop에 메시지를 보낸다. 응답, reasoning, tool call과 agent activity는 요청 중
+NDJSON으로 표시한다. 질문 응답, durable event 재연결, session 삭제와 명시적인 turn
+중단 command는 아직 이전되지 않았다.
 
 대상 독자: Q의 TUI, agent runtime, workspace session, Git 작업 흐름과
 웹 인터페이스를 설계하거나 구현하는 사람.
@@ -128,8 +131,11 @@ GitHub/GitLab 호환 API, 임의 조직의 권한 모델은 초기 목표에 포
 - `/changes`는 staged, unstaged와 untracked 변경을 읽기 전용으로 보여준다.
 - 설정 화면은 model/provider, Gateway, System One, Library, Loom, Skills, LSP, MCP,
   subagent와 `.qignore`를 관리한다.
-- `q studio`는 시작 CWD와 무관한 global shell, embedded frontend와 service status만
-  제공하는 첫 기반 slice까지 구현되어 있다.
+- `q studio`는 시작 CWD와 무관한 global shell, embedded frontend, service status와
+  global Settings를 제공한다. Sessions 화면은 repository root를 명시적으로 받아
+  `.q/sessions`의 목록·생성·transcript 복원과 default loop 실행을 제공한다. 실행은
+  기존 Bubble Tea model을 renderer 없이 구동하므로 TUI와 같은 tool runtime, 저장,
+  compaction과 delegation 경로를 사용한다.
 
 현재 위임은 같은 workspace 안의 child session과 Agent Loop 실행까지 제공한다.
 repository를 지정하는 위임, worktree lease, Change Request, 재연결 가능한 run event와
@@ -477,7 +483,13 @@ TUI와 service 호출이 같은 저장 결과를 만든다.
 - 현재 `/changes`에 해당하는 repository diff 화면.
 
 완료된 기반: user-level loopback server, browser 자동 열기와 `--no-open`, embedded
-Svelte SPA, global status API, SPA/asset/API routing 및 graceful shutdown.
+Svelte SPA, global status API, SPA/asset/API routing 및 graceful shutdown. global Settings와
+repository path 기반 session 목록·생성·transcript, rendererless default loop 실행,
+요청 수명 동안의 NDJSON message/reasoning/tool/activity stream도 연결되어 있다.
+
+남은 기반: 최근 workspace catalog의 server-side 저장, session 이름 변경·삭제,
+`ask_to_user` 응답, run ID에 결합된 중단 command, durable event append와 reconnect cursor,
+repository diff 화면.
 
 완료 기준: 브라우저를 새로고침하거나 잠시 끊어도 실행을 잃지 않고 같은 session과
 event 순서를 복구하며, 일상 대화와 변경 검토에 TUI가 필요하지 않다.

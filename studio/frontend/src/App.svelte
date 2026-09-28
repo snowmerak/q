@@ -1,6 +1,7 @@
 <script lang="ts">
   import { BrainCircuit, Check, Copy, Cpu, House, KeyRound, Layers, Network, Plus, RefreshCw, Server, Settings, SlidersHorizontal, Trash2, Unplug } from '@lucide/svelte';
   import { onMount } from 'svelte';
+  import SessionView from './SessionView.svelte';
 
   type StudioStatus = { version: number; service: string; ready: boolean };
   type ConnectionState =
@@ -85,13 +86,13 @@
       lsp: { config_path: string; items: number; bindings: number };
     };
   };
-  type View = 'overview' | 'settings';
+  type View = 'overview' | 'sessions' | 'settings';
   type SettingsSection = 'models' | 'providers' | 'system-one' | 'runtime' | 'services' | 'integrations';
   type SaveState = { kind: 'idle' | 'saving' | 'saved' | 'error'; message?: string };
 
   const navigation = [
     { label: 'Overview', icon: House, view: 'overview' as View },
-    { label: 'Sessions', icon: Layers, disabled: true },
+    { label: 'Sessions', icon: Layers, view: 'sessions' as View },
     { label: 'Settings', icon: Settings, view: 'settings' as View }
   ];
   const settingsSections = [
@@ -199,9 +200,15 @@
 
   function navigate(view: View) {
     activeView = view;
-    const path = view === 'settings' ? '/settings' : '/';
+    const path = view === 'settings' ? '/settings' : view === 'sessions' ? '/sessions' : '/';
     if (window.location.pathname !== path) window.history.pushState({}, '', path);
     if (view === 'settings' && !settings) void loadSettings();
+  }
+
+  function viewFromLocation(): View {
+    if (window.location.pathname.startsWith('/settings')) return 'settings';
+    if (window.location.pathname.startsWith('/sessions')) return 'sessions';
+    return 'overview';
   }
 
   function queueSave(request: () => Promise<SettingsSnapshot>) {
@@ -420,12 +427,12 @@
   }
 
   onMount(() => {
-    activeView = window.location.pathname.startsWith('/settings') ? 'settings' : 'overview';
+    activeView = viewFromLocation();
     activeSection = sectionFromLocation();
     void loadStatus();
     if (activeView === 'settings') void loadSettings();
     const onPopState = () => {
-      activeView = window.location.pathname.startsWith('/settings') ? 'settings' : 'overview';
+      activeView = viewFromLocation();
       activeSection = sectionFromLocation();
       if (activeView === 'settings' && !settings) void loadSettings();
     };
@@ -443,19 +450,17 @@
       {#each navigation as item}
         {@const Icon = item.icon}
         <button
-          class:active={!item.disabled && item.view === activeView}
-          disabled={item.disabled}
-          aria-current={!item.disabled && item.view === activeView ? 'page' : undefined}
-          title={item.disabled ? 'Available with session management' : undefined}
+          class:active={item.view === activeView}
+          aria-current={item.view === activeView ? 'page' : undefined}
           onclick={() => item.view && navigate(item.view)}
         ><Icon aria-hidden="true" size={19} strokeWidth={1.7} /><span>{item.label}</span></button>
       {/each}
     </nav>
   </aside>
 
-  <main class:settings-main={activeView === 'settings'}>
+  <main class:settings-main={activeView === 'settings'} class:sessions-main={activeView === 'sessions'}>
     <header class="page-header">
-      <div><h1>{activeView === 'settings' ? 'Settings' : 'Studio overview'}</h1>{#if activeView === 'settings'}<p class="page-description">Global configuration shared by Q sessions.</p>{/if}</div>
+      <div><h1>{activeView === 'settings' ? 'Settings' : activeView === 'sessions' ? 'Sessions' : 'Studio overview'}</h1>{#if activeView === 'settings'}<p class="page-description">Global configuration shared by Q sessions.</p>{:else if activeView === 'sessions'}<p class="page-description">Run Q's default loop in a selected repository.</p>{/if}</div>
       <div class="connection" aria-live="polite"><span class:online={connection.kind === 'ready'} class="status-dot" aria-hidden="true"></span><span>{connection.kind === 'ready' ? 'Connected' : connection.kind === 'error' ? 'Disconnected' : 'Connecting'}</span></div>
     </header>
 
@@ -464,7 +469,9 @@
         <h2 id="runtime-heading">Runtime</h2>
         <div class="runtime-body"><dl><div><dt>Local endpoint</dt><dd>{window.location.origin}</dd></div><div><dt>Status</dt><dd class:success={connection.kind === 'ready'}>{connection.kind === 'ready' ? 'Connected' : connection.kind === 'error' ? connection.message : 'Connecting…'}</dd></div></dl>{#if connection.kind === 'error'}<button class="retry" onclick={loadStatus}>Retry connection</button>{/if}</div>
       </section>
-      <section class="empty-session" aria-labelledby="empty-heading"><div class="session-outline" aria-hidden="true"><span></span><span></span><span></span></div><h2 id="empty-heading">No session selected</h2><p>Choose a session to establish workspace context.</p></section>
+      <section class="empty-session" aria-labelledby="empty-heading"><div class="session-outline" aria-hidden="true"><span></span><span></span><span></span></div><h2 id="empty-heading">No session selected</h2><p>Open Sessions to choose a repository and continue a conversation.</p><button class="primary-button overview-session-button" onclick={() => navigate('sessions')}>Open sessions</button></section>
+    {:else if activeView === 'sessions'}
+      <SessionView />
     {:else}
       <div class="settings-layout">
         <aside class="settings-index" aria-label="Settings sections">
@@ -637,5 +644,5 @@
     {/if}
   </main>
 
-  <footer class="status-bar"><div><span>Q Studio</span><span class="divider" aria-hidden="true"></span><span class:online={connection.kind === 'ready'} class="status-dot" aria-hidden="true"></span><span>{connection.kind === 'ready' ? 'Ready' : connection.kind === 'error' ? 'Unavailable' : 'Connecting'}</span></div><span>{activeView === 'settings' ? 'Global settings' : 'Local'}</span></footer>
+  <footer class="status-bar"><div><span>Q Studio</span><span class="divider" aria-hidden="true"></span><span class:online={connection.kind === 'ready'} class="status-dot" aria-hidden="true"></span><span>{connection.kind === 'ready' ? 'Ready' : connection.kind === 'error' ? 'Unavailable' : 'Connecting'}</span></div><span>{activeView === 'settings' ? 'Global settings' : activeView === 'sessions' ? 'Repository session' : 'Local'}</span></footer>
 </div>

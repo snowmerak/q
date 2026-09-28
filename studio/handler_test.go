@@ -21,6 +21,13 @@ func TestHandlerServesGlobalStatusAndSPA(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if server, ok := handler.(*Server); ok {
+		t.Cleanup(func() {
+			if err := server.Close(); err != nil {
+				t.Error(err)
+			}
+		})
+	}
 
 	statusRequest := httptest.NewRequest(http.MethodGet, "/api/v1/status", nil)
 	statusRecorder := httptest.NewRecorder()

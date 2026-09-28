@@ -29,7 +29,7 @@ func runStudio(
 	stdout io.Writer,
 	stderr io.Writer,
 	open func(string) error,
-) error {
+) (returnErr error) {
 	options, err := parseStudioOptions(args, stderr)
 	if errors.Is(err, flag.ErrHelp) {
 		return nil
@@ -37,10 +37,11 @@ func runStudio(
 	if err != nil {
 		return fmt.Errorf("q studio: %w", err)
 	}
-	handler, err := studio.NewHandler()
+	handler, err := studio.NewServer(ctx)
 	if err != nil {
 		return fmt.Errorf("q studio: initialize: %w", err)
 	}
+	defer func() { returnErr = errors.Join(returnErr, handler.Close()) }()
 	listener, err := net.Listen("tcp", net.JoinHostPort("127.0.0.1", fmt.Sprintf("%d", options.port)))
 	if err != nil {
 		return fmt.Errorf("q studio: listen: %w", err)
