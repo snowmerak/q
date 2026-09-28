@@ -9,10 +9,15 @@ import (
 	"sync"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/snowmerak/llm-provider/gateway"
+	"github.com/snowmerak/q/archiveembed"
 	"github.com/snowmerak/q/config"
 	"github.com/snowmerak/q/internal/hostruntime"
+	qlibrary "github.com/snowmerak/q/library"
 	"github.com/snowmerak/q/providerhost"
+	"github.com/snowmerak/q/sessionstore"
 	"github.com/snowmerak/q/workspace"
+	"github.com/snowmerak/q/workspacememory"
 )
 
 // ErrSessionRuntimeUnavailable indicates that a headless session could not
@@ -95,6 +100,92 @@ func (host *SessionHost) ensureProvider(loaded config.Config) (config.Config, er
 		host.providerReady = true
 	}
 	return initialized, nil
+}
+
+// ApplyGateway replaces the managed Gateway child and persists its provider
+// configuration. Existing sessions use the replacement endpoint on their next
+// turn without restarting Studio.
+func (host *SessionHost) ApplyGateway(ctx context.Context, value gateway.Config) error {
+	if host == nil || host.manager == nil {
+		return fmt.Errorf("%w: Gateway runtime is unavailable", ErrSessionRuntimeUnavailable)
+	}
+	host.providerMu.Lock()
+	defer host.providerMu.Unlock()
+	if err := host.manager.Apply(ctx, value); err != nil {
+		return err
+	}
+	host.providerReady = true
+	return nil
+}
+
+// SyncEmbeddings applies the saved embedding model to the global Library and,
+// when root is provided, rebuilds that workspace's semantic archive before
+// returning. A workspace with an active turn may reject the vector transition
+// until that turn releases its lease.
+func (host *SessionHost) SyncEmbeddings(ctx context.Context, root string, value config.Config) (returnErr error) {
+	if host == nil || host.runtime == nil {
+		return fmt.Errorf("%w: embedding runtime is unavailable", ErrSessionRuntimeUnavailable)
+	}
+	value, err := host.ensureProvider(value)
+	if err != nil {
+		return err
+	}
+	configuredClient, err := host.factory(value)
+	if err != nil {
+		return err
+	}
+	defer func() { returnErr = errors.Join(returnErr, configuredClient.Close()) }()
+
+	libraryRuntime, err := qlibrary.Ensure(ctx, host.store.Dir)
+	if err != nil {
+		return err
+	}
+	defer func() { returnErr = errors.Join(returnErr, libraryRuntime.Close()) }()
+	var embedder qlibrary.Embedder
+	if value.Embedding.Model != "" {
+		var ok bool
+		embedder, ok = configuredClient.(qlibrary.Embedder)
+		if !ok {
+			return errors.New("configured LLM client does not support embeddings")
+		}
+	}
+	if err := libraryRuntime.Client().ConfigureEmbedding(embedder, value.Embedding.Model, value.Embedding.Dimensions); err != nil {
+		return err
+	}
+	if _, err := libraryRuntime.Client().SyncSkillEmbeddings(ctx); err != nil {
+		return err
+	}
+
+	root = strings.TrimSpace(root)
+	if root == "" {
+		return nil
+	}
+	if err := workspace.RejectHomeDirectory(root); err != nil {
+		return err
+	}
+	memoryRuntime, err := workspacememory.Ensure(ctx, host.store.Dir)
+	if err != nil {
+		return err
+	}
+	defer func() { returnErr = errors.Join(returnErr, memoryRuntime.Close()) }()
+	vector := sessionstore.VectorConfig{}
+	if value.Embedding.Model != "" {
+		vector = sessionstore.VectorConfig{Model: value.Embedding.Model, Dimensions: value.Embedding.Dimensions}
+	}
+	archiveStore, err := memoryRuntime.Client().OpenWorkspace(ctx, root, vector)
+	if err != nil {
+		return err
+	}
+	defer func() { returnErr = errors.Join(returnErr, archiveStore.Close()) }()
+	archive := archiveembed.New(archiveStore)
+	if value.Embedding.Model == "" {
+		return archive.Disable()
+	}
+	if err := archive.Configure(embedder, value.Embedding.Model, value.Embedding.Dimensions); err != nil {
+		return err
+	}
+	_, err = archive.Backfill(ctx)
+	return err
 }
 
 // Run executes one prompt through Q's default loop in the requested

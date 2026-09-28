@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -13,6 +14,7 @@ import (
 	qlibrary "github.com/snowmerak/q/library"
 	"github.com/snowmerak/q/sessionstore"
 	"github.com/snowmerak/q/workspace"
+	"github.com/snowmerak/q/workspacememory"
 )
 
 type fakeStandaloneSkillLibrary struct {
@@ -119,7 +121,21 @@ func TestStandaloneModelAttachesCurrentWorkspace(t *testing.T) {
 
 func TestStandaloneModelEmbeddingAssignmentBackfillsSkillsAndWorkspace(t *testing.T) {
 	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 	store := config.Store{Dir: filepath.Join(home, ".q")}
+	libraryPort := reserveTestPort(t)
+	memoryPort := reserveTestPort(t)
+	if err := (qlibrary.ConfigStore{Dir: store.Dir}).Save(qlibrary.Config{
+		Version: qlibrary.ConfigVersion, Host: qlibrary.DefaultHost, Port: libraryPort,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := (workspacememory.ConfigStore{Dir: store.Dir}).Save(workspacememory.Config{
+		Version: workspacememory.ConfigVersion, Host: workspacememory.DefaultHost, Port: memoryPort,
+	}); err != nil {
+		t.Fatal(err)
+	}
 	workspaceStore := workspace.Store{Root: t.TempDir()}
 	skillDir := filepath.Join(home, ".agents", "skills", "animal-care")
 	if err := os.MkdirAll(skillDir, 0o755); err != nil {
@@ -169,6 +185,19 @@ func TestStandaloneModelEmbeddingAssignmentBackfillsSkillsAndWorkspace(t *testin
 	if err != nil || len(global.Hits) != 1 || global.Hits[0].Title != "animal-care" {
 		t.Fatalf("global skill search = %#v, err = %v", global, err)
 	}
+}
+
+func reserveTestPort(t *testing.T) int {
+	t.Helper()
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := listener.Addr().(*net.TCPAddr).Port
+	if err := listener.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return port
 }
 
 func TestStandaloneSkillsUsesLightweightRegistry(t *testing.T) {

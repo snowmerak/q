@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { BrainCircuit, Check, Copy, Cpu, House, KeyRound, Layers, Network, Plus, RefreshCw, Server, Settings, SlidersHorizontal, Trash2, Unplug } from '@lucide/svelte';
+  import { BrainCircuit, Check, ChevronDown, ChevronUp, Copy, Cpu, House, KeyRound, Layers, Network, Plus, RefreshCw, Server, Settings, SlidersHorizontal, Trash2, Unplug } from '@lucide/svelte';
   import { onMount } from 'svelte';
   import SessionView from './SessionView.svelte';
 
@@ -24,7 +24,10 @@
     effective_model: string;
     reasoning_effort: string;
     inherited: boolean;
+    custom: boolean;
   };
+  type ModelCandidate = { model: string; reasoning_effort: string; timeout: string };
+  type ModelGroup = { name: string; candidates: ModelCandidate[] };
   type GatewayProvider = {
     id: string;
     type: string;
@@ -45,6 +48,8 @@
     reasoning_efforts?: string[];
     default_effort?: string;
     group?: boolean;
+    api_mode?: string;
+    context_override?: number;
   };
   type SystemOneProvider = { id: string; uri: string; api_key_env: string; _original_id?: string };
   type SystemOneModelOption = { id: string; description?: string; release_date?: string };
@@ -66,9 +71,10 @@
       embedding_model: string;
       embedding_dimensions: number;
       group_count: number;
+      groups: ModelGroup[];
       roles: RoleModelAssignment[];
     };
-    gateway_providers: { config_path: string; items: GatewayProvider[] };
+    gateway_providers: { config_path: string; items: GatewayProvider[]; api_keys: ServiceAPIKey[] };
     system_one: {
       config_path: string;
       default_model: string;
@@ -80,6 +86,7 @@
     services: {
       gateway: ListenerSettings;
       system_one: ListenerSettings & { provider_count: number; default_model: string; role_model_count: number };
+      library: ListenerSettings;
     };
     integrations: {
       mcp: { config_path: string; items: number; bindings: number };
@@ -89,6 +96,8 @@
   type View = 'overview' | 'sessions' | 'settings';
   type SettingsSection = 'models' | 'providers' | 'system-one' | 'runtime' | 'services' | 'integrations';
   type SaveState = { kind: 'idle' | 'saving' | 'saved' | 'error'; message?: string };
+  type LoomStats = { artifacts: number; blobs: number; bytes: number };
+  type LoomGCResult = { artifacts_removed: number; blobs_removed: number; bytes_reclaimed: number; dry_run: boolean };
 
   const navigation = [
     { label: 'Overview', icon: House, view: 'overview' as View },
@@ -121,6 +130,15 @@
   let systemOneKeyAlias = '';
   let generatedSystemOneKey = '';
   let systemOneKeyCopied = false;
+  let gatewayKeyAlias = '';
+  let generatedGatewayKey = '';
+  let gatewayKeyCopied = false;
+  let newModelGroupName = '';
+  let newCustomRoleName = '';
+  let loomStats: LoomStats | null = null;
+  let loomResult: LoomGCResult | null = null;
+  let loomLoading = false;
+  let loomError = '';
 
   async function loadStatus() {
     connection = { kind: 'loading' };
@@ -143,6 +161,7 @@
       adoptSettings((await response.json()) as SettingsSnapshot);
       if (activeSection === 'models' && modelOptions.length === 0) void loadModels();
       if (activeSection === 'system-one' && systemOneModels.length === 0) void loadSystemOneModels();
+      if (activeSection === 'runtime') void loadLoomStatus();
     } catch (error) {
       settingsError = error instanceof Error ? error.message : 'Settings are unavailable';
     }
@@ -191,6 +210,7 @@
     window.history.pushState({}, '', url.pathname + url.search);
     if (section === 'models' && modelOptions.length === 0 && !modelsLoading) void loadModels();
     if (section === 'system-one' && systemOneModels.length === 0 && !systemOneModelsLoading) void loadSystemOneModels();
+    if (section === 'runtime') void loadLoomStatus();
   }
 
   function sectionFromLocation(): SettingsSection {
@@ -225,7 +245,7 @@
       });
   }
 
-  function saveModelAssignment(target: string, assignment: { model: string; reasoning_effort: string; embedding_dimensions?: number }) {
+  function saveModelAssignment(target: string, assignment: { model: string; reasoning_effort: string; embedding_dimensions?: number; workspace_root?: string }) {
     queueSave(() => putSettings(`/api/v1/settings/models/${encodeURIComponent(target)}`, JSON.stringify(assignment)));
   }
 
@@ -242,12 +262,81 @@
     saveModelAssignment('embedding', {
       model: settings.models.embedding_model,
       reasoning_effort: '',
-      embedding_dimensions: settings.models.embedding_dimensions
+      embedding_dimensions: settings.models.embedding_dimensions,
+      workspace_root: localStorage.getItem('q-studio-workspace-root') || ''
     });
   }
 
   function saveRoleModel(role: RoleModelAssignment) {
     saveModelAssignment(role.role, { model: role.configured_model, reasoning_effort: role.reasoning_effort });
+  }
+
+  function saveModelGroup(group: ModelGroup) {
+    queueSave(async () => {
+      const snapshot = await putSettings('/api/v1/settings/model-groups', JSON.stringify(group));
+      await loadModels();
+      return snapshot;
+    });
+  }
+
+  function addModelGroup() {
+    const name = newModelGroupName.trim();
+    const model = modelOptions.find((option) => !option.group)?.id || '';
+    if (!name || !model) return;
+    newModelGroupName = '';
+    saveModelGroup({ name, candidates: [{ model, reasoning_effort: '', timeout: '' }] });
+  }
+
+  function deleteModelGroup(group: ModelGroup) {
+    if (!window.confirm(`Delete model group “${group.name}”?`)) return;
+    queueSave(async () => {
+      const snapshot = await writeSettings('DELETE', `/api/v1/settings/model-groups/${encodeURIComponent(group.name)}`);
+      await loadModels();
+      return snapshot;
+    });
+  }
+
+  function addGroupCandidate(group: ModelGroup) {
+    const used = new Set(group.candidates.map((candidate) => candidate.model));
+    const model = modelOptions.find((option) => !option.group && !used.has(option.id))?.id;
+    if (!model) return;
+    group.candidates = [...group.candidates, { model, reasoning_effort: '', timeout: '' }];
+    saveModelGroup(group);
+  }
+
+  function removeGroupCandidate(group: ModelGroup, index: number) {
+    if (group.candidates.length <= 1) return;
+    group.candidates = group.candidates.filter((_, candidateIndex) => candidateIndex !== index);
+    saveModelGroup(group);
+  }
+
+  function moveGroupCandidate(group: ModelGroup, index: number, direction: -1 | 1) {
+    const target = index + direction;
+    if (target < 0 || target >= group.candidates.length) return;
+    const candidates = [...group.candidates];
+    [candidates[index], candidates[target]] = [candidates[target], candidates[index]];
+    group.candidates = candidates;
+    saveModelGroup(group);
+  }
+
+  function addCustomRole() {
+    const role = newCustomRoleName.trim();
+    if (!role) return;
+    newCustomRoleName = '';
+    queueSave(() => writeSettings('POST', '/api/v1/settings/roles', JSON.stringify({ role })));
+  }
+
+  function deleteCustomRole(role: RoleModelAssignment) {
+    if (!window.confirm(`Delete custom role “${role.role}”?`)) return;
+    queueSave(() => writeSettings('DELETE', `/api/v1/settings/roles/${encodeURIComponent(role.role)}`));
+  }
+
+  function saveModelAPIMode(model: ModelOption) {
+    queueSave(() => putSettings('/api/v1/settings/model-api-mode', JSON.stringify({ model: model.id, mode: model.api_mode || 'chat_completions' })));
+  }
+
+  function saveModelContextOverride(model: ModelOption) {
+    queueSave(() => putSettings('/api/v1/settings/gateway/model-metadata', JSON.stringify({ model: model.id, context_window: model.context_override || 0 })));
   }
 
   function reasoningOptions(model: string, current: string) {
@@ -376,6 +465,33 @@
     queueSave(() => writeSettings('DELETE', `/api/v1/settings/system-one/api-keys/${encodeURIComponent(key.id)}`));
   }
 
+  function createGatewayAPIKey() {
+    const alias = gatewayKeyAlias.trim();
+    if (!alias) return;
+    queueSave(async () => {
+      const response = await fetch('/api/v1/settings/gateway/api-keys', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ alias })
+      });
+      if (!response.ok) throw new Error(await responseError(response));
+      const result = (await response.json()) as { settings: SettingsSnapshot; secret: string };
+      generatedGatewayKey = result.secret;
+      gatewayKeyAlias = '';
+      gatewayKeyCopied = false;
+      return result.settings;
+    });
+  }
+
+  function revokeGatewayAPIKey(key: ServiceAPIKey) {
+    if (!window.confirm(`Revoke Gateway API key “${key.alias}”?`)) return;
+    queueSave(() => writeSettings('DELETE', `/api/v1/settings/gateway/api-keys/${encodeURIComponent(key.id)}`));
+  }
+
+  async function copyGatewayAPIKey() {
+    if (!generatedGatewayKey) return;
+    await navigator.clipboard.writeText(generatedGatewayKey);
+    gatewayKeyCopied = true;
+  }
+
   async function copySystemOneAPIKey() {
     if (!generatedSystemOneKey) return;
     await navigator.clipboard.writeText(generatedSystemOneKey);
@@ -397,7 +513,56 @@
     queueSave(() => putSettings('/api/v1/settings/runtime', payload));
   }
 
-  function saveService(name: 'gateway' | 'system-one') {
+  async function loadLoomStatus() {
+    const root = localStorage.getItem('q-studio-workspace-root') || '';
+    loomError = '';
+    loomResult = null;
+    if (!root) {
+      loomStats = null;
+      loomError = 'Open a repository in Sessions to inspect its Loom store.';
+      return;
+    }
+    loomLoading = true;
+    try {
+      const response = await fetch(`/api/v1/workspaces/loom?workspace_root=${encodeURIComponent(root)}`);
+      if (!response.ok) throw new Error(await responseError(response));
+      loomStats = ((await response.json()) as { stats: LoomStats }).stats;
+    } catch (error) {
+      loomError = error instanceof Error ? error.message : 'Could not inspect Loom storage';
+    } finally {
+      loomLoading = false;
+    }
+  }
+
+  async function collectLoom(dryRun: boolean) {
+    const root = localStorage.getItem('q-studio-workspace-root') || '';
+    if (!root || loomLoading) return;
+    if (!dryRun && !window.confirm('Run Loom garbage collection for the current repository?')) return;
+    loomLoading = true;
+    loomError = '';
+    try {
+      const response = await fetch('/api/v1/workspaces/loom/collect', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ workspace_root: root, dry_run: dryRun })
+      });
+      if (!response.ok) throw new Error(await responseError(response));
+      const result = (await response.json()) as { stats: LoomStats; result: LoomGCResult };
+      loomStats = result.stats;
+      loomResult = result.result;
+    } catch (error) {
+      loomError = error instanceof Error ? error.message : 'Loom garbage collection failed';
+    } finally {
+      loomLoading = false;
+    }
+  }
+
+  function formatBytes(value: number) {
+    if (value < 1024) return `${value} B`;
+    if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KiB`;
+    return `${(value / (1024 * 1024)).toFixed(1)} MiB`;
+  }
+
+  function saveService(name: 'gateway' | 'system-one' | 'library') {
     if (!settings) return;
     const service = name === 'system-one' ? settings.services.system_one : settings.services[name];
     const payload = JSON.stringify({
@@ -516,7 +681,7 @@
                 </div>
                 {#each settings.models.roles as role}
                   <div class="assignment-row">
-                    <div><strong>{roleLabel(role.role)}</strong><small>{role.inherited ? `Inherits ${role.effective_model}` : role.role}</small></div>
+                    <div class="assignment-role"><span><strong>{roleLabel(role.role)}</strong><small>{role.inherited ? `Inherits ${role.effective_model}` : role.role}</small></span>{#if role.custom}<button class="danger-icon" title="Delete custom role" onclick={() => deleteCustomRole(role)}><Trash2 aria-hidden="true" size={14} /></button>{/if}</div>
                     <label><span>Model</span><select bind:value={role.configured_model} onchange={() => saveRoleModel(role)} disabled={modelsLoading}>
                       <option value="">Inherit</option>
                       {#if role.configured_model && !modelOptions.some((model) => model.id === role.configured_model)}<option value={role.configured_model}>{role.configured_model}</option>{/if}
@@ -525,6 +690,37 @@
                     <label><span>Reasoning</span><select bind:value={role.reasoning_effort} onchange={() => saveRoleModel(role)}><option value="">Provider default</option>{#each reasoningOptions(role.configured_model || role.effective_model, role.reasoning_effort) as effort}<option value={effort}>{effort}</option>{/each}</select></label>
                   </div>
                 {/each}
+              </div>
+
+              <div class="subsection-heading"><div><h3>Custom roles</h3><p>Create a reusable model role for subagents.</p></div></div>
+              <div class="settings-card inline-create"><label><span>Role name</span><input placeholder="security-reviewer" bind:value={newCustomRoleName} onkeydown={(event) => event.key === 'Enter' && addCustomRole()} /></label><button class="primary-button" onclick={addCustomRole} disabled={!newCustomRoleName.trim()}><Plus aria-hidden="true" size={15} /> Add role</button></div>
+
+              <div class="subsection-heading"><div><h3>Fallback groups</h3><p>Try ordered candidates with optional reasoning and timeout overrides.</p></div></div>
+              <div class="settings-card inline-create"><label><span>New group name</span><input placeholder="reliable-coding" bind:value={newModelGroupName} onkeydown={(event) => event.key === 'Enter' && addModelGroup()} /></label><button class="primary-button" onclick={addModelGroup} disabled={!newModelGroupName.trim() || !modelOptions.some((model) => !model.group)}><Plus aria-hidden="true" size={15} /> Add group</button></div>
+              <div class="model-group-list">
+                {#each settings.models.groups as group}
+                  <article class="settings-card model-group-card">
+                    <div class="card-heading"><div><h3>{group.name}</h3><p>{group.candidates.length} ordered candidates</p></div><div class="provider-actions"><button class="primary-button compact-button" onclick={() => addGroupCandidate(group)} disabled={group.candidates.length >= modelOptions.filter((model) => !model.group).length}><Plus aria-hidden="true" size={14} /> Candidate</button><button class="danger-icon" title="Delete model group" onclick={() => deleteModelGroup(group)}><Trash2 aria-hidden="true" size={15} /></button></div></div>
+                    <div class="group-candidates">
+                      {#each group.candidates as candidate, candidateIndex}
+                        <div class="group-candidate">
+                          <span class="candidate-order">{candidateIndex + 1}</span>
+                          <label><span>Model</span><select bind:value={candidate.model} onchange={() => saveModelGroup(group)}>{#each modelOptions.filter((model) => !model.group) as model}<option value={model.id}>{model.id}</option>{/each}</select></label>
+                          <label><span>Reasoning</span><select bind:value={candidate.reasoning_effort} onchange={() => saveModelGroup(group)}><option value="">Provider default</option>{#each reasoningOptions(candidate.model, candidate.reasoning_effort) as effort}<option value={effort}>{effort}</option>{/each}</select></label>
+                          <label><span>Timeout</span><input placeholder="60s or empty" bind:value={candidate.timeout} onchange={() => saveModelGroup(group)} /></label>
+                          <div class="candidate-actions"><button title="Move up" onclick={() => moveGroupCandidate(group, candidateIndex, -1)} disabled={candidateIndex === 0}><ChevronUp aria-hidden="true" size={14} /></button><button title="Move down" onclick={() => moveGroupCandidate(group, candidateIndex, 1)} disabled={candidateIndex === group.candidates.length - 1}><ChevronDown aria-hidden="true" size={14} /></button><button title="Remove candidate" onclick={() => removeGroupCandidate(group, candidateIndex)} disabled={group.candidates.length === 1}><Trash2 aria-hidden="true" size={13} /></button></div>
+                        </div>
+                      {/each}
+                    </div>
+                  </article>
+                {/each}
+              </div>
+
+              <div class="subsection-heading"><div><h3>Model behavior</h3><p>Select an API mode and override provider context metadata.</p></div></div>
+              <div class="settings-card model-behavior-list">
+                {#each modelOptions.filter((model) => !model.group) as model}
+                  <div class="model-behavior-row"><div><strong>{model.id}</strong><small>{model.context_length ? `Discovered context ${model.context_length.toLocaleString()}` : 'No context metadata'}</small></div><label><span>API mode</span><select bind:value={model.api_mode} onchange={() => saveModelAPIMode(model)}><option value="chat_completions">Chat Completions</option><option value="responses">Responses</option></select></label><label><span>Context override</span><input type="number" min="0" placeholder="Provider metadata" bind:value={model.context_override} onchange={() => saveModelContextOverride(model)} /></label></div>
+                {:else}<div class="api-key-empty">Refresh Gateway models to edit their behavior.</div>{/each}
               </div>
             </section>
           {:else if activeSection === 'providers'}
@@ -614,7 +810,16 @@
               {#if !settings.runtime.configured}<p class="inline-warning">Complete the initial model setup in Q before editing runtime settings.</p>{/if}
               <div class="settings-card"><div class="card-heading"><div><h3>Agent execution</h3><p>Limit concurrent delegated agent work.</p></div></div><label class="field-row"><span><strong>Maximum parallel agents</strong><small>Applies across built-in roles.</small></span><input type="number" min="1" max="64" bind:value={settings.runtime.max_parallel} onchange={saveRuntime} disabled={!settings.runtime.configured} /></label></div>
               <div class="settings-card"><div class="card-heading"><div><h3>Context compaction</h3><p>Control when and how Q compacts long conversations.</p></div></div><div class="field-grid"><label><span>Context window</span><input type="number" min="0" step="1000" bind:value={settings.runtime.context.window} onchange={saveRuntime} disabled={!settings.runtime.configured} /></label><label><span>Trigger ratio</span><input type="number" min="0.01" max="0.99" step="0.01" bind:value={settings.runtime.context.trigger_ratio} onchange={saveRuntime} disabled={!settings.runtime.configured} /></label><label><span>Target ratio</span><input type="number" min="0.01" max="0.98" step="0.01" bind:value={settings.runtime.context.target_ratio} onchange={saveRuntime} disabled={!settings.runtime.configured} /></label><label><span>Recent ratio</span><input type="number" min="0.01" max="0.97" step="0.01" bind:value={settings.runtime.context.recent_ratio} onchange={saveRuntime} disabled={!settings.runtime.configured} /></label></div></div>
-              <div class="settings-card"><div class="card-heading"><div><h3>Loom storage</h3><p>Bound artifact storage and garbage collection.</p></div></div><div class="field-grid"><label><span>Maximum artifact MiB</span><input type="number" min="1" max="1024" bind:value={settings.runtime.loom.maximum_artifact_mib} onchange={saveRuntime} disabled={!settings.runtime.configured} /></label><label><span>Maximum store MiB</span><input type="number" min="1" max="10240" bind:value={settings.runtime.loom.maximum_store_mib} onchange={saveRuntime} disabled={!settings.runtime.configured} /></label><label><span>GC trigger ratio</span><input type="number" min="0.02" max="0.99" step="0.01" bind:value={settings.runtime.loom.gc_trigger_ratio} onchange={saveRuntime} disabled={!settings.runtime.configured} /></label><label><span>GC target ratio</span><input type="number" min="0.01" max="0.98" step="0.01" bind:value={settings.runtime.loom.gc_target_ratio} onchange={saveRuntime} disabled={!settings.runtime.configured} /></label><label><span>GC grace hours</span><input type="number" min="1" max="8760" bind:value={settings.runtime.loom.gc_grace_hours} onchange={saveRuntime} disabled={!settings.runtime.configured} /></label><label class="toggle-field"><span>Disable garbage collection</span><input type="checkbox" bind:checked={settings.runtime.loom.gc_disabled} onchange={saveRuntime} disabled={!settings.runtime.configured} /><small>{settings.runtime.loom.gc_disabled ? 'Disabled' : 'Enabled'}</small></label></div></div>
+              <div class="settings-card">
+                <div class="card-heading"><div><h3>Loom storage</h3><p>Bound artifact storage and garbage collection.</p></div><button class="icon-button" title="Refresh Loom stats" onclick={loadLoomStatus} disabled={loomLoading}><RefreshCw aria-hidden="true" size={15} class={loomLoading ? 'spin' : undefined} /></button></div>
+                <div class="field-grid"><label><span>Maximum artifact MiB</span><input type="number" min="1" max="1024" bind:value={settings.runtime.loom.maximum_artifact_mib} onchange={saveRuntime} disabled={!settings.runtime.configured} /></label><label><span>Maximum store MiB</span><input type="number" min="1" max="10240" bind:value={settings.runtime.loom.maximum_store_mib} onchange={saveRuntime} disabled={!settings.runtime.configured} /></label><label><span>GC trigger ratio</span><input type="number" min="0.02" max="0.99" step="0.01" bind:value={settings.runtime.loom.gc_trigger_ratio} onchange={saveRuntime} disabled={!settings.runtime.configured} /></label><label><span>GC target ratio</span><input type="number" min="0.01" max="0.98" step="0.01" bind:value={settings.runtime.loom.gc_target_ratio} onchange={saveRuntime} disabled={!settings.runtime.configured} /></label><label><span>GC grace hours</span><input type="number" min="1" max="8760" bind:value={settings.runtime.loom.gc_grace_hours} onchange={saveRuntime} disabled={!settings.runtime.configured} /></label><label class="toggle-field"><span>Disable garbage collection</span><input type="checkbox" bind:checked={settings.runtime.loom.gc_disabled} onchange={saveRuntime} disabled={!settings.runtime.configured} /><small>{settings.runtime.loom.gc_disabled ? 'Disabled' : 'Enabled'}</small></label></div>
+                <div class="loom-operations">
+                  {#if loomStats}<div class="loom-stats"><span><strong>{loomStats.artifacts}</strong> artifacts</span><span><strong>{loomStats.blobs}</strong> blobs</span><span><strong>{formatBytes(loomStats.bytes)}</strong> stored</span></div>{/if}
+                  {#if loomError}<p class="inline-warning">{loomError}</p>{/if}
+                  {#if loomResult}<p class="loom-result">{loomResult.dry_run ? 'Preview' : 'Collected'} · {loomResult.artifacts_removed} artifacts · {loomResult.blobs_removed} blobs · {formatBytes(loomResult.bytes_reclaimed)}</p>{/if}
+                  <div><button class="text-button" onclick={() => collectLoom(true)} disabled={loomLoading || !loomStats}>Preview GC</button><button class="primary-button" onclick={() => collectLoom(false)} disabled={loomLoading || !loomStats}>Run GC</button></div>
+                </div>
+              </div>
             </section>
           {:else if activeSection === 'services'}
             <section class="settings-section">
@@ -623,10 +828,26 @@
                 <article class="settings-card service-card">
                   <div class="card-heading"><div><h3>Gateway</h3><p>OpenAI-compatible model gateway.</p></div><span class="count-badge">{settings.services.gateway.active_api_keys} keys</span></div>
                   <label><span>Host</span><input bind:value={settings.services.gateway.host} onchange={() => saveService('gateway')} /></label><label><span>Port</span><input type="number" min="0" max="65535" bind:value={settings.services.gateway.port} onchange={() => saveService('gateway')} /></label><code>{settings.services.gateway.config_path}</code>
+                  <div class="service-key-manager">
+                    {#if generatedGatewayKey}
+                      <div class="generated-key compact-generated-key"><div><KeyRound aria-hidden="true" size={16} /><span><strong>Copy this key now</strong><small>It is shown once.</small></span></div><div class="generated-key-value"><code>{generatedGatewayKey}</code><button class="icon-button" title="Copy API key" onclick={copyGatewayAPIKey}>{#if gatewayKeyCopied}<Check aria-hidden="true" size={16} />{:else}<Copy aria-hidden="true" size={16} />{/if}</button></div><button class="text-button" onclick={() => generatedGatewayKey = ''}>Dismiss</button></div>
+                    {:else}
+                      <div class="api-key-create"><label><span>New key alias</span><input placeholder="Studio client" bind:value={gatewayKeyAlias} onkeydown={(event) => event.key === 'Enter' && createGatewayAPIKey()} /></label><button class="primary-button" onclick={createGatewayAPIKey} disabled={!gatewayKeyAlias.trim()}><KeyRound aria-hidden="true" size={15} /> Generate</button></div>
+                    {/if}
+                    <div class="api-key-list">
+                      {#each settings.gateway_providers.api_keys as key}
+                        <div class="api-key-row"><div><strong>{key.alias}</strong><small>{key.id.slice(0, 8)} · {formatKeyDate(key.created_at)}</small></div><span class:revoked={key.revoked_at}>{key.revoked_at ? 'Revoked' : 'Active'}</span>{#if !key.revoked_at}<button class="text-button danger-text" onclick={() => revokeGatewayAPIKey(key)}>Revoke</button>{/if}</div>
+                      {:else}<div class="api-key-empty">No keys configured. Authentication is disabled.</div>{/each}
+                    </div>
+                  </div>
                 </article>
                 <article class="settings-card service-card">
                   <div class="card-heading"><div><h3>System One</h3><p>{settings.services.system_one.provider_count} providers · {settings.services.system_one.default_model}</p></div><span class="count-badge">{settings.services.system_one.active_api_keys} keys</span></div>
                   <label><span>Host</span><input bind:value={settings.services.system_one.host} onchange={() => saveService('system-one')} /></label><label><span>Port</span><input type="number" min="0" max="65535" bind:value={settings.services.system_one.port} onchange={() => saveService('system-one')} /></label><code>{settings.services.system_one.config_path}</code>
+                </article>
+                <article class="settings-card service-card">
+                  <div class="card-heading"><div><h3>Library</h3><p>Global Agent Skill and proposition service.</p></div><span class="count-badge">local</span></div>
+                  <label><span>Host</span><input bind:value={settings.services.library.host} onchange={() => saveService('library')} /></label><label><span>Port</span><input type="number" min="1" max="65535" bind:value={settings.services.library.port} onchange={() => saveService('library')} /></label><code>{settings.services.library.config_path}</code>
                 </article>
               </div>
             </section>

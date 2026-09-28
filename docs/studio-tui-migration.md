@@ -83,7 +83,7 @@ operation, Skills, LSP, MCP, subagent/ACP connection, `.qignore`, usage와 help�
   않아 자동 screenshot 검증은 수행하지 않았으며, durable 질문·중단·reconnect는 M5가
   소유한다.
 
-### M2. Settings runtime parity
+### M2. Settings runtime parity — 완료 (2026-09-29)
 
 범위:
 
@@ -100,6 +100,20 @@ operation, Skills, LSP, MCP, subagent/ACP connection, `.qignore`, usage와 help�
 - Studio에서 바꾼 설정과 runtime side effect가 TUI와 일치한다.
 - Studio 재시작 없이 provider 변경이 다음 turn에 적용된다.
 - embedding 변경 도중 종료되어도 다음 시작에서 필요한 backfill을 재개한다.
+
+완료 기록:
+
+- embedding 저장은 global Library와 Sessions에서 마지막으로 연 repository archive를
+  동기화한다. 저장 UI는 재색인이 끝날 때까지 진행 상태를 유지하며, 기존 startup
+  backfill도 다음 session 시작에서 미완료 record를 다시 검사한다.
+- fallback group 후보 순서·reasoning·timeout, custom role, concrete model API mode와
+  Gateway context metadata override를 Models 화면에 추가했다.
+- provider 수정은 실행 중인 `SessionHost`의 Gateway child를 교체한 뒤 저장하므로 다음
+  turn부터 재시작 없이 적용된다. Gateway server key는 생성 때만 secret을 반환한다.
+- Library listener와 repository Loom stats, GC preview/collect를 Services와 Runtime에
+  연결했다.
+- `go test ./app ./studio ./workspace ./gatewayconfig ./library ./loom`, `npm run check`,
+  production build를 통과했다.
 
 ### M3. Integration, Skill과 Agent 관리
 
@@ -176,11 +190,11 @@ operation, Skills, LSP, MCP, subagent/ACP connection, `.qignore`, usage와 help�
 | Question/interrupt | request abort만 지원 | M5 | 미착수 |
 | Changes | 없음 | M4 | 미착수 |
 | Commit | 없음 | M4 | 미착수 |
-| Global model/role assignment | 기본·embedding·role 지원 | M2 advanced/runtime side effect | 부분 |
-| Gateway provider | CRUD와 secret write | M2 hot apply | 부분 |
-| Gateway listener/API key | listener만 지원 | M2 | 부분 |
+| Global model/role assignment | assignment·group·custom role·API mode·metadata·reindex | M2 | 완료 |
+| Gateway provider | CRUD와 실행 중 hot apply | M2 | 완료 |
+| Gateway listener/API key | listener와 일회 표시 key 관리 | M2 | 완료 |
 | System One | provider/model/listener/key 지원 | M2 회귀 유지 | 완료 |
-| Library/Loom | Loom 설정만 지원 | M2 | 부분 |
+| Library/Loom | Library listener, Loom 설정·stats·GC | M2 | 완료 |
 | Skills | 없음 | M3 | 미착수 |
 | LSP | 개수 요약 | M3 | 미착수 |
 | MCP | 개수 요약 | M3 | 미착수 |

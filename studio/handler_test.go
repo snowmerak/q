@@ -2,19 +2,45 @@ package studio
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 
 	"github.com/snowmerak/llm-provider/gateway"
+	"github.com/snowmerak/q/app"
 	"github.com/snowmerak/q/config"
 	"github.com/snowmerak/q/gatewayconfig"
+	qlibrary "github.com/snowmerak/q/library"
 	"github.com/snowmerak/q/providerhost"
 	"github.com/snowmerak/q/systemoneconfig"
+	"github.com/snowmerak/q/workspace"
 )
+
+type settingsRuntimeRunner struct {
+	providers providerhost.Store
+	applied   gateway.Config
+	syncRoot  string
+	syncValue config.Config
+}
+
+func (runtime *settingsRuntimeRunner) Run(context.Context, workspace.Store, string, string, app.SessionEventSink) error {
+	return nil
+}
+
+func (runtime *settingsRuntimeRunner) ApplyGateway(_ context.Context, value gateway.Config) error {
+	runtime.applied = value
+	return runtime.providers.Save(value)
+}
+
+func (runtime *settingsRuntimeRunner) SyncEmbeddings(_ context.Context, root string, value config.Config) error {
+	runtime.syncRoot, runtime.syncValue = root, value
+	return nil
+}
 
 func TestHandlerServesGlobalStatusAndSPA(t *testing.T) {
 	handler, err := NewHandler()
@@ -172,6 +198,34 @@ func TestSettingsAPIReadsAndUpdatesGlobalStores(t *testing.T) {
 		t.Fatalf("saved Gateway = %#v", gateway)
 	}
 
+	response = httptest.NewRecorder()
+	handler.ServeHTTP(response, httptest.NewRequest(http.MethodPut, "/api/v1/settings/services/library", bytes.NewBufferString(`{"host":"127.0.0.3","port":17892}`)))
+	if response.Code != http.StatusOK {
+		t.Fatalf("PUT library = %d %s", response.Code, response.Body.String())
+	}
+	libraryValue, err := (qlibrary.ConfigStore{Dir: store.Dir}).LoadOrDefault()
+	if err != nil || libraryValue.Host != "127.0.0.3" || libraryValue.Port != 17892 {
+		t.Fatalf("saved Library = %#v, %v", libraryValue, err)
+	}
+
+	response = httptest.NewRecorder()
+	handler.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/api/v1/settings/gateway/api-keys", bytes.NewBufferString(`{"alias":"Studio Gateway"}`)))
+	if response.Code != http.StatusCreated {
+		t.Fatalf("POST Gateway API key = %d %s", response.Code, response.Body.String())
+	}
+	var gatewayKey apiKeyCreateResponse
+	if err := json.Unmarshal(response.Body.Bytes(), &gatewayKey); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(gatewayKey.Secret, "qk_") || len(gatewayKey.Settings.Providers.APIKeys) != 1 {
+		t.Fatalf("created Gateway API key = %#v", gatewayKey)
+	}
+	response = httptest.NewRecorder()
+	handler.ServeHTTP(response, httptest.NewRequest(http.MethodDelete, "/api/v1/settings/gateway/api-keys/"+gatewayKey.Settings.Providers.APIKeys[0].ID, nil))
+	if response.Code != http.StatusOK {
+		t.Fatalf("DELETE Gateway API key = %d %s", response.Code, response.Body.String())
+	}
+
 	providerBody := `{"id":"test","type":"openai-compatible","kind":"generic","prefix":"models","enabled":true,"base_url":"` + upstream.URL + `","api_key_env":""}`
 	response = httptest.NewRecorder()
 	handler.ServeHTTP(response, httptest.NewRequest(http.MethodPut, "/api/v1/settings/gateway/providers/test", bytes.NewBufferString(providerBody)))
@@ -184,6 +238,50 @@ func TestSettingsAPIReadsAndUpdatesGlobalStores(t *testing.T) {
 	}
 	if len(providers.Providers) != 1 || providers.Providers[0].Prefix != "models" || providers.Providers[0].Kind != "generic" || providers.Providers[0].APIKey != "top-secret" {
 		t.Fatalf("saved providers = %#v", providers.Providers)
+	}
+
+	response = httptest.NewRecorder()
+	handler.ServeHTTP(response, httptest.NewRequest(http.MethodPut, "/api/v1/settings/model-groups", bytes.NewBufferString(`{"name":"fallback","candidates":[{"model":"models/model-a","reasoning_effort":"high","timeout":"45s"}]}`)))
+	if response.Code != http.StatusOK {
+		t.Fatalf("PUT model group = %d %s", response.Code, response.Body.String())
+	}
+	response = httptest.NewRecorder()
+	handler.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/api/v1/settings/roles", bytes.NewBufferString(`{"role":"security-review"}`)))
+	if response.Code != http.StatusOK {
+		t.Fatalf("POST custom role = %d %s", response.Code, response.Body.String())
+	}
+	response = httptest.NewRecorder()
+	handler.ServeHTTP(response, httptest.NewRequest(http.MethodPut, "/api/v1/settings/models/security-review", bytes.NewBufferString(`{"model":"group/fallback","reasoning_effort":"medium"}`)))
+	if response.Code != http.StatusOK {
+		t.Fatalf("PUT custom role model = %d %s", response.Code, response.Body.String())
+	}
+	response = httptest.NewRecorder()
+	handler.ServeHTTP(response, httptest.NewRequest(http.MethodPut, "/api/v1/settings/model-api-mode", bytes.NewBufferString(`{"model":"models/model-a","mode":"responses"}`)))
+	if response.Code != http.StatusOK {
+		t.Fatalf("PUT model API mode = %d %s", response.Code, response.Body.String())
+	}
+	response = httptest.NewRecorder()
+	handler.ServeHTTP(response, httptest.NewRequest(http.MethodPut, "/api/v1/settings/gateway/model-metadata", bytes.NewBufferString(`{"model":"models/model-a","context_window":64000}`)))
+	if response.Code != http.StatusOK {
+		t.Fatalf("PUT model metadata = %d %s", response.Code, response.Body.String())
+	}
+	loaded, err = store.Load()
+	if err != nil || loaded.ModelGroups["fallback"].Candidates[0].Timeout.String() != "45s" || loaded.ModelAPIMode("models/model-a") != "responses" || loaded.Agents.Roles["security-review"].Group != "fallback" {
+		t.Fatalf("advanced model settings = %#v, %v", loaded, err)
+	}
+	providers, err = (providerhost.Store{Dir: store.Dir}).Load()
+	if err != nil || providers.Providers[0].ModelMetadata["model-a"].ContextLength != 64000 {
+		t.Fatalf("model metadata = %#v, %v", providers.Providers[0].ModelMetadata, err)
+	}
+	response = httptest.NewRecorder()
+	handler.ServeHTTP(response, httptest.NewRequest(http.MethodDelete, "/api/v1/settings/roles/security-review", nil))
+	if response.Code != http.StatusOK {
+		t.Fatalf("DELETE custom role = %d %s", response.Code, response.Body.String())
+	}
+	response = httptest.NewRecorder()
+	handler.ServeHTTP(response, httptest.NewRequest(http.MethodDelete, "/api/v1/settings/model-groups/fallback", nil))
+	if response.Code != http.StatusOK {
+		t.Fatalf("DELETE model group = %d %s", response.Code, response.Body.String())
 	}
 
 	response = httptest.NewRecorder()
@@ -261,5 +359,48 @@ func TestSettingsAPIRejectsInvalidAndUnknownUpdates(t *testing.T) {
 		if response.Code != test.status {
 			t.Fatalf("PUT %s = %d %s; want %d", test.target, response.Code, response.Body.String(), test.status)
 		}
+	}
+}
+
+func TestSettingsRuntimeAppliesProvidersAndEmbeddingSideEffects(t *testing.T) {
+	store := config.Store{Dir: t.TempDir()}
+	value := config.Default()
+	value.Provider.Model = "test/model-a"
+	if err := store.Save(value); err != nil {
+		t.Fatal(err)
+	}
+	providers := providerhost.Store{Dir: store.Dir}
+	if err := providers.Save(gateway.Config{Providers: []gateway.ProviderConfig{{
+		ID: "test", Type: "openai-compatible", Prefix: "test", Enabled: true, BaseURL: "http://127.0.0.1:1",
+	}}}); err != nil {
+		t.Fatal(err)
+	}
+	runtime := &settingsRuntimeRunner{providers: providers}
+	handler, err := newHandlerWithRunner(store, runtime)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, httptest.NewRequest(http.MethodPut, "/api/v1/settings/gateway/providers/test", bytes.NewBufferString(
+		`{"id":"test","type":"openai-compatible","prefix":"test","enabled":true,"base_url":"http://127.0.0.1:2"}`,
+	)))
+	if response.Code != http.StatusOK || len(runtime.applied.Providers) != 1 || runtime.applied.Providers[0].BaseURL != "http://127.0.0.1:2" {
+		t.Fatalf("provider hot apply = %d %#v %s", response.Code, runtime.applied, response.Body.String())
+	}
+
+	root := t.TempDir()
+	response = httptest.NewRecorder()
+	handler.ServeHTTP(response, httptest.NewRequest(http.MethodPut, "/api/v1/settings/models/embedding", bytes.NewBufferString(
+		`{"model":"test/embed","embedding_dimensions":32,"workspace_root":`+quotedJSON(root)+`}`,
+	)))
+	if response.Code != http.StatusOK || runtime.syncRoot != root || runtime.syncValue.Embedding.Model != "test/embed" || runtime.syncValue.Embedding.Dimensions != 32 {
+		t.Fatalf("embedding sync = %d root %q value %#v %s", response.Code, runtime.syncRoot, runtime.syncValue.Embedding, response.Body.String())
+	}
+
+	response = httptest.NewRecorder()
+	handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/v1/workspaces/loom?workspace_root="+url.QueryEscape(root), nil))
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"artifacts":0`) {
+		t.Fatalf("Loom status = %d %s", response.Code, response.Body.String())
 	}
 }

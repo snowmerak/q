@@ -13,12 +13,16 @@ import (
 	"time"
 
 	"github.com/snowmerak/llm-provider/gateway"
+	"github.com/snowmerak/q/client"
 	"github.com/snowmerak/q/client/systemone"
 	"github.com/snowmerak/q/config"
 	"github.com/snowmerak/q/gatewayconfig"
+	qlibrary "github.com/snowmerak/q/library"
+	"github.com/snowmerak/q/loom"
 	"github.com/snowmerak/q/mcpconfig"
 	"github.com/snowmerak/q/providerhost"
 	"github.com/snowmerak/q/systemoneconfig"
+	qtools "github.com/snowmerak/q/tools"
 )
 
 const maximumSettingsRequestSize = 64 << 10
@@ -30,6 +34,16 @@ type settingsService struct {
 	systemOne systemoneconfig.Store
 	mcp       mcpconfig.Store
 	providers providerhost.Store
+	library   qlibrary.ConfigStore
+	runtime   settingsRuntime
+}
+
+type settingsRuntime interface {
+	ApplyGateway(context.Context, gateway.Config) error
+}
+
+type embeddingRuntime interface {
+	SyncEmbeddings(context.Context, string, config.Config) error
 }
 
 type settingsSnapshot struct {
@@ -74,7 +88,19 @@ type modelSettings struct {
 	EmbeddingModel      string                `json:"embedding_model"`
 	EmbeddingDimensions int                   `json:"embedding_dimensions"`
 	GroupCount          int                   `json:"group_count"`
+	Groups              []modelGroupSettings  `json:"groups"`
 	Roles               []roleModelAssignment `json:"roles"`
+}
+
+type modelGroupSettings struct {
+	Name       string                   `json:"name"`
+	Candidates []modelCandidateSettings `json:"candidates"`
+}
+
+type modelCandidateSettings struct {
+	Model           string `json:"model"`
+	ReasoningEffort string `json:"reasoning_effort,omitempty"`
+	Timeout         string `json:"timeout,omitempty"`
 }
 
 type roleModelAssignment struct {
@@ -83,11 +109,13 @@ type roleModelAssignment struct {
 	EffectiveModel  string `json:"effective_model"`
 	ReasoningEffort string `json:"reasoning_effort"`
 	Inherited       bool   `json:"inherited"`
+	Custom          bool   `json:"custom"`
 }
 
 type providerSettings struct {
 	ConfigPath string                    `json:"config_path"`
 	Items      []gatewayProviderSettings `json:"items"`
+	APIKeys    []serviceAPIKeySettings   `json:"api_keys"`
 }
 
 type gatewayProviderSettings struct {
@@ -128,6 +156,7 @@ type serviceAPIKeySettings struct {
 type serviceSettings struct {
 	Gateway   listenerSettings  `json:"gateway"`
 	SystemOne systemOneSettings `json:"system_one"`
+	Library   listenerSettings  `json:"library"`
 }
 
 type listenerSettings struct {
@@ -170,6 +199,7 @@ type modelAssignmentUpdate struct {
 	Model               string `json:"model"`
 	ReasoningEffort     string `json:"reasoning_effort,omitempty"`
 	EmbeddingDimensions int    `json:"embedding_dimensions,omitempty"`
+	WorkspaceRoot       string `json:"workspace_root,omitempty"`
 }
 
 type gatewayProviderUpdate struct {
@@ -224,20 +254,57 @@ type modelOption struct {
 	ReasoningEfforts []string `json:"reasoning_efforts,omitempty"`
 	DefaultEffort    string   `json:"default_effort,omitempty"`
 	Group            bool     `json:"group,omitempty"`
+	APIMode          string   `json:"api_mode,omitempty"`
+	ContextOverride  int64    `json:"context_override,omitempty"`
+}
+
+type modelGroupUpdate struct {
+	Name       string                   `json:"name"`
+	Candidates []modelCandidateSettings `json:"candidates"`
+}
+
+type customRoleUpdate struct {
+	Role string `json:"role"`
+}
+
+type modelAPIModeUpdate struct {
+	Model string `json:"model"`
+	Mode  string `json:"mode"`
+}
+
+type modelMetadataUpdate struct {
+	Model         string `json:"model"`
+	ContextWindow int64  `json:"context_window"`
+}
+
+type loomOperationRequest struct {
+	WorkspaceRoot string `json:"workspace_root"`
+	DryRun        bool   `json:"dry_run"`
+}
+
+type loomStatusResponse struct {
+	WorkspaceRoot string         `json:"workspace_root"`
+	Stats         loom.Stats     `json:"stats"`
+	Result        *loom.GCResult `json:"result,omitempty"`
 }
 
 type apiError struct {
 	Error string `json:"error"`
 }
 
-func newSettingsService(store config.Store) *settingsService {
-	return &settingsService{
+func newSettingsService(store config.Store, runtimes ...settingsRuntime) *settingsService {
+	service := &settingsService{
 		main:      store,
 		gateway:   gatewayconfig.Store{Dir: store.Dir},
 		systemOne: systemoneconfig.Store{Dir: store.Dir},
 		mcp:       mcpconfig.Store{Dir: store.Dir},
 		providers: providerhost.Store{Dir: store.Dir},
+		library:   qlibrary.ConfigStore{Dir: store.Dir},
 	}
+	if len(runtimes) > 0 {
+		service.runtime = runtimes[0]
+	}
+	return service
 }
 
 func (service *settingsService) serveSnapshot(writer http.ResponseWriter, _ *http.Request) {
@@ -288,6 +355,66 @@ func (service *settingsService) serveRuntimeUpdate(writer http.ResponseWriter, r
 	service.writeSnapshot(writer)
 }
 
+func (service *settingsService) serveLoomStatus(writer http.ResponseWriter, request *http.Request) {
+	root, err := canonicalWorkspaceDirectory(request.URL.Query().Get("workspace_root"))
+	if err != nil {
+		writeAPIError(writer, http.StatusBadRequest, err)
+		return
+	}
+	runtime, err := service.openLoomRuntime(request.Context(), root)
+	if err != nil {
+		writeAPIError(writer, http.StatusInternalServerError, err)
+		return
+	}
+	defer func() { _ = runtime.Close() }()
+	stats, err := runtime.LoomStats(request.Context())
+	if err != nil {
+		writeAPIError(writer, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(writer, http.StatusOK, loomStatusResponse{WorkspaceRoot: root, Stats: stats})
+}
+
+func (service *settingsService) serveLoomCollect(writer http.ResponseWriter, request *http.Request) {
+	var input loomOperationRequest
+	if err := decodeSettingsRequest(writer, request, &input); err != nil {
+		writeAPIError(writer, http.StatusBadRequest, err)
+		return
+	}
+	root, err := canonicalWorkspaceDirectory(input.WorkspaceRoot)
+	if err != nil {
+		writeAPIError(writer, http.StatusBadRequest, err)
+		return
+	}
+	runtime, err := service.openLoomRuntime(request.Context(), root)
+	if err != nil {
+		writeAPIError(writer, http.StatusInternalServerError, err)
+		return
+	}
+	defer func() { _ = runtime.Close() }()
+	result, err := runtime.CollectLoom(request.Context(), input.DryRun)
+	if err != nil {
+		writeAPIError(writer, http.StatusInternalServerError, err)
+		return
+	}
+	stats, err := runtime.LoomStats(request.Context())
+	if err != nil {
+		writeAPIError(writer, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(writer, http.StatusOK, loomStatusResponse{WorkspaceRoot: root, Stats: stats, Result: &result})
+}
+
+func (service *settingsService) openLoomRuntime(ctx context.Context, root string) (*qtools.Runtime, error) {
+	service.mu.Lock()
+	value, err := service.main.Load()
+	service.mu.Unlock()
+	if err != nil {
+		return nil, err
+	}
+	return qtools.NewRuntimeWithArchiveAndLoomOptions(ctx, root, nil, value.LoomStoreOptions(nil))
+}
+
 func (service *settingsService) serveModelCatalog(writer http.ResponseWriter, request *http.Request) {
 	service.mu.Lock()
 	providerConfig, err := service.providers.Load()
@@ -318,7 +445,10 @@ func (service *settingsService) serveModelCatalog(writer http.ResponseWriter, re
 	}
 	result := modelCatalog{Models: make([]modelOption, 0, len(models)+len(mainConfig.ModelGroups))}
 	for _, model := range models {
-		option := modelOption{ID: model.ID, ContextLength: model.ContextLength}
+		option := modelOption{ID: model.ID, ContextLength: model.ContextLength, APIMode: mainConfig.ModelAPIMode(model.ID)}
+		if providerIndex, upstreamID, found := studioGatewayModelLocation(providerConfig, model.ID); found {
+			option.ContextOverride = providerConfig.Providers[providerIndex].ModelMetadata[upstreamID].ContextLength
+		}
 		if model.Capabilities != nil && model.Capabilities.Reasoning != nil {
 			reasoning := model.Capabilities.Reasoning
 			option.ReasoningControl = string(reasoning.Control)
@@ -332,6 +462,194 @@ func (service *settingsService) serveModelCatalog(writer http.ResponseWriter, re
 	}
 	sort.Slice(result.Models, func(i, j int) bool { return result.Models[i].ID < result.Models[j].ID })
 	writeJSON(writer, http.StatusOK, result)
+}
+
+func (service *settingsService) serveModelGroupUpsert(writer http.ResponseWriter, request *http.Request) {
+	var update modelGroupUpdate
+	if err := decodeSettingsRequest(writer, request, &update); err != nil {
+		writeAPIError(writer, http.StatusBadRequest, err)
+		return
+	}
+	update.Name = strings.TrimSpace(update.Name)
+	service.mu.Lock()
+	defer service.mu.Unlock()
+	value, err := service.main.Load()
+	if err != nil {
+		writeAPIError(writer, http.StatusInternalServerError, err)
+		return
+	}
+	if value.ModelGroups == nil {
+		value.ModelGroups = make(map[string]config.ModelGroupConfig)
+	}
+	candidates := make([]config.ModelCandidateConfig, 0, len(update.Candidates))
+	for _, candidate := range update.Candidates {
+		timeout := time.Duration(0)
+		if strings.TrimSpace(candidate.Timeout) != "" {
+			timeout, err = time.ParseDuration(strings.TrimSpace(candidate.Timeout))
+			if err != nil {
+				writeAPIError(writer, http.StatusUnprocessableEntity, fmt.Errorf("invalid candidate timeout: %w", err))
+				return
+			}
+		}
+		candidates = append(candidates, config.ModelCandidateConfig{
+			Model: strings.TrimSpace(candidate.Model), ReasoningEffort: strings.TrimSpace(candidate.ReasoningEffort), Timeout: timeout,
+		})
+	}
+	value.ModelGroups[update.Name] = config.ModelGroupConfig{Candidates: candidates}
+	if err := service.main.Save(value); err != nil {
+		writeAPIError(writer, http.StatusUnprocessableEntity, err)
+		return
+	}
+	service.writeSnapshot(writer)
+}
+
+func (service *settingsService) serveModelGroupDelete(writer http.ResponseWriter, request *http.Request) {
+	service.mu.Lock()
+	defer service.mu.Unlock()
+	value, err := service.main.Load()
+	if err != nil {
+		writeAPIError(writer, http.StatusInternalServerError, err)
+		return
+	}
+	name := request.PathValue("group")
+	if _, found := value.ModelGroups[name]; !found {
+		writeAPIError(writer, http.StatusNotFound, errors.New("model group does not exist"))
+		return
+	}
+	delete(value.ModelGroups, name)
+	if err := service.main.Save(value); err != nil {
+		writeAPIError(writer, http.StatusUnprocessableEntity, err)
+		return
+	}
+	service.writeSnapshot(writer)
+}
+
+func (service *settingsService) serveCustomRoleCreate(writer http.ResponseWriter, request *http.Request) {
+	var update customRoleUpdate
+	if err := decodeSettingsRequest(writer, request, &update); err != nil {
+		writeAPIError(writer, http.StatusBadRequest, err)
+		return
+	}
+	update.Role = strings.TrimSpace(update.Role)
+	if !config.ValidCustomRoleName(update.Role) {
+		writeAPIError(writer, http.StatusUnprocessableEntity, errors.New("custom role must start with a lowercase letter and use lowercase letters, digits, or hyphens"))
+		return
+	}
+	service.mu.Lock()
+	defer service.mu.Unlock()
+	value, err := service.main.Load()
+	if err != nil {
+		writeAPIError(writer, http.StatusInternalServerError, err)
+		return
+	}
+	if value.Agents.Roles == nil {
+		value.Agents.Roles = make(map[string]config.AgentConfig)
+	}
+	if _, exists := value.Agents.Roles[update.Role]; exists {
+		writeAPIError(writer, http.StatusConflict, errors.New("custom role already exists"))
+		return
+	}
+	value.Agents.Roles[update.Role] = config.AgentConfig{}
+	if err := service.main.Save(value); err != nil {
+		writeAPIError(writer, http.StatusUnprocessableEntity, err)
+		return
+	}
+	service.writeSnapshot(writer)
+}
+
+func (service *settingsService) serveCustomRoleDelete(writer http.ResponseWriter, request *http.Request) {
+	role := request.PathValue("role")
+	if !config.ValidCustomRoleName(role) {
+		writeAPIError(writer, http.StatusUnprocessableEntity, errors.New("only custom roles can be deleted"))
+		return
+	}
+	service.mu.Lock()
+	defer service.mu.Unlock()
+	value, err := service.main.Load()
+	if err != nil {
+		writeAPIError(writer, http.StatusInternalServerError, err)
+		return
+	}
+	if !value.HasNativeRole(role) {
+		writeAPIError(writer, http.StatusNotFound, errors.New("custom role does not exist"))
+		return
+	}
+	delete(value.Agents.Roles, role)
+	if err := service.main.Save(value); err != nil {
+		writeAPIError(writer, http.StatusUnprocessableEntity, err)
+		return
+	}
+	service.writeSnapshot(writer)
+}
+
+func (service *settingsService) serveModelAPIModeUpdate(writer http.ResponseWriter, request *http.Request) {
+	var update modelAPIModeUpdate
+	if err := decodeSettingsRequest(writer, request, &update); err != nil {
+		writeAPIError(writer, http.StatusBadRequest, err)
+		return
+	}
+	update.Model, update.Mode = strings.TrimSpace(update.Model), strings.TrimSpace(update.Mode)
+	service.mu.Lock()
+	defer service.mu.Unlock()
+	value, err := service.main.Load()
+	if err != nil {
+		writeAPIError(writer, http.StatusInternalServerError, err)
+		return
+	}
+	if value.ModelAPIModes == nil {
+		value.ModelAPIModes = make(map[string]string)
+	}
+	if update.Mode == "" || update.Mode == "chat_completions" {
+		delete(value.ModelAPIModes, update.Model)
+	} else {
+		value.ModelAPIModes[update.Model] = update.Mode
+	}
+	if err := service.main.Save(value); err != nil {
+		writeAPIError(writer, http.StatusUnprocessableEntity, err)
+		return
+	}
+	service.writeSnapshot(writer)
+}
+
+func (service *settingsService) serveModelMetadataUpdate(writer http.ResponseWriter, request *http.Request) {
+	var update modelMetadataUpdate
+	if err := decodeSettingsRequest(writer, request, &update); err != nil {
+		writeAPIError(writer, http.StatusBadRequest, err)
+		return
+	}
+	update.Model = strings.TrimSpace(update.Model)
+	if update.ContextWindow < 0 {
+		writeAPIError(writer, http.StatusUnprocessableEntity, errors.New("context window must not be negative"))
+		return
+	}
+	service.mu.Lock()
+	defer service.mu.Unlock()
+	value, err := service.loadProviderConfig()
+	if err != nil {
+		writeAPIError(writer, http.StatusInternalServerError, err)
+		return
+	}
+	providerIndex, upstreamID, found := studioGatewayModelLocation(value, update.Model)
+	if !found {
+		writeAPIError(writer, http.StatusNotFound, errors.New("model is not mapped to a Gateway provider"))
+		return
+	}
+	provider := &value.Providers[providerIndex]
+	if provider.ModelMetadata == nil {
+		provider.ModelMetadata = make(map[string]client.ModelMetadata)
+	}
+	metadata := provider.ModelMetadata[upstreamID]
+	metadata.ContextLength = update.ContextWindow
+	if metadata.ContextLength == 0 && metadata.MaxOutputTokens == 0 && metadata.Capabilities == nil {
+		delete(provider.ModelMetadata, upstreamID)
+	} else {
+		provider.ModelMetadata[upstreamID] = metadata
+	}
+	if err := service.saveProviderConfig(request, value); err != nil {
+		writeAPIError(writer, http.StatusUnprocessableEntity, err)
+		return
+	}
+	service.writeSnapshot(writer)
 }
 
 func (service *settingsService) serveModelAssignmentUpdate(writer http.ResponseWriter, request *http.Request) {
@@ -399,6 +717,22 @@ func (service *settingsService) serveModelAssignmentUpdate(writer http.ResponseW
 	if err := service.main.Save(value); err != nil {
 		writeAPIError(writer, http.StatusUnprocessableEntity, err)
 		return
+	}
+	if target == "embedding" {
+		if runtime, ok := service.runtime.(embeddingRuntime); ok {
+			root := strings.TrimSpace(update.WorkspaceRoot)
+			if root != "" {
+				root, err = canonicalWorkspaceDirectory(root)
+				if err != nil {
+					writeAPIError(writer, http.StatusBadRequest, err)
+					return
+				}
+			}
+			if err := runtime.SyncEmbeddings(request.Context(), root, value); err != nil {
+				writeAPIError(writer, http.StatusBadGateway, fmt.Errorf("embedding settings saved, but reindexing failed: %w", err))
+				return
+			}
+		}
 	}
 	service.writeSnapshot(writer)
 }
@@ -671,6 +1005,47 @@ func (service *settingsService) serveSystemOneAPIKeyRevoke(writer http.ResponseW
 	service.writeSnapshot(writer)
 }
 
+func (service *settingsService) serveGatewayAPIKeyCreate(writer http.ResponseWriter, request *http.Request) {
+	var update apiKeyCreateRequest
+	if err := decodeSettingsRequest(writer, request, &update); err != nil {
+		writeAPIError(writer, http.StatusBadRequest, err)
+		return
+	}
+	service.mu.Lock()
+	defer service.mu.Unlock()
+	value, err := service.gateway.LoadOrDefault()
+	if err != nil {
+		writeAPIError(writer, http.StatusInternalServerError, err)
+		return
+	}
+	_, generated, err := service.gateway.CreateAPIKey(value, update.Alias, time.Now())
+	if err != nil {
+		writeAPIError(writer, http.StatusUnprocessableEntity, err)
+		return
+	}
+	snapshot, err := service.snapshot()
+	if err != nil {
+		writeAPIError(writer, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(writer, http.StatusCreated, apiKeyCreateResponse{Settings: snapshot, Secret: generated.Secret})
+}
+
+func (service *settingsService) serveGatewayAPIKeyRevoke(writer http.ResponseWriter, request *http.Request) {
+	service.mu.Lock()
+	defer service.mu.Unlock()
+	value, err := service.gateway.LoadOrDefault()
+	if err != nil {
+		writeAPIError(writer, http.StatusInternalServerError, err)
+		return
+	}
+	if _, err := service.gateway.RevokeAPIKey(value, request.PathValue("key"), time.Now()); err != nil {
+		writeAPIError(writer, http.StatusUnprocessableEntity, err)
+		return
+	}
+	service.writeSnapshot(writer)
+}
+
 func (service *settingsService) serveServiceUpdate(writer http.ResponseWriter, request *http.Request) {
 	var update serviceUpdate
 	if err := decodeSettingsRequest(writer, request, &update); err != nil {
@@ -695,6 +1070,13 @@ func (service *settingsService) serveServiceUpdate(writer http.ResponseWriter, r
 		if err == nil {
 			value.Server.Host, value.Server.Port = update.Host, update.Port
 			err = service.systemOne.Save(value)
+		}
+	case "library":
+		var value qlibrary.Config
+		value, err = service.library.LoadOrDefault()
+		if err == nil {
+			value.Host, value.Port = update.Host, update.Port
+			err = service.library.Save(value)
 		}
 	default:
 		writeAPIError(writer, http.StatusNotFound, errors.New("unknown service settings"))
@@ -733,6 +1115,10 @@ func (service *settingsService) snapshot() (settingsSnapshot, error) {
 	if err != nil {
 		return settingsSnapshot{}, err
 	}
+	library, err := service.library.LoadOrDefault()
+	if err != nil {
+		return settingsSnapshot{}, err
+	}
 	mcp, err := service.mcp.LoadOrDefault()
 	if err != nil {
 		return settingsSnapshot{}, err
@@ -764,8 +1150,24 @@ func (service *settingsService) snapshot() (settingsSnapshot, error) {
 			Role: role, ConfiguredModel: configuredModel, EffectiveModel: effectiveModel,
 			ReasoningEffort: raw.ReasoningEffort,
 			Inherited:       !configured || raw.Model == "" && raw.Group == "",
+			Custom:          config.ValidCustomRoleName(role),
 		})
 	}
+	groups := make([]modelGroupSettings, 0, len(main.ModelGroups))
+	for name, group := range main.ModelGroups {
+		item := modelGroupSettings{Name: name, Candidates: make([]modelCandidateSettings, 0, len(group.Candidates))}
+		for _, candidate := range group.Candidates {
+			timeout := ""
+			if candidate.Timeout > 0 {
+				timeout = candidate.Timeout.String()
+			}
+			item.Candidates = append(item.Candidates, modelCandidateSettings{
+				Model: candidate.Model, ReasoningEffort: candidate.ReasoningEffort, Timeout: timeout,
+			})
+		}
+		groups = append(groups, item)
+	}
+	sort.Slice(groups, func(i, j int) bool { return groups[i].Name < groups[j].Name })
 	providerItems := make([]gatewayProviderSettings, 0, len(providerConfig.Providers))
 	for _, provider := range providerConfig.Providers {
 		modelCount := len(provider.Models)
@@ -776,6 +1178,13 @@ func (service *settingsService) snapshot() (settingsSnapshot, error) {
 			ID: provider.ID, Type: provider.Type, Kind: provider.Kind, Prefix: provider.Prefix,
 			Enabled: provider.Enabled, BaseURL: provider.BaseURL, APIKeyEnv: provider.APIKeyEnv,
 			HasInlineAPIKey: provider.APIKey != "", ModelCount: modelCount,
+		})
+	}
+	gatewayKeys := make([]serviceAPIKeySettings, 0, len(gateway.APIKeys))
+	for _, key := range gateway.APIKeys {
+		createdAt := key.CreatedAt
+		gatewayKeys = append(gatewayKeys, serviceAPIKeySettings{
+			ID: key.ID, Alias: key.Alias, CreatedAt: &createdAt, RevokedAt: key.RevokedAt,
 		})
 	}
 	systemOneProviders := make([]systemOneProviderSettings, 0, len(systemOne.Providers))
@@ -816,9 +1225,9 @@ func (service *settingsService) snapshot() (settingsSnapshot, error) {
 			ConfigPath: service.main.Path(), DefaultModel: main.Provider.Model,
 			DefaultReasoning: main.Provider.EffectiveReasoningEffort(),
 			EmbeddingModel:   main.Embedding.Model, EmbeddingDimensions: main.Embedding.Dimensions,
-			GroupCount: len(main.ModelGroups), Roles: roleAssignments,
+			GroupCount: len(main.ModelGroups), Groups: groups, Roles: roleAssignments,
 		},
-		Providers: providerSettings{ConfigPath: service.providers.Path(), Items: providerItems},
+		Providers: providerSettings{ConfigPath: service.providers.Path(), Items: providerItems, APIKeys: gatewayKeys},
 		SystemOne: systemOneAPISettings{
 			ConfigPath: service.systemOne.Path(), DefaultModel: systemOne.DefaultModel,
 			AgentSkillModel: systemOne.RoleModels[systemoneconfig.RoleAgentSkillDecision],
@@ -837,12 +1246,30 @@ func (service *settingsService) snapshot() (settingsSnapshot, error) {
 				ProviderCount: len(systemOne.Providers), DefaultModel: systemOne.DefaultModel,
 				RoleModelCount: len(systemOne.RoleModels),
 			},
+			Library: listenerSettings{ConfigPath: service.library.Path(), Host: library.Host, Port: library.Port},
 		},
 		Integrations: integrationSettings{
 			MCP: integrationSummary{ConfigPath: service.mcp.Path(), Items: len(mcp.Servers), Bindings: len(mcp.Roles)},
 			LSP: integrationSummary{ConfigPath: service.main.Path(), Items: len(main.LSP.Servers), Bindings: len(main.LSP.Languages)},
 		},
 	}, nil
+}
+
+func studioGatewayModelLocation(value gateway.Config, modelID string) (int, string, bool) {
+	prefix, upstreamID, found := strings.Cut(modelID, "/")
+	if !found || prefix == "" || upstreamID == "" {
+		return 0, "", false
+	}
+	for index, provider := range value.Providers {
+		effectivePrefix := provider.Prefix
+		if effectivePrefix == "" {
+			effectivePrefix = provider.ID
+		}
+		if effectivePrefix == prefix {
+			return index, upstreamID, true
+		}
+	}
+	return 0, "", false
 }
 
 func (service *settingsService) loadProviderConfig() (gateway.Config, error) {
@@ -856,6 +1283,9 @@ func (service *settingsService) loadProviderConfig() (gateway.Config, error) {
 func (service *settingsService) saveProviderConfig(request *http.Request, value gateway.Config) error {
 	if err := validateProviderIdentities(value); err != nil {
 		return err
+	}
+	if service.runtime != nil {
+		return service.runtime.ApplyGateway(request.Context(), value)
 	}
 	runtime, err := gateway.NewContext(request.Context(), value)
 	if err != nil {
