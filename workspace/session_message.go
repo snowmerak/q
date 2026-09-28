@@ -56,7 +56,7 @@ type sessionToolCall struct {
 
 func (s Session) MarshalJSON() ([]byte, error) {
 	return json.Marshal(sessionFile{
-		Version: CurrentVersion, ID: s.ID, RunID: s.RunID, LoopMode: s.LoopMode, Title: s.Title, UpdatedAt: s.UpdatedAt,
+		Version: CurrentVersion, ID: s.ID, RunID: s.RunID, Title: s.Title, UpdatedAt: s.UpdatedAt,
 		Transcript: toSessionMessages(s.Transcript), Context: toSessionMessages(s.Context),
 		ResponseReplay: s.ResponseReplay, ResponseAffinity: s.ResponseAffinity,
 		Learning: s.Learning, ActiveTask: s.ActiveTask,
@@ -94,7 +94,7 @@ func (s *Session) UnmarshalJSON(data []byte) error {
 			return err
 		}
 		*s = Session{
-			Version: CurrentVersion, ID: saved.ID, RunID: saved.RunID, LoopMode: saved.LoopMode, Title: saved.Title, UpdatedAt: saved.UpdatedAt,
+			Version: CurrentVersion, ID: saved.ID, RunID: saved.RunID, Title: saved.Title, UpdatedAt: saved.UpdatedAt,
 			Transcript: fromSessionMessages(saved.Transcript), Context: fromSessionMessages(saved.Context),
 			ResponseReplay: saved.ResponseReplay, ResponseAffinity: saved.ResponseAffinity,
 			Learning: saved.Learning, ActiveTask: saved.ActiveTask,

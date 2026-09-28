@@ -24,13 +24,7 @@ q 是面向终端、原生融入工作区的编码代理。在代码仓库或项
 
 如果请求范围明确，希望 q 直接检查或编辑，请使用普通对话。
 
-如果要将需求、计划、实施和审查交给职业角色子代理，请使用 `/mode delegation`。manager 作为 PM 负责规划，senior developer 可以直接实施，也可以分配并审查实施任务。
-
-如需在没有交互式 UI 的情况下运行一项委派任务，请使用 `q sprint`。
-
-```powershell
-q sprint implement the requested feature
-```
+普通聊天可以直接使用工作区工具，同时协调职业角色子代理。manager 作为 PM 负责规划，senior developer 可以直接实施，也可以分配并审查实施任务。
 
 用 `/subagent` 将一个范围明确的请求交给专门代理。当另一个可信进程需要通过 HTTP 使用相同的会话与代理运行时，请使用 `q remote`。
 

@@ -14,9 +14,9 @@ toc:
 
 ## 开始任务
 
-在工作区会话中输入 `/mode delegation`，然后描述期望的结果。主代理可以委派 manager 处理需求和计划、research 调查具体问题、senior developer 处理技术工作或审查。代理的执行顺序并不固定。使用 `/mode default` 可返回直接使用工具的聊天模式。
+在工作区会话中描述期望的结果。默认循环可以直接使用工作区工具，也可以委派 manager 处理需求和计划、research 调查具体问题、senior developer 处理技术工作或审查。代理的执行顺序并不固定。
 
-`q sprint <request...>` 会创建新会话，并在没有交互式 UI 的情况下运行一项委派任务。如只需 PM 工作，可在聊天中使用 `/subagent builtin/manager <request>`。
+如只需 PM 工作，可在聊天中使用 `/subagent builtin/manager <request>`。
 
 ## 角色与模型
 

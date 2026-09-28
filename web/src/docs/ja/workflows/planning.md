@@ -14,9 +14,9 @@ toc:
 
 ## 作業を始める
 
-ワークスペースのセッションで `/mode delegation` を入力し、求める結果を伝えます。メインエージェントは manager に要件と計画を、research に調査を、senior developer に技術作業やレビューを委任できます。エージェントの順序は固定されていません。直接ツールを使う会話に戻すには `/mode default` を使います。
+ワークスペースのセッションで求める結果を伝えます。デフォルトループはワークスペースツールを直接使いながら、manager に要件と計画を、research に調査を、senior developer に技術作業やレビューを委任できます。エージェントの順序は固定されていません。
 
-`q sprint <request...>` は新しいセッションを作成し、対話型 UI なしで一件の委任作業を実行します。PM の作業だけを依頼する場合は、チャットで `/subagent builtin/manager <request>` を使います。
+PM の作業だけを依頼する場合は、チャットで `/subagent builtin/manager <request>` を使います。
 
 ## 役割とモデル
 

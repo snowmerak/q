@@ -16,7 +16,6 @@ toc:
 
 | 명령 | 용도 |
 | --- | --- |
-| `/mode [default\|delegation]` | 현재 채팅 루프 모드를 확인하거나 변경합니다. |
 | `/changes` | 스테이징, 비스테이징, 미추적 변경을 살펴봅니다. |
 | `/commit` | 커밋 제안을 생성하고 검토합니다. |
 | `/sessions` | 다른 저장된 워크스페이스 세션을 엽니다. |
@@ -35,13 +34,12 @@ toc:
 | `/lsp` | 언어 서버 프로필과 루트를 구성합니다. |
 | `/help` | 전체 명령 및 키 도움말을 엽니다. |
 
-기존 `/plan`, `/auto-approve`, `/auto-resolve`, `/autonomous` 명령은 제거되었습니다. 작업을 조율하려면 `/mode delegation`을, PM 업무만 요청하려면 `/subagent builtin/manager <request>`를 사용하세요.
+기존 `/mode`, `/plan`, `/auto-approve`, `/auto-resolve`, `/autonomous` 명령은 제거되었습니다. default loop는 직접 도구와 delegation을 함께 제공하며, PM 업무만 요청하려면 `/subagent builtin/manager <request>`를 사용하세요.
 
 ## 독립 실행 명령
 
 | 명령 | 용도 |
 | --- | --- |
-| `q sprint <request...>` | delegation 모드에서 작업 하나를 실행합니다. |
 | `q remote` | 포그라운드 Remote REST 호스트를 시작합니다. |
 | `q remote config` | Remote 리스너와 API 키를 구성합니다. |
 | `q gateway` | 독립 Gateway를 구성합니다. |

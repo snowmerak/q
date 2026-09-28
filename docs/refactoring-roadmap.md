@@ -5,7 +5,7 @@
 상태: M0~M6을 구현하고 Windows 및 WSL Linux ARM64 로컬 검증을 마쳤다.
 macOS 환경 검증과 코드 리뷰는 남아 있다. 현재 동작의 계약은 README, 기능 문서와 코드가 소유한다.
 
-대상 독자: Q의 TUI, ACP, Remote, Sprint, Agent Loop, 설정 저장소와 런타임 생명주기를
+대상 독자: Q의 TUI, ACP, Remote, Agent Loop, 설정 저장소와 런타임 생명주기를
 변경하는 구현자와 리뷰어.
 
 갱신 조건: 마일스톤의 범위, 패키지 경계, 공개 API 호환성, 검증 기준 또는 구현 순서가
@@ -43,7 +43,7 @@ facade로 유지하며, 새 임베딩 경로는 [agent-loop-embedding.md](agent-
 | `model.Update` | 약 880줄 |
 | `RunAgentLoop` | 약 350줄이며 `app/model.go`에 위치 |
 | 플랫폼별 `replaceFile` | 11개 패키지, 22개 운영체제별 파일 |
-| 런타임 시작 경로 | TUI, ACP, Remote, Sprint 등에 Library, Workspace Memory, Provider 시작·종료 반복 |
+| 런타임 시작 경로 | TUI, ACP, Remote 등에 Library, Workspace Memory, Provider 시작·종료 반복 |
 | API key 구현 | `gatewayconfig`와 `remoteconfig`에 생성, hash, 검증, revoke 흐름이 평행 구현 |
 
 최근 150개 commit에서 `app/model.go`는 71회, `app/acp.go`는 45회 변경됐다. 크기만이
@@ -63,7 +63,7 @@ facade로 유지하며, 새 임베딩 경로는 [agent-loop-embedding.md](agent-
 
 ```text
 cmd/q
-  └─ app host adapters (TUI, ACP, Remote, Sprint)
+  └─ app host adapters (TUI, ACP, Remote)
        ├─ agentloop
        │    ├─ client
        │    ├─ memory
@@ -108,7 +108,7 @@ round를 소유한다. Bubble Tea, ACP SDK, Provider Manager, Library 서버와 
 
 ### `app`
 
-TUI와 ACP/Remote/Sprint host adapter를 소유한다. Agent Loop 이벤트를 각 transport와 화면에
+TUI와 ACP/Remote host adapter를 소유한다. Agent Loop 이벤트를 각 transport와 화면에
 투영하고 session/archive 저장을 조정한다. 화면별 상태는 먼저 `app` 내부 구조체로 묶고,
 독립성이 확인된 화면만 후속 패키지 이동 대상으로 삼는다.
 
@@ -170,7 +170,7 @@ TUI와 ACP/Remote/Sprint host adapter를 소유한다. Agent Loop 이벤트를 �
 
 ### M2. 공통 host runtime 수명주기
 
-목표: TUI, ACP, Remote와 Sprint가 같은 서비스 수명주기 구현을 사용하게 한다.
+목표: TUI, ACP와 Remote가 같은 서비스 수명주기 구현을 사용하게 한다.
 
 작업:
 
@@ -178,7 +178,7 @@ TUI와 ACP/Remote/Sprint host adapter를 소유한다. Agent Loop 이벤트를 �
 2. Library, Workspace Memory, Provider Manager와 Usage Recorder의 생성 및 종료 순서를
    옮긴다.
 3. 시작 중간 단계의 실패가 이미 생성된 리소스를 역순으로 정리하게 한다.
-4. `app.Run`, `openACPHost`, `NewRemoteHost`, `RunSprint`와 관련 standalone 경로를 전환한다.
+4. `app.Run`, `openACPHost`, `NewRemoteHost`와 관련 standalone 경로를 전환한다.
 5. host별로 필요한 client, model 목록과 서비스 endpoint만 명시적으로 노출한다.
 
 완료 조건:
@@ -187,7 +187,7 @@ TUI와 ACP/Remote/Sprint host adapter를 소유한다. Agent Loop 이벤트를 �
   통한다.
 - 각 host의 취소와 종료가 bounded하며 `Close`를 여러 번 호출해도 안전하다.
 - 부분 초기화 실패와 정상 종료 모두 listener, goroutine, client와 recorder를 남기지 않는다.
-- TUI, ACP, Remote, Sprint focused test와 전체 테스트가 통과한다.
+- TUI, ACP, Remote focused test와 전체 테스트가 통과한다.
 
 예상: 2~4일, PR 1~2개.
 

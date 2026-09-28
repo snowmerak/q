@@ -31,13 +31,13 @@ The primary session record is:
 .q/sessions/<uuid>/session.json
 ```
 
-Session v2 stores messages in a common format for Chat Completions and Responses. Existing v1 Chat Completions sessions are converted on load and saved in the new format on the next write. The record also keeps the selected chat loop mode and Responses replay state when applicable.
+Session v2 stores messages in a common format for Chat Completions and Responses. Existing v1 Chat Completions sessions are converted on load and saved in the new format on the next write. The record also keeps Responses replay state when applicable. Retired `loop_mode` values are accepted from older files and omitted on the next save.
 
 Earlier versions could store `plan-execution.json` beside the session. It remains legacy data; the removed `/plan` workflow does not create new checkpoints.
 
 ## Delegated recovery
 
-In delegation mode, each child call has a bookmark in `delegations.json` and its own session under `delegates/<invocation-id>/`. Children may have their own nested delegation tree. After a restart, q restores the deepest child first and returns its stored result to the parent call before continuing the parent turn.
+Each delegated child call has a bookmark in `delegations.json` and its own session under `delegates/<invocation-id>/`. Children may have their own nested delegation tree. After a restart, q restores the deepest child first and returns its stored result to the parent call before continuing the parent turn.
 
 If q stopped while a general tool call had no recorded result, recovery reports that call as `unknown` to its agent and does not run it again automatically. An interrupted external ACP child also returns `unknown`; q cannot resume the remote agent's internal turn. Older plan checkpoints remain as legacy data.
 

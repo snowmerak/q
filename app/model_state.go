@@ -264,7 +264,6 @@ type chatState struct {
 	messages             []client.Message
 	memory               *memory.Manager
 	conversationID       string
-	loopMode             string
 	activeTask           *workspace.ActiveTask
 	pendingMessage       client.Message
 	requestEstimate      int

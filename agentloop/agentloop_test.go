@@ -15,7 +15,6 @@ import (
 	"github.com/snowmerak/q/client"
 	"github.com/snowmerak/q/memory"
 	qtools "github.com/snowmerak/q/tools"
-	"github.com/snowmerak/q/workspace"
 )
 
 func TestConsumeChatStreamRetainsResponsesReplayItems(t *testing.T) {
@@ -183,103 +182,6 @@ func TestMainLoopExposesAndExecutesMemoryToolWithoutCallingWorkspaceRuntime(t *t
 	}
 	if len(runtime.calls) != 0 || memoryResult.Name != memory.SetActiveWorkTool || !strings.Contains(memoryResult.Content, "Inspect project files") {
 		t.Fatalf("memory tool was not handled by the loop: runtime calls=%d result=%#v", len(runtime.calls), memoryResult)
-	}
-}
-
-func TestDelegationModeRejectsSuccessUntilWorkToolSucceeds(t *testing.T) {
-	responses := []*client.ChatResponse{
-		toolResponseWithArguments("task_start", `{"objective":"inspect project"}`),
-		toolResponseWithArguments("task_complete", `{"outcome":"succeeded","summary":"read files"}`),
-		toolResponseWithArguments("delegate_list", `{}`),
-		toolResponseWithArguments(memory.RecordFactTool, `{"fact":"inspection remains pending"}`),
-		toolResponseWithArguments("task_complete", `{"outcome":"succeeded","summary":"read files"}`),
-		toolResponseWithArguments("delegate", `{"subagent_name":"builtin/senior-developer","prompt":"inspect project"}`),
-		toolResponseWithArguments("task_complete", `{"outcome":"succeeded","summary":"inspected project"}`),
-		finalResponse("done"),
-	}
-	configured := &scriptedClient{}
-	configured.chat = func(client.ChatRequest) *client.ChatResponse {
-		index := len(configured.requests) - 1
-		if index >= len(responses) {
-			t.Fatalf("unexpected model request %d", index)
-		}
-		return responses[index]
-	}
-	runtime := &scriptedTools{name: "delegate", content: `{"summary":"inspected"}`}
-	events := make(chan agentloop.Event)
-	go agentloop.RunAgentLoop(t.Context(), agentloop.Request{
-		Client: configured, Tools: runtime, Model: "test", RequireTaskAction: true,
-		Messages: []client.Message{{Role: client.RoleUser, Content: "Inspect project"}},
-	}, events)
-	var rejected, completed int
-	for event := range events {
-		if err := event.Err(); err != nil {
-			t.Fatal(err)
-		}
-		if message, ok := event.Message(); ok && message.Name == "task_complete" {
-			if event.MessageIsToolError() && strings.Contains(message.Content, "requires a successful Q delegate") {
-				rejected++
-			} else if !event.MessageIsToolError() {
-				completed++
-			}
-		}
-	}
-	if rejected != 2 || completed != 1 || len(configured.requests) != len(responses) {
-		t.Fatalf("rejected=%d completed=%d requests=%d", rejected, completed, len(configured.requests))
-	}
-}
-
-func TestDelegationModeAllowsHonestBlockedCompletion(t *testing.T) {
-	responses := []*client.ChatResponse{
-		toolResponseWithArguments("task_start", `{"objective":"inspect project"}`),
-		toolResponseWithArguments("task_complete", `{"outcome":"blocked","summary":"cannot inspect","blocker":"no available agent"}`),
-		finalResponse("done"),
-	}
-	configured := &scriptedClient{}
-	configured.chat = func(client.ChatRequest) *client.ChatResponse { return responses[len(configured.requests)-1] }
-	events := make(chan agentloop.Event)
-	go agentloop.RunAgentLoop(t.Context(), agentloop.Request{
-		Client: configured, Tools: &scriptedTools{}, Model: "test", RequireTaskAction: true,
-		Messages: []client.Message{{Role: client.RoleUser, Content: "Inspect project"}},
-	}, events)
-	var outcome string
-	for event := range events {
-		if err := event.Err(); err != nil {
-			t.Fatal(err)
-		}
-		if result, ok := event.Result(); ok {
-			outcome = result.Outcome
-		}
-	}
-	if outcome != "blocked" || len(configured.requests) != len(responses) {
-		t.Fatalf("outcome=%q requests=%d", outcome, len(configured.requests))
-	}
-}
-
-func TestDelegationModeAcceptsRecordedWorkAfterResume(t *testing.T) {
-	responses := []*client.ChatResponse{
-		toolResponseWithArguments("task_complete", `{"outcome":"succeeded","summary":"inspected project"}`),
-		finalResponse("done"),
-	}
-	configured := &scriptedClient{}
-	configured.chat = func(client.ChatRequest) *client.ChatResponse { return responses[len(configured.requests)-1] }
-	events := make(chan agentloop.Event)
-	go agentloop.RunAgentLoop(t.Context(), agentloop.Request{
-		Client: configured, Tools: &scriptedTools{}, Model: "test", RequireTaskAction: true, PriorTaskAction: true,
-		ActiveTask: &workspace.ActiveTask{Objective: "inspect project"},
-		Messages:   []client.Message{{Role: client.RoleUser, Content: "Inspect project"}},
-	}, events)
-	var outcome string
-	for event := range events {
-		if err := event.Err(); err != nil {
-			t.Fatal(err)
-		}
-		if result, ok := event.Result(); ok {
-			outcome = result.Outcome
-		}
-	}
-	if outcome != "succeeded" || len(configured.requests) != len(responses) {
-		t.Fatalf("outcome=%q requests=%d", outcome, len(configured.requests))
 	}
 }
 

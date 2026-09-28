@@ -34,11 +34,11 @@ q 将用户可见的完整记录与发给模型的压缩请求上下文分别保
 
 旧版本可能在会话旁保存 `plan-execution.json`。已移除的 `/plan` 工作流不再创建新检查点，现有文件仅作为历史数据保留。
 
-会话 v2 使用 Chat Completions 和 Responses 共用的消息格式。现有 v1 Chat Completions 会话在读取时转换，并在下次保存时写入新格式。选定的聊天循环模式和适用时的 Responses 重放状态也会保存。
+会话 v2 使用 Chat Completions 和 Responses 共用的消息格式。现有 v1 Chat Completions 会话在读取时转换，并在下次保存时写入新格式。适用时也会保存 Responses 重放状态。旧文件中的 `loop_mode` 值仍可读取，但下次保存时会省略。
 
 ## 委派恢复
 
-委派模式下，每个子调用的书签保存在 `delegations.json`，子会话保存在 `delegates/<invocation-id>/`。子代理也可以继续委派。重启后，q 从最深层的子会话开始恢复，再将保存的结果返回给父调用。
+每个已委派子调用的书签保存在 `delegations.json`，子会话保存在 `delegates/<invocation-id>/`。子代理也可以继续委派。重启后，q 从最深层的子会话开始恢复，再将保存的结果返回给父调用。
 
 没有记录结果的普通工具调用会以 `unknown` 返回给代理，不会自动重试。中断的外部 ACP 子代理也会返回 `unknown`，因为其内部轮次无法恢复。旧版 plan 检查点作为已有数据保留。
 

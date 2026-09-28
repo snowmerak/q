@@ -128,9 +128,14 @@ func (m model) submitChat() (tea.Model, tea.Cmd) {
 		return m, m.client.(*acpRemoteClient).resetSessionCommand(m.ctx)
 	}
 	if !remoteChat {
+		if retiredLoopModeCommand(content) {
+			m.input.Reset()
+			m.status = "Loop modes were removed. Ordinary chat can use direct tools and delegate work."
+			return m, m.input.Focus()
+		}
 		if retiredPlanCommand(content) {
 			m.input.Reset()
-			m.status = "Plan mode was removed. Use /mode delegation or /subagent builtin/manager."
+			m.status = "Plan mode was removed. Use /subagent builtin/manager for a focused PM request."
 			return m, m.input.Focus()
 		}
 		if updated, command, handled := m.startSkillCommand(content); handled {
@@ -138,11 +143,6 @@ func (m model) submitChat() (tea.Model, tea.Cmd) {
 		}
 		if customCommand(content) {
 			return m.startCustom(content)
-		}
-		if content == "/mode" || strings.HasPrefix(content, "/mode ") {
-			m.input.Reset()
-			m.status = m.runLoopModeCommand(content)
-			return m, m.input.Focus()
 		}
 		switch content {
 		case "/commit":
@@ -243,6 +243,10 @@ func retiredPlanCommand(command string) bool {
 		}
 	}
 	return false
+}
+
+func retiredLoopModeCommand(command string) bool {
+	return command == "/mode" || strings.HasPrefix(command, "/mode ")
 }
 
 func (m model) startChatTurn(content string, compact bool) (tea.Model, tea.Cmd) {
@@ -576,9 +580,7 @@ func (m *model) sendChatRequest() tea.Cmd {
 				Client: configuredClient, Tools: toolRuntime, Model: modelID, ReasoningEffort: reasoningEffort,
 				Messages: history, ConversationID: conversationID, WorkingDirectory: workingDirectory,
 				ActiveTask: activeTask, Stream: streamEnabled, CoalesceInstructions: coalesceInstructions,
-				RequireTaskAction: m.loopMode == loopModeDelegation,
-				PriorTaskAction:   activeTask != nil && priorTaskAction(m.messages),
-				ContextPolicy:     memoryPolicy(m.activeConfig()),
+				ContextPolicy: memoryPolicy(m.activeConfig()),
 			}, events)
 		}
 		return waitAgentEvent(events, turnID)()

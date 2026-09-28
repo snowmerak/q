@@ -25,7 +25,6 @@ func (c slashCommand) usage() string {
 
 // Keep the local help screen and completion menu on the same command catalog.
 var localSlashCommands = []slashCommand{
-	{"/mode", "[default|delegation]", "Set this session's default-loop mode."},
 	{"/commit", "", "Open the interactive commit workflow."},
 	{"/changes", "", "Browse file diffs with syntax highlighting (read only)."},
 	{"/sessions", "", "Resume a saved workspace session."},

@@ -24,13 +24,7 @@ q는 터미널을 위한 워크스페이스 중심 코딩 에이전트입니다.
 
 범위가 명확하고 q가 바로 조사하거나 수정하기를 원한다면 일반 채팅을 사용하세요.
 
-요구사항 확인과 계획, 구현 및 검토를 여러 직업형 서브에이전트에 맡기려면 `/mode delegation`을 사용하세요. manager는 PM으로서 계획을 맡고 senior developer는 직접 구현하거나 구현을 배정하고 검토합니다.
-
-대화형 UI 없이 위임 작업 하나를 실행하려면 `q sprint`를 사용합니다.
-
-```powershell
-q sprint implement the requested feature
-```
+일반 채팅은 workspace 도구를 직접 사용하면서 직업형 서브에이전트를 조율할 수 있습니다. manager는 PM으로서 계획을 맡고 senior developer는 직접 구현하거나 구현을 배정하고 검토합니다.
 
 하나의 제한된 작업을 전문가에게 맡길 때는 `/subagent`를, 신뢰할 수 있는 다른 프로세스가 HTTP를 통해 같은 세션과 에이전트 런타임을 사용해야 할 때는 `q remote`를 사용하세요.
 

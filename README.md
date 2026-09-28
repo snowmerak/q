@@ -15,8 +15,8 @@ the resulting diff, and create a commit without leaving the terminal.
 - **Workspace tools** — anchored reads and edits, complete-file writes,
   directory operations, asynchronous commands, archive search, and optional
   read-only LSP queries.
-- **Selectable orchestration** — ordinary chat can use direct tools or a
-  delegation mode with profession-based subagents.
+- **Integrated delegation** — ordinary chat can use workspace tools directly
+  and assign bounded work to profession-based subagents.
 - **Provider choice** — OpenAI-compatible APIs and local servers, OpenRouter,
   xAI, Anthropic, and the Codex App Server, all exposed through q's managed
   Gateway.
@@ -81,15 +81,6 @@ Start q from the repository or directory you want it to treat as the workspace:
 cd C:\path\to\project
 q
 ```
-
-Run one delegated task without the interactive UI:
-
-```powershell
-q sprint implement the requested feature
-```
-
-Sprint creates a fresh durable workspace session, runs in delegation mode, and
-streams progress plus the final result to stdout.
 
 On first launch, q opens provider setup. Prefer an environment variable for an
 API key instead of storing a key inline. After selecting a model, type a request
@@ -175,7 +166,6 @@ screen and returns to the previous screen without discarding its state.
 
 | Command | Purpose |
 |---|---|
-| `/mode [default\|delegation]` | Show or change the current chat loop mode. |
 | `/changes` | Browse current staged, unstaged, and untracked repository changes. |
 | `/commit` | Generate and review a commit or split-commit proposal. |
 | `/sessions` | Open another saved workspace session. |
@@ -203,7 +193,7 @@ Escape closes the completion popup.
 External subagents are invoked through `/subagent builtin/web-search <query>` or
 `/subagent builtin/web-tester <request>`. Availability depends on assigning the
 builtin to an existing enabled ACP connection in `/subagents`. The same rule
-controls availability in general chat and delegation.
+controls availability in general chat and explicit subagent calls.
 
 Web Tester invocations run in an isolated ACP process/session with a fixed
 15-minute deadline. q automatically selects `allow_once`, falling back to an
@@ -249,7 +239,8 @@ does not stage, commit, or modify files.
 
 ## Delegated work
 
-Use `/mode delegation` to have the main agent coordinate bounded subagents.
+The default chat loop can use its workspace tools directly and coordinate
+bounded subagents when a specialist is useful.
 The manager owns product requirements and the work plan. The senior developer
 can edit and verify changes directly or assign bounded implementation to a junior
 developer, then inspect the result and request corrections when needed. The
@@ -267,14 +258,13 @@ flowchart LR
     J --> S
 ```
 
-The main agent can delegate directly to a suitable role. In `default` mode it
-can also use its own tools. `q sprint` starts one delegation mode turn in a
-fresh workspace session.
+The main agent can delegate directly to a suitable role while continuing to use
+its own tools.
 
 The former `/plan` command and its approval automation have been removed. Use
-`/subagent builtin/manager <request>` for a focused PM task, or `/mode delegation`
-to let the main agent coordinate specialists. Existing plan checkpoints remain
-on disk as legacy data; new work does not resume that workflow.
+`/subagent builtin/manager <request>` for a focused PM task, or ask the main
+agent to coordinate specialists in ordinary chat. Existing plan checkpoints
+remain on disk as legacy data; new work does not resume that workflow.
 
 ## Commit workflow
 
@@ -336,14 +326,13 @@ only when automation requires it.
 
 ## Subagents
 
-### Delegation mode
+### Delegation
 
-Use `/mode delegation` in ordinary chat to have the main agent assign substantive
-repository work to available built-in, custom, or external subagents. The root
-can coordinate and inspect saved evidence, but has no direct workspace file,
-shell, LSP, or arbitrary external MCP tools in this mode. Use
-`/mode default` to return to the direct-tool loop. The selected mode is saved
-with the session; new sessions start in `default` mode.
+The default chat loop exposes both its direct workspace tools and delegation to
+available built-in, custom, or external subagents. The main agent chooses
+whether to work directly or assign bounded work based on the request. For an
+explicit one-off invocation, use `/subagent <name> <request>`. The former
+`/mode` command and its delegation-only root restrictions have been removed.
 
 Child progress and tool activity appear in the transcript; `Ctrl+G` expands or
 collapses the trace. Each delegation has a saved child session and bookmark.
@@ -646,7 +635,6 @@ omits the chat-only `learn` tool.
 
 | Command | Purpose |
 |---|---|
-| `q sprint <request...>` | Run one task in delegation mode. All trailing argv values are joined as the request. |
 | `q gateway` | Configure the Gateway listener, API keys, and providers. |
 | `q gateway start [--host <ip>] [--port <port>]` | Run the OpenAI-compatible Gateway. |
 | `q remote` | Run the foreground REST host for workspace sessions and agent execution. |

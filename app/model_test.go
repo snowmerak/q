@@ -1747,7 +1747,7 @@ func TestHelpCommandAndShortcutKeepCommandsOutOfChatFooter(t *testing.T) {
 	}
 	help := ansi.Strip(m.View().Content)
 	for _, expected := range []string{
-		"q · Help", "SLASH COMMANDS", "/mode [default|delegation]",
+		"q · Help", "SLASH COMMANDS",
 		"/commit", "/new", "/clear", "/learn [on|off|status]", "/model",
 		"/gateway", "/changes",
 	} {
@@ -1758,7 +1758,7 @@ func TestHelpCommandAndShortcutKeepCommandsOutOfChatFooter(t *testing.T) {
 	allHelp := ansi.Strip(renderHelpContent(m.dark))
 	for _, expected := range []string{
 		"/help", "/skills", "/mcp", "/loom", "/ignore", "CHANGES", "COMMAND COMPLETION", "SUBAGENTS AND QUESTIONS", "ctrl+g", "COMMAND LINE", "q commit", "q memory", "q gateway start",
-		"q remote", "q remote config", "q sprint <request...>", "q model", "q mcp", "q skills", "q ignore", "q help",
+		"q remote", "q remote config", "q model", "q mcp", "q skills", "q ignore", "q help",
 	} {
 		if !strings.Contains(allHelp, expected) {
 			t.Fatalf("help content missing %q:\n%s", expected, allHelp)

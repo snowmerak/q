@@ -41,8 +41,7 @@ Explain how this project starts and identify the main runtime components.
 For a change that benefits from delegated roles, use:
 
 ```text
-/mode delegation
-add a health endpoint and cover it with tests
+/subagent builtin/senior-developer add a health endpoint and cover it with tests
 ```
 
 `Ctrl+C` interrupts an active turn. `Ctrl+H` opens the complete key reference without discarding the current screen.

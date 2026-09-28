@@ -1470,8 +1470,6 @@ func (a *acpAgent) runAgentTurn(ctx context.Context, history []client.Message) (
 		ReasoningEffort: a.state.activeConfig().Provider.EffectiveReasoningEffort(),
 		Messages:        history, ConversationID: a.state.conversationID, WorkingDirectory: a.root,
 		ActiveTask: a.state.activeTask, Stream: a.state.streamsActiveChat(),
-		RequireTaskAction: a.state.loopMode == loopModeDelegation,
-		PriorTaskAction:   a.state.activeTask != nil && priorTaskAction(a.state.messages),
 		CoalesceInstructions: modelNeedsSystemInstructionCoalescing(
 			a.state.gatewayConfig, a.state.activeConfig().ModelGroups, a.state.activeModel(), nil,
 		),
@@ -1933,7 +1931,6 @@ func (a *acpAgent) emitAgentPlanContext(ctx context.Context, update agentPlanUpd
 
 func (a *acpAgent) emitAvailableCommandsContext(ctx context.Context) error {
 	commands := []acp.AvailableCommand{
-		{Name: "mode", Description: "Set this session's default-loop mode.", Input: &acp.AvailableCommandInput{Unstructured: &acp.UnstructuredCommandInput{Hint: "default | delegation"}}},
 		{Name: "subagents", Description: "List available subagents or show a definition.", Input: &acp.AvailableCommandInput{Unstructured: &acp.UnstructuredCommandInput{Hint: "list | show <name>"}}},
 		{Name: "subagent", Description: "Run a builtin or custom subagent.", Input: &acp.AvailableCommandInput{Unstructured: &acp.UnstructuredCommandInput{Hint: "<name> <request>"}}},
 		{Name: "commit", Description: "Review generated commit proposals, then commit or commit and push after approval."},
@@ -1954,13 +1951,13 @@ func (a *acpAgent) runACPCommand(ctx context.Context, text string) (acp.PromptRe
 	command := strings.TrimSpace(text)
 	var output string
 	switch {
+	case retiredLoopModeCommand(command):
+		output = "Loop modes were removed. Ordinary chat can use direct tools and delegate work."
 	case retiredPlanCommand(command):
-		output = "Plan mode was removed. Use /mode delegation or /subagent builtin/manager."
+		output = "Plan mode was removed. Use /subagent builtin/manager for a focused PM request."
 	case command == "/commit":
 		response, err := a.runACPCommit(ctx)
 		return response, true, err
-	case command == "/mode" || strings.HasPrefix(command, "/mode "):
-		output = a.state.runLoopModeCommand(command)
 	case command == "/subagent" || strings.HasPrefix(command, "/subagent "):
 		response, err := a.runACPCustom(ctx, command)
 		return response, true, err
@@ -2030,10 +2027,7 @@ func (a *acpAgent) runACPCommand(ctx context.Context, text string) (acp.PromptRe
 }
 
 func renderACPCommandHelp() string {
-	lines := []string{
-		"Available ACP commands:",
-		"- /mode [default|delegation]",
-	}
+	lines := []string{"Available ACP commands:"}
 	lines = append(lines,
 		"- /commit",
 		"- /learn [on|off|status]",

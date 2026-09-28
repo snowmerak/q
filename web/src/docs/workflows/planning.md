@@ -13,9 +13,9 @@ toc:
 
 ## Start a task
 
-Use `/mode delegation` in a workspace session, then describe the outcome you want. The main agent can delegate requirements and planning to the manager, focused investigation to research, and technical work or review to the senior developer. There is no fixed sequence of agents. Use `/mode default` to return to direct tools.
+Describe the outcome you want in a workspace session. The default loop has direct workspace tools and can delegate requirements and planning to the manager, focused investigation to research, and technical work or review to the senior developer. There is no fixed sequence of agents.
 
-`q sprint <request...>` starts a fresh session and runs one delegation-mode task without the interactive UI. For a focused PM request, use `/subagent builtin/manager <request>` in chat.
+For a focused PM request, use `/subagent builtin/manager <request>` in chat.
 
 ## Roles and models
 

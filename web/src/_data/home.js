@@ -1,7 +1,7 @@
 export default {
   en: {
     heading: "A workspace-native coding agent.", lead: "Delegate, implement, review, and remember—without leaving the terminal.", start: "Get started →", github: "View on GitHub",
-    terminalLabel: "Example q sprint delegation trace", copy: "Copy",
+    terminalLabel: "Example subagent delegation trace", copy: "Copy",
     traces: [
       { state: "is-done", agent: "Manager", detail: "Set the objective and acceptance criteria…", status: "✓ Done" },
       { state: "is-done", agent: "Research", detail: "Compared relevant approaches…", status: "✓ Done" },
@@ -12,7 +12,7 @@ export default {
     featureHeading: "One workspace, the whole loop", featureLead: "From request to reviewed change, q keeps the work in your terminal and the context in your workspace.",
     features: [
       { icon: "scope", title: "Define the work", body: "The manager reads workspace context and sets priorities, constraints, and acceptance criteria." },
-      { icon: "delegate", title: "Delegate with boundaries", body: "Switch chat to delegation mode for focused work by built-in, custom, or external agents, with visible child progress." },
+      { icon: "delegate", title: "Delegate with boundaries", body: "Assign focused work to built-in, custom, or external agents from ordinary chat, with visible child progress." },
       { icon: "remember", title: "Remember what matters", body: "Resume nested agent sessions after interruptions and keep reusable project knowledge without bloating every prompt." },
     ],
     workflowHeading: "Visible work across roles", workflowLead: "This is one possible handoff. The main agent chooses specialists as needed, and the senior developer reviews implementation results.",
@@ -20,7 +20,7 @@ export default {
   },
   ko: {
     heading: "워크스페이스 중심 코딩 에이전트.", lead: "터미널을 떠나지 않고 위임하고, 구현하고, 검토하고, 기억하세요.", start: "시작하기 →", github: "GitHub에서 보기",
-    terminalLabel: "q sprint 위임 추적 예시", copy: "복사",
+    terminalLabel: "서브에이전트 위임 추적 예시", copy: "복사",
     traces: [
       { state: "is-done", agent: "Manager", detail: "목표와 수용 기준을 정함…", status: "✓ 완료" },
       { state: "is-done", agent: "Research", detail: "관련 대안을 비교함…", status: "✓ 완료" },
@@ -31,7 +31,7 @@ export default {
     featureHeading: "하나의 워크스페이스에서 전체 루프를", featureLead: "요청부터 검토된 변경까지, q는 작업은 터미널에 두고 컨텍스트는 워크스페이스에 보존합니다.",
     features: [
       { icon: "scope", title: "작업 범위 정하기", body: "Manager가 워크스페이스를 읽고 우선순위, 제약, 수용 기준을 정합니다." },
-      { icon: "delegate", title: "경계를 정해 위임", body: "채팅을 위임 모드로 전환해 내장·사용자 정의·외부 에이전트에 작업을 맡기고 자식 진행 상황을 확인합니다." },
+      { icon: "delegate", title: "경계를 정해 위임", body: "일반 채팅에서 내장·사용자 정의·외부 에이전트에 작업을 맡기고 자식 진행 상황을 확인합니다." },
       { icon: "remember", title: "중요한 것만 기억", body: "중단 후에도 중첩된 에이전트 세션을 재개하고, 프롬프트를 비대하게 만들지 않으면서 프로젝트 지식을 보존합니다." },
     ],
     workflowHeading: "역할 사이의 작업을 한눈에", workflowLead: "이 흐름은 위임의 한 예시입니다. 메인 에이전트가 필요한 전문가를 선택하고 senior developer가 구현 결과를 검토합니다.",
@@ -39,7 +39,7 @@ export default {
   },
   ja: {
     heading: "ワークスペースネイティブなコーディングエージェント。", lead: "ターミナルを離れずに、委任・実装・レビュー・記憶まで。", start: "はじめる →", github: "GitHub で見る",
-    terminalLabel: "q sprint の委任トレース例", copy: "コピー",
+    terminalLabel: "サブエージェント委任トレース例", copy: "コピー",
     traces: [
       { state: "is-done", agent: "Manager", detail: "目的と受け入れ基準を設定…", status: "✓ 完了" },
       { state: "is-done", agent: "Research", detail: "関連する選択肢を比較…", status: "✓ 完了" },
@@ -50,7 +50,7 @@ export default {
     featureHeading: "一つのワークスペースで、すべての工程を", featureLead: "依頼からレビュー済みの変更まで、q は作業をターミナルに、コンテキストをワークスペースに保ちます。",
     features: [
       { icon: "scope", title: "作業範囲を定める", body: "Manager がワークスペースを読み、優先順位、制約、受け入れ基準を定めます。" },
-      { icon: "delegate", title: "境界を定めて委任", body: "チャットを委任モードに切り替え、組み込み・カスタム・外部エージェントに作業を任せ、子の進行を確認できます。" },
+      { icon: "delegate", title: "境界を定めて委任", body: "通常のチャットから組み込み・カスタム・外部エージェントに作業を任せ、子の進行を確認できます。" },
       { icon: "remember", title: "重要なことを記憶", body: "中断後も入れ子のエージェントセッションを再開し、プロンプトを肥大化させずにプロジェクト知識を保持します。" },
     ],
     workflowHeading: "役割をまたぐ作業を可視化", workflowLead: "これは委任の一例です。メインエージェントが必要な専門家を選び、senior developer が実装結果をレビューします。",
@@ -58,7 +58,7 @@ export default {
   },
   "zh-cn": {
     heading: "工作区原生编码代理。", lead: "无需离开终端，即可委派、实施、审查并保留工作记录。", start: "开始使用 →", github: "在 GitHub 上查看",
-    terminalLabel: "q sprint 委派跟踪示例", copy: "复制",
+    terminalLabel: "子代理委派跟踪示例", copy: "复制",
     traces: [
       { state: "is-done", agent: "Manager", detail: "确定目标和验收标准…", status: "✓ 完成" },
       { state: "is-done", agent: "Research", detail: "比较相关方案…", status: "✓ 完成" },
@@ -69,7 +69,7 @@ export default {
     featureHeading: "一个工作区，覆盖完整闭环", featureLead: "从需求到审查后的变更，q 将工作留在终端，将上下文保存在工作区。",
     features: [
       { icon: "scope", title: "明确工作范围", body: "Manager 阅读工作区内容，确定优先级、约束条件和验收标准。" },
-      { icon: "delegate", title: "在边界内委派", body: "将聊天切换到委派模式，把任务交给内置、自定义或外部代理，并查看子任务进度。" },
+      { icon: "delegate", title: "在边界内委派", body: "从普通聊天把任务交给内置、自定义或外部代理，并查看子任务进度。" },
       { icon: "remember", title: "只记住重要内容", body: "中断后恢复嵌套的代理会话，同时保留项目知识，无需让提示不断膨胀。" },
     ],
     workflowHeading: "角色间的工作清晰可见", workflowLead: "这是一种委派示例。主代理按需选择专家，senior developer 审查实现结果。",

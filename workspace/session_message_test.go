@@ -39,6 +39,25 @@ func TestSessionUsesPortableMessageFormatAndPreservesReplay(t *testing.T) {
 	}
 }
 
+func TestSessionAcceptsButDoesNotPersistRetiredLoopMode(t *testing.T) {
+	const previous = `{"version":2,"loop_mode":"delegation","learning":{}}`
+	var session Session
+	if err := json.Unmarshal([]byte(previous), &session); err != nil {
+		t.Fatal(err)
+	}
+	if session.LoopMode != "" {
+		t.Fatalf("retired loop mode restored as %q", session.LoopMode)
+	}
+	session.LoopMode = "delegation"
+	body, err := json.Marshal(session)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(body), "loop_mode") {
+		t.Fatalf("retired loop mode persisted: %s", body)
+	}
+}
+
 func TestSessionMigratesChatMessageVersionOneOnSave(t *testing.T) {
 	const previous = `{"version":1,"transcript":[{"role":"user","content":"hello"},{"role":"assistant","content":"answer","tool_calls":[{"id":"call_1","type":"function","function":{"name":"lookup","arguments":"{}"}}]}],"context":[{"role":"user","content":[{"type":"text","text":"look"},{"type":"image_url","image_url":{"url":"data:image/png;base64,AA=="}}]}],"response_replay":[{"index":1,"model":"openai/gpt","output":[{"type":"reasoning","encrypted_content":"opaque"}]}],"learning":{}}`
 	store := Store{Root: t.TempDir()}

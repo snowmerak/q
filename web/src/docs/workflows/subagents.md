@@ -41,13 +41,7 @@ Custom profiles use their bare name in the TUI. Delegation grants stored inside 
 
 ## Delegate from chat
 
-Ordinary chat starts in `default` mode, where the main agent can use its tools directly. Switch the current session to `delegation` mode when you want the main agent to coordinate bounded subagents for substantive repository work:
-
-```text
-/mode delegation
-```
-
-The mode is saved with the session. `/mode default` restores the direct-tool loop. The manager owns requirements and planning; the senior developer can edit directly or assign implementation to the junior developer, then reviews the result.
+Ordinary chat exposes both direct workspace tools and delegation. The main agent can work directly or coordinate bounded subagents based on the request. The manager owns requirements and planning; the senior developer can edit directly or assign implementation to the junior developer, then review the result. Use `/subagent <name> <request>` when you want to select a role explicitly.
 
 The transcript shows child progress and tool calls; press `Ctrl+G` to expand or collapse the trace. Each call saves a child session and a bookmark under the parent. On restart, q recovers nested children before continuing the parent. A tool call with no recorded result returns `unknown` and is not run again automatically. An interrupted external ACP invocation also returns `unknown` because its internal turn cannot be resumed.
 

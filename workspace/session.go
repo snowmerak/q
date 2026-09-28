@@ -29,9 +29,11 @@ const (
 var ErrNotFound = errors.New("q workspace session not found")
 
 type Session struct {
-	Version    int              `json:"version"`
-	ID         string           `json:"id,omitempty"`
-	RunID      string           `json:"run_id,omitempty"`
+	Version int    `json:"version"`
+	ID      string `json:"id,omitempty"`
+	RunID   string `json:"run_id,omitempty"`
+	// LoopMode is retained only so older session files decode under strict JSON validation.
+	// New saves omit it and the application ignores its value.
 	LoopMode   string           `json:"loop_mode,omitempty"`
 	Title      string           `json:"title,omitempty"`
 	UpdatedAt  *time.Time       `json:"updated_at,omitempty"`

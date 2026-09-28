@@ -62,18 +62,18 @@ func TestSlashCompletionOpensAndFiltersWhileTyping(t *testing.T) {
 		t.Fatalf("slash matches = %#v", matches)
 	}
 	view := ansi.Strip(m.View().Content)
-	for _, expected := range []string{"Commands", "/mode [default|delegation]", "tab/enter complete", "esc close"} {
+	for _, expected := range []string{"Commands", "/commit", "tab/enter complete", "esc close"} {
 		if !strings.Contains(view, expected) {
 			t.Fatalf("popup missing %q:\n%s", expected, view)
 		}
 	}
 	m, _ = completionKey(m, tea.KeyPressMsg{Code: 'm', Text: "m"})
-	if names := completionNames(m.slashCompletionMatches()); !slices.Equal(names, []string{"/mode", "/model", "/mcp"}) {
+	if names := completionNames(m.slashCompletionMatches()); !slices.Equal(names, []string{"/model", "/mcp"}) {
 		t.Fatalf("/m matches = %v", names)
 	}
 	m, _ = completionKey(m, tea.KeyPressMsg{Code: tea.KeyDown})
 	m, _ = completionKey(m, tea.KeyPressMsg{Code: 'o', Text: "o"})
-	if names := completionNames(m.slashCompletionMatches()); !slices.Equal(names, []string{"/mode", "/model"}) || m.slashCompletion.selected != 0 {
+	if names := completionNames(m.slashCompletionMatches()); !slices.Equal(names, []string{"/model"}) || m.slashCompletion.selected != 0 {
 		t.Fatalf("/mo matches = %v, selection = %d", names, m.slashCompletion.selected)
 	}
 }
@@ -161,7 +161,7 @@ func TestSlashCompletionEscapeDismissesUntilInputChanges(t *testing.T) {
 		t.Fatal("resize reopened a dismissed popup")
 	}
 	m, _ = completionKey(m, tea.KeyPressMsg{Code: 'm', Text: "m"})
-	if len(m.slashCompletionMatches()) != 3 {
+	if len(m.slashCompletionMatches()) != 2 {
 		t.Fatal("editing did not reopen the filtered popup")
 	}
 	m, _ = completionKey(m, tea.KeyPressMsg{Code: tea.KeyEsc})
@@ -256,7 +256,7 @@ func TestSlashCompletionOverlayKeepsLayoutAndCursor(t *testing.T) {
 						t.Fatalf("popup covered input at row %d:\n%s", row, ansi.Strip(popup.Content))
 					}
 				}
-				if !strings.Contains(popupLines[popup.Cursor.Y], "│ /m") || !strings.Contains(ansi.Strip(popup.Content), "› /mode") {
+				if !strings.Contains(popupLines[popup.Cursor.Y], "│ /m") || !strings.Contains(ansi.Strip(popup.Content), "› /model") {
 					t.Fatalf("popup or input cursor is misplaced:\n%s", ansi.Strip(popup.Content))
 				}
 			})

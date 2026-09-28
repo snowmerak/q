@@ -1,6 +1,6 @@
 # Execution orchestration contract
 
-> 역사 문서: 이전 `/plan` 실행기의 계약을 설명한다. 새 작업은 delegation 모드를 사용한다.
+> 역사 문서: 이전 `/plan` 실행기의 계약을 설명한다. 새 작업은 일반 대화나 명시적 subagent 호출을 사용한다.
 
 ## 목적
 

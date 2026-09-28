@@ -42,8 +42,7 @@ q
 对于适合委派给不同角色的修改，可以输入：
 
 ```text
-/mode delegation
-添加健康检查端点并编写测试
+/subagent builtin/senior-developer 添加健康检查端点并编写测试
 ```
 
 `Ctrl+C` 中断当前轮次。`Ctrl+H` 会在保留当前屏幕状态的情况下打开完整的按键参考。

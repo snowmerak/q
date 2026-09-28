@@ -14,9 +14,9 @@ toc:
 
 ## 작업 시작
 
-워크스페이스 세션에서 `/mode delegation`을 입력한 뒤 원하는 결과를 설명하세요. 메인 에이전트는 manager에게 요구사항과 계획을, research에게 조사를, senior developer에게 기술 작업이나 검토를 맡길 수 있습니다. 에이전트를 거치는 순서는 고정되어 있지 않습니다. 직접 도구를 사용하는 대화로 돌아가려면 `/mode default`를 사용하세요.
+워크스페이스 세션에서 원하는 결과를 설명하세요. default loop는 workspace 도구를 직접 사용하면서 manager에게 요구사항과 계획을, research에게 조사를, senior developer에게 기술 작업이나 검토를 맡길 수 있습니다. 에이전트를 거치는 순서는 고정되어 있지 않습니다.
 
-`q sprint <request...>`는 새 세션을 만들고 대화형 UI 없이 위임 작업 한 건을 실행합니다. PM 업무만 요청하려면 채팅에서 `/subagent builtin/manager <request>`를 사용하세요.
+PM 업무만 요청하려면 채팅에서 `/subagent builtin/manager <request>`를 사용하세요.
 
 ## 역할과 모델
 

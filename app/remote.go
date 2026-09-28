@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"strings"
 	"sync"
@@ -286,7 +287,7 @@ func (h *RemoteHost) Run(
 		}); err != nil {
 			return err
 		}
-		for _, warning := range sprintStartupWarnings(startup) {
+		for _, warning := range remoteStartupWarnings(startup) {
 			if err := emit(RemoteEvent{Type: "status", Detail: "Warning: " + warning.Error()}); err != nil {
 				return err
 			}
@@ -321,6 +322,21 @@ func (h *RemoteHost) Run(
 		return errors.Join(runErr, result.err)
 	}
 	return runErr
+}
+
+func remoteStartupWarnings(result runtimeInitializedMsg) []error {
+	warnings := make([]error, 0, 3+len(result.mcpStatuses))
+	for _, warning := range []error{result.startupErr, result.archiveErr, result.mcpErr} {
+		if warning != nil {
+			warnings = append(warnings, warning)
+		}
+	}
+	for _, status := range result.mcpStatuses {
+		if status.Error != "" {
+			warnings = append(warnings, fmt.Errorf("MCP %s: %s", status.ID, status.Error))
+		}
+	}
+	return warnings
 }
 
 type remoteExecutionModel struct {

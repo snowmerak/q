@@ -14,33 +14,16 @@ delegate(subagent_name, prompt) -> TaskResult | captured ACP result
 `DelegateInfo.kind`는 `inner` 또는 `external`이다. `inner`는 q의 model runner를
 실행하고, `external`은 기존 ACP adapter를 호출한다.
 
-## 일반 루프의 위임 모드
+## 일반 루프의 위임
 
-`/mode delegation`은 현재 세션의 default role 루프를 위임 중심으로 전환한다.
-`/mode default`는 원래 루프로 돌아가며, `/mode`는 현재 값을 보여준다.
-새 세션과 모드 필드가 없는 기존 세션은 `default`로 시작한다.
-`/clear`는 현재 세션의 모드를 유지한다.
+Default role 루프에는 workspace 도구와 `delegate_list`, `delegate`가 함께 노출된다.
+루트는 요청에 따라 직접 조사·수정하거나 범위가 명확한 작업을 직업형 subagent에
+맡길 수 있다. 별도의 `/mode` 전환, coordinator 전용 프롬프트, 루트 도구 제한은 없다.
+하위 에이전트는 각 정의와 역할 설정에 따라 독립된 도구와 delegation 권한을 받는다.
 
-위임 모드에서는 루트의 시스템 프롬프트가 조정자 역할을 설명한다. 루트는
-`delegate_list`로 사용 가능한 에이전트를 확인하고, 조사·구현·검토·연구를 범위가
-명확한 `delegate` 호출로 맡기는 것을 우선한다. 결과를 확인하고 후속 작업을
-조율한 뒤 사용자에게 보고한다. 간단한 대화에는 바로 답할 수 있다.
-
-위임 모드의 루트에는 workspace 파일·디렉터리 도구, 셸 명령, LSP 도구 및 임의의
-외부 MCP 도구를 노출하지 않는다. 도구 이름을 직접 지정해 호출해도 거부한다.
-루트는 `delegate_list`와 `delegate`로 작업을 맡기고, 허용된 archive, Loom,
-skill 및 proposition 조회 도구로 저장된 증거를 확인할 수 있다. 메인 루프의
-`task_start`, `ask_to_user`, `task_complete`와 세 `memory_*` 도구는 계속 사용할
-수 있다. 하위 에이전트는 루트의 제한을 상속하지 않으며 해당 정의와 역할
-설정에 따라 도구를 받는다. `default` 모드의 도구 범위도 그대로 유지한다.
-시작된 작업을 `succeeded`로 끝내려면 그 작업에서 `delegate` 또는 직접 작업 도구가
-한 번 이상 성공해야 한다. `delegate_list` 조회, 메모리 갱신과 실패한 호출은 실작업
-증거로 세지 않는다. 사용할 수 있는 경로가 없으면 실제 장애를 `blocked`로 보고한다. 재시작한
-작업에서는 축약되지 않은 세션 transcript의 도구 결과를 확인한다.
-
-세션 파일의 `loop_mode` 필드에 값을 저장한다. 시스템 프롬프트는 복구할 때 모드에서
-재구성하여 한 번만 넣는다. 모드 전환 시 이전 Responses continuation 키와 replay를
-비우므로 새 시스템 프롬프트로 과거 provider continuation을 이어 붙이지 않는다.
+이전 버전이 저장한 `loop_mode` 값은 읽기 호환성만 유지하고 새 세션 저장에는 쓰지
+않는다. 기존 transcript와 context의 `q_delegation_mode`, `q_delegation_policy`
+메시지는 복원할 때 제거하여 과거 coordinator 제한이 default loop에 남지 않게 한다.
 
 `delegate_list`는 전체 등록 목록이 아니라 현재 호출자가 실제로 호출할 수 있고 현재
 runtime에서 실행 가능한 agent만 반환한다. `delegate`는 그 목록에 포함된 canonical
@@ -56,8 +39,6 @@ ID만 받는다. 호출 결과는 다른 큰 도구 결과와 마찬가지로 Lo
 - `builtin/senior-developer`: `reviewer` 모델 role로 기술적 접근을 정하고 junior에게 구현을 맡긴 뒤 변경을 직접 검토한다.
 - `builtin/junior-developer`: `coder` 모델 role로 senior developer가 할당한 코드를 읽고 수정하며 검증 및 피드백 반영을 수행한다. 루트에서 직접 호출할 수 없다.
 - `builtin/research`: 저장소와 외부 자료를 조사하고 근거 있는 대안을 제시한다.
-
-`q sprint`는 새 세션에서 delegation 모드의 일반 작업 턴을 실행한다.
 
 ACP Search와 External Web Tester는 다음 fixed builtin registry entry로도 등록한다. 실제
 ACP connection이 role에 할당되어 있고 enabled일 때만 `delegate_list`에 나타난다.

@@ -15,7 +15,6 @@ toc:
 
 | Command | Purpose |
 | --- | --- |
-| `/mode [default\|delegation]` | Show or change the current chat loop mode. |
 | `/changes` | Browse staged, unstaged, and untracked changes. |
 | `/commit` | Generate and review a commit proposal. |
 | `/sessions` | Open another saved workspace session. |
@@ -34,13 +33,12 @@ toc:
 | `/lsp` | Configure language-server profiles and roots. |
 | `/help` | Open the complete command and key guide. |
 
-The former `/plan`, `/auto-approve`, `/auto-resolve`, and `/autonomous` commands have been removed. Use `/mode delegation` to coordinate work or `/subagent builtin/manager <request>` for a focused PM request.
+The former `/mode`, `/plan`, `/auto-approve`, `/auto-resolve`, and `/autonomous` commands have been removed. The default loop has direct tools and delegation; use `/subagent builtin/manager <request>` for a focused PM request.
 
 ## Standalone commands
 
 | Command | Purpose |
 | --- | --- |
-| `q sprint <request...>` | Run one task in delegation mode. |
 | `q remote` | Start the foreground Remote REST host. |
 | `q remote config` | Configure Remote listener and API keys. |
 | `q gateway` | Configure the standalone Gateway. |

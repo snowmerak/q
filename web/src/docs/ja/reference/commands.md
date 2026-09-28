@@ -16,7 +16,6 @@ toc:
 
 | コマンド | 用途 |
 | --- | --- |
-| `/mode [default\|delegation]` | 現在のチャットループモードを確認または変更します。 |
 | `/changes` | ステージ済み、未ステージ、未追跡の変更を確認します。 |
 | `/commit` | コミット案を生成してレビューします。 |
 | `/sessions` | 保存された別のワークスペースセッションを開きます。 |
@@ -35,13 +34,12 @@ toc:
 | `/lsp` | 言語サーバーのプロファイルとルートを設定します。 |
 | `/help` | コマンドとキーのガイドを開きます。 |
 
-以前の `/plan`、`/auto-approve`、`/auto-resolve`、`/autonomous` コマンドは廃止されました。作業の調整には `/mode delegation`、PM の作業だけを依頼する場合は `/subagent builtin/manager <request>` を使います。
+以前の `/mode`、`/plan`、`/auto-approve`、`/auto-resolve`、`/autonomous` コマンドは廃止されました。デフォルトループは直接ツールと委任を同時に提供します。PM の作業だけを依頼する場合は `/subagent builtin/manager <request>` を使います。
 
 ## 単独コマンド
 
 | コマンド | 用途 |
 | --- | --- |
-| `q sprint <request...>` | 委任モードで一件の作業を実行します。 |
 | `q remote` | フォアグラウンドの Remote REST ホストを起動します。 |
 | `q remote config` | Remote リスナーと API キーを設定します。 |
 | `q gateway` | 単独 Gateway を設定します。 |

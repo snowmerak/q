@@ -16,7 +16,6 @@ toc:
 
 | 命令 | 用途 |
 | --- | --- |
-| `/mode [default\|delegation]` | 查看或切换当前聊天循环模式。 |
 | `/changes` | 浏览已暂存、未暂存和未跟踪的更改。 |
 | `/commit` | 生成并审查提交提案。 |
 | `/sessions` | 打开另一个已保存的工作区会话。 |
@@ -35,13 +34,12 @@ toc:
 | `/lsp` | 配置语言服务器配置文件和根目录。 |
 | `/help` | 打开完整的命令和按键指南。 |
 
-旧版 `/plan`、`/auto-approve`、`/auto-resolve` 和 `/autonomous` 命令已移除。协调工作请使用 `/mode delegation`；仅请求 PM 工作时使用 `/subagent builtin/manager <request>`。
+旧版 `/mode`、`/plan`、`/auto-approve`、`/auto-resolve` 和 `/autonomous` 命令已移除。默认循环同时提供直接工具和委派能力；仅请求 PM 工作时使用 `/subagent builtin/manager <request>`。
 
 ## 独立命令
 
 | 命令 | 用途 |
 | --- | --- |
-| `q sprint <request...>` | 在委派模式下运行一项任务。 |
 | `q remote` | 启动前台 Remote REST 服务。 |
 | `q remote config` | 配置 Remote 监听地址和 API 密钥。 |
 | `q gateway` | 配置独立 Gateway。 |

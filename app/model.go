@@ -1126,7 +1126,6 @@ func (m *model) enterChat(value config.Config, configuredClient chatClient) {
 	m.setupEdit = false
 	m.config = value
 	m.client = configuredClient
-	m.loopMode = loopModeDefault
 	workspaceModelErr := m.restoreWorkspaceModel()
 	workspaceLearningErr := m.restoreWorkspaceLearning()
 	active := m.activeConfig()
@@ -1137,7 +1136,6 @@ func (m *model) enterChat(value config.Config, configuredClient chatClient) {
 		m.messages = append(m.messages, client.Message{Role: client.RoleSystem, Content: value.Provider.SystemPrompt})
 	}
 	m.appendRuntimeMessages()
-	m.messages = withLoopModePrompt(m.messages, m.loopMode)
 	m.memory = memory.New(memoryPolicy(active), m.messages)
 	m.conversationID = ""
 	m.runID = ""
@@ -1590,7 +1588,6 @@ func (m *model) resetConversationState(runIDs ...string) {
 		m.messages = append(m.messages, client.Message{Role: client.RoleSystem, Content: m.config.Provider.SystemPrompt})
 	}
 	m.appendRuntimeMessages()
-	m.messages = withLoopModePrompt(m.messages, m.loopMode)
 	active := m.activeConfig()
 	if m.memory == nil {
 		m.memory = memory.New(memoryPolicy(active), m.messages)
@@ -1636,7 +1633,6 @@ func (m *model) releaseConversationState(root string) {
 	m.memory = nil
 	m.learning = nil
 	m.conversationID = ""
-	m.loopMode = loopModeDefault
 	m.activeTask = nil
 	m.delegationRecoveryPending = false
 	m.recoverDelegationTurn = false
@@ -1676,7 +1672,6 @@ func (m *model) startNewWorkspaceSession() error {
 	m.workspaceStore = &store
 	m.workspaceLock = lock
 	m.workspaceRestored = true
-	m.loopMode = loopModeDefault
 	m.resetConversation("run-" + store.SessionID)
 	if previousLock != nil {
 		if err := previousLock.Close(); err != nil {
@@ -1742,9 +1737,8 @@ func (m *model) restoreWorkspaceSession() {
 		}
 	}
 	m.delegationRecoveryPending = hadPendingDelegate
-	m.loopMode = normalizedLoopMode(session.LoopMode)
-	base := withLoopModePrompt(m.messages, m.loopMode)
-	transcript := session.Transcript
+	base := withoutLegacyDelegationModeMessages(m.messages)
+	transcript := withoutLegacyDelegationModeMessages(session.Transcript)
 	var interruptedResults []interruptedToolResult
 	if !hadPendingDelegate {
 		transcript, interruptedResults = reconcileInterruptedToolCallsDetailed(transcript)
@@ -1756,6 +1750,7 @@ func (m *model) restoreWorkspaceSession() {
 		requestContext = session.Transcript
 	}
 	requestContext = restoreResponseReplay(requestContext, session.ResponseReplay)
+	requestContext = withoutLegacyDelegationModeMessages(requestContext)
 	var contextInterruptedCalls int
 	if !hadPendingDelegate {
 		requestContext, contextInterruptedCalls = reconcileInterruptedToolCalls(requestContext)
@@ -1940,7 +1935,6 @@ func (m *model) saveWorkspaceSession() error {
 	}
 	err := m.workspaceStore.Save(workspace.Session{
 		RunID:            m.runID,
-		LoopMode:         normalizedLoopMode(m.loopMode),
 		Title:            m.sessionTitle,
 		UpdatedAt:        workspaceTimePointer(m.sessionUpdatedAt),
 		Transcript:       workspaceSessionMessages(m.messages),
