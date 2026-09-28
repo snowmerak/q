@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Cpu, House, Layers, Network, Plus, RefreshCw, Server, Settings, SlidersHorizontal, Trash2, Unplug } from '@lucide/svelte';
+  import { BrainCircuit, Check, Copy, Cpu, House, KeyRound, Layers, Network, Plus, RefreshCw, Server, Settings, SlidersHorizontal, Trash2, Unplug } from '@lucide/svelte';
   import { onMount } from 'svelte';
 
   type StudioStatus = { version: number; service: string; ready: boolean };
@@ -45,6 +45,9 @@
     default_effort?: string;
     group?: boolean;
   };
+  type SystemOneProvider = { id: string; uri: string; api_key_env: string; _original_id?: string };
+  type SystemOneModelOption = { id: string; description?: string; release_date?: string };
+  type ServiceAPIKey = { id: string; alias: string; created_at?: string; revoked_at?: string; legacy?: boolean };
   type SettingsSnapshot = {
     version: number;
     scope: 'global';
@@ -65,6 +68,14 @@
       roles: RoleModelAssignment[];
     };
     gateway_providers: { config_path: string; items: GatewayProvider[] };
+    system_one: {
+      config_path: string;
+      default_model: string;
+      agent_skill_model: string;
+      providers: SystemOneProvider[];
+      api_keys: ServiceAPIKey[];
+      active_api_keys: number;
+    };
     services: {
       gateway: ListenerSettings;
       system_one: ListenerSettings & { provider_count: number; default_model: string; role_model_count: number };
@@ -76,7 +87,7 @@
     };
   };
   type View = 'overview' | 'settings';
-  type SettingsSection = 'models' | 'providers' | 'runtime' | 'services' | 'integrations';
+  type SettingsSection = 'models' | 'providers' | 'system-one' | 'runtime' | 'services' | 'integrations';
   type SaveState = { kind: 'idle' | 'saving' | 'saved' | 'error'; message?: string };
 
   const navigation = [
@@ -87,6 +98,7 @@
   const settingsSections = [
     { id: 'models' as const, label: 'Models', description: 'Chat, embedding, and role assignments', icon: Cpu },
     { id: 'providers' as const, label: 'Providers', description: 'Gateway upstream providers', icon: Network },
+    { id: 'system-one' as const, label: 'System One', description: 'Decision API and access keys', icon: BrainCircuit },
     { id: 'runtime' as const, label: 'Runtime', description: 'Execution, context, and storage', icon: SlidersHorizontal },
     { id: 'services' as const, label: 'Services', description: 'Gateway, System One, and Remote', icon: Server },
     { id: 'integrations' as const, label: 'Integrations', description: 'MCP and language servers', icon: Unplug }
@@ -103,6 +115,12 @@
   let modelOptions: ModelOption[] = [];
   let modelsLoading = false;
   let modelsError = '';
+  let systemOneModels: SystemOneModelOption[] = [];
+  let systemOneModelsLoading = false;
+  let systemOneModelsError = '';
+  let systemOneKeyAlias = '';
+  let generatedSystemOneKey = '';
+  let systemOneKeyCopied = false;
 
   async function loadStatus() {
     connection = { kind: 'loading' };
@@ -124,6 +142,7 @@
       if (!response.ok) throw new Error(await responseError(response));
       adoptSettings((await response.json()) as SettingsSnapshot);
       if (activeSection === 'models' && modelOptions.length === 0) void loadModels();
+      if (activeSection === 'system-one' && systemOneModels.length === 0) void loadSystemOneModels();
     } catch (error) {
       settingsError = error instanceof Error ? error.message : 'Settings are unavailable';
     }
@@ -131,6 +150,7 @@
 
   function adoptSettings(snapshot: SettingsSnapshot) {
     for (const provider of snapshot.gateway_providers.items) provider._original_id = provider.id;
+    for (const provider of snapshot.system_one.providers) provider._original_id = provider.id;
     settings = snapshot;
   }
 
@@ -149,12 +169,28 @@
     }
   }
 
+  async function loadSystemOneModels() {
+    systemOneModelsLoading = true;
+    systemOneModelsError = '';
+    try {
+      const response = await fetch('/api/v1/settings/system-one/models', { headers: { Accept: 'application/json' } });
+      if (!response.ok) throw new Error(await responseError(response));
+      const catalog = (await response.json()) as { models: SystemOneModelOption[] };
+      systemOneModels = catalog.models;
+    } catch (error) {
+      systemOneModelsError = error instanceof Error ? error.message : 'System One models are unavailable';
+    } finally {
+      systemOneModelsLoading = false;
+    }
+  }
+
   function chooseSettingsSection(section: SettingsSection) {
     activeSection = section;
     const url = new URL(window.location.href);
     url.searchParams.set('section', section);
     window.history.pushState({}, '', url.pathname + url.search);
     if (section === 'models' && modelOptions.length === 0 && !modelsLoading) void loadModels();
+    if (section === 'system-one' && systemOneModels.length === 0 && !systemOneModelsLoading) void loadSystemOneModels();
   }
 
   function sectionFromLocation(): SettingsSection {
@@ -277,6 +313,72 @@
   function clearProviderKey(provider: GatewayProvider) {
     if (!window.confirm(`Clear the stored inline API key for “${provider.id}”?`)) return;
     saveProvider(provider, true);
+  }
+
+  function saveSystemOneModel(target: 'default' | 'agent-skill-decision', model: string) {
+    queueSave(() => putSettings(`/api/v1/settings/system-one/models/${target}`, JSON.stringify({ model })));
+  }
+
+  function saveSystemOneProvider(provider: SystemOneProvider) {
+    const originalID = provider._original_id || provider.id;
+    queueSave(() => putSettings(
+      `/api/v1/settings/system-one/providers/${encodeURIComponent(originalID)}`,
+      JSON.stringify({ id: provider.id, uri: provider.uri, api_key_env: provider.api_key_env })
+    ));
+  }
+
+  function nextSystemOneProviderID() {
+    const used = new Set(settings?.system_one.providers.map((provider) => provider.id) || []);
+    if (!used.has('typesafe')) return 'typesafe';
+    let index = 1;
+    while (used.has(`provider-${index}`)) index++;
+    return `provider-${index}`;
+  }
+
+  function addSystemOneProvider() {
+    const id = nextSystemOneProviderID();
+    queueSave(() => writeSettings('POST', '/api/v1/settings/system-one/providers', JSON.stringify({
+      id,
+      uri: 'https://api.typesafe.ai/v1/systemone',
+      api_key_env: id === 'typesafe' ? 'TYPESAFE_API_KEY' : ''
+    })));
+  }
+
+  function deleteSystemOneProvider(provider: SystemOneProvider) {
+    if (!window.confirm(`Delete System One provider “${provider.id}”?`)) return;
+    queueSave(() => writeSettings('DELETE', `/api/v1/settings/system-one/providers/${encodeURIComponent(provider._original_id || provider.id)}`));
+  }
+
+  function createSystemOneAPIKey() {
+    const alias = systemOneKeyAlias.trim();
+    if (!alias) return;
+    queueSave(async () => {
+      const response = await fetch('/api/v1/settings/system-one/api-keys', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ alias })
+      });
+      if (!response.ok) throw new Error(await responseError(response));
+      const result = (await response.json()) as { settings: SettingsSnapshot; secret: string };
+      generatedSystemOneKey = result.secret;
+      systemOneKeyAlias = '';
+      systemOneKeyCopied = false;
+      return result.settings;
+    });
+  }
+
+  function revokeSystemOneAPIKey(key: ServiceAPIKey) {
+    if (!window.confirm(`Revoke System One API key “${key.alias}”?`)) return;
+    queueSave(() => writeSettings('DELETE', `/api/v1/settings/system-one/api-keys/${encodeURIComponent(key.id)}`));
+  }
+
+  async function copySystemOneAPIKey() {
+    if (!generatedSystemOneKey) return;
+    await navigator.clipboard.writeText(generatedSystemOneKey);
+    systemOneKeyCopied = true;
+  }
+
+  function formatKeyDate(value?: string) {
+    if (!value) return 'Imported key';
+    return new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(value));
   }
 
   function saveRuntime() {
@@ -442,6 +544,63 @@
                 {:else}
                   <div class="empty-card"><p>No Gateway providers configured.</p><button class="primary-button" onclick={addProvider}><Plus aria-hidden="true" size={16} /> Add provider</button></div>
                 {/each}
+              </div>
+            </section>
+          {:else if activeSection === 'system-one'}
+            <section class="settings-section">
+              <div class="section-heading">
+                <div><p class="eyebrow">GLOBAL SYSTEM ONE</p><h2>Decision API</h2><p>Configure decision providers, model routing, and access to <code>q systemone start</code>.</p></div>
+                <button class="icon-button" title="Refresh System One models" onclick={loadSystemOneModels} disabled={systemOneModelsLoading}><RefreshCw aria-hidden="true" size={16} class={systemOneModelsLoading ? 'spin' : undefined} /></button>
+              </div>
+              <code class="config-path">{settings.system_one.config_path}</code>
+              {#if systemOneModelsError}<p class="inline-warning">{systemOneModelsError}</p>{/if}
+
+              <div class="settings-card assignment-list system-one-assignments">
+                <div class="assignment-row system-one-assignment">
+                  <div><strong>Default</strong><small>Representative decision model</small></div>
+                  <label><span>Model</span><select bind:value={settings.system_one.default_model} onchange={() => saveSystemOneModel('default', settings!.system_one.default_model)} disabled={systemOneModelsLoading}>
+                    {#if settings.system_one.default_model && !systemOneModels.some((model) => model.id === settings?.system_one.default_model)}<option value={settings.system_one.default_model}>{settings.system_one.default_model}</option>{/if}
+                    {#each systemOneModels as model}<option value={model.id}>{model.id}</option>{/each}
+                  </select></label>
+                </div>
+                <div class="assignment-row system-one-assignment">
+                  <div><strong>Agent Skill Decision</strong><small>{settings.system_one.agent_skill_model ? 'Dedicated role model' : `Uses ${settings.system_one.default_model}`}</small></div>
+                  <label><span>Model</span><select bind:value={settings.system_one.agent_skill_model} onchange={() => saveSystemOneModel('agent-skill-decision', settings!.system_one.agent_skill_model)} disabled={systemOneModelsLoading}>
+                    <option value="">Use default · {settings.system_one.default_model}</option>
+                    {#if settings.system_one.agent_skill_model && !systemOneModels.some((model) => model.id === settings?.system_one.agent_skill_model)}<option value={settings.system_one.agent_skill_model}>{settings.system_one.agent_skill_model}</option>{/if}
+                    {#each systemOneModels as model}<option value={model.id}>{model.id}</option>{/each}
+                  </select></label>
+                </div>
+              </div>
+
+              <div class="subsection-heading"><div><h3>Providers</h3><p>Each model is addressed as provider ID and model name.</p></div><button class="primary-button" onclick={addSystemOneProvider}><Plus aria-hidden="true" size={16} /> Add provider</button></div>
+              <div class="provider-list">
+                {#each settings.system_one.providers as provider}
+                  <article class="settings-card provider-card system-one-provider-card">
+                    <div class="card-heading"><div><h3>{provider.id}</h3><p>Native System One endpoint</p></div><button class="danger-icon" title="Delete provider" onclick={() => deleteSystemOneProvider(provider)}><Trash2 aria-hidden="true" size={16} /></button></div>
+                    <div class="provider-fields system-one-provider-fields">
+                      <label><span>Provider ID</span><input bind:value={provider.id} onchange={() => saveSystemOneProvider(provider)} /></label>
+                      <label class="wide-field"><span>Endpoint URI</span><input placeholder="https://example.com/v1/systemone" bind:value={provider.uri} onchange={() => saveSystemOneProvider(provider)} /></label>
+                      <label><span>API key environment</span><input placeholder="Optional · unauthenticated when empty" bind:value={provider.api_key_env} onchange={() => saveSystemOneProvider(provider)} /></label>
+                    </div>
+                  </article>
+                {/each}
+              </div>
+
+              <div class="subsection-heading"><div><h3>Server API keys</h3><p>Authenticate clients calling <code>q systemone start</code>. With no active keys, the server accepts unauthenticated requests.</p></div><span class="count-badge">{settings.system_one.active_api_keys} active</span></div>
+              <div class="settings-card api-key-card">
+                {#if generatedSystemOneKey}
+                  <div class="generated-key"><div><KeyRound aria-hidden="true" size={18} /><span><strong>Copy this key now</strong><small>It will not be shown again after this page is dismissed.</small></span></div><div class="generated-key-value"><code>{generatedSystemOneKey}</code><button class="icon-button" title="Copy API key" onclick={copySystemOneAPIKey}>{#if systemOneKeyCopied}<Check aria-hidden="true" size={16} />{:else}<Copy aria-hidden="true" size={16} />{/if}</button></div><button class="text-button" onclick={() => generatedSystemOneKey = ''}>Dismiss</button></div>
+                {:else}
+                  <div class="api-key-create"><label><span>New key alias</span><input placeholder="Studio client" bind:value={systemOneKeyAlias} onkeydown={(event) => event.key === 'Enter' && createSystemOneAPIKey()} /></label><button class="primary-button" onclick={createSystemOneAPIKey} disabled={!systemOneKeyAlias.trim()}><KeyRound aria-hidden="true" size={16} /> Generate key</button></div>
+                {/if}
+                <div class="api-key-list">
+                  {#each settings.system_one.api_keys as key}
+                    <div class="api-key-row"><div><strong>{key.alias}</strong><small>{key.id === 'legacy' ? 'legacy' : key.id.slice(0, 8)} · {formatKeyDate(key.created_at)}</small></div><span class:revoked={key.revoked_at}>{key.revoked_at ? 'Revoked' : 'Active'}</span>{#if !key.revoked_at}<button class="text-button danger-text" onclick={() => revokeSystemOneAPIKey(key)}>Revoke</button>{/if}</div>
+                  {:else}
+                    <div class="api-key-empty">No server API keys configured. Authentication is disabled.</div>
+                  {/each}
+                </div>
               </div>
             </section>
           {:else if activeSection === 'runtime'}

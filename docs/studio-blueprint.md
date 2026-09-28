@@ -7,6 +7,7 @@
 
 현재 구현: user-level `q studio` loopback server와 embedded Svelte shell이 존재한다.
 전역 Settings는 Gateway provider, discovery 기반 model·role assignment,
+System One provider·decision model routing·server API key lifecycle,
 runtime/context/Loom과 Gateway·System One·Remote listener를 기존 store의
 검증·원자적 저장 계약으로 편집하며 MCP/LSP 현황을 조회한다. workspace model
 override는 아직 TUI가 소유한다. session 목록, workspace 선택과 agent 실행은 아직
@@ -430,8 +431,10 @@ TUI와 service 호출이 같은 저장 결과를 만든다.
 - `q studio` lifecycle, local URL과 embedded frontend asset 제공. 시작 CWD는 Studio
   상태나 session workspace로 저장하지 않는다.
 - global Settings API와 Web 화면. Gateway provider, global model·role assignment,
-  runtime/context/Loom과 service listener는 자동 저장한다. Provider inline key는
-  write-only로 다루며 model discovery 응답에도 credential을 포함하지 않는다.
+  System One provider·decision model routing·server API key lifecycle,
+  runtime/context/Loom과 service listener는 자동 저장한다. Gateway provider inline
+  key는 write-only로 다루고 System One provider key는 환경 변수 이름만 저장하며,
+  model discovery 응답에도 credential을 포함하지 않는다.
 - workspace model override는 session/workspace surface가 생길 때 연결한다.
 - 최근 workspace catalog와 workspace가 표시된 session 목록.
 - working directory를 선택하는 session 생성, 전환·삭제와 transcript 조회.

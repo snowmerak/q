@@ -731,7 +731,9 @@ as a workspace: each future Studio session selects and retains its own workspace
 root. The current slice provides the application shell and global Settings for
 runtime, context, Loom, and service listeners. Changes save automatically through
 the same validated stores used by the TUI. Gateway providers and global model
-assignments use discovery-backed editors; workspace model overrides remain in the
+assignments use discovery-backed editors. System One providers, decision model
+routing, listener settings, and server API key lifecycle are also available;
+provider authentication uses environment variables only. Workspace model overrides remain in the
 TUI. MCP and LSP are currently summaries. Session and agent surfaces are tracked in the
 [Q Studio blueprint](docs/studio-blueprint.md).
 
@@ -744,6 +746,8 @@ TUI. MCP and LSP are currently summaries. Session and agent surfaces are tracked
 | `~/.q/config.yaml` | Main model, roles, context, Loom, and LSP configuration. |
 | `~/.q/providers.json` | Managed Gateway providers and model metadata. |
 | `~/.q/gateway.json` | Standalone Gateway listener and key metadata. |
+| `~/.q/systemone.json` | System One providers, decision model routing, listener, and server API key metadata. |
+| `~/.q/systemone.key` | Private master key used only to verify System One server API keys. |
 | `~/.q/remote.json` | Standalone Remote listener, authentication switch, and Remote key metadata. |
 | `~/.q/remote.key` | Private master key used only to verify Remote API keys. |
 | `~/.q/library.json` | Global Library loopback listener settings. |

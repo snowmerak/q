@@ -13,6 +13,7 @@ import (
 	"github.com/snowmerak/q/config"
 	"github.com/snowmerak/q/gatewayconfig"
 	"github.com/snowmerak/q/providerhost"
+	"github.com/snowmerak/q/systemoneconfig"
 )
 
 func TestHandlerServesGlobalStatusAndSPA(t *testing.T) {
@@ -62,12 +63,15 @@ func TestHandlerServesGlobalStatusAndSPA(t *testing.T) {
 func TestSettingsAPIReadsAndUpdatesGlobalStores(t *testing.T) {
 	store := config.Store{Dir: t.TempDir()}
 	upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		if request.URL.Path != "/models" {
-			http.NotFound(writer, request)
-			return
-		}
 		writer.Header().Set("Content-Type", "application/json")
-		_, _ = io.WriteString(writer, `{"object":"list","data":[{"id":"model-a","object":"model","context_length":32000}]}`)
+		switch request.URL.Path {
+		case "/models":
+			_, _ = io.WriteString(writer, `{"object":"list","data":[{"id":"model-a","object":"model","context_length":32000}]}`)
+		case "/v1/models":
+			_, _ = io.WriteString(writer, `{"models":[{"name":"jev-a","description":"test decision model","release_date":"2026-01-01"}]}`)
+		default:
+			http.NotFound(writer, request)
+		}
 	}))
 	defer upstream.Close()
 	value := config.Default()
@@ -79,6 +83,13 @@ func TestSettingsAPIReadsAndUpdatesGlobalStores(t *testing.T) {
 	if err := (providerhost.Store{Dir: store.Dir}).Save(gateway.Config{Providers: []gateway.ProviderConfig{{
 		ID: "test", Type: "openai-compatible", Prefix: "test", Enabled: true, BaseURL: upstream.URL, APIKey: "top-secret",
 	}}}); err != nil {
+		t.Fatal(err)
+	}
+	systemOneStore := systemoneconfig.Store{Dir: store.Dir}
+	systemOneValue := systemoneconfig.Default()
+	systemOneValue.Providers = []systemoneconfig.ProviderConfig{{ID: "decision", URI: upstream.URL + "/v1/systemone"}}
+	systemOneValue.DefaultModel = "decision/jev-a"
+	if err := systemOneStore.Save(systemOneValue); err != nil {
 		t.Fatal(err)
 	}
 	handler, err := newHandler(store)
@@ -103,6 +114,9 @@ func TestSettingsAPIReadsAndUpdatesGlobalStores(t *testing.T) {
 	}
 	if len(snapshot.Providers.Items) != 1 || snapshot.Providers.Items[0].ID != "test" {
 		t.Fatalf("provider settings = %#v", snapshot.Providers)
+	}
+	if len(snapshot.SystemOne.Providers) != 1 || snapshot.SystemOne.Providers[0].ID != "decision" || snapshot.SystemOne.DefaultModel != "decision/jev-a" {
+		t.Fatalf("System One settings = %#v", snapshot.SystemOne)
 	}
 
 	response = httptest.NewRecorder()
@@ -163,6 +177,54 @@ func TestSettingsAPIReadsAndUpdatesGlobalStores(t *testing.T) {
 	}
 	if len(providers.Providers) != 1 || providers.Providers[0].Prefix != "models" || providers.Providers[0].Kind != "generic" || providers.Providers[0].APIKey != "top-secret" {
 		t.Fatalf("saved providers = %#v", providers.Providers)
+	}
+
+	response = httptest.NewRecorder()
+	handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/v1/settings/system-one/models", nil))
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"id":"decision/jev-a"`) {
+		t.Fatalf("GET System One models = %d %s", response.Code, response.Body.String())
+	}
+
+	response = httptest.NewRecorder()
+	handler.ServeHTTP(response, httptest.NewRequest(http.MethodPut, "/api/v1/settings/system-one/models/agent-skill-decision", bytes.NewBufferString(`{"model":"decision/jev-a"}`)))
+	if response.Code != http.StatusOK {
+		t.Fatalf("PUT System One role model = %d %s", response.Code, response.Body.String())
+	}
+
+	response = httptest.NewRecorder()
+	handler.ServeHTTP(response, httptest.NewRequest(http.MethodPut, "/api/v1/settings/system-one/providers/decision", bytes.NewBufferString(`{"id":"decisions","uri":"`+upstream.URL+`/v1/systemone","api_key_env":""}`)))
+	if response.Code != http.StatusOK {
+		t.Fatalf("PUT System One provider = %d %s", response.Code, response.Body.String())
+	}
+	systemOneValue, err = systemOneStore.LoadOrDefault()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if systemOneValue.DefaultModel != "decisions/jev-a" || systemOneValue.RoleModels[systemoneconfig.RoleAgentSkillDecision] != "decisions/jev-a" {
+		t.Fatalf("renamed System One model references = %#v", systemOneValue)
+	}
+
+	response = httptest.NewRecorder()
+	handler.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/api/v1/settings/system-one/api-keys", bytes.NewBufferString(`{"alias":"Studio test"}`)))
+	if response.Code != http.StatusCreated {
+		t.Fatalf("POST System One API key = %d %s", response.Code, response.Body.String())
+	}
+	var created apiKeyCreateResponse
+	if err := json.Unmarshal(response.Body.Bytes(), &created); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(created.Secret, "qso_") || created.Settings.SystemOne.ActiveAPIKeys != 1 || len(created.Settings.SystemOne.APIKeys) != 1 {
+		t.Fatalf("created System One API key = %#v", created)
+	}
+	keyID := created.Settings.SystemOne.APIKeys[0].ID
+	response = httptest.NewRecorder()
+	handler.ServeHTTP(response, httptest.NewRequest(http.MethodDelete, "/api/v1/settings/system-one/api-keys/"+keyID, nil))
+	if response.Code != http.StatusOK {
+		t.Fatalf("DELETE System One API key = %d %s", response.Code, response.Body.String())
+	}
+	systemOneValue, err = systemOneStore.LoadOrDefault()
+	if err != nil || systemOneValue.ActiveKeyCount() != 0 || systemOneValue.APIKeys[0].RevokedAt == nil {
+		t.Fatalf("revoked System One API key = %#v, %v", systemOneValue.APIKeys, err)
 	}
 }
 

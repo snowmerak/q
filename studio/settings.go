@@ -1,6 +1,7 @@
 package studio
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -9,8 +10,10 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/snowmerak/llm-provider/gateway"
+	"github.com/snowmerak/q/client/systemone"
 	"github.com/snowmerak/q/config"
 	"github.com/snowmerak/q/gatewayconfig"
 	"github.com/snowmerak/q/mcpconfig"
@@ -32,13 +35,14 @@ type settingsService struct {
 }
 
 type settingsSnapshot struct {
-	Version      int                 `json:"version"`
-	Scope        string              `json:"scope"`
-	Runtime      runtimeSettings     `json:"runtime"`
-	Models       modelSettings       `json:"models"`
-	Providers    providerSettings    `json:"gateway_providers"`
-	Services     serviceSettings     `json:"services"`
-	Integrations integrationSettings `json:"integrations"`
+	Version      int                  `json:"version"`
+	Scope        string               `json:"scope"`
+	Runtime      runtimeSettings      `json:"runtime"`
+	Models       modelSettings        `json:"models"`
+	Providers    providerSettings     `json:"gateway_providers"`
+	SystemOne    systemOneAPISettings `json:"system_one"`
+	Services     serviceSettings      `json:"services"`
+	Integrations integrationSettings  `json:"integrations"`
 }
 
 type runtimeSettings struct {
@@ -98,6 +102,29 @@ type gatewayProviderSettings struct {
 	APIKeyEnv       string `json:"api_key_env"`
 	HasInlineAPIKey bool   `json:"has_inline_api_key"`
 	ModelCount      int    `json:"model_count"`
+}
+
+type systemOneAPISettings struct {
+	ConfigPath      string                      `json:"config_path"`
+	DefaultModel    string                      `json:"default_model"`
+	AgentSkillModel string                      `json:"agent_skill_model"`
+	Providers       []systemOneProviderSettings `json:"providers"`
+	APIKeys         []serviceAPIKeySettings     `json:"api_keys"`
+	ActiveAPIKeys   int                         `json:"active_api_keys"`
+}
+
+type systemOneProviderSettings struct {
+	ID        string `json:"id"`
+	URI       string `json:"uri"`
+	APIKeyEnv string `json:"api_key_env"`
+}
+
+type serviceAPIKeySettings struct {
+	ID        string     `json:"id"`
+	Alias     string     `json:"alias"`
+	CreatedAt *time.Time `json:"created_at,omitempty"`
+	RevokedAt *time.Time `json:"revoked_at,omitempty"`
+	Legacy    bool       `json:"legacy,omitempty"`
 }
 
 type serviceSettings struct {
@@ -166,8 +193,37 @@ type gatewayProviderUpdate struct {
 	ClearAPIKey bool   `json:"clear_api_key,omitempty"`
 }
 
+type systemOneProviderUpdate struct {
+	ID        string `json:"id"`
+	URI       string `json:"uri"`
+	APIKeyEnv string `json:"api_key_env,omitempty"`
+}
+
+type systemOneModelUpdate struct {
+	Model string `json:"model"`
+}
+
+type apiKeyCreateRequest struct {
+	Alias string `json:"alias"`
+}
+
+type apiKeyCreateResponse struct {
+	Settings settingsSnapshot `json:"settings"`
+	Secret   string           `json:"secret"`
+}
+
 type modelCatalog struct {
 	Models []modelOption `json:"models"`
+}
+
+type systemOneModelCatalog struct {
+	Models []systemOneModelOption `json:"models"`
+}
+
+type systemOneModelOption struct {
+	ID          string `json:"id"`
+	Description string `json:"description,omitempty"`
+	ReleaseDate string `json:"release_date,omitempty"`
 }
 
 type modelOption struct {
@@ -430,6 +486,201 @@ func (service *settingsService) serveProviderDelete(writer http.ResponseWriter, 
 	service.writeSnapshot(writer)
 }
 
+func (service *settingsService) serveSystemOneModelCatalog(writer http.ResponseWriter, request *http.Request) {
+	service.mu.Lock()
+	value, err := service.systemOne.LoadOrDefault()
+	service.mu.Unlock()
+	if err != nil {
+		writeAPIError(writer, http.StatusInternalServerError, err)
+		return
+	}
+	ctx, cancel := context.WithTimeout(request.Context(), 20*time.Second)
+	defer cancel()
+	result := systemOneModelCatalog{Models: make([]systemOneModelOption, 0)}
+	var firstError error
+	for _, provider := range value.Providers {
+		client, clientErr := provider.NewClient()
+		if clientErr == nil {
+			var catalog *systemone.ModelsResult
+			catalog, clientErr = client.ListModels(ctx)
+			if clientErr == nil {
+				for _, model := range catalog.Models {
+					result.Models = append(result.Models, systemOneModelOption{
+						ID: provider.ID + "/" + model.Name, Description: model.Description, ReleaseDate: model.ReleaseDate,
+					})
+				}
+			}
+		}
+		if clientErr != nil && firstError == nil {
+			firstError = fmt.Errorf("%s: %w", provider.ID, clientErr)
+		}
+	}
+	if len(result.Models) == 0 && firstError != nil {
+		writeAPIError(writer, http.StatusBadGateway, fmt.Errorf("discover System One models: %w", firstError))
+		return
+	}
+	sort.Slice(result.Models, func(i, j int) bool { return result.Models[i].ID < result.Models[j].ID })
+	writeJSON(writer, http.StatusOK, result)
+}
+
+func (service *settingsService) serveSystemOneModelAssignmentUpdate(writer http.ResponseWriter, request *http.Request) {
+	var update systemOneModelUpdate
+	if err := decodeSettingsRequest(writer, request, &update); err != nil {
+		writeAPIError(writer, http.StatusBadRequest, err)
+		return
+	}
+	update.Model = strings.TrimSpace(update.Model)
+	service.mu.Lock()
+	defer service.mu.Unlock()
+	value, err := service.systemOne.LoadOrDefault()
+	if err != nil {
+		writeAPIError(writer, http.StatusInternalServerError, err)
+		return
+	}
+	switch request.PathValue("target") {
+	case "default":
+		if update.Model == "" {
+			writeAPIError(writer, http.StatusUnprocessableEntity, errors.New("System One default model is required"))
+			return
+		}
+		value.DefaultModel = update.Model
+	case "agent-skill-decision":
+		if value.RoleModels == nil {
+			value.RoleModels = make(map[string]string)
+		}
+		if update.Model == "" {
+			delete(value.RoleModels, systemoneconfig.RoleAgentSkillDecision)
+		} else {
+			value.RoleModels[systemoneconfig.RoleAgentSkillDecision] = update.Model
+		}
+	default:
+		writeAPIError(writer, http.StatusNotFound, errors.New("unknown System One model assignment"))
+		return
+	}
+	if err := service.systemOne.Save(value); err != nil {
+		writeAPIError(writer, http.StatusUnprocessableEntity, err)
+		return
+	}
+	service.writeSnapshot(writer)
+}
+
+func (service *settingsService) serveSystemOneProviderCreate(writer http.ResponseWriter, request *http.Request) {
+	var update systemOneProviderUpdate
+	if err := decodeSettingsRequest(writer, request, &update); err != nil {
+		writeAPIError(writer, http.StatusBadRequest, err)
+		return
+	}
+	service.mu.Lock()
+	defer service.mu.Unlock()
+	value, err := service.systemOne.LoadOrDefault()
+	if err != nil {
+		writeAPIError(writer, http.StatusInternalServerError, err)
+		return
+	}
+	value.Providers = append(value.Providers, applySystemOneProviderUpdate(systemoneconfig.ProviderConfig{}, update))
+	if err := service.systemOne.Save(value); err != nil {
+		writeAPIError(writer, http.StatusUnprocessableEntity, err)
+		return
+	}
+	service.writeSnapshot(writer)
+}
+
+func (service *settingsService) serveSystemOneProviderUpdate(writer http.ResponseWriter, request *http.Request) {
+	var update systemOneProviderUpdate
+	if err := decodeSettingsRequest(writer, request, &update); err != nil {
+		writeAPIError(writer, http.StatusBadRequest, err)
+		return
+	}
+	service.mu.Lock()
+	defer service.mu.Unlock()
+	value, err := service.systemOne.LoadOrDefault()
+	if err != nil {
+		writeAPIError(writer, http.StatusInternalServerError, err)
+		return
+	}
+	index := systemOneProviderIndex(value, request.PathValue("provider"))
+	if index < 0 {
+		writeAPIError(writer, http.StatusNotFound, errors.New("System One provider does not exist"))
+		return
+	}
+	oldID := value.Providers[index].ID
+	value.Providers[index] = applySystemOneProviderUpdate(value.Providers[index], update)
+	if oldID != value.Providers[index].ID {
+		rewriteSystemOneProviderReferences(&value, oldID, value.Providers[index].ID)
+	}
+	if err := service.systemOne.Save(value); err != nil {
+		writeAPIError(writer, http.StatusUnprocessableEntity, err)
+		return
+	}
+	service.writeSnapshot(writer)
+}
+
+func (service *settingsService) serveSystemOneProviderDelete(writer http.ResponseWriter, request *http.Request) {
+	service.mu.Lock()
+	defer service.mu.Unlock()
+	value, err := service.systemOne.LoadOrDefault()
+	if err != nil {
+		writeAPIError(writer, http.StatusInternalServerError, err)
+		return
+	}
+	index := systemOneProviderIndex(value, request.PathValue("provider"))
+	if index < 0 {
+		writeAPIError(writer, http.StatusNotFound, errors.New("System One provider does not exist"))
+		return
+	}
+	if len(value.Providers) == 1 {
+		writeAPIError(writer, http.StatusUnprocessableEntity, errors.New("at least one System One provider is required"))
+		return
+	}
+	value.Providers = append(value.Providers[:index], value.Providers[index+1:]...)
+	if err := service.systemOne.Save(value); err != nil {
+		writeAPIError(writer, http.StatusUnprocessableEntity, err)
+		return
+	}
+	service.writeSnapshot(writer)
+}
+
+func (service *settingsService) serveSystemOneAPIKeyCreate(writer http.ResponseWriter, request *http.Request) {
+	var update apiKeyCreateRequest
+	if err := decodeSettingsRequest(writer, request, &update); err != nil {
+		writeAPIError(writer, http.StatusBadRequest, err)
+		return
+	}
+	service.mu.Lock()
+	defer service.mu.Unlock()
+	value, err := service.systemOne.LoadOrDefault()
+	if err != nil {
+		writeAPIError(writer, http.StatusInternalServerError, err)
+		return
+	}
+	_, generated, err := service.systemOne.CreateAPIKey(value, update.Alias, time.Now())
+	if err != nil {
+		writeAPIError(writer, http.StatusUnprocessableEntity, err)
+		return
+	}
+	snapshot, err := service.snapshot()
+	if err != nil {
+		writeAPIError(writer, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(writer, http.StatusCreated, apiKeyCreateResponse{Settings: snapshot, Secret: generated.Secret})
+}
+
+func (service *settingsService) serveSystemOneAPIKeyRevoke(writer http.ResponseWriter, request *http.Request) {
+	service.mu.Lock()
+	defer service.mu.Unlock()
+	value, err := service.systemOne.LoadOrDefault()
+	if err != nil {
+		writeAPIError(writer, http.StatusInternalServerError, err)
+		return
+	}
+	if _, err := service.systemOne.RevokeAPIKey(value, request.PathValue("key"), time.Now()); err != nil {
+		writeAPIError(writer, http.StatusUnprocessableEntity, err)
+		return
+	}
+	service.writeSnapshot(writer)
+}
+
 func (service *settingsService) serveServiceUpdate(writer http.ResponseWriter, request *http.Request) {
 	var update serviceUpdate
 	if err := decodeSettingsRequest(writer, request, &update); err != nil {
@@ -549,6 +800,22 @@ func (service *settingsService) snapshot() (settingsSnapshot, error) {
 			HasInlineAPIKey: provider.APIKey != "", ModelCount: modelCount,
 		})
 	}
+	systemOneProviders := make([]systemOneProviderSettings, 0, len(systemOne.Providers))
+	for _, provider := range systemOne.Providers {
+		systemOneProviders = append(systemOneProviders, systemOneProviderSettings{
+			ID: provider.ID, URI: provider.URI, APIKeyEnv: provider.APIKeyEnv,
+		})
+	}
+	systemOneKeys := make([]serviceAPIKeySettings, 0, len(systemOne.APIKeys)+1)
+	if systemOne.Server.APIKey != "" {
+		systemOneKeys = append(systemOneKeys, serviceAPIKeySettings{ID: "legacy", Alias: "Legacy key", Legacy: true})
+	}
+	for _, key := range systemOne.APIKeys {
+		createdAt := key.CreatedAt
+		systemOneKeys = append(systemOneKeys, serviceAPIKeySettings{
+			ID: key.ID, Alias: key.Alias, CreatedAt: &createdAt, RevokedAt: key.RevokedAt,
+		})
+	}
 	return settingsSnapshot{
 		Version: 1,
 		Scope:   "global",
@@ -574,6 +841,11 @@ func (service *settingsService) snapshot() (settingsSnapshot, error) {
 			GroupCount: len(main.ModelGroups), Roles: roleAssignments,
 		},
 		Providers: providerSettings{ConfigPath: service.providers.Path(), Items: providerItems},
+		SystemOne: systemOneAPISettings{
+			ConfigPath: service.systemOne.Path(), DefaultModel: systemOne.DefaultModel,
+			AgentSkillModel: systemOne.RoleModels[systemoneconfig.RoleAgentSkillDecision],
+			Providers:       systemOneProviders, APIKeys: systemOneKeys, ActiveAPIKeys: systemOne.ActiveKeyCount(),
+		},
 		Services: serviceSettings{
 			Gateway: listenerSettings{
 				ConfigPath: service.gateway.Path(), Host: gateway.Server.Host,
@@ -582,7 +854,7 @@ func (service *settingsService) snapshot() (settingsSnapshot, error) {
 			SystemOne: systemOneSettings{
 				listenerSettings: listenerSettings{
 					ConfigPath: service.systemOne.Path(), Host: systemOne.Server.Host,
-					Port: systemOne.Server.Port, ActiveAPIKeys: activeSystemOneKeys(systemOne),
+					Port: systemOne.Server.Port, ActiveAPIKeys: systemOne.ActiveKeyCount(),
 				},
 				ProviderCount: len(systemOne.Providers), DefaultModel: systemOne.DefaultModel,
 				RoleModelCount: len(systemOne.RoleModels),
@@ -678,14 +950,33 @@ func providerIndex(value gateway.Config, id string) int {
 	return -1
 }
 
-func activeSystemOneKeys(value systemoneconfig.Config) int {
-	active := 0
-	for _, key := range value.APIKeys {
-		if key.RevokedAt == nil {
-			active++
+func applySystemOneProviderUpdate(provider systemoneconfig.ProviderConfig, update systemOneProviderUpdate) systemoneconfig.ProviderConfig {
+	provider.ID = strings.TrimSpace(update.ID)
+	provider.URI = strings.TrimSpace(update.URI)
+	provider.APIKeyEnv = strings.TrimSpace(update.APIKeyEnv)
+	return provider
+}
+
+func systemOneProviderIndex(value systemoneconfig.Config, id string) int {
+	for index, provider := range value.Providers {
+		if provider.ID == id {
+			return index
 		}
 	}
-	return active
+	return -1
+}
+
+func rewriteSystemOneProviderReferences(value *systemoneconfig.Config, oldID, newID string) {
+	rewrite := func(model string) string {
+		if strings.HasPrefix(model, oldID+"/") {
+			return newID + strings.TrimPrefix(model, oldID)
+		}
+		return model
+	}
+	value.DefaultModel = rewrite(value.DefaultModel)
+	for role, model := range value.RoleModels {
+		value.RoleModels[role] = rewrite(model)
+	}
 }
 
 func decodeSettingsRequest(writer http.ResponseWriter, request *http.Request, target any) error {
