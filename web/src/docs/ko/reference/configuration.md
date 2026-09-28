@@ -20,8 +20,6 @@ toc:
 | `~/.q/providers.json` | 관리형 Gateway 공급자와 모델 메타데이터 |
 | `~/.q/gateway.json` | 독립 Gateway 리스너와 키 메타데이터 |
 | `~/.q/gateway.key` | Gateway API 키 검증용 비공개 마스터 키 |
-| `~/.q/remote.json` | Remote 리스너, 인증 스위치, 키 메타데이터 |
-| `~/.q/remote.key` | Remote API 키 검증용 비공개 마스터 키 |
 | `~/.q/library.json` | Global Library 루프백 리스너 설정 |
 | `~/.q/workspace-memory.json` | Workspace Memory 루프백 리스너 설정 |
 | `~/.q/usage.json` | 토큰 Usage 서비스 루프백 리스너 설정 |

@@ -19,8 +19,6 @@ toc:
 | `~/.q/providers.json` | Managed Gateway providers and model metadata. |
 | `~/.q/gateway.json` | Standalone Gateway listener and key metadata. |
 | `~/.q/gateway.key` | Private master key used to verify Gateway API keys. |
-| `~/.q/remote.json` | Remote listener, authentication switch, and key metadata. |
-| `~/.q/remote.key` | Private master key used to verify Remote API keys. |
 | `~/.q/library.json` | Global Library loopback listener settings. |
 | `~/.q/workspace-memory.json` | Workspace Memory loopback listener settings. |
 | `~/.q/usage.json` | Token Usage service loopback listener settings. |

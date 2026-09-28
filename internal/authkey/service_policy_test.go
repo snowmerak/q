@@ -1,37 +1,53 @@
 package authkey_test
 
 import (
-	"strings"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 
 	"github.com/snowmerak/q/gatewayconfig"
-	"github.com/snowmerak/q/remoteconfig"
+	"github.com/snowmerak/q/systemoneconfig"
 )
 
-func TestGatewayAndRemoteCredentialsAreNotInterchangeable(t *testing.T) {
+func TestGatewayAndSystemOneCredentialsAreNotInterchangeable(t *testing.T) {
 	masterKey := [32]byte{1, 2, 3}
 	gatewayKey, err := gatewayconfig.GenerateAPIKey(masterKey, "gateway", time.Unix(10, 0))
 	if err != nil {
 		t.Fatal(err)
 	}
-	remoteKey, err := remoteconfig.GenerateAPIKey(masterKey, "remote", time.Unix(10, 0))
+
+	store := systemoneconfig.Store{Dir: t.TempDir()}
+	if _, err := store.EnsureMasterKey(masterKey); err != nil {
+		t.Fatal(err)
+	}
+	value, systemOneKey, err := store.CreateAPIKey(systemoneconfig.Default(), "system-one", time.Unix(10, 0))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if remoteconfig.VerifyAPIKey(masterKey, gatewayKey.Record, gatewayKey.Secret) {
-		t.Fatal("Remote accepted a Gateway credential")
-	}
-	if gatewayconfig.VerifyAPIKey(masterKey, remoteKey.Record, remoteKey.Secret) {
-		t.Fatal("Gateway accepted a Remote credential")
+	if gatewayconfig.VerifyAPIKey(masterKey, value.APIKeys[0], systemOneKey.Secret) {
+		t.Fatal("Gateway accepted a System One credential")
 	}
 
-	remotePrefixedGatewaySecret := "qrk_" + strings.TrimPrefix(gatewayKey.Secret, "qk_")
-	if remoteconfig.VerifyAPIKey(masterKey, gatewayKey.Record, remotePrefixedGatewaySecret) {
-		t.Fatal("Remote accepted a Gateway hash under a Remote prefix")
+	authenticator, err := systemoneconfig.NewAuthenticator(masterKey, value)
+	if err != nil {
+		t.Fatal(err)
 	}
-	gatewayPrefixedRemoteSecret := "qk_" + strings.TrimPrefix(remoteKey.Secret, "qrk_")
-	if gatewayconfig.VerifyAPIKey(masterKey, remoteKey.Record, gatewayPrefixedRemoteSecret) {
-		t.Fatal("Gateway accepted a Remote hash under a Gateway prefix")
+	handler := authenticator.OptionalHandler(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		writer.WriteHeader(http.StatusNoContent)
+	}))
+	request := httptest.NewRequest(http.MethodGet, "/", nil)
+	request.Header.Set("Authorization", "Bearer "+gatewayKey.Secret)
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusUnauthorized {
+		t.Fatalf("System One accepted a Gateway credential: status %d", response.Code)
+	}
+	request = httptest.NewRequest(http.MethodGet, "/", nil)
+	request.Header.Set("Authorization", "Bearer "+systemOneKey.Secret)
+	response = httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusNoContent {
+		t.Fatalf("System One rejected its own credential: status %d", response.Code)
 	}
 }

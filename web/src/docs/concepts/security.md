@@ -29,10 +29,8 @@ Use an isolated account, container, or virtual machine when the repository or re
 
 Prefer environment-variable references for provider and MCP credentials. q stores global configuration under `~/.q`; Windows file modes do not manage ACLs, so protect that directory with the account and filesystem controls appropriate to your machine.
 
-Remote API keys and Gateway keys are separate. Possession of a Remote key can authorize work in any directory the q process account can access.
-
 ## Network services
 
-Internal data services bind to loopback and do not require bearer authentication. The standalone Gateway and Remote service can be configured separately.
+Internal data services bind to loopback and do not require bearer authentication. The standalone Gateway can be configured separately.
 
-Do not expose an unauthenticated Gateway or Remote listener on a non-loopback address. Remote has no built-in TLS or path allowlist; use authentication plus a trusted network or a correctly configured reverse proxy.
+Do not expose an unauthenticated Gateway listener on a non-loopback address. Use authentication plus a trusted network or a correctly configured reverse proxy.

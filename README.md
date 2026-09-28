@@ -642,8 +642,6 @@ omits the chat-only `learn` tool.
 |---|---|
 | `q gateway` | Configure the Gateway listener, API keys, and providers. |
 | `q gateway start [--host <ip>] [--port <port>]` | Run the OpenAI-compatible Gateway. |
-| `q remote` | Run the foreground REST host for workspace sessions and agent execution. |
-| `q remote config` | Configure the Remote listener, authentication switch, and Remote-only API keys. |
 | `q studio [--port <port>] [--no-open]` | Start the embedded Studio web interface on loopback. |
 | `q library` | Configure the global Library listener. |
 | `q library start` | Run the global Library as a dedicated foreground service. |
@@ -703,27 +701,6 @@ client can opt in to role/event-ID forwarding; those headers are telemetry
 classification, not authenticated caller identity, and the Gateway removes
 them before provider dispatch.
 
-The standalone Remote host also defaults to `127.0.0.1:0`, but uses an
-independent keyring because a Remote key can select any working directory the
-q process account can access and can run workspace-mutating tools. Configure it
-with `q remote config`, then start it with `q remote`. `GET /v1/sessions` and
-`GET /v1/subagents` discover workspace state; `POST /v1/subagent-runs` streams
-execution as `application/x-ndjson`. The request requires `working_directory`
-and `prompt`; `session_id` resumes a session, while omission creates one. The
-`subagent` field is optional: an empty or omitted value runs the ordinary main
-agent loop, and a value such as `builtin/senior-developer` runs the existing direct
-`/subagent` flow. Remote prompts are always model input; TUI-only slash commands
-such as `/new` are not executed through the API.
-
-Remote requests preserve `ask_to_user` in the model-visible tool catalog. Since
-the HTTP stream is one-way, a call immediately receives an
-`interaction_unavailable`-style tool error and the agent may continue with the
-available information or finish blocked. Remote does not provide built-in TLS,
-path allowlists, background jobs, reconnect, or interactive answers. Keep it on
-loopback unless authentication and a trusted confidential network or reverse
-proxy are in place. The exact wire contract is served from `/openapi.json` and
-described in [the Remote API implementation note](docs/remote-subagent-api-plan.md).
-
 `q studio` starts a user-level loopback server on a random port and opens its
 embedded Svelte interface. `--port` selects a fixed development port and
 `--no-open` leaves the browser closed. Studio does not treat the launch directory
@@ -748,8 +725,6 @@ TUI. MCP and LSP are currently summaries. Session and agent surfaces are tracked
 | `~/.q/gateway.json` | Standalone Gateway listener and key metadata. |
 | `~/.q/systemone.json` | System One providers, decision model routing, listener, and server API key metadata. |
 | `~/.q/systemone.key` | Private master key used only to verify System One server API keys. |
-| `~/.q/remote.json` | Standalone Remote listener, authentication switch, and Remote key metadata. |
-| `~/.q/remote.key` | Private master key used only to verify Remote API keys. |
 | `~/.q/library.json` | Global Library loopback listener settings. |
 | `~/.q/workspace-memory.json` | Workspace Memory settings. |
 | `~/.q/usage.json` | Token Usage service loopback endpoint settings. |
@@ -840,7 +815,6 @@ publishing the fork.
 - [Delegation session recovery](docs/delegation-session-recovery.md)
 - [Model API modes and portable sessions](docs/model-api-mode-responses-plan.md)
 - [Subagent architecture](docs/subagent-architecture-notes.md)
-- [Remote agent API](docs/remote-subagent-api-plan.md)
 - [Context compaction](docs/context-compaction-plan.md)
 - [Session Store](docs/session-store-notes.md)
 - [Workspace Memory](docs/workspace-memory.md)

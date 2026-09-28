@@ -8,12 +8,12 @@
 현재 구현: user-level `q studio` loopback server와 embedded Svelte shell이 존재한다.
 전역 Settings는 Gateway provider, discovery 기반 model·role assignment,
 System One provider·decision model routing·server API key lifecycle,
-runtime/context/Loom과 Gateway·System One·Remote listener를 기존 store의
+runtime/context/Loom과 Gateway·System One listener를 기존 store의
 검증·원자적 저장 계약으로 편집하며 MCP/LSP 현황을 조회한다. workspace model
 override는 아직 TUI가 소유한다. session 목록, workspace 선택과 agent 실행은 아직
 Studio로 이전되지 않았다.
 
-대상 독자: Q의 TUI, Remote API, agent runtime, workspace session, Git 작업 흐름과
+대상 독자: Q의 TUI, agent runtime, workspace session, Git 작업 흐름과
 웹 인터페이스를 설계하거나 구현하는 사람.
 
 갱신 조건: Studio의 제품 범위, 런타임 경계, 권위 데이터, TUI 이전 범위, Git/MR
@@ -27,11 +27,11 @@ Q Studio는 여러 agent가 수행하는 장기 작업을 한곳에서 시작하
 작업 그래프를 따라가며, 각 agent의 로그·도구 호출·코드 변경·리뷰 상태를 확인한다.
 
 `q studio`가 사용자 단위 웹 애플리케이션과 제어 서버를 함께 시작하는 진입점이
-된다. Studio process는 실행한 디렉터리를 workspace로 소유하지 않는다. 현재의
-`q remote`는 요청 하나를 직접 받는 사용자 진입점에서 Studio가 관리하는 agent 실행
-어댑터로 점진적으로 이동한다. 로컬 실행은 `RemoteHost`와 공통 agent runtime을
-프로세스 안에서 재사용할 수 있고, 다른 머신의 worker는 이후 같은 실행 계약에
-연결할 수 있다.
+된다. Studio process는 실행한 디렉터리를 workspace로 소유하지 않는다. 메인 Agent
+Loop는 저장소 경로, 기준 commit, subagent와 요청을 담은 위임 작업을 로컬 실행
+호스트에 보낸다. 실행 호스트는 해당 저장소에 격리 worktree를 만들고 공통 Agent
+Loop를 실행한 뒤 Change Request를 요청한 부모에게 돌려준다. Studio는 이 흐름을
+관찰하고 개입하는 제어면이며, 실행 요청을 받는 별도 HTTP execution API는 두지 않는다.
 
 ### Workspace와 session 소유권
 
@@ -97,12 +97,11 @@ GitHub/GitLab 호환 API, 임의 조직의 권한 모델은 초기 목표에 포
 
 현재 구현에서 재사용할 수 있는 경계는 다음과 같다.
 
-- TUI, ACP와 Remote는 같은 Agent Loop와 workspace tool runtime을 사용한다.
+- TUI와 ACP는 같은 Agent Loop와 workspace tool runtime을 사용한다.
 - workspace session은 transcript, active task와 학습 상태를 `.q/sessions` 아래에
   저장하고 session lock으로 동시 소유를 막는다.
 - 중첩 delegation은 `task_id`와 `parent_id`를 전파하고 자식 session tree와 복구
   bookmark를 저장한다.
-- Remote는 session과 subagent를 조회하고 하나의 agent 실행을 NDJSON으로 중계한다.
 - agent event에는 message, tool call/result, status, activity, trace, question과 final
   result가 이미 존재한다.
 - `/changes`는 staged, unstaged와 untracked 변경을 읽기 전용으로 보여준다.
@@ -111,11 +110,11 @@ GitHub/GitLab 호환 API, 임의 조직의 권한 모델은 초기 목표에 포
 - `q studio`는 시작 CWD와 무관한 global shell, embedded frontend와 service status만
   제공하는 첫 기반 slice까지 구현되어 있다.
 
-현재 Remote 계약은 foreground 요청과 단방향 stream에 한정된다. background run,
-재연결과 replay cursor, 대화형 응답, worker 등록, Git 작업 수명과 장기 scheduler는
-제공하지 않는다. 정확한 현재 계약은 [Remote agent API](remote-subagent-api-plan.md),
-위임 복구는 [중첩 delegate 세션과 재귀 복구](delegation-session-recovery.md), 저장
-방향은 [Session Store](session-store-notes.md)가 소유한다.
+현재 위임은 같은 workspace 안의 child session과 Agent Loop 실행까지 제공한다.
+repository를 지정하는 위임, worktree lease, Change Request, 재연결 가능한 run event와
+장기 scheduler는 아직 제공하지 않는다. 위임 복구는 [중첩 delegate 세션과 재귀
+복구](delegation-session-recovery.md), 저장 방향은 [Session Store](session-store-notes.md)가
+소유한다.
 
 현재 `web/`은 Eleventy 기반 공개 문서 사이트다. Studio application과 문서 사이트는
 서로 다른 source와 build artifact를 사용한다.
@@ -134,13 +133,18 @@ GitHub/GitLab 호환 API, 임의 조직의 권한 모델은 초기 목표에 포
 
 ### 위임된 코드 작업
 
-1. manager 또는 senior developer가 작업을 만들고 역할형 agent에 할당한다.
-2. Studio가 기준 ref에서 branch와 worktree를 만들고 worker에 lease한다.
+1. manager 또는 senior developer가 저장소 경로, 기준 commit, subagent와 요청을 담아
+   위임한다.
+2. 로컬 Git 실행 호스트가 저장소를 검증하고 기준 commit에서 branch와 worktree를
+   만들어 해당 subagent에 lease한다.
 3. junior developer가 worktree에서 수정하고 검사한 뒤 커밋을 제출한다.
-4. Studio가 기준 ref와 head commit을 고정한 merge request를 연다.
-5. senior developer가 diff와 검사 결과를 검토하고 승인하거나 수정을 요청한다.
-6. 수정 요청은 같은 작업의 다음 iteration으로 기록된다.
-7. 승인된 변경을 병합한 뒤 worktree lease를 해제하고 결과를 상위 작업에 전달한다.
+4. 실행 호스트가 기준 commit과 head commit을 고정한 Change Request를 요청한 부모
+   session에 반환한다.
+5. 요청한 agent 또는 senior developer가 diff와 검사 결과를 검토하고 승인하거나
+   수정 요청을 같은 child 작업에 돌려준다.
+6. 수정 요청과 재제출은 같은 Change Request의 iteration으로 기록된다.
+7. 요청한 쪽이 승인하면 대상 branch에 병합하고 worktree lease를 해제한 뒤 결과를
+   상위 작업에 반영한다.
 
 ### 관찰과 개입
 
@@ -214,7 +218,7 @@ flowchart LR
     Projection[Read projections]
     Scheduler[Task graph scheduler]
     Workers[Agent worker registry]
-    Runtime[Agent Loop / Remote adapter]
+    Runtime[Agent Loop / local execution host]
     Git[Git and worktree service]
     Repo[(Git repository)]
     Sessions[(Workspace sessions)]
@@ -253,7 +257,10 @@ flowchart LR
 ### Agent worker
 
 - 하나 이상의 agent run을 실행하고 event와 heartbeat를 Studio에 전달한다.
-- 로컬 첫 버전은 기존 `RemoteHost`와 Agent Loop를 in-process adapter로 사용한다.
+- 로컬 첫 버전은 공통 Agent Loop를 호출하는 in-process execution host를 사용한다.
+- 위임 command는 canonical repository root, base commit, subagent ID, prompt와 부모
+  run/session ID를 포함하며 execution host가 worktree 생성부터 Change Request 제출까지
+  책임진다.
 - 별도 머신의 worker가 필요해지면 같은 run/command 계약을 network transport에
   투영한다.
 - worker가 authoritative task나 MR 상태를 직접 소유하지 않는다.
@@ -329,7 +336,7 @@ draft/open → closed
 
 ## 10. Event와 재연결 계약
 
-Studio Web GUI는 현재 Remote의 연결 수명에 종속된 NDJSON만으로 동작하지 않는다.
+Studio Web GUI는 실행 요청의 연결 수명에 종속된 일회성 stream만으로 동작하지 않는다.
 event는 먼저 durable log에 append되고 UI는 snapshot 뒤 cursor부터 이어받는다.
 
 공통 envelope에 필요한 의미는 다음과 같다.
@@ -472,7 +479,7 @@ node의 최종 결과와 실패 원인을 확인할 수 있다.
 
 - 질문 응답, guidance, pause/resume/cancel과 reassign command.
 - command audit, idempotency, safe-boundary delivery와 late-command 처리.
-- Studio가 local worker를 관리하고 필요할 때 remote worker를 등록하는 계약.
+- Studio가 local execution host를 관리하고 worker lifecycle을 표시하는 계약.
 
 완료 기준: 질문 대기와 장기 tool 실행을 UI에서 정확한 run에 개입할 수 있고, browser
 disconnect가 worker를 종료하지 않는다.
@@ -517,7 +524,7 @@ TUI 기능을 제거하기 전에는 기능 이전 표의 사용자 흐름을 We
 - standalone binary 이외의 Studio desktop packaging 필요 여부.
 - 최근 workspace catalog의 저장 위치와 기존 workspace를 발견·가져오는 UX.
 - event log를 workspace별 파일, SQLite 또는 기존 archive service 중 어디에 둘지.
-- local `RemoteHost`와 network worker가 공유할 공개 worker protocol의 범위.
+- 향후 network worker가 local execution host와 공유할 worker protocol의 범위.
 - pause의 정확한 safe point와 취소할 수 없는 tool process의 강제 종료 정책.
 - review approval을 새 head commit에서 무효화하는 기본 merge policy.
 - merge 방식: merge commit, squash, rebase 중 기본값과 repository별 override.
@@ -529,7 +536,6 @@ TUI 기능을 제거하기 전에는 기능 이전 표의 사용자 흐름을 We
 
 ## 18. 관련 문서
 
-- [Remote agent API](remote-subagent-api-plan.md)
 - [Delegated subagents](delegated-subagents.md)
 - [중첩 delegate 세션과 재귀 복구](delegation-session-recovery.md)
 - [Agent invocation과 Loom capture](agent-invocation-runtime.md)

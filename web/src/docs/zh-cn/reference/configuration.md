@@ -20,8 +20,6 @@ toc:
 | `~/.q/providers.json` | 受管理 Gateway 的提供商与模型元数据。 |
 | `~/.q/gateway.json` | 独立 Gateway 监听地址与密钥元数据。 |
 | `~/.q/gateway.key` | 用于验证 Gateway API 密钥的私有主密钥。 |
-| `~/.q/remote.json` | Remote 监听地址、认证开关与密钥元数据。 |
-| `~/.q/remote.key` | 用于验证 Remote API 密钥的私有主密钥。 |
 | `~/.q/library.json` | 全局 Library 回环监听设置。 |
 | `~/.q/workspace-memory.json` | Workspace Memory 回环监听设置。 |
 | `~/.q/usage.json` | Token Usage 服务回环监听设置。 |

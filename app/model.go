@@ -254,8 +254,6 @@ type agentEvent = AgentEvent
 // input from the embedding host.
 var ErrInteractionUnavailable = agentloop.ErrInteractionUnavailable
 
-var errRemoteInteractionUnavailable = ErrInteractionUnavailable
-
 // AgentContextReplacement replaces a message in the embedding host's retained
 // transcript after the loop has repaired its local context.
 type AgentContextReplacement = agentloop.ContextReplacement

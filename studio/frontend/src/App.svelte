@@ -79,7 +79,6 @@
     services: {
       gateway: ListenerSettings;
       system_one: ListenerSettings & { provider_count: number; default_model: string; role_model_count: number };
-      remote: ListenerSettings & { authentication_enabled: boolean };
     };
     integrations: {
       mcp: { config_path: string; items: number; bindings: number };
@@ -100,7 +99,7 @@
     { id: 'providers' as const, label: 'Providers', description: 'Gateway upstream providers', icon: Network },
     { id: 'system-one' as const, label: 'System One', description: 'Decision API and access keys', icon: BrainCircuit },
     { id: 'runtime' as const, label: 'Runtime', description: 'Execution, context, and storage', icon: SlidersHorizontal },
-    { id: 'services' as const, label: 'Services', description: 'Gateway, System One, and Remote', icon: Server },
+    { id: 'services' as const, label: 'Services', description: 'Gateway and System One', icon: Server },
     { id: 'integrations' as const, label: 'Integrations', description: 'MCP and language servers', icon: Unplug }
   ];
 
@@ -391,13 +390,12 @@
     queueSave(() => putSettings('/api/v1/settings/runtime', payload));
   }
 
-  function saveService(name: 'gateway' | 'system-one' | 'remote') {
+  function saveService(name: 'gateway' | 'system-one') {
     if (!settings) return;
     const service = name === 'system-one' ? settings.services.system_one : settings.services[name];
     const payload = JSON.stringify({
       host: service.host,
-      port: service.port,
-      authentication_enabled: name === 'remote' ? settings.services.remote.authentication_enabled : false
+      port: service.port
     });
     queueSave(() => putSettings(`/api/v1/settings/services/${name}`, payload));
   }
@@ -622,10 +620,6 @@
                 <article class="settings-card service-card">
                   <div class="card-heading"><div><h3>System One</h3><p>{settings.services.system_one.provider_count} providers · {settings.services.system_one.default_model}</p></div><span class="count-badge">{settings.services.system_one.active_api_keys} keys</span></div>
                   <label><span>Host</span><input bind:value={settings.services.system_one.host} onchange={() => saveService('system-one')} /></label><label><span>Port</span><input type="number" min="0" max="65535" bind:value={settings.services.system_one.port} onchange={() => saveService('system-one')} /></label><code>{settings.services.system_one.config_path}</code>
-                </article>
-                <article class="settings-card service-card">
-                  <div class="card-heading"><div><h3>Remote</h3><p>Workspace session and agent execution API.</p></div><span class="count-badge">{settings.services.remote.active_api_keys} keys</span></div>
-                  <label><span>Host</span><input bind:value={settings.services.remote.host} onchange={() => saveService('remote')} /></label><label><span>Port</span><input type="number" min="0" max="65535" bind:value={settings.services.remote.port} onchange={() => saveService('remote')} /></label><label class="toggle-field"><span>Require authentication</span><input type="checkbox" bind:checked={settings.services.remote.authentication_enabled} onchange={() => saveService('remote')} /><small>{settings.services.remote.authentication_enabled ? 'Enabled' : 'Disabled'}</small></label><code>{settings.services.remote.config_path}</code>
                 </article>
               </div>
             </section>

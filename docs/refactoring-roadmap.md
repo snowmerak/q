@@ -5,7 +5,7 @@
 상태: M0~M6을 구현하고 Windows 및 WSL Linux ARM64 로컬 검증을 마쳤다.
 macOS 환경 검증과 코드 리뷰는 남아 있다. 현재 동작의 계약은 README, 기능 문서와 코드가 소유한다.
 
-대상 독자: Q의 TUI, ACP, Remote, Agent Loop, 설정 저장소와 런타임 생명주기를
+대상 독자: Q의 TUI, ACP, Agent Loop, 설정 저장소와 런타임 생명주기를
 변경하는 구현자와 리뷰어.
 
 갱신 조건: 마일스톤의 범위, 패키지 경계, 공개 API 호환성, 검증 기준 또는 구현 순서가
@@ -43,8 +43,8 @@ facade로 유지하며, 새 임베딩 경로는 [agent-loop-embedding.md](agent-
 | `model.Update` | 약 880줄 |
 | `RunAgentLoop` | 약 350줄이며 `app/model.go`에 위치 |
 | 플랫폼별 `replaceFile` | 11개 패키지, 22개 운영체제별 파일 |
-| 런타임 시작 경로 | TUI, ACP, Remote 등에 Library, Workspace Memory, Provider 시작·종료 반복 |
-| API key 구현 | `gatewayconfig`와 `remoteconfig`에 생성, hash, 검증, revoke 흐름이 평행 구현 |
+| 런타임 시작 경로 | TUI와 ACP 등에 Library, Workspace Memory, Provider 시작·종료 반복 |
+| API key 구현 | Gateway와 System One 설정에 생성, hash, 검증, revoke 흐름이 평행 구현 |
 
 최근 150개 commit에서 `app/model.go`는 71회, `app/acp.go`는 45회 변경됐다. 크기만이
 아니라 변경 결합도도 높은 영역이다.
@@ -52,7 +52,7 @@ facade로 유지하며, 새 임베딩 경로는 [agent-loop-embedding.md](agent-
 기준선으로 실행한 `go test ./...`에서는 다음 두 테스트가 한 번씩 실패했다.
 
 - `TestACPAgentCancelsActiveScoutToolCards`: 테스트 종료 시 Loom 디렉터리 정리 경쟁.
-- `TestRemoteServiceHealthAndShutdownSmoke`: Library와 Workspace Memory의 고정 포트 충돌.
+- standalone service smoke test: Library와 Workspace Memory의 고정 포트 충돌.
 
 두 테스트는 각각 단독 실행하면 통과했다. 기능 회귀보다 수명주기 종료와 테스트 격리의
 간헐 실패로 판단하며, 대규모 구조 변경 전에 이를 안정화한다.
@@ -63,7 +63,7 @@ facade로 유지하며, 새 임베딩 경로는 [agent-loop-embedding.md](agent-
 
 ```text
 cmd/q
-  └─ app host adapters (TUI, ACP, Remote)
+  └─ app host adapters (TUI, ACP)
        ├─ agentloop
        │    ├─ client
        │    ├─ memory
@@ -76,8 +76,8 @@ cmd/q
             ├─ workspacememory
             └─ usagelog
 
-gatewayconfig ─┐
-remoteconfig  ─┴─ internal/authkey
+gatewayconfig   ─┐
+systemoneconfig ─┴─ internal/authkey
 
 config, workspace, sessionstore, ... ── internal/fsreplace
 ```
@@ -97,7 +97,7 @@ Library, Workspace Memory, Provider Manager와 Usage Recorder의 시작, 부분 
 ### `internal/authkey`
 
 key 생성, parsing, domain-separated keyed hash와 constant-time 비교 같은 암호화 primitive를
-소유한다. Gateway와 Remote 패키지는 prefix, domain, 인증 활성화 정책, 설정 파일과 사용자
+소유한다. Gateway와 System One 패키지는 prefix, domain, 인증 활성화 정책, 설정 파일과 사용자
 오류 문맥을 계속 소유한다.
 
 ### `agentloop`
@@ -108,7 +108,7 @@ round를 소유한다. Bubble Tea, ACP SDK, Provider Manager, Library 서버와 
 
 ### `app`
 
-TUI와 ACP/Remote host adapter를 소유한다. Agent Loop 이벤트를 각 transport와 화면에
+TUI와 ACP host adapter를 소유한다. Agent Loop 이벤트를 각 transport와 화면에
 투영하고 session/archive 저장을 조정한다. 화면별 상태는 먼저 `app` 내부 구조체로 묶고,
 독립성이 확인된 화면만 후속 패키지 이동 대상으로 삼는다.
 
@@ -117,8 +117,8 @@ TUI와 ACP/Remote host adapter를 소유한다. Agent Loop 이벤트를 각 tran
 모든 마일스톤은 다음 조건을 지킨다.
 
 - ACP wire message, tool lifecycle과 `write_file`/`edit_file` diff 동작을 유지한다.
-- Session Store, workspace session, Gateway, Remote 및 MCP 설정 파일 형식을 변경하지 않는다.
-- Gateway `qk_`와 Remote `qrk_` key의 prefix, hash domain과 master key 파일을 분리해 유지한다.
+- Session Store, workspace session, Gateway, System One 및 MCP 설정 파일 형식을 변경하지 않는다.
+- Gateway와 System One key의 prefix, hash domain과 master key 파일을 분리해 유지한다.
 - Agent Loop의 실행 구현은 저장소에 하나만 존재한다.
 - 공개 Agent Loop 호출자가 새 패키지로 점진적으로 이동할 수 있도록 기존 `app` 경로를
   호환 facade로 유지한다.
@@ -170,7 +170,7 @@ TUI와 ACP/Remote host adapter를 소유한다. Agent Loop 이벤트를 각 tran
 
 ### M2. 공통 host runtime 수명주기
 
-목표: TUI, ACP와 Remote가 같은 서비스 수명주기 구현을 사용하게 한다.
+목표: TUI와 ACP가 같은 서비스 수명주기 구현을 사용하게 한다.
 
 작업:
 
@@ -178,7 +178,7 @@ TUI와 ACP/Remote host adapter를 소유한다. Agent Loop 이벤트를 각 tran
 2. Library, Workspace Memory, Provider Manager와 Usage Recorder의 생성 및 종료 순서를
    옮긴다.
 3. 시작 중간 단계의 실패가 이미 생성된 리소스를 역순으로 정리하게 한다.
-4. `app.Run`, `openACPHost`, `NewRemoteHost`와 관련 standalone 경로를 전환한다.
+4. `app.Run`, `openACPHost`와 관련 standalone 경로를 전환한다.
 5. host별로 필요한 client, model 목록과 서비스 endpoint만 명시적으로 노출한다.
 
 완료 조건:
@@ -187,19 +187,19 @@ TUI와 ACP/Remote host adapter를 소유한다. Agent Loop 이벤트를 각 tran
   통한다.
 - 각 host의 취소와 종료가 bounded하며 `Close`를 여러 번 호출해도 안전하다.
 - 부분 초기화 실패와 정상 종료 모두 listener, goroutine, client와 recorder를 남기지 않는다.
-- TUI, ACP, Remote focused test와 전체 테스트가 통과한다.
+- TUI, ACP focused test와 전체 테스트가 통과한다.
 
 예상: 2~4일, PR 1~2개.
 
 ### M3. API key 공통 primitive
 
-목표: Gateway와 Remote의 인증 키 암호화와 lifecycle 중복을 제거한다.
+목표: Gateway와 System One의 인증 키 암호화와 lifecycle 중복을 제거한다.
 
 작업:
 
 1. `internal/authkey`에 key policy, record, generate, parse, hash, verify와 revoke primitive를
    정의한다.
-2. Gateway와 Remote 설정 타입은 JSON 호환을 유지하며 공통 record를 alias 또는 명시적
+2. Gateway와 System One 설정 타입은 JSON 호환을 유지하며 공통 record를 alias 또는 명시적
    변환으로 사용한다.
 3. 각 서비스의 prefix와 domain separator를 policy로 고정한다.
 4. master key 생성과 private file 저장의 공통 부분을 추출한다.
@@ -208,7 +208,7 @@ TUI와 ACP/Remote host adapter를 소유한다. Agent Loop 이벤트를 각 tran
 완료 조건:
 
 - key 생성, hash와 constant-time 검증 구현이 한곳에 존재한다.
-- Gateway key는 Remote에서, Remote key는 Gateway에서 인증되지 않는다.
+- Gateway key와 System One key는 서로의 서비스에서 인증되지 않는다.
 - 기존 설정 파일을 그대로 읽고 쓸 수 있다.
 - secret은 생성 반환값 이외의 파일, log와 오류에 나타나지 않는다.
 
@@ -224,7 +224,7 @@ M1과 M3는 M0 이후 서로 독립적으로 진행할 수 있다.
 
 1. `agentloop` 패키지에 공개 request, result, event와 최소 client/tool 계약을 추가한다.
 2. 현재 `RunAgentLoop` 본문과 context, stream, orchestration, skill hint 관련 구현을 이동한다.
-3. TUI, ACP, Remote, Search/Web Tester 호출자를 새 패키지로 전환한다.
+3. TUI, ACP, Search/Web Tester 호출자를 새 패키지로 전환한다.
 4. `app.RunAgentLoop`, 관련 타입과 helper는 alias 또는 forwarding facade로 유지한다.
 5. 외부 `agentloop_test` 패키지에서 workspace 준비, tool round, 질문, compaction과 streaming을
    공개 API만으로 검증한다.
@@ -232,7 +232,7 @@ M1과 M3는 M0 이후 서로 독립적으로 진행할 수 있다.
 완료 조건:
 
 - `agentloop`는 `app`, Bubble Tea, ACP SDK와 provider process lifecycle을 import하지 않는다.
-- TUI, ACP와 Remote가 동일한 Agent Loop 구현을 사용한다.
+- TUI와 ACP가 동일한 Agent Loop 구현을 사용한다.
 - 기존 `app` 공개 호출자와 새 `agentloop` 호출자가 모두 컴파일되고 같은 결과를 얻는다.
 - [embedded-agent-loop-public-api-plan.md](embedded-agent-loop-public-api-plan.md)의 기존 공개
   계약과 제한을 유지한다.
@@ -329,7 +329,7 @@ compaction, cancellation과 terminal result를 검증한다. 실제 provider 연
 | --- | --- |
 | 종료 순서 변경으로 goroutine 또는 데이터 flush 누락 | M0에서 lifecycle test를 고정하고 M2에서 한 소유자가 역순 종료 |
 | Windows replace 의미 변화 | 기존 재시도 테스트를 공통 패키지로 이동하고 실제 호출 패키지 회귀 테스트 유지 |
-| Gateway와 Remote key domain 혼동 | policy fixture와 상호 인증 거부 테스트를 필수화 |
+| Gateway와 System One key domain 혼동 | policy fixture와 상호 인증 거부 테스트를 필수화 |
 | 공개 Agent Loop import 경로 변경 | `app` facade와 type alias 유지, 제거는 별도 호환성 결정으로 처리 |
 | 패키지 이동 중 두 Agent Loop 구현 생성 | 이동 PR에서 원본을 forwarding 또는 삭제하고 단일 구현 조건 검사 |
 | Bubble Tea value model의 copy 의미 손상 | 하위 상태의 값/포인터 소유권을 명시하고 focus, cancel, channel test 유지 |
@@ -351,10 +351,10 @@ compaction, cancellation과 terminal result를 검증한다. 실제 provider 연
 
 | 마일스톤 | 상태 | 구현 PR/commit | 검증 기록 | 남은 작업 |
 | --- | --- | --- | --- | --- |
-| M0 기준선과 테스트 격리 | 완료 | 본 변경 | Remote smoke 20회, ACP 취소 50회, 전체 테스트 통과 | 없음 |
+| M0 기준선과 테스트 격리 | 완료 | 본 변경 | service smoke 20회, ACP 취소 50회, 전체 테스트 통과 | 없음 |
 | M1 플랫폼 파일 교체 | 구현 완료 | 본 변경 | Windows 재시도 test와 WSL Linux ARM64 전체 테스트 통과 | macOS 환경 확인 |
 | M2 host runtime | 완료 | 본 변경 | 부분 시작 실패 정리, `Close` 10회 반복, `app` 및 전체 테스트 통과 | 없음 |
-| M3 API key primitive | 완료 | 본 변경 | Gateway/Remote 및 교차 인증 거부 test, 전체 테스트 통과 | 없음 |
+| M3 API key primitive | 완료 | 본 변경 | Gateway/System One key test와 전체 테스트 통과 | 없음 |
 | M4 Agent Loop 패키지 | 구현 완료 | 본 변경 | 외부 `agentloop_test`의 workspace/tool/question/compaction/stream test, 기존 `app` test, 직접 import 경계 검사 통과 | 호스트 호출자는 호환 facade를 통해 단일 실행 본문 사용 |
 | M5 TUI model 분해 | 구현 완료 | 본 변경 | `app` 및 전체 테스트 통과; 화면 입력, 질문, 세션, 취소 회귀 포함 | 화면별 view와 controller는 기능별 파일군으로 유지 |
 | M6 문서와 경계 정리 | 구현 완료 | 본 변경 | Draw.io/XML 및 SVG 갱신, SVG 렌더 확인, Windows와 WSL Linux 전체 테스트, `go vet ./...`, modulecheck 통과 | macOS 환경 확인과 코드 리뷰 |
@@ -363,7 +363,7 @@ compaction, cancellation과 terminal result를 검증한다. 실제 provider 연
 
 - M4: `agentloop`가 요청, 이벤트, 결과, context 압축, stream 복구, orchestration,
   skill hint, 역할별 tool scope와 단일 `RunAgentLoop` 본문을 소유한다. `app`는 기존
-  공개 타입과 이벤트 채널을 투영하는 facade를 유지한다. TUI, ACP, Remote 및 내부
+  공개 타입과 이벤트 채널을 투영하는 facade를 유지한다. TUI, ACP 및 내부
   Search/Web Tester 호출자는 이 facade를 통해 같은 실행 본문에 도달한다.
   새 임베딩 호출자는 `agentloop`를 직접 사용한다. `agentloop`의 직접 import에는 `app`,
   Bubble Tea, ACP SDK 또는 `providerhost`가 없다. `tools`와 `workspace` 계약은

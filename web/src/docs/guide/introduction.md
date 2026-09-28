@@ -25,7 +25,7 @@ Use ordinary chat when the request is focused and you want q to inspect or edit 
 
 Ordinary chat can coordinate occupational subagents while retaining direct workspace tools. The manager handles requirements and planning; the senior developer can implement directly or assign and review implementation.
 
-Use `/subagent` when a bounded specialist should handle one request. Use `q remote` when another trusted process needs the same session and agent runtime through HTTP.
+Use `/subagent` when a bounded specialist should handle one request.
 
 ## What q keeps
 

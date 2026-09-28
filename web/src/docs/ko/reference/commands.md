@@ -40,8 +40,6 @@ toc:
 
 | 명령 | 용도 |
 | --- | --- |
-| `q remote` | 포그라운드 Remote REST 호스트를 시작합니다. |
-| `q remote config` | Remote 리스너와 API 키를 구성합니다. |
 | `q studio [--port <port>] [--no-open]` | 루프백에서 내장 Studio 웹 인터페이스를 시작합니다. |
 | `q gateway` | 독립 Gateway를 구성합니다. |
 | `q gateway start` | OpenAI 호환 Gateway를 시작합니다. |

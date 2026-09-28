@@ -240,10 +240,10 @@ func RunAgentLoop(ctx context.Context, request Request, events chan<- Event) {
 					return
 				}
 				if answer.Err != nil {
-					if errors.Is(answer.Err, errRemoteInteractionUnavailable) {
+					if errors.Is(answer.Err, errInteractionUnavailable) {
 						message := orchestrationToolResult(
 							call,
-							"interaction_unavailable: interactive input is unavailable in q remote mode; continue with the available information or finish the task as blocked",
+							"interaction_unavailable: interactive input is unavailable in this host; continue with the available information or finish the task as blocked",
 							true,
 						)
 						appendHistory(message)

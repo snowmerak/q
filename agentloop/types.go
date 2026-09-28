@@ -70,9 +70,9 @@ type ContextReplacement struct {
 
 // ErrInteractionUnavailable produces a recoverable tool error for an
 // interactive question that the embedding host cannot answer.
-var ErrInteractionUnavailable = errors.New("interactive input is unavailable in q remote mode")
+var ErrInteractionUnavailable = errors.New("interactive input is unavailable in this host")
 
-var errRemoteInteractionUnavailable = ErrInteractionUnavailable
+var errInteractionUnavailable = ErrInteractionUnavailable
 
 // Event reports progress and results from RunAgentLoop.
 type Event struct {

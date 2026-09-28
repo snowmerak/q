@@ -18,7 +18,6 @@ import (
 	"github.com/snowmerak/q/gatewayconfig"
 	"github.com/snowmerak/q/mcpconfig"
 	"github.com/snowmerak/q/providerhost"
-	"github.com/snowmerak/q/remoteconfig"
 	"github.com/snowmerak/q/systemoneconfig"
 )
 
@@ -28,7 +27,6 @@ type settingsService struct {
 	mu        sync.Mutex
 	main      config.Store
 	gateway   gatewayconfig.Store
-	remote    remoteconfig.Store
 	systemOne systemoneconfig.Store
 	mcp       mcpconfig.Store
 	providers providerhost.Store
@@ -130,7 +128,6 @@ type serviceAPIKeySettings struct {
 type serviceSettings struct {
 	Gateway   listenerSettings  `json:"gateway"`
 	SystemOne systemOneSettings `json:"system_one"`
-	Remote    remoteSettings    `json:"remote"`
 }
 
 type listenerSettings struct {
@@ -145,11 +142,6 @@ type systemOneSettings struct {
 	ProviderCount  int    `json:"provider_count"`
 	DefaultModel   string `json:"default_model"`
 	RoleModelCount int    `json:"role_model_count"`
-}
-
-type remoteSettings struct {
-	listenerSettings
-	AuthenticationEnabled bool `json:"authentication_enabled"`
 }
 
 type integrationSettings struct {
@@ -170,9 +162,8 @@ type runtimeUpdate struct {
 }
 
 type serviceUpdate struct {
-	Host                  string `json:"host"`
-	Port                  int    `json:"port"`
-	AuthenticationEnabled bool   `json:"authentication_enabled,omitempty"`
+	Host string `json:"host"`
+	Port int    `json:"port"`
 }
 
 type modelAssignmentUpdate struct {
@@ -243,7 +234,6 @@ func newSettingsService(store config.Store) *settingsService {
 	return &settingsService{
 		main:      store,
 		gateway:   gatewayconfig.Store{Dir: store.Dir},
-		remote:    remoteconfig.Store{Dir: store.Dir},
 		systemOne: systemoneconfig.Store{Dir: store.Dir},
 		mcp:       mcpconfig.Store{Dir: store.Dir},
 		providers: providerhost.Store{Dir: store.Dir},
@@ -706,14 +696,6 @@ func (service *settingsService) serveServiceUpdate(writer http.ResponseWriter, r
 			value.Server.Host, value.Server.Port = update.Host, update.Port
 			err = service.systemOne.Save(value)
 		}
-	case "remote":
-		var value remoteconfig.Config
-		value, err = service.remote.LoadOrDefault()
-		if err == nil {
-			value.Server = remoteconfig.ServerConfig{Host: update.Host, Port: update.Port}
-			value.Authentication.Enabled = update.AuthenticationEnabled
-			err = service.remote.Save(value)
-		}
 	default:
 		writeAPIError(writer, http.StatusNotFound, errors.New("unknown service settings"))
 		return
@@ -744,10 +726,6 @@ func (service *settingsService) snapshot() (settingsSnapshot, error) {
 		return settingsSnapshot{}, err
 	}
 	gateway, err := service.gateway.LoadOrDefault()
-	if err != nil {
-		return settingsSnapshot{}, err
-	}
-	remote, err := service.remote.LoadOrDefault()
 	if err != nil {
 		return settingsSnapshot{}, err
 	}
@@ -858,13 +836,6 @@ func (service *settingsService) snapshot() (settingsSnapshot, error) {
 				},
 				ProviderCount: len(systemOne.Providers), DefaultModel: systemOne.DefaultModel,
 				RoleModelCount: len(systemOne.RoleModels),
-			},
-			Remote: remoteSettings{
-				listenerSettings: listenerSettings{
-					ConfigPath: service.remote.Path(), Host: remote.Server.Host,
-					Port: remote.Server.Port, ActiveAPIKeys: remote.ActiveKeyCount(),
-				},
-				AuthenticationEnabled: remote.Authentication.Enabled,
 			},
 		},
 		Integrations: integrationSettings{

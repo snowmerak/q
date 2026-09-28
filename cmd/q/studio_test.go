@@ -1,13 +1,34 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"io"
 	"net/http"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
+
+type notifyWriter struct {
+	mu     sync.Mutex
+	buffer bytes.Buffer
+}
+
+func newNotifyWriter() *notifyWriter { return &notifyWriter{} }
+
+func (writer *notifyWriter) Write(body []byte) (int, error) {
+	writer.mu.Lock()
+	defer writer.mu.Unlock()
+	return writer.buffer.Write(body)
+}
+
+func (writer *notifyWriter) String() string {
+	writer.mu.Lock()
+	defer writer.mu.Unlock()
+	return writer.buffer.String()
+}
 
 func TestStudioServiceStatusAndShutdownSmoke(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
