@@ -36,6 +36,9 @@ the resulting diff, and create a commit without leaving the terminal.
 - At least one configured model provider
 - A terminal with ANSI color support
 
+Node.js is needed only when changing or rebuilding the embedded Q Studio
+frontend. Installing and running a released q binary does not require Node.js.
+
 [Task](https://taskfile.dev/) is optional; the same build and test commands can
 be run directly with Go.
 
@@ -73,6 +76,8 @@ task run           # run q from source
 task build         # build both commands into ./bin
 task test          # test q, the ACP SDK fork, and generated bindings
 task dist:check    # verify versioned installation in an isolated module proxy
+task studio:install # install pinned Studio frontend dependencies
+task studio:check   # type-check and verify generated Studio assets
 ```
 
 Start q from the repository or directory you want it to treat as the workspace:
@@ -639,6 +644,7 @@ omits the chat-only `learn` tool.
 | `q gateway start [--host <ip>] [--port <port>]` | Run the OpenAI-compatible Gateway. |
 | `q remote` | Run the foreground REST host for workspace sessions and agent execution. |
 | `q remote config` | Configure the Remote listener, authentication switch, and Remote-only API keys. |
+| `q studio [--port <port>] [--no-open]` | Start the embedded Studio web interface on loopback. |
 | `q library` | Configure the global Library listener. |
 | `q library start` | Run the global Library as a dedicated foreground service. |
 | `q memory` | Keep Workspace Memory running independently of a TUI. |
@@ -717,6 +723,17 @@ path allowlists, background jobs, reconnect, or interactive answers. Keep it on
 loopback unless authentication and a trusted confidential network or reverse
 proxy are in place. The exact wire contract is served from `/openapi.json` and
 described in [the Remote API implementation note](docs/remote-subagent-api-plan.md).
+
+`q studio` starts a user-level loopback server on a random port and opens its
+embedded Svelte interface. `--port` selects a fixed development port and
+`--no-open` leaves the browser closed. Studio does not treat the launch directory
+as a workspace: each future Studio session selects and retains its own workspace
+root. The current slice provides the application shell and global Settings for
+runtime, context, Loom, and service listeners. Changes save automatically through
+the same validated stores used by the TUI. Gateway providers and global model
+assignments use discovery-backed editors; workspace model overrides remain in the
+TUI. MCP and LSP are currently summaries. Session and agent surfaces are tracked in the
+[Q Studio blueprint](docs/studio-blueprint.md).
 
 ## Data and configuration
 
@@ -809,6 +826,7 @@ publishing the fork.
 
 ### Design notes
 
+- [Q Studio blueprint](docs/studio-blueprint.md)
 - [Agent Loop embedding guide](docs/agent-loop-embedding.md)
 - [Architecture refactoring roadmap](docs/refactoring-roadmap.md)
 - [Embedded Agent Loop public API](docs/embedded-agent-loop-public-api-plan.md)

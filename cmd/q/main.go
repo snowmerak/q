@@ -59,6 +59,13 @@ func main() {
 		}
 		return
 	}
+	if len(os.Args) > 1 && os.Args[1] == "studio" {
+		if err := runStudioCommand(ctx, os.Args[2:], os.Stdout, os.Stderr); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
 	if len(os.Args) > 1 && os.Args[1] == "systemone" {
 		mode, serviceArgs, ok := parseServiceCommand(os.Args[2:])
 		if !ok {

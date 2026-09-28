@@ -2,9 +2,16 @@
 
 작성일: 2026-09-16
 
+최근 갱신: 2026-09-28 — Studio의 장기 방향과 현재 Remote 계약의 경계를 연결했다.
+
 상태: 1차 구현 완료. 이 문서는 기존 workspace session, 기본 main agent loop와
 `/subagent` 실행을 원격 HTTP 요청으로 그대로 구동하는 `q remote`의 현재 계약과
 남은 검증 범위를 소유한다.
+
+향후 `q remote` 실행 경계를 Studio가 관리하는 worker adapter로 확장하는 방향과
+Web GUI, 양방향 개입, Git/MR 및 장기 task graph의 선행 순서는
+[Q Studio blueprint](studio-blueprint.md)가 소유한다. 그 기능이 구현되기 전까지는
+이 문서의 foreground 요청과 단방향 stream 계약이 현재 동작이다.
 
 대상 독자: Q의 CLI, workspace session, agent event loop, subagent runtime과 HTTP
 서비스를 변경하는 구현자와 리뷰어.

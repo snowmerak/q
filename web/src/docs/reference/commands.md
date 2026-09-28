@@ -41,6 +41,7 @@ The former `/mode`, `/plan`, `/auto-approve`, `/auto-resolve`, and `/autonomous`
 | --- | --- |
 | `q remote` | Start the foreground Remote REST host. |
 | `q remote config` | Configure Remote listener and API keys. |
+| `q studio [--port <port>] [--no-open]` | Start the embedded Studio web interface on loopback. |
 | `q gateway` | Configure the standalone Gateway. |
 | `q gateway start` | Start the OpenAI-compatible Gateway. |
 | `q library` | Configure the global Library listener. |

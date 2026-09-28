@@ -16,6 +16,23 @@ tasks:
     cmds:
       - go build -o ./bin/ ./cmd/q ./cmd/q-mcp
 
+  studio:install:
+    desc: Install the pinned Q Studio frontend dependencies
+    cmds:
+      - npm --prefix ./studio/frontend ci
+
+  studio:build:
+    desc: Build the versioned Q Studio frontend assets
+    cmds:
+      - npm --prefix ./studio/frontend run build
+
+  studio:check:
+    desc: Check Q Studio types and verify that embedded frontend assets are current
+    cmds:
+      - npm --prefix ./studio/frontend run check
+      - npm --prefix ./studio/frontend run build
+      - git diff --exit-code -- ./studio/frontend/dist
+
   run:
     desc: Run q from source
     interactive: true

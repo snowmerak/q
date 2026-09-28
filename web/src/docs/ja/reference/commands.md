@@ -42,6 +42,7 @@ toc:
 | --- | --- |
 | `q remote` | フォアグラウンドの Remote REST ホストを起動します。 |
 | `q remote config` | Remote リスナーと API キーを設定します。 |
+| `q studio [--port <port>] [--no-open]` | ループバックで組み込み Studio Web インターフェースを起動します。 |
 | `q gateway` | 単独 Gateway を設定します。 |
 | `q gateway start` | OpenAI 互換 Gateway を起動します。 |
 | `q library` | グローバル Library リスナーを設定します。 |

@@ -42,6 +42,7 @@ toc:
 | --- | --- |
 | `q remote` | 启动前台 Remote REST 服务。 |
 | `q remote config` | 配置 Remote 监听地址和 API 密钥。 |
+| `q studio [--port <port>] [--no-open]` | 在回环地址启动内置 Studio Web 界面。 |
 | `q gateway` | 配置独立 Gateway。 |
 | `q gateway start` | 启动兼容 OpenAI 的 Gateway。 |
 | `q library` | 配置全局 Library 监听设置。 |
