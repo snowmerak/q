@@ -267,6 +267,66 @@ dd.success { color: var(--green); }
 
 .sessions-main .page-header { flex: none; }
 
+.changes-main { display: flex; min-height: 0; flex-direction: column; padding-bottom: 0; }
+.changes-main .page-header { flex: none; }
+.changes-layout { display: grid; grid-template-columns: 250px minmax(420px, 1fr) 340px; width: calc(100% + 56px); min-width: 0; min-height: 0; flex: 1; margin: 0 -28px; overflow: hidden; }
+.changes-rail, .commit-review { display: flex; min-width: 0; min-height: 0; flex-direction: column; background: rgba(10, 13, 21, .5); }
+.changes-rail { border-right: 1px solid var(--border); }
+.commit-review { overflow-y: auto; border-left: 1px solid var(--border); }
+.changes-workspace { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: end; gap: 7px; padding: 16px; border-bottom: 1px solid var(--border); }
+.changes-workspace label { display: grid; min-width: 0; gap: 7px; color: var(--muted); font-size: 10px; }
+.changes-workspace input { height: 34px; }
+.changes-heading { display: flex; align-items: center; justify-content: space-between; padding: 12px 14px 7px 16px; color: var(--subtle); font: 10px ui-monospace, SFMono-Regular, Consolas, monospace; }
+.changed-files { min-height: 0; flex: 1; overflow-y: auto; padding: 4px 8px 14px; }
+.changed-files > button { display: grid; grid-template-columns: 24px minmax(0, 1fr); width: 100%; gap: 7px; padding: 10px 9px; color: var(--muted); border: 1px solid transparent; border-radius: 5px; background: transparent; text-align: left; cursor: pointer; }
+.changed-files > button:hover { color: var(--text); background: rgba(255, 255, 255, .03); }
+.changed-files > button.active { color: var(--text); border-color: rgba(143, 92, 255, .24); background: var(--violet-soft); }
+.changed-files > button > span:last-child { display: grid; min-width: 0; gap: 4px; }
+.changed-files strong, .changed-files small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.changed-files strong { font-size: 11px; }
+.changed-files small { color: var(--subtle); font-size: 9px; }
+.changed-files > p { padding: 28px 12px; color: var(--subtle); font-size: 11px; line-height: 1.55; text-align: center; }
+.git-status { color: #bda7ed; font: 10px ui-monospace, SFMono-Regular, Consolas, monospace; }
+.prepare-commit { justify-content: center; margin: 12px 14px 16px; }
+.change-detail { display: flex; min-width: 0; min-height: 0; flex-direction: column; background: rgba(8, 10, 17, .55); }
+.change-detail > header { display: flex; min-height: 62px; flex: none; align-items: center; justify-content: space-between; gap: 12px; padding: 11px 18px; border-bottom: 1px solid var(--border); }
+.change-detail > header h2 { overflow: hidden; font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
+.change-detail > header p { margin-top: 5px; color: var(--subtle); font: 9px ui-monospace, SFMono-Regular, Consolas, monospace; }
+.partial-badge { color: #e6b773; font: 9px ui-monospace, SFMono-Regular, Consolas, monospace; }
+.diff-view { min-width: 0; min-height: 0; flex: 1; overflow: auto; padding: 12px 0 28px; }
+.diff-section { min-width: max-content; }
+.diff-section > header { position: sticky; left: 0; display: flex; align-items: center; gap: 10px; min-height: 34px; padding: 0 14px; color: #c4b8df; border-block: 1px solid #242938; background: #10131d; font: 10px ui-monospace, SFMono-Regular, Consolas, monospace; }
+.diff-section > header span { color: #dda969; }
+.diff-code { padding: 7px 0; background: #080a11; }
+.diff-line { display: grid; grid-template-columns: 52px minmax(max-content, 1fr); min-height: 20px; font: 11px/20px ui-monospace, SFMono-Regular, Consolas, monospace; }
+.diff-line:hover, .diff-line.selected { background: rgba(143, 92, 255, .09); }
+.diff-line > button { position: sticky; left: 0; padding: 0 10px 0 4px; color: #555f76; border: 0; border-right: 1px solid #1e2330; background: #0b0d15; font: inherit; text-align: right; cursor: pointer; user-select: none; }
+.diff-line.selected > button { color: #bca4ef; }
+.diff-line > code { min-width: 0; padding: 0 14px; color: #cfd3df; white-space: pre; }
+.diff-empty, .change-empty { display: grid; min-height: 260px; place-items: center; color: var(--subtle); font-size: 12px; }
+.commit-review-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; padding: 18px 17px 14px; border-bottom: 1px solid var(--border); }
+.commit-review-heading h2 { margin-top: 4px; font-size: 15px; }
+.commit-review > .inline-warning { margin: 12px 16px 0; }
+.commit-wait, .commit-intro { display: grid; min-height: 240px; place-items: center; align-content: center; gap: 13px; padding: 28px; color: var(--subtle); text-align: center; }
+.commit-wait p, .commit-intro p { max-width: 270px; font-size: 11px; line-height: 1.6; }
+.auto-stage-note { margin: 13px 16px 0; padding: 10px 11px; color: #d1bb83; border: 1px solid rgba(208, 171, 84, .22); border-radius: 5px; background: rgba(208, 171, 84, .06); font-size: 10px; line-height: 1.5; }
+.commit-progress { padding: 12px 16px; border-bottom: 1px solid var(--border); }
+.commit-progress p { display: grid; grid-template-columns: 62px minmax(0, 1fr); gap: 6px; margin: 4px 0; color: var(--subtle); font-size: 9px; }
+.commit-progress strong { color: #9e86d5; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
+.proposal-list { display: grid; gap: 11px; padding: 14px 16px; }
+.proposal-list article { display: grid; gap: 9px; }
+.proposal-list article > div { display: grid; gap: 4px; }
+.proposal-list strong { font-size: 11px; }
+.proposal-list small { overflow: hidden; color: var(--subtle); font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
+.proposal-list textarea { width: 100%; padding: 10px; color: #ddd8e7; border: 1px solid var(--border); border-radius: 5px; background: #090c14; font: 10px/1.55 ui-monospace, SFMono-Regular, Consolas, monospace; resize: vertical; }
+.commit-actions { display: flex; flex-wrap: wrap; gap: 8px; padding: 4px 16px 20px; }
+.commit-actions button { flex: 1; justify-content: center; min-width: 92px; }
+.commit-actions .text-button { flex: 0 0 100%; }
+.push-button { background: #493278; }
+.commit-result { display: grid; gap: 12px; padding: 20px 16px; }
+.commit-result > strong { color: var(--green); }
+.commit-result pre { overflow: auto; margin: 0; padding: 11px; color: #cfc8df; border: 1px solid var(--border); border-radius: 5px; background: #090c14; font: 10px/1.55 ui-monospace, SFMono-Regular, Consolas, monospace; white-space: pre-wrap; }
+
 .sessions-layout {
   display: grid;
   grid-template-columns: 250px minmax(360px, 1fr) 260px;
@@ -968,6 +1028,9 @@ input[type="checkbox"] { width: 17px; height: 17px; padding: 0; accent-color: va
 @media (max-width: 1180px) {
   .sessions-layout { grid-template-columns: 230px minmax(360px, 1fr); }
   .run-inspector { display: none; }
+  .changes-layout { grid-template-columns: 220px minmax(360px, 1fr); grid-template-rows: minmax(320px, 1fr) minmax(260px, 40%); }
+  .changes-rail, .change-detail { grid-row: 1; }
+  .commit-review { grid-column: 1 / -1; grid-row: 2; border-top: 1px solid var(--border); border-left: 0; }
 }
 
 @media (max-width: 760px) {
@@ -989,7 +1052,14 @@ input[type="checkbox"] { width: 17px; height: 17px; padding: 0; accent-color: va
   .settings-main .page-header { margin: 0 18px; }
   .sessions-main { padding: 0; }
   .sessions-main .page-header { margin: 0 18px; }
+  .changes-main { padding: 0; }
+  .changes-main .page-header { margin: 0 18px; }
   .sessions-layout { grid-template-columns: minmax(0, 1fr); width: 100%; min-height: 760px; margin: 0; overflow: visible; }
+  .changes-layout { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(520px, auto) auto; width: 100%; min-height: 0; margin: 0; overflow: visible; }
+  .changes-rail, .change-detail, .commit-review { grid-column: 1; grid-row: auto; }
+  .changes-rail { max-height: 360px; border-right: 0; border-bottom: 1px solid var(--border); }
+  .change-detail { min-height: 520px; }
+  .commit-review { max-height: none; border-left: 0; }
   .session-rail { max-height: 310px; border-right: 0; border-bottom: 1px solid var(--border); }
   .run-inspector { display: none; }
   .chat-panel { min-height: 560px; }

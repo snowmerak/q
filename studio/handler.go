@@ -26,7 +26,8 @@ type statusResponse struct {
 // Individual sessions resolve and own their workspace roots.
 type Server struct {
 	http.Handler
-	host *app.SessionHost
+	host    *app.SessionHost
+	commits *commitService
 }
 
 // NewServer returns a Studio server whose runtime follows parent cancellation.
@@ -39,12 +40,12 @@ func NewServer(parent context.Context) (*Server, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open Studio session runtime: %w", err)
 	}
-	handler, err := newHandlerWithRunner(store, host)
+	handler, commits, err := newHandlerRuntime(parent, store, host)
 	if err != nil {
 		_ = host.Close()
 		return nil, err
 	}
-	return &Server{Handler: handler, host: host}, nil
+	return &Server{Handler: handler, host: host, commits: commits}, nil
 }
 
 // NewHandler is retained for embedders that only need an http.Handler.
@@ -57,7 +58,7 @@ func (server *Server) Close() error {
 	if server == nil || server.host == nil {
 		return nil
 	}
-	return server.host.Close()
+	return errors.Join(server.commits.Close(), server.host.Close())
 }
 
 func newHandler(store config.Store) (http.Handler, error) {
@@ -65,13 +66,18 @@ func newHandler(store config.Store) (http.Handler, error) {
 }
 
 func newHandlerWithRunner(store config.Store, runner sessionRunner) (http.Handler, error) {
+	handler, _, err := newHandlerRuntime(context.Background(), store, runner)
+	return handler, err
+}
+
+func newHandlerRuntime(parent context.Context, store config.Store, runner sessionRunner) (http.Handler, *commitService, error) {
 	assets, err := frontend()
 	if err != nil {
-		return nil, fmt.Errorf("open embedded Studio frontend: %w", err)
+		return nil, nil, fmt.Errorf("open embedded Studio frontend: %w", err)
 	}
 	spa, err := newSPAHandler(assets)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/v1/status", serveStatus)
@@ -118,6 +124,15 @@ func newHandlerWithRunner(store config.Store, runner sessionRunner) (http.Handle
 	mux.HandleFunc("PUT /api/v1/workspaces/agents/profiles", integrations.serveProfiles)
 	mux.HandleFunc("DELETE /api/v1/workspaces/agents/profiles/{profile}", integrations.serveProfileDelete)
 	mux.HandleFunc("/api/v1/workspaces/ignore", integrations.serveIgnore)
+	commits := newCommitService(parent, store)
+	mux.HandleFunc("GET /api/v1/workspaces/changes", commits.serveChanges)
+	mux.HandleFunc("GET /api/v1/workspaces/changes/file", commits.serveChangeDetail)
+	mux.HandleFunc("/api/v1/workspaces/commits", commits.serveCommitCollection)
+	mux.HandleFunc("GET /api/v1/workspaces/commits/{commit}", commits.serveCommitDetail)
+	mux.HandleFunc("DELETE /api/v1/workspaces/commits/{commit}", commits.serveCommitDetail)
+	mux.HandleFunc("PUT /api/v1/workspaces/commits/{commit}/proposals/{index}", commits.serveCommitProposal)
+	mux.HandleFunc("POST /api/v1/workspaces/commits/{commit}/regenerate", commits.serveCommitRegenerate)
+	mux.HandleFunc("POST /api/v1/workspaces/commits/{commit}/execute", commits.serveCommitExecute)
 	sessions := newSessionsService(runner)
 	mux.HandleFunc("GET /api/v1/directories", sessions.serveDirectoryListing)
 	mux.HandleFunc("/api/v1/sessions", sessions.serveCollection)
@@ -130,7 +145,7 @@ func newHandlerWithRunner(store config.Store, runner sessionRunner) (http.Handle
 	mux.HandleFunc("PUT /api/v1/workspaces/learning", sessions.serveLearning)
 	mux.Handle("/api/", http.NotFoundHandler())
 	mux.Handle("/", spa)
-	return securityHeaders(mux), nil
+	return securityHeaders(mux), commits, nil
 }
 
 func serveStatus(writer http.ResponseWriter, _ *http.Request) {

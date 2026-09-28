@@ -14,8 +14,8 @@ type progressLogger struct {
 }
 
 type ProgressEvent struct {
-	Stage   string
-	Message string
+	Stage   string `json:"stage"`
+	Message string `json:"message"`
 }
 
 func newProgressLogger(output io.Writer) *progressLogger {

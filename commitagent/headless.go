@@ -19,6 +19,14 @@ type HeadlessSession struct {
 	repositoryLock *workspace.Lock
 }
 
+// Root returns the canonical Git repository root owned by this review.
+func (session *HeadlessSession) Root() string {
+	if session == nil || session.session == nil {
+		return ""
+	}
+	return session.session.Root()
+}
+
 // PrepareHeadlessWithConfig prepares a commit proposal while reusing an
 // embedding q process's workspace lock when possible.
 func PrepareHeadlessWithConfig(
@@ -74,6 +82,16 @@ func (session *HeadlessSession) Regenerate(ctx context.Context) error {
 		return errors.New("q commit: session is unavailable")
 	}
 	return session.session.Regenerate(ctx, session.logger)
+}
+
+// UpdateProposal validates and replaces one generated commit message while
+// preserving its assigned files. Headless UIs use this during review without
+// bypassing the same conventional commit contract as the terminal UI.
+func (session *HeadlessSession) UpdateProposal(index int, message string) error {
+	if session == nil || session.session == nil {
+		return errors.New("q commit: session is unavailable")
+	}
+	return session.session.UpdateProposal(index, message)
 }
 
 func (session *HeadlessSession) Commit(ctx context.Context) (Result, error) {

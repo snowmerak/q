@@ -8,10 +8,10 @@ import (
 )
 
 type Result struct {
-	Messages     []string
-	AutoStaged   bool
-	UsedFallback bool
-	Split        bool
+	Messages     []string `json:"messages"`
+	AutoStaged   bool     `json:"auto_staged"`
+	UsedFallback bool     `json:"used_fallback"`
+	Split        bool     `json:"split"`
 }
 
 func executeProposal(ctx context.Context, state repositoryState, proposal proposalState, source string, logger *progressLogger) (Result, error) {

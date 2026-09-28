@@ -28,12 +28,12 @@
 ## 현재 기준선
 
 Studio에는 repository session lifecycle과 Markdown chat, global model/provider/runtime,
-Gateway/System One/Library service, Loom operation, MCP, LSP, Skills, subagent/ACP와
-`.qignore` 관리가 있다. directory browser는 Go API가 home에서 시작해 모든 지원 OS에
-같은 Web UI를 제공한다.
+Gateway/System One/Library service, Loom operation, MCP, LSP, Skills, subagent/ACP,
+`.qignore`, changes와 commit workflow가 있다. directory browser는 Go API가 home에서
+시작해 모든 지원 OS에 같은 Web UI를 제공한다.
 
 아직 TUI가 소유하는 주요 기능은 질문 응답과 durable interrupt/reconnect,
-changes/commit, workspace model override, usage와 full help다.
+workspace model override, usage와 full help다.
 
 ## 마일스톤
 
@@ -149,7 +149,7 @@ changes/commit, workspace model override, usage와 full help다.
 - `go test ./studio ./app ./lsp ./mcpconfig ./agentskills ./subagent ./workspace`,
   `npm run check`, production build를 통과했다.
 
-### M4. Changes와 commit workflow
+### M4. Changes와 commit workflow — 완료 (2026-09-29)
 
 범위:
 
@@ -162,6 +162,22 @@ changes/commit, workspace model override, usage와 full help다.
 
 - 임시 Git repository fixture에서 TUI와 Studio가 같은 change snapshot을 만든다.
 - 여러 commit 제안을 편집·선택해 실행하고 결과 commit을 확인한다.
+
+완료 기록:
+
+- 기존 `changes` package를 Studio API에서 그대로 호출해 staged, unstaged, untracked,
+  rename 상태와 bounded patch를 제공한다. detail 요청은 매번 현재 snapshot에 실제로
+  포함된 경로만 받아 임의 repository 파일 읽기를 막는다.
+- Changes 화면에 repository별 파일 목록, reload, binary/large preview 상태,
+  `highlight.js` diff 강조와 staged/unstaged section까지 구분되는 행 permalink를
+  추가했다.
+- 기존 `commitagent` headless session을 review API로 감싸 split proposal, 선택한
+  proposal message 수정, regenerate, index snapshot 검증, commit과 optional push를
+  제공한다. 처음 index가 비어 자동 stage한 상태와 push 실패도 별도로 표시한다.
+- review session은 repository lock을 소유하고 cancel, execute, server shutdown 또는
+  30분 inactivity 때 닫힌다. 임시 Git repository integration test와
+  `go test ./studio ./commitagent ./changes ./app`, `npm run check`, production build를
+  통과했다.
 
 ### M5. Durable run, 질문과 개입
 
@@ -206,8 +222,8 @@ changes/commit, workspace model override, usage와 full help다.
 | Markdown/code rendering | 안전한 Markdown과 언어별 highlighting | M1 | 완료 |
 | Tool/reasoning presentation | transcript와 live 접기/요약 | M1 완료, M5 tree 확장 | 완료 |
 | Question/interrupt | request abort만 지원 | M5 | 미착수 |
-| Changes | 없음 | M4 | 미착수 |
-| Commit | 없음 | M4 | 미착수 |
+| Changes | repository change 목록·bounded highlighted diff·행 anchor | M4 | 완료 |
+| Commit | proposal review·수정·재생성·split commit·optional push | M4 | 완료 |
 | Global model/role assignment | assignment·group·custom role·API mode·metadata·reindex | M2 | 완료 |
 | Gateway provider | CRUD와 실행 중 hot apply | M2 | 완료 |
 | Gateway listener/API key | listener와 일회 표시 key 관리 | M2 | 완료 |

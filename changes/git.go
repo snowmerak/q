@@ -24,25 +24,25 @@ const (
 )
 
 type File struct {
-	Path    string
-	OldPath string
+	Path    string `json:"path"`
+	OldPath string `json:"old_path,omitempty"`
 	// Status is Git's two-column index/worktree status, or ?? for untracked.
-	Status string
+	Status string `json:"status"`
 }
 
 type Snapshot struct {
-	Root  string
-	Files []File
+	Root  string `json:"root"`
+	Files []File `json:"files"`
 }
 
 type Section struct {
-	Title     string
-	Patch     string
-	Truncated bool
+	Title     string `json:"title"`
+	Patch     string `json:"patch"`
+	Truncated bool   `json:"truncated"`
 }
 
 type Detail struct {
-	Sections []Section
+	Sections []Section `json:"sections"`
 }
 
 // List returns all changes in the enclosing repository, including individual

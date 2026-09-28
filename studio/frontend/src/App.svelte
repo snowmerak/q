@@ -1,6 +1,7 @@
 <script lang="ts">
-  import { BrainCircuit, Check, ChevronDown, ChevronUp, Copy, Cpu, House, KeyRound, Layers, Network, Plus, RefreshCw, Server, Settings, SlidersHorizontal, Trash2, Unplug } from '@lucide/svelte';
+  import { BrainCircuit, Check, ChevronDown, ChevronUp, Copy, Cpu, GitCompareArrows, House, KeyRound, Layers, Network, Plus, RefreshCw, Server, Settings, SlidersHorizontal, Trash2, Unplug } from '@lucide/svelte';
   import { onMount } from 'svelte';
+  import ChangesView from './ChangesView.svelte';
   import IntegrationsView from './IntegrationsView.svelte';
   import SessionView from './SessionView.svelte';
 
@@ -94,7 +95,7 @@
       lsp: { config_path: string; items: number; bindings: number };
     };
   };
-  type View = 'overview' | 'sessions' | 'settings';
+  type View = 'overview' | 'sessions' | 'changes' | 'settings';
   type SettingsSection = 'models' | 'providers' | 'system-one' | 'runtime' | 'services' | 'integrations';
   type SaveState = { kind: 'idle' | 'saving' | 'saved' | 'error'; message?: string };
   type LoomStats = { artifacts: number; blobs: number; bytes: number };
@@ -103,6 +104,7 @@
   const navigation = [
     { label: 'Overview', icon: House, view: 'overview' as View },
     { label: 'Sessions', icon: Layers, view: 'sessions' as View },
+    { label: 'Changes', icon: GitCompareArrows, view: 'changes' as View },
     { label: 'Settings', icon: Settings, view: 'settings' as View }
   ];
   const settingsSections = [
@@ -221,7 +223,7 @@
 
   function navigate(view: View) {
     activeView = view;
-    const path = view === 'settings' ? '/settings' : view === 'sessions' ? '/sessions' : '/';
+    const path = view === 'settings' ? '/settings' : view === 'sessions' ? '/sessions' : view === 'changes' ? '/changes' : '/';
     if (window.location.pathname !== path) window.history.pushState({}, '', path);
     if (view === 'settings' && !settings) void loadSettings();
   }
@@ -229,6 +231,7 @@
   function viewFromLocation(): View {
     if (window.location.pathname.startsWith('/settings')) return 'settings';
     if (window.location.pathname.startsWith('/sessions')) return 'sessions';
+    if (window.location.pathname.startsWith('/changes')) return 'changes';
     return 'overview';
   }
 
@@ -626,9 +629,9 @@
     </nav>
   </aside>
 
-  <main class:settings-main={activeView === 'settings'} class:sessions-main={activeView === 'sessions'}>
+  <main class:settings-main={activeView === 'settings'} class:sessions-main={activeView === 'sessions'} class:changes-main={activeView === 'changes'}>
     <header class="page-header">
-      <div><h1>{activeView === 'settings' ? 'Settings' : activeView === 'sessions' ? 'Sessions' : 'Studio overview'}</h1>{#if activeView === 'settings'}<p class="page-description">Global configuration shared by Q sessions.</p>{:else if activeView === 'sessions'}<p class="page-description">Run Q's default loop in a selected repository.</p>{/if}</div>
+      <div><h1>{activeView === 'settings' ? 'Settings' : activeView === 'sessions' ? 'Sessions' : activeView === 'changes' ? 'Changes' : 'Studio overview'}</h1>{#if activeView === 'settings'}<p class="page-description">Global configuration shared by Q sessions.</p>{:else if activeView === 'sessions'}<p class="page-description">Run Q's default loop in a selected repository.</p>{:else if activeView === 'changes'}<p class="page-description">Inspect bounded diffs and review commits.</p>{/if}</div>
       <div class="connection" aria-live="polite"><span class:online={connection.kind === 'ready'} class="status-dot" aria-hidden="true"></span><span>{connection.kind === 'ready' ? 'Connected' : connection.kind === 'error' ? 'Disconnected' : 'Connecting'}</span></div>
     </header>
 
@@ -640,6 +643,8 @@
       <section class="empty-session" aria-labelledby="empty-heading"><div class="session-outline" aria-hidden="true"><span></span><span></span><span></span></div><h2 id="empty-heading">No session selected</h2><p>Open Sessions to choose a repository and continue a conversation.</p><button class="primary-button overview-session-button" onclick={() => navigate('sessions')}>Open sessions</button></section>
     {:else if activeView === 'sessions'}
       <SessionView />
+    {:else if activeView === 'changes'}
+      <ChangesView />
     {:else}
       <div class="settings-layout">
         <aside class="settings-index" aria-label="Settings sections">
@@ -862,5 +867,5 @@
     {/if}
   </main>
 
-  <footer class="status-bar"><div><span>Q Studio</span><span class="divider" aria-hidden="true"></span><span class:online={connection.kind === 'ready'} class="status-dot" aria-hidden="true"></span><span>{connection.kind === 'ready' ? 'Ready' : connection.kind === 'error' ? 'Unavailable' : 'Connecting'}</span></div><span>{activeView === 'settings' ? 'Global settings' : activeView === 'sessions' ? 'Repository session' : 'Local'}</span></footer>
+  <footer class="status-bar"><div><span>Q Studio</span><span class="divider" aria-hidden="true"></span><span class:online={connection.kind === 'ready'} class="status-dot" aria-hidden="true"></span><span>{connection.kind === 'ready' ? 'Ready' : connection.kind === 'error' ? 'Unavailable' : 'Connecting'}</span></div><span>{activeView === 'settings' ? 'Global settings' : activeView === 'sessions' ? 'Repository session' : activeView === 'changes' ? 'Repository changes' : 'Local'}</span></footer>
 </div>

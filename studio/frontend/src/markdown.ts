@@ -62,3 +62,9 @@ markdown.renderer.rules.link_open = (tokens, index, options, _environment, rende
 export function renderMarkdown(content: string) {
   return markdown.render(content || '');
 }
+
+export function highlightCode(content: string, language: string) {
+  const normalized = normalizedLanguage(language);
+  if (!normalized || !hljs.getLanguage(normalized)) return hljs.highlight(content, { language: 'plaintext' }).value;
+  return hljs.highlight(content, { language: normalized, ignoreIllegals: true }).value;
+}
