@@ -80,10 +80,10 @@ In the main chat, previously seen IDs are recovered from earlier contextual hint
 
 When `systemone.json` exists, q uses its `agent_skill_decision` model assignment
 or representative-model fallback to rerank Agent Skills. Contextual discovery
-retrieves 24 candidates, sends one System One request containing one score
+retrieves 32 candidates, sends one System One request containing one score
 question per candidate, and keeps the top six. `search_skills` retrieves and
-scores 30 candidates, then returns at most 20 or the smaller requested limit;
-requests above 30 are still capped at 20 results. A failed decision falls back
+scores 32 candidates, then returns at most 20 or the smaller requested limit;
+requests above 32 are still capped at 20 results. A failed decision falls back
 to the original retrieval order and adds a warning instead of failing search.
 
 Only candidate metadata is injected. It is explicitly marked as
@@ -169,8 +169,12 @@ not saved or reindexed, while a changed `SKILL.md` digest or Git commit causes
 the skill record to be reindexed. Added and deleted skills are also applied.
 When an embedding model is configured, active skill metadata is embedded and
 searched through the rebuildable HNSW index together with BM25; without one,
-search remains BM25-only. Assigning a new model reconfigures the vector index
-and backfills active skills for that model. Git detection is best-effort, so a
+search remains BM25-only. Name, description, and each tag have separate vector
+projections. A matching projection contributes according to description (4),
+tag (3), or name (2); the best weighted projection represents the skill in the
+vector ranking before reciprocal-rank fusion with BM25. Assigning a new model
+or finding an old combined skill vector backfills active skills. Git detection
+is best-effort, so a
 non-Git skill, an unborn repository, or an unavailable Git executable leaves
 the commit empty without blocking discovery. Each search still queries only
 the existing projection after any due reconciliation; it does not perform an

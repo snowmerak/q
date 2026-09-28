@@ -71,9 +71,9 @@ type SkillEmbeddingSourceRequest struct {
 }
 
 type SkillEmbeddingSource struct {
-	ID     string `json:"id"`
-	Digest string `json:"digest"`
-	Text   string `json:"text"`
+	ID     string                      `json:"id"`
+	Digest string                      `json:"digest"`
+	Parts  []agentskills.EmbeddingPart `json:"parts"`
 }
 
 type SkillEmbeddingSourceResponse struct {
@@ -82,9 +82,14 @@ type SkillEmbeddingSourceResponse struct {
 }
 
 type SkillEmbeddingItem struct {
-	ID        string    `json:"id"`
-	Digest    string    `json:"digest"`
-	Embedding []float32 `json:"embedding"`
+	ID          string                     `json:"id"`
+	Digest      string                     `json:"digest"`
+	Projections []SkillEmbeddingProjection `json:"projections"`
+}
+
+type SkillEmbeddingProjection struct {
+	ID     string    `json:"id"`
+	Vector []float32 `json:"vector"`
 }
 
 type SkillEmbeddingApplyRequest struct {
@@ -137,7 +142,7 @@ func (s *skillService) search(ctx context.Context, request SkillSearchRequest) (
 	if len(request.Embedding) > 0 && skillVectorMatches(
 		s.archive.VectorConfig(), strings.TrimSpace(request.EmbeddingModel), len(request.Embedding),
 	) {
-		options.Vector = &sessionstore.VectorQuery{Embedding: append([]float32(nil), request.Embedding...)}
+		options.Vector = agentskills.SkillVectorQuery(append([]float32(nil), request.Embedding...))
 	}
 	result, err := s.archive.Search(ctx, options)
 	if err != nil {
@@ -180,18 +185,21 @@ func (s *skillService) embeddingSources(request SkillEmbeddingSourceRequest) (Sk
 	}
 	response := SkillEmbeddingSourceResponse{Sources: make([]SkillEmbeddingSource, 0, request.Limit)}
 	for _, skill := range s.registry.Skills() {
+		parts, err := agentskills.EmbeddingParts(skill.Name, skill.Description, skill.Tags)
+		if err != nil {
+			return SkillEmbeddingSourceResponse{}, fmt.Errorf("library: skill %q: %w", skill.Name, err)
+		}
 		record, err := s.archive.Get(skill.ID)
 		if err != nil {
 			return SkillEmbeddingSourceResponse{}, err
 		}
-		if record.Embedding != nil && record.Embedding.Model == request.Model &&
-			record.Embedding.Dimensions == request.Dimensions && len(record.Embedding.Vector) == request.Dimensions {
+		if agentskills.EmbeddingPartsMatch(record, parts, request.Model, request.Dimensions) {
 			continue
 		}
 		response.Remaining++
 		if len(response.Sources) < request.Limit {
 			response.Sources = append(response.Sources, SkillEmbeddingSource{
-				ID: skill.ID, Digest: skill.Digest, Text: skillEmbeddingText(skill),
+				ID: skill.ID, Digest: skill.Digest, Parts: parts,
 			})
 		}
 	}
@@ -233,17 +241,32 @@ func (s *skillService) applyEmbeddings(request SkillEmbeddingApplyRequest) (Skil
 		if strings.TrimSpace(item.Digest) != skill.Digest {
 			return SkillEmbeddingApplyResponse{}, fmt.Errorf("library: skill %q changed during embedding", skill.Name)
 		}
-		if len(item.Embedding) != request.Dimensions {
-			return SkillEmbeddingApplyResponse{}, fmt.Errorf("library: skill %q embedding has %d dimensions; want %d", skill.Name, len(item.Embedding), request.Dimensions)
+		parts, err := agentskills.EmbeddingParts(skill.Name, skill.Description, skill.Tags)
+		if err != nil {
+			return SkillEmbeddingApplyResponse{}, fmt.Errorf("library: skill %q: %w", skill.Name, err)
+		}
+		if len(item.Projections) != len(parts) {
+			return SkillEmbeddingApplyResponse{}, fmt.Errorf("library: skill %q has %d projections; want %d", skill.Name, len(item.Projections), len(parts))
 		}
 		record, err := s.archive.Get(skill.ID)
 		if err != nil {
 			return SkillEmbeddingApplyResponse{}, err
 		}
 		record.UpdatedAt = time.Time{}
-		record.Embedding = &sessionstore.Embedding{
-			Model: request.Model, Dimensions: request.Dimensions, CreatedAt: now,
-			Vector: append([]float32(nil), item.Embedding...),
+		record.Embedding = nil
+		record.VectorProjections = make([]sessionstore.VectorProjection, 0, len(parts))
+		for index, part := range parts {
+			projection := item.Projections[index]
+			if projection.ID != part.ID || len(projection.Vector) != request.Dimensions {
+				return SkillEmbeddingApplyResponse{}, fmt.Errorf("library: skill %q projection %d does not match %q", skill.Name, index, part.ID)
+			}
+			record.VectorProjections = append(record.VectorProjections, sessionstore.VectorProjection{
+				ID: part.ID,
+				Embedding: sessionstore.Embedding{
+					Model: request.Model, Dimensions: request.Dimensions, CreatedAt: now,
+					Vector: append([]float32(nil), projection.Vector...),
+				},
+			})
 		}
 		records = append(records, record)
 	}
@@ -255,14 +278,6 @@ func (s *skillService) applyEmbeddings(request SkillEmbeddingApplyRequest) (Skil
 
 func skillVectorMatches(config sessionstore.VectorConfig, model string, dimensions int) bool {
 	return config.Enabled() && config.Model == model && config.Dimensions == dimensions
-}
-
-func skillEmbeddingText(skill agentskills.Skill) string {
-	parts := []string{skill.Name, skill.Description}
-	if len(skill.Tags) > 0 {
-		parts = append(parts, strings.Join(skill.Tags, " "))
-	}
-	return strings.Join(parts, "\n")
 }
 
 func (s *skillService) get(id, path string) (SkillResource, error) {

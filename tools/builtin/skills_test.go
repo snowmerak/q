@@ -128,8 +128,8 @@ func TestSearchSkillsUsesSystemOneCandidateAndResultLimits(t *testing.T) {
 	}{
 		{name: "default", want: 20},
 		{name: "smaller", requested: 5, want: 5},
-		{name: "candidate pool size", requested: 30, want: 20},
-		{name: "larger than candidate pool", requested: 31, want: 20},
+		{name: "candidate pool size", requested: 32, want: 20},
+		{name: "larger than candidate pool", requested: 33, want: 20},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			ranker := &testSkillRanker{enabled: true}
@@ -139,10 +139,10 @@ func TestSearchSkillsUsesSystemOneCandidateAndResultLimits(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if global.last.Limit != 30 || len(ranker.candidates) != 30 {
+			if global.last.Limit != 32 || len(ranker.candidates) != 32 {
 				t.Fatalf("candidate request = %d, ranked candidates = %d", global.last.Limit, len(ranker.candidates))
 			}
-			if !output.Reranked || len(output.Hits) != test.want || output.Hits[0].ID != "skill-29" {
+			if !output.Reranked || len(output.Hits) != test.want || output.Hits[0].ID != "skill-31" {
 				t.Fatalf("ranked output = %#v", output)
 			}
 		})
@@ -170,10 +170,10 @@ func TestSearchSkillsFallsBackWhenSystemOneFails(t *testing.T) {
 
 func TestSearchSkillHintsUsesSystemOneCandidateAndResultLimits(t *testing.T) {
 	global := &globalSkillSearch{}
-	for index := range 30 {
+	for index := range 40 {
 		global.result.Hits = append(global.result.Hits, qlibrary.SkillSearchHit{
 			ID: fmt.Sprintf("skill-%02d", index), Title: fmt.Sprintf("skill-%02d", index),
-			Scope: "global", Score: float64(30 - index),
+			Scope: "global", Score: float64(40 - index),
 		})
 	}
 	ranker := &testSkillRanker{enabled: true}
@@ -181,7 +181,7 @@ func TestSearchSkillHintsUsesSystemOneCandidateAndResultLimits(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if global.last.Limit != 24 || len(ranker.candidates) != 24 || !output.Reranked || len(output.Hits) != 24 || output.Hits[0].ID != "skill-23" {
+	if global.last.Limit != 32 || len(ranker.candidates) != 32 || !output.Reranked || len(output.Hits) != 32 || output.Hits[0].ID != "skill-31" {
 		t.Fatalf("hint output = %#v, candidate request = %d, ranked candidates = %d", output, global.last.Limit, len(ranker.candidates))
 	}
 }

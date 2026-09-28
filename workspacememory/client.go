@@ -19,7 +19,7 @@ import (
 
 const (
 	ServiceName     = "q-workspace-memory"
-	ProtocolVersion = 2
+	ProtocolVersion = 3
 	Implementation  = "0.1.0"
 	leaseHeader     = "X-Q-Workspace-Lease"
 )

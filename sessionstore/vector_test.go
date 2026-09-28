@@ -276,6 +276,49 @@ func TestHNSWHybridSearchGatesWeakTextForConfidentSemanticMatch(t *testing.T) {
 	}
 }
 
+func TestVectorProjectionWeightsFavorDescriptionAndIndividualTags(t *testing.T) {
+	store, err := OpenWithOptions(t.TempDir(), OpenOptions{Vector: testVectorConfig()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	for _, record := range []Record{
+		{ID: "name", Kind: KindSkill, VectorProjections: []VectorProjection{
+			{ID: "name", Embedding: Embedding{Model: "embed-test", Vector: []float32{1, 0, 0}}},
+		}},
+		{ID: "tag", Kind: KindSkill, VectorProjections: []VectorProjection{
+			{ID: "tag-0", Embedding: Embedding{Model: "embed-test", Vector: []float32{0.8, 0.6, 0}}},
+		}},
+		{ID: "description", Kind: KindSkill, VectorProjections: []VectorProjection{
+			{ID: "description", Embedding: Embedding{Model: "embed-test", Vector: []float32{0.8, 0.6, 0}}},
+		}},
+	} {
+		if _, err := store.Save(record); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, query := range []string{"", "no lexical matches"} {
+		result, err := store.Search(context.Background(), SearchOptions{
+			Text: query,
+			Vector: &VectorQuery{
+				Embedding:         []float32{1, 0, 0},
+				ProjectionWeights: map[string]float64{"description": 4, "tag": 3, "name": 2},
+			},
+			Limit: 3, Filters: Filters{Kinds: []string{KindSkill}},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(result.Hits) != 3 || result.Hits[0].Record.ID != "description" ||
+			result.Hits[1].Record.ID != "tag" || result.Hits[2].Record.ID != "name" {
+			t.Fatalf("query %q weighted vector order = %#v", query, result.Hits)
+		}
+		if result.Hits[0].VectorScore >= result.Hits[2].VectorScore {
+			t.Fatalf("raw vector similarity did not distinguish field weighting: %#v", result.Hits)
+		}
+	}
+}
+
 func TestHNSWMultipleProjectionsCollapseUpdateAndDelete(t *testing.T) {
 	store, err := OpenWithOptions(t.TempDir(), OpenOptions{Vector: testVectorConfig()})
 	if err != nil {

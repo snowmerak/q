@@ -1279,7 +1279,9 @@ func TestEmbeddingModelAssignmentIndexesExistingGlobalSkills(t *testing.T) {
 			_ = json.NewEncoder(writer).Encode(qlibrary.SkillEmbeddingSourceResponse{
 				Remaining: 1,
 				Sources: []qlibrary.SkillEmbeddingSource{{
-					ID: "skill-one", Digest: "digest-one", Text: "cat care",
+					ID: "skill-one", Digest: "digest-one", Parts: []agentskills.EmbeddingPart{
+						{ID: "description", Text: "cat care"},
+					},
 				}},
 			})
 		case "/v1/skills/embeddings":
@@ -1288,7 +1290,8 @@ func TestEmbeddingModelAssignmentIndexesExistingGlobalSkills(t *testing.T) {
 				t.Error(err)
 			}
 			if input.Model != "embed-model" || input.Dimensions != 3 || len(input.Items) != 1 ||
-				input.Items[0].ID != "skill-one" || len(input.Items[0].Embedding) != 3 {
+				input.Items[0].ID != "skill-one" || len(input.Items[0].Projections) != 1 ||
+				input.Items[0].Projections[0].ID != "description" || len(input.Items[0].Projections[0].Vector) != 3 {
 				t.Errorf("embedding apply request = %#v", input)
 			}
 			applied = true

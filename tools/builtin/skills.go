@@ -35,6 +35,8 @@ type SearchSkillsOutput struct {
 	Warnings []string         `json:"warnings,omitempty"`
 }
 
+const systemOneSkillCandidateLimit = 32
+
 // SkillRanker applies a task-specific relevance decision to a bounded set of
 // search candidates. Enabled may consult live configuration so settings take
 // effect without rebuilding the tool runtime.
@@ -84,7 +86,7 @@ func searchSkillsWithRanker(
 	candidateLimit := requestedLimit
 	resultLimit := requestedLimit
 	if rankingEnabled {
-		candidateLimit = 30
+		candidateLimit = systemOneSkillCandidateLimit
 		resultLimit = min(requestedLimit, 20)
 	}
 	output, err := retrieveSkills(ctx, store, global, input, candidateLimit)
@@ -169,8 +171,8 @@ func retrieveSkills(
 	return output, nil
 }
 
-// SearchSkillHints retrieves and reranks three times the System One hint
-// budget. Hint consumers keep the first six unseen candidates; retaining the
+// SearchSkillHints retrieves and reranks up to 32 candidates in one System One
+// request. Hint consumers keep the first six unseen candidates; retaining the
 // ranked window here lets them skip candidates already shown in the context.
 func SearchSkillHints(
 	ctx context.Context,
@@ -183,7 +185,7 @@ func SearchSkillHints(
 	if ranker == nil || !ranker.Enabled() {
 		return searchSkills(ctx, store, global, SearchSkillsInput{Query: query, Limit: limit})
 	}
-	output, err := retrieveSkills(ctx, store, global, SearchSkillsInput{Query: query}, 24)
+	output, err := retrieveSkills(ctx, store, global, SearchSkillsInput{Query: query}, systemOneSkillCandidateLimit)
 	if err != nil {
 		return SearchSkillsOutput{}, err
 	}

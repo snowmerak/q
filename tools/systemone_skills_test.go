@@ -28,7 +28,7 @@ func TestSystemOneSkillRankerScoresAllCandidatesInOneRequest(t *testing.T) {
 			t.Errorf("decode request: %v", err)
 			return
 		}
-		if body.Model != "jev-skill" || len(body.Questions) == 0 || len(body.Questions) > 30 {
+		if body.Model != "jev-skill" || len(body.Questions) == 0 || len(body.Questions) > 32 {
 			t.Errorf("decision request = %#v", body)
 		}
 		answers := make(map[string]systemone.Answer, len(body.Questions))
@@ -75,7 +75,7 @@ func TestSystemOneSkillRankerScoresAllCandidatesInOneRequest(t *testing.T) {
 		t.Fatalf("requests = %d, ranked = %#v", requests, ranked)
 	}
 
-	largeHits := make([]builtin.SkillSearchHit, 30)
+	largeHits := make([]builtin.SkillSearchHit, 32)
 	for index := range largeHits {
 		largeHits[index] = builtin.SkillSearchHit{
 			ID:          fmt.Sprintf("large-%02d", index),
@@ -85,7 +85,7 @@ func TestSystemOneSkillRankerScoresAllCandidatesInOneRequest(t *testing.T) {
 		}
 	}
 	large, err := ranker.RankSkills(t.Context(), strings.Repeat("작업", 3000), largeHits)
-	if err != nil || requests != 2 || len(large) != 30 {
+	if err != nil || requests != 2 || len(large) != 32 {
 		t.Fatalf("bounded request: requests = %d, hits = %d, err = %v", requests, len(large), err)
 	}
 }

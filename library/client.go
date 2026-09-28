@@ -18,7 +18,7 @@ import (
 
 const (
 	ServiceName         = "q-library"
-	ProtocolVersion     = 3
+	ProtocolVersion     = 4
 	Implementation      = "0.1.0"
 	registrationTimeout = 2 * time.Minute
 )
@@ -254,7 +254,7 @@ func embedTexts(ctx context.Context, configured embeddingClientConfig, texts []s
 }
 
 // SyncSkillEmbeddings configures the Library's rebuildable vector index and
-// fills every active global skill that is missing an embedding for this
+// fills every active global skill that is missing field projections for this
 // client's configured model. With no configured model it disables vectors and
 // leaves skill search on BM25.
 func (c *Client) SyncSkillEmbeddings(ctx context.Context) (SkillEmbeddingSyncStats, error) {
@@ -281,30 +281,52 @@ func (c *Client) SyncSkillEmbeddings(ctx context.Context) (SkillEmbeddingSyncSta
 			}
 			return stats, nil
 		}
-		texts := make([]string, len(sources.Sources))
-		for index, source := range sources.Sources {
-			texts[index] = source.Text
-		}
-		vectors, err := embedTexts(ctx, configured, texts)
-		if err != nil {
-			return stats, fmt.Errorf("library: embed Agent Skills: %w", err)
-		}
-		items := make([]SkillEmbeddingItem, len(sources.Sources))
-		for index, source := range sources.Sources {
-			items[index] = SkillEmbeddingItem{
-				ID: source.ID, Digest: source.Digest, Embedding: vectors[index],
+		texts := make([]string, 0, len(sources.Sources)*3)
+		for _, source := range sources.Sources {
+			for _, part := range source.Parts {
+				texts = append(texts, part.Text)
 			}
 		}
-		var applied SkillEmbeddingApplyResponse
-		if err := c.doJSON(ctx, http.MethodPost, "/skills/embeddings", SkillEmbeddingApplyRequest{
-			Model: configured.model, Dimensions: configured.dimensions, Items: items,
-		}, &applied); err != nil {
-			return stats, err
+		vectors := make([][]float32, 0, len(texts))
+		for start := 0; start < len(texts); start += maximumSkillEmbedBatch {
+			end := min(start+maximumSkillEmbedBatch, len(texts))
+			chunk, err := embedTexts(ctx, configured, texts[start:end])
+			if err != nil {
+				return stats, fmt.Errorf("library: embed Agent Skills: %w", err)
+			}
+			vectors = append(vectors, chunk...)
 		}
-		if applied.Updated != len(items) {
-			return stats, fmt.Errorf("library: applied %d of %d skill embeddings", applied.Updated, len(items))
+		items := make([]SkillEmbeddingItem, len(sources.Sources))
+		position := 0
+		for index, source := range sources.Sources {
+			items[index] = SkillEmbeddingItem{ID: source.ID, Digest: source.Digest}
+			for _, part := range source.Parts {
+				items[index].Projections = append(items[index].Projections, SkillEmbeddingProjection{
+					ID: part.ID, Vector: vectors[position],
+				})
+				position++
+			}
 		}
-		stats.Embedded += applied.Updated
+		for start := 0; start < len(items); {
+			end := start
+			projections := 0
+			for end < len(items) && end-start < maximumSkillEmbedBatch &&
+				(projections+len(items[end].Projections) <= 128 || end == start) {
+				projections += len(items[end].Projections)
+				end++
+			}
+			var applied SkillEmbeddingApplyResponse
+			if err := c.doJSON(ctx, http.MethodPost, "/skills/embeddings", SkillEmbeddingApplyRequest{
+				Model: configured.model, Dimensions: configured.dimensions, Items: items[start:end],
+			}, &applied); err != nil {
+				return stats, err
+			}
+			if applied.Updated != end-start {
+				return stats, fmt.Errorf("library: applied %d of %d skill embeddings", applied.Updated, end-start)
+			}
+			stats.Embedded += applied.Updated
+			start = end
+		}
 	}
 }
 

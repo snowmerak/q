@@ -343,8 +343,9 @@ still win when it is substantially more relevant.
 The Library becomes the owner of global Agent Skill search projections for
 `~/.agents/skills` and `~/.q/skills`. It discovers and reconciles those roots
 at leader startup and after explicit install, update, remove, or reload
-operations. `search_skills` performs only a Library BM25 query; it never scans
-the filesystem, parses YAML, or reconciles records per query.
+operations. `search_skills` queries the Library's BM25 and, when configured,
+field-specific HNSW projections. It never scans the filesystem, parses YAML,
+or reconciles records per query.
 
 Project roots under `<workspace>/.agents/skills` and
 `<workspace>/.q/skills` remain workspace-side in the initial implementation.

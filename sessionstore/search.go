@@ -77,6 +77,10 @@ type VectorQuery struct {
 	Embedding      []float32
 	Weight         float64
 	CandidateLimit int
+	// ProjectionWeights ranks a record by its best matching vector projection.
+	// An exact projection ID wins; otherwise the prefix before '-' is used.
+	// Missing weights default to 1.
+	ProjectionWeights map[string]float64
 }
 
 // HybridTextGate drops weak lexical hits from reciprocal-rank fusion when the
@@ -180,6 +184,12 @@ func validateSearchOptions(options *SearchOptions) error {
 	if options.Vector != nil {
 		vector := *options.Vector
 		vector.Embedding = cloneFloats(vector.Embedding)
+		if vector.ProjectionWeights != nil {
+			vector.ProjectionWeights = make(map[string]float64, len(options.Vector.ProjectionWeights))
+			for id, weight := range options.Vector.ProjectionWeights {
+				vector.ProjectionWeights[id] = weight
+			}
+		}
 		options.Vector = &vector
 	}
 	if options.Limit == 0 {
@@ -233,6 +243,11 @@ func validateSearchOptions(options *SearchOptions) error {
 		if options.Vector.Weight == 0 {
 			options.Vector.Weight = 1
 		}
+		for id, weight := range options.Vector.ProjectionWeights {
+			if id == "" || math.IsNaN(weight) || math.IsInf(weight, 0) || weight <= 0 {
+				return fmt.Errorf("sessionstore: invalid vector projection weight for %q", id)
+			}
+		}
 		if options.Vector.CandidateLimit < 0 || options.Vector.CandidateLimit > 5000 {
 			return errors.New("sessionstore: vector candidate limit must be between 0 and 5000")
 		}
@@ -254,12 +269,13 @@ func validateSearchOptions(options *SearchOptions) error {
 }
 
 type fusedCandidate struct {
-	record      Record
-	textScore   float64
-	vectorScore float64
-	hasVector   bool
-	vectorRank  int
-	baseScore   float64
+	record              Record
+	textScore           float64
+	vectorScore         float64
+	weightedVectorScore float64
+	hasVector           bool
+	vectorRank          int
+	baseScore           float64
 }
 
 func (s *Store) searchWithVectorLocked(ctx context.Context, options SearchOptions) (SearchResult, error) {
@@ -275,7 +291,7 @@ func (s *Store) searchWithVectorLocked(ctx context.Context, options SearchOption
 		candidateLimit = options.Recency.CandidateLimit
 	}
 
-	vectorResults, err := s.vectors.search(options.Vector.Embedding, candidateLimit)
+	vectorResults, err := s.vectors.search(options.Vector.Embedding, candidateLimit, options.Vector.ProjectionWeights)
 	if err != nil {
 		return SearchResult{}, err
 	}
@@ -297,7 +313,7 @@ func (s *Store) searchWithVectorLocked(ctx context.Context, options SearchOption
 		similarity := min(1, max(-1, result.Similarity))
 		vectorScore := (similarity + 1) / 2
 		bestVectorScore = max(bestVectorScore, vectorScore)
-		candidate := &fusedCandidate{record: record, vectorScore: vectorScore, hasVector: true, vectorRank: vectorRank}
+		candidate := &fusedCandidate{record: record, vectorScore: vectorScore, weightedVectorScore: result.weighted, hasVector: true, vectorRank: vectorRank}
 		candidates[record.ID] = candidate
 	}
 
@@ -337,7 +353,7 @@ func (s *Store) searchWithVectorLocked(ctx context.Context, options SearchOption
 		}
 	} else {
 		for _, candidate := range candidates {
-			candidate.baseScore = candidate.vectorScore
+			candidate.baseScore = candidate.weightedVectorScore
 		}
 	}
 

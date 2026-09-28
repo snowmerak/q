@@ -155,8 +155,9 @@ func TestStandaloneModelEmbeddingAssignmentBackfillsSkillsAndWorkspace(t *testin
 		t.Fatalf("standalone embedding result = %#v", result)
 	}
 	reloaded, err := m.archiveSearch.Get(workspaceRecord.ID)
-	if err != nil || reloaded.Embedding == nil || reloaded.Embedding.Model != "embed-model" {
-		t.Fatalf("workspace embedding = %#v, err = %v", reloaded.Embedding, err)
+	if err != nil || reloaded.Embedding != nil || len(reloaded.VectorProjections) != 2 ||
+		reloaded.VectorProjections[1].Embedding.Model != "embed-model" {
+		t.Fatalf("workspace skill projections = %#v, err = %v", reloaded.VectorProjections, err)
 	}
 	workspaceHits, err := m.archiveSearch.Search(context.Background(), sessionstore.SearchOptions{
 		Text: "feline", Filters: sessionstore.Filters{Kinds: []string{sessionstore.KindSkill}}, Limit: 1,

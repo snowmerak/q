@@ -8,6 +8,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	goformersearch "github.com/MichaelAyles/goformersearch"
@@ -111,6 +112,7 @@ type vectorIndex struct {
 type vectorResult struct {
 	RecordID   string
 	Similarity float64
+	weighted   float64
 }
 
 func newVectorIndex(config VectorConfig) *vectorIndex {
@@ -228,7 +230,7 @@ func (v *vectorIndex) addRecord(record Record) (bool, error) {
 	return added, nil
 }
 
-func (v *vectorIndex) search(vector []float32, limit int) ([]vectorResult, error) {
+func (v *vectorIndex) search(vector []float32, limit int, weights map[string]float64) ([]vectorResult, error) {
 	if len(vector) != v.config.Dimensions {
 		return nil, fmt.Errorf("sessionstore: query vector has %d dimensions; want %d", len(vector), v.config.Dimensions)
 	}
@@ -242,23 +244,69 @@ func (v *vectorIndex) search(vector []float32, limit int) ([]vectorResult, error
 	// collapse to each record's best-ranked projection before rank fusion.
 	projectionLimit := min(v.graph.Len(), limit*(maximumVectorProjections+1))
 	results := v.graph.Search(normalizedVector(vector), projectionLimit)
-	out := make([]vectorResult, 0, min(limit, len(results)))
-	seenRecords := make(map[string]struct{}, len(out))
+	if len(weights) == 0 {
+		out := make([]vectorResult, 0, min(limit, len(results)))
+		seenRecords := make(map[string]struct{}, len(out))
+		for _, result := range results {
+			projection, ok := v.idToProjection[result.ID]
+			if !ok {
+				return nil, fmt.Errorf("sessionstore: HNSW result ID %d is not mapped", result.ID)
+			}
+			if _, duplicate := seenRecords[projection.RecordID]; duplicate {
+				continue
+			}
+			seenRecords[projection.RecordID] = struct{}{}
+			similarity := float64(result.Similarity)
+			out = append(out, vectorResult{
+				RecordID: projection.RecordID, Similarity: similarity,
+				weighted: (min(1, max(-1, similarity)) + 1) / 2,
+			})
+			if len(out) == limit {
+				break
+			}
+		}
+		return out, nil
+	}
+	best := make(map[string]vectorResult, min(limit, len(results)))
 	for _, result := range results {
 		projection, ok := v.idToProjection[result.ID]
 		if !ok {
 			return nil, fmt.Errorf("sessionstore: HNSW result ID %d is not mapped", result.ID)
 		}
-		if _, duplicate := seenRecords[projection.RecordID]; duplicate {
-			continue
-		}
-		seenRecords[projection.RecordID] = struct{}{}
-		out = append(out, vectorResult{RecordID: projection.RecordID, Similarity: float64(result.Similarity)})
-		if len(out) == limit {
-			break
+		similarity := float64(result.Similarity)
+		// Weight positive cosine only; the normalized 0.5 baseline for an
+		// unrelated field must not become a large relevance signal.
+		score := max(0, similarity) * projectionWeight(weights, projection.ProjectionID)
+		if previous, exists := best[projection.RecordID]; !exists || score > previous.weighted {
+			best[projection.RecordID] = vectorResult{RecordID: projection.RecordID, Similarity: similarity, weighted: score}
 		}
 	}
+	out := make([]vectorResult, 0, len(best))
+	for _, result := range best {
+		out = append(out, result)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].weighted != out[j].weighted {
+			return out[i].weighted > out[j].weighted
+		}
+		return out[i].RecordID < out[j].RecordID
+	})
+	if len(out) > limit {
+		out = out[:limit]
+	}
 	return out, nil
+}
+
+func projectionWeight(weights map[string]float64, id string) float64 {
+	if weight, found := weights[id]; found {
+		return weight
+	}
+	if prefix, _, found := strings.Cut(id, "-"); found {
+		if weight, found := weights[prefix]; found {
+			return weight
+		}
+	}
+	return 1
 }
 
 func normalizedVector(vector []float32) []float32 {

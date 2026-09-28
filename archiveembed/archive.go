@@ -7,11 +7,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/snowmerak/q/agentskills"
 	"github.com/snowmerak/q/embedding"
 	"github.com/snowmerak/q/sessionstore"
 )
@@ -112,31 +114,70 @@ func (a *Archive) Prepare(ctx context.Context, records []sessionstore.Record) ([
 	if vectorizer == nil {
 		return records, nil
 	}
-	positions := make([]int, 0, len(records))
+	type pendingPart struct {
+		position int
+		id       string
+		skill    bool
+	}
+	pending := make([]pendingPart, 0, len(records))
 	texts := make([]string, 0, len(records))
 	for index := range records {
-		if embeddingMatches(records[index].Embedding, vectorizer) || !isSemanticRecord(records[index]) {
+		if !isSemanticRecord(records[index]) {
+			continue
+		}
+		if records[index].Kind == sessionstore.KindSkill {
+			parts, err := agentskills.EmbeddingParts(records[index].Summary, records[index].Content, records[index].Tags)
+			if err != nil {
+				return records, fmt.Errorf("archive embedding: skill %q: %w", records[index].Summary, err)
+			}
+			if agentskills.EmbeddingPartsMatch(records[index], parts, vectorizer.Model(), vectorizer.Dimensions()) {
+				continue
+			}
+			for _, part := range parts {
+				pending = append(pending, pendingPart{position: index, id: part.ID, skill: true})
+				texts = append(texts, part.Text)
+			}
+			continue
+		}
+		if embeddingMatches(records[index].Embedding, vectorizer) {
 			continue
 		}
 		text := recordText(records[index])
 		if text == "" {
 			continue
 		}
-		positions = append(positions, index)
+		pending = append(pending, pendingPart{position: index})
 		texts = append(texts, text)
 	}
 	if len(texts) == 0 {
 		return records, nil
 	}
-	vectors, err := vectorizer.Embed(ctx, texts)
-	if err != nil {
-		return records, fmt.Errorf("archive embedding: embed records: %w", err)
+	vectors := make([][]float32, 0, len(texts))
+	for start := 0; start < len(texts); start += 32 {
+		end := min(start+32, len(texts))
+		chunk, err := vectorizer.Embed(ctx, texts[start:end])
+		if err != nil {
+			return records, fmt.Errorf("archive embedding: embed records: %w", err)
+		}
+		vectors = append(vectors, chunk...)
 	}
 	createdAt := time.Now().UTC()
-	for index, position := range positions {
-		records[position].Embedding = &sessionstore.Embedding{
+	initializedSkills := make(map[int]bool)
+	for index, part := range pending {
+		embedded := sessionstore.Embedding{
 			Model: vectorizer.Model(), Dimensions: vectorizer.Dimensions(),
 			CreatedAt: createdAt, Vector: vectors[index],
+		}
+		if part.skill {
+			if !initializedSkills[part.position] {
+				records[part.position].Embedding = nil
+				records[part.position].VectorProjections = nil
+				initializedSkills[part.position] = true
+			}
+			records[part.position].VectorProjections = append(records[part.position].VectorProjections,
+				sessionstore.VectorProjection{ID: part.id, Embedding: embedded})
+		} else {
+			records[part.position].Embedding = &embedded
 		}
 	}
 	return records, nil
@@ -156,7 +197,11 @@ func (a *Archive) Search(ctx context.Context, options sessionstore.SearchOptions
 		(options.Sort == "" || options.Sort == sessionstore.SortRelevance) && searchesSemanticRecords(options.Filters.Kinds) {
 		vectors, err := vectorizer.Embed(ctx, []string{strings.TrimSpace(options.Text)})
 		if err == nil {
-			options.Vector = &sessionstore.VectorQuery{Embedding: vectors[0]}
+			if slices.Contains(options.Filters.Kinds, sessionstore.KindSkill) {
+				options.Vector = agentskills.SkillVectorQuery(vectors[0])
+			} else {
+				options.Vector = &sessionstore.VectorQuery{Embedding: vectors[0]}
+			}
 		}
 	}
 	return a.Store.Search(ctx, options)
@@ -203,7 +248,8 @@ func (a *Archive) Backfill(ctx context.Context) (BackfillStats, error) {
 		}
 		changed := make([]sessionstore.Record, 0, len(prepared))
 		for index, record := range prepared {
-			if !sameEmbedding(records[index].Embedding, record.Embedding) {
+			if !sameEmbedding(records[index].Embedding, record.Embedding) ||
+				!reflect.DeepEqual(records[index].VectorProjections, record.VectorProjections) {
 				changed = append(changed, record)
 			}
 		}

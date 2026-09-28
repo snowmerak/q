@@ -191,7 +191,8 @@ func TestPrepareIncludesSkillsAndSkipsArchiveReads(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if records[0].Embedding == nil || records[1].Embedding != nil || records[2].Embedding == nil {
+	if records[0].Embedding == nil || records[1].Embedding != nil || records[2].Embedding != nil ||
+		len(records[2].VectorProjections) != 1 || records[2].VectorProjections[0].ID != "description" {
 		t.Fatalf("prepared records = %#v", records)
 	}
 	embedder.mu.Lock()
@@ -211,6 +212,7 @@ func TestBackfillAndSemanticSearchIncludesSkills(t *testing.T) {
 	t.Cleanup(func() { _ = store.Close() })
 	skill, err := store.Save(sessionstore.Record{
 		Kind: sessionstore.KindSkill, Summary: "animal-care", Content: "care for a cat",
+		Embedding: &sessionstore.Embedding{Model: "embed-test", Dimensions: 3, Vector: []float32{0, 1, 0}},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -243,7 +245,8 @@ func TestBackfillAndSemanticSearchIncludesSkills(t *testing.T) {
 		t.Fatalf("reassigned skill backfill stats = %#v, %v", stats, err)
 	}
 	reassigned, err := store.Get(skill.ID)
-	if err != nil || reassigned.Embedding == nil || reassigned.Embedding.Model != "embed-test-v2" {
+	if err != nil || reassigned.Embedding != nil || len(reassigned.VectorProjections) != 2 ||
+		reassigned.VectorProjections[1].Embedding.Model != "embed-test-v2" {
 		t.Fatalf("reassigned skill record = %#v, %v", reassigned, err)
 	}
 }
