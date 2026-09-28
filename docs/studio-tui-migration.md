@@ -32,11 +32,13 @@ Gateway/System One/Library service, Loom operation, MCP, LSP, Skills, subagent/A
 `.qignore`, changes와 commit workflow, durable run과 개입 control이 있다. directory
 browser는 Go API가 home에서 시작해 모든 지원 OS에 같은 Web UI를 제공한다.
 
-아직 TUI가 소유하는 주요 기능은 workspace model override, usage와 full help다.
+workspace model override, usage, service/worker health와 full help까지 Studio로 이전했다.
+bare `q` 대화 TUI와 ACP는 호환 client로 남지만 독립 설정 CLI 명령은 Studio route를
+연다.
 
 ## 마일스톤
 
-### M0. 이전 계약과 공통 service 경계 — 진행 중
+### M0. 이전 계약과 공통 service 경계 — 완료 (2026-09-29)
 
 범위:
 
@@ -50,6 +52,15 @@ browser는 Go API가 home에서 시작해 모든 지원 OS에 같은 Web UI를 �
 
 - 모든 matrix 행에 권위 service, Studio entry point와 검증이 연결된다.
 - 화면별 파일 I/O를 새 Studio handler에 복제하지 않는다.
+
+완료 기록:
+
+- session/run은 `app.SessionHost`와 `studio.sessionsService`, model/provider/runtime은 기존
+  config store와 `studio.settingsService`, changes/commit은 `changes`/`commitagent`,
+  integration은 각 MCP/LSP/Skill/subagent/workspace store를 권위 경계로 사용한다.
+- Studio handler는 이 service와 validator를 호출하며 frontend가 config/session/Git 파일을
+  직접 읽거나 쓰지 않는다. API path, oversized body, revision, secret redaction과 runtime
+  side effect test를 이후 각 milestone에 누적했다.
 
 ### M1. 채팅 표현과 기본 session lifecycle — 완료 (2026-09-29)
 
@@ -216,7 +227,7 @@ browser는 Go API가 home에서 시작해 모든 지원 OS에 같은 Web UI를 �
   `go test ./studio ./app ./workspace ./agentloop`, `go vet ./studio ./app`,
   `npm run check`와 production build를 통과했다.
 
-### M6. Operations, help와 TUI retirement gate
+### M6. Operations, help와 TUI retirement gate — 완료 (2026-09-29)
 
 범위:
 
@@ -232,11 +243,30 @@ browser는 Go API가 home에서 시작해 모든 지원 OS에 같은 Web UI를 �
 - 아래 matrix의 모든 TUI parity 행이 완료되고 browser end-to-end 검증을 통과한다.
 - README의 기본 사용 경로가 Studio를 가리키며 남은 TUI 호환 범위가 명확하다.
 
+완료 기록:
+
+- 기존 `.q/model.json` store를 사용하는 workspace model API와 Models 화면을 추가했다.
+  default와 직업형 role은 repository별 override를 저장하고 Thinker/Librarian 같은 shared
+  role은 global로 유지한다. main config가 없는 첫 실행도 Studio에서 provider를 만든 뒤
+  default model을 선택해 초기화할 수 있다.
+- Operations는 1/7/30/90일 usage series와 model/role 합계, active/resident run,
+  Gateway·Library·Workspace Memory·Usage health, hot database와 archive 크기, bounded service
+  log를 한 snapshot으로 제공한다. Usage 조회와 health는 기존 user-level service 계약을
+  통과한다.
+- Help에 Studio shortcut, browser/server restart 복구와 모든 local slash command의 Web
+  대응표를 기록했다. `q model`, `q gateway`, `q systemone`, `q library`, `q usage`,
+  `q commit`, integration/help 명령은 대응 Studio route를 열며 `start` service command와
+  bare `q`/ACP 호환 client는 유지한다.
+- README의 기본 실행 경로를 `q studio`로 바꾸고 blueprint의 현재 상태와 navigation을
+  실제 구현에 맞췄다. Go API test, runtime service smoke, Svelte type check와 production
+  build로 검증했다. embedded server의 Operations, Help와 긴 Models 화면을 headless Edge로
+  렌더링해 navigation, 내부 scroll과 workspace override 배치를 확인했다.
+
 ## Capability matrix
 
 | 기능 | 현재 Studio | 목표 마일스톤 | 상태 |
 | --- | --- | --- | --- |
-| App shell/status/navigation | 기본 shell과 service ready | M6 operations와 help | 부분 |
+| App shell/status/navigation | Overview, Sessions, Changes, Operations, Settings, Help | M6 operations와 help | 완료 |
 | Repository directory browser | Go directory API, home 시작 | M1 유지 | 완료 |
 | Session 목록/생성/전환 | 생성·전환·삭제·clear·compact·learning·run reconnect 지원 | M1, M5 | 완료 |
 | Chat streaming | durable event log, cursor replay와 background run | M1, M5 | 완료 |
@@ -255,7 +285,7 @@ browser는 Go API가 home에서 시작해 모든 지원 OS에 같은 Web UI를 �
 | MCP | server CRUD, transport, env/header ref, role grant | M3 | 완료 |
 | Subagent/ACP connection | builtin/custom profile, delegation, binding, probe | M3 | 완료 |
 | `.qignore` | revision-aware 자동 저장 editor | M3 | 완료 |
-| Usage/help | 최소 status만 지원 | M6 | 미착수 |
+| Usage/help | usage·health·worker·log·retention과 Studio help | M6 | 완료 |
 
 `완료`는 해당 행의 현재 범위가 observable acceptance를 통과했다는 뜻이다. 뒤
 마일스톤에서 durability나 operations가 확장될 수 있다.

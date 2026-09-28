@@ -8,16 +8,15 @@
 TUI 기능 이전의 실행 순서, capability별 상태와 acceptance 기록은
 [Studio TUI migration](studio-tui-migration.md)이 소유한다.
 
-현재 구현: user-level `q studio` loopback server와 embedded Svelte shell이 존재한다.
-전역 Settings는 Gateway provider, discovery 기반 model·role assignment,
-System One provider·decision model routing·server API key lifecycle,
-runtime/context/Loom과 Gateway·System One listener를 기존 store의
-검증·원자적 저장 계약으로 편집하며 MCP/LSP 현황을 조회한다. workspace model
-override는 아직 TUI가 소유한다. Sessions 화면은 사용자가 입력한 canonical repository
-root에서 기존 session을 조회하거나 새 session을 만들고, transcript를 복원해 공통
-default loop에 메시지를 보낸다. 응답, reasoning, tool call과 agent activity는 요청 중
-NDJSON으로 표시한다. 질문 응답, durable event 재연결, session 삭제와 명시적인 turn
-중단 command는 아직 이전되지 않았다.
+현재 구현: user-level `q studio` loopback server와 embedded Svelte SPA가 TUI의 일상
+기능을 소유한다. Sessions는 canonical repository별 session lifecycle, 안전한 Markdown과
+code highlighting, durable run cursor, 질문, pause/resume/cancel/guidance와 delegation
+tree를 제공한다. Changes는 bounded diff와 commit review/execute를 제공한다. Settings는
+global/workspace model, Gateway, System One, Library/Loom, MCP/LSP/Skill/subagent/ACP와
+`.qignore`를 같은 Go store와 validator로 편집한다. Operations는 usage, worker/service
+health, bounded log와 보존 상태를 보여주고 Help는 이전 TUI 명령의 Web 경로를 안내한다.
+독립 설정 CLI 명령은 대응 Studio route를 연다. bare `q` 대화 TUI와 ACP는 호환 경로로
+남아 같은 Agent Loop와 저장 계약을 사용한다.
 
 대상 독자: Q의 TUI, agent runtime, workspace session, Git 작업 흐름과
 웹 인터페이스를 설계하거나 구현하는 사람.
@@ -140,9 +139,9 @@ GitHub/GitLab 호환 API, 임의 조직의 권한 모델은 초기 목표에 포
   기존 Bubble Tea model을 renderer 없이 구동하므로 TUI와 같은 tool runtime, 저장,
   compaction과 delegation 경로를 사용한다.
 
-현재 위임은 같은 workspace 안의 child session과 Agent Loop 실행까지 제공한다.
-repository를 지정하는 위임, worktree lease, Change Request, 재연결 가능한 run event와
-장기 scheduler는 아직 제공하지 않는다. 위임 복구는 [중첩 delegate 세션과 재귀
+현재 위임은 같은 workspace 안의 child session과 Agent Loop 실행, durable run event와
+호출 tree까지 제공한다. repository를 지정하는 위임, worktree lease, Change Request와
+장기 task graph scheduler는 아직 제공하지 않는다. 위임 복구는 [중첩 delegate 세션과 재귀
 복구](delegation-session-recovery.md), 저장 방향은 [Session Store](session-store-notes.md)가
 소유한다.
 
@@ -190,9 +189,10 @@ repository를 지정하는 위임, worktree lease, Change Request, 재연결 가
 
 ## 5. Web GUI 정보 구조
 
-Studio의 첫 navigation은 `Overview`, `Sessions`, `Settings`로 제한한다. agent 실행과
-Git 작업 화면은 실제 workflow가 정해질 때 navigation을 확장하며, 데이터 모델의
-이름을 곧바로 최상위 메뉴로 노출하지 않는다.
+현재 navigation은 `Overview`, `Sessions`, `Changes`, `Operations`, `Settings`, `Help`다.
+agent 실행과 Git 작업은 각각 Sessions의 run/delegation projection과 Changes의 review
+workflow에서 시작한다. 장기 task graph와 Change Request가 도입될 때 별도 정보 구조로
+확장한다.
 
 장기적으로 다뤄야 할 정보 영역은 다음과 같다.
 
@@ -469,7 +469,7 @@ fetch와 push해야 할 때 별도 마일스톤으로 정한다.
 완료 기준: Web handler가 Bubble Tea model을 생성하지 않고 핵심 기능을 호출할 수 있고,
 TUI와 service 호출이 같은 저장 결과를 만든다.
 
-### S1. Studio shell, Settings, session과 chat — 기반 구현 중
+### S1. Studio shell, Settings, session과 chat — 완료
 
 - `q studio` lifecycle, local URL과 embedded frontend asset 제공. 시작 CWD는 Studio
   상태나 session workspace로 저장하지 않는다.
@@ -478,7 +478,7 @@ TUI와 service 호출이 같은 저장 결과를 만든다.
   runtime/context/Loom과 service listener는 자동 저장한다. Gateway provider inline
   key는 write-only로 다루고 System One provider key는 환경 변수 이름만 저장하며,
   model discovery 응답에도 credential을 포함하지 않는다.
-- workspace model override는 session/workspace surface가 생길 때 연결한다.
+- workspace model override를 repository path가 명시된 Settings surface에 연결한다.
 - 최근 workspace catalog와 workspace가 표시된 session 목록.
 - working directory를 선택하는 session 생성, 전환·삭제와 transcript 조회.
 - message 전송, streaming, tool call/result, reasoning, active task와 cancel.
@@ -486,18 +486,15 @@ TUI와 service 호출이 같은 저장 결과를 만든다.
 - 현재 `/changes`에 해당하는 repository diff 화면.
 
 완료된 기반: user-level loopback server, browser 자동 열기와 `--no-open`, embedded
-Svelte SPA, global status API, SPA/asset/API routing 및 graceful shutdown. global Settings와
-repository path 기반 session 목록·생성·transcript, rendererless default loop 실행,
-요청 수명 동안의 NDJSON message/reasoning/tool/activity stream도 연결되어 있다.
-
-남은 기반: 최근 workspace catalog의 server-side 저장, session 이름 변경·삭제,
-`ask_to_user` 응답, run ID에 결합된 중단 command, durable event append와 reconnect cursor,
-repository diff 화면.
+Svelte SPA, global status API, SPA/asset/API routing 및 graceful shutdown. global/workspace
+Settings, repository path 기반 session 목록·생성·삭제·transcript, rendererless default
+loop, durable NDJSON event log와 cursor reconnect, `ask_to_user`, pause/resume/cancel/guidance,
+delegation tree와 repository diff 화면이 연결되어 있다.
 
 완료 기준: 브라우저를 새로고침하거나 잠시 끊어도 실행을 잃지 않고 같은 session과
 event 순서를 복구하며, 일상 대화와 변경 검토에 TUI가 필요하지 않다.
 
-### S2. 설정과 관리 화면 이전
+### S2. 설정과 관리 화면 이전 — 완료
 
 - model/provider, Gateway, System One, Library/Loom, Skills, LSP, MCP, Subagents와
   `.qignore` 관리 화면.

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"net/url"
 	"slices"
 	"testing"
 )
@@ -29,13 +30,24 @@ func TestParseServiceCommand(t *testing.T) {
 	}
 }
 
-func TestStandaloneUICommandNames(t *testing.T) {
-	for _, name := range []string{"model", "systemone", "mcp", "subagents", "agents", "skills", "ignore", "lsp", "help"} {
-		if standaloneUICommand(name) == nil {
+func TestStudioUICommandPaths(t *testing.T) {
+	for _, name := range []string{"model", "mcp", "subagents", "agents", "skills", "ignore", "lsp", "help"} {
+		if studioUIPath(name) == "" {
 			t.Fatalf("standalone command %q is not registered", name)
 		}
 	}
-	if standaloneUICommand("unknown") != nil {
+	if studioUIPath("unknown") != "" {
 		t.Fatal("unknown standalone command was registered")
+	}
+}
+
+func TestStudioWorkspacePathPreservesRouteAndCanonicalQueryValues(t *testing.T) {
+	path := studioWorkspacePath("/settings", "integrations&panel=skills", `C:\repo with spaces`)
+	parsed, err := url.Parse(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if parsed.Path != "/settings" || parsed.Query().Get("section") != "integrations" || parsed.Query().Get("panel") != "skills" || parsed.Query().Get("workspace_root") != `C:\repo with spaces` {
+		t.Fatalf("Studio route = %q (%#v)", path, parsed.Query())
 	}
 }

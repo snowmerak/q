@@ -1,12 +1,11 @@
 # q
 
-`q` is a workspace-native coding agent for the terminal. It combines a Bubble
-Tea chat interface, a managed multi-provider LLM gateway, delegated subagents,
-durable workspace history, and a root-scoped tool runtime in one Go
-binary.
+`q` is a workspace-native coding agent with a local Web control surface. It
+combines Q Studio, a managed multi-provider LLM gateway, delegated subagents,
+durable workspace history, and a root-scoped tool runtime in one Go binary.
 
 Use it for ordinary repository work, delegate reviewed implementation, inspect
-the resulting diff, and create a commit without leaving the terminal.
+the resulting diff, and create a commit from one local Studio process.
 
 [Documentation](https://q.saturday.ne.kr) · [Source](https://github.com/snowmerak/q)
 
@@ -24,8 +23,8 @@ the resulting diff, and create a commit without leaving the terminal.
   delegation trees, and searchable history.
 - **Bounded tool output** — large tool results are captured as immutable Loom
   artifacts instead of being copied through every prompt.
-- **Repository review** — a syntax-highlighted `/changes` browser and a guided
-  Conventional Commit workflow.
+- **Repository review** — a syntax-highlighted diff browser and a guided
+  Conventional Commit workflow in Studio.
 - **Extensibility** — external MCP servers, portable Agent Skills, ACP agent
   connections, and a standalone `q-mcp` server.
 
@@ -34,7 +33,7 @@ the resulting diff, and create a commit without leaving the terminal.
 - Go 1.26.5 or later
 - Git on `PATH`
 - At least one configured model provider
-- A terminal with ANSI color support
+- A local Web browser
 
 Node.js is needed only when changing or rebuilding the embedded Q Studio
 frontend. Installing and running a released q binary does not require Node.js.
@@ -62,10 +61,10 @@ From a source checkout, install both commands together:
 go install ./cmd/q ./cmd/q-mcp
 ```
 
-Or run q without installing it:
+Or run Studio without installing it:
 
 ```powershell
-go run ./cmd/q
+go run ./cmd/q studio
 ```
 
 With Task:
@@ -80,16 +79,23 @@ task studio:install # install pinned Studio frontend dependencies
 task studio:check   # type-check and verify generated Studio assets
 ```
 
-Start q from the repository or directory you want it to treat as the workspace:
+Start the user-level Studio server. Its start directory does not limit which
+repositories it can open:
 
 ```powershell
-cd C:\path\to\project
-q
+q studio
 ```
 
-On first launch, q opens provider setup. Prefer an environment variable for an
-API key instead of storing a key inline. After selecting a model, type a request
-normally or type `/` to open command completion.
+Studio opens in the browser. Add a Gateway provider under **Settings →
+Providers**, refresh **Models**, and choose the default model. Provider keys can
+come from environment variables; server access keys are shown only once when
+created. Open **Sessions** to choose any repository and start a conversation.
+
+The bare `q` command remains a compatibility terminal client. Former standalone
+configuration commands such as `q model`, `q gateway`, `q systemone`, `q skills`,
+and `q help` now open their corresponding Studio surface. Service forms such as
+`q gateway start`, `q systemone start`, and `q library start` still run the
+foreground service.
 
 ## Embed the Agent Loop in Go
 
@@ -161,11 +167,33 @@ or Q Library can provide only `Search`, `Save`, and `Delete` through
 `tools.SkillStore` and construct the runtime with
 `tools.NewRuntimeWithSkillStore`.
 
-## TUI guide
+## Studio guide
 
-The main screen keeps the transcript, active agent progress, input, and status
-visible together. `Ctrl+H` opens the complete in-app key reference from any q
-screen and returns to the previous screen without discarding its state.
+Studio is the primary interface for daily Q work:
+
+- **Sessions** owns repository selection, conversation lifecycle, Markdown and
+  syntax-highlighted code, questions, pause/resume/stop, guidance, and the
+  delegation tree. Browser refresh reconnects to the durable run cursor.
+- **Changes** owns staged, unstaged, untracked and renamed files, bounded diffs,
+  commit proposal review, split commits, execution, and optional push.
+- **Settings** owns global and repository model assignments, Gateway and System
+  One, Library and Loom, MCP, LSP, Skills, subagents, ACP bindings, and
+  `.qignore`.
+- **Operations** shows token usage, active workers, local service health,
+  bounded runtime diagnostics, and usage retention.
+- **Help** maps the former slash commands to their Studio locations and lists
+  keyboard and recovery guidance.
+
+In chat, Enter sends and Shift+Enter inserts a line break. Use the run controls
+beside the composer to pause, resume, stop, or redirect active work. `Ctrl+K`
+focuses Studio navigation and `?` opens Help while focus is outside an editor.
+
+## Compatibility terminal client
+
+The bare `q` client keeps the transcript, active agent progress, input, and
+status visible together. It remains available while downstream terminal and ACP
+workflows migrate, but Studio owns configuration, repository review, usage, and
+help entry points.
 
 ### Slash commands
 

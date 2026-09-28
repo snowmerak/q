@@ -5,11 +5,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"os/signal"
+	"strings"
 
 	"github.com/snowmerak/q/app"
-	"github.com/snowmerak/q/commitagent"
 	"github.com/snowmerak/q/config"
 	qlibrary "github.com/snowmerak/q/library"
 	"github.com/snowmerak/q/loom"
@@ -55,7 +56,7 @@ func main() {
 			os.Exit(2)
 		}
 		if mode == serviceCommandConfigure {
-			if err := app.RunSystemOneDefault(ctx); err != nil {
+			if err := runStudioCommandAt(ctx, "/settings?section=system-one"); err != nil {
 				fmt.Fprintln(os.Stderr, err)
 				os.Exit(1)
 			}
@@ -68,13 +69,13 @@ func main() {
 		return
 	}
 	if len(os.Args) > 1 {
-		runStandalone := standaloneUICommand(os.Args[1])
-		if runStandalone != nil {
+		studioPath := studioUIPath(os.Args[1])
+		if studioPath != "" {
 			if len(os.Args) != 2 {
 				fmt.Fprintf(os.Stderr, "usage: q %s\n", os.Args[1])
 				os.Exit(2)
 			}
-			if err := runStandalone(ctx); err != nil {
+			if err := runStudioCommandAt(ctx, studioPath); err != nil {
 				fmt.Fprintln(os.Stderr, err)
 				os.Exit(1)
 			}
@@ -88,7 +89,7 @@ func main() {
 			os.Exit(2)
 		}
 		if mode == serviceCommandConfigure {
-			if err := app.RunGatewayConfigDefault(ctx); err != nil {
+			if err := runStudioCommandAt(ctx, "/settings?section=providers"); err != nil {
 				fmt.Fprintln(os.Stderr, err)
 				os.Exit(1)
 			}
@@ -107,7 +108,7 @@ func main() {
 			os.Exit(2)
 		}
 		if mode == serviceCommandConfigure {
-			if err := app.RunLibraryConfigDefault(ctx); err != nil {
+			if err := runStudioCommandAt(ctx, "/settings?section=services"); err != nil {
 				fmt.Fprintln(os.Stderr, err)
 				os.Exit(1)
 			}
@@ -143,7 +144,7 @@ func main() {
 			fmt.Fprintln(os.Stderr, "usage: q usage")
 			os.Exit(2)
 		}
-		if err := runUsageCommand(ctx, os.Stdout, os.Stderr); err != nil {
+		if err := runStudioCommandAt(ctx, "/operations"); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}
@@ -156,7 +157,7 @@ func main() {
 		}
 		directory, err := os.Getwd()
 		if err == nil {
-			_, err = commitagent.RunDefault(ctx, directory, os.Stdout)
+			err = runStudioCommandAt(ctx, studioWorkspacePath("/changes", "", directory))
 		}
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
@@ -191,27 +192,52 @@ func parseServiceCommand(args []string) (serviceCommandMode, []string, bool) {
 	return serviceCommandStart, args[1:], true
 }
 
-func standaloneUICommand(name string) func(context.Context) error {
+func studioUIPath(name string) string {
+	directory, _ := os.Getwd()
 	switch name {
 	case "model":
-		return app.RunModelDefault
-	case "systemone":
-		return app.RunSystemOneDefault
+		return studioWorkspacePath("/settings", "models", directory)
 	case "skills":
-		return app.RunSkillsDefault
+		return studioWorkspacePath("/settings", "integrations&panel=skills", directory)
 	case "ignore":
-		return app.RunIgnoreDefault
+		return studioWorkspacePath("/settings", "integrations&panel=ignore", directory)
 	case "lsp":
-		return app.RunLSPDefault
+		return studioWorkspacePath("/settings", "integrations&panel=lsp", directory)
 	case "mcp":
-		return app.RunMCPDefault
+		return "/settings?section=integrations&panel=mcp"
 	case "subagents", "agents":
-		return app.RunSubagentsDefault
+		return studioWorkspacePath("/settings", "integrations&panel=agents", directory)
 	case "help":
-		return app.RunHelp
+		return "/help"
 	default:
-		return nil
+		return ""
 	}
+}
+
+func studioWorkspacePath(path, settingsQuery, root string) string {
+	query := url.Values{}
+	if settingsQuery != "" {
+		parts := strings.Split(settingsQuery, "&")
+		for _, part := range parts {
+			key, value, found := strings.Cut(part, "=")
+			if found {
+				query.Set(key, value)
+			} else {
+				query.Set("section", part)
+			}
+		}
+	}
+	if root != "" {
+		query.Set("workspace_root", root)
+	}
+	if encoded := query.Encode(); encoded != "" {
+		return path + "?" + encoded
+	}
+	return path
+}
+
+func runStudioCommandAt(ctx context.Context, path string) error {
+	return runStudioAt(ctx, nil, os.Stdout, os.Stderr, openBrowserURL, path)
 }
 
 func runGatewayChild(parent context.Context, args []string) error {

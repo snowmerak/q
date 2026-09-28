@@ -20,7 +20,7 @@ type studioCommandOptions struct {
 }
 
 func runStudioCommand(ctx context.Context, args []string, stdout, stderr io.Writer) error {
-	return runStudio(ctx, args, stdout, stderr, openBrowserURL)
+	return runStudioAt(ctx, args, stdout, stderr, openBrowserURL, "/")
 }
 
 func runStudio(
@@ -29,6 +29,17 @@ func runStudio(
 	stdout io.Writer,
 	stderr io.Writer,
 	open func(string) error,
+) (returnErr error) {
+	return runStudioAt(ctx, args, stdout, stderr, open, "/")
+}
+
+func runStudioAt(
+	ctx context.Context,
+	args []string,
+	stdout io.Writer,
+	stderr io.Writer,
+	open func(string) error,
+	initialPath string,
 ) (returnErr error) {
 	options, err := parseStudioOptions(args, stderr)
 	if errors.Is(err, flag.ErrHelp) {
@@ -64,7 +75,11 @@ func runStudio(
 		_ = server.Shutdown(shutdownContext)
 	}()
 
-	url := "http://" + listener.Addr().String()
+	baseURL := "http://" + listener.Addr().String()
+	url := baseURL
+	if initialPath != "" && initialPath != "/" {
+		url += "/" + strings.TrimPrefix(initialPath, "/")
+	}
 	if _, err := fmt.Fprintf(stdout, "q studio listening on %s\n", url); err != nil {
 		cancelServer()
 		<-shutdownDone

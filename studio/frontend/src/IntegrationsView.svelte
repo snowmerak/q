@@ -292,7 +292,13 @@
     }, 600);
   }
 
-  onMount(() => { workspaceRoot = localStorage.getItem('q-studio-workspace-root') || ''; void loadPanel(); });
+  onMount(() => {
+    const location = new URL(window.location.href);
+    workspaceRoot = location.searchParams.get('workspace_root') || localStorage.getItem('q-studio-workspace-root') || '';
+    const requestedPanel = location.searchParams.get('panel') as Panel | null;
+    if (requestedPanel && panels.some((candidate) => candidate.id === requestedPanel)) panel = requestedPanel;
+    void loadPanel();
+  });
 </script>
 
 <section class="settings-section integration-manager">

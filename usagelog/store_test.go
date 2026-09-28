@@ -440,9 +440,13 @@ func TestRecorderWritesThroughService(t *testing.T) {
 	if err := recorder.RecordUsage(client.UsageRecord{Model: "local", Role: "coder", TotalTokens: 12}); err != nil {
 		t.Fatal(err)
 	}
-	view, err := recorder.runtime.Client().Query(t.Context(), Filter{From: time.Now().Add(-time.Hour), To: time.Now().Add(time.Hour)})
+	view, err := recorder.Query(t.Context(), Filter{From: time.Now().Add(-time.Hour), To: time.Now().Add(time.Hour)})
 	if err != nil || view.Totals.Calls != 1 || view.Models[0].Name != "local" {
 		t.Fatalf("view=%#v err=%v", view, err)
+	}
+	health, endpoint, _, err := recorder.Health(t.Context())
+	if err != nil || !health.Compatible() || endpoint == "" {
+		t.Fatalf("health=%#v endpoint=%q err=%v", health, endpoint, err)
 	}
 }
 

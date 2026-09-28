@@ -1,9 +1,12 @@
 <script lang="ts">
-  import { BrainCircuit, Check, ChevronDown, ChevronUp, Copy, Cpu, GitCompareArrows, House, KeyRound, Layers, Network, Plus, RefreshCw, Server, Settings, SlidersHorizontal, Trash2, Unplug } from '@lucide/svelte';
+  import { Activity, BrainCircuit, Check, ChevronDown, ChevronUp, CircleHelp, Copy, Cpu, GitCompareArrows, House, KeyRound, Layers, Network, Plus, RefreshCw, Server, Settings, SlidersHorizontal, Trash2, Unplug } from '@lucide/svelte';
   import { onMount } from 'svelte';
   import ChangesView from './ChangesView.svelte';
   import IntegrationsView from './IntegrationsView.svelte';
+  import HelpView from './HelpView.svelte';
+  import OperationsView from './OperationsView.svelte';
   import SessionView from './SessionView.svelte';
+  import WorkspaceModels from './WorkspaceModels.svelte';
 
   type StudioStatus = { version: number; service: string; ready: boolean };
   type ConnectionState =
@@ -95,7 +98,7 @@
       lsp: { config_path: string; items: number; bindings: number };
     };
   };
-  type View = 'overview' | 'sessions' | 'changes' | 'settings';
+  type View = 'overview' | 'sessions' | 'changes' | 'operations' | 'settings' | 'help';
   type SettingsSection = 'models' | 'providers' | 'system-one' | 'runtime' | 'services' | 'integrations';
   type SaveState = { kind: 'idle' | 'saving' | 'saved' | 'error'; message?: string };
   type LoomStats = { artifacts: number; blobs: number; bytes: number };
@@ -105,7 +108,9 @@
     { label: 'Overview', icon: House, view: 'overview' as View },
     { label: 'Sessions', icon: Layers, view: 'sessions' as View },
     { label: 'Changes', icon: GitCompareArrows, view: 'changes' as View },
-    { label: 'Settings', icon: Settings, view: 'settings' as View }
+    { label: 'Operations', icon: Activity, view: 'operations' as View },
+    { label: 'Settings', icon: Settings, view: 'settings' as View },
+    { label: 'Help', icon: CircleHelp, view: 'help' as View }
   ];
   const settingsSections = [
     { id: 'models' as const, label: 'Models', description: 'Chat, embedding, and role assignments', icon: Cpu },
@@ -223,7 +228,7 @@
 
   function navigate(view: View) {
     activeView = view;
-    const path = view === 'settings' ? '/settings' : view === 'sessions' ? '/sessions' : view === 'changes' ? '/changes' : '/';
+    const path = view === 'overview' ? '/' : `/${view}`;
     if (window.location.pathname !== path) window.history.pushState({}, '', path);
     if (view === 'settings' && !settings) void loadSettings();
   }
@@ -232,6 +237,8 @@
     if (window.location.pathname.startsWith('/settings')) return 'settings';
     if (window.location.pathname.startsWith('/sessions')) return 'sessions';
     if (window.location.pathname.startsWith('/changes')) return 'changes';
+    if (window.location.pathname.startsWith('/operations')) return 'operations';
+    if (window.location.pathname.startsWith('/help')) return 'help';
     return 'overview';
   }
 
@@ -607,8 +614,23 @@
       activeSection = sectionFromLocation();
       if (activeView === 'settings' && !settings) void loadSettings();
     };
+    const onShortcut = (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement | null;
+      const editing = !!target?.closest('input, textarea, select, [contenteditable="true"]');
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k') {
+        event.preventDefault();
+        document.querySelector<HTMLButtonElement>('.sidebar nav button.active, .sidebar nav button')?.focus();
+      } else if (!editing && event.key === '?') {
+        event.preventDefault();
+        navigate('help');
+      }
+    };
     window.addEventListener('popstate', onPopState);
-    return () => window.removeEventListener('popstate', onPopState);
+    window.addEventListener('keydown', onShortcut);
+    return () => {
+      window.removeEventListener('popstate', onPopState);
+      window.removeEventListener('keydown', onShortcut);
+    };
   });
 </script>
 
@@ -631,7 +653,7 @@
 
   <main class:settings-main={activeView === 'settings'} class:sessions-main={activeView === 'sessions'} class:changes-main={activeView === 'changes'}>
     <header class="page-header">
-      <div><h1>{activeView === 'settings' ? 'Settings' : activeView === 'sessions' ? 'Sessions' : activeView === 'changes' ? 'Changes' : 'Studio overview'}</h1>{#if activeView === 'settings'}<p class="page-description">Global configuration shared by Q sessions.</p>{:else if activeView === 'sessions'}<p class="page-description">Run Q's default loop in a selected repository.</p>{:else if activeView === 'changes'}<p class="page-description">Inspect bounded diffs and review commits.</p>{/if}</div>
+      <div><h1>{activeView === 'settings' ? 'Settings' : activeView === 'sessions' ? 'Sessions' : activeView === 'changes' ? 'Changes' : activeView === 'operations' ? 'Operations' : activeView === 'help' ? 'Help' : 'Studio overview'}</h1>{#if activeView === 'settings'}<p class="page-description">Global and repository configuration shared by Q sessions.</p>{:else if activeView === 'sessions'}<p class="page-description">Run Q's default loop in a selected repository.</p>{:else if activeView === 'changes'}<p class="page-description">Inspect bounded diffs and review commits.</p>{:else if activeView === 'operations'}<p class="page-description">Usage, workers, local services, logs, and retention.</p>{:else if activeView === 'help'}<p class="page-description">Studio workflows, shortcuts, and recovery.</p>{/if}</div>
       <div class="connection" aria-live="polite"><span class:online={connection.kind === 'ready'} class="status-dot" aria-hidden="true"></span><span>{connection.kind === 'ready' ? 'Connected' : connection.kind === 'error' ? 'Disconnected' : 'Connecting'}</span></div>
     </header>
 
@@ -645,7 +667,11 @@
       <SessionView />
     {:else if activeView === 'changes'}
       <ChangesView />
-    {:else}
+    {:else if activeView === 'operations'}
+      <OperationsView />
+    {:else if activeView === 'help'}
+      <HelpView />
+    {:else if activeView === 'settings'}
       <div class="settings-layout">
         <aside class="settings-index" aria-label="Settings sections">
           <div class="scope-label">GLOBAL</div>
@@ -699,6 +725,8 @@
                   </div>
                 {/each}
               </div>
+
+              <WorkspaceModels models={modelOptions} />
 
               <div class="subsection-heading"><div><h3>Custom roles</h3><p>Create a reusable model role for subagents.</p></div></div>
               <div class="settings-card inline-create"><label><span>Role name</span><input placeholder="security-reviewer" bind:value={newCustomRoleName} onkeydown={(event) => event.key === 'Enter' && addCustomRole()} /></label><button class="primary-button" onclick={addCustomRole} disabled={!newCustomRoleName.trim()}><Plus aria-hidden="true" size={15} /> Add role</button></div>
@@ -815,7 +843,7 @@
           {:else if activeSection === 'runtime'}
             <section class="settings-section">
               <div class="section-heading"><div><p class="eyebrow">GLOBAL RUNTIME</p><h2>Execution and storage</h2></div><code>{settings.runtime.config_path}</code></div>
-              {#if !settings.runtime.configured}<p class="inline-warning">Complete the initial model setup in Q before editing runtime settings.</p>{/if}
+              {#if !settings.runtime.configured}<p class="inline-warning">Choose a Gateway provider and default model in Studio before editing runtime settings.</p>{/if}
               <div class="settings-card"><div class="card-heading"><div><h3>Agent execution</h3><p>Limit concurrent delegated agent work.</p></div></div><label class="field-row"><span><strong>Maximum parallel agents</strong><small>Applies across built-in roles.</small></span><input type="number" min="1" max="64" bind:value={settings.runtime.max_parallel} onchange={saveRuntime} disabled={!settings.runtime.configured} /></label></div>
               <div class="settings-card"><div class="card-heading"><div><h3>Context compaction</h3><p>Control when and how Q compacts long conversations.</p></div></div><div class="field-grid"><label><span>Context window</span><input type="number" min="0" step="1000" bind:value={settings.runtime.context.window} onchange={saveRuntime} disabled={!settings.runtime.configured} /></label><label><span>Trigger ratio</span><input type="number" min="0.01" max="0.99" step="0.01" bind:value={settings.runtime.context.trigger_ratio} onchange={saveRuntime} disabled={!settings.runtime.configured} /></label><label><span>Target ratio</span><input type="number" min="0.01" max="0.98" step="0.01" bind:value={settings.runtime.context.target_ratio} onchange={saveRuntime} disabled={!settings.runtime.configured} /></label><label><span>Recent ratio</span><input type="number" min="0.01" max="0.97" step="0.01" bind:value={settings.runtime.context.recent_ratio} onchange={saveRuntime} disabled={!settings.runtime.configured} /></label></div></div>
               <div class="settings-card">
@@ -867,5 +895,5 @@
     {/if}
   </main>
 
-  <footer class="status-bar"><div><span>Q Studio</span><span class="divider" aria-hidden="true"></span><span class:online={connection.kind === 'ready'} class="status-dot" aria-hidden="true"></span><span>{connection.kind === 'ready' ? 'Ready' : connection.kind === 'error' ? 'Unavailable' : 'Connecting'}</span></div><span>{activeView === 'settings' ? 'Global settings' : activeView === 'sessions' ? 'Repository session' : activeView === 'changes' ? 'Repository changes' : 'Local'}</span></footer>
+  <footer class="status-bar"><div><span>Q Studio</span><span class="divider" aria-hidden="true"></span><span class:online={connection.kind === 'ready'} class="status-dot" aria-hidden="true"></span><span>{connection.kind === 'ready' ? 'Ready' : connection.kind === 'error' ? 'Unavailable' : 'Connecting'}</span></div><span>{activeView === 'settings' ? 'Configuration' : activeView === 'sessions' ? 'Repository session' : activeView === 'changes' ? 'Repository changes' : activeView === 'operations' ? 'Runtime operations' : activeView === 'help' ? 'Studio guide' : 'Local'}</span></footer>
 </div>

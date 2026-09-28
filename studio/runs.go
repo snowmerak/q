@@ -131,6 +131,15 @@ func (service *sessionRunService) Close() error {
 	return result
 }
 
+func (service *sessionRunService) stats() (active, resident int) {
+	if service == nil {
+		return 0, 0
+	}
+	service.mu.Lock()
+	defer service.mu.Unlock()
+	return len(service.active), len(service.runs)
+}
+
 func sessionRunKey(root, sessionID string) string { return root + "\x00" + sessionID }
 func studioRunKey(root, sessionID, runID string) string {
 	return sessionRunKey(root, sessionID) + "\x00" + runID

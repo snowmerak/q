@@ -258,22 +258,22 @@ func renderHelpContent(dark bool, commandSets ...[]slashCommand) string {
 		{"type", "Write a custom answer instead of choosing an option."},
 	})
 	writeHelpSection("COMMAND LINE", [][2]string{
-		{"q commit", "Open the guided commit-message and commit TUI."},
+		{"q commit", "Open the current repository in Studio Changes."},
 		{"q memory", "Run Workspace Memory as a dedicated foreground service."},
-		{"q library", "Configure the Library's default host and fixed port."},
+		{"q library", "Open Library configuration in Studio."},
 		{"q library start", "Run the global Library as a dedicated foreground service."},
-		{"q gateway", "Configure Gateway network, API keys, and providers."},
+		{"q gateway", "Open Gateway providers and access settings in Studio."},
 		{"q gateway start", "Run only the standalone OpenAI-compatible Gateway."},
 		{"q studio", "Open the local Studio web interface."},
-		{"q model", "Configure main, embedding, and subagent models."},
-		{"q systemone", "Configure System One providers, model assignments, and listener."},
+		{"q model", "Open global and workspace model assignments in Studio."},
+		{"q systemone", "Open System One providers, model assignments, and listener in Studio."},
 		{"q systemone start", "Run the standalone System One API server."},
-		{"q mcp", "Configure external MCP tool servers and per-role assignments."},
-		{"q subagents", "Manage subagents, ACP connections, and external bindings."},
-		{"q skills", "Manage global and current-workspace Agent Skills."},
-		{"q lsp", "Configure language servers and discover workspace roots."},
-		{"q ignore", "Edit the current workspace's .qignore rules."},
-		{"q help", "Open this help screen without starting q services."},
+		{"q mcp", "Open external MCP servers and role assignments in Studio."},
+		{"q subagents", "Open subagents, ACP connections, and external bindings in Studio."},
+		{"q skills", "Open global and current-workspace Agent Skills in Studio."},
+		{"q lsp", "Open language servers and workspace roots in Studio."},
+		{"q ignore", "Open the current workspace's .qignore editor in Studio."},
+		{"q help", "Open Studio Help."},
 	})
 	return strings.TrimRight(body.String(), "\n")
 }

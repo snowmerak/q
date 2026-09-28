@@ -112,7 +112,7 @@
     else { review = null; commitError = ''; await loadChanges(selected?.path || ''); }
   }
 
-  onMount(() => { workspaceInput = localStorage.getItem('q-studio-workspace-root') || ''; if (workspaceInput) void loadChanges(); });
+  onMount(() => { workspaceInput = new URL(window.location.href).searchParams.get('workspace_root') || localStorage.getItem('q-studio-workspace-root') || ''; if (workspaceInput) void loadChanges(); });
 </script>
 
 <div class="changes-layout">

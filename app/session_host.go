@@ -153,20 +153,22 @@ type SessionHost struct {
 	factory       clientFactory
 	providerMu    sync.Mutex
 	providerReady bool
+	logs          *runtimeLogBuffer
 }
 
 func NewSessionHost(parent context.Context, store config.Store) (*SessionHost, error) {
 	if parent == nil {
 		parent = context.Background()
 	}
-	runtime, err := hostruntime.Open(parent, hostruntime.Options{Directory: store.Dir})
+	logs := newRuntimeLogBuffer(256)
+	runtime, err := hostruntime.Open(parent, hostruntime.Options{Directory: store.Dir, ServiceOutput: logs})
 	if err != nil {
 		return nil, err
 	}
 	manager := runtime.Manager()
 	return &SessionHost{
 		ctx: runtime.Context(), runtime: runtime, store: store, manager: manager,
-		factory: managedClientFactory(manager, runtime.Recorder()),
+		factory: managedClientFactory(manager, runtime.Recorder()), logs: logs,
 	}, nil
 }
 

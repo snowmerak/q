@@ -8,8 +8,11 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/snowmerak/llm-provider/gateway"
 	"github.com/snowmerak/q/app"
@@ -18,6 +21,7 @@ import (
 	qlibrary "github.com/snowmerak/q/library"
 	"github.com/snowmerak/q/providerhost"
 	"github.com/snowmerak/q/systemoneconfig"
+	"github.com/snowmerak/q/usagelog"
 	"github.com/snowmerak/q/workspace"
 )
 
@@ -26,6 +30,26 @@ type settingsRuntimeRunner struct {
 	applied   gateway.Config
 	syncRoot  string
 	syncValue config.Config
+}
+
+type operationsRuntimeRunner struct{}
+
+func (operationsRuntimeRunner) Run(context.Context, workspace.Store, string, string, app.SessionEventSink) error {
+	return nil
+}
+
+func (operationsRuntimeRunner) RuntimeStatus(context.Context) app.RuntimeStatus {
+	return app.RuntimeStatus{
+		Services: []app.RuntimeServiceStatus{{ID: "library", State: "ready", Endpoint: "http://127.0.0.1:1/v1"}},
+		Logs:     []string{"q library listening"},
+	}
+}
+
+func (operationsRuntimeRunner) Usage(_ context.Context, filter usagelog.Filter) (usagelog.UsageView, error) {
+	return usagelog.UsageView{
+		From: filter.From, To: filter.To, Resolution: "day",
+		Totals: usagelog.Totals{Calls: 2, TotalTokens: 42},
+	}, nil
 }
 
 func (runtime *settingsRuntimeRunner) Run(context.Context, workspace.Store, string, string, app.SessionEventSink) error {
@@ -67,6 +91,19 @@ func TestHandlerServesGlobalStatusAndSPA(t *testing.T) {
 	}
 	if strings.Contains(statusRecorder.Body.String(), "workspace") {
 		t.Fatalf("global Studio status leaked workspace context: %s", statusRecorder.Body.String())
+	}
+
+	operationsRecorder := httptest.NewRecorder()
+	handler.ServeHTTP(operationsRecorder, httptest.NewRequest(http.MethodGet, "/api/v1/operations?days=1", nil))
+	if operationsRecorder.Code != http.StatusOK {
+		t.Fatalf("operations = %d %s", operationsRecorder.Code, operationsRecorder.Body.String())
+	}
+	var operations operationsSnapshot
+	if err := json.Unmarshal(operationsRecorder.Body.Bytes(), &operations); err != nil {
+		t.Fatal(err)
+	}
+	if !operations.RuntimeAvailable || len(operations.Services) != 4 {
+		t.Fatalf("runtime operations = %#v", operations)
 	}
 
 	for _, target := range []string{"/", "/sessions/example"} {
@@ -359,6 +396,122 @@ func TestSettingsAPIRejectsInvalidAndUnknownUpdates(t *testing.T) {
 		if response.Code != test.status {
 			t.Fatalf("PUT %s = %d %s; want %d", test.target, response.Code, response.Body.String(), test.status)
 		}
+	}
+}
+
+func TestOperationsAPICombinesRuntimeWorkersUsageAndRetention(t *testing.T) {
+	store := config.Store{Dir: t.TempDir()}
+	archiveDir := filepath.Join(store.Dir, "usage", "archive")
+	if err := os.MkdirAll(archiveDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for path, body := range map[string]string{
+		filepath.Join(store.Dir, "usage", "usage.sqlite"):     "database",
+		filepath.Join(store.Dir, "usage", "usage.sqlite-wal"): "wal",
+		filepath.Join(archiveDir, "2026-01-01.jsonl.gz"):      "archive",
+	} {
+		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	handler, err := newHandlerWithRunner(store, operationsRuntimeRunner{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/v1/operations?days=7", nil))
+	if response.Code != http.StatusOK {
+		t.Fatalf("GET operations = %d %s", response.Code, response.Body.String())
+	}
+	var snapshot operationsSnapshot
+	if err := json.Unmarshal(response.Body.Bytes(), &snapshot); err != nil {
+		t.Fatal(err)
+	}
+	if !snapshot.RuntimeAvailable || snapshot.Usage.Totals.TotalTokens != 42 || len(snapshot.Services) != 1 || len(snapshot.Logs) != 1 {
+		t.Fatalf("operations snapshot = %#v", snapshot)
+	}
+	if snapshot.Retention.HotDays != 90 || snapshot.Retention.DatabaseBytes != int64(len("database")+len("wal")) || snapshot.Retention.ArchiveFiles != 1 || snapshot.Retention.ArchiveBytes != int64(len("archive")) || snapshot.Usage.To.Sub(snapshot.Usage.From) < 7*24*time.Hour-time.Second {
+		t.Fatalf("operations retention/period = %#v, %s", snapshot.Retention, snapshot.Usage.To.Sub(snapshot.Usage.From))
+	}
+
+	response = httptest.NewRecorder()
+	handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/v1/operations?days=0", nil))
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("invalid operations range = %d %s", response.Code, response.Body.String())
+	}
+}
+
+func TestWorkspaceModelAPIUsesExistingWorkspaceStore(t *testing.T) {
+	store := config.Store{Dir: t.TempDir()}
+	value := config.Default()
+	value.Provider.Model = "global/default"
+	value.Agents.Roles = make(map[string]config.AgentConfig)
+	value.Agents.Roles[config.AgentRoleReviewer] = config.AgentConfig{Model: "global/reviewer"}
+	if err := store.Save(value); err != nil {
+		t.Fatal(err)
+	}
+	handler, err := newHandler(store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := t.TempDir()
+	body := `{"workspace_root":` + quotedJSON(root) + `,"model":"workspace/reviewer"}`
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, httptest.NewRequest(http.MethodPut, "/api/v1/workspaces/models/reviewer", bytes.NewBufferString(body)))
+	if response.Code != http.StatusOK {
+		t.Fatalf("PUT workspace model = %d %s", response.Code, response.Body.String())
+	}
+	var snapshot workspaceModelSettings
+	if err := json.Unmarshal(response.Body.Bytes(), &snapshot); err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.WorkspaceRoot != root || snapshot.ConfigPath != (workspace.Store{Root: root}).ModelPath() {
+		t.Fatalf("workspace snapshot = %#v", snapshot)
+	}
+	found := false
+	for _, assignment := range snapshot.Assignments {
+		if assignment.Role == config.AgentRoleReviewer {
+			found = assignment.ConfiguredModel == "workspace/reviewer" && assignment.EffectiveModel == "workspace/reviewer" && !assignment.Inherited
+		}
+		if assignment.Role == config.AgentRoleThinker || assignment.Role == config.AgentRoleLibrarian {
+			t.Fatalf("shared role exposed as workspace override: %#v", assignment)
+		}
+	}
+	if !found {
+		t.Fatalf("workspace reviewer assignment missing: %#v", snapshot.Assignments)
+	}
+
+	response = httptest.NewRecorder()
+	handler.ServeHTTP(response, httptest.NewRequest(http.MethodDelete, "/api/v1/workspaces/models/reviewer", bytes.NewBufferString(`{"workspace_root":`+quotedJSON(root)+`}`)))
+	if response.Code != http.StatusOK {
+		t.Fatalf("DELETE workspace model = %d %s", response.Code, response.Body.String())
+	}
+	loaded, err := (workspace.Store{Root: root}).LoadModelConfig()
+	if err != nil || len(loaded.Overrides) != 0 {
+		t.Fatalf("cleared workspace model = %#v, %v", loaded, err)
+	}
+
+	response = httptest.NewRecorder()
+	handler.ServeHTTP(response, httptest.NewRequest(http.MethodPut, "/api/v1/workspaces/models/thinker", bytes.NewBufferString(body)))
+	if response.Code != http.StatusNotFound {
+		t.Fatalf("PUT shared workspace role = %d %s", response.Code, response.Body.String())
+	}
+}
+
+func TestDefaultModelInitializesMainConfiguration(t *testing.T) {
+	store := config.Store{Dir: t.TempDir()}
+	handler, err := newHandler(store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, httptest.NewRequest(http.MethodPut, "/api/v1/settings/models/default", bytes.NewBufferString(`{"model":"local/first-model","reasoning_effort":"high"}`)))
+	if response.Code != http.StatusOK {
+		t.Fatalf("PUT initial default model = %d %s", response.Code, response.Body.String())
+	}
+	loaded, err := store.Load()
+	if err != nil || !loaded.Provider.Managed || loaded.Provider.Model != "local/first-model" || loaded.Provider.ReasoningEffort != "high" {
+		t.Fatalf("initialized config = %#v, %v", loaded.Provider, err)
 	}
 }
 

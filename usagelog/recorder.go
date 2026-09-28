@@ -81,26 +81,8 @@ func (r *Recorder) recordUsage(ctx context.Context, record client.UsageRecord) e
 		record.Role = client.UsageRoleUnknown
 	}
 	for attempt := range 2 {
-		if r.runtime == nil {
-			if r.lifetime == nil {
-				r.lifetime, r.cancel = context.WithCancel(context.Background())
-			}
-			configured, err := (ConfigStore{Dir: r.Dir}).LoadOrDefault()
-			if err != nil {
-				return err
-			}
-			ensure := r.ensure
-			if ensure == nil {
-				ensure = EnsureWithOptions
-			}
-			runtime, err := ensure(ctx, EnsureOptions{
-				Dir: r.Dir, Config: configured, LeaderContext: r.lifetime, ProbeTimeout: 50 * time.Millisecond,
-				StartupTimeout: 175 * time.Millisecond, RequestTimeout: 125 * time.Millisecond,
-			})
-			if err != nil {
-				return err
-			}
-			r.runtime = runtime
+		if err := r.ensureRuntime(ctx, 50*time.Millisecond, 175*time.Millisecond, 125*time.Millisecond); err != nil {
+			return err
 		}
 		if err := r.runtime.Client().Append(ctx, record); err == nil {
 			return nil
@@ -110,6 +92,78 @@ func (r *Recorder) recordUsage(ctx context.Context, record client.UsageRecord) e
 		_ = r.runtime.Close()
 		r.runtime = nil
 	}
+	return nil
+}
+
+// Query reads the durable Usage service through the same bounded runtime used
+// by recording. The recorder gate keeps a failed service replacement from
+// racing an operations request.
+func (r *Recorder) Query(ctx context.Context, filter Filter) (UsageView, error) {
+	if r == nil || r.Directory() == "" {
+		return UsageView{}, errors.New("usage: config directory is unavailable")
+	}
+	if ctx == nil {
+		return UsageView{}, errors.New("usage: query context is nil")
+	}
+	r.initializeGate()
+	select {
+	case <-ctx.Done():
+		return UsageView{}, ctx.Err()
+	case <-r.gate:
+	}
+	defer func() { r.gate <- struct{}{} }()
+	if err := r.ensureRuntime(ctx, 250*time.Millisecond, 2*time.Second, 10*time.Second); err != nil {
+		return UsageView{}, err
+	}
+	return r.runtime.Client().Query(ctx, filter)
+}
+
+// Health reports the active Usage service and starts its user-level runtime
+// when this process has not recorded a model call yet.
+func (r *Recorder) Health(ctx context.Context) (Health, string, bool, error) {
+	if r == nil || r.Directory() == "" {
+		return Health{}, "", false, errors.New("usage: config directory is unavailable")
+	}
+	if ctx == nil {
+		return Health{}, "", false, errors.New("usage: health context is nil")
+	}
+	r.initializeGate()
+	select {
+	case <-ctx.Done():
+		return Health{}, "", false, ctx.Err()
+	case <-r.gate:
+	}
+	defer func() { r.gate <- struct{}{} }()
+	if err := r.ensureRuntime(ctx, 250*time.Millisecond, 2*time.Second, 5*time.Second); err != nil {
+		return Health{}, "", false, err
+	}
+	health, err := r.runtime.Client().Health(ctx)
+	return health, r.runtime.Endpoint(), r.runtime.IsLeader(), err
+}
+
+func (r *Recorder) ensureRuntime(ctx context.Context, probeTimeout, startupTimeout, requestTimeout time.Duration) error {
+	if r.runtime != nil {
+		return nil
+	}
+	if r.lifetime == nil {
+		r.lifetime, r.cancel = context.WithCancel(context.Background())
+	}
+	configured, err := (ConfigStore{Dir: r.Dir}).LoadOrDefault()
+	if err != nil {
+		return err
+	}
+	ensure := r.ensure
+	if ensure == nil {
+		ensure = EnsureWithOptions
+	}
+	runtime, err := ensure(ctx, EnsureOptions{
+		Dir: r.Dir, Config: configured, LeaderContext: r.lifetime,
+		ProbeTimeout: probeTimeout, StartupTimeout: startupTimeout, RequestTimeout: requestTimeout,
+	})
+	if err != nil {
+		return err
+	}
+	r.runtime = runtime
 	return nil
 }
 
