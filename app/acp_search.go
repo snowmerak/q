@@ -82,6 +82,18 @@ func probeACPAgentConnection(
 	return disposeACPRemote(remote)
 }
 
+// ProbeACPAgentConnection validates an ACP connection by completing the same
+// initialize, session, and disposal lifecycle used by the TUI connection
+// tester. Studio uses this entry point so both interfaces exercise identical
+// process resolution and authentication behavior.
+func ProbeACPAgentConnection(
+	ctx context.Context,
+	root, connectionID string,
+	connection config.AgentConnectionConfig,
+) error {
+	return probeACPAgentConnection(ctx, root, connectionID, connection)
+}
+
 func executeACPExternalSearch(
 	ctx context.Context,
 	remote *acpRemoteClient,

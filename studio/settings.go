@@ -574,6 +574,25 @@ func (service *settingsService) serveCustomRoleDelete(writer http.ResponseWriter
 		writeAPIError(writer, http.StatusNotFound, errors.New("custom role does not exist"))
 		return
 	}
+	root := ""
+	if requestedRoot := strings.TrimSpace(request.URL.Query().Get("workspace_root")); requestedRoot != "" {
+		root, err = canonicalWorkspaceDirectory(requestedRoot)
+		if err != nil {
+			writeAPIError(writer, http.StatusBadRequest, err)
+			return
+		}
+	}
+	var references []string
+	for _, entry := range profileStore(service.main, root).List() {
+		if entry.Err == nil && entry.Profile.EffectiveKind() == "inner" && entry.Profile.Role == role {
+			references = append(references, entry.Scope+"/"+entry.Profile.Name)
+		}
+	}
+	if len(references) > 0 {
+		sort.Strings(references)
+		writeAPIError(writer, http.StatusConflict, fmt.Errorf("custom role is used by subagents: %s", strings.Join(references, ", ")))
+		return
+	}
 	delete(value.Agents.Roles, role)
 	if err := service.main.Save(value); err != nil {
 		writeAPIError(writer, http.StatusUnprocessableEntity, err)

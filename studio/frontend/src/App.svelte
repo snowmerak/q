@@ -1,6 +1,7 @@
 <script lang="ts">
   import { BrainCircuit, Check, ChevronDown, ChevronUp, Copy, Cpu, House, KeyRound, Layers, Network, Plus, RefreshCw, Server, Settings, SlidersHorizontal, Trash2, Unplug } from '@lucide/svelte';
   import { onMount } from 'svelte';
+  import IntegrationsView from './IntegrationsView.svelte';
   import SessionView from './SessionView.svelte';
 
   type StudioStatus = { version: number; service: string; ready: boolean };
@@ -328,7 +329,9 @@
 
   function deleteCustomRole(role: RoleModelAssignment) {
     if (!window.confirm(`Delete custom role “${role.role}”?`)) return;
-    queueSave(() => writeSettings('DELETE', `/api/v1/settings/roles/${encodeURIComponent(role.role)}`));
+    const root = localStorage.getItem('q-studio-workspace-root') || '';
+    const query = root ? `?workspace_root=${encodeURIComponent(root)}` : '';
+    queueSave(() => writeSettings('DELETE', `/api/v1/settings/roles/${encodeURIComponent(role.role)}${query}`));
   }
 
   function saveModelAPIMode(model: ModelOption) {
@@ -852,13 +855,7 @@
               </div>
             </section>
           {:else}
-            <section class="settings-section">
-              <div class="section-heading"><div><p class="eyebrow">INTEGRATIONS</p><h2>Tool connections</h2><p>Current global configuration discovered from Q.</p></div></div>
-              <div class="integration-grid">
-                <article class="settings-card integration-card"><div><h3>MCP servers</h3><p>External tools and role grants.</p></div><div class="integration-stats"><strong>{settings.integrations.mcp.items}</strong><span>servers</span><strong>{settings.integrations.mcp.bindings}</strong><span>role bindings</span></div><code>{settings.integrations.mcp.config_path}</code></article>
-                <article class="settings-card integration-card"><div><h3>Language servers</h3><p>Trusted executables and language mappings.</p></div><div class="integration-stats"><strong>{settings.integrations.lsp.items}</strong><span>servers</span><strong>{settings.integrations.lsp.bindings}</strong><span>language bindings</span></div><code>{settings.integrations.lsp.config_path}</code></article>
-              </div>
-            </section>
+            <IntegrationsView />
           {/if}
         </div>
       </div>

@@ -9,9 +9,9 @@ import (
 // evidence from the current PATH; Config intentionally retains the portable
 // command name for the global configuration draft.
 type DiscoveredServer struct {
-	ID     string
-	Path   string
-	Config ServerConfig
+	ID     string       `json:"id"`
+	Path   string       `json:"path"`
+	Config ServerConfig `json:"config"`
 }
 
 type serverCandidate struct {

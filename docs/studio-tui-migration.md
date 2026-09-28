@@ -27,14 +27,13 @@
 
 ## 현재 기준선
 
-Studio에는 global model/role assignment, Gateway provider, System One, runtime/context,
-Loom 보존 설정, Gateway/System One listener와 repository별 session 목록·생성·실행이
-있다. directory browser는 Go API가 home에서 시작해 모든 지원 OS에 같은 Web UI를
-제공한다.
+Studio에는 repository session lifecycle과 Markdown chat, global model/provider/runtime,
+Gateway/System One/Library service, Loom operation, MCP, LSP, Skills, subagent/ACP와
+`.qignore` 관리가 있다. directory browser는 Go API가 home에서 시작해 모든 지원 OS에
+같은 Web UI를 제공한다.
 
-아직 TUI가 소유하는 주요 기능은 session 삭제와 대화 명령, 질문 응답, durable
-interrupt/reconnect, changes/commit, advanced model 설정, Gateway key, Library/Loom
-operation, Skills, LSP, MCP, subagent/ACP connection, `.qignore`, usage와 help다.
+아직 TUI가 소유하는 주요 기능은 질문 응답과 durable interrupt/reconnect,
+changes/commit, workspace model override, usage와 full help다.
 
 ## 마일스톤
 
@@ -115,7 +114,7 @@ operation, Skills, LSP, MCP, subagent/ACP connection, `.qignore`, usage와 help�
 - `go test ./app ./studio ./workspace ./gatewayconfig ./library ./loom`, `npm run check`,
   production build를 통과했다.
 
-### M3. Integration, Skill과 Agent 관리
+### M3. Integration, Skill과 Agent 관리 — 완료 (2026-09-29)
 
 범위:
 
@@ -130,6 +129,25 @@ operation, Skills, LSP, MCP, subagent/ACP connection, `.qignore`, usage와 help�
 - TUI에서 만들 수 있는 동일한 config를 Studio에서 만들고 다시 열어 손실 없이 편집한다.
 - connection probe와 discovery 결과가 대상 항목에 귀속되어 표시된다.
 - credential value는 Studio read API로 돌아오지 않는다.
+
+완료 기록:
+
+- Integrations 화면을 MCP, Language servers, Skills, Agents, `.qignore`의 다섯 관리
+  surface로 확장했다. repository 범위 화면은 Sessions에서 마지막으로 연 경로를
+  공유하되 사용자가 다른 canonical 경로를 명시할 수도 있다.
+- MCP의 두 transport, environment/header reference와 role grant, LSP global profile,
+  language default, repository root, PATH discovery를 기존 config validator에 연결했다.
+- portable/global/workspace Skill을 함께 표시하고 Q-managed Git checkout의 clone,
+  pull, delete와 global/workspace index reconciliation을 한 operation으로 묶었다.
+- builtin occupational agent를 읽기 전용으로 표시하고 custom inner/external profile,
+  model role, tool와 delegation grant, ACP connection/binding/probe를 편집하게 했다.
+  ACP child environment value는 read API에서 redacted되고 unchanged marker는 저장 시
+  원래 secret을 보존한다.
+- `.qignore`는 입력 정지 뒤 자동 저장하며 SHA-256 revision mismatch를 `409`로
+  반환한다. custom profile도 원본 revision을 검사하며 삭제 전 delegation reference를
+  확인한다.
+- `go test ./studio ./app ./lsp ./mcpconfig ./agentskills ./subagent ./workspace`,
+  `npm run check`, production build를 통과했다.
 
 ### M4. Changes와 commit workflow
 
@@ -195,11 +213,11 @@ operation, Skills, LSP, MCP, subagent/ACP connection, `.qignore`, usage와 help�
 | Gateway listener/API key | listener와 일회 표시 key 관리 | M2 | 완료 |
 | System One | provider/model/listener/key 지원 | M2 회귀 유지 | 완료 |
 | Library/Loom | Library listener, Loom 설정·stats·GC | M2 | 완료 |
-| Skills | 없음 | M3 | 미착수 |
-| LSP | 개수 요약 | M3 | 미착수 |
-| MCP | 개수 요약 | M3 | 미착수 |
-| Subagent/ACP connection | 없음 | M3 | 미착수 |
-| `.qignore` | 없음 | M3 | 미착수 |
+| Skills | global/repository list·Git lifecycle·reindex | M3 | 완료 |
+| LSP | profile/default/root CRUD와 discovery | M3 | 완료 |
+| MCP | server CRUD, transport, env/header ref, role grant | M3 | 완료 |
+| Subagent/ACP connection | builtin/custom profile, delegation, binding, probe | M3 | 완료 |
+| `.qignore` | revision-aware 자동 저장 editor | M3 | 완료 |
 | Usage/help | 최소 status만 지원 | M6 | 미착수 |
 
 `완료`는 해당 행의 현재 범위가 observable acceptance를 통과했다는 뜻이다. 뒤
