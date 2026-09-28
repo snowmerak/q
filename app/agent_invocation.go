@@ -21,10 +21,14 @@ type agentInvocationToolRuntime struct {
 	invocation *subagent.InvocationRuntime
 }
 
+func (r *agentInvocationToolRuntime) UnwrapToolRuntime() agentToolRuntime { return r.base }
+
 type reservedInvocationToolRuntime struct {
 	base     agentToolRuntime
 	preserve map[string]bool
 }
+
+func (r *reservedInvocationToolRuntime) UnwrapToolRuntime() agentToolRuntime { return r.base }
 
 func (r *reservedInvocationToolRuntime) Tools() []client.Tool {
 	var result []client.Tool
@@ -123,22 +127,31 @@ func configuredAgentToolRuntime(
 }
 
 func configuredInvocationCapture(base agentToolRuntime) subagent.InvocationCaptureFunc {
-	capturer, ok := base.(loomResultCapturer)
-	if !ok {
-		return nil
-	}
-	return func(
-		ctx context.Context,
-		source subagent.InvocationSource,
-		call client.ToolCall,
-		result client.ToolResult,
-	) (client.ToolResult, error) {
-		captured, err := capturer.CaptureResult(ctx, qtools.CaptureSource{
-			Protocol: source.Protocol, Name: source.Name, Kind: source.Kind, MediaType: source.MediaType,
-		}, call, result)
-		if err != nil {
-			return client.ToolResult{}, fmt.Errorf("capture agent invocation %s: %w", call.Function.Name, err)
+	for range 16 {
+		if capturer, ok := base.(loomResultCapturer); ok {
+			return func(
+				ctx context.Context,
+				source subagent.InvocationSource,
+				call client.ToolCall,
+				result client.ToolResult,
+			) (client.ToolResult, error) {
+				captured, err := capturer.CaptureResult(ctx, qtools.CaptureSource{
+					Protocol: source.Protocol, Name: source.Name, Kind: source.Kind, MediaType: source.MediaType,
+				}, call, result)
+				if err != nil {
+					return client.ToolResult{}, fmt.Errorf("capture agent invocation %s: %w", call.Function.Name, err)
+				}
+				return captured, nil
+			}
 		}
-		return captured, nil
+		unwrapper, ok := base.(interface{ UnwrapToolRuntime() agentToolRuntime })
+		if !ok {
+			return nil
+		}
+		base = unwrapper.UnwrapToolRuntime()
+		if base == nil {
+			return nil
+		}
 	}
+	return nil
 }

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"path/filepath"
 	goruntime "runtime"
 	"sort"
 	"strings"
@@ -35,6 +36,18 @@ type HostEnvironment struct {
 }
 
 type SkillHintSearchResult = builtin.SearchSkillsOutput
+
+// RuntimeRoots separates durable workspace state from the source checkout
+// exposed to file, command, and language-server tools. The roots are identical
+// for an ordinary session and differ for an isolated Git worktree.
+type RuntimeRoots struct {
+	WorkspaceStateRoot string
+	CheckoutRoot       string
+}
+
+func sameRuntimeRoots(root string) RuntimeRoots {
+	return RuntimeRoots{WorkspaceStateRoot: root, CheckoutRoot: root}
+}
 
 type runtimeOptions struct {
 	skillRanker builtin.SkillRanker
@@ -85,7 +98,7 @@ func NewRuntime(ctx context.Context, root string) (*Runtime, error) {
 // index without enabling workspace archive tools. The caller owns store.
 func NewRuntimeWithSkillStore(ctx context.Context, root string, store SkillStore) (*Runtime, error) {
 	return newRuntimeWithLSP(
-		ctx, root, nil, store, loom.NewProcessEvaluator(), loom.StoreOptions{}, nil, nil,
+		ctx, sameRuntimeRoots(root), nil, store, loom.NewProcessEvaluator(), loom.StoreOptions{}, nil, nil,
 	)
 }
 
@@ -119,19 +132,7 @@ func NewRuntimeWithArchiveAndLoomOptionsAndLSP(
 	global lsp.GlobalConfig,
 	workspace lsp.WorkspaceConfig,
 ) (*Runtime, error) {
-	manager, err := lsp.NewManager(ctx, root, global, workspace,
-		lsp.WithRootDiscovery((qworkspace.Store{Root: root}).DiscoverLSPRootsContext))
-	if err != nil {
-		return nil, err
-	}
-	runtime, err := newRuntimeWithLSP(
-		ctx, root, archive, skillStoreFromArchive(archive), loom.NewProcessEvaluator(), options, manager, nil,
-	)
-	if err != nil {
-		_ = manager.Close()
-		return nil, err
-	}
-	return runtime, nil
+	return NewRuntimeWithRoots(ctx, sameRuntimeRoots(root), archive, options, global, workspace, nil)
 }
 
 // NewRuntimeWithArchiveAndLoomOptionsAndLSPAndLibrary routes global Agent
@@ -146,13 +147,36 @@ func NewRuntimeWithArchiveAndLoomOptionsAndLSPAndLibrary(
 	globalSkills builtin.GlobalSkillLibrary,
 	runtimeOptions ...RuntimeOption,
 ) (*Runtime, error) {
-	manager, err := lsp.NewManager(ctx, root, global, workspace,
-		lsp.WithRootDiscovery((qworkspace.Store{Root: root}).DiscoverLSPRootsContext))
+	return NewRuntimeWithRoots(
+		ctx, sameRuntimeRoots(root), archive, options, global, workspace, globalSkills, runtimeOptions...,
+	)
+}
+
+// NewRuntimeWithRoots constructs a tool runtime for a source checkout while
+// retaining Loom and q-managed workspace skills in the canonical workspace
+// state root. Archive ownership remains with the caller.
+func NewRuntimeWithRoots(
+	ctx context.Context,
+	roots RuntimeRoots,
+	archive builtin.Archive,
+	options loom.StoreOptions,
+	global lsp.GlobalConfig,
+	workspace lsp.WorkspaceConfig,
+	globalSkills builtin.GlobalSkillLibrary,
+	runtimeOptions ...RuntimeOption,
+) (*Runtime, error) {
+	var err error
+	roots, err = normalizeRuntimeRoots(roots)
+	if err != nil {
+		return nil, err
+	}
+	manager, err := lsp.NewManager(ctx, roots.CheckoutRoot, global, workspace,
+		lsp.WithRootDiscovery((qworkspace.Store{Root: roots.CheckoutRoot}).DiscoverLSPRootsContext))
 	if err != nil {
 		return nil, err
 	}
 	runtime, err := newRuntimeWithLSP(
-		ctx, root, archive, skillStoreFromArchive(archive), loom.NewProcessEvaluator(), options, manager, globalSkills,
+		ctx, roots, archive, skillStoreFromArchive(archive), loom.NewProcessEvaluator(), options, manager, globalSkills,
 		runtimeOptions...,
 	)
 	if err != nil {
@@ -162,13 +186,28 @@ func NewRuntimeWithArchiveAndLoomOptionsAndLSPAndLibrary(
 	return runtime, nil
 }
 
+func normalizeRuntimeRoots(roots RuntimeRoots) (RuntimeRoots, error) {
+	if strings.TrimSpace(roots.WorkspaceStateRoot) == "" || strings.TrimSpace(roots.CheckoutRoot) == "" {
+		return RuntimeRoots{}, errors.New("tools: workspace state root and checkout root are required")
+	}
+	stateRoot, err := filepath.Abs(roots.WorkspaceStateRoot)
+	if err != nil {
+		return RuntimeRoots{}, fmt.Errorf("tools: resolve workspace state root: %w", err)
+	}
+	checkoutRoot, err := filepath.Abs(roots.CheckoutRoot)
+	if err != nil {
+		return RuntimeRoots{}, fmt.Errorf("tools: resolve checkout root: %w", err)
+	}
+	return RuntimeRoots{WorkspaceStateRoot: stateRoot, CheckoutRoot: checkoutRoot}, nil
+}
+
 func newRuntime(ctx context.Context, root string, archive builtin.Archive, evaluator loom.Evaluator, options loom.StoreOptions) (*Runtime, error) {
-	return newRuntimeWithLSP(ctx, root, archive, skillStoreFromArchive(archive), evaluator, options, nil, nil)
+	return newRuntimeWithLSP(ctx, sameRuntimeRoots(root), archive, skillStoreFromArchive(archive), evaluator, options, nil, nil)
 }
 
 func newRuntimeWithLSP(
 	ctx context.Context,
-	root string,
+	roots RuntimeRoots,
 	archive builtin.Archive,
 	skillStore SkillStore,
 	evaluator loom.Evaluator,
@@ -177,17 +216,24 @@ func newRuntimeWithLSP(
 	globalSkills builtin.GlobalSkillLibrary,
 	configuredOptions ...RuntimeOption,
 ) (*Runtime, error) {
+	var err error
+	roots, err = normalizeRuntimeRoots(roots)
+	if err != nil {
+		return nil, err
+	}
 	optionsValue := runtimeOptions{}
 	for _, configure := range configuredOptions {
 		if configure != nil {
 			configure(&optionsValue)
 		}
 	}
-	loomRuntime, err := newLoomRuntime(root, evaluator, withSessionRoots(options, root))
+	loomRuntime, err := newLoomRuntime(roots.WorkspaceStateRoot, evaluator, withSessionRoots(options, roots.WorkspaceStateRoot))
 	if err != nil {
 		return nil, err
 	}
-	server, fs, skills, err := newServer(root, archive, skillStore, loomRuntime, lspManager, globalSkills, optionsValue.skillRanker)
+	server, fs, skills, err := newServer(
+		roots.CheckoutRoot, roots.WorkspaceStateRoot, archive, skillStore, loomRuntime, lspManager, globalSkills, optionsValue.skillRanker,
+	)
 	if err != nil {
 		return nil, err
 	}

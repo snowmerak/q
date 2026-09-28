@@ -35,7 +35,7 @@ func NewServer(root string) (*mcp.Server, error) {
 	if err != nil {
 		return nil, err
 	}
-	server, _, _, err := newServer(root, nil, nil, loomRuntime, nil, nil, nil)
+	server, _, _, err := newServer(root, root, nil, nil, loomRuntime, nil, nil, nil)
 	return server, err
 }
 
@@ -46,12 +46,13 @@ func NewServerWithArchive(root string, archive builtin.Archive) (*mcp.Server, er
 	if err != nil {
 		return nil, err
 	}
-	server, _, _, err := newServer(root, archive, skillStoreFromArchive(archive), loomRuntime, nil, nil, nil)
+	server, _, _, err := newServer(root, root, archive, skillStoreFromArchive(archive), loomRuntime, nil, nil, nil)
 	return server, err
 }
 
 func newServer(
-	root string,
+	checkoutRoot string,
+	workspaceStateRoot string,
 	archive builtin.Archive,
 	skillStore SkillStore,
 	loomRuntime *builtin.LoomRuntime,
@@ -59,7 +60,7 @@ func newServer(
 	globalSkills builtin.GlobalSkillLibrary,
 	skillRanker builtin.SkillRanker,
 ) (*mcp.Server, *builtin.FS, *agentskills.Registry, error) {
-	skills, err := agentskills.Discover(root)
+	skills, err := agentskills.DiscoverWorkspace(checkoutRoot, workspaceStateRoot)
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -79,7 +80,7 @@ func newServer(
 		Version: ServerVersion,
 	}, nil)
 	propositions, _ := globalSkills.(builtin.PropositionLibrary)
-	fs, err := builtin.Register(server, root, builtin.Dependencies{
+	fs, err := builtin.Register(server, checkoutRoot, builtin.Dependencies{
 		Archive: archive, Loom: loomRuntime, Skills: skills, SkillStore: skillStore, GlobalSkills: globalSkills,
 		SkillRanker: skillRanker, Propositions: propositions, LSP: lspManager,
 	})
@@ -239,7 +240,7 @@ func RunStdioWithLoomOptions(ctx context.Context, root string, options loom.Stor
 		}
 	}
 	server, fs, _, err := newServer(
-		root, semanticArchive, semanticArchive, loomRuntime, lspManager, globalSkills,
+		root, root, semanticArchive, semanticArchive, loomRuntime, lspManager, globalSkills,
 		&systemOneSkillRanker{store: systemoneconfig.Store{Dir: configStore.Dir}},
 	)
 	if err != nil {

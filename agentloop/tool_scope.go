@@ -18,6 +18,10 @@ type scopedToolRuntime struct {
 	role string
 }
 
+// UnwrapToolRuntime exposes the wrapped runtime to host-side optional
+// capability discovery without adding those capabilities to ToolRuntime.
+func (r *scopedToolRuntime) UnwrapToolRuntime() ToolRuntime { return r.base }
+
 // ScopeTools exposes only tools assigned to role when a runtime has a
 // role-aware catalog. Calls to hidden tools are rejected.
 func ScopeTools(base ToolRuntime, role string) ToolRuntime {

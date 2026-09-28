@@ -47,6 +47,27 @@ Loop를 실행한 뒤 Change Request를 요청한 부모에게 돌려준다. Stu
 - 최근에 열었던 workspace catalog는 session 발견을 위한 사용자 단위 projection이다.
   source tree와 workspace별 Q 데이터의 권위는 각 canonical root에 남는다.
 
+### 실행 경로 분리
+
+일반 session에서는 아래 세 경로가 같지만, 다른 repository에 위임하거나 Git
+worktree를 lease하면 서로 달라진다. 실행 계약은 하나의 `workspace root`로 이 셋을
+대신하지 않는다.
+
+| 경로 | 소유 데이터와 동작 |
+| --- | --- |
+| Session Store | 요청한 부모 session의 transcript, child session, delegation bookmark와 실행 checkpoint |
+| Workspace State Root | 대상 repository의 `.q` 설정, q-managed skill, Loom, archive/index와 Change Request metadata |
+| Checkout Root | agent에게 노출되는 source tree, file/shell/Git 도구, portable `.agents/skills`, `AGENTS.md`와 LSP process |
+
+부모 session이 repository A에서 repository B의 작업을 위임하면 child 대화와 호출
+관계는 A의 부모 Session Store 아래에 남고, B의 durable workspace 상태는 B의 canonical
+root를 사용한다. 실제 수정만 별도 worktree인 Checkout Root에서 수행한다. delegation
+state는 대상 repository identity, change ID와 checkout lease를 연결한다.
+
+worktree 안에 `.q`를 복사하거나 symlink하지 않는다. runtime은 checkout에서
+`.agents/skills`와 source instruction을 읽되 `.q/skills`와 Loom은 Workspace State
+Root에서 연다. checkout 정리는 session, review와 workspace archive를 삭제하지 않는다.
+
 ### Frontend와 배포
 
 - Studio frontend는 `studio/frontend`의 Svelte SPA이며 Vite로 build한다.
@@ -115,6 +136,10 @@ repository를 지정하는 위임, worktree lease, Change Request, 재연결 가
 장기 scheduler는 아직 제공하지 않는다. 위임 복구는 [중첩 delegate 세션과 재귀
 복구](delegation-session-recovery.md), 저장 방향은 [Session Store](session-store-notes.md)가
 소유한다.
+
+도구 runtime과 delegation 실행 문맥은 Workspace State Root와 Checkout Root를 분리할
+수 있다. 일반 TUI·ACP는 현재 같은 canonical root를 양쪽에 전달한다. repository 지정
+위임이 이 계약에 worktree lease를 연결하는 단계는 아직 구현되지 않았다.
 
 현재 `web/`은 Eleventy 기반 공개 문서 사이트다. Studio application과 문서 사이트는
 서로 다른 source와 build artifact를 사용한다.
@@ -429,6 +454,8 @@ fetch와 push해야 할 때 별도 마일스톤으로 정한다.
   정리한다.
 - query snapshot, command result와 event subscription의 경계를 정한다.
 - 기존 TUI가 새 service를 사용해 동작하는 회귀 증거를 만든다.
+- agent 실행에서 Session Store, Workspace State Root와 Checkout Root를 별도 입력으로
+  유지하고, 일반 실행에서는 같은 root를 사용하는 호환 경로를 둔다.
 
 완료 기준: Web handler가 Bubble Tea model을 생성하지 않고 핵심 기능을 호출할 수 있고,
 TUI와 service 호출이 같은 저장 결과를 만든다.
@@ -487,6 +514,8 @@ disconnect가 worker를 종료하지 않는다.
 ### S5. Git worktree와 merge request
 
 - repository/change/worktree lease service.
+- repository 지정 delegation이 기존 Session Store와 대상 Workspace State Root를
+  유지한 채 lease의 Checkout Root로 도구 runtime을 생성한다.
 - branch·worktree 생성, commit 제출, diff와 checks.
 - merge request, review, changes requested, approval, conflict와 merge.
 - crash recovery와 orphan worktree reconciliation.

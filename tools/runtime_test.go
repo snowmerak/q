@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net"
 	"os"
 	"path/filepath"
@@ -208,6 +209,65 @@ func TestRuntimeExposesConfiguredLSPTools(t *testing.T) {
 	}
 	if status.Workspace != root || len(status.Sessions) != 0 {
 		t.Fatalf("status = %#v", status)
+	}
+}
+
+func TestRuntimeRootsKeepStateOutsideCheckout(t *testing.T) {
+	stateRoot := t.TempDir()
+	checkoutRoot := t.TempDir()
+	if err := os.WriteFile(filepath.Join(checkoutRoot, "checkout.txt"), []byte("leased worktree"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	writeSkill := func(root, name, description string) {
+		t.Helper()
+		directory := filepath.Join(root, name)
+		if err := os.MkdirAll(directory, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		body := "---\nname: " + name + "\ndescription: " + description + "\n---\n\nUse this skill.\n"
+		if err := os.WriteFile(filepath.Join(directory, "SKILL.md"), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeSkill(filepath.Join(checkoutRoot, ".agents", "skills"), "portable-checkout-skill", "Read from the checked out source tree.")
+	writeSkill(filepath.Join(stateRoot, ".q", "skills"), "managed-state-skill", "Keep with canonical workspace state.")
+	writeSkill(filepath.Join(checkoutRoot, ".q", "skills"), "wrong-checkout-skill", "Must not be loaded from a leased checkout.")
+
+	runtime, err := NewRuntimeWithRoots(
+		t.Context(), RuntimeRoots{WorkspaceStateRoot: stateRoot, CheckoutRoot: checkoutRoot},
+		nil, loom.StoreOptions{}, lsp.GlobalConfig{}, lsp.WorkspaceConfig{Version: lsp.WorkspaceConfigVersion}, nil,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := runtime.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
+
+	read, err := runtime.Call(t.Context(), client.ToolCall{
+		ID: "read-checkout", Type: client.ToolTypeFunction,
+		Function: client.FunctionCall{Name: "read_file", Arguments: `{"path":"checkout.txt"}`},
+	})
+	if err != nil || read.IsError || !strings.Contains(read.Content, "leased worktree") {
+		t.Fatalf("checkout read = %#v, err = %v", read, err)
+	}
+	names := make(map[string]bool)
+	for _, skill := range runtime.skills.Skills() {
+		names[skill.Name] = true
+	}
+	if !names["portable-checkout-skill"] || !names["managed-state-skill"] || names["wrong-checkout-skill"] {
+		t.Fatalf("discovered skills = %#v", names)
+	}
+	if _, err := os.Stat(filepath.Join(stateRoot, ".q", loom.DirectoryName)); err != nil {
+		t.Fatalf("workspace Loom state was not created: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(checkoutRoot, ".q", loom.DirectoryName)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("checkout received durable Loom state: %v", err)
+	}
+	if status := runtime.lsp.Status(t.Context()); status.Workspace != checkoutRoot {
+		t.Fatalf("LSP workspace = %q, want %q", status.Workspace, checkoutRoot)
 	}
 }
 

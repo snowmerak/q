@@ -117,7 +117,7 @@ func (r *Registry) managedRoot(scope string) (string, Source, error) {
 	case "global":
 		return filepath.Join(r.home, ".q", "skills"), SourceUserQ, nil
 	case "workspace", "project", "session":
-		return filepath.Join(r.root, ".q", "skills"), SourceProjectQ, nil
+		return filepath.Join(r.stateRoot(), ".q", "skills"), SourceProjectQ, nil
 	default:
 		return "", "", errors.New("agent skills: scope must be global or workspace")
 	}

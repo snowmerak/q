@@ -57,27 +57,40 @@ type Issue struct {
 }
 
 type Registry struct {
-	root    string
-	home    string
-	global  bool
-	qDir    string
-	mu      sync.RWMutex
-	skills  map[string]Skill
-	byID    map[string]Skill
-	entries []Skill
-	issues  []Issue
+	root               string
+	workspaceStateRoot string
+	home               string
+	global             bool
+	qDir               string
+	mu                 sync.RWMutex
+	skills             map[string]Skill
+	byID               map[string]Skill
+	entries            []Skill
+	issues             []Issue
 }
 
 func Discover(root string) (*Registry, error) {
-	root, err := filepath.Abs(root)
+	return DiscoverWorkspace(root, root)
+}
+
+// DiscoverWorkspace reads portable project skills from checkoutRoot while
+// keeping q-managed project skills under workspaceStateRoot. The roots are
+// normally identical; Git worktrees use a temporary checkout with the
+// canonical workspace's durable .q state.
+func DiscoverWorkspace(checkoutRoot, workspaceStateRoot string) (*Registry, error) {
+	root, err := filepath.Abs(checkoutRoot)
 	if err != nil {
 		return nil, fmt.Errorf("agent skills: resolve workspace: %w", err)
+	}
+	stateRoot, err := filepath.Abs(workspaceStateRoot)
+	if err != nil {
+		return nil, fmt.Errorf("agent skills: resolve workspace state: %w", err)
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return nil, fmt.Errorf("agent skills: resolve user home: %w", err)
 	}
-	r := &Registry{root: root, home: home}
+	r := &Registry{root: root, workspaceStateRoot: stateRoot, home: home}
 	if err := r.Reload(); err != nil {
 		return nil, err
 	}
@@ -96,7 +109,7 @@ func DiscoverGlobal(home, qDir string) (*Registry, error) {
 	if err != nil {
 		return nil, fmt.Errorf("agent skills: resolve q directory: %w", err)
 	}
-	r := &Registry{root: home, home: home, global: true, qDir: qDir}
+	r := &Registry{root: home, workspaceStateRoot: home, home: home, global: true, qDir: qDir}
 	if err := r.Reload(); err != nil {
 		return nil, err
 	}
@@ -132,7 +145,7 @@ func (r *Registry) Reload() error {
 			struct {
 				path   string
 				source Source
-			}{filepath.Join(r.root, ".q", "skills"), SourceProjectQ},
+			}{filepath.Join(r.stateRoot(), ".q", "skills"), SourceProjectQ},
 		)
 	}
 	skills := make(map[string]Skill)
@@ -183,6 +196,13 @@ func (r *Registry) Reload() error {
 	r.skills, r.byID, r.entries, r.issues = skills, byID, discovered, issues
 	r.mu.Unlock()
 	return nil
+}
+
+func (r *Registry) stateRoot() string {
+	if strings.TrimSpace(r.workspaceStateRoot) != "" {
+		return r.workspaceStateRoot
+	}
+	return r.root
 }
 
 // Entries returns every valid discovered skill, including lower-precedence

@@ -27,26 +27,36 @@ const (
 )
 
 type delegationDispatcher struct {
-	registry         *subagent.Registry
-	client           chatClient
-	tools            agentToolRuntime
-	value            config.Config
-	workingDirectory string
-	environment      string
-	runID            string
-	sink             subagent.RecordSink
-	capture          subagent.InvocationCaptureFunc
-	external         map[string]subagent.Invocation
-	store            *workspace.Store
-	apiMode          func(string) string
-	progress         subagent.ProgressFunc
-	trace            subagent.TraceFunc
+	registry    *subagent.Registry
+	client      chatClient
+	tools       agentToolRuntime
+	value       config.Config
+	workspace   executionWorkspace
+	environment string
+	runID       string
+	sink        subagent.RecordSink
+	capture     subagent.InvocationCaptureFunc
+	external    map[string]subagent.Invocation
+	store       *workspace.Store
+	apiMode     func(string) string
+	progress    subagent.ProgressFunc
+	trace       subagent.TraceFunc
 
 	mu       sync.Mutex
 	calls    int
 	models   []client.Model
 	modelErr error
 	loaded   bool
+}
+
+// executionWorkspace keeps session ownership, durable workspace state, and the
+// source checkout distinct. Ordinary sessions use one root for all three;
+// delegated Git work will retain the caller's session store, use the target
+// repository's state root, and expose its leased worktree as the checkout.
+type executionWorkspace struct {
+	sessionStore       *workspace.Store
+	workspaceStateRoot string
+	checkoutRoot       string
 }
 
 type delegationRuntime struct {
@@ -123,26 +133,43 @@ func (m model) configuredDelegationRuntime(base agentToolRuntime, root string) (
 }
 
 func (m model) configuredDelegationRuntimeFor(base agentToolRuntime, root, caller string, stack []string) (agentToolRuntime, error) {
+	return m.configuredDelegationRuntimeIn(base, m.executionWorkspace(root), caller, stack)
+}
+
+func (m model) executionWorkspace(checkoutRoot string) executionWorkspace {
+	stateRoot := checkoutRoot
+	if m.workspaceStore != nil {
+		stateRoot = m.workspaceStore.Root
+	}
+	if checkoutRoot == "" {
+		checkoutRoot = stateRoot
+	}
+	return executionWorkspace{
+		sessionStore: m.workspaceStore, workspaceStateRoot: stateRoot, checkoutRoot: checkoutRoot,
+	}
+}
+
+func (m model) configuredDelegationRuntimeIn(base agentToolRuntime, execution executionWorkspace, caller string, stack []string) (agentToolRuntime, error) {
 	if base == nil || m.client == nil {
 		return base, nil
 	}
-	registry, err := buildSubagentRegistry(m.customStore())
+	registry, err := buildSubagentRegistry(m.customStoreAt(execution.workspaceStateRoot))
 	if err != nil {
 		return nil, err
 	}
-	catalog := m.customTools()
+	catalog := customToolsFor(base)
 	if catalog == nil {
 		catalog = base
 	}
 	environment := fmt.Sprintf("%+v", base.Environment())
 	dispatcher := &delegationDispatcher{
 		registry: registry, client: m.client, tools: catalog, value: m.activeConfig(),
-		workingDirectory: root, environment: environment, runID: m.runID,
-		capture: configuredInvocationCapture(m.toolRuntime), external: configuredExternalDelegates(m.activeConfig(), root, registry),
+		workspace: execution, environment: environment, runID: m.runID,
+		capture: configuredInvocationCapture(base), external: configuredExternalDelegates(m.activeConfig(), execution.checkoutRoot, registry),
 		apiMode: m.activeModelAPIMode,
 	}
 	if m.runID != "" {
-		dispatcher.store = m.workspaceStore
+		dispatcher.store = execution.sessionStore
 		if dispatcher.store != nil {
 			count, err := countSavedDelegations(*dispatcher.store, m.runID, 0)
 			if err != nil {
@@ -345,7 +372,7 @@ func (d *delegationDispatcher) dispatch(
 	runtime := &delegationRuntime{base: d.tools, dispatcher: d, caller: input.SubagentName, stack: childStack}
 	result, err := (subagent.GeneralRunner{
 		Client: d.client, Tools: runtime, Spec: spec, Definition: definition,
-		WorkingDirectory: d.workingDirectory, Environment: d.environment, RunID: d.runID,
+		WorkingDirectory: d.workspace.checkoutRoot, Environment: d.environment, RunID: d.runID,
 		Sink: d.sink, Progress: d.progress, Trace: d.trace,
 	}).Run(ctx, input.Prompt)
 	if err != nil {
@@ -618,7 +645,7 @@ func (d *delegationDispatcher) dispatchStored(ctx context.Context, caller string
 	}
 	result, runErr := (subagent.GeneralRunner{
 		Client: d.client, Tools: runtime, Spec: spec, Definition: definition,
-		WorkingDirectory: d.workingDirectory, Environment: d.environment, RunID: d.runID,
+		WorkingDirectory: d.workspace.checkoutRoot, Environment: d.environment, RunID: d.runID,
 		ParentID: parentTaskID, TaskID: state.TaskID, Sink: d.sink, Progress: d.progress, Trace: d.trace, Resume: resume, Checkpoint: checkpoint,
 	}).Run(ctx, input.Prompt)
 	if runErr != nil {

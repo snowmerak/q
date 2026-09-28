@@ -146,6 +146,7 @@ type startupRequest struct {
 	memoryCtx      context.Context
 	store          config.Store
 	workspaceStore workspace.Store
+	checkoutRoot   string
 	loaded         config.Config
 	configErr      error
 	manager        *providerhost.Manager
@@ -162,6 +163,10 @@ func (request startupRequest) run(modelReady chan<- struct{}) runtimeInitialized
 	}
 
 	loaded := request.loaded
+	checkoutRoot := strings.TrimSpace(request.checkoutRoot)
+	if checkoutRoot == "" {
+		checkoutRoot = request.workspaceStore.Root
+	}
 	var startupErr error
 	if !request.providerReady {
 		loaded, startupErr = initializeManagedProvider(request.ctx, request.store, request.manager, loaded, request.configErr)
@@ -218,8 +223,11 @@ func (request startupRequest) run(modelReady chan<- struct{}) runtimeInitialized
 		if semanticArchive != nil {
 			toolArchive = semanticArchive
 		}
-		tools, toolsErr = qtools.NewRuntimeWithArchiveAndLoomOptionsAndLSPAndLibrary(
-			request.ctx, request.workspaceStore.Root, toolArchive, loaded.LoomStoreOptions(nil), loaded.LSP, workspaceLSP, libraryClient,
+		tools, toolsErr = qtools.NewRuntimeWithRoots(
+			request.ctx, qtools.RuntimeRoots{
+				WorkspaceStateRoot: request.workspaceStore.Root,
+				CheckoutRoot:       checkoutRoot,
+			}, toolArchive, loaded.LoomStoreOptions(nil), loaded.LSP, workspaceLSP, libraryClient,
 			qtools.WithSystemOneSkillRanking(systemoneconfig.Store{Dir: request.store.Dir}),
 		)
 		result.tools = tools
@@ -228,7 +236,7 @@ func (request startupRequest) run(modelReady chan<- struct{}) runtimeInitialized
 			mcpValue, mcpErr := (mcpconfig.Store{Dir: request.store.Dir}).LoadOrDefault()
 			result.mcpErr = mcpErr
 			if mcpErr == nil {
-				result.mcpStatuses = tools.ConfigureExternal(request.ctx, request.workspaceStore.Root, mcpValue)
+				result.mcpStatuses = tools.ConfigureExternal(request.ctx, checkoutRoot, mcpValue)
 			}
 		}
 	}

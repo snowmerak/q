@@ -8,6 +8,7 @@ import (
 
 	"github.com/snowmerak/q/client"
 	"github.com/snowmerak/q/config"
+	"github.com/snowmerak/q/mcpconfig"
 	"github.com/snowmerak/q/subagent"
 	"github.com/snowmerak/q/workspace"
 )
@@ -112,6 +113,59 @@ func TestRootDelegationListContainsBuiltinsAndCanonicalProfiles(t *testing.T) {
 		if strings.HasPrefix(info.Name, "external/") {
 			t.Fatalf("kind leaked into subagent ID = %#v", info)
 		}
+	}
+}
+
+func TestDelegationExecutionWorkspaceSeparatesSessionStateAndCheckout(t *testing.T) {
+	m := newModel(t.Context(), config.Store{Dir: t.TempDir()}, nil)
+	m.config = config.Default()
+	m.config.Provider.Model = "test-model"
+	m.client = &fakeClient{models: []client.Model{{ID: "test-model"}}}
+	m.toolRuntime = &fakeAgentTools{}
+	targetTools := &fakeAgentTools{}
+	sessionStore := workspace.Store{Root: t.TempDir()}
+	stateRoot := t.TempDir()
+	checkoutRoot := t.TempDir()
+	m.workspaceStore = &sessionStore
+	if err := m.customStoreAt(stateRoot).Save(subagent.Profile{
+		Version: 1, Name: "state-reader", Role: config.AgentRoleResearch,
+		SystemPrompt: "Read the target repository.", Tools: []string{}, Delegates: []string{},
+	}, "workspace", nil); err != nil {
+		t.Fatal(err)
+	}
+
+	targetRuntime, err := configuredAgentToolRuntime(targetTools, mcpconfig.RoleDefault, m.activeConfig(), checkoutRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime, err := m.configuredDelegationRuntimeIn(targetRuntime, executionWorkspace{
+		sessionStore: &sessionStore, workspaceStateRoot: stateRoot, checkoutRoot: checkoutRoot,
+	}, "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	delegation, ok := runtime.(*delegationRuntime)
+	if !ok {
+		t.Fatalf("runtime = %T", runtime)
+	}
+	got := delegation.dispatcher.workspace
+	if got.sessionStore != &sessionStore || got.workspaceStateRoot != stateRoot || got.checkoutRoot != checkoutRoot {
+		t.Fatalf("execution workspace = %#v", got)
+	}
+	if delegation.dispatcher.capture == nil {
+		t.Fatal("target runtime lost Loom capture through tool scopes")
+	}
+	if _, err := delegation.dispatcher.tools.Call(t.Context(), client.ToolCall{Function: client.FunctionCall{Name: "write_file"}}); err != nil {
+		t.Fatal(err)
+	}
+	if len(targetTools.calls) != 1 || len(m.toolRuntime.(*fakeAgentTools).calls) != 0 {
+		t.Fatalf("target calls = %d, session calls = %d", len(targetTools.calls), len(m.toolRuntime.(*fakeAgentTools).calls))
+	}
+	result, err := runtime.Call(t.Context(), client.ToolCall{Function: client.FunctionCall{
+		Name: subagent.DelegateListToolName, Arguments: `{}`,
+	}})
+	if err != nil || result.IsError || !strings.Contains(result.Content, "workspace/state-reader") {
+		t.Fatalf("state-root profile list = %#v, err = %v", result, err)
 	}
 }
 

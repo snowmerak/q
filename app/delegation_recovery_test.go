@@ -30,7 +30,8 @@ func recoveryDispatcher(t *testing.T, definitions []subagent.AgentDefinition, re
 	value.Provider.Model = "plan-model"
 	configured := &planningClient{responses: responses}
 	tools := &fakeAgentTools{}
-	return &delegationDispatcher{registry: registry, client: configured, tools: tools, value: value, workingDirectory: t.TempDir(), runID: "run-test"}, configured, tools
+	root := t.TempDir()
+	return &delegationDispatcher{registry: registry, client: configured, tools: tools, value: value, workspace: executionWorkspace{workspaceStateRoot: root, checkoutRoot: root}, runID: "run-test"}, configured, tools
 }
 
 func recoveryParent(t *testing.T, agent, prompt string) (workspace.Store, client.ToolCall) {

@@ -22,10 +22,14 @@ import (
 // Custom profiles select from the normal session catalog, including its connected
 // MCP tools. Their model role does not apply a built-in runner's tool filter.
 func (m model) customTools() agentToolRuntime {
-	if catalog, ok := m.toolRuntime.(interface{ CustomTools() []client.Tool }); ok {
-		return customCatalogRuntime{agentToolRuntime: m.toolRuntime, catalog: catalog}
+	return customToolsFor(m.toolRuntime)
+}
+
+func customToolsFor(base agentToolRuntime) agentToolRuntime {
+	if catalog, ok := base.(interface{ CustomTools() []client.Tool }); ok {
+		return customCatalogRuntime{agentToolRuntime: base, catalog: catalog}
 	}
-	return ScopeTools(m.toolRuntime, mcpconfig.RoleDefault)
+	return ScopeTools(base, mcpconfig.RoleDefault)
 }
 
 type customCatalogRuntime struct {
@@ -34,6 +38,8 @@ type customCatalogRuntime struct {
 }
 
 func (r customCatalogRuntime) Tools() []client.Tool { return r.catalog.CustomTools() }
+
+func (r customCatalogRuntime) UnwrapToolRuntime() agentToolRuntime { return r.agentToolRuntime }
 
 func (r customCatalogRuntime) SearchSkillHints(ctx context.Context, query string, limit int) (qtools.SkillHintSearchResult, error) {
 	if !toolAvailable(r, "search_skills") {
@@ -47,9 +53,17 @@ func (r customCatalogRuntime) SearchSkillHints(ctx context.Context, query string
 }
 
 func (m model) customStore() subagent.ProfileStore {
-	s := subagent.ProfileStore{Global: filepath.Join(filepath.Dir(m.store.Path()), "subagents")}
+	root := ""
 	if m.workspaceStore != nil {
-		s.Workspace = filepath.Join(m.workspaceStore.Root, ".q", "subagents")
+		root = m.workspaceStore.Root
+	}
+	return m.customStoreAt(root)
+}
+
+func (m model) customStoreAt(workspaceStateRoot string) subagent.ProfileStore {
+	s := subagent.ProfileStore{Global: filepath.Join(filepath.Dir(m.store.Path()), "subagents")}
+	if workspaceStateRoot != "" {
+		s.Workspace = filepath.Join(workspaceStateRoot, ".q", "subagents")
 	}
 	return s
 }
