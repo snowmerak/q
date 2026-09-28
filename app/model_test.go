@@ -1314,15 +1314,36 @@ func TestEmbeddingModelAssignmentIndexesExistingGlobalSkills(t *testing.T) {
 	if command == nil {
 		t.Fatal("embedding model assignment did not start indexing")
 	}
+	if m.status != "Indexing embeddings…" {
+		t.Fatalf("indexing status = %q", m.status)
+	}
 	message, ok := command().(archiveEmbeddingConfiguredMsg)
 	if !ok || message.err != nil || message.globalSkills != 1 {
 		t.Fatalf("embedding configuration result = %#v", message)
+	}
+	updated, _ = m.Update(message)
+	m = updated.(model)
+	if !strings.Contains(m.status, "Embedded 0 workspace record(s) and 1 global skill(s)") {
+		t.Fatalf("completed indexing status = %q", m.status)
 	}
 	if configured.Model != "embed-model" || configured.Dimensions != 3 || !applied {
 		t.Fatalf("configured = %#v, applied = %v", configured, applied)
 	}
 	if len(embedder.embeddings) != 1 || len(embedder.embeddings[0]) != 1 {
 		t.Fatalf("embedding calls = %#v", embedder.embeddings)
+	}
+}
+
+func TestEmbeddingModelAssignmentReportsUpToDateIndexes(t *testing.T) {
+	value := config.Default()
+	value.Embedding = config.EmbeddingConfig{Model: "embed-model", Dimensions: 3}
+	m := newModel(context.Background(), config.Store{Dir: t.TempDir()}, nil)
+	m.config = value
+	m.status = "embedding model settings saved"
+	updated, _ := m.Update(archiveEmbeddingConfiguredMsg{})
+	m = updated.(model)
+	if m.status != "Embedding index up to date · 0 new workspace records · 0 new global skills" {
+		t.Fatalf("up-to-date indexing status = %q", m.status)
 	}
 }
 

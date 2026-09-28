@@ -806,11 +806,15 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	case archiveEmbeddingConfiguredMsg:
 		if message.err != nil {
 			m.status = "Embedding: " + message.err.Error()
+		} else if m.config.Embedding.Model == "" {
+			m.status = "Embedding disabled"
 		} else if message.stats.Embedded > 0 || message.globalSkills > 0 {
 			m.status = fmt.Sprintf(
 				"Embedded %d workspace record(s) and %d global skill(s)",
 				message.stats.Embedded, message.globalSkills,
 			)
+		} else {
+			m.status = "Embedding index up to date · 0 new workspace records · 0 new global skills"
 		}
 		return m, nil
 	case modelTargetConfiguredMsg:
@@ -827,6 +831,11 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		m.modelFilter.Blur()
 		m.embeddingDimensions.Blur()
 		if message.target == embeddingModelTarget {
+			if message.config.Embedding.Model == "" {
+				m.status = "Disabling embeddings…"
+			} else {
+				m.status = "Indexing embeddings…"
+			}
 			return m, m.configureEmbeddingRuntime(message.config, m.client)
 		}
 		return m, nil
