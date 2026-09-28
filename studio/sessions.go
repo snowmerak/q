@@ -29,8 +29,8 @@ type sessionCompactor interface {
 }
 
 type sessionsService struct {
-	runner    sessionRunner
-	admission chan struct{}
+	runner sessionRunner
+	runs   *sessionRunService
 }
 
 type sessionSummary struct {
@@ -83,8 +83,15 @@ type sessionRunRequest struct {
 	Content       string `json:"content"`
 }
 
-func newSessionsService(runner sessionRunner) *sessionsService {
-	return &sessionsService{runner: runner, admission: make(chan struct{}, 1)}
+func newSessionsService(parent context.Context, runner sessionRunner) *sessionsService {
+	return &sessionsService{runner: runner, runs: newSessionRunService(parent, runner)}
+}
+
+func (service *sessionsService) Close() error {
+	if service == nil {
+		return nil
+	}
+	return service.runs.Close()
 }
 
 func (service *sessionsService) serveDirectoryListing(writer http.ResponseWriter, request *http.Request) {
@@ -201,6 +208,10 @@ func (service *sessionsService) serveDelete(writer http.ResponseWriter, request 
 		writeSessionError(writer, err)
 		return
 	}
+	if err := service.runs.forget(root, request.PathValue("session")); err != nil {
+		writeAPIError(writer, http.StatusInternalServerError, err)
+		return
+	}
 	writer.WriteHeader(http.StatusNoContent)
 }
 
@@ -223,6 +234,14 @@ func (service *sessionsService) serveClear(writer http.ResponseWriter, request *
 	store, err := (workspace.Store{Root: root}).ForSession(request.PathValue("session"))
 	if err != nil {
 		writeAPIError(writer, http.StatusBadRequest, err)
+		return
+	}
+	if err := clearStudioRunArtifacts(store); err != nil {
+		writeAPIError(writer, http.StatusInternalServerError, err)
+		return
+	}
+	if err := service.runs.forget(root, store.SessionID); err != nil {
+		writeAPIError(writer, http.StatusInternalServerError, err)
 		return
 	}
 	writeJSON(writer, http.StatusOK, detailFromSession(root, store, value))
@@ -313,59 +332,17 @@ func (service *sessionsService) serveMessage(writer http.ResponseWriter, request
 		writeAPIError(writer, http.StatusBadRequest, err)
 		return
 	}
-	store, err := (workspace.Store{Root: root}).ForSession(request.PathValue("session"))
+	run, err := service.runs.start(root, request.PathValue("session"), input.Content)
 	if err != nil {
-		writeAPIError(writer, http.StatusBadRequest, err)
-		return
-	}
-
-	select {
-	case service.admission <- struct{}{}:
-		defer func() { <-service.admission }()
-	default:
-		writeAPIError(writer, http.StatusTooManyRequests, errors.New("another Studio turn is already running"))
-		return
-	}
-
-	flusher, canFlush := writer.(http.Flusher)
-	started := false
-	terminalWritten := false
-	emit := func(event app.SessionEvent) error {
-		if !started {
-			if event.Type != "session" {
-				return errors.New("session turn did not begin with a session event")
-			}
-			writer.Header().Set("Cache-Control", "no-store")
-			writer.Header().Set("Content-Type", "application/x-ndjson")
-			writer.Header().Set("X-Q-Session-ID", event.SessionID)
-			writer.WriteHeader(http.StatusOK)
-			started = true
+		if strings.Contains(err.Error(), "already has a running turn") {
+			writeAPIError(writer, http.StatusConflict, err)
+		} else {
+			writeSessionError(writer, err)
 		}
-		if err := json.NewEncoder(writer).Encode(event); err != nil {
-			return err
-		}
-		terminalWritten = event.Type == "result" || event.Type == "cancelled" || event.Type == "error"
-		if canFlush {
-			flusher.Flush()
-		}
-		return nil
-	}
-
-	runErr := service.runner.Run(request.Context(), store, store.SessionID, input.Content, emit)
-	if runErr == nil || terminalWritten {
 		return
 	}
-	if !started {
-		writeSessionError(writer, runErr)
-		return
-	}
-	if request.Context().Err() != nil {
-		return
-	}
-	_ = json.NewEncoder(writer).Encode(app.SessionEvent{Type: "error", Detail: runErr.Error()})
-	if canFlush {
-		flusher.Flush()
-	}
+	writer.Header().Set("Cache-Control", "no-store")
+	writeJSON(writer, http.StatusAccepted, run.snapshotCopy())
 }
 
 func summarizeSession(entry workspace.SessionEntry) sessionSummary {

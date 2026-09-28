@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -97,11 +98,37 @@ func TestSessionsAPIListsLoadsCreatesAndStreams(t *testing.T) {
 		http.MethodPost, "/api/v1/sessions/"+store.SessionID+"/messages",
 		bytes.NewBufferString(`{"workspace_root":`+quotedJSON(root)+`,"content":"continue"}`),
 	))
-	if response.Code != http.StatusOK || response.Header().Get("Content-Type") != "application/x-ndjson" {
+	if response.Code != http.StatusAccepted || response.Header().Get("Content-Type") != "application/json" {
 		t.Fatalf("run session = %d %s", response.Code, response.Body.String())
 	}
-	if !strings.Contains(response.Body.String(), `"type":"stream"`) || !strings.Contains(response.Body.String(), `"type":"result"`) {
-		t.Fatalf("stream = %s", response.Body.String())
+	var started studioRunSnapshot
+	if err := json.Unmarshal(response.Body.Bytes(), &started); err != nil || started.ID == "" {
+		t.Fatalf("run snapshot = %#v, %v", started, err)
+	}
+	var eventBody strings.Builder
+	var cursor int64
+	for range 10 {
+		events := httptest.NewRecorder()
+		handler.ServeHTTP(events, httptest.NewRequest(
+			http.MethodGet,
+			fmt.Sprintf("/api/v1/sessions/%s/runs/%s/events?workspace_root=%s&after=%d&wait_ms=5000", store.SessionID, started.ID, query, cursor),
+			nil,
+		))
+		if events.Code != http.StatusOK {
+			t.Fatalf("run events = %d %s", events.Code, events.Body.String())
+		}
+		var page studioRunPage
+		if err := json.Unmarshal(events.Body.Bytes(), &page); err != nil {
+			t.Fatal(err)
+		}
+		eventBody.Write(events.Body.Bytes())
+		cursor = page.NextCursor
+		if terminalRunStatus(page.Run.Status) {
+			break
+		}
+	}
+	if !strings.Contains(eventBody.String(), `"type":"stream"`) || !strings.Contains(eventBody.String(), `"type":"result"`) {
+		t.Fatalf("run events = %s", eventBody.String())
 	}
 }
 
@@ -200,6 +227,50 @@ func TestWorkspaceLearningAPI(t *testing.T) {
 	value, err := (workspace.Store{Root: root}).LoadLearningConfig()
 	if err != nil || !value.Disabled {
 		t.Fatalf("stored learning = %#v, %v", value, err)
+	}
+}
+
+func TestSessionDelegationTreeIncludesChildStateAndTranscript(t *testing.T) {
+	root := t.TempDir()
+	store, lock, err := workspace.CreateSession(root, "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	bookmark := workspace.DelegationBookmark{
+		InvocationID: "child-one", CallIndex: 1, ToolIndex: 0, CallID: "delegate-1",
+		Agent: "builtin/research", Prompt: "inspect the implementation", RunID: "child-run",
+	}
+	if _, err := store.AddDelegation(bookmark); err != nil {
+		t.Fatal(err)
+	}
+	child, err := store.ChildStore(bookmark.InvocationID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := child.SaveDelegationState(workspace.DelegationState{
+		Agent: bookmark.Agent, Prompt: bookmark.Prompt, RunID: bookmark.RunID, Status: "running",
+		RunningCall: &workspace.DelegationToolCall{CallID: "read-1", Name: "read_file"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	if err := child.Save(workspace.Session{RunID: bookmark.RunID, UpdatedAt: &now, Transcript: []client.Message{{Role: client.RoleAssistant, Content: "Inspecting files"}}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := lock.Close(); err != nil {
+		t.Fatal(err)
+	}
+	handler, err := newHandler(config.Store{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, httptest.NewRequest(
+		http.MethodGet, "/api/v1/sessions/"+store.SessionID+"/delegations?workspace_root="+url.QueryEscape(root), nil,
+	))
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"agent":"builtin/research"`) ||
+		!strings.Contains(response.Body.String(), `"name":"read_file"`) || !strings.Contains(response.Body.String(), "Inspecting files") {
+		t.Fatalf("delegation tree = %d %s", response.Code, response.Body.String())
 	}
 }
 

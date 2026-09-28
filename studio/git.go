@@ -43,6 +43,7 @@ type studioCommitSession struct {
 	id         string
 	root       string
 	headless   *commitagent.HeadlessSession
+	cancel     context.CancelFunc
 	createdAt  time.Time
 	updatedAt  time.Time
 	progressMu sync.Mutex
@@ -177,7 +178,7 @@ func (service *commitService) serveCommitCollection(writer http.ResponseWriter, 
 		writeAPIError(writer, http.StatusInternalServerError, err)
 		return
 	}
-	entry.id, entry.root, entry.headless = id, headless.Root(), headless
+	entry.id, entry.root, entry.headless, entry.cancel = id, headless.Root(), headless, cancel
 	if entry.root == "" {
 		entry.root = root
 	}
@@ -294,6 +295,7 @@ func (service *commitService) remove(id string) {
 	delete(service.sessions, id)
 	service.mu.Unlock()
 	if entry != nil && entry.headless != nil {
+		entry.cancel()
 		_ = entry.headless.Close()
 	}
 }
@@ -310,6 +312,7 @@ func (service *commitService) reapExpired() {
 	}
 	service.mu.Unlock()
 	for _, entry := range expired {
+		entry.cancel()
 		_ = entry.headless.Close()
 	}
 }
@@ -324,6 +327,7 @@ func (service *commitService) Close() error {
 	service.mu.Unlock()
 	var result error
 	for _, entry := range entries {
+		entry.cancel()
 		result = errors.Join(result, entry.headless.Close())
 	}
 	return result

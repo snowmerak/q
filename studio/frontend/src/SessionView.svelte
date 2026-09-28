@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { ArrowUp, Bot, BrainCircuit, ChevronUp, Eraser, Folder, FolderOpen, GitBranch, HardDrive, Home, Minimize2, Plus, RefreshCw, Square, Terminal, Trash2, User, Wrench, X } from '@lucide/svelte';
+  import { ArrowUp, Bot, BrainCircuit, ChevronUp, Eraser, Folder, FolderOpen, GitBranch, HardDrive, Home, Minimize2, Pause, Play, Plus, RefreshCw, Square, Terminal, Trash2, User, Wrench, X } from '@lucide/svelte';
   import { onMount, tick } from 'svelte';
   import Markdown from './Markdown.svelte';
 
@@ -25,6 +25,7 @@
   };
   type RunEvent = {
     type: string;
+    run_id?: string;
     session_id?: string;
     kind?: string;
     start?: boolean;
@@ -33,12 +34,35 @@
     name?: string;
     role?: string;
     agent?: string;
+    task_id?: string;
+    parent_id?: string;
     action?: string;
     is_error?: boolean;
     question?: string;
     context?: string;
     outcome?: string;
+    call_id?: string;
   };
+  type RunQuestion = { call_id: string; question: string; context?: string; choices?: { id: string; label: string; description?: string }[] };
+  type RunSnapshot = {
+    id: string;
+    session_id: string;
+    status: string;
+    outcome?: string;
+    error?: string;
+    pending_question?: RunQuestion;
+    cursor: number;
+  };
+  type RunEventEnvelope = { cursor: number; at: string; event: RunEvent };
+  type RunPage = { run: RunSnapshot; events: RunEventEnvelope[]; next_cursor: number };
+  type DelegationNode = {
+    bookmark: { invocation_id: string; agent: string; prompt: string; task_id?: string; parent_id?: string };
+    state?: { status: string; task_id?: string; parent_id?: string; model?: string; running_call?: { name: string; call_id: string }; unknown_tools?: { name: string; call_id: string }[] };
+    transcript?: Message[];
+    children?: DelegationNode[];
+    issue?: string;
+  };
+  type FlatDelegation = DelegationNode & { depth: number };
   type DirectoryEntry = { name: string; path: string };
   type DirectoryListing = {
     home: string;
@@ -63,7 +87,12 @@
   let events: RunEvent[] = [];
   let responseDraft = '';
   let thinkingDraft = '';
-  let abortController: AbortController | null = null;
+  let activeRun: RunSnapshot | null = null;
+  let runCursor = 0;
+  let pollGeneration = 0;
+  let questionAnswer = '';
+  let delegations: FlatDelegation[] = [];
+  let delegationRefresh: ReturnType<typeof setTimeout> | null = null;
   let transcriptElement: HTMLElement | null = null;
   let directoryPickerOpen = false;
   let directoryLoading = false;
@@ -106,8 +135,12 @@
         await selectSession(target, false);
         window.history.replaceState({}, '', `/sessions/${encodeURIComponent(target)}`);
       } else {
+        pollGeneration += 1;
         selected = null;
         messages = [];
+        activeRun = null;
+        sending = false;
+        delegations = [];
         window.history.replaceState({}, '', '/sessions');
       }
     } catch (cause) {
@@ -164,6 +197,7 @@
     const root = workspaceRoot || workspaceInput.trim();
     if (!root) return;
     sessionLoading = true;
+    pollGeneration += 1;
     error = '';
     try {
       const response = await fetch('/api/v1/sessions', {
@@ -176,6 +210,10 @@
       workspaceInput = detail.workspace_root;
       selected = detail;
       messages = detail.transcript;
+      activeRun = null;
+      sending = false;
+      events = [];
+      delegations = [];
       sessions = [detail.session, ...sessions.filter((session) => session.session_id !== detail.session.session_id)];
       window.history.pushState({}, '', `/sessions/${encodeURIComponent(detail.session.session_id)}`);
     } catch (cause) {
@@ -201,6 +239,9 @@
       events = [];
       responseDraft = '';
       thinkingDraft = '';
+      activeRun = null;
+      runCursor = 0;
+      delegations = [];
       runStatus = 'Conversation cleared';
       sessions = [selected.session, ...sessions.filter((session) => session.session_id !== selected?.session.session_id)];
     } catch (cause) {
@@ -242,9 +283,13 @@
       if (!response.ok) throw new Error(await apiError(response));
       sessions = sessions.filter((session) => session.session_id !== sessionID);
       if (selected?.session.session_id === sessionID) {
+        pollGeneration += 1;
         selected = null;
         messages = [];
         events = [];
+        activeRun = null;
+        sending = false;
+        delegations = [];
         const next = sessions[0]?.session_id;
         if (next) {
           await selectSession(next, false);
@@ -294,7 +339,8 @@
   }
 
   async function selectSession(sessionID: string, push = true) {
-    if (!workspaceRoot || sending) return;
+    if (!workspaceRoot) return;
+    pollGeneration += 1;
     sessionLoading = true;
     error = '';
     try {
@@ -306,7 +352,11 @@
       runStatus = '';
       responseDraft = '';
       thinkingDraft = '';
+      activeRun = null;
+      runCursor = 0;
+      questionAnswer = '';
       if (push) window.history.pushState({}, '', `/sessions/${encodeURIComponent(sessionID)}`);
+      await Promise.all([reconnectLatestRun(sessionID), loadDelegations(sessionID)]);
       await scrollToBottom();
     } catch (cause) {
       error = cause instanceof Error ? cause.message : 'Could not load the session';
@@ -317,7 +367,15 @@
 
   async function sendPrompt() {
     const content = prompt.trim();
-    if (!selected || !workspaceRoot || !content || sending) return;
+    if (!selected || !workspaceRoot || !content) return;
+    if (sending && activeRun) {
+      await commandRun('guidance', { content });
+      if (!error) {
+        prompt = '';
+        runStatus = 'Guidance queued…';
+      }
+      return;
+    }
     prompt = '';
     sending = true;
     error = '';
@@ -326,48 +384,94 @@
     responseDraft = '';
     thinkingDraft = '';
     messages = [...messages, { role: 'user', content }];
-    abortController = new AbortController();
     await scrollToBottom();
     try {
       const response = await fetch(`/api/v1/sessions/${encodeURIComponent(selected.session.session_id)}/messages`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json', Accept: 'application/x-ndjson' },
-        body: JSON.stringify({ workspace_root: workspaceRoot, content }), signal: abortController.signal
+        method: 'POST', headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+        body: JSON.stringify({ workspace_root: workspaceRoot, content })
       });
       if (!response.ok) throw new Error(await apiError(response));
-      if (!response.body) throw new Error('Studio returned an empty stream');
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = '';
-      while (true) {
-        const { done, value } = await reader.read();
-        buffer += decoder.decode(value || new Uint8Array(), { stream: !done });
-        const lines = buffer.split('\n');
-        buffer = done ? '' : lines.pop() || '';
-        for (const line of lines) {
-          if (line.trim()) handleRunEvent(JSON.parse(line) as RunEvent);
-        }
-        if (done) {
-          if (buffer.trim()) handleRunEvent(JSON.parse(buffer) as RunEvent);
-          break;
-        }
-      }
-      await reloadSelected();
-      await refreshSessionListOnly();
+      activeRun = (await response.json()) as RunSnapshot;
+      runCursor = 0;
+      const generation = ++pollGeneration;
+      void pollRun(activeRun.id, generation);
     } catch (cause) {
-      if (cause instanceof DOMException && cause.name === 'AbortError') {
-        runStatus = 'Turn stopped';
-      } else {
-        error = cause instanceof Error ? cause.message : 'The turn failed';
-        runStatus = 'Turn failed';
-      }
+      error = cause instanceof Error ? cause.message : 'The turn failed';
+      runStatus = 'Turn failed';
       await reloadSelected();
-    } finally {
       sending = false;
-      abortController = null;
-      responseDraft = '';
-      thinkingDraft = '';
       await scrollToBottom();
     }
+  }
+
+  function terminalRun(status: string) {
+    return ['completed', 'cancelled', 'failed', 'interrupted', 'redirected'].includes(status);
+  }
+
+  async function reconnectLatestRun(sessionID: string) {
+    if (!workspaceRoot) return;
+    const response = await fetch(`/api/v1/sessions/${encodeURIComponent(sessionID)}/runs/latest?workspace_root=${encodeURIComponent(workspaceRoot)}`);
+    if (response.status === 404) { sending = false; return; }
+    if (!response.ok) throw new Error(await apiError(response));
+    activeRun = (await response.json()) as RunSnapshot;
+    sending = !terminalRun(activeRun.status);
+    runStatus = runStatusLabel(activeRun);
+    runCursor = 0;
+    const generation = ++pollGeneration;
+    void pollRun(activeRun.id, generation);
+  }
+
+  async function pollRun(runID: string, generation: number) {
+    if (!selected || !workspaceRoot) return;
+    const sessionID = selected.session.session_id;
+    let currentRunID = runID;
+    while (generation === pollGeneration && selected?.session.session_id === sessionID) {
+      try {
+        const response = await fetch(`/api/v1/sessions/${encodeURIComponent(sessionID)}/runs/${encodeURIComponent(currentRunID)}/events?workspace_root=${encodeURIComponent(workspaceRoot)}&after=${runCursor}&wait_ms=25000`);
+        if (!response.ok) throw new Error(await apiError(response));
+        const page = (await response.json()) as RunPage;
+        activeRun = page.run;
+        for (const record of page.events) {
+          handleRunEvent(record.event);
+          runCursor = record.cursor;
+          if (record.event.type === 'redirect' && record.event.run_id) {
+            currentRunID = record.event.run_id;
+            runCursor = 0;
+            activeRun = null;
+            events = [];
+            responseDraft = '';
+            thinkingDraft = '';
+            break;
+          }
+        }
+        if (currentRunID !== page.run.id) continue;
+        sending = !terminalRun(page.run.status);
+        runStatus = runStatusLabel(page.run);
+        if (terminalRun(page.run.status)) {
+          responseDraft = '';
+          thinkingDraft = '';
+          await Promise.all([reloadSelected(), refreshSessionListOnly(), loadDelegations(sessionID)]);
+          break;
+        }
+      } catch (cause) {
+        if (generation !== pollGeneration) return;
+        error = cause instanceof Error ? cause.message : 'Could not reconnect to the run';
+        runStatus = 'Connection lost · retrying…';
+        await new Promise((resolve) => setTimeout(resolve, 1000));
+      }
+    }
+  }
+
+  function runStatusLabel(run: RunSnapshot) {
+    if (run.status === 'waiting') return 'Waiting for your answer';
+    if (run.status === 'paused') return 'Paused';
+    if (run.status === 'running' || run.status === 'queued') return 'Running';
+    if (run.status === 'redirecting') return 'Applying guidance…';
+    if (run.status === 'completed') return run.outcome === 'succeeded' ? 'Completed' : run.outcome || 'Completed';
+    if (run.status === 'cancelled') return 'Turn stopped';
+    if (run.status === 'interrupted') return 'Interrupted · send a message to recover';
+    if (run.status === 'failed') return run.error || 'Turn failed';
+    return run.status;
   }
 
   function handleRunEvent(event: RunEvent) {
@@ -379,10 +483,12 @@
     } else if (event.type === 'activity') {
       events = [...events, event];
       runStatus = [event.agent, event.action, event.detail].filter(Boolean).join(' · ');
+      scheduleDelegationRefresh();
     } else if (event.type === 'tool_call' || event.type === 'trace' || event.type === 'question') {
       events = [...events, event];
       if (event.type === 'tool_call') runStatus = `Running ${event.name || 'tool'}…`;
-      if (event.type === 'question') runStatus = 'The model requested input that Studio cannot answer yet';
+      if (event.type === 'question') runStatus = 'Waiting for your answer';
+      if (event.type === 'trace') scheduleDelegationRefresh();
     } else if (event.type === 'message' && event.role === 'tool') {
       events = [...events, event];
     } else if (event.type === 'result') {
@@ -402,6 +508,23 @@
     messages = selected.transcript;
   }
 
+  function flattenDelegations(nodes: DelegationNode[], depth = 0): FlatDelegation[] {
+    return nodes.flatMap((node) => [{ ...node, depth }, ...flattenDelegations(node.children || [], depth + 1)]);
+  }
+
+  async function loadDelegations(sessionID = selected?.session.session_id || '') {
+    if (!workspaceRoot || !sessionID) return;
+    const response = await fetch(`/api/v1/sessions/${encodeURIComponent(sessionID)}/delegations?workspace_root=${encodeURIComponent(workspaceRoot)}`);
+    if (!response.ok) return;
+    const result = (await response.json()) as { nodes: DelegationNode[] };
+    delegations = flattenDelegations(result.nodes);
+  }
+
+  function scheduleDelegationRefresh() {
+    if (delegationRefresh) clearTimeout(delegationRefresh);
+    delegationRefresh = setTimeout(() => { void loadDelegations(); }, 500);
+  }
+
   async function refreshSessionListOnly() {
     if (!workspaceRoot) return;
     const response = await fetch(`/api/v1/sessions?workspace_root=${encodeURIComponent(workspaceRoot)}`);
@@ -409,8 +532,33 @@
     sessions = ((await response.json()) as { sessions: SessionSummary[] }).sessions;
   }
 
+  async function commandRun(action: string, extra: Record<string, string> = {}) {
+    if (!selected || !workspaceRoot || !activeRun) return;
+    error = '';
+    try {
+      const response = await fetch(`/api/v1/sessions/${encodeURIComponent(selected.session.session_id)}/runs/${encodeURIComponent(activeRun.id)}/commands`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ workspace_root: workspaceRoot, action, ...extra })
+      });
+      if (!response.ok) throw new Error(await apiError(response));
+      activeRun = (await response.json()) as RunSnapshot;
+      sending = !terminalRun(activeRun.status);
+      runStatus = runStatusLabel(activeRun);
+    } catch (cause) {
+      error = cause instanceof Error ? cause.message : 'Could not control this turn';
+    }
+  }
+
+  async function answerQuestion(answer = questionAnswer) {
+    if (!activeRun?.pending_question) return;
+    const value = answer.trim();
+    if (!value) return;
+    await commandRun('answer', { call_id: activeRun.pending_question.call_id, answer: value });
+    if (!error) questionAnswer = '';
+  }
+
   function stopTurn() {
-    abortController?.abort();
+    void commandRun('cancel');
   }
 
   function submitFromKeyboard(event: KeyboardEvent) {
@@ -464,8 +612,11 @@
       const sessionID = sessionFromLocation();
       if (sessionID && sessionID !== selected?.session.session_id) void selectSession(sessionID, false);
       if (!sessionID) {
+        pollGeneration += 1;
         selected = null;
         messages = [];
+        activeRun = null;
+        sending = false;
       }
     };
     const onKeyDown = (event: KeyboardEvent) => {
@@ -474,6 +625,8 @@
     window.addEventListener('popstate', onPopState);
     window.addEventListener('keydown', onKeyDown);
     return () => {
+      pollGeneration += 1;
+      if (delegationRefresh) clearTimeout(delegationRefresh);
       window.removeEventListener('popstate', onPopState);
       window.removeEventListener('keydown', onKeyDown);
     };
@@ -492,11 +645,11 @@
 
     {#if workspaceRoot}
       <div class="workspace-meta"><GitBranch aria-hidden="true" size={14} /><span title={workspaceRoot}>{workspaceRoot}</span></div>
-      <div class="session-list-heading"><span>SESSIONS</span><div><button title="Refresh sessions" onclick={refreshSessions} disabled={workspaceLoading || sending}><RefreshCw aria-hidden="true" size={14} /></button><button title="New session" onclick={createSession} disabled={sessionLoading || sending}><Plus aria-hidden="true" size={15} /></button></div></div>
+      <div class="session-list-heading"><span>SESSIONS</span><div><button title="Refresh sessions" onclick={refreshSessions} disabled={workspaceLoading}><RefreshCw aria-hidden="true" size={14} /></button><button title="New session" onclick={createSession} disabled={sessionLoading}><Plus aria-hidden="true" size={15} /></button></div></div>
       <div class="session-list">
         {#each sessions as session}
           <div class="session-list-item" class:active={selected?.session.session_id === session.session_id}>
-            <button class="session-select" onclick={() => selectSession(session.session_id)} disabled={sending}>
+            <button class="session-select" onclick={() => selectSession(session.session_id)}>
               <strong>{session.title || 'New session'}</strong>
               <small>{formatSessionTime(session.updated_at)}</small>
               <code>{shortID(session.session_id)}</code>
@@ -518,10 +671,12 @@
       <div class="chat-heading">
         <div><h2>{selected.session.title || 'New session'}</h2><p>{workspaceRoot}</p></div>
         <div class="chat-heading-actions">
-          <span class:running={sending}>{sending ? 'Running' : runStatus || 'Ready'}</span>
+          <span class:running={sending}>{runStatus || (sending ? 'Running' : 'Ready')}</span>
           <button class:enabled={learningEnabled} title={`Learning ${learningEnabled ? 'enabled' : 'disabled'}`} aria-label={`Turn learning ${learningEnabled ? 'off' : 'on'}`} onclick={toggleLearning} disabled={sending || learningLoading}><BrainCircuit aria-hidden="true" size={15} /></button>
           <button title="Compact context" aria-label="Compact context" onclick={compactSession} disabled={sending || sessionLoading}><Minimize2 aria-hidden="true" size={15} /></button>
           <button title="Clear conversation" aria-label="Clear conversation" onclick={clearSession} disabled={sending || sessionLoading}><Eraser aria-hidden="true" size={15} /></button>
+          {#if sending && activeRun?.status === 'paused'}<button title="Resume turn" aria-label="Resume turn" onclick={() => commandRun('resume')}><Play aria-hidden="true" size={15} /></button>{:else if sending}<button title="Pause turn" aria-label="Pause turn" onclick={() => commandRun('pause')}><Pause aria-hidden="true" size={15} /></button>{/if}
+          {#if sending}<button class="stop-control" title="Stop turn" aria-label="Stop turn" onclick={stopTurn}><Square aria-hidden="true" size={13} fill="currentColor" /></button>{/if}
         </div>
       </div>
       <div class="transcript" bind:this={transcriptElement} aria-live="polite">
@@ -553,12 +708,19 @@
         {#if responseDraft}<article class="chat-message streaming-message"><div class="message-avatar"><Bot aria-hidden="true" size={17} /></div><div class="message-content"><header>Q <span>responding</span></header><Markdown content={responseDraft} /></div></article>{/if}
         {#if sessionLoading}<div class="transcript-loading">Loading session…</div>{/if}
       </div>
+      {#if activeRun?.pending_question}
+        <section class="run-question" aria-labelledby="run-question-title">
+          <div><span>Q NEEDS INPUT</span><h3 id="run-question-title">{activeRun.pending_question.question}</h3>{#if activeRun.pending_question.context}<p>{activeRun.pending_question.context}</p>{/if}</div>
+          {#if activeRun.pending_question.choices?.length}<div class="question-choices">{#each activeRun.pending_question.choices as choice}<button onclick={() => answerQuestion(choice.id)}><strong>{choice.label}</strong>{#if choice.description}<span>{choice.description}</span>{/if}</button>{/each}</div>{/if}
+          <div class="question-answer"><input bind:value={questionAnswer} placeholder="Write an answer…" onkeydown={(event) => event.key === 'Enter' && answerQuestion()} /><button class="primary-button" onclick={() => answerQuestion()} disabled={!questionAnswer.trim()}>Answer</button></div>
+        </section>
+      {/if}
       <div class="composer-wrap">
         <div class="composer">
-          <textarea bind:value={prompt} onkeydown={submitFromKeyboard} placeholder="Ask Q to work in this repository…" rows="3" disabled={sending}></textarea>
-          {#if sending}<button class="send-button stop" title="Stop turn" onclick={stopTurn}><Square aria-hidden="true" size={15} fill="currentColor" /></button>{:else}<button class="send-button" title="Send message" onclick={sendPrompt} disabled={!prompt.trim()}><ArrowUp aria-hidden="true" size={17} /></button>{/if}
+          <textarea bind:value={prompt} onkeydown={submitFromKeyboard} placeholder={sending ? 'Guide the current turn…' : 'Ask Q to work in this repository…'} rows="3"></textarea>
+          <button class="send-button" title={sending ? 'Guide current turn' : 'Send message'} onclick={sendPrompt} disabled={!prompt.trim()}><ArrowUp aria-hidden="true" size={17} /></button>
         </div>
-        <p>Enter to send · Shift+Enter for a new line · default loop runs with this repository as root</p>
+        <p>{sending ? 'Enter to redirect the current work with guidance' : 'Enter to send'} · Shift+Enter for a new line · default loop runs with this repository as root</p>
       </div>
     {:else}
       <div class="chat-empty"><Bot aria-hidden="true" size={34} /><h2>{workspaceRoot ? 'Choose or create a session' : 'Open a repository'}</h2><p>{workspaceRoot ? 'The default loop will use the selected repository for files, tools, and session state.' : 'Sessions are scoped to the repository path you choose.'}</p>{#if workspaceRoot}<button class="primary-button" onclick={createSession}><Plus aria-hidden="true" size={15} /> New session</button>{/if}</div>
@@ -568,6 +730,20 @@
   <aside class="run-inspector" aria-label="Current turn activity">
     <div class="inspector-heading"><Terminal aria-hidden="true" size={16} /><span>Turn activity</span></div>
     {#if selected?.active_task}<div class="active-task"><span>ACTIVE TASK</span><strong>{selected.active_task.objective}</strong></div>{/if}
+    {#if delegations.length}
+      <div class="delegation-tree">
+        <span class="inspector-label">DELEGATION TREE</span>
+        {#each delegations as node}
+          <details style={`--tree-depth: ${node.depth}`}>
+            <summary><span class="tree-branch" aria-hidden="true"></span><strong>{node.bookmark.agent}</strong><em>{node.state?.status || 'recorded'}</em></summary>
+            <p>{node.bookmark.prompt}</p>
+            {#if node.state?.running_call}<small>Running {node.state.running_call.name} · {shortID(node.state.running_call.call_id)}</small>{/if}
+            {#if node.state?.unknown_tools?.length}<small>{node.state.unknown_tools.length} interrupted tool call(s) require review</small>{/if}
+            {#if node.issue}<small class="tree-issue">{node.issue}</small>{/if}
+          </details>
+        {/each}
+      </div>
+    {/if}
     <div class="event-list">
       {#each events as event}
         <article class:error-event={event.is_error || event.type === 'error'}>

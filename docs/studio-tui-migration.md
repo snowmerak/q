@@ -29,11 +29,10 @@
 
 Studio에는 repository session lifecycle과 Markdown chat, global model/provider/runtime,
 Gateway/System One/Library service, Loom operation, MCP, LSP, Skills, subagent/ACP,
-`.qignore`, changes와 commit workflow가 있다. directory browser는 Go API가 home에서
-시작해 모든 지원 OS에 같은 Web UI를 제공한다.
+`.qignore`, changes와 commit workflow, durable run과 개입 control이 있다. directory
+browser는 Go API가 home에서 시작해 모든 지원 OS에 같은 Web UI를 제공한다.
 
-아직 TUI가 소유하는 주요 기능은 질문 응답과 durable interrupt/reconnect,
-workspace model override, usage와 full help다.
+아직 TUI가 소유하는 주요 기능은 workspace model override, usage와 full help다.
 
 ## 마일스톤
 
@@ -179,7 +178,7 @@ workspace model override, usage와 full help다.
   `go test ./studio ./commitagent ./changes ./app`, `npm run check`, production build를
   통과했다.
 
-### M5. Durable run, 질문과 개입
+### M5. Durable run, 질문과 개입 — 완료 (2026-09-29)
 
 범위:
 
@@ -194,6 +193,28 @@ workspace model override, usage와 full help다.
 - 실행 중 새로고침 후 중복이나 누락 없이 timeline을 이어 본다.
 - 부모→자식→손자 호출과 질문/중단 대상이 재시작 뒤에도 유지된다.
 - browser 요청 취소만으로 worker가 사라지지 않는다.
+
+완료 기록:
+
+- POST request와 turn lifetime을 분리하고 session별 background run으로 실행한다. 같은
+  session에는 한 turn만 허용하지만 서로 다른 repository/session은 동시에 실행할 수
+  있다.
+- 각 run은 session 아래 append-only NDJSON event log와 atomic snapshot을 가진다.
+  cursor long polling은 중복 없이 reconnect하며, snapshot보다 앞선 log와 crash 중
+  부분 기록된 마지막 행도 시작 시 안전하게 reconcile한다.
+- `SessionRunControl`을 rendererless default loop에 추가해 정확한 `ask_to_user` call ID의
+  choice/freeform answer, pause/resume/cancel과 late command rejection을 제공한다. 실행 중
+  composer guidance는 현재 turn을 안전하게 interrupt한 뒤 같은 session에서 새 run으로
+  이어지고 redirect event로 UI가 자동 전환된다.
+- Sessions 화면은 browser disconnect와 무관하게 run을 계속하며 새로고침 시 latest run과
+  cursor를 복원한다. 질문 card, pause/resume/stop, guidance composer와 persisted
+  parent-child delegation tree를 함께 표시한다.
+- server restart에서 active snapshot은 `interrupted`로 표시하고 기존 transcript,
+  active task와 child delegation checkpoint를 다음 turn의 공용 recovery 경로가 복원한다.
+- request cancellation, disk replay, cursor tail, session별 동시 실행, stale command,
+  질문과 control, delegation tree fixture를 포함해
+  `go test ./studio ./app ./workspace ./agentloop`, `go vet ./studio ./app`,
+  `npm run check`와 production build를 통과했다.
 
 ### M6. Operations, help와 TUI retirement gate
 
@@ -217,11 +238,11 @@ workspace model override, usage와 full help다.
 | --- | --- | --- | --- |
 | App shell/status/navigation | 기본 shell과 service ready | M6 operations와 help | 부분 |
 | Repository directory browser | Go directory API, home 시작 | M1 유지 | 완료 |
-| Session 목록/생성/전환 | 생성·전환·삭제·clear·compact·learning 지원 | M1 완료, M5 실행 복구 | 완료 |
-| Chat streaming | 요청 수명 NDJSON | M1 rendering, M5 replay | 부분 |
+| Session 목록/생성/전환 | 생성·전환·삭제·clear·compact·learning·run reconnect 지원 | M1, M5 | 완료 |
+| Chat streaming | durable event log, cursor replay와 background run | M1, M5 | 완료 |
 | Markdown/code rendering | 안전한 Markdown과 언어별 highlighting | M1 | 완료 |
 | Tool/reasoning presentation | transcript와 live 접기/요약 | M1 완료, M5 tree 확장 | 완료 |
-| Question/interrupt | request abort만 지원 | M5 | 미착수 |
+| Question/interrupt | exact question answer, pause/resume/cancel, guidance redirect | M5 | 완료 |
 | Changes | repository change 목록·bounded highlighted diff·행 anchor | M4 | 완료 |
 | Commit | proposal review·수정·재생성·split commit·optional push | M4 | 완료 |
 | Global model/role assignment | assignment·group·custom role·API mode·metadata·reindex | M2 | 완료 |

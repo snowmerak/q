@@ -29,6 +29,7 @@ var ErrSessionRuntimeUnavailable = errors.New("session runtime unavailable")
 // for tools, persistence, recovery, and execution order.
 type SessionEvent struct {
 	Type             string                `json:"type"`
+	RunID            string                `json:"run_id,omitempty"`
 	WorkingDirectory string                `json:"working_directory,omitempty"`
 	SessionID        string                `json:"session_id,omitempty"`
 	Created          bool                  `json:"created,omitempty"`
@@ -51,6 +52,96 @@ type SessionEvent struct {
 }
 
 type SessionEventSink func(SessionEvent) error
+
+type sessionRunControlRequest struct {
+	action string
+	answer string
+	ack    chan error
+}
+
+// SessionRunControl lets a rendererless host interact with one running turn.
+// Each command is acknowledged only after the Bubble Tea state has accepted
+// it, so transports can distinguish stale commands from successful delivery.
+type SessionRunControl struct {
+	commands chan sessionRunControlRequest
+	done     chan struct{}
+	once     sync.Once
+	mu       sync.Mutex
+	err      error
+}
+
+// NewSessionRunControl creates a control owned by exactly one RunControlled
+// call. It must not be reused for another turn.
+func NewSessionRunControl() *SessionRunControl {
+	return &SessionRunControl{commands: make(chan sessionRunControlRequest), done: make(chan struct{})}
+}
+
+func (control *SessionRunControl) Answer(ctx context.Context, answer string) error {
+	return control.send(ctx, "answer", answer)
+}
+
+func (control *SessionRunControl) Pause(ctx context.Context) error {
+	return control.send(ctx, "pause", "")
+}
+
+func (control *SessionRunControl) Resume(ctx context.Context) error {
+	return control.send(ctx, "resume", "")
+}
+
+func (control *SessionRunControl) Cancel(ctx context.Context) error {
+	return control.send(ctx, "cancel", "")
+}
+
+func (control *SessionRunControl) send(ctx context.Context, action, answer string) error {
+	if control == nil {
+		return errors.New("session run control is unavailable")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	request := sessionRunControlRequest{action: action, answer: answer, ack: make(chan error, 1)}
+	select {
+	case control.commands <- request:
+	case <-control.done:
+		return control.result()
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	select {
+	case err := <-request.ack:
+		return err
+	case <-control.done:
+		select {
+		case err := <-request.ack:
+			return err
+		default:
+		}
+		return control.result()
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (control *SessionRunControl) finish(err error) {
+	if control == nil {
+		return
+	}
+	control.once.Do(func() {
+		control.mu.Lock()
+		control.err = err
+		control.mu.Unlock()
+		close(control.done)
+	})
+}
+
+func (control *SessionRunControl) result() error {
+	control.mu.Lock()
+	defer control.mu.Unlock()
+	if control.err != nil {
+		return control.err
+	}
+	return errors.New("session turn is no longer running")
+}
 
 // SessionHost owns process-wide dependencies shared by rendererless default
 // loop turns. Each Run opens only the requested repository and session.
@@ -196,6 +287,33 @@ func (host *SessionHost) Run(
 	sessionID, prompt string,
 	emit SessionEventSink,
 ) (returnErr error) {
+	return host.run(requestContext, workspaceStore, sessionID, prompt, emit, nil)
+}
+
+// RunControlled executes one prompt and accepts interactive commands through
+// control. The run lifetime follows requestContext, which embedding services
+// should derive from their own process lifetime rather than a browser request.
+func (host *SessionHost) RunControlled(
+	requestContext context.Context,
+	workspaceStore workspace.Store,
+	sessionID, prompt string,
+	emit SessionEventSink,
+	control *SessionRunControl,
+) (returnErr error) {
+	if control == nil {
+		return errors.New("session run control is required")
+	}
+	defer func() { control.finish(returnErr) }()
+	return host.run(requestContext, workspaceStore, sessionID, prompt, emit, control)
+}
+
+func (host *SessionHost) run(
+	requestContext context.Context,
+	workspaceStore workspace.Store,
+	sessionID, prompt string,
+	emit SessionEventSink,
+	control *SessionRunControl,
+) (returnErr error) {
 	if host == nil {
 		return fmt.Errorf("%w: host is unavailable", ErrSessionRuntimeUnavailable)
 	}
@@ -244,7 +362,7 @@ func (host *SessionHost) Run(
 		return fmt.Errorf("%w: %s", ErrSessionRuntimeUnavailable, message)
 	}
 
-	execution := sessionExecutionModel{state: state, initial: initial, emit: emit, cancel: cancelRun}
+	execution := sessionExecutionModel{state: state, initial: initial, emit: emit, cancel: cancelRun, control: control}
 	final, runErr := tea.NewProgram(
 		execution, tea.WithContext(runContext), tea.WithInput(nil), tea.WithOutput(io.Discard),
 		tea.WithoutRenderer(), tea.WithoutSignalHandler(),
@@ -415,24 +533,54 @@ func sessionStartupWarnings(result runtimeInitializedMsg) []error {
 }
 
 type sessionExecutionModel struct {
-	state   model
-	initial tea.Cmd
-	emit    SessionEventSink
-	cancel  context.CancelFunc
-	err     error
+	state                 model
+	initial               tea.Cmd
+	emit                  SessionEventSink
+	cancel                context.CancelFunc
+	control               *SessionRunControl
+	paused                bool
+	cancelling            bool
+	deferred              *agentEventMsg
+	pendingQuestionCallID string
+	err                   error
 }
 
-func (m sessionExecutionModel) Init() tea.Cmd { return m.initial }
+type sessionRunControlMsg struct{ request sessionRunControlRequest }
+
+func (m sessionExecutionModel) Init() tea.Cmd {
+	return tea.Batch(m.initial, waitSessionRunControl(m.control))
+}
 
 func (m sessionExecutionModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
+	if command, ok := message.(sessionRunControlMsg); ok {
+		return m.updateControl(command.request)
+	}
 	eventMessage, isAgentEvent := message.(agentEventMsg)
 	if !isAgentEvent {
 		updated, command := m.state.Update(message)
 		m.state = updated.(model)
 		return m, command
 	}
+	if m.paused {
+		m.deferred = &eventMessage
+		return m, nil
+	}
+	return m.updateAgentEvent(eventMessage)
+}
+
+func (m sessionExecutionModel) updateAgentEvent(eventMessage agentEventMsg) (tea.Model, tea.Cmd) {
+	if m.cancelling {
+		return m, tea.Quit
+	}
 	event := eventMessage.event
-	if projected, ok := projectSessionAgentEvent(event); ok && m.emit != nil {
+	projected, projectedOK := projectSessionAgentEvent(event)
+	if event.call != nil && event.call.Function.Name == askToUserToolName {
+		m.pendingQuestionCallID = event.call.ID
+	}
+	if event.question != nil {
+		projected.CallID = m.pendingQuestionCallID
+	}
+	if projectedOK && m.emit != nil {
 		if err := m.emit(projected); err != nil {
 			m.err = err
 			m.cancel()
@@ -440,13 +588,18 @@ func (m sessionExecutionModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	}
 	if event.question != nil {
-		if event.answer != nil {
+		if m.control == nil && event.answer != nil {
 			event.answer <- askToUserOutput{Err: ErrInteractionUnavailable}
+		}
+		if m.control != nil {
+			updated, command := m.state.Update(eventMessage)
+			m.state = updated.(model)
+			return m, command
 		}
 		return m, waitAgentEvent(eventMessage.events, eventMessage.turnID)
 	}
 	if event.err != nil || event.response != nil {
-		updated, _ := m.state.Update(message)
+		updated, _ := m.state.Update(eventMessage)
 		m.state = updated.(model)
 		if event.err != nil {
 			m.err = event.err
@@ -470,9 +623,111 @@ func (m sessionExecutionModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, tea.Quit
 	}
-	updated, command := m.state.Update(message)
+	updated, command := m.state.Update(eventMessage)
 	m.state = updated.(model)
 	return m, command
+}
+
+func (m sessionExecutionModel) updateControl(request sessionRunControlRequest) (tea.Model, tea.Cmd) {
+	acknowledge := func(err error) { request.ack <- err }
+	nextControl := waitSessionRunControl(m.control)
+	switch request.action {
+	case "answer":
+		answer := strings.TrimSpace(request.answer)
+		if !m.state.asking || m.state.questionAnswer == nil {
+			acknowledge(errors.New("session turn is not waiting for an answer"))
+			return m, nextControl
+		}
+		if answer == "" {
+			acknowledge(errors.New("answer is required"))
+			return m, nextControl
+		}
+		parsed := answerForQuestion(m.state.pendingQuestion, answer)
+		if m.state.pendingQuestion.ChoiceOnly && parsed.SelectedChoiceID == "" {
+			acknowledge(errors.New("answer must select one of the available choices"))
+			return m, nextControl
+		}
+		updated, command := m.state.submitQuestionAnswer(answer)
+		m.state = updated.(model)
+		if m.emit != nil {
+			if err := m.emit(SessionEvent{Type: "question_answered", CallID: m.pendingQuestionCallID}); err != nil {
+				m.err = err
+				acknowledge(err)
+				m.cancel()
+				return m, tea.Quit
+			}
+		}
+		m.pendingQuestionCallID = ""
+		acknowledge(nil)
+		return m, tea.Batch(command, nextControl)
+	case "pause":
+		if m.paused {
+			acknowledge(nil)
+			return m, nextControl
+		}
+		m.paused = true
+		if m.emit != nil {
+			if err := m.emit(SessionEvent{Type: "control", Action: "paused", Detail: "Turn paused"}); err != nil {
+				m.err = err
+				acknowledge(err)
+				m.cancel()
+				return m, tea.Quit
+			}
+		}
+		acknowledge(nil)
+		return m, nextControl
+	case "resume":
+		if !m.paused {
+			acknowledge(errors.New("session turn is not paused"))
+			return m, nextControl
+		}
+		m.paused = false
+		if m.emit != nil {
+			if err := m.emit(SessionEvent{Type: "control", Action: "resumed", Detail: "Turn resumed"}); err != nil {
+				m.err = err
+				acknowledge(err)
+				m.cancel()
+				return m, tea.Quit
+			}
+		}
+		acknowledge(nil)
+		if m.deferred != nil {
+			deferred := *m.deferred
+			m.deferred = nil
+			updated, command := m.updateAgentEvent(deferred)
+			return updated, tea.Batch(command, nextControl)
+		}
+		return m, nextControl
+	case "cancel":
+		m.cancelling = true
+		updated, _ := m.state.interruptTurn()
+		m.state = updated.(model)
+		if m.emit != nil {
+			if err := m.emit(SessionEvent{Type: "cancelled", Detail: "Turn interrupted by user"}); err != nil {
+				m.err = err
+			}
+		}
+		acknowledge(m.err)
+		return m, tea.Quit
+	default:
+		err := fmt.Errorf("unknown session control action %q", request.action)
+		acknowledge(err)
+		return m, nextControl
+	}
+}
+
+func waitSessionRunControl(control *SessionRunControl) tea.Cmd {
+	if control == nil {
+		return nil
+	}
+	return func() tea.Msg {
+		select {
+		case request := <-control.commands:
+			return sessionRunControlMsg{request: request}
+		case <-control.done:
+			return nil
+		}
+	}
 }
 
 func (m sessionExecutionModel) View() tea.View { return tea.NewView("") }

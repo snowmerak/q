@@ -42,11 +42,14 @@ func TestChangesAndCommitReviewAPI(t *testing.T) {
 	if err := store.Save(value); err != nil {
 		t.Fatal(err)
 	}
-	handler, commits, err := newHandlerRuntime(t.Context(), store, nil)
+	handler, commits, sessions, err := newHandlerRuntime(t.Context(), store, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
+		if err := sessions.Close(); err != nil {
+			t.Error(err)
+		}
 		if err := commits.Close(); err != nil {
 			t.Error(err)
 		}
