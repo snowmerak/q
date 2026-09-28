@@ -15,6 +15,7 @@ type Dependencies struct {
 	Skills       *agentskills.Registry
 	SkillStore   agentskills.SearchStore
 	GlobalSkills GlobalSkillLibrary
+	SkillRanker  SkillRanker
 	Propositions PropositionLibrary
 	LSP          *lsp.Manager
 }
@@ -161,7 +162,7 @@ func Register(server *mcp.Server, root string, dependencies Dependencies) (*FS, 
 			Description: "Search global Agent Skills through q Library and workspace skills through the workspace index, then merge the results. Translate the user's need into concise English keywords for the query. Use get_skill with a selected result ID.",
 			Annotations: &mcp.ToolAnnotations{ReadOnlyHint: readOnly, IdempotentHint: true},
 		}, contextValueHandler(func(ctx context.Context, input SearchSkillsInput) (SearchSkillsOutput, error) {
-			return searchSkills(ctx, dependencies.SkillStore, dependencies.GlobalSkills, input)
+			return searchSkillsWithRanker(ctx, dependencies.SkillStore, dependencies.GlobalSkills, dependencies.SkillRanker, input)
 		}))
 		mcp.AddTool(server, &mcp.Tool{
 			Name:        "get_skill",

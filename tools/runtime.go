@@ -36,6 +36,13 @@ type HostEnvironment struct {
 
 type SkillHintSearchResult = builtin.SearchSkillsOutput
 
+type runtimeOptions struct {
+	skillRanker builtin.SkillRanker
+}
+
+// RuntimeOption configures optional integrations owned by the runtime.
+type RuntimeOption func(*runtimeOptions)
+
 // SkillStore is the minimal writable index used to reconcile and search Agent
 // Skills. The caller owns its lifetime.
 type SkillStore = agentskills.RecordStore
@@ -59,6 +66,7 @@ type Runtime struct {
 	skills         *agentskills.Registry
 	skillStore     SkillStore
 	globalSkills   builtin.GlobalSkillLibrary
+	skillRanker    builtin.SkillRanker
 	skillRefreshMu sync.Mutex
 	skillRefreshAt time.Time
 	tools          []client.Tool
@@ -136,6 +144,7 @@ func NewRuntimeWithArchiveAndLoomOptionsAndLSPAndLibrary(
 	global lsp.GlobalConfig,
 	workspace lsp.WorkspaceConfig,
 	globalSkills builtin.GlobalSkillLibrary,
+	runtimeOptions ...RuntimeOption,
 ) (*Runtime, error) {
 	manager, err := lsp.NewManager(ctx, root, global, workspace,
 		lsp.WithRootDiscovery((qworkspace.Store{Root: root}).DiscoverLSPRootsContext))
@@ -144,6 +153,7 @@ func NewRuntimeWithArchiveAndLoomOptionsAndLSPAndLibrary(
 	}
 	runtime, err := newRuntimeWithLSP(
 		ctx, root, archive, skillStoreFromArchive(archive), loom.NewProcessEvaluator(), options, manager, globalSkills,
+		runtimeOptions...,
 	)
 	if err != nil {
 		_ = manager.Close()
@@ -165,12 +175,19 @@ func newRuntimeWithLSP(
 	options loom.StoreOptions,
 	lspManager *lsp.Manager,
 	globalSkills builtin.GlobalSkillLibrary,
+	configuredOptions ...RuntimeOption,
 ) (*Runtime, error) {
+	optionsValue := runtimeOptions{}
+	for _, configure := range configuredOptions {
+		if configure != nil {
+			configure(&optionsValue)
+		}
+	}
 	loomRuntime, err := newLoomRuntime(root, evaluator, withSessionRoots(options, root))
 	if err != nil {
 		return nil, err
 	}
-	server, fs, skills, err := newServer(root, archive, skillStore, loomRuntime, lspManager, globalSkills)
+	server, fs, skills, err := newServer(root, archive, skillStore, loomRuntime, lspManager, globalSkills, optionsValue.skillRanker)
 	if err != nil {
 		return nil, err
 	}
@@ -189,7 +206,7 @@ func newRuntimeWithLSP(
 	}
 	runtime := &Runtime{
 		client: clientSession, server: serverSession, fs: fs, loom: loomRuntime, lsp: lspManager,
-		skills: skills, skillStore: skillStore, globalSkills: globalSkills,
+		skills: skills, skillStore: skillStore, globalSkills: globalSkills, skillRanker: optionsValue.skillRanker,
 		skillRefreshAt: time.Now().Add(skillRefreshInterval),
 	}
 	listed, err := clientSession.ListTools(ctx, nil)
@@ -308,9 +325,7 @@ func (r *Runtime) SearchSkillHints(ctx context.Context, query string, limit int)
 		return SkillHintSearchResult{}, errors.New("tools: Agent Skills search is unavailable")
 	}
 	_ = r.refreshSkillsIfDue(ctx)
-	return builtin.SearchSkills(ctx, r.skillStore, r.globalSkills, builtin.SearchSkillsInput{
-		Query: query, Limit: limit,
-	})
+	return builtin.SearchSkillHints(ctx, r.skillStore, r.globalSkills, r.skillRanker, query, limit)
 }
 
 func (r *Runtime) ReloadSkills() error {

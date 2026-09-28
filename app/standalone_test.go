@@ -117,6 +117,59 @@ func TestStandaloneModelAttachesCurrentWorkspace(t *testing.T) {
 	}
 }
 
+func TestStandaloneModelEmbeddingAssignmentBackfillsSkillsAndWorkspace(t *testing.T) {
+	home := t.TempDir()
+	store := config.Store{Dir: filepath.Join(home, ".q")}
+	workspaceStore := workspace.Store{Root: t.TempDir()}
+	skillDir := filepath.Join(home, ".agents", "skills", "animal-care")
+	if err := os.MkdirAll(skillDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte(
+		"---\nname: animal-care\ndescription: Care for cats.\n---\n\n# Animal care\n",
+	), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	value := config.Default()
+	value.Embedding = config.EmbeddingConfig{Model: "embed-model", Dimensions: 3}
+	m := newModel(context.Background(), store, nil)
+	m.client = &extractionClient{}
+	closeEmbedding, err := attachStandaloneModelEmbedding(context.Background(), &m, workspaceStore, config.Default())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = closeEmbedding() })
+	workspaceRecord, err := m.archiveSearch.Save(sessionstore.Record{
+		Kind: sessionstore.KindSkill, Summary: "workspace-animal-care", Content: "Care for dogs.",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	updated, command := m.Update(modelTargetConfiguredMsg{config: value, target: embeddingModelTarget})
+	if command == nil {
+		t.Fatal("standalone embedding assignment did not start indexing")
+	}
+	m = updated.(model)
+	result, ok := command().(archiveEmbeddingConfiguredMsg)
+	if !ok || result.err != nil || result.globalSkills != 1 || result.stats.Embedded != 1 {
+		t.Fatalf("standalone embedding result = %#v", result)
+	}
+	reloaded, err := m.archiveSearch.Get(workspaceRecord.ID)
+	if err != nil || reloaded.Embedding == nil || reloaded.Embedding.Model != "embed-model" {
+		t.Fatalf("workspace embedding = %#v, err = %v", reloaded.Embedding, err)
+	}
+	workspaceHits, err := m.archiveSearch.Search(context.Background(), sessionstore.SearchOptions{
+		Text: "feline", Filters: sessionstore.Filters{Kinds: []string{sessionstore.KindSkill}}, Limit: 1,
+	})
+	if err != nil || len(workspaceHits.Hits) != 1 || workspaceHits.Hits[0].VectorScore == 0 {
+		t.Fatalf("workspace semantic search = %#v, err = %v", workspaceHits, err)
+	}
+	global, err := m.libraryClient.SearchSkills(context.Background(), qlibrary.SkillSearchRequest{Query: "feline"})
+	if err != nil || len(global.Hits) != 1 || global.Hits[0].Title != "animal-care" {
+		t.Fatalf("global skill search = %#v, err = %v", global, err)
+	}
+}
+
 func TestStandaloneSkillsUsesLightweightRegistry(t *testing.T) {
 	root := t.TempDir()
 	registry, err := agentskills.Discover(root)

@@ -78,6 +78,14 @@ removes duplicate IDs from that search result. Candidate descriptions are limite
 In the main chat, previously seen IDs are recovered from earlier contextual hints,
 `task_start`/`ask_to_user` tool results, and successful `get_skill` results.
 
+When `systemone.json` exists, q uses its `agent_skill_decision` model assignment
+or representative-model fallback to rerank Agent Skills. Contextual discovery
+retrieves 24 candidates, sends one System One request containing one score
+question per candidate, and keeps the top six. `search_skills` retrieves and
+scores 30 candidates, then returns at most 20 or the smaller requested limit;
+requests above 30 are still capped at 20 results. A failed decision falls back
+to the original retrieval order and adds a warning instead of failing search.
+
 Only candidate metadata is injected. It is explicitly marked as
 non-instructional, and the model must call `get_skill` with an exact candidate
 ID before following that skill. If no candidate applies, or later work reveals

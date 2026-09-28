@@ -826,7 +826,7 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		m.status = message.target + " model settings saved"
 		m.modelFilter.Blur()
 		m.embeddingDimensions.Blur()
-		if message.target == embeddingModelTarget && m.client != nil {
+		if message.target == embeddingModelTarget {
 			return m, m.configureEmbeddingRuntime(message.config, m.client)
 		}
 		return m, nil

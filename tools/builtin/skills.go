@@ -15,7 +15,7 @@ type SearchSkillsInput struct {
 	Query  string   `json:"query" jsonschema:"Concise English keywords describing the procedure or expertise needed; translate non-English requests"`
 	Scopes []string `json:"scopes,omitempty" jsonschema:"Optional exact scopes: global or workspace"`
 	Tags   []string `json:"tags,omitempty" jsonschema:"Optional tags; a skill must match at least one"`
-	Limit  int      `json:"limit,omitempty" jsonschema:"Maximum results; uses the Session Store default when omitted"`
+	Limit  int      `json:"limit,omitempty" jsonschema:"Maximum returned results; defaults to 20 and System One ranking caps it at 20"`
 }
 
 type SkillSearchHit struct {
@@ -31,7 +31,16 @@ type SkillSearchHit struct {
 type SearchSkillsOutput struct {
 	Total    uint64           `json:"total"`
 	Hits     []SkillSearchHit `json:"hits"`
+	Reranked bool             `json:"-"`
 	Warnings []string         `json:"warnings,omitempty"`
+}
+
+// SkillRanker applies a task-specific relevance decision to a bounded set of
+// search candidates. Enabled may consult live configuration so settings take
+// effect without rebuilding the tool runtime.
+type SkillRanker interface {
+	Enabled() bool
+	RankSkills(context.Context, string, []SkillSearchHit) ([]SkillSearchHit, error)
 }
 
 type GlobalSkillLibrary interface {
@@ -51,18 +60,67 @@ type GetSkillOutput struct {
 }
 
 func searchSkills(ctx context.Context, store agentskills.SearchStore, global GlobalSkillLibrary, input SearchSkillsInput) (SearchSkillsOutput, error) {
+	return searchSkillsWithRanker(ctx, store, global, nil, input)
+}
+
+func searchSkillsWithRanker(
+	ctx context.Context,
+	store agentskills.SearchStore,
+	global GlobalSkillLibrary,
+	ranker SkillRanker,
+	input SearchSkillsInput,
+) (SearchSkillsOutput, error) {
 	if store == nil && global == nil {
 		return SearchSkillsOutput{}, errors.New("[E_SKILLS] Skill Store is unavailable")
 	}
-	if global == nil {
-		return searchLocalSkills(ctx, store, input, storedSkillScopes(input.Scopes))
+	requestedLimit := input.Limit
+	if requestedLimit == 0 {
+		requestedLimit = 20
 	}
-	limit := input.Limit
-	if limit == 0 {
-		limit = 20
-	}
-	if limit < 1 || limit > 100 {
+	if requestedLimit < 1 || requestedLimit > 100 {
 		return SearchSkillsOutput{}, errors.New("[E_SKILLS] limit must be between 1 and 100")
+	}
+	rankingEnabled := ranker != nil && ranker.Enabled()
+	candidateLimit := requestedLimit
+	resultLimit := requestedLimit
+	if rankingEnabled {
+		candidateLimit = 30
+		resultLimit = min(requestedLimit, 20)
+	}
+	output, err := retrieveSkills(ctx, store, global, input, candidateLimit)
+	if err != nil {
+		return SearchSkillsOutput{}, err
+	}
+	if rankingEnabled {
+		ranked, rankErr := ranker.RankSkills(ctx, input.Query, output.Hits)
+		if rankErr != nil {
+			output.Warnings = append(output.Warnings, "System One skill relevance unavailable: "+rankErr.Error())
+		} else {
+			output.Hits = ranked
+			output.Reranked = true
+		}
+	}
+	if len(output.Hits) > resultLimit {
+		output.Hits = output.Hits[:resultLimit]
+	}
+	return output, nil
+}
+
+func retrieveSkills(
+	ctx context.Context,
+	store agentskills.SearchStore,
+	global GlobalSkillLibrary,
+	input SearchSkillsInput,
+	limit int,
+) (SearchSkillsOutput, error) {
+	if global == nil {
+		output, err := searchLocalSkills(ctx, store, SearchSkillsInput{
+			Query: input.Query, Scopes: input.Scopes, Tags: input.Tags, Limit: limit,
+		}, storedSkillScopes(input.Scopes))
+		if err == nil && len(output.Hits) > limit {
+			output.Hits = output.Hits[:limit]
+		}
+		return output, err
 	}
 	includeGlobal, includeWorkspace := requestedSkillScopes(input.Scopes)
 	output := SearchSkillsOutput{}
@@ -108,6 +166,37 @@ func searchSkills(ctx context.Context, store agentskills.SearchStore, global Glo
 	if len(output.Hits) > limit {
 		output.Hits = output.Hits[:limit]
 	}
+	return output, nil
+}
+
+// SearchSkillHints retrieves and reranks three times the System One hint
+// budget. Hint consumers keep the first six unseen candidates; retaining the
+// ranked window here lets them skip candidates already shown in the context.
+func SearchSkillHints(
+	ctx context.Context,
+	store agentskills.SearchStore,
+	global GlobalSkillLibrary,
+	ranker SkillRanker,
+	query string,
+	limit int,
+) (SearchSkillsOutput, error) {
+	if ranker == nil || !ranker.Enabled() {
+		return searchSkills(ctx, store, global, SearchSkillsInput{Query: query, Limit: limit})
+	}
+	output, err := retrieveSkills(ctx, store, global, SearchSkillsInput{Query: query}, 24)
+	if err != nil {
+		return SearchSkillsOutput{}, err
+	}
+	ranked, rankErr := ranker.RankSkills(ctx, query, output.Hits)
+	if rankErr != nil {
+		output.Warnings = append(output.Warnings, "System One skill relevance unavailable: "+rankErr.Error())
+		if len(output.Hits) > limit {
+			output.Hits = output.Hits[:limit]
+		}
+		return output, nil
+	}
+	output.Hits = ranked
+	output.Reranked = true
 	return output, nil
 }
 

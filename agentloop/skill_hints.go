@@ -12,6 +12,7 @@ import (
 const (
 	automaticSkillSearchLimit    = 8
 	automaticSkillHintLimit      = 4
+	systemOneSkillHintLimit      = 6
 	maximumSkillHintQueryRunes   = 4000
 	maximumSkillDescriptionRunes = 600
 	maximumSkillHintTags         = 12
@@ -136,7 +137,11 @@ func automaticSkillHints(
 	if err != nil {
 		return nil
 	}
-	hints := make([]skillHint, 0, automaticSkillHintLimit)
+	hintLimit := automaticSkillHintLimit
+	if result.Reranked {
+		hintLimit = systemOneSkillHintLimit
+	}
+	hints := make([]skillHint, 0, hintLimit)
 	for _, hit := range result.Hits {
 		if _, exists := seen[hit.ID]; exists {
 			continue
@@ -146,7 +151,7 @@ func automaticSkillHints(
 			Tags: boundedSkillHintTags(hit.Tags), Scope: hit.Scope,
 		})
 		seen[hit.ID] = struct{}{}
-		if len(hints) == automaticSkillHintLimit {
+		if len(hints) == hintLimit {
 			break
 		}
 	}

@@ -1323,6 +1323,23 @@ func TestEmbeddingModelAssignmentIndexesExistingGlobalSkills(t *testing.T) {
 	}
 }
 
+func TestEmbeddingModelAssignmentReportsUnavailableIndexes(t *testing.T) {
+	value := config.Default()
+	value.Embedding = config.EmbeddingConfig{Model: "embed-model", Dimensions: 3}
+	m := newModel(context.Background(), config.Store{Dir: t.TempDir()}, nil)
+	m.client = &extractionClient{}
+	updated, command := m.Update(modelTargetConfiguredMsg{config: value, target: embeddingModelTarget})
+	if command == nil {
+		t.Fatal("missing embedding indexes were silently ignored")
+	}
+	m = updated.(model)
+	updated, _ = m.Update(command())
+	m = updated.(model)
+	if !strings.Contains(m.status, "embedding indexing did not start") {
+		t.Fatalf("indexing status = %q", m.status)
+	}
+}
+
 func TestModelPickerCanClearEmbeddingConfiguration(t *testing.T) {
 	store := config.Store{Dir: t.TempDir()}
 	value := config.Default()

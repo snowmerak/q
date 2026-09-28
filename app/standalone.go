@@ -5,10 +5,12 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/snowmerak/llm-provider/gateway"
 	"github.com/snowmerak/q/agentskills"
+	"github.com/snowmerak/q/archiveembed"
 	"github.com/snowmerak/q/config"
 	qlibrary "github.com/snowmerak/q/library"
 	"github.com/snowmerak/q/providerhost"
@@ -220,7 +222,7 @@ func RunSkillsDefault(ctx context.Context) error {
 	return nil
 }
 
-// RunModel opens model selection using only personal config and q's managed Gateway.
+// RunModel opens model selection with the services needed to apply embedding changes.
 func RunModel(ctx context.Context, store config.Store) (returnErr error) {
 	runtimeContext, cancelRuntime := context.WithCancel(ctx)
 	defer cancelRuntime()
@@ -292,10 +294,15 @@ func RunModel(ctx context.Context, store config.Store) (returnErr error) {
 		_ = configuredClient.Close()
 		return errors.New("gateway returned no models")
 	}
-
 	m := newManagedModel(runtimeContext, store, factory, manager)
 	m.config = loaded
 	m.client = configuredClient
+	closeEmbedding, err := attachStandaloneModelEmbedding(runtimeContext, &m, workspaceStore, loaded)
+	if err != nil {
+		_ = configuredClient.Close()
+		return err
+	}
+	defer func() { returnErr = errors.Join(returnErr, closeEmbedding()) }()
 	m.gatewayConfig = manager.Config()
 	if err := attachStandaloneModelWorkspace(&m, workspaceStore); err != nil {
 		_ = configuredClient.Close()
@@ -317,6 +324,34 @@ func RunModel(ctx context.Context, store config.Store) (returnErr error) {
 func attachStandaloneModelWorkspace(m *model, store workspace.Store) error {
 	m.workspaceStore = &store
 	return m.restoreWorkspaceModel()
+}
+
+func attachStandaloneModelEmbedding(
+	ctx context.Context, m *model, workspaceStore workspace.Store, loaded config.Config,
+) (func() error, error) {
+	libraryRuntime, err := qlibrary.Ensure(ctx, m.store.Dir)
+	if err != nil {
+		return nil, fmt.Errorf("start Library for model settings: %w", err)
+	}
+	memoryRuntime, err := workspacememory.Ensure(ctx, m.store.Dir)
+	if err != nil {
+		return nil, errors.Join(fmt.Errorf("start Workspace Memory for model settings: %w", err), libraryRuntime.Close())
+	}
+	vectorConfig := sessionstore.VectorConfig{
+		Model: loaded.Embedding.Model, Dimensions: loaded.Embedding.Dimensions,
+	}
+	archiveStore, err := memoryRuntime.Client().OpenWorkspace(ctx, workspaceStore.Root, vectorConfig)
+	if err != nil {
+		return nil, errors.Join(
+			fmt.Errorf("open workspace archive for model settings: %w", err),
+			memoryRuntime.Close(), libraryRuntime.Close(),
+		)
+	}
+	m.libraryClient = qlibrary.NewClient(libraryRuntime.Endpoint(), "", 5*time.Second)
+	m.archiveSearch = archiveembed.New(archiveStore)
+	return func() error {
+		return errors.Join(archiveStore.Close(), memoryRuntime.Close(), libraryRuntime.Close())
+	}, nil
 }
 
 func RunModelDefault(ctx context.Context) error {

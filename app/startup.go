@@ -16,6 +16,7 @@ import (
 	"github.com/snowmerak/q/mcpconfig"
 	"github.com/snowmerak/q/providerhost"
 	"github.com/snowmerak/q/sessionstore"
+	"github.com/snowmerak/q/systemoneconfig"
 	qtools "github.com/snowmerak/q/tools"
 	"github.com/snowmerak/q/tools/builtin"
 	"github.com/snowmerak/q/workspace"
@@ -219,6 +220,7 @@ func (request startupRequest) run(modelReady chan<- struct{}) runtimeInitialized
 		}
 		tools, toolsErr = qtools.NewRuntimeWithArchiveAndLoomOptionsAndLSPAndLibrary(
 			request.ctx, request.workspaceStore.Root, toolArchive, loaded.LoomStoreOptions(nil), loaded.LSP, workspaceLSP, libraryClient,
+			qtools.WithSystemOneSkillRanking(systemoneconfig.Store{Dir: request.store.Dir}),
 		)
 		result.tools = tools
 		result.library = libraryClient

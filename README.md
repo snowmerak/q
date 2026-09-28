@@ -536,6 +536,12 @@ turn, and roles with skill tools can still call `search_skills` whenever later
 work needs more guidance. Already hinted or loaded skill IDs are not suggested
 again in the same context.
 
+When System One settings have been saved, q retrieves 24 hint candidates,
+scores every candidate in one `agent_skill_decision` request, and supplies the
+top six. A direct `search_skills` call retrieves and scores 30 candidates and
+returns at most 20, or the smaller requested limit. If the decision request
+fails, q keeps the original search order and reports a non-blocking warning.
+
 Without an embedding model, retrieval is BM25-only. With one, q combines BM25
 and HNSW vector results; assigning a new embedding model rebuilds and backfills
 the vector projection. Lexical matches rank skill name above tags and

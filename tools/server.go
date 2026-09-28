@@ -17,6 +17,7 @@ import (
 	"github.com/snowmerak/q/lsp"
 	"github.com/snowmerak/q/providerhost"
 	"github.com/snowmerak/q/sessionstore"
+	"github.com/snowmerak/q/systemoneconfig"
 	"github.com/snowmerak/q/tools/builtin"
 	"github.com/snowmerak/q/usagelog"
 	"github.com/snowmerak/q/workspace"
@@ -34,7 +35,7 @@ func NewServer(root string) (*mcp.Server, error) {
 	if err != nil {
 		return nil, err
 	}
-	server, _, _, err := newServer(root, nil, nil, loomRuntime, nil, nil)
+	server, _, _, err := newServer(root, nil, nil, loomRuntime, nil, nil, nil)
 	return server, err
 }
 
@@ -45,7 +46,7 @@ func NewServerWithArchive(root string, archive builtin.Archive) (*mcp.Server, er
 	if err != nil {
 		return nil, err
 	}
-	server, _, _, err := newServer(root, archive, skillStoreFromArchive(archive), loomRuntime, nil, nil)
+	server, _, _, err := newServer(root, archive, skillStoreFromArchive(archive), loomRuntime, nil, nil, nil)
 	return server, err
 }
 
@@ -56,6 +57,7 @@ func newServer(
 	loomRuntime *builtin.LoomRuntime,
 	lspManager *lsp.Manager,
 	globalSkills builtin.GlobalSkillLibrary,
+	skillRanker builtin.SkillRanker,
 ) (*mcp.Server, *builtin.FS, *agentskills.Registry, error) {
 	skills, err := agentskills.Discover(root)
 	if err != nil {
@@ -79,7 +81,7 @@ func newServer(
 	propositions, _ := globalSkills.(builtin.PropositionLibrary)
 	fs, err := builtin.Register(server, root, builtin.Dependencies{
 		Archive: archive, Loom: loomRuntime, Skills: skills, SkillStore: skillStore, GlobalSkills: globalSkills,
-		Propositions: propositions, LSP: lspManager,
+		SkillRanker: skillRanker, Propositions: propositions, LSP: lspManager,
 	})
 	if err != nil {
 		return nil, nil, nil, err
@@ -236,7 +238,10 @@ func RunStdioWithLoomOptions(ctx context.Context, root string, options loom.Stor
 			go func() { _, _ = libraryClient.SyncSkillEmbeddings(ctx) }()
 		}
 	}
-	server, fs, _, err := newServer(root, semanticArchive, semanticArchive, loomRuntime, lspManager, globalSkills)
+	server, fs, _, err := newServer(
+		root, semanticArchive, semanticArchive, loomRuntime, lspManager, globalSkills,
+		&systemOneSkillRanker{store: systemoneconfig.Store{Dir: configStore.Dir}},
+	)
 	if err != nil {
 		return err
 	}

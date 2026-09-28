@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -16,6 +17,7 @@ import (
 type delegatedSkillRuntime struct {
 	queries []string
 	calls   []client.ToolCall
+	result  *builtin.SearchSkillsOutput
 }
 
 func (*delegatedSkillRuntime) Tools() []client.Tool {
@@ -32,9 +34,26 @@ func (r *delegatedSkillRuntime) Call(_ context.Context, call client.ToolCall) (c
 
 func (r *delegatedSkillRuntime) SearchSkillHints(_ context.Context, query string, _ int) (builtin.SearchSkillsOutput, error) {
 	r.queries = append(r.queries, query)
+	if r.result != nil {
+		return *r.result, nil
+	}
 	return builtin.SearchSkillsOutput{Hits: []builtin.SkillSearchHit{{
 		ID: "skill-go", Title: "go-review", Description: "Review Go code", Scope: "workspace",
 	}}}, nil
+}
+
+func TestTaskStartSkillHintsKeepsSixSystemOneResults(t *testing.T) {
+	result := builtin.SearchSkillsOutput{Reranked: true}
+	for index := range 8 {
+		result.Hits = append(result.Hits, builtin.SkillSearchHit{
+			ID: fmt.Sprintf("skill-%d", index), Title: fmt.Sprintf("Skill %d", index),
+		})
+	}
+	runtime := &delegatedSkillRuntime{result: &result}
+	hints := taskStartSkillHints(t.Context(), runtime, runtime.Tools(), taskStartInput{Objective: "Review Go code"})
+	if hints == nil || len(hints.Candidates) != 6 {
+		t.Fatalf("System One task-start hints = %#v", hints)
+	}
 }
 
 func TestGeneralScoutTaskStartReceivesSkillHints(t *testing.T) {
