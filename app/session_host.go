@@ -123,106 +123,28 @@ func (host *SessionHost) Run(
 	defer stopHostCancellation()
 	defer cancelRun()
 
-	loaded, err := host.store.Load()
-	if errors.Is(err, config.ErrNotFound) {
-		return fmt.Errorf("%w: q is not configured; configure a model in Studio first", ErrSessionRuntimeUnavailable)
-	}
+	prepared, err := host.prepareSession(runContext, workspaceStore, sessionID)
 	if err != nil {
 		return err
 	}
-	if err := workspaceStore.MigrateLegacySession(); err != nil {
-		return err
-	}
-
-	var sessionLock *workspace.Lock
-	created := false
-	if strings.TrimSpace(sessionID) != "" {
-		workspaceStore, err = workspaceStore.ForSession(sessionID)
-		if err != nil {
-			return err
-		}
-		sessionLock, err = workspace.AcquireSessionLock(workspaceStore.Root, workspaceStore.SessionID, "q studio")
-		if err != nil {
-			return err
-		}
-		if _, err = workspaceStore.Load(); err != nil {
-			_ = sessionLock.Close()
-			return err
-		}
-	}
-
-	lifecycle := newStartupLifecycle()
-	var configuredClient chatClient
-	defer func() {
-		lifecycle.waitIfStarted()
-		resourcesErr := lifecycle.closeResources()
-		var clientErr error
-		if configuredClient != nil {
-			clientErr = configuredClient.Close()
-		} else if startupClient := lifecycle.startupClient(); startupClient != nil {
-			clientErr = startupClient.Close()
-		}
-		var lockErr error
-		if sessionLock != nil {
-			lockErr = sessionLock.Close()
-		}
-		returnErr = errors.Join(returnErr, resourcesErr, clientErr, lockErr)
-	}()
-
-	loaded, err = host.ensureProvider(loaded)
-	if err != nil {
-		return fmt.Errorf("%w: %v", ErrSessionRuntimeUnavailable, err)
-	}
-	startup := startupRequest{
-		ctx: runContext, memoryCtx: runContext, store: host.store, workspaceStore: workspaceStore,
-		loaded: loaded, manager: host.manager, factory: host.factory, lifecycle: lifecycle, providerReady: true,
-	}.run(nil)
-	if startup.err != nil {
-		return fmt.Errorf("%w: %v", ErrSessionRuntimeUnavailable, startup.err)
-	}
-	if startup.client == nil || startup.tools == nil {
-		return fmt.Errorf("%w: %v", ErrSessionRuntimeUnavailable,
-			errors.Join(errors.New("model or workspace tools are unavailable"), startup.startupErr))
-	}
-	configuredClient = startup.client
-
-	if sessionLock == nil {
-		workspaceStore, sessionLock, err = workspace.CreateSession(workspaceStore.Root, "q studio")
-		if err != nil {
-			return err
-		}
-		created = true
-	}
-
-	state := newManagedModel(runContext, host.store, host.factory, host.manager)
-	state.workspaceStore = &workspaceStore
-	state.workspaceLock = sessionLock
-	state.toolRuntime = startup.tools
-	state.libraryClient = startup.library
-	state.setArchiveWriter(startup.archive)
-	state.archiveSearch = startup.archiveSearch
-	state.archiveErr = startup.archiveErr
-	state.models = append(state.models, startup.models...)
-	state.gatewayConfig = startup.gatewayConfig
-	state.enterChat(startup.config, configuredClient)
-	defer state.stopSessionLearning()
+	defer func() { returnErr = errors.Join(returnErr, prepared.Close()) }()
 
 	if emit != nil {
 		if err := emit(SessionEvent{
-			Type: "session", WorkingDirectory: workspaceStore.Root,
-			SessionID: workspaceStore.SessionID, Created: created,
+			Type: "session", WorkingDirectory: prepared.store.Root,
+			SessionID: prepared.store.SessionID, Created: prepared.created,
 		}); err != nil {
 			return err
 		}
-		for _, warning := range sessionStartupWarnings(startup) {
+		for _, warning := range prepared.warnings {
 			if err := emit(SessionEvent{Type: "status", Detail: "Warning: " + warning.Error()}); err != nil {
 				return err
 			}
 		}
 	}
 
-	updated, initial := state.startChatTurn(prompt, true)
-	state = updated.(model)
+	updated, initial := prepared.state.startChatTurn(prompt, true)
+	state := updated.(model)
 	if !state.waiting || initial == nil {
 		message := strings.TrimSpace(state.status)
 		if message == "" {
@@ -240,6 +162,150 @@ func (host *SessionHost) Run(
 		return errors.Join(runErr, result.err)
 	}
 	return runErr
+}
+
+// Compact summarizes older context for one inactive session without adding a
+// user message or changing its transcript.
+func (host *SessionHost) Compact(requestContext context.Context, workspaceStore workspace.Store, sessionID string) (status string, returnErr error) {
+	if host == nil {
+		return "", fmt.Errorf("%w: host is unavailable", ErrSessionRuntimeUnavailable)
+	}
+	if err := workspace.RejectHomeDirectory(workspaceStore.Root); err != nil {
+		return "", err
+	}
+	if strings.TrimSpace(sessionID) == "" {
+		return "", errors.New("session ID is required")
+	}
+	if requestContext == nil {
+		requestContext = context.Background()
+	}
+	runContext, cancelRun := context.WithCancel(requestContext)
+	stopHostCancellation := context.AfterFunc(host.ctx, cancelRun)
+	defer stopHostCancellation()
+	defer cancelRun()
+
+	prepared, err := host.prepareSession(runContext, workspaceStore, sessionID)
+	if err != nil {
+		return "", err
+	}
+	defer func() { returnErr = errors.Join(returnErr, prepared.Close()) }()
+
+	updated, initial := prepared.state.startManualCompaction()
+	state := updated.(model)
+	if !state.waiting || initial == nil {
+		return strings.TrimSpace(state.status), nil
+	}
+	execution := sessionCompactionModel{state: state, initial: initial, cancel: cancelRun}
+	final, runErr := tea.NewProgram(
+		execution, tea.WithContext(runContext), tea.WithInput(nil), tea.WithOutput(io.Discard),
+		tea.WithoutRenderer(), tea.WithoutSignalHandler(),
+	).Run()
+	if result, ok := final.(sessionCompactionModel); ok {
+		return strings.TrimSpace(result.state.status), errors.Join(runErr, result.err)
+	}
+	return "", runErr
+}
+
+type preparedSession struct {
+	state     model
+	store     workspace.Store
+	lock      *workspace.Lock
+	lifecycle *startupLifecycle
+	client    chatClient
+	warnings  []error
+	created   bool
+}
+
+func (prepared *preparedSession) Close() error {
+	if prepared == nil {
+		return nil
+	}
+	prepared.state.stopSessionLearning()
+	prepared.lifecycle.waitIfStarted()
+	resourcesErr := prepared.lifecycle.closeResources()
+	var clientErr error
+	if prepared.client != nil {
+		clientErr = prepared.client.Close()
+	} else if startupClient := prepared.lifecycle.startupClient(); startupClient != nil {
+		clientErr = startupClient.Close()
+	}
+	var lockErr error
+	if prepared.lock != nil {
+		lockErr = prepared.lock.Close()
+	}
+	return errors.Join(resourcesErr, clientErr, lockErr)
+}
+
+func (host *SessionHost) prepareSession(runContext context.Context, workspaceStore workspace.Store, sessionID string) (_ *preparedSession, returnErr error) {
+	loaded, err := host.store.Load()
+	if errors.Is(err, config.ErrNotFound) {
+		return nil, fmt.Errorf("%w: q is not configured; configure a model in Studio first", ErrSessionRuntimeUnavailable)
+	}
+	if err != nil {
+		return nil, err
+	}
+	if err := workspaceStore.MigrateLegacySession(); err != nil {
+		return nil, err
+	}
+
+	prepared := &preparedSession{store: workspaceStore, lifecycle: newStartupLifecycle()}
+	defer func() {
+		if returnErr != nil {
+			returnErr = errors.Join(returnErr, prepared.Close())
+		}
+	}()
+	if strings.TrimSpace(sessionID) != "" {
+		prepared.store, err = workspaceStore.ForSession(sessionID)
+		if err != nil {
+			return nil, err
+		}
+		prepared.lock, err = workspace.AcquireSessionLock(prepared.store.Root, prepared.store.SessionID, "q studio")
+		if err != nil {
+			return nil, err
+		}
+		if _, err = prepared.store.Load(); err != nil {
+			return nil, err
+		}
+	}
+
+	loaded, err = host.ensureProvider(loaded)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrSessionRuntimeUnavailable, err)
+	}
+	startup := startupRequest{
+		ctx: runContext, memoryCtx: runContext, store: host.store, workspaceStore: prepared.store,
+		loaded: loaded, manager: host.manager, factory: host.factory, lifecycle: prepared.lifecycle, providerReady: true,
+	}.run(nil)
+	if startup.err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrSessionRuntimeUnavailable, startup.err)
+	}
+	if startup.client == nil || startup.tools == nil {
+		return nil, fmt.Errorf("%w: %v", ErrSessionRuntimeUnavailable,
+			errors.Join(errors.New("model or workspace tools are unavailable"), startup.startupErr))
+	}
+	prepared.client = startup.client
+	prepared.warnings = sessionStartupWarnings(startup)
+
+	if prepared.lock == nil {
+		prepared.store, prepared.lock, err = workspace.CreateSession(prepared.store.Root, "q studio")
+		if err != nil {
+			return nil, err
+		}
+		prepared.created = true
+	}
+
+	prepared.state = newManagedModel(runContext, host.store, host.factory, host.manager)
+	prepared.state.workspaceStore = &prepared.store
+	prepared.state.workspaceLock = prepared.lock
+	prepared.state.toolRuntime = startup.tools
+	prepared.state.libraryClient = startup.library
+	prepared.state.setArchiveWriter(startup.archive)
+	prepared.state.archiveSearch = startup.archiveSearch
+	prepared.state.archiveErr = startup.archiveErr
+	prepared.state.models = append(prepared.state.models, startup.models...)
+	prepared.state.gatewayConfig = startup.gatewayConfig
+	prepared.state.enterChat(startup.config, prepared.client)
+	return prepared, nil
 }
 
 func sessionStartupWarnings(result runtimeInitializedMsg) []error {
@@ -319,6 +385,35 @@ func (m sessionExecutionModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m sessionExecutionModel) View() tea.View { return tea.NewView("") }
+
+type sessionCompactionModel struct {
+	state   model
+	initial tea.Cmd
+	cancel  context.CancelFunc
+	err     error
+}
+
+func (m sessionCompactionModel) Init() tea.Cmd { return m.initial }
+
+func (m sessionCompactionModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
+	updated, command := m.state.Update(message)
+	m.state = updated.(model)
+	result, finished := message.(compactionResultMsg)
+	if !finished {
+		return m, command
+	}
+	if result.err != nil {
+		m.err = result.err
+	} else if result.response == nil || len(result.response.Choices) == 0 {
+		m.err = errors.New("context compaction returned no response")
+	}
+	if m.err != nil {
+		m.cancel()
+	}
+	return m, tea.Quit
+}
+
+func (m sessionCompactionModel) View() tea.View { return tea.NewView("") }
 
 func projectSessionAgentEvent(event agentEvent) (SessionEvent, bool) {
 	switch {

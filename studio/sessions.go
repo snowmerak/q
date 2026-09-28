@@ -24,6 +24,10 @@ type sessionRunner interface {
 	Run(context.Context, workspace.Store, string, string, app.SessionEventSink) error
 }
 
+type sessionCompactor interface {
+	Compact(context.Context, workspace.Store, string) (string, error)
+}
+
 type sessionsService struct {
 	runner    sessionRunner
 	admission chan struct{}
@@ -58,6 +62,20 @@ type sessionListResponse struct {
 
 type workspaceRequest struct {
 	WorkspaceRoot string `json:"workspace_root"`
+}
+
+type learningUpdateRequest struct {
+	WorkspaceRoot string `json:"workspace_root"`
+	Disabled      bool   `json:"disabled"`
+}
+
+type learningResponse struct {
+	WorkspaceRoot string `json:"workspace_root"`
+	Enabled       bool   `json:"enabled"`
+}
+
+type sessionOperationResponse struct {
+	Status string `json:"status"`
 }
 
 type sessionRunRequest struct {
@@ -146,6 +164,15 @@ func (service *sessionsService) serveCreate(writer http.ResponseWriter, request 
 }
 
 func (service *sessionsService) serveDetail(writer http.ResponseWriter, request *http.Request) {
+	if request.Method == http.MethodDelete {
+		service.serveDelete(writer, request)
+		return
+	}
+	if request.Method != http.MethodGet {
+		writer.Header().Set("Allow", "GET, DELETE")
+		writeAPIError(writer, http.StatusMethodNotAllowed, errors.New("method not allowed"))
+		return
+	}
 	root, err := canonicalWorkspaceDirectory(request.URL.Query().Get("workspace_root"))
 	if err != nil {
 		writeAPIError(writer, http.StatusBadRequest, err)
@@ -162,6 +189,104 @@ func (service *sessionsService) serveDetail(writer http.ResponseWriter, request 
 		return
 	}
 	writeJSON(writer, http.StatusOK, detailFromSession(root, store, value))
+}
+
+func (service *sessionsService) serveDelete(writer http.ResponseWriter, request *http.Request) {
+	root, err := canonicalWorkspaceDirectory(request.URL.Query().Get("workspace_root"))
+	if err != nil {
+		writeAPIError(writer, http.StatusBadRequest, err)
+		return
+	}
+	if err := workspace.DeleteSession(root, request.PathValue("session"), "q studio session delete"); err != nil {
+		writeSessionError(writer, err)
+		return
+	}
+	writer.WriteHeader(http.StatusNoContent)
+}
+
+func (service *sessionsService) serveClear(writer http.ResponseWriter, request *http.Request) {
+	var input workspaceRequest
+	if err := decodeSessionRequest(writer, request, &input); err != nil {
+		writeAPIError(writer, http.StatusBadRequest, err)
+		return
+	}
+	root, err := canonicalWorkspaceDirectory(input.WorkspaceRoot)
+	if err != nil {
+		writeAPIError(writer, http.StatusBadRequest, err)
+		return
+	}
+	value, err := workspace.ResetSession(root, request.PathValue("session"), "q studio session clear")
+	if err != nil {
+		writeSessionError(writer, err)
+		return
+	}
+	store, err := (workspace.Store{Root: root}).ForSession(request.PathValue("session"))
+	if err != nil {
+		writeAPIError(writer, http.StatusBadRequest, err)
+		return
+	}
+	writeJSON(writer, http.StatusOK, detailFromSession(root, store, value))
+}
+
+func (service *sessionsService) serveCompact(writer http.ResponseWriter, request *http.Request) {
+	compactor, ok := service.runner.(sessionCompactor)
+	if !ok {
+		writeAPIError(writer, http.StatusServiceUnavailable, app.ErrSessionRuntimeUnavailable)
+		return
+	}
+	var input workspaceRequest
+	if err := decodeSessionRequest(writer, request, &input); err != nil {
+		writeAPIError(writer, http.StatusBadRequest, err)
+		return
+	}
+	root, err := canonicalWorkspaceDirectory(input.WorkspaceRoot)
+	if err != nil {
+		writeAPIError(writer, http.StatusBadRequest, err)
+		return
+	}
+	status, err := compactor.Compact(request.Context(), workspace.Store{Root: root}, request.PathValue("session"))
+	if err != nil {
+		writeSessionError(writer, err)
+		return
+	}
+	writeJSON(writer, http.StatusOK, sessionOperationResponse{Status: status})
+}
+
+func (service *sessionsService) serveLearning(writer http.ResponseWriter, request *http.Request) {
+	switch request.Method {
+	case http.MethodGet:
+		root, err := canonicalWorkspaceDirectory(request.URL.Query().Get("workspace_root"))
+		if err != nil {
+			writeAPIError(writer, http.StatusBadRequest, err)
+			return
+		}
+		value, err := (workspace.Store{Root: root}).LoadLearningConfig()
+		if err != nil {
+			writeAPIError(writer, http.StatusInternalServerError, err)
+			return
+		}
+		writeJSON(writer, http.StatusOK, learningResponse{WorkspaceRoot: root, Enabled: !value.Disabled})
+	case http.MethodPut:
+		var input learningUpdateRequest
+		if err := decodeSessionRequest(writer, request, &input); err != nil {
+			writeAPIError(writer, http.StatusBadRequest, err)
+			return
+		}
+		root, err := canonicalWorkspaceDirectory(input.WorkspaceRoot)
+		if err != nil {
+			writeAPIError(writer, http.StatusBadRequest, err)
+			return
+		}
+		value := workspace.LearningConfig{Version: workspace.LearningConfigVersion, Disabled: input.Disabled}
+		if err := (workspace.Store{Root: root}).SaveLearningConfig(value); err != nil {
+			writeAPIError(writer, http.StatusInternalServerError, err)
+			return
+		}
+		writeJSON(writer, http.StatusOK, learningResponse{WorkspaceRoot: root, Enabled: !value.Disabled})
+	default:
+		writer.Header().Set("Allow", "GET, PUT")
+		writeAPIError(writer, http.StatusMethodNotAllowed, errors.New("method not allowed"))
+	}
 }
 
 func (service *sessionsService) serveMessage(writer http.ResponseWriter, request *http.Request) {

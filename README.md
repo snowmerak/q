@@ -811,6 +811,7 @@ publishing the fork.
 ### Design notes
 
 - [Q Studio blueprint](docs/studio-blueprint.md)
+- [Q Studio TUI migration](docs/studio-tui-migration.md)
 - [Agent Loop embedding guide](docs/agent-loop-embedding.md)
 - [Architecture refactoring roadmap](docs/refactoring-roadmap.md)
 - [Embedded Agent Loop public API](docs/embedded-agent-loop-public-api-plan.md)

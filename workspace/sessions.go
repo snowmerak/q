@@ -114,6 +114,45 @@ func DeleteSession(root, sessionID, command string) (returnErr error) {
 	return store.ClearSession()
 }
 
+// ResetSession empties one inactive session in place while preserving its
+// identity. It mirrors the local chat /clear persistence semantics: execution
+// and Thinker checkpoints are discarded, the conversation receives a fresh
+// run ID, and workspace-wide settings and durable archive records remain.
+func ResetSession(root, sessionID, command string) (session Session, returnErr error) {
+	store, err := (Store{Root: root}).ForSession(sessionID)
+	if err != nil {
+		return Session{}, err
+	}
+	lock, err := AcquireSessionLock(root, sessionID, command)
+	if err != nil {
+		return Session{}, err
+	}
+	defer func() { returnErr = errors.Join(returnErr, lock.Close()) }()
+	if _, err := store.Load(); err != nil {
+		return Session{}, err
+	}
+	if err := store.ClearExecution(); err != nil {
+		return Session{}, err
+	}
+	runID, err := NewSessionID()
+	if err != nil {
+		return Session{}, err
+	}
+	now := time.Now().UTC()
+	session = Session{
+		ID:        sessionID,
+		RunID:     "run-" + runID,
+		UpdatedAt: &now,
+	}
+	if err := store.Save(session); err != nil {
+		return Session{}, err
+	}
+	if err := store.ClearThinkerCheckpointAny(); err != nil {
+		return Session{}, err
+	}
+	return session, nil
+}
+
 // MigrateLegacySession moves the former workspace-wide projections into one
 // session directory. The short migration lock serializes upgrades without
 // becoming a process-lifetime workspace lock.

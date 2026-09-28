@@ -95,7 +95,12 @@ func newHandlerWithRunner(store config.Store, runner sessionRunner) (http.Handle
 	mux.HandleFunc("GET /api/v1/directories", sessions.serveDirectoryListing)
 	mux.HandleFunc("/api/v1/sessions", sessions.serveCollection)
 	mux.HandleFunc("GET /api/v1/sessions/{session}", sessions.serveDetail)
+	mux.HandleFunc("DELETE /api/v1/sessions/{session}", sessions.serveDetail)
+	mux.HandleFunc("POST /api/v1/sessions/{session}/clear", sessions.serveClear)
+	mux.HandleFunc("POST /api/v1/sessions/{session}/compact", sessions.serveCompact)
 	mux.HandleFunc("POST /api/v1/sessions/{session}/messages", sessions.serveMessage)
+	mux.HandleFunc("GET /api/v1/workspaces/learning", sessions.serveLearning)
+	mux.HandleFunc("PUT /api/v1/workspaces/learning", sessions.serveLearning)
 	mux.Handle("/api/", http.NotFoundHandler())
 	mux.Handle("/", spa)
 	return securityHeaders(mux), nil

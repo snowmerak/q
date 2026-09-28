@@ -1,6 +1,7 @@
 <script lang="ts">
-  import { ArrowUp, Bot, ChevronUp, Folder, FolderOpen, GitBranch, HardDrive, Home, Plus, RefreshCw, Square, Terminal, User, Wrench, X } from '@lucide/svelte';
+  import { ArrowUp, Bot, BrainCircuit, ChevronUp, Eraser, Folder, FolderOpen, GitBranch, HardDrive, Home, Minimize2, Plus, RefreshCw, Square, Terminal, Trash2, User, Wrench, X } from '@lucide/svelte';
   import { onMount, tick } from 'svelte';
+  import Markdown from './Markdown.svelte';
 
   type SessionSummary = {
     session_id: string;
@@ -69,6 +70,8 @@
   let directoryError = '';
   let directoryPathInput = '';
   let directoryListing: DirectoryListing | null = null;
+  let learningEnabled = true;
+  let learningLoading = false;
 
   function sessionFromLocation() {
     const match = window.location.pathname.match(/^\/sessions\/([^/]+)$/);
@@ -97,6 +100,7 @@
       workspaceInput = result.workspace_root;
       sessions = result.sessions;
       localStorage.setItem('q-studio-workspace-root', result.workspace_root);
+      await loadLearning();
       const target = preferredSession || selected?.session.session_id || result.sessions[0]?.session_id || '';
       if (target && result.sessions.some((session) => session.session_id === target)) {
         await selectSession(target, false);
@@ -178,6 +182,114 @@
       error = cause instanceof Error ? cause.message : 'Could not create a session';
     } finally {
       sessionLoading = false;
+    }
+  }
+
+  async function clearSession() {
+    if (!selected || !workspaceRoot || sending) return;
+    if (!window.confirm('Clear this conversation? Its durable archive records will remain available.')) return;
+    sessionLoading = true;
+    error = '';
+    try {
+      const response = await fetch(`/api/v1/sessions/${encodeURIComponent(selected.session.session_id)}/clear`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ workspace_root: workspaceRoot })
+      });
+      if (!response.ok) throw new Error(await apiError(response));
+      selected = (await response.json()) as SessionDetail;
+      messages = selected.transcript;
+      events = [];
+      responseDraft = '';
+      thinkingDraft = '';
+      runStatus = 'Conversation cleared';
+      sessions = [selected.session, ...sessions.filter((session) => session.session_id !== selected?.session.session_id)];
+    } catch (cause) {
+      error = cause instanceof Error ? cause.message : 'Could not clear the conversation';
+    } finally {
+      sessionLoading = false;
+    }
+  }
+
+  async function compactSession() {
+    if (!selected || !workspaceRoot || sending || sessionLoading) return;
+    sessionLoading = true;
+    error = '';
+    runStatus = 'Compacting context…';
+    try {
+      const response = await fetch(`/api/v1/sessions/${encodeURIComponent(selected.session.session_id)}/compact`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ workspace_root: workspaceRoot })
+      });
+      if (!response.ok) throw new Error(await apiError(response));
+      runStatus = ((await response.json()) as { status?: string }).status || 'Context compacted';
+      await reloadSelected();
+    } catch (cause) {
+      error = cause instanceof Error ? cause.message : 'Could not compact the context';
+      runStatus = 'Compaction failed';
+    } finally {
+      sessionLoading = false;
+    }
+  }
+
+  async function deleteSession(sessionID: string) {
+    if (!workspaceRoot || sending) return;
+    const target = sessions.find((session) => session.session_id === sessionID);
+    if (!window.confirm(`Delete ${target?.title || 'this session'}? Its durable archive records will remain available.`)) return;
+    sessionLoading = true;
+    error = '';
+    try {
+      const response = await fetch(`/api/v1/sessions/${encodeURIComponent(sessionID)}?workspace_root=${encodeURIComponent(workspaceRoot)}`, { method: 'DELETE' });
+      if (!response.ok) throw new Error(await apiError(response));
+      sessions = sessions.filter((session) => session.session_id !== sessionID);
+      if (selected?.session.session_id === sessionID) {
+        selected = null;
+        messages = [];
+        events = [];
+        const next = sessions[0]?.session_id;
+        if (next) {
+          await selectSession(next, false);
+          window.history.replaceState({}, '', `/sessions/${encodeURIComponent(next)}`);
+        } else {
+          window.history.replaceState({}, '', '/sessions');
+        }
+      }
+    } catch (cause) {
+      error = cause instanceof Error ? cause.message : 'Could not delete the session';
+    } finally {
+      sessionLoading = false;
+    }
+  }
+
+  async function loadLearning() {
+    if (!workspaceRoot) return;
+    learningLoading = true;
+    try {
+      const response = await fetch(`/api/v1/workspaces/learning?workspace_root=${encodeURIComponent(workspaceRoot)}`);
+      if (!response.ok) throw new Error(await apiError(response));
+      learningEnabled = ((await response.json()) as { enabled: boolean }).enabled;
+    } catch (cause) {
+      error = cause instanceof Error ? cause.message : 'Could not load learning settings';
+    } finally {
+      learningLoading = false;
+    }
+  }
+
+  async function toggleLearning() {
+    if (!workspaceRoot || learningLoading) return;
+    learningLoading = true;
+    error = '';
+    try {
+      const response = await fetch('/api/v1/workspaces/learning', {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ workspace_root: workspaceRoot, disabled: learningEnabled })
+      });
+      if (!response.ok) throw new Error(await apiError(response));
+      learningEnabled = ((await response.json()) as { enabled: boolean }).enabled;
+      runStatus = `Learning ${learningEnabled ? 'enabled' : 'disabled'}`;
+    } catch (cause) {
+      error = cause instanceof Error ? cause.message : 'Could not update learning settings';
+    } finally {
+      learningLoading = false;
     }
   }
 
@@ -330,6 +442,15 @@
     return event.detail || event.question || event.content || '';
   }
 
+  function toolArguments(value?: string) {
+    if (!value) return '';
+    try {
+      return `\`\`\`json\n${JSON.stringify(JSON.parse(value), null, 2)}\n\`\`\``;
+    } catch {
+      return `\`\`\`text\n${value}\n\`\`\``;
+    }
+  }
+
   async function scrollToBottom() {
     await tick();
     transcriptElement?.scrollTo({ top: transcriptElement.scrollHeight, behavior: 'smooth' });
@@ -374,11 +495,14 @@
       <div class="session-list-heading"><span>SESSIONS</span><div><button title="Refresh sessions" onclick={refreshSessions} disabled={workspaceLoading || sending}><RefreshCw aria-hidden="true" size={14} /></button><button title="New session" onclick={createSession} disabled={sessionLoading || sending}><Plus aria-hidden="true" size={15} /></button></div></div>
       <div class="session-list">
         {#each sessions as session}
-          <button class:active={selected?.session.session_id === session.session_id} onclick={() => selectSession(session.session_id)} disabled={sending}>
-            <strong>{session.title || 'New session'}</strong>
-            <small>{formatSessionTime(session.updated_at)}</small>
-            <code>{shortID(session.session_id)}</code>
-          </button>
+          <div class="session-list-item" class:active={selected?.session.session_id === session.session_id}>
+            <button class="session-select" onclick={() => selectSession(session.session_id)} disabled={sending}>
+              <strong>{session.title || 'New session'}</strong>
+              <small>{formatSessionTime(session.updated_at)}</small>
+              <code>{shortID(session.session_id)}</code>
+            </button>
+            <button class="session-delete" title="Delete session" aria-label={`Delete ${session.title || 'session'}`} onclick={() => deleteSession(session.session_id)} disabled={sending || sessionLoading}><Trash2 aria-hidden="true" size={13} /></button>
+          </div>
         {:else}
           <div class="session-list-empty"><p>No sessions in this repository.</p><button class="primary-button" onclick={createSession}><Plus aria-hidden="true" size={15} /> New session</button></div>
         {/each}
@@ -393,19 +517,40 @@
     {#if selected}
       <div class="chat-heading">
         <div><h2>{selected.session.title || 'New session'}</h2><p>{workspaceRoot}</p></div>
-        <span class:running={sending}>{sending ? 'Running' : runStatus || 'Ready'}</span>
+        <div class="chat-heading-actions">
+          <span class:running={sending}>{sending ? 'Running' : runStatus || 'Ready'}</span>
+          <button class:enabled={learningEnabled} title={`Learning ${learningEnabled ? 'enabled' : 'disabled'}`} aria-label={`Turn learning ${learningEnabled ? 'off' : 'on'}`} onclick={toggleLearning} disabled={sending || learningLoading}><BrainCircuit aria-hidden="true" size={15} /></button>
+          <button title="Compact context" aria-label="Compact context" onclick={compactSession} disabled={sending || sessionLoading}><Minimize2 aria-hidden="true" size={15} /></button>
+          <button title="Clear conversation" aria-label="Clear conversation" onclick={clearSession} disabled={sending || sessionLoading}><Eraser aria-hidden="true" size={15} /></button>
+        </div>
       </div>
       <div class="transcript" bind:this={transcriptElement} aria-live="polite">
-        {#each messages as message}
+        {#each messages as message, messageIndex (`${message.role}-${message.tool_call_id || messageIndex}`)}
           {#if message.role === 'user' || message.role === 'assistant'}
             <article class="chat-message" class:user-message={message.role === 'user'}>
               <div class="message-avatar">{#if message.role === 'user'}<User aria-hidden="true" size={16} />{:else}<Bot aria-hidden="true" size={17} />{/if}</div>
-              <div><header>{message.role === 'user' ? 'You' : 'Q'}</header><p>{message.content || (message.tool_calls?.length ? 'Preparing tool calls…' : '')}</p></div>
+              <div class="message-content"><header>{message.role === 'user' ? 'You' : 'Q'}</header>{#if message.content}<Markdown content={message.content} />{/if}
+                {#if message.tool_calls?.length}
+                  <div class="message-tools">
+                    {#each message.tool_calls as call, callIndex (call.id || callIndex)}
+                      <details class="tool-card">
+                        <summary><Wrench aria-hidden="true" size={14} /><span>{call.function?.name || 'Tool call'}</span><code>{call.id ? shortID(call.id) : 'pending'}</code></summary>
+                        {#if call.function?.arguments}<Markdown compact content={toolArguments(call.function.arguments)} />{/if}
+                      </details>
+                    {/each}
+                  </div>
+                {/if}
+              </div>
             </article>
+          {:else if message.role === 'tool'}
+            <details class="transcript-tool-result">
+              <summary><Wrench aria-hidden="true" size={14} /><span>{message.name || 'Tool result'}</span>{#if message.tool_call_id}<code>{shortID(message.tool_call_id)}</code>{/if}</summary>
+              <Markdown compact content={message.content || '_No output_'} />
+            </details>
           {/if}
         {/each}
-        {#if thinkingDraft}<details class="thinking-block"><summary>Thinking</summary><p>{thinkingDraft}</p></details>{/if}
-        {#if responseDraft}<article class="chat-message"><div class="message-avatar"><Bot aria-hidden="true" size={17} /></div><div><header>Q</header><p>{responseDraft}</p></div></article>{/if}
+        {#if thinkingDraft}<details class="thinking-block"><summary>Thinking</summary><Markdown compact content={thinkingDraft} /></details>{/if}
+        {#if responseDraft}<article class="chat-message streaming-message"><div class="message-avatar"><Bot aria-hidden="true" size={17} /></div><div class="message-content"><header>Q <span>responding</span></header><Markdown content={responseDraft} /></div></article>{/if}
         {#if sessionLoading}<div class="transcript-loading">Loading session…</div>{/if}
       </div>
       <div class="composer-wrap">

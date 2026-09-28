@@ -7,6 +7,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/snowmerak/q/config"
+	"github.com/snowmerak/q/workspace"
 )
 
 func TestSessionExecutionProjectsQuestionAndCompletes(t *testing.T) {
@@ -71,5 +72,37 @@ func TestSessionDefaultLoopTreatsSlashTextAsPrompt(t *testing.T) {
 	}
 	if len(state.messages) == 0 || state.messages[len(state.messages)-1].Content != "/new" {
 		t.Fatalf("messages = %#v", state.messages)
+	}
+}
+
+func TestSessionCompactionModelRunsManualCheckpoint(t *testing.T) {
+	value := config.Default()
+	value.Provider.Model = "tool-model"
+	value.Provider.ContextWindow = 4000
+	store := workspace.Store{Root: t.TempDir()}
+	state := newModel(t.Context(), config.Store{Dir: t.TempDir()}, nil)
+	state.workspaceStore = &store
+	state.enterChat(value, &fakeClient{})
+	for _, message := range compactCommandHistory() {
+		state.messages = append(state.messages, message)
+		state.memory.Append(message)
+	}
+	updated, initial := state.startManualCompaction()
+	state = updated.(model)
+	if initial == nil || !state.waiting {
+		t.Fatal("manual compaction did not start")
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	final, err := tea.NewProgram(
+		sessionCompactionModel{state: state, initial: initial, cancel: cancel},
+		tea.WithContext(ctx), tea.WithInput(nil), tea.WithoutRenderer(), tea.WithoutSignalHandler(),
+	).Run()
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := final.(sessionCompactionModel)
+	if result.err != nil || result.state.waiting || !strings.Contains(result.state.status, "Context compacted") {
+		t.Fatalf("compaction result = err %v, waiting %v, status %q", result.err, result.state.waiting, result.state.status)
 	}
 }

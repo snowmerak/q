@@ -5,6 +5,9 @@
 상태: 활성 청사진. 이 문서는 Q Studio의 목표 구조, 현재 기반과 선행 작업 순서를
 정의한다. 현재 동작의 세부 계약은 각 링크된 구현 문서와 코드가 소유한다.
 
+TUI 기능 이전의 실행 순서, capability별 상태와 acceptance 기록은
+[Studio TUI migration](studio-tui-migration.md)이 소유한다.
+
 현재 구현: user-level `q studio` loopback server와 embedded Svelte shell이 존재한다.
 전역 Settings는 Gateway provider, discovery 기반 model·role assignment,
 System One provider·decision model routing·server API key lifecycle,
@@ -577,6 +580,7 @@ TUI 기능을 제거하기 전에는 기능 이전 표의 사용자 흐름을 We
 
 ## 18. 관련 문서
 
+- [Studio TUI migration](studio-tui-migration.md)
 - [Delegated subagents](delegated-subagents.md)
 - [중첩 delegate 세션과 재귀 복구](delegation-session-recovery.md)
 - [Agent invocation과 Loom capture](agent-invocation-runtime.md)
