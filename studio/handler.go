@@ -92,6 +92,7 @@ func newHandlerWithRunner(store config.Store, runner sessionRunner) (http.Handle
 	mux.HandleFunc("PUT /api/v1/settings/runtime", settings.serveRuntimeUpdate)
 	mux.HandleFunc("PUT /api/v1/settings/services/{service}", settings.serveServiceUpdate)
 	sessions := newSessionsService(runner)
+	mux.HandleFunc("GET /api/v1/directories", sessions.serveDirectoryListing)
 	mux.HandleFunc("/api/v1/sessions", sessions.serveCollection)
 	mux.HandleFunc("GET /api/v1/sessions/{session}", sessions.serveDetail)
 	mux.HandleFunc("POST /api/v1/sessions/{session}/messages", sessions.serveMessage)

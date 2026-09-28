@@ -69,6 +69,15 @@ func newSessionsService(runner sessionRunner) *sessionsService {
 	return &sessionsService{runner: runner, admission: make(chan struct{}, 1)}
 }
 
+func (service *sessionsService) serveDirectoryListing(writer http.ResponseWriter, request *http.Request) {
+	listing, err := browseDirectories(request.URL.Query().Get("path"))
+	if err != nil {
+		writeAPIError(writer, http.StatusBadRequest, err)
+		return
+	}
+	writeJSON(writer, http.StatusOK, listing)
+}
+
 func (service *sessionsService) serveCollection(writer http.ResponseWriter, request *http.Request) {
 	switch request.Method {
 	case http.MethodGet:

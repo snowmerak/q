@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -111,6 +113,31 @@ func TestSessionsAPIRejectsMissingWorkspace(t *testing.T) {
 	handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/v1/sessions", nil))
 	if response.Code != http.StatusBadRequest || !strings.Contains(response.Body.String(), "workspace_root") {
 		t.Fatalf("missing workspace = %d %s", response.Code, response.Body.String())
+	}
+}
+
+func TestDirectoryBrowserDefaultsToHomeAndListsDirectories(t *testing.T) {
+	home := t.TempDir()
+	child := filepath.Join(home, "repository")
+	if err := os.Mkdir(child, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(home, "ignored.txt"), []byte("file"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	listing, err := listDirectories("", home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if listing.Current != home || listing.Home != home {
+		t.Fatalf("listing paths = current %q home %q", listing.Current, listing.Home)
+	}
+	if listing.CanSelect {
+		t.Fatal("home directory must not be selectable as a workspace")
+	}
+	if len(listing.Directories) != 1 || listing.Directories[0].Name != "repository" || listing.Directories[0].Path != child {
+		t.Fatalf("directories = %#v", listing.Directories)
 	}
 }
 
