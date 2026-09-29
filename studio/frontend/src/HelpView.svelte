@@ -4,7 +4,7 @@
     ['/model', 'Settings · Models', 'Global and workspace assignments'], ['/gateway', 'Settings · Providers / Services', 'Providers, keys, listener'], ['/systemone', 'Settings · System One', 'Decision providers, models, keys'],
     ['/library', 'Settings · Services', 'Library listener'], ['/loom', 'Settings · Runtime', 'Storage and garbage collection'], ['/ignore', 'Settings · Integrations', '.qignore editor'],
     ['/skills', 'Settings · Integrations', 'Skill catalog and Git lifecycle'], ['/lsp', 'Settings · Integrations', 'Language server profiles'], ['/mcp', 'Settings · Integrations', 'MCP servers and grants'],
-    ['/subagents', 'Settings · Integrations', 'Agent profiles and delegation'], ['/subagent', 'Sessions', 'Delegate from chat'], ['/changes', 'Changes', 'Repository diff review'], ['/commit', 'Changes', 'Commit proposals and execution'], ['/sessions', 'Sessions', 'Registered session trees'], ['/help', 'Help', 'This guide']
+    ['/subagents', 'Settings · Subagents', 'Profiles, delegation grants, and ACP connections'], ['/subagent', 'Sessions', 'Delegate from chat'], ['/changes', 'Changes', 'Repository diff review'], ['/commit', 'Changes', 'Commit proposals and execution'], ['/sessions', 'Sessions', 'Registered session trees'], ['/help', 'Help', 'This guide']
   ];
   const shortcuts = [
     ['Enter', 'Send a chat message or submit guidance'], ['Shift + Enter', 'Insert a line break'], ['Esc', 'Close the directory browser or active dialog'], ['Ctrl/Cmd + K', 'Focus the Studio navigation'], ['?', 'Open Help when focus is outside an input']

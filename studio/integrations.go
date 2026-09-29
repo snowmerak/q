@@ -97,8 +97,11 @@ type agentSettingsResponse struct {
 type studioAgentDefinition struct {
 	Name             string   `json:"name"`
 	Description      string   `json:"description"`
+	Source           string   `json:"source"`
 	Kind             string   `json:"kind"`
 	Role             string   `json:"role"`
+	Connection       string   `json:"connection,omitempty"`
+	Available        bool     `json:"available"`
 	MutatesWorkspace bool     `json:"mutates_workspace"`
 	SystemPrompt     string   `json:"system_prompt"`
 	Tools            []string `json:"tools"`
@@ -401,7 +404,8 @@ func (service *integrationService) writeSkills(writer http.ResponseWriter, root 
 		}
 		result = append(result, studioSkill{Skill: skill, Active: active[skill.ID], Managed: managed})
 	}
-	writeJSON(writer, http.StatusOK, skillSettingsResponse{WorkspaceRoot: root, Skills: result, Issues: registry.Issues()})
+	issues := append([]agentskills.Issue{}, registry.Issues()...)
+	writeJSON(writer, http.StatusOK, skillSettingsResponse{WorkspaceRoot: root, Skills: result, Issues: issues})
 }
 
 func (service *integrationService) reindexSkills(ctx context.Context, root string, registry *agentskills.Registry) (returnErr error) {
@@ -444,7 +448,7 @@ func (service *integrationService) reindexSkills(ctx context.Context, root strin
 
 func (service *integrationService) serveAgents(writer http.ResponseWriter, request *http.Request) {
 	if request.Method == http.MethodGet {
-		root, err := canonicalWorkspaceDirectory(request.URL.Query().Get("workspace_root"))
+		root, err := optionalCanonicalWorkspaceDirectory(request.URL.Query().Get("workspace_root"))
 		if err != nil {
 			writeAPIError(writer, http.StatusBadRequest, err)
 			return
@@ -462,7 +466,7 @@ func (service *integrationService) serveAgents(writer http.ResponseWriter, reque
 		writeAPIError(writer, http.StatusBadRequest, err)
 		return
 	}
-	root, err := canonicalWorkspaceDirectory(input.WorkspaceRoot)
+	root, err := optionalCanonicalWorkspaceDirectory(input.WorkspaceRoot)
 	if err != nil {
 		writeAPIError(writer, http.StatusBadRequest, err)
 		return
@@ -556,8 +560,12 @@ func (service *integrationService) serveProfiles(writer http.ResponseWriter, req
 		writeAPIError(writer, http.StatusBadRequest, err)
 		return
 	}
-	root, err := canonicalWorkspaceDirectory(input.WorkspaceRoot)
+	root, err := optionalCanonicalWorkspaceDirectory(input.WorkspaceRoot)
 	if err != nil {
+		writeAPIError(writer, http.StatusBadRequest, err)
+		return
+	}
+	if err := requireProfileWorkspace(input.Scope, input.OriginalScope, root); err != nil {
 		writeAPIError(writer, http.StatusBadRequest, err)
 		return
 	}
@@ -612,8 +620,12 @@ func (service *integrationService) serveProfileDelete(writer http.ResponseWriter
 		writeAPIError(writer, http.StatusBadRequest, err)
 		return
 	}
-	root, err := canonicalWorkspaceDirectory(input.WorkspaceRoot)
+	root, err := optionalCanonicalWorkspaceDirectory(input.WorkspaceRoot)
 	if err != nil {
+		writeAPIError(writer, http.StatusBadRequest, err)
+		return
+	}
+	if err := requireProfileWorkspace(input.Scope, input.OriginalScope, root); err != nil {
 		writeAPIError(writer, http.StatusBadRequest, err)
 		return
 	}
@@ -670,7 +682,7 @@ func (service *integrationService) writeAgentsUnlocked(writer http.ResponseWrite
 	}
 	connections := make(map[string]config.AgentConnectionConfig, len(value.Agents.Connections))
 	for id, connection := range value.Agents.Connections {
-		connection.Args = append([]string(nil), connection.Args...)
+		connection.Args = append([]string{}, connection.Args...)
 		connection.Env = make(map[string]string, len(value.Agents.Connections[id].Env))
 		for name := range value.Agents.Connections[id].Env {
 			connection.Env[name] = redactedConnectionSecret
@@ -684,10 +696,18 @@ func (service *integrationService) writeAgentsUnlocked(writer http.ResponseWrite
 	builtins := make([]studioAgentDefinition, 0)
 	toolSet := make(map[string]struct{})
 	for _, definition := range subagent.PublicAgentDefinitions() {
+		available := definition.Info.Kind != subagent.AgentKindExternal
+		connection := ""
+		if definition.Info.Kind == subagent.AgentKindExternal {
+			connection, _, available = value.ExternalAgentConnection(definition.Info.Role)
+		}
 		builtins = append(builtins, studioAgentDefinition{
-			Name: definition.Info.Name, Description: definition.Info.Description, Kind: definition.Info.Kind,
-			Role: definition.Info.Role, MutatesWorkspace: definition.Info.MutatesWorkspace,
-			SystemPrompt: definition.SystemPrompt, Tools: definition.Tools, Delegates: definition.Delegates,
+			Name: definition.Info.Name, Description: definition.Info.Description, Source: definition.Info.Source,
+			Kind: definition.Info.Kind, Role: definition.Info.Role, Connection: connection, Available: available,
+			MutatesWorkspace: definition.Info.MutatesWorkspace,
+			SystemPrompt:     definition.SystemPrompt,
+			Tools:            append([]string{}, definition.Tools...),
+			Delegates:        append([]string{}, definition.Delegates...),
 		})
 		for _, name := range definition.Tools {
 			if subagent.CustomToolAllowed(name) {
@@ -703,6 +723,8 @@ func (service *integrationService) writeAgentsUnlocked(writer http.ResponseWrite
 	entries := profileStore(service.main, root).List()
 	profiles := make([]studioProfileEntry, 0, len(entries))
 	for _, entry := range entries {
+		entry.Profile.Tools = append([]string{}, entry.Profile.Tools...)
+		entry.Profile.Delegates = append([]string{}, entry.Profile.Delegates...)
 		item := studioProfileEntry{Profile: entry.Profile, Scope: entry.Scope, Path: entry.Path, Revision: revision(entry.Raw), Shadowed: entry.Shadowed}
 		if entry.Err != nil {
 			item.Error = entry.Err.Error()
@@ -782,6 +804,20 @@ func profileStore(store config.Store, root string) subagent.ProfileStore {
 		profiles.Workspace = filepath.Join(root, workspace.DirectoryName, "subagents")
 	}
 	return profiles
+}
+
+func optionalCanonicalWorkspaceDirectory(value string) (string, error) {
+	if strings.TrimSpace(value) == "" {
+		return "", nil
+	}
+	return canonicalWorkspaceDirectory(value)
+}
+
+func requireProfileWorkspace(scope, originalScope, root string) error {
+	if root == "" && (scope == "workspace" || originalScope == "workspace") {
+		return errors.New("workspace_root is required for repository subagent profiles")
+	}
+	return nil
 }
 
 func findProfileEntry(entries []subagent.ProfileEntry, scope, name string) (subagent.ProfileEntry, bool) {

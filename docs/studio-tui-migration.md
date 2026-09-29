@@ -149,15 +149,16 @@ bare `q` 대화 TUI와 ACP는 호환 client로 남지만 독립 설정 CLI 명�
 
 완료 기록:
 
-- Integrations 화면을 MCP, Language servers, Skills, Agents, `.qignore`의 다섯 관리
-  surface로 확장했다. repository 범위 화면은 Sessions에서 마지막으로 연 경로를
-  공유하되 사용자가 다른 canonical 경로를 명시할 수도 있다.
+- Integrations 화면은 MCP, Language servers, Skills, `.qignore`를 관리한다. Subagents는
+  별도 Settings 화면에서 custom profile, builtin definition, ACP connection과 외부 role
+  binding을 관리한다. global profile과 connection은 repository 없이 열 수 있고,
+  repository 경로를 지정하면 workspace profile과 ACP probe가 추가된다.
 - MCP의 두 transport, environment/header reference와 role grant, LSP global profile,
   language default, repository root, PATH discovery를 기존 config validator에 연결했다.
 - portable/global/workspace Skill을 함께 표시하고 Q-managed Git checkout의 clone,
   pull, delete와 global/workspace index reconciliation을 한 operation으로 묶었다.
 - builtin occupational agent를 읽기 전용으로 표시하고 custom inner/external profile,
-  model role, tool와 delegation grant, ACP connection/binding/probe를 편집하게 했다.
+  model role, 검색 가능한 tool와 delegation 선택, ACP connection/binding/probe를 편집하게 했다.
   ACP child environment value는 read API에서 redacted되고 unchanged marker는 저장 시
   원래 secret을 보존한다.
 - `.qignore`는 입력 정지 뒤 자동 저장하며 SHA-256 revision mismatch를 `409`로

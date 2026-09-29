@@ -117,12 +117,12 @@ type AgentsConfig struct {
 // built-in Codex or Grok command; Command and Args support another stdio ACP
 // implementation instead.
 type AgentConnectionConfig struct {
-	Preset     string            `yaml:"preset,omitempty"`
-	Command    string            `yaml:"command,omitempty"`
-	Args       []string          `yaml:"args,omitempty"`
-	Env        map[string]string `yaml:"env,omitempty"`
-	AuthMethod string            `yaml:"auth_method,omitempty"`
-	Disabled   bool              `yaml:"disabled,omitempty"`
+	Preset     string            `yaml:"preset,omitempty" json:"preset,omitempty"`
+	Command    string            `yaml:"command,omitempty" json:"command,omitempty"`
+	Args       []string          `yaml:"args,omitempty" json:"args"`
+	Env        map[string]string `yaml:"env,omitempty" json:"env"`
+	AuthMethod string            `yaml:"auth_method,omitempty" json:"auth_method,omitempty"`
+	Disabled   bool              `yaml:"disabled,omitempty" json:"disabled,omitempty"`
 }
 
 type ModelGroupConfig struct {

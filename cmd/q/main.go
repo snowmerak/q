@@ -206,7 +206,7 @@ func studioUIPath(name string) string {
 	case "mcp":
 		return "/settings?section=integrations&panel=mcp"
 	case "subagents", "agents":
-		return studioWorkspacePath("/settings", "integrations&panel=agents", directory)
+		return studioWorkspacePath("/settings", "subagents", directory)
 	case "help":
 		return "/help"
 	default:

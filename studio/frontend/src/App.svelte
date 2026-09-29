@@ -1,11 +1,12 @@
 <script lang="ts">
-  import { Activity, BrainCircuit, Check, ChevronDown, ChevronUp, CircleHelp, Copy, Cpu, GitCompareArrows, House, KeyRound, Layers, Network, Plus, RefreshCw, Server, Settings, SlidersHorizontal, Trash2, Unplug } from '@lucide/svelte';
+  import { Activity, Bot, BrainCircuit, Check, ChevronDown, ChevronUp, CircleHelp, Copy, Cpu, GitCompareArrows, House, KeyRound, Layers, Network, Plus, RefreshCw, Server, Settings, SlidersHorizontal, Trash2, Unplug } from '@lucide/svelte';
   import { onMount } from 'svelte';
   import ChangesView from './ChangesView.svelte';
   import IntegrationsView from './IntegrationsView.svelte';
   import HelpView from './HelpView.svelte';
   import OperationsView from './OperationsView.svelte';
   import SessionView from './SessionView.svelte';
+  import SubagentsView from './SubagentsView.svelte';
   import WorkspaceModels from './WorkspaceModels.svelte';
 
   type StudioStatus = { version: number; service: string; ready: boolean };
@@ -99,7 +100,7 @@
     };
   };
   type View = 'overview' | 'sessions' | 'changes' | 'operations' | 'settings' | 'help';
-  type SettingsSection = 'models' | 'providers' | 'system-one' | 'runtime' | 'services' | 'integrations';
+  type SettingsSection = 'models' | 'providers' | 'system-one' | 'runtime' | 'services' | 'subagents' | 'integrations';
   type SaveState = { kind: 'idle' | 'saving' | 'saved' | 'error'; message?: string };
   type LoomStats = { artifacts: number; blobs: number; bytes: number };
   type LoomGCResult = { artifacts_removed: number; blobs_removed: number; bytes_reclaimed: number; dry_run: boolean };
@@ -118,6 +119,7 @@
     { id: 'system-one' as const, label: 'System One', description: 'Decision API and access keys', icon: BrainCircuit },
     { id: 'runtime' as const, label: 'Runtime', description: 'Execution, context, and storage', icon: SlidersHorizontal },
     { id: 'services' as const, label: 'Services', description: 'Gateway and System One', icon: Server },
+    { id: 'subagents' as const, label: 'Subagents', description: 'Profiles, delegation, and ACP', icon: Bot },
     { id: 'integrations' as const, label: 'Integrations', description: 'MCP and language servers', icon: Unplug }
   ];
 
@@ -887,6 +889,8 @@
                 </article>
               </div>
             </section>
+          {:else if activeSection === 'subagents'}
+            <SubagentsView />
           {:else}
             <IntegrationsView />
           {/if}

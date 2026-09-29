@@ -39,6 +39,15 @@ func TestStudioUICommandPaths(t *testing.T) {
 	if studioUIPath("unknown") != "" {
 		t.Fatal("unknown standalone command was registered")
 	}
+	for _, name := range []string{"subagents", "agents"} {
+		parsed, err := url.Parse(studioUIPath(name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if parsed.Path != "/settings" || parsed.Query().Get("section") != "subagents" || parsed.Query().Get("workspace_root") == "" || parsed.Query().Has("panel") {
+			t.Fatalf("%s Studio route = %q (%#v)", name, parsed.Path, parsed.Query())
+		}
+	}
 }
 
 func TestStudioWorkspacePathPreservesRouteAndCanonicalQueryValues(t *testing.T) {

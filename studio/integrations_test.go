@@ -151,6 +151,9 @@ func TestIntegrationAPIAgentConnectionsAndProfiles(t *testing.T) {
 	if bytes.Contains(response.Body.Bytes(), []byte("super-secret")) || !bytes.Contains(response.Body.Bytes(), []byte(redactedConnectionSecret)) {
 		t.Fatalf("agent response exposed or failed to redact connection env: %s", response.Body.String())
 	}
+	if !bytes.Contains(response.Body.Bytes(), []byte(`"preset":"codex"`)) || bytes.Contains(response.Body.Bytes(), []byte(`"Preset"`)) {
+		t.Fatalf("agent response did not use the Studio JSON contract: %s", response.Body.String())
+	}
 	profile := profileUpdate{
 		WorkspaceRoot: root, Scope: "workspace",
 		Profile: subagent.Profile{
@@ -174,6 +177,85 @@ func TestIntegrationAPIAgentConnectionsAndProfiles(t *testing.T) {
 	response = serveJSON(t, handler, http.MethodDelete, "/api/v1/workspaces/agents/profiles/inspector", deleteRequest)
 	if response.Code != http.StatusOK {
 		t.Fatalf("DELETE profile = %d %s", response.Code, response.Body.String())
+	}
+}
+
+func TestIntegrationAPISubagentsSupportsGlobalProfilesWithoutWorkspace(t *testing.T) {
+	store := config.Store{Dir: t.TempDir()}
+	if err := store.Save(configuredIntegrationTestConfig()); err != nil {
+		t.Fatal(err)
+	}
+	handler, err := newHandler(store)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/v1/settings/subagents", nil))
+	if response.Code != http.StatusOK {
+		t.Fatalf("GET global subagents = %d %s", response.Code, response.Body.String())
+	}
+	var initial agentSettingsResponse
+	if err := json.Unmarshal(response.Body.Bytes(), &initial); err != nil {
+		t.Fatal(err)
+	}
+	if initial.WorkspaceRoot != "" || len(initial.Builtins) == 0 {
+		t.Fatalf("global subagent snapshot = %#v", initial)
+	}
+	for _, definition := range initial.Builtins {
+		if definition.Tools == nil || definition.Delegates == nil {
+			t.Fatalf("builtin collections must be JSON arrays: %#v", definition)
+		}
+	}
+	connections := agentConnectionsUpdate{
+		Connections: map[string]config.AgentConnectionConfig{"studio-search": {Preset: "codex", Env: map[string]string{"SEARCH_TOKEN": "secret"}}},
+		Bindings:    map[string]string{config.AgentRoleSearch: "studio-search"},
+	}
+	response = serveJSON(t, handler, http.MethodPut, "/api/v1/settings/subagents", connections)
+	if response.Code != http.StatusOK || bytes.Contains(response.Body.Bytes(), []byte("secret")) {
+		t.Fatalf("PUT global subagent connections = %d %s", response.Code, response.Body.String())
+	}
+	var connected agentSettingsResponse
+	if err := json.Unmarshal(response.Body.Bytes(), &connected); err != nil {
+		t.Fatal(err)
+	}
+	searchAvailable := false
+	for _, definition := range connected.Builtins {
+		if definition.Name == subagent.BuiltinWebSearchID {
+			searchAvailable = definition.Available && definition.Connection == "studio-search"
+		}
+	}
+	if !searchAvailable {
+		t.Fatalf("configured Search definition unavailable: %#v", connected.Builtins)
+	}
+
+	profile := profileUpdate{
+		Scope: "global",
+		Profile: subagent.Profile{
+			Version: 1, Name: "release-advisor", Description: "Advise on release risk.", Kind: subagent.AgentKindInner,
+			Role: config.AgentRoleResearch, SystemPrompt: "Assess the requested release and report concrete risks.",
+			Tools: []string{"read_file"}, Delegates: []string{subagent.BuiltinResearchID},
+		},
+	}
+	response = serveJSON(t, handler, http.MethodPost, "/api/v1/settings/subagents/profiles", profile)
+	if response.Code != http.StatusOK {
+		t.Fatalf("POST global profile = %d %s", response.Code, response.Body.String())
+	}
+	var snapshot agentSettingsResponse
+	if err := json.Unmarshal(response.Body.Bytes(), &snapshot); err != nil {
+		t.Fatal(err)
+	}
+	if len(snapshot.Profiles) != 1 || snapshot.Profiles[0].Scope != "global" || snapshot.Profiles[0].Profile.Name != "release-advisor" {
+		t.Fatalf("global profile snapshot = %#v", snapshot.Profiles)
+	}
+	if _, err := os.Stat(filepath.Join(store.Dir, "subagents", "release-advisor.yaml")); err != nil {
+		t.Fatalf("global profile file: %v", err)
+	}
+
+	profile.Scope = "workspace"
+	response = serveJSON(t, handler, http.MethodPost, "/api/v1/settings/subagents/profiles", profile)
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("POST workspace profile without root = %d %s", response.Code, response.Body.String())
 	}
 }
 
