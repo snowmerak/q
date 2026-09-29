@@ -241,6 +241,27 @@ func TestWorkspaceAndToolRound(t *testing.T) {
 	}
 }
 
+func TestWorkspacePromptDescribesPrimaryAndAuxiliaryRoots(t *testing.T) {
+	primary := t.TempDir()
+	auxiliary := filepath.Join(t.TempDir(), "support")
+	messages := agentloop.PrepareWorkspaceMessages(nil, agentloop.WorkspaceMessageOptions{
+		Root: primary, ProjectName: "Q", AuxiliaryRoots: []string{auxiliary}, Tools: &scriptedTools{name: "echo"},
+	})
+	prompt := joined(messages)
+	for _, expected := range []string{
+		"Primary workspace root: " + filepath.Clean(primary),
+		"Studio project: Q",
+		"Auxiliary workspace roots: " + filepath.Clean(auxiliary),
+		"The primary workspace owns this session",
+		"use the matching working_directory",
+		"Delegated sessions remain children of this primary session",
+	} {
+		if !strings.Contains(prompt, expected) {
+			t.Fatalf("workspace prompt omitted %q:\n%s", expected, prompt)
+		}
+	}
+}
+
 func TestWorkspacePromptGuidesDefaultLoopDelegationWhenAvailable(t *testing.T) {
 	runtime := &scriptedTools{names: []string{"delegate_list", "delegate"}}
 	messages := agentloop.PrepareWorkspaceMessages(nil, agentloop.WorkspaceMessageOptions{

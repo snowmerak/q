@@ -381,6 +381,16 @@ dd.success { color: var(--green); }
 
 .session-list { min-height: 0; flex: 1; overflow-y: auto; padding: 4px 8px 16px; }
 .session-tree { padding-top: 8px; }
+.session-project-heading { display: flex; min-width: 0; align-items: center; justify-content: space-between; gap: 8px; margin: 10px 4px 4px; padding: 7px 6px 6px; color: #aaa0c4; border-bottom: 1px solid rgba(143, 92, 255, .16); }
+.session-project-heading:first-child { margin-top: 0; }
+.session-project-heading > span { display: flex; min-width: 0; align-items: center; gap: 7px; }
+.session-project-heading svg { flex: none; color: #9c82e3; }
+.session-list .session-project-heading strong { overflow: hidden; font: 10px ui-monospace, SFMono-Regular, Consolas, monospace; text-overflow: ellipsis; white-space: nowrap; }
+.session-list .session-project-heading small { display: grid; min-width: 17px; height: 17px; place-items: center; color: #8d84a6; border: 1px solid var(--border); border-radius: 999px; font: 8px ui-monospace, SFMono-Regular, Consolas, monospace; }
+.session-project-heading > button { padding: 3px 5px; color: var(--subtle); border: 0; border-radius: 3px; background: transparent; font: 8px ui-monospace, SFMono-Regular, Consolas, monospace; cursor: pointer; }
+.session-project-heading > button:hover { color: var(--text); background: rgba(255, 255, 255, .05); }
+.session-project-heading.independent-heading { margin-top: 15px; color: #8d95a9; border-bottom-color: var(--border); }
+.session-group-empty { padding: 11px 9px 13px; color: #666f84; font: 9px ui-monospace, SFMono-Regular, Consolas, monospace; text-align: center; }
 .session-list-item {
   position: relative;
   display: flex;
@@ -694,6 +704,14 @@ dd.success { color: var(--green); }
 .registration-workspace label { display: grid; gap: 7px; color: var(--muted); font-size: 10px; }
 .registration-workspace input { height: 36px; }
 .registration-workspace > button { height: 36px; }
+.project-workspace-shortcuts { display: grid; gap: 7px; padding: 10px 18px; border-bottom: 1px solid var(--border); }
+.project-workspace-shortcuts > span { color: var(--violet); font: 8px ui-monospace, SFMono-Regular, Consolas, monospace; letter-spacing: .1em; }
+.project-workspace-shortcuts > div { display: flex; gap: 6px; overflow-x: auto; padding-bottom: 2px; }
+.project-workspace-shortcuts button { display: grid; min-width: 145px; max-width: 210px; gap: 3px; padding: 7px 9px; color: var(--muted); border: 1px solid var(--border); border-radius: 4px; background: rgba(255, 255, 255, .018); text-align: left; cursor: pointer; }
+.project-workspace-shortcuts button:hover { color: var(--text); border-color: rgba(143, 92, 255, .32); background: rgba(143, 92, 255, .07); }
+.project-workspace-shortcuts strong, .project-workspace-shortcuts small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.project-workspace-shortcuts strong { font-size: 9px; }
+.project-workspace-shortcuts small { color: var(--subtle); font: 8px ui-monospace, SFMono-Regular, Consolas, monospace; }
 .registration-candidates { min-height: 0; flex: 1; overflow-y: auto; padding: 10px 12px; }
 .registration-candidates > button { display: grid; grid-template-columns: 24px minmax(0, 1fr) auto; width: 100%; align-items: center; gap: 9px; padding: 11px 12px; color: var(--muted); border: 1px solid transparent; border-radius: 5px; background: transparent; text-align: left; cursor: pointer; }
 .registration-candidates > button:hover { color: var(--text); border-color: rgba(143, 92, 255, .22); background: rgba(143, 92, 255, .07); }
@@ -705,6 +723,29 @@ dd.success { color: var(--green); }
 .registration-candidates em { color: #a98fe8; font: normal 9px ui-monospace, SFMono-Regular, Consolas, monospace; }
 .registration-candidates .new-session-candidate { margin-bottom: 8px; color: #c5b3f5; border-color: rgba(143, 92, 255, .22); background: rgba(143, 92, 255, .06); }
 .registration-empty { display: grid; min-height: 230px; place-items: center; align-content: center; gap: 14px; color: var(--subtle); font-size: 11px; }
+.workspace-dialog { min-height: min(590px, calc(100vh - 72px)); }
+.workspace-dialog-body { display: flex; min-height: 0; flex: 1; flex-direction: column; gap: 8px; overflow-y: auto; padding: 18px; }
+.workspace-dialog-error { padding: 9px 10px; color: #ffabb4; border: 1px solid rgba(255, 105, 118, .3); border-radius: 5px; background: rgba(255, 105, 118, .07); font-size: 10px; }
+.workspace-dialog-body > label { display: grid; gap: 7px; }
+.workspace-dialog-body > label span, .auxiliary-heading span { color: var(--violet); font: 9px ui-monospace, SFMono-Regular, Consolas, monospace; letter-spacing: .1em; }
+.workspace-dialog-body > label input { height: 36px; color: #aeb5c8; background: #090c14; }
+.workspace-dialog-body > p, .auxiliary-heading p { color: var(--subtle); font-size: 10px; line-height: 1.5; }
+.auxiliary-heading { display: flex; align-items: start; justify-content: space-between; gap: 16px; margin-top: 15px; padding-top: 16px; border-top: 1px solid var(--border); }
+.auxiliary-heading > div { display: grid; gap: 5px; }
+.auxiliary-heading em { color: #887ca7; font: normal 9px ui-monospace, SFMono-Regular, Consolas, monospace; }
+.auxiliary-create { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 8px; margin-top: 5px; }
+.auxiliary-create input, .auxiliary-create button { height: 36px; }
+.auxiliary-list { display: grid; gap: 6px; margin-top: 4px; }
+.auxiliary-list > div:not(.auxiliary-empty) { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 9px; min-height: 39px; padding: 6px 7px 6px 11px; border: 1px solid var(--border); border-radius: 5px; background: rgba(8, 11, 18, .58); }
+.auxiliary-list svg { color: #a58aff; }
+.auxiliary-list code { overflow: hidden; color: #c2c7d7; font: 10px ui-monospace, SFMono-Regular, Consolas, monospace; text-overflow: ellipsis; white-space: nowrap; }
+.auxiliary-list button { display: grid; width: 27px; height: 27px; place-items: center; padding: 0; color: var(--subtle); border: 0; border-radius: 4px; background: transparent; cursor: pointer; }
+.auxiliary-list button:hover { color: #ff9aa5; background: rgba(255, 105, 118, .08); }
+.auxiliary-list .auxiliary-empty { display: grid; min-height: 110px; place-items: center; padding: 18px; color: var(--subtle); border: 1px dashed var(--border); border-radius: 5px; font-size: 10px; text-align: center; }
+.directory-dialog > footer.project-dialog-footer { grid-template-columns: minmax(0, 1fr) auto auto auto; }
+.danger-button { min-height: 34px; padding: 0 12px; color: #de8993; border: 1px solid rgba(255, 105, 118, .25); border-radius: 4px; background: rgba(255, 105, 118, .06); cursor: pointer; }
+.danger-button:hover { color: #ffabb4; background: rgba(255, 105, 118, .11); }
+.danger-button:disabled { cursor: wait; opacity: .5; }
 .secondary-button { min-height: 34px; padding: 0 13px; color: var(--muted); border: 1px solid var(--border-strong); border-radius: 4px; background: transparent; cursor: pointer; }
 .secondary-button:hover { color: var(--text); background: rgba(255, 255, 255, 0.04); }
 
@@ -1203,7 +1244,10 @@ input[type="checkbox"] { width: 17px; height: 17px; padding: 0; accent-color: va
   .directory-dialog { max-height: calc(100vh - 20px); min-height: min(560px, calc(100vh - 20px)); }
   .registration-workspace { grid-template-columns: minmax(0, 1fr) auto; }
   .registration-workspace .secondary-button { grid-column: 1 / -1; }
+  .auxiliary-create { grid-template-columns: minmax(0, 1fr) auto; }
+  .auxiliary-create .secondary-button { grid-column: 1 / -1; }
   .directory-dialog > footer { grid-template-columns: 1fr 1fr; }
+  .directory-dialog > footer.project-dialog-footer { grid-template-columns: 1fr 1fr 1fr; }
   .directory-dialog > footer > div { grid-column: 1 / -1; }
 }
 

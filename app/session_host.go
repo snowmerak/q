@@ -55,6 +55,18 @@ type SessionEvent struct {
 
 type SessionEventSink func(SessionEvent) error
 
+// SessionWorkspaceContext identifies the Studio project that owns a session's
+// primary workspace and the other project roots available to that session.
+type SessionWorkspaceContext struct {
+	ProjectID      string
+	ProjectName    string
+	AuxiliaryRoots []string
+}
+
+// SessionWorkspaceResolver resolves Studio-owned project context for a
+// primary workspace. The bool is false for independent sessions.
+type SessionWorkspaceResolver func(primaryRoot string) (SessionWorkspaceContext, bool, error)
+
 type sessionRunControlRequest struct {
 	action string
 	answer string
@@ -155,6 +167,8 @@ type SessionHost struct {
 	factory       clientFactory
 	providerMu    sync.Mutex
 	providerReady bool
+	workspaceMu   sync.RWMutex
+	workspace     SessionWorkspaceResolver
 	logs          *runtimeLogBuffer
 }
 
@@ -172,6 +186,29 @@ func NewSessionHost(parent context.Context, store config.Store) (*SessionHost, e
 		ctx: runtime.Context(), runtime: runtime, store: store, manager: manager,
 		factory: managedClientFactory(manager, runtime.Recorder()), logs: logs,
 	}, nil
+}
+
+// SetSessionWorkspaceResolver installs the Studio project resolver used for
+// subsequent turns. It is safe to replace while the host is running.
+func (host *SessionHost) SetSessionWorkspaceResolver(resolver SessionWorkspaceResolver) {
+	if host == nil {
+		return
+	}
+	host.workspaceMu.Lock()
+	host.workspace = resolver
+	host.workspaceMu.Unlock()
+}
+
+func (host *SessionHost) resolveSessionWorkspace(primary string) (SessionWorkspaceContext, bool, error) {
+	host.workspaceMu.RLock()
+	resolver := host.workspace
+	host.workspaceMu.RUnlock()
+	if resolver == nil {
+		return SessionWorkspaceContext{}, false, nil
+	}
+	value, found, err := resolver(primary)
+	value.AuxiliaryRoots = append([]string(nil), value.AuxiliaryRoots...)
+	return value, found, err
 }
 
 func (host *SessionHost) Close() error {
@@ -529,6 +566,13 @@ func (host *SessionHost) prepareSession(runContext context.Context, workspaceSto
 	prepared.state.archiveErr = startup.archiveErr
 	prepared.state.models = append(prepared.state.models, startup.models...)
 	prepared.state.gatewayConfig = startup.gatewayConfig
+	projectContext, found, err := host.resolveSessionWorkspace(prepared.store.Root)
+	if err != nil {
+		return nil, fmt.Errorf("resolve Studio project workspaces: %w", err)
+	}
+	if found {
+		prepared.state.studioWorkspaceContext = &projectContext
+	}
 	prepared.state.enterChat(startup.config, prepared.client)
 	return prepared, nil
 }

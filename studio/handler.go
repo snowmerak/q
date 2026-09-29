@@ -146,6 +146,8 @@ func newHandlerRuntime(parent context.Context, store config.Store, runner sessio
 	operations := newOperationsService(store, runner, sessions)
 	mux.HandleFunc("GET /api/v1/operations", operations.serveSnapshot)
 	mux.HandleFunc("GET /api/v1/directories", sessions.serveDirectoryListing)
+	mux.HandleFunc("/api/v1/projects", sessions.serveProjects)
+	mux.HandleFunc("/api/v1/projects/{project}", sessions.serveProject)
 	mux.HandleFunc("/api/v1/registered-sessions", sessions.serveRegisteredCollection)
 	mux.HandleFunc("DELETE /api/v1/registered-sessions/{registration}", sessions.serveRegisteredItem)
 	mux.HandleFunc("/api/v1/sessions", sessions.serveCollection)

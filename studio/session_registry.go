@@ -209,6 +209,8 @@ func (registry *sessionRegistry) saveLocked(value sessionRegistryDocument) error
 type registeredSessionTree struct {
 	RegistrationID string           `json:"registration_id"`
 	WorkspaceRoot  string           `json:"workspace_root"`
+	ProjectID      string           `json:"project_id"`
+	ProjectName    string           `json:"project_name"`
 	Session        sessionSummary   `json:"session"`
 	RegisteredAt   time.Time        `json:"registered_at"`
 	Delegations    []delegationNode `json:"delegations,omitempty"`
@@ -216,6 +218,7 @@ type registeredSessionTree struct {
 }
 
 type registeredSessionsResponse struct {
+	Projects []studioProject         `json:"projects"`
 	Sessions []registeredSessionTree `json:"sessions"`
 }
 
@@ -233,9 +236,14 @@ func (service *sessionsService) serveRegisteredCollection(writer http.ResponseWr
 			writeAPIError(writer, http.StatusInternalServerError, err)
 			return
 		}
+		projects, err := service.projects.list()
+		if err != nil {
+			writeAPIError(writer, http.StatusInternalServerError, err)
+			return
+		}
 		trees := make([]registeredSessionTree, 0, len(items))
 		for _, item := range items {
-			trees = append(trees, service.registeredTree(item))
+			trees = append(trees, service.registeredTree(item, projectForWorkspace(projects, item.WorkspaceRoot)))
 		}
 		sort.SliceStable(trees, func(left, right int) bool {
 			if trees[left].Issue != "" && trees[right].Issue == "" {
@@ -246,7 +254,7 @@ func (service *sessionsService) serveRegisteredCollection(writer http.ResponseWr
 			}
 			return trees[left].Session.UpdatedAt.After(trees[right].Session.UpdatedAt)
 		})
-		writeJSON(writer, http.StatusOK, registeredSessionsResponse{Sessions: trees})
+		writeJSON(writer, http.StatusOK, registeredSessionsResponse{Projects: projects, Sessions: trees})
 	case http.MethodPost:
 		var input registerSessionRequest
 		if err := decodeSessionRequest(writer, request, &input); err != nil {
@@ -284,7 +292,14 @@ func (service *sessionsService) serveRegisteredCollection(writer http.ResponseWr
 			writeAPIError(writer, http.StatusInternalServerError, err)
 			return
 		}
-		writeJSON(writer, http.StatusCreated, service.registeredTree(item))
+		var project *studioProject
+		projects, projectErr := service.projects.list()
+		if projectErr != nil {
+			writeAPIError(writer, http.StatusInternalServerError, projectErr)
+			return
+		}
+		project = projectForWorkspace(projects, root)
+		writeJSON(writer, http.StatusCreated, service.registeredTree(item, project))
 	default:
 		writer.Header().Set("Allow", "GET, POST")
 		writeAPIError(writer, http.StatusMethodNotAllowed, errors.New("method not allowed"))
@@ -308,10 +323,14 @@ func (service *sessionsService) serveRegisteredItem(writer http.ResponseWriter, 
 	writer.WriteHeader(http.StatusNoContent)
 }
 
-func (service *sessionsService) registeredTree(item registeredSession) registeredSessionTree {
+func (service *sessionsService) registeredTree(item registeredSession, project *studioProject) registeredSessionTree {
 	tree := registeredSessionTree{
 		RegistrationID: item.ID, WorkspaceRoot: item.WorkspaceRoot,
 		Session: sessionSummary{SessionID: item.SessionID}, RegisteredAt: item.RegisteredAt,
+	}
+	if project != nil {
+		tree.ProjectID = project.ID
+		tree.ProjectName = project.Name
 	}
 	store, err := (workspace.Store{Root: item.WorkspaceRoot}).ForSession(item.SessionID)
 	if err != nil {
@@ -330,4 +349,17 @@ func (service *sessionsService) registeredTree(item registeredSession) registere
 		tree.Issue = err.Error()
 	}
 	return tree
+}
+
+func projectForWorkspace(projects []studioProject, root string) *studioProject {
+	key := comparableStudioPath(root)
+	for index := range projects {
+		for _, candidate := range projects[index].WorkspaceRoots {
+			if comparableStudioPath(candidate) == key {
+				project := cloneStudioProject(projects[index])
+				return &project
+			}
+		}
+	}
+	return nil
 }

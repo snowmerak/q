@@ -58,6 +58,8 @@ type Result struct {
 // PrepareWorkspaceMessages.
 type WorkspaceMessageOptions struct {
 	Root             string
+	ProjectName      string
+	AuxiliaryRoots   []string
 	Tools            ToolRuntime
 	ArchiveAvailable bool
 }

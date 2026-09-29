@@ -14,6 +14,25 @@ import (
 	"github.com/snowmerak/q/workspace"
 )
 
+func TestSessionHostWorkspaceResolverClonesProjectContext(t *testing.T) {
+	host := &SessionHost{}
+	auxiliary := []string{"/auxiliary"}
+	host.SetSessionWorkspaceResolver(func(primary string) (SessionWorkspaceContext, bool, error) {
+		if primary != "/primary" {
+			t.Fatalf("primary = %q", primary)
+		}
+		return SessionWorkspaceContext{ProjectID: "project", ProjectName: "Q", AuxiliaryRoots: auxiliary}, true, nil
+	})
+	resolved, found, err := host.resolveSessionWorkspace("/primary")
+	if err != nil || !found || resolved.ProjectName != "Q" || len(resolved.AuxiliaryRoots) != 1 {
+		t.Fatalf("resolved = %#v, %v, %v", resolved, found, err)
+	}
+	auxiliary[0] = "/changed"
+	if resolved.AuxiliaryRoots[0] != "/auxiliary" {
+		t.Fatalf("resolver result was not cloned: %#v", resolved)
+	}
+}
+
 func TestSessionExecutionProjectsQuestionAndCompletes(t *testing.T) {
 	value := config.Default()
 	value.Provider.Model = "tool-model"

@@ -358,6 +358,18 @@ func (s Store) ClearSession() error {
 	if err := s.clearDelegationState(); err != nil {
 		return err
 	}
+	// Remove the short-lived per-session workspace projection used by early
+	// Studio builds. Current Studio projects keep this state in the global
+	// project catalog, but old files must not prevent session deletion.
+	if err := withLoomRootMutation(s.Root, func() error {
+		err := os.Remove(filepath.Join(s.SessionDir(), "workspaces.json"))
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		return err
+	}); err != nil {
+		return fmt.Errorf("workspace: remove retired session workspace settings: %w", err)
+	}
 	if err := s.Clear(); err != nil {
 		return err
 	}

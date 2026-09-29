@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { ArrowUp, Bot, BrainCircuit, ChevronUp, Eraser, Folder, FolderOpen, GitBranch, GitCompareArrows, HardDrive, Home, Minimize2, Pause, Play, Plus, RefreshCw, Square, Terminal, Trash2, User, Wrench, X } from '@lucide/svelte';
+  import { ArrowUp, Bot, BrainCircuit, ChevronUp, Eraser, Folder, FolderOpen, Folders, GitBranch, GitCompareArrows, HardDrive, Home, Minimize2, Pause, Play, Plus, RefreshCw, Square, Terminal, Trash2, User, Wrench, X } from '@lucide/svelte';
   import { onMount, tick } from 'svelte';
   import Markdown from './Markdown.svelte';
 
@@ -83,10 +83,19 @@
   type RegisteredSessionTree = {
     registration_id: string;
     workspace_root: string;
+    project_id?: string;
+    project_name?: string;
     session: SessionSummary;
     registered_at: string;
     delegations?: DelegationNode[];
     issue?: string;
+  };
+  type StudioProject = {
+    id: string;
+    name: string;
+    workspace_roots: string[];
+    created_at: string;
+    updated_at: string;
   };
   type DirectoryEntry = { name: string; path: string };
   type DirectoryListing = {
@@ -102,6 +111,7 @@
   let workspaceRoot = '';
   let sessions: SessionSummary[] = [];
   let registeredSessions: RegisteredSessionTree[] = [];
+  let projects: StudioProject[] = [];
   let selectedRegistration: RegisteredSessionTree | null = null;
   let selectedDelegation: FlatDelegation | null = null;
   let selected: SessionDetail | null = null;
@@ -130,6 +140,14 @@
   let learningEnabled = true;
   let learningLoading = false;
   let registrationDialogOpen = false;
+  let projectDialogOpen = false;
+  let projectSaving = false;
+  let projectDialogError = '';
+  let editingProjectID = '';
+  let projectName = '';
+  let projectRootInput = '';
+  let projectRoots: string[] = [];
+  let directoryPickerTarget: 'registration' | 'project' = 'registration';
 
   function sessionFromLocation() {
     const match = window.location.pathname.match(/^\/sessions\/([^/]+)$/);
@@ -165,6 +183,17 @@
 
   async function chooseWorkspace() {
     if (directoryLoading) return;
+    directoryPickerTarget = 'registration';
+    directoryPickerOpen = true;
+    directoryListing = null;
+    directoryPathInput = '';
+    directoryError = '';
+    await browseDirectory();
+  }
+
+  async function chooseProjectWorkspace() {
+    if (directoryLoading) return;
+    directoryPickerTarget = 'project';
     directoryPickerOpen = true;
     directoryListing = null;
     directoryPathInput = '';
@@ -195,6 +224,11 @@
 
   async function selectBrowsedDirectory() {
     if (!directoryListing?.can_select) return;
+    if (directoryPickerTarget === 'project') {
+      projectRootInput = directoryListing.current;
+      closeDirectoryPicker();
+      return;
+    }
     workspaceInput = directoryListing.current;
     closeDirectoryPicker();
     await loadWorkspaceCandidates();
@@ -232,6 +266,79 @@
     workspaceInput = '';
     sessions = [];
     error = '';
+  }
+
+  function openProjectDialog(project?: StudioProject) {
+    const selectedProject = project || projects.find((candidate) => candidate.id === selectedRegistration?.project_id);
+    editingProjectID = selectedProject?.id || '';
+    projectName = selectedProject?.name || '';
+    projectRoots = selectedProject ? [...selectedProject.workspace_roots] : (workspaceRoot ? [workspaceRoot] : []);
+    projectRootInput = '';
+    projectDialogError = '';
+    projectDialogOpen = true;
+    error = '';
+  }
+
+  function addProjectWorkspace() {
+    const value = projectRootInput.trim();
+    if (!value) return;
+    if (!projectRoots.includes(value)) {
+      projectRoots = [...projectRoots, value];
+    }
+    projectRootInput = '';
+  }
+
+  function removeProjectWorkspace(index: number) {
+    projectRoots = projectRoots.filter((_, candidate) => candidate !== index);
+  }
+
+  async function saveProject() {
+    if (projectSaving) return;
+    addProjectWorkspace();
+    if (!projectName.trim() || !projectRoots.length) return;
+    projectSaving = true;
+    projectDialogError = '';
+    try {
+      const target = editingProjectID ? `/api/v1/projects/${encodeURIComponent(editingProjectID)}` : '/api/v1/projects';
+      const response = await fetch(target, {
+        method: editingProjectID ? 'PUT' : 'POST', headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+        body: JSON.stringify({ name: projectName.trim(), workspace_roots: projectRoots })
+      });
+      if (!response.ok) throw new Error(await apiError(response));
+      projectDialogOpen = false;
+      await loadRegisteredSessions(selectedRegistration?.registration_id || '');
+      runStatus = editingProjectID ? 'Project updated' : 'Project created';
+    } catch (cause) {
+      projectDialogError = cause instanceof Error ? cause.message : 'Could not save the project';
+    } finally {
+      projectSaving = false;
+    }
+  }
+
+  async function deleteProject() {
+    if (!editingProjectID || projectSaving) return;
+    if (!window.confirm(`Delete project ${projectName}? Its sessions and workspace data will remain available as independents.`)) return;
+    projectSaving = true;
+    projectDialogError = '';
+    try {
+      const response = await fetch(`/api/v1/projects/${encodeURIComponent(editingProjectID)}`, { method: 'DELETE' });
+      if (!response.ok) throw new Error(await apiError(response));
+      projectDialogOpen = false;
+      await loadRegisteredSessions(selectedRegistration?.registration_id || '');
+      runStatus = 'Project deleted';
+    } catch (cause) {
+      projectDialogError = cause instanceof Error ? cause.message : 'Could not delete the project';
+    } finally {
+      projectSaving = false;
+    }
+  }
+
+  function projectSessions(projectID: string) {
+    return registeredSessions.filter((registration) => registration.project_id === projectID);
+  }
+
+  function independentSessions() {
+    return registeredSessions.filter((registration) => !registration.project_id);
   }
 
   async function clearSession() {
@@ -302,7 +409,9 @@
     try {
       const response = await fetch('/api/v1/registered-sessions', { headers: { Accept: 'application/json' } });
       if (!response.ok) throw new Error(await apiError(response));
-      registeredSessions = ((await response.json()) as { sessions: RegisteredSessionTree[] }).sessions;
+      const result = (await response.json()) as { projects?: StudioProject[]; sessions: RegisteredSessionTree[] };
+      projects = result.projects || [];
+      registeredSessions = result.sessions;
       const targetID = preferredRegistration || selectedRegistration?.registration_id || sessionFromLocation();
       const target = registeredSessions.find((registration) => registration.registration_id === targetID && !registration.issue)
         || registeredSessions.find((registration) => !registration.issue);
@@ -632,7 +741,9 @@
   async function refreshSessionListOnly() {
     const response = await fetch('/api/v1/registered-sessions');
     if (!response.ok) return;
-    registeredSessions = ((await response.json()) as { sessions: RegisteredSessionTree[] }).sessions;
+    const result = (await response.json()) as { projects?: StudioProject[]; sessions: RegisteredSessionTree[] };
+    projects = result.projects || [];
+    registeredSessions = result.sessions;
     if (selectedRegistration) {
       selectedRegistration = registeredSessions.find((registration) => registration.registration_id === selectedRegistration?.registration_id) || selectedRegistration;
     }
@@ -731,6 +842,7 @@
     };
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape' && directoryPickerOpen) closeDirectoryPicker();
+      else if (event.key === 'Escape' && projectDialogOpen) projectDialogOpen = false;
       else if (event.key === 'Escape' && registrationDialogOpen) registrationDialogOpen = false;
     };
     window.addEventListener('popstate', onPopState);
@@ -746,9 +858,9 @@
 
 <div class="sessions-layout">
   <aside class="session-rail" aria-label="Registered session tree">
-    <div class="session-list-heading"><span>SESSION TREE</span><div><button title="Refresh session tree" onclick={refreshSessions} disabled={workspaceLoading}><RefreshCw aria-hidden="true" size={14} /></button><button title="Add or create session" onclick={openRegistrationDialog} disabled={sessionLoading}><Plus aria-hidden="true" size={15} /></button></div></div>
+    <div class="session-list-heading"><span>SESSION TREE</span><div><button title="Refresh session tree" onclick={refreshSessions} disabled={workspaceLoading}><RefreshCw aria-hidden="true" size={14} /></button><button title="Create project" onclick={() => openProjectDialog()} disabled={sessionLoading}><Folders aria-hidden="true" size={15} /></button><button title="Add or create session" onclick={openRegistrationDialog} disabled={sessionLoading}><Plus aria-hidden="true" size={15} /></button></div></div>
     <div class="session-list session-tree">
-      {#each registeredSessions as registration}
+      {#snippet sessionBranch(registration: RegisteredSessionTree)}
         <div class="session-list-item session-root" class:active={selectedRegistration?.registration_id === registration.registration_id && !selectedDelegation} class:broken={!!registration.issue}>
           <button class="session-select" onclick={() => !registration.issue && selectRegisteredSession(registration)} disabled={!!registration.issue}>
             <strong>{registration.session.title || 'New session'}</strong>
@@ -763,9 +875,25 @@
             <span><strong>{node.bookmark.agent.replace(/^builtin\//, '')}</strong><small>{node.state?.change_request ? `${node.state.status} · CR ${node.state.change_request.status}` : node.state?.status || 'recorded'}</small></span>
           </button>
         {/each}
+      {/snippet}
+      {#if projects.length || registeredSessions.length}
+        {#each projects as project}
+          <div class="session-project-heading"><span><Folders aria-hidden="true" size={13} /><strong>{project.name}</strong><small>{project.workspace_roots.length}</small></span><button title={`Edit ${project.name}`} aria-label={`Edit project ${project.name}`} onclick={() => openProjectDialog(project)}>Edit</button></div>
+          {#each projectSessions(project.id) as registration}
+            {@render sessionBranch(registration)}
+          {:else}
+            <div class="session-group-empty">No registered sessions</div>
+          {/each}
+        {/each}
+        <div class="session-project-heading independent-heading"><span><GitBranch aria-hidden="true" size={13} /><strong>Independents</strong><small>{independentSessions().length}</small></span></div>
+        {#each independentSessions() as registration}
+          {@render sessionBranch(registration)}
+        {:else}
+          <div class="session-group-empty">No independent sessions</div>
+        {/each}
       {:else}
         <div class="session-list-empty"><p>Add a workspace session to build your Studio session tree.</p><button class="primary-button" onclick={openRegistrationDialog}><Plus aria-hidden="true" size={15} /> Add session</button></div>
-      {/each}
+      {/if}
     </div>
   </aside>
 
@@ -788,6 +916,7 @@
             <button title="Delete completed delegation" aria-label="Delete completed delegation" onclick={deleteDelegation} disabled={sending || sessionLoading}><Trash2 aria-hidden="true" size={14} /></button>
           {/if}
           {#if !selectedDelegation}
+            <button title={selectedRegistration?.project_id ? 'Edit session project' : 'Create project from this workspace'} aria-label="Configure session project" onclick={() => openProjectDialog()} disabled={sending || sessionLoading}><Folders aria-hidden="true" size={15} /></button>
             <button class:enabled={learningEnabled} title={`Learning ${learningEnabled ? 'enabled' : 'disabled'}`} aria-label={`Turn learning ${learningEnabled ? 'off' : 'on'}`} onclick={toggleLearning} disabled={sending || learningLoading}><BrainCircuit aria-hidden="true" size={15} /></button>
             <button title="Compact context" aria-label="Compact context" onclick={compactSession} disabled={sending || sessionLoading}><Minimize2 aria-hidden="true" size={15} /></button>
             <button title="Clear conversation" aria-label="Clear conversation" onclick={clearSession} disabled={sending || sessionLoading}><Eraser aria-hidden="true" size={15} /></button>
@@ -892,6 +1021,12 @@
         <button class="icon-button" title="Choose repository folder" aria-label="Choose repository folder" onclick={chooseWorkspace} disabled={workspaceLoading}><FolderOpen aria-hidden="true" size={16} /></button>
         <button class="secondary-button" onclick={loadWorkspaceCandidates} disabled={workspaceLoading || !workspaceInput.trim()}>Load sessions</button>
       </div>
+      {#if projects.length}
+        <div class="project-workspace-shortcuts">
+          <span>PROJECT WORKSPACES</span>
+          <div>{#each projects as project}{#each project.workspace_roots as root}<button title={root} onclick={() => { workspaceInput = root; void loadWorkspaceCandidates(); }}><strong>{project.name}</strong><small>{root}</small></button>{/each}{/each}</div>
+        </div>
+      {/if}
       <div class="registration-candidates">
         {#if workspaceLoading}
           <div class="directory-state">Loading sessions…</div>
@@ -914,11 +1049,41 @@
   </div>
 {/if}
 
+{#if projectDialogOpen}
+  <div class="directory-dialog-backdrop">
+    <div class="directory-dialog workspace-dialog" role="dialog" aria-modal="true" aria-labelledby="project-dialog-title">
+      <header>
+        <div><span>STUDIO PROJECT</span><h2 id="project-dialog-title">{editingProjectID ? 'Edit project' : 'Create project'}</h2></div>
+        <button class="dialog-close" title="Close" aria-label="Close project settings" onclick={() => projectDialogOpen = false}><X aria-hidden="true" size={18} /></button>
+      </header>
+      <div class="workspace-dialog-body">
+        {#if projectDialogError}<div class="workspace-dialog-error" role="alert">{projectDialogError}</div>{/if}
+        <label><span>PROJECT NAME</span><input bind:value={projectName} placeholder="Project name" /></label>
+        <p>Registered sessions whose primary workspace matches one of these directories appear under this project.</p>
+        <div class="auxiliary-heading"><div><span>WORKSPACE DIRECTORIES</span><p>Each session keeps its own primary directory and receives the other project directories as auxiliary workspaces.</p></div><em>{projectRoots.length}/{32}</em></div>
+        <div class="auxiliary-create">
+          <input bind:value={projectRootInput} placeholder="/path/to/workspace" onkeydown={(event) => event.key === 'Enter' && addProjectWorkspace()} />
+          <button class="icon-button" title="Choose workspace folder" aria-label="Choose workspace folder" onclick={chooseProjectWorkspace}><FolderOpen aria-hidden="true" size={16} /></button>
+          <button class="secondary-button" onclick={addProjectWorkspace} disabled={!projectRootInput.trim()}>Add</button>
+        </div>
+        <div class="auxiliary-list">
+          {#each projectRoots as root, index}
+            <div><Folder aria-hidden="true" size={15} /><code title={root}>{root}</code><button title="Remove workspace" aria-label={`Remove ${root}`} onclick={() => removeProjectWorkspace(index)}><X aria-hidden="true" size={14} /></button></div>
+          {:else}
+            <div class="auxiliary-empty">Add at least one workspace directory.</div>
+          {/each}
+        </div>
+      </div>
+      <footer class="project-dialog-footer"><div><span>PROJECT CONTEXT</span><code>Workspace changes apply to project sessions on their next turn.</code></div>{#if editingProjectID}<button class="danger-button" onclick={deleteProject} disabled={projectSaving}>Delete</button>{/if}<button class="secondary-button" onclick={() => projectDialogOpen = false}>Cancel</button><button class="primary-button" onclick={saveProject} disabled={projectSaving || !projectName.trim() || (!projectRoots.length && !projectRootInput.trim()) || projectRoots.length > 32}>{projectSaving ? 'Saving…' : 'Save'}</button></footer>
+    </div>
+  </div>
+{/if}
+
 {#if directoryPickerOpen}
   <div class="directory-dialog-backdrop">
     <div class="directory-dialog" role="dialog" aria-modal="true" aria-labelledby="directory-dialog-title">
       <header>
-        <div><span>REPOSITORY</span><h2 id="directory-dialog-title">Choose a folder</h2></div>
+        <div><span>{directoryPickerTarget === 'project' ? 'PROJECT WORKSPACE' : 'REPOSITORY'}</span><h2 id="directory-dialog-title">Choose a folder</h2></div>
         <button class="dialog-close" title="Close" aria-label="Close folder browser" onclick={closeDirectoryPicker}><X aria-hidden="true" size={18} /></button>
       </header>
 

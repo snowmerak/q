@@ -84,6 +84,7 @@ type sessionState struct {
 	workspaceModelRestored    bool
 	workspaceLearning         workspace.LearningConfig
 	workspaceLearningRestored bool
+	studioWorkspaceContext    *SessionWorkspaceContext
 	archive                   recordArchive
 	archiveSearch             *archiveembed.Archive
 	archiveErr                error

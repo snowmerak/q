@@ -35,6 +35,27 @@ import (
 	"github.com/snowmerak/q/workspace"
 )
 
+func TestAppendRuntimeMessagesUsesStudioProjectWorkspaces(t *testing.T) {
+	root := t.TempDir()
+	auxiliary := t.TempDir()
+	store := workspace.Store{Root: root, SessionID: "workspace-prompt"}
+	m := model{}
+	m.workspaceStore = &store
+	m.studioWorkspaceContext = &SessionWorkspaceContext{ProjectName: "Q", AuxiliaryRoots: []string{auxiliary}}
+	m.toolRuntime = &fakeAgentTools{}
+	m.appendRuntimeMessages()
+	var prompt string
+	for _, message := range m.messages {
+		if message.Name == "q_workspace" {
+			prompt = message.TextContent()
+			break
+		}
+	}
+	if !strings.Contains(prompt, root) || !strings.Contains(prompt, auxiliary) || !strings.Contains(prompt, "Studio project: Q") {
+		t.Fatalf("workspace prompt = %q", prompt)
+	}
+}
+
 type fakeProviderRuntime struct {
 	endpoint string
 	apiKey   string

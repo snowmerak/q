@@ -449,6 +449,26 @@ func TestDeleteSessionPreservesOtherSessions(t *testing.T) {
 	}
 }
 
+func TestDeleteSessionRemovesRetiredStudioWorkspaceProjection(t *testing.T) {
+	root := t.TempDir()
+	store, lock, err := CreateSession(root, "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(store.SessionDir(), "workspaces.json"), []byte("{}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := lock.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := DeleteSession(root, store.SessionID, "delete"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(store.SessionDir()); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("session directory still exists: %v", err)
+	}
+}
+
 func TestDeleteSessionRemovesOrphanExecution(t *testing.T) {
 	root := t.TempDir()
 	store := Store{Root: root, SessionID: "11111111-1111-4111-8111-111111111111"}

@@ -3,6 +3,7 @@ package agentloop
 import (
 	"fmt"
 	"path/filepath"
+	"strings"
 
 	"github.com/snowmerak/q/agentinstructions"
 	"github.com/snowmerak/q/client"
@@ -22,8 +23,22 @@ func PrepareWorkspaceMessages(messages []client.Message, options WorkspaceMessag
 		workspacePrompt := fmt.Sprintf(
 			"Runtime environment: OS=%s; architecture=%s; run_command shell=%s. Use commands and quoting compatible with this shell. ",
 			environment.OS, environment.Architecture, environment.Shell,
-		) + "Current workspace root: " + filepath.Clean(options.Root) +
-			". Use the available tools to inspect, edit, and run work in this workspace when the user asks for changes." +
+		) + "Primary workspace root: " + filepath.Clean(options.Root) + "."
+		if strings.TrimSpace(options.ProjectName) != "" {
+			workspacePrompt += " Studio project: " + strings.TrimSpace(options.ProjectName) + "."
+		}
+		if len(options.AuxiliaryRoots) > 0 {
+			cleaned := make([]string, 0, len(options.AuxiliaryRoots))
+			for _, root := range options.AuxiliaryRoots {
+				if strings.TrimSpace(root) != "" {
+					cleaned = append(cleaned, filepath.Clean(root))
+				}
+			}
+			if len(cleaned) > 0 {
+				workspacePrompt += " Auxiliary workspace roots: " + strings.Join(cleaned, "; ") + ". The primary workspace owns this session. Auxiliary workspaces are additional execution locations; use the matching working_directory when inspecting or delegating work that belongs there. Delegated sessions remain children of this primary session."
+			}
+		}
+		workspacePrompt += " Use the available tools to inspect, edit, and run work in these configured workspaces when the user asks for changes." +
 			" For repository discovery, never traverse q's .q metadata directory and honor patterns in the workspace-root .qignore file, including when scanning through run_command. Explicit ignored-path access is allowed when the task requires it." +
 			" Non-Loom MCP tool results include a loom_ref to the immutable full result. For large results, use loom_inspect, loom_read, or loom_eval instead of copying the result through chat context."
 		if options.ArchiveAvailable {

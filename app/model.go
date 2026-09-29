@@ -1173,11 +1173,17 @@ func (m *model) enterChat(value config.Config, configuredClient chatClient) {
 
 func (m *model) appendRuntimeMessages() {
 	root := ""
+	var auxiliary []string
+	projectName := ""
 	if m.workspaceStore != nil {
 		root = m.workspaceStore.Root
 	}
+	if m.studioWorkspaceContext != nil {
+		projectName = m.studioWorkspaceContext.ProjectName
+		auxiliary = append([]string(nil), m.studioWorkspaceContext.AuxiliaryRoots...)
+	}
 	m.messages = PrepareWorkspaceMessages(m.messages, WorkspaceMessageOptions{
-		Root: root, Tools: m.toolRuntime, ArchiveAvailable: m.archive != nil,
+		Root: root, ProjectName: projectName, AuxiliaryRoots: auxiliary, Tools: m.toolRuntime, ArchiveAvailable: m.archive != nil,
 	})
 }
 

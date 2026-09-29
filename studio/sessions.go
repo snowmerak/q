@@ -32,6 +32,7 @@ type sessionsService struct {
 	runner   sessionRunner
 	runs     *sessionRunService
 	registry *sessionRegistry
+	projects *studioProjectStore
 }
 
 type sessionSummary struct {
@@ -85,9 +86,16 @@ type sessionRunRequest struct {
 }
 
 func newSessionsService(parent context.Context, runner sessionRunner, configDirectory string) *sessionsService {
-	return &sessionsService{
+	service := &sessionsService{
 		runner: runner, runs: newSessionRunService(parent, runner), registry: newSessionRegistry(configDirectory),
+		projects: newStudioProjectStore(configDirectory),
 	}
+	if setter, ok := runner.(interface {
+		SetSessionWorkspaceResolver(app.SessionWorkspaceResolver)
+	}); ok {
+		setter.SetSessionWorkspaceResolver(service.projects.resolve)
+	}
+	return service
 }
 
 func (service *sessionsService) Close() error {
