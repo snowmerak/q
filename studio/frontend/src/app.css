@@ -704,14 +704,15 @@ dd.success { color: var(--green); }
 .registration-workspace label { display: grid; gap: 7px; color: var(--muted); font-size: 10px; }
 .registration-workspace input { height: 36px; }
 .registration-workspace > button { height: 36px; }
-.project-workspace-shortcuts { display: grid; gap: 7px; padding: 10px 18px; border-bottom: 1px solid var(--border); }
-.project-workspace-shortcuts > span { color: var(--violet); font: 8px ui-monospace, SFMono-Regular, Consolas, monospace; letter-spacing: .1em; }
-.project-workspace-shortcuts > div { display: flex; gap: 6px; overflow-x: auto; padding-bottom: 2px; }
-.project-workspace-shortcuts button { display: grid; min-width: 145px; max-width: 210px; gap: 3px; padding: 7px 9px; color: var(--muted); border: 1px solid var(--border); border-radius: 4px; background: rgba(255, 255, 255, .018); text-align: left; cursor: pointer; }
-.project-workspace-shortcuts button:hover { color: var(--text); border-color: rgba(143, 92, 255, .32); background: rgba(143, 92, 255, .07); }
-.project-workspace-shortcuts strong, .project-workspace-shortcuts small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.project-workspace-shortcuts strong { font-size: 9px; }
-.project-workspace-shortcuts small { color: var(--subtle); font: 8px ui-monospace, SFMono-Regular, Consolas, monospace; }
+.project-workspace-picker { display: grid; gap: 8px; padding: 11px 18px 13px; border-bottom: 1px solid var(--border); }
+.project-workspace-picker > span { color: var(--violet); font: 8px ui-monospace, SFMono-Regular, Consolas, monospace; letter-spacing: .1em; }
+.project-workspace-picker > div { display: grid; grid-template-columns: minmax(130px, .65fr) minmax(220px, 1.35fr) auto; align-items: end; gap: 8px; }
+.project-workspace-picker label { display: grid; min-width: 0; gap: 5px; }
+.project-workspace-picker small { color: var(--subtle); font-size: 9px; }
+.project-workspace-picker select { width: 100%; height: 34px; min-width: 0; color: #c8cddd; border: 1px solid var(--border); border-radius: 4px; background: #090c14; padding: 0 28px 0 9px; font: 9px ui-monospace, SFMono-Regular, Consolas, monospace; text-overflow: ellipsis; }
+.project-workspace-picker select:focus { outline: 1px solid rgba(143, 92, 255, .55); border-color: rgba(143, 92, 255, .55); }
+.project-workspace-picker select:disabled { color: var(--subtle); opacity: .65; }
+.project-workspace-picker button { height: 34px; }
 .registration-candidates { min-height: 0; flex: 1; overflow-y: auto; padding: 10px 12px; }
 .registration-candidates > button { display: grid; grid-template-columns: 24px minmax(0, 1fr) auto; width: 100%; align-items: center; gap: 9px; padding: 11px 12px; color: var(--muted); border: 1px solid transparent; border-radius: 5px; background: transparent; text-align: left; cursor: pointer; }
 .registration-candidates > button:hover { color: var(--text); border-color: rgba(143, 92, 255, .22); background: rgba(143, 92, 255, .07); }
@@ -1244,6 +1245,8 @@ input[type="checkbox"] { width: 17px; height: 17px; padding: 0; accent-color: va
   .directory-dialog { max-height: calc(100vh - 20px); min-height: min(560px, calc(100vh - 20px)); }
   .registration-workspace { grid-template-columns: minmax(0, 1fr) auto; }
   .registration-workspace .secondary-button { grid-column: 1 / -1; }
+  .project-workspace-picker > div { grid-template-columns: 1fr; }
+  .project-workspace-picker button { width: 100%; }
   .auxiliary-create { grid-template-columns: minmax(0, 1fr) auto; }
   .auxiliary-create .secondary-button { grid-column: 1 / -1; }
   .directory-dialog > footer { grid-template-columns: 1fr 1fr; }

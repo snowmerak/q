@@ -147,6 +147,8 @@
   let projectName = '';
   let projectRootInput = '';
   let projectRoots: string[] = [];
+  let registrationProjectID = '';
+  let registrationProjectRoot = '';
   let directoryPickerTarget: 'registration' | 'project' = 'registration';
 
   function sessionFromLocation() {
@@ -264,8 +266,25 @@
   function openRegistrationDialog() {
     registrationDialogOpen = true;
     workspaceInput = '';
+    registrationProjectID = '';
+    registrationProjectRoot = '';
     sessions = [];
     error = '';
+  }
+
+  function registrationProjectWorkspaces() {
+    return projects.find((project) => project.id === registrationProjectID)?.workspace_roots || [];
+  }
+
+  function selectRegistrationProject() {
+    const roots = registrationProjectWorkspaces();
+    registrationProjectRoot = roots.length === 1 ? roots[0] : '';
+  }
+
+  async function loadRegistrationProjectWorkspace() {
+    if (!registrationProjectRoot) return;
+    workspaceInput = registrationProjectRoot;
+    await loadWorkspaceCandidates();
   }
 
   function openProjectDialog(project?: StudioProject) {
@@ -1022,9 +1041,13 @@
         <button class="secondary-button" onclick={loadWorkspaceCandidates} disabled={workspaceLoading || !workspaceInput.trim()}>Load sessions</button>
       </div>
       {#if projects.length}
-        <div class="project-workspace-shortcuts">
+        <div class="project-workspace-picker">
           <span>PROJECT WORKSPACES</span>
-          <div>{#each projects as project}{#each project.workspace_roots as root}<button title={root} onclick={() => { workspaceInput = root; void loadWorkspaceCandidates(); }}><strong>{project.name}</strong><small>{root}</small></button>{/each}{/each}</div>
+          <div>
+            <label for="registration-project"><small>Project</small><select id="registration-project" bind:value={registrationProjectID} onchange={selectRegistrationProject}><option value="">Select a project</option>{#each projects as project}<option value={project.id}>{project.name}</option>{/each}</select></label>
+            <label for="registration-project-workspace"><small>Workspace</small><select id="registration-project-workspace" bind:value={registrationProjectRoot} disabled={!registrationProjectID}><option value="">Select a workspace</option>{#each registrationProjectWorkspaces() as root}<option value={root}>{root}</option>{/each}</select></label>
+            <button class="secondary-button" onclick={loadRegistrationProjectWorkspace} disabled={!registrationProjectRoot || workspaceLoading}>Load sessions</button>
+          </div>
         </div>
       {/if}
       <div class="registration-candidates">
