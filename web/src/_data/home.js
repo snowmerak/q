@@ -2,13 +2,13 @@ export default {
   en: {
     heading: "A workspace-native coding environment.", lead: "Run sessions, follow delegated work, review changes, and configure q from one local Studio.", start: "Get started →", github: "View on GitHub",
     terminalLabel: "Delegated work visible in Q Studio", copy: "Copy",
-    traces: [
-      { state: "is-done", agent: "Manager", detail: "Set the objective and acceptance criteria…", status: "✓ Done" },
-      { state: "is-done", agent: "Research", detail: "Compared relevant approaches…", status: "✓ Done" },
-      { state: "is-done", agent: "Senior developer", detail: "Assigned a bounded implementation…", status: "✓ Done" },
-      { state: "is-active", agent: "Junior developer", detail: "Editing code and running checks…", status: "Running" },
-      { state: "", agent: "Senior developer", detail: "Reviewing changes and evidence…", status: "Pending" },
-    ],
+    sessionTree: { root: true, state: "is-active", agent: "Studio migration", detail: "~/q · root session", status: "Running", children: [
+      { state: "is-done", agent: "Manager", detail: "Defined milestones and acceptance criteria", status: "Done" },
+      { state: "is-done", agent: "Research", detail: "Compared relevant approaches", status: "Done" },
+      { state: "is-active", agent: "Senior developer", detail: "Reviewing the implementation", status: "Running", children: [
+        { state: "is-active", agent: "Junior developer", detail: "Editing code and running checks", status: "Running" },
+      ] },
+    ] },
     featureHeading: "One Studio, every workspace", featureLead: "Start work in any repository, keep long-running sessions visible, and move from request to reviewed change in the browser.",
     features: [
       { icon: "scope", title: "Run durable sessions", body: "Register root sessions from different repositories and keep chat, context usage, and run controls together." },
@@ -21,13 +21,13 @@ export default {
   ko: {
     heading: "워크스페이스 중심 코딩 환경.", lead: "하나의 로컬 Studio에서 세션을 실행하고, 위임을 따라가고, 변경을 검토하고, q를 구성하세요.", start: "시작하기 →", github: "GitHub에서 보기",
     terminalLabel: "Q Studio에 표시된 위임 작업", copy: "복사",
-    traces: [
-      { state: "is-done", agent: "Manager", detail: "목표와 수용 기준을 정함…", status: "✓ 완료" },
-      { state: "is-done", agent: "Research", detail: "관련 대안을 비교함…", status: "✓ 완료" },
-      { state: "is-done", agent: "Senior developer", detail: "범위가 정해진 구현을 할당함…", status: "✓ 완료" },
-      { state: "is-active", agent: "Junior developer", detail: "코드를 수정하고 검사하는 중…", status: "실행 중" },
-      { state: "", agent: "Senior developer", detail: "변경과 검증 근거를 검토할 예정…", status: "대기" },
-    ],
+    sessionTree: { root: true, state: "is-active", agent: "Studio 마이그레이션", detail: "~/q · 루트 세션", status: "실행 중", children: [
+      { state: "is-done", agent: "Manager", detail: "마일스톤과 수용 기준을 정의함", status: "완료" },
+      { state: "is-done", agent: "Research", detail: "관련 접근 방식을 비교함", status: "완료" },
+      { state: "is-active", agent: "Senior developer", detail: "구현 결과를 검토하는 중", status: "실행 중", children: [
+        { state: "is-active", agent: "Junior developer", detail: "코드를 수정하고 검사하는 중", status: "실행 중" },
+      ] },
+    ] },
     featureHeading: "하나의 Studio에서 모든 워크스페이스를", featureLead: "어떤 저장소에서든 작업을 시작하고, 장기 실행 세션을 확인하며, 요청부터 검토된 변경까지 브라우저에서 이어가세요.",
     features: [
       { icon: "scope", title: "영구 세션 실행", body: "서로 다른 저장소의 루트 세션을 등록하고 채팅, 컨텍스트 사용량과 실행 제어를 한곳에서 관리합니다." },
@@ -40,13 +40,13 @@ export default {
   ja: {
     heading: "ワークスペースネイティブな開発環境。", lead: "一つのローカル Studio でセッション、委任、変更レビュー、q の設定を管理します。", start: "はじめる →", github: "GitHub で見る",
     terminalLabel: "Q Studio に表示された委任作業", copy: "コピー",
-    traces: [
-      { state: "is-done", agent: "Manager", detail: "目的と受け入れ基準を設定…", status: "✓ 完了" },
-      { state: "is-done", agent: "Research", detail: "関連する選択肢を比較…", status: "✓ 完了" },
-      { state: "is-done", agent: "Senior developer", detail: "範囲を定めた実装を割り当て…", status: "✓ 完了" },
-      { state: "is-active", agent: "Junior developer", detail: "コードを変更して検証中…", status: "実行中" },
-      { state: "", agent: "Senior developer", detail: "変更と検証結果をレビュー予定…", status: "待機中" },
-    ],
+    sessionTree: { root: true, state: "is-active", agent: "Studio の移行", detail: "~/q · ルートセッション", status: "実行中", children: [
+      { state: "is-done", agent: "Manager", detail: "マイルストーンと受け入れ基準を定義", status: "完了" },
+      { state: "is-done", agent: "Research", detail: "関連するアプローチを比較", status: "完了" },
+      { state: "is-active", agent: "Senior developer", detail: "実装結果をレビュー中", status: "実行中", children: [
+        { state: "is-active", agent: "Junior developer", detail: "コードを変更して検証中", status: "実行中" },
+      ] },
+    ] },
     featureHeading: "一つの Studio ですべてのワークスペースを", featureLead: "任意のリポジトリで作業を始め、長時間セッションを追跡し、依頼からレビュー済み変更までブラウザで進めます。",
     features: [
       { icon: "scope", title: "永続セッションを実行", body: "異なるリポジトリのルートセッションを登録し、チャット、コンテキスト使用量、実行制御をまとめて管理します。" },
@@ -59,13 +59,13 @@ export default {
   "zh-cn": {
     heading: "工作区原生开发环境。", lead: "在一个本地 Studio 中运行会话、跟踪委派、审查变更并配置 q。", start: "开始使用 →", github: "在 GitHub 上查看",
     terminalLabel: "Q Studio 中显示的委派工作", copy: "复制",
-    traces: [
-      { state: "is-done", agent: "Manager", detail: "确定目标和验收标准…", status: "✓ 完成" },
-      { state: "is-done", agent: "Research", detail: "比较相关方案…", status: "✓ 完成" },
-      { state: "is-done", agent: "Senior developer", detail: "分配明确范围的实现任务…", status: "✓ 完成" },
-      { state: "is-active", agent: "Junior developer", detail: "修改代码并运行检查…", status: "运行中" },
-      { state: "", agent: "Senior developer", detail: "准备审查修改和验证依据…", status: "等待中" },
-    ],
+    sessionTree: { root: true, state: "is-active", agent: "Studio 迁移", detail: "~/q · 根会话", status: "运行中", children: [
+      { state: "is-done", agent: "Manager", detail: "定义里程碑和验收标准", status: "完成" },
+      { state: "is-done", agent: "Research", detail: "比较相关方案", status: "完成" },
+      { state: "is-active", agent: "Senior developer", detail: "正在审查实现结果", status: "运行中", children: [
+        { state: "is-active", agent: "Junior developer", detail: "修改代码并运行检查", status: "运行中" },
+      ] },
+    ] },
     featureHeading: "一个 Studio，管理所有工作区", featureLead: "在任意仓库开始工作，持续查看长时间运行的会话，并在浏览器中完成从请求到变更审查的流程。",
     features: [
       { icon: "scope", title: "运行持久会话", body: "注册不同仓库的根会话，并集中管理聊天、上下文用量和运行控制。" },

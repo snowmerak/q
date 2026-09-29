@@ -1,5 +1,15 @@
 {% set activeLocale = locale or "en" %}
 {% set copy = home[activeLocale] %}
+{% macro renderSessionNode(node) %}
+  <div class="trace-node{% if node.root %} trace-node--root{% endif %}">
+    <div class="trace-row {{ node.state }}">
+      <i class="trace-row__dot" aria-hidden="true"></i>
+      <div class="trace-row__body"><strong>{{ node.agent }}</strong><span>{{ node.detail }}</span></div>
+      <span class="trace-row__status">{{ node.status }}</span>
+    </div>
+    {% if node.children %}<div class="trace-children">{% for child in node.children %}{{ renderSessionNode(child) }}{% endfor %}</div>{% endif %}
+  </div>
+{% endmacro %}
 <section class="hero">
   <div class="hero__copy">
     <h1>{{ copy.heading }}</h1>
@@ -19,9 +29,7 @@
     </div>
     <div class="terminal__body">
       <div class="terminal__command"><span>$</span> q studio</div>
-      <div class="trace-list">
-        {% for trace in copy.traces %}<div class="trace-row {{ trace.state }}"><i class="trace-row__dot"></i><div class="trace-row__body"><strong>{{ trace.agent }}</strong><span>{{ trace.detail }}</span></div><span class="trace-row__status">{{ trace.status }}</span></div>{% endfor %}
-      </div>
+      <div class="trace-tree">{{ renderSessionNode(copy.sessionTree) }}</div>
     </div>
   </div>
 </section>
