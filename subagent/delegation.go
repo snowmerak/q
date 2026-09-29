@@ -428,14 +428,21 @@ func DelegateTools() []client.Tool {
 	strict := true
 	return []client.Tool{
 		{Type: client.ToolTypeFunction, Function: client.FunctionDefinition{
-			Name: DelegateListToolName, Description: "List the subagents this agent is currently allowed to call.", Strict: &strict,
-			Parameters: map[string]any{"type": "object", "properties": map[string]any{}, "additionalProperties": false},
+			Name: DelegateListToolName, Description: "List the subagents this agent is currently allowed to call, optionally for another working directory.", Strict: &strict,
+			Parameters: map[string]any{"type": "object", "properties": map[string]any{
+				"working_directory": map[string]any{
+					"type": "string", "description": "Existing directory whose workspace subagent profiles should be listed. Relative paths resolve from the caller's working directory.",
+				},
+			}, "additionalProperties": false},
 		}},
 		{Type: client.ToolTypeFunction, Function: client.FunctionDefinition{
-			Name: DelegateToolName, Description: "Run one allowed subagent synchronously for a bounded prompt. A mutating child returns an internal change request that the caller must read and then merge or close.", Strict: &strict,
+			Name: DelegateToolName, Description: "Run one allowed subagent synchronously for a bounded prompt, optionally in another working directory. A mutating child in a Git repository returns an internal change request that the caller must read and then merge or close.", Strict: &strict,
 			Parameters: map[string]any{"type": "object", "properties": map[string]any{
 				"subagent_name": map[string]any{"type": "string"},
 				"prompt":        map[string]any{"type": "string", "maxLength": MaximumDelegatePromptBytes},
+				"working_directory": map[string]any{
+					"type": "string", "description": "Existing directory for the temporary child session. Relative paths resolve from the caller's working directory; omitted uses the caller's directory.",
+				},
 			}, "required": []string{"subagent_name", "prompt"}, "additionalProperties": false},
 		}},
 	}

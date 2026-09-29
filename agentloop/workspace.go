@@ -76,7 +76,7 @@ func PrepareWorkspaceMessages(messages []client.Message, options WorkspaceMessag
 		}
 	}
 	if delegateListAvailable && delegateAvailable {
-		orchestrationPrompt += " When a task is sufficiently large or complex, use delegation. Call delegate_list to inspect the available agents, then select and arrange them according to their listed responsibilities and an engineering workflow appropriate to the task."
+		orchestrationPrompt += " When a task is sufficiently large or complex, use delegation. Call delegate_list to inspect the available agents, then select and arrange them according to their listed responsibilities and an engineering workflow appropriate to the task. When the assigned work belongs in another repository or directory, pass the same working_directory to delegate_list and delegate."
 	}
 	result = append(result, client.Message{
 		Role: client.RoleDeveloper, Name: "q_orchestration",

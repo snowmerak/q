@@ -46,6 +46,7 @@ type delegationDispatcher struct {
 	trace       subagent.TraceFunc
 	worktrees   *gitwork.Manager
 	checkout    checkoutRuntimeFactory
+	registryFor func(string) (*subagent.Registry, error)
 	coordinator *delegationDispatcher
 
 	mu       sync.Mutex
@@ -75,8 +76,13 @@ type delegationRuntime struct {
 }
 
 type delegateInput struct {
-	SubagentName string `json:"subagent_name"`
-	Prompt       string `json:"prompt"`
+	SubagentName     string `json:"subagent_name"`
+	Prompt           string `json:"prompt"`
+	WorkingDirectory string `json:"working_directory,omitempty"`
+}
+
+type delegateListInput struct {
+	WorkingDirectory string `json:"working_directory,omitempty"`
 }
 
 type changeRequestInput struct {
@@ -183,6 +189,9 @@ func (m model) configuredDelegationRuntimeIn(base agentToolRuntime, execution ex
 		workspace: execution, environment: environment, runID: m.runID,
 		capture: configuredInvocationCapture(base), external: configuredExternalDelegates(m.activeConfig(), execution.checkoutRoot, registry),
 		apiMode: m.activeModelAPIMode,
+		registryFor: func(root string) (*subagent.Registry, error) {
+			return buildSubagentRegistry(m.customStoreAt(root))
+		},
 	}
 	if clone := findCheckoutRuntimeCloner(base); clone != nil && strings.TrimSpace(m.store.Dir) != "" {
 		dispatcher.checkout = func(ctx context.Context, checkoutRoot string) (agentToolRuntime, io.Closer, error) {
@@ -258,6 +267,41 @@ func findCheckoutRuntimeCloner(runtime agentToolRuntime) checkoutRuntimeCloner {
 	return nil
 }
 
+func canonicalDelegationDirectory(base, value string) (string, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "", errors.New("delegation: working directory is required")
+	}
+	if !filepath.IsAbs(value) {
+		value = filepath.Join(base, value)
+	}
+	absolute, err := filepath.Abs(value)
+	if err != nil {
+		return "", fmt.Errorf("delegation: resolve working directory: %w", err)
+	}
+	canonical, err := filepath.EvalSymlinks(absolute)
+	if err != nil {
+		return "", fmt.Errorf("delegation: resolve working directory links: %w", err)
+	}
+	info, err := os.Stat(canonical)
+	if err != nil {
+		return "", fmt.Errorf("delegation: inspect working directory: %w", err)
+	}
+	if !info.IsDir() {
+		return "", errors.New("delegation: working directory is not a directory")
+	}
+	return filepath.Clean(canonical), nil
+}
+
+func sameDelegationDirectory(left, right string) bool {
+	leftInfo, leftErr := os.Stat(left)
+	rightInfo, rightErr := os.Stat(right)
+	if leftErr == nil && rightErr == nil {
+		return os.SameFile(leftInfo, rightInfo)
+	}
+	return filepath.Clean(left) == filepath.Clean(right)
+}
+
 func (d *delegationDispatcher) shared() *delegationDispatcher {
 	if d.coordinator != nil {
 		return d.coordinator
@@ -295,7 +339,29 @@ func (d *delegationDispatcher) forCheckout(ctx context.Context, checkoutRoot str
 		sink: d.sink, capture: configuredInvocationCapture(configured),
 		external: configuredExternalDelegates(d.value, checkoutRoot, d.registry),
 		store:    d.store, apiMode: d.apiMode, progress: d.progress, trace: d.trace,
-		worktrees: d.worktrees, checkout: d.checkout, coordinator: d.shared(),
+		worktrees: d.worktrees, checkout: d.checkout, registryFor: d.registryFor, coordinator: d.shared(),
+	}
+	return child, closer, nil
+}
+
+func (d *delegationDispatcher) forWorkingDirectory(ctx context.Context, root string) (*delegationDispatcher, io.Closer, error) {
+	child, closer, err := d.forCheckout(ctx, root)
+	if err != nil {
+		return nil, nil, err
+	}
+	fail := func(err error) (*delegationDispatcher, io.Closer, error) {
+		if closer != nil {
+			_ = closer.Close()
+		}
+		return nil, nil, err
+	}
+	if d.registryFor != nil {
+		registry, err := d.registryFor(root)
+		if err != nil {
+			return fail(err)
+		}
+		child.registry = registry
+		child.external = configuredExternalDelegates(d.value, root, registry)
 	}
 	return child, closer, nil
 }
@@ -330,14 +396,28 @@ func (r *delegationRuntime) Call(ctx context.Context, call client.ToolCall) (cli
 	}
 	switch call.Function.Name {
 	case subagent.DelegateListToolName:
-		var input map[string]any
-		if err := decodeDelegationArguments(call.Function.Arguments, &input); err != nil || len(input) != 0 {
-			if err == nil {
-				err = errors.New("delegate_list accepts no arguments")
-			}
+		var input delegateListInput
+		if err := decodeDelegationArguments(call.Function.Arguments, &input); err != nil {
 			return client.ToolResult{Content: err.Error(), IsError: true}, nil
 		}
-		body, err := json.Marshal(r.available())
+		dispatcher := r.dispatcher
+		input.WorkingDirectory = strings.TrimSpace(input.WorkingDirectory)
+		var closer io.Closer
+		if input.WorkingDirectory != "" {
+			resolved, err := canonicalDelegationDirectory(dispatcher.workspace.checkoutRoot, input.WorkingDirectory)
+			if err != nil {
+				return client.ToolResult{Content: err.Error(), IsError: true}, nil
+			}
+			if !sameDelegationDirectory(resolved, dispatcher.workspace.checkoutRoot) {
+				dispatcher, closer, err = dispatcher.forWorkingDirectory(ctx, resolved)
+				if err != nil {
+					return client.ToolResult{Content: "open delegated working directory: " + err.Error(), IsError: true}, nil
+				}
+				defer func() { _ = closer.Close() }()
+			}
+		}
+		target := &delegationRuntime{dispatcher: dispatcher, caller: r.caller, stack: r.stack}
+		body, err := json.Marshal(target.available())
 		if err != nil {
 			return client.ToolResult{}, err
 		}
@@ -349,13 +429,30 @@ func (r *delegationRuntime) Call(ctx context.Context, call client.ToolCall) (cli
 		}
 		input.SubagentName = strings.TrimSpace(input.SubagentName)
 		input.Prompt = strings.TrimSpace(input.Prompt)
+		input.WorkingDirectory = strings.TrimSpace(input.WorkingDirectory)
 		if input.SubagentName == "" || input.Prompt == "" {
 			return client.ToolResult{Content: "subagent_name and prompt are required", IsError: true}, nil
 		}
 		if len(input.Prompt) > subagent.MaximumDelegatePromptBytes {
 			return client.ToolResult{Content: fmt.Sprintf("prompt must not exceed %d bytes", subagent.MaximumDelegatePromptBytes), IsError: true}, nil
 		}
-		return r.dispatcher.dispatch(ctx, r.caller, r.stack, r.store, r.taskID, call, input)
+		dispatcher := r.dispatcher
+		var closer io.Closer
+		if input.WorkingDirectory != "" {
+			resolved, err := canonicalDelegationDirectory(dispatcher.workspace.checkoutRoot, input.WorkingDirectory)
+			if err != nil {
+				return client.ToolResult{Content: err.Error(), IsError: true}, nil
+			}
+			input.WorkingDirectory = resolved
+			if !sameDelegationDirectory(resolved, dispatcher.workspace.checkoutRoot) {
+				dispatcher, closer, err = dispatcher.forWorkingDirectory(ctx, resolved)
+				if err != nil {
+					return client.ToolResult{Content: "open delegated working directory: " + err.Error(), IsError: true}, nil
+				}
+				defer func() { _ = closer.Close() }()
+			}
+		}
+		return dispatcher.dispatch(ctx, r.caller, r.stack, r.store, r.taskID, call, input)
 	case subagent.ChangeRequestReadToolName, subagent.ChangeRequestMergeToolName, subagent.ChangeRequestCloseToolName:
 		return r.callChangeRequest(ctx, call)
 	default:
@@ -406,7 +503,7 @@ func (r *delegationRuntime) callChangeRequest(ctx context.Context, call client.T
 	case subagent.ChangeRequestReadToolName:
 		output, err = r.dispatcher.worktrees.Read(ctx, request)
 	case subagent.ChangeRequestMergeToolName:
-		request, err = r.dispatcher.worktrees.Merge(ctx, r.dispatcher.workspace.checkoutRoot, request)
+		request, err = r.dispatcher.worktrees.Merge(ctx, request.RepositoryRoot, request)
 		state.ChangeRequest = &request
 		if saveErr := child.SaveDelegationState(state); saveErr != nil {
 			return client.ToolResult{}, errors.Join(err, saveErr)
@@ -612,7 +709,8 @@ func (d *delegationDispatcher) dispatchStored(ctx context.Context, caller string
 		bookmark = workspace.DelegationBookmark{
 			InvocationID: id, CallIndex: callIndex, ToolIndex: toolIndex,
 			CallID: call.ID, Agent: input.SubagentName, Prompt: input.Prompt,
-			RunID: parentSession.RunID, CreatedAt: time.Now().UTC(),
+			WorkingDirectory: input.WorkingDirectory,
+			RunID:            parentSession.RunID, CreatedAt: time.Now().UTC(),
 		}
 		shared := d.shared()
 		shared.mu.Lock()
@@ -636,7 +734,8 @@ func (d *delegationDispatcher) dispatchStored(ctx context.Context, caller string
 			return client.ToolResult{}, err
 		}
 	}
-	if bookmark.RunID != parentSession.RunID || bookmark.Agent != input.SubagentName || bookmark.Prompt != input.Prompt {
+	if bookmark.RunID != parentSession.RunID || bookmark.Agent != input.SubagentName || bookmark.Prompt != input.Prompt ||
+		bookmark.WorkingDirectory != input.WorkingDirectory {
 		return client.ToolResult{}, errors.New("delegation bookmark does not match parent call")
 	}
 	child, err := parent.ChildStore(bookmark.InvocationID)
@@ -648,7 +747,7 @@ func (d *delegationDispatcher) dispatchStored(ctx context.Context, caller string
 		return client.ToolResult{}, stateErr
 	}
 	if stateErr == nil {
-		if state.Agent != bookmark.Agent || state.Prompt != bookmark.Prompt || state.RunID != bookmark.RunID {
+		if state.Agent != bookmark.Agent || state.Prompt != bookmark.Prompt || state.WorkingDirectory != bookmark.WorkingDirectory || state.RunID != bookmark.RunID {
 			return client.ToolResult{}, errors.New("delegation state does not match bookmark")
 		}
 		if state.Result != nil {
@@ -658,7 +757,7 @@ func (d *delegationDispatcher) dispatchStored(ctx context.Context, caller string
 	if !allowed {
 		blocked := client.ToolResult{Content: fmt.Sprintf("saved subagent %q is no longer allowed or available", input.SubagentName), IsError: true}
 		if stateErr != nil {
-			state = workspace.DelegationState{Agent: bookmark.Agent, Prompt: bookmark.Prompt, RunID: bookmark.RunID, ParentID: parentTaskID, TaskID: bookmark.InvocationID}
+			state = workspace.DelegationState{Agent: bookmark.Agent, Prompt: bookmark.Prompt, WorkingDirectory: bookmark.WorkingDirectory, RunID: bookmark.RunID, ParentID: parentTaskID, TaskID: bookmark.InvocationID}
 		}
 		state.Status, state.Result = "blocked", &blocked
 		if err := child.SaveDelegationState(state); err != nil {
@@ -679,7 +778,7 @@ func (d *delegationDispatcher) dispatchStored(ctx context.Context, caller string
 		if err := child.Save(workspace.Session{RunID: bookmark.RunID, Transcript: []client.Message{{Role: client.RoleUser, Content: input.Prompt}}, Context: []client.Message{{Role: client.RoleUser, Content: input.Prompt}}}); err != nil {
 			return client.ToolResult{}, err
 		}
-		state = workspace.DelegationState{Agent: bookmark.Agent, Prompt: bookmark.Prompt, RunID: bookmark.RunID, ParentID: parentTaskID, TaskID: bookmark.InvocationID, Status: "running"}
+		state = workspace.DelegationState{Agent: bookmark.Agent, Prompt: bookmark.Prompt, WorkingDirectory: bookmark.WorkingDirectory, RunID: bookmark.RunID, ParentID: parentTaskID, TaskID: bookmark.InvocationID, Status: "running"}
 		if err := child.SaveDelegationState(state); err != nil {
 			return client.ToolResult{}, err
 		}
@@ -777,7 +876,7 @@ func (d *delegationDispatcher) dispatchStored(ctx context.Context, caller string
 		if d.apiMode != nil {
 			mode = d.apiMode(spec.Model)
 		}
-		state = workspace.DelegationState{Agent: bookmark.Agent, Prompt: bookmark.Prompt, RunID: bookmark.RunID, ParentID: parentTaskID, TaskID: bookmark.InvocationID, Model: spec.Model, APIMode: mode, Status: "running"}
+		state = workspace.DelegationState{Agent: bookmark.Agent, Prompt: bookmark.Prompt, WorkingDirectory: bookmark.WorkingDirectory, RunID: bookmark.RunID, ParentID: parentTaskID, TaskID: bookmark.InvocationID, Model: spec.Model, APIMode: mode, Status: "running"}
 		if err := child.SaveDelegationState(state); err != nil {
 			return client.ToolResult{}, err
 		}
@@ -795,43 +894,54 @@ func (d *delegationDispatcher) dispatchStored(ctx context.Context, caller string
 	runDispatcher := d
 	var checkoutCloser io.Closer
 	if definition.Info.MutatesWorkspace && d.worktrees != nil {
-		request := state.ChangeRequest
-		if request == nil {
-			prepared, prepareErr := d.worktrees.Prepare(ctx, d.workspace.checkoutRoot, state.TaskID)
-			if prepareErr != nil {
-				blocked := client.ToolResult{Content: "prepare isolated delegated work: " + prepareErr.Error(), IsError: true}
-				state.Status, state.Result = "blocked", &blocked
+		_, isRepository, repositoryErr := gitwork.RepositoryRoot(ctx, d.workspace.checkoutRoot)
+		if repositoryErr != nil {
+			blocked := client.ToolResult{Content: "inspect delegated Git workspace: " + repositoryErr.Error(), IsError: true}
+			state.Status, state.Result = "blocked", &blocked
+			if saveErr := child.SaveDelegationState(state); saveErr != nil {
+				return client.ToolResult{}, errors.Join(repositoryErr, saveErr)
+			}
+			return blocked, nil
+		}
+		if isRepository {
+			request := state.ChangeRequest
+			if request == nil {
+				prepared, prepareErr := d.worktrees.Prepare(ctx, d.workspace.checkoutRoot, state.TaskID)
+				if prepareErr != nil {
+					blocked := client.ToolResult{Content: "prepare isolated delegated work: " + prepareErr.Error(), IsError: true}
+					state.Status, state.Result = "blocked", &blocked
+					if saveErr := child.SaveDelegationState(state); saveErr != nil {
+						return client.ToolResult{}, errors.Join(prepareErr, saveErr)
+					}
+					return blocked, nil
+				}
+				request = &prepared
+				state.ChangeRequest = request
+				if err := child.SaveDelegationState(state); err != nil {
+					return client.ToolResult{}, err
+				}
+			} else if err := d.worktrees.Resume(ctx, *request); err != nil {
+				blockedRequest := d.worktrees.MarkBlocked(*request)
+				blocked := client.ToolResult{Content: "resume isolated delegated work: " + err.Error(), IsError: true}
+				state.ChangeRequest, state.Status, state.Result = &blockedRequest, "blocked", &blocked
 				if saveErr := child.SaveDelegationState(state); saveErr != nil {
-					return client.ToolResult{}, errors.Join(prepareErr, saveErr)
+					return client.ToolResult{}, errors.Join(err, saveErr)
 				}
 				return blocked, nil
 			}
-			request = &prepared
-			state.ChangeRequest = request
-			if err := child.SaveDelegationState(state); err != nil {
-				return client.ToolResult{}, err
+			isolated, closer, isolateErr := d.forCheckout(ctx, request.WorktreePath)
+			if isolateErr != nil {
+				blockedRequest := d.worktrees.MarkBlocked(*request)
+				blocked := client.ToolResult{Content: "open isolated delegated runtime: " + isolateErr.Error(), IsError: true}
+				state.ChangeRequest, state.Status, state.Result = &blockedRequest, "blocked", &blocked
+				if saveErr := child.SaveDelegationState(state); saveErr != nil {
+					return client.ToolResult{}, errors.Join(isolateErr, saveErr)
+				}
+				return blocked, nil
 			}
-		} else if err := d.worktrees.Resume(ctx, *request); err != nil {
-			blockedRequest := d.worktrees.MarkBlocked(*request)
-			blocked := client.ToolResult{Content: "resume isolated delegated work: " + err.Error(), IsError: true}
-			state.ChangeRequest, state.Status, state.Result = &blockedRequest, "blocked", &blocked
-			if saveErr := child.SaveDelegationState(state); saveErr != nil {
-				return client.ToolResult{}, errors.Join(err, saveErr)
-			}
-			return blocked, nil
+			runDispatcher, checkoutCloser = isolated, closer
+			defer func() { _ = checkoutCloser.Close() }()
 		}
-		isolated, closer, isolateErr := d.forCheckout(ctx, request.WorktreePath)
-		if isolateErr != nil {
-			blockedRequest := d.worktrees.MarkBlocked(*request)
-			blocked := client.ToolResult{Content: "open isolated delegated runtime: " + isolateErr.Error(), IsError: true}
-			state.ChangeRequest, state.Status, state.Result = &blockedRequest, "blocked", &blocked
-			if saveErr := child.SaveDelegationState(state); saveErr != nil {
-				return client.ToolResult{}, errors.Join(isolateErr, saveErr)
-			}
-			return blocked, nil
-		}
-		runDispatcher, checkoutCloser = isolated, closer
-		defer func() { _ = checkoutCloser.Close() }()
 	}
 	childStack := append(append([]string(nil), stack...), input.SubagentName)
 	runtime := &delegationRuntime{base: runDispatcher.tools, dispatcher: runDispatcher, caller: input.SubagentName, stack: childStack, store: &child, taskID: state.TaskID}

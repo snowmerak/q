@@ -73,7 +73,7 @@
     status: string;
   };
   type DelegationNode = {
-    bookmark: { invocation_id: string; agent: string; prompt: string; task_id?: string; parent_id?: string };
+    bookmark: { invocation_id: string; agent: string; prompt: string; working_directory?: string; task_id?: string; parent_id?: string };
     state?: { status: string; task_id?: string; parent_id?: string; model?: string; running_call?: { name: string; call_id: string }; unknown_tools?: { name: string; call_id: string }[]; change_request?: ChangeRequest };
     transcript?: Message[];
     children?: DelegationNode[];
@@ -773,7 +773,7 @@
     {#if error}<div class="session-error" role="alert">{error}</div>{/if}
     {#if selected}
       <div class="chat-heading">
-        <div><h2>{selectedDelegation ? selectedDelegation.bookmark.agent.replace(/^builtin\//, '') : selected.session.title || 'New session'}</h2><p>{selectedDelegation ? selectedDelegation.bookmark.prompt : workspaceRoot}</p></div>
+        <div><h2>{selectedDelegation ? selectedDelegation.bookmark.agent.replace(/^builtin\//, '') : selected.session.title || 'New session'}</h2><p>{selectedDelegation ? `${selectedDelegation.bookmark.working_directory ? `${selectedDelegation.bookmark.working_directory} · ` : ''}${selectedDelegation.bookmark.prompt}` : workspaceRoot}</p></div>
         <div class="chat-heading-actions">
           {#if !selectedDelegation && activeRun?.context_size}
             <div class="context-usage" title={`Estimated context usage: ${formatTokenCount(activeRun.context_used)} of ${formatTokenCount(activeRun.context_size)} tokens`}>

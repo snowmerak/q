@@ -251,6 +251,7 @@ func TestWorkspacePromptGuidesDefaultLoopDelegationWhenAvailable(t *testing.T) {
 		"When a task is sufficiently large or complex, use delegation.",
 		"Call delegate_list to inspect the available agents",
 		"an engineering workflow appropriate to the task",
+		"pass the same working_directory to delegate_list and delegate",
 	} {
 		if !strings.Contains(prompt, expected) {
 			t.Fatalf("workspace prompt omitted %q:\n%s", expected, prompt)

@@ -519,6 +519,195 @@ func TestMutatingDelegationUsesWorktreeAndMergesThroughChangeRequest(t *testing.
 	}
 }
 
+func TestMutatingDelegationCanTargetAnotherRepository(t *testing.T) {
+	parent := t.TempDir()
+	target := t.TempDir()
+	delegationGit(t, target, "init", "-b", "main")
+	if err := os.WriteFile(filepath.Join(target, "README.md"), []byte("target\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	delegationGit(t, target, "add", "README.md")
+	delegationGit(t, target, "-c", "user.name=Test", "-c", "user.email=test@example.test", "commit", "-m", "initial")
+
+	workspaceStore := workspace.Store{Root: parent}
+	sessionID, err := workspace.NewSessionID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	workspaceStore.SessionID = sessionID
+	call := client.ToolCall{ID: "delegate-other-repository", Type: client.ToolTypeFunction, Function: client.FunctionCall{
+		Name:      subagent.DelegateToolName,
+		Arguments: fmt.Sprintf(`{"subagent_name":"builtin/senior-developer","prompt":"create child.txt","working_directory":%q}`, target),
+	}}
+	if err := workspaceStore.Save(workspace.Session{RunID: "run-other-repository", Transcript: []client.Message{{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{call}}}}); err != nil {
+		t.Fatal(err)
+	}
+
+	configuredClient := &planningClient{responses: []client.Message{
+		{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{planToolCall(subagent.TaskStartToolName, `{"objective":"create child.txt"}`)}},
+		{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{{ID: "write-child", Type: client.ToolTypeFunction, Function: client.FunctionCall{Name: "write_file", Arguments: `{"path":"child.txt","content":"other repository"}`}}}},
+		{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{planToolCall(subagent.TaskCompleteToolName, `{"outcome":"succeeded","summary":"Add child file"}`)}},
+	}}
+	toolRuntime, err := qtools.NewRuntimeWithRoots(t.Context(), qtools.RuntimeRoots{
+		WorkspaceStateRoot: parent, CheckoutRoot: parent,
+	}, nil, loom.StoreOptions{}, lsp.GlobalConfig{}, lsp.WorkspaceConfig{}, qlibrary.NewClient("http://127.0.0.1:1", "", time.Millisecond))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = toolRuntime.Close() })
+
+	m := newModel(t.Context(), config.Store{Dir: t.TempDir()}, nil)
+	m.config = config.Default()
+	m.config.Provider.Model = "plan-model"
+	m.client = configuredClient
+	m.toolRuntime = toolRuntime
+	m.workspaceStore = &workspaceStore
+	m.runID = "run-other-repository"
+	runtime, err := m.configuredDelegationRuntime(toolRuntime, parent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := runtime.Call(t.Context(), call)
+	if err != nil || result.IsError {
+		t.Fatalf("delegate result = %#v, err = %v", result, err)
+	}
+	if _, err := os.Stat(filepath.Join(target, "child.txt")); !os.IsNotExist(err) {
+		t.Fatalf("delegated file leaked into target before merge: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(parent, "child.txt")); !os.IsNotExist(err) {
+		t.Fatalf("delegated file leaked into parent: %v", err)
+	}
+	bookmarks, err := workspaceStore.LoadDelegations()
+	if err != nil || len(bookmarks) != 1 || bookmarks[0].WorkingDirectory != target {
+		t.Fatalf("bookmarks = %#v, err = %v", bookmarks, err)
+	}
+	child, err := workspaceStore.ChildStore(bookmarks[0].InvocationID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, err := child.LoadDelegationState()
+	if err != nil || state.WorkingDirectory != target || state.ChangeRequest == nil || state.ChangeRequest.RepositoryRoot != target || state.ChangeRequest.Status != change.StatusOpen {
+		t.Fatalf("delegation state = %#v, err = %v", state, err)
+	}
+	merged, err := runtime.Call(t.Context(), client.ToolCall{Function: client.FunctionCall{
+		Name: subagent.ChangeRequestMergeToolName, Arguments: `{"change_request_id":"` + state.ChangeRequest.ID + `"}`,
+	}})
+	if err != nil || merged.IsError {
+		t.Fatalf("merge change request = %#v, err = %v", merged, err)
+	}
+	body, err := os.ReadFile(filepath.Join(target, "child.txt"))
+	if err != nil || strings.TrimSpace(string(body)) != "other repository" {
+		t.Fatalf("merged body = %q, err = %v", body, err)
+	}
+}
+
+func TestMutatingDelegationCanTargetPlainDirectory(t *testing.T) {
+	parent := t.TempDir()
+	target := t.TempDir()
+	workspaceStore := workspace.Store{Root: parent}
+	sessionID, err := workspace.NewSessionID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	workspaceStore.SessionID = sessionID
+	call := client.ToolCall{ID: "delegate-plain-directory", Type: client.ToolTypeFunction, Function: client.FunctionCall{
+		Name:      subagent.DelegateToolName,
+		Arguments: fmt.Sprintf(`{"subagent_name":"builtin/senior-developer","prompt":"create note.txt","working_directory":%q}`, target),
+	}}
+	if err := workspaceStore.Save(workspace.Session{RunID: "run-plain-directory", Transcript: []client.Message{{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{call}}}}); err != nil {
+		t.Fatal(err)
+	}
+	configuredClient := &planningClient{responses: []client.Message{
+		{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{planToolCall(subagent.TaskStartToolName, `{"objective":"create note.txt"}`)}},
+		{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{{ID: "write-note", Type: client.ToolTypeFunction, Function: client.FunctionCall{Name: "write_file", Arguments: `{"path":"note.txt","content":"plain directory"}`}}}},
+		{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{planToolCall(subagent.TaskCompleteToolName, `{"outcome":"succeeded","summary":"Add note"}`)}},
+	}}
+	toolRuntime, err := qtools.NewRuntimeWithRoots(t.Context(), qtools.RuntimeRoots{
+		WorkspaceStateRoot: parent, CheckoutRoot: parent,
+	}, nil, loom.StoreOptions{}, lsp.GlobalConfig{}, lsp.WorkspaceConfig{}, qlibrary.NewClient("http://127.0.0.1:1", "", time.Millisecond))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = toolRuntime.Close() })
+	m := newModel(t.Context(), config.Store{Dir: t.TempDir()}, nil)
+	m.config = config.Default()
+	m.config.Provider.Model = "plan-model"
+	m.client = configuredClient
+	m.toolRuntime = toolRuntime
+	m.workspaceStore = &workspaceStore
+	m.runID = "run-plain-directory"
+	runtime, err := m.configuredDelegationRuntime(toolRuntime, parent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := runtime.Call(t.Context(), call)
+	if err != nil || result.IsError {
+		t.Fatalf("delegate result = %#v, err = %v", result, err)
+	}
+	body, err := os.ReadFile(filepath.Join(target, "note.txt"))
+	if err != nil || strings.TrimSpace(string(body)) != "plain directory" {
+		t.Fatalf("plain directory body = %q, err = %v", body, err)
+	}
+	bookmarks, err := workspaceStore.LoadDelegations()
+	if err != nil || len(bookmarks) != 1 {
+		t.Fatalf("bookmarks = %#v, err = %v", bookmarks, err)
+	}
+	child, err := workspaceStore.ChildStore(bookmarks[0].InvocationID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, err := child.LoadDelegationState()
+	if err != nil || state.ChangeRequest != nil || state.WorkingDirectory != target {
+		t.Fatalf("plain directory state = %#v, err = %v", state, err)
+	}
+}
+
+func TestDelegateListCanDiscoverAnotherWorkspaceProfiles(t *testing.T) {
+	parent := t.TempDir()
+	target := t.TempDir()
+	settings := config.Store{Dir: t.TempDir()}
+	workspaceStore := workspace.Store{Root: parent}
+	toolRuntime, err := qtools.NewRuntimeWithRoots(t.Context(), qtools.RuntimeRoots{
+		WorkspaceStateRoot: parent, CheckoutRoot: parent,
+	}, nil, loom.StoreOptions{}, lsp.GlobalConfig{}, lsp.WorkspaceConfig{}, qlibrary.NewClient("http://127.0.0.1:1", "", time.Millisecond))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = toolRuntime.Close() })
+	m := newModel(t.Context(), settings, nil)
+	m.config = config.Default()
+	m.config.Provider.Model = "plan-model"
+	m.client = &planningClient{responses: []client.Message{
+		{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{planToolCall(subagent.TaskStartToolName, `{"objective":"inspect target"}`)}},
+		{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{planToolCall(subagent.TaskCompleteToolName, `{"outcome":"succeeded","summary":"Target inspected"}`)}},
+	}}
+	m.toolRuntime = toolRuntime
+	m.workspaceStore = &workspaceStore
+	if err := m.customStoreAt(target).Save(subagent.Profile{
+		Version: 1, Name: "target-researcher", Role: config.AgentRoleResearch,
+		Description: "Target workspace researcher.", SystemPrompt: "Inspect this workspace.", Tools: []string{},
+	}, "workspace", nil); err != nil {
+		t.Fatal(err)
+	}
+	runtime, err := m.configuredDelegationRuntime(toolRuntime, parent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := runtime.Call(t.Context(), client.ToolCall{Function: client.FunctionCall{
+		Name: subagent.DelegateListToolName, Arguments: fmt.Sprintf(`{"working_directory":%q}`, target),
+	}})
+	if err != nil || result.IsError || !strings.Contains(result.Content, `"workspace/target-researcher"`) {
+		t.Fatalf("target delegate list = %#v, err = %v", result, err)
+	}
+	result, err = runtime.Call(t.Context(), client.ToolCall{ID: "target-custom", Function: client.FunctionCall{
+		Name:      subagent.DelegateToolName,
+		Arguments: fmt.Sprintf(`{"subagent_name":"workspace/target-researcher","prompt":"inspect","working_directory":%q}`, target),
+	}})
+	if err != nil || result.IsError {
+		t.Fatalf("target custom delegate = %#v, err = %v", result, err)
+	}
+}
+
 func TestNestedMutatingDelegationMergesJuniorIntoSeniorWorktree(t *testing.T) {
 	repository := t.TempDir()
 	delegationGit(t, repository, "init", "-b", "main")

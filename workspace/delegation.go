@@ -26,14 +26,15 @@ var (
 // DelegationBookmark identifies one call by its position in the parent
 // transcript. Call IDs alone are not unique across model turns.
 type DelegationBookmark struct {
-	InvocationID string    `json:"invocation_id"`
-	CallIndex    int       `json:"call_index"`
-	ToolIndex    int       `json:"tool_index"`
-	CallID       string    `json:"call_id"`
-	Agent        string    `json:"agent"`
-	Prompt       string    `json:"prompt"`
-	RunID        string    `json:"run_id"`
-	CreatedAt    time.Time `json:"created_at"`
+	InvocationID     string    `json:"invocation_id"`
+	CallIndex        int       `json:"call_index"`
+	ToolIndex        int       `json:"tool_index"`
+	CallID           string    `json:"call_id"`
+	Agent            string    `json:"agent"`
+	Prompt           string    `json:"prompt"`
+	WorkingDirectory string    `json:"working_directory,omitempty"`
+	RunID            string    `json:"run_id"`
+	CreatedAt        time.Time `json:"created_at"`
 }
 
 type delegationBookmarks struct {
@@ -44,24 +45,25 @@ type delegationBookmarks struct {
 // DelegationState is the execution marker stored beside one child session.
 // Its Result is saved before the result is appended to the parent transcript.
 type DelegationState struct {
-	Version        int                  `json:"version"`
-	Agent          string               `json:"agent"`
-	Prompt         string               `json:"prompt"`
-	RunID          string               `json:"run_id"`
-	TaskID         string               `json:"task_id,omitempty"`
-	ParentID       string               `json:"parent_id,omitempty"`
-	Model          string               `json:"model,omitempty"`
-	APIMode        string               `json:"api_mode,omitempty"`
-	Candidate      int                  `json:"candidate,omitempty"`
-	ConversationID string               `json:"conversation_id,omitempty"`
-	Round          int                  `json:"round,omitempty"`
-	Reminders      int                  `json:"reminders,omitempty"`
-	Started        bool                 `json:"started,omitempty"`
-	Status         string               `json:"status"`
-	RunningCall    *DelegationToolCall  `json:"running_call,omitempty"`
-	UnknownTools   []DelegationToolCall `json:"unknown_tools,omitempty"`
-	Result         *client.ToolResult   `json:"result,omitempty"`
-	ChangeRequest  *change.Request      `json:"change_request,omitempty"`
+	Version          int                  `json:"version"`
+	Agent            string               `json:"agent"`
+	Prompt           string               `json:"prompt"`
+	WorkingDirectory string               `json:"working_directory,omitempty"`
+	RunID            string               `json:"run_id"`
+	TaskID           string               `json:"task_id,omitempty"`
+	ParentID         string               `json:"parent_id,omitempty"`
+	Model            string               `json:"model,omitempty"`
+	APIMode          string               `json:"api_mode,omitempty"`
+	Candidate        int                  `json:"candidate,omitempty"`
+	ConversationID   string               `json:"conversation_id,omitempty"`
+	Round            int                  `json:"round,omitempty"`
+	Reminders        int                  `json:"reminders,omitempty"`
+	Started          bool                 `json:"started,omitempty"`
+	Status           string               `json:"status"`
+	RunningCall      *DelegationToolCall  `json:"running_call,omitempty"`
+	UnknownTools     []DelegationToolCall `json:"unknown_tools,omitempty"`
+	Result           *client.ToolResult   `json:"result,omitempty"`
+	ChangeRequest    *change.Request      `json:"change_request,omitempty"`
 }
 
 type DelegationToolCall struct {
@@ -140,7 +142,8 @@ func (s Store) AddDelegation(item DelegationBookmark) (DelegationBookmark, error
 	}
 	for _, existing := range items {
 		if existing.CallIndex == item.CallIndex && existing.ToolIndex == item.ToolIndex {
-			if existing.CallID != item.CallID || existing.Agent != item.Agent || existing.Prompt != item.Prompt || existing.RunID != item.RunID {
+			if existing.CallID != item.CallID || existing.Agent != item.Agent || existing.Prompt != item.Prompt ||
+				existing.WorkingDirectory != item.WorkingDirectory || existing.RunID != item.RunID {
 				return DelegationBookmark{}, errors.New("workspace: conflicting delegation bookmark")
 			}
 			return existing, nil

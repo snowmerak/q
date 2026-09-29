@@ -7,8 +7,8 @@ q의 일반 대화와 custom subagent가 이름으로 다른 subagent를 호출�
 구현은 기존 Go runtime과 state machine 안에 두며 embedded Python 계층은 추가하지 않는다.
 
 ```text
-delegate_list() -> []DelegateInfo
-delegate(subagent_name, prompt) -> TaskResult | captured ACP result
+delegate_list(working_directory?) -> []DelegateInfo
+delegate(subagent_name, prompt, working_directory?) -> TaskResult | captured ACP result
 ```
 
 `DelegateInfo.kind`는 `inner` 또는 `external`이다. `inner`는 q의 model runner를
@@ -26,9 +26,15 @@ Default role 루프에는 workspace 도구와 `delegate_list`, `delegate`가 함
 메시지는 복원할 때 제거하여 과거 coordinator 제한이 default loop에 남지 않게 한다.
 
 `delegate_list`는 전체 등록 목록이 아니라 현재 호출자가 실제로 호출할 수 있고 현재
-runtime에서 실행 가능한 agent만 반환한다. `delegate`는 그 목록에 포함된 canonical
-ID만 받는다. 호출 결과는 다른 큰 도구 결과와 마찬가지로 Loom에 저장될 수 있으며,
-호출자에게는 bounded receipt가 전달된다.
+runtime에서 실행 가능한 agent만 반환한다. 다른 디렉터리를 지정하면 그 workspace의
+custom profile도 함께 읽는다. `delegate`는 그 목록에 포함된 canonical ID만 받는다.
+호출 결과는 다른 큰 도구 결과와 마찬가지로 Loom에 저장될 수 있으며, 호출자에게는
+bounded receipt가 전달된다.
+
+`working_directory`를 생략하면 호출자의 현재 checkout에서 실행한다. 다른 기존
+디렉터리의 절대 경로나 호출자 checkout 기준 상대 경로를 주면 그 위치를 도구 루트로
+사용하는 임시 자식 세션을 연다. 자식 transcript와 복구 북마크는 호출한 부모의 세션
+트리에 남고, 선택한 경로는 북마크와 실행 상태에 함께 저장된다.
 
 ## 공개 직업형 agent
 
@@ -168,12 +174,16 @@ assistant/도구 추적을 표시한다. `ctrl+g`로 추적을 접거나 펼칠 
 
 ## Git worktree와 변경 요청
 
-Git branch를 checkout한 persisted session에서 workspace 변경 가능성이 있는 inner
-subagent를 호출하면 Q는 부모의 현재 commit을 base로 고정하고
+Git branch를 checkout한 디렉터리에서 workspace 변경 가능성이 있는 inner subagent를
+호출하면 Q는 선택한 디렉터리의 현재 commit을 base로 고정하고
 `q/delegate/<invocation-id>` local branch와 linked worktree를 만든다. 부모 checkout은
 clean해야 하며 detached HEAD에서는 시작하지 않는다. 자식의 파일·명령·LSP 도구는 이
 worktree를 Checkout Root로 사용하고, transcript·bookmark·Loom·workspace skill은 원래
 Workspace State Root를 계속 사용한다. `.q`를 worktree에 복사하지 않는다.
+
+다른 Git 저장소를 `working_directory`로 선택한 경우 Change Request의 검토와 merge도
+그 저장소의 원래 branch에서 수행한다. Git 저장소가 아닌 일반 디렉터리는 branch나
+Change Request를 만들 수 없으므로 임시 자식 세션이 선택한 디렉터리를 직접 수정한다.
 
 자식이 성공하면 남은 변경을 Q가 commit하거나 자식이 만든 commit을 그대로 받아
 base/head commit이 고정된 내부 Change Request를 `TaskResult`와 자식
