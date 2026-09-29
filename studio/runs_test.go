@@ -146,6 +146,28 @@ func TestStudioRunSurvivesRequestAndReplaysFromDisk(t *testing.T) {
 	}
 }
 
+func TestStudioRunRemainsActiveUntilQueuedGuidanceRedirects(t *testing.T) {
+	now := time.Now().UTC()
+	for _, terminal := range []app.SessionEvent{
+		{Type: "result", Outcome: "succeeded"},
+		{Type: "cancelled"},
+		{Type: "error", Detail: "interrupted by guidance"},
+	} {
+		run := &studioRun{
+			guidance: "continue with the correction",
+			snapshot: studioRunSnapshot{Status: "running", FinishedAt: timePointer(now.Add(-time.Second))},
+		}
+		run.applyEventLocked(terminal, now)
+		if run.snapshot.Status != "redirecting" || run.snapshot.FinishedAt != nil {
+			t.Fatalf("%s while guidance queued = status %q, finished_at %v", terminal.Type, run.snapshot.Status, run.snapshot.FinishedAt)
+		}
+		run.applyEventLocked(app.SessionEvent{Type: "redirect"}, now.Add(time.Second))
+		if run.snapshot.Status != "redirected" || run.snapshot.FinishedAt == nil {
+			t.Fatalf("%s after redirect = status %q, finished_at %v", terminal.Type, run.snapshot.Status, run.snapshot.FinishedAt)
+		}
+	}
+}
+
 func TestStudioRunsAdmitOneTurnPerSessionAndRunSessionsConcurrently(t *testing.T) {
 	root := t.TempDir()
 	first, firstLock, err := workspace.CreateSession(root, "test")

@@ -523,21 +523,34 @@ func (run *studioRun) applyEventLocked(event app.SessionEvent, now time.Time) {
 		run.snapshot.ContextUsed = max(0, event.ContextUsed)
 		run.snapshot.ContextSize = max(0, event.ContextSize)
 	case "result":
-		run.snapshot.Status, run.snapshot.Outcome = "completed", event.Outcome
+		run.snapshot.Outcome = event.Outcome
 		run.snapshot.PendingQuestion = nil
-		run.snapshot.FinishedAt = timePointer(now)
+		if run.guidance != "" {
+			run.snapshot.Status = "redirecting"
+			run.snapshot.FinishedAt = nil
+		} else {
+			run.snapshot.Status = "completed"
+			run.snapshot.FinishedAt = timePointer(now)
+		}
 	case "cancelled":
 		run.snapshot.PendingQuestion = nil
 		if run.guidance != "" {
 			run.snapshot.Status = "redirecting"
+			run.snapshot.FinishedAt = nil
 		} else {
 			run.snapshot.Status = "cancelled"
 			run.snapshot.FinishedAt = timePointer(now)
 		}
 	case "error":
-		run.snapshot.Status, run.snapshot.Error = "failed", event.Detail
+		run.snapshot.Error = event.Detail
 		run.snapshot.PendingQuestion = nil
-		run.snapshot.FinishedAt = timePointer(now)
+		if run.guidance != "" {
+			run.snapshot.Status = "redirecting"
+			run.snapshot.FinishedAt = nil
+		} else {
+			run.snapshot.Status = "failed"
+			run.snapshot.FinishedAt = timePointer(now)
+		}
 	case "recovered":
 		run.snapshot.Status = "interrupted"
 		run.snapshot.PendingQuestion = nil
