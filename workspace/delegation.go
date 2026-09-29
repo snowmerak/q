@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/snowmerak/q/change"
 	"github.com/snowmerak/q/client"
 	"github.com/snowmerak/q/internal/fsreplace"
 )
@@ -19,6 +20,7 @@ const delegationVersion = 1
 var (
 	ErrDelegationNotFound     = errors.New("workspace: delegation does not exist")
 	ErrDelegationNotCompleted = errors.New("workspace: delegation is not completed")
+	ErrDelegationChangeOpen   = errors.New("workspace: delegation has an active change request")
 )
 
 // DelegationBookmark identifies one call by its position in the parent
@@ -59,6 +61,7 @@ type DelegationState struct {
 	RunningCall    *DelegationToolCall  `json:"running_call,omitempty"`
 	UnknownTools   []DelegationToolCall `json:"unknown_tools,omitempty"`
 	Result         *client.ToolResult   `json:"result,omitempty"`
+	ChangeRequest  *change.Request      `json:"change_request,omitempty"`
 }
 
 type DelegationToolCall struct {
@@ -198,6 +201,9 @@ func (s Store) deleteCompletedDelegation(invocationPath []string) error {
 	if state.Status != "completed" {
 		return ErrDelegationNotCompleted
 	}
+	if state.ChangeRequest != nil && !state.ChangeRequest.Final() {
+		return ErrDelegationChangeOpen
+	}
 
 	remaining := append([]DelegationBookmark(nil), items[:index]...)
 	remaining = append(remaining, items[index+1:]...)
@@ -249,6 +255,11 @@ func validateDelegationState(state DelegationState) error {
 		}
 	default:
 		return errors.New("workspace: invalid delegation status")
+	}
+	if state.ChangeRequest != nil {
+		if err := state.ChangeRequest.Validate(); err != nil {
+			return fmt.Errorf("workspace: invalid delegation change request: %w", err)
+		}
 	}
 	return nil
 }

@@ -59,9 +59,20 @@
   };
   type RunEventEnvelope = { cursor: number; at: string; event: RunEvent };
   type RunPage = { run: RunSnapshot; events: RunEventEnvelope[]; next_cursor: number };
+  type ChangeRequest = {
+    id: string;
+    repository_root: string;
+    worktree_path?: string;
+    base_ref: string;
+    base_commit: string;
+    head_ref: string;
+    head_commit?: string;
+    merged_commit?: string;
+    status: string;
+  };
   type DelegationNode = {
     bookmark: { invocation_id: string; agent: string; prompt: string; task_id?: string; parent_id?: string };
-    state?: { status: string; task_id?: string; parent_id?: string; model?: string; running_call?: { name: string; call_id: string }; unknown_tools?: { name: string; call_id: string }[] };
+    state?: { status: string; task_id?: string; parent_id?: string; model?: string; running_call?: { name: string; call_id: string }; unknown_tools?: { name: string; call_id: string }[]; change_request?: ChangeRequest };
     transcript?: Message[];
     children?: DelegationNode[];
     issue?: string;
@@ -747,7 +758,7 @@
         {#each flattenDelegations(registration.delegations || [], 1) as node}
           <button class="session-child" class:active={selectedRegistration?.registration_id === registration.registration_id && selectedDelegation?.path === node.path} style={`--tree-depth: ${node.depth}`} onclick={async () => { if (selectedRegistration?.registration_id !== registration.registration_id) await selectRegisteredSession(registration); selectDelegatedSession(registration, node); }} disabled={!!registration.issue}>
             <span class="tree-branch" aria-hidden="true"></span>
-            <span><strong>{node.bookmark.agent.replace(/^builtin\//, '')}</strong><small>{node.state?.status || 'recorded'}</small></span>
+            <span><strong>{node.bookmark.agent.replace(/^builtin\//, '')}</strong><small>{node.state?.change_request ? `${node.state.status} · CR ${node.state.change_request.status}` : node.state?.status || 'recorded'}</small></span>
           </button>
         {/each}
       {:else}
@@ -770,7 +781,7 @@
             </div>
           {/if}
           <span class:running={sending}>{runStatus || (sending ? 'Running' : 'Ready')}</span>
-          {#if selectedDelegation?.state?.status === 'completed'}
+          {#if selectedDelegation?.state?.status === 'completed' && (!selectedDelegation.state.change_request || ['merged', 'closed'].includes(selectedDelegation.state.change_request.status))}
             <button title="Delete completed delegation" aria-label="Delete completed delegation" onclick={deleteDelegation} disabled={sending || sessionLoading}><Trash2 aria-hidden="true" size={14} /></button>
           {/if}
           {#if !selectedDelegation}
@@ -820,7 +831,7 @@
         </section>
       {/if}
       {#if selectedDelegation}
-        <div class="delegated-session-note"><strong>Delegated session</strong><span>This transcript belongs to the selected child invocation. Interaction remains owned by its parent session.</span></div>
+        <div class="delegated-session-note"><strong>Delegated session</strong><span>This transcript belongs to the selected child invocation. Interaction remains owned by its parent session.</span>{#if selectedDelegation.state?.change_request}<code>Change request {selectedDelegation.state.change_request.status} · {selectedDelegation.state.change_request.head_ref} · {shortID(selectedDelegation.state.change_request.base_commit)} → {shortID(selectedDelegation.state.change_request.head_commit || 'working')}</code>{/if}</div>
       {:else}
         <div class="composer-wrap">
           <div class="composer">
@@ -845,6 +856,7 @@
           <details style={`--tree-depth: ${node.depth}`}>
             <summary><span class="tree-branch" aria-hidden="true"></span><strong>{node.bookmark.agent}</strong><em>{node.state?.status || 'recorded'}</em></summary>
             <p>{node.bookmark.prompt}</p>
+            {#if node.state?.change_request}<small class="change-request-summary">Change request {node.state.change_request.status} · {node.state.change_request.head_ref} · {shortID(node.state.change_request.base_commit)} → {shortID(node.state.change_request.head_commit || 'working')}</small>{/if}
             {#if node.state?.running_call}<small>Running {node.state.running_call.name} · {shortID(node.state.running_call.call_id)}</small>{/if}
             {#if node.state?.unknown_tools?.length}<small>{node.state.unknown_tools.length} interrupted tool call(s) require review</small>{/if}
             {#if node.issue}<small class="tree-issue">{node.issue}</small>{/if}

@@ -141,15 +141,19 @@ GitHub/GitLab 호환 API, 임의 조직의 권한 모델은 초기 목표에 포
   기존 Bubble Tea model을 renderer 없이 구동하므로 TUI와 같은 tool runtime, 저장,
   compaction과 delegation 경로를 사용한다.
 
-현재 위임은 같은 workspace 안의 child session과 Agent Loop 실행, durable run event와
-호출 tree까지 제공한다. repository를 지정하는 위임, worktree lease, Change Request와
-장기 task graph scheduler는 아직 제공하지 않는다. 위임 복구는 [중첩 delegate 세션과 재귀
-복구](delegation-session-recovery.md), 저장 방향은 [Session Store](session-store-notes.md)가
-소유한다.
+현재 위임은 child session, Agent Loop, durable run event와 호출 tree에 더해 저장된
+session의 변경 가능 inner agent를 local Git linked worktree에서 실행한다. parent의
+clean branch/commit을 base로 고정하고 local task branch를 만들며, 완료 시 base/head
+commit을 기록한 내부 Change Request를 직접 부모에게 반환한다. 부모 agent는 전용
+도구로 diff를 읽고 merge 또는 close한다. 중첩 위임도 각 부모의 worktree를 기준으로
+같은 흐름을 사용한다. Studio session tree에는 Change Request 상태와 ref가 표시된다.
 
-도구 runtime과 delegation 실행 문맥은 Workspace State Root와 Checkout Root를 분리할
-수 있다. 일반 TUI·ACP는 현재 같은 canonical root를 양쪽에 전달한다. repository 지정
-위임이 이 계약에 worktree lease를 연결하는 단계는 아직 구현되지 않았다.
+도구 runtime은 원래 Session Store와 Workspace State Root를 유지하면서 lease된
+worktree만 Checkout Root로 바꾼다. 현재 repository는 session의 checkout에서 유도하며,
+임의 repository 지정 위임, 같은 Change Request의 수정 iteration, Studio 수동 review와
+merge UI, orphan reconciliation과 장기 task graph scheduler는 아직 제공하지 않는다.
+위임 복구는 [중첩 delegate 세션과 재귀 복구](delegation-session-recovery.md), 저장 방향은
+[Session Store](session-store-notes.md)가 소유한다.
 
 현재 `web/`은 Eleventy 기반 공개 문서 사이트다. Studio application과 문서 사이트는
 서로 다른 source와 build artifact를 사용한다.
@@ -532,12 +536,19 @@ disconnect가 worker를 종료하지 않는다.
 
 ### S5. Git worktree와 merge request
 
-- repository/change/worktree lease service.
-- repository 지정 delegation이 기존 Session Store와 대상 Workspace State Root를
-  유지한 채 lease의 Checkout Root로 도구 runtime을 생성한다.
-- branch·worktree 생성, commit 제출, diff와 checks.
-- merge request, review, changes requested, approval, conflict와 merge.
-- crash recovery와 orphan worktree reconciliation.
+1차 vertical slice는 구현되어 있다. 저장된 inner delegation은 Session Store와
+Workspace State Root를 유지한 채 linked worktree를 Checkout Root로 사용하고, local
+branch 생성, 자동 commit, 고정 diff 조회, 부모 branch merge/close와 lease 정리를
+지원한다. nested senior→junior merge도 같은 경로를 사용하며 Studio tree가 Change
+Request 상태를 표시한다.
+
+남은 범위는 다음과 같다.
+
+- 호출 시 repository를 명시하는 delegation과 여러 execution host의 lease service.
+- checks 결과 저장과 Studio의 diff review, approval, close와 merge 조작 UI.
+- 같은 Change Request에 changes requested를 전달하고 재제출하는 iteration.
+- base 이동 뒤 rebase/conflict 해소 정책.
+- crash recovery 뒤 orphan worktree와 branch reconciliation 및 audit event.
 
 완료 기준: junior developer에 할당한 격리 worktree의 변경을 senior developer가
 Web GUI에서 검토하고, 한 번 이상의 수정 요청 뒤 대상 branch에 병합할 수 있다.

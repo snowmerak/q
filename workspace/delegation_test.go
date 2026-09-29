@@ -5,7 +5,9 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
+	"github.com/snowmerak/q/change"
 	"github.com/snowmerak/q/client"
 )
 
@@ -210,6 +212,36 @@ func TestDeleteCompletedDelegationRemovesOnlyCompletedChildTree(t *testing.T) {
 	}
 	if _, err := running.Load(); err != nil {
 		t.Fatalf("running delegation was changed: %v", err)
+	}
+	openBookmark := DelegationBookmark{
+		InvocationID: "open-change-child", CallIndex: 2, CallID: "call-open-change",
+		Agent: "builtin/junior-developer", Prompt: "implement", RunID: "run-open-change",
+	}
+	if _, err := store.AddDelegation(openBookmark); err != nil {
+		t.Fatal(err)
+	}
+	openChild, err := store.ChildStore(openBookmark.InvocationID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	if err := openChild.SaveDelegationState(DelegationState{
+		Agent: openBookmark.Agent, Prompt: openBookmark.Prompt, RunID: openBookmark.RunID,
+		Status: "completed", Result: &client.ToolResult{Content: "implemented"},
+		ChangeRequest: &change.Request{
+			Version: change.Version, ID: openBookmark.InvocationID, RepositoryRoot: root,
+			WorktreePath: filepath.Join(root, "lease"), BaseRef: "main", BaseCommit: "base",
+			HeadRef: "q/delegate/open", HeadCommit: "head", Status: change.StatusOpen,
+			CreatedAt: now, UpdatedAt: now,
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := DeleteCompletedDelegation(root, store.SessionID, []string{openBookmark.InvocationID}, "test reject open change"); !errors.Is(err, ErrDelegationChangeOpen) {
+		t.Fatalf("delete delegation with open change = %v", err)
+	}
+	if _, err := openChild.LoadDelegationState(); err != nil {
+		t.Fatalf("open change delegation was changed: %v", err)
 	}
 	nestedBookmark := DelegationBookmark{
 		InvocationID: "nested-completed", CallIndex: 0, CallID: "call-nested",

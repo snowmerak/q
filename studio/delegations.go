@@ -67,7 +67,7 @@ func (service *sessionsService) serveDeleteDelegation(writer http.ResponseWriter
 		switch {
 		case errors.Is(err, workspace.ErrDelegationNotFound):
 			writeAPIError(writer, http.StatusNotFound, err)
-		case errors.Is(err, workspace.ErrDelegationNotCompleted):
+		case errors.Is(err, workspace.ErrDelegationNotCompleted), errors.Is(err, workspace.ErrDelegationChangeOpen):
 			writeAPIError(writer, http.StatusConflict, err)
 		default:
 			writeSessionError(writer, err)

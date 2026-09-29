@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/snowmerak/q/app"
+	"github.com/snowmerak/q/change"
 	"github.com/snowmerak/q/client"
 	"github.com/snowmerak/q/config"
 	"github.com/snowmerak/q/workspace"
@@ -420,6 +421,30 @@ func TestSessionDelegationDeleteOnlyAcceptsCompletedChildren(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	openBookmark := workspace.DelegationBookmark{
+		InvocationID: "open-change-child", CallIndex: 2, CallID: "call-open-change",
+		Agent: "builtin/junior-developer", Prompt: "implement", RunID: "run-open-change",
+	}
+	if _, err := store.AddDelegation(openBookmark); err != nil {
+		t.Fatal(err)
+	}
+	openChild, err := store.ChildStore(openBookmark.InvocationID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	if err := openChild.SaveDelegationState(workspace.DelegationState{
+		Agent: openBookmark.Agent, Prompt: openBookmark.Prompt, RunID: openBookmark.RunID,
+		Status: "completed", Result: &client.ToolResult{Content: "implemented"},
+		ChangeRequest: &change.Request{
+			Version: change.Version, ID: openBookmark.InvocationID, RepositoryRoot: root,
+			WorktreePath: filepath.Join(root, "lease"), BaseRef: "main", BaseCommit: "base",
+			HeadRef: "q/delegate/open", HeadCommit: "head", Status: change.StatusOpen,
+			CreatedAt: now, UpdatedAt: now,
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
 	if err := lock.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -434,6 +459,11 @@ func TestSessionDelegationDeleteOnlyAcceptsCompletedChildren(t *testing.T) {
 	if response.Code != http.StatusConflict {
 		t.Fatalf("delete running delegation = %d %s", response.Code, response.Body.String())
 	}
+	response = httptest.NewRecorder()
+	handler.ServeHTTP(response, httptest.NewRequest(http.MethodDelete, base+"open-change-child", nil))
+	if response.Code != http.StatusConflict {
+		t.Fatalf("delete delegation with open change = %d %s", response.Code, response.Body.String())
+	}
 
 	response = httptest.NewRecorder()
 	handler.ServeHTTP(response, httptest.NewRequest(http.MethodDelete, base+"completed-child", nil))
@@ -441,7 +471,7 @@ func TestSessionDelegationDeleteOnlyAcceptsCompletedChildren(t *testing.T) {
 		t.Fatalf("delete completed delegation = %d %s", response.Code, response.Body.String())
 	}
 	remaining, err := store.LoadDelegations()
-	if err != nil || len(remaining) != 1 || remaining[0].InvocationID != "running-child" {
+	if err != nil || len(remaining) != 2 || remaining[0].InvocationID != "running-child" || remaining[1].InvocationID != "open-change-child" {
 		t.Fatalf("remaining delegations = %#v, %v", remaining, err)
 	}
 }

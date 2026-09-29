@@ -271,6 +271,45 @@ func TestRuntimeRootsKeepStateOutsideCheckout(t *testing.T) {
 	}
 }
 
+func TestNewCheckoutRuntimeKeepsStateAndMovesSourceTools(t *testing.T) {
+	stateRoot := t.TempDir()
+	firstCheckout := t.TempDir()
+	secondCheckout := t.TempDir()
+	if err := os.WriteFile(filepath.Join(firstCheckout, "source.txt"), []byte("first"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(secondCheckout, "source.txt"), []byte("second"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runtime, err := NewRuntimeWithRoots(
+		t.Context(), RuntimeRoots{WorkspaceStateRoot: stateRoot, CheckoutRoot: firstCheckout},
+		nil, loom.StoreOptions{}, lsp.GlobalConfig{}, lsp.WorkspaceConfig{Version: lsp.WorkspaceConfigVersion}, nil,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer runtime.Close()
+	cloned, err := runtime.NewCheckoutRuntime(t.Context(), secondCheckout)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cloned.Close()
+
+	result, err := cloned.Call(t.Context(), client.ToolCall{
+		ID: "read-cloned-checkout", Type: client.ToolTypeFunction,
+		Function: client.FunctionCall{Name: "read_file", Arguments: `{"path":"source.txt"}`},
+	})
+	if err != nil || result.IsError || !strings.Contains(result.Content, "second") {
+		t.Fatalf("cloned checkout read = %#v, err = %v", result, err)
+	}
+	if status := cloned.lsp.Status(t.Context()); status.Workspace != secondCheckout {
+		t.Fatalf("cloned LSP workspace = %q, want %q", status.Workspace, secondCheckout)
+	}
+	if _, err := os.Stat(filepath.Join(stateRoot, ".q", loom.DirectoryName)); err != nil {
+		t.Fatalf("shared workspace state was not used: %v", err)
+	}
+}
+
 func TestRuntimeAutomaticallyDiscoversLSPRoots(t *testing.T) {
 	for _, withLibrary := range []bool{false, true} {
 		name := "without library"

@@ -46,6 +46,8 @@ bare q 호환 채팅에서 `/subagent`를 직접 호출할 때는 사용자 정�
 
 Studio는 각 자식을 세션 트리의 부모 아래에 표시합니다. 자식을 선택하면 진행 상황, 대화와 도구 호출이 열립니다. 각 호출은 부모의 북마크와 자식 세션으로 저장됩니다. 재시작하면 가장 깊은 자식부터 복구한 뒤 부모를 이어갑니다. 결과가 기록되지 않은 도구 호출은 자동 재실행하지 않고 `unknown`으로 전달합니다. 중단된 외부 ACP 호출도 내부 턴을 재개할 수 없어 `unknown`으로 반환합니다.
 
+clean Git branch를 사용하는 저장된 session에서 변경 가능한 inner child는 local `q/delegate/<invocation-id>` branch와 linked worktree에서 작업합니다. 성공하면 Q가 남은 변경을 commit하고 base/head commit이 고정된 내부 Change Request를 반환합니다. 호출한 agent는 diff를 읽은 뒤 merge하거나 close합니다. 중첩 child도 같은 흐름을 사용하므로 senior developer가 junior developer의 branch를 검토·병합한 뒤 자신의 Change Request를 상위에 반환할 수 있습니다. Studio session tree에는 요청 상태와 branch가 표시됩니다. 이 local 흐름에는 remote push가 필요하지 않습니다.
+
 ## 내부 에이전트 정의
 
 내부 프로필은 q 모델 역할, 명시적인 도구 목록, 직접 호출 가능한 위임 대상을 선택합니다.

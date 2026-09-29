@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"reflect"
 	"slices"
 	"sort"
@@ -16,6 +17,8 @@ import (
 
 	"github.com/snowmerak/q/client"
 	"github.com/snowmerak/q/config"
+	"github.com/snowmerak/q/gitwork"
+	"github.com/snowmerak/q/mcpconfig"
 	"github.com/snowmerak/q/subagent"
 	qtools "github.com/snowmerak/q/tools"
 	"github.com/snowmerak/q/workspace"
@@ -41,6 +44,9 @@ type delegationDispatcher struct {
 	apiMode     func(string) string
 	progress    subagent.ProgressFunc
 	trace       subagent.TraceFunc
+	worktrees   *gitwork.Manager
+	checkout    checkoutRuntimeFactory
+	coordinator *delegationDispatcher
 
 	mu       sync.Mutex
 	calls    int
@@ -71,6 +77,16 @@ type delegationRuntime struct {
 type delegateInput struct {
 	SubagentName string `json:"subagent_name"`
 	Prompt       string `json:"prompt"`
+}
+
+type changeRequestInput struct {
+	ID string `json:"change_request_id"`
+}
+
+type checkoutRuntimeFactory func(context.Context, string) (agentToolRuntime, io.Closer, error)
+
+type checkoutRuntimeCloner interface {
+	NewCheckoutRuntime(context.Context, string) (*qtools.Runtime, error)
 }
 
 // observeDelegation forwards the entire nested runner tree through one event
@@ -168,6 +184,16 @@ func (m model) configuredDelegationRuntimeIn(base agentToolRuntime, execution ex
 		capture: configuredInvocationCapture(base), external: configuredExternalDelegates(m.activeConfig(), execution.checkoutRoot, registry),
 		apiMode: m.activeModelAPIMode,
 	}
+	if clone := findCheckoutRuntimeCloner(base); clone != nil && strings.TrimSpace(m.store.Dir) != "" {
+		dispatcher.checkout = func(ctx context.Context, checkoutRoot string) (agentToolRuntime, io.Closer, error) {
+			runtime, err := clone.NewCheckoutRuntime(ctx, checkoutRoot)
+			if err != nil {
+				return nil, nil, err
+			}
+			return runtime, runtime, nil
+		}
+		dispatcher.worktrees = &gitwork.Manager{Root: filepath.Join(m.store.Dir, "worktrees")}
+	}
 	if m.runID != "" {
 		dispatcher.store = execution.sessionStore
 		if dispatcher.store != nil {
@@ -215,6 +241,65 @@ func countSavedDelegations(store workspace.Store, runID string, depth int) (int,
 	return count, nil
 }
 
+func findCheckoutRuntimeCloner(runtime agentToolRuntime) checkoutRuntimeCloner {
+	for range 16 {
+		if cloner, ok := runtime.(checkoutRuntimeCloner); ok {
+			return cloner
+		}
+		unwrapper, ok := runtime.(interface{ UnwrapToolRuntime() agentToolRuntime })
+		if !ok {
+			return nil
+		}
+		runtime = unwrapper.UnwrapToolRuntime()
+		if runtime == nil {
+			return nil
+		}
+	}
+	return nil
+}
+
+func (d *delegationDispatcher) shared() *delegationDispatcher {
+	if d.coordinator != nil {
+		return d.coordinator
+	}
+	return d
+}
+
+func (d *delegationDispatcher) forCheckout(ctx context.Context, checkoutRoot string) (*delegationDispatcher, io.Closer, error) {
+	if d.checkout == nil {
+		return nil, nil, errors.New("delegation: isolated checkout runtime is unavailable")
+	}
+	runtime, closer, err := d.checkout(ctx, checkoutRoot)
+	if err != nil {
+		return nil, nil, err
+	}
+	fail := func(err error) (*delegationDispatcher, io.Closer, error) {
+		if closer != nil {
+			_ = closer.Close()
+		}
+		return nil, nil, err
+	}
+	configured, err := configuredAgentToolRuntime(runtime, mcpconfig.RoleDefault, d.value, checkoutRoot)
+	if err != nil {
+		return fail(err)
+	}
+	catalog := customToolsFor(configured)
+	if catalog == nil {
+		catalog = configured
+	}
+	workspaceContext := d.workspace
+	workspaceContext.checkoutRoot = checkoutRoot
+	child := &delegationDispatcher{
+		registry: d.registry, client: d.client, tools: catalog, value: d.value,
+		workspace: workspaceContext, environment: d.environment, runID: d.runID,
+		sink: d.sink, capture: configuredInvocationCapture(configured),
+		external: configuredExternalDelegates(d.value, checkoutRoot, d.registry),
+		store:    d.store, apiMode: d.apiMode, progress: d.progress, trace: d.trace,
+		worktrees: d.worktrees, checkout: d.checkout, coordinator: d.shared(),
+	}
+	return child, closer, nil
+}
+
 func (r *delegationRuntime) Tools() []client.Tool {
 	if r == nil {
 		return nil
@@ -225,6 +310,9 @@ func (r *delegationRuntime) Tools() []client.Tool {
 	}
 	if len(r.available()) > 0 {
 		result = append(result, subagent.DelegateTools()...)
+	}
+	if r.store != nil && r.dispatcher.worktrees != nil {
+		result = append(result, subagent.ChangeRequestTools()...)
 	}
 	return result
 }
@@ -268,9 +356,84 @@ func (r *delegationRuntime) Call(ctx context.Context, call client.ToolCall) (cli
 			return client.ToolResult{Content: fmt.Sprintf("prompt must not exceed %d bytes", subagent.MaximumDelegatePromptBytes), IsError: true}, nil
 		}
 		return r.dispatcher.dispatch(ctx, r.caller, r.stack, r.store, r.taskID, call, input)
+	case subagent.ChangeRequestReadToolName, subagent.ChangeRequestMergeToolName, subagent.ChangeRequestCloseToolName:
+		return r.callChangeRequest(ctx, call)
 	default:
 		return r.base.Call(ctx, call)
 	}
+}
+
+func (r *delegationRuntime) callChangeRequest(ctx context.Context, call client.ToolCall) (client.ToolResult, error) {
+	if r.store == nil || r.dispatcher == nil || r.dispatcher.worktrees == nil {
+		return client.ToolResult{Content: "change request coordination is unavailable", IsError: true}, nil
+	}
+	var input changeRequestInput
+	if err := decodeDelegationArguments(call.Function.Arguments, &input); err != nil {
+		return client.ToolResult{Content: err.Error(), IsError: true}, nil
+	}
+	input.ID = strings.TrimSpace(input.ID)
+	if input.ID == "" {
+		return client.ToolResult{Content: "change_request_id is required", IsError: true}, nil
+	}
+	bookmarks, err := r.store.LoadDelegations()
+	if err != nil {
+		return client.ToolResult{Content: err.Error(), IsError: true}, nil
+	}
+	directChild := false
+	for _, bookmark := range bookmarks {
+		if bookmark.InvocationID == input.ID {
+			directChild = true
+			break
+		}
+	}
+	if !directChild {
+		return client.ToolResult{Content: "change request does not belong to a direct delegated child", IsError: true}, nil
+	}
+	child, err := r.store.ChildStore(input.ID)
+	if err != nil {
+		return client.ToolResult{Content: err.Error(), IsError: true}, nil
+	}
+	state, err := child.LoadDelegationState()
+	if err != nil {
+		return client.ToolResult{Content: err.Error(), IsError: true}, nil
+	}
+	if state.ChangeRequest == nil || state.ChangeRequest.ID != input.ID {
+		return client.ToolResult{Content: "change request does not exist for this direct child", IsError: true}, nil
+	}
+	request := *state.ChangeRequest
+	var output any
+	switch call.Function.Name {
+	case subagent.ChangeRequestReadToolName:
+		output, err = r.dispatcher.worktrees.Read(ctx, request)
+	case subagent.ChangeRequestMergeToolName:
+		request, err = r.dispatcher.worktrees.Merge(ctx, r.dispatcher.workspace.checkoutRoot, request)
+		state.ChangeRequest = &request
+		if saveErr := child.SaveDelegationState(state); saveErr != nil {
+			return client.ToolResult{}, errors.Join(err, saveErr)
+		}
+		output = request
+	case subagent.ChangeRequestCloseToolName:
+		request, err = r.dispatcher.worktrees.Close(ctx, request)
+		state.ChangeRequest = &request
+		if saveErr := child.SaveDelegationState(state); saveErr != nil {
+			return client.ToolResult{}, errors.Join(err, saveErr)
+		}
+		output = request
+	}
+	if err != nil {
+		return client.ToolResult{Content: err.Error(), IsError: true}, nil
+	}
+	body, err := json.Marshal(output)
+	if err != nil {
+		return client.ToolResult{}, err
+	}
+	result := client.ToolResult{Content: string(body)}
+	if call.Function.Name == subagent.ChangeRequestReadToolName && r.dispatcher.capture != nil {
+		return r.dispatcher.capture(ctx, subagent.InvocationSource{
+			Protocol: "q-change-request", Name: input.ID, Kind: "pinned-diff", MediaType: "application/vnd.q.change-diff+json",
+		}, call, result)
+	}
+	return result, nil
 }
 
 func (r *delegationRuntime) SearchSkillHints(ctx context.Context, query string, limit int) (qtools.SkillHintSearchResult, error) {
@@ -348,13 +511,14 @@ func (d *delegationDispatcher) dispatch(
 	if !d.registry.CanDelegate(caller, input.SubagentName) || !d.available(input.SubagentName) {
 		return client.ToolResult{Content: fmt.Sprintf("subagent %q is not allowed or available", input.SubagentName), IsError: true}, nil
 	}
-	d.mu.Lock()
-	if d.calls >= maximumDelegationCalls {
-		d.mu.Unlock()
+	shared := d.shared()
+	shared.mu.Lock()
+	if shared.calls >= maximumDelegationCalls {
+		shared.mu.Unlock()
 		return client.ToolResult{Content: fmt.Sprintf("delegation call limit %d reached", maximumDelegationCalls), IsError: true}, nil
 	}
-	d.calls++
-	d.mu.Unlock()
+	shared.calls++
+	shared.mu.Unlock()
 
 	definition, _ := d.registry.Get(input.SubagentName)
 	if definition.Info.Kind == subagent.AgentKindExternal {
@@ -450,21 +614,22 @@ func (d *delegationDispatcher) dispatchStored(ctx context.Context, caller string
 			CallID: call.ID, Agent: input.SubagentName, Prompt: input.Prompt,
 			RunID: parentSession.RunID, CreatedAt: time.Now().UTC(),
 		}
-		d.mu.Lock()
-		if d.calls >= maximumDelegationCalls {
-			d.mu.Unlock()
+		shared := d.shared()
+		shared.mu.Lock()
+		if shared.calls >= maximumDelegationCalls {
+			shared.mu.Unlock()
 			return client.ToolResult{Content: fmt.Sprintf("delegation call limit %d reached", maximumDelegationCalls), IsError: true}, nil
 		}
 		bookmarked, addErr := parent.AddDelegation(bookmark)
 		if addErr != nil {
-			d.mu.Unlock()
+			shared.mu.Unlock()
 			return client.ToolResult{}, addErr
 		}
 		bookmark = bookmarked
 		if bookmark.InvocationID == id {
-			d.calls++
+			shared.calls++
 		}
-		d.mu.Unlock()
+		shared.mu.Unlock()
 	} else {
 		bookmark, err = parent.AddDelegation(bookmark)
 		if err != nil {
@@ -627,8 +792,49 @@ func (d *delegationDispatcher) dispatchStored(ctx context.Context, caller string
 			return blocked, nil
 		}
 	}
+	runDispatcher := d
+	var checkoutCloser io.Closer
+	if definition.Info.MutatesWorkspace && d.worktrees != nil {
+		request := state.ChangeRequest
+		if request == nil {
+			prepared, prepareErr := d.worktrees.Prepare(ctx, d.workspace.checkoutRoot, state.TaskID)
+			if prepareErr != nil {
+				blocked := client.ToolResult{Content: "prepare isolated delegated work: " + prepareErr.Error(), IsError: true}
+				state.Status, state.Result = "blocked", &blocked
+				if saveErr := child.SaveDelegationState(state); saveErr != nil {
+					return client.ToolResult{}, errors.Join(prepareErr, saveErr)
+				}
+				return blocked, nil
+			}
+			request = &prepared
+			state.ChangeRequest = request
+			if err := child.SaveDelegationState(state); err != nil {
+				return client.ToolResult{}, err
+			}
+		} else if err := d.worktrees.Resume(ctx, *request); err != nil {
+			blockedRequest := d.worktrees.MarkBlocked(*request)
+			blocked := client.ToolResult{Content: "resume isolated delegated work: " + err.Error(), IsError: true}
+			state.ChangeRequest, state.Status, state.Result = &blockedRequest, "blocked", &blocked
+			if saveErr := child.SaveDelegationState(state); saveErr != nil {
+				return client.ToolResult{}, errors.Join(err, saveErr)
+			}
+			return blocked, nil
+		}
+		isolated, closer, isolateErr := d.forCheckout(ctx, request.WorktreePath)
+		if isolateErr != nil {
+			blockedRequest := d.worktrees.MarkBlocked(*request)
+			blocked := client.ToolResult{Content: "open isolated delegated runtime: " + isolateErr.Error(), IsError: true}
+			state.ChangeRequest, state.Status, state.Result = &blockedRequest, "blocked", &blocked
+			if saveErr := child.SaveDelegationState(state); saveErr != nil {
+				return client.ToolResult{}, errors.Join(isolateErr, saveErr)
+			}
+			return blocked, nil
+		}
+		runDispatcher, checkoutCloser = isolated, closer
+		defer func() { _ = checkoutCloser.Close() }()
+	}
 	childStack := append(append([]string(nil), stack...), input.SubagentName)
-	runtime := &delegationRuntime{base: d.tools, dispatcher: d, caller: input.SubagentName, stack: childStack, store: &child, taskID: state.TaskID}
+	runtime := &delegationRuntime{base: runDispatcher.tools, dispatcher: runDispatcher, caller: input.SubagentName, stack: childStack, store: &child, taskID: state.TaskID}
 	checkpoint := func(saved subagent.GeneralRunState) error {
 		mode := ""
 		if d.apiMode != nil {
@@ -644,12 +850,31 @@ func (d *delegationDispatcher) dispatchStored(ctx context.Context, caller string
 		return child.SaveDelegationState(state)
 	}
 	result, runErr := (subagent.GeneralRunner{
-		Client: d.client, Tools: runtime, Spec: spec, Definition: definition,
-		WorkingDirectory: d.workspace.checkoutRoot, Environment: d.environment, RunID: d.runID,
-		ParentID: parentTaskID, TaskID: state.TaskID, Sink: d.sink, Progress: d.progress, Trace: d.trace, Resume: resume, Checkpoint: checkpoint,
+		Client: runDispatcher.client, Tools: runtime, Spec: spec, Definition: definition,
+		WorkingDirectory: runDispatcher.workspace.checkoutRoot, Environment: runDispatcher.environment, RunID: runDispatcher.runID,
+		ParentID: parentTaskID, TaskID: state.TaskID, Sink: runDispatcher.sink, Progress: runDispatcher.progress, Trace: runDispatcher.trace, Resume: resume, Checkpoint: checkpoint,
 	}).Run(ctx, input.Prompt)
 	if runErr != nil {
 		return client.ToolResult{}, runErr
+	}
+	if state.ChangeRequest != nil {
+		request := *state.ChangeRequest
+		if result.Outcome == "succeeded" {
+			request, err = d.worktrees.Submit(ctx, request, result.Summary)
+			if err != nil {
+				request = d.worktrees.MarkBlocked(request)
+				blocked := client.ToolResult{Content: "submit delegated change: " + err.Error(), IsError: true}
+				state.ChangeRequest, state.Status, state.Result = &request, "blocked", &blocked
+				if saveErr := child.SaveDelegationState(state); saveErr != nil {
+					return client.ToolResult{}, errors.Join(err, saveErr)
+				}
+				return blocked, nil
+			}
+		} else {
+			request = d.worktrees.MarkBlocked(request)
+		}
+		state.ChangeRequest = &request
+		result.ChangeRequest = &request
 	}
 	body, err := json.Marshal(result)
 	if err != nil {
@@ -865,13 +1090,14 @@ func (d *delegationDispatcher) dispatchExternalObserved(ctx context.Context, def
 }
 
 func (d *delegationDispatcher) loadModels(ctx context.Context) ([]client.Model, error) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	if !d.loaded {
-		d.models, d.modelErr = d.client.ListModels(ctx)
-		d.loaded = true
+	shared := d.shared()
+	shared.mu.Lock()
+	defer shared.mu.Unlock()
+	if !shared.loaded {
+		shared.models, shared.modelErr = d.client.ListModels(ctx)
+		shared.loaded = true
 	}
-	return append([]client.Model(nil), d.models...), d.modelErr
+	return append([]client.Model(nil), shared.models...), shared.modelErr
 }
 
 func decodeDelegationArguments(arguments string, output any) error {

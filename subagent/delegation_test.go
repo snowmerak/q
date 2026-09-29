@@ -116,7 +116,7 @@ func TestSeniorDeveloperToolSurfaceAllowsDirectMutation(t *testing.T) {
 	if !found {
 		t.Fatal("senior developer definition is missing")
 	}
-	runtime := &fakeScoutTools{available: append(append(DelegateTools(), skillTestTools()...),
+	runtime := &fakeScoutTools{available: append(append(append(DelegateTools(), ChangeRequestTools()...), skillTestTools()...),
 		client.Tool{Type: client.ToolTypeFunction, Function: client.FunctionDefinition{Name: "read_file"}},
 		client.Tool{Type: client.ToolTypeFunction, Function: client.FunctionDefinition{Name: "loom_read"}},
 		client.Tool{Type: client.ToolTypeFunction, Function: client.FunctionDefinition{Name: "edit_file"}},
@@ -127,7 +127,7 @@ func TestSeniorDeveloperToolSurfaceAllowsDirectMutation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, required := range []string{DelegateListToolName, DelegateToolName, TaskStartToolName, TaskCompleteToolName, "read_file", "loom_read", "edit_file", "write_file", "run_command"} {
+	for _, required := range []string{DelegateListToolName, DelegateToolName, ChangeRequestReadToolName, ChangeRequestMergeToolName, ChangeRequestCloseToolName, TaskStartToolName, TaskCompleteToolName, "read_file", "loom_read", "edit_file", "write_file", "run_command"} {
 		if !hasTool(tools, required) {
 			t.Fatalf("senior developer runtime is missing %q: %#v", required, tools)
 		}

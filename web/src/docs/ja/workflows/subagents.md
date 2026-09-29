@@ -46,6 +46,8 @@ bare q 互換チャットから `/subagent` を明示的に呼ぶ場合は、カ
 
 Studio は各子をセッションツリーの親の下に表示します。子を選ぶと進行状況、会話、ツール呼び出しが開きます。各呼び出しは親のブックマークと子セッションに保存されます。再起動後は最も深い子から復元し、親を続行します。結果の記録がないツール呼び出しは自動再実行せず、`unknown` として返します。中断された外部 ACP 呼び出しも内部ターンを再開できないため `unknown` を返します。
 
+clean な Git branch に紐づく保存済み session では、変更可能な inner child は local の `q/delegate/<invocation-id>` branch と linked worktree で作業します。成功すると Q が残りの変更を commit し、base/head commit を固定した内部 Change Request を返します。呼び出し元は diff を読み、merge または close します。入れ子の child も同じ流れを使うため、senior developer は junior developer の branch をレビューして merge した後、自分の Change Request を上位へ返せます。Studio の session tree には request の状態と branch が表示されます。この local flow に remote push は不要です。
+
 ## 内部エージェントを定義
 
 内部プロファイルは q のモデルロール、明示的なツール一覧、直接呼び出せる委任先を選択します。

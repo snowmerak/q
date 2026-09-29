@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/snowmerak/q/change"
 	"github.com/snowmerak/q/client"
 	"github.com/snowmerak/q/config"
 	"github.com/snowmerak/q/loom"
@@ -44,14 +45,15 @@ type TargetSelector struct {
 }
 
 type TaskResult struct {
-	Executor     string         `json:"executor,omitempty"`
-	Outcome      string         `json:"outcome"`
-	Summary      string         `json:"summary"`
-	Findings     []string       `json:"findings,omitempty"`
-	Artifacts    []string       `json:"artifacts,omitempty"`
-	Verification []string       `json:"verification,omitempty"`
-	Blocker      string         `json:"blocker,omitempty"`
-	Evidence     []TaskEvidence `json:"evidence,omitempty"`
+	Executor      string          `json:"executor,omitempty"`
+	Outcome       string          `json:"outcome"`
+	Summary       string          `json:"summary"`
+	ChangeRequest *change.Request `json:"change_request,omitempty"`
+	Findings      []string        `json:"findings,omitempty"`
+	Artifacts     []string        `json:"artifacts,omitempty"`
+	Verification  []string        `json:"verification,omitempty"`
+	Blocker       string          `json:"blocker,omitempty"`
+	Evidence      []TaskEvidence  `json:"evidence,omitempty"`
 }
 
 // CoderResult remains an alias for source compatibility with native Coder

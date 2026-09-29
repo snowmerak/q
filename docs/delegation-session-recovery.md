@@ -38,13 +38,23 @@
 
 자식 `session.json`은 기본 세션 v2와 같은 메시지 형식을 사용한다. `transcript`는 실제 호출 이력, `context`는 다음 모델 요청에 사용할 문맥이다. Responses `response_replay`와 자식의 선택 모델·후보·API 종류·대화 키를 담는 `response_affinity`도 해당 자식에게만 속한다. `delegation-state.json`에는 라운드와 알림 횟수, `task_start` 상태, 선택한 에이전트·모델·API 종류, 실행 중 도구 호출, 확인불가 도구 호출, 완료된 결과를 둔다. 모델 대화 본문은 중복 저장하지 않는다. 세션 파일이 상태 파일보다 앞서 저장된 채 종료되면 세션의 호출 이력과 모델 정보를 기준으로 상태를 보정한다. 복구 때 저장된 모델·에이전트 설정 또는 API 종류를 사용할 수 없으면 다른 모델로 조용히 전환하지 않고 해당 자식을 `blocked`로 반환한다.
 
+변경 가능한 inner child의 상태에는 base/head ref와 commit, worktree lease 및
+`working|blocked|open|merged|closed` 상태의 Change Request도 함께 저장한다. 저장된
+`working` lease는 같은 branch가 base의 후손인지 확인한 뒤 재사용하고, 제출된 `open`
+request는 기록된 head commit이 움직이지 않았는지 확인한다. merge commit 생성 뒤 상태
+저장 전에 종료된 경우 현재 commit의 두 parent가 기록된 base/head와 정확히 일치할 때만
+완료된 merge로 채택한다. 다른 branch 이동이나 사라진 활성 lease는 자동 추측하지 않고
+`blocked`로 남긴다.
+
 ## 기록 순서
 
 1. 부모가 만든 `delegate` 도구 호출을 부모 `session.json`에 저장한다.
 2. 부모 `delegations.json`에 북마크를 **동기적으로** 저장한다. 북마크에는 자식 세션이 아직 없을 때 재생성할 수 있도록 요청을 포함한다.
 3. 북마크의 ID로 자식 세션과 초기 요청을 저장한 뒤 자식 실행을 시작한다.
-4. 자식은 모델 메시지, 도구 호출, 도구 결과 및 실행 단계가 확정될 때마다 자기 세션과 상태를 저장한다. 도구를 실행하기 전에는 해당 호출을 `running_call`로 기록한다.
-5. 자식의 최종 `TaskResult` 또는 외부 ACP 결과를 자식 상태에 먼저 저장한다. 그다음 부모의 동일한 `call_id`에 도구 결과를 기록하고 부모의 다음 모델 요청을 시작한다.
+4. 변경 가능한 inner child이면 같은 ID의 local branch와 linked worktree를 만들고 Change Request를 `working`으로 저장한다. 자식 도구 runtime은 이 checkout을 사용한다.
+5. 자식은 모델 메시지, 도구 호출, 도구 결과 및 실행 단계가 확정될 때마다 자기 세션과 상태를 저장한다. 도구를 실행하기 전에는 해당 호출을 `running_call`로 기록한다.
+6. 성공한 변경 작업을 commit하고 Change Request의 고정 head와 `open` 상태를 저장한다. 변경이 없으면 `closed`, 차단되면 `blocked`로 기록한다.
+7. 자식의 최종 `TaskResult` 또는 외부 ACP 결과를 자식 상태에 먼저 저장한다. 그다음 부모의 동일한 `call_id`에 도구 결과를 기록하고 부모의 다음 모델 요청을 시작한다.
 
 북마크, 세션, 상태 파일은 각각 임시 파일 동기화 후 교체한다. 파일 간 단일 트랜잭션은 요구하지 않는다. 복구는 북마크와 실제 자식 파일 중 이미 기록된 부분을 확인해 빠진 단계를 멱등적으로 채운다. 쓰기 실패 시 새 도구 실행으로 진행하지 않는다. 검색 아카이브는 조회용 기록이며 이 순서의 성공 여부를 결정하지 않는다.
 

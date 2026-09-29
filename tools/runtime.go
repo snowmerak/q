@@ -87,7 +87,18 @@ type Runtime struct {
 	external       map[string]*externalServer
 	externalRoutes map[string]externalToolRoute
 	externalConfig mcpconfig.Config
+	template       *runtimeTemplate
 	closeMu        sync.Once
+}
+
+type runtimeTemplate struct {
+	roots        RuntimeRoots
+	archive      builtin.Archive
+	loomOptions  loom.StoreOptions
+	globalLSP    lsp.GlobalConfig
+	workspaceLSP lsp.WorkspaceConfig
+	globalSkills builtin.GlobalSkillLibrary
+	skillRanker  builtin.SkillRanker
 }
 
 func NewRuntime(ctx context.Context, root string) (*Runtime, error) {
@@ -183,7 +194,38 @@ func NewRuntimeWithRoots(
 		_ = manager.Close()
 		return nil, err
 	}
+	runtime.template = &runtimeTemplate{
+		roots: roots, archive: archive, loomOptions: options,
+		globalLSP: global, workspaceLSP: workspace,
+		globalSkills: globalSkills, skillRanker: runtime.skillRanker,
+	}
 	return runtime, nil
+}
+
+// NewCheckoutRuntime creates a separately owned runtime for a linked Git
+// worktree while retaining the canonical workspace's durable state. Callers
+// must close the returned runtime; the shared archive remains caller-owned.
+func (r *Runtime) NewCheckoutRuntime(ctx context.Context, checkoutRoot string) (*Runtime, error) {
+	if r == nil || r.template == nil {
+		return nil, errors.New("tools: checkout runtime cloning is unavailable")
+	}
+	template := *r.template
+	cloned, err := NewRuntimeWithRoots(ctx, RuntimeRoots{
+		WorkspaceStateRoot: template.roots.WorkspaceStateRoot,
+		CheckoutRoot:       checkoutRoot,
+	}, template.archive, template.loomOptions, template.globalLSP, template.workspaceLSP, template.globalSkills,
+		func(options *runtimeOptions) { options.skillRanker = template.skillRanker },
+	)
+	if err != nil {
+		return nil, err
+	}
+	r.externalMu.RLock()
+	external := cloneMCPConfig(r.externalConfig)
+	r.externalMu.RUnlock()
+	if len(external.Servers) > 0 {
+		cloned.ConfigureExternal(ctx, checkoutRoot, external)
+	}
+	return cloned, nil
 }
 
 func normalizeRuntimeRoots(roots RuntimeRoots) (RuntimeRoots, error) {

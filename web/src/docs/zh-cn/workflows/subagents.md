@@ -46,6 +46,8 @@ toc:
 
 Studio 将每个子代理显示在会话树的父节点下。选择子节点可打开其进度、对话和工具调用。每次调用都会保存父会话书签和子会话。重启后，q 先恢复最深层的子会话，再继续父会话。没有记录结果的工具调用会返回 `unknown`，不会自动重试。中断的外部 ACP 调用也会返回 `unknown`，因为其内部轮次无法恢复。
 
+在基于 clean Git branch 的已保存 session 中，可修改工作区的 inner child 会在本地 `q/delegate/<invocation-id>` branch 和 linked worktree 中工作。成功后，Q 会提交剩余改动，并返回固定 base/head commit 的内部 Change Request。调用方读取 diff 后再 merge 或 close。嵌套 child 使用相同流程，因此 senior developer 可以先审查并合并 junior developer 的 branch，再向上层返回自己的 Change Request。Studio session tree 会显示请求状态和 branch。该本地流程不需要 remote push。
+
 ## 定义内部代理
 
 内部配置会选择 q 模型角色、明确的工具列表以及可直接调用的委派对象。

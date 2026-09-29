@@ -3,13 +3,25 @@ package app
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
+	"github.com/snowmerak/q/change"
 	"github.com/snowmerak/q/client"
 	"github.com/snowmerak/q/config"
+	qlibrary "github.com/snowmerak/q/library"
+	"github.com/snowmerak/q/loom"
+	"github.com/snowmerak/q/lsp"
 	"github.com/snowmerak/q/mcpconfig"
 	"github.com/snowmerak/q/subagent"
+	qtools "github.com/snowmerak/q/tools"
 	"github.com/snowmerak/q/workspace"
 )
 
@@ -405,6 +417,296 @@ func TestAllowedDelegationRunsLifecycleAndCapturesResult(t *testing.T) {
 			t.Fatalf("lifecycle tool %s missing: %#v", required, configuredClient.requests[0].Tools)
 		}
 	}
+}
+
+func TestMutatingDelegationUsesWorktreeAndMergesThroughChangeRequest(t *testing.T) {
+	repository := t.TempDir()
+	delegationGit(t, repository, "init", "-b", "main")
+	if err := os.WriteFile(filepath.Join(repository, "README.md"), []byte("base\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	delegationGit(t, repository, "add", "README.md")
+	delegationGit(t, repository, "-c", "user.name=Test", "-c", "user.email=test@example.test", "commit", "-m", "initial")
+
+	settings := config.Store{Dir: t.TempDir()}
+	workspaceStore := workspace.Store{Root: repository}
+	if err := workspaceStore.EnsureQGitIgnored(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	delegationGit(t, repository, "add", ".gitignore")
+	delegationGit(t, repository, "-c", "user.name=Test", "-c", "user.email=test@example.test", "commit", "-m", "ignore q metadata")
+	sessionID, err := workspace.NewSessionID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	workspaceStore.SessionID = sessionID
+	call := client.ToolCall{ID: "delegate-worktree", Type: client.ToolTypeFunction, Function: client.FunctionCall{
+		Name: subagent.DelegateToolName, Arguments: `{"subagent_name":"builtin/senior-developer","prompt":"create child.txt"}`,
+	}}
+	if err := workspaceStore.Save(workspace.Session{RunID: "run-worktree", Transcript: []client.Message{{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{call}}}}); err != nil {
+		t.Fatal(err)
+	}
+
+	configuredClient := &planningClient{responses: []client.Message{
+		{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{planToolCall(subagent.TaskStartToolName, `{"objective":"create child.txt"}`)}},
+		{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{{ID: "write-child", Type: client.ToolTypeFunction, Function: client.FunctionCall{Name: "write_file", Arguments: `{"path":"child.txt","content":"isolated worktree"}`}}}},
+		{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{planToolCall(subagent.TaskCompleteToolName, `{"outcome":"succeeded","summary":"Add child file"}`)}},
+	}}
+	toolRuntime, err := qtools.NewRuntimeWithRoots(t.Context(), qtools.RuntimeRoots{
+		WorkspaceStateRoot: repository, CheckoutRoot: repository,
+	}, nil, loom.StoreOptions{}, lsp.GlobalConfig{}, lsp.WorkspaceConfig{}, qlibrary.NewClient("http://127.0.0.1:1", "", time.Millisecond))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = toolRuntime.Close() })
+
+	m := newModel(t.Context(), settings, nil)
+	m.config = config.Default()
+	m.config.Provider.Model = "plan-model"
+	m.client = configuredClient
+	m.toolRuntime = toolRuntime
+	m.workspaceStore = &workspaceStore
+	m.runID = "run-worktree"
+	runtime, err := m.configuredDelegationRuntime(toolRuntime, repository)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := runtime.Call(t.Context(), call)
+	if err != nil || result.IsError {
+		t.Fatalf("delegate result = %#v, err = %v", result, err)
+	}
+	if _, err := os.Stat(filepath.Join(repository, "child.txt")); !os.IsNotExist(err) {
+		t.Fatalf("delegated file leaked into parent before merge: %v", err)
+	}
+	bookmarks, err := workspaceStore.LoadDelegations()
+	if err != nil || len(bookmarks) != 1 {
+		t.Fatalf("bookmarks = %#v, err = %v", bookmarks, err)
+	}
+	child, err := workspaceStore.ChildStore(bookmarks[0].InvocationID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, err := child.LoadDelegationState()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.ChangeRequest == nil || state.ChangeRequest.Status != change.StatusOpen || state.ChangeRequest.HeadCommit == "" {
+		t.Fatalf("change request = %#v", state.ChangeRequest)
+	}
+	delegationGit(t, state.ChangeRequest.WorktreePath, "cat-file", "-t", state.ChangeRequest.BaseCommit)
+	delegationGit(t, state.ChangeRequest.WorktreePath, "cat-file", "-t", state.ChangeRequest.HeadCommit)
+	delegationGit(t, state.ChangeRequest.WorktreePath, "diff", "--stat", state.ChangeRequest.BaseCommit, state.ChangeRequest.HeadCommit, "--")
+
+	read, err := runtime.Call(t.Context(), client.ToolCall{Function: client.FunctionCall{
+		Name: subagent.ChangeRequestReadToolName, Arguments: `{"change_request_id":"` + state.ChangeRequest.ID + `"}`,
+	}})
+	if err != nil || read.IsError || !strings.Contains(read.Content, "child.txt") {
+		t.Fatalf("read change request = %#v, err = %v", read, err)
+	}
+	merged, err := runtime.Call(t.Context(), client.ToolCall{Function: client.FunctionCall{
+		Name: subagent.ChangeRequestMergeToolName, Arguments: `{"change_request_id":"` + state.ChangeRequest.ID + `"}`,
+	}})
+	if err != nil || merged.IsError {
+		t.Fatalf("merge change request = %#v, err = %v", merged, err)
+	}
+	body, err := os.ReadFile(filepath.Join(repository, "child.txt"))
+	if err != nil || strings.TrimSpace(string(body)) != "isolated worktree" {
+		t.Fatalf("merged body = %q, err = %v", body, err)
+	}
+	state, err = child.LoadDelegationState()
+	if err != nil || state.ChangeRequest == nil || state.ChangeRequest.Status != change.StatusMerged {
+		t.Fatalf("merged state = %#v, err = %v", state.ChangeRequest, err)
+	}
+}
+
+func TestNestedMutatingDelegationMergesJuniorIntoSeniorWorktree(t *testing.T) {
+	repository := t.TempDir()
+	delegationGit(t, repository, "init", "-b", "main")
+	if err := os.WriteFile(filepath.Join(repository, "README.md"), []byte("base\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	delegationGit(t, repository, "add", "README.md")
+	delegationGit(t, repository, "-c", "user.name=Test", "-c", "user.email=test@example.test", "commit", "-m", "initial")
+	workspaceStore := workspace.Store{Root: repository}
+	if err := workspaceStore.EnsureQGitIgnored(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	delegationGit(t, repository, "add", ".gitignore")
+	delegationGit(t, repository, "-c", "user.name=Test", "-c", "user.email=test@example.test", "commit", "-m", "ignore q metadata")
+	sessionID, err := workspace.NewSessionID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	workspaceStore.SessionID = sessionID
+	call := client.ToolCall{ID: "delegate-nested-worktree", Type: client.ToolTypeFunction, Function: client.FunctionCall{
+		Name: subagent.DelegateToolName, Arguments: `{"subagent_name":"builtin/senior-developer","prompt":"delegate nested.txt to the junior and review it"}`,
+	}}
+	if err := workspaceStore.Save(workspace.Session{RunID: "run-nested-worktree", Transcript: []client.Message{{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{call}}}}); err != nil {
+		t.Fatal(err)
+	}
+
+	toolRuntime, err := qtools.NewRuntimeWithRoots(t.Context(), qtools.RuntimeRoots{
+		WorkspaceStateRoot: repository, CheckoutRoot: repository,
+	}, nil, loom.StoreOptions{}, lsp.GlobalConfig{}, lsp.WorkspaceConfig{}, qlibrary.NewClient("http://127.0.0.1:1", "", time.Millisecond))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = toolRuntime.Close() })
+	configuredClient := &nestedWorktreeClient{}
+	m := newModel(t.Context(), config.Store{Dir: t.TempDir()}, nil)
+	m.config = config.Default()
+	m.config.Provider.Model = "plan-model"
+	m.client = configuredClient
+	m.toolRuntime = toolRuntime
+	m.workspaceStore = &workspaceStore
+	m.runID = "run-nested-worktree"
+	runtime, err := m.configuredDelegationRuntime(toolRuntime, repository)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := runtime.Call(t.Context(), call)
+	if err != nil || result.IsError {
+		t.Fatalf("nested delegate result = %#v, err = %v", result, err)
+	}
+	var outerResult subagent.TaskResult
+	outerResult, err = decodeDelegatedTaskResult(result.Content)
+	if err != nil || outerResult.ChangeRequest == nil || outerResult.ChangeRequest.Status != change.StatusOpen {
+		t.Fatalf("outer task result = %#v, err = %v", outerResult, err)
+	}
+	if _, err := os.Stat(filepath.Join(repository, "nested.txt")); !os.IsNotExist(err) {
+		t.Fatalf("nested change leaked into root before outer review: %v", err)
+	}
+	rootBookmarks, err := workspaceStore.LoadDelegations()
+	if err != nil || len(rootBookmarks) != 1 {
+		t.Fatalf("root bookmarks = %#v, err = %v", rootBookmarks, err)
+	}
+	seniorStore, err := workspaceStore.ChildStore(rootBookmarks[0].InvocationID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	juniorBookmarks, err := seniorStore.LoadDelegations()
+	if err != nil || len(juniorBookmarks) != 1 {
+		t.Fatalf("junior bookmarks = %#v, err = %v", juniorBookmarks, err)
+	}
+	juniorStore, err := seniorStore.ChildStore(juniorBookmarks[0].InvocationID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	juniorState, err := juniorStore.LoadDelegationState()
+	if err != nil || juniorState.ChangeRequest == nil || juniorState.ChangeRequest.Status != change.StatusMerged {
+		t.Fatalf("junior change request = %#v, err = %v", juniorState.ChangeRequest, err)
+	}
+
+	merged, err := runtime.Call(t.Context(), client.ToolCall{Function: client.FunctionCall{
+		Name: subagent.ChangeRequestMergeToolName, Arguments: `{"change_request_id":"` + outerResult.ChangeRequest.ID + `"}`,
+	}})
+	if err != nil || merged.IsError {
+		t.Fatalf("merge outer change request = %#v, err = %v", merged, err)
+	}
+	if body, err := os.ReadFile(filepath.Join(repository, "nested.txt")); err != nil || strings.TrimSpace(string(body)) != "nested worktree" {
+		t.Fatalf("merged nested file = %q, err = %v", body, err)
+	}
+}
+
+type nestedWorktreeClient struct {
+	mu         sync.Mutex
+	seniorStep int
+	juniorStep int
+	changeID   string
+}
+
+func (c *nestedWorktreeClient) Chat(_ context.Context, request client.ChatRequest) (*client.ChatResponse, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if request.ToolChoice == client.ToolChoiceNone && len(request.Messages) > 0 && request.Messages[len(request.Messages)-1].Role == client.RoleTool {
+		return terminalAcknowledgment(""), nil
+	}
+	senior := false
+	for _, tool := range request.Tools {
+		if tool.Function.Name == subagent.DelegateToolName {
+			senior = true
+			break
+		}
+	}
+	var message client.Message
+	if senior {
+		switch c.seniorStep {
+		case 0:
+			message = client.Message{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{{ID: "senior-start", Type: client.ToolTypeFunction, Function: client.FunctionCall{Name: subagent.TaskStartToolName, Arguments: `{"objective":"review junior implementation"}`}}}}
+		case 1:
+			message = client.Message{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{{ID: "senior-delegate", Type: client.ToolTypeFunction, Function: client.FunctionCall{Name: subagent.DelegateToolName, Arguments: `{"subagent_name":"builtin/junior-developer","prompt":"create nested.txt containing nested worktree"}`}}}}
+		case 2:
+			if len(request.Messages) == 0 {
+				return nil, errors.New("nested test: missing junior result")
+			}
+			content := request.Messages[len(request.Messages)-1].Content
+			result, err := decodeDelegatedTaskResult(content)
+			if err != nil {
+				return nil, fmt.Errorf("nested test: decode junior change request %q: %w", content, err)
+			}
+			if result.ChangeRequest == nil {
+				return nil, fmt.Errorf("nested test: junior result has no change request: %s", content)
+			}
+			c.changeID = result.ChangeRequest.ID
+			message = client.Message{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{{ID: "senior-read", Type: client.ToolTypeFunction, Function: client.FunctionCall{Name: subagent.ChangeRequestReadToolName, Arguments: `{"change_request_id":"` + c.changeID + `"}`}}}}
+		case 3:
+			message = client.Message{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{{ID: "senior-merge", Type: client.ToolTypeFunction, Function: client.FunctionCall{Name: subagent.ChangeRequestMergeToolName, Arguments: `{"change_request_id":"` + c.changeID + `"}`}}}}
+		case 4:
+			message = client.Message{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{{ID: "senior-complete", Type: client.ToolTypeFunction, Function: client.FunctionCall{Name: subagent.TaskCompleteToolName, Arguments: `{"outcome":"succeeded","summary":"Reviewed and merged junior change"}`}}}}
+		default:
+			return nil, errors.New("nested test: unexpected senior round")
+		}
+		c.seniorStep++
+	} else {
+		switch c.juniorStep {
+		case 0:
+			message = client.Message{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{{ID: "junior-start", Type: client.ToolTypeFunction, Function: client.FunctionCall{Name: subagent.TaskStartToolName, Arguments: `{"objective":"create nested.txt"}`}}}}
+		case 1:
+			message = client.Message{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{{ID: "junior-write", Type: client.ToolTypeFunction, Function: client.FunctionCall{Name: "write_file", Arguments: `{"path":"nested.txt","content":"nested worktree"}`}}}}
+		case 2:
+			message = client.Message{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{{ID: "junior-complete", Type: client.ToolTypeFunction, Function: client.FunctionCall{Name: subagent.TaskCompleteToolName, Arguments: `{"outcome":"succeeded","summary":"Add nested file"}`}}}}
+		default:
+			return nil, errors.New("nested test: unexpected junior round")
+		}
+		c.juniorStep++
+	}
+	return &client.ChatResponse{Choices: []client.Choice{{Message: message}}}, nil
+}
+
+func (c *nestedWorktreeClient) ListModels(context.Context) ([]client.Model, error) {
+	return []client.Model{{ID: "plan-model"}}, nil
+}
+
+func (c *nestedWorktreeClient) Close() error { return nil }
+
+func decodeDelegatedTaskResult(content string) (subagent.TaskResult, error) {
+	var direct subagent.TaskResult
+	if err := json.Unmarshal([]byte(content), &direct); err != nil {
+		return subagent.TaskResult{}, err
+	}
+	if direct.Outcome != "" {
+		return direct, nil
+	}
+	var receipt struct {
+		Result json.RawMessage `json:"result"`
+	}
+	if err := json.Unmarshal([]byte(content), &receipt); err != nil || len(receipt.Result) == 0 {
+		return subagent.TaskResult{}, errors.New("captured task result is missing its result")
+	}
+	if err := json.Unmarshal(receipt.Result, &direct); err != nil {
+		return subagent.TaskResult{}, err
+	}
+	return direct, nil
+}
+
+func delegationGit(t *testing.T, root string, arguments ...string) string {
+	t.Helper()
+	command := exec.CommandContext(t.Context(), "git", append([]string{"-C", root}, arguments...)...)
+	body, err := command.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %v: %v\n%s", arguments, err, body)
+	}
+	return strings.TrimSpace(string(body))
 }
 
 func delegateInfoNames(values []subagent.DelegateInfo) []string {

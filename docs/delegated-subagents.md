@@ -160,6 +160,35 @@ assistant/도구 추적을 표시한다. `ctrl+g`로 추적을 접거나 펼칠 
 진행 중인 일반 `delegate` 호출은 부모·자식 세션 트리와 북마크로 복구한다.
 저장 형식과 재시작 순서는 [중첩 delegate 세션과 재귀 복구](delegation-session-recovery.md)에 정리했다.
 
+## Git worktree와 변경 요청
+
+Git branch를 checkout한 persisted session에서 workspace 변경 가능성이 있는 inner
+subagent를 호출하면 Q는 부모의 현재 commit을 base로 고정하고
+`q/delegate/<invocation-id>` local branch와 linked worktree를 만든다. 부모 checkout은
+clean해야 하며 detached HEAD에서는 시작하지 않는다. 자식의 파일·명령·LSP 도구는 이
+worktree를 Checkout Root로 사용하고, transcript·bookmark·Loom·workspace skill은 원래
+Workspace State Root를 계속 사용한다. `.q`를 worktree에 복사하지 않는다.
+
+자식이 성공하면 남은 변경을 Q가 commit하거나 자식이 만든 commit을 그대로 받아
+base/head commit이 고정된 내부 Change Request를 `TaskResult`와 자식
+`delegation-state.json`에 기록한다. 직접 부모에게 다음 도구가 노출된다.
+
+```text
+change_request_read(change_request_id)  # 고정된 base/head diff 확인
+change_request_merge(change_request_id) # 현재 부모 branch에 --no-ff merge 후 lease 정리
+change_request_close(change_request_id) # 거절한 branch와 worktree 정리
+```
+
+branch는 linked worktree와 같은 local repository의 공용 ref이므로 별도 push가 필요 없다.
+merge 전에는 부모가 여전히 같은 branch와 base commit에 있고 clean한지 다시 확인한다.
+완료된 delegation이라도 Change Request가 `working`, `blocked`, `open`이면 삭제할 수 없다.
+중첩 delegation은 각 부모 worktree 안에서 같은 절차를 반복하므로 senior가 junior의
+변경을 먼저 검토·병합하고, 그 결과를 자신의 Change Request로 상위에 제출할 수 있다.
+
+현재 자동 격리는 저장된 일반 session의 inner delegation에 적용된다. 명시적
+`/subagent` 단독 호출, external ACP agent, 같은 Change Request에 수정 요청을 돌려보내는
+iteration, Studio의 수동 merge 버튼과 orphan lease reconciliation은 후속 범위다.
+
 ## 도구와 변경 권한
 
 모든 inner subagent는 정의나 custom profile의 도구 목록과 관계없이

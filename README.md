@@ -377,6 +377,16 @@ An in-flight tool with no recorded result is reported as `unknown` and is not
 automatically run again. External ACP children cannot resume their internal
 turn; an interrupted invocation is returned as `unknown`.
 
+For a persisted session in a clean Git checkout, a mutating inner subagent runs
+on a local `q/delegate/<invocation-id>` branch in a linked worktree. Its completed
+changes are committed and returned as an internal change request pinned to base
+and head commits. The caller reads the diff with `change_request_read`, then
+merges it into its current branch with `change_request_merge` or discards it with
+`change_request_close`. Nested mutating delegates follow the same rule, so a
+senior developer reviews and merges a junior developer's branch before its own
+change request reaches the parent. No remote push or hosted Git service is
+required for this local flow.
+
 
 Open `/subagents` in the TUI to inspect builtin definitions and manage runnable custom
 profiles. Inner and external execution are shown by the stored `kind`, not by an ID namespace.
@@ -749,8 +759,9 @@ assignments use discovery-backed editors. System One providers, decision model
 routing, listener settings, and server API key lifecycle are also available;
 provider authentication uses environment variables only. Workspace model
 overrides, MCP/LSP management, session questions, durable event reconnection,
-turn control, and repository change review are available in Studio. The
-remaining run graph, worktree review, and long-running task work is tracked in
+turn control, repository change review, and delegated worktree status are
+available in Studio. Manual change-request review controls, the remaining run
+graph, and long-running task work are tracked in
 the [Q Studio blueprint](docs/studio-blueprint.md).
 
 ## Data and configuration
@@ -769,6 +780,7 @@ the [Q Studio blueprint](docs/studio-blueprint.md).
 | `~/.q/usage.json` | Token Usage service loopback endpoint settings. |
 | `~/.q/mcp.json` | External MCP profiles and role assignments. |
 | `~/.q/studio-sessions.json` | Registered Studio root sessions and their workspace locations. |
+| `~/.q/worktrees/<repository-hash>/<invocation-id>/` | Linked Git worktree leases for mutating delegated sessions. |
 | `~/.q/systemone.json` | System One providers, model assignments, listener settings, and client key hashes (saved with private file permissions). |
 | `~/.q/systemone.key` | Private master key used to verify managed System One API keys. |
 | `~/.q/skills/` | q-managed global Agent Skills. |

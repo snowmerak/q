@@ -16,10 +16,13 @@ import (
 )
 
 const (
-	DelegateListToolName = "delegate_list"
-	DelegateToolName     = "delegate"
-	TaskStartToolName    = "task_start"
-	TaskCompleteToolName = "task_complete"
+	DelegateListToolName       = "delegate_list"
+	DelegateToolName           = "delegate"
+	ChangeRequestReadToolName  = "change_request_read"
+	ChangeRequestMergeToolName = "change_request_merge"
+	ChangeRequestCloseToolName = "change_request_close"
+	TaskStartToolName          = "task_start"
+	TaskCompleteToolName       = "task_complete"
 
 	BuiltinInterviewerID     = "builtin/interviewer"
 	BuiltinManagerID         = "builtin/manager"
@@ -261,14 +264,14 @@ func BuiltinAgentDefinitions() []AgentDefinition {
 		{
 			Info: DelegateInfo{Name: BuiltinManagerID, Source: "builtin", Kind: AgentKindInner, Role: config.AgentRoleManager,
 				Description: "Own product requirements, priorities, acceptance criteria, and the work plan; coordinate specialists as needed."},
-			SystemPrompt: "You are the project manager. Read the request and relevant workspace evidence yourself. Own the objective, priorities, dependencies, acceptance criteria, and a concise actionable plan. Delegate interviewing, research, or technical assessment only when needed; inspect their results before deciding. Record unresolved questions and assumptions explicitly. Coordinate work rather than treating planning as a mandatory separate mode. Do not edit the workspace.",
+			SystemPrompt: "You are the project manager. Read the request and relevant workspace evidence yourself. Own the objective, priorities, dependencies, acceptance criteria, and a concise actionable plan. Delegate interviewing, research, or technical assessment only when needed; inspect their results before deciding. If explicitly requested implementation returns a change request, read its pinned diff and merge it only when it satisfies the agreed acceptance criteria; close unexpected or rejected work. Record unresolved questions and assumptions explicitly. Coordinate work rather than treating planning as a mandatory separate mode. Do not make direct workspace edits.",
 			Tools:        append([]string(nil), readTools...),
 			Delegates:    []string{BuiltinInterviewerID, BuiltinResearchID, BuiltinSeniorDeveloperID},
 		},
 		{
 			Info: DelegateInfo{Name: BuiltinSeniorDeveloperID, Source: "builtin", Kind: AgentKindInner, Role: config.AgentRoleReviewer,
 				Description: "Own the technical approach, implement directly or delegate bounded work, and review changes and verification.", MutatesWorkspace: true},
-			SystemPrompt: "You are the senior developer accountable for the technical result. Inspect the relevant code and select a coherent approach. Make focused changes yourself when appropriate, or delegate bounded implementation to the junior developer when useful. Give the junior developer concrete scope, constraints, and acceptance criteria. Review actual changes and verification evidence, return specific corrections when needed, and recheck the result. Report what was verified and what remains uncertain. Do not claim work is complete from a delegate summary alone.",
+			SystemPrompt: "You are the senior developer accountable for the technical result. Inspect the relevant code and select a coherent approach. Make focused changes yourself when appropriate, or delegate bounded implementation to the junior developer when useful. Give the junior developer concrete scope, constraints, and acceptance criteria. A successful mutating delegate returns an internal change request. Read its pinned diff with change_request_read, verify the actual change and evidence, and merge it with change_request_merge only after it passes review; close rejected work with change_request_close. Report what was verified and what remains uncertain. Do not claim work is complete from a delegate summary alone.",
 			Tools:        append([]string(nil), developerTools...),
 			Delegates:    []string{BuiltinJuniorDeveloperID, BuiltinResearchID},
 		},
@@ -424,11 +427,34 @@ func DelegateTools() []client.Tool {
 			Parameters: map[string]any{"type": "object", "properties": map[string]any{}, "additionalProperties": false},
 		}},
 		{Type: client.ToolTypeFunction, Function: client.FunctionDefinition{
-			Name: DelegateToolName, Description: "Run one allowed subagent synchronously for a bounded prompt.", Strict: &strict,
+			Name: DelegateToolName, Description: "Run one allowed subagent synchronously for a bounded prompt. A mutating child returns an internal change request that the caller must read and then merge or close.", Strict: &strict,
 			Parameters: map[string]any{"type": "object", "properties": map[string]any{
 				"subagent_name": map[string]any{"type": "string"},
 				"prompt":        map[string]any{"type": "string", "maxLength": MaximumDelegatePromptBytes},
 			}, "required": []string{"subagent_name", "prompt"}, "additionalProperties": false},
+		}},
+	}
+}
+
+func ChangeRequestTools() []client.Tool {
+	strict := true
+	parameters := func(description string) map[string]any {
+		return map[string]any{"type": "object", "properties": map[string]any{
+			"change_request_id": map[string]any{"type": "string", "description": description},
+		}, "required": []string{"change_request_id"}, "additionalProperties": false}
+	}
+	return []client.Tool{
+		{Type: client.ToolTypeFunction, Function: client.FunctionDefinition{
+			Name: ChangeRequestReadToolName, Description: "Read the pinned diff and metadata for a direct delegated child change request before deciding its outcome.", Strict: &strict,
+			Parameters: parameters("The delegated invocation ID returned in change_request.id."),
+		}},
+		{Type: client.ToolTypeFunction, Function: client.FunctionDefinition{
+			Name: ChangeRequestMergeToolName, Description: "Merge an approved direct child change request into this agent's current branch, then release its worktree.", Strict: &strict,
+			Parameters: parameters("The reviewed delegated invocation ID."),
+		}},
+		{Type: client.ToolTypeFunction, Function: client.FunctionDefinition{
+			Name: ChangeRequestCloseToolName, Description: "Close a rejected or abandoned direct child change request and delete its branch and worktree.", Strict: &strict,
+			Parameters: parameters("The delegated invocation ID to close."),
 		}},
 	}
 }
@@ -813,7 +839,7 @@ func selectDefinitionTools(definition AgentDefinition, runtime ToolRuntime) ([]c
 	found := make(map[string]bool, len(wanted))
 	for _, tool := range runtime.Tools() {
 		name := tool.Function.Name
-		if _, selected := wanted[name]; selected || ((name == DelegateListToolName || name == DelegateToolName) && len(definition.Delegates) > 0) {
+		if _, selected := wanted[name]; selected || (delegationCoordinationTool(name) && len(definition.Delegates) > 0) {
 			result = append(result, tool)
 			found[name] = true
 		}
@@ -833,6 +859,16 @@ func selectDefinitionTools(definition AgentDefinition, runtime ToolRuntime) ([]c
 	result = append(result, TaskLifecycleTools()...)
 	sort.Slice(result, func(i, j int) bool { return result[i].Function.Name < result[j].Function.Name })
 	return result, nil
+}
+
+func delegationCoordinationTool(name string) bool {
+	switch name {
+	case DelegateListToolName, DelegateToolName,
+		ChangeRequestReadToolName, ChangeRequestMergeToolName, ChangeRequestCloseToolName:
+		return true
+	default:
+		return false
+	}
 }
 
 func parseGeneralTaskStart(arguments string) (taskStartInput, error) {
