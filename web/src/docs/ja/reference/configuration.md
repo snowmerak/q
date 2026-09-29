@@ -20,6 +20,8 @@ toc:
 | `~/.q/providers.json` | 管理対象 Gateway のプロバイダーとモデルメタデータ |
 | `~/.q/gateway.json` | 単独 Gateway のリスナーとキーメタデータ |
 | `~/.q/gateway.key` | Gateway API キー検証用の非公開マスターキー |
+| `~/.q/systemone.json` | System One のプロバイダー、モデルルーティング、リスナー、API キーメタデータ |
+| `~/.q/systemone.key` | System One API キー検証用の非公開マスターキー |
 | `~/.q/library.json` | Global Library のループバックリスナー設定 |
 | `~/.q/workspace-memory.json` | Workspace Memory のループバックリスナー設定 |
 | `~/.q/usage.json` | トークン Usage サービスのループバックリスナー設定 |
@@ -27,11 +29,12 @@ toc:
 | `~/.agents/skills/` | q が管理しないポータブルなグローバル Agent Skills |
 | `~/.q/skills/` | q 管理のグローバル Agent Skills |
 | `~/.q/subagents/` | グローバルなカスタムサブエージェントプロファイル |
+| `~/.q/studio-sessions.json` | Studio に登録したルートセッションとワークスペース位置 |
 | `~/.q/logs/thinker/` | 短期間の Thinker 呼び出し診断 |
 | `~/.q/usage/usage.sqlite` | 最近のトークンイベントと日次集計 |
 | `~/.q/usage/archive/` | 古い生の使用量イベントの Parquet アーカイブ |
 
-通常の設定は TUI から行ってください。自動化が必要な場合にだけ直接編集することを推奨します。
+通常の設定は Studio から行ってください。自動化が必要な場合にだけ直接編集することを推奨します。
 
 ## ワークスペースの状態
 
@@ -40,8 +43,6 @@ toc:
 | `.q/sessions/<uuid>/session.json` | 会話、コンテキスト、タイトル、ライフサイクル、学習状態 |
 | `.q/sessions/<uuid>/delegations.json` | 委任した子呼び出しのブックマーク |
 | `.q/sessions/<uuid>/delegates/<invocation-id>/` | 子セッション、実行状態、入れ子の委任ツリー |
-| `.q/sessions/<uuid>/plan-execution.json` | 旧バージョンの plan チェックポイント |
-| `.q/plan-executions/` | 旧バージョンの実行スナップショット |
 | `.q/model.json` | ワークスペースのモデルロール上書き |
 | `.q/learning.json` | ワークスペース学習スイッチ |
 | `.q/lsp.json` | ワークスペース LSP ルートと上書き |
@@ -57,4 +58,4 @@ toc:
 
 JSON レコードが正本です。Bleve と HNSW インデックスは派生データで再構築できます。
 
-Loom GC は設定された猶予期間に従い、アクティブなセッションプロジェクションと計画チェックポイントから参照されるものを保護します。ワークスペースの `.q` を削除すると q の永続履歴は失われますが、リポジトリファイルは元に戻りません。
+Loom GC は設定された猶予期間に従い、アクティブなセッションプロジェクションと保存レコードから参照されるものを保護します。ワークスペースの `.q` を削除すると q の永続履歴は失われますが、リポジトリファイルは元に戻りません。

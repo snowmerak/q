@@ -1,7 +1,7 @@
 ---
 locale: zh-cn
 title: 安装 q
-description: 使用 Go 安装 q，或从源码构建，然后在目标工作区启动。
+description: 使用 Go 安装 q，或从源码构建，然后启动本地 Studio。
 sectionLabel: 指南
 toc:
   - id: 要求
@@ -12,8 +12,8 @@ toc:
     label: 从源码安装
   - id: 无需安装直接运行
     label: 无需安装直接运行
-  - id: 在工作区启动
-    label: 在工作区启动
+  - id: 启动-studio
+    label: 启动 Studio
 ---
 
 ## 要求
@@ -23,7 +23,7 @@ toc:
 - Go 1.26.5 或更高版本
 - `PATH` 中可用的 Git
 - 至少一个已配置的模型提供商
-- 支持 ANSI 颜色的终端
+- 用于 Studio 的现代浏览器
 
 [Task](https://taskfile.dev/) 是可选的。所有必要的构建和测试命令都能直接通过 Go 运行。
 
@@ -60,7 +60,7 @@ go install ./cmd/q ./cmd/q-mcp
 在源码检出目录中直接启动 q：
 
 ```powershell
-go run ./cmd/q
+go run ./cmd/q studio
 ```
 
 仓库还包含常用开发任务的 Task 目标：
@@ -71,13 +71,12 @@ task build
 task test
 ```
 
-## 在工作区启动
+## 启动 Studio
 
-切换到 q 应视为工作区的仓库或目录，然后运行：
+从任意目录启动 Studio，然后在 **Sessions** 中注册仓库：
 
 ```powershell
-cd C:\path\to\project
-q
+q studio
 ```
 
-首次启动会打开提供商设置。分配模型后，像平常一样输入请求，或输入 `/` 浏览命令。
+在 **Settings → Providers** 中添加提供商，并在 **Settings → Models** 中分配默认模型。bare `q` 仍可作为终端兼容客户端使用。

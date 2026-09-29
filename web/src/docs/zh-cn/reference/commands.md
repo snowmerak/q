@@ -1,13 +1,13 @@
 ---
 locale: zh-cn
 title: 命令
-description: 查找用于控制 q 主要工作流的交互命令和独立命令。
+description: 查找用于控制 q 主要工作流的聊天命令和 CLI 命令。
 sectionLabel: 参考
 toc:
   - id: 聊天命令
     label: 聊天命令
-  - id: 独立命令
-    label: 独立命令
+  - id: cli-命令
+    label: CLI 命令
   - id: 常用按键
     label: 常用按键
 ---
@@ -24,6 +24,7 @@ toc:
 | `/learn [on\|off\|status]` | 检查点或控制此工作区的持久学习。 |
 | `/model` | 分配模型并配置回退组。 |
 | `/gateway` | 配置提供商和 Gateway 监听设置。 |
+| `/systemone` | 配置 System One 提供商、decision 模型、密钥和监听设置。 |
 | `/library` | 配置全局 Library 监听设置。 |
 | `/loom` | 查看 Loom 存储并配置垃圾回收。 |
 | `/ignore` | 编辑 `.qignore` 中的工作区发现规则。 |
@@ -34,27 +35,28 @@ toc:
 | `/lsp` | 配置语言服务器配置文件和根目录。 |
 | `/help` | 打开完整的命令和按键指南。 |
 
-旧版 `/mode`、`/plan`、`/auto-approve`、`/auto-resolve` 和 `/autonomous` 命令已移除。默认循环同时提供直接工具和委派能力；仅请求 PM 工作时使用 `/subagent builtin/manager <request>`。
 
-## 独立命令
+## CLI 命令
 
 | 命令 | 用途 |
 | --- | --- |
 | `q studio [--port <port>] [--no-open]` | 在回环地址启动内置 Studio Web 界面。 |
-| `q gateway` | 配置独立 Gateway。 |
+| `q gateway` | 在 Studio 中打开 Gateway 提供商和监听设置。 |
 | `q gateway start` | 启动兼容 OpenAI 的 Gateway。 |
-| `q library` | 配置全局 Library 监听设置。 |
+| `q systemone` | 在 Studio 中打开 System One 提供商、decision 模型和密钥。 |
+| `q systemone start [--host <ip>] [--port <port>]` | 启动 System One decision API。 |
+| `q library` | 在 Studio 中打开全局 Library 监听设置。 |
 | `q library start` | 让全局 Library 作为前台服务持续运行。 |
 | `q memory` | 让 Workspace Memory 独立运行。 |
-| `q usage` | 打开本地 Token 使用量仪表盘。 |
-| `q commit` | 打开独立的提交流程。 |
-| `q model` | 配置模型和角色分配。 |
-| `q subagents` | 管理子代理配置文件与 ACP 绑定。 |
-| `q skills` | 管理 Agent Skills。 |
-| `q mcp` | 配置外部 MCP 服务器。 |
-| `q lsp` | 配置语言服务器与工作区根目录。 |
-| `q ignore` | 编辑 `.qignore`。 |
-| `q help` | 不启动聊天服务，直接打开命令和按键指南。 |
+| `q usage` | 打开 Studio 的 Operations。 |
+| `q commit` | 在 Studio Changes 和提交审查中打开当前仓库。 |
+| `q model` | 在 Studio 中打开全局和工作区模型分配。 |
+| `q subagents` | 在 Studio 中打开子代理配置和 ACP 绑定。 |
+| `q skills` | 在 Studio 中打开 Agent Skills。 |
+| `q mcp` | 在 Studio 中打开 MCP 配置。 |
+| `q lsp` | 在 Studio 中打开语言服务器和工作区根目录。 |
+| `q ignore` | 在 Studio 中打开当前仓库的 `.qignore` 编辑器。 |
+| `q help` | 打开 Studio Help。 |
 | `q acp [flags]` | 通过 stdin/stdout 将 q 作为 ACP 服务器运行。 |
 
 `q agents` 是 `q subagents` 的兼容别名。

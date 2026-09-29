@@ -1,10 +1,10 @@
 ---
 title: Runtime model
-description: See how the TUI, providers, tools, memory, and supporting services divide ownership.
+description: See how Studio, session runtimes, providers, tools, memory, and supporting services divide ownership.
 sectionLabel: Concepts
 toc:
-  - id: one-interactive-process
-    label: One interactive process
+  - id: studio-host-process
+    label: Studio host process
   - id: workspace-runtime
     label: Workspace runtime
   - id: durable-services
@@ -13,15 +13,15 @@ toc:
     label: Why the boundaries matter
 ---
 
-## One interactive process
+## Studio host process
 
-An ordinary q process owns one selected workspace session and coordinates the terminal UI, current model turn, active agents, and interaction lifecycle.
+One user-level Studio process can host root sessions from several repositories. Each active session owns its model turn, agents, run events, and interaction state. Runs continue when the browser disconnects, and only one turn runs in the same session at a time; different sessions may run concurrently.
 
 It also supervises a managed Gateway child on a private loopback endpoint. Provider configuration can be replaced without tying the provider process lifetime to stored workspace state.
 
 ## Workspace runtime
 
-Workspace file tools are rooted at the directory where q starts. Reads and edits use path checks and stale-content anchors. Shell commands start in the workspace, but they are not an operating-system sandbox.
+Workspace file tools are rooted at the directory registered for the selected root session. Reads and edits use path checks and stale-content anchors. Shell commands start in that workspace, but they are not an operating-system sandbox.
 
 Optional LSP sessions are also rooted and read-only from the model's perspective. q exposes diagnostics, hover, definitions, references, and symbols while rejecting server-originated edits.
 
@@ -36,7 +36,7 @@ q separates durable ownership by concern:
 | Loom | Immutable capture for large tool results |
 | Usage service | Token events, rollups, archives, and dashboard data |
 
-Ordinary q processes ensure these services are available when needed. Standalone commands can keep them alive independently of a TUI.
+Studio and compatibility clients ensure these services are available when needed. Service commands can keep selected services running independently of the browser UI.
 
 ## Why the boundaries matter
 

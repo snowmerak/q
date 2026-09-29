@@ -30,7 +30,7 @@ q の管理対象 Gateway は次をサポートします。
 
 ## Gatewayを設定
 
-q 内で `/gateway` を開き、プロバイダーとリスナー設定を追加します。通常の q セッションは一時的なループバックポート上の専用 Gateway 子プロセスを監督します。
+Studio の **Settings → Providers** でプロバイダーを追加し、**Settings → Services** でリスナーを設定します。Studio ホストは非公開ループバックポート上の管理対象 Gateway 子プロセスを監督します。
 
 プロバイダー変更は、置き換え用プロセスの起動に成功してから有効化されます。起動できない場合は、動作中の設定を維持します。
 
@@ -38,9 +38,9 @@ q 内で `/gateway` を開き、プロバイダーとリスナー設定を追加
 
 ## モデルロールを割り当て
 
-`/model` でメインチャットと `interviewer`、`manager`、`research`、`reviewer`、`coder`、`commit`、`thinker`、`librarian` などの専門ロールにモデルを割り当てます。senior developer は `reviewer`、junior developer は `coder` のモデルロールを使います。
+**Settings → Models** でメインチャットと `interviewer`、`manager`、`research`、`reviewer`、`coder`、`commit`、`thinker`、`librarian` などの専門ロールにモデルを割り当てます。senior developer は `reviewer`、junior developer は `coder` のモデルロールを使います。
 
-割り当て表で `a` を押すと再利用可能なカスタムロールを作成できます。カスタムサブエージェントは自身のツールと委任許可を保ったまま、そのロールを選択できます。
+ロール割り当て一覧から再利用可能なカスタムロールを作成できます。カスタムサブエージェントは自身のツールと委任許可を保ったまま、そのロールを選択できます。
 
 ワークスペース上書きは `.q/model.json`、グローバル割り当ては `~/.q/config.yaml` に保存されます。
 
@@ -50,7 +50,7 @@ q は具体的なモデルごとに Chat Completions または Responses を選�
 
 Codex App Server では q の minimal agent が `node_repl` など継承された非公開 MCP ツールを無効にします。Q 自身のツールは引き続き使え、セッショントレースに表示されます。
 
-`/model` で選ぶか、`~/.q/config.yaml` の `model_api_modes` に完全なモデル ID と `chat_completions` または `responses` を指定できます。既定モデルのグループに候補が複数ある場合、Responses は使えません。ロール別グループは各候補モデルの API を選びます。保存済みセッションは両 API で共通のメッセージ形式を使います。
+Studio のモデル API 設定を使うか、`~/.q/config.yaml` の `model_api_modes` に完全なモデル ID と `chat_completions` または `responses` を指定できます。既定モデルのグループに候補が複数ある場合、Responses は使えません。ロール別グループは各候補モデルの API を選びます。保存済みセッションは両 API で共通のメッセージ形式を使います。
 
 ## 埋め込みを設定
 

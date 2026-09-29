@@ -29,7 +29,7 @@ q's managed Gateway supports:
 
 ## Configure the Gateway
 
-Open `/gateway` inside q to add providers and listener settings. An ordinary q session supervises its own managed Gateway child on an ephemeral loopback port.
+Open **Settings → Providers** in Studio to add providers, then use **Settings → Services** for listener settings. The Studio host supervises its managed Gateway child on a private loopback port.
 
 Provider changes are activated by starting a replacement first. If the replacement cannot start, q keeps the currently running configuration instead of switching to a broken one.
 
@@ -37,9 +37,9 @@ Use environment-variable references for provider credentials whenever possible. 
 
 ## Assign model roles
 
-Open `/model` to assign a model to the main chat and specialized roles such as `interviewer`, `manager`, `research`, `reviewer`, `coder`, `commit`, `thinker`, and `librarian`. The senior developer uses `reviewer`; the junior developer uses `coder`.
+Open **Settings → Models** to assign a model to the main chat and specialized roles such as `interviewer`, `manager`, `research`, `reviewer`, `coder`, `commit`, `thinker`, and `librarian`. The senior developer uses `reviewer`; the junior developer uses `coder`.
 
-Press `a` in the assignment table to create a reusable custom role. Custom subagents can select that role while keeping their own tools and delegation grants.
+Create a reusable custom role from the role assignment list. Custom subagents can select that role while keeping their own tools and delegation grants.
 
 Workspace overrides are stored in `.q/model.json`; global assignments remain in `~/.q/config.yaml`.
 
@@ -49,7 +49,7 @@ q can call Chat Completions or Responses for each concrete model. Known native O
 
 The Codex App Server runs q's minimal agent with inherited private MCP tools, including `node_repl`, disabled. Q's own tools remain available and visible in its session trace.
 
-Use `/model` or set `model_api_modes` in `~/.q/config.yaml` to override a model:
+Use the model API controls in Studio or set `model_api_modes` in `~/.q/config.yaml` to override a model:
 
 ```yaml
 model_api_modes:

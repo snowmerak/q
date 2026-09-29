@@ -30,7 +30,7 @@ q 管理的 Gateway 支持：
 
 ## 配置Gateway
 
-在 q 中打开 `/gateway` 添加提供商和监听设置。普通 q 会话会在临时回环端口上管理专属的 Gateway 子进程。
+在 Studio 的 **Settings → Providers** 中添加提供商，并在 **Settings → Services** 中配置监听器。Studio 宿主在私有回环端口上管理 Gateway 子进程。
 
 提供商修改会先启动替代进程，再切换到新设置。如果替代进程无法启动，q 会继续使用正在运行的配置。
 
@@ -38,9 +38,9 @@ q 管理的 Gateway 支持：
 
 ## 分配模型角色
 
-打开 `/model`，为主对话和 `interviewer`、`manager`、`research`、`reviewer`、`coder`、`commit`、`thinker`、`librarian` 等专门角色分配模型。senior developer 使用 `reviewer`，junior developer 使用 `coder` 模型角色。
+在 **Settings → Models** 中为主对话和 `interviewer`、`manager`、`research`、`reviewer`、`coder`、`commit`、`thinker`、`librarian` 等专门角色分配模型。senior developer 使用 `reviewer`，junior developer 使用 `coder` 模型角色。
 
-在分配表中按 `a` 可以创建可复用的自定义角色。自定义子代理可以选用该角色，同时保留自身的工具与委派许可。
+可从角色分配列表创建可复用的自定义角色。自定义子代理可以选用该角色，同时保留自身的工具与委派许可。
 
 工作区覆盖设置存于 `.q/model.json`，全局分配存于 `~/.q/config.yaml`。
 
@@ -50,7 +50,7 @@ q 可针对每个具体模型选择 Chat Completions 或 Responses。已确认�
 
 通过 Codex App Server 使用 q 的 minimal agent 时，会禁用包括 `node_repl` 在内的继承私有 MCP 工具。Q 自身的工具仍可使用，并显示在会话记录中。
 
-可以在 `/model` 中选择，或在 `~/.q/config.yaml` 的 `model_api_modes` 中指定完整模型 ID，并设置为 `chat_completions` 或 `responses`。默认模型组有多个候选模型时不能使用 Responses；各角色的模型组为每个具体候选模型选择 API。保存的会话在两种 API 之间使用共同消息格式。
+可以使用 Studio 的模型 API 设置，或在 `~/.q/config.yaml` 的 `model_api_modes` 中指定完整模型 ID，并设置为 `chat_completions` 或 `responses`。默认模型组有多个候选模型时不能使用 Responses；各角色的模型组为每个具体候选模型选择 API。保存的会话在两种 API 之间使用共同消息格式。
 
 ## 配置嵌入模型
 

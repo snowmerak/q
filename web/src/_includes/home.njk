@@ -15,10 +15,10 @@
   <div class="terminal" aria-label="{{ copy.terminalLabel }}">
     <div class="terminal__bar">
       <span class="terminal__lights" aria-hidden="true"><i></i><i></i><i></i></span><span>~/project</span>
-      <button class="terminal__copy" type="button" data-copy-value="q sprint implement the requested feature"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="8" width="11" height="11" rx="2"></rect><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"></path></svg><span>{{ copy.copy }}</span></button>
+      <button class="terminal__copy" type="button" data-copy-value="q studio"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="8" width="11" height="11" rx="2"></rect><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"></path></svg><span>{{ copy.copy }}</span></button>
     </div>
     <div class="terminal__body">
-      <div class="terminal__command"><span>$</span> q sprint implement the requested feature</div>
+      <div class="terminal__command"><span>$</span> q studio</div>
       <div class="trace-list">
         {% for trace in copy.traces %}<div class="trace-row {{ trace.state }}"><i class="trace-row__dot"></i><div class="trace-row__body"><strong>{{ trace.agent }}</strong><span>{{ trace.detail }}</span></div><span class="trace-row__status">{{ trace.status }}</span></div>{% endfor %}
       </div>

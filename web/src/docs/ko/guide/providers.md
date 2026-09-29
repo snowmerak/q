@@ -30,7 +30,7 @@ q의 관리형 Gateway는 다음을 지원합니다.
 
 ## Gateway 구성
 
-q 안에서 `/gateway`를 열어 공급자와 리스너 설정을 추가하세요. 일반 q 세션은 임시 루프백 포트에서 전용 관리형 Gateway 자식 프로세스를 감독합니다.
+Studio의 **Settings → Providers**에서 공급자를 추가하고 **Settings → Services**에서 리스너를 설정하세요. Studio 호스트는 비공개 루프백 포트에서 관리형 Gateway 자식 프로세스를 감독합니다.
 
 공급자 변경은 교체 프로세스를 먼저 시작한 다음 활성화됩니다. 교체 프로세스가 시작되지 않으면 q는 동작 중인 구성을 유지합니다.
 
@@ -38,9 +38,9 @@ q 안에서 `/gateway`를 열어 공급자와 리스너 설정을 추가하세�
 
 ## 모델 역할 할당
 
-`/model`을 열어 기본 채팅과 `interviewer`, `manager`, `research`, `reviewer`, `coder`, `commit`, `thinker`, `librarian` 같은 전문 역할에 모델을 할당합니다. senior developer는 `reviewer`, junior developer는 `coder` 모델 역할을 사용합니다.
+**Settings → Models**에서 기본 채팅과 `interviewer`, `manager`, `research`, `reviewer`, `coder`, `commit`, `thinker`, `librarian` 같은 전문 역할에 모델을 할당합니다. senior developer는 `reviewer`, junior developer는 `coder` 모델 역할을 사용합니다.
 
-할당 표에서 `a`를 누르면 재사용 가능한 사용자 정의 역할을 만들 수 있습니다. 사용자 정의 서브에이전트는 자체 도구와 위임 권한을 유지하면서 이 역할을 선택할 수 있습니다.
+역할 할당 목록에서 재사용 가능한 사용자 정의 역할을 만들 수 있습니다. 사용자 정의 서브에이전트는 자체 도구와 위임 권한을 유지하면서 이 역할을 선택할 수 있습니다.
 
 워크스페이스 오버라이드는 `.q/model.json`에, 전역 할당은 `~/.q/config.yaml`에 저장됩니다.
 
@@ -50,7 +50,7 @@ q는 구체적인 모델별로 Chat Completions 또는 Responses를 선택합니
 
 Codex App Server에서는 q의 minimal agent가 `node_repl` 같은 상속된 비공개 MCP 도구를 비활성화합니다. Q 자체 도구는 계속 사용할 수 있고 세션 추적에 표시됩니다.
 
-`/model`에서 선택하거나 `~/.q/config.yaml`의 `model_api_modes`에 전체 모델 ID와 `chat_completions` 또는 `responses`를 지정할 수 있습니다. 기본 모델 그룹에 후보가 여러 개면 Responses를 사용할 수 없습니다. 역할별 그룹은 각 후보 모델의 API를 따릅니다. 저장된 세션은 두 API에서 공통 메시지 형식을 사용합니다.
+Studio의 모델 API 제어에서 선택하거나 `~/.q/config.yaml`의 `model_api_modes`에 전체 모델 ID와 `chat_completions` 또는 `responses`를 지정할 수 있습니다. 기본 모델 그룹에 후보가 여러 개면 Responses를 사용할 수 없습니다. 역할별 그룹은 각 후보 모델의 API를 따릅니다. 저장된 세션은 두 API에서 공통 메시지 형식을 사용합니다.
 
 ## 임베딩 구성
 

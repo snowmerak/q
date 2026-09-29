@@ -1,6 +1,6 @@
 ---
 title: Install q
-description: Install q with Go or build it from source, then start it in the workspace you want it to understand.
+description: Install q with Go or build it from source, then start the local Studio.
 sectionLabel: Guide
 toc:
   - id: requirements
@@ -11,8 +11,8 @@ toc:
     label: Install from source
   - id: run-without-installing
     label: Run without installing
-  - id: start-in-a-workspace
-    label: Start in a workspace
+  - id: start-studio
+    label: Start Studio
 ---
 
 ## Requirements
@@ -21,7 +21,7 @@ Before installing q, make sure the following are available:
 
 - Go 1.26.5 or later
 - Git on `PATH`
-- A terminal with ANSI color support
+- A modern browser for Studio
 - Credentials for at least one model provider, or a working local compatible endpoint
 
 [Task](https://taskfile.dev/) is optional. Every required build and test command can run directly through Go.
@@ -59,7 +59,7 @@ This installs both commands from the checked-out source rather than resolving `@
 From a source checkout, start q directly:
 
 ```powershell
-go run ./cmd/q
+go run ./cmd/q studio
 ```
 
 The repository also includes Task targets for common development operations:
@@ -70,13 +70,12 @@ task build
 task test
 ```
 
-## Start in a workspace
+## Start Studio
 
-Change to the repository or directory q should treat as its workspace, then run q:
+Start Studio from any directory, then register repositories from **Sessions**:
 
 ```powershell
-cd C:\path\to\project
-q
+q studio
 ```
 
-On first launch, q opens provider setup. Once a model is assigned, type a request normally or type `/` to browse commands.
+Open **Settings → Providers** to add a provider and **Settings → Models** to assign the default model. Bare `q` remains available as a terminal compatibility client.

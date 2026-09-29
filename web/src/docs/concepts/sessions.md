@@ -17,7 +17,7 @@ toc:
 
 ## Durable sessions
 
-Each workspace can hold multiple UUID-based sessions under `.q/sessions/`. The startup picker shows their titles and recent activity. Press `d` on an inactive session and `y` to delete it; `n` or Esc cancels. The current session and sessions open in another process cannot be deleted. Deletion removes the session and its delegated child state, but preserves durable Workspace Memory archive records.
+Each workspace can hold multiple UUID-based sessions under `.q/sessions/`. Studio registers root sessions with their workspace locations and presents roots from different repositories in one list. Add a repository, then choose an existing root session or create a new one. Deleting an inactive root removes its complete delegated child tree but preserves durable Workspace Memory archive records.
 
 One process owns a selected session. Another q process may open a different session in the same workspace, but session locks do not serialize edits to the repository itself.
 
@@ -33,13 +33,14 @@ The primary session record is:
 
 Session v2 stores messages in a common format for Chat Completions and Responses. Existing v1 Chat Completions sessions are converted on load and saved in the new format on the next write. The record also keeps Responses replay state when applicable. Retired `loop_mode` values are accepted from older files and omitted on the next save.
 
-Earlier versions could store `plan-execution.json` beside the session. It remains legacy data; the removed `/plan` workflow does not create new checkpoints.
 
 ## Delegated recovery
 
 Each delegated child call has a bookmark in `delegations.json` and its own session under `delegates/<invocation-id>/`. Children may have their own nested delegation tree. After a restart, q restores the deepest child first and returns its stored result to the parent call before continuing the parent turn.
 
-If q stopped while a general tool call had no recorded result, recovery reports that call as `unknown` to its agent and does not run it again automatically. An interrupted external ACP child also returns `unknown`; q cannot resume the remote agent's internal turn. Older plan checkpoints remain as legacy data.
+Studio projects these records as a navigable tree. Selecting a child opens its transcript. A completed child can be deleted; q removes that child and every descendant while retaining the completed tool exchange in the parent transcript. Active, blocked, and unknown children cannot be deleted through this action.
+
+If q stopped while a general tool call had no recorded result, recovery reports that call as `unknown` to its agent and does not run it again automatically. An interrupted external ACP child also returns `unknown`; q cannot resume the remote agent's internal turn.
 
 ## Workspace Memory
 

@@ -1,13 +1,13 @@
 ---
 locale: ja
 title: コマンド
-description: q の主要ワークフローを制御する対話コマンドと単独コマンドを確認します。
+description: q の主要ワークフローを制御するチャットコマンドと CLI コマンドを確認します。
 sectionLabel: リファレンス
 toc:
   - id: チャットコマンド
     label: チャットコマンド
-  - id: 単独コマンド
-    label: 単独コマンド
+  - id: cli-コマンド
+    label: CLI コマンド
   - id: 基本キー
     label: 基本キー
 ---
@@ -24,6 +24,7 @@ toc:
 | `/learn [on\|off\|status]` | 永続学習をチェックポイントまたは制御します。 |
 | `/model` | モデルを割り当て、フォールバックグループを設定します。 |
 | `/gateway` | プロバイダーと Gateway リスナーを設定します。 |
+| `/systemone` | System One のプロバイダー、decision モデル、キー、リスナーを設定します。 |
 | `/library` | グローバル Library リスナーを設定します。 |
 | `/loom` | Loom ストレージと GC を確認・設定します。 |
 | `/ignore` | `.qignore` の探索ルールを編集します。 |
@@ -34,27 +35,28 @@ toc:
 | `/lsp` | 言語サーバーのプロファイルとルートを設定します。 |
 | `/help` | コマンドとキーのガイドを開きます。 |
 
-以前の `/mode`、`/plan`、`/auto-approve`、`/auto-resolve`、`/autonomous` コマンドは廃止されました。デフォルトループは直接ツールと委任を同時に提供します。PM の作業だけを依頼する場合は `/subagent builtin/manager <request>` を使います。
 
-## 単独コマンド
+## CLI コマンド
 
 | コマンド | 用途 |
 | --- | --- |
 | `q studio [--port <port>] [--no-open]` | ループバックで組み込み Studio Web インターフェースを起動します。 |
-| `q gateway` | 単独 Gateway を設定します。 |
+| `q gateway` | Studio で Gateway のプロバイダーとリスナー設定を開きます。 |
 | `q gateway start` | OpenAI 互換 Gateway を起動します。 |
-| `q library` | グローバル Library リスナーを設定します。 |
+| `q systemone` | Studio で System One のプロバイダー、decision モデル、キーを開きます。 |
+| `q systemone start [--host <ip>] [--port <port>]` | System One decision API を起動します。 |
+| `q library` | Studio でグローバル Library リスナー設定を開きます。 |
 | `q library start` | グローバル Library をフォアグラウンドで稼働させます。 |
 | `q memory` | Workspace Memory を独立して稼働させます。 |
-| `q usage` | ローカルのトークン使用量ダッシュボードを開きます。 |
-| `q commit` | 単独コミットワークフローを開きます。 |
-| `q model` | モデルとロール割り当てを設定します。 |
-| `q subagents` | プロファイルと ACP バインドを管理します。 |
-| `q skills` | Agent Skills を管理します。 |
-| `q mcp` | 外部 MCP サーバーを設定します。 |
-| `q lsp` | 言語サーバーとワークスペースルートを設定します。 |
-| `q ignore` | `.qignore` を編集します。 |
-| `q help` | チャットサービスなしでコマンドとキーのガイドを開きます。 |
+| `q usage` | Studio の Operations を開きます。 |
+| `q commit` | 現在のリポジトリを Studio の Changes とコミットレビューで開きます。 |
+| `q model` | Studio でグローバルとワークスペースのモデル割り当てを開きます。 |
+| `q subagents` | Studio でサブエージェントと ACP バインディングを開きます。 |
+| `q skills` | Studio で Agent Skills を開きます。 |
+| `q mcp` | Studio で MCP 設定を開きます。 |
+| `q lsp` | Studio で言語サーバーとワークスペースルートを開きます。 |
+| `q ignore` | Studio で現在のリポジトリの `.qignore` を開きます。 |
+| `q help` | Studio Help を開きます。 |
 | `q acp [flags]` | q を stdin/stdout の ACP サーバーとして実行します。 |
 
 `q agents` は `q subagents` の互換エイリアスです。

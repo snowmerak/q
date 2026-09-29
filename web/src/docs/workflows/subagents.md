@@ -17,7 +17,7 @@ toc:
 
 ## Inspect available agents
 
-Open `/subagents` to inspect built-in definitions and manage custom profiles. The list shows each profile's execution kind, model role, scope, tools, and delegation grants.
+Open **Settings → Subagents** in Studio to inspect built-in definitions and manage custom profiles. The list shows each profile's execution kind, model role, scope, tools, and delegation grants.
 
 The public built-in IDs are:
 
@@ -37,13 +37,13 @@ Pass the complete task context in the request. A child does not automatically in
 /subagent builtin/senior-developer review the cancellation path in app/model.go
 ```
 
-Custom profiles use their bare name in the TUI. Delegation grants stored inside profiles use canonical IDs such as `builtin/senior-developer`, `global/code-reader`, or `workspace/browser-check`.
+Explicit `/subagent` calls in the bare q compatibility client use a custom profile's short name. Delegation grants stored inside profiles use canonical IDs such as `builtin/senior-developer`, `global/code-reader`, or `workspace/browser-check`.
 
 ## Delegate from chat
 
 Ordinary chat exposes both direct workspace tools and delegation. The main agent can work directly or coordinate bounded subagents based on the request. The manager owns requirements and planning; the senior developer can edit directly or assign implementation to the junior developer, then review the result. Use `/subagent <name> <request>` when you want to select a role explicitly.
 
-The transcript shows child progress and tool calls; press `Ctrl+G` to expand or collapse the trace. Each call saves a child session and a bookmark under the parent. On restart, q recovers nested children before continuing the parent. A tool call with no recorded result returns `unknown` and is not run again automatically. An interrupted external ACP invocation also returns `unknown` because its internal turn cannot be resumed.
+Studio shows each child below its parent in the session tree. Select a child to open its progress, transcript, and tool calls. Each call saves a child session and a bookmark under the parent. On restart, q recovers nested children before continuing the parent. A tool call with no recorded result returns `unknown` and is not run again automatically. An interrupted external ACP invocation also returns `unknown` because its internal turn cannot be resumed.
 
 ## Define an inner agent
 
@@ -65,7 +65,6 @@ delegates: []
 
 Profiles live in `~/.q/subagents/` or `<workspace>/.q/subagents/`. A workspace profile replaces the complete global profile with the same name.
 
-Saved grants to removed built-in agents are inactive. Remove them when editing an existing profile; new profiles cannot save those grants.
 
 ## External agents
 

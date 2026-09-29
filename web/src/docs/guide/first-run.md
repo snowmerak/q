@@ -1,34 +1,41 @@
 ---
 title: First run
-description: Configure the first model, send a request, and inspect what q changed.
+description: Start Studio, configure a model, create a repository session, and review the result.
 sectionLabel: Guide
 toc:
-  - id: open-the-workspace
-    label: Open the workspace
+  - id: start-studio
+    label: Start Studio
   - id: configure-a-model
     label: Configure a model
+  - id: create-a-session
+    label: Create a session
   - id: send-the-first-request
     label: Send the first request
   - id: review-the-result
     label: Review the result
 ---
 
-## Open the workspace
+## Start Studio
 
-Start q from the project directory you want it to operate on. The active workspace anchors file tools, discovery, session storage, workspace instructions, skills, and model overrides.
+Start the embedded local web application. It can manage sessions in any repository, regardless of the directory where you launch it.
 
 ```powershell
-cd C:\work\my-project
-q
+q studio
 ```
 
-Starting q in a repository subdirectory does not automatically widen the file-tool boundary to the Git root. Repository-level portable Agent Skills can still be discovered from the nearest Git root.
+Studio prints its loopback URL and opens it in your browser. Keep that q process running while you use the interface.
 
 ## Configure a model
 
-First launch opens provider setup. Add a provider, select a model, and assign it to the default role. Prefer an environment variable for the provider API key instead of storing a credential inline.
+Open **Settings → Providers**, add a Gateway provider, and enter its endpoint and API key environment variable. Then open **Settings → Models** and assign a discovered model to **Default**. Provider and model changes save automatically.
 
-You can reopen model assignment at any time with `/model` and provider configuration with `/gateway`.
+Use **Settings → System One** only when you want a separate typed-decision provider for tasks such as Agent Skill relevance checks.
+
+## Create a session
+
+Open **Sessions** and choose **Add session**. Select the repository directory with the folder browser, then choose an existing root session or create a new one. Studio remembers the repository location for that root session.
+
+Starting Studio in a repository subdirectory does not widen the file boundary. Each session runs in the exact workspace directory registered for it.
 
 ## Send the first request
 
@@ -38,16 +45,16 @@ Begin with a concrete repository question so you can see how q gathers evidence:
 Explain how this project starts and identify the main runtime components.
 ```
 
-For a change that benefits from delegated roles, use:
+For a change that benefits from a specialist, ask the main agent to delegate or explicitly name an occupational role:
 
 ```text
-/subagent builtin/senior-developer add a health endpoint and cover it with tests
+Ask the senior developer to add a health endpoint and verify it.
 ```
 
-`Ctrl+C` interrupts an active turn. `Ctrl+H` opens the complete key reference without discarding the current screen.
+Child agents appear below their parent in the session tree. Select a child to inspect its own transcript and tool activity.
 
 ## Review the result
 
-Run `/changes` to browse staged, unstaged, and untracked repository changes. The view represents the whole repository, including changes that existed before the current turn.
+Open **Changes** to browse staged, unstaged, renamed, and untracked repository changes. Select a file for its highlighted diff.
 
-When the diff is ready, `/commit` generates a Conventional Commit or split-commit proposal. Nothing is committed until you confirm it in the review screen.
+When the diff is ready, start commit review to generate a Conventional Commit or split-commit proposal. Nothing is committed until you execute the selected proposal.

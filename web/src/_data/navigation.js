@@ -5,6 +5,7 @@ const structure = [
       { key: "introduction", path: "/guide/introduction/", icon: "document" },
       { key: "install", path: "/guide/install/", icon: "download" },
       { key: "firstRun", path: "/guide/first-run/", icon: "terminal" },
+      { key: "studio", path: "/guide/studio/", icon: "graph" },
       { key: "providers", path: "/guide/providers/", icon: "nodes" },
     ],
   },
@@ -39,25 +40,25 @@ const structure = [
 
 const labels = {
   en: {
-    gettingStarted: "Getting started", introduction: "Introduction", install: "Install q", firstRun: "First run", providers: "Choose a provider",
+    gettingStarted: "Getting started", introduction: "Introduction", install: "Install q", firstRun: "First run", studio: "Q Studio", providers: "Choose a provider",
     workflows: "Workflows", delegatedWork: "Delegated work", subagents: "Subagents", agentSkills: "Agent Skills", reviewCommit: "Review and commit", acpMcp: "ACP and MCP",
     concepts: "Concepts", runtime: "Runtime model", sessions: "Sessions and memory", workspaceGuidance: "Workspace guidance", security: "Security boundaries",
     reference: "Reference", commands: "Commands", configuration: "Configuration",
   },
   ko: {
-    gettingStarted: "시작하기", introduction: "소개", install: "q 설치", firstRun: "첫 실행", providers: "공급자 선택",
+    gettingStarted: "시작하기", introduction: "소개", install: "q 설치", firstRun: "첫 실행", studio: "Q Studio", providers: "공급자 선택",
     workflows: "워크플로", delegatedWork: "위임 작업", subagents: "서브에이전트", agentSkills: "에이전트 스킬", reviewCommit: "변경 검토 및 커밋", acpMcp: "ACP와 MCP",
     concepts: "개념", runtime: "런타임 모델", sessions: "세션과 메모리", workspaceGuidance: "워크스페이스 지침", security: "보안 경계",
     reference: "참조", commands: "명령어", configuration: "구성",
   },
   ja: {
-    gettingStarted: "はじめに", introduction: "概要", install: "q のインストール", firstRun: "初回実行", providers: "プロバイダーの選択",
+    gettingStarted: "はじめに", introduction: "概要", install: "q のインストール", firstRun: "初回実行", studio: "Q Studio", providers: "プロバイダーの選択",
     workflows: "ワークフロー", delegatedWork: "委任作業", subagents: "サブエージェント", agentSkills: "エージェントスキル", reviewCommit: "変更確認とコミット", acpMcp: "ACP と MCP",
     concepts: "コンセプト", runtime: "ランタイムモデル", sessions: "セッションとメモリ", workspaceGuidance: "ワークスペース指示", security: "セキュリティ境界",
     reference: "リファレンス", commands: "コマンド", configuration: "設定",
   },
   "zh-cn": {
-    gettingStarted: "快速开始", introduction: "简介", install: "安装 q", firstRun: "首次运行", providers: "选择提供商",
+    gettingStarted: "快速开始", introduction: "简介", install: "安装 q", firstRun: "首次运行", studio: "Q Studio", providers: "选择提供商",
     workflows: "工作流", delegatedWork: "委派工作", subagents: "子代理", agentSkills: "代理技能", reviewCommit: "审查与提交", acpMcp: "ACP 与 MCP",
     concepts: "概念", runtime: "运行时模型", sessions: "会话与记忆", workspaceGuidance: "工作区指引", security: "安全边界",
     reference: "参考", commands: "命令", configuration: "配置",

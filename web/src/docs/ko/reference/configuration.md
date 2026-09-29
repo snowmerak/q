@@ -20,6 +20,8 @@ toc:
 | `~/.q/providers.json` | 관리형 Gateway 공급자와 모델 메타데이터 |
 | `~/.q/gateway.json` | 독립 Gateway 리스너와 키 메타데이터 |
 | `~/.q/gateway.key` | Gateway API 키 검증용 비공개 마스터 키 |
+| `~/.q/systemone.json` | System One 공급자, 모델 라우팅, 리스너와 API 키 메타데이터 |
+| `~/.q/systemone.key` | System One API 키 검증용 비공개 마스터 키 |
 | `~/.q/library.json` | Global Library 루프백 리스너 설정 |
 | `~/.q/workspace-memory.json` | Workspace Memory 루프백 리스너 설정 |
 | `~/.q/usage.json` | 토큰 Usage 서비스 루프백 리스너 설정 |
@@ -27,11 +29,12 @@ toc:
 | `~/.agents/skills/` | q가 관리하지 않는 휴대 가능한 전역 Agent Skills |
 | `~/.q/skills/` | q가 관리하는 전역 Agent Skills |
 | `~/.q/subagents/` | 전역 사용자 정의 서브에이전트 프로필 |
+| `~/.q/studio-sessions.json` | Studio에 등록한 루트 세션과 워크스페이스 위치 |
 | `~/.q/logs/thinker/` | 단기 Thinker 호출 진단 |
 | `~/.q/usage/usage.sqlite` | 최근 토큰 이벤트와 일별 집계 |
 | `~/.q/usage/archive/` | 오래된 원시 사용량 이벤트의 Parquet 아카이브 |
 
-일반 구성에는 TUI를 사용하세요. 자동화가 필요할 때만 이 파일을 직접 편집하는 것이 좋습니다.
+일반 구성에는 Studio를 사용하세요. 자동화가 필요할 때만 이 파일을 직접 편집하는 것이 좋습니다.
 
 ## 워크스페이스 상태
 
@@ -40,8 +43,6 @@ toc:
 | `.q/sessions/<uuid>/session.json` | 대화, 컨텍스트, 제목, 생명주기, 학습 상태 |
 | `.q/sessions/<uuid>/delegations.json` | 위임된 자식 호출의 북마크 |
 | `.q/sessions/<uuid>/delegates/<invocation-id>/` | 자식 세션, 실행 상태, 중첩 위임 트리 |
-| `.q/sessions/<uuid>/plan-execution.json` | 이전 버전의 plan 체크포인트 |
-| `.q/plan-executions/` | 이전 버전의 실행 스냅샷 |
 | `.q/model.json` | 워크스페이스 모델 역할 오버라이드 |
 | `.q/learning.json` | 워크스페이스 학습 스위치 |
 | `.q/lsp.json` | 워크스페이스 LSP 루트와 오버라이드 |
@@ -57,4 +58,4 @@ toc:
 
 JSON 레코드가 원본입니다. Bleve와 HNSW 인덱스는 파생 데이터이며 다시 만들 수 있습니다.
 
-Loom GC는 구성된 유예 기간에 따라 활성 세션 프로젝션과 계획 체크포인트가 참조하는 아티팩트를 보호합니다. 워크스페이스 `.q` 상태를 삭제하면 q의 영구 기록이 사라지지만 저장소 파일을 되돌리지는 않습니다.
+Loom GC는 구성된 유예 기간에 따라 활성 세션 프로젝션과 저장된 레코드가 참조하는 아티팩트를 보호합니다. 워크스페이스 `.q` 상태를 삭제하면 q의 영구 기록이 사라지지만 저장소 파일을 되돌리지는 않습니다.

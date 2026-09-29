@@ -8,8 +8,6 @@ toc:
     label: 작업 시작
   - id: 역할과-모델
     label: 역할과 모델
-  - id: 이전-plan-모드
-    label: 이전 plan 모드
 ---
 
 ## 작업 시작
@@ -22,8 +20,4 @@ PM 업무만 요청하려면 채팅에서 `/subagent builtin/manager <request>`�
 
 manager는 PM 직책으로 요구사항, 우선순위, 수용 기준과 필요한 작업 계획을 맡습니다. interviewer는 사용자 결정이 필요한 질문을 가려내고 research는 특정 문제를 조사합니다. 각 역할은 필요한 워크스페이스 근거를 직접 읽을 수 있습니다.
 
-senior developer는 `reviewer` 모델 역할과 수정·명령 도구를 사용합니다. 직접 코드를 수정하거나 junior developer에게 범위가 정해진 구현을 맡길 수 있으며, 실제 변경과 검증 결과를 검토하고 필요하면 수정을 요청합니다. junior developer도 `coder` 모델 역할과 수정·명령 도구를 사용합니다. 별도 `builtin/reviewer` 서브에이전트는 제거되었으므로 기술 검토는 `builtin/senior-developer`에 요청하세요.
-
-## 이전 plan 모드
-
-`/plan`과 `/auto-approve`, `/auto-resolve`, `/autonomous` 제어 명령은 더 이상 작업을 시작하지 않습니다. 계획 작성은 일반 위임에서 manager에게 요청합니다. 기존 plan 체크포인트는 과거 데이터로 디스크에 남지만 새 plan 실행으로 재개되지는 않습니다.
+senior developer는 `reviewer` 모델 역할과 수정·명령 도구를 사용합니다. 직접 코드를 수정하거나 junior developer에게 범위가 정해진 구현을 맡길 수 있으며, 실제 변경과 검증 결과를 검토하고 필요하면 수정을 요청합니다. junior developer도 `coder` 모델 역할과 수정·명령 도구를 사용합니다.

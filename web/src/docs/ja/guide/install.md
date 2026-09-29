@@ -1,7 +1,7 @@
 ---
 locale: ja
 title: q のインストール
-description: Go で q をインストールするかソースからビルドし、対象のワークスペースで起動します。
+description: Go で q をインストールするかソースからビルドし、ローカル Studio を起動します。
 sectionLabel: ガイド
 toc:
   - id: 要件
@@ -12,8 +12,8 @@ toc:
     label: ソースからインストール
   - id: インストールせずに実行
     label: インストールせずに実行
-  - id: ワークスペースで起動
-    label: ワークスペースで起動
+  - id: studio-を起動
+    label: Studio を起動
 ---
 
 ## 要件
@@ -23,7 +23,7 @@ q をインストールする前に、次のものを用意してください。
 - Go 1.26.5 以降
 - `PATH` から実行できる Git
 - 設定済みのモデルプロバイダーが一つ以上
-- ANSI カラー対応のターミナル
+- Studio を利用するモダンブラウザ
 
 [Task](https://taskfile.dev/) は任意です。必要なビルドとテストはすべて Go だけで実行できます。
 
@@ -60,7 +60,7 @@ go install ./cmd/q ./cmd/q-mcp
 ソースチェックアウトから q を直接起動できます。
 
 ```powershell
-go run ./cmd/q
+go run ./cmd/q studio
 ```
 
 一般的な開発作業向けの Task ターゲットもあります。
@@ -71,13 +71,12 @@ task build
 task test
 ```
 
-## ワークスペースで起動
+## Studio を起動
 
-q がワークスペースとして扱うリポジトリまたはディレクトリへ移動して起動します。
+任意のディレクトリから Studio を起動し、**Sessions** でリポジトリを登録します。
 
 ```powershell
-cd C:\path\to\project
-q
+q studio
 ```
 
-初回起動ではプロバイダー設定が開きます。モデルを割り当てたら通常どおり依頼を入力するか、`/` でコマンドを検索してください。
+**Settings → Providers** でプロバイダーを追加し、**Settings → Models** で既定モデルを割り当てます。bare `q` はターミナル互換クライアントとして利用できます。

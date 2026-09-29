@@ -1,7 +1,7 @@
 ---
 locale: ko
 title: q 설치
-description: Go로 q를 설치하거나 소스에서 빌드한 뒤 원하는 워크스페이스에서 시작합니다.
+description: Go로 q를 설치하거나 소스에서 빌드한 뒤 로컬 Studio를 시작합니다.
 sectionLabel: 가이드
 toc:
   - id: 요구사항
@@ -12,8 +12,8 @@ toc:
     label: 소스에서 설치
   - id: 설치하지-않고-실행
     label: 설치하지 않고 실행
-  - id: 워크스페이스에서-시작
-    label: 워크스페이스에서 시작
+  - id: studio-시작
+    label: Studio 시작
 ---
 
 ## 요구사항
@@ -23,7 +23,7 @@ q를 설치하기 전에 다음 항목을 준비하세요.
 - Go 1.26.5 이상
 - `PATH`에서 실행 가능한 Git
 - 구성된 모델 공급자 하나 이상
-- ANSI 색상을 지원하는 터미널
+- Studio를 사용할 최신 브라우저
 
 [Task](https://taskfile.dev/)는 선택 사항입니다. 필요한 모든 빌드와 테스트 명령은 Go만으로 실행할 수 있습니다.
 
@@ -60,7 +60,7 @@ go install ./cmd/q ./cmd/q-mcp
 소스 체크아웃에서 q를 바로 시작할 수 있습니다.
 
 ```powershell
-go run ./cmd/q
+go run ./cmd/q studio
 ```
 
 저장소에는 일반적인 개발 작업용 Task 대상도 있습니다.
@@ -71,13 +71,12 @@ task build
 task test
 ```
 
-## 워크스페이스에서 시작
+## Studio 시작
 
-q가 워크스페이스로 사용할 저장소나 디렉터리로 이동한 뒤 실행하세요.
+어느 디렉터리에서든 Studio를 시작한 뒤 **Sessions**에서 저장소를 등록하세요.
 
 ```powershell
-cd C:\path\to\project
-q
+q studio
 ```
 
-첫 실행에서는 공급자 설정이 열립니다. 모델을 할당한 뒤 평소처럼 요청을 입력하거나 `/`를 입력해 명령을 찾아보세요.
+**Settings → Providers**에서 공급자를 추가하고 **Settings → Models**에서 기본 모델을 할당하세요. bare `q`는 터미널 호환 클라이언트로 유지됩니다.

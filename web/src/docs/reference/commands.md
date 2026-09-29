@@ -1,12 +1,12 @@
 ---
 title: Commands
-description: Find the interactive and standalone commands that control q's main workflows.
+description: Find the chat and CLI commands that control q's main workflows.
 sectionLabel: Reference
 toc:
   - id: chat-commands
     label: Chat commands
-  - id: standalone-commands
-    label: Standalone commands
+  - id: cli-commands
+    label: CLI commands
   - id: essential-keys
     label: Essential keys
 ---
@@ -23,6 +23,7 @@ toc:
 | `/learn [on\|off\|status]` | Checkpoint or control durable learning for this workspace. |
 | `/model` | Assign models and configure fallback groups. |
 | `/gateway` | Configure providers and Gateway listener settings. |
+| `/systemone` | Configure System One providers, decision models, keys, and listener settings. |
 | `/library` | Configure the global Library listener. |
 | `/loom` | Inspect Loom storage and configure garbage collection. |
 | `/ignore` | Edit workspace discovery rules in `.qignore`. |
@@ -33,27 +34,28 @@ toc:
 | `/lsp` | Configure language-server profiles and roots. |
 | `/help` | Open the complete command and key guide. |
 
-The former `/mode`, `/plan`, `/auto-approve`, `/auto-resolve`, and `/autonomous` commands have been removed. The default loop has direct tools and delegation; use `/subagent builtin/manager <request>` for a focused PM request.
 
-## Standalone commands
+## CLI commands
 
 | Command | Purpose |
 | --- | --- |
 | `q studio [--port <port>] [--no-open]` | Start the embedded Studio web interface on loopback. |
-| `q gateway` | Configure the standalone Gateway. |
+| `q gateway` | Open Gateway providers and listener settings in Studio. |
 | `q gateway start` | Start the OpenAI-compatible Gateway. |
-| `q library` | Configure the global Library listener. |
+| `q systemone` | Open System One providers, decision models, and keys in Studio. |
+| `q systemone start [--host <ip>] [--port <port>]` | Start the System One decision API. |
+| `q library` | Open global Library listener settings in Studio. |
 | `q library start` | Keep the global Library running as a foreground service. |
 | `q memory` | Keep Workspace Memory running independently. |
-| `q usage` | Open the local token-usage dashboard. |
-| `q commit` | Open the standalone commit workflow. |
-| `q model` | Configure model and role assignments. |
-| `q subagents` | Manage subagent profiles and ACP bindings. |
-| `q skills` | Manage Agent Skills. |
-| `q mcp` | Configure external MCP servers. |
-| `q lsp` | Configure language servers and workspace roots. |
-| `q ignore` | Edit `.qignore`. |
-| `q help` | Open the command and key guide without starting chat services. |
+| `q usage` | Open Operations in Studio. |
+| `q commit` | Open the current repository in Studio Changes and commit review. |
+| `q model` | Open global and workspace model assignments in Studio. |
+| `q subagents` | Open subagent profiles and ACP bindings in Studio. |
+| `q skills` | Open Agent Skills in Studio. |
+| `q mcp` | Open MCP configuration in Studio. |
+| `q lsp` | Open language servers and workspace roots in Studio. |
+| `q ignore` | Open the current repository's `.qignore` editor in Studio. |
+| `q help` | Open Studio Help. |
 | `q acp [flags]` | Run q as an ACP server over stdin/stdout. |
 
 `q agents` is a compatibility alias for `q subagents`.

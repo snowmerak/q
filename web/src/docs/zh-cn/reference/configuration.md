@@ -20,6 +20,8 @@ toc:
 | `~/.q/providers.json` | 受管理 Gateway 的提供商与模型元数据。 |
 | `~/.q/gateway.json` | 独立 Gateway 监听地址与密钥元数据。 |
 | `~/.q/gateway.key` | 用于验证 Gateway API 密钥的私有主密钥。 |
+| `~/.q/systemone.json` | System One 提供商、模型路由、监听器和 API 密钥元数据。 |
+| `~/.q/systemone.key` | 用于验证 System One API 密钥的私有主密钥。 |
 | `~/.q/library.json` | 全局 Library 回环监听设置。 |
 | `~/.q/workspace-memory.json` | Workspace Memory 回环监听设置。 |
 | `~/.q/usage.json` | Token Usage 服务回环监听设置。 |
@@ -27,11 +29,12 @@ toc:
 | `~/.agents/skills/` | 可被发现但不由 q 管理的便携式全局 Agent Skills。 |
 | `~/.q/skills/` | 由 q 管理的全局 Agent Skills。 |
 | `~/.q/subagents/` | 全局自定义子代理配置文件。 |
+| `~/.q/studio-sessions.json` | Studio 中注册的根会话及其工作区位置。 |
 | `~/.q/logs/thinker/` | 短期保存的 Thinker 调用诊断。 |
 | `~/.q/usage/usage.sqlite` | 近期 Token 事件与每日汇总。 |
 | `~/.q/usage/archive/` | 旧原始使用事件的 Parquet 归档。 |
 
-普通配置请使用 TUI。仅在自动化确有需要时直接编辑这些文件。
+普通配置请使用 Studio。仅在自动化确有需要时直接编辑这些文件。
 
 ## 工作区状态
 
@@ -40,8 +43,6 @@ toc:
 | `.q/sessions/<uuid>/session.json` | 会话记录、上下文、标题、生命周期与学习状态。 |
 | `.q/sessions/<uuid>/delegations.json` | 子代理调用的书签。 |
 | `.q/sessions/<uuid>/delegates/<invocation-id>/` | 子会话、执行状态和嵌套委派树。 |
-| `.q/sessions/<uuid>/plan-execution.json` | 旧版 plan 检查点。 |
-| `.q/plan-executions/` | 旧版执行快照。 |
 | `.q/model.json` | 工作区模型角色覆盖设置。 |
 | `.q/learning.json` | 工作区学习开关。 |
 | `.q/lsp.json` | 工作区 LSP 根目录与覆盖设置。 |
@@ -57,4 +58,4 @@ toc:
 
 JSON 记录是事实来源。Bleve 与 HNSW 索引是派生数据，可以重建。
 
-Loom 垃圾回收会在配置的宽限期内保护活跃会话视图和计划检查点所引用的内容。删除工作区的 `.q` 状态会移除该工作区中 q 的持久历史，但不会还原仓库文件。
+Loom 垃圾回收会在配置的宽限期内保护活跃会话视图和已保存记录所引用的内容。删除工作区的 `.q` 状态会移除该工作区中 q 的持久历史，但不会还原仓库文件。

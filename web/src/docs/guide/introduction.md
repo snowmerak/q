@@ -15,24 +15,24 @@ toc:
 
 ## What q is
 
-q is a workspace-native coding agent for the terminal. Start it inside a repository or project directory and it combines conversation, file tools, shell commands, model providers, subagents, review, and durable history in one Go binary.
+q is a workspace-native coding environment. Its local Studio combines conversation, file tools, shell commands, model providers, occupational subagents, repository review, and durable history in one Go binary.
 
 The workspace is the operating boundary for q's file tools. Shell commands start there too, but they are **not** an operating-system sandbox. Review commands and approvals with the same care you would use for a local development shell.
 
 ## Choose a workflow
 
-Use ordinary chat when the request is focused and you want q to inspect or edit directly.
+Create or register a repository session in Studio when you want q to inspect, edit, or coordinate work in that workspace.
 
 Ordinary chat can coordinate occupational subagents while retaining direct workspace tools. The manager handles requirements and planning; the senior developer can implement directly or assign and review implementation.
 
-Use `/subagent` when a bounded specialist should handle one request.
+Ask the main agent to delegate when a specialist should handle a bounded request. Bare `q` remains available as a compatibility chat client with `/subagent` for explicit role selection.
 
 ## What q keeps
 
-Each workspace can contain multiple durable sessions. The visible transcript, compacted model context, task lifecycle, delegation state, and searchable workspace history are stored separately so long-running work can remain inspectable without sending the entire past on every turn.
+Each workspace can contain multiple durable sessions, while Studio presents registered root sessions from different repositories together. The visible transcript, compacted model context, task lifecycle, delegation state, and searchable workspace history are stored separately so long-running work can remain inspectable without sending the entire past on every turn.
 
 q also supports Agent Skills. Skill metadata is searched on demand; a full `SKILL.md` enters model context only after the agent loads an applicable skill.
 
 ## Next step
 
-Install q with `go install` or from a source checkout, then start it in the project you want it to understand.
+Install q with `go install` or from a source checkout, run `q studio`, then register the repository you want it to understand.
