@@ -63,7 +63,7 @@ func (fsys *FS) ListDirectory(input ListDirectoryInput) (ListDirectoryOutput, er
 	if userPath == "" {
 		userPath = "."
 	}
-	path, err := fsys.resolveExisting(userPath)
+	path, root, err := fsys.resolveExistingRoot(userPath)
 	if err != nil {
 		return ListDirectoryOutput{}, err
 	}
@@ -71,13 +71,13 @@ func (fsys *FS) ListDirectory(input ListDirectoryInput) (ListDirectoryOutput, er
 	if err != nil {
 		return ListDirectoryOutput{}, err
 	}
-	ignore, err := loadDiscoveryIgnore(fsys.Root)
+	ignore, err := loadDiscoveryIgnore(root)
 	if err != nil {
 		return ListDirectoryOutput{}, fmt.Errorf("read %s: %w", workspaceIgnoreFile, err)
 	}
 	result := make([]DirectoryEntry, 0, len(entries))
 	for _, entry := range entries {
-		relative, err := filepath.Rel(fsys.Root, filepath.Join(path, entry.Name()))
+		relative, err := filepath.Rel(root, filepath.Join(path, entry.Name()))
 		if err != nil {
 			return ListDirectoryOutput{}, err
 		}
@@ -143,7 +143,7 @@ func (fs *FS) MovePath(input MovePathInput) (MovePathOutput, error) {
 	if err != nil {
 		return MovePathOutput{}, err
 	}
-	if source == fs.Root {
+	if fs.isAllowedRoot(source) {
 		return MovePathOutput{}, fmt.Errorf("[E_PATH] cannot move the workspace root")
 	}
 	destination, err := fs.resolveWritePath(input.Destination)
@@ -264,7 +264,7 @@ func (fs *FS) RemovePath(input RemovePathInput) (PathOutput, error) {
 	if err != nil {
 		return PathOutput{}, err
 	}
-	if path == fs.Root {
+	if fs.isAllowedRoot(path) {
 		return PathOutput{}, fmt.Errorf("[E_PATH] cannot remove the workspace root")
 	}
 	fs.mu.Lock()

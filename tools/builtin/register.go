@@ -17,13 +17,19 @@ type Dependencies struct {
 	GlobalSkills GlobalSkillLibrary
 	SkillRanker  SkillRanker
 	Propositions PropositionLibrary
-	LSP          *lsp.Manager
+	LSP          lsp.Service
 }
 
 // Register adds the root-jailed builtin tools to server. Optional workspace
 // services are included when supplied through dependencies.
 func Register(server *mcp.Server, root string, dependencies Dependencies) (*FS, error) {
-	fs, err := NewFS(root)
+	return RegisterWithRoots(server, root, nil, dependencies)
+}
+
+// RegisterWithRoots adds the builtin tools with a primary root and optional
+// absolute-path access to explicitly configured additional roots.
+func RegisterWithRoots(server *mcp.Server, root string, additional []string, dependencies Dependencies) (*FS, error) {
+	fs, err := NewFSWithRoots(root, additional)
 	if err != nil {
 		return nil, err
 	}

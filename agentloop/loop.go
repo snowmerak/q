@@ -38,6 +38,7 @@ func RunAgentLoop(ctx context.Context, request Request, events chan<- Event) {
 	history := append([]client.Message(nil), request.Messages...)
 	conversationID := request.ConversationID
 	workingDirectory := request.WorkingDirectory
+	auxiliaryDirectories := append([]string(nil), request.AuxiliaryDirectories...)
 	activeTask := cloneActiveTask(request.ActiveTask)
 	streamEnabled := request.Stream
 	coalesceInstructions := request.CoalesceInstructions
@@ -145,7 +146,7 @@ func RunAgentLoop(ctx context.Context, request Request, events chan<- Event) {
 				assistant.ToolCalls[index].ID = fmt.Sprintf("q-call-%d-%d", round+1, index+1)
 			}
 		}
-		instructionLoader := agentinstructions.New(workingDirectory, loopContext.Messages())
+		instructionLoader := agentinstructions.NewRootSet(workingDirectory, auxiliaryDirectories, loopContext.Messages())
 		newInstructions := instructionLoader.ForToolCalls(assistant.ToolCalls)
 		if len(newInstructions) > 0 {
 			appendHistory(newInstructions...)

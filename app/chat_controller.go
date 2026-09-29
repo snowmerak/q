@@ -531,8 +531,12 @@ func (m *model) sendChatRequest() tea.Cmd {
 	modelID := m.activeModel()
 	reasoningEffort := m.activeConfig().Provider.EffectiveReasoningEffort()
 	workingDirectory := ""
+	var auxiliaryDirectories []string
 	if m.workspaceStore != nil {
 		workingDirectory = m.workspaceStore.Root
+	}
+	if m.studioWorkspaceContext != nil {
+		auxiliaryDirectories = append([]string(nil), m.studioWorkspaceContext.AuxiliaryRoots...)
 	}
 	turnContext := m.activeTurnContext()
 	turnID := m.turnID
@@ -579,7 +583,8 @@ func (m *model) sendChatRequest() tea.Cmd {
 			go runPersistedAgentLoop(turnContext, AgentLoopRequest{
 				Client: configuredClient, Tools: toolRuntime, Model: modelID, ReasoningEffort: reasoningEffort,
 				Messages: history, ConversationID: conversationID, WorkingDirectory: workingDirectory,
-				ActiveTask: activeTask, Stream: streamEnabled, CoalesceInstructions: coalesceInstructions,
+				AuxiliaryDirectories: auxiliaryDirectories,
+				ActiveTask:           activeTask, Stream: streamEnabled, CoalesceInstructions: coalesceInstructions,
 				ContextPolicy: memoryPolicy(m.activeConfig()),
 			}, events)
 		}

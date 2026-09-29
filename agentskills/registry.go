@@ -58,6 +58,7 @@ type Issue struct {
 
 type Registry struct {
 	root               string
+	auxiliaryRoots     []string
 	workspaceStateRoot string
 	home               string
 	global             bool
@@ -78,6 +79,13 @@ func Discover(root string) (*Registry, error) {
 // normally identical; Git worktrees use a temporary checkout with the
 // canonical workspace's durable .q state.
 func DiscoverWorkspace(checkoutRoot, workspaceStateRoot string) (*Registry, error) {
+	return DiscoverWorkspaceRoots(checkoutRoot, nil, workspaceStateRoot)
+}
+
+// DiscoverWorkspaceRoots includes portable and q-managed project skills from
+// explicitly configured additional workspace roots while retaining primary
+// workspace ownership for installs and durable state.
+func DiscoverWorkspaceRoots(checkoutRoot string, auxiliaryRoots []string, workspaceStateRoot string) (*Registry, error) {
 	root, err := filepath.Abs(checkoutRoot)
 	if err != nil {
 		return nil, fmt.Errorf("agent skills: resolve workspace: %w", err)
@@ -90,7 +98,29 @@ func DiscoverWorkspace(checkoutRoot, workspaceStateRoot string) (*Registry, erro
 	if err != nil {
 		return nil, fmt.Errorf("agent skills: resolve user home: %w", err)
 	}
-	r := &Registry{root: root, workspaceStateRoot: stateRoot, home: home}
+	auxiliary := make([]string, 0, len(auxiliaryRoots))
+	for _, candidate := range auxiliaryRoots {
+		candidate = strings.TrimSpace(candidate)
+		if candidate == "" {
+			continue
+		}
+		candidate, err = filepath.Abs(candidate)
+		if err != nil {
+			return nil, fmt.Errorf("agent skills: resolve additional workspace: %w", err)
+		}
+		candidate = filepath.Clean(candidate)
+		duplicate := sameDirectory(root, candidate)
+		for _, existing := range auxiliary {
+			if sameDirectory(existing, candidate) {
+				duplicate = true
+				break
+			}
+		}
+		if !duplicate {
+			auxiliary = append(auxiliary, candidate)
+		}
+	}
+	r := &Registry{root: root, auxiliaryRoots: auxiliary, workspaceStateRoot: stateRoot, home: home}
 	if err := r.Reload(); err != nil {
 		return nil, err
 	}
@@ -131,22 +161,30 @@ func (r *Registry) Reload() error {
 		locations[1].path = filepath.Join(r.qDir, "skills")
 	}
 	if !r.global {
-		if repositoryRoot := gitWorkTreeRoot(r.root); repositoryRoot != "" && !sameDirectory(repositoryRoot, r.root) {
+		seenLocations := make(map[string]struct{})
+		addLocation := func(path string, source Source) {
+			key := filepath.Clean(path) + "\x00" + string(source)
+			if _, found := seenLocations[key]; found {
+				return
+			}
+			seenLocations[key] = struct{}{}
 			locations = append(locations, struct {
 				path   string
 				source Source
-			}{filepath.Join(repositoryRoot, ".agents", "skills"), SourceProjectPortable})
+			}{path: path, source: source})
 		}
-		locations = append(locations,
-			struct {
-				path   string
-				source Source
-			}{filepath.Join(r.root, ".agents", "skills"), SourceProjectPortable},
-			struct {
-				path   string
-				source Source
-			}{filepath.Join(r.stateRoot(), ".q", "skills"), SourceProjectQ},
-		)
+		addPortable := func(root string) {
+			if repositoryRoot := gitWorkTreeRoot(root); repositoryRoot != "" && !sameDirectory(repositoryRoot, root) {
+				addLocation(filepath.Join(repositoryRoot, ".agents", "skills"), SourceProjectPortable)
+			}
+			addLocation(filepath.Join(root, ".agents", "skills"), SourceProjectPortable)
+		}
+		for _, root := range r.auxiliaryRoots {
+			addPortable(root)
+			addLocation(filepath.Join(root, ".q", "skills"), SourceProjectQ)
+		}
+		addPortable(r.root)
+		addLocation(filepath.Join(r.stateRoot(), ".q", "skills"), SourceProjectQ)
 	}
 	skills := make(map[string]Skill)
 	var discovered []Skill

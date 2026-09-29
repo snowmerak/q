@@ -253,7 +253,8 @@ func TestWorkspacePromptDescribesPrimaryAndAuxiliaryRoots(t *testing.T) {
 		"Studio project: Q",
 		"Auxiliary workspace roots: " + filepath.Clean(auxiliary),
 		"The primary workspace owns this session",
-		"use the matching working_directory",
+		"use their absolute paths for direct file or LSP tools",
+		"as run_command workdir or delegation working_directory",
 		"Delegated sessions remain children of this primary session",
 	} {
 		if !strings.Contains(prompt, expected) {

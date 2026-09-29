@@ -40,6 +40,7 @@ type Request struct {
 	Messages             []client.Message
 	ConversationID       string
 	WorkingDirectory     string
+	AuxiliaryDirectories []string
 	ActiveTask           *workspace.ActiveTask
 	Stream               bool
 	CoalesceInstructions bool

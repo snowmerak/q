@@ -1,6 +1,7 @@
 package agentinstructions
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -29,6 +30,32 @@ func TestLoaderLoadsRootAndApplicableNestedInstructions(t *testing.T) {
 	}
 	if repeated := loader.ForPaths([]string{"app/model.go"}); len(repeated) != 0 {
 		t.Fatalf("repeated messages = %#v", repeated)
+	}
+}
+
+func TestRootSetLoadsAdditionalWorkspaceInstructionsForAbsolutePaths(t *testing.T) {
+	primary := t.TempDir()
+	additional := t.TempDir()
+	writeInstruction(t, filepath.Join(primary, "AGENTS.md"), "primary rule")
+	writeInstruction(t, filepath.Join(additional, "AGENTS.md"), "additional rule")
+	writeInstruction(t, filepath.Join(additional, "nested", "AGENTS.md"), "nested additional rule")
+
+	loader := NewRootSet(primary, []string{additional}, nil)
+	rootMessages := loader.Root()
+	if len(rootMessages) != 2 || !strings.Contains(rootMessages[0].Content, "primary rule") ||
+		!strings.Contains(rootMessages[1].Content, "additional rule") {
+		t.Fatalf("root messages = %#v", rootMessages)
+	}
+	arguments, err := json.Marshal(map[string]string{"path": filepath.Join(additional, "nested", "file.go")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	nested := loader.ForToolCalls([]client.ToolCall{{Function: client.FunctionCall{Arguments: string(arguments)}}})
+	if len(nested) != 1 || !strings.Contains(nested[0].Content, "nested additional rule") {
+		t.Fatalf("additional nested messages = %#v", nested)
+	}
+	if sources := Sources(nested); len(sources) != 1 || sources[0] != filepath.ToSlash(filepath.Join(additional, "nested", "AGENTS.md")) {
+		t.Fatalf("additional sources = %#v", sources)
 	}
 }
 

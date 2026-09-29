@@ -534,9 +534,14 @@ func (host *SessionHost) prepareSession(runContext context.Context, workspaceSto
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrSessionRuntimeUnavailable, err)
 	}
+	projectContext, projectFound, err := host.resolveSessionWorkspace(prepared.store.Root)
+	if err != nil {
+		return nil, fmt.Errorf("resolve Studio project workspaces: %w", err)
+	}
 	startup := startupRequest{
 		ctx: runContext, memoryCtx: runContext, store: host.store, workspaceStore: prepared.store,
 		loaded: loaded, manager: host.manager, factory: host.factory, lifecycle: prepared.lifecycle, providerReady: true,
+		auxiliaryRoots: append([]string(nil), projectContext.AuxiliaryRoots...),
 	}.run(nil)
 	if startup.err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrSessionRuntimeUnavailable, startup.err)
@@ -566,11 +571,7 @@ func (host *SessionHost) prepareSession(runContext context.Context, workspaceSto
 	prepared.state.archiveErr = startup.archiveErr
 	prepared.state.models = append(prepared.state.models, startup.models...)
 	prepared.state.gatewayConfig = startup.gatewayConfig
-	projectContext, found, err := host.resolveSessionWorkspace(prepared.store.Root)
-	if err != nil {
-		return nil, fmt.Errorf("resolve Studio project workspaces: %w", err)
-	}
-	if found {
+	if projectFound {
 		prepared.state.studioWorkspaceContext = &projectContext
 	}
 	prepared.state.enterChat(startup.config, prepared.client)

@@ -15,7 +15,7 @@ import (
 func PrepareWorkspaceMessages(messages []client.Message, options WorkspaceMessageOptions) []client.Message {
 	result := append([]client.Message(nil), messages...)
 	if options.Root != "" {
-		loader := agentinstructions.New(options.Root, result)
+		loader := agentinstructions.NewRootSet(options.Root, options.AuxiliaryRoots, result)
 		result = append(result, loader.Root()...)
 	}
 	if options.Tools != nil && options.Root != "" {
@@ -35,11 +35,11 @@ func PrepareWorkspaceMessages(messages []client.Message, options WorkspaceMessag
 				}
 			}
 			if len(cleaned) > 0 {
-				workspacePrompt += " Auxiliary workspace roots: " + strings.Join(cleaned, "; ") + ". The primary workspace owns this session. Auxiliary workspaces are additional execution locations; use the matching working_directory when inspecting or delegating work that belongs there. Delegated sessions remain children of this primary session."
+				workspacePrompt += " Auxiliary workspace roots: " + strings.Join(cleaned, "; ") + ". The primary workspace owns this session. Auxiliary workspaces are additional execution locations; use their absolute paths for direct file or LSP tools and as run_command workdir or delegation working_directory when work belongs there. Delegated sessions remain children of this primary session."
 			}
 		}
 		workspacePrompt += " Use the available tools to inspect, edit, and run work in these configured workspaces when the user asks for changes." +
-			" For repository discovery, never traverse q's .q metadata directory and honor patterns in the workspace-root .qignore file, including when scanning through run_command. Explicit ignored-path access is allowed when the task requires it." +
+			" For repository discovery, never traverse q's .q metadata directory and honor patterns in the corresponding workspace-root .qignore file, including when scanning through run_command. Explicit ignored-path access is allowed when the task requires it." +
 			" Non-Loom MCP tool results include a loom_ref to the immutable full result. For large results, use loom_inspect, loom_read, or loom_eval instead of copying the result through chat context."
 		if options.ArchiveAvailable {
 			workspacePrompt += " Before starting substantive work that requires tools or multiple steps, call search_archive with concise, task-specific terms to check relevant prior workspace conversations, decisions, agent results, and tool failures. Before finalizing substantive work, search again using any new decision terms, failures, or verification questions revealed by the work. Use get_archive_record only for selected results that need more detail."

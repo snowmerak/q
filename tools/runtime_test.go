@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net"
 	"os"
 	"path/filepath"
@@ -268,6 +269,82 @@ func TestRuntimeRootsKeepStateOutsideCheckout(t *testing.T) {
 	}
 	if status := runtime.lsp.Status(t.Context()); status.Workspace != checkoutRoot {
 		t.Fatalf("LSP workspace = %q, want %q", status.Workspace, checkoutRoot)
+	}
+}
+
+func TestRuntimeRootsExposeConfiguredAdditionalWorkspaces(t *testing.T) {
+	primary := t.TempDir()
+	additional := t.TempDir()
+	outside := t.TempDir()
+	if err := os.WriteFile(filepath.Join(additional, "additional.txt"), []byte("additional workspace"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(outside, "outside.txt"), []byte("outside"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	skillDirectory := filepath.Join(additional, ".agents", "skills", "additional-workspace-skill")
+	if err := os.MkdirAll(skillDirectory, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(skillDirectory, "SKILL.md"), []byte("---\nname: additional-workspace-skill\ndescription: Work in the configured additional repository.\n---\n\nUse the additional workspace.\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := (workspace.Store{Root: additional}).SaveLSP(lsp.WorkspaceConfig{
+		Version: lsp.WorkspaceConfigVersion,
+		Roots:   []lsp.RootConfig{{Path: ".", Language: "go"}},
+	}, lsp.GlobalConfig{}); err != nil {
+		t.Fatal(err)
+	}
+
+	runtime, err := NewRuntimeWithRoots(
+		t.Context(), RuntimeRoots{
+			WorkspaceStateRoot: primary, CheckoutRoot: primary,
+			AuxiliaryCheckoutRoots: []string{additional},
+		}, nil, loom.StoreOptions{}, lsp.GlobalConfig{}, lsp.WorkspaceConfig{Version: lsp.WorkspaceConfigVersion}, nil,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer runtime.Close()
+
+	read, err := runtime.Call(t.Context(), client.ToolCall{
+		ID: "read-additional", Type: client.ToolTypeFunction,
+		Function: client.FunctionCall{Name: "read_file", Arguments: fmt.Sprintf(`{"path":%q}`, filepath.Join(additional, "additional.txt"))},
+	})
+	if err != nil || read.IsError || !strings.Contains(read.Content, "additional workspace") {
+		t.Fatalf("additional read = %#v, err = %v", read, err)
+	}
+	rejected, err := runtime.Call(t.Context(), client.ToolCall{
+		ID: "read-outside", Type: client.ToolTypeFunction,
+		Function: client.FunctionCall{Name: "read_file", Arguments: fmt.Sprintf(`{"path":%q}`, filepath.Join(outside, "outside.txt"))},
+	})
+	if err != nil || !rejected.IsError {
+		t.Fatalf("outside read = %#v, err = %v", rejected, err)
+	}
+	foundSkill := false
+	for _, skill := range runtime.Skills() {
+		foundSkill = foundSkill || skill.Name == "additional-workspace-skill"
+	}
+	if !foundSkill {
+		t.Fatalf("additional workspace skill was not discovered: %#v", runtime.Skills())
+	}
+	status := runtime.lsp.Status(t.Context())
+	if len(status.Sessions) != 1 || status.Sessions[0].Root != filepath.Clean(additional) {
+		t.Fatalf("routed LSP status = %#v", status)
+	}
+
+	isolatedRoot := t.TempDir()
+	isolated, err := runtime.NewCheckoutRuntime(t.Context(), isolatedRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer isolated.Close()
+	isolationResult, err := isolated.Call(t.Context(), client.ToolCall{
+		ID: "read-additional-isolated", Type: client.ToolTypeFunction,
+		Function: client.FunctionCall{Name: "read_file", Arguments: fmt.Sprintf(`{"path":%q}`, filepath.Join(additional, "additional.txt"))},
+	})
+	if err != nil || !isolationResult.IsError {
+		t.Fatalf("isolated checkout reached additional workspace: result=%#v err=%v", isolationResult, err)
 	}
 }
 

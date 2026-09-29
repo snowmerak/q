@@ -9,7 +9,7 @@ import (
 
 type lspStatusInput struct{}
 
-func registerLSP(server *mcp.Server, manager *lsp.Manager) {
+func registerLSP(server *mcp.Server, manager lsp.Service) {
 	readOnly := true
 	idempotent := true
 	annotations := &mcp.ToolAnnotations{ReadOnlyHint: readOnly, IdempotentHint: idempotent}

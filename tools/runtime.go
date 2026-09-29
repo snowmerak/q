@@ -37,12 +37,14 @@ type HostEnvironment struct {
 
 type SkillHintSearchResult = builtin.SearchSkillsOutput
 
-// RuntimeRoots separates durable workspace state from the source checkout
-// exposed to file, command, and language-server tools. The roots are identical
-// for an ordinary session and differ for an isolated Git worktree.
+// RuntimeRoots separates durable workspace state from the source checkouts
+// exposed to file, command, and language-server tools. Auxiliary checkouts are
+// available to a Studio project session, while an isolated Git worktree uses
+// only its delegated checkout.
 type RuntimeRoots struct {
-	WorkspaceStateRoot string
-	CheckoutRoot       string
+	WorkspaceStateRoot     string
+	CheckoutRoot           string
+	AuxiliaryCheckoutRoots []string
 }
 
 func sameRuntimeRoots(root string) RuntimeRoots {
@@ -75,7 +77,7 @@ type Runtime struct {
 	server         *mcp.ServerSession
 	fs             *builtin.FS
 	loom           *builtin.LoomRuntime
-	lsp            *lsp.Manager
+	lsp            lsp.Service
 	skills         *agentskills.Registry
 	skillStore     SkillStore
 	globalSkills   builtin.GlobalSkillLibrary
@@ -186,12 +188,37 @@ func NewRuntimeWithRoots(
 	if err != nil {
 		return nil, err
 	}
+	service := lsp.Service(manager)
+	additionalManagers := make([]*lsp.Manager, 0, len(roots.AuxiliaryCheckoutRoots))
+	for _, root := range roots.AuxiliaryCheckoutRoots {
+		workspaceConfig, loadErr := (qworkspace.Store{Root: root}).LoadLSP()
+		if loadErr != nil {
+			for _, opened := range additionalManagers {
+				_ = opened.Close()
+			}
+			_ = manager.Close()
+			return nil, fmt.Errorf("tools: load additional workspace LSP settings for %s: %w", root, loadErr)
+		}
+		additional, managerErr := lsp.NewManager(ctx, root, global, workspaceConfig,
+			lsp.WithRootDiscovery((qworkspace.Store{Root: root}).DiscoverLSPRootsContext))
+		if managerErr != nil {
+			for _, opened := range additionalManagers {
+				_ = opened.Close()
+			}
+			_ = manager.Close()
+			return nil, fmt.Errorf("tools: open additional workspace LSP manager for %s: %w", root, managerErr)
+		}
+		additionalManagers = append(additionalManagers, additional)
+	}
+	if len(additionalManagers) > 0 {
+		service = lsp.NewRouter(manager, additionalManagers...)
+	}
 	runtime, err := newRuntimeWithLSP(
-		ctx, roots, archive, skillStoreFromArchive(archive), loom.NewProcessEvaluator(), options, manager, globalSkills,
+		ctx, roots, archive, skillStoreFromArchive(archive), loom.NewProcessEvaluator(), options, service, globalSkills,
 		runtimeOptions...,
 	)
 	if err != nil {
-		_ = manager.Close()
+		_ = service.Close()
 		return nil, err
 	}
 	runtime.template = &runtimeTemplate{
@@ -240,7 +267,40 @@ func normalizeRuntimeRoots(roots RuntimeRoots) (RuntimeRoots, error) {
 	if err != nil {
 		return RuntimeRoots{}, fmt.Errorf("tools: resolve checkout root: %w", err)
 	}
-	return RuntimeRoots{WorkspaceStateRoot: stateRoot, CheckoutRoot: checkoutRoot}, nil
+	auxiliary := make([]string, 0, len(roots.AuxiliaryCheckoutRoots))
+	for _, root := range roots.AuxiliaryCheckoutRoots {
+		root = strings.TrimSpace(root)
+		if root == "" {
+			continue
+		}
+		absolute, resolveErr := filepath.Abs(root)
+		if resolveErr != nil {
+			return RuntimeRoots{}, fmt.Errorf("tools: resolve additional checkout root: %w", resolveErr)
+		}
+		absolute = filepath.Clean(absolute)
+		duplicate := sameToolPath(absolute, checkoutRoot)
+		for _, existing := range auxiliary {
+			if sameToolPath(absolute, existing) {
+				duplicate = true
+				break
+			}
+		}
+		if !duplicate {
+			auxiliary = append(auxiliary, absolute)
+		}
+	}
+	return RuntimeRoots{
+		WorkspaceStateRoot: filepath.Clean(stateRoot), CheckoutRoot: filepath.Clean(checkoutRoot),
+		AuxiliaryCheckoutRoots: auxiliary,
+	}, nil
+}
+
+func sameToolPath(left, right string) bool {
+	left, right = filepath.Clean(left), filepath.Clean(right)
+	if goruntime.GOOS == "windows" {
+		return strings.EqualFold(left, right)
+	}
+	return left == right
 }
 
 func newRuntime(ctx context.Context, root string, archive builtin.Archive, evaluator loom.Evaluator, options loom.StoreOptions) (*Runtime, error) {
@@ -254,7 +314,7 @@ func newRuntimeWithLSP(
 	skillStore SkillStore,
 	evaluator loom.Evaluator,
 	options loom.StoreOptions,
-	lspManager *lsp.Manager,
+	lspManager lsp.Service,
 	globalSkills builtin.GlobalSkillLibrary,
 	configuredOptions ...RuntimeOption,
 ) (*Runtime, error) {
@@ -274,7 +334,8 @@ func newRuntimeWithLSP(
 		return nil, err
 	}
 	server, fs, skills, err := newServer(
-		roots.CheckoutRoot, roots.WorkspaceStateRoot, archive, skillStore, loomRuntime, lspManager, globalSkills, optionsValue.skillRanker,
+		roots.CheckoutRoot, roots.AuxiliaryCheckoutRoots, roots.WorkspaceStateRoot,
+		archive, skillStore, loomRuntime, lspManager, globalSkills, optionsValue.skillRanker,
 	)
 	if err != nil {
 		return nil, err

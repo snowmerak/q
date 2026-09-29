@@ -147,6 +147,7 @@ type startupRequest struct {
 	store          config.Store
 	workspaceStore workspace.Store
 	checkoutRoot   string
+	auxiliaryRoots []string
 	loaded         config.Config
 	configErr      error
 	manager        *providerhost.Manager
@@ -225,8 +226,9 @@ func (request startupRequest) run(modelReady chan<- struct{}) runtimeInitialized
 		}
 		tools, toolsErr = qtools.NewRuntimeWithRoots(
 			request.ctx, qtools.RuntimeRoots{
-				WorkspaceStateRoot: request.workspaceStore.Root,
-				CheckoutRoot:       checkoutRoot,
+				WorkspaceStateRoot:     request.workspaceStore.Root,
+				CheckoutRoot:           checkoutRoot,
+				AuxiliaryCheckoutRoots: append([]string(nil), request.auxiliaryRoots...),
 			}, toolArchive, loaded.LoomStoreOptions(nil), loaded.LSP, workspaceLSP, libraryClient,
 			qtools.WithSystemOneSkillRanking(systemoneconfig.Store{Dir: request.store.Dir}),
 		)

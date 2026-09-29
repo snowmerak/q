@@ -3,6 +3,7 @@ package app
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -14,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/snowmerak/q/client"
 	"github.com/snowmerak/q/config"
 	"github.com/snowmerak/q/providerhost"
 	"github.com/snowmerak/q/workspace"
@@ -22,6 +24,11 @@ import (
 
 func TestStartupKeepsToolsWhenArchiveOpenFails(t *testing.T) {
 	root := t.TempDir()
+	auxiliary := t.TempDir()
+	auxiliaryFile := filepath.Join(auxiliary, "auxiliary.txt")
+	if err := os.WriteFile(auxiliaryFile, []byte("available from project workspace"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	settingsDir := t.TempDir()
 	health := workspacememory.Health{
 		Service: workspacememory.ServiceName, ProtocolVersion: workspacememory.ProtocolVersion, Ready: true,
@@ -67,6 +74,7 @@ func TestStartupKeepsToolsWhenArchiveOpenFails(t *testing.T) {
 		ctx: t.Context(), memoryCtx: t.Context(), store: config.Store{Dir: settingsDir},
 		workspaceStore: workspace.Store{Root: root}, loaded: config.Default(),
 		configErr: config.ErrNotFound, manager: manager, lifecycle: newStartupLifecycle(), providerReady: true,
+		auxiliaryRoots: []string{auxiliary},
 	}
 	result := request.run(nil)
 	defer func() {
@@ -82,6 +90,13 @@ func TestStartupKeepsToolsWhenArchiveOpenFails(t *testing.T) {
 	}
 	if len(result.tools.Tools()) == 0 {
 		t.Fatal("archive failure left the builtin tool runtime empty")
+	}
+	read, err := result.tools.Call(t.Context(), client.ToolCall{
+		ID: "read-project-workspace", Type: client.ToolTypeFunction,
+		Function: client.FunctionCall{Name: "read_file", Arguments: fmt.Sprintf(`{"path":%q}`, auxiliaryFile)},
+	})
+	if err != nil || read.IsError || !strings.Contains(read.Content, "available from project workspace") {
+		t.Fatalf("project workspace read = %#v, err = %v", read, err)
 	}
 }
 
