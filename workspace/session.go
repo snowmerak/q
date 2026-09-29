@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/snowmerak/q/client"
+	"github.com/snowmerak/q/internal/fsopen"
 	"github.com/snowmerak/q/internal/fsreplace"
 	"github.com/snowmerak/q/thinker"
 )
@@ -175,7 +176,7 @@ func (s Store) Load() (Session, error) {
 			return Session{}, err
 		}
 	}
-	file, err := os.Open(s.Path())
+	file, err := fsopen.Open(s.Path())
 	if errors.Is(err, os.ErrNotExist) {
 		return Session{}, ErrNotFound
 	}

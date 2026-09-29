@@ -7,6 +7,7 @@ package fsreplace
 import (
 	"errors"
 	"fmt"
+	"os"
 	"syscall"
 	"time"
 	"unsafe"
@@ -19,9 +20,11 @@ const (
 	errorLockViolation    syscall.Errno = 33
 )
 
-// Replace moves source over destination and asks Windows to flush the move.
-// Antivirus and indexer handles can briefly deny the operation, so transient
-// sharing errors use a short bounded retry.
+// Replace moves source over destination. ReplaceFileW preserves atomic replace
+// semantics while readers hold handles that share deletion. MoveFileExW covers
+// the first write when no destination exists. Antivirus and indexer handles can
+// briefly deny either operation, so transient sharing errors use a short
+// bounded retry.
 func Replace(source, destination string) error {
 	sourcePointer, err := syscall.UTF16PtrFromString(source)
 	if err != nil {
@@ -31,16 +34,33 @@ func Replace(source, destination string) error {
 	if err != nil {
 		return err
 	}
-	const (
-		moveFileReplaceExisting = 0x1
-		moveFileWriteThrough    = 0x8
-	)
-	procedure := syscall.NewLazyDLL("kernel32.dll").NewProc("MoveFileExW")
+	_, statErr := os.Stat(destination)
+	destinationExists := statErr == nil
+	if statErr != nil && !errors.Is(statErr, os.ErrNotExist) {
+		return statErr
+	}
+	kernel := syscall.NewLazyDLL("kernel32.dll")
+	if destinationExists {
+		procedure := kernel.NewProc("ReplaceFileW")
+		return retry(func() error {
+			result, _, callErr := procedure.Call(
+				uintptr(unsafe.Pointer(destinationPointer)),
+				uintptr(unsafe.Pointer(sourcePointer)),
+				0, 0, 0, 0,
+			)
+			if result == 0 {
+				return fmt.Errorf("ReplaceFileW: %w", callErr)
+			}
+			return nil
+		}, time.Sleep)
+	}
+	const moveFileWriteThrough = 0x8
+	procedure := kernel.NewProc("MoveFileExW")
 	return retry(func() error {
 		result, _, callErr := procedure.Call(
 			uintptr(unsafe.Pointer(sourcePointer)),
 			uintptr(unsafe.Pointer(destinationPointer)),
-			moveFileReplaceExisting|moveFileWriteThrough,
+			moveFileWriteThrough,
 		)
 		if result == 0 {
 			return fmt.Errorf("MoveFileExW: %w", callErr)
