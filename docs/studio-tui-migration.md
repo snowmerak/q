@@ -85,6 +85,8 @@ bare `q` 대화 TUI와 ACP는 호환 client로 남지만 독립 설정 CLI 명�
   언어 목록을 연결했다. 복원 transcript와 streaming 응답이 같은 renderer를 사용한다.
 - code copy, 표·목록·인용·링크, 접을 수 있는 tool call/result와 overflow 처리를
   chat timeline에 적용했다.
+- TUI와 같은 현재 context 예측치와 context window를 durable run event/snapshot에 기록하고
+  Sessions 헤더의 사용률 meter로 표시한다.
 - session 삭제와 in-place clear, workspace learning on/off, rendererless 수동 compaction을
   공용 Go service와 Studio API/UI에 연결했다.
 - `go test ./workspace ./studio`, SessionHost/compaction 집중 test, `npm run check`와
@@ -270,6 +272,7 @@ bare `q` 대화 TUI와 ACP는 호환 client로 남지만 독립 설정 CLI 명�
 | Repository directory browser | Go directory API, home 시작 | M1 유지 | 완료 |
 | Session 목록/생성/전환 | 생성·전환·삭제·clear·compact·learning·run reconnect 지원 | M1, M5 | 완료 |
 | Chat streaming | durable event log, cursor replay와 background run | M1, M5 | 완료 |
+| Session context usage | 예측 token/context window와 사용률 meter | M1 | 완료 |
 | Markdown/code rendering | 안전한 Markdown과 언어별 highlighting | M1 | 완료 |
 | Tool/reasoning presentation | transcript와 live 접기/요약 | M1 완료, M5 tree 확장 | 완료 |
 | Question/interrupt | exact question answer, pause/resume/cancel, guidance redirect | M5 | 완료 |

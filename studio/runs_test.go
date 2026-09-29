@@ -36,6 +36,9 @@ func TestStudioRunSurvivesRequestAndReplaysFromDisk(t *testing.T) {
 		if err := emit(app.SessionEvent{Type: "session", SessionID: sessionID, WorkingDirectory: root}); err != nil {
 			return err
 		}
+		if err := emit(app.SessionEvent{Type: "context_usage", ContextUsed: 32000, ContextSize: 128000}); err != nil {
+			return err
+		}
 		close(started)
 		select {
 		case <-release:
@@ -107,7 +110,7 @@ func TestStudioRunSurvivesRequestAndReplaysFromDisk(t *testing.T) {
 			break
 		}
 	}
-	if page.Run.Status != "completed" || len(page.Events) < 3 {
+	if page.Run.Status != "completed" || page.Run.ContextUsed != 32000 || page.Run.ContextSize != 128000 || len(page.Events) < 4 {
 		t.Fatalf("completed page = %#v", page)
 	}
 	empty := httptest.NewRecorder()
@@ -138,7 +141,7 @@ func TestStudioRunSurvivesRequestAndReplaysFromDisk(t *testing.T) {
 	}
 	loaded := replayed.page(0, maximumRunEventPage)
 	encoded, _ := json.Marshal(loaded.Events)
-	if loaded.Run.Status != "completed" || !strings.Contains(string(encoded), `"content":"durable"`) {
+	if loaded.Run.Status != "completed" || loaded.Run.ContextUsed != 32000 || loaded.Run.ContextSize != 128000 || !strings.Contains(string(encoded), `"content":"durable"`) {
 		t.Fatalf("replayed run = %#v events=%s", loaded.Run, encoded)
 	}
 }

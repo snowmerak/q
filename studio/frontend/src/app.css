@@ -414,6 +414,11 @@ dd.success { color: var(--green); }
 .chat-heading h2 { overflow: hidden; font-size: 15px; text-overflow: ellipsis; white-space: nowrap; }
 .chat-heading p { overflow: hidden; margin-top: 5px; color: var(--subtle); font: 10px ui-monospace, SFMono-Regular, Consolas, monospace; text-overflow: ellipsis; white-space: nowrap; }
 .chat-heading-actions { display: flex; flex: none; align-items: center; gap: 5px; }
+.context-usage { display: grid; grid-template-columns: auto auto; min-width: 118px; gap: 3px 8px; margin-right: 7px; }
+.context-usage > span, .context-usage > small { color: var(--muted); font: 9px ui-monospace, SFMono-Regular, Consolas, monospace; }
+.context-usage > small { color: var(--subtle); text-align: right; }
+.context-usage > div { grid-column: 1 / -1; height: 3px; overflow: hidden; border-radius: 999px; background: rgba(255, 255, 255, .07); }
+.context-usage i { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg, #7651d2, #ab8cff); transition: width .2s ease; }
 .chat-heading-actions > span { min-width: 64px; margin-right: 4px; color: var(--muted); font: 10px ui-monospace, SFMono-Regular, Consolas, monospace; text-align: right; }
 .chat-heading-actions > span.running { color: #cdbdff; }
 .chat-heading-actions > button { display: grid; width: 30px; height: 30px; place-items: center; padding: 0; color: var(--subtle); border: 1px solid var(--border); border-radius: 5px; background: rgba(12, 15, 24, 0.72); cursor: pointer; }

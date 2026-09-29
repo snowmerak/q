@@ -173,7 +173,8 @@ Studio is the primary interface for daily Q work:
 
 - **Sessions** owns repository selection, conversation lifecycle, Markdown and
   syntax-highlighted code, questions, pause/resume/stop, guidance, and the
-  delegation tree. Browser refresh reconnects to the durable run cursor.
+  delegation tree. It shows the current estimated context usage, and browser
+  refresh reconnects to the durable run cursor.
 - **Changes** owns staged, unstaged, untracked and renamed files, bounded diffs,
   commit proposal review, split commits, execution, and optional push.
 - **Settings** owns global and repository model assignments, Gateway and System
@@ -734,18 +735,20 @@ embedded Svelte interface. `--port` selects a fixed development port and
 `--no-open` leaves the browser closed. Studio does not treat the launch directory
 as a workspace. In Sessions, enter a repository path to list or create its
 persisted Q sessions, restore a transcript, and run the ordinary default loop
-with that repository as its tool and workspace root. The chat streams response,
-reasoning, tool, and agent activity events while the request is connected.
+with that repository as its tool and workspace root. The chat persists response,
+reasoning, tool, agent activity, and context usage events so a browser can
+reconnect without owning the run lifetime.
 
 Studio also provides the application shell and global Settings for
 runtime, context, Loom, and service listeners. Changes save automatically through
 the same validated stores used by the TUI. Gateway providers and global model
 assignments use discovery-backed editors. System One providers, decision model
 routing, listener settings, and server API key lifecycle are also available;
-provider authentication uses environment variables only. Workspace model overrides remain in the
-TUI. MCP and LSP are currently summaries. Session questions, durable event
-reconnection, explicit turn cancellation, and repository change review remain
-tracked in the [Q Studio blueprint](docs/studio-blueprint.md).
+provider authentication uses environment variables only. Workspace model
+overrides, MCP/LSP management, session questions, durable event reconnection,
+turn control, and repository change review are available in Studio. The
+remaining run graph, worktree review, and long-running task work is tracked in
+the [Q Studio blueprint](docs/studio-blueprint.md).
 
 ## Data and configuration
 

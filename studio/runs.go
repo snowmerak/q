@@ -50,6 +50,8 @@ type studioRunSnapshot struct {
 	Outcome         string             `json:"outcome,omitempty"`
 	Error           string             `json:"error,omitempty"`
 	PendingQuestion *studioRunQuestion `json:"pending_question,omitempty"`
+	ContextUsed     int                `json:"context_used,omitempty"`
+	ContextSize     int                `json:"context_size,omitempty"`
 	Cursor          int64              `json:"cursor"`
 	CreatedAt       time.Time          `json:"created_at"`
 	UpdatedAt       time.Time          `json:"updated_at"`
@@ -517,6 +519,9 @@ func (run *studioRun) applyEventLocked(event app.SessionEvent, now time.Time) {
 		} else if event.Action == "resumed" {
 			run.snapshot.Status = "running"
 		}
+	case "context_usage":
+		run.snapshot.ContextUsed = max(0, event.ContextUsed)
+		run.snapshot.ContextSize = max(0, event.ContextSize)
 	case "result":
 		run.snapshot.Status, run.snapshot.Outcome = "completed", event.Outcome
 		run.snapshot.PendingQuestion = nil

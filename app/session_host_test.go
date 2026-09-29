@@ -17,6 +17,7 @@ import (
 func TestSessionExecutionProjectsQuestionAndCompletes(t *testing.T) {
 	value := config.Default()
 	value.Provider.Model = "tool-model"
+	value.Provider.ContextWindow = 4000
 	state := newModel(t.Context(), config.Store{Dir: t.TempDir()}, nil)
 	state.toolRuntime = &fakeAgentTools{}
 	state.enterChat(value, &askingClient{})
@@ -46,12 +47,13 @@ func TestSessionExecutionProjectsQuestionAndCompletes(t *testing.T) {
 	if result.err != nil {
 		t.Fatal(result.err)
 	}
-	var question, terminal bool
+	var question, terminal, contextUsage bool
 	for _, event := range events {
 		question = question || event.Type == "question"
 		terminal = terminal || event.Type == "result"
+		contextUsage = contextUsage || event.Type == "context_usage" && event.ContextUsed > 0 && event.ContextSize == 4000
 	}
-	if !question || !terminal {
+	if !question || !terminal || !contextUsage {
 		t.Fatalf("events = %#v", events)
 	}
 	var unavailable bool

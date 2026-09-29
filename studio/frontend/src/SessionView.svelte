@@ -42,6 +42,8 @@
     context?: string;
     outcome?: string;
     call_id?: string;
+    context_used?: number;
+    context_size?: number;
   };
   type RunQuestion = { call_id: string; question: string; context?: string; choices?: { id: string; label: string; description?: string }[] };
   type RunSnapshot = {
@@ -51,6 +53,8 @@
     outcome?: string;
     error?: string;
     pending_question?: RunQuestion;
+    context_used?: number;
+    context_size?: number;
     cursor: number;
   };
   type RunEventEnvelope = { cursor: number; at: string; event: RunEvent };
@@ -578,6 +582,17 @@
     return value.length > 10 ? value.slice(0, 10) : value;
   }
 
+  function formatTokenCount(value = 0) {
+    if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}m`;
+    if (value >= 1_000) return `${(value / 1_000).toFixed(1)}k`;
+    return new Intl.NumberFormat().format(value);
+  }
+
+  function contextPercent(run: RunSnapshot) {
+    if (!run.context_size) return 0;
+    return Math.min(999, Math.floor((run.context_used || 0) * 100 / run.context_size));
+  }
+
   function eventTitle(event: RunEvent) {
     if (event.type === 'tool_call') return event.name || 'Tool call';
     if (event.type === 'trace') return [event.agent, event.name || event.kind].filter(Boolean).join(' · ');
@@ -671,6 +686,13 @@
       <div class="chat-heading">
         <div><h2>{selected.session.title || 'New session'}</h2><p>{workspaceRoot}</p></div>
         <div class="chat-heading-actions">
+          {#if activeRun?.context_size}
+            <div class="context-usage" title={`Estimated context usage: ${formatTokenCount(activeRun.context_used)} of ${formatTokenCount(activeRun.context_size)} tokens`}>
+              <span>Context {contextPercent(activeRun)}%</span>
+              <small>{formatTokenCount(activeRun.context_used)}/{formatTokenCount(activeRun.context_size)}</small>
+              <div role="progressbar" aria-label="Estimated context usage" aria-valuemin="0" aria-valuemax={activeRun.context_size} aria-valuenow={activeRun.context_used || 0}><i style={`width: ${Math.min(100, contextPercent(activeRun))}%`}></i></div>
+            </div>
+          {/if}
           <span class:running={sending}>{runStatus || (sending ? 'Running' : 'Ready')}</span>
           <button class:enabled={learningEnabled} title={`Learning ${learningEnabled ? 'enabled' : 'disabled'}`} aria-label={`Turn learning ${learningEnabled ? 'off' : 'on'}`} onclick={toggleLearning} disabled={sending || learningLoading}><BrainCircuit aria-hidden="true" size={15} /></button>
           <button title="Compact context" aria-label="Compact context" onclick={compactSession} disabled={sending || sessionLoading}><Minimize2 aria-hidden="true" size={15} /></button>

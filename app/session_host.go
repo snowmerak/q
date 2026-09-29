@@ -49,6 +49,8 @@ type SessionEvent struct {
 	Context          string                `json:"context,omitempty"`
 	Choices          []AgentQuestionChoice `json:"choices,omitempty"`
 	Outcome          string                `json:"outcome,omitempty"`
+	ContextUsed      int                   `json:"context_used,omitempty"`
+	ContextSize      int                   `json:"context_size,omitempty"`
 }
 
 type SessionEventSink func(SessionEvent) error
@@ -363,8 +365,20 @@ func (host *SessionHost) run(
 		}
 		return fmt.Errorf("%w: %s", ErrSessionRuntimeUnavailable, message)
 	}
+	contextUsed, contextSize := 0, 0
+	if usage, ok := sessionContextUsageEvent(state); ok {
+		contextUsed, contextSize = usage.ContextUsed, usage.ContextSize
+		if emit != nil {
+			if err := emit(usage); err != nil {
+				return err
+			}
+		}
+	}
 
-	execution := sessionExecutionModel{state: state, initial: initial, emit: emit, cancel: cancelRun, control: control}
+	execution := sessionExecutionModel{
+		state: state, initial: initial, emit: emit, cancel: cancelRun, control: control,
+		contextUsed: contextUsed, contextSize: contextSize,
+	}
 	final, runErr := tea.NewProgram(
 		execution, tea.WithContext(runContext), tea.WithInput(nil), tea.WithOutput(io.Discard),
 		tea.WithoutRenderer(), tea.WithoutSignalHandler(),
@@ -544,6 +558,8 @@ type sessionExecutionModel struct {
 	cancelling            bool
 	deferred              *agentEventMsg
 	pendingQuestionCallID string
+	contextUsed           int
+	contextSize           int
 	err                   error
 }
 
@@ -561,6 +577,9 @@ func (m sessionExecutionModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	if !isAgentEvent {
 		updated, command := m.state.Update(message)
 		m.state = updated.(model)
+		if !m.emitContextUsage() {
+			return m, tea.Quit
+		}
 		return m, command
 	}
 	if m.paused {
@@ -596,6 +615,9 @@ func (m sessionExecutionModel) updateAgentEvent(eventMessage agentEventMsg) (tea
 		if m.control != nil {
 			updated, command := m.state.Update(eventMessage)
 			m.state = updated.(model)
+			if !m.emitContextUsage() {
+				return m, tea.Quit
+			}
 			return m, command
 		}
 		return m, waitAgentEvent(eventMessage.events, eventMessage.turnID)
@@ -603,6 +625,9 @@ func (m sessionExecutionModel) updateAgentEvent(eventMessage agentEventMsg) (tea
 	if event.err != nil || event.response != nil {
 		updated, _ := m.state.Update(eventMessage)
 		m.state = updated.(model)
+		if !m.emitContextUsage() {
+			return m, tea.Quit
+		}
 		if event.err != nil {
 			m.err = event.err
 			return m, tea.Quit
@@ -627,7 +652,40 @@ func (m sessionExecutionModel) updateAgentEvent(eventMessage agentEventMsg) (tea
 	}
 	updated, command := m.state.Update(eventMessage)
 	m.state = updated.(model)
+	if !m.emitContextUsage() {
+		return m, tea.Quit
+	}
 	return m, command
+}
+
+func sessionContextUsageEvent(state model) (SessionEvent, bool) {
+	if state.memory == nil {
+		return SessionEvent{}, false
+	}
+	stats := state.memory.Stats()
+	if stats.ContextWindow <= 0 {
+		return SessionEvent{}, false
+	}
+	return SessionEvent{
+		Type: "context_usage", ContextUsed: max(0, stats.PredictedTokens), ContextSize: stats.ContextWindow,
+	}, true
+}
+
+func (m *sessionExecutionModel) emitContextUsage() bool {
+	usage, ok := sessionContextUsageEvent(m.state)
+	if !ok || usage.ContextUsed == m.contextUsed && usage.ContextSize == m.contextSize {
+		return true
+	}
+	m.contextUsed, m.contextSize = usage.ContextUsed, usage.ContextSize
+	if m.emit == nil {
+		return true
+	}
+	if err := m.emit(usage); err != nil {
+		m.err = err
+		m.cancel()
+		return false
+	}
+	return true
 }
 
 func (m sessionExecutionModel) updateControl(request sessionRunControlRequest) (tea.Model, tea.Cmd) {
