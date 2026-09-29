@@ -11,7 +11,7 @@ import (
 const (
 	commandOutputLimit = 4 << 20
 	commandReadLimit   = 256 << 10
-	maximumWait        = 60 * time.Second
+	maximumWait        = 5 * time.Minute
 )
 
 func CommandShellDescription() string {
@@ -31,7 +31,7 @@ type CommandInput struct {
 type WaitInput struct {
 	CommandID string `json:"command_id" jsonschema:"Identifier returned by run_command."`
 	Offset    int64  `json:"offset,omitempty" jsonschema:"Output byte offset returned by a previous call. Defaults to zero."`
-	TimeoutMS int    `json:"timeout_ms,omitempty" jsonschema:"Maximum wait in milliseconds. Defaults to 30000 and is capped at 60000."`
+	TimeoutMS int    `json:"timeout_ms,omitempty" jsonschema:"Maximum wait in milliseconds. Defaults to 300000 and is capped at 300000."`
 }
 
 type CommandOutput struct {
@@ -153,7 +153,7 @@ func (r *commandRegistry) Wait(input WaitInput) (CommandOutput, error) {
 	if err != nil {
 		return CommandOutput{}, err
 	}
-	timeout := 30 * time.Second
+	timeout := maximumWait
 	if input.TimeoutMS > 0 {
 		timeout = time.Duration(input.TimeoutMS) * time.Millisecond
 	}

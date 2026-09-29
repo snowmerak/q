@@ -109,7 +109,7 @@ func Register(server *mcp.Server, root string, dependencies Dependencies) (*FS, 
 
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "wait",
-		Description: "Wait up to 60 seconds for a run_command process and return status and output. Pass the latest next_offset; if status is still running, call wait again.",
+		Description: "Wait up to 5 minutes for a run_command process and return status and output. Pass the latest next_offset; if status is still running, call wait again.",
 		Annotations: &mcp.ToolAnnotations{ReadOnlyHint: readOnly},
 	}, valueHandler(fs.WaitCommand))
 
