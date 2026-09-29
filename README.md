@@ -86,6 +86,26 @@ repositories it can open:
 q studio
 ```
 
+Studio listens on `127.0.0.1` with a random available port by default. Pin the
+local address when a stable URL is useful:
+
+```powershell
+q studio --host 127.0.0.1 --port 7070
+```
+
+To reach Studio from another device on a trusted network, listen on every IPv4
+interface and open `http://<this-machine-ip>:7070` yourself:
+
+```powershell
+q studio --host 0.0.0.0 --port 7070 --no-open
+```
+
+`--host` accepts an IP address such as `127.0.0.1`, `0.0.0.0`, `::1`, or `::`.
+Port `0` selects a random available port. Studio has no built-in HTTP
+authentication and can run files, processes, and Git operations with the q
+process's permissions. Bind it to a non-loopback address only on a trusted,
+firewalled network or behind an authenticated reverse proxy.
+
 Studio opens in the browser. Add a Gateway provider under **Settings →
 Providers**, refresh **Models**, and choose the default model. Provider keys can
 come from environment variables; server access keys are shown only once when
@@ -686,7 +706,7 @@ omits the chat-only `learn` tool.
 |---|---|
 | `q gateway` | Configure the Gateway listener, API keys, and providers. |
 | `q gateway start [--host <ip>] [--port <port>]` | Run the OpenAI-compatible Gateway. |
-| `q studio [--port <port>] [--no-open]` | Start the embedded Studio web interface on loopback. |
+| `q studio [--host <ip>] [--port <port>] [--no-open]` | Start the embedded Studio web interface. Defaults to `127.0.0.1` and a random port. |
 | `q library` | Configure the global Library listener. |
 | `q library start` | Run the global Library as a dedicated foreground service. |
 | `q memory` | Keep Workspace Memory running independently of a TUI. |
@@ -745,10 +765,13 @@ client can opt in to role/event-ID forwarding; those headers are telemetry
 classification, not authenticated caller identity, and the Gateway removes
 them before provider dispatch.
 
-`q studio` starts a user-level loopback server on a random port and opens its
-embedded Svelte interface. `--port` selects a fixed development port and
-`--no-open` leaves the browser closed. Studio does not treat the launch directory
-as a workspace. Sessions starts from a user-level registry of root sessions.
+`q studio` starts a user-level server on `127.0.0.1` with a random port and opens
+its embedded Svelte interface. `--host` selects a listen IP, `--port` selects a
+fixed port, and `--no-open` leaves the browser closed. A non-loopback host exposes
+Studio without built-in HTTP authentication, so use one only within a trusted,
+firewalled network or behind an authenticated reverse proxy. Studio does not
+treat the launch directory as a workspace. Sessions start from a user-level
+registry of root sessions.
 Add a repository directory, choose one of its persisted sessions or create a
 new root, then navigate its delegated child sessions as a tree. Each root keeps
 its repository as execution metadata. The chat persists response,

@@ -39,7 +39,7 @@ toc:
 
 | Command | Purpose |
 | --- | --- |
-| `q studio [--port <port>] [--no-open]` | Start the embedded Studio web interface on loopback. |
+| `q studio [--host <ip>] [--port <port>] [--no-open]` | Start the embedded Studio web interface. Defaults to `127.0.0.1` and a random port. |
 | `q gateway` | Open Gateway providers and listener settings in Studio. |
 | `q gateway start` | Start the OpenAI-compatible Gateway. |
 | `q systemone` | Open System One providers, decision models, and keys in Studio. |

@@ -8,7 +8,7 @@
 TUI 기능 이전의 실행 순서, capability별 상태와 acceptance 기록은
 [Studio TUI migration](studio-tui-migration.md)이 소유한다.
 
-현재 구현: user-level `q studio` loopback server와 embedded Svelte SPA가 TUI의 일상
+현재 구현: 기본적으로 loopback에 바인딩되고 필요할 때 명시적인 `--host`로 범위를 넓힐 수 있는 user-level `q studio` server와 embedded Svelte SPA가 TUI의 일상
 기능을 소유한다. Sessions는 여러 repository의 등록된 root와 nested delegation을 전역
 session tree로 표시하고, 안전한 Markdown과 code highlighting, durable run cursor, 질문,
 pause/resume/cancel/guidance를 제공한다. Changes는 bounded diff와 commit review/execute를 제공한다. Settings는

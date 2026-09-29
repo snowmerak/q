@@ -40,7 +40,7 @@ toc:
 
 | コマンド | 用途 |
 | --- | --- |
-| `q studio [--port <port>] [--no-open]` | ループバックで組み込み Studio Web インターフェースを起動します。 |
+| `q studio [--host <ip>] [--port <port>] [--no-open]` | 組み込み Studio Web インターフェースを起動します。デフォルトは `127.0.0.1` とランダムなポートです。 |
 | `q gateway` | Studio で Gateway のプロバイダーとリスナー設定を開きます。 |
 | `q gateway start` | OpenAI 互換 Gateway を起動します。 |
 | `q systemone` | Studio で System One のプロバイダー、decision モデル、キーを開きます。 |

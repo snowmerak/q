@@ -23,7 +23,23 @@ Q Studio is the primary interface for daily work. It is an embedded Svelte appli
 q studio
 ```
 
-Studio listens on loopback and opens a browser. Use `--port <port>` to select a port or `--no-open` to leave the browser closed. The directory where Studio starts does not limit its workspaces. Each registered root session records the repository directory where its agent runs.
+Studio listens on `127.0.0.1` with a random available port and opens a browser by default. Use a fixed local URL with:
+
+```powershell
+q studio --host 127.0.0.1 --port 7070
+```
+
+To connect from another device on a trusted network, listen on every IPv4 interface and open `http://<this-machine-ip>:7070` from that device:
+
+```powershell
+q studio --host 0.0.0.0 --port 7070 --no-open
+```
+
+`--host` accepts an IP address such as `127.0.0.1`, `0.0.0.0`, `::1`, or `::`. Port `0` selects a random available port, and `--no-open` disables automatic browser launch.
+
+**Studio has no built-in HTTP authentication.** A Studio client can trigger file, process, Git, and configuration operations with the q process's permissions. Use a non-loopback host only on a trusted, firewalled network or behind an authenticated reverse proxy.
+
+The directory where Studio starts does not limit its workspaces. Each registered root session records the repository directory where its agent runs.
 
 ## Sessions and delegation
 
@@ -49,6 +65,6 @@ Repository model overrides appear when a workspace is selected. Provider changes
 
 ## Local runtime boundary
 
-Studio binds to loopback and performs file, process, Git, and configuration work through the local q process. The browser never receives direct filesystem access. Shell commands still have the authority of the local q process and are not an operating-system sandbox.
+Studio binds to loopback by default and performs file, process, Git, and configuration work through the local q process. The browser never receives direct filesystem access. Shell commands still have the authority of the local q process and are not an operating-system sandbox. `--host` can deliberately widen the network boundary, so access control must then be supplied by the network or an authenticated reverse proxy.
 
 Bare `q` remains available as a compatibility chat client, and `q acp` remains the ACP server entry point. Configuration commands such as `q model`, `q gateway`, `q systemone`, `q subagents`, `q skills`, `q mcp`, and `q lsp` open the corresponding Studio surface.

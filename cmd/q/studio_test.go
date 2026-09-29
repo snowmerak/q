@@ -78,11 +78,31 @@ func TestStudioServiceStatusAndShutdownSmoke(t *testing.T) {
 }
 
 func TestParseStudioOptions(t *testing.T) {
-	options, err := parseStudioOptions([]string{"--port", "7070", "--no-open"}, io.Discard)
-	if err != nil || options.port != 7070 || !options.noOpen {
+	options, err := parseStudioOptions([]string{"--host", "0.0.0.0", "--port", "7070", "--no-open"}, io.Discard)
+	if err != nil || options.host != "0.0.0.0" || options.port != 7070 || !options.noOpen {
 		t.Fatalf("options = %#v, %v", options, err)
+	}
+	defaults, err := parseStudioOptions(nil, io.Discard)
+	if err != nil || defaults.host != "127.0.0.1" || defaults.port != 0 || defaults.noOpen {
+		t.Fatalf("defaults = %#v, %v", defaults, err)
+	}
+	if _, err := parseStudioOptions([]string{"--host", "localhost"}, io.Discard); err == nil {
+		t.Fatal("non-IP host was accepted")
 	}
 	if _, err := parseStudioOptions([]string{"--port", "65536"}, io.Discard); err == nil {
 		t.Fatal("invalid port was accepted")
+	}
+}
+
+func TestStudioClientHostUsesLoopbackForWildcardListeners(t *testing.T) {
+	tests := map[string]string{
+		"0.0.0.0":  "127.0.0.1",
+		"::":       "::1",
+		"10.0.0.8": "10.0.0.8",
+	}
+	for host, want := range tests {
+		if got := studioClientHost(host); got != want {
+			t.Errorf("studioClientHost(%q) = %q, want %q", host, got, want)
+		}
 	}
 }

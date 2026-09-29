@@ -40,7 +40,7 @@ toc:
 
 | 명령 | 용도 |
 | --- | --- |
-| `q studio [--port <port>] [--no-open]` | 루프백에서 내장 Studio 웹 인터페이스를 시작합니다. |
+| `q studio [--host <ip>] [--port <port>] [--no-open]` | 내장 Studio 웹 인터페이스를 시작합니다. 기본값은 `127.0.0.1`과 임의 포트입니다. |
 | `q gateway` | Studio에서 Gateway 공급자와 리스너 설정을 엽니다. |
 | `q gateway start` | OpenAI 호환 Gateway를 시작합니다. |
 | `q systemone` | Studio에서 System One 공급자, decision 모델과 키를 엽니다. |

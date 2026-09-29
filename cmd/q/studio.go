@@ -15,6 +15,7 @@ import (
 )
 
 type studioCommandOptions struct {
+	host   string
 	port   int
 	noOpen bool
 }
@@ -53,11 +54,14 @@ func runStudioAt(
 		return fmt.Errorf("q studio: initialize: %w", err)
 	}
 	defer func() { returnErr = errors.Join(returnErr, handler.Close()) }()
-	listener, err := net.Listen("tcp", net.JoinHostPort("127.0.0.1", fmt.Sprintf("%d", options.port)))
+	listener, err := net.Listen("tcp", net.JoinHostPort(options.host, fmt.Sprintf("%d", options.port)))
 	if err != nil {
 		return fmt.Errorf("q studio: listen: %w", err)
 	}
 	defer listener.Close()
+	if !net.ParseIP(options.host).IsLoopback() {
+		_, _ = fmt.Fprintf(stderr, "q studio: warning: listening on non-loopback host %s without built-in authentication\n", options.host)
+	}
 
 	server := &http.Server{
 		Handler:           handler,
@@ -75,18 +79,24 @@ func runStudioAt(
 		_ = server.Shutdown(shutdownContext)
 	}()
 
-	baseURL := "http://" + listener.Addr().String()
-	url := baseURL
-	if initialPath != "" && initialPath != "/" {
-		url += "/" + strings.TrimPrefix(initialPath, "/")
+	listenURL := "http://" + listener.Addr().String()
+	_, listenPort, err := net.SplitHostPort(listener.Addr().String())
+	if err != nil {
+		return fmt.Errorf("q studio: resolve listen address: %w", err)
 	}
-	if _, err := fmt.Fprintf(stdout, "q studio listening on %s\n", url); err != nil {
+	openURL := "http://" + net.JoinHostPort(studioClientHost(options.host), listenPort)
+	if initialPath != "" && initialPath != "/" {
+		path := "/" + strings.TrimPrefix(initialPath, "/")
+		listenURL += path
+		openURL += path
+	}
+	if _, err := fmt.Fprintf(stdout, "q studio listening on %s\n", listenURL); err != nil {
 		cancelServer()
 		<-shutdownDone
 		return fmt.Errorf("q studio: report listen address: %w", err)
 	}
 	if !options.noOpen && open != nil {
-		if err := open(url); err != nil {
+		if err := open(openURL); err != nil {
 			_, _ = fmt.Fprintf(stderr, "q studio: could not open browser: %v\n", err)
 		}
 	}
@@ -100,13 +110,14 @@ func runStudioAt(
 }
 
 func parseStudioOptions(args []string, output io.Writer) (studioCommandOptions, error) {
-	options := studioCommandOptions{}
+	options := studioCommandOptions{host: "127.0.0.1"}
 	flags := flag.NewFlagSet("q studio", flag.ContinueOnError)
 	flags.SetOutput(output)
 	flags.Usage = func() {
-		_, _ = fmt.Fprintln(output, "usage: q studio [--port <port>] [--no-open]")
+		_, _ = fmt.Fprintln(output, "usage: q studio [--host <ip>] [--port <port>] [--no-open]")
 		flags.PrintDefaults()
 	}
+	flags.StringVar(&options.host, "host", "127.0.0.1", "listen IP address")
 	flags.IntVar(&options.port, "port", 0, "listen port (0 selects a random port)")
 	flags.BoolVar(&options.noOpen, "no-open", false, "do not open the Studio URL in a browser")
 	if err := flags.Parse(args); err != nil {
@@ -115,8 +126,22 @@ func parseStudioOptions(args []string, output io.Writer) (studioCommandOptions, 
 	if flags.NArg() != 0 {
 		return studioCommandOptions{}, fmt.Errorf("unexpected arguments: %s", strings.Join(flags.Args(), " "))
 	}
+	if net.ParseIP(options.host) == nil {
+		return studioCommandOptions{}, fmt.Errorf("host %q is not an IP address", options.host)
+	}
 	if options.port < 0 || options.port > 65535 {
 		return studioCommandOptions{}, fmt.Errorf("port must be between 0 and 65535")
 	}
 	return options, nil
+}
+
+func studioClientHost(host string) string {
+	ip := net.ParseIP(host)
+	if ip == nil || !ip.IsUnspecified() {
+		return host
+	}
+	if ip.To4() != nil {
+		return "127.0.0.1"
+	}
+	return "::1"
 }

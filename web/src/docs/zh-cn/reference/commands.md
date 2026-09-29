@@ -40,7 +40,7 @@ toc:
 
 | 命令 | 用途 |
 | --- | --- |
-| `q studio [--port <port>] [--no-open]` | 在回环地址启动内置 Studio Web 界面。 |
+| `q studio [--host <ip>] [--port <port>] [--no-open]` | 启动内置 Studio Web 界面。默认使用 `127.0.0.1` 和随机端口。 |
 | `q gateway` | 在 Studio 中打开 Gateway 提供商和监听设置。 |
 | `q gateway start` | 启动兼容 OpenAI 的 Gateway。 |
 | `q systemone` | 在 Studio 中打开 System One 提供商、decision 模型和密钥。 |
