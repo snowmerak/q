@@ -653,7 +653,7 @@
 
   <main class:settings-main={activeView === 'settings'} class:sessions-main={activeView === 'sessions'} class:changes-main={activeView === 'changes'}>
     <header class="page-header">
-      <div><h1>{activeView === 'settings' ? 'Settings' : activeView === 'sessions' ? 'Sessions' : activeView === 'changes' ? 'Changes' : activeView === 'operations' ? 'Operations' : activeView === 'help' ? 'Help' : 'Studio overview'}</h1>{#if activeView === 'settings'}<p class="page-description">Global and repository configuration shared by Q sessions.</p>{:else if activeView === 'sessions'}<p class="page-description">Run Q's default loop in a selected repository.</p>{:else if activeView === 'changes'}<p class="page-description">Inspect bounded diffs and review commits.</p>{:else if activeView === 'operations'}<p class="page-description">Usage, workers, local services, logs, and retention.</p>{:else if activeView === 'help'}<p class="page-description">Studio workflows, shortcuts, and recovery.</p>{/if}</div>
+      <div><h1>{activeView === 'settings' ? 'Settings' : activeView === 'sessions' ? 'Sessions' : activeView === 'changes' ? 'Changes' : activeView === 'operations' ? 'Operations' : activeView === 'help' ? 'Help' : 'Studio overview'}</h1>{#if activeView === 'settings'}<p class="page-description">Global and repository configuration shared by Q sessions.</p>{:else if activeView === 'sessions'}<p class="page-description">Navigate registered root sessions and their delegated work.</p>{:else if activeView === 'changes'}<p class="page-description">Inspect bounded diffs and review commits.</p>{:else if activeView === 'operations'}<p class="page-description">Usage, workers, local services, logs, and retention.</p>{:else if activeView === 'help'}<p class="page-description">Studio workflows, shortcuts, and recovery.</p>{/if}</div>
       <div class="connection" aria-live="polite"><span class:online={connection.kind === 'ready'} class="status-dot" aria-hidden="true"></span><span>{connection.kind === 'ready' ? 'Connected' : connection.kind === 'error' ? 'Disconnected' : 'Connecting'}</span></div>
     </header>
 
@@ -662,7 +662,7 @@
         <h2 id="runtime-heading">Runtime</h2>
         <div class="runtime-body"><dl><div><dt>Local endpoint</dt><dd>{window.location.origin}</dd></div><div><dt>Status</dt><dd class:success={connection.kind === 'ready'}>{connection.kind === 'ready' ? 'Connected' : connection.kind === 'error' ? connection.message : 'Connecting…'}</dd></div></dl>{#if connection.kind === 'error'}<button class="retry" onclick={loadStatus}>Retry connection</button>{/if}</div>
       </section>
-      <section class="empty-session" aria-labelledby="empty-heading"><div class="session-outline" aria-hidden="true"><span></span><span></span><span></span></div><h2 id="empty-heading">No session selected</h2><p>Open Sessions to choose a repository and continue a conversation.</p><button class="primary-button overview-session-button" onclick={() => navigate('sessions')}>Open sessions</button></section>
+      <section class="empty-session" aria-labelledby="empty-heading"><div class="session-outline" aria-hidden="true"><span></span><span></span><span></span></div><h2 id="empty-heading">No session selected</h2><p>Open Sessions to register a root session and continue its conversation.</p><button class="primary-button overview-session-button" onclick={() => navigate('sessions')}>Open sessions</button></section>
     {:else if activeView === 'sessions'}
       <SessionView />
     {:else if activeView === 'changes'}

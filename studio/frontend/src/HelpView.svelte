@@ -4,7 +4,7 @@
     ['/model', 'Settings · Models', 'Global and workspace assignments'], ['/gateway', 'Settings · Providers / Services', 'Providers, keys, listener'], ['/systemone', 'Settings · System One', 'Decision providers, models, keys'],
     ['/library', 'Settings · Services', 'Library listener'], ['/loom', 'Settings · Runtime', 'Storage and garbage collection'], ['/ignore', 'Settings · Integrations', '.qignore editor'],
     ['/skills', 'Settings · Integrations', 'Skill catalog and Git lifecycle'], ['/lsp', 'Settings · Integrations', 'Language server profiles'], ['/mcp', 'Settings · Integrations', 'MCP servers and grants'],
-    ['/subagents', 'Settings · Integrations', 'Agent profiles and delegation'], ['/subagent', 'Sessions', 'Delegate from chat'], ['/changes', 'Changes', 'Repository diff review'], ['/commit', 'Changes', 'Commit proposals and execution'], ['/sessions', 'Sessions', 'Repository conversations'], ['/help', 'Help', 'This guide']
+    ['/subagents', 'Settings · Integrations', 'Agent profiles and delegation'], ['/subagent', 'Sessions', 'Delegate from chat'], ['/changes', 'Changes', 'Repository diff review'], ['/commit', 'Changes', 'Commit proposals and execution'], ['/sessions', 'Sessions', 'Registered session trees'], ['/help', 'Help', 'This guide']
   ];
   const shortcuts = [
     ['Enter', 'Send a chat message or submit guidance'], ['Shift + Enter', 'Insert a line break'], ['Esc', 'Close the directory browser or active dialog'], ['Ctrl/Cmd + K', 'Focus the Studio navigation'], ['?', 'Open Help when focus is outside an input']
@@ -12,7 +12,7 @@
 </script>
 
 <section class="help-view">
-  <article class="help-card intro-card"><p class="eyebrow">STUDIO GUIDE</p><h2>Every daily Q workflow now has a Web surface.</h2><p>Choose a repository in Sessions, run and guide the default loop, inspect its delegation tree, then review and commit changes without leaving Studio.</p></article>
+  <article class="help-card intro-card"><p class="eyebrow">STUDIO GUIDE</p><h2>Every daily Q workflow now has a Web surface.</h2><p>Register an existing or new root session for any repository, run and guide its default loop, inspect delegated work in the same tree, then review and commit changes without leaving Studio.</p></article>
   <div class="help-grid">
     <article class="help-card"><div class="help-heading"><h2>Keyboard</h2><p>Shortcuts follow the focused surface.</p></div><div class="shortcut-list">{#each shortcuts as shortcut}<div><kbd>{shortcut[0]}</kbd><span>{shortcut[1]}</span></div>{/each}</div></article>
     <article class="help-card"><div class="help-heading"><h2>Recovery</h2><p>What to do when a local operation is interrupted.</p></div><ul class="recovery-list"><li><strong>Disconnected browser</strong><span>Reload Studio. Runs continue in the server and reconnect from their event cursor.</span></li><li><strong>Interrupted run after restart</strong><span>Continue the same session. Q restores the transcript, active task and delegation checkpoint.</span></li><li><strong>Stale repository view</strong><span>Refresh the active Changes or Settings panel before retrying.</span></li><li><strong>Service unavailable</strong><span>Open Operations for the endpoint and bounded diagnostics, then retry after the service is ready.</span></li></ul></article>

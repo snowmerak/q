@@ -89,7 +89,9 @@ q studio
 Studio opens in the browser. Add a Gateway provider under **Settings →
 Providers**, refresh **Models**, and choose the default model. Provider keys can
 come from environment variables; server access keys are shown only once when
-created. Open **Sessions** to choose any repository and start a conversation.
+created. Open **Sessions**, choose a repository, then register an existing root
+session or create a new one. Registered roots and their delegated sessions appear
+in one global tree.
 
 The bare `q` command remains a compatibility terminal client. Former standalone
 configuration commands such as `q model`, `q gateway`, `q systemone`, `q skills`,
@@ -171,10 +173,10 @@ or Q Library can provide only `Search`, `Save`, and `Delete` through
 
 Studio is the primary interface for daily Q work:
 
-- **Sessions** owns repository selection, conversation lifecycle, Markdown and
-  syntax-highlighted code, questions, pause/resume/stop, guidance, and the
-  delegation tree. It shows the current estimated context usage, and browser
-  refresh reconnects to the durable run cursor.
+- **Sessions** shows registered root sessions from every repository as one
+  delegation tree. Add an existing workspace session or create a new root,
+  open child transcripts, and manage the root conversation lifecycle. It also
+  shows current context usage and reconnects to the durable run cursor.
 - **Changes** owns staged, unstaged, untracked and renamed files, bounded diffs,
   commit proposal review, split commits, execution, and optional push.
 - **Settings** owns global and repository model assignments, Gateway and System
@@ -202,7 +204,7 @@ help entry points.
 |---|---|
 | `/changes` | Browse current staged, unstaged, and untracked repository changes. |
 | `/commit` | Generate and review a commit or split-commit proposal. |
-| `/sessions` | Open another saved workspace session. |
+| `/sessions` | Open the registered root and delegation session tree. |
 | `/new` | Create and switch to a new session. |
 | `/clear` | Clear the current conversation projection. |
 | `/compact` | Summarize older model context without deleting the transcript (TUI and ACP). |
@@ -733,9 +735,10 @@ them before provider dispatch.
 `q studio` starts a user-level loopback server on a random port and opens its
 embedded Svelte interface. `--port` selects a fixed development port and
 `--no-open` leaves the browser closed. Studio does not treat the launch directory
-as a workspace. In Sessions, enter a repository path to list or create its
-persisted Q sessions, restore a transcript, and run the ordinary default loop
-with that repository as its tool and workspace root. The chat persists response,
+as a workspace. Sessions starts from a user-level registry of root sessions.
+Add a repository directory, choose one of its persisted sessions or create a
+new root, then navigate its delegated child sessions as a tree. Each root keeps
+its repository as execution metadata. The chat persists response,
 reasoning, tool, agent activity, and context usage events so a browser can
 reconnect without owning the run lifetime.
 
@@ -765,6 +768,7 @@ the [Q Studio blueprint](docs/studio-blueprint.md).
 | `~/.q/workspace-memory.json` | Workspace Memory settings. |
 | `~/.q/usage.json` | Token Usage service loopback endpoint settings. |
 | `~/.q/mcp.json` | External MCP profiles and role assignments. |
+| `~/.q/studio-sessions.json` | Registered Studio root sessions and their workspace locations. |
 | `~/.q/systemone.json` | System One providers, model assignments, listener settings, and client key hashes (saved with private file permissions). |
 | `~/.q/systemone.key` | Private master key used to verify managed System One API keys. |
 | `~/.q/skills/` | q-managed global Agent Skills. |

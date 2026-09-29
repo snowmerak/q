@@ -29,8 +29,9 @@ type sessionCompactor interface {
 }
 
 type sessionsService struct {
-	runner sessionRunner
-	runs   *sessionRunService
+	runner   sessionRunner
+	runs     *sessionRunService
+	registry *sessionRegistry
 }
 
 type sessionSummary struct {
@@ -83,8 +84,10 @@ type sessionRunRequest struct {
 	Content       string `json:"content"`
 }
 
-func newSessionsService(parent context.Context, runner sessionRunner) *sessionsService {
-	return &sessionsService{runner: runner, runs: newSessionRunService(parent, runner)}
+func newSessionsService(parent context.Context, runner sessionRunner, configDirectory string) *sessionsService {
+	return &sessionsService{
+		runner: runner, runs: newSessionRunService(parent, runner), registry: newSessionRegistry(configDirectory),
+	}
 }
 
 func (service *sessionsService) Close() error {

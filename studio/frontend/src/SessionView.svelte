@@ -66,7 +66,15 @@
     children?: DelegationNode[];
     issue?: string;
   };
-  type FlatDelegation = DelegationNode & { depth: number };
+  type FlatDelegation = DelegationNode & { depth: number; path: string };
+  type RegisteredSessionTree = {
+    registration_id: string;
+    workspace_root: string;
+    session: SessionSummary;
+    registered_at: string;
+    delegations?: DelegationNode[];
+    issue?: string;
+  };
   type DirectoryEntry = { name: string; path: string };
   type DirectoryListing = {
     home: string;
@@ -80,6 +88,9 @@
   let workspaceInput = '';
   let workspaceRoot = '';
   let sessions: SessionSummary[] = [];
+  let registeredSessions: RegisteredSessionTree[] = [];
+  let selectedRegistration: RegisteredSessionTree | null = null;
+  let selectedDelegation: FlatDelegation | null = null;
   let selected: SessionDetail | null = null;
   let messages: Message[] = [];
   let prompt = '';
@@ -105,6 +116,7 @@
   let directoryListing: DirectoryListing | null = null;
   let learningEnabled = true;
   let learningLoading = false;
+  let registrationDialogOpen = false;
 
   function sessionFromLocation() {
     const match = window.location.pathname.match(/^\/sessions\/([^/]+)$/);
@@ -120,7 +132,7 @@
     }
   }
 
-  async function openWorkspace(preferredSession = '') {
+  async function loadWorkspaceCandidates() {
     const requested = workspaceInput.trim();
     if (!requested) return;
     workspaceLoading = true;
@@ -129,26 +141,10 @@
       const response = await fetch(`/api/v1/sessions?workspace_root=${encodeURIComponent(requested)}`);
       if (!response.ok) throw new Error(await apiError(response));
       const result = (await response.json()) as { workspace_root: string; sessions: SessionSummary[] };
-      workspaceRoot = result.workspace_root;
       workspaceInput = result.workspace_root;
       sessions = result.sessions;
-      localStorage.setItem('q-studio-workspace-root', result.workspace_root);
-      await loadLearning();
-      const target = preferredSession || selected?.session.session_id || result.sessions[0]?.session_id || '';
-      if (target && result.sessions.some((session) => session.session_id === target)) {
-        await selectSession(target, false);
-        window.history.replaceState({}, '', `/sessions/${encodeURIComponent(target)}`);
-      } else {
-        pollGeneration += 1;
-        selected = null;
-        messages = [];
-        activeRun = null;
-        sending = false;
-        delegations = [];
-        window.history.replaceState({}, '', '/sessions');
-      }
     } catch (cause) {
-      error = cause instanceof Error ? cause.message : 'Could not open the repository';
+      error = cause instanceof Error ? cause.message : 'Could not inspect the repository';
     } finally {
       workspaceLoading = false;
     }
@@ -188,43 +184,41 @@
     if (!directoryListing?.can_select) return;
     workspaceInput = directoryListing.current;
     closeDirectoryPicker();
-    await openWorkspace();
+    await loadWorkspaceCandidates();
   }
 
   async function refreshSessions() {
-    if (!workspaceRoot) return;
-    workspaceInput = workspaceRoot;
-    await openWorkspace(selected?.session.session_id || '');
+    await loadRegisteredSessions(selectedRegistration?.registration_id || '');
   }
 
-  async function createSession() {
-    const root = workspaceRoot || workspaceInput.trim();
+  async function registerSession(sessionID = '', create = false) {
+    const root = workspaceInput.trim();
     if (!root) return;
     sessionLoading = true;
     pollGeneration += 1;
     error = '';
     try {
-      const response = await fetch('/api/v1/sessions', {
+      const response = await fetch('/api/v1/registered-sessions', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ workspace_root: root })
+        body: JSON.stringify({ workspace_root: root, session_id: sessionID, create })
       });
       if (!response.ok) throw new Error(await apiError(response));
-      const detail = (await response.json()) as SessionDetail;
-      workspaceRoot = detail.workspace_root;
-      workspaceInput = detail.workspace_root;
-      selected = detail;
-      messages = detail.transcript;
-      activeRun = null;
-      sending = false;
-      events = [];
-      delegations = [];
-      sessions = [detail.session, ...sessions.filter((session) => session.session_id !== detail.session.session_id)];
-      window.history.pushState({}, '', `/sessions/${encodeURIComponent(detail.session.session_id)}`);
+      const registration = (await response.json()) as RegisteredSessionTree;
+      registrationDialogOpen = false;
+      sessions = [];
+      await loadRegisteredSessions(registration.registration_id);
     } catch (cause) {
-      error = cause instanceof Error ? cause.message : 'Could not create a session';
+      error = cause instanceof Error ? cause.message : 'Could not register the session';
     } finally {
       sessionLoading = false;
     }
+  }
+
+  function openRegistrationDialog() {
+    registrationDialogOpen = true;
+    workspaceInput = '';
+    sessions = [];
+    error = '';
   }
 
   async function clearSession() {
@@ -247,7 +241,7 @@
       runCursor = 0;
       delegations = [];
       runStatus = 'Conversation cleared';
-      sessions = [selected.session, ...sessions.filter((session) => session.session_id !== selected?.session.session_id)];
+      await refreshSessionListOnly();
     } catch (cause) {
       error = cause instanceof Error ? cause.message : 'Could not clear the conversation';
     } finally {
@@ -276,32 +270,78 @@
     }
   }
 
-  async function deleteSession(sessionID: string) {
-    if (!workspaceRoot || sending) return;
-    const target = sessions.find((session) => session.session_id === sessionID);
-    if (!window.confirm(`Delete ${target?.title || 'this session'}? Its durable archive records will remain available.`)) return;
+  function clearSelectedSession() {
+    pollGeneration += 1;
+    selectedRegistration = null;
+    selectedDelegation = null;
+    selected = null;
+    workspaceRoot = '';
+    messages = [];
+    events = [];
+    activeRun = null;
+    sending = false;
+    delegations = [];
+  }
+
+  async function loadRegisteredSessions(preferredRegistration = '') {
+    workspaceLoading = true;
+    error = '';
+    try {
+      const response = await fetch('/api/v1/registered-sessions', { headers: { Accept: 'application/json' } });
+      if (!response.ok) throw new Error(await apiError(response));
+      registeredSessions = ((await response.json()) as { sessions: RegisteredSessionTree[] }).sessions;
+      const targetID = preferredRegistration || selectedRegistration?.registration_id || sessionFromLocation();
+      const target = registeredSessions.find((registration) => registration.registration_id === targetID && !registration.issue)
+        || registeredSessions.find((registration) => !registration.issue);
+      if (target) {
+        await selectRegisteredSession(target, false);
+        window.history.replaceState({}, '', `/sessions/${encodeURIComponent(target.registration_id)}`);
+      } else {
+        clearSelectedSession();
+        window.history.replaceState({}, '', '/sessions');
+      }
+    } catch (cause) {
+      error = cause instanceof Error ? cause.message : 'Could not load registered sessions';
+    } finally {
+      workspaceLoading = false;
+    }
+  }
+
+  async function unregisterSession(registration: RegisteredSessionTree) {
+    if (!window.confirm(`Remove ${registration.session.title || 'this session'} from Studio? The workspace session will remain on disk.`)) return;
     sessionLoading = true;
     error = '';
     try {
-      const response = await fetch(`/api/v1/sessions/${encodeURIComponent(sessionID)}?workspace_root=${encodeURIComponent(workspaceRoot)}`, { method: 'DELETE' });
+      const response = await fetch(`/api/v1/registered-sessions/${encodeURIComponent(registration.registration_id)}`, { method: 'DELETE' });
       if (!response.ok) throw new Error(await apiError(response));
-      sessions = sessions.filter((session) => session.session_id !== sessionID);
-      if (selected?.session.session_id === sessionID) {
-        pollGeneration += 1;
-        selected = null;
-        messages = [];
-        events = [];
-        activeRun = null;
-        sending = false;
-        delegations = [];
-        const next = sessions[0]?.session_id;
-        if (next) {
-          await selectSession(next, false);
-          window.history.replaceState({}, '', `/sessions/${encodeURIComponent(next)}`);
-        } else {
-          window.history.replaceState({}, '', '/sessions');
-        }
+      registeredSessions = registeredSessions.filter((item) => item.registration_id !== registration.registration_id);
+      if (selectedRegistration?.registration_id === registration.registration_id) {
+        const next = registeredSessions.find((item) => !item.issue);
+        if (next) await selectRegisteredSession(next, false);
+        else clearSelectedSession();
+        window.history.replaceState({}, '', next ? `/sessions/${encodeURIComponent(next.registration_id)}` : '/sessions');
       }
+    } catch (cause) {
+      error = cause instanceof Error ? cause.message : 'Could not unregister the session';
+    } finally {
+      sessionLoading = false;
+    }
+  }
+
+  async function deleteSession() {
+    if (!selected || !selectedRegistration || !workspaceRoot || sending || selectedDelegation) return;
+    if (!window.confirm(`Delete ${selected.session.title || 'this session'} from ${workspaceRoot}? Its durable archive records will remain available.`)) return;
+    sessionLoading = true;
+    error = '';
+    try {
+      const response = await fetch(`/api/v1/sessions/${encodeURIComponent(selected.session.session_id)}?workspace_root=${encodeURIComponent(workspaceRoot)}`, { method: 'DELETE' });
+      if (!response.ok) throw new Error(await apiError(response));
+      await fetch(`/api/v1/registered-sessions/${encodeURIComponent(selectedRegistration.registration_id)}`, { method: 'DELETE' });
+      registeredSessions = registeredSessions.filter((item) => item.registration_id !== selectedRegistration?.registration_id);
+      const next = registeredSessions.find((item) => !item.issue);
+      if (next) await selectRegisteredSession(next, false);
+      else clearSelectedSession();
+      window.history.replaceState({}, '', next ? `/sessions/${encodeURIComponent(next.registration_id)}` : '/sessions');
     } catch (cause) {
       error = cause instanceof Error ? cause.message : 'Could not delete the session';
     } finally {
@@ -342,12 +382,15 @@
     }
   }
 
-  async function selectSession(sessionID: string, push = true) {
-    if (!workspaceRoot) return;
+  async function selectRegisteredSession(registration: RegisteredSessionTree, push = true) {
     pollGeneration += 1;
     sessionLoading = true;
     error = '';
     try {
+      selectedRegistration = registration;
+      selectedDelegation = null;
+      workspaceRoot = registration.workspace_root;
+      const sessionID = registration.session.session_id;
       const response = await fetch(`/api/v1/sessions/${encodeURIComponent(sessionID)}?workspace_root=${encodeURIComponent(workspaceRoot)}`);
       if (!response.ok) throw new Error(await apiError(response));
       selected = (await response.json()) as SessionDetail;
@@ -359,14 +402,25 @@
       activeRun = null;
       runCursor = 0;
       questionAnswer = '';
-      if (push) window.history.pushState({}, '', `/sessions/${encodeURIComponent(sessionID)}`);
-      await Promise.all([reconnectLatestRun(sessionID), loadDelegations(sessionID)]);
+      if (push) window.history.pushState({}, '', `/sessions/${encodeURIComponent(registration.registration_id)}`);
+      await Promise.all([loadLearning(), reconnectLatestRun(sessionID), loadDelegations(sessionID)]);
       await scrollToBottom();
     } catch (cause) {
       error = cause instanceof Error ? cause.message : 'Could not load the session';
     } finally {
       sessionLoading = false;
     }
+  }
+
+  function selectDelegatedSession(registration: RegisteredSessionTree, node: FlatDelegation) {
+    if (selectedRegistration?.registration_id !== registration.registration_id) return;
+    selectedDelegation = node;
+    messages = node.transcript || [];
+    events = [];
+    responseDraft = '';
+    thinkingDraft = '';
+    runStatus = node.state?.status || 'Recorded';
+    void scrollToBottom();
   }
 
   async function sendPrompt() {
@@ -509,11 +563,14 @@
     const response = await fetch(`/api/v1/sessions/${encodeURIComponent(selected.session.session_id)}?workspace_root=${encodeURIComponent(workspaceRoot)}`);
     if (!response.ok) return;
     selected = (await response.json()) as SessionDetail;
-    messages = selected.transcript;
+    if (!selectedDelegation) messages = selected.transcript;
   }
 
-  function flattenDelegations(nodes: DelegationNode[], depth = 0): FlatDelegation[] {
-    return nodes.flatMap((node) => [{ ...node, depth }, ...flattenDelegations(node.children || [], depth + 1)]);
+  function flattenDelegations(nodes: DelegationNode[], depth = 0, parentPath = ''): FlatDelegation[] {
+    return nodes.flatMap((node) => {
+      const path = parentPath ? `${parentPath}/${node.bookmark.invocation_id}` : node.bookmark.invocation_id;
+      return [{ ...node, depth, path }, ...flattenDelegations(node.children || [], depth + 1, path)];
+    });
   }
 
   async function loadDelegations(sessionID = selected?.session.session_id || '') {
@@ -522,6 +579,11 @@
     if (!response.ok) return;
     const result = (await response.json()) as { nodes: DelegationNode[] };
     delegations = flattenDelegations(result.nodes);
+    if (selectedRegistration) {
+      const updated = { ...selectedRegistration, delegations: result.nodes };
+      selectedRegistration = updated;
+      registeredSessions = registeredSessions.map((registration) => registration.registration_id === updated.registration_id ? updated : registration);
+    }
   }
 
   function scheduleDelegationRefresh() {
@@ -530,10 +592,12 @@
   }
 
   async function refreshSessionListOnly() {
-    if (!workspaceRoot) return;
-    const response = await fetch(`/api/v1/sessions?workspace_root=${encodeURIComponent(workspaceRoot)}`);
+    const response = await fetch('/api/v1/registered-sessions');
     if (!response.ok) return;
-    sessions = ((await response.json()) as { sessions: SessionSummary[] }).sessions;
+    registeredSessions = ((await response.json()) as { sessions: RegisteredSessionTree[] }).sessions;
+    if (selectedRegistration) {
+      selectedRegistration = registeredSessions.find((registration) => registration.registration_id === selectedRegistration?.registration_id) || selectedRegistration;
+    }
   }
 
   async function commandRun(action: string, extra: Record<string, string> = {}) {
@@ -620,22 +684,16 @@
   }
 
   onMount(() => {
-    const requestedRoot = new URL(window.location.href).searchParams.get('workspace_root') || '';
-    workspaceInput = requestedRoot || localStorage.getItem('q-studio-workspace-root') || '';
-    if (workspaceInput) void openWorkspace(sessionFromLocation());
+    void loadRegisteredSessions(sessionFromLocation());
     const onPopState = () => {
-      const sessionID = sessionFromLocation();
-      if (sessionID && sessionID !== selected?.session.session_id) void selectSession(sessionID, false);
-      if (!sessionID) {
-        pollGeneration += 1;
-        selected = null;
-        messages = [];
-        activeRun = null;
-        sending = false;
-      }
+      const registrationID = sessionFromLocation();
+      const registration = registeredSessions.find((item) => item.registration_id === registrationID && !item.issue);
+      if (registration && registration.registration_id !== selectedRegistration?.registration_id) void selectRegisteredSession(registration, false);
+      if (!registrationID) clearSelectedSession();
     };
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape' && directoryPickerOpen) closeDirectoryPicker();
+      else if (event.key === 'Escape' && registrationDialogOpen) registrationDialogOpen = false;
     };
     window.addEventListener('popstate', onPopState);
     window.addEventListener('keydown', onKeyDown);
@@ -649,44 +707,37 @@
 </script>
 
 <div class="sessions-layout">
-  <aside class="session-rail" aria-label="Repository sessions">
-    <div class="workspace-picker">
-      <label for="workspace-root">Repository path</label>
-      <div class="workspace-input-row">
-        <input id="workspace-root" bind:value={workspaceInput} placeholder="/path/to/repository" onkeydown={(event) => event.key === 'Enter' && openWorkspace()} />
-        <button class="icon-button" title="Choose repository folder" aria-label="Choose repository folder" onclick={chooseWorkspace} disabled={workspaceLoading}><FolderOpen aria-hidden="true" size={16} /></button>
-      </div>
-    </div>
-
-    {#if workspaceRoot}
-      <div class="workspace-meta"><GitBranch aria-hidden="true" size={14} /><span title={workspaceRoot}>{workspaceRoot}</span></div>
-      <div class="session-list-heading"><span>SESSIONS</span><div><button title="Refresh sessions" onclick={refreshSessions} disabled={workspaceLoading}><RefreshCw aria-hidden="true" size={14} /></button><button title="New session" onclick={createSession} disabled={sessionLoading}><Plus aria-hidden="true" size={15} /></button></div></div>
-      <div class="session-list">
-        {#each sessions as session}
-          <div class="session-list-item" class:active={selected?.session.session_id === session.session_id}>
-            <button class="session-select" onclick={() => selectSession(session.session_id)}>
-              <strong>{session.title || 'New session'}</strong>
-              <small>{formatSessionTime(session.updated_at)}</small>
-              <code>{shortID(session.session_id)}</code>
-            </button>
-            <button class="session-delete" title="Delete session" aria-label={`Delete ${session.title || 'session'}`} onclick={() => deleteSession(session.session_id)} disabled={sending || sessionLoading}><Trash2 aria-hidden="true" size={13} /></button>
-          </div>
-        {:else}
-          <div class="session-list-empty"><p>No sessions in this repository.</p><button class="primary-button" onclick={createSession}><Plus aria-hidden="true" size={15} /> New session</button></div>
+  <aside class="session-rail" aria-label="Registered session tree">
+    <div class="session-list-heading"><span>SESSION TREE</span><div><button title="Refresh session tree" onclick={refreshSessions} disabled={workspaceLoading}><RefreshCw aria-hidden="true" size={14} /></button><button title="Add or create session" onclick={openRegistrationDialog} disabled={sessionLoading}><Plus aria-hidden="true" size={15} /></button></div></div>
+    <div class="session-list session-tree">
+      {#each registeredSessions as registration}
+        <div class="session-list-item session-root" class:active={selectedRegistration?.registration_id === registration.registration_id && !selectedDelegation} class:broken={!!registration.issue}>
+          <button class="session-select" onclick={() => !registration.issue && selectRegisteredSession(registration)} disabled={!!registration.issue}>
+            <strong>{registration.session.title || 'New session'}</strong>
+            <small title={registration.workspace_root}>{registration.workspace_root}</small>
+            <code>{registration.issue || `${formatSessionTime(registration.session.updated_at)} · ${shortID(registration.session.session_id)}`}</code>
+          </button>
+          <button class="session-delete" title="Remove from Studio" aria-label={`Remove ${registration.session.title || 'session'} from Studio`} onclick={() => unregisterSession(registration)} disabled={sending || sessionLoading}><X aria-hidden="true" size={13} /></button>
+        </div>
+        {#each flattenDelegations(registration.delegations || [], 1) as node}
+          <button class="session-child" class:active={selectedRegistration?.registration_id === registration.registration_id && selectedDelegation?.path === node.path} style={`--tree-depth: ${node.depth}`} onclick={async () => { if (selectedRegistration?.registration_id !== registration.registration_id) await selectRegisteredSession(registration); selectDelegatedSession(registration, node); }} disabled={!!registration.issue}>
+            <span class="tree-branch" aria-hidden="true"></span>
+            <span><strong>{node.bookmark.agent.replace(/^builtin\//, '')}</strong><small>{node.state?.status || 'recorded'}</small></span>
+          </button>
         {/each}
-      </div>
-    {:else}
-      <div class="repository-empty"><FolderOpen aria-hidden="true" size={26} /><p>Enter a repository path to load its Q sessions.</p></div>
-    {/if}
+      {:else}
+        <div class="session-list-empty"><p>Add a workspace session to build your Studio session tree.</p><button class="primary-button" onclick={openRegistrationDialog}><Plus aria-hidden="true" size={15} /> Add session</button></div>
+      {/each}
+    </div>
   </aside>
 
   <section class="chat-panel">
     {#if error}<div class="session-error" role="alert">{error}</div>{/if}
     {#if selected}
       <div class="chat-heading">
-        <div><h2>{selected.session.title || 'New session'}</h2><p>{workspaceRoot}</p></div>
+        <div><h2>{selectedDelegation ? selectedDelegation.bookmark.agent.replace(/^builtin\//, '') : selected.session.title || 'New session'}</h2><p>{selectedDelegation ? selectedDelegation.bookmark.prompt : workspaceRoot}</p></div>
         <div class="chat-heading-actions">
-          {#if activeRun?.context_size}
+          {#if !selectedDelegation && activeRun?.context_size}
             <div class="context-usage" title={`Estimated context usage: ${formatTokenCount(activeRun.context_used)} of ${formatTokenCount(activeRun.context_size)} tokens`}>
               <span>Context {contextPercent(activeRun)}%</span>
               <small>{formatTokenCount(activeRun.context_used)}/{formatTokenCount(activeRun.context_size)}</small>
@@ -694,11 +745,14 @@
             </div>
           {/if}
           <span class:running={sending}>{runStatus || (sending ? 'Running' : 'Ready')}</span>
-          <button class:enabled={learningEnabled} title={`Learning ${learningEnabled ? 'enabled' : 'disabled'}`} aria-label={`Turn learning ${learningEnabled ? 'off' : 'on'}`} onclick={toggleLearning} disabled={sending || learningLoading}><BrainCircuit aria-hidden="true" size={15} /></button>
-          <button title="Compact context" aria-label="Compact context" onclick={compactSession} disabled={sending || sessionLoading}><Minimize2 aria-hidden="true" size={15} /></button>
-          <button title="Clear conversation" aria-label="Clear conversation" onclick={clearSession} disabled={sending || sessionLoading}><Eraser aria-hidden="true" size={15} /></button>
-          {#if sending && activeRun?.status === 'paused'}<button title="Resume turn" aria-label="Resume turn" onclick={() => commandRun('resume')}><Play aria-hidden="true" size={15} /></button>{:else if sending}<button title="Pause turn" aria-label="Pause turn" onclick={() => commandRun('pause')}><Pause aria-hidden="true" size={15} /></button>{/if}
-          {#if sending}<button class="stop-control" title="Stop turn" aria-label="Stop turn" onclick={stopTurn}><Square aria-hidden="true" size={13} fill="currentColor" /></button>{/if}
+          {#if !selectedDelegation}
+            <button class:enabled={learningEnabled} title={`Learning ${learningEnabled ? 'enabled' : 'disabled'}`} aria-label={`Turn learning ${learningEnabled ? 'off' : 'on'}`} onclick={toggleLearning} disabled={sending || learningLoading}><BrainCircuit aria-hidden="true" size={15} /></button>
+            <button title="Compact context" aria-label="Compact context" onclick={compactSession} disabled={sending || sessionLoading}><Minimize2 aria-hidden="true" size={15} /></button>
+            <button title="Clear conversation" aria-label="Clear conversation" onclick={clearSession} disabled={sending || sessionLoading}><Eraser aria-hidden="true" size={15} /></button>
+            <button title="Delete workspace session" aria-label="Delete workspace session" onclick={deleteSession} disabled={sending || sessionLoading}><Trash2 aria-hidden="true" size={14} /></button>
+            {#if sending && activeRun?.status === 'paused'}<button title="Resume turn" aria-label="Resume turn" onclick={() => commandRun('resume')}><Play aria-hidden="true" size={15} /></button>{:else if sending}<button title="Pause turn" aria-label="Pause turn" onclick={() => commandRun('pause')}><Pause aria-hidden="true" size={15} /></button>{/if}
+            {#if sending}<button class="stop-control" title="Stop turn" aria-label="Stop turn" onclick={stopTurn}><Square aria-hidden="true" size={13} fill="currentColor" /></button>{/if}
+          {/if}
         </div>
       </div>
       <div class="transcript" bind:this={transcriptElement} aria-live="polite">
@@ -730,22 +784,26 @@
         {#if responseDraft}<article class="chat-message streaming-message"><div class="message-avatar"><Bot aria-hidden="true" size={17} /></div><div class="message-content"><header>Q <span>responding</span></header><Markdown content={responseDraft} /></div></article>{/if}
         {#if sessionLoading}<div class="transcript-loading">Loading session…</div>{/if}
       </div>
-      {#if activeRun?.pending_question}
+      {#if !selectedDelegation && activeRun?.pending_question}
         <section class="run-question" aria-labelledby="run-question-title">
           <div><span>Q NEEDS INPUT</span><h3 id="run-question-title">{activeRun.pending_question.question}</h3>{#if activeRun.pending_question.context}<p>{activeRun.pending_question.context}</p>{/if}</div>
           {#if activeRun.pending_question.choices?.length}<div class="question-choices">{#each activeRun.pending_question.choices as choice}<button onclick={() => answerQuestion(choice.id)}><strong>{choice.label}</strong>{#if choice.description}<span>{choice.description}</span>{/if}</button>{/each}</div>{/if}
           <div class="question-answer"><input bind:value={questionAnswer} placeholder="Write an answer…" onkeydown={(event) => event.key === 'Enter' && answerQuestion()} /><button class="primary-button" onclick={() => answerQuestion()} disabled={!questionAnswer.trim()}>Answer</button></div>
         </section>
       {/if}
-      <div class="composer-wrap">
-        <div class="composer">
-          <textarea bind:value={prompt} onkeydown={submitFromKeyboard} placeholder={sending ? 'Guide the current turn…' : 'Ask Q to work in this repository…'} rows="3"></textarea>
-          <button class="send-button" title={sending ? 'Guide current turn' : 'Send message'} onclick={sendPrompt} disabled={!prompt.trim()}><ArrowUp aria-hidden="true" size={17} /></button>
+      {#if selectedDelegation}
+        <div class="delegated-session-note"><strong>Delegated session</strong><span>This transcript belongs to the selected child invocation. Interaction remains owned by its parent session.</span></div>
+      {:else}
+        <div class="composer-wrap">
+          <div class="composer">
+            <textarea bind:value={prompt} onkeydown={submitFromKeyboard} placeholder={sending ? 'Guide the current turn…' : 'Ask Q to work in this repository…'} rows="3"></textarea>
+            <button class="send-button" title={sending ? 'Guide current turn' : 'Send message'} onclick={sendPrompt} disabled={!prompt.trim()}><ArrowUp aria-hidden="true" size={17} /></button>
+          </div>
+          <p>{sending ? 'Enter to redirect the current work with guidance' : 'Enter to send'} · Shift+Enter for a new line · {workspaceRoot}</p>
         </div>
-        <p>{sending ? 'Enter to redirect the current work with guidance' : 'Enter to send'} · Shift+Enter for a new line · default loop runs with this repository as root</p>
-      </div>
+      {/if}
     {:else}
-      <div class="chat-empty"><Bot aria-hidden="true" size={34} /><h2>{workspaceRoot ? 'Choose or create a session' : 'Open a repository'}</h2><p>{workspaceRoot ? 'The default loop will use the selected repository for files, tools, and session state.' : 'Sessions are scoped to the repository path you choose.'}</p>{#if workspaceRoot}<button class="primary-button" onclick={createSession}><Plus aria-hidden="true" size={15} /> New session</button>{/if}</div>
+      <div class="chat-empty"><Bot aria-hidden="true" size={34} /><h2>Build a session tree</h2><p>Register an existing workspace session or create a new root session.</p><button class="primary-button" onclick={openRegistrationDialog}><Plus aria-hidden="true" size={15} /> Add session</button></div>
     {/if}
   </section>
 
@@ -778,6 +836,40 @@
     </div>
   </aside>
 </div>
+
+{#if registrationDialogOpen}
+  <div class="directory-dialog-backdrop">
+    <div class="directory-dialog registration-dialog" role="dialog" aria-modal="true" aria-labelledby="registration-dialog-title">
+      <header>
+        <div><span>SESSION REGISTRY</span><h2 id="registration-dialog-title">Add a root session</h2></div>
+        <button class="dialog-close" title="Close" aria-label="Close session registry" onclick={() => registrationDialogOpen = false}><X aria-hidden="true" size={18} /></button>
+      </header>
+      <div class="registration-workspace">
+        <label for="registration-workspace"><span>Workspace directory</span><input id="registration-workspace" bind:value={workspaceInput} placeholder="/path/to/repository" onkeydown={(event) => event.key === 'Enter' && loadWorkspaceCandidates()} /></label>
+        <button class="icon-button" title="Choose repository folder" aria-label="Choose repository folder" onclick={chooseWorkspace} disabled={workspaceLoading}><FolderOpen aria-hidden="true" size={16} /></button>
+        <button class="secondary-button" onclick={loadWorkspaceCandidates} disabled={workspaceLoading || !workspaceInput.trim()}>Load sessions</button>
+      </div>
+      <div class="registration-candidates">
+        {#if workspaceLoading}
+          <div class="directory-state">Loading sessions…</div>
+        {:else if workspaceInput && sessions.length}
+          <button class="new-session-candidate" onclick={() => registerSession('', true)} disabled={sessionLoading}><Plus aria-hidden="true" size={16} /><span><strong>Create new session</strong><small>{workspaceInput}</small></span></button>
+          {#each sessions as session}
+            <button onclick={() => registerSession(session.session_id, false)} disabled={sessionLoading || registeredSessions.some((registration) => registration.workspace_root === workspaceInput && registration.session.session_id === session.session_id)}>
+              <GitBranch aria-hidden="true" size={15} /><span><strong>{session.title || 'New session'}</strong><small>{formatSessionTime(session.updated_at)} · {shortID(session.session_id)}</small></span>
+              <em>{registeredSessions.some((registration) => registration.workspace_root === workspaceInput && registration.session.session_id === session.session_id) ? 'Registered' : 'Add'}</em>
+            </button>
+          {/each}
+        {:else if workspaceInput}
+          <div class="registration-empty"><p>No saved sessions found in this workspace.</p><button class="primary-button" onclick={() => registerSession('', true)} disabled={sessionLoading}><Plus aria-hidden="true" size={15} /> Create new session</button></div>
+        {:else}
+          <div class="directory-state">Choose a workspace directory, then select an existing session or create a new one.</div>
+        {/if}
+      </div>
+      <footer><div><span>REGISTRATION</span><code>Workspace data stays in the repository. Studio stores only the root session reference.</code></div><button class="secondary-button" onclick={() => registrationDialogOpen = false}>Cancel</button></footer>
+    </div>
+  </div>
+{/if}
 
 {#if directoryPickerOpen}
   <div class="directory-dialog-backdrop">

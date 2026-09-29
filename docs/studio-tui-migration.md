@@ -32,6 +32,11 @@ Gateway/System One/Library service, Loom operation, MCP, LSP, Skills, subagent/A
 `.qignore`, changes와 commit workflow, durable run과 개입 control이 있다. directory
 browser는 Go API가 home에서 시작해 모든 지원 OS에 같은 Web UI를 제공한다.
 
+Sessions는 user-level registry에 등록한 여러 workspace의 root session을 하나의 tree로
+표시한다. workspace directory에서 기존 root를 고르거나 새 session을 만들어 등록하고,
+기존 nested delegation session은 클릭 가능한 child transcript로 투영한다. registry는
+root 위치만 보유하며 transcript와 delegation의 권위는 workspace `.q`에 남는다.
+
 workspace model override, usage, service/worker health와 full help까지 Studio로 이전했다.
 bare `q` 대화 TUI와 ACP는 호환 client로 남지만 독립 설정 CLI 명령은 Studio route를
 연다.
@@ -270,7 +275,7 @@ bare `q` 대화 TUI와 ACP는 호환 client로 남지만 독립 설정 CLI 명�
 | --- | --- | --- | --- |
 | App shell/status/navigation | Overview, Sessions, Changes, Operations, Settings, Help | M6 operations와 help | 완료 |
 | Repository directory browser | Go directory API, home 시작 | M1 유지 | 완료 |
-| Session 목록/생성/전환 | 생성·전환·삭제·clear·compact·learning·run reconnect 지원 | M1, M5 | 완료 |
+| Session tree/등록/전환 | 전역 root registry, workspace에서 기존 root 선택·새 root 생성, child transcript, 삭제·clear·compact·learning·run reconnect | M1, M5 | 완료 |
 | Chat streaming | durable event log, cursor replay와 background run | M1, M5 | 완료 |
 | Session context usage | 예측 token/context window와 사용률 meter | M1 | 완료 |
 | Markdown/code rendering | 안전한 Markdown과 언어별 highlighting | M1 | 완료 |

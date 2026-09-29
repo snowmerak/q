@@ -144,6 +144,117 @@ func TestSessionsAPIRejectsMissingWorkspace(t *testing.T) {
 	}
 }
 
+func TestRegisteredSessionsPersistTreesAndUnregisterWithoutDeletingSource(t *testing.T) {
+	root := t.TempDir()
+	store, lock, err := workspace.CreateSession(root, "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC().Truncate(time.Second)
+	if err := store.Save(workspace.Session{
+		Title: "Registered root", UpdatedAt: &now,
+		Transcript: []client.Message{{Role: client.RoleUser, Content: "root conversation"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	bookmark := workspace.DelegationBookmark{
+		InvocationID: "child-session", CallIndex: 0, ToolIndex: 0, CallID: "delegate-1",
+		Agent: "builtin/research", Prompt: "inspect it", RunID: "child-run",
+	}
+	if _, err := store.AddDelegation(bookmark); err != nil {
+		t.Fatal(err)
+	}
+	child, err := store.ChildStore(bookmark.InvocationID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := child.Save(workspace.Session{
+		Title: "Research", UpdatedAt: &now,
+		Transcript: []client.Message{{Role: client.RoleAssistant, Content: "child conversation"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := lock.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	configStore := config.Store{Dir: t.TempDir()}
+	handler, err := newHandler(configStore)
+	if err != nil {
+		t.Fatal(err)
+	}
+	register := serveJSON(t, handler, http.MethodPost, "/api/v1/registered-sessions", registerSessionRequest{
+		WorkspaceRoot: root, SessionID: store.SessionID,
+	})
+	if register.Code != http.StatusCreated {
+		t.Fatalf("register session = %d %s", register.Code, register.Body.String())
+	}
+	var registered registeredSessionTree
+	if err := json.Unmarshal(register.Body.Bytes(), &registered); err != nil {
+		t.Fatal(err)
+	}
+	if registered.RegistrationID == "" || registered.Session.Title != "Registered root" || len(registered.Delegations) != 1 ||
+		len(registered.Delegations[0].Transcript) != 1 {
+		t.Fatalf("registered tree = %#v", registered)
+	}
+
+	reopened, err := newHandler(configStore)
+	if err != nil {
+		t.Fatal(err)
+	}
+	list := httptest.NewRecorder()
+	reopened.ServeHTTP(list, httptest.NewRequest(http.MethodGet, "/api/v1/registered-sessions", nil))
+	if list.Code != http.StatusOK || !strings.Contains(list.Body.String(), "child conversation") {
+		t.Fatalf("persisted registry = %d %s", list.Code, list.Body.String())
+	}
+
+	unregister := httptest.NewRecorder()
+	reopened.ServeHTTP(unregister, httptest.NewRequest(
+		http.MethodDelete, "/api/v1/registered-sessions/"+registered.RegistrationID, nil,
+	))
+	if unregister.Code != http.StatusNoContent {
+		t.Fatalf("unregister = %d %s", unregister.Code, unregister.Body.String())
+	}
+	if _, err := store.Load(); err != nil {
+		t.Fatalf("unregister deleted source session: %v", err)
+	}
+	list = httptest.NewRecorder()
+	reopened.ServeHTTP(list, httptest.NewRequest(http.MethodGet, "/api/v1/registered-sessions", nil))
+	if list.Code != http.StatusOK || strings.Contains(list.Body.String(), "Registered root") {
+		t.Fatalf("registry after unregister = %d %s", list.Code, list.Body.String())
+	}
+}
+
+func TestRegisteredSessionsCanCreateAndRegisterRootSession(t *testing.T) {
+	root := t.TempDir()
+	handler, err := newHandler(config.Store{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	response := serveJSON(t, handler, http.MethodPost, "/api/v1/registered-sessions", registerSessionRequest{
+		WorkspaceRoot: root,
+		Create:        true,
+	})
+	if response.Code != http.StatusCreated {
+		t.Fatalf("create and register session = %d %s", response.Code, response.Body.String())
+	}
+	var registered registeredSessionTree
+	if err := json.Unmarshal(response.Body.Bytes(), &registered); err != nil {
+		t.Fatal(err)
+	}
+	if registered.RegistrationID == "" || registered.Session.SessionID == "" || registered.WorkspaceRoot != root {
+		t.Fatalf("created registration = %#v", registered)
+	}
+	store, err := (workspace.Store{Root: root}).ForSession(registered.Session.SessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Load(); err != nil {
+		t.Fatalf("load created root session: %v", err)
+	}
+}
+
 func TestSessionsAPIClearsAndDeletesSessions(t *testing.T) {
 	root := t.TempDir()
 	store, lock, err := workspace.CreateSession(root, "test")

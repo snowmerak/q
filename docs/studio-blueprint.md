@@ -9,9 +9,9 @@ TUI 기능 이전의 실행 순서, capability별 상태와 acceptance 기록은
 [Studio TUI migration](studio-tui-migration.md)이 소유한다.
 
 현재 구현: user-level `q studio` loopback server와 embedded Svelte SPA가 TUI의 일상
-기능을 소유한다. Sessions는 canonical repository별 session lifecycle, 안전한 Markdown과
-code highlighting, durable run cursor, 질문, pause/resume/cancel/guidance와 delegation
-tree를 제공한다. Changes는 bounded diff와 commit review/execute를 제공한다. Settings는
+기능을 소유한다. Sessions는 여러 repository의 등록된 root와 nested delegation을 전역
+session tree로 표시하고, 안전한 Markdown과 code highlighting, durable run cursor, 질문,
+pause/resume/cancel/guidance를 제공한다. Changes는 bounded diff와 commit review/execute를 제공한다. Settings는
 global/workspace model, Gateway, System One, Library/Loom, MCP/LSP/Skill/subagent/ACP와
 `.qignore`를 같은 Go store와 validator로 편집한다. Operations는 usage, worker/service
 health, bounded log와 보존 상태를 보여주고 Help는 이전 TUI 명령의 Web 경로를 안내한다.
@@ -40,17 +40,18 @@ Loop를 실행한 뒤 Change Request를 요청한 부모에게 돌려준다. Stu
 
 ### Workspace와 session 소유권
 
-- 각 session이 하나의 canonical `workspace_root`를 소유한다.
-- 새 session을 만들 때 working directory를 선택하며, 기존 session을 열면 저장된
-  workspace가 함께 복원된다.
+- Studio의 기본 탐색 단위는 workspace가 아니라 등록된 root session tree다.
+- 각 root session이 하나의 canonical `workspace_root`를 소유한다. 새 root를 등록할 때
+  workspace directory에서 기존 session을 고르거나 새 session을 만든다.
 - run은 session의 workspace를 상속한다. task와 change는 자신을 만든 session 및
   repository 관계를 명시적으로 기록한다.
 - Studio는 서로 다른 workspace에 속한 session과 run을 한 process에서 동시에
   조회하고 실행할 수 있다.
 - Studio를 어느 디렉터리에서 시작했는지는 session, run, task 또는 Git 작업의
   workspace를 결정하지 않는다.
-- 최근에 열었던 workspace catalog는 session 발견을 위한 사용자 단위 projection이다.
-  source tree와 workspace별 Q 데이터의 권위는 각 canonical root에 남는다.
+- user-level session registry는 root session ID와 workspace 위치만 보유하는 탐색
+  projection이다. transcript, child delegation과 workspace별 Q 데이터의 권위는 각
+  canonical root에 남는다.
 
 ### 실행 경로 분리
 
@@ -134,8 +135,9 @@ GitHub/GitLab 호환 API, 임의 조직의 권한 모델은 초기 목표에 포
 - 설정 화면은 model/provider, Gateway, System One, Library, Loom, Skills, LSP, MCP,
   subagent와 `.qignore`를 관리한다.
 - `q studio`는 시작 CWD와 무관한 global shell, embedded frontend, service status와
-  global Settings를 제공한다. Sessions 화면은 repository root를 명시적으로 받아
-  `.q/sessions`의 목록·생성·transcript 복원과 default loop 실행을 제공한다. 실행은
+  global Settings를 제공한다. Sessions 화면은 등록한 root session과 nested delegation을
+  전역 tree로 보여준다. 등록할 때 repository root를 명시해 `.q/sessions`의 기존 root를
+  선택하거나 새 root를 만들며, 선택한 root에서 default loop를 실행한다. 실행은
   기존 Bubble Tea model을 renderer 없이 구동하므로 TUI와 같은 tool runtime, 저장,
   compaction과 delegation 경로를 사용한다.
 
@@ -158,8 +160,8 @@ GitHub/GitLab 호환 API, 임의 조직의 권한 모델은 초기 목표에 포
 
 1. 사용자가 `q studio`를 실행한다. 시작 디렉터리는 Studio scope를 제한하지 않는다.
 2. 출력된 local URL을 브라우저에서 연다.
-3. workspace와 함께 표시되는 기존 session을 선택하거나 working directory를 골라
-   새 session을 만들고 메시지를 보낸다.
+3. 전역 session tree에서 root 또는 child를 연다. 새 root는 workspace directory를
+   고른 뒤 기존 session을 등록하거나 새 session을 만들어 추가한다.
 4. reasoning, 응답, tool call과 하위 agent 활동이 순서대로 갱신된다.
 5. agent가 질문하면 사용자가 같은 화면에서 답하고 실행을 이어간다.
 6. 모델, provider, skill과 연결 설정을 별도 설정 화면에서 관리한다.
@@ -199,7 +201,7 @@ workflow에서 시작한다. 장기 task graph와 Change Request가 도입될 �
 | 영역 | 제공할 정보와 동작 |
 | --- | --- |
 | Workspaces | session에서 발견하거나 사용자가 연 canonical root, repository와 상태 요약 |
-| Sessions | workspace가 표시된 session 목록, 생성·이름 변경·삭제, transcript와 active task |
+| Sessions | 전역 root/child session tree, workspace 등록, 생성·삭제, transcript와 active task |
 | Chat | composer, streaming message/reasoning, tool result, 질문과 실행 중단 |
 | Agent activity | 호출 tree, 선택한 run의 timeline, 자식 호출과 runtime 상태 |
 | Work graph | 의존성 graph, 담당 역할, checkpoint, 차단 원인과 우선순위 |
@@ -255,10 +257,12 @@ flowchart LR
     Runtime[Agent Loop / local execution host]
     Git[Git and worktree service]
     Repo[(Git repository)]
-    Sessions[(Workspace sessions)]
+    Registry[(User session registry)]
+    Sessions[(Workspace session stores)]
 
     Browser -->|commands and queries| Studio
     Studio -->|snapshot and event subscription| Browser
+    Studio --> Registry
     Studio --> Commands
     Commands --> Scheduler
     Commands --> Workers
@@ -276,7 +280,7 @@ flowchart LR
 ### Studio host
 
 - `q studio`의 process lifecycle과 browser asset 제공을 소유한다.
-- 사용자 단위 workspace catalog, session별 workspace admission, browser session과
+- 사용자 단위 root session registry, session별 workspace admission, browser session과
   local authentication을 관리한다.
 - command API, query API와 cursor 기반 event subscription을 제공한다.
 - agent worker, task scheduler와 Git service의 상태를 조정한다.
@@ -310,7 +314,7 @@ flowchart LR
 
 | 데이터 | 권위 원본 | 재생성 가능한 projection |
 | --- | --- | --- |
-| Workspace 관계 | session의 canonical root와 Studio의 최근 root catalog | workspace 목록과 상태 요약 |
+| Session 등록 | user-level root session registry와 session의 canonical root | 전역 session tree와 workspace 상태 요약 |
 | 대화와 agent context | workspace session과 child session | Web transcript, 검색 index |
 | Run lifecycle | append-only Studio event log | 호출 tree, timeline, 상태 요약 |
 | Task와 dependency | Studio task store | graph layout, 역할별 queue |
@@ -479,17 +483,18 @@ TUI와 service 호출이 같은 저장 결과를 만든다.
   key는 write-only로 다루고 System One provider key는 환경 변수 이름만 저장하며,
   model discovery 응답에도 credential을 포함하지 않는다.
 - workspace model override를 repository path가 명시된 Settings surface에 연결한다.
-- 최근 workspace catalog와 workspace가 표시된 session 목록.
-- working directory를 선택하는 session 생성, 전환·삭제와 transcript 조회.
+- user-level root session registry와 여러 workspace의 session tree.
+- workspace directory에서 기존 session 등록 또는 새 root 생성, 전환·등록 해제·삭제와
+  root/child transcript 조회.
 - message 전송, streaming, tool call/result, reasoning, active task와 cancel.
 - durable event append, snapshot과 reconnect cursor.
 - 현재 `/changes`에 해당하는 repository diff 화면.
 
 완료된 기반: user-level loopback server, browser 자동 열기와 `--no-open`, embedded
 Svelte SPA, global status API, SPA/asset/API routing 및 graceful shutdown. global/workspace
-Settings, repository path 기반 session 목록·생성·삭제·transcript, rendererless default
+Settings, 전역 root session registry·생성·삭제·root/child transcript, rendererless default
 loop, durable NDJSON event log와 cursor reconnect, `ask_to_user`, pause/resume/cancel/guidance,
-delegation tree와 repository diff 화면이 연결되어 있다.
+delegation session tree와 repository diff 화면이 연결되어 있다.
 
 완료 기준: 브라우저를 새로고침하거나 잠시 끊어도 실행을 잃지 않고 같은 session과
 event 순서를 복구하며, 일상 대화와 변경 검토에 TUI가 필요하지 않다.
@@ -504,11 +509,13 @@ event 순서를 복구하며, 일상 대화와 변경 검토에 TUI가 필요하
 완료 기준: TUI 기능 이전 표의 모든 항목이 Web GUI에서 acceptance를 충족하고, 같은
 설정을 두 UI에서 열어도 손실이나 schema drift가 없다.
 
-### S3. Durable run registry와 호출 tree
+### S3. Global session tree와 node별 run registry
 
 - run/parent/task 식별자와 worker heartbeat.
-- 여러 동시 run의 tree, timeline, 로그와 tool/agent 상세 화면.
-- child session과 delegation recovery를 Studio projection에 연결.
+- 등록된 root와 nested child session을 전역 navigation tree로 유지한다.
+- 여러 동시 run의 node별 timeline, 로그와 tool/agent 상세 화면.
+- child session과 delegation recovery를 Studio projection에 연결한다. child의 직접 개입은
+  parent ownership과 recovery 계약을 보존하는 command로 추가한다.
 - usage, error와 duration 요약.
 
 완료 기준: 부모→자식→손자 호출을 실행 중과 재시작 후 같은 관계로 조회하고, 각
@@ -563,7 +570,7 @@ TUI 기능을 제거하기 전에는 기능 이전 표의 사용자 흐름을 We
 ## 17. 주요 위험과 미결정 사항
 
 - standalone binary 이외의 Studio desktop packaging 필요 여부.
-- 최근 workspace catalog의 저장 위치와 기존 workspace를 발견·가져오는 UX.
+- 등록 파일과 실제 workspace session이 이동·삭제됐을 때 재연결하거나 정리하는 UX.
 - event log를 workspace별 파일, SQLite 또는 기존 archive service 중 어디에 둘지.
 - 향후 network worker가 local execution host와 공유할 worker protocol의 범위.
 - pause의 정확한 safe point와 취소할 수 없는 tool process의 강제 종료 정책.
