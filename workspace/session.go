@@ -354,6 +354,9 @@ func (s Store) ClearSession() error {
 	if err := s.ClearDelegations(); err != nil {
 		return err
 	}
+	if err := s.clearDelegationState(); err != nil {
+		return err
+	}
 	if err := s.Clear(); err != nil {
 		return err
 	}

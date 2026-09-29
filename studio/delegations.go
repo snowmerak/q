@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net/http"
 	"os"
+	"strings"
 
 	"github.com/snowmerak/q/workspace"
 )
@@ -39,6 +40,41 @@ func (service *sessionsService) serveDelegations(writer http.ResponseWriter, req
 		return
 	}
 	writeJSON(writer, http.StatusOK, delegationTreeResponse{WorkspaceRoot: root, SessionID: store.SessionID, Nodes: nodes})
+}
+
+func (service *sessionsService) serveDeleteDelegation(writer http.ResponseWriter, request *http.Request) {
+	root, err := canonicalWorkspaceDirectory(request.URL.Query().Get("workspace_root"))
+	if err != nil {
+		writeAPIError(writer, http.StatusBadRequest, err)
+		return
+	}
+	pathValue := strings.Trim(request.URL.Query().Get("path"), "/")
+	if pathValue == "" {
+		writeAPIError(writer, http.StatusBadRequest, errors.New("delegation path is required"))
+		return
+	}
+	invocationPath := strings.Split(pathValue, "/")
+	if len(invocationPath) > maximumDelegationTreeDepth {
+		writeAPIError(writer, http.StatusBadRequest, errors.New("delegation path exceeds maximum depth"))
+		return
+	}
+	if err := workspace.DeleteCompletedDelegation(
+		root,
+		request.PathValue("session"),
+		invocationPath,
+		"q studio delegation delete",
+	); err != nil {
+		switch {
+		case errors.Is(err, workspace.ErrDelegationNotFound):
+			writeAPIError(writer, http.StatusNotFound, err)
+		case errors.Is(err, workspace.ErrDelegationNotCompleted):
+			writeAPIError(writer, http.StatusConflict, err)
+		default:
+			writeSessionError(writer, err)
+		}
+		return
+	}
+	writer.WriteHeader(http.StatusNoContent)
 }
 
 func loadDelegationNodes(store workspace.Store, depth int, remaining *int) ([]delegationNode, error) {

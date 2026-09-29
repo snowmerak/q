@@ -385,6 +385,67 @@ func TestSessionDelegationTreeIncludesChildStateAndTranscript(t *testing.T) {
 	}
 }
 
+func TestSessionDelegationDeleteOnlyAcceptsCompletedChildren(t *testing.T) {
+	root := t.TempDir()
+	store, lock, err := workspace.CreateSession(root, "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for index, item := range []struct {
+		id     string
+		status string
+	}{
+		{id: "completed-child", status: "completed"},
+		{id: "running-child", status: "running"},
+	} {
+		bookmark := workspace.DelegationBookmark{
+			InvocationID: item.id, CallIndex: index, CallID: "call-" + item.id,
+			Agent: "builtin/research", Prompt: "inspect", RunID: "run-" + item.id,
+		}
+		if _, err := store.AddDelegation(bookmark); err != nil {
+			t.Fatal(err)
+		}
+		child, err := store.ChildStore(item.id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := child.Save(workspace.Session{RunID: bookmark.RunID}); err != nil {
+			t.Fatal(err)
+		}
+		state := workspace.DelegationState{Agent: bookmark.Agent, Prompt: bookmark.Prompt, RunID: bookmark.RunID, Status: item.status}
+		if item.status == "completed" {
+			state.Result = &client.ToolResult{Content: "done"}
+		}
+		if err := child.SaveDelegationState(state); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := lock.Close(); err != nil {
+		t.Fatal(err)
+	}
+	handler, err := newHandler(config.Store{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := "/api/v1/sessions/" + store.SessionID + "/delegations?workspace_root=" + url.QueryEscape(root) + "&path="
+
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, httptest.NewRequest(http.MethodDelete, base+"running-child", nil))
+	if response.Code != http.StatusConflict {
+		t.Fatalf("delete running delegation = %d %s", response.Code, response.Body.String())
+	}
+
+	response = httptest.NewRecorder()
+	handler.ServeHTTP(response, httptest.NewRequest(http.MethodDelete, base+"completed-child", nil))
+	if response.Code != http.StatusNoContent {
+		t.Fatalf("delete completed delegation = %d %s", response.Code, response.Body.String())
+	}
+	remaining, err := store.LoadDelegations()
+	if err != nil || len(remaining) != 1 || remaining[0].InvocationID != "running-child" {
+		t.Fatalf("remaining delegations = %#v, %v", remaining, err)
+	}
+}
+
 func TestDirectoryBrowserDefaultsToHomeAndListsDirectories(t *testing.T) {
 	home := t.TempDir()
 	child := filepath.Join(home, "repository")

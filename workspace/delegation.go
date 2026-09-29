@@ -16,6 +16,11 @@ import (
 
 const delegationVersion = 1
 
+var (
+	ErrDelegationNotFound     = errors.New("workspace: delegation does not exist")
+	ErrDelegationNotCompleted = errors.New("workspace: delegation is not completed")
+)
+
 // DelegationBookmark identifies one call by its position in the parent
 // transcript. Call IDs alone are not unique across model turns.
 type DelegationBookmark struct {
@@ -148,6 +153,70 @@ func (s Store) AddDelegation(item DelegationBookmark) (DelegationBookmark, error
 	return item, nil
 }
 
+// deleteCompletedDelegation removes one completed child invocation and its
+// descendants while preserving the completed tool exchange in the parent
+// transcript. The caller must own the root session lock for the full update.
+func (s Store) deleteCompletedDelegation(invocationPath []string) error {
+	if len(invocationPath) == 0 {
+		return ErrDelegationNotFound
+	}
+	parent := s
+	var (
+		child Store
+		items []DelegationBookmark
+		index = -1
+	)
+	for depth, invocationID := range invocationPath {
+		loaded, err := parent.LoadDelegations()
+		if err != nil {
+			return err
+		}
+		index = -1
+		for candidate, bookmark := range loaded {
+			if bookmark.InvocationID == invocationID {
+				index = candidate
+				break
+			}
+		}
+		if index < 0 {
+			return ErrDelegationNotFound
+		}
+		store, err := parent.ChildStore(invocationID)
+		if err != nil {
+			return err
+		}
+		child = store
+		items = loaded
+		if depth < len(invocationPath)-1 {
+			parent = store
+		}
+	}
+	state, err := child.LoadDelegationState()
+	if err != nil {
+		return err
+	}
+	if state.Status != "completed" {
+		return ErrDelegationNotCompleted
+	}
+
+	remaining := append([]DelegationBookmark(nil), items[:index]...)
+	remaining = append(remaining, items[index+1:]...)
+	if err := writeDelegationJSON(parent.Root, parent.DelegationsPath(), delegationBookmarks{
+		Version: delegationVersion,
+		Items:   remaining,
+	}); err != nil {
+		return err
+	}
+	if err := child.ClearSession(); err != nil {
+		rollbackErr := writeDelegationJSON(parent.Root, parent.DelegationsPath(), delegationBookmarks{
+			Version: delegationVersion,
+			Items:   items,
+		})
+		return errors.Join(err, rollbackErr)
+	}
+	return nil
+}
+
 func (s Store) LoadDelegationState() (DelegationState, error) {
 	var state DelegationState
 	if err := rejectSymlinks(s.Root, s.DelegationStatePath()); err != nil {
@@ -190,6 +259,18 @@ func (s Store) SaveDelegationState(state DelegationState) error {
 		return err
 	}
 	return writeDelegationJSON(s.Root, s.DelegationStatePath(), state)
+}
+
+func (s Store) clearDelegationState() error {
+	return withLoomRootMutation(s.Root, func() error {
+		if err := rejectSymlinks(s.Root, s.DelegationStatePath()); err != nil {
+			return err
+		}
+		if err := os.Remove(s.DelegationStatePath()); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		return nil
+	})
 }
 
 func readDelegationJSON(path string, target any) error {

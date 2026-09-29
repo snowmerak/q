@@ -114,6 +114,25 @@ func DeleteSession(root, sessionID, command string) (returnErr error) {
 	return store.ClearSession()
 }
 
+// DeleteCompletedDelegation removes one inactive completed child invocation
+// from a session tree. The root session lock prevents a running turn from
+// changing delegation bookmarks during deletion.
+func DeleteCompletedDelegation(root, sessionID string, invocationPath []string, command string) (returnErr error) {
+	store, err := (Store{Root: root}).ForSession(sessionID)
+	if err != nil {
+		return err
+	}
+	lock, err := AcquireSessionLock(root, sessionID, command)
+	if err != nil {
+		return err
+	}
+	defer func() { returnErr = errors.Join(returnErr, lock.Close()) }()
+	if _, err := store.Load(); err != nil {
+		return err
+	}
+	return store.deleteCompletedDelegation(invocationPath)
+}
+
 // ResetSession empties one inactive session in place while preserving its
 // identity. It mirrors the local chat /clear persistence semantics: execution
 // and Thinker checkpoints are discarded, the conversation receives a fresh

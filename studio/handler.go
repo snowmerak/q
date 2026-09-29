@@ -159,6 +159,7 @@ func newHandlerRuntime(parent context.Context, store config.Store, runner sessio
 	mux.HandleFunc("GET /api/v1/sessions/{session}/runs/{run}/events", sessions.serveRunEvents)
 	mux.HandleFunc("POST /api/v1/sessions/{session}/runs/{run}/commands", sessions.serveRunCommand)
 	mux.HandleFunc("GET /api/v1/sessions/{session}/delegations", sessions.serveDelegations)
+	mux.HandleFunc("DELETE /api/v1/sessions/{session}/delegations", sessions.serveDeleteDelegation)
 	mux.HandleFunc("GET /api/v1/workspaces/learning", sessions.serveLearning)
 	mux.HandleFunc("PUT /api/v1/workspaces/learning", sessions.serveLearning)
 	mux.Handle("/api/", http.NotFoundHandler())

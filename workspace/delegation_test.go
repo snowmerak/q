@@ -148,6 +148,100 @@ func TestDeleteSessionRemovesDelegationTreeButRejectsSymlink(t *testing.T) {
 	}
 }
 
+func TestDeleteCompletedDelegationRemovesOnlyCompletedChildTree(t *testing.T) {
+	root := t.TempDir()
+	store, lock, err := CreateSession(root, "test setup")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for index, item := range []struct {
+		id     string
+		status string
+	}{
+		{id: "completed-child", status: "completed"},
+		{id: "running-child", status: "running"},
+	} {
+		bookmark := DelegationBookmark{
+			InvocationID: item.id, CallIndex: index, CallID: "call-" + item.id,
+			Agent: "builtin/research", Prompt: "inspect", RunID: "run-" + item.id,
+		}
+		if _, err := store.AddDelegation(bookmark); err != nil {
+			t.Fatal(err)
+		}
+		child, err := store.ChildStore(item.id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := child.Save(Session{RunID: bookmark.RunID}); err != nil {
+			t.Fatal(err)
+		}
+		state := DelegationState{Agent: bookmark.Agent, Prompt: bookmark.Prompt, RunID: bookmark.RunID, Status: item.status}
+		if item.status == "completed" {
+			state.Result = &client.ToolResult{Content: "done"}
+		}
+		if err := child.SaveDelegationState(state); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := lock.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := DeleteCompletedDelegation(root, store.SessionID, []string{"completed-child"}, "test delete"); err != nil {
+		t.Fatal(err)
+	}
+	bookmarks, err := store.LoadDelegations()
+	if err != nil || len(bookmarks) != 1 || bookmarks[0].InvocationID != "running-child" {
+		t.Fatalf("remaining bookmarks = %#v, %v", bookmarks, err)
+	}
+	completed, err := store.ChildStore("completed-child")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := completed.Load(); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("load deleted delegation = %v", err)
+	}
+	if err := DeleteCompletedDelegation(root, store.SessionID, []string{"running-child"}, "test reject"); !errors.Is(err, ErrDelegationNotCompleted) {
+		t.Fatalf("delete running delegation = %v", err)
+	}
+	running, err := store.ChildStore("running-child")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := running.Load(); err != nil {
+		t.Fatalf("running delegation was changed: %v", err)
+	}
+	nestedBookmark := DelegationBookmark{
+		InvocationID: "nested-completed", CallIndex: 0, CallID: "call-nested",
+		Agent: "builtin/junior-developer", Prompt: "implement", RunID: "run-nested",
+	}
+	if _, err := running.AddDelegation(nestedBookmark); err != nil {
+		t.Fatal(err)
+	}
+	nested, err := running.ChildStore(nestedBookmark.InvocationID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := nested.Save(Session{RunID: nestedBookmark.RunID}); err != nil {
+		t.Fatal(err)
+	}
+	if err := nested.SaveDelegationState(DelegationState{
+		Agent: nestedBookmark.Agent, Prompt: nestedBookmark.Prompt, RunID: nestedBookmark.RunID,
+		Status: "completed", Result: &client.ToolResult{Content: "implemented"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := DeleteCompletedDelegation(root, store.SessionID, []string{"running-child", "nested-completed"}, "test nested delete"); err != nil {
+		t.Fatal(err)
+	}
+	if remaining, err := running.LoadDelegations(); err != nil || len(remaining) != 0 {
+		t.Fatalf("nested bookmarks = %#v, %v", remaining, err)
+	}
+	if _, err := running.Load(); err != nil {
+		t.Fatalf("parent delegation was changed: %v", err)
+	}
+}
+
 func TestClearSessionRejectsInvalidIDBeforeDeletingAnything(t *testing.T) {
 	root := t.TempDir()
 	sentinel := filepath.Join(root, "sentinel")

@@ -349,6 +349,31 @@
     }
   }
 
+  async function deleteDelegation() {
+    if (!selected || !selectedDelegation || !workspaceRoot || selectedDelegation.state?.status !== 'completed' || sessionLoading || sending) return;
+    const agent = selectedDelegation.bookmark.agent.replace(/^builtin\//, '');
+    if (!window.confirm(`Delete the completed ${agent} delegation? Its child transcript and descendants will be removed; the parent conversation will remain.`)) return;
+    sessionLoading = true;
+    error = '';
+    try {
+      const query = new URLSearchParams({ workspace_root: workspaceRoot, path: selectedDelegation.path });
+      const response = await fetch(`/api/v1/sessions/${encodeURIComponent(selected.session.session_id)}/delegations?${query}`, { method: 'DELETE' });
+      if (!response.ok) throw new Error(await apiError(response));
+      selectedDelegation = null;
+      messages = selected.transcript;
+      events = [];
+      responseDraft = '';
+      thinkingDraft = '';
+      runStatus = 'Completed delegation deleted';
+      await loadDelegations(selected.session.session_id);
+      await scrollToBottom();
+    } catch (cause) {
+      error = cause instanceof Error ? cause.message : 'Could not delete the delegation';
+    } finally {
+      sessionLoading = false;
+    }
+  }
+
   async function loadLearning() {
     if (!workspaceRoot) return;
     learningLoading = true;
@@ -745,6 +770,9 @@
             </div>
           {/if}
           <span class:running={sending}>{runStatus || (sending ? 'Running' : 'Ready')}</span>
+          {#if selectedDelegation?.state?.status === 'completed'}
+            <button title="Delete completed delegation" aria-label="Delete completed delegation" onclick={deleteDelegation} disabled={sending || sessionLoading}><Trash2 aria-hidden="true" size={14} /></button>
+          {/if}
           {#if !selectedDelegation}
             <button class:enabled={learningEnabled} title={`Learning ${learningEnabled ? 'enabled' : 'disabled'}`} aria-label={`Turn learning ${learningEnabled ? 'off' : 'on'}`} onclick={toggleLearning} disabled={sending || learningLoading}><BrainCircuit aria-hidden="true" size={15} /></button>
             <button title="Compact context" aria-label="Compact context" onclick={compactSession} disabled={sending || sessionLoading}><Minimize2 aria-hidden="true" size={15} /></button>
