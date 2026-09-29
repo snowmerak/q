@@ -63,11 +63,24 @@ func PrepareWorkspaceMessages(messages []client.Message, options WorkspaceMessag
 			break
 		}
 	}
+	orchestrationPrompt := "Use task_start before work that requires tools or multiple execution steps. Once task_start succeeds, that task must finish with exactly one successful task_complete call; do not finish it with a plain assistant response. " +
+		"Direct questions and short answers may finish normally without task_start or task_complete. Use ask_to_user when a required user decision or missing detail prevents safe progress; wait for the answer and then continue the same turn. " +
+		"Call task_complete only for a started task after all requested work and appropriate verification are done, or with outcome blocked when progress genuinely cannot continue."
+	delegateListAvailable, delegateAvailable := false, false
+	for _, tool := range runtimeTools {
+		switch tool.Function.Name {
+		case "delegate_list":
+			delegateListAvailable = true
+		case "delegate":
+			delegateAvailable = true
+		}
+	}
+	if delegateListAvailable && delegateAvailable {
+		orchestrationPrompt += " When a task is sufficiently large or complex, use delegation. Call delegate_list to inspect the available agents, then select and arrange them according to their listed responsibilities and an engineering workflow appropriate to the task."
+	}
 	result = append(result, client.Message{
 		Role: client.RoleDeveloper, Name: "q_orchestration",
-		Content: "Use task_start before work that requires tools or multiple execution steps. Once task_start succeeds, that task must finish with exactly one successful task_complete call; do not finish it with a plain assistant response. " +
-			"Direct questions and short answers may finish normally without task_start or task_complete. Use ask_to_user when a required user decision or missing detail prevents safe progress; wait for the answer and then continue the same turn. " +
-			"Call task_complete only for a started task after all requested work and appropriate verification are done, or with outcome blocked when progress genuinely cannot continue.",
+		Content: orchestrationPrompt,
 	})
 	return result
 }

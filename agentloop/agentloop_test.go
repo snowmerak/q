@@ -110,17 +110,26 @@ func (*scriptedClient) Close() error                                       { ret
 
 type scriptedTools struct {
 	name    string
+	names   []string
 	content string
 	calls   []client.ToolCall
 }
 
 func (r *scriptedTools) Tools() []client.Tool {
-	if r.name == "" {
+	names := append([]string(nil), r.names...)
+	if len(names) == 0 && r.name != "" {
+		names = append(names, r.name)
+	}
+	if len(names) == 0 {
 		return nil
 	}
-	return []client.Tool{{Type: client.ToolTypeFunction, Function: client.FunctionDefinition{
-		Name: r.name, Parameters: map[string]any{"type": "object"},
-	}}}
+	result := make([]client.Tool, 0, len(names))
+	for _, name := range names {
+		result = append(result, client.Tool{Type: client.ToolTypeFunction, Function: client.FunctionDefinition{
+			Name: name, Parameters: map[string]any{"type": "object"},
+		}})
+	}
+	return result
 }
 func (*scriptedTools) Environment() qtools.HostEnvironment {
 	return qtools.HostEnvironment{OS: "test", Architecture: "test", Shell: "test"}
@@ -229,6 +238,23 @@ func TestWorkspaceAndToolRound(t *testing.T) {
 	}
 	if calls != 1 || results != 1 || len(runtime.calls) != 1 || final.ToolCalls != 1 || final.Response.Choices[0].Message.Content != "done" {
 		t.Fatalf("calls=%d results=%d runtime=%d final=%#v", calls, results, len(runtime.calls), final)
+	}
+}
+
+func TestWorkspacePromptGuidesDefaultLoopDelegationWhenAvailable(t *testing.T) {
+	runtime := &scriptedTools{names: []string{"delegate_list", "delegate"}}
+	messages := agentloop.PrepareWorkspaceMessages(nil, agentloop.WorkspaceMessageOptions{
+		Root: t.TempDir(), Tools: runtime,
+	})
+	prompt := joined(messages)
+	for _, expected := range []string{
+		"When a task is sufficiently large or complex, use delegation.",
+		"Call delegate_list to inspect the available agents",
+		"an engineering workflow appropriate to the task",
+	} {
+		if !strings.Contains(prompt, expected) {
+			t.Fatalf("workspace prompt omitted %q:\n%s", expected, prompt)
+		}
 	}
 }
 
