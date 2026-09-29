@@ -387,6 +387,7 @@ type taskStartInput struct {
 type taskCompleteInput struct {
 	Outcome      string   `json:"outcome"`
 	Summary      string   `json:"summary"`
+	Report       string   `json:"report,omitempty"`
 	Findings     []string `json:"findings,omitempty"`
 	Artifacts    []string `json:"artifacts,omitempty"`
 	Verification []string `json:"verification,omitempty"`
@@ -396,6 +397,10 @@ type taskCompleteInput struct {
 func TaskLifecycleTools() []client.Tool {
 	strict := true
 	textSchema := map[string]any{"type": "string", "maxLength": maximumCoderTextBytes}
+	reportSchema := map[string]any{
+		"type": "string", "maxLength": maximumTaskReportBytes,
+		"description": "Optional detailed Markdown report with final analysis, rationale, and evidence. Do not include hidden chain-of-thought.",
+	}
 	stringsSchema := map[string]any{
 		"type": "array", "maxItems": maximumCoderListItems,
 		"items": map[string]any{"type": "string", "maxLength": maximumCoderTextBytes},
@@ -408,10 +413,10 @@ func TaskLifecycleTools() []client.Tool {
 			}, "required": []string{"objective"}, "additionalProperties": false},
 		}},
 		{Type: client.ToolTypeFunction, Function: client.FunctionDefinition{
-			Name: TaskCompleteToolName, Description: "Finish the active delegated task with its result.", Strict: &strict,
+			Name: TaskCompleteToolName, Description: "Finish the active delegated task. Keep summary concise and use report for a detailed final Markdown analysis when useful.", Strict: &strict,
 			Parameters: map[string]any{"type": "object", "properties": map[string]any{
 				"outcome": map[string]any{"type": "string", "enum": []string{"succeeded", "blocked"}},
-				"summary": textSchema, "findings": stringsSchema,
+				"summary": textSchema, "report": reportSchema, "findings": stringsSchema,
 				"artifacts": stringsSchema, "verification": stringsSchema,
 				"blocker": textSchema,
 			}, "required": []string{"outcome", "summary"}, "additionalProperties": false},
@@ -566,7 +571,7 @@ func (r GeneralRunner) Run(ctx context.Context, prompt string) (result TaskResul
 	}()
 
 	systemPrompt := withRetrievalCatalog(r.Definition.SystemPrompt, available) + "\n\nRuntime environment: " + r.Environment + "\nWorking directory: " + r.WorkingDirectory +
-		"\n\nStart by calling task_start. Do not call any other tool before task_start succeeds. Finish with task_complete as the only tool call in that turn. task_complete uses the common schema exactly; do not invent agent-specific fields."
+		"\n\nStart by calling task_start. Do not call any other tool before task_start succeeds. Finish with task_complete as the only tool call in that turn. Keep summary concise. Put detailed final analysis, design rationale, review notes, or research synthesis in the optional Markdown report field without exposing hidden chain-of-thought. task_complete uses the common schema exactly; do not invent agent-specific fields."
 	messages := []client.Message{{Role: client.RoleSystem, Content: systemPrompt}, {Role: client.RoleUser, Content: prompt}}
 	state := GeneralRunState{Transcript: append([]client.Message(nil), messages...), Context: append([]client.Message(nil), messages...), Spec: r.Spec.Checkpoint()}
 	if r.Resume != nil {
@@ -893,11 +898,12 @@ func parseGeneralTaskComplete(arguments string) (TaskResult, error) {
 		return TaskResult{}, fmt.Errorf("decode task_complete: %w", err)
 	}
 	result := TaskResult{
-		Outcome: input.Outcome, Summary: input.Summary, Findings: input.Findings,
+		Outcome: input.Outcome, Summary: input.Summary, Report: input.Report, Findings: input.Findings,
 		Artifacts: input.Artifacts, Verification: input.Verification, Blocker: input.Blocker,
 	}
 	result.Outcome = strings.TrimSpace(result.Outcome)
 	result.Summary = strings.TrimSpace(result.Summary)
+	result.Report = strings.TrimSpace(result.Report)
 	result.Blocker = strings.TrimSpace(result.Blocker)
 	result.Findings = cleanStrings(result.Findings)
 	result.Artifacts = cleanStrings(result.Artifacts)

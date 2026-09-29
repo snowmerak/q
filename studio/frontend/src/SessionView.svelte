@@ -1,7 +1,9 @@
 <script lang="ts">
-  import { ArrowUp, Bot, BrainCircuit, ChevronUp, Eraser, Folder, FolderOpen, GitBranch, HardDrive, Home, Minimize2, Pause, Play, Plus, RefreshCw, Square, Terminal, Trash2, User, Wrench, X } from '@lucide/svelte';
+  import { ArrowUp, Bot, BrainCircuit, ChevronUp, Eraser, Folder, FolderOpen, GitBranch, GitCompareArrows, HardDrive, Home, Minimize2, Pause, Play, Plus, RefreshCw, Square, Terminal, Trash2, User, Wrench, X } from '@lucide/svelte';
   import { onMount, tick } from 'svelte';
   import Markdown from './Markdown.svelte';
+
+  export let openChanges: (workspaceRoot: string) => void = () => {};
 
   type SessionSummary = {
     session_id: string;
@@ -781,6 +783,7 @@
             </div>
           {/if}
           <span class:running={sending}>{runStatus || (sending ? 'Running' : 'Ready')}</span>
+          <button title="Open repository changes" aria-label="Open repository changes" onclick={() => openChanges(workspaceRoot)} disabled={!workspaceRoot}><GitCompareArrows aria-hidden="true" size={15} /></button>
           {#if selectedDelegation?.state?.status === 'completed' && (!selectedDelegation.state.change_request || ['merged', 'closed'].includes(selectedDelegation.state.change_request.status))}
             <button title="Delete completed delegation" aria-label="Delete completed delegation" onclick={deleteDelegation} disabled={sending || sessionLoading}><Trash2 aria-hidden="true" size={14} /></button>
           {/if}

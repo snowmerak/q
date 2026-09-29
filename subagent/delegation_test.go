@@ -1,6 +1,7 @@
 package subagent
 
 import (
+	"encoding/json"
 	"slices"
 	"strings"
 	"testing"
@@ -203,12 +204,13 @@ func TestCommonTaskCompleteSchemaRejectsExecutorFields(t *testing.T) {
 	result, err := parseGeneralTaskComplete(`{
 		"outcome":"succeeded",
 		"summary":"done",
+		"report":"## Analysis\n\nDetailed final explanation.",
 		"findings":["one"],
 		"artifacts":["file.go"],
 		"verification":["go test ./..."],
 		"blocker":""
 	}`)
-	if err != nil || result.Summary != "done" {
+	if err != nil || result.Summary != "done" || !strings.Contains(result.Report, "Detailed final explanation") {
 		t.Fatalf("result = %#v, err = %v", result, err)
 	}
 	for _, arguments := range []string{
@@ -218,6 +220,28 @@ func TestCommonTaskCompleteSchemaRejectsExecutorFields(t *testing.T) {
 		if _, err := parseGeneralTaskComplete(arguments); err == nil || !strings.Contains(err.Error(), "unknown field") {
 			t.Fatalf("arguments %s: %v", arguments, err)
 		}
+	}
+}
+
+func TestCommonTaskCompleteAllowsBoundedLongReport(t *testing.T) {
+	arguments, err := json.Marshal(taskCompleteInput{
+		Outcome: "succeeded", Summary: "done", Report: strings.Repeat("r", maximumTaskReportBytes),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := parseGeneralTaskComplete(string(arguments))
+	if err != nil || len(result.Report) != maximumTaskReportBytes {
+		t.Fatalf("report bytes = %d, err = %v", len(result.Report), err)
+	}
+	arguments, err = json.Marshal(taskCompleteInput{
+		Outcome: "succeeded", Summary: "done", Report: strings.Repeat("r", maximumTaskReportBytes+1),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := parseGeneralTaskComplete(string(arguments)); err == nil || !strings.Contains(err.Error(), "report") {
+		t.Fatalf("oversized report = %v", err)
 	}
 }
 

@@ -88,6 +88,10 @@ func (r CustomRunner) Run(ctx context.Context, input string) (output string, run
 func RenderTaskResult(result TaskResult) string {
 	var body strings.Builder
 	body.WriteString(result.Summary)
+	if result.Report != "" {
+		body.WriteString("\n\n")
+		body.WriteString(result.Report)
+	}
 	writePlanList(&body, "Findings", result.Findings)
 	writePlanList(&body, "Artifacts", result.Artifacts)
 	writePlanList(&body, "Verification", result.Verification)

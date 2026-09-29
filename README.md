@@ -483,7 +483,10 @@ invocation adapter and Loom capture. General chat receives `delegate_list` and `
 receive them only when their profile has direct grants. The manager can delegate
 to the interviewer, researcher, and senior developer. The senior developer can
 implement directly or assign work to the junior developer and review its result.
-The researcher can delegate to configured web search.
+The researcher can delegate to configured web search. A task result keeps its
+short conclusion in `summary` and may include a Markdown `report` up to 256 KiB
+for detailed analysis, design rationale, review notes, or research synthesis.
+Large results use the existing Loom receipt and retrieval path.
 
 ## Sessions, history, and learning
 

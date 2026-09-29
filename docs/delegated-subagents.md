@@ -57,13 +57,19 @@ ACP connection이 role에 할당되어 있고 enabled일 때만 `delegate_list`�
 ```json
 {
   "outcome": "succeeded | blocked",
-  "summary": "...",
+  "summary": "짧은 결과 요약",
+  "report": "선택 사항인 장문 Markdown 분석·설계·리뷰·조사 본문",
   "findings": ["..."],
   "artifacts": ["..."],
   "verification": ["..."],
   "blocker": "..."
 }
 ```
+
+`summary`는 부모가 빠르게 판단할 수 있는 짧은 결론으로 유지한다. 자세한 분석, 설계
+근거, 코드 리뷰, 조사 종합과 긴 설명은 `report`에 Markdown으로 기록할 수 있다.
+`report`는 최대 256 KiB이며 큰 TaskResult는 기존 Loom capture에 전체가 저장되고
+부모에게는 reference와 bounded preview가 전달된다.
 
 `task_start`와 `task_complete`는 host가 자동으로 제공하는 protocol 도구이므로 profile의
 `tools`에 저장하지 않는다. Plan의 `submit_brief`, `submit_plan`, `review_task` 같은

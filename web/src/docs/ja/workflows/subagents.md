@@ -48,6 +48,8 @@ Studio は各子をセッションツリーの親の下に表示します。子�
 
 clean な Git branch に紐づく保存済み session では、変更可能な inner child は local の `q/delegate/<invocation-id>` branch と linked worktree で作業します。成功すると Q が残りの変更を commit し、base/head commit を固定した内部 Change Request を返します。呼び出し元は diff を読み、merge または close します。入れ子の child も同じ流れを使うため、senior developer は junior developer の branch をレビューして merge した後、自分の Change Request を上位へ返せます。Studio の session tree には request の状態と branch が表示されます。この local flow に remote push は不要です。
 
+すべての inner task result には短い `summary` があり、任意の `report` に最終分析、設計根拠、レビューコメント、調査結果を Markdown で最大 256 KiB まで記録できます。大きな結果は Loom に保存され、呼び出し元は reference と制限付き preview を受け取り、必要に応じて完全な report を取得します。
+
 ## 内部エージェントを定義
 
 内部プロファイルは q のモデルロール、明示的なツール一覧、直接呼び出せる委任先を選択します。

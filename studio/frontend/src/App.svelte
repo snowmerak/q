@@ -235,6 +235,18 @@
     if (view === 'settings' && !settings) void loadSettings();
   }
 
+  function openWorkspaceChanges(workspaceRoot: string) {
+    const root = workspaceRoot.trim();
+    if (!root) return;
+    localStorage.setItem('q-studio-workspace-root', root);
+    activeView = 'changes';
+    const url = new URL(window.location.href);
+    url.pathname = '/changes';
+    url.search = '';
+    url.searchParams.set('workspace_root', root);
+    window.history.pushState({}, '', url.pathname + url.search);
+  }
+
   function viewFromLocation(): View {
     if (window.location.pathname.startsWith('/settings')) return 'settings';
     if (window.location.pathname.startsWith('/sessions')) return 'sessions';
@@ -666,7 +678,7 @@
       </section>
       <section class="empty-session" aria-labelledby="empty-heading"><div class="session-outline" aria-hidden="true"><span></span><span></span><span></span></div><h2 id="empty-heading">No session selected</h2><p>Open Sessions to register a root session and continue its conversation.</p><button class="primary-button overview-session-button" onclick={() => navigate('sessions')}>Open sessions</button></section>
     {:else if activeView === 'sessions'}
-      <SessionView />
+      <SessionView openChanges={openWorkspaceChanges} />
     {:else if activeView === 'changes'}
       <ChangesView />
     {:else if activeView === 'operations'}

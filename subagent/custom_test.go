@@ -36,6 +36,15 @@ func (c *fallbackCustomClient) Chat(_ context.Context, request client.ChatReques
 func customProfile() Profile {
 	return Profile{Version: 1, Name: "inspector", Role: "analyst", SystemPrompt: "Inspect precisely.", Tools: []string{}}
 }
+
+func TestRenderTaskResultIncludesDetailedReport(t *testing.T) {
+	output := RenderTaskResult(TaskResult{
+		Outcome: "succeeded", Summary: "Short conclusion", Report: "## Analysis\n\nDetailed evidence.",
+	})
+	if !strings.Contains(output, "Short conclusion\n\n## Analysis\n\nDetailed evidence.") {
+		t.Fatalf("rendered result = %q", output)
+	}
+}
 func TestCustomRoleResolution(t *testing.T) {
 	v := config.Default()
 	v.Provider.Model = "test"

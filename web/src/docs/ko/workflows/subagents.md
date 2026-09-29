@@ -48,6 +48,8 @@ Studio는 각 자식을 세션 트리의 부모 아래에 표시합니다. 자�
 
 clean Git branch를 사용하는 저장된 session에서 변경 가능한 inner child는 local `q/delegate/<invocation-id>` branch와 linked worktree에서 작업합니다. 성공하면 Q가 남은 변경을 commit하고 base/head commit이 고정된 내부 Change Request를 반환합니다. 호출한 agent는 diff를 읽은 뒤 merge하거나 close합니다. 중첩 child도 같은 흐름을 사용하므로 senior developer가 junior developer의 branch를 검토·병합한 뒤 자신의 Change Request를 상위에 반환할 수 있습니다. Studio session tree에는 요청 상태와 branch가 표시됩니다. 이 local 흐름에는 remote push가 필요하지 않습니다.
 
+모든 inner 작업 결과는 짧은 `summary`와 선택적인 `report`를 가집니다. `report`에는 최종 분석, 설계 근거, 리뷰 의견이나 조사 종합을 Markdown으로 최대 256 KiB까지 담을 수 있습니다. 큰 결과는 Loom에 저장되며 호출자는 reference와 제한된 preview를 받은 뒤 필요할 때 전체 보고서를 조회합니다.
+
 ## 내부 에이전트 정의
 
 내부 프로필은 q 모델 역할, 명시적인 도구 목록, 직접 호출 가능한 위임 대상을 선택합니다.

@@ -20,6 +20,7 @@ const (
 	maximumCoderReminders     = 3
 	maximumCoderListItems     = 32
 	maximumCoderTextBytes     = 32 << 10
+	maximumTaskReportBytes    = 256 << 10
 	maximumCoderEvidenceItems = 128
 )
 
@@ -259,8 +260,10 @@ func coderCompletionTool() client.Tool {
 		Name: CoderCompleteToolName, Description: "Finish this Coder attempt with its structured implementation and verification result.", Strict: &strict,
 		Parameters: map[string]any{
 			"type": "object", "properties": map[string]any{
-				"outcome": map[string]any{"type": "string", "enum": []string{"succeeded", "blocked"}},
-				"summary": map[string]any{"type": "string"}, "findings": stringsSchema,
+				"outcome":   map[string]any{"type": "string", "enum": []string{"succeeded", "blocked"}},
+				"summary":   map[string]any{"type": "string", "maxLength": maximumCoderTextBytes},
+				"report":    map[string]any{"type": "string", "maxLength": maximumTaskReportBytes, "description": "Optional detailed final Markdown report."},
+				"findings":  stringsSchema,
 				"artifacts": stringsSchema, "verification": stringsSchema,
 				"blocker": map[string]any{"type": "string"},
 			}, "required": []string{"outcome", "summary"}, "additionalProperties": false,
@@ -277,6 +280,9 @@ func parseCoderCompletion(arguments string) (CoderResult, error) {
 		if _, exists := supplied["executor"]; exists {
 			return CoderResult{}, errors.New("task_complete executor is assigned by q and must not be supplied by Coder")
 		}
+		if _, exists := supplied["change_request"]; exists {
+			return CoderResult{}, errors.New("task_complete change_request is assigned by q and must not be supplied by Coder")
+		}
 	}
 	var result CoderResult
 	if err := decodeStrict(arguments, &result); err != nil {
@@ -284,6 +290,7 @@ func parseCoderCompletion(arguments string) (CoderResult, error) {
 	}
 	result.Outcome = strings.TrimSpace(result.Outcome)
 	result.Summary = strings.TrimSpace(result.Summary)
+	result.Report = strings.TrimSpace(result.Report)
 	result.Blocker = strings.TrimSpace(result.Blocker)
 	result.Findings = cleanStrings(result.Findings)
 	result.Artifacts = cleanStrings(result.Artifacts)
@@ -314,6 +321,9 @@ func validateCoderResult(result CoderResult) error {
 }
 
 func validateTaskResultBounds(result TaskResult) error {
+	if len(result.Report) > maximumTaskReportBytes {
+		return fmt.Errorf("executor result report must not exceed %d bytes", maximumTaskReportBytes)
+	}
 	if len(result.Summary) > maximumCoderTextBytes || len(result.Blocker) > maximumCoderTextBytes ||
 		!boundedAgentStrings(result.Findings) || !boundedAgentStrings(result.Artifacts) ||
 		!boundedAgentStrings(result.Verification) {

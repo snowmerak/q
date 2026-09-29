@@ -380,7 +380,7 @@ func TestAllowedDelegationRunsLifecycleAndCapturesResult(t *testing.T) {
 	value.Provider.Model = "plan-model"
 	configuredClient := &planningClient{responses: []client.Message{
 		{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{planToolCall(subagent.TaskStartToolName, `{"objective":"inspect"}`)}},
-		{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{planToolCall(subagent.TaskCompleteToolName, `{"outcome":"succeeded","summary":"found it","findings":["app/model.go"]}`)}},
+		{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{planToolCall(subagent.TaskCompleteToolName, `{"outcome":"succeeded","summary":"found it","report":"## Analysis\n\nThe model path preserves the selected provider.","findings":["app/model.go"]}`)}},
 	}}
 	m := newModel(t.Context(), store, nil)
 	m.config = value
@@ -403,7 +403,7 @@ func TestAllowedDelegationRunsLifecycleAndCapturesResult(t *testing.T) {
 		ID: "delegate-1", Function: client.FunctionCall{Name: subagent.DelegateToolName,
 			Arguments: `{"subagent_name":"builtin/senior-developer","prompt":"inspect model handling"}`},
 	})
-	if err != nil || result.IsError || !strings.Contains(result.Content, `"loom_ref"`) {
+	if err != nil || result.IsError || !strings.Contains(result.Content, `"loom_ref"`) || !strings.Contains(result.Content, `The model path preserves`) {
 		t.Fatalf("result = %#v, err = %v", result, err)
 	}
 	if len(configuredClient.requests) != 2 || len(configuredClient.terminalRequests) != 1 {

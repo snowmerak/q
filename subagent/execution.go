@@ -48,6 +48,7 @@ type TaskResult struct {
 	Executor      string          `json:"executor,omitempty"`
 	Outcome       string          `json:"outcome"`
 	Summary       string          `json:"summary"`
+	Report        string          `json:"report,omitempty"`
 	ChangeRequest *change.Request `json:"change_request,omitempty"`
 	Findings      []string        `json:"findings,omitempty"`
 	Artifacts     []string        `json:"artifacts,omitempty"`

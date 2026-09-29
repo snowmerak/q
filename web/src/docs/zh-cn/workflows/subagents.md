@@ -48,6 +48,8 @@ Studio 将每个子代理显示在会话树的父节点下。选择子节点可�
 
 在基于 clean Git branch 的已保存 session 中，可修改工作区的 inner child 会在本地 `q/delegate/<invocation-id>` branch 和 linked worktree 中工作。成功后，Q 会提交剩余改动，并返回固定 base/head commit 的内部 Change Request。调用方读取 diff 后再 merge 或 close。嵌套 child 使用相同流程，因此 senior developer 可以先审查并合并 junior developer 的 branch，再向上层返回自己的 Change Request。Studio session tree 会显示请求状态和 branch。该本地流程不需要 remote push。
 
+每个 inner task result 都包含简短的 `summary`，并可通过可选的 `report` 保存最多 256 KiB 的最终 Markdown 分析、设计依据、审查意见或研究综述。较大的结果会存入 Loom；调用方收到 reference 和受限 preview，并可按需读取完整报告。
+
 ## 定义内部代理
 
 内部配置会选择 q 模型角色、明确的工具列表以及可直接调用的委派对象。

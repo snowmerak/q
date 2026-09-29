@@ -47,6 +47,8 @@ Studio shows each child below its parent in the session tree. Select a child to 
 
 In a persisted session backed by a clean Git branch, a mutating inner child works on a local `q/delegate/<invocation-id>` branch in a linked worktree. When it succeeds, q commits remaining changes and returns an internal change request pinned to base and head commits. The caller reads that diff, then merges or closes the request. Nested children use the same flow, so a senior developer can review and merge a junior developer's branch before returning its own change request. Studio shows the request status and branch in the session tree. This local flow does not require a remote push.
 
+Every inner task result has a concise `summary` and may include a `report` containing up to 256 KiB of final Markdown analysis, design rationale, review notes, or research synthesis. Large results are stored in Loom; the caller receives a reference and bounded preview and can retrieve the complete report when needed.
+
 ## Define an inner agent
 
 Inner profiles select a q model role, an explicit tool list, and directly callable delegates.
