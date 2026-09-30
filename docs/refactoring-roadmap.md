@@ -431,3 +431,20 @@ controller, `studio/integrations.go`의 MCP/LSP/Skills/agent별 경계다. dialo
 검증: `task studio:test`(브라우저 9개), Svelte 검사와 Studio Go 회귀·통합
 테스트를 통과했다. 배포 bundle도 재빌드했다. 이후 후보는 세션의 실행·채팅
 controller와 `studio/integrations.go`의 기능별 분리다.
+
+## 14. Studio 실행 조회 수명 분리 (2026-10-01)
+
+- `sessions/run-monitor.ts`가 이벤트 long polling, cursor, guidance redirect,
+  재연결 대기와 요청 취소를 소유한다. workspace/session 경로를 시작할 때
+  고정하고, 선택 변경·대화 지우기·화면 종료 시 요청과 retry timer를 취소한다.
+- `SessionView.svelte`는 메시지 입력, run command와 표시 상태를 소유한다.
+  세션 detail, latest run, transcript, delegation 및 learning 응답은 자신을
+  시작한 선택이 여전히 유효할 때만 화면에 반영한다. 세션 조회 중에는 입력을
+  잠시 막아 이전 session ID와 새로운 workspace path가 섞이지 않게 한다.
+- 지연된 이전 run 응답과 세션 detail 응답을 브라우저에서 의도적으로 보류한 뒤
+  선택을 바꿔, 요청 취소와 새 선택 보존을 검증한다. 기존 guidance redirect와
+  새로고침 후 replay 흐름도 유지한다. 실행 중인 backend task는 관찰 종료와
+  별개로 유지되며 기존 세션에서 다시 연결할 수 있다.
+
+검증: Svelte 검사와 `task studio:test`(브라우저 11개)를 통과했다.
+배포 bundle을 재빌드했다. 다음 단계는 Go integration 처리의 기능별 분리다.

@@ -6,7 +6,8 @@
   import SessionRegistration from './sessions/SessionRegistration.svelte';
   import { apiError } from './api';
   import { formatSessionTime, shortID } from './sessions/format';
-  import type { DelegationNode, FlatDelegation, Message, RegisteredSessionTree, RunEvent, RunPage, RunSnapshot, SessionDetail, StudioProject } from './sessions/types';
+  import { RunMonitor, runStatusLabel, terminalRun } from './sessions/run-monitor';
+  import type { DelegationNode, FlatDelegation, Message, RegisteredSessionTree, RunEvent, RunSnapshot, SessionDetail, StudioProject } from './sessions/types';
 
   export let openChanges: (workspaceRoot: string) => void = () => {};
 
@@ -27,8 +28,7 @@
   let responseDraft = '';
   let thinkingDraft = '';
   let activeRun: RunSnapshot | null = null;
-  let runCursor = 0;
-  let pollGeneration = 0;
+  let sessionGeneration = 0;
   let questionAnswer = '';
   let delegations: FlatDelegation[] = [];
   let delegationRefresh: ReturnType<typeof setTimeout> | null = null;
@@ -38,6 +38,39 @@
   let registrationDialogOpen = false;
   let projectDialogOpen = false;
   let editingProject: StudioProject | undefined;
+
+  const runMonitor = new RunMonitor({
+    page: (page) => {
+      activeRun = page.run;
+      for (const record of page.events) {
+        handleRunEvent(record.event);
+        if (record.event.type === 'redirect' && record.event.run_id) {
+          activeRun = null;
+          events = [];
+          responseDraft = '';
+          thinkingDraft = '';
+          return;
+        }
+      }
+      sending = !terminalRun(page.run.status);
+      runStatus = runStatusLabel(page.run);
+      if (!sending) {
+        responseDraft = '';
+        thinkingDraft = '';
+      }
+    },
+    complete: async () => {
+      await Promise.all([reloadSelected(), refreshSessionListOnly(), loadDelegations()]);
+    },
+    retry: (cause) => {
+      error = cause instanceof Error ? cause.message : 'Could not reconnect to the run';
+      runStatus = 'Connection lost · retrying…';
+    }
+  });
+
+  function isCurrentSession(generation: number) {
+    return generation === sessionGeneration;
+  }
 
   function sessionFromLocation() {
     const match = window.location.pathname.match(/^\/sessions\/([^/]+)$/);
@@ -51,7 +84,8 @@
   async function registerSession(root: string, sessionID = '', create = false) {
     if (!root) return;
     sessionLoading = true;
-    pollGeneration += 1;
+    sessionGeneration += 1;
+    runMonitor.stop();
     error = '';
     try {
       const response = await fetch('/api/v1/registered-sessions', {
@@ -106,12 +140,13 @@
       });
       if (!response.ok) throw new Error(await apiError(response));
       selected = (await response.json()) as SessionDetail;
+      sessionGeneration += 1;
+      runMonitor.stop();
       messages = selected.transcript;
       events = [];
       responseDraft = '';
       thinkingDraft = '';
       activeRun = null;
-      runCursor = 0;
       delegations = [];
       runStatus = 'Conversation cleared';
       await refreshSessionListOnly();
@@ -144,11 +179,14 @@
   }
 
   function clearSelectedSession() {
-    pollGeneration += 1;
+    sessionGeneration += 1;
+    runMonitor.stop();
     selectedRegistration = null;
     selectedDelegation = null;
     selected = null;
     workspaceRoot = '';
+    sessionLoading = false;
+    learningLoading = false;
     messages = [];
     events = [];
     activeRun = null;
@@ -252,14 +290,16 @@
   async function loadLearning() {
     if (!workspaceRoot) return;
     learningLoading = true;
+    const generation = sessionGeneration;
     try {
       const response = await fetch(`/api/v1/workspaces/learning?workspace_root=${encodeURIComponent(workspaceRoot)}`);
       if (!response.ok) throw new Error(await apiError(response));
-      learningEnabled = ((await response.json()) as { enabled: boolean }).enabled;
+      const result = (await response.json()) as { enabled: boolean };
+      if (isCurrentSession(generation)) learningEnabled = result.enabled;
     } catch (cause) {
-      error = cause instanceof Error ? cause.message : 'Could not load learning settings';
+      if (isCurrentSession(generation)) error = cause instanceof Error ? cause.message : 'Could not load learning settings';
     } finally {
-      learningLoading = false;
+      if (isCurrentSession(generation)) learningLoading = false;
     }
   }
 
@@ -283,7 +323,8 @@
   }
 
   async function selectRegisteredSession(registration: RegisteredSessionTree, push = true) {
-    pollGeneration += 1;
+    const generation = ++sessionGeneration;
+    runMonitor.stop();
     sessionLoading = true;
     error = '';
     try {
@@ -293,22 +334,23 @@
       const sessionID = registration.session.session_id;
       const response = await fetch(`/api/v1/sessions/${encodeURIComponent(sessionID)}?workspace_root=${encodeURIComponent(workspaceRoot)}`);
       if (!response.ok) throw new Error(await apiError(response));
-      selected = (await response.json()) as SessionDetail;
+      const detail = (await response.json()) as SessionDetail;
+      if (!isCurrentSession(generation)) return;
+      selected = detail;
       messages = selected.transcript;
       events = [];
       runStatus = '';
       responseDraft = '';
       thinkingDraft = '';
       activeRun = null;
-      runCursor = 0;
       questionAnswer = '';
       if (push) window.history.pushState({}, '', `/sessions/${encodeURIComponent(registration.registration_id)}`);
       await Promise.all([loadLearning(), reconnectLatestRun(sessionID), loadDelegations(sessionID)]);
       await scrollToBottom();
     } catch (cause) {
-      error = cause instanceof Error ? cause.message : 'Could not load the session';
+      if (isCurrentSession(generation)) error = cause instanceof Error ? cause.message : 'Could not load the session';
     } finally {
-      sessionLoading = false;
+      if (isCurrentSession(generation)) sessionLoading = false;
     }
   }
 
@@ -325,15 +367,17 @@
 
   async function sendPrompt() {
     const content = prompt.trim();
-    if (!selected || !workspaceRoot || !content) return;
+    if (!selected || !workspaceRoot || !content || sessionLoading) return;
+    const generation = sessionGeneration;
     if (sending && activeRun) {
       await commandRun('guidance', { content });
-      if (!error) {
+      if (isCurrentSession(generation) && !error) {
         prompt = '';
         runStatus = 'Guidance queued…';
       }
       return;
     }
+    const target = { workspaceRoot, sessionID: selected.session.session_id };
     prompt = '';
     sending = true;
     error = '';
@@ -349,87 +393,35 @@
         body: JSON.stringify({ workspace_root: workspaceRoot, content })
       });
       if (!response.ok) throw new Error(await apiError(response));
-      activeRun = (await response.json()) as RunSnapshot;
-      runCursor = 0;
-      const generation = ++pollGeneration;
-      void pollRun(activeRun.id, generation);
+      const run = (await response.json()) as RunSnapshot;
+      if (!isCurrentSession(generation)) return;
+      activeRun = run;
+      runMonitor.start(target, run.id);
     } catch (cause) {
+      if (!isCurrentSession(generation)) return;
       error = cause instanceof Error ? cause.message : 'The turn failed';
       runStatus = 'Turn failed';
       await reloadSelected();
+      if (!isCurrentSession(generation)) return;
       sending = false;
       await scrollToBottom();
     }
   }
 
-  function terminalRun(status: string) {
-    return ['completed', 'cancelled', 'failed', 'interrupted', 'redirected'].includes(status);
-  }
-
   async function reconnectLatestRun(sessionID: string) {
     if (!workspaceRoot) return;
-    const response = await fetch(`/api/v1/sessions/${encodeURIComponent(sessionID)}/runs/latest?workspace_root=${encodeURIComponent(workspaceRoot)}`);
+    const generation = sessionGeneration;
+    const target = { workspaceRoot, sessionID };
+    const response = await fetch(`/api/v1/sessions/${encodeURIComponent(sessionID)}/runs/latest?workspace_root=${encodeURIComponent(target.workspaceRoot)}`);
+    if (!isCurrentSession(generation)) return;
     if (response.status === 404) { sending = false; return; }
     if (!response.ok) throw new Error(await apiError(response));
-    activeRun = (await response.json()) as RunSnapshot;
-    sending = !terminalRun(activeRun.status);
-    runStatus = runStatusLabel(activeRun);
-    runCursor = 0;
-    const generation = ++pollGeneration;
-    void pollRun(activeRun.id, generation);
-  }
-
-  async function pollRun(runID: string, generation: number) {
-    if (!selected || !workspaceRoot) return;
-    const sessionID = selected.session.session_id;
-    let currentRunID = runID;
-    while (generation === pollGeneration && selected?.session.session_id === sessionID) {
-      try {
-        const response = await fetch(`/api/v1/sessions/${encodeURIComponent(sessionID)}/runs/${encodeURIComponent(currentRunID)}/events?workspace_root=${encodeURIComponent(workspaceRoot)}&after=${runCursor}&wait_ms=25000`);
-        if (!response.ok) throw new Error(await apiError(response));
-        const page = (await response.json()) as RunPage;
-        activeRun = page.run;
-        for (const record of page.events) {
-          handleRunEvent(record.event);
-          runCursor = record.cursor;
-          if (record.event.type === 'redirect' && record.event.run_id) {
-            currentRunID = record.event.run_id;
-            runCursor = 0;
-            activeRun = null;
-            events = [];
-            responseDraft = '';
-            thinkingDraft = '';
-            break;
-          }
-        }
-        if (currentRunID !== page.run.id) continue;
-        sending = !terminalRun(page.run.status);
-        runStatus = runStatusLabel(page.run);
-        if (terminalRun(page.run.status)) {
-          responseDraft = '';
-          thinkingDraft = '';
-          await Promise.all([reloadSelected(), refreshSessionListOnly(), loadDelegations(sessionID)]);
-          break;
-        }
-      } catch (cause) {
-        if (generation !== pollGeneration) return;
-        error = cause instanceof Error ? cause.message : 'Could not reconnect to the run';
-        runStatus = 'Connection lost · retrying…';
-        await new Promise((resolve) => setTimeout(resolve, 1000));
-      }
-    }
-  }
-
-  function runStatusLabel(run: RunSnapshot) {
-    if (run.status === 'waiting') return 'Waiting for your answer';
-    if (run.status === 'paused') return 'Paused';
-    if (run.status === 'running' || run.status === 'queued') return 'Running';
-    if (run.status === 'redirecting') return 'Applying guidance…';
-    if (run.status === 'completed') return run.outcome === 'succeeded' ? 'Completed' : run.outcome || 'Completed';
-    if (run.status === 'cancelled') return 'Turn stopped';
-    if (run.status === 'interrupted') return 'Interrupted · send a message to recover';
-    if (run.status === 'failed') return run.error || 'Turn failed';
-    return run.status;
+    const run = (await response.json()) as RunSnapshot;
+    if (!isCurrentSession(generation)) return;
+    activeRun = run;
+    sending = !terminalRun(run.status);
+    runStatus = runStatusLabel(run);
+    runMonitor.start(target, run.id);
   }
 
   function handleRunEvent(event: RunEvent) {
@@ -460,9 +452,12 @@
 
   async function reloadSelected() {
     if (!selected || !workspaceRoot) return;
+    const generation = sessionGeneration;
     const response = await fetch(`/api/v1/sessions/${encodeURIComponent(selected.session.session_id)}?workspace_root=${encodeURIComponent(workspaceRoot)}`);
     if (!response.ok) return;
-    selected = (await response.json()) as SessionDetail;
+    const detail = (await response.json()) as SessionDetail;
+    if (!isCurrentSession(generation)) return;
+    selected = detail;
     if (!selectedDelegation) messages = selected.transcript;
   }
 
@@ -475,9 +470,11 @@
 
   async function loadDelegations(sessionID = selected?.session.session_id || '') {
     if (!workspaceRoot || !sessionID) return;
+    const generation = sessionGeneration;
     const response = await fetch(`/api/v1/sessions/${encodeURIComponent(sessionID)}/delegations?workspace_root=${encodeURIComponent(workspaceRoot)}`);
     if (!response.ok) return;
     const result = (await response.json()) as { nodes: DelegationNode[] };
+    if (!isCurrentSession(generation)) return;
     delegations = flattenDelegations(result.nodes);
     if (selectedRegistration) {
       const updated = { ...selectedRegistration, delegations: result.nodes };
@@ -505,26 +502,30 @@
   async function commandRun(action: string, extra: Record<string, string> = {}) {
     if (!selected || !workspaceRoot || !activeRun) return;
     error = '';
+    const generation = sessionGeneration;
     try {
       const response = await fetch(`/api/v1/sessions/${encodeURIComponent(selected.session.session_id)}/runs/${encodeURIComponent(activeRun.id)}/commands`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ workspace_root: workspaceRoot, action, ...extra })
       });
       if (!response.ok) throw new Error(await apiError(response));
-      activeRun = (await response.json()) as RunSnapshot;
+      const run = (await response.json()) as RunSnapshot;
+      if (!isCurrentSession(generation)) return;
+      activeRun = run;
       sending = !terminalRun(activeRun.status);
       runStatus = runStatusLabel(activeRun);
     } catch (cause) {
-      error = cause instanceof Error ? cause.message : 'Could not control this turn';
+      if (isCurrentSession(generation)) error = cause instanceof Error ? cause.message : 'Could not control this turn';
     }
   }
 
   async function answerQuestion(answer = questionAnswer) {
     if (!activeRun?.pending_question) return;
+    const generation = sessionGeneration;
     const value = answer.trim();
     if (!value) return;
     await commandRun('answer', { call_id: activeRun.pending_question.call_id, answer: value });
-    if (!error) questionAnswer = '';
+    if (isCurrentSession(generation) && !error) questionAnswer = '';
   }
 
   function stopTurn() {
@@ -585,7 +586,8 @@
     };
     window.addEventListener('popstate', onPopState);
     return () => {
-      pollGeneration += 1;
+      sessionGeneration += 1;
+      runMonitor.stop();
       if (delegationRefresh) clearTimeout(delegationRefresh);
       window.removeEventListener('popstate', onPopState);
     };
@@ -703,8 +705,8 @@
       {:else}
         <div class="composer-wrap">
           <div class="composer">
-            <textarea bind:value={prompt} onkeydown={submitFromKeyboard} placeholder={sending ? 'Guide the current turn…' : 'Ask Q to work in this repository…'} rows="3"></textarea>
-            <button class="send-button" title={sending ? 'Guide current turn' : 'Send message'} onclick={sendPrompt} disabled={!prompt.trim()}><ArrowUp aria-hidden="true" size={17} /></button>
+            <textarea bind:value={prompt} onkeydown={submitFromKeyboard} placeholder={sending ? 'Guide the current turn…' : 'Ask Q to work in this repository…'} rows="3" disabled={sessionLoading}></textarea>
+            <button class="send-button" title={sending ? 'Guide current turn' : 'Send message'} onclick={sendPrompt} disabled={sessionLoading || !prompt.trim()}><ArrowUp aria-hidden="true" size={17} /></button>
           </div>
           <p>{sending ? 'Enter to redirect the current work with guidance' : 'Enter to send'} · Shift+Enter for a new line · {workspaceRoot}</p>
         </div>

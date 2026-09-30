@@ -62,6 +62,9 @@ Markdown headings and highlighted code, automatic checkbox persistence, and
 project creation/edit cancellation/update/deletion. The folder browser starts
 from home, closes before its owning dialog on Escape, and passes the selected
 workspace to real session registration. Reopening a dialog resets its inputs.
+Switching sessions aborts a held event request and rejects its late content;
+a delayed session detail response cannot overwrite a newer selection. Input is
+disabled until that selection finishes loading.
 The suite also verifies
 settings scrolling at 1440px and 900px widths. Settings keep their selected
 section, cached snapshot, and pending save queue across page navigation and

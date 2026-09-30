@@ -190,6 +190,97 @@ test('guidance redirects a real run without refresh and renders markdown and cod
   expect(transcript.some((message) => message.role === 'user' && message.content.includes('write the requested file'))).toBe(true);
 });
 
+test('switching sessions aborts polling and rejects an old run response', async ({ page, request }) => {
+  const fixture = await (await request.get('/_test/fixture')).json();
+  const first = await (await request.post('/api/v1/registered-sessions', { data: { workspace_root: fixture.root, create: true } })).json();
+  const second = await (await request.post('/api/v1/registered-sessions', { data: { workspace_root: fixture.other, create: true } })).json();
+  let release;
+  const gate = new Promise((resolve) => { release = resolve; });
+  let notifyHeld;
+  const held = new Promise((resolve) => { notifyHeld = resolve; });
+  let notifyDelivered;
+  const delivered = new Promise((resolve) => { notifyDelivered = resolve; });
+  const matchesRun = (url) => new URL(url).pathname.startsWith(`/api/v1/sessions/${first.session.session_id}/runs/`) && new URL(url).pathname.endsWith('/events');
+  let intercepted = false;
+  await page.route('**/events?**', async (route) => {
+    if (!matchesRun(route.request().url()) || intercepted) return route.continue();
+    intercepted = true;
+    const response = await route.fetch();
+    const body = await response.json();
+    body.run.status = 'running';
+    body.events = [{ cursor: 1, at: new Date().toISOString(), event: { type: 'stream', kind: 'response', start: true, content: 'STALE RUN CONTENT' } }];
+    notifyHeld();
+    await gate;
+    await route.fulfill({ response, json: body });
+    notifyDelivered();
+  });
+  try {
+    await page.goto(`/sessions/${first.registration_id}`);
+    const composer = page.locator('.composer textarea');
+    await expect(composer).toBeEnabled();
+    await composer.fill('wait for guidance');
+    await composer.press('Enter');
+    await held;
+    const aborted = page.waitForEvent('requestfailed', { predicate: (request) => matchesRun(request.url()) });
+    await page.locator('.session-root').filter({ hasText: second.session.session_id.slice(0, 10) }).getByRole('button', { name: /New session/ }).click();
+    await aborted;
+    await expect(page).toHaveURL(new RegExp(`/sessions/${second.registration_id}$`));
+    await expect(composer).toBeEnabled();
+    release();
+    await delivered;
+    await expect(composer).toHaveAttribute('placeholder', 'Ask Q to work in this repository…');
+    await expect(page.locator('.chat-heading p')).toHaveText(fixture.other);
+    await expect(page.locator('.transcript')).not.toContainText('STALE RUN CONTENT');
+    await expect(page.getByRole('heading', { name: 'Which direction?' })).toHaveCount(0);
+    // The previous run remains recoverable in its own session after observation stops.
+    const latest = await request.get(`/api/v1/sessions/${first.session.session_id}/runs/latest?workspace_root=${encodeURIComponent(fixture.root)}`);
+    expect(latest.ok()).toBe(true);
+    const run = await latest.json();
+    expect(['queued', 'running', 'waiting', 'paused']).toContain(run.status);
+    const cancelled = await request.post(`/api/v1/sessions/${first.session.session_id}/runs/${run.id}/commands`, { data: { workspace_root: fixture.root, action: 'cancel' } });
+    expect(cancelled.ok()).toBe(true);
+  } finally {
+    release();
+  }
+});
+
+test('a delayed session detail cannot replace a newer selection', async ({ page, request }) => {
+  const fixture = await (await request.get('/_test/fixture')).json();
+  const first = await (await request.post('/api/v1/registered-sessions', { data: { workspace_root: fixture.project_root, create: true } })).json();
+  const second = await (await request.post('/api/v1/registered-sessions', { data: { workspace_root: fixture.project_other, create: true } })).json();
+  await page.goto(`/sessions/${second.registration_id}`);
+  await expect(page.locator('.composer textarea')).toBeEnabled();
+  let release;
+  const gate = new Promise((resolve) => { release = resolve; });
+  let notifyHeld;
+  const held = new Promise((resolve) => { notifyHeld = resolve; });
+  await page.route(`**/api/v1/sessions/${first.session.session_id}?**`, async (route) => {
+    const response = await route.fetch();
+    notifyHeld();
+    await gate;
+    await route.fulfill({ response });
+  });
+  const rootButton = (session) => page.locator('.session-root').filter({ hasText: session.session.session_id.slice(0, 10) }).getByRole('button', { name: /New session/ });
+  try {
+    await rootButton(first).click();
+    await held;
+    await expect(page.locator('.composer textarea')).toBeDisabled();
+    await rootButton(second).click();
+    await expect(page.locator('.composer textarea')).toBeEnabled();
+    const oldResponse = page.waitForResponse((response) => new URL(response.url()).pathname === `/api/v1/sessions/${first.session.session_id}`);
+    release();
+    await oldResponse;
+    // A subsequent round trip gives rendering and the old response handler time to finish.
+    await page.getByRole('button', { name: 'Configure session project' }).click();
+    await expect(page.getByRole('dialog').locator('.auxiliary-list code')).toHaveText(fixture.project_other);
+    await page.keyboard.press('Escape');
+    await expect(page).toHaveURL(new RegExp(`/sessions/${second.registration_id}$`));
+    await expect(page.locator('.chat-heading p')).toHaveText(fixture.project_other);
+  } finally {
+    release();
+  }
+});
+
 test('runtime checkbox saves automatically and survives reload', async ({ page, request }) => {
   await page.goto('/settings?section=runtime');
   const checkbox = page.getByRole('checkbox', { name: 'Garbage collection' });
