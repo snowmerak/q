@@ -491,3 +491,21 @@ activity 표시 책임을 분리하는 것이다.
 검증: Svelte 검사, Studio Go 테스트, `task studio:test`(브라우저 15개),
 `git diff --check`를 통과했다. 기존 Playwright fixture로 실제 browser 렌더링을
 검증했고 배포 bundle을 재빌드했다. 다음 단계는 session transcript/activity 표시다.
+
+## 17. Studio 대화·활동 표시 책임 분리 (2026-10-01)
+
+- `sessions/Transcript.svelte`가 user/assistant 메시지, tool call/result,
+  thinking과 response draft, loading 표시와 transcript DOM을 소유한다.
+  `SessionView.svelte`는 메시지와 실행 상태를 전달하고, 렌더링 완료 후
+  component의 scroll 동작을 호출한다.
+- `sessions/RunActivity.svelte`가 active task, delegation tree, change request와
+  tool activity 표시를 소유한다. 표시 helper는 기존 `sessions/format.ts`에 모았다.
+- 부모 화면은 session 선택, 입력, 질문 답변, 실행 command와 run monitor를 계속
+  소유한다. 반복 tool ID를 위한 message/call index key와 기존 DOM 구조를 유지해
+  새로고침 replay, tool 결과 펼치기와 화면 폭에 따른 정렬을 보존한다.
+
+검증: Svelte 검사와 `task studio:test`(브라우저 15개)를 통과했다. 실제 default
+loop의 guidance 전환, 응답 갱신, replay와 Markdown/code 표시, 900·1440·2560·
+3440px에서 tool call/result 양쪽 정렬을 검증했고, 1440px 대화 screenshot도
+확인했다. 배포 bundle을 재빌드했다. 이 단계에서는 기존 표시의 책임만 나눴다.
+다음 정리 후보는 subagent 설정의 profile/connection 상태와 session tree 표시다.

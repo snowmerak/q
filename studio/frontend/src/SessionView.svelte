@@ -1,11 +1,12 @@
 <script lang="ts">
-  import { ArrowUp, Bot, BrainCircuit, Eraser, Folders, GitBranch, GitCompareArrows, Minimize2, Pause, Play, Plus, RefreshCw, Square, Terminal, Trash2, User, Wrench, X } from '@lucide/svelte';
+  import { ArrowUp, Bot, BrainCircuit, Eraser, Folders, GitBranch, GitCompareArrows, Minimize2, Pause, Play, Plus, RefreshCw, Square, Trash2, X } from '@lucide/svelte';
   import { onMount, tick } from 'svelte';
-  import Markdown from './Markdown.svelte';
+  import Transcript from './sessions/Transcript.svelte';
+  import RunActivity from './sessions/RunActivity.svelte';
   import ProjectDialog from './sessions/ProjectDialog.svelte';
   import SessionRegistration from './sessions/SessionRegistration.svelte';
   import { apiError } from './api';
-  import { formatSessionTime, shortID } from './sessions/format';
+  import { contextPercent, formatSessionTime, formatTokenCount, shortID } from './sessions/format';
   import { RunMonitor, runStatusLabel, terminalRun } from './sessions/run-monitor';
   import type { DelegationNode, FlatDelegation, Message, RegisteredSessionTree, RunEvent, RunSnapshot, SessionDetail, StudioProject } from './sessions/types';
 
@@ -32,7 +33,7 @@
   let questionAnswer = '';
   let delegations: FlatDelegation[] = [];
   let delegationRefresh: ReturnType<typeof setTimeout> | null = null;
-  let transcriptElement: HTMLElement | null = null;
+  let transcript: Transcript | null = null;
   let learningEnabled = true;
   let learningLoading = false;
   let registrationDialogOpen = false;
@@ -539,41 +540,9 @@
     }
   }
 
-  function formatTokenCount(value = 0) {
-    if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}m`;
-    if (value >= 1_000) return `${(value / 1_000).toFixed(1)}k`;
-    return new Intl.NumberFormat().format(value);
-  }
-
-  function contextPercent(run: RunSnapshot) {
-    if (!run.context_size) return 0;
-    return Math.min(999, Math.floor((run.context_used || 0) * 100 / run.context_size));
-  }
-
-  function eventTitle(event: RunEvent) {
-    if (event.type === 'tool_call') return event.name || 'Tool call';
-    if (event.type === 'trace') return [event.agent, event.name || event.kind].filter(Boolean).join(' · ');
-    if (event.type === 'activity') return [event.agent, event.action].filter(Boolean).join(' · ');
-    if (event.type === 'question') return 'Question';
-    return event.name || event.type;
-  }
-
-  function eventBody(event: RunEvent) {
-    return event.detail || event.question || event.content || '';
-  }
-
-  function toolArguments(value?: string) {
-    if (!value) return '';
-    try {
-      return `\`\`\`json\n${JSON.stringify(JSON.parse(value), null, 2)}\n\`\`\``;
-    } catch {
-      return `\`\`\`text\n${value}\n\`\`\``;
-    }
-  }
-
   async function scrollToBottom() {
     await tick();
-    transcriptElement?.scrollTo({ top: transcriptElement.scrollHeight, behavior: 'smooth' });
+    transcript?.scrollToBottom();
   }
 
   onMount(() => {
@@ -664,35 +633,7 @@
           {/if}
         </div>
       </div>
-      <div class="transcript" bind:this={transcriptElement} aria-live="polite">
-        {#each messages as message, messageIndex (`${messageIndex}-${message.role}-${message.tool_call_id || ''}`)}
-          {#if message.role === 'user' || message.role === 'assistant'}
-            <article class="chat-message" class:user-message={message.role === 'user'}>
-              <div class="message-avatar">{#if message.role === 'user'}<User aria-hidden="true" size={16} />{:else}<Bot aria-hidden="true" size={17} />{/if}</div>
-              <div class="message-content"><header>{message.role === 'user' ? 'You' : 'Q'}</header>{#if message.content}<Markdown content={message.content} />{/if}
-                {#if message.tool_calls?.length}
-                  <div class="message-tools">
-                    {#each message.tool_calls as call, callIndex (`${callIndex}-${call.id || ''}`)}
-                      <details class="tool-card">
-                        <summary><Wrench aria-hidden="true" size={14} /><span>{call.function?.name || 'Tool call'}</span><code>{call.id ? shortID(call.id) : 'pending'}</code></summary>
-                        {#if call.function?.arguments}<Markdown compact content={toolArguments(call.function.arguments)} />{/if}
-                      </details>
-                    {/each}
-                  </div>
-                {/if}
-              </div>
-            </article>
-          {:else if message.role === 'tool'}
-            <details class="transcript-tool-result">
-              <summary><Wrench aria-hidden="true" size={14} /><span>{message.name || 'Tool result'}</span>{#if message.tool_call_id}<code>{shortID(message.tool_call_id)}</code>{/if}</summary>
-              <Markdown compact content={message.content || '_No output_'} />
-            </details>
-          {/if}
-        {/each}
-        {#if thinkingDraft}<details class="thinking-block"><summary>Thinking</summary><Markdown compact content={thinkingDraft} /></details>{/if}
-        {#if responseDraft}<article class="chat-message streaming-message"><div class="message-avatar"><Bot aria-hidden="true" size={17} /></div><div class="message-content"><header>Q <span>responding</span></header><Markdown content={responseDraft} /></div></article>{/if}
-        {#if sessionLoading}<div class="transcript-loading">Loading session…</div>{/if}
-      </div>
+      <Transcript bind:this={transcript} {messages} {thinkingDraft} {responseDraft} loading={sessionLoading} />
       {#if !selectedDelegation && activeRun?.pending_question}
         <section class="run-question" aria-labelledby="run-question-title">
           <div><span>Q NEEDS INPUT</span><h3 id="run-question-title">{activeRun.pending_question.question}</h3>{#if activeRun.pending_question.context}<p>{activeRun.pending_question.context}</p>{/if}</div>
@@ -716,35 +657,7 @@
     {/if}
   </section>
 
-  <aside class="run-inspector" aria-label="Current turn activity">
-    <div class="inspector-heading"><Terminal aria-hidden="true" size={16} /><span>Turn activity</span></div>
-    {#if selected?.active_task}<div class="active-task"><span>ACTIVE TASK</span><strong>{selected.active_task.objective}</strong></div>{/if}
-    {#if delegations.length}
-      <div class="delegation-tree">
-        <span class="inspector-label">DELEGATION TREE</span>
-        {#each delegations as node}
-          <details style={`--tree-depth: ${node.depth}`}>
-            <summary><span class="tree-branch" aria-hidden="true"></span><strong>{node.bookmark.agent}</strong><em>{node.state?.status || 'recorded'}</em></summary>
-            <p>{node.bookmark.prompt}</p>
-            {#if node.state?.change_request}<small class="change-request-summary">Change request {node.state.change_request.status} · {node.state.change_request.head_ref} · {shortID(node.state.change_request.base_commit)} → {shortID(node.state.change_request.head_commit || 'working')}</small>{/if}
-            {#if node.state?.running_call}<small>Running {node.state.running_call.name} · {shortID(node.state.running_call.call_id)}</small>{/if}
-            {#if node.state?.unknown_tools?.length}<small>{node.state.unknown_tools.length} interrupted tool call(s) require review</small>{/if}
-            {#if node.issue}<small class="tree-issue">{node.issue}</small>{/if}
-          </details>
-        {/each}
-      </div>
-    {/if}
-    <div class="event-list">
-      {#each events as event}
-        <article class:error-event={event.is_error || event.type === 'error'}>
-          <div class="event-icon"><Wrench aria-hidden="true" size={13} /></div>
-          <div><strong>{eventTitle(event)}</strong>{#if eventBody(event)}<p>{eventBody(event)}</p>{/if}</div>
-        </article>
-      {:else}
-        <div class="events-empty"><p>Tool calls and agent activity from the current turn appear here.</p></div>
-      {/each}
-    </div>
-  </aside>
+  <RunActivity activeTask={selected?.active_task} {delegations} {events} />
 </div>
 
 {#if registrationDialogOpen}
