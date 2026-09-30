@@ -6,7 +6,9 @@
   "scripts": {
     "dev": "vite --host 127.0.0.1",
     "build": "vite build",
-    "check": "svelte-check --tsconfig ./tsconfig.json"
+    "check": "svelte-check --tsconfig ./tsconfig.json",
+    "test:e2e": "npm run build && playwright test",
+    "test:e2e:install": "playwright install chromium"
   },
   "dependencies": {
     "@lucide/svelte": "1.48.0",
@@ -15,6 +17,7 @@
     "svelte": "5.57.1"
   },
   "devDependencies": {
+    "@playwright/test": "1.63.0",
     "@sveltejs/vite-plugin-svelte": "7.3.1",
     "@types/markdown-it": "14.1.2",
     "svelte-check": "4.7.6",

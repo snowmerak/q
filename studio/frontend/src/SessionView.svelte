@@ -945,14 +945,14 @@
         </div>
       </div>
       <div class="transcript" bind:this={transcriptElement} aria-live="polite">
-        {#each messages as message, messageIndex (`${message.role}-${message.tool_call_id || messageIndex}`)}
+        {#each messages as message, messageIndex (`${messageIndex}-${message.role}-${message.tool_call_id || ''}`)}
           {#if message.role === 'user' || message.role === 'assistant'}
             <article class="chat-message" class:user-message={message.role === 'user'}>
               <div class="message-avatar">{#if message.role === 'user'}<User aria-hidden="true" size={16} />{:else}<Bot aria-hidden="true" size={17} />{/if}</div>
               <div class="message-content"><header>{message.role === 'user' ? 'You' : 'Q'}</header>{#if message.content}<Markdown content={message.content} />{/if}
                 {#if message.tool_calls?.length}
                   <div class="message-tools">
-                    {#each message.tool_calls as call, callIndex (call.id || callIndex)}
+                    {#each message.tool_calls as call, callIndex (`${callIndex}-${call.id || ''}`)}
                       <details class="tool-card">
                         <summary><Wrench aria-hidden="true" size={14} /><span>{call.function?.name || 'Tool call'}</span><code>{call.id ? shortID(call.id) : 'pending'}</code></summary>
                         {#if call.function?.arguments}<Markdown compact content={toolArguments(call.function.arguments)} />{/if}

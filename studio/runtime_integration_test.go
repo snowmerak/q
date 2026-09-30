@@ -1,0 +1,350 @@
+package studio
+
+import (
+	"context"
+	"encoding/json"
+	"flag"
+	"fmt"
+	"io"
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/snowmerak/q/app"
+	"github.com/snowmerak/q/client"
+	"github.com/snowmerak/q/config"
+	qlibrary "github.com/snowmerak/q/library"
+	"github.com/snowmerak/q/loom"
+	"github.com/snowmerak/q/providerhost"
+	"github.com/snowmerak/q/usagelog"
+	"github.com/snowmerak/q/workspace"
+	"github.com/snowmerak/q/workspacememory"
+)
+
+// SessionHost starts Q's Gateway and Loom in the current executable. Let the
+// test binary host those real children, with the same stdin-owned lifetime.
+func TestMain(m *testing.M) {
+	if len(os.Args) > 1 && (os.Args[1] == providerhost.ChildCommand || os.Args[1] == loom.ChildCommand) {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		var err error
+		if os.Args[1] == loom.ChildCommand {
+			err = loom.RunChild(ctx, os.Stdin, os.Stdout)
+		} else {
+			flags := flag.NewFlagSet("gateway-test-child", flag.ContinueOnError)
+			path := flags.String("config", "", "runtime snapshot")
+			err = flags.Parse(os.Args[2:])
+			if err == nil {
+				go func() { _, _ = io.Copy(io.Discard, os.Stdin); cancel() }()
+				err = providerhost.RunChild(ctx, *path, os.Getenv(providerhost.ChildAPIKeyEnv), providerhost.EncodeReady(json.NewEncoder(os.Stdout)))
+			}
+		}
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		os.Exit(0)
+	}
+	os.Exit(m.Run())
+}
+
+type studioIntegration struct {
+	handler http.Handler
+	root    string
+	session workspace.Store
+}
+
+func newStudioIntegration(t *testing.T) studioIntegration {
+	t.Helper()
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	store := config.Store{Dir: filepath.Join(home, ".q")}
+	port := func() int {
+		t.Helper()
+		listener, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		value := listener.Addr().(*net.TCPAddr).Port
+		if err := listener.Close(); err != nil {
+			t.Fatal(err)
+		}
+		return value
+	}
+	if err := (qlibrary.ConfigStore{Dir: store.Dir}).Save(qlibrary.Config{Version: qlibrary.ConfigVersion, Host: "127.0.0.1", Port: port()}); err != nil {
+		t.Fatal(err)
+	}
+	if err := (workspacememory.ConfigStore{Dir: store.Dir}).Save(workspacememory.Config{Version: workspacememory.ConfigVersion, Host: "127.0.0.1", Port: port()}); err != nil {
+		t.Fatal(err)
+	}
+	if err := (usagelog.ConfigStore{Dir: store.Dir}).Save(usagelog.Config{Version: usagelog.ConfigVersion, Host: "127.0.0.1", Port: port()}); err != nil {
+		t.Fatal(err)
+	}
+	upstream := httptest.NewServer(http.HandlerFunc(studioTestModel))
+	t.Cleanup(upstream.Close)
+	value := config.Default()
+	value.Provider.Model, value.Provider.BaseURL, value.Provider.APIKeyEnv = "test-model", upstream.URL+"/v1", ""
+	if err := store.Save(value); err != nil {
+		t.Fatal(err)
+	}
+	host, err := app.NewSessionHost(t.Context(), store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := host.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	handler, commits, runs, err := newHandlerRuntime(t.Context(), store, host)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := runs.Close(); err != nil {
+			t.Error(err)
+		}
+		if err := commits.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	root := t.TempDir()
+	session, lock, err := workspace.CreateSession(root, "Studio integration")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := lock.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return studioIntegration{handler: handler, root: root, session: session}
+}
+
+// Only the model is substituted: HTTP, Gateway, SessionHost, tools, event log
+// and workspace storage all run normally against disposable local resources.
+func studioTestModel(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path == "/v1/models" {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"object":"list","data":[{"id":"test-model","object":"model"}]}`)
+		return
+	}
+	if r.URL.Path != "/v1/chat/completions" {
+		http.NotFound(w, r)
+		return
+	}
+	var request struct {
+		client.ChatRequest
+		Stream bool `json:"stream"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+		http.Error(w, err.Error(), 400)
+		return
+	}
+	latestUser := -1
+	for i, message := range request.Messages {
+		if message.Role == client.RoleUser {
+			latestUser = i
+		}
+	}
+	text := ""
+	if latestUser >= 0 {
+		text = request.Messages[latestUser].TextContent()
+	}
+	completed := map[string]bool{}
+	activeTask := false
+	for _, message := range request.Messages {
+		if message.Role == client.RoleAssistant {
+			for _, call := range message.ToolCalls {
+				if call.Function.Name == "task_start" {
+					activeTask = true
+				}
+				if call.Function.Name == "task_complete" {
+					activeTask = false
+				}
+			}
+		}
+	}
+	for _, message := range request.Messages[latestUser+1:] {
+		if message.Role == client.RoleAssistant {
+			for _, call := range message.ToolCalls {
+				completed[call.Function.Name] = true
+			}
+		}
+	}
+	// Guidance continues the interrupted lifecycle rather than starting it twice.
+	completed["task_start"] = completed["task_start"] || activeTask
+	name, arguments := "task_start", `{"objective":"Exercise Studio runtime"}`
+	if completed["task_start"] {
+		switch {
+		case strings.Contains(text, "wait for guidance") && !completed["ask_to_user"]:
+			name, arguments = "ask_to_user", `{"question":"Which direction?","choices":[{"id":"blue","label":"Blue"},{"id":"green","label":"Green"}]}`
+		case !strings.Contains(text, "wait for guidance") && !completed["write_file"]:
+			name, arguments = "write_file", `{"path":"studio-result.txt","content":"created through the real default loop"}`
+		default:
+			name, arguments = "task_complete", `{"outcome":"succeeded","summary":"## Studio result\n\nCreated **studio-result.txt**.\n\n\u0060\u0060\u0060go\npackage main\n\u0060\u0060\u0060"}`
+		}
+	}
+	message := client.Message{Role: client.RoleAssistant}
+	finish := "stop"
+	if fmt.Sprint(request.ToolChoice) != string(client.ToolChoiceNone) {
+		finish = "tool_calls"
+		message.ToolCalls = []client.ToolCall{{ID: "test-" + name, Type: client.ToolTypeFunction, Function: client.FunctionCall{Name: name, Arguments: arguments}}}
+	}
+	if request.Stream {
+		w.Header().Set("Content-Type", "text/event-stream")
+		calls := []map[string]any{}
+		for i, call := range message.ToolCalls {
+			calls = append(calls, map[string]any{"index": i, "id": call.ID, "type": call.Type, "function": call.Function})
+		}
+		chunk := map[string]any{"id": "studio-test", "model": "test-model", "choices": []any{map[string]any{"index": 0, "delta": map[string]any{"role": "assistant", "tool_calls": calls}, "finish_reason": finish}}}
+		body, _ := json.Marshal(chunk)
+		_, _ = fmt.Fprintf(w, "data: %s\n\ndata: [DONE]\n\n", body)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]any{"id": "studio-test", "model": "test-model", "choices": []any{map[string]any{"index": 0, "message": message, "finish_reason": finish}}})
+}
+
+func (fixture studioIntegration) start(t *testing.T, prompt string) studioRunSnapshot {
+	t.Helper()
+	response := serveJSON(t, fixture.handler, http.MethodPost, "/api/v1/sessions/"+fixture.session.SessionID+"/messages", map[string]string{"workspace_root": fixture.root, "content": prompt})
+	if response.Code != http.StatusAccepted {
+		t.Fatalf("start = %d %s", response.Code, response.Body.String())
+	}
+	var run studioRunSnapshot
+	if err := json.Unmarshal(response.Body.Bytes(), &run); err != nil {
+		t.Fatal(err)
+	}
+	return run
+}
+
+func TestStudioRealRuntimeGuidanceRedirectsAndPersistsTools(t *testing.T) {
+	fixture := newStudioIntegration(t)
+	server := httptest.NewServer(fixture.handler)
+	defer server.Close()
+	run := fixture.start(t, "wait for guidance")
+	base := server.URL + "/api/v1/sessions/" + fixture.session.SessionID
+	query := "?workspace_root=" + url.QueryEscape(fixture.root)
+	page := waitStudioPage(t, base+"/runs/"+run.ID+"/events"+query, func(page studioRunPage) bool { return page.Run.Status == "waiting" })
+	if page.Run.PendingQuestion == nil {
+		t.Fatal("question missing")
+	}
+	command := serveJSON(t, fixture.handler, http.MethodPost, "/api/v1/sessions/"+fixture.session.SessionID+"/runs/"+run.ID+"/commands", studioRunCommandRequest{WorkspaceRoot: fixture.root, Action: "guidance", Content: "write the requested file"})
+	if command.Code != http.StatusOK {
+		t.Fatalf("guidance = %d %s", command.Code, command.Body.String())
+	}
+	page = waitStudioPage(t, base+"/runs/"+run.ID+"/events"+query, func(page studioRunPage) bool { return page.Run.Status == "redirected" })
+	nextID := ""
+	for _, record := range page.Events {
+		if record.Event.Type == "redirect" {
+			nextID = record.Event.RunID
+		}
+	}
+	if nextID == "" || nextID == run.ID {
+		t.Fatalf("redirect events = %#v", page.Events)
+	}
+	page = waitStudioPage(t, base+"/runs/"+nextID+"/events"+query, func(page studioRunPage) bool { return terminalRunStatus(page.Run.Status) })
+	if page.Run.Status != "completed" || page.Run.Outcome != "succeeded" {
+		t.Fatalf("guided run = %#v", page.Run)
+	}
+	body, err := os.ReadFile(filepath.Join(fixture.root, "studio-result.txt"))
+	if err != nil || string(body) != "created through the real default loop" {
+		t.Fatalf("tool side effect = %q, %v", body, err)
+	}
+	session, err := fixture.session.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, _ := json.Marshal(session.Transcript)
+	if !strings.Contains(string(encoded), "write the requested file") || !strings.Contains(string(encoded), "write_file") {
+		t.Fatalf("transcript lost guidance/tools: %s", encoded)
+	}
+	response, err := http.Get(base + "/runs/latest" + query)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	var latest studioRunSnapshot
+	if err := json.NewDecoder(response.Body).Decode(&latest); err != nil {
+		t.Fatal(err)
+	}
+	if latest.ID != nextID {
+		t.Fatalf("latest = %q, want %q", latest.ID, nextID)
+	}
+}
+
+func waitStudioPage(t *testing.T, endpoint string, ready func(studioRunPage) bool) studioRunPage {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Second)
+	defer cancel()
+	var page studioRunPage
+	for ctx.Err() == nil {
+		request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint+"&after=0&wait_ms=100", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		response, err := http.DefaultClient.Do(request)
+		if err != nil {
+			t.Fatalf("poll: %v; last run %#v", err, page.Run)
+		}
+		decodeErr := json.NewDecoder(response.Body).Decode(&page)
+		_ = response.Body.Close()
+		if response.StatusCode != 200 || decodeErr != nil {
+			t.Fatalf("poll = %d, %v", response.StatusCode, decodeErr)
+		}
+		if ready(page) {
+			return page
+		}
+		select {
+		case <-ctx.Done():
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+	t.Fatalf("run did not reach expected state: %#v", page.Run)
+	return page
+}
+
+// Launched only by the opt-in Playwright suite, on a supplied loopback port.
+func TestStudioBrowserFixture(t *testing.T) {
+	address := os.Getenv("Q_STUDIO_BROWSER_ADDRESS")
+	if address == "" {
+		t.Skip("launched by npm run test:e2e; browser boundary is not part of go test")
+	}
+	fixture := newStudioIntegration(t)
+	other := t.TempDir()
+	projects := serveJSON(t, fixture.handler, http.MethodPost, "/api/v1/projects", studioProjectUpdateRequest{Name: "Integration", WorkspaceRoots: []string{fixture.root, other}})
+	if projects.Code != 201 {
+		t.Fatalf("project = %d %s", projects.Code, projects.Body.String())
+	}
+	projects = serveJSON(t, fixture.handler, http.MethodPost, "/api/v1/projects", studioProjectUpdateRequest{Name: "Solo", WorkspaceRoots: []string{t.TempDir()}})
+	if projects.Code != 201 {
+		t.Fatalf("project = %d %s", projects.Code, projects.Body.String())
+	}
+	closed := make(chan struct{})
+	var once sync.Once
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /_test/fixture", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, 200, map[string]string{"root": fixture.root, "other": other, "session_id": fixture.session.SessionID})
+	})
+	mux.HandleFunc("POST /_test/shutdown", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(204); once.Do(func() { close(closed) }) })
+	mux.Handle("/", fixture.handler)
+	listener, err := net.Listen("tcp", address)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := &http.Server{Handler: mux, ReadHeaderTimeout: 5 * time.Second}
+	done := make(chan error, 1)
+	go func() { done <- server.Serve(listener) }()
+	t.Cleanup(func() { _ = server.Close(); <-done })
+	select {
+	case <-closed:
+	case <-t.Context().Done():
+	}
+}

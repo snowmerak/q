@@ -2,6 +2,7 @@ package studio
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -381,9 +382,17 @@ func loadLatestStudioRun(root string, store workspace.Store) (*studioRun, error)
 	snapshot = rebuilt
 	run := &studioRun{root: root, store: store, snapshot: snapshot, events: events, notify: make(chan struct{}), closed: true}
 	if !terminalRunStatus(snapshot.Status) {
-		log, openErr := os.OpenFile(filepath.Join(store.SessionDir(), studioRunsDirectory, snapshot.ID+".ndjson"), os.O_APPEND|os.O_WRONLY, 0o600)
+		log, openErr := os.OpenFile(filepath.Join(store.SessionDir(), studioRunsDirectory, snapshot.ID+".ndjson"), os.O_RDWR, 0o600)
 		if openErr != nil {
 			return nil, openErr
+		}
+		if err := repairStudioRunTail(log); err != nil {
+			_ = log.Close()
+			return nil, err
+		}
+		if _, err := log.Seek(0, io.SeekEnd); err != nil {
+			_ = log.Close()
+			return nil, err
 		}
 		run.log, run.closed = log, false
 		if err := run.append(app.SessionEvent{Type: "recovered", RunID: snapshot.ID, Detail: "Studio restarted while this turn was active; continue the session to recover persisted work"}); err != nil {
@@ -393,6 +402,30 @@ func loadLatestStudioRun(root string, store workspace.Store) (*studioRun, error)
 		_ = run.close()
 	}
 	return run, nil
+}
+
+// Event replay tolerates an interrupted final write. Before appending recovery
+// events, remove that fragment or terminate a complete final JSON record so a
+// subsequent restart can still decode the log.
+func repairStudioRunTail(file *os.File) error {
+	info, err := file.Stat()
+	if err != nil || info.Size() == 0 {
+		return err
+	}
+	start := max(int64(0), info.Size()-maximumRunEventSize-1)
+	tail := make([]byte, info.Size()-start)
+	if _, err := file.ReadAt(tail, start); err != nil {
+		return err
+	}
+	if tail[len(tail)-1] == '\n' {
+		return nil
+	}
+	boundary := bytes.LastIndexByte(tail, '\n') + 1
+	if json.Valid(tail[boundary:]) {
+		_, err = file.WriteAt([]byte{'\n'}, info.Size())
+		return err
+	}
+	return file.Truncate(start + int64(boundary))
 }
 
 func readStudioRunEvents(path string) ([]studioRunEvent, error) {
@@ -440,7 +473,7 @@ func readStudioRunEvents(path string) ([]studioRunEvent, error) {
 		var tail [1]byte
 		_, readErr := file.ReadAt(tail[:], max(0, info.Size()-1))
 		partialTail := readErr == nil && tail[0] != '\n'
-		if err := decode(pending); err != nil && !partialTail {
+		if err := decode(pending); err != nil && (!partialTail || json.Valid(pending)) {
 			return nil, err
 		}
 	}

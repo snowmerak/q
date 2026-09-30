@@ -877,9 +877,23 @@ task build
 task dist:check
 ```
 
-`task test` also tests the nested ACP modules and checks generated binding
-drift. See [ACP fork maintenance](docs/acp-go-sdk-patch.md) before updating or
-publishing the fork.
+Install the Studio development dependencies with `task studio:install` first.
+`task test` also tests the nested ACP modules, checks generated binding drift,
+and checks Studio types. See [ACP fork maintenance](docs/acp-go-sdk-patch.md)
+before updating or publishing the fork.
+
+Studio browser regressions run separately:
+
+```powershell
+npm --prefix ./studio/frontend run test:e2e:install
+task studio:test
+```
+
+The browser suite builds and serves the embedded UI with disposable settings,
+workspaces, and a local model fixture. It needs no provider API keys and leaves
+your running Studio and user configuration untouched. See
+[Regression and integration tests](docs/testing.md) for covered workflows and
+failure diagnostics.
 
 ### Design notes
 

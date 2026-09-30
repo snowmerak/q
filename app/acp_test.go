@@ -546,11 +546,25 @@ func TestACPAgentConcurrentResumeSharesOneSessionRuntime(t *testing.T) {
 	}
 }
 
+type activationWaitContext struct {
+	context.Context
+	waiting chan struct{}
+	once    sync.Once
+}
+
+func (ctx *activationWaitContext) Done() <-chan struct{} {
+	ctx.once.Do(func() { close(ctx.waiting) })
+	return ctx.Context.Done()
+}
+
 func TestACPAgentCloseWaitsForSessionActivation(t *testing.T) {
 	tools := &fakeACPExternalTools{
 		blockCall: 3, blockEntered: make(chan struct{}), blockRelease: make(chan struct{}),
 	}
 	agent, workspaceStore, _ := testACPAgent(t, &fakeClient{}, tools)
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(func() { close(tools.blockRelease) }) }
+	t.Cleanup(release)
 	servers := []acp.McpServer{{Stdio: &acp.McpServerStdio{Name: "session", Command: "session-mcp"}}}
 	created, err := agent.NewSession(t.Context(), acp.NewSessionRequest{
 		Cwd: workspaceStore.Root, McpServers: servers,
@@ -574,17 +588,28 @@ func TestACPAgentCloseWaitsForSessionActivation(t *testing.T) {
 		t.Fatal("resume did not reach its activation barrier")
 	}
 	closeDone := make(chan error, 1)
+	closeContext := &activationWaitContext{Context: t.Context(), waiting: make(chan struct{})}
 	go func() {
-		_, err := agent.CloseSession(t.Context(), acp.CloseSessionRequest{SessionId: created.SessionId})
+		_, err := agent.CloseSession(closeContext, acp.CloseSessionRequest{SessionId: created.SessionId})
 		closeDone <- err
 	}()
+	select {
+	case <-closeContext.waiting:
+	case err := <-closeDone:
+		t.Fatalf("close did not wait for activation: %v", err)
+	case <-time.After(time.Second):
+		t.Fatal("close did not reach the activation wait")
+	}
 	select {
 	case err := <-closeDone:
 		t.Fatalf("close returned before activation completed: %v", err)
 	default:
 	}
-	close(tools.blockRelease)
-	if err := <-resumeDone; err != nil {
+	release()
+	// Once activation publishes the runtime, Close may win before Resume
+	// starts background learning. Both completion orders are valid; the
+	// invariant below is that Close leaves no active session behind.
+	if err := <-resumeDone; err != nil && err.Error() != "no ACP session is open for this workspace" {
 		t.Fatal(err)
 	}
 	if err := <-closeDone; err != nil {

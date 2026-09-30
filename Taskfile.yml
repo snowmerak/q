@@ -33,6 +33,11 @@ tasks:
       - npm --prefix ./studio/frontend run build
       - git diff --exit-code -- ./studio/frontend/dist
 
+  studio:test:
+    desc: Run browser regression tests against an isolated Studio and local model fixture
+    cmds:
+      - npm --prefix ./studio/frontend run test:e2e
+
   run:
     desc: Run q from source
     interactive: true
@@ -40,12 +45,13 @@ tasks:
       - go run ./cmd/q {{.CLI_ARGS}}
 
   test:
-    desc: Test q and both nested ACP modules, including generated binding drift
+    desc: Test q and both nested ACP modules, generated bindings, and Studio types
     cmds:
       - go test ./...
       - go -C third_party/acp-go-sdk test ./...
       - go -C third_party/acp-go-sdk/cmd/generate test ./...
       - task: acp:check
+      - npm --prefix ./studio/frontend run check
 
   acp:generate:
     desc: Regenerate ACP bindings from pinned schemas and Q's overlay
