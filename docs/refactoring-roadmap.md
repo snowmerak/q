@@ -448,3 +448,24 @@ controller와 `studio/integrations.go`의 기능별 분리다.
 
 검증: Svelte 검사와 `task studio:test`(브라우저 11개)를 통과했다.
 배포 bundle을 재빌드했다. 다음 단계는 Go integration 처리의 기능별 분리다.
+
+## 15. Studio integration 처리 분리 (2026-10-01)
+
+- 909줄의 `studio/integrations.go`에서 MCP, LSP, Skills, agent connection,
+  subagent profile과 ignore 처리를 각각 `integrations_mcp.go`,
+  `integrations_lsp.go`, `integrations_skills.go`, `integrations_agents.go`,
+  `integrations_profiles.go`, `integrations_ignore.go`로 옮겼다. 각 기능의
+  request/response 타입은 그 기능과 함께 둔다.
+- `integrations.go`는 service 생성, 공유 mutex, 선택적 workspace 경로 처리,
+  revision과 strict request decode만 소유하며 66줄로 줄었다. profile store와
+  delegation graph 검증은 profile 처리와, connection 참조 검증과 secret
+  마스킹은 agent connection 처리와 함께 유지한다.
+- 분리 전후 선언 47개의 본문을 문자열 내부까지 동일하게 비교했다. HTTP 경로,
+  JSON 계약, 요청 크기 제한, 공유 lock, revision conflict와 runtime 적용 순서는
+  변경하지 않았다.
+
+검증: `go test ./studio -count=1 -timeout=3m`, `go vet ./studio`,
+`task studio:test`(브라우저 11개), `git diff --check`를 통과했다. MCP/LSP 설정,
+Skills 목록, connection/profile 저장과 ignore revision 충돌을 기존 회귀 테스트로
+검증했다. 다음 후보는 frontend integration 화면의 기능별 상태와 세션 transcript/
+activity 표시 책임을 분리하는 것이다.
