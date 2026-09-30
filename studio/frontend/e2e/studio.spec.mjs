@@ -823,3 +823,41 @@ test('initial folder lookup preserves a directory typed while loading', async ({
   await browser.getByRole('button', { name: 'Go', exact: true }).click();
   await expect(browser.locator('footer code')).toHaveText(fixture.project_other);
 });
+
+
+test('operations keep the selected period and stop polling on navigation', async ({ page }) => {
+  await page.clock.install();
+  let release;
+  const gate = new Promise((resolve) => { release = resolve; });
+  let notify;
+  const held = new Promise((resolve) => { notify = resolve; });
+  let reads = 0;
+  let aborted = false;
+  page.on('requestfailed', (r) => { if (r.url().includes('/operations?days=30')) aborted = true; });
+  await page.route('**/api/v1/operations?**', async (route) => {
+    reads++;
+    const response = await route.fetch();
+    if (new URL(route.request().url()).searchParams.get('days') === '30') {
+      notify(); await gate;
+    }
+    await route.fulfill({ response }).catch(() => {});
+  });
+  await page.goto('/operations');
+  await held;
+  await page.getByRole('combobox', { name: 'Usage period', exact: true }).selectOption('7');
+  await expect(page.locator('.usage-card')).toContainText('7 day window');
+  await expect(page.getByRole('heading', { name: 'Services', exact: true })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Retention', exact: true })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Runtime logs', exact: true })).toBeVisible();
+  await expect.poll(() => aborted).toBe(true);
+  release();
+  await expect(page.locator('.usage-card')).not.toContainText('30 day window');
+  const before = reads;
+  await page.clock.fastForward('00:00:16');
+  await expect.poll(() => reads).toBeGreaterThan(before);
+  await expect(page.getByTitle('Refresh operations', { exact: true })).toBeEnabled();
+  await page.getByRole('complementary', { name: 'Studio navigation' }).getByRole('button', { name: 'Help', exact: true }).click();
+  const stopped = reads;
+  await page.clock.fastForward('00:00:31');
+  expect(reads).toBe(stopped);
+});

@@ -563,3 +563,16 @@ change request 상태와 diff 표시, 그리고 Operations 화면의 조회·표
 검증: Svelte 검사와 `task studio:test`(브라우저 22개)를 통과했다. 배포 bundle을
 재빌드했다. 남은 정리 범위는 Operations 조회/표시 분리, 전역 Settings 편집 기능
 분리와 전체 검증이다. 이 세 단계가 끝나면 이번 Studio 정리를 완료로 기록한다.
+
+## 21. Studio Operations 조회와 표시 분리 (2026-10-01)
+
+- `OperationsView.svelte`가 기간 선택, 요청 취소와 15초 자동 조회의 수명을,
+  `operations/Dashboard.svelte`가 usage/worker/service/retention/log 표시를 소유한다.
+  JSON 타입과 표시 helper도 해당 directory에 둔다. 기존 CSS와 responsive 구성을 유지했다.
+- 새 기간을 선택하면 이전 요청을 취소하고 최신 응답만 반영한다. 표시 기간은 실제
+  snapshot에 맞춘다. 느린 요청 중 자동 조회는 건너뛰고 화면 종료 시 timer와 요청을
+  해제한다. service/log 목록이 null인 응답도 빈 목록으로 표시한다.
+
+검증: Svelte 검사와 실제 Studio API를 사용하는 Operations browser 회귀를 통과했다.
+기간 변경 중 지연 응답 취소, 자동 갱신과 다른 화면 이동 후 polling 종료를 확인했다.
+배포 bundle을 재빌드했다. 다음은 전역 Settings 편집 기능 분리와 전체 검증이다.
