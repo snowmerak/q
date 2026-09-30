@@ -56,9 +56,10 @@ func TestMain(m *testing.M) {
 }
 
 type studioIntegration struct {
-	handler http.Handler
-	root    string
-	session workspace.Store
+	handler  http.Handler
+	root     string
+	session  workspace.Store
+	modelURI string
 }
 
 func newStudioIntegration(t *testing.T) studioIntegration {
@@ -124,7 +125,7 @@ func newStudioIntegration(t *testing.T) studioIntegration {
 	if err := lock.Close(); err != nil {
 		t.Fatal(err)
 	}
-	return studioIntegration{handler: handler, root: root, session: session}
+	return studioIntegration{handler: handler, root: root, session: session, modelURI: upstream.URL + "/v1"}
 }
 
 // Only the model is substituted: HTTP, Gateway, SessionHost, tools, event log
@@ -319,6 +320,31 @@ func TestStudioBrowserFixture(t *testing.T) {
 	}
 	fixture := newStudioIntegration(t)
 	other := t.TempDir()
+	gatewayProvider := serveJSON(t, fixture.handler, http.MethodPost, "/api/v1/settings/gateway/providers",
+		map[string]any{"id": "default", "type": "openai-compatible", "enabled": true, "base_url": fixture.modelURI})
+	if gatewayProvider.Code != http.StatusOK {
+		t.Fatalf("gateway fixture = %d %s", gatewayProvider.Code, gatewayProvider.Body.String())
+	}
+	model := serveJSON(t, fixture.handler, http.MethodPut, "/api/v1/settings/models/default",
+		map[string]string{"model": "default/test-model", "reasoning_effort": ""})
+	if model.Code != http.StatusOK {
+		t.Fatalf("model fixture = %d %s", model.Code, model.Body.String())
+	}
+	decisions := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/models" {
+			http.NotFound(w, r)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"models": []map[string]string{{"name": "decision-test"}}})
+	}))
+	t.Cleanup(decisions.Close)
+	t.Setenv("Q_STUDIO_DECISION_KEY", "fixture-decision-key")
+	decisionURI := decisions.URL + "/v1/systemone"
+	configured := serveJSON(t, fixture.handler, http.MethodPut, "/api/v1/settings/system-one/providers/typesafe",
+		map[string]string{"id": "typesafe", "uri": decisionURI, "api_key_env": ""})
+	if configured.Code != http.StatusOK {
+		t.Fatalf("decision fixture = %d %s", configured.Code, configured.Body.String())
+	}
 	skillDirectory := filepath.Join(fixture.root, ".agents", "skills", "studio-review")
 	if err := os.MkdirAll(skillDirectory, 0o755); err != nil {
 		t.Fatal(err)
@@ -346,6 +372,7 @@ func TestStudioBrowserFixture(t *testing.T) {
 			"project_root": projectRoot, "project_other": projectOther,
 			"tree_root": tree.Root, "tree_session_id": tree.SessionID,
 			"git_root": gitRoot, "git_other": gitOther,
+			"decision_uri": decisionURI,
 		})
 	})
 	mux.HandleFunc("POST /_test/shutdown", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(204); once.Do(func() { close(closed) }) })

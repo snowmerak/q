@@ -55,6 +55,8 @@ SessionHost with temporary settings, projects, workspaces, and local model
 responses. It does not contact an external model or use your user settings or
 provider credentials. The fixture shutdown endpoint allows Go to close its
 services and remove temporary data before Playwright stops the process.
+Gateway providers and the native System One catalog are configured with local
+HTTP fixtures, so settings cases also work when run individually.
 
 Browser assertions cover project/workspace selection and reset, a guided turn
 without page refresh, replay after reload, repeated tool IDs in later turns,
@@ -79,6 +81,16 @@ Browser assertions select a child from another root, switch transcripts, and
 delete a grandchild through Studio while preserving its parent and root.
 This checks persisted tree navigation and deletion, rather than model-driven
 delegation execution.
+Changes tests use real temporary Git repositories: late diffs cannot replace a
+new repository selection, queued commit messages retain their order, and execution
+commits only the reviewed repository. Folder browsing preserves paths typed before
+its initial home lookup finishes. Operations tests cancel an old usage period,
+refresh on the timer, and stop polling after navigation.
+Global settings tests cover role/group creation and deletion, queued group edits
+across sections, Gateway/System One provider renames followed by another save,
+decision role routing, listener persistence, and both servers' API key creation
+and revocation. Provider discovery uses local HTTP catalogs, rather than live
+provider interoperability.
 The suite also verifies
 settings scrolling at 1440px and 900px widths. Settings keep their selected
 section, cached snapshot, and pending save queue across page navigation and

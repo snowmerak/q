@@ -861,3 +861,156 @@ test('operations keep the selected period and stop polling on navigation', async
   await page.clock.fastForward('00:00:31');
   expect(reads).toBe(stopped);
 });
+
+
+test('global model editors preserve queued drafts across settings panels', async ({ page, request }) => {
+  await page.goto('/settings?section=models');
+  await expect(page.getByTitle('Refresh Gateway models', { exact: true })).toBeEnabled();
+  await page.getByRole('textbox', { name: 'Role name', exact: true }).fill('ui-model-role');
+  await page.getByRole('button', { name: 'Add role', exact: true }).click();
+  const role = page.locator('.assignment-row').filter({ has: page.getByText('Ui Model Role', { exact: true }) });
+  await expect(role).toBeVisible();
+  const model = page.locator('.primary-assignment').first().getByRole('combobox', { name: 'Model', exact: true });
+  const selectedModel = await model.inputValue();
+  await role.getByRole('combobox', { name: 'Model', exact: true }).selectOption(selectedModel);
+  await expect(page.locator('.save-state')).toHaveText('Saved');
+  await page.getByRole('textbox', { name: 'New group name', exact: true }).fill('ui-fallback');
+  await page.getByRole('button', { name: 'Add group', exact: true }).click();
+  const group = page.locator('.model-group-card').filter({ has: page.getByRole('heading', { name: 'ui-fallback', exact: true }) });
+  const timeout = group.getByRole('textbox', { name: 'Timeout', exact: true });
+  await expect(timeout).toBeVisible();
+  let release;
+  const gate = new Promise((resolve) => { release = resolve; });
+  let notify;
+  const held = new Promise((resolve) => { notify = resolve; });
+  const writes = [];
+  await page.route('**/api/v1/settings/model-groups', async (route) => {
+    if (route.request().method() !== 'PUT') return route.continue();
+    writes.push(route.request().postDataJSON());
+    const response = await route.fetch();
+    if (writes.length === 1) { notify(); await gate; }
+    await route.fulfill({ response });
+  });
+  await timeout.fill('45s'); await timeout.press('Tab'); await held;
+  await timeout.fill('90s'); await timeout.press('Tab');
+  await page.getByRole('complementary', { name: 'Settings sections' }).getByRole('button', { name: /^Runtime/ }).click();
+  const parallel = page.getByRole('spinbutton', { name: /Maximum parallel agents/ });
+  await parallel.fill('5'); await parallel.press('Tab');
+  release();
+  await expect(page.locator('.save-state')).toHaveText('Saved');
+  await expect(parallel).toHaveValue('5');
+  const saved = await (await request.get('/api/v1/settings')).json();
+  expect(saved.runtime.max_parallel).toBe(5);
+  expect(saved.models.groups.find((item) => item.name === 'ui-fallback').candidates[0].timeout).toBe('1m30s');
+  expect(writes.map((item) => item.candidates[0].timeout)).toEqual(['45s', '90s']);
+  await page.getByRole('complementary', { name: 'Settings sections' }).getByRole('button', { name: /^Models/ }).click();
+  await expect(timeout).toHaveValue('1m30s');
+  await expect(role.getByRole('combobox', { name: 'Model', exact: true })).toHaveValue(selectedModel);
+  page.once('dialog', (dialog) => dialog.accept());
+  await group.getByTitle('Delete model group', { exact: true }).click();
+  await expect(group).toHaveCount(0);
+  page.once('dialog', (dialog) => dialog.accept());
+  await role.getByTitle('Delete custom role', { exact: true }).click();
+  await expect(role).toHaveCount(0);
+});
+
+test('gateway provider edits follow an acknowledged rename in the save queue', async ({ page, request }) => {
+  expect((await request.post('/api/v1/settings/gateway/providers', { data: {
+    id: 'ui-gateway', type: 'openai-compatible', enabled: false, base_url: 'http://127.0.0.1:1/v1', api_key_env: ''
+  } })).ok()).toBe(true);
+  await page.goto('/settings?section=providers');
+  const card = page.locator('.provider-card').filter({ hasText: 'ui-gateway' });
+  await expect(card).toBeVisible();
+  let release;
+  const gate = new Promise((resolve) => { release = resolve; });
+  let notify;
+  const held = new Promise((resolve) => { notify = resolve; });
+  const writes = [];
+  await page.route('**/api/v1/settings/gateway/providers/*', async (route) => {
+    if (route.request().method() !== 'PUT') return route.continue();
+    writes.push({ url: route.request().url(), body: route.request().postDataJSON() });
+    const response = await route.fetch();
+    if (writes.length === 1) { notify(); await gate; }
+    await route.fulfill({ response });
+  });
+  const id = card.getByRole('textbox', { name: 'Provider ID', exact: true });
+  await id.fill('ui-gateway-renamed'); await id.press('Tab'); await held;
+  await card.getByRole('textbox', { name: 'Model prefix', exact: true }).fill('studio');
+  await card.getByRole('textbox', { name: 'Model prefix', exact: true }).press('Tab');
+  release();
+  await expect(page.locator('.save-state')).toHaveText('Saved');
+  expect(new URL(writes[1].url).pathname).toBe('/api/v1/settings/gateway/providers/ui-gateway-renamed');
+  expect(writes[1].body.prefix).toBe('studio');
+  await page.reload();
+  await expect(id).toHaveValue('ui-gateway-renamed');
+  await expect(card.getByRole('textbox', { name: 'Model prefix', exact: true })).toHaveValue('studio');
+  page.once('dialog', (dialog) => dialog.accept());
+  await card.getByTitle('Delete provider', { exact: true }).click();
+  await expect(card).toHaveCount(0);
+});
+
+test('system one routing and listener key management persist through native settings panels', async ({ page, request }) => {
+  const fixture = await (await request.get('/_test/fixture')).json();
+  expect((await request.post('/api/v1/settings/system-one/providers', { data: {
+    id: 'ui-decision', uri: fixture.decision_uri, api_key_env: ''
+  } })).ok()).toBe(true);
+  await page.goto('/settings?section=system-one');
+  await expect(page.getByTitle('Refresh System One models', { exact: true })).toBeEnabled();
+  const role = page.locator('.system-one-assignment').filter({ hasText: 'Agent Skill Decision' });
+  await expect(role.getByRole('combobox', { name: 'Model', exact: true }).locator('option[value="ui-decision/decision-test"]')).toHaveCount(1);
+  await role.getByRole('combobox', { name: 'Model', exact: true }).selectOption('ui-decision/decision-test');
+  await expect(page.locator('.save-state')).toHaveText('Saved');
+  const card = page.locator('.system-one-provider-card').filter({ hasText: 'ui-decision' });
+  let release;
+  const gate = new Promise((resolve) => { release = resolve; });
+  let notify;
+  const held = new Promise((resolve) => { notify = resolve; });
+  const writes = [];
+  await page.route('**/api/v1/settings/system-one/providers/*', async (route) => {
+    if (route.request().method() !== 'PUT') return route.continue();
+    writes.push(route.request().url());
+    const response = await route.fetch();
+    if (writes.length === 1) { notify(); await gate; }
+    await route.fulfill({ response });
+  });
+  const id = card.getByRole('textbox', { name: 'Provider ID', exact: true });
+  await id.fill('ui-decision-renamed'); await id.press('Tab'); await held;
+  await card.getByRole('textbox', { name: 'API key environment', exact: true }).fill('Q_STUDIO_DECISION_KEY');
+  await card.getByRole('textbox', { name: 'API key environment', exact: true }).press('Tab');
+  release();
+  await expect(page.locator('.save-state')).toHaveText('Saved');
+  expect(new URL(writes[1]).pathname).toBe('/api/v1/settings/system-one/providers/ui-decision-renamed');
+  await expect(role.getByRole('combobox', { name: 'Model', exact: true })).toHaveValue('ui-decision-renamed/decision-test');
+  const alias = page.getByRole('textbox', { name: 'New key alias', exact: true });
+  await alias.fill('ui-decision-key');
+  await page.getByRole('button', { name: 'Generate key', exact: true }).click();
+  await expect(page.locator('.generated-key:visible code')).not.toBeEmpty();
+  await page.getByRole('button', { name: 'Dismiss', exact: true }).click();
+  const keyRow = page.locator('.api-key-row').filter({ hasText: 'ui-decision-key' });
+  page.once('dialog', (dialog) => dialog.accept());
+  await keyRow.getByRole('button', { name: 'Revoke', exact: true }).click();
+  await expect(keyRow).toContainText('Revoked');
+  await role.getByRole('combobox', { name: 'Model', exact: true }).selectOption('');
+  await expect(page.locator('.save-state')).toHaveText('Saved');
+  page.once('dialog', (dialog) => dialog.accept());
+  await card.getByTitle('Delete provider', { exact: true }).click();
+  await expect(card).toHaveCount(0);
+
+  await page.getByRole('complementary', { name: 'Settings sections' }).getByRole('button', { name: /^Services/ }).click();
+  const library = page.locator('.service-card').filter({ has: page.getByRole('heading', { name: 'Library', exact: true }) });
+  await library.getByRole('textbox', { name: 'Host', exact: true }).fill('127.0.0.2');
+  await library.getByRole('textbox', { name: 'Host', exact: true }).press('Tab');
+  await expect(page.locator('.save-state')).toHaveText('Saved');
+  const gateway = page.locator('.service-card').filter({ has: page.getByRole('heading', { name: 'Gateway', exact: true }) });
+  await gateway.getByRole('textbox', { name: 'New key alias', exact: true }).fill('ui-gateway-key');
+  await gateway.getByRole('button', { name: 'Generate', exact: true }).click();
+  await expect(gateway.locator('.generated-key code')).not.toBeEmpty();
+  await gateway.getByRole('button', { name: 'Dismiss', exact: true }).click();
+  const gatewayKey = gateway.locator('.api-key-row').filter({ hasText: 'ui-gateway-key' });
+  page.once('dialog', (dialog) => dialog.accept());
+  await gatewayKey.getByRole('button', { name: 'Revoke', exact: true }).click();
+  await expect(gatewayKey).toContainText('Revoked');
+  await page.reload();
+  await expect(library.getByRole('textbox', { name: 'Host', exact: true })).toHaveValue('127.0.0.2');
+  await expect(gatewayKey).toContainText('Revoked');
+});

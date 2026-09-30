@@ -576,3 +576,25 @@ change request 상태와 diff 표시, 그리고 Operations 화면의 조회·표
 검증: Svelte 검사와 실제 Studio API를 사용하는 Operations browser 회귀를 통과했다.
 기간 변경 중 지연 응답 취소, 자동 갱신과 다른 화면 이동 후 polling 종료를 확인했다.
 배포 bundle을 재빌드했다. 다음은 전역 Settings 편집 기능 분리와 전체 검증이다.
+
+## 22. Studio 전역 설정 편집 기능 분리 (2026-10-01)
+
+- `SettingsView.svelte`는 section 선택, 공통 snapshot, 저장 상태와 직렬 queue만
+  소유한다. 모델·role·fallback group·API mode 편집은 `settings/ModelsPanel.svelte`,
+  Gateway provider는 `ProvidersPanel.svelte`, System One은 `SystemOnePanel.svelte`,
+  runtime/Loom은 `RuntimePanel.svelte`, listener와 Gateway key는 `ServicesPanel.svelte`
+  로 나눴다. HTTP 저장과 표시 helper는 `persistence.ts`, `format.ts`에 둔다.
+- 패널은 page/section 전환 후에도 상태를 유지한다. catalog 조회는 해당 section을
+  열 때 시작한다. 마지막 저장 응답만 공통 snapshot에 반영하고 모든 대기 작업이
+  끝날 때까지 Saving 표시를 유지한다. payload는 입력 당시 직렬화하며 provider
+  rename 후 다음 저장은 승인된 ID를 사용한다. 같은 ID를 재사용해도 편집 객체의
+  identity로 승인 경로를 구분한다.
+- 모델 catalog와 Loom 통계는 최신 조회만 반영한다. Loom GC는 표시 중인 통계를
+  조회한 root로 요청한다. DOM class, 자동 저장, 전역 설정 파일과 HTTP 계약은 유지했다.
+- 실제 브라우저에서 모델 role/group 생성·삭제, 연속 group 저장 중 다른 패널 편집,
+  Gateway/System One provider rename 후 저장, System One role model 변경,
+  양쪽 서버 key 생성·폐기와 listener 저장을 검증한다. Browser fixture는 local
+  Gateway와 native System One catalog를 준비하므로 테스트 순서나 외부 API에 의존하지 않는다.
+
+검증: `task studio:test`(브라우저 26개)를 통과했다. 배포 bundle을 재빌드했다.
+최종 단계는 전체 테스트·정적 분석·배포 bundle 일치 검사와 완료 기록이다.
