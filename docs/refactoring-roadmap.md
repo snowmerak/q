@@ -529,3 +529,21 @@ loop의 guidance 전환, 응답 갱신, replay와 Markdown/code 표시, 900·144
 
 검증: Svelte 검사와 `task studio:test`(브라우저 18개)를 통과했다.
 배포 bundle을 재빌드했다. 다음 단계는 session tree 표시 책임 분리다.
+
+## 19. Studio 세션 트리 표시 책임 분리 (2026-10-01)
+
+- `sessions/SessionTree.svelte`는 project/Independents 그룹, root와 중첩 delegation
+  표시, 선택 강조와 tree depth를 소유한다. 선택·등록·삭제·새로고침·project 편집은
+  callback으로 부모에 전달하며 API 요청과 실행 controller는 계속
+  `SessionView.svelte`가 소유한다. 기존 DOM과 CSS 구조는 유지했다.
+- 공통 `sessions/tree.ts`가 invocation path를 누적하며 delegation tree를 펼친다.
+  rail과 run activity에 전달하는 목록이 같은 경로 계산을 사용하므로 중첩 delegation
+  선택과 삭제가 같은 child를 가리킨다.
+- opt-in browser fixture에 workspace API로 임시 root → senior → junior 기록을
+  생성했다. 다른 root에서 child를 선택하는 흐름, 깊이·선택 강조·transcript 전환,
+  junior 삭제 요청의 전체 path와 senior/root 보존, root 입력 복원을 검증한다.
+  저장된 tree와 실제 Studio API를 검증하며 모델의 delegation 실행을 재현하는 테스트는 아니다.
+
+검증: Svelte 검사, Studio Go 회귀·통합 테스트와 `task studio:test`(브라우저 19개)를
+통과했다. 배포 bundle을 재빌드했다. 다음 정리 후보는 Changes 화면의 repository/
+change request 상태와 diff 표시, 그리고 Operations 화면의 조회·표시 책임이다.

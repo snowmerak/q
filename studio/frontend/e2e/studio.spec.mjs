@@ -157,6 +157,55 @@ test('folder browser closes before registration and registers the selected works
   await expect(registry).toHaveCount(0);
 });
 
+test('nested delegation selection and deletion preserve the root and parent branch', async ({ page, request }) => {
+  const fixture = await (await request.get('/_test/fixture')).json();
+  const response = await request.post('/api/v1/registered-sessions', { data: {
+    workspace_root: fixture.tree_root, session_id: fixture.tree_session_id
+  } });
+  expect(response.status()).toBe(201);
+  const registration = await response.json();
+  // Start on another root, then select this tree through a child branch.
+  const other = await request.post('/api/v1/registered-sessions', { data: {
+    workspace_root: fixture.root, session_id: fixture.session_id
+  } });
+  expect(other.status()).toBe(201);
+  const otherRegistration = await other.json();
+  await page.goto('/sessions/' + otherRegistration.registration_id);
+  const rail = page.getByRole('complementary', { name: 'Registered session tree' });
+  const senior = rail.getByRole('button', { name: 'senior-developer completed', exact: true });
+  const junior = rail.getByRole('button', { name: 'junior-developer completed', exact: true });
+  await senior.click();
+  await expect(page).toHaveURL(new RegExp('/sessions/' + registration.registration_id + '$'));
+  await expect(page.locator('.transcript').getByRole('heading', { name: 'Senior fixture', exact: true })).toBeVisible();
+  await expect(senior).toHaveClass(/active/);
+  await expect(page.locator('.composer textarea')).toHaveCount(0);
+  await junior.click();
+  await expect(page.locator('.transcript').getByRole('heading', { name: 'Junior fixture', exact: true })).toBeVisible();
+  await expect(junior).toHaveClass(/active/);
+  expect(await senior.evaluate((el) => el.style.getPropertyValue('--tree-depth'))).toBe('1');
+  expect(await junior.evaluate((el) => el.style.getPropertyValue('--tree-depth'))).toBe('2');
+  page.once('dialog', (dialog) => dialog.accept());
+  const removed = page.waitForResponse((r) => r.request().method() === 'DELETE' && new URL(r.url()).pathname.endsWith('/delegations'));
+  await page.getByRole('button', { name: 'Delete completed delegation', exact: true }).click();
+  const deletion = await removed;
+  expect(deletion.ok()).toBe(true);
+  expect(new URL(deletion.url()).searchParams.get('path')).toBe('senior-child/junior-child');
+  await expect(junior).toHaveCount(0);
+  await expect(senior).toBeVisible();
+  await expect(page.locator('.transcript').getByRole('heading', { name: 'Root fixture', exact: true })).toBeVisible();
+  await expect(page.locator('.composer textarea')).toBeEnabled();
+  await senior.click();
+  await expect(page.locator('.transcript').getByRole('heading', { name: 'Senior fixture', exact: true })).toBeVisible();
+  await rail.locator('.session-select').filter({ hasText: 'Delegation fixture' }).click();
+  await expect(page.locator('.transcript').getByRole('heading', { name: 'Root fixture', exact: true })).toBeVisible();
+  const saved = await (await request.get('/api/v1/registered-sessions')).json();
+  const tree = saved.sessions.find((item) => item.registration_id === registration.registration_id);
+  expect(tree.delegations).toHaveLength(1);
+  expect(tree.delegations[0].bookmark.invocation_id).toBe('senior-child');
+  expect(tree.delegations[0].children || []).toHaveLength(0);
+  expect((await request.delete('/api/v1/registered-sessions/' + registration.registration_id)).ok()).toBe(true);
+});
+
 test('guidance redirects a real run without refresh and renders markdown and code', async ({ page, request }, testInfo) => {
   const fixture = await (await request.get('/_test/fixture')).json();
   const registered = await request.post('/api/v1/registered-sessions', { data: { workspace_root: fixture.root, create: true } });

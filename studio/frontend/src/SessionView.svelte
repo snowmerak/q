@@ -1,12 +1,14 @@
 <script lang="ts">
-  import { ArrowUp, Bot, BrainCircuit, Eraser, Folders, GitBranch, GitCompareArrows, Minimize2, Pause, Play, Plus, RefreshCw, Square, Trash2, X } from '@lucide/svelte';
+  import { ArrowUp, Bot, BrainCircuit, Eraser, Folders, GitCompareArrows, Minimize2, Pause, Play, Plus, Square, Trash2 } from '@lucide/svelte';
   import { onMount, tick } from 'svelte';
+  import SessionTree from './sessions/SessionTree.svelte';
+  import { flattenDelegations } from './sessions/tree';
   import Transcript from './sessions/Transcript.svelte';
   import RunActivity from './sessions/RunActivity.svelte';
   import ProjectDialog from './sessions/ProjectDialog.svelte';
   import SessionRegistration from './sessions/SessionRegistration.svelte';
   import { apiError } from './api';
-  import { contextPercent, formatSessionTime, formatTokenCount, shortID } from './sessions/format';
+  import { contextPercent, formatTokenCount, shortID } from './sessions/format';
   import { RunMonitor, runStatusLabel, terminalRun } from './sessions/run-monitor';
   import type { DelegationNode, FlatDelegation, Message, RegisteredSessionTree, RunEvent, RunSnapshot, SessionDetail, StudioProject } from './sessions/types';
 
@@ -119,14 +121,6 @@
     projectDialogOpen = false;
     await loadRegisteredSessions(selectedRegistration?.registration_id || '');
     runStatus = status;
-  }
-
-  function projectSessions(projectID: string) {
-    return registeredSessions.filter((registration) => registration.project_id === projectID);
-  }
-
-  function independentSessions() {
-    return registeredSessions.filter((registration) => !registration.project_id);
   }
 
   async function clearSession() {
@@ -355,6 +349,11 @@
     }
   }
 
+  async function openDelegatedSession(registration: RegisteredSessionTree, node: FlatDelegation) {
+    if (selectedRegistration?.registration_id !== registration.registration_id) await selectRegisteredSession(registration);
+    selectDelegatedSession(registration, node);
+  }
+
   function selectDelegatedSession(registration: RegisteredSessionTree, node: FlatDelegation) {
     if (selectedRegistration?.registration_id !== registration.registration_id) return;
     selectedDelegation = node;
@@ -462,12 +461,6 @@
     if (!selectedDelegation) messages = selected.transcript;
   }
 
-  function flattenDelegations(nodes: DelegationNode[], depth = 0, parentPath = ''): FlatDelegation[] {
-    return nodes.flatMap((node) => {
-      const path = parentPath ? `${parentPath}/${node.bookmark.invocation_id}` : node.bookmark.invocation_id;
-      return [{ ...node, depth, path }, ...flattenDelegations(node.children || [], depth + 1, path)];
-    });
-  }
 
   async function loadDelegations(sessionID = selected?.session.session_id || '') {
     if (!workspaceRoot || !sessionID) return;
@@ -564,45 +557,13 @@
 </script>
 
 <div class="sessions-layout">
-  <aside class="session-rail" aria-label="Registered session tree">
-    <div class="session-list-heading"><span>SESSION TREE</span><div><button title="Refresh session tree" onclick={refreshSessions} disabled={workspaceLoading}><RefreshCw aria-hidden="true" size={14} /></button><button title="Create project" onclick={() => openProjectDialog()} disabled={sessionLoading}><Folders aria-hidden="true" size={15} /></button><button title="Add or create session" onclick={openRegistrationDialog} disabled={sessionLoading}><Plus aria-hidden="true" size={15} /></button></div></div>
-    <div class="session-list session-tree">
-      {#snippet sessionBranch(registration: RegisteredSessionTree)}
-        <div class="session-list-item session-root" class:active={selectedRegistration?.registration_id === registration.registration_id && !selectedDelegation} class:broken={!!registration.issue}>
-          <button class="session-select" onclick={() => !registration.issue && selectRegisteredSession(registration)} disabled={!!registration.issue}>
-            <strong>{registration.session.title || 'New session'}</strong>
-            <small title={registration.workspace_root}>{registration.workspace_root}</small>
-            <code>{registration.issue || `${formatSessionTime(registration.session.updated_at)} · ${shortID(registration.session.session_id)}`}</code>
-          </button>
-          <button class="session-delete" title="Remove from Studio" aria-label={`Remove ${registration.session.title || 'session'} from Studio`} onclick={() => unregisterSession(registration)} disabled={sending || sessionLoading}><X aria-hidden="true" size={13} /></button>
-        </div>
-        {#each flattenDelegations(registration.delegations || [], 1) as node}
-          <button class="session-child" class:active={selectedRegistration?.registration_id === registration.registration_id && selectedDelegation?.path === node.path} style={`--tree-depth: ${node.depth}`} onclick={async () => { if (selectedRegistration?.registration_id !== registration.registration_id) await selectRegisteredSession(registration); selectDelegatedSession(registration, node); }} disabled={!!registration.issue}>
-            <span class="tree-branch" aria-hidden="true"></span>
-            <span><strong>{node.bookmark.agent.replace(/^builtin\//, '')}</strong><small>{node.state?.change_request ? `${node.state.status} · CR ${node.state.change_request.status}` : node.state?.status || 'recorded'}</small></span>
-          </button>
-        {/each}
-      {/snippet}
-      {#if projects.length || registeredSessions.length}
-        {#each projects as project}
-          <div class="session-project-heading"><span><Folders aria-hidden="true" size={13} /><strong>{project.name}</strong><small>{project.workspace_roots.length}</small></span><button title={`Edit ${project.name}`} aria-label={`Edit project ${project.name}`} onclick={() => openProjectDialog(project)}>Edit</button></div>
-          {#each projectSessions(project.id) as registration}
-            {@render sessionBranch(registration)}
-          {:else}
-            <div class="session-group-empty">No registered sessions</div>
-          {/each}
-        {/each}
-        <div class="session-project-heading independent-heading"><span><GitBranch aria-hidden="true" size={13} /><strong>Independents</strong><small>{independentSessions().length}</small></span></div>
-        {#each independentSessions() as registration}
-          {@render sessionBranch(registration)}
-        {:else}
-          <div class="session-group-empty">No independent sessions</div>
-        {/each}
-      {:else}
-        <div class="session-list-empty"><p>Add a workspace session to build your Studio session tree.</p><button class="primary-button" onclick={openRegistrationDialog}><Plus aria-hidden="true" size={15} /> Add session</button></div>
-      {/if}
-    </div>
-  </aside>
+  <SessionTree
+    {projects} {registeredSessions} {workspaceLoading} {sessionLoading} {sending}
+    selectedRegistrationID={selectedRegistration?.registration_id || ''}
+    selectedDelegationPath={selectedDelegation?.path || ''}
+    onrefresh={refreshSessions} onproject={openProjectDialog} onregistration={openRegistrationDialog}
+    onselect={selectRegisteredSession} onunregister={unregisterSession} ondelegate={openDelegatedSession}
+  />
 
   <section class="chat-panel">
     {#if error}<div class="session-error" role="alert">{error}</div>{/if}

@@ -74,6 +74,11 @@ Subagent tests cover profile role/prompt/tool/delegation grants and deletion,
 queued revision chains and scope moves during a repository switch, and ACP
 connection secret masking, enabled options, role bindings, and deletion.
 They do not launch an external ACP process.
+The fixture also seeds a nested delegation tree through workspace storage APIs.
+Browser assertions select a child from another root, switch transcripts, and
+delete a grandchild through Studio while preserving its parent and root.
+This checks persisted tree navigation and deletion, rather than model-driven
+delegation execution.
 The suite also verifies
 settings scrolling at 1440px and 900px widths. Settings keep their selected
 section, cached snapshot, and pending save queue across page navigation and

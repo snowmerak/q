@@ -337,11 +337,13 @@ func TestStudioBrowserFixture(t *testing.T) {
 	closed := make(chan struct{})
 	var once sync.Once
 	projectRoot, projectOther := t.TempDir(), t.TempDir()
+	tree := seedStudioBrowserDelegations(t)
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /_test/fixture", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, map[string]string{
 			"root": fixture.root, "other": other, "session_id": fixture.session.SessionID,
 			"project_root": projectRoot, "project_other": projectOther,
+			"tree_root": tree.Root, "tree_session_id": tree.SessionID,
 		})
 	})
 	mux.HandleFunc("POST /_test/shutdown", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(204); once.Do(func() { close(closed) }) })
@@ -358,4 +360,50 @@ func TestStudioBrowserFixture(t *testing.T) {
 	case <-closed:
 	case <-t.Context().Done():
 	}
+}
+
+// Seed persisted records through workspace APIs; this fixture checks tree UI
+// and deletion, without claiming to execute a model-driven delegation.
+func seedStudioBrowserDelegations(t *testing.T) workspace.Store {
+	t.Helper()
+	root, lock, err := workspace.CreateSession(t.TempDir(), "studio browser tree fixture")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lock.Close()
+	session, err := root.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	session.Title = "Delegation fixture"
+	session.Transcript = []client.Message{{Role: client.RoleAssistant, Content: "# Root fixture"}}
+	if err := root.Save(session); err != nil {
+		t.Fatal(err)
+	}
+	parent := root
+	for _, item := range []struct{ id, agent, content string }{
+		{"senior-child", "builtin/senior-developer", "# Senior fixture"},
+		{"junior-child", "builtin/junior-developer", "# Junior fixture"},
+	} {
+		bookmark := workspace.DelegationBookmark{InvocationID: item.id, CallID: item.id,
+			Agent: item.agent, Prompt: "Review the fixture", RunID: session.RunID, CreatedAt: time.Now().UTC()}
+		if _, err := parent.AddDelegation(bookmark); err != nil {
+			t.Fatal(err)
+		}
+		child, err := parent.ChildStore(item.id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := child.Save(workspace.Session{RunID: session.RunID,
+			Transcript: []client.Message{{Role: client.RoleAssistant, Content: item.content}}}); err != nil {
+			t.Fatal(err)
+		}
+		if err := child.SaveDelegationState(workspace.DelegationState{Agent: item.agent,
+			Prompt: bookmark.Prompt, RunID: session.RunID, Status: "completed",
+			Result: &client.ToolResult{Content: item.content}}); err != nil {
+			t.Fatal(err)
+		}
+		parent = child
+	}
+	return root
 }
