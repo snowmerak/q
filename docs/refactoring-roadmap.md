@@ -4,6 +4,7 @@
 
 상태: M0~M6을 구현하고 Windows 및 WSL Linux ARM64 로컬 검증을 마쳤다.
 macOS 환경 검증과 코드 리뷰는 남아 있다. 현재 동작의 계약은 README, 기능 문서와 코드가 소유한다.
+후속 Studio 정리는 2026-10-01에 완료했다. 범위와 최종 검증은 23절에 기록한다.
 
 대상 독자: Q의 TUI, ACP, Agent Loop, 설정 저장소와 런타임 생명주기를
 변경하는 구현자와 리뷰어.
@@ -598,3 +599,30 @@ change request 상태와 diff 표시, 그리고 Operations 화면의 조회·표
 
 검증: `task studio:test`(브라우저 26개)를 통과했다. 배포 bundle을 재빌드했다.
 최종 단계는 전체 테스트·정적 분석·배포 bundle 일치 검사와 완료 기록이다.
+
+## 23. Studio 정리 완료 (2026-10-01)
+
+12~22절의 Studio 정리와 20절에서 정한 남은 범위를 완료했다. 화면별 조회·선택·실행
+상태의 소유자를 유지하면서 표시와 편집 기능을 분리했다. 전역 설정은 공통 snapshot과
+직렬 저장 queue를 유지하고, 세션 실행은 기존 controller와 API를 사용한다.
+
+- 마지막 구현 단계: Changes 조회·커밋 리뷰, Operations 조회·dashboard, 전역 Settings
+  모델·provider·runtime·service 편집 패널 분리.
+- 회귀 보완: 늦은 조회 응답, 폴더 초기 조회 중 입력, 연속 저장과 provider rename,
+  리뷰한 repository로만 commit, 화면 종료 시 polling 해제를 검증했다.
+- 기존 HTTP API와 설정 저장 형식을 유지했다. 배포는 계속 Svelte SPA bundle을
+  version 관리하고 Go에 embed하는 방식이다.
+
+최종 검증은 Windows ARM64에서 다음과 같이 완료했다.
+
+| 검사 | 결과 |
+| --- | --- |
+| `task test` | 루트 Go 패키지와 두 ACP 모듈 테스트, 생성 코드 일치 검사 통과; Svelte 오류·경고 0개 |
+| `task studio:test` | 실제 Studio와 local HTTP fixture를 사용한 브라우저 회귀 26개 통과 |
+| `go vet ./...` | 통과 |
+| `task studio:check` | Svelte 검사·production build 통과; commit된 embed bundle과 일치 |
+| `git diff --check` | 통과 |
+
+이번 검증은 외부 모델의 품질이나 실제 외부 ACP process 실행을 포함하지 않는다.
+macOS/POSIX 환경 검증을 이번 단계에서 추가로 실행하지 않았으며, 앞선 M0~M6의
+플랫폼 검증 기록은 그대로 유지한다. 이번 Studio 정리의 구현·검증 작업은 완료했다.
