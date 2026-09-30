@@ -59,7 +59,9 @@ services and remove temporary data before Playwright stops the process.
 Browser assertions cover project/workspace selection and reset, a guided turn
 without page refresh, replay after reload, repeated tool IDs in later turns,
 Markdown headings and highlighted code, automatic checkbox persistence, and
-settings scrolling at 1440px and 900px widths. Tool call and result cards must
+settings scrolling at 1440px and 900px widths. Settings keep their selected
+section, cached snapshot, and pending save queue across page navigation and
+browser history. Tool call and result cards must
 share both edges at 900px, 1440px, 2560px, and 3440px widths, collapsed and
 expanded, without horizontal transcript overflow. Unhandled JavaScript errors and
 unexpected HTTP errors fail the suite. A new session's expected latest-run 404

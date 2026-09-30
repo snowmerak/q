@@ -21,6 +21,36 @@ test.afterEach(async ({ page }) => {
   expect(page.testErrors, 'browser runtime errors').toEqual([]);
 });
 
+test('sidebar collapses, keeps navigation usable, and remembers its state', async ({ page }, testInfo) => {
+  const sidebar = page.getByRole('complementary', { name: 'Studio navigation' });
+  for (const width of [1440, 390]) {
+    await page.setViewportSize({ width, height: 900 });
+    await page.goto('/sessions');
+    const expandedMain = await page.locator('main').boundingBox();
+    await sidebar.getByRole('button', { name: 'Collapse sidebar' }).click();
+    const expand = sidebar.getByRole('button', { name: 'Expand sidebar' });
+    await expect(expand).toHaveAttribute('aria-expanded', 'false');
+    await expect(sidebar.getByRole('button', { name: 'Sessions', exact: true })).toHaveAttribute('aria-current', 'page');
+    if (width === 1440) {
+      expect((await sidebar.boundingBox()).width).toBe(72);
+      expect((await page.locator('main').boundingBox()).width).toBeGreaterThan(expandedMain.width);
+    }
+    await sidebar.getByRole('button', { name: 'Help', exact: true }).click();
+    await expect(page.getByRole('heading', { name: 'Help', exact: true })).toBeVisible();
+    await page.reload();
+    await expect(expand).toHaveAttribute('aria-expanded', 'false');
+    await expect(sidebar.getByRole('button', { name: 'Help', exact: true })).toHaveAttribute('aria-current', 'page');
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+    await page.screenshot({ path: testInfo.outputPath(`sidebar-collapsed-${width}.png`) });
+    await expand.focus();
+    await expand.press('Enter');
+    await expect(sidebar.getByRole('button', { name: 'Collapse sidebar' })).toHaveAttribute('aria-expanded', 'true');
+    await page.reload();
+    await expect(sidebar.getByRole('button', { name: 'Collapse sidebar' })).toBeVisible();
+    if (width === 1440) expect((await sidebar.boundingBox()).width).toBe(244);
+  }
+});
+
 test('project selection refreshes workspaces and clears the previous selection', async ({ page, request }) => {
   const fixture = await (await request.get('/_test/fixture')).json();
   await page.getByTitle('Add or create session').click();
@@ -91,6 +121,49 @@ test('runtime checkbox saves automatically and survives reload', async ({ page, 
   expect(settings.runtime.loom.gc_disabled).toBe(previous);
   await page.reload();
   await expect(checkbox).toBeChecked({ checked: !previous });
+});
+
+test('settings retain their save queue and selected section across navigation', async ({ page }) => {
+  let snapshots = 0;
+  page.on('request', (request) => {
+    if (request.method() === 'GET' && new URL(request.url()).pathname === '/api/v1/settings') snapshots++;
+  });
+  await page.goto('/settings?section=runtime');
+  const checkbox = page.getByRole('checkbox', { name: 'Garbage collection' });
+  await expect(checkbox).toBeEnabled();
+  const previous = await checkbox.isChecked();
+  const sections = page.getByRole('complementary', { name: 'Settings sections' });
+  await sections.getByRole('button', { name: /^Models/ }).click();
+  await expect(page.getByRole('heading', { name: 'Model assignments' })).toBeVisible();
+  await page.goBack();
+  await expect(checkbox).toBeEnabled();
+
+  let releaseSave;
+  const saveGate = new Promise((resolve) => { releaseSave = resolve; });
+  let notifySaved;
+  const saved = new Promise((resolve) => { notifySaved = resolve; });
+  await page.route('**/api/v1/settings/runtime', async (route) => {
+    const response = await route.fetch();
+    notifySaved();
+    await saveGate;
+    await route.fulfill({ response });
+  });
+  try {
+    await checkbox.setChecked(!previous);
+    await saved;
+    const navigation = page.getByRole('complementary', { name: 'Studio navigation' });
+    await navigation.getByRole('button', { name: 'Help', exact: true }).click();
+    await expect(page.getByRole('heading', { name: 'Help', exact: true })).toBeVisible();
+    const saveResponse = page.waitForResponse((response) => response.url().endsWith('/api/v1/settings/runtime') && response.request().method() === 'PUT');
+    releaseSave();
+    expect((await saveResponse).ok()).toBe(true);
+    await navigation.getByRole('button', { name: 'Settings', exact: true }).click();
+    await expect(checkbox).toBeChecked({ checked: !previous });
+    await expect(page.locator('.save-state')).not.toContainText('Saving');
+    expect(snapshots, 'cached settings remain owned by the mounted settings component').toBe(1);
+  } finally {
+    releaseSave();
+  }
 });
 
 test('tool results align with tool calls across wide and narrow viewports', async ({ page, request }, testInfo) => {

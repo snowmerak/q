@@ -384,3 +384,30 @@ compaction, cancellation과 terminal result를 검증한다. 실제 provider 연
   `go test ./... -count=1`을 각각 통과했다. 첫 WSL 실행에서 발견한 두 이식성 문제는
   `agentskills` 테스트의 `HOME` 격리와 `subagent`의 역슬래시 경로 정규화로 수정했다.
   macOS 환경 검증은 실행하지 않았다.
+
+## 12. Studio 설정 책임 분리 (2026-10-01)
+
+최근 Studio 확장으로 화면 전환과 설정 저장이 `App.svelte`에, 여러 설정 기능의
+HTTP 처리가 `studio/settings.go`에 함께 모였다. 이 변경은 해당 영역의 책임을
+나누며 기존 API, 설정 파일 형식, mutex와 런타임 적용 순서를 유지한다.
+
+- `App.svelte`: navigation, 연결 상태, 전역 단축키와 sidebar만 소유한다.
+- `SettingsView.svelte`: 설정 화면, catalog cache와 직렬 저장 queue를 소유한다.
+  화면 전환 중에도 component를 유지하고 표시만 바꿔, 진행 중인 저장과 기존
+  설정 cache를 보존한다. 설정 API 타입은 `settings/types.ts`에 모았다.
+- Go 설정 처리: service와 snapshot은 `settings.go`, JSON 계약은
+  `settings_types.go`, 기능 처리는 `settings_models.go`,
+  `settings_workspace_models.go`, `settings_providers.go`,
+  `settings_systemone.go`, `settings_runtime.go`로 나눈다. 공통 HTTP 응답과
+  strict settings request decode는 `api.go`에 둔다.
+- Go 선언 89개가 분리 전후 동일하게 유지되는지 확인했다. 기존 Studio API
+  회귀·통합 테스트와 브라우저 테스트에 더해, 설정 저장 응답이 다른 화면에서
+  도착해도 queue와 선택 section이 유지되는 브라우저 회귀를 검증한다.
+
+검증: Windows에서 `task test`(전체 Go, 중첩 ACP 모듈, 생성 코드 검사,
+Svelte 검사), `task studio:test`(브라우저 7개), `go vet ./studio`와
+`git diff --check`를 통과했다. 프런트엔드 배포 bundle도 재빌드했다.
+
+이후 정리 후보는 `SessionView.svelte`의 registry/project dialog와 실행·채팅
+controller, `studio/integrations.go`의 MCP/LSP/Skills/agent별 경계다. 이번 변경에
+포함하지 않았으며, 각 영역의 실제 수명주기와 회귀 검증을 확보한 뒤 분리한다.
