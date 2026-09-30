@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { ArrowUp, Bot, BrainCircuit, Eraser, Folders, GitCompareArrows, Minimize2, Pause, Play, Plus, Square, Trash2 } from '@lucide/svelte';
+  import { ArrowUp, Bot, BrainCircuit, Eraser, Files, Folders, GitCompareArrows, Minimize2, Pause, Play, Plus, Square, Trash2 } from '@lucide/svelte';
   import { onMount, tick } from 'svelte';
   import SessionTree from './sessions/SessionTree.svelte';
   import { flattenDelegations } from './sessions/tree';
@@ -7,6 +7,8 @@
   import RunActivity from './sessions/RunActivity.svelte';
   import ProjectDialog from './sessions/ProjectDialog.svelte';
   import SessionRegistration from './sessions/SessionRegistration.svelte';
+  import FileExplorer from './files/FileExplorer.svelte';
+  import { resolveFileLink } from './files/paths';
   import { apiError } from './api';
   import { contextPercent, formatTokenCount, shortID } from './sessions/format';
   import { RunMonitor, runStatusLabel, terminalRun } from './sessions/run-monitor';
@@ -41,6 +43,31 @@
   let registrationDialogOpen = false;
   let projectDialogOpen = false;
   let editingProject: StudioProject | undefined;
+  let filesOpen = false;
+  let openedFilePath = '';
+  let openedFileLine = 1;
+  let openedFileRoot = '';
+  let lastFileContext = '';
+  let fileExplorer: FileExplorer | null = null;
+  $: fileWorkspace = selectedDelegation
+    ? selectedDelegation.state?.change_request?.worktree_path || selectedDelegation.bookmark.working_directory || selectedDelegation.state?.change_request?.repository_root || workspaceRoot
+    : workspaceRoot;
+  $: fileRoots = [...new Set([fileWorkspace, workspaceRoot, ...(projects.find((project) => project.id === selectedRegistration?.project_id)?.workspace_roots || [])].filter(Boolean))];
+  $: fileContext = `${selectedRegistration?.registration_id || ''}/${selectedDelegation?.path || ''}`;
+  $: if (fileContext !== lastFileContext) {
+    lastFileContext = fileContext;
+    openedFilePath = ''; openedFileLine = 1; openedFileRoot = '';
+  }
+  function openFileLink(value: string) {
+    const target = resolveFileLink(value, fileRoots);
+    if (!target) { error = 'The linked file is outside the available session workspaces.'; return; }
+    if (filesOpen && fileExplorer) {
+      fileExplorer.openFile(target.root, target.path, target.line);
+      return;
+    }
+    openedFileRoot = target.root; openedFilePath = target.path; openedFileLine = target.line;
+    filesOpen = true;
+  }
 
   const runMonitor = new RunMonitor({
     page: (page) => {
@@ -556,7 +583,7 @@
   });
 </script>
 
-<div class="sessions-layout">
+<div class="sessions-layout" class:files-open={filesOpen && !!selected}>
   <SessionTree
     {projects} {registeredSessions} {workspaceLoading} {sessionLoading} {sending}
     selectedRegistrationID={selectedRegistration?.registration_id || ''}
@@ -579,7 +606,8 @@
             </div>
           {/if}
           <span class:running={sending}>{runStatus || (sending ? 'Running' : 'Ready')}</span>
-          <button title="Open repository changes" aria-label="Open repository changes" onclick={() => openChanges(workspaceRoot)} disabled={!workspaceRoot}><GitCompareArrows aria-hidden="true" size={15} /></button>
+          <button title="Browse session files" aria-label="Browse session files" aria-pressed={filesOpen} onclick={() => filesOpen = !filesOpen} disabled={!fileWorkspace}><Files aria-hidden="true" size={15} /></button>
+          <button title="Open repository changes" aria-label="Open repository changes" onclick={() => openChanges(fileWorkspace)} disabled={!fileWorkspace}><GitCompareArrows aria-hidden="true" size={15} /></button>
           {#if selectedDelegation?.state?.status === 'completed' && (!selectedDelegation.state.change_request || ['merged', 'closed'].includes(selectedDelegation.state.change_request.status))}
             <button title="Delete completed delegation" aria-label="Delete completed delegation" onclick={deleteDelegation} disabled={sending || sessionLoading}><Trash2 aria-hidden="true" size={14} /></button>
           {/if}
@@ -594,7 +622,7 @@
           {/if}
         </div>
       </div>
-      <Transcript bind:this={transcript} {messages} {thinkingDraft} {responseDraft} loading={sessionLoading} />
+      <Transcript bind:this={transcript} {messages} {thinkingDraft} {responseDraft} loading={sessionLoading} onfile={openFileLink} />
       {#if !selectedDelegation && activeRun?.pending_question}
         <section class="run-question" aria-labelledby="run-question-title">
           <div><span>Q NEEDS INPUT</span><h3 id="run-question-title">{activeRun.pending_question.question}</h3>{#if activeRun.pending_question.context}<p>{activeRun.pending_question.context}</p>{/if}</div>
@@ -618,7 +646,9 @@
     {/if}
   </section>
 
-  <RunActivity activeTask={selected?.active_task} {delegations} {events} />
+  {#if filesOpen && selected}
+    <aside class="session-file-panel" aria-label="Session file browser">{#key fileContext}<FileExplorer bind:this={fileExplorer} initialRoot={openedFileRoot || fileWorkspace} initialPath={openedFilePath} initialLine={openedFileLine} roots={fileRoots} compact onclose={() => filesOpen = false} />{/key}</aside>
+  {:else}<RunActivity activeTask={selected?.active_task} {delegations} {events} />{/if}
 </div>
 
 {#if registrationDialogOpen}

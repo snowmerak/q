@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/snowmerak/q/app"
+	"github.com/snowmerak/q/change"
 	"github.com/snowmerak/q/client"
 	"github.com/snowmerak/q/config"
 	qlibrary "github.com/snowmerak/q/library"
@@ -365,6 +366,7 @@ func TestStudioBrowserFixture(t *testing.T) {
 	projectRoot, projectOther := t.TempDir(), t.TempDir()
 	tree := seedStudioBrowserDelegations(t)
 	gitRoot, gitOther := seedStudioBrowserChanges(t, 42), seedStudioBrowserChanges(t, 84)
+	files, filesWorktree := seedStudioBrowserFiles(t)
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /_test/fixture", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, map[string]string{
@@ -373,6 +375,7 @@ func TestStudioBrowserFixture(t *testing.T) {
 			"tree_root": tree.Root, "tree_session_id": tree.SessionID,
 			"git_root": gitRoot, "git_other": gitOther,
 			"decision_uri": decisionURI,
+			"files_root":   files.Root, "files_session_id": files.SessionID, "files_worktree": filesWorktree,
 		})
 	})
 	mux.HandleFunc("POST /_test/shutdown", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(204); once.Do(func() { close(closed) }) })
@@ -450,4 +453,57 @@ func seedStudioBrowserChanges(t *testing.T, answer int) string {
 	writeStudioGitFile(t, root, "main.go", fmt.Sprintf("package main\n\nvar answer  = %d\n", answer))
 	writeStudioGitFile(t, root, "secondary.go", "package main\n\nvar count  = 1\n")
 	return root
+}
+
+func seedStudioBrowserFiles(t *testing.T) (workspace.Store, string) {
+	t.Helper()
+	root := seedStudioBrowserChanges(t, 128)
+	if err := os.Mkdir(filepath.Join(root, "nested"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	writeStudioGitFile(t, root, "nested/config.json", "{\"enabled\":true}\n")
+	writeStudioGitFile(t, root, "clean.txt", "unchanged content\n")
+	writeStudioGitFile(t, root, "deleted.txt", "deleted content\n")
+	writeStudioGitFile(t, root, "binary.bin", "\x00\x01\xff")
+	writeStudioGitFile(t, root, "large.txt", strings.Repeat("preview line\n", 4500))
+	studioGit(t, root, "add", "nested", "clean.txt", "deleted.txt", "binary.bin", "large.txt")
+	studioGit(t, root, "commit", "-m", "chore: file viewer fixtures")
+	if err := os.Remove(filepath.Join(root, "deleted.txt")); err != nil {
+		t.Fatal(err)
+	}
+	writeStudioGitFile(t, root, "new.txt", "new content\n")
+	worktree := t.TempDir()
+	studioGit(t, root, "worktree", "add", "-b", "viewer-child", worktree, "HEAD")
+	writeStudioGitFile(t, worktree, "main.go", "package main\n\nvar answer = 999\n")
+	store, lock, err := workspace.CreateSession(root, "file viewer fixture")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lock.Close()
+	session, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	session.Title = "File viewer fixture"
+	session.Transcript = []client.Message{{Role: client.RoleAssistant, Content: "# Files root\n[Inspect main](main.go#L3)"}}
+	if err := store.Save(session); err != nil {
+		t.Fatal(err)
+	}
+	bookmark := workspace.DelegationBookmark{InvocationID: "viewer-child", CallID: "viewer-child", Agent: "builtin/junior-developer", Prompt: "Inspect files", RunID: session.RunID, WorkingDirectory: root, CreatedAt: time.Now().UTC()}
+	if _, err := store.AddDelegation(bookmark); err != nil {
+		t.Fatal(err)
+	}
+	child, err := store.ChildStore(bookmark.InvocationID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := child.Save(workspace.Session{RunID: session.RunID, Transcript: []client.Message{{Role: client.RoleAssistant, Content: "# Files child\n[Inspect child main](main.go#L3)"}}}); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	base := strings.TrimSpace(studioGit(t, root, "rev-parse", "HEAD"))
+	if err := child.SaveDelegationState(workspace.DelegationState{Agent: bookmark.Agent, Prompt: bookmark.Prompt, RunID: session.RunID, Status: "completed", Result: &client.ToolResult{Content: "Files inspected"}, ChangeRequest: &change.Request{Version: change.Version, ID: "viewer-request", RepositoryRoot: root, WorktreePath: worktree, BaseRef: "HEAD", BaseCommit: base, HeadRef: "viewer-child", Status: change.StatusWorking, CreatedAt: now, UpdatedAt: now}}); err != nil {
+		t.Fatal(err)
+	}
+	return store, worktree
 }

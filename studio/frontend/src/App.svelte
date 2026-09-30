@@ -1,7 +1,8 @@
 <script lang="ts">
-  import { Activity, CircleHelp, GitCompareArrows, House, Layers, PanelLeftClose, PanelLeftOpen, Settings } from '@lucide/svelte';
+  import { Activity, CircleHelp, Files, GitCompareArrows, House, Layers, PanelLeftClose, PanelLeftOpen, Settings } from '@lucide/svelte';
   import { onMount } from 'svelte';
   import ChangesView from './ChangesView.svelte';
+  import FilesView from './FilesView.svelte';
   import HelpView from './HelpView.svelte';
   import OperationsView from './OperationsView.svelte';
   import SessionView from './SessionView.svelte';
@@ -12,11 +13,12 @@
     | { kind: 'loading' }
     | { kind: 'ready'; status: StudioStatus }
     | { kind: 'error'; message: string };
-  type View = 'overview' | 'sessions' | 'changes' | 'operations' | 'settings' | 'help';
+  type View = 'overview' | 'sessions' | 'files' | 'changes' | 'operations' | 'settings' | 'help';
 
   const navigation = [
     { label: 'Overview', icon: House, view: 'overview' as View },
     { label: 'Sessions', icon: Layers, view: 'sessions' as View },
+    { label: 'Files', icon: Files, view: 'files' as View },
     { label: 'Changes', icon: GitCompareArrows, view: 'changes' as View },
     { label: 'Operations', icon: Activity, view: 'operations' as View },
     { label: 'Settings', icon: Settings, view: 'settings' as View },
@@ -69,6 +71,7 @@
   function viewFromLocation(): View {
     if (window.location.pathname.startsWith('/settings')) return 'settings';
     if (window.location.pathname.startsWith('/sessions')) return 'sessions';
+    if (window.location.pathname.startsWith('/files')) return 'files';
     if (window.location.pathname.startsWith('/changes')) return 'changes';
     if (window.location.pathname.startsWith('/operations')) return 'operations';
     if (window.location.pathname.startsWith('/help')) return 'help';
@@ -130,9 +133,9 @@
     </nav>
   </aside>
 
-  <main class:settings-main={activeView === 'settings'} class:sessions-main={activeView === 'sessions'} class:changes-main={activeView === 'changes'}>
+  <main class:settings-main={activeView === 'settings'} class:sessions-main={activeView === 'sessions'} class:changes-main={activeView === 'changes'} class:files-main={activeView === 'files'}>
     <header class="page-header">
-      <div><h1>{activeView === 'settings' ? 'Settings' : activeView === 'sessions' ? 'Sessions' : activeView === 'changes' ? 'Changes' : activeView === 'operations' ? 'Operations' : activeView === 'help' ? 'Help' : 'Studio overview'}</h1>{#if activeView === 'settings'}<p class="page-description">Global and repository configuration shared by Q sessions.</p>{:else if activeView === 'sessions'}<p class="page-description">Navigate registered root sessions and their delegated work.</p>{:else if activeView === 'changes'}<p class="page-description">Inspect bounded diffs and review commits.</p>{:else if activeView === 'operations'}<p class="page-description">Usage, workers, local services, logs, and retention.</p>{:else if activeView === 'help'}<p class="page-description">Studio workflows, shortcuts, and recovery.</p>{/if}</div>
+      <div><h1>{activeView === 'settings' ? 'Settings' : activeView === 'sessions' ? 'Sessions' : activeView === 'files' ? 'Files' : activeView === 'changes' ? 'Changes' : activeView === 'operations' ? 'Operations' : activeView === 'help' ? 'Help' : 'Studio overview'}</h1>{#if activeView === 'settings'}<p class="page-description">Global and repository configuration shared by Q sessions.</p>{:else if activeView === 'sessions'}<p class="page-description">Navigate registered root sessions and their delegated work.</p>{:else if activeView === 'files'}<p class="page-description">Browse workspace files and switch between raw content and Git diffs.</p>{:else if activeView === 'changes'}<p class="page-description">Inspect bounded diffs and review commits.</p>{:else if activeView === 'operations'}<p class="page-description">Usage, workers, local services, logs, and retention.</p>{:else if activeView === 'help'}<p class="page-description">Studio workflows, shortcuts, and recovery.</p>{/if}</div>
       <div class="connection" aria-live="polite"><span class:online={connection.kind === 'ready'} class="status-dot" aria-hidden="true"></span><span>{connection.kind === 'ready' ? 'Connected' : connection.kind === 'error' ? 'Disconnected' : 'Connecting'}</span></div>
     </header>
 
@@ -146,6 +149,8 @@
       <SessionView openChanges={openWorkspaceChanges} />
     {:else if activeView === 'changes'}
       <ChangesView />
+    {:else if activeView === 'files'}
+      <FilesView />
     {:else if activeView === 'operations'}
       <OperationsView />
     {:else if activeView === 'help'}
@@ -154,5 +159,5 @@
     <SettingsView active={activeView === 'settings'} />
   </main>
 
-  <footer class="status-bar"><div><span>Q Studio</span><span class="divider" aria-hidden="true"></span><span class:online={connection.kind === 'ready'} class="status-dot" aria-hidden="true"></span><span>{connection.kind === 'ready' ? 'Ready' : connection.kind === 'error' ? 'Unavailable' : 'Connecting'}</span></div><span>{activeView === 'settings' ? 'Configuration' : activeView === 'sessions' ? 'Repository session' : activeView === 'changes' ? 'Repository changes' : activeView === 'operations' ? 'Runtime operations' : activeView === 'help' ? 'Studio guide' : 'Local'}</span></footer>
+  <footer class="status-bar"><div><span>Q Studio</span><span class="divider" aria-hidden="true"></span><span class:online={connection.kind === 'ready'} class="status-dot" aria-hidden="true"></span><span>{connection.kind === 'ready' ? 'Ready' : connection.kind === 'error' ? 'Unavailable' : 'Connecting'}</span></div><span>{activeView === 'settings' ? 'Configuration' : activeView === 'sessions' ? 'Repository session' : activeView === 'files' ? 'Workspace files' : activeView === 'changes' ? 'Repository changes' : activeView === 'operations' ? 'Runtime operations' : activeView === 'help' ? 'Studio guide' : 'Local'}</span></footer>
 </div>

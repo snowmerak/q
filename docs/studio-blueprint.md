@@ -11,7 +11,10 @@ TUI 기능 이전의 실행 순서, capability별 상태와 acceptance 기록은
 현재 구현: 기본적으로 loopback에 바인딩되고 필요할 때 명시적인 `--host`로 범위를 넓힐 수 있는 user-level `q studio` server와 embedded Svelte SPA가 TUI의 일상
 기능을 소유한다. Sessions는 여러 repository의 등록된 root와 nested delegation을 전역
 session tree로 표시하고, 안전한 Markdown과 code highlighting, durable run cursor, 질문,
-pause/resume/cancel/guidance를 제공한다. Changes는 bounded diff와 commit review/execute를 제공한다. Settings는
+pause/resume/cancel/guidance를 제공한다. Files는 디렉토리 탐색과 읽기 전용 Raw/Diff 모드를 제공하고,
+세션의 파일 버튼과 Markdown 파일 링크는 채팅 옆에 같은 뷰어를 연다. 자식 세션의 기본 조회 경로는
+delegation worktree이며 프로젝트의 다른 workspace로도 전환할 수 있다.
+Changes는 bounded diff와 commit review/execute를 제공한다. Settings는
 global/workspace model, Gateway, System One, Library/Loom, MCP/LSP/Skill/subagent/ACP와
 `.qignore`를 같은 Go store와 validator로 편집한다. Operations는 usage, worker/service
 health, bounded log와 보존 상태를 보여주고 Help는 이전 TUI 명령의 Web 경로를 안내한다.
@@ -195,7 +198,7 @@ merge UI, orphan reconciliation과 장기 task graph scheduler는 아직 제공�
 
 ## 5. Web GUI 정보 구조
 
-현재 navigation은 `Overview`, `Sessions`, `Changes`, `Operations`, `Settings`, `Help`다.
+현재 navigation은 `Overview`, `Sessions`, `Files`, `Changes`, `Operations`, `Settings`, `Help`다.
 agent 실행과 Git 작업은 각각 Sessions의 run/delegation projection과 Changes의 review
 workflow에서 시작한다. 장기 task graph와 Change Request가 도입될 때 별도 정보 구조로
 확장한다.
@@ -208,6 +211,7 @@ workflow에서 시작한다. 장기 task graph와 Change Request가 도입될 �
 | Sessions | 전역 root/child session tree, workspace 등록, 생성·삭제, transcript와 active task |
 | Chat | composer, streaming message/reasoning, tool result, 질문과 실행 중단 |
 | Agent activity | 호출 tree, 선택한 run의 timeline, 자식 호출과 runtime 상태 |
+| Files | workspace directory tree, 원문·문법 강조·줄 번호와 staged/unstaged diff; 세션 worktree의 읽기 전용 조회 |
 | Work graph | 의존성 graph, 담당 역할, checkpoint, 차단 원인과 우선순위 |
 | Changes | worktree, branch, commit, 변경 파일, diff, review와 merge 상태 |
 | Settings | model/provider, service, skill, LSP, MCP, subagent와 workspace 설정 |

@@ -91,6 +91,13 @@ across sections, Gateway/System One provider renames followed by another save,
 decision role routing, listener persistence, and both servers' API key creation
 and revocation. Provider discovery uses local HTTP catalogs, rather than live
 provider interoperability.
+Files tests exercise directory expansion, raw syntax highlighting and copying,
+line selection retained in the URL, Raw/Diff switching and reload, and clean,
+deleted, binary and bounded large-file previews. Delayed reads cannot replace a
+new file or mode. A real temporary Git worktree supplies content distinct from
+its parent for session file-link tests, including project workspace switching
+and reopening the same link. Files API tests also cover subdirectory Git scope,
+directory pagination and symlink escapes, with read-only index verification.
 The suite also verifies
 settings scrolling at 1440px and 900px widths. Settings keep their selected
 section, cached snapshot, and pending save queue across page navigation and

@@ -1,4 +1,6 @@
 import { test, expect } from '@playwright/test';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 test.beforeEach(async ({ page }) => {
   const errors = [];
@@ -1013,4 +1015,125 @@ test('system one routing and listener key management persist through native sett
   await page.reload();
   await expect(library.getByRole('textbox', { name: 'Host', exact: true })).toHaveValue('127.0.0.2');
   await expect(gatewayKey).toContainText('Revoked');
+});
+
+test('file browser switches raw and diff and handles unchanged, deleted, binary and large files', async ({ page, request }) => {
+  const fixture = await (await request.get('/_test/fixture')).json();
+  await page.goto('/files?' + new URLSearchParams({ workspace_root: fixture.files_root }));
+  await expect(page).toHaveTitle(/Q Studio/);
+  await expect(page.getByRole('heading', { name: 'Files', exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'File main.go', exact: true }).click();
+  const viewer = page.getByRole('region', { name: 'File viewer' });
+  await expect(viewer.locator('.language-go .hljs-keyword').first()).toBeVisible();
+  await expect(viewer.locator('.file-code-grid code')).toContainText('answer  = 128');
+  await expect(viewer.getByRole('button', { name: 'File line 3', exact: true })).toBeVisible();
+  await viewer.getByRole('button', { name: 'File line 3', exact: true }).click();
+  expect(new URL(page.url()).searchParams.get('line')).toBe('3');
+  await page.context().grantPermissions(['clipboard-read', 'clipboard-write']);
+  await viewer.getByRole('button', { name: 'Copy file content', exact: true }).click();
+  await expect(viewer.getByRole('button', { name: 'Copy file content', exact: true })).toContainText('Copied');
+  expect(await page.evaluate(() => navigator.clipboard.readText())).toContain('answer  = 128');
+  await viewer.getByRole('button', { name: 'Diff', exact: true }).click();
+  await expect(viewer).toContainText('UNSTAGED · index → working tree');
+  await expect(viewer.locator('.diff-code')).toContainText('+var answer  = 128');
+  await page.screenshot({ path: join(tmpdir(), 'q-studio-files-diff.png') });
+  await page.reload();
+  await expect(viewer.getByRole('button', { name: 'Diff', exact: true })).toHaveAttribute('aria-pressed', 'true');
+  await expect(viewer.locator('.diff-code')).toContainText('+var answer  = 128');
+  await viewer.getByRole('button', { name: 'Raw', exact: true }).click();
+  await expect(viewer.getByRole('button', { name: 'File line 3', exact: true })).toHaveClass(/selected/);
+  await viewer.getByRole('button', { name: 'Diff', exact: true }).click();
+  await page.getByRole('button', { name: 'File clean.txt', exact: true }).click();
+  await expect(viewer).toContainText('No Git changes for this file.');
+  await page.getByRole('button', { name: 'Changed file deleted.txt', exact: true }).click();
+  await expect(viewer.locator('.diff-code')).toContainText('-deleted content');
+  await viewer.getByRole('button', { name: 'Raw', exact: true }).click();
+  await expect(viewer).toContainText('File is absent from the working directory.');
+  await page.getByRole('button', { name: 'File binary.bin', exact: true }).click();
+  await expect(viewer).toContainText('Binary or non-UTF-8 file');
+  await page.getByRole('button', { name: 'File large.txt', exact: true }).click();
+  await expect(viewer).toContainText('Partial preview');
+  expect(await viewer.locator('.file-line-numbers button').count()).toBeLessThanOrEqual(4001);
+  await page.getByRole('button', { name: 'Directory nested', exact: true }).click();
+  await page.getByRole('button', { name: 'File nested/config.json', exact: true }).click();
+  await expect(viewer.locator('.language-json .hljs-attr')).toContainText('"enabled"');
+  for (const width of [1440, 390]) {
+    await page.setViewportSize({ width, height: 900 });
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    await viewer.scrollIntoViewIfNeeded();
+    await page.screenshot({ path: join(tmpdir(), `q-studio-files-raw-${width}.png`) });
+  }
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.getByRole('textbox', { name: 'File workspace directory', exact: true }).fill(fixture.other);
+  await page.locator('.files-root-input').getByRole('button', { name: 'Open', exact: true }).click();
+  await expect(viewer.locator('header small')).toHaveText(fixture.other);
+  await page.getByRole('textbox', { name: 'File path', exact: true }).fill('missing.txt');
+  await page.getByRole('button', { name: 'Open file', exact: true }).click();
+  await viewer.getByRole('button', { name: 'Diff', exact: true }).click();
+  await expect(viewer).toContainText('Git diff is unavailable for this directory.');
+});
+
+test('file browser ignores a late raw read when the file and mode change', async ({ page, request }) => {
+  const fixture = await (await request.get('/_test/fixture')).json();
+  let held, release;
+  const captured = new Promise((resolve) => held = resolve);
+  const gate = new Promise((resolve) => release = resolve);
+  await page.route('**/api/v1/workspaces/files/content?*', async (route) => {
+    if (new URL(route.request().url()).searchParams.get('path') !== 'main.go') return route.continue();
+    const response = await route.fetch();
+    held(); await gate;
+    await route.fulfill({ response }).catch(() => {});
+  });
+  await page.goto('/files?' + new URLSearchParams({ workspace_root: fixture.files_root }));
+  await page.getByRole('button', { name: 'File main.go', exact: true }).click();
+  await captured;
+  await page.getByRole('button', { name: 'File secondary.go', exact: true }).click();
+  const viewer = page.getByRole('region', { name: 'File viewer' });
+  await viewer.getByRole('button', { name: 'Diff', exact: true }).click();
+  await expect(viewer.locator('.diff-code')).toContainText('+var count  = 1');
+  release();
+  await expect(viewer.locator(':scope > header strong')).toHaveText('secondary.go');
+  await expect(viewer.locator('.diff-code')).not.toContainText('answer');
+  await viewer.getByRole('button', { name: 'Raw', exact: true }).click();
+  await expect(viewer.locator('.file-code-grid code')).toContainText('count  = 1');
+});
+
+test('session file links open the selected delegation worktree and project workspaces', async ({ page, request }) => {
+  const fixture = await (await request.get('/_test/fixture')).json();
+  const project = await request.post('/api/v1/projects', { data: { name: 'Viewer project', workspace_roots: [fixture.files_root, fixture.project_other] } });
+  expect(project.ok()).toBe(true);
+  const registered = await request.post('/api/v1/registered-sessions', { data: { workspace_root: fixture.files_root, session_id: fixture.files_session_id } });
+  expect(registered.status()).toBe(201);
+  const session = await registered.json();
+  await page.goto('/sessions/' + session.registration_id);
+  await page.getByRole('link', { name: 'Inspect main', exact: true }).click();
+  const panel = page.getByRole('complementary', { name: 'Session file browser' });
+  const viewer = panel.getByRole('region', { name: 'File viewer' });
+  await expect(viewer.locator('.file-code-grid code')).toContainText('answer  = 128');
+  await expect(viewer.getByRole('button', { name: 'File line 3', exact: true })).toHaveClass(/selected/);
+  await expect(panel.getByRole('combobox', { name: 'File workspace', exact: true }).locator('option').filter({ hasText: fixture.project_other })).toHaveCount(1);
+  await page.getByRole('complementary', { name: 'Registered session tree' }).getByRole('button', { name: /^junior-developer completed.*CR working$/ }).click();
+  await page.getByRole('link', { name: 'Inspect child main', exact: true }).click();
+  await expect(viewer.locator('header small')).toHaveText(fixture.files_worktree);
+  await expect(viewer.locator('.file-code-grid code')).toContainText('answer = 999');
+  await viewer.getByRole('button', { name: 'Diff', exact: true }).click();
+  await expect(viewer.locator('.diff-code')).toContainText('+var answer = 999');
+  await expect(page.locator('.transcript')).toContainText('Files child');
+  await page.screenshot({ path: join(tmpdir(), 'q-studio-session-files.png') });
+  await panel.getByRole('combobox', { name: 'File workspace', exact: true }).selectOption(fixture.project_other);
+  await expect(viewer.locator('header small')).toHaveText(fixture.project_other);
+  await page.getByRole('link', { name: 'Inspect child main', exact: true }).click();
+  await expect(viewer.locator('header small')).toHaveText(fixture.files_worktree);
+  await expect(viewer.locator('.diff-code')).toContainText('+var answer = 999');
+  for (const width of [900, 390]) {
+    await page.setViewportSize({ width, height: 900 });
+    await expect(panel).toBeVisible();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    await page.screenshot({ path: join(tmpdir(), `q-studio-session-files-${width}.png`) });
+  }
+  await panel.getByRole('button', { name: 'Close file browser', exact: true }).click();
+  await expect(panel).toHaveCount(0);
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await expect(page.getByRole('complementary', { name: 'Current turn activity' })).toBeVisible();
+  await request.delete('/api/v1/projects/' + (await project.json()).id);
 });

@@ -197,6 +197,15 @@ Studio is the primary interface for daily Q work:
   delegation tree. Add an existing workspace session or create a new root,
   open child transcripts, and manage the root conversation lifecycle. It also
   shows current context usage and reconnects to the durable run cursor.
+- **Files** browses directories and files in a chosen workspace, with **Raw**
+  (syntax highlighting, line numbers, and copy) and **Diff** (separate staged,
+  unstaged, and untracked patches) modes. The session toolbar and Markdown file
+  links open the same viewer beside chat. Child sessions use their delegation
+  worktree; the workspace selector also includes the project's other directories.
+  Deleted files remain selectable through the Git changes list. Text previews
+  are limited to 256 KiB or 4,000 lines; binary/non-UTF-8 files show a notice.
+  The viewer is read-only and hides `.git` and `.q` metadata.
+  Raw also works in directories without Git; Diff reports when Git is unavailable.
 - **Changes** owns staged, unstaged, untracked and renamed files, bounded diffs,
   commit proposal review, split commits, execution, and optional push.
 - **Settings** owns global and repository model assignments, Gateway and System

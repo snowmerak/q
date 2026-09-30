@@ -4,6 +4,7 @@
 
   export let content = '';
   export let compact = false;
+  export let onfile: ((path: string) => void) | undefined = undefined;
 
   let root: HTMLDivElement;
   $: rendered = renderMarkdown(content);
@@ -33,6 +34,13 @@
   }
 
   async function handleClick(event: MouseEvent) {
+    const anchor = event.target instanceof Element ? event.target.closest<HTMLAnchorElement>('a') : null;
+    const href = anchor?.getAttribute('href') || '';
+    if (onfile && anchor && root.contains(anchor) && href && !href.startsWith('#') && !href.startsWith('//') && (!/^[a-z][a-z\d+.-]*:/i.test(href) || /^[a-z]:[\\/]/i.test(href))) {
+      event.preventDefault();
+      onfile(href);
+      return;
+    }
     const target = event.target instanceof Element ? event.target.closest<HTMLButtonElement>('.code-copy') : null;
     if (!target || !root.contains(target)) return;
     const code = target.closest('.code-frame')?.querySelector('code')?.textContent || '';
