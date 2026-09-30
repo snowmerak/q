@@ -722,3 +722,104 @@ test('model settings scroll inside the content pane at desktop and narrow widths
     await expect.poll(() => pane.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
   }
 });
+
+
+test('changes reject a late file diff after repository selection', async ({ page, request }) => {
+  const fixture = await (await request.get('/_test/fixture')).json();
+  await page.goto('/changes?workspace_root=' + encodeURIComponent(fixture.git_root));
+  await expect(page.locator('.diff-view')).toContainText('+var answer  = 42');
+  let release;
+  const gate = new Promise((resolve) => { release = resolve; });
+  let notify;
+  const held = new Promise((resolve) => { notify = resolve; });
+  let aborted = false;
+  page.on('requestfailed', (r) => { if (r.url().includes('/changes/file')) aborted = true; });
+  await page.route('**/api/v1/workspaces/changes/file?**', async (route) => {
+    const url = new URL(route.request().url());
+    if (url.searchParams.get('workspace_root') !== fixture.git_root || url.searchParams.get('path') !== 'secondary.go') return route.continue();
+    const response = await route.fetch();
+    notify();
+    await gate;
+    await route.fulfill({ response }).catch(() => {});
+  });
+  await page.locator('.changed-files button').filter({ hasText: 'secondary.go' }).click();
+  await held;
+  await page.getByRole('textbox', { name: 'Repository', exact: true }).fill(fixture.git_other);
+  await page.getByTitle('Load changes', { exact: true }).click();
+  await expect(page.locator('.diff-view')).toContainText('+var answer  = 84');
+  await expect.poll(() => aborted).toBe(true);
+  release();
+  await expect(page.locator('.change-detail h2')).toHaveText('main.go');
+  await expect(page.locator('.diff-view')).not.toContainText('count');
+  await page.getByRole('button', { name: /Link to diff line 1 in/ }).first().click();
+  await expect(page.locator('.diff-line.selected')).toHaveCount(1);
+  await page.locator('.changed-files button').filter({ hasText: 'secondary.go' }).click();
+  await expect(page.locator('.diff-view')).toContainText('+var count  = 1');
+  await expect(page.locator('.diff-line.selected')).toHaveCount(0);
+});
+
+test('commit review queues message edits and executes only its repository', async ({ page, request }) => {
+  const fixture = await (await request.get('/_test/fixture')).json();
+  await page.goto('/changes?workspace_root=' + encodeURIComponent(fixture.git_root));
+  await expect(page.locator('.diff-view')).toContainText('+var answer  = 42');
+  await page.getByRole('button', { name: 'Prepare commit', exact: true }).click();
+  const proposal = page.locator('.proposal-list textarea').first();
+  await expect(proposal).toBeVisible();
+  let release;
+  const gate = new Promise((resolve) => { release = resolve; });
+  let notify;
+  const held = new Promise((resolve) => { notify = resolve; });
+  const writes = [];
+  await page.route('**/api/v1/workspaces/commits/*/proposals/*', async (route) => {
+    writes.push(route.request().postDataJSON());
+    const response = await route.fetch();
+    if (writes.length === 1) { notify(); await gate; }
+    await route.fulfill({ response });
+  });
+  await proposal.fill('style: first message');
+  await proposal.press('Tab');
+  await held;
+  await proposal.fill('style: final fixture message');
+  await proposal.press('Tab');
+  await page.getByRole('textbox', { name: 'Repository', exact: true }).fill(fixture.git_other);
+  await expect(page.getByTitle('Load changes', { exact: true })).toBeDisabled();
+  release();
+  await expect(page.getByRole('button', { name: 'Commit', exact: true })).toBeEnabled();
+  await expect(proposal).toHaveValue('style: final fixture message');
+  expect(writes.map((item) => item.message)).toEqual(['style: first message', 'style: final fixture message']);
+  page.once('dialog', (dialog) => dialog.accept());
+  await page.getByRole('button', { name: 'Commit', exact: true }).click();
+  await expect(page.locator('.commit-result')).toContainText('Committed');
+  await expect(page.locator('.commit-result')).toContainText('style: final fixture message');
+  const original = await (await request.get('/api/v1/workspaces/changes?workspace_root=' + encodeURIComponent(fixture.git_root))).json();
+  const other = await (await request.get('/api/v1/workspaces/changes?workspace_root=' + encodeURIComponent(fixture.git_other))).json();
+  expect(original.snapshot.files || []).toHaveLength(0);
+  expect(other.snapshot.files).toHaveLength(2);
+  await expect(page.getByRole('textbox', { name: 'Repository', exact: true })).toHaveValue(fixture.git_root);
+});
+
+
+test('initial folder lookup preserves a directory typed while loading', async ({ page, request }) => {
+  const fixture = await (await request.get('/_test/fixture')).json();
+  let release;
+  const gate = new Promise((resolve) => { release = resolve; });
+  let notify;
+  const held = new Promise((resolve) => { notify = resolve; });
+  await page.route('**/api/v1/directories', async (route) => {
+    const response = await route.fetch();
+    notify();
+    await gate;
+    await route.fulfill({ response });
+  });
+  await page.getByTitle('Add or create session').click();
+  await page.getByRole('button', { name: 'Choose repository folder' }).click();
+  const browser = page.getByRole('dialog', { name: 'Choose a folder' });
+  await held;
+  const path = browser.getByRole('textbox', { name: 'Directory path' });
+  await path.fill(fixture.project_other);
+  release();
+  await expect(browser.getByRole('button', { name: 'Go', exact: true })).toBeEnabled();
+  await expect(path).toHaveValue(fixture.project_other);
+  await browser.getByRole('button', { name: 'Go', exact: true }).click();
+  await expect(browser.locator('footer code')).toHaveText(fixture.project_other);
+});

@@ -338,12 +338,14 @@ func TestStudioBrowserFixture(t *testing.T) {
 	var once sync.Once
 	projectRoot, projectOther := t.TempDir(), t.TempDir()
 	tree := seedStudioBrowserDelegations(t)
+	gitRoot, gitOther := seedStudioBrowserChanges(t, 42), seedStudioBrowserChanges(t, 84)
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /_test/fixture", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, map[string]string{
 			"root": fixture.root, "other": other, "session_id": fixture.session.SessionID,
 			"project_root": projectRoot, "project_other": projectOther,
 			"tree_root": tree.Root, "tree_session_id": tree.SessionID,
+			"git_root": gitRoot, "git_other": gitOther,
 		})
 	})
 	mux.HandleFunc("POST /_test/shutdown", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(204); once.Do(func() { close(closed) }) })
@@ -405,5 +407,20 @@ func seedStudioBrowserDelegations(t *testing.T) workspace.Store {
 		}
 		parent = child
 	}
+	return root
+}
+
+func seedStudioBrowserChanges(t *testing.T, answer int) string {
+	t.Helper()
+	root := t.TempDir()
+	studioGit(t, root, "init")
+	studioGit(t, root, "config", "user.name", "Studio Browser Fixture")
+	studioGit(t, root, "config", "user.email", "studio@example.test")
+	writeStudioGitFile(t, root, "main.go", fmt.Sprintf("package main\n\nvar answer = %d\n", answer))
+	writeStudioGitFile(t, root, "secondary.go", "package main\n\nvar count = 1\n")
+	studioGit(t, root, "add", ".")
+	studioGit(t, root, "commit", "-m", "chore: fixture")
+	writeStudioGitFile(t, root, "main.go", fmt.Sprintf("package main\n\nvar answer  = %d\n", answer))
+	writeStudioGitFile(t, root, "secondary.go", "package main\n\nvar count  = 1\n")
 	return root
 }

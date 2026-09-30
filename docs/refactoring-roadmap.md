@@ -547,3 +547,19 @@ loop의 guidance 전환, 응답 갱신, replay와 Markdown/code 표시, 900·144
 검증: Svelte 검사, Studio Go 회귀·통합 테스트와 `task studio:test`(브라우저 19개)를
 통과했다. 배포 bundle을 재빌드했다. 다음 정리 후보는 Changes 화면의 repository/
 change request 상태와 diff 표시, 그리고 Operations 화면의 조회·표시 책임이다.
+
+## 20. Studio 변경 조회와 커밋 리뷰 분리 (2026-10-01)
+
+- `ChangesView.svelte`는 repository snapshot과 파일 선택을, `changes/FileDiff.svelte`는
+  diff 표시를, `changes/CommitReview.svelte`는 proposal 편집과 commit 수명을 소유한다.
+  공통 JSON 계약과 표시 helper는 같은 directory에 둔다.
+- repository/file 조회를 취소하고 generation을 검사해 늦은 응답이 새 선택을 덮지
+  않는다. 파일 변경 시 diff line 선택도 초기화한다. 리뷰 중 다른 repository로 이동은
+  취소 후 가능하며 저장된 리뷰의 root로만 commit/refresh한다. 편집은 직렬로 저장하고
+  화면 종료 시 대기 작업 이후 남아 있는 리뷰를 해제한다.
+- 실제 임시 Git 저장소에서 diff 교체와 리뷰 메시지 연속 저장·commit을 검증했다.
+  전체 검증 중 발견한 폴더 초기 조회의 입력 덮어쓰기도 수정하고 지연 응답 회귀를 추가했다.
+
+검증: Svelte 검사와 `task studio:test`(브라우저 22개)를 통과했다. 배포 bundle을
+재빌드했다. 남은 정리 범위는 Operations 조회/표시 분리, 전역 Settings 편집 기능
+분리와 전체 검증이다. 이 세 단계가 끝나면 이번 Studio 정리를 완료로 기록한다.

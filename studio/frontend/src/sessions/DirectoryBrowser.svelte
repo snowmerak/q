@@ -1,6 +1,6 @@
 <script lang="ts">
   import { ChevronUp, Folder, HardDrive, Home, X } from '@lucide/svelte';
-  import { onMount } from 'svelte';
+  import { onDestroy, onMount } from 'svelte';
   import { apiError } from '../api';
 
   export let kind: 'registration' | 'project' = 'registration';
@@ -21,6 +21,11 @@
   let directoryError = '';
   let directoryPathInput = '';
   let directoryListing: DirectoryListing | null = null;
+  let generation = 0;
+  let inputRevision = 0;
+  let controller: AbortController | undefined;
+
+  onDestroy(() => { generation += 1; controller?.abort(); });
 
   async function selectBrowsedDirectory() {
     if (directoryListing?.can_select) await onselect(directoryListing.current);
@@ -39,18 +44,26 @@
   });
 
   async function browseDirectory(path = '') {
+    const requestGeneration = ++generation;
+    const revision = inputRevision;
+    controller?.abort();
+    const requestController = new AbortController();
+    controller = requestController;
     directoryLoading = true;
     directoryError = '';
     try {
       const query = path.trim() ? `?path=${encodeURIComponent(path.trim())}` : '';
-      const response = await fetch(`/api/v1/directories${query}`, { headers: { Accept: 'application/json' } });
+      const response = await fetch(`/api/v1/directories${query}`, { headers: { Accept: 'application/json' }, signal: requestController.signal });
       if (!response.ok) throw new Error(await apiError(response));
-      directoryListing = (await response.json()) as DirectoryListing;
-      directoryPathInput = directoryListing.current;
+      const listing = (await response.json()) as DirectoryListing;
+      if (requestGeneration !== generation) return;
+      directoryListing = listing;
+      // The initial home lookup may finish after the user starts typing.
+      if (revision === inputRevision) directoryPathInput = listing.current;
     } catch (cause) {
-      directoryError = cause instanceof Error ? cause.message : 'Could not browse this directory';
+      if (!requestController.signal.aborted && requestGeneration === generation) directoryError = cause instanceof Error ? cause.message : 'Could not browse this directory';
     } finally {
-      directoryLoading = false;
+      if (requestGeneration === generation) directoryLoading = false;
     }
   }
 </script>
@@ -65,7 +78,7 @@
     <div class="directory-toolbar">
       <button title="Home" aria-label="Go to home directory" onclick={() => browseDirectory(directoryListing?.home || '')} disabled={directoryLoading}><Home aria-hidden="true" size={16} /></button>
       <button title="Parent directory" aria-label="Go to parent directory" onclick={() => directoryListing?.parent && browseDirectory(directoryListing.parent)} disabled={directoryLoading || !directoryListing?.parent}><ChevronUp aria-hidden="true" size={17} /></button>
-      <input aria-label="Directory path" bind:value={directoryPathInput} onkeydown={(event) => event.key === 'Enter' && browseDirectory(directoryPathInput)} />
+      <input aria-label="Directory path" bind:value={directoryPathInput} oninput={() => inputRevision += 1} onkeydown={(event) => event.key === 'Enter' && browseDirectory(directoryPathInput)} />
       <button class="browse-button" onclick={() => browseDirectory(directoryPathInput)} disabled={directoryLoading}>Go</button>
     </div>
 
