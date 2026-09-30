@@ -338,6 +338,149 @@ test('settings retain their save queue and selected section across navigation', 
   }
 });
 
+
+test('MCP edits persist transport, environment grants, and deletion', async ({ page, request }) => {
+  await page.goto('/settings?section=integrations');
+  await expect(page.getByRole('heading', { name: 'MCP servers', exact: true })).toBeVisible();
+  await page.getByRole('textbox', { name: 'Server ID', exact: true }).fill('ui-docs');
+  const save = () => page.waitForResponse((r) => new URL(r.url()).pathname === '/api/v1/integrations/mcp' && r.request().method() === 'PUT');
+  let saved = save();
+  await page.getByRole('button', { name: 'Add server', exact: true }).click();
+  expect((await saved).ok()).toBe(true);
+  const card = page.locator('.integration-editor').filter({ has: page.getByRole('heading', { name: 'ui-docs', exact: true }) });
+  saved = save();
+  await card.getByRole('combobox', { name: 'Transport', exact: true }).selectOption('streamable-http');
+  expect((await saved).ok()).toBe(true);
+  const url = card.getByRole('textbox', { name: 'URL', exact: true });
+  saved = save();
+  await url.fill('https://example.test/mcp');
+  await url.press('Tab');
+  expect((await saved).ok()).toBe(true);
+  const headers = card.getByRole('textbox', { name: 'Header to env mapping · JSON', exact: true });
+  await headers.fill('{');
+  await headers.press('Tab');
+  await expect(page.locator('.integration-message')).toContainText('headers:');
+  saved = save();
+  await headers.fill('{"Authorization":"DOCS_TOKEN"}');
+  await headers.press('Tab');
+  expect((await saved).ok()).toBe(true);
+  saved = save();
+  await card.getByRole('checkbox', { name: 'reviewer', exact: true }).check();
+  expect((await saved).ok()).toBe(true);
+  const config = (await (await request.get('/api/v1/integrations/mcp')).json()).config;
+  expect(config.servers['ui-docs']).toEqual({ transport: 'streamable-http', url: 'https://example.test/mcp', headers: { Authorization: 'DOCS_TOKEN' } });
+  expect(config.roles.reviewer).toContain('ui-docs');
+  await page.reload();
+  await expect(url).toHaveValue('https://example.test/mcp');
+  await expect(headers).toHaveValue('{"Authorization":"DOCS_TOKEN"}');
+  await expect(card.getByRole('checkbox', { name: 'reviewer', exact: true })).toBeChecked();
+  page.once('dialog', (dialog) => dialog.accept());
+  saved = save();
+  await card.getByTitle('Delete MCP server', { exact: true }).click();
+  expect((await saved).ok()).toBe(true);
+  await expect(card).toHaveCount(0);
+  const removed = (await (await request.get('/api/v1/integrations/mcp')).json()).config;
+  expect(removed.servers?.['ui-docs']).toBeUndefined();
+  expect(removed.roles?.reviewer || []).not.toContain('ui-docs');
+});
+
+test('queued LSP edits keep their repository when the workspace changes', async ({ page, request }) => {
+  const fixture = await (await request.get('/_test/fixture')).json();
+  expect((await request.put('/api/v1/workspaces/lsp', { data: {
+    workspace_root: fixture.project_root,
+    global: { servers: { 'ui-gopls': { languages: ['go'], command: 'gopls', args: [] } }, languages: { go: 'ui-gopls' } },
+    workspace: { version: 1, roots: [] }
+  } })).ok()).toBe(true);
+  await page.goto('/settings?section=integrations&panel=lsp&workspace_root=' + encodeURIComponent(fixture.project_root));
+  await expect(page.getByRole('heading', { name: 'Repository roots', exact: true })).toBeVisible();
+  let release;
+  const gate = new Promise((resolve) => { release = resolve; });
+  let notifyHeld;
+  const held = new Promise((resolve) => { notifyHeld = resolve; });
+  const writes = [];
+  await page.route('**/api/v1/workspaces/lsp', async (route) => {
+    if (route.request().method() !== 'PUT') return route.continue();
+    writes.push(route.request().postDataJSON());
+    const response = await route.fetch();
+    if (writes.length === 1) { notifyHeld(); await gate; }
+    await route.fulfill({ response });
+  });
+  try {
+    await page.getByRole('button', { name: 'Add root', exact: true }).click();
+    await held;
+    const root = page.getByRole('textbox', { name: 'Root path', exact: true });
+    await root.fill('src');
+    await root.press('Tab');
+    await page.getByRole('textbox', { name: 'Repository path', exact: true }).fill(fixture.project_other);
+    await page.getByRole('button', { name: 'Load repository', exact: true }).click();
+    release();
+    await expect(page.getByRole('heading', { name: 'Repository roots', exact: true })).toBeVisible();
+    await expect(page.getByRole('textbox', { name: 'Root path', exact: true })).toHaveCount(0);
+    await expect(page.getByTitle('Reload current panel', { exact: true })).toBeEnabled();
+    expect(writes).toHaveLength(2);
+    expect(writes.map((write) => write.workspace_root)).toEqual([fixture.project_root, fixture.project_root]);
+    const read = async (root) => (await (await request.get('/api/v1/workspaces/lsp?workspace_root=' + encodeURIComponent(root))).json()).workspace.roots || [];
+    expect((await read(fixture.project_root)).map((root) => root.path)).toEqual(['src']);
+    expect(await read(fixture.project_other)).toEqual([]);
+  } finally { release(); }
+});
+
+test('ignore debounce preserves revisions and flushes to the owning repository on navigation', async ({ page, request }) => {
+  const fixture = await (await request.get('/_test/fixture')).json();
+  await page.goto('/settings?section=integrations&panel=ignore&workspace_root=' + encodeURIComponent(fixture.project_root));
+  const editor = page.getByRole('textbox', { name: '.qignore content', exact: true });
+  await expect(editor).toBeVisible();
+  let release;
+  const gate = new Promise((resolve) => { release = resolve; });
+  let notifyHeld;
+  const held = new Promise((resolve) => { notifyHeld = resolve; });
+  const writes = [];
+  await page.route('**/api/v1/workspaces/ignore', async (route) => {
+    if (route.request().method() !== 'PUT') return route.continue();
+    writes.push(route.request().postDataJSON());
+    const response = await route.fetch();
+    if (writes.length === 1) { notifyHeld(); await gate; }
+    await route.fulfill({ response });
+  });
+  try {
+    await editor.fill('build/\n');
+    await held;
+    await editor.fill('build/\nvendor/\n');
+    await page.getByRole('textbox', { name: 'Repository path', exact: true }).fill(fixture.project_other);
+    await page.getByRole('button', { name: 'Load repository', exact: true }).click();
+    release();
+    await expect(editor).toBeVisible();
+    await expect(editor).toHaveValue('');
+    await expect(page.getByTitle('Reload current panel', { exact: true })).toBeEnabled();
+    expect(writes.map((write) => write.workspace_root)).toEqual([fixture.project_root, fixture.project_root]);
+    expect(writes[1].revision).not.toBe(writes[0].revision);
+    const read = async (root) => (await (await request.get('/api/v1/workspaces/ignore?workspace_root=' + encodeURIComponent(root))).json()).content;
+    expect(await read(fixture.project_root)).toBe('build/\nvendor/\n');
+    expect(await read(fixture.project_other)).toBe('');
+    const saved = page.waitForResponse((r) => new URL(r.url()).pathname === '/api/v1/workspaces/ignore' && r.request().method() === 'PUT');
+    await editor.fill('cache/\n');
+    await page.getByRole('complementary', { name: 'Studio navigation' }).getByRole('button', { name: 'Help', exact: true }).click();
+    expect((await saved).ok()).toBe(true);
+    await expect(page.getByRole('heading', { name: 'Help', exact: true })).toBeVisible();
+    expect(await read(fixture.project_other)).toBe('cache/\n');
+    expect(writes[2].workspace_root).toBe(fixture.project_other);
+  } finally { release(); }
+});
+
+test('portable skills render read-only and reindex through the real local services', async ({ page, request }) => {
+  const fixture = await (await request.get('/_test/fixture')).json();
+  await page.goto('/settings?section=integrations&panel=skills&workspace_root=' + encodeURIComponent(fixture.root));
+  const card = page.locator('.skill-card').filter({ has: page.getByRole('heading', { name: 'studio-review', exact: true }) });
+  await expect(card).toContainText('Review the requested Go package.');
+  await expect(card).toContainText('Read only');
+  await expect(card.getByRole('button')).toHaveCount(0);
+  const saved = page.waitForResponse((r) => new URL(r.url()).pathname === '/api/v1/workspaces/skills/reindex');
+  await page.getByRole('button', { name: 'Reindex all', exact: true }).click();
+  expect((await saved).ok()).toBe(true);
+  await expect(page.locator('.integration-message')).toContainText('Skill indexes rebuilt');
+  await expect(card).toBeVisible();
+});
+
 test('tool results align with tool calls across wide and narrow viewports', async ({ page, request }, testInfo) => {
   const fixture = await (await request.get('/_test/fixture')).json();
   const registered = await request.post('/api/v1/registered-sessions', { data: { workspace_root: fixture.root, create: true } });

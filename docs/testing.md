@@ -65,6 +65,11 @@ workspace to real session registration. Reopening a dialog resets its inputs.
 Switching sessions aborts a held event request and rejects its late content;
 a delayed session detail response cannot overwrite a newer selection. Input is
 disabled until that selection finishes loading.
+Integration browser tests exercise MCP transport, environment grants, role
+grants, invalid JSON recovery, and deletion; queued LSP writes stay in their
+original repository while the selected path changes. Ignore edits keep their
+document's revision and flush on panel/route changes. A disposable portable
+skill renders read-only and reindexes through the real local services.
 The suite also verifies
 settings scrolling at 1440px and 900px widths. Settings keep their selected
 section, cached snapshot, and pending save queue across page navigation and

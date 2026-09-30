@@ -469,3 +469,25 @@ controller와 `studio/integrations.go`의 기능별 분리다.
 Skills 목록, connection/profile 저장과 ignore revision 충돌을 기존 회귀 테스트로
 검증했다. 다음 후보는 frontend integration 화면의 기능별 상태와 세션 transcript/
 activity 표시 책임을 분리하는 것이다.
+
+## 16. Studio integration 화면의 상태 분리 (2026-10-01)
+
+- `IntegrationsView.svelte`는 panel 선택, repository 경로 입력과 작업 상태만
+  소유한다. MCP, LSP, Skills와 `.qignore`의 조회·입력·저장은
+  `integrations/MCPPanel.svelte`, `LSPPanel.svelte`, `SkillsPanel.svelte`,
+  `IgnorePanel.svelte`가 각각 소유한다. 타입과 JSON 처리는 같은 directory에 둔다.
+- `integrations/operations.ts`의 직렬 queue로 저장과 후속 조회 순서를 유지하고,
+  대기 중인 모든 작업이 끝날 때까지 busy 상태를 유지한다. 저장 payload와
+  workspace path는 입력 당시 고정한다. 오래된 저장/조회 응답은 새로운 편집이나
+  repository 선택을 덮지 않는다.
+- `.qignore`는 문서별 revision을 저장 승인 후 갱신한다. panel 변경, repository
+  변경과 component 종료 시 debounce 중인 입력을 해당 문서의 경로로 저장한다.
+  서버의 revision 충돌 검사는 유지하며 browser 전체 종료의 저장 완료는 보장하지 않는다.
+- 브라우저 회귀 4개를 추가했다. MCP transport/env grant/삭제와 JSON 오류 복구,
+  지연된 LSP 저장 중 repository 변경, `.qignore` revision 연쇄와 화면 전환 저장,
+  portable Skills 표시와 실제 local service 재인덱싱을 확인한다. fixture에만 임시
+  portable skill을 추가하며 외부 Git repository나 실제 사용자 설정을 사용하지 않는다.
+
+검증: Svelte 검사, Studio Go 테스트, `task studio:test`(브라우저 15개),
+`git diff --check`를 통과했다. 기존 Playwright fixture로 실제 browser 렌더링을
+검증했고 배포 bundle을 재빌드했다. 다음 단계는 session transcript/activity 표시다.

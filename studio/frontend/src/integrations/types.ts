@@ -1,0 +1,9 @@
+export type MCPServer = { transport: 'stdio' | 'streamable-http'; command?: string; args?: string[]; env?: Record<string, string>; url?: string; headers?: Record<string, string> };
+export type MCPResponse = { config_path: string; config: { version: number; servers: Record<string, MCPServer>; roles: Record<string, string[]> }; roles: string[] };
+export type LSPServer = { languages: string[]; command: string; args?: string[]; disabled?: boolean };
+export type LSPRoot = { path: string; language: string; server?: string; source?: string; disabled?: boolean };
+export type LSPResponse = { config_path: string; workspace_path: string; workspace_root: string; global: { servers: Record<string, LSPServer>; languages: Record<string, string> }; workspace: { version: number; roots: LSPRoot[] } };
+export type DiscoveredServer = { id: string; path: string; config: LSPServer };
+export type Skill = { id: string; name: string; description: string; directory: string; source: string; scope: string; tags?: string[]; git_commit?: string; active: boolean; managed: boolean };
+export type SkillResponse = { workspace_root: string; skills: Skill[]; issues: { path: string; message: string }[] };
+export type IgnoreResponse = { workspace_root: string; path: string; content: string; revision: string };

@@ -319,6 +319,13 @@ func TestStudioBrowserFixture(t *testing.T) {
 	}
 	fixture := newStudioIntegration(t)
 	other := t.TempDir()
+	skillDirectory := filepath.Join(fixture.root, ".agents", "skills", "studio-review")
+	if err := os.MkdirAll(skillDirectory, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(skillDirectory, "SKILL.md"), []byte("---\nname: studio-review\ndescription: Review the requested Go package.\ntags: [go, review]\n---\n\nRead the package and report findings.\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	projects := serveJSON(t, fixture.handler, http.MethodPost, "/api/v1/projects", studioProjectUpdateRequest{Name: "Integration", WorkspaceRoots: []string{fixture.root, other}})
 	if projects.Code != 201 {
 		t.Fatalf("project = %d %s", projects.Code, projects.Body.String())
