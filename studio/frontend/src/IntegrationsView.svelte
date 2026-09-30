@@ -5,7 +5,7 @@
   import LSPPanel from './integrations/LSPPanel.svelte';
   import SkillsPanel from './integrations/SkillsPanel.svelte';
   import IgnorePanel from './integrations/IgnorePanel.svelte';
-  import { createIntegrationOperations } from './integrations/operations';
+  import { createSettingsOperations } from './settings/operations';
 
   type Panel = 'mcp' | 'lsp' | 'skills' | 'ignore';
   const panels: { id: Panel; label: string; detail: string }[] = [
@@ -21,7 +21,7 @@
   let repositoryRoot = '';
   let ready = false;
   let reloadToken = 0;
-  const operations = createIntegrationOperations();
+  const operations = createSettingsOperations();
 
   function loadPanel() {
     repositoryRoot = workspaceRoot.trim();

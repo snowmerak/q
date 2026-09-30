@@ -339,6 +339,139 @@ test('settings retain their save queue and selected section across navigation', 
 });
 
 
+
+test('global subagent profiles save roles, permissions, prompts, and deletion', async ({ page, request }) => {
+  await page.goto('/settings?section=subagents');
+  const context = page.getByRole('textbox', { name: 'Repository context · optional', exact: true });
+  await context.fill('');
+  await page.getByRole('button', { name: 'Use global only', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Custom profiles', exact: true })).toBeVisible();
+  await page.getByRole('textbox', { name: 'Profile name', exact: true }).fill('ui-inspector');
+  const save = (method) => page.waitForResponse((r) => new URL(r.url()).pathname.startsWith('/api/v1/settings/subagents/profiles') && r.request().method() === method);
+  let saved = save('POST');
+  await page.getByRole('button', { name: 'Add profile', exact: true }).click();
+  expect((await saved).ok()).toBe(true);
+  const card = page.locator('.subagent-profile').filter({ has: page.getByRole('heading', { name: 'ui-inspector', exact: true }) });
+  saved = save('PUT');
+  await card.getByRole('combobox', { name: 'Model role', exact: true }).selectOption('reviewer');
+  expect((await saved).ok()).toBe(true);
+  saved = save('PUT');
+  await card.getByRole('textbox', { name: 'System prompt', exact: true }).fill('Review the code and report evidence.');
+  await card.getByRole('textbox', { name: 'System prompt', exact: true }).press('Tab');
+  expect((await saved).ok()).toBe(true);
+  await card.getByPlaceholder('Filter tools').fill('read_file');
+  saved = save('PUT');
+  await card.getByRole('checkbox', { name: 'read_file', exact: true }).check();
+  expect((await saved).ok()).toBe(true);
+  await card.getByPlaceholder('Filter delegates').fill('builtin/research');
+  saved = save('PUT');
+  await card.getByRole('checkbox', { name: /^builtin\/research / }).check();
+  expect((await saved).ok()).toBe(true);
+  await page.reload();
+  await expect(card.getByRole('combobox', { name: 'Model role', exact: true })).toHaveValue('reviewer');
+  await expect(card.getByRole('textbox', { name: 'System prompt', exact: true })).toHaveValue('Review the code and report evidence.');
+  await expect(card.getByRole('checkbox', { name: 'read_file', exact: true })).toBeChecked();
+  await expect(card.getByRole('checkbox', { name: /^builtin\/research / })).toBeChecked();
+  const snapshot = await (await request.get('/api/v1/settings/subagents')).json();
+  const profile = snapshot.profiles.find((entry) => entry.profile.name === 'ui-inspector').profile;
+  expect(profile.tools).toContain('read_file');
+  expect(profile.delegates).toContain('builtin/research');
+  page.once('dialog', (dialog) => dialog.accept());
+  saved = save('DELETE');
+  await card.getByTitle('Delete profile', { exact: true }).click();
+  expect((await saved).ok()).toBe(true);
+  await expect(card).toHaveCount(0);
+});
+
+test('queued profile edits preserve revisions, scope migration, and the original repository', async ({ page, request }) => {
+  const fixture = await (await request.get('/_test/fixture')).json();
+  await page.goto('/settings?section=subagents&workspace_root=' + encodeURIComponent(fixture.project_root));
+  await expect(page.getByRole('heading', { name: 'Custom profiles', exact: true })).toBeVisible();
+  await page.getByRole('textbox', { name: 'Profile name', exact: true }).fill('ui-queued');
+  await page.getByRole('button', { name: 'Add profile', exact: true }).click();
+  const card = page.locator('.subagent-profile').filter({ has: page.getByRole('heading', { name: 'ui-queued', exact: true }) });
+  await expect(card).toBeVisible();
+  let release;
+  const gate = new Promise((resolve) => { release = resolve; });
+  let notifyHeld;
+  const held = new Promise((resolve) => { notifyHeld = resolve; });
+  const writes = [];
+  await page.route('**/api/v1/settings/subagents/profiles', async (route) => {
+    if (route.request().method() !== 'PUT') return route.continue();
+    writes.push(route.request().postDataJSON());
+    const response = await route.fetch();
+    if (writes.length === 1) { notifyHeld(); await gate; }
+    await route.fulfill({ response });
+  });
+  try {
+    await card.getByRole('textbox', { name: 'Description', exact: true }).fill('First draft');
+    await card.getByRole('textbox', { name: 'Description', exact: true }).press('Tab');
+    await held;
+    await card.getByRole('combobox', { name: 'Model role', exact: true }).selectOption('reviewer');
+    await card.getByRole('combobox', { name: 'Scope', exact: true }).selectOption('workspace');
+    await card.getByRole('textbox', { name: 'Description', exact: true }).fill('Final draft');
+    await card.getByRole('textbox', { name: 'Description', exact: true }).press('Tab');
+    await page.getByRole('textbox', { name: 'Repository context · optional', exact: true }).fill(fixture.project_other);
+    await page.getByRole('button', { name: 'Load repository', exact: true }).click();
+    release();
+    await expect(page.getByTitle('Reload subagent settings', { exact: true })).toBeEnabled();
+    expect(writes).toHaveLength(4);
+    expect(writes.map((write) => write.workspace_root)).toEqual(Array(4).fill(fixture.project_root));
+    expect(writes[3].original_scope).toBe('workspace');
+    expect(writes[1].revision).not.toBe(writes[0].revision);
+    expect(writes[2].revision).not.toBe(writes[1].revision);
+    // Moving an unchanged profile changes its scope, while its content hash stays the same.
+    expect(writes[3].revision).toBe(writes[2].revision);
+    const snapshot = await (await request.get('/api/v1/settings/subagents?workspace_root=' + encodeURIComponent(fixture.project_root))).json();
+    const entry = snapshot.profiles.find((entry) => entry.profile.name === 'ui-queued');
+    expect(entry.scope).toBe('workspace');
+    expect(entry.profile.description).toBe('Final draft');
+    expect(entry.profile.role).toBe('reviewer');
+    await expect(card).toHaveCount(0);
+  } finally { release(); }
+});
+
+test('ACP connections preserve secret mappings, enabled state, and role bindings', async ({ page, request }) => {
+  await page.goto('/settings?section=subagents');
+  await expect(page.getByRole('heading', { name: 'Custom profiles', exact: true })).toBeVisible();
+  await page.getByRole('button', { name: /^ACP connections/ }).click();
+  await page.getByRole('textbox', { name: 'Connection ID', exact: true }).fill('ui-acp');
+  const save = () => page.waitForResponse((r) => new URL(r.url()).pathname === '/api/v1/settings/subagents' && r.request().method() === 'PUT');
+  let saved = save();
+  await page.getByRole('button', { name: 'Add connection', exact: true }).click();
+  expect((await saved).ok()).toBe(true);
+  const card = page.locator('.integration-editor').filter({ has: page.getByRole('heading', { name: 'ui-acp', exact: true }) });
+  const env = card.getByRole('textbox', { name: 'Child environment · JSON', exact: true });
+  saved = save();
+  await env.fill('{"Q_STUDIO_TEST_TOKEN":"fixture-secret"}');
+  await env.press('Tab');
+  expect((await saved).ok()).toBe(true);
+  await expect(env).toHaveValue('{"Q_STUDIO_TEST_TOKEN":"********"}');
+  saved = save();
+  await card.getByRole('checkbox', { name: /^Connection state/ }).uncheck();
+  expect((await saved).ok()).toBe(true);
+  await expect(card.getByText('Disabled', { exact: true })).toBeVisible();
+  saved = save();
+  await card.getByRole('checkbox', { name: /^Connection state/ }).check();
+  expect((await saved).ok()).toBe(true);
+  const binding = page.locator('.binding-grid select').first();
+  saved = save();
+  await binding.selectOption('ui-acp');
+  expect((await saved).ok()).toBe(true);
+  await page.reload();
+  await page.getByRole('button', { name: /^ACP connections/ }).click();
+  await expect(binding).toHaveValue('ui-acp');
+  await expect(env).toHaveValue('{"Q_STUDIO_TEST_TOKEN":"********"}');
+  await expect(card.getByRole('checkbox', { name: /^Connection state/ })).toBeChecked();
+  const snapshot = await (await request.get('/api/v1/settings/subagents')).json();
+  expect(snapshot.connections['ui-acp'].env.Q_STUDIO_TEST_TOKEN).toBe('********');
+  page.once('dialog', (dialog) => dialog.accept());
+  saved = save();
+  await card.getByTitle('Delete ACP connection', { exact: true }).click();
+  expect((await saved).ok()).toBe(true);
+  await expect(card).toHaveCount(0);
+});
+
 test('MCP edits persist transport, environment grants, and deletion', async ({ page, request }) => {
   await page.goto('/settings?section=integrations');
   await expect(page.getByRole('heading', { name: 'MCP servers', exact: true })).toBeVisible();

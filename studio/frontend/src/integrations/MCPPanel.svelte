@@ -1,12 +1,13 @@
 <script lang="ts">
   import { Plus, Trash2 } from '@lucide/svelte';
-  import { jsonText, parseJSON, requestJSON } from './api';
-  import type { IntegrationOperations } from './operations';
+  import { requestJSON } from '../api';
+  import { jsonText, parseJSON } from '../settings/json';
+  import type { SettingsOperations } from '../settings/operations';
   import type { MCPServer, MCPResponse } from './types';
 
   export let active = false;
   export let reloadToken = 0;
-  export let operations: IntegrationOperations;
+  export let operations: SettingsOperations;
   let mcp: MCPResponse | null = null;
   let newMCPID = '';
   let loadedToken = -1;

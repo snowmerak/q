@@ -1,12 +1,13 @@
 <script lang="ts">
   import { onDestroy } from 'svelte';
-  import { requestJSON, requireWorkspace } from './api';
-  import type { IntegrationOperations } from './operations';
+  import { requestJSON } from '../api';
+  import { requireWorkspace } from './api';
+  import type { SettingsOperations } from '../settings/operations';
   import type { IgnoreResponse } from './types';
 
   export let active = false;
   export let reloadToken = 0;
-  export let operations: IntegrationOperations;
+  export let operations: SettingsOperations;
   export let workspaceRoot = '';
   let ignore: IgnoreResponse | null = null;
   let loadedKey = '';

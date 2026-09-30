@@ -70,6 +70,10 @@ grants, invalid JSON recovery, and deletion; queued LSP writes stay in their
 original repository while the selected path changes. Ignore edits keep their
 document's revision and flush on panel/route changes. A disposable portable
 skill renders read-only and reindexes through the real local services.
+Subagent tests cover profile role/prompt/tool/delegation grants and deletion,
+queued revision chains and scope moves during a repository switch, and ACP
+connection secret masking, enabled options, role bindings, and deletion.
+They do not launch an external ACP process.
 The suite also verifies
 settings scrolling at 1440px and 900px widths. Settings keep their selected
 section, cached snapshot, and pending save queue across page navigation and

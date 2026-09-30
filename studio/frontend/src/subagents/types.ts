@@ -1,0 +1,5 @@
+export type AgentConnection = { preset?: string; command?: string; args?: string[]; env?: Record<string, string>; auth_method?: string; disabled?: boolean };
+export type AgentDefinition = { name: string; description: string; source: string; kind: string; role: string; connection?: string; available: boolean; mutates_workspace: boolean; system_prompt: string; tools: string[]; delegates: string[] };
+export type Profile = { version: number; name: string; description?: string; kind: string; role?: string; agent?: string; system_prompt: string; mutates_workspace?: boolean; tools: string[]; delegates: string[] };
+export type ProfileEntry = { profile: Profile; scope: string; path: string; revision: string; shadowed: boolean; error?: string; _originalScope?: string };
+export type AgentResponse = { workspace_root: string; config_path: string; connections: Record<string, AgentConnection>; bindings: Record<string, string>; external_roles: string[]; native_roles: string[]; builtins: AgentDefinition[]; profiles: ProfileEntry[]; tool_names: string[] };

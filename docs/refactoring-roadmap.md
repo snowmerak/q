@@ -509,3 +509,23 @@ loop의 guidance 전환, 응답 갱신, replay와 Markdown/code 표시, 900·144
 3440px에서 tool call/result 양쪽 정렬을 검증했고, 1440px 대화 screenshot도
 확인했다. 배포 bundle을 재빌드했다. 이 단계에서는 기존 표시의 책임만 나눴다.
 다음 정리 후보는 subagent 설정의 profile/connection 상태와 session tree 표시다.
+
+## 18. Studio subagent 설정 상태 분리 (2026-10-01)
+
+- `SubagentsView.svelte`는 repository context, tab 선택과 catalog 조회를 소유한다.
+  profile 편집·scope 이동은 `subagents/ProfilesPanel.svelte`, ACP connection과
+  role binding은 `ConnectionsPanel.svelte`, 기본 제공 profile 표시는
+  `BuiltinProfiles.svelte`로 옮겼다. tab을 바꿔도 편집 상태와 저장 수명을 유지한다.
+- 직렬 저장 queue는 `settings/operations.ts`, JSON 입력 처리는 `settings/json.ts`,
+  공통 HTTP 처리는 `api.ts`로 모아 integration과 subagent 설정이 같이 사용한다.
+  각 저장은 입력 당시의 payload와 조회한 repository 경로를 유지한다.
+- profile 저장은 승인된 revision과 scope를 다음 저장에 전달한다. scope만 옮기면
+  content hash가 같을 수 있으므로 scope도 별도로 추적한다. 오래된 응답은 최신
+  입력을 덮지 않으며 profile/connection 저장은 각자의 catalog 영역만 갱신한다.
+- browser 회귀 3개로 profile role/prompt/tool/delegation grant와 삭제, 연속 편집과
+  scope 이동 중 repository 변경, ACP secret 마스킹·활성화·role binding을 검증한다.
+  이 과정에서 활성화 후 role 선택 목록이 갱신되지 않는 문제도 수정했다.
+  실제 외부 ACP process 실행은 이번 browser 검증에 포함하지 않는다.
+
+검증: Svelte 검사와 `task studio:test`(브라우저 18개)를 통과했다.
+배포 bundle을 재빌드했다. 다음 단계는 session tree 표시 책임 분리다.

@@ -1,12 +1,14 @@
 <script lang="ts">
   import { Plus, Search, Trash2 } from '@lucide/svelte';
-  import { jsonText, parseJSON, requestJSON, requireWorkspace } from './api';
-  import type { IntegrationOperations } from './operations';
+  import { requestJSON } from '../api';
+  import { jsonText, parseJSON } from '../settings/json';
+  import { requireWorkspace } from './api';
+  import type { SettingsOperations } from '../settings/operations';
   import type { LSPServer, LSPRoot, LSPResponse, DiscoveredServer } from './types';
 
   export let active = false;
   export let reloadToken = 0;
-  export let operations: IntegrationOperations;
+  export let operations: SettingsOperations;
   export let workspaceRoot = '';
   let lsp: LSPResponse | null = null;
   let newLSPID = '';

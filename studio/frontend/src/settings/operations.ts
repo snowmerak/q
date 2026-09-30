@@ -1,6 +1,6 @@
 import { writable } from 'svelte/store';
 
-export function createIntegrationOperations() {
+export function createSettingsOperations() {
   const state = writable({ busy: false, message: '', error: '' });
   let queue = Promise.resolve();
   let pending = 0;
@@ -26,4 +26,4 @@ export function createIntegrationOperations() {
   return { subscribe: state.subscribe, run, fail };
 }
 
-export type IntegrationOperations = ReturnType<typeof createIntegrationOperations>;
+export type SettingsOperations = ReturnType<typeof createSettingsOperations>;
