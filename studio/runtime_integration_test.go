@@ -329,9 +329,13 @@ func TestStudioBrowserFixture(t *testing.T) {
 	}
 	closed := make(chan struct{})
 	var once sync.Once
+	projectRoot, projectOther := t.TempDir(), t.TempDir()
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /_test/fixture", func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, 200, map[string]string{"root": fixture.root, "other": other, "session_id": fixture.session.SessionID})
+		writeJSON(w, 200, map[string]string{
+			"root": fixture.root, "other": other, "session_id": fixture.session.SessionID,
+			"project_root": projectRoot, "project_other": projectOther,
+		})
 	})
 	mux.HandleFunc("POST /_test/shutdown", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(204); once.Do(func() { close(closed) }) })
 	mux.Handle("/", fixture.handler)

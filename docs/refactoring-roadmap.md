@@ -409,5 +409,25 @@ Svelte 검사), `task studio:test`(브라우저 7개), `go vet ./studio`와
 `git diff --check`를 통과했다. 프런트엔드 배포 bundle도 재빌드했다.
 
 이후 정리 후보는 `SessionView.svelte`의 registry/project dialog와 실행·채팅
-controller, `studio/integrations.go`의 MCP/LSP/Skills/agent별 경계다. 이번 변경에
-포함하지 않았으며, 각 영역의 실제 수명주기와 회귀 검증을 확보한 뒤 분리한다.
+controller, `studio/integrations.go`의 MCP/LSP/Skills/agent별 경계다. dialog 분리의
+후속 구현은 아래 기록을 따른다.
+
+## 13. Studio 세션 대화상자 분리 (2026-10-01)
+
+- 세션 등록, 프로젝트 편집, 폴더 탐색의 입력·조회·오류·닫기 상태를 각각
+  `sessions/SessionRegistration.svelte`, `sessions/ProjectDialog.svelte`,
+  `sessions/DirectoryBrowser.svelte`로 옮겼다. 폴더 탐색은 등록과 프로젝트
+  편집에서 같은 component를 사용하며, Escape는 가장 위의 폴더 창부터 닫는다.
+- `SessionView.svelte`는 선택한 root/child session, 실제 session 등록 요청,
+  registry 새로고침과 실행·스트리밍 controller를 계속 소유한다. 대화상자가
+  선택한 명시적 workspace path와 완료 callback으로 연결한다.
+- session/run/registry JSON 타입과 표시 helper는 `sessions/types.ts`와
+  `sessions/format.ts`, 관련 HTTP 오류 parsing은 `api.ts`에 모았다. API와
+  backend 저장 형식은 변경하지 않았다.
+- browser fixture의 임시 directory를 사용해 프로젝트 생성·수정·삭제, 취소 후
+  편집값 복원, folder selection 후 실제 session 등록, home부터 재탐색 및
+  중첩 dialog의 Escape 순서를 추가 검증한다. 실제 사용자 프로젝트는 사용하지 않는다.
+
+검증: `task studio:test`(브라우저 9개), Svelte 검사와 Studio Go 회귀·통합
+테스트를 통과했다. 배포 bundle도 재빌드했다. 이후 후보는 세션의 실행·채팅
+controller와 `studio/integrations.go`의 기능별 분리다.

@@ -76,6 +76,87 @@ test('project selection refreshes workspaces and clears the previous selection',
   await expect(dialog.getByRole('button', { name: /Create new session/ })).toBeVisible();
 });
 
+test('project dialog creates, cancels edits, updates, and deletes a saved project', async ({ page, request }) => {
+  const fixture = await (await request.get('/_test/fixture')).json();
+  // An empty registry makes Create project start a new project instead of
+  // editing the currently selected session's project.
+  const registry = await (await request.get('/api/v1/registered-sessions')).json();
+  for (const session of registry.sessions) {
+    expect((await request.delete(`/api/v1/registered-sessions/${session.registration_id}`)).ok()).toBe(true);
+  }
+  await page.reload();
+  await page.getByTitle('Create project', { exact: true }).click();
+  const create = page.getByRole('dialog', { name: 'Create project', exact: true });
+  await create.getByPlaceholder('Project name').fill('UI refactor project');
+  await create.getByPlaceholder('/path/to/workspace').fill(fixture.project_root);
+  await create.getByRole('button', { name: 'Add', exact: true }).click();
+  await create.getByRole('button', { name: 'Choose workspace folder' }).click();
+  const browser = page.getByRole('dialog', { name: 'Choose a folder' });
+  await browser.getByRole('textbox', { name: 'Directory path' }).fill(fixture.project_other);
+  await browser.getByRole('button', { name: 'Go', exact: true }).click();
+  await expect(browser.locator('footer code')).toHaveText(fixture.project_other);
+  await browser.getByRole('button', { name: 'Choose folder', exact: true }).click();
+  await expect(create.getByPlaceholder('/path/to/workspace')).toHaveValue(fixture.project_other);
+  await expect(create.locator('.auxiliary-list > div')).toHaveCount(1);
+  await create.getByRole('button', { name: 'Add', exact: true }).click();
+  await expect(create.locator('.auxiliary-list > div')).toHaveCount(2);
+  await create.getByRole('button', { name: 'Save', exact: true }).click();
+  await expect(create).toHaveCount(0);
+
+  const edit = page.getByRole('dialog', { name: 'Edit project', exact: true });
+  await page.getByRole('button', { name: 'Edit project UI refactor project', exact: true }).click();
+  await edit.getByPlaceholder('Project name').fill('Unsaved name');
+  await edit.getByRole('button', { name: `Remove ${fixture.project_other}`, exact: true }).click();
+  await edit.getByRole('button', { name: 'Cancel', exact: true }).click();
+  await page.getByRole('button', { name: 'Edit project UI refactor project', exact: true }).click();
+  await expect(edit.getByPlaceholder('Project name')).toHaveValue('UI refactor project');
+  await expect(edit.locator('.auxiliary-list > div')).toHaveCount(2);
+  await edit.getByPlaceholder('Project name').fill('UI refactor updated');
+  await edit.getByRole('button', { name: `Remove ${fixture.project_other}`, exact: true }).click();
+  await edit.getByRole('button', { name: 'Save', exact: true }).click();
+  await expect(edit).toHaveCount(0);
+  await page.reload();
+  await page.getByRole('button', { name: 'Edit project UI refactor updated', exact: true }).click();
+  await expect(edit.locator('.auxiliary-list > div')).toHaveCount(1);
+  const projects = (await (await request.get('/api/v1/projects')).json()).projects;
+  expect(projects.find((project) => project.name === 'UI refactor updated').workspace_roots).toEqual([fixture.project_root]);
+  page.once('dialog', (dialog) => dialog.accept());
+  await edit.getByRole('button', { name: 'Delete', exact: true }).click();
+  await expect(edit).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Edit project UI refactor updated', exact: true })).toHaveCount(0);
+});
+
+test('folder browser closes before registration and registers the selected workspace', async ({ page, request }) => {
+  const fixture = await (await request.get('/_test/fixture')).json();
+  const home = (await (await request.get('/api/v1/directories')).json()).current;
+  await page.getByTitle('Add or create session').click();
+  const registry = page.getByRole('dialog', { name: 'Add a root session' });
+  await registry.getByRole('button', { name: 'Choose repository folder' }).click();
+  const browser = page.getByRole('dialog', { name: 'Choose a folder' });
+  await expect(browser.getByRole('textbox', { name: 'Directory path' })).toHaveValue(home);
+  await page.keyboard.press('Escape');
+  await expect(browser).toHaveCount(0);
+  await expect(registry).toBeVisible();
+  await registry.getByRole('button', { name: 'Choose repository folder' }).click();
+  await expect(browser.getByRole('textbox', { name: 'Directory path' })).toHaveValue(home);
+  await browser.getByRole('textbox', { name: 'Directory path' }).fill(fixture.root);
+  await browser.getByRole('button', { name: 'Go', exact: true }).click();
+  await expect(browser.locator('footer code')).toHaveText(fixture.root);
+  await browser.getByRole('button', { name: 'Choose folder', exact: true }).click();
+  await expect(browser).toHaveCount(0);
+  await expect(registry.getByLabel('Workspace directory')).toHaveValue(fixture.root);
+  await registry.getByRole('button', { name: /Create new session/ }).click();
+  await expect(registry).toHaveCount(0);
+  await expect(page.locator('.composer textarea')).toBeEnabled();
+  const selectedID = new URL(page.url()).pathname.split('/').at(-1);
+  const registered = (await (await request.get('/api/v1/registered-sessions')).json()).sessions;
+  expect(registered.find((session) => session.registration_id === selectedID).workspace_root).toBe(fixture.root);
+  await page.getByTitle('Add or create session').click();
+  await expect(registry.getByLabel('Workspace directory')).toHaveValue('');
+  await page.keyboard.press('Escape');
+  await expect(registry).toHaveCount(0);
+});
+
 test('guidance redirects a real run without refresh and renders markdown and code', async ({ page, request }, testInfo) => {
   const fixture = await (await request.get('/_test/fixture')).json();
   const registered = await request.post('/api/v1/registered-sessions', { data: { workspace_root: fixture.root, create: true } });
