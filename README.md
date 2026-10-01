@@ -198,8 +198,10 @@ Studio is the primary interface for daily Q work:
   open child transcripts, and manage the root conversation lifecycle. It also
   shows current context usage and reconnects to the durable run cursor.
 - **Files** browses directories and files in a chosen workspace, with **Raw**
-  (syntax highlighting, line numbers, and copy) and **Diff** (separate staged,
-  unstaged, and untracked patches) modes. The session toolbar and Markdown file
+  (syntax highlighting, line numbers, and copy) and **Diff** modes. Diff keeps
+  the complete file in view, with previous/current line numbers, `+`/`−` gutter
+  markers, and colored added/removed rows. It defaults to HEAD versus the working
+  tree; staged and unstaged comparisons are selectable. The session toolbar and Markdown file
   links open the same viewer beside chat. Child sessions use their delegation
   worktree; the workspace selector also includes the project's other directories.
   Deleted files remain selectable through the Git changes list. Text previews

@@ -47,6 +47,25 @@
 .file-line-numbers button.selected { color: #d1b5ff; background: var(--violet-soft); }
 .file-code-grid pre { margin: 0; padding: 0 16px; font: inherit; tab-size: 2; }
 .file-code-grid code { display: block; color: #cbd1df; font: inherit; white-space: pre; }
+.file-comparison { display: flex; flex: none; align-items: center; gap: 12px; padding: 9px 14px; color: var(--muted); border-bottom: 1px solid var(--border); font-size: 13px; }
+.file-comparison select { min-width: 0; flex: 1; height: 36px; font-size: 13px; }
+.file-diff-meta { display: flex; flex: none; flex-wrap: wrap; gap: 12px; padding: 8px 14px; color: var(--muted); font-size: 12px; }
+.file-diff-meta > span + span { color: #e6b773; }
+.inline-file-diff-scroll { min-height: 0; flex: 1; overflow: auto; background: #080b12; }
+.inline-file-diff-grid { min-width: max-content; padding-bottom: 12px; font: 14px/24px ui-monospace, SFMono-Regular, Consolas, monospace; }
+.inline-file-diff-row { display: grid; grid-template-columns: 122px minmax(max-content, 1fr); min-height: 24px; }
+.inline-file-diff-row.added { background: rgba(54, 167, 106, .13); }
+.inline-file-diff-row.removed { background: rgba(223, 78, 95, .13); }
+.inline-file-diff-row.selected { outline: 1px solid rgba(161, 118, 241, .3); outline-offset: -1px; }
+.inline-diff-gutter, .inline-diff-columns { position: sticky; left: 0; display: grid; grid-template-columns: 48px 48px 26px; background: #0b0e17; }
+.inline-diff-columns { width: 122px; color: #9ca7bd; font-size: 11px; text-align: center; }
+.inline-diff-gutter { border-right: 1px solid var(--border); color: #7d879e; }
+.inline-diff-gutter > span, .inline-diff-gutter > button { padding: 0 8px 0 2px; text-align: right; }
+.inline-diff-gutter > button { color: inherit; border: 0; background: transparent; font: inherit; cursor: pointer; }
+.inline-file-diff-row.added .inline-diff-gutter { color: #8dd8b7; background: #10271d; }
+.inline-file-diff-row.removed .inline-diff-gutter { color: #efa0a8; background: #2b141c; }
+.inline-diff-gutter .inline-diff-marker { padding: 0; text-align: center; font-weight: 700; }
+.inline-file-diff-row > code { padding: 0 16px; color: #cbd1df; font: inherit; white-space: pre; tab-size: 2; }
 .sessions-layout.files-open { grid-template-columns: 260px minmax(320px, 1fr) minmax(420px, 43%); }
 .session-file-panel { display: flex; min-width: 0; min-height: 0; flex-direction: column; border-left: 1px solid var(--border); }
 .file-explorer.compact .files-workspace-controls { grid-template-columns: minmax(0, 1fr); padding: 12px; }

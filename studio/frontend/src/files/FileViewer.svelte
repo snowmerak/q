@@ -2,7 +2,7 @@
   import { Copy, RefreshCw } from '@lucide/svelte';
   import { onDestroy } from 'svelte';
   import { requestJSON } from '../api';
-  import DiffView from '../DiffView.svelte';
+  import InlineDiff from './InlineDiff.svelte';
   import CodeView from './CodeView.svelte';
   import { fileLanguage } from './paths';
   import type { FileContent, FileDiff } from './types';
@@ -20,7 +20,8 @@
   let generation = 0;
   let controller: AbortController | undefined;
   let loadedKey = '';
-  $: key = `${root}\n${path}\n${mode}`;
+  let comparison = 'working';
+  $: key = `${root}\n${path}\n${mode}\n${comparison}`;
   $: if (key !== loadedKey) { loadedKey = key; void load(); }
   $: language = fileLanguage(path);
   async function load() {
@@ -33,7 +34,7 @@
     loading = true;
     const selectedMode = mode;
     try {
-      const result = await requestJSON<FileContent | FileDiff>('GET', `/api/v1/workspaces/files/${selectedMode === 'raw' ? 'content' : 'diff'}?${new URLSearchParams({ workspace_root: root, path })}`, undefined, current.signal);
+      const result = await requestJSON<FileContent | FileDiff>('GET', `/api/v1/workspaces/files/${selectedMode === 'raw' ? 'content' : 'diff'}?${new URLSearchParams({ workspace_root: root, path, comparison })}`, undefined, current.signal);
       if (generation !== currentGeneration) return;
       if (selectedMode === 'raw') content = result as FileContent; else diff = result as FileDiff;
     } catch (reason) { if (!current.signal.aborted && generation === currentGeneration) error = reason instanceof Error ? reason.message : 'Could not open file'; }
@@ -50,6 +51,7 @@
 <section class="file-viewer" aria-label="File viewer">
   <header><div><strong title={path}>{path || 'Select a file'}</strong><small>{root}</small></div><button class="icon-button" aria-label="Refresh file" title="Refresh file" disabled={!path || loading} onclick={() => load()}><RefreshCw size={16} /></button></header>
   <div class="file-mode-bar"><div role="group" aria-label="File view mode"><button class:active={mode === 'raw'} aria-pressed={mode === 'raw'} onclick={() => chooseMode('raw')}>Raw</button><button class:active={mode === 'diff'} aria-pressed={mode === 'diff'} onclick={() => chooseMode('diff')}>Diff</button></div><span>{mode === 'raw' ? language : 'Git changes'}</span>{#if content && !content.binary && !content.missing}<button class="text-button" aria-label={content.truncated ? 'Copy file preview' : 'Copy file content'} onclick={copy}><Copy size={14} />{copied || (content.truncated ? 'Copy preview' : 'Copy')}</button>{/if}</div>
+  {#if mode === 'diff'}<label class="file-comparison">Compare<select aria-label="Diff comparison" bind:value={comparison}><option value="working">All changes · HEAD → working tree</option><option value="staged">Staged · HEAD → index</option><option value="unstaged">Unstaged · index → working tree</option></select></label>{/if}
   {#if error}<div class="file-view-state" role="alert">{error}<button class="secondary-button" onclick={() => load()}>Retry file</button></div>
   {:else if loading}<div class="file-view-state">Loading {mode === 'raw' ? 'file' : 'diff'}…</div>
   {:else if !path}<div class="file-view-state">Select a file to inspect its content or Git changes.</div>
@@ -61,7 +63,6 @@
     {:else}<CodeView content={content.content} {language} {line} {online} />{/if}
   {:else if diff}
     {#if !diff.available}<div class="file-view-state">Git diff is unavailable for this directory.<small>{diff.reason}</small></div>
-    {:else if !diff.sections.length}<div class="file-view-state">No Git changes for this file.</div>
-    {:else}{#key `${root}/${path}`}<DiffView sections={diff.sections} />{/key}{/if}
+    {:else}{#key `${root}/${path}/${comparison}`}<InlineDiff {diff} {language} {line} {online} />{/key}{/if}
   {/if}
 </section>

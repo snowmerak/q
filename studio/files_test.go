@@ -68,13 +68,24 @@ func TestFileViewerRawAndDiff(t *testing.T) {
 		t.Fatalf("raw = %s", raw.Body.String())
 	}
 	diff := get("/diff", "main.go")
-	for _, want := range []string{"STAGED", "UNSTAGED", "answer = 2", "answer = 3"} {
+	for _, want := range []string{"HEAD → working tree", "answer = 1", "answer = 3"} {
 		if !strings.Contains(diff.Body.String(), want) {
 			t.Fatalf("diff lacks %s: %s", want, diff.Body.String())
 		}
 	}
-	if !strings.Contains(get("/diff", "new.go").Body.String(), "UNTRACKED") {
+	if !strings.Contains(get("/diff", "new.go").Body.String(), `"all_added":true`) {
 		t.Fatal("new file diff missing")
+	}
+	for _, comparison := range []struct{ mode, title, old, current string }{{"staged", "HEAD → index", "answer = 1", "answer = 2"}, {"unstaged", "Index → working tree", "answer = 2", "answer = 3"}} {
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/v1/workspaces/files/diff?"+url.Values{"workspace_root": {filepath.Join(root, "src")}, "path": {"main.go"}, "comparison": {comparison.mode}}.Encode(), nil))
+		var result workspaceFileDiff
+		if response.Code != 200 || json.Unmarshal(response.Body.Bytes(), &result) != nil {
+			t.Fatalf("comparison = %d %s", response.Code, response.Body.String())
+		}
+		if !strings.Contains(result.Content.Content, comparison.current) || len(result.Sections) != 1 || result.Sections[0].Title != comparison.title || !strings.Contains(result.Sections[0].Patch, comparison.old) {
+			t.Fatalf("incorrect %s comparison: %#v", comparison.mode, result)
+		}
 	}
 	if !strings.Contains(get("/content", "deleted.go").Body.String(), `"missing":true`) {
 		t.Fatal("deleted raw is not marked missing")

@@ -14,6 +14,8 @@ session tree로 표시하고, 안전한 Markdown과 code highlighting, durable r
 pause/resume/cancel/guidance를 제공한다. Files는 디렉토리 탐색과 읽기 전용 Raw/Diff 모드를 제공하고,
 세션의 파일 버튼과 Markdown 파일 링크는 채팅 옆에 같은 뷰어를 연다. 자식 세션의 기본 조회 경로는
 delegation worktree이며 프로젝트의 다른 workspace로도 전환할 수 있다.
+Files의 Diff는 전체 파일을 유지하면서 이전/현재 줄 번호, `+`/`−` gutter와 추가/삭제
+배경색을 표시한다. 기본 비교는 HEAD → working tree이며 staged/unstaged 기준을 선택할 수 있다.
 Changes는 bounded diff와 commit review/execute를 제공한다. Settings는
 global/workspace model, Gateway, System One, Library/Loom, MCP/LSP/Skill/subagent/ACP와
 `.qignore`를 같은 Go store와 validator로 편집한다. Operations는 usage, worker/service

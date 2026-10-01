@@ -98,6 +98,9 @@ new file or mode. A real temporary Git worktree supplies content distinct from
 its parent for session file-link tests, including project workspace switching
 and reopening the same link. Files API tests also cover subdirectory Git scope,
 directory pagination and symlink escapes, with read-only index verification.
+Full-file Diff assertions retain unchanged first/last lines, check real old/new
+line numbers and gutter markers around additions and removals, preserve multiline
+syntax highlighting, and switch between HEAD/worktree and index comparisons.
 The suite also verifies
 settings scrolling at 1440px and 900px widths. Settings keep their selected
 section, cached snapshot, and pending save queue across page navigation and

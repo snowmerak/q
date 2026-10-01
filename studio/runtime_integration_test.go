@@ -466,8 +466,18 @@ func seedStudioBrowserFiles(t *testing.T) (workspace.Store, string) {
 	writeStudioGitFile(t, root, "deleted.txt", "deleted content\n")
 	writeStudioGitFile(t, root, "binary.bin", "\x00\x01\xff")
 	writeStudioGitFile(t, root, "large.txt", strings.Repeat("preview line\n", 4500))
-	studioGit(t, root, "add", "nested", "clean.txt", "deleted.txt", "binary.bin", "large.txt")
+	fullLines := []string{"package main", "", "/*"}
+	for index := 4; index <= 120; index++ {
+		fullLines = append(fullLines, fmt.Sprintf("comment line %d", index))
+	}
+	fullLines = append(fullLines, "*/", "var tail = 7")
+	writeStudioGitFile(t, root, "full.go", strings.Join(fullLines, "\n")+"\n")
+	studioGit(t, root, "add", "nested", "clean.txt", "deleted.txt", "binary.bin", "large.txt", "full.go")
 	studioGit(t, root, "commit", "-m", "chore: file viewer fixtures")
+	fullLines[19] = "changed comment line 20"
+	fullLines = append(fullLines[:55], fullLines[56:]...)
+	fullLines = append(fullLines[:85], append([]string{"added comment line"}, fullLines[85:]...)...)
+	writeStudioGitFile(t, root, "full.go", strings.Join(fullLines, "\n")+"\n")
 	if err := os.Remove(filepath.Join(root, "deleted.txt")); err != nil {
 		t.Fatal(err)
 	}

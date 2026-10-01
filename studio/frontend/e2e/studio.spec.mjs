@@ -1034,19 +1034,19 @@ test('file browser switches raw and diff and handles unchanged, deleted, binary 
   await expect(viewer.getByRole('button', { name: 'Copy file content', exact: true })).toContainText('Copied');
   expect(await page.evaluate(() => navigator.clipboard.readText())).toContain('answer  = 128');
   await viewer.getByRole('button', { name: 'Diff', exact: true }).click();
-  await expect(viewer).toContainText('UNSTAGED · index → working tree');
-  await expect(viewer.locator('.diff-code')).toContainText('+var answer  = 128');
+  await expect(viewer).toContainText('HEAD → working tree');
+  await expect(viewer.locator('.inline-file-diff-row.added code')).toContainText('var answer  = 128');
   await page.screenshot({ path: join(tmpdir(), 'q-studio-files-diff.png') });
   await page.reload();
   await expect(viewer.getByRole('button', { name: 'Diff', exact: true })).toHaveAttribute('aria-pressed', 'true');
-  await expect(viewer.locator('.diff-code')).toContainText('+var answer  = 128');
+  await expect(viewer.locator('.inline-file-diff-row.added code')).toContainText('var answer  = 128');
   await viewer.getByRole('button', { name: 'Raw', exact: true }).click();
   await expect(viewer.getByRole('button', { name: 'File line 3', exact: true })).toHaveClass(/selected/);
   await viewer.getByRole('button', { name: 'Diff', exact: true }).click();
   await page.getByRole('button', { name: 'File clean.txt', exact: true }).click();
   await expect(viewer).toContainText('No Git changes for this file.');
   await page.getByRole('button', { name: 'Changed file deleted.txt', exact: true }).click();
-  await expect(viewer.locator('.diff-code')).toContainText('-deleted content');
+  await expect(viewer.locator('.inline-file-diff-row.removed code')).toContainText('deleted content');
   await viewer.getByRole('button', { name: 'Raw', exact: true }).click();
   await expect(viewer).toContainText('File is absent from the working directory.');
   await page.getByRole('button', { name: 'File binary.bin', exact: true }).click();
@@ -1073,6 +1073,42 @@ test('file browser switches raw and diff and handles unchanged, deleted, binary 
   await expect(viewer).toContainText('Git diff is unavailable for this directory.');
 });
 
+test('file diff keeps the entire file, correct line numbers, gutter markers and multiline syntax', async ({ page, request }) => {
+  const fixture = await (await request.get('/_test/fixture')).json();
+  await page.goto('/files?' + new URLSearchParams({ workspace_root: fixture.files_root, path: 'full.go', mode: 'diff' }));
+  const viewer = page.getByRole('region', { name: 'File viewer' });
+  const rows = viewer.locator('.inline-file-diff-row');
+  await expect(rows).toHaveCount(124);
+  await expect(rows.first().locator('code')).toHaveText('package main');
+  await expect(rows.last().locator('code')).toHaveText('var tail = 7');
+  await expect(rows.last()).toHaveAttribute('data-new-line', '122');
+  await expect(rows.last()).toHaveAttribute('data-old-line', '122');
+  const added = viewer.locator('.inline-file-diff-row.added').filter({ hasText: 'added comment line' });
+  await expect(added.locator('.inline-diff-marker')).toHaveText('+');
+  await expect(added).toHaveAttribute('data-new-line', '86');
+  await expect(added.locator('code .hljs-comment')).toHaveText('added comment line');
+  const removed = viewer.locator('.inline-file-diff-row.removed').filter({ hasText: 'comment line 56' });
+  await expect(removed.locator('.inline-diff-marker')).toHaveText('−');
+  await expect(removed).toHaveAttribute('data-old-line', '56');
+  await expect(removed).not.toHaveAttribute('data-new-line');
+  await expect(viewer.locator('.inline-file-diff-grid')).not.toContainText('@@');
+  await expect(viewer.locator('.inline-file-diff-grid')).not.toContainText('diff --git');
+  await added.getByRole('button', { name: 'Diff line 86', exact: true }).click();
+  expect(new URL(page.url()).searchParams.get('line')).toBe('86');
+  await page.screenshot({ path: join(tmpdir(), 'q-studio-files-inline-diff.png') });
+  await viewer.getByRole('combobox', { name: 'Diff comparison', exact: true }).selectOption('staged');
+  await expect(viewer).toContainText('HEAD → index');
+  await expect(rows).toHaveCount(122);
+  await expect(viewer.locator('.inline-file-diff-row.added')).toHaveCount(0);
+  await expect(rows.last().locator('code')).toHaveText('var tail = 7');
+  await viewer.getByRole('combobox', { name: 'Diff comparison', exact: true }).selectOption('unstaged');
+  await expect(rows).toHaveCount(124);
+  await expect(added).toBeVisible();
+  await viewer.getByRole('button', { name: 'Raw', exact: true }).click();
+  await expect(viewer.locator('.file-code-grid code')).toContainText('var tail = 7');
+  await expect(viewer.locator('.inline-file-diff-row')).toHaveCount(0);
+});
+
 test('file browser ignores a late raw read when the file and mode change', async ({ page, request }) => {
   const fixture = await (await request.get('/_test/fixture')).json();
   let held, release;
@@ -1090,10 +1126,10 @@ test('file browser ignores a late raw read when the file and mode change', async
   await page.getByRole('button', { name: 'File secondary.go', exact: true }).click();
   const viewer = page.getByRole('region', { name: 'File viewer' });
   await viewer.getByRole('button', { name: 'Diff', exact: true }).click();
-  await expect(viewer.locator('.diff-code')).toContainText('+var count  = 1');
+  await expect(viewer.locator('.inline-file-diff-row.added code')).toContainText('var count  = 1');
   release();
   await expect(viewer.locator(':scope > header strong')).toHaveText('secondary.go');
-  await expect(viewer.locator('.diff-code')).not.toContainText('answer');
+  await expect(viewer.locator('.inline-file-diff-grid')).not.toContainText('answer');
   await viewer.getByRole('button', { name: 'Raw', exact: true }).click();
   await expect(viewer.locator('.file-code-grid code')).toContainText('count  = 1');
 });
@@ -1117,14 +1153,14 @@ test('session file links open the selected delegation worktree and project works
   await expect(viewer.locator('header small')).toHaveText(fixture.files_worktree);
   await expect(viewer.locator('.file-code-grid code')).toContainText('answer = 999');
   await viewer.getByRole('button', { name: 'Diff', exact: true }).click();
-  await expect(viewer.locator('.diff-code')).toContainText('+var answer = 999');
+  await expect(viewer.locator('.inline-file-diff-row.added code')).toContainText('var answer = 999');
   await expect(page.locator('.transcript')).toContainText('Files child');
   await page.screenshot({ path: join(tmpdir(), 'q-studio-session-files.png') });
   await panel.getByRole('combobox', { name: 'File workspace', exact: true }).selectOption(fixture.project_other);
   await expect(viewer.locator('header small')).toHaveText(fixture.project_other);
   await page.getByRole('link', { name: 'Inspect child main', exact: true }).click();
   await expect(viewer.locator('header small')).toHaveText(fixture.files_worktree);
-  await expect(viewer.locator('.diff-code')).toContainText('+var answer = 999');
+  await expect(viewer.locator('.inline-file-diff-row.added code')).toContainText('var answer = 999');
   for (const width of [900, 390]) {
     await page.setViewportSize({ width, height: 900 });
     await expect(panel).toBeVisible();

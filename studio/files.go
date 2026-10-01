@@ -57,11 +57,14 @@ type workspaceFileChanges struct {
 }
 
 type workspaceFileDiff struct {
-	WorkspaceRoot string            `json:"workspace_root"`
-	Path          string            `json:"path"`
-	Available     bool              `json:"available"`
-	Reason        string            `json:"reason,omitempty"`
-	Sections      []changes.Section `json:"sections"`
+	WorkspaceRoot string               `json:"workspace_root"`
+	Path          string               `json:"path"`
+	Available     bool                 `json:"available"`
+	Reason        string               `json:"reason,omitempty"`
+	Sections      []changes.Section    `json:"sections"`
+	Comparison    string               `json:"comparison"`
+	Content       workspaceFileContent `json:"content"`
+	AllAdded      bool                 `json:"all_added"`
 }
 
 // Relative filesystem lookups go through os.Root, including symlink traversal.
@@ -164,38 +167,41 @@ func serveWorkspaceFileContent(writer http.ResponseWriter, request *http.Request
 		return
 	}
 	defer fs.Close()
+	result, err := readWorkspaceFileContent(fs, root, name)
+	if err != nil {
+		writeAPIError(writer, http.StatusUnprocessableEntity, err)
+		return
+	}
+	writeJSON(writer, http.StatusOK, result)
+}
+
+func readWorkspaceFileContent(fs *os.Root, root, name string) (workspaceFileContent, error) {
 	result := workspaceFileContent{WorkspaceRoot: root, Path: filepath.ToSlash(name)}
 	info, err := fs.Stat(name)
 	if errors.Is(err, os.ErrNotExist) {
 		result.Missing = true
-		writeJSON(writer, http.StatusOK, result)
-		return
+		return result, nil
 	}
 	if err != nil {
-		writeAPIError(writer, http.StatusUnprocessableEntity, err)
-		return
+		return result, err
 	}
 	if !info.Mode().IsRegular() {
-		writeAPIError(writer, http.StatusUnprocessableEntity, errors.New("only regular files can be previewed"))
-		return
+		return result, errors.New("only regular files can be previewed")
 	}
 	file, err := fs.Open(name)
 	if err != nil {
-		writeAPIError(writer, http.StatusUnprocessableEntity, err)
-		return
+		return result, err
 	}
 	defer file.Close()
 	// Recheck the opened handle: the path may have changed after Stat.
 	info, err = file.Stat()
 	if err != nil || !info.Mode().IsRegular() {
-		writeAPIError(writer, http.StatusUnprocessableEntity, errors.New("file changed during lookup; refresh the viewer"))
-		return
+		return result, errors.New("file changed during lookup; refresh the viewer")
 	}
 	result.Size = info.Size()
 	body, err := io.ReadAll(io.LimitReader(file, filePreviewBytes+1))
 	if err != nil {
-		writeAPIError(writer, http.StatusUnprocessableEntity, err)
-		return
+		return result, err
 	}
 	result.Truncated = len(body) > filePreviewBytes
 	if result.Truncated {
@@ -223,7 +229,7 @@ func serveWorkspaceFileContent(writer http.ResponseWriter, request *http.Request
 		}
 		result.Content = string(body)
 	}
-	writeJSON(writer, http.StatusOK, result)
+	return result, nil
 }
 
 func scopedFileChanges(ctx context.Context, root string) (changes.Snapshot, []changes.File, error) {
@@ -278,34 +284,56 @@ func serveWorkspaceFileDiff(writer http.ResponseWriter, request *http.Request) {
 	defer fs.Close()
 	ctx, cancel := context.WithTimeout(request.Context(), 15*time.Second)
 	defer cancel()
-	snapshot, files, err := scopedFileChanges(ctx, root)
+	snapshot, _, err := scopedFileChanges(ctx, root)
 	result := workspaceFileDiff{WorkspaceRoot: root, Path: filepath.ToSlash(name), Available: err == nil, Sections: []changes.Section{}}
 	if err != nil {
 		result.Reason = err.Error()
 		writeJSON(writer, http.StatusOK, result)
 		return
 	}
-	for _, file := range files {
-		if file.Path != result.Path {
-			continue
-		}
-		// Read the original repository-relative selection, retaining rename sources.
-		for _, original := range snapshot.Files {
-			absolute := filepath.Join(snapshot.Root, filepath.FromSlash(original.Path))
-			if absolute != filepath.Join(root, name) {
-				continue
-			}
-			detail, err := changes.Read(ctx, snapshot.Root, original)
-			if err != nil {
-				writeAPIError(writer, http.StatusUnprocessableEntity, err)
-				return
-			}
-			if detail.Sections != nil {
-				result.Sections = detail.Sections
-			}
+	comparison := request.URL.Query().Get("comparison")
+	if comparison == "" {
+		comparison = "working"
+	}
+	if comparison != "working" && comparison != "staged" && comparison != "unstaged" {
+		writeAPIError(writer, http.StatusBadRequest, errors.New("invalid file comparison"))
+		return
+	}
+	result.Comparison = comparison
+	relative, err := filepath.Rel(snapshot.Root, filepath.Join(root, name))
+	if err != nil || !filepath.IsLocal(relative) {
+		writeAPIError(writer, http.StatusBadRequest, errors.New("file is outside the repository"))
+		return
+	}
+	selected := changes.File{Path: filepath.ToSlash(relative), Status: "  "}
+	for _, original := range snapshot.Files {
+		if original.Path == selected.Path {
+			selected = original
 			break
 		}
-		break
+	}
+	if comparison == "staged" {
+		source, err := changes.ReadIndex(ctx, snapshot.Root, selected)
+		if err != nil {
+			writeAPIError(writer, http.StatusUnprocessableEntity, err)
+			return
+		}
+		result.Content = workspaceFileContent{WorkspaceRoot: root, Path: result.Path, Content: source.Content, Binary: source.Binary, Missing: source.Missing, Truncated: source.Truncated, Size: int64(len(source.Content))}
+	} else {
+		result.Content, err = readWorkspaceFileContent(fs, root, name)
+		if err != nil {
+			writeAPIError(writer, http.StatusUnprocessableEntity, err)
+			return
+		}
+	}
+	patch, allAdded, err := changes.ReadComparison(ctx, snapshot.Root, selected, comparison)
+	if err != nil {
+		writeAPIError(writer, http.StatusUnprocessableEntity, err)
+		return
+	}
+	result.AllAdded = allAdded
+	if patch.Patch != "" {
+		result.Sections = []changes.Section{patch}
 	}
 	writeJSON(writer, http.StatusOK, result)
 }
