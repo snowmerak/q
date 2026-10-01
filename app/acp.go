@@ -1454,6 +1454,7 @@ func (a *acpAgent) runAgentTurn(ctx context.Context, history []client.Message) (
 	if persistent {
 		workflowCtx, cancelWorkflow = context.WithCancel(a.state.ctx)
 	}
+	workflowCtx = sessionstore.WithSearchScope(workflowCtx, a.state.runID, "")
 	events := make(chan agentEvent)
 	var trace *acpPlanTrace
 	if delegation != nil {

@@ -7,17 +7,19 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/snowmerak/q/agentskills"
 	"github.com/snowmerak/q/lsp"
+	"github.com/snowmerak/q/sessionstore"
 )
 
 type Dependencies struct {
-	Archive      Archive
-	Loom         *LoomRuntime
-	Skills       *agentskills.Registry
-	SkillStore   agentskills.SearchStore
-	GlobalSkills GlobalSkillLibrary
-	SkillRanker  SkillRanker
-	Propositions PropositionLibrary
-	LSP          lsp.Service
+	Archive       Archive
+	Loom          *LoomRuntime
+	Skills        *agentskills.Registry
+	SkillStore    agentskills.SearchStore
+	GlobalSkills  GlobalSkillLibrary
+	SkillRanker   SkillRanker
+	ArchiveRanker ArchiveRanker
+	Propositions  PropositionLibrary
+	LSP           lsp.Service
 }
 
 // Register adds the root-jailed builtin tools to server. Optional workspace
@@ -124,8 +126,17 @@ func RegisterWithRoots(server *mcp.Server, root string, additional []string, dep
 			Name:        "search_archive",
 			Description: "Search durable workspace history for prior conversations, decisions, agent tasks, failures, and tool results. Returns bounded excerpts; use get_archive_record for a selected full record.",
 			Annotations: &mcp.ToolAnnotations{ReadOnlyHint: readOnly, IdempotentHint: true},
-		}, func(ctx context.Context, _ *mcp.CallToolRequest, input SearchArchiveInput) (*mcp.CallToolResult, SearchArchiveOutput, error) {
-			output, err := SearchArchive(ctx, dependencies.Archive, input)
+		}, func(ctx context.Context, request *mcp.CallToolRequest, input SearchArchiveInput) (*mcp.CallToolResult, SearchArchiveOutput, error) {
+			if request != nil && request.Params != nil {
+				if raw, ok := request.Params.Meta[ArchiveExcludeMessageMetaKey]; ok {
+					data, err := json.Marshal(raw)
+					var message sessionstore.MessageToolCall
+					if err == nil && json.Unmarshal(data, &message) == nil && message.RunID != "" && message.ToolCallID != "" {
+						ctx = context.WithValue(ctx, archiveExcludeMessageKey{}, &message)
+					}
+				}
+			}
+			output, err := searchArchiveWithRanker(ctx, dependencies.Archive, dependencies.ArchiveRanker, input)
 			if err != nil {
 				return nil, SearchArchiveOutput{}, err
 			}

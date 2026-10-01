@@ -35,7 +35,7 @@ func NewServer(root string) (*mcp.Server, error) {
 	if err != nil {
 		return nil, err
 	}
-	server, _, _, err := newServer(root, nil, root, nil, nil, loomRuntime, nil, nil, nil)
+	server, _, _, err := newServer(root, nil, root, nil, nil, loomRuntime, nil, nil, nil, nil)
 	return server, err
 }
 
@@ -46,7 +46,7 @@ func NewServerWithArchive(root string, archive builtin.Archive) (*mcp.Server, er
 	if err != nil {
 		return nil, err
 	}
-	server, _, _, err := newServer(root, nil, root, archive, skillStoreFromArchive(archive), loomRuntime, nil, nil, nil)
+	server, _, _, err := newServer(root, nil, root, archive, skillStoreFromArchive(archive), loomRuntime, nil, nil, nil, nil)
 	return server, err
 }
 
@@ -60,6 +60,7 @@ func newServer(
 	lspManager lsp.Service,
 	globalSkills builtin.GlobalSkillLibrary,
 	skillRanker builtin.SkillRanker,
+	archiveRanker builtin.ArchiveRanker,
 ) (*mcp.Server, *builtin.FS, *agentskills.Registry, error) {
 	skills, err := agentskills.DiscoverWorkspaceRoots(checkoutRoot, auxiliaryCheckoutRoots, workspaceStateRoot)
 	if err != nil {
@@ -83,7 +84,7 @@ func newServer(
 	propositions, _ := globalSkills.(builtin.PropositionLibrary)
 	fs, err := builtin.RegisterWithRoots(server, checkoutRoot, auxiliaryCheckoutRoots, builtin.Dependencies{
 		Archive: archive, Loom: loomRuntime, Skills: skills, SkillStore: skillStore, GlobalSkills: globalSkills,
-		SkillRanker: skillRanker, Propositions: propositions, LSP: lspManager,
+		SkillRanker: skillRanker, ArchiveRanker: archiveRanker, Propositions: propositions, LSP: lspManager,
 	})
 	if err != nil {
 		return nil, nil, nil, err
@@ -243,6 +244,7 @@ func RunStdioWithLoomOptions(ctx context.Context, root string, options loom.Stor
 	server, fs, _, err := newServer(
 		root, nil, root, semanticArchive, semanticArchive, loomRuntime, lspManager, globalSkills,
 		&systemOneSkillRanker{store: systemoneconfig.Store{Dir: configStore.Dir}},
+		&systemOneArchiveRanker{store: systemoneconfig.Store{Dir: configStore.Dir}},
 	)
 	if err != nil {
 		return err

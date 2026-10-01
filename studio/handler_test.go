@@ -332,6 +332,11 @@ func TestSettingsAPIReadsAndUpdatesGlobalStores(t *testing.T) {
 	if response.Code != http.StatusOK {
 		t.Fatalf("PUT System One role model = %d %s", response.Code, response.Body.String())
 	}
+	response = httptest.NewRecorder()
+	handler.ServeHTTP(response, httptest.NewRequest(http.MethodPut, "/api/v1/settings/system-one/models/archive-decision", bytes.NewBufferString(`{"model":"decision/jev-a"}`)))
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"archive_model":"decision/jev-a"`) {
+		t.Fatalf("PUT System One archive model = %d %s", response.Code, response.Body.String())
+	}
 
 	response = httptest.NewRecorder()
 	handler.ServeHTTP(response, httptest.NewRequest(http.MethodPut, "/api/v1/settings/system-one/providers/decision", bytes.NewBufferString(`{"id":"decisions","uri":"`+upstream.URL+`/v1/systemone","api_key_env":""}`)))
@@ -342,8 +347,19 @@ func TestSettingsAPIReadsAndUpdatesGlobalStores(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if systemOneValue.DefaultModel != "decisions/jev-a" || systemOneValue.RoleModels[systemoneconfig.RoleAgentSkillDecision] != "decisions/jev-a" {
+	if systemOneValue.DefaultModel != "decisions/jev-a" || systemOneValue.RoleModels[systemoneconfig.RoleAgentSkillDecision] != "decisions/jev-a" ||
+		systemOneValue.RoleModels[systemoneconfig.RoleArchiveDecision] != "decisions/jev-a" {
 		t.Fatalf("renamed System One model references = %#v", systemOneValue)
+	}
+	response = httptest.NewRecorder()
+	handler.ServeHTTP(response, httptest.NewRequest(http.MethodPut, "/api/v1/settings/system-one/models/archive-decision", bytes.NewBufferString(`{"model":""}`)))
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"archive_model":""`) {
+		t.Fatalf("reset archive model = %d %s", response.Code, response.Body.String())
+	}
+	systemOneValue, err = systemOneStore.LoadOrDefault()
+	if err != nil || systemOneValue.RoleModels[systemoneconfig.RoleAgentSkillDecision] != "decisions/jev-a" ||
+		systemOneValue.ModelForRole(systemoneconfig.RoleArchiveDecision) != systemOneValue.DefaultModel {
+		t.Fatalf("independent archive default = %#v, %v", systemOneValue, err)
 	}
 
 	response = httptest.NewRecorder()

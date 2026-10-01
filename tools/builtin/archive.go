@@ -14,18 +14,19 @@ import (
 )
 
 const (
-	defaultArchiveSearchLimit  = 8
-	maximumArchiveSearchLimit  = 50
-	archiveSearchExcerptRunes  = 1200
-	archiveSearchSummaryRunes  = 600
-	defaultRecordContentRunes  = 12000
-	maximumRecordContentRunes  = 50000
-	maximumRecordSummaryRunes  = 4000
-	maximumRecordPayloadBytes  = 64 << 10
-	defaultRecencyHalfLifeHour = 24 * 30
-	maximumRecencyHalfLifeHour = 24 * 365 * 100
-	maximumRecencyWeight       = 100
-	maximumArchiveSearchOffset = 5000
+	defaultArchiveSearchLimit   = 8
+	maximumArchiveSearchLimit   = 12
+	archiveSearchCandidateLimit = 32
+	archiveSearchExcerptRunes   = 1200
+	archiveSearchSummaryRunes   = 600
+	defaultRecordContentRunes   = 12000
+	maximumRecordContentRunes   = 50000
+	maximumRecordSummaryRunes   = 4000
+	maximumRecordPayloadBytes   = 64 << 10
+	defaultRecencyHalfLifeHour  = 24 * 30
+	maximumRecencyHalfLifeHour  = 24 * 365 * 100
+	maximumRecencyWeight        = 100
+	maximumArchiveSearchOffset  = archiveSearchCandidateLimit
 )
 
 // Archive is the read side of the workspace record store.
@@ -33,6 +34,18 @@ type Archive interface {
 	Search(context.Context, sessionstore.SearchOptions) (sessionstore.SearchResult, error)
 	Get(string) (sessionstore.Record, error)
 }
+
+// ArchiveRanker scores a bounded candidate window using live decision settings.
+type ArchiveRanker interface {
+	Enabled() bool
+	RankArchive(context.Context, string, []ArchiveSearchHit) ([]ArchiveSearchHit, error)
+}
+
+// ArchiveExcludeMessageMetaKey carries host-owned search context across the
+// internal MCP transport without adding model-visible tool arguments.
+const ArchiveExcludeMessageMetaKey = "q/archive-exclude-message"
+
+type archiveExcludeMessageKey struct{}
 
 type SearchArchiveInput struct {
 	Query                string   `json:"query,omitempty" jsonschema:"Text to match against record summaries and content."`
@@ -50,8 +63,8 @@ type SearchArchiveInput struct {
 	Sort                 string   `json:"sort,omitempty" jsonschema:"Sort order: relevance, newest, or oldest. Defaults to relevance with a query and newest without one."`
 	RecencyWeight        float64  `json:"recency_weight,omitempty" jsonschema:"Optional relevance boost for newer records, from 0 to 100. A positive value enables recency reranking."`
 	RecencyHalfLifeHours float64  `json:"recency_half_life_hours,omitempty" jsonschema:"Recency decay half-life in hours. Defaults to 720 when recency_weight is positive."`
-	Limit                int      `json:"limit,omitempty" jsonschema:"Maximum results, from 1 to 50. Defaults to 8."`
-	Offset               int      `json:"offset,omitempty" jsonschema:"Non-negative result offset for pagination."`
+	Limit                int      `json:"limit,omitempty" jsonschema:"Maximum results, from 1 to 12. Defaults to 8."`
+	Offset               int      `json:"offset,omitempty" jsonschema:"Result offset from 0 to 32 within the ranked window of at most 32 candidates. Defaults to zero."`
 }
 
 type ArchiveSearchHit struct {
@@ -76,8 +89,9 @@ type ArchiveSearchHit struct {
 }
 
 type SearchArchiveOutput struct {
-	Total uint64             `json:"total"`
-	Hits  []ArchiveSearchHit `json:"hits"`
+	Total    uint64             `json:"total" jsonschema:"Number of candidates in this search window, at most 32."`
+	Hits     []ArchiveSearchHit `json:"hits"`
+	Warnings []string           `json:"warnings,omitempty"`
 }
 
 type GetArchiveRecordInput struct {
@@ -121,6 +135,10 @@ type GetArchiveRecordOutput struct {
 }
 
 func SearchArchive(ctx context.Context, archive Archive, input SearchArchiveInput) (SearchArchiveOutput, error) {
+	return searchArchiveWithRanker(ctx, archive, nil, input)
+}
+
+func searchArchiveWithRanker(ctx context.Context, archive Archive, ranker ArchiveRanker, input SearchArchiveInput) (SearchArchiveOutput, error) {
 	if archive == nil {
 		return SearchArchiveOutput{}, errors.New("[E_ARCHIVE] workspace archive is unavailable")
 	}
@@ -168,8 +186,9 @@ func SearchArchive(ctx context.Context, archive Archive, input SearchArchiveInpu
 			Kinds: kinds, Roles: input.Roles, Models: input.Models,
 			Efforts: input.Efforts, Statuses: input.Statuses, Tags: input.Tags,
 		},
-		CreatedAfter: after, CreatedBefore: before, Sort: sortOrder, Limit: limit, Offset: input.Offset,
+		CreatedAfter: after, CreatedBefore: before, Sort: sortOrder, Limit: archiveSearchCandidateLimit,
 	}
+	options.ExcludeMessage, _ = ctx.Value(archiveExcludeMessageKey{}).(*sessionstore.MessageToolCall)
 	if math.IsNaN(input.RecencyWeight) || math.IsInf(input.RecencyWeight, 0) ||
 		input.RecencyWeight < 0 || input.RecencyWeight > maximumRecencyWeight {
 		return SearchArchiveOutput{}, fmt.Errorf("[E_ARCHIVE] recency_weight must be between 0 and %d", maximumRecencyWeight)
@@ -197,8 +216,11 @@ func SearchArchive(ctx context.Context, archive Archive, input SearchArchiveInpu
 	if err != nil {
 		return SearchArchiveOutput{}, fmt.Errorf("[E_ARCHIVE] search: %w", err)
 	}
-	output := SearchArchiveOutput{Total: result.Total, Hits: make([]ArchiveSearchHit, 0, len(result.Hits))}
-	for _, hit := range result.Hits {
+	// Every page uses the same candidate window. The store omits the calling
+	// assistant response before applying this limit, so it never reaches scoring.
+	hits := result.Hits[:min(len(result.Hits), archiveSearchCandidateLimit)]
+	output := SearchArchiveOutput{Total: uint64(len(hits)), Hits: make([]ArchiveSearchHit, 0, len(hits))}
+	for _, hit := range hits {
 		excerpt, truncated := truncateArchiveText(strings.TrimSpace(hit.Record.Content), archiveSearchExcerptRunes)
 		summary, summaryTruncated := truncateArchiveText(strings.TrimSpace(hit.Record.Summary), archiveSearchSummaryRunes)
 		output.Hits = append(output.Hits, ArchiveSearchHit{
@@ -211,6 +233,21 @@ func SearchArchive(ctx context.Context, archive Archive, input SearchArchiveInpu
 			Score: hit.Score,
 		})
 	}
+	// Explicit chronological sorts and empty-query browsing retain their order.
+	if ranker != nil && ranker.Enabled() && sortOrder == sessionstore.SortRelevance &&
+		strings.TrimSpace(input.Query) != "" && input.Offset < len(output.Hits) {
+		ranked, rankErr := ranker.RankArchive(ctx, input.Query, output.Hits)
+		if rankErr != nil {
+			if ctx.Err() != nil {
+				return SearchArchiveOutput{}, ctx.Err()
+			}
+			output.Warnings = append(output.Warnings, "System One archive relevance unavailable: "+rankErr.Error())
+		} else {
+			output.Hits = ranked
+		}
+	}
+	start := min(input.Offset, len(output.Hits))
+	output.Hits = output.Hits[start:min(start+limit, len(output.Hits))]
 	return output, nil
 }
 

@@ -12,6 +12,7 @@ import (
 	"github.com/snowmerak/q/client"
 	"github.com/snowmerak/q/config"
 	"github.com/snowmerak/q/loom"
+	"github.com/snowmerak/q/sessionstore"
 )
 
 const (
@@ -59,6 +60,7 @@ func (r CoderRunner) Run(ctx context.Context, attempt CoderAttempt) (result Code
 		prompt += "\n\n" + environment
 	}
 	taskID := r.coderTaskID(attempt)
+	ctx = sessionstore.WithSearchScope(ctx, r.RunID, taskID)
 	var lifecycle *Lifecycle
 	if r.Sink != nil || strings.TrimSpace(r.RunID) != "" {
 		lifecycle, err = NewLifecycle(r.Sink, r.RunID, taskID, r.ExecutionID, &r.Spec)

@@ -126,6 +126,7 @@ func (r ScoutRunner) Run(ctx context.Context, task ScoutTask) (result ScoutResul
 	if err != nil {
 		return ScoutResult{}, err
 	}
+	ctx = sessionstore.WithSearchScope(ctx, r.RunID, prepared.ID)
 	reportProgress(r.Progress, ProgressEvent{
 		Agent: "scout", TaskID: prepared.ID, ParentID: prepared.ParentID,
 		Action: ProgressStarted, Detail: prepared.Objective,

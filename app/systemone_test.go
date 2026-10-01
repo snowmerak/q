@@ -286,28 +286,42 @@ func TestSystemOneModelPickerSavesDefaultAndRoleSelection(t *testing.T) {
 	if err != nil || loaded.DefaultModel != "second/second-model" {
 		t.Fatalf("default choice was not saved: %#v, %v", loaded, err)
 	}
-	m.systemOneListCursor = 1
+	for index, role := range []string{systemoneconfig.RoleAgentSkillDecision, systemoneconfig.RoleArchiveDecision} {
+		m.systemOneListCursor = index + 1
+		updated, command = m.updateSystemOne(tea.KeyPressMsg{Code: tea.KeyEnter})
+		m = updated.(model)
+		updated, _ = m.Update(command())
+		m = updated.(model)
+		if len(m.systemOneModels) != 3 || m.systemOneModels[0].Name != "" {
+			t.Fatalf("role models = %#v", m.systemOneModels)
+		}
+		updated, _ = m.updateSystemOne(tea.KeyPressMsg{Code: tea.KeyDown})
+		m = updated.(model)
+		updated, _ = m.updateSystemOne(tea.KeyPressMsg{Code: tea.KeyEnter})
+		m = updated.(model)
+		loaded, err = store.LoadOrDefault()
+		if err != nil || loaded.RoleModels[role] != "typesafe/first-model" {
+			t.Fatalf("%s choice was not saved: %#v, %v", role, loaded, err)
+		}
+	}
 	updated, command = m.updateSystemOne(tea.KeyPressMsg{Code: tea.KeyEnter})
 	m = updated.(model)
 	updated, _ = m.Update(command())
 	m = updated.(model)
-	if len(m.systemOneModels) != 3 || m.systemOneModels[0].Name != "" {
-		t.Fatalf("role models = %#v", m.systemOneModels)
-	}
-	updated, _ = m.updateSystemOne(tea.KeyPressMsg{Code: tea.KeyDown})
-	m = updated.(model)
+	m.systemOneCursor = 0
 	updated, _ = m.updateSystemOne(tea.KeyPressMsg{Code: tea.KeyEnter})
 	m = updated.(model)
 	loaded, err = store.LoadOrDefault()
-	if err != nil || loaded.RoleModels[systemoneconfig.RoleAgentSkillDecision] != "typesafe/first-model" {
-		t.Fatalf("role choice was not saved: %#v, %v", loaded, err)
+	if err != nil || loaded.RoleModels[systemoneconfig.RoleArchiveDecision] != "" || loaded.RoleModels[systemoneconfig.RoleAgentSkillDecision] != "typesafe/first-model" ||
+		m.status != "Archive Decision uses the default model" {
+		t.Fatalf("archive default changed another assignment: %#v, status=%q, error=%v", loaded, m.status, err)
 	}
 }
 
 func TestSystemOneProviderRenameUpdatesAssignmentsOnEdit(t *testing.T) {
 	store := systemoneconfig.Store{Dir: t.TempDir()}
 	value := systemoneconfig.Default()
-	value.RoleModels = map[string]string{systemoneconfig.RoleAgentSkillDecision: "typesafe/skill-model"}
+	value.RoleModels = map[string]string{systemoneconfig.RoleAgentSkillDecision: "typesafe/skill-model", systemoneconfig.RoleArchiveDecision: "typesafe/archive-model"}
 	if err := store.Save(value); err != nil {
 		t.Fatal(err)
 	}
@@ -320,7 +334,8 @@ func TestSystemOneProviderRenameUpdatesAssignmentsOnEdit(t *testing.T) {
 	m = updated.(model)
 	loaded, err := store.LoadOrDefault()
 	if err != nil || loaded.Providers[0].ID != "typesafex" || loaded.DefaultModel != "typesafex/jev-latest" ||
-		loaded.RoleModels[systemoneconfig.RoleAgentSkillDecision] != "typesafex/skill-model" {
+		loaded.RoleModels[systemoneconfig.RoleAgentSkillDecision] != "typesafex/skill-model" ||
+		loaded.RoleModels[systemoneconfig.RoleArchiveDecision] != "typesafex/archive-model" {
 		t.Fatalf("renamed assignments = %#v, %v", loaded, err)
 	}
 }

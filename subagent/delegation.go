@@ -542,6 +542,7 @@ func (r GeneralRunner) Run(ctx context.Context, prompt string) (result TaskResul
 		}
 		taskID = strings.ReplaceAll(r.Definition.Info.Name, "/", "-") + "-" + generated
 	}
+	ctx = sessionstore.WithSearchScope(ctx, r.RunID, taskID)
 	progress := func(action, detail string) {
 		reportProgress(r.Progress, ProgressEvent{Agent: r.Definition.Info.Name, TaskID: taskID, ParentID: r.ParentID, Action: action, Detail: detail})
 	}

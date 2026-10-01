@@ -94,6 +94,7 @@ type systemOneAPISettings struct {
 	ConfigPath      string                      `json:"config_path"`
 	DefaultModel    string                      `json:"default_model"`
 	AgentSkillModel string                      `json:"agent_skill_model"`
+	ArchiveModel    string                      `json:"archive_model"`
 	Providers       []systemOneProviderSettings `json:"providers"`
 	APIKeys         []serviceAPIKeySettings     `json:"api_keys"`
 	ActiveAPIKeys   int                         `json:"active_api_keys"`

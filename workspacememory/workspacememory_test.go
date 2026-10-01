@@ -219,6 +219,20 @@ func TestWorkspaceVectorConfigurationAndSearch(t *testing.T) {
 	if err != nil || len(result.Hits) != 1 || result.Hits[0].Record.ID != records[0].ID {
 		t.Fatalf("vector search = %#v, err = %v", result, err)
 	}
+	if _, err := workspace.Save(sessionstore.Record{
+		Kind: sessionstore.KindMessage, RunID: "run", TaskID: "child", Content: "east",
+		Payload:   json.RawMessage(`{"role":"assistant","tool_calls":[{"id":"search"}]}`),
+		Embedding: &sessionstore.Embedding{Model: config.Model, Dimensions: 2, Vector: []float32{1, 0}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	filtered, err := shared.Search(context.Background(), sessionstore.SearchOptions{
+		Vector: &sessionstore.VectorQuery{Embedding: []float32{1, 0}}, Limit: 1,
+		ExcludeMessage: &sessionstore.MessageToolCall{RunID: "run", TaskID: "child", ToolCallID: "search"},
+	})
+	if err != nil || filtered.Total != 2 || len(filtered.Hits) != 1 || filtered.Hits[0].Record.ID != records[0].ID {
+		t.Fatalf("filtered remote vector search = %#v, err = %v", filtered, err)
+	}
 	if err := workspace.ConfigureVector(sessionstore.VectorConfig{}); !errors.Is(err, ErrVectorConflict) {
 		t.Fatalf("ConfigureVector with multiple leases error = %v", err)
 	}

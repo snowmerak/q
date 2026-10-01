@@ -23,6 +23,7 @@ const (
 	DefaultModel           = "jev-latest"
 	Version                = 2
 	RoleAgentSkillDecision = "agent_skill_decision"
+	RoleArchiveDecision    = "archive_decision"
 )
 
 type ServerConfig struct {

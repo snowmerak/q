@@ -231,6 +231,7 @@ func (request startupRequest) run(modelReady chan<- struct{}) runtimeInitialized
 				AuxiliaryCheckoutRoots: append([]string(nil), request.auxiliaryRoots...),
 			}, toolArchive, loaded.LoomStoreOptions(nil), loaded.LSP, workspaceLSP, libraryClient,
 			qtools.WithSystemOneSkillRanking(systemoneconfig.Store{Dir: request.store.Dir}),
+			qtools.WithSystemOneArchiveRanking(systemoneconfig.Store{Dir: request.store.Dir}),
 		)
 		result.tools = tools
 		result.library = libraryClient

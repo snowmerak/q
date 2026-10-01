@@ -19,6 +19,7 @@ import (
 	"github.com/snowmerak/q/loom"
 	"github.com/snowmerak/q/lsp"
 	"github.com/snowmerak/q/mcpconfig"
+	"github.com/snowmerak/q/sessionstore"
 	"github.com/snowmerak/q/tools/builtin"
 	qworkspace "github.com/snowmerak/q/workspace"
 )
@@ -52,7 +53,8 @@ func sameRuntimeRoots(root string) RuntimeRoots {
 }
 
 type runtimeOptions struct {
-	skillRanker builtin.SkillRanker
+	skillRanker   builtin.SkillRanker
+	archiveRanker builtin.ArchiveRanker
 }
 
 // RuntimeOption configures optional integrations owned by the runtime.
@@ -82,6 +84,7 @@ type Runtime struct {
 	skillStore     SkillStore
 	globalSkills   builtin.GlobalSkillLibrary
 	skillRanker    builtin.SkillRanker
+	archiveRanker  builtin.ArchiveRanker
 	skillRefreshMu sync.Mutex
 	skillRefreshAt time.Time
 	tools          []client.Tool
@@ -94,13 +97,14 @@ type Runtime struct {
 }
 
 type runtimeTemplate struct {
-	roots        RuntimeRoots
-	archive      builtin.Archive
-	loomOptions  loom.StoreOptions
-	globalLSP    lsp.GlobalConfig
-	workspaceLSP lsp.WorkspaceConfig
-	globalSkills builtin.GlobalSkillLibrary
-	skillRanker  builtin.SkillRanker
+	roots         RuntimeRoots
+	archive       builtin.Archive
+	loomOptions   loom.StoreOptions
+	globalLSP     lsp.GlobalConfig
+	workspaceLSP  lsp.WorkspaceConfig
+	globalSkills  builtin.GlobalSkillLibrary
+	skillRanker   builtin.SkillRanker
+	archiveRanker builtin.ArchiveRanker
 }
 
 func NewRuntime(ctx context.Context, root string) (*Runtime, error) {
@@ -225,6 +229,7 @@ func NewRuntimeWithRoots(
 		roots: roots, archive: archive, loomOptions: options,
 		globalLSP: global, workspaceLSP: workspace,
 		globalSkills: globalSkills, skillRanker: runtime.skillRanker,
+		archiveRanker: runtime.archiveRanker,
 	}
 	return runtime, nil
 }
@@ -241,7 +246,10 @@ func (r *Runtime) NewCheckoutRuntime(ctx context.Context, checkoutRoot string) (
 		WorkspaceStateRoot: template.roots.WorkspaceStateRoot,
 		CheckoutRoot:       checkoutRoot,
 	}, template.archive, template.loomOptions, template.globalLSP, template.workspaceLSP, template.globalSkills,
-		func(options *runtimeOptions) { options.skillRanker = template.skillRanker },
+		func(options *runtimeOptions) {
+			options.skillRanker = template.skillRanker
+			options.archiveRanker = template.archiveRanker
+		},
 	)
 	if err != nil {
 		return nil, err
@@ -335,7 +343,7 @@ func newRuntimeWithLSP(
 	}
 	server, fs, skills, err := newServer(
 		roots.CheckoutRoot, roots.AuxiliaryCheckoutRoots, roots.WorkspaceStateRoot,
-		archive, skillStore, loomRuntime, lspManager, globalSkills, optionsValue.skillRanker,
+		archive, skillStore, loomRuntime, lspManager, globalSkills, optionsValue.skillRanker, optionsValue.archiveRanker,
 	)
 	if err != nil {
 		return nil, err
@@ -356,6 +364,7 @@ func newRuntimeWithLSP(
 	runtime := &Runtime{
 		client: clientSession, server: serverSession, fs: fs, loom: loomRuntime, lsp: lspManager,
 		skills: skills, skillStore: skillStore, globalSkills: globalSkills, skillRanker: optionsValue.skillRanker,
+		archiveRanker:  optionsValue.archiveRanker,
 		skillRefreshAt: time.Now().Add(skillRefreshInterval),
 	}
 	listed, err := clientSession.ListTools(ctx, nil)
@@ -634,7 +643,13 @@ func (r *Runtime) Call(ctx context.Context, call client.ToolCall) (client.ToolRe
 		return CaptureMCPToolResult(ctx, r.loom.Store, route.server, call, result)
 	}
 	r.externalMu.RUnlock()
-	result, err := r.client.CallTool(ctx, &mcp.CallToolParams{Name: call.Function.Name, Arguments: arguments})
+	params := &mcp.CallToolParams{Name: call.Function.Name, Arguments: arguments}
+	if call.Function.Name == "search_archive" {
+		if message := sessionstore.SearchMessageExclusion(ctx, call.ID); message != nil {
+			params.Meta = mcp.Meta{builtin.ArchiveExcludeMessageMetaKey: message}
+		}
+	}
+	result, err := r.client.CallTool(ctx, params)
 	if err != nil {
 		return client.ToolResult{}, err
 	}

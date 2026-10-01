@@ -111,6 +111,24 @@ embeddings and semantic query vectors, then sends those values to Workspace
 Memory; the server owns their durable storage and HNSW indexing, not the model
 provider connection.
 
+## Archive search decisions
+
+`search_archive` retrieves up to 32 candidates, excluding the assistant response
+that issued the search before filling that window. It returns eight results by
+default and accepts `limit` values from 1 to 12. `offset` applies after ranking
+within that fixed window (0 through 32); `total` reports the window size rather
+than all index matches. Use a more specific query or filters to find other records.
+
+When System One settings exist, nonempty relevance queries score all candidates
+in one request using the `archive_decision` role, falling back to the default
+System One model when that role has no assignment. Studio's System One settings
+and the terminal settings expose Archive Decision independently of Agent Skill
+Decision. The decision receives bounded summaries, excerpts, roles, kinds,
+statuses, and timestamps; records themselves are unchanged. Equal scores retain
+the original retrieval order. Failed or invalid decisions return that original
+order with a warning. Explicit newest/oldest sorts and empty-query browsing
+preserve their chronological behavior without a decision request.
+
 ## What remains process-local
 
 Workspace Memory intentionally owns only records and their derived indexes.

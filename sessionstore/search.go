@@ -59,6 +59,9 @@ type SearchOptions struct {
 	Limit          int
 	Offset         int
 	Recency        *Recency
+	// ExcludeMessage removes the assistant response that issued this tool call
+	// from ranked candidates before pagination. It does not alter stored records.
+	ExcludeMessage *MessageToolCall
 }
 
 // TextFieldBoosts adjusts the relative contribution of the three full-text
@@ -123,12 +126,21 @@ func (s *Store) Search(ctx context.Context, options SearchOptions) (SearchResult
 	query := buildQuery(options)
 	requestSize := options.Limit
 	requestFrom := options.Offset
+	if options.ExcludeMessage != nil {
+		// Apply the omission before the offset so subsequent pages neither
+		// repeat nor skip a hit. One spare candidate fills the omitted slot.
+		requestFrom = 0
+		requestSize = options.Offset + options.Limit + 1
+	}
 	if options.Recency != nil {
 		requestFrom = 0
 		requestSize = options.Recency.CandidateLimit
 		if requestSize == 0 {
 			requestSize = max(50, (options.Offset+options.Limit)*5)
 			requestSize = min(requestSize, 5000)
+		}
+		if options.ExcludeMessage != nil {
+			requestSize = min(5000, max(requestSize, options.Offset+options.Limit+1))
 		}
 	}
 	request := bleve.NewSearchRequestOptions(query, requestSize, requestFrom, false)
@@ -160,11 +172,19 @@ func (s *Store) Search(ctx context.Context, options SearchOptions) (SearchResult
 	}
 	if options.Recency != nil {
 		rerankByRecency(hits, *options.Recency)
+	}
+	total := result.Total
+	if options.ExcludeMessage != nil {
+		filtered := omitToolCallMessage(hits, options.ExcludeMessage)
+		total -= uint64(len(hits) - len(filtered))
+		hits = filtered
+	}
+	if options.Recency != nil || options.ExcludeMessage != nil {
 		start := min(options.Offset, len(hits))
 		end := min(start+options.Limit, len(hits))
 		hits = hits[start:end]
 	}
-	return SearchResult{Total: result.Total, Hits: hits}, nil
+	return SearchResult{Total: total, Hits: hits}, nil
 }
 
 func validateSearchOptions(options *SearchOptions) error {
@@ -290,6 +310,9 @@ func (s *Store) searchWithVectorLocked(ctx context.Context, options SearchOption
 	if options.Recency != nil && options.Recency.CandidateLimit > candidateLimit {
 		candidateLimit = options.Recency.CandidateLimit
 	}
+	if options.ExcludeMessage != nil {
+		candidateLimit = min(5000, max(candidateLimit, options.Offset+options.Limit+1))
+	}
 
 	vectorResults, err := s.vectors.search(options.Vector.Embedding, candidateLimit, options.Vector.ProjectionWeights)
 	if err != nil {
@@ -376,6 +399,7 @@ func (s *Store) searchWithVectorLocked(ctx context.Context, options SearchOption
 	if options.Recency != nil {
 		rerankByRecency(hits, *options.Recency)
 	}
+	hits = omitToolCallMessage(hits, options.ExcludeMessage)
 	total := uint64(len(hits))
 	start := min(options.Offset, len(hits))
 	end := min(start+options.Limit, len(hits))

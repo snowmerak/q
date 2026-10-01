@@ -30,7 +30,7 @@ const (
 	systemOnePageKeys
 )
 
-const systemOneProviderRow = 4
+const systemOneProviderRow = 5
 
 const (
 	systemOneFieldProviderID = iota
@@ -38,13 +38,14 @@ const (
 	systemOneFieldKeyEnv
 	systemOneFieldDefaultModel
 	systemOneFieldAgentSkillModel
+	systemOneFieldArchiveModel
 	systemOneFieldHost
 	systemOneFieldPort
 )
 
 func (m *model) initSystemOne(dir string) {
 	m.systemOneStore = systemoneconfig.Store{Dir: dir}
-	for index, prompt := range []string{"Provider ID", "URI", "API key environment variable", "Default model", "Agent Skill Decision model", "Listen host", "Listen port"} {
+	for index, prompt := range []string{"Provider ID", "URI", "API key environment variable", "Default model", "Agent Skill Decision model", "Archive Decision model", "Listen host", "Listen port"} {
 		field := textinput.New()
 		field.Prompt = ""
 		field.Placeholder = prompt
@@ -105,6 +106,7 @@ func (m *model) loadSystemOneFields() {
 	for index, value := range []string{
 		provider.ID, provider.URI, provider.APIKeyEnv,
 		m.systemOneConfig.DefaultModel, m.systemOneConfig.RoleModels[systemoneconfig.RoleAgentSkillDecision],
+		m.systemOneConfig.RoleModels[systemoneconfig.RoleArchiveDecision],
 		m.systemOneConfig.Server.Host, strconv.Itoa(m.systemOneConfig.Server.Port),
 	} {
 		m.systemOneInputs[index].SetValue(value)
@@ -117,6 +119,7 @@ func (m *model) captureSystemOneFields() {
 	m.systemOneConfig.Providers[m.systemOneProvider] = provider
 	defaultModel := strings.TrimSpace(m.systemOneInputs[systemOneFieldDefaultModel].Value())
 	roleModel := strings.TrimSpace(m.systemOneInputs[systemOneFieldAgentSkillModel].Value())
+	archiveModel := strings.TrimSpace(m.systemOneInputs[systemOneFieldArchiveModel].Value())
 	if oldID != provider.ID {
 		replacePrefix := func(model string) string {
 			if strings.HasPrefix(model, oldID+"/") {
@@ -126,20 +129,27 @@ func (m *model) captureSystemOneFields() {
 		}
 		defaultModel = replacePrefix(defaultModel)
 		roleModel = replacePrefix(roleModel)
+		archiveModel = replacePrefix(archiveModel)
 		for role, model := range m.systemOneConfig.RoleModels {
 			m.systemOneConfig.RoleModels[role] = replacePrefix(model)
 		}
 		m.systemOneInputs[systemOneFieldDefaultModel].SetValue(defaultModel)
 		m.systemOneInputs[systemOneFieldAgentSkillModel].SetValue(roleModel)
+		m.systemOneInputs[systemOneFieldArchiveModel].SetValue(archiveModel)
 	}
 	m.systemOneConfig.DefaultModel = defaultModel
-	if roleModel != "" {
-		if m.systemOneConfig.RoleModels == nil {
-			m.systemOneConfig.RoleModels = make(map[string]string)
+	for role, selected := range map[string]string{
+		systemoneconfig.RoleAgentSkillDecision: roleModel,
+		systemoneconfig.RoleArchiveDecision:    archiveModel,
+	} {
+		if selected != "" {
+			if m.systemOneConfig.RoleModels == nil {
+				m.systemOneConfig.RoleModels = make(map[string]string)
+			}
+			m.systemOneConfig.RoleModels[role] = selected
+		} else {
+			delete(m.systemOneConfig.RoleModels, role)
 		}
-		m.systemOneConfig.RoleModels[systemoneconfig.RoleAgentSkillDecision] = roleModel
-	} else {
-		delete(m.systemOneConfig.RoleModels, systemoneconfig.RoleAgentSkillDecision)
 	}
 	m.systemOneConfig.Server.Host = strings.TrimSpace(m.systemOneInputs[systemOneFieldHost].Value())
 	if port, err := strconv.Atoi(strings.TrimSpace(m.systemOneInputs[systemOneFieldPort].Value())); err == nil {
@@ -157,6 +167,7 @@ func (m *model) focusSystemOne() tea.Cmd {
 		return nil
 	}
 	if m.systemOneFocus == systemOneFieldDefaultModel || m.systemOneFocus == systemOneFieldAgentSkillModel ||
+		m.systemOneFocus == systemOneFieldArchiveModel ||
 		m.systemOneLoading || m.systemOnePicking {
 		return nil
 	}
@@ -201,11 +212,14 @@ func (m model) updateSystemOneList(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.systemOneFocus = systemOneFieldAgentSkillModel
 			return m.loadSystemOneModels()
 		case 2:
+			m.systemOneFocus = systemOneFieldArchiveModel
+			return m.loadSystemOneModels()
+		case 3:
 			m.systemOnePage = systemOnePageNetwork
 			m.systemOneFocus = systemOneFieldHost
 			m.status = ""
 			return m, m.focusSystemOne()
-		case 3:
+		case 4:
 			m.systemOnePage = systemOnePageKeys
 			m.systemOneKeyAdding = false
 			m.systemOneKeyRevokeArmed = false
@@ -520,7 +534,7 @@ func (m model) receiveSystemOneModels(message systemOneModelsMsg) (tea.Model, te
 		m.status = "No models returned by the configured System One providers"
 		return m, m.focusSystemOne()
 	}
-	if m.systemOneModelTarget == systemOneFieldAgentSkillModel {
+	if m.systemOneModelTarget == systemOneFieldAgentSkillModel || m.systemOneModelTarget == systemOneFieldArchiveModel {
 		message.models = append([]systemone.Model{{Description: "Use default model"}}, message.models...)
 	}
 	m.systemOneModels = message.models
@@ -566,6 +580,9 @@ func (m model) updateSystemOneModels(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		if m.persistSystemOne() {
 			if selected == "" {
 				m.status = "Agent Skill Decision uses the default model"
+				if m.systemOneModelTarget == systemOneFieldArchiveModel {
+					m.status = "Archive Decision uses the default model"
+				}
 			} else {
 				m.status = "Selected " + selected
 			}
@@ -636,6 +653,7 @@ func (m model) viewSystemOneList() string {
 	rows := []string{
 		"Default model · " + m.systemOneConfig.DefaultModel,
 		"Agent Skill Decision · " + m.systemOneConfig.ModelForRole(systemoneconfig.RoleAgentSkillDecision),
+		"Archive Decision · " + m.systemOneConfig.ModelForRole(systemoneconfig.RoleArchiveDecision),
 		"Network · " + m.systemOneConfig.Server.Host + ":" + strconv.Itoa(m.systemOneConfig.Server.Port),
 		fmt.Sprintf("API keys · %d active · %d total", m.systemOneConfig.ActiveKeyCount(), m.systemOneKeyCount()),
 	}

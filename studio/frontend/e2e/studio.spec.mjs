@@ -1093,6 +1093,9 @@ test('system one routing and listener key management persist through native sett
   await expect(role.getByRole('combobox', { name: 'Model', exact: true }).locator('option[value="ui-decision/decision-test"]')).toHaveCount(1);
   await role.getByRole('combobox', { name: 'Model', exact: true }).selectOption('ui-decision/decision-test');
   await expect(page.locator('.save-state')).toHaveText('Saved');
+  const archiveRole = page.locator('.system-one-assignment').filter({ hasText: 'Archive Decision' });
+  await archiveRole.getByRole('combobox', { name: 'Model', exact: true }).selectOption('ui-decision/decision-test');
+  await expect(page.locator('.save-state')).toHaveText('Saved');
   const card = page.locator('.system-one-provider-card').filter({ hasText: 'ui-decision' });
   let release;
   const gate = new Promise((resolve) => { release = resolve; });
@@ -1114,6 +1117,10 @@ test('system one routing and listener key management persist through native sett
   await expect(page.locator('.save-state')).toHaveText('Saved');
   expect(new URL(writes[1]).pathname).toBe('/api/v1/settings/system-one/providers/ui-decision-renamed');
   await expect(role.getByRole('combobox', { name: 'Model', exact: true })).toHaveValue('ui-decision-renamed/decision-test');
+  await expect(archiveRole.getByRole('combobox', { name: 'Model', exact: true })).toHaveValue('ui-decision-renamed/decision-test');
+  await page.reload();
+  await expect(archiveRole.getByRole('combobox', { name: 'Model', exact: true })).toHaveValue('ui-decision-renamed/decision-test');
+  await expect(role.getByRole('combobox', { name: 'Model', exact: true })).toHaveValue('ui-decision-renamed/decision-test');
   const alias = page.getByRole('textbox', { name: 'New key alias', exact: true });
   await alias.fill('ui-decision-key');
   await page.getByRole('button', { name: 'Generate key', exact: true }).click();
@@ -1125,6 +1132,11 @@ test('system one routing and listener key management persist through native sett
   await expect(keyRow).toContainText('Revoked');
   await role.getByRole('combobox', { name: 'Model', exact: true }).selectOption('');
   await expect(page.locator('.save-state')).toHaveText('Saved');
+  await expect(archiveRole.getByRole('combobox', { name: 'Model', exact: true })).toHaveValue('ui-decision-renamed/decision-test');
+  await archiveRole.getByRole('combobox', { name: 'Model', exact: true }).selectOption('');
+  await expect(page.locator('.save-state')).toHaveText('Saved');
+  await page.reload();
+  await expect(archiveRole.getByRole('combobox', { name: 'Model', exact: true })).toHaveValue('');
   page.once('dialog', (dialog) => dialog.accept());
   await card.getByTitle('Delete provider', { exact: true }).click();
   await expect(card).toHaveCount(0);

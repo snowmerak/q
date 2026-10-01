@@ -203,6 +203,7 @@ func (service *settingsService) snapshot() (settingsSnapshot, error) {
 		SystemOne: systemOneAPISettings{
 			ConfigPath: service.systemOne.Path(), DefaultModel: systemOne.DefaultModel,
 			AgentSkillModel: systemOne.RoleModels[systemoneconfig.RoleAgentSkillDecision],
+			ArchiveModel:    systemOne.RoleModels[systemoneconfig.RoleArchiveDecision],
 			Providers:       systemOneProviders, APIKeys: systemOneKeys, ActiveAPIKeys: systemOne.ActiveKeyCount(),
 		},
 		Services: serviceSettings{

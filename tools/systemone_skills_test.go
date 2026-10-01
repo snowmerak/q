@@ -34,7 +34,7 @@ func TestSystemOneSkillRankerScoresAllCandidatesInOneRequest(t *testing.T) {
 		answers := make(map[string]systemone.Answer, len(body.Questions))
 		for index := range len(body.Questions) {
 			score := float64(index % len(skillRelevanceCriteria))
-			answers[skillDecisionQuestionName(index)] = systemone.Answer{
+			answers[decisionQuestionName(index)] = systemone.Answer{
 				Type: systemone.QuestionScore, Score: &score,
 			}
 		}

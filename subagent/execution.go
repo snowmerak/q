@@ -14,6 +14,7 @@ import (
 	"github.com/snowmerak/q/client"
 	"github.com/snowmerak/q/config"
 	"github.com/snowmerak/q/loom"
+	"github.com/snowmerak/q/sessionstore"
 )
 
 const (
@@ -142,6 +143,7 @@ func (r PlannerReviewRunner) Run(ctx context.Context, input TaskReviewRequest) (
 	if strings.TrimSpace(r.ExecutionID) == "" {
 		taskID = fmt.Sprintf("plan-execution-planner-%d-%d", input.TaskIndex+1, input.Attempt)
 	}
+	ctx = sessionstore.WithSearchScope(ctx, r.RunID, taskID)
 	var lifecycle *Lifecycle
 	if r.Sink != nil || strings.TrimSpace(r.RunID) != "" {
 		lifecycle, err = NewLifecycle(r.Sink, r.RunID, taskID, r.ExecutionID, &r.Spec)

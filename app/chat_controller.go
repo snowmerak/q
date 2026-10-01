@@ -538,7 +538,7 @@ func (m *model) sendChatRequest() tea.Cmd {
 	if m.studioWorkspaceContext != nil {
 		auxiliaryDirectories = append([]string(nil), m.studioWorkspaceContext.AuxiliaryRoots...)
 	}
-	turnContext := m.activeTurnContext()
+	turnContext := sessionstore.WithSearchScope(m.activeTurnContext(), m.runID, "")
 	turnID := m.turnID
 	events := make(chan agentEvent)
 	toolRuntime, toolRuntimeErr := configuredAgentToolRuntime(

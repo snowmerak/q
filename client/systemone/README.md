@@ -55,6 +55,8 @@ In q, `/systemone` or `q systemone` stores multiple providers and standalone
 server settings in `~/.q/systemone.json`. `systemoneconfig.Store.NewClient()`
 returns a native client and model for the representative `default_model`
 assignment; `Config.ResolveModel(role)` resolves an optional role override.
+The `agent_skill_decision` and `archive_decision` roles independently rerank
+skill and archive search candidates; unset roles use `default_model`.
 The initial TypeSafe provider reads `TYPESAFE_API_KEY`; provider settings store
 only the environment variable name. If it has no value, requests are sent
 without authentication. Run

@@ -64,13 +64,13 @@ func (r *systemOneSkillRanker) RankSkills(
 	}
 	questions := make(map[string]systemone.Question, len(hits))
 	for index, hit := range hits {
-		questions[skillDecisionQuestionName(index)] = systemone.Question{
+		questions[decisionQuestionName(index)] = systemone.Question{
 			Type: systemone.QuestionScore,
 			Instructions: map[string]any{
 				"task": "Evaluate whether this Agent Skill should guide the task in the shared state.",
 				"candidate": map[string]any{
-					"name":        truncateSkillDecisionText(hit.Title, maximumSkillDecisionTitleBytes),
-					"description": truncateSkillDecisionText(hit.Description, maximumSkillDecisionDescriptionBytes),
+					"name":        truncateDecisionText(hit.Title, maximumSkillDecisionTitleBytes),
+					"description": truncateDecisionText(hit.Description, maximumSkillDecisionDescriptionBytes),
 					"tags":        boundedSkillDecisionTags(hit.Tags),
 					"scope":       hit.Scope,
 				},
@@ -81,7 +81,7 @@ func (r *systemOneSkillRanker) RankSkills(
 	result, err := configured.Evaluate(ctx, systemone.Request{
 		Model: model,
 		State: map[string]string{
-			"task": truncateSkillDecisionText(strings.TrimSpace(query), maximumSkillDecisionQueryBytes),
+			"task": truncateDecisionText(strings.TrimSpace(query), maximumSkillDecisionQueryBytes),
 		},
 		Questions: questions,
 	}, systemone.CallOptions{})
@@ -90,7 +90,7 @@ func (r *systemOneSkillRanker) RankSkills(
 	}
 	ranked := append([]builtin.SkillSearchHit(nil), hits...)
 	for index := range ranked {
-		answer, found := result.Answers[skillDecisionQuestionName(index)]
+		answer, found := result.Answers[decisionQuestionName(index)]
 		if !found || answer.Type != systemone.QuestionScore || answer.Score == nil {
 			return nil, fmt.Errorf("systemone: missing score for skill candidate %d", index)
 		}
@@ -106,7 +106,7 @@ func (r *systemOneSkillRanker) RankSkills(
 	return ranked, nil
 }
 
-func skillDecisionQuestionName(index int) string {
+func decisionQuestionName(index int) string {
 	return fmt.Sprintf("candidate_%02d", index)
 }
 
@@ -116,7 +116,7 @@ func boundedSkillDecisionTags(tags []string) []string {
 		if len(result) == maximumSkillDecisionTags {
 			break
 		}
-		value := truncateSkillDecisionText(strings.TrimSpace(tag), maximumSkillDecisionTagBytes)
+		value := truncateDecisionText(strings.TrimSpace(tag), maximumSkillDecisionTagBytes)
 		if value != "" {
 			result = append(result, value)
 		}
@@ -124,7 +124,7 @@ func boundedSkillDecisionTags(tags []string) []string {
 	return result
 }
 
-func truncateSkillDecisionText(value string, limit int) string {
+func truncateDecisionText(value string, limit int) string {
 	if limit <= 0 {
 		return ""
 	}

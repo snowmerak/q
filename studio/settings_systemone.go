@@ -71,14 +71,18 @@ func (service *settingsService) serveSystemOneModelAssignmentUpdate(writer http.
 			return
 		}
 		value.DefaultModel = update.Model
-	case "agent-skill-decision":
+	case "agent-skill-decision", "archive-decision":
+		role := systemoneconfig.RoleAgentSkillDecision
+		if request.PathValue("target") == "archive-decision" {
+			role = systemoneconfig.RoleArchiveDecision
+		}
 		if value.RoleModels == nil {
 			value.RoleModels = make(map[string]string)
 		}
 		if update.Model == "" {
-			delete(value.RoleModels, systemoneconfig.RoleAgentSkillDecision)
+			delete(value.RoleModels, role)
 		} else {
-			value.RoleModels[systemoneconfig.RoleAgentSkillDecision] = update.Model
+			value.RoleModels[role] = update.Model
 		}
 	default:
 		writeAPIError(writer, http.StatusNotFound, errors.New("unknown System One model assignment"))

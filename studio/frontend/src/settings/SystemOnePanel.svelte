@@ -36,7 +36,7 @@
     }
   }
 
-  function saveSystemOneModel(target: 'default' | 'agent-skill-decision', model: string) {
+  function saveSystemOneModel(target: 'default' | 'agent-skill-decision' | 'archive-decision', model: string) {
     queueSave(() => putSettings(`/api/v1/settings/system-one/models/${target}`, JSON.stringify({ model })));
   }
 
@@ -128,6 +128,14 @@
       <label><span>Model</span><select bind:value={settings.system_one.agent_skill_model} onchange={() => saveSystemOneModel('agent-skill-decision', settings!.system_one.agent_skill_model)} disabled={systemOneModelsLoading}>
         <option value="">Use default · {settings.system_one.default_model}</option>
         {#if settings.system_one.agent_skill_model && !systemOneModels.some((model) => model.id === settings?.system_one.agent_skill_model)}<option value={settings.system_one.agent_skill_model}>{settings.system_one.agent_skill_model}</option>{/if}
+        {#each systemOneModels as model}<option value={model.id}>{model.id}</option>{/each}
+      </select></label>
+    </div>
+    <div class="assignment-row system-one-assignment">
+      <div><strong>Archive Decision</strong><small>{settings.system_one.archive_model ? 'Dedicated role model' : `Uses ${settings.system_one.default_model}`}</small></div>
+      <label><span>Model</span><select bind:value={settings.system_one.archive_model} onchange={() => saveSystemOneModel('archive-decision', settings!.system_one.archive_model)} disabled={systemOneModelsLoading}>
+        <option value="">Use default · {settings.system_one.default_model}</option>
+        {#if settings.system_one.archive_model && !systemOneModels.some((model) => model.id === settings?.system_one.archive_model)}<option value={settings.system_one.archive_model}>{settings.system_one.archive_model}</option>{/if}
         {#each systemOneModels as model}<option value={model.id}>{model.id}</option>{/each}
       </select></label>
     </div>
