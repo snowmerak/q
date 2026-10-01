@@ -209,6 +209,54 @@ test('folder browser closes before registration and registers the selected works
   await expect(registry).toHaveCount(0);
 });
 
+test('inner delegation supports guidance, pause, stop and followup without rewriting its parent', async ({ page, request }) => {
+  const fixture = await (await request.get('/_test/fixture')).json();
+  const created = await request.post('/api/v1/registered-sessions', { data: { workspace_root: fixture.other, create: true } });
+  expect(created.status()).toBe(201);
+  const registration = await created.json();
+  await page.goto('/sessions/' + registration.registration_id);
+  const composer = page.locator('.composer textarea');
+  await composer.fill('delegate controlled work');
+  await composer.press('Enter');
+  const rail = page.getByRole('complementary', { name: 'Registered session tree' });
+  await rail.getByRole('button', { name: 'research running', exact: true }).click();
+  await expect(composer).toBeEnabled();
+  await page.getByRole('button', { name: 'Pause turn', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Resume turn', exact: true })).toBeVisible();
+  await composer.fill('finish controlled child');
+  await composer.press('Enter');
+  await expect(page.getByRole('button', { name: 'Stop turn', exact: true })).toHaveCount(0);
+  await expect(composer).toBeEnabled();
+  const rootEndpoint = `/api/v1/sessions/${registration.session.session_id}`;
+  const query = '?workspace_root=' + encodeURIComponent(fixture.other);
+  await expect.poll(async () => (await (await request.get(rootEndpoint + '/runs/latest' + query)).json()).status).toBe('completed');
+  const parent = (await (await request.get(rootEndpoint + query)).json()).transcript;
+  await composer.fill('controlled child');
+  await composer.press('Enter');
+  await expect(page.getByRole('button', { name: 'Stop turn', exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'Stop turn', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Stop turn', exact: true })).toHaveCount(0);
+  await expect(composer).toBeEnabled();
+  await composer.fill('finish controlled child');
+  await composer.press('Enter');
+  await expect(composer).toHaveValue('');
+  await expect(composer).toBeEnabled();
+  await expect(page.getByRole('button', { name: 'Stop turn', exact: true })).toHaveCount(0);
+  await expect(page.locator('.transcript')).toContainText('finish controlled child');
+  expect((await (await request.get(rootEndpoint + query)).json()).transcript).toEqual(parent);
+});
+
+test('external ACP delegation keeps chat and execution controls unavailable', async ({ page, request }) => {
+  const fixture = await (await request.get('/_test/fixture')).json();
+  const response = await request.post('/api/v1/registered-sessions', { data: { workspace_root: fixture.tree_root, session_id: fixture.tree_session_id } });
+  const registration = await response.json();
+  await page.goto('/sessions/' + registration.registration_id);
+  await page.getByRole('complementary', { name: 'Registered session tree' }).getByRole('button', { name: 'web-search completed', exact: true }).click();
+  await expect(page.locator('.delegated-session-note')).toContainText('External ACP session');
+  await expect(page.locator('.composer textarea')).toHaveCount(0);
+  await expect(page.getByRole('button', { name: /^(Pause|Resume|Stop) turn$/ })).toHaveCount(0);
+});
+
 test('nested delegation selection and deletion preserve the root and parent branch', async ({ page, request }) => {
   const fixture = await (await request.get('/_test/fixture')).json();
   const response = await request.post('/api/v1/registered-sessions', { data: {
@@ -230,7 +278,7 @@ test('nested delegation selection and deletion preserve the root and parent bran
   await expect(page).toHaveURL(new RegExp('/sessions/' + registration.registration_id + '$'));
   await expect(page.locator('.transcript').getByRole('heading', { name: 'Senior fixture', exact: true })).toBeVisible();
   await expect(senior).toHaveClass(/active/);
-  await expect(page.locator('.composer textarea')).toHaveCount(0);
+  await expect(page.locator('.composer textarea')).toBeEnabled();
   await junior.click();
   await expect(page.locator('.transcript').getByRole('heading', { name: 'Junior fixture', exact: true })).toBeVisible();
   await expect(junior).toHaveClass(/active/);
@@ -252,7 +300,7 @@ test('nested delegation selection and deletion preserve the root and parent bran
   await expect(page.locator('.transcript').getByRole('heading', { name: 'Root fixture', exact: true })).toBeVisible();
   const saved = await (await request.get('/api/v1/registered-sessions')).json();
   const tree = saved.sessions.find((item) => item.registration_id === registration.registration_id);
-  expect(tree.delegations).toHaveLength(1);
+  expect(tree.delegations).toHaveLength(2);
   expect(tree.delegations[0].bookmark.invocation_id).toBe('senior-child');
   expect(tree.delegations[0].children || []).toHaveLength(0);
   expect((await request.delete('/api/v1/registered-sessions/' + registration.registration_id)).ok()).toBe(true);

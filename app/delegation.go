@@ -15,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/snowmerak/q/change"
 	"github.com/snowmerak/q/client"
 	"github.com/snowmerak/q/config"
 	"github.com/snowmerak/q/gitwork"
@@ -778,7 +779,7 @@ func (d *delegationDispatcher) dispatchStored(ctx context.Context, caller string
 		if err := child.Save(workspace.Session{RunID: bookmark.RunID, Transcript: []client.Message{{Role: client.RoleUser, Content: input.Prompt}}, Context: []client.Message{{Role: client.RoleUser, Content: input.Prompt}}}); err != nil {
 			return client.ToolResult{}, err
 		}
-		state = workspace.DelegationState{Agent: bookmark.Agent, Prompt: bookmark.Prompt, WorkingDirectory: bookmark.WorkingDirectory, RunID: bookmark.RunID, ParentID: parentTaskID, TaskID: bookmark.InvocationID, Status: "running"}
+		state = workspace.DelegationState{Agent: bookmark.Agent, Kind: subagent.AgentKindExternal, Prompt: bookmark.Prompt, WorkingDirectory: bookmark.WorkingDirectory, RunID: bookmark.RunID, ParentID: parentTaskID, TaskID: bookmark.InvocationID, Status: "running"}
 		if err := child.SaveDelegationState(state); err != nil {
 			return client.ToolResult{}, err
 		}
@@ -792,6 +793,11 @@ func (d *delegationDispatcher) dispatchStored(ctx context.Context, caller string
 		}
 		return result, nil
 	}
+	return d.runStoredInner(ctx, definition, stack, bookmark, child, state, stateErr, call, parentTaskID, "")
+}
+
+func (d *delegationDispatcher) runStoredInner(ctx context.Context, definition subagent.AgentDefinition, stack []string, bookmark workspace.DelegationBookmark, child workspace.Store, state workspace.DelegationState, stateErr error, call client.ToolCall, parentTaskID, followup string) (output client.ToolResult, returnErr error) {
+	input := delegateInput{SubagentName: bookmark.Agent, Prompt: bookmark.Prompt, WorkingDirectory: bookmark.WorkingDirectory}
 	models, err := d.loadModels(ctx)
 	if err != nil {
 		return client.ToolResult{}, err
@@ -857,7 +863,7 @@ func (d *delegationDispatcher) dispatchStored(ctx context.Context, caller string
 		if len(childSession.Transcript) >= 2 {
 			resume = &subagent.GeneralRunState{
 				Transcript: childSession.Transcript, Context: restoreResponseReplay(childSession.Context, childSession.ResponseReplay),
-				Round: state.Round, Started: state.Started, Reminders: state.Reminders,
+				Round: state.Round, TurnStartRound: state.TurnStartRound, Started: state.Started, Reminders: state.Reminders,
 				Spec: subagent.SpecCheckpoint{Model: state.Model, Candidate: state.Candidate, ConversationID: state.ConversationID},
 			}
 		} else if state.Round != 0 {
@@ -876,7 +882,7 @@ func (d *delegationDispatcher) dispatchStored(ctx context.Context, caller string
 		if d.apiMode != nil {
 			mode = d.apiMode(spec.Model)
 		}
-		state = workspace.DelegationState{Agent: bookmark.Agent, Prompt: bookmark.Prompt, WorkingDirectory: bookmark.WorkingDirectory, RunID: bookmark.RunID, ParentID: parentTaskID, TaskID: bookmark.InvocationID, Model: spec.Model, APIMode: mode, Status: "running"}
+		state = workspace.DelegationState{Agent: bookmark.Agent, Kind: subagent.AgentKindInner, Prompt: bookmark.Prompt, WorkingDirectory: bookmark.WorkingDirectory, RunID: bookmark.RunID, ParentID: parentTaskID, TaskID: bookmark.InvocationID, Model: spec.Model, APIMode: mode, Status: "running"}
 		if err := child.SaveDelegationState(state); err != nil {
 			return client.ToolResult{}, err
 		}
@@ -892,6 +898,24 @@ func (d *delegationDispatcher) dispatchStored(ctx context.Context, caller string
 		}
 	}
 	runDispatcher := d
+	if followup != "" {
+		state.Status, state.Result = "running", nil
+		if state.ChangeRequest != nil {
+			request := *state.ChangeRequest
+			if request.Status == change.StatusClosed || request.Status == change.StatusMerged {
+				state.ChangeRequest = nil
+			} else {
+				if d.worktrees == nil {
+					return client.ToolResult{}, errors.New("delegated worktree manager is unavailable")
+				}
+				if err := d.worktrees.Resume(ctx, request); err != nil {
+					return client.ToolResult{}, err
+				}
+				request.Status, request.HeadCommit = change.StatusWorking, ""
+				state.ChangeRequest = &request
+			}
+		}
+	}
 	var checkoutCloser io.Closer
 	if definition.Info.MutatesWorkspace && d.worktrees != nil {
 		_, isRepository, repositoryErr := gitwork.RepositoryRoot(ctx, d.workspace.checkoutRoot)
@@ -945,6 +969,21 @@ func (d *delegationDispatcher) dispatchStored(ctx context.Context, caller string
 	}
 	childStack := append(append([]string(nil), stack...), input.SubagentName)
 	runtime := &delegationRuntime{base: runDispatcher.tools, dispatcher: runDispatcher, caller: input.SubagentName, stack: childStack, store: &child, taskID: state.TaskID}
+	state.Kind = subagent.AgentKindInner
+	if err := child.SaveDelegationState(state); err != nil {
+		return client.ToolResult{}, err
+	}
+	runContext, control, finishControl, err := attachDelegationControl(ctx, child)
+	if err != nil {
+		return client.ToolResult{}, err
+	}
+	defer func() {
+		if returnErr == nil && output.IsError {
+			finishControl(errors.New(output.Content))
+			return
+		}
+		finishControl(returnErr)
+	}()
 	checkpoint := func(saved subagent.GeneralRunState) error {
 		mode := ""
 		if d.apiMode != nil {
@@ -954,6 +993,7 @@ func (d *delegationDispatcher) dispatchStored(ctx context.Context, caller string
 			return err
 		}
 		state.Round, state.Started, state.Reminders = saved.Round, saved.Started, saved.Reminders
+		state.TurnStartRound = saved.TurnStartRound
 		state.Model, state.Candidate, state.ConversationID = saved.Spec.Model, saved.Spec.Candidate, saved.Spec.ConversationID
 		state.RunningCall, state.UnknownTools = delegatedToolOutcomes(saved.Transcript)
 		state.APIMode = mode
@@ -962,10 +1002,13 @@ func (d *delegationDispatcher) dispatchStored(ctx context.Context, caller string
 	result, runErr := (subagent.GeneralRunner{
 		Client: runDispatcher.client, Tools: runtime, Spec: spec, Definition: definition,
 		WorkingDirectory: runDispatcher.workspace.checkoutRoot, Environment: runDispatcher.environment, RunID: runDispatcher.runID,
-		ParentID: parentTaskID, TaskID: state.TaskID, Sink: runDispatcher.sink, Progress: runDispatcher.progress, Trace: runDispatcher.trace, Resume: resume, Checkpoint: checkpoint,
-	}).Run(ctx, input.Prompt)
+		ParentID: parentTaskID, TaskID: state.TaskID, Sink: runDispatcher.sink, Progress: runDispatcher.progress, Trace: runDispatcher.trace, Resume: resume, Checkpoint: checkpoint, Control: control, Followup: followup,
+	}).Run(runContext, input.Prompt)
 	if runErr != nil {
-		return client.ToolResult{}, runErr
+		if !errors.Is(context.Cause(runContext), subagent.ErrRunStopped) || ctx.Err() != nil {
+			return client.ToolResult{}, runErr
+		}
+		result = subagent.TaskResult{Outcome: "blocked", Summary: "Subagent stopped by user", Blocker: "The user stopped this subagent execution."}
 	}
 	if state.ChangeRequest != nil {
 		request := *state.ChangeRequest
@@ -1030,10 +1073,18 @@ func delegatedToolOutcomes(messages []client.Message) (*workspace.DelegationTool
 // from the newer transcript after a crash between those two file replacements.
 func reconcileChildExecutionState(session workspace.Session, state workspace.DelegationState, spec subagent.Spec) (workspace.DelegationState, bool, error) {
 	changed := false
-	rounds, reminders := 0, 0
-	started := false
+	rounds, reminders, turnStart := 0, 0, 0
+	started, completed := false, false
 	for index, message := range session.Transcript {
 		switch message.Role {
+		case client.RoleUser:
+			if message.Name == subagent.FollowupMessageName {
+				turnStart, reminders = rounds, 0
+				if completed {
+					started = false
+				}
+				completed = false
+			}
 		case client.RoleAssistant:
 			if index > 0 && session.Transcript[index-1].Role == client.RoleTool && session.Transcript[index-1].Name == subagent.TaskCompleteToolName {
 				continue
@@ -1049,12 +1100,16 @@ func reconcileChildExecutionState(session workspace.Session, state workspace.Del
 					Started bool `json:"started"`
 				}
 				if json.Unmarshal([]byte(message.Content), &result) == nil && result.Started {
-					started = true
+					started, completed = true, false
 				}
+			}
+			if message.Name == subagent.TaskCompleteToolName {
+				var result subagent.TaskResult
+				completed = json.Unmarshal([]byte(message.Content), &result) == nil && result.Outcome != ""
 			}
 		}
 	}
-	if state.Round > rounds || state.Reminders > reminders || (state.Started && !started) {
+	if state.Round > rounds || state.TurnStartRound > turnStart || (state.TurnStartRound == turnStart && (state.Reminders > reminders || (state.Started && !started))) {
 		return state, false, errors.New("delegation state is ahead of its child transcript")
 	}
 	if state.Round != rounds {
@@ -1063,8 +1118,8 @@ func reconcileChildExecutionState(session workspace.Session, state workspace.Del
 	if state.Reminders != reminders {
 		state.Reminders, changed = reminders, true
 	}
-	if started && !state.Started {
-		state.Started, changed = true, true
+	if state.Started != started || state.TurnStartRound != turnStart {
+		state.Started, state.TurnStartRound, changed = started, turnStart, true
 	}
 	if affinity := session.ResponseAffinity; affinity != nil && affinity.Model != "" {
 		candidate := -1

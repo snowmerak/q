@@ -582,7 +582,7 @@ dd.success { color: var(--green); }
 .send-button:hover { background: #9c70ff; }
 .send-button:disabled { color: var(--subtle); background: #202536; cursor: not-allowed; }
 .send-button.stop { color: #ffb4bb; background: rgba(255, 105, 118, 0.16); }
-.composer-wrap > p { max-width: 860px; margin: 7px auto 0; color: var(--subtle); font-size: 11px; text-align: right; }
+.composer-wrap > p { max-width: 860px; margin: 7px auto 0; color: var(--subtle); font-size: 11px; text-align: right; overflow-wrap: anywhere; }
 .delegated-session-note { display: flex; flex: none; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 16px; padding: 14px 22px; color: var(--subtle); border-top: 1px solid var(--border); background: rgba(11, 14, 23, .88); font-size: 12px; }
 .delegated-session-note strong { color: #c9b9f2; }
 .delegated-session-note code { flex-basis: 100%; color: #9d8cff; font: 11px ui-monospace, SFMono-Regular, Consolas, monospace; overflow-wrap: anywhere; }

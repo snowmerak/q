@@ -160,16 +160,22 @@ func (control *SessionRunControl) result() error {
 // SessionHost owns process-wide dependencies shared by rendererless default
 // loop turns. Each Run opens only the requested repository and session.
 type SessionHost struct {
-	ctx           context.Context
-	runtime       *hostruntime.Runtime
-	store         config.Store
-	manager       *providerhost.Manager
-	factory       clientFactory
-	providerMu    sync.Mutex
-	providerReady bool
-	workspaceMu   sync.RWMutex
-	workspace     SessionWorkspaceResolver
-	logs          *runtimeLogBuffer
+	ctx               context.Context
+	runtime           *hostruntime.Runtime
+	store             config.Store
+	manager           *providerhost.Manager
+	factory           clientFactory
+	providerMu        sync.Mutex
+	providerReady     bool
+	workspaceMu       sync.RWMutex
+	workspace         SessionWorkspaceResolver
+	logs              *runtimeLogBuffer
+	delegationMu      sync.Mutex
+	delegationRuns    map[string]*delegationRunControl
+	delegationWG      sync.WaitGroup
+	delegationCtx     context.Context
+	delegationCancel  context.CancelFunc
+	delegationClosing bool
 }
 
 func NewSessionHost(parent context.Context, store config.Store) (*SessionHost, error) {
@@ -215,6 +221,16 @@ func (host *SessionHost) Close() error {
 	if host == nil || host.runtime == nil {
 		return nil
 	}
+	host.delegationMu.Lock()
+	host.delegationClosing = true
+	if host.delegationCancel != nil {
+		host.delegationCancel()
+	}
+	for _, run := range host.delegationRuns {
+		run.cancel(context.Canceled)
+	}
+	host.delegationMu.Unlock()
+	host.delegationWG.Wait()
 	return host.runtime.Close()
 }
 
@@ -369,6 +385,7 @@ func (host *SessionHost) run(
 		requestContext = context.Background()
 	}
 	runContext, cancelRun := context.WithCancel(requestContext)
+	runContext = context.WithValue(runContext, delegationHostKey{}, host)
 	stopHostCancellation := context.AfterFunc(host.ctx, cancelRun)
 	defer stopHostCancellation()
 	defer cancelRun()

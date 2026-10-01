@@ -185,6 +185,17 @@ func studioTestModel(w http.ResponseWriter, r *http.Request) {
 	name, arguments := "task_start", `{"objective":"Exercise Studio runtime"}`
 	if completed["task_start"] {
 		switch {
+		case strings.Contains(text, "delegate controlled work") && !completed["delegate"]:
+			name, arguments = "delegate", `{"subagent_name":"builtin/research","prompt":"controlled child"}`
+		case strings.Contains(text, "controlled child") && !strings.Contains(text, "finish"):
+			select {
+			case <-r.Context().Done():
+				return
+			case <-time.After(250 * time.Millisecond):
+			}
+			name, arguments = "read_file", `{"path":"README.md"}`
+		case strings.Contains(text, "controlled"):
+			name, arguments = "task_complete", `{"outcome":"succeeded","summary":"Controlled work finished"}`
 		case strings.Contains(text, "wait for guidance") && !completed["ask_to_user"]:
 			name, arguments = "ask_to_user", `{"question":"Which direction?","choices":[{"id":"blue","label":"Blue"},{"id":"green","label":"Green"}]}`
 		case !strings.Contains(text, "wait for guidance") && !completed["write_file"]:
@@ -447,6 +458,20 @@ func seedStudioBrowserDelegations(t *testing.T) workspace.Store {
 			t.Fatal(err)
 		}
 		parent = child
+	}
+	external := workspace.DelegationBookmark{InvocationID: "external-child", CallIndex: 1, CallID: "external", Agent: "builtin/web-search", Prompt: "External fixture", RunID: session.RunID}
+	if _, err := root.AddDelegation(external); err != nil {
+		t.Fatal(err)
+	}
+	child, err := root.ChildStore(external.InvocationID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := child.Save(workspace.Session{RunID: session.RunID, Transcript: []client.Message{{Role: client.RoleAssistant, Content: "# External fixture"}}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := child.SaveDelegationState(workspace.DelegationState{Agent: external.Agent, Kind: "external", Prompt: external.Prompt, Status: "completed", Result: &client.ToolResult{Content: "done"}}); err != nil {
+		t.Fatal(err)
 	}
 	return root
 }

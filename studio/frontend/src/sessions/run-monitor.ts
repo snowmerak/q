@@ -20,6 +20,7 @@ export function runStatusLabel(run: RunSnapshot) {
   if (run.status === 'redirecting') return 'Applying guidance…';
   if (run.status === 'completed') return run.outcome === 'succeeded' ? 'Completed' : run.outcome || 'Completed';
   if (run.status === 'cancelled') return 'Turn stopped';
+  if (run.status === 'cancelling') return 'Stopping…';
   if (run.status === 'interrupted') return 'Interrupted · send a message to recover';
   if (run.status === 'failed') return run.error || 'Turn failed';
   return run.status;

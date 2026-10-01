@@ -496,6 +496,23 @@ func TestMutatingDelegationUsesWorktreeAndMergesThroughChangeRequest(t *testing.
 	delegationGit(t, state.ChangeRequest.WorktreePath, "cat-file", "-t", state.ChangeRequest.BaseCommit)
 	delegationGit(t, state.ChangeRequest.WorktreePath, "cat-file", "-t", state.ChangeRequest.HeadCommit)
 	delegationGit(t, state.ChangeRequest.WorktreePath, "diff", "--stat", state.ChangeRequest.BaseCommit, state.ChangeRequest.HeadCommit, "--")
+	// A followup revises the same reviewable request and preserves its ownership.
+	dispatcher := runtime.(*delegationRuntime).dispatcher
+	definition, _ := dispatcher.registry.Get(subagent.BuiltinSeniorDeveloperID)
+	previousHead := state.ChangeRequest.HeadCommit
+	configuredClient.responses = []client.Message{
+		{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{planToolCall(subagent.TaskStartToolName, `{"objective":"revise child.txt"}`)}},
+		{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{planToolCall("write_file", `{"path":"child.txt","content":"revised isolated worktree"}`)}},
+		{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{planToolCall(subagent.TaskCompleteToolName, `{"outcome":"succeeded","summary":"Revise child file"}`)}},
+	}
+	updated, err := dispatcher.runStoredInner(t.Context(), definition, nil, bookmarks[0], child, state, nil, call, "", "revise child.txt")
+	if err != nil || updated.IsError {
+		t.Fatalf("followup = %#v, %v", updated, err)
+	}
+	state, err = child.LoadDelegationState()
+	if err != nil || state.ChangeRequest.ID != bookmarks[0].InvocationID || state.ChangeRequest.Status != change.StatusOpen || state.ChangeRequest.HeadCommit == previousHead {
+		t.Fatalf("revised change request = %#v, %v", state.ChangeRequest, err)
+	}
 
 	read, err := runtime.Call(t.Context(), client.ToolCall{Function: client.FunctionCall{
 		Name: subagent.ChangeRequestReadToolName, Arguments: `{"change_request_id":"` + state.ChangeRequest.ID + `"}`,
@@ -510,12 +527,25 @@ func TestMutatingDelegationUsesWorktreeAndMergesThroughChangeRequest(t *testing.
 		t.Fatalf("merge change request = %#v, err = %v", merged, err)
 	}
 	body, err := os.ReadFile(filepath.Join(repository, "child.txt"))
-	if err != nil || strings.TrimSpace(string(body)) != "isolated worktree" {
+	if err != nil || strings.TrimSpace(string(body)) != "revised isolated worktree" {
 		t.Fatalf("merged body = %q, err = %v", body, err)
 	}
 	state, err = child.LoadDelegationState()
 	if err != nil || state.ChangeRequest == nil || state.ChangeRequest.Status != change.StatusMerged {
 		t.Fatalf("merged state = %#v, err = %v", state.ChangeRequest, err)
+	}
+	// A completed lease can be reopened after merge, without losing the child ID.
+	configuredClient.responses = []client.Message{
+		{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{planToolCall(subagent.TaskStartToolName, `{"objective":"check merged work"}`)}},
+		{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{planToolCall(subagent.TaskCompleteToolName, `{"outcome":"succeeded","summary":"No further changes"}`)}},
+	}
+	updated, err = dispatcher.runStoredInner(t.Context(), definition, nil, bookmarks[0], child, state, nil, call, "", "check merged work")
+	if err != nil || updated.IsError {
+		t.Fatalf("followup after merge = %#v, %v", updated, err)
+	}
+	state, err = child.LoadDelegationState()
+	if err != nil || state.ChangeRequest.ID != bookmarks[0].InvocationID || state.ChangeRequest.Status != change.StatusClosed {
+		t.Fatalf("closed change request = %#v, %v", state.ChangeRequest, err)
 	}
 }
 

@@ -172,6 +172,18 @@ assistant/도구 추적을 표시한다. `ctrl+g`로 추적을 접거나 펼칠 
 진행 중인 일반 `delegate` 호출은 부모·자식 세션 트리와 북마크로 복구한다.
 저장 형식과 재시작 순서는 [중첩 delegate 세션과 재귀 복구](delegation-session-recovery.md)에 정리했다.
 
+Studio에서는 내부 자식 세션을 선택해 채팅과 pause/resume/stop을 사용할 수 있다.
+실행 중 메시지는 현재 도구 호출이 끝난 뒤 자식 문맥에 저장하고 적용한다. 일시정지
+중 메시지를 보내면 재개한다. 자식의 stop은 그 자식과 하위 실행만 취소하며, 부모에는
+blocked 결과를 반환한다. 실행 ID를 검사하므로 이전 화면의 명령이 다음 실행을
+중단하지 않는다. 외부 ACP 자식은 조회만 가능하며 서버에서도 제어 명령을 거부한다.
+
+중단·완료 후에도 같은 자식의 대화 이력으로 후속 메시지를 보낼 수 있다. 부모가 결과를
+저장하고 해당 root session의 실행을 마친 뒤 시작하며, 후속 실행 동안도 root session
+잠금을 유지한다. 기존 모델과 역할별 도구·위임 권한을 확인하고, 이미 부모에게 전달한
+결과는 바꾸지 않는다. 중단 시 결과를 저장하지 못한 도구는 unknown으로 닫아 재실행하지
+않는다. 완료 후에는 새 task_start와 별도의 라운드 한도로 이어간다.
+
 ## Git worktree와 변경 요청
 
 Git branch를 checkout한 디렉터리에서 workspace 변경 가능성이 있는 inner subagent를
@@ -202,8 +214,10 @@ merge 전에는 부모가 여전히 같은 branch와 base commit에 있고 clean
 변경을 먼저 검토·병합하고, 그 결과를 자신의 Change Request로 상위에 제출할 수 있다.
 
 현재 자동 격리는 저장된 일반 session의 inner delegation에 적용된다. 명시적
-`/subagent` 단독 호출, external ACP agent, 같은 Change Request에 수정 요청을 돌려보내는
-iteration, Studio의 수동 merge 버튼과 orphan lease reconciliation은 후속 범위다.
+Studio의 자식 후속 메시지는 열린 Change Request의 worktree를 이어서 수정하고 다시
+제출한다. 병합·종료된 요청은 같은 자식 ID로 새 worktree를 준비한다. 명시적 `/subagent`
+단독 호출, external ACP agent, Studio의 수동 merge 버튼과 orphan lease reconciliation은
+후속 범위다.
 
 ## 도구와 변경 권한
 

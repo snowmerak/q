@@ -67,11 +67,12 @@ export type ChangeRequest = {
 };
 export type DelegationNode = {
   bookmark: { invocation_id: string; agent: string; prompt: string; working_directory?: string; task_id?: string; parent_id?: string };
-  state?: { status: string; task_id?: string; parent_id?: string; model?: string; running_call?: { name: string; call_id: string }; unknown_tools?: { name: string; call_id: string }[]; change_request?: ChangeRequest };
+  state?: { status: string; kind?: string; task_id?: string; parent_id?: string; model?: string; running_call?: { name: string; call_id: string }; unknown_tools?: { name: string; call_id: string }[]; change_request?: ChangeRequest };
   transcript?: Message[];
   children?: DelegationNode[];
   issue?: string;
 };
+export type DelegationSession = { node: DelegationNode; kind: string; run?: { id: string; status: string; error?: string } };
 export type FlatDelegation = DelegationNode & { depth: number; path: string };
 export type RegisteredSessionTree = {
   registration_id: string;

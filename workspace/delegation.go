@@ -12,6 +12,7 @@ import (
 
 	"github.com/snowmerak/q/change"
 	"github.com/snowmerak/q/client"
+	"github.com/snowmerak/q/internal/fsopen"
 	"github.com/snowmerak/q/internal/fsreplace"
 )
 
@@ -47,6 +48,7 @@ type delegationBookmarks struct {
 type DelegationState struct {
 	Version          int                  `json:"version"`
 	Agent            string               `json:"agent"`
+	Kind             string               `json:"kind,omitempty"`
 	Prompt           string               `json:"prompt"`
 	WorkingDirectory string               `json:"working_directory,omitempty"`
 	RunID            string               `json:"run_id"`
@@ -57,6 +59,7 @@ type DelegationState struct {
 	Candidate        int                  `json:"candidate,omitempty"`
 	ConversationID   string               `json:"conversation_id,omitempty"`
 	Round            int                  `json:"round,omitempty"`
+	TurnStartRound   int                  `json:"turn_start_round,omitempty"`
 	Reminders        int                  `json:"reminders,omitempty"`
 	Started          bool                 `json:"started,omitempty"`
 	Status           string               `json:"status"`
@@ -244,7 +247,10 @@ func (s Store) LoadDelegationState() (DelegationState, error) {
 }
 
 func validateDelegationState(state DelegationState) error {
-	if state.Agent == "" || state.Prompt == "" || state.Round < 0 || state.Reminders < 0 {
+	if state.Kind != "" && state.Kind != "inner" && state.Kind != "external" {
+		return errors.New("workspace: invalid delegation kind")
+	}
+	if state.Agent == "" || state.Prompt == "" || state.Round < 0 || state.Reminders < 0 || state.TurnStartRound < 0 || state.TurnStartRound > state.Round {
 		return errors.New("workspace: invalid delegation state")
 	}
 	switch state.Status {
@@ -288,7 +294,7 @@ func (s Store) clearDelegationState() error {
 }
 
 func readDelegationJSON(path string, target any) error {
-	file, err := os.Open(path)
+	file, err := fsopen.Open(path)
 	if err != nil {
 		return err
 	}

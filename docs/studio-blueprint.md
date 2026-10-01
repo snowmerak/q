@@ -526,8 +526,9 @@ event 순서를 복구하며, 일상 대화와 변경 검토에 TUI가 필요하
 - run/parent/task 식별자와 worker heartbeat.
 - 등록된 root와 nested child session을 전역 navigation tree로 유지한다.
 - 여러 동시 run의 node별 timeline, 로그와 tool/agent 상세 화면.
-- child session과 delegation recovery를 Studio projection에 연결한다. child의 직접 개입은
-  parent ownership과 recovery 계약을 보존하는 command로 추가한다.
+- child session과 delegation recovery를 Studio projection에 연결했다. 내부 child는
+  guidance와 pause/resume/stop, 중단·완료 후 후속 메시지를 지원한다. 후속 실행은 root
+  session 잠금을 획득하고 이미 전달한 부모 결과를 보존한다. 외부 ACP child는 조회만 가능하다.
 - usage, error와 duration 요약.
 
 완료 기준: 부모→자식→손자 호출을 실행 중과 재시작 후 같은 관계로 조회하고, 각

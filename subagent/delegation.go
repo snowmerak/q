@@ -485,18 +485,24 @@ type GeneralRunner struct {
 	TaskID                               string
 	Resume                               *GeneralRunState
 	Checkpoint                           func(GeneralRunState) error
+	Control                              *RunControl
+	Followup                             string
 }
 
 // GeneralRunState is a full, provider-neutral child checkpoint. Transcript is
 // append-only; Context may be compacted for the next model request.
 type GeneralRunState struct {
-	Transcript []client.Message
-	Context    []client.Message
-	Round      int
-	Started    bool
-	Reminders  int
-	Spec       SpecCheckpoint
+	Transcript     []client.Message
+	Context        []client.Message
+	Round          int
+	TurnStartRound int
+	Started        bool
+	Reminders      int
+	Spec           SpecCheckpoint
 }
+
+// FollowupMessageName marks a new user turn in a saved child conversation.
+const FollowupMessageName = "q_followup"
 
 func (r GeneralRunner) Run(ctx context.Context, prompt string) (result TaskResult, runErr error) {
 	if ctx == nil || r.Client == nil {
@@ -583,9 +589,29 @@ func (r GeneralRunner) Run(ctx context.Context, prompt string) (result TaskResul
 	state := GeneralRunState{Transcript: append([]client.Message(nil), messages...), Context: append([]client.Message(nil), messages...), Spec: r.Spec.Checkpoint()}
 	if r.Resume != nil {
 		state = *r.Resume
+		state.Transcript = append([]client.Message(nil), state.Transcript...)
+		state.Context = append([]client.Message(nil), state.Context...)
 		if len(state.Transcript) < 2 || len(state.Context) < 2 || state.Transcript[1].TextContent() != prompt {
 			return TaskResult{}, errors.New("subagent: saved child conversation does not match request")
 		}
+	}
+	if r.Followup != "" {
+		if _, completed := savedGeneralCompletion(state.Transcript); completed {
+			state.Started = false
+		}
+		// A stopped operation may have executed before cancellation. Close its
+		// exchange as unknown instead of replaying effects ahead of new guidance.
+		calls, completed := pendingGeneralTools(state.Transcript)
+		for _, call := range calls[completed:] {
+			message := client.ToolResultMessage(call, client.ToolResult{Content: `{"status":"unknown","detail":"execution was interrupted before this result was saved"}`, IsError: true})
+			state.Transcript = append(state.Transcript, message)
+			state.Context = append(state.Context, message)
+		}
+		message := client.Message{Role: client.RoleUser, Name: FollowupMessageName, Content: r.Followup}
+		state.Transcript = append(state.Transcript, message)
+		state.Context = append(state.Context, message)
+		state.Reminders = 0
+		state.TurnStartRound = state.Round
 	}
 	history := NewContextCompactor(r.Spec, state.Context, available, 2)
 	// GeneralRunState.Started remains authoritative across compaction and
@@ -599,7 +625,7 @@ func (r GeneralRunner) Run(ctx context.Context, prompt string) (result TaskResul
 		}
 		return nil
 	}
-	if r.Resume == nil {
+	if r.Resume == nil || r.Followup != "" {
 		if err := checkpoint(); err != nil {
 			return TaskResult{}, err
 		}
@@ -627,7 +653,7 @@ func (r GeneralRunner) Run(ctx context.Context, prompt string) (result TaskResul
 		return checkpoint()
 	}
 	for {
-		if err = ctx.Err(); err != nil {
+		if err = r.Control.wait(ctx); err != nil {
 			return TaskResult{}, err
 		}
 		// A saved assistant turn must be drained before another model request.
@@ -639,6 +665,9 @@ func (r GeneralRunner) Run(ctx context.Context, prompt string) (result TaskResul
 			}
 			continue
 		}
+		if err := r.applyGuidance(&state, history, lifecycle, checkpoint); err != nil {
+			return TaskResult{}, err
+		}
 		if len(state.Transcript) > 0 {
 			last := state.Transcript[len(state.Transcript)-1]
 			if last.Role == client.RoleAssistant && len(last.ToolCalls) == 0 {
@@ -648,7 +677,7 @@ func (r GeneralRunner) Run(ctx context.Context, prompt string) (result TaskResul
 				continue
 			}
 		}
-		if state.Round >= rounds {
+		if state.Round-state.TurnStartRound >= rounds {
 			break
 		}
 		beforeContext := history.Messages()
@@ -714,10 +743,17 @@ func (r GeneralRunner) Run(ctx context.Context, prompt string) (result TaskResul
 func savedGeneralCompletion(messages []client.Message) (TaskResult, bool) {
 	for index := len(messages) - 1; index >= 0; index-- {
 		message := messages[index]
+		if message.Role == client.RoleUser {
+			return TaskResult{}, false
+		}
 		if message.Role != client.RoleAssistant || len(message.ToolCalls) != 1 || message.ToolCalls[0].Function.Name != TaskCompleteToolName {
 			continue
 		}
 		if len(messages[index+1:]) < 2 || messages[index+1].Role != client.RoleTool || messages[index+1].ToolCallID != message.ToolCalls[0].ID {
+			return TaskResult{}, false
+		}
+		var saved TaskResult
+		if json.Unmarshal([]byte(messages[index+1].Content), &saved) != nil || saved.Outcome == "" {
 			return TaskResult{}, false
 		}
 		last := messages[len(messages)-1]
@@ -752,6 +788,9 @@ func pendingGeneralTools(messages []client.Message) ([]client.ToolCall, int) {
 func (r *GeneralRunner) completeGeneralCalls(ctx context.Context, state *GeneralRunState, history *ContextCompactor, available []client.Tool, taskID string, lifecycle *Lifecycle, started *bool, checkpoint func() error) (TaskResult, bool, error) {
 	calls, completed := pendingGeneralTools(state.Transcript)
 	for index := completed; index < len(calls); index++ {
+		if err := r.Control.wait(ctx); err != nil {
+			return TaskResult{}, false, err
+		}
 		call := calls[index]
 		recovering := r.Resume != nil && index == completed && state.Round <= r.Resume.Round
 		reportProgress(r.Progress, ProgressEvent{Agent: r.Definition.Info.Name, TaskID: taskID, ParentID: r.ParentID, Action: ProgressTool, Detail: call.Function.Name})
@@ -777,6 +816,8 @@ func (r *GeneralRunner) completeGeneralCalls(ctx context.Context, state *General
 		case TaskCompleteToolName:
 			if !*started {
 				toolResult = scoutToolError(errors.New("task_complete requires task_start"))
+			} else if r.Control.hasGuidance() {
+				toolResult = scoutToolError(errors.New("new user guidance is pending; address it before completing the task"))
 			} else if len(calls) != 1 {
 				toolResult = scoutToolError(errors.New("task_complete must be the only tool call in its turn"))
 			} else {

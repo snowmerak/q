@@ -12,7 +12,7 @@
   import { apiError } from './api';
   import { contextPercent, formatTokenCount, shortID } from './sessions/format';
   import { RunMonitor, runStatusLabel, terminalRun } from './sessions/run-monitor';
-  import type { DelegationNode, FlatDelegation, Message, RegisteredSessionTree, RunEvent, RunSnapshot, SessionDetail, StudioProject } from './sessions/types';
+  import type { DelegationNode, DelegationSession, FlatDelegation, Message, RegisteredSessionTree, RunEvent, RunSnapshot, SessionDetail, StudioProject } from './sessions/types';
 
   export let openChanges: (workspaceRoot: string) => void = () => {};
 
@@ -21,6 +21,8 @@
   let projects: StudioProject[] = [];
   let selectedRegistration: RegisteredSessionTree | null = null;
   let selectedDelegation: FlatDelegation | null = null;
+  let delegationKind = '';
+  let delegationPoll: AbortController | null = null;
   let selected: SessionDetail | null = null;
   let messages: Message[] = [];
   let prompt = '';
@@ -100,6 +102,11 @@
 
   function isCurrentSession(generation: number) {
     return generation === sessionGeneration;
+  }
+
+  function stopDelegationMonitor() {
+    delegationPoll?.abort();
+    delegationPoll = null;
   }
 
   function sessionFromLocation() {
@@ -203,6 +210,8 @@
   function clearSelectedSession() {
     sessionGeneration += 1;
     runMonitor.stop();
+    stopDelegationMonitor();
+    stopDelegationMonitor();
     selectedRegistration = null;
     selectedDelegation = null;
     selected = null;
@@ -294,11 +303,7 @@
       const query = new URLSearchParams({ workspace_root: workspaceRoot, path: selectedDelegation.path });
       const response = await fetch(`/api/v1/sessions/${encodeURIComponent(selected.session.session_id)}/delegations?${query}`, { method: 'DELETE' });
       if (!response.ok) throw new Error(await apiError(response));
-      selectedDelegation = null;
-      messages = selected.transcript;
-      events = [];
-      responseDraft = '';
-      thinkingDraft = '';
+      if (selectedRegistration) await selectRegisteredSession(selectedRegistration, false);
       runStatus = 'Completed delegation deleted';
       await loadDelegations(selected.session.session_id);
       await scrollToBottom();
@@ -347,6 +352,9 @@
   async function selectRegisteredSession(registration: RegisteredSessionTree, push = true) {
     const generation = ++sessionGeneration;
     runMonitor.stop();
+    stopDelegationMonitor();
+    activeRun = null;
+    sending = false;
     sessionLoading = true;
     error = '';
     try {
@@ -383,24 +391,98 @@
 
   function selectDelegatedSession(registration: RegisteredSessionTree, node: FlatDelegation) {
     if (selectedRegistration?.registration_id !== registration.registration_id) return;
+    const generation = ++sessionGeneration;
+    runMonitor.stop();
+    stopDelegationMonitor();
+    activeRun = null;
+    sending = false;
+    sessionLoading = true;
+    error = '';
+    prompt = '';
+    questionAnswer = '';
+    delegationKind = '';
     selectedDelegation = node;
     messages = node.transcript || [];
     events = [];
     responseDraft = '';
     thinkingDraft = '';
     runStatus = node.state?.status || 'Recorded';
+    const controller = new AbortController();
+    delegationPoll = controller;
+    void monitorDelegation(registration, node.path, generation, controller.signal);
     void scrollToBottom();
+  }
+
+  function applyDelegationSession(value: DelegationSession) {
+    if (!selectedDelegation) return;
+    selectedDelegation = { ...selectedDelegation, ...value.node };
+    delegationKind = value.kind;
+    messages = value.node.transcript || [];
+    activeRun = value.run ? { ...value.run, session_id: value.node.bookmark.invocation_id, cursor: 0 } : null;
+    sending = !!activeRun && !terminalRun(activeRun.status);
+    runStatus = activeRun ? runStatusLabel(activeRun) : value.node.state?.status || 'Recorded';
+  }
+
+  async function monitorDelegation(registration: RegisteredSessionTree, path: string, generation: number, signal: AbortSignal) {
+    const query = new URLSearchParams({ workspace_root: registration.workspace_root, path });
+    let first = true;
+    while (!signal.aborted) {
+      try {
+        const response = await fetch(`/api/v1/sessions/${encodeURIComponent(registration.session.session_id)}/delegations/session?${query}`, { signal });
+        if (!response.ok) throw new Error(await apiError(response));
+        const value = await response.json() as DelegationSession;
+        if (signal.aborted || !isCurrentSession(generation)) return;
+        applyDelegationSession(value);
+        if (first) sessionLoading = false;
+        first = false;
+        await loadDelegations();
+      } catch (cause) {
+        if (signal.aborted || !isCurrentSession(generation)) return;
+        error = cause instanceof Error ? cause.message : 'Could not load the delegated session';
+        if (first) sessionLoading = false;
+        first = false;
+      }
+      await new Promise<void>((resolve) => {
+        const finish = () => { clearTimeout(timer); signal.removeEventListener('abort', finish); resolve(); };
+        const timer = setTimeout(finish, 1000);
+        signal.addEventListener('abort', finish, { once: true });
+        if (signal.aborted) finish();
+      });
+    }
   }
 
   async function sendPrompt() {
     const content = prompt.trim();
     if (!selected || !workspaceRoot || !content || sessionLoading) return;
     const generation = sessionGeneration;
+    if (selectedDelegation && delegationKind !== 'inner') return;
+    if (selectedDelegation && !sending) {
+      error = '';
+      sessionLoading = true;
+      try {
+        const response = await fetch(`/api/v1/sessions/${encodeURIComponent(selected.session.session_id)}/delegations/commands`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ workspace_root: workspaceRoot, path: selectedDelegation.path, action: 'message', content })
+        });
+        if (!response.ok) throw new Error(await apiError(response));
+        const value = await response.json() as DelegationSession;
+        if (!isCurrentSession(generation)) return;
+        applyDelegationSession(value);
+        prompt = '';
+      } catch (cause) {
+        if (isCurrentSession(generation)) error = cause instanceof Error ? cause.message : 'Could not continue this subagent';
+      } finally {
+        if (isCurrentSession(generation)) sessionLoading = false;
+      }
+      return;
+    }
     if (sending && activeRun) {
-      await commandRun('guidance', { content });
+      sessionLoading = true;
+      try { await commandRun('guidance', { content }); }
+      finally { if (isCurrentSession(generation)) sessionLoading = false; }
       if (isCurrentSession(generation) && !error) {
         prompt = '';
-        runStatus = 'Guidance queued…';
+        runStatus = selectedDelegation ? 'Guidance sent' : 'Guidance queued…';
       }
       return;
     }
@@ -505,8 +587,11 @@
   }
 
   function scheduleDelegationRefresh() {
-    if (delegationRefresh) clearTimeout(delegationRefresh);
-    delegationRefresh = setTimeout(() => { void loadDelegations(); }, 500);
+    if (delegationRefresh) return;
+    delegationRefresh = setTimeout(() => {
+      delegationRefresh = null;
+      void loadDelegations();
+    }, 500);
   }
 
   async function refreshSessionListOnly() {
@@ -525,6 +610,17 @@
     error = '';
     const generation = sessionGeneration;
     try {
+      if (selectedDelegation) {
+        if (delegationKind !== 'inner') return;
+        const response = await fetch(`/api/v1/sessions/${encodeURIComponent(selected.session.session_id)}/delegations/commands`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ workspace_root: workspaceRoot, path: selectedDelegation.path, run_id: activeRun.id, action, ...extra })
+        });
+        if (!response.ok) throw new Error(await apiError(response));
+        const value = await response.json() as DelegationSession;
+        if (isCurrentSession(generation)) applyDelegationSession(value);
+        return;
+      }
       const response = await fetch(`/api/v1/sessions/${encodeURIComponent(selected.session.session_id)}/runs/${encodeURIComponent(activeRun.id)}/commands`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ workspace_root: workspaceRoot, action, ...extra })
@@ -577,6 +673,7 @@
     return () => {
       sessionGeneration += 1;
       runMonitor.stop();
+      stopDelegationMonitor();
       if (delegationRefresh) clearTimeout(delegationRefresh);
       window.removeEventListener('popstate', onPopState);
     };
@@ -617,6 +714,8 @@
             <button title="Compact context" aria-label="Compact context" onclick={compactSession} disabled={sending || sessionLoading}><Minimize2 aria-hidden="true" size={15} /></button>
             <button title="Clear conversation" aria-label="Clear conversation" onclick={clearSession} disabled={sending || sessionLoading}><Eraser aria-hidden="true" size={15} /></button>
             <button title="Delete workspace session" aria-label="Delete workspace session" onclick={deleteSession} disabled={sending || sessionLoading}><Trash2 aria-hidden="true" size={14} /></button>
+          {/if}
+          {#if !selectedDelegation || delegationKind === 'inner'}
             {#if sending && activeRun?.status === 'paused'}<button title="Resume turn" aria-label="Resume turn" onclick={() => commandRun('resume')}><Play aria-hidden="true" size={15} /></button>{:else if sending}<button title="Pause turn" aria-label="Pause turn" onclick={() => commandRun('pause')}><Pause aria-hidden="true" size={15} /></button>{/if}
             {#if sending}<button class="stop-control" title="Stop turn" aria-label="Stop turn" onclick={stopTurn}><Square aria-hidden="true" size={13} fill="currentColor" /></button>{/if}
           {/if}
@@ -630,8 +729,13 @@
           <div class="question-answer"><input bind:value={questionAnswer} placeholder="Write an answer…" onkeydown={(event) => event.key === 'Enter' && answerQuestion()} /><button class="primary-button" onclick={() => answerQuestion()} disabled={!questionAnswer.trim()}>Answer</button></div>
         </section>
       {/if}
-      {#if selectedDelegation}
-        <div class="delegated-session-note"><strong>Delegated session</strong><span>This transcript belongs to the selected child invocation. Interaction remains owned by its parent session.</span>{#if selectedDelegation.state?.change_request}<code>Change request {selectedDelegation.state.change_request.status} · {selectedDelegation.state.change_request.head_ref} · {shortID(selectedDelegation.state.change_request.base_commit)} → {shortID(selectedDelegation.state.change_request.head_commit || 'working')}</code>{/if}</div>
+      {#if selectedDelegation?.state?.change_request}
+        <div class="delegated-session-note"><code>Change request {selectedDelegation.state.change_request.status} · {selectedDelegation.state.change_request.head_ref} · {shortID(selectedDelegation.state.change_request.base_commit)} → {shortID(selectedDelegation.state.change_request.head_commit || 'working')}</code></div>
+      {/if}
+      {#if selectedDelegation && !delegationKind}
+        <div class="delegated-session-note"><span>Loading delegated session…</span></div>
+      {:else if selectedDelegation && delegationKind !== 'inner'}
+        <div class="delegated-session-note"><strong>External ACP session</strong><span>Chat and execution controls are unavailable for external ACP sessions.</span></div>
       {:else}
         <div class="composer-wrap">
           <div class="composer">
