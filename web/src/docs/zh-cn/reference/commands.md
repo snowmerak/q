@@ -49,7 +49,7 @@ toc:
 | `q library start` | 让全局 Library 作为前台服务持续运行。 |
 | `q memory` | 让 Workspace Memory 独立运行。 |
 | `q usage` | 打开 Studio 的 Operations。 |
-| `q commit` | 在 Studio Changes 和提交审查中打开当前仓库。 |
+| `q commit` | 在当前仓库启动交互式终端提交会话，生成、审查、编辑并批准提交提案。 |
 | `q model` | 在 Studio 中打开全局和工作区模型分配。 |
 | `q subagents` | 在 Studio 中打开子代理配置和 ACP 绑定。 |
 | `q skills` | 在 Studio 中打开 Agent Skills。 |

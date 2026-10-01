@@ -1,0 +1,136 @@
+export type Command = { command: string; action: string; studio: string };
+export type ShortcutGroup = { title: string; keys: [string, string][] };
+
+// Checked against cmd/q/main.go, app/slash_commands.go and the owning key
+// handlers. Studio's SessionHost passes chat text directly to the default loop;
+// terminal slash commands are documented with their separate Web controls.
+export const cli: Command[] = [
+  { command: 'q', action: 'Open the terminal session picker and default chat loop in the current directory.', studio: 'Sessions · register or create a root session' },
+  { command: 'q studio [--host <ip>] [--port <port>] [--no-open]', action: 'Start Studio. Defaults: 127.0.0.1, random port, open the browser. --port 0 also selects a random port; --no-open keeps the server running without opening a browser.', studio: 'Entire Studio' },
+  { command: 'q commit', action: 'Start an interactive commit session in this terminal: generate, review, edit, approve, and optionally push proposals for the current repository.', studio: 'Changes · commit review' },
+  { command: 'q model', action: 'Open model assignments for global roles and the current workspace, including embeddings and fallback groups.', studio: 'Settings · Models' },
+  { command: 'q gateway', action: 'Open Gateway provider and listener configuration.', studio: 'Settings · Providers / Services' },
+  { command: 'q gateway start [--host <ip>] [--port <port>]', action: 'Serve the OpenAI-compatible Gateway in the foreground. Flags override configured listener settings; --port 0 chooses a random port.', studio: 'Operations · service health' },
+  { command: 'q systemone', action: 'Open decision providers, role models, listener settings, and optional client authentication keys.', studio: 'Settings · System One' },
+  { command: 'q systemone start [--host <ip>] [--port <port>]', action: 'Serve the System One decision API in the foreground, using configured settings unless overridden.', studio: 'Operations · service health' },
+  { command: 'q library', action: 'Open global Library listener settings.', studio: 'Settings · Services' },
+  { command: 'q library start', action: 'Run the global Library as a foreground service.', studio: 'Operations' },
+  { command: 'q memory', action: 'Run Workspace Memory as a foreground service.', studio: 'Operations' },
+  { command: 'q usage', action: 'Open usage, runtime services, logs, and retention controls.', studio: 'Operations' },
+  { command: 'q subagents', action: 'Open agent profiles, delegation permissions, external bindings, and ACP connections.', studio: 'Settings · Subagents' },
+  { command: 'q agents', action: 'Compatibility alias for q subagents.', studio: 'Settings · Subagents' },
+  { command: 'q skills', action: 'Open global and current-workspace skill catalogs and Git management.', studio: 'Settings · Integrations · Skills' },
+  { command: 'q mcp', action: 'Open external MCP servers and role assignments.', studio: 'Settings · Integrations · MCP' },
+  { command: 'q lsp', action: 'Open language servers and workspace project roots.', studio: 'Settings · Integrations · LSP' },
+  { command: 'q ignore', action: 'Open the current workspace’s .qignore discovery rules.', studio: 'Settings · Integrations · Ignore' },
+  { command: 'q help', action: 'Open this Studio guide.', studio: 'Help' },
+  { command: 'q acp [--root <path>]', action: 'Serve Q as an ACP agent over stdin/stdout. Workspace root defaults to the current directory.', studio: 'External ACP clients' },
+  { command: 'q-mcp [--root <path>]', action: 'Expose Q’s builtin tools as a stdio MCP server. Root defaults to the current directory.', studio: 'External MCP clients' },
+];
+
+export const slash: Command[] = [
+  { command: '/new', action: 'Create and switch to a new terminal workspace session.', studio: 'Sessions · Add or create session' },
+  { command: '/sessions', action: 'Resume or manage a saved terminal workspace session.', studio: 'Sessions · session tree / root registration' },
+  { command: '/clear', action: 'Clear the current conversation in place.', studio: 'Sessions · Clear conversation' },
+  { command: '/compact', action: 'Summarize older model context while retaining the transcript.', studio: 'Sessions · Compact context' },
+  { command: '/learn', action: 'Queue a learning checkpoint when learning is enabled.', studio: 'Sessions · Learning / Settings · Runtime' },
+  { command: '/learn on|off|status', action: 'Enable, disable, or inspect durable learning for this workspace.', studio: 'Sessions · Learning toggle' },
+  { command: '/commit', action: 'Open the interactive commit proposal and approval session.', studio: 'Changes · commit review' },
+  { command: '/changes', action: 'Browse staged, unstaged, and untracked diffs without modifying files.', studio: 'Changes / Sessions · Repository changes' },
+  { command: '/model', action: 'Assign chat, embedding, and role models; manage custom roles and fallback groups.', studio: 'Settings · Models' },
+  { command: '/gateway', action: 'Configure providers, listener, and Gateway API keys.', studio: 'Settings · Providers / Services' },
+  { command: '/systemone', action: 'Configure decision providers, models, listener, and optional client keys.', studio: 'Settings · System One' },
+  { command: '/library', action: 'Configure global Library listener defaults.', studio: 'Settings · Services' },
+  { command: '/loom', action: 'Inspect storage and configure garbage collection.', studio: 'Settings · Runtime / Operations · retention' },
+  { command: '/ignore', action: 'Edit workspace discovery rules in .qignore.', studio: 'Settings · Integrations · Ignore' },
+  { command: '/skills', action: 'Browse and manage global/workspace skills, including embedding reindexing.', studio: 'Settings · Integrations · Skills' },
+  { command: '/skills add <global|workspace> <git-url>', action: 'Clone a Git-managed skill into the selected scope.', studio: 'Settings · Integrations · Skills · Add' },
+  { command: '/skills update <skill-id|name>', action: 'Pull updates for a Git-managed skill.', studio: 'Settings · Integrations · Skills · Pull' },
+  { command: '/skills remove <skill-id|name>', action: 'Remove a Git-managed skill.', studio: 'Settings · Integrations · Skills · Remove' },
+  { command: '/lsp', action: 'Configure global language servers and workspace roots.', studio: 'Settings · Integrations · LSP' },
+  { command: '/mcp', action: 'Configure external MCP servers, environment grants, and role assignments.', studio: 'Settings · Integrations · MCP' },
+  { command: '/subagents', action: 'Open profile, external binding, and ACP connection management.', studio: 'Settings · Subagents' },
+  { command: '/subagents list', action: 'List available builtin, custom, and external agents.', studio: 'Settings · Subagents · Profiles' },
+  { command: '/subagents show <name>', action: 'Inspect the selected agent definition and permissions.', studio: 'Settings · Subagents · Profiles' },
+  { command: '/subagent <name> <request>', action: 'Invoke a builtin or custom subagent with an explicit task, for example /subagent builtin/manager investigate this change.', studio: 'Sessions · ask the default loop to delegate; follow the child tree' },
+  { command: '/help', action: 'Open terminal help.', studio: 'Help' },
+];
+
+export const studioKeys: ShortcutGroup[] = [{ title: 'Studio keyboard', keys: [
+  ['Enter', 'Send a chat message, or submit guidance during an active turn. Enter in a question input submits the answer.'],
+  ['Shift + Enter', 'Insert a line break in the chat composer.'],
+  ['Ctrl/Cmd + K', 'Focus the active Studio navigation button.'],
+  ['?', 'Open Help when focus is outside an input, textarea, select, or editable text.'],
+  ['Escape', 'Close the folder browser, project dialog, or session registration dialog. The folder browser closes first when nested.'],
+  ['Tab / Shift + Tab', 'Move between native buttons and fields; Enter or Space activates the focused button.'],
+  ['Page Up / Page Down · Home / End', 'Scroll the focused Help region using the browser’s native keyboard controls.'],
+] }];
+
+export const terminalKeys: ShortcutGroup[] = [
+  { title: 'Terminal chat', keys: [
+    ['Enter / Ctrl + S', 'Send the current message or answer a pending question.'],
+    ['Shift + Enter', 'Insert a newline.'],
+    ['Ctrl + O', 'Collapse or expand all tool result bodies in chat and agent traces.'],
+    ['Ctrl + G', 'Expand or collapse the detailed subagent trace.'],
+    ['Ctrl + L', 'Clear the current conversation while idle; ACP clients start a new remote session.'],
+    ['Ctrl + P', 'Open Gateway configuration while idle. A connected ACP agent controls its own model.'],
+    ['Ctrl + H', 'Open or close terminal Help.'],
+    ['Ctrl + C', 'Interrupt an active chat turn; quit when idle or on another screen.'],
+    ['Escape', 'Quit terminal chat, or leave the current screen.'],
+  ] },
+  { title: 'Terminal command completion and questions', keys: [
+    ['/', 'Show slash command completion; type to filter.'],
+    ['↑ / ↓ · Shift + Tab', 'Select a completion.'],
+    ['Tab / Enter', 'Complete a selected command; Enter runs a fully typed command.'],
+    ['Escape', 'Dismiss the completion popup.'],
+    ['↑ / ↓ · Tab / Shift + Tab', 'Choose a question option when the answer input is empty.'],
+    ['Type an answer', 'Use a custom answer when the question permits it.'],
+    ['Page Up / Page Down', 'Scroll the active question, agent trace, or Help panel.'],
+    ['Home / End', 'Jump to the start or end of terminal Help.'],
+  ] },
+  { title: 'Terminal sessions', keys: [
+    ['↑ / ↓ · j / k · Tab / Shift + Tab', 'Select a saved session.'],
+    ['Enter / Space', 'Resume the selected session.'],
+    ['n', 'Create a new session.'],
+    ['d / Delete', 'Request deletion of an inactive session; y confirms, n or Escape cancels.'],
+    ['r', 'Refresh sessions and recent activity.'],
+    ['Escape', 'Return to chat, or quit the startup picker.'],
+  ] },
+  { title: 'Terminal Changes', keys: [
+    ['↑ / ↓ · j / k', 'Select a file in the file pane.'],
+    ['Tab / Shift + Tab', 'Switch between file and diff panes.'],
+    ['Enter', 'Focus the selected diff.'],
+    ['Page Up / Page Down · Home / End', 'Page or jump in the focused pane.'],
+    ['← / →', 'Scroll the focused diff horizontally.'],
+    ['r / Escape', 'Reload changes / return to chat.'],
+  ] },
+  { title: 'Terminal commit session', keys: [
+    ['↑ / ↓ · j / k', 'Select a split commit proposal.'],
+    ['e', 'Edit the selected message.'],
+    ['Ctrl + S', 'Save the message while editing; Escape discards the edit.'],
+    ['r', 'Regenerate proposals before approval.'],
+    ['Enter', 'Approve and create the proposed commit or commits.'],
+    ['p', 'Approve, commit, and push; after committing, push to the existing upstream.'],
+    ['Escape / q', 'Cancel at review, or leave the completed/failed session.'],
+    ['Ctrl + C', 'Cancel and quit the commit session.'],
+  ] },
+  { title: 'Terminal model assignments', keys: [
+    ['↑ / ↓ · ← / →', 'Select a role and global/workspace scope.'],
+    ['Enter', 'Open model selection or edit the selected value.'],
+    ['a / d', 'Add / request deletion of a custom role.'],
+    ['i / g', 'Reset an assignment / manage fallback groups.'],
+    ['Ctrl + E / Ctrl + R', 'In model selection, edit the context window / change the selected model’s API mode.'],
+  ] },
+  { title: 'Terminal settings and skill catalog', keys: [
+    ['Tab / Shift + Tab · ↑ / ↓', 'Move between settings fields; Enter edits, confirms, or saves the selected setting.'],
+    ['Skills: Tab / ← / →', 'Switch global/workspace skill scope.'],
+    ['Skills: a / u / d / r', 'Add / pull / request deletion / reload and reindex skills.'],
+    ['MCP/LSP: a / e / d', 'Add / edit / remove the selected server.'],
+    ['MCP: Space · LSP: Space / m', 'Assign a role / toggle a server or edit workspace project roots.'],
+    ['Subagents: a / c / e / d / r', 'Add / open ACP connections / edit / request deletion / reload profiles.'],
+    ['ACP connections: a / e / d / t / c', 'Add / edit / remove / toggle enabled state / probe a connection.'],
+    ['Escape', 'Return to the owning screen. The .qignore editor saves changes on exit.'],
+  ] },
+];
+
+export const acpCommands = '/commit, /learn [on|off|status], /clear, /compact, /help, /subagents [list|show <name>], /subagent <name> <request>';

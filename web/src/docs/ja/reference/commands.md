@@ -49,7 +49,7 @@ toc:
 | `q library start` | グローバル Library をフォアグラウンドで稼働させます。 |
 | `q memory` | Workspace Memory を独立して稼働させます。 |
 | `q usage` | Studio の Operations を開きます。 |
-| `q commit` | 現在のリポジトリを Studio の Changes とコミットレビューで開きます。 |
+| `q commit` | 現在のリポジトリで、コミット提案の生成・レビュー・編集・承認を行う対話型ターミナルセッションを起動します。 |
 | `q model` | Studio でグローバルとワークスペースのモデル割り当てを開きます。 |
 | `q subagents` | Studio でサブエージェントと ACP バインディングを開きます。 |
 | `q skills` | Studio で Agent Skills を開きます。 |

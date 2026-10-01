@@ -19,7 +19,9 @@ Files의 Diff는 전체 파일을 유지하면서 이전/현재 줄 번호, `+`/
 Changes는 bounded diff와 commit review/execute를 제공한다. Settings는
 global/workspace model, Gateway, System One, Library/Loom, MCP/LSP/Skill/subagent/ACP와
 `.qignore`를 같은 Go store와 validator로 편집한다. Operations는 usage, worker/service
-health, bounded log와 보존 상태를 보여주고 Help는 이전 TUI 명령의 Web 경로를 안내한다.
+health, bounded log와 보존 상태를 보여준다. Help는 CLI 명령/옵션, 터미널 slash command와
+Studio 대응 경로, Studio/터미널 단축키, 커밋 세션과 복구 방법을 안내하며 목차와 내부 스크롤을 제공한다.
+`q commit`은 터미널에서 커밋 제안 생성·검토·수정·승인 세션을 실행한다.
 독립 설정 CLI 명령은 대응 Studio route를 연다. bare `q` 대화 TUI와 ACP는 호환 경로로
 남아 같은 Agent Loop와 저장 계약을 사용한다.
 

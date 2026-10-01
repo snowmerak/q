@@ -258,7 +258,7 @@ func renderHelpContent(dark bool, commandSets ...[]slashCommand) string {
 		{"type", "Write a custom answer instead of choosing an option."},
 	})
 	writeHelpSection("COMMAND LINE", [][2]string{
-		{"q commit", "Open the current repository in Studio Changes."},
+		{"q commit", "Run the interactive commit proposal and approval session in this terminal."},
 		{"q memory", "Run Workspace Memory as a dedicated foreground service."},
 		{"q library", "Open Library configuration in Studio."},
 		{"q library start", "Run the global Library as a dedicated foreground service."},

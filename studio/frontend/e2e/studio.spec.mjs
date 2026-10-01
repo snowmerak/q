@@ -53,6 +53,56 @@ test('sidebar collapses, keeps navigation usable, and remembers its state', asyn
   }
 });
 
+test('help exposes the command reference and scrolls to every section on desktop and mobile', async ({ page }) => {
+  for (const viewport of [{ width: 1440, height: 720 }, { width: 900, height: 650 }, { width: 390, height: 844 }]) {
+    await page.setViewportSize(viewport);
+    await page.goto('/help');
+    await expect(page).toHaveURL(/\/help$/);
+    await expect(page).toHaveTitle('Q Studio');
+    await expect(page.getByRole('heading', { name: 'Help', exact: true })).toBeVisible();
+    const guide = page.getByRole('region', { name: 'Studio help guide' });
+    const index = page.getByRole('navigation', { name: 'Help sections' });
+    await expect(guide.getByRole('heading', { name: 'Sessions, commands, and everyday workflows' })).toBeVisible();
+    await expect(guide.locator('#help-cli .reference-list > div')).toHaveCount(21);
+    await expect(guide.locator('#help-slash .reference-list > div')).toHaveCount(25);
+    expect(await guide.evaluate((element) => element.scrollHeight > element.clientHeight)).toBe(true);
+    await guide.hover();
+    await page.mouse.wheel(0, 700);
+    await expect.poll(() => guide.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
+    await index.getByRole('button', { name: 'CLI commands', exact: true }).click();
+    await expect(guide.getByRole('heading', { name: 'CLI commands', exact: true })).toBeInViewport();
+    await expect(guide.locator('#help-cli')).toContainText('q commit');
+    await expect(guide.locator('#help-cli')).toContainText('interactive commit session in this terminal');
+    await index.getByRole('button', { name: 'Slash commands', exact: true }).click();
+    await expect(guide.getByRole('heading', { name: 'Slash commands', exact: true })).toBeInViewport();
+    await expect(guide.locator('#help-slash')).toContainText('Studio chat currently sends text directly to the default loop');
+    await index.getByRole('button', { name: 'Keyboard shortcuts', exact: true }).click();
+    await guide.getByText('Terminal commit session', { exact: true }).click();
+    await expect(guide.locator('details[open]')).toContainText('Approve and create the proposed commit');
+    await index.getByRole('button', { name: 'Commit session', exact: true }).click();
+    await expect(guide.getByRole('heading', { name: 'Commit session', exact: true })).toBeInViewport();
+    await index.getByRole('button', { name: 'Files', exact: true }).click();
+    await expect(guide.getByRole('heading', { name: 'Files: Raw and Diff', exact: true })).toBeInViewport();
+    await index.getByRole('button', { name: 'Recovery', exact: true }).click();
+    await expect(guide.getByRole('heading', { name: 'Recovery', exact: true })).toBeInViewport();
+    await guide.focus();
+    await guide.press('Home');
+    await expect.poll(() => guide.evaluate((element) => element.scrollTop)).toBe(0);
+    await guide.press('End');
+    await expect(guide.getByText('Service unavailable', { exact: true })).toBeInViewport();
+    await guide.press('Home');
+    await expect.poll(() => guide.evaluate((element) => element.scrollTop)).toBe(0);
+    await page.evaluate(() => window.scrollTo(0, 0));
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+    await page.screenshot({ path: join(tmpdir(), `q-studio-help-${viewport.width}.png`) });
+  }
+  await page.goto('/sessions');
+  await page.keyboard.press('?');
+  await expect(page.getByRole('heading', { name: 'Help', exact: true })).toBeVisible();
+  await page.keyboard.press('Control+k');
+  await expect(page.getByRole('complementary', { name: 'Studio navigation' }).getByRole('button', { name: 'Help', exact: true })).toBeFocused();
+});
+
 test('project selection refreshes workspaces and clears the previous selection', async ({ page, request }) => {
   const fixture = await (await request.get('/_test/fixture')).json();
   await page.getByTitle('Add or create session').click();

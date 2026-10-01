@@ -145,6 +145,8 @@ nav button.active::before {
 .status-dot.online { background: var(--green); box-shadow: 0 0 12px rgba(67, 230, 162, 0.35); }
 
 main { grid-row: 1; min-width: 0; padding: 0 28px 32px; }
+main.help-main { display: flex; min-height: 0; flex-direction: column; overflow: hidden; padding-bottom: 0; }
+main.help-main > .page-header { flex: none; }
 
 .page-header {
   display: flex;

@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/snowmerak/q/app"
+	"github.com/snowmerak/q/commitagent"
 	"github.com/snowmerak/q/config"
 	qlibrary "github.com/snowmerak/q/library"
 	"github.com/snowmerak/q/loom"
@@ -157,7 +158,7 @@ func main() {
 		}
 		directory, err := os.Getwd()
 		if err == nil {
-			err = runStudioCommandAt(ctx, studioWorkspacePath("/changes", "", directory))
+			_, err = commitagent.RunDefault(ctx, directory, os.Stdout)
 		}
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)

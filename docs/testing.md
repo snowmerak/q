@@ -101,6 +101,12 @@ directory pagination and symlink escapes, with read-only index verification.
 Full-file Diff assertions retain unchanged first/last lines, check real old/new
 line numbers and gutter markers around additions and removals, preserve multiline
 syntax highlighting, and switch between HEAD/worktree and index comparisons.
+Help tests cover command reference completeness, section navigation, wheel and
+Home/End scrolling, terminal shortcut disclosure, and Studio navigation shortcuts
+at 1440px, 900px, and 390px widths. The CLI commit regression executes the real
+command entry point in an isolated non-repository and verifies that it enters
+the Git-backed terminal workflow without opening Studio; commit-agent tests cover
+proposal review, approval, index validation, and execution in temporary repositories.
 The suite also verifies
 settings scrolling at 1440px and 900px widths. Settings keep their selected
 section, cached snapshot, and pending save queue across page navigation and

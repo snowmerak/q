@@ -215,8 +215,9 @@ Studio is the primary interface for daily Q work:
   `.qignore`.
 - **Operations** shows token usage, active workers, local service health,
   bounded runtime diagnostics, and usage retention.
-- **Help** maps the former slash commands to their Studio locations and lists
-  keyboard and recovery guidance.
+- **Help** lists CLI commands and flags, terminal slash commands and their Studio
+  equivalents, Studio/terminal shortcuts, commit sessions, and recovery guidance.
+  A section index and keyboard-accessible scroll region keep the entire guide reachable.
 
 In chat, Enter sends and Shift+Enter inserts a line break. Use the run controls
 beside the composer to pause, resume, stop, or redirect active work. `Ctrl+K`
@@ -721,8 +722,8 @@ omits the chat-only `learn` tool.
 | `q library` | Configure the global Library listener. |
 | `q library start` | Run the global Library as a dedicated foreground service. |
 | `q memory` | Keep Workspace Memory running independently of a TUI. |
-| `q usage` | Open the local token-usage dashboard and host its service when needed. |
-| `q commit` | Open the commit workflow in the current repository. |
+| `q usage` | Open Studio Operations for usage, workers, services, logs, and retention. |
+| `q commit` | Run the interactive terminal commit session for the current repository: generate, review, edit, and approve proposals. |
 | `q model` | Configure model and role assignments. |
 | `q systemone` | Configure System One providers, models, and its standalone server. |
 | `q systemone start [--host <ip>] [--port <port>]` | Run the standalone System One API server. |
@@ -731,7 +732,7 @@ omits the chat-only `learn` tool.
 | `q skills` | Manage Agent Skills. |
 | `q lsp` | Configure language servers. |
 | `q ignore` | Edit `.qignore`. |
-| `q help` | Open the TUI help without starting chat services. |
+| `q help` | Open Studio Help. |
 
 System One runs independently of Q's chat Gateway. In `q systemone`, use
 ↑/↓ or Tab to select a setting, Enter to edit it, `a` to add a provider, and `d` to

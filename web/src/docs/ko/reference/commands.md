@@ -49,7 +49,7 @@ toc:
 | `q library start` | 전역 Library를 포그라운드 서비스로 유지합니다. |
 | `q memory` | Workspace Memory를 독립적으로 실행합니다. |
 | `q usage` | Studio의 Operations를 엽니다. |
-| `q commit` | 현재 저장소를 Studio Changes와 커밋 검토 화면에서 엽니다. |
+| `q commit` | 현재 저장소의 커밋 제안을 생성·검토·수정하고 승인하는 터미널 커밋 세션을 실행합니다. |
 | `q model` | Studio에서 전역 및 워크스페이스 모델 할당을 엽니다. |
 | `q subagents` | Studio에서 서브에이전트 프로필과 ACP 바인딩을 엽니다. |
 | `q skills` | Studio에서 Agent Skills를 엽니다. |

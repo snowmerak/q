@@ -94,7 +94,8 @@
       const editing = !!target?.closest('input, textarea, select, [contenteditable="true"]');
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k') {
         event.preventDefault();
-        document.querySelector<HTMLButtonElement>('.sidebar nav button.active, .sidebar nav button')?.focus();
+        const active = document.querySelector<HTMLButtonElement>('.sidebar nav button.active');
+        (active || document.querySelector<HTMLButtonElement>('.sidebar nav button'))?.focus();
       } else if (!editing && event.key === '?') {
         event.preventDefault();
         navigate('help');
@@ -133,7 +134,7 @@
     </nav>
   </aside>
 
-  <main class:settings-main={activeView === 'settings'} class:sessions-main={activeView === 'sessions'} class:changes-main={activeView === 'changes'} class:files-main={activeView === 'files'}>
+  <main class:settings-main={activeView === 'settings'} class:sessions-main={activeView === 'sessions'} class:changes-main={activeView === 'changes'} class:files-main={activeView === 'files'} class:help-main={activeView === 'help'}>
     <header class="page-header">
       <div><h1>{activeView === 'settings' ? 'Settings' : activeView === 'sessions' ? 'Sessions' : activeView === 'files' ? 'Files' : activeView === 'changes' ? 'Changes' : activeView === 'operations' ? 'Operations' : activeView === 'help' ? 'Help' : 'Studio overview'}</h1>{#if activeView === 'settings'}<p class="page-description">Global and repository configuration shared by Q sessions.</p>{:else if activeView === 'sessions'}<p class="page-description">Navigate registered root sessions and their delegated work.</p>{:else if activeView === 'files'}<p class="page-description">Browse workspace files and switch between raw content and Git diffs.</p>{:else if activeView === 'changes'}<p class="page-description">Inspect bounded diffs and review commits.</p>{:else if activeView === 'operations'}<p class="page-description">Usage, workers, local services, logs, and retention.</p>{:else if activeView === 'help'}<p class="page-description">Studio workflows, shortcuts, and recovery.</p>{/if}</div>
       <div class="connection" aria-live="polite"><span class:online={connection.kind === 'ready'} class="status-dot" aria-hidden="true"></span><span>{connection.kind === 'ready' ? 'Connected' : connection.kind === 'error' ? 'Disconnected' : 'Connecting'}</span></div>

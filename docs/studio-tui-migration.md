@@ -263,8 +263,8 @@ bare `q` 대화 TUI와 ACP는 호환 client로 남지만 독립 설정 CLI 명�
   통과한다.
 - Help에 Studio shortcut, browser/server restart 복구와 모든 local slash command의 Web
   대응표를 기록했다. `q model`, `q gateway`, `q systemone`, `q library`, `q usage`,
-  `q commit`, integration/help 명령은 대응 Studio route를 열며 `start` service command와
-  bare `q`/ACP 호환 client는 유지한다.
+  integration/help 명령은 대응 Studio route를 열며 `start` service command와
+  bare `q`/ACP 호환 client는 유지한다. `q commit`은 터미널의 대화형 커밋 세션을 실행한다.
 - README의 기본 실행 경로를 `q studio`로 바꾸고 blueprint의 현재 상태와 navigation을
   실제 구현에 맞췄다. Go API test, runtime service smoke, Svelte type check와 production
   build로 검증했다. embedded server의 Operations, Help와 긴 Models 화면을 headless Edge로

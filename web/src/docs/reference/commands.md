@@ -48,7 +48,7 @@ toc:
 | `q library start` | Keep the global Library running as a foreground service. |
 | `q memory` | Keep Workspace Memory running independently. |
 | `q usage` | Open Operations in Studio. |
-| `q commit` | Open the current repository in Studio Changes and commit review. |
+| `q commit` | Run the interactive terminal commit session: generate, review, edit, and approve proposals for the current repository. |
 | `q model` | Open global and workspace model assignments in Studio. |
 | `q subagents` | Open subagent profiles and ACP bindings in Studio. |
 | `q skills` | Open Agent Skills in Studio. |
