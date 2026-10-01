@@ -701,6 +701,39 @@ test('ignore debounce preserves revisions and flushes to the owning repository o
   } finally { release(); }
 });
 
+test('skills show global entries without a repository and switch scopes when one is loaded or cleared', async ({ page, request }) => {
+  const fixture = await (await request.get('/_test/fixture')).json();
+  await page.evaluate(() => localStorage.removeItem('q-studio-workspace-root'));
+  await page.goto('/settings?section=integrations&panel=skills');
+  const globalSkill = page.getByRole('heading', { name: 'studio-global-review', exact: true });
+  const repositorySkills = page.getByRole('heading', { name: 'Repository skills', exact: true });
+  const repositorySkill = page.getByRole('heading', { name: 'studio-review', exact: true });
+  const reindex = page.getByRole('button', { name: 'Reindex all', exact: true });
+  await expect(page.getByRole('heading', { name: 'Global skills', exact: true })).toBeVisible();
+  await expect(globalSkill).toBeVisible();
+  await expect(repositorySkills).toHaveCount(0);
+  await expect(repositorySkill).toHaveCount(0);
+  await expect(reindex).toBeDisabled();
+  await expect(page.getByRole('button', { name: 'Clone and index', exact: true })).toHaveCount(0);
+  await page.getByRole('textbox', { name: 'Repository path', exact: true }).fill(fixture.root);
+  await page.getByRole('button', { name: 'Load repository', exact: true }).click();
+  await expect(globalSkill).toBeVisible();
+  await expect(repositorySkills).toBeVisible();
+  await expect(repositorySkill).toBeVisible();
+  await expect(reindex).toBeEnabled();
+  await page.getByRole('textbox', { name: 'Repository path', exact: true }).fill('');
+  await page.getByRole('button', { name: 'Load repository', exact: true }).click();
+  await expect(globalSkill).toBeVisible();
+  await expect(repositorySkills).toHaveCount(0);
+  await expect(repositorySkill).toHaveCount(0);
+  await expect(reindex).toBeDisabled();
+  await page.reload();
+  await expect(globalSkill).toBeVisible();
+  await expect(page.getByRole('textbox', { name: 'Repository path', exact: true })).toHaveValue('');
+  await expect(repositorySkills).toHaveCount(0);
+  await expect(page.locator('.integration-message')).toHaveCount(0);
+});
+
 test('portable skills render read-only and reindex through the real local services', async ({ page, request }) => {
   const fixture = await (await request.get('/_test/fixture')).json();
   await page.goto('/settings?section=integrations&panel=skills&workspace_root=' + encodeURIComponent(fixture.root));

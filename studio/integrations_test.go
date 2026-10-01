@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/snowmerak/q/agentskills"
 	"github.com/snowmerak/q/config"
 	qlsp "github.com/snowmerak/q/lsp"
 	"github.com/snowmerak/q/mcpconfig"
@@ -125,6 +126,67 @@ func TestIntegrationAPISkillsListsPortableEntries(t *testing.T) {
 	handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/v1/workspaces/skills?workspace_root="+url.QueryEscape(root), nil))
 	if response.Code != http.StatusOK || !bytes.Contains(response.Body.Bytes(), []byte(`"name":"read-go"`)) || !bytes.Contains(response.Body.Bytes(), []byte(`"managed":false`)) {
 		t.Fatalf("GET skills = %d %s", response.Code, response.Body.String())
+	}
+}
+
+func TestIntegrationAPISkillsWithoutWorkspace(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	store := config.Store{Dir: filepath.Join(home, ".q")}
+	if err := store.Save(configuredIntegrationTestConfig()); err != nil {
+		t.Fatal(err)
+	}
+	root := t.TempDir()
+	// A missing workspace must not implicitly discover the server's working directory.
+	t.Chdir(root)
+	for _, directory := range []string{
+		filepath.Join(home, ".agents", "skills", "review"),
+		filepath.Join(store.Dir, "skills", "review"),
+		filepath.Join(root, ".agents", "skills", "review"),
+	} {
+		if err := os.MkdirAll(directory, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(directory, "SKILL.md"), []byte("---\nname: review\ndescription: Review code.\n---\n\nInspect the requested package.\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	handler, err := newHandler(store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, query := range []string{"", "?workspace_root=", "?workspace_root=%20%20", "?workspace_root=" + url.QueryEscape(root)} {
+		t.Run(query, func(t *testing.T) {
+			response := httptest.NewRecorder()
+			handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/v1/workspaces/skills"+query, nil))
+			if response.Code != http.StatusOK {
+				t.Fatalf("GET skills = %d %s", response.Code, response.Body.String())
+			}
+			var result skillSettingsResponse
+			if err := json.Unmarshal(response.Body.Bytes(), &result); err != nil {
+				t.Fatal(err)
+			}
+			wantRoot, wantCount, activeSource := "", 2, agentskills.SourceUserQ
+			if query == "?workspace_root="+url.QueryEscape(root) {
+				wantRoot, err = canonicalWorkspaceDirectory(root)
+				if err != nil {
+					t.Fatal(err)
+				}
+				wantCount, activeSource = 3, agentskills.SourceProjectPortable
+			}
+			if result.WorkspaceRoot != wantRoot || len(result.Skills) != wantCount {
+				t.Fatalf("skills = %#v, want root %q and %d entries", result, wantRoot, wantCount)
+			}
+			for _, skill := range result.Skills {
+				if wantRoot == "" && skill.Scope != "global" {
+					t.Fatalf("unexpected project skill without a workspace: %#v", skill)
+				}
+				if skill.Active != (skill.Source == activeSource) {
+					t.Fatalf("unexpected active state: %#v", skill)
+				}
+			}
+		})
 	}
 }
 

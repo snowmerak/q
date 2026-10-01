@@ -26,6 +26,7 @@
   function loadPanel() {
     repositoryRoot = workspaceRoot.trim();
     if (repositoryRoot) localStorage.setItem('q-studio-workspace-root', repositoryRoot);
+    else localStorage.removeItem('q-studio-workspace-root');
     reloadToken += 1;
   }
 

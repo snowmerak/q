@@ -36,7 +36,7 @@ type skillOperationRequest struct {
 func (service *integrationService) serveSkills(writer http.ResponseWriter, request *http.Request) {
 	switch request.Method {
 	case http.MethodGet:
-		root, err := canonicalWorkspaceDirectory(request.URL.Query().Get("workspace_root"))
+		root, err := optionalCanonicalWorkspaceDirectory(request.URL.Query().Get("workspace_root"))
 		if err != nil {
 			writeAPIError(writer, http.StatusBadRequest, err)
 			return
@@ -129,7 +129,17 @@ func (service *integrationService) skillRegistry(rawRoot string) (string, *agent
 }
 
 func (service *integrationService) writeSkills(writer http.ResponseWriter, root string) {
-	registry, err := agentskills.Discover(root)
+	var registry *agentskills.Registry
+	var err error
+	if root == "" {
+		var home string
+		home, err = os.UserHomeDir()
+		if err == nil {
+			registry, err = agentskills.DiscoverGlobal(home, service.main.Dir)
+		}
+	} else {
+		registry, err = agentskills.Discover(root)
+	}
 	if err != nil {
 		writeAPIError(writer, http.StatusInternalServerError, err)
 		return
