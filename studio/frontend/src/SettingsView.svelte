@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Bot, BrainCircuit, Cpu, Network, Server, SlidersHorizontal, Unplug } from '@lucide/svelte';
+  import { ArrowLeftRight, Bot, BrainCircuit, Cpu, Network, Server, SlidersHorizontal, Unplug } from '@lucide/svelte';
   import { onMount } from 'svelte';
   import { requestJSON } from './api';
   import IntegrationsView from './IntegrationsView.svelte';
@@ -9,6 +9,8 @@
   import SystemOnePanel from './settings/SystemOnePanel.svelte';
   import RuntimePanel from './settings/RuntimePanel.svelte';
   import ServicesPanel from './settings/ServicesPanel.svelte';
+  import TransferPanel from './settings/TransferPanel.svelte';
+  import type { SettingsBundle } from './settings/transfer';
   import type { SaveState, SettingsSection, SettingsSnapshot } from './settings/types';
 
   // The cache and write queue survive section and page navigation.
@@ -20,7 +22,8 @@
     { id: 'runtime' as const, label: 'Runtime', description: 'Execution, context, and storage', icon: SlidersHorizontal },
     { id: 'services' as const, label: 'Services', description: 'Gateway and System One', icon: Server },
     { id: 'subagents' as const, label: 'Subagents', description: 'Profiles, delegation, and ACP', icon: Bot },
-    { id: 'integrations' as const, label: 'Integrations', description: 'MCP and language servers', icon: Unplug }
+    { id: 'integrations' as const, label: 'Integrations', description: 'MCP and language servers', icon: Unplug },
+    { id: 'import-export' as const, label: 'Import / Export', description: 'Move selected settings', icon: ArrowLeftRight }
   ];
 
 
@@ -90,6 +93,24 @@
     });
   }
 
+  async function applyImportedSettings(bundle: SettingsBundle) {
+    await saveQueue;
+    const generation = ++saveGeneration;
+    pending += 1;
+    if (savedTimer) clearTimeout(savedTimer);
+    saveState = { kind: 'saving' };
+    try {
+      const result = await requestJSON<{ settings: SettingsSnapshot; warning?: string }>('POST', '/api/v1/settings/transfer/import', bundle);
+      if (generation === saveGeneration) adoptSettings(result.settings);
+      saveState = { kind: 'saved' };
+      savedTimer = setTimeout(() => saveState = { kind: 'idle' }, 2400);
+      return result.warning;
+    } catch (reason) {
+      saveState = { kind: 'error', message: reason instanceof Error ? reason.message : 'Could not import settings' };
+      throw reason;
+    } finally { pending -= 1; }
+  }
+
   onMount(() => {
     const onPopState = () => { activeSection = sectionFromLocation(); };
     window.addEventListener('popstate', onPopState);
@@ -124,6 +145,7 @@
         <div hidden={activeSection !== 'services'}><ServicesPanel bind:settings {queueSave} /></div>
         {#if active && activeSection === 'subagents'}<SubagentsView />{/if}
         {#if active && activeSection === 'integrations'}<IntegrationsView />{/if}
+        {#if active && activeSection === 'import-export'}<TransferPanel busy={pending > 0} onimport={applyImportedSettings} />{/if}
       {/if}
     </div>
   </div>

@@ -88,6 +88,9 @@ func newHandlerRuntime(parent context.Context, store config.Store, runner sessio
 	}
 	settings := newSettingsService(store, settingsRuntimes...)
 	mux.HandleFunc("GET /api/v1/settings", settings.serveSnapshot)
+	mux.HandleFunc("GET /api/v1/settings/transfer", settings.serveTransferExport)
+	mux.HandleFunc("POST /api/v1/settings/transfer/preview", settings.serveTransferPreview)
+	mux.HandleFunc("POST /api/v1/settings/transfer/import", settings.serveTransferImport)
 	mux.HandleFunc("GET /api/v1/settings/models", settings.serveModelCatalog)
 	mux.HandleFunc("PUT /api/v1/settings/models/{target}", settings.serveModelAssignmentUpdate)
 	mux.HandleFunc("GET /api/v1/workspaces/models", settings.serveWorkspaceModels)
