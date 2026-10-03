@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/blevesearch/bleve/v2"
+	"github.com/snowmerak/q/internal/fsopen"
 	"github.com/snowmerak/q/internal/fsreplace"
 	"github.com/snowmerak/q/worklock"
 	bolterrors "go.etcd.io/bbolt/errors"
@@ -460,7 +461,7 @@ func (s *Store) loadRecordLocked(id string) (Record, error) {
 	if id == "" {
 		return Record{}, errors.New("sessionstore: record ID is required")
 	}
-	file, err := os.Open(s.recordPath(id))
+	file, err := fsopen.Open(s.recordPath(id))
 	if errors.Is(err, os.ErrNotExist) {
 		return Record{}, ErrNotFound
 	}
@@ -612,7 +613,7 @@ func (s *Store) rebuildVectorsLocked() error {
 }
 
 func (s *Store) loadRecordFileLocked(path string) (Record, error) {
-	file, err := os.Open(path)
+	file, err := fsopen.Open(path)
 	if err != nil {
 		return Record{}, fmt.Errorf("sessionstore: open source record %s: %w", path, err)
 	}
@@ -644,7 +645,7 @@ func (s *Store) loadRecordFileLocked(path string) (Record, error) {
 }
 
 func (s *Store) readIndexState() (indexState, bool) {
-	body, err := os.ReadFile(s.statePath)
+	body, err := fsopen.ReadFile(s.statePath)
 	if err != nil {
 		return indexState{}, false
 	}

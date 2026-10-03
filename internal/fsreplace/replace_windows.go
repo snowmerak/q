@@ -13,18 +13,20 @@ import (
 	"unsafe"
 )
 
-const maximumReplaceRetries = 3
+const maximumReplaceRetries = 7
 
 const (
-	errorSharingViolation syscall.Errno = 32
-	errorLockViolation    syscall.Errno = 33
+	errorSharingViolation       syscall.Errno = 32
+	errorLockViolation          syscall.Errno = 33
+	errorUnableToRemoveReplaced syscall.Errno = 1175
 )
 
 // Replace moves source over destination. ReplaceFileW preserves atomic replace
 // semantics while readers hold handles that share deletion. MoveFileExW covers
 // the first write when no destination exists. Antivirus and indexer handles can
-// briefly deny either operation, so transient sharing errors use a short
-// bounded retry.
+// briefly deny either operation, so transient sharing errors back off for at
+// most 1.27 seconds. Error 1175 leaves both names intact and is safe to retry;
+// errors 1176 and 1177 can change those names and must not be retried here.
 func Replace(source, destination string) error {
 	sourcePointer, err := syscall.UTF16PtrFromString(source)
 	if err != nil {
@@ -49,7 +51,7 @@ func Replace(source, destination string) error {
 				0, 0, 0, 0,
 			)
 			if result == 0 {
-				return fmt.Errorf("ReplaceFileW: %w", callErr)
+				return fmt.Errorf("ReplaceFileW %s: %w", destination, callErr)
 			}
 			return nil
 		}, time.Sleep)
@@ -63,7 +65,7 @@ func Replace(source, destination string) error {
 			moveFileWriteThrough,
 		)
 		if result == 0 {
-			return fmt.Errorf("MoveFileExW: %w", callErr)
+			return fmt.Errorf("MoveFileExW %s: %w", destination, callErr)
 		}
 		return nil
 	}, time.Sleep)
@@ -81,5 +83,6 @@ func retry(operation func() error, sleep func(time.Duration)) error {
 func retryable(err error) bool {
 	return errors.Is(err, syscall.ERROR_ACCESS_DENIED) ||
 		errors.Is(err, errorSharingViolation) ||
-		errors.Is(err, errorLockViolation)
+		errors.Is(err, errorLockViolation) ||
+		errors.Is(err, errorUnableToRemoveReplaced)
 }

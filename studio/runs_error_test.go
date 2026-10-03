@@ -92,3 +92,32 @@ func TestStudioRunKeepsEventFailureWhenRunnerReturnsCancellation(t *testing.T) {
 		t.Fatalf("failure = %#v", page.Run)
 	}
 }
+
+func TestStudioRunDoesNotDuplicateReturnedEventFailure(t *testing.T) {
+	root := t.TempDir()
+	store, lock, err := workspace.CreateSession(root, "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := lock.Close(); err != nil {
+		t.Fatal(err)
+	}
+	runner := sessionRunnerFunc(func(ctx context.Context, _ workspace.Store, _ string, _ string, emit app.SessionEventSink) error {
+		failure := emit(app.SessionEvent{Type: "message", Content: strings.Repeat("x", maximumRunEventSize)})
+		if failure == nil {
+			t.Error("oversized event unexpectedly persisted")
+		}
+		return errors.Join(context.Canceled, failure)
+	})
+	service := newSessionRunService(t.Context(), runner)
+	defer service.Close()
+	run, err := service.start(root, store.SessionID, "work")
+	if err != nil {
+		t.Fatal(err)
+	}
+	service.wg.Wait()
+	page := run.page(0, maximumRunEventPage)
+	if page.Run.Status != "failed" || strings.Count(page.Run.Error, "persist Studio message event") != 1 {
+		t.Fatalf("failure = %#v", page.Run)
+	}
+}

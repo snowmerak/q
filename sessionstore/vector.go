@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	goformersearch "github.com/MichaelAyles/goformersearch"
+	"github.com/snowmerak/q/internal/fsopen"
 	"github.com/snowmerak/q/internal/fsreplace"
 	"github.com/snowmerak/q/worklock"
 )
@@ -129,7 +130,7 @@ func newVectorIndex(config VectorConfig) *vectorIndex {
 }
 
 func loadVectorIndex(graphPath, idsPath string, config VectorConfig) (*vectorIndex, error) {
-	file, err := os.Open(graphPath)
+	file, err := fsopen.Open(graphPath)
 	if err != nil {
 		return nil, err
 	}
@@ -145,7 +146,7 @@ func loadVectorIndex(graphPath, idsPath string, config VectorConfig) (*vectorInd
 		return nil, fmt.Errorf("HNSW dimensions %d do not match configured dimensions %d", graph.Dims(), config.Dimensions)
 	}
 	graph.SetEfSearch(config.EfSearch)
-	body, err := os.ReadFile(idsPath)
+	body, err := fsopen.ReadFile(idsPath)
 	if err != nil {
 		return nil, err
 	}

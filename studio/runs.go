@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/snowmerak/q/app"
+	"github.com/snowmerak/q/internal/fsopen"
 	"github.com/snowmerak/q/internal/fsreplace"
 	"github.com/snowmerak/q/subagent"
 	"github.com/snowmerak/q/workspace"
@@ -205,14 +206,14 @@ func (service *sessionRunService) execute(run *studioRun, prompt string) {
 	run.cancel = cancel
 	run.mu.Unlock()
 	defer cancel()
-	var emitErr error
+	var emitFailures []error
 	var emitMu sync.Mutex
 	emit := func(event app.SessionEvent) error {
 		event.RunID = run.snapshot.ID
 		if err := run.append(event); err != nil {
 			failure := fmt.Errorf("persist Studio %s event: %w", event.Type, err)
 			emitMu.Lock()
-			emitErr = errors.Join(emitErr, failure)
+			emitFailures = append(emitFailures, failure)
 			emitMu.Unlock()
 			return failure
 		}
@@ -227,8 +228,10 @@ func (service *sessionRunService) execute(run *studioRun, prompt string) {
 	// Keep persistence failures even if the runner only returns its resulting
 	// cancellation. Cancellation alone does not mean Studio is shutting down.
 	emitMu.Lock()
-	if emitErr != nil && !errors.Is(runErr, emitErr) {
-		runErr = errors.Join(runErr, emitErr)
+	for _, failure := range emitFailures {
+		if !errors.Is(runErr, failure) {
+			runErr = errors.Join(runErr, failure)
+		}
 	}
 	emitMu.Unlock()
 	if runErr != nil && !run.terminal() {
@@ -366,7 +369,7 @@ func loadLatestStudioRun(root string, store workspace.Store) (*studioRun, error)
 	if info.Size() > maximumSessionRequestSize {
 		return nil, errors.New("Studio run snapshot is too large")
 	}
-	body, err := os.ReadFile(snapshotPath)
+	body, err := fsopen.ReadFile(snapshotPath)
 	if err != nil {
 		return nil, err
 	}
