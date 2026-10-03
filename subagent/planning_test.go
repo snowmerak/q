@@ -410,9 +410,9 @@ func TestPlannerReadsLoomReportWithoutOtherBuiltinTools(t *testing.T) {
 		t.Fatalf("proposal=%#v requests=%d", proposal, len(plannerClient.requests))
 	}
 	available := plannerClient.requests[0].Tools
-	if len(available) != 8 || !hasTool(available, "loom_read") || !hasTool(available, SubmitPlanToolName) ||
+	if len(available) != 9 || !hasTool(available, "loom_read") || !hasTool(available, SubmitPlanToolName) ||
 		!hasTool(available, TaskStartToolName) || !hasTool(available, "search_skills") || !hasTool(available, "get_skill") ||
-		!hasTool(available, "memory_set_active_work") || !hasTool(available, "memory_complete_work") || !hasTool(available, "memory_record_fact") {
+		!hasTool(available, "memory_set_active_work") || !hasTool(available, "memory_complete_work") || !hasTool(available, "memory_record_fact") || !hasTool(available, "memory_checkpoint") {
 		t.Fatalf("expected planner and default memory tools, got %#v", available)
 	}
 	if len(tools.calls) != 1 || tools.calls[0] != readCall {

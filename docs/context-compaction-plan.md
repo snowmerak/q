@@ -24,6 +24,7 @@
 - 전체 transcript와 API request context 분리
 - 보수적 token 추정과 실제 `prompt_tokens` 기반 provider overhead 보정
 - 오래된 context의 구조화된 session checkpoint와 최근 원문 보존
+- 확인된 task memory를 투영하고 아직 반영되지 않은 구간만 보충 요약하는 점진적 압축
 - `get_skill`로 읽은 resource별 최신 전문을 별도 10% soft budget으로 보존
 - 작은 모델의 복구 가능한 JSON 변형을 정규화하고 누락 섹션은 기존 checkpoint에서 계승
 - assistant tool call과 연속된 tool result를 같은 보존 단위로 처리
@@ -46,6 +47,68 @@
 - 검증: TUI/ACP 명령 발견, 임계치 이전 수동 압축, transcript 보존, 빈 대화, 실패 경로 및 기존 자동 압축 회귀 테스트.
 
 구현 경계와 검증 결과는 [수동 압축 안정성 리뷰](manual-compact-stability-review.md)에 정리했다.
+
+### 점진적 task memory 압축 (2026-10-03)
+
+기존 `memory_set_active_work`, `memory_complete_work`, `memory_record_fact`에
+`memory_checkpoint`를 추가했다. 개별 작업/사실 기록만으로 이전 대화 전체가
+반영됐다고 간주하지 않는다. 모델이 필요한 상태와 증거 위치를 먼저 기록하고,
+`memory_checkpoint({"expected_revision": N})`를 **그 턴의 유일한 도구 호출**로
+실행해야 그 지점까지를 반영 완료로 인정한다. 호스트는 앞선 도구 묶음이 모두
+완료됐는지 검사하고, 해당 메시지 prefix의 digest를 결과에 기록한다.
+
+모든 새 memory 결과에는 `event_id`와 증가하는 `revision`이 있다. 기존 세 도구의
+`expected_revision`은 선택 사항이므로 이전 입력은 호환된다. 지정한 revision이
+현재 상태와 다르면 상태 변경 없이 오류를 반환한다. replay는 연속된 새 revision만
+적용하며, 중복·오래된 결과와 revision 공백 뒤의 결과는 적용하지 않는다.
+확인 결과 누락, prefix 변경, 불완전한 도구 묶음은 해당 확인의 coverage를 무효화한다.
+앞선 유효한 checkpoint가 있으면 거기서부터 보충 요약하고, 없으면 기존 full-source
+요약을 사용한다. provider 전용 replay 정보의 제거는 digest를 바꾸지 않는다.
+
+압축 계획은 다음 세 경로를 사용한다.
+
+| 상태 | 압축 입력/동작 |
+|---|---|
+| 유효한 확인 또는 저장된 checkpoint가 없음 | 기존 오래된 `Source` 전체 요약 |
+| 기준 상태 뒤에 아직 반영되지 않은 오래된 메시지가 있음 | `maintained_checkpoint`, `memory_revision`, `uncovered_messages`만 요약 모델에 전달 |
+| 요약 대상인 오래된 메시지가 모두 반영됨 | `Plan.CheckpointWithoutModel()`로 checkpoint를 직접 생성; 요약 모델 호출 없음 |
+
+최근 원문, 역할별 task anchor, `ask_to_user` 등 호출자가 고정한 도구 묶음과 Skill
+resource 보존 규칙은 그대로 적용된다. 점진적 경로에서 제거하는 source의 사용자
+메시지는 `q_context_requests`에 시간순 JSON으로 별도 보존한다. 공백·정정·비텍스트
+content part를 포함한 원본 메시지를 유지하며, 호스트가 넣은 `keep going`은 제외한다.
+이 앵커는 다음 압축과 TUI/ACP 세션 저장·복원에서도 보존한다. 과거 버전에서 이미
+요약으로 바뀐 사용자 원문을 새로 복원하는 기능은 아니다.
+
+모델이 생성하는 checkpoint는 기존 네 필드를 유지한다. 호스트가 저장하는 JSON에는
+`_memory: {"version":1,"revision":N}`을 덧붙여, 최신 상태가 이미 반영된 뒤에
+남아 있는 과거 tool result가 완료 작업을 다시 활성화하지 못하게 한다. 예전 네 필드
+checkpoint와 revision 없는 delta도 읽을 수 있다. 보충 요약으로 새로 찾은 정보는
+유지된 항목과 ID 기준으로 병합하며, 명시적으로 완료된 ID는 active work에서 제거한다.
+
+메인 `agentloop.Context`, `subagent.ContextCompactor`, TUI 및 ACP `/compact`가
+동일한 계획을 사용한다. 직접 투영도 검증·저장·취소 처리를 거친 뒤 context를 교체하고
+provider 대화를 초기화한다. 요약 호출이 생략되면 요약 모델 usage도 추가하지 않는다.
+전체 transcript, lifecycle archive와 기존 Loom 재조회 경로는 유지한다.
+
+원문과 유지 상태는 조용히 잘라내지 않는다. 점진적 결과가 압축 trigger 아래로
+들어가지 못하면 적용을 실패시켜 기존 context를 유지한다. 현재 버전에는 누적 사실과
+사용자 원문을 자동으로 archive로 옮기는 정책이 없으므로, 큰 작업에서는 더 큰 모델
+context 또는 새 세션이 필요할 수 있다.
+
+결정적 테스트는 coverage 누락·변조·중복, 오래된 revision, 반복 압축과 재시작,
+미반영 이력의 요약 유지, 원문/첨부 참조, 모델 호출 생략, 저장 실패·취소를 검증한다.
+호스트는 모델의 “정보를 모두 기록했다”는 판단의 의미적 완전성까지 증명하지 않는다.
+실제 모델의 호출 습관, 작업 성공률, 재탐색 감소와 token/latency 개선은 live trial로
+추가 평가해야 한다.
+
+로컬 검증 기록 (2026-10-03, Windows arm64, Go 1.27.1):
+
+- `go test -p 1 ./... -timeout=120s` 통과. 최종 수정 후 memory/agentloop/subagent/app/commitagent/thinker도 재검증했다.
+- `go vet ./...` 통과. 최종 수정 패키지에도 다시 실행했다.
+- `go run ./scripts/modulecheck` 통과: 격리된 module archive에서 `q`, `q-mcp` 설치 확인. 사용자 GOBIN 변경이나 배포는 하지 않았다.
+- `golangci-lint` 2.14.0, `--no-config` 기본 검사(errcheck, govet, ineffassign, staticcheck, unused): memory/agentloop 전체와 변경 파일 범위 검사 통과. 저장소 전체 검사는 수정하지 않은 파일의 기존 지적으로 실패했다.
+- `govulncheck`는 실행 파일과 module tool 등록이 없어 실행하지 않았다. 라이브 모델 품질/비용 비교와 자동 archive 정책은 이번 검증에 포함하지 않았다.
 
 ### 에이전트 도구 루프 (2026-09-09)
 

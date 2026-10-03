@@ -217,8 +217,8 @@ func TestCustomRunnerSelectedToolsAndArchive(t *testing.T) {
 	if len(tools.calls) != 1 || tools.calls[0].Function.Name != "read_file" {
 		t.Fatal(tools.calls)
 	}
-	if len(c.requests[0].Tools) != 8 || !hasTool(c.requests[0].Tools, "memory_set_active_work") ||
-		!hasTool(c.requests[0].Tools, "memory_complete_work") || !hasTool(c.requests[0].Tools, "memory_record_fact") ||
+	if len(c.requests[0].Tools) != 9 || !hasTool(c.requests[0].Tools, "memory_set_active_work") ||
+		!hasTool(c.requests[0].Tools, "memory_complete_work") || !hasTool(c.requests[0].Tools, "memory_record_fact") || !hasTool(c.requests[0].Tools, "memory_checkpoint") ||
 		len(c.requests[0].Messages) < 2 ||
 		!strings.HasPrefix(c.requests[0].Messages[0].Content, p.SystemPrompt+"\n\nAgent Skills are retrieved") ||
 		!strings.Contains(c.requests[0].Messages[0].Content, "Runtime environment: \nWorking directory: ") ||

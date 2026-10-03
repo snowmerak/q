@@ -89,9 +89,6 @@ func (c *Context) CompactIfNeeded(
 	if !c.ShouldCompact() {
 		return nil, nil
 	}
-	if configuredClient == nil {
-		return nil, errors.New("agent loop: context compaction requires a model client")
-	}
 	plan, err := c.manager.PlanWithRetention(memory.Retention{
 		PreserveInstructions: true,
 		// The lifecycle state is host-owned. Keep its opening exchange exact so
@@ -108,17 +105,27 @@ func (c *Context) CompactIfNeeded(
 		}
 		return nil, fmt.Errorf("agent loop: plan context compaction: %w", err)
 	}
-	response, err := chatWithEmptyResponseRecovery(ctx, configuredClient, client.ChatRequest{
-		Model: modelID, Messages: plan.RequestMessages(),
-		ReasoningEffort: reasoningEffort,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("agent loop: compact context: %w", err)
+	checkpointText, ready := plan.CheckpointWithoutModel()
+	if !ready {
+		if configuredClient == nil {
+			return nil, errors.New("agent loop: context compaction requires a model client")
+		}
+		response, err := chatWithEmptyResponseRecovery(ctx, configuredClient, client.ChatRequest{
+			Model: modelID, Messages: plan.RequestMessages(),
+			ReasoningEffort: reasoningEffort,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("agent loop: compact context: %w", err)
+		}
+		if response == nil || len(response.Choices) == 0 {
+			return nil, errors.New("agent loop: compact context returned no choices")
+		}
+		checkpointText = response.Choices[0].Message.TextContent()
 	}
-	if response == nil || len(response.Choices) == 0 {
-		return nil, errors.New("agent loop: compact context returned no choices")
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
-	checkpoint, err := c.manager.ApplyCheckpoint(plan, response.Choices[0].Message.TextContent())
+	checkpoint, err := c.manager.ApplyCheckpoint(plan, checkpointText)
 	if err != nil {
 		return nil, fmt.Errorf("agent loop: compact context: %w", err)
 	}

@@ -92,7 +92,7 @@ func TestMemoryToolsRejectInvalidUpdateWithoutMutation(t *testing.T) {
 	if !handled || !result.IsError || len(manager.taskMemory.facts) != 0 {
 		t.Fatalf("invalid fact changed state: %#v", manager.taskMemory)
 	}
-	if len(AppendMemoryTools(MemoryTools())) != 3 {
+	if len(AppendMemoryTools(MemoryTools())) != 4 {
 		t.Fatal("memory tools were duplicated")
 	}
 }

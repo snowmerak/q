@@ -1733,21 +1733,25 @@ func (a *acpAgent) compactContext(ctx context.Context, force bool) error {
 	if err != nil {
 		return err
 	}
-	response, err := chatWithConversationRecovery(ctx, a.state.client, client.ChatRequest{
-		Model:           a.state.activeModel(),
-		ReasoningEffort: a.state.activeConfig().Provider.EffectiveReasoningEffort(),
-		Messages:        plan.RequestMessages(),
-	})
-	if err != nil {
-		return err
-	}
-	if response == nil || len(response.Choices) == 0 {
-		return errors.New("context compaction returned no response choices")
+	checkpointText, ready := plan.CheckpointWithoutModel()
+	if !ready {
+		response, err := chatWithConversationRecovery(ctx, a.state.client, client.ChatRequest{
+			Model:           a.state.activeModel(),
+			ReasoningEffort: a.state.activeConfig().Provider.EffectiveReasoningEffort(),
+			Messages:        plan.RequestMessages(),
+		})
+		if err != nil {
+			return err
+		}
+		if response == nil || len(response.Choices) == 0 {
+			return errors.New("context compaction returned no response choices")
+		}
+		checkpointText = response.Choices[0].Message.TextContent()
 	}
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	compactedMemory, checkpoint, err := a.state.memory.CheckpointCopy(plan, response.Choices[0].Message.TextContent())
+	compactedMemory, checkpoint, err := a.state.memory.CheckpointCopy(plan, checkpointText)
 	if err != nil {
 		return err
 	}

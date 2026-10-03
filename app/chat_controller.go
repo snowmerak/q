@@ -515,6 +515,9 @@ func (m model) compactContext(plan memory.Plan, manual bool) tea.Cmd {
 	turnContext := m.activeTurnContext()
 	turnID := m.turnID
 	return func() tea.Msg {
+		if checkpoint, ready := plan.CheckpointWithoutModel(); ready {
+			return compactionResultMsg{turnID: turnID, checkpoint: checkpoint, plan: plan, err: turnContext.Err(), manual: manual}
+		}
 		response, err := chatWithEmptyResponseRecovery(turnContext, configuredClient, client.ChatRequest{
 			Model: modelID, Messages: plan.RequestMessages(),
 			ReasoningEffort: reasoningEffort,

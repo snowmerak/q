@@ -261,7 +261,7 @@ func (m model) updateCompactionResult(message compactionResultMsg) (tea.Model, t
 		}
 		return m, m.input.Focus()
 	}
-	if message.response == nil || len(message.response.Choices) == 0 {
+	if message.checkpoint == "" && (message.response == nil || len(message.response.Choices) == 0) {
 		m.rollbackPendingMessage()
 		err := errors.New("provider returned no choices")
 		m.archiveFailure("context_compaction", err)
@@ -271,7 +271,11 @@ func (m model) updateCompactionResult(message compactionResultMsg) (tea.Model, t
 		}
 		return m, m.input.Focus()
 	}
-	compactedMemory, checkpoint, err := m.memory.CheckpointCopy(message.plan, message.response.Choices[0].Message.TextContent())
+	checkpointText := message.checkpoint
+	if checkpointText == "" {
+		checkpointText = message.response.Choices[0].Message.TextContent()
+	}
+	compactedMemory, checkpoint, err := m.memory.CheckpointCopy(message.plan, checkpointText)
 	if err != nil {
 		m.rollbackPendingMessage()
 		m.archiveFailure("context_compaction", err)

@@ -313,11 +313,12 @@ type agentEventMsg struct {
 }
 
 type compactionResultMsg struct {
-	turnID   uint64
-	response *client.ChatResponse
-	plan     memory.Plan
-	err      error
-	manual   bool
+	turnID     uint64
+	response   *client.ChatResponse
+	checkpoint string
+	plan       memory.Plan
+	err        error
+	manual     bool
 }
 
 type deferredSubmitMsg struct{}
@@ -2013,7 +2014,7 @@ func cloneActiveTask(task *workspace.ActiveTask) *workspace.ActiveTask {
 func workspaceSessionMessages(messages []client.Message) []client.Message {
 	saved := make([]client.Message, 0, len(messages))
 	for _, message := range messages {
-		if (message.Role == client.RoleSystem || message.Role == client.RoleDeveloper) && message.Name != memory.SummaryName {
+		if (message.Role == client.RoleSystem || message.Role == client.RoleDeveloper) && message.Name != memory.SummaryName && message.Name != memory.RequestAnchorName {
 			continue
 		}
 		saved = append(saved, message)
@@ -2024,7 +2025,7 @@ func workspaceSessionMessages(messages []client.Message) []client.Message {
 func mergeWorkspaceMessages(base, saved []client.Message) []client.Message {
 	merged := append([]client.Message(nil), base...)
 	for _, message := range saved {
-		if (message.Role == client.RoleSystem || message.Role == client.RoleDeveloper) && message.Name != memory.SummaryName {
+		if (message.Role == client.RoleSystem || message.Role == client.RoleDeveloper) && message.Name != memory.SummaryName && message.Name != memory.RequestAnchorName {
 			continue
 		}
 		merged = append(merged, message)

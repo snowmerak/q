@@ -63,7 +63,7 @@ func (c *ContextCompactor) Messages() []client.Message {
 func (c *ContextCompactor) RequestMessages() []client.Message {
 	messages := c.Messages()
 	for index := range messages {
-		if messages[index].Name == memory.SummaryName {
+		if messages[index].Name == memory.SummaryName || messages[index].Name == memory.RequestAnchorName {
 			messages[index].Role = client.RoleUser
 			messages[index].Name = ""
 		}
@@ -120,7 +120,7 @@ func (c *ContextCompactor) CompactIfNeeded(ctx context.Context, spec *Spec, conf
 	if c == nil || c.memory == nil || !c.memory.ShouldCompact() {
 		return nil
 	}
-	if spec == nil || configured == nil {
+	if spec == nil {
 		return errors.New("subagent: context compaction requires model spec and client")
 	}
 	plan, err := c.memory.PlanWithRetention(memory.Retention{
@@ -133,22 +133,33 @@ func (c *ContextCompactor) CompactIfNeeded(ctx context.Context, spec *Spec, conf
 		}
 		return err
 	}
-	compactor := *spec
-	compactor.conversationID = ""
-	response, err := compactor.Chat(ctx, configured, client.ChatRequest{
-		Messages: plan.RequestMessages(),
-	})
+	checkpointText, ready := plan.CheckpointWithoutModel()
+	var usage client.Usage
+	if !ready {
+		if configured == nil {
+			return errors.New("subagent: context compaction requires a model client")
+		}
+		compactor := *spec
+		compactor.conversationID = ""
+		response, err := compactor.Chat(ctx, configured, client.ChatRequest{
+			Messages: plan.RequestMessages(),
+		})
+		if err != nil {
+			return fmt.Errorf("subagent: compact context: %w", err)
+		}
+		if response == nil || len(response.Choices) == 0 {
+			return errors.New("subagent: compact context returned no choices")
+		}
+		checkpointText, usage = response.Choices[0].Message.TextContent(), response.Usage
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	_, err = c.memory.ApplyCheckpoint(plan, checkpointText)
 	if err != nil {
 		return fmt.Errorf("subagent: compact context: %w", err)
 	}
-	if response == nil || len(response.Choices) == 0 {
-		return errors.New("subagent: compact context returned no choices")
-	}
-	_, err = c.memory.ApplyCheckpoint(plan, response.Choices[0].Message.TextContent())
-	if err != nil {
-		return fmt.Errorf("subagent: compact context: %w", err)
-	}
-	c.usage = addUsage(c.usage, response.Usage)
+	c.usage = addUsage(c.usage, usage)
 	spec.conversationID = ""
 	return nil
 }

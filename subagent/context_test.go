@@ -28,6 +28,38 @@ func contextCheckpointJSON(activeWork string) string {
 	return string(body)
 }
 
+func TestContextCompactorProjectsCoveredMemoryWithoutUsage(t *testing.T) {
+	spec := Spec{Role: config.AgentRoleGriller, Model: "griller", ContextLength: 16_000, conversationID: "old-backend"}
+	history := NewContextCompactor(spec, []client.Message{
+		{Role: client.RoleSystem, Content: "role"},
+		{Role: client.RoleUser, Content: "task"},
+	}, nil, 2)
+	history.Append(client.Message{Role: client.RoleAssistant, Content: strings.Repeat("completed analysis ", 4000)})
+	for _, input := range []struct{ name, arguments string }{
+		{memory.RecordFactTool, `{"fact":"Complete evidence","source":"loom://report"}`},
+		{memory.CheckpointTool, `{"expected_revision":1}`},
+	} {
+		call := scoutCall(input.name, input.arguments)
+		history.Append(client.Message{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{call}})
+		result, handled := history.CallMemoryTool(call)
+		if !handled || result.IsError {
+			t.Fatalf("memory tool: %s", result.Content)
+		}
+		history.Append(client.ToolResultMessage(call, result))
+	}
+	if err := history.CompactIfNeeded(t.Context(), &spec, nil); err != nil {
+		t.Fatal(err)
+	}
+	if spec.conversationID != "" || !reflect.DeepEqual(history.CompactionUsage(), client.Usage{}) || history.memory.Stats().Compactions != 1 {
+		t.Fatal("direct projection retained backend history or charged model usage")
+	}
+	for _, message := range history.RequestMessages() {
+		if strings.Contains(message.Content, "completed analysis") {
+			t.Fatal("covered analysis survived projection")
+		}
+	}
+}
+
 func isContextCheckpointRequest(request client.ChatRequest) bool {
 	return len(request.Tools) == 0 && len(request.Messages) > 0 &&
 		strings.Contains(request.Messages[0].Content, "session continuation checkpoint")

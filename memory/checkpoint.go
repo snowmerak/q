@@ -62,6 +62,9 @@ func normalizeCheckpoint(plan Plan, response string) (string, error) {
 }
 
 func priorCheckpoint(plan Plan) (Checkpoint, bool) {
+	if plan.Maintained != nil {
+		return *plan.Maintained, true
+	}
 	for _, messages := range [][]client.Message{plan.Immutable, plan.Source, plan.RetainedSkillResources, plan.Recent} {
 		for _, message := range messages {
 			if message.Name != SummaryName {

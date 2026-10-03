@@ -194,7 +194,7 @@ func TestCommitAgentForcesOverviewAndFallsBackAfterThreeReminders(t *testing.T) 
 	if !ok || choice["type"] != "function" {
 		t.Fatalf("first tool choice = %#v", fake.requests[0].ToolChoice)
 	}
-	if len(fake.requests[0].Tools) != 13 {
+	if len(fake.requests[0].Tools) != 14 {
 		t.Fatalf("commit tools = %d", len(fake.requests[0].Tools))
 	}
 	for _, expected := range []string{"calling git_overview", "sending proposal reminder 3/3", "proposal reminders exhausted"} {
