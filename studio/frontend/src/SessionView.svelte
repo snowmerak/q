@@ -35,6 +35,9 @@
   let responseDraft = '';
   let thinkingDraft = '';
   let activeRun: RunSnapshot | null = null;
+  $: runError = activeRun && ['failed', 'cancelled', 'interrupted'].includes(activeRun.status)
+    ? activeRun.error || (activeRun.status === 'failed' ? 'The turn failed without an error detail.' : 'The turn stopped before completion.')
+    : '';
   let sessionGeneration = 0;
   let questionAnswer = '';
   let delegations: FlatDelegation[] = [];
@@ -491,6 +494,7 @@
     sending = true;
     error = '';
     runStatus = 'Starting default loop…';
+    activeRun = null;
     events = [];
     responseDraft = '';
     thinkingDraft = '';
@@ -552,9 +556,9 @@
       events = [...events, event];
     } else if (event.type === 'result') {
       runStatus = event.outcome === 'succeeded' ? 'Completed' : event.outcome || 'Completed';
-    } else if (event.type === 'error') {
-      error = event.detail || 'The turn failed';
-      runStatus = 'Turn failed';
+    } else if (event.type === 'error' || event.type === 'cancelled' || event.type === 'recovered') {
+      events = [...events, event];
+      runStatus = event.type === 'error' ? 'Turn failed' : 'Turn stopped';
     }
     void scrollToBottom();
   }
@@ -721,6 +725,13 @@
           {/if}
         </div>
       </div>
+      {#if runError}
+        <div class="session-error run-error" role="alert">
+          <strong>{runStatusLabel(activeRun!)}</strong>
+          <p>{runError}</p>
+          {#if selected.active_task}<small>The task is still active. Send a message to continue.</small>{/if}
+        </div>
+      {/if}
       <Transcript bind:this={transcript} {messages} {thinkingDraft} {responseDraft} loading={sessionLoading} onfile={openFileLink} />
       {#if !selectedDelegation && activeRun?.pending_question}
         <section class="run-question" aria-labelledby="run-question-title">

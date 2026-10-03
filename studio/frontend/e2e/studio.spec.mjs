@@ -339,6 +339,49 @@ test('guidance redirects a real run without refresh and renders markdown and cod
   expect(transcript.some((message) => message.role === 'user' && message.content.includes('write the requested file'))).toBe(true);
 });
 
+test('failed runs retain their reason and activity after completion and reload', async ({ page, request }) => {
+  const fixture = await (await request.get('/_test/fixture')).json();
+  const session = await (await request.post('/api/v1/registered-sessions', { data: { workspace_root: fixture.root, create: true } })).json();
+  await page.goto(`/sessions/${encodeURIComponent(session.registration_id)}`);
+  const composer = page.locator('.composer textarea');
+  await composer.fill('fail this turn');
+  await composer.press('Enter');
+  const failure = page.getByRole('alert').filter({ hasText: 'fixture model failure: connection closed' });
+  await expect(failure).toContainText('Turn failed');
+  await expect(failure).toContainText('The task is still active');
+  await expect(composer).toHaveAttribute('placeholder', 'Ask Q to work in this repository…');
+  const activity = page.getByRole('complementary', { name: 'Current turn activity' });
+  await expect(activity).toContainText('task_start');
+  await expect(activity).toContainText('fixture model failure: connection closed');
+  await page.reload();
+  await expect(failure).toBeVisible();
+  await expect(activity).toContainText('fixture model failure: connection closed');
+  await page.setViewportSize({ width: 390, height: 900 });
+  await expect(failure).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  await page.screenshot({ path: join(tmpdir(), 'q-studio-run-error.png') });
+  await composer.fill('continue the task');
+  await composer.press('Enter');
+  await expect(page.locator('.transcript').getByRole('heading', { name: 'Studio result' })).toBeVisible();
+  await expect(failure).toHaveCount(0);
+});
+
+test('stopped runs retain the cancellation reason after reload', async ({ page, request }) => {
+  const fixture = await (await request.get('/_test/fixture')).json();
+  const session = await (await request.post('/api/v1/registered-sessions', { data: { workspace_root: fixture.root, create: true } })).json();
+  await page.goto(`/sessions/${encodeURIComponent(session.registration_id)}`);
+  const composer = page.locator('.composer textarea');
+  await composer.fill('wait for guidance');
+  await composer.press('Enter');
+  await expect(page.getByRole('heading', { name: 'Which direction?' })).toBeVisible();
+  await page.getByRole('button', { name: 'Stop turn', exact: true }).click();
+  const stopped = page.getByRole('alert').filter({ hasText: 'Turn interrupted by user' });
+  await expect(stopped).toContainText('Turn stopped');
+  await page.reload();
+  await expect(stopped).toBeVisible();
+  await expect(page.getByRole('complementary', { name: 'Current turn activity' })).toContainText('Turn interrupted by user');
+});
+
 test('switching sessions aborts polling and rejects an old run response', async ({ page, request }) => {
   const fixture = await (await request.get('/_test/fixture')).json();
   const first = await (await request.post('/api/v1/registered-sessions', { data: { workspace_root: fixture.root, create: true } })).json();

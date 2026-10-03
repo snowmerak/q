@@ -182,6 +182,10 @@ func studioTestModel(w http.ResponseWriter, r *http.Request) {
 	}
 	// Guidance continues the interrupted lifecycle rather than starting it twice.
 	completed["task_start"] = completed["task_start"] || activeTask
+	if completed["task_start"] && strings.Contains(text, "fail this turn") {
+		http.Error(w, `{"error":{"message":"fixture model failure: connection closed"}}`, http.StatusInternalServerError)
+		return
+	}
 	name, arguments := "task_start", `{"objective":"Exercise Studio runtime"}`
 	if completed["task_start"] {
 		switch {

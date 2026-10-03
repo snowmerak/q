@@ -22,7 +22,7 @@ export function runStatusLabel(run: RunSnapshot) {
   if (run.status === 'cancelled') return 'Turn stopped';
   if (run.status === 'cancelling') return 'Stopping…';
   if (run.status === 'interrupted') return 'Interrupted · send a message to recover';
-  if (run.status === 'failed') return run.error || 'Turn failed';
+  if (run.status === 'failed') return 'Turn failed';
   return run.status;
 }
 

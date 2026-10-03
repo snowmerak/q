@@ -205,9 +205,18 @@ func (service *sessionRunService) execute(run *studioRun, prompt string) {
 	run.cancel = cancel
 	run.mu.Unlock()
 	defer cancel()
+	var emitErr error
+	var emitMu sync.Mutex
 	emit := func(event app.SessionEvent) error {
 		event.RunID = run.snapshot.ID
-		return run.append(event)
+		if err := run.append(event); err != nil {
+			failure := fmt.Errorf("persist Studio %s event: %w", event.Type, err)
+			emitMu.Lock()
+			emitErr = errors.Join(emitErr, failure)
+			emitMu.Unlock()
+			return failure
+		}
+		return nil
 	}
 	var runErr error
 	if controlled, ok := service.runner.(controlledSessionRunner); ok {
@@ -215,11 +224,19 @@ func (service *sessionRunService) execute(run *studioRun, prompt string) {
 	} else {
 		runErr = service.runner.Run(runContext, run.store, run.store.SessionID, prompt, emit)
 	}
+	// Keep persistence failures even if the runner only returns its resulting
+	// cancellation. Cancellation alone does not mean Studio is shutting down.
+	emitMu.Lock()
+	if emitErr != nil && !errors.Is(runErr, emitErr) {
+		runErr = errors.Join(runErr, emitErr)
+	}
+	emitMu.Unlock()
 	if runErr != nil && !run.terminal() {
 		typeName := "error"
 		detail := runErr.Error()
-		if errors.Is(runErr, context.Canceled) || errors.Is(runContext.Err(), context.Canceled) {
-			typeName, detail = "cancelled", "Turn stopped because Studio is shutting down"
+		if service.ctx.Err() != nil {
+			typeName = "cancelled"
+			detail = "Turn stopped because Studio is shutting down: " + detail
 		}
 		_ = run.append(app.SessionEvent{Type: typeName, RunID: run.snapshot.ID, Detail: detail})
 	} else if runErr == nil && !run.terminal() {
@@ -566,6 +583,7 @@ func (run *studioRun) applyEventLocked(event app.SessionEvent, now time.Time) {
 			run.snapshot.FinishedAt = timePointer(now)
 		}
 	case "cancelled":
+		run.snapshot.Error = event.Detail
 		run.snapshot.PendingQuestion = nil
 		if run.guidance != "" {
 			run.snapshot.Status = "redirecting"
