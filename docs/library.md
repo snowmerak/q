@@ -11,8 +11,8 @@ search, resource reads, and explicit reconciliation are available through the
 `/v1/skills/*` routes and are consumed by the existing MCP skill tools.
 
 Proposition extraction, queued writes, persistent write idempotency, BM25
-search, embedding generation, multi-vector hybrid search, and `created_at`
-recency ranking are implemented.
+search, embedding generation, multi-vector hybrid search, bounded Librarian
+retrieval during adjudication, and `created_at` recency ranking are implemented.
 
 ## Purpose and decisions
 
@@ -396,7 +396,10 @@ bounded single-proposition schema and obvious credential-like content, then
 places the request in a durable SQLite FIFO queue. The handler waits while the
 single Library worker searches up to five existing propositions using the
 final hybrid score with recency disabled and starts a fresh `librarian` role
-session to choose `create`, `merge`, or `discard`. Create persists a new global
+session. The Librarian can decide immediately from those candidates or use
+`search_propositions` to reformulate a query and `get_proposition` to inspect a
+returned candidate's provenance and extraction metadata. It finishes with
+`resolve_proposition`, choosing `create`, `merge`, or `discard`. Create persists a new global
 record; merge unions bounded refs, queries, tags, confidence, and matching query
 vectors into the selected record; discard writes no proposition. Reusing a key
 with identical input returns the stored decision; different input returns HTTP
@@ -404,6 +407,44 @@ with identical input returns the stored decision; different input returns HTTP
 so a missing legacy checkpoint cannot reuse an older segment key with newly
 generated content. Within a checkpoint, the key is never advanced until the
 stored request receives a Library disposition.
+
+Each judgment allows at most three additional searches, with five results per
+search, and five detail reads. Search queries contain at most 512 characters;
+all adjudication searches disable recency weighting. Rewritten queries use the
+leader's configured embedding provider for hybrid search, or BM25 alone when
+embedding is not configured. Detail reads and merge/discard targets must refer
+to candidates actually returned in that judgment. The Library tracks those
+IDs independently of the model and validates the final target before saving
+the decision.
+
+The initial search, model rounds, lookups, and terminal acknowledgment share
+the existing 90-second judgment deadline. Initial input and accumulated tool
+results, assistant text, and arguments have a 128 KiB byte budget (not a model
+token guarantee). The three tool definitions remain fixed throughout the
+session. Each round accepts one tool call; lookups are read-only, and only the
+saved final decision can mutate proposition memory. Search, embedding, and
+detail failures, exhausted limits, invalid targets, or cancellation leave no
+new disposition to apply; a lookup failure is never treated as an empty match.
+
+Research messages and candidate lists are temporary. An interrupted judgment
+can repeat its reads when the same registration is resubmitted. Once a valid
+decision is saved, recovery applies that decision without repeating research.
+Embedded callers that supply the original `PropositionJudge` interface keep
+their initial-candidate behavior; implementing `PropositionRetrievalJudge`
+opts into the bounded, read-only `PropositionLookup` capability. No stored
+proposition or queue schema migration is required. This adds retrieval, not
+supersession or validity tracking.
+
+Deterministic tests cover finding and merging a memory absent from the initial
+candidates, delivery of detail metadata, model fallback with retained evidence,
+lookup failures and limits, cancellation, independent host target validation,
+failed-job resubmission after restart, and replay of a saved decision without
+model calls. Live-model retrieval quality and latency have not been measured.
+The full regression suite passed with `go test -p 1 ./... -timeout=120s`.
+Static validation used `go vet ./...` and golangci-lint 2.14.0 on `./library`
+with `--no-config` (errcheck, govet, ineffassign, staticcheck, and unused), all
+passing. The isolated module archive installation check also passed.
+`govulncheck` was unavailable in this environment and was not run.
 
 On the first run after this checkpoint format is introduced, an already
 partially applied legacy segment has no recoverable payload. Its new generation

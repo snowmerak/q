@@ -423,12 +423,21 @@ func (s *propositionService) processNext(ctx context.Context) (bool, error) {
 			err = errors.New("library: proposition judge is not configured")
 		} else {
 			var candidates []PropositionSearchHit
-			candidates, err = s.similarCandidates(ctx, job.Request)
+			judgeContext, cancelJudge := context.WithTimeout(ctx, propositionJudgeTimeout)
+			candidates, err = s.similarCandidates(judgeContext, job.Request)
 			if err == nil {
-				judgeContext, cancelJudge := context.WithTimeout(ctx, propositionJudgeTimeout)
-				decision, err = s.judge.JudgeProposition(judgeContext, job.Request, candidates)
-				cancelJudge()
+				if judge, ok := s.judge.(PropositionRetrievalJudge); ok {
+					lookup := &propositionLookup{service: s, candidates: append([]PropositionSearchHit(nil), candidates...)}
+					decision, err = judge.JudgePropositionWithRetrieval(judgeContext, job.Request, candidates, lookup)
+					candidates = lookup.candidates
+				} else {
+					decision, err = s.judge.JudgeProposition(judgeContext, job.Request, candidates)
+				}
 			}
+			if err == nil {
+				err = judgeContext.Err()
+			}
+			cancelJudge()
 			if err == nil {
 				err = validatePropositionDecision(decision, candidates)
 			}
