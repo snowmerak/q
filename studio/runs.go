@@ -315,7 +315,7 @@ func (service *sessionRunService) forget(root, sessionID string) error {
 	service.mu.Lock()
 	if service.active[key] != "" {
 		service.mu.Unlock()
-		return errors.New("the selected session still has a running turn")
+		return fmt.Errorf("%w: the selected session still has a running turn", workspace.ErrLocked)
 	}
 	var removed []*studioRun
 	for id, run := range service.runs {

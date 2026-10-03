@@ -3,6 +3,7 @@ package studio
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -341,6 +342,46 @@ func TestStudioRealRuntimeReportsResponseUsage(t *testing.T) {
 		if usage == nil || usage.InputTokens != 2048 || usage.OutputTokens != 96 || usage.CachedTokens == nil || *usage.CachedTokens != 1536 {
 			t.Fatalf("persisted response usage = %#v", usage)
 		}
+	}
+}
+
+func TestStudioLiveSessionClearAndDeleteBetweenTurns(t *testing.T) {
+	fixture := newStudioIntegration(t)
+	server := httptest.NewServer(fixture.handler)
+	defer server.Close()
+	base := "/api/v1/sessions/" + fixture.session.SessionID
+	query := "?workspace_root=" + url.QueryEscape(fixture.root)
+	complete := func(prompt string) {
+		t.Helper()
+		run := fixture.start(t, prompt)
+		page := waitStudioPage(t, server.URL+base+"/runs/"+run.ID+"/events"+query, func(page studioRunPage) bool {
+			return page.Run.Status == "completed" || page.Run.Status == "failed"
+		})
+		if page.Run.Status != "completed" {
+			t.Fatalf("turn failed: %#v", page.Run)
+		}
+	}
+	complete("first turn")
+	complete("second turn")
+	response := serveJSON(t, fixture.handler, http.MethodPost, base+"/clear", workspaceRequest{WorkspaceRoot: fixture.root})
+	if response.Code != http.StatusOK {
+		t.Fatalf("idle session clear: %d %s", response.Code, response.Body.String())
+	}
+	complete("after clear")
+	saved, err := fixture.session.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, _ := json.Marshal(saved.Transcript)
+	if strings.Contains(string(encoded), "first turn") || strings.Contains(string(encoded), "second turn") {
+		t.Fatal("cleared live state returned in a later turn")
+	}
+	response = serveJSON(t, fixture.handler, http.MethodDelete, base+query, nil)
+	if response.Code != http.StatusNoContent {
+		t.Fatalf("idle session delete: %d %s", response.Code, response.Body.String())
+	}
+	if _, err := fixture.session.Load(); !errors.Is(err, workspace.ErrNotFound) {
+		t.Fatalf("deleted session still exists: %v", err)
 	}
 }
 

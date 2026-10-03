@@ -58,6 +58,10 @@ func (service *sessionsService) serveDeleteDelegation(writer http.ResponseWriter
 		writeAPIError(writer, http.StatusBadRequest, errors.New("delegation path exceeds maximum depth"))
 		return
 	}
+	if err := service.releaseSession(root, request.PathValue("session")); err != nil {
+		writeSessionError(writer, err)
+		return
+	}
 	if err := workspace.DeleteCompletedDelegation(
 		root,
 		request.PathValue("session"),

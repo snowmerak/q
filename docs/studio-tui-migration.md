@@ -27,6 +27,15 @@
 
 ## 현재 기준선
 
+Studio의 `SessionHost`는 프로세스 안에서 session별 rendererless 실행 상태를 유지한다.
+일반 turn 완료는 model, provider conversation ID, 문맥 token 보정이나 MCP/LSP 연결을
+폐기하지 않으며, idle 상태에서도 백그라운드 학습 결과를 처리한다. clear/delete와
+host 종료는 해당 자원을 닫는다. model/provider, workspace/project나 MCP/LSP
+설정이 바뀌면 다음 turn에서 idle 실행 상태를 재생성해 새 설정을 적용한다. learning
+toggle은 유지 중인 실행 상태에 즉시 적용하며 embedding 전환은 idle archive lease를 닫는다. session
+파일과 Studio run event log는 계속 복구·재연결의 권위 데이터로 사용한다. 토큰 footer는
+TUI와 같이 최종 assistant 응답의 사용량만 표시하며 tool 호출에 같은 값이 반복되지 않는다.
+
 Studio에는 repository session lifecycle과 Markdown chat, global model/provider/runtime,
 Gateway/System One/Library service, Loom operation, MCP, LSP, Skills, subagent/ACP,
 `.qignore`, changes와 commit workflow, durable run과 개입 control이 있다. directory

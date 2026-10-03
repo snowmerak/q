@@ -216,15 +216,37 @@ func (service *sessionsService) serveDelete(writer http.ResponseWriter, request 
 		writeAPIError(writer, http.StatusBadRequest, err)
 		return
 	}
-	if err := workspace.DeleteSession(root, request.PathValue("session"), "q studio session delete"); err != nil {
+	if err := service.releaseSession(root, request.PathValue("session")); err != nil {
 		writeSessionError(writer, err)
 		return
 	}
-	if err := service.runs.forget(root, request.PathValue("session")); err != nil {
-		writeAPIError(writer, http.StatusInternalServerError, err)
+	store, err := (workspace.Store{Root: root}).ForSession(request.PathValue("session"))
+	if err != nil {
+		writeSessionError(writer, err)
+		return
+	}
+	if err := service.deleteSession(store); err != nil {
+		writeSessionError(writer, err)
 		return
 	}
 	writer.WriteHeader(http.StatusNoContent)
+}
+
+func (service *sessionsService) deleteSession(store workspace.Store) (returnErr error) {
+	// Hold the shared workspace lock before removing Studio artifacts too;
+	// an external TUI or a newly queued turn may still own this session.
+	lock, err := workspace.AcquireSessionLock(store.Root, store.SessionID, "q studio session delete")
+	if err != nil {
+		return err
+	}
+	defer func() { returnErr = errors.Join(returnErr, lock.Close()) }()
+	if err := service.runs.forget(store.Root, store.SessionID); err != nil {
+		return err
+	}
+	if err := clearStudioRunArtifacts(store); err != nil {
+		return err
+	}
+	return store.ClearSession()
 }
 
 func (service *sessionsService) serveClear(writer http.ResponseWriter, request *http.Request) {
@@ -236,6 +258,14 @@ func (service *sessionsService) serveClear(writer http.ResponseWriter, request *
 	root, err := canonicalWorkspaceDirectory(input.WorkspaceRoot)
 	if err != nil {
 		writeAPIError(writer, http.StatusBadRequest, err)
+		return
+	}
+	if err := service.releaseSession(root, request.PathValue("session")); err != nil {
+		writeSessionError(writer, err)
+		return
+	}
+	if err := service.runs.forget(root, request.PathValue("session")); err != nil {
+		writeSessionError(writer, err)
 		return
 	}
 	value, err := workspace.ResetSession(root, request.PathValue("session"), "q studio session clear")
@@ -252,11 +282,16 @@ func (service *sessionsService) serveClear(writer http.ResponseWriter, request *
 		writeAPIError(writer, http.StatusInternalServerError, err)
 		return
 	}
-	if err := service.runs.forget(root, store.SessionID); err != nil {
-		writeAPIError(writer, http.StatusInternalServerError, err)
-		return
-	}
 	writeJSON(writer, http.StatusOK, detailFromSession(root, store, value))
+}
+
+func (service *sessionsService) releaseSession(root, sessionID string) error {
+	if releaser, ok := service.runner.(interface {
+		ReleaseSession(workspace.Store, string) error
+	}); ok {
+		return releaser.ReleaseSession(workspace.Store{Root: root}, sessionID)
+	}
+	return nil
 }
 
 func (service *sessionsService) serveCompact(writer http.ResponseWriter, request *http.Request) {
@@ -312,6 +347,14 @@ func (service *sessionsService) serveLearning(writer http.ResponseWriter, reques
 		if err := (workspace.Store{Root: root}).SaveLearningConfig(value); err != nil {
 			writeAPIError(writer, http.StatusInternalServerError, err)
 			return
+		}
+		if runtime, ok := service.runner.(interface {
+			RefreshLearning(context.Context, workspace.Store) error
+		}); ok {
+			if err := runtime.RefreshLearning(request.Context(), workspace.Store{Root: root}); err != nil {
+				writeAPIError(writer, http.StatusInternalServerError, err)
+				return
+			}
 		}
 		writeJSON(writer, http.StatusOK, learningResponse{WorkspaceRoot: root, Enabled: !value.Disabled})
 	default:

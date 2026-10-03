@@ -33,7 +33,7 @@
               {/each}
             </div>
           {/if}
-          {#if message.role === 'assistant' && message.usage}
+          {#if message.role === 'assistant' && !message.tool_calls?.length && message.usage}
             <footer class="response-usage" aria-label="Response token usage">
               <span>Input {tokenNumber.format(message.usage.input_tokens)}</span>
               <span title={message.usage.cached_tokens === undefined ? 'The provider did not report cached input tokens' : 'Cached input is included in input tokens'}>Cached {message.usage.cached_tokens === undefined ? '—' : tokenNumber.format(message.usage.cached_tokens)}</span>

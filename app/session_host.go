@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"strings"
 	"sync"
 
@@ -159,9 +158,12 @@ func (control *SessionRunControl) result() error {
 	return errors.New("session turn is no longer running")
 }
 
-// SessionHost owns process-wide dependencies shared by rendererless default
-// loop turns. Each Run opens only the requested repository and session.
+// SessionHost owns process-wide dependencies and live repository sessions.
+// Runs reuse each session's model, provider affinity and tool connections.
 type SessionHost struct {
+	liveMu            sync.Mutex
+	liveSessions      map[string]*liveSession
+	liveClosed        bool
 	ctx               context.Context
 	runtime           *hostruntime.Runtime
 	store             config.Store
@@ -220,7 +222,7 @@ func (host *SessionHost) resolveSessionWorkspace(primary string) (SessionWorkspa
 }
 
 func (host *SessionHost) Close() error {
-	if host == nil || host.runtime == nil {
+	if host == nil {
 		return nil
 	}
 	host.delegationMu.Lock()
@@ -232,8 +234,12 @@ func (host *SessionHost) Close() error {
 		run.cancel(context.Canceled)
 	}
 	host.delegationMu.Unlock()
+	sessionsErr := host.closeLiveSessions()
 	host.delegationWG.Wait()
-	return host.runtime.Close()
+	if host.runtime == nil {
+		return sessionsErr
+	}
+	return errors.Join(sessionsErr, host.runtime.Close())
 }
 
 func (host *SessionHost) ensureProvider(loaded config.Config) (config.Config, error) {
@@ -275,6 +281,9 @@ func (host *SessionHost) ApplyGateway(ctx context.Context, value gateway.Config)
 func (host *SessionHost) SyncEmbeddings(ctx context.Context, root string, value config.Config) (returnErr error) {
 	if host == nil || host.runtime == nil {
 		return fmt.Errorf("%w: embedding runtime is unavailable", ErrSessionRuntimeUnavailable)
+	}
+	if err := host.releaseIdleSessions(); err != nil {
+		return err
 	}
 	value, err := host.ensureProvider(value)
 	if err != nil {
@@ -372,7 +381,7 @@ func (host *SessionHost) run(
 	sessionID, prompt string,
 	emit SessionEventSink,
 	control *SessionRunControl,
-) (returnErr error) {
+) error {
 	if host == nil {
 		return fmt.Errorf("%w: host is unavailable", ErrSessionRuntimeUnavailable)
 	}
@@ -383,71 +392,18 @@ func (host *SessionHost) run(
 	if prompt == "" {
 		return errors.New("prompt is required")
 	}
-	if requestContext == nil {
-		requestContext = context.Background()
-	}
-	runContext, cancelRun := context.WithCancel(requestContext)
-	runContext = context.WithValue(runContext, delegationHostKey{}, host)
-	stopHostCancellation := context.AfterFunc(host.ctx, cancelRun)
-	defer stopHostCancellation()
-	defer cancelRun()
-
-	prepared, err := host.prepareSession(runContext, workspaceStore, sessionID)
+	session, err := host.acquireLiveSession(workspaceStore, sessionID)
 	if err != nil {
 		return err
 	}
-	defer func() { returnErr = errors.Join(returnErr, prepared.Close()) }()
-
-	if emit != nil {
-		if err := emit(SessionEvent{
-			Type: "session", WorkingDirectory: prepared.store.Root,
-			SessionID: prepared.store.SessionID, Created: prepared.created,
-		}); err != nil {
-			return err
-		}
-		for _, warning := range prepared.warnings {
-			if err := emit(SessionEvent{Type: "status", Detail: "Warning: " + warning.Error()}); err != nil {
-				return err
-			}
-		}
-	}
-
-	updated, initial := prepared.state.startChatTurn(prompt, true)
-	state := updated.(model)
-	if !state.waiting || initial == nil {
-		message := strings.TrimSpace(state.status)
-		if message == "" {
-			message = "session turn did not start"
-		}
-		return fmt.Errorf("%w: %s", ErrSessionRuntimeUnavailable, message)
-	}
-	contextUsed, contextSize := 0, 0
-	if usage, ok := sessionContextUsageEvent(state); ok {
-		contextUsed, contextSize = usage.ContextUsed, usage.ContextSize
-		if emit != nil {
-			if err := emit(usage); err != nil {
-				return err
-			}
-		}
-	}
-
-	execution := sessionExecutionModel{
-		state: state, initial: initial, emit: emit, cancel: cancelRun, control: control,
-		contextUsed: contextUsed, contextSize: contextSize,
-	}
-	final, runErr := tea.NewProgram(
-		execution, tea.WithContext(runContext), tea.WithInput(nil), tea.WithOutput(io.Discard),
-		tea.WithoutRenderer(), tea.WithoutSignalHandler(),
-	).Run()
-	if result, ok := final.(sessionExecutionModel); ok {
-		return errors.Join(runErr, result.err)
-	}
-	return runErr
+	defer session.busy.Unlock()
+	_, err = session.execute(requestContext, prompt, false, emit, control)
+	return err
 }
 
 // Compact summarizes older context for one inactive session without adding a
 // user message or changing its transcript.
-func (host *SessionHost) Compact(requestContext context.Context, workspaceStore workspace.Store, sessionID string) (status string, returnErr error) {
+func (host *SessionHost) Compact(requestContext context.Context, workspaceStore workspace.Store, sessionID string) (string, error) {
 	if host == nil {
 		return "", fmt.Errorf("%w: host is unavailable", ErrSessionRuntimeUnavailable)
 	}
@@ -457,34 +413,12 @@ func (host *SessionHost) Compact(requestContext context.Context, workspaceStore 
 	if strings.TrimSpace(sessionID) == "" {
 		return "", errors.New("session ID is required")
 	}
-	if requestContext == nil {
-		requestContext = context.Background()
-	}
-	runContext, cancelRun := context.WithCancel(requestContext)
-	stopHostCancellation := context.AfterFunc(host.ctx, cancelRun)
-	defer stopHostCancellation()
-	defer cancelRun()
-
-	prepared, err := host.prepareSession(runContext, workspaceStore, sessionID)
+	session, err := host.acquireLiveSession(workspaceStore, sessionID)
 	if err != nil {
 		return "", err
 	}
-	defer func() { returnErr = errors.Join(returnErr, prepared.Close()) }()
-
-	updated, initial := prepared.state.startManualCompaction()
-	state := updated.(model)
-	if !state.waiting || initial == nil {
-		return strings.TrimSpace(state.status), nil
-	}
-	execution := sessionCompactionModel{state: state, initial: initial, cancel: cancelRun}
-	final, runErr := tea.NewProgram(
-		execution, tea.WithContext(runContext), tea.WithInput(nil), tea.WithOutput(io.Discard),
-		tea.WithoutRenderer(), tea.WithoutSignalHandler(),
-	).Run()
-	if result, ok := final.(sessionCompactionModel); ok {
-		return strings.TrimSpace(result.state.status), errors.Join(runErr, result.err)
-	}
-	return "", runErr
+	defer session.busy.Unlock()
+	return session.execute(requestContext, "", true, nil, nil)
 }
 
 type preparedSession struct {
@@ -557,8 +491,12 @@ func (host *SessionHost) prepareSession(runContext context.Context, workspaceSto
 	if err != nil {
 		return nil, fmt.Errorf("resolve Studio project workspaces: %w", err)
 	}
+	memoryContext := host.ctx
+	if host.runtime != nil {
+		memoryContext = host.runtime.MemoryContext()
+	}
 	startup := startupRequest{
-		ctx: runContext, memoryCtx: runContext, store: host.store, workspaceStore: prepared.store,
+		ctx: runContext, memoryCtx: memoryContext, store: host.store, workspaceStore: prepared.store,
 		loaded: loaded, manager: host.manager, factory: host.factory, lifecycle: prepared.lifecycle, providerReady: true,
 		auxiliaryRoots: append([]string(nil), projectContext.AuxiliaryRoots...),
 	}.run(nil)
@@ -613,6 +551,8 @@ func sessionStartupWarnings(result runtimeInitializedMsg) []error {
 }
 
 type sessionExecutionModel struct {
+	keepAlive             bool
+	finished              func(model, error)
 	state                 model
 	initial               tea.Cmd
 	emit                  SessionEventSink
@@ -627,14 +567,29 @@ type sessionExecutionModel struct {
 	err                   error
 }
 
-type sessionRunControlMsg struct{ request sessionRunControlRequest }
+type sessionRunControlMsg struct {
+	request sessionRunControlRequest
+	control *SessionRunControl
+}
 
 func (m sessionExecutionModel) Init() tea.Cmd {
-	return tea.Batch(m.initial, waitSessionRunControl(m.control))
+	return tea.Batch(m.initial, waitSessionRunControl(m.control, m.state.ctx))
 }
 
 func (m sessionExecutionModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
+	if result, ok := message.(chatResultMsg); ok {
+		if result.err == nil && (result.response == nil || len(result.response.Choices) == 0) {
+			result.err = errors.New("session turn returned no response")
+		}
+		return m.updateAgentEvent(agentEventMsg{turnID: result.turnID, event: agentEvent{
+			response: result.response, err: result.err, requestEstimate: result.requestEstimate, toolCalls: result.toolCalls,
+		}})
+	}
 	if command, ok := message.(sessionRunControlMsg); ok {
+		if command.control != m.control {
+			command.request.ack <- errors.New("session turn has finished")
+			return m, nil
+		}
 		return m.updateControl(command.request)
 	}
 	eventMessage, isAgentEvent := message.(agentEventMsg)
@@ -642,9 +597,12 @@ func (m sessionExecutionModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		updated, command := m.state.Update(message)
 		m.state = updated.(model)
 		if !m.emitContextUsage() {
-			return m, tea.Quit
+			return m.failExecution()
 		}
 		return m, command
+	}
+	if eventMessage.turnID != 0 && eventMessage.turnID != m.state.turnID {
+		return m, nil
 	}
 	if m.paused {
 		m.deferred = &eventMessage
@@ -654,8 +612,11 @@ func (m sessionExecutionModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m sessionExecutionModel) updateAgentEvent(eventMessage agentEventMsg) (tea.Model, tea.Cmd) {
+	if eventMessage.turnID != 0 && eventMessage.turnID != m.state.turnID {
+		return m, nil
+	}
 	if m.cancelling {
-		return m, tea.Quit
+		return m.finishExecution(nil)
 	}
 	event := eventMessage.event
 	projected, projectedOK := projectSessionAgentEvent(event)
@@ -669,7 +630,7 @@ func (m sessionExecutionModel) updateAgentEvent(eventMessage agentEventMsg) (tea
 		if err := m.emit(projected); err != nil {
 			m.err = err
 			m.cancel()
-			return m, tea.Quit
+			return m.failExecution()
 		}
 	}
 	if event.question != nil {
@@ -680,25 +641,25 @@ func (m sessionExecutionModel) updateAgentEvent(eventMessage agentEventMsg) (tea
 			updated, command := m.state.Update(eventMessage)
 			m.state = updated.(model)
 			if !m.emitContextUsage() {
-				return m, tea.Quit
+				return m.failExecution()
 			}
 			return m, command
 		}
 		return m, waitAgentEvent(eventMessage.events, eventMessage.turnID)
 	}
 	if event.err != nil || event.response != nil {
-		updated, _ := m.state.Update(eventMessage)
+		updated, command := m.state.Update(eventMessage)
 		m.state = updated.(model)
 		if !m.emitContextUsage() {
-			return m, tea.Quit
+			return m.failExecution()
 		}
 		if event.err != nil {
 			m.err = event.err
-			return m, tea.Quit
+			return m.finishExecution(command)
 		}
 		if event.response == nil || len(event.response.Choices) == 0 {
 			m.err = errors.New("session turn returned no response")
-			return m, tea.Quit
+			return m.finishExecution(command)
 		}
 		if m.emit != nil {
 			sessionID := ""
@@ -713,14 +674,40 @@ func (m sessionExecutionModel) updateAgentEvent(eventMessage agentEventMsg) (tea
 				m.err = err
 			}
 		}
-		return m, tea.Quit
+		return m.finishExecution(command)
 	}
 	updated, command := m.state.Update(eventMessage)
 	m.state = updated.(model)
 	if !m.emitContextUsage() {
-		return m, tea.Quit
+		return m.failExecution()
 	}
 	return m, command
+}
+
+func (m *sessionExecutionModel) detach() {
+	m.emit, m.control, m.cancel, m.finished = nil, nil, nil, nil
+	m.paused, m.cancelling = false, false
+	m.deferred = nil
+	m.pendingQuestionCallID = ""
+}
+
+func (m sessionExecutionModel) finishExecution(command tea.Cmd) (tea.Model, tea.Cmd) {
+	if !m.keepAlive {
+		return m, tea.Quit
+	}
+	if m.finished != nil {
+		m.finished(m.state, m.err)
+	}
+	m.detach()
+	return m, command
+}
+
+func (m sessionExecutionModel) failExecution() (tea.Model, tea.Cmd) {
+	if m.keepAlive && m.state.waiting {
+		updated, _ := m.state.interruptTurn()
+		m.state = updated.(model)
+	}
+	return m.finishExecution(nil)
 }
 
 func sessionContextUsageEvent(state model) (SessionEvent, bool) {
@@ -755,7 +742,7 @@ func (m *sessionExecutionModel) emitContextUsage() bool {
 
 func (m sessionExecutionModel) updateControl(request sessionRunControlRequest) (tea.Model, tea.Cmd) {
 	acknowledge := func(err error) { request.ack <- err }
-	nextControl := waitSessionRunControl(m.control)
+	nextControl := waitSessionRunControl(m.control, m.state.ctx)
 	switch request.action {
 	case "answer":
 		answer := strings.TrimSpace(request.answer)
@@ -779,7 +766,7 @@ func (m sessionExecutionModel) updateControl(request sessionRunControlRequest) (
 				m.err = err
 				acknowledge(err)
 				m.cancel()
-				return m, tea.Quit
+				return m.failExecution()
 			}
 		}
 		m.pendingQuestionCallID = ""
@@ -796,7 +783,7 @@ func (m sessionExecutionModel) updateControl(request sessionRunControlRequest) (
 				m.err = err
 				acknowledge(err)
 				m.cancel()
-				return m, tea.Quit
+				return m.failExecution()
 			}
 		}
 		acknowledge(nil)
@@ -812,7 +799,7 @@ func (m sessionExecutionModel) updateControl(request sessionRunControlRequest) (
 				m.err = err
 				acknowledge(err)
 				m.cancel()
-				return m, tea.Quit
+				return m.failExecution()
 			}
 		}
 		acknowledge(nil)
@@ -833,7 +820,7 @@ func (m sessionExecutionModel) updateControl(request sessionRunControlRequest) (
 			}
 		}
 		acknowledge(m.err)
-		return m, tea.Quit
+		return m.finishExecution(nil)
 	default:
 		err := fmt.Errorf("unknown session control action %q", request.action)
 		acknowledge(err)
@@ -841,15 +828,20 @@ func (m sessionExecutionModel) updateControl(request sessionRunControlRequest) (
 	}
 }
 
-func waitSessionRunControl(control *SessionRunControl) tea.Cmd {
+func waitSessionRunControl(control *SessionRunControl, ctx context.Context) tea.Cmd {
 	if control == nil {
 		return nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
 	}
 	return func() tea.Msg {
 		select {
 		case request := <-control.commands:
-			return sessionRunControlMsg{request: request}
+			return sessionRunControlMsg{request: request, control: control}
 		case <-control.done:
+			return nil
+		case <-ctx.Done():
 			return nil
 		}
 	}

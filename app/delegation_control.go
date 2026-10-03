@@ -151,6 +151,11 @@ func (host *SessionHost) StartDelegation(ctx context.Context, root workspace.Sto
 	if prompt == "" || len(prompt) > subagent.MaximumDelegatePromptBytes {
 		return DelegationRunSnapshot{}, errors.New("content must be nonempty and within the prompt size limit")
 	}
+	// A standalone child followup updates this session's durable tree. Release
+	// the idle parent runtime so the next parent turn reloads those changes.
+	if err := host.ReleaseSession(root, root.SessionID); err != nil {
+		return DelegationRunSnapshot{}, err
+	}
 	host.delegationMu.Lock()
 	if host.delegationClosing {
 		host.delegationMu.Unlock()

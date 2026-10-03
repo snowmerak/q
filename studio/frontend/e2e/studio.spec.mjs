@@ -357,6 +357,8 @@ for (const cache of [
     await expect(usage).toContainText(cache.label);
     await expect(usage).toContainText('Output 96');
     await expect(page.locator('.user-message .response-usage')).toHaveCount(0);
+    await expect(page.locator('.response-usage')).toHaveCount(1);
+    await expect(page.locator('.chat-message').filter({ has: page.locator('.message-tools') }).locator('.response-usage')).toHaveCount(0);
     const detail = await (await request.get(`/api/v1/sessions/${session.session.session_id}?workspace_root=${encodeURIComponent(fixture.root)}`)).json();
     const counts = detail.transcript.filter((message) => message.role === 'assistant').map((message) => message.usage);
     expect(counts.length).toBeGreaterThanOrEqual(3);
