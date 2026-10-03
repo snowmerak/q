@@ -52,6 +52,9 @@ func projectAgentLoopEvent(source agentloop.Event) agentEvent {
 		event.message = &message
 		event.toolIsError = source.MessageIsToolError()
 	}
+	if usage, ok := source.Usage(); ok {
+		event.usage = &usage
+	}
 	if call, ok := source.ToolCall(); ok {
 		event.call = &call
 	}

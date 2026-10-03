@@ -91,6 +91,7 @@ type sessionState struct {
 	runID                     string
 	sessionTitle              string
 	sessionUpdatedAt          time.Time
+	responseUsage             []workspace.ResponseUsage
 	standalone                bool
 	standaloneRoot            screen
 }

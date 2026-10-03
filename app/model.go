@@ -224,6 +224,7 @@ type chatResultMsg struct {
 // inspect events through the exported accessor methods.
 type AgentEvent struct {
 	persistenceAck  chan struct{}
+	usage           *client.Usage
 	status          string
 	activity        *agentActivity
 	trace           *agentTrace
@@ -1129,6 +1130,7 @@ func (m *model) enterChat(value config.Config, configuredClient chatClient) {
 	workspaceLearningErr := m.restoreWorkspaceLearning()
 	active := m.activeConfig()
 	m.messages = nil
+	m.responseUsage = nil
 	m.transcriptThoughts = nil
 	m.streamResponse = ""
 	if value.Provider.SystemPrompt != "" {
@@ -1587,6 +1589,7 @@ func (m *model) resetConversation(runIDs ...string) {
 
 func (m *model) resetConversationState(runIDs ...string) {
 	m.messages = nil
+	m.responseUsage = nil
 	m.transcriptThoughts = nil
 	m.streamResponse = ""
 	if m.config.Provider.SystemPrompt != "" {
@@ -1636,6 +1639,7 @@ func (m *model) releaseConversationState(root string) {
 	}
 	m.messages = nil
 	m.memory = nil
+	m.responseUsage = nil
 	m.learning = nil
 	m.conversationID = ""
 	m.activeTask = nil
@@ -1750,6 +1754,7 @@ func (m *model) restoreWorkspaceSession() {
 	}
 	interruptedCalls := len(interruptedResults)
 	m.messages = mergeWorkspaceMessages(base, transcript)
+	m.responseUsage = append([]workspace.ResponseUsage(nil), session.ResponseUsage...)
 	requestContext := session.Context
 	if len(requestContext) == 0 {
 		requestContext = session.Transcript
@@ -1943,6 +1948,7 @@ func (m *model) saveWorkspaceSession() error {
 		Title:            m.sessionTitle,
 		UpdatedAt:        workspaceTimePointer(m.sessionUpdatedAt),
 		Transcript:       workspaceSessionMessages(m.messages),
+		ResponseUsage:    m.responseUsage,
 		Context:          requestContext,
 		ResponseReplay:   collectResponseReplay(requestContext),
 		ResponseAffinity: responseAffinity,

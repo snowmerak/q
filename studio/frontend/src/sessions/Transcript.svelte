@@ -10,6 +10,7 @@
   export let loading = false;
   export let onfile: ((path: string) => void) | undefined = undefined;
   let transcriptElement: HTMLElement | null = null;
+  const tokenNumber = new Intl.NumberFormat();
 
   export function scrollToBottom() {
     transcriptElement?.scrollTo({ top: transcriptElement.scrollHeight, behavior: 'smooth' });
@@ -31,6 +32,13 @@
                 </details>
               {/each}
             </div>
+          {/if}
+          {#if message.role === 'assistant' && message.usage}
+            <footer class="response-usage" aria-label="Response token usage">
+              <span>Input {tokenNumber.format(message.usage.input_tokens)}</span>
+              <span title={message.usage.cached_tokens === undefined ? 'The provider did not report cached input tokens' : 'Cached input is included in input tokens'}>Cached {message.usage.cached_tokens === undefined ? '—' : tokenNumber.format(message.usage.cached_tokens)}</span>
+              <span>Output {tokenNumber.format(message.usage.output_tokens)}</span>
+            </footer>
           {/if}
         </div>
       </article>

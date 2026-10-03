@@ -339,6 +339,40 @@ test('guidance redirects a real run without refresh and renders markdown and cod
   expect(transcript.some((message) => message.role === 'user' && message.content.includes('write the requested file'))).toBe(true);
 });
 
+for (const cache of [
+  { prompt: 'write the requested file', label: 'Cached 1,536', value: 1536 },
+  { prompt: 'write the requested file with zero cache', label: 'Cached 0', value: 0 },
+  { prompt: 'write the requested file with unreported cache', label: 'Cached —', value: undefined }
+]) {
+  test(`response token usage shows ${cache.label} and survives reload`, async ({ page, request }) => {
+    const fixture = await (await request.get('/_test/fixture')).json();
+    const session = await (await request.post('/api/v1/registered-sessions', { data: { workspace_root: fixture.root, create: true } })).json();
+    await page.goto(`/sessions/${session.registration_id}`);
+    const composer = page.locator('.composer textarea');
+    await composer.fill(cache.prompt);
+    await composer.press('Enter');
+    const reply = page.locator('.chat-message').filter({ has: page.getByRole('heading', { name: 'Studio result' }) });
+    const usage = reply.locator('.response-usage');
+    await expect(usage).toContainText('Input 2,048');
+    await expect(usage).toContainText(cache.label);
+    await expect(usage).toContainText('Output 96');
+    await expect(page.locator('.user-message .response-usage')).toHaveCount(0);
+    const detail = await (await request.get(`/api/v1/sessions/${session.session.session_id}?workspace_root=${encodeURIComponent(fixture.root)}`)).json();
+    const counts = detail.transcript.filter((message) => message.role === 'assistant').map((message) => message.usage);
+    expect(counts.length).toBeGreaterThanOrEqual(3);
+    for (const count of counts) expect(count).toEqual({ input_tokens: 2048, output_tokens: 96, ...(cache.value === undefined ? {} : { cached_tokens: cache.value }) });
+    await page.reload();
+    await expect(usage).toContainText(cache.label);
+    await expect(usage).toContainText('Input 2,048');
+    await expect(usage).toContainText('Output 96');
+    await page.setViewportSize({ width: 390, height: 844 });
+    await usage.scrollIntoViewIfNeeded();
+    await expect(usage).toBeVisible();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+    await page.screenshot({ path: join(tmpdir(), `q-studio-response-usage-${cache.value === undefined ? 'unknown' : cache.value}.png`) });
+  });
+}
+
 test('failed runs retain their reason and activity after completion and reload', async ({ page, request }) => {
   const fixture = await (await request.get('/_test/fixture')).json();
   const session = await (await request.post('/api/v1/registered-sessions', { data: { workspace_root: fixture.root, create: true } })).json();

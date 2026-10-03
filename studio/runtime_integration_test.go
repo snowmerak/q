@@ -209,6 +209,13 @@ func studioTestModel(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	message := client.Message{Role: client.RoleAssistant}
+	usage := client.Usage{PromptTokens: 2048, CompletionTokens: 96, TotalTokens: 2144}
+	if !strings.Contains(text, "unreported cache") {
+		usage.PromptDetails = &client.TokenDetails{CachedTokens: 1536}
+		if strings.Contains(text, "zero cache") {
+			usage.PromptDetails.CachedTokens = 0
+		}
+	}
 	finish := "stop"
 	if fmt.Sprint(request.ToolChoice) != string(client.ToolChoiceNone) {
 		finish = "tool_calls"
@@ -220,13 +227,13 @@ func studioTestModel(w http.ResponseWriter, r *http.Request) {
 		for i, call := range message.ToolCalls {
 			calls = append(calls, map[string]any{"index": i, "id": call.ID, "type": call.Type, "function": call.Function})
 		}
-		chunk := map[string]any{"id": "studio-test", "model": "test-model", "choices": []any{map[string]any{"index": 0, "delta": map[string]any{"role": "assistant", "tool_calls": calls}, "finish_reason": finish}}}
+		chunk := map[string]any{"id": "studio-test", "model": "test-model", "choices": []any{map[string]any{"index": 0, "delta": map[string]any{"role": "assistant", "tool_calls": calls}, "finish_reason": finish}}, "usage": usage}
 		body, _ := json.Marshal(chunk)
 		_, _ = fmt.Fprintf(w, "data: %s\n\ndata: [DONE]\n\n", body)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]any{"id": "studio-test", "model": "test-model", "choices": []any{map[string]any{"index": 0, "message": message, "finish_reason": finish}}})
+	_ = json.NewEncoder(w).Encode(map[string]any{"id": "studio-test", "model": "test-model", "choices": []any{map[string]any{"index": 0, "message": message, "finish_reason": finish}}, "usage": usage})
 }
 
 func (fixture studioIntegration) start(t *testing.T, prompt string) studioRunSnapshot {
@@ -294,6 +301,46 @@ func TestStudioRealRuntimeGuidanceRedirectsAndPersistsTools(t *testing.T) {
 	}
 	if latest.ID != nextID {
 		t.Fatalf("latest = %q, want %q", latest.ID, nextID)
+	}
+}
+
+func TestStudioRealRuntimeReportsResponseUsage(t *testing.T) {
+	fixture := newStudioIntegration(t)
+	server := httptest.NewServer(fixture.handler)
+	defer server.Close()
+	run := fixture.start(t, "write the requested file")
+	base := server.URL + "/api/v1/sessions/" + fixture.session.SessionID
+	query := "?workspace_root=" + url.QueryEscape(fixture.root)
+	page := waitStudioPage(t, base+"/runs/"+run.ID+"/events"+query, func(page studioRunPage) bool { return page.Run.Status == "completed" || page.Run.Status == "failed" })
+	if page.Run.Status != "completed" {
+		t.Fatalf("run failed: %#v", page.Run)
+	}
+	resultUsageFound := false
+	for _, record := range page.Events {
+		if record.Event.Type == "result" {
+			usage := record.Event.Usage
+			resultUsageFound = usage != nil && usage.InputTokens == 2048 && usage.OutputTokens == 96 && usage.CachedTokens != nil && *usage.CachedTokens == 1536
+		}
+	}
+	if !resultUsageFound {
+		t.Fatal("result event omitted provider usage")
+	}
+	saved, err := fixture.session.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(saved.ResponseUsage) < 3 {
+		t.Fatalf("tool rounds and final response usage not saved: %#v", saved.ResponseUsage)
+	}
+	detail := detailFromSession(fixture.root, fixture.session, saved)
+	for _, message := range detail.Transcript {
+		if message.Role != "assistant" {
+			continue
+		}
+		usage := message.Usage
+		if usage == nil || usage.InputTokens != 2048 || usage.OutputTokens != 96 || usage.CachedTokens == nil || *usage.CachedTokens != 1536 {
+			t.Fatalf("persisted response usage = %#v", usage)
+		}
 	}
 }
 

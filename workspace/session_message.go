@@ -20,6 +20,7 @@ type sessionFile struct {
 	Title            string                `json:"title,omitempty"`
 	UpdatedAt        *time.Time            `json:"updated_at,omitempty"`
 	Transcript       []sessionMessage      `json:"transcript,omitempty"`
+	ResponseUsage    []ResponseUsage       `json:"response_usage,omitempty"`
 	Context          []sessionMessage      `json:"context,omitempty"`
 	ResponseReplay   []ResponseReplayItem  `json:"response_replay,omitempty"`
 	ResponseAffinity *ResponseAffinity     `json:"response_affinity,omitempty"`
@@ -58,6 +59,7 @@ func (s Session) MarshalJSON() ([]byte, error) {
 	return json.Marshal(sessionFile{
 		Version: CurrentVersion, ID: s.ID, RunID: s.RunID, Title: s.Title, UpdatedAt: s.UpdatedAt,
 		Transcript: toSessionMessages(s.Transcript), Context: toSessionMessages(s.Context),
+		ResponseUsage:  s.ResponseUsage,
 		ResponseReplay: s.ResponseReplay, ResponseAffinity: s.ResponseAffinity,
 		Learning: s.Learning, ActiveTask: s.ActiveTask,
 	})
@@ -96,6 +98,7 @@ func (s *Session) UnmarshalJSON(data []byte) error {
 		*s = Session{
 			Version: CurrentVersion, ID: saved.ID, RunID: saved.RunID, Title: saved.Title, UpdatedAt: saved.UpdatedAt,
 			Transcript: fromSessionMessages(saved.Transcript), Context: fromSessionMessages(saved.Context),
+			ResponseUsage:  saved.ResponseUsage,
 			ResponseReplay: saved.ResponseReplay, ResponseAffinity: saved.ResponseAffinity,
 			Learning: saved.Learning, ActiveTask: saved.ActiveTask,
 		}

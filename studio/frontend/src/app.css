@@ -471,6 +471,7 @@ dd.success { color: var(--green); }
 .message-avatar { display: grid; width: 28px; height: 28px; place-items: center; color: #cdbdff; border: 1px solid rgba(143, 92, 255, 0.32); border-radius: 5px; background: rgba(143, 92, 255, 0.1); }
 .user-message .message-avatar { color: #aab2c8; border-color: var(--border-strong); background: var(--surface-raised); }
 .message-content { min-width: 0; }
+.response-usage { display: flex; flex-wrap: wrap; gap: 6px 14px; margin-top: 10px; color: var(--muted); font: 11px ui-monospace, SFMono-Regular, Consolas, monospace; }
 .chat-message header { display: flex; align-items: center; gap: 8px; margin: 3px 0 9px; color: #bcc3d7; font-size: 13px; font-weight: 600; }
 .chat-message header span { color: var(--violet); font: 11px ui-monospace, SFMono-Regular, Consolas, monospace; font-weight: 400; }
 .streaming-message .message-avatar { box-shadow: 0 0 0 4px rgba(143, 92, 255, 0.07), 0 0 18px rgba(143, 92, 255, 0.15); }

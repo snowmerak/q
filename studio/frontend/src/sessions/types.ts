@@ -5,12 +5,14 @@ export type SessionSummary = {
   updated_at: string;
 };
 export type ToolCall = { id: string; function?: { name?: string; arguments?: string } };
+export type TokenUsage = { input_tokens: number; cached_tokens?: number; output_tokens: number };
 export type Message = {
   role: string;
   content?: string;
   name?: string;
   tool_call_id?: string;
   tool_calls?: ToolCall[];
+  usage?: TokenUsage;
 };
 export type SessionDetail = {
   workspace_root: string;
@@ -19,6 +21,7 @@ export type SessionDetail = {
   active_task?: { objective: string; completion_criteria?: string[]; started_at: string };
 };
 export type RunEvent = {
+  usage?: TokenUsage;
   type: string;
   run_id?: string;
   session_id?: string;

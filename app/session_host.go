@@ -11,6 +11,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/snowmerak/llm-provider/gateway"
 	"github.com/snowmerak/q/archiveembed"
+	"github.com/snowmerak/q/client"
 	"github.com/snowmerak/q/config"
 	"github.com/snowmerak/q/internal/hostruntime"
 	qlibrary "github.com/snowmerak/q/library"
@@ -51,6 +52,7 @@ type SessionEvent struct {
 	Outcome          string                `json:"outcome,omitempty"`
 	ContextUsed      int                   `json:"context_used,omitempty"`
 	ContextSize      int                   `json:"context_size,omitempty"`
+	Usage            *workspace.TokenUsage `json:"usage,omitempty"`
 }
 
 type SessionEventSink func(SessionEvent) error
@@ -706,6 +708,7 @@ func (m sessionExecutionModel) updateAgentEvent(eventMessage agentEventMsg) (tea
 			if err := m.emit(SessionEvent{
 				Type: "result", SessionID: sessionID, Outcome: event.outcome,
 				Content: strings.TrimSpace(event.response.Choices[0].Message.TextContent()),
+				Usage:   responseTokenUsage(event.response.Usage),
 			}); err != nil {
 				m.err = err
 			}
@@ -898,7 +901,11 @@ func projectSessionAgentEvent(event agentEvent) (SessionEvent, bool) {
 	case event.question != nil:
 		return SessionEvent{Type: "question", Question: event.question.Question, Context: event.question.Context, Choices: event.question.Choices}, true
 	case event.message != nil:
-		return SessionEvent{Type: "message", Role: string(event.message.Role), Name: event.message.Name, CallID: event.message.ToolCallID, Content: event.message.TextContent(), IsError: event.toolIsError}, true
+		projected := SessionEvent{Type: "message", Role: string(event.message.Role), Name: event.message.Name, CallID: event.message.ToolCallID, Content: event.message.TextContent(), IsError: event.toolIsError}
+		if event.message.Role == client.RoleAssistant && event.usage != nil {
+			projected.Usage = responseTokenUsage(*event.usage)
+		}
+		return projected, true
 	default:
 		return SessionEvent{}, false
 	}

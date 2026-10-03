@@ -35,11 +35,12 @@ type Session struct {
 	RunID   string `json:"run_id,omitempty"`
 	// LoopMode is retained only so older session files decode under strict JSON validation.
 	// New saves omit it and the application ignores its value.
-	LoopMode   string           `json:"loop_mode,omitempty"`
-	Title      string           `json:"title,omitempty"`
-	UpdatedAt  *time.Time       `json:"updated_at,omitempty"`
-	Transcript []client.Message `json:"transcript,omitempty"`
-	Context    []client.Message `json:"context,omitempty"`
+	LoopMode      string           `json:"loop_mode,omitempty"`
+	Title         string           `json:"title,omitempty"`
+	UpdatedAt     *time.Time       `json:"updated_at,omitempty"`
+	Transcript    []client.Message `json:"transcript,omitempty"`
+	ResponseUsage []ResponseUsage  `json:"response_usage,omitempty"`
+	Context       []client.Message `json:"context,omitempty"`
 	// ResponseReplay is private provider state aligned to Context indexes. It
 	// is not included in the searchable conversation archive.
 	ResponseReplay   []ResponseReplayItem  `json:"response_replay,omitempty"`
@@ -52,6 +53,21 @@ type ResponseReplayItem struct {
 	Index  int               `json:"index"`
 	Model  string            `json:"model"`
 	Output []json.RawMessage `json:"output"`
+}
+
+// TokenUsage records provider-reported counts; cached input is part of input.
+// A nil cache count distinguishes an unavailable report from a reported zero.
+type TokenUsage struct {
+	InputTokens  int  `json:"input_tokens"`
+	CachedTokens *int `json:"cached_tokens,omitempty"`
+	OutputTokens int  `json:"output_tokens"`
+}
+
+// ResponseUsage identifies an assistant message by its ordinal in the full
+// transcript, so host instructions do not shift the usage association.
+type ResponseUsage struct {
+	AssistantIndex int `json:"assistant_index"`
+	TokenUsage
 }
 
 type ResponseAffinity struct {
@@ -406,6 +422,13 @@ func validateSessionID(value string) error {
 }
 
 func cloneSession(session Session) Session {
+	session.ResponseUsage = append([]ResponseUsage(nil), session.ResponseUsage...)
+	for index := range session.ResponseUsage {
+		if cached := session.ResponseUsage[index].CachedTokens; cached != nil {
+			value := *cached
+			session.ResponseUsage[index].CachedTokens = &value
+		}
+	}
 	session.Transcript = append([]client.Message(nil), session.Transcript...)
 	session.Context = append([]client.Message(nil), session.Context...)
 	session.Learning = session.Learning.Clone()

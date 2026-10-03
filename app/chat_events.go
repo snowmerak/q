@@ -117,6 +117,9 @@ func (m model) updateAgentEvent(message agentEventMsg) (tea.Model, tea.Cmd) {
 	if event.message != nil {
 		m.streamResponse = ""
 		m.messages = append(m.messages, *event.message)
+		if event.message.Role == client.RoleAssistant && event.usage != nil {
+			m.recordResponseUsage(*event.usage)
+		}
 		learning := m.observeLearningMessage(*event.message)
 		if m.memory != nil {
 			m.memory.Append(*event.message)
@@ -194,6 +197,7 @@ func (m model) updateChatResult(message chatResultMsg) (tea.Model, tea.Cmd) {
 	}
 	m.messages = append(m.messages, message.intermediate...)
 	m.messages = append(m.messages, assistant)
+	m.recordResponseUsage(message.response.Usage)
 	learningCommands := make([]tea.Cmd, 0, len(message.intermediate)+2)
 	for _, intermediate := range message.intermediate {
 		learningCommands = append(learningCommands, m.observeLearningMessage(intermediate))

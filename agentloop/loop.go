@@ -157,7 +157,7 @@ func RunAgentLoop(ctx context.Context, request Request, events chan<- Event) {
 				}
 			}
 			appendHistory(assistant)
-			if !emitEvent(ctx, events, Event{message: &assistant}) {
+			if !emitEvent(ctx, events, Event{message: &assistant, usage: &response.Usage}) {
 				return
 			}
 			sources := strings.Join(agentinstructions.Sources(newInstructions), ", ")
@@ -179,7 +179,7 @@ func RunAgentLoop(ctx context.Context, request Request, events chan<- Event) {
 			continue
 		}
 		appendHistory(assistant)
-		if !emitEvent(ctx, events, Event{message: &assistant}) {
+		if !emitEvent(ctx, events, Event{message: &assistant, usage: &response.Usage}) {
 			return
 		}
 		for _, call := range assistant.ToolCalls {

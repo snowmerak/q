@@ -43,11 +43,12 @@ type sessionSummary struct {
 }
 
 type sessionMessage struct {
-	Role       string            `json:"role"`
-	Content    string            `json:"content,omitempty"`
-	Name       string            `json:"name,omitempty"`
-	ToolCallID string            `json:"tool_call_id,omitempty"`
-	ToolCalls  []client.ToolCall `json:"tool_calls,omitempty"`
+	Role       string                `json:"role"`
+	Content    string                `json:"content,omitempty"`
+	Name       string                `json:"name,omitempty"`
+	ToolCallID string                `json:"tool_call_id,omitempty"`
+	ToolCalls  []client.ToolCall     `json:"tool_calls,omitempty"`
+	Usage      *workspace.TokenUsage `json:"usage,omitempty"`
 }
 
 type sessionDetail struct {
@@ -369,11 +370,23 @@ func detailFromSession(root string, store workspace.Store, value workspace.Sessi
 		updatedAt = value.UpdatedAt.UTC()
 	}
 	transcript := make([]sessionMessage, 0, len(value.Transcript))
+	usageByAssistant := make(map[int]workspace.TokenUsage, len(value.ResponseUsage))
+	for _, usage := range value.ResponseUsage {
+		usageByAssistant[usage.AssistantIndex] = usage.TokenUsage
+	}
+	assistantIndex := 0
 	for _, message := range value.Transcript {
-		transcript = append(transcript, sessionMessage{
+		projected := sessionMessage{
 			Role: string(message.Role), Content: message.TextContent(), Name: message.Name,
 			ToolCallID: message.ToolCallID, ToolCalls: message.ToolCalls,
-		})
+		}
+		if message.Role == client.RoleAssistant {
+			if usage, ok := usageByAssistant[assistantIndex]; ok {
+				projected.Usage = &usage
+			}
+			assistantIndex++
+		}
+		transcript = append(transcript, projected)
 	}
 	return sessionDetail{
 		WorkspaceRoot: root,

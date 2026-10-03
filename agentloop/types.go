@@ -81,6 +81,7 @@ var errInteractionUnavailable = ErrInteractionUnavailable
 type Event struct {
 	status          string
 	message         *client.Message
+	usage           *client.Usage
 	call            *client.ToolCall
 	question        *AgentQuestion
 	answer          chan AgentAnswer
@@ -110,6 +111,14 @@ func (e Event) Message() (client.Message, bool) {
 }
 
 func (e Event) MessageIsToolError() bool { return e.toolIsError }
+
+// Usage returns the provider counts associated with an assistant message.
+func (e Event) Usage() (client.Usage, bool) {
+	if e.usage == nil {
+		return client.Usage{}, false
+	}
+	return *e.usage, true
+}
 
 func (e Event) ToolCall() (client.ToolCall, bool) {
 	if e.call == nil {
