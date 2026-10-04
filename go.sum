@@ -181,6 +181,10 @@ github.com/segmentio/encoding v0.5.4 h1:OW1VRern8Nw6ITAtwSZ7Idrl3MXCFwXHPgqESYfv
 github.com/segmentio/encoding v0.5.4/go.mod h1:HS1ZKa3kSN32ZHVZ7ZLPLXWvOVIiZtyJnO1gPH1sKt0=
 github.com/snowmerak/llm-provider v0.0.0-20260926090044-3043c15ef8b3 h1:zXrEgfi7fZbYNX9MCwoU+V9tEaAbFfZYzUUWU0/WyqM=
 github.com/snowmerak/llm-provider v0.0.0-20260926090044-3043c15ef8b3/go.mod h1:WFmHR1wFrFrz3KOm88WebLWnMnmw2+hq7tnBJ1ETvxg=
+github.com/snowmerak/llm-provider v0.0.0-20261004020013-ae344b103635 h1:9+BKB+oNm1qYF6IJdq/5t3M0q4FhZH4AL52KMqROiA0=
+github.com/snowmerak/llm-provider v0.0.0-20261004020013-ae344b103635/go.mod h1:WFmHR1wFrFrz3KOm88WebLWnMnmw2+hq7tnBJ1ETvxg=
+github.com/snowmerak/llm-provider v0.0.0-20261004031457-5232a15c51dd h1:EIYh6iJIisaBHAfmxRoumUEG2P33gOcgIK+G6jwaoIY=
+github.com/snowmerak/llm-provider v0.0.0-20261004031457-5232a15c51dd/go.mod h1:WFmHR1wFrFrz3KOm88WebLWnMnmw2+hq7tnBJ1ETvxg=
 github.com/snowmerak/q/third_party/acp-go-sdk v0.0.0-20260827012000-155b26051836 h1:Rw5MHyEJAtSSVs0gjP2znWFcFx92IhLXdcN3moT0ZFw=
 github.com/snowmerak/q/third_party/acp-go-sdk v0.0.0-20260827012000-155b26051836/go.mod h1:A3GH5F1IiBCYNpC2LNwHw6gpgoxQxSk+5bQfkuOdVGg=
 github.com/stretchr/testify v1.11.1 h1:7s2iGBzp5EwR7/aIZr8ao5+dra3wiQyKjjFuvgVKu7U=
