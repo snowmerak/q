@@ -29,6 +29,46 @@ type liveSession struct {
 	configuration [32]byte
 }
 
+// Reserve a session key while opening or draining it. Registry locks protect
+// only map changes; slow provider and learner shutdowns run outside them.
+type liveSessionOperation struct {
+	ctx    context.Context
+	cancel context.CancelFunc
+	done   chan struct{}
+}
+
+func (host *SessionHost) beginLiveSessionOperation(key string) (*liveSessionOperation, error) {
+	host.liveMu.Lock()
+	defer host.liveMu.Unlock()
+	if host.liveClosed {
+		return nil, errors.New("session host is closed")
+	}
+	if host.liveIdleDone != nil || host.liveOperations[key] != nil {
+		return nil, workspace.ErrLocked
+	}
+	if host.liveOperations == nil {
+		host.liveOperations = make(map[string]*liveSessionOperation)
+	}
+	if host.liveSessions == nil {
+		host.liveSessions = make(map[string]*liveSession)
+	}
+	parent := host.ctx
+	if parent == nil {
+		parent = context.Background()
+	}
+	ctx, cancel := context.WithCancel(context.WithValue(parent, delegationHostKey{}, host))
+	operation := &liveSessionOperation{ctx: ctx, cancel: cancel, done: make(chan struct{})}
+	host.liveOperations[key] = operation
+	return operation, nil
+}
+
+func (host *SessionHost) finishLiveSessionOperation(key string, operation *liveSessionOperation) {
+	host.liveMu.Lock()
+	delete(host.liveOperations, key)
+	close(operation.done)
+	host.liveMu.Unlock()
+}
+
 type liveSessionResult struct {
 	status string
 	err    error
@@ -135,21 +175,27 @@ func (host *SessionHost) sessionConfiguration(store workspace.Store) ([32]byte, 
 // acquireLiveSession leases one foreground operation. Configuration changes
 // reopen an idle session; ordinary prompts retain its provider and memory state.
 func (host *SessionHost) acquireLiveSession(store workspace.Store, sessionID string) (*liveSession, error) {
-	host.liveMu.Lock()
-	defer host.liveMu.Unlock()
-	if host.liveClosed {
-		return nil, errors.New("session host is closed")
+	key := liveSessionKey(store, sessionID)
+	operation, err := host.beginLiveSessionOperation(key)
+	if err != nil {
+		return nil, err
 	}
-	if host.liveSessions == nil {
-		host.liveSessions = make(map[string]*liveSession)
-	}
+	defer host.finishLiveSessionOperation(key, operation)
+	transferred := false
+	defer func() {
+		if !transferred {
+			operation.cancel()
+		}
+	}()
 	if sessionID != "" {
 		selected, err := store.ForSession(sessionID)
 		if err != nil {
 			return nil, err
 		}
-		key := liveSessionKey(store, sessionID)
-		if existing := host.liveSessions[key]; existing != nil {
+		host.liveMu.Lock()
+		existing := host.liveSessions[key]
+		host.liveMu.Unlock()
+		if existing != nil {
 			if !existing.busy.TryLock() {
 				return nil, workspace.ErrLocked
 			}
@@ -162,10 +208,16 @@ func (host *SessionHost) acquireLiveSession(store workspace.Store, sessionID str
 			case <-existing.done:
 			default:
 				if existing.configuration == configuration {
+					if err := operation.ctx.Err(); err != nil {
+						existing.busy.Unlock()
+						return nil, err
+					}
 					return existing, nil
 				}
 			}
+			host.liveMu.Lock()
 			delete(host.liveSessions, key)
+			host.liveMu.Unlock()
 			err = existing.close()
 			existing.busy.Unlock()
 			if err != nil {
@@ -173,25 +225,30 @@ func (host *SessionHost) acquireLiveSession(store workspace.Store, sessionID str
 			}
 		}
 	}
-	parent := host.ctx
-	if parent == nil {
-		parent = context.Background()
+	if err := operation.ctx.Err(); err != nil {
+		return nil, err
 	}
-	ctx, cancel := context.WithCancel(context.WithValue(parent, delegationHostKey{}, host))
-	prepared, err := host.prepareSession(ctx, store, sessionID)
+	prepared, err := host.prepareSession(operation.ctx, store, sessionID)
 	if err != nil {
-		cancel()
 		return nil, err
 	}
 	configuration, err := host.sessionConfiguration(prepared.store)
 	if err != nil {
-		cancel()
+		operation.cancel()
 		return nil, errors.Join(err, prepared.Close())
 	}
-	session := newLiveSession(ctx, cancel, prepared)
+	session := newLiveSession(operation.ctx, operation.cancel, prepared)
 	session.configuration = configuration
 	session.busy.Lock()
+	host.liveMu.Lock()
+	if host.liveClosed {
+		host.liveMu.Unlock()
+		session.busy.Unlock()
+		return nil, errors.Join(errors.New("session host is closed"), session.close())
+	}
 	host.liveSessions[liveSessionKey(prepared.store, prepared.store.SessionID)] = session
+	host.liveMu.Unlock()
+	transferred = true
 	return session, nil
 }
 
@@ -257,10 +314,16 @@ func (session *liveSession) close() error {
 // ReleaseSession closes an idle session before clear/delete or another owner
 // takes its workspace lock. An active turn must be stopped separately.
 func (host *SessionHost) ReleaseSession(store workspace.Store, sessionID string) error {
-	host.liveMu.Lock()
-	defer host.liveMu.Unlock()
 	key := liveSessionKey(store, sessionID)
+	operation, err := host.beginLiveSessionOperation(key)
+	if err != nil {
+		return err
+	}
+	defer host.finishLiveSessionOperation(key, operation)
+	defer operation.cancel()
+	host.liveMu.Lock()
 	session := host.liveSessions[key]
+	host.liveMu.Unlock()
 	if session == nil {
 		return nil
 	}
@@ -268,21 +331,43 @@ func (host *SessionHost) ReleaseSession(store workspace.Store, sessionID string)
 		return workspace.ErrLocked
 	}
 	defer session.busy.Unlock()
+	host.liveMu.Lock()
 	delete(host.liveSessions, key)
+	host.liveMu.Unlock()
 	return session.close()
 }
 
 func (host *SessionHost) closeLiveSessions() error {
 	host.liveMu.Lock()
 	host.liveClosed = true
-	sessions := host.liveSessions
-	host.liveSessions = nil
+	var operations []*liveSessionOperation
+	for _, operation := range host.liveOperations {
+		operations = append(operations, operation)
+	}
+	idleDone := host.liveIdleDone
+	var sessions []*liveSession
+	for _, session := range host.liveSessions {
+		sessions = append(sessions, session)
+	}
 	host.liveMu.Unlock()
+	for _, operation := range operations {
+		operation.cancel()
+	}
 	for _, session := range sessions {
 		session.cancel()
 	}
+	for _, operation := range operations {
+		<-operation.done
+	}
+	if idleDone != nil {
+		<-idleDone
+	}
+	host.liveMu.Lock()
+	remaining := host.liveSessions
+	host.liveSessions = nil
+	host.liveMu.Unlock()
 	var err error
-	for _, session := range sessions {
+	for _, session := range remaining {
 		err = errors.Join(err, session.close())
 	}
 	return err
@@ -319,7 +404,14 @@ func (host *SessionHost) RefreshLearning(ctx context.Context, store workspace.St
 // Embedding transitions need the old archive leases closed before rebuilding.
 func (host *SessionHost) releaseIdleSessions() error {
 	host.liveMu.Lock()
-	defer host.liveMu.Unlock()
+	if host.liveClosed {
+		host.liveMu.Unlock()
+		return errors.New("session host is closed")
+	}
+	if host.liveIdleDone != nil || len(host.liveOperations) > 0 {
+		host.liveMu.Unlock()
+		return workspace.ErrLocked
+	}
 	var leased []*liveSession
 	defer func() {
 		for _, session := range leased {
@@ -328,13 +420,26 @@ func (host *SessionHost) releaseIdleSessions() error {
 	}()
 	for _, session := range host.liveSessions {
 		if !session.busy.TryLock() {
+			host.liveMu.Unlock()
 			return workspace.ErrLocked
 		}
 		leased = append(leased, session)
 	}
+	done := make(chan struct{})
+	host.liveIdleDone = done
+	host.liveSessions = nil
+	host.liveMu.Unlock()
+	defer func() {
+		host.liveMu.Lock()
+		host.liveIdleDone = nil
+		close(done)
+		host.liveMu.Unlock()
+	}()
+	for _, session := range leased {
+		session.cancel()
+	}
 	var err error
-	for key, session := range host.liveSessions {
-		delete(host.liveSessions, key)
+	for _, session := range leased {
 		err = errors.Join(err, session.close())
 	}
 	return err
@@ -407,8 +512,8 @@ func (m liveSessionModel) Update(message tea.Msg) (updatedModel tea.Model, nextC
 		m.execution.state = updated.(model)
 		m.execution.state.ctx = parent
 		if !m.execution.state.waiting {
-			var err error
-			if !request.compact {
+			err := m.execution.state.turnErr
+			if err == nil && !request.compact {
 				err = fmt.Errorf("%w: %s", ErrSessionRuntimeUnavailable, m.execution.state.status)
 			}
 			m.finish(err)
@@ -448,13 +553,5 @@ func (m liveSessionModel) Update(message tea.Msg) (updatedModel tea.Model, nextC
 	}
 	updated, command := m.execution.Update(message)
 	m.execution = updated.(sessionExecutionModel)
-	if result, ok := message.(compactionResultMsg); ok && m.request != nil && m.request.compact && (result.turnID == 0 || result.turnID == m.execution.state.turnID) {
-		m.execution.detach()
-		err := result.err
-		if err == nil && result.checkpoint == "" && (result.response == nil || len(result.response.Choices) == 0) {
-			err = errors.New("context compaction returned no response")
-		}
-		m.finish(err)
-	}
 	return m, command
 }

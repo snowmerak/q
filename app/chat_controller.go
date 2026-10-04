@@ -280,6 +280,7 @@ func (m model) startChatTurn(content string, compact bool) (tea.Model, tea.Cmd) 
 	if compact && m.memory.ShouldCompact() {
 		plan, err := m.memory.Plan()
 		if err != nil {
+			m.turnErr = err
 			m.rollbackPendingMessage()
 			m.archiveFailure("context_compaction", err)
 			m.status = err.Error()
@@ -291,6 +292,7 @@ func (m model) startChatTurn(content string, compact bool) (tea.Model, tea.Cmd) 
 		compactionPlan = &plan
 	}
 	if err := m.saveWorkspaceSession(); err != nil {
+		m.turnErr = err
 		m.rollbackPendingMessage()
 		m.archiveFailure("session_save", err)
 		m.status = err.Error()
@@ -380,6 +382,7 @@ func (m *model) beginTurn() {
 	}
 	m.turnID++
 	m.streamResponse = ""
+	m.turnErr = nil
 	m.turnContext, m.turnCancel = context.WithCancel(m.ctx)
 }
 
@@ -485,6 +488,7 @@ func hasCompactionHistory(messages []client.Message) bool {
 // startManualCompaction uses the automatic checkpoint path without adding a user turn.
 func (m model) startManualCompaction() (tea.Model, tea.Cmd) {
 	m.input.Reset()
+	m.turnErr = nil
 	if m.memory == nil || !hasCompactionHistory(m.memory.Messages()) {
 		m.status = "Nothing to compact"
 		return m, m.input.Focus()
@@ -494,6 +498,7 @@ func (m model) startManualCompaction() (tea.Model, tea.Cmd) {
 		if errors.Is(err, memory.ErrNothingToCompact) {
 			m.status = "Nothing to compact"
 		} else {
+			m.turnErr = err
 			m.status = "compact context: " + err.Error()
 		}
 		return m, m.input.Focus()

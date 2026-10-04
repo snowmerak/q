@@ -18,6 +18,7 @@ func (m model) updateAgentEvent(message agentEventMsg) (tea.Model, tea.Cmd) {
 	if event.taskStarted != nil {
 		m.activeTask = cloneActiveTask(event.taskStarted)
 		if err := m.saveWorkspaceSession(); err != nil {
+			m.turnErr = errors.Join(m.turnErr, err)
 			m.status = err.Error()
 		}
 		return m, tea.Batch(m.spinner.Tick, waitAgentEvent(message.events, message.turnID))
@@ -25,6 +26,7 @@ func (m model) updateAgentEvent(message agentEventMsg) (tea.Model, tea.Cmd) {
 	if event.taskCompleted {
 		m.activeTask = nil
 		if err := m.saveWorkspaceSession(); err != nil {
+			m.turnErr = errors.Join(m.turnErr, err)
 			m.status = err.Error()
 		}
 		return m, tea.Batch(m.spinner.Tick, waitAgentEvent(message.events, message.turnID))
@@ -73,6 +75,7 @@ func (m model) updateAgentEvent(message agentEventMsg) (tea.Model, tea.Cmd) {
 	}
 	if event.compaction != nil {
 		if err := m.applyAgentContextCompaction(*event.compaction); err != nil {
+			m.turnErr = errors.Join(m.turnErr, err)
 			m.status = "apply agent context compaction: " + err.Error()
 		} else {
 			m.status = "Context compacted · continuing…"
@@ -137,6 +140,7 @@ func (m model) updateAgentEvent(message agentEventMsg) (tea.Model, tea.Cmd) {
 		}
 		m.refreshTranscript()
 		if err := m.saveWorkspaceSession(); err != nil {
+			m.turnErr = errors.Join(m.turnErr, err)
 			m.status = err.Error()
 			if event.persistenceAck != nil && m.turnCancel != nil {
 				m.turnCancel()
@@ -169,9 +173,11 @@ func (m model) updateChatResult(message chatResultMsg) (tea.Model, tea.Cmd) {
 	m.pendingMessage = client.Message{}
 	m.streamResponse = ""
 	if message.err != nil {
+		m.turnErr = errors.Join(m.turnErr, message.err)
 		m.compactionTarget = 0
 		m.archiveFailure("chat", message.err)
 		if archiveErr := m.flushArchive(); archiveErr != nil {
+			m.turnErr = errors.Join(m.turnErr, archiveErr)
 			m.status = message.err.Error() + " · archive: " + archiveErr.Error()
 			return m, m.input.Focus()
 		}
@@ -181,9 +187,11 @@ func (m model) updateChatResult(message chatResultMsg) (tea.Model, tea.Cmd) {
 	if message.response == nil || len(message.response.Choices) == 0 {
 		m.compactionTarget = 0
 		err := errors.New("provider returned no choices")
+		m.turnErr = errors.Join(m.turnErr, err)
 		m.archiveFailure("chat", err)
 		m.status = "provider returned no choices"
 		if archiveErr := m.flushArchive(); archiveErr != nil {
+			m.turnErr = errors.Join(m.turnErr, archiveErr)
 			m.status += " · archive: " + archiveErr.Error()
 		}
 		return m, m.input.Focus()
@@ -242,9 +250,11 @@ func (m model) updateChatResult(message chatResultMsg) (tea.Model, tea.Cmd) {
 	m.sessionUpdatedAt = time.Now().UTC()
 	m.resize(m.width, m.height)
 	if err := m.saveWorkspaceSession(); err != nil {
+		m.turnErr = errors.Join(m.turnErr, err)
 		m.status = err.Error()
 	}
 	if err := m.flushArchive(); err != nil {
+		m.turnErr = errors.Join(m.turnErr, err)
 		m.status = "archive: " + err.Error()
 	}
 	focus := m.input.Focus()
@@ -257,10 +267,12 @@ func (m model) updateCompactionResult(message compactionResultMsg) (tea.Model, t
 		return m, nil
 	}
 	if message.err != nil {
+		m.turnErr = errors.Join(m.turnErr, message.err)
 		m.rollbackPendingMessage()
 		m.archiveFailure("context_compaction", message.err)
 		m.status = "compact context: " + message.err.Error()
 		if archiveErr := m.flushArchive(); archiveErr != nil {
+			m.turnErr = errors.Join(m.turnErr, archiveErr)
 			m.status += " · archive: " + archiveErr.Error()
 		}
 		return m, m.input.Focus()
@@ -268,9 +280,11 @@ func (m model) updateCompactionResult(message compactionResultMsg) (tea.Model, t
 	if message.checkpoint == "" && (message.response == nil || len(message.response.Choices) == 0) {
 		m.rollbackPendingMessage()
 		err := errors.New("provider returned no choices")
+		m.turnErr = errors.Join(m.turnErr, err)
 		m.archiveFailure("context_compaction", err)
 		m.status = "compact context: provider returned no choices"
 		if archiveErr := m.flushArchive(); archiveErr != nil {
+			m.turnErr = errors.Join(m.turnErr, archiveErr)
 			m.status += " · archive: " + archiveErr.Error()
 		}
 		return m, m.input.Focus()
@@ -281,10 +295,12 @@ func (m model) updateCompactionResult(message compactionResultMsg) (tea.Model, t
 	}
 	compactedMemory, checkpoint, err := m.memory.CheckpointCopy(message.plan, checkpointText)
 	if err != nil {
+		m.turnErr = errors.Join(m.turnErr, err)
 		m.rollbackPendingMessage()
 		m.archiveFailure("context_compaction", err)
 		m.status = "compact context: " + err.Error()
 		if archiveErr := m.flushArchive(); archiveErr != nil {
+			m.turnErr = errors.Join(m.turnErr, archiveErr)
 			m.status += " · archive: " + archiveErr.Error()
 		}
 		return m, m.input.Focus()
@@ -293,10 +309,12 @@ func (m model) updateCompactionResult(message compactionResultMsg) (tea.Model, t
 	candidate.memory = compactedMemory
 	candidate.conversationID = ""
 	if err := candidate.saveWorkspaceSession(); err != nil {
+		m.turnErr = errors.Join(m.turnErr, err)
 		m.rollbackPendingMessage()
 		m.archiveFailure("context_compaction", err)
 		m.status = "compact context: " + err.Error()
 		if archiveErr := m.flushArchive(); archiveErr != nil {
+			m.turnErr = errors.Join(m.turnErr, archiveErr)
 			m.status += " · archive: " + archiveErr.Error()
 		}
 		return m, m.input.Focus()
@@ -315,6 +333,7 @@ func (m model) updateCompactionResult(message compactionResultMsg) (tea.Model, t
 		m.finishTurn()
 		m.waiting = false
 		if err := m.flushArchive(); err != nil {
+			m.turnErr = errors.Join(m.turnErr, err)
 			m.status += " · archive: " + err.Error()
 		}
 		return m, m.input.Focus()

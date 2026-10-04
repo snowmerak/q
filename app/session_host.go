@@ -163,6 +163,8 @@ func (control *SessionRunControl) result() error {
 type SessionHost struct {
 	liveMu            sync.Mutex
 	liveSessions      map[string]*liveSession
+	liveOperations    map[string]*liveSessionOperation
+	liveIdleDone      chan struct{}
 	liveClosed        bool
 	ctx               context.Context
 	runtime           *hostruntime.Runtime
@@ -594,8 +596,18 @@ func (m sessionExecutionModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	}
 	eventMessage, isAgentEvent := message.(agentEventMsg)
 	if !isAgentEvent {
+		if result, ok := message.(compactionResultMsg); ok && result.turnID != 0 && result.turnID != m.state.turnID {
+			return m, nil
+		}
 		updated, command := m.state.Update(message)
 		m.state = updated.(model)
+		if _, ok := message.(compactionResultMsg); ok && !m.state.waiting {
+			m.err = m.state.turnErr
+			if !m.emitContextUsage() {
+				return m.failExecution()
+			}
+			return m.finishExecution(command)
+		}
 		if !m.emitContextUsage() {
 			return m.failExecution()
 		}
@@ -650,11 +662,11 @@ func (m sessionExecutionModel) updateAgentEvent(eventMessage agentEventMsg) (tea
 	if event.err != nil || event.response != nil {
 		updated, command := m.state.Update(eventMessage)
 		m.state = updated.(model)
+		m.err = m.state.turnErr
 		if !m.emitContextUsage() {
 			return m.failExecution()
 		}
-		if event.err != nil {
-			m.err = event.err
+		if m.err != nil {
 			return m.finishExecution(command)
 		}
 		if event.response == nil || len(event.response.Choices) == 0 {
@@ -733,7 +745,7 @@ func (m *sessionExecutionModel) emitContextUsage() bool {
 		return true
 	}
 	if err := m.emit(usage); err != nil {
-		m.err = err
+		m.err = errors.Join(m.err, err)
 		m.cancel()
 		return false
 	}
@@ -862,14 +874,10 @@ func (m sessionCompactionModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	updated, command := m.state.Update(message)
 	m.state = updated.(model)
 	result, finished := message.(compactionResultMsg)
-	if !finished {
+	if !finished || result.turnID != 0 && result.turnID != m.state.turnID {
 		return m, command
 	}
-	if result.err != nil {
-		m.err = result.err
-	} else if result.response == nil || len(result.response.Choices) == 0 {
-		m.err = errors.New("context compaction returned no response")
-	}
+	m.err = m.state.turnErr
 	if m.err != nil {
 		m.cancel()
 	}

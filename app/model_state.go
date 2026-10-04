@@ -299,6 +299,7 @@ type chatState struct {
 	streamResponse       string
 	turnContext          context.Context
 	turnCancel           context.CancelFunc
+	turnErr              error // Foreground failures survive status updates until the next turn.
 	turnID               uint64
 	turnMessageStart     int
 	toolResultsCollapsed bool
