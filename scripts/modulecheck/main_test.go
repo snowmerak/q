@@ -91,3 +91,18 @@ func TestSnapshotManifest(t *testing.T) {
 		t.Fatalf("wrong checksum filtering: %q", data)
 	}
 }
+
+func TestUnpublishedLLMSnapshotDoesNotKeepPublishedChecksums(t *testing.T) {
+	previous := *llmSnapshot
+	*llmSnapshot = "../llm-provider"
+	t.Cleanup(func() { *llmSnapshot = previous })
+	manifest := "require (\n" + qModule + "/" + sdkDir + " v0.0.0-old\n" + llmModule + " v0.0.0-old\n)\n"
+	data, err := snapshotManifest("go.mod", []byte(manifest))
+	if err != nil || !strings.Contains(string(data), llmModule+" "+qVersion) {
+		t.Fatalf("snapshot manifest: %s %v", data, err)
+	}
+	data, err = snapshotManifest("go.sum", []byte(llmModule+" v0.0.0-old h1:published\nexample.com/keep v1.0.0 h1:keep\n"))
+	if err != nil || string(data) != "example.com/keep v1.0.0 h1:keep\n" {
+		t.Fatalf("snapshot checksums: %s %v", data, err)
+	}
+}

@@ -17,7 +17,8 @@ the resulting diff, and create a commit from one local Studio process.
 - **Integrated delegation** — ordinary chat can use workspace tools directly
   and assign bounded work to profession-based subagents.
 - **Provider choice** — OpenAI-compatible APIs and local servers, OpenRouter,
-  xAI, Anthropic, and the Codex App Server, all exposed through q's managed
+  xAI, Anthropic, the Codex App Server, and
+  [Sign in with ChatGPT](./docs/chatgpt-sign-in.md), all exposed through q's managed
   Gateway.
 - **Durable sessions** — API-independent conversation records, recoverable
   delegation trees, and searchable history.

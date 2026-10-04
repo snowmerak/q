@@ -54,7 +54,11 @@
   }
 
   function adoptSettings(snapshot: SettingsSnapshot) {
-    for (const provider of snapshot.gateway_providers.items) provider._original_id = provider.id;
+    for (const provider of snapshot.gateway_providers.items) {
+      provider._original_id = provider.id;
+      provider._original_type = provider.type;
+      provider._original_enabled = provider.enabled;
+    }
     for (const provider of snapshot.system_one.providers) provider._original_id = provider.id;
     settings = snapshot;
   }

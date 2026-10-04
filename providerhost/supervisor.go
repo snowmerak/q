@@ -49,6 +49,7 @@ func NewSupervisor(ctx context.Context, store Store) (*Supervisor, error) {
 }
 
 func (s *Supervisor) Prepare(ctx context.Context, value gateway.Config) (*generation, error) {
+	value = LocalConfig(value, s.store.Dir)
 	configPath, err := s.store.WriteRuntimeSnapshot(value)
 	if err != nil {
 		return nil, err

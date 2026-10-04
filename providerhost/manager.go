@@ -2,8 +2,13 @@ package providerhost
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
+	"net/url"
 	"sync"
+	"time"
 
 	"github.com/snowmerak/llm-provider/gateway"
 )
@@ -47,6 +52,9 @@ func (m *Manager) LoadAndStart(ctx context.Context) error {
 // not prevent its settings from being saved. A child startup failure still
 // leaves the current Gateway untouched.
 func (m *Manager) Apply(ctx context.Context, value gateway.Config) error {
+	if err := m.checkPendingChatGPTLogin(ctx); err != nil {
+		return err
+	}
 	value.Listen = "127.0.0.1:0"
 	value = migrateLegacyModelDiscoveryTimeout(value)
 	prepared, err := m.supervisor.Prepare(ctx, value)
@@ -61,6 +69,38 @@ func (m *Manager) Apply(ctx context.Context, value gateway.Config) error {
 	m.mu.Lock()
 	m.config = cloneConfig(value)
 	m.mu.Unlock()
+	return nil
+}
+
+// Replacing a child during browser consent loses its loopback callback before
+// the issued client ID can be saved. Keep that child alive until sign-in ends.
+func (m *Manager) checkPendingChatGPTLogin(ctx context.Context) error {
+	if m.Endpoint() == "" {
+		return nil
+	}
+	for _, provider := range m.Config().Providers {
+		if provider.Type != "chatgpt" || !provider.Enabled {
+			continue
+		}
+		request, err := http.NewRequestWithContext(ctx, http.MethodGet, m.Endpoint()+"/providers/"+url.PathEscape(provider.ID)+"/chatgpt", nil)
+		if err != nil {
+			return err
+		}
+		request.Header.Set("Authorization", "Bearer "+m.APIKey())
+		response, err := (&http.Client{Timeout: 10 * time.Second}).Do(request)
+		if err != nil {
+			return nil
+		} // A dead child still needs to be recoverable.
+		var status struct {
+			Pending bool `json:"pending"`
+		}
+		err = json.NewDecoder(io.LimitReader(response.Body, 4096)).Decode(&status)
+		_ = response.Body.Close()
+		if response.StatusCode == 200 && err == nil && status.Pending {
+			return fmt.Errorf("providerhost: finish ChatGPT sign-in before changing Gateway settings")
+		}
+		return nil // All Q aliases share the same account store.
+	}
 	return nil
 }
 

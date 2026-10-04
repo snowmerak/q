@@ -140,7 +140,7 @@ func (service *settingsService) saveProviderConfig(request *http.Request, value 
 	if service.runtime != nil {
 		return service.runtime.ApplyGateway(request.Context(), value)
 	}
-	runtime, err := gateway.NewContext(request.Context(), value)
+	runtime, err := gateway.NewContext(request.Context(), providerhost.LocalConfig(value, service.main.Dir))
 	if err != nil {
 		return err
 	}
@@ -187,6 +187,10 @@ func applyProviderUpdate(provider gateway.ProviderConfig, update gatewayProvider
 	provider.Enabled = update.Enabled
 	provider.BaseURL = strings.TrimSpace(update.BaseURL)
 	provider.APIKeyEnv = strings.TrimSpace(update.APIKeyEnv)
+	if provider.Type == "chatgpt" {
+		provider.BaseURL, provider.APIKey, provider.APIKeyEnv = "", "", ""
+		return provider
+	}
 	if update.ClearAPIKey {
 		provider.APIKey = ""
 	} else if update.APIKey != "" {

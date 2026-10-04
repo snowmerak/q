@@ -105,6 +105,8 @@ func newHandlerRuntime(parent context.Context, store config.Store, runner sessio
 	mux.HandleFunc("POST /api/v1/settings/gateway/providers", settings.serveProviderCreate)
 	mux.HandleFunc("PUT /api/v1/settings/gateway/providers/{provider}", settings.serveProviderUpdate)
 	mux.HandleFunc("DELETE /api/v1/settings/gateway/providers/{provider}", settings.serveProviderDelete)
+	mux.HandleFunc("GET /api/v1/settings/gateway/providers/{provider}/chatgpt", settings.serveChatGPT)
+	mux.HandleFunc("POST /api/v1/settings/gateway/providers/{provider}/chatgpt/{action}", settings.serveChatGPT)
 	mux.HandleFunc("POST /api/v1/settings/gateway/api-keys", settings.serveGatewayAPIKeyCreate)
 	mux.HandleFunc("DELETE /api/v1/settings/gateway/api-keys/{key}", settings.serveGatewayAPIKeyRevoke)
 	mux.HandleFunc("GET /api/v1/settings/system-one/models", settings.serveSystemOneModelCatalog)

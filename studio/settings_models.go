@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	llmprovider "github.com/snowmerak/llm-provider"
 	"github.com/snowmerak/llm-provider/gateway"
 	"github.com/snowmerak/q/client"
 	"github.com/snowmerak/q/config"
@@ -31,13 +32,19 @@ func (service *settingsService) serveModelCatalog(writer http.ResponseWriter, re
 		writeAPIError(writer, http.StatusInternalServerError, mainErr)
 		return
 	}
-	runtime, err := gateway.NewContext(request.Context(), providerConfig)
-	if err != nil {
-		writeAPIError(writer, http.StatusBadGateway, fmt.Errorf("initialize Gateway model discovery: %w", err))
-		return
+	var models []llmprovider.Model
+	if runtime, ok := service.runtime.(gatewayManagementRuntime); ok {
+		models, err = managedModels(request.Context(), runtime)
+	} else {
+		// Headless test/embedder fallback uses Q's own identity as well. The
+		// running Studio always delegates credential ownership to its child.
+		var runtime *gateway.Gateway
+		runtime, err = gateway.NewContext(request.Context(), providerhost.LocalConfig(providerConfig, service.main.Dir))
+		if err == nil {
+			defer func() { _ = runtime.Close() }()
+			models, err = runtime.Models(request.Context())
+		}
 	}
-	defer func() { _ = runtime.Close() }()
-	models, err := runtime.Models(request.Context())
 	if err != nil {
 		writeAPIError(writer, http.StatusBadGateway, fmt.Errorf("discover Gateway models: %w", err))
 		return

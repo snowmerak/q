@@ -13,6 +13,7 @@ import (
 	"github.com/snowmerak/q/config"
 	"github.com/snowmerak/q/lsp"
 	"github.com/snowmerak/q/mcpconfig"
+	"github.com/snowmerak/q/providerhost"
 	"github.com/snowmerak/q/subagent"
 	"github.com/snowmerak/q/systemoneconfig"
 )
@@ -321,7 +322,7 @@ func transferTouchesMain(bundle settingsBundle) bool {
 
 // Validate the complete merged state before any file is changed, so dependencies
 // can be imported together even when they span multiple tabs.
-func (state *transferState) validate(ctx context.Context, bundle settingsBundle) error {
+func (state *transferState) validate(ctx context.Context, bundle settingsBundle, directory string) error {
 	if transferTouchesMain(bundle) || len(bundle.Sections["subagents"]) > 0 {
 		normalized, err := state.main.LSP.Normalized()
 		if err != nil {
@@ -354,7 +355,7 @@ func (state *transferState) validate(ctx context.Context, bundle settingsBundle)
 		if err := validateProviderIdentities(state.providers); err != nil {
 			return err
 		}
-		validation, err := gateway.NewContext(ctx, state.providers)
+		validation, err := gateway.NewContext(ctx, providerhost.LocalConfig(state.providers, directory))
 		if err != nil {
 			return err
 		}

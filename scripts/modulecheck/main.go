@@ -8,6 +8,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"flag"
 	"fmt"
 	"io"
 	"net/url"
@@ -24,9 +25,13 @@ const (
 	sdkDir     = "third_party/acp-go-sdk"
 	qVersion   = "v0.0.0-modulecheck"
 	sdkVersion = "v0.0.0-modulecheck"
+	llmModule  = "github.com/snowmerak/llm-provider"
 )
 
+var llmSnapshot = flag.String("llm-provider", "", "Also check an unpublished llm-provider checkout using a disposable module archive")
+
 func main() {
+	flag.Parse()
 	if err := run(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
@@ -78,6 +83,38 @@ func run() (returnErr error) {
 	}
 	defer func() { returnErr = errors.Join(returnErr, os.RemoveAll(tempDir)) }()
 	proxy := filepath.Join(tempDir, "proxy")
+	if *llmSnapshot != "" {
+		candidate, err := filepath.Abs(*llmSnapshot)
+		if err != nil {
+			return err
+		}
+		cmd := exec.Command("git", "ls-files", "--cached", "--others", "--exclude-standard", "-z")
+		cmd.Dir = candidate
+		listing, err := cmd.Output()
+		if err != nil {
+			return err
+		}
+		var candidateFiles []string
+		for name := range strings.SplitSeq(string(listing), "\x00") {
+			if name == "" {
+				continue
+			}
+			info, err := os.Lstat(filepath.Join(candidate, filepath.FromSlash(name)))
+			if os.IsNotExist(err) {
+				continue
+			}
+			if err != nil {
+				return err
+			}
+			if info.Mode().IsRegular() {
+				candidateFiles = append(candidateFiles, name)
+			}
+		}
+		if err := writeModule(proxy, candidate, "", llmModule, qVersion, candidateFiles); err != nil {
+			return err
+		}
+		fmt.Printf("Using unpublished llm-provider snapshot from %s; release pin remains unchanged.\n", candidate)
+	}
 	for _, m := range []struct{ dir, module, version string }{
 		{"", qModule, qVersion},
 		{sdkDir, qModule + "/" + sdkDir, sdkVersion},
@@ -102,7 +139,7 @@ func run() (returnErr error) {
 		"GOWORK": "off", "GOFLAGS": "-modcacherw", "GOTOOLCHAIN": "local",
 		"GOOS": "", "GOARCH": "", // Install for this host, regardless of cross-build settings.
 		"GOPROXY": proxyChain, "GONOPROXY": "none",
-		"GONOSUMDB":  strings.Trim(goEnv["GONOSUMDB"]+","+qModule, ","),
+		"GONOSUMDB":  strings.Trim(goEnv["GONOSUMDB"]+","+qModule+","+llmModule, ","),
 		"GOMODCACHE": filepath.Join(tempDir, "modcache"),
 		"GOBIN":      filepath.Join(tempDir, "bin"),
 	})
@@ -249,6 +286,9 @@ func snapshotManifest(name string, data []byte) ([]byte, error) {
 	found := false
 	for _, line := range lines {
 		fields := strings.Fields(line)
+		if *llmSnapshot != "" && name == "go.sum" && len(fields) > 0 && fields[0] == llmModule {
+			continue
+		}
 		if name == "go.sum" && len(fields) > 0 && fields[0] == module {
 			continue
 		}
@@ -259,6 +299,9 @@ func snapshotManifest(name string, data []byte) ([]byte, error) {
 			if len(fields) >= 2 && fields[0] == module {
 				line = strings.Replace(line, fields[1], sdkVersion, 1)
 				found = true
+			}
+			if *llmSnapshot != "" && len(fields) >= 2 && fields[0] == llmModule {
+				line = strings.Replace(line, fields[1], qVersion, 1)
 			}
 		}
 		result = append(result, line)

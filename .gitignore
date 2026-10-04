@@ -5,3 +5,4 @@
 /studio/frontend/node_modules/
 /studio/frontend/test-results/
 /studio/frontend/playwright-report/
+/go.work.sum

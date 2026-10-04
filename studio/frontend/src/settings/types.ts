@@ -30,6 +30,8 @@ export type GatewayProvider = {
   model_count: number;
   api_key?: string;
   _original_id?: string;
+  _original_type?: string;
+  _original_enabled?: boolean;
 };
 export type ModelOption = {
   id: string;

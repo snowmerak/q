@@ -28,7 +28,7 @@ func PreferredProviderAPIModes(gatewayConfig gateway.Config) map[string]string {
 
 func knownNativeResponsesProvider(provider gateway.ProviderConfig) bool {
 	switch provider.Type {
-	case "openrouter", "xai", "grok":
+	case "openrouter", "xai", "grok", "chatgpt":
 		return true
 	case "openai-compatible":
 		switch provider.Kind {

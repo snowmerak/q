@@ -236,6 +236,7 @@ func (state transferState) bundle() (settingsBundle, error) {
 // These opaque maps can contain credentials. Their local values are retained
 // on import, along with inline keys, ACP env values, and cache passwords.
 func portableProvider(provider gateway.ProviderConfig) gateway.ProviderConfig {
+	provider.ChatGPT = gateway.ChatGPTConfig{}
 	provider.APIKey = ""
 	provider.Headers = nil
 	provider.Body = nil
@@ -353,7 +354,7 @@ func (service *settingsService) serveTransfer(writer http.ResponseWriter, reques
 		writeAPIError(writer, http.StatusUnprocessableEntity, errors.New("select at least one setting"))
 		return
 	}
-	if err := state.validate(request.Context(), bundle); err != nil {
+	if err := state.validate(request.Context(), bundle, service.main.Dir); err != nil {
 		writeAPIError(writer, http.StatusUnprocessableEntity, err)
 		return
 	}

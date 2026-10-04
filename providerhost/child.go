@@ -35,12 +35,12 @@ func RunChild(ctx context.Context, configPath, apiKey string, ready func(ReadyMe
 	if err != nil {
 		return err
 	}
-	instance, err := gateway.NewContext(ctx, value)
+	configDir := filepath.Dir(filepath.Dir(configPath))
+	instance, err := gateway.NewContext(ctx, LocalConfig(value, configDir))
 	if err != nil {
 		return err
 	}
 	defer func() { returnErr = errors.Join(returnErr, instance.Close()) }()
-	configDir := filepath.Dir(filepath.Dir(configPath))
 	usageRecorder := usagelog.New(configDir)
 	defer func() { returnErr = errors.Join(returnErr, usageRecorder.Close()) }()
 
