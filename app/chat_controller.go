@@ -270,26 +270,35 @@ func (m model) startChatTurn(content string, compact bool) (tea.Model, tea.Cmd) 
 	if m.memory == nil {
 		m.memory = memory.New(memoryPolicy(m.activeConfig()), nil)
 	}
-	m.memory.Append(userMessage)
 	m.pendingMessage = userMessage
+	m.pendingMessageDeferred = false
+	var compactionPlan *memory.Plan
+	var compactionErr error
+	if compact && m.memory.ShouldCompactAfterAppend(userMessage) {
+		m.pendingMessageDeferred = true
+		plan, err := m.memory.PlanBeforeAppend(memory.Retention{PreserveInstructions: true, AllowTargetGrowth: true, SummarizeOversizedRecent: true}, userMessage)
+		compactionErr = err
+		if err == nil {
+			compactionPlan = &plan
+		}
+	}
+	if !m.pendingMessageDeferred {
+		m.memory.Append(userMessage)
+	}
 	m.input.Reset()
 	m.input.Blur()
 	m.waiting = true
 	m.refreshTranscript()
-	var compactionPlan *memory.Plan
-	if compact && m.memory.ShouldCompact() {
-		plan, err := m.memory.Plan()
-		if err != nil {
-			m.turnErr = err
-			m.rollbackPendingMessage()
-			m.archiveFailure("context_compaction", err)
-			m.status = err.Error()
-			if archiveErr := m.flushArchive(); archiveErr != nil {
-				m.status += " · archive: " + archiveErr.Error()
-			}
-			return m, m.input.Focus()
+	if compactionErr != nil {
+		err := compactionErr
+		m.turnErr = err
+		m.rollbackPendingMessage()
+		m.archiveFailure("context_compaction", err)
+		m.status = err.Error()
+		if archiveErr := m.flushArchive(); archiveErr != nil {
+			m.status += " · archive: " + archiveErr.Error()
 		}
-		compactionPlan = &plan
+		return m, m.input.Focus()
 	}
 	if err := m.saveWorkspaceSession(); err != nil {
 		m.turnErr = err
@@ -407,6 +416,9 @@ func (m model) interruptTurn() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	manualCompaction := m.compacting && m.pendingMessage.Content == ""
+	// A cancelled deferred request remains in the transcript, but must not be
+	// inserted into model context without its reserved compaction completing.
+	m.pendingMessageDeferred = false
 	if m.turnCancel != nil {
 		m.turnCancel()
 	}
@@ -641,12 +653,13 @@ func (m *model) rollbackPendingMessage() {
 		if len(m.messages) > 0 {
 			m.messages = m.messages[:len(m.messages)-1]
 		}
-		if m.memory != nil {
+		if m.memory != nil && !m.pendingMessageDeferred {
 			m.memory.PopLast()
 		}
 		m.input.SetValue(m.pendingMessage.Content)
 	}
 	m.pendingMessage = client.Message{}
+	m.pendingMessageDeferred = false
 	m.streamResponse = ""
 	m.waiting = false
 	m.compacting = false

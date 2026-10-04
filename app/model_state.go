@@ -303,4 +303,6 @@ type chatState struct {
 	turnID               uint64
 	turnMessageStart     int
 	toolResultsCollapsed bool
+
+	pendingMessageDeferred bool
 }

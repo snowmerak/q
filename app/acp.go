@@ -1409,6 +1409,11 @@ func (a *acpAgent) runPrompt(ctx context.Context, userMessage client.Message) (a
 	titleChanged := a.state.touchSessionMetadata(titleSource)
 	a.state.archiveMessage(userMessage, sessionstore.StatusSubmitted, false)
 	a.state.messages = append(a.state.messages, userMessage)
+	if err := a.compactContext(ctx, false, userMessage); err != nil {
+		a.state.archiveFailure("ACP context compaction failed", err)
+		_ = a.state.flushArchive()
+		return acp.PromptResponse{}, err
+	}
 	a.state.memory.Append(userMessage)
 	a.launchLearning(a.state.observeLearningMessage(userMessage))
 	if err := a.state.saveWorkspaceSession(); err != nil {
@@ -1533,6 +1538,9 @@ func (a *acpAgent) continueACPAgentTurn(
 		if event.compaction != nil {
 			if err := a.state.applyAgentContextCompaction(*event.compaction); err != nil {
 				return acp.PromptResponse{}, fmt.Errorf("apply agent context compaction: %w", err)
+			}
+			if event.persistenceAck != nil {
+				close(event.persistenceAck)
 			}
 			a.publishUsageUpdate()
 		}
@@ -1725,11 +1733,14 @@ func (a *acpAgent) compactIfNeeded(ctx context.Context) error {
 	return a.compactContext(ctx, false)
 }
 
-func (a *acpAgent) compactContext(ctx context.Context, force bool) error {
-	if !force && !a.state.memory.ShouldCompact() {
+func (a *acpAgent) compactContext(ctx context.Context, force bool, incoming ...client.Message) error {
+	if !force && !a.state.memory.ShouldCompactAfterAppend(incoming...) {
 		return nil
 	}
 	plan, err := a.state.memory.Plan()
+	if len(incoming) > 0 {
+		plan, err = a.state.memory.PlanBeforeAppend(memory.Retention{PreserveInstructions: true, AllowTargetGrowth: true, SummarizeOversizedRecent: true}, incoming...)
+	}
 	if err != nil {
 		return err
 	}

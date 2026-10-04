@@ -77,8 +77,14 @@ func (m model) updateAgentEvent(message agentEventMsg) (tea.Model, tea.Cmd) {
 		if err := m.applyAgentContextCompaction(*event.compaction); err != nil {
 			m.turnErr = errors.Join(m.turnErr, err)
 			m.status = "apply agent context compaction: " + err.Error()
+			if event.persistenceAck != nil && m.turnCancel != nil {
+				m.turnCancel()
+			}
 		} else {
 			m.status = "Context compacted · continuing…"
+		}
+		if event.persistenceAck != nil {
+			close(event.persistenceAck)
 		}
 		return m, tea.Batch(m.spinner.Tick, waitAgentEvent(message.events, message.turnID))
 	}
@@ -305,6 +311,9 @@ func (m model) updateCompactionResult(message compactionResultMsg) (tea.Model, t
 		}
 		return m, m.input.Focus()
 	}
+	if m.pendingMessageDeferred && !message.manual {
+		compactedMemory.Append(m.pendingMessage)
+	}
 	candidate := m
 	candidate.memory = compactedMemory
 	candidate.conversationID = ""
@@ -320,6 +329,7 @@ func (m model) updateCompactionResult(message compactionResultMsg) (tea.Model, t
 		return m, m.input.Focus()
 	}
 	m.memory = compactedMemory
+	m.pendingMessageDeferred = false
 	m.conversationID = ""
 	m.archiveSummary(checkpoint)
 	m.compacting = false

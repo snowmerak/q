@@ -331,11 +331,12 @@ func TestCompactionResumesWithCheckpoint(t *testing.T) {
 		}
 		return finalResponse("done")
 	}
-	runtime := &scriptedTools{name: "large_read", content: strings.Repeat("large result ", 5000)}
+	runtime := &scriptedTools{name: "large_read", content: strings.Repeat("large result ", 2000)}
 	events := make(chan agentloop.Event)
 	go agentloop.RunAgentLoop(t.Context(), agentloop.Request{
 		Client: configured, Tools: runtime, Model: "test",
-		Messages:      []client.Message{{Role: client.RoleSystem, Content: "system"}, {Role: client.RoleUser, Content: "read"}},
+		Messages: []client.Message{{Role: client.RoleSystem, Content: "system"},
+			{Role: client.RoleAssistant, Content: strings.Repeat("old work ", 2000)}, {Role: client.RoleUser, Content: "read"}},
 		ContextPolicy: memory.Policy{ContextWindow: 16000, TriggerRatio: .85, TargetRatio: .22, RecentRatio: .07},
 	}, events)
 	compactions := 0

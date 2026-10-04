@@ -177,12 +177,13 @@ func (r largeResultRuntime) Call(context.Context, client.ToolCall) (client.ToolR
 
 func TestStreamAgentLoopCompactsBetweenToolRounds(t *testing.T) {
 	configuredClient := &compactingLoopClient{}
-	hugeResult := strings.Repeat("large tool output ", 4_000)
+	hugeResult := strings.Repeat("large tool output ", 1_000)
 	events := make(chan agentEvent)
 	go RunAgentLoop(t.Context(), AgentLoopRequest{
 		Client: configuredClient, Tools: largeResultRuntime{content: hugeResult}, Model: "test-model", ReasoningEffort: "low",
 		Messages: []client.Message{
 			{Role: client.RoleSystem, Content: "keep this system contract exactly"},
+			{Role: client.RoleAssistant, Content: strings.Repeat("old work ", 3_300)},
 			{Role: client.RoleUser, Content: "read the large result"},
 		},
 		ConversationID: "initial-conversation",
@@ -237,15 +238,15 @@ func TestStreamAgentLoopCompactsBetweenToolRounds(t *testing.T) {
 	if !strings.Contains(resumedContent, "Session continuation checkpoint:") || !strings.Contains(resumedContent, "condensed tool evidence") {
 		t.Fatalf("post-compaction messages do not contain summary: %#v", resumedRequest.Messages)
 	}
-	if strings.Contains(resumedContent, hugeResult) {
-		t.Fatal("post-compaction request retained the oversized tool result")
+	if !strings.Contains(resumedContent, hugeResult) || strings.Contains(joinedMessageContent(compactRequest.Messages), hugeResult) {
+		t.Fatal("incoming tool result was summarized instead of appended after compaction")
 	}
 	if resumedRequest.Messages[0].Content != "keep this system contract exactly" {
 		t.Fatalf("system contract changed: %#v", resumedRequest.Messages)
 	}
 	last := resumedRequest.Messages[len(resumedRequest.Messages)-1]
-	if last.Role != client.RoleUser || last.Content != "keep going" {
-		t.Fatalf("post-compaction continuation = %#v", last)
+	if last.Role != client.RoleTool || last.ToolCallID != "large-read" || last.Content != hugeResult {
+		t.Fatal("post-compaction context lost the exact pending tool result")
 	}
 }
 
@@ -270,9 +271,9 @@ func TestStreamAgentLoopCompactionFailureStopsBeforeNextRound(t *testing.T) {
 	configuredClient := &compactingLoopClient{compactionErr: compactErr}
 	events := make(chan agentEvent)
 	go RunAgentLoop(t.Context(), AgentLoopRequest{
-		Client: configuredClient, Tools: largeResultRuntime{content: strings.Repeat("large result ", 5_000)},
+		Client: configuredClient, Tools: largeResultRuntime{content: strings.Repeat("large result ", 1_500)},
 		Model: "test-model", ReasoningEffort: "low",
-		Messages:       []client.Message{{Role: client.RoleUser, Content: "read"}},
+		Messages:       []client.Message{{Role: client.RoleAssistant, Content: strings.Repeat("old work ", 3_300)}, {Role: client.RoleUser, Content: "read"}},
 		ConversationID: "initial-conversation",
 		ContextPolicy:  memory.Policy{ContextWindow: 16_000, TriggerRatio: .85, TargetRatio: .22, RecentRatio: .07},
 	}, events)

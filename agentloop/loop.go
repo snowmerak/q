@@ -71,6 +71,26 @@ func RunAgentLoop(ctx context.Context, request Request, events chan<- Event) {
 	loopContext := newAgentLoopContext(contextPolicy, history, availableTools)
 	toolCalls := 0
 	taskStarted := activeTask != nil
+	appendHistory := func(messages ...client.Message) bool {
+		if loopContext.manager.ShouldCompactAfterAppend(messages...) {
+			if !emitEvent(ctx, events, Event{status: "Compacting context before adding history…"}) {
+				return false
+			}
+			compaction, err := loopContext.CompactBeforeAppend(ctx, configuredClient, modelID, reasoningEffort, messages...)
+			if err != nil {
+				emitEvent(ctx, events, Event{err: err})
+				return false
+			}
+			if compaction != nil {
+				conversationID = ""
+				if !emitEvent(ctx, events, Event{compaction: compaction}) {
+					return false
+				}
+			}
+		}
+		loopContext.Append(messages...)
+		return true
+	}
 	for round := 0; ; round++ {
 		if loopContext.ShouldCompact() {
 			if !emitEvent(ctx, events, Event{status: "Compacting context…"}) {
@@ -89,10 +109,6 @@ func RunAgentLoop(ctx context.Context, request Request, events chan<- Event) {
 			}
 		}
 		roundHistory := loopContext.Messages()
-		appendHistory := func(messages ...client.Message) {
-			loopContext.Append(messages...)
-			roundHistory = append(roundHistory, messages...)
-		}
 		requestEstimate := memory.CountMessages(roundHistory)
 		request := client.ChatRequest{
 			Model: modelID, Messages: providerMessages(agentinstructions.Normalize(roundHistory), coalesceInstructions), ConversationID: conversationID, Tools: availableTools,
@@ -126,6 +142,10 @@ func RunAgentLoop(ctx context.Context, request Request, events chan<- Event) {
 		}
 		if len(assistant.ToolCalls) == 0 {
 			if !taskStarted {
+				if !appendHistory(assistant) {
+					return
+				}
+				// A pre-append compaction starts the next provider conversation.
 				response.Choices[0].Message = assistant
 				response.ConversationID = conversationID
 				emitEvent(ctx, events, Event{
@@ -133,12 +153,14 @@ func RunAgentLoop(ctx context.Context, request Request, events chan<- Event) {
 				})
 				return
 			}
-			appendHistory(assistant, client.Message{
+			if !appendHistory(assistant, client.Message{
 				Role: client.RoleUser,
 				Content: "This task was started with task_start and is not complete until you call task_complete. " +
 					"Call task_complete now with the final outcome and summary; " +
 					"if more work is required, continue the work first.",
-			})
+			}) {
+				return
+			}
 			continue
 		}
 		for index := range assistant.ToolCalls {
@@ -149,14 +171,18 @@ func RunAgentLoop(ctx context.Context, request Request, events chan<- Event) {
 		instructionLoader := agentinstructions.NewRootSet(workingDirectory, auxiliaryDirectories, loopContext.Messages())
 		newInstructions := instructionLoader.ForToolCalls(assistant.ToolCalls)
 		if len(newInstructions) > 0 {
-			appendHistory(newInstructions...)
+			if !appendHistory(newInstructions...) {
+				return
+			}
 			for index := range newInstructions {
 				message := newInstructions[index]
 				if !emitEvent(ctx, events, Event{message: &message}) {
 					return
 				}
 			}
-			appendHistory(assistant)
+			if !appendHistory(assistant) {
+				return
+			}
 			if !emitEvent(ctx, events, Event{message: &assistant, usage: &response.Usage}) {
 				return
 			}
@@ -171,14 +197,18 @@ func RunAgentLoop(ctx context.Context, request Request, events chan<- Event) {
 					"workspace instructions were loaded from "+sources+"; review them and retry any still-appropriate tool call",
 					true,
 				)
-				appendHistory(message)
+				if !appendHistory(message) {
+					return
+				}
 				if !emitEvent(ctx, events, Event{message: &message, toolIsError: true}) {
 					return
 				}
 			}
 			continue
 		}
-		appendHistory(assistant)
+		if !appendHistory(assistant) {
+			return
+		}
 		if !emitEvent(ctx, events, Event{message: &assistant, usage: &response.Usage}) {
 			return
 		}
@@ -194,7 +224,9 @@ func RunAgentLoop(ctx context.Context, request Request, events chan<- Event) {
 				}
 				if parseErr != nil {
 					message := orchestrationToolResult(call, "invalid task_start arguments: "+parseErr.Error(), true)
-					appendHistory(message)
+					if !appendHistory(message) {
+						return
+					}
 					if !emitEvent(ctx, events, Event{message: &message, toolIsError: true}) {
 						return
 					}
@@ -207,7 +239,9 @@ func RunAgentLoop(ctx context.Context, request Request, events chan<- Event) {
 					CompletionCriteria: append([]string(nil), input.CompletionCriteria...), SkillHints: hints,
 				})
 				message := orchestrationToolResult(call, string(body), false)
-				appendHistory(message)
+				if !appendHistory(message) {
+					return
+				}
 				if !emitEvent(ctx, events, Event{message: &message}) {
 					return
 				}
@@ -224,7 +258,9 @@ func RunAgentLoop(ctx context.Context, request Request, events chan<- Event) {
 				input, parseErr := parseAskToUser(call.Function.Arguments)
 				if parseErr != nil {
 					message := orchestrationToolResult(call, "invalid ask_to_user arguments: "+parseErr.Error(), true)
-					appendHistory(message)
+					if !appendHistory(message) {
+						return
+					}
 					if !emitEvent(ctx, events, Event{message: &message, toolIsError: true}) {
 						return
 					}
@@ -247,7 +283,9 @@ func RunAgentLoop(ctx context.Context, request Request, events chan<- Event) {
 							"interaction_unavailable: interactive input is unavailable in this host; continue with the available information or finish the task as blocked",
 							true,
 						)
-						appendHistory(message)
+						if !appendHistory(message) {
+							return
+						}
 						if !emitEvent(ctx, events, Event{message: &message, toolIsError: true}) {
 							return
 						}
@@ -261,7 +299,9 @@ func RunAgentLoop(ctx context.Context, request Request, events chan<- Event) {
 				)
 				body, _ := json.Marshal(answer)
 				message := orchestrationToolResult(call, string(body), false)
-				appendHistory(message)
+				if !appendHistory(message) {
+					return
+				}
 				if !emitEvent(ctx, events, Event{message: &message}) {
 					return
 				}
@@ -270,7 +310,9 @@ func RunAgentLoop(ctx context.Context, request Request, events chan<- Event) {
 			if call.Function.Name == taskCompleteToolName {
 				if !taskStarted {
 					message := orchestrationToolResult(call, "task_complete requires an active task_start lifecycle", true)
-					appendHistory(message)
+					if !appendHistory(message) {
+						return
+					}
 					if !emitEvent(ctx, events, Event{message: &message, toolIsError: true}) {
 						return
 					}
@@ -282,7 +324,9 @@ func RunAgentLoop(ctx context.Context, request Request, events chan<- Event) {
 				}
 				if parseErr != nil {
 					message := orchestrationToolResult(call, "invalid task_complete arguments: "+parseErr.Error(), true)
-					appendHistory(message)
+					if !appendHistory(message) {
+						return
+					}
 					if !emitEvent(ctx, events, Event{message: &message, toolIsError: true}) {
 						return
 					}
@@ -290,7 +334,9 @@ func RunAgentLoop(ctx context.Context, request Request, events chan<- Event) {
 				}
 				body, _ := json.Marshal(completion)
 				message := orchestrationToolResult(call, string(body), false)
-				appendHistory(message)
+				if !appendHistory(message) {
+					return
+				}
 				if !emitEvent(ctx, events, Event{message: &message}) {
 					return
 				}
@@ -305,20 +351,40 @@ func RunAgentLoop(ctx context.Context, request Request, events chan<- Event) {
 				if !emitEvent(ctx, events, Event{status: "Finalizing task…"}) {
 					return
 				}
-				request.Messages = roundHistory
+				request.Messages = loopContext.Messages()
 				request.ConversationID = conversationID
 				finished, finishErr := client.FinishToolTurn(ctx, request, func(ctx context.Context, request client.ChatRequest) (*client.ChatResponse, error) {
+					// Rejected terminal calls can trigger pre-append compaction too.
+					// Keep the provider request on the loop's current context/thread.
+					history := loopContext.Messages()
+					last := len(history) - 1
+					previous := request.Messages[len(request.Messages)-1]
+					if last >= 0 && history[last].ToolCallID == previous.ToolCallID && previous.Role == client.RoleTool {
+						history[last].Content = previous.Content
+					}
+					request.Messages = history
+					request.ConversationID = conversationID
 					requestEstimate = memory.CountMessages(request.Messages)
 					request.Messages = providerMessages(agentinstructions.Normalize(request.Messages), coalesceInstructions)
+					var response *client.ChatResponse
+					var err error
 					if streamEnabled {
-						return streamChatWithConversationRecovery(ctx, configuredClient, request, func(chatStreamDelta) bool { return true })
+						response, err = streamChatWithConversationRecovery(ctx, configuredClient, request, func(chatStreamDelta) bool { return true })
+					} else {
+						response, err = chatWithConversationRecovery(ctx, configuredClient, request)
 					}
-					return chatWithConversationRecovery(ctx, configuredClient, request)
+					if response != nil && response.ConversationID != "" {
+						conversationID = response.ConversationID
+					}
+					return response, err
 				}, func(message client.Message) error {
 					// Keep the structured completion as the one user-visible final
 					// answer, but archive any extra calls and their rejection results.
 					if message.Role == client.RoleAssistant && len(message.ToolCalls) == 0 {
 						return nil
+					}
+					if !appendHistory(message) {
+						return errors.New("agent loop: could not reserve context for terminal history")
 					}
 					if !emitEvent(ctx, events, Event{message: &message, toolIsError: message.Role == client.RoleTool}) {
 						return ctx.Err()
@@ -339,9 +405,11 @@ func RunAgentLoop(ctx context.Context, request Request, events chan<- Event) {
 					Role: client.RoleAssistant, Name: thinker.TaskCompletionReplyName,
 					Content: renderTaskCompletion(completion),
 				}
-				if response.ConversationID == "" {
-					response.ConversationID = conversationID
+				loopContext.Observe(response.Usage, requestEstimate)
+				if !appendHistory(response.Choices[0].Message) {
+					return
 				}
+				response.ConversationID = conversationID
 				emitEvent(ctx, events, Event{
 					response: response, complete: true, outcome: completion.Outcome, requestEstimate: requestEstimate, toolCalls: toolCalls,
 				})
@@ -363,7 +431,9 @@ func RunAgentLoop(ctx context.Context, request Request, events chan<- Event) {
 				Role: client.RoleTool, Name: call.Function.Name,
 				ToolCallID: call.ID, Content: content,
 			}
-			appendHistory(message)
+			if !appendHistory(message) {
+				return
+			}
 			toolCalls++
 			if !emitEvent(ctx, events, Event{message: &message, toolIsError: result.IsError}) {
 				return

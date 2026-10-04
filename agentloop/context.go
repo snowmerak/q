@@ -63,7 +63,9 @@ func (c *Context) CallMemoryTool(call client.ToolCall) (client.ToolResult, bool)
 	if c == nil || c.manager == nil {
 		return client.ToolResult{}, false
 	}
-	return c.manager.CallMemoryTool(call)
+	// The delta becomes authoritative when its result is appended. In
+	// particular, pre-append compaction must not include an unpersisted update.
+	return c.manager.Copy().CallMemoryTool(call)
 }
 
 func (c *Context) Observe(usage client.Usage, requestEstimate int) {
@@ -75,6 +77,30 @@ func (c *Context) Observe(usage client.Usage, requestEstimate int) {
 
 func (c *Context) ShouldCompact() bool {
 	return c != nil && c.manager != nil && c.manager.ShouldCompact()
+}
+
+func loopRetention() memory.Retention {
+	// Lifecycle exchanges and pending callbacks must survive a fresh thread.
+	return memory.Retention{
+		PreserveInstructions: true,
+		PreserveToolNames:    []string{askToUserToolName, taskStartToolName},
+		AllowTargetGrowth:    true, SummarizeOversizedRecent: true,
+		ContinuationMessage: "keep going",
+	}
+}
+
+// CompactBeforeAppend checks the combined size before mutating history. The
+// returned plan contains only existing history; callers emit it before the
+// incoming message so the persisted host context follows the same order.
+func (c *Context) CompactBeforeAppend(ctx context.Context, configuredClient ChatClient, modelID, reasoningEffort string, messages ...client.Message) (*AgentContextCompaction, error) {
+	if c == nil || c.manager == nil || !c.manager.ShouldCompactAfterAppend(messages...) {
+		return nil, nil
+	}
+	plan, err := c.manager.PlanBeforeAppend(loopRetention(), messages...)
+	if err != nil {
+		return nil, fmt.Errorf("agent loop: reserve context for incoming history: %w", err)
+	}
+	return c.compact(ctx, configuredClient, modelID, reasoningEffort, plan)
 }
 
 // CompactIfNeeded summarizes completed tool-loop history on a fresh provider
@@ -89,22 +115,14 @@ func (c *Context) CompactIfNeeded(
 	if !c.ShouldCompact() {
 		return nil, nil
 	}
-	plan, err := c.manager.PlanWithRetention(memory.Retention{
-		PreserveInstructions: true,
-		// The lifecycle state is host-owned. Keep its opening exchange exact so
-		// a compacted model context does not try to start the active task again.
-		PreserveToolNames:        []string{askToUserToolName, taskStartToolName},
-		AllowTargetGrowth:        true,
-		SummarizeOversizedRecent: true,
-		// Strict chat templates need a user turn even when the latest real one was summarized.
-		ContinuationMessage: "keep going",
-	})
+	plan, err := c.manager.PlanWithRetention(loopRetention())
 	if err != nil {
-		if errors.Is(err, memory.ErrNothingToCompact) {
-			return nil, nil
-		}
 		return nil, fmt.Errorf("agent loop: plan context compaction: %w", err)
 	}
+	return c.compact(ctx, configuredClient, modelID, reasoningEffort, plan)
+}
+
+func (c *Context) compact(ctx context.Context, configuredClient ChatClient, modelID, reasoningEffort string, plan memory.Plan) (*AgentContextCompaction, error) {
 	checkpointText, ready := plan.CheckpointWithoutModel()
 	if !ready {
 		if configuredClient == nil {
@@ -125,9 +143,10 @@ func (c *Context) CompactIfNeeded(
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	checkpoint, err := c.manager.ApplyCheckpoint(plan, checkpointText)
+	next, checkpoint, err := c.manager.CheckpointCopy(plan, checkpointText)
 	if err != nil {
 		return nil, fmt.Errorf("agent loop: compact context: %w", err)
 	}
+	c.manager = next
 	return &AgentContextCompaction{Plan: plan, Summary: checkpoint}, nil
 }

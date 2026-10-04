@@ -95,12 +95,17 @@ func TestLiveSessionCompactionFailuresFinishAndAllowRetry(t *testing.T) {
 				ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 				defer cancel()
 				result := false
+				compacting := false
 				_, err := session.execute(ctx, "failed prompt", manual, func(event SessionEvent) error {
 					result = result || event.Type == "result"
+					compacting = compacting || event.Type == "status" && strings.Contains(event.Detail, "Compacting context")
 					return nil
 				}, nil)
 				if err == nil || errors.Is(err, context.DeadlineExceeded) || result {
 					t.Fatalf("compaction did not finish as failed: err=%v result=%v", err, result)
+				}
+				if !compacting {
+					t.Fatal("Studio did not receive the compaction status")
 				}
 				if failure == "provider" && !errors.Is(err, want) {
 					t.Fatalf("provider error was lost: %v", err)

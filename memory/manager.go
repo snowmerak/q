@@ -38,6 +38,8 @@ type Retention struct {
 	// ContinuationMessage becomes the final user turn in the compacted context.
 	// It is not part of the conversation source sent to the checkpoint model.
 	ContinuationMessage string
+	// ReservedTokens leaves room for messages waiting to be appended.
+	ReservedTokens int
 }
 
 type Plan struct {
@@ -56,6 +58,7 @@ type Plan struct {
 	Maintained         *Checkpoint
 	MaintainedRevision uint64
 	CoveredMessages    int
+	ReservedTokens     int
 }
 
 type Stats struct {
@@ -172,6 +175,25 @@ func (m *Manager) ShouldCompact() bool {
 		m.PredictedTokens() >= int(float64(m.policy.ContextWindow)*m.policy.TriggerRatio)
 }
 
+// ShouldCompactAfterAppend checks a prospective append without changing memory.
+func (m *Manager) ShouldCompactAfterAppend(messages ...client.Message) bool {
+	next := *m
+	next.messages = append(cloneMessages(m.messages), messages...)
+	return next.ShouldCompact()
+}
+
+// PlanBeforeAppend compacts existing history while reserving space for the
+// incoming messages. Pending tool calls in existing history stay paired with
+// their results when the caller appends them after applying this plan.
+func (m *Manager) PlanBeforeAppend(retention Retention, messages ...client.Message) (Plan, error) {
+	local := CountMessages(messages)
+	retention.ReservedTokens = local + max(8, local/10)
+	if m.policy.ContextWindow > 0 && retention.ReservedTokens >= int(float64(m.policy.ContextWindow)*m.policy.TriggerRatio) {
+		return Plan{}, errors.New("memory: incoming history exceeds the context compaction threshold; request a smaller result or input")
+	}
+	return m.PlanWithRetention(retention)
+}
+
 func (m *Manager) ObserveUsage(promptTokens, localEstimate int) {
 	if promptTokens <= 0 || localEstimate < 0 {
 		return
@@ -264,6 +286,7 @@ func (m *Manager) PlanWithRetention(retention Retention) (Plan, error) {
 		ProviderOverhead:       m.providerOverhead,
 		MemoryRevision:         m.taskMemory.revision,
 		RetainedSkillResources: retainedSkillResources,
+		ReservedTokens:         retention.ReservedTokens,
 	}
 	for index, message := range messages {
 		switch {
@@ -288,6 +311,12 @@ func (m *Manager) PlanWithRetention(retention Retention) (Plan, error) {
 	// reduce the ordinary 22% compaction target. Only the model's hard context
 	// window can force that soft target lower.
 	maximumOrdinaryTarget := m.policy.ContextWindow - CountMessages(plan.RetainedSkillResources)
+	if plan.ReservedTokens > 0 {
+		maximumOrdinaryTarget = min(maximumOrdinaryTarget, plan.ThresholdTokens-plan.ReservedTokens-CountMessages(plan.RetainedSkillResources)-1)
+		if maximumOrdinaryTarget <= 0 {
+			return Plan{}, errors.New("memory: incoming history exceeds the context compaction threshold; request a smaller result or input")
+		}
+	}
 	if maximumOrdinaryTarget < plan.TargetTokens {
 		plan.TargetTokens = maximumOrdinaryTarget
 	}
@@ -361,17 +390,24 @@ func (m *Manager) Apply(plan Plan, response string) error {
 // CheckpointCopy prepares a compacted context without changing the live manager.
 // Callers can persist the copy before replacing their active context.
 func (m *Manager) CheckpointCopy(plan Plan, response string) (*Manager, string, error) {
+	next := m.Copy()
+	checkpoint, err := next.ApplyCheckpoint(plan, response)
+	if err != nil {
+		return nil, "", err
+	}
+	return next, checkpoint, nil
+}
+
+// Copy preserves calibration and maintained state without sharing mutable
+// memory entries. It can stage a tool delta or checkpoint before committing it.
+func (m *Manager) Copy() *Manager {
 	next := *m
 	next.messages = cloneMessages(m.messages)
 	next.taskMemory.active = append([]memoryEntry(nil), m.taskMemory.active...)
 	next.taskMemory.previous = append([]memoryEntry(nil), m.taskMemory.previous...)
 	next.taskMemory.facts = append([]memoryEntry(nil), m.taskMemory.facts...)
 	next.taskMemory.currentRequest = append([]string(nil), m.taskMemory.currentRequest...)
-	checkpoint, err := next.ApplyCheckpoint(plan, response)
-	if err != nil {
-		return nil, "", err
-	}
-	return &next, checkpoint, nil
+	return &next
 }
 
 // ApplyCheckpoint recovers and normalizes a provider-produced checkpoint before
@@ -403,7 +439,7 @@ func (m *Manager) ApplyCheckpoint(plan Plan, response string) (string, error) {
 	})
 	compacted = append(compacted, cloneMessages(plan.RetainedSkillResources)...)
 	compacted = append(compacted, cloneMessages(plan.Recent)...)
-	if plan.Maintained != nil {
+	if plan.ThresholdTokens > 0 || plan.Maintained != nil || plan.ReservedTokens > 0 {
 		local := CountMessages(compacted)
 		predicted := local + max(m.providerOverhead, plan.ProviderOverhead) + max(8, local/10)
 		// A transferred loop plan carries the originating model's limit. The
@@ -412,7 +448,10 @@ func (m *Manager) ApplyCheckpoint(plan Plan, response string) (string, error) {
 		if threshold == 0 {
 			threshold = int(float64(m.policy.ContextWindow) * m.policy.TriggerRatio)
 		}
-		if threshold > 0 && predicted >= threshold {
+		if threshold > 0 && predicted+plan.ReservedTokens >= threshold {
+			if plan.ReservedTokens > 0 {
+				return "", errors.New("memory: compacted context leaves no room for incoming history below the compaction threshold")
+			}
 			return "", errors.New("memory: maintained state and original requests leave no room below the compaction threshold; use a larger-context model or start a new session")
 		}
 	}

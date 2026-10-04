@@ -528,6 +528,14 @@ func (m liveSessionModel) Update(message tea.Msg) (updatedModel tea.Model, nextC
 			m.execution.state = state
 			m.finish(err)
 		}
+		if m.execution.state.compacting && request.emit != nil {
+			if err := request.emit(SessionEvent{Type: "status", Detail: m.execution.state.status}); err != nil {
+				m.execution.err = err
+				updated, command := m.execution.failExecution()
+				m.execution = updated.(sessionExecutionModel)
+				return m, command
+			}
+		}
 		if !m.execution.emitContextUsage() {
 			updated, command := m.execution.failExecution()
 			m.execution = updated.(sessionExecutionModel)

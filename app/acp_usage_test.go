@@ -215,7 +215,7 @@ func TestACPAgentEmitsUsageAfterPrompt(t *testing.T) {
 		usage: client.Usage{PromptTokens: 120},
 	}
 	agent, workspaceStore, connection := testACPAgent(t, configuredClient, &fakeAgentTools{})
-	agent.state.config.Provider.ContextWindow = 2_000
+	agent.state.config.Provider.ContextWindow = 16_000
 	agent.state.memory.Configure(memoryPolicy(agent.state.config))
 	observed := &observingACPUsageConnection{fakeACPConnection: connection, usage: make(chan acp.SessionNotification, 16)}
 	agent.setConnection(observed)
@@ -338,7 +338,7 @@ func TestACPAgentEmitsCompactedMainLoopUsage(t *testing.T) {
 	agent, workspaceStore, connection := testACPAgent(
 		t,
 		configuredClient,
-		largeResultRuntime{content: strings.Repeat("large tool output ", 4_000)},
+		largeResultRuntime{content: strings.Repeat("large tool output ", 1_000)},
 	)
 	agent.state.config.Provider.ContextWindow = 16_000
 	agent.state.memory.Configure(memoryPolicy(agent.state.config))
@@ -346,6 +346,14 @@ func TestACPAgentEmitsCompactedMainLoopUsage(t *testing.T) {
 	agent.setConnection(observed)
 
 	sessionID := openTestACPSession(t, agent, workspaceStore.Root)
+	runtime := activeACPRuntime(t, agent, sessionID)
+	history := []client.Message{{Role: client.RoleSystem, Content: "Keep the contract."},
+		{Role: client.RoleAssistant, Content: strings.Repeat("old work ", 3_300)}}
+	runtime.state.memory = memory.New(memoryPolicy(runtime.state.activeConfig()), history)
+	runtime.state.messages = append([]client.Message(nil), history...)
+	if runtime.state.memory.ShouldCompact() {
+		t.Fatal("initial history must fit before the tool result")
+	}
 	result := make(chan acpPromptResult, 1)
 	go func() {
 		response, err := agent.Prompt(t.Context(), acp.PromptRequest{
@@ -359,13 +367,15 @@ func TestACPAgentEmitsCompactedMainLoopUsage(t *testing.T) {
 	initial := waitForUsage(t, observed.usage, func(*acp.SessionUsageUpdate) bool { return true })
 	close(configuredClient.releaseFirst)
 	waitForSignal(t, configuredClient.compactionStarted)
-	high := waitForUsage(t, observed.usage, func(usage *acp.SessionUsageUpdate) bool {
-		return usage.Used > initial.Update.UsageUpdate.Used+5_000
-	})
+	// The overflowing result is still waiting to be appended. Usage must not
+	// report an oversized context while the checkpoint request is running.
+	if got := runtime.state.memory.PredictedTokens(); got >= 13_600 {
+		t.Fatalf("context crossed the 85%% threshold before compaction: %d", got)
+	}
 	close(configuredClient.releaseCompaction)
 	waitForSignal(t, configuredClient.resumedStarted)
 	low := waitForUsage(t, observed.usage, func(usage *acp.SessionUsageUpdate) bool {
-		return usage.Used < high.Update.UsageUpdate.Used
+		return usage.Used < initial.Update.UsageUpdate.Used
 	})
 	close(configuredClient.releaseResumed)
 	completed := waitForPromptResult(t, result)
@@ -376,8 +386,8 @@ func TestACPAgentEmitsCompactedMainLoopUsage(t *testing.T) {
 	if response.StopReason != acp.StopReasonEndTurn {
 		t.Fatalf("stop reason = %q, want %q", response.StopReason, acp.StopReasonEndTurn)
 	}
-	if low.Update.UsageUpdate.Used >= high.Update.UsageUpdate.Used {
-		t.Fatalf("compaction usage = %d, want less than %d", low.Update.UsageUpdate.Used, high.Update.UsageUpdate.Used)
+	if low.Update.UsageUpdate.Used >= initial.Update.UsageUpdate.Used {
+		t.Fatalf("compaction usage = %d, want less than %d", low.Update.UsageUpdate.Used, initial.Update.UsageUpdate.Used)
 	}
 
 	stats := activeACPRuntime(t, agent, sessionID).state.memory.Stats()
@@ -396,7 +406,7 @@ func TestACPAgentEmitsCompactedMainLoopUsage(t *testing.T) {
 
 func TestACPUsageUpdateJSONRPCWire(t *testing.T) {
 	agent, workspaceStore, _ := testACPAgent(t, &fakeClient{}, &fakeAgentTools{})
-	agent.state.config.Provider.ContextWindow = 2_000
+	agent.state.config.Provider.ContextWindow = 16_000
 	agent.state.memory.Configure(memoryPolicy(agent.state.config))
 
 	requestReader, requestWriter := io.Pipe()
@@ -486,7 +496,7 @@ func TestACPUsageUpdateJSONRPCWire(t *testing.T) {
 	usageWire := usageWires[len(usageWires)-1]
 	used, usedOK := usageWire["used"].(float64)
 	size, sizeOK := usageWire["size"].(float64)
-	if !usedOK || !sizeOK || used < 0 || size != float64(2_000) {
+	if !usedOK || !sizeOK || used < 0 || size != float64(16_000) {
 		t.Fatalf("wire usage = %#v", usageWire)
 	}
 	if _, found := usageWire["cost"]; found {
@@ -517,7 +527,7 @@ func (f *failingACPUsageConnection) SessionUpdate(ctx context.Context, notificat
 func TestACPUsageFailureDoesNotChangePromptResult(t *testing.T) {
 	configuredClient := &fakeClient{}
 	agent, workspaceStore, connection := testACPAgent(t, configuredClient, &fakeAgentTools{})
-	agent.state.config.Provider.ContextWindow = 2_000
+	agent.state.config.Provider.ContextWindow = 16_000
 	agent.state.memory.Configure(memoryPolicy(agent.state.config))
 	var logs bytes.Buffer
 	agent.logger = slog.New(slog.NewTextHandler(&logs, nil))
@@ -565,7 +575,7 @@ func (b *blockingACPUsageConnection) SessionUpdate(ctx context.Context, notifica
 func TestACPUsageUpdateIsTimeBounded(t *testing.T) {
 	configuredClient := &stagedACPClient{started: make(chan struct{}), release: make(chan struct{})}
 	agent, workspaceStore, connection := testACPAgent(t, configuredClient, &fakeAgentTools{})
-	agent.state.config.Provider.ContextWindow = 2_000
+	agent.state.config.Provider.ContextWindow = 16_000
 	agent.state.memory.Configure(memoryPolicy(agent.state.config))
 	entered := make(chan struct{})
 	agent.setConnection(&blockingACPUsageConnection{fakeACPConnection: connection, entered: entered})

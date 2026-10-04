@@ -285,6 +285,17 @@ if result, ok := event.Result(); ok && result.Response != nil && len(result.Resp
 
 Initialize the manager with the exact messages passed to the loop and mirror
 events in order. A zero `memory.Policy.ContextWindow` disables compaction.
+
+Before appending an assistant message or tool result, the loop checks the
+projected context size against the configured trigger (85% by default). If the
+append would cross it, the loop reserves space for that message, compacts the
+existing history, and emits the compaction event before the message event.
+Pending tool calls survive the checkpoint so their incoming results remain
+paired and exact. A message that cannot fit below the trigger, or a checkpoint
+that fails to leave the reserved space, ends the turn with an error instead of
+committing oversized history. For user input managed outside the loop, use
+`memory.Manager.ShouldCompactAfterAppend` and `PlanBeforeAppend` before
+appending it, then apply the checkpoint successfully before inserting the input.
 `workspace.Session` can persist the full `Transcript`, compact `Context`, and
 `ActiveTask`, but `RunAgentLoop` never saves it automatically.
 

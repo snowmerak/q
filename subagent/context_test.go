@@ -154,7 +154,7 @@ func TestContextCompactorAppliesSummaryAboveTarget(t *testing.T) {
 	anchor := client.Message{Role: client.RoleSystem, Content: "contract"}
 	history := NewContextCompactor(spec, []client.Message{anchor}, nil, 1)
 	history.Append(client.Message{Role: client.RoleAssistant, Content: strings.Repeat("old context ", 8_000)})
-	summary := strings.Repeat("x", 40_000)
+	summary := strings.Repeat("x", 20_000)
 	if err := history.CompactIfNeeded(t.Context(), &spec, contextChatFunc(func(context.Context, client.ChatRequest) (*client.ChatResponse, error) {
 		return contextResponse(contextCheckpointJSON(summary)), nil
 	})); err != nil {
