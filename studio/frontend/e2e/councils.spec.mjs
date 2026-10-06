@@ -146,3 +146,26 @@ test('completed council switches between every independent answer', async ({ pag
   await page.getByRole('tab', { name: /A test\/one/ }).click();
   await expect(panel).toContainText('Independent answer 1');
 });
+
+test('failed chair synthesis shows its stored error and stops the progress message', async ({ page }) => {
+  const id = '66666666-6666-4666-8666-666666666666';
+  const members = [{ model: 'test/one' }, { model: 'test/two' }];
+  const council = { id, name: 'Failed synthesis', scope: 'independent', members, chair: { model: 'test/chair' }, rounds: 2 };
+  const turn = {
+    id: '77777777-7777-4777-8777-777777777777', council_id: id,
+    prompt: 'Compare the options', status: 'failed', stage: 'synthesis', total_rounds: 2, current_round: 2,
+    members, chair: council.chair, error: 'model test/chair returned empty answer (finish_reason=length, response_id=response-123)',
+    responses: [{ label: 'A', model: 'test/one', text: 'First answer' }, { label: 'B', model: 'test/two', text: 'Second answer' }],
+    reviews: [{ model: 'test/one', text: 'Peer review' }, { model: 'test/two', text: 'Another review' }],
+    created_at: '2026-10-06T12:00:00Z'
+  };
+  await page.route('**/api/v1/settings/models', (route) => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ models: members.map((seat) => ({ id: seat.model })) }) }));
+  await page.route('**/api/v1/councils', (route) => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ councils: [council] }) }));
+  await page.route(`**/api/v1/councils/${id}`, (route) => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ council, turns: [turn] }) }));
+  await page.goto(`/councils/${id}`);
+  const alert = page.getByRole('alert', { name: 'Council turn error' });
+  await expect(alert).toContainText('Chair synthesis failed');
+  await expect(alert).toContainText('finish_reason=length');
+  await expect(page.getByText('Failed · test/chair')).toBeVisible();
+  await expect(page.getByText('is comparing the answers and reviews')).toHaveCount(0);
+});

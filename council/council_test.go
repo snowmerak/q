@@ -474,6 +474,37 @@ func TestCouncilCanFinishAfterOneRound(t *testing.T) {
 	}
 }
 
+type emptyChairModel struct{ fakeModel }
+
+func (m *emptyChairModel) Chat(ctx context.Context, request client.ChatRequest) (*client.ChatResponse, error) {
+	if request.Model == "provider/chair" {
+		return &client.ChatResponse{
+			ID:      "response-123",
+			Usage:   client.Usage{PromptTokens: 321, CompletionTokens: 64},
+			Choices: []client.Choice{{Message: client.Message{Role: client.RoleAssistant}, FinishReason: "length"}},
+		}, nil
+	}
+	return m.fakeModel.Chat(ctx, request)
+}
+
+func TestChairEmptyAnswerReportsResponseDiagnostics(t *testing.T) {
+	value := testCouncil(council.Independent, "", "")
+	value.ID = "dddddddd-dddd-4ddd-8ddd-dddddddddddd"
+	turn, err := council.NewTurn(value, "Assess the design")
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := council.Run(t.Context(), &emptyChairModel{}, value, nil, turn, nil, filepath.Join(t.TempDir(), "scratch"), 2, func(council.Turn) error { return nil })
+	if err == nil || result.Stage != "synthesis" {
+		t.Fatalf("chair failure = %+v, %v", result, err)
+	}
+	for _, detail := range []string{"provider/chair", "empty answer", "finish_reason=length", "response_id=response-123", "prompt_tokens=321", "completion_tokens=64"} {
+		if !strings.Contains(err.Error(), detail) {
+			t.Fatalf("missing %q from error %q", detail, err)
+		}
+	}
+}
+
 type workspaceModel struct {
 	mu                  sync.Mutex
 	sawTool             bool
