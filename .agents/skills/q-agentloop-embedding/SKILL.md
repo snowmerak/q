@@ -36,7 +36,10 @@ an external-package tool round.
   loop intentionally has no separate round-limit option.
 
 `RunAgentLoop` requires a client and tool runtime and owns neither lifetime.
-For a plain model completion without tools, use the model client directly.
+For a standalone plain model completion without tools, use the model client
+directly. A host that intentionally uses Q's loop for every model step may
+provide a non-nil runtime with an empty tool catalog, as Council does for
+independent runs.
 The runtime also does not close an injected Skill store; the host owns it.
 
 With `NewRuntimeWithSkillStore`, keep Skill discovery and hint orchestration in

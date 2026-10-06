@@ -107,9 +107,12 @@ the host. Cancellation and deadlines come from `ctx`. There is no separate
 round-limit option, so externally reachable services should apply an
 appropriate context deadline.
 
-The loop requires both `Client` and `Tools`. For a completion with no tool
-runtime, call the model client directly instead of manufacturing an empty Agent
-Loop integration.
+The loop requires both `Client` and `Tools`. A host that only needs one plain
+completion can call the model client directly. A host that needs Q's loop
+semantics for every model step can supply a non-nil runtime with an empty tool
+catalog; the loop still provides its orchestration tools and response recovery.
+Council uses this form for independent runs and a read-only runtime for
+workspace runs.
 
 ## Enable Agent Skills without Archive or Library
 

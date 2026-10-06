@@ -32,10 +32,13 @@ func NewReadRuntime(base agentloop.ToolRuntime, roots []string) *ReadRuntime {
 }
 
 func (r *ReadRuntime) Tools() []client.Tool {
-	result := []client.Tool{{Type: client.ToolTypeFunction, Function: client.FunctionDefinition{
-		Name: "search_text", Description: "Search text in the authorized workspace roots. Returns at most 100 matching lines, honors .qignore, and skips symlinks and large files.",
-		Parameters: map[string]any{"type": "object", "properties": map[string]any{"query": map[string]any{"type": "string"}}, "required": []string{"query"}, "additionalProperties": false},
-	}}}
+	var result []client.Tool
+	if len(r.roots) > 0 {
+		result = append(result, client.Tool{Type: client.ToolTypeFunction, Function: client.FunctionDefinition{
+			Name: "search_text", Description: "Search text in the authorized workspace roots. Returns at most 100 matching lines, honors .qignore, and skips symlinks and large files.",
+			Parameters: map[string]any{"type": "object", "properties": map[string]any{"query": map[string]any{"type": "string"}}, "required": []string{"query"}, "additionalProperties": false},
+		}})
+	}
 	if r.base == nil {
 		return result
 	}

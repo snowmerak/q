@@ -49,11 +49,13 @@ func recoverEmptyChatResponse(
 	attempt chatRequestAttempt,
 ) (*client.ChatResponse, error) {
 	attempts := 0
+	var lastResponse *client.ChatResponse
 	for retry := 0; retry <= emptyChatResponseRetries; retry++ {
 		response, err := attempt(ctx, request)
 		if err != nil || !isEmptyChatResponse(response) {
 			return response, err
 		}
+		lastResponse = response
 		attempts++
 		if err := ctx.Err(); err != nil {
 			return nil, err
@@ -67,9 +69,37 @@ func recoverEmptyChatResponse(
 		if err != nil || !isEmptyChatResponse(response) {
 			return response, err
 		}
+		lastResponse = response
 		attempts++
 	}
-	return nil, fmt.Errorf("%w after %d attempts", errEmptyChatResponse, attempts)
+	return nil, fmt.Errorf("%w after %d attempts%s", errEmptyChatResponse, attempts, emptyResponseDiagnostic(lastResponse))
+}
+
+func emptyResponseDiagnostic(response *client.ChatResponse) string {
+	if response == nil {
+		return ""
+	}
+	var details []string
+	if len(response.Choices) > 0 && response.Choices[0].FinishReason != "" {
+		details = append(details, "finish_reason="+response.Choices[0].FinishReason)
+	}
+	if response.ID != "" {
+		id := response.ID
+		if len(id) > 128 {
+			id = id[:128] + "…"
+		}
+		details = append(details, "response_id="+id)
+	}
+	if response.Usage.PromptTokens > 0 {
+		details = append(details, fmt.Sprintf("prompt_tokens=%d", response.Usage.PromptTokens))
+	}
+	if response.Usage.CompletionTokens > 0 {
+		details = append(details, fmt.Sprintf("completion_tokens=%d", response.Usage.CompletionTokens))
+	}
+	if len(details) == 0 {
+		return ""
+	}
+	return " (" + strings.Join(details, ", ") + ")"
 }
 
 func isEmptyChatResponse(response *client.ChatResponse) bool {

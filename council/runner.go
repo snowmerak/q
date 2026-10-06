@@ -170,10 +170,10 @@ func run(ctx context.Context, model agentloop.ChatClient, value Council, previou
 					own = anonymizeResponses([]Response{own}, value.Members)[0]
 					user += "\nYour first answer:\n" + own.Text + "\nPrevious anonymous reviews:\n" + feedback
 				}
-				answer, err := chat(ctx, model, seat, []client.Message{
+				answer, err := runSeat(ctx, model, seat, []client.Message{
 					{Role: client.RoleSystem, Content: system},
 					{Role: client.RoleUser, Content: user},
-				})
+				}, roots, filepath.Join(scratch, fmt.Sprintf("round-%d-%s", number, label(index))))
 				review := Review{Model: seat.Model, Text: answer}
 				if err != nil {
 					review.Error = err.Error()
@@ -200,10 +200,10 @@ func run(ctx context.Context, model agentloop.ChatClient, value Council, previou
 	if err := save(turn); err != nil {
 		return turn, err
 	}
-	answer, err := chat(ctx, model, value.Chair, []client.Message{
+	answer, err := runSeat(ctx, model, value.Chair, []client.Message{
 		{Role: client.RoleSystem, Content: "You are the chair of an LLM council. Consider the independent answers and every round of plain-text peer reviews. Synthesize the strongest supported findings, address corrections, and preserve consequential disagreements and uncertainty. Avoid repeating the same point across sections. Do not claim that agreement proves correctness. Answer the user's question directly."},
 		{Role: client.RoleUser, Content: "Question: " + turn.Prompt + "\n\nAll council rounds:\n" + formatChairHistory(turn.Rounds, value.Members)},
-	})
+	}, roots, filepath.Join(scratch, "chair"))
 	if err != nil {
 		return turn, err
 	}
@@ -372,58 +372,65 @@ func firstOpinion(ctx context.Context, model agentloop.ChatClient, seat Seat, pr
 	if context := priorContext(previous); context != "" {
 		user = "Previous council conversation:\n" + context + "Current question:\n" + prompt
 	}
-	if len(roots) == 0 {
-		return chat(ctx, model, seat, []client.Message{
-			{Role: client.RoleSystem, Content: "Provide an independent, evidence-conscious first opinion. Other council members' current answers are unavailable. Do not identify your model."},
-			{Role: client.RoleUser, Content: user},
-		})
+	system := "Provide an independent, evidence-conscious first opinion. Other council members' current answers are unavailable. Do not identify your model."
+	if len(roots) > 0 {
+		system = "Provide an independent first opinion. Investigate the available repositories using read-only tools. Never modify source files. Cite relevant paths and acknowledge uncertainty. Do not identify your model. If you start a task, put your complete opinion and evidence in task_complete.summary."
 	}
-	runtime, err := tools.NewRuntimeWithRoots(ctx, tools.RuntimeRoots{
-		WorkspaceStateRoot: scratch, CheckoutRoot: roots[0], AuxiliaryCheckoutRoots: roots[1:],
-	}, nil, loom.StoreOptions{}, lsp.GlobalConfig{}, lsp.WorkspaceConfig{}, nil)
-	if err != nil {
-		return "", err
+	return runSeat(ctx, model, seat, []client.Message{{Role: client.RoleSystem, Content: system}, {Role: client.RoleUser, Content: user}}, roots, scratch)
+}
+
+// runSeat is the only model execution path for council opinions, reviews, and
+// synthesis. Council owns the schedule; Q's Agent Loop owns every model round.
+func runSeat(ctx context.Context, model agentloop.ChatClient, seat Seat, messages []client.Message, roots []string, scratch string) (string, error) {
+	readTools := NewReadRuntime(nil, roots)
+	workingDirectory := ""
+	userMessage := messages[len(messages)-1]
+	workspaceOptions := app.WorkspaceMessageOptions{Tools: readTools}
+	var auxiliaryRoots []string
+	if len(roots) > 0 {
+		auxiliaryRoots = roots[1:]
+		runtime, err := tools.NewRuntimeWithRoots(ctx, tools.RuntimeRoots{
+			WorkspaceStateRoot: scratch, CheckoutRoot: roots[0], AuxiliaryCheckoutRoots: roots[1:],
+		}, nil, loom.StoreOptions{}, lsp.GlobalConfig{}, lsp.WorkspaceConfig{}, nil)
+		if err != nil {
+			return "", err
+		}
+		defer runtime.Close()
+		readTools = NewReadRuntime(runtime, roots)
+		workspaceOptions = app.WorkspaceMessageOptions{Root: roots[0], AuxiliaryRoots: auxiliaryRoots, Tools: readTools}
+		workingDirectory = roots[0]
 	}
-	defer runtime.Close()
-	readTools := NewReadRuntime(runtime, roots)
-	messages := app.PrepareWorkspaceMessages([]client.Message{{Role: client.RoleSystem, Content: "Provide an independent first opinion. Investigate the available repositories using read-only tools. Never modify source files. Cite relevant paths and acknowledge uncertainty. Do not identify your model. If you start a task, put your complete opinion and evidence in task_complete.summary."}}, app.WorkspaceMessageOptions{
-		Root: roots[0], AuxiliaryRoots: roots[1:], Tools: readTools,
-	})
-	messages = append(messages, client.Message{Role: client.RoleDeveloper, Content: "Council mode is read-only. Only the advertised read tools are authorized. Do not request edits, commands, or delegation."}, client.Message{Role: client.RoleUser, Content: user})
+	messages = app.PrepareWorkspaceMessages(messages[:1], workspaceOptions)
+	messages = append(messages,
+		client.Message{Role: client.RoleDeveloper, Content: "Council mode is read-only. Only the advertised read tools are authorized. Do not request edits, commands, or delegation."},
+		userMessage,
+	)
 	events := make(chan app.AgentEvent)
 	go app.RunAgentLoop(ctx, app.AgentLoopRequest{
 		Client: model, Tools: readTools, Model: seat.Model, ReasoningEffort: seat.ReasoningEffort,
-		Messages: messages, WorkingDirectory: roots[0], AuxiliaryDirectories: roots[1:],
+		Messages: messages, WorkingDirectory: workingDirectory, AuxiliaryDirectories: auxiliaryRoots,
 	}, events)
-	var answer string
+	var response *client.ChatResponse
 	var runErr error
 	for event := range events {
 		if _, answers, ok := event.Question(); ok {
 			answers <- app.AgentAnswer{Err: app.ErrInteractionUnavailable}
 		}
-		if result, ok := event.Result(); ok && result.Response != nil && len(result.Response.Choices) > 0 {
-			answer = result.Response.Choices[0].Message.Content
+		if result, ok := event.Result(); ok {
+			response = result.Response
 		}
 		if err := event.Err(); err != nil {
 			runErr = err
 		}
 	}
 	if runErr != nil {
-		return "", runErr
+		if errors.Is(runErr, agentloop.ErrEmptyChatResponse) {
+			return "", fmt.Errorf("model %s returned empty answer: %w", seat.Model, runErr)
+		}
+		return "", fmt.Errorf("model %s request failed: %w", seat.Model, runErr)
 	}
 	if err := ctx.Err(); err != nil {
 		return "", err
-	}
-	if strings.TrimSpace(answer) == "" {
-		return "", errors.New("member returned no answer")
-	}
-	return answer, nil
-}
-
-func chat(ctx context.Context, model agentloop.ChatClient, seat Seat, messages []client.Message) (string, error) {
-	response, err := model.Chat(ctx, client.ChatRequest{Model: seat.Model, ReasoningEffort: seat.ReasoningEffort, Messages: messages})
-	if err != nil {
-		return "", fmt.Errorf("model %s request failed: %w", seat.Model, err)
 	}
 	if response == nil {
 		return "", fmt.Errorf("model %s returned no response", seat.Model)

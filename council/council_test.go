@@ -339,7 +339,7 @@ type failingLastReviewModel struct {
 }
 
 func (m *failingLastReviewModel) Chat(ctx context.Context, request client.ChatRequest) (*client.ChatResponse, error) {
-	if request.Model == "provider/two" && len(request.Messages) > 1 && strings.Contains(request.Messages[1].Content, "Round 3 reviews:") {
+	if request.Model == "provider/two" && strings.Contains(councilUserPrompt(request), "Round 3 reviews:") {
 		m.mu.Lock()
 		m.attempts++
 		fail := !m.failed
@@ -405,6 +405,15 @@ func (m *fakeModel) Chat(_ context.Context, request client.ChatRequest) (*client
 	return &client.ChatResponse{Choices: []client.Choice{{Message: client.Message{Role: client.RoleAssistant, Content: content}}}}, nil
 }
 
+func councilUserPrompt(request client.ChatRequest) string {
+	for index := len(request.Messages) - 1; index >= 0; index-- {
+		if request.Messages[index].Role == client.RoleUser {
+			return request.Messages[index].Content
+		}
+	}
+	return ""
+}
+
 func TestIndependentRunUsesDistinctOpinionsThenReviewsAndSynthesis(t *testing.T) {
 	value := testCouncil(council.Independent, "", "")
 	value.ID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
@@ -454,9 +463,21 @@ func TestIndependentRunUsesDistinctOpinionsThenReviewsAndSynthesis(t *testing.T)
 	model.mu.Lock()
 	defer model.mu.Unlock()
 	for _, request := range model.requests {
+		var hasTaskStart, hasTaskComplete bool
+		for _, tool := range request.Tools {
+			hasTaskStart = hasTaskStart || tool.Function.Name == "task_start"
+			hasTaskComplete = hasTaskComplete || tool.Function.Name == "task_complete"
+			if tool.Function.Name == "search_text" || tool.Function.Name == "read_file" {
+				t.Fatalf("independent council advertised workspace tool %q", tool.Function.Name)
+			}
+		}
+		if !hasTaskStart || !hasTaskComplete {
+			t.Fatalf("council bypassed Q Agent Loop for %s: tools=%+v", request.Model, request.Tools)
+		}
 		if len(request.Messages) > 0 && strings.Contains(request.Messages[0].Content, "anonymous peer reviewer") {
-			if strings.Contains(request.Messages[1].Content, "provider/one") || strings.Contains(request.Messages[1].Content, "provider/two") {
-				t.Fatalf("review leaked model identity: %s", request.Messages[1].Content)
+			user := councilUserPrompt(request)
+			if strings.Contains(user, "provider/one") || strings.Contains(user, "provider/two") {
+				t.Fatalf("review leaked model identity: %s", user)
 			}
 		}
 	}
@@ -497,15 +518,16 @@ func TestCouncilContinuesReviewRoundsAndChairReceivesEveryRound(t *testing.T) {
 			chairRequest = request
 		}
 		if strings.Contains(request.Messages[0].Content, "continuing a multi-round LLM council") {
-			if strings.Contains(request.Messages[1].Content, "Round 2 reviews") {
+			user := councilUserPrompt(*request)
+			if strings.Contains(user, "Round 2 reviews") {
 				sawIntegratedFeedback = true
 			}
-			if strings.Contains(request.Messages[1].Content, "Peer review from") {
+			if strings.Contains(user, "Peer review from") {
 				sawPriorReview = true
 			}
 		}
 	}
-	if chairRequest == nil || !strings.Contains(chairRequest.Messages[1].Content, "Round 4") || !sawIntegratedFeedback || !sawPriorReview || !strings.Contains(chairRequest.Messages[1].Content, "Integrated review from") {
+	if chairRequest == nil || !strings.Contains(councilUserPrompt(*chairRequest), "Round 4") || !sawIntegratedFeedback || !sawPriorReview || !strings.Contains(councilUserPrompt(*chairRequest), "Integrated review from") {
 		t.Fatalf("later reviews were not integrated: chair=%v feedback=%v review=%v", chairRequest != nil, sawIntegratedFeedback, sawPriorReview)
 	}
 }
@@ -593,6 +615,14 @@ type workspaceModel struct {
 }
 
 func (m *workspaceModel) Chat(_ context.Context, request client.ChatRequest) (*client.ChatResponse, error) {
+	if len(request.Messages) > 0 {
+		if strings.Contains(request.Messages[0].Content, "chair of an LLM council") {
+			return &client.ChatResponse{Choices: []client.Choice{{Message: client.Message{Role: client.RoleAssistant, Content: "repository synthesis"}}}}, nil
+		}
+		if strings.Contains(request.Messages[0].Content, "anonymous peer reviewer") || strings.Contains(request.Messages[0].Content, "continuing a multi-round LLM council") {
+			return &client.ChatResponse{Choices: []client.Choice{{Message: client.Message{Role: client.RoleAssistant, Content: "peer review"}}}}, nil
+		}
+	}
 	m.mu.Lock()
 	if m.counts == nil {
 		m.counts = map[string]int{}
