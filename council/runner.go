@@ -23,6 +23,16 @@ import (
 // Run executes the configured council rounds followed by chair synthesis.
 // First opinions remain independent of the current turn's other members.
 func Run(ctx context.Context, model agentloop.ChatClient, value Council, previous []Turn, turn Turn, roots []string, scratch string, maxParallel int, save func(Turn) error) (Turn, error) {
+	return run(ctx, model, value, previous, turn, roots, scratch, maxParallel, save, false)
+}
+
+// Resume retries missing or failed work in a saved turn, keeping successful
+// outputs from the current round and all earlier rounds.
+func Resume(ctx context.Context, model agentloop.ChatClient, value Council, previous []Turn, turn Turn, roots []string, scratch string, maxParallel int, save func(Turn) error) (Turn, error) {
+	return run(ctx, model, value, previous, turn, roots, scratch, maxParallel, save, true)
+}
+
+func run(ctx context.Context, model agentloop.ChatClient, value Council, previous []Turn, turn Turn, roots []string, scratch string, maxParallel int, save func(Turn) error, resume bool) (Turn, error) {
 	if model == nil {
 		return turn, errors.New("council model client is unavailable")
 	}
@@ -44,11 +54,20 @@ func Run(ctx context.Context, model agentloop.ChatClient, value Council, previou
 	defer os.RemoveAll(scratch)
 	totalRounds := EffectiveRounds(value)
 	turn.TotalRounds, turn.CurrentRound = totalRounds, 1
-	turn.Rounds = make([]Round, totalRounds)
+	if resume {
+		if err := prepareResume(&turn, value); err != nil {
+			return turn, err
+		}
+	} else {
+		turn.Rounds = make([]Round, totalRounds)
+		turn.Responses = make([]Response, len(value.Members))
+	}
 	turn.Stage, turn.Status = "opinions", "running"
-	turn.Responses = make([]Response, len(value.Members))
+	turn.Error = ""
 	for index, seat := range value.Members {
-		turn.Responses[index] = Response{Label: label(index), Model: seat.Model}
+		if !completeResponse(turn.Responses[index], seat) {
+			turn.Responses[index] = Response{Label: label(index), Model: seat.Model}
+		}
 	}
 	turn.Rounds[0] = Round{Number: 1, Responses: turn.Responses}
 	if err := save(turn); err != nil {
@@ -67,6 +86,9 @@ func Run(ctx context.Context, model agentloop.ChatClient, value Council, previou
 	semaphore := make(chan struct{}, maxParallel)
 	var wg sync.WaitGroup
 	for index, seat := range value.Members {
+		if completeResponse(turn.Responses[index], seat) {
+			continue
+		}
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -92,20 +114,22 @@ func Run(ctx context.Context, model agentloop.ChatClient, value Council, previou
 	if err := ctx.Err(); err != nil {
 		return turn, err
 	}
-	var valid []Response
-	for _, response := range turn.Responses {
-		if response.Error == "" && strings.TrimSpace(response.Text) != "" {
-			valid = append(valid, response)
+	valid := append([]Response(nil), turn.Responses...)
+	for index, response := range valid {
+		if !completeResponse(response, value.Members[index]) {
+			return turn, fmt.Errorf("council member %s did not produce an answer: %s", label(index), response.Error)
 		}
-	}
-	if len(valid) < 2 {
-		return turn, errors.New("fewer than two council members produced an answer")
 	}
 	for number := 2; number <= totalRounds; number++ {
 		turn.Stage, turn.CurrentRound = "reviews", number
-		turn.Rounds[number-1] = Round{Number: number, Reviews: make([]Review, len(value.Members))}
+		if len(turn.Rounds[number-1].Reviews) != len(value.Members) {
+			turn.Rounds[number-1].Reviews = make([]Review, len(value.Members))
+		}
+		turn.Rounds[number-1].Number = number
 		for index, seat := range value.Members {
-			turn.Rounds[number-1].Reviews[index].Model = seat.Model
+			if !completeReview(turn.Rounds[number-1].Reviews[index], seat) {
+				turn.Rounds[number-1].Reviews[index] = Review{Model: seat.Model}
+			}
 		}
 		turn.Reviews, turn.Ranking = turn.Rounds[number-1].Reviews, nil
 		if err := save(turn); err != nil {
@@ -113,6 +137,9 @@ func Run(ctx context.Context, model agentloop.ChatClient, value Council, previou
 		}
 		feedback := formatPriorFeedback(turn.Rounds[:number-1], value.Members)
 		for index, seat := range value.Members {
+			if completeReview(turn.Reviews[index], seat) {
+				continue
+			}
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
@@ -163,6 +190,11 @@ func Run(ctx context.Context, model agentloop.ChatClient, value Council, previou
 		if err := ctx.Err(); err != nil {
 			return turn, err
 		}
+		for index, review := range turn.Reviews {
+			if !completeReview(review, value.Members[index]) {
+				return turn, fmt.Errorf("council round %d reviewer %s failed: %s", number, label(index), review.Error)
+			}
+		}
 	}
 	turn.Stage = "synthesis"
 	if err := save(turn); err != nil {
@@ -180,6 +212,61 @@ func Run(ctx context.Context, model agentloop.ChatClient, value Council, previou
 		return turn, err
 	}
 	return turn, nil
+}
+
+func completeResponse(response Response, seat Seat) bool {
+	return response.Model == seat.Model && response.Error == "" && strings.TrimSpace(response.Text) != ""
+}
+
+func completeReview(review Review, seat Seat) bool {
+	return review.Model == seat.Model && review.Error == "" && strings.TrimSpace(review.Text) != ""
+}
+
+func prepareResume(turn *Turn, value Council) error {
+	count := EffectiveRounds(value)
+	stored := turn.Rounds
+	turn.Rounds = make([]Round, count)
+	copy(turn.Rounds, stored)
+	for number := 1; number <= count; number++ {
+		turn.Rounds[number-1].Number = number
+	}
+	if len(turn.Rounds[0].Responses) != len(value.Members) {
+		turn.Rounds[0].Responses = append([]Response(nil), turn.Responses...)
+	}
+	responses := make([]Response, len(value.Members))
+	copy(responses, turn.Rounds[0].Responses)
+	turn.Responses = responses
+	turn.Rounds[0].Responses = responses
+	firstIncomplete := count + 1
+	for index, seat := range value.Members {
+		if !completeResponse(responses[index], seat) {
+			firstIncomplete = 1
+		}
+	}
+	for number := 2; number <= count; number++ {
+		reviews := turn.Rounds[number-1].Reviews
+		if len(reviews) != len(value.Members) && number == 2 && len(turn.Reviews) == len(value.Members) && len(stored) == 0 {
+			reviews = turn.Reviews
+			turn.Rounds[number-1].Reviews = reviews
+		}
+		if len(reviews) != len(value.Members) {
+			firstIncomplete = min(firstIncomplete, number)
+			continue
+		}
+		for index, seat := range value.Members {
+			if !completeReview(reviews[index], seat) {
+				firstIncomplete = min(firstIncomplete, number)
+			}
+		}
+	}
+	if firstIncomplete == count+1 && strings.TrimSpace(turn.Final) != "" {
+		return errors.New("council turn is already complete")
+	}
+	for number := firstIncomplete + 1; number <= count; number++ {
+		turn.Rounds[number-1] = Round{Number: number}
+	}
+	turn.Final = ""
+	return nil
 }
 
 func label(index int) string { return string(rune('A' + index)) }

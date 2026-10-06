@@ -83,6 +83,7 @@ type Round struct {
 type Turn struct {
 	ID           string         `json:"id"`
 	CouncilID    string         `json:"council_id"`
+	RerunOf      string         `json:"rerun_of,omitempty"`
 	Prompt       string         `json:"prompt"`
 	Members      []Seat         `json:"members"`
 	Chair        Seat           `json:"chair"`

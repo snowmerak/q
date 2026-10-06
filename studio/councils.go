@@ -15,6 +15,7 @@ import (
 	"github.com/snowmerak/q/app"
 	"github.com/snowmerak/q/config"
 	"github.com/snowmerak/q/council"
+	"github.com/snowmerak/q/worklock"
 )
 
 type councilModelProvider interface {
@@ -49,6 +50,10 @@ type councilInput struct {
 
 type councilTurnInput struct {
 	Prompt string `json:"prompt"`
+}
+
+type councilRetryInput struct {
+	Mode string `json:"mode"`
 }
 type councilDetail struct {
 	Council council.Council `json:"council"`
@@ -204,11 +209,18 @@ func (service *councilService) serveItem(writer http.ResponseWriter, request *ht
 	case http.MethodDelete:
 		service.mu.Lock()
 		_, running := service.active[id]
-		service.mu.Unlock()
 		if running {
+			service.mu.Unlock()
 			writeAPIError(writer, http.StatusConflict, errors.New("council has a running turn"))
 			return
 		}
+		lock, err := service.acquireRunLock(id)
+		service.mu.Unlock()
+		if err != nil {
+			writeRunLockError(writer, err)
+			return
+		}
+		defer lock.Close()
 		if err := service.store.Delete(id); err != nil {
 			writeCouncilError(writer, err)
 			return
@@ -300,25 +312,157 @@ func (service *councilService) serveTurns(writer http.ResponseWriter, request *h
 		writeAPIError(writer, http.StatusServiceUnavailable, errors.New("Studio is shutting down"))
 		return
 	}
+	lock, err := service.acquireRunLock(value.ID)
+	if err != nil {
+		service.mu.Unlock()
+		writeRunLockError(writer, err)
+		return
+	}
 	ctx, cancel := context.WithTimeout(service.ctx, 10*time.Minute)
 	service.active[value.ID] = activeCouncilRun{id: turn.ID, cancel: cancel}
 	if err := service.store.SaveTurn(turn); err != nil {
 		delete(service.active, value.ID)
 		service.mu.Unlock()
 		cancel()
+		_ = lock.Close()
 		writeCouncilError(writer, err)
 		return
 	}
 	service.wg.Add(1)
 	service.mu.Unlock()
-	go service.execute(ctx, cancel, value, turn)
+	go service.execute(ctx, cancel, lock, value, turn, false)
 	writeJSON(writer, http.StatusAccepted, turn)
 }
 
-func (service *councilService) execute(ctx context.Context, cancel context.CancelFunc, value council.Council, turn council.Turn) {
+func (service *councilService) serveRetry(writer http.ResponseWriter, request *http.Request) {
+	if request.Method != http.MethodPost {
+		writer.Header().Set("Allow", "POST")
+		writeAPIError(writer, http.StatusMethodNotAllowed, errors.New("method not allowed"))
+		return
+	}
+	id, runID := request.PathValue("council"), request.PathValue("run")
+	if !council.ValidID(runID) {
+		writeAPIError(writer, http.StatusBadRequest, errors.New("invalid run ID"))
+		return
+	}
+	value, err := service.store.Load(id)
+	if err != nil {
+		writeCouncilError(writer, err)
+		return
+	}
+	var input councilRetryInput
+	if err := decodeSettingsRequest(writer, request, &input); err != nil {
+		writeAPIError(writer, http.StatusBadRequest, err)
+		return
+	}
+	if input.Mode != "resume" && input.Mode != "rerun" {
+		writeAPIError(writer, http.StatusBadRequest, errors.New("mode must be resume or rerun"))
+		return
+	}
+	turns, err := service.store.ListTurns(id)
+	if err != nil {
+		writeCouncilError(writer, err)
+		return
+	}
+	var source council.Turn
+	for _, item := range turns {
+		if item.ID == runID {
+			source = item
+			break
+		}
+	}
+	if source.ID == "" {
+		writeAPIError(writer, http.StatusNotFound, os.ErrNotExist)
+		return
+	}
+	if source.Status == "queued" || source.Status == "running" {
+		writeAPIError(writer, http.StatusConflict, errors.New("council turn is still running; reload its status first"))
+		return
+	}
+	if input.Mode == "resume" && source.Status == "completed" {
+		writeAPIError(writer, http.StatusConflict, errors.New("completed council turn has nothing to resume"))
+		return
+	}
+	if len(source.Members) > 0 {
+		value.Members = append([]council.Seat(nil), source.Members...)
+	}
+	if source.Chair.Model != "" {
+		value.Chair = source.Chair
+	}
+	if source.TotalRounds > 0 {
+		value.Rounds = source.TotalRounds
+	} else if len(source.Rounds) > 0 {
+		value.Rounds = len(source.Rounds)
+	}
+	if err := council.Validate(value); err != nil {
+		writeAPIError(writer, http.StatusUnprocessableEntity, err)
+		return
+	}
+	turn := source
+	if input.Mode == "rerun" {
+		turn, err = council.NewTurn(value, source.Prompt)
+		if err != nil {
+			writeCouncilError(writer, err)
+			return
+		}
+		turn.RerunOf = source.ID
+	} else {
+		turn.Status, turn.Error = "queued", ""
+	}
+	service.mu.Lock()
+	if _, busy := service.active[id]; busy {
+		service.mu.Unlock()
+		writeAPIError(writer, http.StatusConflict, errors.New("council already has a running turn"))
+		return
+	}
+	if service.ctx.Err() != nil {
+		service.mu.Unlock()
+		writeAPIError(writer, http.StatusServiceUnavailable, errors.New("Studio is shutting down"))
+		return
+	}
+	lock, err := service.acquireRunLock(id)
+	if err != nil {
+		service.mu.Unlock()
+		writeRunLockError(writer, err)
+		return
+	}
+	ctx, cancel := context.WithTimeout(service.ctx, 10*time.Minute)
+	service.active[id] = activeCouncilRun{id: turn.ID, cancel: cancel}
+	if err := service.store.SaveTurn(turn); err != nil {
+		delete(service.active, id)
+		service.mu.Unlock()
+		cancel()
+		_ = lock.Close()
+		writeCouncilError(writer, err)
+		return
+	}
+	service.wg.Add(1)
+	service.mu.Unlock()
+	go service.execute(ctx, cancel, lock, value, turn, input.Mode == "resume")
+	writeJSON(writer, http.StatusAccepted, turn)
+}
+
+func (service *councilService) acquireRunLock(id string) (*worklock.Lock, error) {
+	return worklock.AcquireFile(service.store.Root, filepath.Join("locks", id+".lock"), "q studio council")
+}
+
+func writeRunLockError(writer http.ResponseWriter, err error) {
+	if errors.Is(err, worklock.ErrLocked) {
+		writeAPIError(writer, http.StatusConflict, errors.New("council is running in another Studio window"))
+		return
+	}
+	writeCouncilError(writer, err)
+}
+
+func (service *councilService) execute(ctx context.Context, cancel context.CancelFunc, lock *worklock.Lock, value council.Council, turn council.Turn, resume bool) {
 	defer service.wg.Done()
 	defer cancel()
-	defer func() { service.mu.Lock(); delete(service.active, value.ID); service.mu.Unlock() }()
+	defer func() {
+		service.mu.Lock()
+		_ = lock.Close()
+		delete(service.active, value.ID)
+		service.mu.Unlock()
+	}()
 	fail := func(err error) {
 		if errors.Is(err, context.Canceled) {
 			turn.Status = "cancelled"
@@ -354,14 +498,27 @@ func (service *councilService) execute(ctx context.Context, cancel context.Cance
 		fail(err)
 		return
 	}
+	cutoff := turn.CreatedAt
+	if turn.RerunOf != "" {
+		for _, item := range previous {
+			if item.ID == turn.RerunOf {
+				cutoff = item.CreatedAt
+				break
+			}
+		}
+	}
 	var history []council.Turn
 	for _, item := range previous {
-		if item.ID != turn.ID {
+		if item.CreatedAt.Before(cutoff) {
 			history = append(history, item)
 		}
 	}
 	scratch := filepath.Join(service.store.Root, "scratch", turn.ID)
-	turn, err = council.Run(ctx, model, value, history, turn, roots, scratch, settings.EffectiveAgents().MaxParallel, func(progress council.Turn) error {
+	runner := council.Run
+	if resume {
+		runner = council.Resume
+	}
+	turn, err = runner(ctx, model, value, history, turn, roots, scratch, settings.EffectiveAgents().MaxParallel, func(progress council.Turn) error {
 		turn = progress
 		return service.store.SaveTurn(progress)
 	})
@@ -392,8 +549,16 @@ func (service *councilService) serveRun(writer http.ResponseWriter, request *htt
 			active := service.active[id].id == runID
 			service.mu.Unlock()
 			if !active && (turn.Status == "queued" || turn.Status == "running") {
-				turn.Status, turn.Error = "interrupted", "Studio stopped before this turn completed"
-				_ = service.store.SaveTurn(turn)
+				lock, err := service.acquireRunLock(id)
+				if err != nil && !errors.Is(err, worklock.ErrLocked) {
+					writeCouncilError(writer, err)
+					return
+				}
+				if err == nil {
+					_ = lock.Close()
+					turn.Status, turn.Error = "interrupted", "Studio stopped before this turn completed"
+					_ = service.store.SaveTurn(turn)
+				}
 			}
 			writeJSON(writer, http.StatusOK, turn)
 			return

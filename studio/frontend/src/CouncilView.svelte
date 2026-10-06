@@ -11,7 +11,7 @@
   type Opinion = { label: string; model: string; text?: string; error?: string };
   type Review = { model: string; text?: string; error?: string };
   type CouncilRound = { number: number; responses?: Opinion[]; reviews?: Review[] };
-  type Turn = { id: string; prompt: string; members: Seat[]; chair: Seat; status: string; stage: string; total_rounds?: number; current_round?: number; rounds?: CouncilRound[]; responses: Opinion[]; reviews: Review[]; final?: string; error?: string; created_at: string };
+  type Turn = { id: string; rerun_of?: string; prompt: string; members: Seat[]; chair: Seat; status: string; stage: string; total_rounds?: number; current_round?: number; rounds?: CouncilRound[]; responses: Opinion[]; reviews: Review[]; final?: string; error?: string; created_at: string };
 
   let councils: Council[] = [];
   let selected: Council | null = null;
@@ -20,6 +20,7 @@
   let projects: StudioProject[] = [];
   let loading = true;
   let saving = false;
+  let retrying = '';
   let error = '';
   let prompt = '';
   let poll: ReturnType<typeof setTimeout> | null = null;
@@ -163,6 +164,17 @@
     catch (cause) { error = cause instanceof Error ? cause.message : 'Could not cancel council turn'; }
   }
 
+  async function retryTurn(turn: Turn, mode: 'resume' | 'rerun') {
+    if (!selected || activeTurn || retrying) return;
+    retrying = turn.id; error = '';
+    try {
+      const updated = await request<Turn>(`/api/v1/councils/${encodeURIComponent(selected.id)}/runs/${encodeURIComponent(turn.id)}/retry`, 'POST', { mode });
+      turns = mode === 'resume' ? turns.map((item) => item.id === updated.id ? updated : item) : [...turns, updated];
+      schedulePoll();
+    } catch (cause) { error = cause instanceof Error ? cause.message : 'Could not restart council turn'; }
+    finally { retrying = ''; }
+  }
+
   function addMember() {
     const used = new Set(draftMembers.map((seat) => seat.model));
     const model = concreteModels.find((option) => !used.has(option.id));
@@ -211,7 +223,7 @@
   }
 
   function readyCount(items: { text?: string; error?: string }[] | undefined): number {
-    return items?.filter((item) => !!item.text || !!item.error).length || 0;
+    return items?.filter((item) => !!item.text && !item.error).length || 0;
   }
 
   function hasAnswers(round: CouncilRound): boolean {
@@ -299,7 +311,7 @@
           {/if}
           {#each [...turns].reverse() as turn}
             <article class="council-turn">
-              <div class="turn-meta"><span>{new Date(turn.created_at).toLocaleString()}</span><span class="turn-status">{turn.status === 'running' ? 'Deliberating' : turn.status}</span></div>
+              <div class="turn-meta"><span>{new Date(turn.created_at).toLocaleString()}{turn.rerun_of ? ' · Rerun' : ''}</span><div class="turn-actions"><span class="turn-status">{turn.status === 'running' ? 'Deliberating' : turn.status}</span>{#if !['queued', 'running'].includes(turn.status)}{#if ['failed', 'cancelled', 'interrupted'].includes(turn.status)}<button onclick={() => retryTurn(turn, 'resume')} disabled={!!activeTurn || !!retrying}>Resume saved progress</button>{/if}<button onclick={() => retryTurn(turn, 'rerun')} disabled={!!activeTurn || !!retrying} title="Create a new turn with the same question and model settings">Rerun turn</button>{/if}</div></div>
               <h4 class="turn-question">{turn.prompt}</h4>
               <div class="stage-track" aria-label="Council stages">
                 {#each Array.from({ length: roundCount(turn) }, (_, index) => index + 1) as number}
@@ -387,6 +399,8 @@
   .turn-question { margin: 12px 0 20px; font-size: 18px; line-height: 1.5; }
   .turn-meta { font-size: 12px; }
   .turn-status { color: var(--violet); text-transform: capitalize; }
+  .turn-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 8px; }
+  .turn-actions button { padding: 5px 8px; font-size: 12px; }
   .stage-track { display: grid; grid-template-columns: repeat(auto-fit, minmax(155px, 1fr)); gap: 8px; margin-bottom: 20px; }
   .stage-track > div { display: flex; align-items: center; gap: 10px; min-width: 0; padding: 10px; border: 1px solid var(--border); border-radius: 7px; color: var(--muted); font-size: 12px; }
   .stage-track > div.active { border-color: var(--violet); background: var(--violet-soft); color: var(--text); }

@@ -2,6 +2,8 @@ package council_test
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -329,6 +331,63 @@ type fakeModel struct {
 	requests []client.ChatRequest
 }
 
+type failingLastReviewModel struct {
+	fakeModel
+	mu       sync.Mutex
+	failed   bool
+	attempts int
+}
+
+func (m *failingLastReviewModel) Chat(ctx context.Context, request client.ChatRequest) (*client.ChatResponse, error) {
+	if request.Model == "provider/two" && len(request.Messages) > 1 && strings.Contains(request.Messages[1].Content, "Round 3 reviews:") {
+		m.mu.Lock()
+		m.attempts++
+		fail := !m.failed
+		m.failed = true
+		m.mu.Unlock()
+		if fail {
+			return nil, errors.New("temporary timeout")
+		}
+	}
+	return m.fakeModel.Chat(ctx, request)
+}
+
+func TestResumeRetriesOnlyFailedReviewThenSynthesizes(t *testing.T) {
+	value := testCouncil(council.Independent, "", "")
+	value.ID = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee"
+	value.Rounds = 4
+	turn, err := council.NewTurn(value, "Assess the design")
+	if err != nil {
+		t.Fatal(err)
+	}
+	model := &failingLastReviewModel{}
+	scratch := filepath.Join(t.TempDir(), "scratch")
+	partial, err := council.Run(t.Context(), model, value, nil, turn, nil, scratch, 2, func(council.Turn) error { return nil })
+	if err == nil || partial.Stage != "reviews" || partial.CurrentRound != 4 || !strings.Contains(err.Error(), "temporary timeout") {
+		t.Fatalf("partial run = %+v, %v", partial, err)
+	}
+	if partial.Rounds[3].Reviews[0].Text == "" || partial.Rounds[3].Reviews[1].Error == "" {
+		t.Fatalf("round 4 progress = %+v", partial.Rounds[3])
+	}
+	before := len(model.requests)
+	kept := partial.Rounds[3].Reviews[0].Text
+	encoded, err := json.Marshal(partial)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var saved council.Turn
+	if err := json.Unmarshal(encoded, &saved); err != nil {
+		t.Fatal(err)
+	}
+	result, err := council.Resume(t.Context(), model, value, nil, saved, nil, scratch, 2, func(council.Turn) error { return nil })
+	if err != nil || result.Status != "completed" || result.Rounds[3].Reviews[0].Text != kept || result.Rounds[3].Reviews[1].Error != "" {
+		t.Fatalf("resumed run = %+v, %v", result, err)
+	}
+	if len(model.requests)-before != 2 || model.attempts != 2 {
+		t.Fatalf("resume made %d successful calls and %d failed-review attempts", len(model.requests)-before, model.attempts)
+	}
+}
+
 func (m *fakeModel) Chat(_ context.Context, request client.ChatRequest) (*client.ChatResponse, error) {
 	m.mu.Lock()
 	m.requests = append(m.requests, request)
@@ -502,6 +561,27 @@ func TestChairEmptyAnswerReportsResponseDiagnostics(t *testing.T) {
 		if !strings.Contains(err.Error(), detail) {
 			t.Fatalf("missing %q from error %q", detail, err)
 		}
+	}
+}
+
+func TestResumeFailedChairUsesSavedRounds(t *testing.T) {
+	value := testCouncil(council.Independent, "", "")
+	value.ID = "ffffffff-ffff-4fff-8fff-ffffffffffff"
+	turn, err := council.NewTurn(value, "Assess the design")
+	if err != nil {
+		t.Fatal(err)
+	}
+	partial, err := council.Run(t.Context(), &emptyChairModel{}, value, nil, turn, nil, filepath.Join(t.TempDir(), "first"), 2, func(council.Turn) error { return nil })
+	if err == nil || partial.Stage != "synthesis" {
+		t.Fatalf("chair failure = %+v, %v", partial, err)
+	}
+	model := &fakeModel{}
+	result, err := council.Resume(t.Context(), model, value, nil, partial, nil, filepath.Join(t.TempDir(), "resume"), 2, func(council.Turn) error { return nil })
+	if err != nil || result.Status != "completed" || result.Final != "Council conclusion" {
+		t.Fatalf("chair resume = %+v, %v", result, err)
+	}
+	if len(model.requests) != 1 || model.requests[0].Model != "provider/chair" {
+		t.Fatalf("chair resume made unexpected calls: %+v", model.requests)
 	}
 }
 

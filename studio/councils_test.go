@@ -16,6 +16,7 @@ import (
 	"github.com/snowmerak/q/client"
 	"github.com/snowmerak/q/config"
 	"github.com/snowmerak/q/council"
+	"github.com/snowmerak/q/worklock"
 	"github.com/snowmerak/q/workspace"
 )
 
@@ -139,6 +140,108 @@ func TestStudioIndependentCouncilPersistsWithoutWorkspaceAndRuns(t *testing.T) {
 	t.Cleanup(func() { _ = reopened.Close() })
 	if loaded, err := reopened.Load(created.ID); err != nil || loaded.Scope != council.Independent {
 		t.Fatalf("reopened = %+v, %v", loaded, err)
+	}
+}
+
+func TestStudioCouncilResumeAndRerunKeepOriginalTurn(t *testing.T) {
+	dir := t.TempDir()
+	handler, commits, sessions, err := newHandlerRuntime(t.Context(), config.Store{Dir: dir}, councilTestHost{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer commits.Close()
+	defer sessions.Close()
+	input := councilInput{Name: "Retry council", Scope: council.Independent, Members: []council.Seat{{Model: "test/one"}, {Model: "test/two"}}, Chair: council.Seat{Model: "test/chair"}}
+	var created council.Council
+	if status := councilAPI(t, handler, http.MethodPost, "/api/v1/councils", input, &created); status != http.StatusCreated {
+		t.Fatalf("create status = %d", status)
+	}
+	partial, err := council.NewTurn(created, "Question to retry")
+	if err != nil {
+		t.Fatal(err)
+	}
+	partial.Status, partial.Stage, partial.Error = "failed", "opinions", "temporary timeout"
+	partial.Responses = []council.Response{{Label: "A", Model: "test/one", Text: "Keep this original answer"}, {Label: "B", Model: "test/two", Error: "temporary timeout"}}
+	partial.Rounds = []council.Round{{Number: 1, Responses: partial.Responses}}
+	if err := sessions.councils.store.SaveTurn(partial); err != nil {
+		t.Fatal(err)
+	}
+	base := "/api/v1/councils/" + created.ID + "/runs/" + partial.ID
+	var resumed council.Turn
+	if status := councilAPI(t, handler, http.MethodPost, base+"/retry", councilRetryInput{Mode: "resume"}, &resumed); status != http.StatusAccepted || resumed.ID != partial.ID {
+		t.Fatalf("resume = %d, %+v", status, resumed)
+	}
+	readCompleted := func(id string) council.Turn {
+		t.Helper()
+		var result council.Turn
+		deadline := time.Now().Add(3 * time.Second)
+		for time.Now().Before(deadline) {
+			councilAPI(t, handler, http.MethodGet, "/api/v1/councils/"+created.ID+"/runs/"+id, nil, &result)
+			if result.Status == "completed" {
+				return result
+			}
+			time.Sleep(15 * time.Millisecond)
+		}
+		t.Fatalf("turn did not complete: %+v", result)
+		return result
+	}
+	resumed = readCompleted(partial.ID)
+	if resumed.Responses[0].Text != "Keep this original answer" || resumed.Responses[1].Text != "Independent answer" || resumed.Final != "Final council answer" {
+		t.Fatalf("resume lost saved work: %+v", resumed)
+	}
+	var rerun council.Turn
+	if status := councilAPI(t, handler, http.MethodPost, base+"/retry", councilRetryInput{Mode: "rerun"}, &rerun); status != http.StatusAccepted || rerun.ID == partial.ID || rerun.RerunOf != partial.ID {
+		t.Fatalf("rerun = %d, %+v", status, rerun)
+	}
+	rerun = readCompleted(rerun.ID)
+	if rerun.Responses[0].Text != "Independent answer" {
+		t.Fatalf("rerun reused the original answer: %+v", rerun)
+	}
+	var detail councilDetail
+	councilAPI(t, handler, http.MethodGet, "/api/v1/councils/"+created.ID, nil, &detail)
+	if len(detail.Turns) != 2 || detail.Turns[0].ID != partial.ID || detail.Turns[1].ID != rerun.ID {
+		t.Fatalf("rerun replaced history: %+v", detail.Turns)
+	}
+}
+
+func TestStudioCouncilDoesNotInterruptAnotherWindowRun(t *testing.T) {
+	dir := t.TempDir()
+	handler, commits, sessions, err := newHandlerRuntime(t.Context(), config.Store{Dir: dir}, councilTestHost{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer commits.Close()
+	defer sessions.Close()
+	input := councilInput{Name: "Shared council", Scope: council.Independent, Members: []council.Seat{{Model: "test/one"}, {Model: "test/two"}}, Chair: council.Seat{Model: "test/chair"}}
+	var created council.Council
+	if status := councilAPI(t, handler, http.MethodPost, "/api/v1/councils", input, &created); status != http.StatusCreated {
+		t.Fatalf("create status = %d", status)
+	}
+	turn, err := council.NewTurn(created, "Another window is working")
+	if err != nil {
+		t.Fatal(err)
+	}
+	turn.Status, turn.Stage = "running", "opinions"
+	if err := sessions.councils.store.SaveTurn(turn); err != nil {
+		t.Fatal(err)
+	}
+	lock, err := worklock.AcquireFile(sessions.councils.store.Root, filepath.Join("locks", created.ID+".lock"), "other Studio")
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := "/api/v1/councils/" + created.ID
+	var observed council.Turn
+	if status := councilAPI(t, handler, http.MethodGet, base+"/runs/"+turn.ID, nil, &observed); status != http.StatusOK || observed.Status != "running" {
+		t.Fatalf("active cross-window turn = %d, %+v", status, observed)
+	}
+	if status := councilAPI(t, handler, http.MethodDelete, base, nil, nil); status != http.StatusConflict {
+		t.Fatalf("delete while another window runs = %d", status)
+	}
+	if err := lock.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if status := councilAPI(t, handler, http.MethodGet, base+"/runs/"+turn.ID, nil, &observed); status != http.StatusOK || observed.Status != "interrupted" {
+		t.Fatalf("stopped cross-window turn = %d, %+v", status, observed)
 	}
 }
 

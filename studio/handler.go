@@ -157,6 +157,7 @@ func newHandlerRuntime(parent context.Context, store config.Store, runner sessio
 	mux.HandleFunc("/api/v1/councils/{council}/turns", sessions.councils.serveTurns)
 	mux.HandleFunc("/api/v1/councils/{council}/runs/{run}", sessions.councils.serveRun)
 	mux.HandleFunc("/api/v1/councils/{council}/runs/{run}/cancel", sessions.councils.serveCancel)
+	mux.HandleFunc("/api/v1/councils/{council}/runs/{run}/retry", sessions.councils.serveRetry)
 	mux.HandleFunc("GET /api/v1/operations", operations.serveSnapshot)
 	mux.HandleFunc("GET /api/v1/directories", sessions.serveDirectoryListing)
 	mux.HandleFunc("GET /api/v1/workspaces/files", serveWorkspaceFiles)

@@ -145,6 +145,14 @@ test('completed council switches between every independent answer', async ({ pag
   await expect(panel).toContainText('Independent answer 3');
   await page.getByRole('tab', { name: /A test\/one/ }).click();
   await expect(panel).toContainText('Independent answer 1');
+  let rerunMode = '';
+  await page.route(`**/api/v1/councils/${id}/runs/${turn.id}/retry`, (route) => {
+    rerunMode = route.request().postDataJSON().mode;
+    return route.fulfill({ status: 202, contentType: 'application/json', body: JSON.stringify({ ...turn, id: '88888888-8888-4888-8888-888888888888', rerun_of: turn.id, status: 'queued', stage: 'queued', responses: [], reviews: [], final: '' }) });
+  });
+  await page.getByRole('button', { name: 'Rerun turn' }).click();
+  await expect.poll(() => rerunMode).toBe('rerun');
+  await expect(page.locator('.turn-meta').filter({ hasText: ' · Rerun' })).toBeVisible();
 });
 
 test('failed chair synthesis shows its stored error and stops the progress message', async ({ page }) => {
@@ -168,4 +176,11 @@ test('failed chair synthesis shows its stored error and stops the progress messa
   await expect(alert).toContainText('finish_reason=length');
   await expect(page.getByText('Failed · test/chair')).toBeVisible();
   await expect(page.getByText('is comparing the answers and reviews')).toHaveCount(0);
+  let resumeMode = '';
+  await page.route(`**/api/v1/councils/${id}/runs/${turn.id}/retry`, (route) => {
+    resumeMode = route.request().postDataJSON().mode;
+    return route.fulfill({ status: 202, contentType: 'application/json', body: JSON.stringify({ ...turn, status: 'queued', error: '' }) });
+  });
+  await page.getByRole('button', { name: 'Resume saved progress' }).click();
+  await expect.poll(() => resumeMode).toBe('resume');
 });
