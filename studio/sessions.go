@@ -33,6 +33,7 @@ type sessionsService struct {
 	runs     *sessionRunService
 	registry *sessionRegistry
 	projects *studioProjectStore
+	councils *councilService
 }
 
 type sessionSummary struct {
@@ -103,7 +104,7 @@ func (service *sessionsService) Close() error {
 	if service == nil {
 		return nil
 	}
-	return service.runs.Close()
+	return errors.Join(service.runs.Close(), service.councils.Close())
 }
 
 func (service *sessionsService) serveDirectoryListing(writer http.ResponseWriter, request *http.Request) {

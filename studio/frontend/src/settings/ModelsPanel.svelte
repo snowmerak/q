@@ -5,6 +5,7 @@
   import type { ModelGroup, ModelOption, RoleModelAssignment } from './types';
   import { apiError as responseError } from '../api';
   import { putSettings, writeSettings } from './persistence';
+  import { reasoningOptions as modelReasoningOptions } from './reasoning';
   import type { QueueSave } from './persistence';
   import type { SettingsSnapshot } from './types';
 
@@ -138,13 +139,7 @@
   }
 
   function reasoningOptions(model: string, current: string) {
-    const discovered = modelOptions.find((candidate) => candidate.id === model);
-    const common = ['minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'];
-    const values = discovered?.reasoning_control === 'effort' && discovered.reasoning_efforts?.length
-      ? [...discovered.reasoning_efforts]
-      : model.startsWith('group/') || current ? common : [];
-    if (current && !values.includes(current)) values.push(current);
-    return [...new Set(values)];
+    return modelReasoningOptions(model, current, modelOptions);
   }
 </script>
 

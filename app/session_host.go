@@ -260,6 +260,27 @@ func (host *SessionHost) ensureProvider(loaded config.Config) (config.Config, er
 	return initialized, nil
 }
 
+// NewCouncilClient opens a caller-owned model client using Studio's managed
+// Gateway, without creating or attaching a repository session.
+func (host *SessionHost) NewCouncilClient(_ context.Context) (ChatClient, config.Config, error) {
+	if host == nil {
+		return nil, config.Config{}, ErrSessionRuntimeUnavailable
+	}
+	loaded, err := host.store.Load()
+	if err != nil {
+		return nil, config.Config{}, err
+	}
+	loaded, err = host.ensureProvider(loaded)
+	if err != nil {
+		return nil, config.Config{}, err
+	}
+	model, err := host.factory(loaded)
+	if err != nil {
+		return nil, config.Config{}, err
+	}
+	return model, loaded, nil
+}
+
 // ApplyGateway replaces the managed Gateway child and persists its provider
 // configuration. Existing sessions use the replacement endpoint on their next
 // turn without restarting Studio.

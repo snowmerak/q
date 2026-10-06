@@ -1,0 +1,204 @@
+package studio
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/snowmerak/q/app"
+	"github.com/snowmerak/q/client"
+	"github.com/snowmerak/q/config"
+	"github.com/snowmerak/q/council"
+	"github.com/snowmerak/q/workspace"
+)
+
+type councilTestHost struct{}
+
+func (councilTestHost) Run(context.Context, workspace.Store, string, string, app.SessionEventSink) error {
+	return nil
+}
+func (councilTestHost) NewCouncilClient(context.Context) (app.ChatClient, config.Config, error) {
+	value := config.Default()
+	value.Agents.MaxParallel = 2
+	return councilTestModel{}, value, nil
+}
+
+type councilTestModel struct{}
+
+func (councilTestModel) ListModels(context.Context) ([]client.Model, error) { return nil, nil }
+func (councilTestModel) Close() error                                       { return nil }
+func (councilTestModel) Chat(_ context.Context, request client.ChatRequest) (*client.ChatResponse, error) {
+	text := "Independent answer"
+	if request.Model == "test/chair" {
+		text = "Final council answer"
+	}
+	if len(request.Messages) > 0 && strings.Contains(request.Messages[0].Content, "anonymous peer reviewer") {
+		text = "Peer review"
+	}
+	return &client.ChatResponse{Choices: []client.Choice{{Message: client.Message{Role: client.RoleAssistant, Content: text}}}}, nil
+}
+
+func councilAPI(t *testing.T, handler http.Handler, method, path string, body any, target any) int {
+	t.Helper()
+	var input *bytes.Reader
+	if body == nil {
+		input = bytes.NewReader(nil)
+	} else {
+		encoded, err := json.Marshal(body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		input = bytes.NewReader(encoded)
+	}
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, httptest.NewRequest(method, path, input))
+	if target != nil {
+		if err := json.Unmarshal(recorder.Body.Bytes(), target); err != nil {
+			t.Fatalf("%s %s returned %d %s: %v", method, path, recorder.Code, recorder.Body.String(), err)
+		}
+	}
+	return recorder.Code
+}
+
+func TestStudioIndependentCouncilPersistsWithoutWorkspaceAndRuns(t *testing.T) {
+	dir := t.TempDir()
+	handler, commits, sessions, err := newHandlerRuntime(t.Context(), config.Store{Dir: dir}, councilTestHost{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer commits.Close()
+	defer sessions.Close()
+	input := councilInput{Name: "General", Scope: council.Independent, Members: []council.Seat{{Model: "test/one"}, {Model: "test/two"}}, Chair: council.Seat{Model: "test/chair"}}
+	var created council.Council
+	if status := councilAPI(t, handler, http.MethodPost, "/api/v1/councils", input, &created); status != http.StatusCreated {
+		t.Fatalf("create status = %d", status)
+	}
+	if created.WorkspaceRoot != "" || created.ProjectID != "" {
+		t.Fatalf("independent council acquired a workspace: %+v", created)
+	}
+	if created.Rounds != 2 {
+		t.Fatalf("default rounds = %d", created.Rounds)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "council", "independent", created.ID, "council.json")); err != nil {
+		t.Fatal(err)
+	}
+	var turn council.Turn
+	if status := councilAPI(t, handler, http.MethodPost, "/api/v1/councils/"+created.ID+"/turns", councilTurnInput{Prompt: "Hello?"}, &turn); status != http.StatusAccepted {
+		t.Fatalf("turn status = %d", status)
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		councilAPI(t, handler, http.MethodGet, "/api/v1/councils/"+created.ID+"/runs/"+turn.ID, nil, &turn)
+		if turn.Status == "completed" {
+			break
+		}
+		time.Sleep(15 * time.Millisecond)
+	}
+	if turn.Status != "completed" || turn.Final != "Final council answer" {
+		t.Fatalf("finished turn = %+v", turn)
+	}
+	var detail councilDetail
+	if status := councilAPI(t, handler, http.MethodGet, "/api/v1/councils/"+created.ID, nil, &detail); status != http.StatusOK {
+		t.Fatalf("detail status = %d", status)
+	}
+	if len(detail.Turns) != 1 || detail.Turns[0].Final != turn.Final {
+		t.Fatalf("detail = %+v", detail)
+	}
+	for _, format := range []string{"md", "json"} {
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/v1/councils/"+created.ID+"/export?format="+format, nil))
+		if response.Code != http.StatusOK || response.Header().Get("Cache-Control") != "no-store" || !strings.Contains(response.Header().Get("Content-Disposition"), "council-"+created.ID+"."+format) {
+			t.Fatalf("%s export status/headers = %d, %+v", format, response.Code, response.Header())
+		}
+		if format == "md" {
+			for _, text := range []string{"Hello?", "Independent answer", "Peer review", "Final council answer"} {
+				if !strings.Contains(response.Body.String(), text) {
+					t.Fatalf("Markdown export omitted %q: %s", text, response.Body.String())
+				}
+			}
+		} else {
+			var exported councilDetail
+			if err := json.Unmarshal(response.Body.Bytes(), &exported); err != nil || exported.Council.ID != created.ID || len(exported.Turns) != 1 || exported.Turns[0].Final != turn.Final {
+				t.Fatalf("JSON export = %+v, %v", exported, err)
+			}
+		}
+	}
+	badExport := httptest.NewRecorder()
+	handler.ServeHTTP(badExport, httptest.NewRequest(http.MethodGet, "/api/v1/councils/"+created.ID+"/export?format=html", nil))
+	if badExport.Code != http.StatusBadRequest {
+		t.Fatalf("unsupported export format status = %d", badExport.Code)
+	}
+	reopened := council.NewStore(dir)
+	t.Cleanup(func() { _ = reopened.Close() })
+	if loaded, err := reopened.Load(created.ID); err != nil || loaded.Scope != council.Independent {
+		t.Fatalf("reopened = %+v, %v", loaded, err)
+	}
+}
+
+func TestStudioCouncilExportIncludesRunningTurnSnapshot(t *testing.T) {
+	dir := t.TempDir()
+	handler, commits, sessions, err := newHandlerRuntime(t.Context(), config.Store{Dir: dir}, councilTestHost{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer commits.Close()
+	defer sessions.Close()
+	input := councilInput{Name: "Live council", Scope: council.Independent, Members: []council.Seat{{Model: "test/one"}, {Model: "test/two"}}, Chair: council.Seat{Model: "test/chair"}}
+	var created council.Council
+	if status := councilAPI(t, handler, http.MethodPost, "/api/v1/councils", input, &created); status != http.StatusCreated {
+		t.Fatalf("create status = %d", status)
+	}
+	turn, err := council.NewTurn(created, "Question during run")
+	if err != nil {
+		t.Fatal(err)
+	}
+	turn.Status, turn.Stage = "running", "opinions"
+	turn.Responses = []council.Response{{Label: "A", Model: "test/one", Text: "First partial answer"}, {Label: "B", Model: "test/two"}}
+	turn.Rounds = []council.Round{{Number: 1, Responses: turn.Responses}}
+	if err := sessions.councils.store.SaveTurn(turn); err != nil {
+		t.Fatal(err)
+	}
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/v1/councils/"+created.ID+"/export?format=md", nil))
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), "First partial answer") || !strings.Contains(response.Body.String(), "_Pending._") {
+		t.Fatalf("running export = %d %s", response.Code, response.Body.String())
+	}
+}
+
+func TestStudioCouncilCreationSupportsWorkspaceAndProject(t *testing.T) {
+	dir := t.TempDir()
+	handler, commits, sessions, err := newHandlerRuntime(t.Context(), config.Store{Dir: dir}, councilTestHost{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer commits.Close()
+	defer sessions.Close()
+	root := t.TempDir()
+	input := councilInput{Name: "Repository", Scope: council.Workspace, WorkspaceRoot: root, Members: []council.Seat{{Model: "test/one"}, {Model: "test/two"}}, Chair: council.Seat{Model: "test/chair"}, Rounds: 3}
+	var workspaceCouncil council.Council
+	if status := councilAPI(t, handler, http.MethodPost, "/api/v1/councils", input, &workspaceCouncil); status != http.StatusCreated {
+		t.Fatalf("workspace create status = %d", status)
+	}
+	if workspaceCouncil.WorkspaceRoot != root || workspaceCouncil.Rounds != 3 {
+		t.Fatalf("workspace council = %+v", workspaceCouncil)
+	}
+	var project studioProject
+	if status := councilAPI(t, handler, http.MethodPost, "/api/v1/projects", studioProjectUpdateRequest{Name: "Research", WorkspaceRoots: []string{root}}, &project); status != http.StatusCreated {
+		t.Fatalf("project create status = %d", status)
+	}
+	input.Name, input.Scope, input.WorkspaceRoot, input.ProjectID = "Project", council.Project, "", project.ID
+	var projectCouncil council.Council
+	if status := councilAPI(t, handler, http.MethodPost, "/api/v1/councils", input, &projectCouncil); status != http.StatusCreated {
+		t.Fatalf("project council create status = %d", status)
+	}
+	if projectCouncil.ProjectID != project.ID || projectCouncil.WorkspaceRoot != "" {
+		t.Fatalf("project council = %+v", projectCouncil)
+	}
+}

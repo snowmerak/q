@@ -1,7 +1,8 @@
 <script lang="ts">
-  import { Activity, CircleHelp, Files, GitCompareArrows, House, Layers, PanelLeftClose, PanelLeftOpen, Settings } from '@lucide/svelte';
+  import { Activity, CircleHelp, Files, GitCompareArrows, House, Layers, MessagesSquare, PanelLeftClose, PanelLeftOpen, Settings } from '@lucide/svelte';
   import { onMount } from 'svelte';
   import ChangesView from './ChangesView.svelte';
+  import CouncilView from './CouncilView.svelte';
   import FilesView from './FilesView.svelte';
   import HelpView from './HelpView.svelte';
   import OperationsView from './OperationsView.svelte';
@@ -13,11 +14,12 @@
     | { kind: 'loading' }
     | { kind: 'ready'; status: StudioStatus }
     | { kind: 'error'; message: string };
-  type View = 'overview' | 'sessions' | 'files' | 'changes' | 'operations' | 'settings' | 'help';
+  type View = 'overview' | 'sessions' | 'councils' | 'files' | 'changes' | 'operations' | 'settings' | 'help';
 
   const navigation = [
     { label: 'Overview', icon: House, view: 'overview' as View },
     { label: 'Sessions', icon: Layers, view: 'sessions' as View },
+    { label: 'Councils', icon: MessagesSquare, view: 'councils' as View },
     { label: 'Files', icon: Files, view: 'files' as View },
     { label: 'Changes', icon: GitCompareArrows, view: 'changes' as View },
     { label: 'Operations', icon: Activity, view: 'operations' as View },
@@ -71,6 +73,7 @@
   function viewFromLocation(): View {
     if (window.location.pathname.startsWith('/settings')) return 'settings';
     if (window.location.pathname.startsWith('/sessions')) return 'sessions';
+    if (window.location.pathname.startsWith('/councils')) return 'councils';
     if (window.location.pathname.startsWith('/files')) return 'files';
     if (window.location.pathname.startsWith('/changes')) return 'changes';
     if (window.location.pathname.startsWith('/operations')) return 'operations';
@@ -134,9 +137,9 @@
     </nav>
   </aside>
 
-  <main class:settings-main={activeView === 'settings'} class:sessions-main={activeView === 'sessions'} class:changes-main={activeView === 'changes'} class:files-main={activeView === 'files'} class:help-main={activeView === 'help'}>
+  <main class:settings-main={activeView === 'settings'} class:sessions-main={activeView === 'sessions'} class:councils-main={activeView === 'councils'} class:changes-main={activeView === 'changes'} class:files-main={activeView === 'files'} class:help-main={activeView === 'help'}>
     <header class="page-header">
-      <div><h1>{activeView === 'settings' ? 'Settings' : activeView === 'sessions' ? 'Sessions' : activeView === 'files' ? 'Files' : activeView === 'changes' ? 'Changes' : activeView === 'operations' ? 'Operations' : activeView === 'help' ? 'Help' : 'Studio overview'}</h1>{#if activeView === 'settings'}<p class="page-description">Global and repository configuration shared by Q sessions.</p>{:else if activeView === 'sessions'}<p class="page-description">Navigate registered root sessions and their delegated work.</p>{:else if activeView === 'files'}<p class="page-description">Browse workspace files and switch between raw content and Git diffs.</p>{:else if activeView === 'changes'}<p class="page-description">Inspect bounded diffs and review commits.</p>{:else if activeView === 'operations'}<p class="page-description">Usage, workers, local services, logs, and retention.</p>{:else if activeView === 'help'}<p class="page-description">Studio workflows, shortcuts, and recovery.</p>{/if}</div>
+      <div><h1>{activeView === 'settings' ? 'Settings' : activeView === 'sessions' ? 'Sessions' : activeView === 'councils' ? 'Councils' : activeView === 'files' ? 'Files' : activeView === 'changes' ? 'Changes' : activeView === 'operations' ? 'Operations' : activeView === 'help' ? 'Help' : 'Studio overview'}</h1>{#if activeView === 'settings'}<p class="page-description">Global and repository configuration shared by Q sessions.</p>{:else if activeView === 'sessions'}<p class="page-description">Navigate registered root sessions and their delegated work.</p>{:else if activeView === 'councils'}<p class="page-description">Independent and repository councils with configurable members and chair.</p>{:else if activeView === 'files'}<p class="page-description">Browse workspace files and switch between raw content and Git diffs.</p>{:else if activeView === 'changes'}<p class="page-description">Inspect bounded diffs and review commits.</p>{:else if activeView === 'operations'}<p class="page-description">Usage, workers, local services, logs, and retention.</p>{:else if activeView === 'help'}<p class="page-description">Studio workflows, shortcuts, and recovery.</p>{/if}</div>
       <div class="connection" aria-live="polite"><span class:online={connection.kind === 'ready'} class="status-dot" aria-hidden="true"></span><span>{connection.kind === 'ready' ? 'Connected' : connection.kind === 'error' ? 'Disconnected' : 'Connecting'}</span></div>
     </header>
 
@@ -148,6 +151,8 @@
       <section class="empty-session" aria-labelledby="empty-heading"><div class="session-outline" aria-hidden="true"><span></span><span></span><span></span></div><h2 id="empty-heading">No session selected</h2><p>Open Sessions to register a root session and continue its conversation.</p><button class="primary-button overview-session-button" onclick={() => navigate('sessions')}>Open sessions</button></section>
     {:else if activeView === 'sessions'}
       <SessionView openChanges={openWorkspaceChanges} />
+    {:else if activeView === 'councils'}
+      <CouncilView />
     {:else if activeView === 'changes'}
       <ChangesView />
     {:else if activeView === 'files'}
@@ -160,5 +165,5 @@
     <SettingsView active={activeView === 'settings'} />
   </main>
 
-  <footer class="status-bar"><div><span>Q Studio</span><span class="divider" aria-hidden="true"></span><span class:online={connection.kind === 'ready'} class="status-dot" aria-hidden="true"></span><span>{connection.kind === 'ready' ? 'Ready' : connection.kind === 'error' ? 'Unavailable' : 'Connecting'}</span></div><span>{activeView === 'settings' ? 'Configuration' : activeView === 'sessions' ? 'Repository session' : activeView === 'files' ? 'Workspace files' : activeView === 'changes' ? 'Repository changes' : activeView === 'operations' ? 'Runtime operations' : activeView === 'help' ? 'Studio guide' : 'Local'}</span></footer>
+  <footer class="status-bar"><div><span>Q Studio</span><span class="divider" aria-hidden="true"></span><span class:online={connection.kind === 'ready'} class="status-dot" aria-hidden="true"></span><span>{connection.kind === 'ready' ? 'Ready' : connection.kind === 'error' ? 'Unavailable' : 'Connecting'}</span></div><span>{activeView === 'settings' ? 'Configuration' : activeView === 'sessions' ? 'Repository session' : activeView === 'councils' ? 'Model council' : activeView === 'files' ? 'Workspace files' : activeView === 'changes' ? 'Repository changes' : activeView === 'operations' ? 'Runtime operations' : activeView === 'help' ? 'Studio guide' : 'Local'}</span></footer>
 </div>

@@ -211,6 +211,17 @@ Studio is the primary interface for daily Q work:
   Raw also works in directories without Git; Diff reports when Git is unavailable.
 - **Changes** owns staged, unstaged, untracked and renamed files, bounded diffs,
   commit proposal review, split commits, execution, and optional push.
+- **Councils** runs several selected models through independent answers,
+  anonymous plain-text peer reviews and a chair synthesis. The default is two
+  rounds: first answers, then reviews. Later rounds ask each member to
+  integrate earlier feedback into another review; the chair receives the first
+  answers and every review. Configure one to six rounds in Studio. Create a
+  council without a workspace, or attach one to a workspace or Studio project.
+  Its member and chair models can be changed in Studio. Attached councils use Q's read-only
+  repository tools while forming their first answers. Studio processes share a
+  local SQLite council index; the conversations remain in per-council folders.
+  Export the full conversation from Studio as Markdown or JSON, including
+  available progress from a turn that is still running.
 - **Settings** owns global and repository model assignments, Gateway and System
   One, Library and Loom, MCP, LSP, Skills, subagents, ACP bindings, and
   `.qignore`.
@@ -819,6 +830,9 @@ the [Q Studio blueprint](docs/studio-blueprint.md).
 | `~/.q/usage.json` | Token Usage service loopback endpoint settings. |
 | `~/.q/mcp.json` | External MCP profiles and role assignments. |
 | `~/.q/studio-sessions.json` | Registered Studio root sessions and their workspace locations. |
+| `~/.q/council/index.sqlite` | Shared SQLite index for council lists across local Studio processes. |
+| `~/.q/council/independent/<council-id>/` | Conversations for councils with no workspace or project. |
+| `~/.q/council/workspaces/` and `~/.q/council/projects/` | Workspace and Studio project council conversations. |
 | `~/.q/worktrees/<repository-hash>/<invocation-id>/` | Linked Git worktree leases for mutating delegated sessions. |
 | `~/.q/systemone.json` | System One providers, model assignments, listener settings, and client key hashes (saved with private file permissions). |
 | `~/.q/systemone.key` | Private master key used to verify managed System One API keys. |
