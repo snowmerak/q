@@ -12,6 +12,15 @@
 
   const providerIDs = new WeakMap<GatewayProvider, string>();
 
+  function usesDefaultBaseURL(type: string) {
+    return type === 'anthropic' || type === 'xai';
+  }
+
+  function useDefaultBaseURL(provider: GatewayProvider) {
+    provider.base_url = '';
+    saveProvider(provider);
+  }
+
   function providerKinds(type: string) {
     if (type !== 'openai-compatible') {
       const kind = type === 'xai' ? 'grok' : type === 'codex' ? 'codex' : type;
@@ -44,9 +53,18 @@
     provider.kind = '';
     if (provider.type === 'openai-compatible') {
       if (!provider.base_url) provider.base_url = 'https://api.openai.com/v1';
-      if (!provider.api_key_env) provider.api_key_env = 'OPENAI_API_KEY';
+      if (!provider.api_key_env || ['XAI_API_KEY', 'ANTHROPIC_API_KEY', 'CLAUDE_API_KEY'].includes(provider.api_key_env)) {
+        provider.api_key_env = 'OPENAI_API_KEY';
+      }
     }
-	if (provider.type === 'chatgpt') { provider.base_url = ''; provider.api_key_env = ''; provider.api_key = ''; }
+    if (usesDefaultBaseURL(provider.type)) {
+      provider.base_url = '';
+      const defaultKeyEnv = provider.type === 'anthropic' ? 'ANTHROPIC_API_KEY' : 'XAI_API_KEY';
+      if (!provider.api_key_env || ['OPENAI_API_KEY', 'OPENROUTER_API_KEY', 'XAI_API_KEY', 'ANTHROPIC_API_KEY', 'CLAUDE_API_KEY'].includes(provider.api_key_env)) {
+        provider.api_key_env = defaultKeyEnv;
+      }
+    }
+    if (provider.type === 'chatgpt') { provider.base_url = ''; provider.api_key_env = ''; provider.api_key = ''; }
     saveProvider(provider);
   }
 
@@ -95,7 +113,13 @@
           <label><span>API type</span><select bind:value={provider.type} onchange={() => changeProviderType(provider)}><option value="openai-compatible">OpenAI compatible</option><option value="openrouter">OpenRouter</option><option value="xai">xAI</option><option value="anthropic">Anthropic</option><option value="codex">Codex App Server</option><option value="chatgpt">ChatGPT plan</option></select></label>
           <label><span>Provider kind</span><select bind:value={provider.kind} onchange={() => saveProvider(provider)}>{#each providerKinds(provider.type) as kind}<option value={kind.value}>{kind.label}</option>{/each}</select></label>
           {#if provider.type !== 'chatgpt'}
-          <label class="wide-field"><span>Base URL</span><input placeholder="Provider default" bind:value={provider.base_url} onchange={() => saveProvider(provider)} disabled={provider.type === 'codex'} /></label>
+          {#if usesDefaultBaseURL(provider.type)}
+            {#if provider.base_url}
+              <div class="wide-field">Custom Base URL: <code>{provider.base_url}</code> <button class="text-button" onclick={() => useDefaultBaseURL(provider)}>Use provider default</button></div>
+            {/if}
+          {:else}
+            <label class="wide-field"><span>Base URL</span><input placeholder="Provider default" bind:value={provider.base_url} onchange={() => saveProvider(provider)} disabled={provider.type === 'codex'} /></label>
+          {/if}
           <label><span>API key environment</span><input placeholder="Optional" bind:value={provider.api_key_env} onchange={() => saveProvider(provider)} disabled={provider.type === 'codex'} /></label>
           <label><span>New inline API key</span><input type="password" autocomplete="new-password" placeholder={provider.has_inline_api_key ? 'Stored · enter to replace' : 'Optional'} bind:value={provider.api_key} onchange={() => saveProvider(provider)} disabled={provider.type === 'codex'} /></label>
           {/if}
