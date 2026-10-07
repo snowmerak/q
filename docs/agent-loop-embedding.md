@@ -12,6 +12,36 @@ projects core events into the TUI/ACP event shape.
 
 ## Install and import
 
+### Reuse an existing Q session
+
+For Studio features that need Q's existing session behavior, use
+`app.SessionHost.Run` or `RunWithOptions`. The host retains the live model and
+tool connections and saves `workspace.Session`, including tool transcripts,
+compact context, active tasks, native response replay and provider affinity.
+Call the host again with the same store and session ID to continue the session.
+
+`SessionOptions` can select a model and reasoning effort, append stable system
+instructions, and separate the authorized checkout roots from the state root.
+An injected `RuntimeFactory` supplies the complete authorized tool catalog and
+its closer; the host does not add delegation or external tools to that runtime.
+Give the policy a stable `RuntimeKey` so live sessions reopen when it changes.
+
+For a retryable step, supply a stable `OperationID`. The operation is saved with
+the actual session context. Retrying a pending operation continues that context
+without inserting another copy of the prompt; retrying a completed operation
+returns its saved result. A changed prompt requires a new operation ID.
+
+Council uses one Q session per member and another for the chair for each council
+turn. Reviews are subsequent user turns in those same member sessions. Session
+files remain under the council directory, including
+`~/.q/council/independent/<council-id>/.q/sessions/` for independent councils.
+The council JSON contains session references and displayed results, while Q owns
+the complete execution state. Older council turns without Q session references
+can resume using their saved results as explicit input to new sessions; tool
+history from those older runs was never stored and cannot be recovered.
+
+### Use the lower-level loop
+
 Pin Q to the version your application has tested:
 
 ```powershell

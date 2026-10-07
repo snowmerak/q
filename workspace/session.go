@@ -47,6 +47,17 @@ type Session struct {
 	ResponseAffinity *ResponseAffinity     `json:"response_affinity,omitempty"`
 	Learning         thinker.LearningState `json:"learning"`
 	ActiveTask       *ActiveTask           `json:"active_task,omitempty"`
+	Operation        *SessionOperation     `json:"operation,omitempty"`
+}
+
+// SessionOperation checkpoints an embedding caller's current turn together
+// with the actual Q context. Result is written atomically with its completion.
+type SessionOperation struct {
+	ID           string `json:"id"`
+	Prompt       string `json:"prompt"`
+	ContextReady bool   `json:"context_ready,omitempty"`
+	Completed    bool   `json:"completed,omitempty"`
+	Result       string `json:"result,omitempty"`
 }
 
 type ResponseReplayItem struct {
@@ -422,6 +433,10 @@ func validateSessionID(value string) error {
 }
 
 func cloneSession(session Session) Session {
+	if session.Operation != nil {
+		operation := *session.Operation
+		session.Operation = &operation
+	}
 	session.ResponseUsage = append([]ResponseUsage(nil), session.ResponseUsage...)
 	for index := range session.ResponseUsage {
 		if cached := session.ResponseUsage[index].CachedTokens; cached != nil {

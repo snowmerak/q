@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"github.com/snowmerak/q/app"
-	"github.com/snowmerak/q/client"
 	"github.com/snowmerak/q/config"
 	"github.com/snowmerak/q/council"
 	"github.com/snowmerak/q/worklock"
@@ -25,25 +24,15 @@ type councilTestHost struct{}
 func (councilTestHost) Run(context.Context, workspace.Store, string, string, app.SessionEventSink) error {
 	return nil
 }
-func (councilTestHost) NewCouncilClient(context.Context) (app.ChatClient, config.Config, error) {
-	value := config.Default()
-	value.Agents.MaxParallel = 2
-	return councilTestModel{}, value, nil
-}
-
-type councilTestModel struct{}
-
-func (councilTestModel) ListModels(context.Context) ([]client.Model, error) { return nil, nil }
-func (councilTestModel) Close() error                                       { return nil }
-func (councilTestModel) Chat(_ context.Context, request client.ChatRequest) (*client.ChatResponse, error) {
+func (councilTestHost) ReleaseSession(workspace.Store, string) error { return nil }
+func (councilTestHost) RunWithOptions(_ context.Context, store workspace.Store, id, prompt string, options app.SessionOptions, emit app.SessionEventSink) error {
 	text := "Independent answer"
-	if request.Model == "test/chair" {
+	if options.Model == "test/chair" {
 		text = "Final council answer"
-	}
-	if len(request.Messages) > 0 && strings.Contains(request.Messages[0].Content, "anonymous peer reviewer") {
+	} else if strings.Contains(prompt, "anonymous peer reviewer") || strings.Contains(prompt, "continuing a multi-round") {
 		text = "Peer review"
 	}
-	return &client.ChatResponse{Choices: []client.Choice{{Message: client.Message{Role: client.RoleAssistant, Content: text}}}}, nil
+	return emit(app.SessionEvent{Type: "result", SessionID: id, Content: text})
 }
 
 func councilAPI(t *testing.T, handler http.Handler, method, path string, body any, target any) int {

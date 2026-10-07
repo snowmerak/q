@@ -5,6 +5,12 @@ description: Embed or extend Q's existing public Go Agent Loop in another applic
 
 # Q Agent Loop embedding
 
+For Q Studio features that need existing session persistence and recovery, use
+`app.SessionHost.Run` / `RunWithOptions` with the same session ID across turns.
+SessionHost already consumes and persists Q's loop events; do not reconstruct
+its message history from displayed answers. Inject a complete authorized tool
+runtime through SessionOptions when a feature needs a restricted catalog.
+
 Use `app.RunAgentLoop` as the only execution boundary. It is the loop used by
 Q's TUI and ACP host. Do not copy it into an `agent`/`agentloop` package, add a
 parallel state machine, or reimplement its orchestration and compaction.

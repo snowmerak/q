@@ -13,9 +13,11 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/snowmerak/q/app"
 	"github.com/snowmerak/q/client"
 	"github.com/snowmerak/q/council"
 	"github.com/snowmerak/q/tools"
+	"github.com/snowmerak/q/workspace"
 )
 
 func testCouncil(scope council.Scope, root, project string) council.Council {
@@ -362,7 +364,7 @@ func TestResumeRetriesOnlyFailedReviewThenSynthesizes(t *testing.T) {
 	}
 	model := &failingLastReviewModel{}
 	scratch := filepath.Join(t.TempDir(), "scratch")
-	partial, err := council.Run(t.Context(), model, value, nil, turn, nil, scratch, 2, func(council.Turn) error { return nil })
+	partial, err := council.Run(t.Context(), sessionRunner{model}, value, nil, turn, nil, scratch, 2, func(council.Turn) error { return nil })
 	if err == nil || partial.Stage != "reviews" || partial.CurrentRound != 4 || !strings.Contains(err.Error(), "temporary timeout") {
 		t.Fatalf("partial run = %+v, %v", partial, err)
 	}
@@ -379,7 +381,7 @@ func TestResumeRetriesOnlyFailedReviewThenSynthesizes(t *testing.T) {
 	if err := json.Unmarshal(encoded, &saved); err != nil {
 		t.Fatal(err)
 	}
-	result, err := council.Resume(t.Context(), model, value, nil, saved, nil, scratch, 2, func(council.Turn) error { return nil })
+	result, err := council.Resume(t.Context(), sessionRunner{model}, value, nil, saved, nil, scratch, 2, func(council.Turn) error { return nil })
 	if err != nil || result.Status != "completed" || result.Rounds[3].Reviews[0].Text != kept || result.Rounds[3].Reviews[1].Error != "" {
 		t.Fatalf("resumed run = %+v, %v", result, err)
 	}
@@ -424,7 +426,7 @@ func TestIndependentRunUsesDistinctOpinionsThenReviewsAndSynthesis(t *testing.T)
 	model := &fakeModel{}
 	var stages []string
 	var opinionProgress, reviewProgress []int
-	result, err := council.Run(t.Context(), model, value, nil, turn, nil, filepath.Join(t.TempDir(), "scratch"), 2, func(progress council.Turn) error {
+	result, err := council.Run(t.Context(), sessionRunner{model}, value, nil, turn, nil, filepath.Join(t.TempDir(), "scratch"), 2, func(progress council.Turn) error {
 		if len(stages) == 0 || stages[len(stages)-1] != progress.Stage {
 			stages = append(stages, progress.Stage)
 		}
@@ -463,17 +465,6 @@ func TestIndependentRunUsesDistinctOpinionsThenReviewsAndSynthesis(t *testing.T)
 	model.mu.Lock()
 	defer model.mu.Unlock()
 	for _, request := range model.requests {
-		var hasTaskStart, hasTaskComplete bool
-		for _, tool := range request.Tools {
-			hasTaskStart = hasTaskStart || tool.Function.Name == "task_start"
-			hasTaskComplete = hasTaskComplete || tool.Function.Name == "task_complete"
-			if tool.Function.Name == "search_text" || tool.Function.Name == "read_file" {
-				t.Fatalf("independent council advertised workspace tool %q", tool.Function.Name)
-			}
-		}
-		if !hasTaskStart || !hasTaskComplete {
-			t.Fatalf("council bypassed Q Agent Loop for %s: tools=%+v", request.Model, request.Tools)
-		}
 		if len(request.Messages) > 0 && strings.Contains(request.Messages[0].Content, "anonymous peer reviewer") {
 			user := councilUserPrompt(request)
 			if strings.Contains(user, "provider/one") || strings.Contains(user, "provider/two") {
@@ -492,7 +483,7 @@ func TestCouncilContinuesReviewRoundsAndChairReceivesEveryRound(t *testing.T) {
 		t.Fatal(err)
 	}
 	model := &fakeModel{}
-	result, err := council.Run(t.Context(), model, value, nil, turn, nil, filepath.Join(t.TempDir(), "scratch"), 2, func(council.Turn) error { return nil })
+	result, err := council.Run(t.Context(), sessionRunner{model}, value, nil, turn, nil, filepath.Join(t.TempDir(), "scratch"), 2, func(council.Turn) error { return nil })
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -541,7 +532,7 @@ func TestCouncilCanFinishAfterOneRound(t *testing.T) {
 		t.Fatal(err)
 	}
 	model := &fakeModel{}
-	result, err := council.Run(t.Context(), model, value, nil, turn, nil, filepath.Join(t.TempDir(), "scratch"), 2, func(council.Turn) error { return nil })
+	result, err := council.Run(t.Context(), sessionRunner{model}, value, nil, turn, nil, filepath.Join(t.TempDir(), "scratch"), 2, func(council.Turn) error { return nil })
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -568,18 +559,18 @@ func (m *emptyChairModel) Chat(ctx context.Context, request client.ChatRequest) 
 	return m.fakeModel.Chat(ctx, request)
 }
 
-func TestChairEmptyAnswerReportsResponseDiagnostics(t *testing.T) {
+func TestChairEmptyAnswerReportsFailure(t *testing.T) {
 	value := testCouncil(council.Independent, "", "")
 	value.ID = "dddddddd-dddd-4ddd-8ddd-dddddddddddd"
 	turn, err := council.NewTurn(value, "Assess the design")
 	if err != nil {
 		t.Fatal(err)
 	}
-	result, err := council.Run(t.Context(), &emptyChairModel{}, value, nil, turn, nil, filepath.Join(t.TempDir(), "scratch"), 2, func(council.Turn) error { return nil })
+	result, err := council.Run(t.Context(), sessionRunner{&emptyChairModel{}}, value, nil, turn, nil, filepath.Join(t.TempDir(), "scratch"), 2, func(council.Turn) error { return nil })
 	if err == nil || result.Stage != "synthesis" {
 		t.Fatalf("chair failure = %+v, %v", result, err)
 	}
-	for _, detail := range []string{"provider/chair", "empty answer", "finish_reason=length", "response_id=response-123", "prompt_tokens=321", "completion_tokens=64"} {
+	for _, detail := range []string{"provider/chair", "empty answer"} {
 		if !strings.Contains(err.Error(), detail) {
 			t.Fatalf("missing %q from error %q", detail, err)
 		}
@@ -593,12 +584,13 @@ func TestResumeFailedChairUsesSavedRounds(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	partial, err := council.Run(t.Context(), &emptyChairModel{}, value, nil, turn, nil, filepath.Join(t.TempDir(), "first"), 2, func(council.Turn) error { return nil })
+	sessionRoot := t.TempDir()
+	partial, err := council.Run(t.Context(), sessionRunner{&emptyChairModel{}}, value, nil, turn, nil, sessionRoot, 2, func(council.Turn) error { return nil })
 	if err == nil || partial.Stage != "synthesis" {
 		t.Fatalf("chair failure = %+v, %v", partial, err)
 	}
 	model := &fakeModel{}
-	result, err := council.Resume(t.Context(), model, value, nil, partial, nil, filepath.Join(t.TempDir(), "resume"), 2, func(council.Turn) error { return nil })
+	result, err := council.Resume(t.Context(), sessionRunner{model}, value, nil, partial, nil, sessionRoot, 2, func(council.Turn) error { return nil })
 	if err != nil || result.Status != "completed" || result.Final != "Council conclusion" {
 		t.Fatalf("chair resume = %+v, %v", result, err)
 	}
@@ -607,81 +599,110 @@ func TestResumeFailedChairUsesSavedRounds(t *testing.T) {
 	}
 }
 
-type workspaceModel struct {
-	mu                  sync.Mutex
-	sawTool             bool
-	forbiddenAdvertised bool
-	counts              map[string]int
+// sessionRunner is only a scheduling fake; SessionHost tests cover the real Q
+// context, tool dispatch, checkpointing and provider state across calls.
+type sessionRunner struct {
+	model interface {
+		Chat(context.Context, client.ChatRequest) (*client.ChatResponse, error)
+	}
 }
 
-func (m *workspaceModel) Chat(_ context.Context, request client.ChatRequest) (*client.ChatResponse, error) {
-	if len(request.Messages) > 0 {
-		if strings.Contains(request.Messages[0].Content, "chair of an LLM council") {
-			return &client.ChatResponse{Choices: []client.Choice{{Message: client.Message{Role: client.RoleAssistant, Content: "repository synthesis"}}}}, nil
-		}
-		if strings.Contains(request.Messages[0].Content, "anonymous peer reviewer") || strings.Contains(request.Messages[0].Content, "continuing a multi-round LLM council") {
-			return &client.ChatResponse{Choices: []client.Choice{{Message: client.Message{Role: client.RoleAssistant, Content: "peer review"}}}}, nil
-		}
-	}
-	m.mu.Lock()
-	if m.counts == nil {
-		m.counts = map[string]int{}
-	}
-	m.counts[request.Model]++
-	count := m.counts[request.Model]
-	m.mu.Unlock()
-	for _, tool := range request.Tools {
-		if tool.Function.Name == "edit_file" || tool.Function.Name == "run_command" {
-			m.mu.Lock()
-			m.forbiddenAdvertised = true
-			m.mu.Unlock()
-		}
-	}
-	answer := "peer review"
-	if request.Model == "provider/chair" {
-		answer = "repository synthesis"
-	}
-	if len(request.Tools) > 0 {
-		for _, message := range request.Messages {
-			if message.Role == client.RoleTool {
-				m.mu.Lock()
-				m.sawTool = true
-				m.mu.Unlock()
-				return &client.ChatResponse{Choices: []client.Choice{{Message: client.Message{Role: client.RoleAssistant, Content: "located the evidence"}}}}, nil
-			}
-		}
-		if count > 2 {
-			return &client.ChatResponse{Choices: []client.Choice{{Message: client.Message{Role: client.RoleAssistant, Content: "located the evidence"}}}}, nil
-		}
-		return &client.ChatResponse{Choices: []client.Choice{{Message: client.Message{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{{
-			ID: "search-1", Type: client.ToolTypeFunction, Function: client.FunctionCall{Name: "search_text", Arguments: `{"query":"needle"}`},
-		}}}}}}, nil
-	}
-	return &client.ChatResponse{Choices: []client.Choice{{Message: client.Message{Role: client.RoleAssistant, Content: answer}}}}, nil
+type councilSessionCall struct{ model, session, operation string }
+type recordingSessions struct {
+	sessionRunner
+	mu    sync.Mutex
+	calls []councilSessionCall
 }
 
-func TestWorkspaceRunUsesQToolLoopWithReadOnlyCatalog(t *testing.T) {
-	root := t.TempDir()
-	if err := os.WriteFile(filepath.Join(root, "evidence.txt"), []byte("needle in file\n"), 0o600); err != nil {
-		t.Fatal(err)
+func (runner *recordingSessions) RunWithOptions(ctx context.Context, store workspace.Store, id, prompt string, options app.SessionOptions, emit app.SessionEventSink) error {
+	runner.mu.Lock()
+	runner.calls = append(runner.calls, councilSessionCall{options.Model, id, options.OperationID})
+	runner.mu.Unlock()
+	if options.WorkingDirectory == store.Root {
+		return errors.New("storage root was exposed as a workspace")
 	}
-	value := testCouncil(council.Workspace, root, "")
-	value.ID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
-	turn, err := council.NewTurn(value, "Find evidence")
+	runtime, closer, err := options.RuntimeFactory(ctx, workspace.Store{Root: store.Root, SessionID: id})
+	if err != nil {
+		return err
+	}
+	if closer != nil {
+		defer closer.Close()
+	}
+	for _, tool := range runtime.Tools() {
+		if tool.Function.Name == "run_command" || tool.Function.Name == "edit_file" || strings.HasPrefix(tool.Function.Name, "delegate") {
+			return errors.New("mutating tool advertised")
+		}
+	}
+	if _, err := runtime.Call(ctx, client.ToolCall{Function: client.FunctionCall{Name: "run_command", Arguments: `{"command":"echo forbidden"}`}}); err == nil {
+		return errors.New("hidden command was authorized")
+	}
+	return runner.sessionRunner.RunWithOptions(ctx, store, id, prompt, options, emit)
+}
+
+func TestCouncilUsesPersistentSeatSessionsForEveryRound(t *testing.T) {
+	store := council.NewStore(t.TempDir())
+	t.Cleanup(func() { _ = store.Close() })
+	value := testCouncil(council.Independent, "", "")
+	value.Rounds = 4
+	value, err := store.Create(value)
 	if err != nil {
 		t.Fatal(err)
 	}
-	model := &workspaceModel{}
-	result, err := council.Run(t.Context(), model, value, nil, turn, []string{root}, filepath.Join(t.TempDir(), "scratch"), 2, func(council.Turn) error { return nil })
+	turn, err := council.NewTurn(value, "Assess design")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Final != "repository synthesis" {
-		t.Fatalf("final = %q", result.Final)
+	root, err := store.SessionRoot(value.ID)
+	if err != nil {
+		t.Fatal(err)
 	}
-	model.mu.Lock()
-	defer model.mu.Unlock()
-	if !model.sawTool || model.forbiddenAdvertised {
-		t.Fatalf("tool round = %v, forbidden advertised = %v", model.sawTool, model.forbiddenAdvertised)
+	runner := &recordingSessions{sessionRunner: sessionRunner{&fakeModel{}}}
+	result, err := council.Run(t.Context(), runner, value, nil, turn, nil, root, 2, store.SaveTurn)
+	if err != nil {
+		t.Fatal(err)
 	}
+	seen := map[string]string{}
+	for _, call := range runner.calls {
+		if previous := seen[call.model]; previous != "" && previous != call.session {
+			t.Fatalf("seat session changed: %+v", runner.calls)
+		}
+		seen[call.model] = call.session
+	}
+	if len(seen) != 3 || len(runner.calls) != 9 || seen[value.Chair.Model] != result.ChairSession {
+		t.Fatalf("seat calls = %+v", runner.calls)
+	}
+	for index, seat := range value.Members {
+		if seen[seat.Model] != result.MemberSessions[index] || seen[seat.Model] == result.ChairSession {
+			t.Fatal("member and chair session identities overlap")
+		}
+	}
+	turns, err := store.ListTurns(value.ID)
+	if err != nil || len(turns) != 1 || !slices.Equal(turns[0].MemberSessions, result.MemberSessions) {
+		t.Fatalf("session references not saved: %+v, %v", turns, err)
+	}
+	for _, id := range append(result.MemberSessions, result.ChairSession) {
+		selected, err := (workspace.Store{Root: root}).ForSession(id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := selected.Load(); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func (runner sessionRunner) ReleaseSession(workspace.Store, string) error { return nil }
+func (runner sessionRunner) RunWithOptions(ctx context.Context, store workspace.Store, id, prompt string, options app.SessionOptions, emit app.SessionEventSink) error {
+	stage, user, _ := strings.Cut(prompt, "\n\n")
+	if options.OperationID == "synthesis" {
+		stage, user = options.SystemPrompt, prompt
+	}
+	response, err := runner.model.Chat(ctx, client.ChatRequest{Model: options.Model, ReasoningEffort: options.ReasoningEffort, Messages: []client.Message{{Role: client.RoleSystem, Content: stage}, {Role: client.RoleUser, Content: user}}})
+	if err != nil {
+		return err
+	}
+	if response == nil || len(response.Choices) == 0 {
+		return errors.New("no response")
+	}
+	return emit(app.SessionEvent{Type: "result", SessionID: id, Content: response.Choices[0].Message.Content})
 }

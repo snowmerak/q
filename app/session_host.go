@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"strings"
 	"sync"
 
@@ -260,27 +261,6 @@ func (host *SessionHost) ensureProvider(loaded config.Config) (config.Config, er
 	return initialized, nil
 }
 
-// NewCouncilClient opens a caller-owned model client using Studio's managed
-// Gateway, without creating or attaching a repository session.
-func (host *SessionHost) NewCouncilClient(_ context.Context) (ChatClient, config.Config, error) {
-	if host == nil {
-		return nil, config.Config{}, ErrSessionRuntimeUnavailable
-	}
-	loaded, err := host.store.Load()
-	if err != nil {
-		return nil, config.Config{}, err
-	}
-	loaded, err = host.ensureProvider(loaded)
-	if err != nil {
-		return nil, config.Config{}, err
-	}
-	model, err := host.factory(loaded)
-	if err != nil {
-		return nil, config.Config{}, err
-	}
-	return model, loaded, nil
-}
-
 // ApplyGateway replaces the managed Gateway child and persists its provider
 // configuration. Existing sessions use the replacement endpoint on their next
 // turn without restarting Studio.
@@ -404,6 +384,7 @@ func (host *SessionHost) run(
 	sessionID, prompt string,
 	emit SessionEventSink,
 	control *SessionRunControl,
+	configured ...SessionOptions,
 ) error {
 	if host == nil {
 		return fmt.Errorf("%w: host is unavailable", ErrSessionRuntimeUnavailable)
@@ -415,12 +396,16 @@ func (host *SessionHost) run(
 	if prompt == "" {
 		return errors.New("prompt is required")
 	}
-	session, err := host.acquireLiveSession(workspaceStore, sessionID)
+	options := SessionOptions{}
+	if len(configured) > 0 {
+		options = configured[0]
+	}
+	session, err := host.acquireLiveSession(workspaceStore, sessionID, configured...)
 	if err != nil {
 		return err
 	}
 	defer session.busy.Unlock()
-	_, err = session.execute(requestContext, prompt, false, emit, control)
+	_, err = session.execute(requestContext, prompt, false, emit, control, options.OperationID)
 	return err
 }
 
@@ -445,13 +430,14 @@ func (host *SessionHost) Compact(requestContext context.Context, workspaceStore 
 }
 
 type preparedSession struct {
-	state     model
-	store     workspace.Store
-	lock      *workspace.Lock
-	lifecycle *startupLifecycle
-	client    chatClient
-	warnings  []error
-	created   bool
+	state       model
+	store       workspace.Store
+	lock        *workspace.Lock
+	lifecycle   *startupLifecycle
+	client      chatClient
+	warnings    []error
+	created     bool
+	toolsCloser io.Closer
 }
 
 func (prepared *preparedSession) Close() error {
@@ -467,14 +453,18 @@ func (prepared *preparedSession) Close() error {
 	} else if startupClient := prepared.lifecycle.startupClient(); startupClient != nil {
 		clientErr = startupClient.Close()
 	}
+	var toolsErr error
+	if prepared.toolsCloser != nil {
+		toolsErr = prepared.toolsCloser.Close()
+	}
 	var lockErr error
 	if prepared.lock != nil {
 		lockErr = prepared.lock.Close()
 	}
-	return errors.Join(resourcesErr, clientErr, lockErr)
+	return errors.Join(resourcesErr, toolsErr, clientErr, lockErr)
 }
 
-func (host *SessionHost) prepareSession(runContext context.Context, workspaceStore workspace.Store, sessionID string) (_ *preparedSession, returnErr error) {
+func (host *SessionHost) prepareSession(runContext context.Context, workspaceStore workspace.Store, sessionID string, configured ...SessionOptions) (_ *preparedSession, returnErr error) {
 	loaded, err := host.store.Load()
 	if errors.Is(err, config.ErrNotFound) {
 		return nil, fmt.Errorf("%w: q is not configured; configure a model in Studio first", ErrSessionRuntimeUnavailable)
@@ -510,7 +500,22 @@ func (host *SessionHost) prepareSession(runContext context.Context, workspaceSto
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrSessionRuntimeUnavailable, err)
 	}
-	projectContext, projectFound, err := host.resolveSessionWorkspace(prepared.store.Root)
+	options := SessionOptions{}
+	if len(configured) > 0 {
+		options = configured[0]
+	}
+	if options.Model != "" && options.Model != loaded.Provider.Model {
+		loaded.Provider.Model = options.Model
+		loaded.Provider.ContextWindow = 0
+	}
+	if len(configured) > 0 {
+		loaded.Provider.ReasoningEffort = options.ReasoningEffort
+	}
+	executionRoot := prepared.store.Root
+	if options.WorkingDirectory != "" {
+		executionRoot = options.WorkingDirectory
+	}
+	projectContext, projectFound, err := host.resolveSessionWorkspace(executionRoot)
 	if err != nil {
 		return nil, fmt.Errorf("resolve Studio project workspaces: %w", err)
 	}
@@ -518,15 +523,45 @@ func (host *SessionHost) prepareSession(runContext context.Context, workspaceSto
 	if host.runtime != nil {
 		memoryContext = host.runtime.MemoryContext()
 	}
-	startup := startupRequest{
-		ctx: runContext, memoryCtx: memoryContext, store: host.store, workspaceStore: prepared.store,
-		loaded: loaded, manager: host.manager, factory: host.factory, lifecycle: prepared.lifecycle, providerReady: true,
-		auxiliaryRoots: append([]string(nil), projectContext.AuxiliaryRoots...),
-	}.run(nil)
+	var startup runtimeInitializedMsg
+	var injected AgentToolRuntime
+	if options.RuntimeFactory != nil {
+		if prepared.lock == nil {
+			prepared.store, prepared.lock, err = workspace.CreateSession(prepared.store.Root, "q studio")
+			if err != nil {
+				return nil, err
+			}
+			prepared.created = true
+		}
+		startup.config = loaded
+		startup.client, startup.err = host.factory(loaded)
+		prepared.client = startup.client
+		if startup.err == nil {
+			startup.models, _ = startup.client.ListModels(runContext)
+			startup.config, _ = refreshModelContextWindow(loaded, startup.models)
+			injected, prepared.toolsCloser, startup.err = options.RuntimeFactory(runContext, prepared.store)
+			if injected == nil && startup.err == nil {
+				startup.err = errors.New("injected session tools are unavailable")
+			}
+		}
+		if host.manager != nil {
+			startup.gatewayConfig = host.manager.Config()
+		}
+	} else {
+		auxiliary := projectContext.AuxiliaryRoots
+		if options.WorkingDirectory != "" {
+			auxiliary = options.AuxiliaryDirectories
+		}
+		startup = startupRequest{
+			ctx: runContext, memoryCtx: memoryContext, store: host.store, workspaceStore: prepared.store,
+			loaded: loaded, manager: host.manager, factory: host.factory, lifecycle: prepared.lifecycle, providerReady: true,
+			checkoutRoot: options.WorkingDirectory, auxiliaryRoots: append([]string(nil), auxiliary...),
+		}.run(nil)
+	}
 	if startup.err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrSessionRuntimeUnavailable, startup.err)
 	}
-	if startup.client == nil || startup.tools == nil {
+	if startup.client == nil || (startup.tools == nil && injected == nil) {
 		return nil, fmt.Errorf("%w: %v", ErrSessionRuntimeUnavailable,
 			errors.Join(errors.New("model or workspace tools are unavailable"), startup.startupErr))
 	}
@@ -545,6 +580,18 @@ func (host *SessionHost) prepareSession(runContext context.Context, workspaceSto
 	prepared.state.workspaceStore = &prepared.store
 	prepared.state.workspaceLock = prepared.lock
 	prepared.state.toolRuntime = startup.tools
+	if len(configured) > 0 {
+		stable := options
+		stable.OperationID = ""
+		prepared.state.sessionOptions = &stable
+		if injected != nil {
+			prepared.state.toolRuntime = injected
+		}
+		if options.DisableLearning {
+			prepared.state.workspaceLearning.Disabled = true
+			prepared.state.workspaceLearningRestored = true
+		}
+	}
 	prepared.state.libraryClient = startup.library
 	prepared.state.setArchiveWriter(startup.archive)
 	prepared.state.archiveSearch = startup.archiveSearch

@@ -75,13 +75,14 @@ type liveSessionResult struct {
 }
 
 type liveSessionRequest struct {
-	ctx     context.Context
-	cancel  context.CancelFunc
-	prompt  string
-	compact bool
-	emit    SessionEventSink
-	control *SessionRunControl
-	result  chan liveSessionResult
+	ctx         context.Context
+	cancel      context.CancelFunc
+	prompt      string
+	compact     bool
+	emit        SessionEventSink
+	control     *SessionRunControl
+	operationID string
+	result      chan liveSessionResult
 }
 
 type liveSessionCancel struct{ request *liveSessionRequest }
@@ -143,7 +144,7 @@ func liveSessionKey(store workspace.Store, sessionID string) string {
 	return filepath.Join(store.Root, workspace.DirectoryName, "sessions", sessionID)
 }
 
-func (host *SessionHost) sessionConfiguration(store workspace.Store) ([32]byte, error) {
+func (host *SessionHost) sessionConfiguration(store workspace.Store, configured ...SessionOptions) ([32]byte, error) {
 	loaded, err := host.store.Load()
 	if err != nil {
 		return [32]byte{}, err
@@ -165,6 +166,11 @@ func (host *SessionHost) sessionConfiguration(store workspace.Store) ([32]byte, 
 		return [32]byte{}, err
 	}
 	values := []any{loaded, modelConfig, lsp, mcp, project}
+	if len(configured) > 0 {
+		stable := configured[0]
+		stable.OperationID = ""
+		values = append(values, stable)
+	}
 	if host.manager != nil {
 		values = append(values, host.manager.Config(), host.manager.Endpoint())
 	}
@@ -174,7 +180,7 @@ func (host *SessionHost) sessionConfiguration(store workspace.Store) ([32]byte, 
 
 // acquireLiveSession leases one foreground operation. Configuration changes
 // reopen an idle session; ordinary prompts retain its provider and memory state.
-func (host *SessionHost) acquireLiveSession(store workspace.Store, sessionID string) (*liveSession, error) {
+func (host *SessionHost) acquireLiveSession(store workspace.Store, sessionID string, configured ...SessionOptions) (*liveSession, error) {
 	key := liveSessionKey(store, sessionID)
 	operation, err := host.beginLiveSessionOperation(key)
 	if err != nil {
@@ -199,7 +205,7 @@ func (host *SessionHost) acquireLiveSession(store workspace.Store, sessionID str
 			if !existing.busy.TryLock() {
 				return nil, workspace.ErrLocked
 			}
-			configuration, err := host.sessionConfiguration(selected)
+			configuration, err := host.sessionConfiguration(selected, configured...)
 			if err != nil {
 				existing.busy.Unlock()
 				return nil, err
@@ -228,11 +234,11 @@ func (host *SessionHost) acquireLiveSession(store workspace.Store, sessionID str
 	if err := operation.ctx.Err(); err != nil {
 		return nil, err
 	}
-	prepared, err := host.prepareSession(operation.ctx, store, sessionID)
+	prepared, err := host.prepareSession(operation.ctx, store, sessionID, configured...)
 	if err != nil {
 		return nil, err
 	}
-	configuration, err := host.sessionConfiguration(prepared.store)
+	configuration, err := host.sessionConfiguration(prepared.store, configured...)
 	if err != nil {
 		operation.cancel()
 		return nil, errors.Join(err, prepared.Close())
@@ -276,7 +282,7 @@ func newLiveSession(ctx context.Context, cancel context.CancelFunc, prepared *pr
 	return session
 }
 
-func (session *liveSession) execute(parent context.Context, prompt string, compact bool, emit SessionEventSink, control *SessionRunControl) (string, error) {
+func (session *liveSession) execute(parent context.Context, prompt string, compact bool, emit SessionEventSink, control *SessionRunControl, operationIDs ...string) (string, error) {
 	if parent == nil {
 		parent = context.Background()
 	}
@@ -288,6 +294,9 @@ func (session *liveSession) execute(parent context.Context, prompt string, compa
 	defer stop()
 	defer cancel()
 	request := &liveSessionRequest{ctx: ctx, cancel: cancel, prompt: prompt, compact: compact, emit: emit, control: control, result: make(chan liveSessionResult, 1)}
+	if len(operationIDs) > 0 {
+		request.operationID = operationIDs[0]
+	}
 	session.program.Send(request)
 	select {
 	case result := <-request.result:
@@ -498,6 +507,21 @@ func (m liveSessionModel) Update(message tea.Msg) (updatedModel tea.Model, nextC
 			}
 		}
 		m.created, m.warnings = false, nil
+		if operation := m.execution.state.sessionOperation; request.operationID != "" && operation != nil && operation.ID == request.operationID && operation.Completed {
+			var err error
+			if operation.Prompt != request.prompt {
+				err = errors.New("session operation prompt changed")
+			} else {
+				// A preceding completion may have failed while saving. Retry the
+				// checkpoint before returning its result without another model call.
+				err = m.execution.state.saveWorkspaceSession()
+				if err == nil && request.emit != nil {
+					err = request.emit(SessionEvent{Type: "result", SessionID: m.execution.state.workspaceStore.SessionID, Content: operation.Result})
+				}
+			}
+			m.finish(err)
+			return m, nil
+		}
 		// The turn follows the caller's cancellation; learning and tools keep
 		// their session context. Commands capture this turn context on start.
 		parent := m.execution.state.ctx
@@ -507,7 +531,7 @@ func (m liveSessionModel) Update(message tea.Msg) (updatedModel tea.Model, nextC
 		if request.compact {
 			updated, command = m.execution.state.startManualCompaction()
 		} else {
-			updated, command = m.execution.state.startChatTurn(request.prompt, true)
+			updated, command = m.execution.state.startSessionOperation(request.prompt, request.operationID)
 		}
 		m.execution.state = updated.(model)
 		m.execution.state.ctx = parent

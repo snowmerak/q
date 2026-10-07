@@ -1,4 +1,4 @@
-// Package council stores and runs Studio councils independently of Q sessions.
+// Package council coordinates Studio councils using persistent Q sessions.
 package council
 
 import (
@@ -81,24 +81,26 @@ type Round struct {
 }
 
 type Turn struct {
-	ID           string         `json:"id"`
-	CouncilID    string         `json:"council_id"`
-	RerunOf      string         `json:"rerun_of,omitempty"`
-	Prompt       string         `json:"prompt"`
-	Members      []Seat         `json:"members"`
-	Chair        Seat           `json:"chair"`
-	TotalRounds  int            `json:"total_rounds,omitempty"`
-	CurrentRound int            `json:"current_round,omitempty"`
-	Rounds       []Round        `json:"rounds,omitempty"`
-	Status       string         `json:"status"`
-	Stage        string         `json:"stage"`
-	Responses    []Response     `json:"responses"`
-	Reviews      []Review       `json:"reviews"`
-	Ranking      []RankedAnswer `json:"ranking,omitempty"`
-	Final        string         `json:"final,omitempty"`
-	Error        string         `json:"error,omitempty"`
-	CreatedAt    time.Time      `json:"created_at"`
-	UpdatedAt    time.Time      `json:"updated_at"`
+	ID             string         `json:"id"`
+	MemberSessions []string       `json:"member_sessions,omitempty"`
+	ChairSession   string         `json:"chair_session,omitempty"`
+	CouncilID      string         `json:"council_id"`
+	RerunOf        string         `json:"rerun_of,omitempty"`
+	Prompt         string         `json:"prompt"`
+	Members        []Seat         `json:"members"`
+	Chair          Seat           `json:"chair"`
+	TotalRounds    int            `json:"total_rounds,omitempty"`
+	CurrentRound   int            `json:"current_round,omitempty"`
+	Rounds         []Round        `json:"rounds,omitempty"`
+	Status         string         `json:"status"`
+	Stage          string         `json:"stage"`
+	Responses      []Response     `json:"responses"`
+	Reviews        []Review       `json:"reviews"`
+	Ranking        []RankedAnswer `json:"ranking,omitempty"`
+	Final          string         `json:"final,omitempty"`
+	Error          string         `json:"error,omitempty"`
+	CreatedAt      time.Time      `json:"created_at"`
+	UpdatedAt      time.Time      `json:"updated_at"`
 }
 
 type Store struct {
@@ -202,6 +204,18 @@ func (s *Store) path(value Council) string {
 	default:
 		return filepath.Join(s.Root, "projects", value.ProjectID, value.ID)
 	}
+}
+
+// SessionRoot locates a council's durable Q execution state. Independent
+// councils live entirely below ~/.q/council/independent/<council-id>.
+func (s *Store) SessionRoot(id string) (string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	value, err := s.loadLocked(id)
+	if err != nil {
+		return "", err
+	}
+	return s.path(value), nil
 }
 
 func (s *Store) Create(value Council) (Council, error) {

@@ -6,15 +6,36 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
 
 	"github.com/snowmerak/q/agentloop"
+	"github.com/snowmerak/q/app"
 	"github.com/snowmerak/q/client"
+	"github.com/snowmerak/q/loom"
+	"github.com/snowmerak/q/lsp"
 	"github.com/snowmerak/q/tools"
 	"github.com/snowmerak/q/tools/builtin"
+	"github.com/snowmerak/q/workspace"
 )
+
+func readRuntimeFactory(roots []string) func(context.Context, workspace.Store) (app.AgentToolRuntime, io.Closer, error) {
+	roots = append([]string(nil), roots...)
+	return func(ctx context.Context, store workspace.Store) (app.AgentToolRuntime, io.Closer, error) {
+		if len(roots) == 0 {
+			return NewReadRuntime(nil, nil), nil, nil
+		}
+		runtime, err := tools.NewRuntimeWithRoots(ctx, tools.RuntimeRoots{
+			WorkspaceStateRoot: store.SessionDir(), CheckoutRoot: roots[0], AuxiliaryCheckoutRoots: roots[1:],
+		}, nil, loom.StoreOptions{}, lsp.GlobalConfig{}, lsp.WorkspaceConfig{}, nil)
+		if err != nil {
+			return nil, nil, err
+		}
+		return NewReadRuntime(runtime, roots), runtime, nil
+	}
+}
 
 var councilReadTools = map[string]bool{
 	"read_file": true, "list_directory": true, "loom_inspect": true, "loom_read": true,

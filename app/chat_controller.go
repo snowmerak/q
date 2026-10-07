@@ -284,6 +284,11 @@ func (m model) startChatTurn(content string, compact bool) (tea.Model, tea.Cmd) 
 	}
 	if !m.pendingMessageDeferred {
 		m.memory.Append(userMessage)
+		if m.sessionOperation != nil {
+			operation := *m.sessionOperation
+			operation.ContextReady = true
+			m.sessionOperation = &operation
+		}
 	}
 	m.input.Reset()
 	m.input.Blur()
@@ -326,11 +331,16 @@ func (m *model) resumeRecoveredTurn() tea.Cmd {
 		return nil
 	}
 	m.recoverDelegationTurn = false
+	return m.continueChatTurn()
+}
+
+// continueChatTurn continues saved context without adding a user message.
+func (m *model) continueChatTurn() tea.Cmd {
 	m.beginTurn()
 	m.turnMessageStart = len(m.messages)
 	m.waiting = true
 	m.input.Blur()
-	m.status = "Resuming delegated task…"
+	m.status = "Resuming saved turn…"
 	return tea.Batch(m.spinner.Tick, m.sendChatRequest())
 }
 
@@ -550,24 +560,21 @@ func (m *model) sendChatRequest() tea.Cmd {
 	configuredClient := m.client
 	modelID := m.activeModel()
 	reasoningEffort := m.activeConfig().Provider.EffectiveReasoningEffort()
-	workingDirectory := ""
-	var auxiliaryDirectories []string
-	if m.workspaceStore != nil {
-		workingDirectory = m.workspaceStore.Root
-	}
-	if m.studioWorkspaceContext != nil {
-		auxiliaryDirectories = append([]string(nil), m.studioWorkspaceContext.AuxiliaryRoots...)
-	}
+	workingDirectory, auxiliaryDirectories := m.executionRoots()
 	turnContext := sessionstore.WithSearchScope(m.activeTurnContext(), m.runID, "")
 	turnID := m.turnID
 	events := make(chan agentEvent)
-	toolRuntime, toolRuntimeErr := configuredAgentToolRuntime(
-		m.toolRuntime, mcpconfig.RoleDefault, m.activeConfig(), workingDirectory,
-	)
-	if toolRuntimeErr == nil {
-		toolRuntime, toolRuntimeErr = m.configuredDelegationRuntime(toolRuntime, workingDirectory)
-		if delegation, ok := toolRuntime.(*delegationRuntime); ok {
-			delegation.observeDelegation(turnContext, events)
+	toolRuntime := m.toolRuntime
+	var toolRuntimeErr error
+	if m.sessionOptions == nil || m.sessionOptions.RuntimeFactory == nil {
+		toolRuntime, toolRuntimeErr = configuredAgentToolRuntime(
+			m.toolRuntime, mcpconfig.RoleDefault, m.activeConfig(), workingDirectory,
+		)
+		if toolRuntimeErr == nil {
+			toolRuntime, toolRuntimeErr = m.configuredDelegationRuntime(toolRuntime, workingDirectory)
+			if delegation, ok := toolRuntime.(*delegationRuntime); ok {
+				delegation.observeDelegation(turnContext, events)
+			}
 		}
 	}
 	streamEnabled := m.streamsActiveChat()
@@ -650,6 +657,11 @@ func providerMessages(messages []client.Message, coalesceInstructions bool) []cl
 func (m *model) rollbackPendingMessage() {
 	m.finishTurn()
 	if m.pendingMessage.Content != "" {
+		if m.sessionOperation != nil {
+			operation := *m.sessionOperation
+			operation.ContextReady = false
+			m.sessionOperation = &operation
+		}
 		if len(m.messages) > 0 {
 			m.messages = m.messages[:len(m.messages)-1]
 		}

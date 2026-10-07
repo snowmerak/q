@@ -26,6 +26,7 @@ type sessionFile struct {
 	ResponseAffinity *ResponseAffinity     `json:"response_affinity,omitempty"`
 	Learning         thinker.LearningState `json:"learning"`
 	ActiveTask       *ActiveTask           `json:"active_task,omitempty"`
+	Operation        *SessionOperation     `json:"operation,omitempty"`
 }
 
 type sessionMessage struct {
@@ -61,7 +62,7 @@ func (s Session) MarshalJSON() ([]byte, error) {
 		Transcript: toSessionMessages(s.Transcript), Context: toSessionMessages(s.Context),
 		ResponseUsage:  s.ResponseUsage,
 		ResponseReplay: s.ResponseReplay, ResponseAffinity: s.ResponseAffinity,
-		Learning: s.Learning, ActiveTask: s.ActiveTask,
+		Learning: s.Learning, ActiveTask: s.ActiveTask, Operation: s.Operation,
 	})
 }
 
@@ -100,7 +101,7 @@ func (s *Session) UnmarshalJSON(data []byte) error {
 			Transcript: fromSessionMessages(saved.Transcript), Context: fromSessionMessages(saved.Context),
 			ResponseUsage:  saved.ResponseUsage,
 			ResponseReplay: saved.ResponseReplay, ResponseAffinity: saved.ResponseAffinity,
-			Learning: saved.Learning, ActiveTask: saved.ActiveTask,
+			Learning: saved.Learning, ActiveTask: saved.ActiveTask, Operation: saved.Operation,
 		}
 		return nil
 	default:

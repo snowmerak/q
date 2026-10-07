@@ -12,20 +12,20 @@ import (
 	"sync"
 	"time"
 
-	"github.com/snowmerak/q/app"
 	"github.com/snowmerak/q/config"
 	"github.com/snowmerak/q/council"
 	"github.com/snowmerak/q/worklock"
 )
 
-type councilModelProvider interface {
-	NewCouncilClient(context.Context) (app.ChatClient, config.Config, error)
-}
+type councilModelProvider = council.SessionRunner
+
+const councilTurnTimeout = 50 * time.Minute
 
 type councilService struct {
 	store    *council.Store
 	projects *studioProjectStore
 	provider councilModelProvider
+	settings config.Store
 	ctx      context.Context
 	cancel   context.CancelFunc
 	mu       sync.Mutex
@@ -63,7 +63,7 @@ type councilDetail struct {
 func newCouncilService(parent context.Context, configDir string, projects *studioProjectStore, provider councilModelProvider) *councilService {
 	ctx, cancel := context.WithCancel(parent)
 	return &councilService{
-		store: council.NewStore(configDir), projects: projects, provider: provider,
+		store: council.NewStore(configDir), projects: projects, provider: provider, settings: config.Store{Dir: configDir},
 		ctx: ctx, cancel: cancel, active: make(map[string]activeCouncilRun),
 	}
 }
@@ -318,7 +318,7 @@ func (service *councilService) serveTurns(writer http.ResponseWriter, request *h
 		writeRunLockError(writer, err)
 		return
 	}
-	ctx, cancel := context.WithTimeout(service.ctx, 10*time.Minute)
+	ctx, cancel := context.WithTimeout(service.ctx, councilTurnTimeout)
 	service.active[value.ID] = activeCouncilRun{id: turn.ID, cancel: cancel}
 	if err := service.store.SaveTurn(turn); err != nil {
 		delete(service.active, value.ID)
@@ -426,7 +426,7 @@ func (service *councilService) serveRetry(writer http.ResponseWriter, request *h
 		writeRunLockError(writer, err)
 		return
 	}
-	ctx, cancel := context.WithTimeout(service.ctx, 10*time.Minute)
+	ctx, cancel := context.WithTimeout(service.ctx, councilTurnTimeout)
 	service.active[id] = activeCouncilRun{id: turn.ID, cancel: cancel}
 	if err := service.store.SaveTurn(turn); err != nil {
 		delete(service.active, id)
@@ -476,12 +476,14 @@ func (service *councilService) execute(ctx context.Context, cancel context.Cance
 		fail(errors.New("Studio council model runtime is unavailable"))
 		return
 	}
-	model, settings, err := service.provider.NewCouncilClient(ctx)
+	settings, err := service.settings.Load()
+	if errors.Is(err, config.ErrNotFound) {
+		settings, err = config.Default(), nil
+	}
 	if err != nil {
 		fail(err)
 		return
 	}
-	defer model.Close()
 	var roots []string
 	switch value.Scope {
 	case council.Workspace:
@@ -513,12 +515,16 @@ func (service *councilService) execute(ctx context.Context, cancel context.Cance
 			history = append(history, item)
 		}
 	}
-	scratch := filepath.Join(service.store.Root, "scratch", turn.ID)
+	sessionRoot, err := service.store.SessionRoot(value.ID)
+	if err != nil {
+		fail(err)
+		return
+	}
 	runner := council.Run
 	if resume {
 		runner = council.Resume
 	}
-	turn, err = runner(ctx, model, value, history, turn, roots, scratch, settings.EffectiveAgents().MaxParallel, func(progress council.Turn) error {
+	turn, err = runner(ctx, service.provider, value, history, turn, roots, sessionRoot, settings.EffectiveAgents().MaxParallel, func(progress council.Turn) error {
 		turn = progress
 		return service.store.SaveTurn(progress)
 	})

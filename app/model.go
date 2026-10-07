@@ -1133,8 +1133,8 @@ func (m *model) enterChat(value config.Config, configuredClient chatClient) {
 	m.responseUsage = nil
 	m.transcriptThoughts = nil
 	m.streamResponse = ""
-	if value.Provider.SystemPrompt != "" {
-		m.messages = append(m.messages, client.Message{Role: client.RoleSystem, Content: value.Provider.SystemPrompt})
+	if active.Provider.SystemPrompt != "" {
+		m.messages = append(m.messages, client.Message{Role: client.RoleSystem, Content: active.Provider.SystemPrompt})
 	}
 	m.appendRuntimeMessages()
 	m.memory = memory.New(memoryPolicy(active), m.messages)
@@ -1175,15 +1175,10 @@ func (m *model) enterChat(value config.Config, configuredClient chatClient) {
 }
 
 func (m *model) appendRuntimeMessages() {
-	root := ""
-	var auxiliary []string
+	root, auxiliary := m.executionRoots()
 	projectName := ""
-	if m.workspaceStore != nil {
-		root = m.workspaceStore.Root
-	}
 	if m.studioWorkspaceContext != nil {
 		projectName = m.studioWorkspaceContext.ProjectName
-		auxiliary = append([]string(nil), m.studioWorkspaceContext.AuxiliaryRoots...)
 	}
 	m.messages = PrepareWorkspaceMessages(m.messages, WorkspaceMessageOptions{
 		Root: root, ProjectName: projectName, AuxiliaryRoots: auxiliary, Tools: m.toolRuntime, ArchiveAvailable: m.archive != nil,
@@ -1588,12 +1583,13 @@ func (m *model) resetConversation(runIDs ...string) {
 }
 
 func (m *model) resetConversationState(runIDs ...string) {
+	m.sessionOperation = nil
 	m.messages = nil
 	m.responseUsage = nil
 	m.transcriptThoughts = nil
 	m.streamResponse = ""
-	if m.config.Provider.SystemPrompt != "" {
-		m.messages = append(m.messages, client.Message{Role: client.RoleSystem, Content: m.config.Provider.SystemPrompt})
+	if prompt := m.activeConfig().Provider.SystemPrompt; prompt != "" {
+		m.messages = append(m.messages, client.Message{Role: client.RoleSystem, Content: prompt})
 	}
 	m.appendRuntimeMessages()
 	active := m.activeConfig()
@@ -1728,6 +1724,10 @@ func (m *model) restoreWorkspaceSession() {
 	if err != nil {
 		m.status = err.Error()
 		return
+	}
+	if session.Operation != nil {
+		operation := *session.Operation
+		m.sessionOperation = &operation
 	}
 	m.runID = session.RunID
 	if m.runID == "" {
@@ -1904,6 +1904,16 @@ func (m model) activeConfig() config.Config {
 			}
 		}
 	}
+	if m.sessionOptions != nil {
+		if m.sessionOptions.SystemPrompt != "" {
+			value.Provider.SystemPrompt += "\n\n" + m.sessionOptions.SystemPrompt
+		}
+		if m.sessionOptions.Model != "" {
+			value.Provider.Model = m.sessionOptions.Model
+			value.Provider.ContextWindow = m.contextWindowForModel(value.Provider.Model)
+		}
+		value.Provider.ReasoningEffort = m.sessionOptions.ReasoningEffort
+	}
 	return value
 }
 
@@ -1953,6 +1963,7 @@ func (m *model) saveWorkspaceSession() error {
 		ResponseReplay:   collectResponseReplay(requestContext),
 		ResponseAffinity: responseAffinity,
 		ActiveTask:       cloneActiveTask(m.activeTask),
+		Operation:        m.sessionOperation,
 		Learning: func() thinker.LearningState {
 			if m.learning == nil {
 				return thinker.LearningState{}

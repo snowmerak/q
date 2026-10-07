@@ -3,6 +3,7 @@ package app
 import (
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
@@ -254,6 +255,12 @@ func (m model) updateChatResult(message chatResultMsg) (tea.Model, tea.Cmd) {
 	}
 	m.compactionTarget = 0
 	m.sessionUpdatedAt = time.Now().UTC()
+	if m.sessionOperation != nil {
+		operation := *m.sessionOperation
+		operation.Completed = true
+		operation.Result = strings.TrimSpace(assistant.TextContent())
+		m.sessionOperation = &operation
+	}
 	m.resize(m.width, m.height)
 	if err := m.saveWorkspaceSession(); err != nil {
 		m.turnErr = errors.Join(m.turnErr, err)
@@ -316,6 +323,11 @@ func (m model) updateCompactionResult(message compactionResultMsg) (tea.Model, t
 	}
 	candidate := m
 	candidate.memory = compactedMemory
+	if candidate.sessionOperation != nil && !message.manual {
+		operation := *candidate.sessionOperation
+		operation.ContextReady = true
+		candidate.sessionOperation = &operation
+	}
 	candidate.conversationID = ""
 	if err := candidate.saveWorkspaceSession(); err != nil {
 		m.turnErr = errors.Join(m.turnErr, err)
@@ -329,6 +341,7 @@ func (m model) updateCompactionResult(message compactionResultMsg) (tea.Model, t
 		return m, m.input.Focus()
 	}
 	m.memory = compactedMemory
+	m.sessionOperation = candidate.sessionOperation
 	m.pendingMessageDeferred = false
 	m.conversationID = ""
 	m.archiveSummary(checkpoint)
