@@ -88,7 +88,7 @@ func TestPublicAgentLoopRunsToolRoundFromExternalPackage(t *testing.T) {
 	events := make(chan app.AgentEvent)
 	go app.RunAgentLoop(t.Context(), app.AgentLoopRequest{
 		Client: configuredClient, Tools: tools, Model: "test-model",
-		Messages: messages, WorkingDirectory: root,
+		Messages: messages, WorkingDirectory: root, Extra: map[string]any{"q_anthropic_cache": "1h"},
 	}, events)
 
 	var toolCallSeen, toolMessageSeen bool
@@ -118,6 +118,11 @@ func TestPublicAgentLoopRunsToolRoundFromExternalPackage(t *testing.T) {
 	}
 	if len(configuredClient.requests) != 2 {
 		t.Fatalf("model requests = %d", len(configuredClient.requests))
+	}
+	for index, request := range configuredClient.requests {
+		if request.Extra["q_anthropic_cache"] != "1h" {
+			t.Fatalf("model request %d lost cache policy: %#v", index+1, request.Extra)
+		}
 	}
 }
 

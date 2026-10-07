@@ -37,6 +37,7 @@ type Request struct {
 	Tools                ToolRuntime
 	Model                string
 	ReasoningEffort      string
+	Extra                map[string]any
 	Messages             []client.Message
 	ConversationID       string
 	WorkingDirectory     string

@@ -607,7 +607,7 @@ type sessionRunner struct {
 	}
 }
 
-type councilSessionCall struct{ model, session, operation string }
+type councilSessionCall struct{ model, session, operation, cachePolicy string }
 type recordingSessions struct {
 	sessionRunner
 	mu    sync.Mutex
@@ -616,7 +616,7 @@ type recordingSessions struct {
 
 func (runner *recordingSessions) RunWithOptions(ctx context.Context, store workspace.Store, id, prompt string, options app.SessionOptions, emit app.SessionEventSink) error {
 	runner.mu.Lock()
-	runner.calls = append(runner.calls, councilSessionCall{options.Model, id, options.OperationID})
+	runner.calls = append(runner.calls, councilSessionCall{options.Model, id, options.OperationID, options.AnthropicPromptCache})
 	runner.mu.Unlock()
 	if options.WorkingDirectory == store.Root {
 		return errors.New("storage root was exposed as a workspace")
@@ -663,6 +663,9 @@ func TestCouncilUsesPersistentSeatSessionsForEveryRound(t *testing.T) {
 	}
 	seen := map[string]string{}
 	for _, call := range runner.calls {
+		if call.operation == "synthesis" && call.cachePolicy != "off" || call.operation != "synthesis" && call.cachePolicy != "1h" {
+			t.Fatalf("unexpected council cache policy: %+v", call)
+		}
 		if previous := seen[call.model]; previous != "" && previous != call.session {
 			t.Fatalf("seat session changed: %+v", runner.calls)
 		}

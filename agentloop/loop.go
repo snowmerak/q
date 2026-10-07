@@ -43,6 +43,7 @@ func RunAgentLoop(ctx context.Context, request Request, events chan<- Event) {
 	streamEnabled := request.Stream
 	coalesceInstructions := request.CoalesceInstructions
 	contextPolicy := request.ContextPolicy
+	requestExtra := request.Extra
 	availableTools := memory.AppendMemoryTools(append(append([]client.Tool(nil), toolRuntime.Tools()...), orchestrationTools()...))
 	hintedSkillIDs := knownSkillIDs(history)
 	if len(history) > 0 && history[len(history)-1].Role == client.RoleUser {
@@ -69,6 +70,7 @@ func RunAgentLoop(ctx context.Context, request Request, events chan<- Event) {
 		}
 	}
 	loopContext := newAgentLoopContext(contextPolicy, history, availableTools)
+	loopContext.extra = requestExtra
 	toolCalls := 0
 	taskStarted := activeTask != nil
 	appendHistory := func(messages ...client.Message) bool {
@@ -112,7 +114,7 @@ func RunAgentLoop(ctx context.Context, request Request, events chan<- Event) {
 		requestEstimate := memory.CountMessages(roundHistory)
 		request := client.ChatRequest{
 			Model: modelID, Messages: providerMessages(agentinstructions.Normalize(roundHistory), coalesceInstructions), ConversationID: conversationID, Tools: availableTools,
-			ReasoningEffort: reasoningEffort, WorkingDirectory: workingDirectory,
+			ReasoningEffort: reasoningEffort, WorkingDirectory: workingDirectory, Extra: requestExtra,
 		}
 		var response *client.ChatResponse
 		if streamEnabled {

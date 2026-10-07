@@ -17,6 +17,7 @@ import (
 type SessionOptions struct {
 	Model                string
 	ReasoningEffort      string
+	AnthropicPromptCache string
 	SystemPrompt         string
 	WorkingDirectory     string
 	AuxiliaryDirectories []string
@@ -60,6 +61,9 @@ func (m model) startSessionOperation(prompt, id string) (tea.Model, tea.Cmd) {
 func (host *SessionHost) RunWithOptions(ctx context.Context, store workspace.Store, sessionID, prompt string, options SessionOptions, emit SessionEventSink) error {
 	if options.RuntimeFactory != nil && options.RuntimeKey == "" {
 		return errors.New("injected session runtime requires a runtime key")
+	}
+	if options.AnthropicPromptCache != "" && options.AnthropicPromptCache != "1h" && options.AnthropicPromptCache != "off" {
+		return errors.New("anthropic prompt cache must be 1h or off")
 	}
 	options.AuxiliaryDirectories = append([]string(nil), options.AuxiliaryDirectories...)
 	return host.run(ctx, store, sessionID, prompt, emit, nil, options)

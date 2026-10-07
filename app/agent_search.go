@@ -187,7 +187,7 @@ func streamAgentSearch(
 	if parent.tools == nil {
 		streamSingleChat(
 			ctx, parent.client, parent.model, parent.reasoningEffort, history, parent.conversationID,
-			parent.workingDirectory, parent.coalesceInstructions, memory.CountMessages(history), events,
+			parent.workingDirectory, parent.coalesceInstructions, nil, memory.CountMessages(history), events,
 		)
 		return
 	}

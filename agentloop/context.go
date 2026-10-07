@@ -19,6 +19,7 @@ type AgentContextCompaction struct {
 // Context holds loop-local conversation memory and compaction policy.
 type Context struct {
 	manager *memory.Manager
+	extra   map[string]any
 }
 
 // NewContext creates loop-local memory for a test or embedding host.
@@ -130,7 +131,7 @@ func (c *Context) compact(ctx context.Context, configuredClient ChatClient, mode
 		}
 		response, err := chatWithEmptyResponseRecovery(ctx, configuredClient, client.ChatRequest{
 			Model: modelID, Messages: plan.RequestMessages(),
-			ReasoningEffort: reasoningEffort,
+			ReasoningEffort: reasoningEffort, Extra: c.extra,
 		})
 		if err != nil {
 			return nil, fmt.Errorf("agent loop: compact context: %w", err)

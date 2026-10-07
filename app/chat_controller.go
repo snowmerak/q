@@ -538,6 +538,7 @@ func (m model) startManualCompaction() (tea.Model, tea.Cmd) {
 func (m model) compactContext(plan memory.Plan, manual bool) tea.Cmd {
 	configuredClient := m.client
 	modelID := m.activeModel()
+	requestExtra := m.anthropicRequestExtra(modelID)
 	reasoningEffort := m.activeConfig().Provider.EffectiveReasoningEffort()
 	turnContext := m.activeTurnContext()
 	turnID := m.turnID
@@ -547,7 +548,7 @@ func (m model) compactContext(plan memory.Plan, manual bool) tea.Cmd {
 		}
 		response, err := chatWithEmptyResponseRecovery(turnContext, configuredClient, client.ChatRequest{
 			Model: modelID, Messages: plan.RequestMessages(),
-			ReasoningEffort: reasoningEffort,
+			ReasoningEffort: reasoningEffort, Extra: requestExtra,
 		})
 		return compactionResultMsg{turnID: turnID, response: response, plan: plan, err: err, manual: manual}
 	}
@@ -559,6 +560,7 @@ func (m *model) sendChatRequest() tea.Cmd {
 	conversationID := m.conversationID
 	configuredClient := m.client
 	modelID := m.activeModel()
+	requestExtra := m.anthropicRequestExtra(modelID)
 	reasoningEffort := m.activeConfig().Provider.EffectiveReasoningEffort()
 	workingDirectory, auxiliaryDirectories := m.executionRoots()
 	turnContext := sessionstore.WithSearchScope(m.activeTurnContext(), m.runID, "")
@@ -598,17 +600,18 @@ func (m *model) sendChatRequest() tea.Cmd {
 		return func() tea.Msg {
 			response, err := chatWithEmptyResponseRecovery(turnContext, configuredClient, client.ChatRequest{
 				Model: modelID, Messages: providerMessages(agentinstructions.Normalize(history), coalesceInstructions), ConversationID: conversationID,
-				ReasoningEffort: reasoningEffort, WorkingDirectory: workingDirectory,
+				ReasoningEffort: reasoningEffort, WorkingDirectory: workingDirectory, Extra: requestExtra,
 			})
 			return chatResultMsg{turnID: turnID, response: response, requestEstimate: m.requestEstimate, err: err}
 		}
 	}
 	return func() tea.Msg {
 		if toolRuntime == nil && streamEnabled {
-			go streamSingleChat(turnContext, configuredClient, modelID, reasoningEffort, history, conversationID, workingDirectory, coalesceInstructions, m.requestEstimate, events)
+			go streamSingleChat(turnContext, configuredClient, modelID, reasoningEffort, history, conversationID, workingDirectory, coalesceInstructions, requestExtra, m.requestEstimate, events)
 		} else {
 			go runPersistedAgentLoop(turnContext, AgentLoopRequest{
 				Client: configuredClient, Tools: toolRuntime, Model: modelID, ReasoningEffort: reasoningEffort,
+				Extra:    requestExtra,
 				Messages: history, ConversationID: conversationID, WorkingDirectory: workingDirectory,
 				AuxiliaryDirectories: auxiliaryDirectories,
 				ActiveTask:           activeTask, Stream: streamEnabled, CoalesceInstructions: coalesceInstructions,
@@ -627,13 +630,14 @@ func streamSingleChat(
 	conversationID string,
 	workingDirectory string,
 	coalesceInstructions bool,
+	requestExtra map[string]any,
 	requestEstimate int,
 	events chan<- agentEvent,
 ) {
 	defer close(events)
 	response, err := streamChatWithEmptyResponseRecovery(ctx, configuredClient, client.ChatRequest{
 		Model: modelID, Messages: providerMessages(agentinstructions.Normalize(history), coalesceInstructions), ConversationID: conversationID,
-		ReasoningEffort: reasoningEffort, WorkingDirectory: workingDirectory,
+		ReasoningEffort: reasoningEffort, WorkingDirectory: workingDirectory, Extra: requestExtra,
 	}, func(delta chatStreamDelta) bool {
 		return emitAgentEvent(ctx, events, agentEvent{streamDelta: &delta})
 	})

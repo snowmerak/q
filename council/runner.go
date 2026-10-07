@@ -398,7 +398,11 @@ func runSeat(ctx context.Context, host SessionRunner, seat Seat, prompt string, 
 	options := app.SessionOptions{
 		Model: seat.Model, ReasoningEffort: seat.ReasoningEffort, SystemPrompt: system,
 		DisableLearning: true, RuntimeKey: "council-read-only-v1", OperationID: operationID,
-		RuntimeFactory: readRuntimeFactory(roots),
+		AnthropicPromptCache: "1h",
+		RuntimeFactory:       readRuntimeFactory(roots),
+	}
+	if operationID == "synthesis" {
+		options.AnthropicPromptCache = "off"
 	}
 	if len(roots) > 0 {
 		options.WorkingDirectory = roots[0]

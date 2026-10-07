@@ -40,6 +40,13 @@ the complete execution state. Older council turns without Q session references
 can resume using their saved results as explicit input to new sessions; tool
 history from those older runs was never stored and cannot be recovered.
 
+Council sets `SessionOptions.AnthropicPromptCache` to `"1h"` for member sessions
+and `"off"` for the chair session. Q sends this as the Gateway-only
+`q_anthropic_cache` Chat Completions field only when the selected provider is
+native Anthropic. The policy applies to every model request in that session,
+including tool rounds and context compaction. Other sessions retain the
+Gateway's default cache behavior.
+
 ### Use the lower-level loop
 
 Pin Q to the version your application has tested:
@@ -64,6 +71,8 @@ import (
 Import `agentloop` for an embedding that does not need Q's Bubble Tea or ACP
 host. It still uses Q's `tools` and `workspace` contracts. Existing callers
 may continue importing `app` without changing their request or event handling.
+`agentloop.Request.Extra` carries optional provider request fields through each
+model and context-compaction call.
 
 ## Run a minimal workspace turn
 
