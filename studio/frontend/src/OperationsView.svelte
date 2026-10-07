@@ -63,6 +63,6 @@
 <style>
   .operations-view { display: grid; gap: 18px; min-height: 0; padding: 0 0 26px; }
   .operations-toolbar { display: flex; justify-content: flex-end; gap: 9px; }
-  .operations-toolbar label { display: flex; align-items: center; gap: 9px; color: #8791a8; font-size: 10px; }
+  .operations-toolbar label { display: flex; align-items: center; gap: 9px; color: var(--subtle); font-size: calc(10px * var(--text-scale)); }
   .operations-toolbar select { min-width: 130px; }
 </style>

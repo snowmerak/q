@@ -67,40 +67,40 @@ q studio --host 0.0.0.0 --port 7070 --no-open</code></pre><p>Use an IP address f
 
 <style>
   .help-index { display: flex; flex: none; flex-wrap: wrap; gap: 7px; padding: 14px 0; }
-  .help-index button { width: auto; min-height: 34px; padding: 6px 12px; border: 1px solid var(--border); background: var(--panel, var(--surface)); color: var(--muted); font-size: 13px; cursor: pointer; }
+  .help-index button { width: auto; min-height: 34px; padding: 6px 12px; border: 1px solid var(--border); background: var(--panel, var(--surface)); color: var(--muted); font-size: calc(13px * var(--text-scale)); cursor: pointer; }
   .help-index button:focus-visible, .help-view:focus-visible { outline: 2px solid var(--violet); outline-offset: -2px; }
   .help-view { min-height: 0; min-width: 0; flex: 1; overflow-y: auto; overscroll-behavior: contain; padding: 0 12px 28px 0; scrollbar-gutter: stable; }
   .help-content { display: grid; gap: 18px; max-width: 1120px; }
   .help-card { min-width: 0; border: 1px solid var(--border); border-radius: 7px; background: var(--panel, var(--surface)); scroll-margin-top: 14px; }
-  .intro-card { padding: 24px; background: linear-gradient(125deg, rgba(128,82,255,.15), rgba(12,15,23,.2) 48%), var(--surface); }
-  .intro-card h2 { margin: 8px 0 12px; font-size: 24px; }
-  .intro-card > p:last-of-type { max-width: 900px; color: var(--muted); font-size: 15px; line-height: 1.7; }
+  .intro-card { padding: 24px; background: var(--help-intro), var(--surface); }
+  .intro-card h2 { margin: 8px 0 12px; font-size: calc(24px * var(--text-scale)); }
+  .intro-card > p:last-of-type { max-width: 900px; color: var(--muted); font-size: calc(15px * var(--text-scale)); line-height: 1.7; }
   .intro-card .recovery-list { margin-top: 18px; }
   .help-heading { padding: 20px 22px; border-bottom: 1px solid var(--border); }
-  .help-heading h2 { font-size: 20px; }
-  .help-heading p { margin-top: 7px; color: var(--muted); font-size: 14px; line-height: 1.6; }
-  h3 { margin: 18px 22px 10px; font-size: 16px; }
+  .help-heading h2 { font-size: calc(20px * var(--text-scale)); }
+  .help-heading p { margin-top: 7px; color: var(--muted); font-size: calc(14px * var(--text-scale)); line-height: 1.6; }
+  h3 { margin: 18px 22px 10px; font-size: calc(16px * var(--text-scale)); }
   .reference-list > div { display: grid; gap: 7px; padding: 16px 22px; border-bottom: 1px solid var(--border); }
   .reference-list > div:last-child { border-bottom: 0; }
-  code { color: #c6b1ff; font: 13px/1.6 ui-monospace, SFMono-Regular, Consolas, monospace; overflow-wrap: anywhere; }
-  .reference-list p, .help-note p { color: var(--muted); font-size: 14px; line-height: 1.7; }
-  .reference-list small { color: var(--subtle); font-size: 13px; }
+  code { color: #c6b1ff; font: calc(13px * var(--text-scale))/1.6 ui-monospace, SFMono-Regular, Consolas, monospace; overflow-wrap: anywhere; }
+  .reference-list p, .help-note p { color: var(--muted); font-size: calc(14px * var(--text-scale)); line-height: 1.7; }
+  .reference-list small { color: var(--subtle); font-size: calc(13px * var(--text-scale)); }
   .help-note { padding: 18px 22px; border-top: 1px solid var(--border); }
-  .help-note strong { display: block; margin-bottom: 8px; font-size: 15px; }
-  pre { margin: 12px 0; padding: 12px; border: 1px solid var(--border); border-radius: 5px; background: #090c14; white-space: pre-wrap; overflow-wrap: anywhere; }
+  .help-note strong { display: block; margin-bottom: 8px; font-size: calc(15px * var(--text-scale)); }
+  pre { margin: 12px 0; padding: 12px; border: 1px solid var(--border); border-radius: 5px; background: var(--field-bg); white-space: pre-wrap; overflow-wrap: anywhere; }
   .shortcut-list { display: grid; }
   .shortcut-list > div { display: grid; grid-template-columns: minmax(160px, .6fr) minmax(0, 1fr); align-items: start; gap: 20px; padding: 13px 22px; border-top: 1px solid var(--border); }
   .shortcut-list > div:first-child { border-top: 0; }
-  kbd { width: fit-content; max-width: 100%; padding: 4px 8px; color: #d4c9ff; border: 1px solid #45366e; border-bottom-width: 2px; border-radius: 4px; background: #1a1430; font: 13px/1.5 ui-monospace, SFMono-Regular, Consolas, monospace; overflow-wrap: anywhere; }
-  .shortcut-list span { color: var(--muted); font-size: 14px; line-height: 1.65; }
+  kbd { width: fit-content; max-width: 100%; padding: 4px 8px; color: var(--accent-text); border: 1px solid var(--border-strong); border-bottom-width: 2px; border-radius: 4px; background: var(--violet-soft); font: calc(13px * var(--text-scale))/1.5 ui-monospace, SFMono-Regular, Consolas, monospace; overflow-wrap: anywhere; }
+  .shortcut-list span { color: var(--muted); font-size: calc(14px * var(--text-scale)); line-height: 1.65; }
   details { border-top: 1px solid var(--border); }
-  summary { padding: 16px 22px; color: var(--text); font-size: 16px; cursor: pointer; }
+  summary { padding: 16px 22px; color: var(--text); font-size: calc(16px * var(--text-scale)); cursor: pointer; }
   .recovery-list { display: grid; margin: 0; padding: 0; list-style: none; }
   .recovery-list li { display: grid; gap: 7px; padding: 16px 22px; border-top: 1px solid var(--border); }
   .recovery-list li:first-child { border-top: 0; }
-  .recovery-list strong { color: var(--text); font-size: 15px; }
-  .recovery-list span { color: var(--muted); font-size: 14px; line-height: 1.7; }
-  .steps { margin: 0; padding: 18px 22px 18px 44px; color: var(--muted); font-size: 14px; line-height: 1.7; }
+  .recovery-list strong { color: var(--text); font-size: calc(15px * var(--text-scale)); }
+  .recovery-list span { color: var(--muted); font-size: calc(14px * var(--text-scale)); line-height: 1.7; }
+  .steps { margin: 0; padding: 18px 22px 18px 44px; color: var(--muted); font-size: calc(14px * var(--text-scale)); line-height: 1.7; }
   .steps li + li { margin-top: 12px; }
   @media (max-width: 760px) { .help-view { flex: none; max-height: 70dvh; } .help-index { gap: 5px; } .help-index button { padding: 6px 9px; } }
   @media (max-width: 620px) { .shortcut-list > div { grid-template-columns: minmax(0, 1fr); gap: 9px; } .intro-card, .help-heading { padding: 18px; } .reference-list > div, .help-note, .recovery-list li, .shortcut-list > div { padding-inline: 18px; } }

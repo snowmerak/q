@@ -35,11 +35,11 @@
   .transfer-cards { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
   .transfer-cards article { display: flex; min-height: 228px; align-items: flex-start; flex-direction: column; gap: 14px; padding: 22px; }
   .transfer-cards :global(svg) { color: var(--violet); }
-  .transfer-cards h3 { margin: 0; font-size: 16px; }
+  .transfer-cards h3 { margin: 0; font-size: calc(16px * var(--text-scale)); }
   .transfer-cards p { margin: 0; }
-  .transfer-cards p, .transfer-note { color: var(--muted); font-size: 13px; line-height: 1.7; }
+  .transfer-cards p, .transfer-note { color: var(--muted); font-size: calc(13px * var(--text-scale)); line-height: 1.7; }
   .transfer-cards button { margin-top: auto; }
   .transfer-note { max-width: 820px; margin-top: 20px; }
-  .transfer-success { color: #b8d8ba; font-size: 13px; }
+  .transfer-success { color: #b8d8ba; font-size: calc(13px * var(--text-scale)); }
   @media (max-width: 700px) { .transfer-cards { grid-template-columns: 1fr; } }
 </style>

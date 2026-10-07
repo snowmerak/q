@@ -79,9 +79,9 @@
 
 <style>
   .chatgpt-connection { display: grid; gap: 12px; padding: 0 20px 20px; }
-  p { margin: 0; color: var(--muted); font-size: 13px; line-height: 1.5; }
-  label { display: grid; gap: 8px; min-width: 0; color: var(--muted); font-size: 13px; }
+  p { margin: 0; color: var(--muted); font-size: calc(13px * var(--text-scale)); line-height: 1.5; }
+  label { display: grid; gap: 8px; min-width: 0; color: var(--muted); font-size: calc(13px * var(--text-scale)); }
   .provider-actions { flex-wrap: wrap; gap: 8px; }
-  a { color: var(--muted); font-size: 13px; text-underline-offset: 3px; }
+  a { color: var(--muted); font-size: calc(13px * var(--text-scale)); text-underline-offset: 3px; }
   [role='alert'] { color: #e5a1a1; overflow-wrap: anywhere; }
 </style>

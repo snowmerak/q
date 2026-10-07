@@ -23,6 +23,30 @@ test.afterEach(async ({ page }) => {
   expect(page.testErrors, 'browser runtime errors').toEqual([]);
 });
 
+test('appearance choices persist across pages and keep the current text size as the minimum', async ({ page }) => {
+  await page.goto('/settings?section=appearance');
+  const theme = page.getByRole('group', { name: 'Theme' });
+  const textSize = page.getByRole('group', { name: 'Text size' });
+  await expect(theme.getByRole('radio', { name: /^Dawn/ })).toBeChecked();
+  await expect(textSize.getByRole('radio', { name: '100%' })).toBeChecked();
+
+  await theme.getByRole('radio', { name: /^Light/ }).check();
+  await textSize.getByRole('radio', { name: '130%' }).check();
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
+  await expect.poll(() => page.locator('body').evaluate((body) => getComputedStyle(body).fontSize)).toBe('20.8px');
+
+  await page.goto('/help');
+  await page.reload();
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
+  await expect.poll(() => page.locator('body').evaluate((body) => getComputedStyle(body).fontSize)).toBe('20.8px');
+  await page.goto('/settings?section=appearance');
+  await expect(theme.getByRole('radio', { name: /^Light/ })).toBeChecked();
+  await expect(textSize.getByRole('radio', { name: '130%' })).toBeChecked();
+
+  await theme.getByRole('radio', { name: /^Night/ }).check();
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'night');
+});
+
 test('sidebar collapses, keeps navigation usable, and remembers its state', async ({ page }, testInfo) => {
   const sidebar = page.getByRole('complementary', { name: 'Studio navigation' });
   for (const width of [1440, 390]) {

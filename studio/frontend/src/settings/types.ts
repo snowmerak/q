@@ -86,7 +86,7 @@ export type SettingsSnapshot = {
     lsp: { config_path: string; items: number; bindings: number };
   };
 };
-export type SettingsSection = 'models' | 'providers' | 'system-one' | 'runtime' | 'services' | 'subagents' | 'integrations' | 'import-export';
+export type SettingsSection = 'appearance' | 'models' | 'providers' | 'system-one' | 'runtime' | 'services' | 'subagents' | 'integrations' | 'import-export';
 export type SaveState = { kind: 'idle' | 'saving' | 'saved' | 'error'; message?: string };
 export type LoomStats = { artifacts: number; blobs: number; bytes: number };
 export type LoomGCResult = { artifacts_removed: number; blobs_removed: number; bytes_reclaimed: number; dry_run: boolean };

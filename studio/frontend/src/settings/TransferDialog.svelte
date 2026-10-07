@@ -175,43 +175,43 @@
 </dialog>
 
 <style>
-  .transfer-dialog { width: min(960px, calc(100vw - 40px)); max-height: calc(100dvh - 40px); padding: 0; margin: auto; color: var(--text); background: #0d1019; border: 1px solid var(--border-strong); border-radius: 8px; box-shadow: 0 28px 90px rgba(0, 0, 0, .55); }
+  .transfer-dialog { width: min(960px, calc(100vw - 40px)); max-height: calc(100dvh - 40px); padding: 0; margin: auto; color: var(--text); background: var(--surface); border: 1px solid var(--border-strong); border-radius: 8px; box-shadow: 0 28px 90px rgba(0, 0, 0, .55); }
   .transfer-dialog[open] { display: flex; flex-direction: column; }
-  .transfer-dialog::backdrop { background: rgba(3, 5, 10, .76); backdrop-filter: blur(4px); }
+  .transfer-dialog::backdrop { background: var(--overlay); backdrop-filter: blur(4px); }
   header { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; padding: 22px; }
-  header h2 { margin: 5px 0 8px; font-size: 20px; }
-  header p:last-child, .file-picker small { color: var(--muted); font-size: 12px; }
+  header h2 { margin: 5px 0 8px; font-size: calc(20px * var(--text-scale)); }
+  header p:last-child, .file-picker small { color: var(--muted); font-size: calc(12px * var(--text-scale)); }
   .file-picker { display: grid; gap: 8px; padding: 0 22px 18px; }
-  .file-picker label { display: grid; gap: 8px; font-size: 12px; }
-  .file-picker input { min-width: 0; max-width: 100%; font-size: 12px; }
+  .file-picker label { display: grid; gap: 8px; font-size: calc(12px * var(--text-scale)); }
+  .file-picker input { min-width: 0; max-width: 100%; font-size: calc(12px * var(--text-scale)); }
   .transfer-tabs { display: flex; flex-shrink: 0; overflow-x: auto; border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); }
-  .transfer-tabs button { display: grid; flex: 1; gap: 5px; padding: 13px 15px; border: 0; border-bottom: 2px solid transparent; border-radius: 0; white-space: nowrap; background: transparent; color: var(--muted); font-size: 12px; }
+  .transfer-tabs button { display: grid; flex: 1; gap: 5px; padding: 13px 15px; border: 0; border-bottom: 2px solid transparent; border-radius: 0; white-space: nowrap; background: transparent; color: var(--muted); font-size: calc(12px * var(--text-scale)); }
   .transfer-tabs button.active { color: var(--text); border-bottom-color: var(--violet); background: rgba(160, 132, 232, .06); }
-  .transfer-tabs span { font-size: 10px; color: var(--subtle); }
-  .transfer-toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; padding: 12px 22px; font-size: 12px; color: var(--muted); }
+  .transfer-tabs span { font-size: calc(10px * var(--text-scale)); color: var(--subtle); }
+  .transfer-toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; padding: 12px 22px; font-size: calc(12px * var(--text-scale)); color: var(--muted); }
   .transfer-toolbar > div { display: flex; gap: 14px; }
   .transfer-body { min-height: 180px; overflow-y: auto; padding: 0 22px 20px; }
-  .select-section { display: flex; align-items: center; gap: 10px; padding: 8px 0 16px; font-size: 12px; }
+  .select-section { display: flex; align-items: center; gap: 10px; padding: 8px 0 16px; font-size: calc(12px * var(--text-scale)); }
   input[type=checkbox] { flex: none; width: 15px; height: 15px; accent-color: var(--violet); }
   .transfer-item { margin-bottom: 8px; border: 1px solid var(--border); border-radius: 5px; }
   .transfer-item.selected { border-color: rgba(160, 132, 232, .5); background: rgba(160, 132, 232, .04); }
   .transfer-item > label { display: flex; align-items: center; gap: 12px; padding: 14px; cursor: pointer; }
   .transfer-item label > span { display: grid; flex: 1; min-width: 0; gap: 5px; }
-  .transfer-item strong { font-size: 13px; font-weight: 500; overflow-wrap: anywhere; }
-  .transfer-item small { color: var(--muted); font-size: 11px; overflow-wrap: anywhere; }
-  .transfer-item em { font-size: 10px; font-style: normal; color: var(--violet); white-space: nowrap; }
+  .transfer-item strong { font-size: calc(13px * var(--text-scale)); font-weight: 500; overflow-wrap: anywhere; }
+  .transfer-item small { color: var(--muted); font-size: calc(11px * var(--text-scale)); overflow-wrap: anywhere; }
+  .transfer-item em { font-size: calc(10px * var(--text-scale)); font-style: normal; color: var(--violet); white-space: nowrap; }
   details { padding: 0 14px 12px 41px; }
-  summary { color: var(--subtle); font-size: 11px; cursor: pointer; }
+  summary { color: var(--subtle); font-size: calc(11px * var(--text-scale)); cursor: pointer; }
   .value-comparison { display: flex; flex-wrap: wrap; gap: 12px; padding-top: 12px; }
   .value-comparison > div { flex: 1 1 240px; min-width: 0; }
-  h4 { margin: 0 0 6px; font-size: 11px; color: var(--muted); }
-  pre { max-height: 220px; overflow: auto; padding: 10px; white-space: pre-wrap; overflow-wrap: anywhere; background: #090c14; font-size: 11px; line-height: 1.6; }
-  .transfer-empty { padding: 45px 0; text-align: center; color: var(--subtle); font-size: 13px; }
+  h4 { margin: 0 0 6px; font-size: calc(11px * var(--text-scale)); color: var(--muted); }
+  pre { max-height: 220px; overflow: auto; padding: 10px; white-space: pre-wrap; overflow-wrap: anywhere; background: var(--field-bg); font-size: calc(11px * var(--text-scale)); line-height: 1.6; }
+  .transfer-empty { padding: 45px 0; text-align: center; color: var(--subtle); font-size: calc(13px * var(--text-scale)); }
   .workspace-dialog-error { margin-bottom: 14px; }
-  footer { display: flex; flex-shrink: 0; flex-wrap: wrap; align-items: center; gap: 12px; padding: 18px 22px; border-top: 1px solid var(--border); background: #090c14; }
+  footer { display: flex; flex-shrink: 0; flex-wrap: wrap; align-items: center; gap: 12px; padding: 18px 22px; border-top: 1px solid var(--border); background: var(--field-bg); }
   footer > div { display: grid; flex: 1; gap: 6px; min-width: 200px; }
-  footer strong { font-size: 12px; }
-  footer small { font-size: 11px; color: var(--muted); }
+  footer strong { font-size: calc(12px * var(--text-scale)); }
+  footer small { font-size: calc(11px * var(--text-scale)); color: var(--muted); }
   footer button { display: inline-flex; align-items: center; gap: 8px; }
   @media (max-width: 600px) {
     .transfer-dialog { width: calc(100vw - 20px); max-height: calc(100dvh - 20px); }

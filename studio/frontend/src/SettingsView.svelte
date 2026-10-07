@@ -1,10 +1,11 @@
 <script lang="ts">
-  import { ArrowLeftRight, Bot, BrainCircuit, Cpu, Network, Server, SlidersHorizontal, Unplug } from '@lucide/svelte';
+  import { ArrowLeftRight, Bot, BrainCircuit, Cpu, Network, Palette, Server, SlidersHorizontal, Unplug } from '@lucide/svelte';
   import { onMount } from 'svelte';
   import { requestJSON } from './api';
   import IntegrationsView from './IntegrationsView.svelte';
   import SubagentsView from './SubagentsView.svelte';
   import ModelsPanel from './settings/ModelsPanel.svelte';
+  import AppearancePanel from './settings/AppearancePanel.svelte';
   import ProvidersPanel from './settings/ProvidersPanel.svelte';
   import SystemOnePanel from './settings/SystemOnePanel.svelte';
   import RuntimePanel from './settings/RuntimePanel.svelte';
@@ -16,6 +17,7 @@
   // The cache and write queue survive section and page navigation.
   export let active = false;
   const settingsSections = [
+    { id: 'appearance' as const, label: 'Appearance', description: 'Theme and text size', icon: Palette },
     { id: 'models' as const, label: 'Models', description: 'Chat, embedding, and role assignments', icon: Cpu },
     { id: 'providers' as const, label: 'Providers', description: 'Gateway upstream providers', icon: Network },
     { id: 'system-one' as const, label: 'System One', description: 'Decision API and access keys', icon: BrainCircuit },
@@ -127,7 +129,7 @@
 
   <div class="settings-layout" hidden={!active}>
     <aside class="settings-index" aria-label="Settings sections">
-      <div class="scope-label">GLOBAL</div>
+      <div class="scope-label">SETTINGS</div>
       {#each settingsSections as section}
         {@const SectionIcon = section.icon}
         <button class:active={activeSection === section.id} onclick={() => chooseSettingsSection(section.id)}><SectionIcon aria-hidden="true" size={18} strokeWidth={1.7} /><span><strong>{section.label}</strong><small>{section.description}</small></span></button>
@@ -135,8 +137,10 @@
     </aside>
 
     <div class="settings-content">
-      <div class="save-state" class:error={saveState.kind === 'error'} aria-live="polite">{saveState.kind === 'saving' ? 'Saving…' : saveState.kind === 'saved' ? 'Saved' : saveState.kind === 'error' ? saveState.message : 'Changes save automatically'}</div>
-      {#if settingsError}
+      <div class="save-state" hidden={activeSection === 'appearance'} class:error={saveState.kind === 'error'} aria-live="polite">{saveState.kind === 'saving' ? 'Saving…' : saveState.kind === 'saved' ? 'Saved' : saveState.kind === 'error' ? saveState.message : 'Changes save automatically'}</div>
+      {#if activeSection === 'appearance'}
+        <AppearancePanel />
+      {:else if settingsError}
         <section class="error-panel"><h2>Settings unavailable</h2><p>{settingsError}</p><button class="retry" onclick={loadSettings}>Retry</button></section>
       {:else if !settings}
         <section class="loading-panel">Loading settings…</section>
