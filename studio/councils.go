@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/snowmerak/q/app"
 	"github.com/snowmerak/q/config"
 	"github.com/snowmerak/q/council"
 	"github.com/snowmerak/q/worklock"
@@ -143,7 +144,33 @@ func (service *councilService) prepare(input councilInput) (council.Council, err
 	if err := council.Validate(value); err != nil {
 		return council.Council{}, err
 	}
+	if err := service.validateConnections(value); err != nil {
+		return council.Council{}, err
+	}
 	return value, nil
+}
+
+func (service *councilService) validateConnections(value council.Council) error {
+	var settings config.Config
+	loaded := false
+	for _, seat := range append(append([]council.Seat(nil), value.Members...), value.Chair) {
+		if seat.Agent == "" {
+			continue
+		}
+		if !loaded {
+			var err error
+			settings, err = service.settings.Load()
+			if err != nil {
+				return err
+			}
+			loaded = true
+		}
+		connection, found := settings.Agents.Connections[seat.Agent]
+		if !found || connection.Disabled {
+			return fmt.Errorf("ACP connection %q is unavailable", seat.Agent)
+		}
+	}
+	return nil
 }
 
 func (service *councilService) projectRoots(id string) ([]string, error) {
@@ -386,7 +413,7 @@ func (service *councilService) serveRetry(writer http.ResponseWriter, request *h
 	if len(source.Members) > 0 {
 		value.Members = append([]council.Seat(nil), source.Members...)
 	}
-	if source.Chair.Model != "" {
+	if source.Chair.Model != "" || source.Chair.Agent != "" {
 		value.Chair = source.Chair
 	}
 	if source.TotalRounds > 0 {
@@ -472,10 +499,6 @@ func (service *councilService) execute(ctx context.Context, cancel context.Cance
 		turn.Error = err.Error()
 		_ = service.store.SaveTurn(turn)
 	}
-	if service.provider == nil {
-		fail(errors.New("Studio council model runtime is unavailable"))
-		return
-	}
 	settings, err := service.settings.Load()
 	if errors.Is(err, config.ErrNotFound) {
 		settings, err = config.Default(), nil
@@ -524,7 +547,8 @@ func (service *councilService) execute(ctx context.Context, cancel context.Cance
 	if resume {
 		runner = council.Resume
 	}
-	turn, err = runner(ctx, service.provider, value, history, turn, roots, sessionRoot, settings.EffectiveAgents().MaxParallel, func(progress council.Turn) error {
+	host := app.NewParticipantRunner(ctx, service.provider, settings.Agents.Connections)
+	turn, err = runner(ctx, host, value, history, turn, roots, sessionRoot, settings.EffectiveAgents().MaxParallel, func(progress council.Turn) error {
 		turn = progress
 		return service.store.SaveTurn(progress)
 	})

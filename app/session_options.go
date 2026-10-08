@@ -15,7 +15,9 @@ import (
 // execution, persistence or recovery. RuntimeFactory owns the entire authorized
 // catalog; Q does not add delegation or external tools to an injected runtime.
 type SessionOptions struct {
-	Model                string
+	Model string
+	// Agent selects a registered ACP connection through ParticipantRunner.
+	Agent                string
 	ReasoningEffort      string
 	AnthropicPromptCache string
 	SystemPrompt         string
@@ -59,6 +61,9 @@ func (m model) startSessionOperation(prompt, id string) (tea.Model, tea.Cmd) {
 // RunWithOptions runs through the same live session used by Run and Studio.
 // Keep RuntimeKey stable while the injected runtime's authorization is unchanged.
 func (host *SessionHost) RunWithOptions(ctx context.Context, store workspace.Store, sessionID, prompt string, options SessionOptions, emit SessionEventSink) error {
+	if options.Agent != "" {
+		return errors.New("ACP sessions require a participant runner")
+	}
 	if options.RuntimeFactory != nil && options.RuntimeKey == "" {
 		return errors.New("injected session runtime requires a runtime key")
 	}

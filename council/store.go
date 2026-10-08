@@ -16,6 +16,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/snowmerak/q/config"
 	"github.com/snowmerak/q/internal/fsreplace"
 	"github.com/snowmerak/q/workspace"
 )
@@ -34,8 +35,17 @@ const (
 )
 
 type Seat struct {
-	Model           string `json:"model"`
+	Model           string `json:"model,omitempty"`
+	Agent           string `json:"agent,omitempty"`
 	ReasoningEffort string `json:"reasoning_effort,omitempty"`
+}
+
+// Identity is the display identity; the seat's position identifies its session.
+func (s Seat) Identity() string {
+	if s.Agent != "" {
+		return "acp/" + s.Agent
+	}
+	return s.Model
 }
 
 type Council struct {
@@ -54,13 +64,15 @@ type Council struct {
 
 type Response struct {
 	Label string `json:"label"`
-	Model string `json:"model"`
+	Model string `json:"model,omitempty"`
+	Agent string `json:"agent,omitempty"`
 	Text  string `json:"text,omitempty"`
 	Error string `json:"error,omitempty"`
 }
 
 type Review struct {
-	Model         string   `json:"model"`
+	Model         string   `json:"model,omitempty"`
+	Agent         string   `json:"agent,omitempty"`
 	Text          string   `json:"text,omitempty"`
 	Ranking       []string `json:"ranking,omitempty"`
 	RevisedAnswer string   `json:"revised_answer,omitempty"`
@@ -150,7 +162,7 @@ func Validate(value Council) error {
 		return errors.New("unknown council scope")
 	}
 	if len(value.Members) < 2 || len(value.Members) > 8 {
-		return errors.New("council requires 2 to 8 member models")
+		return errors.New("council requires 2 to 8 participants")
 	}
 	if rounds := EffectiveRounds(value); rounds < 1 || rounds > MaximumRounds {
 		return fmt.Errorf("council rounds must be between 1 and %d", MaximumRounds)
@@ -160,7 +172,7 @@ func Validate(value Council) error {
 		if err := validateSeat(member); err != nil {
 			return err
 		}
-		if seen[member.Model] {
+		if member.Model != "" && seen[member.Model] {
 			return fmt.Errorf("duplicate council member model %q", member.Model)
 		}
 		seen[member.Model] = true
@@ -176,6 +188,15 @@ func EffectiveRounds(value Council) int {
 }
 
 func validateSeat(seat Seat) error {
+	if seat.Agent != "" {
+		if seat.Model != "" || seat.ReasoningEffort != "" {
+			return errors.New("ACP participant cannot specify a model or reasoning effort")
+		}
+		if !config.ValidAgentConnectionID(seat.Agent) {
+			return errors.New("invalid ACP connection ID")
+		}
+		return nil
+	}
 	if seat.Model == "" || seat.Model != strings.TrimSpace(seat.Model) || strings.HasPrefix(seat.Model, "group/") {
 		return errors.New("select a concrete model")
 	}

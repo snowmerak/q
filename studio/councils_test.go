@@ -294,3 +294,60 @@ func TestStudioCouncilCreationSupportsWorkspaceAndProject(t *testing.T) {
 		t.Fatalf("project council = %+v", projectCouncil)
 	}
 }
+
+func TestStudioCouncilACPConfigurationPersistsAndValidatesConnections(t *testing.T) {
+	dir := t.TempDir()
+	settings := config.Default()
+	settings.Provider.Model = "test/one"
+	settings.Agents.Connections = map[string]config.AgentConnectionConfig{
+		"research": {Command: "test-acp"},
+		"disabled": {Command: "test-acp", Disabled: true},
+	}
+	store := config.Store{Dir: dir}
+	if err := store.Save(settings); err != nil {
+		t.Fatal(err)
+	}
+	handler, commits, sessions, err := newHandlerRuntime(t.Context(), store, councilTestHost{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer commits.Close()
+	defer sessions.Close()
+	input := councilInput{Name: "Mixed council", Scope: council.Independent,
+		Members: []council.Seat{{Model: "test/one"}, {Agent: "research"}}, Chair: council.Seat{Agent: "research"}, Rounds: 3}
+	var created council.Council
+	if status := councilAPI(t, handler, http.MethodPost, "/api/v1/councils", input, &created); status != http.StatusCreated {
+		t.Fatalf("create = %d", status)
+	}
+	var detail councilDetail
+	councilAPI(t, handler, http.MethodGet, "/api/v1/councils/"+created.ID, nil, &detail)
+	if detail.Council.Members[1].Agent != "research" || detail.Council.Chair.Agent != "research" {
+		t.Fatalf("lost ACP assignments: %+v", detail.Council)
+	}
+	for _, connection := range []string{"missing", "disabled"} {
+		input.Members[1].Agent = connection
+		if status := councilAPI(t, handler, http.MethodPost, "/api/v1/councils", input, nil); status != http.StatusUnprocessableEntity {
+			t.Fatalf("invalid connection %s accepted: %d", connection, status)
+		}
+	}
+	source, err := council.NewTurn(created, "Retry original ACP settings")
+	if err != nil {
+		t.Fatal(err)
+	}
+	source.Status = "failed"
+	if err := sessions.councils.store.SaveTurn(source); err != nil {
+		t.Fatal(err)
+	}
+	changed := created
+	changed.Members = []council.Seat{{Model: "test/one"}, {Model: "test/two"}}
+	changed.Chair = council.Seat{Model: "test/chair"}
+	if _, err := sessions.councils.store.Update(changed); err != nil {
+		t.Fatal(err)
+	}
+	var rerun council.Turn
+	status := councilAPI(t, handler, http.MethodPost, "/api/v1/councils/"+created.ID+"/runs/"+source.ID+"/retry", councilRetryInput{Mode: "rerun"}, &rerun)
+	if status != http.StatusAccepted || rerun.Members[1].Agent != "research" || rerun.Chair.Agent != "research" {
+		t.Fatalf("retry did not retain original ACP assignments: %d %+v", status, rerun)
+	}
+
+}

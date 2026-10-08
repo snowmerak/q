@@ -6,10 +6,10 @@
   import type { ModelOption } from './settings/types';
   import type { StudioProject } from './sessions/types';
 
-  type Seat = { model: string; reasoning_effort?: string };
+  type Seat = { model?: string; agent?: string; reasoning_effort?: string };
   type Council = { id: string; name: string; scope: 'independent' | 'workspace' | 'project'; workspace_root?: string; project_id?: string; members: Seat[]; chair: Seat; rounds?: number; updated_at: string };
-  type Opinion = { label: string; model: string; text?: string; error?: string };
-  type Review = { model: string; text?: string; error?: string };
+  type Opinion = { label: string; model?: string; agent?: string; text?: string; error?: string };
+  type Review = { model?: string; agent?: string; text?: string; error?: string };
   type CouncilRound = { number: number; responses?: Opinion[]; reviews?: Review[] };
   type Turn = { id: string; rerun_of?: string; prompt: string; members: Seat[]; chair: Seat; status: string; stage: string; total_rounds?: number; current_round?: number; rounds?: CouncilRound[]; responses: Opinion[]; reviews: Review[]; final?: string; error?: string; created_at: string };
 
@@ -17,6 +17,7 @@
   let selected: Council | null = null;
   let turns: Turn[] = [];
   let models: ModelOption[] = [];
+  let connections: Record<string, { disabled?: boolean }> = {};
   let projects: StudioProject[] = [];
   let loading = true;
   let saving = false;
@@ -37,6 +38,17 @@
 
   $: activeTurn = [...turns].reverse().find((turn) => turn.status === 'queued' || turn.status === 'running');
   $: concreteModels = models.filter((model) => !model.group);
+  $: participantChoices = [...concreteModels.map((model) => ({ value: model.id, label: model.id })), ...Object.keys(connections).filter((id) => !connections[id].disabled).sort().map((id) => ({ value: `agent:${id}`, label: `ACP · ${id}` }))];
+
+  function identity(seat: Seat): string { return seat.agent ? `acp/${seat.agent}` : seat.model || ''; }
+  function choice(seat: Seat): string { return seat.agent ? `agent:${seat.agent}` : seat.model || ''; }
+  function seatFor(value: string): Seat { return value.startsWith('agent:') ? { agent: value.slice(6) } : { model: value, reasoning_effort: '' }; }
+  function changeMember(index: number, value: string) { draftMembers = draftMembers.map((seat, at) => at === index ? seatFor(value) : seat); }
+  function defaultSeats(): Seat[] {
+    const choices = participantChoices.slice(0, 2);
+    if (choices.length === 1 && choices[0].value.startsWith('agent:')) choices.push(choices[0]);
+    return choices.map((option) => seatFor(option.value));
+  }
 
   async function request<T>(path: string, method = 'GET', body?: unknown): Promise<T> {
     const response = await fetch(path, { method, headers: { Accept: 'application/json', ...(body === undefined ? {} : { 'Content-Type': 'application/json' }) }, body: body === undefined ? undefined : JSON.stringify(body) });
@@ -55,16 +67,19 @@
   }
 
   async function loadReferenceData() {
-    const [catalog, projectList] = await Promise.all([
-      request<{ models: ModelOption[] }>('/api/v1/settings/models'),
-      request<{ projects: StudioProject[] }>('/api/v1/projects')
+    const [catalog, projectList, agents] = await Promise.all([
+      request<{ models: ModelOption[] }>('/api/v1/settings/models').catch(() => ({ models: [] })),
+      request<{ projects: StudioProject[] }>('/api/v1/projects'),
+      request<{ connections: Record<string, { disabled?: boolean }> }>('/api/v1/settings/subagents')
     ]);
     models = catalog.models || [];
     projects = projectList.projects || [];
+    connections = agents.connections || {};
     if (draftMembers.length === 0) {
-      const choices = models.filter((model) => !model.group);
-      draftMembers = choices.slice(0, 2).map((model) => ({ model: model.id, reasoning_effort: '' }));
-      draftChair = { model: choices[0]?.id || '', reasoning_effort: '' };
+      const choices = [...models.filter((model) => !model.group).map((model) => model.id), ...Object.keys(connections).filter((id) => !connections[id].disabled).sort().map((id) => `agent:${id}`)];
+      draftMembers = choices.slice(0, 2).map(seatFor);
+      if (draftMembers.length === 1 && draftMembers[0].agent) draftMembers.push({ ...draftMembers[0] });
+      draftChair = seatFor(choices[0] || '');
     }
   }
 
@@ -116,9 +131,8 @@
     draftScope = 'independent';
     draftRoot = '';
     draftProject = '';
-    const choices = concreteModels;
-    draftMembers = choices.slice(0, 2).map((model) => ({ model: model.id, reasoning_effort: '' }));
-    draftChair = { model: choices[0]?.id || '', reasoning_effort: '' };
+    draftMembers = defaultSeats();
+    draftChair = seatFor(participantChoices[0]?.value || '');
     draftRounds = 2;
     window.history.pushState({}, '', '/councils');
   }
@@ -176,9 +190,9 @@
   }
 
   function addMember() {
-    const used = new Set(draftMembers.map((seat) => seat.model));
-    const model = concreteModels.find((option) => !used.has(option.id));
-    if (model && draftMembers.length < 8) draftMembers = [...draftMembers, { model: model.id, reasoning_effort: '' }];
+    const used = new Set(draftMembers.map(choice));
+    const selected = participantChoices.find((option) => !used.has(option.value)) || participantChoices.find((option) => option.value.startsWith('agent:'));
+    if (selected && draftMembers.length < 8) draftMembers = [...draftMembers, seatFor(selected.value)];
   }
 
   function removeMember(index: number) { draftMembers = draftMembers.filter((_, at) => at !== index); }
@@ -214,7 +228,7 @@
   }
 
   function opinions(turn: Turn, round: CouncilRound): Opinion[] {
-    return turn.members.map((seat, index) => round.responses?.[index] || { label: String.fromCharCode(65 + index), model: seat.model });
+    return turn.members.map((seat, index) => round.responses?.[index] || { label: String.fromCharCode(65 + index), model: seat.model, agent: seat.agent });
   }
 
   function shownOpinion(turn: Turn, round: CouncilRound, selectedLabel?: string): Opinion | undefined {
@@ -279,27 +293,28 @@
         <strong>{item.name}</strong><small>{item.scope}{item.scope === 'project' ? ` · ${projects.find((project) => project.id === item.project_id)?.name || 'Project'}` : ''}</small>
       </button>
     {/each}
-    {#if !loading && councils.length === 0}<p class="muted">Create a council to bring several models into one conversation.</p>{/if}
+    {#if !loading && councils.length === 0}<p class="muted">Create a council to bring models and ACP agents into one conversation.</p>{/if}
   </aside>
 
   <div class="council-content">
     {#if error}<p class="council-error" role="alert">{error}</p>{/if}
     {#if creating || selected}
-      <div class="council-heading"><div><h2>{selected ? selected.name : 'New council'}</h2>{#if selected}<p>{selected.members.length} members · {selected.rounds || 2} rounds · {selected.scope} · Chair: {selected.chair.model}</p>{/if}</div>{#if selected}<div class="council-heading-actions"><details class="export-menu"><summary>Export history ▾</summary><div><a href={`/api/v1/councils/${encodeURIComponent(selected.id)}/export?format=md`}>Markdown</a><a href={`/api/v1/councils/${encodeURIComponent(selected.id)}/export?format=json`}>JSON</a></div></details><button onclick={() => { settingsOpen = !settingsOpen; }}>{settingsOpen ? 'Hide settings' : 'Configure'}</button><button class="danger" onclick={deleteCouncil} disabled={!!activeTurn}>Delete</button></div>{/if}</div>
+      <div class="council-heading"><div><h2>{selected ? selected.name : 'New council'}</h2>{#if selected}<p>{selected.members.length} members · {selected.rounds || 2} rounds · {selected.scope} · Chair: {identity(selected.chair)}</p>{/if}</div>{#if selected}<div class="council-heading-actions"><details class="export-menu"><summary>Export history ▾</summary><div><a href={`/api/v1/councils/${encodeURIComponent(selected.id)}/export?format=md`}>Markdown</a><a href={`/api/v1/councils/${encodeURIComponent(selected.id)}/export?format=json`}>JSON</a></div></details><button onclick={() => { settingsOpen = !settingsOpen; }}>{settingsOpen ? 'Hide settings' : 'Configure'}</button><button class="danger" onclick={deleteCouncil} disabled={!!activeTurn}>Delete</button></div>{/if}</div>
       {#if creating || settingsOpen}<div class="council-settings">
         <label>Name <input bind:value={draftName} maxlength="120" /></label>
         <label>Scope <select bind:value={draftScope} disabled={!!selected}><option value="independent">Independent</option><option value="workspace">Workspace</option><option value="project">Project</option></select></label>
         {#if draftScope === 'workspace'}<label class="full">Workspace directory <input bind:value={draftRoot} placeholder="Absolute repository path" disabled={!!selected} /></label>{/if}
         {#if draftScope === 'project'}<label class="full">Studio project <select bind:value={draftProject} disabled={!!selected}><option value="">Select a project</option>{#each projects as project}<option value={project.id}>{project.name}</option>{/each}</select></label>{/if}
-        <div class="full seat-heading"><strong>Participating models</strong><button onclick={addMember} disabled={draftMembers.length >= 8}>Add model</button></div>
+        <div class="full seat-heading"><strong>Participants</strong><button onclick={addMember} disabled={draftMembers.length >= 8}>Add participant</button></div>
         {#each draftMembers as seat, index}
-          <div class="full seat-row"><span>{index + 1}</span><select bind:value={seat.model} onchange={() => { seat.reasoning_effort = ''; draftMembers = [...draftMembers]; }} aria-label={`Model for member ${index + 1}`}>{#each concreteModels as model}<option value={model.id} disabled={draftMembers.some((other, at) => at !== index && other.model === model.id)}>{model.id}</option>{/each}</select><select bind:value={seat.reasoning_effort} aria-label={`Reasoning for member ${index + 1}`}><option value="">Provider default</option>{#each reasoningOptions(seat.model, seat.reasoning_effort || '', models) as effort}<option value={effort}>{effort}</option>{/each}</select><button onclick={() => moveMember(index, -1)} disabled={index === 0} aria-label="Move up">↑</button><button onclick={() => moveMember(index, 1)} disabled={index === draftMembers.length - 1} aria-label="Move down">↓</button><button onclick={() => removeMember(index)} disabled={draftMembers.length <= 2} aria-label="Remove member">×</button></div>
+          <div class="full seat-row"><span>{index + 1}</span><select value={choice(seat)} onchange={(event) => changeMember(index, event.currentTarget.value)} aria-label={`Model for member ${index + 1}`}>{#if !participantChoices.some((option) => option.value === choice(seat))}<option value={choice(seat)}>{identity(seat)} · unavailable</option>{/if}{#each participantChoices as option}<option value={option.value} disabled={!option.value.startsWith('agent:') && draftMembers.some((other, at) => at !== index && choice(other) === option.value)}>{option.label}</option>{/each}</select>{#if seat.agent}<span class="seat-defaults muted">Agent defaults</span>{:else}<select bind:value={seat.reasoning_effort} aria-label={`Reasoning for member ${index + 1}`}><option value="">Provider default</option>{#each reasoningOptions(seat.model || '', seat.reasoning_effort || '', models) as effort}<option value={effort}>{effort}</option>{/each}</select>{/if}<button onclick={() => moveMember(index, -1)} disabled={index === 0} aria-label="Move up">↑</button><button onclick={() => moveMember(index, 1)} disabled={index === draftMembers.length - 1} aria-label="Move down">↓</button><button onclick={() => removeMember(index)} disabled={draftMembers.length <= 2} aria-label="Remove member">×</button></div>
         {/each}
-        <label>Chair model <select bind:value={draftChair.model} onchange={() => { draftChair.reasoning_effort = ''; draftChair = { ...draftChair }; }}>{#each concreteModels as model}<option value={model.id}>{model.id}</option>{/each}</select></label>
-        <label>Chair reasoning <select bind:value={draftChair.reasoning_effort}><option value="">Provider default</option>{#each reasoningOptions(draftChair.model, draftChair.reasoning_effort || '', models) as effort}<option value={effort}>{effort}</option>{/each}</select></label>
+        <label>Chair model <select value={choice(draftChair)} onchange={(event) => { draftChair = seatFor(event.currentTarget.value); }}>{#if !participantChoices.some((option) => option.value === choice(draftChair))}<option value={choice(draftChair)}>{identity(draftChair)} · unavailable</option>{/if}{#each participantChoices as option}<option value={option.value}>{option.label}</option>{/each}</select></label>
+        <label>Chair reasoning <select disabled={!!draftChair.agent} bind:value={draftChair.reasoning_effort}><option value="">Provider default</option>{#each reasoningOptions(draftChair.model || '', draftChair.reasoning_effort || '', models) as effort}<option value={effort}>{effort}</option>{/each}</select></label>
         <label>Rounds <select bind:value={draftRounds}>{#each [1, 2, 3, 4, 5, 6] as count}<option value={count}>{count}</option>{/each}</select></label>
-        <p class="rounds-note">Round 1: independent answers · Round 2: peer reviews · Later rounds: integrated reviews of answers and feedback. At least {draftMembers.length * draftRounds + 1} model calls including the chair; later prompts also include previous feedback.</p>
-        <div class="full actions"><button class="primary" onclick={saveCouncil} disabled={saving || concreteModels.length < 2}>{saving ? 'Saving…' : selected ? 'Save settings' : 'Create council'}</button></div>
+        <p class="rounds-note">ACP connections are registered in Settings · Subagents and use agent defaults. Configure the external agent for read-only access.</p>
+        <p class="rounds-note">Round 1: independent answers · Round 2: peer reviews · Later rounds: integrated reviews of answers and feedback. At least {draftMembers.length * draftRounds + 1} participant calls including the chair; later prompts also include previous feedback.</p>
+        <div class="full actions"><button class="primary" onclick={saveCouncil} disabled={saving || draftMembers.length < 2 || draftMembers.some((seat) => !choice(seat)) || !choice(draftChair)}>{saving ? 'Saving…' : selected ? 'Save settings' : 'Create council'}</button></div>
       </div>{/if}
       {#if selected}
         <div class="council-conversation">
@@ -311,32 +326,32 @@
           {/if}
           {#each [...turns].reverse() as turn}
             <article class="council-turn">
-              <div class="turn-meta"><span>{new Date(turn.created_at).toLocaleString()}{turn.rerun_of ? ' · Rerun' : ''}</span><div class="turn-actions"><span class="turn-status">{turn.status === 'running' ? 'Deliberating' : turn.status}</span>{#if !['queued', 'running'].includes(turn.status)}{#if ['failed', 'cancelled', 'interrupted'].includes(turn.status)}<button onclick={() => retryTurn(turn, 'resume')} disabled={!!activeTurn || !!retrying}>Resume saved progress</button>{/if}<button onclick={() => retryTurn(turn, 'rerun')} disabled={!!activeTurn || !!retrying} title="Create a new turn with the same question and model settings">Rerun turn</button>{/if}</div></div>
+              <div class="turn-meta"><span>{new Date(turn.created_at).toLocaleString()}{turn.rerun_of ? ' · Rerun' : ''}</span><div class="turn-actions"><span class="turn-status">{turn.status === 'running' ? 'Deliberating' : turn.status}</span>{#if !['queued', 'running'].includes(turn.status)}{#if ['failed', 'cancelled', 'interrupted'].includes(turn.status)}<button onclick={() => retryTurn(turn, 'resume')} disabled={!!activeTurn || !!retrying}>Resume saved progress</button>{/if}<button onclick={() => retryTurn(turn, 'rerun')} disabled={!!activeTurn || !!retrying} title="Create a new turn with the same question and participant settings">Rerun turn</button>{/if}</div></div>
               <h4 class="turn-question">{turn.prompt}</h4>
               <div class="stage-track" aria-label="Council stages">
                 {#each Array.from({ length: roundCount(turn) }, (_, index) => index + 1) as number}
                   {@const round = roundAt(turn, number)}
                   <div class:done={stageState(turn, number) === 'done'} class:active={stageState(turn, number) === 'active'} class:failed={turn.status === 'failed' && turn.stage !== 'synthesis' && currentRound(turn) === number}><span class="stage-number">{number}</span><span>{number === 1 ? 'Independent opinions' : number === 2 ? 'Peer review' : 'Integrated review'}<small>{readyCount(number === 1 ? round.responses : round.reviews)} / {turn.members.length} finished</small></span></div>
                 {/each}
-                <div class:done={stageState(turn, roundCount(turn) + 1) === 'done'} class:active={stageState(turn, roundCount(turn) + 1) === 'active'} class:failed={turn.status === 'failed' && turn.stage === 'synthesis'}><span class="stage-number">★</span><span>Chair synthesis<small>{turn.status === 'failed' && turn.stage === 'synthesis' ? `Failed · ${turn.chair.model}` : turn.final ? turn.chair.model : turn.stage === 'synthesis' ? 'Writing answer' : 'Waiting'}</small></span></div>
+                <div class:done={stageState(turn, roundCount(turn) + 1) === 'done'} class:active={stageState(turn, roundCount(turn) + 1) === 'active'} class:failed={turn.status === 'failed' && turn.stage === 'synthesis'}><span class="stage-number">★</span><span>Chair synthesis<small>{turn.status === 'failed' && turn.stage === 'synthesis' ? `Failed · ${identity(turn.chair)}` : turn.final ? identity(turn.chair) : turn.stage === 'synthesis' ? 'Writing answer' : 'Waiting'}</small></span></div>
               </div>
               {#if turn.error}<section class="turn-failure" role="alert" aria-label="Council turn error"><strong>{turn.status === 'failed' && turn.stage === 'synthesis' ? 'Chair synthesis failed' : turn.status === 'cancelled' ? 'Council turn cancelled' : 'Council turn failed'}</strong><p>{turn.error}</p></section>{/if}
-              {#if turn.final}<section class="final-answer" aria-label="Chair synthesis"><div class="section-caption"><span>CHAIR'S ANSWER</span><small>{turn.chair.model}</small></div><Markdown content={turn.final} /></section>{/if}
+              {#if turn.final}<section class="final-answer" aria-label="Chair synthesis"><div class="section-caption"><span>CHAIR'S ANSWER</span><small>{identity(turn.chair)}</small></div><Markdown content={turn.final} /></section>{/if}
               {#each visibleRounds(turn) as round}
                 {@const opinion = shownOpinion(turn, round, selectedAnswers[`${turn.id}-${round.number}`])}
                 <section class="deliberation-section">
-                  <div class="section-caption"><span>{String(round.number).padStart(2, '0')} · {round.number === 1 ? 'INDEPENDENT OPINIONS' : round.number === 2 ? 'PEER REVIEW' : 'INTEGRATED REVIEW'}</span><small>{round.number === 1 ? 'Each model answered independently' : round.number === 2 ? 'Anonymous evaluation of first answers' : 'Reviewing prior answers and feedback'}</small></div>
+                  <div class="section-caption"><span>{String(round.number).padStart(2, '0')} · {round.number === 1 ? 'INDEPENDENT OPINIONS' : round.number === 2 ? 'PEER REVIEW' : 'INTEGRATED REVIEW'}</span><small>{round.number === 1 ? 'Each participant answered independently' : round.number === 2 ? 'Anonymous evaluation of first answers' : 'Reviewing prior answers and feedback'}</small></div>
                   {#if round.number === 1 || hasAnswers(round)}
                     <div class="opinion-tabs" role="tablist" aria-label={`Round ${round.number} answers for ${turn.prompt}`}>
                       {#each opinions(turn, round) as answer}
                         <button role="tab" aria-selected={opinion?.label === answer.label} class:active={opinion?.label === answer.label} onclick={() => { selectedAnswers = { ...selectedAnswers, [`${turn.id}-${round.number}`]: answer.label }; }}>
-                          <strong>{answer.label}</strong><span>{answer.model}</span><small>{answer.error ? 'Failed' : answer.text ? 'Ready' : 'Waiting'}</small>
+                          <strong>{answer.label}</strong><span>{identity(answer)}</span><small>{answer.error ? 'Failed' : answer.text ? 'Ready' : 'Waiting'}</small>
                         </button>
                       {/each}
                     </div>
                     {#if opinion}
                       <div class="opinion-panel" role="tabpanel">
-                        <div class="opinion-title"><strong>Answer {opinion.label}</strong><span>{opinion.model}</span></div>
+                        <div class="opinion-title"><strong>Answer {opinion.label}</strong><span>{identity(opinion)}</span></div>
                         {#if opinion.error}<p class="council-error">{opinion.error}</p>{:else if opinion.text}<Markdown content={opinion.text} />{:else}<p class="muted">Waiting for this model's answer…</p>{/if}
                       </div>
                     {/if}
@@ -344,7 +359,7 @@
                   {#if round.number >= 2}
                     <div class="review-list">
                       {#each round.reviews || [] as review}
-                        <details><summary><strong>{review.model}</strong><span>{review.error ? 'Failed' : review.text ? 'Reviewed' : 'Reviewing…'}</span></summary>
+                        <details><summary><strong>{identity(review)}</strong><span>{review.error ? 'Failed' : review.text ? 'Reviewed' : 'Reviewing…'}</span></summary>
                           {#if review.error}<p class="council-error">{review.error}</p>{:else if review.text}<Markdown content={reviewText(review)} />{:else}<p class="muted">Waiting for peer review…</p>{/if}
                         </details>
                       {/each}
@@ -352,7 +367,7 @@
                   {/if}
                 </section>
               {/each}
-              {#if turn.status === 'running' && turn.stage === 'synthesis' && !turn.final}<div class="synthesis-pending">Chair {turn.chair.model} is comparing the answers and reviews…</div>{/if}
+              {#if turn.status === 'running' && turn.stage === 'synthesis' && !turn.final}<div class="synthesis-pending">Chair {identity(turn.chair)} is comparing the answers and reviews…</div>{/if}
             </article>
           {/each}
           {#if turns.length === 0}<p class="muted">Ask the council its first question.</p>{/if}
@@ -433,6 +448,6 @@
   .ask-box > div { justify-content: flex-end; }
   .running-controls { display: flex; align-items: center; justify-content: space-between; color: var(--muted); }
   .council-empty { display: grid; justify-items: start; gap: 12px; margin: 30px 0; }
-  @media (max-width: 900px) { .council-view { grid-template-columns: 1fr; } .council-list { border-right: 0; border-bottom: 1px solid var(--border); } .council-settings { grid-template-columns: 1fr; } .seat-row { grid-template-columns: 22px 1fr repeat(3, 32px); } .seat-row select:nth-of-type(2) { grid-column: 2 / -1; grid-row: 2; } }
+  @media (max-width: 900px) { .council-view { grid-template-columns: 1fr; } .council-list { border-right: 0; border-bottom: 1px solid var(--border); } .council-settings { grid-template-columns: 1fr; } .seat-row { grid-template-columns: 22px 1fr repeat(3, 32px); } .seat-row select:nth-of-type(2), .seat-row .seat-defaults { grid-column: 2 / -1; grid-row: 2; } .council-heading { flex-direction: column; gap: 12px; } .council-heading-actions { flex-wrap: wrap; } }
   @media (max-width: 600px) { .stage-track { grid-template-columns: 1fr; } .section-caption { flex-direction: column; align-items: flex-start; } }
 </style>

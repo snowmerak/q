@@ -40,6 +40,17 @@ the complete execution state. Older council turns without Q session references
 can resume using their saved results as explicit input to new sessions; tool
 history from those older runs was never stored and cannot be recovered.
 
+Council ACP seats are run through `app.ParticipantRunner` using an enabled
+`Agents.Connections` entry. Their Q session directory stores `council-acp.json`
+with completed prompts and answers. A seat keeps its ACP process/session for the
+current run. Reopening starts a fresh ACP session with completed exchanges as
+explicit context, rather than depending on optional remote session restoration.
+Completed operation IDs return saved answers; failed or interrupted prompts may
+be attempted again, so this is not exactly-once execution at the external agent.
+ACP seats reject mutating permission requests and do not advertise Q filesystem
+or terminal access. External tools still belong to the agent; its own read-only
+sandbox is required. ACP model, reasoning and cache settings remain agent-owned.
+
 Council sets `SessionOptions.AnthropicPromptCache` to `"1h"` for member sessions
 and `"off"` for the chair session. Q sends this as the Gateway-only
 `q_anthropic_cache` Chat Completions field only when the selected provider is

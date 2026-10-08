@@ -1,5 +1,7 @@
 import { test, expect } from '@playwright/test';
 import { readFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 test('council list appears while model discovery is still pending', async ({ page }) => {
   const council = { id: '55555555-5555-4555-8555-555555555555', name: 'Available council', scope: 'independent', members: [{ model: 'test/one' }, { model: 'test/two' }], chair: { model: 'test/one' } };
@@ -183,4 +185,59 @@ test('failed chair synthesis shows its stored error and stops the progress messa
   });
   await page.getByRole('button', { name: 'Resume saved progress' }).click();
   await expect.poll(() => resumeMode).toBe('resume');
+});
+
+
+test('council saves model and ACP members with an ACP chair', async ({ page, request }) => {
+  const errors = [];
+  page.on('pageerror', (error) => errors.push(error.message));
+  page.on('console', (message) => { if (message.type() === 'error' || message.type() === 'warning') errors.push(message.text()); });
+  const registered = await request.put('/api/v1/settings/subagents', { data: {
+    connections: { research: { command: 'test-acp', args: [], env: {} } }, bindings: {}
+  } });
+  expect(registered.ok()).toBe(true);
+  await page.route('**/api/v1/settings/models', (route) => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ models: [{ id: 'test/one' }, { id: 'test/two' }] }) }));
+  await page.goto('/councils');
+  await expect(page).toHaveTitle(/Q Studio/);
+  await page.getByRole('button', { name: 'New', exact: true }).click();
+  await page.getByLabel('Name', { exact: true }).fill('Mixed ACP council');
+  await page.getByLabel('Model for member 2').selectOption('agent:research');
+  await page.getByLabel('Chair model').selectOption('agent:research');
+  await expect(page.getByLabel('Reasoning for member 2')).toHaveCount(0);
+  await expect(page.getByLabel('Chair reasoning')).toBeDisabled();
+  await page.getByRole('button', { name: 'Create council' }).click();
+  await expect(page.getByRole('heading', { name: 'Mixed ACP council' })).toBeVisible();
+  const id = new URL(page.url()).pathname.split('/').pop();
+  const detail = await (await request.get(`/api/v1/councils/${id}`)).json();
+  expect(detail.council.members).toEqual([{ model: 'test/one' }, { agent: 'research' }]);
+  expect(detail.council.chair).toEqual({ agent: 'research' });
+  await page.reload();
+  await page.getByRole('button', { name: 'Configure', exact: true }).click();
+  await expect(page.getByLabel('Model for member 2')).toHaveValue('agent:research');
+  await expect(page.getByLabel('Chair model')).toHaveValue('agent:research');
+  await expect(page.locator('vite-error-overlay')).toHaveCount(0);
+  await page.screenshot({ path: join(tmpdir(), 'q-council-acp-desktop.png'), fullPage: true });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(page.getByLabel('Model for member 2')).toBeVisible();
+  const layout = await page.locator('.seat-row').nth(1).evaluate((row) => {
+    const defaults = row.querySelector('.seat-defaults').getBoundingClientRect();
+    const buttons = [...row.querySelectorAll('button')].map((button) => button.getBoundingClientRect());
+    return { separated: buttons.every((button) => defaults.top >= button.bottom), width: document.documentElement.clientWidth, scrollWidth: document.documentElement.scrollWidth };
+  });
+  expect(layout.separated).toBe(true);
+  expect(layout.scrollWidth).toBeLessThanOrEqual(layout.width);
+  await page.screenshot({ path: join(tmpdir(), 'q-council-acp-mobile.png'), fullPage: true });
+  expect(errors).toEqual([]);
+});
+
+test('ACP-only council can be configured without model choices', async ({ page }) => {
+  await page.route('**/api/v1/settings/models', (route) => route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ error: 'Model provider is unavailable' }) }));
+  await page.route('**/api/v1/settings/subagents', (route) => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ connections: { research: {}, disabled: { disabled: true } } }) }));
+  await page.goto('/councils');
+  await page.getByRole('button', { name: 'New', exact: true }).click();
+  await expect(page.getByLabel('Model for member 1')).toHaveValue('agent:research');
+  await expect(page.getByLabel('Model for member 2')).toHaveValue('agent:research');
+  await expect(page.getByLabel('Chair model')).toHaveValue('agent:research');
+  await expect(page.getByRole('button', { name: 'Create council' })).toBeEnabled();
+  await expect(page.getByLabel('Model for member 1').locator('option')).toHaveText(['ACP · research']);
 });

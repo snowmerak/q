@@ -211,14 +211,19 @@ Studio is the primary interface for daily Q work:
   Raw also works in directories without Git; Diff reports when Git is unavailable.
 - **Changes** owns staged, unstaged, untracked and renamed files, bounded diffs,
   commit proposal review, split commits, execution, and optional push.
-- **Councils** runs several selected models through independent answers,
+- **Councils** runs selected models and registered ACP agents through independent answers,
   anonymous plain-text peer reviews and a chair synthesis. The default is two
   rounds: first answers, then reviews. Later rounds ask each member to
   integrate earlier feedback into another review; the chair receives the first
   answers and every review. Configure one to six rounds in Studio. Create a
   council without a workspace, or attach one to a workspace or Studio project.
-  Its member and chair models can be changed in Studio. Attached councils use Q's read-only
-  repository tools while forming their first answers. Studio processes share a
+  Its members and chair can use either a model or an enabled global ACP connection
+  registered in Settings > Subagents. ACP seats use the agent's model defaults.
+  Native seats use Q's read-only repository tools. ACP seats reject edit and
+  command permission requests; the external agent must also enforce its own
+  read-only sandbox. Each ACP seat retains its session across rounds, and
+  resumed runs reconstruct completed conversation text from saved exchanges
+  (external tool state is not restored). Studio processes share a
   local SQLite council index; the conversations remain in per-council folders.
   Export the full conversation from Studio as Markdown or JSON, including
   available progress from a turn that is still running.

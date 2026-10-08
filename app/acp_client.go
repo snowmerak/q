@@ -59,6 +59,8 @@ type acpRemoteClient struct {
 	title        string
 	turn         *acpRemoteTurn
 	permissions  acpPermissionMode
+	// Councils require an actual answer and a successfully finished prompt.
+	requireCompletedText bool
 
 	slashCommandsBySession map[acp.SessionId][]slashCommand
 
@@ -306,6 +308,7 @@ func (r *acpRemoteClient) prompt(ctx context.Context, content string, events cha
 	sessionID := r.sessionID
 	root := r.root
 	embeddedContext := r.capabilities.PromptCapabilities.EmbeddedContext
+	requireCompletedText := r.requireCompletedText
 	r.mu.Unlock()
 	defer func() {
 		r.mu.Lock()
@@ -327,6 +330,9 @@ func (r *acpRemoteClient) prompt(ctx context.Context, content string, events cha
 		return nil, 0, r.decorateError("ACP prompt", err)
 	}
 	message, toolCalls := turn.result()
+	if requireCompletedText && (strings.TrimSpace(message.TextContent()) == "" || response.StopReason != acp.StopReasonEndTurn) {
+		return nil, toolCalls, errors.New("ACP participant did not produce a completed textual answer")
+	}
 	if strings.TrimSpace(message.TextContent()) == "" {
 		message.Content = "Agent turn completed without a textual response."
 		if response.StopReason != "" && response.StopReason != acp.StopReasonEndTurn {

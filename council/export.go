@@ -18,7 +18,7 @@ func ExportMarkdown(value Council, turns []Turn) string {
 	if value.ProjectID != "" {
 		fmt.Fprintf(&out, "- Project ID: `%s`\n", value.ProjectID)
 	}
-	fmt.Fprintf(&out, "- Chair: `%s`\n\n", value.Chair.Model)
+	fmt.Fprintf(&out, "- Chair: `%s`\n\n", value.Chair.Identity())
 	if len(turns) == 0 {
 		out.WriteString("_No council turns yet._\n")
 		return out.String()
@@ -30,26 +30,32 @@ func ExportMarkdown(value Council, turns []Turn) string {
 			fmt.Fprintf(&out, "### Round %d — %s\n\n", round.Number, exportRoundName(round.Number))
 			for responseIndex, response := range round.Responses {
 				label, model := response.Label, response.Model
+				if response.Agent != "" {
+					model = "acp/" + response.Agent
+				}
 				if label == "" {
 					label = string(rune('A' + responseIndex))
 				}
 				if model == "" && responseIndex < len(turn.Members) {
-					model = turn.Members[responseIndex].Model
+					model = turn.Members[responseIndex].Identity()
 				}
 				fmt.Fprintf(&out, "#### Answer %s — `%s`\n\n", label, model)
 				writeExportText(&out, response.Text, response.Error)
 			}
 			for reviewIndex, review := range round.Reviews {
 				model := review.Model
+				if review.Agent != "" {
+					model = "acp/" + review.Agent
+				}
 				if model == "" && reviewIndex < len(turn.Members) {
-					model = turn.Members[reviewIndex].Model
+					model = turn.Members[reviewIndex].Identity()
 				}
 				fmt.Fprintf(&out, "#### Review — `%s`\n\n", model)
 				writeExportText(&out, ReviewAnalysis(review.Text), review.Error)
 			}
 		}
 		if turn.Final != "" {
-			fmt.Fprintf(&out, "### Chair synthesis — `%s`\n\n%s\n\n", turn.Chair.Model, strings.TrimSpace(turn.Final))
+			fmt.Fprintf(&out, "### Chair synthesis — `%s`\n\n%s\n\n", turn.Chair.Identity(), strings.TrimSpace(turn.Final))
 		}
 		if turn.Error != "" {
 			fmt.Fprintf(&out, "**Turn error:** %s\n\n", turn.Error)

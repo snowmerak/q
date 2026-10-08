@@ -65,7 +65,7 @@ func run(ctx context.Context, host SessionRunner, value Council, previous []Turn
 	turn.Error = ""
 	for index, seat := range value.Members {
 		if !completeResponse(turn.Responses[index], seat) {
-			turn.Responses[index] = Response{Label: label(index), Model: seat.Model}
+			turn.Responses[index] = Response{Label: label(index), Model: seat.Model, Agent: seat.Agent}
 		}
 	}
 	turn.Rounds[0] = Round{Number: 1, Responses: turn.Responses}
@@ -99,7 +99,7 @@ func run(ctx context.Context, host SessionRunner, value Council, previous []Turn
 			}
 			defer func() { <-semaphore }()
 			answer, err := firstOpinion(ctx, host, seat, turn.Prompt, previous, roots, sessionRoot, turn.MemberSessions[index], "round-1")
-			response := Response{Label: label(index), Model: seat.Model, Text: answer}
+			response := Response{Label: label(index), Model: seat.Model, Agent: seat.Agent, Text: answer}
 			if err != nil {
 				response.Error = err.Error()
 			}
@@ -127,7 +127,7 @@ func run(ctx context.Context, host SessionRunner, value Council, previous []Turn
 		turn.Rounds[number-1].Number = number
 		for index, seat := range value.Members {
 			if !completeReview(turn.Rounds[number-1].Reviews[index], seat) {
-				turn.Rounds[number-1].Reviews[index] = Review{Model: seat.Model}
+				turn.Rounds[number-1].Reviews[index] = Review{Model: seat.Model, Agent: seat.Agent}
 			}
 		}
 		turn.Reviews, turn.Ranking = turn.Rounds[number-1].Reviews, nil
@@ -151,8 +151,8 @@ func run(ctx context.Context, host SessionRunner, value Council, previous []Turn
 				defer func() { <-semaphore }()
 				var peers []Response
 				var own Response
-				for _, response := range valid {
-					if response.Model == seat.Model {
+				for responseIndex, response := range valid {
+					if responseIndex == index {
 						own = response
 					} else {
 						peers = append(peers, response)
@@ -176,7 +176,7 @@ func run(ctx context.Context, host SessionRunner, value Council, previous []Turn
 					}
 				}
 				answer, err := runSeat(ctx, host, seat, system+"\n\n"+user, roots, sessionRoot, turn.MemberSessions[index], fmt.Sprintf("round-%d", number))
-				review := Review{Model: seat.Model, Text: answer}
+				review := Review{Model: seat.Model, Agent: seat.Agent, Text: answer}
 				if err != nil {
 					review.Error = err.Error()
 				}
@@ -216,11 +216,11 @@ func run(ctx context.Context, host SessionRunner, value Council, previous []Turn
 }
 
 func completeResponse(response Response, seat Seat) bool {
-	return response.Model == seat.Model && response.Error == "" && strings.TrimSpace(response.Text) != ""
+	return response.Model == seat.Model && response.Agent == seat.Agent && response.Error == "" && strings.TrimSpace(response.Text) != ""
 }
 
 func completeReview(review Review, seat Seat) bool {
-	return review.Model == seat.Model && review.Error == "" && strings.TrimSpace(review.Text) != ""
+	return review.Model == seat.Model && review.Agent == seat.Agent && review.Error == "" && strings.TrimSpace(review.Text) != ""
 }
 
 func prepareResume(turn *Turn, value Council) error {
@@ -285,6 +285,7 @@ func anonymizeResponses(responses []Response, members []Seat) []Response {
 	copy(result, responses)
 	for index := range result {
 		result[index].Model = ""
+		result[index].Agent = ""
 		result[index].Text = redactModelNames(result[index].Text, members)
 	}
 	return result
@@ -292,7 +293,7 @@ func anonymizeResponses(responses []Response, members []Seat) []Response {
 
 func redactModelNames(value string, members []Seat) string {
 	for _, member := range members {
-		value = strings.ReplaceAll(value, member.Model, "[model identity]")
+		value = strings.ReplaceAll(value, member.Identity(), "[model identity]")
 	}
 	return value
 }
@@ -396,7 +397,7 @@ func runSeat(ctx context.Context, host SessionRunner, seat Seat, prompt string, 
 		system = chairInstructions
 	}
 	options := app.SessionOptions{
-		Model: seat.Model, ReasoningEffort: seat.ReasoningEffort, SystemPrompt: system,
+		Model: seat.Model, Agent: seat.Agent, ReasoningEffort: seat.ReasoningEffort, SystemPrompt: system,
 		DisableLearning: true, RuntimeKey: "council-read-only-v1", OperationID: operationID,
 		AnthropicPromptCache: "1h",
 		RuntimeFactory:       readRuntimeFactory(roots),
@@ -418,10 +419,10 @@ func runSeat(ctx context.Context, host SessionRunner, seat Seat, prompt string, 
 		return nil
 	})
 	if err != nil {
-		return "", fmt.Errorf("model %s request failed: %w", seat.Model, err)
+		return "", fmt.Errorf("participant %s request failed: %w", seat.Identity(), err)
 	}
 	if strings.TrimSpace(result) == "" {
-		return "", fmt.Errorf("model %s returned empty answer", seat.Model)
+		return "", fmt.Errorf("participant %s returned empty answer", seat.Identity())
 	}
 	return result, nil
 }
