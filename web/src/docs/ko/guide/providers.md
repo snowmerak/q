@@ -36,6 +36,8 @@ Studio의 **Settings → Providers**에서 공급자를 추가하고 **Settings 
 
 가능하면 공급자 자격 증명은 환경변수 참조로 설정하세요. 전역 공급자 정의는 `~/.q/providers.json`에 저장됩니다.
 
+API 유형이 `openrouter`인 공급자에게 Q는 `HTTP-Referer: https://q.saturday.ne.kr`와 `X-OpenRouter-Title: Q`를 보냅니다. OpenRouter는 이렇게 식별된 사용량을 공개 앱 순위에 포함할 수 있습니다. 다른 앱 이름을 쓰려면 `~/.q/providers.json`에서 해당 공급자의 `headers`에 원하는 값을 지정하세요. 직접 지정한 값이 Q의 기본값보다 우선합니다.
+
 ## 모델 역할 할당
 
 **Settings → Models**에서 기본 채팅과 `interviewer`, `manager`, `research`, `reviewer`, `coder`, `commit`, `thinker`, `librarian` 같은 전문 역할에 모델을 할당합니다. senior developer는 `reviewer`, junior developer는 `coder` 모델 역할을 사용합니다.

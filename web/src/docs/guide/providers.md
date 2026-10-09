@@ -35,6 +35,8 @@ Provider changes are activated by starting a replacement first. If the replaceme
 
 Use environment-variable references for provider credentials whenever possible. Global provider definitions live in `~/.q/providers.json`.
 
+For providers with API type `openrouter`, Q sends `HTTP-Referer: https://q.saturday.ne.kr` and `X-OpenRouter-Title: Q` to OpenRouter. OpenRouter may include attributed usage in its public app rankings. To use your own app identity, set either header in that provider's `headers` object in `~/.q/providers.json`; configured values take precedence over Q's defaults.
+
 ## Assign model roles
 
 Open **Settings → Models** to assign a model to the main chat and specialized roles such as `interviewer`, `manager`, `research`, `reviewer`, `coder`, `commit`, `thinker`, and `librarian`. The senior developer uses `reviewer`; the junior developer uses `coder`.
