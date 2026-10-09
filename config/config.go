@@ -776,35 +776,8 @@ func (s Store) Save(value Config) error {
 		return fmt.Errorf("config: encode: %w", err)
 	}
 
-	temporary, err := os.CreateTemp(s.Dir, ".config-*.yaml")
-	if err != nil {
-		return fmt.Errorf("config: create temporary file: %w", err)
+	if err := fsreplace.WriteFile(s.Path(), body, 0o600); err != nil {
+		return fmt.Errorf("config: save config: %w", err)
 	}
-	temporaryPath := temporary.Name()
-	keep := false
-	defer func() {
-		if !keep {
-			_ = os.Remove(temporaryPath)
-		}
-	}()
-	if err := temporary.Chmod(0o600); err != nil {
-		_ = temporary.Close()
-		return fmt.Errorf("config: secure temporary file: %w", err)
-	}
-	if _, err := temporary.Write(body); err != nil {
-		_ = temporary.Close()
-		return fmt.Errorf("config: write temporary file: %w", err)
-	}
-	if err := temporary.Sync(); err != nil {
-		_ = temporary.Close()
-		return fmt.Errorf("config: sync temporary file: %w", err)
-	}
-	if err := temporary.Close(); err != nil {
-		return fmt.Errorf("config: close temporary file: %w", err)
-	}
-	if err := fsreplace.Replace(temporaryPath, s.Path()); err != nil {
-		return fmt.Errorf("config: replace %s: %w", s.Path(), err)
-	}
-	keep = true
 	return nil
 }

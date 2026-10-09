@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/snowmerak/llm-provider/gateway"
+	"github.com/snowmerak/q/agentloop"
 	"github.com/snowmerak/q/client"
 	"github.com/snowmerak/q/config"
 )
@@ -141,7 +142,7 @@ func TestConsumeChatStreamSeparatesThinkingAndResponse(t *testing.T) {
 		}}},
 	}}}
 	var deltas []chatStreamDelta
-	response, received, err := consumeChatStream(t.Context(), configured, client.ChatRequest{Model: "local"}, func(delta chatStreamDelta) bool {
+	response, received, err := agentloop.ConsumeChatStream(t.Context(), configured, client.ChatRequest{Model: "local"}, func(delta chatStreamDelta) bool {
 		deltas = append(deltas, delta)
 		return true
 	})
@@ -174,7 +175,7 @@ func TestConsumeChatStreamReadsCompatibleReasoningAndMergesToolFragments(t *test
 		}}}, FinishReason: "tool_calls"}}},
 	}}}
 	var thinking string
-	response, _, err := consumeChatStream(t.Context(), configured, client.ChatRequest{}, func(delta chatStreamDelta) bool {
+	response, _, err := agentloop.ConsumeChatStream(t.Context(), configured, client.ChatRequest{}, func(delta chatStreamDelta) bool {
 		if delta.Kind == chatStreamThinking {
 			thinking += delta.Content
 		}
@@ -206,7 +207,7 @@ func TestConsumeChatStreamPreservesWhitespaceOnlyThinkingDeltas(t *testing.T) {
 	}
 	configured := &scriptedStreamingClient{stream: &scriptedChatStream{chunks: chunks}}
 	var thinking string
-	_, _, err := consumeChatStream(t.Context(), configured, client.ChatRequest{}, func(delta chatStreamDelta) bool {
+	_, _, err := agentloop.ConsumeChatStream(t.Context(), configured, client.ChatRequest{}, func(delta chatStreamDelta) bool {
 		if delta.Kind == chatStreamThinking {
 			thinking += delta.Content
 		}
@@ -235,7 +236,7 @@ func TestConsumeChatStreamSeparatesCodexGatewayPhases(t *testing.T) {
 		},
 	}}}
 	var thinking string
-	response, _, err := consumeChatStream(t.Context(), configured, client.ChatRequest{}, func(delta chatStreamDelta) bool {
+	response, _, err := agentloop.ConsumeChatStream(t.Context(), configured, client.ChatRequest{}, func(delta chatStreamDelta) bool {
 		if delta.Kind == chatStreamThinking {
 			thinking += delta.Content
 		}

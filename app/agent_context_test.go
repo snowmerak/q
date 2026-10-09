@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/snowmerak/q/agentloop"
 	"github.com/snowmerak/q/client"
 	"github.com/snowmerak/q/config"
 	"github.com/snowmerak/q/memory"
@@ -252,10 +253,10 @@ func TestStreamAgentLoopCompactsBetweenToolRounds(t *testing.T) {
 
 func TestMainAgentLoopUsesConfiguredTrigger(t *testing.T) {
 	history := []client.Message{{Role: client.RoleUser, Content: strings.Repeat("context ", 1_000)}}
-	probe := newAgentLoopContext(memory.Policy{}, history, largeResultRuntime{}.Tools())
+	probe := agentloop.NewContext(memory.Policy{}, history, largeResultRuntime{}.Tools())
 	predicted := probe.PredictedTokens()
 	contextWindowAtEightyTwoPercent := (predicted*100 + 81) / 82
-	loopContext := newAgentLoopContext(memory.Policy{
+	loopContext := agentloop.NewContext(memory.Policy{
 		ContextWindow: contextWindowAtEightyTwoPercent,
 		TriggerRatio:  .85,
 		TargetRatio:   .22,

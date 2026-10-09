@@ -39,6 +39,17 @@ func TestParseGatewayOptions(t *testing.T) {
 	}
 }
 
+func availableUsagePort(t *testing.T) int {
+	t.Helper()
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := listener.Addr().(*net.TCPAddr).Port
+	_ = listener.Close()
+	return port
+}
+
 func TestParseGatewayOptionsDocumentsStartCommand(t *testing.T) {
 	var output strings.Builder
 	if _, err := parseGatewayOptions([]string{"--help"}, &output); !errors.Is(err, flag.ErrHelp) {

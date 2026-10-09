@@ -39,7 +39,7 @@ func TestStreamAgentWebTesterReturnsParentSynthesis(t *testing.T) {
 	})
 	parentClient := &fakeClient{}
 	events := make(chan agentEvent, 8)
-	streamAgentWebTester(t.Context(), runtime, "verify login", "web-call-1", agentSearchParent{
+	streamExternalAgent(webTesterAgentCommand, t.Context(), runtime, "verify login", "web-call-1", externalAgentParent{
 		client: parentClient, tools: runtime, model: "main-model", reasoningEffort: "high",
 	}, events)
 	var activities []agentActivity

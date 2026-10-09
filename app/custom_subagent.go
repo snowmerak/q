@@ -273,9 +273,9 @@ func (m model) startCustom(command string) (tea.Model, tea.Cmd) {
 	if definition.Info.Kind == subagent.AgentKindExternal {
 		switch definition.Info.Name {
 		case subagent.BuiltinWebSearchID:
-			return m.startAgentSearch(input)
+			return m.startExternalAgent(searchAgentCommand, input)
 		case subagent.BuiltinWebTesterID:
-			return m.startAgentWebTester(input)
+			return m.startExternalAgent(webTesterAgentCommand, input)
 		}
 	}
 	m.beginTurn()

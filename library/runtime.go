@@ -13,6 +13,7 @@ import (
 	"time"
 
 	qconfig "github.com/snowmerak/q/config"
+	"github.com/snowmerak/q/internal/localservice"
 	"github.com/snowmerak/q/sessionstore"
 	"github.com/snowmerak/q/worklock"
 )
@@ -158,79 +159,28 @@ func (r *Runtime) Close() error {
 }
 
 func Run(ctx context.Context, dir string, output io.Writer) error {
-	announced := false
-	for ctx.Err() == nil {
-		runtime, err := Ensure(ctx, dir)
-		if err != nil {
-			return err
-		}
-		if !announced {
+	return localservice.Run(ctx,
+		func(ctx context.Context) (*Runtime, error) { return Ensure(ctx, dir) },
+		func(ctx context.Context, runtime *Runtime) error { return waitForFailure(ctx, runtime.client) },
+		func(runtime *Runtime) error {
 			mode := "connected to"
 			if runtime.IsLeader() {
 				mode = "listening on"
 			}
-			if _, err := fmt.Fprintf(output, "q library %s %s\n", mode, runtime.Endpoint()); err != nil {
-				_ = runtime.Close()
-				return err
-			}
-			announced = true
-		}
-		if runtime.IsLeader() {
-			select {
-			case <-ctx.Done():
-				return runtime.Close()
-			case <-runtime.Done():
-				_ = runtime.Close()
-			}
-		} else {
-			if waitForFailure(ctx, runtime.client) == nil {
-				_ = runtime.Close()
-				return nil
-			}
-		}
-		_ = runtime.Close()
-	}
-	return nil
-}
-
-func waitUntilReady(ctx context.Context, client *Client, timeout time.Duration) error {
-	deadline := time.Now().Add(timeout)
-	delay := 20 * time.Millisecond
-	for {
-		health, err := client.Health(ctx)
-		if err == nil {
-			if !health.Compatible() {
-				return incompatibleError(health)
-			}
-			return nil
-		}
-		if time.Now().After(deadline) {
-			return fmt.Errorf("library: leader did not become ready within %s: %w", timeout, err)
-		}
-		jitter := time.Duration(rand.IntN(max(1, int(delay/3))))
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(delay + jitter):
-		}
-		delay = min(delay*2, 500*time.Millisecond)
-	}
+			_, err := fmt.Fprintf(output, "q library %s %s\n", mode, runtime.Endpoint())
+			return err
+		},
+	)
 }
 
 func waitForFailure(ctx context.Context, client *Client) error {
-	ticker := time.NewTicker(500 * time.Millisecond)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return nil
-		case <-ticker.C:
-			health, err := client.Health(ctx)
-			if err != nil || !health.Compatible() {
-				return errors.New("library: leader unavailable")
-			}
+	return localservice.WaitForFailure(ctx, 500*time.Millisecond, func(ctx context.Context) error {
+		health, err := client.Health(ctx)
+		if err != nil || !health.Compatible() {
+			return errors.New("library: leader unavailable")
 		}
-	}
+		return nil
+	})
 }
 
 func incompatibleError(health Health) error {

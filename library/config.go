@@ -147,33 +147,8 @@ func (s ConfigStore) Save(value Config) error {
 	if err := os.MkdirAll(s.Dir, 0o700); err != nil {
 		return fmt.Errorf("library: create config directory: %w", err)
 	}
-	file, err := os.CreateTemp(s.Dir, ".library-*.json")
-	if err != nil {
-		return fmt.Errorf("library: create temporary config: %w", err)
+	if err := fsreplace.WriteFile(s.Path(), body, 0o600); err != nil {
+		return fmt.Errorf("library: save config: %w", err)
 	}
-	temporary := file.Name()
-	keep := false
-	defer func() {
-		_ = file.Close()
-		if !keep {
-			_ = os.Remove(temporary)
-		}
-	}()
-	if err := file.Chmod(0o600); err != nil {
-		return fmt.Errorf("library: secure temporary config: %w", err)
-	}
-	if _, err := file.Write(body); err != nil {
-		return fmt.Errorf("library: write temporary config: %w", err)
-	}
-	if err := file.Sync(); err != nil {
-		return fmt.Errorf("library: sync temporary config: %w", err)
-	}
-	if err := file.Close(); err != nil {
-		return fmt.Errorf("library: close temporary config: %w", err)
-	}
-	if err := fsreplace.Replace(temporary, s.Path()); err != nil {
-		return fmt.Errorf("library: replace config: %w", err)
-	}
-	keep = true
 	return nil
 }

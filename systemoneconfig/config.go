@@ -291,29 +291,8 @@ func (s Store) Save(value Config) error {
 		return fmt.Errorf("systemone: encode settings: %w", err)
 	}
 	data = append(data, '\n')
-	temporary, err := os.CreateTemp(s.Dir, ".systemone-*.json")
-	if err != nil {
-		return fmt.Errorf("systemone: create temporary settings: %w", err)
-	}
-	temporaryPath := temporary.Name()
-	defer func() { _ = os.Remove(temporaryPath) }()
-	if err := temporary.Chmod(0o600); err != nil {
-		_ = temporary.Close()
-		return fmt.Errorf("systemone: secure temporary settings: %w", err)
-	}
-	if _, err := temporary.Write(data); err != nil {
-		_ = temporary.Close()
-		return fmt.Errorf("systemone: write settings: %w", err)
-	}
-	if err := temporary.Sync(); err != nil {
-		_ = temporary.Close()
-		return fmt.Errorf("systemone: sync settings: %w", err)
-	}
-	if err := temporary.Close(); err != nil {
-		return fmt.Errorf("systemone: close settings: %w", err)
-	}
-	if err := fsreplace.Replace(temporaryPath, s.Path()); err != nil {
-		return fmt.Errorf("systemone: replace settings: %w", err)
+	if err := fsreplace.WriteFile(s.Path(), data, 0o600); err != nil {
+		return fmt.Errorf("systemone: save config: %w", err)
 	}
 	return nil
 }

@@ -4,11 +4,12 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/snowmerak/q/agentloop"
 	"github.com/snowmerak/q/client"
 )
 
 func TestKnownSkillIDsRestoresHintsAndLoadedSkillsFromContext(t *testing.T) {
-	user := appendSkillHintContext(client.Message{Role: client.RoleUser, Content: "review this"}, &skillHintSet{
+	user := agentloop.AppendSkillHintContext(client.Message{Role: client.RoleUser, Content: "review this"}, &skillHintSet{
 		Trigger: "user_input", Candidates: []skillHint{{ID: "from-user", Name: "user"}},
 	})
 	messages := []client.Message{
@@ -18,7 +19,7 @@ func TestKnownSkillIDsRestoresHintsAndLoadedSkillsFromContext(t *testing.T) {
 		{Role: client.RoleTool, Name: askToUserToolName, Content: "malformed"},
 	}
 
-	known := knownSkillIDs(messages)
+	known := agentloop.KnownSkillIDs(messages)
 	for _, id := range []string{"from-user", "from-task", "loaded"} {
 		if _, ok := known[id]; !ok {
 			t.Fatalf("known skill IDs %#v omitted %q", known, id)

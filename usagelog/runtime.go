@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/snowmerak/q/internal/localservice"
 	"github.com/snowmerak/q/worklock"
 )
 
@@ -148,55 +149,33 @@ func (r *Runtime) Close() error {
 }
 
 func Run(ctx context.Context, dir string, output io.Writer) error {
-	announced := false
-	for ctx.Err() == nil {
-		runtime, err := Ensure(ctx, dir)
-		if err != nil {
-			return err
-		}
-		if !announced && output != nil {
+	return localservice.Run(ctx,
+		func(ctx context.Context) (*Runtime, error) { return Ensure(ctx, dir) },
+		func(ctx context.Context, runtime *Runtime) error { return waitForFailure(ctx, runtime.client) },
+		func(runtime *Runtime) error {
+			if output == nil {
+				return nil
+			}
 			mode := "connected to"
 			if runtime.IsLeader() {
 				mode = "listening on"
 			}
-			if _, err := fmt.Fprintf(output, "q usage %s %s\n", mode, runtime.DashboardURL()); err != nil {
-				_ = runtime.Close()
-				return err
-			}
-			announced = true
-		}
-		if runtime.IsLeader() {
-			select {
-			case <-ctx.Done():
-				return runtime.Close()
-			case <-runtime.Done():
-				_ = runtime.Close()
-			}
-		} else if waitForFailure(ctx, runtime.client) == nil {
-			_ = runtime.Close()
-			return nil
-		}
-		_ = runtime.Close()
-	}
-	return nil
+			_, err := fmt.Fprintf(output, "q usage %s %s\n", mode, runtime.DashboardURL())
+			return err
+		},
+	)
 }
 
 func waitForFailure(ctx context.Context, client *Client) error {
-	ticker := time.NewTicker(500 * time.Millisecond)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return nil
-		case <-ticker.C:
-			probeContext, cancel := context.WithTimeout(ctx, defaultProbeTimeout)
-			health, err := client.Health(probeContext)
-			cancel()
-			if err != nil || !health.Compatible() {
-				return errors.New("usage: leader unavailable")
-			}
+	return localservice.WaitForFailure(ctx, 500*time.Millisecond, func(ctx context.Context) error {
+		probeContext, cancel := context.WithTimeout(ctx, defaultProbeTimeout)
+		health, err := client.Health(probeContext)
+		cancel()
+		if err != nil || !health.Compatible() {
+			return errors.New("usage: leader unavailable")
 		}
-	}
+		return nil
+	})
 }
 
 func incompatibleError(health Health) error {

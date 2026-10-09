@@ -127,33 +127,8 @@ func (s ConfigStore) Save(value Config) error {
 	if err := os.MkdirAll(s.Dir, 0o700); err != nil {
 		return fmt.Errorf("usage: create config directory: %w", err)
 	}
-	temporary, err := os.CreateTemp(s.Dir, ".usage-*.json")
-	if err != nil {
-		return err
+	if err := fsreplace.WriteFile(s.Path(), body, 0o600); err != nil {
+		return fmt.Errorf("usage: save config: %w", err)
 	}
-	path := temporary.Name()
-	keep := false
-	defer func() {
-		_ = temporary.Close()
-		if !keep {
-			_ = os.Remove(path)
-		}
-	}()
-	if err := temporary.Chmod(0o600); err != nil {
-		return err
-	}
-	if _, err := temporary.Write(body); err != nil {
-		return err
-	}
-	if err := temporary.Sync(); err != nil {
-		return err
-	}
-	if err := temporary.Close(); err != nil {
-		return err
-	}
-	if err := fsreplace.Replace(path, s.Path()); err != nil {
-		return fmt.Errorf("usage: replace config: %w", err)
-	}
-	keep = true
 	return nil
 }

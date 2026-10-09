@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math/rand/v2"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -1173,5 +1174,29 @@ func seedLibraryRecords(t *testing.T, dir string, records ...sessionstore.Record
 	}
 	if err := lock.Close(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func waitUntilReady(ctx context.Context, client *Client, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	delay := 20 * time.Millisecond
+	for {
+		health, err := client.Health(ctx)
+		if err == nil {
+			if !health.Compatible() {
+				return incompatibleError(health)
+			}
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("library: leader did not become ready within %s: %w", timeout, err)
+		}
+		jitter := time.Duration(rand.IntN(max(1, int(delay/3))))
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(delay + jitter):
+		}
+		delay = min(delay*2, 500*time.Millisecond)
 	}
 }

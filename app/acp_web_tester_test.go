@@ -120,7 +120,7 @@ func TestExternalWebTesterACPIntegration(t *testing.T) {
 	defer cancel()
 	parent := &fakeClient{}
 	events := make(chan agentEvent, 8)
-	streamAgentWebTester(ctx, configured, "Inspect the workspace and verify it is accessible. Do not edit files.", "real-web-test", agentSearchParent{
+	streamExternalAgent(webTesterAgentCommand, ctx, configured, "Inspect the workspace and verify it is accessible. Do not edit files.", "real-web-test", externalAgentParent{
 		client: parent, tools: configured, model: "test-model",
 	}, events)
 	for event := range events {

@@ -97,36 +97,9 @@ func (s Store) writeAtomic(path string, body []byte) error {
 	if err := secureDirectory(s.Dir); err != nil {
 		return err
 	}
-	file, err := os.CreateTemp(s.Dir, ".providers-*.json")
-	if err != nil {
-		return fmt.Errorf("providerhost: create temporary config: %w", err)
+	if err := fsreplace.WriteFile(path, body, 0o600); err != nil {
+		return fmt.Errorf("providerhost: save config: %w", err)
 	}
-	temporaryPath := file.Name()
-	keep := false
-	defer func() {
-		if !keep {
-			_ = os.Remove(temporaryPath)
-		}
-	}()
-	if err := file.Chmod(0o600); err != nil {
-		_ = file.Close()
-		return fmt.Errorf("providerhost: secure temporary config: %w", err)
-	}
-	if _, err := file.Write(body); err != nil {
-		_ = file.Close()
-		return fmt.Errorf("providerhost: write temporary config: %w", err)
-	}
-	if err := file.Sync(); err != nil {
-		_ = file.Close()
-		return fmt.Errorf("providerhost: sync temporary config: %w", err)
-	}
-	if err := file.Close(); err != nil {
-		return fmt.Errorf("providerhost: close temporary config: %w", err)
-	}
-	if err := fsreplace.Replace(temporaryPath, path); err != nil {
-		return fmt.Errorf("providerhost: replace %s: %w", path, err)
-	}
-	keep = true
 	return nil
 }
 

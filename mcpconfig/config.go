@@ -272,35 +272,8 @@ func (s Store) Save(value Config) error {
 		return fmt.Errorf("mcpconfig: encode: %w", err)
 	}
 	body = append(body, '\n')
-	temporary, err := os.CreateTemp(s.Dir, ".mcp-*.json")
-	if err != nil {
-		return fmt.Errorf("mcpconfig: create temporary file: %w", err)
+	if err := fsreplace.WriteFile(s.Path(), body, 0o600); err != nil {
+		return fmt.Errorf("mcpconfig: save config: %w", err)
 	}
-	temporaryPath := temporary.Name()
-	keep := false
-	defer func() {
-		if !keep {
-			_ = os.Remove(temporaryPath)
-		}
-	}()
-	if err := temporary.Chmod(0o600); err != nil {
-		_ = temporary.Close()
-		return err
-	}
-	if _, err := temporary.Write(body); err != nil {
-		_ = temporary.Close()
-		return err
-	}
-	if err := temporary.Sync(); err != nil {
-		_ = temporary.Close()
-		return err
-	}
-	if err := temporary.Close(); err != nil {
-		return err
-	}
-	if err := fsreplace.Replace(temporaryPath, s.Path()); err != nil {
-		return fmt.Errorf("mcpconfig: replace %s: %w", s.Path(), err)
-	}
-	keep = true
 	return nil
 }

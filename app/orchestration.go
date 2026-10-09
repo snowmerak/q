@@ -4,7 +4,6 @@ import (
 	"strings"
 
 	"github.com/snowmerak/q/agentloop"
-	"github.com/snowmerak/q/client"
 )
 
 const (
@@ -15,8 +14,6 @@ const (
 	maximumAskToUserChoices = 9
 )
 
-type taskStartInput = agentloop.TaskStartInput
-type taskCompleteInput = agentloop.TaskCompleteInput
 type AgentQuestionChoice = agentloop.AgentQuestionChoice
 type askToUserChoice = AgentQuestionChoice
 type AgentQuestion = agentloop.AgentQuestion
@@ -24,21 +21,8 @@ type askToUserInput = AgentQuestion
 type AgentAnswer = agentloop.AgentAnswer
 type askToUserOutput = AgentAnswer
 
-func orchestrationTools() []client.Tool { return agentloop.OrchestrationTools() }
-func parseTaskStart(arguments string) (taskStartInput, error) {
-	return agentloop.ParseTaskStart(arguments)
-}
-func parseAskToUser(arguments string) (askToUserInput, error) {
-	return agentloop.ParseAskToUser(arguments)
-}
-func parseTaskComplete(arguments string) (taskCompleteInput, error) {
-	return agentloop.ParseTaskComplete(arguments)
-}
 func answerForQuestion(input askToUserInput, answer string) askToUserOutput {
 	return agentloop.AnswerForQuestion(input, answer)
-}
-func renderTaskCompletion(input taskCompleteInput) string {
-	return agentloop.RenderTaskCompletion(input)
 }
 
 func renderPendingQuestion(input askToUserInput, selected int) string {

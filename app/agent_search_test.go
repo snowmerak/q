@@ -22,7 +22,7 @@ func TestStreamAgentSearchReturnsParentSynthesis(t *testing.T) {
 	toolRuntime := testAgentSearchRuntime(t, search)
 	parentClient := &fakeClient{}
 	events := make(chan agentEvent, 8)
-	streamAgentSearch(t.Context(), toolRuntime, "latest API behavior", "search-call-1", agentSearchParent{
+	streamExternalAgent(searchAgentCommand, t.Context(), toolRuntime, "latest API behavior", "search-call-1", externalAgentParent{
 		client: parentClient, model: "main-model", tools: toolRuntime,
 		reasoningEffort: "high",
 	}, events)
@@ -62,7 +62,7 @@ func TestAgentSearchParentResponseIsAddedToTUITranscript(t *testing.T) {
 		return subagent.ExternalSearchResult{Agent: "codex", Summary: "Sourced evidence"}, nil
 	})
 	events := make(chan agentEvent, 8)
-	streamAgentSearch(t.Context(), toolRuntime, "explain the evidence", "search-call-2", agentSearchParent{
+	streamExternalAgent(searchAgentCommand, t.Context(), toolRuntime, "explain the evidence", "search-call-2", externalAgentParent{
 		client: parentClient, model: "main-model", tools: toolRuntime,
 	}, events)
 
@@ -93,7 +93,7 @@ func TestSendAgentSearchUsesDefaultReasoningEffort(t *testing.T) {
 	value.Provider.Model, value.Provider.ReasoningEffort = "main-model", "high"
 	m := newModel(t.Context(), config.Store{Dir: t.TempDir()}, nil)
 	m.enterChat(value, parentClient)
-	message := m.sendAgentSearch(toolRuntime, "explain the evidence")().(agentEventMsg)
+	message := m.sendExternalAgent(searchAgentCommand, toolRuntime, "explain the evidence")().(agentEventMsg)
 	if message.event.err != nil {
 		t.Fatal(message.event.err)
 	}

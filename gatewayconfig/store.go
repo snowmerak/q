@@ -67,7 +67,7 @@ func (s Store) Save(value Config) error {
 		return fmt.Errorf("gatewayconfig: encode: %w", err)
 	}
 	body = append(body, '\n')
-	return s.writeAtomic(s.Path(), ".gateway-*.json", body)
+	return s.writeAtomic(s.Path(), body)
 }
 
 func (s Store) LoadMasterKey() ([32]byte, error) {
@@ -80,38 +80,13 @@ func (s Store) EnsureMasterKey(random [32]byte) ([32]byte, error) {
 	})
 }
 
-func (s Store) writeAtomic(path, pattern string, body []byte) error {
+func (s Store) writeAtomic(path string, body []byte) error {
 	if err := secureDirectory(s.Dir); err != nil {
 		return err
 	}
-	file, err := os.CreateTemp(s.Dir, pattern)
-	if err != nil {
-		return fmt.Errorf("gatewayconfig: create temporary file: %w", err)
+	if err := fsreplace.WriteFile(path, body, 0o600); err != nil {
+		return fmt.Errorf("gatewayconfig: save config: %w", err)
 	}
-	temporaryPath := file.Name()
-	keep := false
-	defer func() {
-		_ = file.Close()
-		if !keep {
-			_ = os.Remove(temporaryPath)
-		}
-	}()
-	if err := file.Chmod(0o600); err != nil {
-		return fmt.Errorf("gatewayconfig: secure temporary file: %w", err)
-	}
-	if _, err := file.Write(body); err != nil {
-		return fmt.Errorf("gatewayconfig: write temporary file: %w", err)
-	}
-	if err := file.Sync(); err != nil {
-		return fmt.Errorf("gatewayconfig: sync temporary file: %w", err)
-	}
-	if err := file.Close(); err != nil {
-		return fmt.Errorf("gatewayconfig: close temporary file: %w", err)
-	}
-	if err := fsreplace.Replace(temporaryPath, path); err != nil {
-		return fmt.Errorf("gatewayconfig: replace %s: %w", path, err)
-	}
-	keep = true
 	return nil
 }
 

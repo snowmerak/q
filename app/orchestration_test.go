@@ -4,10 +4,12 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+
+	"github.com/snowmerak/q/agentloop"
 )
 
 func TestOrchestrationToolsExposeConditionalTaskLifecycle(t *testing.T) {
-	available := orchestrationTools()
+	available := agentloop.OrchestrationTools()
 	if len(available) != 3 || available[0].Function.Name != taskStartToolName ||
 		available[1].Function.Name != askToUserToolName || available[2].Function.Name != taskCompleteToolName {
 		t.Fatalf("orchestration tools = %#v", available)
@@ -19,17 +21,17 @@ func TestOrchestrationToolsExposeConditionalTaskLifecycle(t *testing.T) {
 }
 
 func TestTaskStartRequiresObjective(t *testing.T) {
-	started, err := parseTaskStart(`{"objective":"Implement the feature","completion_criteria":["Tests pass"]}`)
+	started, err := agentloop.ParseTaskStart(`{"objective":"Implement the feature","completion_criteria":["Tests pass"]}`)
 	if err != nil || started.Objective != "Implement the feature" {
 		t.Fatalf("task start = %#v, err = %v", started, err)
 	}
-	if _, err := parseTaskStart(`{"objective":" "}`); err == nil {
+	if _, err := agentloop.ParseTaskStart(`{"objective":" "}`); err == nil {
 		t.Fatal("task_start without objective was accepted")
 	}
 }
 
 func TestAskToUserArgumentsAndChoiceAnswer(t *testing.T) {
-	input, err := parseAskToUser(`{
+	input, err := agentloop.ParseAskToUser(`{
 		"question":"Choose a mode",
 		"choices":[{"id":"safe","label":"Safe mode"}]
 	}`)
@@ -48,13 +50,13 @@ func TestAskToUserArgumentsAndChoiceAnswer(t *testing.T) {
 	if !strings.Contains(rendered, customAnswerLabel) || !strings.Contains(rendered, "type below") {
 		t.Fatalf("custom answer choice was not rendered last: %q", rendered)
 	}
-	if _, err := parseAskToUser(`{"question":"","unexpected":true}`); err == nil {
+	if _, err := agentloop.ParseAskToUser(`{"question":"","unexpected":true}`); err == nil {
 		t.Fatal("invalid ask_to_user arguments were accepted")
 	}
 }
 
 func TestAskToUserAcceptsAtMostNineChoices(t *testing.T) {
-	properties := orchestrationTools()[1].Function.Parameters["properties"].(map[string]any)
+	properties := agentloop.OrchestrationTools()[1].Function.Parameters["properties"].(map[string]any)
 	choiceSchema := properties["choices"].(map[string]any)
 	if got := choiceSchema["maxItems"]; got != maximumAskToUserChoices {
 		t.Fatalf("ask_to_user maxItems = %v; want %d", got, maximumAskToUserChoices)
@@ -69,7 +71,7 @@ func TestAskToUserAcceptsAtMostNineChoices(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	input, err := parseAskToUser(string(arguments))
+	input, err := agentloop.ParseAskToUser(string(arguments))
 	if err != nil || len(input.Choices) != maximumAskToUserChoices {
 		t.Fatalf("nine choices = %#v, err = %v", input.Choices, err)
 	}
@@ -79,13 +81,13 @@ func TestAskToUserAcceptsAtMostNineChoices(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := parseAskToUser(string(arguments)); err == nil || !strings.Contains(err.Error(), "at most 9") {
+	if _, err := agentloop.ParseAskToUser(string(arguments)); err == nil || !strings.Contains(err.Error(), "at most 9") {
 		t.Fatalf("ten choices error = %v", err)
 	}
 }
 
 func TestTaskCompleteRequiresTerminalOutcome(t *testing.T) {
-	completion, err := parseTaskComplete(`{
+	completion, err := agentloop.ParseTaskComplete(`{
 		"outcome":"succeeded",
 		"summary":"Implemented the requested change",
 		"verification":["go test ./..."]
@@ -93,11 +95,11 @@ func TestTaskCompleteRequiresTerminalOutcome(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if rendered := renderTaskCompletion(completion); !strings.Contains(rendered, "Implemented") ||
+	if rendered := agentloop.RenderTaskCompletion(completion); !strings.Contains(rendered, "Implemented") ||
 		!strings.Contains(rendered, "go test ./...") {
 		t.Fatalf("rendered completion = %q", rendered)
 	}
-	if _, err := parseTaskComplete(`{"outcome":"blocked","summary":"Cannot continue"}`); err == nil {
+	if _, err := agentloop.ParseTaskComplete(`{"outcome":"blocked","summary":"Cannot continue"}`); err == nil {
 		t.Fatal("blocked completion without blocker was accepted")
 	}
 }
