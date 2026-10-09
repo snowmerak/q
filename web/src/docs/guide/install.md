@@ -19,7 +19,7 @@ toc:
 
 Before installing q, make sure the following are available:
 
-- Go 1.26.5 or later
+- Go 1.26.9 or later
 - Git on `PATH`
 - A modern browser for Studio
 - Credentials for at least one model provider, or a working local compatible endpoint

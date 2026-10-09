@@ -4,7 +4,7 @@
 # `mise install` provisions everything below; tasks still live in the Makefile.
 [tools]
 # Go toolchain and editor helpers
-go = "1.26.3"
+go = "1.26.9"
 "go:golang.org/x/tools/gopls" = "0.22.0"
 golangci-lint = "2.12.2"
 gofumpt = "0.10.0"

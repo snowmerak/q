@@ -31,7 +31,7 @@ the resulting diff, and create a commit from one local Studio process.
 
 ## Requirements
 
-- Go 1.26.5 or later
+- Go 1.26.9 or later
 - Git on `PATH`
 - At least one configured model provider
 - A local Web browser
