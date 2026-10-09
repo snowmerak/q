@@ -88,7 +88,7 @@ func (r *Runtime) ConfigureExternal(ctx context.Context, root string, value mcpc
 	previous := r.external
 	r.external = servers
 	r.externalRoutes = routes
-	r.externalConfig = cloneMCPConfig(value)
+	r.externalConfig = value.Clone()
 	r.externalMu.Unlock()
 	for _, server := range previous {
 		_ = server.session.Close()
@@ -259,29 +259,4 @@ func assignedServerIDs(values map[string][]string) []string {
 	}
 	sort.Strings(ids)
 	return ids
-}
-
-func cloneMCPConfig(value mcpconfig.Config) mcpconfig.Config {
-	result := mcpconfig.Config{Version: value.Version, Servers: make(map[string]mcpconfig.ServerConfig, len(value.Servers)), Roles: make(map[string][]string, len(value.Roles))}
-	for id, server := range value.Servers {
-		server.Args = append([]string(nil), server.Args...)
-		server.Env = cloneStrings(server.Env)
-		server.Headers = cloneStrings(server.Headers)
-		server.ResolvedEnv = cloneStrings(server.ResolvedEnv)
-		server.ResolvedHeaders = cloneStrings(server.ResolvedHeaders)
-		result.Servers[id] = server
-	}
-	for role, ids := range value.Roles {
-		result.Roles[role] = append([]string(nil), ids...)
-	}
-	return result
-}
-
-func cloneStrings(value map[string]string) map[string]string {
-	if value == nil {
-		return nil
-	}
-	result := make(map[string]string, len(value))
-	maps.Copy(result, value)
-	return result
 }

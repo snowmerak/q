@@ -334,25 +334,7 @@ func writeDelegationJSON(root, path string, value any) error {
 		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 			return err
 		}
-		file, err := os.CreateTemp(filepath.Dir(path), ".delegation-*.json")
-		if err != nil {
-			return err
-		}
-		temporary := file.Name()
-		defer func() { _ = os.Remove(temporary) }()
-		if err := file.Chmod(0o600); err != nil {
-			return errors.Join(err, file.Close())
-		}
-		if _, err := file.Write(body); err != nil {
-			return errors.Join(err, file.Close())
-		}
-		if err := file.Sync(); err != nil {
-			return errors.Join(err, file.Close())
-		}
-		if err := file.Close(); err != nil {
-			return err
-		}
-		return fsreplace.Replace(temporary, path)
+		return fsreplace.WriteFile(path, body, 0o600)
 	})
 }
 

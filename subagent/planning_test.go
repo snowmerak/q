@@ -232,7 +232,7 @@ func TestPlanningValidationRequiresExecutableContract(t *testing.T) {
 }
 
 func TestGrillerQuestionChoicesAreNonExhaustive(t *testing.T) {
-	if prompt := grillerInstructions(); !strings.Contains(prompt, "non-exhaustive") ||
+	if prompt := grillerInstructionsFor(false); !strings.Contains(prompt, "non-exhaustive") ||
 		!strings.Contains(prompt, "free-form answer") || !strings.Contains(prompt, "not treat every choice as an action") ||
 		!strings.Contains(prompt, "never claim that the user did not answer") || !strings.Contains(prompt, "confirmed_choices") {
 		t.Fatalf("Griller prompt does not preserve free-form answers:\n%s", prompt)

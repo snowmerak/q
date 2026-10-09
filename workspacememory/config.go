@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/snowmerak/q/internal/fsreplace"
+	"github.com/snowmerak/q/internal/strictjson"
 )
 
 const (
@@ -100,15 +101,9 @@ func (s ConfigStore) LoadOrDefault() (Config, error) {
 		return Config{}, fmt.Errorf("workspacememory: open config: %w", err)
 	}
 	defer func() { _ = file.Close() }()
-	decoder := json.NewDecoder(io.LimitReader(file, 1<<20))
-	decoder.DisallowUnknownFields()
 	var value Config
-	if err := decoder.Decode(&value); err != nil {
-		return Config{}, fmt.Errorf("workspacememory: decode config: %w", err)
-	}
-	var trailing any
-	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
-		if err == nil {
+	if err := strictjson.Decode(io.LimitReader(file, 1<<20), &value); err != nil {
+		if errors.Is(err, strictjson.ErrMultipleValues) {
 			return Config{}, errors.New("workspacememory: config contains multiple JSON values")
 		}
 		return Config{}, fmt.Errorf("workspacememory: decode config: %w", err)

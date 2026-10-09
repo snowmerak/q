@@ -49,6 +49,9 @@ func EnsureWithOptions(ctx context.Context, options EnsureOptions) (*Runtime, er
 	if ctx == nil {
 		return nil, errors.New("usage: context is nil")
 	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if err := os.MkdirAll(options.Dir, 0o700); err != nil {
 		return nil, fmt.Errorf("usage: create config directory: %w", err)
 	}
@@ -64,11 +67,17 @@ func EnsureWithOptions(ctx context.Context, options EnsureOptions) (*Runtime, er
 	deadline := time.Now().Add(startupTimeout)
 	delay := 20 * time.Millisecond
 	for {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		if health, err := probe.Health(ctx); err == nil {
 			if !health.Compatible() {
 				return nil, incompatibleError(health)
 			}
 			return &Runtime{client: client}, nil
+		}
+		if err := ctx.Err(); err != nil {
+			return nil, err
 		}
 		serviceLock, lockErr := worklock.AcquireFile(options.Dir, ServiceLockFileName, "q usage service")
 		if lockErr == nil {
@@ -78,6 +87,11 @@ func EnsureWithOptions(ctx context.Context, options EnsureOptions) (*Runtime, er
 					return nil, incompatibleError(health)
 				}
 				return &Runtime{client: client}, nil
+			}
+			// LeaderContext owns an established service, not a canceled startup.
+			if err := ctx.Err(); err != nil {
+				_ = serviceLock.Close()
+				return nil, err
 			}
 			listener, listenErr := net.Listen("tcp", config.ListenAddress())
 			if listenErr != nil {

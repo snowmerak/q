@@ -3,10 +3,6 @@ package studio
 import (
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
-	"errors"
-	"fmt"
-	"io"
 	"net/http"
 	"strings"
 	"sync"
@@ -48,19 +44,6 @@ func revision(body []byte) string {
 	return hex.EncodeToString(sum[:])
 }
 
-func decodeIntegrationRequest(writer http.ResponseWriter, request *http.Request, output any) error {
-	request.Body = http.MaxBytesReader(writer, request.Body, maximumIntegrationRequestSize)
-	decoder := json.NewDecoder(request.Body)
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(output); err != nil {
-		return fmt.Errorf("decode integration settings: %w", err)
-	}
-	var trailing any
-	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
-		if err == nil {
-			return errors.New("decode integration settings: multiple JSON values")
-		}
-		return fmt.Errorf("decode integration settings: %w", err)
-	}
-	return nil
+func decodeIntegrationRequest(writer http.ResponseWriter, request *http.Request, target any) error {
+	return decodeRequest(writer, request, target, maximumIntegrationRequestSize, "decode integration settings")
 }

@@ -486,7 +486,3 @@ func deterministicLegacyProjectionID(
 		value[0:4], value[4:6], value[6:8], value[8:10], value[10:16],
 	), nil
 }
-
-func deterministicLegacySessionID(session Session) (string, error) {
-	return deterministicLegacyProjectionID(session, nil, 0)
-}

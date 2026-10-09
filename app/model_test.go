@@ -3270,7 +3270,7 @@ func TestWorkspaceModelDoesNotOverrideGlobalServiceModels(t *testing.T) {
 	value.Provider.ContextWindow = 16000
 	value.Embedding = config.EmbeddingConfig{Model: "global-embedding", Dimensions: 1536}
 	m := model{
-		chatState: chatState{config: value},
+		conversationState: conversationState{config: value},
 		sessionState: sessionState{workspaceModel: workspace.ModelConfig{
 			Version: workspace.ModelConfigVersion,
 			Overrides: map[string]workspace.ModelOverride{
@@ -3306,8 +3306,8 @@ func TestEmbeddedCommitReceivesActiveConfig(t *testing.T) {
 	value := config.Default()
 	value.Provider.Model = "global-main"
 	m := model{
-		hostState: hostState{ctx: context.Background()},
-		chatState: chatState{config: value},
+		hostState:         hostState{ctx: context.Background()},
+		conversationState: conversationState{config: value},
 		sessionState: sessionState{
 			workspaceStore: &workspace.Store{Root: t.TempDir()},
 			workspaceModel: workspace.ModelConfig{

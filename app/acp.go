@@ -133,7 +133,7 @@ func openACPHost(parent context.Context, store config.Store, root string) (*acpH
 		return fail(errors.New("no model provider is configured; run `q gateway` first"))
 	}
 
-	host.model = newManagedModel(runtimeContext, store, factory, manager)
+	host.model = newRuntimeModel(runtimeContext, store, factory, manager)
 	host.model.workspaceStore = &workspaceStore
 	host.model.toolRuntime = initialized.tools
 	host.model.setArchiveWriter(initialized.archive)
@@ -142,7 +142,7 @@ func openACPHost(parent context.Context, store config.Store, root string) (*acpH
 	host.model.libraryClient = initialized.library
 	host.model.models = initialized.models
 	host.model.gatewayConfig = initialized.gatewayConfig
-	host.model.enterChat(initialized.config, initialized.client)
+	host.model.enterSession(initialized.config, initialized.client)
 	return host, nil
 }
 
@@ -235,7 +235,7 @@ func newACPAgent(state *model, root string, logger *slog.Logger) *acpAgent {
 // MCP connections are not.
 func (a *acpAgent) newSessionRuntime() *acpAgent {
 	template := a.state
-	state := newManagedModel(template.ctx, template.store, template.factory, template.runtime)
+	state := newRuntimeModel(template.ctx, template.store, template.factory, template.runtime)
 	state.toolRuntime = template.toolRuntime
 	state.libraryClient = template.libraryClient
 	state.archive = template.archive
@@ -742,7 +742,7 @@ func (a *acpAgent) activateStore(
 	a.state.workspaceStore = &store
 	a.state.workspaceLock = lock
 	a.state.workspaceRestored = false
-	a.state.enterChat(a.state.config, a.state.client)
+	a.state.enterSession(a.state.config, a.state.client)
 	// TUI recovery is an interactive panel, not an ACP lifecycle response. Keep
 	// the checkpoint on disk but do not leave the headless model waiting on an
 	// invisible TUI question.
@@ -773,9 +773,9 @@ func (a *acpAgent) configureSessionMCP(ctx context.Context, servers []acp.McpSer
 			if err != nil {
 				return err
 			}
-			a.sessionMCPBase = cloneMCPConfig(base)
+			a.sessionMCPBase = base.Clone()
 			a.sessionMCPBaseSet = true
-			a.sessionMCPConfig = cloneMCPConfig(base)
+			a.sessionMCPConfig = base.Clone()
 		}
 		return nil
 	}
@@ -783,13 +783,13 @@ func (a *acpAgent) configureSessionMCP(ctx context.Context, servers []acp.McpSer
 	if err != nil {
 		return err
 	}
-	a.sessionMCPBase = cloneMCPConfig(base)
+	a.sessionMCPBase = base.Clone()
 	a.sessionMCPBaseSet = true
 	merged, sessionIDs, err := mergeACPMCPServers(base, servers)
 	if err != nil {
 		return err
 	}
-	a.sessionMCPConfig = cloneMCPConfig(merged)
+	a.sessionMCPConfig = merged.Clone()
 	a.sessionMCPIDs = sessionIDs
 	a.sessionMCPOverride = true
 
@@ -912,7 +912,7 @@ func (a *acpAgent) restoreWorkspaceMCP() error {
 		return nil
 	}
 	a.stateMu.Lock()
-	value := cloneMCPConfig(a.sessionMCPBase)
+	value := a.sessionMCPBase.Clone()
 	configured := a.sessionMCPBaseSet
 	a.stateMu.Unlock()
 	if !configured {
@@ -941,7 +941,7 @@ func (a *acpAgent) restoreWorkspaceMCP() error {
 }
 
 func mergeACPMCPServers(base mcpconfig.Config, servers []acp.McpServer) (mcpconfig.Config, map[string]struct{}, error) {
-	value := cloneMCPConfig(base)
+	value := base.Clone()
 	if value.Servers == nil {
 		value.Servers = make(map[string]mcpconfig.ServerConfig)
 	}
@@ -1536,17 +1536,13 @@ func (a *acpAgent) continueACPAgentTurn(
 			}
 		}
 		if event.compaction != nil {
-			if err := a.state.applyAgentContextCompaction(*event.compaction); err != nil {
+			if err := a.state.persistAgentCompaction(event); err != nil {
 				return acp.PromptResponse{}, fmt.Errorf("apply agent context compaction: %w", err)
-			}
-			if event.persistenceAck != nil {
-				close(event.persistenceAck)
 			}
 			a.publishUsageUpdate()
 		}
 		if event.taskStarted != nil {
-			a.state.activeTask = event.taskStarted
-			if err := a.state.saveWorkspaceSession(); err != nil {
+			if err := a.state.saveActiveTask(event.taskStarted); err != nil {
 				return acp.PromptResponse{}, err
 			}
 			if err := a.emitTaskPlan(event.taskStarted.Objective, acp.PlanEntryStatusInProgress); err != nil {
@@ -1558,8 +1554,7 @@ func (a *acpAgent) continueACPAgentTurn(
 			if a.state.activeTask != nil {
 				objective = a.state.activeTask.Objective
 			}
-			a.state.activeTask = nil
-			if err := a.state.saveWorkspaceSession(); err != nil {
+			if err := a.state.saveActiveTask(nil); err != nil {
 				return acp.PromptResponse{}, err
 			}
 			if objective != "" {
@@ -1622,16 +1617,10 @@ func (a *acpAgent) continueACPAgentTurn(
 		}
 		if event.message != nil {
 			message := *event.message
-			a.state.messages = append(a.state.messages, message)
-			a.state.memory.Append(message)
-			a.launchLearning(a.state.observeLearningMessage(message))
+			a.launchLearning(a.state.appendSessionMessage(message, nil))
 			switch message.Role {
 			case client.RoleTool:
-				if event.toolIsError {
-					a.state.archiveMessage(message, sessionstore.StatusFailed, true)
-				} else {
-					a.state.archiveMessage(message, sessionstore.StatusSucceeded, false)
-				}
+				a.state.archiveSessionMessage(message, event.toolIsError)
 				var diffs []acp.ToolCallContent
 				if diffRuntime != nil {
 					diffs = diffRuntime.take(message.ToolCallID)
@@ -1641,16 +1630,13 @@ func (a *acpAgent) continueACPAgentTurn(
 				}
 				*streamedResponse = ""
 			case client.RoleAssistant:
-				a.state.archiveMessage(message, sessionstore.StatusSucceeded, false)
+				a.state.archiveSessionMessage(message, false)
 				if err := a.emitMissingAssistantText(message.Content, streamedResponse); err != nil {
 					return acp.PromptResponse{}, err
 				}
 			}
-			if err := a.state.saveWorkspaceSession(); err != nil {
+			if err := a.state.persistAgentMessage(event); err != nil {
 				return acp.PromptResponse{}, err
-			}
-			if event.persistenceAck != nil {
-				close(event.persistenceAck)
 			}
 			a.publishUsageUpdate()
 		}

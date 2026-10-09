@@ -37,10 +37,10 @@ func TestStudioServiceStatusAndShutdownSmoke(t *testing.T) {
 	opened := make(chan string, 1)
 	done := make(chan error, 1)
 	go func() {
-		done <- runStudio(ctx, nil, output, diagnostics, func(url string) error {
+		done <- runStudioAt(ctx, nil, output, diagnostics, func(url string) error {
 			opened <- url
 			return nil
-		})
+		}, "/")
 	}()
 
 	var url string

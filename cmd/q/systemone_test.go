@@ -104,6 +104,9 @@ func TestRunSystemOneWithStoreServesAndStops(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if _, err := io.Copy(io.Discard, response.Body); err != nil {
+		t.Fatal(err)
+	}
 	if err := response.Body.Close(); err != nil {
 		t.Error(err)
 	}
@@ -166,6 +169,10 @@ func TestRunSystemOneWithManagedKey(t *testing.T) {
 		}
 		response, err := http.DefaultClient.Do(request)
 		if err != nil {
+			t.Fatal(err)
+		}
+		// Finish the response before testing shutdown so the connection is idle.
+		if _, err := io.Copy(io.Discard, response.Body); err != nil {
 			t.Fatal(err)
 		}
 		if err := response.Body.Close(); err != nil {

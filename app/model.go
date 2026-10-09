@@ -377,21 +377,16 @@ func newModel(ctx context.Context, store config.Store, factory clientFactory) mo
 
 func newManagedModel(ctx context.Context, store config.Store, factory clientFactory, runtime providerRuntime) model {
 	defaults := config.Default()
-	m := model{
-		hostState: hostState{ctx: ctx, store: store, factory: factory, runtime: runtime, screen: screenSetup},
-		chatState: chatState{
-			viewport:           viewport.New(viewport.WithWidth(80), viewport.WithHeight(12)),
-			questionViewport:   viewport.New(viewport.WithWidth(80), viewport.WithHeight(8)),
-			agentTraceViewport: viewport.New(viewport.WithWidth(80), viewport.WithHeight(8)),
-			helpViewport:       viewport.New(viewport.WithWidth(80), viewport.WithHeight(12)),
-			changes:            newChangesViewState(),
-			spinner:            spinner.New(spinner.WithSpinner(spinner.Dot)),
-		},
-		lifecycleState: lifecycleState{thinkerSerial: &thinker.Serial{}},
-	}
-	m.resetSessionLearning()
-	if runtime != nil {
-		m.gatewayConfig = runtime.Config()
+	m := newRuntimeModel(ctx, store, factory, runtime)
+	m.headless = false
+	m.screen = screenSetup
+	m.chatState = chatState{
+		viewport:           viewport.New(viewport.WithWidth(80), viewport.WithHeight(12)),
+		questionViewport:   viewport.New(viewport.WithWidth(80), viewport.WithHeight(8)),
+		agentTraceViewport: viewport.New(viewport.WithWidth(80), viewport.WithHeight(8)),
+		helpViewport:       viewport.New(viewport.WithWidth(80), viewport.WithHeight(12)),
+		changes:            newChangesViewState(),
+		spinner:            spinner.New(spinner.WithSpinner(spinner.Dot)),
 	}
 	m.viewport.SoftWrap = true
 	m.questionViewport.SoftWrap = true
@@ -567,10 +562,10 @@ func newIgnoreEditor() textarea.Model {
 
 func (m model) Init() tea.Cmd {
 	if m.initializing && m.startup != nil {
-		return tea.Batch(m.startup, m.spinner.Tick, tea.RequestBackgroundColor)
+		return tea.Batch(m.startup, m.chatTick(), tea.RequestBackgroundColor)
 	}
 	if m.screen == screenChat {
-		return tea.Batch(m.input.Focus(), tea.RequestBackgroundColor)
+		return tea.Batch(m.focusChatInput(), tea.RequestBackgroundColor)
 	}
 	if m.screen == screenModels {
 		return tea.Batch(m.modelPickerFocus(), tea.RequestBackgroundColor)
@@ -636,13 +631,13 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	case acpSessionResetMsg:
 		if message.err != nil {
 			m.status = "Start new ACP session: " + message.err.Error()
-			return m, m.input.Focus()
+			return m, m.focusChatInput()
 		}
 		m.resetConversation()
 		m.memory = memory.New(memoryPolicy(m.activeConfig()), m.messages)
 		m.status = "New ACP session · " + string(message.sessionID)
 		m.resize(m.width, m.height)
-		return m, m.input.Focus()
+		return m, m.focusChatInput()
 	case commitFinishedMsg:
 		m.commitRunning = false
 		if message.err != nil {
@@ -651,7 +646,7 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			m.status = commitResultStatus(message.result)
 		}
 		m.resize(m.width, m.height)
-		return m, m.input.Focus()
+		return m, m.focusChatInput()
 	case runtimeInitializedMsg:
 		m.initializing = false
 		m.startup = nil
@@ -700,7 +695,7 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		m.resize(m.width, m.height)
 		if m.screen == screenChat {
 			resume := m.continueRecoveredSession()
-			return m, tea.Batch(m.input.Focus(), m.startNextLearningSegment(), resume)
+			return m, tea.Batch(m.focusChatInput(), m.startNextLearningSegment(), resume)
 		}
 		if m.screen == screenSessions {
 			return m, nil
@@ -713,51 +708,7 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, m.setup[m.setupFocus].Focus()
 	case thinkerResultMsg:
-		if message.jobID == "" || message.jobID != m.thinkerJobID || message.sessionGeneration != m.sessionGeneration {
-			return m, nil
-		}
-		m.thinkerBusy = false
-		m.thinkerJobID = ""
-		if message.result.LogError != "" {
-			m.archiveFailure("thinker log", errors.New(message.result.LogError))
-			_ = m.flushArchive()
-		}
-		if message.err != nil {
-			m.archiveFailure("thinker", message.err)
-			_ = m.flushArchive()
-			if !m.waiting {
-				m.status = "Thinker: " + message.err.Error()
-				m.resize(m.width, m.height)
-			}
-			return m, nil
-		}
-		if m.learning != nil {
-			if err := m.learning.Commit(message.jobID); err != nil {
-				m.status = "Thinker checkpoint: " + err.Error()
-				return m, nil
-			}
-			if err := m.saveWorkspaceSession(); err != nil {
-				m.status = err.Error()
-				return m, nil
-			}
-		}
-		if message.checkpointStore != nil {
-			if err := message.checkpointStore.ClearThinkerCheckpoint(message.jobID); err != nil {
-				m.archiveFailure("clear thinker checkpoint", err)
-				_ = m.flushArchive()
-				m.status = "Thinker checkpoint cleanup: " + err.Error()
-				m.resize(m.width, m.height)
-				return m, m.startNextLearningSegment()
-			}
-		}
-		if !m.waiting && message.result.Processed > 0 {
-			m.status = fmt.Sprintf(
-				"Thinker processed %d proposition(s) · %d created · %d merged · %d discarded",
-				message.result.Processed, message.result.Created, message.result.Merged, message.result.Discarded,
-			)
-			m.resize(m.width, m.height)
-		}
-		return m, m.startNextLearningSegment()
+		return m.updateThinkerResult(message)
 	case configuredMsg:
 		if message.err != nil {
 			m.status = message.err.Error()
@@ -802,7 +753,7 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			m.enterChat(message.config, message.client)
 		}
 		resume := m.continueRecoveredSession()
-		return m, tea.Batch(m.input.Focus(), m.startNextLearningSegment(), embeddingCommand, resume)
+		return m, tea.Batch(m.focusChatInput(), m.startNextLearningSegment(), embeddingCommand, resume)
 	case archiveEmbeddingConfiguredMsg:
 		if message.err != nil {
 			m.status = "Embedding: " + message.err.Error()
@@ -895,8 +846,8 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			m.status = message.err.Error()
 			return m, nil
 		}
-		m.mcpDraft = cloneMCPConfig(message.config)
-		m.mcpOriginal = cloneMCPConfig(message.config)
+		m.mcpDraft = message.config.Clone()
+		m.mcpOriginal = message.config.Clone()
 		m.mcpDiscardArmed = false
 		m.status = renderMCPSaveStatus(message.statuses, m.toolRuntime == nil)
 		return m, nil
@@ -942,7 +893,7 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			m.status = message.err.Error()
 			if m.modelReturn == screenChat {
 				m.screen = screenChat
-				return m, m.input.Focus()
+				return m, m.focusChatInput()
 			}
 			m.screen = screenSetup
 			return m, m.setup[m.setupFocus].Focus()
@@ -952,7 +903,7 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			return m, m.setup[m.setupFocus].Focus()
 		}
 		if m.screen == screenChat {
-			return m, m.input.Focus()
+			return m, m.focusChatInput()
 		}
 		return m, m.modelPickerFocus()
 	case systemOneModelsMsg:
@@ -1061,7 +1012,7 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		if exitAfterSave {
 			m.screen = screenChat
 			m.blurLoomInputs()
-			return m, m.input.Focus()
+			return m, m.focusChatInput()
 		}
 		return m, m.loomFocusCommand()
 	case skillActionMsg:
@@ -1122,6 +1073,14 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m *model) enterChat(value config.Config, configuredClient chatClient) {
+	m.input = newChatInput()
+	m.enterSession(value, configuredClient)
+	m.resize(m.width, m.height)
+	m.focusChatInput()
+	m.refreshTranscript()
+}
+
+func (m *model) enterSession(value config.Config, configuredClient chatClient) {
 	m.screen = screenChat
 	m.setupEdit = false
 	m.config = value
@@ -1154,7 +1113,6 @@ func (m *model) enterChat(value config.Config, configuredClient chatClient) {
 	m.pendingMessage = client.Message{}
 	m.clearAgentActivities()
 	m.status = ""
-	m.input = newChatInput()
 	m.restoreWorkspaceSession()
 	if workspaceModelErr != nil {
 		if m.status != "" {
@@ -1169,9 +1127,6 @@ func (m *model) enterChat(value config.Config, configuredClient chatClient) {
 		m.status += workspaceLearningErr.Error()
 	}
 	m.ensureRunID()
-	m.resize(m.width, m.height)
-	m.input.Focus()
-	m.refreshTranscript()
 }
 
 func (m *model) appendRuntimeMessages() {
@@ -1193,7 +1148,7 @@ func (m *model) enterSetup(value config.Config) {
 	m.setup[setupBaseURL].SetValue(value.Provider.BaseURL)
 	m.setup[setupAPIKeyEnv].SetValue(value.Provider.APIKeyEnv)
 	m.setup[setupAPIKey].SetValue(value.Provider.APIKey)
-	m.input.Blur()
+	m.blurChatInput()
 	for index := range m.setup {
 		m.setup[index].Blur()
 	}
@@ -1207,7 +1162,7 @@ func (m *model) enterProviderList() {
 		m.providerCursor = max(0, len(m.gatewayConfig.Providers)-1)
 	}
 	m.discovering = false
-	m.input.Blur()
+	m.blurChatInput()
 	for index := range m.setup {
 		m.setup[index].Blur()
 	}
@@ -1241,7 +1196,7 @@ func (m *model) enterProviderEditor(index int) {
 	m.setup[setupBaseURL].SetValue(provider.BaseURL)
 	m.setup[setupAPIKeyEnv].SetValue(provider.APIKeyEnv)
 	m.setup[setupAPIKey].SetValue(provider.APIKey)
-	m.input.Blur()
+	m.blurChatInput()
 	for fieldIndex := range m.setup {
 		m.setup[fieldIndex].Blur()
 	}
@@ -1620,7 +1575,7 @@ func (m *model) resetConversationState(runIDs ...string) {
 	m.pendingQuestion = askToUserInput{}
 	m.questionAnswer = nil
 	m.questionEvents = nil
-	m.input.Placeholder = "Type a message…"
+	m.setChatPlaceholder("Type a message…")
 	m.status = "Conversation cleared"
 	m.clearAgentActivities()
 	m.resize(m.width, m.height)
@@ -2051,6 +2006,9 @@ func mergeWorkspaceMessages(base, saved []client.Message) []client.Message {
 }
 
 func (m *model) resize(width, height int) {
+	if m.headless {
+		return
+	}
 	m.width, m.height = max(width, 40), max(height, 12)
 	contentWidth := max(20, m.width-4)
 	for i := range m.custom.inputs {
@@ -2178,6 +2136,9 @@ func (m *model) applyColorScheme(dark bool) {
 }
 
 func (m *model) refreshTranscript() {
+	if m.headless {
+		return
+	}
 	if m.screen != screenChat {
 		return
 	}
@@ -2186,6 +2147,9 @@ func (m *model) refreshTranscript() {
 }
 
 func (m *model) refreshQuestion() {
+	if m.headless {
+		return
+	}
 	if m.screen != screenChat || !m.asking {
 		m.questionViewport.SetContent("")
 		return
@@ -2217,7 +2181,9 @@ func (m *model) clearAgentActivities() {
 	m.agentLogVisible = 0
 	m.agentTraces = nil
 	m.agentTraceExpanded = true
-	m.agentTraceViewport.SetContent("")
+	if !m.headless {
+		m.agentTraceViewport.SetContent("")
+	}
 }
 
 func (m *model) appendAgentTrace(trace agentTrace) {
@@ -2248,6 +2214,9 @@ func boundedAgentTraceContent(content string) string {
 }
 
 func (m *model) refreshAgentTrace(gotoBottom bool) {
+	if m.headless {
+		return
+	}
 	if m.screen != screenChat {
 		return
 	}

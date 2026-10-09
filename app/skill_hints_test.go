@@ -9,8 +9,8 @@ import (
 )
 
 func TestKnownSkillIDsRestoresHintsAndLoadedSkillsFromContext(t *testing.T) {
-	user := agentloop.AppendSkillHintContext(client.Message{Role: client.RoleUser, Content: "review this"}, &skillHintSet{
-		Trigger: "user_input", Candidates: []skillHint{{ID: "from-user", Name: "user"}},
+	user := agentloop.AppendSkillHintContext(client.Message{Role: client.RoleUser, Content: "review this"}, &SkillHintSet{
+		Trigger: "user_input", Candidates: []SkillHint{{ID: "from-user", Name: "user"}},
 	})
 	messages := []client.Message{
 		user,
@@ -29,3 +29,8 @@ func TestKnownSkillIDsRestoresHintsAndLoadedSkillsFromContext(t *testing.T) {
 		t.Fatalf("user hint tags = %d in %q", count, user.Content)
 	}
 }
+
+const (
+	skillHintsTag = "<q_skill_hints>"
+	activeTaskTag = "<q_active_task>"
+)

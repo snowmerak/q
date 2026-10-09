@@ -87,36 +87,9 @@ func (s Store) SaveLearningConfig(value LearningConfig) error {
 	if err := os.Chmod(s.Dir(), 0o700); err != nil {
 		return fmt.Errorf("workspace: secure %s: %w", s.Dir(), err)
 	}
-	file, err := os.CreateTemp(s.Dir(), ".learning-*.json")
-	if err != nil {
-		return fmt.Errorf("workspace: create temporary learning settings: %w", err)
+	if err := fsreplace.WriteFile(s.LearningPath(), body, 0o600); err != nil {
+		return fmt.Errorf("workspace: save learning settings: %w", err)
 	}
-	temporaryPath := file.Name()
-	keep := false
-	defer func() {
-		if !keep {
-			_ = os.Remove(temporaryPath)
-		}
-	}()
-	if err := file.Chmod(0o600); err != nil {
-		_ = file.Close()
-		return fmt.Errorf("workspace: secure temporary learning settings: %w", err)
-	}
-	if _, err := file.Write(body); err != nil {
-		_ = file.Close()
-		return fmt.Errorf("workspace: write temporary learning settings: %w", err)
-	}
-	if err := file.Sync(); err != nil {
-		_ = file.Close()
-		return fmt.Errorf("workspace: sync temporary learning settings: %w", err)
-	}
-	if err := file.Close(); err != nil {
-		return fmt.Errorf("workspace: close temporary learning settings: %w", err)
-	}
-	if err := fsreplace.Replace(temporaryPath, s.LearningPath()); err != nil {
-		return fmt.Errorf("workspace: replace %s: %w", s.LearningPath(), err)
-	}
-	keep = true
 	return nil
 }
 

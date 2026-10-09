@@ -9,7 +9,6 @@ import (
 	"net"
 	"net/http"
 	"os"
-	"strings"
 	"time"
 
 	"github.com/snowmerak/q/config"
@@ -17,12 +16,7 @@ import (
 	"github.com/snowmerak/q/systemoneserver"
 )
 
-type systemOneCommandOptions struct {
-	host    string
-	port    int
-	hostSet bool
-	portSet bool
-}
+type systemOneCommandOptions = networkCommandOptions
 
 func runSystemOneCommand(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	store, err := config.DefaultStore()
@@ -151,36 +145,7 @@ func watchSystemOneKeyring(ctx context.Context, store systemoneconfig.Store, ser
 }
 
 func parseSystemOneOptions(args []string, output io.Writer) (systemOneCommandOptions, error) {
-	options := systemOneCommandOptions{port: -1}
-	flags := flag.NewFlagSet("q systemone start", flag.ContinueOnError)
-	flags.SetOutput(output)
-	flags.Usage = func() {
-		_, _ = fmt.Fprintln(output, "usage: q systemone start [--host <ip>] [--port <port>]")
-		flags.PrintDefaults()
-	}
-	flags.StringVar(&options.host, "host", "", "override the configured listen IP address")
-	flags.IntVar(&options.port, "port", -1, "override the configured listen port (0 selects a random port)")
-	if err := flags.Parse(args); err != nil {
-		return systemOneCommandOptions{}, err
-	}
-	if flags.NArg() != 0 {
-		return systemOneCommandOptions{}, fmt.Errorf("unexpected arguments: %s", strings.Join(flags.Args(), " "))
-	}
-	flags.Visit(func(current *flag.Flag) {
-		switch current.Name {
-		case "host":
-			options.hostSet = true
-		case "port":
-			options.portSet = true
-		}
-	})
-	if options.hostSet && net.ParseIP(options.host) == nil {
-		return systemOneCommandOptions{}, fmt.Errorf("host %q is not an IP address", options.host)
-	}
-	if options.portSet && (options.port < 0 || options.port > 65535) {
-		return systemOneCommandOptions{}, errors.New("port must be between 0 and 65535")
-	}
-	return options, nil
+	return parseNetworkOptions("systemone", args, output)
 }
 
 func listenSystemOne(options systemOneCommandOptions, configured systemoneconfig.ServerConfig) (net.Listener, bool, error) {

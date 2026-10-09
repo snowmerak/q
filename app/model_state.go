@@ -27,6 +27,7 @@ import (
 
 type model struct {
 	hostState
+	conversationState
 	lifecycleState
 	sessionState
 	providerState
@@ -44,6 +45,7 @@ type model struct {
 
 // hostState owns one copyable part of the Bubble Tea model.
 type hostState struct {
+	headless      bool
 	custom        customManager
 	ctx           context.Context
 	store         config.Store
@@ -261,17 +263,38 @@ type agentsState struct {
 	agentsProbe     map[string]string
 }
 
-// chatState owns one copyable part of the Bubble Tea model.
+// conversationState holds session execution data shared by all hosts.
+type conversationState struct {
+	config                 config.Config
+	client                 chatClient
+	messages               []client.Message
+	memory                 *memory.Manager
+	conversationID         string
+	activeTask             *workspace.ActiveTask
+	pendingMessage         client.Message
+	requestEstimate        int
+	compactionTarget       int
+	commitRunning          bool
+	initializing           bool
+	startup                tea.Cmd
+	waiting                bool
+	compacting             bool
+	submitPending          bool
+	asking                 bool
+	pendingQuestion        askToUserInput
+	questionAnswer         chan<- askToUserOutput
+	questionEvents         <-chan agentEvent
+	questionTurnID         uint64
+	turnContext            context.Context
+	turnCancel             context.CancelFunc
+	turnErr                error // Foreground failures survive status updates until the next turn.
+	turnID                 uint64
+	turnMessageStart       int
+	pendingMessageDeferred bool
+}
+
+// chatState holds terminal controls and their presentation state.
 type chatState struct {
-	config               config.Config
-	client               chatClient
-	messages             []client.Message
-	memory               *memory.Manager
-	conversationID       string
-	activeTask           *workspace.ActiveTask
-	pendingMessage       client.Message
-	requestEstimate      int
-	compactionTarget     int
 	input                textarea.Model
 	slashCompletion      slashCompletionState
 	viewport             viewport.Model
@@ -280,17 +303,6 @@ type chatState struct {
 	helpViewport         viewport.Model
 	changes              changesViewState
 	spinner              spinner.Model
-	commitRunning        bool
-	initializing         bool
-	startup              tea.Cmd
-	waiting              bool
-	compacting           bool
-	submitPending        bool
-	asking               bool
-	pendingQuestion      askToUserInput
-	questionAnswer       chan<- askToUserOutput
-	questionEvents       <-chan agentEvent
-	questionTurnID       uint64
 	questionChoice       int
 	agentActivities      []agentActivity
 	agentStates          map[string]string
@@ -299,12 +311,5 @@ type chatState struct {
 	agentTraceExpanded   bool
 	transcriptThoughts   []transcriptThought
 	streamResponse       string
-	turnContext          context.Context
-	turnCancel           context.CancelFunc
-	turnErr              error // Foreground failures survive status updates until the next turn.
-	turnID               uint64
-	turnMessageStart     int
 	toolResultsCollapsed bool
-
-	pendingMessageDeferred bool
 }

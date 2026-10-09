@@ -33,7 +33,7 @@ func TestReadOnlyPropositionToolsAreAvailableToQueryRoles(t *testing.T) {
 	}
 	for label, tools := range map[string][]client.Tool{
 		"scout":          scoutTools(available),
-		"griller":        grillerTools(available),
+		"griller":        grillerToolsWithCompletion(available, submitBriefTool()),
 		"planner review": plannerReviewTools(available),
 		"coder":          coderTools(available),
 	} {

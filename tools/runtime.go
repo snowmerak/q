@@ -255,7 +255,7 @@ func (r *Runtime) NewCheckoutRuntime(ctx context.Context, checkoutRoot string) (
 		return nil, err
 	}
 	r.externalMu.RLock()
-	external := cloneMCPConfig(r.externalConfig)
+	external := r.externalConfig.Clone()
 	r.externalMu.RUnlock()
 	if len(external.Servers) > 0 {
 		cloned.ConfigureExternal(ctx, checkoutRoot, external)

@@ -123,20 +123,20 @@ func (m model) submitChat() (tea.Model, tea.Cmd) {
 	}
 	_, remoteChat := m.client.(*acpRemoteClient)
 	if remoteChat && content == "/new" {
-		m.input.Reset()
+		m.resetChatInput()
 		m.status = "Starting new ACP session…"
 		return m, m.client.(*acpRemoteClient).resetSessionCommand(m.ctx)
 	}
 	if !remoteChat {
 		if retiredLoopModeCommand(content) {
-			m.input.Reset()
+			m.resetChatInput()
 			m.status = "Loop modes were removed. Ordinary chat can use direct tools and delegate work."
-			return m, m.input.Focus()
+			return m, m.focusChatInput()
 		}
 		if retiredPlanCommand(content) {
-			m.input.Reset()
+			m.resetChatInput()
 			m.status = "Plan mode was removed. Use /subagent builtin/manager for a focused PM request."
-			return m, m.input.Focus()
+			return m, m.focusChatInput()
 		}
 		if updated, command, handled := m.startSkillCommand(content); handled {
 			return updated, command
@@ -150,60 +150,60 @@ func (m model) submitChat() (tea.Model, tea.Cmd) {
 		case "/changes":
 			return m.enterChanges()
 		case "/clear":
-			m.input.Reset()
+			m.resetChatInput()
 			m.resetConversation()
-			return m, m.input.Focus()
+			return m, m.focusChatInput()
 		case "/compact":
 			return m.startManualCompaction()
 		case "/new":
-			m.input.Reset()
+			m.resetChatInput()
 			if err := m.startNewWorkspaceSession(); err != nil {
 				m.status = err.Error()
 			}
-			return m, m.input.Focus()
+			return m, m.focusChatInput()
 		case "/sessions":
-			m.input.Reset()
+			m.resetChatInput()
 			return m.enterSessions()
 		case "/learn":
-			m.input.Reset()
+			m.resetChatInput()
 			if m.learningDisabled() {
 				m.status = "Learning is disabled for this workspace · /learn on to enable"
-				return m, m.input.Focus()
+				return m, m.focusChatInput()
 			}
 			m.status = "Learning checkpoint enqueued"
-			return m, tea.Batch(m.input.Focus(), m.enqueueExplicitLearning())
+			return m, tea.Batch(m.focusChatInput(), m.enqueueExplicitLearning())
 		case "/learn off":
-			m.input.Reset()
+			m.resetChatInput()
 			if err := m.setWorkspaceLearningDisabled(true); err != nil {
 				m.status = err.Error()
-				return m, m.input.Focus()
+				return m, m.focusChatInput()
 			}
 			m.status = "Learning disabled for this workspace"
-			return m, m.input.Focus()
+			return m, m.focusChatInput()
 		case "/learn on":
-			m.input.Reset()
+			m.resetChatInput()
 			if err := m.setWorkspaceLearningDisabled(false); err != nil {
 				m.status = err.Error()
-				return m, m.input.Focus()
+				return m, m.focusChatInput()
 			}
 			m.status = "Learning enabled for this workspace"
-			return m, tea.Batch(m.input.Focus(), m.startNextLearningSegment())
+			return m, tea.Batch(m.focusChatInput(), m.startNextLearningSegment())
 		case "/learn status":
-			m.input.Reset()
+			m.resetChatInput()
 			if m.learningDisabled() {
 				m.status = "Learning is disabled for this workspace"
 			} else {
 				m.status = "Learning is enabled for this workspace"
 			}
-			return m, m.input.Focus()
+			return m, m.focusChatInput()
 		case "/model":
-			m.input.Reset()
+			m.resetChatInput()
 			return m.discoverCurrentModels()
 		case "/systemone":
-			m.input.Reset()
+			m.resetChatInput()
 			return m.enterSystemOne()
 		case "/gateway":
-			m.input.Reset()
+			m.resetChatInput()
 			if m.runtime != nil {
 				m.enterGatewaySettings()
 				return m, nil
@@ -211,25 +211,25 @@ func (m model) submitChat() (tea.Model, tea.Cmd) {
 			m.enterSetup(m.config)
 			return m, m.setup[m.setupFocus].Focus()
 		case "/library":
-			m.input.Reset()
+			m.resetChatInput()
 			return m, m.enterLibrarySettings()
 		case "/loom":
-			m.input.Reset()
+			m.resetChatInput()
 			return m.enterLoom()
 		case "/ignore":
-			m.input.Reset()
+			m.resetChatInput()
 			return m.enterIgnore()
 		case "/skills":
-			m.input.Reset()
+			m.resetChatInput()
 			return m.enterSkills()
 		case "/lsp":
-			m.input.Reset()
+			m.resetChatInput()
 			return m.enterLSP()
 		case "/mcp":
-			m.input.Reset()
+			m.resetChatInput()
 			return m.enterMCP()
 		case "/help":
-			m.input.Reset()
+			m.resetChatInput()
 			return m.enterHelp()
 		}
 	}
@@ -290,8 +290,8 @@ func (m model) startChatTurn(content string, compact bool) (tea.Model, tea.Cmd) 
 			m.sessionOperation = &operation
 		}
 	}
-	m.input.Reset()
-	m.input.Blur()
+	m.resetChatInput()
+	m.blurChatInput()
 	m.waiting = true
 	m.refreshTranscript()
 	if compactionErr != nil {
@@ -303,7 +303,7 @@ func (m model) startChatTurn(content string, compact bool) (tea.Model, tea.Cmd) 
 		if archiveErr := m.flushArchive(); archiveErr != nil {
 			m.status += " · archive: " + archiveErr.Error()
 		}
-		return m, m.input.Focus()
+		return m, m.focusChatInput()
 	}
 	if err := m.saveWorkspaceSession(); err != nil {
 		m.turnErr = err
@@ -313,15 +313,15 @@ func (m model) startChatTurn(content string, compact bool) (tea.Model, tea.Cmd) 
 		if archiveErr := m.flushArchive(); archiveErr != nil {
 			m.status += " · archive: " + archiveErr.Error()
 		}
-		return m, m.input.Focus()
+		return m, m.focusChatInput()
 	}
 	if compactionPlan != nil {
 		m.compacting = true
 		m.status = "Compacting context…"
-		return m, tea.Batch(m.spinner.Tick, m.compactContext(*compactionPlan, false), learning)
+		return m, tea.Batch(m.chatTick(), m.compactContext(*compactionPlan, false), learning)
 	}
 	m.status = "Thinking…"
-	return m, tea.Batch(m.spinner.Tick, m.sendChatRequest(), learning)
+	return m, tea.Batch(m.chatTick(), m.sendChatRequest(), learning)
 }
 
 // resumeRecoveredTurn continues the parent model after its saved delegate
@@ -339,9 +339,9 @@ func (m *model) continueChatTurn() tea.Cmd {
 	m.beginTurn()
 	m.turnMessageStart = len(m.messages)
 	m.waiting = true
-	m.input.Blur()
+	m.blurChatInput()
 	m.status = "Resuming saved turn…"
-	return tea.Batch(m.spinner.Tick, m.sendChatRequest())
+	return tea.Batch(m.chatTick(), m.sendChatRequest())
 }
 
 func (m model) submitQuestionAnswer(content string) (tea.Model, tea.Cmd) {
@@ -355,8 +355,8 @@ func (m model) submitQuestionAnswer(content string) (tea.Model, tea.Cmd) {
 		}
 		if customAnswerSelected(m.pendingQuestion, m.questionChoice) {
 			m.status = "Type a custom answer below"
-			m.input.Placeholder = "Type a custom answer…"
-			return m, m.input.Focus()
+			m.setChatPlaceholder("Type a custom answer…")
+			return m, m.focusChatInput()
 		}
 		choice := m.pendingQuestion.Choices[min(max(m.questionChoice, 0), len(m.pendingQuestion.Choices)-1)]
 		answer = askToUserOutput{SelectedChoiceID: choice.ID}
@@ -366,8 +366,8 @@ func (m model) submitQuestionAnswer(content string) (tea.Model, tea.Cmd) {
 		answer = answerForQuestion(m.pendingQuestion, content)
 		if m.pendingQuestion.ChoiceOnly && answer.SelectedChoiceID == "" {
 			m.status = "Choose one of the available permission options"
-			m.input.Reset()
-			return m, m.input.Focus()
+			m.resetChatInput()
+			return m, m.focusChatInput()
 		}
 	}
 	answerChannel := m.questionAnswer
@@ -380,12 +380,12 @@ func (m model) submitQuestionAnswer(content string) (tea.Model, tea.Cmd) {
 	m.questionAnswer = nil
 	m.questionEvents = nil
 	m.questionTurnID = 0
-	m.input.Reset()
-	m.input.Placeholder = "Type a message…"
-	m.input.Blur()
+	m.resetChatInput()
+	m.setChatPlaceholder("Type a message…")
+	m.blurChatInput()
 	m.status = "Thinking…"
 	m.resize(m.width, m.height)
-	return m, tea.Batch(m.spinner.Tick, func() tea.Msg {
+	return m, tea.Batch(m.chatTick(), func() tea.Msg {
 		select {
 		case answerChannel <- answer:
 			return waitAgentEvent(events, turnID)()
@@ -452,8 +452,8 @@ func (m model) interruptTurn() (tea.Model, tea.Cmd) {
 		m.conversationID = ""
 	}
 	m.compactionTarget = 0
-	m.input.Reset()
-	m.input.Placeholder = "Type a message…"
+	m.resetChatInput()
+	m.setChatPlaceholder("Type a message…")
 	m.status = "Turn interrupted"
 	m.sessionUpdatedAt = time.Now().UTC()
 	m.resize(m.width, m.height)
@@ -463,7 +463,7 @@ func (m model) interruptTurn() (tea.Model, tea.Cmd) {
 	if err := m.flushArchive(); err != nil {
 		m.status += " · archive: " + err.Error()
 	}
-	return m, m.input.Focus()
+	return m, m.focusChatInput()
 }
 
 func (m *model) completeInterruptedToolCalls() {
@@ -509,11 +509,11 @@ func hasCompactionHistory(messages []client.Message) bool {
 
 // startManualCompaction uses the automatic checkpoint path without adding a user turn.
 func (m model) startManualCompaction() (tea.Model, tea.Cmd) {
-	m.input.Reset()
+	m.resetChatInput()
 	m.turnErr = nil
 	if m.memory == nil || !hasCompactionHistory(m.memory.Messages()) {
 		m.status = "Nothing to compact"
-		return m, m.input.Focus()
+		return m, m.focusChatInput()
 	}
 	plan, err := m.memory.Plan()
 	if err != nil {
@@ -523,16 +523,16 @@ func (m model) startManualCompaction() (tea.Model, tea.Cmd) {
 			m.turnErr = err
 			m.status = "compact context: " + err.Error()
 		}
-		return m, m.input.Focus()
+		return m, m.focusChatInput()
 	}
 	m.beginTurn()
 	m.turnMessageStart = len(m.messages)
 	m.pendingMessage = client.Message{}
 	m.waiting = true
 	m.compacting = true
-	m.input.Blur()
+	m.blurChatInput()
 	m.status = "Compacting context…"
-	return m, tea.Batch(m.spinner.Tick, m.compactContext(plan, true))
+	return m, tea.Batch(m.chatTick(), m.compactContext(plan, true))
 }
 
 func (m model) compactContext(plan memory.Plan, manual bool) tea.Cmd {
@@ -672,7 +672,9 @@ func (m *model) rollbackPendingMessage() {
 		if m.memory != nil && !m.pendingMessageDeferred {
 			m.memory.PopLast()
 		}
-		m.input.SetValue(m.pendingMessage.Content)
+		if !m.headless {
+			m.input.SetValue(m.pendingMessage.Content)
+		}
 	}
 	m.pendingMessage = client.Message{}
 	m.pendingMessageDeferred = false

@@ -2,12 +2,10 @@ package commitagent
 
 import (
 	"fmt"
-	"io"
 	"sync"
 )
 
 type progressLogger struct {
-	output io.Writer
 	events chan<- ProgressEvent
 	notify func(ProgressEvent)
 	mu     sync.Mutex
@@ -16,10 +14,6 @@ type progressLogger struct {
 type ProgressEvent struct {
 	Stage   string `json:"stage"`
 	Message string `json:"message"`
-}
-
-func newProgressLogger(output io.Writer) *progressLogger {
-	return &progressLogger{output: output}
 }
 
 func newEventProgressLogger(events chan<- ProgressEvent) *progressLogger {
@@ -37,9 +31,6 @@ func (logger *progressLogger) step(stage, format string, arguments ...any) {
 	event := ProgressEvent{Stage: stage, Message: fmt.Sprintf(format, arguments...)}
 	logger.mu.Lock()
 	defer logger.mu.Unlock()
-	if logger.output != nil {
-		_, _ = fmt.Fprintf(logger.output, "q commit · %s · %s\n", event.Stage, event.Message)
-	}
 	if logger.events != nil {
 		select {
 		case logger.events <- event:

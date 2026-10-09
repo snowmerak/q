@@ -38,8 +38,8 @@ func (m model) enterMCP() (tea.Model, tea.Cmd) {
 	}
 	m.screen = screenMCP
 	m.input.Blur()
-	m.mcpDraft = cloneMCPConfig(value)
-	m.mcpOriginal = cloneMCPConfig(value)
+	m.mcpDraft = value.Clone()
+	m.mcpOriginal = value.Clone()
 	m.mcpPanel = 0
 	m.mcpCursor = [2]int{}
 	m.mcpMode = mcpModeList
@@ -191,7 +191,7 @@ func (m model) acceptMCPForm() (tea.Model, tea.Cmd) {
 	} else {
 		server.URL, server.Headers = endpoint, headers
 	}
-	candidate := cloneMCPConfig(m.mcpDraft)
+	candidate := m.mcpDraft.Clone()
 	if id != m.mcpEditID {
 		if _, exists := candidate.Servers[id]; exists {
 			m.status = "MCP server profile already exists · " + id
@@ -306,7 +306,7 @@ func (m model) saveMCPSettings() (tea.Model, tea.Cmd) {
 	}
 	m.mcpBusy = true
 	m.status = "Saving MCP settings…"
-	value := cloneMCPConfig(m.mcpDraft)
+	value := m.mcpDraft.Clone()
 	store := m.mcpSettingsStore
 	ctx := m.ctx
 	root := ""
@@ -464,22 +464,6 @@ func (m model) mcpModified() bool {
 	left, _ := json.Marshal(m.mcpDraft)
 	right, _ := json.Marshal(m.mcpOriginal)
 	return string(left) != string(right)
-}
-
-func cloneMCPConfig(value mcpconfig.Config) mcpconfig.Config {
-	result := mcpconfig.Config{Version: value.Version, Servers: make(map[string]mcpconfig.ServerConfig, len(value.Servers)), Roles: make(map[string][]string, len(value.Roles))}
-	for id, server := range value.Servers {
-		server.Args = append([]string(nil), server.Args...)
-		server.Env = cloneStringMap(server.Env)
-		server.Headers = cloneStringMap(server.Headers)
-		server.ResolvedEnv = cloneStringMap(server.ResolvedEnv)
-		server.ResolvedHeaders = cloneStringMap(server.ResolvedHeaders)
-		result.Servers[id] = server
-	}
-	for role, servers := range value.Roles {
-		result.Roles[role] = append([]string(nil), servers...)
-	}
-	return result
 }
 
 func cloneStringMap(value map[string]string) map[string]string {

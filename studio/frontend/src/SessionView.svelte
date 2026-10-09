@@ -9,7 +9,7 @@
   import SessionRegistration from './sessions/SessionRegistration.svelte';
   import FileExplorer from './files/FileExplorer.svelte';
   import { resolveFileLink } from './files/paths';
-  import { apiError } from './api';
+  import { apiError, requestResponse } from './api';
   import { contextPercent, formatTokenCount, shortID } from './sessions/format';
   import { RunMonitor, runStatusLabel, terminalRun } from './sessions/run-monitor';
   import type { DelegationNode, DelegationSession, FlatDelegation, Message, RegisteredSessionTree, RunEvent, RunSnapshot, SessionDetail, StudioProject } from './sessions/types';
@@ -128,11 +128,10 @@
     runMonitor.stop();
     error = '';
     try {
-      const response = await fetch('/api/v1/registered-sessions', {
+      const response = await requestResponse('/api/v1/registered-sessions', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ workspace_root: root, session_id: sessionID, create })
       });
-      if (!response.ok) throw new Error(await apiError(response));
       const registration = (await response.json()) as RegisteredSessionTree;
       registrationDialogOpen = false;
       await loadRegisteredSessions(registration.registration_id);
@@ -166,11 +165,10 @@
     sessionLoading = true;
     error = '';
     try {
-      const response = await fetch(`/api/v1/sessions/${encodeURIComponent(selected.session.session_id)}/clear`, {
+      const response = await requestResponse(`/api/v1/sessions/${encodeURIComponent(selected.session.session_id)}/clear`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ workspace_root: workspaceRoot })
       });
-      if (!response.ok) throw new Error(await apiError(response));
       selected = (await response.json()) as SessionDetail;
       sessionGeneration += 1;
       runMonitor.stop();
@@ -195,11 +193,10 @@
     error = '';
     runStatus = 'Compacting context…';
     try {
-      const response = await fetch(`/api/v1/sessions/${encodeURIComponent(selected.session.session_id)}/compact`, {
+      const response = await requestResponse(`/api/v1/sessions/${encodeURIComponent(selected.session.session_id)}/compact`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ workspace_root: workspaceRoot })
       });
-      if (!response.ok) throw new Error(await apiError(response));
       runStatus = ((await response.json()) as { status?: string }).status || 'Context compacted';
       await reloadSelected();
     } catch (cause) {
@@ -232,8 +229,7 @@
     workspaceLoading = true;
     error = '';
     try {
-      const response = await fetch('/api/v1/registered-sessions', { headers: { Accept: 'application/json' } });
-      if (!response.ok) throw new Error(await apiError(response));
+      const response = await requestResponse('/api/v1/registered-sessions', { headers: { Accept: 'application/json' } });
       const result = (await response.json()) as { projects?: StudioProject[]; sessions: RegisteredSessionTree[] };
       projects = result.projects || [];
       registeredSessions = result.sessions;
@@ -259,8 +255,7 @@
     sessionLoading = true;
     error = '';
     try {
-      const response = await fetch(`/api/v1/registered-sessions/${encodeURIComponent(registration.registration_id)}`, { method: 'DELETE' });
-      if (!response.ok) throw new Error(await apiError(response));
+      const response = await requestResponse(`/api/v1/registered-sessions/${encodeURIComponent(registration.registration_id)}`, { method: 'DELETE' });
       registeredSessions = registeredSessions.filter((item) => item.registration_id !== registration.registration_id);
       if (selectedRegistration?.registration_id === registration.registration_id) {
         const next = registeredSessions.find((item) => !item.issue);
@@ -281,8 +276,7 @@
     sessionLoading = true;
     error = '';
     try {
-      const response = await fetch(`/api/v1/sessions/${encodeURIComponent(selected.session.session_id)}?workspace_root=${encodeURIComponent(workspaceRoot)}`, { method: 'DELETE' });
-      if (!response.ok) throw new Error(await apiError(response));
+      const response = await requestResponse(`/api/v1/sessions/${encodeURIComponent(selected.session.session_id)}?workspace_root=${encodeURIComponent(workspaceRoot)}`, { method: 'DELETE' });
       await fetch(`/api/v1/registered-sessions/${encodeURIComponent(selectedRegistration.registration_id)}`, { method: 'DELETE' });
       registeredSessions = registeredSessions.filter((item) => item.registration_id !== selectedRegistration?.registration_id);
       const next = registeredSessions.find((item) => !item.issue);
@@ -304,8 +298,7 @@
     error = '';
     try {
       const query = new URLSearchParams({ workspace_root: workspaceRoot, path: selectedDelegation.path });
-      const response = await fetch(`/api/v1/sessions/${encodeURIComponent(selected.session.session_id)}/delegations?${query}`, { method: 'DELETE' });
-      if (!response.ok) throw new Error(await apiError(response));
+      const response = await requestResponse(`/api/v1/sessions/${encodeURIComponent(selected.session.session_id)}/delegations?${query}`, { method: 'DELETE' });
       if (selectedRegistration) await selectRegisteredSession(selectedRegistration, false);
       runStatus = 'Completed delegation deleted';
       await loadDelegations(selected.session.session_id);
@@ -322,8 +315,7 @@
     learningLoading = true;
     const generation = sessionGeneration;
     try {
-      const response = await fetch(`/api/v1/workspaces/learning?workspace_root=${encodeURIComponent(workspaceRoot)}`);
-      if (!response.ok) throw new Error(await apiError(response));
+      const response = await requestResponse(`/api/v1/workspaces/learning?workspace_root=${encodeURIComponent(workspaceRoot)}`);
       const result = (await response.json()) as { enabled: boolean };
       if (isCurrentSession(generation)) learningEnabled = result.enabled;
     } catch (cause) {
@@ -338,11 +330,10 @@
     learningLoading = true;
     error = '';
     try {
-      const response = await fetch('/api/v1/workspaces/learning', {
+      const response = await requestResponse('/api/v1/workspaces/learning', {
         method: 'PUT', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ workspace_root: workspaceRoot, disabled: learningEnabled })
       });
-      if (!response.ok) throw new Error(await apiError(response));
       learningEnabled = ((await response.json()) as { enabled: boolean }).enabled;
       runStatus = `Learning ${learningEnabled ? 'enabled' : 'disabled'}`;
     } catch (cause) {
@@ -365,8 +356,7 @@
       selectedDelegation = null;
       workspaceRoot = registration.workspace_root;
       const sessionID = registration.session.session_id;
-      const response = await fetch(`/api/v1/sessions/${encodeURIComponent(sessionID)}?workspace_root=${encodeURIComponent(workspaceRoot)}`);
-      if (!response.ok) throw new Error(await apiError(response));
+      const response = await requestResponse(`/api/v1/sessions/${encodeURIComponent(sessionID)}?workspace_root=${encodeURIComponent(workspaceRoot)}`);
       const detail = (await response.json()) as SessionDetail;
       if (!isCurrentSession(generation)) return;
       selected = detail;
@@ -431,8 +421,7 @@
     let first = true;
     while (!signal.aborted) {
       try {
-        const response = await fetch(`/api/v1/sessions/${encodeURIComponent(registration.session.session_id)}/delegations/session?${query}`, { signal });
-        if (!response.ok) throw new Error(await apiError(response));
+        const response = await requestResponse(`/api/v1/sessions/${encodeURIComponent(registration.session.session_id)}/delegations/session?${query}`, { signal });
         const value = await response.json() as DelegationSession;
         if (signal.aborted || !isCurrentSession(generation)) return;
         applyDelegationSession(value);
@@ -463,11 +452,10 @@
       error = '';
       sessionLoading = true;
       try {
-        const response = await fetch(`/api/v1/sessions/${encodeURIComponent(selected.session.session_id)}/delegations/commands`, {
+        const response = await requestResponse(`/api/v1/sessions/${encodeURIComponent(selected.session.session_id)}/delegations/commands`, {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ workspace_root: workspaceRoot, path: selectedDelegation.path, action: 'message', content })
         });
-        if (!response.ok) throw new Error(await apiError(response));
         const value = await response.json() as DelegationSession;
         if (!isCurrentSession(generation)) return;
         applyDelegationSession(value);
@@ -501,11 +489,10 @@
     messages = [...messages, { role: 'user', content }];
     await scrollToBottom();
     try {
-      const response = await fetch(`/api/v1/sessions/${encodeURIComponent(selected.session.session_id)}/messages`, {
+      const response = await requestResponse(`/api/v1/sessions/${encodeURIComponent(selected.session.session_id)}/messages`, {
         method: 'POST', headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
         body: JSON.stringify({ workspace_root: workspaceRoot, content })
       });
-      if (!response.ok) throw new Error(await apiError(response));
       const run = (await response.json()) as RunSnapshot;
       if (!isCurrentSession(generation)) return;
       activeRun = run;
@@ -616,20 +603,18 @@
     try {
       if (selectedDelegation) {
         if (delegationKind !== 'inner') return;
-        const response = await fetch(`/api/v1/sessions/${encodeURIComponent(selected.session.session_id)}/delegations/commands`, {
+        const response = await requestResponse(`/api/v1/sessions/${encodeURIComponent(selected.session.session_id)}/delegations/commands`, {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ workspace_root: workspaceRoot, path: selectedDelegation.path, run_id: activeRun.id, action, ...extra })
         });
-        if (!response.ok) throw new Error(await apiError(response));
         const value = await response.json() as DelegationSession;
         if (isCurrentSession(generation)) applyDelegationSession(value);
         return;
       }
-      const response = await fetch(`/api/v1/sessions/${encodeURIComponent(selected.session.session_id)}/runs/${encodeURIComponent(activeRun.id)}/commands`, {
+      const response = await requestResponse(`/api/v1/sessions/${encodeURIComponent(selected.session.session_id)}/runs/${encodeURIComponent(activeRun.id)}/commands`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ workspace_root: workspaceRoot, action, ...extra })
       });
-      if (!response.ok) throw new Error(await apiError(response));
       const run = (await response.json()) as RunSnapshot;
       if (!isCurrentSession(generation)) return;
       activeRun = run;

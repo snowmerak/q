@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/snowmerak/q/internal/qignore"
 	"github.com/snowmerak/q/lsp"
 )
 
@@ -58,12 +59,12 @@ func (s Store) DiscoverLSPRootsContext(ctx context.Context) ([]lsp.RootConfig, e
 			return nil
 		}
 		if entry.IsDir() {
-			if _, skip := lspDiscoverySkippedDirectories[strings.ToLower(entry.Name())]; skip || ignore.matches(relative, true) {
+			if _, skip := lspDiscoverySkippedDirectories[strings.ToLower(entry.Name())]; skip || ignore.Matches(relative, true) {
 				return filepath.SkipDir
 			}
 			return nil
 		}
-		if ignore.matches(relative, false) {
+		if ignore.Matches(relative, false) {
 			return nil
 		}
 		directory := filepath.Dir(relative)
@@ -132,11 +133,7 @@ func dominatedByMarker(candidate lspMarker, markers []lspMarker) bool {
 	return false
 }
 
-type lspIgnore struct{ rules []lspIgnoreRule }
-type lspIgnoreRule struct {
-	negated, directoryOnly bool
-	pattern                *regexp.Regexp
-}
+type lspIgnore = qignore.Matcher
 
 func loadLSPIgnore(root string) (lspIgnore, error) {
 	body, err := os.ReadFile(filepath.Join(root, IgnoreFileName))
@@ -146,69 +143,5 @@ func loadLSPIgnore(root string) (lspIgnore, error) {
 	if err != nil {
 		return lspIgnore{}, err
 	}
-	var result lspIgnore
-	for raw := range strings.SplitSeq(strings.ReplaceAll(string(body), "\r\n", "\n"), "\n") {
-		line := strings.TrimSpace(raw)
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
-		negated := strings.HasPrefix(line, "!")
-		if negated {
-			line = strings.TrimSpace(strings.TrimPrefix(line, "!"))
-		}
-		directoryOnly := strings.HasSuffix(line, "/") || strings.HasSuffix(line, `\`)
-		line = strings.TrimRight(line, `/\`)
-		anchored := strings.HasPrefix(line, "/") || strings.HasPrefix(line, `\`)
-		line = filepath.ToSlash(strings.TrimLeft(line, `/\`))
-		if line == "" {
-			continue
-		}
-		expression := lspGlobExpression(line)
-		if !anchored && !strings.Contains(line, "/") {
-			expression = `(?:^|.*/)` + expression
-		} else {
-			expression = `^` + expression
-		}
-		result.rules = append(result.rules, lspIgnoreRule{negated, directoryOnly, regexp.MustCompile(expression + `$`)})
-	}
-	return result, nil
-}
-
-func lspGlobExpression(pattern string) string {
-	var result strings.Builder
-	for index := 0; index < len(pattern); index++ {
-		switch pattern[index] {
-		case '*':
-			if index+1 < len(pattern) && pattern[index+1] == '*' {
-				index++
-				if index+1 < len(pattern) && pattern[index+1] == '/' {
-					index++
-					result.WriteString(`(?:.*/)?`)
-				} else {
-					result.WriteString(`.*`)
-				}
-			} else {
-				result.WriteString(`[^/]*`)
-			}
-		case '?':
-			result.WriteString(`[^/]`)
-		default:
-			result.WriteString(regexp.QuoteMeta(string(pattern[index])))
-		}
-	}
-	return result.String()
-}
-
-func (ignore lspIgnore) matches(path string, directory bool) bool {
-	path = strings.TrimPrefix(filepath.ToSlash(filepath.Clean(path)), "./")
-	ignored := false
-	for _, rule := range ignore.rules {
-		if rule.directoryOnly && !directory {
-			continue
-		}
-		if rule.pattern.MatchString(path) {
-			ignored = !rule.negated
-		}
-	}
-	return ignored
+	return qignore.Parse(string(body)), nil
 }

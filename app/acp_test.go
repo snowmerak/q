@@ -82,7 +82,7 @@ type fakeACPExternalTools struct {
 }
 
 func (f *fakeACPExternalTools) ConfigureExternal(_ context.Context, _ string, value mcpconfig.Config) []qtools.ExternalStatus {
-	f.configured = append(f.configured, cloneMCPConfig(value))
+	f.configured = append(f.configured, value.Clone())
 	call := len(f.configured)
 	if call == 1 && f.cancelFirst != nil {
 		f.cancelFirst()

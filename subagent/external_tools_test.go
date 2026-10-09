@@ -14,7 +14,7 @@ func TestAssignedExternalMCPToolsPassRoleFilters(t *testing.T) {
 		tools []client.Tool
 	}{
 		{name: "scout", tools: scoutTools(runtime.Tools())},
-		{name: "griller", tools: grillerTools(runtime.Tools())},
+		{name: "griller", tools: grillerToolsWithCompletion(runtime.Tools(), submitBriefTool())},
 		{name: "planner", tools: plannerTools(runtime)},
 		{name: "planner review", tools: plannerReviewTools(runtime.Tools())},
 		{name: "coder", tools: coderTools(runtime.Tools())},

@@ -753,10 +753,6 @@ func retainPlanningAttempt(task *GrillTask, brief GrillBrief, proposal PlanPropo
 	}
 }
 
-func grillerInstructions() string {
-	return grillerInstructionsFor(false)
-}
-
 func grillerInstructionsFor(autoResolve bool) string {
 	instructions := `You are q's Griller for /plan mode. Your job is to remove critical ambiguity and produce a bounded brief for the Planner, not to write the plan yourself.
 
@@ -814,10 +810,6 @@ Complete successful submit_plan arguments (replace the example content with the 
 
 Complete blocked submit_plan arguments:
 ` + plannerBlockedExample
-}
-
-func grillerTools(available []client.Tool) []client.Tool {
-	return grillerToolsWithCompletion(available, submitBriefTool())
 }
 
 func grillerToolsWithCompletion(available []client.Tool, completion client.Tool) []client.Tool {

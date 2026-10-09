@@ -24,16 +24,6 @@ func runStudioCommand(ctx context.Context, args []string, stdout, stderr io.Writ
 	return runStudioAt(ctx, args, stdout, stderr, openBrowserURL, "/")
 }
 
-func runStudio(
-	ctx context.Context,
-	args []string,
-	stdout io.Writer,
-	stderr io.Writer,
-	open func(string) error,
-) (returnErr error) {
-	return runStudioAt(ctx, args, stdout, stderr, open, "/")
-}
-
 func runStudioAt(
 	ctx context.Context,
 	args []string,

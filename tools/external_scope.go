@@ -30,7 +30,7 @@ type ExternalScope struct {
 // NewExternalScope connects the external servers in value without replacing
 // the base Runtime's workspace-wide MCP configuration.
 func (r *Runtime) NewExternalScope(ctx context.Context, root string, value mcpconfig.Config) (*ExternalScope, []ExternalStatus) {
-	scope := &ExternalScope{base: r, config: cloneMCPConfig(value)}
+	scope := &ExternalScope{base: r, config: value.Clone()}
 	if r == nil {
 		return scope, []ExternalStatus{{Error: "tools: runtime is unavailable"}}
 	}

@@ -17,20 +17,18 @@ func (m model) updateAgentEvent(message agentEventMsg) (tea.Model, tea.Cmd) {
 	}
 	event := message.event
 	if event.taskStarted != nil {
-		m.activeTask = cloneActiveTask(event.taskStarted)
-		if err := m.saveWorkspaceSession(); err != nil {
+		if err := m.saveActiveTask(event.taskStarted); err != nil {
 			m.turnErr = errors.Join(m.turnErr, err)
 			m.status = err.Error()
 		}
-		return m, tea.Batch(m.spinner.Tick, waitAgentEvent(message.events, message.turnID))
+		return m, tea.Batch(m.chatTick(), waitAgentEvent(message.events, message.turnID))
 	}
 	if event.taskCompleted {
-		m.activeTask = nil
-		if err := m.saveWorkspaceSession(); err != nil {
+		if err := m.saveActiveTask(nil); err != nil {
 			m.turnErr = errors.Join(m.turnErr, err)
 			m.status = err.Error()
 		}
-		return m, tea.Batch(m.spinner.Tick, waitAgentEvent(message.events, message.turnID))
+		return m, tea.Batch(m.chatTick(), waitAgentEvent(message.events, message.turnID))
 	}
 	if event.streamDelta != nil {
 		delta := *event.streamDelta
@@ -49,45 +47,43 @@ func (m model) updateAgentEvent(message agentEventMsg) (tea.Model, tea.Cmd) {
 			m.status = "Responding…"
 		}
 		m.refreshTranscript()
-		return m, tea.Batch(m.spinner.Tick, waitAgentEvent(message.events, message.turnID))
+		return m, tea.Batch(m.chatTick(), waitAgentEvent(message.events, message.turnID))
 	}
 	if event.learningName != "" {
 		command := m.enqueueLearningSpecial(event.learningName, event.learningPayload)
-		return m, tea.Batch(m.spinner.Tick, waitAgentEvent(message.events, message.turnID), command)
+		return m, tea.Batch(m.chatTick(), waitAgentEvent(message.events, message.turnID), command)
 	}
 	if event.plan != nil {
 		m.status = agentPlanStatus(*event.plan)
-		return m, tea.Batch(m.spinner.Tick, waitAgentEvent(message.events, message.turnID))
+		return m, tea.Batch(m.chatTick(), waitAgentEvent(message.events, message.turnID))
 	}
 	if event.activity != nil {
 		m.appendAgentActivity(*event.activity)
 		m.status = activityStatus(*event.activity)
 		m.resize(m.width, m.height)
-		return m, tea.Batch(m.spinner.Tick, waitAgentEvent(message.events, message.turnID))
+		return m, tea.Batch(m.chatTick(), waitAgentEvent(message.events, message.turnID))
 	}
 	if event.trace != nil {
 		m.appendAgentTrace(*event.trace)
 		m.resize(m.width, m.height)
-		return m, tea.Batch(m.spinner.Tick, waitAgentEvent(message.events, message.turnID))
+		return m, tea.Batch(m.chatTick(), waitAgentEvent(message.events, message.turnID))
 	}
 	if event.status != "" {
 		m.status = event.status
-		return m, tea.Batch(m.spinner.Tick, waitAgentEvent(message.events, message.turnID))
+		return m, tea.Batch(m.chatTick(), waitAgentEvent(message.events, message.turnID))
 	}
 	if event.compaction != nil {
-		if err := m.applyAgentContextCompaction(*event.compaction); err != nil {
+		if err := m.persistAgentCompaction(event); err != nil {
 			m.turnErr = errors.Join(m.turnErr, err)
 			m.status = "apply agent context compaction: " + err.Error()
 			if event.persistenceAck != nil && m.turnCancel != nil {
 				m.turnCancel()
 			}
+			acknowledgeAgentPersistence(event)
 		} else {
 			m.status = "Context compacted · continuing…"
 		}
-		if event.persistenceAck != nil {
-			close(event.persistenceAck)
-		}
-		return m, tea.Batch(m.spinner.Tick, waitAgentEvent(message.events, message.turnID))
+		return m, tea.Batch(m.chatTick(), waitAgentEvent(message.events, message.turnID))
 	}
 	if event.contextReplace != nil {
 		if m.memory != nil {
@@ -95,7 +91,7 @@ func (m model) updateAgentEvent(message agentEventMsg) (tea.Model, tea.Cmd) {
 				m.status = "update model context: " + err.Error()
 			}
 		}
-		return m, tea.Batch(m.spinner.Tick, waitAgentEvent(message.events, message.turnID))
+		return m, tea.Batch(m.chatTick(), waitAgentEvent(message.events, message.turnID))
 	}
 	if event.call != nil {
 		m.archiveToolCall(*event.call)
@@ -104,7 +100,7 @@ func (m model) updateAgentEvent(message agentEventMsg) (tea.Model, tea.Cmd) {
 		if event.call.Function.Name == "learn" {
 			learning = m.enqueueExplicitLearning()
 		}
-		return m, tea.Batch(m.spinner.Tick, waitAgentEvent(message.events, message.turnID), learning)
+		return m, tea.Batch(m.chatTick(), waitAgentEvent(message.events, message.turnID), learning)
 	}
 	if event.question != nil {
 		m.asking = true
@@ -113,8 +109,11 @@ func (m model) updateAgentEvent(message agentEventMsg) (tea.Model, tea.Cmd) {
 		m.questionAnswer = event.answer
 		m.questionEvents = message.events
 		m.questionTurnID = message.turnID
-		m.input.Reset()
-		m.input.Placeholder = "Type a custom answer…"
+		if m.headless {
+			return m, nil
+		}
+		m.resetChatInput()
+		m.setChatPlaceholder("Type a custom answer…")
 		m.status = "Choose an option or type a custom answer"
 		m.resize(m.width, m.height)
 		if len(m.pendingQuestion.Choices) > 0 {
@@ -122,43 +121,29 @@ func (m model) updateAgentEvent(message agentEventMsg) (tea.Model, tea.Cmd) {
 		} else {
 			m.questionViewport.GotoTop()
 		}
-		return m, m.input.Focus()
+		return m, m.focusChatInput()
 	}
 	if event.message != nil {
 		m.streamResponse = ""
-		m.messages = append(m.messages, *event.message)
-		if event.message.Role == client.RoleAssistant && event.usage != nil {
-			m.recordResponseUsage(*event.usage)
-		}
-		learning := m.observeLearningMessage(*event.message)
-		if m.memory != nil {
-			m.memory.Append(*event.message)
-		}
+		learning := m.appendSessionMessage(*event.message, event.usage)
+		m.archiveSessionMessage(*event.message, event.toolIsError)
 		if event.message.Role == client.RoleAssistant {
-			m.archiveMessage(*event.message, sessionstore.StatusSucceeded, false)
 			m.status = "Preparing tool call…"
 		} else {
-			status := sessionstore.StatusSucceeded
-			if event.toolIsError {
-				status = sessionstore.StatusFailed
-			}
-			m.archiveMessage(*event.message, status, event.toolIsError)
 			m.status = "Thinking… · " + event.message.Name + " completed"
 		}
 		m.refreshTranscript()
-		if err := m.saveWorkspaceSession(); err != nil {
+		if err := m.persistAgentMessage(event); err != nil {
 			m.turnErr = errors.Join(m.turnErr, err)
 			m.status = err.Error()
 			if event.persistenceAck != nil && m.turnCancel != nil {
 				m.turnCancel()
 			}
+			acknowledgeAgentPersistence(event)
 		}
-		if event.persistenceAck != nil {
-			close(event.persistenceAck)
-		}
-		return m, tea.Batch(m.spinner.Tick, waitAgentEvent(message.events, message.turnID), learning)
+		return m, tea.Batch(m.chatTick(), waitAgentEvent(message.events, message.turnID), learning)
 	}
-	return m.Update(chatResultMsg{
+	return m.updateChatResult(chatResultMsg{
 		turnID:   message.turnID,
 		response: event.response, requestEstimate: event.requestEstimate,
 		toolCalls: event.toolCalls, err: event.err,
@@ -186,10 +171,10 @@ func (m model) updateChatResult(message chatResultMsg) (tea.Model, tea.Cmd) {
 		if archiveErr := m.flushArchive(); archiveErr != nil {
 			m.turnErr = errors.Join(m.turnErr, archiveErr)
 			m.status = message.err.Error() + " · archive: " + archiveErr.Error()
-			return m, m.input.Focus()
+			return m, m.focusChatInput()
 		}
 		m.status = message.err.Error()
-		return m, m.input.Focus()
+		return m, m.focusChatInput()
 	}
 	if message.response == nil || len(message.response.Choices) == 0 {
 		m.compactionTarget = 0
@@ -201,7 +186,7 @@ func (m model) updateChatResult(message chatResultMsg) (tea.Model, tea.Cmd) {
 			m.turnErr = errors.Join(m.turnErr, archiveErr)
 			m.status += " · archive: " + archiveErr.Error()
 		}
-		return m, m.input.Focus()
+		return m, m.focusChatInput()
 	}
 	assistant := message.response.Choices[0].Message
 	if assistant.Role == "" {
@@ -270,7 +255,7 @@ func (m model) updateChatResult(message chatResultMsg) (tea.Model, tea.Cmd) {
 		m.turnErr = errors.Join(m.turnErr, err)
 		m.status = "archive: " + err.Error()
 	}
-	focus := m.input.Focus()
+	focus := m.focusChatInput()
 	learningCommands = append(learningCommands, focus, m.startNextLearningSegment())
 	return m, tea.Batch(learningCommands...)
 }
@@ -288,7 +273,7 @@ func (m model) updateCompactionResult(message compactionResultMsg) (tea.Model, t
 			m.turnErr = errors.Join(m.turnErr, archiveErr)
 			m.status += " · archive: " + archiveErr.Error()
 		}
-		return m, m.input.Focus()
+		return m, m.focusChatInput()
 	}
 	if message.checkpoint == "" && (message.response == nil || len(message.response.Choices) == 0) {
 		m.rollbackPendingMessage()
@@ -300,7 +285,7 @@ func (m model) updateCompactionResult(message compactionResultMsg) (tea.Model, t
 			m.turnErr = errors.Join(m.turnErr, archiveErr)
 			m.status += " · archive: " + archiveErr.Error()
 		}
-		return m, m.input.Focus()
+		return m, m.focusChatInput()
 	}
 	checkpointText := message.checkpoint
 	if checkpointText == "" {
@@ -316,7 +301,7 @@ func (m model) updateCompactionResult(message compactionResultMsg) (tea.Model, t
 			m.turnErr = errors.Join(m.turnErr, archiveErr)
 			m.status += " · archive: " + archiveErr.Error()
 		}
-		return m, m.input.Focus()
+		return m, m.focusChatInput()
 	}
 	if m.pendingMessageDeferred && !message.manual {
 		compactedMemory.Append(m.pendingMessage)
@@ -338,7 +323,7 @@ func (m model) updateCompactionResult(message compactionResultMsg) (tea.Model, t
 			m.turnErr = errors.Join(m.turnErr, archiveErr)
 			m.status += " · archive: " + archiveErr.Error()
 		}
-		return m, m.input.Focus()
+		return m, m.focusChatInput()
 	}
 	m.memory = compactedMemory
 	m.sessionOperation = candidate.sessionOperation
@@ -359,7 +344,7 @@ func (m model) updateCompactionResult(message compactionResultMsg) (tea.Model, t
 			m.turnErr = errors.Join(m.turnErr, err)
 			m.status += " · archive: " + err.Error()
 		}
-		return m, m.input.Focus()
+		return m, m.focusChatInput()
 	}
 	return m, m.sendChatRequest()
 }

@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { apiError } from './api';
+  import { requestJSON } from './api';
   import Markdown from './Markdown.svelte';
   import { reasoningOptions } from './settings/reasoning';
   import type { ModelOption } from './settings/types';
@@ -51,9 +51,7 @@
   }
 
   async function request<T>(path: string, method = 'GET', body?: unknown): Promise<T> {
-    const response = await fetch(path, { method, headers: { Accept: 'application/json', ...(body === undefined ? {} : { 'Content-Type': 'application/json' }) }, body: body === undefined ? undefined : JSON.stringify(body) });
-    if (!response.ok) throw new Error(await apiError(response));
-    return await response.json() as T;
+    return requestJSON<T>(method, path, body);
   }
 
   function selectedFromPath() {

@@ -62,15 +62,6 @@ func (server *Server) Close() error {
 	return errors.Join(server.sessions.Close(), server.commits.Close(), server.host.Close())
 }
 
-func newHandler(store config.Store) (http.Handler, error) {
-	return newHandlerWithRunner(store, nil)
-}
-
-func newHandlerWithRunner(store config.Store, runner sessionRunner) (http.Handler, error) {
-	handler, _, _, err := newHandlerRuntime(context.Background(), store, runner)
-	return handler, err
-}
-
 func newHandlerRuntime(parent context.Context, store config.Store, runner sessionRunner) (http.Handler, *commitService, *sessionsService, error) {
 	assets, err := frontend()
 	if err != nil {

@@ -576,7 +576,7 @@ func (host *SessionHost) prepareSession(runContext context.Context, workspaceSto
 		prepared.created = true
 	}
 
-	prepared.state = newManagedModel(runContext, host.store, host.factory, host.manager)
+	prepared.state = newRuntimeModel(runContext, host.store, host.factory, host.manager)
 	prepared.state.workspaceStore = &prepared.store
 	prepared.state.workspaceLock = prepared.lock
 	prepared.state.toolRuntime = startup.tools
@@ -601,7 +601,7 @@ func (host *SessionHost) prepareSession(runContext context.Context, workspaceSto
 	if projectFound {
 		prepared.state.studioWorkspaceContext = &projectContext
 	}
-	prepared.state.enterChat(startup.config, prepared.client)
+	prepared.state.enterSession(startup.config, prepared.client)
 	return prepared, nil
 }
 
@@ -667,7 +667,7 @@ func (m sessionExecutionModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		if result, ok := message.(compactionResultMsg); ok && result.turnID != 0 && result.turnID != m.state.turnID {
 			return m, nil
 		}
-		updated, command := m.state.Update(message)
+		updated, command := m.state.updateExecution(message)
 		m.state = updated.(model)
 		if _, ok := message.(compactionResultMsg); ok && !m.state.waiting {
 			m.err = m.state.turnErr
@@ -718,7 +718,7 @@ func (m sessionExecutionModel) updateAgentEvent(eventMessage agentEventMsg) (tea
 			event.answer <- askToUserOutput{Err: ErrInteractionUnavailable}
 		}
 		if m.control != nil {
-			updated, command := m.state.Update(eventMessage)
+			updated, command := m.state.updateExecution(eventMessage)
 			m.state = updated.(model)
 			if !m.emitContextUsage() {
 				return m.failExecution()
@@ -728,7 +728,7 @@ func (m sessionExecutionModel) updateAgentEvent(eventMessage agentEventMsg) (tea
 		return m, waitAgentEvent(eventMessage.events, eventMessage.turnID)
 	}
 	if event.err != nil || event.response != nil {
-		updated, command := m.state.Update(eventMessage)
+		updated, command := m.state.updateExecution(eventMessage)
 		m.state = updated.(model)
 		m.err = m.state.turnErr
 		if !m.emitContextUsage() {
@@ -756,7 +756,7 @@ func (m sessionExecutionModel) updateAgentEvent(eventMessage agentEventMsg) (tea
 		}
 		return m.finishExecution(command)
 	}
-	updated, command := m.state.Update(eventMessage)
+	updated, command := m.state.updateExecution(eventMessage)
 	m.state = updated.(model)
 	if !m.emitContextUsage() {
 		return m.failExecution()
@@ -928,31 +928,6 @@ func waitSessionRunControl(control *SessionRunControl, ctx context.Context) tea.
 }
 
 func (m sessionExecutionModel) View() tea.View { return tea.NewView("") }
-
-type sessionCompactionModel struct {
-	state   model
-	initial tea.Cmd
-	cancel  context.CancelFunc
-	err     error
-}
-
-func (m sessionCompactionModel) Init() tea.Cmd { return m.initial }
-
-func (m sessionCompactionModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
-	updated, command := m.state.Update(message)
-	m.state = updated.(model)
-	result, finished := message.(compactionResultMsg)
-	if !finished || result.turnID != 0 && result.turnID != m.state.turnID {
-		return m, command
-	}
-	m.err = m.state.turnErr
-	if m.err != nil {
-		m.cancel()
-	}
-	return m, tea.Quit
-}
-
-func (m sessionCompactionModel) View() tea.View { return tea.NewView("") }
 
 func projectSessionAgentEvent(event agentEvent) (SessionEvent, bool) {
 	switch {

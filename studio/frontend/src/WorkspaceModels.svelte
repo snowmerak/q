@@ -1,6 +1,7 @@
 <script lang="ts">
   import { RefreshCw } from '@lucide/svelte';
   import { onMount } from 'svelte';
+  import { requestResponse } from './api';
 
   type ModelOption = { id: string; group?: boolean };
   type Assignment = { role: string; configured_model: string; effective_model: string; inherited: boolean };
@@ -25,8 +26,7 @@
     error = '';
     saved = '';
     try {
-      const response = await fetch(`/api/v1/workspaces/models?workspace_root=${encodeURIComponent(root)}`, { headers: { Accept: 'application/json' } });
-      if (!response.ok) throw new Error(await responseError(response));
+      const response = await requestResponse(`/api/v1/workspaces/models?workspace_root=${encodeURIComponent(root)}`, { headers: { Accept: 'application/json' } });
       snapshot = await response.json() as Snapshot;
       workspaceRoot = snapshot.workspace_root;
       localStorage.setItem('q-studio-workspace-root', workspaceRoot);
@@ -44,12 +44,11 @@
     saved = '';
     try {
       const method = assignment.configured_model ? 'PUT' : 'DELETE';
-      const response = await fetch(`/api/v1/workspaces/models/${encodeURIComponent(assignment.role)}`, {
+      const response = await requestResponse(`/api/v1/workspaces/models/${encodeURIComponent(assignment.role)}`, {
         method,
         headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
         body: JSON.stringify({ workspace_root: snapshot.workspace_root, model: assignment.configured_model })
       });
-      if (!response.ok) throw new Error(await responseError(response));
       snapshot = await response.json() as Snapshot;
       saved = 'Saved';
       window.setTimeout(() => { saved = ''; }, 1400);
@@ -60,15 +59,6 @@
       saved = '';
     } finally {
       loading = false;
-    }
-  }
-
-  async function responseError(response: Response) {
-    try {
-      const value = await response.json() as { error?: string | { message?: string }; message?: string };
-      return (typeof value.error === 'string' ? value.error : value.error?.message) || value.message || `Request failed (${response.status})`;
-    } catch {
-      return `Request failed (${response.status})`;
     }
   }
 

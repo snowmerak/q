@@ -5,6 +5,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/snowmerak/q/agentloop"
 	"github.com/snowmerak/q/client"
 	"github.com/snowmerak/q/config"
 )
@@ -126,7 +127,7 @@ func TestChatEmptyResponseRecoveryIsBoundedWithoutToolHistory(t *testing.T) {
 		ConversationID: "existing-thread",
 		Messages:       []client.Message{{Role: client.RoleUser, Content: "hello"}},
 	})
-	if !errors.Is(err, errEmptyChatResponse) {
+	if !errors.Is(err, agentloop.ErrEmptyChatResponse) {
 		t.Fatalf("error = %v, want empty response error", err)
 	}
 	if len(configuredClient.requests) != 3 {

@@ -178,36 +178,9 @@ func (s Store) SaveModelConfig(value ModelConfig) error {
 	if err := os.Chmod(s.Dir(), 0o700); err != nil {
 		return fmt.Errorf("workspace: secure %s: %w", s.Dir(), err)
 	}
-	file, err := os.CreateTemp(s.Dir(), ".model-*.json")
-	if err != nil {
-		return fmt.Errorf("workspace: create temporary model settings: %w", err)
+	if err := fsreplace.WriteFile(s.ModelPath(), body, 0o600); err != nil {
+		return fmt.Errorf("workspace: save model settings: %w", err)
 	}
-	temporaryPath := file.Name()
-	keep := false
-	defer func() {
-		if !keep {
-			_ = os.Remove(temporaryPath)
-		}
-	}()
-	if err := file.Chmod(0o600); err != nil {
-		_ = file.Close()
-		return fmt.Errorf("workspace: secure temporary model settings: %w", err)
-	}
-	if _, err := file.Write(body); err != nil {
-		_ = file.Close()
-		return fmt.Errorf("workspace: write temporary model settings: %w", err)
-	}
-	if err := file.Sync(); err != nil {
-		_ = file.Close()
-		return fmt.Errorf("workspace: sync temporary model settings: %w", err)
-	}
-	if err := file.Close(); err != nil {
-		return fmt.Errorf("workspace: close temporary model settings: %w", err)
-	}
-	if err := fsreplace.Replace(temporaryPath, s.ModelPath()); err != nil {
-		return fmt.Errorf("workspace: replace %s: %w", s.ModelPath(), err)
-	}
-	keep = true
 	return nil
 }
 

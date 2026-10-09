@@ -99,36 +99,9 @@ func (s Store) SaveThinkerCheckpoint(checkpoint thinker.JobCheckpoint) error {
 		if err := os.Chmod(s.SessionDir(), 0o700); err != nil {
 			return fmt.Errorf("workspace: secure %s: %w", s.SessionDir(), err)
 		}
-		file, err := os.CreateTemp(s.SessionDir(), ".thinker-checkpoint-*.json")
-		if err != nil {
-			return fmt.Errorf("workspace: create temporary Thinker checkpoint: %w", err)
+		if err := fsreplace.WriteFile(s.ThinkerCheckpointPath(), body, 0o600); err != nil {
+			return fmt.Errorf("workspace: save Thinker checkpoint: %w", err)
 		}
-		temporaryPath := file.Name()
-		keep := false
-		defer func() {
-			if !keep {
-				_ = os.Remove(temporaryPath)
-			}
-		}()
-		if err := file.Chmod(0o600); err != nil {
-			_ = file.Close()
-			return fmt.Errorf("workspace: secure temporary Thinker checkpoint: %w", err)
-		}
-		if _, err := file.Write(body); err != nil {
-			_ = file.Close()
-			return fmt.Errorf("workspace: write temporary Thinker checkpoint: %w", err)
-		}
-		if err := file.Sync(); err != nil {
-			_ = file.Close()
-			return fmt.Errorf("workspace: sync temporary Thinker checkpoint: %w", err)
-		}
-		if err := file.Close(); err != nil {
-			return fmt.Errorf("workspace: close temporary Thinker checkpoint: %w", err)
-		}
-		if err := fsreplace.Replace(temporaryPath, s.ThinkerCheckpointPath()); err != nil {
-			return fmt.Errorf("workspace: replace %s: %w", s.ThinkerCheckpointPath(), err)
-		}
-		keep = true
 		return nil
 	})
 }

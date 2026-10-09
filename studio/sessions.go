@@ -2,10 +2,8 @@ package studio
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -466,20 +464,7 @@ func canonicalWorkspaceDirectory(value string) (string, error) {
 }
 
 func decodeSessionRequest(writer http.ResponseWriter, request *http.Request, target any) error {
-	request.Body = http.MaxBytesReader(writer, request.Body, maximumSessionRequestSize)
-	decoder := json.NewDecoder(request.Body)
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(target); err != nil {
-		return fmt.Errorf("decode request: %w", err)
-	}
-	var trailing any
-	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
-		if err == nil {
-			return errors.New("decode request: multiple JSON values")
-		}
-		return fmt.Errorf("decode request: %w", err)
-	}
-	return nil
+	return decodeRequest(writer, request, target, maximumSessionRequestSize, "decode request")
 }
 
 func writeSessionError(writer http.ResponseWriter, err error) {

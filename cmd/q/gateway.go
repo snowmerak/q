@@ -9,7 +9,6 @@ import (
 	"net"
 	"net/http"
 	"os"
-	"strings"
 	"syscall"
 	"time"
 
@@ -20,12 +19,7 @@ import (
 	"github.com/snowmerak/q/usagelog"
 )
 
-type gatewayCommandOptions struct {
-	host    string
-	port    int
-	hostSet bool
-	portSet bool
-}
+type gatewayCommandOptions = networkCommandOptions
 
 func runGatewayCommand(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	store, err := config.DefaultStore()
@@ -127,36 +121,7 @@ func runGatewayWithStore(
 }
 
 func parseGatewayOptions(args []string, output io.Writer) (gatewayCommandOptions, error) {
-	options := gatewayCommandOptions{port: -1}
-	flags := flag.NewFlagSet("q gateway start", flag.ContinueOnError)
-	flags.SetOutput(output)
-	flags.Usage = func() {
-		_, _ = fmt.Fprintln(output, "usage: q gateway start [--host <ip>] [--port <port>]")
-		flags.PrintDefaults()
-	}
-	flags.StringVar(&options.host, "host", "", "override the configured listen IP address")
-	flags.IntVar(&options.port, "port", -1, "override the configured listen port (0 selects a random port)")
-	if err := flags.Parse(args); err != nil {
-		return gatewayCommandOptions{}, err
-	}
-	if flags.NArg() != 0 {
-		return gatewayCommandOptions{}, fmt.Errorf("unexpected arguments: %s", strings.Join(flags.Args(), " "))
-	}
-	flags.Visit(func(current *flag.Flag) {
-		switch current.Name {
-		case "host":
-			options.hostSet = true
-		case "port":
-			options.portSet = true
-		}
-	})
-	if options.hostSet && net.ParseIP(options.host) == nil {
-		return gatewayCommandOptions{}, fmt.Errorf("host %q is not an IP address", options.host)
-	}
-	if options.portSet && (options.port < 0 || options.port > 65535) {
-		return gatewayCommandOptions{}, fmt.Errorf("port must be between 0 and 65535")
-	}
-	return options, nil
+	return parseNetworkOptions("gateway", args, output)
 }
 
 func listenGateway(options gatewayCommandOptions, configured gatewayconfig.ServerConfig) (net.Listener, bool, error) {

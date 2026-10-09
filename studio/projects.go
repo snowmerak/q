@@ -210,36 +210,9 @@ func (store *studioProjectStore) saveLocked(value studioProjectsDocument) error 
 	if err := os.Chmod(directory, 0o700); err != nil {
 		return fmt.Errorf("secure Studio config directory: %w", err)
 	}
-	temporary, err := os.CreateTemp(directory, ".studio-projects-*.json")
-	if err != nil {
-		return err
+	if err := fsreplace.WriteFile(store.path, body, 0o600); err != nil {
+		return fmt.Errorf("save Studio projects: %w", err)
 	}
-	temporaryPath := temporary.Name()
-	keep := false
-	defer func() {
-		if !keep {
-			_ = os.Remove(temporaryPath)
-		}
-	}()
-	if err := temporary.Chmod(0o600); err != nil {
-		_ = temporary.Close()
-		return err
-	}
-	if _, err := temporary.Write(body); err != nil {
-		_ = temporary.Close()
-		return err
-	}
-	if err := temporary.Sync(); err != nil {
-		_ = temporary.Close()
-		return err
-	}
-	if err := temporary.Close(); err != nil {
-		return err
-	}
-	if err := fsreplace.Replace(temporaryPath, store.path); err != nil {
-		return err
-	}
-	keep = true
 	return nil
 }
 

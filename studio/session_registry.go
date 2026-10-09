@@ -173,36 +173,9 @@ func (registry *sessionRegistry) saveLocked(value sessionRegistryDocument) error
 	if err := os.Chmod(directory, 0o700); err != nil {
 		return fmt.Errorf("secure Studio config directory: %w", err)
 	}
-	temporary, err := os.CreateTemp(directory, ".studio-sessions-*.json")
-	if err != nil {
-		return err
+	if err := fsreplace.WriteFile(registry.path, body, 0o600); err != nil {
+		return fmt.Errorf("save Studio session registry: %w", err)
 	}
-	temporaryPath := temporary.Name()
-	keep := false
-	defer func() {
-		if !keep {
-			_ = os.Remove(temporaryPath)
-		}
-	}()
-	if err := temporary.Chmod(0o600); err != nil {
-		_ = temporary.Close()
-		return err
-	}
-	if _, err := temporary.Write(body); err != nil {
-		_ = temporary.Close()
-		return err
-	}
-	if err := temporary.Sync(); err != nil {
-		_ = temporary.Close()
-		return err
-	}
-	if err := temporary.Close(); err != nil {
-		return err
-	}
-	if err := fsreplace.Replace(temporaryPath, registry.path); err != nil {
-		return err
-	}
-	keep = true
 	return nil
 }
 

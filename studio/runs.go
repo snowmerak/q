@@ -703,36 +703,9 @@ func (run *studioRun) persistSnapshotLocked() error {
 	}
 	body = append(body, '\n')
 	path := filepath.Join(run.store.SessionDir(), studioLatestRunFile)
-	temporary, err := os.CreateTemp(run.store.SessionDir(), ".studio-run-*.json")
-	if err != nil {
-		return err
+	if err := fsreplace.WriteFile(path, body, 0o600); err != nil {
+		return fmt.Errorf("save Studio run snapshot: %w", err)
 	}
-	temporaryPath := temporary.Name()
-	keep := false
-	defer func() {
-		if !keep {
-			_ = os.Remove(temporaryPath)
-		}
-	}()
-	if err := temporary.Chmod(0o600); err != nil {
-		_ = temporary.Close()
-		return err
-	}
-	if _, err := temporary.Write(body); err != nil {
-		_ = temporary.Close()
-		return err
-	}
-	if err := temporary.Sync(); err != nil {
-		_ = temporary.Close()
-		return err
-	}
-	if err := temporary.Close(); err != nil {
-		return err
-	}
-	if err := fsreplace.Replace(temporaryPath, path); err != nil {
-		return err
-	}
-	keep = true
 	return nil
 }
 

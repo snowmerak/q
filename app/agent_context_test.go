@@ -317,7 +317,7 @@ func TestApplyAgentContextCompactionPreservesTranscript(t *testing.T) {
 	transcript := append([]client.Message(nil), history...)
 	archive := &collectingRecordArchive{}
 	store := &workspace.Store{Root: t.TempDir()}
-	m := model{chatState: chatState{messages: transcript, memory: manager, conversationID: "old-provider-state"}, sessionState: sessionState{archive: archive, workspaceStore: store}}
+	m := model{conversationState: conversationState{messages: transcript, memory: manager, conversationID: "old-provider-state"}, sessionState: sessionState{archive: archive, workspaceStore: store}}
 
 	if err := m.applyAgentContextCompaction(agentContextCompaction{Plan: plan, Summary: testCheckpointJSON("durable state")}); err != nil {
 		t.Fatal(err)

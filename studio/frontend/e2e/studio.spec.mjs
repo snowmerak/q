@@ -330,6 +330,23 @@ test('nested delegation selection and deletion preserve the root and parent bran
   expect((await request.delete('/api/v1/registered-sessions/' + registration.registration_id)).ok()).toBe(true);
 });
 
+test('a session without a run opens without an error and accepts its first message', async ({ page, request }) => {
+  const fixture = await (await request.get('/_test/fixture')).json();
+  const registered = await request.post('/api/v1/registered-sessions', { data: { workspace_root: fixture.root, create: true } });
+  expect(registered.status()).toBe(201);
+  const session = await registered.json();
+  const latestResponse = page.waitForResponse((response) => new URL(response.url()).pathname === `/api/v1/sessions/${session.session.session_id}/runs/latest`);
+  await page.goto(`/sessions/${session.registration_id}`);
+  expect((await latestResponse).status()).toBe(404);
+  const composer = page.locator('.composer textarea');
+  await expect(composer).toBeEnabled();
+  await expect(page.getByRole('alert')).toHaveCount(0);
+  await composer.fill('write the requested file');
+  await composer.press('Enter');
+  await expect(page.locator('.transcript').getByRole('heading', { name: 'Studio result' })).toBeVisible();
+  await expect(page.getByRole('alert')).toHaveCount(0);
+});
+
 test('guidance redirects a real run without refresh and renders markdown and code', async ({ page, request }, testInfo) => {
   const fixture = await (await request.get('/_test/fixture')).json();
   const registered = await request.post('/api/v1/registered-sessions', { data: { workspace_root: fixture.root, create: true } });

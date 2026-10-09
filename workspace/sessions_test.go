@@ -221,17 +221,17 @@ func TestMigrateLegacySessionWaitsForLegacyOwnerBeforeCheckingFiles(t *testing.T
 func TestDeterministicLegacySessionIDIgnoresVolatileMetadata(t *testing.T) {
 	firstTime := time.Date(2026, time.August, 26, 1, 0, 0, 0, time.UTC)
 	secondTime := firstTime.Add(time.Hour)
-	first, err := deterministicLegacySessionID(Session{
+	first, err := deterministicLegacyProjectionID(Session{
 		ID: "old-id", RunID: "run-legacy", UpdatedAt: &firstTime,
 		Transcript: []client.Message{{Role: client.RoleUser, Content: "legacy"}},
-	})
+	}, nil, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := deterministicLegacySessionID(Session{
+	second, err := deterministicLegacyProjectionID(Session{
 		ID: "different-id", RunID: "run-legacy", UpdatedAt: &secondTime,
 		Transcript: []client.Message{{Role: client.RoleUser, Content: "legacy"}},
-	})
+	}, nil, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
