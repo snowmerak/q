@@ -20,6 +20,8 @@ type ChatClient interface {
 }
 
 // ToolRuntime supplies the tools and environment available to one loop.
+// Call must support concurrent ordinary calls. Loop-owned task, question and
+// memory calls are handled serially by RunAgentLoop rather than this runtime.
 type ToolRuntime interface {
 	Tools() []client.Tool
 	Environment() qtools.HostEnvironment

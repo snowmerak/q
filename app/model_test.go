@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -240,6 +241,7 @@ type fakeClient struct {
 }
 
 type fakeAgentTools struct {
+	mu               sync.Mutex
 	calls            []client.ToolCall
 	tools            []client.Tool
 	loomOptions      loom.StoreOptions
@@ -322,11 +324,15 @@ func (f *fakeAgentTools) Tools() []client.Tool {
 }
 
 func (f *fakeAgentTools) Call(_ context.Context, call client.ToolCall) (client.ToolResult, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.calls = append(f.calls, call)
 	return client.ToolResult{Content: `{"loom_ref":"loom://0123456789abcdef0123456789abcdef","stored":true,"result":{"path":"main.go"}}`}, nil
 }
 
 func (f *fakeAgentTools) SearchSkillHints(_ context.Context, query string, _ int) (qtools.SkillHintSearchResult, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.skillHintQueries = append(f.skillHintQueries, query)
 	if f.skillHintErr != nil {
 		return qtools.SkillHintSearchResult{}, f.skillHintErr

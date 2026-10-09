@@ -23,6 +23,8 @@ func (r *planSkillTools) SearchSkillHints(_ context.Context, query string, _ int
 }
 
 func (r *planSkillTools) Call(_ context.Context, call client.ToolCall) (client.ToolResult, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	r.calls = append(r.calls, call)
 	if call.Function.Name == "get_skill" {
 		return client.ToolResult{Content: `{"content":"Complete planning skill instructions"}`}, nil

@@ -177,7 +177,7 @@ func (service *sessionRunService) start(root, sessionID, prompt string) (*studio
 	select {
 	case <-service.ctx.Done():
 		service.mu.Unlock()
-		return nil, errors.New("Studio is shutting down")
+		return nil, errors.New("studio is shutting down")
 	default:
 	}
 	runID, err := workspace.NewSessionID()
@@ -239,7 +239,7 @@ func (service *sessionRunService) execute(run *studioRun, prompt string) {
 		detail := runErr.Error()
 		if service.ctx.Err() != nil {
 			typeName = "cancelled"
-			detail = "Turn stopped because Studio is shutting down: " + detail
+			detail = "Turn stopped because studio is shutting down: " + detail
 		}
 		_ = run.append(app.SessionEvent{Type: typeName, RunID: run.snapshot.ID, Detail: detail})
 	} else if runErr == nil && !run.terminal() {
@@ -367,7 +367,7 @@ func loadLatestStudioRun(root string, store workspace.Store) (*studioRun, error)
 		return nil, err
 	}
 	if info.Size() > maximumSessionRequestSize {
-		return nil, errors.New("Studio run snapshot is too large")
+		return nil, errors.New("studio run snapshot is too large")
 	}
 	body, err := fsopen.ReadFile(snapshotPath)
 	if err != nil {
@@ -453,13 +453,13 @@ func readStudioRunEvents(path string) ([]studioRunEvent, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 	info, err := file.Stat()
 	if err != nil {
 		return nil, err
 	}
 	if info.Size() > maximumRunLogSize {
-		return nil, fmt.Errorf("Studio run log exceeds %d bytes", maximumRunLogSize)
+		return nil, fmt.Errorf("studio run log exceeds %d bytes", maximumRunLogSize)
 	}
 	scanner := bufio.NewScanner(io.LimitReader(file, maximumRunLogSize+1))
 	scanner.Buffer(make([]byte, 64<<10), maximumRunEventSize)
@@ -472,7 +472,7 @@ func readStudioRunEvents(path string) ([]studioRunEvent, error) {
 			return fmt.Errorf("decode Studio run event: %w", err)
 		}
 		if event.Cursor != previous+1 {
-			return errors.New("Studio run event cursor is not contiguous")
+			return errors.New("studio run event cursor is not contiguous")
 		}
 		previous = event.Cursor
 		result = append(result, event)
@@ -504,7 +504,7 @@ func (run *studioRun) append(event app.SessionEvent) error {
 	run.mu.Lock()
 	defer run.mu.Unlock()
 	if run.closed || run.log == nil {
-		return errors.New("Studio run log is closed")
+		return errors.New("studio run log is closed")
 	}
 	now := time.Now().UTC()
 	record := studioRunEvent{Cursor: run.snapshot.Cursor + 1, At: now, Event: event}
@@ -513,7 +513,7 @@ func (run *studioRun) append(event app.SessionEvent) error {
 		return err
 	}
 	if len(body) > maximumRunEventSize {
-		return fmt.Errorf("Studio run event exceeds %d bytes", maximumRunEventSize)
+		return fmt.Errorf("studio run event exceeds %d bytes", maximumRunEventSize)
 	}
 	body = append(body, '\n')
 	if _, err := run.log.Write(body); err != nil {
@@ -567,9 +567,10 @@ func (run *studioRun) applyEventLocked(event app.SessionEvent, now time.Time) {
 		run.snapshot.PendingQuestion = nil
 		run.snapshot.Status = "running"
 	case "control":
-		if event.Action == "paused" {
+		switch event.Action {
+		case "paused":
 			run.snapshot.Status = "paused"
-		} else if event.Action == "resumed" {
+		case "resumed":
 			run.snapshot.Status = "running"
 		}
 	case "context_usage":
@@ -795,7 +796,7 @@ func (service *sessionsService) serveRunDetail(writer http.ResponseWriter, reque
 	}
 	run, err := service.runs.lookup(root, store.SessionID, request.PathValue("run"))
 	if err != nil {
-		writeAPIError(writer, http.StatusNotFound, errors.New("Studio run does not exist"))
+		writeAPIError(writer, http.StatusNotFound, errors.New("studio run does not exist"))
 		return
 	}
 	writeJSON(writer, http.StatusOK, run.snapshotCopy())
@@ -808,7 +809,7 @@ func (service *sessionsService) serveRunEvents(writer http.ResponseWriter, reque
 	}
 	run, err := service.runs.lookup(root, store.SessionID, request.PathValue("run"))
 	if err != nil {
-		writeAPIError(writer, http.StatusNotFound, errors.New("Studio run does not exist"))
+		writeAPIError(writer, http.StatusNotFound, errors.New("studio run does not exist"))
 		return
 	}
 	after, err := strconv.ParseInt(defaultString(request.URL.Query().Get("after"), "0"), 10, 64)
@@ -844,11 +845,11 @@ func (service *sessionsService) serveRunCommand(writer http.ResponseWriter, requ
 	}
 	run, err := service.runs.lookup(root, store.SessionID, request.PathValue("run"))
 	if err != nil {
-		writeAPIError(writer, http.StatusNotFound, errors.New("Studio run does not exist"))
+		writeAPIError(writer, http.StatusNotFound, errors.New("studio run does not exist"))
 		return
 	}
 	if run.control == nil || terminalRunStatus(run.snapshotCopy().Status) {
-		writeAPIError(writer, http.StatusConflict, errors.New("Studio run is no longer active"))
+		writeAPIError(writer, http.StatusConflict, errors.New("studio run is no longer active"))
 		return
 	}
 	switch strings.TrimSpace(input.Action) {

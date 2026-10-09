@@ -9,9 +9,11 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"sync"
 
 	"github.com/snowmerak/q/client"
 	"github.com/snowmerak/q/config"
+	"github.com/snowmerak/q/internal/toolbatch"
 	"github.com/snowmerak/q/loom"
 )
 
@@ -181,6 +183,31 @@ func runGriller[T any](
 	if r.Spec.Role != config.AgentRoleGriller {
 		return output, fmt.Errorf("subagent: griller runner requires role %q", config.AgentRoleGriller)
 	}
+	// Parallel Scout invocations share their host callbacks. Preserve serialized
+	// delivery even when those callbacks append to a host-owned slice or UI state.
+	var eventMu sync.Mutex
+	serializeProgress := func(callback ProgressFunc) ProgressFunc {
+		if callback == nil {
+			return nil
+		}
+		return func(event ProgressEvent) {
+			eventMu.Lock()
+			defer eventMu.Unlock()
+			callback(event)
+		}
+	}
+	serializeTrace := func(callback TraceFunc) TraceFunc {
+		if callback == nil {
+			return nil
+		}
+		return func(event TraceEvent) {
+			eventMu.Lock()
+			defer eventMu.Unlock()
+			callback(event)
+		}
+	}
+	r.Progress, r.Trace = serializeProgress(r.Progress), serializeTrace(r.Trace)
+	r.Scout.Progress, r.Scout.Trace = serializeProgress(r.Scout.Progress), serializeTrace(r.Scout.Trace)
 	task.Objective = strings.TrimSpace(task.Objective)
 	if task.Objective == "" {
 		return output, errors.New("subagent: Grill objective is required")
@@ -274,7 +301,7 @@ func runGriller[T any](
 			Agent: "griller", TaskID: task.ID, ParentID: task.ParentID,
 			Action: ProgressThinking, Detail: fmt.Sprintf("model round %d", round+1),
 		})
-		parallel := false
+		parallel := true
 		request := client.ChatRequest{
 			Messages: history.RequestMessages(), Tools: available, ToolChoice: client.ToolChoiceAuto,
 			ParallelToolCalls: &parallel, WorkingDirectory: r.WorkingDirectory,
@@ -306,11 +333,44 @@ func runGriller[T any](
 			)})
 			continue
 		}
-		for _, call := range assistant.ToolCalls {
+		batch := toolbatch.New(assistant.ToolCalls, toolbatch.IsLoopTool, func(ctx context.Context, _ int, call client.ToolCall) (client.ToolResult, error) {
+			switch call.Function.Name {
+			case ExternalSearchToolName:
+				if _, err := ParseExternalSearchInput(call.Function.Arguments); err != nil {
+					return scoutToolError(err), nil
+				}
+				return invocationTools.Call(ctx, call)
+			case DelegateScoutToolName, "loom_inspect", "loom_read", "loom_eval", "search_skills", "get_skill", "search_propositions", "get_proposition":
+				return invocationTools.Call(ctx, call)
+			default:
+				if externalMCPToolAllowed(call.Function.Name) {
+					return r.Tools.Call(ctx, call)
+				}
+				return scoutToolError(fmt.Errorf("tool %q is not available to griller", call.Function.Name)), nil
+			}
+		})
+		batch.Before = func(_ int, call client.ToolCall) error {
 			reportProgress(r.Progress, ProgressEvent{
 				Agent: "griller", TaskID: task.ID, ParentID: task.ParentID,
 				Action: ProgressTool, Detail: call.Function.Name,
 			})
+			if call.Function.Name == ExternalSearchToolName {
+				if input, err := ParseExternalSearchInput(call.Function.Arguments); err == nil {
+					reportProgress(r.Progress, ProgressEvent{Agent: "search", TaskID: task.ID, ParentID: "griller", Action: ProgressStarted, Detail: input.Query})
+				}
+			}
+			return nil
+		}
+		for index, call := range assistant.ToolCalls {
+			if err := ctx.Err(); err != nil {
+				return output, err
+			}
+			if toolbatch.IsLoopTool(call) {
+				reportProgress(r.Progress, ProgressEvent{
+					Agent: "griller", TaskID: task.ID, ParentID: task.ParentID,
+					Action: ProgressTool, Detail: call.Function.Name,
+				})
+			}
 			if memoryResult, handled := history.CallMemoryTool(call); handled {
 				traceToolResult(r.Trace, "griller", task.ID, task.ParentID, call, memoryResult)
 				history.Append(client.ToolResultMessage(call, memoryResult))
@@ -352,16 +412,13 @@ func runGriller[T any](
 				})
 				result = jsonToolResult(answer)
 			case ExternalSearchToolName:
-				input, parseErr := ParseExternalSearchInput(call.Function.Arguments)
+				_, parseErr := ParseExternalSearchInput(call.Function.Arguments)
 				if parseErr != nil {
 					result = scoutToolError(parseErr)
 					break
 				}
-				reportProgress(r.Progress, ProgressEvent{
-					Agent: "search", TaskID: task.ID, ParentID: "griller",
-					Action: ProgressStarted, Detail: input.Query,
-				})
-				result, err = invocationTools.Call(ctx, call)
+
+				result, err = batch.Call(ctx, index)
 				searchErr := err
 				if err != nil {
 					result = scoutToolError(err)
@@ -395,19 +452,22 @@ func runGriller[T any](
 				}
 				result = scoutToolError(parseErr)
 			case DelegateScoutToolName, "loom_inspect", "loom_read", "loom_eval", "search_skills", "get_skill", "search_propositions", "get_proposition":
-				result, err = invocationTools.Call(ctx, call)
+				result, err = batch.Call(ctx, index)
 				if err != nil {
 					result = scoutToolError(err)
 				}
 			default:
 				if externalMCPToolAllowed(call.Function.Name) {
-					result, err = r.Tools.Call(ctx, call)
+					result, err = batch.Call(ctx, index)
 					if err != nil {
 						result = scoutToolError(err)
 					}
 				} else {
 					result = scoutToolError(fmt.Errorf("tool %q is not available to griller", call.Function.Name))
 				}
+			}
+			if err := ctx.Err(); err != nil {
+				return output, err
 			}
 			traceToolResult(r.Trace, "griller", task.ID, task.ParentID, call, result)
 			history.Append(client.Message{
@@ -476,7 +536,7 @@ func (r PlannerRunner) Run(ctx context.Context, brief GrillBrief) (proposal Plan
 			Agent: "planner", TaskID: r.TaskID, ParentID: r.ParentID,
 			Action: ProgressThinking, Detail: fmt.Sprintf("model round %d", round+1),
 		})
-		parallel := false
+		parallel := true
 		request := client.ChatRequest{
 			Messages: history.RequestMessages(), Tools: available, ToolChoice: client.ToolChoiceAuto,
 			ParallelToolCalls: &parallel, WorkingDirectory: r.WorkingDirectory,
@@ -508,11 +568,39 @@ func (r PlannerRunner) Run(ctx context.Context, brief GrillBrief) (proposal Plan
 			)})
 			continue
 		}
-		for _, call := range assistant.ToolCalls {
+		batch := toolbatch.New(assistant.ToolCalls, toolbatch.IsLoopTool, func(ctx context.Context, _ int, call client.ToolCall) (client.ToolResult, error) {
+			if r.Tools == nil || !hasTool(available, call.Function.Name) {
+				return scoutToolError(fmt.Errorf("tool %q is not available to planner", call.Function.Name)), nil
+			}
+			if call.Function.Name == ExternalSearchToolName {
+				if _, err := ParseExternalSearchInput(call.Function.Arguments); err != nil {
+					return scoutToolError(err), nil
+				}
+			}
+			return r.Tools.Call(ctx, call)
+		})
+		batch.Before = func(_ int, call client.ToolCall) error {
 			reportProgress(r.Progress, ProgressEvent{
 				Agent: "planner", TaskID: r.TaskID, ParentID: r.ParentID,
 				Action: ProgressTool, Detail: call.Function.Name,
 			})
+			if call.Function.Name == ExternalSearchToolName && r.Tools != nil && hasTool(available, call.Function.Name) {
+				if input, err := ParseExternalSearchInput(call.Function.Arguments); err == nil {
+					reportProgress(r.Progress, ProgressEvent{Agent: "search", ParentID: "planner", Action: ProgressStarted, Detail: input.Query})
+				}
+			}
+			return nil
+		}
+		for index, call := range assistant.ToolCalls {
+			if err := ctx.Err(); err != nil {
+				return PlanProposal{}, err
+			}
+			if toolbatch.IsLoopTool(call) {
+				reportProgress(r.Progress, ProgressEvent{
+					Agent: "planner", TaskID: r.TaskID, ParentID: r.ParentID,
+					Action: ProgressTool, Detail: call.Function.Name,
+				})
+			}
 			var result client.ToolResult
 			if call.Function.Name == TaskStartToolName {
 				result = dedicatedTaskStartResult(ctx, r.Tools, available, call, &started, len(assistant.ToolCalls))
@@ -528,12 +616,12 @@ func (r PlannerRunner) Run(ctx context.Context, brief GrillBrief) (proposal Plan
 			} else if memoryResult, handled := history.CallMemoryTool(call); handled {
 				result = memoryResult
 			} else if call.Function.Name == ExternalSearchToolName && r.Tools != nil && hasTool(available, ExternalSearchToolName) {
-				input, parseErr := ParseExternalSearchInput(call.Function.Arguments)
+				_, parseErr := ParseExternalSearchInput(call.Function.Arguments)
 				if parseErr != nil {
 					result = scoutToolError(parseErr)
 				} else {
-					reportProgress(r.Progress, ProgressEvent{Agent: "search", ParentID: "planner", Action: ProgressStarted, Detail: input.Query})
-					result, err = r.Tools.Call(ctx, call)
+
+					result, err = batch.Call(ctx, index)
 					searchErr := err
 					if err != nil {
 						result = scoutToolError(err)
@@ -548,12 +636,15 @@ func (r PlannerRunner) Run(ctx context.Context, brief GrillBrief) (proposal Plan
 					}
 				}
 			} else if r.Tools != nil && hasTool(available, call.Function.Name) {
-				result, err = r.Tools.Call(ctx, call)
+				result, err = batch.Call(ctx, index)
 				if err != nil {
 					result = scoutToolError(err)
 				}
 			} else {
 				result = scoutToolError(fmt.Errorf("tool %q is not available to planner", call.Function.Name))
+			}
+			if err := ctx.Err(); err != nil {
+				return PlanProposal{}, err
 			}
 			traceToolResult(r.Trace, "planner", r.TaskID, r.ParentID, call, result)
 			message := client.Message{

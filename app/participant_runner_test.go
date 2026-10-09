@@ -21,7 +21,9 @@ func TestACPParticipantKeepsSessionAndRestoresOnlyCompletedExchanges(t *testing.
 	if err := store.Save(workspace.Session{}); err != nil {
 		t.Fatal(err)
 	}
-	lock.Close()
+	if err := lock.Close(); err != nil {
+		t.Error(err)
+	}
 	executable, err := os.Executable()
 	if err != nil {
 		t.Fatal(err)
@@ -99,7 +101,9 @@ func TestACPParticipantKeepsSessionAndRestoresOnlyCompletedExchanges(t *testing.
 	if starts != 2 || !strings.Contains(last, "first opinion") || !strings.Contains(last, "peer review") || !strings.Contains(last, "saved answer") || strings.Contains(last, "\nfail\n") {
 		t.Fatalf("incorrect restored context: starts=%d prompt=%s", starts, last)
 	}
-	runner.ReleaseSession(store, store.SessionID)
+	if err := runner.ReleaseSession(store, store.SessionID); err != nil {
+		t.Error(err)
+	}
 }
 
 func TestACPParticipantRejectsUnavailableConnectionsAndModelControls(t *testing.T) {
@@ -126,7 +130,9 @@ func TestACPParticipantRejectsEmptyAndIncompleteResponses(t *testing.T) {
 			connection := &fakeACPRemoteConnection{}
 			remote := &acpRemoteClient{connection: connection, sessionID: "test", requireCompletedText: true}
 			connection.prompt = func(ctx context.Context, request acp.PromptRequest) (acp.PromptResponse, error) {
-				remote.SessionUpdate(ctx, acp.SessionNotification{SessionId: request.SessionId, Update: acp.SessionUpdate{AgentMessageChunk: &acp.SessionUpdateAgentMessageChunk{Content: acp.TextBlock(test.text)}}})
+				if err := remote.SessionUpdate(ctx, acp.SessionNotification{SessionId: request.SessionId, Update: acp.SessionUpdate{AgentMessageChunk: &acp.SessionUpdateAgentMessageChunk{Content: acp.TextBlock(test.text)}}}); err != nil {
+					t.Error(err)
+				}
 				return acp.PromptResponse{StopReason: test.stop}, nil
 			}
 			if _, _, err := remote.prompt(t.Context(), "question", nil); err == nil {

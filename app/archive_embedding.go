@@ -14,7 +14,7 @@ func (m model) configureEmbeddingRuntime(value config.Config, configuredClient c
 	if archive == nil && libraryClient == nil {
 		if value.Embedding.Model != "" {
 			return func() tea.Msg {
-				return archiveEmbeddingConfiguredMsg{err: errors.New("Library and workspace archive are unavailable; embedding indexing did not start")}
+				return archiveEmbeddingConfiguredMsg{err: errors.New("library and workspace archive are unavailable; embedding indexing did not start")}
 			}
 		}
 		return nil

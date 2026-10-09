@@ -295,7 +295,11 @@ func TestStudioRealRuntimeGuidanceRedirectsAndPersistsTools(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer response.Body.Close()
+	defer func() {
+		if err := response.Body.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	var latest studioRunSnapshot
 	if err := json.NewDecoder(response.Body).Decode(&latest); err != nil {
 		t.Fatal(err)
@@ -516,7 +520,11 @@ func seedStudioBrowserDelegations(t *testing.T) workspace.Store {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer lock.Close()
+	defer func() {
+		if err := lock.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	session, err := root.Load()
 	if err != nil {
 		t.Fatal(err)
@@ -617,7 +625,11 @@ func seedStudioBrowserFiles(t *testing.T) (workspace.Store, string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer lock.Close()
+	defer func() {
+		if err := lock.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	session, err := store.Load()
 	if err != nil {
 		t.Fatal(err)

@@ -171,7 +171,7 @@ func (store *studioProjectStore) loadLocked() (studioProjectsDocument, error) {
 		return studioProjectsDocument{}, fmt.Errorf("inspect Studio projects: %w", err)
 	}
 	if info.Size() > maximumStudioProjectsSize {
-		return studioProjectsDocument{}, errors.New("Studio projects file is too large")
+		return studioProjectsDocument{}, errors.New("studio projects file is too large")
 	}
 	decoder := json.NewDecoder(io.LimitReader(file, maximumStudioProjectsSize+1))
 	decoder.DisallowUnknownFields()
@@ -201,7 +201,7 @@ func (store *studioProjectStore) saveLocked(value studioProjectsDocument) error 
 	}
 	body = append(body, '\n')
 	if len(body) > maximumStudioProjectsSize {
-		return errors.New("Studio projects file is too large")
+		return errors.New("studio projects file is too large")
 	}
 	directory := filepath.Dir(store.path)
 	if err := os.MkdirAll(directory, 0o700); err != nil {
@@ -256,13 +256,13 @@ func validateStudioProjects(value studioProjectsDocument) error {
 		}
 		name := strings.TrimSpace(project.Name)
 		if name == "" || name != project.Name || len(name) > 128 {
-			return errors.New("Studio project names must contain 1 to 128 characters without surrounding whitespace")
+			return errors.New("studio project names must contain 1 to 128 characters without surrounding whitespace")
 		}
 		if project.CreatedAt.IsZero() || project.UpdatedAt.IsZero() {
-			return errors.New("Studio project timestamps are required")
+			return errors.New("studio project timestamps are required")
 		}
 		if len(project.WorkspaceRoots) == 0 || len(project.WorkspaceRoots) > maximumProjectWorkspaceRoots {
-			return fmt.Errorf("Studio projects must contain 1 to %d workspace roots", maximumProjectWorkspaceRoots)
+			return fmt.Errorf("studio projects must contain 1 to %d workspace roots", maximumProjectWorkspaceRoots)
 		}
 		if _, exists := ids[project.ID]; exists {
 			return errors.New("duplicate Studio project ID")
@@ -382,7 +382,7 @@ func (service *sessionsService) serveProject(writer http.ResponseWriter, request
 		}
 		project, err := service.projects.update(id, input)
 		if errors.Is(err, os.ErrNotExist) {
-			writeAPIError(writer, http.StatusNotFound, errors.New("Studio project does not exist"))
+			writeAPIError(writer, http.StatusNotFound, errors.New("studio project does not exist"))
 			return
 		}
 		if err != nil {
@@ -393,7 +393,7 @@ func (service *sessionsService) serveProject(writer http.ResponseWriter, request
 	case http.MethodDelete:
 		err := service.projects.delete(id)
 		if errors.Is(err, os.ErrNotExist) {
-			writeAPIError(writer, http.StatusNotFound, errors.New("Studio project does not exist"))
+			writeAPIError(writer, http.StatusNotFound, errors.New("studio project does not exist"))
 			return
 		}
 		if err != nil {

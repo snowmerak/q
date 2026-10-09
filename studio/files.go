@@ -84,7 +84,7 @@ func openFileWorkspace(request *http.Request) (*os.Root, string, string, error) 
 	}
 	for _, part := range strings.Split(filepath.ToSlash(name), "/") {
 		if fileViewerMetadata(part) {
-			return nil, "", "", errors.New("Q and Git metadata are not shown in the file viewer")
+			return nil, "", "", errors.New("q and Git metadata are not shown in the file viewer")
 		}
 	}
 	fs, err := os.OpenRoot(root)
@@ -104,7 +104,7 @@ func serveWorkspaceFiles(writer http.ResponseWriter, request *http.Request) {
 		writeAPIError(writer, http.StatusBadRequest, err)
 		return
 	}
-	defer fs.Close()
+	defer func() { _ = fs.Close() }()
 	offset := 0
 	if value := request.URL.Query().Get("offset"); value != "" {
 		offset, err = strconv.Atoi(value)
@@ -118,7 +118,7 @@ func serveWorkspaceFiles(writer http.ResponseWriter, request *http.Request) {
 		writeAPIError(writer, http.StatusUnprocessableEntity, err)
 		return
 	}
-	defer directory.Close()
+	defer func() { _ = directory.Close() }()
 	for remaining := offset; remaining > 0; {
 		entries, readErr := directory.ReadDir(min(remaining, fileDirectoryPage))
 		remaining -= len(entries)
@@ -166,7 +166,7 @@ func serveWorkspaceFileContent(writer http.ResponseWriter, request *http.Request
 		writeAPIError(writer, http.StatusBadRequest, err)
 		return
 	}
-	defer fs.Close()
+	defer func() { _ = fs.Close() }()
 	result, err := readWorkspaceFileContent(fs, root, name)
 	if err != nil {
 		writeAPIError(writer, http.StatusUnprocessableEntity, err)
@@ -192,7 +192,7 @@ func readWorkspaceFileContent(fs *os.Root, root, name string) (workspaceFileCont
 	if err != nil {
 		return result, err
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 	// Recheck the opened handle: the path may have changed after Stat.
 	info, err = file.Stat()
 	if err != nil || !info.Mode().IsRegular() {
@@ -263,7 +263,7 @@ func serveWorkspaceFileChanges(writer http.ResponseWriter, request *http.Request
 		writeAPIError(writer, http.StatusBadRequest, err)
 		return
 	}
-	defer fs.Close()
+	defer func() { _ = fs.Close() }()
 	ctx, cancel := context.WithTimeout(request.Context(), 15*time.Second)
 	defer cancel()
 	_, files, err := scopedFileChanges(ctx, root)
@@ -281,7 +281,7 @@ func serveWorkspaceFileDiff(writer http.ResponseWriter, request *http.Request) {
 		writeAPIError(writer, http.StatusBadRequest, err)
 		return
 	}
-	defer fs.Close()
+	defer func() { _ = fs.Close() }()
 	ctx, cancel := context.WithTimeout(request.Context(), 15*time.Second)
 	defer cancel()
 	snapshot, _, err := scopedFileChanges(ctx, root)

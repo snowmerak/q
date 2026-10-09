@@ -1,6 +1,9 @@
 package fsopen
 
-import "io"
+import (
+	"errors"
+	"io"
+)
 
 // ReadFile reads path using the same replacement-compatible handles as Open.
 func ReadFile(path string) ([]byte, error) {
@@ -8,6 +11,6 @@ func ReadFile(path string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer file.Close()
-	return io.ReadAll(file)
+	body, readErr := io.ReadAll(file)
+	return body, errors.Join(readErr, file.Close())
 }

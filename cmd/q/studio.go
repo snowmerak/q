@@ -58,7 +58,7 @@ func runStudioAt(
 	if err != nil {
 		return fmt.Errorf("q studio: listen: %w", err)
 	}
-	defer listener.Close()
+	defer func() { _ = listener.Close() }()
 	if !net.ParseIP(options.host).IsLoopback() {
 		_, _ = fmt.Fprintf(stderr, "q studio: warning: listening on non-loopback host %s without built-in authentication\n", options.host)
 	}

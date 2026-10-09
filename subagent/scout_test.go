@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/snowmerak/q/client"
@@ -39,6 +40,7 @@ func (f *fakeScoutClient) Chat(_ context.Context, request client.ChatRequest) (*
 }
 
 type fakeScoutTools struct {
+	mu        sync.Mutex
 	available []client.Tool
 	calls     []client.ToolCall
 	result    *client.ToolResult
@@ -59,6 +61,8 @@ func (*fakeScoutTools) SearchSkillHints(context.Context, string, int) (builtin.S
 }
 
 func (f *fakeScoutTools) Call(_ context.Context, call client.ToolCall) (client.ToolResult, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.calls = append(f.calls, call)
 	if f.result != nil {
 		return *f.result, nil

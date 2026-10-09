@@ -67,7 +67,7 @@ func (service *settingsService) serveSystemOneModelAssignmentUpdate(writer http.
 	switch request.PathValue("target") {
 	case "default":
 		if update.Model == "" {
-			writeAPIError(writer, http.StatusUnprocessableEntity, errors.New("System One default model is required"))
+			writeAPIError(writer, http.StatusUnprocessableEntity, errors.New("systemone default model is required"))
 			return
 		}
 		value.DefaultModel = update.Model
@@ -131,7 +131,7 @@ func (service *settingsService) serveSystemOneProviderUpdate(writer http.Respons
 	}
 	index := systemOneProviderIndex(value, request.PathValue("provider"))
 	if index < 0 {
-		writeAPIError(writer, http.StatusNotFound, errors.New("System One provider does not exist"))
+		writeAPIError(writer, http.StatusNotFound, errors.New("systemone provider does not exist"))
 		return
 	}
 	oldID := value.Providers[index].ID
@@ -156,7 +156,7 @@ func (service *settingsService) serveSystemOneProviderDelete(writer http.Respons
 	}
 	index := systemOneProviderIndex(value, request.PathValue("provider"))
 	if index < 0 {
-		writeAPIError(writer, http.StatusNotFound, errors.New("System One provider does not exist"))
+		writeAPIError(writer, http.StatusNotFound, errors.New("systemone provider does not exist"))
 		return
 	}
 	if len(value.Providers) == 1 {

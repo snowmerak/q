@@ -14,10 +14,16 @@ type planningClient struct {
 	responses        []client.Message
 	requests         []client.ChatRequest
 	terminalRequests []client.ChatRequest
+	respond          func(context.Context, client.ChatRequest) (*client.ChatResponse, error)
 }
 
-func (p *planningClient) Chat(_ context.Context, request client.ChatRequest) (*client.ChatResponse, error) {
+func (p *planningClient) Chat(ctx context.Context, request client.ChatRequest) (*client.ChatResponse, error) {
 	p.mu.Lock()
+	if p.respond != nil && request.ToolChoice != client.ToolChoiceNone {
+		p.requests = append(p.requests, request)
+		p.mu.Unlock()
+		return p.respond(ctx, request)
+	}
 	defer p.mu.Unlock()
 	if request.ToolChoice == client.ToolChoiceNone && len(request.Messages) > 0 && request.Messages[len(request.Messages)-1].Role == client.RoleTool {
 		p.terminalRequests = append(p.terminalRequests, request)

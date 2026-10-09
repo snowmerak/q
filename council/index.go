@@ -84,21 +84,20 @@ ON CONFLICT(key) DO UPDATE SET value = value + 1`); err != nil {
 	for rows.Next() {
 		var id, path string
 		if err := rows.Scan(&id, &path); err != nil {
-			rows.Close()
-			return err
+			return errors.Join(err, rows.Close())
 		}
 		if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
 			missing = append(missing, id)
 		} else if err != nil {
-			rows.Close()
-			return err
+			return errors.Join(err, rows.Close())
 		}
 	}
 	if err := rows.Err(); err != nil {
-		rows.Close()
+		return errors.Join(err, rows.Close())
+	}
+	if err := rows.Close(); err != nil {
 		return err
 	}
-	rows.Close()
 	for _, id := range missing {
 		if _, err := tx.Exec(`DELETE FROM councils WHERE id = ?`, id); err != nil {
 			return err

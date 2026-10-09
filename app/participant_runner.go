@@ -58,7 +58,7 @@ func NewParticipantRunner(ctx context.Context, native ParticipantSessionHost, co
 	return &ParticipantRunner{ctx: ctx, native: native, connections: connections, sessions: make(map[string]*acpParticipantSession), start: startACPRemoteClient}
 }
 
-func (r *ParticipantRunner) RunWithOptions(ctx context.Context, store workspace.Store, id, prompt string, options SessionOptions, emit SessionEventSink) error {
+func (r *ParticipantRunner) RunWithOptions(ctx context.Context, store workspace.Store, id, prompt string, options SessionOptions, emit SessionEventSink) (returnErr error) {
 	if options.Agent == "" {
 		if r.native == nil {
 			return errors.New("native session host is unavailable")
@@ -91,7 +91,7 @@ func (r *ParticipantRunner) RunWithOptions(ctx context.Context, store workspace.
 	if err != nil {
 		return err
 	}
-	defer lock.Close()
+	defer func() { returnErr = errors.Join(returnErr, lock.Close()) }()
 	roots := append([]string(nil), options.AuxiliaryDirectories...)
 	if options.WorkingDirectory != "" {
 		roots = append([]string{options.WorkingDirectory}, roots...)
@@ -190,18 +190,15 @@ func saveACPParticipantState(path string, state acpParticipantState) error {
 	if err != nil {
 		return err
 	}
-	defer os.Remove(file.Name())
+	defer func() { _ = os.Remove(file.Name()) }()
 	if err := file.Chmod(0o600); err != nil {
-		file.Close()
-		return err
+		return errors.Join(err, file.Close())
 	}
 	if _, err := file.Write(body); err != nil {
-		file.Close()
-		return err
+		return errors.Join(err, file.Close())
 	}
 	if err := file.Sync(); err != nil {
-		file.Close()
-		return err
+		return errors.Join(err, file.Close())
 	}
 	if err := file.Close(); err != nil {
 		return err

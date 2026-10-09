@@ -437,7 +437,7 @@ func ensureTurnSessions(turn *Turn, store workspace.Store, members int) error {
 	if len(turn.MemberSessions) == 0 {
 		turn.MemberSessions = make([]string, members)
 	}
-	create := func(id *string) error {
+	create := func(id *string) (returnErr error) {
 		if *id != "" {
 			_, err := store.ForSession(*id)
 			return err
@@ -446,7 +446,7 @@ func ensureTurnSessions(turn *Turn, store workspace.Store, members int) error {
 		if err != nil {
 			return err
 		}
-		defer lock.Close()
+		defer func() { returnErr = errors.Join(returnErr, lock.Close()) }()
 		if err := selected.Save(workspace.Session{}); err != nil {
 			return err
 		}

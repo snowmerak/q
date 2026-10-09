@@ -134,7 +134,7 @@ func ValidID(id string) bool {
 			}
 			continue
 		}
-		if !((r >= '0' && r <= '9') || (r >= 'a' && r <= 'f')) {
+		if (r < '0' || r > '9') && (r < 'a' || r > 'f') {
 			return false
 		}
 	}
@@ -285,7 +285,7 @@ func (s *Store) List() ([]Council, error) {
 	return s.listLocked()
 }
 
-func (s *Store) listLocked() ([]Council, error) {
+func (s *Store) listLocked() (result []Council, returnErr error) {
 	db, err := s.openIndexLocked()
 	if err != nil {
 		return nil, err
@@ -294,8 +294,7 @@ func (s *Store) listLocked() ([]Council, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	var result []Council
+	defer func() { returnErr = errors.Join(returnErr, rows.Close()) }()
 	for rows.Next() {
 		var body []byte
 		if err := rows.Scan(&body); err != nil {
@@ -523,7 +522,7 @@ func readDocument(path string, target any) error {
 	if err != nil {
 		return err
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 	info, err := file.Stat()
 	if err != nil {
 		return err
@@ -559,18 +558,15 @@ func writeDocument(path string, value any) error {
 	if err != nil {
 		return err
 	}
-	defer os.Remove(file.Name())
+	defer func() { _ = os.Remove(file.Name()) }()
 	if err := file.Chmod(0o600); err != nil {
-		file.Close()
-		return err
+		return errors.Join(err, file.Close())
 	}
 	if _, err := file.Write(append(body, '\n')); err != nil {
-		file.Close()
-		return err
+		return errors.Join(err, file.Close())
 	}
 	if err := file.Sync(); err != nil {
-		file.Close()
-		return err
+		return errors.Join(err, file.Close())
 	}
 	if err := file.Close(); err != nil {
 		return err

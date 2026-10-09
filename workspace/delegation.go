@@ -298,7 +298,7 @@ func readDelegationJSON(path string, target any) error {
 	if err != nil {
 		return err
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 	info, err := file.Stat()
 	if err != nil {
 		return err
@@ -339,18 +339,15 @@ func writeDelegationJSON(root, path string, value any) error {
 			return err
 		}
 		temporary := file.Name()
-		defer os.Remove(temporary)
+		defer func() { _ = os.Remove(temporary) }()
 		if err := file.Chmod(0o600); err != nil {
-			file.Close()
-			return err
+			return errors.Join(err, file.Close())
 		}
 		if _, err := file.Write(body); err != nil {
-			file.Close()
-			return err
+			return errors.Join(err, file.Close())
 		}
 		if err := file.Sync(); err != nil {
-			file.Close()
-			return err
+			return errors.Join(err, file.Close())
 		}
 		if err := file.Close(); err != nil {
 			return err

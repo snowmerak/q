@@ -184,7 +184,7 @@ func (service *councilService) projectRoots(id string) ([]string, error) {
 	for _, project := range projects {
 		if project.ID == id {
 			if len(project.WorkspaceRoots) == 0 {
-				return nil, errors.New("Studio project has no workspaces")
+				return nil, errors.New("studio project has no workspaces")
 			}
 			roots := make([]string, 0, len(project.WorkspaceRoots))
 			for _, item := range project.WorkspaceRoots {
@@ -247,8 +247,8 @@ func (service *councilService) serveItem(writer http.ResponseWriter, request *ht
 			writeRunLockError(writer, err)
 			return
 		}
-		defer lock.Close()
-		if err := service.store.Delete(id); err != nil {
+		err = errors.Join(service.store.Delete(id), lock.Close())
+		if err != nil {
 			writeCouncilError(writer, err)
 			return
 		}
@@ -336,7 +336,7 @@ func (service *councilService) serveTurns(writer http.ResponseWriter, request *h
 	}
 	if service.ctx.Err() != nil {
 		service.mu.Unlock()
-		writeAPIError(writer, http.StatusServiceUnavailable, errors.New("Studio is shutting down"))
+		writeAPIError(writer, http.StatusServiceUnavailable, errors.New("studio is shutting down"))
 		return
 	}
 	lock, err := service.acquireRunLock(value.ID)
@@ -444,7 +444,7 @@ func (service *councilService) serveRetry(writer http.ResponseWriter, request *h
 	}
 	if service.ctx.Err() != nil {
 		service.mu.Unlock()
-		writeAPIError(writer, http.StatusServiceUnavailable, errors.New("Studio is shutting down"))
+		writeAPIError(writer, http.StatusServiceUnavailable, errors.New("studio is shutting down"))
 		return
 	}
 	lock, err := service.acquireRunLock(id)

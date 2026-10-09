@@ -71,7 +71,7 @@ func runSystemOneWithStore(
 	if err != nil {
 		return err
 	}
-	defer listener.Close()
+	defer func() { _ = listener.Close() }()
 	server := &http.Server{
 		Handler:           instance.Handler(),
 		ReadHeaderTimeout: 10 * time.Second,

@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/snowmerak/q/client"
+	"github.com/snowmerak/q/internal/toolbatch"
 	"github.com/snowmerak/q/loom"
 	"github.com/snowmerak/q/subagent"
 )
@@ -47,7 +48,7 @@ func runCommitAgent(
 		if err := history.CompactIfNeeded(ctx, &spec, configuredClient); err != nil {
 			return proposalState{}, false, fmt.Errorf("q commit: context: %w", err)
 		}
-		parallel := false
+		parallel := true
 		request := client.ChatRequest{
 			Messages: history.RequestMessages(), Tools: available, ToolChoice: client.ToolChoiceAuto,
 			ParallelToolCalls: &parallel, WorkingDirectory: state.root,
@@ -81,11 +82,27 @@ func runCommitAgent(
 			})
 			continue
 		}
-		for _, call := range assistant.ToolCalls {
+		barrier := func(call client.ToolCall) bool {
+			return toolbatch.IsLoopTool(call) || call.Function.Name == toolGitOverview ||
+				call.Function.Name == toolProposeCommit || call.Function.Name == toolSplitCommit
+		}
+		batch := toolbatch.New(assistant.ToolCalls, barrier, func(ctx context.Context, _ int, call client.ToolCall) (client.ToolResult, error) {
+			return runtime.call(ctx, call), nil
+		})
+		for index, call := range assistant.ToolCalls {
+			if err := ctx.Err(); err != nil {
+				return proposalState{}, false, err
+			}
 			logger.step("tool", "calling %s", call.Function.Name)
 			result, handled := history.CallMemoryTool(call)
 			if !handled {
-				result = runtime.call(ctx, call)
+				result, err = batch.Call(ctx, index)
+				if err != nil {
+					return proposalState{}, false, err
+				}
+			}
+			if err := ctx.Err(); err != nil {
+				return proposalState{}, false, err
 			}
 			if result.IsError {
 				logger.step("tool", "%s returned a validation error", call.Function.Name)

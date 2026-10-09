@@ -201,7 +201,7 @@ func (host *SessionHost) StartDelegation(ctx context.Context, root workspace.Sto
 	}
 }
 
-func (host *SessionHost) continueDelegation(ctx context.Context, prepared *preparedSession, path, prompt string, ready chan DelegationRunSnapshot) error {
+func (host *SessionHost) continueDelegation(ctx context.Context, prepared *preparedSession, path, prompt string, ready chan DelegationRunSnapshot) (returnErr error) {
 	parts := strings.Split(path, "/")
 	if path == "" || len(parts) > maximumDelegationDepth {
 		return errors.New("invalid delegation path")
@@ -277,7 +277,7 @@ func (host *SessionHost) continueDelegation(ctx context.Context, prepared *prepa
 		if err != nil {
 			return err
 		}
-		defer closer.Close()
+		defer func() { returnErr = errors.Join(returnErr, closer.Close()) }()
 		dispatcher = different
 	}
 	definition, found := dispatcher.registry.Get(bookmark.Agent)

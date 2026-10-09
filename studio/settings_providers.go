@@ -48,7 +48,7 @@ func (service *settingsService) serveProviderUpdate(writer http.ResponseWriter, 
 	}
 	index := providerIndex(value, request.PathValue("provider"))
 	if index < 0 {
-		writeAPIError(writer, http.StatusNotFound, errors.New("Gateway provider does not exist"))
+		writeAPIError(writer, http.StatusNotFound, errors.New("gateway provider does not exist"))
 		return
 	}
 	value.Providers[index] = applyProviderUpdate(value.Providers[index], update)
@@ -69,7 +69,7 @@ func (service *settingsService) serveProviderDelete(writer http.ResponseWriter, 
 	}
 	index := providerIndex(value, request.PathValue("provider"))
 	if index < 0 {
-		writeAPIError(writer, http.StatusNotFound, errors.New("Gateway provider does not exist"))
+		writeAPIError(writer, http.StatusNotFound, errors.New("gateway provider does not exist"))
 		return
 	}
 	if len(value.Providers) == 1 {
@@ -158,10 +158,10 @@ func validateProviderIdentities(value gateway.Config) error {
 	prefixes := make(map[string]struct{}, len(value.Providers))
 	for _, provider := range value.Providers {
 		if provider.ID == "" || provider.ID != strings.TrimSpace(provider.ID) || strings.ContainsAny(provider.ID, "/\r\n\t ") {
-			return fmt.Errorf("Gateway provider ID %q must contain no slash or whitespace", provider.ID)
+			return fmt.Errorf("gateway provider ID %q must contain no slash or whitespace", provider.ID)
 		}
 		if _, duplicate := ids[provider.ID]; duplicate {
-			return fmt.Errorf("Gateway provider ID %q is already in use", provider.ID)
+			return fmt.Errorf("gateway provider ID %q is already in use", provider.ID)
 		}
 		ids[provider.ID] = struct{}{}
 		prefix := provider.Prefix
@@ -169,10 +169,10 @@ func validateProviderIdentities(value gateway.Config) error {
 			prefix = provider.ID
 		}
 		if prefix != strings.TrimSpace(prefix) || strings.ContainsAny(prefix, "/\r\n\t ") {
-			return fmt.Errorf("Gateway provider prefix %q must contain no slash or whitespace", prefix)
+			return fmt.Errorf("gateway provider prefix %q must contain no slash or whitespace", prefix)
 		}
 		if _, duplicate := prefixes[prefix]; duplicate {
-			return fmt.Errorf("Gateway provider prefix %q is already in use", prefix)
+			return fmt.Errorf("gateway provider prefix %q is already in use", prefix)
 		}
 		prefixes[prefix] = struct{}{}
 	}

@@ -45,7 +45,9 @@ func TestServerRoutesModelsAndDecisionsAcrossProviders(t *testing.T) {
 	if err := json.NewDecoder(response.Body).Decode(&catalog); err != nil {
 		t.Fatal(err)
 	}
-	response.Body.Close()
+	if err := response.Body.Close(); err != nil {
+		t.Error(err)
+	}
 	if len(catalog.Models) != 4 || catalog.Models[0].Name != "first/jev" ||
 		catalog.Models[1].Name != "first/jev-preview" || catalog.Models[2].Name != "second/jev" ||
 		catalog.Models[3].Name != "second/jev-preview" {
@@ -75,7 +77,9 @@ func TestServerRoutesModelsAndDecisionsAcrossProviders(t *testing.T) {
 		if err := json.NewDecoder(response.Body).Decode(&result); err != nil {
 			t.Fatal(err)
 		}
-		response.Body.Close()
+		if err := response.Body.Close(); err != nil {
+			t.Error(err)
+		}
 		if result.Model != test.model || result.Answers["q"].Choice != test.wantProvider {
 			t.Fatalf("%s result = %#v", test.model, result)
 		}
@@ -104,18 +108,24 @@ func TestServerRejectsMissingClientKeyAndUnknownProvider(t *testing.T) {
 	if response.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("missing key status = %d", response.StatusCode)
 	}
-	response.Body.Close()
+	if err := response.Body.Close(); err != nil {
+		t.Error(err)
+	}
 	response = send(t, http.MethodPost, server.URL+"/v1/systemone", body, "client-key", "")
 	if response.StatusCode != http.StatusBadRequest {
 		t.Fatalf("unknown provider status = %d", response.StatusCode)
 	}
-	response.Body.Close()
+	if err := response.Body.Close(); err != nil {
+		t.Error(err)
+	}
 	body = []byte(`{"model":"first/jev","state":"x","questions":{}}`)
 	response = send(t, http.MethodPost, server.URL+"/v1/systemone", body, "client-key", "invalid key")
 	if response.StatusCode != http.StatusBadRequest {
 		t.Fatalf("invalid idempotency key status = %d", response.StatusCode)
 	}
-	response.Body.Close()
+	if err := response.Body.Close(); err != nil {
+		t.Error(err)
+	}
 }
 
 func TestServerManagedKeysEnableAndDisableAuthentication(t *testing.T) {
@@ -148,7 +158,9 @@ func TestServerManagedKeysEnableAndDisableAuthentication(t *testing.T) {
 	checkStatus := func(key string, want int) {
 		t.Helper()
 		response := send(t, http.MethodGet, server.URL+"/v1/models", nil, key, "")
-		response.Body.Close()
+		if err := response.Body.Close(); err != nil {
+			t.Error(err)
+		}
 		if response.StatusCode != want {
 			t.Fatalf("key %q: status = %d, want %d", key, response.StatusCode, want)
 		}
@@ -195,7 +207,11 @@ func TestServerPreservesProviderErrorAndRateLimitHeaders(t *testing.T) {
 	defer server.Close()
 	response := send(t, http.MethodPost, server.URL+"/v1/systemone",
 		[]byte(`{"model":"jev","state":"x","questions":{}}`), "", "")
-	defer response.Body.Close()
+	defer func() {
+		if err := response.Body.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	body, _ := io.ReadAll(response.Body)
 	if response.StatusCode != http.StatusTooManyRequests ||
 		response.Header.Get("X-System-One-Error-Code") != "rate_limited" ||

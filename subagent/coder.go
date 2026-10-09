@@ -11,6 +11,7 @@ import (
 
 	"github.com/snowmerak/q/client"
 	"github.com/snowmerak/q/config"
+	"github.com/snowmerak/q/internal/toolbatch"
 	"github.com/snowmerak/q/loom"
 	"github.com/snowmerak/q/sessionstore"
 )
@@ -125,7 +126,7 @@ func (r *CoderRunner) run(
 			Agent: "coder", TaskID: taskID, ParentID: r.ExecutionID,
 			Action: ProgressThinking, Detail: fmt.Sprintf("model round %d", round+1),
 		})
-		parallel := false
+		parallel := true
 		request := client.ChatRequest{
 			Messages: history.RequestMessages(), Tools: available, ToolChoice: client.ToolChoiceAuto,
 			ParallelToolCalls: &parallel, WorkingDirectory: r.WorkingDirectory,
@@ -162,11 +163,29 @@ func (r *CoderRunner) run(
 			)})
 			continue
 		}
-		for _, call := range assistant.ToolCalls {
+		batch := toolbatch.New(assistant.ToolCalls, toolbatch.IsLoopTool, func(ctx context.Context, _ int, call client.ToolCall) (client.ToolResult, error) {
+			if !hasTool(available, call.Function.Name) {
+				return scoutToolError(fmt.Errorf("tool %q is not available to coder", call.Function.Name)), nil
+			}
+			return r.Tools.Call(ctx, call)
+		})
+		batch.Before = func(_ int, call client.ToolCall) error {
 			reportProgress(r.Progress, ProgressEvent{
 				Agent: "coder", TaskID: taskID, ParentID: r.ExecutionID,
 				Action: ProgressTool, Detail: call.Function.Name,
 			})
+			return nil
+		}
+		for index, call := range assistant.ToolCalls {
+			if err := ctx.Err(); err != nil {
+				return CoderResult{}, err
+			}
+			if toolbatch.IsLoopTool(call) {
+				reportProgress(r.Progress, ProgressEvent{
+					Agent: "coder", TaskID: taskID, ParentID: r.ExecutionID,
+					Action: ProgressTool, Detail: call.Function.Name,
+				})
+			}
 			var toolResult client.ToolResult
 			if call.Function.Name == TaskStartToolName {
 				toolResult = dedicatedTaskStartResult(ctx, r.Tools, available, call, &started, len(assistant.ToolCalls))
@@ -191,13 +210,16 @@ func (r *CoderRunner) run(
 			} else if !hasTool(available, call.Function.Name) {
 				toolResult = scoutToolError(fmt.Errorf("tool %q is not available to coder", call.Function.Name))
 			} else {
-				toolResult, err = r.Tools.Call(ctx, call)
+				toolResult, err = batch.Call(ctx, index)
 				if err != nil {
 					toolResult = scoutToolError(err)
 				}
 			}
 			if call.Function.Name != CoderCompleteToolName && call.Function.Name != TaskStartToolName && !IsMemoryTool(call.Function.Name) && len(evidence) < maximumCoderEvidenceItems {
 				evidence = append(evidence, coderEvidence(call, toolResult, r.WorkingDirectory))
+			}
+			if err := ctx.Err(); err != nil {
+				return CoderResult{}, err
 			}
 			message := client.Message{
 				Role: client.RoleTool, Name: call.Function.Name,

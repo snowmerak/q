@@ -13,6 +13,7 @@ import (
 	"github.com/snowmerak/q/change"
 	"github.com/snowmerak/q/client"
 	"github.com/snowmerak/q/config"
+	"github.com/snowmerak/q/internal/toolbatch"
 	"github.com/snowmerak/q/loom"
 	"github.com/snowmerak/q/sessionstore"
 )
@@ -195,7 +196,7 @@ func (r PlannerReviewRunner) Run(ctx context.Context, input TaskReviewRequest) (
 			Agent: "planner", TaskID: taskID, ParentID: r.ExecutionID,
 			Action: ProgressThinking, Detail: fmt.Sprintf("review round %d", round+1),
 		})
-		parallel := false
+		parallel := true
 		request := client.ChatRequest{
 			Messages: history.RequestMessages(), Tools: available,
 			ToolChoice: client.ToolChoiceAuto, ParallelToolCalls: &parallel,
@@ -252,6 +253,9 @@ func (r PlannerReviewRunner) Run(ctx context.Context, input TaskReviewRequest) (
 				})
 				return review, nil
 			}
+			if err := ctx.Err(); err != nil {
+				return TaskReview{}, err
+			}
 			message := client.Message{
 				Role: client.RoleTool, Name: ReviewTaskToolName, ToolCallID: assistant.ToolCalls[0].ID,
 				Content: scoutToolError(err).Content,
@@ -265,11 +269,29 @@ func (r PlannerReviewRunner) Run(ctx context.Context, input TaskReviewRequest) (
 			}
 			continue
 		}
-		for _, call := range assistant.ToolCalls {
+		batch := toolbatch.New(assistant.ToolCalls, toolbatch.IsLoopTool, func(ctx context.Context, _ int, call client.ToolCall) (client.ToolResult, error) {
+			if r.Tools == nil || !hasTool(available, call.Function.Name) {
+				return scoutToolError(fmt.Errorf("tool %q is not available to planner review", call.Function.Name)), nil
+			}
+			return r.Tools.Call(ctx, call)
+		})
+		batch.Before = func(_ int, call client.ToolCall) error {
 			reportProgress(r.Progress, ProgressEvent{
 				Agent: "planner", TaskID: taskID, ParentID: r.ExecutionID,
 				Action: ProgressTool, Detail: call.Function.Name,
 			})
+			return nil
+		}
+		for index, call := range assistant.ToolCalls {
+			if err := ctx.Err(); err != nil {
+				return TaskReview{}, err
+			}
+			if toolbatch.IsLoopTool(call) {
+				reportProgress(r.Progress, ProgressEvent{
+					Agent: "planner", TaskID: taskID, ParentID: r.ExecutionID,
+					Action: ProgressTool, Detail: call.Function.Name,
+				})
+			}
 			var toolResult client.ToolResult
 			switch {
 			case call.Function.Name == TaskStartToolName:
@@ -281,7 +303,7 @@ func (r PlannerReviewRunner) Run(ctx context.Context, input TaskReviewRequest) (
 			case r.Tools == nil || !hasTool(available, call.Function.Name):
 				toolResult = scoutToolError(fmt.Errorf("tool %q is not available to planner review", call.Function.Name))
 			default:
-				toolResult, err = r.Tools.Call(ctx, call)
+				toolResult, err = batch.Call(ctx, index)
 				if err != nil {
 					toolResult = scoutToolError(err)
 				}

@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/snowmerak/q/agentloop"
@@ -109,6 +110,7 @@ func (*scriptedClient) ListModels(context.Context) ([]client.Model, error) { ret
 func (*scriptedClient) Close() error                                       { return nil }
 
 type scriptedTools struct {
+	mu      sync.Mutex
 	name    string
 	names   []string
 	content string
@@ -135,6 +137,8 @@ func (*scriptedTools) Environment() qtools.HostEnvironment {
 	return qtools.HostEnvironment{OS: "test", Architecture: "test", Shell: "test"}
 }
 func (r *scriptedTools) Call(_ context.Context, call client.ToolCall) (client.ToolResult, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	r.calls = append(r.calls, call)
 	return client.ToolResult{Content: r.content}, nil
 }

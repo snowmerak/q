@@ -140,7 +140,7 @@ func (c *Client) do(ctx context.Context, method, path string, body []byte, idemp
 	if err != nil {
 		return nil, nil, fmt.Errorf("systemone: %s %s: %w", method, path, err)
 	}
-	defer response.Body.Close()
+	defer func() { _ = response.Body.Close() }()
 	responseBody, err := io.ReadAll(io.LimitReader(response.Body, maxResponseBytes+1))
 	if err != nil {
 		return nil, nil, fmt.Errorf("systemone: read response: %w", err)

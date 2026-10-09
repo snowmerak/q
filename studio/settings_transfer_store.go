@@ -127,7 +127,7 @@ func (backup transferBackup) restore() error {
 		return err
 	}
 	path := file.Name()
-	defer os.Remove(path)
+	defer func() { _ = os.Remove(path) }()
 	if err := file.Chmod(backup.mode); err != nil {
 		_ = file.Close()
 		return err

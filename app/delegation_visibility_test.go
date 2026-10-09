@@ -1,8 +1,12 @@
 package app
 
 import (
+	"context"
+	"fmt"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/snowmerak/q/client"
 	"github.com/snowmerak/q/config"
@@ -169,16 +173,45 @@ func TestLiveTurnWithTwoDelegateCallsKeepsBothChildren(t *testing.T) {
 	second.ID = first.ID
 	value := config.Default()
 	value.Provider.Model = "plan-model"
-	configured := &planningClient{responses: []client.Message{
-		{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{first, second}},
-		{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{planToolCall(subagent.TaskStartToolName, `{"objective":"first task"}`)}},
-		{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{planToolCall(subagent.TaskCompleteToolName, `{"outcome":"succeeded","summary":"first done"}`)}},
-		{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{planToolCall(subagent.TaskStartToolName, `{"objective":"second task"}`)}},
-		{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{planToolCall(subagent.TaskCompleteToolName, `{"outcome":"succeeded","summary":"second done"}`)}},
-		{Role: client.RoleAssistant, Content: "Both complete."},
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	var children atomic.Int32
+	bothStarted := make(chan struct{})
+	configured := &planningClient{respond: func(ctx context.Context, request client.ChatRequest) (*client.ChatResponse, error) {
+		respond := func(message client.Message) (*client.ChatResponse, error) {
+			return &client.ChatResponse{Choices: []client.Choice{{Message: message}}}, nil
+		}
+		var task string
+		for _, message := range request.Messages {
+			if message.Role == client.RoleUser && (message.Content == "first task" || message.Content == "second task") {
+				task = message.Content
+				break
+			}
+		}
+		if task != "" {
+			last := request.Messages[len(request.Messages)-1]
+			if last.Role == client.RoleTool && last.Name == subagent.TaskStartToolName {
+				summary := strings.TrimSuffix(task, " task") + " done"
+				return respond(client.Message{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{planToolCall(subagent.TaskCompleteToolName, fmt.Sprintf(`{"outcome":"succeeded","summary":%q}`, summary))}})
+			}
+			if children.Add(1) == 2 {
+				close(bothStarted)
+			}
+			select {
+			case <-bothStarted:
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+			return respond(client.Message{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{planToolCall(subagent.TaskStartToolName, fmt.Sprintf(`{"objective":%q}`, task))}})
+		}
+		if request.Messages[len(request.Messages)-1].Role == client.RoleTool {
+			return respond(client.Message{Role: client.RoleAssistant, Content: "Both complete."})
+		}
+		return respond(client.Message{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{first, second}})
 	}}
+
 	store := workspace.Store{Root: t.TempDir()}
-	m := newModel(t.Context(), config.Store{Dir: t.TempDir()}, nil)
+	m := newModel(ctx, config.Store{Dir: t.TempDir()}, nil)
 	m.workspaceStore = &store
 	m.toolRuntime = &fakeAgentTools{}
 	m.enterChat(value, configured)
@@ -194,8 +227,12 @@ func TestLiveTurnWithTwoDelegateCallsKeepsBothChildren(t *testing.T) {
 		t.Fatalf("two live delegates: bookmarks=%#v states=%#v waiting=%v status=%q err=%v", bookmarks, m.agentStates, m.waiting, m.status, err)
 	}
 	results := 0
+	wantSummaries := []string{"first done", "second done"}
 	for _, message := range m.messages {
 		if message.Role == client.RoleTool && message.Name == subagent.DelegateToolName && !strings.Contains(message.Content, "Tool error") {
+			if results >= len(wantSummaries) || !strings.Contains(message.Content, wantSummaries[results]) {
+				t.Fatalf("parent result order lost: %s", message.Content)
+			}
 			results++
 		}
 	}

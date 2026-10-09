@@ -21,7 +21,7 @@ func TestStudioRunPreservesFailureDetails(t *testing.T) {
 		{"failure", errors.New("ReplaceFileW: access denied"), false, "failed", "ReplaceFileW: access denied"},
 		{"failure with cancellation", errors.Join(context.Canceled, errors.New("ReplaceFileW: access denied")), false, "failed", "ReplaceFileW: access denied"},
 		{"internal cancellation", context.Canceled, false, "failed", "context canceled"},
-		{"shutdown", context.Canceled, true, "cancelled", "Studio is shutting down"},
+		{"shutdown", context.Canceled, true, "cancelled", "studio is shutting down"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			root := t.TempDir()
@@ -40,7 +40,11 @@ func TestStudioRunPreservesFailureDetails(t *testing.T) {
 				return test.failure
 			})
 			service = newSessionRunService(t.Context(), runner)
-			defer service.Close()
+			defer func() {
+				if err := service.Close(); err != nil {
+					t.Error(err)
+				}
+			}()
 			run, err := service.start(root, store.SessionID, "work")
 			if err != nil {
 				t.Fatal(err)
@@ -57,7 +61,7 @@ func TestStudioRunPreservesFailureDetails(t *testing.T) {
 				if page.Run.Status != test.status || !strings.Contains(page.Run.Error, test.wantDetail) || !strings.Contains(page.Run.Error, test.failure.Error()) {
 					t.Fatalf("reloaded=%v: run = %#v", reload, page.Run)
 				}
-				if !test.shutdown && strings.Contains(page.Run.Error, "Studio is shutting down") {
+				if !test.shutdown && strings.Contains(page.Run.Error, "studio is shutting down") {
 					t.Fatalf("internal failure mislabeled as shutdown: %s", page.Run.Error)
 				}
 			}
@@ -81,14 +85,18 @@ func TestStudioRunKeepsEventFailureWhenRunnerReturnsCancellation(t *testing.T) {
 		return context.Canceled
 	})
 	service := newSessionRunService(t.Context(), runner)
-	defer service.Close()
+	defer func() {
+		if err := service.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	run, err := service.start(root, store.SessionID, "work")
 	if err != nil {
 		t.Fatal(err)
 	}
 	service.wg.Wait()
 	page := run.page(0, maximumRunEventPage)
-	if page.Run.Status != "failed" || !strings.Contains(page.Run.Error, "persist Studio message event") || !strings.Contains(page.Run.Error, "Studio run event exceeds") {
+	if page.Run.Status != "failed" || !strings.Contains(page.Run.Error, "persist Studio message event") || !strings.Contains(page.Run.Error, "studio run event exceeds") {
 		t.Fatalf("failure = %#v", page.Run)
 	}
 }
@@ -110,7 +118,11 @@ func TestStudioRunDoesNotDuplicateReturnedEventFailure(t *testing.T) {
 		return errors.Join(context.Canceled, failure)
 	})
 	service := newSessionRunService(t.Context(), runner)
-	defer service.Close()
+	defer func() {
+		if err := service.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	run, err := service.start(root, store.SessionID, "work")
 	if err != nil {
 		t.Fatal(err)

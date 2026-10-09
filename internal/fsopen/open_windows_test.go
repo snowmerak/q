@@ -28,7 +28,11 @@ func TestOpenAllowsAtomicReplacement(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer file.Close()
+	defer func() {
+		if err := file.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	if err := fsreplace.Replace(source, destination); err != nil {
 		t.Fatalf("replace while reader is open: %v", err)
 	}

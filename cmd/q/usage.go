@@ -11,16 +11,6 @@ import (
 	"github.com/snowmerak/q/usagelog"
 )
 
-var openUsageBrowser = openBrowserURL
-
-func runUsageCommand(ctx context.Context, output, errorOutput io.Writer) error {
-	store, err := config.DefaultStore()
-	if err != nil {
-		return err
-	}
-	return runUsageCommandWithStore(ctx, store, output, errorOutput, openUsageBrowser)
-}
-
 func runUsageCommandWithStore(ctx context.Context, store config.Store, output, errorOutput io.Writer, open func(string) error) error {
 	usageRuntime, err := usagelog.Ensure(ctx, store.Dir)
 	if err != nil {

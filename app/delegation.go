@@ -372,9 +372,7 @@ func (r *delegationRuntime) Tools() []client.Tool {
 		return nil
 	}
 	var result []client.Tool
-	for _, tool := range r.base.Tools() {
-		result = append(result, tool)
-	}
+	result = append(result, r.base.Tools()...)
 	if len(r.available()) > 0 {
 		result = append(result, subagent.DelegateTools()...)
 	}

@@ -50,7 +50,7 @@ func (a *councilACPAgent) Prompt(ctx context.Context, request acp.PromptRequest)
 		return acp.PromptResponse{}, err
 	}
 	_, err = file.Write(append(body, '\n'))
-	file.Close()
+	err = errors.Join(err, file.Close())
 	if err != nil {
 		return acp.PromptResponse{}, err
 	}
@@ -61,8 +61,7 @@ func (a *councilACPAgent) Prompt(ctx context.Context, request acp.PromptRequest)
 	if strings.Contains(text, "continuing a multi-round LLM council") {
 		file, err := os.OpenFile(filepath.Join(a.logDir, "failed-once"), os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
 		if err == nil {
-			file.Close()
-			return acp.PromptResponse{}, errors.New("temporary ACP review failure")
+			return acp.PromptResponse{}, errors.Join(errors.New("temporary ACP review failure"), file.Close())
 		}
 	}
 	for _, kind := range []acp.ToolKind{acp.ToolKindRead, acp.ToolKindEdit, acp.ToolKindExecute} {

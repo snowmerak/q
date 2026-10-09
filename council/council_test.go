@@ -189,7 +189,11 @@ func TestCouncilIndexProcessHelper(t *testing.T) {
 		return
 	}
 	store := council.NewStore(configDir)
-	defer store.Close()
+	defer func() {
+		if err := store.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	if _, err := store.Create(testCouncil(council.Independent, "", "")); err != nil {
 		t.Fatal(err)
 	}
@@ -614,7 +618,7 @@ type recordingSessions struct {
 	calls []councilSessionCall
 }
 
-func (runner *recordingSessions) RunWithOptions(ctx context.Context, store workspace.Store, id, prompt string, options app.SessionOptions, emit app.SessionEventSink) error {
+func (runner *recordingSessions) RunWithOptions(ctx context.Context, store workspace.Store, id, prompt string, options app.SessionOptions, emit app.SessionEventSink) (returnErr error) {
 	runner.mu.Lock()
 	runner.calls = append(runner.calls, councilSessionCall{options.Model, id, options.OperationID, options.AnthropicPromptCache})
 	runner.mu.Unlock()
@@ -626,7 +630,7 @@ func (runner *recordingSessions) RunWithOptions(ctx context.Context, store works
 		return err
 	}
 	if closer != nil {
-		defer closer.Close()
+		defer func() { returnErr = errors.Join(returnErr, closer.Close()) }()
 	}
 	for _, tool := range runtime.Tools() {
 		if tool.Function.Name == "run_command" || tool.Function.Name == "edit_file" || strings.HasPrefix(tool.Function.Name, "delegate") {

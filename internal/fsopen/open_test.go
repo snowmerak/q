@@ -17,7 +17,11 @@ func TestOpenReadsFile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer file.Close()
+	defer func() {
+		if err := file.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	body, err := io.ReadAll(file)
 	if err != nil {
 		t.Fatal(err)

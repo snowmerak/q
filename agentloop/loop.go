@@ -10,6 +10,7 @@ import (
 
 	"github.com/snowmerak/q/agentinstructions"
 	"github.com/snowmerak/q/client"
+	"github.com/snowmerak/q/internal/toolbatch"
 	"github.com/snowmerak/q/memory"
 	"github.com/snowmerak/q/thinker"
 	"github.com/snowmerak/q/workspace"
@@ -116,6 +117,8 @@ func RunAgentLoop(ctx context.Context, request Request, events chan<- Event) {
 			Model: modelID, Messages: providerMessages(agentinstructions.Normalize(roundHistory), coalesceInstructions), ConversationID: conversationID, Tools: availableTools,
 			ReasoningEffort: reasoningEffort, WorkingDirectory: workingDirectory, Extra: requestExtra,
 		}
+		parallel := true
+		request.ParallelToolCalls = &parallel
 		var response *client.ChatResponse
 		if streamEnabled {
 			response, err = streamChatWithEmptyResponseRecovery(ctx, configuredClient, request, func(delta chatStreamDelta) bool {
@@ -214,9 +217,21 @@ func RunAgentLoop(ctx context.Context, request Request, events chan<- Event) {
 		if !emitEvent(ctx, events, Event{message: &assistant, usage: &response.Usage}) {
 			return
 		}
-		for _, call := range assistant.ToolCalls {
+		batch := toolbatch.New(assistant.ToolCalls, toolbatch.IsLoopTool, func(ctx context.Context, _ int, call client.ToolCall) (client.ToolResult, error) {
+			return toolRuntime.Call(ctx, call)
+		})
+		batch.Before = func(_ int, call client.ToolCall) error {
+			if !emitEvent(ctx, events, Event{call: &call}) {
+				return ctx.Err()
+			}
+			return nil
+		}
+		for index, call := range assistant.ToolCalls {
+			if ctx.Err() != nil {
+				return
+			}
 			callCopy := call
-			if !emitEvent(ctx, events, Event{call: &callCopy}) {
+			if toolbatch.IsLoopTool(call) && !emitEvent(ctx, events, Event{call: &callCopy}) {
 				return
 			}
 			if call.Function.Name == taskStartToolName {
@@ -420,7 +435,10 @@ func RunAgentLoop(ctx context.Context, request Request, events chan<- Event) {
 			result, handled := loopContext.CallMemoryTool(call)
 			var callErr error
 			if !handled {
-				result, callErr = toolRuntime.Call(ctx, call)
+				result, callErr = batch.Call(ctx, index)
+			}
+			if ctx.Err() != nil {
+				return
 			}
 			if callErr != nil {
 				result = client.ToolResult{Content: callErr.Error(), IsError: true}

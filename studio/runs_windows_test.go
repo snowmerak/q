@@ -46,7 +46,11 @@ func TestStudioRunContinuesAfterSnapshotReaderCloses(t *testing.T) {
 		return emit(app.SessionEvent{Type: "result", Outcome: "succeeded", Content: "continued"})
 	})
 	service := newSessionRunService(t.Context(), runner)
-	defer service.Close()
+	defer func() {
+		if err := service.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	run, err := service.start(root, store.SessionID, "work")
 	if err != nil {
 		t.Fatal(err)
@@ -71,17 +75,29 @@ func TestStudioRunSnapshotAllowsReplacementWhileRead(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer lock.Close()
+	defer func() {
+		if err := lock.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	run, err := createStudioRun(root, store, "snapshot-reader")
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer run.close()
+	defer func() {
+		if err := run.close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	reader, err := fsopen.Open(filepath.Join(store.SessionDir(), studioLatestRunFile))
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer reader.Close()
+	defer func() {
+		if err := reader.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	if err := run.append(app.SessionEvent{Type: "message", Role: "tool", Name: "task_start"}); err != nil {
 		t.Fatalf("snapshot replacement with shared reader: %v", err)
 	}

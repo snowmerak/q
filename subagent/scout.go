@@ -12,6 +12,7 @@ import (
 
 	"github.com/snowmerak/q/client"
 	"github.com/snowmerak/q/config"
+	"github.com/snowmerak/q/internal/toolbatch"
 	"github.com/snowmerak/q/loom"
 	"github.com/snowmerak/q/sessionstore"
 )
@@ -46,6 +47,7 @@ type AgentClient interface {
 
 // ToolRuntime supplies workspace tools. ScoutRunner filters this catalog to
 // its non-mutating investigation allowlist before exposing it to the model.
+// Call must support concurrent ordinary calls within one model turn.
 type ToolRuntime interface {
 	Tools() []client.Tool
 	Call(context.Context, client.ToolCall) (client.ToolResult, error)
@@ -205,7 +207,7 @@ func (r *ScoutRunner) run(ctx context.Context, task ScoutTask, prompt string, li
 			Agent: "scout", TaskID: task.ID, ParentID: task.ParentID,
 			Action: ProgressThinking, Detail: fmt.Sprintf("model round %d", round+1),
 		})
-		parallel := false
+		parallel := true
 		request := client.ChatRequest{
 			Messages: history.RequestMessages(), Tools: tools, ToolChoice: client.ToolChoiceAuto,
 			ParallelToolCalls: &parallel, WorkingDirectory: r.WorkingDirectory,
@@ -244,11 +246,29 @@ func (r *ScoutRunner) run(ctx context.Context, task ScoutTask, prompt string, li
 			continue
 		}
 
-		for _, call := range assistant.ToolCalls {
+		batch := toolbatch.New(assistant.ToolCalls, toolbatch.IsLoopTool, func(ctx context.Context, _ int, call client.ToolCall) (client.ToolResult, error) {
+			if !scoutToolAllowed(call.Function.Name) {
+				return scoutToolError(fmt.Errorf("tool %q is not available to scout", call.Function.Name)), nil
+			}
+			return r.Tools.Call(ctx, call)
+		})
+		batch.Before = func(_ int, call client.ToolCall) error {
 			reportProgress(r.Progress, ProgressEvent{
 				Agent: "scout", TaskID: task.ID, ParentID: task.ParentID,
 				Action: ProgressTool, Detail: call.Function.Name,
 			})
+			return nil
+		}
+		for index, call := range assistant.ToolCalls {
+			if err := ctx.Err(); err != nil {
+				return ScoutResult{}, err
+			}
+			if toolbatch.IsLoopTool(call) {
+				reportProgress(r.Progress, ProgressEvent{
+					Agent: "scout", TaskID: task.ID, ParentID: task.ParentID,
+					Action: ProgressTool, Detail: call.Function.Name,
+				})
+			}
 			var toolResult client.ToolResult
 			if call.Function.Name == TaskStartToolName {
 				toolResult = dedicatedTaskStartResult(ctx, r.Tools, tools, call, &started, len(assistant.ToolCalls))
@@ -275,10 +295,13 @@ func (r *ScoutRunner) run(ctx context.Context, task ScoutTask, prompt string, li
 			} else if !scoutToolAllowed(call.Function.Name) {
 				toolResult = scoutToolError(fmt.Errorf("tool %q is not available to scout", call.Function.Name))
 			} else {
-				toolResult, err = r.Tools.Call(ctx, call)
+				toolResult, err = batch.Call(ctx, index)
 				if err != nil {
 					toolResult = scoutToolError(err)
 				}
+			}
+			if err := ctx.Err(); err != nil {
+				return ScoutResult{}, err
 			}
 			message := client.Message{
 				Role: client.RoleTool, Name: call.Function.Name,

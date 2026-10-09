@@ -134,7 +134,11 @@ func TestStudioRunSurvivesRequestAndReplaysFromDisk(t *testing.T) {
 		t.Fatal(err)
 	}
 	reopened := newSessionRunService(t.Context(), nil)
-	defer reopened.Close()
+	defer func() {
+		if err := reopened.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	replayed, err := reopened.latest(root, store.SessionID)
 	if err != nil {
 		t.Fatal(err)
@@ -199,7 +203,11 @@ func TestStudioRunsAdmitOneTurnPerSessionAndRunSessionsConcurrently(t *testing.T
 		}
 	})
 	service := newSessionRunService(t.Context(), runner)
-	defer service.Close()
+	defer func() {
+		if err := service.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	if _, err := service.start(root, first.SessionID, "first"); err != nil {
 		t.Fatal(err)
 	}

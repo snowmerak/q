@@ -63,8 +63,16 @@ func TestStudioIndependentCouncilPersistsWithoutWorkspaceAndRuns(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer commits.Close()
-	defer sessions.Close()
+	defer func() {
+		if err := commits.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
+	defer func() {
+		if err := sessions.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	input := councilInput{Name: "General", Scope: council.Independent, Members: []council.Seat{{Model: "test/one"}, {Model: "test/two"}}, Chair: council.Seat{Model: "test/chair"}}
 	var created council.Council
 	if status := councilAPI(t, handler, http.MethodPost, "/api/v1/councils", input, &created); status != http.StatusCreated {
@@ -138,8 +146,16 @@ func TestStudioCouncilResumeAndRerunKeepOriginalTurn(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer commits.Close()
-	defer sessions.Close()
+	defer func() {
+		if err := commits.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
+	defer func() {
+		if err := sessions.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	input := councilInput{Name: "Retry council", Scope: council.Independent, Members: []council.Seat{{Model: "test/one"}, {Model: "test/two"}}, Chair: council.Seat{Model: "test/chair"}}
 	var created council.Council
 	if status := councilAPI(t, handler, http.MethodPost, "/api/v1/councils", input, &created); status != http.StatusCreated {
@@ -199,8 +215,16 @@ func TestStudioCouncilDoesNotInterruptAnotherWindowRun(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer commits.Close()
-	defer sessions.Close()
+	defer func() {
+		if err := commits.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
+	defer func() {
+		if err := sessions.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	input := councilInput{Name: "Shared council", Scope: council.Independent, Members: []council.Seat{{Model: "test/one"}, {Model: "test/two"}}, Chair: council.Seat{Model: "test/chair"}}
 	var created council.Council
 	if status := councilAPI(t, handler, http.MethodPost, "/api/v1/councils", input, &created); status != http.StatusCreated {
@@ -240,8 +264,16 @@ func TestStudioCouncilExportIncludesRunningTurnSnapshot(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer commits.Close()
-	defer sessions.Close()
+	defer func() {
+		if err := commits.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
+	defer func() {
+		if err := sessions.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	input := councilInput{Name: "Live council", Scope: council.Independent, Members: []council.Seat{{Model: "test/one"}, {Model: "test/two"}}, Chair: council.Seat{Model: "test/chair"}}
 	var created council.Council
 	if status := councilAPI(t, handler, http.MethodPost, "/api/v1/councils", input, &created); status != http.StatusCreated {
@@ -270,8 +302,16 @@ func TestStudioCouncilCreationSupportsWorkspaceAndProject(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer commits.Close()
-	defer sessions.Close()
+	defer func() {
+		if err := commits.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
+	defer func() {
+		if err := sessions.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	root := t.TempDir()
 	input := councilInput{Name: "Repository", Scope: council.Workspace, WorkspaceRoot: root, Members: []council.Seat{{Model: "test/one"}, {Model: "test/two"}}, Chair: council.Seat{Model: "test/chair"}, Rounds: 3}
 	var workspaceCouncil council.Council
@@ -311,8 +351,16 @@ func TestStudioCouncilACPConfigurationPersistsAndValidatesConnections(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer commits.Close()
-	defer sessions.Close()
+	defer func() {
+		if err := commits.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
+	defer func() {
+		if err := sessions.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	input := councilInput{Name: "Mixed council", Scope: council.Independent,
 		Members: []council.Seat{{Model: "test/one"}, {Agent: "research"}}, Chair: council.Seat{Agent: "research"}, Rounds: 3}
 	var created council.Council

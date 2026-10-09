@@ -61,11 +61,17 @@ func TestRunSystemOneWithStoreServesAndStops(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	reader, writer := io.Pipe()
-	defer reader.Close()
+	defer func() {
+		if err := reader.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	done := make(chan error, 1)
 	go func() {
 		done <- runSystemOneWithStore(ctx, []string{"--port", "0"}, writer, io.Discard, store)
-		writer.Close()
+		if err := writer.Close(); err != nil {
+			t.Error(err)
+		}
 	}()
 	line, err := bufio.NewReader(reader).ReadString('\n')
 	if err != nil {
@@ -88,7 +94,9 @@ func TestRunSystemOneWithStoreServesAndStops(t *testing.T) {
 	if err := json.NewDecoder(response.Body).Decode(&catalog); err != nil {
 		t.Fatal(err)
 	}
-	response.Body.Close()
+	if err := response.Body.Close(); err != nil {
+		t.Error(err)
+	}
 	if len(catalog.Models) != 1 || catalog.Models[0].Name != "typesafe/jev" {
 		t.Fatalf("models = %#v", catalog.Models)
 	}
@@ -96,7 +104,9 @@ func TestRunSystemOneWithStoreServesAndStops(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	response.Body.Close()
+	if err := response.Body.Close(); err != nil {
+		t.Error(err)
+	}
 	if response.StatusCode != http.StatusOK {
 		t.Fatalf("decision status = %d", response.StatusCode)
 	}
@@ -128,11 +138,17 @@ func TestRunSystemOneWithManagedKey(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	reader, writer := io.Pipe()
-	defer reader.Close()
+	defer func() {
+		if err := reader.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	done := make(chan error, 1)
 	go func() {
 		done <- runSystemOneWithStore(ctx, []string{"--port", "0"}, writer, io.Discard, store)
-		writer.Close()
+		if err := writer.Close(); err != nil {
+			t.Error(err)
+		}
 	}()
 	line, err := bufio.NewReader(reader).ReadString('\n')
 	if err != nil {
@@ -152,7 +168,9 @@ func TestRunSystemOneWithManagedKey(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		response.Body.Close()
+		if err := response.Body.Close(); err != nil {
+			t.Error(err)
+		}
 		return response.StatusCode
 	}
 	if got := requestModels(""); got != http.StatusUnauthorized {
@@ -197,7 +215,9 @@ func TestSystemOneKeyringReloadsWhileServing(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		response.Body.Close()
+		if err := response.Body.Close(); err != nil {
+			t.Error(err)
+		}
 		return response.StatusCode
 	}
 	if got := status(); got != http.StatusOK {

@@ -85,6 +85,20 @@ may continue importing `app` without changing their request or event handling.
 `agentloop.Request.Extra` carries optional provider request fields through each
 model and context-compaction call.
 
+Ordinary tool calls in one assistant turn run concurrently in contiguous batches,
+with at most four active calls per loop. Task lifecycle, user questions, memory
+updates and workflow completion calls are serial barriers: preceding calls finish
+and their results are recorded before the barrier runs; following calls start
+only after its result is recorded. Results retain the assistant's original call
+order, including during context compaction and session recovery.
+
+Injected runtimes must support concurrent `Call` invocations. A batch does not
+infer dependencies between ordinary tools, including commands and file changes;
+dependent operations must be requested in separate model rounds. The loop joins
+active batch workers before returning on cancellation, so runtimes should honor
+the supplied context. An interrupted ordinary batch with unsaved results is
+treated as having unknown outcomes rather than automatically replayed.
+
 ## Run a minimal workspace turn
 
 Create the model client and tool runtime once for the lifetime chosen by the

@@ -330,8 +330,7 @@ func TestSystemOneProviderRenameUpdatesAssignmentsOnEdit(t *testing.T) {
 	m = updated.(model)
 	updated, _ = m.updateSystemOne(tea.KeyPressMsg{Code: tea.KeyEnter})
 	m = updated.(model)
-	updated, _ = m.updateSystemOne(systemOneTestKey('x', "x"))
-	m = updated.(model)
+	_, _ = m.updateSystemOne(systemOneTestKey('x', "x"))
 	loaded, err := store.LoadOrDefault()
 	if err != nil || loaded.Providers[0].ID != "typesafex" || loaded.DefaultModel != "typesafex/jev-latest" ||
 		loaded.RoleModels[systemoneconfig.RoleAgentSkillDecision] != "typesafex/skill-model" ||

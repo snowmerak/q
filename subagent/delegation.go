@@ -12,6 +12,7 @@ import (
 
 	"github.com/snowmerak/q/client"
 	"github.com/snowmerak/q/config"
+	"github.com/snowmerak/q/internal/toolbatch"
 	"github.com/snowmerak/q/sessionstore"
 )
 
@@ -692,7 +693,7 @@ func (r GeneralRunner) Run(ctx context.Context, prompt string) (result TaskResul
 			}
 		}
 		progress(ProgressThinking, fmt.Sprintf("model round %d", state.Round+1))
-		parallel := false
+		parallel := true
 		request := client.ChatRequest{Messages: history.RequestMessages(), Tools: available, ToolChoice: client.ToolChoiceAuto, ParallelToolCalls: &parallel, WorkingDirectory: r.WorkingDirectory}
 		if !started {
 			request.ToolChoice = client.NamedToolChoice(TaskStartToolName)
@@ -788,13 +789,44 @@ func pendingGeneralTools(messages []client.Message) ([]client.ToolCall, int) {
 
 func (r *GeneralRunner) completeGeneralCalls(ctx context.Context, state *GeneralRunState, history *ContextCompactor, available []client.Tool, taskID string, lifecycle *Lifecycle, started *bool, checkpoint func() error) (TaskResult, bool, error) {
 	calls, completed := pendingGeneralTools(state.Transcript)
+	if completed >= len(calls) {
+		return TaskResult{}, false, nil
+	}
+	// Every unsaved call in the interrupted ordinary segment may have run.
+	// Later segments are protected by the next serial barrier.
+	recoveryEnd := completed
+	if r.Resume != nil && state.Round <= r.Resume.Round && !toolbatch.IsLoopTool(calls[completed]) {
+		recoveryEnd = toolbatch.End(calls, completed, toolbatch.IsLoopTool)
+	}
+	batch := toolbatch.New(calls, toolbatch.IsLoopTool, func(ctx context.Context, index int, call client.ToolCall) (client.ToolResult, error) {
+		if !*started {
+			return scoutToolError(errors.New("call task_start before using tools")), nil
+		}
+		recovering := index < recoveryEnd
+		if recovering && call.Function.Name != DelegateToolName {
+			return client.ToolResult{Content: `{"status":"unknown","detail":"tool execution outcome could not be confirmed after session restart"}`, IsError: true}, nil
+		}
+		if !hasTool(available, call.Function.Name) && (!recovering || call.Function.Name != DelegateToolName) {
+			return scoutToolError(fmt.Errorf("tool %q is unavailable", call.Function.Name)), nil
+		}
+		return r.Tools.Call(ctx, call)
+	})
+	batch.Before = func(_ int, call client.ToolCall) error {
+		if err := r.Control.wait(ctx); err != nil {
+			return err
+		}
+		reportProgress(r.Progress, ProgressEvent{Agent: r.Definition.Info.Name, TaskID: taskID, ParentID: r.ParentID, Action: ProgressTool, Detail: call.Function.Name})
+		return nil
+	}
 	for index := completed; index < len(calls); index++ {
 		if err := r.Control.wait(ctx); err != nil {
 			return TaskResult{}, false, err
 		}
 		call := calls[index]
-		recovering := r.Resume != nil && index == completed && state.Round <= r.Resume.Round
-		reportProgress(r.Progress, ProgressEvent{Agent: r.Definition.Info.Name, TaskID: taskID, ParentID: r.ParentID, Action: ProgressTool, Detail: call.Function.Name})
+		recovering := index < recoveryEnd
+		if toolbatch.IsLoopTool(call) {
+			reportProgress(r.Progress, ProgressEvent{Agent: r.Definition.Info.Name, TaskID: taskID, ParentID: r.ParentID, Action: ProgressTool, Detail: call.Function.Name})
+		}
 		var toolResult client.ToolResult
 		switch call.Function.Name {
 		case TaskStartToolName:
@@ -848,11 +880,11 @@ func (r *GeneralRunner) completeGeneralCalls(ctx context.Context, state *General
 				toolResult = scoutToolError(errors.New("call task_start before using tools"))
 			} else if recovering && call.Function.Name != DelegateToolName {
 				toolResult = client.ToolResult{Content: `{"status":"unknown","detail":"tool execution outcome could not be confirmed after session restart"}`, IsError: true}
-			} else if !hasTool(available, call.Function.Name) && !(recovering && call.Function.Name == DelegateToolName) {
+			} else if !hasTool(available, call.Function.Name) && (!recovering || call.Function.Name != DelegateToolName) {
 				toolResult = scoutToolError(fmt.Errorf("tool %q is unavailable", call.Function.Name))
 			} else {
 				var callErr error
-				toolResult, callErr = r.Tools.Call(ctx, call)
+				toolResult, callErr = batch.Call(ctx, index)
 				if callErr != nil {
 					if ctx.Err() != nil {
 						return TaskResult{}, false, ctx.Err()
@@ -860,6 +892,9 @@ func (r *GeneralRunner) completeGeneralCalls(ctx context.Context, state *General
 					toolResult = scoutToolError(callErr)
 				}
 			}
+		}
+		if err := ctx.Err(); err != nil {
+			return TaskResult{}, false, err
 		}
 		traceToolResult(r.Trace, r.Definition.Info.Name, taskID, r.ParentID, call, toolResult)
 		message := client.ToolResultMessage(call, toolResult)

@@ -80,7 +80,11 @@ func TestReplaceRetainsBothFilesWhenReaderBlocksRemoval(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer reader.Close()
+	defer func() {
+		if err := reader.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	err = Replace(source, destination)
 	if err == nil || !strings.Contains(err.Error(), destination) {
 		t.Fatalf("replace while reader blocks removal = %v", err)

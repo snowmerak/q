@@ -305,7 +305,11 @@ func TestRuntimeRootsExposeConfiguredAdditionalWorkspaces(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer runtime.Close()
+	defer func() {
+		if err := runtime.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 
 	read, err := runtime.Call(t.Context(), client.ToolCall{
 		ID: "read-additional", Type: client.ToolTypeFunction,
@@ -338,7 +342,11 @@ func TestRuntimeRootsExposeConfiguredAdditionalWorkspaces(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer isolated.Close()
+	defer func() {
+		if err := isolated.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	isolationResult, err := isolated.Call(t.Context(), client.ToolCall{
 		ID: "read-additional-isolated", Type: client.ToolTypeFunction,
 		Function: client.FunctionCall{Name: "read_file", Arguments: fmt.Sprintf(`{"path":%q}`, filepath.Join(additional, "additional.txt"))},
@@ -365,12 +373,20 @@ func TestNewCheckoutRuntimeKeepsStateAndMovesSourceTools(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer runtime.Close()
+	defer func() {
+		if err := runtime.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	cloned, err := runtime.NewCheckoutRuntime(t.Context(), secondCheckout)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer cloned.Close()
+	defer func() {
+		if err := cloned.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 
 	result, err := cloned.Call(t.Context(), client.ToolCall{
 		ID: "read-cloned-checkout", Type: client.ToolTypeFunction,

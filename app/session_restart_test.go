@@ -53,8 +53,7 @@ func TestInterruptedChatTurnRestoresSavedMessageBoundaries(t *testing.T) {
 	updated, _ = m.updateAgentEvent(agentEventMsg{event: agentEvent{message: &call}, events: make(chan agentEvent)})
 	m = updated.(model)
 	result := client.Message{Role: client.RoleTool, Name: "read_file", ToolCallID: "call-1", Content: "file contents"}
-	updated, _ = m.updateAgentEvent(agentEventMsg{event: agentEvent{message: &result}, events: make(chan agentEvent)})
-	m = updated.(model)
+	_, _ = m.updateAgentEvent(agentEventMsg{event: agentEvent{message: &result}, events: make(chan agentEvent)})
 	assertSavedTail(client.RoleTool, "file contents")
 
 	restarted := newChat()

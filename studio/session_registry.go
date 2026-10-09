@@ -104,13 +104,13 @@ func (registry *sessionRegistry) loadLocked() (sessionRegistryDocument, error) {
 	if err != nil {
 		return sessionRegistryDocument{}, fmt.Errorf("open Studio session registry: %w", err)
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 	info, err := file.Stat()
 	if err != nil {
 		return sessionRegistryDocument{}, fmt.Errorf("inspect Studio session registry: %w", err)
 	}
 	if info.Size() > maximumRegistrySize {
-		return sessionRegistryDocument{}, errors.New("Studio session registry is too large")
+		return sessionRegistryDocument{}, errors.New("studio session registry is too large")
 	}
 	var value sessionRegistryDocument
 	decoder := json.NewDecoder(io.LimitReader(file, maximumRegistrySize))
@@ -164,7 +164,7 @@ func (registry *sessionRegistry) saveLocked(value sessionRegistryDocument) error
 	}
 	body = append(body, '\n')
 	if len(body) > maximumRegistrySize {
-		return errors.New("Studio session registry is too large")
+		return errors.New("studio session registry is too large")
 	}
 	directory := filepath.Dir(registry.path)
 	if err := os.MkdirAll(directory, 0o700); err != nil {
@@ -272,7 +272,7 @@ func (service *sessionsService) serveRegisteredCollection(writer http.ResponseWr
 				writeAPIError(writer, http.StatusBadRequest, errors.New("session_id must be empty when creating a session"))
 				return
 			}
-			var lock io.Closer
+			var lock *workspace.Lock
 			store, lock, err = workspace.CreateSession(root, "q studio")
 			if lock != nil {
 				err = errors.Join(err, lock.Close())
