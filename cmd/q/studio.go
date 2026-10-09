@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/snowmerak/q/config"
 	"github.com/snowmerak/q/studio"
 )
 
@@ -39,6 +40,10 @@ func runStudioAt(
 	if err != nil {
 		return fmt.Errorf("q studio: %w", err)
 	}
+	store, err := config.DefaultStore()
+	if err != nil {
+		return fmt.Errorf("q studio: %w", err)
+	}
 	handler, err := studio.NewServer(ctx)
 	if err != nil {
 		return fmt.Errorf("q studio: initialize: %w", err)
@@ -59,7 +64,15 @@ func runStudioAt(
 		IdleTimeout:       2 * time.Minute,
 	}
 	serverContext, cancelServer := context.WithCancel(ctx)
-	defer cancelServer()
+	gatewayDone := make(chan struct{})
+	go func() {
+		defer close(gatewayDone)
+		runStudioGateway(serverContext, store.Dir, stdout, stderr)
+	}()
+	defer func() {
+		cancelServer()
+		<-gatewayDone
+	}()
 	shutdownDone := make(chan struct{})
 	go func() {
 		defer close(shutdownDone)

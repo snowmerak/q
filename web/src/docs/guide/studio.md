@@ -23,7 +23,9 @@ Q Studio is the primary interface for daily work. It is an embedded Svelte appli
 q studio
 ```
 
-Studio listens on `127.0.0.1` with a random available port and opens a browser by default. Use a fixed local URL with:
+Studio listens on `127.0.0.1` with a random available port and opens a browser by default. Studio also starts the separate `q gateway start` server using its saved listener settings. It prints the Gateway URL in the terminal. Before providers are configured, the Gateway starts when the first provider is saved. The Gateway stops with Studio; run `q gateway start` separately when it should stay up independently.
+
+Use a fixed local URL with:
 
 ```powershell
 q studio --host 127.0.0.1 --port 7070

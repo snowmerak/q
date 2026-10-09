@@ -116,9 +116,10 @@ in one global tree.
 
 The bare `q` command remains a compatibility terminal client. Former standalone
 configuration commands such as `q model`, `q gateway`, `q systemone`, `q skills`,
-and `q help` now open their corresponding Studio surface. Service forms such as
-`q gateway start`, `q systemone start`, and `q library start` still run the
-foreground service.
+and `q help` now open their corresponding Studio surface. `q studio` also starts
+the standalone Gateway listener using the saved Gateway address and providers.
+`q gateway start`, `q systemone start`, and
+`q library start` still run foreground services independently of Studio.
 
 ## Embed the Agent Loop in Go
 
@@ -382,7 +383,9 @@ An ordinary q session supervises a managed Gateway child bound to an ephemeral
 loopback port. `/gateway` edits providers and starts a replacement before it
 activates new settings, so a failed replacement does not discard the running
 configuration. The standalone `q gateway start` command is a separate,
-user-addressable server with its own listener and API-key settings. Both forms
+user-addressable server with its own listener and API-key settings. `q studio`
+starts this server alongside its internal Gateway and applies saved provider and
+listener changes by restarting the standalone server. Both forms
 record provider-reported token usage in the user-level `q usage` service.
 
 `/model` assigns a model to the main chat and specialized roles such as

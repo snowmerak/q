@@ -3,12 +3,17 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/snowmerak/llm-provider/gateway"
+	"github.com/snowmerak/q/providerhost"
 )
 
 type notifyWriter struct {
@@ -31,6 +36,9 @@ func (writer *notifyWriter) String() string {
 }
 
 func TestStudioServiceStatusAndShutdownSmoke(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 	ctx, cancel := context.WithCancel(t.Context())
 	output := newNotifyWriter()
 	diagnostics := newNotifyWriter()
@@ -74,6 +82,107 @@ func TestStudioServiceStatusAndShutdownSmoke(t *testing.T) {
 		}
 	case <-time.After(10 * time.Second):
 		t.Fatal("q studio did not shut down")
+	}
+}
+
+func TestStudioStartsStandaloneGatewayAfterProviderSetup(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.URL.Path != "/v1/models" {
+			http.NotFound(writer, request)
+			return
+		}
+		_ = json.NewEncoder(writer).Encode(map[string]any{
+			"object": "list", "data": []map[string]any{{"id": "test-model"}},
+		})
+	}))
+	defer upstream.Close()
+
+	directory := t.TempDir()
+	ctx, cancel := context.WithCancel(t.Context())
+	output := newNotifyWriter()
+	diagnostics := newNotifyWriter()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		runStudioGateway(ctx, directory, output, diagnostics)
+	}()
+	defer func() {
+		cancel()
+		select {
+		case <-done:
+		case <-time.After(10 * time.Second):
+			t.Error("standalone Gateway did not stop with Studio")
+		}
+	}()
+
+	if err := (providerhost.Store{Dir: directory}).Save(gateway.Config{Providers: []gateway.ProviderConfig{{
+		ID: "test", Type: "openai-compatible", Enabled: true, BaseURL: upstream.URL + "/v1",
+	}}}); err != nil {
+		t.Fatal(err)
+	}
+
+	var endpoint string
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		for _, line := range strings.Split(output.String(), "\n") {
+			if address, found := strings.CutPrefix(line, "q gateway listening on "); found {
+				endpoint = address
+				break
+			}
+		}
+		if endpoint != "" {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if endpoint == "" {
+		t.Fatalf("standalone Gateway did not start: %s", diagnostics.String())
+	}
+	response, err := http.Get(endpoint + "/models")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("Gateway models status = %d", response.StatusCode)
+	}
+	var models struct {
+		Data []struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(response.Body).Decode(&models); err != nil {
+		t.Fatal(err)
+	}
+	if len(models.Data) != 1 || models.Data[0].ID != "test/test-model" {
+		t.Fatalf("Gateway models = %#v", models.Data)
+	}
+	if err := (providerhost.Store{Dir: directory}).Save(gateway.Config{Providers: []gateway.ProviderConfig{{
+		ID: "updated", Type: "openai-compatible", Enabled: true, BaseURL: upstream.URL + "/v1",
+	}}}); err != nil {
+		t.Fatal(err)
+	}
+	for time.Now().Before(deadline.Add(10 * time.Second)) {
+		if strings.Count(output.String(), "q gateway listening on ") >= 2 {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	lines := strings.Split(strings.TrimSpace(output.String()), "\n")
+	if strings.Count(output.String(), "q gateway listening on ") < 2 {
+		t.Fatalf("Gateway did not reload saved providers: %s; %s", output.String(), diagnostics.String())
+	}
+	endpoint = strings.TrimPrefix(lines[len(lines)-1], "q gateway listening on ")
+	reloaded, err := http.Get(endpoint + "/models")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reloaded.Body.Close()
+	if err := json.NewDecoder(reloaded.Body).Decode(&models); err != nil {
+		t.Fatal(err)
+	}
+	if len(models.Data) != 1 || models.Data[0].ID != "updated/test-model" {
+		t.Fatalf("reloaded Gateway models = %#v", models.Data)
 	}
 }
 
