@@ -25,6 +25,7 @@ type EnsureOptions struct {
 	Judge          PropositionJudge
 	ProbeTimeout   time.Duration
 	StartupTimeout time.Duration
+	RequestTimeout time.Duration
 }
 
 type Runtime struct {
@@ -58,13 +59,15 @@ func EnsureWithOptions(ctx context.Context, options EnsureOptions) (*Runtime, er
 	}
 	probeTimeout := options.ProbeTimeout
 	if probeTimeout <= 0 {
-		probeTimeout = 300 * time.Millisecond
+		probeTimeout = time.Duration(defaultProbeTimeout) * time.Millisecond
 	}
 	startupTimeout := options.StartupTimeout
 	if startupTimeout <= 0 {
 		startupTimeout = 3 * time.Second
 	}
-	client := NewClient(value.Endpoint(), "", probeTimeout)
+	// Keep readiness probes short without imposing their deadline on Store work.
+	probe := NewClient(value.Endpoint(), "", probeTimeout)
+	client := NewClient(value.Endpoint(), "", options.RequestTimeout)
 	deadline := time.Now().Add(startupTimeout)
 	delay := 20 * time.Millisecond
 	var lastListenErr error
@@ -72,7 +75,7 @@ func EnsureWithOptions(ctx context.Context, options EnsureOptions) (*Runtime, er
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		if health, err := client.Health(ctx); err == nil {
+		if health, err := probe.Health(ctx); err == nil {
 			if !health.Compatible() {
 				return nil, incompatibleError(health)
 			}
@@ -84,7 +87,7 @@ func EnsureWithOptions(ctx context.Context, options EnsureOptions) (*Runtime, er
 
 		lock, err := worklock.AcquireFile(options.Dir, LockFileName, "q library")
 		if err == nil {
-			if health, probeErr := client.Health(ctx); probeErr == nil {
+			if health, probeErr := probe.Health(ctx); probeErr == nil {
 				_ = lock.Close()
 				if !health.Compatible() {
 					return nil, incompatibleError(health)
@@ -175,7 +178,9 @@ func Run(ctx context.Context, dir string, output io.Writer) error {
 
 func waitForFailure(ctx context.Context, client *Client) error {
 	return localservice.WaitForFailure(ctx, 500*time.Millisecond, func(ctx context.Context) error {
-		health, err := client.Health(ctx)
+		probeContext, cancel := context.WithTimeout(ctx, time.Duration(defaultProbeTimeout)*time.Millisecond)
+		defer cancel()
+		health, err := client.Health(probeContext)
 		if err != nil || !health.Compatible() {
 			return errors.New("library: leader unavailable")
 		}

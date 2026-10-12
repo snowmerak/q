@@ -96,7 +96,31 @@ func newSessionsService(parent context.Context, runner sessionRunner, configDire
 	}); ok {
 		setter.SetSessionWorkspaceResolver(service.projects.resolve)
 	}
+	if setter, ok := runner.(interface {
+		SetEmbeddingWorkspaceResolver(func() ([]string, error))
+	}); ok {
+		setter.SetEmbeddingWorkspaceResolver(service.embeddingWorkspaceRoots)
+	}
 	return service
+}
+
+func (service *sessionsService) embeddingWorkspaceRoots() ([]string, error) {
+	projects, err := service.projects.list()
+	if err != nil {
+		return nil, err
+	}
+	sessions, err := service.registry.list()
+	if err != nil {
+		return nil, err
+	}
+	var roots []string
+	for _, project := range projects {
+		roots = append(roots, project.WorkspaceRoots...)
+	}
+	for _, session := range sessions {
+		roots = append(roots, session.WorkspaceRoot)
+	}
+	return roots, nil
 }
 
 func (service *sessionsService) Close() error {

@@ -207,6 +207,19 @@ func (request startupRequest) run(modelReady chan<- struct{}) runtimeInitialized
 	var semanticArchive *archiveembed.Archive
 	if archiveOpenErr == nil {
 		semanticArchive = archiveembed.New(archiveStore)
+		semanticArchive.SetVectorConfigResolver(func(ctx context.Context) (sessionstore.VectorConfig, error) {
+			if err := ctx.Err(); err != nil {
+				return sessionstore.VectorConfig{}, err
+			}
+			current, err := request.store.Load()
+			if errors.Is(err, config.ErrNotFound) {
+				return vectorConfig, nil
+			}
+			if err != nil {
+				return sessionstore.VectorConfig{}, err
+			}
+			return sessionstore.VectorConfig{Model: current.Embedding.Model, Dimensions: current.Embedding.Dimensions}, nil
+		})
 		archive = sessionstore.NewWriterWithOptions(archiveStore, sessionstore.WriterOptions{
 			Context: memoryContext, Prepare: semanticArchive.Prepare,
 		})
@@ -265,22 +278,24 @@ func (request startupRequest) run(modelReady chan<- struct{}) runtimeInitialized
 			result.err = clientErr
 			return result
 		}
-		if loaded.Embedding.Model != "" && libraryClient != nil {
+		if loaded.Embedding.Model != "" {
 			embedder, ok := configuredClient.(qlibrary.Embedder)
 			if !ok {
 				_ = configuredClient.Close()
 				result.err = errors.New("configured LLM client does not support embeddings")
 				return result
 			}
-			if embeddingErr := libraryClient.ConfigureEmbedding(
-				embedder, loaded.Embedding.Model, loaded.Embedding.Dimensions,
-			); embeddingErr != nil {
-				_ = configuredClient.Close()
-				result.err = embeddingErr
-				return result
-			}
-			if _, embeddingErr := libraryClient.SyncSkillEmbeddings(request.ctx); embeddingErr != nil {
-				result.startupErr = errors.Join(result.startupErr, embeddingErr)
+			if libraryClient != nil {
+				if embeddingErr := libraryClient.ConfigureEmbedding(
+					embedder, loaded.Embedding.Model, loaded.Embedding.Dimensions,
+				); embeddingErr != nil {
+					_ = configuredClient.Close()
+					result.err = embeddingErr
+					return result
+				}
+				if _, embeddingErr := libraryClient.SyncEmbeddings(request.ctx); embeddingErr != nil {
+					result.startupErr = errors.Join(result.startupErr, embeddingErr)
+				}
 			}
 			if semanticArchive != nil {
 				if embeddingErr := semanticArchive.Configure(
@@ -290,7 +305,21 @@ func (request startupRequest) run(modelReady chan<- struct{}) runtimeInitialized
 					result.err = embeddingErr
 					return result
 				}
-				go func() { _, _ = semanticArchive.Backfill(request.ctx) }()
+				if _, embeddingErr := semanticArchive.Backfill(request.ctx); embeddingErr != nil {
+					result.startupErr = errors.Join(result.startupErr, embeddingErr)
+				}
+			}
+		}
+		if loaded.Embedding.Model == "" {
+			if embedder, ok := configuredClient.(qlibrary.Embedder); ok {
+				if libraryClient != nil {
+					_ = libraryClient.ConfigureEmbedding(embedder, "", 0)
+				}
+				if semanticArchive != nil {
+					if err := semanticArchive.Configure(embedder, "", 0); err != nil {
+						result.startupErr = errors.Join(result.startupErr, err)
+					}
+				}
 			}
 		}
 		if models, modelsErr := configuredClient.ListModels(request.ctx); modelsErr == nil {

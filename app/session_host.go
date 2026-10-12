@@ -10,13 +10,11 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/snowmerak/llm-provider/gateway"
-	"github.com/snowmerak/q/archiveembed"
 	"github.com/snowmerak/q/client"
 	"github.com/snowmerak/q/config"
 	"github.com/snowmerak/q/internal/hostruntime"
 	qlibrary "github.com/snowmerak/q/library"
 	"github.com/snowmerak/q/providerhost"
-	"github.com/snowmerak/q/sessionstore"
 	"github.com/snowmerak/q/workspace"
 	"github.com/snowmerak/q/workspacememory"
 )
@@ -162,27 +160,28 @@ func (control *SessionRunControl) result() error {
 // SessionHost owns process-wide dependencies and live repository sessions.
 // Runs reuse each session's model, provider affinity and tool connections.
 type SessionHost struct {
-	liveMu            sync.Mutex
-	liveSessions      map[string]*liveSession
-	liveOperations    map[string]*liveSessionOperation
-	liveIdleDone      chan struct{}
-	liveClosed        bool
-	ctx               context.Context
-	runtime           *hostruntime.Runtime
-	store             config.Store
-	manager           *providerhost.Manager
-	factory           clientFactory
-	providerMu        sync.Mutex
-	providerReady     bool
-	workspaceMu       sync.RWMutex
-	workspace         SessionWorkspaceResolver
-	logs              *runtimeLogBuffer
-	delegationMu      sync.Mutex
-	delegationRuns    map[string]*delegationRunControl
-	delegationWG      sync.WaitGroup
-	delegationCtx     context.Context
-	delegationCancel  context.CancelFunc
-	delegationClosing bool
+	liveMu              sync.Mutex
+	liveSessions        map[string]*liveSession
+	liveOperations      map[string]*liveSessionOperation
+	liveIdleDone        chan struct{}
+	liveClosed          bool
+	ctx                 context.Context
+	runtime             *hostruntime.Runtime
+	store               config.Store
+	manager             *providerhost.Manager
+	factory             clientFactory
+	providerMu          sync.Mutex
+	providerReady       bool
+	workspaceMu         sync.RWMutex
+	workspace           SessionWorkspaceResolver
+	embeddingWorkspaces func() ([]string, error)
+	logs                *runtimeLogBuffer
+	delegationMu        sync.Mutex
+	delegationRuns      map[string]*delegationRunControl
+	delegationWG        sync.WaitGroup
+	delegationCtx       context.Context
+	delegationCancel    context.CancelFunc
+	delegationClosing   bool
 }
 
 func NewSessionHost(parent context.Context, store config.Store) (*SessionHost, error) {
@@ -277,10 +276,9 @@ func (host *SessionHost) ApplyGateway(ctx context.Context, value gateway.Config)
 	return nil
 }
 
-// SyncEmbeddings applies the saved embedding model to the global Library and,
-// when root is provided, rebuilds that workspace's semantic archive before
-// returning. A workspace with an active turn may reject the vector transition
-// until that turn releases its lease.
+// SyncEmbeddings migrates the global Library and all known workspace archives
+// before returning. Active workspaces may reject a transition until their turn
+// releases its lease; such failures are returned so a retry can finish migration.
 func (host *SessionHost) SyncEmbeddings(ctx context.Context, root string, value config.Config) (returnErr error) {
 	if host == nil || host.runtime == nil {
 		return fmt.Errorf("%w: embedding runtime is unavailable", ErrSessionRuntimeUnavailable)
@@ -288,7 +286,11 @@ func (host *SessionHost) SyncEmbeddings(ctx context.Context, root string, value 
 	if err := host.releaseIdleSessions(); err != nil {
 		return err
 	}
-	value, err := host.ensureProvider(value)
+	roots, err := host.embeddingWorkspaceRoots(root)
+	if err != nil {
+		return err
+	}
+	value, err = host.ensureProvider(value)
 	if err != nil {
 		return err
 	}
@@ -314,40 +316,25 @@ func (host *SessionHost) SyncEmbeddings(ctx context.Context, root string, value 
 	if err := libraryRuntime.Client().ConfigureEmbedding(embedder, value.Embedding.Model, value.Embedding.Dimensions); err != nil {
 		return err
 	}
-	if _, err := libraryRuntime.Client().SyncSkillEmbeddings(ctx); err != nil {
-		return err
-	}
-
-	root = strings.TrimSpace(root)
-	if root == "" {
-		return nil
-	}
-	if err := workspace.RejectHomeDirectory(root); err != nil {
-		return err
+	_, migrationErr := libraryRuntime.Client().SyncEmbeddings(ctx)
+	if len(roots) == 0 {
+		return migrationErr
 	}
 	memoryRuntime, err := workspacememory.Ensure(ctx, host.store.Dir)
 	if err != nil {
-		return err
+		return errors.Join(migrationErr, err)
 	}
 	defer func() { returnErr = errors.Join(returnErr, memoryRuntime.Close()) }()
-	vector := sessionstore.VectorConfig{}
-	if value.Embedding.Model != "" {
-		vector = sessionstore.VectorConfig{Model: value.Embedding.Model, Dimensions: value.Embedding.Dimensions}
+	memoryClient := workspacememory.NewClient(memoryRuntime.Endpoint(), "", embeddingRequestTimeout)
+	for _, workspaceRoot := range roots {
+		if err := ctx.Err(); err != nil {
+			return errors.Join(migrationErr, err)
+		}
+		if err := syncWorkspaceEmbeddings(ctx, memoryClient, workspaceRoot, value, embedder); err != nil {
+			migrationErr = errors.Join(migrationErr, fmt.Errorf("embedding migration for %q: %w", workspaceRoot, err))
+		}
 	}
-	archiveStore, err := memoryRuntime.Client().OpenWorkspace(ctx, root, vector)
-	if err != nil {
-		return err
-	}
-	defer func() { returnErr = errors.Join(returnErr, archiveStore.Close()) }()
-	archive := archiveembed.New(archiveStore)
-	if value.Embedding.Model == "" {
-		return archive.Disable()
-	}
-	if err := archive.Configure(embedder, value.Embedding.Model, value.Embedding.Dimensions); err != nil {
-		return err
-	}
-	_, err = archive.Backfill(ctx)
-	return err
+	return migrationErr
 }
 
 // Run executes one prompt through Q's default loop in the requested

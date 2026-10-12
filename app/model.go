@@ -163,9 +163,10 @@ type configuredMsg struct {
 }
 
 type archiveEmbeddingConfiguredMsg struct {
-	stats        archiveembed.BackfillStats
-	globalSkills int
-	err          error
+	stats              archiveembed.BackfillStats
+	globalSkills       int
+	globalPropositions int
+	err                error
 }
 
 type mcpSettingsSavedMsg struct {
@@ -759,10 +760,10 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			m.status = "Embedding: " + message.err.Error()
 		} else if m.config.Embedding.Model == "" {
 			m.status = "Embedding disabled"
-		} else if message.stats.Embedded > 0 || message.globalSkills > 0 {
+		} else if message.stats.Embedded > 0 || message.globalSkills > 0 || message.globalPropositions > 0 {
 			m.status = fmt.Sprintf(
-				"Embedded %d workspace record(s) and %d global skill(s)",
-				message.stats.Embedded, message.globalSkills,
+				"Embedded %d workspace record(s) and %d global skill(s) · %d proposition(s)",
+				message.stats.Embedded, message.globalSkills, message.globalPropositions,
 			)
 		} else {
 			m.status = "Embedding index up to date · 0 new workspace records · 0 new global skills"

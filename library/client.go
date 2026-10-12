@@ -17,10 +17,12 @@ import (
 )
 
 const (
-	ServiceName         = "q-library"
-	ProtocolVersion     = 4
-	Implementation      = "0.1.0"
-	registrationTimeout = 2 * time.Minute
+	ServiceName           = "q-library"
+	ProtocolVersion       = 6
+	Implementation        = "0.1.0"
+	defaultRequestTimeout = 5 * time.Second
+	registrationTimeout   = 2 * time.Minute
+	indexingTimeout       = 5 * time.Minute
 )
 
 type Health struct {
@@ -40,9 +42,11 @@ type Client struct {
 	endpoint string
 	http     *http.Client
 	register *http.Client
+	index    *http.Client
 
 	embeddingMu sync.RWMutex
 	embedding   embeddingClientConfig
+	reconcile   chan struct{}
 }
 
 // Embedder is the subset of q's configured LLM client needed for Library
@@ -59,13 +63,18 @@ type embeddingClientConfig struct {
 
 // NewClient retains the API-key argument for source compatibility. Library
 // servers are loopback-only and do not authenticate HTTP requests.
+// Timeout bounds ordinary requests. Indexing requests allow five minutes and
+// proposition registration at least two minutes, subject to the caller's context deadline.
 func NewClient(endpoint, _ string, timeout time.Duration) *Client {
 	if timeout <= 0 {
-		timeout = time.Duration(defaultProbeTimeout) * time.Millisecond
+		timeout = defaultRequestTimeout
 	}
 	return &Client{
-		endpoint: strings.TrimRight(endpoint, "/"),
-		http:     &http.Client{Timeout: timeout}, register: &http.Client{Timeout: max(timeout, registrationTimeout)},
+		endpoint:  strings.TrimRight(endpoint, "/"),
+		http:      &http.Client{Timeout: timeout},
+		register:  &http.Client{Timeout: max(timeout, registrationTimeout)},
+		index:     &http.Client{Timeout: indexingTimeout},
+		reconcile: make(chan struct{}, 1),
 	}
 }
 
@@ -80,9 +89,16 @@ func (c *Client) ConfigureEmbedding(provider Embedder, model string, dimensions 
 		return errors.New("library: client is nil")
 	}
 	model = strings.TrimSpace(model)
+	if err := c.acquireReconciliation(context.Background()); err != nil {
+		return err
+	}
+	defer func() { <-c.reconcile }()
 	if model == "" && dimensions == 0 {
 		c.embeddingMu.Lock()
-		c.embedding = embeddingClientConfig{}
+		c.embedding.model, c.embedding.dimensions = "", 0
+		if provider != nil {
+			c.embedding.provider = provider
+		}
 		c.embeddingMu.Unlock()
 		return nil
 	}
@@ -130,10 +146,27 @@ func (c *Client) getHealth(ctx context.Context, path string) (Health, error) {
 
 func (c *Client) SearchSkills(ctx context.Context, input SkillSearchRequest) (SkillSearchResponse, error) {
 	query := strings.TrimSpace(input.Query)
-	if len(input.Embedding) == 0 && query != "" {
-		configured := c.embeddingConfig()
+	if query != "" || len(input.Embedding) > 0 {
+		configured, unlock, err := c.lockEmbedding(ctx)
+		if err != nil {
+			return SkillSearchResponse{}, err
+		}
+		defer unlock()
 		if configured.provider != nil {
-			if vectors, err := embedTexts(ctx, configured, []string{query}); err == nil {
+			if _, err := c.syncSkillEmbeddings(ctx, configured); err != nil {
+				return SkillSearchResponse{}, fmt.Errorf("library: repair skill embeddings before search: %w", err)
+			}
+			configured = c.embeddingConfig()
+			if configured.model == "" {
+				input.Embedding, input.EmbeddingModel = nil, ""
+			} else if len(input.Embedding) == 0 || input.EmbeddingModel != configured.model || len(input.Embedding) != configured.dimensions {
+				if query == "" {
+					return SkillSearchResponse{}, errors.New("library: outdated query vector requires query text for repair")
+				}
+				vectors, err := embedTexts(ctx, configured, []string{query})
+				if err != nil {
+					return SkillSearchResponse{}, fmt.Errorf("library: embed skill search query: %w", err)
+				}
 				input.Embedding = vectors[0]
 				input.EmbeddingModel = configured.model
 			}
@@ -164,7 +197,7 @@ func (c *Client) GetSkill(ctx context.Context, id, path string) (SkillResource, 
 
 func (c *Client) ReloadSkills(ctx context.Context) (SkillReloadResponse, error) {
 	var output SkillReloadResponse
-	if err := c.doJSON(ctx, http.MethodPost, "/skills/reload", struct{}{}, &output); err != nil {
+	if err := c.doJSONWithClient(ctx, c.index, http.MethodPost, "/skills/reload", struct{}{}, &output, nil); err != nil {
 		return SkillReloadResponse{}, err
 	}
 	if c.embeddingConfig().provider != nil {
@@ -180,14 +213,30 @@ func (c *Client) SearchPropositions(ctx context.Context, input PropositionSearch
 	if len([]rune(query)) > maximumPropositionQueryRunes {
 		return PropositionSearchResponse{}, fmt.Errorf("library: proposition query exceeds %d characters", maximumPropositionQueryRunes)
 	}
-	if len(input.Embedding) == 0 && query != "" {
-		configured := c.embeddingConfig()
+	if query != "" || len(input.Embedding) > 0 {
+		configured, unlock, err := c.lockEmbedding(ctx)
+		if err != nil {
+			return PropositionSearchResponse{}, err
+		}
+		defer unlock()
 		if configured.provider != nil {
-			vectors, err := embedTexts(ctx, configured, []string{query})
-			if err != nil {
-				return PropositionSearchResponse{}, fmt.Errorf("library: embed proposition search query: %w", err)
+			if _, err := c.syncEmbeddings(ctx, configured); err != nil {
+				return PropositionSearchResponse{}, fmt.Errorf("library: repair embeddings before proposition search: %w", err)
 			}
-			input.Embedding = vectors[0]
+			configured = c.embeddingConfig()
+			if configured.model == "" {
+				input.Embedding = nil
+			} else if len(input.Embedding) == 0 || input.EmbeddingModel != configured.model || len(input.Embedding) != configured.dimensions {
+				if query == "" {
+					return PropositionSearchResponse{}, errors.New("library: outdated query vector requires query text for repair")
+				}
+				vectors, err := embedTexts(ctx, configured, []string{query})
+				if err != nil {
+					return PropositionSearchResponse{}, fmt.Errorf("library: embed proposition search query: %w", err)
+				}
+				input.Embedding = vectors[0]
+				input.EmbeddingModel = configured.model
+			}
 		}
 	}
 	var output PropositionSearchResponse
@@ -207,9 +256,24 @@ func (c *Client) GetProposition(ctx context.Context, id string) (Proposition, er
 }
 
 func (c *Client) RegisterProposition(ctx context.Context, idempotencyKey string, input PropositionRegisterRequest) (PropositionRegisterResponse, error) {
+	configured, unlock, err := c.lockEmbedding(ctx)
+	if err != nil {
+		return PropositionRegisterResponse{}, err
+	}
+	defer unlock()
+	if configured.provider != nil {
+		if _, err := c.syncEmbeddings(ctx, configured); err != nil {
+			return PropositionRegisterResponse{}, fmt.Errorf("library: repair embeddings before proposition registration: %w", err)
+		}
+		configured = c.embeddingConfig()
+		if configured.model == "" {
+			input.Embeddings = nil
+		} else if input.Embeddings != nil && (input.Embeddings.Model != configured.model || input.Embeddings.Dimensions != configured.dimensions) {
+			input.Embeddings = nil
+		}
+	}
 	if input.Embeddings == nil {
-		configured := c.embeddingConfig()
-		if configured.provider != nil {
+		if configured.provider != nil && configured.model != "" {
 			normalized, err := normalizePropositionRegisterRequest(input)
 			if err != nil {
 				return PropositionRegisterResponse{}, err
@@ -245,6 +309,30 @@ func (c *Client) embeddingConfig() embeddingClientConfig {
 	return c.embedding
 }
 
+// Serialize repair and semantic use, holding the selected model stable until
+// the request finishes. Waiting callers can cancel and then retry on next use.
+func (c *Client) lockEmbedding(ctx context.Context) (embeddingClientConfig, func(), error) {
+	if err := c.acquireReconciliation(ctx); err != nil {
+		return embeddingClientConfig{}, nil, err
+	}
+	return c.embeddingConfig(), func() { <-c.reconcile }, nil
+}
+
+func (c *Client) acquireReconciliation(ctx context.Context) error {
+	if c == nil {
+		return errors.New("library: client is nil")
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	select {
+	case c.reconcile <- struct{}{}:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	return nil
+}
+
 func embedTexts(ctx context.Context, configured embeddingClientConfig, texts []string) ([][]float32, error) {
 	vectorizer, err := qembedding.New(configured.provider, configured.model, configured.dimensions)
 	if err != nil {
@@ -253,31 +341,81 @@ func embedTexts(ctx context.Context, configured embeddingClientConfig, texts []s
 	return vectorizer.Embed(ctx, texts)
 }
 
+// EmbeddingSyncStats reports completed global record migrations.
+type EmbeddingSyncStats struct {
+	Skills       int
+	Propositions int
+}
+
+// SyncEmbeddings migrates all global searchable records to the configured model.
+// Repeating a failed migration fills only missing or outdated projections.
+func (c *Client) SyncEmbeddings(ctx context.Context) (EmbeddingSyncStats, error) {
+	configured, unlock, err := c.lockEmbedding(ctx)
+	if err != nil {
+		return EmbeddingSyncStats{}, err
+	}
+	defer unlock()
+	return c.syncEmbeddings(ctx, configured)
+}
+
+func (c *Client) syncEmbeddings(ctx context.Context, configured embeddingClientConfig) (EmbeddingSyncStats, error) {
+	skills, err := c.syncSkillEmbeddings(ctx, configured)
+	configured = c.embeddingConfig()
+	stats := EmbeddingSyncStats{Skills: skills.Embedded}
+	if err != nil || configured.model == "" {
+		return stats, err
+	}
+	propositions, err := c.syncEmbeddingSources(ctx, configured, "propositions")
+	stats.Propositions = propositions.Embedded
+	return stats, err
+}
+
 // SyncSkillEmbeddings configures the Library's rebuildable vector index and
 // fills every active global skill that is missing field projections for this
 // client's configured model. With no configured model it disables vectors and
 // leaves skill search on BM25.
 func (c *Client) SyncSkillEmbeddings(ctx context.Context) (SkillEmbeddingSyncStats, error) {
-	configured := c.embeddingConfig()
-	vector := SkillVectorConfigRequest{Model: configured.model, Dimensions: configured.dimensions}
-	var configuredResponse struct{}
-	if err := c.doJSON(ctx, http.MethodPost, "/skills/embeddings/configure", vector, &configuredResponse); err != nil {
+	configured, unlock, err := c.lockEmbedding(ctx)
+	if err != nil {
 		return SkillEmbeddingSyncStats{}, err
 	}
-	if configured.provider == nil {
+	defer unlock()
+	return c.syncSkillEmbeddings(ctx, configured)
+}
+
+func (c *Client) syncSkillEmbeddings(ctx context.Context, configured embeddingClientConfig) (SkillEmbeddingSyncStats, error) {
+	vector := SkillVectorConfigRequest{Model: configured.model, Dimensions: configured.dimensions}
+	var configuredResponse SkillVectorConfigResponse
+	if err := c.doJSONWithClient(ctx, c.index, http.MethodPost, "/skills/embeddings/configure", vector, &configuredResponse, nil); err != nil {
+		return SkillEmbeddingSyncStats{}, err
+	}
+	if configuredResponse.Vector != nil {
+		configured.model, configured.dimensions = configuredResponse.Vector.Model, configuredResponse.Vector.Dimensions
+		c.embeddingMu.Lock()
+		c.embedding = configured
+		c.embeddingMu.Unlock()
+	}
+	if configured.model == "" {
 		return SkillEmbeddingSyncStats{}, nil
 	}
+	if configured.provider == nil {
+		return SkillEmbeddingSyncStats{}, errors.New("library: active embedding model requires a provider")
+	}
+	return c.syncEmbeddingSources(ctx, configured, "skills")
+}
+
+func (c *Client) syncEmbeddingSources(ctx context.Context, configured embeddingClientConfig, kind string) (SkillEmbeddingSyncStats, error) {
 	stats := SkillEmbeddingSyncStats{}
 	for {
 		var sources SkillEmbeddingSourceResponse
-		if err := c.doJSON(ctx, http.MethodPost, "/skills/embeddings/sources", SkillEmbeddingSourceRequest{
+		if err := c.doJSONWithClient(ctx, c.index, http.MethodPost, "/"+kind+"/embeddings/sources", SkillEmbeddingSourceRequest{
 			Model: configured.model, Dimensions: configured.dimensions, Limit: defaultSkillEmbedBatch,
-		}, &sources); err != nil {
+		}, &sources, nil); err != nil {
 			return stats, err
 		}
 		if len(sources.Sources) == 0 {
 			if sources.Remaining != 0 {
-				return stats, errors.New("library: skill embedding source scan made no progress")
+				return stats, fmt.Errorf("library: %s embedding source scan made no progress", kind)
 			}
 			return stats, nil
 		}
@@ -292,7 +430,7 @@ func (c *Client) SyncSkillEmbeddings(ctx context.Context) (SkillEmbeddingSyncSta
 			end := min(start+maximumSkillEmbedBatch, len(texts))
 			chunk, err := embedTexts(ctx, configured, texts[start:end])
 			if err != nil {
-				return stats, fmt.Errorf("library: embed Agent Skills: %w", err)
+				return stats, fmt.Errorf("library: embed %s: %w", kind, err)
 			}
 			vectors = append(vectors, chunk...)
 		}
@@ -316,13 +454,13 @@ func (c *Client) SyncSkillEmbeddings(ctx context.Context) (SkillEmbeddingSyncSta
 				end++
 			}
 			var applied SkillEmbeddingApplyResponse
-			if err := c.doJSON(ctx, http.MethodPost, "/skills/embeddings", SkillEmbeddingApplyRequest{
+			if err := c.doJSONWithClient(ctx, c.index, http.MethodPost, "/"+kind+"/embeddings", SkillEmbeddingApplyRequest{
 				Model: configured.model, Dimensions: configured.dimensions, Items: items[start:end],
-			}, &applied); err != nil {
+			}, &applied, nil); err != nil {
 				return stats, err
 			}
 			if applied.Updated != end-start {
-				return stats, fmt.Errorf("library: applied %d of %d skill embeddings", applied.Updated, end-start)
+				return stats, fmt.Errorf("library: applied %d of %d %s embeddings", applied.Updated, end-start, kind)
 			}
 			stats.Embedded += applied.Updated
 			start = end

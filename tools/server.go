@@ -151,6 +151,19 @@ func RunStdioWithLoomOptions(ctx context.Context, root string, options loom.Stor
 	}
 	defer func() { runErr = errors.Join(runErr, archive.Close()) }()
 	semanticArchive := archiveembed.New(archive)
+	semanticArchive.SetVectorConfigResolver(func(ctx context.Context) (sessionstore.VectorConfig, error) {
+		if err := ctx.Err(); err != nil {
+			return sessionstore.VectorConfig{}, err
+		}
+		current, err := configStore.Load()
+		if errors.Is(err, config.ErrNotFound) {
+			return vectorConfig, nil
+		}
+		if err != nil {
+			return sessionstore.VectorConfig{}, err
+		}
+		return sessionstore.VectorConfig{Model: current.Embedding.Model, Dimensions: current.Embedding.Dimensions}, nil
+	})
 	loomRuntime, err := newLoomRuntime(root, loom.NewProcessEvaluator(), withSessionRoots(options, root))
 	if err != nil {
 		return err
@@ -176,7 +189,7 @@ func RunStdioWithLoomOptions(ctx context.Context, root string, options loom.Stor
 	var embeddingManager *providerhost.Manager
 	usageRecorder := usagelog.New(configStore.Dir)
 	defer func() { runErr = errors.Join(runErr, usageRecorder.Close()) }()
-	if loaded.Embedding.Model != "" {
+	if loaded.Embedding.Model != "" || loaded.Provider.Model != "" {
 		if loaded.Provider.Managed {
 			embeddingManager, err = providerhost.NewManager(ctx, providerhost.Store{Dir: configStore.Dir})
 			if err != nil {
@@ -223,7 +236,6 @@ func RunStdioWithLoomOptions(ctx context.Context, root string, options loom.Stor
 			}
 			return err
 		}
-		go func() { _, _ = semanticArchive.Backfill(ctx) }()
 		defer func() { runErr = errors.Join(runErr, embeddingClient.Close()) }()
 		if embeddingManager != nil {
 			defer func() { runErr = errors.Join(runErr, embeddingManager.Close()) }()
@@ -237,9 +249,6 @@ func RunStdioWithLoomOptions(ctx context.Context, root string, options loom.Stor
 	}
 	if libraryRuntime != nil {
 		defer func() { runErr = errors.Join(runErr, libraryRuntime.Close()) }()
-		if loaded.Embedding.Model != "" {
-			go func() { _, _ = libraryClient.SyncSkillEmbeddings(ctx) }()
-		}
 	}
 	server, fs, _, err := newServer(
 		root, nil, root, semanticArchive, semanticArchive, loomRuntime, lspManager, globalSkills,

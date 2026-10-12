@@ -173,7 +173,32 @@ search remains BM25-only. Name, description, and each tag have separate vector
 projections. A matching projection contributes according to description (4),
 tag (3), or name (2); the best weighted projection represents the skill in the
 vector ranking before reciprocal-rank fusion with BM25. Assigning a new model
-or finding an old combined skill vector backfills active skills. Git detection
+or finding an old combined skill vector backfills active skills. Model assignment
+also re-embeds existing global propositions, preserving their content, queries,
+provenance and registration identity. Studio migrates existing archives for all
+registered project and session workspaces, even without a selected workspace.
+Failed migrations report an error; retrying resumes missing or outdated vectors.
+Semantic workspace searches reconcile missing and outdated record embeddings
+before querying, regardless of Studio registration. Global skill/proposition
+searches and proposition registration also repair their embeddings on use.
+These checks run again on subsequent use, so a later import or a failed startup
+migration does not require another settings save. Matching vectors are reused;
+repair errors are returned and a later request retries the remaining records.
+Concurrent repairs on one archive/client are serialized with cancelable waits,
+and model assignment cannot change halfway through those operations.
+Embedding backfills patch only derived vectors under the source-store lock.
+They compare a digest of the original record before writing, so deletions are
+never resurrected and concurrent source edits trigger a bounded rescan.
+The Library's persisted model settings take precedence over client snapshots;
+older clients adopt that model on use instead of reverting the shared graph.
+Running workspace archives also resolve the latest settings on use. Supplied
+query vectors with an outdated model or shape are regenerated from query text,
+and requests without enough text to repair them return an error.
+Library readiness probes use 300 ms, ordinary requests default to 5 seconds,
+and index configuration and embedding synchronization requests allow 5 minutes
+per request, subject to the caller's deadline. Workspace archive opening,
+vector configuration and batch indexing use the same five-minute budget,
+including automatic repair during retrieval. Git detection
 is best-effort, so a
 non-Git skill, an unborn repository, or an unavailable Git executable leaves
 the commit empty without blocking discovery. Each search still queries only

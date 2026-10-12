@@ -92,6 +92,7 @@ func startLeader(
 		}
 	}
 	propositions := newPropositionService(ctx, archive, queue, judge, judgeErr)
+	propositions.embeddingConfigDir = dir
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /v1/health", func(writer http.ResponseWriter, _ *http.Request) {
 		writeJSON(writer, http.StatusOK, health)
@@ -101,6 +102,7 @@ func startLeader(
 	})
 	registerSkillRoutes(mux, skills)
 	registerPropositionRoutes(mux, propositions)
+	registerPropositionEmbeddingRoutes(mux, propositions)
 	l := &leader{
 		health: health, archive: archive, propositions: propositions, queue: queue, judge: modelJudge,
 		lock: lock, cancel: cancel, done: make(chan struct{}),

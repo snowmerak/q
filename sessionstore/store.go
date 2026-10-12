@@ -336,7 +336,10 @@ func (s *Store) SaveBatch(records []Record) ([]Record, error) {
 	if err := s.requireOpenLocked(); err != nil {
 		return nil, err
 	}
+	return s.saveBatchLocked(records)
+}
 
+func (s *Store) saveBatchLocked(records []Record) ([]Record, error) {
 	now := time.Now().UTC()
 	prepared := make([]Record, len(records))
 	bodies := make([][]byte, len(records))

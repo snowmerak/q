@@ -67,6 +67,8 @@ func (runtime *settingsRuntimeRunner) SyncEmbeddings(_ context.Context, root str
 }
 
 func TestHandlerServesGlobalStatusAndSPA(t *testing.T) {
+	// Keep the public constructor test on isolated service endpoints.
+	newStudioIntegration(t)
 	handler, err := NewHandler()
 	if err != nil {
 		t.Fatal(err)

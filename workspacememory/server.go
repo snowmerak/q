@@ -66,6 +66,15 @@ type saveBatchResponse struct {
 	Error   *storeError           `json:"error,omitempty"`
 }
 
+type embeddingUpdateRequest struct {
+	Updates []sessionstore.EmbeddingUpdate `json:"updates"`
+}
+
+type embeddingUpdateResponse struct {
+	Result sessionstore.EmbeddingUpdateResult `json:"result"`
+	Error  *storeError                        `json:"error,omitempty"`
+}
+
 type storeError struct {
 	Code     string `json:"code"`
 	Message  string `json:"message"`
@@ -113,6 +122,7 @@ type workspaceEntry struct {
 type workspaceStore interface {
 	Save(sessionstore.Record) (sessionstore.Record, error)
 	SaveBatch([]sessionstore.Record) ([]sessionstore.Record, error)
+	ApplyEmbeddings([]sessionstore.EmbeddingUpdate) (sessionstore.EmbeddingUpdateResult, error)
 	Get(string) (sessionstore.Record, error)
 	Delete(string) error
 	Search(context.Context, sessionstore.SearchOptions) (sessionstore.SearchResult, error)
@@ -496,6 +506,15 @@ func newHandler(health Health, manager *workspaceManager) http.Handler {
 			return
 		}
 		writeJSON(writer, http.StatusOK, saveBatchResponse{Records: records})
+	}))
+	mux.Handle("POST /v1/workspaces/{workspace}/records/embeddings", withWorkspace(func(writer http.ResponseWriter, request *http.Request, entry *workspaceEntry) {
+		var input embeddingUpdateRequest
+		if err := decodeJSON(writer, request, &input); err != nil {
+			writeServiceError(writer, err)
+			return
+		}
+		result, err := entry.store.ApplyEmbeddings(input.Updates)
+		writeJSON(writer, http.StatusOK, embeddingUpdateResponse{Result: result, Error: encodeStoreError(err)})
 	}))
 	mux.Handle("POST /v1/workspaces/{workspace}/records/get", withWorkspace(func(writer http.ResponseWriter, request *http.Request, entry *workspaceEntry) {
 		var input recordIDRequest

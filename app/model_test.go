@@ -1121,13 +1121,21 @@ func TestModelTargetsIncludeLearningRoles(t *testing.T) {
 func TestExplicitLearningSegmentStartsThinkerExtractionThroughLibraryClient(t *testing.T) {
 	var registered qlibrary.PropositionRegisterRequest
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Content-Type", "application/json")
+		switch request.URL.Path {
+		case "/v1/skills/embeddings/configure":
+			_, _ = writer.Write([]byte(`{}`))
+			return
+		case "/v1/skills/embeddings/sources", "/v1/propositions/embeddings/sources":
+			_ = json.NewEncoder(writer).Encode(qlibrary.SkillEmbeddingSourceResponse{})
+			return
+		}
 		if request.URL.Path != "/v1/propositions" || !strings.HasPrefix(request.Header.Get("Idempotency-Key"), "thinker-v1/") || !strings.HasSuffix(request.Header.Get("Idempotency-Key"), "/0") {
 			t.Errorf("registration request = %s %s, key %q", request.Method, request.URL.Path, request.Header.Get("Idempotency-Key"))
 		}
 		if err := json.NewDecoder(request.Body).Decode(&registered); err != nil {
 			t.Error(err)
 		}
-		writer.Header().Set("Content-Type", "application/json")
 		_, _ = writer.Write([]byte(`{"id":"prop-app-test","created":true}`))
 	}))
 	defer server.Close()
@@ -1286,6 +1294,8 @@ func TestEmbeddingModelAssignmentIndexesExistingGlobalSkills(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		writer.Header().Set("Content-Type", "application/json")
 		switch request.URL.Path {
+		case "/v1/propositions/embeddings/sources":
+			_ = json.NewEncoder(writer).Encode(qlibrary.SkillEmbeddingSourceResponse{})
 		case "/v1/skills/embeddings/configure":
 			if err := json.NewDecoder(request.Body).Decode(&configured); err != nil {
 				t.Error(err)
@@ -1371,6 +1381,16 @@ func TestEmbeddingModelAssignmentReportsUpToDateIndexes(t *testing.T) {
 	m = updated.(model)
 	if m.status != "Embedding index up to date · 0 new workspace records · 0 new global skills" {
 		t.Fatalf("up-to-date indexing status = %q", m.status)
+	}
+}
+
+func TestEmbeddingModelAssignmentReportsPropositionMigration(t *testing.T) {
+	m := newModel(t.Context(), config.Store{Dir: t.TempDir()}, nil)
+	m.config.Embedding = config.EmbeddingConfig{Model: "embed-model", Dimensions: 3}
+	updated, _ := m.Update(archiveEmbeddingConfiguredMsg{globalPropositions: 105})
+	m = updated.(model)
+	if !strings.Contains(m.status, "105 proposition(s)") {
+		t.Fatalf("proposition migration status = %q", m.status)
 	}
 }
 

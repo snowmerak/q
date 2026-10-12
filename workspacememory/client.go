@@ -19,7 +19,7 @@ import (
 
 const (
 	ServiceName     = "q-workspace-memory"
-	ProtocolVersion = 3
+	ProtocolVersion = 4
 	Implementation  = "0.1.0"
 	leaseHeader     = "X-Q-Workspace-Lease"
 )
@@ -83,10 +83,13 @@ type Client struct {
 	endpoint       string
 	http           *http.Client
 	requestTimeout time.Duration
+	index          *http.Client
 }
 
 // NewClient retains the credential argument for source compatibility. The
 // loopback-only Workspace Memory server does not authenticate HTTP requests.
+// Archive opening, vector configuration and batch indexing allow five minutes;
+// ordinary requests retain timeout and every request honors its context.
 func NewClient(endpoint, _ string, timeout time.Duration) *Client {
 	if timeout <= 0 {
 		timeout = 2 * time.Minute
@@ -94,6 +97,7 @@ func NewClient(endpoint, _ string, timeout time.Duration) *Client {
 	return &Client{
 		endpoint: strings.TrimRight(endpoint, "/"),
 		http:     &http.Client{Timeout: timeout}, requestTimeout: timeout,
+		index: &http.Client{Timeout: 5 * time.Minute},
 	}
 }
 
@@ -208,7 +212,13 @@ func (c *Client) doJSON(ctx context.Context, method, path string, input, output 
 	if leaseID != "" {
 		request.Header.Set(leaseHeader, leaseID)
 	}
-	response, err := c.http.Do(request)
+	httpClient := c.http
+	if method == http.MethodPost && (path == "/workspaces/open" ||
+		strings.HasSuffix(path, "/vector/configure") || strings.HasSuffix(path, "/records/save-batch") || strings.HasSuffix(path, "/records/embeddings")) {
+		// These operations can synchronously rebuild the derived HNSW graph.
+		httpClient = c.index
+	}
+	response, err := httpClient.Do(request)
 	if err != nil {
 		return err
 	}
@@ -301,6 +311,18 @@ func (w *Workspace) SaveContext(ctx context.Context, record sessionstore.Record)
 
 func (w *Workspace) SaveBatch(records []sessionstore.Record) ([]sessionstore.Record, error) {
 	return w.SaveBatchContext(context.Background(), records)
+}
+
+func (w *Workspace) ApplyEmbeddings(updates []sessionstore.EmbeddingUpdate) (sessionstore.EmbeddingUpdateResult, error) {
+	return w.ApplyEmbeddingsContext(context.Background(), updates)
+}
+
+func (w *Workspace) ApplyEmbeddingsContext(ctx context.Context, updates []sessionstore.EmbeddingUpdate) (sessionstore.EmbeddingUpdateResult, error) {
+	var output embeddingUpdateResponse
+	if err := w.call(ctx, http.MethodPost, "/records/embeddings", embeddingUpdateRequest{Updates: updates}, &output); err != nil {
+		return sessionstore.EmbeddingUpdateResult{}, err
+	}
+	return output.Result, decodeStoreError(output.Error)
 }
 
 func (w *Workspace) SaveBatchContext(ctx context.Context, records []sessionstore.Record) ([]sessionstore.Record, error) {

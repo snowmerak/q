@@ -71,6 +71,15 @@ func (s *interfaceArchiveStore) SaveBatch(records []sessionstore.Record) ([]sess
 	return records, nil
 }
 
+func (s *interfaceArchiveStore) ApplyEmbeddings(updates []sessionstore.EmbeddingUpdate) (sessionstore.EmbeddingUpdateResult, error) {
+	for _, update := range updates {
+		record := s.records[update.ID]
+		record.Embedding, record.VectorProjections = update.Embedding, update.VectorProjections
+		s.records[update.ID] = record
+	}
+	return sessionstore.EmbeddingUpdateResult{Updated: len(updates)}, nil
+}
+
 func (s *interfaceArchiveStore) Get(id string) (sessionstore.Record, error) {
 	record, ok := s.records[id]
 	if !ok {

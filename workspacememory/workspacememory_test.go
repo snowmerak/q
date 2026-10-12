@@ -700,6 +700,10 @@ type failingWorkspaceStore struct {
 	configureErr error
 }
 
+func (s *failingWorkspaceStore) ApplyEmbeddings([]sessionstore.EmbeddingUpdate) (sessionstore.EmbeddingUpdateResult, error) {
+	return sessionstore.EmbeddingUpdateResult{}, s.saveErr
+}
+
 func (s *failingWorkspaceStore) Save(sessionstore.Record) (sessionstore.Record, error) {
 	return s.saveRecords[0], s.saveErr
 }

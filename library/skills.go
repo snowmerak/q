@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/snowmerak/q/agentskills"
+	qconfig "github.com/snowmerak/q/config"
 	"github.com/snowmerak/q/sessionstore"
 )
 
@@ -64,6 +65,10 @@ type SkillVectorConfigRequest struct {
 	Dimensions int    `json:"dimensions,omitempty"`
 }
 
+type SkillVectorConfigResponse struct {
+	Vector *SkillVectorConfigRequest `json:"vector,omitempty"`
+}
+
 type SkillEmbeddingSourceRequest struct {
 	Model      string `json:"model"`
 	Dimensions int    `json:"dimensions"`
@@ -107,6 +112,7 @@ type SkillEmbeddingSyncStats struct {
 }
 
 type skillService struct {
+	dir      string
 	registry *agentskills.Registry
 	archive  *sessionstore.Store
 	mu       sync.Mutex
@@ -121,7 +127,7 @@ func newSkillService(ctx context.Context, dir string, archive *sessionstore.Stor
 	if err != nil {
 		return nil, err
 	}
-	service := &skillService{registry: registry, archive: archive}
+	service := &skillService{dir: dir, registry: registry, archive: archive}
 	if err := registry.SyncRecords(ctx, archive); err != nil {
 		return nil, fmt.Errorf("library: reconcile global Agent Skills: %w", err)
 	}
@@ -143,6 +149,8 @@ func (s *skillService) search(ctx context.Context, request SkillSearchRequest) (
 		s.archive.VectorConfig(), strings.TrimSpace(request.EmbeddingModel), len(request.Embedding),
 	) {
 		options.Vector = agentskills.SkillVectorQuery(append([]float32(nil), request.Embedding...))
+	} else if len(request.Embedding) > 0 {
+		return SkillSearchResponse{}, errors.New("library: skill query vector does not match active model")
 	}
 	result, err := s.archive.Search(ctx, options)
 	if err != nil {
@@ -158,15 +166,47 @@ func (s *skillService) search(ctx context.Context, request SkillSearchRequest) (
 	return response, nil
 }
 
-func (s *skillService) configureVector(request SkillVectorConfigRequest) error {
+func (s *skillService) configureVector(request SkillVectorConfigRequest) (SkillVectorConfigRequest, error) {
 	if s == nil || s.archive == nil {
-		return errors.New("library: global Agent Skills are unavailable")
+		return SkillVectorConfigRequest{}, errors.New("library: global Agent Skills are unavailable")
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.archive.ConfigureVector(sessionstore.VectorConfig{
+	// Persisted settings own the model. A client from an older session must
+	// follow them instead of rolling the shared graph back to its snapshot.
+	request, err := savedEmbeddingVector(s.dir, request)
+	if err != nil {
+		return SkillVectorConfigRequest{}, err
+	}
+	err = s.archive.ConfigureVector(sessionstore.VectorConfig{
 		Model: strings.TrimSpace(request.Model), Dimensions: request.Dimensions,
 	})
+	return request, err
+}
+
+func savedEmbeddingVector(dir string, fallback SkillVectorConfigRequest) (SkillVectorConfigRequest, error) {
+	if dir == "" {
+		return fallback, nil
+	}
+	loaded, err := (qconfig.Store{Dir: dir}).Load()
+	if errors.Is(err, qconfig.ErrNotFound) {
+		return fallback, nil
+	}
+	if err != nil {
+		return SkillVectorConfigRequest{}, err
+	}
+	return SkillVectorConfigRequest{Model: loaded.Embedding.Model, Dimensions: loaded.Embedding.Dimensions}, nil
+}
+
+func validateEmbeddingModel(dir string, archive *sessionstore.Store, model string, dimensions int) error {
+	wanted, err := savedEmbeddingVector(dir, SkillVectorConfigRequest{Model: model, Dimensions: dimensions})
+	if err != nil {
+		return err
+	}
+	if wanted.Model != model || wanted.Dimensions != dimensions || !skillVectorMatches(archive.VectorConfig(), model, dimensions) {
+		return errors.New("library: embedding model does not match latest settings and active index")
+	}
+	return nil
 }
 
 func (s *skillService) embeddingSources(request SkillEmbeddingSourceRequest) (SkillEmbeddingSourceResponse, error) {
@@ -174,8 +214,8 @@ func (s *skillService) embeddingSources(request SkillEmbeddingSourceRequest) (Sk
 		return SkillEmbeddingSourceResponse{}, errors.New("library: global Agent Skills are unavailable")
 	}
 	request.Model = strings.TrimSpace(request.Model)
-	if !skillVectorMatches(s.archive.VectorConfig(), request.Model, request.Dimensions) {
-		return SkillEmbeddingSourceResponse{}, errors.New("library: skill embedding source model does not match the active vector index")
+	if err := validateEmbeddingModel(s.dir, s.archive, request.Model, request.Dimensions); err != nil {
+		return SkillEmbeddingSourceResponse{}, err
 	}
 	if request.Limit == 0 {
 		request.Limit = defaultSkillEmbedBatch
@@ -227,7 +267,7 @@ func (s *skillService) applyEmbeddings(request SkillEmbeddingApplyRequest) (Skil
 		active[skill.ID] = skill
 	}
 	now := time.Now().UTC()
-	records := make([]sessionstore.Record, 0, len(request.Items))
+	updates := make([]sessionstore.EmbeddingUpdate, 0, len(request.Items))
 	seen := make(map[string]struct{}, len(request.Items))
 	for _, item := range request.Items {
 		skill, ok := active[strings.TrimSpace(item.ID)]
@@ -252,7 +292,10 @@ func (s *skillService) applyEmbeddings(request SkillEmbeddingApplyRequest) (Skil
 		if err != nil {
 			return SkillEmbeddingApplyResponse{}, err
 		}
-		record.UpdatedAt = time.Time{}
+		digest, err := sessionstore.RecordSourceDigest(record)
+		if err != nil {
+			return SkillEmbeddingApplyResponse{}, err
+		}
 		record.Embedding = nil
 		record.VectorProjections = make([]sessionstore.VectorProjection, 0, len(parts))
 		for index, part := range parts {
@@ -268,12 +311,16 @@ func (s *skillService) applyEmbeddings(request SkillEmbeddingApplyRequest) (Skil
 				},
 			})
 		}
-		records = append(records, record)
+		updates = append(updates, sessionstore.EmbeddingUpdate{ID: record.ID, SourceDigest: digest, VectorProjections: record.VectorProjections})
 	}
-	if _, err := s.archive.SaveBatch(records); err != nil {
+	if err := validateEmbeddingModel(s.dir, s.archive, request.Model, request.Dimensions); err != nil {
 		return SkillEmbeddingApplyResponse{}, err
 	}
-	return SkillEmbeddingApplyResponse{Updated: len(records)}, nil
+	applied, err := s.archive.ApplyEmbeddings(updates)
+	if err != nil {
+		return SkillEmbeddingApplyResponse{}, err
+	}
+	return SkillEmbeddingApplyResponse{Updated: applied.Updated}, nil
 }
 
 func skillVectorMatches(config sessionstore.VectorConfig, model string, dimensions int) bool {
@@ -347,11 +394,12 @@ func registerSkillRoutes(mux *http.ServeMux, skills *skillService) {
 			writeLibraryError(writer, http.StatusBadRequest, err)
 			return
 		}
-		if err := skills.configureVector(input); err != nil {
+		vector, err := skills.configureVector(input)
+		if err != nil {
 			writeLibraryError(writer, http.StatusBadRequest, err)
 			return
 		}
-		writeJSON(writer, http.StatusOK, struct{}{})
+		writeJSON(writer, http.StatusOK, SkillVectorConfigResponse{Vector: &vector})
 	}))
 	mux.Handle("POST /v1/skills/embeddings/sources", http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		var input SkillEmbeddingSourceRequest

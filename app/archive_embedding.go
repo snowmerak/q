@@ -29,7 +29,7 @@ func (m model) configureEmbeddingRuntime(value config.Config, configuredClient c
 			if libraryClient != nil {
 				libraryErr = libraryClient.ConfigureEmbedding(nil, "", 0)
 				if libraryErr == nil {
-					_, libraryErr = libraryClient.SyncSkillEmbeddings(ctx)
+					_, libraryErr = libraryClient.SyncEmbeddings(ctx)
 				}
 			}
 			return archiveEmbeddingConfiguredMsg{err: errors.Join(archiveErr, libraryErr)}
@@ -38,7 +38,7 @@ func (m model) configureEmbeddingRuntime(value config.Config, configuredClient c
 		if !ok {
 			return archiveEmbeddingConfiguredMsg{err: errors.New("configured LLM client does not support embeddings")}
 		}
-		var libraryStats qlibrary.SkillEmbeddingSyncStats
+		var libraryStats qlibrary.EmbeddingSyncStats
 		var libraryErr error
 		if libraryClient != nil {
 			if err := libraryClient.ConfigureEmbedding(
@@ -46,18 +46,18 @@ func (m model) configureEmbeddingRuntime(value config.Config, configuredClient c
 			); err != nil {
 				libraryErr = err
 			} else {
-				libraryStats, libraryErr = libraryClient.SyncSkillEmbeddings(ctx)
+				libraryStats, libraryErr = libraryClient.SyncEmbeddings(ctx)
 			}
 		}
 		if archive == nil {
-			return archiveEmbeddingConfiguredMsg{globalSkills: libraryStats.Embedded, err: libraryErr}
+			return archiveEmbeddingConfiguredMsg{globalSkills: libraryStats.Skills, globalPropositions: libraryStats.Propositions, err: libraryErr}
 		}
 		if err := archive.Configure(embedder, value.Embedding.Model, value.Embedding.Dimensions); err != nil {
-			return archiveEmbeddingConfiguredMsg{globalSkills: libraryStats.Embedded, err: errors.Join(libraryErr, err)}
+			return archiveEmbeddingConfiguredMsg{globalSkills: libraryStats.Skills, globalPropositions: libraryStats.Propositions, err: errors.Join(libraryErr, err)}
 		}
 		stats, err := archive.Backfill(ctx)
 		return archiveEmbeddingConfiguredMsg{
-			stats: stats, globalSkills: libraryStats.Embedded, err: errors.Join(libraryErr, err),
+			stats: stats, globalSkills: libraryStats.Skills, globalPropositions: libraryStats.Propositions, err: errors.Join(libraryErr, err),
 		}
 	}
 }

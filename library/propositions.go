@@ -50,6 +50,7 @@ var propositionSensitivePatterns = []*regexp.Regexp{
 // values select the Library defaults; an explicit zero weight disables the
 // created_at boost for one request.
 type PropositionSearchRequest struct {
+	EmbeddingModel       string     `json:"embedding_model,omitempty"`
 	Query                string     `json:"query"`
 	Embedding            []float32  `json:"embedding,omitempty"`
 	Tags                 []string   `json:"tags,omitempty"`
@@ -135,15 +136,16 @@ type Proposition struct {
 }
 
 type propositionService struct {
-	archive  *sessionstore.Store
-	queue    *propositionQueue
-	judge    PropositionJudge
-	judgeErr error
-	now      func() time.Time
-	mu       sync.Mutex
-	ctx      context.Context
-	cancel   context.CancelFunc
-	done     chan struct{}
+	embeddingConfigDir string
+	archive            *sessionstore.Store
+	queue              *propositionQueue
+	judge              PropositionJudge
+	judgeErr           error
+	now                func() time.Time
+	mu                 sync.Mutex
+	ctx                context.Context
+	cancel             context.CancelFunc
+	done               chan struct{}
 }
 
 func (s *propositionService) register(ctx context.Context, idempotencyKey string, request PropositionRegisterRequest) (PropositionRegisterResponse, error) {
@@ -635,6 +637,9 @@ func (s *propositionService) search(ctx context.Context, request PropositionSear
 		},
 	}
 	if len(request.Embedding) > 0 {
+		if request.EmbeddingModel != "" && !skillVectorMatches(s.archive.VectorConfig(), request.EmbeddingModel, len(request.Embedding)) {
+			return PropositionSearchResponse{}, errors.New("library: proposition query vector does not match active model")
+		}
 		options.Vector = &sessionstore.VectorQuery{Embedding: append([]float32(nil), request.Embedding...)}
 	}
 	if weight > 0 {

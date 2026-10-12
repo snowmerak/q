@@ -4,11 +4,49 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/url"
+	"reflect"
 	"testing"
 
 	"github.com/snowmerak/q/config"
 	"github.com/snowmerak/q/workspace"
 )
+
+type embeddingCatalogRunner struct {
+	settingsRuntimeRunner
+	roots func() ([]string, error)
+}
+
+func (runner *embeddingCatalogRunner) SetEmbeddingWorkspaceResolver(resolver func() ([]string, error)) {
+	runner.roots = resolver
+}
+
+func TestEmbeddingCatalogIncludesProjectAndIndependentSessionRoots(t *testing.T) {
+	dir := t.TempDir()
+	projectRoot, sessionRoot := t.TempDir(), t.TempDir()
+	if _, err := newStudioProjectStore(dir).create(studioProjectUpdateRequest{Name: "project", WorkspaceRoots: []string{projectRoot}}); err != nil {
+		t.Fatal(err)
+	}
+	store, lock, err := workspace.CreateSession(sessionRoot, "independent")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := lock.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := newSessionRegistry(dir).register(sessionRoot, store.SessionID); err != nil {
+		t.Fatal(err)
+	}
+	runner := &embeddingCatalogRunner{}
+	service := newSessionsService(t.Context(), runner, dir)
+	defer func() { _ = service.Close() }()
+	if runner.roots == nil {
+		t.Fatal("embedding workspace catalog was not wired to the runtime")
+	}
+	roots, err := runner.roots()
+	if err != nil || !reflect.DeepEqual(roots, []string{projectRoot, sessionRoot}) {
+		t.Fatalf("embedding workspace catalog = %v, %v", roots, err)
+	}
+}
 
 func TestStudioProjectsGroupSessionsAndResolveAuxiliaryRoots(t *testing.T) {
 	configDirectory := t.TempDir()
