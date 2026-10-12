@@ -18,6 +18,7 @@ export type SessionDetail = {
   workspace_root: string;
   session: SessionSummary;
   transcript: Message[];
+  transcript_thoughts?: { before: number; content: string }[];
   active_task?: { objective: string; completion_criteria?: string[]; started_at: string };
 };
 export type RunEvent = {

@@ -35,12 +35,13 @@ type Session struct {
 	RunID   string `json:"run_id,omitempty"`
 	// LoopMode is retained only so older session files decode under strict JSON validation.
 	// New saves omit it and the application ignores its value.
-	LoopMode      string           `json:"loop_mode,omitempty"`
-	Title         string           `json:"title,omitempty"`
-	UpdatedAt     *time.Time       `json:"updated_at,omitempty"`
-	Transcript    []client.Message `json:"transcript,omitempty"`
-	ResponseUsage []ResponseUsage  `json:"response_usage,omitempty"`
-	Context       []client.Message `json:"context,omitempty"`
+	LoopMode           string              `json:"loop_mode,omitempty"`
+	Title              string              `json:"title,omitempty"`
+	UpdatedAt          *time.Time          `json:"updated_at,omitempty"`
+	Transcript         []client.Message    `json:"transcript,omitempty"`
+	ResponseUsage      []ResponseUsage     `json:"response_usage,omitempty"`
+	TranscriptThoughts []TranscriptThought `json:"transcript_thoughts,omitempty"`
+	Context            []client.Message    `json:"context,omitempty"`
 	// ResponseReplay is private provider state aligned to Context indexes. It
 	// is not included in the searchable conversation archive.
 	ResponseReplay   []ResponseReplayItem  `json:"response_replay,omitempty"`
@@ -79,6 +80,13 @@ type TokenUsage struct {
 type ResponseUsage struct {
 	AssistantIndex int `json:"assistant_index"`
 	TokenUsage
+}
+
+// TranscriptThought is visible model reasoning anchored before a portable
+// transcript message. It is display history, never an extra model-context message.
+type TranscriptThought struct {
+	Before  int    `json:"before"`
+	Content string `json:"content"`
 }
 
 type ResponseAffinity struct {
@@ -411,6 +419,7 @@ func cloneSession(session Session) Session {
 		session.Operation = &operation
 	}
 	session.ResponseUsage = append([]ResponseUsage(nil), session.ResponseUsage...)
+	session.TranscriptThoughts = append([]TranscriptThought(nil), session.TranscriptThoughts...)
 	for index := range session.ResponseUsage {
 		if cached := session.ResponseUsage[index].CachedTokens; cached != nil {
 			value := *cached

@@ -28,3 +28,13 @@ func TestSessionDetailAssociatesUsageWithAssistantMessages(t *testing.T) {
 		t.Fatalf("response usage = %#v", got)
 	}
 }
+
+func TestSessionDetailIncludesPersistedVisibleThoughts(t *testing.T) {
+	detail := detailFromSession("root", workspace.Store{}, workspace.Session{
+		Transcript:         []client.Message{{Role: client.RoleUser, Content: "question"}, {Role: client.RoleAssistant, Content: "answer"}},
+		TranscriptThoughts: []workspace.TranscriptThought{{Before: 1, Content: "visible thought"}, {Before: 2, Content: "partial thought"}},
+	})
+	if len(detail.TranscriptThoughts) != 2 || detail.TranscriptThoughts[0].Before != 1 || detail.TranscriptThoughts[1].Before != len(detail.Transcript) {
+		t.Fatalf("thoughts = %#v", detail.TranscriptThoughts)
+	}
+}

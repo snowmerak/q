@@ -247,3 +247,107 @@ func TestResponsesStreamRejectsMissingCompletion(t *testing.T) {
 		t.Fatalf("missing completion error = %v", err)
 	}
 }
+
+func TestResponsesTerminalEventsReadNestedFailureDetails(t *testing.T) {
+	for _, test := range []struct {
+		name, kind, document, want string
+	}{
+		{"budget", "response.incomplete", `{"status":"incomplete","incomplete_details":{"reason":"max_output_tokens"},"max_output_tokens":256,"usage":{"output_tokens":256,"output_tokens_details":{"reasoning_tokens":256}},"output":[{"type":"function_call","call_id":"cutoff","name":"read_file","arguments":"{"}]}`, "limit=256, output_tokens=256, reasoning_tokens=256"},
+		{"filter", "response.incomplete", `{"status":"incomplete","incomplete_details":{"reason":"content_filter"}}`, "content_filter"},
+		{"failed", "response.failed", `{"status":"failed","error":{"message":"backend unavailable"}}`, "backend unavailable"},
+		{"missing-details", "response.incomplete", `{"status":"incomplete"}`, `status "incomplete"`},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+				writer.Header().Set("Content-Type", "text/event-stream")
+				_, _ = io.WriteString(writer, "data: {\"type\":\"response.reasoning_summary_text.delta\",\"delta\":\"partial thought\"}\n\n")
+				_, _ = io.WriteString(writer, "data: {\"type\":\""+test.kind+"\",\"response\":"+test.document+"}\n\n")
+			}))
+			defer server.Close()
+			configured, err := New(Config{BaseURL: server.URL + "/v1", APIKey: "test", ModelAPIModes: map[string]string{"native/model": "responses"}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = configured.Close() })
+			stream, err := configured.ChatStream(t.Context(), ChatRequest{Model: "native/model", Messages: []Message{{Role: RoleUser, Content: "hi"}}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer stream.Close()
+			first, err := stream.Recv()
+			if err != nil || first.Choices[0].Phase != "commentary" || first.Choices[0].Delta.Content != "partial thought" {
+				t.Fatalf("partial thought: %#v, %v", first, err)
+			}
+			chunk, err := stream.Recv()
+			if chunk != nil || err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("terminal: %#v, %v; want %s", chunk, err, test.want)
+			}
+			if _, err := stream.Recv(); err != io.EOF {
+				t.Fatalf("terminal must be final: %v", err)
+			}
+			response, err := parseResponseDocument(json.RawMessage(test.document), "cache_test", "native/model")
+			if response != nil || err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("non-streaming terminal: %#v, %v", response, err)
+			}
+		})
+	}
+}
+
+func TestResponsesNativeThoughtAndSummaryAreDisplayedOnce(t *testing.T) {
+	for _, first := range []string{"response.reasoning_text.delta", "response.reasoning_summary_text.delta"} {
+		t.Run(first, func(t *testing.T) {
+			second := "response.reasoning_text.delta"
+			if first == second {
+				second = "response.reasoning_summary_text.delta"
+			}
+			server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+				writer.Header().Set("Content-Type", "text/event-stream")
+				for _, kind := range []string{first, second} {
+					for _, delta := range []string{"think", "ing"} {
+						_, _ = io.WriteString(writer, "data: {\"type\":\""+kind+"\",\"output_index\":0,\"delta\":\""+delta+"\"}\n\n")
+					}
+				}
+				_, _ = io.WriteString(writer, "data: {\"type\":\"response.reasoning_summary_text.delta\",\"output_index\":1,\"delta\":\"next\"}\n\n")
+				_, _ = io.WriteString(writer, "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_test\",\"model\":\"native/model\",\"status\":\"completed\",\"output\":[{\"type\":\"reasoning\",\"id\":\"rs_0\",\"content\":[{\"type\":\"reasoning_text\",\"text\":\"thinking\"}]},{\"type\":\"reasoning\",\"id\":\"rs_1\",\"summary\":[{\"type\":\"summary_text\",\"text\":\"next\"}]},{\"type\":\"message\",\"content\":[{\"type\":\"output_text\",\"text\":\"answer\"}]}]}}\n\n")
+			}))
+			defer server.Close()
+			configured, err := New(Config{BaseURL: server.URL + "/v1", APIKey: "test", ModelAPIModes: map[string]string{"native/model": "responses"}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = configured.Close() })
+			stream, err := configured.ChatStream(t.Context(), ChatRequest{Model: "native/model", Messages: []Message{{Role: RoleUser, Content: "hi"}}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer stream.Close()
+			var thought, answer string
+			var nativeOutput []json.RawMessage
+			for {
+				chunk, err := stream.Recv()
+				if err == io.EOF {
+					break
+				}
+				if err != nil {
+					t.Fatal(err)
+				}
+				for _, choice := range chunk.Choices {
+					if choice.Delta == nil {
+						continue
+					}
+					if choice.Phase == "commentary" {
+						thought += choice.Delta.Content
+					} else {
+						answer += choice.Delta.Content
+					}
+					if len(choice.Delta.ResponseOutput) > 0 {
+						nativeOutput = choice.Delta.ResponseOutput
+					}
+				}
+			}
+			if thought != "thinkingnext" || answer != "answer" || len(nativeOutput) != 3 {
+				t.Fatalf("thought=%q answer=%q output=%s", thought, answer, nativeOutput)
+			}
+		})
+	}
+}

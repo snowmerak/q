@@ -51,10 +51,11 @@ type sessionMessage struct {
 }
 
 type sessionDetail struct {
-	WorkspaceRoot string                `json:"workspace_root"`
-	Session       sessionSummary        `json:"session"`
-	Transcript    []sessionMessage      `json:"transcript"`
-	ActiveTask    *workspace.ActiveTask `json:"active_task,omitempty"`
+	WorkspaceRoot      string                        `json:"workspace_root"`
+	Session            sessionSummary                `json:"session"`
+	Transcript         []sessionMessage              `json:"transcript"`
+	TranscriptThoughts []workspace.TranscriptThought `json:"transcript_thoughts,omitempty"`
+	ActiveTask         *workspace.ActiveTask         `json:"active_task,omitempty"`
 }
 
 type sessionListResponse struct {
@@ -436,7 +437,7 @@ func detailFromSession(root string, store workspace.Store, value workspace.Sessi
 			SessionID: store.SessionID, RunID: value.RunID,
 			Title: value.Title, UpdatedAt: updatedAt,
 		},
-		Transcript: transcript, ActiveTask: value.ActiveTask,
+		Transcript: transcript, TranscriptThoughts: value.TranscriptThoughts, ActiveTask: value.ActiveTask,
 	}
 }
 

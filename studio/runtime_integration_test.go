@@ -224,6 +224,9 @@ func studioTestModel(w http.ResponseWriter, r *http.Request) {
 	}
 	if request.Stream {
 		w.Header().Set("Content-Type", "text/event-stream")
+		if strings.Contains(text, "show reasoning") {
+			_, _ = io.WriteString(w, "data: {\"choices\":[{\"index\":0,\"delta\":{\"reasoning_content\":\"Inspecting the request before taking action.\"}}]}\n\n")
+		}
 		calls := []map[string]any{}
 		for i, call := range message.ToolCalls {
 			calls = append(calls, map[string]any{"index": i, "id": call.ID, "type": call.Type, "function": call.Function})

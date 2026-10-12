@@ -1710,6 +1710,7 @@ func (m *model) restoreWorkspaceSession() {
 	interruptedCalls := len(interruptedResults)
 	m.messages = mergeWorkspaceMessages(base, transcript)
 	m.responseUsage = append([]workspace.ResponseUsage(nil), session.ResponseUsage...)
+	m.transcriptThoughts = restoreTranscriptThoughts(base, transcript, session.TranscriptThoughts)
 	requestContext := session.Context
 	if len(requestContext) == 0 {
 		requestContext = session.Transcript
@@ -1909,16 +1910,17 @@ func (m *model) saveWorkspaceSession() error {
 		responseAffinity = &workspace.ResponseAffinity{Model: m.activeModel(), Key: m.conversationID}
 	}
 	err := m.workspaceStore.Save(workspace.Session{
-		RunID:            m.runID,
-		Title:            m.sessionTitle,
-		UpdatedAt:        workspaceTimePointer(m.sessionUpdatedAt),
-		Transcript:       workspaceSessionMessages(m.messages),
-		ResponseUsage:    m.responseUsage,
-		Context:          requestContext,
-		ResponseReplay:   collectResponseReplay(requestContext),
-		ResponseAffinity: responseAffinity,
-		ActiveTask:       cloneActiveTask(m.activeTask),
-		Operation:        m.sessionOperation,
+		RunID:              m.runID,
+		Title:              m.sessionTitle,
+		UpdatedAt:          workspaceTimePointer(m.sessionUpdatedAt),
+		Transcript:         workspaceSessionMessages(m.messages),
+		ResponseUsage:      m.responseUsage,
+		TranscriptThoughts: collectTranscriptThoughts(m.messages, m.transcriptThoughts),
+		Context:            requestContext,
+		ResponseReplay:     collectResponseReplay(requestContext),
+		ResponseAffinity:   responseAffinity,
+		ActiveTask:         cloneActiveTask(m.activeTask),
+		Operation:          m.sessionOperation,
 		Learning: func() thinker.LearningState {
 			if m.learning == nil {
 				return thinker.LearningState{}
@@ -1992,6 +1994,28 @@ func workspaceSessionMessages(messages []client.Message) []client.Message {
 		saved = append(saved, message)
 	}
 	return saved
+}
+
+func collectTranscriptThoughts(messages []client.Message, thoughts []transcriptThought) []workspace.TranscriptThought {
+	saved := make([]workspace.TranscriptThought, 0, len(thoughts))
+	for _, thought := range thoughts {
+		before := min(max(thought.Before, 0), len(messages))
+		saved = append(saved, workspace.TranscriptThought{
+			Before: len(workspaceSessionMessages(messages[:before])), Content: thought.Content,
+		})
+	}
+	return saved
+}
+
+func restoreTranscriptThoughts(base, saved []client.Message, thoughts []workspace.TranscriptThought) []transcriptThought {
+	restored := make([]transcriptThought, 0, len(thoughts))
+	for _, thought := range thoughts {
+		before := min(max(thought.Before, 0), len(saved))
+		restored = append(restored, transcriptThought{
+			Before: len(base) + len(workspaceSessionMessages(saved[:before])), Content: thought.Content,
+		})
+	}
+	return restored
 }
 
 func mergeWorkspaceMessages(base, saved []client.Message) []client.Message {

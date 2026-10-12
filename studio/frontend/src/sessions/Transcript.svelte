@@ -5,6 +5,7 @@
   import type { Message } from './types';
 
   export let messages: Message[] = [];
+  export let thoughts: { before: number; content: string }[] = [];
   export let thinkingDraft = '';
   export let responseDraft = '';
   export let loading = false;
@@ -19,6 +20,9 @@
 
 <div class="transcript" bind:this={transcriptElement} aria-live="polite">
   {#each messages as message, messageIndex (`${messageIndex}-${message.role}-${message.tool_call_id || ''}`)}
+    {#each thoughts.filter((thought) => thought.before === messageIndex && thought.content) as thought}
+      <details class="thinking-block"><summary>Thinking</summary><Markdown compact content={thought.content} {onfile} /></details>
+    {/each}
     {#if message.role === 'user' || message.role === 'assistant'}
       <article class="chat-message" class:user-message={message.role === 'user'}>
         <div class="message-avatar">{#if message.role === 'user'}<User aria-hidden="true" size={16} />{:else}<Bot aria-hidden="true" size={17} />{/if}</div>
@@ -48,6 +52,9 @@
         <Markdown compact content={message.content || '_No output_'} {onfile} />
       </details>
     {/if}
+  {/each}
+  {#each thoughts.filter((thought) => thought.before >= messages.length && thought.content) as thought}
+    <details class="thinking-block"><summary>Thinking</summary><Markdown compact content={thought.content} {onfile} /></details>
   {/each}
   {#if thinkingDraft}<details class="thinking-block"><summary>Thinking</summary><Markdown compact content={thinkingDraft} {onfile} /></details>{/if}
   {#if responseDraft}<article class="chat-message streaming-message"><div class="message-avatar"><Bot aria-hidden="true" size={17} /></div><div class="message-content"><header>Q <span>responding</span></header><Markdown content={responseDraft} {onfile} /></div></article>{/if}

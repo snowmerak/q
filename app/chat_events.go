@@ -166,6 +166,9 @@ func (m model) updateChatResult(message chatResultMsg) (tea.Model, tea.Cmd) {
 	m.streamResponse = ""
 	if message.err != nil {
 		m.turnErr = errors.Join(m.turnErr, message.err)
+		if saveErr := m.saveWorkspaceSession(); saveErr != nil {
+			m.turnErr = errors.Join(m.turnErr, saveErr)
+		}
 		m.compactionTarget = 0
 		m.archiveFailure("chat", message.err)
 		if archiveErr := m.flushArchive(); archiveErr != nil {

@@ -717,7 +717,7 @@
           {#if selected.active_task}<small>The task is still active. Send a message to continue.</small>{/if}
         </div>
       {/if}
-      <Transcript bind:this={transcript} {messages} {thinkingDraft} {responseDraft} loading={sessionLoading} onfile={openFileLink} />
+      <Transcript bind:this={transcript} {messages} thoughts={selectedDelegation ? [] : selected?.transcript_thoughts || []} {thinkingDraft} {responseDraft} loading={sessionLoading} onfile={openFileLink} />
       {#if !selectedDelegation && activeRun?.pending_question}
         <section class="run-question" aria-labelledby="run-question-title">
           <div><span>Q NEEDS INPUT</span><h3 id="run-question-title">{activeRun.pending_question.question}</h3>{#if activeRun.pending_question.context}<p>{activeRun.pending_question.context}</p>{/if}</div>

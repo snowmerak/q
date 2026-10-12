@@ -443,6 +443,38 @@ test('failed runs retain their reason and activity after completion and reload',
   await expect(failure).toHaveCount(0);
 });
 
+for (const failed of [false, true]) {
+  test(`visible reasoning survives ${failed ? 'failure' : 'completion'} and session reload`, async ({ page, request }) => {
+    const fixture = await (await request.get('/_test/fixture')).json();
+    const session = await (await request.post('/api/v1/registered-sessions', { data: { workspace_root: fixture.root, create: true } })).json();
+    const url = `/sessions/${encodeURIComponent(session.registration_id)}`;
+    await page.goto(url);
+    const composer = page.locator('.composer textarea');
+    await composer.fill(failed ? 'show reasoning and fail this turn' : 'show reasoning and write the requested file');
+    await composer.press('Enter');
+    if (failed) await expect(page.getByRole('alert').filter({ hasText: 'fixture model failure' })).toBeVisible();
+    else await expect(page.locator('.transcript').getByRole('heading', { name: 'Studio result' })).toBeVisible();
+    const endpoint = `/api/v1/sessions/${session.session.session_id}?workspace_root=${encodeURIComponent(fixture.root)}`;
+    const detail = await (await request.get(endpoint)).json();
+    expect(detail.transcript_thoughts.length).toBeGreaterThan(0);
+    const blocks = page.locator('.transcript .thinking-block');
+    await expect(blocks).toHaveCount(detail.transcript_thoughts.length);
+    await blocks.first().locator('summary').click();
+    await expect(blocks.first()).toContainText('Inspecting the request before taking action.');
+    for (const width of [1440, 390]) {
+      await page.setViewportSize({ width, height: 900 });
+      await page.reload();
+      await expect(page).toHaveURL(new RegExp(url + '$'));
+      await expect(page).toHaveTitle('Q Studio');
+      await expect(blocks).toHaveCount(detail.transcript_thoughts.length);
+      await blocks.first().locator('summary').click();
+      await expect(blocks.first()).toContainText('Inspecting the request before taking action.');
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+      await page.screenshot({ path: join(tmpdir(), `q-studio-reasoning-${failed ? 'failed' : 'completed'}-${width}.png`) });
+    }
+  });
+}
+
 test('stopped runs retain the cancellation reason after reload', async ({ page, request }) => {
   const fixture = await (await request.get('/_test/fixture')).json();
   const session = await (await request.post('/api/v1/registered-sessions', { data: { workspace_root: fixture.root, create: true } })).json();

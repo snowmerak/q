@@ -22,8 +22,12 @@ type responseDocument struct {
 	Error  *struct {
 		Message string `json:"message"`
 	} `json:"error"`
-	Output []json.RawMessage `json:"output"`
-	Usage  struct {
+	IncompleteDetails *struct {
+		Reason string `json:"reason"`
+	} `json:"incomplete_details"`
+	MaxOutputTokens *int              `json:"max_output_tokens"`
+	Output          []json.RawMessage `json:"output"`
+	Usage           struct {
 		InputTokens  int `json:"input_tokens"`
 		OutputTokens int `json:"output_tokens"`
 		TotalTokens  int `json:"total_tokens"`
@@ -31,7 +35,24 @@ type responseDocument struct {
 			CachedTokens     int `json:"cached_tokens"`
 			CacheWriteTokens int `json:"cache_write_tokens"`
 		} `json:"input_tokens_details"`
+		OutputDetails struct {
+			ReasoningTokens int `json:"reasoning_tokens"`
+		} `json:"output_tokens_details"`
 	} `json:"usage"`
+}
+
+func responseFailureMessage(document responseDocument) string {
+	if document.Error != nil && document.Error.Message != "" {
+		return document.Error.Message
+	}
+	if document.IncompleteDetails != nil && document.IncompleteDetails.Reason != "" {
+		if document.IncompleteDetails.Reason == "max_output_tokens" && document.MaxOutputTokens != nil {
+			return fmt.Sprintf("max_output_tokens limit reached (limit=%d, output_tokens=%d, reasoning_tokens=%d)",
+				*document.MaxOutputTokens, document.Usage.OutputTokens, document.Usage.OutputDetails.ReasoningTokens)
+		}
+		return document.IncompleteDetails.Reason
+	}
+	return fmt.Sprintf("response ended with status %q", document.Status)
 }
 
 func responseAffinity(conversationID string) (string, error) {
@@ -220,10 +241,10 @@ func parseResponseDocument(body json.RawMessage, affinity, requestedModel string
 		return nil, fmt.Errorf("client: decode Responses reply: %w", err)
 	}
 	if document.Error != nil {
-		return nil, fmt.Errorf("client: Responses failed: %s", document.Error.Message)
+		return nil, fmt.Errorf("client: Responses failed: %s", responseFailureMessage(document))
 	}
 	if document.Status != "completed" {
-		return nil, fmt.Errorf("client: Responses ended with status %q", document.Status)
+		return nil, fmt.Errorf("client: Responses ended with status %q: %s", document.Status, responseFailureMessage(document))
 	}
 	if document.Output == nil {
 		return nil, errors.New("client: Responses reply has no output array")
@@ -345,13 +366,14 @@ func (c *Client) responsesChatStream(ctx context.Context, request ChatRequest) (
 }
 
 type responsesChunkStream struct {
-	inner     ResponseStream
-	model     string
-	affinity  string
-	text      strings.Builder
-	completed bool
-	output    map[int]json.RawMessage
-	phases    map[int]string
+	inner            ResponseStream
+	model            string
+	affinity         string
+	text             strings.Builder
+	completed        bool
+	output           map[int]json.RawMessage
+	phases           map[int]string
+	reasoningSources map[int]string
 }
 
 func (s *responsesChunkStream) Close() error { return s.inner.Close() }
@@ -413,7 +435,19 @@ func (s *responsesChunkStream) Recv() (*ChatChunk, error) {
 				s.text.WriteString(data.Delta)
 			}
 			return &ChatChunk{Model: s.model, Choices: []Choice{{Index: 0, Phase: phase, Delta: &Message{Role: RoleAssistant, Content: data.Delta}}}}, nil
-		case "response.reasoning_summary_text.delta":
+		case "response.reasoning_summary_text.delta", "response.reasoning_text.delta":
+			if data.Delta == "" {
+				continue
+			}
+			if s.reasoningSources == nil {
+				s.reasoningSources = make(map[int]string)
+			}
+			// Compatible servers may send both native thought and summary text.
+			// Display one channel per item, while retaining the native output for replay.
+			if source := s.reasoningSources[data.OutputIndex]; source != "" && source != kind {
+				continue
+			}
+			s.reasoningSources[data.OutputIndex] = kind
 			return &ChatChunk{Model: s.model, Choices: []Choice{{Index: 0, Phase: "commentary", Delta: &Message{Role: RoleAssistant, Content: data.Delta}}}}, nil
 		case "response.output_item.done":
 			if s.output == nil {
@@ -425,6 +459,19 @@ func (s *responsesChunkStream) Recv() (*ChatChunk, error) {
 			if data.Error != nil && data.Error.Message != "" {
 				message = data.Error.Message
 			}
+			if len(data.Response) > 0 {
+				var document responseDocument
+				if err := json.Unmarshal(data.Response, &document); err != nil {
+					return nil, fmt.Errorf("client: decode Responses terminal event: %w", err)
+				}
+				if document.Error != nil || document.IncompleteDetails != nil || message == "" {
+					message = responseFailureMessage(document)
+				}
+			}
+			if message == "" {
+				message = "no error details provided"
+			}
+			s.completed = true
 			return nil, fmt.Errorf("client: Responses stream %s: %s", kind, message)
 		case "response.completed":
 			body := data.Response
