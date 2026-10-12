@@ -25,6 +25,7 @@ import (
 	qlibrary "github.com/snowmerak/q/library"
 	"github.com/snowmerak/q/loom"
 	"github.com/snowmerak/q/providerhost"
+	"github.com/snowmerak/q/sessionstore"
 	"github.com/snowmerak/q/usagelog"
 	"github.com/snowmerak/q/workspace"
 	"github.com/snowmerak/q/workspacememory"
@@ -133,6 +134,25 @@ func newStudioIntegration(t *testing.T) studioIntegration {
 // Only the model is substituted: HTTP, Gateway, SessionHost, tools, event log
 // and workspace storage all run normally against disposable local resources.
 func studioTestModel(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path == "/v1/embeddings" {
+		var request struct {
+			Model      string   `json:"model"`
+			Input      []string `json:"input"`
+			Dimensions int      `json:"dimensions"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil || request.Dimensions <= 0 {
+			http.Error(w, "invalid embedding request", http.StatusBadRequest)
+			return
+		}
+		data := make([]client.Embedding, len(request.Input))
+		for index := range data {
+			vector := make([]float64, request.Dimensions)
+			vector[0] = 1
+			data[index] = client.Embedding{Index: index, Embedding: vector}
+		}
+		writeJSON(w, http.StatusOK, client.EmbeddingResponse{Model: request.Model, Data: data})
+		return
+	}
 	if r.URL.Path == "/v1/models" {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = io.WriteString(w, `{"object":"list","data":[{"id":"test-model","object":"model"}]}`)
@@ -488,6 +508,17 @@ func TestStudioBrowserFixture(t *testing.T) {
 	tree := seedStudioBrowserDelegations(t)
 	gitRoot, gitOther := seedStudioBrowserChanges(t, 42), seedStudioBrowserChanges(t, 84)
 	files, filesWorktree := seedStudioBrowserFiles(t)
+	embeddingRoot := t.TempDir()
+	embeddingArchive, err := sessionstore.OpenWithOptions(embeddingRoot, sessionstore.OpenOptions{Vector: sessionstore.VectorConfig{Model: "previous", Dimensions: 2}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := embeddingArchive.Save(sessionstore.Record{ID: "old-embedding", Kind: "message", Content: "History in an unregistered workspace", Embedding: &sessionstore.Embedding{Model: "previous", Dimensions: 2, Vector: []float32{1, 0}}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := embeddingArchive.Close(); err != nil {
+		t.Fatal(err)
+	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /_test/fixture", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, map[string]string{
@@ -497,6 +528,7 @@ func TestStudioBrowserFixture(t *testing.T) {
 			"git_root": gitRoot, "git_other": gitOther,
 			"decision_uri": decisionURI,
 			"files_root":   files.Root, "files_session_id": files.SessionID, "files_worktree": filesWorktree,
+			"embedding_root": embeddingRoot,
 		})
 	})
 	mux.HandleFunc("POST /_test/shutdown", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(204); once.Do(func() { close(closed) }) })

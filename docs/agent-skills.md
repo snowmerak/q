@@ -46,6 +46,60 @@ Planner review runners. A profile's `tools` list controls its additional tools,
 not this fixed set. An inner subagent cannot start when either skill tool is
 missing from its runtime catalog.
 
+## Embedding status
+
+Studio exposes a read-only embedding coverage query at
+`GET /api/v1/embeddings/status`, also available under **Settings → Embeddings**.
+It reports the configured model and dimensions, current/missing/outdated eligible
+records, stored vector models, invalid vectors, unreadable files, and persisted
+index configuration for the global Library and workspace archives. The optional
+`workspace_root` parameter adds an absolute workspace path to the inspection.
+Registered project and session roots are included automatically; existing sibling
+archives in their parent directories are discovered without recursive traversal
+or registration. `discovery_roots` describes that discovery scope, with at most
+1,000 entries inspected per parent. This is not an inventory of every archive
+on disk.
+
+Counts use the same eligibility and projection matching rules as embedding
+migration: empty text and `archive-read` records are excluded, and a partial set
+of projections counts as outdated. `current` describes model/dimension/projection
+coverage, not a verification that a vector represents the latest source text.
+`complete: false`, per-archive `issues`, and top-level `warnings` distinguish
+partial inspection from zero missing records. `state` is `current`, `pending`,
+`absent`, `disabled`, or `error`; `pending` includes mismatched or missing index
+metadata. Index metadata is persisted state, not a live HNSW search probe.
+The response records observation start and completion times; concurrent writes
+can appear across the scan, so it is not a transactional snapshot. Inspection
+does not open indexes, acquire workspace leases, call the embedding provider,
+or create or repair archives. The screen refreshes every 15 seconds while open
+and supports manual refresh and inspection of another workspace path.
+
+Manual repair is available through **Sync** on an archive row or **Sync all**.
+`POST /api/v1/embeddings/sync` accepts `{"scope":"global"}`, or
+`{"scope":"workspace","workspace_root":"<absolute path>"}`, or
+`{"scope":"all","workspace_root":"<optional additional absolute path>"}`.
+It returns **202 Accepted** with a job ID and a `Location` for
+`GET /api/v1/embeddings/sync/{job}`. Acceptance means a process-owned background
+job was started, not that migration finished. The status response also includes
+the latest `sync_job`, so navigation can reconnect to its progress. Jobs expose
+archive totals, completed/failed counts, records updated, and per-archive errors.
+They are retained for the current Studio process, with at most 32 recent jobs;
+restart clears this history. Studio shutdown cancels and drains active work.
+
+Only one manual job runs at once. An identical request reuses the active job;
+a different overlapping request returns 409. Disabled embeddings return 409,
+and a missing runtime returns 503. The job uses saved model settings, not model
+parameters supplied by a caller. A model change during sync fails the job for
+retry; provider responses generated for a superseded model are rejected. Each
+archive has a five-minute deadline. Successful records remain saved when a
+later batch or another archive fails, and retries fill only missing/outdated
+vectors. Workspace sync targets one existing archive and does not create absent
+archives. Sync all uses the same discovery scope as status, skips current and
+absent archives, continues after individual failures, and reports incomplete
+discovery as a failure rather than claiming full completion. Automatic repair
+on normal use remains enabled. During manual sync the screen refreshes every
+three seconds and returns to its ordinary refresh interval after completion.
+
 ## Contextual discovery
 
 In the main chat, when both tools are available, q performs host-side candidate

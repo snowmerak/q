@@ -27,11 +27,12 @@ type sessionCompactor interface {
 }
 
 type sessionsService struct {
-	runner   sessionRunner
-	runs     *sessionRunService
-	registry *sessionRegistry
-	projects *studioProjectStore
-	councils *councilService
+	runner        sessionRunner
+	runs          *sessionRunService
+	registry      *sessionRegistry
+	projects      *studioProjectStore
+	councils      *councilService
+	embeddingSync *embeddingSyncService
 }
 
 type sessionSummary struct {
@@ -127,7 +128,7 @@ func (service *sessionsService) Close() error {
 	if service == nil {
 		return nil
 	}
-	return errors.Join(service.runs.Close(), service.councils.Close())
+	return errors.Join(service.embeddingSync.Close(), service.runs.Close(), service.councils.Close())
 }
 
 func (service *sessionsService) serveDirectoryListing(writer http.ResponseWriter, request *http.Request) {

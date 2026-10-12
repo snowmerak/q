@@ -616,6 +616,10 @@ func (s *Store) rebuildVectorsLocked() error {
 }
 
 func (s *Store) loadRecordFileLocked(path string) (Record, error) {
+	return readRecordFile(path)
+}
+
+func readRecordFile(path string) (Record, error) {
 	file, err := fsopen.Open(path)
 	if err != nil {
 		return Record{}, fmt.Errorf("sessionstore: open source record %s: %w", path, err)

@@ -245,12 +245,19 @@ func (host *SessionHost) Close() error {
 }
 
 func (host *SessionHost) ensureProvider(loaded config.Config) (config.Config, error) {
+	return host.ensureProviderContext(host.ctx, loaded)
+}
+
+func (host *SessionHost) ensureProviderContext(ctx context.Context, loaded config.Config) (config.Config, error) {
 	host.providerMu.Lock()
 	defer host.providerMu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return loaded, err
+	}
 	if host.providerReady {
 		return loaded, nil
 	}
-	initialized, err := initializeManagedProvider(host.ctx, host.store, host.manager, loaded, nil)
+	initialized, err := initializeManagedProvider(ctx, host.store, host.manager, loaded, nil)
 	if err != nil {
 		return loaded, err
 	}

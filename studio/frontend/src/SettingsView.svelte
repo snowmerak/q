@@ -1,10 +1,11 @@
 <script lang="ts">
-  import { ArrowLeftRight, Bot, BrainCircuit, Cpu, Network, Palette, Server, SlidersHorizontal, Unplug } from '@lucide/svelte';
+  import { ArrowLeftRight, Bot, BrainCircuit, Cpu, Database, Network, Palette, Server, SlidersHorizontal, Unplug } from '@lucide/svelte';
   import { onMount } from 'svelte';
   import { requestJSON } from './api';
   import IntegrationsView from './IntegrationsView.svelte';
   import SubagentsView from './SubagentsView.svelte';
   import ModelsPanel from './settings/ModelsPanel.svelte';
+  import EmbeddingsPanel from './settings/EmbeddingsPanel.svelte';
   import AppearancePanel from './settings/AppearancePanel.svelte';
   import ProvidersPanel from './settings/ProvidersPanel.svelte';
   import SystemOnePanel from './settings/SystemOnePanel.svelte';
@@ -19,6 +20,7 @@
   const settingsSections = [
     { id: 'appearance' as const, label: 'Appearance', description: 'Theme and text size', icon: Palette },
     { id: 'models' as const, label: 'Models', description: 'Chat, embedding, and role assignments', icon: Cpu },
+    { id: 'embeddings' as const, label: 'Embeddings', description: 'Coverage and model consistency', icon: Database },
     { id: 'providers' as const, label: 'Providers', description: 'Gateway upstream providers', icon: Network },
     { id: 'system-one' as const, label: 'System One', description: 'Decision API and access keys', icon: BrainCircuit },
     { id: 'runtime' as const, label: 'Runtime', description: 'Execution, context, and storage', icon: SlidersHorizontal },
@@ -137,9 +139,11 @@
     </aside>
 
     <div class="settings-content">
-      <div class="save-state" hidden={activeSection === 'appearance'} class:error={saveState.kind === 'error'} aria-live="polite">{saveState.kind === 'saving' ? 'Saving…' : saveState.kind === 'saved' ? 'Saved' : saveState.kind === 'error' ? saveState.message : 'Changes save automatically'}</div>
+      <div class="save-state" hidden={activeSection === 'appearance' || activeSection === 'embeddings'} class:error={saveState.kind === 'error'} aria-live="polite">{saveState.kind === 'saving' ? 'Saving…' : saveState.kind === 'saved' ? 'Saved' : saveState.kind === 'error' ? saveState.message : 'Changes save automatically'}</div>
       {#if activeSection === 'appearance'}
         <AppearancePanel />
+      {:else if activeSection === 'embeddings'}
+        {#if active}<EmbeddingsPanel />{/if}
       {:else if settingsError}
         <section class="error-panel"><h2>Settings unavailable</h2><p>{settingsError}</p><button class="retry" onclick={loadSettings}>Retry</button></section>
       {:else if !settings}

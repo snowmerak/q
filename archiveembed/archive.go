@@ -74,13 +74,33 @@ func New(store Store) *Archive {
 // Configure enables record and query embedding and switches the Store's
 // rebuildable vector graph to the selected model.
 func (a *Archive) Configure(provider embedding.Provider, model string, dimensions int) error {
+	return a.ConfigureContext(context.Background(), provider, model, dimensions)
+}
+
+// ConfigureContext forwards the operation's cancellation and deadline to stores
+// that support contextual vector configuration, including remote archives.
+func (a *Archive) ConfigureContext(ctx context.Context, provider embedding.Provider, model string, dimensions int) error {
 	if a == nil || a.Store == nil {
 		return errors.New("archive embedding: store is unavailable")
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	configure := func(config sessionstore.VectorConfig) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if contextual, ok := a.Store.(interface {
+			ConfigureVectorContext(context.Context, sessionstore.VectorConfig) error
+		}); ok {
+			return contextual.ConfigureVectorContext(ctx, config)
+		}
+		return a.ConfigureVector(config)
 	}
 	if model == "" && dimensions == 0 {
 		a.mu.Lock()
 		defer a.mu.Unlock()
-		if err := a.ConfigureVector(sessionstore.VectorConfig{}); err != nil {
+		if err := configure(sessionstore.VectorConfig{}); err != nil {
 			return err
 		}
 		a.provider, a.vectorizer = provider, nil
@@ -92,7 +112,7 @@ func (a *Archive) Configure(provider embedding.Provider, model string, dimension
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	if err := a.ConfigureVector(sessionstore.VectorConfig{
+	if err := configure(sessionstore.VectorConfig{
 		Model: vectorizer.Model(), Dimensions: vectorizer.Dimensions(),
 	}); err != nil {
 		return fmt.Errorf("archive embedding: configure vector index: %w", err)

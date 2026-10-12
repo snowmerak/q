@@ -3,9 +3,11 @@ package archiveembed
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/snowmerak/q/client"
 	"github.com/snowmerak/q/sessionstore"
@@ -47,6 +49,38 @@ type interfaceArchiveStore struct {
 	records    map[string]sessionstore.Record
 	search     sessionstore.SearchResult
 	options    sessionstore.SearchOptions
+}
+
+type cancellingArchiveStore struct {
+	interfaceArchiveStore
+	context context.Context
+}
+
+func (s *cancellingArchiveStore) ConfigureVectorContext(ctx context.Context, _ sessionstore.VectorConfig) error {
+	s.context = ctx
+	<-ctx.Done()
+	return ctx.Err()
+}
+
+func TestArchiveConfigureContextCancelsRemoteConfiguration(t *testing.T) {
+	for _, disabled := range []bool{false, true} {
+		t.Run(fmt.Sprint(disabled), func(t *testing.T) {
+			store := &cancellingArchiveStore{}
+			archive := New(store)
+			ctx, cancel := context.WithTimeout(t.Context(), 20*time.Millisecond)
+			defer cancel()
+			model, dimensions := "embed-test", 3
+			if disabled {
+				model, dimensions = "", 0
+			}
+			if err := archive.ConfigureContext(ctx, &testEmbedder{}, model, dimensions); !errors.Is(err, context.DeadlineExceeded) {
+				t.Fatalf("configure error = %v", err)
+			}
+			if store.context != ctx || archive.vectorizer != nil || store.configured.Enabled() {
+				t.Fatal("cancelled configuration must use the caller context and leave embedding disabled")
+			}
+		})
+	}
 }
 
 func (s *interfaceArchiveStore) ConfigureVector(config sessionstore.VectorConfig) error {
