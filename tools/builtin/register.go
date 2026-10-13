@@ -8,6 +8,7 @@ import (
 	"github.com/snowmerak/q/agentskills"
 	"github.com/snowmerak/q/lsp"
 	"github.com/snowmerak/q/sessionstore"
+	"github.com/snowmerak/q/webbrowser"
 )
 
 type Dependencies struct {
@@ -20,6 +21,8 @@ type Dependencies struct {
 	ArchiveRanker ArchiveRanker
 	Propositions  PropositionLibrary
 	LSP           lsp.Service
+	Browser       *webbrowser.Runtime
+	WebSearch     WebSearcher
 }
 
 // Register adds the root-jailed builtin tools to server. Optional workspace
@@ -36,6 +39,9 @@ func RegisterWithRoots(server *mcp.Server, root string, additional []string, dep
 		return nil, err
 	}
 	readOnly := true
+	if dependencies.WebSearch != nil {
+		registerWebSearch(server, dependencies.WebSearch)
+	}
 	destructive := true
 	nonDestructive := false
 
@@ -207,6 +213,9 @@ func RegisterWithRoots(server *mcp.Server, root string, additional []string, dep
 	}
 	if dependencies.LSP != nil {
 		registerLSP(server, dependencies.LSP)
+	}
+	if dependencies.Browser != nil {
+		registerBrowser(server, dependencies.Browser)
 	}
 
 	return fs, nil

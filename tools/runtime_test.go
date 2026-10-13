@@ -62,7 +62,7 @@ func TestRuntimeListsAndCallsBuiltinTools(t *testing.T) {
 			t.Error(err)
 		}
 	}()
-	if len(runtime.Tools()) != 15 {
+	if len(runtime.Tools()) != 23 {
 		t.Fatalf("runtime tools = %d", len(runtime.Tools()))
 	}
 	tools := runtime.Tools()
@@ -487,7 +487,7 @@ func TestRuntimeExposesAndCallsArchiveTools(t *testing.T) {
 			t.Error(err)
 		}
 	}()
-	if len(runtime.Tools()) != 19 || !runtimeHasTool(runtime, "search_archive") || !runtimeHasTool(runtime, "get_archive_record") {
+	if len(runtime.Tools()) != 27 || !runtimeHasTool(runtime, "search_archive") || !runtimeHasTool(runtime, "get_archive_record") {
 		t.Fatalf("runtime tools = %#v", runtime.Tools())
 	}
 

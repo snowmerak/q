@@ -1,0 +1,11 @@
+{
+  "started_at": "2026-10-13T15:46:38.5920846+09:00",
+  "finished_at": "2026-10-13T15:50:24.1841542+09:00",
+  "elapsed_seconds": 225.5850903,
+  "coverage_timeout_seconds": 1800,
+  "search_timeout_seconds": 2100,
+  "smoke_timeout_seconds": 2160,
+  "input": "web-search-tool-go-document-input.json",
+  "result": "web-search-tool-go-document-qwen-finish-30m-result.json",
+  "exit_code": 0
+}

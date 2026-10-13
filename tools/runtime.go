@@ -21,6 +21,7 @@ import (
 	"github.com/snowmerak/q/mcpconfig"
 	"github.com/snowmerak/q/sessionstore"
 	"github.com/snowmerak/q/tools/builtin"
+	"github.com/snowmerak/q/webbrowser"
 	qworkspace "github.com/snowmerak/q/workspace"
 )
 
@@ -53,6 +54,7 @@ func sameRuntimeRoots(root string) RuntimeRoots {
 }
 
 type runtimeOptions struct {
+	webSearch     builtin.WebSearcher
 	skillRanker   builtin.SkillRanker
 	archiveRanker builtin.ArchiveRanker
 }
@@ -75,9 +77,11 @@ type CaptureSource struct {
 
 // Runtime connects q's chat loop to the builtin MCP server in-process.
 type Runtime struct {
+	webSearch      builtin.WebSearcher
 	client         *mcp.ClientSession
 	server         *mcp.ServerSession
 	fs             *builtin.FS
+	browser        *webbrowser.Runtime
 	loom           *builtin.LoomRuntime
 	lsp            lsp.Service
 	skills         *agentskills.Registry
@@ -97,6 +101,7 @@ type Runtime struct {
 }
 
 type runtimeTemplate struct {
+	webSearch     builtin.WebSearcher
 	roots         RuntimeRoots
 	archive       builtin.Archive
 	loomOptions   loom.StoreOptions
@@ -229,7 +234,7 @@ func NewRuntimeWithRoots(
 		roots: roots, archive: archive, loomOptions: options,
 		globalLSP: global, workspaceLSP: workspace,
 		globalSkills: globalSkills, skillRanker: runtime.skillRanker,
-		archiveRanker: runtime.archiveRanker,
+		archiveRanker: runtime.archiveRanker, webSearch: runtime.webSearch,
 	}
 	return runtime, nil
 }
@@ -249,6 +254,7 @@ func (r *Runtime) NewCheckoutRuntime(ctx context.Context, checkoutRoot string) (
 		func(options *runtimeOptions) {
 			options.skillRanker = template.skillRanker
 			options.archiveRanker = template.archiveRanker
+			options.webSearch = template.webSearch
 		},
 	)
 	if err != nil {
@@ -341,9 +347,9 @@ func newRuntimeWithLSP(
 	if err != nil {
 		return nil, err
 	}
-	server, fs, skills, err := newServer(
+	server, fs, skills, browser, err := newServer(
 		roots.CheckoutRoot, roots.AuxiliaryCheckoutRoots, roots.WorkspaceStateRoot,
-		archive, skillStore, loomRuntime, lspManager, globalSkills, optionsValue.skillRanker, optionsValue.archiveRanker,
+		archive, skillStore, loomRuntime, lspManager, globalSkills, optionsValue.skillRanker, optionsValue.archiveRanker, optionsValue.webSearch,
 	)
 	if err != nil {
 		return nil, err
@@ -353,18 +359,20 @@ func newRuntimeWithLSP(
 	serverSession, err := server.Connect(ctx, serverTransport, nil)
 	if err != nil {
 		fs.Close()
+		_ = browser.Close()
 		return nil, fmt.Errorf("tools: connect builtin MCP server: %w", err)
 	}
 	clientSession, err := mcp.NewClient(&mcp.Implementation{Name: "q", Version: ServerVersion}, nil).Connect(ctx, clientTransport, nil)
 	if err != nil {
 		_ = serverSession.Close()
 		fs.Close()
+		_ = browser.Close()
 		return nil, fmt.Errorf("tools: connect builtin MCP client: %w", err)
 	}
 	runtime := &Runtime{
-		client: clientSession, server: serverSession, fs: fs, loom: loomRuntime, lsp: lspManager,
+		client: clientSession, server: serverSession, fs: fs, browser: browser, loom: loomRuntime, lsp: lspManager,
 		skills: skills, skillStore: skillStore, globalSkills: globalSkills, skillRanker: optionsValue.skillRanker,
-		archiveRanker:  optionsValue.archiveRanker,
+		archiveRanker: optionsValue.archiveRanker, webSearch: optionsValue.webSearch,
 		skillRefreshAt: time.Now().Add(skillRefreshInterval),
 	}
 	listed, err := clientSession.ListTools(ctx, nil)
@@ -872,6 +880,9 @@ func (r *Runtime) Close() error {
 		}
 		if r.fs != nil {
 			r.fs.Close()
+		}
+		if r.browser != nil {
+			closeErr = errors.Join(closeErr, r.browser.Close())
 		}
 		if r.lsp != nil {
 			closeErr = errors.Join(closeErr, r.lsp.Close())

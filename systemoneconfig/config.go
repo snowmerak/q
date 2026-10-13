@@ -24,6 +24,8 @@ const (
 	Version                = 2
 	RoleAgentSkillDecision = "agent_skill_decision"
 	RoleArchiveDecision    = "archive_decision"
+	RoleWebSearch          = "web_search"
+	RoleWebSearchFinish    = "web_search_finish"
 )
 
 type ServerConfig struct {

@@ -20,6 +20,7 @@ import (
 	"github.com/snowmerak/q/systemoneconfig"
 	"github.com/snowmerak/q/tools/builtin"
 	"github.com/snowmerak/q/usagelog"
+	"github.com/snowmerak/q/webbrowser"
 	"github.com/snowmerak/q/workspace"
 	"github.com/snowmerak/q/workspacememory"
 )
@@ -35,7 +36,7 @@ func NewServer(root string) (*mcp.Server, error) {
 	if err != nil {
 		return nil, err
 	}
-	server, _, _, err := newServer(root, nil, root, nil, nil, loomRuntime, nil, nil, nil, nil)
+	server, _, _, _, err := newServer(root, nil, root, nil, nil, loomRuntime, nil, nil, nil, nil)
 	return server, err
 }
 
@@ -46,7 +47,7 @@ func NewServerWithArchive(root string, archive builtin.Archive) (*mcp.Server, er
 	if err != nil {
 		return nil, err
 	}
-	server, _, _, err := newServer(root, nil, root, archive, skillStoreFromArchive(archive), loomRuntime, nil, nil, nil, nil)
+	server, _, _, _, err := newServer(root, nil, root, archive, skillStoreFromArchive(archive), loomRuntime, nil, nil, nil, nil)
 	return server, err
 }
 
@@ -61,10 +62,11 @@ func newServer(
 	globalSkills builtin.GlobalSkillLibrary,
 	skillRanker builtin.SkillRanker,
 	archiveRanker builtin.ArchiveRanker,
-) (*mcp.Server, *builtin.FS, *agentskills.Registry, error) {
+	webServices ...builtin.WebSearcher,
+) (*mcp.Server, *builtin.FS, *agentskills.Registry, *webbrowser.Runtime, error) {
 	skills, err := agentskills.DiscoverWorkspaceRoots(checkoutRoot, auxiliaryCheckoutRoots, workspaceStateRoot)
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, nil, nil, err
 	}
 	if skillStore != nil {
 		var syncErr error
@@ -74,7 +76,7 @@ func newServer(
 			syncErr = skills.SyncRecordsForScopes(context.Background(), skillStore, "project")
 		}
 		if syncErr != nil {
-			return nil, nil, nil, fmt.Errorf("tools: index Agent Skills: %w", syncErr)
+			return nil, nil, nil, nil, fmt.Errorf("tools: index Agent Skills: %w", syncErr)
 		}
 	}
 	server := mcp.NewServer(&mcp.Implementation{
@@ -82,14 +84,19 @@ func newServer(
 		Version: ServerVersion,
 	}, nil)
 	propositions, _ := globalSkills.(builtin.PropositionLibrary)
+	browser := webbrowser.New()
+	var webSearch builtin.WebSearcher = &configuredWebSearch{}
+	if len(webServices) > 0 && webServices[0] != nil {
+		webSearch = webServices[0]
+	}
 	fs, err := builtin.RegisterWithRoots(server, checkoutRoot, auxiliaryCheckoutRoots, builtin.Dependencies{
 		Archive: archive, Loom: loomRuntime, Skills: skills, SkillStore: skillStore, GlobalSkills: globalSkills,
-		SkillRanker: skillRanker, ArchiveRanker: archiveRanker, Propositions: propositions, LSP: lspManager,
+		SkillRanker: skillRanker, ArchiveRanker: archiveRanker, Propositions: propositions, LSP: lspManager, Browser: browser, WebSearch: webSearch,
 	})
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, nil, nil, err
 	}
-	return server, fs, skills, nil
+	return server, fs, skills, browser, nil
 }
 
 func newLoomRuntime(root string, evaluator loom.Evaluator, options loom.StoreOptions) (*builtin.LoomRuntime, error) {
@@ -250,7 +257,7 @@ func RunStdioWithLoomOptions(ctx context.Context, root string, options loom.Stor
 	if libraryRuntime != nil {
 		defer func() { runErr = errors.Join(runErr, libraryRuntime.Close()) }()
 	}
-	server, fs, _, err := newServer(
+	server, fs, _, browser, err := newServer(
 		root, nil, root, semanticArchive, semanticArchive, loomRuntime, lspManager, globalSkills,
 		&systemOneSkillRanker{store: systemoneconfig.Store{Dir: configStore.Dir}},
 		&systemOneArchiveRanker{store: systemoneconfig.Store{Dir: configStore.Dir}},
@@ -259,6 +266,7 @@ func RunStdioWithLoomOptions(ctx context.Context, root string, options loom.Stor
 		return err
 	}
 	defer fs.Close()
+	defer func() { runErr = errors.Join(runErr, browser.Close()) }()
 	return server.Run(ctx, &mcp.StdioTransport{})
 }
 

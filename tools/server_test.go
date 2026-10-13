@@ -37,8 +37,8 @@ func TestServerListsAndCallsBuiltinTools(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(listed.Tools) != 14 {
-		t.Fatalf("listed %d tools; want 14", len(listed.Tools))
+	if len(listed.Tools) != 22 {
+		t.Fatalf("listed %d tools; want 22", len(listed.Tools))
 	}
 	for _, tool := range listed.Tools {
 		if tool.Name == "learn" {

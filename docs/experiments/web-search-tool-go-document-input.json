@@ -1,0 +1,11 @@
+{
+  "goal": "Find official Go documentation: why must callers invoke a context CancelFunc, and does calling it wait for the work to stop?",
+  "query": "Go context CancelFunc documentation call cancel wait work stop",
+  "requirements": [
+    "Why callers should invoke a context CancelFunc",
+    "Whether calling CancelFunc waits for the work to stop"
+  ],
+  "allowed_domains": ["pkg.go.dev", "go.dev"],
+  "start_url": "https://pkg.go.dev/context",
+  "max_steps": 8
+}
