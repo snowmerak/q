@@ -793,6 +793,7 @@ func pendingGeneralTools(messages []client.Message) ([]client.ToolCall, int) {
 }
 
 func (r *GeneralRunner) completeGeneralCalls(ctx context.Context, state *GeneralRunState, history *ContextCompactor, available []client.Tool, taskID string, lifecycle *Lifecycle, started *bool, checkpoint func() error) (TaskResult, bool, error) {
+	ctx = client.WithToolModel(ctx, r.Spec.toolModel(r.Client, r.WorkingDirectory))
 	calls, completed := pendingGeneralTools(state.Transcript)
 	if completed >= len(calls) {
 		return TaskResult{}, false, nil

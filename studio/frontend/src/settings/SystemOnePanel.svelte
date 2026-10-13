@@ -36,7 +36,7 @@
     }
   }
 
-  function saveSystemOneModel(target: 'default' | 'agent-skill-decision' | 'archive-decision', model: string) {
+  function saveSystemOneModel(target: 'default' | 'agent-skill-decision' | 'archive-decision' | 'web-search' | 'web-search-finish', model: string) {
     queueSave(() => putSettings(`/api/v1/settings/system-one/models/${target}`, JSON.stringify({ model })));
   }
 
@@ -140,6 +140,26 @@
       </select></label>
     </div>
   </div>
+
+  <div class="settings-card assignment-list system-one-assignments">
+    <div class="assignment-row system-one-assignment">
+      <div><strong>Web Search Navigation</strong><small>Chooses navigation and evidence collection actions</small></div>
+      <label><span>Model</span><select bind:value={settings.system_one.web_search_model} onchange={() => saveSystemOneModel('web-search', settings.system_one.web_search_model)} disabled={systemOneModelsLoading}>
+        <option value="">Not configured</option>
+        {#if settings.system_one.web_search_model && !systemOneModels.some((model) => model.id === settings.system_one.web_search_model)}<option value={settings.system_one.web_search_model}>{settings.system_one.web_search_model}</option>{/if}
+        {#each systemOneModels as model}<option value={model.id}>{model.id}</option>{/each}
+      </select></label>
+    </div>
+    <div class="assignment-row system-one-assignment">
+      <div><strong>Web Search Completion</strong><small>Decides whether collected evidence answers the request</small></div>
+      <label><span>Model</span><select bind:value={settings.system_one.web_search_finish_model} onchange={() => saveSystemOneModel('web-search-finish', settings.system_one.web_search_finish_model)} disabled={systemOneModelsLoading}>
+        <option value="">Not configured</option>
+        {#if settings.system_one.web_search_finish_model && !systemOneModels.some((model) => model.id === settings.system_one.web_search_finish_model)}<option value={settings.system_one.web_search_finish_model}>{settings.system_one.web_search_finish_model}</option>{/if}
+        {#each systemOneModels as model}<option value={model.id}>{model.id}</option>{/each}
+      </select></label>
+    </div>
+  </div>
+  <p class="helper-copy" role="status">{settings.system_one.web_search_enabled ? 'Web search tools enabled.' : 'Select both web search models to enable web search tools.'}</p>
 
   <div class="subsection-heading"><div><h3>Providers</h3><p>Each model is addressed as provider ID and model name.</p></div><button class="primary-button" onclick={addSystemOneProvider}><Plus aria-hidden="true" size={16} /> Add provider</button></div>
   <div class="provider-list">

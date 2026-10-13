@@ -99,6 +99,15 @@ active batch workers before returning on cancellation, so runtimes should honor
 the supplied context. An interrupted ordinary batch with unsaved results is
 treated as having unknown outcomes rather than automatically replayed.
 
+The loop binds its model client, model, reasoning and request options to tool
+contexts using `client.WithToolModel`. `web_search` uses that client only when
+System One requests a new query or requirement decomposition. Delegated runs
+bind their selected role model. The in-process MCP runtime keeps these bindings
+local and scoped to each call; callers do not need another provider connection.
+For a direct `tools.Runtime.Call` outside the loop, supply a `client.ToolModel`
+using `client.WithToolModel`. The host owns the client and must keep it alive
+until the call returns. Generation uses isolated messages and conversation state.
+
 ## Run a minimal workspace turn
 
 Create the model client and tool runtime once for the lifetime chosen by the

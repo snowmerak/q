@@ -71,11 +71,13 @@ func (service *settingsService) serveSystemOneModelAssignmentUpdate(writer http.
 			return
 		}
 		value.DefaultModel = update.Model
-	case "agent-skill-decision", "archive-decision":
-		role := systemoneconfig.RoleAgentSkillDecision
-		if request.PathValue("target") == "archive-decision" {
-			role = systemoneconfig.RoleArchiveDecision
-		}
+	case "agent-skill-decision", "archive-decision", "web-search", "web-search-finish":
+		role := map[string]string{
+			"agent-skill-decision": systemoneconfig.RoleAgentSkillDecision,
+			"archive-decision":     systemoneconfig.RoleArchiveDecision,
+			"web-search":           systemoneconfig.RoleWebSearch,
+			"web-search-finish":    systemoneconfig.RoleWebSearchFinish,
+		}[request.PathValue("target")]
 		if value.RoleModels == nil {
 			value.RoleModels = make(map[string]string)
 		}

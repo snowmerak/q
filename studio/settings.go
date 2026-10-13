@@ -202,9 +202,12 @@ func (service *settingsService) snapshot() (settingsSnapshot, error) {
 		Providers: providerSettings{ConfigPath: service.providers.Path(), Items: providerItems, APIKeys: gatewayKeys},
 		SystemOne: systemOneAPISettings{
 			ConfigPath: service.systemOne.Path(), DefaultModel: systemOne.DefaultModel,
-			AgentSkillModel: systemOne.RoleModels[systemoneconfig.RoleAgentSkillDecision],
-			ArchiveModel:    systemOne.RoleModels[systemoneconfig.RoleArchiveDecision],
-			Providers:       systemOneProviders, APIKeys: systemOneKeys, ActiveAPIKeys: systemOne.ActiveKeyCount(),
+			AgentSkillModel:      systemOne.RoleModels[systemoneconfig.RoleAgentSkillDecision],
+			ArchiveModel:         systemOne.RoleModels[systemoneconfig.RoleArchiveDecision],
+			WebSearchModel:       systemOne.RoleModels[systemoneconfig.RoleWebSearch],
+			WebSearchFinishModel: systemOne.RoleModels[systemoneconfig.RoleWebSearchFinish],
+			WebSearchEnabled:     systemOne.WebSearchConfigured(),
+			Providers:            systemOneProviders, APIKeys: systemOneKeys, ActiveAPIKeys: systemOne.ActiveKeyCount(),
 		},
 		Services: serviceSettings{
 			Gateway: listenerSettings{

@@ -159,6 +159,12 @@ func (c Config) ModelForRole(role string) string {
 	return c.DefaultModel
 }
 
+// WebSearchConfigured requires explicit navigation and completion assignments.
+// The representative model alone does not enable web search tools.
+func (c Config) WebSearchConfigured() bool {
+	return c.RoleModels[RoleWebSearch] != "" && c.RoleModels[RoleWebSearchFinish] != "" && c.Validate() == nil
+}
+
 // ResolveModel locates the provider and native model for an assignment.
 func (c Config) ResolveModel(role string) (ProviderConfig, string, error) {
 	id, model, qualified := strings.Cut(c.ModelForRole(role), "/")

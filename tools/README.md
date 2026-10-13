@@ -59,9 +59,16 @@ actions, but it is not a browser network sandbox: page JavaScript still runs.
 Each search owns a separate temporary browser session and closes it on return,
 including errors and cancellation; no persistent browser daemon is required.
 
-System One resolves the `web_search` entry in global `systemone.json`
-`role_models`, falling back to `default_model`. Completion coverage has its own
-`web_search_finish` role; when absent it reuses the navigation model. For Gemma
+System One requires explicit `web_search` and `web_search_finish` entries in
+global `systemone.json` `role_models`. Choose them independently in Studio's
+Settings → System One panel as Web Search Navigation and Web Search Completion.
+Both `web_search` and `web_search_batch` are hidden until both assignments name
+configured providers and models. Clearing either assignment hides both tools
+and rejects direct calls; missing or invalid settings also hide them. Existing
+in-process sessions refresh the catalog when search becomes configured; MCP
+clients see the current configuration when they request `tools/list`. No model
+endpoint is contacted to decide availability. The default model alone does not
+enable web search. For Gemma
 navigation/source checks and Qwen completion checks, add these assignments to
 the existing role map:
 
@@ -71,17 +78,22 @@ the existing role map:
 
 Gemma still selects the `finish` action; Qwen checks each requirement and the
 original goal through native System One `supported`/`missing` choices. The same
-Qwen check runs at the action-budget boundary. The planner defaults
-to `oev/qwen3.8-27b` from the enabled OpenAI-compatible provider in global
-`providers.json`. Override it with global `websearch.json`:
+Qwen check runs at the action-budget boundary. When System One requests `query`
+or `decompose`, generation reuses the calling agent's existing model client,
+model, reasoning setting and provider request options. Main TUI/Studio/ACP loops
+bind their active model; delegated agents bind their selected role model,
+including a successful model-group fallback. Parallel calls keep separate
+bindings through MCP. No provider is opened directly, and no model or reasoning
+level is hard-coded. Generated requests use isolated messages and do not reuse
+the caller's stateful conversation ID. The caller's client and search context
+control waiting; there is no separate 90-second generation timeout.
 
-```json
-{"planner_model": "oev/qwen3.8-27b"}
-```
-
-The planner provider is loaded only when System One requests `query` or
-`decompose`. Navigation and completion checks use native choices without text
-generation, including when the completion model is Qwen.
+`q-mcp` uses its configured Q default chat client/model when no calling loop is
+present. A standalone embedded runtime can supply `client.WithToolModel` on its
+call context. Without a model client, navigation and evidence collection still
+work; a requested generation operation returns a planner error with partial
+evidence. The former `websearch.json` planner override is no longer read.
+Navigation and completion checks continue to use native System One choices.
 No role or provider settings are rewritten. The usual global directory is
 `~/.q`. Embedders can inject a concurrent service with `tools.WithWebSearch`.
 
@@ -144,7 +156,7 @@ When `-output` is supplied, the complete captured payload is also exported as
 
 Use `web_search_batch` when the caller already has independent research goals.
 It schedules the existing `web_search` service, preserving the Gemma navigation,
-Qwen native completion and optional Qwen query/decomposition flow. It does not
+native completion and optional caller-model query/decomposition flow. It does not
 create another AgentLoop, automatically invent tasks, or merge sources across
 tasks. Splitting a larger user request into tasks is the caller's responsibility.
 

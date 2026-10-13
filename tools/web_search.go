@@ -1,29 +1,21 @@
 package tools
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
-	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
-	"github.com/snowmerak/llm-provider/gateway"
 	"github.com/snowmerak/q/client"
 	"github.com/snowmerak/q/client/systemone"
 	"github.com/snowmerak/q/config"
-	"github.com/snowmerak/q/providerhost"
 	"github.com/snowmerak/q/systemoneconfig"
 	"github.com/snowmerak/q/tools/builtin"
 	"github.com/snowmerak/q/websearch"
 )
-
-const defaultWebPlannerModel = "oev/qwen3.8-27b"
 
 // WithWebSearch substitutes a search service, including in linked checkouts.
 // The service owns per-call resources and must support concurrent searches.
@@ -31,57 +23,50 @@ func WithWebSearch(service builtin.WebSearcher) RuntimeOption {
 	return func(options *runtimeOptions) { options.webSearch = service }
 }
 
-type configuredWebSearch struct{ dir string }
-
-type webSearchSettings struct {
-	PlannerModel string `json:"planner_model"`
+type configuredWebSearch struct {
+	dir      string
+	fallback client.ToolModel
 }
 
-func loadWebSearchSettings(dir string) (webSearchSettings, error) {
-	s := webSearchSettings{PlannerModel: defaultWebPlannerModel}
-	b, err := os.ReadFile(filepath.Join(dir, "websearch.json"))
-	if errors.Is(err, os.ErrNotExist) {
-		return s, nil
-	}
-	if err != nil {
-		return s, err
-	}
-	if len(b) > 4096 {
-		return s, errors.New("web_search: websearch.json exceeds 4 KiB")
-	}
-	trimmed := bytes.TrimSpace(b)
-	if len(trimmed) == 0 || trimmed[0] != '{' {
-		return s, errors.New("web_search: settings must contain a JSON object")
-	}
-	d := json.NewDecoder(bytes.NewReader(b))
-	d.DisallowUnknownFields()
-	if err := d.Decode(&s); err != nil {
-		return s, fmt.Errorf("web_search: settings: %w", err)
-	}
-	if err := d.Decode(new(any)); err != io.EOF {
-		return s, errors.New("web_search: settings must contain one JSON object")
-	}
-	id, name, ok := strings.Cut(s.PlannerModel, "/")
-	if !ok || id == "" || name == "" || strings.ContainsAny(s.PlannerModel, " \t\r\n") {
-		return s, errors.New("web_search: planner_model must be provider-id/model-name")
-	}
-	return s, nil
-}
-
-func (s *configuredWebSearch) Search(ctx context.Context, in websearch.Input) (websearch.Output, error) {
+func (s *configuredWebSearch) settings() (string, systemoneconfig.Config, error) {
 	dir := s.dir
 	if dir == "" {
 		store, err := config.DefaultStore()
 		if err != nil {
-			return websearch.Output{}, err
+			return "", systemoneconfig.Config{}, err
 		}
 		dir = store.Dir
 	}
-	settings, err := loadWebSearchSettings(dir)
+	value, err := (systemoneconfig.Store{Dir: dir}).LoadOrDefault()
 	if err != nil {
-		return websearch.Output{}, err
+		return dir, value, err
 	}
-	soConfig, err := (systemoneconfig.Store{Dir: dir}).LoadOrDefault()
+	if !value.WebSearchConfigured() {
+		return dir, value, errors.New("web_search: configure both navigation and completion System One models")
+	}
+	return dir, value, nil
+}
+
+// Available checks configuration locally without contacting model providers.
+func (s *configuredWebSearch) Available() bool {
+	_, _, err := s.settings()
+	return err == nil
+}
+
+func webSearchAvailable(service builtin.WebSearcher) bool {
+	if service == nil {
+		return false
+	}
+	if availability, ok := service.(interface{ Available() bool }); ok {
+		return availability.Available()
+	}
+	return true
+}
+
+func webSearchTool(name string) bool { return name == "web_search" || name == "web_search_batch" }
+
+func (s *configuredWebSearch) Search(ctx context.Context, in websearch.Input) (websearch.Output, error) {
+	_, soConfig, err := s.settings()
 	if err != nil {
 		return websearch.Output{}, err
 	}
@@ -95,7 +80,11 @@ func (s *configuredWebSearch) Search(ctx context.Context, in websearch.Input) (w
 	if err != nil {
 		return websearch.Output{}, err
 	}
-	engine := websearch.Engine{Decision: decision, DecisionModel: model, Planner: &webQueryPlanner{dir: dir, model: settings.PlannerModel}, PlannerModel: settings.PlannerModel, NewSession: func() websearch.Session { return websearch.NewBrowserSession() }}
+	caller, ok := client.ToolModelFromContext(ctx)
+	if !ok {
+		caller = s.fallback
+	}
+	engine := websearch.Engine{Decision: decision, DecisionModel: model, Planner: &webQueryPlanner{caller: caller}, PlannerModel: caller.Model, NewSession: func() websearch.Session { return websearch.NewBrowserSession() }}
 	if soConfig.RoleModels[systemoneconfig.RoleWebSearchFinish] != "" {
 		finishProvider, finishModel, err := soConfig.ResolveModel(systemoneconfig.RoleWebSearchFinish)
 		if err != nil {
@@ -110,19 +99,20 @@ func (s *configuredWebSearch) Search(ctx context.Context, in websearch.Input) (w
 	return engine.Search(ctx, in)
 }
 
-type webQueryPlanner struct{ dir, model string }
+type webQueryPlanner struct{ caller client.ToolModel }
 
 // Plan is a single completion for an explicitly requested string-writing
 // operation. It cannot navigate, choose tool calls, summarize or finish.
 func (p *webQueryPlanner) Plan(ctx context.Context, in websearch.PlanRequest) (websearch.Plan, error) {
+	if err := ctx.Err(); err != nil {
+		return websearch.Plan{}, err
+	}
 	if in.Operation != "query" && in.Operation != "decompose" {
 		return websearch.Plan{}, errors.New("web_search: unsupported planner operation")
 	}
-	configured, native, err := p.newClient()
-	if err != nil {
-		return websearch.Plan{}, err
+	if p.caller.Client == nil {
+		return websearch.Plan{}, errors.New("web_search: the calling agent's model client is required to generate queries or requirements")
 	}
-	defer func() { _ = configured.Close() }()
 	state, err := json.Marshal(in)
 	if err != nil {
 		return websearch.Plan{}, err
@@ -133,11 +123,8 @@ func (p *webQueryPlanner) Plan(ctx context.Context, in websearch.PlanRequest) (w
 	} else {
 		instruction += `Return {"requirements":["atomic requirement", "..."]}. Split the ORIGINAL goal into at most 6 nonempty requirements, at most 800 UTF-8 bytes each. Preserve every clause, qualification and source requirement. Do not insert known answers.`
 	}
-	zero := 0.0
-	max := 1000
-	callCtx, cancel := context.WithTimeout(ctx, 90*time.Second)
-	defer cancel()
-	response, err := configured.Chat(callCtx, client.ChatRequest{Model: native, Temperature: &zero, MaxTokens: &max, ReasoningEffort: "none", Messages: []client.Message{{Role: client.RoleSystem, Content: instruction}, {Role: client.RoleUser, Content: string(state)}}})
+	ctx = client.WithUsageRole(ctx, p.caller.Role)
+	response, err := p.caller.Client.Chat(ctx, client.ChatRequest{Model: p.caller.Model, ReasoningEffort: p.caller.ReasoningEffort, WorkingDirectory: p.caller.WorkingDirectory, Extra: p.caller.Extra, Messages: []client.Message{{Role: client.RoleSystem, Content: instruction}, {Role: client.RoleUser, Content: string(state)}}})
 	if err != nil {
 		return websearch.Plan{}, err
 	}
@@ -168,41 +155,4 @@ func (p *webQueryPlanner) Plan(ctx context.Context, in websearch.PlanRequest) (w
 		return plan, errors.New("web_search: planner returned fields for another operation")
 	}
 	return plan, nil
-}
-
-func (p *webQueryPlanner) newClient() (*client.Client, string, error) {
-	providers, err := gateway.LoadConfig((providerhost.Store{Dir: p.dir}).Path())
-	if err != nil {
-		return nil, "", fmt.Errorf("web_search: query planner providers: %w", err)
-	}
-	id, model, _ := strings.Cut(p.model, "/")
-	for _, provider := range providers.Providers {
-		if provider.ID != id && strings.TrimSuffix(provider.Prefix, "/") != id {
-			continue
-		}
-		if !provider.Enabled || provider.Type != "openai-compatible" && provider.Type != "openai" {
-			return nil, "", errors.New("web_search: query planner requires an enabled OpenAI-compatible provider")
-		}
-		if provider.BaseURL == "" {
-			return nil, "", errors.New("web_search: query planner provider requires explicit base_url")
-		}
-		key := provider.APIKey
-		if key == "" {
-			key = os.Getenv(provider.APIKeyEnv)
-		}
-		headers := http.Header{}
-		for k, v := range provider.Headers {
-			headers.Set(k, v)
-		}
-		modes := map[string]string{}
-		current, loadErr := (config.Store{Dir: p.dir}).Load()
-		if loadErr == nil {
-			modes[model] = current.ModelAPIMode(p.model)
-		} else if !errors.Is(loadErr, config.ErrNotFound) {
-			return nil, "", loadErr
-		}
-		c, err := client.New(client.Config{BaseURL: provider.BaseURL, APIKey: key, DisableAPIKey: key == "", DefaultModel: model, HTTPClient: &http.Client{Timeout: 95 * time.Second}, Headers: headers, BodyFields: provider.Body, ModelAPIModes: modes})
-		return c, model, err
-	}
-	return nil, "", fmt.Errorf("web_search: query planner provider %q is not configured", id)
 }

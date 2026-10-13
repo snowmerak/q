@@ -45,6 +45,7 @@ func RunAgentLoop(ctx context.Context, request Request, events chan<- Event) {
 	coalesceInstructions := request.CoalesceInstructions
 	contextPolicy := request.ContextPolicy
 	requestExtra := request.Extra
+	ctx = client.WithToolModel(ctx, client.ToolModel{Client: configuredClient, Model: modelID, ReasoningEffort: reasoningEffort, WorkingDirectory: workingDirectory, Extra: requestExtra, Role: "main"})
 	availableTools := memory.AppendMemoryTools(append(append([]client.Tool(nil), toolRuntime.Tools()...), orchestrationTools()...))
 	hintedSkillIDs := knownSkillIDs(history)
 	if len(history) > 0 && history[len(history)-1].Role == client.RoleUser {

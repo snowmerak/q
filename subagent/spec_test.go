@@ -173,6 +173,10 @@ func TestResolveModelGroupAndKeepSuccessfulFallbackForExecution(t *testing.T) {
 	if spec.Model != "secondary" || spec.ReasoningEffort != "medium" {
 		t.Fatalf("active spec = %#v", spec)
 	}
+	bound := spec.toolModel(configured, "caller-directory")
+	if bound.Client != configured || bound.Model != "secondary" || bound.ReasoningEffort != "medium" || bound.Role != config.AgentRolePlanner || bound.WorkingDirectory != "caller-directory" {
+		t.Fatalf("tool model did not retain the successful role candidate: %+v", bound)
+	}
 	if _, err := spec.Chat(t.Context(), configured, client.ChatRequest{}); err != nil {
 		t.Fatal(err)
 	}

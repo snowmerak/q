@@ -8,22 +8,23 @@
 
 - Gemma4 E4B / System One: 다음 링크·근거 구절 선택, 브라우저 관찰, 검색 입력 여부와 기존 입력값 선택, 검색 제출, 출처 판정, `finish` 시도 선택.
 - Qwen3.8 27B / System One: 수집된 근거로 요구사항 각각과 원래 목표의 완료 여부를 `supported`/`missing`으로 판정. 단계 예산 끝의 완료 검사에도 적용.
-- Qwen / 생성형 호출: System One이 요청한 새 검색어 작성 또는 원래 목표의 요구사항 분해. 탐색·최종 답변은 담당하지 않는다.
+- 호출한 에이전트의 모델 / 생성형 호출: System One이 요청한 새 검색어 작성 또는 원래 목표의 요구사항 분해. 탐색·최종 답변은 담당하지 않는다. 아래 과거 실험에서는 Qwen을 사용했다.
 - Go: HTTP/HTML 추출, URL 정리·중복 제거, 검색 결과 페이지와 본문 구분, 지정 도메인 필터, 일부 알려진 검색 챌린지 감지, 메뉴·본문 크기 제한, 참조 갱신·현재 폼 재검사, 이력 관리, 시간·호출 예산, 브라우저 정리.
 
-System One은 global `systemone.json`의 `role_models.web_search` 또는 대표 모델을 사용한다.
-이 환경에서는 `oev/gemma4-e4b`가 대표 모델이다. Qwen 기본값은 `oev/qwen3.8-27b`이며
-global `websearch.json`의 `planner_model`로 바꿀 수 있다. 완료 검사는 별도
-`role_models.web_search_finish`로 지정하며, 없으면 탐색 모델을 재사용한다.
-사용자 요청으로 이 환경의 완료 역할을 `oev/qwen3.8-27b`로 설정했다.
-생성형 Qwen provider는 해당 동작을 요청받을 때만 로드한다.
+현재는 global `systemone.json`에 `role_models.web_search`와
+`role_models.web_search_finish`를 모두 명시해야 검색 도구가 노출된다.
+Studio Settings → System One에서 탐색·완료 모델을 각각 설정할 수 있다.
+검색어 생성은 호출한 에이전트의 기존 클라이언트·모델·reasoning 설정을 재사용한다.
+별도 provider 직결, Qwen 기본값, `websearch.json` override는 제거했다.
+메인 루프는 현재 선택 모델, 서브에이전트는 역할별 선택 모델을 전달하며,
+MCP 경계를 지나거나 병렬 호출해도 각각의 설정을 유지한다.
 결과의 `coverage_model`과 `coverage_calls`로 완료 검사 모델/호출 횟수를 확인한다.
 `system_one_calls`는 완료 검사를 포함한 전체 native 호출이며 `planner_calls`는
 검색어 작성·요구사항 분해의 생성형 호출만 센다.
 
 처음 검색어가 없으면 목표를 그대로 검색하므로 시작에 생성형 호출이 필수인 것은 아니다.
 검색 필드에는 현재 검색어나 이미 있는 요구사항을 입력한다. 새로운 문자열을 만들려면
-Qwen의 `query` 또는 `decompose`를 거친다. 입력·제출 대상은 구조적으로 식별한 검색
+호출 모델의 `query` 또는 `decompose`를 거친다. 입력·제출 대상은 구조적으로 식별한 검색
 컨트롤이며, GET 폼 또는 독립 검색 입력에 제한한다. 페이지 JS 자체를 막는 네트워크
 샌드박스는 아니다. iframe/shadow DOM, 로그인, 업로드, 임의 폼 조작은 지원하지 않는다.
 

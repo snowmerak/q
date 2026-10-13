@@ -72,6 +72,9 @@ export type SettingsSnapshot = {
     default_model: string;
     agent_skill_model: string;
     archive_model: string;
+    web_search_model: string;
+    web_search_finish_model: string;
+    web_search_enabled: boolean;
     providers: SystemOneProvider[];
     api_keys: ServiceAPIKey[];
     active_api_keys: number;

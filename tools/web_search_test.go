@@ -7,12 +7,13 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
-	"github.com/snowmerak/llm-provider/gateway"
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/snowmerak/q/client"
 	"github.com/snowmerak/q/client/systemone"
 	"github.com/snowmerak/q/loom"
@@ -159,20 +160,20 @@ func TestLargeWebSearchBatchPreviewRetainsAllTaskOutcomes(t *testing.T) {
 	}
 }
 
-func TestWebPlannerOnlyWritesRequestedFieldsAndUsesConfiguredProvider(t *testing.T) {
+func TestWebPlannerOnlyWritesRequestedFieldsAndUsesCallerClient(t *testing.T) {
 	var calls int
 	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/v1/chat/completions" {
 			t.Errorf("unexpected path %s", r.URL.Path)
 		}
-		if r.Header.Get("Authorization") != "" {
-			t.Error("leaked ambient API key")
+		if r.Header.Get("Authorization") != "Bearer caller-key" {
+			t.Error("did not reuse caller authentication")
 		}
 		var body map[string]any
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			t.Error(err)
 		}
-		if body["model"] != "qwen3.8-27b" || body["tools"] != nil {
+		if body["model"] != "active-model" || body["tools"] != nil || body["reasoning_effort"] != "high" {
 			t.Errorf("unexpected request model/tools: %+v", body)
 		}
 		calls++
@@ -188,11 +189,12 @@ func TestWebPlannerOnlyWritesRequestedFieldsAndUsesConfiguredProvider(t *testing
 	}))
 	defer api.Close()
 	t.Setenv("OPENAI_API_KEY", "must-not-leak")
-	dir := t.TempDir()
-	if err := (providerhost.Store{Dir: dir}).Save(gateway.Config{Providers: []gateway.ProviderConfig{{ID: "oev", Prefix: "oev", Type: "openai-compatible", Enabled: true, BaseURL: api.URL + "/v1"}}}); err != nil {
+	configured, err := client.New(client.Config{BaseURL: api.URL + "/v1", APIKey: "caller-key", DefaultModel: "wrong-default"})
+	if err != nil {
 		t.Fatal(err)
 	}
-	p := &webQueryPlanner{dir: dir, model: defaultWebPlannerModel}
+	defer func() { _ = configured.Close() }()
+	p := &webQueryPlanner{caller: client.ToolModel{Client: configured, Model: "active-model", ReasoningEffort: "high", Role: "research"}}
 	plan, err := p.Plan(t.Context(), websearch.PlanRequest{Operation: "query", Goal: "Research"})
 	if err != nil || plan.Query != "new search terms" || calls != 1 {
 		t.Fatalf("plan=%+v err=%v calls=%d", plan, err, calls)
@@ -205,19 +207,155 @@ func TestWebPlannerOnlyWritesRequestedFieldsAndUsesConfiguredProvider(t *testing
 	}
 }
 
-func TestWebSearchSettingsStrictAndLazyPlanner(t *testing.T) {
-	dir := t.TempDir()
-	s, err := loadWebSearchSettings(dir)
-	if err != nil || s.PlannerModel != defaultWebPlannerModel {
-		t.Fatalf("settings=%+v err=%v", s, err)
+func TestWebPlannerRequiresCallerOnlyWhenGenerating(t *testing.T) {
+	p := &webQueryPlanner{}
+	for _, operation := range []string{"query", "decompose"} {
+		if _, err := p.Plan(t.Context(), websearch.PlanRequest{Operation: operation, Goal: "Research"}); err == nil || !strings.Contains(err.Error(), "calling agent") {
+			t.Fatalf("missing caller model was not rejected: %v", err)
+		}
 	}
-	for _, body := range []string{`null`, `{"unknown":true}`, `{"planner_model":"unqualified"}`, `{"planner_model":"oev/qwen3.8-27b"} {}`, strings.Repeat("x", 4097)} {
-		if err := os.WriteFile(filepath.Join(dir, "websearch.json"), []byte(body), 0600); err != nil {
+}
+
+type webPlannerChatFunc func(context.Context, client.ChatRequest) (*client.ChatResponse, error)
+
+func (f webPlannerChatFunc) Chat(ctx context.Context, request client.ChatRequest) (*client.ChatResponse, error) {
+	return f(ctx, request)
+}
+
+func TestConcurrentWebSearchCallsKeepTheirCallerModelThroughMCP(t *testing.T) {
+	search := batchSearchFunc(func(ctx context.Context, in websearch.Input) (websearch.Output, error) {
+		caller, ok := client.ToolModelFromContext(ctx)
+		if !ok {
+			return websearch.Output{}, fmt.Errorf("caller model missing inside MCP handler")
+		}
+		plan, err := (&webQueryPlanner{caller: caller}).Plan(ctx, websearch.PlanRequest{Operation: "query", Goal: in.Goal})
+		return websearch.Output{Status: "complete", Query: plan.Query, PlannerModel: caller.Model, PlannerCalls: 1}, err
+	})
+	runtime, err := newRuntimeWithLSP(t.Context(), sameRuntimeRoots(t.TempDir()), nil, nil, loom.NewProcessEvaluator(), loom.StoreOptions{}, nil, nil, WithWebSearch(search))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = runtime.Close() }()
+	results := make(chan error, 2)
+	var workers sync.WaitGroup
+	for _, model := range []string{"caller-a", "caller-b"} {
+		workers.Go(func() {
+			chat := webPlannerChatFunc(func(ctx context.Context, request client.ChatRequest) (*client.ChatResponse, error) {
+				if request.Model != model || request.ReasoningEffort != "high" || request.WorkingDirectory != "directory-"+model || request.Extra["caller_policy"] != model || len(request.Tools) != 0 || request.ConversationID != "" || request.Temperature != nil || request.MaxTokens != nil {
+					return nil, fmt.Errorf("caller settings changed: %+v", request)
+				}
+				if _, ok := ctx.Deadline(); !ok {
+					return nil, fmt.Errorf("caller deadline lost")
+				}
+				return &client.ChatResponse{Choices: []client.Choice{{Message: client.Message{Role: client.RoleAssistant, Content: `{"query":"written-` + model + `"}`}}}}, nil
+			})
+			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+			defer cancel()
+			ctx = client.WithToolModel(ctx, client.ToolModel{Client: chat, Model: model, ReasoningEffort: "high", WorkingDirectory: "directory-" + model, Extra: map[string]any{"caller_policy": model}, Role: "research"})
+			result, err := runtime.Call(ctx, client.ToolCall{ID: "same-call-id", Function: client.FunctionCall{Name: "web_search", Arguments: `{"goal":"` + model + `"}`}})
+			if err == nil && (result.IsError || !strings.Contains(result.Content, "written-"+model)) {
+				err = fmt.Errorf("wrong caller result: %+v", result)
+			}
+			results <- err
+		})
+	}
+	workers.Wait()
+	close(results)
+	for err := range results {
+		if err != nil {
 			t.Fatal(err)
 		}
-		if _, err := loadWebSearchSettings(dir); err == nil {
-			t.Fatalf("accepted %s", fmt.Sprintf("%.100s", body))
+	}
+	runtime.callContexts.mu.Lock()
+	defer runtime.callContexts.mu.Unlock()
+	if len(runtime.callContexts.pending) != 0 {
+		t.Fatal("caller contexts leaked after MCP calls")
+	}
+}
+
+func TestWebSearchVisibilityFollowsModelSettingsWithoutRestart(t *testing.T) {
+	var requests atomic.Int32
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requests.Add(1)
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer api.Close()
+	dir := t.TempDir()
+	store := systemoneconfig.Store{Dir: dir}
+	search := &configuredWebSearch{dir: dir}
+	runtime, err := newRuntimeWithLSP(t.Context(), sameRuntimeRoots(t.TempDir()), nil, nil, loom.NewProcessEvaluator(), loom.StoreOptions{}, nil, nil, WithWebSearch(search))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = runtime.Close() }()
+	assertVisibility := func(t *testing.T, enabled bool) {
+		t.Helper()
+		listed, err := runtime.client.ListTools(t.Context(), nil)
+		if err != nil {
+			t.Fatal(err)
 		}
+		for _, name := range []string{"web_search", "web_search_batch"} {
+			found := false
+			for _, tool := range listed.Tools {
+				found = found || tool.Name == name
+			}
+			if found != enabled || runtimeHasTool(runtime, name) != enabled || hasToolName(runtime.ToolsForRole("research"), name) != enabled || hasToolName(runtime.CustomTools(), name) != enabled {
+				t.Fatalf("%s visibility does not match configured models: enabled=%v", name, enabled)
+			}
+			if !enabled {
+				arguments := `{"goal":"must not execute"}`
+				if name == "web_search_batch" {
+					arguments = `{"tasks":[{"id":"one","search":{"goal":"must not execute"}}]}`
+				}
+				result, err := runtime.Call(t.Context(), client.ToolCall{Function: client.FunctionCall{Name: name, Arguments: arguments}})
+				if err != nil || !result.IsError {
+					t.Fatalf("hidden runtime tool %s was not rejected: %+v %v", name, result, err)
+				}
+				if _, err := runtime.client.CallTool(t.Context(), &mcp.CallToolParams{Name: name, Arguments: json.RawMessage(arguments)}); err == nil {
+					t.Fatalf("hidden MCP tool %s was not rejected", name)
+				}
+			}
+		}
+	}
+	assertVisibility(t, false) // An absent file must not enable the default model.
+	value := systemoneconfig.Default()
+	value.Providers = []systemoneconfig.ProviderConfig{{ID: "decision", URI: api.URL + "/v1/systemone"}}
+	value.DefaultModel = "decision/default"
+	for _, test := range []struct {
+		name                   string
+		navigation, completion string
+		enabled                bool
+	}{
+		{"default only", "", "", false},
+		{"navigation only", "decision/navigate", "", false},
+		{"both roles", "decision/navigate", "decision/finish", true},
+		{"clear completion", "decision/navigate", "", false},
+		{"restore completion", "decision/navigate", "decision/finish", true},
+		{"clear navigation", "", "decision/finish", false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			value.RoleModels = make(map[string]string)
+			if test.navigation != "" {
+				value.RoleModels[systemoneconfig.RoleWebSearch] = test.navigation
+			}
+			if test.completion != "" {
+				value.RoleModels[systemoneconfig.RoleWebSearchFinish] = test.completion
+			}
+			if err := store.Save(value); err != nil {
+				t.Fatal(err)
+			}
+			assertVisibility(t, test.enabled)
+		})
+	}
+	if err := os.WriteFile(store.Path(), []byte(`{"broken":`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	assertVisibility(t, false)
+	if _, err := search.Search(t.Context(), websearch.Input{Goal: "must not execute"}); err == nil {
+		t.Fatal("invalid settings reached search")
+	}
+	if requests.Load() != 0 {
+		t.Fatalf("configuration checks contacted a provider %d times", requests.Load())
 	}
 }
 
@@ -264,7 +402,7 @@ func TestConfiguredWebSearchUsesNativeRoleWithoutLoadingPlannerProvider(t *testi
 	so := systemoneconfig.Default()
 	so.Providers = []systemoneconfig.ProviderConfig{{ID: "oev", URI: api.URL + "/v1/systemone"}}
 	so.DefaultModel = "oev/another-default"
-	so.RoleModels = map[string]string{systemoneconfig.RoleWebSearch: "oev/gemma4-e4b"}
+	so.RoleModels = map[string]string{systemoneconfig.RoleWebSearch: "oev/gemma4-e4b", systemoneconfig.RoleWebSearchFinish: "oev/gemma4-e4b"}
 	if err := (systemoneconfig.Store{Dir: dir}).Save(so); err != nil {
 		t.Fatal(err)
 	}
@@ -335,7 +473,7 @@ func TestConfiguredWebSearchRoutesCompletionToSeparateNativeModel(t *testing.T) 
 	so := systemoneconfig.Default()
 	so.Providers = []systemoneconfig.ProviderConfig{{ID: "oev", URI: navigation.URL + "/v1/systemone"}, {ID: "judge", URI: coverage.URL + "/v1/systemone"}}
 	so.DefaultModel = "oev/gemma4-e4b"
-	so.RoleModels = map[string]string{systemoneconfig.RoleWebSearchFinish: "judge/qwen3.8-27b"}
+	so.RoleModels = map[string]string{systemoneconfig.RoleWebSearch: "oev/gemma4-e4b", systemoneconfig.RoleWebSearchFinish: "judge/qwen3.8-27b"}
 	if err := (systemoneconfig.Store{Dir: dir}).Save(so); err != nil {
 		t.Fatal(err)
 	}

@@ -14,10 +14,13 @@ import (
 	"github.com/snowmerak/q/websearch"
 )
 
-type embeddedWebSearch struct{ calls atomic.Int32 }
+type embeddedWebSearch struct{ calls, bindings atomic.Int32 }
 
-func (s *embeddedWebSearch) Search(_ context.Context, in websearch.Input) (websearch.Output, error) {
+func (s *embeddedWebSearch) Search(ctx context.Context, in websearch.Input) (websearch.Output, error) {
 	s.calls.Add(1)
+	if caller, ok := client.ToolModelFromContext(ctx); ok && caller.Model == "test-model" && caller.ReasoningEffort == "high" && caller.Extra["caller_policy"] == "preserved" {
+		s.bindings.Add(1)
+	}
 	return websearch.Output{Status: "complete", Requirements: []string{in.Goal}, Evidence: []websearch.Evidence{{URL: "https://example.com/source", Text: "Public loop receives web evidence."}}}, nil
 }
 
@@ -52,7 +55,7 @@ func TestPublicAgentLoopDispatchesWebSearchThroughMCP(t *testing.T) {
 			defer func() { _ = runtime.Close() }()
 			chat := &webLoopClient{tool: tc.tool, arguments: tc.arguments}
 			events := make(chan app.AgentEvent)
-			go app.RunAgentLoop(t.Context(), app.AgentLoopRequest{Client: chat, Tools: runtime, Model: "test-model", Messages: []client.Message{{Role: client.RoleUser, Content: "Read source evidence"}}, WorkingDirectory: root}, events)
+			go app.RunAgentLoop(t.Context(), app.AgentLoopRequest{Client: chat, Tools: runtime, Model: "test-model", ReasoningEffort: "high", Extra: map[string]any{"caller_policy": "preserved"}, Messages: []client.Message{{Role: client.RoleUser, Content: "Read source evidence"}}, WorkingDirectory: root}, events)
 			resultSeen := false
 			toolSeen := false
 			for event := range events {
@@ -66,7 +69,7 @@ func TestPublicAgentLoopDispatchesWebSearchThroughMCP(t *testing.T) {
 					resultSeen = true
 				}
 			}
-			if !resultSeen || !toolSeen || search.calls.Load() != tc.calls || len(chat.requests) != 2 {
+			if !resultSeen || !toolSeen || search.calls.Load() != tc.calls || search.bindings.Load() != tc.calls || len(chat.requests) != 2 {
 				t.Fatalf("result=%v tool=%v calls=%d requests=%d", resultSeen, toolSeen, search.calls.Load(), len(chat.requests))
 			}
 			advertised := false

@@ -208,15 +208,16 @@ func RunStdioWithLoomOptions(ctx context.Context, root string, options loom.Stor
 			}
 			embeddingClient, err = client.New(client.Config{
 				BaseURL: embeddingManager.Endpoint(), APIKey: embeddingManager.APIKey(),
-				DefaultModel:  loaded.Provider.Model,
-				UsageRecorder: usageRecorder,
+				DefaultModel: loaded.Provider.Model, ModelAPIModes: loaded.EffectiveModelAPIModes(),
+				ProviderAPIModes: providerhost.PreferredProviderAPIModes(embeddingManager.Config()),
+				UsageRecorder:    usageRecorder, ForwardUsageMetadata: true,
 			})
 		} else {
 			apiKey := loaded.Provider.ResolveAPIKey()
 			embeddingClient, err = client.New(client.Config{
 				BaseURL: loaded.Provider.BaseURL, APIKey: apiKey, DefaultModel: loaded.Provider.Model,
 				DisableAPIKey: apiKey == "",
-				UsageRecorder: usageRecorder,
+				UsageRecorder: usageRecorder, ModelAPIModes: loaded.EffectiveModelAPIModes(),
 			})
 		}
 		if err != nil {
@@ -257,10 +258,15 @@ func RunStdioWithLoomOptions(ctx context.Context, root string, options loom.Stor
 	if libraryRuntime != nil {
 		defer func() { runErr = errors.Join(runErr, libraryRuntime.Close()) }()
 	}
+	var fallback client.ToolModel
+	if embeddingClient != nil && loaded.Provider.Model != "" {
+		fallback = client.ToolModel{Client: embeddingClient, Model: loaded.Provider.Model, ReasoningEffort: loaded.Provider.EffectiveReasoningEffort(), WorkingDirectory: root, Role: "main"}
+	}
 	server, fs, _, browser, err := newServer(
 		root, nil, root, semanticArchive, semanticArchive, loomRuntime, lspManager, globalSkills,
 		&systemOneSkillRanker{store: systemoneconfig.Store{Dir: configStore.Dir}},
 		&systemOneArchiveRanker{store: systemoneconfig.Store{Dir: configStore.Dir}},
+		&configuredWebSearch{dir: configStore.Dir, fallback: fallback},
 	)
 	if err != nil {
 		return err

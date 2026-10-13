@@ -45,6 +45,9 @@ func (f *fakeGlobalSkillLibrary) GetSkill(_ context.Context, id, _ string) (qlib
 }
 
 func TestRuntimeListsAndCallsBuiltinTools(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 	root := t.TempDir()
 	skillDirectory := filepath.Join(root, ".agents", "skills", "test-skill")
 	if err := os.MkdirAll(skillDirectory, 0o755); err != nil {
@@ -62,7 +65,7 @@ func TestRuntimeListsAndCallsBuiltinTools(t *testing.T) {
 			t.Error(err)
 		}
 	}()
-	if len(runtime.Tools()) != 23 {
+	if len(runtime.Tools()) != 21 {
 		t.Fatalf("runtime tools = %d", len(runtime.Tools()))
 	}
 	tools := runtime.Tools()
@@ -454,6 +457,9 @@ func TestRuntimeAutomaticallyDiscoversLSPRoots(t *testing.T) {
 }
 
 func TestRuntimeExposesAndCallsArchiveTools(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 	root := t.TempDir()
 	skillDirectory := filepath.Join(root, ".agents", "skills", "archive-test-skill")
 	if err := os.MkdirAll(skillDirectory, 0o755); err != nil {
@@ -487,7 +493,7 @@ func TestRuntimeExposesAndCallsArchiveTools(t *testing.T) {
 			t.Error(err)
 		}
 	}()
-	if len(runtime.Tools()) != 27 || !runtimeHasTool(runtime, "search_archive") || !runtimeHasTool(runtime, "get_archive_record") {
+	if len(runtime.Tools()) != 25 || !runtimeHasTool(runtime, "search_archive") || !runtimeHasTool(runtime, "get_archive_record") {
 		t.Fatalf("runtime tools = %#v", runtime.Tools())
 	}
 
