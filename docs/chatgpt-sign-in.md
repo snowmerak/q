@@ -61,6 +61,14 @@ once, and failed/incomplete streams retain the server's error code, explanation
 and incomplete reason. Chat Completions' `stream_options.include_usage` is kept
 off the upstream Responses request, whose completion event already includes usage.
 
+ChatGPT cache affinity is automatic, without a Studio setting. Q's default native
+Responses route keeps its existing per-session cache ID across turns and saved-session
+reloads. The Gateway maps that ID to `prompt_cache_key`, and the ChatGPT adapter
+uses the same value for the upstream `session-id` header. Chat Completions callers
+also reuse the returned conversation ID for subsequent turns. The header is added
+only by the ChatGPT adapter, not globally forwarded
+to other providers. This is `session-id`, not `X-Session-Id`.
+
 Q preserves optional tool arguments with explicit `strict: false` unless the
 tool declares a compatible strict schema. Strict mode requires every object
 property to be required and `additionalProperties: false` on every object.
@@ -73,7 +81,7 @@ run.
 
 Q's `go.mod` pins llm-provider `v0.0.0-20261014004000-2a04b3c58860`, including
 the ChatGPT namespace description and non-streaming collection fixes. The
-additional Chat Completions streaming, refusal and error-detail fixes in the
+additional Chat Completions streaming, refusal, error-detail and cache-session fixes in the
 sibling checkout require publishing that provider revision and updating this
 pin before release; candidate validation alone does not update the dependency.
 The workspace contains Q and the existing
@@ -120,6 +128,11 @@ native Responses and Chat Completions streaming inference on GPT-6.1 Sol, with
 31 tools advertised and automatic tool
 selection. The probe never executes a tool, creates a Studio session or starts
 a login. It spends ChatGPT usage.
+
+Add `Q_TEST_CHATGPT_CACHE=1` to that opt-in run to check three growing conversation
+turns in each API mode. This exercises Q's automatic cache ID through the real
+Gateway and ChatGPT adapter without manually supplying a key or header. It checks
+that affinity stays stable and that a subsequent turn reports cached tokens.
 
 For the Studio path, set `Q_TEST_CHATGPT_STUDIO=1` and run
 `go test ./studio -run '^TestLiveStudioChatGPTPersonalChat$' -count=1 -v`.

@@ -83,12 +83,12 @@ func TestLiveChatGPTAcceptsQToolCatalog(t *testing.T) {
 	t.Cleanup(func() { _ = g.Close() })
 	server := httptest.NewServer(g.Handler())
 	t.Cleanup(server.Close)
-	configured, err := client.New(client.Config{BaseURL: server.URL + "/v1", DisableAPIKey: true, ModelAPIModes: map[string]string{"plan/" + model: "responses"}})
+	configured, err := client.New(client.Config{BaseURL: server.URL + "/v1", DisableAPIKey: true, ForwardUsageMetadata: true, ModelAPIModes: map[string]string{"plan/" + model: "responses"}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = configured.Close() })
-	chatCompatible, err := client.New(client.Config{BaseURL: server.URL + "/v1", DisableAPIKey: true})
+	chatCompatible, err := client.New(client.Config{BaseURL: server.URL + "/v1", DisableAPIKey: true, ForwardUsageMetadata: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -117,6 +117,39 @@ func TestLiveChatGPTAcceptsQToolCatalog(t *testing.T) {
 				t.Fatal("expected an OK answer without tool execution")
 			}
 			t.Logf("%s completed with %d Q tools advertised", model, len(catalog))
+		})
+	}
+	if os.Getenv("Q_TEST_CHATGPT_CACHE") != "1" {
+		return
+	}
+	for _, test := range []struct {
+		name   string
+		client *client.Client
+	}{{"responses-cache", configured}, {"chat-completions-cache", chatCompatible}} {
+		t.Run(test.name, func(t *testing.T) {
+			prefix := "Cache probe " + time.Now().UTC().Format(time.RFC3339Nano) + ".\n" + strings.Repeat("Reference context: The cedar tree is green, the stone bridge crosses the river, and the library keeps maps. ", 200)
+			request := client.ChatRequest{Model: "plan/" + model, Messages: []client.Message{{Role: client.RoleDeveloper, Content: prefix}, {Role: client.RoleUser, Content: "Reply exactly OK."}}}
+			hit := false
+			for round := 1; round <= 3; round++ {
+				response, _, err := agentloop.ConsumeChatStream(ctx, test.client, request, nil)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if response == nil || len(response.Choices) == 0 || response.Usage.PromptDetails == nil {
+					t.Fatal("missing completed answer or cache usage")
+				}
+				if !strings.HasPrefix(response.ConversationID, "cache_") || request.ConversationID != "" && response.ConversationID != request.ConversationID {
+					t.Fatal("cache affinity changed within the session")
+				}
+				cached := response.Usage.PromptDetails.CachedTokens
+				hit = hit || round > 1 && cached > 0
+				t.Logf("round %d: input=%d cached=%d", round, response.Usage.PromptTokens, cached)
+				request.ConversationID = response.ConversationID
+				request.Messages = append(request.Messages, response.Choices[0].Message, client.Message{Role: client.RoleUser, Content: "Reply exactly OK again."})
+			}
+			if !hit {
+				t.Fatal("no cache hit in subsequent turns using automatic session affinity")
+			}
 		})
 	}
 }

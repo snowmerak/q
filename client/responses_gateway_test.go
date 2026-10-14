@@ -18,6 +18,9 @@ func TestResponsesModeThroughGatewayReplaysToolsAndCacheAffinity(t *testing.T) {
 		case "/v1/models":
 			_, _ = io.WriteString(writer, `{"data":[{"id":"model"}]}`)
 		case "/v1/responses":
+			if request.Header.Get("session-id") != "" {
+				t.Error("ChatGPT session header leaked into an OpenAI-compatible route")
+			}
 			var body map[string]any
 			if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
 				t.Errorf("decode upstream body: %v", err)
