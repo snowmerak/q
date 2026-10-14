@@ -12,6 +12,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -21,6 +22,54 @@ import (
 	"github.com/snowmerak/q/workspace"
 	"github.com/snowmerak/q/workspacememory"
 )
+
+func TestStartupRejectsMissingEmbeddingProviderBeforeOpeningArchive(t *testing.T) {
+	var memoryRequests atomic.Int64
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		memoryRequests.Add(1)
+		http.Error(writer, "archive must not be used before the embedding provider is ready", http.StatusServiceUnavailable)
+	}))
+	defer server.Close()
+	endpoint, err := url.Parse(server.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	port, err := strconv.Atoi(endpoint.Port())
+	if err != nil {
+		t.Fatal(err)
+	}
+	settings := config.Store{Dir: t.TempDir()}
+	if err := (workspacememory.ConfigStore{Dir: settings.Dir}).Save(workspacememory.Config{Host: endpoint.Hostname(), Port: port}); err != nil {
+		t.Fatal(err)
+	}
+	value := config.Default()
+	value.Provider.Model = "default/chat"
+	value.Embedding = config.EmbeddingConfig{Model: "default/embed", Dimensions: 3}
+	if err := settings.Save(value); err != nil {
+		t.Fatal(err)
+	}
+	manager, err := providerhost.NewManager(t.Context(), providerhost.Store{Dir: settings.Dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = manager.Close() })
+	request := startupRequest{
+		ctx: t.Context(), memoryCtx: t.Context(), store: settings,
+		workspaceStore: workspace.Store{Root: t.TempDir()}, loaded: value,
+		manager: manager, lifecycle: newStartupLifecycle(), providerReady: true,
+		factory: func(config.Config) (chatClient, error) {
+			t.Error("client factory called without a ready provider runtime")
+			return &fakeClient{}, nil
+		},
+	}
+	result := request.run(nil)
+	if result.err == nil || !strings.Contains(result.err.Error(), "embedding provider runtime is not ready") {
+		t.Fatalf("missing provider error = %v", result.err)
+	}
+	if memoryRequests.Load() != 0 || result.tools != nil || result.archive != nil || result.client != nil {
+		t.Fatalf("startup used unavailable embedding dependencies: requests=%d, result=%+v", memoryRequests.Load(), result)
+	}
+}
 
 func TestStartupKeepsToolsWhenArchiveOpenFails(t *testing.T) {
 	root := t.TempDir()

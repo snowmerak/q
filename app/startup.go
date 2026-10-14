@@ -156,7 +156,7 @@ type startupRequest struct {
 	providerReady  bool
 }
 
-func (request startupRequest) run(modelReady chan<- struct{}) runtimeInitializedMsg {
+func (request startupRequest) run(modelReady chan<- struct{}) (result runtimeInitializedMsg) {
 	request.lifecycle.begin()
 	defer request.lifecycle.finish()
 	if err := request.workspaceStore.EnsureQGitIgnored(request.ctx); err != nil {
@@ -176,8 +176,44 @@ func (request startupRequest) run(modelReady chan<- struct{}) runtimeInitialized
 		close(modelReady)
 	}
 
-	result := runtimeInitializedMsg{
+	result = runtimeInitializedMsg{
 		config: loaded, gatewayConfig: request.manager.Config(), startupErr: startupErr,
+	}
+	var configuredClient chatClient
+	defer func() {
+		if result.err != nil {
+			result.err = errors.Join(result.err, request.lifecycle.closeResources())
+			if configuredClient != nil {
+				result.err = errors.Join(result.err, configuredClient.Close())
+			}
+		}
+	}()
+	// Tool construction indexes project skills, so its embedding provider must
+	// exist before opening that path. A saved model alone is not a ready runtime.
+	if request.configErr == nil && request.manager.Endpoint() != "" {
+		if !loaded.Provider.Managed {
+			loaded.UseManagedGateway()
+		}
+		var clientErr error
+		configuredClient, clientErr = request.factory(loaded)
+		if clientErr != nil {
+			result.err = clientErr
+			return result
+		}
+	}
+	var embedder qlibrary.Embedder
+	if configuredClient != nil {
+		embedder, _ = configuredClient.(qlibrary.Embedder)
+	}
+	if loaded.Embedding.Model != "" {
+		if configuredClient == nil {
+			result.err = errors.Join(errors.New("embedding provider runtime is not ready"), startupErr)
+			return result
+		}
+		if embedder == nil {
+			result.err = errors.New("configured LLM client does not support embeddings")
+			return result
+		}
 	}
 	vectorConfig := sessionstore.VectorConfig{}
 	if loaded.Embedding.Model != "" {
@@ -223,6 +259,7 @@ func (request startupRequest) run(modelReady chan<- struct{}) runtimeInitialized
 		archive = sessionstore.NewWriterWithOptions(archiveStore, sessionstore.WriterOptions{
 			Context: memoryContext, Prepare: semanticArchive.Prepare,
 		})
+		request.lifecycle.setResources(nil, nil, archive, memoryRuntime)
 	}
 	workspaceLSP, toolsErr := request.workspaceStore.LoadLSP()
 	var tools *qtools.Runtime
@@ -233,6 +270,18 @@ func (request startupRequest) run(modelReady chan<- struct{}) runtimeInitialized
 			libraryConfig = qlibrary.DefaultConfig()
 		}
 		libraryClient = qlibrary.NewClient(libraryConfig.Endpoint(), "", 5*time.Second)
+		if configuredClient != nil {
+			if err := libraryClient.ConfigureEmbedding(embedder, loaded.Embedding.Model, loaded.Embedding.Dimensions); err != nil {
+				result.err = err
+				return result
+			}
+			if semanticArchive != nil {
+				if err := semanticArchive.ConfigureContext(request.ctx, embedder, loaded.Embedding.Model, loaded.Embedding.Dimensions); err != nil {
+					result.err = err
+					return result
+				}
+			}
+		}
 		var toolArchive builtin.Archive
 		if semanticArchive != nil {
 			toolArchive = semanticArchive
@@ -257,11 +306,6 @@ func (request startupRequest) run(modelReady chan<- struct{}) runtimeInitialized
 		}
 	}
 	if toolsErr != nil {
-		if archive != nil {
-			_ = archive.Close()
-		} else if archiveStore != nil {
-			_ = archiveStore.Close()
-		}
 		result.err = toolsErr
 		return result
 	}
@@ -269,56 +313,16 @@ func (request startupRequest) run(modelReady chan<- struct{}) runtimeInitialized
 	result.archive = archive
 	result.archiveSearch = semanticArchive
 
-	if request.configErr == nil && request.manager.Endpoint() != "" {
-		if !loaded.Provider.Managed {
-			loaded.UseManagedGateway()
-		}
-		configuredClient, clientErr := request.factory(loaded)
-		if clientErr != nil {
-			result.err = clientErr
-			return result
-		}
+	if configuredClient != nil {
 		if loaded.Embedding.Model != "" {
-			embedder, ok := configuredClient.(qlibrary.Embedder)
-			if !ok {
-				_ = configuredClient.Close()
-				result.err = errors.New("configured LLM client does not support embeddings")
-				return result
-			}
 			if libraryClient != nil {
-				if embeddingErr := libraryClient.ConfigureEmbedding(
-					embedder, loaded.Embedding.Model, loaded.Embedding.Dimensions,
-				); embeddingErr != nil {
-					_ = configuredClient.Close()
-					result.err = embeddingErr
-					return result
-				}
 				if _, embeddingErr := libraryClient.SyncEmbeddings(request.ctx); embeddingErr != nil {
 					result.startupErr = errors.Join(result.startupErr, embeddingErr)
 				}
 			}
 			if semanticArchive != nil {
-				if embeddingErr := semanticArchive.Configure(
-					embedder, loaded.Embedding.Model, loaded.Embedding.Dimensions,
-				); embeddingErr != nil {
-					_ = configuredClient.Close()
-					result.err = embeddingErr
-					return result
-				}
 				if _, embeddingErr := semanticArchive.Backfill(request.ctx); embeddingErr != nil {
 					result.startupErr = errors.Join(result.startupErr, embeddingErr)
-				}
-			}
-		}
-		if loaded.Embedding.Model == "" {
-			if embedder, ok := configuredClient.(qlibrary.Embedder); ok {
-				if libraryClient != nil {
-					_ = libraryClient.ConfigureEmbedding(embedder, "", 0)
-				}
-				if semanticArchive != nil {
-					if err := semanticArchive.Configure(embedder, "", 0); err != nil {
-						result.startupErr = errors.Join(result.startupErr, err)
-					}
 				}
 			}
 		}
