@@ -63,7 +63,9 @@ func webSearchAvailable(service builtin.WebSearcher) bool {
 	return true
 }
 
-func webSearchTool(name string) bool { return name == "web_search" || name == "web_search_batch" }
+func webSearchTool(name string) bool {
+	return name == "browser_search" || name == "web_search" || name == "web_search_batch"
+}
 
 func (s *configuredWebSearch) Search(ctx context.Context, in websearch.Input) (websearch.Output, error) {
 	_, soConfig, err := s.settings()
@@ -84,7 +86,7 @@ func (s *configuredWebSearch) Search(ctx context.Context, in websearch.Input) (w
 	if !ok {
 		caller = s.fallback
 	}
-	engine := websearch.Engine{Decision: decision, DecisionModel: model, Planner: &webQueryPlanner{caller: caller}, PlannerModel: caller.Model, NewSession: func() websearch.Session { return websearch.NewBrowserSession() }}
+	engine := websearch.Engine{Decision: decision, DecisionModel: model, Planner: &webQueryPlanner{caller: caller}, PlannerModel: caller.Model, Discovery: websearch.ScourSearcher{}, NewSession: func() websearch.Session { return websearch.NewBrowserSession() }}
 	if soConfig.RoleModels[systemoneconfig.RoleWebSearchFinish] != "" {
 		finishProvider, finishModel, err := soConfig.ResolveModel(systemoneconfig.RoleWebSearchFinish)
 		if err != nil {

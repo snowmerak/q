@@ -65,7 +65,7 @@ func TestMalformedLinkDoesNotDiscardPageContent(t *testing.T) {
 	requireBrowser(t)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/html")
-		_, _ = fmt.Fprint(w, `<title>Documentation</title><main>Valid cancellation evidence.</main><a href="http://[">Malformed link</a><a href="/valid">Valid link</a><a href="javascript:void(0)">Script link</a>`)
+		_, _ = fmt.Fprint(w, `<title>Documentation</title><main>Valid cancellation evidence.<img alt="Organization chart: Example Ministry."></main><a href="http://[">Malformed link</a><a href="/valid">Valid link</a><a href="javascript:void(0)">Script link</a>`)
 	}))
 	defer server.Close()
 	runtime := New()
@@ -74,10 +74,10 @@ func TestMalformedLinkDoesNotDiscardPageContent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if page.Title != "Documentation" || !strings.Contains(page.Text, "Valid cancellation evidence.") || len(page.Links) != 1 || page.Links[0].URL != server.URL+"/valid" {
+	if page.Title != "Documentation" || !strings.Contains(page.Text, "Valid cancellation evidence.") || !strings.Contains(page.Text, "Organization chart: Example Ministry.") || len(page.Links) != 1 || page.Links[0].URL != server.URL+"/valid" {
 		t.Fatalf("malformed link discarded valid content: %+v", page)
 	}
-	if page, err := runtime.Read(t.Context(), TabInput{TabID: page.TabID}); err != nil || len(page.Links) != 1 {
+	if page, err := runtime.Read(t.Context(), TabInput{TabID: page.TabID}); err != nil || len(page.Links) != 1 || !strings.Contains(page.Text, "Organization chart: Example Ministry.") {
 		t.Fatalf("read = %+v, %v", page, err)
 	}
 }

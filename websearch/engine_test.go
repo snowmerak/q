@@ -123,7 +123,7 @@ func TestCompletionUsesIndependentSystemOneModel(t *testing.T) {
 		maxSteps int
 		fail     bool
 	}{
-		{name: "finish action", maxSteps: 2},
+		{name: "first source before next action", maxSteps: 20},
 		{name: "budget boundary", maxSteps: 1},
 		{name: "coverage error retains evidence", maxSteps: 2, fail: true},
 	} {
@@ -167,7 +167,7 @@ func TestCompletionUsesIndependentSystemOneModel(t *testing.T) {
 				return &systemone.Result{Answers: answers}, nil
 			})
 			out, err := e.Search(t.Context(), Input{Goal: "Explicit evidence", StartURL: u, MaxSteps: tc.maxSteps})
-			if err != nil || len(out.Evidence) != 1 || !s.closed || out.CoverageCalls != 1 || out.CoverageModel != "qwen3.8-27b" || out.SystemOneModel != "gemma4-e4b" || out.SystemOneCalls != tc.maxSteps+2 {
+			if err != nil || len(out.Evidence) != 1 || !s.closed || out.CoverageCalls != 1 || out.CoverageModel != "qwen3.8-27b" || out.SystemOneModel != "gemma4-e4b" || out.SystemOneCalls != 3 || out.Steps != 1 {
 				t.Fatalf("output=%+v err=%v", out, err)
 			}
 			if tc.fail {
@@ -200,7 +200,7 @@ func TestNavigationUsesExplicitDecisionTimeout(t *testing.T) {
 func TestQueryEscalationOnlyAfterMissingCoverage(t *testing.T) {
 	u := "https://example.com/overview"
 	s := &fakeSession{pages: map[string]Document{u: doc(u, "Overview, no exception details."), searchURL("timeout exception catch"): doc("https://example.com/detail", "The exception is caught outside the context.")}}
-	base := sequence(t, "collect_0", "accept", "finish", "query", "collect_0", "accept", "finish")
+	base := sequence(t, "collect_0", "accept", "query", "collect_0", "accept", "finish")
 	checks := 0
 	planCalls := 0
 	e := Engine{Decision: decisionFunc(func(ctx context.Context, r systemone.Request, o systemone.CallOptions) (*systemone.Result, error) {
@@ -233,7 +233,7 @@ func TestQueryEscalationOnlyAfterMissingCoverage(t *testing.T) {
 func TestDecompositionCannotDropOriginalGoalAtCompletion(t *testing.T) {
 	u := "https://example.com/docs"
 	s := &fakeSession{pages: map[string]Document{u: doc(u, "Part one only.")}}
-	base := sequence(t, "decompose", "collect_0", "accept", "finish", "stop")
+	base := sequence(t, "decompose", "collect_0", "accept", "stop")
 	e := Engine{Decision: decisionFunc(func(ctx context.Context, r systemone.Request, o systemone.CallOptions) (*systemone.Result, error) {
 		if _, ok := r.Questions["requirement_0"]; ok {
 			return &systemone.Result{Answers: map[string]systemone.Answer{"requirement_0": {Type: systemone.QuestionChoice, Choice: "supported"}, "requirement_1": {Type: systemone.QuestionChoice, Choice: "missing"}}}, nil
@@ -313,7 +313,7 @@ func TestInvalidInputNeverCreatesSession(t *testing.T) {
 func TestFailedFinishCannotRepeatAtBudgetBoundary(t *testing.T) {
 	u := "https://example.com/partial"
 	s := &fakeSession{pages: map[string]Document{u: doc(u, "Only a partial answer.")}}
-	base := sequence(t, "collect_0", "accept", "finish")
+	base := sequence(t, "collect_0", "accept", "stop")
 	checks := 0
 	e := Engine{Decision: decisionFunc(func(ctx context.Context, r systemone.Request, o systemone.CallOptions) (*systemone.Result, error) {
 		if _, ok := r.Questions["requirement_0"]; ok {

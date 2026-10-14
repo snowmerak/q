@@ -440,7 +440,7 @@ func (r *Runtime) Tools() []client.Tool {
 	available := webSearchAvailable(r.webSearch)
 	// An initially unconfigured MCP catalog omits search schemas. Load them
 	// once when settings enable search, so existing sessions need no restart.
-	if available && !hasToolName(r.tools, "web_search") {
+	if available && (!hasToolName(r.tools, "browser_search") || !hasToolName(r.tools, "web_search")) {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		listed, err := r.client.ListTools(ctx, nil)
 		cancel()

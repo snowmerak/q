@@ -252,12 +252,12 @@ func BuiltinAgentDefinitions() []AgentDefinition {
 		"search_archive", "get_archive_record", "lsp_status", "lsp_diagnostics",
 		"lsp_hover", "lsp_definition", "lsp_references", "lsp_document_symbols",
 		"lsp_workspace_symbols",
-		"browser_open", "browser_read", "browser_snapshot", "browser_close", "web_search", "web_search_batch",
+		"browser_open", "browser_read", "browser_snapshot", "browser_close", "browser_search", "web_search_batch",
 	}
 	developerTools := append(append([]string(nil), readTools...),
 		"edit_file", "write_file", "create_directory", "move_path", "copy_path", "remove_path", "run_command", "cmd_status", "wait", "browser_click", "browser_fill")
 	juniorTools := slices.DeleteFunc(append([]string(nil), developerTools...), func(name string) bool {
-		return name == "web_search" || name == "web_search_batch"
+		return name == "browser_search" || name == "web_search" || name == "web_search_batch"
 	})
 	return []AgentDefinition{
 		{

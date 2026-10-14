@@ -4,7 +4,11 @@ package webbrowser
 // applied in Chrome so a large page cannot flood the CDP response or Loom.
 const readScript = `() => {
  const body = document.querySelector('main, article, [role="main"]') || document.body;
- const text = Array.from(body ? body.innerText : '');
+ const rendered = body ? body.innerText : '';
+ const alternatives = body ? Array.from(body.querySelectorAll('img[alt]'))
+   .map(img => (img.getAttribute('alt') || '').trim())
+   .filter(alt => alt && !rendered.includes(alt)) : [];
+ const text = Array.from([rendered, ...alternatives].join('\n'));
  const anchors = Array.from(document.querySelectorAll('a[href]'));
  const links = anchors.filter(a => {
    try { return /^https?:$/.test(new URL(a.href).protocol); }

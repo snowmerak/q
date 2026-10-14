@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/url"
 	"strings"
 	"time"
 
@@ -137,68 +136,5 @@ func fetch(ctx context.Context, h *http.Client, target string) (webbrowser.PageC
 	if err != nil {
 		return p, err
 	}
-	base := res.Request.URL
-	var text strings.Builder
-	var walk func(*html.Node)
-	var nodeText func(*html.Node) string
-	nodeText = func(n *html.Node) string {
-		if n.Type == html.TextNode {
-			return n.Data
-		}
-		var b strings.Builder
-		for c := n.FirstChild; c != nil; c = c.NextSibling {
-			b.WriteString(nodeText(c))
-			b.WriteByte(' ')
-		}
-		return strings.Join(strings.Fields(b.String()), " ")
-	}
-	walk = func(n *html.Node) {
-		if n.Type == html.ElementNode {
-			switch n.Data {
-			case "script", "style", "nav", "footer", "noscript", "svg", "template":
-				return
-			case "title":
-				p.Title = clip(nodeText(n), 200)
-				return
-			case "a":
-				for _, a := range n.Attr {
-					if a.Key == "href" && len(p.Links) < 300 {
-						if u, e := url.Parse(a.Val); e == nil {
-							u = base.ResolveReference(u)
-							if v := u.Query().Get("uddg"); v != "" && strings.HasSuffix(u.Hostname(), "duckduckgo.com") {
-								if decoded, e := url.Parse(v); e == nil {
-									u = decoded
-								}
-							}
-							u.Fragment = ""
-							if validURL(u.String()) {
-								p.Links = append(p.Links, webbrowser.Link{Text: clip(nodeText(n), 300), URL: u.String()})
-							}
-						}
-					}
-				}
-			}
-			if n.Data == "p" || n.Data == "div" || n.Data == "li" || n.Data == "h1" || n.Data == "h2" || n.Data == "h3" || n.Data == "pre" {
-				text.WriteByte('\n')
-			}
-		}
-		if n.Type == html.TextNode {
-			text.WriteString(n.Data)
-			text.WriteByte(' ')
-		}
-		for c := n.FirstChild; c != nil; c = c.NextSibling {
-			walk(c)
-		}
-	}
-	walk(doc)
-	lines := []string{}
-	for _, line := range strings.Split(text.String(), "\n") {
-		if normalized := strings.Join(strings.Fields(line), " "); normalized != "" {
-			lines = append(lines, normalized)
-		}
-	}
-	raw := strings.Join(lines, "\n\n")
-	p.Text = clip(raw, 250000)
-	p.Truncated = len(raw) > len(p.Text)
-	return p, nil
+	return extractDocument(doc, res.Request.URL), nil
 }

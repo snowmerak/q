@@ -43,10 +43,10 @@ func TestWebSearchMCPAndLoomIntegration(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = r.Close() }()
-	if !runtimeHasTool(r, "web_search") {
-		t.Fatal("web_search missing")
+	if !runtimeHasTool(r, "browser_search") || !runtimeHasTool(r, "web_search") {
+		t.Fatal("browser_search or its compatibility alias is missing")
 	}
-	result, err := r.Call(t.Context(), client.ToolCall{ID: "web-call", Type: client.ToolTypeFunction, Function: client.FunctionCall{Name: "web_search", Arguments: `{"goal":"research goal"}`}})
+	result, err := r.Call(t.Context(), client.ToolCall{ID: "web-call", Type: client.ToolTypeFunction, Function: client.FunctionCall{Name: "browser_search", Arguments: `{"goal":"research goal"}`}})
 	if err != nil || result.IsError || s.calls != 1 {
 		t.Fatalf("result=%+v err=%v calls=%d", result, err, s.calls)
 	}
@@ -58,7 +58,7 @@ func TestWebSearchMCPAndLoomIntegration(t *testing.T) {
 		t.Fatalf("receipt=%+v", receipt)
 	}
 	artifact, err := r.loom.Store.Inspect(t.Context(), receipt.LoomRef)
-	if err != nil || artifact.Source["tool"] != "web_search" {
+	if err != nil || artifact.Source["tool"] != "browser_search" {
 		t.Fatalf("artifact=%+v err=%v", artifact, err)
 	}
 }
@@ -252,53 +252,57 @@ func (f webPlannerChatFunc) Chat(ctx context.Context, request client.ChatRequest
 }
 
 func TestConcurrentWebSearchCallsKeepTheirCallerModelThroughMCP(t *testing.T) {
-	search := batchSearchFunc(func(ctx context.Context, in websearch.Input) (websearch.Output, error) {
-		caller, ok := client.ToolModelFromContext(ctx)
-		if !ok {
-			return websearch.Output{}, fmt.Errorf("caller model missing inside MCP handler")
-		}
-		plan, err := (&webQueryPlanner{caller: caller}).Plan(ctx, websearch.PlanRequest{Operation: "query", Goal: in.Goal})
-		return websearch.Output{Status: "complete", Query: plan.Query, PlannerModel: caller.Model, PlannerCalls: 1}, err
-	})
-	runtime, err := newRuntimeWithLSP(t.Context(), sameRuntimeRoots(t.TempDir()), nil, nil, loom.NewProcessEvaluator(), loom.StoreOptions{}, nil, nil, WithWebSearch(search))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = runtime.Close() }()
-	results := make(chan error, 2)
-	var workers sync.WaitGroup
-	for _, model := range []string{"caller-a", "caller-b"} {
-		workers.Go(func() {
-			chat := webPlannerChatFunc(func(ctx context.Context, request client.ChatRequest) (*client.ChatResponse, error) {
-				if request.Model != model || request.ReasoningEffort != "high" || request.WorkingDirectory != "directory-"+model || request.Extra["caller_policy"] != model || len(request.Tools) != 0 || request.ConversationID != "" || request.Temperature != nil || request.MaxTokens != nil {
-					return nil, fmt.Errorf("caller settings changed: %+v", request)
+	for _, toolName := range []string{"browser_search", "web_search"} {
+		t.Run(toolName, func(t *testing.T) {
+			search := batchSearchFunc(func(ctx context.Context, in websearch.Input) (websearch.Output, error) {
+				caller, ok := client.ToolModelFromContext(ctx)
+				if !ok {
+					return websearch.Output{}, fmt.Errorf("caller model missing inside MCP handler")
 				}
-				if _, ok := ctx.Deadline(); !ok {
-					return nil, fmt.Errorf("caller deadline lost")
-				}
-				return &client.ChatResponse{Choices: []client.Choice{{Message: client.Message{Role: client.RoleAssistant, Content: `{"query":"written-` + model + `"}`}}}}, nil
+				plan, err := (&webQueryPlanner{caller: caller}).Plan(ctx, websearch.PlanRequest{Operation: "query", Goal: in.Goal})
+				return websearch.Output{Status: "complete", Query: plan.Query, PlannerModel: caller.Model, PlannerCalls: 1}, err
 			})
-			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
-			defer cancel()
-			ctx = client.WithToolModel(ctx, client.ToolModel{Client: chat, Model: model, ReasoningEffort: "high", WorkingDirectory: "directory-" + model, Extra: map[string]any{"caller_policy": model}, Role: "research"})
-			result, err := runtime.Call(ctx, client.ToolCall{ID: "same-call-id", Function: client.FunctionCall{Name: "web_search", Arguments: `{"goal":"` + model + `"}`}})
-			if err == nil && (result.IsError || !strings.Contains(result.Content, "written-"+model)) {
-				err = fmt.Errorf("wrong caller result: %+v", result)
+			runtime, err := newRuntimeWithLSP(t.Context(), sameRuntimeRoots(t.TempDir()), nil, nil, loom.NewProcessEvaluator(), loom.StoreOptions{}, nil, nil, WithWebSearch(search))
+			if err != nil {
+				t.Fatal(err)
 			}
-			results <- err
+			defer func() { _ = runtime.Close() }()
+			results := make(chan error, 2)
+			var workers sync.WaitGroup
+			for _, model := range []string{"caller-a", "caller-b"} {
+				workers.Go(func() {
+					chat := webPlannerChatFunc(func(ctx context.Context, request client.ChatRequest) (*client.ChatResponse, error) {
+						if request.Model != model || request.ReasoningEffort != "high" || request.WorkingDirectory != "directory-"+model || request.Extra["caller_policy"] != model || len(request.Tools) != 0 || request.ConversationID != "" || request.Temperature != nil || request.MaxTokens != nil {
+							return nil, fmt.Errorf("caller settings changed: %+v", request)
+						}
+						if _, ok := ctx.Deadline(); !ok {
+							return nil, fmt.Errorf("caller deadline lost")
+						}
+						return &client.ChatResponse{Choices: []client.Choice{{Message: client.Message{Role: client.RoleAssistant, Content: `{"query":"written-` + model + `"}`}}}}, nil
+					})
+					ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+					defer cancel()
+					ctx = client.WithToolModel(ctx, client.ToolModel{Client: chat, Model: model, ReasoningEffort: "high", WorkingDirectory: "directory-" + model, Extra: map[string]any{"caller_policy": model}, Role: "research"})
+					result, err := runtime.Call(ctx, client.ToolCall{ID: "same-call-id", Function: client.FunctionCall{Name: toolName, Arguments: `{"goal":"` + model + `"}`}})
+					if err == nil && (result.IsError || !strings.Contains(result.Content, "written-"+model)) {
+						err = fmt.Errorf("wrong caller result: %+v", result)
+					}
+					results <- err
+				})
+			}
+			workers.Wait()
+			close(results)
+			for err := range results {
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			runtime.callContexts.mu.Lock()
+			defer runtime.callContexts.mu.Unlock()
+			if len(runtime.callContexts.pending) != 0 {
+				t.Fatal("caller contexts leaked after MCP calls")
+			}
 		})
-	}
-	workers.Wait()
-	close(results)
-	for err := range results {
-		if err != nil {
-			t.Fatal(err)
-		}
-	}
-	runtime.callContexts.mu.Lock()
-	defer runtime.callContexts.mu.Unlock()
-	if len(runtime.callContexts.pending) != 0 {
-		t.Fatal("caller contexts leaked after MCP calls")
 	}
 }
 
@@ -323,7 +327,7 @@ func TestWebSearchVisibilityFollowsModelSettingsWithoutRestart(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		for _, name := range []string{"web_search", "web_search_batch"} {
+		for _, name := range []string{"browser_search", "web_search", "web_search_batch"} {
 			found := false
 			for _, tool := range listed.Tools {
 				found = found || tool.Name == name
@@ -436,7 +440,7 @@ func TestConfiguredWebSearchUsesNativeRoleWithoutLoadingPlannerProvider(t *testi
 		t.Fatal(err)
 	}
 	out, err := (&configuredWebSearch{dir: dir}).Search(t.Context(), websearch.Input{Goal: "the exact requirement", StartURL: page.URL})
-	if err != nil || out.Status != "complete" || out.PlannerCalls != 0 || out.SystemOneCalls != 4 || out.CoverageModel != "gemma4-e4b" || out.CoverageCalls != 1 {
+	if err != nil || out.Status != "complete" || out.PlannerCalls != 0 || out.SystemOneCalls != 3 || out.CoverageModel != "gemma4-e4b" || out.CoverageCalls != 1 {
 		t.Fatalf("out=%+v err=%v calls=%d", out, err, calls)
 	}
 	// No providers.json exists: planner setup is deferred until its operation.
@@ -507,7 +511,7 @@ func TestConfiguredWebSearchRoutesCompletionToSeparateNativeModel(t *testing.T) 
 		t.Fatal(err)
 	}
 	out, err := (&configuredWebSearch{dir: dir}).Search(t.Context(), websearch.Input{Goal: "the exact requirement", StartURL: page.URL})
-	if err != nil || out.Status != "complete" || out.PlannerCalls != 0 || out.CoverageCalls != 1 || out.CoverageModel != "qwen3.8-27b" || navigationCalls != 3 || coverageCalls != 1 || out.SystemOneCalls != 4 {
+	if err != nil || out.Status != "complete" || out.PlannerCalls != 0 || out.CoverageCalls != 1 || out.CoverageModel != "qwen3.8-27b" || navigationCalls != 2 || coverageCalls != 1 || out.SystemOneCalls != 3 {
 		t.Fatalf("output=%+v err=%v navigation=%d coverage=%d", out, err, navigationCalls, coverageCalls)
 	}
 }

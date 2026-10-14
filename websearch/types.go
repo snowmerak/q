@@ -27,36 +27,54 @@ type Evidence struct {
 }
 
 type Output struct {
-	Status         string           `json:"status"`
-	StopReason     string           `json:"stop_reason"`
-	Query          string           `json:"query"`
-	Requirements   []string         `json:"requirements"`
-	Unresolved     []string         `json:"unresolved_requirements"`
-	Evidence       []Evidence       `json:"evidence"`
-	Steps          int              `json:"steps"`
-	SystemOneCalls int              `json:"system_one_calls"`
-	PlannerCalls   int              `json:"planner_calls"`
-	SystemOneModel string           `json:"system_one_model"`
-	CoverageCalls  int              `json:"coverage_calls"`
-	CoverageModel  string           `json:"coverage_model"`
-	PlannerModel   string           `json:"planner_model,omitempty"`
-	Errors         []string         `json:"errors,omitempty"`
-	Actions        []Step           `json:"actions"`
-	LastPage       *PageObservation `json:"last_page,omitempty"`
+	Status           string            `json:"status"`
+	StopReason       string            `json:"stop_reason"`
+	Query            string            `json:"query"`
+	Requirements     []string          `json:"requirements"`
+	Unresolved       []string          `json:"unresolved_requirements"`
+	Evidence         []Evidence        `json:"evidence"`
+	Steps            int               `json:"steps"`
+	SystemOneCalls   int               `json:"system_one_calls"`
+	PlannerCalls     int               `json:"planner_calls"`
+	SystemOneModel   string            `json:"system_one_model"`
+	CoverageCalls    int               `json:"coverage_calls"`
+	CoverageModel    string            `json:"coverage_model"`
+	PlannerModel     string            `json:"planner_model,omitempty"`
+	Errors           []string          `json:"errors,omitempty"`
+	Actions          []Step            `json:"actions"`
+	LastPage         *PageObservation  `json:"last_page,omitempty"`
+	SearchCalls      int               `json:"search_calls,omitempty"`
+	Candidates       []Candidate       `json:"candidates,omitempty"`
+	LastObservation  string            `json:"last_observation,omitempty"`
+	SystemOneTimings []SystemOneTiming `json:"system_one_timings,omitempty"`
+}
+
+// SystemOneTiming separates local admission from the remote request, which
+// includes network waiting and the provider's own queue/inference time.
+type SystemOneTiming struct {
+	Phase          string  `json:"phase"`
+	Model          string  `json:"model"`
+	InputBytes     int     `json:"input_bytes"`
+	QueueSeconds   float64 `json:"queue_seconds"`
+	RequestSeconds float64 `json:"request_seconds"`
+	Error          string  `json:"error,omitempty"`
 }
 
 type Step struct {
-	Action string `json:"action"`
-	URL    string `json:"url"`
+	Action  string `json:"action"`
+	URL     string `json:"url"`
+	Target  string `json:"target,omitempty"`
+	Outcome string `json:"outcome,omitempty"`
 }
 
 type PageObservation struct {
-	URL       string `json:"url"`
-	Title     string `json:"title"`
-	Preview   string `json:"preview"`
-	Links     int    `json:"links"`
-	Controls  int    `json:"controls"`
-	Truncated bool   `json:"truncated"`
+	URL         string `json:"url"`
+	Title       string `json:"title"`
+	Preview     string `json:"preview"`
+	Links       int    `json:"links"`
+	Controls    int    `json:"controls"`
+	Truncated   bool   `json:"truncated"`
+	ContentHash string `json:"content_hash,omitempty"`
 }
 
 type PlanRequest struct {
@@ -103,4 +121,7 @@ type Engine struct {
 	Planner          Planner
 	PlannerModel     string
 	NewSession       func() Session
+	// Discovery supplies ranked URL candidates without opening a browser.
+	// Nil retains direct search-page navigation for existing embedders.
+	Discovery MetaSearcher
 }

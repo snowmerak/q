@@ -22,7 +22,8 @@ Builtin tools:
 - `browser_snapshot`: inspect visible interactive elements and obtain refs
 - `browser_click`, `browser_fill`: interact using refs from the latest snapshot
 - `browser_close`: close a tab and stop Chrome immediately when the last tab closes
-- `web_search`: System One research loop with source passages and requirement coverage; Qwen writes queries or decomposes the goal only when requested by System One
+- `browser_search`: one-call System One research loop covering search, navigation, page reading, source passages and requirement coverage; the calling model writes queries or decomposes the goal only when requested by System One
+- `web_search`: compatibility name for `browser_search`
 - `web_search_batch`: run independent research tasks concurrently with per-task evidence, outcomes and timings
 
 Browser tools use Rod inside Q and a locally installed Chrome/Chromium (including
@@ -41,14 +42,23 @@ Text is capped at 24,000 Unicode characters, links and interactive elements at
 100, and open tabs at 8. Full tool results use Q's normal Loom capture path.
 This initial implementation inspects the main document only, excluding iframe
 and shadow-root contents. It supplies browser navigation rather than a search
-index; `web_search` supplies a bounded research workflow on top. The existing
-ACP web-search agent remains available for search delegation.
+index; `browser_search` supplies a bounded research workflow on top. Prefer it for
+web research and factual lookup; raw browser tools remain for direct interactive
+website work. The existing ACP web-search agent remains available for search
+delegation.
 
-`web_search` is registered in both MCP stdio and in-process runtimes, including
+`browser_search` is registered in both MCP stdio and in-process runtimes, including
 the builtin interviewer, manager, research, and senior developer profiles.
 These profiles also expose `web_search_batch`; the junior developer profile
 omits both search tools. Custom profiles select them explicitly in `tools`.
-Static documents are fetched and extracted in Go. System One chooses links,
+Initial discovery and query refinements use the pinned Go scour library to
+query its eight general web engines concurrently, with an eight-second timeout
+per engine. Successful results are merged and ranked even when other engines
+fail; engine failures remain in the research result. At most 20 candidates are
+retained, filtered by `allowed_domains`. Search snippets guide selection and
+never count as source evidence. No scour answer or infobox plugins run.
+System One chooses candidate URLs before Q fetches their original source text.
+Static documents are fetched and extracted in Go. System One also chooses links,
 passages, whether to inspect browser controls,
 whether to fill a search field, and whether to submit or click its search
 button. Input values come from the current query or requirements; new text is
@@ -59,12 +69,32 @@ actions, but it is not a browser network sandbox: page JavaScript still runs.
 Each search owns a separate temporary browser session and closes it on return,
 including errors and cancellation; no persistent browser daemon is required.
 
+Static extraction prioritizes semantic main content while retaining navigation
+URLs, including links inside menus omitted from source prose. Image `alt` text
+is retained as publisher-provided text; no image recognition is performed.
+Navigation requests include only the currently selectable search candidates,
+with bounded snippet previews. Full candidates remain in the stored result.
+
+Within each research call, Q hashes whitespace-normalized extracted source text
+with SHA-256. A fresh fetch of a previously seen page is rejected as `unchanged`
+when the content hash matches; changed bodies remain usable. Request URLs and
+redirect destinations are remembered, and fragments/common tracking parameters
+are excluded from URL identity. Unchanged navigation and browser actions are
+removed from the available choices for that source state, including read/render
+loops with changing CDP refs. Current search controls remain usable even when
+rendering did not change the body. `last_page.content_hash` and action `target`/
+`outcome` fields expose the comparison; stored source passages are not replaced
+by repeated whitespace-only responses.
+If a source body changes, its old collected passages are invalidated and
+completion must be checked against the new evidence.
+
 System One requires explicit `web_search` and `web_search_finish` entries in
 global `systemone.json` `role_models`. Choose them independently in Studio's
 Settings → System One panel as Web Search Navigation and Web Search Completion.
-Both `web_search` and `web_search_batch` are hidden until both assignments name
-configured providers and models. Clearing either assignment hides both tools
-and rejects direct calls; missing or invalid settings also hide them. Existing
+`browser_search`, its `web_search` compatibility name and `web_search_batch` are
+hidden until both assignments name configured providers and models. Clearing
+either assignment hides all three tools and rejects direct calls; missing or
+invalid settings also hide them. Existing
 in-process sessions refresh the catalog when search becomes configured; MCP
 clients see the current configuration when they request `tools/list`. No model
 endpoint is contacted to decide availability. The default model alone does not
@@ -78,15 +108,19 @@ the existing role map:
 
 Gemma still selects the `finish` action; Qwen checks each requirement and the
 original goal through native System One `supported`/`missing` choices. The same
-Qwen check runs at the action-budget boundary. When System One requests `query`
+Qwen check runs immediately after the first accepted source passage, on an
+explicit finish action, and at the action-budget boundary when evidence has
+changed. A successful first-source check ends the call; a missing verdict guides
+continued navigation without automatically rechecking every added passage.
+When System One requests `query`
 or `decompose`, generation reuses the calling agent's existing model client,
 model, reasoning setting and provider request options. Main TUI/Studio/ACP loops
 bind their active model; delegated agents bind their selected role model,
 including a successful model-group fallback. Parallel calls keep separate
 bindings through MCP. No provider is opened directly, and no model or reasoning
 level is hard-coded. Generated requests use isolated messages and do not reuse
-the caller's stateful conversation ID. The caller's client and search context
-control waiting; there is no separate 90-second generation timeout.
+the caller's stateful conversation ID. Generation has a 90-second timeout, also
+subject to the caller's client and search deadline.
 
 `q-mcp` uses its configured Q default chat client/model when no calling loop is
 present. A standalone embedded runtime can supply `client.WithToolModel` on its
@@ -111,18 +145,23 @@ Example tool arguments:
 
 Without `query`, the initial search uses the goal directly. Without
 `requirements`, the whole goal starts as one requirement and System One may
-request decomposition. `start_url` can bypass initial DuckDuckGo search.
+request decomposition. `start_url` bypasses initial metasearch.
 The result contains verbatim passages with URLs, unresolved requirements,
 action history and System One/planner call counts. Source acceptance and
 completion are separate System One assessments; completion checks both the
 requirements and the original goal to catch incomplete decompositions. Results
-include `coverage_model` and `coverage_calls`; `system_one_calls`
+include `search_calls`, ranked `candidates`, `coverage_model` and `coverage_calls`; `system_one_calls`
 counts all native calls, including coverage. `planner_calls` counts only
 generative query/decomposition operations. Completion checks reduce premature
 completion but remain model judgments, especially for
 subtle qualifications. `allowed_domains` enforces evidence publisher hosts in
 code, including redirects, and filters link destinations to those publishers or
 known search result pages. It does not restrict browser subresource requests.
+`system_one_timings` records each admitted native request's phase, model, input
+bytes, local admission wait and remote request time (including any server queue).
+`last_observation` retains the final observation or failure. The bounded error
+list keeps the latest eight errors so early search failures cannot hide a later
+model timeout.
 
 Completion checks allow 30 minutes per native request; the completion HTTP
 client allows 30 minutes plus five seconds. Ordinary single-search action/source
