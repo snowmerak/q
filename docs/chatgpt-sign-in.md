@@ -43,11 +43,15 @@ account. Unsupported plan options, including output-token caps and temperature,
 produce errors; do not enable those overrides for ChatGPT models. Hosted image
 generation, file search, Code Interpreter, hosted MCP and tool_search are outside
 this preview's contract. Q's client-side function tools use supported namespaces.
+The generated `functions` namespace includes its own required description,
+separately from the descriptions on individual tools. Omitting that namespace
+description causes HTTP 400 (`Missing required parameter: 'tools[0].description'`)
+even when every child tool has a description; reconnecting cannot repair it.
 
 ## Local development and release validation
 
-Q's `go.mod` pins llm-provider `v0.0.0-20261004155157-5061a2c9fe38`, the
-published commit with ChatGPT support. The workspace contains Q and the existing
+Q's `go.mod` pins llm-provider `v0.0.0-20261014003100-b4af17ff09df`, including
+the ChatGPT namespace description fix. The workspace contains Q and the existing
 ACP modules; it does not need the sibling llm-provider checkout. Local
 `go test ./...`, `go vet ./...`, and Go builds use
 the published provider. Build the checked-in Studio assets with:
