@@ -165,6 +165,8 @@ func newHandlerRuntime(parent context.Context, store config.Store, runner sessio
 	mux.HandleFunc("/api/v1/projects", sessions.serveProjects)
 	mux.HandleFunc("/api/v1/projects/{project}", sessions.serveProject)
 	mux.HandleFunc("/api/v1/registered-sessions", sessions.serveRegisteredCollection)
+	mux.HandleFunc("POST /api/v1/chats", sessions.serveCreateChat)
+	mux.HandleFunc("DELETE /api/v1/chats/{registration}", sessions.serveDeleteChat)
 	mux.HandleFunc("DELETE /api/v1/registered-sessions/{registration}", sessions.serveRegisteredItem)
 	mux.HandleFunc("/api/v1/sessions", sessions.serveCollection)
 	mux.HandleFunc("GET /api/v1/sessions/{session}", sessions.serveDetail)

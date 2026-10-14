@@ -180,6 +180,7 @@ func (registry *sessionRegistry) saveLocked(value sessionRegistryDocument) error
 }
 
 type registeredSessionTree struct {
+	Kind           string           `json:"kind,omitempty"`
 	RegistrationID string           `json:"registration_id"`
 	WorkspaceRoot  string           `json:"workspace_root"`
 	ProjectID      string           `json:"project_id"`
@@ -301,7 +302,9 @@ func (service *sessionsService) registeredTree(item registeredSession, project *
 		RegistrationID: item.ID, WorkspaceRoot: item.WorkspaceRoot,
 		Session: sessionSummary{SessionID: item.SessionID}, RegisteredAt: item.RegisteredAt,
 	}
-	if project != nil {
+	if service.isChat(item.WorkspaceRoot) {
+		tree.Kind = "chat"
+	} else if project != nil {
 		tree.ProjectID = project.ID
 		tree.ProjectName = project.Name
 	}

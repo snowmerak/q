@@ -130,7 +130,8 @@ test('help exposes the command reference and scrolls to every section on desktop
 test('project selection refreshes workspaces and clears the previous selection', async ({ page, request }) => {
   const fixture = await (await request.get('/_test/fixture')).json();
   await page.getByTitle('Add or create session').click();
-  const dialog = page.getByRole('dialog', { name: 'Add a root session' });
+  const dialog = page.getByRole('dialog', { name: 'New session' });
+  await dialog.getByRole('tab', { name: 'Project', exact: true }).click();
   const project = dialog.getByRole('combobox', { name: 'Project', exact: true });
   const workspace = dialog.getByRole('combobox', { name: 'Workspace', exact: true });
   const load = dialog.locator('.project-workspace-picker').getByRole('button', { name: 'Load sessions' });
@@ -148,7 +149,7 @@ test('project selection refreshes workspaces and clears the previous selection',
   await expect(load).toBeDisabled();
   await workspace.selectOption(fixture.root);
   await load.click();
-  await expect(dialog.getByLabel('Workspace directory')).toHaveValue(fixture.root);
+  await expect(workspace).toHaveValue(fixture.root);
   await expect(dialog.getByRole('button', { name: /Create new session/ })).toBeVisible();
 });
 
@@ -206,7 +207,8 @@ test('folder browser closes before registration and registers the selected works
   const fixture = await (await request.get('/_test/fixture')).json();
   const home = (await (await request.get('/api/v1/directories')).json()).current;
   await page.getByTitle('Add or create session').click();
-  const registry = page.getByRole('dialog', { name: 'Add a root session' });
+  const registry = page.getByRole('dialog', { name: 'New session' });
+  await registry.getByRole('tab', { name: 'Workspace', exact: true }).click();
   await registry.getByRole('button', { name: 'Choose repository folder' }).click();
   const browser = page.getByRole('dialog', { name: 'Choose a folder' });
   await expect(browser.getByRole('textbox', { name: 'Directory path' })).toHaveValue(home);
@@ -228,6 +230,7 @@ test('folder browser closes before registration and registers the selected works
   const registered = (await (await request.get('/api/v1/registered-sessions')).json()).sessions;
   expect(registered.find((session) => session.registration_id === selectedID).workspace_root).toBe(fixture.root);
   await page.getByTitle('Add or create session').click();
+  await registry.getByRole('tab', { name: 'Workspace', exact: true }).click();
   await expect(registry.getByLabel('Workspace directory')).toHaveValue('');
   await page.keyboard.press('Escape');
   await expect(registry).toHaveCount(0);

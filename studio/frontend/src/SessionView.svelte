@@ -121,16 +121,16 @@
     await loadRegisteredSessions(selectedRegistration?.registration_id || '');
   }
 
-  async function registerSession(root: string, sessionID = '', create = false) {
-    if (!root) return;
+  async function registerSession(root: string, sessionID = '', create = false, chat = false) {
+    if (!root && !chat) return;
     sessionLoading = true;
     sessionGeneration += 1;
     runMonitor.stop();
     error = '';
     try {
-      const response = await requestResponse('/api/v1/registered-sessions', {
+      const response = await requestResponse(chat ? '/api/v1/chats' : '/api/v1/registered-sessions', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ workspace_root: root, session_id: sessionID, create })
+        body: JSON.stringify(chat ? {} : { workspace_root: root, session_id: sessionID, create })
       });
       const registration = (await response.json()) as RegisteredSessionTree;
       registrationDialogOpen = false;
@@ -140,6 +140,10 @@
     } finally {
       sessionLoading = false;
     }
+  }
+
+  async function createChat() {
+    await registerSession('', '', true, true);
   }
 
   function openRegistrationDialog() {
@@ -251,11 +255,12 @@
   }
 
   async function unregisterSession(registration: RegisteredSessionTree) {
-    if (!window.confirm(`Remove ${registration.session.title || 'this session'} from Studio? The workspace session will remain on disk.`)) return;
+    const chat = registration.kind === 'chat';
+    if (!window.confirm(chat ? `Delete ${registration.session.title || 'this chat'} and its locally stored data?` : `Remove ${registration.session.title || 'this session'} from Studio? The workspace session will remain on disk.`)) return;
     sessionLoading = true;
     error = '';
     try {
-      const response = await requestResponse(`/api/v1/registered-sessions/${encodeURIComponent(registration.registration_id)}`, { method: 'DELETE' });
+      const response = await requestResponse(`/api/v1/${chat ? 'chats' : 'registered-sessions'}/${encodeURIComponent(registration.registration_id)}`, { method: 'DELETE' });
       registeredSessions = registeredSessions.filter((item) => item.registration_id !== registration.registration_id);
       if (selectedRegistration?.registration_id === registration.registration_id) {
         const next = registeredSessions.find((item) => !item.issue);
@@ -272,6 +277,10 @@
 
   async function deleteSession() {
     if (!selected || !selectedRegistration || !workspaceRoot || sending || selectedDelegation) return;
+    if (selectedRegistration.kind === 'chat') {
+      await unregisterSession(selectedRegistration);
+      return;
+    }
     if (!window.confirm(`Delete ${selected.session.title || 'this session'} from ${workspaceRoot}? Its durable archive records will remain available.`)) return;
     sessionLoading = true;
     error = '';
@@ -675,14 +684,15 @@
     selectedRegistrationID={selectedRegistration?.registration_id || ''}
     selectedDelegationPath={selectedDelegation?.path || ''}
     onrefresh={refreshSessions} onproject={openProjectDialog} onregistration={openRegistrationDialog}
+    onchat={createChat}
     onselect={selectRegisteredSession} onunregister={unregisterSession} ondelegate={openDelegatedSession}
   />
 
   <section class="chat-panel">
     {#if error}<div class="session-error" role="alert">{error}</div>{/if}
     {#if selected}
-      <div class="chat-heading">
-        <div><h2>{selectedDelegation ? selectedDelegation.bookmark.agent.replace(/^builtin\//, '') : selected.session.title || 'New session'}</h2><p>{selectedDelegation ? `${selectedDelegation.bookmark.working_directory ? `${selectedDelegation.bookmark.working_directory} · ` : ''}${selectedDelegation.bookmark.prompt}` : workspaceRoot}</p></div>
+      <div class="chat-heading" class:personal-chat={selectedRegistration?.kind === 'chat' && !selectedDelegation}>
+        <div><h2>{selectedDelegation ? selectedDelegation.bookmark.agent.replace(/^builtin\//, '') : selected.session.title || (selectedRegistration?.kind === 'chat' ? 'New chat' : 'New session')}</h2><p>{selectedDelegation ? `${selectedDelegation.bookmark.working_directory ? `${selectedDelegation.bookmark.working_directory} · ` : ''}${selectedDelegation.bookmark.prompt}` : selectedRegistration?.kind === 'chat' ? 'Personal chat' : workspaceRoot}</p></div>
         <div class="chat-heading-actions">
           {#if !selectedDelegation && activeRun?.context_size}
             <div class="context-usage" title={`Estimated context usage: ${formatTokenCount(activeRun.context_used)} of ${formatTokenCount(activeRun.context_size)} tokens`}>
@@ -693,16 +703,16 @@
           {/if}
           <span class:running={sending}>{runStatus || (sending ? 'Running' : 'Ready')}</span>
           <button title="Browse session files" aria-label="Browse session files" aria-pressed={filesOpen} onclick={() => filesOpen = !filesOpen} disabled={!fileWorkspace}><Files aria-hidden="true" size={15} /></button>
-          <button title="Open repository changes" aria-label="Open repository changes" onclick={() => openChanges(fileWorkspace)} disabled={!fileWorkspace}><GitCompareArrows aria-hidden="true" size={15} /></button>
+          {#if selectedRegistration?.kind !== 'chat' || selectedDelegation}<button title="Open repository changes" aria-label="Open repository changes" onclick={() => openChanges(fileWorkspace)} disabled={!fileWorkspace}><GitCompareArrows aria-hidden="true" size={15} /></button>{/if}
           {#if selectedDelegation?.state?.status === 'completed' && (!selectedDelegation.state.change_request || ['merged', 'closed'].includes(selectedDelegation.state.change_request.status))}
             <button title="Delete completed delegation" aria-label="Delete completed delegation" onclick={deleteDelegation} disabled={sending || sessionLoading}><Trash2 aria-hidden="true" size={14} /></button>
           {/if}
           {#if !selectedDelegation}
-            <button title={selectedRegistration?.project_id ? 'Edit session project' : 'Create project from this workspace'} aria-label="Configure session project" onclick={() => openProjectDialog()} disabled={sending || sessionLoading}><Folders aria-hidden="true" size={15} /></button>
+            {#if selectedRegistration?.kind !== 'chat'}<button title={selectedRegistration?.project_id ? 'Edit session project' : 'Create project from this workspace'} aria-label="Configure session project" onclick={() => openProjectDialog()} disabled={sending || sessionLoading}><Folders aria-hidden="true" size={15} /></button>{/if}
             <button class:enabled={learningEnabled} title={`Learning ${learningEnabled ? 'enabled' : 'disabled'}`} aria-label={`Turn learning ${learningEnabled ? 'off' : 'on'}`} onclick={toggleLearning} disabled={sending || learningLoading}><BrainCircuit aria-hidden="true" size={15} /></button>
             <button title="Compact context" aria-label="Compact context" onclick={compactSession} disabled={sending || sessionLoading}><Minimize2 aria-hidden="true" size={15} /></button>
             <button title="Clear conversation" aria-label="Clear conversation" onclick={clearSession} disabled={sending || sessionLoading}><Eraser aria-hidden="true" size={15} /></button>
-            <button title="Delete workspace session" aria-label="Delete workspace session" onclick={deleteSession} disabled={sending || sessionLoading}><Trash2 aria-hidden="true" size={14} /></button>
+            <button title={selectedRegistration?.kind === 'chat' ? 'Delete chat' : 'Delete workspace session'} aria-label={selectedRegistration?.kind === 'chat' ? 'Delete chat' : 'Delete workspace session'} onclick={deleteSession} disabled={sending || sessionLoading}><Trash2 aria-hidden="true" size={14} /></button>
           {/if}
           {#if !selectedDelegation || delegationKind === 'inner'}
             {#if sending && activeRun?.status === 'paused'}<button title="Resume turn" aria-label="Resume turn" onclick={() => commandRun('resume')}><Play aria-hidden="true" size={15} /></button>{:else if sending}<button title="Pause turn" aria-label="Pause turn" onclick={() => commandRun('pause')}><Pause aria-hidden="true" size={15} /></button>{/if}
@@ -735,14 +745,14 @@
       {:else}
         <div class="composer-wrap">
           <div class="composer">
-            <textarea bind:value={prompt} onkeydown={submitFromKeyboard} placeholder={sending ? 'Guide the current turn…' : 'Ask Q to work in this repository…'} rows="3" disabled={sessionLoading}></textarea>
+            <textarea bind:value={prompt} onkeydown={submitFromKeyboard} placeholder={sending ? 'Guide the current turn…' : selectedRegistration?.kind === 'chat' ? 'Message Q…' : 'Ask Q to work in this repository…'} rows="3" disabled={sessionLoading}></textarea>
             <button class="send-button" title={sending ? 'Guide current turn' : 'Send message'} onclick={sendPrompt} disabled={sessionLoading || !prompt.trim()}><ArrowUp aria-hidden="true" size={17} /></button>
           </div>
-          <p>{sending ? 'Enter to redirect the current work with guidance' : 'Enter to send'} · Shift+Enter for a new line · {workspaceRoot}</p>
+          <p>{sending ? 'Enter to redirect the current work with guidance' : 'Enter to send'} · Shift+Enter for a new line · {selectedRegistration?.kind === 'chat' ? 'Personal chat' : workspaceRoot}</p>
         </div>
       {/if}
     {:else}
-      <div class="chat-empty"><Bot aria-hidden="true" size={34} /><h2>Build a session tree</h2><p>Register an existing workspace session or create a new root session.</p><button class="primary-button" onclick={openRegistrationDialog}><Plus aria-hidden="true" size={15} /> Add session</button></div>
+      <div class="chat-empty"><Bot aria-hidden="true" size={34} /><h2>Start a conversation</h2><p>Chat with Q, or add a session from a workspace.</p><button class="primary-button" onclick={createChat} disabled={sessionLoading}><Plus aria-hidden="true" size={15} /> New chat</button><button class="secondary-button" onclick={openRegistrationDialog}>Add workspace session</button></div>
     {/if}
   </section>
 
@@ -752,7 +762,7 @@
 </div>
 
 {#if registrationDialogOpen}
-  <SessionRegistration {projects} {registeredSessions} busy={sessionLoading} onregister={registerSession} onclose={() => registrationDialogOpen = false} onerror={(message) => error = message} />
+  <SessionRegistration {projects} {registeredSessions} busy={sessionLoading} onregister={registerSession} onchat={createChat} onclose={() => registrationDialogOpen = false} onerror={(message) => error = message} />
 {/if}
 
 {#if projectDialogOpen}

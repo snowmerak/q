@@ -46,6 +46,13 @@ Sessions는 user-level registry에 등록한 여러 workspace의 root session을
 기존 nested delegation session은 클릭 가능한 child transcript로 투영한다. registry는
 root 위치만 보유하며 transcript와 delegation의 권위는 workspace `.q`에 남는다.
 
+Sessions의 `New chat`은 workspace나 project 선택 없이 개인 채팅을 생성한다.
+각 채팅은 user config directory 아래 `chats/chat-*`의 독립 공간을 사용한다
+(기본 `~/.q/chats/`). `Chats` 그룹에서 다시 열 수 있고 Studio 종료 후에도
+기록을 유지한다. 채팅 삭제는 해당 전용 공간과 registry 항목을 제거하며,
+일반 workspace의 등록 해제와 구분한다. API는 `POST /api/v1/chats`와
+`DELETE /api/v1/chats/{registration}`이며 등록 목록은 `kind: "chat"`으로 구분한다.
+
 workspace model override, usage, service/worker health와 full help까지 Studio로 이전했다.
 bare `q` 대화 TUI와 ACP는 호환 client로 남지만 독립 설정 CLI 명령은 Studio route를
 연다.

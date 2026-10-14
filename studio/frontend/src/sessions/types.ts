@@ -79,6 +79,7 @@ export type DelegationNode = {
 export type DelegationSession = { node: DelegationNode; kind: string; run?: { id: string; status: string; error?: string } };
 export type FlatDelegation = DelegationNode & { depth: number; path: string };
 export type RegisteredSessionTree = {
+	kind?: 'chat';
   registration_id: string;
   workspace_root: string;
   project_id?: string;
