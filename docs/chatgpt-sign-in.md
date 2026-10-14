@@ -79,11 +79,9 @@ run.
 
 ## Local development and release validation
 
-Q's `go.mod` pins llm-provider `v0.0.0-20261014004000-2a04b3c58860`, including
-the ChatGPT namespace description and non-streaming collection fixes. The
-additional Chat Completions streaming, refusal, error-detail and cache-session fixes in the
-sibling checkout require publishing that provider revision and updating this
-pin before release; candidate validation alone does not update the dependency.
+Q's `go.mod` pins published llm-provider `v0.0.0-20261014110600-2b9dafbe5452`,
+including the ChatGPT namespace description, streamed output collection,
+refusal, error-detail and automatic cache-session fixes.
 The workspace contains Q and the existing
 ACP modules; it does not need the sibling llm-provider checkout. Local
 `go test ./...`, `go vet ./...`, and Go builds use
