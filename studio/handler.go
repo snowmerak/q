@@ -139,6 +139,8 @@ func newHandlerRuntime(parent context.Context, store config.Store, runner sessio
 	mux.HandleFunc("POST /api/v1/workspaces/commits/{commit}/regenerate", commits.serveCommitRegenerate)
 	mux.HandleFunc("POST /api/v1/workspaces/commits/{commit}/execute", commits.serveCommitExecute)
 	sessions := newSessionsService(parent, runner, store.Dir)
+	settings.embeddingChanges = newEmbeddingChangeService(parent, settings)
+	sessions.embeddingChanges = settings.embeddingChanges
 	embeddings := embeddingStatusService{main: store, sessions: sessions}
 	sessions.embeddingSync = newEmbeddingSyncService(parent, embeddings, runner)
 	mux.HandleFunc("GET /api/v1/embeddings/status", embeddings.serveStatus)

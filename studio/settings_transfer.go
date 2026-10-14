@@ -368,7 +368,12 @@ func (service *settingsService) serveTransfer(writer http.ResponseWriter, reques
 	}
 	response := transferImportResponse{}
 	if _, ok := bundle.Sections["models"]["embedding"]; ok {
-		if runtime, ok := service.runtime.(embeddingRuntime); ok {
+		if service.embeddingChanges != nil {
+			select {
+			case service.embeddingChanges.wake <- struct{}{}:
+			default:
+			}
+		} else if runtime, ok := service.runtime.(embeddingRuntime); ok {
 			if err := runtime.SyncEmbeddings(request.Context(), "", state.main); err != nil {
 				response.Warning = fmt.Sprintf("Settings imported, but embedding reindexing failed: %v", err)
 			}

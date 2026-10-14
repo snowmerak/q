@@ -61,6 +61,27 @@ func requireBrowser(t *testing.T) {
 	}
 }
 
+func TestMalformedLinkDoesNotDiscardPageContent(t *testing.T) {
+	requireBrowser(t)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		_, _ = fmt.Fprint(w, `<title>Documentation</title><main>Valid cancellation evidence.</main><a href="http://[">Malformed link</a><a href="/valid">Valid link</a><a href="javascript:void(0)">Script link</a>`)
+	}))
+	defer server.Close()
+	runtime := New()
+	t.Cleanup(func() { _ = runtime.Close() })
+	page, err := runtime.Open(t.Context(), OpenInput{URL: server.URL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if page.Title != "Documentation" || !strings.Contains(page.Text, "Valid cancellation evidence.") || len(page.Links) != 1 || page.Links[0].URL != server.URL+"/valid" {
+		t.Fatalf("malformed link discarded valid content: %+v", page)
+	}
+	if page, err := runtime.Read(t.Context(), TabInput{TabID: page.TabID}); err != nil || len(page.Links) != 1 {
+		t.Fatalf("read = %+v, %v", page, err)
+	}
+}
+
 func TestResearchSearchControlsAndLiveFormValidation(t *testing.T) {
 	requireBrowser(t)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {

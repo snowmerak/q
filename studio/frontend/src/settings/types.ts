@@ -62,6 +62,10 @@ export type SettingsSnapshot = {
     default_reasoning_effort: string;
     embedding_model: string;
     embedding_dimensions: number;
+    embedding_change?: {
+      id: string; model: string; dimensions: number; workspace_root?: string;
+      state: 'pending' | 'applying' | 'failed'; requested_at: string; error?: string;
+    };
     group_count: number;
     groups: ModelGroup[];
     roles: RoleModelAssignment[];

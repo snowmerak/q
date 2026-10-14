@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -217,6 +218,34 @@ func TestWebPlannerRequiresCallerOnlyWhenGenerating(t *testing.T) {
 }
 
 type webPlannerChatFunc func(context.Context, client.ChatRequest) (*client.ChatResponse, error)
+
+func TestWebPlannerBoundsGenerationAndPreservesCallerDeadline(t *testing.T) {
+	for _, timeout := range []time.Duration{35 * time.Minute, 20 * time.Millisecond} {
+		t.Run(timeout.String(), func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(t.Context(), timeout)
+			defer cancel()
+			callerDeadline, _ := ctx.Deadline()
+			chat := webPlannerChatFunc(func(ctx context.Context, request client.ChatRequest) (*client.ChatResponse, error) {
+				deadline, ok := ctx.Deadline()
+				if !ok || deadline.After(callerDeadline) || time.Until(deadline) > 90*time.Second {
+					t.Errorf("generation deadline = %v, caller deadline = %v", deadline, callerDeadline)
+				}
+				if timeout < time.Second {
+					<-ctx.Done()
+					return nil, ctx.Err()
+				}
+				return &client.ChatResponse{Choices: []client.Choice{{Message: client.Message{Content: `{"query":"new search terms"}`}}}}, nil
+			})
+			planner := &webQueryPlanner{caller: client.ToolModel{Client: chat, Model: "caller"}}
+			_, err := planner.Plan(ctx, websearch.PlanRequest{Operation: "query", Goal: "Research"})
+			if timeout < time.Second && !errors.Is(err, context.DeadlineExceeded) {
+				t.Fatalf("caller cancellation = %v", err)
+			} else if timeout >= time.Second && err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
 
 func (f webPlannerChatFunc) Chat(ctx context.Context, request client.ChatRequest) (*client.ChatResponse, error) {
 	return f(ctx, request)

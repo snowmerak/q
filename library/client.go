@@ -446,24 +446,19 @@ func (c *Client) syncEmbeddingSources(ctx context.Context, configured embeddingC
 			}
 		}
 		for start := 0; start < len(items); {
-			end := start
-			projections := 0
-			for end < len(items) && end-start < maximumSkillEmbedBatch &&
-				(projections+len(items[end].Projections) <= 128 || end == start) {
-				projections += len(items[end].Projections)
-				end++
-			}
-			var applied SkillEmbeddingApplyResponse
-			if err := c.doJSONWithClient(ctx, c.index, http.MethodPost, "/"+kind+"/embeddings", SkillEmbeddingApplyRequest{
-				Model: configured.model, Dimensions: configured.dimensions, Items: items[start:end],
-			}, &applied, nil); err != nil {
+			batch, err := nextEmbeddingBatch(configured.model, configured.dimensions, items[start:])
+			if err != nil {
 				return stats, err
 			}
-			if applied.Updated != end-start {
-				return stats, fmt.Errorf("library: applied %d of %d %s embeddings", applied.Updated, end-start, kind)
+			var applied SkillEmbeddingApplyResponse
+			if err := c.doJSONWithClient(ctx, c.index, http.MethodPost, "/"+kind+"/embeddings", batch, &applied, nil); err != nil {
+				return stats, err
+			}
+			if applied.Updated != len(batch.Items) {
+				return stats, fmt.Errorf("library: applied %d of %d %s embeddings", applied.Updated, len(batch.Items), kind)
 			}
 			stats.Embedded += applied.Updated
-			start = end
+			start += len(batch.Items)
 		}
 	}
 }

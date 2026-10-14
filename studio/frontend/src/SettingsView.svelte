@@ -122,8 +122,12 @@
   onMount(() => {
     const onPopState = () => { activeSection = sectionFromLocation(); };
     window.addEventListener('popstate', onPopState);
+    const embeddingTimer = setInterval(() => {
+      if (active && settings?.models.embedding_change && !pending && !settingsLoading) void loadSettings();
+    }, 2000);
     return () => {
       window.removeEventListener('popstate', onPopState);
+      clearInterval(embeddingTimer);
       if (savedTimer) clearTimeout(savedTimer);
     };
   });

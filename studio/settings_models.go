@@ -286,6 +286,10 @@ func (service *settingsService) serveModelAssignmentUpdate(writer http.ResponseW
 	update.Model = strings.TrimSpace(update.Model)
 	update.ReasoningEffort = strings.TrimSpace(update.ReasoningEffort)
 	target := request.PathValue("target")
+	if target == "embedding" && service.embeddingChanges != nil {
+		service.queueEmbeddingChange(writer, update)
+		return
+	}
 	service.mu.Lock()
 	defer service.mu.Unlock()
 	value, err := service.main.Load()

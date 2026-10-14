@@ -5,6 +5,7 @@ package archiveembed
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"reflect"
@@ -21,6 +22,7 @@ import (
 const (
 	maximumEmbeddingRunes = 16000
 	backfillPageSize      = 100
+	maximumBackfillPasses = 5
 )
 
 var historyKinds = []string{
@@ -63,6 +65,7 @@ type Archive struct {
 }
 
 type BackfillStats struct {
+	// Scanned includes records read again when verifying source stability.
 	Scanned  int
 	Embedded int
 }
@@ -83,43 +86,42 @@ func (a *Archive) ConfigureContext(ctx context.Context, provider embedding.Provi
 	if a == nil || a.Store == nil {
 		return errors.New("archive embedding: store is unavailable")
 	}
+	if err := a.lockReconciliation(ctx); err != nil {
+		return err
+	}
+	defer a.unlockReconciliation()
+	var vectorizer *embedding.Vectorizer
+	var config sessionstore.VectorConfig
+	if model == "" && dimensions == 0 {
+		config = sessionstore.VectorConfig{}
+	} else {
+		var err error
+		vectorizer, err = embedding.New(provider, model, dimensions)
+		if err != nil {
+			return err
+		}
+		config = sessionstore.VectorConfig{Model: vectorizer.Model(), Dimensions: vectorizer.Dimensions()}
+	}
+	if err := a.configureVector(ctx, config); err != nil {
+		return fmt.Errorf("archive embedding: configure vector index: %w", err)
+	}
+	a.mu.Lock()
+	a.vectorizer = vectorizer
+	a.provider = provider
+	a.mu.Unlock()
+	return nil
+}
+
+func (a *Archive) configureVector(ctx context.Context, config sessionstore.VectorConfig) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	configure := func(config sessionstore.VectorConfig) error {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		if contextual, ok := a.Store.(interface {
-			ConfigureVectorContext(context.Context, sessionstore.VectorConfig) error
-		}); ok {
-			return contextual.ConfigureVectorContext(ctx, config)
-		}
-		return a.ConfigureVector(config)
+	if contextual, ok := a.Store.(interface {
+		ConfigureVectorContext(context.Context, sessionstore.VectorConfig) error
+	}); ok {
+		return contextual.ConfigureVectorContext(ctx, config)
 	}
-	if model == "" && dimensions == 0 {
-		a.mu.Lock()
-		defer a.mu.Unlock()
-		if err := configure(sessionstore.VectorConfig{}); err != nil {
-			return err
-		}
-		a.provider, a.vectorizer = provider, nil
-		return nil
-	}
-	vectorizer, err := embedding.New(provider, model, dimensions)
-	if err != nil {
-		return err
-	}
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	if err := configure(sessionstore.VectorConfig{
-		Model: vectorizer.Model(), Dimensions: vectorizer.Dimensions(),
-	}); err != nil {
-		return fmt.Errorf("archive embedding: configure vector index: %w", err)
-	}
-	a.vectorizer = vectorizer
-	a.provider = provider
-	return nil
+	return a.ConfigureVector(config)
 }
 
 // SetVectorConfigResolver lets a running archive follow its owner's latest
@@ -130,12 +132,15 @@ func (a *Archive) SetVectorConfigResolver(resolve func(context.Context) (session
 	a.mu.Unlock()
 }
 
+// The caller holds the cancellable reconciliation slot. mu only protects field
+// snapshots, never provider, resolver or Store I/O, so waiting callers can stop.
 func (a *Archive) refreshConfiguration(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
 	a.mu.RLock()
 	resolve := a.resolveVector
+	current, provider := a.vectorizer, a.provider
 	a.mu.RUnlock()
 	if resolve == nil {
 		return nil
@@ -144,32 +149,25 @@ func (a *Archive) refreshConfiguration(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	if a.vectorizer == nil && !wanted.Enabled() {
+	if current == nil && !wanted.Enabled() {
 		return nil
 	}
-	if a.vectorizer != nil && a.vectorizer.Model() == wanted.Model && a.vectorizer.Dimensions() == wanted.Dimensions {
+	if current != nil && current.Model() == wanted.Model && current.Dimensions() == wanted.Dimensions {
 		return nil
 	}
 	var vectorizer *embedding.Vectorizer
 	if wanted.Enabled() {
-		vectorizer, err = embedding.New(a.provider, wanted.Model, wanted.Dimensions)
+		vectorizer, err = embedding.New(provider, wanted.Model, wanted.Dimensions)
 		if err != nil {
 			return err
 		}
 	}
-	if contextual, ok := a.Store.(interface {
-		ConfigureVectorContext(context.Context, sessionstore.VectorConfig) error
-	}); ok {
-		err = contextual.ConfigureVectorContext(ctx, wanted)
-	} else {
-		err = a.ConfigureVector(wanted)
-	}
-	if err != nil {
+	if err := a.configureVector(ctx, wanted); err != nil {
 		return err
 	}
+	a.mu.Lock()
 	a.vectorizer = vectorizer
+	a.mu.Unlock()
 	return nil
 }
 
@@ -178,12 +176,16 @@ func (a *Archive) Disable() error {
 	if a == nil || a.Store == nil {
 		return errors.New("archive embedding: store is unavailable")
 	}
-	a.mu.Lock()
-	defer a.mu.Unlock()
+	if err := a.lockReconciliation(context.Background()); err != nil {
+		return err
+	}
+	defer a.unlockReconciliation()
 	if err := a.ConfigureVector(sessionstore.VectorConfig{}); err != nil {
 		return fmt.Errorf("archive embedding: disable vector index: %w", err)
 	}
+	a.mu.Lock()
 	a.vectorizer = nil
+	a.mu.Unlock()
 	return nil
 }
 
@@ -193,12 +195,17 @@ func (a *Archive) Prepare(ctx context.Context, records []sessionstore.Record) ([
 	if a == nil {
 		return records, nil
 	}
+	if err := a.lockReconciliation(ctx); err != nil {
+		return records, err
+	}
+	defer a.unlockReconciliation()
 	if err := a.refreshConfiguration(ctx); err != nil {
 		return records, err
 	}
 	a.mu.RLock()
-	defer a.mu.RUnlock()
-	return prepare(ctx, records, a.vectorizer)
+	vectorizer := a.vectorizer
+	a.mu.RUnlock()
+	return prepare(ctx, records, vectorizer)
 }
 
 func prepare(ctx context.Context, records []sessionstore.Record, vectorizer *embedding.Vectorizer) ([]sessionstore.Record, error) {
@@ -285,26 +292,27 @@ func (a *Archive) Search(ctx context.Context, options sessionstore.SearchOptions
 	if a == nil || a.Store == nil {
 		return sessionstore.SearchResult{}, errors.New("archive embedding: store is unavailable")
 	}
+	semantic := options.Vector != nil || (strings.TrimSpace(options.Text) != "" &&
+		(options.Sort == "" || options.Sort == sessionstore.SortRelevance) && searchesSemanticRecords(options.Filters.Kinds))
+	if !semantic {
+		return a.Store.Search(ctx, options)
+	}
+	if err := a.lockReconciliation(ctx); err != nil {
+		return sessionstore.SearchResult{}, err
+	}
+	defer a.unlockReconciliation()
 	if err := a.refreshConfiguration(ctx); err != nil {
 		return sessionstore.SearchResult{}, err
 	}
-	semantic := options.Vector != nil || (strings.TrimSpace(options.Text) != "" &&
-		(options.Sort == "" || options.Sort == sessionstore.SortRelevance) && searchesSemanticRecords(options.Filters.Kinds))
-	if semantic {
-		if err := a.lockReconciliation(ctx); err != nil {
-			return sessionstore.SearchResult{}, err
-		}
-		defer a.unlockReconciliation()
-	}
 	a.mu.RLock()
-	defer a.mu.RUnlock()
 	vectorizer := a.vectorizer
-	if vectorizer != nil && semantic {
+	a.mu.RUnlock()
+	if vectorizer != nil {
 		if _, err := a.backfill(ctx, vectorizer); err != nil {
 			return sessionstore.SearchResult{}, fmt.Errorf("archive embedding: repair before search: %w", err)
 		}
 	}
-	if vectorizer != nil && semantic && options.Vector == nil {
+	if vectorizer != nil && options.Vector == nil {
 		vectors, err := vectorizer.Embed(ctx, []string{strings.TrimSpace(options.Text)})
 		if err != nil {
 			return sessionstore.SearchResult{}, fmt.Errorf("archive embedding: embed search query: %w", err)
@@ -336,17 +344,18 @@ func (a *Archive) Backfill(ctx context.Context) (BackfillStats, error) {
 	if a == nil || a.Store == nil {
 		return BackfillStats{}, errors.New("archive embedding: store is unavailable")
 	}
-	if err := a.refreshConfiguration(ctx); err != nil {
-		return BackfillStats{}, err
-	}
 	if err := a.lockReconciliation(ctx); err != nil {
 		return BackfillStats{}, err
 	}
 	defer a.unlockReconciliation()
+	if err := a.refreshConfiguration(ctx); err != nil {
+		return BackfillStats{}, err
+	}
 	// Keep model assignment from changing halfway through a migration.
 	a.mu.RLock()
-	defer a.mu.RUnlock()
-	return a.backfill(ctx, a.vectorizer)
+	vectorizer := a.vectorizer
+	a.mu.RUnlock()
+	return a.backfill(ctx, vectorizer)
 }
 
 func (a *Archive) backfill(ctx context.Context, vectorizer *embedding.Vectorizer) (BackfillStats, error) {
@@ -360,21 +369,36 @@ func (a *Archive) backfill(ctx context.Context, vectorizer *embedding.Vectorizer
 		current := store.VectorConfig()
 		if current.Model != vectorizer.Model() || current.Dimensions != vectorizer.Dimensions() {
 			wanted := sessionstore.VectorConfig{Model: vectorizer.Model(), Dimensions: vectorizer.Dimensions()}
-			var err error
-			if contextual, ok := a.Store.(interface {
-				ConfigureVectorContext(context.Context, sessionstore.VectorConfig) error
-			}); ok {
-				err = contextual.ConfigureVectorContext(ctx, wanted)
-			} else {
-				err = a.ConfigureVector(wanted)
-			}
-			if err != nil {
+			if err := a.configureVector(ctx, wanted); err != nil {
 				return BackfillStats{}, fmt.Errorf("archive embedding: repair vector index: %w", err)
 			}
 		}
 	}
+	// Offset pages can move even when the deleted record needed no update.
+	// Verify consecutive complete source scans, excluding derived vectors from
+	// the digest. Never report completion while observed sources keep changing.
 	stats := BackfillStats{}
-	retries := 0
+	var previous [sha256.Size]byte
+	havePrevious := false
+	for range maximumBackfillPasses {
+		var fingerprint [sha256.Size]byte
+		var skipped bool
+		pass, err := a.backfillPass(ctx, vectorizer, &fingerprint, &skipped)
+		stats.Scanned += pass.Scanned
+		stats.Embedded += pass.Embedded
+		if err != nil {
+			return stats, err
+		}
+		if havePrevious && fingerprint == previous && pass.Embedded == 0 && !skipped {
+			return stats, nil
+		}
+		previous, havePrevious = fingerprint, !skipped
+	}
+	return stats, errors.New("archive embedding: source kept changing during repair")
+}
+
+func (a *Archive) backfillPass(ctx context.Context, vectorizer *embedding.Vectorizer, fingerprint *[sha256.Size]byte, skipped *bool) (BackfillStats, error) {
+	stats := BackfillStats{}
 	for offset := 0; ; offset += backfillPageSize {
 		result, err := a.Store.Search(ctx, sessionstore.SearchOptions{
 			Filters: sessionstore.Filters{Kinds: semanticKinds},
@@ -388,8 +412,15 @@ func (a *Archive) backfill(ctx context.Context, vectorizer *embedding.Vectorizer
 		}
 		stats.Scanned += len(result.Hits)
 		records := make([]sessionstore.Record, len(result.Hits))
+		digests := make([]string, len(result.Hits))
 		for index, hit := range result.Hits {
 			records[index] = hit.Record
+			digest, err := sessionstore.RecordSourceDigest(hit.Record)
+			if err != nil {
+				return stats, err
+			}
+			digests[index] = digest
+			*fingerprint = sha256.Sum256(append(fingerprint[:], digest...))
 		}
 		prepared, err := prepare(ctx, append([]sessionstore.Record(nil), records...), vectorizer)
 		if err != nil {
@@ -399,12 +430,8 @@ func (a *Archive) backfill(ctx context.Context, vectorizer *embedding.Vectorizer
 		for index, record := range prepared {
 			if !sameEmbedding(records[index].Embedding, record.Embedding) ||
 				!reflect.DeepEqual(records[index].VectorProjections, record.VectorProjections) {
-				digest, err := sessionstore.RecordSourceDigest(records[index])
-				if err != nil {
-					return stats, err
-				}
 				changed = append(changed, sessionstore.EmbeddingUpdate{
-					ID: record.ID, SourceDigest: digest, Embedding: record.Embedding,
+					ID: record.ID, SourceDigest: digests[index], Embedding: record.Embedding,
 					VectorProjections: record.VectorProjections,
 				})
 			}
@@ -423,14 +450,8 @@ func (a *Archive) backfill(ctx context.Context, vectorizer *embedding.Vectorizer
 			}
 			stats.Embedded += applied.Updated
 			if applied.Skipped > 0 {
-				// Deletes change pagination and edits need fresh embedding input.
-				// Restart from the source, with a bound for continuously changing data.
-				retries++
-				if retries > 3 {
-					return stats, errors.New("archive embedding: source kept changing during repair")
-				}
-				offset = -backfillPageSize
-				continue
+				*skipped = true
+				return stats, nil
 			}
 		}
 		if len(result.Hits) < backfillPageSize {

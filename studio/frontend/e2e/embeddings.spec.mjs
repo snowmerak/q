@@ -1,5 +1,43 @@
 import { test, expect } from '@playwright/test';
 
+test('pending model changes show the requested model and refresh after application', async ({ page, request }) => {
+  const original = await (await request.get('/api/v1/settings')).json();
+  const current = structuredClone(original);
+  current.models.embedding_model = 'old/embedding';
+  current.models.embedding_dimensions = 3;
+  delete current.models.embedding_change;
+  let applied = false;
+  let queued = false;
+  const snapshot = () => {
+    const value = structuredClone(current);
+    if (queued && !applied) value.models.embedding_change = {
+      id: 'pending-fixture', model: 'default/test-model', dimensions: 3,
+      state: 'pending', requested_at: new Date().toISOString()
+    };
+    if (applied) value.models.embedding_model = 'default/test-model';
+    return value;
+  };
+  await page.route('**/api/v1/settings', route => route.fulfill({ json: snapshot() }));
+  await page.route('**/api/v1/settings/models/embedding', async route => {
+    expect(route.request().postDataJSON().model).toBe('default/test-model');
+    queued = true;
+    await route.fulfill({ status: 202, json: snapshot() });
+  });
+  await page.goto('/settings?section=models');
+  const row = page.locator('.assignment-row').filter({ has: page.getByText('Semantic indexes and skill search', { exact: true }) });
+  await row.getByRole('combobox').selectOption('default/test-model');
+  const status = page.getByRole('status', { name: 'Embedding model change' });
+  await expect(status).toContainText('waiting for all sessions to finish');
+  await expect(status).toContainText('Currently configured: old/embedding');
+  await expect(row.getByRole('combobox')).toHaveValue('default/test-model');
+  await page.reload();
+  await expect(status).toContainText('waiting for all sessions to finish');
+  await expect(row.getByRole('combobox')).toHaveValue('default/test-model');
+  applied = true;
+  await expect(status).toHaveCount(0);
+  await expect(row.getByRole('combobox')).toHaveValue('default/test-model');
+});
+
 test('embedding status reads the API and keeps the page usable on desktop and mobile', async ({ page, request }, testInfo) => {
   const errors = [];
   page.on('pageerror', error => errors.push(error.message));
@@ -35,7 +73,11 @@ test('embedding status reads the API and keeps the page usable on desktop and mo
 test('manual sync repairs an unregistered archive through the real API and survives navigation', async ({ page, request }) => {
   const fixture = await (await request.get('/_test/fixture')).json();
   const configured = await request.put('/api/v1/settings/models/embedding', { data: { model: 'default/test-model', embedding_dimensions: 3 } });
-  expect(configured.status()).toBe(200);
+  expect(configured.status()).toBe(202);
+  await expect.poll(async () => {
+    const settings = await (await request.get('/api/v1/settings')).json();
+    return !settings.models.embedding_change && settings.models.embedding_model === 'default/test-model';
+  }).toBe(true);
   await page.goto('/settings?section=embeddings');
   const panel = page.getByRole('region', { name: 'Embedding status', exact: true });
   const row = panel.getByRole('table').locator('tbody > tr:not(.details-row)').filter({ has: page.getByText(fixture.embedding_root, { exact: true }) });
@@ -67,7 +109,11 @@ test('manual sync repairs an unregistered archive through the real API and survi
   }
   // Restore the shared fixture's default before other specs use it.
   const disabled = await request.put('/api/v1/settings/models/embedding', { data: { model: '', embedding_dimensions: 0 } });
-  expect(disabled.status()).toBe(200);
+  expect(disabled.status()).toBe(202);
+  await expect.poll(async () => {
+    const settings = await (await request.get('/api/v1/settings')).json();
+    return !settings.models.embedding_change && settings.models.embedding_model === '';
+  }).toBe(true);
 });
 
 test('embedding status distinguishes old, missing, and unreadable data and refreshes', async ({ page }) => {

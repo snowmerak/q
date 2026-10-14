@@ -6,7 +6,10 @@ const readScript = `() => {
  const body = document.querySelector('main, article, [role="main"]') || document.body;
  const text = Array.from(body ? body.innerText : '');
  const anchors = Array.from(document.querySelectorAll('a[href]'));
- const links = anchors.filter(a => /^https?:$/.test(new URL(a.href).protocol))
+ const links = anchors.filter(a => {
+   try { return /^https?:$/.test(new URL(a.href).protocol); }
+   catch { return false; }
+ })
    .slice(0, 100).map(a => ({text: (a.innerText || a.getAttribute('aria-label') || '').trim().slice(0, 300), url: a.href}));
  return {url: location.href, title: document.title, text: text.slice(0, 24000).join(''), links,
    truncated: text.length > 24000 || anchors.length > 100};

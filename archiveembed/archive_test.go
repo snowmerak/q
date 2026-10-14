@@ -191,7 +191,7 @@ func TestBackfillAndSemanticSearch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if stats.Scanned != 2 || stats.Embedded != 2 {
+	if stats.Scanned != 4 || stats.Embedded != 2 {
 		t.Fatalf("backfill stats = %#v", stats)
 	}
 	stored, err := store.Get(cat.ID)
@@ -268,7 +268,7 @@ func TestBackfillAndSemanticSearchIncludesSkills(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if stats.Scanned != 1 || stats.Embedded != 1 {
+	if stats.Scanned != 2 || stats.Embedded != 1 {
 		t.Fatalf("skill backfill stats = %#v", stats)
 	}
 	result, err := archive.Search(context.Background(), sessionstore.SearchOptions{

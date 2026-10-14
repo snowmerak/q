@@ -284,20 +284,36 @@ func (host *SessionHost) ApplyGateway(ctx context.Context, value gateway.Config)
 }
 
 // SyncEmbeddings migrates the global Library and all known workspace archives
-// before returning. Active workspaces may reject a transition until their turn
-// releases its lease; such failures are returned so a retry can finish migration.
+// before returning. Active turns defer the transition; admission stays closed
+// while idle sessions are released and the archives migrate.
 func (host *SessionHost) SyncEmbeddings(ctx context.Context, root string, value config.Config) (returnErr error) {
 	if host == nil || host.runtime == nil {
 		return fmt.Errorf("%w: embedding runtime is unavailable", ErrSessionRuntimeUnavailable)
 	}
-	if err := host.releaseIdleSessions(); err != nil {
-		return err
+	return host.withIdleSessions(ctx, func() error { return host.syncEmbeddings(ctx, root, value) })
+}
+
+// ApplyEmbeddingChange commits settings only after all Studio sessions are idle
+// and their old archive leases are closed. A busy host does not call commit.
+func (host *SessionHost) ApplyEmbeddingChange(ctx context.Context, root string, commit func() (config.Config, error)) error {
+	if host == nil || host.runtime == nil {
+		return fmt.Errorf("%w: embedding runtime is unavailable", ErrSessionRuntimeUnavailable)
 	}
+	return host.withIdleSessions(ctx, func() error {
+		value, err := commit()
+		if err != nil {
+			return err
+		}
+		return host.syncEmbeddings(ctx, root, value)
+	})
+}
+
+func (host *SessionHost) syncEmbeddings(ctx context.Context, root string, value config.Config) (returnErr error) {
 	roots, err := host.embeddingWorkspaceRoots(root)
 	if err != nil {
 		return err
 	}
-	value, err = host.ensureProvider(value)
+	value, err = host.ensureProviderContext(ctx, value)
 	if err != nil {
 		return err
 	}

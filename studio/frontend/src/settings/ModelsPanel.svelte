@@ -13,6 +13,11 @@
   export let settings: SettingsSnapshot;
   export let queueSave: QueueSave;
 
+  let embeddingModel = '';
+  let embeddingDimensions = 0;
+  $: embeddingModel = settings.models.embedding_change?.model ?? settings.models.embedding_model;
+  $: embeddingDimensions = settings.models.embedding_change?.dimensions ?? settings.models.embedding_dimensions;
+
   let started = false;
   let modelOptions: ModelOption[] = [];
   let modelsLoading = false;
@@ -54,9 +59,9 @@
   function saveEmbeddingModel() {
     if (!settings) return;
     saveModelAssignment('embedding', {
-      model: settings.models.embedding_model,
+      model: embeddingModel,
       reasoning_effort: '',
-      embedding_dimensions: settings.models.embedding_dimensions,
+      embedding_dimensions: embeddingDimensions,
       workspace_root: localStorage.getItem('q-studio-workspace-root') || ''
     });
   }
@@ -161,13 +166,21 @@
     </div>
     <div class="assignment-row primary-assignment">
       <div><strong>Embedding</strong><small>Semantic indexes and skill search</small></div>
-      <label><span>Model</span><select bind:value={settings.models.embedding_model} onchange={saveEmbeddingModel} disabled={modelsLoading}>
+      <label><span>Model</span><select bind:value={embeddingModel} onchange={saveEmbeddingModel} disabled={modelsLoading}>
         <option value="">Disabled</option>
-        {#if settings.models.embedding_model && !modelOptions.some((model) => model.id === settings?.models.embedding_model)}<option value={settings.models.embedding_model}>{settings.models.embedding_model}</option>{/if}
+        {#if embeddingModel && !modelOptions.some((model) => model.id === embeddingModel)}<option value={embeddingModel}>{embeddingModel}</option>{/if}
         {#each modelOptions.filter((model) => !model.group) as model}<option value={model.id}>{model.id}</option>{/each}
       </select></label>
-      <label><span>Dimensions</span><input type="number" min="1" max="4096" bind:value={settings.models.embedding_dimensions} onchange={saveEmbeddingModel} disabled={!settings.models.embedding_model} /></label>
+      <label><span>Dimensions</span><input type="number" min="1" max="4096" bind:value={embeddingDimensions} onchange={saveEmbeddingModel} disabled={!embeddingModel} /></label>
     </div>
+    {#if settings.models.embedding_change}
+      <p class="inline-warning" role="status" aria-label="Embedding model change">
+        {#if settings.models.embedding_change.state === 'applying'}Applying embedding model change…
+        {:else if settings.models.embedding_change.state === 'failed'}Embedding model change is not complete. Retrying automatically. {settings.models.embedding_change.error}
+        {:else}Embedding model change is waiting for all sessions to finish.{/if}
+        Currently configured: {settings.models.embedding_model || 'Disabled'}{settings.models.embedding_model ? ` · ${settings.models.embedding_dimensions} dimensions` : ''}.
+      </p>
+    {/if}
     {#each settings.models.roles as role}
       <div class="assignment-row">
         <div class="assignment-role"><span><strong>{roleLabel(role.role)}</strong><small>{role.inherited ? `Inherits ${role.effective_model}` : role.role}</small></span>{#if role.custom}<button class="danger-icon" title="Delete custom role" onclick={() => deleteCustomRole(role)}><Trash2 aria-hidden="true" size={14} /></button>{/if}</div>

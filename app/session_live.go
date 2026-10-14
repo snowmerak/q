@@ -412,6 +412,15 @@ func (host *SessionHost) RefreshLearning(ctx context.Context, store workspace.St
 
 // Embedding transitions need the old archive leases closed before rebuilding.
 func (host *SessionHost) releaseIdleSessions() error {
+	return host.withIdleSessions(host.ctx, nil)
+}
+
+// Keep admission closed until the transition finishes, not just until the old
+// sessions have closed. Otherwise a new turn can acquire an old-model lease.
+func (host *SessionHost) withIdleSessions(ctx context.Context, apply func() error) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	host.liveMu.Lock()
 	if host.liveClosed {
 		host.liveMu.Unlock()
@@ -450,6 +459,12 @@ func (host *SessionHost) releaseIdleSessions() error {
 	var err error
 	for _, session := range leased {
 		err = errors.Join(err, session.close())
+	}
+	if err == nil {
+		err = ctx.Err()
+	}
+	if err == nil && apply != nil {
+		err = apply()
 	}
 	return err
 }

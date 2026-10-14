@@ -32,6 +32,16 @@ type transferBackup struct {
 
 func (service *settingsService) saveTransfer(request *http.Request, state transferState, bundle settingsBundle) error {
 	var writes []transferWrite
+	if _, embedding := bundle.Sections["models"]["embedding"]; embedding && service.embeddingChanges != nil {
+		change := newEmbeddingChange(state.main.Embedding, "")
+		current, err := service.main.Load()
+		if err != nil {
+			return err
+		}
+		state.main.Embedding = current.Embedding
+		// Include the durable request in the import's existing rollback boundary.
+		writes = append(writes, transferWrite{service.embeddingChangePath(), func() error { return service.saveEmbeddingChange(change) }})
+	}
 	if transferTouchesMain(bundle) {
 		writes = append(writes, transferWrite{service.main.Path(), func() error { return service.main.Save(state.main) }})
 	}

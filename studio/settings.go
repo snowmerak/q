@@ -17,14 +17,15 @@ import (
 )
 
 type settingsService struct {
-	mu        sync.Mutex
-	main      config.Store
-	gateway   gatewayconfig.Store
-	systemOne systemoneconfig.Store
-	mcp       mcpconfig.Store
-	providers providerhost.Store
-	library   qlibrary.ConfigStore
-	runtime   settingsRuntime
+	mu               sync.Mutex
+	main             config.Store
+	gateway          gatewayconfig.Store
+	systemOne        systemoneconfig.Store
+	mcp              mcpconfig.Store
+	providers        providerhost.Store
+	library          qlibrary.ConfigStore
+	runtime          settingsRuntime
+	embeddingChanges *embeddingChangeService
 }
 
 type settingsRuntime interface {
@@ -76,6 +77,10 @@ func (service *settingsService) snapshot() (settingsSnapshot, error) {
 	if errors.Is(err, config.ErrNotFound) {
 		main, configured, err = config.Default(), false, nil
 	}
+	if err != nil {
+		return settingsSnapshot{}, err
+	}
+	change, err := service.loadEmbeddingChange()
 	if err != nil {
 		return settingsSnapshot{}, err
 	}
@@ -197,7 +202,8 @@ func (service *settingsService) snapshot() (settingsSnapshot, error) {
 			ConfigPath: service.main.Path(), DefaultModel: main.Provider.Model,
 			DefaultReasoning: main.Provider.EffectiveReasoningEffort(),
 			EmbeddingModel:   main.Embedding.Model, EmbeddingDimensions: main.Embedding.Dimensions,
-			GroupCount: len(main.ModelGroups), Groups: groups, Roles: roleAssignments,
+			EmbeddingChange: change,
+			GroupCount:      len(main.ModelGroups), Groups: groups, Roles: roleAssignments,
 		},
 		Providers: providerSettings{ConfigPath: service.providers.Path(), Items: providerItems, APIKeys: gatewayKeys},
 		SystemOne: systemOneAPISettings{

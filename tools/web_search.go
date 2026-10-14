@@ -124,6 +124,8 @@ func (p *webQueryPlanner) Plan(ctx context.Context, in websearch.PlanRequest) (w
 		instruction += `Return {"requirements":["atomic requirement", "..."]}. Split the ORIGINAL goal into at most 6 nonempty requirements, at most 800 UTF-8 bytes each. Preserve every clause, qualification and source requirement. Do not insert known answers.`
 	}
 	ctx = client.WithUsageRole(ctx, p.caller.Role)
+	ctx, cancel := context.WithTimeout(ctx, 90*time.Second)
+	defer cancel()
 	response, err := p.caller.Client.Chat(ctx, client.ChatRequest{Model: p.caller.Model, ReasoningEffort: p.caller.ReasoningEffort, WorkingDirectory: p.caller.WorkingDirectory, Extra: p.caller.Extra, Messages: []client.Message{{Role: client.RoleSystem, Content: instruction}, {Role: client.RoleUser, Content: string(state)}}})
 	if err != nil {
 		return websearch.Plan{}, err

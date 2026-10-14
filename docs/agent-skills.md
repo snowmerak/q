@@ -86,6 +86,18 @@ archive totals, completed/failed counts, records updated, and per-archive errors
 They are retained for the current Studio process, with at most 32 recent jobs;
 restart clears this history. Studio shutdown cancels and drains active work.
 
+Studio embedding model updates return 202 after durably saving a pending request.
+The configured model stays unchanged while any Studio session is running. Once
+all sessions are idle, Studio closes their old archive leases, blocks new session
+admission through the migration, commits the requested configuration and syncs
+the global Library and known workspace archives. Settings expose
+`models.embedding_change` as pending, applying or failed until migration completes;
+the Models screen refreshes this status automatically. A newer request replaces
+the pending target. Requests survive shutdown in `embedding-change.json` and resume
+on the next Studio start. An interrupted or failed migration remains unapplied in
+this status and retries, retaining any completed derived embeddings. Exiting
+before the idle transition leaves the configured model unchanged.
+
 Only one manual job runs at once. An identical request reuses the active job;
 a different overlapping request returns 409. Disabled embeddings return 409,
 and a missing runtime returns 503. The job uses saved model settings, not model
@@ -99,6 +111,16 @@ absent archives, continues after individual failures, and reports incomplete
 discovery as a failure rather than claiming full completion. Automatic repair
 on normal use remains enabled. During manual sync the screen refreshes every
 three seconds and returns to its ordinary refresh interval after completion.
+
+Workspace repair verifies consecutive complete scans using source digests that
+exclude derived embeddings. The final scan must match the preceding scan and
+need no embedding writes or skipped conditional updates. This catches offset
+shifts caused by deleting an already-current record. After five passes without
+stability, repair returns an error while retaining completed updates for retry.
+`BackfillStats.Scanned` includes verification reads. This is convergence checking,
+not a transactional snapshot; subsequent changes are repaired on later use.
+Waiting semantic operations and configuration changes honor their context while
+another repair runs. Chronological and metadata-only reads bypass that wait.
 
 ## Contextual discovery
 

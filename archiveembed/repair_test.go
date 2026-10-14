@@ -3,6 +3,8 @@ package archiveembed
 import (
 	"context"
 	"errors"
+	"fmt"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -20,6 +22,162 @@ type changingSourceEmbedder struct {
 	testEmbedder
 	once   sync.Once
 	change func()
+}
+
+func TestBackfillVerifiesCoverageAfterDeletingCurrentRecord(t *testing.T) {
+	store, err := sessionstore.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	created := time.Now().UTC().Add(-time.Hour)
+	records := make([]sessionstore.Record, backfillPageSize+1)
+	for index := range records {
+		records[index] = sessionstore.Record{ID: fmt.Sprintf("record-%03d", index), Kind: sessionstore.KindMessage, Content: "cat", CreatedAt: created.Add(time.Duration(index) * time.Second)}
+	}
+	records[0].Embedding = &sessionstore.Embedding{Model: "current", Dimensions: 3, Vector: []float32{1, 0, 0}}
+	if _, err := store.SaveBatch(records); err != nil {
+		t.Fatal(err)
+	}
+	embedder := &changingSourceEmbedder{change: func() {
+		// This record is not in the embedding updates, so CAS cannot detect
+		// its deletion moving the last record into the preceding offset page.
+		if err := store.Delete(records[0].ID); err != nil {
+			t.Error(err)
+		}
+	}}
+	archive := New(store)
+	if err := archive.Configure(embedder, "current", 3); err != nil {
+		t.Fatal(err)
+	}
+	stats, err := archive.Backfill(t.Context())
+	if err != nil || stats.Embedded != backfillPageSize {
+		t.Fatalf("repair = %+v, %v", stats, err)
+	}
+	for _, source := range records[1:] {
+		record, err := store.Get(source.ID)
+		if err != nil || record.Embedding == nil || record.Embedding.Model != "current" {
+			t.Fatalf("unrepaired record = %+v, %v", record, err)
+		}
+	}
+	if _, err := store.Get(records[0].ID); !errors.Is(err, sessionstore.ErrNotFound) {
+		t.Fatalf("deleted record resurrected: %v", err)
+	}
+}
+
+type changingScanStore struct {
+	*sessionstore.Store
+	scans int
+}
+
+func (s *changingScanStore) Search(ctx context.Context, options sessionstore.SearchOptions) (sessionstore.SearchResult, error) {
+	result, err := s.Store.Search(ctx, options)
+	if err == nil && options.Offset == 0 && len(result.Hits) > 0 {
+		s.scans++
+		record := result.Hits[0].Record
+		record.Refs = []string{fmt.Sprintf("revision-%d", s.scans)}
+		_, err = s.Save(record)
+	}
+	return result, err
+}
+
+func TestBackfillRejectsContinuouslyChangingScan(t *testing.T) {
+	store, err := sessionstore.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	if _, err := store.Save(sessionstore.Record{ID: "changing", Kind: sessionstore.KindMessage, Content: "cat", Embedding: &sessionstore.Embedding{Model: "current", Dimensions: 3, Vector: []float32{1, 0, 0}}}); err != nil {
+		t.Fatal(err)
+	}
+	source := &changingScanStore{Store: store}
+	archive := New(source)
+	if err := archive.Configure(&testEmbedder{}, "current", 3); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := archive.Backfill(t.Context()); err == nil || !strings.Contains(err.Error(), "source kept changing") {
+		t.Fatalf("unstable scan reported success: %v", err)
+	}
+	if source.scans > 5 {
+		t.Fatalf("repair did not bound retries: %d scans", source.scans)
+	}
+}
+
+func TestResolverOperationsCanCancelWhileRepairing(t *testing.T) {
+	for _, changed := range []bool{false, true} {
+		t.Run(fmt.Sprintf("model_changed=%t", changed), func(t *testing.T) {
+			store, err := sessionstore.Open(t.TempDir())
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = store.Close() })
+			if _, err := store.Save(sessionstore.Record{Kind: sessionstore.KindMessage, Content: "cat"}); err != nil {
+				t.Fatal(err)
+			}
+			embedder := &blockingEmbedder{started: make(chan struct{}), release: make(chan struct{})}
+			archive := New(store)
+			if err := archive.Configure(embedder, "current", 3); err != nil {
+				t.Fatal(err)
+			}
+			wanted := "current"
+			archive.SetVectorConfigResolver(func(context.Context) (sessionstore.VectorConfig, error) {
+				return sessionstore.VectorConfig{Model: wanted, Dimensions: 3}, nil
+			})
+			ctx, cancel := context.WithCancel(t.Context())
+			done := make(chan error, 1)
+			go func() { _, err := archive.Backfill(ctx); done <- err }()
+			t.Cleanup(func() { cancel(); <-done })
+			select {
+			case <-embedder.started:
+			case <-time.After(5 * time.Second):
+				t.Fatal("repair never started")
+			}
+			if changed {
+				wanted = "next"
+			}
+			operations := map[string]func(context.Context) error{
+				"search": func(ctx context.Context) error {
+					_, err := archive.Search(ctx, sessionstore.SearchOptions{Text: "cat"})
+					return err
+				},
+				"backfill": func(ctx context.Context) error { _, err := archive.Backfill(ctx); return err },
+				"prepare": func(ctx context.Context) error {
+					_, err := archive.Prepare(ctx, []sessionstore.Record{{Kind: sessionstore.KindMessage, Content: "dog"}})
+					return err
+				},
+				"configure": func(ctx context.Context) error { return archive.ConfigureContext(ctx, embedder, "next", 3) },
+			}
+			for name, operation := range operations {
+				t.Run(name, func(t *testing.T) {
+					waitCtx, stop := context.WithTimeout(t.Context(), 20*time.Millisecond)
+					defer stop()
+					returned := make(chan error, 1)
+					go func() { returned <- operation(waitCtx) }()
+					select {
+					case err := <-returned:
+						if !errors.Is(err, context.DeadlineExceeded) {
+							t.Errorf("waiting operation = %v", err)
+						}
+					case <-time.After(time.Second):
+						t.Error("waiting operation ignored its deadline")
+						cancel()
+						<-returned
+					}
+				})
+				if ctx.Err() != nil {
+					return
+				}
+			}
+			readCtx, stop := context.WithTimeout(t.Context(), time.Second)
+			defer stop()
+			if current := store.VectorConfig(); current.Model != "current" {
+				t.Errorf("cancelled operation changed the model: %+v", current)
+			}
+			if _, err := archive.Search(readCtx, sessionstore.SearchOptions{Sort: sessionstore.SortOldest}); err != nil {
+				t.Errorf("chronological read blocked by provider: %v", err)
+			}
+		})
+	}
 }
 
 func TestRunningArchiveFollowsLatestModelAndRejectsOldWorker(t *testing.T) {

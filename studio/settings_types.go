@@ -47,6 +47,7 @@ type modelSettings struct {
 	DefaultReasoning    string                `json:"default_reasoning_effort"`
 	EmbeddingModel      string                `json:"embedding_model"`
 	EmbeddingDimensions int                   `json:"embedding_dimensions"`
+	EmbeddingChange     *embeddingChange      `json:"embedding_change,omitempty"`
 	GroupCount          int                   `json:"group_count"`
 	Groups              []modelGroupSettings  `json:"groups"`
 	Roles               []roleModelAssignment `json:"roles"`
