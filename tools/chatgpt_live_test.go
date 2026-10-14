@@ -19,7 +19,7 @@ import (
 	"github.com/snowmerak/q/tools"
 )
 
-// Explicit opt-in: exercise both caller modes through an existing Q login,
+// Explicit opt-in: exercise native Responses and Chat-compatible caller modes through an existing Q login,
 // without signing in, recording a session, or executing advertised tools.
 func TestLiveChatGPTAcceptsQToolCatalog(t *testing.T) {
 	if os.Getenv("Q_TEST_CHATGPT_TOOLS") != "1" {
@@ -88,14 +88,22 @@ func TestLiveChatGPTAcceptsQToolCatalog(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = configured.Close() })
+	chatCompatible, err := client.New(client.Config{BaseURL: server.URL + "/v1", DisableAPIKey: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = chatCompatible.Close() })
 	request := client.ChatRequest{Model: "plan/" + model, Messages: []client.Message{{Role: client.RoleUser, Content: "Reply exactly OK. Do not call any tools."}}, Tools: catalog, ToolChoice: client.ToolChoiceAuto}
-	for _, mode := range []string{"non-streaming", "streaming"} {
+	for _, mode := range []string{"non-streaming", "streaming", "chat-completions-streaming"} {
 		t.Run(mode, func(t *testing.T) {
 			var response *client.ChatResponse
 			var err error
-			if mode == "streaming" {
+			switch mode {
+			case "chat-completions-streaming":
+				response, _, err = agentloop.ConsumeChatStream(ctx, chatCompatible, request, nil)
+			case "streaming":
 				response, _, err = agentloop.ConsumeChatStream(ctx, configured, request, nil)
-			} else {
+			default:
 				response, err = configured.Chat(ctx, request)
 			}
 			if err != nil {

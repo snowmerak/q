@@ -49,11 +49,17 @@ description causes HTTP 400 (`Missing required parameter: 'tools[0].description'
 even when every child tool has a description; reconnecting cannot repair it.
 
 Studio recognizes ChatGPT as a streaming provider, including in model groups.
-For non-streaming callers, the provider collects final `response.output_item.done`
-snapshots before returning the completed response. ChatGPT may leave the terminal
-event's output array empty; using only that event loses the answer and causes
+Both caller modes must collect final `response.output_item.done` snapshots before
+returning the completed response. ChatGPT may leave the terminal event's output
+array empty or partial; using only that event loses the answer and causes
 `Responses completed without text or function calls` even after successful
 inference. Collection preserves text, function calls, opaque reasoning and usage.
+
+Completed refusal content is shown as an assistant answer, with its native
+output preserved for subsequent requests. Streaming refusal deltas are displayed
+once, and failed/incomplete streams retain the server's error code, explanation
+and incomplete reason. Chat Completions' `stream_options.include_usage` is kept
+off the upstream Responses request, whose completion event already includes usage.
 
 Q preserves optional tool arguments with explicit `strict: false` unless the
 tool declares a compatible strict schema. Strict mode requires every object
@@ -66,7 +72,10 @@ run.
 ## Local development and release validation
 
 Q's `go.mod` pins llm-provider `v0.0.0-20261014004000-2a04b3c58860`, including
-the ChatGPT namespace description and non-streaming collection fixes.
+the ChatGPT namespace description and non-streaming collection fixes. The
+additional Chat Completions streaming, refusal and error-detail fixes in the
+sibling checkout require publishing that provider revision and updating this
+pin before release; candidate validation alone does not update the dependency.
 The workspace contains Q and the existing
 ACP modules; it does not need the sibling llm-provider checkout. Local
 `go test ./...`, `go vet ./...`, and Go builds use
@@ -106,8 +115,9 @@ test before release.
 
 For the tool-schema regression, explicitly set `Q_TEST_CHATGPT_TOOLS=1` and run
 `go test ./tools -run '^TestLiveChatGPTAcceptsQToolCatalog$' -count=1 -v`.
-This uses an already connected Q account and checks both non-streaming and
-streaming GPT-6.1 Sol inference with 31 tools advertised and automatic tool
+This uses an already connected Q account and checks non-streaming/streaming
+native Responses and Chat Completions streaming inference on GPT-6.1 Sol, with
+31 tools advertised and automatic tool
 selection. The probe never executes a tool, creates a Studio session or starts
 a login. It spends ChatGPT usage.
 

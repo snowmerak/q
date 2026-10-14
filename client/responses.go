@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"sort"
 	"strings"
 )
 
@@ -260,8 +259,9 @@ func parseResponseDocument(body json.RawMessage, affinity, requestedModel string
 			Name      string `json:"name"`
 			Arguments string `json:"arguments"`
 			Content   []struct {
-				Type string `json:"type"`
-				Text string `json:"text"`
+				Type    string `json:"type"`
+				Text    string `json:"text"`
+				Refusal string `json:"refusal"`
 			} `json:"content"`
 		}
 		if err := json.Unmarshal(raw, &item); err != nil {
@@ -276,8 +276,11 @@ func parseResponseDocument(body json.RawMessage, affinity, requestedModel string
 				message.Phase = item.Phase
 			}
 			for _, part := range item.Content {
-				if part.Type == "output_text" {
+				switch part.Type {
+				case "output_text":
 					message.Content += part.Text
+				case "refusal":
+					message.Content += part.Refusal
 				}
 			}
 		case "function_call":
@@ -402,7 +405,7 @@ func (s *responsesChunkStream) Recv() (*ChatChunk, error) {
 		var data struct {
 			Type        string          `json:"type"`
 			Delta       string          `json:"delta"`
-			OutputIndex int             `json:"output_index"`
+			OutputIndex *int            `json:"output_index"`
 			Item        json.RawMessage `json:"item"`
 			Response    json.RawMessage `json:"response"`
 			Error       *struct {
@@ -417,6 +420,10 @@ func (s *responsesChunkStream) Recv() (*ChatChunk, error) {
 		if kind == "" {
 			kind = event.Event
 		}
+		index := 0
+		if data.OutputIndex != nil {
+			index = *data.OutputIndex
+		}
 		switch kind {
 		case "response.output_item.added":
 			var item struct {
@@ -430,9 +437,9 @@ func (s *responsesChunkStream) Recv() (*ChatChunk, error) {
 			if s.phases == nil {
 				s.phases = make(map[int]string)
 			}
-			s.phases[data.OutputIndex] = item.Phase
-		case "response.output_text.delta":
-			phase := s.phases[data.OutputIndex]
+			s.phases[index] = item.Phase
+		case "response.output_text.delta", "response.refusal.delta":
+			phase := s.phases[index]
 			if phase != "commentary" {
 				s.text.WriteString(data.Delta)
 			}
@@ -446,16 +453,19 @@ func (s *responsesChunkStream) Recv() (*ChatChunk, error) {
 			}
 			// Compatible servers may send both native thought and summary text.
 			// Display one channel per item, while retaining the native output for replay.
-			if source := s.reasoningSources[data.OutputIndex]; source != "" && source != kind {
+			if source := s.reasoningSources[index]; source != "" && source != kind {
 				continue
 			}
-			s.reasoningSources[data.OutputIndex] = kind
+			s.reasoningSources[index] = kind
 			return &ChatChunk{Model: s.model, Choices: []Choice{{Index: 0, Phase: "commentary", Delta: &Message{Role: RoleAssistant, Content: data.Delta}}}}, nil
 		case "response.output_item.done":
+			if data.OutputIndex == nil || index < 0 || len(data.Item) == 0 || string(data.Item) == "null" {
+				return nil, errors.New("client: completed output item is missing its index or value")
+			}
 			if s.output == nil {
 				s.output = make(map[int]json.RawMessage)
 			}
-			s.output[data.OutputIndex] = append(json.RawMessage(nil), data.Item...)
+			s.output[index] = append(json.RawMessage(nil), data.Item...)
 		case "response.failed", "response.incomplete", "error":
 			message := data.Message
 			if data.Error != nil && data.Error.Message != "" {
@@ -480,21 +490,9 @@ func (s *responsesChunkStream) Recv() (*ChatChunk, error) {
 			if len(body) == 0 {
 				return nil, errors.New("client: Responses completion event has no response")
 			}
-			if len(s.output) > 0 {
-				var payload map[string]json.RawMessage
-				if json.Unmarshal(body, &payload) == nil && (len(payload["output"]) == 0 || string(payload["output"]) == "null" || string(payload["output"]) == "[]") {
-					indexes := make([]int, 0, len(s.output))
-					for index := range s.output {
-						indexes = append(indexes, index)
-					}
-					sort.Ints(indexes)
-					items := make([]json.RawMessage, 0, len(indexes))
-					for _, index := range indexes {
-						items = append(items, s.output[index])
-					}
-					payload["output"], _ = json.Marshal(items)
-					body, _ = json.Marshal(payload)
-				}
+			body, err = collectResponseOutput(body, s.output)
+			if err != nil {
+				return nil, fmt.Errorf("client: collect Responses output: %w", err)
 			}
 			response, err := parseResponseDocument(body, s.affinity, s.model)
 			if err != nil {
