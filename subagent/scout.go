@@ -431,7 +431,7 @@ func lspQueryToolAllowed(name string) bool {
 }
 
 func scoutCompletionTool() client.Tool {
-	strict := true
+	strict := false
 	stringArray := map[string]any{
 		"type": "array", "maxItems": maximumScoutListItems,
 		"items": map[string]any{"type": "string"},

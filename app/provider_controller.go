@@ -357,8 +357,8 @@ func gatewayModelLocation(value gateway.Config, modelID string) (int, string, bo
 }
 
 // streamsActiveChat limits token streaming to providers that use the shared
-// OpenAI-compatible HTTP transport or the native Codex stream. Native
-// Anthropic retains its existing one-shot chat behavior.
+// OpenAI-compatible HTTP transport, ChatGPT Responses, or the native Codex
+// stream. Native Anthropic retains its existing one-shot chat behavior.
 func (m model) streamsActiveChat() bool {
 	return modelSupportsChatStreaming(m.gatewayConfig, m.activeConfig().ModelGroups, m.activeModel(), nil)
 }
@@ -394,7 +394,7 @@ func modelSupportsChatStreaming(
 		return false
 	}
 	switch gatewayConfig.Providers[providerIndex].Type {
-	case "openai-compatible", "openrouter", "xai", "grok", "codex", "codex-app-server":
+	case "openai-compatible", "openrouter", "xai", "grok", "chatgpt", "codex", "codex-app-server":
 		return true
 	default:
 		return false

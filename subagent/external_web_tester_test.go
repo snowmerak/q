@@ -5,9 +5,9 @@ import (
 	"testing"
 )
 
-func TestExternalWebTesterToolAndInputAreStrictAndBounded(t *testing.T) {
+func TestExternalWebTesterToolPreservesOptionalInputsAndRejectsUnknownFields(t *testing.T) {
 	tool := ExternalWebTesterTool()
-	if tool.Function.Name != ExternalWebTesterToolName || tool.Function.Strict == nil || !*tool.Function.Strict {
+	if tool.Function.Name != ExternalWebTesterToolName || tool.Function.Strict == nil || *tool.Function.Strict {
 		t.Fatalf("tool = %#v", tool)
 	}
 	input, err := ParseExternalWebTesterInput(`{"request":" verify login ","context":[" local app "]}`)

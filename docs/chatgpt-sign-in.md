@@ -48,10 +48,26 @@ separately from the descriptions on individual tools. Omitting that namespace
 description causes HTTP 400 (`Missing required parameter: 'tools[0].description'`)
 even when every child tool has a description; reconnecting cannot repair it.
 
+Studio recognizes ChatGPT as a streaming provider, including in model groups.
+For non-streaming callers, the provider collects final `response.output_item.done`
+snapshots before returning the completed response. ChatGPT may leave the terminal
+event's output array empty; using only that event loses the answer and causes
+`Responses completed without text or function calls` even after successful
+inference. Collection preserves text, function calls, opaque reasoning and usage.
+
+Q preserves optional tool arguments with explicit `strict: false` unless the
+tool declares a compatible strict schema. Strict mode requires every object
+property to be required and `additionalProperties: false` on every object.
+Declaring strict mode on schemas with optional fields causes HTTP 400, such as
+the `external_search` error for missing `completion_criteria`. Local argument
+validation still checks required values, types and unknown fields before tools
+run.
+
 ## Local development and release validation
 
-Q's `go.mod` pins llm-provider `v0.0.0-20261014003100-b4af17ff09df`, including
-the ChatGPT namespace description fix. The workspace contains Q and the existing
+Q's `go.mod` pins llm-provider `v0.0.0-20261014004000-2a04b3c58860`, including
+the ChatGPT namespace description and non-streaming collection fixes.
+The workspace contains Q and the existing
 ACP modules; it does not need the sibling llm-provider checkout. Local
 `go test ./...`, `go vet ./...`, and Go builds use
 the published provider. Build the checked-in Studio assets with:
@@ -83,10 +99,24 @@ regression test verifies initial status through the real local Gateway child,
 then exercises account selection, disconnect, credential-field absence and
 reload with mocked safe status responses. Delayed-save regressions cover provider
 renaming, conversion to ChatGPT and enabling a provider, including automatic
-status refresh after the Gateway applies each change. The tests do not authorize
-another real app or spend ChatGPT usage. The earlier real OAuth/inference probe
+status refresh after the Gateway applies each change. The default tests do not
+authorize another real app or spend ChatGPT usage. The earlier real OAuth/inference probe
 revoked its session; this implementation still needs a fresh end-to-end consent
 test before release.
+
+For the tool-schema regression, explicitly set `Q_TEST_CHATGPT_TOOLS=1` and run
+`go test ./tools -run '^TestLiveChatGPTAcceptsQToolCatalog$' -count=1 -v`.
+This uses an already connected Q account and checks both non-streaming and
+streaming GPT-6.1 Sol inference with 31 tools advertised and automatic tool
+selection. The probe never executes a tool, creates a Studio session or starts
+a login. It spends ChatGPT usage.
+
+For the Studio path, set `Q_TEST_CHATGPT_STUDIO=1` and run
+`go test ./studio -run '^TestLiveStudioChatGPTPersonalChat$' -count=1 -v`.
+This uses isolated Studio services, creates a disposable personal chat with
+failed user-only history, and checks two real turns and their saved answers.
+Learning is disabled for this test chat. Both existing-login checks completed
+successfully on 2026-10-14; they do not verify the consent flow above.
 
 Contract and lifecycle details live in the sibling
 `llm-provider/providers/chatgpt/README.md` and the official

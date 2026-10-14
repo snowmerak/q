@@ -29,7 +29,8 @@ const plannerBlockedExample = `{
 
 func submitPlanTool(executors ...string) client.Tool {
 	executors = normalizePlanExecutors(executors)
-	strict := true
+	// Optional fields and named Loom inputs use general JSON Schema semantics.
+	strict := false
 	codeSchema := planTextSchema("JavaScript function body returning an array of workspace-relative file paths; at most 262144 UTF-8 bytes.")
 	codeSchema["maxLength"] = maximumTargetCodeBytes
 	refSchema := planTextSchema("A valid loom:// artifact reference supplied in the brief.")

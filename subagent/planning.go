@@ -842,7 +842,7 @@ func plannerTools(runtime ToolRuntime, executors ...string) []client.Tool {
 }
 
 func askUserTool() client.Tool {
-	strict := true
+	strict := false
 	return client.Tool{Type: client.ToolTypeFunction, Function: client.FunctionDefinition{
 		Name: AskToUserToolName, Description: "Ask the user one planning question that repository investigation cannot answer. Choices are optional, non-exhaustive suggestions; free-form answers are always allowed.", Strict: &strict,
 		Parameters: map[string]any{
@@ -860,7 +860,7 @@ func askUserTool() client.Tool {
 }
 
 func delegateScoutTool() client.Tool {
-	strict := true
+	strict := false
 	stringsSchema := stringArraySchemaValue()
 	return client.Tool{Type: client.ToolTypeFunction, Function: client.FunctionDefinition{
 		Name: DelegateScoutToolName, Description: "Delegate one bounded read-only repository question to Scout and receive a Loom receipt containing its structured report or preview.", Strict: &strict,
@@ -874,7 +874,7 @@ func delegateScoutTool() client.Tool {
 }
 
 func submitBriefTool() client.Tool {
-	strict := true
+	strict := false
 	stringsSchema := stringArraySchemaValue()
 	choicesSchema := map[string]any{"type": "array", "items": map[string]any{
 		"type": "object", "properties": map[string]any{

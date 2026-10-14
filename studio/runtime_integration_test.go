@@ -66,6 +66,10 @@ type studioIntegration struct {
 }
 
 func newStudioIntegration(t *testing.T) studioIntegration {
+	return newStudioIntegrationConfigured(t, studioTestModel, nil)
+}
+
+func newStudioIntegrationConfigured(t *testing.T, model http.HandlerFunc, configure func(*config.Config)) studioIntegration {
 	t.Helper()
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -92,10 +96,13 @@ func newStudioIntegration(t *testing.T) studioIntegration {
 	if err := (usagelog.ConfigStore{Dir: store.Dir}).Save(usagelog.Config{Version: usagelog.ConfigVersion, Host: "127.0.0.1", Port: port()}); err != nil {
 		t.Fatal(err)
 	}
-	upstream := httptest.NewServer(http.HandlerFunc(studioTestModel))
+	upstream := httptest.NewServer(model)
 	t.Cleanup(upstream.Close)
 	value := config.Default()
 	value.Provider.Model, value.Provider.BaseURL, value.Provider.APIKeyEnv = "test-model", upstream.URL+"/v1", ""
+	if configure != nil {
+		configure(&value)
+	}
 	if err := store.Save(value); err != nil {
 		t.Fatal(err)
 	}

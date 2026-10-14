@@ -26,7 +26,8 @@ type ExternalSearchResult struct {
 type ExternalSearchFunc func(context.Context, ExternalSearchInput) (ExternalSearchResult, error)
 
 func ExternalSearchTool() client.Tool {
-	strict := true
+	// OpenAI strict mode requires every property; this contract allows omissions.
+	strict := false
 	stringsSchema := stringArraySchemaValue()
 	return client.Tool{Type: client.ToolTypeFunction, Function: client.FunctionDefinition{
 		Name:        ExternalSearchToolName,

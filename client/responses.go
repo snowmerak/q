@@ -105,7 +105,9 @@ func (c *Client) responseRequest(request ChatRequest, affinity string) (json.Raw
 			if tool.Type != ToolTypeFunction {
 				return nil, fmt.Errorf("client: Responses mode does not support tool type %q", tool.Type)
 			}
-			item := map[string]any{"type": "function", "name": tool.Function.Name}
+			// Match Chat's non-strict default so Responses cannot promote optional
+			// input properties to required fields. Explicit strict requests survive.
+			item := map[string]any{"type": "function", "name": tool.Function.Name, "strict": false}
 			if tool.Function.Description != "" {
 				item["description"] = tool.Function.Description
 			}

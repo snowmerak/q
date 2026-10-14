@@ -26,7 +26,7 @@ type ExternalWebTesterResult struct {
 }
 
 func ExternalWebTesterTool() client.Tool {
-	strict := true
+	strict := false
 	stringsSchema := map[string]any{
 		"type": "array", "maxItems": maximumCoderListItems,
 		"items": map[string]any{"type": "string", "maxLength": maximumCoderTextBytes},

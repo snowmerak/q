@@ -276,7 +276,7 @@ func coderReservedTool(name string) bool {
 }
 
 func coderCompletionTool() client.Tool {
-	strict := true
+	strict := false
 	stringsSchema := map[string]any{
 		"type": "array", "maxItems": maximumCoderListItems,
 		"items": map[string]any{"type": "string"},

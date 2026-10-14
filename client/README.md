@@ -4,6 +4,15 @@ This package wraps `github.com/snowmerak/llm-provider/providers/openai` instead
 of implementing a second HTTP stack. It supports chat completions, streaming,
 tool calls, model listing, embeddings, and raw Responses API requests.
 
+Function tools with no explicit strictness use `strict: false` in Responses
+mode, matching Chat Completions' default and preserving optional parameters.
+Explicit strictness is preserved. OpenAI strict mode is a narrower schema
+contract: every object must reject additional properties and require all of its
+properties, with optional values represented as nullable. A schema with optional
+properties or free-form maps must not advertise `strict: true`. Q still validates
+tool arguments locally before execution; provider strictness does not replace
+that validation. Raw Responses requests retain the caller's supplied fields.
+
 ```go
 c, err := client.New(client.Config{
     BaseURL:      "http://127.0.0.1:8080/v1",

@@ -671,7 +671,7 @@ func plannerReviewTools(available []client.Tool, executors ...string) []client.T
 
 func reviewTaskTool(executors ...string) client.Tool {
 	executors = normalizePlanExecutors(executors)
-	strict := true
+	strict := false
 	factChangeSchema := map[string]any{
 		"description": "Apply one explicit, evidence-based change to the current plan facts.",
 		"anyOf": []map[string]any{

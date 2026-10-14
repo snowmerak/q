@@ -401,7 +401,7 @@ type taskCompleteInput struct {
 }
 
 func TaskLifecycleTools() []client.Tool {
-	strict := true
+	strict := false
 	textSchema := map[string]any{"type": "string", "maxLength": maximumCoderTextBytes}
 	reportSchema := map[string]any{
 		"type": "string", "maxLength": maximumTaskReportBytes,
@@ -431,7 +431,7 @@ func TaskLifecycleTools() []client.Tool {
 }
 
 func DelegateTools() []client.Tool {
-	strict := true
+	strict := false
 	return []client.Tool{
 		{Type: client.ToolTypeFunction, Function: client.FunctionDefinition{
 			Name: DelegateListToolName, Description: "List the subagents this agent is currently allowed to call, optionally for another working directory.", Strict: &strict,

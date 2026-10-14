@@ -264,11 +264,13 @@ func TestModelSupportsChatStreaming(t *testing.T) {
 		{ID: "router", Type: "openrouter", Enabled: true},
 		{ID: "xai", Type: "xai", Enabled: true},
 		{ID: "codex", Type: "codex", Enabled: true},
+		{ID: "plan", Type: "chatgpt", Enabled: true},
 		{ID: "claude", Type: "anthropic", Enabled: true},
 	}}
 	groups := map[string]config.ModelGroupConfig{
 		"local-only": {Candidates: []config.ModelCandidateConfig{{Model: "local/slow-a"}, {Model: "local/slow-b"}}},
 		"mixed":      {Candidates: []config.ModelCandidateConfig{{Model: "local/slow"}, {Model: "codex/fast"}}},
+		"plan":       {Candidates: []config.ModelCandidateConfig{{Model: "plan/gpt-6.1-sol"}}},
 	}
 	tests := []struct {
 		model string
@@ -278,9 +280,11 @@ func TestModelSupportsChatStreaming(t *testing.T) {
 		{model: "router/model", want: true},
 		{model: "xai/model", want: true},
 		{model: "codex/fast", want: true},
+		{model: "plan/gpt-6.1-sol", want: true},
 		{model: "claude/model", want: false},
 		{model: "group/local-only", want: true},
 		{model: "group/mixed", want: true},
+		{model: "group/plan", want: true},
 		{model: "missing/model", want: false},
 	}
 	for _, test := range tests {
