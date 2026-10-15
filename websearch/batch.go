@@ -116,11 +116,6 @@ func SearchBatch(ctx context.Context, search Searcher, in BatchInput) (BatchOutp
 					continue
 				}
 				task := in.Tasks[index]
-				// A model endpoint may queue concurrent batches. Preserve explicit
-				// overrides, but do not impose a one-minute default on queued calls.
-				if task.Search.DecisionTimeoutSeconds == 0 {
-					task.Search.DecisionTimeoutSeconds = 1800
-				}
 				begin := time.Now()
 				result, err := search.Search(ctx, task.Search)
 				item := TaskResult{ID: task.ID, Started: true, ElapsedSeconds: time.Since(begin).Seconds(), Status: result.Status}

@@ -257,6 +257,9 @@ prompt has 4719 tokens; limit is 4096; truncation is disabled
 [`websearch/pages.go`](../websearch/pages.go)가 configured `browser_search`, 호환 이름
 `web_search`, `web_search_batch`에 사용된다. 입력 필드와 근거 출력은 유지하고 페이지별
 `pages` 기록을 추가했다. `max_steps`/`steps`는 이 경로에서 읽기를 시도한 페이지 수다.
+후속 변경으로 `decision_timeout_seconds` 입력과 개별 탐색·출처·문단 판정 타임아웃을
+제거했다. 판정 HTTP 클라이언트도 별도 시간제한 없이 검색/호출자 컨텍스트를 따른다.
+검색 전체 35분·완료 판정 30분·페이지 HTTP GET 25초 제한은 유지한다.
 
 - 메타서치 후보 중 읽지 않은 페이지를 선택한다. publisher 검사와 문단 분류는 탐색 역할,
   페이지 처리 후 완료 검사는 완료 역할을 사용한다. 생성형 planner 호출은 0회다.

@@ -32,9 +32,6 @@ func validate(in Input) error {
 	if in.MaxSteps < 0 || in.MaxSteps > 40 {
 		return errors.New("web_search: max_steps must be between 0 and 40")
 	}
-	if in.DecisionTimeoutSeconds < 0 || in.DecisionTimeoutSeconds > 1800 {
-		return errors.New("web_search: decision_timeout_seconds must be between 0 and 1800")
-	}
 	if in.StartURL != "" && (!validURL(in.StartURL) || len(in.StartURL) > 2000) {
 		return errors.New("web_search: start_url must be HTTP(S), without credentials, max 2000 bytes")
 	}
@@ -363,11 +360,7 @@ func (r *run) state() any {
 }
 
 func (r *run) choose(ctx context.Context, questions map[string]systemone.Question, state any) (map[string]string, error) {
-	timeout := time.Minute
-	if r.in.DecisionTimeoutSeconds > 0 {
-		timeout = time.Duration(r.in.DecisionTimeoutSeconds) * time.Second
-	}
-	return r.chooseWith(ctx, r.engine.Decision, r.engine.DecisionModel, timeout, false, questions, state)
+	return r.chooseWith(ctx, r.engine.Decision, r.engine.DecisionModel, 0, false, questions, state)
 }
 
 func (r *run) chooseWith(ctx context.Context, decision Decider, model string, timeout time.Duration, coverage bool, questions map[string]systemone.Question, state any) (answers map[string]string, returnErr error) {
@@ -408,8 +401,12 @@ func (r *run) chooseWith(ctx context.Context, decision Decider, model string, ti
 		}
 		r.out.SystemOneTimings = append(r.out.SystemOneTimings, timing)
 	}()
-	callCtx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
+	callCtx := ctx
+	if timeout > 0 {
+		var cancel context.CancelFunc
+		callCtx, cancel = context.WithTimeout(ctx, timeout)
+		defer cancel()
+	}
 	r.out.SystemOneCalls++
 	if coverage {
 		r.out.CoverageCalls++

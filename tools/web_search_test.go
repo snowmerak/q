@@ -245,6 +245,15 @@ func TestWebSearchVisibilityFollowsModelSettingsWithoutRestart(t *testing.T) {
 		for _, name := range []string{"browser_search", "web_search", "web_search_batch"} {
 			found := false
 			for _, tool := range listed.Tools {
+				if tool.Name == name {
+					schema, err := json.Marshal(tool.InputSchema)
+					if err != nil {
+						t.Fatal(err)
+					}
+					if strings.Contains(string(schema), "decision_timeout_seconds") {
+						t.Fatalf("%s still exposes a decision timeout: %s", name, schema)
+					}
+				}
 				found = found || tool.Name == name
 			}
 			if found != enabled || runtimeHasTool(runtime, name) != enabled || hasToolName(runtime.ToolsForRole("research"), name) != enabled || hasToolName(runtime.CustomTools(), name) != enabled {

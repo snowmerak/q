@@ -51,6 +51,11 @@ delegation.
 the builtin interviewer, manager, research, and senior developer profiles.
 These profiles also expose `web_search_batch`; the junior developer profile
 omits both search tools. Custom profiles select them explicitly in `tools`.
+Request exactly one piece of information per `browser_search` call. Split lists
+and multi-entity questions into separate calls or one `web_search_batch` task per
+information item (for example, one ministry's current minister). Preserve source,
+time and verification constraints in every subgoal, then combine the results in
+the calling agent.
 Initial discovery uses the pinned Go scour library to
 query its eight general web engines concurrently, with an eight-second timeout
 per engine. Successful results are merged and ranked even when other engines
@@ -156,12 +161,12 @@ bytes, local admission wait and remote request time (including any server queue)
 list keeps the latest eight errors so early search failures cannot hide a later
 model timeout.
 
-Completion checks allow 30 minutes per native request; the completion HTTP
-client allows 30 minutes plus five seconds. Ordinary single-search selection,
-publisher and relevance decisions default to one minute;
-`decision_timeout_seconds` overrides that limit
-up to 1800 seconds. The overall search allows 35 minutes, subject to the
-caller's deadline. HTTP GET requests allow 25 seconds. The
+Completion checks allow 30 minutes per native request; a separately configured
+completion HTTP client allows 30 minutes plus five seconds. Page selection, publisher and relevance
+decisions have no independent timeout or HTTP client timeout: they inherit the
+search/caller context, including model-server queueing. There is no tool input
+for overriding decision timeouts. The overall search allows 35 minutes, subject
+to the caller's deadline. HTTP GET requests allow 25 seconds. The
 smoke driver allows 36 minutes so it does not cancel the completion early.
 
 Defaults: 20 attempted pages (maximum 40), 35 minutes total, six requirements,
@@ -214,16 +219,15 @@ The batch accepts 1–8 tasks with unique ASCII IDs (letters, digits, dot, under
 hyphen; at most 64 bytes) and 1–4 concurrent loops (default 3).
 It validates the entire input before starting work. Each task owns its candidate,
 hash, passage, requirement and budget state. Batch selection/publisher/relevance
-decisions default to 30
-minutes, including model-server queueing; set a task's
-`search.decision_timeout_seconds` to override it. Completion remains 30 minutes.
+decisions inherit the batch/caller context without an independent timeout,
+including model-server queueing. Completion remains 30 minutes.
 This concurrency limit applies to one batch; other
 tool calls have independent limits, and model endpoints may serialize requests.
 `model_concurrency` separately limits active model requests to 1–4 (default 1,
 capped by loop concurrency). Browser/HTTP work and loop state remain independent
 while native decisions and completion checks share model
 slots. Local model admission waits count against the 35-minute batch deadline;
-native request deadlines start after admission and also respect that deadline.
+completion request deadlines start after admission and also respect that deadline.
 Increase model concurrency only when the endpoint supports overlapping inference.
 Injected services using `websearch.Engine` inherit this limit; other services can
 use `websearch.AcquireModelSlot(ctx)` around each model call.

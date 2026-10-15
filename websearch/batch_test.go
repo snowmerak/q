@@ -180,8 +180,8 @@ func TestConcurrentEngineSearchesKeepSessionsAndEvidenceIndependent(t *testing.T
 	}}
 	engine.Decision = decisionFunc(func(ctx context.Context, req systemone.Request, _ systemone.CallOptions) (*systemone.Result, error) {
 		deadline, ok := ctx.Deadline()
-		if !ok || time.Until(deadline) > 30*time.Minute || time.Until(deadline) < 29*time.Minute {
-			t.Error("batch navigation must allow thirty minutes")
+		if !ok || time.Until(deadline) > searchTimeout || time.Until(deadline) < searchTimeout-time.Minute {
+			t.Error("batch navigation must inherit the batch deadline")
 		}
 		answers := map[string]systemone.Answer{}
 		for key := range req.Questions {
@@ -225,16 +225,17 @@ func TestConcurrentEngineSearchesKeepSessionsAndEvidenceIndependent(t *testing.T
 	}
 }
 
-func TestBatchPreservesExplicitDecisionTimeout(t *testing.T) {
-	search := searchFunc(func(_ context.Context, in Input) (Output, error) {
-		if in.DecisionTimeoutSeconds != 37 {
-			t.Fatalf("explicit timeout replaced: %d", in.DecisionTimeoutSeconds)
+func TestBatchPreservesCallerDeadline(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+	defer cancel()
+	want, _ := ctx.Deadline()
+	search := searchFunc(func(ctx context.Context, _ Input) (Output, error) {
+		if deadline, ok := ctx.Deadline(); !ok || !deadline.Equal(want) {
+			t.Error("caller deadline was not preserved")
 		}
 		return Output{Status: "complete"}, nil
 	})
-	task := batchTask("explicit")
-	task.Search.DecisionTimeoutSeconds = 37
-	if out, err := SearchBatch(t.Context(), search, BatchInput{Tasks: []BatchTask{task}}); err != nil || out.Status != "complete" {
+	if out, err := SearchBatch(ctx, search, BatchInput{Tasks: []BatchTask{batchTask("deadline")}}); err != nil || out.Status != "complete" {
 		t.Fatalf("output=%+v err=%v", out, err)
 	}
 }

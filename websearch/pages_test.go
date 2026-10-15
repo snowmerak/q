@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/snowmerak/q/client/systemone"
 )
@@ -30,7 +31,14 @@ func TestPageResearchClassifiesWholePageBeforeCoverage(t *testing.T) {
 	}))
 	defer page.Close()
 	classified, checks := 0, 0
-	d := decisionFunc(func(_ context.Context, req systemone.Request, _ systemone.CallOptions) (*systemone.Result, error) {
+	d := decisionFunc(func(ctx context.Context, req systemone.Request, _ systemone.CallOptions) (*systemone.Result, error) {
+		limit := searchTimeout
+		if _, coverage := req.Questions["requirement_0"]; coverage {
+			limit = coverageTimeout
+		}
+		if deadline, ok := ctx.Deadline(); !ok || time.Until(deadline) > limit || time.Until(deadline) < limit-time.Minute {
+			t.Fatal("page decision did not inherit the search deadline or coverage limit")
+		}
 		return pageAnswers(req, func(key string, q systemone.Question) string {
 			switch {
 			case key == "publisher":

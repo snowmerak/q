@@ -71,9 +71,8 @@ func (s *configuredWebSearch) Search(ctx context.Context, in websearch.Input) (w
 	if err != nil {
 		return websearch.Output{}, err
 	}
-	// Engine supplies the per-call deadline: one minute for single searches,
-	// thirty minutes for batches by default, or the caller's explicit override.
-	decision, err := systemone.New(systemone.Config{BaseURL: provider.BaseURL(), APIKey: provider.ResolveAPIKey(), HTTPClient: &http.Client{Timeout: 30*time.Minute + 5*time.Second}})
+	// Decisions inherit the search/caller context, including model-server queueing.
+	decision, err := systemone.New(systemone.Config{BaseURL: provider.BaseURL(), APIKey: provider.ResolveAPIKey(), HTTPClient: &http.Client{}})
 	if err != nil {
 		return websearch.Output{}, err
 	}

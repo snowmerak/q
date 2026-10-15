@@ -137,8 +137,8 @@ func TestCompletionUsesIndependentSystemOneModel(t *testing.T) {
 			e := Engine{DecisionModel: "gemma4-e4b", CoverageModel: "qwen3.8-27b", NewSession: func() Session { return s }}
 			e.Decision = decisionFunc(func(ctx context.Context, req systemone.Request, opts systemone.CallOptions) (*systemone.Result, error) {
 				deadline, ok := ctx.Deadline()
-				if !ok || time.Until(deadline) > time.Minute || time.Until(deadline) < 55*time.Second {
-					t.Fatal("navigation must retain its one-minute deadline")
+				if !ok || time.Until(deadline) > searchTimeout || time.Until(deadline) < searchTimeout-time.Minute {
+					t.Fatal("navigation must inherit the search deadline")
 				}
 				if req.Model != "gemma4-e4b" {
 					t.Fatalf("navigation model=%s", req.Model)
@@ -184,19 +184,38 @@ func TestCompletionUsesIndependentSystemOneModel(t *testing.T) {
 	}
 }
 
-func TestNavigationUsesExplicitDecisionTimeout(t *testing.T) {
+func TestNavigationInheritsCallerDeadline(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+	defer cancel()
+	want, _ := ctx.Deadline()
 	u := "https://example.com/docs"
 	base := sequence(t, "stop")
 	e := Engine{NewSession: func() Session { return &fakeSession{pages: map[string]Document{u: doc(u, "Evidence.")}} }}
 	e.Decision = decisionFunc(func(ctx context.Context, req systemone.Request, opts systemone.CallOptions) (*systemone.Result, error) {
 		deadline, ok := ctx.Deadline()
-		if !ok || time.Until(deadline) > 2*time.Second || time.Until(deadline) < time.Second {
-			t.Fatal("explicit navigation timeout was not applied")
+		if !ok || !deadline.Equal(want) {
+			t.Fatal("caller deadline was not preserved")
 		}
 		return base.Evaluate(ctx, req, opts)
 	})
-	if _, err := e.Search(t.Context(), Input{Goal: "Evidence", StartURL: u, DecisionTimeoutSeconds: 2}); err != nil {
+	if _, err := e.Search(ctx, Input{Goal: "Evidence", StartURL: u}); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestDecisionAddsNoDeadlineAndPreservesCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	r := run{engine: &Engine{Decision: decisionFunc(func(callCtx context.Context, _ systemone.Request, _ systemone.CallOptions) (*systemone.Result, error) {
+		if _, ok := callCtx.Deadline(); ok {
+			t.Fatal("decision added an independent deadline")
+		}
+		cancel()
+		<-callCtx.Done()
+		return nil, callCtx.Err()
+	})}}
+	if _, err := r.choose(ctx, nil, nil); !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancellation lost: %v", err)
 	}
 }
 
