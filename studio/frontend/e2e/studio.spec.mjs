@@ -1242,11 +1242,11 @@ test('web search model choices enable tools only when both roles are configured'
   expect((await request.post('/api/v1/settings/system-one/providers', { data: {
     id: 'web-decision', uri: fixture.decision_uri, api_key_env: ''
   } })).ok()).toBe(true);
-  await page.goto('/settings?section=system-one');
+  await page.goto('/settings?section=web-search');
   await expect(page).toHaveTitle('Q Studio');
-  const navigation = page.locator('.system-one-assignment').filter({ hasText: 'Web Search Navigation' }).getByRole('combobox', { name: 'Model', exact: true });
-  const completion = page.locator('.system-one-assignment').filter({ hasText: 'Web Search Completion' }).getByRole('combobox', { name: 'Model', exact: true });
-  const disabled = page.getByText('Select both web search models to enable web search tools.', { exact: true });
+  const navigation = page.getByLabel('Source and evidence model');
+  const completion = page.getByLabel('Completion model', { exact: true });
+  const disabled = page.getByText('Select both decision models to enable web search tools.', { exact: true });
   const enabled = page.getByText('Web search tools enabled.', { exact: true });
   await expect(disabled).toBeVisible();
   await navigation.selectOption('web-decision/decision-test');
@@ -1285,7 +1285,7 @@ test('system one routing and listener key management persist through native sett
   expect((await request.post('/api/v1/settings/system-one/providers', { data: {
     id: 'ui-decision', uri: fixture.decision_uri, api_key_env: ''
   } })).ok()).toBe(true);
-  await page.goto('/settings?section=system-one');
+  await page.goto('/settings?section=web-search');
   await expect(page.getByTitle('Refresh System One models', { exact: true })).toBeEnabled();
   const role = page.locator('.system-one-assignment').filter({ hasText: 'Agent Skill Decision' });
   await expect(role.getByRole('combobox', { name: 'Model', exact: true }).locator('option[value="ui-decision/decision-test"]')).toHaveCount(1);

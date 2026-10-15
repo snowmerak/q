@@ -196,8 +196,13 @@ func (state transferState) bundle() (settingsBundle, error) {
 		put("system-one", "provider/"+provider.ID, provider)
 	}
 	for role, model := range state.systemOne.RoleModels {
+		if role == systemoneconfig.RoleWebSearch || role == systemoneconfig.RoleWebSearchFinish {
+			put("web-search", "role/"+role, model)
+			continue
+		}
 		put("system-one", "role/"+role, model)
 	}
+	put("web-search", "browser", state.main.WebSearch.Effective())
 	put("runtime", "parallel-agents", state.main.EffectiveAgents().MaxParallel)
 	put("runtime", "logging", state.main.Logging.Effective())
 	put("runtime", "context", contextSettings(state.main.EffectiveContext()))
@@ -274,7 +279,7 @@ func decodeTransferBundle(writer http.ResponseWriter, request *http.Request) (se
 		return bundle, errors.New("choose a Q settings file with format q-settings, version 1, and global scope")
 	}
 	for section, items := range bundle.Sections {
-		if !slices.Contains([]string{"models", "providers", "system-one", "runtime", "services", "subagents", "integrations"}, section) || items == nil {
+		if !slices.Contains([]string{"models", "providers", "system-one", "web-search", "runtime", "services", "subagents", "integrations"}, section) || items == nil {
 			return bundle, fmt.Errorf("unsupported settings section %q", section)
 		}
 	}

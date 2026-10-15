@@ -18,34 +18,33 @@ Builtin tools:
 - `run_command`: start a shell command in a workspace directory
 - `cmd_status`: poll command state and incremental output
 - `wait`: wait up to 60 seconds for command progress or completion
-- `browser_open`, `browser_read`: open HTTP/HTTPS pages and read rendered text and links
-- `browser_snapshot`: inspect visible interactive elements and obtain refs
-- `browser_click`, `browser_fill`: interact using refs from the latest snapshot
-- `browser_close`: close a tab and stop Chrome immediately when the last tab closes
-- `browser_search`: metasearch → System One source selection → HTTP reading and paragraph classification → accumulated evidence check after each page
+- `browser_search`: metasearch → System One source selection → CDP reading and paragraph classification → accumulated evidence check after each page
 - `web_search`: compatibility name for `browser_search`
 - `web_search_batch`: run independent research tasks concurrently with per-task evidence, outcomes and timings
 
-Browser tools use Rod inside Q and a locally installed Chrome/Chromium (including
-compatible Edge installations). No Docker, Node.js, Python, or browser download
-is required. Set `Q_BROWSER_PATH` to an executable path when automatic detection
-does not find the desired browser. A separate temporary headless profile starts
-only on the first `browser_open`. Tabs and cookies survive between tool calls;
-two minutes without any browser tool call terminates Chrome and expires all tab
-IDs. The tool runtime and MCP stdio server also close the browser on shutdown.
+Raw browser tool registration (`browser_open`, `browser_read`, `browser_snapshot`,
+`browser_click`, `browser_fill`, `browser_close`) is temporarily commented out.
+These tools are absent from MCP and in-process tool lists and cannot be called.
+Only the research tools and compatibility alias above are exposed for web access.
+The internal `webbrowser` Rod/CDP runtime remains available to Go callers, but
+configured `browser_search` now uses it as the primary page reader.
+Its browser implementation uses an installed Chrome/Chromium or `Q_BROWSER_PATH`,
+an isolated temporary profile, bounded page text, and cleanup on close/idle expiry.
 
-Open a page, read it, then take a snapshot before clicking or filling a field.
-Every snapshot replaces its element refs; every interaction invalidates them.
-Take a new snapshot before the next interaction. References from replaced or
-detached DOM nodes are rejected. Web text is untrusted evidence, not instructions.
-Text is capped at 24,000 Unicode characters, links and interactive elements at
-100, and open tabs at 8. Full tool results use Q's normal Loom capture path.
-This initial implementation inspects the main document only, excluding iframe
-and shadow-root contents. It supplies browser navigation rather than a search
-index; `browser_search` supplies a bounded research workflow on top. Prefer it for
-web research and factual lookup; raw browser tools remain for direct interactive
-website work. The existing ACP web-search agent remains available for search
-delegation.
+Settings → Web Search owns page-read concurrency (1–8, default 2), source/evidence
+selection and completion models, and a reserved generative model selection.
+Existing System One role assignments remain authoritative and are preserved.
+The generative model is saved in `config.yaml` but is not invoked or inherited
+from the chat model. Web Search settings participate in selective import/export.
+Changes apply on the next search; lowering capacity lets admitted reads finish.
+
+Chrome is reused across tool runtimes in the same process. Each research call
+owns one incognito context and reuses its page/cookies across source reads.
+Read capacity is shared across concurrent batches and sessions; model inference
+releases read capacity. Common image/media/font URL patterns are blocked. Reads
+wait for DOM readiness/stability instead of all network resources. The last tool
+runtime closes Chrome; with no search contexts it also expires after two minutes.
+Separate OS processes have independent browser pools.
 
 `browser_search` is registered in both MCP stdio and in-process runtimes, including
 the builtin interviewer, manager, research, and senior developer profiles.
@@ -63,7 +62,7 @@ fail; engine failures remain in the research result. At most 20 candidates are
 retained, filtered by `allowed_domains`. Search snippets guide selection and
 never count as source evidence. No scour answer or infobox plugins run.
 System One selects one of up to eight unread candidate URLs before Q reads its
-original source with HTTP GET. Q checks the publisher independently, then offers
+rendered original source through CDP. Q checks the publisher independently, then offers
 source blocks in document order, up to four per native request. Each question
 explicitly identifies its block ID; the ID is not assumed to be visible to the
 model automatically. Useful partial facts are collected verbatim. Adjacent short
@@ -124,7 +123,7 @@ is zero for configured research tools.
 Embedders can inject a concurrent service with `tools.WithWebSearch`. Existing
 direct `websearch.Engine` embedders that omit `Discovery` retain the older
 injected browser/planner loop. Configured MCP and in-process research tools
-always supply `ScourSearcher` and use the new HTTP page workflow. With Discovery,
+always supply `ScourSearcher` and a shared CDP reader. With Discovery,
 an optional `NewSession` injection supplies `Page(ctx, url, false)` and `Close`
 only; without it Q reads via Go HTTP and creates no browser resources.
 
@@ -166,7 +165,7 @@ completion HTTP client allows 30 minutes plus five seconds. Page selection, publ
 decisions have no independent timeout or HTTP client timeout: they inherit the
 search/caller context, including model-server queueing. There is no tool input
 for overriding decision timeouts. The overall search allows 35 minutes, subject
-to the caller's deadline. HTTP GET requests allow 25 seconds. The
+to the caller's deadline. CDP navigation/reading allows 30 seconds after page-read admission. The
 smoke driver allows 36 minutes so it does not cancel the completion early.
 
 Defaults: 20 attempted pages (maximum 40), 35 minutes total, six requirements,
@@ -178,11 +177,11 @@ record, never silently dropped. Oversized classification batches shrink to fewer
 blocks. A single oversized paragraph yields partial evidence with `evidence_budget`.
 Provider tokenizer/context limits are independent of this byte check: model
 errors retain structured provider `detail`, including token-limit rejections.
-Static HTML is limited to 2 MiB and 250,000 text bytes. Page/block truncation is
+Configured CDP reading retains up to 250,000 text characters; HTTP-only embedders retain the 2 MiB/250,000-byte static limits. Page/block truncation is
 visible in `pages[].truncated`.
 Search engine blocking, unavailable models, unsupported documents and budget
 exhaustion return partial evidence with `status: "incomplete"` and a stop reason.
-CAPTCHAs, login and JavaScript-only pages have no automatic browser fallback.
+CAPTCHAs and login can still prevent reading; JavaScript navigation and cookie redirects run in Chrome.
 Results pass through normal Loom capture.
 
 For an opt-in real MCP/model smoke test:

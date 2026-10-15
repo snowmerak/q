@@ -50,12 +50,13 @@ type Link struct {
 }
 
 type PageContent struct {
-	TabID     string `json:"tab_id"`
-	URL       string `json:"url"`
-	Title     string `json:"title"`
-	Text      string `json:"text"`
-	Links     []Link `json:"links"`
-	Truncated bool   `json:"truncated"`
+	StatusCode int    `json:"status_code,omitempty"`
+	TabID      string `json:"tab_id"`
+	URL        string `json:"url"`
+	Title      string `json:"title"`
+	Text       string `json:"text"`
+	Links      []Link `json:"links"`
+	Truncated  bool   `json:"truncated"`
 }
 
 type Element struct {
@@ -96,16 +97,17 @@ type tab struct {
 // Runtime serializes browser operations so idle cleanup cannot race a call.
 // It owns a temporary Chrome profile; no user's existing browser is attached.
 type Runtime struct {
-	mu            sync.Mutex
-	browser       *rod.Browser
-	cancelBrowser context.CancelFunc
-	launcher      *launcher.Launcher
-	tabs          map[string]*tab
-	nextTab       uint64
-	nextSnapshot  uint64
-	idleTimeout   time.Duration
-	idle          *time.Timer
-	closed        bool
+	releaseReaders func() error
+	mu             sync.Mutex
+	browser        *rod.Browser
+	cancelBrowser  context.CancelFunc
+	launcher       *launcher.Launcher
+	tabs           map[string]*tab
+	nextTab        uint64
+	nextSnapshot   uint64
+	idleTimeout    time.Duration
+	idle           *time.Timer
+	closed         bool
 }
 
 // New creates an inactive runtime. Chrome is only started by Open.
@@ -574,5 +576,10 @@ func (r *Runtime) Close() error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.closed = true
-	return r.stop()
+	err := r.stop()
+	if r.releaseReaders != nil {
+		err = errors.Join(err, r.releaseReaders())
+		r.releaseReaders = nil
+	}
+	return err
 }

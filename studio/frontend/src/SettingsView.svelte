@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { ArrowLeftRight, Bot, BrainCircuit, Cpu, Database, Network, Palette, Server, SlidersHorizontal, Unplug } from '@lucide/svelte';
+  import { ArrowLeftRight, Globe, Bot, BrainCircuit, Cpu, Database, Network, Palette, Server, SlidersHorizontal, Unplug } from '@lucide/svelte';
   import { onMount } from 'svelte';
   import { requestJSON } from './api';
   import IntegrationsView from './IntegrationsView.svelte';
@@ -9,6 +9,7 @@
   import AppearancePanel from './settings/AppearancePanel.svelte';
   import ProvidersPanel from './settings/ProvidersPanel.svelte';
   import SystemOnePanel from './settings/SystemOnePanel.svelte';
+  import WebSearchPanel from './settings/WebSearchPanel.svelte';
   import RuntimePanel from './settings/RuntimePanel.svelte';
   import ServicesPanel from './settings/ServicesPanel.svelte';
   import TransferPanel from './settings/TransferPanel.svelte';
@@ -23,6 +24,7 @@
     { id: 'embeddings' as const, label: 'Embeddings', description: 'Coverage and model consistency', icon: Database },
     { id: 'providers' as const, label: 'Providers', description: 'Gateway upstream providers', icon: Network },
     { id: 'system-one' as const, label: 'System One', description: 'Decision API and access keys', icon: BrainCircuit },
+    { id: 'web-search' as const, label: 'Web Search', description: 'Browser capacity and research models', icon: Globe },
     { id: 'runtime' as const, label: 'Runtime', description: 'Execution, context, and storage', icon: SlidersHorizontal },
     { id: 'services' as const, label: 'Services', description: 'Gateway and System One', icon: Server },
     { id: 'subagents' as const, label: 'Subagents', description: 'Profiles, delegation, and ACP', icon: Bot },
@@ -157,6 +159,7 @@
         <div hidden={activeSection !== 'models'}><ModelsPanel bind:settings {queueSave} active={active && activeSection === 'models'} /></div>
         <div hidden={activeSection !== 'providers'}><ProvidersPanel bind:settings {queueSave} /></div>
         <div hidden={activeSection !== 'system-one'}><SystemOnePanel bind:settings {queueSave} active={active && activeSection === 'system-one'} /></div>
+        <div hidden={activeSection !== 'web-search'}><WebSearchPanel bind:settings {queueSave} active={active && activeSection === 'web-search'} /></div>
         <div hidden={activeSection !== 'runtime'}><RuntimePanel bind:settings {queueSave} active={active && activeSection === 'runtime'} /></div>
         <div hidden={activeSection !== 'services'}><ServicesPanel bind:settings {queueSave} /></div>
         {#if active && activeSection === 'subagents'}<SubagentsView />{/if}

@@ -7,6 +7,7 @@ import (
 )
 
 type settingsSnapshot struct {
+	WebSearch    webSearchSettings    `json:"web_search"`
 	Version      int                  `json:"version"`
 	Scope        string               `json:"scope"`
 	Runtime      runtimeSettings      `json:"runtime"`

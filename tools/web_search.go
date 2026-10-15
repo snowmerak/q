@@ -10,6 +10,7 @@ import (
 	"github.com/snowmerak/q/config"
 	"github.com/snowmerak/q/systemoneconfig"
 	"github.com/snowmerak/q/tools/builtin"
+	"github.com/snowmerak/q/webbrowser"
 	"github.com/snowmerak/q/websearch"
 )
 
@@ -20,7 +21,8 @@ func WithWebSearch(service builtin.WebSearcher) RuntimeOption {
 }
 
 type configuredWebSearch struct {
-	dir string
+	dir     string
+	readers *webbrowser.ReaderPool
 }
 
 func (s *configuredWebSearch) settings() (string, systemoneconfig.Config, error) {
@@ -63,7 +65,7 @@ func webSearchTool(name string) bool {
 }
 
 func (s *configuredWebSearch) Search(ctx context.Context, in websearch.Input) (websearch.Output, error) {
-	_, soConfig, err := s.settings()
+	dir, soConfig, err := s.settings()
 	if err != nil {
 		return websearch.Output{}, err
 	}
@@ -77,6 +79,22 @@ func (s *configuredWebSearch) Search(ctx context.Context, in websearch.Input) (w
 		return websearch.Output{}, err
 	}
 	engine := websearch.Engine{Decision: decision, DecisionModel: model, Discovery: websearch.ScourSearcher{}}
+	main, err := (config.Store{Dir: dir}).Load()
+	if errors.Is(err, config.ErrNotFound) {
+		main, err = config.Default(), nil
+	}
+	if err != nil {
+		return websearch.Output{}, err
+	}
+	pool := s.readers
+	if pool == nil {
+		pool = webbrowser.NewReaderPool()
+		defer func() { _ = pool.Close() }()
+	}
+	if err := pool.SetLimit(main.WebSearch.Effective().MaxConcurrentReads); err != nil {
+		return websearch.Output{}, err
+	}
+	engine.NewSession = func() websearch.Session { return websearch.NewCDPSession(pool) }
 	if soConfig.RoleModels[systemoneconfig.RoleWebSearchFinish] != "" {
 		finishProvider, finishModel, err := soConfig.ResolveModel(systemoneconfig.RoleWebSearchFinish)
 		if err != nil {

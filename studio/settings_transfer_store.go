@@ -51,7 +51,7 @@ func (service *settingsService) saveTransfer(request *http.Request, state transf
 	if _, ok := bundle.Sections["services"]["gateway"]; ok {
 		writes = append(writes, transferWrite{service.gateway.Path(), func() error { return service.gateway.Save(state.gateway) }})
 	}
-	if _, ok := bundle.Sections["services"]["system-one"]; ok || len(bundle.Sections["system-one"]) > 0 {
+	if _, ok := bundle.Sections["services"]["system-one"]; ok || len(bundle.Sections["system-one"]) > 0 || bundle.Sections["web-search"]["role/web_search"] != nil || bundle.Sections["web-search"]["role/web_search_finish"] != nil {
 		writes = append(writes, transferWrite{service.systemOne.Path(), func() error { return service.systemOne.Save(state.systemOne) }})
 	}
 	if _, ok := bundle.Sections["services"]["library"]; ok {

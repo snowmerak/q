@@ -49,6 +49,7 @@ const (
 var ErrNotFound = errors.New("q config not found")
 
 type Config struct {
+	WebSearch     WebSearchConfig             `yaml:"web_search,omitempty"`
 	Logging       LoggingConfig               `yaml:"logging,omitempty"`
 	Version       int                         `yaml:"version"`
 	Provider      ProviderConfig              `yaml:"provider"`
@@ -229,6 +230,9 @@ func Default() Config {
 }
 
 func (c Config) Validate() error {
+	if err := c.WebSearch.Validate(); err != nil {
+		return err
+	}
 	if c.Version != CurrentVersion {
 		return fmt.Errorf("config: unsupported version %d", c.Version)
 	}

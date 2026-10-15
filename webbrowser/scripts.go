@@ -2,7 +2,7 @@ package webbrowser
 
 // These scripts read the rendered main document, not raw HTML. Limits are
 // applied in Chrome so a large page cannot flood the CDP response or Loom.
-const readScript = `() => {
+const readScript = `(limit = 24000) => {
  const body = document.querySelector('main, article, [role="main"]') || document.body;
  const rendered = body ? body.innerText : '';
  const alternatives = body ? Array.from(body.querySelectorAll('img[alt]'))
@@ -15,8 +15,9 @@ const readScript = `() => {
    catch { return false; }
  })
    .slice(0, 100).map(a => ({text: (a.innerText || a.getAttribute('aria-label') || '').trim().slice(0, 300), url: a.href}));
- return {url: location.href, title: document.title, text: text.slice(0, 24000).join(''), links,
-   truncated: text.length > 24000 || anchors.length > 100};
+ return {url: location.href, title: document.title, text: text.slice(0, limit).join(''), links,
+   status_code: performance.getEntriesByType('navigation')[0]?.responseStatus || 0,
+   truncated: text.length > limit || anchors.length > 100};
 }`
 
 const documentScript = `() => JSON.stringify([location.href, performance.timeOrigin])`

@@ -2,6 +2,7 @@ export const transferSections = [
   { id: 'models', label: 'Models' },
   { id: 'providers', label: 'Providers' },
   { id: 'system-one', label: 'System One' },
+  { id: 'web-search', label: 'Web Search' },
   { id: 'runtime', label: 'Runtime' },
   { id: 'services', label: 'Services' },
   { id: 'subagents', label: 'Subagents' },
@@ -55,6 +56,9 @@ export function selectedBundle(bundle: SettingsBundle, selected: Set<string>): S
 
 export function transferLabel(section: TransferSection, id: string): string {
   const names: Record<string, string> = {
+    'web-search:browser': 'Browser capacity and generative model',
+    'web-search:role/web_search': 'Source and evidence model',
+    'web-search:role/web_search_finish': 'Completion model',
     'models:default': 'Default chat model', 'models:embedding': 'Embedding model',
     'system-one:default': 'Default decision model', 'runtime:parallel-agents': 'Maximum parallel agents',
     'runtime:context': 'Context compaction', 'runtime:loom': 'Loom storage', 'runtime:system-prompt': 'System prompt',

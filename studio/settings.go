@@ -181,6 +181,9 @@ func (service *settingsService) snapshot() (settingsSnapshot, error) {
 		})
 	}
 	return settingsSnapshot{
+		WebSearch: webSearchSettings{WebSearchConfig: main.WebSearch.Effective(),
+			NavigationModel: systemOne.RoleModels[systemoneconfig.RoleWebSearch],
+			CompletionModel: systemOne.RoleModels[systemoneconfig.RoleWebSearchFinish], Enabled: systemOne.WebSearchConfigured()},
 		Version: 1,
 		Scope:   "global",
 		Runtime: runtimeSettings{

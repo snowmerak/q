@@ -84,16 +84,24 @@ func newServer(
 		Version: ServerVersion,
 	}, nil)
 	propositions, _ := globalSkills.(builtin.PropositionLibrary)
-	browser := webbrowser.New()
-	var webSearch builtin.WebSearcher = &configuredWebSearch{}
+	browser, readers := webbrowser.NewWithSharedReaders()
+	var webSearch builtin.WebSearcher = &configuredWebSearch{readers: readers}
 	if len(webServices) > 0 && webServices[0] != nil {
 		webSearch = webServices[0]
+	}
+	if configured, ok := webSearch.(*configuredWebSearch); ok {
+		// A checkout clone can share the original service while searches run.
+		// Attach this runtime's pool without mutating that shared service.
+		copyService := *configured
+		copyService.readers = readers
+		webSearch = &copyService
 	}
 	fs, err := builtin.RegisterWithRoots(server, checkoutRoot, auxiliaryCheckoutRoots, builtin.Dependencies{
 		Archive: archive, Loom: loomRuntime, Skills: skills, SkillStore: skillStore, GlobalSkills: globalSkills,
 		SkillRanker: skillRanker, ArchiveRanker: archiveRanker, Propositions: propositions, LSP: lspManager, Browser: browser, WebSearch: webSearch,
 	})
 	if err != nil {
+		_ = browser.Close()
 		return nil, nil, nil, nil, err
 	}
 	return server, fs, skills, browser, nil

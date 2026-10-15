@@ -1,4 +1,4 @@
-// Package websearch implements bounded HTTP research over metasearch candidates.
+// Package websearch implements bounded source research over metasearch candidates.
 // System One selects sources and classifies verbatim evidence. Direct embedders
 // without Discovery retain the injected browser/planner compatibility path.
 package websearch
@@ -133,9 +133,9 @@ type Engine struct {
 	Planner          Planner
 	PlannerModel     string
 	NewSession       func() Session
-	// Discovery selects the page-at-a-time HTTP research workflow. NewSession,
+	// Discovery selects the page-at-a-time research workflow. NewSession,
 	// when supplied, injects reading via Page(ctx, url, false) and Close only.
 	// Otherwise no browser is created. Nil retains the older injected browser
-	// loop for existing embedders; configured browser_search always supplies it.
+	// loop for existing embedders; configured browser_search supplies Discovery and a process-shared CDP reader.
 	Discovery MetaSearcher
 }
