@@ -225,6 +225,7 @@ func (service *sessionRunService) execute(run *studioRun, prompt string) {
 	defer cancel()
 	var emitFailures []error
 	var emitMu sync.Mutex
+	toolCalls := diagnostics.NewToolCalls("studio.tool")
 	emit := func(event app.SessionEvent) error {
 		event.RunID = run.snapshot.ID
 		event.RequestID = diagnostics.RequestID(runContext)
@@ -237,19 +238,21 @@ func (service *sessionRunService) execute(run *studioRun, prompt string) {
 			return failure
 		}
 		switch event.Type {
-		case "tool_call", "question", "question_answered", "control":
-			level := slog.LevelInfo
-			if event.Type == "tool_call" {
-				level = slog.LevelDebug
+		case "tool_call":
+			toolCalls.Started(runContext, diagnostics.ToolIdentity{Name: event.Name, CallID: event.CallID})
+		case "trace":
+			identity := diagnostics.ToolIdentity{Name: event.Name, CallID: event.CallID, Agent: event.Agent, TaskID: event.TaskID, ParentID: event.ParentID}
+			switch event.Kind {
+			case "tool_call":
+				toolCalls.Started(runContext, identity)
+			case "tool_result":
+				toolCalls.Finished(runContext, identity, event.IsError)
 			}
-			logger.Log(runContext, level, "studio.run.event", "event_type", event.Type, "action", event.Action, "tool", event.Name, "call_id", event.CallID)
+		case "question", "question_answered", "control":
+			logger.Info("studio.run.event", "event_type", event.Type, "action", event.Action)
 		case "message":
 			if event.Role == "tool" {
-				level := slog.LevelDebug
-				if event.IsError {
-					level = slog.LevelWarn
-				}
-				logger.Log(runContext, level, "studio.tool.finished", "tool", event.Name, "call_id", event.CallID, "is_error", event.IsError)
+				toolCalls.Finished(runContext, diagnostics.ToolIdentity{Name: event.Name, CallID: event.CallID}, event.IsError)
 			}
 		}
 		return nil

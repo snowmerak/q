@@ -65,7 +65,7 @@ type councilLogFixture struct {
 func newCouncilLogFixture(t *testing.T, host *correlatedCouncilHost) *councilLogFixture {
 	t.Helper()
 	directory := t.TempDir()
-	runtime, err := diagnostics.Open(directory, diagnostics.Options{Level: slog.LevelDebug, FileEnabled: true, MaxFileBytes: 1 << 20, MaxTotalBytes: 2 << 20, MaxAge: 7 * 24 * time.Hour}, io.Discard, io.Discard)
+	runtime, err := diagnostics.Open(directory, diagnostics.Options{Level: slog.LevelInfo, FileEnabled: true, MaxFileBytes: 1 << 20, MaxTotalBytes: 2 << 20, MaxAge: 7 * 24 * time.Hour}, io.Discard, io.Discard)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -183,6 +183,9 @@ func TestCouncilLogsStagesAndSeatsWithIncomingOrGeneratedRequestID(t *testing.T)
 					continue
 				}
 				counts[event]++
+				if strings.HasPrefix(event, "council.tool.") && (record["level"] != "INFO" || strings.HasSuffix(event, ".finished") && record["duration_ms"] == nil) {
+					t.Fatalf("missing default council tool detail: %+v", record)
+				}
 				if record["request_id"] != requestID || record["council_id"] != fixture.value.ID || record["turn_id"] != turn.ID {
 					t.Fatalf("lost identity: %+v", record)
 				}

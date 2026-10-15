@@ -183,6 +183,9 @@ func TestStudioCouncilResumeAndRerunKeepOriginalTurn(t *testing.T) {
 		for time.Now().Before(deadline) {
 			councilAPI(t, handler, http.MethodGet, "/api/v1/councils/"+created.ID+"/runs/"+id, nil, &result)
 			if result.Status == "completed" {
+				// A persisted terminal result can precede releasing seat sessions
+				// and the active-run lock. Retry after the owner finishes cleanup.
+				sessions.councils.wg.Wait()
 				return result
 			}
 			time.Sleep(15 * time.Millisecond)

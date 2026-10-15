@@ -130,13 +130,18 @@ func validateConfig(config Config) error {
 
 // Chat creates a non-streaming chat completion. DefaultModel is used when the
 // request omits Model.
-func (c *Client) Chat(ctx context.Context, request ChatRequest) (*ChatResponse, error) {
+func (c *Client) Chat(ctx context.Context, request ChatRequest) (response *ChatResponse, err error) {
 	request.Model = c.model(request.Model)
+	call := startModelCall(ctx, request.Model, c.apiMode(request.Model), false)
+	defer func() {
+		call.observeResponse(response)
+		call.finish(err, "completed")
+	}()
 	if c.apiMode(request.Model) == "responses" {
 		return c.responsesChat(ctx, request)
 	}
 	ctx, request.Headers = c.withUsageMetadata(ctx, request.Headers, "")
-	response, err := c.inner.Chat(ctx, request)
+	response, err = c.inner.Chat(ctx, request)
 	if response != nil {
 		c.recordChatUsage(ctx, request, response.Model, response.Usage, estimateResponseTokens(response))
 	}
@@ -147,6 +152,23 @@ func (c *Client) Chat(ctx context.Context, request ChatRequest) (*ChatResponse, 
 // returned stream.
 func (c *Client) ChatStream(ctx context.Context, request ChatRequest) (Stream, error) {
 	request.Model = c.model(request.Model)
+	call := startModelCall(ctx, request.Model, c.apiMode(request.Model), true)
+	stream, err := c.chatStream(ctx, request)
+	if err != nil {
+		call.finish(err, "failed")
+		return nil, err
+	}
+	if call == nil {
+		return stream, nil
+	}
+	tracked := &modelLogStream{Stream: stream, call: call}
+	if headers, ok := stream.(ResponseHeaderer); ok {
+		return &modelLogHeaderStream{modelLogStream: tracked, headers: headers}, nil
+	}
+	return tracked, nil
+}
+
+func (c *Client) chatStream(ctx context.Context, request ChatRequest) (Stream, error) {
 	if c.apiMode(request.Model) == "responses" {
 		return c.responsesChatStream(ctx, request)
 	}
@@ -186,10 +208,17 @@ func (c *Client) ListModels(ctx context.Context) ([]Model, error) {
 }
 
 // Embed creates embeddings, using DefaultModel when request.Model is empty.
-func (c *Client) Embed(ctx context.Context, request EmbeddingRequest) (*EmbeddingResponse, error) {
+func (c *Client) Embed(ctx context.Context, request EmbeddingRequest) (response *EmbeddingResponse, err error) {
 	request.Model = c.model(request.Model)
+	call := startModelCall(WithUsageRole(ctx, "embedding"), request.Model, "embeddings", false)
+	defer func() {
+		if response != nil {
+			call.observeUsage(response.Model, Usage{PromptTokens: response.Usage.PromptTokens, TotalTokens: response.Usage.TotalTokens})
+		}
+		call.finish(err, "completed")
+	}()
 	ctx, request.Headers = c.withUsageMetadata(ctx, request.Headers, "embedding")
-	response, err := c.provider.Embed(ctx, request)
+	response, err = c.provider.Embed(ctx, request)
 	if response != nil {
 		c.recordEmbeddingUsage(ctx, request, response)
 	}

@@ -109,16 +109,38 @@ export/import한다. 변경한 설정은 다음 Studio 시작부터 적용한다
 | 서버 | `studio.started/ready/stopped`: INFO. 시작 시 적용한 한도와 stdout 여부도 포함한다. |
 | HTTP | `studio.request.completed`: 정상·예상된 4xx는 DEBUG, 서버 5xx는 ERROR. 메서드·route template·상태·`duration_ms`를 기록한다. |
 | 루트 실행 | `studio.run.started/finished`: INFO, 실행 실패는 ERROR. 사용자 취소는 정상 상태다. |
-| 도구·제어 | 성공 도구 호출·완료는 DEBUG, 도구 오류는 WARN. 질문·일시 정지·재개는 INFO. 본문은 제외한다. |
+| 도구·제어 | `studio.tool.started/finished`: INFO, 도구 오류는 WARN. 루트·중첩 서브에이전트의 도구 이름·호출 ID·작업 식별자·결과와 관측 소요 시간을 기록한다. 질문·일시 정지·재개는 INFO. 본문은 제외한다. |
+| 모델 | `model.call.started/finished`: INFO, 실패는 ERROR, 취소는 INFO. Chat Completions·Responses의 단발·스트리밍, 임베딩, System One 결정 호출을 기록한다. `model_call_id`, `requested_model`, `response_model`, `api_mode`, `streaming`, `usage_role`, 상태·`duration_ms`와 반환된 사용량을 포함한다. |
 | 서브에이전트 | `studio.subagent.started/finished`, `studio.invocation.started/finished`: 요청·작업·호출 식별자와 소요 시간·결과를 기록한다. |
 | 카운슬 턴 | `council.turn.queued/retry_queued/started/finished/cancel_requested`: INFO, 실행 실패는 ERROR. `council_id`, `turn_id`, 상태·소요 시간과 재시도 연결 정보를 기록한다. |
 | 카운슬 단계·참여자 | `council.stage.started/finished`, `council.seat.started/finished`: INFO, 실패는 ERROR, 사용자 취소는 INFO. `stage`, `round`, 참여자 `seat`, `role`, `session_id`, `operation_id`, `model`·`agent`를 기록한다. 완료 작업을 재사용하는 `council.seat.skipped`는 DEBUG다. |
-| 카운슬 도구·저장 | `council.tool.started/finished`: DEBUG, 도구 오류는 WARN. `council.persistence.failed`, `council.lock.release_failed`: ERROR. `council.session.release_failed`: WARN. 본문·원본 오류 문자열은 제외한다. |
+| 카운슬 도구·저장 | `council.tool.started/finished`: INFO, 도구 오류는 WARN. 도구 이름·호출 ID·결과·관측 소요 시간을 포함한다. `council.persistence.failed`, `council.lock.release_failed`: ERROR. `council.session.release_failed`: WARN. 본문·원본 오류 문자열은 제외한다. |
 | 저장 | `studio.persistence.failed`: ERROR. 이벤트·종료 저장 실패를 안전한 속성으로 구분한다. |
 | Gateway | 시작·정상 중단·설정 변경 재시작은 INFO, 사용 불가는 WARN. 기존 명령 출력은 별도다. |
 
 기본 INFO에서는 폴링·정적 asset마다 성공 로그를 쌓지 않는다. DEBUG로 켜면
 해당 요청도 요청 ID·route 필드로 확인한다.
+
+모델 이벤트의 단위는 Q client 호출이다. 모델 그룹 fallback과 애플리케이션의
+재요청은 호출마다 별도 `model_call_id`를 갖고 원래 `request_id`를 공유한다.
+스트림은 연결이 열렸을 때 시작하고 EOF·수신 실패·명시적 close에서 한 번만
+종료한다. EOF 전에 닫히면 `closed`, 요청 취소는 `cancelled`로 구분하며 성공으로
+간주하지 않는다. 청크마다 로그를 쓰지 않고 모델·최종 사용량만 요약한다.
+외부 ACP 참여자는 기존 호스트 invocation·seat 로그를 따르며 외부 프로그램
+내부의 모델 호출을 추정하지 않는다.
+
+`usage_reported`는 응답에서 사용량 정보를 확인했는지 나타낸다. 제공된 `prompt_tokens`,
+`completion_tokens`, `total_tokens`를 기록하며, System One의 누락·null 항목과
+사용량 없는 응답을 0이나 추정치로 채우지 않는다. 토큰은 해당 호출의 값이고
+세션 누계·다음 context 예측치가 아니다. 오류에는 `error_type`과 알 수 있는
+`http_status`만 포함하고 원본 메시지·응답 header를 넣지 않는다.
+단발 채팅·임베딩 응답은 사용량 필드가 모두 0이면 누락과 구별할 수 없어
+`usage_reported: false`로 기록한다.
+
+도구 시간은 호스트의 호출·결과 이벤트 사이의 관측 시간이다. 실행 대기와
+이벤트 전달을 포함할 수 있다. 타이머는 실행별 최대 1024개를 보관하고, 시작을
+관측하지 못한 결과에는 소요 시간을 만들지 않는다. 취소·중단으로 결과 이벤트가
+없는 호출은 시작 로그로 남는다.
 
 enqueue 전에 두 sink에 공통 정규화를 적용한다. 요청·응답 body, query,
 인증 header, 대화, 숨은 추론, 도구 인자·결과, 파일 내용과 설정 전체를 속성에
@@ -200,15 +222,20 @@ HTTP·실행·Gateway를 정리하고 종료 이벤트를 넣은 뒤 큐를 닫�
 - UUID header 채택·정규화, 누락·잘못된 값의 UUID 생성, context ID 유지.
 - 카운슬 HTTP·직접 실행의 ID 생성·전파·저장, 브라우저 취소 후 실행 유지,
   모든 단계·참여자·도구 로그의 식별자와 본문 제외, 실패·취소·resume·rerun 연결.
+- 기본 INFO의 루트·중첩 자식·카운슬 도구 이름·호출 ID·결과·시간과 오류 WARN.
+- 실제 HTTP fixture를 통한 Chat Completions·Responses·임베딩·System One의 모델·
+  반환 사용량·요청 ID와 본문 제외. fallback별 호출 ID, 스트림 EOF·수신 오류·
+  취소·조기 close의 한 번 종료와 response header 인터페이스 보존.
 - 설정 기본값·범위·load/save·transfer 왕복과 임시 HOME의 Studio 기동·종료 파일 확인.
 
 완료 검증은 Windows ARM64, Go 1.27.2의 현재 작업 트리 기준이다.
 
-- `go test ./diagnostics ./config ./council ./studio ./cmd/q ./app ./subagent ./workspace`: 통과.
-- `go build ./...`, 관련 8개 package의 `go vet`, `go mod tidy -diff`: 통과.
+- `go test ./client ./client/systemone ./diagnostics ./config ./council ./studio ./cmd/q ./app ./subagent ./workspace`: 통과.
+- `go build ./...`, 관련 10개 package의 `go vet`, `go mod tidy -diff`: 통과.
 - golangci-lint 2.14.0의 기본 검사(`errcheck`, `govet`, `ineffassign`, `staticcheck`,
   `unused`)에서 변경분 경고 0건. 전체 검사에는 기존 `cmd/q/studio_test.go`의
-  응답 body Close 반환값 경고 2건이 남아 있다.
+  응답 body Close 반환값 경고 2건과 `client/responses_test.go`의 stream Close
+  반환값 경고 2건이 남아 있다.
 - 문서의 로컬 링크와 `git diff --check`: 통과.
 - race detector는 `windows/arm64`에서 지원되지 않아 실행하지 못했다.
   `govulncheck`는 설치되어 있지 않아 실행하지 않았다.

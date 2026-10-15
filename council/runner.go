@@ -451,17 +451,22 @@ func runSeat(ctx context.Context, host SessionRunner, seat Seat, prompt string, 
 	// Stage instructions are a new user turn; the system and tool prefix remains
 	// unchanged throughout the member's session.
 	var result string
+	toolCalls := diagnostics.NewToolCalls("council.tool")
 	err := host.RunWithOptions(ctx, workspace.Store{Root: sessionRoot}, sessionID, prompt, options, func(event app.SessionEvent) error {
 		switch event.Type {
 		case "tool_call":
-			logger.Debug("council.tool.started", "tool", event.Name, "call_id", event.CallID)
+			toolCalls.Started(ctx, diagnostics.ToolIdentity{Name: event.Name, CallID: event.CallID})
+		case "trace":
+			identity := diagnostics.ToolIdentity{Name: event.Name, CallID: event.CallID, Agent: event.Agent, TaskID: event.TaskID, ParentID: event.ParentID}
+			switch event.Kind {
+			case "tool_call":
+				toolCalls.Started(ctx, identity)
+			case "tool_result":
+				toolCalls.Finished(ctx, identity, event.IsError)
+			}
 		case "message":
 			if event.Role == "tool" {
-				level := slog.LevelDebug
-				if event.IsError {
-					level = slog.LevelWarn
-				}
-				logger.Log(ctx, level, "council.tool.finished", "tool", event.Name, "call_id", event.CallID, "is_error", event.IsError)
+				toolCalls.Finished(ctx, diagnostics.ToolIdentity{Name: event.Name, CallID: event.CallID}, event.IsError)
 			}
 		}
 		if event.Type == "result" {

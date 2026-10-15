@@ -98,6 +98,11 @@ in `~/.q/config.yaml`; see [Studio logging](./docs/studio-logging-plan.md) for
 settings, retention, and failure behavior. Embedded Studio servers are silent
 unless a logger is supplied with `studio.WithLogger`.
 
+The default INFO logs include tool names and call IDs for root sessions, nested
+subagents, and councils, plus model calls with selected/reported model IDs,
+streaming mode, status, duration, and reported token usage. Model fallbacks get
+separate call IDs under the same request ID.
+
 Studio listens on `127.0.0.1` with a random available port by default. Pin the
 local address when a stable URL is useful:
 

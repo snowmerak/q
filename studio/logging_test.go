@@ -167,6 +167,8 @@ func TestStudioRunLogsLifecycleWithoutConversation(t *testing.T) {
 				for _, event := range []app.SessionEvent{
 					{Type: "tool_call", Name: "read_file", CallID: "call-1", Content: "private arguments"},
 					{Type: "message", Role: "tool", Name: "read_file", CallID: "call-1", Content: "private file"},
+					{Type: "trace", Kind: "tool_call", Agent: "child", TaskID: "task-1", ParentID: "parent-1", Name: "search", CallID: "nested-1", Content: "private arguments"},
+					{Type: "trace", Kind: "tool_result", Agent: "child", TaskID: "task-1", ParentID: "parent-1", Name: "search", CallID: "nested-1", Content: "private result"},
 					{Type: "stream", Content: "private response"},
 				} {
 					if err := emit(event); err != nil {
@@ -182,7 +184,7 @@ func TestStudioRunLogsLifecycleWithoutConversation(t *testing.T) {
 			})
 			var output bytes.Buffer
 			service := newSessionRunService(t.Context(), runner)
-			service.logger = slog.New(slog.NewJSONHandler(&output, &slog.HandlerOptions{Level: slog.LevelDebug}))
+			service.logger = slog.New(slog.NewJSONHandler(&output, nil))
 			t.Cleanup(func() { _ = service.Close() })
 			run, err := service.start(store.Root, store.SessionID, "private prompt")
 			if err != nil {
@@ -206,6 +208,24 @@ func TestStudioRunLogsLifecycleWithoutConversation(t *testing.T) {
 			}
 			if !strings.Contains(output.String(), "studio.tool.finished") || strings.Contains(output.String(), "private") {
 				t.Fatalf("unexpected tool or payload log: %s", output.String())
+			}
+			starts, finishes := 0, 0
+			for _, record := range records {
+				if record["msg"] == "studio.tool.started" {
+					starts++
+				}
+				if record["msg"] == "studio.tool.finished" {
+					finishes++
+					if record["level"] != "INFO" || record["duration_ms"] == nil {
+						t.Fatalf("missing default tool detail: %+v", record)
+					}
+				}
+				if record["call_id"] == "nested-1" && (record["agent"] != "child" || record["task_id"] != "task-1" || record["parent_id"] != "parent-1") {
+					t.Fatalf("missing nested tool identity: %+v", record)
+				}
+			}
+			if starts != 2 || finishes != 2 {
+				t.Fatalf("tool logs = %d starts, %d finishes", starts, finishes)
 			}
 		})
 	}

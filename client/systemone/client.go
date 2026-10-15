@@ -73,24 +73,30 @@ func (c *Client) Evaluate(ctx context.Context, request Request, options CallOpti
 
 // EvaluateRaw preserves the supplied JSON bytes, including numeric literals,
 // field order, and extension fields. The server validates the native contract.
-func (c *Client) EvaluateRaw(ctx context.Context, body json.RawMessage, options CallOptions) (*Result, error) {
+func (c *Client) EvaluateRaw(ctx context.Context, body json.RawMessage, options CallOptions) (result *Result, returnErr error) {
 	if len(body) == 0 || len(body) > maxRequestBytes || !json.Valid(body) || bytes.TrimSpace(body)[0] != '{' {
 		return nil, errors.New("systemone: request must be a JSON object of at most 65536 bytes")
 	}
 	if err := validateIdempotencyKey(options.IdempotencyKey); err != nil {
 		return nil, err
 	}
+	var selected struct {
+		Model string `json:"model"`
+	}
+	_ = json.Unmarshal(body, &selected)
+	finish := logDecision(ctx, selected.Model)
+	defer func() { finish(result, returnErr) }()
 	responseBody, header, err := c.do(ctx, http.MethodPost, "systemone", body, options.IdempotencyKey)
 	if err != nil {
 		return nil, err
 	}
-	var result Result
-	if err := json.Unmarshal(responseBody, &result); err != nil {
+	var decoded Result
+	if err := json.Unmarshal(responseBody, &decoded); err != nil {
 		return nil, fmt.Errorf("systemone: decode decision response: %w", err)
 	}
-	result.Raw = responseBody
-	result.Header = header
-	return &result, nil
+	decoded.Raw = responseBody
+	decoded.Header = header
+	return &decoded, nil
 }
 
 // ListModels returns the endpoint's model catalog. Versioned model IDs can be

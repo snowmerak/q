@@ -552,8 +552,9 @@ func (r GeneralRunner) Run(ctx context.Context, prompt string) (result TaskResul
 		taskID = strings.ReplaceAll(r.Definition.Info.Name, "/", "-") + "-" + generated
 	}
 	ctx = sessionstore.WithSearchScope(ctx, r.RunID, taskID)
+	ctx = diagnostics.WithAttrs(ctx, slog.String("agent", r.Definition.Info.Name), slog.String("task_id", taskID), slog.String("parent_id", r.ParentID))
 	startedAt := time.Now()
-	logger := diagnostics.Logger(ctx).With("agent", r.Definition.Info.Name, "task_id", taskID, "parent_id", r.ParentID)
+	logger := diagnostics.Logger(ctx)
 	logger.Info("studio.subagent.started")
 	defer func() {
 		level := slog.LevelInfo
