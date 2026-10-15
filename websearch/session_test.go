@@ -124,7 +124,7 @@ func TestChunksRemainAvailableAndKeepUnicodeValid(t *testing.T) {
 
 func TestRenderedSearchRedirectLinksBecomePublisherDestinations(t *testing.T) {
 	links := rankedLinks([]webbrowser.Link{{Text: "Official docs", URL: "https://duckduckgo.com/l/?uddg=https%3A%2F%2Fpkg.go.dev%2Fcontext"}}, "context")
-	if len(links) != 1 || links[0].URL != "https://pkg.go.dev/context" || !publisherAllowed([]string{"go.dev"}, links[0].URL) {
+	if len(links) != 1 || links[0].URL != "https://pkg.go.dev/context" {
 		t.Fatalf("links=%+v", links)
 	}
 }

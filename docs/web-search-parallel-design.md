@@ -27,9 +27,9 @@ flowchart TD
 ```json
 {
   "tasks": [
-    {"id": "go", "search": {"goal": "Go 공식 문서에서 CancelFunc 동작 조사", "allowed_domains": ["go.dev", "pkg.go.dev"]}},
-    {"id": "sqlite", "search": {"goal": "SQLite 공식 문서에서 WAL 제약 조사", "allowed_domains": ["sqlite.org"]}},
-    {"id": "python", "search": {"goal": "Python 공식 문서에서 asyncio.timeout 조사", "allowed_domains": ["docs.python.org"]}}
+    {"id": "go", "search": {"goal": "Go 공식 문서에서 CancelFunc 동작 조사"}},
+    {"id": "sqlite", "search": {"goal": "SQLite 공식 문서에서 WAL 제약 조사"}},
+    {"id": "python", "search": {"goal": "Python 공식 문서에서 asyncio.timeout 조사"}}
   ],
   "concurrency": 3,
   "model_concurrency": 1

@@ -7,6 +7,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/snowmerak/q/diagnostics"
+
 	"github.com/JoakimCarlsson/scour/engines"
 	"github.com/JoakimCarlsson/scour/merge"
 	"github.com/JoakimCarlsson/scour/query"
@@ -40,6 +42,16 @@ func (ScourSearcher) Search(ctx context.Context, text string) (SearchResults, er
 	q := query.Query{Raw: text, Terms: text, Category: query.CategoryGeneral, SafeSearch: query.SafeModerate, Page: 1}
 	selected := engines.Select(q, engines.Preferences{})
 	results, failures := engines.FanOut(ctx, q, selected, 8*time.Second)
+	counts := map[string]int{}
+	for _, result := range results {
+		counts[result.Engine]++
+	}
+	for engine, count := range counts {
+		diagnostics.Logger(ctx).Info("web_search.metasearch.engine.completed", "engine", clip(engine, 80), "result_count", count, "reason_code", "none")
+	}
+	for _, failure := range failures {
+		diagnostics.Logger(ctx).Info("web_search.metasearch.engine.completed", "engine", clip(failure.Engine, 80), "result_count", 0, "reason_code", failureCode(failure.Err), "suspended", failure.Suspended)
+	}
 	if err := ctx.Err(); err != nil {
 		return SearchResults{}, err
 	}
@@ -76,24 +88,36 @@ func (r *run) discover(ctx context.Context, text string) {
 		return
 	}
 	r.out.SearchCalls++
+	started := time.Now()
+	diagnostics.Logger(ctx).Info("web_search.metasearch.started", "query_id", logID(text), "query_bytes", len(text))
 	results, err := r.engine.Discovery.Search(ctx, text)
 	r.out.Candidates = nil
 	r.page = Document{}
 	r.pageAccepted = nil
 	if err != nil {
+		diagnostics.Logger(ctx).Info("web_search.metasearch.completed", "reason_code", failureCode(err), "duration_ms", time.Since(started).Milliseconds(), "candidate_count", 0)
 		r.fail(err)
 		return
 	}
 	seen := map[string]bool{}
 	for _, candidate := range results.Candidates {
 		key := pageURL(candidate.URL)
-		if !validURL(candidate.URL) || len(candidate.URL) > 2000 || seen[key] || !publisherAllowed(r.in.AllowedDomains, candidate.URL) {
+		reason := ""
+		switch {
+		case !validURL(candidate.URL) || len(candidate.URL) > 2000:
+			reason = "invalid_url"
+		case seen[key]:
+			reason = "duplicate"
+		}
+		if reason != "" {
+			diagnostics.Logger(ctx).Info("web_search.candidate.filtered", "url", logURL(candidate.URL), "url_id", logID(candidate.URL), "reason_code", reason)
 			continue
 		}
 		seen[key] = true
 		candidate.Title = clip(candidate.Title, 200)
 		candidate.Snippet = clip(candidate.Snippet, 500)
 		r.out.Candidates = append(r.out.Candidates, candidate)
+		diagnostics.Logger(ctx).Info("web_search.candidate.discovered", "candidate_id", fmt.Sprintf("candidate_%d", len(r.out.Candidates)-1), "rank", len(r.out.Candidates), "url", logURL(candidate.URL), "url_id", logID(candidate.URL), "engines", candidate.Engines)
 		if len(r.out.Candidates) == 20 {
 			break
 		}
@@ -101,6 +125,7 @@ func (r *run) discover(ctx context.Context, text string) {
 	for _, message := range results.Errors {
 		r.fail(fmt.Errorf("%s", message))
 	}
+	diagnostics.Logger(ctx).Info("web_search.metasearch.completed", "candidate_count", len(r.out.Candidates), "returned_count", len(results.Candidates), "engine_error_count", len(results.Errors), "duration_ms", time.Since(started).Milliseconds(), "reason_code", "none")
 	if len(r.out.Candidates) == 0 {
 		r.lastError = "Metasearch returned no usable candidates. Refine the query or stop with unresolved requirements."
 	} else {

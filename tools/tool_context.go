@@ -7,6 +7,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/snowmerak/q/client"
+	"github.com/snowmerak/q/diagnostics"
 )
 
 const toolContextMetaKey = "q/caller-context"
@@ -25,9 +26,6 @@ type toolCallContext struct {
 }
 
 func (c *toolCallContexts) bind(ctx context.Context, params *mcp.CallToolParams) func() {
-	if _, ok := client.ToolModelFromContext(ctx); !ok {
-		return func() {}
-	}
 	id := client.NewUsageEventID()
 	entry := &toolCallContext{ctx: ctx, done: make(chan struct{})}
 	c.mu.Lock()
@@ -79,10 +77,6 @@ func (c *toolCallContexts) middleware(next mcp.MethodHandler) mcp.MethodHandler 
 		if err := parent.Err(); err != nil {
 			return nil, err
 		}
-		model, ok := client.ToolModelFromContext(parent)
-		if !ok {
-			return nil, errors.New("tools: caller model is unavailable")
-		}
 		ctx, cancel := context.WithCancel(ctx)
 		defer cancel()
 		stop := context.AfterFunc(parent, cancel)
@@ -92,6 +86,10 @@ func (c *toolCallContexts) middleware(next mcp.MethodHandler) mcp.MethodHandler 
 			ctx, cancelDeadline = context.WithDeadline(ctx, deadline)
 			defer cancelDeadline()
 		}
-		return next(client.WithToolModel(ctx, model), method, req)
+		ctx = diagnostics.Inherit(ctx, parent)
+		if model, ok := client.ToolModelFromContext(parent); ok {
+			ctx = client.WithToolModel(ctx, model)
+		}
+		return next(ctx, method, req)
 	}
 }

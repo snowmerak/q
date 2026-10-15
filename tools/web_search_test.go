@@ -253,6 +253,9 @@ func TestWebSearchVisibilityFollowsModelSettingsWithoutRestart(t *testing.T) {
 					if strings.Contains(string(schema), "decision_timeout_seconds") {
 						t.Fatalf("%s still exposes a decision timeout: %s", name, schema)
 					}
+					if strings.Contains(string(schema), "allowed_domains") {
+						t.Fatalf("%s still exposes a publisher allowlist: %s", name, schema)
+					}
 				}
 				found = found || tool.Name == name
 			}

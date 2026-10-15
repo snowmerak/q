@@ -346,3 +346,6 @@ Remove-Item Env:Q_TEST_SEQUENTIAL_WEB, Env:Q_SEQUENTIAL_CASE, Env:Q_SEQUENTIAL_R
 ```
 
 재실행 시 기존 기록을 보존하려면 `Q_SEQUENTIAL_RESULT`에 다른 파일명을 지정한다.
+
+후속 변경: `allowed_domains` 입력·도메인 필터는 제거했다. 출처 판정은 수집 거부 대신
+`cross_check_suggestions`로 교차 확인을 제안한다. 현재 계약은 `web-search-cdp.md` 참고.

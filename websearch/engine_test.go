@@ -273,16 +273,6 @@ func TestDecompositionCannotDropOriginalGoalAtCompletion(t *testing.T) {
 	}
 }
 
-func TestDomainConstraintRejectsSuffixImpostor(t *testing.T) {
-	u := "https://official.test.attacker.test/docs"
-	s := &fakeSession{pages: map[string]Document{u: doc(u, "Pretend official evidence.")}}
-	e := Engine{Decision: sequence(t, "collect_0", "stop"), NewSession: func() Session { return s }}
-	out, err := e.Search(t.Context(), Input{Goal: "Official evidence", AllowedDomains: []string{"official.test"}, StartURL: u})
-	if err != nil || len(out.Evidence) != 0 || out.SystemOneCalls != 2 || out.Status != "incomplete" {
-		t.Fatalf("output=%+v err=%v", out, err)
-	}
-}
-
 func TestBudgetCancellationAndBadProtocolRetainPartialResults(t *testing.T) {
 	t.Run("budget", func(t *testing.T) {
 		u := "https://example.com"
@@ -325,7 +315,7 @@ func TestBudgetCancellationAndBadProtocolRetainPartialResults(t *testing.T) {
 
 func TestInvalidInputNeverCreatesSession(t *testing.T) {
 	e := Engine{Decision: sequence(t), NewSession: func() Session { t.Fatal("unexpected session"); return nil }}
-	for _, in := range []Input{{}, {Goal: "x", StartURL: "file:///private"}, {Goal: "x", AllowedDomains: []string{""}}, {Goal: "x", Requirements: []string{""}}, {Goal: "x", MaxSteps: 41}, {Goal: strings.Repeat("x", 4001)}} {
+	for _, in := range []Input{{}, {Goal: "x", StartURL: "file:///private"}, {Goal: "x", Requirements: []string{""}}, {Goal: "x", MaxSteps: 41}, {Goal: strings.Repeat("x", 4001)}} {
 		if _, err := e.Search(t.Context(), in); err == nil {
 			t.Fatalf("accepted %+v", in)
 		}

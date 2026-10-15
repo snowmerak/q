@@ -60,14 +60,14 @@ func TestMetasearchExhaustionReturnsWithoutPlannerEscalation(t *testing.T) {
 	engine := Engine{Discovery: metaSearchFunc(func(_ context.Context, query string) (SearchResults, error) {
 		queries = append(queries, query)
 		if len(queries) == 1 {
-			return SearchResults{Candidates: []Candidate{{URL: "https://other.test/", Title: "Wrong publisher"}}}, nil
+			return SearchResults{}, nil
 		}
 		return SearchResults{Candidates: []Candidate{{URL: u}}}, nil
 	}), Decision: sequence(t), Planner: plannerFunc(func(_ context.Context, req PlanRequest) (Plan, error) {
 		t.Fatal("page workflow must not invoke a generative planner", req)
 		return Plan{}, nil
 	}), NewSession: func() Session { return session }}
-	out, err := engine.Search(t.Context(), Input{Goal: "exact requirement", Query: "first query", AllowedDomains: []string{"official.test"}})
+	out, err := engine.Search(t.Context(), Input{Goal: "exact requirement", Query: "first query"})
 	if err != nil || out.Status != "incomplete" || out.StopReason != "candidate_exhausted" || out.SearchCalls != 1 || out.PlannerCalls != 0 || len(queries) != 1 || !session.closed {
 		t.Fatalf("out=%+v err=%v queries=%v", out, err, queries)
 	}

@@ -114,7 +114,7 @@ func TestPageResearchPartialEvidenceContinuesAcrossFailuresAndDuplicates(t *test
 	}
 }
 
-func TestPageResearchPreservesOriginalGoalAndRejectsWrongPublisher(t *testing.T) {
+func TestPageResearchPreservesOriginalGoalAndSuggestsCrossCheck(t *testing.T) {
 	u := "https://official.test/current"
 	third := "https://third.test/history"
 	s := &fakeSession{pages: map[string]Document{u: doc(u, "Education minister Example."), third: doc(third, "An earlier minister was Someone Else.")}}
@@ -136,7 +136,7 @@ func TestPageResearchPreservesOriginalGoalAndRejectsWrongPublisher(t *testing.T)
 				return "candidate_0"
 			case key == "publisher":
 				if req.State.(map[string]string)["url"] == third {
-					return "reject"
+					return "cross_check"
 				}
 				return "accept"
 			case strings.HasPrefix(key, "block_"):
@@ -149,8 +149,56 @@ func TestPageResearchPreservesOriginalGoalAndRejectsWrongPublisher(t *testing.T)
 		}), nil
 	})}
 	out, err := e.Search(t.Context(), Input{Goal: goal, Requirements: []string{"Education minister name"}, StartURL: u, MaxSteps: 3})
-	if err != nil || out.Status != "incomplete" || checks != 1 || len(out.Evidence) != 1 || out.Unresolved[0] != goal || !s.closed || out.Pages[1].Outcome != "rejected" {
+	if err != nil || out.Status != "incomplete" || checks != 2 || len(out.Evidence) != 2 || len(out.CrossCheckSuggestions) != 1 || !strings.Contains(out.CrossCheckSuggestions[0], third) || out.Unresolved[0] != goal || !s.closed || out.Pages[1].Outcome != "processed" {
 		t.Fatalf("out=%+v err=%v checks=%d", out, err, checks)
+	}
+}
+
+func TestPageResearchKeepsOnlySelectedParagraphWithoutChangingSource(t *testing.T) {
+	u := "https://news.test/article"
+	fact := "The lantern is blue."
+	noise := "Advertisement: lantern discounts."
+	text := fact + "\n\n" + noise + "\n\nRelated articles: lantern history."
+	s := &fakeSession{pages: map[string]Document{u: doc(u, text)}}
+	e := Engine{NewSession: func() Session { return s }, Discovery: metaSearchFunc(func(context.Context, string) (SearchResults, error) {
+		t.Fatal("the supplied page should answer the goal")
+		return SearchResults{}, nil
+	}), Decision: decisionFunc(func(_ context.Context, req systemone.Request, _ systemone.CallOptions) (*systemone.Result, error) {
+		return pageAnswers(req, func(key string, _ systemone.Question) string {
+			if key == "publisher" {
+				return "accept"
+			}
+			if strings.HasPrefix(key, "block_") {
+				state := req.State.(map[string]any)
+				paragraph := state["blocks"].(map[string]string)[key]
+				if paragraph == fact {
+					if state["context"].(map[string]map[string]string)[key]["after"] != noise {
+						t.Fatal("neighboring context was lost")
+					}
+					return "keep"
+				}
+				return "discard"
+			}
+			return "supported"
+		}), nil
+	})}
+	out, err := e.Search(t.Context(), Input{Goal: "What color is the lantern?", StartURL: u})
+	if err != nil || out.Status != "complete" || len(out.Evidence) != 1 || out.Evidence[0].Text != fact || s.pages[u].Text != text || out.Pages[0].Examined != 3 {
+		t.Fatalf("out=%+v err=%v", out, err)
+	}
+}
+
+func TestPageResearchCrossCheckSuggestionDoesNotBlockCompletion(t *testing.T) {
+	u := "https://news.test/article"
+	s := &fakeSession{pages: map[string]Document{u: doc(u, "The lantern is blue.")}}
+	e := Engine{NewSession: func() Session { return s },
+		Discovery: metaSearchFunc(func(context.Context, string) (SearchResults, error) {
+			t.Fatal("the supplied page should answer the goal")
+			return SearchResults{}, nil
+		}), Decision: sequence(t, "cross_check")}
+	out, err := e.Search(t.Context(), Input{Goal: "Find the lantern color in official sources or reliable reporting.", StartURL: u})
+	if err != nil || out.Status != "complete" || len(out.Evidence) != 1 || len(out.CrossCheckSuggestions) != 1 || !strings.Contains(out.CrossCheckSuggestions[0], u) {
+		t.Fatalf("out=%+v err=%v", out, err)
 	}
 }
 
@@ -199,7 +247,7 @@ func TestPageResearchNativeFailureIncludesProviderDetail(t *testing.T) {
 	}
 }
 
-func TestPageResearchRejectsRedirectOutsideAllowedPublishers(t *testing.T) {
+func TestPageResearchAllowsRedirectToAnotherPublisher(t *testing.T) {
 	page := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = fmt.Fprint(w, "<main>Unapproved source fact.</main>")
 	}))
@@ -210,12 +258,9 @@ func TestPageResearchRejectsRedirectOutsideAllowedPublishers(t *testing.T) {
 	e := Engine{Discovery: metaSearchFunc(func(context.Context, string) (SearchResults, error) {
 		t.Fatal("page budget should prevent search")
 		return SearchResults{}, nil
-	}), Decision: decisionFunc(func(context.Context, systemone.Request, systemone.CallOptions) (*systemone.Result, error) {
-		t.Fatal("disallowed publisher reached a model")
-		return nil, nil
-	})}
-	out, err := e.Search(t.Context(), Input{Goal: "Approved evidence", StartURL: redirect.URL, AllowedDomains: []string{"127.0.0.1"}, MaxSteps: 1})
-	if err != nil || out.Status != "incomplete" || len(out.Evidence) != 0 || out.SystemOneCalls != 0 || out.Pages[0].Outcome != "rejected" || !strings.Contains(out.LastObservation, "Redirected publisher") {
+	}), Decision: sequence(t, "accept")}
+	out, err := e.Search(t.Context(), Input{Goal: "Approved evidence", StartURL: redirect.URL, MaxSteps: 1})
+	if err != nil || out.Status != "complete" || len(out.Evidence) != 1 || out.Evidence[0].URL != destination || out.Pages[0].Outcome != "processed" {
 		t.Fatalf("out=%+v err=%v", out, err)
 	}
 }

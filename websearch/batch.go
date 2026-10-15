@@ -4,8 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"sync"
 	"time"
+
+	"github.com/google/uuid"
+	"github.com/snowmerak/q/diagnostics"
 )
 
 // Searcher owns independent resources per call and must support concurrent
@@ -72,7 +76,7 @@ type BatchOutput struct {
 // Invalid batches start no searches. Failures do not cancel sibling tasks.
 // Cancellation stops admission and joins started calls before returning their
 // partial results. Concurrency is bounded per batch, not across other callers.
-func SearchBatch(ctx context.Context, search Searcher, in BatchInput) (BatchOutput, error) {
+func SearchBatch(ctx context.Context, search Searcher, in BatchInput) (output BatchOutput, returnErr error) {
 	if search == nil {
 		return BatchOutput{}, errors.New("web_search_batch: search service is required")
 	}
@@ -100,6 +104,11 @@ func SearchBatch(ctx context.Context, search Searcher, in BatchInput) (BatchOutp
 	}
 	modelConcurrency = min(modelConcurrency, concurrency)
 	started := time.Now()
+	ctx = diagnostics.WithAttrs(ctx, slog.String("search_batch_id", uuid.NewString()))
+	diagnostics.Logger(ctx).Info("web_search.batch.started", "task_count", len(in.Tasks), "concurrency", concurrency, "model_concurrency", modelConcurrency)
+	defer func() {
+		diagnostics.Logger(ctx).Info("web_search.batch.completed", "status", output.Status, "task_count", len(output.Results), "duration_ms", time.Since(started).Milliseconds(), "reason_code", failureCode(returnErr))
+	}()
 	ctx, cancel := context.WithTimeout(ctx, searchTimeout)
 	defer cancel()
 	ctx = context.WithValue(ctx, modelSlotsKey{}, make(chan struct{}, modelConcurrency))
@@ -117,7 +126,10 @@ func SearchBatch(ctx context.Context, search Searcher, in BatchInput) (BatchOutp
 				}
 				task := in.Tasks[index]
 				begin := time.Now()
-				result, err := search.Search(ctx, task.Search)
+				taskContext := diagnostics.WithAttrs(ctx, slog.String("search_task_id", task.ID))
+				diagnostics.Logger(taskContext).Info("web_search.task.started")
+				result, err := search.Search(taskContext, task.Search)
+				diagnostics.Logger(taskContext).Info("web_search.task.completed", "status", result.Status, "stop_reason", result.StopReason, "duration_ms", time.Since(begin).Milliseconds(), "reason_code", failureCode(err))
 				item := TaskResult{ID: task.ID, Started: true, ElapsedSeconds: time.Since(begin).Seconds(), Status: result.Status}
 				if result.Status != "" || len(result.Evidence) > 0 || result.Steps > 0 {
 					item.Result = &result

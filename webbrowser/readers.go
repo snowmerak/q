@@ -10,6 +10,7 @@ import (
 
 	"github.com/go-rod/rod"
 	"github.com/go-rod/rod/lib/proto"
+	"github.com/snowmerak/q/diagnostics"
 )
 
 // ReaderPool reuses one Chrome process. Each Reader owns an incognito context;
@@ -92,9 +93,12 @@ func (r *Reader) start(ctx context.Context) error {
 		p.idle.Stop()
 		p.idle = nil
 	}
+	reused := p.owner.browser != nil
+	started := time.Now()
 	if err := p.owner.start(ctx); err != nil {
 		return err
 	}
+	diagnostics.Logger(ctx).Info("web_search.browser.ready", "process_reused", reused, "duration_ms", time.Since(started).Milliseconds())
 	b, err := p.owner.browser.Context(ctx).Incognito()
 	if err != nil {
 		p.scheduleIdle()
@@ -138,11 +142,17 @@ func (r *Reader) Read(ctx context.Context, target string) (PageContent, error) {
 	if err := validateURL(target); err != nil {
 		return PageContent{}, err
 	}
+	waiting := time.Now()
+	diagnostics.Logger(ctx).Info("web_search.browser.waiting")
 	release, err := r.pool.acquire(ctx)
 	if err != nil {
 		return PageContent{}, err
 	}
 	defer release()
+	r.pool.mu.Lock()
+	active, limit := r.pool.active, r.pool.limit
+	r.pool.mu.Unlock()
+	diagnostics.Logger(ctx).Info("web_search.browser.admitted", "queue_ms", time.Since(waiting).Milliseconds(), "active_reads", active, "read_limit", limit)
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.closed {
@@ -174,7 +184,7 @@ func (r *Reader) Read(ctx context.Context, target string) (PageContent, error) {
 		return PageContent{}, err
 	}
 	if result.StatusCode >= http.StatusBadRequest {
-		return PageContent{}, fmt.Errorf("browser: HTTP %d for %s", result.StatusCode, result.URL)
+		return result, fmt.Errorf("browser: HTTP %d for %s", result.StatusCode, result.URL)
 	}
 	return result, validateURL(result.URL)
 }

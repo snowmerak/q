@@ -33,21 +33,3 @@ func searchChallenge(p Document) bool {
 	text := strings.ToLower(p.Text)
 	return strings.Contains(text, "bots use duckduckgo too") && strings.Contains(text, "challenge")
 }
-
-func publisherAllowed(domains []string, target string) bool {
-	if len(domains) == 0 {
-		return true
-	}
-	u, err := url.Parse(target)
-	if err != nil {
-		return false
-	}
-	host := strings.ToLower(u.Hostname())
-	for _, h := range domains {
-		h = strings.ToLower(h)
-		if host == h || strings.HasSuffix(host, "."+h) {
-			return true
-		}
-	}
-	return false
-}

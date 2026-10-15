@@ -59,7 +59,7 @@ Initial discovery uses the pinned Go scour library to
 query its eight general web engines concurrently, with an eight-second timeout
 per engine. Successful results are merged and ranked even when other engines
 fail; engine failures remain in the research result. At most 20 candidates are
-retained, filtered by `allowed_domains`. Search snippets guide selection and
+retained without publisher-host filtering. Search snippets guide selection and
 never count as source evidence. No scour answer or infobox plugins run.
 System One selects one of up to eight unread candidate URLs before Q reads its
 rendered original source through CDP. Q checks the publisher independently, then offers
@@ -134,7 +134,6 @@ Example tool arguments:
   "goal": "Find official Go documentation explaining CancelFunc cleanup and whether it waits for work to stop.",
   "query": "Go context CancelFunc documentation",
   "requirements": ["Why callers should cancel", "Whether cancellation waits for work to stop"],
-  "allowed_domains": ["pkg.go.dev", "go.dev"],
   "max_steps": 20
 }
 ```
@@ -144,7 +143,7 @@ Without `query`, the initial search uses the goal directly. Without
 selection; if that page is insufficient, one metasearch list is fetched unless
 the page budget is already exhausted.
 The result contains verbatim passages with URLs, unresolved requirements,
-action history and System One/planner call counts. Source acceptance and
+action history and System One/planner call counts. Publisher assessment and
 completion are separate System One assessments; completion checks both the
 requirements and the original goal to catch missing qualifications. Results
 include `search_calls`, ranked `candidates`, `coverage_model` and `coverage_calls`; `system_one_calls`
@@ -152,8 +151,9 @@ counts all native calls, including coverage. `pages` records URL/title, block
 counts, examined/added counts, outcome, truncation and error for each attempted
 page; `steps` counts attempted pages. Completion checks reduce premature
 completion but remain model judgments, especially for
-subtle qualifications. `allowed_domains` enforces evidence publisher hosts in
-code, including redirects, and filters metasearch candidates to those publishers.
+subtle qualifications. Publisher assessment is advisory: `cross_check_suggestions`
+recommends independent corroboration without excluding relevant source text.
+Explicit official-only requirements still apply to the final completion check.
 `system_one_timings` records each admitted native request's phase, model, input
 bytes, local admission wait and remote request time (including any server queue).
 `last_observation` retains the final observation or failure. The bounded error
@@ -206,9 +206,9 @@ tasks. Splitting a larger user request into tasks is the caller's responsibility
 ```json
 {
   "tasks": [
-    {"id": "go", "search": {"goal": "Find official Go CancelFunc cleanup and waiting behavior.", "allowed_domains": ["go.dev", "pkg.go.dev"]}},
-    {"id": "sqlite", "search": {"goal": "Find official SQLite WAL filesystem and read-only access conditions.", "allowed_domains": ["sqlite.org"]}},
-    {"id": "python", "search": {"goal": "Find official asyncio.timeout exception, catch scope and rescheduling behavior.", "allowed_domains": ["docs.python.org"]}}
+    {"id": "go", "search": {"goal": "Find official Go CancelFunc cleanup and waiting behavior."}},
+    {"id": "sqlite", "search": {"goal": "Find official SQLite WAL filesystem and read-only access conditions."}},
+    {"id": "python", "search": {"goal": "Find official asyncio.timeout exception, catch scope and rescheduling behavior."}}
   ],
   "concurrency": 3
 }

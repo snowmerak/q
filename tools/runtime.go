@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"path/filepath"
 	goruntime "runtime"
 	"sort"
@@ -15,6 +16,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/snowmerak/q/agentskills"
 	"github.com/snowmerak/q/client"
+	"github.com/snowmerak/q/diagnostics"
 	qlibrary "github.com/snowmerak/q/library"
 	"github.com/snowmerak/q/loom"
 	"github.com/snowmerak/q/lsp"
@@ -702,6 +704,9 @@ func (r *Runtime) Call(ctx context.Context, call client.ToolCall) (client.ToolRe
 	r.externalMu.RUnlock()
 	params := &mcp.CallToolParams{Name: call.Function.Name, Arguments: arguments}
 	if webSearchTool(call.Function.Name) {
+		if call.ID != "" {
+			ctx = diagnostics.WithAttrs(ctx, slog.String("tool_call_id", call.ID))
+		}
 		releaseContext := r.callContexts.bind(ctx, params)
 		defer releaseContext()
 	}
