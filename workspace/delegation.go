@@ -46,6 +46,7 @@ type delegationBookmarks struct {
 // DelegationState is the execution marker stored beside one child session.
 // Its Result is saved before the result is appended to the parent transcript.
 type DelegationState struct {
+	RequestID        string               `json:"request_id,omitempty"`
 	Version          int                  `json:"version"`
 	Agent            string               `json:"agent"`
 	Kind             string               `json:"kind,omitempty"`

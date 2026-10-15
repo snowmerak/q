@@ -5,9 +5,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
+	"time"
 
 	"github.com/snowmerak/q/client"
+	"github.com/snowmerak/q/diagnostics"
 	"github.com/snowmerak/q/tools/builtin"
 )
 
@@ -93,7 +96,7 @@ func (r *InvocationRuntime) SearchSkillHints(ctx context.Context, query string, 
 	return searcher.SearchSkillHints(ctx, query, limit)
 }
 
-func (r *InvocationRuntime) Call(ctx context.Context, call client.ToolCall) (client.ToolResult, error) {
+func (r *InvocationRuntime) Call(ctx context.Context, call client.ToolCall) (result client.ToolResult, returnErr error) {
 	if r == nil {
 		return client.ToolResult{}, errors.New("subagent: invocation runtime is unavailable")
 	}
@@ -107,6 +110,16 @@ func (r *InvocationRuntime) Call(ctx context.Context, call client.ToolCall) (cli
 	if r.capture == nil {
 		return client.ToolResult{}, errors.New("subagent: invocation Loom capture is unavailable")
 	}
+	started := time.Now()
+	logger := diagnostics.Logger(ctx).With("agent", invocation.Source.Name, "call_id", call.ID)
+	logger.Info("studio.invocation.started")
+	defer func() {
+		level := slog.LevelInfo
+		if returnErr != nil || result.IsError {
+			level = slog.LevelWarn
+		}
+		logger.Log(ctx, level, "studio.invocation.finished", "duration_ms", time.Since(started).Milliseconds(), "failed", returnErr != nil || result.IsError)
+	}()
 	result, err := invocation.Handler(ctx, call)
 	if err != nil {
 		body, marshalErr := json.Marshal(map[string]string{"error": err.Error()})

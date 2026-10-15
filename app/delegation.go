@@ -18,6 +18,7 @@ import (
 	"github.com/snowmerak/q/change"
 	"github.com/snowmerak/q/client"
 	"github.com/snowmerak/q/config"
+	"github.com/snowmerak/q/diagnostics"
 	"github.com/snowmerak/q/gitwork"
 	"github.com/snowmerak/q/mcpconfig"
 	"github.com/snowmerak/q/subagent"
@@ -778,6 +779,7 @@ func (d *delegationDispatcher) dispatchStored(ctx context.Context, caller string
 			return client.ToolResult{}, err
 		}
 		state = workspace.DelegationState{Agent: bookmark.Agent, Kind: subagent.AgentKindExternal, Prompt: bookmark.Prompt, WorkingDirectory: bookmark.WorkingDirectory, RunID: bookmark.RunID, ParentID: parentTaskID, TaskID: bookmark.InvocationID, Status: "running"}
+		state.RequestID = diagnostics.RequestID(ctx)
 		if err := child.SaveDelegationState(state); err != nil {
 			return client.ToolResult{}, err
 		}
@@ -795,6 +797,9 @@ func (d *delegationDispatcher) dispatchStored(ctx context.Context, caller string
 }
 
 func (d *delegationDispatcher) runStoredInner(ctx context.Context, definition subagent.AgentDefinition, stack []string, bookmark workspace.DelegationBookmark, child workspace.Store, state workspace.DelegationState, stateErr error, call client.ToolCall, parentTaskID, followup string) (output client.ToolResult, returnErr error) {
+	if diagnostics.RequestID(ctx) == "" && state.RequestID != "" {
+		ctx = diagnostics.WithRequestID(ctx, state.RequestID)
+	}
 	input := delegateInput{SubagentName: bookmark.Agent, Prompt: bookmark.Prompt, WorkingDirectory: bookmark.WorkingDirectory}
 	models, err := d.loadModels(ctx)
 	if err != nil {
@@ -968,6 +973,7 @@ func (d *delegationDispatcher) runStoredInner(ctx context.Context, definition su
 	childStack := append(append([]string(nil), stack...), input.SubagentName)
 	runtime := &delegationRuntime{base: runDispatcher.tools, dispatcher: runDispatcher, caller: input.SubagentName, stack: childStack, store: &child, taskID: state.TaskID}
 	state.Kind = subagent.AgentKindInner
+	state.RequestID = diagnostics.RequestID(ctx)
 	if err := child.SaveDelegationState(state); err != nil {
 		return client.ToolResult{}, err
 	}

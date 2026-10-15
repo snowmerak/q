@@ -13,9 +13,11 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/google/uuid"
 	"github.com/snowmerak/q/app"
 	"github.com/snowmerak/q/client"
 	"github.com/snowmerak/q/council"
+	"github.com/snowmerak/q/diagnostics"
 	"github.com/snowmerak/q/tools"
 	"github.com/snowmerak/q/workspace"
 )
@@ -611,7 +613,7 @@ type sessionRunner struct {
 	}
 }
 
-type councilSessionCall struct{ model, session, operation, cachePolicy string }
+type councilSessionCall struct{ model, session, operation, cachePolicy, requestID string }
 type recordingSessions struct {
 	sessionRunner
 	mu    sync.Mutex
@@ -620,7 +622,7 @@ type recordingSessions struct {
 
 func (runner *recordingSessions) RunWithOptions(ctx context.Context, store workspace.Store, id, prompt string, options app.SessionOptions, emit app.SessionEventSink) (returnErr error) {
 	runner.mu.Lock()
-	runner.calls = append(runner.calls, councilSessionCall{options.Model, id, options.OperationID, options.AnthropicPromptCache})
+	runner.calls = append(runner.calls, councilSessionCall{options.Model, id, options.OperationID, options.AnthropicPromptCache, diagnostics.RequestID(ctx)})
 	runner.mu.Unlock()
 	if options.WorkingDirectory == store.Root {
 		return errors.New("storage root was exposed as a workspace")
@@ -665,8 +667,14 @@ func TestCouncilUsesPersistentSeatSessionsForEveryRound(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if _, err := uuid.Parse(result.RequestID); err != nil {
+		t.Fatalf("direct council execution did not generate a request UUID: %q", result.RequestID)
+	}
 	seen := map[string]string{}
 	for _, call := range runner.calls {
+		if call.requestID != result.RequestID {
+			t.Fatalf("participant lost generated request ID: %+v", call)
+		}
 		if call.operation == "synthesis" && call.cachePolicy != "off" || call.operation != "synthesis" && call.cachePolicy != "1h" {
 			t.Fatalf("unexpected council cache policy: %+v", call)
 		}
@@ -684,7 +692,7 @@ func TestCouncilUsesPersistentSeatSessionsForEveryRound(t *testing.T) {
 		}
 	}
 	turns, err := store.ListTurns(value.ID)
-	if err != nil || len(turns) != 1 || !slices.Equal(turns[0].MemberSessions, result.MemberSessions) {
+	if err != nil || len(turns) != 1 || turns[0].RequestID != result.RequestID || !slices.Equal(turns[0].MemberSessions, result.MemberSessions) {
 		t.Fatalf("session references not saved: %+v, %v", turns, err)
 	}
 	for _, id := range append(result.MemberSessions, result.ChairSession) {

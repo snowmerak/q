@@ -7,6 +7,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/snowmerak/q/diagnostics"
 	"github.com/snowmerak/q/gatewayconfig"
 	"github.com/snowmerak/q/providerhost"
 )
@@ -14,10 +15,12 @@ import (
 // runStudioGateway keeps the standalone Gateway alongside Studio. It uses the
 // same server path as `q gateway start` and restarts after saved settings change.
 func runStudioGateway(ctx context.Context, directory string, stdout, stderr io.Writer) {
+	logger := diagnostics.Logger(ctx)
 	providers := providerhost.Store{Dir: directory}
 	settings := gatewayconfig.Store{Dir: directory}
 	paths := []string{providers.Path(), settings.Path()}
 	for ctx.Err() == nil {
+		logger.Info("studio.gateway.starting")
 		before := gatewayFiles(paths)
 		runContext, cancel := context.WithCancel(ctx)
 		done := make(chan error, 1)
@@ -40,6 +43,7 @@ func runStudioGateway(ctx context.Context, directory string, stdout, stderr io.W
 				break watch
 			case <-ticker.C:
 				if !sameGatewayFiles(before, gatewayFiles(paths)) {
+					logger.Info("studio.gateway.restarting", "reason_code", "configuration_changed")
 					cancel()
 					runErr = <-done
 					break watch
@@ -49,9 +53,11 @@ func runStudioGateway(ctx context.Context, directory string, stdout, stderr io.W
 		ticker.Stop()
 		cancel()
 		if ctx.Err() != nil {
+			logger.Info("studio.gateway.stopped")
 			return
 		}
 		if runErr != nil && waitForChange {
+			logger.Warn("studio.gateway.unavailable", "error", runErr)
 			_, _ = fmt.Fprintf(stderr, "q studio: standalone Gateway unavailable: %v\n", runErr)
 		}
 		if waitForChange {

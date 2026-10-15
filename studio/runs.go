@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -17,6 +18,7 @@ import (
 	"time"
 
 	"github.com/snowmerak/q/app"
+	"github.com/snowmerak/q/diagnostics"
 	"github.com/snowmerak/q/internal/fsopen"
 	"github.com/snowmerak/q/internal/fsreplace"
 	"github.com/snowmerak/q/subagent"
@@ -48,6 +50,7 @@ type studioRunSnapshot struct {
 	Version         int                `json:"version"`
 	ID              string             `json:"id"`
 	SessionID       string             `json:"session_id"`
+	RequestID       string             `json:"request_id,omitempty"`
 	Status          string             `json:"status"`
 	Outcome         string             `json:"outcome,omitempty"`
 	Error           string             `json:"error,omitempty"`
@@ -98,6 +101,7 @@ type sessionRunService struct {
 	ctx       context.Context
 	cancel    context.CancelFunc
 	runner    sessionRunner
+	logger    *slog.Logger
 	mu        sync.Mutex
 	runs      map[string]*studioRun
 	active    map[string]string
@@ -111,7 +115,7 @@ func newSessionRunService(parent context.Context, runner sessionRunner) *session
 	}
 	ctx, cancel := context.WithCancel(parent)
 	return &sessionRunService{
-		ctx: ctx, cancel: cancel, runner: runner,
+		ctx: ctx, cancel: cancel, runner: runner, logger: studioLogger(nil),
 		runs: make(map[string]*studioRun), active: make(map[string]string), latestIDs: make(map[string]string),
 	}
 }
@@ -149,7 +153,7 @@ func studioRunKey(root, sessionID, runID string) string {
 	return sessionRunKey(root, sessionID) + "\x00" + runID
 }
 
-func (service *sessionRunService) start(root, sessionID, prompt string) (*studioRun, error) {
+func (service *sessionRunService) start(root, sessionID, prompt string, causes ...context.Context) (*studioRun, error) {
 	if service == nil || service.runner == nil {
 		return nil, app.ErrSessionRuntimeUnavailable
 	}
@@ -185,7 +189,14 @@ func (service *sessionRunService) start(root, sessionID, prompt string) (*studio
 		service.mu.Unlock()
 		return nil, err
 	}
-	run, err := createStudioRun(root, store, runID)
+	cause := service.ctx
+	if len(causes) > 0 {
+		cause = diagnostics.Inherit(cause, causes[0])
+	}
+	if diagnostics.RequestID(cause) == "" {
+		cause = diagnostics.WithRequestID(cause, "")
+	}
+	run, err := createStudioRun(root, store, runID, diagnostics.RequestID(cause))
 	if err != nil {
 		service.mu.Unlock()
 		return nil, err
@@ -201,7 +212,13 @@ func (service *sessionRunService) start(root, sessionID, prompt string) (*studio
 
 func (service *sessionRunService) execute(run *studioRun, prompt string) {
 	defer service.wg.Done()
-	runContext, cancel := context.WithCancel(service.ctx)
+	started := time.Now()
+	logger := service.logger.With("session_id", run.store.SessionID, "run_id", run.snapshot.ID)
+	runContext := diagnostics.WithRequestID(service.ctx, run.snapshot.RequestID)
+	runContext = diagnostics.WithLogger(runContext, logger)
+	logger = diagnostics.Logger(runContext)
+	logger.Info("studio.run.started")
+	runContext, cancel := context.WithCancel(runContext)
 	run.mu.Lock()
 	run.cancel = cancel
 	run.mu.Unlock()
@@ -210,12 +227,30 @@ func (service *sessionRunService) execute(run *studioRun, prompt string) {
 	var emitMu sync.Mutex
 	emit := func(event app.SessionEvent) error {
 		event.RunID = run.snapshot.ID
+		event.RequestID = diagnostics.RequestID(runContext)
 		if err := run.append(event); err != nil {
 			failure := fmt.Errorf("persist Studio %s event: %w", event.Type, err)
+			logger.Error("studio.persistence.failed", "event_type", event.Type, "error", err)
 			emitMu.Lock()
 			emitFailures = append(emitFailures, failure)
 			emitMu.Unlock()
 			return failure
+		}
+		switch event.Type {
+		case "tool_call", "question", "question_answered", "control":
+			level := slog.LevelInfo
+			if event.Type == "tool_call" {
+				level = slog.LevelDebug
+			}
+			logger.Log(runContext, level, "studio.run.event", "event_type", event.Type, "action", event.Action, "tool", event.Name, "call_id", event.CallID)
+		case "message":
+			if event.Role == "tool" {
+				level := slog.LevelDebug
+				if event.IsError {
+					level = slog.LevelWarn
+				}
+				logger.Log(runContext, level, "studio.tool.finished", "tool", event.Name, "call_id", event.CallID, "is_error", event.IsError)
+			}
 		}
 		return nil
 	}
@@ -241,20 +276,47 @@ func (service *sessionRunService) execute(run *studioRun, prompt string) {
 			typeName = "cancelled"
 			detail = "Turn stopped because studio is shutting down: " + detail
 		}
-		_ = run.append(app.SessionEvent{Type: typeName, RunID: run.snapshot.ID, Detail: detail})
+		if err := run.append(app.SessionEvent{Type: typeName, RunID: run.snapshot.ID, Detail: detail}); err != nil {
+			logger.Error("studio.persistence.failed", "event_type", typeName, "error", err)
+		}
 	} else if runErr == nil && !run.terminal() {
-		_ = run.append(app.SessionEvent{Type: "result", RunID: run.snapshot.ID, Outcome: "succeeded"})
+		if err := run.append(app.SessionEvent{Type: "result", RunID: run.snapshot.ID, Outcome: "succeeded"}); err != nil {
+			logger.Error("studio.persistence.failed", "event_type", "result", "error", err)
+		}
 	}
 	guidance := run.takeGuidance()
 	service.mu.Lock()
 	delete(service.active, sessionRunKey(run.root, run.store.SessionID))
 	service.mu.Unlock()
-	_ = run.close()
+	closeErr := run.close()
+	if closeErr != nil {
+		logger.Error("studio.persistence.failed", "error", closeErr)
+	}
+	snapshot := run.snapshotCopy()
+	level := slog.LevelInfo
+	if runErr != nil || closeErr != nil || snapshot.Status == "failed" {
+		level = slog.LevelError
+		if snapshot.Status == "cancelled" && closeErr == nil {
+			level = slog.LevelInfo
+		}
+	}
+	attributes := []any{
+		"status", snapshot.Status, "outcome", snapshot.Outcome,
+		"duration_ms", time.Since(started).Milliseconds(),
+	}
+	if err := errors.Join(runErr, closeErr); err != nil {
+		attributes = append(attributes, "error", err)
+	}
+	if snapshot.Error != "" {
+		attributes = append(attributes, "detail", snapshot.Error)
+	}
+	logger.Log(runContext, level, "studio.run.finished", attributes...)
 	if guidance == "" || service.ctx.Err() != nil {
 		return
 	}
-	next, err := service.start(run.root, run.store.SessionID, "User guidance for the interrupted task:\n\n"+guidance)
+	next, err := service.start(run.root, run.store.SessionID, "User guidance for the interrupted task:\n\n"+guidance, runContext)
 	if err != nil {
+		logger.Error("studio.guidance.failed", "error", err)
 		_ = run.reopenAndAppend(app.SessionEvent{Type: "error", RunID: run.snapshot.ID, Detail: "Could not apply guidance: " + err.Error()})
 		return
 	}
@@ -333,7 +395,7 @@ func (service *sessionRunService) forget(root, sessionID string) error {
 	return result
 }
 
-func createStudioRun(root string, store workspace.Store, runID string) (*studioRun, error) {
+func createStudioRun(root string, store workspace.Store, runID string, requestIDs ...string) (*studioRun, error) {
 	directory := filepath.Join(store.SessionDir(), studioRunsDirectory)
 	if err := os.MkdirAll(directory, 0o700); err != nil {
 		return nil, fmt.Errorf("create Studio run directory: %w", err)
@@ -352,6 +414,9 @@ func createStudioRun(root string, store workspace.Store, runID string) (*studioR
 			Version: studioRunVersion, ID: runID, SessionID: store.SessionID,
 			Status: "queued", CreatedAt: now, UpdatedAt: now,
 		},
+	}
+	if len(requestIDs) > 0 {
+		run.snapshot.RequestID = requestIDs[0]
 	}
 	if err := run.persistSnapshotLocked(); err != nil {
 		_ = log.Close()
@@ -503,6 +568,9 @@ func readStudioRunEvents(path string) ([]studioRunEvent, error) {
 func (run *studioRun) append(event app.SessionEvent) error {
 	run.mu.Lock()
 	defer run.mu.Unlock()
+	if event.RequestID == "" {
+		event.RequestID = run.snapshot.RequestID
+	}
 	if run.closed || run.log == nil {
 		return errors.New("studio run log is closed")
 	}

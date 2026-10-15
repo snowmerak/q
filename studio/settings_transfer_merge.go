@@ -154,6 +154,16 @@ func (state *transferState) merge(section, id string, data json.RawMessage) erro
 		}
 	case "runtime":
 		switch id {
+		case "logging":
+			value, err := transferValue[config.LoggingConfig](data)
+			if err != nil {
+				return err
+			}
+			if err := value.Validate(); err != nil {
+				return err
+			}
+			state.main.Logging = value
+			return nil
 		case "parallel-agents":
 			value, err := transferValue[int](data)
 			if err != nil {

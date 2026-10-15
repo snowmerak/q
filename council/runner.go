@@ -5,12 +5,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/snowmerak/q/app"
+	"github.com/snowmerak/q/diagnostics"
 	"github.com/snowmerak/q/workspace"
 )
 
@@ -26,7 +28,20 @@ func Resume(ctx context.Context, host SessionRunner, value Council, previous []T
 	return run(ctx, host, value, previous, turn, roots, sessionRoot, maxParallel, save, true)
 }
 
-func run(ctx context.Context, host SessionRunner, value Council, previous []Turn, turn Turn, roots []string, sessionRoot string, maxParallel int, save func(Turn) error, resume bool) (Turn, error) {
+func run(ctx context.Context, host SessionRunner, value Council, previous []Turn, turn Turn, roots []string, sessionRoot string, maxParallel int, save func(Turn) error, resume bool) (result Turn, runErr error) {
+	requestID := diagnostics.RequestID(ctx)
+	if requestID == "" {
+		requestID = turn.RequestID
+	}
+	ctx = diagnostics.WithRequestID(ctx, requestID)
+	turn.RequestID = diagnostics.RequestID(ctx)
+	ctx = diagnostics.WithAttrs(ctx, slog.String("council_id", value.ID), slog.String("turn_id", turn.ID))
+	var finishStage func(error)
+	defer func() {
+		if finishStage != nil {
+			finishStage(runErr)
+		}
+	}()
 	if host == nil {
 		return turn, errors.New("council session host is unavailable")
 	}
@@ -48,7 +63,9 @@ func run(ctx context.Context, host SessionRunner, value Council, previous []Turn
 	}
 	defer func() {
 		for _, id := range append(append([]string(nil), turn.MemberSessions...), turn.ChairSession) {
-			_ = host.ReleaseSession(workspace.Store{Root: sessionRoot}, id)
+			if err := host.ReleaseSession(workspace.Store{Root: sessionRoot}, id); err != nil {
+				diagnostics.Logger(ctx).Warn("council.session.release_failed", "session_id", id, "error", err)
+			}
 		}
 	}()
 	totalRounds := EffectiveRounds(value)
@@ -62,6 +79,8 @@ func run(ctx context.Context, host SessionRunner, value Council, previous []Turn
 		turn.Responses = make([]Response, len(value.Members))
 	}
 	turn.Stage, turn.Status = "opinions", "running"
+	stageCtx, finish := beginStage(ctx, "opinions", 1)
+	finishStage = finish
 	turn.Error = ""
 	for index, seat := range value.Members {
 		if !completeResponse(turn.Responses[index], seat) {
@@ -86,6 +105,7 @@ func run(ctx context.Context, host SessionRunner, value Council, previous []Turn
 	var wg sync.WaitGroup
 	for index, seat := range value.Members {
 		if completeResponse(turn.Responses[index], seat) {
+			diagnostics.Logger(memberContext(stageCtx, index)).Debug("council.seat.skipped", "reason_code", "already_completed")
 			continue
 		}
 		wg.Add(1)
@@ -98,7 +118,7 @@ func run(ctx context.Context, host SessionRunner, value Council, previous []Turn
 				return
 			}
 			defer func() { <-semaphore }()
-			answer, err := firstOpinion(ctx, host, seat, turn.Prompt, previous, roots, sessionRoot, turn.MemberSessions[index], "round-1")
+			answer, err := firstOpinion(memberContext(stageCtx, index), host, seat, turn.Prompt, previous, roots, sessionRoot, turn.MemberSessions[index], "round-1")
 			response := Response{Label: label(index), Model: seat.Model, Agent: seat.Agent, Text: answer}
 			if err != nil {
 				response.Error = err.Error()
@@ -120,6 +140,8 @@ func run(ctx context.Context, host SessionRunner, value Council, previous []Turn
 		}
 	}
 	for number := 2; number <= totalRounds; number++ {
+		finishStage(nil)
+		stageCtx, finishStage = beginStage(ctx, "reviews", number)
 		turn.Stage, turn.CurrentRound = "reviews", number
 		if len(turn.Rounds[number-1].Reviews) != len(value.Members) {
 			turn.Rounds[number-1].Reviews = make([]Review, len(value.Members))
@@ -137,6 +159,7 @@ func run(ctx context.Context, host SessionRunner, value Council, previous []Turn
 		feedback := formatPriorFeedback(turn.Rounds[number-2:number-1], value.Members)
 		for index, seat := range value.Members {
 			if completeReview(turn.Reviews[index], seat) {
+				diagnostics.Logger(memberContext(stageCtx, index)).Debug("council.seat.skipped", "reason_code", "already_completed")
 				continue
 			}
 			wg.Add(1)
@@ -175,7 +198,7 @@ func run(ctx context.Context, host SessionRunner, value Council, previous []Turn
 						user = "Question: " + turn.Prompt + "\nPeer answers:\n" + formatResponses(anonymizeResponses(peers, value.Members)) + "\nYour first answer:\n" + own.Text + "\nPrevious anonymous reviews:\n" + formatPriorFeedback(turn.Rounds[:number-1], value.Members)
 					}
 				}
-				answer, err := runSeat(ctx, host, seat, system+"\n\n"+user, roots, sessionRoot, turn.MemberSessions[index], fmt.Sprintf("round-%d", number))
+				answer, err := runSeat(memberContext(stageCtx, index), host, seat, system+"\n\n"+user, roots, sessionRoot, turn.MemberSessions[index], fmt.Sprintf("round-%d", number))
 				review := Review{Model: seat.Model, Agent: seat.Agent, Text: answer}
 				if err != nil {
 					review.Error = err.Error()
@@ -199,10 +222,13 @@ func run(ctx context.Context, host SessionRunner, value Council, previous []Turn
 		}
 	}
 	turn.Stage = "synthesis"
+	finishStage(nil)
+	stageCtx, finishStage = beginStage(ctx, "synthesis", totalRounds)
 	if err := save(turn); err != nil {
 		return turn, err
 	}
-	answer, err := runSeat(ctx, host, value.Chair,
+	chairCtx := diagnostics.WithAttrs(stageCtx, slog.String("seat", "chair"), slog.String("role", "chair"))
+	answer, err := runSeat(chairCtx, host, value.Chair,
 		"Question: "+turn.Prompt+"\n\nAll council rounds:\n"+formatChairHistory(turn.Rounds, value.Members),
 		roots, sessionRoot, turn.ChairSession, "synthesis")
 	if err != nil {
@@ -391,7 +417,20 @@ type SessionRunner interface {
 const memberInstructions = "You participate in an LLM council. Follow each user turn's stage instructions: first provide your independent opinion, then review anonymous peer answers and integrate later feedback. Write evidence-conscious plain-text conclusions. Do not rank or score answers or identify any model. Council mode is read-only: only the advertised read tools are authorized. Do not request edits, commands, or delegation. If you use task_complete, include your complete answer in its summary."
 const chairInstructions = "You are the chair of an LLM council. Consider independent answers and all rounds of peer reviews. Synthesize supported findings, corrections, meaningful disagreements and uncertainty. Do not claim agreement proves correctness. Answer directly without repetition. Council mode is read-only; only advertised read tools are authorized."
 
-func runSeat(ctx context.Context, host SessionRunner, seat Seat, prompt string, roots []string, sessionRoot, sessionID, operationID string) (string, error) {
+func runSeat(ctx context.Context, host SessionRunner, seat Seat, prompt string, roots []string, sessionRoot, sessionID, operationID string) (answer string, runErr error) {
+	ctx = diagnostics.WithAttrs(ctx, slog.String("session_id", sessionID), slog.String("operation_id", operationID), slog.String("model", seat.Model), slog.String("agent", seat.Agent))
+	logger := diagnostics.Logger(ctx)
+	started := time.Now()
+	logger.Info("council.seat.started")
+	defer func() {
+		level, status := slog.LevelInfo, "completed"
+		if errors.Is(runErr, context.Canceled) {
+			status = "cancelled"
+		} else if runErr != nil {
+			level, status = slog.LevelError, "failed"
+		}
+		logger.Log(ctx, level, "council.seat.finished", "status", status, "duration_ms", time.Since(started).Milliseconds(), "error", runErr)
+	}()
 	system := memberInstructions
 	if operationID == "synthesis" {
 		system = chairInstructions
@@ -413,6 +452,18 @@ func runSeat(ctx context.Context, host SessionRunner, seat Seat, prompt string, 
 	// unchanged throughout the member's session.
 	var result string
 	err := host.RunWithOptions(ctx, workspace.Store{Root: sessionRoot}, sessionID, prompt, options, func(event app.SessionEvent) error {
+		switch event.Type {
+		case "tool_call":
+			logger.Debug("council.tool.started", "tool", event.Name, "call_id", event.CallID)
+		case "message":
+			if event.Role == "tool" {
+				level := slog.LevelDebug
+				if event.IsError {
+					level = slog.LevelWarn
+				}
+				logger.Log(ctx, level, "council.tool.finished", "tool", event.Name, "call_id", event.CallID, "is_error", event.IsError)
+			}
+		}
 		if event.Type == "result" {
 			result = event.Content
 		}

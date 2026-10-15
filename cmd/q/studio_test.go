@@ -5,8 +5,11 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -36,6 +39,7 @@ func (writer *notifyWriter) String() string {
 }
 
 func TestStudioServiceStatusAndShutdownSmoke(t *testing.T) {
+	defaultLogger := slog.Default()
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
@@ -82,6 +86,32 @@ func TestStudioServiceStatusAndShutdownSmoke(t *testing.T) {
 		}
 	case <-time.After(10 * time.Second):
 		t.Fatal("q studio did not shut down")
+	}
+	paths, err := filepath.Glob(filepath.Join(home, ".q", "logs", "studio", "*.jsonl"))
+	if err != nil || len(paths) == 0 {
+		t.Fatalf("missing file logs: %v %v", paths, err)
+	}
+	var logs strings.Builder
+	for _, path := range paths {
+		body, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		logs.Write(body)
+	}
+	for _, event := range []string{"studio.started", "studio.ready", "studio.stopped"} {
+		if !strings.Contains(logs.String(), event) {
+			t.Errorf("file log missing %s: %s", event, logs.String())
+		}
+		if strings.Contains(output.String(), event) {
+			t.Errorf("diagnostic event on stdout by default: %s", output.String())
+		}
+	}
+	if response.Header.Get("X-Request-ID") == "" {
+		t.Fatal("missing request correlation header")
+	}
+	if slog.Default() != defaultLogger {
+		t.Fatal("Studio replaced the process-wide logger")
 	}
 }
 

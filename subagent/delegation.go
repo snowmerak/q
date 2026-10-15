@@ -6,13 +6,16 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"reflect"
 	"slices"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/snowmerak/q/client"
 	"github.com/snowmerak/q/config"
+	"github.com/snowmerak/q/diagnostics"
 	"github.com/snowmerak/q/internal/toolbatch"
 	"github.com/snowmerak/q/sessionstore"
 )
@@ -549,6 +552,16 @@ func (r GeneralRunner) Run(ctx context.Context, prompt string) (result TaskResul
 		taskID = strings.ReplaceAll(r.Definition.Info.Name, "/", "-") + "-" + generated
 	}
 	ctx = sessionstore.WithSearchScope(ctx, r.RunID, taskID)
+	startedAt := time.Now()
+	logger := diagnostics.Logger(ctx).With("agent", r.Definition.Info.Name, "task_id", taskID, "parent_id", r.ParentID)
+	logger.Info("studio.subagent.started")
+	defer func() {
+		level := slog.LevelInfo
+		if runErr != nil && ctx.Err() == nil {
+			level = slog.LevelError
+		}
+		logger.Log(ctx, level, "studio.subagent.finished", "duration_ms", time.Since(startedAt).Milliseconds(), "failed", runErr != nil, "outcome", result.Outcome, "cancelled", ctx.Err() != nil)
+	}()
 	progress := func(action, detail string) {
 		reportProgress(r.Progress, ProgressEvent{Agent: r.Definition.Info.Name, TaskID: taskID, ParentID: r.ParentID, Action: action, Detail: detail})
 	}

@@ -413,7 +413,7 @@ func (service *sessionsService) serveMessage(writer http.ResponseWriter, request
 		writeAPIError(writer, http.StatusBadRequest, err)
 		return
 	}
-	run, err := service.runs.start(root, request.PathValue("session"), input.Content)
+	run, err := service.runs.start(root, request.PathValue("session"), input.Content, request.Context())
 	if err != nil {
 		if strings.Contains(err.Error(), "already has a running turn") {
 			writeAPIError(writer, http.StatusConflict, err)

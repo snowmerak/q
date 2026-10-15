@@ -19,6 +19,9 @@ func decodeSettingsRequest(writer http.ResponseWriter, request *http.Request, ta
 }
 
 func writeAPIError(writer http.ResponseWriter, status int, err error) {
+	if response, ok := writer.(*loggedResponseWriter); ok {
+		response.apiError = err
+	}
 	writeJSON(writer, status, apiError{Error: err.Error()})
 }
 

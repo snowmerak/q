@@ -49,6 +49,7 @@ const (
 var ErrNotFound = errors.New("q config not found")
 
 type Config struct {
+	Logging       LoggingConfig               `yaml:"logging,omitempty"`
 	Version       int                         `yaml:"version"`
 	Provider      ProviderConfig              `yaml:"provider"`
 	Embedding     EmbeddingConfig             `yaml:"embedding,omitempty"`

@@ -12,6 +12,7 @@ import (
 
 	"github.com/snowmerak/q/app"
 	"github.com/snowmerak/q/config"
+	"github.com/snowmerak/q/diagnostics"
 )
 
 const apiVersion = 1
@@ -32,7 +33,7 @@ type Server struct {
 }
 
 // NewServer returns a Studio server whose runtime follows parent cancellation.
-func NewServer(parent context.Context) (*Server, error) {
+func NewServer(parent context.Context, options ...ServerOption) (*Server, error) {
 	store, err := config.DefaultStore()
 	if err != nil {
 		return nil, fmt.Errorf("locate Studio settings: %w", err)
@@ -41,7 +42,7 @@ func NewServer(parent context.Context) (*Server, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open Studio session runtime: %w", err)
 	}
-	handler, commits, sessions, err := newHandlerRuntime(parent, store, host)
+	handler, commits, sessions, err := newHandlerRuntime(parent, store, host, options...)
 	if err != nil {
 		_ = host.Close()
 		return nil, err
@@ -62,7 +63,9 @@ func (server *Server) Close() error {
 	return errors.Join(server.sessions.Close(), server.commits.Close(), server.host.Close())
 }
 
-func newHandlerRuntime(parent context.Context, store config.Store, runner sessionRunner) (http.Handler, *commitService, *sessionsService, error) {
+func newHandlerRuntime(parent context.Context, store config.Store, runner sessionRunner, options ...ServerOption) (http.Handler, *commitService, *sessionsService, error) {
+	logger := studioLogger(options)
+	parent = diagnostics.WithLogger(parent, logger)
 	assets, err := frontend()
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("open embedded Studio frontend: %w", err)
@@ -139,6 +142,7 @@ func newHandlerRuntime(parent context.Context, store config.Store, runner sessio
 	mux.HandleFunc("POST /api/v1/workspaces/commits/{commit}/regenerate", commits.serveCommitRegenerate)
 	mux.HandleFunc("POST /api/v1/workspaces/commits/{commit}/execute", commits.serveCommitExecute)
 	sessions := newSessionsService(parent, runner, store.Dir)
+	sessions.runs.logger = logger
 	settings.embeddingChanges = newEmbeddingChangeService(parent, settings)
 	sessions.embeddingChanges = settings.embeddingChanges
 	embeddings := embeddingStatusService{main: store, sessions: sessions}
@@ -186,7 +190,7 @@ func newHandlerRuntime(parent context.Context, store config.Store, runner sessio
 	mux.HandleFunc("PUT /api/v1/workspaces/learning", sessions.serveLearning)
 	mux.Handle("/api/", http.NotFoundHandler())
 	mux.Handle("/", spa)
-	return securityHeaders(mux), commits, sessions, nil
+	return logRequests(securityHeaders(mux), logger), commits, sessions, nil
 }
 
 func serveStatus(writer http.ResponseWriter, _ *http.Request) {

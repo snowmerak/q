@@ -19,6 +19,7 @@ require (
 	github.com/dop251/goja v0.0.0-20260806115107-493f22071ef6
 	github.com/go-rod/rod v0.116.2
 	github.com/google/jsonschema-go v0.4.3
+	github.com/google/uuid v1.6.0
 	github.com/modelcontextprotocol/go-sdk v1.7.0
 	github.com/parquet-go/parquet-go v0.32.0
 	github.com/snowmerak/llm-provider v0.0.0-20261014110600-2b9dafbe5452
@@ -73,7 +74,6 @@ require (
 	github.com/go-sourcemap/sourcemap v2.1.3+incompatible // indirect
 	github.com/golang/snappy v1.0.0 // indirect
 	github.com/google/pprof v0.0.0-20260802141513-ef3492d7dac3 // indirect
-	github.com/google/uuid v1.6.0 // indirect
 	github.com/gorilla/css v1.0.1 // indirect
 	github.com/json-iterator/go v0.0.0-20171115153421-f7279a603ede // indirect
 	github.com/klauspost/compress v1.18.7 // indirect

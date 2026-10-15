@@ -93,6 +93,7 @@ type Round struct {
 }
 
 type Turn struct {
+	RequestID      string         `json:"request_id,omitempty"`
 	ID             string         `json:"id"`
 	MemberSessions []string       `json:"member_sessions,omitempty"`
 	ChairSession   string         `json:"chair_session,omitempty"`

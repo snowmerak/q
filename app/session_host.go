@@ -27,6 +27,7 @@ var ErrSessionRuntimeUnavailable = errors.New("session runtime unavailable")
 // Studio uses it for streaming, while the ordinary model remains responsible
 // for tools, persistence, recovery, and execution order.
 type SessionEvent struct {
+	RequestID        string                `json:"request_id,omitempty"`
 	Type             string                `json:"type"`
 	RunID            string                `json:"run_id,omitempty"`
 	WorkingDirectory string                `json:"working_directory,omitempty"`

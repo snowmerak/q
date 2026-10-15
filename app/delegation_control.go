@@ -9,6 +9,7 @@ import (
 	"sync"
 
 	"github.com/snowmerak/q/client"
+	"github.com/snowmerak/q/diagnostics"
 	"github.com/snowmerak/q/subagent"
 	"github.com/snowmerak/q/workspace"
 )
@@ -23,9 +24,10 @@ type delegationStart struct {
 // DelegationRunSnapshot identifies the current execution of a child session.
 // Commands must name its ID so a stale browser cannot control a later execution.
 type DelegationRunSnapshot struct {
-	ID     string `json:"id"`
-	Status string `json:"status"`
-	Error  string `json:"error,omitempty"`
+	RequestID string `json:"request_id,omitempty"`
+	ID        string `json:"id"`
+	Status    string `json:"status"`
+	Error     string `json:"error,omitempty"`
 }
 
 type delegationRunControl struct {
@@ -57,7 +59,7 @@ func attachDelegationControl(ctx context.Context, store workspace.Store) (contex
 	}
 	ctx, cancel := context.WithCancelCause(ctx)
 	control := subagent.NewRunControl(cancel)
-	run := &delegationRunControl{control: control, cancel: cancel, snapshot: DelegationRunSnapshot{ID: id, Status: "running"}}
+	run := &delegationRunControl{control: control, cancel: cancel, snapshot: DelegationRunSnapshot{ID: id, Status: "running", RequestID: diagnostics.RequestID(ctx)}}
 	host.delegationMu.Lock()
 	if host.delegationRuns == nil {
 		host.delegationRuns = make(map[string]*delegationRunControl)
@@ -165,6 +167,8 @@ func (host *SessionHost) StartDelegation(ctx context.Context, root workspace.Sto
 		host.delegationCtx, host.delegationCancel = context.WithCancel(host.ctx)
 	}
 	runContext := context.WithValue(host.delegationCtx, delegationHostKey{}, host)
+	runContext = diagnostics.Inherit(runContext, ctx)
+	runContext = diagnostics.WithRequestID(runContext, "")
 	host.delegationWG.Add(1)
 	host.delegationMu.Unlock()
 

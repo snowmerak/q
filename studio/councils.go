@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -15,6 +16,7 @@ import (
 	"github.com/snowmerak/q/app"
 	"github.com/snowmerak/q/config"
 	"github.com/snowmerak/q/council"
+	"github.com/snowmerak/q/diagnostics"
 	"github.com/snowmerak/q/worklock"
 )
 
@@ -345,7 +347,9 @@ func (service *councilService) serveTurns(writer http.ResponseWriter, request *h
 		writeRunLockError(writer, err)
 		return
 	}
-	ctx, cancel := context.WithTimeout(service.ctx, councilTurnTimeout)
+	ctx, cancel := context.WithTimeout(diagnostics.Inherit(service.ctx, request.Context()), councilTurnTimeout)
+	ctx = diagnostics.WithRequestID(ctx, "")
+	turn.RequestID = diagnostics.RequestID(ctx)
 	service.active[value.ID] = activeCouncilRun{id: turn.ID, cancel: cancel}
 	if err := service.store.SaveTurn(turn); err != nil {
 		delete(service.active, value.ID)
@@ -357,6 +361,7 @@ func (service *councilService) serveTurns(writer http.ResponseWriter, request *h
 	}
 	service.wg.Add(1)
 	service.mu.Unlock()
+	diagnostics.Logger(ctx).Info("council.turn.queued", "council_id", value.ID, "turn_id", turn.ID)
 	go service.execute(ctx, cancel, lock, value, turn, false)
 	writeJSON(writer, http.StatusAccepted, turn)
 }
@@ -453,7 +458,9 @@ func (service *councilService) serveRetry(writer http.ResponseWriter, request *h
 		writeRunLockError(writer, err)
 		return
 	}
-	ctx, cancel := context.WithTimeout(service.ctx, councilTurnTimeout)
+	ctx, cancel := context.WithTimeout(diagnostics.Inherit(service.ctx, request.Context()), councilTurnTimeout)
+	ctx = diagnostics.WithRequestID(ctx, "")
+	turn.RequestID = diagnostics.RequestID(ctx)
 	service.active[id] = activeCouncilRun{id: turn.ID, cancel: cancel}
 	if err := service.store.SaveTurn(turn); err != nil {
 		delete(service.active, id)
@@ -465,6 +472,7 @@ func (service *councilService) serveRetry(writer http.ResponseWriter, request *h
 	}
 	service.wg.Add(1)
 	service.mu.Unlock()
+	diagnostics.Logger(ctx).Info("council.turn.retry_queued", "council_id", value.ID, "turn_id", turn.ID, "retry_mode", input.Mode, "previous_request_id", source.RequestID, "source_turn_id", source.ID)
 	go service.execute(ctx, cancel, lock, value, turn, input.Mode == "resume")
 	writeJSON(writer, http.StatusAccepted, turn)
 }
@@ -484,9 +492,23 @@ func writeRunLockError(writer http.ResponseWriter, err error) {
 func (service *councilService) execute(ctx context.Context, cancel context.CancelFunc, lock *worklock.Lock, value council.Council, turn council.Turn, resume bool) {
 	defer service.wg.Done()
 	defer cancel()
+	ctx = diagnostics.WithRequestID(ctx, turn.RequestID)
+	turn.RequestID = diagnostics.RequestID(ctx)
+	logger := diagnostics.Logger(ctx).With("council_id", value.ID, "turn_id", turn.ID)
+	started := time.Now()
+	logger.Info("council.turn.started", "resume", resume)
+	defer func() {
+		level := slog.LevelInfo
+		if turn.Status == "failed" {
+			level = slog.LevelError
+		}
+		logger.Log(ctx, level, "council.turn.finished", "status", turn.Status, "stage", turn.Stage, "round", turn.CurrentRound, "duration_ms", time.Since(started).Milliseconds())
+	}()
 	defer func() {
 		service.mu.Lock()
-		_ = lock.Close()
+		if err := lock.Close(); err != nil {
+			logger.Error("council.lock.release_failed", "error", err)
+		}
 		delete(service.active, value.ID)
 		service.mu.Unlock()
 	}()
@@ -497,7 +519,9 @@ func (service *councilService) execute(ctx context.Context, cancel context.Cance
 			turn.Status = "failed"
 		}
 		turn.Error = err.Error()
-		_ = service.store.SaveTurn(turn)
+		if saveErr := service.store.SaveTurn(turn); saveErr != nil {
+			logger.Error("council.persistence.failed", "error", saveErr)
+		}
 	}
 	settings, err := service.settings.Load()
 	if errors.Is(err, config.ErrNotFound) {
@@ -550,7 +574,11 @@ func (service *councilService) execute(ctx context.Context, cancel context.Cance
 	host := app.NewParticipantRunner(ctx, service.provider, settings.Agents.Connections)
 	turn, err = runner(ctx, host, value, history, turn, roots, sessionRoot, settings.EffectiveAgents().MaxParallel, func(progress council.Turn) error {
 		turn = progress
-		return service.store.SaveTurn(progress)
+		if err := service.store.SaveTurn(progress); err != nil {
+			logger.Error("council.persistence.failed", "error", err)
+			return err
+		}
+		return nil
 	})
 	if err != nil {
 		fail(err)
@@ -610,9 +638,11 @@ func (service *councilService) serveCancel(writer http.ResponseWriter, request *
 		return
 	}
 	found := false
+	var runRequestID string
 	for _, turn := range turns {
 		if turn.ID == runID {
 			found = true
+			runRequestID = turn.RequestID
 			break
 		}
 	}
@@ -628,6 +658,7 @@ func (service *councilService) serveCancel(writer http.ResponseWriter, request *
 		return
 	}
 	run.cancel()
+	diagnostics.Logger(request.Context()).Info("council.turn.cancel_requested", "council_id", id, "turn_id", runID, "run_request_id", runRequestID)
 	writeJSON(writer, http.StatusAccepted, map[string]string{"status": "cancelling"})
 }
 

@@ -199,6 +199,7 @@ func (state transferState) bundle() (settingsBundle, error) {
 		put("system-one", "role/"+role, model)
 	}
 	put("runtime", "parallel-agents", state.main.EffectiveAgents().MaxParallel)
+	put("runtime", "logging", state.main.Logging.Effective())
 	put("runtime", "context", contextSettings(state.main.EffectiveContext()))
 	loom := state.main.EffectiveLoom()
 	put("runtime", "loom", transferLoom{loom.MaximumArtifactMiB, loom.MaximumStoreMiB, transferLoomGC(loom.GC)})

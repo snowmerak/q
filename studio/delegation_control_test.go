@@ -70,6 +70,12 @@ func exerciseStudioDelegation(t *testing.T, firstAction string) {
 			if err := json.Unmarshal(response.Body.Bytes(), &value); err != nil {
 				t.Fatal(err)
 			}
+			if action == "message" {
+				id := response.Header().Get("X-Request-ID")
+				if id == "" || value.Run.RequestID != id || id == rootRun.RequestID {
+					t.Fatalf("followup request correlation: header=%q run=%q original=%q", id, value.Run.RequestID, rootRun.RequestID)
+				}
+			}
 		}
 		return value
 	}
@@ -78,6 +84,9 @@ func exerciseStudioDelegation(t *testing.T, firstAction string) {
 	})
 	if first.Kind != "inner" {
 		t.Fatalf("kind = %s", first.Kind)
+	}
+	if rootRun.RequestID == "" || first.Node.State.RequestID != rootRun.RequestID {
+		t.Fatalf("child lost root request ID: root=%q child=%q", rootRun.RequestID, first.Node.State.RequestID)
 	}
 	command("stale-id", "cancel", "", http.StatusConflict)
 	paused := command(first.Run.ID, "pause", "", http.StatusOK)
@@ -99,9 +108,12 @@ func exerciseStudioDelegation(t *testing.T, firstAction string) {
 	if second.Run.ID == first.Run.ID {
 		t.Fatal("followup reused execution identity")
 	}
-	poll(func(v delegationSessionResponse) bool {
+	secondRunning := poll(func(v delegationSessionResponse) bool {
 		return v.Run.ID == second.Run.ID && v.Node.State.Started && v.Node.State.TurnStartRound > 0
 	})
+	if secondRunning.Node.State.RequestID != second.Run.RequestID {
+		t.Fatalf("followup state lost request ID: %+v", secondRunning.Node.State)
+	}
 	command(first.Run.ID, "cancel", "", http.StatusConflict)
 	command(second.Run.ID, "pause", "", http.StatusOK)
 	command(second.Run.ID, "resume", "", http.StatusOK)
@@ -119,6 +131,9 @@ func exerciseStudioDelegation(t *testing.T, firstAction string) {
 	}
 	third := command("", "message", "finish controlled child", http.StatusAccepted)
 	final := poll(func(v delegationSessionResponse) bool { return v.Run.ID == third.Run.ID && v.Run.Status == "completed" })
+	if final.Node.State.RequestID != third.Run.RequestID {
+		t.Fatalf("completed followup lost request ID: %+v", final.Node.State)
+	}
 	if final.Node.State.Round <= first.Node.State.Round {
 		t.Fatal("followup did not advance the saved conversation")
 	}

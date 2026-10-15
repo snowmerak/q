@@ -87,6 +87,17 @@ repositories it can open:
 q studio
 ```
 
+Studio writes JSONL diagnostics to `~/.q/logs/studio/`. Diagnostic stdout output
+is disabled by default. Files rotate at 25 MiB; managed Studio logs share a
+1,000,000,000-byte budget and seven-day retention. A `request_id` connects HTTP
+requests, background runs, council rounds and seats, tools, and nested subagents.
+Valid UUIDs supplied in `X-Request-ID` are preserved; missing or invalid IDs get a
+new UUID. Bodies, query strings,
+conversation content, and raw error details are omitted. Configure `logging`
+in `~/.q/config.yaml`; see [Studio logging](./docs/studio-logging-plan.md) for
+settings, retention, and failure behavior. Embedded Studio servers are silent
+unless a logger is supplied with `studio.WithLogger`.
+
 Studio listens on `127.0.0.1` with a random available port by default. Pin the
 local address when a stable URL is useful:
 
@@ -846,6 +857,7 @@ the [Q Studio blueprint](docs/studio-blueprint.md).
 | `~/.q/systemone.key` | Private master key used to verify managed System One API keys. |
 | `~/.q/skills/` | q-managed global Agent Skills. |
 | `~/.q/logs/thinker/` | Private Thinker invocation diagnostics retained for three days. |
+| `~/.q/logs/studio/` | Rotating Studio diagnostics; 25 MiB per file, 1 GB total, seven-day retention. |
 | `~/.q/usage/usage.sqlite` | Recent token-only events and all-time daily rollups. |
 | `~/.q/usage/archive/` | Daily Parquet archives for raw events older than 90 days. |
 | `~/.q/logs/model-usage/` | Legacy JSONL import source; successful import does not delete it. |
