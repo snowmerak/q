@@ -258,15 +258,11 @@ func RunStdioWithLoomOptions(ctx context.Context, root string, options loom.Stor
 	if libraryRuntime != nil {
 		defer func() { runErr = errors.Join(runErr, libraryRuntime.Close()) }()
 	}
-	var fallback client.ToolModel
-	if embeddingClient != nil && loaded.Provider.Model != "" {
-		fallback = client.ToolModel{Client: embeddingClient, Model: loaded.Provider.Model, ReasoningEffort: loaded.Provider.EffectiveReasoningEffort(), WorkingDirectory: root, Role: "main"}
-	}
 	server, fs, _, browser, err := newServer(
 		root, nil, root, semanticArchive, semanticArchive, loomRuntime, lspManager, globalSkills,
 		&systemOneSkillRanker{store: systemoneconfig.Store{Dir: configStore.Dir}},
 		&systemOneArchiveRanker{store: systemoneconfig.Store{Dir: configStore.Dir}},
-		&configuredWebSearch{dir: configStore.Dir, fallback: fallback},
+		&configuredWebSearch{dir: configStore.Dir},
 	)
 	if err != nil {
 		return err

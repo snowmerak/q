@@ -80,7 +80,10 @@ func sequence(t *testing.T, choices ...string) Decider {
 				t.Fatalf("too many options: %d", len(options))
 			}
 			choice := "supported"
-			if key == "action" || key == "publisher" {
+			if strings.HasPrefix(key, "block_") {
+				choice = "keep"
+			}
+			if key == "action" || key == "publisher" || key == "page" {
 				if i >= len(choices) {
 					t.Fatalf("unexpected decision %s", key)
 				}

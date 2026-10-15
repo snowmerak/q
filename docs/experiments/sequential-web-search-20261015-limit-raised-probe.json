@@ -1,0 +1,12 @@
+{
+  "recorded_at": "2026-10-15T12:24:06.4800518+00:00",
+  "status": 200,
+  "seconds": 38.8712172,
+  "request_bytes": 14991,
+  "model_limits": {
+    "id": "gemma4-26b",
+    "max_input_tokens": 32768,
+    "context_window": 131072
+  },
+  "body": "{\"model\":\"gemma4-26b\",\"answers\":{\"requirement_0\":{\"type\":\"choice\",\"choice\":\"supported\",\"confidence\":0.9999675321418469,\"probabilities\":{\"missing\":0.00001623392907648799,\"supported\":0.9999837660709234}}},\"usage\":{\"input_tokens\":4719,\"output_tokens\":0}}"
+}

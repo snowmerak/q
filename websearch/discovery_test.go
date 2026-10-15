@@ -31,7 +31,7 @@ func TestMetasearchSelectsAndReadsOriginalSource(t *testing.T) {
 	}))
 	defer page.Close()
 	searchCalls := 0
-	base := sequence(t, "candidate_1", "collect_0", "accept", "finish")
+	base := sequence(t, "candidate_1", "accept")
 	engine := Engine{Discovery: metaSearchFunc(func(_ context.Context, query string) (SearchResults, error) {
 		searchCalls++
 		if query != "lantern specification" || pageCalls != 0 {
@@ -39,7 +39,7 @@ func TestMetasearchSelectsAndReadsOriginalSource(t *testing.T) {
 		}
 		return SearchResults{Candidates: []Candidate{{URL: page.URL + "/other", Title: "Other", Snippet: "The lantern is red."}, {URL: page.URL, Title: "Specification", Snippet: "Unverified search snippet."}}, Errors: []string{"bing: blocked"}}, nil
 	}), Decision: decisionFunc(func(ctx context.Context, req systemone.Request, opts systemone.CallOptions) (*systemone.Result, error) {
-		if q, ok := req.Questions["action"]; ok && searchCalls == 1 && pageCalls == 0 {
+		if q, ok := req.Questions["page"]; ok && searchCalls == 1 && pageCalls == 0 {
 			choices := q.Criteria.(map[string]string)
 			if choices["candidate_1"] == "" || choices["collect_0"] != "" || choices["finish"] != "" {
 				t.Fatal("search snippets were offered as verified evidence")
@@ -53,7 +53,7 @@ func TestMetasearchSelectsAndReadsOriginalSource(t *testing.T) {
 	}
 }
 
-func TestMetasearchRefinesThroughCallingPlanner(t *testing.T) {
+func TestMetasearchExhaustionReturnsWithoutPlannerEscalation(t *testing.T) {
 	u := "https://official.test/detail"
 	session := &fakeSession{pages: map[string]Document{u: doc(u, "The exact requirement is documented.")}}
 	var queries []string
@@ -63,14 +63,12 @@ func TestMetasearchRefinesThroughCallingPlanner(t *testing.T) {
 			return SearchResults{Candidates: []Candidate{{URL: "https://other.test/", Title: "Wrong publisher"}}}, nil
 		}
 		return SearchResults{Candidates: []Candidate{{URL: u}}}, nil
-	}), Decision: sequence(t, "query", "candidate_0", "collect_0", "accept", "finish"), Planner: plannerFunc(func(_ context.Context, req PlanRequest) (Plan, error) {
-		if req.Operation != "query" || len(req.PreviousQueries) != 1 {
-			t.Fatal(req)
-		}
-		return Plan{Query: "refined query"}, nil
+	}), Decision: sequence(t), Planner: plannerFunc(func(_ context.Context, req PlanRequest) (Plan, error) {
+		t.Fatal("page workflow must not invoke a generative planner", req)
+		return Plan{}, nil
 	}), NewSession: func() Session { return session }}
 	out, err := engine.Search(t.Context(), Input{Goal: "exact requirement", Query: "first query", AllowedDomains: []string{"official.test"}})
-	if err != nil || out.Status != "complete" || out.SearchCalls != 2 || out.PlannerCalls != 1 || len(queries) != 2 || queries[1] != "refined query" || !session.closed {
+	if err != nil || out.Status != "incomplete" || out.StopReason != "candidate_exhausted" || out.SearchCalls != 1 || out.PlannerCalls != 0 || len(queries) != 1 || !session.closed {
 		t.Fatalf("out=%+v err=%v queries=%v", out, err, queries)
 	}
 }

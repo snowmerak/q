@@ -1,6 +1,6 @@
-// Package websearch implements a bounded research state machine. System One
-// selects existing actions; a generative planner only writes queries or splits
-// requirements. It is a domain tool, not a replacement for Q's AgentLoop.
+// Package websearch implements bounded HTTP research over metasearch candidates.
+// System One selects sources and classifies verbatim evidence. Direct embedders
+// without Discovery retain the injected browser/planner compatibility path.
 package websearch
 
 import (
@@ -15,9 +15,9 @@ type Input struct {
 	Query                  string   `json:"query,omitempty" jsonschema:"Optional initial search query; defaults to the goal without a generative call."`
 	Requirements           []string `json:"requirements,omitempty" jsonschema:"Optional atomic requirements, at most 6. Must collectively preserve the whole goal."`
 	StartURL               string   `json:"start_url,omitempty" jsonschema:"Optional HTTP(S) starting page instead of a search results page."`
-	AllowedDomains         []string `json:"allowed_domains,omitempty" jsonschema:"Optional allowed evidence publisher hosts; filter link destinations to these hosts and known search result pages. Redirected evidence is checked again."`
-	MaxSteps               int      `json:"max_steps,omitempty" jsonschema:"Action budget, defaults to 20, maximum 40. Whole call has a 35 minute deadline; completion checks allow 30 minutes each, subject to the caller deadline."`
-	DecisionTimeoutSeconds int      `json:"decision_timeout_seconds,omitempty" jsonschema:"Navigation/source native request timeout, maximum 1800 seconds. Defaults to 60 for a single search and 1800 in web_search_batch, including model-server queue time. Caller/search deadlines still apply."`
+	AllowedDomains         []string `json:"allowed_domains,omitempty" jsonschema:"Optional allowed evidence publisher hosts; filter metasearch candidates and validate final redirect publishers before collecting evidence."`
+	MaxSteps               int      `json:"max_steps,omitempty" jsonschema:"Page budget for metasearch research, defaults to 20, maximum 40. Whole call has a 35 minute deadline; completion checks allow 30 minutes each, subject to the caller deadline."`
+	DecisionTimeoutSeconds int      `json:"decision_timeout_seconds,omitempty" jsonschema:"Page selection, publisher and relevance native request timeout, maximum 1800 seconds. Defaults to 60 for a single search and 1800 in web_search_batch, including model-server queue time. Caller/search deadlines still apply."`
 }
 
 type Evidence struct {
@@ -47,6 +47,19 @@ type Output struct {
 	Candidates       []Candidate       `json:"candidates,omitempty"`
 	LastObservation  string            `json:"last_observation,omitempty"`
 	SystemOneTimings []SystemOneTiming `json:"system_one_timings,omitempty"`
+	Pages            []PageResult      `json:"pages,omitempty"`
+}
+
+// PageResult exposes bounded reading, classification, and collection progress.
+type PageResult struct {
+	URL       string `json:"url"`
+	Title     string `json:"title,omitempty"`
+	Blocks    int    `json:"blocks"`
+	Examined  int    `json:"examined"`
+	Added     int    `json:"added"`
+	Outcome   string `json:"outcome"`
+	Truncated bool   `json:"truncated,omitempty"`
+	Error     string `json:"error,omitempty"`
 }
 
 // SystemOneTiming separates local admission from the remote request, which
@@ -121,7 +134,9 @@ type Engine struct {
 	Planner          Planner
 	PlannerModel     string
 	NewSession       func() Session
-	// Discovery supplies ranked URL candidates without opening a browser.
-	// Nil retains direct search-page navigation for existing embedders.
+	// Discovery selects the page-at-a-time HTTP research workflow. NewSession,
+	// when supplied, injects reading via Page(ctx, url, false) and Close only.
+	// Otherwise no browser is created. Nil retains the older injected browser
+	// loop for existing embedders; configured browser_search always supplies it.
 	Discovery MetaSearcher
 }

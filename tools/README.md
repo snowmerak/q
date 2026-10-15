@@ -22,7 +22,7 @@ Builtin tools:
 - `browser_snapshot`: inspect visible interactive elements and obtain refs
 - `browser_click`, `browser_fill`: interact using refs from the latest snapshot
 - `browser_close`: close a tab and stop Chrome immediately when the last tab closes
-- `browser_search`: one-call System One research loop covering search, navigation, page reading, source passages and requirement coverage; the calling model writes queries or decomposes the goal only when requested by System One
+- `browser_search`: metasearch → System One source selection → HTTP reading and paragraph classification → accumulated evidence check after each page
 - `web_search`: compatibility name for `browser_search`
 - `web_search_batch`: run independent research tasks concurrently with per-task evidence, outcomes and timings
 
@@ -51,42 +51,42 @@ delegation.
 the builtin interviewer, manager, research, and senior developer profiles.
 These profiles also expose `web_search_batch`; the junior developer profile
 omits both search tools. Custom profiles select them explicitly in `tools`.
-Initial discovery and query refinements use the pinned Go scour library to
+Initial discovery uses the pinned Go scour library to
 query its eight general web engines concurrently, with an eight-second timeout
 per engine. Successful results are merged and ranked even when other engines
 fail; engine failures remain in the research result. At most 20 candidates are
 retained, filtered by `allowed_domains`. Search snippets guide selection and
 never count as source evidence. No scour answer or infobox plugins run.
-System One chooses candidate URLs before Q fetches their original source text.
-Static documents are fetched and extracted in Go. System One also chooses links,
-passages, whether to inspect browser controls,
-whether to fill a search field, and whether to submit or click its search
-button. Input values come from the current query or requirements; new text is
-written by the planner. Eligible controls are text/search inputs identified by
-search semantics in GET forms or standalone search inputs. Every interaction
-refreshes refs and submission rechecks the live form. This restricts the offered
-actions, but it is not a browser network sandbox: page JavaScript still runs.
-Each search owns a separate temporary browser session and closes it on return,
-including errors and cancellation; no persistent browser daemon is required.
+System One selects one of up to eight unread candidate URLs before Q reads its
+original source with HTTP GET. Q checks the publisher independently, then offers
+source blocks in document order, up to four per native request. Each question
+explicitly identifies its block ID; the ID is not assumed to be visible to the
+model automatically. Useful partial facts are collected verbatim. Adjacent short
+paragraphs, headings and dates stay together, normally around 1,600 UTF-8 bytes.
+An individual long paragraph is not silently clipped.
+
+After the page has been classified, the completion model checks the accumulated
+source evidence against every requirement **and the original qualified goal**.
+Source, time, identity and scope conditions remain in the completion input even
+when a caller supplies short requirements. Missing evidence continues to another
+candidate from the same metasearch list. Candidate exhaustion returns incomplete
+evidence. This path performs no generative planning, query refinement, browser
+rendering, form interaction or navigation through page links. HTTP failures are
+recorded and skipped; no Chrome process is started by research.
 
 Static extraction prioritizes semantic main content while retaining navigation
 URLs, including links inside menus omitted from source prose. Image `alt` text
 is retained as publisher-provided text; no image recognition is performed.
-Navigation requests include only the currently selectable search candidates,
+Selection requests include only the currently selectable search candidates,
 with bounded snippet previews. Full candidates remain in the stored result.
 
 Within each research call, Q hashes whitespace-normalized extracted source text
-with SHA-256. A fresh fetch of a previously seen page is rejected as `unchanged`
-when the content hash matches; changed bodies remain usable. Request URLs and
-redirect destinations are remembered, and fragments/common tracking parameters
-are excluded from URL identity. Unchanged navigation and browser actions are
-removed from the available choices for that source state, including read/render
-loops with changing CDP refs. Current search controls remain usable even when
-rendering did not change the body. `last_page.content_hash` and action `target`/
-`outcome` fields expose the comparison; stored source passages are not replaced
-by repeated whitespace-only responses.
-If a source body changes, its old collected passages are invalidated and
-completion must be checked against the new evidence.
+with SHA-256. Unread aliases or redirects with an already seen body are recorded
+as `unchanged` and add no repeated evidence. Requested URLs and redirect
+destinations are remembered, and fragments/common tracking parameters are
+excluded from URL identity. `last_page.content_hash` and action `target`/`outcome`
+fields expose the comparison. Source passages are not replaced by repeated
+whitespace-only responses.
 
 System One requires explicit `web_search` and `web_search_finish` entries in
 global `systemone.json` `role_models`. Choose them independently in Studio's
@@ -106,30 +106,22 @@ the existing role map:
 {"web_search": "oev/gemma4-e4b", "web_search_finish": "oev/qwen3.8-27b"}
 ```
 
-Gemma still selects the `finish` action; Qwen checks each requirement and the
-original goal through native System One `supported`/`missing` choices. The same
-Qwen check runs immediately after the first accepted source passage, on an
-explicit finish action, and at the action-budget boundary when evidence has
-changed. A successful first-source check ends the call; a missing verdict guides
-continued navigation without automatically rechecking every added passage.
-When System One requests `query`
-or `decompose`, generation reuses the calling agent's existing model client,
-model, reasoning setting and provider request options. Main TUI/Studio/ACP loops
-bind their active model; delegated agents bind their selected role model,
-including a successful model-group fallback. Parallel calls keep separate
-bindings through MCP. No provider is opened directly, and no model or reasoning
-level is hard-coded. Generated requests use isolated messages and do not reuse
-the caller's stateful conversation ID. Generation has a 90-second timeout, also
-subject to the caller's client and search deadline.
+The navigation role selects pages, checks publishers and classifies source
+blocks. The completion role checks native `supported`/`missing` questions once
+after each accepted page, never between its paragraphs. Zero collected evidence
+cannot complete a task. HTTP-failed, rejected and unchanged pages contribute no
+evidence and advance to the next candidate. All source/collection/coverage errors
+retain partial results. The models are not hard-coded and settings are not
+rewritten; the usual global directory is `~/.q`. No calling chat model is needed
+for this workflow. `planner_calls` remains in the result for compatibility and
+is zero for configured research tools.
 
-`q-mcp` uses its configured Q default chat client/model when no calling loop is
-present. A standalone embedded runtime can supply `client.WithToolModel` on its
-call context. Without a model client, navigation and evidence collection still
-work; a requested generation operation returns a planner error with partial
-evidence. The former `websearch.json` planner override is no longer read.
-Navigation and completion checks continue to use native System One choices.
-No role or provider settings are rewritten. The usual global directory is
-`~/.q`. Embedders can inject a concurrent service with `tools.WithWebSearch`.
+Embedders can inject a concurrent service with `tools.WithWebSearch`. Existing
+direct `websearch.Engine` embedders that omit `Discovery` retain the older
+injected browser/planner loop. Configured MCP and in-process research tools
+always supply `ScourSearcher` and use the new HTTP page workflow. With Discovery,
+an optional `NewSession` injection supplies `Page(ctx, url, false)` and `Close`
+only; without it Q reads via Go HTTP and creates no browser resources.
 
 Example tool arguments:
 
@@ -144,19 +136,20 @@ Example tool arguments:
 ```
 
 Without `query`, the initial search uses the goal directly. Without
-`requirements`, the whole goal starts as one requirement and System One may
-request decomposition. `start_url` bypasses initial metasearch.
+`requirements`, the whole goal is one requirement. `start_url` bypasses initial
+selection; if that page is insufficient, one metasearch list is fetched unless
+the page budget is already exhausted.
 The result contains verbatim passages with URLs, unresolved requirements,
 action history and System One/planner call counts. Source acceptance and
 completion are separate System One assessments; completion checks both the
-requirements and the original goal to catch incomplete decompositions. Results
+requirements and the original goal to catch missing qualifications. Results
 include `search_calls`, ranked `candidates`, `coverage_model` and `coverage_calls`; `system_one_calls`
-counts all native calls, including coverage. `planner_calls` counts only
-generative query/decomposition operations. Completion checks reduce premature
+counts all native calls, including coverage. `pages` records URL/title, block
+counts, examined/added counts, outcome, truncation and error for each attempted
+page; `steps` counts attempted pages. Completion checks reduce premature
 completion but remain model judgments, especially for
 subtle qualifications. `allowed_domains` enforces evidence publisher hosts in
-code, including redirects, and filters link destinations to those publishers or
-known search result pages. It does not restrict browser subresource requests.
+code, including redirects, and filters metasearch candidates to those publishers.
 `system_one_timings` records each admitted native request's phase, model, input
 bytes, local admission wait and remote request time (including any server queue).
 `last_observation` retains the final observation or failure. The bounded error
@@ -164,20 +157,28 @@ list keeps the latest eight errors so early search failures cannot hide a later
 model timeout.
 
 Completion checks allow 30 minutes per native request; the completion HTTP
-client allows 30 minutes plus five seconds. Ordinary single-search action/source
-decisions default to one minute; `decision_timeout_seconds` overrides that limit
+client allows 30 minutes plus five seconds. Ordinary single-search selection,
+publisher and relevance decisions default to one minute;
+`decision_timeout_seconds` overrides that limit
 up to 1800 seconds. The overall search allows 35 minutes, subject to the
-caller's deadline, and its temporary browser idle timeout is 36 minutes. The
+caller's deadline. HTTP GET requests allow 25 seconds. The
 smoke driver allows 36 minutes so it does not cancel the completion early.
 
-Defaults: 20 actions (maximum 40), 35 minutes total, at most three planner
-calls, six requirements, eight passages of at most 1,400 UTF-8 bytes each,
-and at most 36 action choices per decision. Static HTML is limited to 2 MiB
-and 250,000 text bytes; rendered observations use the browser limits above.
+Defaults: 20 attempted pages (maximum 40), 35 minutes total, six requirements,
+up to 64 source blocks examined per page and 64 retained evidence blocks.
+Every native request must fit the client's 64 KiB JSON wire contract. Before
+retaining a block Q checks the future completion request including metadata and
+all questions; relevant blocks that cannot fit are explicitly marked in the page
+record, never silently dropped. Oversized classification batches shrink to fewer
+blocks. A single oversized paragraph yields partial evidence with `evidence_budget`.
+Provider tokenizer/context limits are independent of this byte check: model
+errors retain structured provider `detail`, including token-limit rejections.
+Static HTML is limited to 2 MiB and 250,000 text bytes. Page/block truncation is
+visible in `pages[].truncated`.
 Search engine blocking, unavailable models, unsupported documents and budget
 exhaustion return partial evidence with `status: "incomplete"` and a stop reason.
-CAPTCHAs, login, iframe/shadow controls, arbitrary forms and file upload are
-not supported. Results pass through normal Loom capture.
+CAPTCHAs, login and JavaScript-only pages have no automatic browser fallback.
+Results pass through normal Loom capture.
 
 For an opt-in real MCP/model smoke test:
 
@@ -194,8 +195,7 @@ When `-output` is supplied, the complete captured payload is also exported as
 ### Parallel research
 
 Use `web_search_batch` when the caller already has independent research goals.
-It schedules the existing `web_search` service, preserving the Gemma navigation,
-native completion and optional caller-model query/decomposition flow. It does not
+It schedules the same page-at-a-time research service and role models. It does not
 create another AgentLoop, automatically invent tasks, or merge sources across
 tasks. Splitting a larger user request into tasks is the caller's responsibility.
 
@@ -212,16 +212,16 @@ tasks. Splitting a larger user request into tasks is the caller's responsibility
 
 The batch accepts 1–8 tasks with unique ASCII IDs (letters, digits, dot, underscore,
 hyphen; at most 64 bytes) and 1–4 concurrent loops (default 3).
-It validates the entire input before starting work. Each task owns its browser,
-refs, cookies, history, passages, requirements and budgets. There is no shared
-browser lock between tasks. Batch navigation/source decisions default to 30
+It validates the entire input before starting work. Each task owns its candidate,
+hash, passage, requirement and budget state. Batch selection/publisher/relevance
+decisions default to 30
 minutes, including model-server queueing; set a task's
 `search.decision_timeout_seconds` to override it. Completion remains 30 minutes.
 This concurrency limit applies to one batch; other
 tool calls have independent limits, and model endpoints may serialize requests.
 `model_concurrency` separately limits active model requests to 1–4 (default 1,
 capped by loop concurrency). Browser/HTTP work and loop state remain independent
-while native decisions, completion checks and generative planning share model
+while native decisions and completion checks share model
 slots. Local model admission waits count against the 35-minute batch deadline;
 native request deadlines start after admission and also respect that deadline.
 Increase model concurrency only when the endpoint supports overlapping inference.

@@ -18,7 +18,7 @@ import (
 func main() {
 	input := flag.String("input", "", "UTF-8 JSON file containing web_search arguments")
 	output := flag.String("output", "", "Optional file for the JSON Loom receipt")
-	tool := flag.String("tool", "web_search", "web_search or web_search_batch")
+	tool := flag.String("tool", "browser_search", "browser_search, web_search or web_search_batch")
 	flag.Parse()
 	if err := run(*input, *output, *tool); err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -27,8 +27,8 @@ func main() {
 }
 
 func run(input, output, tool string) (returnErr error) {
-	if tool != "web_search" && tool != "web_search_batch" {
-		return fmt.Errorf("-tool must be web_search or web_search_batch")
+	if tool != "browser_search" && tool != "web_search" && tool != "web_search_batch" {
+		return fmt.Errorf("-tool must be browser_search, web_search or web_search_batch")
 	}
 	if input == "" {
 		return fmt.Errorf("-input is required; this command makes real model and web calls")

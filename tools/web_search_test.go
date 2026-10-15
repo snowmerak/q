@@ -3,7 +3,6 @@ package tools
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -161,91 +160,7 @@ func TestLargeWebSearchBatchPreviewRetainsAllTaskOutcomes(t *testing.T) {
 	}
 }
 
-func TestWebPlannerOnlyWritesRequestedFieldsAndUsesCallerClient(t *testing.T) {
-	var calls int
-	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/v1/chat/completions" {
-			t.Errorf("unexpected path %s", r.URL.Path)
-		}
-		if r.Header.Get("Authorization") != "Bearer caller-key" {
-			t.Error("did not reuse caller authentication")
-		}
-		var body map[string]any
-		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-			t.Error(err)
-		}
-		if body["model"] != "active-model" || body["tools"] != nil || body["reasoning_effort"] != "high" {
-			t.Errorf("unexpected request model/tools: %+v", body)
-		}
-		calls++
-		w.Header().Set("Content-Type", "application/json")
-		answer := `{"query":"new search terms"}`
-		if calls == 2 {
-			answer = `{"query":"not allowed","requirements":["x"]}`
-		}
-		response := map[string]any{"choices": []any{map[string]any{"index": 0, "message": map[string]any{"role": "assistant", "content": "JSON follows:\n" + answer}, "finish_reason": "stop"}}}
-		if err := json.NewEncoder(w).Encode(response); err != nil {
-			t.Error(err)
-		}
-	}))
-	defer api.Close()
-	t.Setenv("OPENAI_API_KEY", "must-not-leak")
-	configured, err := client.New(client.Config{BaseURL: api.URL + "/v1", APIKey: "caller-key", DefaultModel: "wrong-default"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = configured.Close() }()
-	p := &webQueryPlanner{caller: client.ToolModel{Client: configured, Model: "active-model", ReasoningEffort: "high", Role: "research"}}
-	plan, err := p.Plan(t.Context(), websearch.PlanRequest{Operation: "query", Goal: "Research"})
-	if err != nil || plan.Query != "new search terms" || calls != 1 {
-		t.Fatalf("plan=%+v err=%v calls=%d", plan, err, calls)
-	}
-	if _, err := p.Plan(t.Context(), websearch.PlanRequest{Operation: "decompose", Goal: "Research"}); err == nil {
-		t.Fatal("accepted query in decomposition")
-	}
-	if _, err := p.Plan(t.Context(), websearch.PlanRequest{Operation: "navigate"}); err == nil || calls != 2 {
-		t.Fatal("unsupported operation reached model")
-	}
-}
-
-func TestWebPlannerRequiresCallerOnlyWhenGenerating(t *testing.T) {
-	p := &webQueryPlanner{}
-	for _, operation := range []string{"query", "decompose"} {
-		if _, err := p.Plan(t.Context(), websearch.PlanRequest{Operation: operation, Goal: "Research"}); err == nil || !strings.Contains(err.Error(), "calling agent") {
-			t.Fatalf("missing caller model was not rejected: %v", err)
-		}
-	}
-}
-
 type webPlannerChatFunc func(context.Context, client.ChatRequest) (*client.ChatResponse, error)
-
-func TestWebPlannerBoundsGenerationAndPreservesCallerDeadline(t *testing.T) {
-	for _, timeout := range []time.Duration{35 * time.Minute, 20 * time.Millisecond} {
-		t.Run(timeout.String(), func(t *testing.T) {
-			ctx, cancel := context.WithTimeout(t.Context(), timeout)
-			defer cancel()
-			callerDeadline, _ := ctx.Deadline()
-			chat := webPlannerChatFunc(func(ctx context.Context, request client.ChatRequest) (*client.ChatResponse, error) {
-				deadline, ok := ctx.Deadline()
-				if !ok || deadline.After(callerDeadline) || time.Until(deadline) > 90*time.Second {
-					t.Errorf("generation deadline = %v, caller deadline = %v", deadline, callerDeadline)
-				}
-				if timeout < time.Second {
-					<-ctx.Done()
-					return nil, ctx.Err()
-				}
-				return &client.ChatResponse{Choices: []client.Choice{{Message: client.Message{Content: `{"query":"new search terms"}`}}}}, nil
-			})
-			planner := &webQueryPlanner{caller: client.ToolModel{Client: chat, Model: "caller"}}
-			_, err := planner.Plan(ctx, websearch.PlanRequest{Operation: "query", Goal: "Research"})
-			if timeout < time.Second && !errors.Is(err, context.DeadlineExceeded) {
-				t.Fatalf("caller cancellation = %v", err)
-			} else if timeout >= time.Second && err != nil {
-				t.Fatal(err)
-			}
-		})
-	}
-}
 
 func (f webPlannerChatFunc) Chat(ctx context.Context, request client.ChatRequest) (*client.ChatResponse, error) {
 	return f(ctx, request)
@@ -259,8 +174,8 @@ func TestConcurrentWebSearchCallsKeepTheirCallerModelThroughMCP(t *testing.T) {
 				if !ok {
 					return websearch.Output{}, fmt.Errorf("caller model missing inside MCP handler")
 				}
-				plan, err := (&webQueryPlanner{caller: caller}).Plan(ctx, websearch.PlanRequest{Operation: "query", Goal: in.Goal})
-				return websearch.Output{Status: "complete", Query: plan.Query, PlannerModel: caller.Model, PlannerCalls: 1}, err
+				_, err := caller.Client.Chat(ctx, client.ChatRequest{Model: caller.Model, ReasoningEffort: caller.ReasoningEffort, WorkingDirectory: caller.WorkingDirectory, Extra: caller.Extra})
+				return websearch.Output{Status: "complete", Query: "written-" + caller.Model}, err
 			})
 			runtime, err := newRuntimeWithLSP(t.Context(), sameRuntimeRoots(t.TempDir()), nil, nil, loom.NewProcessEvaluator(), loom.StoreOptions{}, nil, nil, WithWebSearch(search))
 			if err != nil {
@@ -421,6 +336,10 @@ func TestConfiguredWebSearchUsesNativeRoleWithoutLoadingPlannerProvider(t *testi
 				}
 			case "publisher":
 				choice = "accept"
+			default:
+				if strings.HasPrefix(k, "block_") {
+					choice = "keep"
+				}
 			}
 			answers[k] = systemone.Answer{Type: systemone.QuestionChoice, Choice: choice}
 		}
@@ -482,7 +401,11 @@ func TestConfiguredWebSearchRoutesCompletionToSeparateNativeModel(t *testing.T) 
 					case "publisher":
 						choice = "accept"
 					default:
-						t.Errorf("completion leaked to Gemma: %s", k)
+						if strings.HasPrefix(k, "block_") {
+							choice = "keep"
+						} else {
+							t.Errorf("completion leaked to Gemma: %s", k)
+						}
 					}
 				}
 				answers[k] = systemone.Answer{Type: systemone.QuestionChoice, Choice: choice}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -170,7 +171,7 @@ func TestConcurrentEngineSearchesKeepSessionsAndEvidenceIndependent(t *testing.T
 		pages[u] = doc(u, "Evidence only for "+id)
 		tasks = append(tasks, BatchTask{ID: id, Search: Input{Goal: id, StartURL: u}})
 	}
-	engine := &Engine{DecisionModel: "gemma4-e4b", CoverageModel: "qwen3.8-27b", NewSession: func() Session {
+	engine := &Engine{DecisionModel: "gemma4-e4b", CoverageModel: "qwen3.8-27b", Discovery: metaSearchFunc(func(context.Context, string) (SearchResults, error) { return SearchResults{}, nil }), NewSession: func() Session {
 		s := &fakeSession{pages: pages}
 		mu.Lock()
 		sessions = append(sessions, s)
@@ -185,6 +186,9 @@ func TestConcurrentEngineSearchesKeepSessionsAndEvidenceIndependent(t *testing.T
 		answers := map[string]systemone.Answer{}
 		for key := range req.Questions {
 			choice := "accept"
+			if strings.HasPrefix(key, "block_") {
+				choice = "keep"
+			}
 			if key == "action" {
 				choice = "collect_0"
 				if len(req.State.(map[string]any)["evidence"].([]Evidence)) > 0 {

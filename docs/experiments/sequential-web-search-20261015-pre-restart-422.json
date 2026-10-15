@@ -1,0 +1,7 @@
+{
+  "recorded_at": "2026-10-15T12:21:36.9709043+00:00",
+  "status": 422,
+  "seconds": 0.5446605,
+  "request_bytes": 14991,
+  "body": "{\"detail\":\"prompt has 4719 tokens; limit is 4096; truncation is disabled\"}"
+}

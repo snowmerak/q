@@ -1,0 +1,6 @@
+{
+  "status": 422,
+  "seconds": 0.3427033,
+  "request_bytes": 14991,
+  "body": "{\"detail\":\"prompt has 4719 tokens; limit is 4096; truncation is disabled\"}"
+}
