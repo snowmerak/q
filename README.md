@@ -644,8 +644,10 @@ again in the same context.
 
 When System One settings have been saved, q retrieves 32 hint candidates,
 scores every candidate in one `agent_skill_decision` request, and supplies the
-top six. A direct `search_skills` call retrieves and scores 32 candidates and
-returns at most 20, or the smaller requested limit. If the decision request
+top eight for `task_start` or the top six for other contextual triggers.
+Without System One reranking, `task_start` retrieves at most twelve candidates
+and supplies at most six. A direct `search_skills` call retrieves and scores
+32 candidates and returns at most 20, or the smaller requested limit. If the decision request
 fails, q keeps the original search order and reports a non-blocking warning.
 
 Without an embedding model, retrieval is BM25-only. With one, q combines BM25

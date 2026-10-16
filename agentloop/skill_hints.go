@@ -13,6 +13,9 @@ const (
 	automaticSkillSearchLimit    = 8
 	automaticSkillHintLimit      = 4
 	systemOneSkillHintLimit      = 6
+	taskStartSkillSearchLimit    = 12
+	taskStartSkillHintLimit      = 6
+	taskStartSystemOneHintLimit  = 8
 	maximumSkillHintQueryRunes   = 4000
 	maximumSkillDescriptionRunes = 600
 	maximumSkillHintTags         = 12
@@ -133,13 +136,20 @@ func automaticSkillHints(
 	if query == "" {
 		return nil
 	}
-	result, err := searcher.SearchSkillHints(ctx, query, automaticSkillSearchLimit)
+	searchLimit := automaticSkillSearchLimit
+	hintLimit := automaticSkillHintLimit
+	rankedHintLimit := systemOneSkillHintLimit
+	if trigger == taskStartToolName {
+		searchLimit = taskStartSkillSearchLimit
+		hintLimit = taskStartSkillHintLimit
+		rankedHintLimit = taskStartSystemOneHintLimit
+	}
+	result, err := searcher.SearchSkillHints(ctx, query, searchLimit)
 	if err != nil {
 		return nil
 	}
-	hintLimit := automaticSkillHintLimit
 	if result.Reranked {
-		hintLimit = systemOneSkillHintLimit
+		hintLimit = rankedHintLimit
 	}
 	hints := make([]skillHint, 0, hintLimit)
 	for _, hit := range result.Hits {

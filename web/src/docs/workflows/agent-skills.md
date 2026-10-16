@@ -19,7 +19,7 @@ toc:
 
 q implements the portable [`SKILL.md` Agent Skills format](https://agentskills.io/specification) as an on-demand retrieval layer. The full catalog and skill bodies stay out of the base prompt.
 
-On a new user turn, `task_start`, or an answer returned through `ask_to_user`, q can search skill metadata and add up to four previously unseen candidate hints. A hint is not an instruction. The model must call `get_skill` before following the skill.
+On a new user turn, `task_start`, or an answer returned through `ask_to_user`, q can search skill metadata and add candidate hints. Without System One reranking, `task_start` retrieves up to twelve candidates and supplies up to six hints; other triggers retrieve up to eight and supply up to four. With System One reranking, q retrieves up to 32 candidates and supplies up to eight hints for `task_start` or six for other triggers. Previously seen candidates are skipped in the main chat. A hint is not an instruction. The model must call `get_skill` before following the skill.
 
 Roles with skill tools may also call `search_skills` later when new information shows that more guidance is needed.
 

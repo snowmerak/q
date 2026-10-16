@@ -18,6 +18,7 @@ type delegatedSkillRuntime struct {
 	queries []string
 	calls   []client.ToolCall
 	result  *builtin.SearchSkillsOutput
+	limit   int
 }
 
 func (*delegatedSkillRuntime) Tools() []client.Tool {
@@ -32,7 +33,8 @@ func (r *delegatedSkillRuntime) Call(_ context.Context, call client.ToolCall) (c
 	return client.ToolResult{}, errors.New("unexpected model tool call")
 }
 
-func (r *delegatedSkillRuntime) SearchSkillHints(_ context.Context, query string, _ int) (builtin.SearchSkillsOutput, error) {
+func (r *delegatedSkillRuntime) SearchSkillHints(_ context.Context, query string, limit int) (builtin.SearchSkillsOutput, error) {
+	r.limit = limit
 	r.queries = append(r.queries, query)
 	if r.result != nil {
 		return *r.result, nil
@@ -42,17 +44,22 @@ func (r *delegatedSkillRuntime) SearchSkillHints(_ context.Context, query string
 	}}}, nil
 }
 
-func TestTaskStartSkillHintsKeepsSixSystemOneResults(t *testing.T) {
+func TestTaskStartSkillHintLimits(t *testing.T) {
 	result := builtin.SearchSkillsOutput{Reranked: true}
-	for index := range 8 {
+	for index := range 12 {
 		result.Hits = append(result.Hits, builtin.SkillSearchHit{
 			ID: fmt.Sprintf("skill-%d", index), Title: fmt.Sprintf("Skill %d", index),
 		})
 	}
 	runtime := &delegatedSkillRuntime{result: &result}
 	hints := taskStartSkillHints(t.Context(), runtime, runtime.Tools(), taskStartInput{Objective: "Review Go code"})
-	if hints == nil || len(hints.Candidates) != 6 {
+	if runtime.limit != 12 || hints == nil || len(hints.Candidates) != 8 {
 		t.Fatalf("System One task-start hints = %#v", hints)
+	}
+	result.Reranked = false
+	hints = taskStartSkillHints(t.Context(), runtime, runtime.Tools(), taskStartInput{Objective: "Review Go code"})
+	if runtime.limit != 12 || hints == nil || len(hints.Candidates) != 6 {
+		t.Fatalf("ordinary task-start hints = %#v", hints)
 	}
 }
 

@@ -172,7 +172,7 @@ func retrieveSkills(
 }
 
 // SearchSkillHints retrieves and reranks up to 32 candidates in one System One
-// request. Hint consumers keep the first six unseen candidates; retaining the
+// request. Hint consumers apply their own hint limits; retaining the
 // ranked window here lets them skip candidates already shown in the context.
 func SearchSkillHints(
 	ctx context.Context,
