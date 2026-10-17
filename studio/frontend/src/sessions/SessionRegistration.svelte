@@ -9,6 +9,7 @@
   export let projects: StudioProject[] = [];
   export let registeredSessions: RegisteredSessionTree[] = [];
   export let busy = false;
+  export let initialMode: 'chat' | 'workspace' = 'chat';
   export let onregister: (root: string, sessionID: string, create: boolean) => Promise<void> = async () => {};
   export let onchat: () => Promise<void> = async () => {};
   export let onclose: () => void = () => {};
@@ -20,7 +21,7 @@
     { id: 'project', label: 'Project', icon: Folders }
   ] as const;
   type Mode = typeof tabs[number]['id'];
-  let mode: Mode = 'chat';
+  let mode: Mode = initialMode;
   let workspaceInput = '';
   let workspaceSessions: SessionSummary[] = [];
   let workspaceLoadedRoot = '';

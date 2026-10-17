@@ -44,6 +44,7 @@ test('create a personal chat without selecting a workspace, reload it, and delet
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
     await page.screenshot({ path: testInfo.outputPath(`chat-${width}.png`) });
   }
+  await page.getByRole('button', { name: 'Show sessions', exact: true }).click();
   page.once('dialog', dialog => dialog.accept());
   const deleted = page.waitForResponse(response => new URL(response.url()).pathname === `/api/v1/chats/${chat.registration_id}` && response.request().method() === 'DELETE');
   await page.locator('.session-root.active').getByRole('button', { name: /Delete chat/ }).click();

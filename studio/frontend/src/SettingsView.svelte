@@ -42,6 +42,7 @@
   let savedTimer: ReturnType<typeof setTimeout> | undefined;
   let saveGeneration = 0;
   let pending = 0;
+  $: if (active && new URL(window.location.href).searchParams.has('section')) activeSection = sectionFromLocation();
   $: if (active && !settings && !settingsLoading && !settingsError) void loadSettings();
 
   async function loadSettings() {

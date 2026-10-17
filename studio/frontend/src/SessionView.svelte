@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { ArrowUp, Bot, BrainCircuit, Eraser, Files, Folders, GitCompareArrows, Minimize2, Pause, Play, Plus, Square, Trash2 } from '@lucide/svelte';
+  import { ArrowUp, Bot, BrainCircuit, ChevronDown, Eraser, Files, Folders, GitCompareArrows, Layers, Minimize2, Pause, Play, Plus, Square, Trash2 } from '@lucide/svelte';
   import { onMount, tick } from 'svelte';
   import SessionTree from './sessions/SessionTree.svelte';
   import { flattenDelegations } from './sessions/tree';
@@ -46,6 +46,8 @@
   let learningEnabled = true;
   let learningLoading = false;
   let registrationDialogOpen = false;
+  let registrationMode: 'chat' | 'workspace' = 'chat';
+  let sessionListOpen = false;
   let projectDialogOpen = false;
   let editingProject: StudioProject | undefined;
   let filesOpen = false;
@@ -135,6 +137,7 @@
       const registration = (await response.json()) as RegisteredSessionTree;
       registrationDialogOpen = false;
       await loadRegisteredSessions(registration.registration_id);
+      sessionListOpen = false;
     } catch (cause) {
       error = cause instanceof Error ? cause.message : 'Could not register the session';
     } finally {
@@ -147,8 +150,25 @@
   }
 
   function openRegistrationDialog() {
+    registrationMode = 'chat';
     registrationDialogOpen = true;
     error = '';
+  }
+
+  function openWorkspaceDialog() {
+    registrationMode = 'workspace';
+    registrationDialogOpen = true;
+    error = '';
+  }
+
+  async function selectFromTree(registration: RegisteredSessionTree) {
+    await selectRegisteredSession(registration);
+    sessionListOpen = false;
+  }
+
+  async function selectDelegationFromTree(registration: RegisteredSessionTree, node: FlatDelegation) {
+    await openDelegatedSession(registration, node);
+    sessionListOpen = false;
   }
 
   function openProjectDialog(project?: StudioProject) {
@@ -648,6 +668,7 @@
   }
 
   function submitFromKeyboard(event: KeyboardEvent) {
+    if (event.isComposing) return;
     if (event.key === 'Enter' && !event.shiftKey) {
       event.preventDefault();
       void sendPrompt();
@@ -660,7 +681,20 @@
   }
 
   onMount(() => {
-    void loadRegisteredSessions(sessionFromLocation());
+    let disposed = false;
+    const action = new URLSearchParams(window.location.search).get('new');
+    // Consume creation links once so reloading a session never creates another.
+    if (action) {
+      const url = new URL(window.location.href);
+      url.searchParams.delete('new');
+      window.history.replaceState({}, '', url.pathname + url.search);
+    }
+    void (async () => {
+      await loadRegisteredSessions(sessionFromLocation());
+      if (disposed) return;
+      if (action === 'chat') await createChat();
+      else if (action === 'workspace') openWorkspaceDialog();
+    })();
     const onPopState = () => {
       const registrationID = sessionFromLocation();
       const registration = registeredSessions.find((item) => item.registration_id === registrationID && !item.issue);
@@ -669,6 +703,7 @@
     };
     window.addEventListener('popstate', onPopState);
     return () => {
+      disposed = true;
       sessionGeneration += 1;
       runMonitor.stop();
       stopDelegationMonitor();
@@ -678,14 +713,15 @@
   });
 </script>
 
-<div class="sessions-layout" class:files-open={filesOpen && !!selected}>
+<div class="sessions-layout" class:files-open={filesOpen && !!selected} class:session-list-open={sessionListOpen}>
+  <button class="mobile-session-toggle" aria-label={sessionListOpen ? 'Hide sessions' : 'Show sessions'} aria-expanded={sessionListOpen} aria-controls="session-tree" onclick={() => sessionListOpen = !sessionListOpen}><Layers aria-hidden="true" size={17} /><span>Sessions<small>{selected?.session.title || 'Browse chats and workspaces'}</small></span><ChevronDown aria-hidden="true" size={17} /></button>
   <SessionTree
     {projects} {registeredSessions} {workspaceLoading} {sessionLoading} {sending}
     selectedRegistrationID={selectedRegistration?.registration_id || ''}
     selectedDelegationPath={selectedDelegation?.path || ''}
     onrefresh={refreshSessions} onproject={openProjectDialog} onregistration={openRegistrationDialog}
     onchat={createChat}
-    onselect={selectRegisteredSession} onunregister={unregisterSession} ondelegate={openDelegatedSession}
+    onselect={selectFromTree} onunregister={unregisterSession} ondelegate={selectDelegationFromTree}
   />
 
   <section class="chat-panel">
@@ -745,14 +781,14 @@
       {:else}
         <div class="composer-wrap">
           <div class="composer">
-            <textarea bind:value={prompt} onkeydown={submitFromKeyboard} placeholder={sending ? 'Guide the current turn…' : selectedRegistration?.kind === 'chat' ? 'Message Q…' : 'Ask Q to work in this repository…'} rows="3" disabled={sessionLoading}></textarea>
+            <textarea bind:value={prompt} aria-label="Message Q" onkeydown={submitFromKeyboard} placeholder={sending ? 'Guide the current turn…' : selectedRegistration?.kind === 'chat' ? 'Message Q…' : 'Ask Q to work in this repository…'} rows="3" disabled={sessionLoading}></textarea>
             <button class="send-button" title={sending ? 'Guide current turn' : 'Send message'} onclick={sendPrompt} disabled={sessionLoading || !prompt.trim()}><ArrowUp aria-hidden="true" size={17} /></button>
           </div>
           <p>{sending ? 'Enter to redirect the current work with guidance' : 'Enter to send'} · Shift+Enter for a new line · {selectedRegistration?.kind === 'chat' ? 'Personal chat' : workspaceRoot}</p>
         </div>
       {/if}
     {:else}
-      <div class="chat-empty"><Bot aria-hidden="true" size={34} /><h2>Start a conversation</h2><p>Chat with Q, or add a session from a workspace.</p><button class="primary-button" onclick={createChat} disabled={sessionLoading}><Plus aria-hidden="true" size={15} /> New chat</button><button class="secondary-button" onclick={openRegistrationDialog}>Add workspace session</button></div>
+      <div class="chat-empty"><Bot aria-hidden="true" size={34} /><h2>Start a conversation</h2><p>Chat with Q, or add a session from a workspace.</p><button class="primary-button" onclick={createChat} disabled={sessionLoading}><Plus aria-hidden="true" size={15} /> New chat</button><button class="secondary-button" onclick={openWorkspaceDialog}>Add workspace session</button></div>
     {/if}
   </section>
 
@@ -762,7 +798,7 @@
 </div>
 
 {#if registrationDialogOpen}
-  <SessionRegistration {projects} {registeredSessions} busy={sessionLoading} onregister={registerSession} onchat={createChat} onclose={() => registrationDialogOpen = false} onerror={(message) => error = message} />
+  <SessionRegistration {projects} {registeredSessions} initialMode={registrationMode} busy={sessionLoading} onregister={registerSession} onchat={createChat} onclose={() => registrationDialogOpen = false} onerror={(message) => error = message} />
 {/if}
 
 {#if projectDialogOpen}

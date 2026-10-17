@@ -27,7 +27,7 @@ test('settings export keeps selections across tabs and downloads only selected i
   const errors = [];
   page.on('pageerror', (error) => errors.push(error.message));
   await page.goto('/settings?section=import-export');
-  await expect(page).toHaveTitle('Q Studio');
+  await expect(page).toHaveTitle('Settings · Q Studio');
   await page.getByRole('button', { name: 'Choose settings to export', exact: true }).click();
   const dialog = page.getByRole('dialog', { name: 'Export settings', exact: true });
   await expect(dialog.getByRole('button', { name: 'Export file', exact: true })).toBeDisabled();

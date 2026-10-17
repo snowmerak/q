@@ -82,7 +82,7 @@ test('help exposes the command reference and scrolls to every section on desktop
     await page.setViewportSize(viewport);
     await page.goto('/help');
     await expect(page).toHaveURL(/\/help$/);
-    await expect(page).toHaveTitle('Q Studio');
+    await expect(page).toHaveTitle('Help · Q Studio');
     await expect(page.getByRole('heading', { name: 'Help', exact: true })).toBeVisible();
     const guide = page.getByRole('region', { name: 'Studio help guide' });
     const index = page.getByRole('navigation', { name: 'Help sections' });
@@ -468,7 +468,7 @@ for (const failed of [false, true]) {
       await page.setViewportSize({ width, height: 900 });
       await page.reload();
       await expect(page).toHaveURL(new RegExp(url + '$'));
-      await expect(page).toHaveTitle('Q Studio');
+      await expect(page).toHaveTitle('Sessions · Q Studio');
       await expect(blocks).toHaveCount(detail.transcript_thoughts.length);
       await blocks.first().locator('summary').click();
       await expect(blocks.first()).toContainText('Inspecting the request before taking action.');
@@ -1100,6 +1100,7 @@ test('initial folder lookup preserves a directory typed while loading', async ({
     await route.fulfill({ response });
   });
   await page.getByTitle('Add or create session').click();
+  await page.getByRole('tab', { name: 'Workspace', exact: true }).click();
   await page.getByRole('button', { name: 'Choose repository folder' }).click();
   const browser = page.getByRole('dialog', { name: 'Choose a folder' });
   await held;
@@ -1243,7 +1244,7 @@ test('web search model choices enable tools only when both roles are configured'
     id: 'web-decision', uri: fixture.decision_uri, api_key_env: ''
   } })).ok()).toBe(true);
   await page.goto('/settings?section=web-search');
-  await expect(page).toHaveTitle('Q Studio');
+  await expect(page).toHaveTitle('Settings · Q Studio');
   const navigation = page.getByLabel('Source and evidence model');
   const completion = page.getByLabel('Completion model', { exact: true });
   const disabled = page.getByText('Select both decision models to enable web search tools.', { exact: true });
@@ -1285,7 +1286,7 @@ test('system one routing and listener key management persist through native sett
   expect((await request.post('/api/v1/settings/system-one/providers', { data: {
     id: 'ui-decision', uri: fixture.decision_uri, api_key_env: ''
   } })).ok()).toBe(true);
-  await page.goto('/settings?section=web-search');
+  await page.goto('/settings?section=system-one');
   await expect(page.getByTitle('Refresh System One models', { exact: true })).toBeEnabled();
   const role = page.locator('.system-one-assignment').filter({ hasText: 'Agent Skill Decision' });
   await expect(role.getByRole('combobox', { name: 'Model', exact: true }).locator('option[value="ui-decision/decision-test"]')).toHaveCount(1);

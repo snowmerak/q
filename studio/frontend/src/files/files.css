@@ -86,6 +86,6 @@
   .files-body { grid-template-columns: minmax(0, 1fr); grid-template-rows: 220px minmax(440px, 1fr); }
   .files-tree { border-right: 0; border-bottom: 1px solid var(--border); }
   .sessions-layout.files-open { grid-template-columns: minmax(0, 1fr); }
-  .sessions-layout.files-open > .session-rail { display: flex; }
+  .sessions-layout.files-open.session-list-open > .session-rail { display: flex; }
   .session-file-panel { position: fixed; inset: 16px 8px; z-index: 40; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; box-shadow: 0 20px 90px #000b; }
 }

@@ -211,10 +211,15 @@ or Q Library can provide only `Search`, `Save`, and `Delete` through
 
 Studio is the primary interface for daily Q work:
 
+- **Overview** starts a personal chat or opens workspace session registration,
+  and lists recent sessions for one-click continuation.
 - **Sessions** shows registered root sessions from every repository as one
   delegation tree. Add an existing workspace session or create a new root,
   open child transcripts, and manage the root conversation lifecycle. It also
   shows current context usage and reconnects to the durable run cursor.
+  Search by session title, project, workspace path, or delegated agent, and
+  collapse groups to keep the tree manageable. On mobile, use **Sessions**
+  above the conversation to show or hide the session picker.
 - **Files** browses directories and files in a chosen workspace, with **Raw**
   (syntax highlighting, line numbers, and copy) and **Diff** modes. Diff keeps
   the complete file in view, with previous/current line numbers, `+`/`−` gutter
