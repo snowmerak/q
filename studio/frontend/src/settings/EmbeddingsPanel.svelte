@@ -2,11 +2,13 @@
   import { RefreshCw, Search, RotateCw } from '@lucide/svelte';
   import { onMount } from 'svelte';
   import { requestJSON } from '../api';
-  import { embeddingStateLabels, type EmbeddingSnapshot, type EmbeddingArchive, type EmbeddingSyncJob } from './embeddings';
+  import { embeddingStateLabels, readEmbeddingStatus, type EmbeddingSnapshot, type EmbeddingArchive, type EmbeddingSyncJob } from './embeddings';
 
   let snapshot: EmbeddingSnapshot | null = null;
   let loading = false;
   let error = '';
+  let partial = false;
+  let received = 0;
   let workspaceRoot = localStorage.getItem('q-studio-workspace-root') || '';
   let inspectedRoot = workspaceRoot;
   let generation = 0;
@@ -27,14 +29,29 @@
     const current = ++generation;
     controller = new AbortController();
     loading = true;
+    received = 0;
     error = '';
     try {
       const query = inspectedRoot ? `?workspace_root=${encodeURIComponent(inspectedRoot)}` : '';
-      const result = await requestJSON<EmbeddingSnapshot>('GET', `/api/v1/embeddings/status${query}`, undefined, controller.signal);
-      if (generation === current) {
-        snapshot = result;
-        syncJob = result.sync_job || null;
-      }
+      let scan: EmbeddingSnapshot | null = null;
+      await readEmbeddingStatus(`/api/v1/embeddings/status${query}`, controller.signal, event => {
+        if (generation !== current) return;
+        if (event.type === 'started') {
+          scan = event.snapshot;
+          // Keep the previous rows until the first fresh archive is available.
+          if (!snapshot) { snapshot = scan; partial = true; }
+          syncJob = scan.sync_job || null;
+        } else if (event.type === 'archive' && scan) {
+          scan = { ...scan, archives: [...scan.archives, event.archive] };
+          received++;
+          snapshot = scan;
+          partial = true;
+        } else if (event.type === 'completed') {
+          snapshot = { ...event.snapshot, archives: scan?.archives || event.snapshot.archives };
+          syncJob = snapshot.sync_job || null;
+          partial = false;
+        }
+      });
     } catch (reason) {
       if (generation === current && !controller.signal.aborted) {
         error = reason instanceof Error ? reason.message : 'Embedding status is unavailable';
@@ -98,7 +115,7 @@
     <label><span>Additional workspace path</span><input bind:value={workspaceRoot} placeholder="Absolute workspace path" /></label>
     <button class="secondary-button" type="submit" disabled={loading}><Search aria-hidden="true" size={16} /> Inspect workspace</button>
   </form>
-  {#if error}<div class="status-error" role="alert">{error}{#if snapshot} — Showing the last successful scan.{/if}</div>{/if}
+  {#if error}<div class="status-error" role="alert">{error}{#if snapshot} — {partial ? 'Showing the archives received before the scan stopped.' : 'Showing the last successful scan.'}{/if}</div>{/if}
   {#if syncError}<div class="status-error" role="alert">{syncError}</div>{/if}
   {#if syncJob}
     <div class="settings-card sync-progress" role="region" aria-label="Embedding sync progress" aria-live="polite">
@@ -112,12 +129,12 @@
   {/if}
   {#if snapshot && totals}
     <div class="settings-card model-summary">
-      <div><span class="scope-label">CONFIGURED MODEL</span><strong>{snapshot.enabled ? snapshot.model : 'Embeddings disabled'}</strong><small>{snapshot.dimensions} dimensions · Checked {new Date(snapshot.completed_at).toLocaleString()}</small></div>
+      <div><span class="scope-label">CONFIGURED MODEL</span><strong>{snapshot.enabled ? snapshot.model : 'Embeddings disabled'}</strong><small>{snapshot.dimensions} dimensions · {loading ? 'Checking archives…' : partial ? 'Scan interrupted' : `Checked ${new Date(snapshot.completed_at).toLocaleString()}`}</small></div>
       <div class="coverage"><strong>{totals.current.toLocaleString()} / {totals.eligible.toLocaleString()}</strong><span>records current</span></div>
       <div class="coverage"><strong>{totals.missing.toLocaleString()}</strong><span>missing</span></div>
       <div class="coverage"><strong>{totals.stale.toLocaleString()}</strong><span>outdated / incomplete</span></div>
     </div>
-    {#if !snapshot.complete}<p class="status-error" role="status">Scan incomplete. Counts cover only records that could be inspected.</p>{/if}
+    {#if loading}<p class="scan-note" role="status">Checking embedding status… {received} {received === 1 ? 'archive' : 'archives'} received. Totals update as each archive is checked.</p>{:else if !snapshot.complete && !partial}<p class="status-error" role="status">Scan incomplete. Counts cover only records that could be inspected.</p>{/if}
     {#each snapshot.warnings as warning}<p class="status-error">{warning}</p>{/each}
     <div class="table-scroll">
       <table aria-label="Embedding coverage by archive">

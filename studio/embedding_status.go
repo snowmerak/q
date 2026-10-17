@@ -2,6 +2,7 @@ package studio
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -46,6 +47,15 @@ type embeddingStatusService struct {
 	sessions *sessionsService
 }
 
+// Stream metadata and individual archives without repeating earlier rows. JSON
+// callers keep the complete snapshot contract used by embedding sync jobs.
+type embeddingStatusEvent struct {
+	Type     string                   `json:"type"`
+	Snapshot *embeddingStatusResponse `json:"snapshot,omitempty"`
+	Archive  *embeddingArchiveStatus  `json:"archive,omitempty"`
+	Error    string                   `json:"error,omitempty"`
+}
+
 func (service embeddingStatusService) serveStatus(writer http.ResponseWriter, request *http.Request) {
 	extraRoot := strings.TrimSpace(request.URL.Query().Get("workspace_root"))
 	if extraRoot != "" {
@@ -62,6 +72,10 @@ func (service embeddingStatusService) serveStatus(writer http.ResponseWriter, re
 	}
 	ctx, cancel := context.WithTimeout(request.Context(), 30*time.Second)
 	defer cancel()
+	if strings.Contains(request.Header.Get("Accept"), "application/x-ndjson") {
+		service.serveStatusStream(ctx, writer, request, extraRoot)
+		return
+	}
 	result, err := service.snapshot(ctx, extraRoot)
 	if err != nil {
 		status := http.StatusInternalServerError
@@ -77,8 +91,39 @@ func (service embeddingStatusService) serveStatus(writer http.ResponseWriter, re
 	writeJSON(writer, http.StatusOK, result)
 }
 
+func (service embeddingStatusService) serveStatusStream(ctx context.Context, writer http.ResponseWriter, request *http.Request, extraRoot string) {
+	started := false
+	encoder := json.NewEncoder(writer)
+	emit := func(event embeddingStatusEvent) error {
+		if !started {
+			writer.Header().Set("Content-Type", "application/x-ndjson")
+			writer.Header().Set("Cache-Control", "no-store")
+			writer.Header().Set("X-Accel-Buffering", "no")
+			started = true
+		}
+		if err := encoder.Encode(event); err != nil {
+			return err
+		}
+		return http.NewResponseController(writer).Flush()
+	}
+	if _, err := service.scan(ctx, extraRoot, emit); err != nil {
+		if !started {
+			writeAPIError(writer, http.StatusInternalServerError, err)
+		} else if request.Context().Err() == nil {
+			_ = emit(embeddingStatusEvent{Type: "error", Error: err.Error()})
+		}
+	}
+}
+
 func (service embeddingStatusService) snapshot(ctx context.Context, extraRoot string) (embeddingStatusResponse, error) {
+	return service.scan(ctx, extraRoot, nil)
+}
+
+func (service embeddingStatusService) scan(ctx context.Context, extraRoot string, emit func(embeddingStatusEvent) error) (embeddingStatusResponse, error) {
 	result := embeddingStatusResponse{ObservedAt: time.Now().UTC(), Complete: true, Archives: []embeddingArchiveStatus{}, DiscoveryRoots: []string{}, Warnings: []string{}}
+	if err := ctx.Err(); err != nil {
+		return result, err
+	}
 	value, err := service.main.Load()
 	if errors.Is(err, config.ErrNotFound) {
 		value, err = config.Default(), nil
@@ -88,6 +133,26 @@ func (service embeddingStatusService) snapshot(ctx context.Context, extraRoot st
 	}
 	vector := sessionstore.VectorConfig{Model: value.Embedding.Model, Dimensions: value.Embedding.Dimensions}
 	result.Model, result.Dimensions, result.Enabled = vector.Model, vector.Dimensions, vector.Enabled()
+	result.SyncJob = service.sessions.embeddingSync.latest()
+	publishSnapshot := func(kind string) error {
+		if emit == nil {
+			return nil
+		}
+		metadata := result
+		metadata.Archives = []embeddingArchiveStatus{}
+		return emit(embeddingStatusEvent{Type: kind, Snapshot: &metadata})
+	}
+	appendArchive := func(archive embeddingArchiveStatus, err error) error {
+		appendEmbeddingArchive(&result, archive, vector, err)
+		if emit == nil {
+			return nil
+		}
+		archive = result.Archives[len(result.Archives)-1]
+		return emit(embeddingStatusEvent{Type: "archive", Archive: &archive})
+	}
+	if err := publishSnapshot("started"); err != nil {
+		return result, err
+	}
 	roots, err := service.sessions.embeddingWorkspaceRoots()
 	if err != nil {
 		return result, err
@@ -148,7 +213,9 @@ func (service embeddingStatusService) snapshot(ctx context.Context, extraRoot st
 	}
 	global := embeddingArchiveStatus{Name: "Global Library", Scope: "global"}
 	global.EmbeddingStatus, err = library.InspectEmbeddingStatus(ctx, filepath.Join(service.main.Dir, "library"), vector)
-	appendEmbeddingArchive(&result, global, vector, err)
+	if err := appendArchive(global, err); err != nil {
+		return result, err
+	}
 	paths := make([]string, 0, len(workspaces))
 	for _, root := range workspaces {
 		paths = append(paths, root)
@@ -162,11 +229,13 @@ func (service embeddingStatusService) snapshot(ctx context.Context, extraRoot st
 		}
 		archive := embeddingArchiveStatus{Name: filepath.Base(root), Scope: "workspace", WorkspaceRoot: root, Registered: registered[comparableStudioPath(root)]}
 		archive.EmbeddingStatus, err = archiveembed.InspectStatus(ctx, filepath.Join(root, ".q"), vector)
-		appendEmbeddingArchive(&result, archive, vector, err)
+		if err := appendArchive(archive, err); err != nil {
+			return result, err
+		}
 	}
 	result.CompletedAt = time.Now().UTC()
 	result.SyncJob = service.sessions.embeddingSync.latest()
-	return result, nil
+	return result, publishSnapshot("completed")
 }
 
 func appendEmbeddingArchive(result *embeddingStatusResponse, archive embeddingArchiveStatus, config sessionstore.VectorConfig, err error) {

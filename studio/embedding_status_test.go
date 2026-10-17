@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -219,5 +221,103 @@ func TestEmbeddingStatusShowsReadFailuresAndDisabledConfiguration(t *testing.T) 
 	cancel()
 	if _, err := service.snapshot(ctx, root); err != context.Canceled {
 		t.Fatalf("canceled scan = %v", err)
+	}
+}
+
+type embeddingStatusFlushWriter struct {
+	*httptest.ResponseRecorder
+	onFlush func()
+}
+
+func (writer *embeddingStatusFlushWriter) Flush() {
+	writer.ResponseRecorder.Flush()
+	writer.onFlush()
+}
+
+func TestEmbeddingStatusFlushesEachArchiveBeforeInspectingTheNext(t *testing.T) {
+	base := t.TempDir()
+	root := filepath.Join(base, "workspace")
+	if err := os.MkdirAll(root, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	main := config.Store{Dir: filepath.Join(base, "settings")}
+	value := config.Default()
+	value.Provider.Model = "test"
+	value.Embedding = config.EmbeddingConfig{Model: "current", Dimensions: 2}
+	if err := main.Save(value); err != nil {
+		t.Fatal(err)
+	}
+	service := embeddingStatusService{main: main, sessions: newSessionsService(t.Context(), nil, main.Dir)}
+	response := httptest.NewRecorder()
+	var events []embeddingStatusEvent
+	var offset int
+	writer := &embeddingStatusFlushWriter{ResponseRecorder: response}
+	writer.onFlush = func() {
+		t.Helper()
+		var event embeddingStatusEvent
+		if err := json.Unmarshal(response.Body.Bytes()[offset:], &event); err != nil {
+			t.Fatalf("flushed event = %v", err)
+		}
+		offset = response.Body.Len()
+		events = append(events, event)
+		if event.Type != "archive" || event.Archive.Scope != "global" {
+			return
+		}
+		// This record does not exist until the global row reaches Flush. A
+		// buffered full scan would already have reported this workspace absent.
+		directory := filepath.Join(root, ".q", "data", "records")
+		if err := os.MkdirAll(directory, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		now := time.Now().UTC()
+		record, err := json.Marshal(sessionstore.Record{ID: "later", Version: sessionstore.RecordVersion, Kind: "message", Content: "Read after the first row is sent", CreatedAt: now, UpdatedAt: now})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(directory, "later.json"), record, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/embeddings/status?workspace_root="+url.QueryEscape(root), nil).WithContext(t.Context())
+	request.Header.Set("Accept", "application/x-ndjson, application/json")
+	service.serveStatus(writer, request)
+	if response.Code != http.StatusOK || response.Header().Get("Content-Type") != "application/x-ndjson" || response.Header().Get("Cache-Control") != "no-store" {
+		t.Fatalf("stream = %d %v %s", response.Code, response.Header(), response.Body.String())
+	}
+	if len(events) != 4 || events[0].Type != "started" || events[1].Type != "archive" || events[2].Type != "archive" || events[3].Type != "completed" {
+		t.Fatalf("stream events = %+v", events)
+	}
+	if events[0].Snapshot.Model != "current" || !events[0].Snapshot.CompletedAt.IsZero() || len(events[0].Snapshot.Archives) != 0 {
+		t.Fatalf("initial metadata = %+v", events[0].Snapshot)
+	}
+	if archive := events[2].Archive; archive.WorkspaceRoot != root || !archive.Exists || archive.Missing != 1 {
+		t.Fatalf("workspace was inspected before the first flush: %+v", archive)
+	}
+	if final := events[3].Snapshot; !final.Complete || final.CompletedAt.IsZero() || len(final.Archives) != 0 {
+		t.Fatalf("final metadata = %+v", final)
+	}
+	invalid := httptest.NewRecorder()
+	request = httptest.NewRequest(http.MethodGet, "/api/v1/embeddings/status?workspace_root=relative", nil)
+	request.Header.Set("Accept", "application/x-ndjson")
+	service.serveStatus(invalid, request)
+	if invalid.Code != http.StatusBadRequest || invalid.Flushed {
+		t.Fatalf("invalid stream started before validation: %d %s", invalid.Code, invalid.Body.String())
+	}
+}
+
+func TestEmbeddingStatusStopsScanningAfterStreamWriteFailure(t *testing.T) {
+	main := config.Store{Dir: t.TempDir()}
+	service := embeddingStatusService{main: main, sessions: newSessionsService(t.Context(), nil, main.Dir)}
+	stopped := errors.New("consumer disconnected")
+	var kinds []string
+	result, err := service.scan(t.Context(), t.TempDir(), func(event embeddingStatusEvent) error {
+		kinds = append(kinds, event.Type)
+		if event.Type == "archive" {
+			return stopped
+		}
+		return nil
+	})
+	if !errors.Is(err, stopped) || len(kinds) != 2 || len(result.Archives) != 1 || !result.CompletedAt.IsZero() {
+		t.Fatalf("scan continued after write failure: %v %+v %+v", err, kinds, result)
 	}
 }

@@ -51,7 +51,9 @@ test('embedding status reads the API and keeps the page usable on desktop and mo
   await panel.getByRole('button', { name: 'Inspect workspace', exact: true }).click();
   const response = await refreshed;
   expect(response.status()).toBe(200);
-  const snapshot = await response.json();
+  expect(response.headers()['content-type']).toContain('application/x-ndjson');
+  await expect(panel.getByRole('button', { name: 'Refresh', exact: true })).toBeEnabled();
+  const snapshot = await (await request.get(`/api/v1/embeddings/status?workspace_root=${encodeURIComponent(fixture.root)}`)).json();
   expect(snapshot.archives.some(archive => archive.workspace_root === fixture.root)).toBe(true);
   const table = panel.getByRole('table');
   await expect(table.locator('tbody > tr:not(.details-row)')).toHaveCount(snapshot.archives.length);

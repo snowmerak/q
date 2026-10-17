@@ -74,6 +74,18 @@ does not open indexes, acquire workspace leases, call the embedding provider,
 or create or repair archives. The screen refreshes every 15 seconds while open
 and supports manual refresh and inspection of another workspace path.
 
+The default API response remains one JSON snapshot. Studio requests
+`Accept: application/x-ndjson` to render archives as they are inspected. The
+stream begins with `{"type":"started","snapshot":...}`, emits one
+`{"type":"archive","archive":...}` per checked archive, and ends with
+`{"type":"completed","snapshot":...}`. Started and completed snapshots carry
+metadata with empty `archives` arrays; clients collect the individual archive
+events. Totals during a scan cover only the received archives. A failure after
+streaming starts is reported as `{"type":"error","error":"..."}`. EOF without
+a completed event means the scan was interrupted, so Studio retains received
+rows and labels them as partial results. Leaving the page cancels the request
+and its remaining inspection work.
+
 Manual repair is available through **Sync** on an archive row or **Sync all**.
 `POST /api/v1/embeddings/sync` accepts `{"scope":"global"}`, or
 `{"scope":"workspace","workspace_root":"<absolute path>"}`, or
