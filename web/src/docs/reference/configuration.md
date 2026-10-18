@@ -37,6 +37,14 @@ toc:
 
 Use Studio for ordinary configuration. Edit these files directly only when automation requires it.
 
+Managed model requests retry transient connection failures and HTTP 408/429/5xx.
+The default is four total attempts, waiting 250 ms, 500 ms, and 1 s between them.
+In `config.yaml`, `provider.request_retry` accepts `max_attempts` (1–10),
+`initial_backoff` (for example `250ms`), and `max_backoff` (default `2s`). Set
+`max_attempts: 1` to disable retries. Changes apply when sessions reopen on their
+next turn. A retry uses the current Gateway address and credential; cancellation
+stops immediately. Streams reconnect only before their first returned chunk.
+
 ## Import and export
 
 Open **Settings → Import / Export** in Studio to move global settings. The dialog has Models, Providers, System One, Runtime, Services, Subagents, and Integrations tabs. Selections persist across tabs and export together in one JSON file.

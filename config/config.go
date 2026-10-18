@@ -63,15 +63,38 @@ type Config struct {
 }
 
 type ProviderConfig struct {
-	Managed         bool   `yaml:"managed,omitempty"`
-	Type            string `yaml:"type"`
-	BaseURL         string `yaml:"base_url"`
-	Model           string `yaml:"model"`
-	ReasoningEffort string `yaml:"reasoning_effort,omitempty"`
-	APIKeyEnv       string `yaml:"api_key_env,omitempty"`
-	APIKey          string `yaml:"api_key,omitempty"`
-	SystemPrompt    string `yaml:"system_prompt,omitempty"`
-	ContextWindow   int64  `yaml:"context_window,omitempty"`
+	RequestRetry    RequestRetryConfig `yaml:"request_retry,omitempty"`
+	Managed         bool               `yaml:"managed,omitempty"`
+	Type            string             `yaml:"type"`
+	BaseURL         string             `yaml:"base_url"`
+	Model           string             `yaml:"model"`
+	ReasoningEffort string             `yaml:"reasoning_effort,omitempty"`
+	APIKeyEnv       string             `yaml:"api_key_env,omitempty"`
+	APIKey          string             `yaml:"api_key,omitempty"`
+	SystemPrompt    string             `yaml:"system_prompt,omitempty"`
+	ContextWindow   int64              `yaml:"context_window,omitempty"`
+}
+
+// RequestRetryConfig controls transient failures at the managed Gateway. A
+// single attempt disables retries; zero fields use the application defaults.
+type RequestRetryConfig struct {
+	MaxAttempts    int           `yaml:"max_attempts,omitempty"`
+	InitialBackoff time.Duration `yaml:"initial_backoff,omitempty"`
+	MaxBackoff     time.Duration `yaml:"max_backoff,omitempty"`
+}
+
+func (c ProviderConfig) EffectiveRequestRetry() RequestRetryConfig {
+	value := c.RequestRetry
+	if value.MaxAttempts == 0 {
+		value.MaxAttempts = 4
+	}
+	if value.InitialBackoff == 0 {
+		value.InitialBackoff = 250 * time.Millisecond
+	}
+	if value.MaxBackoff == 0 {
+		value.MaxBackoff = 2 * time.Second
+	}
+	return value
 }
 
 type ContextConfig struct {
@@ -231,6 +254,10 @@ func Default() Config {
 func (c Config) Validate() error {
 	if c.Version != CurrentVersion {
 		return fmt.Errorf("config: unsupported version %d", c.Version)
+	}
+	retry := c.Provider.EffectiveRequestRetry()
+	if retry.MaxAttempts < 1 || retry.MaxAttempts > 10 || retry.InitialBackoff < 0 || retry.MaxBackoff < retry.InitialBackoff {
+		return errors.New("config: provider request_retry requires 1-10 attempts and 0 < initial_backoff <= max_backoff")
 	}
 	if !c.Provider.Managed {
 		if c.Provider.Type != "openai-compatible" {

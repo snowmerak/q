@@ -175,6 +175,16 @@ func (s *Supervisor) APIKey() string {
 	return s.current.apiKey
 }
 
+// Connection returns one generation's address and credential atomically.
+func (s *Supervisor) Connection() (string, string) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.current == nil {
+		return "", ""
+	}
+	return s.current.endpoint, s.current.apiKey
+}
+
 func (s *Supervisor) Close() error {
 	s.mu.Lock()
 	current := s.current

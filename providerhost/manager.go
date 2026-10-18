@@ -124,6 +124,8 @@ func (m *Manager) Endpoint() string { return m.supervisor.Endpoint() }
 
 func (m *Manager) APIKey() string { return m.supervisor.APIKey() }
 
+func (m *Manager) Connection() (string, string) { return m.supervisor.Connection() }
+
 func (m *Manager) Close() error { return m.supervisor.Close() }
 
 func cloneConfig(value gateway.Config) gateway.Config {

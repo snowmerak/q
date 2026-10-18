@@ -17,6 +17,7 @@ import (
 // values let llm-provider use OPENAI_BASE_URL, OPENAI_API_KEY, and its standard
 // OpenAI endpoint defaults.
 type Config struct {
+	Retry         RetryPolicy
 	BaseURL       string
 	APIKey        string
 	DefaultModel  string
@@ -40,6 +41,7 @@ type Config struct {
 // Client is an OpenAI-compatible client backed by llm-provider's OpenAI
 // implementation. It is safe for concurrent calls when its HTTPClient is safe.
 type Client struct {
+	retry                RetryPolicy
 	inner                *llmprovider.Client
 	provider             *provideropenai.Provider
 	defaultModel         string
@@ -90,6 +92,7 @@ func New(config Config) (*Client, error) {
 
 	provider := provideropenai.New(options...)
 	return &Client{
+		retry:                config.Retry,
 		inner:                llmprovider.New(provider),
 		provider:             provider,
 		defaultModel:         config.DefaultModel,
@@ -138,12 +141,18 @@ func (c *Client) Chat(ctx context.Context, request ChatRequest) (response *ChatR
 		call.finish(err, "completed")
 	}()
 	if c.apiMode(request.Model) == "responses" {
-		return c.responsesChat(ctx, request)
+		return retryRequest(&requestRetry{ctx: ctx, policy: c.retry}, func() (*ChatResponse, error) {
+			return c.responsesChat(ctx, request)
+		})
 	}
-	ctx, request.Headers = c.withUsageMetadata(ctx, request.Headers, "")
-	response, err = c.inner.Chat(ctx, request)
+	usageContext := ctx
+	response, err = retryRequest(&requestRetry{ctx: ctx, policy: c.retry}, func() (*ChatResponse, error) {
+		attempt := request
+		usageContext, attempt.Headers = c.withUsageMetadata(ctx, request.Headers, "")
+		return c.inner.Chat(usageContext, attempt)
+	})
 	if response != nil {
-		c.recordChatUsage(ctx, request, response.Model, response.Usage, estimateResponseTokens(response))
+		c.recordChatUsage(usageContext, request, response.Model, response.Usage, estimateResponseTokens(response))
 	}
 	return response, err
 }
@@ -153,7 +162,9 @@ func (c *Client) Chat(ctx context.Context, request ChatRequest) (response *ChatR
 func (c *Client) ChatStream(ctx context.Context, request ChatRequest) (Stream, error) {
 	request.Model = c.model(request.Model)
 	call := startModelCall(ctx, request.Model, c.apiMode(request.Model), true)
-	stream, err := c.chatStream(ctx, request)
+	stream, err := openRetryStream(ctx, c.retry, func(attemptContext context.Context) (retryStreamSource[ChatChunk], error) {
+		return c.chatStream(attemptContext, request)
+	})
 	if err != nil {
 		call.finish(err, "failed")
 		return nil, err
@@ -162,10 +173,7 @@ func (c *Client) ChatStream(ctx context.Context, request ChatRequest) (Stream, e
 		return stream, nil
 	}
 	tracked := &modelLogStream{Stream: stream, call: call}
-	if headers, ok := stream.(ResponseHeaderer); ok {
-		return &modelLogHeaderStream{modelLogStream: tracked, headers: headers}, nil
-	}
-	return tracked, nil
+	return &modelLogHeaderStream{modelLogStream: tracked, headers: stream}, nil
 }
 
 func (c *Client) chatStream(ctx context.Context, request ChatRequest) (Stream, error) {
@@ -204,7 +212,9 @@ func (c *Client) apiMode(model string) string {
 
 // ListModels returns models exposed by the compatible endpoint.
 func (c *Client) ListModels(ctx context.Context) ([]Model, error) {
-	return c.provider.ListModels(ctx)
+	return retryRequest(&requestRetry{ctx: ctx, policy: c.retry}, func() ([]Model, error) {
+		return c.provider.ListModels(ctx)
+	})
 }
 
 // Embed creates embeddings, using DefaultModel when request.Model is empty.
@@ -217,10 +227,14 @@ func (c *Client) Embed(ctx context.Context, request EmbeddingRequest) (response 
 		}
 		call.finish(err, "completed")
 	}()
-	ctx, request.Headers = c.withUsageMetadata(ctx, request.Headers, "embedding")
-	response, err = c.provider.Embed(ctx, request)
+	usageContext := ctx
+	response, err = retryRequest(&requestRetry{ctx: ctx, policy: c.retry}, func() (*EmbeddingResponse, error) {
+		attempt := request
+		usageContext, attempt.Headers = c.withUsageMetadata(ctx, request.Headers, "embedding")
+		return c.provider.Embed(usageContext, attempt)
+	})
 	if response != nil {
-		c.recordEmbeddingUsage(ctx, request, response)
+		c.recordEmbeddingUsage(usageContext, request, response)
 	}
 	return response, err
 }
@@ -232,8 +246,10 @@ func (c *Client) CreateResponse(ctx context.Context, body json.RawMessage, heade
 	if err != nil {
 		return nil, err
 	}
-	_, headers = c.withUsageMetadata(ctx, headers, "")
-	return c.provider.CreateResponse(ctx, prepared, headers)
+	return retryRequest(&requestRetry{ctx: ctx, policy: c.retry}, func() (*RawResponse, error) {
+		_, attemptHeaders := c.withUsageMetadata(ctx, headers, "")
+		return c.provider.CreateResponse(ctx, prepared, attemptHeaders)
+	})
 }
 
 // CreateResponseStream is the streaming counterpart to CreateResponse. The
@@ -243,8 +259,10 @@ func (c *Client) CreateResponseStream(ctx context.Context, body json.RawMessage,
 	if err != nil {
 		return nil, err
 	}
-	_, headers = c.withUsageMetadata(ctx, headers, "")
-	return c.provider.CreateResponseStream(ctx, prepared, headers)
+	return openRetryStream(ctx, c.retry, func(attemptContext context.Context) (retryStreamSource[ResponseEvent], error) {
+		_, attemptHeaders := c.withUsageMetadata(attemptContext, headers, "")
+		return c.provider.CreateResponseStream(attemptContext, prepared, attemptHeaders)
+	})
 }
 
 func (c *Client) withUsageMetadata(ctx context.Context, headers http.Header, defaultRole string) (context.Context, http.Header) {

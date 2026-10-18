@@ -41,3 +41,11 @@ bounded role from `WithUsageRole` and a per-call event ID. The Gateway consumes
 these headers for `q usage`, removes them before provider dispatch, and uses the
 event ID to deduplicate its record from an optional client-side
 `UsageRecorder`. Leave this option disabled for direct provider endpoints.
+
+`Config.Retry` opts into bounded retries for connection failures, truncated
+responses, HTTP 408/429 and HTTP 5xx. Each physical attempt gets its own usage
+event ID. Chat and native Responses streams can reconnect only before returning
+their first chunk/event; partial output and tool fragments are never replayed.
+Cancellation and deadlines stop both requests and backoff waits. Direct clients
+default to one attempt. Q's managed clients default to four attempts and resolve
+the current Gateway address and credential again on every attempt.

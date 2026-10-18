@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/snowmerak/llm-provider/gateway"
@@ -49,16 +50,18 @@ type skillHintSearcher interface {
 
 func managedClientFactory(runtime providerRuntime, recorder client.UsageRecorder) clientFactory {
 	return func(value config.Config) (chatClient, error) {
-		endpoint := runtime.Endpoint()
+		endpoint, apiKey := managedGatewayConnection(runtime)
 		if endpoint == "" {
 			return nil, errors.New("internal LLM Gateway is not running")
 		}
-		apiKey := runtime.APIKey()
 		if apiKey == "" {
 			return nil, errors.New("internal LLM Gateway API key is unavailable")
 		}
 		providerModes := providerhost.PreferredProviderAPIModes(runtime.Config())
+		retry := value.Provider.EffectiveRequestRetry()
 		return client.New(client.Config{
+			Retry:                client.RetryPolicy{MaxAttempts: retry.MaxAttempts, InitialBackoff: retry.InitialBackoff, MaxBackoff: retry.MaxBackoff},
+			HTTPClient:           &http.Client{Transport: managedGatewayTransport{runtime: runtime}},
 			BaseURL:              endpoint,
 			APIKey:               apiKey,
 			DefaultModel:         value.Provider.Model,
