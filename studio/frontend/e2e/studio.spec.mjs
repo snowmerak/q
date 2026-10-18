@@ -47,8 +47,10 @@ test('appearance choices persist across pages and keep the current text size as 
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'night');
 });
 
-test('sidebar collapses, keeps navigation usable, and remembers its state', async ({ page }, testInfo) => {
+test('sidebar starts collapsed, keeps navigation usable, and remembers its state', async ({ page }, testInfo) => {
   const sidebar = page.getByRole('complementary', { name: 'Studio navigation' });
+  await expect(sidebar.getByRole('button', { name: 'Expand sidebar' })).toHaveAttribute('aria-expanded', 'false');
+  await sidebar.getByRole('button', { name: 'Expand sidebar' }).click();
   for (const width of [1440, 390]) {
     await page.setViewportSize({ width, height: 900 });
     await page.goto('/sessions');

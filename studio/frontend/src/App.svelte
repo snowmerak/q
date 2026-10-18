@@ -29,7 +29,7 @@
   ];
   let connection: ConnectionState = { kind: 'loading' };
   let activeView: View = 'overview';
-  let sidebarCollapsed = false;
+  let sidebarCollapsed = true;
 
   $: activeLabel = navigation.find(item => item.view === activeView)?.label || 'Overview';
 
@@ -91,9 +91,9 @@
 
   onMount(() => {
     try {
-      sidebarCollapsed = localStorage.getItem('q-studio-sidebar-collapsed') === 'true';
+      sidebarCollapsed = localStorage.getItem('q-studio-sidebar-collapsed') !== 'false';
     } catch {
-      // Use the expanded default when browser storage is unavailable.
+      // Use the collapsed default when browser storage is unavailable.
     }
     activeView = viewFromLocation();
     void loadStatus();
