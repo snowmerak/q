@@ -12,6 +12,7 @@ import (
 
 	"github.com/snowmerak/q/app"
 	"github.com/snowmerak/q/client"
+	"github.com/snowmerak/q/config"
 	"github.com/snowmerak/q/subagent"
 	"github.com/snowmerak/q/workspace"
 )
@@ -27,6 +28,7 @@ type sessionCompactor interface {
 }
 
 type sessionsService struct {
+	main             config.Store
 	runner           sessionRunner
 	runs             *sessionRunService
 	registry         *sessionRegistry
@@ -90,6 +92,7 @@ type sessionRunRequest struct {
 
 func newSessionsService(parent context.Context, runner sessionRunner, configDirectory string) *sessionsService {
 	service := &sessionsService{
+		main:   config.Store{Dir: configDirectory},
 		runner: runner, runs: newSessionRunService(parent, runner), registry: newSessionRegistry(configDirectory),
 		projects: newStudioProjectStore(configDirectory),
 	}

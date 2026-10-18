@@ -692,7 +692,8 @@ dd.success { color: var(--green); }
 .send-button:hover { background: #9c70ff; }
 .send-button:disabled { color: var(--subtle); background: var(--border-strong); cursor: not-allowed; }
 .send-button.stop { color: #ffb4bb; background: rgba(255, 105, 118, 0.16); }
-.composer-wrap > p { max-width: 860px; margin: 7px auto 0; color: var(--subtle); font-size: calc(11px * var(--text-scale)); text-align: right; overflow-wrap: anywhere; }
+.composer-footer { display: flex; align-items: center; justify-content: space-between; gap: 16px; max-width: 860px; margin: 8px auto 0; }
+.composer-footer > p { flex: 1; min-width: 0; margin: 0; color: var(--subtle); font-size: calc(11px * var(--text-scale)); text-align: right; overflow-wrap: anywhere; }
 .delegated-session-note { display: flex; flex: none; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 16px; padding: 14px 22px; color: var(--subtle); border-top: 1px solid var(--border); background: var(--panel-bg); font-size: calc(12px * var(--text-scale)); }
 .delegated-session-note strong { color: #c9b9f2; }
 .delegated-session-note code { flex-basis: 100%; color: #9d8cff; font: calc(11px * var(--text-scale)) ui-monospace, SFMono-Regular, Consolas, monospace; overflow-wrap: anywhere; }

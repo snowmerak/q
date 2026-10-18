@@ -6,6 +6,7 @@
   import { loadDraft, saveDraft } from './sessions/drafts';
   import ProjectDialog from './sessions/ProjectDialog.svelte';
   import SessionRegistration from './sessions/SessionRegistration.svelte';
+  import SessionModelPicker from './sessions/SessionModelPicker.svelte';
   import FileExplorer from './files/FileExplorer.svelte';
   import { resolveFileLink } from './files/paths';
   import { apiError, requestResponse } from './api';
@@ -16,6 +17,7 @@
   export let openChanges: (workspaceRoot: string) => void = () => {};
 
   let workspaceRoot = '';
+  let modelSaving = false;
   let registeredSessions: RegisteredSessionTree[] = [];
   let projects: StudioProject[] = [];
   let selectedRegistration: RegisteredSessionTree | null = null;
@@ -379,6 +381,7 @@
   }
 
   async function selectRegisteredSession(registration: RegisteredSessionTree, push = true) {
+    modelSaving = false;
     switchDraft(registration.registration_id);
     const generation = ++sessionGeneration;
     runMonitor.stop();
@@ -416,6 +419,7 @@
   }
 
   function selectDelegatedSession(registration: RegisteredSessionTree, node: FlatDelegation) {
+    modelSaving = false;
     if (selectedRegistration?.registration_id !== registration.registration_id) return;
     switchDraft(`${registration.registration_id}/${node.path}`);
     const generation = ++sessionGeneration;
@@ -474,6 +478,7 @@
   }
 
   async function sendPrompt() {
+    if (modelSaving) return;
     const content = prompt.trim();
     if (!selected || !workspaceRoot || !content || sessionLoading) return;
     const generation = sessionGeneration;
@@ -774,9 +779,16 @@
         <div class="composer-wrap">
           <div class="composer">
             <textarea bind:value={prompt} oninput={(event) => saveDraft(draftKey, event.currentTarget.value)} aria-label="Message Q" onkeydown={submitFromKeyboard} placeholder={sending ? 'Guide the current turn…' : selectedRegistration?.kind === 'chat' ? 'Message Q…' : 'Ask Q to work in this repository…'} rows="3" disabled={sessionLoading}></textarea>
-            <button class="send-button" title={sending ? 'Guide current turn' : 'Send message'} onclick={sendPrompt} disabled={sessionLoading || !prompt.trim()}><ArrowUp aria-hidden="true" size={17} /></button>
+            <button class="send-button" title={sending ? 'Guide current turn' : 'Send message'} onclick={sendPrompt} disabled={sessionLoading || modelSaving || !prompt.trim()}><ArrowUp aria-hidden="true" size={17} /></button>
           </div>
-          <p>{sending ? 'Enter to redirect the current work with guidance' : 'Enter to send'} · Shift+Enter for a new line · {selectedRegistration?.kind === 'chat' ? 'Personal chat' : workspaceRoot}</p>
+          <div class="composer-footer">
+            {#if !selectedDelegation}
+              {#key `${workspaceRoot}/${selected.session.session_id}`}
+                <SessionModelPicker {workspaceRoot} sessionID={selected.session.session_id} disabled={sending || sessionLoading} bind:saving={modelSaving} />
+              {/key}
+            {/if}
+            <p>{sending ? 'Enter to redirect the current work with guidance' : 'Enter to send'} · Shift+Enter for a new line · {selectedRegistration?.kind === 'chat' ? 'Personal chat' : workspaceRoot}</p>
+          </div>
         </div>
       {/if}
     {:else}

@@ -153,6 +153,10 @@ func (host *SessionHost) sessionConfiguration(store workspace.Store, configured 
 	if err != nil {
 		return [32]byte{}, err
 	}
+	sessionModel, err := store.LoadSessionModelConfig()
+	if err != nil {
+		return [32]byte{}, err
+	}
 	lsp, err := store.LoadLSP()
 	if err != nil {
 		return [32]byte{}, err
@@ -165,7 +169,7 @@ func (host *SessionHost) sessionConfiguration(store workspace.Store, configured 
 	if err != nil {
 		return [32]byte{}, err
 	}
-	values := []any{loaded, modelConfig, lsp, mcp, project}
+	values := []any{loaded, modelConfig, sessionModel, lsp, mcp, project}
 	if len(configured) > 0 {
 		stable := configured[0]
 		stable.OperationID = ""

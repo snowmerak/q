@@ -26,6 +26,13 @@ An injected `RuntimeFactory` supplies the complete authorized tool catalog and
 its closer; the host does not add delegation or external tools to that runtime.
 Give the policy a stable `RuntimeKey` so live sessions reopen when it changes.
 
+Studio's chat composer can persist a model selection for each session in
+`.q/sessions/<session-id>/model.json`. An explicit `SessionOptions.Model` takes
+precedence over that selection, followed by the workspace and global defaults.
+Changes are accepted between turns and take effect on the next turn; clearing
+the conversation retains the choice. Selecting Default restores inheritance.
+Thinker and Librarian keep their global model assignments.
+
 For a retryable step, supply a stable `OperationID`. The operation is saved with
 the actual session context. Retrying a pending operation continues that context
 without inserting another copy of the prompt; retrying a completed operation

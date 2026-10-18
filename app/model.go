@@ -1833,7 +1833,7 @@ func (m *model) restoreWorkspaceLearning() error {
 	return nil
 }
 
-// activeConfig applies the workspace's interactive model override while
+// activeConfig applies workspace and session interactive model overrides while
 // pinning shared-state model roles to their global inheritance. Embedding
 // configuration is already independent from Provider.Model.
 func (m model) activeConfig() config.Config {
@@ -1853,6 +1853,9 @@ func (m model) activeConfig() config.Config {
 			agent.Group = ""
 			value.Agents.Roles[role] = agent
 		}
+	}
+	if len(m.workspaceModel.Overrides) > 0 || (m.sessionOptions != nil && m.sessionOptions.Model != "") {
+		value.Agents.Roles = cloneAgentRoles(value.Agents.Roles)
 		for _, role := range []string{config.AgentRoleThinker, config.AgentRoleLibrarian} {
 			agent := value.Agents.Roles[role]
 			if agent.Model == "" && agent.Group == "" {

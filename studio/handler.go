@@ -175,6 +175,8 @@ func newHandlerRuntime(parent context.Context, store config.Store, runner sessio
 	mux.HandleFunc("/api/v1/sessions", sessions.serveCollection)
 	mux.HandleFunc("GET /api/v1/sessions/{session}", sessions.serveDetail)
 	mux.HandleFunc("DELETE /api/v1/sessions/{session}", sessions.serveDetail)
+	mux.HandleFunc("GET /api/v1/sessions/{session}/model", sessions.serveSessionModel)
+	mux.HandleFunc("PUT /api/v1/sessions/{session}/model", sessions.serveSessionModel)
 	mux.HandleFunc("POST /api/v1/sessions/{session}/clear", sessions.serveClear)
 	mux.HandleFunc("POST /api/v1/sessions/{session}/compact", sessions.serveCompact)
 	mux.HandleFunc("POST /api/v1/sessions/{session}/messages", sessions.serveMessage)

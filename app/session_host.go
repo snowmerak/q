@@ -591,7 +591,17 @@ func (host *SessionHost) prepareSession(runContext context.Context, workspaceSto
 	prepared.state.workspaceStore = &prepared.store
 	prepared.state.workspaceLock = prepared.lock
 	prepared.state.toolRuntime = startup.tools
-	if len(configured) > 0 {
+	sessionModel, err := prepared.store.LoadSessionModelConfig()
+	if err != nil {
+		return nil, err
+	}
+	if len(configured) == 0 {
+		options.ReasoningEffort = startup.config.Provider.ReasoningEffort
+	}
+	if options.Model == "" {
+		options.Model = sessionModel.Model
+	}
+	if len(configured) > 0 || options.Model != "" {
 		stable := options
 		stable.OperationID = ""
 		prepared.state.sessionOptions = &stable

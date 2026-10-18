@@ -382,6 +382,9 @@ func (s Store) ClearSession() error {
 		return err
 	}
 	return withLoomRootMutation(s.Root, func() error {
+		if err := os.Remove(s.SessionModelPath()); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
 		err := os.Remove(s.SessionDir())
 		if errors.Is(err, os.ErrNotExist) {
 			return nil
