@@ -340,24 +340,6 @@ func TestSettingsAPIReadsAndUpdatesGlobalStores(t *testing.T) {
 		t.Fatalf("PUT System One archive model = %d %s", response.Code, response.Body.String())
 	}
 
-	for _, assignment := range []struct {
-		target  string
-		enabled bool
-	}{
-		{"web-search", false}, {"web-search-finish", true},
-	} {
-		response = httptest.NewRecorder()
-		handler.ServeHTTP(response, httptest.NewRequest(http.MethodPut, "/api/v1/settings/system-one/models/"+assignment.target, bytes.NewBufferString(`{"model":"decision/jev-a"}`)))
-		if response.Code != http.StatusOK {
-			t.Fatalf("PUT %s = %d %s", assignment.target, response.Code, response.Body.String())
-		}
-		if err := json.Unmarshal(response.Body.Bytes(), &snapshot); err != nil {
-			t.Fatal(err)
-		}
-		if snapshot.SystemOne.WebSearchEnabled != assignment.enabled {
-			t.Fatalf("web search readiness = %+v", snapshot.SystemOne)
-		}
-	}
 	response = httptest.NewRecorder()
 	handler.ServeHTTP(response, httptest.NewRequest(http.MethodPut, "/api/v1/settings/system-one/providers/decision", bytes.NewBufferString(`{"id":"decisions","uri":"`+upstream.URL+`/v1/systemone","api_key_env":""}`)))
 	if response.Code != http.StatusOK {
@@ -368,9 +350,7 @@ func TestSettingsAPIReadsAndUpdatesGlobalStores(t *testing.T) {
 		t.Fatal(err)
 	}
 	if systemOneValue.DefaultModel != "decisions/jev-a" || systemOneValue.RoleModels[systemoneconfig.RoleAgentSkillDecision] != "decisions/jev-a" ||
-		systemOneValue.RoleModels[systemoneconfig.RoleArchiveDecision] != "decisions/jev-a" ||
-		systemOneValue.RoleModels[systemoneconfig.RoleWebSearch] != "decisions/jev-a" ||
-		systemOneValue.RoleModels[systemoneconfig.RoleWebSearchFinish] != "decisions/jev-a" {
+		systemOneValue.RoleModels[systemoneconfig.RoleArchiveDecision] != "decisions/jev-a" {
 		t.Fatalf("renamed System One model references = %#v", systemOneValue)
 	}
 	response = httptest.NewRecorder()
@@ -384,19 +364,6 @@ func TestSettingsAPIReadsAndUpdatesGlobalStores(t *testing.T) {
 		t.Fatalf("independent archive default = %#v, %v", systemOneValue, err)
 	}
 
-	for _, target := range []string{"web-search", "web-search-finish"} {
-		response = httptest.NewRecorder()
-		handler.ServeHTTP(response, httptest.NewRequest(http.MethodPut, "/api/v1/settings/system-one/models/"+target, bytes.NewBufferString(`{"model":""}`)))
-		if response.Code != http.StatusOK {
-			t.Fatalf("clear %s = %d %s", target, response.Code, response.Body.String())
-		}
-		if err := json.Unmarshal(response.Body.Bytes(), &snapshot); err != nil {
-			t.Fatal(err)
-		}
-		if snapshot.SystemOne.WebSearchEnabled {
-			t.Fatal("cleared web search models remained enabled")
-		}
-	}
 	response = httptest.NewRecorder()
 	handler.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/api/v1/settings/system-one/api-keys", bytes.NewBufferString(`{"alias":"Studio test"}`)))
 	if response.Code != http.StatusCreated {

@@ -7,7 +7,6 @@ import (
 )
 
 type settingsSnapshot struct {
-	WebSearch    webSearchSettings    `json:"web_search"`
 	Version      int                  `json:"version"`
 	Scope        string               `json:"scope"`
 	Runtime      runtimeSettings      `json:"runtime"`
@@ -93,16 +92,13 @@ type gatewayProviderSettings struct {
 }
 
 type systemOneAPISettings struct {
-	ConfigPath           string                      `json:"config_path"`
-	DefaultModel         string                      `json:"default_model"`
-	AgentSkillModel      string                      `json:"agent_skill_model"`
-	ArchiveModel         string                      `json:"archive_model"`
-	WebSearchModel       string                      `json:"web_search_model"`
-	WebSearchFinishModel string                      `json:"web_search_finish_model"`
-	WebSearchEnabled     bool                        `json:"web_search_enabled"`
-	Providers            []systemOneProviderSettings `json:"providers"`
-	APIKeys              []serviceAPIKeySettings     `json:"api_keys"`
-	ActiveAPIKeys        int                         `json:"active_api_keys"`
+	ConfigPath      string                      `json:"config_path"`
+	DefaultModel    string                      `json:"default_model"`
+	AgentSkillModel string                      `json:"agent_skill_model"`
+	ArchiveModel    string                      `json:"archive_model"`
+	Providers       []systemOneProviderSettings `json:"providers"`
+	APIKeys         []serviceAPIKeySettings     `json:"api_keys"`
+	ActiveAPIKeys   int                         `json:"active_api_keys"`
 }
 
 type systemOneProviderSettings struct {

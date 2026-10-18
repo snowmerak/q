@@ -163,12 +163,11 @@ func (r *CoderRunner) run(
 			)})
 			continue
 		}
-		callerModel := r.Spec.toolModel(r.Client, r.WorkingDirectory)
 		batch := toolbatch.New(assistant.ToolCalls, toolbatch.IsLoopTool, func(ctx context.Context, _ int, call client.ToolCall) (client.ToolResult, error) {
 			if !hasTool(available, call.Function.Name) {
 				return scoutToolError(fmt.Errorf("tool %q is not available to coder", call.Function.Name)), nil
 			}
-			return r.Tools.Call(client.WithToolModel(ctx, callerModel), call)
+			return r.Tools.Call(ctx, call)
 		})
 		batch.Before = func(_ int, call client.ToolCall) error {
 			reportProgress(r.Progress, ProgressEvent{

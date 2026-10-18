@@ -36,7 +36,7 @@
     }
   }
 
-  function saveSystemOneModel(target: 'default' | 'agent-skill-decision' | 'archive-decision' | 'web-search' | 'web-search-finish', model: string) {
+  function saveSystemOneModel(target: 'default' | 'agent-skill-decision' | 'archive-decision', model: string) {
     queueSave(() => putSettings(`/api/v1/settings/system-one/models/${target}`, JSON.stringify({ model })));
   }
 

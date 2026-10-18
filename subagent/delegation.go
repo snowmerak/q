@@ -8,7 +8,6 @@ import (
 	"io"
 	"log/slog"
 	"reflect"
-	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -255,13 +254,9 @@ func BuiltinAgentDefinitions() []AgentDefinition {
 		"search_archive", "get_archive_record", "lsp_status", "lsp_diagnostics",
 		"lsp_hover", "lsp_definition", "lsp_references", "lsp_document_symbols",
 		"lsp_workspace_symbols",
-		"browser_open", "browser_read", "browser_snapshot", "browser_close", "browser_search", "web_search_batch",
 	}
 	developerTools := append(append([]string(nil), readTools...),
-		"edit_file", "write_file", "create_directory", "move_path", "copy_path", "remove_path", "run_command", "cmd_status", "wait", "browser_click", "browser_fill")
-	juniorTools := slices.DeleteFunc(append([]string(nil), developerTools...), func(name string) bool {
-		return name == "browser_search" || name == "web_search" || name == "web_search_batch"
-	})
+		"edit_file", "write_file", "create_directory", "move_path", "copy_path", "remove_path", "run_command", "cmd_status", "wait")
 	return []AgentDefinition{
 		{
 			Info: DelegateInfo{Name: BuiltinInterviewerID, Source: "builtin", Kind: AgentKindInner, Role: config.AgentRoleInterviewer,
@@ -288,7 +283,7 @@ func BuiltinAgentDefinitions() []AgentDefinition {
 			Info: DelegateInfo{Name: BuiltinJuniorDeveloperID, Source: "builtin", Kind: AgentKindInner, Role: config.AgentRoleCoder,
 				Description: "Read and modify the code for an assigned task, run relevant checks, and revise it after review.", MutatesWorkspace: true},
 			SystemPrompt: "You are the junior developer responsible for an assigned implementation. Inspect the relevant code and instructions, make the requested change, run focused verification, and report changed files, results, and remaining risks. When the senior developer returns feedback, revise the implementation and verify again. Stay within the assigned scope and do not delegate your implementation.",
-			Tools:        juniorTools,
+			Tools:        append([]string(nil), developerTools...),
 		},
 		{
 			Info: DelegateInfo{Name: BuiltinResearchID, Source: "builtin", Kind: AgentKindInner, Role: config.AgentRoleResearch,
@@ -355,7 +350,7 @@ func DefinitionForProfile(entry ProfileEntry) (AgentDefinition, error) {
 		},
 		SystemPrompt: entry.Profile.SystemPrompt,
 		Connection:   entry.Profile.Agent,
-		Tools:        append([]string(nil), entry.Profile.Tools...), Delegates: append([]string(nil), entry.Profile.Delegates...),
+		Tools:        withoutRetiredSearchTools(entry.Profile.Tools), Delegates: append([]string(nil), entry.Profile.Delegates...),
 		StrictTools: true,
 	}, nil
 }
@@ -807,7 +802,6 @@ func pendingGeneralTools(messages []client.Message) ([]client.ToolCall, int) {
 }
 
 func (r *GeneralRunner) completeGeneralCalls(ctx context.Context, state *GeneralRunState, history *ContextCompactor, available []client.Tool, taskID string, lifecycle *Lifecycle, started *bool, checkpoint func() error) (TaskResult, bool, error) {
-	ctx = client.WithToolModel(ctx, r.Spec.toolModel(r.Client, r.WorkingDirectory))
 	calls, completed := pendingGeneralTools(state.Transcript)
 	if completed >= len(calls) {
 		return TaskResult{}, false, nil
@@ -955,7 +949,7 @@ func selectDefinitionTools(definition AgentDefinition, runtime ToolRuntime) ([]c
 	}
 	if definition.StrictTools {
 		for name := range wanted {
-			if !found[name] {
+			if !found[name] && !retiredBuiltinSearchTool(name) {
 				return nil, fmt.Errorf("subagent %s: unavailable tool %q", definition.Info.Name, name)
 			}
 		}

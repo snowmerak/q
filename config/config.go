@@ -49,7 +49,6 @@ const (
 var ErrNotFound = errors.New("q config not found")
 
 type Config struct {
-	WebSearch     WebSearchConfig             `yaml:"web_search,omitempty"`
 	Logging       LoggingConfig               `yaml:"logging,omitempty"`
 	Version       int                         `yaml:"version"`
 	Provider      ProviderConfig              `yaml:"provider"`
@@ -230,9 +229,6 @@ func Default() Config {
 }
 
 func (c Config) Validate() error {
-	if err := c.WebSearch.Validate(); err != nil {
-		return err
-	}
 	if c.Version != CurrentVersion {
 		return fmt.Errorf("config: unsupported version %d", c.Version)
 	}
@@ -737,12 +733,18 @@ func (s Store) Load() (Config, error) {
 	}
 	defer func() { _ = file.Close() }()
 
-	var loaded Config
+	// Accept the retired section without exposing or saving it. Other fields
+	// still use strict decoding so unrelated configuration mistakes stay visible.
+	var document struct {
+		Config           `yaml:",inline"`
+		RetiredWebSearch yaml.Node `yaml:"web_search"`
+	}
 	decoder := yaml.NewDecoder(file)
 	decoder.KnownFields(true)
-	if err := decoder.Decode(&loaded); err != nil {
+	if err := decoder.Decode(&document); err != nil {
 		return Config{}, fmt.Errorf("config: decode %s: %w", s.Path(), err)
 	}
+	loaded := document.Config
 	normalizedLSP, err := loaded.LSP.Normalized()
 	if err != nil {
 		return Config{}, fmt.Errorf("config: %w", err)

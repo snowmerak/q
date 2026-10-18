@@ -97,7 +97,7 @@ func TestSettingsTransferExportsPortableValues(t *testing.T) {
 	if err := json.Unmarshal(response.Body.Bytes(), &bundle); err != nil {
 		t.Fatal(err)
 	}
-	if bundle.Format != "q-settings" || bundle.Version != 1 || bundle.Scope != "global" || len(bundle.Sections) != 7 {
+	if bundle.Format != "q-settings" || bundle.Version != 1 || bundle.Scope != "global" || len(bundle.Sections) != 6 {
 		t.Fatalf("bundle = %#v", bundle)
 	}
 	provider, err := transferValue[gateway.ProviderConfig](bundle.Sections["providers"]["provider/local"])

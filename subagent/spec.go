@@ -37,10 +37,6 @@ type SpecCheckpoint struct {
 	ConversationID string `json:"conversation_id,omitempty"`
 }
 
-func (s Spec) toolModel(configured client.ModelChatClient, directory string) client.ToolModel {
-	return client.ToolModel{Client: configured, Model: s.Model, ReasoningEffort: s.ReasoningEffort, WorkingDirectory: directory, Role: s.Role}
-}
-
 func (s Spec) Checkpoint() SpecCheckpoint {
 	return SpecCheckpoint{Model: s.Model, Candidate: s.activeCandidate, ConversationID: s.conversationID}
 }

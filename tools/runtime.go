@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log/slog"
 	"path/filepath"
 	goruntime "runtime"
 	"sort"
@@ -16,14 +15,12 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/snowmerak/q/agentskills"
 	"github.com/snowmerak/q/client"
-	"github.com/snowmerak/q/diagnostics"
 	qlibrary "github.com/snowmerak/q/library"
 	"github.com/snowmerak/q/loom"
 	"github.com/snowmerak/q/lsp"
 	"github.com/snowmerak/q/mcpconfig"
 	"github.com/snowmerak/q/sessionstore"
 	"github.com/snowmerak/q/tools/builtin"
-	"github.com/snowmerak/q/webbrowser"
 	qworkspace "github.com/snowmerak/q/workspace"
 )
 
@@ -56,7 +53,6 @@ func sameRuntimeRoots(root string) RuntimeRoots {
 }
 
 type runtimeOptions struct {
-	webSearch     builtin.WebSearcher
 	skillRanker   builtin.SkillRanker
 	archiveRanker builtin.ArchiveRanker
 }
@@ -79,11 +75,9 @@ type CaptureSource struct {
 
 // Runtime connects q's chat loop to the builtin MCP server in-process.
 type Runtime struct {
-	webSearch      builtin.WebSearcher
 	client         *mcp.ClientSession
 	server         *mcp.ServerSession
 	fs             *builtin.FS
-	browser        *webbrowser.Runtime
 	loom           *builtin.LoomRuntime
 	lsp            lsp.Service
 	skills         *agentskills.Registry
@@ -94,8 +88,6 @@ type Runtime struct {
 	skillRefreshMu sync.Mutex
 	skillRefreshAt time.Time
 	tools          []client.Tool
-	toolsMu        sync.Mutex
-	callContexts   *toolCallContexts
 	externalMu     sync.RWMutex
 	external       map[string]*externalServer
 	externalRoutes map[string]externalToolRoute
@@ -105,7 +97,6 @@ type Runtime struct {
 }
 
 type runtimeTemplate struct {
-	webSearch     builtin.WebSearcher
 	roots         RuntimeRoots
 	archive       builtin.Archive
 	loomOptions   loom.StoreOptions
@@ -238,7 +229,7 @@ func NewRuntimeWithRoots(
 		roots: roots, archive: archive, loomOptions: options,
 		globalLSP: global, workspaceLSP: workspace,
 		globalSkills: globalSkills, skillRanker: runtime.skillRanker,
-		archiveRanker: runtime.archiveRanker, webSearch: runtime.webSearch,
+		archiveRanker: runtime.archiveRanker,
 	}
 	return runtime, nil
 }
@@ -258,7 +249,6 @@ func (r *Runtime) NewCheckoutRuntime(ctx context.Context, checkoutRoot string) (
 		func(options *runtimeOptions) {
 			options.skillRanker = template.skillRanker
 			options.archiveRanker = template.archiveRanker
-			options.webSearch = template.webSearch
 		},
 	)
 	if err != nil {
@@ -351,37 +341,30 @@ func newRuntimeWithLSP(
 	if err != nil {
 		return nil, err
 	}
-	if optionsValue.webSearch == nil {
-		optionsValue.webSearch = &configuredWebSearch{}
-	}
-	server, fs, skills, browser, err := newServer(
+	server, fs, skills, err := newServer(
 		roots.CheckoutRoot, roots.AuxiliaryCheckoutRoots, roots.WorkspaceStateRoot,
-		archive, skillStore, loomRuntime, lspManager, globalSkills, optionsValue.skillRanker, optionsValue.archiveRanker, optionsValue.webSearch,
+		archive, skillStore, loomRuntime, lspManager, globalSkills, optionsValue.skillRanker, optionsValue.archiveRanker,
 	)
 	if err != nil {
 		return nil, err
 	}
 	builtin.RegisterLearning(server)
-	callContexts := &toolCallContexts{}
-	server.AddReceivingMiddleware(callContexts.middleware)
 	serverTransport, clientTransport := mcp.NewInMemoryTransports()
 	serverSession, err := server.Connect(ctx, serverTransport, nil)
 	if err != nil {
 		fs.Close()
-		_ = browser.Close()
 		return nil, fmt.Errorf("tools: connect builtin MCP server: %w", err)
 	}
 	clientSession, err := mcp.NewClient(&mcp.Implementation{Name: "q", Version: ServerVersion}, nil).Connect(ctx, clientTransport, nil)
 	if err != nil {
 		_ = serverSession.Close()
 		fs.Close()
-		_ = browser.Close()
 		return nil, fmt.Errorf("tools: connect builtin MCP client: %w", err)
 	}
 	runtime := &Runtime{
-		client: clientSession, server: serverSession, fs: fs, browser: browser, loom: loomRuntime, lsp: lspManager, callContexts: callContexts,
+		client: clientSession, server: serverSession, fs: fs, loom: loomRuntime, lsp: lspManager,
 		skills: skills, skillStore: skillStore, globalSkills: globalSkills, skillRanker: optionsValue.skillRanker,
-		archiveRanker: optionsValue.archiveRanker, webSearch: optionsValue.webSearch,
+		archiveRanker:  optionsValue.archiveRanker,
 		skillRefreshAt: time.Now().Add(skillRefreshInterval),
 	}
 	listed, err := clientSession.ListTools(ctx, nil)
@@ -437,46 +420,7 @@ func (r *Runtime) CollectLoom(ctx context.Context, dryRun bool) (loom.GCResult, 
 }
 
 func (r *Runtime) Tools() []client.Tool {
-	r.toolsMu.Lock()
-	defer r.toolsMu.Unlock()
-	available := webSearchAvailable(r.webSearch)
-	// An initially unconfigured MCP catalog omits search schemas. Load them
-	// once when settings enable search, so existing sessions need no restart.
-	if available && (!hasToolName(r.tools, "browser_search") || !hasToolName(r.tools, "web_search")) {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		listed, err := r.client.ListTools(ctx, nil)
-		cancel()
-		if err == nil {
-			for _, tool := range listed.Tools {
-				if !webSearchTool(tool.Name) || hasToolName(r.tools, tool.Name) {
-					continue
-				}
-				parameters, err := schemaObject(tool.InputSchema)
-				if err == nil {
-					r.tools = append(r.tools, client.Tool{Type: client.ToolTypeFunction, Function: client.FunctionDefinition{
-						Name: tool.Name, Description: tool.Description, Parameters: parameters,
-					}})
-				}
-			}
-			sort.Slice(r.tools, func(i, j int) bool { return r.tools[i].Function.Name < r.tools[j].Function.Name })
-		}
-	}
-	result := make([]client.Tool, 0, len(r.tools))
-	for _, tool := range r.tools {
-		if available || !webSearchTool(tool.Function.Name) {
-			result = append(result, tool)
-		}
-	}
-	return result
-}
-
-func hasToolName(tools []client.Tool, name string) bool {
-	for _, tool := range tools {
-		if tool.Function.Name == name {
-			return true
-		}
-	}
-	return false
+	return append([]client.Tool(nil), r.tools...)
 }
 
 // CustomTools includes all connected MCP servers for explicit profile selection.
@@ -677,9 +621,6 @@ func (r *Runtime) Environment() HostEnvironment {
 }
 
 func (r *Runtime) Call(ctx context.Context, call client.ToolCall) (client.ToolResult, error) {
-	if webSearchTool(call.Function.Name) && !webSearchAvailable(r.webSearch) {
-		return client.ToolResult{IsError: true, Content: "web_search: configure both navigation and completion System One models"}, nil
-	}
 	arguments := make(map[string]any)
 	if strings.TrimSpace(call.Function.Arguments) != "" {
 		if err := json.Unmarshal([]byte(call.Function.Arguments), &arguments); err != nil {
@@ -703,13 +644,6 @@ func (r *Runtime) Call(ctx context.Context, call client.ToolCall) (client.ToolRe
 	}
 	r.externalMu.RUnlock()
 	params := &mcp.CallToolParams{Name: call.Function.Name, Arguments: arguments}
-	if webSearchTool(call.Function.Name) {
-		if call.ID != "" {
-			ctx = diagnostics.WithAttrs(ctx, slog.String("tool_call_id", call.ID))
-		}
-		releaseContext := r.callContexts.bind(ctx, params)
-		defer releaseContext()
-	}
 	if call.Function.Name == "search_archive" {
 		if message := sessionstore.SearchMessageExclusion(ctx, call.ID); message != nil {
 			params.Meta = mcp.Meta{builtin.ArchiveExcludeMessageMetaKey: message}
@@ -938,9 +872,6 @@ func (r *Runtime) Close() error {
 		}
 		if r.fs != nil {
 			r.fs.Close()
-		}
-		if r.browser != nil {
-			closeErr = errors.Join(closeErr, r.browser.Close())
 		}
 		if r.lsp != nil {
 			closeErr = errors.Join(closeErr, r.lsp.Close())

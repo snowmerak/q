@@ -117,6 +117,7 @@ func ParseProfile(raw []byte) (Profile, error) {
 	if p.EffectiveKind() == AgentKindInner {
 		p.Role = config.CanonicalAgentRole(p.Role)
 	}
+	p.Tools = withoutRetiredSearchTools(p.Tools)
 	return p, p.Validate()
 }
 func (s ProfileStore) List() []ProfileEntry {
@@ -190,6 +191,7 @@ func (s ProfileStore) Get(name string) (ProfileEntry, error) {
 }
 func (s ProfileStore) Save(p Profile, scope string, original *ProfileEntry) (returnErr error) {
 	p.Kind = p.EffectiveKind()
+	p.Tools = withoutRetiredSearchTools(p.Tools)
 	if err := p.Validate(); err != nil {
 		return err
 	}

@@ -27,10 +27,11 @@ const maximumTransferSize = 4 << 20
 // A bundle contains only portable, selected global settings. IDs identify merge
 // units within each section; missing units always leave destination data intact.
 type settingsBundle struct {
-	Format   string                                `json:"format"`
-	Version  int                                   `json:"version"`
-	Scope    string                                `json:"scope"`
-	Sections map[string]map[string]json.RawMessage `json:"sections"`
+	retiredSearchSkipped bool
+	Format               string                                `json:"format"`
+	Version              int                                   `json:"version"`
+	Scope                string                                `json:"scope"`
+	Sections             map[string]map[string]json.RawMessage `json:"sections"`
 }
 
 type transferChange struct {
@@ -196,13 +197,8 @@ func (state transferState) bundle() (settingsBundle, error) {
 		put("system-one", "provider/"+provider.ID, provider)
 	}
 	for role, model := range state.systemOne.RoleModels {
-		if role == systemoneconfig.RoleWebSearch || role == systemoneconfig.RoleWebSearchFinish {
-			put("web-search", "role/"+role, model)
-			continue
-		}
 		put("system-one", "role/"+role, model)
 	}
-	put("web-search", "browser", state.main.WebSearch.Effective())
 	put("runtime", "parallel-agents", state.main.EffectiveAgents().MaxParallel)
 	put("runtime", "logging", state.main.Logging.Effective())
 	put("runtime", "context", contextSettings(state.main.EffectiveContext()))
@@ -279,7 +275,20 @@ func decodeTransferBundle(writer http.ResponseWriter, request *http.Request) (se
 		return bundle, errors.New("choose a Q settings file with format q-settings, version 1, and global scope")
 	}
 	for section, items := range bundle.Sections {
-		if !slices.Contains([]string{"models", "providers", "system-one", "web-search", "runtime", "services", "subagents", "integrations"}, section) || items == nil {
+		if section == "web-search" {
+			delete(bundle.Sections, section)
+			bundle.retiredSearchSkipped = true
+			continue
+		}
+		if section == "system-one" {
+			for _, id := range []string{"role/web_search", "role/web_search_finish"} {
+				if _, ok := items[id]; ok {
+					delete(items, id)
+					bundle.retiredSearchSkipped = true
+				}
+			}
+		}
+		if !slices.Contains([]string{"models", "providers", "system-one", "runtime", "services", "subagents", "integrations"}, section) || items == nil {
 			return bundle, fmt.Errorf("unsupported settings section %q", section)
 		}
 	}
@@ -356,7 +365,7 @@ func (service *settingsService) serveTransfer(writer http.ResponseWriter, reques
 			preview.Changes = append(preview.Changes, transferChange{Section: section, ID: id, Action: action, Current: before.Sections[section][id]})
 		}
 	}
-	if len(preview.Changes) == 0 {
+	if len(preview.Changes) == 0 && !bundle.retiredSearchSkipped {
 		writeAPIError(writer, http.StatusUnprocessableEntity, errors.New("select at least one setting"))
 		return
 	}
@@ -373,6 +382,9 @@ func (service *settingsService) serveTransfer(writer http.ResponseWriter, reques
 		return
 	}
 	response := transferImportResponse{}
+	if bundle.retiredSearchSkipped {
+		response.Warning = "Retired built-in web search settings were ignored."
+	}
 	if _, ok := bundle.Sections["models"]["embedding"]; ok {
 		if service.embeddingChanges != nil {
 			select {

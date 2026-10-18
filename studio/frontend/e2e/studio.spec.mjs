@@ -1246,48 +1246,6 @@ test('gateway provider edits follow an acknowledged rename in the save queue', a
   await expect(card).toHaveCount(0);
 });
 
-test('web search model choices enable tools only when both roles are configured', async ({ page, request }) => {
-  const fixture = await (await request.get('/_test/fixture')).json();
-  expect((await request.post('/api/v1/settings/system-one/providers', { data: {
-    id: 'web-decision', uri: fixture.decision_uri, api_key_env: ''
-  } })).ok()).toBe(true);
-  await page.goto('/settings?section=web-search');
-  await expect(page).toHaveTitle('Settings · Q Studio');
-  const navigation = page.getByLabel('Source and evidence model');
-  const completion = page.getByLabel('Completion model', { exact: true });
-  const disabled = page.getByText('Select both decision models to enable web search tools.', { exact: true });
-  const enabled = page.getByText('Web search tools enabled.', { exact: true });
-  await expect(disabled).toBeVisible();
-  await navigation.selectOption('web-decision/decision-test');
-  await expect(page.locator('.save-state')).toHaveText('Saved');
-  await expect(completion).toHaveValue('');
-  await expect(disabled).toBeVisible();
-  await completion.selectOption('web-decision/decision-test');
-  await expect(page.locator('.save-state')).toHaveText('Saved');
-  await expect(enabled).toBeVisible();
-  await page.reload();
-  await expect(navigation).toHaveValue('web-decision/decision-test');
-  await expect(completion).toHaveValue('web-decision/decision-test');
-  await expect(enabled).toBeVisible();
-  for (const width of [1440, 390]) {
-    await page.setViewportSize({ width, height: 900 });
-    await completion.scrollIntoViewIfNeeded();
-    await expect(navigation).toBeVisible();
-    await expect(completion).toBeVisible();
-    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
-    await page.screenshot({ path: join(tmpdir(), `q-studio-web-search-${width}.png`) });
-  }
-  await completion.selectOption('');
-  await expect(page.locator('.save-state')).toHaveText('Saved');
-  await expect(navigation).toHaveValue('web-decision/decision-test');
-  await expect(disabled).toBeVisible();
-  await page.reload();
-  await expect(completion).toHaveValue('');
-  await expect(disabled).toBeVisible();
-  await navigation.selectOption('');
-  await expect(page.locator('.save-state')).toHaveText('Saved');
-  expect((await request.delete('/api/v1/settings/system-one/providers/web-decision')).ok()).toBe(true);
-});
 
 test('system one routing and listener key management persist through native settings panels', async ({ page, request }) => {
   const fixture = await (await request.get('/_test/fixture')).json();

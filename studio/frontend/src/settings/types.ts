@@ -49,7 +49,6 @@ export type ServiceAPIKey = { id: string; alias: string; created_at?: string; re
 export type SettingsSnapshot = {
   version: number;
   scope: 'global';
-  web_search: { max_concurrent_reads: number; generative_model: string; navigation_model: string; completion_model: string; enabled: boolean };
   runtime: {
     configured: boolean;
     config_path: string;
@@ -77,9 +76,6 @@ export type SettingsSnapshot = {
     default_model: string;
     agent_skill_model: string;
     archive_model: string;
-    web_search_model: string;
-    web_search_finish_model: string;
-    web_search_enabled: boolean;
     providers: SystemOneProvider[];
     api_keys: ServiceAPIKey[];
     active_api_keys: number;
@@ -94,7 +90,7 @@ export type SettingsSnapshot = {
     lsp: { config_path: string; items: number; bindings: number };
   };
 };
-export type SettingsSection = 'web-search' | 'appearance' | 'models' | 'embeddings' | 'providers' | 'system-one' | 'runtime' | 'services' | 'subagents' | 'integrations' | 'import-export';
+export type SettingsSection = 'appearance' | 'models' | 'embeddings' | 'providers' | 'system-one' | 'runtime' | 'services' | 'subagents' | 'integrations' | 'import-export';
 export type SaveState = { kind: 'idle' | 'saving' | 'saved' | 'error'; message?: string };
 export type LoomStats = { artifacts: number; blobs: number; bytes: number };
 export type LoomGCResult = { artifacts_removed: number; blobs_removed: number; bytes_reclaimed: number; dry_run: boolean };

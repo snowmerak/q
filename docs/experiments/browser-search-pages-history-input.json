@@ -1,7 +1,0 @@
-{
-  "goal": "교육부 공식 홈페이지에서 조회 시점에 현재 장관으로 표시된 성명을 확인한다. 제3자 언론 기사나 과거 탄핵 관련 기사에 등장하는 이름은 공식 출처 또는 현재 재임 근거로 인정하지 않는다.",
-  "requirements": ["교육부 공식 홈페이지에 현재 표시된 장관 성명"],
-  "start_url": "https://www.bbc.com/korean/articles/cjr2q01zdezo",
-  "max_steps": 1,
-  "decision_timeout_seconds": 90
-}

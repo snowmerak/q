@@ -24,8 +24,6 @@ const (
 	Version                = 2
 	RoleAgentSkillDecision = "agent_skill_decision"
 	RoleArchiveDecision    = "archive_decision"
-	RoleWebSearch          = "web_search"
-	RoleWebSearchFinish    = "web_search_finish"
 )
 
 type ServerConfig struct {
@@ -96,6 +94,9 @@ func (c Config) Validate() error {
 		return fmt.Errorf("systemone: default model: %w", err)
 	}
 	for role, model := range c.RoleModels {
+		if retiredSearchRole(role) {
+			continue
+		}
 		if role == "" || strings.ContainsAny(role, " \t\r\n") {
 			return fmt.Errorf("systemone: invalid role %q", role)
 		}
@@ -159,10 +160,22 @@ func (c Config) ModelForRole(role string) string {
 	return c.DefaultModel
 }
 
-// WebSearchConfigured requires explicit navigation and completion assignments.
-// The representative model alone does not enable web search tools.
-func (c Config) WebSearchConfigured() bool {
-	return c.RoleModels[RoleWebSearch] != "" && c.RoleModels[RoleWebSearchFinish] != "" && c.Validate() == nil
+// Retired search roles are ignored on load and omitted on the next save.
+func retiredSearchRole(role string) bool {
+	return role == "web_search" || role == "web_search_finish"
+}
+
+func (c Config) withoutRetiredSearchRoles() Config {
+	roles := make(map[string]string, len(c.RoleModels))
+	for role, model := range c.RoleModels {
+		if !retiredSearchRole(role) {
+			roles[role] = model
+		}
+	}
+	if c.RoleModels != nil {
+		c.RoleModels = roles
+	}
+	return c
 }
 
 // ResolveModel locates the provider and native model for an assignment.
@@ -266,6 +279,7 @@ func (s Store) LoadOrDefault() (Config, error) {
 	if err := json.Unmarshal(data, &value); err != nil {
 		return Config{}, fmt.Errorf("systemone: decode settings: %w", err)
 	}
+	value = value.withoutRetiredSearchRoles()
 	if err := value.Validate(); err != nil {
 		return Config{}, err
 	}
@@ -285,6 +299,7 @@ func (s Store) NewClientForRole(role string) (*systemone.Client, string, error) 
 }
 
 func (s Store) Save(value Config) error {
+	value = value.withoutRetiredSearchRoles()
 	if err := value.Validate(); err != nil {
 		return err
 	}

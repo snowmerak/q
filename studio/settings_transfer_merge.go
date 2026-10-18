@@ -21,33 +21,6 @@ import (
 func (state *transferState) merge(section, id string, data json.RawMessage) error {
 	kind, name, _ := strings.Cut(id, "/")
 	switch section {
-	case "web-search":
-		if id == "browser" {
-			value, err := transferValue[config.WebSearchConfig](data)
-			if err != nil {
-				return err
-			}
-			if err := value.Validate(); err != nil {
-				return err
-			}
-			state.main.WebSearch = value
-			return nil
-		}
-		if kind == "role" && (name == systemoneconfig.RoleWebSearch || name == systemoneconfig.RoleWebSearchFinish) {
-			value, err := transferValue[string](data)
-			if err != nil {
-				return err
-			}
-			if state.systemOne.RoleModels == nil {
-				state.systemOne.RoleModels = map[string]string{}
-			}
-			if value == "" {
-				delete(state.systemOne.RoleModels, name)
-			} else {
-				state.systemOne.RoleModels[name] = value
-			}
-			return nil
-		}
 	case "models":
 		switch kind {
 		case "default":
@@ -341,7 +314,7 @@ func (state *transferState) merge(section, id string, data json.RawMessage) erro
 }
 
 func transferTouchesMain(bundle settingsBundle) bool {
-	if len(bundle.Sections["models"])+len(bundle.Sections["runtime"]) > 0 || bundle.Sections["web-search"]["browser"] != nil {
+	if len(bundle.Sections["models"])+len(bundle.Sections["runtime"]) > 0 {
 		return true
 	}
 	for id := range bundle.Sections["subagents"] {

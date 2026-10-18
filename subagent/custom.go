@@ -43,7 +43,7 @@ func SelectCustomTools(p Profile, runtime ToolRuntime) ([]client.Tool, error) {
 				}
 			}
 		}
-		if !found {
+		if !found && !retiredBuiltinSearchTool(name) {
 			return nil, fmt.Errorf("subagent %s: unavailable tool %q", p.Name, name)
 		}
 	}

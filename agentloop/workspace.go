@@ -61,15 +61,6 @@ func PrepareWorkspaceMessages(messages []client.Message, options WorkspaceMessag
 		runtimeTools = options.Tools.Tools()
 	}
 	for _, tool := range runtimeTools {
-		if tool.Function.Name == "browser_search" {
-			result = append(result, client.Message{
-				Role: client.RoleDeveloper, Name: "q_web_research",
-				Content: "For web research and factual lookup, use browser_search for exactly one requested piece of information per call, preserving source, time and verification constraints. Split lists and multi-entity questions into separate calls or web_search_batch tasks, then combine the results. It runs the System One search, page-reading, evidence collection and completion checks inside one call. Do not replace this workflow with guessed URLs or external_search delegation. Raw browser tools are temporarily disabled. Check the returned status, evidence and unresolved requirements before answering; an error page, search snippet or incomplete result is not a verified answer. For a large Loom receipt, inspect or read its evidence before finalizing. Follow available runtime tools when a generic browser skill describes a different browser interface.",
-			})
-			break
-		}
-	}
-	for _, tool := range runtimeTools {
 		if tool.Function.Name == "search_skills" {
 			result = append(result, client.Message{
 				Role: client.RoleDeveloper, Name: "q_agent_skills",

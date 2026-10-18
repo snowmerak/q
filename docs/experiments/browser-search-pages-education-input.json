@@ -1,8 +1,0 @@
-{
-  "goal": "교육부 공식 홈페이지에서 조회 시점에 장관으로 표시된 성명과 그 원문 근거를 확인한다. 과거 기사에 등장한 이름을 현재 이름으로 대체하지 않는다.",
-  "query": "교육부 장관 인사말",
-  "requirements": ["교육부 공식 홈페이지에 현재 표시된 장관 성명과 원문 근거"],
-  "allowed_domains": ["moe.go.kr"],
-  "max_steps": 3,
-  "decision_timeout_seconds": 90
-}
