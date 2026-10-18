@@ -26,7 +26,11 @@ func TestOpenRouterIdentitySentUpstream(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer instance.Close()
+	defer func() {
+		if err := instance.Close(); err != nil {
+			t.Errorf("close Gateway: %v", err)
+		}
+	}()
 
 	select {
 	case headers := <-requests:

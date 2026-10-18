@@ -547,7 +547,14 @@ func TestStudioBrowserFixture(t *testing.T) {
 	server := &http.Server{Handler: mux, ReadHeaderTimeout: 5 * time.Second}
 	done := make(chan error, 1)
 	go func() { done <- server.Serve(listener) }()
-	t.Cleanup(func() { _ = server.Close(); <-done })
+	t.Cleanup(func() {
+		if err := server.Close(); err != nil {
+			t.Errorf("close Studio browser fixture: %v", err)
+		}
+		if err := <-done; err != nil && !errors.Is(err, http.ErrServerClosed) {
+			t.Errorf("Studio browser fixture serve: %v", err)
+		}
+	})
 	select {
 	case <-closed:
 	case <-t.Context().Done():

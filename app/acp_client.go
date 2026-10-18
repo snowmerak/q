@@ -274,8 +274,15 @@ func (r *acpRemoteClient) Close() error {
 			_ = r.stdin.Close()
 		}
 		if r.processDone != nil {
+			// Cancellation normally yields an exit status or context error.
+			// Preserve unexpected wait failures alongside the ACP close result.
 			select {
-			case <-r.processDone:
+			case processErr := <-r.processDone:
+				var exitErr *exec.ExitError
+				if processErr != nil && !errors.As(processErr, &exitErr) &&
+					!errors.Is(processErr, context.Canceled) && !errors.Is(processErr, context.DeadlineExceeded) {
+					r.closeErr = errors.Join(r.closeErr, processErr)
+				}
 			case <-time.After(2 * time.Second):
 			}
 		}

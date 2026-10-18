@@ -273,7 +273,11 @@ func TestResponsesTerminalEventsReadNestedFailureDetails(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			defer stream.Close()
+			defer func() {
+				if err := stream.Close(); err != nil {
+					t.Errorf("close Responses stream: %v", err)
+				}
+			}()
 			first, err := stream.Recv()
 			if err != nil || first.Choices[0].Phase != "commentary" || first.Choices[0].Delta.Content != "partial thought" {
 				t.Fatalf("partial thought: %#v, %v", first, err)
@@ -320,7 +324,11 @@ func TestResponsesNativeThoughtAndSummaryAreDisplayedOnce(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			defer stream.Close()
+			defer func() {
+				if err := stream.Close(); err != nil {
+					t.Errorf("close Responses stream: %v", err)
+				}
+			}()
 			var thought, answer string
 			var nativeOutput []json.RawMessage
 			for {

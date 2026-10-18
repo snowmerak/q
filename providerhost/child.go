@@ -61,8 +61,11 @@ func RunChild(ctx context.Context, configPath, apiKey string, ready func(ReadyMe
 	}
 	if err := ready(message); err != nil {
 		_ = server.Close()
-		<-serveDone
-		return fmt.Errorf("providerhost: write readiness message: %w", err)
+		readinessErr := fmt.Errorf("providerhost: write readiness message: %w", err)
+		if serveErr := <-serveDone; serveErr != nil && !errors.Is(serveErr, http.ErrServerClosed) {
+			return errors.Join(readinessErr, serveErr)
+		}
+		return readinessErr
 	}
 
 	select {

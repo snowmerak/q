@@ -172,7 +172,11 @@ func TestStudioStartsStandaloneGatewayAfterProviderSetup(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer response.Body.Close()
+	defer func() {
+		if err := response.Body.Close(); err != nil {
+			t.Errorf("close Gateway models response: %v", err)
+		}
+	}()
 	if response.StatusCode != http.StatusOK {
 		t.Fatalf("Gateway models status = %d", response.StatusCode)
 	}
@@ -207,7 +211,11 @@ func TestStudioStartsStandaloneGatewayAfterProviderSetup(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer reloaded.Body.Close()
+	defer func() {
+		if err := reloaded.Body.Close(); err != nil {
+			t.Errorf("close reloaded Gateway models response: %v", err)
+		}
+	}()
 	if err := json.NewDecoder(reloaded.Body).Decode(&models); err != nil {
 		t.Fatal(err)
 	}

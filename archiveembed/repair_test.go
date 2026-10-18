@@ -126,7 +126,12 @@ func TestResolverOperationsCanCancelWhileRepairing(t *testing.T) {
 			ctx, cancel := context.WithCancel(t.Context())
 			done := make(chan error, 1)
 			go func() { _, err := archive.Backfill(ctx); done <- err }()
-			t.Cleanup(func() { cancel(); <-done })
+			t.Cleanup(func() {
+				cancel()
+				if err := <-done; err != nil && !errors.Is(err, context.Canceled) {
+					t.Errorf("finish cancelled archive repair: %v", err)
+				}
+			})
 			select {
 			case <-embedder.started:
 			case <-time.After(5 * time.Second):
@@ -161,7 +166,9 @@ func TestResolverOperationsCanCancelWhileRepairing(t *testing.T) {
 					case <-time.After(time.Second):
 						t.Error("waiting operation ignored its deadline")
 						cancel()
-						<-returned
+						if err := <-returned; err != nil && !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
+							t.Errorf("finish cancelled operation: %v", err)
+						}
 					}
 				})
 				if ctx.Err() != nil {

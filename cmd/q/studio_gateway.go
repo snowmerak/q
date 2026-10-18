@@ -36,7 +36,7 @@ func runStudioGateway(ctx context.Context, directory string, stdout, stderr io.W
 			select {
 			case <-ctx.Done():
 				cancel()
-				<-done
+				runErr = <-done
 				break watch
 			case runErr = <-done:
 				waitForChange = true

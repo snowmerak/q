@@ -159,8 +159,8 @@ func TestCancelledBatchJoinsWorkersAndSkipsQueuedCalls(t *testing.T) {
 		<-cancelled
 	}
 	select {
-	case <-done:
-		t.Fatal("batch returned before active workers stopped")
+	case err := <-done:
+		t.Fatalf("batch returned before active workers stopped: %v", err)
 	default:
 	}
 	close(release)
