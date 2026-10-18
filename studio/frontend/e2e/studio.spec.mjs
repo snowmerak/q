@@ -313,6 +313,7 @@ test('nested delegation selection and deletion preserve the root and parent bran
   expect(await junior.evaluate((el) => el.style.getPropertyValue('--tree-depth'))).toBe('2');
   page.once('dialog', (dialog) => dialog.accept());
   const removed = page.waitForResponse((r) => r.request().method() === 'DELETE' && new URL(r.url()).pathname.endsWith('/delegations'));
+  await page.locator('.session-actions-menu > summary').click();
   await page.getByRole('button', { name: 'Delete completed delegation', exact: true }).click();
   const deletion = await removed;
   expect(deletion.ok()).toBe(true);
@@ -430,7 +431,7 @@ test('failed runs retain their reason and activity after completion and reload',
   await expect(failure).toContainText('Turn failed');
   await expect(failure).toContainText('The task is still active');
   await expect(composer).toHaveAttribute('placeholder', 'Ask Q to work in this repository…');
-  const activity = page.getByRole('complementary', { name: 'Current turn activity' });
+  const activity = page.locator('.transcript');
   await expect(activity).toContainText('task_start');
   await expect(activity).toContainText('fixture model failure: connection closed');
   await page.reload();
@@ -491,7 +492,7 @@ test('stopped runs retain the cancellation reason after reload', async ({ page, 
   await expect(stopped).toContainText('Turn stopped');
   await page.reload();
   await expect(stopped).toBeVisible();
-  await expect(page.getByRole('complementary', { name: 'Current turn activity' })).toContainText('Turn interrupted by user');
+  await expect(page.locator('.transcript')).toContainText('Turn interrupted by user');
 });
 
 test('switching sessions aborts polling and rejects an old run response', async ({ page, request }) => {
@@ -575,6 +576,7 @@ test('a delayed session detail cannot replace a newer selection', async ({ page,
     release();
     await oldResponse;
     // A subsequent round trip gives rendering and the old response handler time to finish.
+    await page.locator('.session-actions-menu > summary').click();
     await page.getByRole('button', { name: 'Configure session project' }).click();
     await expect(page.getByRole('dialog').locator('.auxiliary-list code')).toHaveText(fixture.project_other);
     await page.keyboard.press('Escape');
@@ -610,7 +612,7 @@ test('settings retain their save queue and selected section across navigation', 
   const previous = await checkbox.isChecked();
   const sections = page.getByRole('complementary', { name: 'Settings sections' });
   await sections.getByRole('button', { name: /^Models/ }).click();
-  await expect(page.getByRole('heading', { name: 'Model assignments' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Models', exact: true })).toBeVisible();
   await page.goBack();
   await expect(checkbox).toBeEnabled();
 
@@ -1003,7 +1005,7 @@ test('model settings scroll inside the content pane at desktop and narrow widths
     await page.setViewportSize({ width, height: 650 });
     await page.goto('/settings?section=models');
     const pane = page.locator('.settings-content');
-    await expect(pane.getByRole('heading', { name: 'Model assignments' })).toBeVisible();
+    await expect(pane.getByRole('heading', { name: 'Models', exact: true })).toBeVisible();
     await expect.poll(() => pane.evaluate((element) => element.scrollHeight > element.clientHeight)).toBe(true);
     await pane.hover();
     await page.mouse.wheel(0, 700);
@@ -1163,6 +1165,7 @@ test('global model editors preserve queued drafts across settings panels', async
   const selectedModel = await model.inputValue();
   await role.getByRole('combobox', { name: 'Model', exact: true }).selectOption(selectedModel);
   await expect(page.locator('.save-state')).toHaveText('Saved');
+  await page.getByRole('tab', { name: 'Fallback groups', exact: true }).click();
   await page.getByRole('textbox', { name: 'New group name', exact: true }).fill('ui-fallback');
   await page.getByRole('button', { name: 'Add group', exact: true }).click();
   const group = page.locator('.model-group-card').filter({ has: page.getByRole('heading', { name: 'ui-fallback', exact: true }) });
@@ -1194,11 +1197,14 @@ test('global model editors preserve queued drafts across settings panels', async
   expect(writes.map((item) => item.candidates[0].timeout)).toEqual(['45s', '90s']);
   await page.getByRole('complementary', { name: 'Settings sections' }).getByRole('button', { name: /^Models/ }).click();
   await expect(timeout).toHaveValue('1m30s');
+  await page.getByRole('tab', { name: 'Assignments', exact: true }).click();
   await expect(role.getByRole('combobox', { name: 'Model', exact: true })).toHaveValue(selectedModel);
+  await page.getByRole('tab', { name: 'Fallback groups', exact: true }).click();
   page.once('dialog', (dialog) => dialog.accept());
   await group.getByTitle('Delete model group', { exact: true }).click();
   await expect(group).toHaveCount(0);
   page.once('dialog', (dialog) => dialog.accept());
+  await page.getByRole('tab', { name: 'Assignments', exact: true }).click();
   await role.getByTitle('Delete custom role', { exact: true }).click();
   await expect(role).toHaveCount(0);
 });
@@ -1512,6 +1518,7 @@ test('session file links open the selected delegation worktree and project works
   await panel.getByRole('button', { name: 'Close file browser', exact: true }).click();
   await expect(panel).toHaveCount(0);
   await page.setViewportSize({ width: 1440, height: 900 });
-  await expect(page.getByRole('complementary', { name: 'Current turn activity' })).toBeVisible();
+  await expect(page.getByRole('complementary', { name: 'Current turn activity' })).toHaveCount(0);
+  await expect(page.locator('.transcript')).toBeVisible();
   await request.delete('/api/v1/projects/' + (await project.json()).id);
 });

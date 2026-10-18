@@ -1,37 +1,56 @@
 <script lang="ts">
   import { Bot, User, Wrench } from '@lucide/svelte';
   import Markdown from '../Markdown.svelte';
-  import { shortID, toolArguments } from './format';
-  import type { Message } from './types';
+  import { eventBody, eventTitle, shortID, toolArguments } from './format';
+  import { buildTimeline } from './timeline';
+  import type { Message, RunEvent } from './types';
+  import { afterUpdate, beforeUpdate } from 'svelte';
 
   export let messages: Message[] = [];
   export let thoughts: { before: number; content: string }[] = [];
-  export let thinkingDraft = '';
-  export let responseDraft = '';
+  export let events: RunEvent[] = [];
+  export let sessionKey = '';
   export let loading = false;
   export let onfile: ((path: string) => void) | undefined = undefined;
   let transcriptElement: HTMLElement | null = null;
+  let follow = true;
+  let previousSession = '';
   const tokenNumber = new Intl.NumberFormat();
+  $: entries = buildTimeline(messages, thoughts, events);
 
-  export function scrollToBottom() {
-    transcriptElement?.scrollTo({ top: transcriptElement.scrollHeight, behavior: 'smooth' });
+  function nearBottom() {
+    if (!transcriptElement) return true;
+    const distance = transcriptElement.scrollHeight - transcriptElement.clientHeight;
+    return distance <= 0 || transcriptElement.scrollTop / distance >= 0.95;
   }
+
+  beforeUpdate(() => { follow = sessionKey !== previousSession || nearBottom(); });
+  afterUpdate(() => {
+    previousSession = sessionKey;
+    if (follow) transcriptElement?.scrollTo({ top: transcriptElement.scrollHeight, behavior: 'instant' });
+  });
 </script>
 
 <div class="transcript" bind:this={transcriptElement} aria-live="polite">
-  {#each messages as message, messageIndex (`${messageIndex}-${message.role}-${message.tool_call_id || ''}`)}
-    {#each thoughts.filter((thought) => thought.before === messageIndex && thought.content) as thought}
-      <details class="thinking-block"><summary>Thinking</summary><Markdown compact content={thought.content} {onfile} /></details>
-    {/each}
+  {#each entries as entry, entryIndex (entryIndex)}
+    {#if entry.kind === 'thinking'}
+      <details class="thinking-block"><summary>Thinking</summary><Markdown compact content={entry.content} {onfile} /></details>
+    {:else if entry.kind === 'activity'}
+      <details class="transcript-activity" class:error-event={entry.event.is_error || ['error', 'cancelled', 'recovered'].includes(entry.event.type)}>
+        <summary><Wrench aria-hidden="true" size={14} /><span>{eventTitle(entry.event)}</span></summary>
+        {#if eventBody(entry.event)}<Markdown compact content={entry.event.type === 'trace' ? toolArguments(eventBody(entry.event)) : eventBody(entry.event)} {onfile} />{/if}
+      </details>
+    {:else}
+    {@const message = entry.message}
     {#if message.role === 'user' || message.role === 'assistant'}
-      <article class="chat-message" class:user-message={message.role === 'user'}>
+      <article class="chat-message" class:user-message={message.role === 'user'} class:streaming-message={entry.streaming}>
         <div class="message-avatar">{#if message.role === 'user'}<User aria-hidden="true" size={16} />{:else}<Bot aria-hidden="true" size={17} />{/if}</div>
-        <div class="message-content"><header>{message.role === 'user' ? 'You' : 'Q'}</header>{#if message.content}<Markdown content={message.content} {onfile} />{/if}
+        <div class="message-content"><header>{message.role === 'user' ? 'You' : 'Q'}{#if entry.streaming}<span>responding</span>{/if}</header>{#if message.content}<Markdown content={message.content} {onfile} />{/if}
           {#if message.tool_calls?.length}
             <div class="message-tools">
               {#each message.tool_calls as call, callIndex (`${callIndex}-${call.id || ''}`)}
                 <details class="tool-card">
-                  <summary><Wrench aria-hidden="true" size={14} /><span>{call.function?.name || 'Tool call'}</span><code>{call.id ? shortID(call.id) : 'pending'}</code></summary>
+                  <summary><Wrench aria-hidden="true" size={14} /><span>{call.function?.name || 'Tool call'}</span><small class="tool-kind">Call</small><code>{call.id ? shortID(call.id) : 'pending'}</code></summary>
                   {#if call.function?.arguments}<Markdown compact content={toolArguments(call.function.arguments)} {onfile} />{/if}
                 </details>
               {/each}
@@ -48,15 +67,11 @@
       </article>
     {:else if message.role === 'tool'}
       <details class="transcript-tool-result">
-        <summary><Wrench aria-hidden="true" size={14} /><span>{message.name || 'Tool result'}</span>{#if message.tool_call_id}<code>{shortID(message.tool_call_id)}</code>{/if}</summary>
+        <summary><Wrench aria-hidden="true" size={14} /><span>{message.name || 'Tool result'}</span><small class="tool-kind">Result</small>{#if message.tool_call_id}<code>{shortID(message.tool_call_id)}</code>{/if}</summary>
         <Markdown compact content={message.content || '_No output_'} {onfile} />
       </details>
     {/if}
+    {/if}
   {/each}
-  {#each thoughts.filter((thought) => thought.before >= messages.length && thought.content) as thought}
-    <details class="thinking-block"><summary>Thinking</summary><Markdown compact content={thought.content} {onfile} /></details>
-  {/each}
-  {#if thinkingDraft}<details class="thinking-block"><summary>Thinking</summary><Markdown compact content={thinkingDraft} {onfile} /></details>{/if}
-  {#if responseDraft}<article class="chat-message streaming-message"><div class="message-avatar"><Bot aria-hidden="true" size={17} /></div><div class="message-content"><header>Q <span>responding</span></header><Markdown content={responseDraft} {onfile} /></div></article>{/if}
   {#if loading}<div class="transcript-loading">Loading session…</div>{/if}
 </div>

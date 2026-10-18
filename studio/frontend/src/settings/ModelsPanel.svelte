@@ -1,5 +1,6 @@
 <script lang="ts">
   import { ChevronDown, ChevronUp, Plus, RefreshCw, Trash2 } from '@lucide/svelte';
+  import { onMount } from 'svelte';
   import WorkspaceModels from '../WorkspaceModels.svelte';
   import { roleLabel } from './format';
   import type { ModelGroup, ModelOption, RoleModelAssignment } from './types';
@@ -12,6 +13,43 @@
   export let active = false;
   export let settings: SettingsSnapshot;
   export let queueSave: QueueSave;
+
+  const tabs = [
+    { id: 'assignments', label: 'Assignments' },
+    { id: 'fallback', label: 'Fallback groups' },
+    { id: 'behavior', label: 'Model behavior' }
+  ];
+  let activeTab = tabFromLocation();
+
+  function tabFromLocation() {
+    const tab = new URL(window.location.href).searchParams.get('model_tab');
+    return tabs.some(candidate => candidate.id === tab) ? tab! : 'assignments';
+  }
+
+  function chooseTab(tab: string) {
+    activeTab = tab;
+    const url = new URL(window.location.href);
+    url.searchParams.set('model_tab', tab);
+    window.history.pushState({}, '', url.pathname + url.search);
+  }
+
+  function tabKeydown(event: KeyboardEvent, index: number) {
+    let next = index;
+    if (event.key === 'ArrowRight') next = (index + 1) % tabs.length;
+    else if (event.key === 'ArrowLeft') next = (index + tabs.length - 1) % tabs.length;
+    else if (event.key === 'Home') next = 0;
+    else if (event.key === 'End') next = tabs.length - 1;
+    else return;
+    event.preventDefault();
+    chooseTab(tabs[next].id);
+    document.getElementById(`model-tab-${tabs[next].id}`)?.focus();
+  }
+
+  onMount(() => {
+    const onPopState = () => activeTab = tabFromLocation();
+    window.addEventListener('popstate', onPopState);
+    return () => window.removeEventListener('popstate', onPopState);
+  });
 
   let embeddingModel = '';
   let embeddingDimensions = 0;
@@ -150,11 +188,17 @@
 
 <section class="settings-section">
   <div class="section-heading">
-    <div><p class="eyebrow">GLOBAL MODELS</p><h2>Model assignments</h2><p>Choose Gateway models for chat, embedding, and agent roles.</p></div>
+    <div><p class="eyebrow">GLOBAL MODELS</p><h2>Models</h2><p>Configure model assignments, fallback groups, and behavior.</p></div>
     <button class="icon-button" title="Refresh Gateway models" onclick={loadModels} disabled={modelsLoading}><RefreshCw aria-hidden="true" size={16} class={modelsLoading ? 'spin' : undefined} /></button>
   </div>
   <code class="config-path">{settings.models.config_path}</code>
   {#if modelsError}<p class="inline-warning">{modelsError}</p>{/if}
+  <div class="model-tabs" role="tablist" aria-label="Model settings">
+    {#each tabs as tab, index}
+      <button id={`model-tab-${tab.id}`} role="tab" aria-selected={activeTab === tab.id} aria-controls={`model-panel-${tab.id}`} tabindex={activeTab === tab.id ? 0 : -1} onclick={() => chooseTab(tab.id)} onkeydown={(event) => tabKeydown(event, index)}>{tab.label}</button>
+    {/each}
+  </div>
+  <div id="model-panel-assignments" role="tabpanel" aria-labelledby="model-tab-assignments" tabindex="0" hidden={activeTab !== 'assignments'}>
   <div class="settings-card assignment-list">
     <div class="assignment-row primary-assignment">
       <div><strong>Default</strong><small>Primary chat model and role fallback</small></div>
@@ -199,6 +243,8 @@
   <div class="subsection-heading"><div><h3>Custom roles</h3><p>Create a reusable model role for subagents.</p></div></div>
   <div class="settings-card inline-create"><label><span>Role name</span><input placeholder="security-reviewer" bind:value={newCustomRoleName} onkeydown={(event) => event.key === 'Enter' && addCustomRole()} /></label><button class="primary-button" onclick={addCustomRole} disabled={!newCustomRoleName.trim()}><Plus aria-hidden="true" size={15} /> Add role</button></div>
 
+  </div>
+  <div id="model-panel-fallback" role="tabpanel" aria-labelledby="model-tab-fallback" tabindex="0" hidden={activeTab !== 'fallback'}>
   <div class="subsection-heading"><div><h3>Fallback groups</h3><p>Try ordered candidates with optional reasoning and timeout overrides.</p></div></div>
   <div class="settings-card inline-create"><label><span>New group name</span><input placeholder="reliable-coding" bind:value={newModelGroupName} onkeydown={(event) => event.key === 'Enter' && addModelGroup()} /></label><button class="primary-button" onclick={addModelGroup} disabled={!newModelGroupName.trim() || !modelOptions.some((model) => !model.group)}><Plus aria-hidden="true" size={15} /> Add group</button></div>
   <div class="model-group-list">
@@ -220,10 +266,20 @@
     {/each}
   </div>
 
+  </div>
+  <div id="model-panel-behavior" role="tabpanel" aria-labelledby="model-tab-behavior" tabindex="0" hidden={activeTab !== 'behavior'}>
   <div class="subsection-heading"><div><h3>Model behavior</h3><p>Select an API mode and override provider context metadata.</p></div></div>
   <div class="settings-card model-behavior-list">
     {#each modelOptions.filter((model) => !model.group) as model}
       <div class="model-behavior-row"><div><strong>{model.id}</strong><small>{model.context_length ? `Discovered context ${model.context_length.toLocaleString()}` : 'No context metadata'}</small></div><label><span>API mode</span><select bind:value={model.api_mode} onchange={() => saveModelAPIMode(model)}><option value="chat_completions">Chat Completions</option><option value="responses">Responses</option></select></label><label><span>Context override</span><input type="number" min="0" placeholder="Provider metadata" bind:value={model.context_override} onchange={() => saveModelContextOverride(model)} /></label></div>
     {:else}<div class="api-key-empty">Refresh Gateway models to edit their behavior.</div>{/each}
   </div>
+  </div>
 </section>
+
+<style>
+  .model-tabs { display: flex; gap: 5px; overflow-x: auto; margin: 18px 0 24px; border-bottom: 1px solid var(--border); }
+  .model-tabs button { flex: none; padding: 12px 14px; color: var(--muted); border: 0; border-bottom: 2px solid transparent; background: transparent; cursor: pointer; font-size: calc(14px * var(--text-scale)); }
+  .model-tabs button[aria-selected="true"] { color: var(--accent-text); border-bottom-color: var(--violet); }
+  [role="tabpanel"][hidden] { display: none; }
+</style>

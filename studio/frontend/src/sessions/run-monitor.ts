@@ -4,7 +4,7 @@ import type { RunPage, RunSnapshot } from './types';
 export type RunTarget = { workspaceRoot: string; sessionID: string };
 
 type RunObserver = {
-  page: (page: RunPage) => void;
+  page: (page: RunPage) => void | Promise<void>;
   complete: () => Promise<void>;
   retry: (cause: unknown) => void;
 };
@@ -67,7 +67,7 @@ export class RunMonitor {
         if (!response.ok) throw new Error(await apiError(response));
         const page = (await response.json()) as RunPage;
         if (signal.aborted) return;
-        this.observer.page(page);
+        await this.observer.page(page);
         if (signal.aborted) return;
         const redirect = page.events.find((record) => record.event.type === 'redirect' && record.event.run_id);
         if (redirect) {

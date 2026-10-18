@@ -1,10 +1,9 @@
 <script lang="ts">
-  import { ArrowUp, Bot, BrainCircuit, ChevronDown, Eraser, Files, Folders, GitCompareArrows, Layers, Minimize2, Pause, Play, Plus, Square, Trash2 } from '@lucide/svelte';
-  import { onMount, tick } from 'svelte';
+  import { ArrowUp, Bot, BrainCircuit, ChevronDown, Ellipsis, Eraser, Files, Folders, GitCompareArrows, Layers, Minimize2, Pause, Play, Plus, Square, Trash2 } from '@lucide/svelte';
+  import { onMount } from 'svelte';
   import SessionTree from './sessions/SessionTree.svelte';
-  import { flattenDelegations } from './sessions/tree';
   import Transcript from './sessions/Transcript.svelte';
-  import RunActivity from './sessions/RunActivity.svelte';
+  import { loadDraft, saveDraft } from './sessions/drafts';
   import ProjectDialog from './sessions/ProjectDialog.svelte';
   import SessionRegistration from './sessions/SessionRegistration.svelte';
   import FileExplorer from './files/FileExplorer.svelte';
@@ -26,23 +25,22 @@
   let selected: SessionDetail | null = null;
   let messages: Message[] = [];
   let prompt = '';
+  let draftKey = '';
+  let actionsMenu: HTMLDetailsElement | undefined;
+
   let workspaceLoading = false;
   let sessionLoading = false;
   let sending = false;
   let error = '';
   let runStatus = '';
   let events: RunEvent[] = [];
-  let responseDraft = '';
-  let thinkingDraft = '';
   let activeRun: RunSnapshot | null = null;
   $: runError = activeRun && ['failed', 'cancelled', 'interrupted'].includes(activeRun.status)
     ? activeRun.error || (activeRun.status === 'failed' ? 'The turn failed without an error detail.' : 'The turn stopped before completion.')
     : '';
   let sessionGeneration = 0;
   let questionAnswer = '';
-  let delegations: FlatDelegation[] = [];
   let delegationRefresh: ReturnType<typeof setTimeout> | null = null;
-  let transcript: Transcript | null = null;
   let learningEnabled = true;
   let learningLoading = false;
   let registrationDialogOpen = false;
@@ -65,6 +63,22 @@
     lastFileContext = fileContext;
     openedFilePath = ''; openedFileLine = 1; openedFileRoot = '';
   }
+  function switchDraft(key: string) {
+    saveDraft(draftKey, prompt);
+    draftKey = key;
+    prompt = key ? loadDraft(key) : '';
+    closeActions();
+  }
+
+  function clearPrompt() {
+    prompt = '';
+    saveDraft(draftKey, '');
+  }
+
+  function closeActions() {
+    if (actionsMenu) actionsMenu.open = false;
+  }
+
   function openFileLink(value: string) {
     const target = resolveFileLink(value, fileRoots);
     if (!target) { error = 'The linked file is outside the available session workspaces.'; return; }
@@ -77,24 +91,20 @@
   }
 
   const runMonitor = new RunMonitor({
-    page: (page) => {
+    page: async (page) => {
       activeRun = page.run;
+      events = [...events, ...page.events.map(record => record.event)];
       for (const record of page.events) {
         handleRunEvent(record.event);
         if (record.event.type === 'redirect' && record.event.run_id) {
           activeRun = null;
           events = [];
-          responseDraft = '';
-          thinkingDraft = '';
+          await reloadSelected();
           return;
         }
       }
       sending = !terminalRun(page.run.status);
       runStatus = runStatusLabel(page.run);
-      if (!sending) {
-        responseDraft = '';
-        thinkingDraft = '';
-      }
     },
     complete: async () => {
       await Promise.all([reloadSelected(), refreshSessionListOnly(), loadDelegations()]);
@@ -198,10 +208,7 @@
       runMonitor.stop();
       messages = selected.transcript;
       events = [];
-      responseDraft = '';
-      thinkingDraft = '';
       activeRun = null;
-      delegations = [];
       runStatus = 'Conversation cleared';
       await refreshSessionListOnly();
     } catch (cause) {
@@ -222,6 +229,7 @@
         body: JSON.stringify({ workspace_root: workspaceRoot })
       });
       runStatus = ((await response.json()) as { status?: string }).status || 'Context compacted';
+      events = [];
       await reloadSelected();
     } catch (cause) {
       error = cause instanceof Error ? cause.message : 'Could not compact the context';
@@ -232,9 +240,9 @@
   }
 
   function clearSelectedSession() {
+    switchDraft('');
     sessionGeneration += 1;
     runMonitor.stop();
-    stopDelegationMonitor();
     stopDelegationMonitor();
     selectedRegistration = null;
     selectedDelegation = null;
@@ -246,7 +254,6 @@
     events = [];
     activeRun = null;
     sending = false;
-    delegations = [];
   }
 
   async function loadRegisteredSessions(preferredRegistration = '') {
@@ -331,7 +338,6 @@
       if (selectedRegistration) await selectRegisteredSession(selectedRegistration, false);
       runStatus = 'Completed delegation deleted';
       await loadDelegations(selected.session.session_id);
-      await scrollToBottom();
     } catch (cause) {
       error = cause instanceof Error ? cause.message : 'Could not delete the delegation';
     } finally {
@@ -373,6 +379,7 @@
   }
 
   async function selectRegisteredSession(registration: RegisteredSessionTree, push = true) {
+    switchDraft(registration.registration_id);
     const generation = ++sessionGeneration;
     runMonitor.stop();
     stopDelegationMonitor();
@@ -392,13 +399,10 @@
       messages = selected.transcript;
       events = [];
       runStatus = '';
-      responseDraft = '';
-      thinkingDraft = '';
       activeRun = null;
       questionAnswer = '';
       if (push) window.history.pushState({}, '', `/sessions/${encodeURIComponent(registration.registration_id)}`);
       await Promise.all([loadLearning(), reconnectLatestRun(sessionID), loadDelegations(sessionID)]);
-      await scrollToBottom();
     } catch (cause) {
       if (isCurrentSession(generation)) error = cause instanceof Error ? cause.message : 'Could not load the session';
     } finally {
@@ -413,6 +417,7 @@
 
   function selectDelegatedSession(registration: RegisteredSessionTree, node: FlatDelegation) {
     if (selectedRegistration?.registration_id !== registration.registration_id) return;
+    switchDraft(`${registration.registration_id}/${node.path}`);
     const generation = ++sessionGeneration;
     runMonitor.stop();
     stopDelegationMonitor();
@@ -420,19 +425,15 @@
     sending = false;
     sessionLoading = true;
     error = '';
-    prompt = '';
     questionAnswer = '';
     delegationKind = '';
     selectedDelegation = node;
     messages = node.transcript || [];
     events = [];
-    responseDraft = '';
-    thinkingDraft = '';
     runStatus = node.state?.status || 'Recorded';
     const controller = new AbortController();
     delegationPoll = controller;
     void monitorDelegation(registration, node.path, generation, controller.signal);
-    void scrollToBottom();
   }
 
   function applyDelegationSession(value: DelegationSession) {
@@ -488,7 +489,7 @@
         const value = await response.json() as DelegationSession;
         if (!isCurrentSession(generation)) return;
         applyDelegationSession(value);
-        prompt = '';
+        clearPrompt();
       } catch (cause) {
         if (isCurrentSession(generation)) error = cause instanceof Error ? cause.message : 'Could not continue this subagent';
       } finally {
@@ -501,22 +502,19 @@
       try { await commandRun('guidance', { content }); }
       finally { if (isCurrentSession(generation)) sessionLoading = false; }
       if (isCurrentSession(generation) && !error) {
-        prompt = '';
+        clearPrompt();
         runStatus = selectedDelegation ? 'Guidance sent' : 'Guidance queued…';
       }
       return;
     }
     const target = { workspaceRoot, sessionID: selected.session.session_id };
-    prompt = '';
+    clearPrompt();
     sending = true;
     error = '';
     runStatus = 'Starting default loop…';
     activeRun = null;
     events = [];
-    responseDraft = '';
-    thinkingDraft = '';
     messages = [...messages, { role: 'user', content }];
-    await scrollToBottom();
     try {
       const response = await requestResponse(`/api/v1/sessions/${encodeURIComponent(selected.session.session_id)}/messages`, {
         method: 'POST', headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
@@ -530,10 +528,10 @@
       if (!isCurrentSession(generation)) return;
       error = cause instanceof Error ? cause.message : 'The turn failed';
       runStatus = 'Turn failed';
+      if (!prompt) { prompt = content; saveDraft(draftKey, content); }
       await reloadSelected();
       if (!isCurrentSession(generation)) return;
       sending = false;
-      await scrollToBottom();
     }
   }
 
@@ -554,29 +552,20 @@
   }
 
   function handleRunEvent(event: RunEvent) {
-    if (event.type === 'stream') {
-      if (event.kind === 'thinking') thinkingDraft = (event.start ? '' : thinkingDraft) + (event.content || '');
-      if (event.kind === 'response') responseDraft = (event.start ? '' : responseDraft) + (event.content || '');
-    } else if (event.type === 'status') {
+    if (event.type === 'status') {
       runStatus = event.detail || 'Working…';
     } else if (event.type === 'activity') {
-      events = [...events, event];
       runStatus = [event.agent, event.action, event.detail].filter(Boolean).join(' · ');
       scheduleDelegationRefresh();
     } else if (event.type === 'tool_call' || event.type === 'trace' || event.type === 'question') {
-      events = [...events, event];
       if (event.type === 'tool_call') runStatus = `Running ${event.name || 'tool'}…`;
       if (event.type === 'question') runStatus = 'Waiting for your answer';
       if (event.type === 'trace') scheduleDelegationRefresh();
-    } else if (event.type === 'message' && event.role === 'tool') {
-      events = [...events, event];
     } else if (event.type === 'result') {
       runStatus = event.outcome === 'succeeded' ? 'Completed' : event.outcome || 'Completed';
     } else if (event.type === 'error' || event.type === 'cancelled' || event.type === 'recovered') {
-      events = [...events, event];
       runStatus = event.type === 'error' ? 'Turn failed' : 'Turn stopped';
     }
-    void scrollToBottom();
   }
 
   async function reloadSelected() {
@@ -598,7 +587,6 @@
     if (!response.ok) return;
     const result = (await response.json()) as { nodes: DelegationNode[] };
     if (!isCurrentSession(generation)) return;
-    delegations = flattenDelegations(result.nodes);
     if (selectedRegistration) {
       const updated = { ...selectedRegistration, delegations: result.nodes };
       selectedRegistration = updated;
@@ -675,11 +663,6 @@
     }
   }
 
-  async function scrollToBottom() {
-    await tick();
-    transcript?.scrollToBottom();
-  }
-
   onMount(() => {
     let disposed = false;
     const action = new URLSearchParams(window.location.search).get('new');
@@ -703,6 +686,7 @@
     };
     window.addEventListener('popstate', onPopState);
     return () => {
+      saveDraft(draftKey, prompt);
       disposed = true;
       sessionGeneration += 1;
       runMonitor.stop();
@@ -712,6 +696,8 @@
     };
   });
 </script>
+
+<svelte:window onclick={(event) => { if (actionsMenu && !actionsMenu.contains(event.target as Node)) closeActions(); }} onkeydown={(event) => { if (event.key === 'Escape' && actionsMenu?.open) { closeActions(); actionsMenu.querySelector('summary')?.focus(); } }} />
 
 <div class="sessions-layout" class:files-open={filesOpen && !!selected} class:session-list-open={sessionListOpen}>
   <button class="mobile-session-toggle" aria-label={sessionListOpen ? 'Hide sessions' : 'Show sessions'} aria-expanded={sessionListOpen} aria-controls="session-tree" onclick={() => sessionListOpen = !sessionListOpen}><Layers aria-hidden="true" size={17} /><span>Sessions<small>{selected?.session.title || 'Browse chats and workspaces'}</small></span><ChevronDown aria-hidden="true" size={17} /></button>
@@ -740,15 +726,21 @@
           <span class:running={sending}>{runStatus || (sending ? 'Running' : 'Ready')}</span>
           <button title="Browse session files" aria-label="Browse session files" aria-pressed={filesOpen} onclick={() => filesOpen = !filesOpen} disabled={!fileWorkspace}><Files aria-hidden="true" size={15} /></button>
           {#if selectedRegistration?.kind !== 'chat' || selectedDelegation}<button title="Open repository changes" aria-label="Open repository changes" onclick={() => openChanges(fileWorkspace)} disabled={!fileWorkspace}><GitCompareArrows aria-hidden="true" size={15} /></button>{/if}
-          {#if selectedDelegation?.state?.status === 'completed' && (!selectedDelegation.state.change_request || ['merged', 'closed'].includes(selectedDelegation.state.change_request.status))}
-            <button title="Delete completed delegation" aria-label="Delete completed delegation" onclick={deleteDelegation} disabled={sending || sessionLoading}><Trash2 aria-hidden="true" size={14} /></button>
-          {/if}
-          {#if !selectedDelegation}
-            {#if selectedRegistration?.kind !== 'chat'}<button title={selectedRegistration?.project_id ? 'Edit session project' : 'Create project from this workspace'} aria-label="Configure session project" onclick={() => openProjectDialog()} disabled={sending || sessionLoading}><Folders aria-hidden="true" size={15} /></button>{/if}
-            <button class:enabled={learningEnabled} title={`Learning ${learningEnabled ? 'enabled' : 'disabled'}`} aria-label={`Turn learning ${learningEnabled ? 'off' : 'on'}`} onclick={toggleLearning} disabled={sending || learningLoading}><BrainCircuit aria-hidden="true" size={15} /></button>
-            <button title="Compact context" aria-label="Compact context" onclick={compactSession} disabled={sending || sessionLoading}><Minimize2 aria-hidden="true" size={15} /></button>
-            <button title="Clear conversation" aria-label="Clear conversation" onclick={clearSession} disabled={sending || sessionLoading}><Eraser aria-hidden="true" size={15} /></button>
-            <button title={selectedRegistration?.kind === 'chat' ? 'Delete chat' : 'Delete workspace session'} aria-label={selectedRegistration?.kind === 'chat' ? 'Delete chat' : 'Delete workspace session'} onclick={deleteSession} disabled={sending || sessionLoading}><Trash2 aria-hidden="true" size={14} /></button>
+          {#if !selectedDelegation || (selectedDelegation.state?.status === 'completed' && (!selectedDelegation.state.change_request || ['merged', 'closed'].includes(selectedDelegation.state.change_request.status)))}
+            <details class="session-actions-menu" bind:this={actionsMenu}>
+              <summary aria-label="More session actions" title="More session actions"><Ellipsis aria-hidden="true" size={18} /></summary>
+              <div class="session-actions-items">
+                {#if selectedDelegation}
+                  <button onclick={() => { closeActions(); void deleteDelegation(); }} disabled={sending || sessionLoading}><Trash2 aria-hidden="true" size={15} />Delete completed delegation</button>
+                {:else}
+                  {#if selectedRegistration?.kind !== 'chat'}<button aria-label="Configure session project" onclick={() => { closeActions(); openProjectDialog(); }} disabled={sending || sessionLoading}><Folders aria-hidden="true" size={15} />Configure project</button>{/if}
+                  <button class:enabled={learningEnabled} aria-label={`Turn learning ${learningEnabled ? 'off' : 'on'}`} onclick={() => { closeActions(); void toggleLearning(); }} disabled={sending || learningLoading}><BrainCircuit aria-hidden="true" size={15} />Learning {learningEnabled ? 'enabled' : 'disabled'}</button>
+                  <button onclick={() => { closeActions(); void compactSession(); }} disabled={sending || sessionLoading}><Minimize2 aria-hidden="true" size={15} />Compact context</button>
+                  <button onclick={() => { closeActions(); void clearSession(); }} disabled={sending || sessionLoading}><Eraser aria-hidden="true" size={15} />Clear conversation</button>
+                  <button class="danger-action" onclick={() => { closeActions(); void deleteSession(); }} disabled={sending || sessionLoading}><Trash2 aria-hidden="true" size={15} />{selectedRegistration?.kind === 'chat' ? 'Delete chat' : 'Delete workspace session'}</button>
+                {/if}
+              </div>
+            </details>
           {/if}
           {#if !selectedDelegation || delegationKind === 'inner'}
             {#if sending && activeRun?.status === 'paused'}<button title="Resume turn" aria-label="Resume turn" onclick={() => commandRun('resume')}><Play aria-hidden="true" size={15} /></button>{:else if sending}<button title="Pause turn" aria-label="Pause turn" onclick={() => commandRun('pause')}><Pause aria-hidden="true" size={15} /></button>{/if}
@@ -763,7 +755,7 @@
           {#if selected.active_task}<small>The task is still active. Send a message to continue.</small>{/if}
         </div>
       {/if}
-      <Transcript bind:this={transcript} {messages} thoughts={selectedDelegation ? [] : selected?.transcript_thoughts || []} {thinkingDraft} {responseDraft} loading={sessionLoading} onfile={openFileLink} />
+      <Transcript {messages} thoughts={selectedDelegation ? [] : selected?.transcript_thoughts || []} events={selectedDelegation ? [] : events} sessionKey={fileContext} loading={sessionLoading} onfile={openFileLink} />
       {#if !selectedDelegation && activeRun?.pending_question}
         <section class="run-question" aria-labelledby="run-question-title">
           <div><span>Q NEEDS INPUT</span><h3 id="run-question-title">{activeRun.pending_question.question}</h3>{#if activeRun.pending_question.context}<p>{activeRun.pending_question.context}</p>{/if}</div>
@@ -781,7 +773,7 @@
       {:else}
         <div class="composer-wrap">
           <div class="composer">
-            <textarea bind:value={prompt} aria-label="Message Q" onkeydown={submitFromKeyboard} placeholder={sending ? 'Guide the current turn…' : selectedRegistration?.kind === 'chat' ? 'Message Q…' : 'Ask Q to work in this repository…'} rows="3" disabled={sessionLoading}></textarea>
+            <textarea bind:value={prompt} oninput={(event) => saveDraft(draftKey, event.currentTarget.value)} aria-label="Message Q" onkeydown={submitFromKeyboard} placeholder={sending ? 'Guide the current turn…' : selectedRegistration?.kind === 'chat' ? 'Message Q…' : 'Ask Q to work in this repository…'} rows="3" disabled={sessionLoading}></textarea>
             <button class="send-button" title={sending ? 'Guide current turn' : 'Send message'} onclick={sendPrompt} disabled={sessionLoading || !prompt.trim()}><ArrowUp aria-hidden="true" size={17} /></button>
           </div>
           <p>{sending ? 'Enter to redirect the current work with guidance' : 'Enter to send'} · Shift+Enter for a new line · {selectedRegistration?.kind === 'chat' ? 'Personal chat' : workspaceRoot}</p>
@@ -794,7 +786,7 @@
 
   {#if filesOpen && selected}
     <aside class="session-file-panel" aria-label="Session file browser">{#key fileContext}<FileExplorer bind:this={fileExplorer} initialRoot={openedFileRoot || fileWorkspace} initialPath={openedFilePath} initialLine={openedFileLine} roots={fileRoots} compact onclose={() => filesOpen = false} />{/key}</aside>
-  {:else}<RunActivity activeTask={selected?.active_task} {delegations} {events} />{/if}
+  {/if}
 </div>
 
 {#if registrationDialogOpen}
