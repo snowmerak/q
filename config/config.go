@@ -138,7 +138,7 @@ type AgentsConfig struct {
 }
 
 // AgentConnectionConfig describes one ACP agent process. Preset supplies the
-// built-in Codex or Grok command; Command and Args support another stdio ACP
+// built-in Codex, Claude, or Grok command; Command and Args support another stdio ACP
 // implementation instead.
 type AgentConnectionConfig struct {
 	Preset     string            `yaml:"preset,omitempty" json:"preset,omitempty"`
@@ -371,7 +371,7 @@ func (c Config) Validate() error {
 		if connection.Preset == "" && connection.Command == "" {
 			return fmt.Errorf("config: agent connection %q requires preset or command", id)
 		}
-		if connection.Preset != "" && connection.Preset != "codex" && connection.Preset != "grok" {
+		if connection.Preset != "" && connection.Preset != "codex" && connection.Preset != "claude" && connection.Preset != "grok" {
 			return fmt.Errorf("config: agent connection %q uses unsupported preset %q", id, connection.Preset)
 		}
 		for index, argument := range connection.Args {

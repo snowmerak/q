@@ -469,6 +469,12 @@ its ACP binding; its built-in system prompt remains fixed. Press `c` to register
 enable, disable, or delete shared ACP connections. For custom entries, `a` adds, `e` edits,
 and `d` deletes the selected profile after confirmation. Each list row summarizes
 its model role, scope, tool state, and delegation grants.
+ACP connection presets include `codex`, `claude`, and `grok`. The `claude` preset uses
+[`claude-agent-acp`](https://github.com/agentclientprotocol/claude-agent-acp), preferring
+an installed executable and otherwise running `npx -y @agentclientprotocol/claude-agent-acp`.
+Install it globally with `npm install -g @agentclientprotocol/claude-agent-acp`, or use
+a custom command for another ACP implementation. Connection arguments and child
+environment variables apply to presets as well.
 In an editor, Tab or Up/Down selects fields, Enter advances from name and
 description or opens a scope/kind/role/ACP/tool/delegate picker, Ctrl+S saves, and Esc cancels.
 Inside the multiline prompt, Enter inserts a newline and arrows move the cursor;

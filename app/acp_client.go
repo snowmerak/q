@@ -108,6 +108,18 @@ func resolveACPAgentCommand(agent string, lookPath func(string) (string, error))
 			name: name, args: []string{"-y", "@agentclientprotocol/codex-acp"}, display: "Codex",
 			installTip: "npm install -g @agentclientprotocol/codex-acp",
 		}, nil
+	case "claude":
+		if name, err := lookPath("claude-agent-acp"); err == nil {
+			return acpAgentCommand{name: name, display: "Claude"}, nil
+		}
+		name, err := lookPath("npx")
+		if err != nil {
+			return acpAgentCommand{}, errors.New("claude ACP requires claude-agent-acp or npx; install @agentclientprotocol/claude-agent-acp")
+		}
+		return acpAgentCommand{
+			name: name, args: []string{"-y", "@agentclientprotocol/claude-agent-acp"}, display: "Claude",
+			installTip: "npm install -g @agentclientprotocol/claude-agent-acp",
+		}, nil
 	case "grok":
 		name, err := lookPath("grok")
 		if err != nil {
@@ -115,7 +127,7 @@ func resolveACPAgentCommand(agent string, lookPath func(string) (string, error))
 		}
 		return acpAgentCommand{name: name, args: []string{"agent", "stdio"}, display: "Grok"}, nil
 	default:
-		return acpAgentCommand{}, fmt.Errorf("unsupported ACP agent %q; use codex or grok", agent)
+		return acpAgentCommand{}, fmt.Errorf("unsupported ACP agent %q; use codex, claude, or grok", agent)
 	}
 }
 

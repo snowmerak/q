@@ -95,11 +95,11 @@ func TestConfiguredExternalWebTesterRequiresEnabledAssignment(t *testing.T) {
 
 func TestExternalWebTesterACPIntegration(t *testing.T) {
 	if strings.TrimSpace(os.Getenv("Q_TEST_ACP_WEB_TESTER")) == "" {
-		t.Skip("set Q_TEST_ACP_WEB_TESTER=1 and Q_TEST_ACP_PRESET=codex or grok to run a real external Web Tester turn")
+		t.Skip("set Q_TEST_ACP_WEB_TESTER=1 and Q_TEST_ACP_PRESET=codex, claude, or grok to run a real external Web Tester turn")
 	}
 	preset := strings.TrimSpace(os.Getenv("Q_TEST_ACP_PRESET"))
 	if preset == "" {
-		t.Fatal("Q_TEST_ACP_PRESET must be codex or grok")
+		t.Fatal("Q_TEST_ACP_PRESET must be codex, claude, or grok")
 	}
 	root := t.TempDir()
 	runtime, err := qtools.NewRuntime(t.Context(), root)

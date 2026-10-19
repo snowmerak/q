@@ -510,7 +510,7 @@ func newManagedModel(ctx context.Context, store config.Store, factory clientFact
 		field.CharLimit = 4096
 		m.mcpInputs[index] = field
 	}
-	agentsPlaceholders := []string{"connection ID", "codex or grok", "custom ACP command", `arguments as JSON, e.g. ["agent","stdio"]`, `environment as JSON, e.g. {"TOKEN":"value"}`, "authentication method ID"}
+	agentsPlaceholders := []string{"connection ID", "codex, claude, or grok", "custom ACP command", `arguments as JSON, e.g. ["agent","stdio"]`, `environment as JSON, e.g. {"TOKEN":"value"}`, "authentication method ID"}
 	for index := range m.agentsInputs {
 		field := textinput.New()
 		field.Prompt = ""

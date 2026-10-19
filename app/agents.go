@@ -229,7 +229,7 @@ func (m model) saveAgentsSettings() (tea.Model, tea.Cmd) {
 }
 
 func (m model) viewACPConnectionForm() string {
-	labels := []string{"Connection ID", "Preset (codex/grok; empty for custom)", "Custom command", "Arguments (JSON array)", "Child environment (JSON object)", "ACP auth method (optional)"}
+	labels := []string{"Connection ID", "Preset (codex/claude/grok; empty for custom)", "Custom command", "Arguments (JSON array)", "Child environment (JSON object)", "ACP auth method (optional)"}
 	var body strings.Builder
 	body.WriteString(agentTraceTitleStyle(m.dark).Render("ACP AGENT CONNECTION"))
 	body.WriteString("\n")

@@ -270,7 +270,7 @@ func TestIntegrationAPISubagentsSupportsGlobalProfilesWithoutWorkspace(t *testin
 		}
 	}
 	connections := agentConnectionsUpdate{
-		Connections: map[string]config.AgentConnectionConfig{"studio-search": {Preset: "codex", Env: map[string]string{"SEARCH_TOKEN": "secret"}}},
+		Connections: map[string]config.AgentConnectionConfig{"studio-search": {Preset: "claude", Env: map[string]string{"SEARCH_TOKEN": "secret"}}},
 		Bindings:    map[string]string{config.AgentRoleSearch: "studio-search"},
 	}
 	response = serveJSON(t, handler, http.MethodPut, "/api/v1/settings/subagents", connections)
@@ -280,6 +280,10 @@ func TestIntegrationAPISubagentsSupportsGlobalProfilesWithoutWorkspace(t *testin
 	var connected agentSettingsResponse
 	if err := json.Unmarshal(response.Body.Bytes(), &connected); err != nil {
 		t.Fatal(err)
+	}
+	stored, err := store.Load()
+	if err != nil || stored.Agents.Connections["studio-search"].Preset != "claude" || connected.Connections["studio-search"].Preset != "claude" {
+		t.Fatalf("Claude connection was not persisted: config=%#v response=%#v err=%v", stored.Agents.Connections, connected.Connections, err)
 	}
 	searchAvailable := false
 	for _, definition := range connected.Builtins {

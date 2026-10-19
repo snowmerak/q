@@ -327,7 +327,7 @@ func TestValidateAgentConnectionsAndSearchRole(t *testing.T) {
 		want        string
 	}{
 		{name: "invalid id", connections: map[string]AgentConnectionConfig{"bad id": {Preset: "codex"}}, want: "connection ID"},
-		{name: "unknown preset", connections: map[string]AgentConnectionConfig{"other": {Preset: "claude"}}, want: "unsupported preset"},
+		{name: "unknown preset", connections: map[string]AgentConnectionConfig{"other": {Preset: "unknown"}}, want: "unsupported preset"},
 		{name: "missing command", connections: map[string]AgentConnectionConfig{"other": {}}, want: "requires preset or command"},
 		{name: "mixed command", connections: map[string]AgentConnectionConfig{"other": {Preset: "codex", Command: "agent"}}, want: "mutually exclusive"},
 		{name: "auth whitespace", connections: map[string]AgentConnectionConfig{"codex": {Preset: "codex", AuthMethod: " login "}}, want: "auth_method"},
@@ -351,6 +351,7 @@ func TestValidateAgentConnectionsAndSearchRole(t *testing.T) {
 	value.Provider.Model = "active-model"
 	value.Agents.Connections = map[string]AgentConnectionConfig{
 		"codex-main":  {Preset: "codex"},
+		"claude-main": {Preset: "claude"},
 		"grok.backup": {Preset: "grok"},
 	}
 	value.Agents.Roles = map[string]AgentConfig{AgentRoleSearch: {Agent: "codex-main"}}

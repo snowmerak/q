@@ -154,7 +154,7 @@ func TestExternalWebTesterToolIsExposedOnlyToConfiguredDefaultParent(t *testing.
 func TestACPConnectionProbeIntegration(t *testing.T) {
 	preset := strings.TrimSpace(os.Getenv("Q_TEST_ACP_PRESET"))
 	if preset == "" {
-		t.Skip("set Q_TEST_ACP_PRESET=codex or grok to probe an installed ACP agent")
+		t.Skip("set Q_TEST_ACP_PRESET=codex, claude, or grok to probe an installed ACP agent")
 	}
 	ctx, cancel := context.WithTimeout(t.Context(), 90*time.Second)
 	defer cancel()
@@ -165,11 +165,11 @@ func TestACPConnectionProbeIntegration(t *testing.T) {
 
 func TestACPAgentExplicitSearchIntegration(t *testing.T) {
 	if strings.TrimSpace(os.Getenv("Q_TEST_ACP_SEARCH")) == "" {
-		t.Skip("set Q_TEST_ACP_SEARCH=1 and Q_TEST_ACP_PRESET=codex or grok to run a real builtin/web-search subagent turn")
+		t.Skip("set Q_TEST_ACP_SEARCH=1 and Q_TEST_ACP_PRESET=codex, claude, or grok to run a real builtin/web-search subagent turn")
 	}
 	preset := strings.TrimSpace(os.Getenv("Q_TEST_ACP_PRESET"))
 	if preset == "" {
-		t.Fatal("Q_TEST_ACP_PRESET must be codex or grok")
+		t.Fatal("Q_TEST_ACP_PRESET must be codex, claude, or grok")
 	}
 	parentClient := &fakeClient{}
 	agent, workspaceStore, connection := testACPAgent(t, parentClient, &fakeAgentTools{})

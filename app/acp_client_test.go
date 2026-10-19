@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/snowmerak/q/client"
+	"github.com/snowmerak/q/config"
 	"github.com/snowmerak/q/third_party/acp-go-sdk"
 )
 
@@ -74,6 +75,41 @@ func TestResolveACPAgentCommand(t *testing.T) {
 	}
 	if _, err := resolveACPAgentCommand("unknown", lookPath); err == nil {
 		t.Fatal("unknown ACP agent was accepted")
+	}
+}
+
+func TestResolveClaudeACPAgentCommand(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		paths map[string]string
+		want  string
+		args  []string
+	}{
+		{name: "installed", paths: map[string]string{"claude-agent-acp": "C:/bin/claude-agent-acp.cmd", "npx": "C:/bin/npx.cmd"}, want: "C:/bin/claude-agent-acp.cmd"},
+		{name: "npx fallback", paths: map[string]string{"npx": "C:/bin/npx.cmd"}, want: "C:/bin/npx.cmd", args: []string{"-y", "@agentclientprotocol/claude-agent-acp"}},
+		{name: "missing executable"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			lookPath := func(name string) (string, error) {
+				if path, ok := test.paths[name]; ok {
+					return path, nil
+				}
+				return "", errors.New("missing")
+			}
+			command, err := resolveConfiguredACPAgentCommand(config.AgentConnectionConfig{
+				Preset: "claude", Args: []string{"--custom-argument"}, Env: map[string]string{"CUSTOM_ENV": "value"},
+			}, lookPath)
+			if test.want == "" {
+				if err == nil || !strings.Contains(err.Error(), "install @agentclientprotocol/claude-agent-acp") {
+					t.Fatalf("missing executable error = %v", err)
+				}
+				return
+			}
+			if err != nil || command.name != test.want || command.display != "Claude" ||
+				!slices.Equal(command.args, append(test.args, "--custom-argument")) || command.env["CUSTOM_ENV"] != "value" {
+				t.Fatalf("Claude command = %#v, %v", command, err)
+			}
+		})
 	}
 }
 
