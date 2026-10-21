@@ -3,6 +3,7 @@ package studio
 import (
 	"time"
 
+	"github.com/snowmerak/q/config"
 	"github.com/snowmerak/q/loom"
 )
 
@@ -228,14 +229,20 @@ type systemOneModelOption struct {
 }
 
 type modelOption struct {
-	ID               string   `json:"id"`
-	ContextLength    int64    `json:"context_length,omitempty"`
-	ReasoningControl string   `json:"reasoning_control,omitempty"`
-	ReasoningEfforts []string `json:"reasoning_efforts,omitempty"`
-	DefaultEffort    string   `json:"default_effort,omitempty"`
-	Group            bool     `json:"group,omitempty"`
-	APIMode          string   `json:"api_mode,omitempty"`
-	ContextOverride  int64    `json:"context_override,omitempty"`
+	ID               string                `json:"id"`
+	ContextLength    int64                 `json:"context_length,omitempty"`
+	ReasoningControl string                `json:"reasoning_control,omitempty"`
+	ReasoningEfforts []string              `json:"reasoning_efforts,omitempty"`
+	DefaultEffort    string                `json:"default_effort,omitempty"`
+	Group            bool                  `json:"group,omitempty"`
+	APIMode          string                `json:"api_mode,omitempty"`
+	ContextOverride  int64                 `json:"context_override,omitempty"`
+	Sampling         config.SamplingConfig `json:"sampling"`
+}
+
+type modelSamplingUpdate struct {
+	Model    string                `json:"model"`
+	Sampling config.SamplingConfig `json:"sampling"`
 }
 
 type modelGroupUpdate struct {

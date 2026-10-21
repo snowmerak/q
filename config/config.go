@@ -57,6 +57,7 @@ type Config struct {
 	Plan          PlanConfig                  `yaml:"plan,omitempty"`
 	ModelGroups   map[string]ModelGroupConfig `yaml:"model_groups,omitempty"`
 	ModelAPIModes map[string]string           `yaml:"model_api_modes,omitempty"`
+	ModelSampling map[string]SamplingConfig   `yaml:"model_sampling,omitempty"`
 	Agents        AgentsConfig                `yaml:"agents,omitempty"`
 	Loom          LoomConfig                  `yaml:"loom,omitempty"`
 	LSP           lsp.GlobalConfig            `yaml:"lsp,omitempty"`
@@ -280,6 +281,14 @@ func (c Config) Validate() error {
 		}
 		if mode != "chat_completions" && mode != "responses" {
 			return fmt.Errorf("config: model_api_modes[%q] must be chat_completions or responses", model)
+		}
+	}
+	for model, sampling := range c.ModelSampling {
+		if model == "" || model != strings.TrimSpace(model) || strings.HasPrefix(model, "group/") {
+			return fmt.Errorf("config: model_sampling key %q must be a concrete model ID without surrounding whitespace", model)
+		}
+		if err := sampling.Validate(); err != nil {
+			return fmt.Errorf("config: model_sampling[%q]: %w", model, err)
 		}
 	}
 	if effort := c.Provider.EffectiveReasoningEffort(); effort != "" && c.Provider.ReasoningEffort != effort {

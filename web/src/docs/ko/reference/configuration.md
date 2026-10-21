@@ -36,6 +36,22 @@ toc:
 
 일반 구성에는 Studio를 사용하세요. 자동화가 필요할 때만 이 파일을 직접 편집하는 것이 좋습니다.
 
+Studio의 **Settings → Models → Model behavior → Sampling overrides**에서 모델별 `temperature`, `top_p`, `top_k`, `min_p`, `repetition_penalty`, `presence_penalty`, `frequency_penalty`를 설정할 수 있습니다. 빈칸은 기존 요청 또는 공급자 기본값을 유지하고, `0`은 명시적인 설정값으로 저장합니다. **Greedy / penalties off**는 순서대로 `0`, `1`, `0`, `0`, `1`, `0`, `0`을 적용하며, **Clear overrides**는 모든 샘플링 오버라이드를 지웁니다. 공급자와 모델에 따라 지원하는 파라미터가 다릅니다.
+
+값은 `~/.q/config.yaml`의 `model_sampling`에 구체적인 Gateway 모델 ID별로 저장됩니다. Gateway는 요청마다 설정을 읽으므로 저장한 값은 재시작 없이 다음 요청부터 적용됩니다. 진행 중인 요청은 시작 시점의 설정을 유지하며, 폴백 그룹은 각 후보 모델의 값을 적용합니다. 입력 범위는 `temperature ≥ 0`, `top_p`와 `min_p`는 `0–1`, `top_k`는 0 이상의 정수, `repetition_penalty > 0`, 두 penalty는 `-2–2`입니다. 유효하지 않은 저장은 거부하고 기존 설정을 유지합니다.
+
+```yaml
+model_sampling:
+  local/my-model:
+    temperature: 0
+    top_p: 1
+    top_k: 0
+    min_p: 0
+    repetition_penalty: 1
+    presence_penalty: 0
+    frequency_penalty: 0
+```
+
 Studio의 **Settings → Import / Export**에서 전역 설정을 옮길 수 있습니다. 팝업의 Models, Providers, System One, Runtime, Services, Subagents, Integrations 탭에서 항목을 선택하세요. 탭을 바꾸어도 선택은 유지되며, 선택한 항목을 하나의 JSON 파일로 내보냅니다.
 
 가져오기는 파일 선택 → 항목 선택 → 변경 검토 → 적용 순서입니다. 같은 ID의 항목은 덮어쓰고, 선택하지 않은 항목은 유지합니다. 모델 그룹, ACP 연결, MCP 서버 등 필요한 참조가 없으면 적용 전에 오류를 표시하므로 관련 항목을 함께 선택하세요. 리스너 주소와 포트 변경은 해당 서비스가 재시작될 때 적용됩니다.

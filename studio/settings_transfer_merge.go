@@ -88,6 +88,16 @@ func (state *transferState) merge(section, id string, data json.RawMessage) erro
 			}
 			state.main.ModelAPIModes[name] = value
 			return nil
+		case "sampling":
+			value, err := transferValue[config.SamplingConfig](data)
+			if err != nil {
+				return err
+			}
+			if state.main.ModelSampling == nil {
+				state.main.ModelSampling = make(map[string]config.SamplingConfig)
+			}
+			state.main.ModelSampling[name] = value
+			return nil
 		}
 	case "providers":
 		if kind == "provider" && name != "" {

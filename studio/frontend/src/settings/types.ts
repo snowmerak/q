@@ -33,6 +33,15 @@ export type GatewayProvider = {
   _original_type?: string;
   _original_enabled?: boolean;
 };
+export type ModelSampling = {
+  temperature?: number;
+  top_p?: number;
+  top_k?: number;
+  min_p?: number;
+  repetition_penalty?: number;
+  presence_penalty?: number;
+  frequency_penalty?: number;
+};
 export type ModelOption = {
   id: string;
   context_length?: number;
@@ -42,6 +51,7 @@ export type ModelOption = {
   group?: boolean;
   api_mode?: string;
   context_override?: number;
+  sampling?: ModelSampling;
 };
 export type SystemOneProvider = { id: string; uri: string; api_key_env: string; _original_id?: string };
 export type SystemOneModelOption = { id: string; description?: string; release_date?: string };

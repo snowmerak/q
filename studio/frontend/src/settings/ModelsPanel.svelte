@@ -2,6 +2,7 @@
   import { ChevronDown, ChevronUp, Plus, RefreshCw, Trash2 } from '@lucide/svelte';
   import { onMount } from 'svelte';
   import WorkspaceModels from '../WorkspaceModels.svelte';
+  import ModelSampling from './ModelSampling.svelte';
   import { roleLabel } from './format';
   import type { ModelGroup, ModelOption, RoleModelAssignment } from './types';
   import { apiError as responseError } from '../api';
@@ -73,7 +74,7 @@
       const response = await fetch('/api/v1/settings/models', { headers: { Accept: 'application/json' } });
       if (!response.ok) throw new Error(await responseError(response));
       const catalog = (await response.json()) as { models: ModelOption[] };
-      if (generation === catalogGeneration) modelOptions = catalog.models;
+      if (generation === catalogGeneration) modelOptions = catalog.models.map(model => ({ ...model, sampling: model.sampling ?? {} }));
     } catch (error) {
       if (generation === catalogGeneration) modelsError = error instanceof Error ? error.message : 'Models are unavailable';
     } finally {
@@ -181,6 +182,11 @@
     queueSave(() => putSettings('/api/v1/settings/gateway/model-metadata', payload));
   }
 
+  function saveModelSampling(model: ModelOption) {
+    const payload = JSON.stringify({ model: model.id, sampling: model.sampling ?? {} });
+    queueSave(() => putSettings('/api/v1/settings/model-sampling', payload));
+  }
+
   function reasoningOptions(model: string, current: string) {
     return modelReasoningOptions(model, current, modelOptions);
   }
@@ -268,10 +274,10 @@
 
   </div>
   <div id="model-panel-behavior" role="tabpanel" aria-labelledby="model-tab-behavior" tabindex="0" hidden={activeTab !== 'behavior'}>
-  <div class="subsection-heading"><div><h3>Model behavior</h3><p>Select an API mode and override provider context metadata.</p></div></div>
+  <div class="subsection-heading"><div><h3>Model behavior</h3><p>Select an API mode, override context metadata, and configure sampling per model.</p></div></div>
   <div class="settings-card model-behavior-list">
     {#each modelOptions.filter((model) => !model.group) as model}
-      <div class="model-behavior-row"><div><strong>{model.id}</strong><small>{model.context_length ? `Discovered context ${model.context_length.toLocaleString()}` : 'No context metadata'}</small></div><label><span>API mode</span><select bind:value={model.api_mode} onchange={() => saveModelAPIMode(model)}><option value="chat_completions">Chat Completions</option><option value="responses">Responses</option></select></label><label><span>Context override</span><input type="number" min="0" placeholder="Provider metadata" bind:value={model.context_override} onchange={() => saveModelContextOverride(model)} /></label></div>
+      <div class="model-behavior-row"><div><strong>{model.id}</strong><small>{model.context_length ? `Discovered context ${model.context_length.toLocaleString()}` : 'No context metadata'}</small></div><label><span>API mode</span><select bind:value={model.api_mode} onchange={() => saveModelAPIMode(model)}><option value="chat_completions">Chat Completions</option><option value="responses">Responses</option></select></label><label><span>Context override</span><input type="number" min="0" placeholder="Provider metadata" bind:value={model.context_override} onchange={() => saveModelContextOverride(model)} /></label><ModelSampling model={model.id} bind:sampling={model.sampling} save={() => saveModelSampling(model)} /></div>
     {:else}<div class="api-key-empty">Refresh Gateway models to edit their behavior.</div>{/each}
   </div>
   </div>

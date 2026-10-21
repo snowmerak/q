@@ -75,7 +75,7 @@ export function transferLabel(section: TransferSection, id: string): string {
   const kind = slash < 0 ? id : id.slice(0, slash);
   const name = slash < 0 ? '' : id.slice(slash + 1);
   const kinds: Record<string, string> = {
-    role: 'Role', group: 'Model group', 'api-mode': 'Model API mode', provider: 'Provider',
+    role: 'Role', group: 'Model group', 'api-mode': 'Model API mode', sampling: 'Model sampling', provider: 'Provider',
     connection: 'ACP connection', binding: 'External role', profile: 'Profile',
     'mcp-server': 'MCP server', 'mcp-role': 'MCP role', 'lsp-server': 'LSP server', 'lsp-language': 'LSP language'
   };

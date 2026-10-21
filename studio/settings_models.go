@@ -52,6 +52,7 @@ func (service *settingsService) serveModelCatalog(writer http.ResponseWriter, re
 	result := modelCatalog{Models: make([]modelOption, 0, len(models)+len(mainConfig.ModelGroups))}
 	for _, model := range models {
 		option := modelOption{ID: model.ID, ContextLength: model.ContextLength, APIMode: mainConfig.ModelAPIMode(model.ID)}
+		option.Sampling = mainConfig.ModelSampling[model.ID]
 		if providerIndex, upstreamID, found := studioGatewayModelLocation(providerConfig, model.ID); found {
 			option.ContextOverride = providerConfig.Providers[providerIndex].ModelMetadata[upstreamID].ContextLength
 		}
@@ -228,6 +229,39 @@ func (service *settingsService) serveModelAPIModeUpdate(writer http.ResponseWrit
 		delete(value.ModelAPIModes, update.Model)
 	} else {
 		value.ModelAPIModes[update.Model] = update.Mode
+	}
+	if err := service.main.Save(value); err != nil {
+		writeAPIError(writer, http.StatusUnprocessableEntity, err)
+		return
+	}
+	service.writeSnapshot(writer)
+}
+
+func (service *settingsService) serveModelSamplingUpdate(writer http.ResponseWriter, request *http.Request) {
+	var update modelSamplingUpdate
+	if err := decodeSettingsRequest(writer, request, &update); err != nil {
+		writeAPIError(writer, http.StatusBadRequest, err)
+		return
+	}
+	update.Model = strings.TrimSpace(update.Model)
+	if update.Model == "" || strings.HasPrefix(update.Model, "group/") {
+		writeAPIError(writer, http.StatusUnprocessableEntity, errors.New("a concrete model ID is required"))
+		return
+	}
+	service.mu.Lock()
+	defer service.mu.Unlock()
+	value, err := service.main.Load()
+	if err != nil {
+		writeAPIError(writer, http.StatusInternalServerError, err)
+		return
+	}
+	if value.ModelSampling == nil {
+		value.ModelSampling = make(map[string]config.SamplingConfig)
+	}
+	if update.Sampling.Empty() {
+		delete(value.ModelSampling, update.Model)
+	} else {
+		value.ModelSampling[update.Model] = update.Sampling
 	}
 	if err := service.main.Save(value); err != nil {
 		writeAPIError(writer, http.StatusUnprocessableEntity, err)

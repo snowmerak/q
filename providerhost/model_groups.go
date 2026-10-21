@@ -26,7 +26,7 @@ const (
 )
 
 // ModelGroupHandler exposes q model groups through an existing Gateway HTTP
-// handler. Group configuration is loaded per request so TUI saves take effect
+// handler. Group and sampling configuration is loaded per request so saves take effect
 // without restarting the Gateway process.
 func ModelGroupHandler(inner http.Handler, store config.Store) http.Handler {
 	if inner == nil {
@@ -54,38 +54,31 @@ type modelGroupHandler struct {
 }
 
 func (h *modelGroupHandler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
-	groups, err := h.loadGroups()
+	value, err := h.store.Load()
+	if errors.Is(err, config.ErrNotFound) {
+		value, err = config.Config{}, nil
+	}
 	if err != nil {
 		writeGroupError(writer, http.StatusInternalServerError, err)
 		return
 	}
-	if len(groups) == 0 {
+	groups := value.ModelGroups
+	if len(groups) == 0 && len(value.ModelSampling) == 0 {
 		h.inner.ServeHTTP(writer, request)
 		return
 	}
 	switch {
-	case request.Method == http.MethodGet && request.URL.Path == "/v1/models":
+	case len(groups) > 0 && request.Method == http.MethodGet && request.URL.Path == "/v1/models":
 		h.serveModels(writer, request, groups)
-	case request.Method == http.MethodGet && strings.HasPrefix(request.URL.Path, "/v1/models/"):
+	case len(groups) > 0 && request.Method == http.MethodGet && strings.HasPrefix(request.URL.Path, "/v1/models/"):
 		h.serveModel(writer, request, groups)
 	case request.Method == http.MethodPost && request.URL.Path == "/v1/chat/completions":
-		h.serveChat(writer, request, groups)
+		h.serveGroupRequest(writer, request, value, false)
 	case request.Method == http.MethodPost && request.URL.Path == "/v1/responses":
-		h.serveResponses(writer, request, groups)
+		h.serveGroupRequest(writer, request, value, true)
 	default:
 		h.inner.ServeHTTP(writer, request)
 	}
-}
-
-func (h *modelGroupHandler) loadGroups() (map[string]config.ModelGroupConfig, error) {
-	value, err := h.store.Load()
-	if errors.Is(err, config.ErrNotFound) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	return value.ModelGroups, nil
 }
 
 func (h *modelGroupHandler) serveModels(writer http.ResponseWriter, request *http.Request, groups map[string]config.ModelGroupConfig) {
@@ -192,15 +185,7 @@ func minimumModelLimit(models []client.Model, selectLimit func(client.Model) int
 	return minimum
 }
 
-func (h *modelGroupHandler) serveChat(writer http.ResponseWriter, request *http.Request, groups map[string]config.ModelGroupConfig) {
-	h.serveGroupRequest(writer, request, groups, false)
-}
-
-func (h *modelGroupHandler) serveResponses(writer http.ResponseWriter, request *http.Request, groups map[string]config.ModelGroupConfig) {
-	h.serveGroupRequest(writer, request, groups, true)
-}
-
-func (h *modelGroupHandler) serveGroupRequest(writer http.ResponseWriter, request *http.Request, groups map[string]config.ModelGroupConfig, responses bool) {
+func (h *modelGroupHandler) serveGroupRequest(writer http.ResponseWriter, request *http.Request, value config.Config, responses bool) {
 	body, err := io.ReadAll(io.LimitReader(request.Body, 16<<20))
 	if err != nil {
 		writeGroupError(writer, http.StatusBadRequest, fmt.Errorf("model groups: read request: %w", err))
@@ -217,19 +202,25 @@ func (h *modelGroupHandler) serveGroupRequest(writer http.ResponseWriter, reques
 		return
 	}
 	name, grouped := strings.CutPrefix(externalModel, modelGroupPrefix)
-	group, found := groups[name]
+	group, found := value.ModelGroups[name]
 	if !grouped || !found {
+		if sampling := value.ModelSampling[externalModel]; !sampling.Empty() {
+			if err := applySampling(fields, sampling); err != nil {
+				writeGroupError(writer, http.StatusInternalServerError, err)
+				return
+			}
+			body, err = json.Marshal(fields)
+			if err != nil {
+				writeGroupError(writer, http.StatusInternalServerError, err)
+				return
+			}
+		}
 		h.serveInnerBody(writer, request, body)
 		return
 	}
 	if responses {
 		if len(group.Candidates) != 1 {
 			writeGroupError(writer, http.StatusBadRequest, fmt.Errorf("model group %q cannot use Responses with multiple candidates", name))
-			return
-		}
-		value, err := h.store.Load()
-		if err != nil {
-			writeGroupError(writer, http.StatusInternalServerError, err)
 			return
 		}
 		for _, candidate := range group.Candidates {
@@ -245,7 +236,7 @@ func (h *modelGroupHandler) serveGroupRequest(writer http.ResponseWriter, reques
 		if !h.allow(candidate.Model) {
 			continue
 		}
-		attemptBody, err := rewriteGroupRequest(fields, candidate, responses)
+		attemptBody, err := rewriteGroupRequest(fields, candidate, responses, value.ModelSampling[candidate.Model])
 		if err != nil {
 			writeGroupError(writer, http.StatusInternalServerError, err)
 			return
@@ -359,7 +350,7 @@ func (w *groupCandidateWriter) recorder() *httptest.ResponseRecorder {
 	return recorded
 }
 
-func rewriteGroupRequest(fields map[string]json.RawMessage, candidate config.ModelCandidateConfig, responses bool) ([]byte, error) {
+func rewriteGroupRequest(fields map[string]json.RawMessage, candidate config.ModelCandidateConfig, responses bool, sampling config.SamplingConfig) ([]byte, error) {
 	copyFields := make(map[string]json.RawMessage, len(fields)+1)
 	maps.Copy(copyFields, fields)
 	model, _ := json.Marshal(candidate.Model)
@@ -377,6 +368,11 @@ func rewriteGroupRequest(fields map[string]json.RawMessage, candidate config.Mod
 			copyFields["reasoning"], _ = json.Marshal(reasoning)
 		} else {
 			copyFields["reasoning_effort"] = effort
+		}
+	}
+	if !sampling.Empty() {
+		if err := applySampling(copyFields, sampling); err != nil {
+			return nil, err
 		}
 	}
 	return json.Marshal(copyFields)
