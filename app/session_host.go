@@ -71,6 +71,7 @@ type SessionWorkspaceResolver func(primaryRoot string) (SessionWorkspaceContext,
 type sessionRunControlRequest struct {
 	action string
 	answer string
+	callID string
 	ack    chan error
 }
 
@@ -95,6 +96,11 @@ func (control *SessionRunControl) Answer(ctx context.Context, answer string) err
 	return control.send(ctx, "answer", answer)
 }
 
+// AnswerQuestion rejects a reply to a question that has already been replaced.
+func (control *SessionRunControl) AnswerQuestion(ctx context.Context, callID, answer string) error {
+	return control.sendRequest(ctx, sessionRunControlRequest{action: "answer", answer: answer, callID: callID})
+}
+
 func (control *SessionRunControl) Pause(ctx context.Context) error {
 	return control.send(ctx, "pause", "")
 }
@@ -108,13 +114,17 @@ func (control *SessionRunControl) Cancel(ctx context.Context) error {
 }
 
 func (control *SessionRunControl) send(ctx context.Context, action, answer string) error {
+	return control.sendRequest(ctx, sessionRunControlRequest{action: action, answer: answer})
+}
+
+func (control *SessionRunControl) sendRequest(ctx context.Context, request sessionRunControlRequest) error {
 	if control == nil {
 		return errors.New("session run control is unavailable")
 	}
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	request := sessionRunControlRequest{action: action, answer: answer, ack: make(chan error, 1)}
+	request.ack = make(chan error, 1)
 	select {
 	case control.commands <- request:
 	case <-control.done:
@@ -566,7 +576,8 @@ func (host *SessionHost) prepareSession(runContext context.Context, workspaceSto
 		startup = startupRequest{
 			ctx: runContext, memoryCtx: memoryContext, store: host.store, workspaceStore: prepared.store,
 			loaded: loaded, manager: host.manager, factory: host.factory, lifecycle: prepared.lifecycle, providerReady: true,
-			checkoutRoot: options.WorkingDirectory, auxiliaryRoots: append([]string(nil), auxiliary...),
+			disableExternalMCP: options.DisableExternalMCP,
+			checkoutRoot:       options.WorkingDirectory, auxiliaryRoots: append([]string(nil), auxiliary...),
 		}.run(nil)
 	}
 	if startup.err != nil {
@@ -578,6 +589,19 @@ func (host *SessionHost) prepareSession(runContext context.Context, workspaceSto
 	}
 	prepared.client = startup.client
 	prepared.warnings = sessionStartupWarnings(startup)
+	if options.WrapRuntime != nil {
+		base := AgentToolRuntime(startup.tools)
+		if injected != nil {
+			base = injected
+		}
+		injected, err = options.WrapRuntime(runContext, prepared.store, base)
+		if err != nil {
+			return nil, err
+		}
+		if injected == nil {
+			return nil, errors.New("wrapped session tools are unavailable")
+		}
+	}
 
 	if prepared.lock == nil {
 		prepared.store, prepared.lock, err = workspace.CreateSession(prepared.store.Root, "q studio")
@@ -604,6 +628,7 @@ func (host *SessionHost) prepareSession(runContext context.Context, workspaceSto
 	if len(configured) > 0 || options.Model != "" {
 		stable := options
 		stable.OperationID = ""
+		stable.Control = nil
 		prepared.state.sessionOptions = &stable
 		if injected != nil {
 			prepared.state.toolRuntime = injected
@@ -847,6 +872,10 @@ func (m sessionExecutionModel) updateControl(request sessionRunControlRequest) (
 	switch request.action {
 	case "answer":
 		answer := strings.TrimSpace(request.answer)
+		if request.callID != "" && request.callID != m.pendingQuestionCallID {
+			acknowledge(errors.New("question is no longer waiting for an answer"))
+			return m, nextControl
+		}
 		if !m.state.asking || m.state.questionAnswer == nil {
 			acknowledge(errors.New("session turn is not waiting for an answer"))
 			return m, nextControl
@@ -863,7 +892,7 @@ func (m sessionExecutionModel) updateControl(request sessionRunControlRequest) (
 		updated, command := m.state.submitQuestionAnswer(answer)
 		m.state = updated.(model)
 		if m.emit != nil {
-			if err := m.emit(SessionEvent{Type: "question_answered", CallID: m.pendingQuestionCallID}); err != nil {
+			if err := m.emit(SessionEvent{Type: "question_answered", CallID: m.pendingQuestionCallID, Content: answer}); err != nil {
 				m.err = err
 				acknowledge(err)
 				m.cancel()

@@ -568,7 +568,7 @@ func (m *model) sendChatRequest() tea.Cmd {
 	events := make(chan agentEvent)
 	toolRuntime := m.toolRuntime
 	var toolRuntimeErr error
-	if m.sessionOptions == nil || m.sessionOptions.RuntimeFactory == nil {
+	if m.sessionOptions == nil || (m.sessionOptions.RuntimeFactory == nil && m.sessionOptions.WrapRuntime == nil) {
 		toolRuntime, toolRuntimeErr = configuredAgentToolRuntime(
 			m.toolRuntime, mcpconfig.RoleDefault, m.activeConfig(), workingDirectory,
 		)
@@ -584,6 +584,10 @@ func (m *model) sendChatRequest() tea.Cmd {
 		m.gatewayConfig, m.activeConfig().ModelGroups, modelID, nil,
 	)
 	activeTask := cloneActiveTask(m.activeTask)
+	var allowedTools []string
+	if m.sessionOptions != nil {
+		allowedTools = m.sessionOptions.AllowedTools
+	}
 	if toolRuntimeErr != nil {
 		return func() tea.Msg {
 			return chatResultMsg{turnID: turnID, requestEstimate: m.requestEstimate, err: toolRuntimeErr}
@@ -616,6 +620,7 @@ func (m *model) sendChatRequest() tea.Cmd {
 				AuxiliaryDirectories: auxiliaryDirectories,
 				ActiveTask:           activeTask, Stream: streamEnabled, CoalesceInstructions: coalesceInstructions,
 				ContextPolicy: memoryPolicy(m.activeConfig()),
+				AllowedTools:  allowedTools,
 			}, events)
 		}
 		return waitAgentEvent(events, turnID)()

@@ -34,6 +34,9 @@ func RunAgentLoop(ctx context.Context, request Request, events chan<- Event) {
 	}
 	configuredClient := request.Client
 	toolRuntime := request.Tools
+	if request.AllowedTools != nil {
+		toolRuntime = &allowedToolRuntime{base: toolRuntime, names: request.AllowedTools}
+	}
 	modelID := request.Model
 	reasoningEffort := request.ReasoningEffort
 	history := append([]client.Message(nil), request.Messages...)
@@ -46,6 +49,10 @@ func RunAgentLoop(ctx context.Context, request Request, events chan<- Event) {
 	contextPolicy := request.ContextPolicy
 	requestExtra := request.Extra
 	availableTools := memory.AppendMemoryTools(append(append([]client.Tool(nil), toolRuntime.Tools()...), orchestrationTools()...))
+	availableTools = filterTools(availableTools, request.AllowedTools)
+	if !catalogHas(availableTools, taskCompleteToolName) {
+		activeTask = nil
+	}
 	hintedSkillIDs := knownSkillIDs(history)
 	if len(history) > 0 && history[len(history)-1].Role == client.RoleUser {
 		index := len(history) - 1
@@ -174,7 +181,13 @@ func RunAgentLoop(ctx context.Context, request Request, events chan<- Event) {
 			}
 		}
 		instructionLoader := agentinstructions.NewRootSet(workingDirectory, auxiliaryDirectories, loopContext.Messages())
-		newInstructions := instructionLoader.ForToolCalls(assistant.ToolCalls)
+		instructionCalls := make([]client.ToolCall, 0, len(assistant.ToolCalls))
+		for _, call := range assistant.ToolCalls {
+			if catalogHas(availableTools, call.Function.Name) {
+				instructionCalls = append(instructionCalls, call)
+			}
+		}
+		newInstructions := instructionLoader.ForToolCalls(instructionCalls)
 		if len(newInstructions) > 0 {
 			if !appendHistory(newInstructions...) {
 				return
@@ -218,9 +231,15 @@ func RunAgentLoop(ctx context.Context, request Request, events chan<- Event) {
 			return
 		}
 		batch := toolbatch.New(assistant.ToolCalls, toolbatch.IsLoopTool, func(ctx context.Context, _ int, call client.ToolCall) (client.ToolResult, error) {
+			if !catalogHas(availableTools, call.Function.Name) {
+				return client.ToolResult{}, fmt.Errorf("tool %q is not allowed in this session", call.Function.Name)
+			}
 			return toolRuntime.Call(ctx, call)
 		})
 		batch.Before = func(_ int, call client.ToolCall) error {
+			if !catalogHas(availableTools, call.Function.Name) {
+				return nil
+			}
 			if !emitEvent(ctx, events, Event{call: &call}) {
 				return ctx.Err()
 			}
@@ -231,6 +250,13 @@ func RunAgentLoop(ctx context.Context, request Request, events chan<- Event) {
 				return
 			}
 			callCopy := call
+			if !catalogHas(availableTools, call.Function.Name) {
+				message := orchestrationToolResult(call, fmt.Sprintf("tool %q is not allowed in this session", call.Function.Name), true)
+				if !appendHistory(message) || !emitEvent(ctx, events, Event{message: &message, toolIsError: true}) {
+					return
+				}
+				continue
+			}
 			if toolbatch.IsLoopTool(call) && !emitEvent(ctx, events, Event{call: &callCopy}) {
 				return
 			}

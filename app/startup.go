@@ -142,18 +142,19 @@ func (lifecycle *startupLifecycle) closeResources() error {
 }
 
 type startupRequest struct {
-	ctx            context.Context
-	memoryCtx      context.Context
-	store          config.Store
-	workspaceStore workspace.Store
-	checkoutRoot   string
-	auxiliaryRoots []string
-	loaded         config.Config
-	configErr      error
-	manager        *providerhost.Manager
-	factory        clientFactory
-	lifecycle      *startupLifecycle
-	providerReady  bool
+	ctx                context.Context
+	memoryCtx          context.Context
+	store              config.Store
+	workspaceStore     workspace.Store
+	checkoutRoot       string
+	auxiliaryRoots     []string
+	loaded             config.Config
+	configErr          error
+	manager            *providerhost.Manager
+	factory            clientFactory
+	lifecycle          *startupLifecycle
+	providerReady      bool
+	disableExternalMCP bool
 }
 
 func (request startupRequest) run(modelReady chan<- struct{}) (result runtimeInitializedMsg) {
@@ -297,7 +298,7 @@ func (request startupRequest) run(modelReady chan<- struct{}) (result runtimeIni
 		)
 		result.tools = tools
 		result.library = libraryClient
-		if toolsErr == nil {
+		if toolsErr == nil && !request.disableExternalMCP {
 			mcpValue, mcpErr := (mcpconfig.Store{Dir: request.store.Dir}).LoadOrDefault()
 			result.mcpErr = mcpErr
 			if mcpErr == nil {

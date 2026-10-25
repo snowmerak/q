@@ -13,6 +13,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/google/uuid"
+	"github.com/snowmerak/q/app"
 	"github.com/snowmerak/q/internal/fsopen"
 	"github.com/snowmerak/q/internal/fsreplace"
 	"github.com/snowmerak/q/worklock"
@@ -25,12 +26,18 @@ var ErrInvalidID = errors.New("invalid composer ID")
 var ErrInvalidInput = errors.New("a name of up to 120 characters and a model are required")
 
 type Turn struct {
-	ID        string    `json:"id"`
-	Prompt    string    `json:"prompt"`
-	Answer    string    `json:"answer,omitempty"`
-	Status    string    `json:"status"`
-	Error     string    `json:"error,omitempty"`
-	CreatedAt time.Time `json:"created_at"`
+	ID           string        `json:"id"`
+	Prompt       string        `json:"prompt"`
+	Answer       string        `json:"answer,omitempty"`
+	Status       string        `json:"status"`
+	Error        string        `json:"error,omitempty"`
+	CreatedAt    time.Time     `json:"created_at"`
+	Interactions []Interaction `json:"interactions,omitempty"`
+}
+
+type Interaction struct {
+	Question string `json:"question"`
+	Answer   string `json:"answer"`
 }
 
 type Conversation struct {
@@ -42,6 +49,14 @@ type Conversation struct {
 	Turns     []Turn    `json:"turns"`
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
+	Question  *Question `json:"question,omitempty"`
+}
+
+type Question struct {
+	CallID   string                    `json:"call_id"`
+	Question string                    `json:"question"`
+	Context  string                    `json:"context,omitempty"`
+	Choices  []app.AgentQuestionChoice `json:"choices,omitempty"`
 }
 
 type Store struct{ Root string }

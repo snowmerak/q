@@ -15,7 +15,6 @@ import (
 	"github.com/snowmerak/q/client"
 	"github.com/snowmerak/q/composer"
 	"github.com/snowmerak/q/config"
-	"github.com/snowmerak/q/memory"
 	"github.com/snowmerak/q/workspace"
 )
 
@@ -50,7 +49,7 @@ func waitTestComposer(t *testing.T, handler http.Handler, id string) composer.Co
 }
 
 // Only the provider is substituted. The real Gateway, SessionHost and saved
-// session context must execute a loop-owned tool and retain its result across
+// session context must execute an artifact tool and retain its result across
 // subsequent turns, rather than taking a plain-completion bypass.
 func TestComposerRealRuntimeUsesSharedLoopAndRetainsConversation(t *testing.T) {
 	requests := make(chan client.ChatRequest, 8)
@@ -74,7 +73,7 @@ func TestComposerRealRuntimeUsesSharedLoopAndRetainsConversation(t *testing.T) {
 		if input.Messages[len(input.Messages)-1].Role == client.RoleUser {
 			message.Content = ""
 			message.ToolCalls = []client.ToolCall{{ID: "fact-" + uuid.NewString(), Type: client.ToolTypeFunction,
-				Function: client.FunctionCall{Name: memory.RecordFactTool, Arguments: `{"fact":"The user is developing a reading club app","source":"user"}`},
+				Function: client.FunctionCall{Name: "composer_write_artifact", Arguments: `{"path":"docs/diagram/club.d2","content":"reader -> club"}`},
 			}}
 			finish = "tool_calls"
 		}
@@ -109,8 +108,8 @@ func TestComposerRealRuntimeUsesSharedLoopAndRetainsConversation(t *testing.T) {
 					t.Fatalf("wrong model: %s", input.Model)
 				}
 				allowed := map[string]bool{
-					"task_start": true, "ask_to_user": true, "task_complete": true,
-					memory.SetActiveWorkTool: true, memory.CompleteWorkTool: true, memory.RecordFactTool: true, memory.CheckpointTool: true,
+					"ask_to_user": true, "search_skills": true, "get_skill": true, "search_archive": true, "get_archive_record": true, "learn": true,
+					"search_propositions": true, "get_proposition": true, "composer_list_artifacts": true, "composer_read_artifact": true, "composer_write_artifact": true, "composer_delete_artifact": true,
 				}
 				if len(input.Tools) != len(allowed) {
 					t.Fatalf("wrong loop tool catalog: %+v", input.Tools)
@@ -131,13 +130,13 @@ func TestComposerRealRuntimeUsesSharedLoopAndRetainsConversation(t *testing.T) {
 					matchedCall := false
 					for _, message := range input.Messages {
 						for _, call := range message.ToolCalls {
-							if call.ID == last.ToolCallID && call.Function.Name == memory.RecordFactTool {
+							if call.ID == last.ToolCallID && call.Function.Name == "composer_write_artifact" {
 								matchedCall = true
 							}
 						}
 					}
-					if last.Role != client.RoleTool || !matchedCall || !strings.Contains(last.Content, `"operation":"record_fact"`) {
-						t.Fatalf("shared loop did not execute the memory tool: %+v", last)
+					if last.Role != client.RoleTool || !matchedCall || !strings.Contains(last.Content, `"path":"docs/diagram/club.d2"`) {
+						t.Fatalf("shared loop did not execute the artifact tool: %+v", last)
 					}
 				}
 				if len(c.Turns) == 2 && !strings.Contains(string(body), "Who would use your idea first?") {
@@ -163,7 +162,7 @@ func TestComposerRealRuntimeUsesSharedLoopAndRetainsConversation(t *testing.T) {
 	}
 	facts := 0
 	for _, message := range native.Transcript {
-		if message.Role == client.RoleTool && message.Name == memory.RecordFactTool {
+		if message.Role == client.RoleTool && message.Name == "composer_write_artifact" {
 			facts++
 		}
 	}
@@ -178,7 +177,7 @@ func TestComposerRealRuntimeUsesSharedLoopAndRetainsConversation(t *testing.T) {
 	if status := councilAPI(t, reopened, http.MethodGet, "/api/v1/composers/"+c.ID, nil, &saved); status != http.StatusOK || len(saved.Turns) != 2 || saved.SessionID != c.SessionID {
 		t.Fatalf("reopened = %d %+v", status, saved)
 	}
-	if response := serveJSON(t, reopened, http.MethodDelete, "/api/v1/composers/"+c.ID, nil); response.Code != http.StatusNoContent {
+	if response := serveJSON(t, fixture.handler, http.MethodDelete, "/api/v1/composers/"+c.ID, nil); response.Code != http.StatusNoContent {
 		t.Fatalf("delete = %d %s", response.Code, response.Body.String())
 	}
 	if response := serveJSON(t, reopened, http.MethodGet, "/api/v1/composers/"+c.ID, nil); response.Code != http.StatusNotFound {
@@ -192,15 +191,8 @@ type blockedComposerHost struct {
 }
 
 func (h blockedComposerHost) RunWithOptions(ctx context.Context, _ workspace.Store, _ string, _ string, options app.SessionOptions, emit app.SessionEventSink) error {
-	runtime, closer, err := options.RuntimeFactory(ctx, workspace.Store{})
-	if closer != nil {
-		defer func() { _ = closer.Close() }()
-	}
-	if err != nil {
-		return err
-	}
-	if len(runtime.Tools()) != 0 {
-		panic("Composer acquired tools")
+	if options.WrapRuntime == nil || options.RuntimeFactory != nil || len(options.AllowedTools) == 0 {
+		panic("Composer did not restrict the standard runtime")
 	}
 	if err := emit(app.SessionEvent{Type: "stream", Kind: "response", Start: true, Content: "A partial thought"}); err != nil {
 		return err

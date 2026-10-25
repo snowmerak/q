@@ -249,6 +249,21 @@ func studioTestModel(w http.ResponseWriter, r *http.Request) {
 			if strings.Contains(text, "students") {
 				message.Content = "Let's develop the reading club idea for students."
 			}
+			if strings.Contains(text, "composer artifacts") {
+				switch {
+				case !completed["ask_to_user"]:
+					message.Content = ""
+					message.ToolCalls = []client.ToolCall{{ID: "composer-question", Type: client.ToolTypeFunction, Function: client.FunctionCall{Name: "ask_to_user", Arguments: `{"question":"Which view should we develop?","choices":[{"id":"flow","label":"Reading flow","description":"Draw the reader journey"},{"id":"component","label":"Interactive component"}]}`}}}
+				case !completed["composer_write_artifact"]:
+					message.Content = ""
+					message.ToolCalls = []client.ToolCall{
+						{ID: "composer-diagram", Type: client.ToolTypeFunction, Function: client.FunctionCall{Name: "composer_write_artifact", Arguments: `{"path":"docs/diagram/reading.d2","content":"reader -> club -> discussion"}`}},
+						{ID: "composer-html", Type: client.ToolTypeFunction, Function: client.FunctionCall{Name: "composer_write_artifact", Arguments: `{"path":"docs/webcomponent/reading.html","content":"<!doctype html><html><head><meta charset=\"utf-8\"><title>Reading club</title></head><body><h1>Reading club</h1><button onclick=\"this.textContent='Joined!'\">Join club</button></body></html>"}`}},
+					}
+				default:
+					message.Content = "Created the reading flow and an interactive club component. Open their previews and tell me what to refine."
+				}
+			}
 			break
 		}
 	}
@@ -260,6 +275,9 @@ func studioTestModel(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	finish := "stop"
+	if len(message.ToolCalls) > 0 {
+		finish = "tool_calls"
+	}
 	if !composerChat && fmt.Sprint(request.ToolChoice) != string(client.ToolChoiceNone) {
 		finish = "tool_calls"
 		message.ToolCalls = []client.ToolCall{{ID: "test-" + name, Type: client.ToolTypeFunction, Function: client.FunctionCall{Name: name, Arguments: arguments}}}

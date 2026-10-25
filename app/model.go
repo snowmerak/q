@@ -1136,8 +1136,13 @@ func (m *model) appendRuntimeMessages() {
 	if m.studioWorkspaceContext != nil {
 		projectName = m.studioWorkspaceContext.ProjectName
 	}
+	var allowedTools []string
+	if m.sessionOptions != nil {
+		allowedTools = m.sessionOptions.AllowedTools
+	}
 	m.messages = PrepareWorkspaceMessages(m.messages, WorkspaceMessageOptions{
 		Root: root, ProjectName: projectName, AuxiliaryRoots: auxiliary, Tools: m.toolRuntime, ArchiveAvailable: m.archive != nil,
+		AllowedTools: allowedTools,
 	})
 }
 

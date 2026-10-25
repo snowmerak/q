@@ -22,13 +22,18 @@ type composerService struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 	mu     sync.Mutex
-	active map[string]context.CancelFunc
+	active map[string]composerRun
 	wg     sync.WaitGroup
+}
+
+type composerRun struct {
+	cancel  context.CancelFunc
+	control *app.SessionRunControl
 }
 
 func newComposerService(parent context.Context, dir string, runner composer.SessionRunner) *composerService {
 	ctx, cancel := context.WithCancel(parent)
-	return &composerService{store: composer.NewStore(dir), runner: runner, ctx: ctx, cancel: cancel, active: make(map[string]context.CancelFunc)}
+	return &composerService{store: composer.NewStore(dir), runner: runner, ctx: ctx, cancel: cancel, active: make(map[string]composerRun)}
 }
 
 func (s *composerService) Close() error {
@@ -39,7 +44,14 @@ func (s *composerService) Close() error {
 	s.cancel()
 	s.mu.Unlock()
 	s.wg.Wait()
-	return nil
+	if s.runner == nil {
+		return nil
+	}
+	values, err := s.store.List()
+	for _, value := range values {
+		err = errors.Join(err, s.runner.ReleaseSession(s.store.SessionStore(value), value.SessionID))
+	}
+	return err
 }
 
 func writeComposerError(w http.ResponseWriter, err error) {
@@ -47,11 +59,11 @@ func writeComposerError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, composer.ErrInvalidID):
 		status = http.StatusBadRequest
-	case errors.Is(err, composer.ErrInvalidInput):
+	case errors.Is(err, composer.ErrInvalidInput), errors.Is(err, composer.ErrArtifactPath):
 		status = http.StatusUnprocessableEntity
 	case errors.Is(err, os.ErrNotExist):
 		status = http.StatusNotFound
-	case errors.Is(err, worklock.ErrLocked):
+	case errors.Is(err, worklock.ErrLocked), errors.Is(err, composer.ErrArtifactConflict):
 		status = http.StatusConflict
 	}
 	writeAPIError(w, status, err)
@@ -101,6 +113,7 @@ func (s *composerService) recover(c *composer.Conversation) error {
 		}
 	}
 	if changed {
+		c.Question = nil
 		c.UpdatedAt = time.Now().UTC()
 		return s.store.Save(*c)
 	}
@@ -203,14 +216,15 @@ func (s *composerService) serveMessages(w http.ResponseWriter, r *http.Request) 
 	}
 	// The service owns accepted work; closing a browser request does not cancel it.
 	ctx, cancel := context.WithCancel(diagnostics.Inherit(s.ctx, r.Context()))
-	s.active[id] = cancel
+	control := app.NewSessionRunControl()
+	s.active[id] = composerRun{cancel: cancel, control: control}
 	s.wg.Add(1)
 	accepted = true
-	go s.execute(ctx, cancel, lock, c)
+	go s.execute(ctx, cancel, control, lock, c)
 	writeJSON(w, http.StatusAccepted, c)
 }
 
-func (s *composerService) execute(ctx context.Context, cancel context.CancelFunc, lock *worklock.Lock, c composer.Conversation) {
+func (s *composerService) execute(ctx context.Context, cancel context.CancelFunc, control *app.SessionRunControl, lock *worklock.Lock, c composer.Conversation) {
 	// The HTTP response and worker must not share the mutable turn slice.
 	c.Turns = append([]composer.Turn(nil), c.Turns...)
 	defer s.wg.Done()
@@ -221,7 +235,27 @@ func (s *composerService) execute(ctx context.Context, cancel context.CancelFunc
 	turn := &c.Turns[len(c.Turns)-1]
 	session := s.store.SessionStore(c)
 	var published time.Time
-	err := s.runner.RunWithOptions(ctx, session, c.SessionID, turn.Prompt, composer.Options(c.Model, turn.ID), func(event app.SessionEvent) error {
+	options := composer.Options(c.Model, turn.ID)
+	options.Control = control
+	err := s.runner.RunWithOptions(ctx, session, c.SessionID, turn.Prompt, options, func(event app.SessionEvent) error {
+		if event.Type == "question" {
+			c.Question = &composer.Question{CallID: event.CallID, Question: event.Question, Context: event.Context, Choices: event.Choices}
+			return s.store.Save(c)
+		}
+		if event.Type == "question_answered" {
+			if c.Question != nil {
+				answer := event.Content
+				for _, choice := range c.Question.Choices {
+					if answer == choice.ID {
+						answer = choice.Label
+						break
+					}
+				}
+				turn.Interactions = append(turn.Interactions, composer.Interaction{Question: c.Question.Question, Answer: answer})
+			}
+			c.Question = nil
+			return s.store.Save(c)
+		}
 		if event.Type == "stream" && event.Kind == "response" {
 			if event.Start {
 				turn.Answer = ""
@@ -251,11 +285,8 @@ func (s *composerService) execute(ctx context.Context, cancel context.CancelFunc
 			turn.Status = "cancelled"
 		}
 	}
-	// Release the native session before publishing completion so the next Studio
-	// instance can immediately continue with the saved conversation context.
-	if releaseErr := s.runner.ReleaseSession(session, c.SessionID); releaseErr != nil {
-		logger.Error("composer.session.release_failed", "error", releaseErr)
-	}
+	// Keep the native session alive so queued learning can finish between turns.
+	c.Question = nil
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	c.UpdatedAt = time.Now().UTC()
@@ -277,11 +308,43 @@ func (s *composerService) serveCancel(w http.ResponseWriter, r *http.Request) {
 		writeComposerError(w, composer.ErrInvalidID)
 		return
 	}
-	cancel, ok := s.active[id]
+	run, ok := s.active[id]
 	if !ok {
 		writeAPIError(w, http.StatusConflict, errors.New("no Composer reply is running in this Studio"))
 		return
 	}
-	cancel()
+	run.cancel()
 	writeJSON(w, http.StatusAccepted, map[string]string{"status": "cancelling"})
+}
+
+func (s *composerService) serveAnswer(w http.ResponseWriter, r *http.Request) {
+	var input struct {
+		CallID string `json:"call_id"`
+		Answer string `json:"answer"`
+	}
+	if err := decodeSessionRequest(w, r, &input); err != nil {
+		writeAPIError(w, http.StatusBadRequest, err)
+		return
+	}
+	s.mu.Lock()
+	value, err := s.store.Load(r.PathValue("composer"))
+	run, ok := s.active[value.ID]
+	s.mu.Unlock()
+	if err != nil {
+		writeComposerError(w, err)
+		return
+	}
+	if !ok || value.Question == nil || value.Question.CallID != input.CallID {
+		writeAPIError(w, http.StatusConflict, errors.New("this question is no longer waiting for an answer"))
+		return
+	}
+	if strings.TrimSpace(input.Answer) == "" {
+		writeAPIError(w, http.StatusUnprocessableEntity, errors.New("answer is required"))
+		return
+	}
+	if err := run.control.AnswerQuestion(r.Context(), input.CallID, input.Answer); err != nil {
+		writeAPIError(w, http.StatusConflict, err)
+		return
+	}
+	writeJSON(w, http.StatusAccepted, map[string]bool{"answered": true})
 }

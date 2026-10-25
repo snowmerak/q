@@ -41,6 +41,9 @@ func PrepareWorkspaceMessages(messages []client.Message, options WorkspaceMessag
 		workspacePrompt += " Use the available tools to inspect, edit, and run work in these configured workspaces when the user asks for changes." +
 			" For repository discovery, never traverse q's .q metadata directory and honor patterns in the corresponding workspace-root .qignore file, including when scanning through run_command. Explicit ignored-path access is allowed when the task requires it." +
 			" Non-Loom MCP tool results include a loom_ref to the immutable full result. For large results, use loom_inspect, loom_read, or loom_eval instead of copying the result through chat context."
+		if options.AllowedTools != nil {
+			workspacePrompt = "Session root: " + filepath.Clean(options.Root) + ". Use only tools in the authorized catalog. Available artifact tools operate on their documented paths; the session root does not grant general filesystem or command access."
+		}
 		if options.ArchiveAvailable {
 			workspacePrompt += " Before starting substantive work that requires tools or multiple steps, call search_archive with concise, task-specific terms to check relevant prior workspace conversations, decisions, agent results, and tool failures. Before finalizing substantive work, search again using any new decision terms, failures, or verification questions revealed by the work. Use get_archive_record only for selected results that need more detail."
 		}
@@ -60,6 +63,7 @@ func PrepareWorkspaceMessages(messages []client.Message, options WorkspaceMessag
 	if toolsAvailable {
 		runtimeTools = options.Tools.Tools()
 	}
+	runtimeTools = filterTools(runtimeTools, options.AllowedTools)
 	for _, tool := range runtimeTools {
 		if tool.Function.Name == "search_skills" {
 			result = append(result, client.Message{
@@ -81,6 +85,13 @@ func PrepareWorkspaceMessages(messages []client.Message, options WorkspaceMessag
 	orchestrationPrompt := "Use task_start before work that requires tools or multiple execution steps. Once task_start succeeds, that task must finish with exactly one successful task_complete call; do not finish it with a plain assistant response. " +
 		"Direct questions and short answers may finish normally without task_start or task_complete. Use ask_to_user when a required user decision or missing detail prevents safe progress; wait for the answer and then continue the same turn. " +
 		"Call task_complete only for a started task after all requested work and appropriate verification are done, or with outcome blocked when progress genuinely cannot continue."
+	loopTools := filterTools(orchestrationTools(), options.AllowedTools)
+	if !catalogHas(loopTools, taskStartToolName) || !catalogHas(loopTools, taskCompleteToolName) {
+		orchestrationPrompt = ""
+		if catalogHas(loopTools, askToUserToolName) {
+			orchestrationPrompt = "Use ask_to_user to clarify a required user decision or missing detail. Wait for the user's answer, then continue the same conversation. Respond directly when no question or tool is needed."
+		}
+	}
 	delegateListAvailable, delegateAvailable := false, false
 	for _, tool := range runtimeTools {
 		switch tool.Function.Name {
@@ -93,9 +104,11 @@ func PrepareWorkspaceMessages(messages []client.Message, options WorkspaceMessag
 	if delegateListAvailable && delegateAvailable {
 		orchestrationPrompt += " When a task is sufficiently large or complex, use delegation. Call delegate_list to inspect the available agents, then select and arrange them according to their listed responsibilities and an engineering workflow appropriate to the task. When the assigned work belongs in another repository or directory, pass the same working_directory to delegate_list and delegate."
 	}
-	result = append(result, client.Message{
-		Role: client.RoleDeveloper, Name: "q_orchestration",
-		Content: orchestrationPrompt,
-	})
+	if orchestrationPrompt != "" {
+		result = append(result, client.Message{
+			Role: client.RoleDeveloper, Name: "q_orchestration",
+			Content: orchestrationPrompt,
+		})
+	}
 	return result
 }

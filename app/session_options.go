@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"slices"
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
@@ -13,7 +14,7 @@ import (
 
 // SessionOptions configures an embedded session without replacing Q's session
 // execution, persistence or recovery. RuntimeFactory owns the authorized workspace
-// catalog; loop-owned orchestration and memory tools remain available.
+// catalog. AllowedTools can also restrict loop-owned orchestration and memory.
 type SessionOptions struct {
 	Model string
 	// Agent selects a registered ACP connection through ParticipantRunner.
@@ -24,8 +25,17 @@ type SessionOptions struct {
 	WorkingDirectory     string
 	AuxiliaryDirectories []string
 	DisableLearning      bool
+	DisableExternalMCP   bool
 	RuntimeKey           string
 	RuntimeFactory       func(context.Context, workspace.Store) (AgentToolRuntime, io.Closer, error) `json:"-"`
+	// WrapRuntime restricts or extends the standard runtime without replacing
+	// its archive, Skill Library, learning, or resource ownership.
+	WrapRuntime func(context.Context, workspace.Store, AgentToolRuntime) (AgentToolRuntime, error) `json:"-"`
+	// AllowedTools filters the complete catalog. Nil preserves Q's default tools;
+	// an empty non-nil list disables all tools.
+	AllowedTools []string
+	// Control belongs to this turn only and is never retained by a live session.
+	Control *SessionRunControl `json:"-"`
 	// OperationID makes retries continue a saved operation without appending
 	// the same user prompt again. A completed operation returns its saved result.
 	OperationID string `json:"-"`
@@ -60,18 +70,22 @@ func (m model) startSessionOperation(prompt, id string) (tea.Model, tea.Cmd) {
 
 // RunWithOptions runs through the same live session used by Run and Studio.
 // Keep RuntimeKey stable while the injected runtime's authorization is unchanged.
-func (host *SessionHost) RunWithOptions(ctx context.Context, store workspace.Store, sessionID, prompt string, options SessionOptions, emit SessionEventSink) error {
+func (host *SessionHost) RunWithOptions(ctx context.Context, store workspace.Store, sessionID, prompt string, options SessionOptions, emit SessionEventSink) (returnErr error) {
+	if options.Control != nil {
+		defer func() { options.Control.finish(returnErr) }()
+	}
 	if options.Agent != "" {
 		return errors.New("ACP sessions require a participant runner")
 	}
-	if options.RuntimeFactory != nil && options.RuntimeKey == "" {
+	if (options.RuntimeFactory != nil || options.WrapRuntime != nil) && options.RuntimeKey == "" {
 		return errors.New("injected session runtime requires a runtime key")
 	}
 	if options.AnthropicPromptCache != "" && options.AnthropicPromptCache != "1h" && options.AnthropicPromptCache != "off" {
 		return errors.New("anthropic prompt cache must be 1h or off")
 	}
 	options.AuxiliaryDirectories = append([]string(nil), options.AuxiliaryDirectories...)
-	return host.run(ctx, store, sessionID, prompt, emit, nil, options)
+	options.AllowedTools = slices.Clone(options.AllowedTools)
+	return host.run(ctx, store, sessionID, prompt, emit, options.Control, options)
 }
 
 func (m model) executionRoots() (string, []string) {

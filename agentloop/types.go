@@ -48,6 +48,9 @@ type Request struct {
 	Stream               bool
 	CoalesceInstructions bool
 	ContextPolicy        memory.Policy
+	// AllowedTools filters the complete catalog, including loop-owned tools.
+	// Nil retains the default catalog; an empty non-nil slice disables all tools.
+	AllowedTools []string
 }
 
 // Result is the terminal response and loop accounting data.
@@ -66,6 +69,7 @@ type WorkspaceMessageOptions struct {
 	AuxiliaryRoots   []string
 	Tools            ToolRuntime
 	ArchiveAvailable bool
+	AllowedTools     []string
 }
 
 // ContextReplacement repairs a message in the host's retained transcript.

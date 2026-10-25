@@ -2,10 +2,16 @@
   import { onMount, tick } from 'svelte';
   import { requestJSON, requestResponse } from './api';
   import Markdown from './Markdown.svelte';
+  import ComposerArtifacts from './ComposerArtifacts.svelte';
   import type { ModelOption } from './settings/types';
 
-  type Turn = { id: string; prompt: string; answer?: string; status: string; error?: string; created_at: string };
-  type Conversation = { id: string; name: string; model: string; updated_at: string; turns: Turn[] };
+  type Turn = { id: string; prompt: string; answer?: string; status: string; error?: string; created_at: string; interactions?: { question: string; answer: string }[] };
+  type Question = { call_id: string; question: string; context?: string; choices?: { id: string; label: string; description?: string }[] };
+  type Conversation = { id: string; name: string; model: string; updated_at: string; turns: Turn[]; question?: Question };
+  let answer = '';
+  let answering = false;
+  let questionID = '';
+  let artifactDirty = false;
   let conversations: Conversation[] = [];
   let selected: Conversation | null = null;
   let models: ModelOption[] = [];
@@ -27,6 +33,7 @@
   const drafts = new Map<string, string>();
   $: running = selected?.turns.some(turn => turn.status === 'running') || false;
   $: concreteModels = models.filter(model => !model.group);
+  $: if ((selected?.question?.call_id || '') !== questionID) { questionID = selected?.question?.call_id || ''; answer = ''; }
 
   function api<T>(method: string, path: string, body?: unknown) {
     return requestJSON<T>(method, path, body, controller.signal);
@@ -84,6 +91,7 @@
     }, 1000);
   }
   async function open(id: string, navigate = true) {
+    if (id !== selected?.id && artifactDirty && !window.confirm('Discard your unsaved artifact source changes?')) return;
     rememberDraft();
     stopPoll();
     const expected = ++generation;
@@ -99,6 +107,7 @@
     finally { if (generation === expected) opening = false; }
   }
   function startCreate(navigate = true) {
+    if (artifactDirty && !window.confirm('Discard your unsaved artifact source changes?')) return;
     rememberDraft(); stopPoll(); generation++;
     selected = null; creating = true; opening = false; cancelling = false;
     name = ''; prompt = ''; error = '';
@@ -136,12 +145,27 @@
     try { await api('POST', `/api/v1/composers/${selected.id}/cancel`, {}); }
     catch (cause) { failure(cause); cancelling = false; }
   }
+  async function submitAnswer(value = answer) {
+    if (!selected?.question || !value.trim() || answering) return;
+    const expected = generation;
+    const id = selected.id;
+    answering = true; error = '';
+    try {
+      await api('POST', `/api/v1/composers/${id}/answer`, { call_id: selected.question.call_id, answer: value });
+      if (generation !== expected) return;
+      const updated = await api<Conversation>('GET', `/api/v1/composers/${id}`);
+      if (generation !== expected) return;
+      selected = updated; answer = ''; schedulePoll();
+    } catch (cause) { if (generation === expected) failure(cause); }
+    finally { answering = false; }
+  }
   async function remove() {
     if (!selected || running || !window.confirm(`Delete Composer “${selected.name}” and its conversation?`)) return;
     busy = true; error = '';
     try {
       await requestResponse(`/api/v1/composers/${selected.id}`, { method: 'DELETE', signal: controller.signal });
       drafts.delete(selected.id);
+      artifactDirty = false;
       startCreate();
       creating = false;
       await loadList();
@@ -167,7 +191,7 @@
   });
 </script>
 
-<div class="composer-view">
+<div class="composer-view" class:with-artifacts={selected && !creating}>
   <aside class="conversation-list" aria-label="Composer conversations">
     <div class="list-heading"><h2>Conversations</h2><button onclick={() => startCreate()} disabled={busy}>New</button></div>
     {#if loading}<p class="muted" role="status">Loading conversations…</p>
@@ -202,6 +226,7 @@
         {#each selected.turns as turn (turn.id)}
           <article class="turn">
             <div class="user-message"><strong>You</strong><p>{turn.prompt}</p></div>
+            {#each turn.interactions || [] as interaction}<div class="interaction"><strong>Composer</strong><p>{interaction.question}</p><strong>You</strong><p>{interaction.answer}</p></div>{/each}
             <div class="model-message"><strong>Composer</strong>
               {#if turn.answer}<Markdown content={turn.answer} />{/if}
               {#if turn.status === 'running'}<p class="muted" role="status">Thinking through your idea…</p>
@@ -210,6 +235,15 @@
           </article>
         {/each}
       </div>
+      {#if selected.question}
+        <form class="question-card" onsubmit={(event) => { event.preventDefault(); void submitAnswer(); }}>
+          <h3>{selected.question.question}</h3>
+          {#if selected.question.context}<p class="muted">{selected.question.context}</p>{/if}
+          {#each selected.question.choices || [] as choice}<button type="button" onclick={() => submitAnswer(choice.id)} disabled={answering}><strong>{choice.label}</strong>{#if choice.description}<small>{choice.description}</small>{/if}</button>{/each}
+          <label for="composer-answer">Your answer</label><input id="composer-answer" bind:value={answer} disabled={answering} maxlength="60000" />
+          <button class="primary" type="submit" disabled={answering || !answer.trim()}>Answer</button>
+        </form>
+      {/if}
       <form class="message-form" onsubmit={(event) => { event.preventDefault(); void send(); }}>
         <label class="message-label" for="composer-message">Develop your idea</label>
         <textarea id="composer-message" bind:value={prompt} onkeydown={onKey} disabled={busy} placeholder="Share an idea or continue the conversation…" rows="3" maxlength="60000"></textarea>
@@ -220,19 +254,27 @@
       </form>
     {:else}<div class="welcome"><p class="eyebrow">COMPOSER</p><h2>From a spark to a clearer idea.</h2><p class="muted">Talk with a model to explore possibilities, ask questions, and work out the details.</p><button class="primary" onclick={() => startCreate()}>New conversation</button></div>{/if}
   </section>
+  {#if selected && !creating}{#key selected.id}<ComposerArtifacts composerID={selected.id} {running} bind:dirty={artifactDirty} />{/key}{/if}
 </div>
 
 <style>
-  .composer-view { display:grid; grid-template-columns:260px minmax(0,1fr); gap:22px; height:calc(100vh - 180px); min-height:440px; }
+  .composer-view { display:grid; flex:1; grid-template-columns:260px minmax(0,1fr); grid-template-rows:minmax(0,1fr); gap:22px; min-height:0; }
+  .composer-view.with-artifacts { grid-template-columns:260px minmax(300px,1fr) minmax(360px,1.1fr); }
+  .interaction { margin:0 16px 20px; padding:12px 16px; border-left:2px solid var(--violet); }
+  .interaction p { white-space:pre-wrap; overflow-wrap:anywhere; }
+  .question-card { flex:0 1 auto; min-height:0; max-height:40vh; overflow:auto; display:grid; gap:10px; padding:16px; border:1px solid var(--violet); border-radius:8px; }
+  .question-card h3,.question-card p { margin:0; }
+  .question-card button { text-align:left; }
+  .question-card small { display:block; margin-top:5px; color:var(--muted); }
   .conversation-list { overflow:auto; border-right:1px solid var(--border); padding:20px 14px 20px 0; }
   .list-heading,.conversation-heading,.message-actions { display:flex; align-items:center; justify-content:space-between; gap:12px; }
   h2 { margin:0; font-size:calc(18px * var(--text-scale)); }
-  .list-heading { margin-bottom:16px; }
+  .list-heading { margin-bottom:16px; flex-wrap:wrap; }
   .list-heading h2 { font-size:calc(24px * var(--text-scale)); }
   .conversation-item { width:100%; display:flex; flex-direction:column; gap:6px; text-align:left; margin-bottom:8px; padding:12px; overflow-wrap:anywhere; }
   .conversation-item.selected { border-color:var(--violet); background:var(--violet-soft); }
   .conversation-item small { color:var(--muted); }
-  .conversation-content { min-width:0; min-height:0; display:flex; flex-direction:column; gap:16px; padding:20px 0 40px; }
+  .conversation-content { min-width:0; min-height:0; display:flex; flex-direction:column; gap:16px; padding:20px 0 16px; }
   .conversation-heading { flex:none; border-bottom:1px solid var(--border); padding-bottom:12px; }
   .conversation-heading p { margin:6px 0 0; overflow-wrap:anywhere; }
   .history { flex:1; min-height:0; overflow:auto; padding:0 16px 8px 0; scrollbar-gutter:stable; }
@@ -258,5 +300,6 @@
   .muted { color:var(--muted); line-height:1.6; }
   .error { color:var(--error); overflow-wrap:anywhere; }
   .eyebrow { color:var(--accent-text); font-size:calc(11px * var(--text-scale)); letter-spacing:.15em; font-weight:700; }
-  @media(max-width:800px) { .composer-view { grid-template-columns:1fr; height:auto; min-height:calc(100vh - 180px); } .conversation-list { max-height:200px; border-right:0; border-bottom:1px solid var(--border); padding:20px 0; } .conversation-content { min-height:500px; } .history { max-height:65vh; } .message-actions small { font-size:10px; } }
+  @media(max-width:1200px) { .composer-view {flex:none;grid-template-rows:auto;} .composer-view.with-artifacts { grid-template-columns:260px minmax(0,1fr);height:auto; } .with-artifacts :global(.artifacts){grid-column:2;} .conversation-content{min-height:600px;} .history{max-height:65vh;} }
+  @media(max-width:800px) { .composer-view,.composer-view.with-artifacts { grid-template-columns:1fr; height:auto; min-height:calc(100vh - 180px); } .with-artifacts :global(.artifacts){grid-column:1;} .conversation-list { max-height:200px; border-right:0; border-bottom:1px solid var(--border); padding:20px 0; } .conversation-content { min-height:500px; } .history { max-height:65vh; } .message-actions small { font-size:10px; } }
 </style>

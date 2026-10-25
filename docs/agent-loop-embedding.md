@@ -26,11 +26,30 @@ An injected `RuntimeFactory` supplies the complete authorized tool catalog and
 its closer; the host does not add delegation or external tools to that runtime.
 Give the policy a stable `RuntimeKey` so live sessions reopen when it changes.
 
-Studio's standalone Composer also runs through `RunWithOptions` and Q's shared
-Agent Loop, using a private persisted session and an empty injected workspace
-tool runtime. The loop's orchestration and context-memory tools remain available;
-filesystem, command, MCP and delegation tools are not supplied. Conversation
-history, tool results and context compaction use the same session machinery.
+`WrapRuntime` can restrict or extend the standard runtime while the host retains
+its archive, Skill Library, learning, and resource ownership. `AllowedTools`
+filters the complete model catalog and rejects hidden calls, including loop-owned
+tools. Nil keeps the standard catalog; an empty non-nil list disables all tools.
+Pass a fresh `Control` on each `RunWithOptions` turn to answer interactive
+questions; `AnswerQuestion` also checks that the question's call ID still matches.
+
+Studio's standalone Composer runs through this same shared Agent Loop with a
+private persisted session. Its allowlist contains `ask_to_user`, skill/archive/
+proposition lookup, `learn`, and four `composer_*_artifact(s)` tools. Generic
+filesystem, command, MCP, delegation, task lifecycle, and context-memory tools
+are excluded. Native sessions remain alive between turns so queued learning
+can finish; deletion and service shutdown release them.
+
+Source files live under `~/.q/composer/<composer-id>/docs/diagram/` (`.d2`) and
+`docs/webcomponent/` (`.html`). The editor uses revision hashes to reject stale
+saves. D2 renders in-process using dagre, without a separately installed CLI;
+imports can read only that Composer's managed diagrams. HTML supports inline
+CSS and JavaScript in an opaque-origin sandbox with network access disabled.
+Invalid source remains saved and editable while the preview reports its error.
+Each source is limited to 256 KiB, with up to 128 files per Composer.
+Both preview types can open in an expanded dialog. D2 starts at its natural
+size for readable labels and supports zoom, drag-to-pan, actual-size reset, and
+fit-to-screen inside the same sandbox.
 
 Studio's chat composer can persist a model selection for each session in
 `.q/sessions/<session-id>/model.json`. An explicit `SessionOptions.Model` takes

@@ -1,0 +1,135 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>D2 diagram preview</title>
+  <style>
+    * { box-sizing: border-box; }
+    html, body { height: 100%; margin: 0; }
+    body { display: flex; flex-direction: column; font: 13px system-ui, sans-serif; color: #273445; background: white; }
+    .controls { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; padding: 8px; background: #f5f6f9; border-bottom: 1px solid #d8dce5; }
+    button { padding: 6px 10px; border: 1px solid #c4cbd7; border-radius: 5px; background: white; color: inherit; cursor: pointer; font: inherit; min-height: 32px; }
+    button:disabled { opacity: .4; cursor: default; }
+    button:focus-visible, #viewport:focus-visible { outline: 2px solid #8450ff; outline-offset: -2px; }
+    #actual { min-width: 64px; font-variant-numeric: tabular-nums; }
+    .hint { color: #667184; margin-left: auto; font-size: 11px; }
+    #viewport { position: relative; flex: 1; min-height: 0; overflow: hidden; touch-action: none; cursor: grab; user-select: none; }
+    #viewport.dragging { cursor: grabbing; }
+    #diagram { position: absolute; left: 0; top: 0; transform-origin: 0 0; }
+    #diagram > svg { display: block; width: 100%; height: 100%; max-width: none; }
+  </style>
+</head>
+<body>
+  <div class="controls" role="group" aria-label="Diagram zoom">
+    <button id="out" type="button" aria-label="Zoom out" title="Zoom out (−)">−</button>
+    <button id="actual" type="button" aria-label="Actual size (100%)" title="Actual size (0)"><output id="scale">100%</output></button>
+    <button id="in" type="button" aria-label="Zoom in" title="Zoom in (+)">+</button>
+    <button id="fit" type="button" title="Fit diagram to screen (F)">Fit</button>
+    <span class="hint">Drag to pan · Scroll to zoom</span>
+  </div>
+  <div id="viewport" tabindex="0" role="region" aria-label="Diagram canvas">
+    <div id="diagram"><!-- DIAGRAM --></div>
+  </div>
+  <script>
+    (() => {
+      const viewport = document.getElementById('viewport');
+      const diagram = document.getElementById('diagram');
+      const svg = diagram.querySelector('svg');
+      const bounds = svg.viewBox.baseVal;
+      const width = bounds.width || svg.width.baseVal.value || 800;
+      const height = bounds.height || svg.height.baseVal.value || 600;
+      const minimum = 0.02;
+      const maximum = 8;
+      let scale = 1;
+      let x = 0;
+      let y = 0;
+      let fitted = false;
+      let drag = null;
+      diagram.style.width = width + 'px';
+      diagram.style.height = height + 'px';
+
+      function draw() {
+        diagram.style.transform = 'translate(' + x + 'px,' + y + 'px) scale(' + scale + ')';
+        document.getElementById('scale').textContent = Math.round(scale * 100) + '%';
+        document.getElementById('out').disabled = scale <= minimum;
+        document.getElementById('in').disabled = scale >= maximum;
+      }
+      function center() {
+        x = Math.max(20, (viewport.clientWidth - width * scale) / 2);
+        y = Math.max(20, (viewport.clientHeight - height * scale) / 2);
+        draw();
+      }
+      function fit() {
+        fitted = true;
+        scale = Math.max(minimum, Math.min(maximum, (viewport.clientWidth - 40) / width, (viewport.clientHeight - 40) / height));
+        center();
+      }
+      function actual() { fitted = false; scale = 1; center(); }
+      function zoom(value, anchorX = viewport.clientWidth / 2, anchorY = viewport.clientHeight / 2) {
+        fitted = false;
+        const next = Math.max(minimum, Math.min(maximum, value));
+        x = anchorX - (anchorX - x) * next / scale;
+        y = anchorY - (anchorY - y) * next / scale;
+        scale = next;
+        draw();
+      }
+      document.getElementById('in').onclick = () => zoom(scale * 1.25);
+      document.getElementById('out').onclick = () => zoom(scale / 1.25);
+      document.getElementById('actual').onclick = actual;
+      document.getElementById('fit').onclick = fit;
+      // A sandboxed frame's keyboard events do not bubble to its modal host.
+      window.addEventListener('keydown', event => {
+        if (event.key !== 'Escape') return;
+        event.preventDefault();
+        window.parent.postMessage({ type: 'q-composer-close-preview' }, '*');
+      }, true);
+      viewport.addEventListener('wheel', event => {
+        event.preventDefault();
+        const rect = viewport.getBoundingClientRect();
+        const delta = event.deltaY * (event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? viewport.clientHeight : 1);
+        zoom(scale * Math.exp(-Math.max(-500, Math.min(500, delta)) * 0.002), event.clientX - rect.left, event.clientY - rect.top);
+      }, { passive: false });
+      viewport.addEventListener('pointerdown', event => {
+        if (!event.isPrimary || event.button !== 0 || event.target.closest('a')) return;
+        drag = { id: event.pointerId, x: event.clientX, y: event.clientY, startX: x, startY: y };
+        viewport.setPointerCapture(event.pointerId);
+        viewport.classList.add('dragging');
+        viewport.focus({ preventScroll: true });
+      });
+      viewport.addEventListener('pointermove', event => {
+        if (!drag || drag.id !== event.pointerId) return;
+        fitted = false;
+        x = drag.startX + event.clientX - drag.x;
+        y = drag.startY + event.clientY - drag.y;
+        draw();
+      });
+      function endDrag(event) {
+        if (!drag || drag.id !== event.pointerId) return;
+        drag = null;
+        viewport.classList.remove('dragging');
+      }
+      viewport.addEventListener('lostpointercapture', endDrag);
+      viewport.addEventListener('pointerup', endDrag);
+      viewport.addEventListener('pointercancel', endDrag);
+      viewport.addEventListener('dblclick', fit);
+      viewport.addEventListener('keydown', event => {
+        if (event.ctrlKey || event.metaKey || event.altKey) return;
+        if (event.key === '+' || event.key === '=') zoom(scale * 1.25);
+        else if (event.key === '-') zoom(scale / 1.25);
+        else if (event.key === '0') actual();
+        else if (event.key.toLowerCase() === 'f') fit();
+        else if (event.key === 'ArrowLeft') { fitted = false; x += 40; draw(); }
+        else if (event.key === 'ArrowRight') { fitted = false; x -= 40; draw(); }
+        else if (event.key === 'ArrowUp') { fitted = false; y += 40; draw(); }
+        else if (event.key === 'ArrowDown') { fitted = false; y -= 40; draw(); }
+        else return;
+        event.preventDefault();
+      });
+      new ResizeObserver(() => { if (fitted) fit(); }).observe(viewport);
+      // Start at the diagram's natural size so labels remain readable.
+      actual();
+    })();
+  </script>
+</body>
+</html>
