@@ -223,15 +223,16 @@
 </div>
 
 <style>
-  .composer-view { display:grid; grid-template-columns:260px minmax(0,1fr); gap:24px; height:calc(100vh - 180px); min-height:440px; }
-  .conversation-list { overflow:auto; border-right:1px solid var(--border); padding-right:16px; }
+  .composer-view { display:grid; grid-template-columns:260px minmax(0,1fr); gap:22px; height:calc(100vh - 180px); min-height:440px; }
+  .conversation-list { overflow:auto; border-right:1px solid var(--border); padding:20px 14px 20px 0; }
   .list-heading,.conversation-heading,.message-actions { display:flex; align-items:center; justify-content:space-between; gap:12px; }
   h2 { margin:0; font-size:calc(18px * var(--text-scale)); }
   .list-heading { margin-bottom:16px; }
+  .list-heading h2 { font-size:calc(24px * var(--text-scale)); }
   .conversation-item { width:100%; display:flex; flex-direction:column; gap:6px; text-align:left; margin-bottom:8px; padding:12px; overflow-wrap:anywhere; }
   .conversation-item.selected { border-color:var(--violet); background:var(--violet-soft); }
   .conversation-item small { color:var(--muted); }
-  .conversation-content { min-width:0; min-height:0; display:flex; flex-direction:column; gap:16px; }
+  .conversation-content { min-width:0; min-height:0; display:flex; flex-direction:column; gap:16px; padding:20px 0 40px; }
   .conversation-heading { flex:none; border-bottom:1px solid var(--border); padding-bottom:12px; }
   .conversation-heading p { margin:6px 0 0; overflow-wrap:anywhere; }
   .history { flex:1; min-height:0; overflow:auto; padding:0 16px 8px 0; scrollbar-gutter:stable; }
@@ -257,5 +258,5 @@
   .muted { color:var(--muted); line-height:1.6; }
   .error { color:var(--error); overflow-wrap:anywhere; }
   .eyebrow { color:var(--accent-text); font-size:calc(11px * var(--text-scale)); letter-spacing:.15em; font-weight:700; }
-  @media(max-width:800px) { .composer-view { grid-template-columns:1fr; height:auto; min-height:calc(100vh - 180px); } .conversation-list { max-height:200px; border-right:0; border-bottom:1px solid var(--border); padding:0 0 12px; } .conversation-content { min-height:500px; } .history { max-height:65vh; } .message-actions small { font-size:10px; } }
+  @media(max-width:800px) { .composer-view { grid-template-columns:1fr; height:auto; min-height:calc(100vh - 180px); } .conversation-list { max-height:200px; border-right:0; border-bottom:1px solid var(--border); padding:20px 0; } .conversation-content { min-height:500px; } .history { max-height:65vh; } .message-actions small { font-size:10px; } }
 </style>

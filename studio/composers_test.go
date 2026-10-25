@@ -15,6 +15,7 @@ import (
 	"github.com/snowmerak/q/client"
 	"github.com/snowmerak/q/composer"
 	"github.com/snowmerak/q/config"
+	"github.com/snowmerak/q/memory"
 	"github.com/snowmerak/q/workspace"
 )
 
@@ -49,8 +50,9 @@ func waitTestComposer(t *testing.T, handler http.Handler, id string) composer.Co
 }
 
 // Only the provider is substituted. The real Gateway, SessionHost and saved
-// session context must deliver the selected model and both conversation turns.
-func TestComposerRealRuntimeRetainsModelAndConversationAfterReopening(t *testing.T) {
+// session context must execute a loop-owned tool and retain its result across
+// subsequent turns, rather than taking a plain-completion bypass.
+func TestComposerRealRuntimeUsesSharedLoopAndRetainsConversation(t *testing.T) {
 	requests := make(chan client.ChatRequest, 8)
 	fixture := newStudioIntegrationConfigured(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/v1/chat/completions" {
@@ -67,13 +69,28 @@ func TestComposerRealRuntimeRetainsModelAndConversationAfterReopening(t *testing
 			return
 		}
 		requests <- input.ChatRequest
+		message := client.Message{Role: client.RoleAssistant, Content: "Who would use your idea first?"}
+		finish := "stop"
+		if input.Messages[len(input.Messages)-1].Role == client.RoleUser {
+			message.Content = ""
+			message.ToolCalls = []client.ToolCall{{ID: "fact-" + uuid.NewString(), Type: client.ToolTypeFunction,
+				Function: client.FunctionCall{Name: memory.RecordFactTool, Arguments: `{"fact":"The user is developing a reading club app","source":"user"}`},
+			}}
+			finish = "tool_calls"
+		}
 		if input.Stream {
 			w.Header().Set("Content-Type", "text/event-stream")
-			_, _ = fmt.Fprint(w, "data: {\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"Who would use your idea first?\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n")
+			delta := map[string]any{"role": "assistant", "content": message.Content}
+			if len(message.ToolCalls) > 0 {
+				call := message.ToolCalls[0]
+				delta["tool_calls"] = []any{map[string]any{"index": 0, "id": call.ID, "type": call.Type, "function": call.Function}}
+			}
+			body, _ := json.Marshal(map[string]any{"choices": []any{map[string]any{"index": 0, "delta": delta, "finish_reason": finish}}})
+			_, _ = fmt.Fprintf(w, "data: %s\n\ndata: [DONE]\n\n", body)
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]any{"choices": []any{map[string]any{"index": 0, "message": client.Message{Role: client.RoleAssistant, Content: "Who would use your idea first?"}, "finish_reason": "stop"}}})
+		_ = json.NewEncoder(w).Encode(map[string]any{"choices": []any{map[string]any{"index": 0, "message": message, "finish_reason": finish}}})
 	}, nil)
 	c := createTestComposer(t, fixture.handler)
 	for _, prompt := range []string{"I want to make a reading club app", "The first users will be local libraries"} {
@@ -85,22 +102,50 @@ func TestComposerRealRuntimeRetainsModelAndConversationAfterReopening(t *testing
 		if last := c.Turns[len(c.Turns)-1]; last.Status != "completed" || last.Answer != "Who would use your idea first?" {
 			t.Fatalf("reply = %+v", last)
 		}
-		select {
-		case input := <-requests:
-			if input.Model != "test-model" || len(input.Tools) != 0 {
-				t.Fatalf("wrong model or tool catalog: model=%s tools=%d", input.Model, len(input.Tools))
-			}
-			body, _ := json.Marshal(input.Messages)
-			for _, expected := range []string{"I want to make a reading club app", prompt, "You are Composer"} {
-				if !strings.Contains(string(body), expected) {
-					t.Fatalf("context missing %q", expected)
+		for round := range 2 {
+			select {
+			case input := <-requests:
+				if input.Model != "test-model" {
+					t.Fatalf("wrong model: %s", input.Model)
 				}
+				allowed := map[string]bool{
+					"task_start": true, "ask_to_user": true, "task_complete": true,
+					memory.SetActiveWorkTool: true, memory.CompleteWorkTool: true, memory.RecordFactTool: true, memory.CheckpointTool: true,
+				}
+				if len(input.Tools) != len(allowed) {
+					t.Fatalf("wrong loop tool catalog: %+v", input.Tools)
+				}
+				for _, tool := range input.Tools {
+					if !allowed[tool.Function.Name] {
+						t.Fatalf("Composer acquired workspace tool %q", tool.Function.Name)
+					}
+				}
+				body, _ := json.Marshal(input.Messages)
+				for _, expected := range []string{"I want to make a reading club app", prompt, "You are Composer"} {
+					if !strings.Contains(string(body), expected) {
+						t.Fatalf("context missing %q", expected)
+					}
+				}
+				if round == 1 {
+					last := input.Messages[len(input.Messages)-1]
+					matchedCall := false
+					for _, message := range input.Messages {
+						for _, call := range message.ToolCalls {
+							if call.ID == last.ToolCallID && call.Function.Name == memory.RecordFactTool {
+								matchedCall = true
+							}
+						}
+					}
+					if last.Role != client.RoleTool || !matchedCall || !strings.Contains(last.Content, `"operation":"record_fact"`) {
+						t.Fatalf("shared loop did not execute the memory tool: %+v", last)
+					}
+				}
+				if len(c.Turns) == 2 && !strings.Contains(string(body), "Who would use your idea first?") {
+					t.Fatal("previous assistant reply was lost")
+				}
+			case <-time.After(time.Second):
+				t.Fatal("provider request was not captured")
 			}
-			if len(c.Turns) == 2 && !strings.Contains(string(body), "Who would use your idea first?") {
-				t.Fatal("previous assistant reply was lost")
-			}
-		case <-time.After(time.Second):
-			t.Fatal("provider request was not captured")
 		}
 	}
 	if len(c.Turns) != 2 {
@@ -111,6 +156,19 @@ func TestComposerRealRuntimeRetainsModelAndConversationAfterReopening(t *testing
 	settings, err := config.DefaultStore()
 	if err != nil {
 		t.Fatal(err)
+	}
+	native, err := composer.NewStore(settings.Dir).SessionStore(c).Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	facts := 0
+	for _, message := range native.Transcript {
+		if message.Role == client.RoleTool && message.Name == memory.RecordFactTool {
+			facts++
+		}
+	}
+	if facts != 2 {
+		t.Fatalf("loop tool results were not persisted: got %d", facts)
 	}
 	reopened, err := newHandler(settings)
 	if err != nil {

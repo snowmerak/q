@@ -12,8 +12,8 @@ import (
 )
 
 // SessionOptions configures an embedded session without replacing Q's session
-// execution, persistence or recovery. RuntimeFactory owns the entire authorized
-// catalog; Q does not add delegation or external tools to an injected runtime.
+// execution, persistence or recovery. RuntimeFactory owns the authorized workspace
+// catalog; loop-owned orchestration and memory tools remain available.
 type SessionOptions struct {
 	Model string
 	// Agent selects a registered ACP connection through ParticipantRunner.
@@ -24,11 +24,8 @@ type SessionOptions struct {
 	WorkingDirectory     string
 	AuxiliaryDirectories []string
 	DisableLearning      bool
-	// ConversationOnly sends ordinary chat requests without the agent loop's
-	// orchestration or memory tools. Session persistence and compaction remain.
-	ConversationOnly bool
-	RuntimeKey       string
-	RuntimeFactory   func(context.Context, workspace.Store) (AgentToolRuntime, io.Closer, error) `json:"-"`
+	RuntimeKey           string
+	RuntimeFactory       func(context.Context, workspace.Store) (AgentToolRuntime, io.Closer, error) `json:"-"`
 	// OperationID makes retries continue a saved operation without appending
 	// the same user prompt again. A completed operation returns its saved result.
 	OperationID string `json:"-"`

@@ -26,6 +26,7 @@ test('Composer creates a model conversation, saves history, and continues after 
     await expect(history.getByText('I want to make a reading club app', { exact: true })).toBeVisible();
     await expect(history.getByText('Who would use your idea first?', { exact: true })).toBeVisible();
     await input.fill('The first users are students');
+    await expect(page.getByRole('button', { name: 'Send', exact: true })).toBeEnabled();
     await input.press('Shift+Enter');
     await expect(input).toHaveValue('The first users are students\n');
     await input.press('Enter');
