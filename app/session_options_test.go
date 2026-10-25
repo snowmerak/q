@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/snowmerak/llm-provider/gateway"
 	"github.com/snowmerak/q/client"
 	"github.com/snowmerak/q/config"
 	"github.com/snowmerak/q/memory"
@@ -19,6 +20,58 @@ import (
 )
 
 type retainedSessionTools struct{ calls int }
+
+func TestConversationOnlyOmitsAllToolsFromStreamingAndOrdinaryChat(t *testing.T) {
+	for _, mode := range []string{"ordinary", "streaming"} {
+		t.Run(mode, func(t *testing.T) {
+			value := config.Default()
+			value.Provider.Model = "local/model"
+			ordinary := &fakeClient{}
+			streaming := &scriptedStreamingClient{stream: &scriptedChatStream{chunks: []*client.ChatChunk{
+				{Choices: []client.Choice{{Delta: &client.Message{Role: client.RoleAssistant, Content: "An idea"}, FinishReason: "stop"}}},
+			}}}
+			var configured chatClient = ordinary
+			if mode == "streaming" {
+				configured = streaming
+			}
+			m := newModel(t.Context(), config.Store{Dir: t.TempDir()}, nil)
+			m.enterChat(value, configured)
+			runtime := &retainedSessionTools{}
+			m.toolRuntime = runtime
+			m.sessionOptions = &SessionOptions{ConversationOnly: true}
+			if mode == "streaming" {
+				m.gatewayConfig = gateway.Config{Providers: []gateway.ProviderConfig{{ID: "local", Prefix: "local", Type: "openai-compatible", Enabled: true}}}
+			}
+			switch result := m.sendChatRequest()().(type) {
+			case chatResultMsg:
+				if result.err != nil {
+					t.Fatal(result.err)
+				}
+			case agentEventMsg:
+				if result.event.err != nil {
+					t.Fatal(result.event.err)
+				}
+				for event := range result.events {
+					if event.err != nil {
+						t.Fatal(event.err)
+					}
+				}
+			default:
+				t.Fatalf("unexpected result %T", result)
+			}
+			request := streaming.request
+			if mode == "ordinary" {
+				if len(ordinary.requests) != 1 {
+					t.Fatalf("requests = %d", len(ordinary.requests))
+				}
+				request = ordinary.requests[0]
+			}
+			if len(request.Tools) != 0 || runtime.calls != 0 || request.Model != "local/model" {
+				t.Fatalf("conversation acquired tools or changed model: model=%s tools=%d calls=%d", request.Model, len(request.Tools), runtime.calls)
+			}
+		})
+	}
+}
 
 func (*retainedSessionTools) Tools() []client.Tool {
 	return []client.Tool{{Type: client.ToolTypeFunction, Function: client.FunctionDefinition{Name: "read_evidence", Parameters: map[string]any{"type": "object"}}}}

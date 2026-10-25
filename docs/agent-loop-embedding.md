@@ -26,6 +26,11 @@ An injected `RuntimeFactory` supplies the complete authorized tool catalog and
 its closer; the host does not add delegation or external tools to that runtime.
 Give the policy a stable `RuntimeKey` so live sessions reopen when it changes.
 
+`ConversationOnly` selects ordinary chat instead of the tool loop, omitting
+orchestration and memory tools as well as workspace tools. Session history and
+context compaction still apply. Studio's standalone Composer uses this mode
+with a private persisted session and an empty injected runtime.
+
 Studio's chat composer can persist a model selection for each session in
 `.q/sessions/<session-id>/model.json`. An explicit `SessionOptions.Model` takes
 precedence over that selection, followed by the workspace and global defaults.

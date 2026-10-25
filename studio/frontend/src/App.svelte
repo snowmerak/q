@@ -1,8 +1,9 @@
 <script lang="ts">
-  import { Activity, CircleHelp, Files, GitCompareArrows, House, Layers, MessagesSquare, PanelLeftClose, PanelLeftOpen, Settings } from '@lucide/svelte';
+  import { Activity, CircleHelp, Files, GitCompareArrows, House, Layers, Lightbulb, MessagesSquare, PanelLeftClose, PanelLeftOpen, Settings } from '@lucide/svelte';
   import { onMount } from 'svelte';
   import ChangesView from './ChangesView.svelte';
   import CouncilView from './CouncilView.svelte';
+  import ComposerView from './ComposerView.svelte';
   import FilesView from './FilesView.svelte';
   import HelpView from './HelpView.svelte';
   import OperationsView from './OperationsView.svelte';
@@ -15,12 +16,13 @@
     | { kind: 'loading' }
     | { kind: 'ready'; status: StudioStatus }
     | { kind: 'error'; message: string };
-  type View = 'overview' | 'sessions' | 'councils' | 'files' | 'changes' | 'operations' | 'settings' | 'help';
+  type View = 'overview' | 'sessions' | 'councils' | 'composers' | 'files' | 'changes' | 'operations' | 'settings' | 'help';
 
   const navigation = [
     { label: 'Overview', icon: House, view: 'overview' as View },
     { label: 'Sessions', icon: Layers, view: 'sessions' as View },
     { label: 'Councils', icon: MessagesSquare, view: 'councils' as View },
+    { label: 'Composer', icon: Lightbulb, view: 'composers' as View },
     { label: 'Files', icon: Files, view: 'files' as View },
     { label: 'Changes', icon: GitCompareArrows, view: 'changes' as View },
     { label: 'Operations', icon: Activity, view: 'operations' as View },
@@ -82,6 +84,7 @@
     if (window.location.pathname.startsWith('/settings')) return 'settings';
     if (window.location.pathname.startsWith('/sessions')) return 'sessions';
     if (window.location.pathname.startsWith('/councils')) return 'councils';
+    if (window.location.pathname.startsWith('/composers')) return 'composers';
     if (window.location.pathname.startsWith('/files')) return 'files';
     if (window.location.pathname.startsWith('/changes')) return 'changes';
     if (window.location.pathname.startsWith('/operations')) return 'operations';
@@ -132,7 +135,7 @@
       </button>
     </div>
     <nav id="studio-navigation" aria-label="Main navigation">
-      {#each [{ label: 'Workspace', items: navigation.slice(0, 5) }, { label: 'Manage', items: navigation.slice(5) }] as group}
+      {#each [{ label: 'Workspace', items: navigation.slice(0, 6) }, { label: 'Manage', items: navigation.slice(6) }] as group}
       <div class="navigation-group">
         <span class="navigation-group-label">{group.label}</span>
       {#each group.items as item}
@@ -153,7 +156,7 @@
 
   <main class:settings-main={activeView === 'settings'} class:sessions-main={activeView === 'sessions'} class:councils-main={activeView === 'councils'} class:changes-main={activeView === 'changes'} class:files-main={activeView === 'files'} class:help-main={activeView === 'help'}>
     <header class="page-header">
-      <div><h1>{activeView === 'settings' ? 'Settings' : activeView === 'sessions' ? 'Sessions' : activeView === 'councils' ? 'Councils' : activeView === 'files' ? 'Files' : activeView === 'changes' ? 'Changes' : activeView === 'operations' ? 'Operations' : activeView === 'help' ? 'Help' : 'Studio overview'}</h1>{#if activeView === 'settings'}<p class="page-description">Studio appearance and global and repository configuration.</p>{:else if activeView === 'sessions'}<p class="page-description">Chat with Q or continue your workspace sessions.</p>{:else if activeView === 'councils'}<p class="page-description">Independent and repository councils with configurable members and chair.</p>{:else if activeView === 'files'}<p class="page-description">Browse workspace files and switch between raw content and Git diffs.</p>{:else if activeView === 'changes'}<p class="page-description">Inspect bounded diffs and review commits.</p>{:else if activeView === 'operations'}<p class="page-description">Usage, workers, local services, logs, and retention.</p>{:else if activeView === 'help'}<p class="page-description">Studio workflows, shortcuts, and recovery.</p>{/if}</div>
+      <div><h1>{activeView === 'settings' ? 'Settings' : activeView === 'sessions' ? 'Sessions' : activeView === 'councils' ? 'Councils' : activeView === 'composers' ? 'Composer' : activeView === 'files' ? 'Files' : activeView === 'changes' ? 'Changes' : activeView === 'operations' ? 'Operations' : activeView === 'help' ? 'Help' : 'Studio overview'}</h1>{#if activeView === 'settings'}<p class="page-description">Studio appearance and global and repository configuration.</p>{:else if activeView === 'sessions'}<p class="page-description">Chat with Q or continue your workspace sessions.</p>{:else if activeView === 'composers'}<p class="page-description">Develop ideas through conversation with your chosen model.</p>{:else if activeView === 'councils'}<p class="page-description">Independent and repository councils with configurable members and chair.</p>{:else if activeView === 'files'}<p class="page-description">Browse workspace files and switch between raw content and Git diffs.</p>{:else if activeView === 'changes'}<p class="page-description">Inspect bounded diffs and review commits.</p>{:else if activeView === 'operations'}<p class="page-description">Usage, workers, local services, logs, and retention.</p>{:else if activeView === 'help'}<p class="page-description">Studio workflows, shortcuts, and recovery.</p>{/if}</div>
     </header>
 
     {#if activeView === 'overview'}
@@ -163,6 +166,8 @@
       <SessionView openChanges={openWorkspaceChanges} />
     {:else if activeView === 'councils'}
       <CouncilView />
+    {:else if activeView === 'composers'}
+      <ComposerView />
     {:else if activeView === 'changes'}
       <ChangesView />
     {:else if activeView === 'files'}
@@ -175,5 +180,5 @@
     <SettingsView active={activeView === 'settings'} />
   </main>
 
-  <footer class="status-bar"><div><span>Q Studio</span><span class="divider" aria-hidden="true"></span><span class:online={connection.kind === 'ready'} class="status-dot" aria-hidden="true"></span><span>{connection.kind === 'ready' ? 'Ready' : connection.kind === 'error' ? 'Unavailable' : 'Connecting'}</span></div><span>{activeView === 'settings' ? 'Configuration' : activeView === 'sessions' ? 'Conversations' : activeView === 'councils' ? 'Model council' : activeView === 'files' ? 'Workspace files' : activeView === 'changes' ? 'Repository changes' : activeView === 'operations' ? 'Runtime operations' : activeView === 'help' ? 'Studio guide' : 'Local'}</span></footer>
+  <footer class="status-bar"><div><span>Q Studio</span><span class="divider" aria-hidden="true"></span><span class:online={connection.kind === 'ready'} class="status-dot" aria-hidden="true"></span><span>{connection.kind === 'ready' ? 'Ready' : connection.kind === 'error' ? 'Unavailable' : 'Connecting'}</span></div><span>{activeView === 'settings' ? 'Configuration' : activeView === 'sessions' ? 'Conversations' : activeView === 'councils' ? 'Model council' : activeView === 'composers' ? 'Idea development' : activeView === 'files' ? 'Workspace files' : activeView === 'changes' ? 'Repository changes' : activeView === 'operations' ? 'Runtime operations' : activeView === 'help' ? 'Studio guide' : 'Local'}</span></footer>
 </div>

@@ -24,8 +24,11 @@ type SessionOptions struct {
 	WorkingDirectory     string
 	AuxiliaryDirectories []string
 	DisableLearning      bool
-	RuntimeKey           string
-	RuntimeFactory       func(context.Context, workspace.Store) (AgentToolRuntime, io.Closer, error) `json:"-"`
+	// ConversationOnly sends ordinary chat requests without the agent loop's
+	// orchestration or memory tools. Session persistence and compaction remain.
+	ConversationOnly bool
+	RuntimeKey       string
+	RuntimeFactory   func(context.Context, workspace.Store) (AgentToolRuntime, io.Closer, error) `json:"-"`
 	// OperationID makes retries continue a saved operation without appending
 	// the same user prompt again. A completed operation returns its saved result.
 	OperationID string `json:"-"`

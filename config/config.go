@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/snowmerak/q/internal/fsopen"
 	"github.com/snowmerak/q/internal/fsreplace"
 	"github.com/snowmerak/q/loom"
 	"github.com/snowmerak/q/lsp"
@@ -760,7 +761,7 @@ func (s Store) Path() string {
 }
 
 func (s Store) Load() (Config, error) {
-	file, err := os.Open(s.Path())
+	file, err := fsopen.Open(s.Path())
 	if errors.Is(err, os.ErrNotExist) {
 		return Config{}, ErrNotFound
 	}

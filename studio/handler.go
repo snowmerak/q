@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/snowmerak/q/app"
+	"github.com/snowmerak/q/composer"
 	"github.com/snowmerak/q/config"
 	"github.com/snowmerak/q/diagnostics"
 )
@@ -153,6 +154,12 @@ func newHandlerRuntime(parent context.Context, store config.Store, runner sessio
 	mux.HandleFunc("GET /api/v1/embeddings/sync/{job}", sessions.embeddingSync.serveJob)
 	provider, _ := runner.(councilModelProvider)
 	sessions.councils = newCouncilService(parent, store.Dir, sessions.projects, provider)
+	composerRunner, _ := runner.(composer.SessionRunner)
+	sessions.composers = newComposerService(parent, store.Dir, composerRunner)
+	mux.HandleFunc("/api/v1/composers", sessions.composers.serveCollection)
+	mux.HandleFunc("/api/v1/composers/{composer}", sessions.composers.serveItem)
+	mux.HandleFunc("POST /api/v1/composers/{composer}/messages", sessions.composers.serveMessages)
+	mux.HandleFunc("POST /api/v1/composers/{composer}/cancel", sessions.composers.serveCancel)
 	operations := newOperationsService(store, runner, sessions)
 	mux.HandleFunc("/api/v1/councils", sessions.councils.serveCollection)
 	mux.HandleFunc("/api/v1/councils/{council}", sessions.councils.serveItem)

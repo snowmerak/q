@@ -34,6 +34,7 @@ type sessionsService struct {
 	registry         *sessionRegistry
 	projects         *studioProjectStore
 	councils         *councilService
+	composers        *composerService
 	embeddingSync    *embeddingSyncService
 	embeddingChanges *embeddingChangeService
 }
@@ -132,7 +133,7 @@ func (service *sessionsService) Close() error {
 	if service == nil {
 		return nil
 	}
-	return errors.Join(service.embeddingChanges.Close(), service.embeddingSync.Close(), service.runs.Close(), service.councils.Close())
+	return errors.Join(service.embeddingChanges.Close(), service.embeddingSync.Close(), service.runs.Close(), service.councils.Close(), service.composers.Close())
 }
 
 func (service *sessionsService) serveDirectoryListing(writer http.ResponseWriter, request *http.Request) {

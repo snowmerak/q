@@ -237,6 +237,21 @@ func studioTestModel(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	message := client.Message{Role: client.RoleAssistant}
+	composerChat := false
+	for _, item := range request.Messages {
+		if item.Role == client.RoleSystem && strings.Contains(item.TextContent(), "You are Composer,") {
+			composerChat = true
+			if strings.Contains(text, "composer wait") {
+				<-r.Context().Done()
+				return
+			}
+			message.Content = "Who would use your idea first?"
+			if strings.Contains(text, "students") {
+				message.Content = "Let's develop the reading club idea for students."
+			}
+			break
+		}
+	}
 	usage := client.Usage{PromptTokens: 2048, CompletionTokens: 96, TotalTokens: 2144}
 	if !strings.Contains(text, "unreported cache") {
 		usage.PromptDetails = &client.TokenDetails{CachedTokens: 1536}
@@ -245,7 +260,7 @@ func studioTestModel(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	finish := "stop"
-	if fmt.Sprint(request.ToolChoice) != string(client.ToolChoiceNone) {
+	if !composerChat && fmt.Sprint(request.ToolChoice) != string(client.ToolChoiceNone) {
 		finish = "tool_calls"
 		message.ToolCalls = []client.ToolCall{{ID: "test-" + name, Type: client.ToolTypeFunction, Function: client.FunctionCall{Name: name, Arguments: arguments}}}
 	}
@@ -258,7 +273,7 @@ func studioTestModel(w http.ResponseWriter, r *http.Request) {
 		for i, call := range message.ToolCalls {
 			calls = append(calls, map[string]any{"index": i, "id": call.ID, "type": call.Type, "function": call.Function})
 		}
-		chunk := map[string]any{"id": "studio-test", "model": "test-model", "choices": []any{map[string]any{"index": 0, "delta": map[string]any{"role": "assistant", "tool_calls": calls}, "finish_reason": finish}}, "usage": usage}
+		chunk := map[string]any{"id": "studio-test", "model": "test-model", "choices": []any{map[string]any{"index": 0, "delta": map[string]any{"role": "assistant", "content": message.Content, "tool_calls": calls}, "finish_reason": finish}}, "usage": usage}
 		body, _ := json.Marshal(chunk)
 		_, _ = fmt.Fprintf(w, "data: %s\n\ndata: [DONE]\n\n", body)
 		return

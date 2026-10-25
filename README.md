@@ -22,6 +22,8 @@ the resulting diff, and create a commit from one local Studio process.
   Gateway.
 - **Durable sessions** — API-independent conversation records, recoverable
   delegation trees, and searchable history.
+- **Composer** — a separate space to develop ideas through conversation with a
+  selected model, with saved history that can be continued later.
 - **Bounded tool output** — large tool results are captured as immutable Loom
   artifacts instead of being copied through every prompt.
 - **Repository review** — a syntax-highlighted diff browser and a guided

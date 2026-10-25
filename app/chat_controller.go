@@ -567,8 +567,12 @@ func (m *model) sendChatRequest() tea.Cmd {
 	turnID := m.turnID
 	events := make(chan agentEvent)
 	toolRuntime := m.toolRuntime
+	conversationOnly := m.sessionOptions != nil && m.sessionOptions.ConversationOnly
+	if conversationOnly {
+		toolRuntime = nil
+	}
 	var toolRuntimeErr error
-	if m.sessionOptions == nil || m.sessionOptions.RuntimeFactory == nil {
+	if !conversationOnly && (m.sessionOptions == nil || m.sessionOptions.RuntimeFactory == nil) {
 		toolRuntime, toolRuntimeErr = configuredAgentToolRuntime(
 			m.toolRuntime, mcpconfig.RoleDefault, m.activeConfig(), workingDirectory,
 		)
