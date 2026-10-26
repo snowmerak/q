@@ -13,9 +13,11 @@ import (
 )
 
 // SessionModelConfig selects the interactive model for one session. An empty
-// model inherits the workspace and global defaults. It survives conversation clear.
+// model inherits the workspace and global defaults. Empty reasoning effort
+// inherits the global default. Both choices survive conversation clear.
 type SessionModelConfig struct {
-	Model string `json:"model"`
+	Model           string `json:"model"`
+	ReasoningEffort string `json:"reasoning_effort,omitempty"`
 }
 
 func (s Store) SessionModelPath() string { return filepath.Join(s.SessionDir(), ModelFileName) }
@@ -58,6 +60,9 @@ func (s Store) LoadSessionModelConfig() (SessionModelConfig, error) {
 func (value SessionModelConfig) Validate() error {
 	if value.Model != strings.TrimSpace(value.Model) || len(value.Model) > 4096 {
 		return errors.New("workspace: session model must be at most 4096 bytes without surrounding whitespace")
+	}
+	if strings.ContainsAny(value.ReasoningEffort, " \t\r\n") || len(value.ReasoningEffort) > 64 {
+		return errors.New("workspace: reasoning effort must be at most 64 bytes without surrounding whitespace")
 	}
 	return nil
 }

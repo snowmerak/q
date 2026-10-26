@@ -1,18 +1,20 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { requestResponse } from '../api';
+  import { reasoningOptions } from '../settings/reasoning';
+  import type { ModelOption } from '../settings/types';
 
   export let workspaceRoot: string;
   export let sessionID: string;
   export let disabled = false;
   export let saving = false;
 
-  type Selection = { model: string; effective_model: string };
-  type ModelOption = { id: string; group?: boolean };
+  type Selection = { model: string; effective_model: string; reasoning_effort: string; effective_reasoning_effort: string };
   let selection: Selection | null = null;
   let models: ModelOption[] = [];
   let loading = true;
   let model = '';
+  let effort = '';
   let error = '';
   let catalogError = '';
   let disposed = false;
@@ -22,7 +24,7 @@
     void Promise.all([
       requestResponse(`${endpoint}?workspace_root=${encodeURIComponent(workspaceRoot)}`)
         .then(response => response.json())
-        .then((value: Selection) => { if (!disposed) { selection = value; model = value.model; } })
+        .then((value: Selection) => { if (!disposed) { selection = value; model = value.model; effort = value.reasoning_effort || ''; } })
         .catch(cause => { if (!disposed) error = cause instanceof Error ? cause.message : 'Could not load the session model'; }),
       requestResponse('/api/v1/settings/models')
         .then(response => response.json())
@@ -39,7 +41,7 @@
     try {
       const response = await requestResponse(endpoint, {
         method: 'PUT', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ workspace_root: workspaceRoot, model })
+        body: JSON.stringify({ workspace_root: workspaceRoot, model, reasoning_effort: effort })
       });
       const updated = await response.json() as Selection;
       if (!disposed) selection = updated;
@@ -48,6 +50,7 @@
     } finally {
       if (!disposed) {
         model = selection.model;
+        effort = selection.reasoning_effort || '';
         saving = false;
       }
     }
@@ -59,6 +62,10 @@
     <option value="">Default{selection && !selection.model ? ` · ${selection.effective_model}` : ''}</option>
     {#if selection?.model && !models.some(model => model.id === selection?.model)}<option value={selection.model}>{selection.model}</option>{/if}
     {#each models as model}<option value={model.id}>{model.id}{model.group ? ' · group' : ''}</option>{/each}
+  </select>
+  <select aria-label="Reasoning effort" title="Reasoning effort for this chat" bind:value={effort} onchange={save} disabled={disabled || loading || saving || !selection}>
+    <option value="">Reasoning: default{selection?.effective_reasoning_effort && !selection.reasoning_effort ? ` · ${selection.effective_reasoning_effort}` : ''}</option>
+    {#each reasoningOptions(model || selection?.effective_model || '', effort || selection?.effective_reasoning_effort || '', models) as option}<option value={option}>{option}</option>{/each}
   </select>
   {#if saving}<span class="model-status" role="status">Saving…</span>{/if}
   {#if error || catalogError}<span class="model-error" role="alert">{error || catalogError}</span>{/if}

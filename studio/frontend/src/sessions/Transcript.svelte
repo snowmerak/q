@@ -12,6 +12,8 @@
   export let sessionKey = '';
   export let loading = false;
   export let onfile: ((path: string) => void) | undefined = undefined;
+  export let assistantLabel = 'Q';
+  export let label = '';
   let transcriptElement: HTMLElement | null = null;
   let follow = true;
   let previousSession = '';
@@ -31,7 +33,8 @@
   });
 </script>
 
-<div class="transcript" bind:this={transcriptElement} aria-live="polite">
+<!-- svelte-ignore a11y_no_noninteractive_tabindex (Named conversation regions support keyboard scrolling.) -->
+<div class="transcript" bind:this={transcriptElement} aria-live="polite" role={label ? 'region' : undefined} aria-label={label || undefined} tabindex={label ? 0 : undefined}>
   {#each entries as entry, entryIndex (entryIndex)}
     {#if entry.kind === 'thinking'}
       <details class="thinking-block"><summary>Thinking</summary><Markdown compact content={entry.content} {onfile} /></details>
@@ -45,7 +48,9 @@
     {#if message.role === 'user' || message.role === 'assistant'}
       <article class="chat-message" class:user-message={message.role === 'user'} class:streaming-message={entry.streaming}>
         <div class="message-avatar">{#if message.role === 'user'}<User aria-hidden="true" size={16} />{:else}<Bot aria-hidden="true" size={17} />{/if}</div>
-        <div class="message-content"><header>{message.role === 'user' ? 'You' : 'Q'}{#if entry.streaming}<span>responding</span>{/if}</header>{#if message.content}<Markdown content={message.content} {onfile} />{/if}
+        <div class="message-content"><header>{message.role === 'user' ? 'You' : assistantLabel}{#if entry.streaming || message.status === 'running'}<span>responding</span>{/if}</header>{#if message.content}<Markdown content={message.content} {onfile} />{/if}
+          {#if message.status === 'running' && !message.content}<p class="message-progress" role="status">Thinking through your idea…</p>
+          {:else if message.status && !['completed', 'running'].includes(message.status)}<p class="message-failure">{message.status === 'cancelled' ? 'Reply stopped. You can continue the conversation.' : message.error || 'This reply did not finish.'}</p>{/if}
           {#if message.tool_calls?.length}
             <div class="message-tools">
               {#each message.tool_calls as call, callIndex (`${callIndex}-${call.id || ''}`)}
@@ -75,3 +80,8 @@
   {/each}
   {#if loading}<div class="transcript-loading">Loading session…</div>{/if}
 </div>
+
+<style>
+  .message-progress { color:var(--muted); font-size:calc(13px * var(--text-scale)); }
+  .message-failure { color:var(--error); font-size:calc(13px * var(--text-scale)); overflow-wrap:anywhere; }
+</style>

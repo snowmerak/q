@@ -15,6 +15,8 @@ export type Message = {
   tool_call_id?: string;
   tool_calls?: ToolCall[];
   usage?: TokenUsage;
+  status?: string;
+  error?: string;
 };
 export type SessionDetail = {
   workspace_root: string;

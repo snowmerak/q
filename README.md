@@ -223,6 +223,10 @@ Studio is the primary interface for daily Q work:
   Search by session title, project, workspace path, or delegated agent, and
   collapse groups to keep the tree manageable. On mobile, use **Sessions**
   above the conversation to show or hide the session picker.
+  The chat footer selects the session model and reasoning effort. Choices apply
+  to the next turn and survive reload and conversation clear; Default reasoning
+  inherits the global chat setting. Composer shares the chat transcript and
+  input styling while retaining its diagram/HTML artifact panel.
 - **Files** browses directories and files in a chosen workspace, with **Raw**
   (syntax highlighting, line numbers, and copy) and **Diff** modes. Diff keeps
   the complete file in view, with previous/current line numbers, `+`/`−` gutter

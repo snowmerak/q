@@ -49,7 +49,7 @@ func TestStudioSessionModelChangesActualRequestsAndRetainsHistory(t *testing.T) 
 	if response.Code != http.StatusOK {
 		t.Fatalf("provider = %d %s", response.Code, response.Body.String())
 	}
-	response = serveJSON(t, fixture.handler, http.MethodPut, "/api/v1/settings/models/default", map[string]string{"model": "default/test-model"})
+	response = serveJSON(t, fixture.handler, http.MethodPut, "/api/v1/settings/models/default", map[string]string{"model": "default/test-model", "reasoning_effort": "low"})
 	if response.Code != http.StatusOK {
 		t.Fatalf("default = %d %s", response.Code, response.Body.String())
 	}
@@ -62,7 +62,7 @@ func TestStudioSessionModelChangesActualRequestsAndRetainsHistory(t *testing.T) 
 			t.Fatalf("set model = %d %s", response.Code, response.Body.String())
 		}
 	}
-	run := func(prompt, expectedModel string, history bool) {
+	run := func(prompt, expectedModel string, history bool, efforts ...string) {
 		t.Helper()
 		mu.Lock()
 		requests = nil
@@ -87,6 +87,13 @@ func TestStudioSessionModelChangesActualRequestsAndRetainsHistory(t *testing.T) 
 		for _, request := range requests {
 			if request.Model != expectedModel {
 				t.Fatalf("model = %q; want %q", request.Model, expectedModel)
+			}
+			expectedEffort := "low"
+			if len(efforts) != 0 {
+				expectedEffort = efforts[0]
+			}
+			if request.ReasoningEffort != expectedEffort {
+				t.Fatalf("reasoning = %q; want %q", request.ReasoningEffort, expectedEffort)
 			}
 		}
 		if history {
@@ -119,7 +126,7 @@ func TestStudioSessionModelChangesActualRequestsAndRetainsHistory(t *testing.T) 
 	if err := json.Unmarshal(response.Body.Bytes(), &inherited); err != nil {
 		t.Fatal(err)
 	}
-	if inherited.Model != "" || inherited.EffectiveModel != "default/test-model" {
+	if inherited.Model != "" || inherited.EffectiveModel != "default/test-model" || inherited.ReasoningEffort != "" || inherited.EffectiveReasoningEffort != "low" {
 		t.Fatalf("other session model = %+v", inherited)
 	}
 	setModel("")
@@ -129,6 +136,28 @@ func TestStudioSessionModelChangesActualRequestsAndRetainsHistory(t *testing.T) 
 		t.Fatal(err)
 	}
 	run("fourth controlled finish", "alternate-model", true)
+	setEffort := func(effort string) {
+		t.Helper()
+		response := serveJSON(t, fixture.handler, http.MethodPut, base+"/model", sessionModelUpdate{WorkspaceRoot: fixture.root, ReasoningEffort: &effort})
+		if response.Code != http.StatusOK {
+			t.Fatalf("set reasoning = %d %s", response.Code, response.Body.String())
+		}
+	}
+	setEffort("high")
+	run("fifth controlled finish", "alternate-model", true, "high")
+	// A model-only request retains the effort override and the existing context.
+	setModel("default/test-model")
+	run("sixth controlled finish", "test-model", true, "high")
+	selected, err := fixture.session.LoadSessionModelConfig()
+	if err != nil || selected.ReasoningEffort != "high" {
+		t.Fatalf("model-only update lost effort: %+v %v", selected, err)
+	}
+	setEffort("")
+	run("seventh controlled finish", "alternate-model", true)
+	response = serveJSON(t, fixture.handler, http.MethodPut, base+"/model", map[string]string{"workspace_root": fixture.root, "model": "", "reasoning_effort": " high "})
+	if response.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("invalid reasoning = %d", response.Code)
+	}
 	response = serveJSON(t, fixture.handler, http.MethodPut, base+"/model", sessionModelUpdate{WorkspaceRoot: fixture.root, Model: " invalid "})
 	if response.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("invalid model = %d", response.Code)

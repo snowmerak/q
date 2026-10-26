@@ -1,7 +1,9 @@
 <script lang="ts">
-  import { onMount, tick } from 'svelte';
+  import { onMount } from 'svelte';
+  import { ArrowUp, Bot, Square, Trash2 } from '@lucide/svelte';
   import { requestJSON, requestResponse } from './api';
-  import Markdown from './Markdown.svelte';
+  import Transcript from './sessions/Transcript.svelte';
+  import type { Message } from './sessions/types';
   import ComposerArtifacts from './ComposerArtifacts.svelte';
   import type { ModelOption } from './settings/types';
   import { loadDraft, saveDraft } from './sessions/drafts';
@@ -34,11 +36,11 @@
   let name = '';
   let model = '';
   let prompt = '';
-  let history: HTMLDivElement;
   let poll: ReturnType<typeof setTimeout> | undefined;
   let generation = 0;
   const controller = new AbortController();
   $: running = selected?.turns.some(turn => turn.status === 'running') || false;
+  $: messages = conversationMessages(selected?.turns || []);
   $: concreteModels = models.filter(model => !model.group);
   $: if ((selected?.question?.call_id || '') !== questionID) { questionID = selected?.question?.call_id || ''; answer = ''; }
 
@@ -55,9 +57,15 @@
     conversations = [value, ...conversations.filter(item => item.id !== value.id)]
       .sort((a, b) => b.updated_at.localeCompare(a.updated_at));
   }
-  async function scrollToEnd() {
-    await tick();
-    if (history) history.scrollTop = history.scrollHeight;
+  function conversationMessages(turns: Turn[]): Message[] {
+    return turns.flatMap(turn => [
+      { role: 'user', content: turn.prompt },
+      ...(turn.interactions || []).flatMap(interaction => [
+        { role: 'assistant', content: interaction.question },
+        { role: 'user', content: interaction.answer }
+      ]),
+      { role: 'assistant', content: turn.answer || '', status: turn.status, error: turn.error }
+    ]);
   }
 
   async function loadList() {
@@ -84,12 +92,10 @@
       try {
         const value = await api<Conversation>('GET', `/api/v1/composers/${id}`);
         if (generation !== expected || controller.signal.aborted) return;
-        const nearEnd = !history || history.scrollHeight - history.scrollTop - history.clientHeight < 100;
         selected = value;
         remember(value);
         if (value.turns.some(turn => turn.status === 'running')) schedulePoll();
         else { cancelling = false; if (embedded) await onupdated(); }
-        if (nearEnd) await scrollToEnd();
       } catch (cause) {
         if (generation !== expected) return;
         failure(cause);
@@ -108,7 +114,6 @@
       if (generation !== expected || controller.signal.aborted) return;
       selected = value; creating = false; prompt = loadDraft(draftKey || `composer:${id}`);
       if (navigate && !embedded) window.history.pushState({}, '', `/composers/${value.id}`);
-      await scrollToEnd();
       schedulePoll();
     } catch (cause) { if (generation === expected) failure(cause); }
     finally { if (generation === expected) opening = false; }
@@ -142,7 +147,6 @@
       remember(value);
       if (generation !== expected) return;
       selected = value; prompt = '';
-      await scrollToEnd();
       schedulePoll();
     } catch (cause) { if (generation === expected) failure(cause); }
     finally { busy = false; }
@@ -220,8 +224,8 @@
     {/each}
   </aside>
   {/if}
-  <section class="conversation-content" aria-label="Composer conversation">
-    {#if error}<div class="error" role="alert">{error}</div>{/if}
+  <section class="chat-panel conversation-content" aria-label="Composer conversation">
+    {#if error}<div class="session-error" role="alert">{error}</div>{/if}
     {#if opening}<p class="muted" role="status">Opening conversation…</p>
     {:else if creating}
       <form class="create-form" onsubmit={(event) => { event.preventDefault(); void create(); }}>
@@ -231,45 +235,39 @@
           {#if concreteModels.length === 0}<option value="">{modelsLoading ? 'Loading models…' : 'No models available'}</option>{/if}
           {#each concreteModels as choice}<option value={choice.id}>{choice.id}</option>{/each}
         </select></label>
-        {#if modelError}<p class="error" role="alert">{modelError} <button type="button" onclick={loadModels}>Retry models</button></p>
+        {#if modelError}<p class="error" role="alert">{modelError} <button class="text-button" type="button" onclick={loadModels}>Retry models</button></p>
         {:else if !modelsLoading && concreteModels.length === 0}<p class="muted">Add a provider in <a href="/settings">Settings</a> to choose a model.</p>{/if}
-        <div><button class="primary" type="submit" disabled={busy || !name.trim() || !model}>{busy ? 'Creating…' : 'Create conversation'}</button></div>
+        <div><button class="primary-button" type="submit" disabled={busy || !name.trim() || !model}>{busy ? 'Creating…' : 'Create conversation'}</button></div>
       </form>
     {:else if selected}
-      <div class="conversation-heading"><div><h2>{selected.name}</h2><p class="muted">{selected.model}</p></div><button onclick={remove} disabled={busy || running}>Delete</button></div>
-      <!-- svelte-ignore a11y_no_noninteractive_tabindex (Scrollable conversation history is keyboard accessible.) -->
-      <div class="history" bind:this={history} role="region" aria-label="Conversation history" tabindex="0">
-        {#if selected.turns.length === 0}<div class="empty-history"><h3>What would you like to explore?</h3><p class="muted">Share a rough idea, a problem, or a possibility. Work through the details at your own pace.</p></div>{/if}
-        {#each selected.turns as turn (turn.id)}
-          <article class="turn">
-            <div class="user-message"><strong>You</strong><p>{turn.prompt}</p></div>
-            {#each turn.interactions || [] as interaction}<div class="interaction"><strong>Composer</strong><p>{interaction.question}</p><strong>You</strong><p>{interaction.answer}</p></div>{/each}
-            <div class="model-message"><strong>Composer</strong>
-              {#if turn.answer}<Markdown content={turn.answer} />{/if}
-              {#if turn.status === 'running'}<p class="muted" role="status">Thinking through your idea…</p>
-              {:else if turn.status !== 'completed'}<p class="error">{turn.status === 'cancelled' ? 'Reply stopped. You can continue the conversation.' : turn.error || 'This reply did not finish.'}</p>{/if}
-            </div>
-          </article>
-        {/each}
+      <div class="chat-heading">
+        <div><h2>{selected.name}</h2><p>Composer</p></div>
+        <div class="chat-heading-actions">
+          <span class:running>{running ? 'Running' : 'Ready'}</span>
+          {#if running}<button class="stop-control" type="button" title="Stop reply" aria-label="Stop reply" onclick={cancel} disabled={cancelling}><Square aria-hidden="true" size={13} fill="currentColor" /></button>{/if}
+          <button type="button" title="Delete conversation" aria-label="Delete" onclick={remove} disabled={busy || running}><Trash2 aria-hidden="true" size={15} /></button>
+        </div>
       </div>
+      {#if selected.turns.length}
+        <Transcript {messages} assistantLabel="Composer" label="Conversation history" sessionKey={selected.id} />
+      {:else}
+        <div class="chat-empty"><Bot aria-hidden="true" size={34} /><h3>What would you like to explore?</h3><p>Share a rough idea, a problem, or a possibility. Work through the details at your own pace.</p></div>
+      {/if}
       {#if selected.question}
-        <form class="question-card" onsubmit={(event) => { event.preventDefault(); void submitAnswer(); }}>
-          <h3>{selected.question.question}</h3>
-          {#if selected.question.context}<p class="muted">{selected.question.context}</p>{/if}
-          {#each selected.question.choices || [] as choice}<button type="button" onclick={() => submitAnswer(choice.id)} disabled={answering}><strong>{choice.label}</strong>{#if choice.description}<small>{choice.description}</small>{/if}</button>{/each}
-          <label for="composer-answer">Your answer</label><input id="composer-answer" bind:value={answer} disabled={answering} maxlength="60000" />
-          <button class="primary" type="submit" disabled={answering || !answer.trim()}>Answer</button>
+        <form class="run-question" onsubmit={(event) => { event.preventDefault(); void submitAnswer(); }}>
+          <div><span>COMPOSER NEEDS INPUT</span><h3>{selected.question.question}</h3>{#if selected.question.context}<p>{selected.question.context}</p>{/if}</div>
+          {#if selected.question.choices?.length}<div class="question-choices">{#each selected.question.choices as choice}<button type="button" onclick={() => submitAnswer(choice.id)} disabled={answering}><strong>{choice.label}</strong>{#if choice.description}<span>{choice.description}</span>{/if}</button>{/each}</div>{/if}
+          <div class="question-answer"><input aria-label="Your answer" bind:value={answer} disabled={answering} placeholder="Write an answer…" maxlength="60000" /><button class="primary-button" type="submit" disabled={answering || !answer.trim()}>Answer</button></div>
         </form>
       {/if}
-      <form class="message-form" onsubmit={(event) => { event.preventDefault(); void send(); }}>
-        <label class="message-label" for="composer-message">Develop your idea</label>
-        <textarea id="composer-message" bind:value={prompt} oninput={(event) => saveDraft(draftKey || `composer:${selected?.id}`, event.currentTarget.value)} onkeydown={onKey} disabled={busy} placeholder="Share an idea or continue the conversation…" rows="3" maxlength="60000"></textarea>
-        <div class="message-actions"><small class="muted">Enter to send · Shift + Enter for a new line</small>
-          {#if running}<button type="button" onclick={cancel} disabled={cancelling}>{cancelling ? 'Stopping…' : 'Stop reply'}</button>
-          {:else}<button class="primary" type="submit" disabled={busy || !prompt.trim()}>Send</button>{/if}
+      <form class="composer-wrap" onsubmit={(event) => { event.preventDefault(); void send(); }}>
+        <div class="composer">
+          <textarea id="composer-message" aria-label="Develop your idea" bind:value={prompt} oninput={(event) => saveDraft(draftKey || `composer:${selected?.id}`, event.currentTarget.value)} onkeydown={onKey} disabled={busy} placeholder="Share an idea or continue the conversation…" rows="3" maxlength="60000"></textarea>
+          <button class="send-button" type="submit" title="Send" aria-label="Send" disabled={busy || running || !prompt.trim()}><ArrowUp aria-hidden="true" size={17} /></button>
         </div>
+        <div class="composer-footer"><span class="conversation-model" title={selected.model}>{selected.model}</span><p>{running ? 'Reply in progress' : 'Enter to send'} · Shift + Enter for a new line</p></div>
       </form>
-    {:else}<div class="welcome"><p class="eyebrow">COMPOSER</p><h2>From a spark to a clearer idea.</h2><p class="muted">Talk with a model to explore possibilities, ask questions, and work out the details.</p><button class="primary" onclick={() => startCreate()}>New conversation</button></div>{/if}
+    {:else}<div class="welcome"><p class="eyebrow">COMPOSER</p><h2>From a spark to a clearer idea.</h2><p class="muted">Talk with a model to explore possibilities, ask questions, and work out the details.</p><button class="primary-button" onclick={() => startCreate()}>New conversation</button></div>{/if}
   </section>
   {#if selected && !creating}{#key selected.id}<ComposerArtifacts composerID={selected.id} {running} bind:dirty={artifactDirty} />{/key}{/if}
 </div>
@@ -277,51 +275,32 @@
 <style>
   .composer-view { display:grid; flex:1; grid-template-columns:260px minmax(0,1fr); grid-template-rows:minmax(0,1fr); gap:22px; min-height:0; }
   .composer-view.with-artifacts { grid-template-columns:260px minmax(300px,1fr) minmax(360px,1.1fr); }
-  .interaction { margin:0 16px 20px; padding:12px 16px; border-left:2px solid var(--violet); }
-  .interaction p { white-space:pre-wrap; overflow-wrap:anywhere; }
-  .question-card { flex:0 1 auto; min-height:0; max-height:40vh; overflow:auto; display:grid; gap:10px; padding:16px; border:1px solid var(--violet); border-radius:8px; }
-  .question-card h3,.question-card p { margin:0; }
-  .question-card button { text-align:left; }
-  .question-card small { display:block; margin-top:5px; color:var(--muted); }
+  .conversation-content { min-width:0; min-height:0; }
+  .conversation-model { max-width:50%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; padding:5px 8px; border:1px solid var(--border); border-radius:6px; color:var(--muted); background:var(--surface-raised); font-size:12px; }
   .conversation-list { overflow:auto; border-right:1px solid var(--border); padding:20px 14px 20px 0; }
-  .list-heading,.conversation-heading,.message-actions { display:flex; align-items:center; justify-content:space-between; gap:12px; }
-  h2 { margin:0; font-size:calc(18px * var(--text-scale)); }
-  .list-heading { margin-bottom:16px; flex-wrap:wrap; }
-  .list-heading h2 { font-size:calc(24px * var(--text-scale)); }
+  .list-heading { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:16px; }
   .conversation-item { width:100%; display:flex; flex-direction:column; gap:6px; text-align:left; margin-bottom:8px; padding:12px; overflow-wrap:anywhere; }
   .conversation-item.selected { border-color:var(--violet); background:var(--violet-soft); }
-  .conversation-item small { color:var(--muted); }
-  .conversation-content { min-width:0; min-height:0; display:flex; flex-direction:column; gap:16px; padding:20px 0 16px; }
-  .conversation-heading { flex:none; border-bottom:1px solid var(--border); padding-bottom:12px; }
-  .conversation-heading p { margin:6px 0 0; overflow-wrap:anywhere; }
-  .history { flex:1; min-height:0; overflow:auto; padding:0 16px 8px 0; scrollbar-gutter:stable; }
-  .turn { max-width:860px; margin:0 auto 28px; }
-  .user-message { border:1px solid var(--border); border-radius:8px; padding:16px; background:var(--surface-raised); margin-bottom:18px; }
-  .user-message p { white-space:pre-wrap; overflow-wrap:anywhere; margin:8px 0 0; line-height:1.6; }
-  .model-message { padding:0 16px; }
-  .model-message > strong { display:block; color:var(--accent-text); margin-bottom:10px; }
-  .message-form { flex:none; border-top:1px solid var(--border); padding-top:16px; }
-  .message-label { display:block; color:var(--muted); font-size:calc(12px * var(--text-scale)); margin-bottom:8px; }
-  textarea,input,select { width:100%; min-width:0; color:var(--text); background:var(--field-bg); border:1px solid var(--border-strong); border-radius:7px; padding:12px; font:inherit; }
-  textarea { resize:vertical; min-height:84px; max-height:220px; }
-  textarea:focus,input:focus,select:focus { outline:2px solid var(--violet); outline-offset:2px; }
-  .message-actions { margin-top:10px; }
-  button { color:var(--text); background:var(--surface-raised); border:1px solid var(--border-strong); border-radius:6px; padding:8px 12px; cursor:pointer; font:inherit; }
-  button:hover { border-color:var(--violet); }
-  button:disabled { opacity:.5; cursor:default; }
-  button.primary { background:var(--violet); border-color:var(--violet); color:var(--on-accent); }
-  .create-form { display:grid; gap:20px; max-width:600px; margin:30px auto; width:100%; }
+  .conversation-item small,.muted { color:var(--muted); }
+  .create-form { display:grid; gap:20px; max-width:600px; width:100%; margin:30px auto; padding:0 22px; }
   .create-form label { display:grid; gap:8px; }
-  .welcome,.empty-history { margin:50px auto; max-width:550px; }
-  .welcome h2,.create-form h2 { font-size:calc(25px * var(--text-scale)); line-height:1.3; }
-  .muted { color:var(--muted); line-height:1.6; }
+  .create-form input,.create-form select { width:100%; min-width:0; padding:10px; border:1px solid var(--border-strong); border-radius:6px; color:var(--text); background:var(--field-bg); font:inherit; }
+  .create-form input:focus,.create-form select:focus { outline:2px solid var(--violet); outline-offset:2px; }
   .error { color:var(--error); overflow-wrap:anywhere; }
+  .welcome { margin:50px auto; padding:0 22px; max-width:550px; }
+  .welcome h2,.create-form h2 { font-size:calc(22px * var(--text-scale)); line-height:1.4; }
   .eyebrow { color:var(--accent-text); font-size:calc(11px * var(--text-scale)); letter-spacing:.15em; font-weight:700; }
-  @media(max-width:1200px) { .composer-view {flex:none;grid-template-rows:auto;} .composer-view.with-artifacts { grid-template-columns:260px minmax(0,1fr);height:auto; } .with-artifacts :global(.artifacts){grid-column:2;} .conversation-content{min-height:600px;} .history{max-height:65vh;} }
-  @media(max-width:800px) { .composer-view,.composer-view.with-artifacts { grid-template-columns:1fr; height:auto; min-height:calc(100vh - 180px); } .with-artifacts :global(.artifacts){grid-column:1;} .conversation-list { max-height:200px; border-right:0; border-bottom:1px solid var(--border); padding:20px 0; } .conversation-content { min-height:500px; } .history { max-height:65vh; } .message-actions small { font-size:10px; } }
   .composer-view.embedded { width:100%; height:100%; min-height:0; gap:0; grid-template-columns:minmax(0,1fr); grid-template-rows:minmax(0,1fr); }
   .composer-view.embedded.with-artifacts { grid-template-columns:minmax(300px,1fr) minmax(320px,1fr); }
-  .embedded .conversation-content { padding:20px 24px 16px; }
-  @media(max-width:1200px) { .composer-view.embedded.with-artifacts { grid-template-columns:minmax(0,1fr); height:auto; overflow:auto; } .embedded.with-artifacts :global(.artifacts) { grid-column:1; min-height:500px; } }
-  @media(max-width:800px) { .embedded .conversation-content { padding:20px 18px 16px; } }
+  @media(max-width:1200px) {
+    .composer-view.embedded.with-artifacts { grid-template-columns:minmax(0,1fr); height:auto; overflow:auto; }
+    .embedded.with-artifacts :global(.artifacts) { grid-column:1; min-height:500px; }
+    .conversation-content { min-height:600px; height:calc(100dvh - 136px); }
+  }
+  @media(max-width:800px) {
+    .composer-view,.composer-view.with-artifacts { grid-template-columns:minmax(0,1fr); height:auto; }
+    .conversation-list { max-height:200px; border-right:0; border-bottom:1px solid var(--border); }
+    .conversation-content { min-height:560px; height:calc(100dvh - 270px); }
+    .composer-view :global(.artifacts) { grid-column:1; }
+  }
 </style>

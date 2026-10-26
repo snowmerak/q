@@ -22,7 +22,8 @@ export default defineConfig({
   use: { baseURL, browserName: 'chromium', viewport: { width: 1440, height: 900 }, trace: 'retain-on-failure', screenshot: 'only-on-failure' },
   globalTeardown: './e2e/teardown.mjs',
   webServer: {
-    command: 'go test -v ./studio -run ^TestStudioBrowserFixture$ -count=1 -timeout=5m',
+    // The full suite shares this fixture and can exceed five minutes on Windows.
+    command: 'go test -v ./studio -run ^TestStudioBrowserFixture$ -count=1 -timeout=10m',
     cwd: fileURLToPath(new URL('../../', import.meta.url)),
     env: { Q_STUDIO_BROWSER_ADDRESS: `127.0.0.1:${port}` },
     url: `${baseURL}/api/v1/status`,

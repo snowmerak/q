@@ -71,12 +71,25 @@ Both preview types can open in an expanded dialog. D2 starts at its natural
 size for readable labels and supports zoom, drag-to-pan, actual-size reset, and
 fit-to-screen inside the same sandbox.
 
-Studio's chat composer can persist a model selection for each session in
-`.q/sessions/<session-id>/model.json`. An explicit `SessionOptions.Model` takes
+Studio's chat composer can persist model and reasoning effort selections for
+each session in `.q/sessions/<session-id>/model.json`. An explicit `SessionOptions.Model` takes
 precedence over that selection, followed by the workspace and global defaults.
 Changes are accepted between turns and take effect on the next turn; clearing
 the conversation retains the choice. Selecting Default restores inheritance.
 Thinker and Librarian keep their global model assignments.
+
+`SessionModelConfig.ReasoningEffort` affects ordinary SessionHost chat turns.
+An empty effort inherits the global chat default; a nonempty effort overrides
+it for this session. Explicit `RunWithOptions` reasoning policy takes precedence
+over the saved session choice, including its empty provider-default policy.
+The Studio model endpoint returns both `reasoning_effort` and
+`effective_reasoning_effort`. PUT with an omitted effort preserves the saved
+choice; an explicit empty string restores inheritance. Model and effort changes
+share the existing idle-session lock and preserve conversation context.
+
+Composer uses the same transcript component and chat header/input styles as
+ordinary chat, with its own assistant label and saved reply status. Its question
+and cancellation APIs and managed artifact panel retain their workflow behavior.
 
 For a retryable step, supply a stable `OperationID`. The operation is saved with
 the actual session context. Retrying a pending operation continues that context

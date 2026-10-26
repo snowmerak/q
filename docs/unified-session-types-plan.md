@@ -201,6 +201,9 @@ event cursor를 만들어서는 안 된다. `sessionSummary.run_id`도 현재 �
 
 ### 4.6 Sessions 통합 구현과 UI 보존
 
+이 절의 보존 비교는 `81a3bfa`까지의 Sessions 통합을 기준으로 한다.
+이후 사용자가 요청한 Chat reasoning 선택과 Composer 스타일 정렬은 4.7절에서 다룬다.
+
 사용자 조건: 기존 Sessions UI를 해치지 않는 것을 최우선으로 한다.
 이에 따라 Interaction 상세 전체를 다른 컴포넌트로 옮기는 대규모 추출은 진행하지 않았다.
 기존 `SessionView.svelte`의 Interaction markup, 공통 `app.css`, 입력창·transcript·파일 패널
@@ -243,6 +246,27 @@ Council/Composer 기능 유지, 타입 간 초안·편집·비동기 상태의 �
 
 Browser 플러그인이 제공되지 않아 저장소의 Playwright와 격리된 Studio/model fixture를 사용했다.
 스크린샷·trace 등 실행 산출물은 저장소 밖의 임시 디렉터리에 저장했다.
+
+### 4.7 Chat reasoning과 Composer 표시 일관성
+
+- Chat 하단 모델 선택기 옆에 모델 discovery의 지원 단계에 따른 reasoning 선택을 추가했다.
+  세션의 `model.json`에 저장하며, 빈 값은 전역 Chat reasoning을 상속한다. 모델만 변경하는
+  기존 API 요청은 reasoning 선택을 보존한다. 실행 중 변경은 기존 세션 잠금으로 거부한다.
+- 일반 SessionHost 턴에서 선택값을 적용한다. 명시적인 `RunWithOptions` 정책은 우선하므로
+  Council·Composer 등 임베딩 실행기의 reasoning 정책을 바꾸지 않는다.
+- Composer 대화는 일반 Chat의 Transcript와 헤더·질문·입력창 스타일을 재사용한다.
+  표시용 턴/질문/응답 상태만 렌더러에 투영하며 native 모델 context를 다시 조립하지 않는다.
+  전송은 입력창 안의 화살표, 중단과 삭제는 헤더 아이콘으로 제공한다.
+- 산출물 경계·편집·격리 미리보기·확대, 초안과 미저장 source 보호는 기존 계약을 유지한다.
+- 저장·상속·명시적 실행 정책 우선순위는 실제 모델 요청을 검사하는 Go 테스트로 확인한다.
+  브라우저에서는 저장/재시작/초기화/실행 중 잠금과 Composer의 기존 전체 흐름을 검증한다.
+
+세부 저장·임베딩 계약은 [Agent Loop 임베딩 문서](agent-loop-embedding.md)가 소유한다.
+
+검증 결과: Go 전체 테스트와 실제 요청의 reasoning/상속/명시적 정책 우선순위 테스트,
+frontend check/build, vet/build/tidy 차이 검사, lint, govulncheck, modulecheck가 통과했다.
+브라우저는 79개 통과 후 공유 테스트 서버의 5분 제한이 만료되어 남은 9개를 재실행했고
+모두 통과했다. Playwright용 Go fixture 제한을 10분으로 늘렸으며 제품 실행 제한은 바꾸지 않았다.
 
 ## 5. 수정 규모와 검증
 

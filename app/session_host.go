@@ -632,11 +632,14 @@ func (host *SessionHost) prepareSession(runContext context.Context, workspaceSto
 	}
 	if len(configured) == 0 {
 		options.ReasoningEffort = startup.config.Provider.ReasoningEffort
+		if sessionModel.ReasoningEffort != "" {
+			options.ReasoningEffort = sessionModel.ReasoningEffort
+		}
 	}
 	if options.Model == "" {
 		options.Model = sessionModel.Model
 	}
-	if len(configured) > 0 || options.Model != "" {
+	if len(configured) > 0 || options.Model != "" || sessionModel.ReasoningEffort != "" {
 		stable := options
 		stable.OperationID = ""
 		stable.Control = nil

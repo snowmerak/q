@@ -74,6 +74,9 @@ func TestSessionOptionsRetainActualQContextAndResumeAcrossHosts(t *testing.T) {
 	if err := store.Save(workspace.Session{}); err != nil {
 		t.Fatal(err)
 	}
+	if err := store.SaveSessionModelConfig(workspace.SessionModelConfig{ReasoningEffort: "low"}); err != nil {
+		t.Fatal(err)
+	}
 	if err := lock.Close(); err != nil {
 		t.Fatal(err)
 	}
