@@ -14,6 +14,7 @@ import (
 	"github.com/snowmerak/q/composer"
 	"github.com/snowmerak/q/diagnostics"
 	"github.com/snowmerak/q/worklock"
+	"github.com/snowmerak/q/workspace"
 )
 
 type composerService struct {
@@ -82,15 +83,16 @@ func (s *composerService) serveCollection(w http.ResponseWriter, r *http.Request
 		}{values})
 	case http.MethodPost:
 		var input struct {
-			Name        string `json:"name"`
-			Model       string `json:"model"`
-			StorageRoot string `json:"storage_root,omitempty"`
+			Name            string `json:"name"`
+			Model           string `json:"model"`
+			ReasoningEffort string `json:"reasoning_effort,omitempty"`
+			StorageRoot     string `json:"storage_root,omitempty"`
 		}
 		if err := decodeSettingsRequest(w, r, &input); err != nil {
 			writeAPIError(w, http.StatusBadRequest, err)
 			return
 		}
-		value, err := s.store.CreateInRoot(input.StorageRoot, input.Name, input.Model)
+		value, err := s.store.CreateWithOptions(input.StorageRoot, input.Name, workspace.SessionModelConfig{Model: input.Model, ReasoningEffort: input.ReasoningEffort})
 		if err != nil {
 			writeComposerError(w, err)
 			return
@@ -237,6 +239,7 @@ func (s *composerService) execute(ctx context.Context, cancel context.CancelFunc
 	session := s.store.SessionStore(c)
 	var published time.Time
 	options := composer.Options(c.Model, turn.ID)
+	options.ReasoningEffort = c.ReasoningEffort
 	options.Control = control
 	err := s.runner.RunWithOptions(ctx, session, c.SessionID, turn.Prompt, options, func(event app.SessionEvent) error {
 		if event.Type == "question" {

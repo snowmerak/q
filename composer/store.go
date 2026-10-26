@@ -42,16 +42,17 @@ type Interaction struct {
 }
 
 type Conversation struct {
-	Version       int       `json:"version"`
-	ID            string    `json:"id"`
-	Name          string    `json:"name"`
-	Model         string    `json:"model"`
-	SessionID     string    `json:"session_id"`
-	WorkspaceRoot string    `json:"workspace_root"`
-	Turns         []Turn    `json:"turns"`
-	CreatedAt     time.Time `json:"created_at"`
-	UpdatedAt     time.Time `json:"updated_at"`
-	Question      *Question `json:"question,omitempty"`
+	Version         int       `json:"version"`
+	ID              string    `json:"id"`
+	Name            string    `json:"name"`
+	Model           string    `json:"model"`
+	ReasoningEffort string    `json:"reasoning_effort,omitempty"`
+	SessionID       string    `json:"session_id"`
+	WorkspaceRoot   string    `json:"workspace_root"`
+	Turns           []Turn    `json:"turns"`
+	CreatedAt       time.Time `json:"created_at"`
+	UpdatedAt       time.Time `json:"updated_at"`
+	Question        *Question `json:"question,omitempty"`
 }
 
 type Question struct {
@@ -92,15 +93,23 @@ func (s *Store) Create(name, model string) (Conversation, error) {
 // CreateInRoot selects storage independently of the model's authorized tools.
 // Empty root gives the session its own ordinary private chat workspace.
 func (s *Store) CreateInRoot(root, name, model string) (Conversation, error) {
-	name, model = strings.TrimSpace(name), strings.TrimSpace(model)
-	if name == "" || utf8.RuneCountInString(name) > 120 || model == "" || len(model) > 512 {
+	return s.CreateWithOptions(root, name, workspace.SessionModelConfig{Model: model})
+}
+
+// CreateWithOptions saves the model and reasoning effort with the new session.
+func (s *Store) CreateWithOptions(root, name string, options workspace.SessionModelConfig) (Conversation, error) {
+	name, options.Model = strings.TrimSpace(name), strings.TrimSpace(options.Model)
+	if name == "" || utf8.RuneCountInString(name) > 120 || options.Model == "" || len(options.Model) > 512 {
 		return Conversation{}, ErrInvalidInput
 	}
+	if err := options.Validate(); err != nil {
+		return Conversation{}, errors.Join(ErrInvalidInput, err)
+	}
 	now := time.Now().UTC()
-	c := Conversation{Version: 1, Name: name, Model: model, Turns: []Turn{}, CreatedAt: now, UpdatedAt: now}
+	c := Conversation{Version: 1, Name: name, Model: options.Model, ReasoningEffort: options.ReasoningEffort, Turns: []Turn{}, CreatedAt: now, UpdatedAt: now}
 	_, err := s.catalog.Create(root, name, workspace.Composer, func(store workspace.Store) error {
 		c.ID, c.SessionID, c.WorkspaceRoot = store.SessionID, store.SessionID, store.Root
-		if err := store.SaveSessionModelConfig(workspace.SessionModelConfig{Model: model}); err != nil {
+		if err := store.SaveSessionModelConfig(options); err != nil {
 			return err
 		}
 		return writeConversation(store, c)

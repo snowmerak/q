@@ -5,7 +5,8 @@ test('session model selection persists, stays local, and locks during execution'
   const second = await (await request.post('/api/v1/chats', { data: {} })).json();
   const errors = [];
   await page.route('**/api/v1/settings/models', route => route.fulfill({ json: { models: [
-    { id: 'default/test-model', reasoning_control: 'effort', reasoning_efforts: ['low', 'high'] }
+    { id: 'default/test-model', reasoning_control: 'effort', reasoning_efforts: ['low', 'high'] },
+    { id: `other-provider/${'long-unselected-model-name-'.repeat(5)}` }
   ] } }));
   page.on('pageerror', error => errors.push(error.message));
   page.on('console', message => {
@@ -31,6 +32,13 @@ test('session model selection persists, stays local, and locks during execution'
     await page.reload();
     await expect(picker).toHaveValue('default/test-model');
     await expect(effort).toHaveValue('high');
+    // Long catalog entries must not push the reasoning control onto another row.
+    await expect.poll(async () => {
+      const modelBox = await picker.boundingBox();
+      const effortBox = await effort.boundingBox();
+      return Math.abs(modelBox.y - effortBox.y);
+    }).toBeLessThanOrEqual(1);
+    await expect(picker).toHaveAttribute('title', 'default/test-model');
     await page.screenshot({ path: testInfo.outputPath('session-model-desktop.png') });
     await page.goto(`/sessions/${second.registration_id}`);
     await expect(picker).toBeEnabled();

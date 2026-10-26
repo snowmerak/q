@@ -91,7 +91,10 @@ func TestComposerRealRuntimeUsesSharedLoopAndRetainsConversation(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]any{"choices": []any{map[string]any{"index": 0, "message": message, "finish_reason": finish}}})
 	}, nil)
-	c := createTestComposer(t, fixture.handler)
+	var c composer.Conversation
+	if status := councilAPI(t, fixture.handler, http.MethodPost, "/api/v1/composers", map[string]string{"name": "A new idea", "model": "default/test-model", "reasoning_effort": "high"}, &c); status != http.StatusCreated {
+		t.Fatalf("create composer = %d: %+v", status, c)
+	}
 	for _, prompt := range []string{"I want to make a reading club app", "The first users will be local libraries"} {
 		response := serveJSON(t, fixture.handler, http.MethodPost, "/api/v1/composers/"+c.ID+"/messages", map[string]string{"content": prompt})
 		if response.Code != http.StatusAccepted {
@@ -106,6 +109,9 @@ func TestComposerRealRuntimeUsesSharedLoopAndRetainsConversation(t *testing.T) {
 			case input := <-requests:
 				if input.Model != "test-model" {
 					t.Fatalf("wrong model: %s", input.Model)
+				}
+				if input.ReasoningEffort != "high" {
+					t.Fatalf("wrong reasoning effort: %q", input.ReasoningEffort)
 				}
 				allowed := map[string]bool{
 					"ask_to_user": true, "search_skills": true, "get_skill": true, "search_archive": true, "get_archive_record": true, "learn": true,
@@ -177,7 +183,7 @@ func TestComposerRealRuntimeUsesSharedLoopAndRetainsConversation(t *testing.T) {
 		t.Fatal(err)
 	}
 	var saved composer.Conversation
-	if status := councilAPI(t, reopened, http.MethodGet, "/api/v1/composers/"+c.ID, nil, &saved); status != http.StatusOK || len(saved.Turns) != 2 || saved.SessionID != c.SessionID {
+	if status := councilAPI(t, reopened, http.MethodGet, "/api/v1/composers/"+c.ID, nil, &saved); status != http.StatusOK || len(saved.Turns) != 2 || saved.SessionID != c.SessionID || saved.ReasoningEffort != "high" {
 		t.Fatalf("reopened = %d %+v", status, saved)
 	}
 	if response := serveJSON(t, fixture.handler, http.MethodDelete, "/api/v1/composers/"+c.ID, nil); response.Code != http.StatusNoContent {

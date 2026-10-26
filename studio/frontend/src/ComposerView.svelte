@@ -6,6 +6,7 @@
   import type { Message } from './sessions/types';
   import ComposerArtifacts from './ComposerArtifacts.svelte';
   import type { ModelOption } from './settings/types';
+  import { reasoningOptions } from './settings/reasoning';
   import { loadDraft, saveDraft } from './sessions/drafts';
 
   export let embedded = false;
@@ -18,7 +19,7 @@
 
   type Turn = { id: string; prompt: string; answer?: string; status: string; error?: string; created_at: string; interactions?: { question: string; answer: string }[] };
   type Question = { call_id: string; question: string; context?: string; choices?: { id: string; label: string; description?: string }[] };
-  type Conversation = { id: string; name: string; model: string; updated_at: string; turns: Turn[]; question?: Question };
+  type Conversation = { id: string; name: string; model: string; reasoning_effort?: string; updated_at: string; turns: Turn[]; question?: Question };
   let answer = '';
   let answering = false;
   let questionID = '';
@@ -35,6 +36,7 @@
   let modelsLoading = true;
   let name = '';
   let model = '';
+  let reasoningEffort = '';
   let prompt = '';
   let poll: ReturnType<typeof setTimeout> | undefined;
   let generation = 0;
@@ -122,13 +124,13 @@
     if (artifactDirty && !window.confirm('Discard your unsaved artifact source changes?')) return;
     rememberDraft(); stopPoll(); generation++;
     selected = null; creating = true; opening = false; cancelling = false;
-    name = ''; prompt = ''; error = '';
+    name = ''; reasoningEffort = ''; prompt = ''; error = '';
     if (navigate && !embedded) window.history.pushState({}, '', '/composers');
   }
   async function create() {
     busy = true; error = '';
     try {
-      const value = await api<Conversation>('POST', '/api/v1/composers', { name: name.trim(), model });
+      const value = await api<Conversation>('POST', '/api/v1/composers', { name: name.trim(), model, reasoning_effort: reasoningEffort });
       remember(value);
       if (embedded) await oncreated(value.id);
       else await open(value.id);
@@ -224,16 +226,20 @@
     {/each}
   </aside>
   {/if}
-  <section class="chat-panel conversation-content" aria-label="Composer conversation">
+  <section class="chat-panel conversation-content" class:creating aria-label="Composer conversation">
     {#if error}<div class="session-error" role="alert">{error}</div>{/if}
     {#if opening}<p class="muted" role="status">Opening conversation…</p>
     {:else if creating}
       <form class="create-form" onsubmit={(event) => { event.preventDefault(); void create(); }}>
         <div><p class="eyebrow">COMPOSER</p><h2>Give your idea room to grow.</h2><p class="muted">Choose a model and work through your idea together. Your conversation is saved so you can return to it.</p></div>
         <label>Name<input bind:value={name} maxlength="120" required placeholder="What are you thinking about?" disabled={busy} /></label>
-        <label>Model<select bind:value={model} required disabled={busy || concreteModels.length === 0}>
+        <label>Model<select bind:value={model} onchange={() => { reasoningEffort = ''; }} required disabled={busy || concreteModels.length === 0}>
           {#if concreteModels.length === 0}<option value="">{modelsLoading ? 'Loading models…' : 'No models available'}</option>{/if}
           {#each concreteModels as choice}<option value={choice.id}>{choice.id}</option>{/each}
+        </select></label>
+        <label>Reasoning effort<select bind:value={reasoningEffort} disabled={busy || !model}>
+          <option value="">Provider default</option>
+          {#each reasoningOptions(model, reasoningEffort, models) as effort}<option value={effort}>{effort}</option>{/each}
         </select></label>
         {#if modelError}<p class="error" role="alert">{modelError} <button class="text-button" type="button" onclick={loadModels}>Retry models</button></p>
         {:else if !modelsLoading && concreteModels.length === 0}<p class="muted">Add a provider in <a href="/settings">Settings</a> to choose a model.</p>{/if}
@@ -276,15 +282,16 @@
   .composer-view { display:grid; flex:1; grid-template-columns:260px minmax(0,1fr); grid-template-rows:minmax(0,1fr); gap:22px; min-height:0; }
   .composer-view.with-artifacts { grid-template-columns:260px minmax(300px,1fr) minmax(360px,1.1fr); }
   .conversation-content { min-width:0; min-height:0; }
+  .conversation-content.creating { overflow:auto; }
   .conversation-model { max-width:50%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; padding:5px 8px; border:1px solid var(--border); border-radius:6px; color:var(--muted); background:var(--surface-raised); font-size:12px; }
   .conversation-list { overflow:auto; border-right:1px solid var(--border); padding:20px 14px 20px 0; }
   .list-heading { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:16px; }
   .conversation-item { width:100%; display:flex; flex-direction:column; gap:6px; text-align:left; margin-bottom:8px; padding:12px; overflow-wrap:anywhere; }
   .conversation-item.selected { border-color:var(--violet); background:var(--violet-soft); }
   .conversation-item small,.muted { color:var(--muted); }
-  .create-form { display:grid; gap:20px; max-width:600px; width:100%; margin:30px auto; padding:0 22px; }
+  .create-form { display:grid; flex:none; gap:20px; max-width:600px; width:100%; margin:30px auto; padding:0 22px; }
   .create-form label { display:grid; gap:8px; }
-  .create-form input,.create-form select { width:100%; min-width:0; padding:10px; border:1px solid var(--border-strong); border-radius:6px; color:var(--text); background:var(--field-bg); font:inherit; }
+  .create-form input,.create-form select { width:100%; min-width:0; height:auto; min-height:38px; padding:10px; border:1px solid var(--border-strong); border-radius:6px; color:var(--text); background:var(--field-bg); font:inherit; line-height:1.5; }
   .create-form input:focus,.create-form select:focus { outline:2px solid var(--violet); outline-offset:2px; }
   .error { color:var(--error); overflow-wrap:anywhere; }
   .welcome { margin:50px auto; padding:0 22px; max-width:550px; }

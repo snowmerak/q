@@ -1,12 +1,42 @@
 package composer
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/snowmerak/q/workspace"
 )
+
+func TestComposerReasoningEffortPersistsAndRejectsInvalidValues(t *testing.T) {
+	store := NewStore(t.TempDir())
+	for _, effort := range []string{" high", "low high", strings.Repeat("x", 65)} {
+		_, err := store.CreateWithOptions("", "Idea", workspace.SessionModelConfig{Model: "provider/model", ReasoningEffort: effort})
+		if !errors.Is(err, ErrInvalidInput) {
+			t.Fatalf("effort %q: %v", effort, err)
+		}
+	}
+	for _, effort := range []string{"", "high"} {
+		created, err := store.CreateWithOptions("", "Idea", workspace.SessionModelConfig{Model: "provider/model", ReasoningEffort: effort})
+		if err != nil {
+			t.Fatal(err)
+		}
+		reopened, err := NewStore(store.Root).Load(created.ID)
+		if err != nil || reopened.ReasoningEffort != effort {
+			t.Fatalf("reopened=%+v %v", reopened, err)
+		}
+		config, err := store.SessionStore(reopened).LoadSessionModelConfig()
+		if err != nil || config.Model != created.Model || config.ReasoningEffort != effort {
+			t.Fatalf("session model=%+v %v", config, err)
+		}
+	}
+	list, err := store.List()
+	if err != nil || len(list) != 2 {
+		t.Fatalf("invalid values created sessions: %+v %v", list, err)
+	}
+}
 
 func TestComposerUsesCanonicalPrivateSessionAndExplicitRoot(t *testing.T) {
 	config := t.TempDir()

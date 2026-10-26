@@ -142,8 +142,11 @@ test('Composer creates a model conversation, saves history, and continues after 
   const errors = [];
   page.on('pageerror', error => errors.push(error.message));
   await page.route('**/api/v1/settings/models', route => route.fulfill({ json: { models: [
-    { id: 'default/test-model' }, { id: 'a-fallback-group', group: true }
+    { id: 'default/test-model', reasoning_control: 'effort', reasoning_efforts: ['low', 'high'] },
+    { id: 'default/other-model', reasoning_control: 'effort', reasoning_efforts: ['low'] },
+    { id: 'a-fallback-group', group: true }
   ] } }));
+  await page.addInitScript(() => localStorage.setItem('q-studio-text-scale', '145'));
   let id;
   try {
     await page.goto('/');
@@ -152,7 +155,30 @@ test('Composer creates a model conversation, saves history, and continues after 
     await page.getByRole('button', { name: 'Add or create session', exact: true }).click();
     await page.getByRole('button', { name: 'New Composer', exact: true }).click();
     await page.getByLabel('Name', { exact: true }).fill('Reading club idea');
-    await expect(page.getByRole('combobox', { name: 'Model', exact: true }).locator('option')).toHaveText(['default/test-model']);
+    const modelPicker = page.getByRole('combobox', { name: 'Model', exact: true });
+    const effortPicker = page.getByRole('combobox', { name: 'Reasoning effort', exact: true });
+    await expect(modelPicker.locator('option')).toHaveText(['default/test-model', 'default/other-model']);
+    await expect(effortPicker).toHaveValue('');
+    await effortPicker.selectOption('high');
+    await modelPicker.selectOption('default/other-model');
+    await expect(effortPicker).toHaveValue('');
+    await expect(effortPicker.locator('option')).toHaveText(['Provider default', 'low']);
+    await modelPicker.selectOption('default/test-model');
+    await effortPicker.selectOption('high');
+    // The largest appearance font must fit inside each creation control.
+    for (const control of [page.getByLabel('Name', { exact: true }), modelPicker, effortPicker]) {
+      expect(await control.evaluate(element => {
+        const style = getComputedStyle(element);
+        return element.clientHeight - parseFloat(style.paddingTop) - parseFloat(style.paddingBottom) >= parseFloat(style.lineHeight);
+      })).toBe(true);
+    }
+    await page.screenshot({ path: testInfo.outputPath('composer-create-large-font.png') });
+    await page.setViewportSize({ width: 390, height: 844 });
+    await effortPicker.scrollIntoViewIfNeeded();
+    await expect(effortPicker).toBeInViewport();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    await page.screenshot({ path: testInfo.outputPath('composer-create-mobile.png') });
+    await page.setViewportSize({ width: 1440, height: 900 });
     await page.getByRole('button', { name: 'Create conversation' }).click();
     await expect(page.getByRole('heading', { name: 'Reading club idea', exact: true })).toBeVisible();
     id = (await (await request.get('/api/v1/registered-sessions')).json()).sessions.find(item => item.registration_id === new URL(page.url()).pathname.split('/').pop()).session.session_id;
@@ -173,6 +199,7 @@ test('Composer creates a model conversation, saves history, and continues after 
     await page.screenshot({ path: testInfo.outputPath('conversation.png'), fullPage: true });
     const detail = await (await request.get(`/api/v1/composers/${id}`)).json();
     expect(detail.model).toBe('default/test-model');
+    expect(detail.reasoning_effort).toBe('high');
     expect(detail.turns).toHaveLength(2);
     expect(detail.turns.every(turn => turn.status === 'completed')).toBe(true);
     await page.getByRole('button', { name: 'Overview', exact: true }).click();
