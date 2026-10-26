@@ -2,9 +2,6 @@
 package council
 
 import (
-	"crypto/sha256"
-	"database/sql"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -16,8 +13,11 @@ import (
 	"sync"
 	"time"
 
+	"github.com/snowmerak/q/client"
 	"github.com/snowmerak/q/config"
 	"github.com/snowmerak/q/internal/fsreplace"
+	"github.com/snowmerak/q/internal/sessioncatalog"
+	"github.com/snowmerak/q/worklock"
 	"github.com/snowmerak/q/workspace"
 )
 
@@ -117,12 +117,14 @@ type Turn struct {
 }
 
 type Store struct {
-	Root string
-	mu   sync.Mutex
-	db   *sql.DB
+	Root    string
+	mu      sync.Mutex
+	catalog *sessioncatalog.Catalog
 }
 
-func NewStore(configDir string) *Store { return &Store{Root: filepath.Join(configDir, "council")} }
+func NewStore(configDir string) *Store {
+	return &Store{Root: configDir, catalog: sessioncatalog.New(configDir)}
+}
 
 func ValidID(id string) bool {
 	if len(id) != 36 {
@@ -207,165 +209,73 @@ func validateSeat(seat Seat) error {
 	return nil
 }
 
-func workspaceKey(root string) string {
-	path := filepath.Clean(root)
-	// Windows workspace paths are case insensitive.
-	if filepath.Separator == '\\' {
-		path = strings.ToLower(path)
+// SessionStore resolves the single canonical parent; its contents are authoritative.
+func (s *Store) SessionStore(id string) (workspace.Store, error) {
+	if !ValidID(id) {
+		return workspace.Store{}, errors.New("invalid council ID")
 	}
-	sum := sha256.Sum256([]byte(path))
-	return hex.EncodeToString(sum[:16])
+	return s.catalog.Session(id, workspace.Council)
 }
-
-func (s *Store) path(value Council) string {
-	switch value.Scope {
-	case Independent:
-		return filepath.Join(s.Root, "independent", value.ID)
-	case Workspace:
-		return filepath.Join(s.Root, "workspaces", workspaceKey(value.WorkspaceRoot), value.ID)
-	default:
-		return filepath.Join(s.Root, "projects", value.ProjectID, value.ID)
-	}
-}
-
-// SessionRoot locates a council's durable Q execution state. Independent
-// councils live entirely below ~/.q/council/independent/<council-id>.
 func (s *Store) SessionRoot(id string) (string, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	value, err := s.loadLocked(id)
+	store, err := s.SessionStore(id)
 	if err != nil {
 		return "", err
 	}
-	return s.path(value), nil
+	return store.SessionDir(), nil
 }
+func (s *Store) Lock(id string) (*worklock.Lock, error) {
+	if !ValidID(id) {
+		return nil, errors.New("invalid council ID")
+	}
+	if err := os.MkdirAll(s.Root, 0o700); err != nil {
+		return nil, err
+	}
+	return worklock.AcquireFile(s.Root, filepath.Join("session-operation-locks", id+".lock"), "q council workflow")
+}
+func (s *Store) Create(value Council) (Council, error) { return s.CreateInRoot("", value) }
 
-func (s *Store) Create(value Council) (Council, error) {
+// CreateInRoot allows a caller to select a workspace independently of read scope.
+// Empty root allocates a private workspace using the ordinary chat convention.
+func (s *Store) CreateInRoot(root string, value Council) (Council, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if err := Validate(value); err != nil {
 		return Council{}, err
 	}
+	now := time.Now().UTC()
+	value.Version, value.CreatedAt, value.UpdatedAt = version, now, now
 	value.Rounds = EffectiveRounds(value)
-	id, err := workspace.NewSessionID()
-	if err != nil {
-		return Council{}, err
-	}
-	value.ID, value.Version = id, version
-	value.CreatedAt = time.Now().UTC()
-	value.UpdatedAt = value.CreatedAt
-	db, err := s.openIndexLocked()
-	if err != nil {
-		return Council{}, err
-	}
-	tx, err := db.Begin()
-	if err != nil {
-		return Council{}, err
-	}
-	defer func() { _ = tx.Rollback() }()
-	path := filepath.Join(s.path(value), "council.json")
-	body, err := json.Marshal(value)
-	if err != nil {
-		return Council{}, err
-	}
-	if _, err := tx.Exec(`INSERT INTO councils(id, path, updated_at, document) VALUES(?, ?, ?, ?)`, value.ID, path, value.UpdatedAt.UnixNano(), body); err != nil {
-		return Council{}, err
-	}
-	if err := writeDocument(path, value); err != nil {
-		return Council{}, err
-	}
-	if err := tx.Commit(); err != nil {
-		return Council{}, err
-	}
-	return value, nil
+	_, err := s.catalog.Create(root, value.Name, workspace.Council, func(store workspace.Store) error {
+		value.ID = store.SessionID
+		return writeDocument(filepath.Join(store.SessionDir(), "council", "config.json"), value)
+	})
+	return value, err
 }
-
 func (s *Store) List() ([]Council, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.listLocked()
-}
-
-func (s *Store) listLocked() (result []Council, returnErr error) {
-	db, err := s.openIndexLocked()
+	stores, err := s.catalog.Sessions(workspace.Council)
 	if err != nil {
 		return nil, err
 	}
-	rows, err := db.Query(`SELECT document FROM councils ORDER BY updated_at DESC, id`)
-	if err != nil {
-		return nil, err
-	}
-	defer func() { returnErr = errors.Join(returnErr, rows.Close()) }()
-	for rows.Next() {
-		var body []byte
-		if err := rows.Scan(&body); err != nil {
-			return nil, err
-		}
-		var value Council
-		if err := json.Unmarshal(body, &value); err != nil {
-			return nil, err
-		}
-		result = append(result, value)
-	}
-	return result, rows.Err()
-}
-
-func (s *Store) listDiskLocked() ([]Council, error) {
-	var result []Council
-	for _, scope := range []string{"independent", "workspaces", "projects"} {
-		base := filepath.Join(s.Root, scope)
-		outer, err := os.ReadDir(base)
+	values := []Council{}
+	for _, store := range stores {
+		value, err := s.loadLocked(store.SessionID)
 		if errors.Is(err, os.ErrNotExist) {
 			continue
 		}
 		if err != nil {
 			return nil, err
 		}
-		for _, entry := range outer {
-			if !entry.IsDir() {
-				continue
-			}
-			if scope == "independent" {
-				if !ValidID(entry.Name()) {
-					continue
-				}
-				value, err := readCouncil(filepath.Join(base, entry.Name(), "council.json"))
-				if errors.Is(err, os.ErrNotExist) {
-					continue
-				}
-				if err != nil {
-					return nil, err
-				}
-				result = append(result, value)
-				continue
-			}
-			inner, err := os.ReadDir(filepath.Join(base, entry.Name()))
-			if err != nil {
-				return nil, err
-			}
-			for _, child := range inner {
-				if !child.IsDir() || !ValidID(child.Name()) {
-					continue
-				}
-				value, err := readCouncil(filepath.Join(base, entry.Name(), child.Name(), "council.json"))
-				if errors.Is(err, os.ErrNotExist) {
-					continue
-				}
-				if err != nil {
-					return nil, err
-				}
-				result = append(result, value)
-			}
-		}
+		values = append(values, value)
 	}
-	sort.Slice(result, func(i, j int) bool { return result[i].UpdatedAt.After(result[j].UpdatedAt) })
-	return result, nil
+	sort.Slice(values, func(i, j int) bool { return values[i].UpdatedAt.After(values[j].UpdatedAt) })
+	return values, nil
 }
-
 func readCouncil(path string) (Council, error) {
 	var value Council
 	if err := readDocument(path, &value); err != nil {
-		return Council{}, err
+		return value, err
 	}
 	if value.Version != version || !ValidID(value.ID) {
 		return Council{}, fmt.Errorf("invalid council at %s", path)
@@ -376,101 +286,67 @@ func readCouncil(path string) (Council, error) {
 	value.Rounds = EffectiveRounds(value)
 	return value, nil
 }
-
 func (s *Store) Load(id string) (Council, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.loadLocked(id)
 }
-
 func (s *Store) loadLocked(id string) (Council, error) {
-	if !ValidID(id) {
-		return Council{}, errors.New("invalid council ID")
-	}
-	path, err := s.indexPathLocked(id)
+	store, err := s.SessionStore(id)
 	if err != nil {
 		return Council{}, err
 	}
-	value, err := readCouncil(path)
+	value, err := readCouncil(filepath.Join(store.SessionDir(), "council", "config.json"))
 	if err != nil {
 		return Council{}, err
 	}
-	if value.ID != id || filepath.Join(s.path(value), "council.json") != path {
-		return Council{}, errors.New("invalid council index path")
+	if value.ID != id {
+		return Council{}, errors.New("invalid council identity")
 	}
 	return value, nil
 }
-
 func (s *Store) Update(value Council) (Council, error) {
+	guard, err := s.Lock(value.ID)
+	if err != nil {
+		return Council{}, err
+	}
+	defer func() { _ = guard.Close() }()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	previous, err := s.loadLocked(value.ID)
 	if err != nil {
 		return Council{}, err
 	}
-	if value.Scope != previous.Scope || value.WorkspaceRoot != previous.WorkspaceRoot || value.ProjectID != previous.ProjectID {
+	if previous.Scope != value.Scope || previous.WorkspaceRoot != value.WorkspaceRoot || previous.ProjectID != value.ProjectID {
 		return Council{}, errors.New("council scope cannot be changed")
+	}
+	if !value.UpdatedAt.IsZero() && !value.UpdatedAt.Equal(previous.UpdatedAt) {
+		return Council{}, errors.New("council changed in another Studio; reload and retry")
 	}
 	if err := Validate(value); err != nil {
 		return Council{}, err
 	}
-	value.Rounds = EffectiveRounds(value)
 	value.Version, value.CreatedAt, value.UpdatedAt = version, previous.CreatedAt, time.Now().UTC()
-	db, err := s.openIndexLocked()
+	value.Rounds = EffectiveRounds(value)
+	store, err := s.SessionStore(value.ID)
 	if err != nil {
 		return Council{}, err
 	}
-	tx, err := db.Begin()
-	if err != nil {
+	if err := writeDocument(filepath.Join(store.SessionDir(), "council", "config.json"), value); err != nil {
 		return Council{}, err
 	}
-	defer func() { _ = tx.Rollback() }()
-	path := filepath.Join(s.path(value), "council.json")
-	body, err := json.Marshal(value)
-	if err != nil {
-		return Council{}, err
-	}
-	result, err := tx.Exec(`UPDATE councils SET updated_at = ?, document = ? WHERE id = ? AND updated_at = ?`, value.UpdatedAt.UnixNano(), body, value.ID, previous.UpdatedAt.UnixNano())
-	if err != nil {
-		return Council{}, err
-	}
-	if count, err := result.RowsAffected(); err != nil || count != 1 {
-		return Council{}, errors.New("council changed in another Studio; reload and retry")
-	}
-	if err := writeDocument(path, value); err != nil {
-		return Council{}, err
-	}
-	if err := tx.Commit(); err != nil {
+	if err := s.projectSession(store, value, nil); err != nil {
 		return Council{}, err
 	}
 	return value, nil
 }
 
+// Delete requires the workflow lock; active participants must be stopped first.
 func (s *Store) Delete(id string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	value, err := s.loadLocked(id)
-	if err != nil {
-		return err
-	}
-	db, err := s.openIndexLocked()
-	if err != nil {
-		return err
-	}
-	tx, err := db.Begin()
-	if err != nil {
-		return err
-	}
-	defer func() { _ = tx.Rollback() }()
-	if _, err := tx.Exec(`DELETE FROM councils WHERE id = ?`, id); err != nil {
-		return err
-	}
-	if err := os.RemoveAll(s.path(value)); err != nil {
-		return err
-	}
-	return tx.Commit()
+	return s.catalog.Delete(id, workspace.Council)
 }
-
 func (s *Store) SaveTurn(value Turn) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -481,32 +357,70 @@ func (s *Store) SaveTurn(value Turn) error {
 	if err != nil {
 		return err
 	}
+	store, err := s.SessionStore(c.ID)
+	if err != nil {
+		return err
+	}
 	value.UpdatedAt = time.Now().UTC()
-	return writeDocument(filepath.Join(s.path(c), "turns", value.ID+".json"), value)
+	if err := writeDocument(filepath.Join(store.SessionDir(), "council", "turns", value.ID+".json"), value); err != nil {
+		return err
+	}
+	turns, err := s.listTurnsLocked(c.ID)
+	if err != nil {
+		return err
+	}
+	return s.projectSession(store, c, turns)
 }
-
+func (s *Store) projectSession(store workspace.Store, c Council, turns []Turn) error {
+	guard, err := store.AcquireLock("q council projection")
+	if err != nil {
+		return err
+	}
+	defer func() { _ = guard.Close() }()
+	parent, err := store.Load()
+	if err != nil {
+		return err
+	}
+	parent.Title = c.Name
+	now := time.Now().UTC()
+	parent.UpdatedAt = &now
+	if turns != nil {
+		parent.Transcript = nil
+		for _, turn := range turns {
+			parent.Transcript = append(parent.Transcript, client.Message{Role: client.RoleUser, Content: turn.Prompt})
+			if turn.Final != "" {
+				parent.Transcript = append(parent.Transcript, client.Message{Role: client.RoleAssistant, Content: turn.Final})
+			}
+		}
+	}
+	return store.Save(parent)
+}
 func (s *Store) ListTurns(id string) ([]Turn, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	c, err := s.loadLocked(id)
+	return s.listTurnsLocked(id)
+}
+func (s *Store) listTurnsLocked(id string) ([]Turn, error) {
+	store, err := s.SessionStore(id)
 	if err != nil {
 		return nil, err
 	}
-	entries, err := os.ReadDir(filepath.Join(s.path(c), "turns"))
+	directory := filepath.Join(store.SessionDir(), "council", "turns")
+	entries, err := os.ReadDir(directory)
 	if errors.Is(err, os.ErrNotExist) {
 		return []Turn{}, nil
 	}
 	if err != nil {
 		return nil, err
 	}
-	result := make([]Turn, 0, len(entries))
+	result := []Turn{}
 	for _, entry := range entries {
 		name := strings.TrimSuffix(entry.Name(), ".json")
 		if !entry.Type().IsRegular() || !ValidID(name) || entry.Name() != name+".json" {
 			continue
 		}
 		var turn Turn
-		if err := readDocument(filepath.Join(s.path(c), "turns", entry.Name()), &turn); err != nil {
+		if err := readDocument(filepath.Join(directory, entry.Name()), &turn); err != nil {
 			return nil, err
 		}
 		if turn.ID != name || turn.CouncilID != id {
@@ -517,6 +431,7 @@ func (s *Store) ListTurns(id string) ([]Turn, error) {
 	sort.Slice(result, func(i, j int) bool { return result[i].CreatedAt.Before(result[j].CreatedAt) })
 	return result, nil
 }
+func (s *Store) Close() error { return nil }
 
 func readDocument(path string, target any) error {
 	file, err := os.Open(path)

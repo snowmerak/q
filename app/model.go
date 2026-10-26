@@ -1690,6 +1690,7 @@ func (m *model) restoreWorkspaceSession() {
 		operation := *session.Operation
 		m.sessionOperation = &operation
 	}
+	m.workspaceSessionType = session.Type
 	m.runID = session.RunID
 	if m.runID == "" {
 		m.ensureRunID()
@@ -1919,6 +1920,7 @@ func (m *model) saveWorkspaceSession() error {
 		responseAffinity = &workspace.ResponseAffinity{Model: m.activeModel(), Key: m.conversationID}
 	}
 	err := m.workspaceStore.Save(workspace.Session{
+		Type:               m.workspaceSessionType,
 		RunID:              m.runID,
 		Title:              m.sessionTitle,
 		UpdatedAt:          workspaceTimePointer(m.sessionUpdatedAt),

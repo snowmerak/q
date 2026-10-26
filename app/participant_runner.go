@@ -87,7 +87,7 @@ func (r *ParticipantRunner) RunWithOptions(ctx context.Context, store workspace.
 	session.mu.Lock()
 	defer session.mu.Unlock()
 	// Share the same lock as native sessions, including across Studio processes.
-	lock, err := workspace.AcquireSessionLock(store.Root, id, "q council ACP")
+	lock, err := selected.AcquireLock("q council ACP")
 	if err != nil {
 		return err
 	}

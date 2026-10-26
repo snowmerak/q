@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"path/filepath"
 	"sync"
 
 	tea "charm.land/bubbletea/v2"
@@ -141,7 +140,11 @@ func (commands *liveSessionCommands) close() {
 }
 
 func liveSessionKey(store workspace.Store, sessionID string) string {
-	return filepath.Join(store.Root, workspace.DirectoryName, "sessions", sessionID)
+	selected, err := store.ForSession(sessionID)
+	if err != nil {
+		return ""
+	}
+	return selected.SessionDir()
 }
 
 func (host *SessionHost) sessionConfiguration(store workspace.Store, configured ...SessionOptions) ([32]byte, error) {

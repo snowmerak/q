@@ -16,6 +16,7 @@ import (
 // execution, persistence or recovery. RuntimeFactory owns the authorized workspace
 // catalog. AllowedTools can also restrict loop-owned orchestration and memory.
 type SessionOptions struct {
+	Type  workspace.SessionType
 	Model string
 	// Agent selects a registered ACP connection through ParticipantRunner.
 	Agent                string

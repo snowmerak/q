@@ -870,9 +870,10 @@ the [Q Studio blueprint](docs/studio-blueprint.md).
 | `~/.q/usage.json` | Token Usage service loopback endpoint settings. |
 | `~/.q/mcp.json` | External MCP profiles and role assignments. |
 | `~/.q/studio-sessions.json` | Registered Studio root sessions and their workspace locations. |
-| `~/.q/council/index.sqlite` | Shared SQLite index for council lists across local Studio processes. |
-| `~/.q/council/independent/<council-id>/` | Conversations for councils with no workspace or project. |
-| `~/.q/council/workspaces/` and `~/.q/council/projects/` | Workspace and Studio project council conversations. |
+| `~/.q/chats/chat-*/.q/sessions/<session-id>/` | Default private workspace sessions for personal chats, Council, and Composer; explicit storage roots are also supported. |
+| `<workspace-root>/.q/sessions/<session-id>/session.json` | Canonical session with explicit `interaction`, `council`, or `composer` type. |
+| `<workspace-root>/.q/sessions/<session-id>/council/` | Council configuration, turn checkpoints, and internal participant contexts. |
+| `<workspace-root>/.q/sessions/<session-id>/composer/` and `docs/` | Composer presentation state and managed D2/HTML artifacts inside its session. |
 | `~/.q/worktrees/<repository-hash>/<invocation-id>/` | Linked Git worktree leases for mutating delegated sessions. |
 | `~/.q/systemone.json` | System One providers, model assignments, listener settings, and client key hashes (saved with private file permissions). |
 | `~/.q/systemone.key` | Private master key used to verify managed System One API keys. |

@@ -40,10 +40,11 @@ type sessionsService struct {
 }
 
 type sessionSummary struct {
-	SessionID string    `json:"session_id"`
-	RunID     string    `json:"run_id,omitempty"`
-	Title     string    `json:"title,omitempty"`
-	UpdatedAt time.Time `json:"updated_at"`
+	Type      workspace.SessionType `json:"type"`
+	SessionID string                `json:"session_id"`
+	RunID     string                `json:"run_id,omitempty"`
+	Title     string                `json:"title,omitempty"`
+	UpdatedAt time.Time             `json:"updated_at"`
 }
 
 type sessionMessage struct {
@@ -168,7 +169,7 @@ func (service *sessionsService) serveList(writer http.ResponseWriter, request *h
 		writeAPIError(writer, http.StatusInternalServerError, err)
 		return
 	}
-	entries, err := base.ListSessions()
+	entries, err := base.ListInteractionSessions()
 	if err != nil {
 		writeAPIError(writer, http.StatusInternalServerError, err)
 		return
@@ -246,12 +247,16 @@ func (service *sessionsService) serveDelete(writer http.ResponseWriter, request 
 		writeAPIError(writer, http.StatusBadRequest, err)
 		return
 	}
-	if err := service.releaseSession(root, request.PathValue("session")); err != nil {
+	store, err := (workspace.Store{Root: root}).ForSession(request.PathValue("session"))
+	if err != nil {
 		writeSessionError(writer, err)
 		return
 	}
-	store, err := (workspace.Store{Root: root}).ForSession(request.PathValue("session"))
-	if err != nil {
+	if err := store.RequireInteraction(); err != nil && !errors.Is(err, workspace.ErrNotFound) {
+		writeSessionError(writer, err)
+		return
+	}
+	if err := service.releaseSession(root, store.SessionID); err != nil {
 		writeSessionError(writer, err)
 		return
 	}
@@ -263,6 +268,9 @@ func (service *sessionsService) serveDelete(writer http.ResponseWriter, request 
 }
 
 func (service *sessionsService) deleteSession(store workspace.Store) (returnErr error) {
+	if err := store.RequireInteraction(); err != nil && !errors.Is(err, workspace.ErrNotFound) {
+		return err
+	}
 	// Hold the shared workspace lock before removing Studio artifacts too;
 	// an external TUI or a newly queued turn may still own this session.
 	lock, err := workspace.AcquireSessionLock(store.Root, store.SessionID, "q studio session delete")
@@ -288,6 +296,10 @@ func (service *sessionsService) serveClear(writer http.ResponseWriter, request *
 	root, err := canonicalWorkspaceDirectory(input.WorkspaceRoot)
 	if err != nil {
 		writeAPIError(writer, http.StatusBadRequest, err)
+		return
+	}
+	if err := (workspace.Store{Root: root, SessionID: request.PathValue("session")}).RequireInteraction(); err != nil {
+		writeAPIError(writer, http.StatusConflict, err)
 		return
 	}
 	if err := service.releaseSession(root, request.PathValue("session")); err != nil {
@@ -340,7 +352,12 @@ func (service *sessionsService) serveCompact(writer http.ResponseWriter, request
 		writeAPIError(writer, http.StatusBadRequest, err)
 		return
 	}
-	status, err := compactor.Compact(request.Context(), workspace.Store{Root: root}, request.PathValue("session"))
+	store := workspace.Store{Root: root, SessionID: request.PathValue("session")}
+	if err := store.RequireInteraction(); err != nil {
+		writeSessionError(writer, err)
+		return
+	}
+	status, err := compactor.Compact(request.Context(), workspace.Store{Root: root}, store.SessionID)
 	if err != nil {
 		writeSessionError(writer, err)
 		return
@@ -432,6 +449,7 @@ func (service *sessionsService) serveMessage(writer http.ResponseWriter, request
 
 func summarizeSession(entry workspace.SessionEntry) sessionSummary {
 	return sessionSummary{
+		Type:      entry.Type.Effective(),
 		SessionID: entry.Store.SessionID, RunID: entry.RunID,
 		Title: entry.Title, UpdatedAt: entry.UpdatedAt,
 	}
@@ -464,6 +482,7 @@ func detailFromSession(root string, store workspace.Store, value workspace.Sessi
 	return sessionDetail{
 		WorkspaceRoot: root,
 		Session: sessionSummary{
+			Type:      value.Type.Effective(),
 			SessionID: store.SessionID, RunID: value.RunID,
 			Title: value.Title, UpdatedAt: updatedAt,
 		},
@@ -500,6 +519,8 @@ func decodeSessionRequest(writer http.ResponseWriter, request *http.Request, tar
 
 func writeSessionError(writer http.ResponseWriter, err error) {
 	switch {
+	case errors.Is(err, workspace.ErrWorkflowRequired):
+		writeAPIError(writer, http.StatusConflict, err)
 	case errors.Is(err, workspace.ErrLocked):
 		writeAPIError(writer, http.StatusConflict, errors.New("the selected session is already in use"))
 	case errors.Is(err, workspace.ErrNotFound):

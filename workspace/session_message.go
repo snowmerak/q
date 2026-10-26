@@ -14,6 +14,7 @@ import (
 // its messages to Chat Completions or Responses only when making a request.
 type sessionFile struct {
 	Version            int                   `json:"version"`
+	Type               SessionType           `json:"type"`
 	ID                 string                `json:"id,omitempty"`
 	RunID              string                `json:"run_id,omitempty"`
 	LoopMode           string                `json:"loop_mode,omitempty"`
@@ -58,7 +59,11 @@ type sessionToolCall struct {
 }
 
 func (s Session) MarshalJSON() ([]byte, error) {
+	if err := s.Type.Validate(); err != nil {
+		return nil, err
+	}
 	return json.Marshal(sessionFile{
+		Type:    s.Type.Effective(),
 		Version: CurrentVersion, ID: s.ID, RunID: s.RunID, Title: s.Title, UpdatedAt: s.UpdatedAt,
 		Transcript: toSessionMessages(s.Transcript), Context: toSessionMessages(s.Context),
 		ResponseUsage:      s.ResponseUsage,
@@ -85,11 +90,18 @@ func (s *Session) UnmarshalJSON(data []byte) error {
 			return err
 		}
 		*s = Session(legacy)
+		s.Type = s.Type.Effective()
+		if err := s.Type.Validate(); err != nil {
+			return err
+		}
 		s.Version = CurrentVersion
 		return nil
-	case CurrentVersion:
+	case 2, CurrentVersion:
 		var saved sessionFile
 		if err := decodeSessionStrict(data, &saved); err != nil {
+			return err
+		}
+		if err := saved.Type.Validate(); err != nil {
 			return err
 		}
 		if err := validateSessionMessages(saved.Transcript); err != nil {
@@ -99,6 +111,7 @@ func (s *Session) UnmarshalJSON(data []byte) error {
 			return err
 		}
 		*s = Session{
+			Type:    saved.Type.Effective(),
 			Version: CurrentVersion, ID: saved.ID, RunID: saved.RunID, Title: saved.Title, UpdatedAt: saved.UpdatedAt,
 			Transcript: fromSessionMessages(saved.Transcript), Context: fromSessionMessages(saved.Context),
 			ResponseUsage:      saved.ResponseUsage,

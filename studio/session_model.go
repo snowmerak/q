@@ -79,6 +79,9 @@ func (service *sessionsService) serveSessionModel(writer http.ResponseWriter, re
 }
 
 func (service *sessionsService) updateSessionModel(store workspace.Store, model string) (returnErr error) {
+	if err := store.RequireInteraction(); err != nil {
+		return err
+	}
 	// The live runtime owns the session lock between turns. Release it before
 	// saving; the shared lock also excludes another Studio or TUI owner.
 	if err := service.releaseSession(store.Root, store.SessionID); err != nil {

@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"os"
 	"strings"
 	"sync"
 	"time"
@@ -58,12 +57,12 @@ func run(ctx context.Context, host SessionRunner, value Council, previous []Turn
 		return turn, errors.New("council workspace roots are unavailable")
 	}
 	legacyResume := resume && len(turn.MemberSessions) == 0
-	if err := ensureTurnSessions(&turn, workspace.Store{Root: sessionRoot}, len(value.Members)); err != nil {
+	if err := ensureTurnSessions(&turn, sessionRoot, len(value.Members)); err != nil {
 		return turn, err
 	}
 	defer func() {
 		for _, id := range append(append([]string(nil), turn.MemberSessions...), turn.ChairSession) {
-			if err := host.ReleaseSession(workspace.Store{Root: sessionRoot}, id); err != nil {
+			if err := releaseSeat(host, sessionRoot, id); err != nil {
 				diagnostics.Logger(ctx).Warn("council.session.release_failed", "session_id", id, "error", err)
 			}
 		}
@@ -448,11 +447,19 @@ func runSeat(ctx context.Context, host SessionRunner, seat Seat, prompt string, 
 		options.WorkingDirectory = roots[0]
 		options.AuxiliaryDirectories = append([]string(nil), roots[1:]...)
 	}
+	parentStore, err := workspace.OpenCouncilDirectory(sessionRoot)
+	if err != nil {
+		return "", err
+	}
+	seatStore, err := parentStore.CouncilParticipant(sessionID)
+	if err != nil {
+		return "", err
+	}
 	// Stage instructions are a new user turn; the system and tool prefix remains
 	// unchanged throughout the member's session.
 	var result string
 	toolCalls := diagnostics.NewToolCalls("council.tool")
-	err := host.RunWithOptions(ctx, workspace.Store{Root: sessionRoot}, sessionID, prompt, options, func(event app.SessionEvent) error {
+	err = host.RunWithOptions(ctx, seatStore, sessionID, prompt, options, func(event app.SessionEvent) error {
 		switch event.Type {
 		case "tool_call":
 			toolCalls.Started(ctx, diagnostics.ToolIdentity{Name: event.Name, CallID: event.CallID})
@@ -483,8 +490,20 @@ func runSeat(ctx context.Context, host SessionRunner, seat Seat, prompt string, 
 	return result, nil
 }
 
-func ensureTurnSessions(turn *Turn, store workspace.Store, members int) error {
-	if err := os.MkdirAll(store.Root, 0o700); err != nil {
+func releaseSeat(host SessionRunner, parentDirectory, id string) error {
+	parent, err := workspace.OpenCouncilDirectory(parentDirectory)
+	if err != nil {
+		return err
+	}
+	child, err := parent.CouncilParticipant(id)
+	if err != nil {
+		return err
+	}
+	return host.ReleaseSession(child, id)
+}
+func ensureTurnSessions(turn *Turn, parentDirectory string, members int) error {
+	parent, err := workspace.OpenCouncilDirectory(parentDirectory)
+	if err != nil {
 		return err
 	}
 	if len(turn.MemberSessions) != 0 && len(turn.MemberSessions) != members {
@@ -493,24 +512,31 @@ func ensureTurnSessions(turn *Turn, store workspace.Store, members int) error {
 	if len(turn.MemberSessions) == 0 {
 		turn.MemberSessions = make([]string, members)
 	}
-	create := func(id *string) (returnErr error) {
-		if *id != "" {
-			_, err := store.ForSession(*id)
-			return err
+	create := func(id *string) error {
+		existing := *id != ""
+		if !existing {
+			*id, err = workspace.NewSessionID()
+			if err != nil {
+				return err
+			}
 		}
-		selected, lock, err := workspace.CreateSession(store.Root, "q studio council")
+		child, err := parent.CouncilParticipant(*id)
 		if err != nil {
 			return err
 		}
-		defer func() { returnErr = errors.Join(returnErr, lock.Close()) }()
-		if err := selected.Save(workspace.Session{}); err != nil {
+		if existing {
+			_, err := child.Load()
 			return err
 		}
-		*id = selected.SessionID
-		return nil
+		lock, err := child.AcquireLock("q council participant create")
+		if err != nil {
+			return err
+		}
+		defer func() { _ = lock.Close() }()
+		return child.Save(workspace.Session{Type: workspace.Interaction})
 	}
-	for index := range turn.MemberSessions {
-		if err := create(&turn.MemberSessions[index]); err != nil {
+	for i := range turn.MemberSessions {
+		if err := create(&turn.MemberSessions[i]); err != nil {
 			return err
 		}
 	}

@@ -160,6 +160,9 @@ func TestComposerRealRuntimeUsesSharedLoopAndRetainsConversation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if native.Type != workspace.Composer || native.ID != c.ID || c.ID != c.SessionID {
+		t.Fatalf("Composer lost canonical type/identity: %+v", native)
+	}
 	facts := 0
 	for _, message := range native.Transcript {
 		if message.Role == client.RoleTool && message.Name == "composer_write_artifact" {

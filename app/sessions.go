@@ -49,7 +49,7 @@ func (m *model) refreshSessions() error {
 	if m.workspaceStore == nil {
 		return errors.New("workspace session storage is unavailable")
 	}
-	entries, err := (workspace.Store{Root: m.workspaceStore.Root}).ListSessions()
+	entries, err := (workspace.Store{Root: m.workspaceStore.Root}).ListInteractionSessions()
 	if err != nil {
 		return err
 	}

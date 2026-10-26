@@ -20,7 +20,7 @@ import (
 )
 
 const (
-	CurrentVersion = 2
+	CurrentVersion = 3
 	DirectoryName  = ".q"
 	SessionsName   = "sessions"
 	FileName       = "session.json"
@@ -30,9 +30,10 @@ const (
 var ErrNotFound = errors.New("q workspace session not found")
 
 type Session struct {
-	Version int    `json:"version"`
-	ID      string `json:"id,omitempty"`
-	RunID   string `json:"run_id,omitempty"`
+	Version int         `json:"version"`
+	ID      string      `json:"id,omitempty"`
+	Type    SessionType `json:"type"`
+	RunID   string      `json:"run_id,omitempty"`
 	// LoopMode is retained only so older session files decode under strict JSON validation.
 	// New saves omit it and the application ignores its value.
 	LoopMode           string              `json:"loop_mode,omitempty"`
@@ -116,6 +117,7 @@ type Store struct {
 // ordered newest-first by ListSessions.
 type SessionEntry struct {
 	Store     Store
+	Type      SessionType
 	RunID     string
 	Title     string
 	UpdatedAt time.Time
@@ -188,6 +190,12 @@ func (s Store) ForSession(sessionID string) (Store, error) {
 	if err := validateSessionID(sessionID); err != nil {
 		return Store{}, err
 	}
+	if s.nestedDir != "" {
+		if s.SessionID != sessionID {
+			return Store{}, errors.New("workspace: cannot switch an internal session ID")
+		}
+		return s, nil
+	}
 	return Store{Root: s.Root, SessionID: sessionID}, nil
 }
 
@@ -251,6 +259,18 @@ func (s Store) Load() (Session, error) {
 
 func (s Store) Save(session Session) error {
 	session = cloneSession(session)
+	if session.Type == "" {
+		previous, err := s.Load()
+		if err == nil {
+			session.Type = previous.Type
+		} else if !errors.Is(err, ErrNotFound) {
+			return err
+		}
+	}
+	session.Type = session.Type.Effective()
+	if err := session.Type.Validate(); err != nil {
+		return err
+	}
 	session.Version = CurrentVersion
 	if s.SessionID != "" {
 		session.ID = s.SessionID
@@ -329,7 +349,7 @@ func (s Store) ListSessions() ([]SessionEntry, error) {
 			updatedAt = info.ModTime().UTC()
 		}
 		result = append(result, SessionEntry{
-			Store: store, RunID: session.RunID, Title: session.Title, UpdatedAt: updatedAt,
+			Store: store, Type: session.Type, RunID: session.RunID, Title: session.Title, UpdatedAt: updatedAt,
 		})
 	}
 	sort.Slice(result, func(i, j int) bool {

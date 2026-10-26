@@ -87,7 +87,7 @@ func Run(ctx context.Context, store config.Store) (returnErr error) {
 	if err := workspaceStore.MigrateLegacySession(); err != nil {
 		return err
 	}
-	sessions, err := workspaceStore.ListSessions()
+	sessions, err := workspaceStore.ListInteractionSessions()
 	if err != nil {
 		return err
 	}

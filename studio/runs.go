@@ -154,6 +154,9 @@ func studioRunKey(root, sessionID, runID string) string {
 }
 
 func (service *sessionRunService) start(root, sessionID, prompt string, causes ...context.Context) (*studioRun, error) {
+	if err := (workspace.Store{Root: root, SessionID: sessionID}).RequireInteraction(); err != nil {
+		return nil, err
+	}
 	if service == nil || service.runner == nil {
 		return nil, app.ErrSessionRuntimeUnavailable
 	}

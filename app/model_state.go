@@ -74,6 +74,7 @@ type lifecycleState struct {
 // sessionState owns one copyable part of the Bubble Tea model.
 type sessionState struct {
 	workspaceStore            *workspace.Store
+	workspaceSessionType      workspace.SessionType
 	sessionOptions            *SessionOptions
 	sessionOperation          *workspace.SessionOperation
 	workspaceLock             *workspace.Lock

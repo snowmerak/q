@@ -477,7 +477,7 @@ func (a *acpAgent) ListSessions(_ context.Context, request acp.ListSessionsReque
 			return response, nil
 		}
 	}
-	entries, err := (workspace.Store{Root: a.root}).ListSessions()
+	entries, err := (workspace.Store{Root: a.root}).ListInteractionSessions()
 	if err != nil {
 		return response, err
 	}
@@ -708,7 +708,7 @@ func (a *acpAgent) activateSession(
 	if err != nil {
 		return nil, false, err
 	}
-	if _, err := store.Load(); errors.Is(err, workspace.ErrNotFound) {
+	if err := store.RequireInteraction(); errors.Is(err, workspace.ErrNotFound) {
 		_ = lock.Close()
 		return nil, false, fmt.Errorf("unknown ACP session %q", sessionID)
 	} else if err != nil {

@@ -82,14 +82,15 @@ func (s *composerService) serveCollection(w http.ResponseWriter, r *http.Request
 		}{values})
 	case http.MethodPost:
 		var input struct {
-			Name  string `json:"name"`
-			Model string `json:"model"`
+			Name        string `json:"name"`
+			Model       string `json:"model"`
+			StorageRoot string `json:"storage_root,omitempty"`
 		}
 		if err := decodeSettingsRequest(w, r, &input); err != nil {
 			writeAPIError(w, http.StatusBadRequest, err)
 			return
 		}
-		value, err := s.store.Create(input.Name, input.Model)
+		value, err := s.store.CreateInRoot(input.StorageRoot, input.Name, input.Model)
 		if err != nil {
 			writeComposerError(w, err)
 			return

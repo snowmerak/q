@@ -15,7 +15,6 @@ import (
 	"github.com/snowmerak/q/app"
 	"github.com/snowmerak/q/config"
 	"github.com/snowmerak/q/council"
-	"github.com/snowmerak/q/worklock"
 	"github.com/snowmerak/q/workspace"
 )
 
@@ -84,7 +83,7 @@ func TestStudioIndependentCouncilPersistsWithoutWorkspaceAndRuns(t *testing.T) {
 	if created.Rounds != 2 {
 		t.Fatalf("default rounds = %d", created.Rounds)
 	}
-	if _, err := os.Stat(filepath.Join(dir, "council", "independent", created.ID, "council.json")); err != nil {
+	if _, err := os.Stat(studioCouncilConfigPath(t, sessions.councils.store, created.ID)); err != nil {
 		t.Fatal(err)
 	}
 	var turn council.Turn
@@ -241,7 +240,7 @@ func TestStudioCouncilDoesNotInterruptAnotherWindowRun(t *testing.T) {
 	if err := sessions.councils.store.SaveTurn(turn); err != nil {
 		t.Fatal(err)
 	}
-	lock, err := worklock.AcquireFile(sessions.councils.store.Root, filepath.Join("locks", created.ID+".lock"), "other Studio")
+	lock, err := sessions.councils.store.Lock(created.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -401,4 +400,13 @@ func TestStudioCouncilACPConfigurationPersistsAndValidatesConnections(t *testing
 		t.Fatalf("retry did not retain original ACP assignments: %d %+v", status, rerun)
 	}
 
+}
+
+func studioCouncilConfigPath(t *testing.T, store *council.Store, id string) string {
+	t.Helper()
+	root, err := store.SessionRoot(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return filepath.Join(root, "council", "config.json")
 }

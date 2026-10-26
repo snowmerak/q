@@ -27,7 +27,7 @@ func TestSessionUsesPortableMessageFormatAndPreservesReplay(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(body), `"version": 2`) || !strings.Contains(string(body), `"kind": "image"`) || !strings.Contains(string(body), `"phase": "commentary"`) || strings.Contains(string(body), `"image_url"`) {
+	if !strings.Contains(string(body), `"version": 3`) || !strings.Contains(string(body), `"kind": "image"`) || !strings.Contains(string(body), `"phase": "commentary"`) || strings.Contains(string(body), `"image_url"`) {
 		t.Fatalf("session file is not portable: %s", body)
 	}
 	loaded, err := store.Load()
@@ -81,7 +81,7 @@ func TestSessionMigratesChatMessageVersionOneOnSave(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(body), `"version": 2`) || !strings.Contains(string(body), `"kind": "image"`) {
+	if !strings.Contains(string(body), `"version": 3`) || !strings.Contains(string(body), `"kind": "image"`) {
 		t.Fatalf("migrated session = %s", body)
 	}
 	if _, err := store.Load(); err != nil {

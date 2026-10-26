@@ -124,7 +124,7 @@ func TestMixedCouncilACPResumeUsesSavedRoundsAndACPChair(t *testing.T) {
 		t.Fatal(err)
 	}
 	model := &fakeModel{}
-	root := t.TempDir()
+	root := councilTestRoot(t)
 	runner := app.NewParticipantRunner(t.Context(), sessionRunner{model}, connections)
 	partial, err := council.Run(t.Context(), runner, value, nil, turn, nil, root, 2, func(council.Turn) error { return nil })
 	if err == nil || partial.CurrentRound != 3 || partial.Rounds[1].Reviews[1].Text != "ACP review" {
@@ -188,7 +188,7 @@ func TestCouncilACPCancellationStopsProcess(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
 	defer cancel()
 	start := time.Now()
-	_, err = council.Run(ctx, app.NewParticipantRunner(ctx, nil, connections), value, nil, turn, nil, t.TempDir(), 2, func(council.Turn) error { return nil })
+	_, err = council.Run(ctx, app.NewParticipantRunner(ctx, nil, connections), value, nil, turn, nil, councilTestRoot(t), 2, func(council.Turn) error { return nil })
 	if !errors.Is(err, context.DeadlineExceeded) || time.Since(start) > 6*time.Second {
 		t.Fatalf("ACP cancellation = %v, elapsed %s", err, time.Since(start))
 	}
@@ -213,7 +213,7 @@ func TestCouncilDistinctACPSeatsCanUseSameConnection(t *testing.T) {
 		t.Fatal(err)
 	}
 	runner := app.NewParticipantRunner(t.Context(), sessionRunner{&fakeModel{}}, connections)
-	result, err := council.Run(t.Context(), runner, value, nil, turn, nil, t.TempDir(), 2, func(council.Turn) error { return nil })
+	result, err := council.Run(t.Context(), runner, value, nil, turn, nil, councilTestRoot(t), 2, func(council.Turn) error { return nil })
 	if err != nil || result.Status != "completed" || result.MemberSessions[0] == result.MemberSessions[1] {
 		t.Fatalf("distinct ACP seats = %+v, %v", result, err)
 	}
@@ -242,7 +242,7 @@ func TestACPAnonymizationPreservesWordsMatchingShortConnectionIDs(t *testing.T) 
 		t.Fatal(err)
 	}
 	model := &acpIdentityModel{}
-	_, err = council.Run(t.Context(), sessionRunner{model}, value, nil, turn, nil, t.TempDir(), 2, func(council.Turn) error { return nil })
+	_, err = council.Run(t.Context(), sessionRunner{model}, value, nil, turn, nil, councilTestRoot(t), 2, func(council.Turn) error { return nil })
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -40,8 +40,25 @@ filesystem, command, MCP, delegation, task lifecycle, and context-memory tools
 are excluded. Native sessions remain alive between turns so queued learning
 can finish; deletion and service shutdown release them.
 
-Source files live under `~/.q/composer/<composer-id>/docs/diagram/` (`.d2`) and
-`docs/webcomponent/` (`.html`). The editor uses revision hashes to reject stale
+All user session types use `<workspace-root>/.q/sessions/<session-id>/`.
+`session.json` version 3 explicitly records `type` as `interaction`, `council`,
+or `composer`; existing version 1/2 sessions default to `interaction`.
+The native Composer ID and workflow ID are the same. Its UI projection lives in
+`composer/conversation.json` inside that session directory. Pass
+`SessionOptions.Type = workspace.Composer` when opening it through SessionHost;
+the default runtime rejects opening a typed workflow as an ordinary interaction.
+The type selects a workflow and does not grant tool permissions.
+
+By default, new Council and Composer sessions allocate a private workspace under
+`<config-dir>/chats/chat-*/`, like ordinary personal chats. Their stores expose
+`CreateInRoot` and their creation APIs accept optional `storage_root` for an
+explicit workspace. Council's read scope remains independent of its storage root.
+The shared `studio-sessions.json` catalog contains references to these canonical
+sessions. Existing Council/Composer directories are neither read nor migrated.
+The current Studio screens stay separate; the unified Sessions UI is deferred.
+
+Composer source files live under the session directory's `docs/diagram/` (`.d2`)
+and `docs/webcomponent/` (`.html`). The editor uses revision hashes to reject stale
 saves. D2 renders in-process using dagre, without a separately installed CLI;
 imports can read only that Composer's managed diagrams. HTML supports inline
 CSS and JavaScript in an opaque-origin sandbox with network access disabled.
@@ -65,12 +82,15 @@ returns its saved result. A changed prompt requires a new operation ID.
 
 Council uses one Q session per member and another for the chair for each council
 turn. Reviews are subsequent user turns in those same member sessions. Session
-files remain under the council directory, including
-`~/.q/council/independent/<council-id>/.q/sessions/` for independent councils.
-The council JSON contains session references and displayed results, while Q owns
-the complete execution state. Older council turns without Q session references
-can resume using their saved results as explicit input to new sessions; tool
-history from those older runs was never stored and cannot be recovered.
+files live under the canonical parent's `council/participants/<child-session-id>/`.
+Use `workspace.Store.CouncilParticipant` to resolve a child; the returned store
+preserves its internal address through `ForSession` and `AcquireLock`.
+Children are not root sessions and do not appear in the workspace session list.
+The parent's `session.json` has type `council` and projects prompts/final answers.
+`council/config.json` holds membership/read scope; `council/turns/<turn-id>.json`
+holds round checkpoints, participant references, and displayed results. Q owns
+each native participant's complete context and execution state. The coordinator
+uses the parent as storage rather than running it with the default tool runtime.
 
 Council ACP seats are run through `app.ParticipantRunner` using an enabled
 `Agents.Connections` entry. Their Q session directory stores `council-acp.json`

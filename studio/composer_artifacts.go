@@ -18,7 +18,7 @@ func (s *composerService) artifactStore(id string) (*composer.Artifacts, error) 
 	if err != nil {
 		return nil, err
 	}
-	return &composer.Artifacts{Root: s.store.SessionStore(c).Root}, nil
+	return &composer.Artifacts{Root: s.store.SessionStore(c).SessionDir()}, nil
 }
 
 func (s *composerService) serveArtifacts(w http.ResponseWriter, r *http.Request) {

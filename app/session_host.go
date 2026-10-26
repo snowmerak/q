@@ -493,8 +493,10 @@ func (host *SessionHost) prepareSession(runContext context.Context, workspaceSto
 	if err != nil {
 		return nil, err
 	}
-	if err := workspaceStore.MigrateLegacySession(); err != nil {
-		return nil, err
+	if !workspaceStore.IsInternal() {
+		if err := workspaceStore.MigrateLegacySession(); err != nil {
+			return nil, err
+		}
 	}
 
 	prepared := &preparedSession{store: workspaceStore, lifecycle: newStartupLifecycle()}
@@ -508,7 +510,7 @@ func (host *SessionHost) prepareSession(runContext context.Context, workspaceSto
 		if err != nil {
 			return nil, err
 		}
-		prepared.lock, err = workspace.AcquireSessionLock(prepared.store.Root, prepared.store.SessionID, "q studio")
+		prepared.lock, err = prepared.store.AcquireLock("q studio")
 		if err != nil {
 			return nil, err
 		}
@@ -524,6 +526,15 @@ func (host *SessionHost) prepareSession(runContext context.Context, workspaceSto
 	options := SessionOptions{}
 	if len(configured) > 0 {
 		options = configured[0]
+	}
+	if prepared.store.SessionID != "" {
+		persisted, err := prepared.store.Load()
+		if err != nil {
+			return nil, err
+		}
+		if persisted.Type == workspace.Council || persisted.Type != options.Type.Effective() {
+			return nil, errors.New("session workflow requires its matching runtime")
+		}
 	}
 	if options.Model != "" && options.Model != loaded.Provider.Model {
 		loaded.Provider.Model = options.Model

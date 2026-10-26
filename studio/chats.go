@@ -87,18 +87,30 @@ func (service *sessionsService) serveDeleteChat(writer http.ResponseWriter, requ
 			writeAPIError(writer, http.StatusBadRequest, errors.New("session is not a managed chat"))
 			return
 		}
+		store := workspace.Store{Root: item.WorkspaceRoot, SessionID: item.SessionID}
+		if err := store.RequireInteraction(); err != nil && !errors.Is(err, workspace.ErrNotFound) {
+			writeSessionError(writer, err)
+			return
+		}
 		if err := service.releaseSession(item.WorkspaceRoot, item.SessionID); err != nil {
 			writeSessionError(writer, err)
 			return
 		}
-		store := workspace.Store{Root: item.WorkspaceRoot, SessionID: item.SessionID}
 		if err := service.deleteSession(store); err != nil {
 			writeSessionError(writer, err)
 			return
 		}
-		if err := os.RemoveAll(item.WorkspaceRoot); err != nil {
+		remaining, err := os.ReadDir(store.SessionsDir())
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
 			writeAPIError(writer, http.StatusInternalServerError, err)
 			return
+		}
+		// Explicit storage roots may attach other workflows to a managed chat.
+		if len(remaining) == 0 {
+			if err := os.RemoveAll(item.WorkspaceRoot); err != nil {
+				writeAPIError(writer, http.StatusInternalServerError, err)
+				return
+			}
 		}
 		if err := service.registry.unregister(item.ID); err != nil {
 			writeAPIError(writer, http.StatusInternalServerError, err)

@@ -8,7 +8,6 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -42,6 +41,7 @@ type activeCouncilRun struct {
 }
 
 type councilInput struct {
+	StorageRoot   string         `json:"storage_root,omitempty"`
 	Name          string         `json:"name"`
 	Scope         council.Scope  `json:"scope"`
 	WorkspaceRoot string         `json:"workspace_root,omitempty"`
@@ -102,7 +102,7 @@ func (service *councilService) serveCollection(writer http.ResponseWriter, reque
 			writeAPIError(writer, http.StatusUnprocessableEntity, err)
 			return
 		}
-		value, err = service.store.Create(value)
+		value, err = service.store.CreateInRoot(input.StorageRoot, value)
 		if err != nil {
 			writeAPIError(writer, http.StatusUnprocessableEntity, err)
 			return
@@ -221,6 +221,10 @@ func (service *councilService) serveItem(writer http.ResponseWriter, request *ht
 		var input councilInput
 		if err := decodeSettingsRequest(writer, request, &input); err != nil {
 			writeAPIError(writer, http.StatusBadRequest, err)
+			return
+		}
+		if input.StorageRoot != "" {
+			writeAPIError(writer, http.StatusUnprocessableEntity, errors.New("storage_root can only be selected when creating a council"))
 			return
 		}
 		update, err := service.prepare(input)
@@ -478,7 +482,7 @@ func (service *councilService) serveRetry(writer http.ResponseWriter, request *h
 }
 
 func (service *councilService) acquireRunLock(id string) (*worklock.Lock, error) {
-	return worklock.AcquireFile(service.store.Root, filepath.Join("locks", id+".lock"), "q studio council")
+	return service.store.Lock(id)
 }
 
 func writeRunLockError(writer http.ResponseWriter, err error) {

@@ -34,6 +34,14 @@ func AcquireSessionLock(root, sessionID, command string) (*Lock, error) {
 
 // CreateSession creates, locks, and persists a new empty session.
 func CreateSession(root, command string) (Store, *Lock, error) {
+	return CreateTypedSession(root, command, Interaction)
+}
+
+// CreateTypedSession creates one canonical session with an explicit workflow type.
+func CreateTypedSession(root, command string, kind SessionType) (Store, *Lock, error) {
+	if err := kind.Validate(); err != nil {
+		return Store{}, nil, err
+	}
 	for range 4 {
 		sessionID, err := NewSessionID()
 		if err != nil {
@@ -54,7 +62,8 @@ func CreateSession(root, command string) (Store, *Lock, error) {
 		}
 		now := time.Now().UTC()
 		if err := store.Save(Session{
-			ID: sessionID, RunID: "run-" + sessionID, UpdatedAt: &now,
+			Type: kind.Effective(),
+			ID:   sessionID, RunID: "run-" + sessionID, UpdatedAt: &now,
 		}); err != nil {
 			_ = lock.Close()
 			return Store{}, nil, err
@@ -72,7 +81,7 @@ func OpenLatestSession(root, command string) (Store, *Lock, error) {
 		return Store{}, nil, err
 	}
 	for range 4 {
-		entries, err := base.ListSessions()
+		entries, err := base.ListInteractionSessions()
 		if err != nil {
 			return Store{}, nil, err
 		}
@@ -104,6 +113,9 @@ func OpenLatestSession(root, command string) (Store, *Lock, error) {
 func DeleteSession(root, sessionID, command string) (returnErr error) {
 	store, err := (Store{Root: root}).ForSession(sessionID)
 	if err != nil {
+		return err
+	}
+	if err := store.RequireInteraction(); err != nil && !errors.Is(err, ErrNotFound) {
 		return err
 	}
 	lock, err := AcquireSessionLock(root, sessionID, command)
@@ -147,7 +159,8 @@ func ResetSession(root, sessionID, command string) (session Session, returnErr e
 		return Session{}, err
 	}
 	defer func() { returnErr = errors.Join(returnErr, lock.Close()) }()
-	if _, err := store.Load(); err != nil {
+	previous, err := store.Load()
+	if err != nil {
 		return Session{}, err
 	}
 	if err := store.ClearExecution(); err != nil {
@@ -159,6 +172,7 @@ func ResetSession(root, sessionID, command string) (session Session, returnErr e
 	}
 	now := time.Now().UTC()
 	session = Session{
+		Type:      previous.Type,
 		ID:        sessionID,
 		RunID:     "run-" + runID,
 		UpdatedAt: &now,

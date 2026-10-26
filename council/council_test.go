@@ -37,7 +37,7 @@ func TestStorePersistsIndependentCouncilAndTurns(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	path := filepath.Join(configDir, "council", "independent", created.ID, "council.json")
+	path := councilConfigPath(t, store, created.ID)
 	if _, err := os.Stat(path); err != nil {
 		t.Fatalf("independent council path: %v", err)
 	}
@@ -51,6 +51,17 @@ func TestStorePersistsIndependentCouncilAndTurns(t *testing.T) {
 	turn.Status, turn.Final = "completed", "A considered answer"
 	if err := store.SaveTurn(turn); err != nil {
 		t.Fatal(err)
+	}
+	parent, err := store.SessionStore(created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if filepath.Dir(parent.Root) != filepath.Join(configDir, "chats") {
+		t.Fatal("independent council did not select a private workspace")
+	}
+	native, err := parent.Load()
+	if err != nil || native.Type != workspace.Council || native.ID != created.ID || len(native.Transcript) != 2 || native.Transcript[1].Content != turn.Final {
+		t.Fatalf("canonical council parent=%+v %v", native, err)
 	}
 	reopened := council.NewStore(configDir)
 	t.Cleanup(func() { _ = reopened.Close() })
@@ -83,7 +94,7 @@ func TestStoreLoadsLegacyCouncilWithTwoRounds(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	path := filepath.Join(configDir, "council", "independent", created.ID, "council.json")
+	path := councilConfigPath(t, store, created.ID)
 	body, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
@@ -117,7 +128,7 @@ func TestStoreSeparatesWorkspaceAndProjectCouncils(t *testing.T) {
 	if workspaceCouncil.Scope != council.Workspace || projectCouncil.Scope != council.Project {
 		t.Fatalf("scopes = %s, %s", workspaceCouncil.Scope, projectCouncil.Scope)
 	}
-	if _, err := os.Stat(filepath.Join(store.Root, "projects", projectCouncil.ProjectID, projectCouncil.ID, "council.json")); err != nil {
+	if _, err := os.Stat(councilConfigPath(t, store, projectCouncil.ID)); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -155,33 +166,22 @@ func TestStoreSharesCouncilIndexBetweenInstances(t *testing.T) {
 	}
 }
 
-func TestStoreImportsExistingCouncilJSON(t *testing.T) {
+func TestStoreDoesNotImportLegacyCouncilJSON(t *testing.T) {
 	configDir := t.TempDir()
-	initial := council.NewStore(configDir)
-	t.Cleanup(func() { _ = initial.Close() })
-	created, err := initial.Create(testCouncil(council.Independent, "", ""))
-	if err != nil {
+	old := filepath.Join(configDir, "council", "independent", "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa")
+	if err := os.MkdirAll(old, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := initial.Close(); err != nil {
+	if err := os.WriteFile(filepath.Join(old, "council.json"), []byte("legacy data"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Remove(filepath.Join(configDir, "council", "index.sqlite")); err != nil {
-		t.Fatal(err)
+	store := council.NewStore(configDir)
+	values, err := store.List()
+	if err != nil || len(values) != 0 {
+		t.Fatalf("legacy data imported: %+v %v", values, err)
 	}
-	path := filepath.Join(configDir, "council", "independent", created.ID, "council.json")
-	body, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(path, []byte(strings.Replace(string(body), "  \"rounds\": 2,\n", "", 1)), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	migrated := council.NewStore(configDir)
-	t.Cleanup(func() { _ = migrated.Close() })
-	values, err := migrated.List()
-	if err != nil || len(values) != 1 || values[0].ID != created.ID || values[0].Rounds != 2 {
-		t.Fatalf("imported list = %+v, %v", values, err)
+	if _, err := os.Stat(filepath.Join(old, "council.json")); err != nil {
+		t.Fatal("opening the store must not delete arbitrary old data")
 	}
 }
 
@@ -369,7 +369,7 @@ func TestResumeRetriesOnlyFailedReviewThenSynthesizes(t *testing.T) {
 		t.Fatal(err)
 	}
 	model := &failingLastReviewModel{}
-	scratch := filepath.Join(t.TempDir(), "scratch")
+	scratch := councilTestRoot(t)
 	partial, err := council.Run(t.Context(), sessionRunner{model}, value, nil, turn, nil, scratch, 2, func(council.Turn) error { return nil })
 	if err == nil || partial.Stage != "reviews" || partial.CurrentRound != 4 || !strings.Contains(err.Error(), "temporary timeout") {
 		t.Fatalf("partial run = %+v, %v", partial, err)
@@ -432,7 +432,7 @@ func TestIndependentRunUsesDistinctOpinionsThenReviewsAndSynthesis(t *testing.T)
 	model := &fakeModel{}
 	var stages []string
 	var opinionProgress, reviewProgress []int
-	result, err := council.Run(t.Context(), sessionRunner{model}, value, nil, turn, nil, filepath.Join(t.TempDir(), "scratch"), 2, func(progress council.Turn) error {
+	result, err := council.Run(t.Context(), sessionRunner{model}, value, nil, turn, nil, councilTestRoot(t), 2, func(progress council.Turn) error {
 		if len(stages) == 0 || stages[len(stages)-1] != progress.Stage {
 			stages = append(stages, progress.Stage)
 		}
@@ -489,7 +489,7 @@ func TestCouncilContinuesReviewRoundsAndChairReceivesEveryRound(t *testing.T) {
 		t.Fatal(err)
 	}
 	model := &fakeModel{}
-	result, err := council.Run(t.Context(), sessionRunner{model}, value, nil, turn, nil, filepath.Join(t.TempDir(), "scratch"), 2, func(council.Turn) error { return nil })
+	result, err := council.Run(t.Context(), sessionRunner{model}, value, nil, turn, nil, councilTestRoot(t), 2, func(council.Turn) error { return nil })
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -538,7 +538,7 @@ func TestCouncilCanFinishAfterOneRound(t *testing.T) {
 		t.Fatal(err)
 	}
 	model := &fakeModel{}
-	result, err := council.Run(t.Context(), sessionRunner{model}, value, nil, turn, nil, filepath.Join(t.TempDir(), "scratch"), 2, func(council.Turn) error { return nil })
+	result, err := council.Run(t.Context(), sessionRunner{model}, value, nil, turn, nil, councilTestRoot(t), 2, func(council.Turn) error { return nil })
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -572,7 +572,7 @@ func TestChairEmptyAnswerReportsFailure(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	result, err := council.Run(t.Context(), sessionRunner{&emptyChairModel{}}, value, nil, turn, nil, filepath.Join(t.TempDir(), "scratch"), 2, func(council.Turn) error { return nil })
+	result, err := council.Run(t.Context(), sessionRunner{&emptyChairModel{}}, value, nil, turn, nil, councilTestRoot(t), 2, func(council.Turn) error { return nil })
 	if err == nil || result.Stage != "synthesis" {
 		t.Fatalf("chair failure = %+v, %v", result, err)
 	}
@@ -590,7 +590,7 @@ func TestResumeFailedChairUsesSavedRounds(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	sessionRoot := t.TempDir()
+	sessionRoot := councilTestRoot(t)
 	partial, err := council.Run(t.Context(), sessionRunner{&emptyChairModel{}}, value, nil, turn, nil, sessionRoot, 2, func(council.Turn) error { return nil })
 	if err == nil || partial.Stage != "synthesis" {
 		t.Fatalf("chair failure = %+v, %v", partial, err)
@@ -696,7 +696,7 @@ func TestCouncilUsesPersistentSeatSessionsForEveryRound(t *testing.T) {
 		t.Fatalf("session references not saved: %+v, %v", turns, err)
 	}
 	for _, id := range append(result.MemberSessions, result.ChairSession) {
-		selected, err := (workspace.Store{Root: root}).ForSession(id)
+		selected, err := mustCouncilStore(t, root).CouncilParticipant(id)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -720,4 +720,32 @@ func (runner sessionRunner) RunWithOptions(ctx context.Context, store workspace.
 		return errors.New("no response")
 	}
 	return emit(app.SessionEvent{Type: "result", SessionID: id, Content: response.Choices[0].Message.Content})
+}
+
+func councilConfigPath(t *testing.T, store *council.Store, id string) string {
+	t.Helper()
+	root, err := store.SessionRoot(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return filepath.Join(root, "council", "config.json")
+}
+func councilTestRoot(t *testing.T) string {
+	t.Helper()
+	store, lock, err := workspace.CreateTypedSession(t.TempDir(), "council test", workspace.Council)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := lock.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return store.SessionDir()
+}
+func mustCouncilStore(t *testing.T, root string) workspace.Store {
+	t.Helper()
+	store, err := workspace.OpenCouncilDirectory(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return store
 }

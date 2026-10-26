@@ -34,10 +34,11 @@ var allowedTools = []string{
 func Options(model, operation string) app.SessionOptions {
 	return app.SessionOptions{
 		Model: model, SystemPrompt: instructions, RuntimeKey: "composer-artifacts-v1", OperationID: operation,
+		Type:               workspace.Composer,
 		AllowedTools:       slices.Clone(allowedTools),
 		DisableExternalMCP: true,
 		WrapRuntime: func(_ context.Context, store workspace.Store, base app.AgentToolRuntime) (app.AgentToolRuntime, error) {
-			return &artifactRuntime{base: base, files: &Artifacts{Root: store.Root}}, nil
+			return &artifactRuntime{base: base, files: &Artifacts{Root: store.SessionDir()}}, nil
 		},
 	}
 }
