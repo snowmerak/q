@@ -7,14 +7,54 @@
   import ProjectDialog from './sessions/ProjectDialog.svelte';
   import SessionRegistration from './sessions/SessionRegistration.svelte';
   import SessionModelPicker from './sessions/SessionModelPicker.svelte';
+  import CouncilView from './CouncilView.svelte';
+  import ComposerView from './ComposerView.svelte';
   import FileExplorer from './files/FileExplorer.svelte';
   import { resolveFileLink } from './files/paths';
   import { apiError, requestResponse } from './api';
   import { contextPercent, formatTokenCount, shortID } from './sessions/format';
   import { RunMonitor, runStatusLabel, terminalRun } from './sessions/run-monitor';
-  import type { DelegationNode, DelegationSession, FlatDelegation, Message, RegisteredSessionTree, RunEvent, RunSnapshot, SessionDetail, StudioProject } from './sessions/types';
+  import type { DelegationNode, DelegationSession, FlatDelegation, Message, RegisteredSessionTree, RunEvent, RunSnapshot, SessionDetail, StudioProject, SessionType } from './sessions/types';
 
   export let openChanges: (workspaceRoot: string) => void = () => {};
+  let workflowCreate: 'council' | 'composer' | null = null;
+  let workflowDirty = false;
+  let typeFilter: SessionType | 'all' = 'all';
+
+  export function canLeave() {
+    return !workflowDirty || window.confirm('Discard your unsaved artifact source changes?');
+  }
+  export function currentPath() {
+    return selectedRegistration ? `/sessions/${encodeURIComponent(selectedRegistration.registration_id)}` : workflowCreate ? `/sessions?new=${workflowCreate}` : '/sessions';
+  }
+
+  function startWorkflow(type: 'council' | 'composer') {
+    if (!canLeave()) return;
+    clearSelectedSession();
+    workflowCreate = type;
+    registrationDialogOpen = false;
+    sessionListOpen = false;
+    filesOpen = false;
+    window.history.pushState({}, '', `/sessions?new=${type}`);
+  }
+
+  async function workflowCreated(id: string) {
+    const generation = sessionGeneration;
+    await refreshSessionListOnly();
+    if (!isCurrentSession(generation)) return;
+    const registration = registeredSessions.find(item => item.session.session_id === id && item.session.type === workflowCreate);
+    if (!registration) { error = 'The new session is not available in the catalog. Refresh to try again.'; return; }
+    typeFilter = 'all';
+    await selectRegisteredSession(registration);
+  }
+
+  async function workflowRemoved(id: string) {
+    await refreshSessionListOnly();
+    if (selectedRegistration?.registration_id !== id) return;
+    workflowDirty = false;
+    clearSelectedSession();
+    window.history.replaceState({}, '', '/sessions');
+  }
 
   let workspaceRoot = '';
   let modelSaving = false;
@@ -137,6 +177,7 @@
 
   async function registerSession(root: string, sessionID = '', create = false, chat = false) {
     if (!root && !chat) return;
+    if (!canLeave()) return;
     sessionLoading = true;
     sessionGeneration += 1;
     runMonitor.stop();
@@ -147,8 +188,9 @@
         body: JSON.stringify(chat ? {} : { workspace_root: root, session_id: sessionID, create })
       });
       const registration = (await response.json()) as RegisteredSessionTree;
+      typeFilter = 'all';
       registrationDialogOpen = false;
-      await loadRegisteredSessions(registration.registration_id);
+      await loadRegisteredSessions(registration.registration_id, true);
       sessionListOpen = false;
     } catch (cause) {
       error = cause instanceof Error ? cause.message : 'Could not register the session';
@@ -242,6 +284,8 @@
   }
 
   function clearSelectedSession() {
+    workflowCreate = null;
+    workflowDirty = false;
     switchDraft('');
     sessionGeneration += 1;
     runMonitor.stop();
@@ -258,7 +302,7 @@
     sending = false;
   }
 
-  async function loadRegisteredSessions(preferredRegistration = '') {
+  async function loadRegisteredSessions(preferredRegistration = '', approved = false) {
     workspaceLoading = true;
     error = '';
     try {
@@ -266,15 +310,19 @@
       const result = (await response.json()) as { projects?: StudioProject[]; sessions: RegisteredSessionTree[] };
       projects = result.projects || [];
       registeredSessions = result.sessions;
+      const legacy = window.location.pathname.match(/^\/(councils|composers)(?:\/([^/]+))?$/);
+      if (legacy) typeFilter = legacy[1] === 'councils' ? 'council' : 'composer';
       const targetID = preferredRegistration || selectedRegistration?.registration_id || sessionFromLocation();
-      const target = registeredSessions.find((registration) => registration.registration_id === targetID && !registration.issue)
-        || registeredSessions.find((registration) => !registration.issue);
+      const legacyTarget = legacy?.[2] ? registeredSessions.find(item => item.session.type === typeFilter && item.session.session_id === decodeURIComponent(legacy[2])) : null;
+      const target = legacyTarget || registeredSessions.find((registration) => registration.registration_id === targetID && !registration.issue)
+        || (!legacy?.[2] ? registeredSessions.find((registration) => !registration.issue && (typeFilter === 'all' || registration.session.type === typeFilter)) : null);
       if (target) {
-        await selectRegisteredSession(target, false);
-        window.history.replaceState({}, '', `/sessions/${encodeURIComponent(target.registration_id)}`);
+        await selectRegisteredSession(target, false, approved);
+        window.history.replaceState({}, '', currentPath());
       } else {
         clearSelectedSession();
-        window.history.replaceState({}, '', '/sessions');
+        if (targetID || legacy?.[2]) error = 'The requested session is unavailable.';
+        window.history.replaceState({}, '', typeFilter === 'all' ? '/sessions' : `/sessions?type=${typeFilter}`);
       }
     } catch (cause) {
       error = cause instanceof Error ? cause.message : 'Could not load registered sessions';
@@ -285,13 +333,15 @@
 
   async function unregisterSession(registration: RegisteredSessionTree) {
     const chat = registration.kind === 'chat';
-    if (!window.confirm(chat ? `Delete ${registration.session.title || 'this chat'} and its locally stored data?` : `Remove ${registration.session.title || 'this session'} from Studio? The workspace session will remain on disk.`)) return;
+    const workflow = registration.session.type === 'council' || registration.session.type === 'composer' ? registration.session.type : null;
+    if (!window.confirm(workflow ? `Delete ${registration.session.title || workflow} and its session data?` : chat ? `Delete ${registration.session.title || 'this chat'} and its locally stored data?` : `Remove ${registration.session.title || 'this session'} from Studio? The workspace session will remain on disk.`)) return;
     sessionLoading = true;
     error = '';
     try {
-      const response = await requestResponse(`/api/v1/${chat ? 'chats' : 'registered-sessions'}/${encodeURIComponent(registration.registration_id)}`, { method: 'DELETE' });
+      const response = await requestResponse(workflow ? `/api/v1/${workflow === 'council' ? 'councils' : 'composers'}/${encodeURIComponent(registration.session.session_id)}` : `/api/v1/${chat ? 'chats' : 'registered-sessions'}/${encodeURIComponent(registration.registration_id)}`, { method: 'DELETE' });
       registeredSessions = registeredSessions.filter((item) => item.registration_id !== registration.registration_id);
       if (selectedRegistration?.registration_id === registration.registration_id) {
+        workflowDirty = false;
         const next = registeredSessions.find((item) => !item.issue);
         if (next) await selectRegisteredSession(next, false);
         else clearSelectedSession();
@@ -380,9 +430,19 @@
     }
   }
 
-  async function selectRegisteredSession(registration: RegisteredSessionTree, push = true) {
+  async function selectRegisteredSession(registration: RegisteredSessionTree, push = true, approved = false) {
+    if (registration.registration_id !== selectedRegistration?.registration_id || workflowCreate) {
+      if (!approved && !canLeave()) return;
+    } else if (registration.session.type && registration.session.type !== 'interaction') {
+      selectedRegistration = registration;
+      return;
+    }
+    workflowCreate = null;
+    workflowDirty = false;
     modelSaving = false;
-    switchDraft(registration.registration_id);
+    // Typed panels own their drafts. The Interaction input must not overwrite
+    // them with its inactive prompt when the selection changes.
+    switchDraft(registration.session.type === 'council' || registration.session.type === 'composer' ? '' : registration.registration_id);
     const generation = ++sessionGeneration;
     runMonitor.stop();
     stopDelegationMonitor();
@@ -395,6 +455,12 @@
       selectedDelegation = null;
       workspaceRoot = registration.workspace_root;
       const sessionID = registration.session.session_id;
+      if (registration.session.type === 'council' || registration.session.type === 'composer') {
+        selected = { workspace_root: workspaceRoot, session: registration.session, transcript: [] };
+        filesOpen = false;
+        if (push) window.history.pushState({}, '', `/sessions/${encodeURIComponent(registration.registration_id)}`);
+        return;
+      }
       const response = await requestResponse(`/api/v1/sessions/${encodeURIComponent(sessionID)}?workspace_root=${encodeURIComponent(workspaceRoot)}`);
       const detail = (await response.json()) as SessionDetail;
       if (!isCurrentSession(generation)) return;
@@ -670,7 +736,10 @@
 
   onMount(() => {
     let disposed = false;
-    const action = new URLSearchParams(window.location.search).get('new');
+    const params = new URLSearchParams(window.location.search);
+    const requestedType = params.get('type');
+    if (requestedType === 'interaction' || requestedType === 'council' || requestedType === 'composer') typeFilter = requestedType;
+    const action = params.get('new');
     // Consume creation links once so reloading a session never creates another.
     if (action) {
       const url = new URL(window.location.href);
@@ -682,14 +751,24 @@
       if (disposed) return;
       if (action === 'chat') await createChat();
       else if (action === 'workspace') openWorkspaceDialog();
+      else if (action === 'council' || action === 'composer') startWorkflow(action);
     })();
     const onPopState = () => {
+      if (!window.location.pathname.startsWith('/sessions')) return;
       const registrationID = sessionFromLocation();
+      if (registrationID === selectedRegistration?.registration_id && !workflowCreate) return;
+      if (!canLeave()) { window.history.pushState({}, '', currentPath()); return; }
       const registration = registeredSessions.find((item) => item.registration_id === registrationID && !item.issue);
-      if (registration && registration.registration_id !== selectedRegistration?.registration_id) void selectRegisteredSession(registration, false);
-      if (!registrationID) clearSelectedSession();
+      if (registration && registration.registration_id !== selectedRegistration?.registration_id) void selectRegisteredSession(registration, false, true);
+      if (!registrationID) {
+        const create = new URLSearchParams(window.location.search).get('new');
+        clearSelectedSession();
+        if (create === 'council' || create === 'composer') workflowCreate = create;
+      }
     };
+    const beforeUnload = (event: BeforeUnloadEvent) => { if (workflowDirty) { event.preventDefault(); event.returnValue = ''; } };
     window.addEventListener('popstate', onPopState);
+    window.addEventListener('beforeunload', beforeUnload);
     return () => {
       saveDraft(draftKey, prompt);
       disposed = true;
@@ -698,6 +777,7 @@
       stopDelegationMonitor();
       if (delegationRefresh) clearTimeout(delegationRefresh);
       window.removeEventListener('popstate', onPopState);
+      window.removeEventListener('beforeunload', beforeUnload);
     };
   });
 </script>
@@ -708,6 +788,7 @@
   <button class="mobile-session-toggle" aria-label={sessionListOpen ? 'Hide sessions' : 'Show sessions'} aria-expanded={sessionListOpen} aria-controls="session-tree" onclick={() => sessionListOpen = !sessionListOpen}><Layers aria-hidden="true" size={17} /><span>Sessions<small>{selected?.session.title || 'Browse chats and workspaces'}</small></span><ChevronDown aria-hidden="true" size={17} /></button>
   <SessionTree
     {projects} {registeredSessions} {workspaceLoading} {sessionLoading} {sending}
+    bind:typeFilter
     selectedRegistrationID={selectedRegistration?.registration_id || ''}
     selectedDelegationPath={selectedDelegation?.path || ''}
     onrefresh={refreshSessions} onproject={openProjectDialog} onregistration={openRegistrationDialog}
@@ -715,6 +796,18 @@
     onselect={selectFromTree} onunregister={unregisterSession} ondelegate={selectDelegationFromTree}
   />
 
+  {#if workflowCreate || selectedRegistration?.session.type === 'council' || selectedRegistration?.session.type === 'composer'}
+    <section class="workflow-panel" aria-label="Session workflow">
+      {#if error}<div class="session-error" role="alert">{error}</div>{/if}
+      {#key workflowCreate || selectedRegistration?.registration_id}
+        {#if workflowCreate === 'council' || selectedRegistration?.session.type === 'council'}
+          <CouncilView embedded initialID={workflowCreate ? '' : selectedRegistration?.session.session_id || ''} draftKey={selectedRegistration?.registration_id || ''} oncreated={workflowCreated} onupdated={refreshSessionListOnly} onremoved={workflowRemoved.bind(null, selectedRegistration?.registration_id || '')} />
+        {:else}
+          <ComposerView embedded initialID={workflowCreate ? '' : selectedRegistration?.session.session_id || ''} draftKey={selectedRegistration?.registration_id || ''} bind:artifactDirty={workflowDirty} oncreated={workflowCreated} onupdated={refreshSessionListOnly} onremoved={workflowRemoved.bind(null, selectedRegistration?.registration_id || '')} />
+        {/if}
+      {/key}
+    </section>
+  {:else}
   <section class="chat-panel">
     {#if error}<div class="session-error" role="alert">{error}</div>{/if}
     {#if selected}
@@ -782,7 +875,7 @@
             <button class="send-button" title={sending ? 'Guide current turn' : 'Send message'} onclick={sendPrompt} disabled={sessionLoading || modelSaving || !prompt.trim()}><ArrowUp aria-hidden="true" size={17} /></button>
           </div>
           <div class="composer-footer">
-            {#if !selectedDelegation}
+            {#if !selectedDelegation && selected.session.session_id === selectedRegistration?.session.session_id && selected.workspace_root === workspaceRoot}
               {#key `${workspaceRoot}/${selected.session.session_id}`}
                 <SessionModelPicker {workspaceRoot} sessionID={selected.session.session_id} disabled={sending || sessionLoading} bind:saving={modelSaving} />
               {/key}
@@ -795,6 +888,7 @@
       <div class="chat-empty"><Bot aria-hidden="true" size={34} /><h2>Start a conversation</h2><p>Chat with Q, or add a session from a workspace.</p><button class="primary-button" onclick={createChat} disabled={sessionLoading}><Plus aria-hidden="true" size={15} /> New chat</button><button class="secondary-button" onclick={openWorkspaceDialog}>Add workspace session</button></div>
     {/if}
   </section>
+  {/if}
 
   {#if filesOpen && selected}
     <aside class="session-file-panel" aria-label="Session file browser">{#key fileContext}<FileExplorer bind:this={fileExplorer} initialRoot={openedFileRoot || fileWorkspace} initialPath={openedFilePath} initialLine={openedFileLine} roots={fileRoots} compact onclose={() => filesOpen = false} />{/key}</aside>
@@ -802,8 +896,13 @@
 </div>
 
 {#if registrationDialogOpen}
-  <SessionRegistration {projects} {registeredSessions} initialMode={registrationMode} busy={sessionLoading} onregister={registerSession} onchat={createChat} onclose={() => registrationDialogOpen = false} onerror={(message) => error = message} />
+  <SessionRegistration {projects} {registeredSessions} initialMode={registrationMode} busy={sessionLoading} onregister={registerSession} onchat={createChat} onworkflow={startWorkflow} onclose={() => registrationDialogOpen = false} onerror={(message) => error = message} />
 {/if}
+
+<style>
+  .workflow-panel { display:flex; flex-direction:column; min-width:0; min-height:0; overflow:hidden; }
+  @media(max-width:800px) { .workflow-panel { min-height:560px; overflow:visible; } }
+</style>
 
 {#if projectDialogOpen}
   <ProjectDialog project={editingProject} {workspaceRoot} onsaved={projectSaved} onclose={() => projectDialogOpen = false} />

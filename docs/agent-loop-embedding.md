@@ -55,7 +55,10 @@ By default, new Council and Composer sessions allocate a private workspace under
 explicit workspace. Council's read scope remains independent of its storage root.
 The shared `studio-sessions.json` catalog contains references to these canonical
 sessions. Existing Council/Composer directories are neither read nor migrated.
-The current Studio screens stay separate; the unified Sessions UI is deferred.
+Studio lists all three types in Sessions and opens each with its own detail
+panel and workflow API. Ordinary Interaction controls retain their existing
+behavior. The older Council/Composer URLs resolve through the shared catalog
+to the corresponding registration in Sessions.
 
 Composer source files live under the session directory's `docs/diagram/` (`.d2`)
 and `docs/webcomponent/` (`.html`). The editor uses revision hashes to reject stale

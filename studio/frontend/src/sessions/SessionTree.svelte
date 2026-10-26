@@ -2,7 +2,7 @@
   import { ChevronDown, Folders, GitBranch, MessageSquarePlus, Plus, RefreshCw, Search, X } from '@lucide/svelte';
   import { formatSessionTime, shortID } from './format';
   import { flattenDelegations } from './tree';
-  import type { FlatDelegation, RegisteredSessionTree, StudioProject } from './types';
+  import type { FlatDelegation, RegisteredSessionTree, StudioProject, SessionType } from './types';
 
   export let projects: StudioProject[];
   export let registeredSessions: RegisteredSessionTree[];
@@ -11,6 +11,7 @@
   export let workspaceLoading: boolean;
   export let sessionLoading: boolean;
   export let sending: boolean;
+  export let typeFilter: SessionType | 'all' = 'all';
   export let onrefresh: () => void;
   export let onproject: (project?: StudioProject) => void;
   export let onregistration: () => void;
@@ -24,9 +25,10 @@
   let collapsedGroups = new Set<string>();
   $: query = search.trim().toLocaleLowerCase();
   $: filteredSessions = registeredSessions.filter(registration => {
+    if (typeFilter !== 'all' && (registration.session.type || 'interaction') !== typeFilter) return false;
     const project = projects.find(project => project.id === registration.project_id);
     const title = registration.session.title || (registration.kind === 'chat' ? 'New chat' : 'New session');
-    const terms = [title, registration.kind === 'chat' ? 'Personal chat' : '', registration.session.session_id, registration.workspace_root, project?.name,
+    const terms = [title, registration.session.type, registration.kind === 'chat' ? 'Personal chat' : '', registration.session.session_id, registration.workspace_root, project?.name,
       ...flattenDelegations(registration.delegations || [], 1).map(node => node.bookmark.agent)];
     return !query || terms.some(term => term?.toLocaleLowerCase().includes(query));
   });
@@ -56,6 +58,9 @@
     <div class="session-list-heading"><span>YOUR SESSIONS</span><div><button title="Refresh session tree" aria-label="Refresh session tree" onclick={onrefresh} disabled={workspaceLoading}><RefreshCw aria-hidden="true" size={14} /></button><button title="Create project" aria-label="Create project" onclick={() => onproject()} disabled={sessionLoading}><Folders aria-hidden="true" size={15} /></button></div></div>
     <div class="session-create-actions"><button class="primary-button" title="New chat" onclick={onchat} disabled={sessionLoading}><MessageSquarePlus aria-hidden="true" size={15} />New chat</button><button class="secondary-button" title="Add or create session" aria-label="Add or create session" onclick={onregistration} disabled={sessionLoading}><Plus aria-hidden="true" size={15} />New session</button></div>
     <div class="session-search"><Search aria-hidden="true" size={15} /><input bind:this={searchInput} bind:value={search} aria-label="Search sessions" placeholder="Search sessions…" onkeydown={(event) => { if (event.key === 'Escape') clearSearch(); }} />{#if search}<button aria-label="Clear session search" onclick={clearSearch}><X aria-hidden="true" size={14} /></button>{/if}</div>
+    {#if typeFilter !== 'all' || registeredSessions.some(item => item.session.type && item.session.type !== 'interaction')}
+      <div class="session-type-filter"><select aria-label="Filter session type" bind:value={typeFilter}><option value="all">All session types</option><option value="interaction">Interaction</option><option value="council">Council</option><option value="composer">Composer</option></select></div>
+    {/if}
     {#if query}<p class="session-search-count" role="status">{filteredSessions.length} {filteredSessions.length === 1 ? 'session' : 'sessions'} found</p>{/if}
     <div class="session-list session-tree" aria-busy={workspaceLoading}>
       {#snippet groupHeading(id: string, label: string, count: number)}
@@ -69,10 +74,10 @@
         <div class="session-list-item session-root" class:active={selectedRegistrationID === registration.registration_id && !selectedDelegationPath} class:broken={!!registration.issue}>
           <button class="session-select" aria-current={selectedRegistrationID === registration.registration_id && !selectedDelegationPath ? 'true' : undefined} onclick={() => !registration.issue && onselect(registration)} disabled={!!registration.issue}>
             <strong>{registration.session.title || (registration.kind === 'chat' ? 'New chat' : 'New session')}</strong>
-            <small title={registration.kind === 'chat' ? undefined : registration.workspace_root}>{registration.kind === 'chat' ? 'Personal chat' : registration.workspace_root}</small>
+            <small title={registration.kind === 'chat' ? undefined : registration.workspace_root}>{#if registration.session.type === 'council'}Council · {:else if registration.session.type === 'composer'}Composer · {/if}{registration.kind === 'chat' ? 'Personal chat' : registration.workspace_root}</small>
             <code>{registration.issue || `${formatSessionTime(registration.session.updated_at)} · ${shortID(registration.session.session_id)}`}</code>
           </button>
-          <button class="session-delete" title={registration.kind === 'chat' ? 'Delete chat' : 'Remove from Studio'} aria-label={registration.kind === 'chat' ? `Delete chat ${registration.session.title || ''}`.trim() : `Remove ${registration.session.title || 'session'} from Studio`} onclick={() => onunregister(registration)} disabled={sending || sessionLoading}><X aria-hidden="true" size={13} /></button>
+          <button class="session-delete" title={registration.session.type && registration.session.type !== 'interaction' ? 'Delete session' : registration.kind === 'chat' ? 'Delete chat' : 'Remove from Studio'} aria-label={registration.session.type && registration.session.type !== 'interaction' ? `Delete ${registration.session.type} ${registration.session.title || ''}`.trim() : registration.kind === 'chat' ? `Delete chat ${registration.session.title || ''}`.trim() : `Remove ${registration.session.title || 'session'} from Studio`} onclick={() => onunregister(registration)} disabled={sending || sessionLoading}><X aria-hidden="true" size={13} /></button>
         </div>
         {#each flattenDelegations(registration.delegations || [], 1) as node}
           <button class="session-child" class:active={selectedRegistrationID === registration.registration_id && selectedDelegationPath === node.path} style={`--tree-depth: ${node.depth}`} onclick={() => ondelegate(registration, node)} disabled={!!registration.issue}>
@@ -118,3 +123,8 @@
       {/if}
     </div>
   </aside>
+
+<style>
+  .session-type-filter { padding:0 16px 8px; }
+  .session-type-filter select { width:100%; min-width:0; padding:5px 8px; color:var(--muted); background:var(--surface); border:1px solid var(--border); border-radius:4px; font:inherit; font-size:12px; }
+</style>

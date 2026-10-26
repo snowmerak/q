@@ -271,10 +271,16 @@ func TestComposerLocksCancellationRecoveryAndIsolation(t *testing.T) {
 	if response := serveJSON(t, other, http.MethodPost, "/api/v1/composers", map[string]string{"name": strings.Repeat("생각", 60), "model": "default/test-model"}); response.Code != http.StatusCreated {
 		t.Fatalf("120-character Korean title = %d %s", response.Code, response.Body.String())
 	}
-	// Composer's private session never appears as a registered coding session.
+	// Unified discovery includes Composer roots with their workflow type; it
+	// must not expose their contents as ordinary interaction/delegation roots.
 	var registered registeredSessionsResponse
-	if status := councilAPI(t, other, http.MethodGet, "/api/v1/registered-sessions", nil, &registered); status != http.StatusOK || len(registered.Sessions) != 0 {
-		t.Fatalf("Composer leaked into workspace sessions: %+v", registered)
+	if status := councilAPI(t, other, http.MethodGet, "/api/v1/registered-sessions", nil, &registered); status != http.StatusOK || len(registered.Sessions) != 2 {
+		t.Fatalf("Composer catalog: %+v", registered)
+	}
+	for _, entry := range registered.Sessions {
+		if entry.Session.Type != workspace.Composer || len(entry.Delegations) != 0 {
+			t.Fatalf("Composer was exposed as an ordinary coding session: %+v", entry)
+		}
 	}
 }
 

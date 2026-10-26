@@ -11,7 +11,7 @@ test('session type tabs keep separate selections and fit desktop and mobile', as
   await expect(page).toHaveTitle(/Q Studio/);
   await page.getByRole('button', { name: 'Add or create session', exact: true }).click();
   const dialog = page.getByRole('dialog', { name: 'New session', exact: true });
-  const chat = dialog.getByRole('tab', { name: 'Chat', exact: true });
+  const chat = dialog.getByRole('tab', { name: 'Temporary', exact: true });
   const workspace = dialog.getByRole('tab', { name: 'Workspace', exact: true });
   const project = dialog.getByRole('tab', { name: 'Project', exact: true });
   await expect(chat).toHaveAttribute('aria-selected', 'true');
@@ -96,6 +96,6 @@ test('project tab explains an empty project list', async ({ page, request }) => 
   await dialog.getByRole('tab', { name: 'Project', exact: true }).click();
   await expect(dialog.getByRole('heading', { name: 'No projects yet', exact: true })).toBeVisible();
   await expect(dialog.getByRole('combobox')).toHaveCount(0);
-  await dialog.getByRole('tab', { name: 'Chat', exact: true }).click();
+  await dialog.getByRole('tab', { name: 'Temporary', exact: true }).click();
   await expect(dialog.getByRole('button', { name: 'New chat', exact: true })).toBeEnabled();
 });

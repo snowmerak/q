@@ -1,4 +1,6 @@
+export type SessionType = 'interaction' | 'council' | 'composer';
 export type SessionSummary = {
+  type?: SessionType;
   session_id: string;
   run_id?: string;
   title?: string;

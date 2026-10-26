@@ -4,7 +4,7 @@ test('session registration can start a chat with an empty workspace field', asyn
   await page.goto('/sessions');
   await page.getByRole('button', { name: 'Add or create session', exact: true }).click();
   const dialog = page.getByRole('dialog', { name: 'New session', exact: true });
-  await expect(dialog.getByRole('tab', { name: 'Chat', exact: true })).toHaveAttribute('aria-selected', 'true');
+  await expect(dialog.getByRole('tab', { name: 'Temporary', exact: true })).toHaveAttribute('aria-selected', 'true');
   await expect(dialog.getByLabel('Workspace directory')).toHaveCount(0);
   const created = page.waitForResponse(response => new URL(response.url()).pathname === '/api/v1/chats' && response.request().method() === 'POST');
   await dialog.getByRole('button', { name: 'New chat', exact: true }).click();

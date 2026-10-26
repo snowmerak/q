@@ -1,9 +1,7 @@
 <script lang="ts">
-  import { Activity, CircleHelp, Files, GitCompareArrows, House, Layers, Lightbulb, MessagesSquare, PanelLeftClose, PanelLeftOpen, Settings } from '@lucide/svelte';
+  import { Activity, CircleHelp, Files, GitCompareArrows, House, Layers, PanelLeftClose, PanelLeftOpen, Settings } from '@lucide/svelte';
   import { onMount } from 'svelte';
   import ChangesView from './ChangesView.svelte';
-  import CouncilView from './CouncilView.svelte';
-  import ComposerView from './ComposerView.svelte';
   import FilesView from './FilesView.svelte';
   import HelpView from './HelpView.svelte';
   import OperationsView from './OperationsView.svelte';
@@ -21,8 +19,6 @@
   const navigation = [
     { label: 'Overview', icon: House, view: 'overview' as View },
     { label: 'Sessions', icon: Layers, view: 'sessions' as View },
-    { label: 'Councils', icon: MessagesSquare, view: 'councils' as View },
-    { label: 'Composer', icon: Lightbulb, view: 'composers' as View },
     { label: 'Files', icon: Files, view: 'files' as View },
     { label: 'Changes', icon: GitCompareArrows, view: 'changes' as View },
     { label: 'Operations', icon: Activity, view: 'operations' as View },
@@ -32,6 +28,7 @@
   let connection: ConnectionState = { kind: 'loading' };
   let activeView: View = 'overview';
   let sidebarCollapsed = true;
+  let sessionView: SessionView | null = null;
 
   $: activeLabel = navigation.find(item => item.view === activeView)?.label || 'Overview';
 
@@ -58,12 +55,15 @@
   }
 
   function navigate(view: View) {
+    if (activeView === view) return;
+    if (activeView === 'sessions' && sessionView?.canLeave() === false) return;
     activeView = view;
     const path = view === 'overview' ? '/' : `/${view}`;
     if (window.location.pathname !== path) window.history.pushState({}, '', path);
   }
 
   function openPath(path: string) {
+    if (activeView === 'sessions' && sessionView?.canLeave() === false) return;
     window.history.pushState({}, '', path);
     activeView = viewFromLocation();
   }
@@ -83,8 +83,8 @@
   function viewFromLocation(): View {
     if (window.location.pathname.startsWith('/settings')) return 'settings';
     if (window.location.pathname.startsWith('/sessions')) return 'sessions';
-    if (window.location.pathname.startsWith('/councils')) return 'councils';
-    if (window.location.pathname.startsWith('/composers')) return 'composers';
+    if (window.location.pathname.startsWith('/councils')) return 'sessions';
+    if (window.location.pathname.startsWith('/composers')) return 'sessions';
     if (window.location.pathname.startsWith('/files')) return 'files';
     if (window.location.pathname.startsWith('/changes')) return 'changes';
     if (window.location.pathname.startsWith('/operations')) return 'operations';
@@ -101,7 +101,12 @@
     activeView = viewFromLocation();
     void loadStatus();
     const onPopState = () => {
-      activeView = viewFromLocation();
+      const next = viewFromLocation();
+      if (activeView === 'sessions' && next !== 'sessions' && sessionView?.canLeave() === false) {
+        window.history.pushState({}, '', sessionView.currentPath());
+        return;
+      }
+      activeView = next;
     };
     const onShortcut = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement | null;
@@ -135,7 +140,7 @@
       </button>
     </div>
     <nav id="studio-navigation" aria-label="Main navigation">
-      {#each [{ label: 'Workspace', items: navigation.slice(0, 6) }, { label: 'Manage', items: navigation.slice(6) }] as group}
+      {#each [{ label: 'Workspace', items: navigation.slice(0, 4) }, { label: 'Manage', items: navigation.slice(4) }] as group}
       <div class="navigation-group">
         <span class="navigation-group-label">{group.label}</span>
       {#each group.items as item}
@@ -163,11 +168,7 @@
       {#if connection.kind === 'error'}<div class="overview-connection-error" role="alert"><span>{connection.message}</span><button class="retry" onclick={loadStatus}>Retry connection</button></div>{/if}
       <OverviewView onopen={openPath} />
     {:else if activeView === 'sessions'}
-      <SessionView openChanges={openWorkspaceChanges} />
-    {:else if activeView === 'councils'}
-      <CouncilView />
-    {:else if activeView === 'composers'}
-      <ComposerView />
+      <SessionView bind:this={sessionView} openChanges={openWorkspaceChanges} />
     {:else if activeView === 'changes'}
       <ChangesView />
     {:else if activeView === 'files'}

@@ -22,7 +22,7 @@ the resulting diff, and create a commit from one local Studio process.
   Gateway.
 - **Durable sessions** — API-independent conversation records, recoverable
   delegation trees, and searchable history.
-- **Composer** — a separate space to develop ideas through conversation with a
+- **Composer** — a session type to develop ideas through conversation with a
   selected model, saved history, D2 diagrams, and interactive HTML previews.
   Refine files together through chat or edit their source beside the preview.
 - **Bounded tool output** — large tool results are captured as immutable Loom
@@ -248,8 +248,10 @@ Studio is the primary interface for daily Q work:
   command permission requests; the external agent must also enforce its own
   read-only sandbox. Each ACP seat retains its session across rounds, and
   resumed runs reconstruct completed conversation text from saved exchanges
-  (external tool state is not restored). Studio processes share a
-  local SQLite council index; the conversations remain in per-council folders.
+  (external tool state is not restored). Studio processes share the session
+  catalog; configuration, turns, and participant contexts live inside the
+  parent session's `council/` directory. Open Council and Composer sessions
+  from Sessions, or create one using New session > New Council / New Composer.
   Export the full conversation from Studio as Markdown or JSON, including
   available progress from a turn that is still running.
 - **Settings** owns global and repository model assignments, Gateway and System

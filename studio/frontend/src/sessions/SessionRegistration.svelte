@@ -14,9 +14,10 @@
   export let onchat: () => Promise<void> = async () => {};
   export let onclose: () => void = () => {};
   export let onerror: (message: string) => void = () => {};
+  export let onworkflow: (type: 'council' | 'composer') => void = () => {};
 
   const tabs = [
-    { id: 'chat', label: 'Chat', icon: MessageSquare },
+    { id: 'chat', label: 'Temporary', icon: MessageSquare },
     { id: 'workspace', label: 'Workspace', icon: FolderOpen },
     { id: 'project', label: 'Project', icon: Folders }
   ] as const;
@@ -196,10 +197,18 @@
         </div>
       {/if}
     </div>
-    <footer>
+    <footer class="registration-footer">
       <div><p class="registration-footer-note">{mode === 'chat' ? 'No workspace needed.' : 'Continue an existing session or create a new one.'}</p></div>
-      <button class="secondary-button" onclick={() => onclose()}>Cancel</button>
-      {#if mode === 'chat'}<button class="primary-button" onclick={onchat} disabled={busy}><Plus aria-hidden="true" size={15} /> New chat</button>{/if}
+      {#if mode === 'chat'}
+        <div class="registration-actions">
+          <button class="secondary-button" onclick={() => onclose()}>Cancel</button>
+          <button class="primary-button" onclick={onchat} disabled={busy}><Plus aria-hidden="true" size={15} /> New chat</button>
+          <button class="primary-button" onclick={() => onworkflow('council')} disabled={busy}><Plus aria-hidden="true" size={15} /> New Council</button>
+          <button class="primary-button" onclick={() => onworkflow('composer')} disabled={busy}><Plus aria-hidden="true" size={15} /> New Composer</button>
+        </div>
+      {:else}
+        <button class="secondary-button" onclick={() => onclose()}>Cancel</button>
+      {/if}
     </footer>
   </div>
 </div>
@@ -207,3 +216,12 @@
 {#if directoryPickerOpen}
   <DirectoryBrowser onselect={selectDirectory} onclose={() => directoryPickerOpen = false} />
 {/if}
+
+<style>
+  .registration-footer { grid-template-columns:minmax(0,1fr) auto; }
+  .registration-footer > .registration-actions { display:flex; flex-wrap:wrap; justify-content:flex-end; gap:8px; }
+  @media(max-width:600px) {
+    .registration-footer { grid-template-columns:minmax(0,1fr); }
+    .registration-actions button { flex:1 1 calc(50% - 4px); justify-content:center; white-space:nowrap; }
+  }
+</style>

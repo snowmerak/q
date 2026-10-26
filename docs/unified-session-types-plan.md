@@ -2,7 +2,8 @@
 
 - 작성일/갱신일: 2026-10-27 (Asia/Seoul)
 - 기준 커밋: `8ac7d87776bc2b134110e2c3b1b39d1f3ee1494a`
-- 현재 범위: Council·Composer 저장 및 실행 구조 변경. Sessions 화면 통합은 후속 작업.
+- 저장 구조 변경 및 후속 UI 통합 분석 기준: `d37d538`.
+- 현재 범위: 저장 정규화 완료. 기존 Interaction UI를 보존하며 Sessions에 Council·Composer를 연결했다. 검증 결과는 4.6절에서 관리한다.
 - 데이터 정책: 구형 Council·Composer를 이전하거나 가져오지 않는다. 일반 세션은 보존한다.
 
 ## 1. 확정된 저장 계약
@@ -73,8 +74,9 @@ Council 부모는 조정기가 쓰고, native 참가자와 Composer context는 �
 
 ## 4. 후속 Sessions 화면 통합 계획
 
-현재 Council·Composer 화면과 API는 새 저장소를 사용하지만 독립 메뉴를 유지한다.
-일반 Sessions 화면은 아직 `interaction`만 표시한다. 아래 작업은 이번 범위에 포함하지 않는다.
+아래 4.1~4.5절은 `d37d538` 당시 작성한 통합 분석과 제안이다.
+이후 사용자가 기존 Sessions UI 보존을 최우선 조건으로 구현을 요청했다.
+현재 구현은 4.6절에 기록하며, 공통 durable monitor/API 통합은 후속 범위로 유지한다.
 
 1. 공통 목록 응답에 타입·capability를 연결하고 전체/Interaction/Council/Composer 필터를 제공한다.
 2. 기존 개인 chat·프로젝트 구분, 검색, delegation 탐색을 유지한다.
@@ -85,6 +87,162 @@ Council 부모는 조정기가 쓰고, native 참가자와 Composer context는 �
 6. 모바일, 질문 응답, 재접속, 입력칸 하단 배치, D2 줌·확대와 HTML 편집을 회귀 검증한다.
 
 실행 중 타입 변경, 타입 간 자동 전환, 세션 대화나 산출물 병합은 별도 요구사항이다.
+
+### 4.1 코드 조사 결과
+
+아래 표는 `d37d538` 시점의 구현 전 조사 결과다. 이후 구현 상태는 4.6절이 소유한다.
+
+| 지점 | 현재 코드의 동작 | 통합에 필요한 변경 |
+| --- | --- | --- |
+| `studio/session_registry.go` | catalog에 세 타입이 있지만 응답에서 Interaction 이외를 제외 | 공통 목록에 세 타입 노출, 타입별 capability 제공 |
+| `studio/sessions.go` | backend summary에 이미 `type` 존재. workspace 목록은 Interaction만 조회 | UI 타입 정의 연결, 통합 조회 범위 결정. CLI/ACP 필터는 유지 |
+| `sessions/types.ts` | frontend SessionSummary에 `type` 없음 | SessionType과 capability 계약 추가 |
+| `SessionView.svelte` | 선택 시 일반 transcript, learning, latest run, delegation을 모두 조회 | 목록/선택 틀과 일반 Interaction 상세를 분리하고 타입별 상세 연결 |
+| `SessionTree.svelte` | 프로젝트/개인 chat 그룹, 검색, delegation 트리 | 타입 필터·표시 추가, 기존 그룹과 검색 유지 |
+| `CouncilView.svelte` | 목록·URL·생성·구성·라운드·polling을 한 컴포넌트가 소유 | 목록/URL을 공통 틀로 이동하고 구성 폼·상세 패널 추출 |
+| `ComposerView.svelte` | 목록·URL·생성·대화·질문·polling을 한 컴포넌트가 소유 | 대화 패널·생성 폼 추출, 공통 선택/초안/이탈 처리 연결 |
+| `ComposerArtifacts.svelte` | composer ID로 source/preview를 읽는 독립 패널, dirty 상태 전달 | 기존 패널 재사용, 세션 변경 시 미저장 편집 보호 |
+| `App.svelte`, `OverviewView.svelte` | 별도 최상위 메뉴와 각 상세 URL, 일반 세션 최근 목록 | Sessions로 진입점 통합, 기존 링크와 최근 목록 처리 |
+
+필터만 제거하면 `selectRegisteredSession()`이 Council/Composer에도 일반 run·delegation
+조회와 일반 실행 컨트롤을 연결한다. 서버가 이러한 변경을 거절하도록 이미 보호되어 있으므로
+목록 노출과 상세 dispatch를 같은 변경에서 완성해야 한다.
+
+### 4.2 권장 화면 경계
+
+```text
+Sessions 화면
+├── 공통 목록: 검색 / 전체·Interaction·Council·Composer / 프로젝트·개인 분류
+├── 공통 선택·URL·새 세션 진입점
+└── 선택한 세션의 상세 패널
+    ├── Interaction: 기존 transcript·도구·delegation·파일·실행 제어
+    ├── Council: 질문·라운드·의견·검토·최종 답변·구성·재시도
+    └── Composer: 대화·질문 응답·하단 입력·D2/HTML 소스와 미리보기
+```
+
+가칭 `SessionWorkbench`가 catalog/선택/라우팅/생성을 소유하고,
+`InteractionSessionPanel`, `CouncilSessionPanel`, `ComposerSessionPanel`을 연결한다.
+각 패널은 목록이나 전역 URL을 다시 소유하지 않는다. 기존 화면 전체를 그대로 중첩하면
+좌측 목록과 생성 진입점이 중복되므로 상세와 폼을 추출한다.
+
+상세 패널은 registration ID를 key로 마운트하여 세션별 상태를 분리한다.
+입력 영역은 세 타입 모두 상세 하단을 사용하되, 실행 중 입력의 의미는 유지한다.
+Interaction은 guidance로 이어질 수 있지만 Council/Composer에 같은 의미를 임의로 부여하지 않는다.
+전송 버튼·질문 카드 같은 작은 UI는 필요한 범위에서 공통화한다.
+
+### 4.3 실행 연결과 capability
+
+첫 UI 통합에서는 기존 API와 실행 서비스를 유지하고 frontend에서 타입별 어댑터로 연결한다.
+목록·선택·생성 후 갱신·삭제 후 갱신은 공통 틀이 소유하며,
+각 패널/어댑터는 기존 타입별 조회·전송·취소·질문·재시도를 호출한다.
+새 Agent Loop나 실행 이력 저장 형식을 추가하지 않는다.
+
+| 동작 | Interaction | Council | Composer |
+| --- | --- | --- | --- |
+| 전송 / 중단 | 기존 messages / run commands | turns / 해당 run cancel | messages / cancel |
+| 진행 관찰 | durable cursor 기반 RunMonitor | 라운드 snapshot polling | 대화·질문 snapshot polling |
+| 질문 응답 | pending question에 답변 | 현재 별도 사용자 질문 API 없음 | 기존 answer API |
+| pause / resume / guidance | 기존 지원 | 라운드 재시도와 구분, 공통 컨트롤 제공 안 함 | 현재 공통 컨트롤 제공 안 함 |
+| 실패 턴 재시도 | 기존 실행 복구 의미 유지 | resume / rerun 구분 유지 | 다음 대화로 계속, Council 재시도 UI 제공 안 함 |
+| 모델/구성 | 기존 SessionModelPicker | 멤버·의장·라운드 구성 | 생성 시 모델 선택, 기존 세션 모델 수정 API는 현재 없음 |
+| compact / clear | 기존 지원 | 현재 공통 컨트롤 제공 안 함 | 현재 공통 컨트롤 제공 안 함 |
+| 산출물 | 기존 파일 탐색 | 라운드 결과·export | D2/HTML artifact 패널 |
+
+서버 응답의 capability는 해당 타입의 현재 지원 동작만 설명한다. 실행 중 여부·잠금·질문
+call ID는 실제 서비스가 계속 검사한다. frontend capability 표시를 권한 검증으로 사용하지 않는다.
+기존 `RequireInteraction`을 제거해서 일반 endpoint로 typed workflow를 실행하지 않는다.
+
+세 타입의 상태 표시는 공통 표현으로 맞출 수 있지만, snapshot polling에서 임의의 durable
+event cursor를 만들어서는 안 된다. `sessionSummary.run_id`도 현재 활성 Studio run ID로
+간주하지 않는다. 공통 durable monitor/API까지 통합하는 작업은 UI 통합 뒤 별도 단계로 둔다.
+
+### 4.4 ID·그룹·수명주기에서 보존할 계약
+
+- **URL과 실행 주소:** `/sessions/<registration-id>`를 유지한다. 실행에는 registration의
+  `workspace_root`와 `session.session_id`를 사용한다. native ID만으로 모든 루트를 식별하지 않는다.
+- **기존 링크:** `/councils/<session-id>`, `/composers/<session-id>`는 catalog의 타입/ID를
+  조회해 Sessions 상세로 연결한다. 여러 후보가 있으면 임의 선택하지 않는다. 데이터 이전은 없다.
+- **그룹과 타입:** 현재 `kind: chat`은 관리되는 개인 workspace를 뜻한다. 이를 실행 타입으로
+  사용하지 않는다. private workspace의 Council도 Council 타입이며 개인 분류에 들어갈 수 있다.
+  Council의 project 읽기 scope만으로 저장 세션의 프로젝트 소유권을 바꾸지 않는다.
+- **등록 해제와 삭제:** typed store는 catalog를 통해 세션을 찾는다. 일반 세션의 단순 unregister를
+  노출하면 typed 데이터가 디스크에 남은 채 발견되지 않을 수 있다. 첫 통합에서는 타입별 전체
+  삭제 endpoint를 사용하고, 독립적인 숨김/등록 해제는 별도 검색 계약이 생기기 전 제공하지 않는다.
+- **초안:** 일반 Sessions의 `sessions/drafts.ts`를 재사용하고 registration ID로 구분한다.
+  Composer의 현재 컴포넌트 내부 Map과 Council의 단일 prompt 상태를 공통 초안 저장에 연결한다.
+- **미저장 source:** 목록 선택, 새 세션, 타입 필터로 인한 선택 변경, 뒤로/앞으로 이동 전에
+  artifact dirty 상태를 확인한다. 편집 취소 시 기존 선택과 URL이 서로 달라지지 않게 한다.
+- **늦은 응답:** 타입/세션 전환 시 polling과 fetch를 중지하고 세대 번호를 검증한다.
+  Council은 현재 timer 정리만으로 진행 중 fetch를 취소하지 않으므로 이 부분을 보강한다.
+- **목록 최신성:** 생성·삭제·완료 후 공통 catalog를 갱신한다. 일부 endpoint 응답은 회복 처리로
+  상태가 바뀔 수 있으므로 UI가 표시용 상태를 원본 `session.json`에 다시 저장하지 않는다.
+
+### 4.5 구현 순서와 첫 통합의 완료 기준
+
+1. **상세 패널 추출:** 기존 세 화면에서 목록/라우팅을 분리하고, 기존 URL에서 기능을 보존한다.
+   타입 정의와 생성 폼도 분리한다. Composer artifact·Council 결과 표시를 재작성하지 않는다.
+2. **공통 화면 연결:** catalog 응답과 frontend 타입을 연결하고 목록에 세 타입을 노출한다.
+   선택은 타입별 패널로 dispatch하며, 지원하지 않는 일반 컨트롤을 노출하지 않는다.
+3. **생성·관리 연결:** 공통 New 진입점에서 타입을 고르고 기존 생성 서비스를 호출한다.
+   독립 세션의 private workspace 기본값과 선택적 `storage_root` 계약을 유지한다.
+   생성 응답 후 catalog를 다시 조회해 해당 registration을 선택한다.
+4. **메뉴·링크 정리:** Sessions만 최상위 진입점으로 두고 기존 typed URL, Overview 최근 목록,
+   뒤로/앞으로 이동과 새로고침을 연결한다. 기존 `new=chat/workspace` 링크도 보존한다.
+5. **회귀 검증:** 한 Sessions 화면에서 세 타입의 생성·검색·선택·재접속·삭제까지 확인한다.
+   Council 구성/라운드/ACP·재시도, Composer 질문/편집/확대, 일반 delegation/파일/제어를 유지한다.
+
+첫 통합 완료는 **하나의 Sessions 진입점과 목록 안에서 세 타입을 각각 사용할 수 있는 상태**다.
+세 타입의 모든 HTTP 주소·run event 형식까지 동시에 합치는 것을 완료 조건으로 삼지 않는다.
+그 후 공통 실행 monitor가 필요하면 현재 타입별 의미를 보존하는 서버 어댑터를 추가한다.
+
+기존 API 보호 테스트는 유지한다. 추가 테스트는 공통 목록의 타입/ID, 정상 및 손상된 등록 항목,
+타입별 동작 노출, 기존 링크, 늦은 응답 격리, 미저장 source·초안 보존에 집중한다.
+조사·문서 갱신 단계에서는 제품 코드 변경이나 새 테스트 실행을 하지 않았다.
+
+### 4.6 Sessions 통합 구현과 UI 보존
+
+사용자 조건: 기존 Sessions UI를 해치지 않는 것을 최우선으로 한다.
+이에 따라 Interaction 상세 전체를 다른 컴포넌트로 옮기는 대규모 추출은 진행하지 않았다.
+기존 `SessionView.svelte`의 Interaction markup, 공통 `app.css`, 입력창·transcript·파일 패널
+배치를 유지하고, 같은 목록의 선택 타입이 Council/Composer일 때만 상세 패널을 연결한다.
+기존 typed 컴포넌트는 embedded 모드에서 자신의 목록·전역 URL 처리를 사용하지 않는다.
+
+- catalog는 세 타입을 함께 반환한다. typed root에는 일반 delegation tree를 붙이지 않는다.
+- 기존 New chat와 Workspace/Project 생성 흐름은 유지한다. 사용자 요청에 따라 개인 생성
+  탭 이름을 Temporary로 바꾸고, 하단에 New chat·New Council·New Composer를 같은 수준의
+  생성 버튼으로 배치한다. 모바일에서는 버튼을 줄바꿈하며 기존 창 높이 기준을 유지한다.
+- 타입 필터는 typed 세션이 있거나 해당 필터를 선택한 경우에만 나타난다.
+  필터 변경은 열려 있는 대화를 교체하지 않으며 새 세션 생성 시 전체 필터로 복귀한다.
+- 최상위 진입점은 Sessions다. 기존 `/councils`, `/composers` URL은 catalog를 통해
+  registration을 찾아 같은 Sessions 화면으로 연결하며 실행에는 native session ID를 쓴다.
+- 일반 대화의 실행·모델·압축·학습·파일·delegation 컨트롤은 유지한다.
+  typed 상세는 기존 타입별 API를 사용한다. 별도 capability 응답과 durable monitor 통합은
+  이번에 추가하지 않았으며 서버의 일반 endpoint 보호를 유지한다.
+- 세션별 초안은 공통 저장 helper를 사용하되 Interaction 입력과 typed 입력의 작성 주체를
+  분리한다. 미저장 source는 선택·메뉴 이동·브라우저 이탈 시 보호한다.
+- 전환 중 fetch/poll은 취소하고 늦은 응답을 무시한다. 모델 선택기는 선택된 root와 ID가
+  일치한 상세를 받은 뒤 연결하여 이전 ID와 새 root를 섞어 조회하지 않는다.
+
+검증 경계는 일반 채팅 영역의 시각적 보존, 기존 Sessions 전체 사용자 흐름,
+Council/Composer 기능 유지, 타입 간 초안·편집·비동기 상태의 격리다.
+검증 결과(2026-10-27):
+
+- 변경 전 기존 Sessions 브라우저 테스트 10개를 실행해 기준 화면을 확보했다.
+- 변경 후 기존 브라우저 회귀 86개가 통과했다. 추가한 workflow 통합 테스트 2개도
+  최종 재실행에서 통과했다. 추가 테스트는 모바일 목록이 접힌 후의 조회 선택자를 수정해 재검증했다.
+- 기준/최종 캡처의 일반 대화 영역 비교에서 1440×900과 390×900 모두 변경 픽셀 0개였다.
+  의도적으로 통합한 최상위 메뉴는 비교 대상에서 제외했다. 별도로 타입 전환 전후의
+  Interaction 상세는 전체 패널 screenshot buffer와 bounding box가 동일함을 검증했다.
+- Chromium에서 일반 모델 선택·생성 창·검색·IME·파일·delegation·guidance·재접속,
+  Council 구성/ACP/라운드/재시도, Composer 질문/편집/격리 미리보기/확대를 검증했다.
+- 세 타입 초안, 미저장 source 이탈 취소, 뒤로/앞으로 이동, 늦은 Council 응답 격리,
+  모바일 선택기와 새 채팅 생성 시 타입 필터 복귀를 추가 검증했다.
+- `go test -p 1 ./... -timeout=10m`, 최종 frontend asset 기준 Studio 전체 테스트,
+  frontend check/build, `go vet`, `go build`, module tidy 차이 검사, golangci-lint가 통과했다.
+  govulncheck에서 코드가 호출하는 취약점은 발견되지 않았다.
+
+Browser 플러그인이 제공되지 않아 저장소의 Playwright와 격리된 Studio/model fixture를 사용했다.
+스크린샷·trace 등 실행 산출물은 저장소 밖의 임시 디렉터리에 저장했다.
 
 ## 5. 수정 규모와 검증
 

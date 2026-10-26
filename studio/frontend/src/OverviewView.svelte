@@ -50,7 +50,7 @@
         {#each sessions as registration}
           <button class="recent-session" onclick={() => onopen(`/sessions/${encodeURIComponent(registration.registration_id)}`)}>
             <span class="recent-session-icon" aria-hidden="true">{#if registration.kind === 'chat'}<MessageSquare size={18} />{:else}<GitBranch size={18} />{/if}</span>
-            <span class="recent-session-description"><strong>{registration.session.title || (registration.kind === 'chat' ? 'New chat' : 'New session')}</strong><small title={registration.workspace_root}>{registration.kind === 'chat' ? 'Personal chat' : registration.project_name || registration.workspace_root}</small></span>
+            <span class="recent-session-description"><strong>{registration.session.title || (registration.kind === 'chat' ? 'New chat' : 'New session')}</strong><small title={registration.workspace_root}>{#if registration.session.type === 'council'}Council · {:else if registration.session.type === 'composer'}Composer · {/if}{registration.kind === 'chat' ? 'Personal chat' : registration.project_name || registration.workspace_root}</small></span>
             <time datetime={registration.session.updated_at}>{formatSessionTime(registration.session.updated_at)}</time>
             <ArrowRight class="recent-session-arrow" aria-hidden="true" size={16} />
           </button>

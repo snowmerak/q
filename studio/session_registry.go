@@ -66,10 +66,6 @@ func (service *sessionsService) serveRegisteredCollection(writer http.ResponseWr
 		trees := make([]registeredSessionTree, 0, len(items))
 		for _, item := range items {
 			tree := service.registeredTree(item, projectForWorkspace(projects, item.WorkspaceRoot))
-			// Typed workflows remain in their existing views until Sessions UI integration.
-			if tree.Issue == "" && tree.Session.Type != workspace.Interaction {
-				continue
-			}
 			trees = append(trees, tree)
 		}
 		sort.SliceStable(trees, func(left, right int) bool {
@@ -187,6 +183,9 @@ func (service *sessionsService) registeredTree(item registeredSession, project *
 		return tree
 	}
 	tree.Session = detailFromSession(item.WorkspaceRoot, store, value).Session
+	if value.Type != workspace.Interaction {
+		return tree
+	}
 	remaining := maximumDelegationTreeNodes
 	tree.Delegations, err = loadDelegationNodes(store, 0, &remaining)
 	if err != nil {

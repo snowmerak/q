@@ -161,7 +161,11 @@ test('project dialog creates, cancels edits, updates, and deletes a saved projec
   // editing the currently selected session's project.
   const registry = await (await request.get('/api/v1/registered-sessions')).json();
   for (const session of registry.sessions) {
-    expect((await request.delete(`/api/v1/registered-sessions/${session.registration_id}`)).ok()).toBe(true);
+    const type = session.session.type;
+    const path = type === 'council' || type === 'composer'
+      ? `/api/v1/${type === 'council' ? 'councils' : 'composers'}/${session.session.session_id}`
+      : `/api/v1/registered-sessions/${session.registration_id}`;
+    expect((await request.delete(path)).ok()).toBe(true);
   }
   await page.reload();
   await page.getByTitle('Create project', { exact: true }).click();

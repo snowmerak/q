@@ -11,7 +11,7 @@ test('Composer expands previews and supports readable D2 zoom and pan', async ({
     expect((await request.put(base + encodeURIComponent('docs/diagram/large.d2'), { data: { content: diagram, expected_hash: '' } })).ok()).toBe(true);
     expect((await request.put(base + encodeURIComponent('docs/webcomponent/demo.html'), { data: { content: '<!doctype html><h1>Expanded component</h1><button onclick="this.textContent=\'Working\'">Try it</button><p id="isolation"></p><script>try { parent.document.body; } catch { document.querySelector(\'#isolation\').textContent=\'Isolated\'; }</script>', expected_hash: '' } })).ok()).toBe(true);
     await page.goto(`/composers/${id}`);
-    await expect(page).toHaveTitle('Composer · Q Studio');
+    await expect(page).toHaveTitle('Sessions · Q Studio');
     const artifacts = page.getByRole('region', { name: 'Composer artifacts' });
     const preview = page.frameLocator('iframe[title="Artifact preview"]');
     const svg = preview.locator('#diagram > svg');
@@ -147,14 +147,15 @@ test('Composer creates a model conversation, saves history, and continues after 
   let id;
   try {
     await page.goto('/');
-    await page.getByRole('button', { name: 'Composer', exact: true }).click();
-    await expect(page).toHaveTitle('Composer · Q Studio');
-    await page.getByRole('button', { name: 'New', exact: true }).click();
+    await page.getByRole('button', { name: 'Sessions', exact: true }).click();
+    await expect(page).toHaveTitle('Sessions · Q Studio');
+    await page.getByRole('button', { name: 'Add or create session', exact: true }).click();
+    await page.getByRole('button', { name: 'New Composer', exact: true }).click();
     await page.getByLabel('Name', { exact: true }).fill('Reading club idea');
     await expect(page.getByRole('combobox', { name: 'Model', exact: true }).locator('option')).toHaveText(['default/test-model']);
     await page.getByRole('button', { name: 'Create conversation' }).click();
     await expect(page.getByRole('heading', { name: 'Reading club idea', exact: true })).toBeVisible();
-    id = new URL(page.url()).pathname.split('/').pop();
+    id = (await (await request.get('/api/v1/registered-sessions')).json()).sessions.find(item => item.registration_id === new URL(page.url()).pathname.split('/').pop()).session.session_id;
     const input = page.getByLabel('Develop your idea');
     await input.fill('I want to make a reading club app');
     await input.press('Enter');
@@ -174,13 +175,13 @@ test('Composer creates a model conversation, saves history, and continues after 
     expect(detail.model).toBe('default/test-model');
     expect(detail.turns).toHaveLength(2);
     expect(detail.turns.every(turn => turn.status === 'completed')).toBe(true);
+    await page.getByRole('button', { name: 'Overview', exact: true }).click();
     await page.getByRole('button', { name: 'Sessions', exact: true }).click();
-    await page.getByRole('button', { name: 'Composer', exact: true }).click();
-    await page.getByRole('button', { name: /Reading club idea default\/test-model/ }).click();
+    await page.getByRole('button', { name: /Reading club idea Composer/ }).click();
     await expect(history.getByText("Let's develop the reading club idea for students.", { exact: true })).toBeVisible();
     page.once('dialog', dialog => dialog.accept());
     await page.getByRole('button', { name: 'Delete', exact: true }).click();
-    await expect(page.getByRole('button', { name: /Reading club idea default\/test-model/ })).toHaveCount(0);
+    await expect(page.getByRole('button', { name: /Reading club idea Composer/ })).toHaveCount(0);
     expect((await request.get(`/api/v1/composers/${id}`)).status()).toBe(404);
     expect(errors).toEqual([]);
   } finally { if (id) await request.delete(`/api/v1/composers/${id}`); }

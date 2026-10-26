@@ -2,6 +2,7 @@ package studio
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/url"
 	"os"
@@ -46,6 +47,21 @@ func TestTypedWorkflowsRejectOrdinarySessionMutations(t *testing.T) {
 	parent, err := sessions.councils.store.SessionStore(c.ID)
 	if err != nil {
 		t.Fatal(err)
+	}
+	response := serveJSON(t, handler, http.MethodGet, "/api/v1/registered-sessions", nil)
+	var catalog registeredSessionsResponse
+	if response.Code != http.StatusOK || json.Unmarshal(response.Body.Bytes(), &catalog) != nil || len(catalog.Sessions) != 2 {
+		t.Fatalf("typed catalog=%d %s", response.Code, response.Body.String())
+	}
+	seen := map[workspace.SessionType]bool{}
+	for _, entry := range catalog.Sessions {
+		seen[entry.Session.Type] = true
+		if entry.RegistrationID == entry.Session.SessionID || len(entry.Delegations) != 0 {
+			t.Fatalf("invalid typed root identity/tree: %+v", entry)
+		}
+	}
+	if !seen[workspace.Council] || !seen[workspace.Composer] {
+		t.Fatalf("catalog omitted workflows: %+v", catalog)
 	}
 	for _, store := range []workspace.Store{parent, sessions.composers.store.SessionStore(idea)} {
 		before, err := os.ReadFile(store.Path())

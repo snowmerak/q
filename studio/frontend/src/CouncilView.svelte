@@ -5,6 +5,16 @@
   import { reasoningOptions } from './settings/reasoning';
   import type { ModelOption } from './settings/types';
   import type { StudioProject } from './sessions/types';
+  import { loadDraft, saveDraft } from './sessions/drafts';
+
+  export let embedded = false;
+  export let initialID = '';
+  export let draftKey = '';
+  export let oncreated: (id: string) => Promise<void> = async () => {};
+  export let onupdated: () => Promise<void> = async () => {};
+  export let onremoved: () => Promise<void> = async () => {};
+  const controller = new AbortController();
+  let generation = 0;
 
   type Seat = { model?: string; agent?: string; reasoning_effort?: string };
   type Council = { id: string; name: string; scope: 'independent' | 'workspace' | 'project'; workspace_root?: string; project_id?: string; members: Seat[]; chair: Seat; rounds?: number; updated_at: string };
@@ -51,7 +61,7 @@
   }
 
   async function request<T>(path: string, method = 'GET', body?: unknown): Promise<T> {
-    return requestJSON<T>(method, path, body);
+    return requestJSON<T>(method, path, body, controller.signal);
   }
 
   function selectedFromPath() {
@@ -86,10 +96,13 @@
   }
 
   async function openCouncil(id: string, navigate = true) {
+    const expected = ++generation;
     if (poll) { clearTimeout(poll); poll = null; }
     const detail = await request<{ council: Council; turns: Turn[] }>(`/api/v1/councils/${encodeURIComponent(id)}`);
+    if (controller.signal.aborted || expected !== generation) return;
     selected = detail.council;
     turns = detail.turns || [];
+    prompt = loadDraft(draftKey || `council:${id}`);
     draftName = selected.name;
     draftScope = selected.scope;
     draftRoot = selected.workspace_root || '';
@@ -99,7 +112,7 @@
     draftRounds = selected.rounds || 2;
     creating = false;
     settingsOpen = false;
-    if (navigate && window.location.pathname !== `/councils/${id}`) window.history.pushState({}, '', `/councils/${id}`);
+    if (navigate && !embedded && window.location.pathname !== `/councils/${id}`) window.history.pushState({}, '', `/councils/${id}`);
     schedulePoll();
   }
 
@@ -109,17 +122,21 @@
     if (!ongoing || !selected) return;
     const councilID = selected.id;
     const turnID = ongoing.id;
+    const expected = generation;
     poll = setTimeout(async () => {
       try {
         const updated = await request<Turn>(`/api/v1/councils/${encodeURIComponent(councilID)}/runs/${encodeURIComponent(turnID)}`);
+        if (controller.signal.aborted || expected !== generation) return;
         turns = turns.map((turn) => turn.id === turnID ? updated : turn);
         if (['queued', 'running'].includes(updated.status)) schedulePoll();
+        else if (embedded) await onupdated();
         else await loadCatalog();
-      } catch (cause) { error = cause instanceof Error ? cause.message : 'Could not read council progress'; }
+      } catch (cause) { if (!controller.signal.aborted && expected === generation) error = cause instanceof Error ? cause.message : 'Could not read council progress'; }
     }, 1200);
   }
 
-  function startCreate() {
+  function startCreate(navigate = true) {
+    generation++;
     if (poll) { clearTimeout(poll); poll = null; }
     selected = null;
     turns = [];
@@ -132,7 +149,7 @@
     draftMembers = defaultSeats();
     draftChair = seatFor(participantChoices[0]?.value || '');
     draftRounds = 2;
-    window.history.pushState({}, '', '/councils');
+    if (navigate && !embedded) window.history.pushState({}, '', '/councils');
   }
 
   function payload() {
@@ -144,6 +161,11 @@
     try {
       const path = selected ? `/api/v1/councils/${encodeURIComponent(selected.id)}` : '/api/v1/councils';
       const saved = await request<Council>(path, selected ? 'PUT' : 'POST', payload());
+      if (embedded) {
+        if (selected) { await openCouncil(saved.id, false); await onupdated(); }
+        else await oncreated(saved.id);
+        return;
+      }
       await loadCatalog();
       await openCouncil(saved.id);
     } catch (cause) { error = cause instanceof Error ? cause.message : 'Could not save council'; }
@@ -154,6 +176,8 @@
     if (!selected || !window.confirm(`Delete council “${selected.name}” and its conversation?`)) return;
     try {
       await request(`/api/v1/councils/${encodeURIComponent(selected.id)}`, 'DELETE');
+      saveDraft(draftKey || `council:${selected.id}`, '');
+      if (embedded) { await onremoved(); return; }
       selected = null; turns = []; creating = false;
       window.history.pushState({}, '', '/councils');
       await loadCatalog();
@@ -166,6 +190,7 @@
     try {
       const turn = await request<Turn>(`/api/v1/councils/${encodeURIComponent(selected.id)}/turns`, 'POST', { prompt: prompt.trim() });
       turns = [...turns, turn]; prompt = '';
+      saveDraft(draftKey || `council:${selected.id}`, '');
       schedulePoll();
     } catch (cause) { error = cause instanceof Error ? cause.message : 'Could not start council turn'; }
   }
@@ -262,6 +287,13 @@
 
   onMount(() => {
     let mounted = true;
+    if (embedded) {
+      if (initialID) void openCouncil(initialID, false).catch((cause) => { if (!controller.signal.aborted) error = String(cause); });
+      else startCreate(false);
+      void loadReferenceData().catch((cause) => { if (!controller.signal.aborted) error = String(cause); });
+      loading = false;
+      return () => { generation++; controller.abort(); if (poll) clearTimeout(poll); };
+    }
     void (async () => {
       try {
         await loadCouncilList();
@@ -278,13 +310,14 @@
       else { selected = null; creating = false; turns = []; }
     };
     window.addEventListener('popstate', pop);
-    return () => { mounted = false; if (poll) clearTimeout(poll); window.removeEventListener('popstate', pop); };
+    return () => { mounted = false; generation++; controller.abort(); if (poll) clearTimeout(poll); window.removeEventListener('popstate', pop); };
   });
 </script>
 
-<section class="council-view">
+<section class="council-view" class:embedded>
+  {#if !embedded}
   <aside class="council-list">
-    <div class="list-heading"><h2>Councils</h2><button onclick={startCreate}>New</button></div>
+    <div class="list-heading"><h2>Councils</h2><button onclick={() => startCreate()}>New</button></div>
     {#if loading}<p class="muted">Loading…</p>{/if}
     {#each councils as item}
       <button class:selected={selected?.id === item.id} class="council-item" onclick={() => { error = ''; void openCouncil(item.id).catch((cause) => error = String(cause)); }}>
@@ -293,6 +326,7 @@
     {/each}
     {#if !loading && councils.length === 0}<p class="muted">Create a council to bring models and ACP agents into one conversation.</p>{/if}
   </aside>
+  {/if}
 
   <div class="council-content">
     {#if error}<p class="council-error" role="alert">{error}</p>{/if}
@@ -320,7 +354,7 @@
           {#if activeTurn}
             <div class="ask-box running-controls" role="status"><span>Council is working · {activeTurn.stage === 'synthesis' ? 'Chair synthesis' : `Round ${currentRound(activeTurn)} / ${roundCount(activeTurn)}`}</span><button onclick={cancelTurn}>Cancel turn</button></div>
           {:else}
-            <div class="ask-box"><textarea bind:value={prompt} placeholder="Ask this council…" rows="3" aria-label="Ask this council"></textarea><div><button class="primary" onclick={ask} disabled={!prompt.trim()}>Ask council</button></div></div>
+            <div class="ask-box"><textarea bind:value={prompt} oninput={(event) => saveDraft(draftKey || `council:${selected?.id}`, event.currentTarget.value)} placeholder="Ask this council…" rows="3" aria-label="Ask this council"></textarea><div><button class="primary" onclick={ask} disabled={!prompt.trim()}>Ask council</button></div></div>
           {/if}
           {#each [...turns].reverse() as turn}
             <article class="council-turn">
@@ -372,7 +406,7 @@
         </div>
       {/if}
     {:else}
-      <div class="council-empty"><h2>Choose a council</h2><p>Independent councils stay in your global Q folder. Workspace and project councils can read their assigned repositories.</p><button class="primary" onclick={startCreate}>Create council</button></div>
+      <div class="council-empty"><h2>Choose a council</h2><p>Independent councils stay in your global Q folder. Workspace and project councils can read their assigned repositories.</p><button class="primary" onclick={() => startCreate()}>Create council</button></div>
     {/if}
   </div>
 </section>
@@ -448,4 +482,6 @@
   .council-empty { display: grid; justify-items: start; gap: 12px; margin: 30px 0; }
   @media (max-width: 900px) { .council-view { grid-template-columns: 1fr; } .council-list { border-right: 0; border-bottom: 1px solid var(--border); } .council-settings { grid-template-columns: 1fr; } .seat-row { grid-template-columns: 22px 1fr repeat(3, 32px); } .seat-row select:nth-of-type(2), .seat-row .seat-defaults { grid-column: 2 / -1; grid-row: 2; } .council-heading { flex-direction: column; gap: 12px; } .council-heading-actions { flex-wrap: wrap; } }
   @media (max-width: 600px) { .stage-track { grid-template-columns: 1fr; } .section-caption { flex-direction: column; align-items: flex-start; } }
+  .council-view.embedded { display:block; width:100%; min-height:0; height:100%; overflow:auto; padding:0 24px; }
+  @media(max-width:800px) { .council-view.embedded { height:auto; min-height:560px; padding:0 18px; } }
 </style>
