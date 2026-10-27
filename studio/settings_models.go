@@ -28,6 +28,11 @@ func (service *settingsService) serveModelCatalog(writer http.ResponseWriter, re
 		writeAPIError(writer, http.StatusInternalServerError, err)
 		return
 	}
+	// The catalog is needed to choose the first default model, which creates
+	// config.yaml. Discovery must also work before that file exists.
+	if errors.Is(mainErr, config.ErrNotFound) {
+		mainConfig, mainErr = config.Default(), nil
+	}
 	if mainErr != nil {
 		writeAPIError(writer, http.StatusInternalServerError, mainErr)
 		return

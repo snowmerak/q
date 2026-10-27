@@ -313,6 +313,40 @@ func (fixture studioIntegration) start(t *testing.T, prompt string) studioRunSna
 	return run
 }
 
+func TestStudioRealRuntimeInitialModelSetup(t *testing.T) {
+	fixture := newStudioIntegration(t)
+	store, err := config.DefaultStore()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Reproduce Studio-only onboarding with no main configuration saved yet.
+	if err := os.Remove(store.Path()); err != nil {
+		t.Fatal(err)
+	}
+	created := serveJSON(t, fixture.handler, http.MethodPost, "/api/v1/settings/gateway/providers", map[string]any{
+		"id": "local", "type": "openai-compatible", "enabled": true, "base_url": fixture.modelURI,
+	})
+	if created.Code != http.StatusOK {
+		t.Fatalf("POST initial provider = %d %s", created.Code, created.Body.String())
+	}
+	catalog := serveJSON(t, fixture.handler, http.MethodGet, "/api/v1/settings/models", nil)
+	if catalog.Code != http.StatusOK || !strings.Contains(catalog.Body.String(), `"id":"local/test-model"`) {
+		t.Fatalf("GET initial managed catalog = %d %s", catalog.Code, catalog.Body.String())
+	}
+	if _, err := store.Load(); !errors.Is(err, config.ErrNotFound) {
+		t.Fatalf("model discovery saved a main config: %v", err)
+	}
+	saved := serveJSON(t, fixture.handler, http.MethodPut, "/api/v1/settings/models/default", map[string]string{"model": "local/test-model"})
+	if saved.Code != http.StatusOK {
+		t.Fatalf("PUT initial default model = %d %s", saved.Code, saved.Body.String())
+	}
+	loaded, err := store.Load()
+	if err != nil || !loaded.Provider.Managed || loaded.Provider.Model != "local/test-model" {
+		t.Fatalf("initialized main config = %#v, %v", loaded.Provider, err)
+	}
+	fixture.start(t, "hello")
+}
+
 func TestStudioRealRuntimeGuidanceRedirectsAndPersistsTools(t *testing.T) {
 	fixture := newStudioIntegration(t)
 	server := httptest.NewServer(fixture.handler)

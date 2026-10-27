@@ -79,7 +79,7 @@
     const id = nextProviderID();
     const payload = JSON.stringify({
       id, type: 'openai-compatible', kind: '', prefix: '', enabled: true,
-      base_url: 'https://api.openai.com/v1', api_key_env: 'OPENAI_API_KEY'
+      base_url: 'https://api.openai.com/v1', api_key_env: ''
     });
     queueSave(() => writeSettings('POST', '/api/v1/settings/gateway/providers', payload));
   }

@@ -209,6 +209,7 @@
     <div class="assignment-row primary-assignment">
       <div><strong>Default</strong><small>Primary chat model and role fallback</small></div>
       <label><span>Model</span><select bind:value={settings.models.default_model} onchange={saveDefaultModel} disabled={modelsLoading}>
+        {#if !settings.models.default_model}<option value="" disabled>Choose a default model</option>{/if}
         {#if settings.models.default_model && !modelOptions.some((model) => model.id === settings?.models.default_model)}<option value={settings.models.default_model}>{settings.models.default_model}</option>{/if}
         {#each modelOptions as model}<option value={model.id}>{model.id}{model.group ? ' · group' : ''}</option>{/each}
       </select></label>

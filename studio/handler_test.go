@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -518,9 +519,27 @@ func TestWorkspaceModelAPIUsesExistingWorkspaceStore(t *testing.T) {
 
 func TestDefaultModelInitializesMainConfiguration(t *testing.T) {
 	store := config.Store{Dir: t.TempDir()}
+	upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(writer, `{"object":"list","data":[{"id":"first-model","object":"model"}]}`)
+	}))
+	defer upstream.Close()
 	handler, err := newHandler(store)
 	if err != nil {
 		t.Fatal(err)
+	}
+	created := serveJSON(t, handler, http.MethodPost, "/api/v1/settings/gateway/providers", map[string]any{
+		"id": "local", "type": "openai-compatible", "enabled": true, "base_url": upstream.URL + "/v1", "api_key_env": "",
+	})
+	if created.Code != http.StatusOK {
+		t.Fatalf("POST initial provider = %d %s", created.Code, created.Body.String())
+	}
+	catalog := serveJSON(t, handler, http.MethodGet, "/api/v1/settings/models", nil)
+	if catalog.Code != http.StatusOK || !strings.Contains(catalog.Body.String(), `"id":"local/first-model"`) {
+		t.Fatalf("GET initial model catalog = %d %s", catalog.Code, catalog.Body.String())
+	}
+	if _, err := store.Load(); !errors.Is(err, config.ErrNotFound) {
+		t.Fatalf("model discovery initialized main config before model selection: %v", err)
 	}
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, httptest.NewRequest(http.MethodPut, "/api/v1/settings/models/default", bytes.NewBufferString(`{"model":"local/first-model","reasoning_effort":"high"}`)))
@@ -530,6 +549,14 @@ func TestDefaultModelInitializesMainConfiguration(t *testing.T) {
 	loaded, err := store.Load()
 	if err != nil || !loaded.Provider.Managed || loaded.Provider.Model != "local/first-model" || loaded.Provider.ReasoningEffort != "high" {
 		t.Fatalf("initialized config = %#v, %v", loaded.Provider, err)
+	}
+	saved := serveJSON(t, handler, http.MethodPut, "/api/v1/settings/models/reviewer", map[string]any{"model": "local/first-model"})
+	if saved.Code != http.StatusOK {
+		t.Fatalf("PUT initial role model = %d %s", saved.Code, saved.Body.String())
+	}
+	loaded, err = store.Load()
+	if err != nil || loaded.Agents.Roles[config.AgentRoleReviewer].Model != "local/first-model" {
+		t.Fatalf("saved role after initialization = %#v, %v", loaded.Agents, err)
 	}
 }
 

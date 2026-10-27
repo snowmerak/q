@@ -10,6 +10,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/snowmerak/q/config"
 )
 
 // GatewayRequest forwards management and model discovery to the managed child.
@@ -22,6 +24,11 @@ func (host *SessionHost) GatewayRequest(ctx context.Context, method, path string
 		return nil, errors.New("unsupported Gateway management path")
 	}
 	loaded, err := host.store.Load()
+	// Model discovery and ChatGPT sign-in precede the first saved chat model.
+	if errors.Is(err, config.ErrNotFound) {
+		loaded, err = config.Default(), nil
+		loaded.UseManagedGateway()
+	}
 	if err != nil {
 		return nil, err
 	}
