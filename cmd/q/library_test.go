@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 	qlibrary "github.com/snowmerak/q/library"
 )
 
@@ -97,6 +98,36 @@ func TestLibraryCommandServesHealth(t *testing.T) {
 	}
 	if health.StoreID == "" || health.Generation == "" {
 		t.Fatalf("health = %#v", health)
+	}
+	// Launch the actual bridge executable against this custom Library address.
+	// Its stdout must contain only MCP frames, even though the Library service
+	// itself reports status on a separate process's stdout.
+	bridge, err := mcp.NewClient(&mcp.Implementation{Name: "q-test", Version: "0"}, nil).Connect(ctx, &mcp.CommandTransport{Command: exec.CommandContext(ctx, binary, "library", "mcp", "--config-dir", configDir)}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	listed, err := bridge.ListTools(ctx, nil)
+	if err != nil || len(listed.Tools) != 5 {
+		t.Fatalf("Library MCP tools = %+v, %v", listed, err)
+	}
+	result, err := bridge.CallTool(ctx, &mcp.CallToolParams{Name: "search_propositions", Arguments: map[string]any{"query": ""}})
+	if err != nil || result.IsError {
+		t.Fatalf("Library MCP search = %+v, %v", result, err)
+	}
+	// This Library has no configured Librarian. Learning still acknowledges
+	// the durable queue write through the actual stdio bridge executable.
+	result, err = bridge.CallTool(ctx, &mcp.CallToolParams{Name: "request_learning", Arguments: map[string]any{
+		"content": "The user confirmed this integration-test decision.", "refs": []string{"user:integration-test"}, "confidence": 1,
+	}})
+	if err != nil || result.IsError {
+		t.Fatalf("Library MCP learning = %+v, %v", result, err)
+	}
+	ack, err := json.Marshal(result.StructuredContent)
+	if err != nil || string(ack) != `{"enqueued":true}` {
+		t.Fatalf("Library MCP acknowledgement = %s, %v", ack, err)
+	}
+	if err := bridge.Close(); err != nil {
+		t.Fatal(err)
 	}
 	var output string
 	select {

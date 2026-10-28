@@ -103,6 +103,12 @@ type PropositionRegisterResponse struct {
 	Discarded bool   `json:"discarded,omitempty"`
 }
 
+// PropositionEnqueueResponse confirms durable acceptance, including retries of
+// an already accepted request. It does not report the eventual review outcome.
+type PropositionEnqueueResponse struct {
+	Enqueued bool `json:"enqueued"`
+}
+
 type PropositionDeleteResponse struct {
 	ID      string `json:"id"`
 	Deleted bool   `json:"deleted"`
@@ -149,30 +155,49 @@ type propositionService struct {
 }
 
 func (s *propositionService) register(ctx context.Context, idempotencyKey string, request PropositionRegisterRequest) (PropositionRegisterResponse, error) {
-	if s == nil || s.archive == nil {
-		return PropositionRegisterResponse{}, errors.New("library: propositions are unavailable")
-	}
-	idempotencyKey = strings.TrimSpace(idempotencyKey)
-	if idempotencyKey == "" {
-		return PropositionRegisterResponse{}, errors.New("library: Idempotency-Key is required")
-	}
-	if len(idempotencyKey) > maximumPropositionIdempotencyKeyBytes {
-		return PropositionRegisterResponse{}, fmt.Errorf("library: Idempotency-Key exceeds %d bytes", maximumPropositionIdempotencyKeyBytes)
-	}
-	normalized, err := normalizePropositionRegisterRequest(request)
+	normalized, requestDigest, err := s.validateRegistration(idempotencyKey, request)
 	if err != nil {
 		return PropositionRegisterResponse{}, err
 	}
+	return s.queue.submit(ctx, strings.TrimSpace(idempotencyKey), requestDigest, normalized)
+}
+
+func (s *propositionService) enqueue(ctx context.Context, idempotencyKey string, request PropositionRegisterRequest) (PropositionEnqueueResponse, error) {
+	normalized, requestDigest, err := s.validateRegistration(idempotencyKey, request)
+	if err != nil {
+		return PropositionEnqueueResponse{}, err
+	}
+	if _, err := s.queue.enqueue(ctx, strings.TrimSpace(idempotencyKey), requestDigest, normalized); err != nil {
+		return PropositionEnqueueResponse{}, err
+	}
+	return PropositionEnqueueResponse{Enqueued: true}, nil
+}
+
+func (s *propositionService) validateRegistration(idempotencyKey string, request PropositionRegisterRequest) (PropositionRegisterRequest, string, error) {
+	if s == nil || s.archive == nil {
+		return PropositionRegisterRequest{}, "", errors.New("library: propositions are unavailable")
+	}
+	idempotencyKey = strings.TrimSpace(idempotencyKey)
+	if idempotencyKey == "" {
+		return PropositionRegisterRequest{}, "", errors.New("library: Idempotency-Key is required")
+	}
+	if len(idempotencyKey) > maximumPropositionIdempotencyKeyBytes {
+		return PropositionRegisterRequest{}, "", fmt.Errorf("library: Idempotency-Key exceeds %d bytes", maximumPropositionIdempotencyKeyBytes)
+	}
+	normalized, err := normalizePropositionRegisterRequest(request)
+	if err != nil {
+		return PropositionRegisterRequest{}, "", err
+	}
 	if s.queue == nil {
-		return PropositionRegisterResponse{}, errors.New("library: proposition queue is unavailable")
+		return PropositionRegisterRequest{}, "", errors.New("library: proposition queue is unavailable")
 	}
 	if normalized.Embeddings != nil {
 		vector := s.archive.VectorConfig()
 		if !vector.Enabled() {
-			return PropositionRegisterResponse{}, errors.New("library: proposition vector index is not configured")
+			return PropositionRegisterRequest{}, "", errors.New("library: proposition vector index is not configured")
 		}
 		if normalized.Embeddings.Model != vector.Model || normalized.Embeddings.Dimensions != vector.Dimensions {
-			return PropositionRegisterResponse{}, fmt.Errorf(
+			return PropositionRegisterRequest{}, "", fmt.Errorf(
 				"library: proposition embeddings use %s/%d; Library index uses %s/%d",
 				normalized.Embeddings.Model, normalized.Embeddings.Dimensions, vector.Model, vector.Dimensions,
 			)
@@ -180,9 +205,9 @@ func (s *propositionService) register(ctx context.Context, idempotencyKey string
 	}
 	_, _, requestDigest, err := propositionRegistrationIdentity(idempotencyKey, normalized)
 	if err != nil {
-		return PropositionRegisterResponse{}, err
+		return PropositionRegisterRequest{}, "", err
 	}
-	return s.queue.submit(ctx, idempotencyKey, requestDigest, normalized)
+	return normalized, requestDigest, nil
 }
 
 func propositionRegistrationIdentity(idempotencyKey string, request PropositionRegisterRequest) (string, string, string, error) {
@@ -723,6 +748,23 @@ func (s *propositionService) get(id string) (Proposition, error) {
 }
 
 func registerPropositionRoutes(mux *http.ServeMux, propositions *propositionService) {
+	mux.Handle("POST /v1/propositions/enqueue", http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		var input PropositionRegisterRequest
+		if err := decodeLibraryJSON(writer, request, &input); err != nil {
+			writeLibraryError(writer, http.StatusBadRequest, err)
+			return
+		}
+		output, err := propositions.enqueue(request.Context(), request.Header.Get("Idempotency-Key"), input)
+		if err != nil {
+			status := http.StatusBadRequest
+			if errors.Is(err, errPropositionIdempotencyConflict) {
+				status = http.StatusConflict
+			}
+			writeLibraryError(writer, status, err)
+			return
+		}
+		writeJSON(writer, http.StatusAccepted, output)
+	}))
 	mux.Handle("POST /v1/propositions", http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		var input PropositionRegisterRequest
 		if err := decodeLibraryJSON(writer, request, &input); err != nil {

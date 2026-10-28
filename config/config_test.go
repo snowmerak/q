@@ -37,7 +37,7 @@ func TestStoreRoundTrip(t *testing.T) {
 		AgentRoleSearch:    {Agent: "primary"},
 	}
 	want.Agents.Connections = map[string]AgentConnectionConfig{
-		"primary":  {Preset: "codex"},
+		"primary":  {Preset: "codex", Library: true},
 		"fallback": {Preset: "grok", AuthMethod: "local-subscription"},
 	}
 	want.LSP = lsp.GlobalConfig{

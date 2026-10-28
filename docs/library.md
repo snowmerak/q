@@ -14,6 +14,48 @@ Proposition extraction, queued writes, persistent write idempotency, BM25
 search, embedding generation, multi-vector hybrid search, bounded Librarian
 retrieval during adjudication, and `created_at` recency ranking are implemented.
 
+## ACP Sessions and Library MCP
+
+Providers → ACP offers a per-connection **Q Library for Sessions** switch
+(`agents.connections.<id>.library: true`). Existing connections default to off.
+Saving the switch affects the next idle session connection/turn; an active
+turn keeps its current connection. A configuration change opens a new remote
+session with completed conversation restored. An unchanged connection passes
+the same Library MCP configuration during ACP new, load and resume.
+
+The application supplies `q library mcp --config-dir <absolute Q directory>`
+as a stdio MCP server named `q-library`, using the running Q executable. It
+exposes exactly `search_skills`, `get_skill`, `search_propositions`,
+`get_proposition` and `request_learning`. It only calls the existing Library
+HTTP API, never opens the database, starts workspace services, or registers
+Q filesystem, shell, task or delegation tools. Search uses BM25 without an
+embedding provider. The bridge reads `library.json` at launch; reconnect after
+changing the Library address. It can initialize while Library is offline;
+individual calls return errors and ordinary ACP chat can continue.
+
+A short Library usage instruction is included in MCP initialization and the
+first successful prompt of a remote session. Q persists its instruction version
+with the ACP checkpoint, so successful load/resume avoids repeating the prompt
+instruction. New sessions and fallback transcript restoration receive it again.
+No general Q workflow or native agent-loop system prompt is injected. This
+switch currently applies to ACP Sessions, not Council or subagent invocations.
+
+`request_learning` accepts one concise established fact, preference or decision,
+confidence, evidence/source refs, and optional retrieval queries and tags.
+It sends a stable, content-derived idempotency key to the existing durable
+proposition review queue and returns `{"enqueued":true}` after the queue
+transaction commits, reusing the session MCP `learn` acknowledgement contract.
+It supplies content explicitly because the standalone bridge does not own the
+ACP conversation history. Queue acceptance does not require a Librarian model
+or wait for model calls. Background review records processing failures and may
+eventually create, merge or discard the request. Invalid input or a failed queue
+write returns an error. Repeating an accepted request does not duplicate it.
+ACP Sessions continue to disable automatic transcript learning.
+
+The bridge uses `POST /v1/propositions/enqueue`, which returns HTTP 202 after
+durable acceptance. The existing synchronous `POST /v1/propositions` API used
+by Thinker still waits for the review outcome.
+
 ## Purpose and decisions
 
 The Library provides one user-level service for durable information that must

@@ -19,10 +19,11 @@ import (
 )
 
 type acpSessionCheckpoint struct {
-	Agent      string   `json:"agent"`
-	SessionID  string   `json:"session_id"`
-	Connection [32]byte `json:"connection"`
-	Transcript [32]byte `json:"transcript"`
+	Agent                      string   `json:"agent"`
+	SessionID                  string   `json:"session_id"`
+	Connection                 [32]byte `json:"connection"`
+	Transcript                 [32]byte `json:"transcript"`
+	LibraryInstructionsVersion int      `json:"library_instructions_version,omitempty"`
 }
 
 func acpSessionPath(store workspace.Store) string {
@@ -47,6 +48,12 @@ func (host *SessionHost) prepareACPSession(ctx context.Context, prepared *prepar
 	if err != nil {
 		return nil, err
 	}
+	if connection.Library {
+		command.mcpServers, err = acpLibraryServers(host.store.Dir)
+		if err != nil {
+			return nil, fmt.Errorf("configure ACP Library: %w", err)
+		}
+	}
 	saved, err := prepared.store.Load()
 	if err != nil {
 		return nil, err
@@ -57,6 +64,7 @@ func (host *SessionHost) prepareACPSession(ctx context.Context, prepared *prepar
 	}
 	checkpoint := acpSessionCheckpoint{Agent: agent, Connection: sha256.Sum256(body)}
 	remoteID := ""
+	libraryInstructionsVersion := 0
 	if body, err := os.ReadFile(acpSessionPath(prepared.store)); err == nil {
 		var previous acpSessionCheckpoint
 		if err := json.Unmarshal(body, &previous); err != nil {
@@ -64,6 +72,7 @@ func (host *SessionHost) prepareACPSession(ctx context.Context, prepared *prepar
 		}
 		if previous.Agent == agent && previous.Connection == checkpoint.Connection && previous.Transcript == acpTranscriptDigest(saved.Transcript) {
 			remoteID = previous.SessionID
+			libraryInstructionsVersion = previous.LibraryInstructionsVersion
 		}
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return nil, err
@@ -84,14 +93,15 @@ func (host *SessionHost) prepareACPSession(ctx context.Context, prepared *prepar
 		}
 	}
 	remote.sessionCheckpoint = &checkpoint
+	remote.libraryInstructionsSent = remote.resumed && libraryInstructionsVersion == acpLibraryInstructionsVersion
 	if !remote.resumed {
 		remote.initialContext = completedACPContext(saved.Transcript)
 	}
 	prepared.state = newRuntimeModel(ctx, host.store, host.factory, host.manager)
 	prepared.state.workspaceStore = &prepared.store
 	prepared.state.workspaceLock = prepared.lock
-	// The remote agent owns tools, learning and context compaction. Q retains
-	// the normal live-session event stream, transcript and workspace lock.
+	// The remote agent owns its loop and context compaction. Q's automatic
+	// transcript learner stays disabled; Library MCP learning is explicit.
 	prepared.state.workspaceLearning = workspace.LearningConfig{Disabled: true}
 	prepared.state.workspaceLearningRestored = true
 	prepared.state.sessionOptions = &SessionOptions{Agent: agent, DisableLearning: true}
@@ -127,6 +137,9 @@ func saveACPSessionCheckpoint(store workspace.Store, remote *acpRemoteClient, me
 	checkpoint := *remote.sessionCheckpoint
 	checkpoint.SessionID = string(remote.sessionID)
 	checkpoint.Transcript = acpTranscriptDigest(messages)
+	if len(remote.mcpServers) > 0 && remote.libraryInstructionsSent {
+		checkpoint.LibraryInstructionsVersion = acpLibraryInstructionsVersion
+	}
 	body, err := json.Marshal(checkpoint)
 	if err != nil {
 		return err

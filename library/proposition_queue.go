@@ -111,37 +111,44 @@ func (q *propositionQueue) close() error {
 }
 
 func (q *propositionQueue) submit(ctx context.Context, key, digest string, request PropositionRegisterRequest) (PropositionRegisterResponse, error) {
+	ownsAttempt, err := q.enqueue(ctx, key, digest, request)
+	if err != nil {
+		return PropositionRegisterResponse{}, err
+	}
+	return q.wait(ctx, key, digest, ownsAttempt)
+}
+
+// enqueue acknowledges only the durable queue transaction. Processing uses the
+// service context and does not depend on the submitting caller staying alive.
+func (q *propositionQueue) enqueue(ctx context.Context, key, digest string, request PropositionRegisterRequest) (bool, error) {
 	body, err := json.Marshal(request)
 	if err != nil {
-		return PropositionRegisterResponse{}, fmt.Errorf("library: encode proposition job: %w", err)
+		return false, fmt.Errorf("library: encode proposition job: %w", err)
 	}
 	now := q.now().UTC().UnixMilli()
 	tx, err := q.db.BeginTx(ctx, nil)
 	if err != nil {
-		return PropositionRegisterResponse{}, err
+		return false, err
 	}
 	defer func() { _ = tx.Rollback() }()
-	if response, found, err := receiptFromQuerier(ctx, tx, key, digest); err != nil {
-		return PropositionRegisterResponse{}, err
+	if _, found, err := receiptFromQuerier(ctx, tx, key, digest); err != nil {
+		return false, err
 	} else if found {
-		if response.Action == PropositionActionCreate {
-			response.Created = false
-		}
-		return response, nil
+		return false, nil
 	}
 	var existingDigest, existingState string
 	ownsAttempt := false
 	err = tx.QueryRowContext(ctx, `SELECT request_digest, state FROM proposition_jobs WHERE idempotency_key = ?`, key).Scan(&existingDigest, &existingState)
 	switch {
 	case err == nil && existingDigest != digest:
-		return PropositionRegisterResponse{}, errPropositionIdempotencyConflict
+		return false, errPropositionIdempotencyConflict
 	case err == nil:
 		if existingState == "failed" {
 			if _, err = tx.ExecContext(ctx, `
 UPDATE proposition_jobs
 SET state = 'queued', last_error = NULL, lease_until = NULL, updated_at = ?
 WHERE idempotency_key = ?`, now, key); err != nil {
-				return PropositionRegisterResponse{}, err
+				return false, err
 			}
 			ownsAttempt = true
 		}
@@ -149,17 +156,17 @@ WHERE idempotency_key = ?`, now, key); err != nil {
 		if _, err = tx.ExecContext(ctx, `
 INSERT INTO proposition_jobs(idempotency_key, request_digest, request_json, state, created_at, updated_at)
 VALUES(?, ?, ?, 'queued', ?, ?)`, key, digest, body, now, now); err != nil {
-			return PropositionRegisterResponse{}, fmt.Errorf("library: enqueue proposition job: %w", err)
+			return false, fmt.Errorf("library: enqueue proposition job: %w", err)
 		}
 		ownsAttempt = true
 	default:
-		return PropositionRegisterResponse{}, err
+		return false, err
 	}
 	if err := tx.Commit(); err != nil {
-		return PropositionRegisterResponse{}, err
+		return false, err
 	}
 	q.signal()
-	return q.wait(ctx, key, digest, ownsAttempt)
+	return ownsAttempt, nil
 }
 
 func (q *propositionQueue) wait(ctx context.Context, key, digest string, ownsAttempt bool) (PropositionRegisterResponse, error) {

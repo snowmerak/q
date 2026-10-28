@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/snowmerak/q/config"
+	"github.com/snowmerak/q/internal/librarymcp"
 	"github.com/snowmerak/q/third_party/acp-go-sdk"
 	"github.com/snowmerak/q/workspace"
 )
@@ -23,6 +24,20 @@ type studioACPFixture struct {
 	id         acp.SessionId
 	model      string
 	effort     string
+}
+
+func validateFixtureLibraryServers(servers []acp.McpServer) error {
+	if os.Getenv("Q_STUDIO_ACP_LIBRARY") != "1" {
+		return nil
+	}
+	if len(servers) != 1 || servers[0].Stdio == nil {
+		return fmt.Errorf("expected one Library stdio server: %+v", servers)
+	}
+	server := servers[0].Stdio
+	if server.Name != "q-library" || !filepath.IsAbs(server.Command) || len(server.Args) != 4 || strings.Join(server.Args[:3], " ") != "library mcp --config-dir" || !filepath.IsAbs(server.Args[3]) || len(server.Env) != 0 {
+		return fmt.Errorf("invalid Library server: %+v", server)
+	}
+	return nil
 }
 
 func (agent *studioACPFixture) configOptions() []acp.SessionConfigOption {
@@ -76,13 +91,18 @@ func runStudioACPFixture() {
 
 func (agent *studioACPFixture) Initialize(context.Context, acp.InitializeRequest) (acp.InitializeResponse, error) {
 	capabilities := acp.AgentCapabilities{}
-	if os.Getenv("Q_STUDIO_ACP_NO_RESUME") != "1" {
+	if os.Getenv("Q_STUDIO_ACP_LOAD") == "1" {
+		capabilities.LoadSession = true
+	} else if os.Getenv("Q_STUDIO_ACP_NO_RESUME") != "1" {
 		capabilities.SessionCapabilities.Resume = &acp.SessionResumeCapabilities{}
 	}
 	return acp.InitializeResponse{ProtocolVersion: acp.ProtocolVersionNumber, AgentCapabilities: capabilities}, nil
 }
 
-func (agent *studioACPFixture) NewSession(context.Context, acp.NewSessionRequest) (acp.NewSessionResponse, error) {
+func (agent *studioACPFixture) NewSession(_ context.Context, request acp.NewSessionRequest) (acp.NewSessionResponse, error) {
+	if err := validateFixtureLibraryServers(request.McpServers); err != nil {
+		return acp.NewSessionResponse{}, err
+	}
 	agent.id = acp.SessionId(fmt.Sprintf("fixture-%d", os.Getpid()))
 	agent.model = "fixture-a"
 	agent.effort = "medium"
@@ -90,10 +110,18 @@ func (agent *studioACPFixture) NewSession(context.Context, acp.NewSessionRequest
 }
 
 func (agent *studioACPFixture) ResumeSession(_ context.Context, request acp.ResumeSessionRequest) (acp.ResumeSessionResponse, error) {
+	if err := validateFixtureLibraryServers(request.McpServers); err != nil {
+		return acp.ResumeSessionResponse{}, err
+	}
 	agent.id = request.SessionId
 	agent.model = "fixture-a"
 	agent.effort = "medium"
 	return acp.ResumeSessionResponse{ConfigOptions: agent.configOptions()}, nil
+}
+
+func (agent *studioACPFixture) LoadSession(ctx context.Context, request acp.LoadSessionRequest) (acp.LoadSessionResponse, error) {
+	response, err := agent.ResumeSession(ctx, acp.ResumeSessionRequest{SessionId: request.SessionId, Cwd: request.Cwd, McpServers: request.McpServers})
+	return acp.LoadSessionResponse{ConfigOptions: response.ConfigOptions}, err
 }
 
 func (agent *studioACPFixture) Cancel(context.Context, acp.CancelNotification) error { return nil }
@@ -153,8 +181,9 @@ func (agent *studioACPFixture) Prompt(ctx context.Context, request acp.PromptReq
 }
 
 func TestStudioACPSessionsStreamResumeAndRequireApproval(t *testing.T) {
-	for _, resume := range []bool{true, false} {
-		t.Run(fmt.Sprint(resume), func(t *testing.T) {
+	for _, options := range []struct{ resume, library, load bool }{{true, false, false}, {false, false, false}, {true, true, false}, {false, true, false}, {true, true, true}} {
+		resume, useLibrary := options.resume, options.library
+		t.Run(fmt.Sprintf("resume=%v/library=%v/load=%v", resume, useLibrary, options.load), func(t *testing.T) {
 			fixture := newStudioIntegrationConfigured(t, studioTestModel, func(value *config.Config) {
 				value.UseManagedGateway()
 				value.Provider.Model = ""
@@ -165,11 +194,17 @@ func TestStudioACPSessionsStreamResumeAndRequireApproval(t *testing.T) {
 			}
 			log := filepath.Join(t.TempDir(), "prompts.jsonl")
 			environment := map[string]string{"Q_STUDIO_ACP_FIXTURE": "1", "Q_STUDIO_ACP_LOG": log}
+			if useLibrary {
+				environment["Q_STUDIO_ACP_LIBRARY"] = "1"
+			}
+			if options.load {
+				environment["Q_STUDIO_ACP_LOAD"] = "1"
+			}
 			if !resume {
 				environment["Q_STUDIO_ACP_NO_RESUME"] = "1"
 			}
 			created := serveJSON(t, fixture.handler, http.MethodPut, "/api/v1/settings/acp", map[string]any{
-				"connections": map[string]any{"fixture": map[string]any{"command": executable, "env": environment}},
+				"connections": map[string]any{"fixture": map[string]any{"command": executable, "env": environment, "library": useLibrary}},
 			})
 			if created.Code != http.StatusOK {
 				t.Fatalf("ACP settings = %d %s", created.Code, created.Body.String())
@@ -235,6 +270,9 @@ func TestStudioACPSessionsStreamResumeAndRequireApproval(t *testing.T) {
 			if len(calls) != 3 || calls[0]["session"] != calls[1]["session"] {
 				t.Fatalf("session not retained: %+v", calls)
 			}
+			if strings.Contains(calls[0]["prompt"], "Q Library provides") != useLibrary || strings.Contains(calls[1]["prompt"], "Q Library provides") || (useLibrary && !resume && strings.Count(calls[2]["prompt"], "Q Library provides") != 1) {
+				t.Fatalf("Library instructions were omitted or duplicated: %+v", calls)
+			}
 			if resume && (calls[2]["session"] != calls[0]["session"] || calls[2]["prompt"] != "third") {
 				t.Fatalf("session not resumed: %+v", calls)
 			}
@@ -283,7 +321,11 @@ func TestStudioACPSessionsStreamResumeAndRequireApproval(t *testing.T) {
 			if err := json.Unmarshal([]byte(lines[len(lines)-1]), &isolated); err != nil {
 				t.Fatal(err)
 			}
-			if isolated["session"] == calls[0]["session"] || isolated["prompt"] != "isolated" {
+			isolatedPrompt := "isolated"
+			if useLibrary {
+				isolatedPrompt = librarymcp.Instructions + "\n\nCurrent request:\nisolated"
+			}
+			if isolated["session"] == calls[0]["session"] || isolated["prompt"] != isolatedPrompt {
 				t.Fatalf("ACP context leaked: %+v", isolated)
 			}
 			invalid := serveJSON(t, fixture.handler, http.MethodPut, base+"/model", map[string]string{"workspace_root": fixture.root, "agent": "missing"})

@@ -255,6 +255,22 @@ func (c *Client) GetProposition(ctx context.Context, id string) (Proposition, er
 	return output, nil
 }
 
+// EnqueueProposition returns after durable queue acceptance. Embedding and
+// Librarian model calls are not prerequisites for accepting a learning request.
+func (c *Client) EnqueueProposition(ctx context.Context, idempotencyKey string, input PropositionRegisterRequest) (PropositionEnqueueResponse, error) {
+	if c == nil {
+		return PropositionEnqueueResponse{}, errors.New("library: client is nil")
+	}
+	var output PropositionEnqueueResponse
+	if err := c.doJSONWithClient(ctx, c.http, http.MethodPost, "/propositions/enqueue", input, &output, map[string]string{"Idempotency-Key": idempotencyKey}); err != nil {
+		return PropositionEnqueueResponse{}, err
+	}
+	if !output.Enqueued {
+		return PropositionEnqueueResponse{}, errors.New("library: learning request was not accepted")
+	}
+	return output, nil
+}
+
 func (c *Client) RegisterProposition(ctx context.Context, idempotencyKey string, input PropositionRegisterRequest) (PropositionRegisterResponse, error) {
 	configured, unlock, err := c.lockEmbedding(ctx)
 	if err != nil {

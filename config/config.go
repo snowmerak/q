@@ -149,6 +149,8 @@ type AgentConnectionConfig struct {
 	Env        map[string]string `yaml:"env,omitempty" json:"env"`
 	AuthMethod string            `yaml:"auth_method,omitempty" json:"auth_method,omitempty"`
 	Disabled   bool              `yaml:"disabled,omitempty" json:"disabled,omitempty"`
+	// Library exposes global lookup and reviewed learning tools to ACP Sessions.
+	Library bool `yaml:"library,omitempty" json:"library,omitempty"`
 }
 
 type ModelGroupConfig struct {

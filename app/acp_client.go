@@ -29,6 +29,7 @@ type acpAgentCommand struct {
 	env           map[string]string
 	display       string
 	installPreset string
+	mcpServers    []acp.McpServer
 }
 
 type acpRemoteConnection interface {
@@ -61,11 +62,13 @@ type acpRemoteClient struct {
 	turn         *acpRemoteTurn
 	permissions  acpPermissionMode
 	// Councils require an actual answer and a successfully finished prompt.
-	requireCompletedText bool
-	resumed              bool
-	initialContext       string
-	sessionCheckpoint    *acpSessionCheckpoint
-	configOptions        []acp.SessionConfigOption
+	requireCompletedText    bool
+	resumed                 bool
+	initialContext          string
+	sessionCheckpoint       *acpSessionCheckpoint
+	configOptions           []acp.SessionConfigOption
+	mcpServers              []acp.McpServer
+	libraryInstructionsSent bool
 
 	slashCommandsBySession map[acp.SessionId][]slashCommand
 
@@ -213,6 +216,10 @@ func startACPRemoteClientWithResume(
 		root: root, agent: strings.ToLower(command.display), display: command.display,
 		command: strings.Join(append([]string{filepath.Base(command.name)}, command.args...), " "),
 		stdin:   stdin, cancel: cancel, processDone: wait, stderr: stderr,
+		mcpServers: command.mcpServers,
+	}
+	if remote.mcpServers == nil {
+		remote.mcpServers = []acp.McpServer{}
 	}
 	connection := acp.NewClientSideConnection(remote, stdin, stdout)
 	connection.SetLogger(slog.New(slog.NewTextHandler(stderr, nil)))
@@ -263,13 +270,13 @@ func startACPRemoteClientWithResume(
 		case initialize.AgentCapabilities.SessionCapabilities.Resume != nil:
 			var response acp.ResumeSessionResponse
 			response, err = connection.ResumeSession(ctx, acp.ResumeSessionRequest{
-				SessionId: remote.sessionID, Cwd: root, McpServers: []acp.McpServer{},
+				SessionId: remote.sessionID, Cwd: root, McpServers: remote.mcpServers,
 			})
 			remote.updateConfigOptions(response.ConfigOptions)
 		case initialize.AgentCapabilities.LoadSession:
 			var response acp.LoadSessionResponse
 			response, err = connection.LoadSession(ctx, acp.LoadSessionRequest{
-				SessionId: remote.sessionID, Cwd: root, McpServers: []acp.McpServer{},
+				SessionId: remote.sessionID, Cwd: root, McpServers: remote.mcpServers,
 			})
 			remote.updateConfigOptions(response.ConfigOptions)
 		default:
@@ -362,6 +369,7 @@ func (r *acpRemoteClient) prompt(ctx context.Context, content string, events cha
 	requireCompletedText := r.requireCompletedText
 	initialContext := r.initialContext
 	r.initialContext = ""
+	content, libraryInstructions := r.libraryPrompt(content, initialContext)
 	r.mu.Unlock()
 	defer func() {
 		r.mu.Lock()
@@ -371,9 +379,6 @@ func (r *acpRemoteClient) prompt(ctx context.Context, content string, events cha
 		r.mu.Unlock()
 	}()
 
-	if initialContext != "" {
-		content = initialContext + "\n\nCurrent request:\n" + content
-	}
 	promptBlocks, err := acpPromptBlocksForText(root, content, embeddedContext)
 	if err != nil {
 		return nil, 0, err
@@ -384,6 +389,11 @@ func (r *acpRemoteClient) prompt(ctx context.Context, content string, events cha
 	})
 	if err != nil {
 		return nil, 0, r.decorateError("ACP prompt", err)
+	}
+	if libraryInstructions {
+		r.mu.Lock()
+		r.libraryInstructionsSent = true
+		r.mu.Unlock()
 	}
 	message, toolCalls := turn.result()
 	if requireCompletedText && (strings.TrimSpace(message.TextContent()) == "" || response.StopReason != acp.StopReasonEndTurn) {
@@ -437,7 +447,7 @@ func (r *acpRemoteClient) resetSession(ctx context.Context) (acp.SessionId, erro
 
 func (r *acpRemoteClient) newSession(ctx context.Context) (acp.SessionId, error) {
 	response, err := r.connection.NewSession(ctx, acp.NewSessionRequest{
-		Cwd: r.root, McpServers: []acp.McpServer{},
+		Cwd: r.root, McpServers: r.mcpServers,
 	})
 	if err != nil {
 		return "", err
@@ -446,6 +456,7 @@ func (r *acpRemoteClient) newSession(ctx context.Context) (acp.SessionId, error)
 	r.sessionID = response.SessionId
 	r.configOptions = response.ConfigOptions
 	r.title = ""
+	r.libraryInstructionsSent = false
 	for sessionID := range r.slashCommandsBySession {
 		if sessionID != response.SessionId {
 			delete(r.slashCommandsBySession, sessionID)

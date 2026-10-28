@@ -103,9 +103,16 @@ func main() {
 		return
 	}
 	if len(os.Args) > 1 && os.Args[1] == "library" {
+		if len(os.Args) > 2 && os.Args[2] == "mcp" {
+			if err := runLibraryMCP(ctx, os.Args[3:], os.Stderr); err != nil {
+				fmt.Fprintln(os.Stderr, err)
+				os.Exit(1)
+			}
+			return
+		}
 		mode, serviceArgs, ok := parseServiceCommand(os.Args[2:])
 		if !ok || (mode == serviceCommandStart && len(serviceArgs) != 0) {
-			fmt.Fprintln(os.Stderr, "usage: q library | q library start")
+			fmt.Fprintln(os.Stderr, "usage: q library | q library start | q library mcp [--config-dir <dir>]")
 			os.Exit(2)
 		}
 		if mode == serviceCommandConfigure {
