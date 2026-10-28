@@ -19,6 +19,7 @@ import (
 type SessionModelConfig struct {
 	Model           string `json:"model"`
 	Agent           string `json:"agent,omitempty"`
+	AgentModel      string `json:"agent_model,omitempty"`
 	ReasoningEffort string `json:"reasoning_effort,omitempty"`
 }
 
@@ -70,6 +71,12 @@ func (value SessionModelConfig) Validate() error {
 	}
 	if value.Model != strings.TrimSpace(value.Model) || len(value.Model) > 4096 {
 		return errors.New("workspace: session model must be at most 4096 bytes without surrounding whitespace")
+	}
+	if value.AgentModel != "" && value.Agent == "" {
+		return errors.New("workspace: an ACP model requires an ACP connection")
+	}
+	if value.AgentModel != strings.TrimSpace(value.AgentModel) || len(value.AgentModel) > 4096 {
+		return errors.New("workspace: ACP model must be at most 4096 bytes without surrounding whitespace")
 	}
 	if strings.ContainsAny(value.ReasoningEffort, " \t\r\n") || len(value.ReasoningEffort) > 64 {
 		return errors.New("workspace: reasoning effort must be at most 64 bytes without surrounding whitespace")

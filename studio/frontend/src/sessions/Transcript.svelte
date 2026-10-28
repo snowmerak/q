@@ -18,6 +18,7 @@
   let follow = true;
   let previousSession = '';
   const tokenNumber = new Intl.NumberFormat();
+  const cachePercent = new Intl.NumberFormat(undefined, { style: 'percent', maximumFractionDigits: 1 });
   $: entries = buildTimeline(messages, thoughts, events);
 
   function nearBottom() {
@@ -65,6 +66,7 @@
             <footer class="response-usage" aria-label="Response token usage">
               <span>Input {tokenNumber.format(message.usage.input_tokens)}</span>
               <span title={message.usage.cached_tokens === undefined ? 'The provider did not report cached input tokens' : 'Cached input is included in input tokens'}>Cached {message.usage.cached_tokens === undefined ? '—' : tokenNumber.format(message.usage.cached_tokens)}</span>
+              <span title="Cached input tokens divided by all input tokens">Cache hit {message.usage.cached_tokens === undefined || message.usage.input_tokens <= 0 ? '—' : cachePercent.format(Math.min(1, Math.max(0, message.usage.cached_tokens / message.usage.input_tokens)))}</span>
               <span>Output {tokenNumber.format(message.usage.output_tokens)}</span>
             </footer>
           {/if}

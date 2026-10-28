@@ -21,6 +21,29 @@ type studioACPFixture struct {
 	acp.Agent
 	connection *acp.AgentSideConnection
 	id         acp.SessionId
+	model      string
+}
+
+func (agent *studioACPFixture) configOptions() []acp.SessionConfigOption {
+	if os.Getenv("Q_STUDIO_ACP_NO_MODELS") == "1" {
+		return nil
+	}
+	options := acp.SessionConfigSelectOptionsUngrouped{{Value: "fixture-a", Name: "Fixture A"}, {Value: "fixture-b", Name: "Fixture B"}, {Value: "rejected", Name: "Rejected model"}}
+	return []acp.SessionConfigOption{{Select: &acp.SessionConfigOptionSelect{
+		Id: "fixture-model", Name: "Model", Type: "select", Category: new(acp.SessionConfigOptionCategoryModel), CurrentValue: acp.SessionConfigValueId(agent.model),
+		Options: acp.SessionConfigSelectOptions{Ungrouped: &options},
+	}}}
+}
+
+func (agent *studioACPFixture) SetSessionConfigOption(_ context.Context, request acp.SetSessionConfigOptionRequest) (acp.SetSessionConfigOptionResponse, error) {
+	if request.ValueId == nil || request.ValueId.ConfigId != "fixture-model" || request.ValueId.SessionId != agent.id {
+		return acp.SetSessionConfigOptionResponse{}, fmt.Errorf("invalid model request")
+	}
+	if request.ValueId.Value == "rejected" {
+		return acp.SetSessionConfigOptionResponse{}, fmt.Errorf("model change rejected")
+	}
+	agent.model = string(request.ValueId.Value)
+	return acp.SetSessionConfigOptionResponse{ConfigOptions: agent.configOptions()}, nil
 }
 
 func runStudioACPFixture() {
@@ -39,12 +62,14 @@ func (agent *studioACPFixture) Initialize(context.Context, acp.InitializeRequest
 
 func (agent *studioACPFixture) NewSession(context.Context, acp.NewSessionRequest) (acp.NewSessionResponse, error) {
 	agent.id = acp.SessionId(fmt.Sprintf("fixture-%d", os.Getpid()))
-	return acp.NewSessionResponse{SessionId: agent.id}, nil
+	agent.model = "fixture-a"
+	return acp.NewSessionResponse{SessionId: agent.id, ConfigOptions: agent.configOptions()}, nil
 }
 
 func (agent *studioACPFixture) ResumeSession(_ context.Context, request acp.ResumeSessionRequest) (acp.ResumeSessionResponse, error) {
 	agent.id = request.SessionId
-	return acp.ResumeSessionResponse{}, nil
+	agent.model = "fixture-a"
+	return acp.ResumeSessionResponse{ConfigOptions: agent.configOptions()}, nil
 }
 
 func (agent *studioACPFixture) Cancel(context.Context, acp.CancelNotification) error { return nil }
@@ -56,7 +81,7 @@ func (agent *studioACPFixture) Prompt(ctx context.Context, request acp.PromptReq
 		if err != nil {
 			return acp.PromptResponse{}, err
 		}
-		_ = json.NewEncoder(file).Encode(map[string]string{"session": string(agent.id), "prompt": text})
+		_ = json.NewEncoder(file).Encode(map[string]string{"session": string(agent.id), "prompt": text, "model": agent.model})
 		_ = file.Close()
 	}
 	if text == "wait" {
@@ -79,8 +104,25 @@ func (agent *studioACPFixture) Prompt(ctx context.Context, request acp.PromptReq
 	if _, current, found := strings.Cut(text, "\n\nCurrent request:\n"); found {
 		text = current
 	}
-	err := agent.connection.SessionUpdate(ctx, acp.SessionNotification{SessionId: agent.id, Update: acp.UpdateAgentMessageText("ACP answer: " + text)})
-	return acp.PromptResponse{StopReason: acp.StopReasonEndTurn}, err
+	answer := "ACP answer: " + text
+	if text == "model" {
+		answer = "ACP model: " + agent.model
+	}
+	err := agent.connection.SessionUpdate(ctx, acp.SessionNotification{SessionId: agent.id, Update: acp.UpdateAgentMessageText(answer)})
+	usage := &acp.Usage{InputTokens: 20, OutputTokens: 10, TotalTokens: 110, CachedReadTokens: new(60), CachedWriteTokens: new(20)}
+	if text == "uncached" {
+		usage.InputTokens = 80
+		usage.CachedReadTokens = new(0)
+	}
+	if text == "unknown cache" {
+		usage.InputTokens = 100
+		usage.CachedReadTokens = nil
+		usage.CachedWriteTokens = nil
+	}
+	if text == "no usage" {
+		usage = nil
+	}
+	return acp.PromptResponse{StopReason: acp.StopReasonEndTurn, Usage: usage}, err
 }
 
 func TestStudioACPSessionsStreamResumeAndRequireApproval(t *testing.T) {

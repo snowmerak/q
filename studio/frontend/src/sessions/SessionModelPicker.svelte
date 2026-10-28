@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
+  import ACPModelPicker from './ACPModelPicker.svelte';
   import { requestResponse } from '../api';
   import { reasoningOptions } from '../settings/reasoning';
   import type { ModelOption } from '../settings/types';
@@ -77,6 +78,7 @@
       {#each agents as agent}<option value={`acp:${agent}`}>ACP · {agent}</option>{/each}
     </optgroup>
   </select>
+  {#if agent}{#key agent}<ACPModelPicker {workspaceRoot} {sessionID} disabled={disabled || saving} bind:saving />{/key}{/if}
   <select class="effort-select" aria-label="Reasoning effort" title="Reasoning effort for this chat" bind:value={effort} onchange={save} disabled={disabled || loading || saving || !selection || model.startsWith('acp:')}>
     <option value="">{model.startsWith('acp:') ? 'Agent default' : 'Reasoning: default'}{selection?.effective_reasoning_effort && !selection.reasoning_effort ? ` · ${selection.effective_reasoning_effort}` : ''}</option>
     {#each reasoningOptions(model || selection?.effective_model || '', effort || selection?.effective_reasoning_effort || '', models) as option}<option value={option}>{option}</option>{/each}

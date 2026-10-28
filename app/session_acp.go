@@ -34,7 +34,7 @@ func acpTranscriptDigest(messages []client.Message) [32]byte {
 	return sha256.Sum256(body)
 }
 
-func (host *SessionHost) prepareACPSession(ctx context.Context, prepared *preparedSession, loaded config.Config, agent string) (*preparedSession, error) {
+func (host *SessionHost) prepareACPSession(ctx context.Context, prepared *preparedSession, loaded config.Config, agent, agentModel string) (*preparedSession, error) {
 	if err := prepared.store.RequireInteraction(); err != nil {
 		return nil, err
 	}
@@ -72,6 +72,11 @@ func (host *SessionHost) prepareACPSession(ctx context.Context, prepared *prepar
 		return nil, err
 	}
 	prepared.client = remote
+	if agentModel != "" && remote.modelSettings().CurrentModel != agentModel {
+		if err := remote.setModel(ctx, agentModel); err != nil {
+			return nil, err
+		}
+	}
 	remote.sessionCheckpoint = &checkpoint
 	if !remote.resumed {
 		remote.initialContext = completedACPContext(saved.Transcript)

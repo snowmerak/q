@@ -65,6 +65,7 @@ type acpRemoteClient struct {
 	resumed              bool
 	initialContext       string
 	sessionCheckpoint    *acpSessionCheckpoint
+	configOptions        []acp.SessionConfigOption
 
 	slashCommandsBySession map[acp.SessionId][]slashCommand
 
@@ -260,13 +261,17 @@ func startACPRemoteClientWithResume(
 		remote.sessionID = acp.SessionId(sessionID)
 		switch {
 		case initialize.AgentCapabilities.SessionCapabilities.Resume != nil:
-			_, err = connection.ResumeSession(ctx, acp.ResumeSessionRequest{
+			var response acp.ResumeSessionResponse
+			response, err = connection.ResumeSession(ctx, acp.ResumeSessionRequest{
 				SessionId: remote.sessionID, Cwd: root, McpServers: []acp.McpServer{},
 			})
+			remote.updateConfigOptions(response.ConfigOptions)
 		case initialize.AgentCapabilities.LoadSession:
-			_, err = connection.LoadSession(ctx, acp.LoadSessionRequest{
+			var response acp.LoadSessionResponse
+			response, err = connection.LoadSession(ctx, acp.LoadSessionRequest{
 				SessionId: remote.sessionID, Cwd: root, McpServers: []acp.McpServer{},
 			})
+			remote.updateConfigOptions(response.ConfigOptions)
 		default:
 			err = errors.New("agent does not support session/load or session/resume")
 		}
@@ -391,6 +396,7 @@ func (r *acpRemoteClient) prompt(ctx context.Context, content string, events cha
 		}
 	}
 	result := &client.ChatResponse{Choices: []client.Choice{{Message: message}}}
+	result.Usage = acpResponseUsage(response.Usage)
 	return result, toolCalls, nil
 }
 
@@ -438,6 +444,7 @@ func (r *acpRemoteClient) newSession(ctx context.Context) (acp.SessionId, error)
 	}
 	r.mu.Lock()
 	r.sessionID = response.SessionId
+	r.configOptions = response.ConfigOptions
 	r.title = ""
 	for sessionID := range r.slashCommandsBySession {
 		if sessionID != response.SessionId {
@@ -465,6 +472,9 @@ func (r *acpRemoteClient) SessionUpdate(ctx context.Context, notification acp.Se
 	}
 	if notification.Update.SessionInfoUpdate != nil && notification.Update.SessionInfoUpdate.Title != nil {
 		r.title = strings.TrimSpace(*notification.Update.SessionInfoUpdate.Title)
+	}
+	if update := notification.Update.ConfigOptionUpdate; update != nil && notification.SessionId == r.sessionID {
+		r.configOptions = update.ConfigOptions
 	}
 	turn := r.turn
 	sessionID := r.sessionID

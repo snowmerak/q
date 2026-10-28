@@ -18,6 +18,7 @@ type sessionModelUpdate struct {
 type sessionModelSettings struct {
 	Model                    string `json:"model"`
 	Agent                    string `json:"agent,omitempty"`
+	AgentModel               string `json:"agent_model,omitempty"`
 	EffectiveModel           string `json:"effective_model"`
 	ReasoningEffort          string `json:"reasoning_effort"`
 	EffectiveReasoningEffort string `json:"effective_reasoning_effort"`
@@ -103,7 +104,7 @@ func (service *sessionsService) serveSessionModel(writer http.ResponseWriter, re
 	if selected.Agent != "" {
 		effective, effort = "acp/"+selected.Agent, ""
 	}
-	writeJSON(writer, http.StatusOK, sessionModelSettings{Model: selected.Model, Agent: selected.Agent, EffectiveModel: effective,
+	writeJSON(writer, http.StatusOK, sessionModelSettings{Model: selected.Model, Agent: selected.Agent, AgentModel: selected.AgentModel, EffectiveModel: effective,
 		ReasoningEffort: selected.ReasoningEffort, EffectiveReasoningEffort: effort})
 }
 
@@ -129,6 +130,9 @@ func (service *sessionsService) updateSessionModel(store workspace.Store, model,
 		return err
 	}
 	value.Model = model
+	if value.Agent != agent {
+		value.AgentModel = ""
+	}
 	value.Agent = agent
 	// Model-only clients must not silently reset a saved reasoning choice.
 	if effort != nil {

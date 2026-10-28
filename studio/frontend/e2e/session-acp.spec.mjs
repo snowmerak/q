@@ -149,3 +149,76 @@ test('ACP connection saves keep the next JSON field being edited', async ({ page
   await expect(args).toHaveValue('["--first"]');
   await expect(env).toHaveValue('{"DRAFT_TOKEN":"********"}');
 });
+
+test('ACP model selection stays in the session and cache hit rates survive reload', async ({ page, request }) => {
+  const fixture = await (await request.get('/_test/fixture')).json();
+  const settings = await (await request.get('/api/v1/settings/acp')).json();
+  const id = 'acp-model-usage';
+  expect((await request.put('/api/v1/settings/acp', { data: { connections: { ...settings.connections, [id]: { command: fixture.acp_executable, env: { Q_STUDIO_ACP_FIXTURE: '1' } } } } })).ok()).toBe(true);
+  const chat = await (await request.post('/api/v1/chats', { data: {} })).json();
+  const errors = [];
+  page.on('pageerror', error => errors.push(error.message));
+  try {
+    await page.goto(`/sessions/${chat.registration_id}`);
+    await page.getByRole('combobox', { name: 'Session model', exact: true }).selectOption(`acp:${id}`);
+    const model = page.getByRole('combobox', { name: 'ACP model', exact: true });
+    const composer = page.getByRole('textbox', { name: 'Message Q', exact: true });
+    await expect(model).toBeEnabled();
+    await expect(model).toHaveValue('fixture-a');
+    await model.selectOption('fixture-b');
+    await expect(model).toBeEnabled();
+    await composer.fill('model');
+    await composer.press('Enter');
+    const reply = page.locator('.chat-message').filter({ has: page.getByText('ACP model: fixture-b', { exact: true }) });
+    await expect(reply.locator('.response-usage')).toContainText('Input 100');
+    await expect(reply.locator('.response-usage')).toContainText('Cache hit 60%');
+    await page.reload();
+    await expect(model).toBeEnabled();
+    await expect(model).toHaveValue('fixture-b');
+    await expect(reply.locator('.response-usage')).toContainText('Cache hit 60%');
+    await model.selectOption('rejected');
+    await expect(model).toHaveValue('fixture-b');
+    await expect(page.getByRole('alert').filter({ hasText: 'model change rejected' })).toBeVisible();
+    await page.getByTitle('Reload agent models', { exact: true }).click();
+    await expect(model).toBeEnabled();
+    for (const [prompt, rate] of [['uncached', '0%'], ['unknown cache', '—']]) {
+      await composer.fill(prompt);
+      await composer.press('Enter');
+      const result = page.locator('.chat-message').filter({ has: page.getByText(`ACP answer: ${prompt}`, { exact: true }) });
+      await expect(result.locator('.response-usage')).toContainText(`Cache hit ${rate}`);
+      await expect(model).toBeEnabled();
+    }
+    await page.screenshot({ path: join(tmpdir(), 'q-acp-model-cache.png') });
+    await page.setViewportSize({ width: 390, height: 844 });
+    await model.scrollIntoViewIfNeeded();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+    await page.screenshot({ path: join(tmpdir(), 'q-acp-model-cache-mobile.png') });
+    await composer.fill('permission');
+    await composer.press('Enter');
+    await expect(page.getByRole('heading', { name: 'Edit fixture file', exact: true })).toBeVisible();
+    await expect(model).toBeDisabled();
+    await page.getByRole('button', { name: /^Allow/ }).click();
+    await expect(model).toBeEnabled();
+    expect(errors).toEqual([]);
+  } finally { await request.delete(`/api/v1/chats/${chat.registration_id}`); }
+});
+
+test('ACP agents without a model selector retain their default model', async ({ page, request }) => {
+  const fixture = await (await request.get('/_test/fixture')).json();
+  const settings = await (await request.get('/api/v1/settings/acp')).json();
+  const id = 'acp-default-only';
+  expect((await request.put('/api/v1/settings/acp', { data: { connections: { ...settings.connections, [id]: { command: fixture.acp_executable, env: { Q_STUDIO_ACP_FIXTURE: '1', Q_STUDIO_ACP_NO_MODELS: '1' } } } } })).ok()).toBe(true);
+  const chat = await (await request.post('/api/v1/chats', { data: {} })).json();
+  try {
+    await page.goto(`/sessions/${chat.registration_id}`);
+    await page.getByRole('combobox', { name: 'Session model', exact: true }).selectOption(`acp:${id}`);
+    const model = page.getByRole('combobox', { name: 'ACP model', exact: true });
+    await expect(model).toBeDisabled();
+    await expect(model.locator('option:checked')).toContainText('model selection unavailable');
+    const composer = page.getByRole('textbox', { name: 'Message Q', exact: true });
+    await composer.fill('hello');
+    await composer.press('Enter');
+    await expect(page.getByText('ACP answer: hello', { exact: true })).toBeVisible();
+    await expect(model).toBeDisabled();
+  } finally { await request.delete(`/api/v1/chats/${chat.registration_id}`); }
+});

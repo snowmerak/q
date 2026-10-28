@@ -265,8 +265,13 @@ Studio is the primary interface for daily Q work:
   `config.yaml`; Subagents retains profiles and external role bindings.
   The Session model picker also lists enabled ACP connections. Each chat owns
   its ACP process and conversation, with streamed replies and interactive tool
-  approvals. ACP uses the agent's model and reasoning defaults and needs no API
-  model configured in Q. On reopening, Q uses ACP resume/load when available;
+  approvals. Agents that offer a model config option expose an **ACP model**
+  selector. Changes keep the same live ACP session, persist per chat, and are
+  reapplied on reopening. Other agents retain their model default. ACP uses the
+  agent's reasoning defaults and needs no API model configured in Q.
+  Replies show reported cached tokens and cache hit rate, including after reload;
+  missing cache counters remain unavailable rather than appearing as zero.
+  On reopening, Q uses ACP resume/load when available;
   otherwise it supplies completed conversation text as context without replaying
   previous operations. Providers > ACP shows installed runtimes. With Node.js
   and npm available, Codex or Claude Code's ACP adapter installs automatically
