@@ -19,15 +19,16 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/snowmerak/q/client"
 	"github.com/snowmerak/q/config"
+	"github.com/snowmerak/q/internal/acpadapter"
 	"github.com/snowmerak/q/third_party/acp-go-sdk"
 )
 
 type acpAgentCommand struct {
-	name       string
-	args       []string
-	env        map[string]string
-	display    string
-	installTip string
+	name          string
+	args          []string
+	env           map[string]string
+	display       string
+	installPreset string
 }
 
 type acpRemoteConnection interface {
@@ -61,6 +62,9 @@ type acpRemoteClient struct {
 	permissions  acpPermissionMode
 	// Councils require an actual answer and a successfully finished prompt.
 	requireCompletedText bool
+	resumed              bool
+	initialContext       string
+	sessionCheckpoint    *acpSessionCheckpoint
 
 	slashCommandsBySession map[acp.SessionId][]slashCommand
 
@@ -95,40 +99,51 @@ var _ chatClient = (*acpRemoteClient)(nil)
 var _ acp.Client = (*acpRemoteClient)(nil)
 
 func resolveACPAgentCommand(agent string, lookPath func(string) (string, error)) (acpAgentCommand, error) {
-	switch strings.ToLower(strings.TrimSpace(agent)) {
-	case "codex":
-		if name, err := lookPath("codex-acp"); err == nil {
-			return acpAgentCommand{name: name, display: "Codex"}, nil
+	preset := strings.ToLower(strings.TrimSpace(agent))
+	manager, _ := acpadapter.DefaultManager()
+	if installed, _, err := manager.Resolve(preset, lookPath); err == nil {
+		display := map[string]string{"codex": "Codex", "claude": "Claude", "grok": "Grok"}[preset]
+		return acpAgentCommand{name: installed.Name, args: installed.Args, display: display}, nil
+	}
+	switch preset {
+	case "codex", "claude":
+		display := map[string]string{"codex": "Codex", "claude": "Claude"}[preset]
+		for _, executable := range []string{"node", "npm"} {
+			if _, err := lookPath(executable); err != nil {
+				return acpAgentCommand{}, fmt.Errorf("%s ACP adapter is not installed; Node.js and npm are required for automatic installation", display)
+			}
 		}
-		name, err := lookPath("npx")
-		if err != nil {
-			return acpAgentCommand{}, errors.New("codex ACP requires codex-acp or npx; install @agentclientprotocol/codex-acp")
-		}
-		return acpAgentCommand{
-			name: name, args: []string{"-y", "@agentclientprotocol/codex-acp"}, display: "Codex",
-			installTip: "npm install -g @agentclientprotocol/codex-acp",
-		}, nil
-	case "claude":
-		if name, err := lookPath("claude-agent-acp"); err == nil {
-			return acpAgentCommand{name: name, display: "Claude"}, nil
-		}
-		name, err := lookPath("npx")
-		if err != nil {
-			return acpAgentCommand{}, errors.New("claude ACP requires claude-agent-acp or npx; install @agentclientprotocol/claude-agent-acp")
-		}
-		return acpAgentCommand{
-			name: name, args: []string{"-y", "@agentclientprotocol/claude-agent-acp"}, display: "Claude",
-			installTip: "npm install -g @agentclientprotocol/claude-agent-acp",
-		}, nil
+		return acpAgentCommand{display: display, installPreset: preset}, nil
 	case "grok":
-		name, err := lookPath("grok")
-		if err != nil {
-			return acpAgentCommand{}, errors.New("grok ACP requires the Grok Build CLI; install it from https://x.ai/cli")
-		}
-		return acpAgentCommand{name: name, args: []string{"agent", "stdio"}, display: "Grok"}, nil
+		return acpAgentCommand{}, errors.New("grok ACP requires the Grok Build CLI; install it from https://x.ai/cli")
 	default:
 		return acpAgentCommand{}, fmt.Errorf("unsupported ACP agent %q; use codex, claude, or grok", agent)
 	}
+}
+
+// Resolve is side-effect free; installation starts only when the caller
+// actually opens the ACP connection. Extra arguments and child env survive it.
+func prepareACPAgentCommand(ctx context.Context, command acpAgentCommand) (acpAgentCommand, error) {
+	if command.installPreset == "" {
+		return command, nil
+	}
+	manager, err := acpadapter.DefaultManager()
+	if err != nil {
+		return acpAgentCommand{}, err
+	}
+	installContext, cancel := context.WithTimeout(ctx, 3*time.Minute)
+	defer cancel()
+	if _, err := manager.Install(installContext, command.installPreset); err != nil {
+		return acpAgentCommand{}, fmt.Errorf("automatically install %s ACP adapter: %w", command.display, err)
+	}
+	installed, _, err := manager.Resolve(command.installPreset, exec.LookPath)
+	if err != nil {
+		return acpAgentCommand{}, err
+	}
+	command.name = installed.Name
+	command.args = append(installed.Args, command.args...)
+	command.installPreset = ""
+	return command, nil
 }
 
 func resolveConfiguredACPAgentCommand(connection config.AgentConnectionConfig, lookPath func(string) (string, error)) (acpAgentCommand, error) {
@@ -157,9 +172,21 @@ func startACPRemoteClient(
 	root, sessionID, authMethod string,
 	logOutput io.Writer,
 ) (*acpRemoteClient, error) {
+	return startACPRemoteClientWithResume(ctx, command, root, sessionID, authMethod, logOutput, false)
+}
+
+func startACPRemoteClientWithResume(
+	ctx context.Context, command acpAgentCommand, root, sessionID, authMethod string,
+	logOutput io.Writer, optionalResume bool,
+) (*acpRemoteClient, error) {
 	_ = logOutput // Keep agent diagnostics out of Bubble Tea's alternate screen.
+	command, err := prepareACPAgentCommand(ctx, command)
+	if err != nil {
+		return nil, err
+	}
 	processContext, cancel := context.WithCancel(ctx)
 	cmd := exec.CommandContext(processContext, command.name, command.args...)
+	acpadapter.ConfigureProcess(cmd)
 	cmd.Dir = root
 	cmd.Env = mergedProcessEnv(os.Environ(), command.env)
 	stderr := newSynchronizedTailBuffer(64 << 10)
@@ -176,11 +203,7 @@ func startACPRemoteClient(
 	}
 	if err := cmd.Start(); err != nil {
 		cancel()
-		tip := ""
-		if command.installTip != "" {
-			tip = "; try " + command.installTip
-		}
-		return nil, fmt.Errorf("start %s ACP agent: %w%s", command.display, err, tip)
+		return nil, fmt.Errorf("start %s ACP agent: %w", command.display, err)
 	}
 	wait := make(chan error, 1)
 	go func() { wait <- cmd.Wait() }()
@@ -246,6 +269,10 @@ func startACPRemoteClient(
 			})
 		default:
 			err = errors.New("agent does not support session/load or session/resume")
+		}
+		remote.resumed = err == nil
+		if err != nil && optionalResume && ctx.Err() == nil {
+			_, err = remote.newSession(ctx)
 		}
 	}
 	if err != nil {
@@ -328,6 +355,8 @@ func (r *acpRemoteClient) prompt(ctx context.Context, content string, events cha
 	root := r.root
 	embeddedContext := r.capabilities.PromptCapabilities.EmbeddedContext
 	requireCompletedText := r.requireCompletedText
+	initialContext := r.initialContext
+	r.initialContext = ""
 	r.mu.Unlock()
 	defer func() {
 		r.mu.Lock()
@@ -337,6 +366,9 @@ func (r *acpRemoteClient) prompt(ctx context.Context, content string, events cha
 		r.mu.Unlock()
 	}()
 
+	if initialContext != "" {
+		content = initialContext + "\n\nCurrent request:\n" + content
+	}
 	promptBlocks, err := acpPromptBlocksForText(root, content, embeddedContext)
 	if err != nil {
 		return nil, 0, err
@@ -473,7 +505,7 @@ func (r *acpRemoteClient) RequestPermission(ctx context.Context, request acp.Req
 		})
 	}
 	answer := make(chan askToUserOutput, 1)
-	if !turn.emit(agentEvent{question: &question, answer: answer}) {
+	if !turn.emit(agentEvent{question: &question, answer: answer, questionCallID: string(request.ToolCall.ToolCallId)}) {
 		return cancelledPermission(), nil
 	}
 	select {

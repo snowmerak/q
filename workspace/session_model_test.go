@@ -50,3 +50,30 @@ func TestSessionReasoningConfigValidationAndLegacyModel(t *testing.T) {
 		}
 	}
 }
+
+func TestSessionACPSelectionSurvivesReset(t *testing.T) {
+	store, lock, err := CreateSession(t.TempDir(), "ACP selection")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SaveSessionModelConfig(SessionModelConfig{Agent: "local-acp"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := lock.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ResetSession(store.Root, store.SessionID, "clear"); err != nil {
+		t.Fatal(err)
+	}
+	selected, err := store.LoadSessionModelConfig()
+	if err != nil || selected.Agent != "local-acp" || selected.Model != "" {
+		t.Fatalf("ACP selection after clear = %+v, %v", selected, err)
+	}
+	for _, invalid := range []SessionModelConfig{
+		{Agent: "local-acp", Model: "provider/model"}, {Agent: "local-acp", ReasoningEffort: "high"}, {Agent: " local-acp"}, {Agent: "other/agent"},
+	} {
+		if err := invalid.Validate(); err == nil {
+			t.Fatalf("invalid ACP selection accepted: %+v", invalid)
+		}
+	}
+}

@@ -10,6 +10,7 @@ import (
 	"sync"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/snowmerak/q/config"
 	"github.com/snowmerak/q/mcpconfig"
 	"github.com/snowmerak/q/workspace"
 )
@@ -149,6 +150,10 @@ func liveSessionKey(store workspace.Store, sessionID string) string {
 
 func (host *SessionHost) sessionConfiguration(store workspace.Store, configured ...SessionOptions) ([32]byte, error) {
 	loaded, err := host.store.Load()
+	if errors.Is(err, config.ErrNotFound) {
+		loaded, err = config.Default(), nil
+		loaded.UseManagedGateway()
+	}
 	if err != nil {
 		return [32]byte{}, err
 	}
@@ -493,6 +498,10 @@ func (m liveSessionModel) Update(message tea.Msg) (updatedModel tea.Model, nextC
 		command := m.execution.state.startNextLearningSegment()
 		return m, command
 	case liveSessionLearning:
+		if m.execution.state.clientIsACPRemote() {
+			close(request.done)
+			return m, nil
+		}
 		var command tea.Cmd
 		if m.execution.state.workspaceLearning.Disabled != request.value.Disabled {
 			m.execution.state.workspaceLearning = request.value
@@ -513,6 +522,10 @@ func (m liveSessionModel) Update(message tea.Msg) (updatedModel tea.Model, nextC
 		m.request = request
 		if err := request.ctx.Err(); err != nil {
 			m.finish(err)
+			return m, nil
+		}
+		if request.compact && m.execution.state.clientIsACPRemote() {
+			m.finish(errors.New("ACP agents manage their own context compaction"))
 			return m, nil
 		}
 		if request.emit != nil {

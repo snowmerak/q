@@ -34,6 +34,10 @@ import (
 // SessionHost starts Q's Gateway and Loom in the current executable. Let the
 // test binary host those real children, with the same stdin-owned lifetime.
 func TestMain(m *testing.M) {
+	if os.Getenv("Q_STUDIO_ACP_FIXTURE") == "1" {
+		runStudioACPFixture()
+		os.Exit(0)
+	}
 	if len(os.Args) > 1 && (os.Args[1] == providerhost.ChildCommand || os.Args[1] == loom.ChildCommand) {
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
@@ -595,8 +599,10 @@ func TestStudioBrowserFixture(t *testing.T) {
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /_test/fixture", func(w http.ResponseWriter, r *http.Request) {
+		executable, _ := os.Executable()
 		writeJSON(w, 200, map[string]string{
-			"root": fixture.root, "other": other, "session_id": fixture.session.SessionID,
+			"acp_executable": executable,
+			"root":           fixture.root, "other": other, "session_id": fixture.session.SessionID,
 			"project_root": projectRoot, "project_other": projectOther,
 			"tree_root": tree.Root, "tree_session_id": tree.SessionID,
 			"git_root": gitRoot, "git_other": gitOther,

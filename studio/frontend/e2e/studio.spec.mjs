@@ -744,11 +744,11 @@ test('queued profile edits preserve revisions, scope migration, and the original
 });
 
 test('ACP connections preserve secret mappings, enabled state, and role bindings', async ({ page, request }) => {
-  await page.goto('/settings?section=subagents');
-  await expect(page.getByRole('heading', { name: 'Custom profiles', exact: true })).toBeVisible();
-  await page.getByRole('button', { name: /^ACP connections/ }).click();
+  await page.goto('/settings?section=providers&provider_tab=acp');
+  await expect(page.getByRole('heading', { name: 'ACP providers', exact: true })).toBeVisible();
   await page.getByRole('textbox', { name: 'Connection ID', exact: true }).fill('ui-acp');
-  const save = () => page.waitForResponse((r) => new URL(r.url()).pathname === '/api/v1/settings/subagents' && r.request().method() === 'PUT');
+  let endpoint = '/api/v1/settings/acp';
+  const save = () => page.waitForResponse((r) => new URL(r.url()).pathname === endpoint && r.request().method() === 'PUT');
   let saved = save();
   await page.getByRole('button', { name: 'Add connection', exact: true }).click();
   expect((await saved).ok()).toBe(true);
@@ -766,13 +766,19 @@ test('ACP connections preserve secret mappings, enabled state, and role bindings
   saved = save();
   await card.getByRole('checkbox', { name: /^Connection state/ }).check();
   expect((await saved).ok()).toBe(true);
+  await page.goto('/settings?section=subagents');
+  await page.getByRole('button', { name: /^External role bindings/ }).click();
+  await expect(page.getByRole('textbox', { name: 'Connection ID', exact: true })).toHaveCount(0);
+  endpoint = '/api/v1/settings/subagents';
   const binding = page.locator('.binding-grid select').first();
   saved = save();
   await binding.selectOption('ui-acp');
   expect((await saved).ok()).toBe(true);
   await page.reload();
-  await page.getByRole('button', { name: /^ACP connections/ }).click();
+  await page.getByRole('button', { name: /^External role bindings/ }).click();
   await expect(binding).toHaveValue('ui-acp');
+  await page.goto('/settings?section=providers&provider_tab=acp');
+  endpoint = '/api/v1/settings/acp';
   await expect(env).toHaveValue('{"Q_STUDIO_TEST_TOKEN":"********"}');
   await expect(card.getByRole('checkbox', { name: /^Connection state/ })).toBeChecked();
   const snapshot = await (await request.get('/api/v1/settings/subagents')).json();

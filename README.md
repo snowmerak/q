@@ -247,7 +247,7 @@ Studio is the primary interface for daily Q work:
   answers and every review. Configure one to six rounds in Studio. Create a
   council without a workspace, or attach one to a workspace or Studio project.
   Its members and chair can use either a model or an enabled global ACP connection
-  registered in Settings > Subagents. ACP seats use the agent's model defaults.
+  registered in Settings > Providers > ACP. ACP seats use the agent's model defaults.
   Native seats use Q's read-only repository tools. ACP seats reject edit and
   command permission requests; the external agent must also enforce its own
   read-only sandbox. Each ACP seat retains its session across rounds, and
@@ -261,6 +261,19 @@ Studio is the primary interface for daily Q work:
 - **Settings** owns global and repository model assignments, Gateway and System
   One, Library and Loom, MCP, LSP, Skills, subagents, ACP bindings, and
   `.qignore`.
+  Providers contains **API Provider** and **ACP** tabs. ACP connections remain in
+  `config.yaml`; Subagents retains profiles and external role bindings.
+  The Session model picker also lists enabled ACP connections. Each chat owns
+  its ACP process and conversation, with streamed replies and interactive tool
+  approvals. ACP uses the agent's model and reasoning defaults and needs no API
+  model configured in Q. On reopening, Q uses ACP resume/load when available;
+  otherwise it supplies completed conversation text as context without replaying
+  previous operations. Providers > ACP shows installed runtimes. With Node.js
+  and npm available, Codex or Claude Code's ACP adapter installs automatically
+  into Q's user cache on first use. **Install adapter** optionally prepares it
+  ahead of time; the same preset works in Sessions, Councils,
+  and subagents without restarting Q. Grok uses its native `grok agent stdio`
+  support. Sign in through the agent's own CLI before chatting.
 - **Operations** shows token usage, active workers, local service health,
   bounded runtime diagnostics, and usage retention.
 - **Help** lists CLI commands and flags, terminal slash commands and their Studio
@@ -480,7 +493,9 @@ and `d` deletes the selected profile after confirmation. Each list row summarize
 its model role, scope, tool state, and delegation grants.
 ACP connection presets include `codex`, `claude`, and `grok`. The `claude` preset uses
 [`claude-agent-acp`](https://github.com/agentclientprotocol/claude-agent-acp), preferring
-an installed executable and otherwise running `npx -y @agentclientprotocol/claude-agent-acp`.
+an installed executable or the adapter installed in Studio's Providers > ACP.
+With Node.js and npm available, opening a missing preset automatically installs
+its adapter into Q's user cache. Later connections reuse that installation.
 Install it globally with `npm install -g @agentclientprotocol/claude-agent-acp`, or use
 a custom command for another ACP implementation. Connection arguments and child
 environment variables apply to presets as well.

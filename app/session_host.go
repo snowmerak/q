@@ -488,7 +488,8 @@ func (prepared *preparedSession) Close() error {
 func (host *SessionHost) prepareSession(runContext context.Context, workspaceStore workspace.Store, sessionID string, configured ...SessionOptions) (_ *preparedSession, returnErr error) {
 	loaded, err := host.store.Load()
 	if errors.Is(err, config.ErrNotFound) {
-		return nil, fmt.Errorf("%w: q is not configured; configure a model in Studio first", ErrSessionRuntimeUnavailable)
+		loaded, err = config.Default(), nil
+		loaded.UseManagedGateway()
 	}
 	if err != nil {
 		return nil, err
@@ -519,6 +520,28 @@ func (host *SessionHost) prepareSession(runContext context.Context, workspaceSto
 		}
 	}
 
+	if prepared.store.SessionID != "" && len(configured) == 0 {
+		selection, err := prepared.store.LoadSessionModelConfig()
+		if err != nil {
+			return nil, err
+		}
+		if selection.Agent != "" {
+			return host.prepareACPSession(runContext, prepared, loaded, selection.Agent)
+		}
+		if loaded.Provider.Model == "" {
+			loaded.Provider.Model = selection.Model
+			if loaded.Provider.Model == "" {
+				local, err := prepared.store.LoadModelConfig()
+				if err != nil {
+					return nil, err
+				}
+				loaded.Provider.Model = local.Overrides["default"].Model
+			}
+		}
+	}
+	if len(configured) == 0 && loaded.Provider.Model == "" {
+		return nil, fmt.Errorf("%w: q is not configured; choose an API model or ACP provider in Studio", ErrSessionRuntimeUnavailable)
+	}
 	loaded, err = host.ensureProvider(loaded)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrSessionRuntimeUnavailable, err)
@@ -763,6 +786,9 @@ func (m sessionExecutionModel) updateAgentEvent(eventMessage agentEventMsg) (tea
 	if event.call != nil && event.call.Function.Name == askToUserToolName {
 		m.pendingQuestionCallID = event.call.ID
 	}
+	if event.questionCallID != "" {
+		m.pendingQuestionCallID = event.questionCallID
+	}
 	if event.question != nil {
 		projected.CallID = m.pendingQuestionCallID
 	}
@@ -851,6 +877,9 @@ func (m sessionExecutionModel) failExecution() (tea.Model, tea.Cmd) {
 }
 
 func sessionContextUsageEvent(state model) (SessionEvent, bool) {
+	if state.clientIsACPRemote() {
+		return SessionEvent{}, false
+	}
 	if state.memory == nil {
 		return SessionEvent{}, false
 	}

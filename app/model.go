@@ -244,6 +244,7 @@ type AgentEvent struct {
 	learningName    string
 	learningPayload json.RawMessage
 	streamDelta     *chatStreamDelta
+	questionCallID  string
 	taskStarted     *workspace.ActiveTask
 	taskCompleted   bool
 	contextReplace  *agentContextReplacement
@@ -1879,6 +1880,10 @@ func (m model) activeConfig() config.Config {
 			value.Provider.ContextWindow = m.contextWindowForModel(value.Provider.Model)
 		}
 		value.Provider.ReasoningEffort = m.sessionOptions.ReasoningEffort
+		if m.sessionOptions.Agent != "" {
+			value.Provider.Model = "acp/" + m.sessionOptions.Agent
+			value.Provider.ReasoningEffort = ""
+		}
 	}
 	return value
 }
@@ -1941,6 +1946,9 @@ func (m *model) saveWorkspaceSession() error {
 	})
 	if err != nil {
 		return &workspaceSessionSaveError{err: err}
+	}
+	if remote, ok := m.client.(*acpRemoteClient); ok {
+		return saveACPSessionCheckpoint(*m.workspaceStore, remote, workspaceSessionMessages(m.messages))
 	}
 	return nil
 }

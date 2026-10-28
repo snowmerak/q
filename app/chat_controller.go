@@ -566,6 +566,13 @@ func (m *model) sendChatRequest() tea.Cmd {
 	turnContext := sessionstore.WithSearchScope(m.activeTurnContext(), m.runID, "")
 	turnID := m.turnID
 	events := make(chan agentEvent)
+	if remote, ok := configuredClient.(*acpRemoteClient); ok {
+		content := m.pendingMessage.TextContent()
+		return func() tea.Msg {
+			go remote.runPrompt(turnContext, content, events)
+			return waitAgentEvent(events, turnID)()
+		}
+	}
 	toolRuntime := m.toolRuntime
 	var toolRuntimeErr error
 	if m.sessionOptions == nil || (m.sessionOptions.RuntimeFactory == nil && m.sessionOptions.WrapRuntime == nil) {
@@ -591,13 +598,6 @@ func (m *model) sendChatRequest() tea.Cmd {
 	if toolRuntimeErr != nil {
 		return func() tea.Msg {
 			return chatResultMsg{turnID: turnID, requestEstimate: m.requestEstimate, err: toolRuntimeErr}
-		}
-	}
-	if remote, ok := configuredClient.(*acpRemoteClient); ok {
-		content := m.pendingMessage.TextContent()
-		return func() tea.Msg {
-			go remote.runPrompt(turnContext, content, events)
-			return waitAgentEvent(events, turnID)()
 		}
 	}
 	if toolRuntime == nil && !streamEnabled {

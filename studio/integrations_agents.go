@@ -81,12 +81,16 @@ func (service *integrationService) serveAgents(writer http.ResponseWriter, reque
 	service.mu.Lock()
 	defer service.mu.Unlock()
 	value, err := service.main.Load()
+	if errors.Is(err, config.ErrNotFound) {
+		value, err = config.Default(), nil
+		value.UseManagedGateway()
+	}
 	if err != nil {
 		writeAPIError(writer, http.StatusInternalServerError, err)
 		return
 	}
 	if input.Connections == nil {
-		input.Connections = make(map[string]config.AgentConnectionConfig)
+		input.Connections = value.Agents.Connections
 	}
 	if value.Agents.Roles == nil {
 		value.Agents.Roles = make(map[string]config.AgentConfig)
@@ -105,6 +109,14 @@ func (service *integrationService) serveAgents(writer http.ResponseWriter, reque
 	}
 	value.Agents.Connections = input.Connections
 	for _, role := range config.ExternalAgentRoles() {
+		if input.Bindings == nil {
+			if assignment := value.Agents.Roles[role]; assignment.Agent != "" {
+				if _, found := input.Connections[assignment.Agent]; !found {
+					delete(value.Agents.Roles, role)
+				}
+			}
+			continue
+		}
 		assignment := value.Agents.Roles[role]
 		assignment.Agent = strings.TrimSpace(input.Bindings[role])
 		if assignment.Agent == "" {
@@ -160,6 +172,10 @@ func (service *integrationService) writeAgents(writer http.ResponseWriter, root 
 	service.mu.Lock()
 	defer service.mu.Unlock()
 	value, err := service.main.Load()
+	if errors.Is(err, config.ErrNotFound) {
+		value, err = config.Default(), nil
+		value.UseManagedGateway()
+	}
 	if err != nil {
 		writeAPIError(writer, http.StatusInternalServerError, err)
 		return

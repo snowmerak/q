@@ -273,7 +273,7 @@ func (c Config) Validate() error {
 			return fmt.Errorf("config: provider base_url must not contain a query or fragment")
 		}
 	}
-	if strings.TrimSpace(c.Provider.Model) == "" {
+	if !c.Provider.Managed && strings.TrimSpace(c.Provider.Model) == "" {
 		return fmt.Errorf("config: provider model is required")
 	}
 	for model, mode := range c.ModelAPIModes {

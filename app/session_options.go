@@ -45,7 +45,7 @@ type SessionOptions struct {
 func (m model) startSessionOperation(prompt, id string) (tea.Model, tea.Cmd) {
 	if id == "" {
 		m.sessionOperation = nil
-		return m.startChatTurn(prompt, true)
+		return m.startChatTurn(prompt, !m.clientIsACPRemote())
 	}
 	if operation := m.sessionOperation; operation != nil && operation.ID == id {
 		if operation.Prompt != prompt {
@@ -66,7 +66,7 @@ func (m model) startSessionOperation(prompt, id string) (tea.Model, tea.Cmd) {
 		}
 	}
 	m.sessionOperation = &workspace.SessionOperation{ID: id, Prompt: prompt}
-	return m.startChatTurn(prompt, true)
+	return m.startChatTurn(prompt, !m.clientIsACPRemote())
 }
 
 // RunWithOptions runs through the same live session used by Run and Studio.

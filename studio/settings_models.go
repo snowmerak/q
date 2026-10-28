@@ -21,6 +21,14 @@ func (service *settingsService) serveModelCatalog(writer http.ResponseWriter, re
 	mainConfig, mainErr := service.main.Load()
 	service.mu.Unlock()
 	if errors.Is(err, providerhost.ErrNotFound) {
+		if mainErr == nil {
+			for _, connection := range mainConfig.Agents.Connections {
+				if !connection.Disabled {
+					writeJSON(writer, http.StatusOK, modelCatalog{Models: []modelOption{}})
+					return
+				}
+			}
+		}
 		writeAPIError(writer, http.StatusConflict, errors.New("gateway providers are not configured"))
 		return
 	}

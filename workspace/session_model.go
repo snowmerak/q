@@ -12,11 +12,13 @@ import (
 	"github.com/snowmerak/q/internal/fsreplace"
 )
 
-// SessionModelConfig selects the interactive model for one session. An empty
-// model inherits the workspace and global defaults. Empty reasoning effort
-// inherits the global default. Both choices survive conversation clear.
+// SessionModelConfig selects an API model or ACP connection for one session.
+// Without an agent, an empty model inherits the workspace and global defaults,
+// and empty reasoning effort inherits the global default. Selections survive
+// conversation clear.
 type SessionModelConfig struct {
 	Model           string `json:"model"`
+	Agent           string `json:"agent,omitempty"`
 	ReasoningEffort string `json:"reasoning_effort,omitempty"`
 }
 
@@ -58,6 +60,14 @@ func (s Store) LoadSessionModelConfig() (SessionModelConfig, error) {
 }
 
 func (value SessionModelConfig) Validate() error {
+	if value.Agent != "" {
+		if value.Agent != strings.TrimSpace(value.Agent) || strings.ContainsAny(value.Agent, "/\\ \t\r\n") || len(value.Agent) > 128 {
+			return errors.New("workspace: invalid ACP connection ID")
+		}
+		if value.Model != "" || value.ReasoningEffort != "" {
+			return errors.New("workspace: ACP sessions use the agent's model and reasoning defaults")
+		}
+	}
 	if value.Model != strings.TrimSpace(value.Model) || len(value.Model) > 4096 {
 		return errors.New("workspace: session model must be at most 4096 bytes without surrounding whitespace")
 	}

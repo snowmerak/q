@@ -52,7 +52,9 @@ func (f *fakeACPRemoteConnection) UnstableDeleteSession(_ context.Context, reque
 }
 
 func TestResolveACPAgentCommand(t *testing.T) {
-	paths := map[string]string{"codex-acp": "C:/bin/codex-acp.exe", "npx": "C:/bin/npx.cmd", "grok": "C:/bin/grok.exe"}
+	t.Setenv("LOCALAPPDATA", t.TempDir())
+	t.Setenv("XDG_CACHE_HOME", t.TempDir())
+	paths := map[string]string{"codex-acp": "C:/bin/codex-acp.exe", "npm": "C:/bin/npm.cmd", "node": "C:/bin/node.exe", "grok": "C:/bin/grok.exe"}
 	lookPath := func(name string) (string, error) {
 		path, ok := paths[name]
 		if !ok {
@@ -66,8 +68,8 @@ func TestResolveACPAgentCommand(t *testing.T) {
 	}
 	delete(paths, "codex-acp")
 	codex, err = resolveACPAgentCommand("codex", lookPath)
-	if err != nil || codex.name != paths["npx"] || !slices.Equal(codex.args, []string{"-y", "@agentclientprotocol/codex-acp"}) {
-		t.Fatalf("codex npx command = %#v, %v", codex, err)
+	if err != nil || codex.installPreset != "codex" || codex.name != "" || len(codex.args) != 0 {
+		t.Fatalf("codex automatic installation = %#v, %v", codex, err)
 	}
 	grok, err := resolveACPAgentCommand("grok", lookPath)
 	if err != nil || grok.name != paths["grok"] || !slices.Equal(grok.args, []string{"agent", "stdio"}) {
@@ -79,15 +81,21 @@ func TestResolveACPAgentCommand(t *testing.T) {
 }
 
 func TestResolveClaudeACPAgentCommand(t *testing.T) {
+	t.Setenv("LOCALAPPDATA", t.TempDir())
+	t.Setenv("XDG_CACHE_HOME", t.TempDir())
 	for _, test := range []struct {
-		name  string
-		paths map[string]string
-		want  string
-		args  []string
+		name    string
+		paths   map[string]string
+		want    string
+		args    []string
+		install bool
+		missing bool
 	}{
-		{name: "installed", paths: map[string]string{"claude-agent-acp": "C:/bin/claude-agent-acp.cmd", "npx": "C:/bin/npx.cmd"}, want: "C:/bin/claude-agent-acp.cmd"},
-		{name: "npx fallback", paths: map[string]string{"npx": "C:/bin/npx.cmd"}, want: "C:/bin/npx.cmd", args: []string{"-y", "@agentclientprotocol/claude-agent-acp"}},
-		{name: "missing executable"},
+		{name: "installed", paths: map[string]string{"claude-agent-acp": "C:/bin/claude-agent-acp.exe"}, want: "C:/bin/claude-agent-acp.exe"},
+		{name: "automatic installation", paths: map[string]string{"npm": "C:/bin/npm.cmd", "node": "C:/bin/node.exe"}, install: true},
+		{name: "missing npm", paths: map[string]string{"node": "C:/bin/node.exe"}, missing: true},
+		{name: "missing node", paths: map[string]string{"npm": "C:/bin/npm.cmd"}, missing: true},
+		{name: "missing executable", missing: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			lookPath := func(name string) (string, error) {
@@ -99,8 +107,8 @@ func TestResolveClaudeACPAgentCommand(t *testing.T) {
 			command, err := resolveConfiguredACPAgentCommand(config.AgentConnectionConfig{
 				Preset: "claude", Args: []string{"--custom-argument"}, Env: map[string]string{"CUSTOM_ENV": "value"},
 			}, lookPath)
-			if test.want == "" {
-				if err == nil || !strings.Contains(err.Error(), "install @agentclientprotocol/claude-agent-acp") {
+			if test.missing {
+				if err == nil || !strings.Contains(err.Error(), "required for automatic installation") {
 					t.Fatalf("missing executable error = %v", err)
 				}
 				return
@@ -108,6 +116,9 @@ func TestResolveClaudeACPAgentCommand(t *testing.T) {
 			if err != nil || command.name != test.want || command.display != "Claude" ||
 				!slices.Equal(command.args, append(test.args, "--custom-argument")) || command.env["CUSTOM_ENV"] != "value" {
 				t.Fatalf("Claude command = %#v, %v", command, err)
+			}
+			if (command.installPreset == "claude") != test.install {
+				t.Fatalf("automatic installation = %+v", command)
 			}
 		})
 	}

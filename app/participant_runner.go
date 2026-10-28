@@ -125,9 +125,9 @@ func (r *ParticipantRunner) RunWithOptions(ctx context.Context, store workspace.
 		if err != nil {
 			return err
 		}
-		// Council must never install an agent implicitly through npx.
-		if command.installTip != "" {
-			return errors.New("council ACP requires an installed codex-acp executable")
+		command, err = prepareACPAgentCommand(ctx, command)
+		if err != nil {
+			return err
 		}
 		root := key
 		if len(roots) > 0 {

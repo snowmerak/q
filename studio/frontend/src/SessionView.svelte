@@ -58,6 +58,7 @@
 
   let workspaceRoot = '';
   let modelSaving = false;
+  let sessionAgent = '';
   let registeredSessions: RegisteredSessionTree[] = [];
   let projects: StudioProject[] = [];
   let selectedRegistration: RegisteredSessionTree | null = null;
@@ -440,6 +441,7 @@
     workflowCreate = null;
     workflowDirty = false;
     modelSaving = false;
+    sessionAgent = '';
     // Typed panels own their drafts. The Interaction input must not overwrite
     // them with its inactive prompt when the selection changes.
     switchDraft(registration.session.type === 'council' || registration.session.type === 'composer' ? '' : registration.registration_id);
@@ -486,6 +488,7 @@
 
   function selectDelegatedSession(registration: RegisteredSessionTree, node: FlatDelegation) {
     modelSaving = false;
+    sessionAgent = '';
     if (selectedRegistration?.registration_id !== registration.registration_id) return;
     switchDraft(`${registration.registration_id}/${node.path}`);
     const generation = ++sessionGeneration;
@@ -833,7 +836,7 @@
                 {:else}
                   {#if selectedRegistration?.kind !== 'chat'}<button aria-label="Configure session project" onclick={() => { closeActions(); openProjectDialog(); }} disabled={sending || sessionLoading}><Folders aria-hidden="true" size={15} />Configure project</button>{/if}
                   <button class:enabled={learningEnabled} aria-label={`Turn learning ${learningEnabled ? 'off' : 'on'}`} onclick={() => { closeActions(); void toggleLearning(); }} disabled={sending || learningLoading}><BrainCircuit aria-hidden="true" size={15} />Learning {learningEnabled ? 'enabled' : 'disabled'}</button>
-                  <button onclick={() => { closeActions(); void compactSession(); }} disabled={sending || sessionLoading}><Minimize2 aria-hidden="true" size={15} />Compact context</button>
+                  <button onclick={() => { closeActions(); void compactSession(); }} title={sessionAgent ? 'The ACP agent manages its own context' : undefined} disabled={sending || sessionLoading || modelSaving || !!sessionAgent}><Minimize2 aria-hidden="true" size={15} />Compact context</button>
                   <button onclick={() => { closeActions(); void clearSession(); }} disabled={sending || sessionLoading}><Eraser aria-hidden="true" size={15} />Clear conversation</button>
                   <button class="danger-action" onclick={() => { closeActions(); void deleteSession(); }} disabled={sending || sessionLoading}><Trash2 aria-hidden="true" size={15} />{selectedRegistration?.kind === 'chat' ? 'Delete chat' : 'Delete workspace session'}</button>
                 {/if}
@@ -877,7 +880,7 @@
           <div class="composer-footer">
             {#if !selectedDelegation && selected.session.session_id === selectedRegistration?.session.session_id && selected.workspace_root === workspaceRoot}
               {#key `${workspaceRoot}/${selected.session.session_id}`}
-                <SessionModelPicker {workspaceRoot} sessionID={selected.session.session_id} disabled={sending || sessionLoading} bind:saving={modelSaving} />
+                <SessionModelPicker {workspaceRoot} sessionID={selected.session.session_id} disabled={sending || sessionLoading} bind:saving={modelSaving} bind:agent={sessionAgent} />
               {/key}
             {/if}
             <p>{sending ? 'Enter to redirect the current work with guidance' : 'Enter to send'} · Shift+Enter for a new line · {selectedRegistration?.kind === 'chat' ? 'Personal chat' : workspaceRoot}</p>

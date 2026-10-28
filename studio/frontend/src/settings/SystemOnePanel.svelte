@@ -4,6 +4,7 @@
   import type { ServiceAPIKey, SystemOneModelOption, SystemOneProvider } from './types';
   import { apiError as responseError } from '../api';
   import { putSettings, writeSettings } from './persistence';
+  import { acknowledgeProviderDraft, captureProviderDraft, markProviderDraft } from './providerDrafts';
   import type { QueueSave } from './persistence';
   import type { SettingsSnapshot } from './types';
 
@@ -42,12 +43,16 @@
 
   function saveSystemOneProvider(provider: SystemOneProvider) {
     const originalID = provider._original_id || provider.id;
-    const nextID = provider.id;
+    const nextID = provider.id.trim();
+    const submitted = captureProviderDraft(provider);
     const payload = JSON.stringify({ id: provider.id, uri: provider.uri, api_key_env: provider.api_key_env });
     queueSave(async () => {
       const currentID = providerIDs.get(provider) || originalID;
       const snapshot = await putSettings(`/api/v1/settings/system-one/providers/${encodeURIComponent(currentID)}`, payload);
       providerIDs.set(provider, nextID);
+      // Match the acknowledged provider even if its ID has been edited again.
+      provider._original_id = nextID;
+      acknowledgeProviderDraft(provider, submitted);
       return snapshot;
     });
   }
@@ -147,9 +152,9 @@
       <article class="settings-card provider-card system-one-provider-card">
         <div class="card-heading"><div><h3>{provider.id}</h3><p>Native System One endpoint</p></div><button class="danger-icon" title="Delete provider" onclick={() => deleteSystemOneProvider(provider)}><Trash2 aria-hidden="true" size={16} /></button></div>
         <div class="provider-fields system-one-provider-fields">
-          <label><span>Provider ID</span><input bind:value={provider.id} onchange={() => saveSystemOneProvider(provider)} /></label>
-          <label class="wide-field"><span>Endpoint URI</span><input placeholder="https://example.com/v1/systemone" bind:value={provider.uri} onchange={() => saveSystemOneProvider(provider)} /></label>
-          <label><span>API key environment</span><input placeholder="Optional · unauthenticated when empty" bind:value={provider.api_key_env} onchange={() => saveSystemOneProvider(provider)} /></label>
+          <label><span>Provider ID</span><input bind:value={provider.id} oninput={() => markProviderDraft(provider, 'id')} onchange={() => saveSystemOneProvider(provider)} /></label>
+          <label class="wide-field"><span>Endpoint URI</span><input placeholder="https://example.com/v1/systemone" bind:value={provider.uri} oninput={() => markProviderDraft(provider, 'uri')} onchange={() => saveSystemOneProvider(provider)} /></label>
+          <label><span>API key environment</span><input placeholder="Optional · unauthenticated when empty" bind:value={provider.api_key_env} oninput={() => markProviderDraft(provider, 'api_key_env')} onchange={() => saveSystemOneProvider(provider)} /></label>
         </div>
       </article>
     {/each}
