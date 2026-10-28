@@ -56,7 +56,7 @@ func TestSessionACPSelectionSurvivesReset(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := store.SaveSessionModelConfig(SessionModelConfig{Agent: "local-acp", AgentModel: "external/model"}); err != nil {
+	if err := store.SaveSessionModelConfig(SessionModelConfig{Agent: "local-acp", AgentModel: "external/model", AgentReasoningEffort: "high"}); err != nil {
 		t.Fatal(err)
 	}
 	if err := lock.Close(); err != nil {
@@ -66,12 +66,13 @@ func TestSessionACPSelectionSurvivesReset(t *testing.T) {
 		t.Fatal(err)
 	}
 	selected, err := store.LoadSessionModelConfig()
-	if err != nil || selected.Agent != "local-acp" || selected.AgentModel != "external/model" || selected.Model != "" {
+	if err != nil || selected.Agent != "local-acp" || selected.AgentModel != "external/model" || selected.AgentReasoningEffort != "high" || selected.Model != "" {
 		t.Fatalf("ACP selection after clear = %+v, %v", selected, err)
 	}
 	for _, invalid := range []SessionModelConfig{
 		{Agent: "local-acp", Model: "provider/model"}, {Agent: "local-acp", ReasoningEffort: "high"}, {Agent: " local-acp"}, {Agent: "other/agent"},
 		{AgentModel: "model"}, {Agent: "local-acp", AgentModel: " model"},
+		{AgentReasoningEffort: "high"}, {Agent: "local-acp", AgentReasoningEffort: " high"},
 	} {
 		if err := invalid.Validate(); err == nil {
 			t.Fatalf("invalid ACP selection accepted: %+v", invalid)

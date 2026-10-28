@@ -79,16 +79,16 @@
     </optgroup>
   </select>
   {#if agent}{#key agent}<ACPModelPicker {workspaceRoot} {sessionID} disabled={disabled || saving} bind:saving />{/key}{/if}
-  <select class="effort-select" aria-label="Reasoning effort" title="Reasoning effort for this chat" bind:value={effort} onchange={save} disabled={disabled || loading || saving || !selection || model.startsWith('acp:')}>
-    <option value="">{model.startsWith('acp:') ? 'Agent default' : 'Reasoning: default'}{selection?.effective_reasoning_effort && !selection.reasoning_effort ? ` · ${selection.effective_reasoning_effort}` : ''}</option>
+  {#if !agent}<select class="effort-select" aria-label="Reasoning effort" title="Reasoning effort for this chat" bind:value={effort} onchange={save} disabled={disabled || loading || saving || !selection}>
+    <option value="">Reasoning: default{selection?.effective_reasoning_effort && !selection.reasoning_effort ? ` · ${selection.effective_reasoning_effort}` : ''}</option>
     {#each reasoningOptions(model || selection?.effective_model || '', effort || selection?.effective_reasoning_effort || '', models) as option}<option value={option}>{option}</option>{/each}
-  </select>
+  </select>{/if}
   {#if saving}<span class="model-status" role="status">Saving…</span>{/if}
   {#if error || (catalogError && !agents.length) || agentError}<span class="model-error" role="alert">{error || (agents.length ? '' : catalogError) || agentError}</span>{/if}
 </div>
 
 <style>
-  .session-model-picker { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; max-width: min(420px, 50%); min-width: 0; font-size: 12px; }
+  .session-model-picker { display: flex; align-items: center; flex-wrap: nowrap; gap: 8px; max-width: 100%; min-width: 0; font-size: 12px; }
   select { width: auto; min-width: 0; max-width: 100%; padding: 5px 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface-raised); color: var(--text); font: inherit; }
   .model-select { width: 220px; }
   .effort-select { max-width: min(160px, 100%); }

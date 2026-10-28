@@ -266,9 +266,11 @@ Studio is the primary interface for daily Q work:
   The Session model picker also lists enabled ACP connections. Each chat owns
   its ACP process and conversation, with streamed replies and interactive tool
   approvals. Agents that offer a model config option expose an **ACP model**
-  selector. Changes keep the same live ACP session, persist per chat, and are
-  reapplied on reopening. Other agents retain their model default. ACP uses the
-  agent's reasoning defaults and needs no API model configured in Q.
+  selector, and agents that offer a thought-level option expose a reasoning
+  selector beside it. Changes keep the same live ACP session, persist per chat,
+  and are reapplied on reopening. Model changes refresh the available reasoning
+  levels. Unsupported controls remain disabled and labeled as not exposed.
+  ACP needs no API model configured in Q.
   Replies show reported cached tokens and cache hit rate, including after reload;
   missing cache counters remain unavailable rather than appearing as zero.
   On reopening, Q uses ACP resume/load when available;

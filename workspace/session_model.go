@@ -17,10 +17,11 @@ import (
 // and empty reasoning effort inherits the global default. Selections survive
 // conversation clear.
 type SessionModelConfig struct {
-	Model           string `json:"model"`
-	Agent           string `json:"agent,omitempty"`
-	AgentModel      string `json:"agent_model,omitempty"`
-	ReasoningEffort string `json:"reasoning_effort,omitempty"`
+	Model                string `json:"model"`
+	Agent                string `json:"agent,omitempty"`
+	AgentModel           string `json:"agent_model,omitempty"`
+	AgentReasoningEffort string `json:"agent_reasoning_effort,omitempty"`
+	ReasoningEffort      string `json:"reasoning_effort,omitempty"`
 }
 
 func (s Store) SessionModelPath() string { return filepath.Join(s.SessionDir(), ModelFileName) }
@@ -66,17 +67,19 @@ func (value SessionModelConfig) Validate() error {
 			return errors.New("workspace: invalid ACP connection ID")
 		}
 		if value.Model != "" || value.ReasoningEffort != "" {
-			return errors.New("workspace: ACP sessions use the agent's model and reasoning defaults")
+			return errors.New("workspace: ACP sessions use agent-specific model and reasoning settings")
 		}
 	}
 	if value.Model != strings.TrimSpace(value.Model) || len(value.Model) > 4096 {
 		return errors.New("workspace: session model must be at most 4096 bytes without surrounding whitespace")
 	}
-	if value.AgentModel != "" && value.Agent == "" {
-		return errors.New("workspace: an ACP model requires an ACP connection")
-	}
-	if value.AgentModel != strings.TrimSpace(value.AgentModel) || len(value.AgentModel) > 4096 {
-		return errors.New("workspace: ACP model must be at most 4096 bytes without surrounding whitespace")
+	for _, choice := range []struct{ name, value string }{{"model", value.AgentModel}, {"reasoning effort", value.AgentReasoningEffort}} {
+		if choice.value != "" && value.Agent == "" {
+			return fmt.Errorf("workspace: an ACP %s requires an ACP connection", choice.name)
+		}
+		if choice.value != strings.TrimSpace(choice.value) || len(choice.value) > 4096 {
+			return fmt.Errorf("workspace: ACP %s must be at most 4096 bytes without surrounding whitespace", choice.name)
+		}
 	}
 	if strings.ContainsAny(value.ReasoningEffort, " \t\r\n") || len(value.ReasoningEffort) > 64 {
 		return errors.New("workspace: reasoning effort must be at most 64 bytes without surrounding whitespace")

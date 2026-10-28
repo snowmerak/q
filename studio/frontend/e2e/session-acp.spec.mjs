@@ -83,11 +83,11 @@ test('Providers groups API and ACP while Sessions chats with an ACP agent', asyn
     const composer = page.getByRole('textbox', { name: 'Message Q', exact: true });
     await picker.selectOption(`acp:${id}`);
     await expect(picker).toBeEnabled();
-    await expect(effort).toBeDisabled();
+    await expect(effort).toBeEnabled();
     await page.getByLabel('More session actions', { exact: true }).click();
     await expect(page.getByRole('button', { name: 'Compact context', exact: true })).toBeDisabled();
     await page.keyboard.press('Escape');
-    await expect(effort.locator('option:checked')).toHaveText('Agent default');
+    await expect(effort.locator('option:checked')).toHaveText('Medium');
     await composer.fill('hello ACP');
     await composer.press('Enter');
     await expect(page.getByText('ACP answer: hello ACP', { exact: true })).toBeVisible();
@@ -102,14 +102,15 @@ test('Providers groups API and ACP while Sessions chats with an ACP agent', asyn
     await page.reload();
     await expect(picker).toHaveValue(`acp:${id}`);
     await expect(page.getByText('ACP answer: hello ACP', { exact: true })).toBeVisible();
-    await expect(effort).toBeDisabled();
+    await expect(effort).toBeEnabled();
     await page.screenshot({ path: join(tmpdir(), 'q-session-acp.png') });
     await picker.selectOption('');
     await expect(effort).toBeEnabled();
     await expect(picker).toHaveValue('');
     expect(errors).toEqual([]);
   } finally {
-    await request.delete(`/api/v1/chats/${chat.registration_id}`);
+    const deleted = await request.delete(`/api/v1/chats/${chat.registration_id}`);
+    expect(deleted.status(), await deleted.text()).toBe(204);
   }
 });
 
@@ -162,9 +163,13 @@ test('ACP model selection stays in the session and cache hit rates survive reloa
     await page.goto(`/sessions/${chat.registration_id}`);
     await page.getByRole('combobox', { name: 'Session model', exact: true }).selectOption(`acp:${id}`);
     const model = page.getByRole('combobox', { name: 'ACP model', exact: true });
+    const effort = page.getByRole('combobox', { name: 'Reasoning effort', exact: true });
     const composer = page.getByRole('textbox', { name: 'Message Q', exact: true });
     await expect(model).toBeEnabled();
     await expect(model).toHaveValue('fixture-a');
+    await expect(effort).toHaveValue('medium');
+    await effort.selectOption('high');
+    await expect(effort).toBeEnabled();
     await model.selectOption('fixture-b');
     await expect(model).toBeEnabled();
     await composer.fill('model');
@@ -175,6 +180,9 @@ test('ACP model selection stays in the session and cache hit rates survive reloa
     await page.reload();
     await expect(model).toBeEnabled();
     await expect(model).toHaveValue('fixture-b');
+    await expect(effort).toHaveValue('high');
+    await expect(effort.locator('option[value="low"]')).toHaveCount(0);
+    expect(Math.abs((await model.boundingBox()).y - (await effort.boundingBox()).y)).toBeLessThanOrEqual(1);
     await expect(reply.locator('.response-usage')).toContainText('Cache hit 60%');
     await model.selectOption('rejected');
     await expect(model).toHaveValue('fixture-b');
@@ -191,12 +199,14 @@ test('ACP model selection stays in the session and cache hit rates survive reloa
     await page.screenshot({ path: join(tmpdir(), 'q-acp-model-cache.png') });
     await page.setViewportSize({ width: 390, height: 844 });
     await model.scrollIntoViewIfNeeded();
+    expect(Math.abs((await model.boundingBox()).y - (await effort.boundingBox()).y)).toBeLessThanOrEqual(1);
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
     await page.screenshot({ path: join(tmpdir(), 'q-acp-model-cache-mobile.png') });
     await composer.fill('permission');
     await composer.press('Enter');
     await expect(page.getByRole('heading', { name: 'Edit fixture file', exact: true })).toBeVisible();
     await expect(model).toBeDisabled();
+    await expect(effort).toBeDisabled();
     await page.getByRole('button', { name: /^Allow/ }).click();
     await expect(model).toBeEnabled();
     expect(errors).toEqual([]);
@@ -215,6 +225,9 @@ test('ACP agents without a model selector retain their default model', async ({ 
     const model = page.getByRole('combobox', { name: 'ACP model', exact: true });
     await expect(model).toBeDisabled();
     await expect(model.locator('option:checked')).toContainText('model selection unavailable');
+    const effort = page.getByRole('combobox', { name: 'Reasoning effort', exact: true });
+    await expect(effort).toBeDisabled();
+    await expect(effort.locator('option:checked')).toContainText('not exposed');
     const composer = page.getByRole('textbox', { name: 'Message Q', exact: true });
     await composer.fill('hello');
     await composer.press('Enter');

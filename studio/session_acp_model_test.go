@@ -55,11 +55,38 @@ func TestStudioACPModelsSwitchInPlaceAndPersistUsage(t *testing.T) {
 				return result
 			}
 			selectAgent("fixture")
+			reasoningRequest := func(effort string) app.ACPModelSettings {
+				t.Helper()
+				response := serveJSON(t, fixture.handler, http.MethodPut, base+"/acp/model", map[string]string{"workspace_root": fixture.root, "reasoning_effort": effort})
+				if response.Code != 200 {
+					t.Fatalf("ACP reasoning: %d %s", response.Code, response.Body.String())
+				}
+				var result app.ACPModelSettings
+				if err := json.Unmarshal(response.Body.Bytes(), &result); err != nil {
+					t.Fatal(err)
+				}
+				return result
+			}
 			initial := modelRequest(http.MethodPost, "")
 			if !initial.Supported || initial.CurrentModel != "fixture-a" || len(initial.Models) != 3 {
 				t.Fatalf("models = %+v", initial)
 			}
+			if !initial.ReasoningSupported || initial.CurrentReasoningEffort != "medium" || len(initial.ReasoningEfforts) != 3 {
+				t.Fatalf("reasoning options = %+v", initial)
+			}
+			reasoningRequest("low")
 			changed := modelRequest(http.MethodPut, "fixture-b")
+			if changed.CurrentReasoningEffort != "medium" || len(changed.ReasoningEfforts) != 2 {
+				t.Fatalf("model-specific efforts = %+v", changed)
+			}
+			reasoningRequest("high")
+			invalidPair := serveJSON(t, fixture.handler, http.MethodPut, base+"/acp/model", map[string]string{"workspace_root": fixture.root, "model": "fixture-a", "reasoning_effort": "unknown"})
+			if invalidPair.Code != 422 {
+				t.Fatalf("invalid effort accepted: %d %s", invalidPair.Code, invalidPair.Body.String())
+			}
+			if rolledBack := modelRequest(http.MethodPost, ""); rolledBack.CurrentModel != "fixture-b" || rolledBack.CurrentReasoningEffort != "high" {
+				t.Fatalf("failed pair was not rolled back: %+v", rolledBack)
+			}
 			if changed.CurrentModel != "fixture-b" {
 				t.Fatalf("change = %+v", changed)
 			}
@@ -70,7 +97,7 @@ func TestStudioACPModelsSwitchInPlaceAndPersistUsage(t *testing.T) {
 				}
 			}
 			selection, err := fixture.session.LoadSessionModelConfig()
-			if err != nil || selection.AgentModel != "fixture-b" {
+			if err != nil || selection.AgentModel != "fixture-b" || selection.AgentReasoningEffort != "high" {
 				t.Fatalf("saved model = %+v, %v", selection, err)
 			}
 			server := httptest.NewServer(fixture.handler)
@@ -99,7 +126,7 @@ func TestStudioACPModelsSwitchInPlaceAndPersistUsage(t *testing.T) {
 			}
 			run("second")
 			selectAgent("fixture") // Reopen; the requested model must be reapplied.
-			if reopened := modelRequest(http.MethodPost, ""); reopened.CurrentModel != "fixture-b" {
+			if reopened := modelRequest(http.MethodPost, ""); reopened.CurrentModel != "fixture-b" || reopened.CurrentReasoningEffort != "high" {
 				t.Fatalf("restored model = %+v", reopened)
 			}
 			if result := run("model"); result.Content != "ACP model: fixture-b" {
@@ -117,7 +144,7 @@ func TestStudioACPModelsSwitchInPlaceAndPersistUsage(t *testing.T) {
 				}
 				calls = append(calls, call)
 			}
-			if len(calls) != 3 || calls[0]["session"] != calls[1]["session"] || calls[0]["model"] != "fixture-b" {
+			if len(calls) != 3 || calls[0]["session"] != calls[1]["session"] || calls[0]["model"] != "fixture-b" || calls[0]["reasoning_effort"] != "high" || calls[2]["reasoning_effort"] != "high" {
 				t.Fatalf("model switch reopened the session: %+v", calls)
 			}
 			if resume && calls[0]["session"] != calls[2]["session"] {
@@ -149,7 +176,7 @@ func TestStudioACPModelsSwitchInPlaceAndPersistUsage(t *testing.T) {
 				t.Fatalf("unsupported models = %+v", unsupported)
 			}
 			selection, err = fixture.session.LoadSessionModelConfig()
-			if err != nil || selection.AgentModel != "" {
+			if err != nil || selection.AgentModel != "" || selection.AgentReasoningEffort != "" {
 				t.Fatalf("provider change retained a foreign model: %+v, %v", selection, err)
 			}
 		})

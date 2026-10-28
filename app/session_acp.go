@@ -26,7 +26,7 @@ type acpSessionCheckpoint struct {
 }
 
 func acpSessionPath(store workspace.Store) string {
-	return filepath.Join(store.SessionDir(), "acp-session.json")
+	return filepath.Join(store.SessionDir(), workspace.ACPSessionFileName)
 }
 
 func acpTranscriptDigest(messages []client.Message) [32]byte {
@@ -34,7 +34,8 @@ func acpTranscriptDigest(messages []client.Message) [32]byte {
 	return sha256.Sum256(body)
 }
 
-func (host *SessionHost) prepareACPSession(ctx context.Context, prepared *preparedSession, loaded config.Config, agent, agentModel string) (*preparedSession, error) {
+func (host *SessionHost) prepareACPSession(ctx context.Context, prepared *preparedSession, loaded config.Config, selected workspace.SessionModelConfig) (*preparedSession, error) {
+	agent := selected.Agent
 	if err := prepared.store.RequireInteraction(); err != nil {
 		return nil, err
 	}
@@ -72,8 +73,13 @@ func (host *SessionHost) prepareACPSession(ctx context.Context, prepared *prepar
 		return nil, err
 	}
 	prepared.client = remote
-	if agentModel != "" && remote.modelSettings().CurrentModel != agentModel {
-		if err := remote.setModel(ctx, agentModel); err != nil {
+	if selected.AgentModel != "" && remote.modelSettings().CurrentModel != selected.AgentModel {
+		if err := remote.setModel(ctx, selected.AgentModel); err != nil {
+			return nil, err
+		}
+	}
+	if selected.AgentReasoningEffort != "" && remote.modelSettings().CurrentReasoningEffort != selected.AgentReasoningEffort {
+		if err := remote.setReasoningEffort(ctx, selected.AgentReasoningEffort); err != nil {
 			return nil, err
 		}
 	}

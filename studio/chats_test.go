@@ -91,6 +91,68 @@ func TestChatsPersistWithoutAWorkspaceAndDeleteOnlyTheirOwnData(t *testing.T) {
 	}
 }
 
+func TestStudioACPChatRunsAndDeletesThroughTheRealRuntime(t *testing.T) {
+	fixture := newStudioIntegration(t)
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	configured := serveJSON(t, fixture.handler, http.MethodPut, "/api/v1/settings/acp", map[string]any{"connections": map[string]config.AgentConnectionConfig{
+		"delete-fixture": {Command: executable, Env: map[string]string{"Q_STUDIO_ACP_FIXTURE": "1"}},
+	}})
+	if configured.Code != http.StatusOK {
+		t.Fatal(configured.Body.String())
+	}
+	server := httptest.NewServer(fixture.handler)
+	defer server.Close()
+	chat := createTestChat(t, fixture.handler)
+	chatFixture := fixture
+	chatFixture.root = chat.WorkspaceRoot
+	chatFixture.session = workspace.Store{Root: chat.WorkspaceRoot, SessionID: chat.Session.SessionID}
+	selected := serveJSON(t, fixture.handler, http.MethodPut, "/api/v1/sessions/"+chat.Session.SessionID+"/model", map[string]string{"workspace_root": chat.WorkspaceRoot, "agent": "delete-fixture"})
+	if selected.Code != http.StatusOK {
+		t.Fatal(selected.Body.String())
+	}
+	run := chatFixture.start(t, "hello ACP")
+	endpoint := server.URL + "/api/v1/sessions/" + chat.Session.SessionID + "/runs/" + run.ID + "/events?workspace_root=" + url.QueryEscape(chat.WorkspaceRoot)
+	page := waitStudioPage(t, endpoint, func(page studioRunPage) bool { return terminalRunStatus(page.Run.Status) })
+	if page.Run.Status != "completed" {
+		t.Fatalf("ACP turn = %+v", page.Run)
+	}
+	if _, err := os.Stat(filepath.Join(chatFixture.session.SessionDir(), workspace.ACPSessionFileName)); err != nil {
+		t.Fatalf("ACP checkpoint missing: %v", err)
+	}
+	response := serveJSON(t, fixture.handler, http.MethodDelete, "/api/v1/chats/"+chat.RegistrationID, nil)
+	if response.Code != http.StatusNoContent {
+		t.Fatalf("delete ACP chat = %d %s", response.Code, response.Body.String())
+	}
+	if _, err := os.Stat(chat.WorkspaceRoot); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("ACP chat directory remains: %v", err)
+	}
+}
+
+func TestStudioChatRetriesDeletionWithOnlyACPCheckpointRemaining(t *testing.T) {
+	handler, err := newHandler(config.Store{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	chat := createTestChat(t, handler)
+	store := workspace.Store{Root: chat.WorkspaceRoot, SessionID: chat.Session.SessionID}
+	if err := os.WriteFile(filepath.Join(store.SessionDir(), workspace.ACPSessionFileName), []byte(`{"session_id":"previous-session"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(store.Path()); err != nil {
+		t.Fatal(err)
+	}
+	response := serveJSON(t, handler, http.MethodDelete, "/api/v1/chats/"+chat.RegistrationID, nil)
+	if response.Code != http.StatusNoContent {
+		t.Fatalf("retry delete = %d %s", response.Code, response.Body.String())
+	}
+	if _, err := os.Stat(chat.WorkspaceRoot); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("partially deleted ACP chat remains: %v", err)
+	}
+}
+
 func TestStudioChatRunsAndDeletesThroughTheRealRuntime(t *testing.T) {
 	fixture := newStudioIntegration(t)
 	server := httptest.NewServer(fixture.handler)

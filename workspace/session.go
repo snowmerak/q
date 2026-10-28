@@ -24,7 +24,9 @@ const (
 	DirectoryName  = ".q"
 	SessionsName   = "sessions"
 	FileName       = "session.json"
-	maximumSize    = 64 << 20
+	// ACPSessionFileName stores the external session ID used when reconnecting.
+	ACPSessionFileName = "acp-session.json"
+	maximumSize        = 64 << 20
 )
 
 var ErrNotFound = errors.New("q workspace session not found")
@@ -361,8 +363,8 @@ func (s Store) ListSessions() ([]SessionEntry, error) {
 	return result, nil
 }
 
-// ClearSession removes the persisted conversation, execution projection, and
-// Thinker write-ahead checkpoint for one session, then removes its empty
+// ClearSession removes the persisted conversation, execution projection, ACP
+// resume metadata and Thinker checkpoint for one session, then removes its empty
 // session directory. Its lock file lives outside the session directory and is
 // intentionally retained as reusable metadata.
 func (s Store) ClearSession() error {
@@ -397,6 +399,17 @@ func (s Store) ClearSession() error {
 		return err
 	}); err != nil {
 		return fmt.Errorf("workspace: remove retired session workspace settings: %w", err)
+	}
+	// Remove resume metadata before the conversation so a removal failure
+	// leaves the session discoverable and can be retried through Studio.
+	if err := withLoomRootMutation(s.Root, func() error {
+		err := os.Remove(filepath.Join(s.SessionDir(), ACPSessionFileName))
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		return err
+	}); err != nil {
+		return fmt.Errorf("workspace: remove ACP session checkpoint: %w", err)
 	}
 	if err := s.Clear(); err != nil {
 		return err

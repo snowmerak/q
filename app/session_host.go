@@ -526,7 +526,7 @@ func (host *SessionHost) prepareSession(runContext context.Context, workspaceSto
 			return nil, err
 		}
 		if selection.Agent != "" {
-			return host.prepareACPSession(runContext, prepared, loaded, selection.Agent, selection.AgentModel)
+			return host.prepareACPSession(runContext, prepared, loaded, selection)
 		}
 		if loaded.Provider.Model == "" {
 			loaded.Provider.Model = selection.Model

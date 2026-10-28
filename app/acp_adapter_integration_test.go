@@ -88,6 +88,26 @@ func TestNPMACPModelSelection(t *testing.T) {
 				t.Fatal("installed adapter did not offer model selection")
 			}
 			beforeID := remote.sessionID
+			checkReasoning := func() {
+				current := remote.modelSettings()
+				if !current.ReasoningSupported {
+					t.Fatal("installed adapter did not offer reasoning controls")
+				}
+				for _, effort := range current.ReasoningEfforts {
+					if effort.ID == current.CurrentReasoningEffort {
+						continue
+					}
+					if err := remote.setReasoningEffort(ctx, effort.ID); err != nil {
+						t.Fatal(err)
+					}
+					if remote.sessionID != beforeID || remote.modelSettings().CurrentReasoningEffort != effort.ID {
+						t.Fatal("reasoning change replaced the session or was not applied")
+					}
+					t.Logf("%s: changed reasoning from %s to %s in the same ACP session", preset, current.CurrentReasoningEffort, effort.ID)
+					return
+				}
+				t.Logf("%s: one reasoning level offered (%s)", preset, current.CurrentReasoningEffort)
+			}
 			for _, model := range settings.Models {
 				if model.ID == settings.CurrentModel {
 					continue
@@ -99,9 +119,11 @@ func TestNPMACPModelSelection(t *testing.T) {
 					t.Fatal("model change replaced the ACP session or was not applied")
 				}
 				t.Logf("%s: %d models; changed %s to %s in the same ACP session", preset, len(settings.Models), settings.CurrentModel, model.ID)
+				checkReasoning()
 				return
 			}
 			t.Logf("%s: one model offered (%s)", preset, settings.CurrentModel)
+			checkReasoning()
 		})
 	}
 }

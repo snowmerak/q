@@ -75,6 +75,58 @@ func TestSessionStoresIsolateConversationAndExecution(t *testing.T) {
 	}
 }
 
+func TestClearSessionRemovesACPCheckpointAndCanRetryPartialDeletion(t *testing.T) {
+	for _, partial := range []bool{false, true} {
+		t.Run(map[bool]string{false: "conversation", true: "checkpoint only"}[partial], func(t *testing.T) {
+			store := Store{Root: t.TempDir(), SessionID: "11111111-1111-4111-8111-111111111111"}
+			if err := store.Save(Session{Transcript: []client.Message{{Role: client.RoleUser, Content: "ACP conversation"}}}); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(store.SessionDir(), ACPSessionFileName), []byte(`{"session_id":"remote-session"}`), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if partial {
+				if err := os.Remove(store.Path()); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := store.ClearSession(); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := os.Stat(store.SessionDir()); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("ACP session directory remains: %v", err)
+			}
+			if err := store.ClearSession(); err != nil {
+				t.Fatalf("repeat delete: %v", err)
+			}
+		})
+	}
+}
+
+func TestClearSessionKeepsConversationWhenACPCheckpointCannotBeRemoved(t *testing.T) {
+	store := Store{Root: t.TempDir(), SessionID: "11111111-1111-4111-8111-111111111111"}
+	if err := store.Save(Session{}); err != nil {
+		t.Fatal(err)
+	}
+	checkpoint := filepath.Join(store.SessionDir(), ACPSessionFileName)
+	if err := os.Mkdir(checkpoint, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	blocker := filepath.Join(checkpoint, "unexpected.txt")
+	if err := os.WriteFile(blocker, []byte("retain unexpected data"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.ClearSession(); err == nil {
+		t.Fatal("expected checkpoint removal to fail")
+	}
+	if _, err := store.Load(); err != nil {
+		t.Fatalf("failed checkpoint removal lost the conversation: %v", err)
+	}
+	if _, err := os.Stat(blocker); err != nil {
+		t.Fatalf("unexpected data was removed: %v", err)
+	}
+}
+
 func TestSessionLocksAllowDifferentSessionsOnly(t *testing.T) {
 	root := t.TempDir()
 	first, firstLock, err := CreateSession(root, "first")

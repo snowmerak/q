@@ -22,6 +22,7 @@ type studioACPFixture struct {
 	connection *acp.AgentSideConnection
 	id         acp.SessionId
 	model      string
+	effort     string
 }
 
 func (agent *studioACPFixture) configOptions() []acp.SessionConfigOption {
@@ -29,20 +30,41 @@ func (agent *studioACPFixture) configOptions() []acp.SessionConfigOption {
 		return nil
 	}
 	options := acp.SessionConfigSelectOptionsUngrouped{{Value: "fixture-a", Name: "Fixture A"}, {Value: "fixture-b", Name: "Fixture B"}, {Value: "rejected", Name: "Rejected model"}}
-	return []acp.SessionConfigOption{{Select: &acp.SessionConfigOptionSelect{
+	result := []acp.SessionConfigOption{{Select: &acp.SessionConfigOptionSelect{
 		Id: "fixture-model", Name: "Model", Type: "select", Category: new(acp.SessionConfigOptionCategoryModel), CurrentValue: acp.SessionConfigValueId(agent.model),
 		Options: acp.SessionConfigSelectOptions{Ungrouped: &options},
 	}}}
+	if os.Getenv("Q_STUDIO_ACP_NO_REASONING") != "1" {
+		efforts := acp.SessionConfigSelectOptionsUngrouped{{Value: "medium", Name: "Medium"}, {Value: "high", Name: "High"}}
+		if agent.model == "fixture-a" {
+			efforts = append(acp.SessionConfigSelectOptionsUngrouped{{Value: "low", Name: "Low"}}, efforts...)
+		}
+		result = append(result, acp.SessionConfigOption{Select: &acp.SessionConfigOptionSelect{
+			Id: "fixture-effort", Name: "Reasoning effort", Type: "select", Category: new(acp.SessionConfigOptionCategoryThoughtLevel), CurrentValue: acp.SessionConfigValueId(agent.effort),
+			Options: acp.SessionConfigSelectOptions{Ungrouped: &efforts},
+		}})
+	}
+	return result
 }
 
 func (agent *studioACPFixture) SetSessionConfigOption(_ context.Context, request acp.SetSessionConfigOptionRequest) (acp.SetSessionConfigOptionResponse, error) {
-	if request.ValueId == nil || request.ValueId.ConfigId != "fixture-model" || request.ValueId.SessionId != agent.id {
+	if request.ValueId == nil || request.ValueId.SessionId != agent.id {
 		return acp.SetSessionConfigOptionResponse{}, fmt.Errorf("invalid model request")
 	}
 	if request.ValueId.Value == "rejected" {
 		return acp.SetSessionConfigOptionResponse{}, fmt.Errorf("model change rejected")
 	}
-	agent.model = string(request.ValueId.Value)
+	switch request.ValueId.ConfigId {
+	case "fixture-model":
+		agent.model = string(request.ValueId.Value)
+		if agent.model == "fixture-b" && agent.effort == "low" {
+			agent.effort = "medium"
+		}
+	case "fixture-effort":
+		agent.effort = string(request.ValueId.Value)
+	default:
+		return acp.SetSessionConfigOptionResponse{}, fmt.Errorf("unknown config option")
+	}
 	return acp.SetSessionConfigOptionResponse{ConfigOptions: agent.configOptions()}, nil
 }
 
@@ -63,12 +85,14 @@ func (agent *studioACPFixture) Initialize(context.Context, acp.InitializeRequest
 func (agent *studioACPFixture) NewSession(context.Context, acp.NewSessionRequest) (acp.NewSessionResponse, error) {
 	agent.id = acp.SessionId(fmt.Sprintf("fixture-%d", os.Getpid()))
 	agent.model = "fixture-a"
+	agent.effort = "medium"
 	return acp.NewSessionResponse{SessionId: agent.id, ConfigOptions: agent.configOptions()}, nil
 }
 
 func (agent *studioACPFixture) ResumeSession(_ context.Context, request acp.ResumeSessionRequest) (acp.ResumeSessionResponse, error) {
 	agent.id = request.SessionId
 	agent.model = "fixture-a"
+	agent.effort = "medium"
 	return acp.ResumeSessionResponse{ConfigOptions: agent.configOptions()}, nil
 }
 
@@ -81,7 +105,7 @@ func (agent *studioACPFixture) Prompt(ctx context.Context, request acp.PromptReq
 		if err != nil {
 			return acp.PromptResponse{}, err
 		}
-		_ = json.NewEncoder(file).Encode(map[string]string{"session": string(agent.id), "prompt": text, "model": agent.model})
+		_ = json.NewEncoder(file).Encode(map[string]string{"session": string(agent.id), "prompt": text, "model": agent.model, "reasoning_effort": agent.effort})
 		_ = file.Close()
 	}
 	if text == "wait" {
@@ -107,6 +131,9 @@ func (agent *studioACPFixture) Prompt(ctx context.Context, request acp.PromptReq
 	answer := "ACP answer: " + text
 	if text == "model" {
 		answer = "ACP model: " + agent.model
+	}
+	if text == "reasoning" {
+		answer = "ACP reasoning: " + agent.effort
 	}
 	err := agent.connection.SessionUpdate(ctx, acp.SessionNotification{SessionId: agent.id, Update: acp.UpdateAgentMessageText(answer)})
 	usage := &acp.Usage{InputTokens: 20, OutputTokens: 10, TotalTokens: 110, CachedReadTokens: new(60), CachedWriteTokens: new(20)}
