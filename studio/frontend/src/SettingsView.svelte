@@ -12,8 +12,9 @@
   import RuntimePanel from './settings/RuntimePanel.svelte';
   import ServicesPanel from './settings/ServicesPanel.svelte';
   import TransferPanel from './settings/TransferPanel.svelte';
+  import { preserveProviderDrafts } from './settings/providerDrafts';
   import type { SettingsBundle } from './settings/transfer';
-  import type { SaveState, SettingsSection, SettingsSnapshot } from './settings/types';
+  import type { GatewayProvider, SystemOneProvider, SaveState, SettingsSection, SettingsSnapshot } from './settings/types';
 
   // The cache and write queue survive section and page navigation.
   export let active = false;
@@ -33,6 +34,8 @@
 
   let activeSection: SettingsSection = sectionFromLocation();
   let settings: SettingsSnapshot | null = null;
+  let savedProviders: GatewayProvider[] = [];
+  let savedSystemOneProviders: SystemOneProvider[] = [];
   let settingsError = '';
   let settingsLoading = false;
   let saveState: SaveState = { kind: 'idle' };
@@ -58,13 +61,23 @@
     }
   }
 
-  function adoptSettings(snapshot: SettingsSnapshot) {
+  function adoptSettings(snapshot: SettingsSnapshot, preserveDrafts = true) {
     for (const provider of snapshot.gateway_providers.items) {
       provider._original_id = provider.id;
       provider._original_type = provider.type;
       provider._original_enabled = provider.enabled;
     }
     for (const provider of snapshot.system_one.providers) provider._original_id = provider.id;
+    const nextSavedProviders = snapshot.gateway_providers.items.map(provider => ({ ...provider }));
+    const nextSavedSystemOneProviders = snapshot.system_one.providers.map(provider => ({ ...provider }));
+    if (settings && preserveDrafts) {
+      preserveProviderDrafts(snapshot.gateway_providers.items, settings.gateway_providers.items, savedProviders,
+        ['id', 'type', 'kind', 'prefix', 'enabled', 'base_url', 'api_key_env', 'api_key']);
+      preserveProviderDrafts(snapshot.system_one.providers, settings.system_one.providers, savedSystemOneProviders,
+        ['id', 'uri', 'api_key_env']);
+    }
+    savedProviders = nextSavedProviders;
+    savedSystemOneProviders = nextSavedSystemOneProviders;
     settings = snapshot;
   }
 
@@ -110,7 +123,7 @@
     saveState = { kind: 'saving' };
     try {
       const result = await requestJSON<{ settings: SettingsSnapshot; warning?: string }>('POST', '/api/v1/settings/transfer/import', bundle);
-      if (generation === saveGeneration) adoptSettings(result.settings);
+      if (generation === saveGeneration) adoptSettings(result.settings, false);
       saveState = { kind: 'saved' };
       savedTimer = setTimeout(() => saveState = { kind: 'idle' }, 2400);
       return result.warning;

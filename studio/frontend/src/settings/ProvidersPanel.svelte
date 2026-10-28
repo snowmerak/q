@@ -36,6 +36,7 @@
   function saveProvider(provider: GatewayProvider, clearAPIKey = false) {
     const originalID = provider._original_id || provider.id;
     const nextID = provider.id;
+    const submittedKey = provider.api_key || '';
     const payload = JSON.stringify({
       id: provider.id, type: provider.type, kind: provider.kind, prefix: provider.prefix,
       enabled: provider.enabled, base_url: provider.base_url, api_key_env: provider.api_key_env,
@@ -45,6 +46,7 @@
       const currentID = providerIDs.get(provider) || originalID;
       const snapshot = await putSettings(`/api/v1/settings/gateway/providers/${encodeURIComponent(currentID)}`, payload);
       providerIDs.set(provider, nextID);
+      if (provider.api_key === submittedKey) provider.api_key = '';
       return snapshot;
     });
   }
