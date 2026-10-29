@@ -108,6 +108,9 @@ CREATE TABLE IF NOT EXISTS catalog_migrations (name TEXT PRIMARY KEY, completed_
 	if err := s.initializeCoordinator(ctx); err != nil {
 		return err
 	}
+	if err := s.initializeScheduling(ctx); err != nil {
+		return err
+	}
 	if err := s.initializeManagerRoles(ctx, version); err != nil {
 		return err
 	}

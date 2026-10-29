@@ -294,7 +294,7 @@ func (s *Store) ClaimTicket(ctx context.Context, id string, in ClaimInput) (Atte
 			limit = 3
 		}
 		var active int
-		if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM ticket_attempts WHERE json_extract(payload,'$.status') IN ('reserved','running')`).Scan(&active); err != nil {
+		if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM ticket_attempts WHERE `+activeAttempts).Scan(&active); err != nil {
 			return Attempt{}, err
 		}
 		if active >= limit {
@@ -304,7 +304,7 @@ func (s *Store) ClaimTicket(ctx context.Context, id string, in ClaimInput) (Atte
 		if err := tx.QueryRowContext(ctx, `SELECT coalesce((SELECT max_parallel_tickets FROM workspace_settings WHERE workspace_id=?),0)`, item.WorkspaceID).Scan(&projectLimit); err != nil {
 			return Attempt{}, err
 		}
-		if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM ticket_attempts WHERE workspace_id=? AND json_extract(payload,'$.status') IN ('reserved','running')`, item.WorkspaceID).Scan(&projectActive); err != nil {
+		if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM ticket_attempts WHERE workspace_id=? AND `+activeAttempts, item.WorkspaceID).Scan(&projectActive); err != nil {
 			return Attempt{}, err
 		}
 		if projectActive >= EffectiveParallel(projectLimit, limit) {
@@ -686,7 +686,7 @@ func (s *Store) RecoverExpired(ctx context.Context) error {
 		return err
 	}
 	defer func() { _ = tx.Rollback() }()
-	rows, err := tx.QueryContext(ctx, `SELECT payload FROM ticket_attempts`)
+	rows, err := tx.QueryContext(ctx, `SELECT payload FROM ticket_attempts WHERE `+leasedAttempts+` AND julianday(json_extract(payload,'$.lease_until'))<julianday(?)`, stamp(time.Now()))
 	if err != nil {
 		return err
 	}

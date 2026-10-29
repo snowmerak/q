@@ -39,7 +39,7 @@
 
 - Projects: 목록·생성·이름/디렉터리 수정·보관, 기본 세트, 참여 멤버 바인딩과 활성화, 실행 제한. 모바일에서는 프로젝트 선택기를 사용한다.
 - Sessions의 프로젝트 생성·편집 대화상자를 제거하고 프로젝트 설정 아이콘으로 연결했다. Issues/Tickets에서도 같은 설정 화면으로 이동한다.
-- Library schema 7 / protocol 11. 기본 세트는 revision을 검사하여 저장한다. 생성 요청에서 `initial_members` 생략은 저장된 기본 세트, 명시적 빈 배열은 멤버 없음이다. 갱신 시 `limits` 생략은 기존 제한을 보존한다.
+- Library schema 7 / protocol 12. 기본 세트는 revision을 검사하여 저장한다. 생성 요청에서 `initial_members` 생략은 저장된 기본 세트, 명시적 빈 배열은 멤버 없음이다. 갱신 시 `limits` 생략은 기존 제한을 보존한다.
 - 명시적 `global/name`과 `workspace/name`은 이름이 같아도 각각 선택할 수 있다. 초기 선택은 실제 프로필과 활성 ACP 연결을 검사한다. 기존 멤버/보호 세션/이력의 ID를 바꾸지 않는다.
 - 프로젝트 설정은 Library, 전역 상한은 기존 config의 `agents.max_parallel`이 원본이다. 티켓은 기존 2초 스캔 후 source 예약 트랜잭션에서 검사한다. 한도에 도달한 프로젝트는 호스트 접수 슬롯을 잡기 전에 제외하여 다른 프로젝트의 접수를 막지 않는다. Q 위임은 새 호출에서 다시 읽으며 슬롯 대기 중에도 최대 100ms 간격으로 재조회한다. 실행 중 호출은 제한 하향으로 취소하지 않는다.
 - ACP 내부 병렬성과 프로필의 기존 도구·위임 정책은 각 기존 실행 경로가 관리한다.
@@ -52,3 +52,13 @@
 - `go vet` 및 golangci-lint 2.15.0 기본 검사(errcheck, govet, ineffassign, staticcheck, unused) 통과. 프런트엔드 `check` 오류/경고 0, `build` 통과.
 - Playwright 6개 시나리오 통과: 프로젝트 생성·디렉터리 탐색·기본 세트·멤버·상한·보관, 티켓 자동 접수, 프로젝트별 세션 등록, 기존 이슈 본문/검색, 보호 Coordinator/Integrator 세션. 390/1440px와 글자 배율 1/1.3에서 가로 넘침과 선택 상자/입력의 세로 잘림 없음.
 - `bin/q.exe` 빌드. 현재 실행 중인 사용자 Studio는 재시작하지 않았다. 새 바이너리로 Studio/Library를 다시 시작하면 새 화면과 프로토콜이 적용된다.
+
+
+## 후속 개선: 인덱스 기반 스케줄러 조회
+
+- 2초마다 일반 `ListItems`로 전체 티켓을 읽던 경로를 제거했다. 할당 대기(`queued`, `assignment_waiting`, 구버전 미접수 todo)와 병합/종료 대기만 전용 부분 인덱스로 조회한다. 재시도 시각 전인 항목은 SQL에서 제외한다.
+- 인덱스는 기존 JSON 원본의 표현식으로 구성한다. payload 변경과 같은 SQLite 트랜잭션에서 자동 갱신하며 별도 큐 원본이나 이중 쓰기를 추가하지 않는다. 기존 카탈로그를 열 때 누락된 인덱스를 생성한다.
+- 실행 수와 멤버별 부하는 reserved/running 실행 인덱스에서 집계한다. source의 전역·프로젝트 예약 상한 검사는 유지한다.
+- 임대 만료 복구는 활성 임대와 만료 시각 인덱스로 조회하고, 매니저 알림은 미전달·재시도 가능한 항목 중 첫 항목만 조회한다. 일반 화면의 티켓/실행/알림 이력 조회 계약은 유지한다.
+- 새 Library 계약: `GET /v1/workspaces/{id}/ticket-queue?queue=assignment|merge`, `GET /v1/workspaces/{id}/ticket-load`, `GET /v1/workspaces/{id}/inbox?pending=true`. 큐는 기존 방식의 최대 100개 커서 페이지를 제공한다.
+- 검증: 부분 인덱스의 실행 계획, 기존 데이터의 인덱스 생성, 프로젝트 격리와 페이지네이션, 취소/재시도 반영, 완료 이력 미역직렬화, 만료 복구와 알림 재시도, 기존 coordinator 회귀 시나리오를 확인했다. `go test ./workitems ./library ./coordinator -count=1 -timeout=120s`, app/studio의 티켓·Coordinator·프로젝트·워크스페이스 관련 테스트, `go vet`, golangci-lint 기본 검사를 통과했다. `bin/q.exe`도 다시 빌드했다.

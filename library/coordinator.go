@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/url"
+	"strconv"
 
 	"github.com/snowmerak/q/workitems"
 )
@@ -16,6 +17,23 @@ type AttemptList struct {
 }
 type InboxList struct {
 	Entries []workitems.InboxEntry `json:"entries"`
+}
+
+func (c *Client) ListTicketQueue(ctx context.Context, workspaceID, queue, cursor string, limit int) (workitems.ItemPage, error) {
+	var out workitems.ItemPage
+	query := url.Values{"queue": {queue}, "cursor": {cursor}, "limit": {strconv.Itoa(limit)}}
+	err := c.doJSON(ctx, http.MethodGet, "/workspaces/"+url.PathEscape(workspaceID)+"/ticket-queue?"+query.Encode(), nil, &out)
+	return out, err
+}
+func (c *Client) GetTicketLoad(ctx context.Context, workspaceID string) (workitems.TicketLoad, error) {
+	var out workitems.TicketLoad
+	err := c.doJSON(ctx, http.MethodGet, "/workspaces/"+url.PathEscape(workspaceID)+"/ticket-load", nil, &out)
+	return out, err
+}
+func (c *Client) NextPendingInbox(ctx context.Context, workspaceID string) (InboxList, error) {
+	var out InboxList
+	err := c.doJSON(ctx, http.MethodGet, "/workspaces/"+url.PathEscape(workspaceID)+"/inbox?pending=true", nil, &out)
+	return out, err
 }
 
 func (c *Client) ListMembers(ctx context.Context, id string) (MemberList, error) {
@@ -99,6 +117,28 @@ func coordinatorWrite[I, O any](mux *http.ServeMux, route string, action func(co
 }
 
 func registerCoordinatorRoutes(mux *http.ServeMux, s *workitems.Store) {
+	mux.HandleFunc("GET /v1/workspaces/{workspace}/ticket-queue", func(w http.ResponseWriter, r *http.Request) {
+		limit, err := strconv.Atoi(r.URL.Query().Get("limit"))
+		if err != nil && r.URL.Query().Get("limit") != "" {
+			workspaceError(w, workitems.ErrInvalidInput)
+			return
+		}
+		out, err := s.ListTicketQueue(r.Context(), r.PathValue("workspace"), r.URL.Query().Get("queue"), r.URL.Query().Get("cursor"), limit)
+		if err != nil {
+			workspaceError(w, err)
+			return
+		}
+		writeJSON(w, 200, out)
+	})
+	mux.HandleFunc("GET /v1/workspaces/{workspace}/ticket-load", func(w http.ResponseWriter, r *http.Request) {
+		out, err := s.GetTicketLoad(r.Context(), r.PathValue("workspace"))
+		if err != nil {
+			workspaceError(w, err)
+			return
+		}
+		writeJSON(w, 200, out)
+	})
+
 	coordinatorWrite(mux, "POST /v1/inbox/{entry}/defer", func(ctx context.Context, r *http.Request, in struct {
 		ManagerSessionID string `json:"manager_session_id"`
 		Reason           string `json:"reason"`
@@ -155,7 +195,13 @@ func registerCoordinatorRoutes(mux *http.ServeMux, s *workitems.Store) {
 		return map[string]bool{"reconciled": err == nil}, err
 	})
 	mux.HandleFunc("GET /v1/workspaces/{workspace}/inbox", func(w http.ResponseWriter, r *http.Request) {
-		out, err := s.ListInbox(r.Context(), r.PathValue("workspace"))
+		var out []workitems.InboxEntry
+		var err error
+		if r.URL.Query().Get("pending") == "true" {
+			out, err = s.NextPendingInbox(r.Context(), r.PathValue("workspace"))
+		} else {
+			out, err = s.ListInbox(r.Context(), r.PathValue("workspace"))
+		}
 		if err != nil {
 			workspaceError(w, err)
 			return

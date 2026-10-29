@@ -39,6 +39,10 @@ func TestScanAdmitsLegacyTicketsAndPreservesExplicitStops(t *testing.T) {
 	if _, err := source.ControlTicket(ctx, stopped.ID, workitems.TicketAction{Action: "cancel", Revision: stopped.Revision}); err != nil {
 		t.Fatal(err)
 	}
+	completed, err := source.CreateItem(ctx, workitems.CreateInput{WorkspaceID: project.ID, Kind: workitems.Ticket, Title: "Old completed history", Content: "Not a scheduler candidate", Author: "user"})
+	if err != nil {
+		t.Fatal(err)
+	}
 	if err := source.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -48,6 +52,11 @@ func TestScanAdmitsLegacyTicketsAndPreservesExplicitStops(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, updateErr := db.ExecContext(ctx, `UPDATE items SET payload=json_remove(payload,'$.execution_state') WHERE id=?`, legacy.ID)
+	if updateErr == nil {
+		// A full UI-list read would fail decoding this historical timestamp.
+		// Scheduler reads must never fetch completed payloads.
+		_, updateErr = db.ExecContext(ctx, `UPDATE items SET payload=json_set(payload,'$.state','done','$.execution_state','done','$.created_at','old-invalid-time') WHERE id=?`, completed.ID)
+	}
 	closeErr := db.Close()
 	if updateErr != nil || closeErr != nil {
 		t.Fatalf("legacy fixture: %v %v", updateErr, closeErr)

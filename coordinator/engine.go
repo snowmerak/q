@@ -134,49 +134,63 @@ func (e *Engine) scan(ctx context.Context) (returnErr error) {
 		return err
 	}
 	for _, project := range projects.Workspaces {
-		cursor := ""
-		var tickets []workitems.Item
-		for {
-			page, err := c.ListItems(ctx, project.ID, workitems.Ticket, cursor, 100)
-			if err != nil {
-				return err
-			}
-			tickets = append(tickets, page.Items...)
-			cursor = page.NextCursor
-			if cursor == "" {
-				break
-			}
+		load, err := c.GetTicketLoad(ctx, project.ID)
+		if err != nil {
+			return err
 		}
 		parallel := 3
 		if e.options.Parallel != nil {
 			parallel = max(1, e.options.Parallel())
 		}
-		active := 0
-		e.mu.Lock()
-		for _, item := range tickets {
-			if item.ExecutionState == "running" || item.ExecutionState == "reserved" || item.ExecutionState == "stopping" || (needsAssignment(item) && e.active[item.ID]) {
-				active++
+		remaining := workitems.EffectiveParallel(project.Limits.MaxParallelTickets, parallel) - load.Active
+		if remaining > 0 {
+			var queued []workitems.Item
+			cursor := ""
+			for {
+				page, err := c.ListTicketQueue(ctx, project.ID, "assignment", cursor, 100)
+				if err != nil {
+					return err
+				}
+				queued = append(queued, page.Items...)
+				cursor = page.NextCursor
+				if cursor == "" {
+					break
+				}
 			}
-		}
-		e.mu.Unlock()
-		remaining := workitems.EffectiveParallel(project.Limits.MaxParallelTickets, parallel) - active
-		for _, item := range tickets {
-			if item.Deleted {
-				continue
+			// Assignment decisions not yet reserved in Library also occupy a
+			// local project slot. Reserved/running work is counted by source.
+			e.mu.Lock()
+			for _, item := range queued {
+				if e.active[item.ID] {
+					remaining--
+				}
 			}
-			// Filter full projects before occupying a host worker slot. Otherwise
-			// their queued assignments can starve projects that still have room.
-			if remaining > 0 && needsAssignment(item) && !time.Now().Before(item.NextAssignmentAt) {
+			e.mu.Unlock()
+			for _, item := range queued {
+				if remaining <= 0 {
+					break
+				}
 				if e.launch(item.ID, func() { e.log(e.execute(project, item)) }) {
 					remaining--
 				}
 			}
-			if item.ExecutionState == "merge_queued" || item.ExecutionState == "close_queued" {
+		}
+		cursor := ""
+		for {
+			page, err := c.ListTicketQueue(ctx, project.ID, "merge", cursor, 100)
+			if err != nil {
+				return err
+			}
+			for _, item := range page.Items {
 				e.launch(item.ID, func() { e.log(e.merge(project, item)) })
+			}
+			cursor = page.NextCursor
+			if cursor == "" {
+				break
 			}
 		}
 		if e.options.Deliver != nil {
-			inbox, err := c.ListInbox(ctx, project.ID)
+			inbox, err := c.NextPendingInbox(ctx, project.ID)
 			if err != nil {
 				return err
 			}
@@ -253,30 +267,15 @@ func (e *Engine) execute(project workitems.Workspace, item workitems.Item) (retu
 	if e.options.Parallel != nil {
 		parallel = max(1, e.options.Parallel())
 	}
-	active := 0
-	loads := map[string]int{}
-	cursor := ""
-	for {
-		page, err := c.ListItems(e.ctx, project.ID, workitems.Ticket, cursor, 100)
-		if err != nil {
-			return waiting(err)
-		}
-		for _, ticket := range page.Items {
-			if ticket.ExecutionState == "running" || ticket.ExecutionState == "reserved" || ticket.ExecutionState == "stopping" {
-				loads[ticket.AssignedMemberID]++
-				active++
-			}
-		}
-		cursor = page.NextCursor
-		if cursor == "" {
-			break
-		}
+	load, err := c.GetTicketLoad(e.ctx, project.ID)
+	if err != nil {
+		return waiting(err)
 	}
-	if active >= workitems.EffectiveParallel(project.Limits.MaxParallelTickets, parallel) {
+	if load.Active >= workitems.EffectiveParallel(project.Limits.MaxParallelTickets, parallel) {
 		return nil
 	}
 	for i := range candidates {
-		candidates[i].ActiveAttempts = loads[candidates[i].Member.ID]
+		candidates[i].ActiveAttempts = load.Members[candidates[i].Member.ID]
 	}
 	body, err := c.ReadContent(e.ctx, item.BodyPostID, "", 8192)
 	if err != nil {
@@ -447,15 +446,16 @@ func (e *Engine) deliver(project workitems.Workspace, entry workitems.InboxEntry
 	}
 	defer func() { returnErr = errors.Join(returnErr, runtime.Close()) }()
 	c := runtime.Client()
-	inbox, err := c.ListInbox(e.ctx, project.ID)
+	inbox, err := c.NextPendingInbox(e.ctx, project.ID)
 	if err != nil {
 		return err
 	}
-	for _, current := range inbox.Entries {
-		if current.ID == entry.ID && current.Delivered {
-			return nil
-		}
+	// Recheck under the project lock: another host may have acknowledged or
+	// deferred the notification since scan. Historical inbox rows stay unread.
+	if len(inbox.Entries) == 0 || inbox.Entries[0].ID != entry.ID {
+		return nil
 	}
+	entry = inbox.Entries[0]
 	a, err := c.GetAttempt(e.ctx, entry.AttemptID)
 	if err != nil {
 		return err
