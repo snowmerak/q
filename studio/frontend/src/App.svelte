@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Activity, CircleHelp, Files, GitCompareArrows, House, Layers, PanelLeftClose, PanelLeftOpen, Settings } from '@lucide/svelte';
+  import { Activity, CircleDot, CircleHelp, Files, GitCompareArrows, House, Kanban, Layers, PanelLeftClose, PanelLeftOpen, Settings } from '@lucide/svelte';
   import { onMount } from 'svelte';
   import ChangesView from './ChangesView.svelte';
   import FilesView from './FilesView.svelte';
@@ -20,8 +20,8 @@
   const navigation = [
     { label: 'Overview', icon: House, view: 'overview' as View },
     { label: 'Sessions', icon: Layers, view: 'sessions' as View },
-    { label: 'Issues', icon: Files, view: 'issues' as View },
-    { label: 'Tickets', icon: Layers, view: 'tickets' as View },
+    { label: 'Issues', icon: CircleDot, view: 'issues' as View },
+    { label: 'Tickets', icon: Kanban, view: 'tickets' as View },
     { label: 'Files', icon: Files, view: 'files' as View },
     { label: 'Changes', icon: GitCompareArrows, view: 'changes' as View },
     { label: 'Operations', icon: Activity, view: 'operations' as View },
