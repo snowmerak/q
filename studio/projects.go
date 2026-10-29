@@ -160,6 +160,10 @@ func (service *sessionsService) serveProjects(writer http.ResponseWriter, reques
 			writeAPIError(writer, http.StatusBadRequest, err)
 			return
 		}
+		if err := service.prepareInitialMembers(&input); err != nil {
+			writeAPIError(writer, http.StatusBadRequest, err)
+			return
+		}
 		project, err := service.projects.create(input)
 		if err != nil {
 			writeAPIError(writer, http.StatusBadRequest, err)

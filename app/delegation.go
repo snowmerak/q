@@ -49,6 +49,9 @@ type delegationDispatcher struct {
 	worktrees   *gitwork.Manager
 	checkout    checkoutRuntimeFactory
 	registryFor func(string) (*subagent.Registry, error)
+	parallel    func(context.Context) (int, error)
+	active      map[string]int
+	notify      chan struct{}
 	coordinator *delegationDispatcher
 
 	mu       sync.Mutex
@@ -190,7 +193,7 @@ func (m model) configuredDelegationRuntimeIn(base agentToolRuntime, execution ex
 		registry: registry, client: m.client, tools: catalog, value: m.activeConfig(),
 		workspace: execution, environment: environment, runID: m.runID,
 		capture: configuredInvocationCapture(base), external: configuredExternalDelegates(m.activeConfig(), execution.checkoutRoot, registry),
-		apiMode: m.activeModelAPIMode,
+		apiMode: m.activeModelAPIMode, parallel: m.projectDelegationLimit(execution),
 		registryFor: func(root string) (*subagent.Registry, error) {
 			return buildSubagentRegistry(m.customStoreAt(root))
 		},
@@ -593,6 +596,15 @@ func (d *delegationDispatcher) dispatch(
 	call client.ToolCall,
 	input delegateInput,
 ) (client.ToolResult, error) {
+	key := parentTaskID + "\n" + strings.Join(stack, "\n")
+	if parentStore != nil {
+		key = parentStore.SessionDir() + "\n" + parentTaskID
+	}
+	release, err := d.acquireDelegation(ctx, key)
+	if err != nil {
+		return client.ToolResult{}, err
+	}
+	defer release()
 	if len(stack) >= maximumDelegationDepth {
 		return client.ToolResult{Content: fmt.Sprintf("delegation depth exceeds %d", maximumDelegationDepth), IsError: true}, nil
 	}

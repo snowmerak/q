@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { Check, ChevronDown, ChevronsDown, CircleCheck, CircleDot, CircleX, ClipboardList, FileText, GitCompareArrows, GitMerge, Link2, MessageSquareReply, MessagesSquare, Pencil, Plus, RefreshCw, RotateCcw, Save, Search, Send, Settings2, SlidersHorizontal, UserCheck, UserMinus, UserPlus, Users, X } from '@lucide/svelte';
+  import { Check, ChevronDown, ChevronsDown, CircleCheck, CircleDot, CircleX, ClipboardList, FileText, GitCompareArrows, GitMerge, Link2, MessageSquareReply, MessagesSquare, Pencil, Plus, RefreshCw, RotateCcw, Save, Search, Send, Settings2, SlidersHorizontal, X } from '@lucide/svelte';
   import { requestResponse } from './api';
   import type { StudioProject } from './sessions/types';
   export let kind: 'issue' | 'ticket' = 'issue';
@@ -37,17 +37,12 @@
   let acceptance = '';
   let executionMode = 'report';
   let members: Member[] = [];
-  let agentOptions: { id: string; description: string }[] = [];
-  let agentRoot = '';
-  let executionRoot = '';
-  let agentID = '';
   let memberID = '';
   let attempts: Attempt[] = [];
   let deliveryErrors: { id: string; delivery_error: string; next_delivery_at?: string }[] = [];
   let feedback = '';
   let diff = '';
   let workerPages: Record<string, { messages: WorkerMessage[]; cursor: string; unknown: string }> = {};
-  let showMembers = false;
   let filters = '';
   let stateFilter = '';
   let createRequestID = crypto.randomUUID();
@@ -77,11 +72,8 @@
   function write(method: string, value: unknown): RequestInit { return { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(value) }; }
   function message(cause: unknown) { error = cause instanceof Error ? cause.message : String(cause); }
   onMount(() => { void (async () => { try { projects = (await json<{ projects: StudioProject[] }>('projects')).projects; const params = new URL(location.href).searchParams; workspaceID = projects.find(p => p.id === params.get('workspace_id'))?.id || projects[0]?.id || ''; mounted = true; await changeProject(); const id = params.get('item_id'); if (id) await selectItem(id); const postID = params.get('post_id'); if (postID) await revealPost(postID); } catch (cause) { message(cause); } })(); const timer = setInterval(() => { if (document.visibilityState === 'visible' && kind === 'ticket' && !busy && !editing && !editDetails) { void loadItems(); if (selected) void loadAttempts(selected.id); } }, 5000); return () => clearInterval(timer); });
-  async function changeProject() { selected = null; searched = false; attempts = []; diff = ''; agentRoot = projects.find(p => p.id === workspaceID)?.workspace_roots[0] || ''; executionRoot = agentRoot; await Promise.all([loadItems(), loadMembers(), loadAgents()]); }
+  async function changeProject() { selected = null; searched = false; attempts = []; diff = ''; await Promise.all([loadItems(), loadMembers()]); }
   async function loadMembers() { const id = workspaceID; if (!id) { members = []; return; } try { const value = (await json<{ members: Member[] }>(`projects/${id}/members`)).members; if (id === workspaceID) members = value; } catch (cause) { if (id === workspaceID) message(cause); } }
-  async function loadAgents() { const root = agentRoot; if (!root) return; try { const value = await json<{ builtins: { name: string; description: string; available: boolean }[]; profiles: { scope: string; profile: { name: string; description: string }; error?: string; shadowed: boolean }[] }>(`workspaces/agents?workspace_root=${encodeURIComponent(root)}`); if (root !== agentRoot) return; agentOptions = [...value.builtins.filter(a => a.available && a.name !== 'builtin/junior-developer').map(a => ({ id: a.name, description: a.description })), ...value.profiles.filter(p => !p.error && !p.shadowed).map(p => ({ id: `${p.scope}/${p.profile.name}`, description: p.profile.description }))]; agentID = agentOptions[0]?.id || ''; } catch (cause) { if (root === agentRoot) message(cause); } }
-  async function joinMember() { busy = true; try { const existing = members.find(m => m.agent_id === agentID && m.definition_root === agentRoot && m.execution_root === executionRoot); await json(`projects/${workspaceID}/members`, write('POST', { id: existing?.id || '', agent_id: agentID, definition_root: agentRoot, execution_root: executionRoot, revision: existing?.revision || 0, disabled: false, request_id: crypto.randomUUID() })); await loadMembers(); } catch (cause) { message(cause); } finally { busy = false; } }
-  async function toggleMember(member: Member) { busy = true; try { await json(`projects/${workspaceID}/members`, write('POST', { ...member, workspace_id: undefined, disabled: !member.disabled, request_id: crypto.randomUUID() })); await loadMembers(); } catch (cause) { message(cause); } finally { busy = false; } }
   async function loadAttempts(id: string) { const scope = workspaceID; try { const [value, inbox] = await Promise.all([json<{ attempts: Attempt[] }>(`work/items/${id}/attempts`), json<{ entries: { id: string; ticket_id: string; delivered: boolean; delivery_error: string; next_delivery_at?: string }[] }>(`projects/${scope}/inbox`)]); if (selected?.id !== id) return; attempts = value.attempts; deliveryErrors = inbox.entries.filter(entry => entry.ticket_id === id && !entry.delivered && entry.delivery_error); const current = items.find(i => i.id === id); if (current) selected = current; } catch (cause) { message(cause); } }
   async function controlTicket(action: string) { if (!selected) return; busy = true; error = ''; try { selected = await json<Item>(`work/items/${selected.id}/control`, write('POST', { action, revision: selected.revision, request_id: crypto.randomUUID() })); await loadItems(); await loadAttempts(selected.id); } catch (cause) { message(cause); } finally { busy = false; } }
   async function review(attempt: Attempt, decision: string) { busy = true; error = ''; try { await json(`work/attempts/${attempt.id}/review`, write('POST', { decision, feedback, request_id: crypto.randomUUID() })); feedback = ''; await loadItems(); await loadAttempts(attempt.ticket_id); } catch (cause) { message(cause); } finally { busy = false; } }
@@ -139,22 +131,14 @@
     <label class="project-field">Project<select aria-label="Work item project" bind:value={workspaceID} onchange={changeProject} disabled={busy}><option value="">Select a project</option>{#each projects as p}<option value={p.id}>{p.name}</option>{/each}</select></label>
     <div class="work-actions">
       <button class="secondary-button work-icon-button" disabled={busy || loading} onclick={() => { searched = false; void loadItems(); }} title="Refresh" aria-label="Refresh"><RefreshCw aria-hidden="true" size={17} /></button>
-      {#if workspaceID}<button class="secondary-button work-icon-button" onclick={() => openWorkspaceRole('coordinator')} title="Coordinator · Request intake and planning" aria-label="Coordinator"><ClipboardList aria-hidden="true" size={17} /></button><button class="secondary-button work-icon-button" onclick={() => openWorkspaceRole('integrator')} title="Integrator · Review and merge" aria-label="Integrator"><GitMerge aria-hidden="true" size={17} /></button>{#if kind === 'ticket'}<button class="secondary-button work-icon-button" class:active={showMembers} aria-expanded={showMembers} onclick={() => showMembers = !showMembers} title={`Workspace members (${members.filter(m => !m.disabled).length})`} aria-label={`Workspace members (${members.filter(m => !m.disabled).length})`}><Users aria-hidden="true" size={17} /><span class="member-count" aria-hidden="true">{members.filter(m => !m.disabled).length}</span></button>{/if}{/if}
+      {#if workspaceID}<button class="secondary-button work-icon-button" onclick={() => openWorkspaceRole('coordinator')} title="Coordinator · Request intake and planning" aria-label="Coordinator"><ClipboardList aria-hidden="true" size={17} /></button><button class="secondary-button work-icon-button" onclick={() => openWorkspaceRole('integrator')} title="Integrator · Review and merge" aria-label="Integrator"><GitMerge aria-hidden="true" size={17} /></button><a class="secondary-button work-icon-button" href={`/projects?project_id=${workspaceID}`} title="Project settings" aria-label="Project settings"><Settings2 aria-hidden="true" size={17} /></a>{/if}
       <button class="primary-button" disabled={!workspaceID || busy} onclick={() => creating = !creating}><Plus aria-hidden="true" size={16} />New {kind}</button>
     </div>
   </div>
-  {#if !projects.length}<p>Create a project in <a href="/sessions">Sessions</a> to organize issues and tickets.</p>{/if}
+  {#if !projects.length}<p>Create a project in <a href="/projects?new=1">Projects</a> to organize issues and tickets.</p>{/if}
   {#if error}<div role="alert" class="work-error">{error}</div>{/if}
   {#if kind === 'ticket' && project && !members.some(member => !member.disabled)}
-    <div class="work-notice" role="status"><p>No subagents have joined this project. Issued tickets wait for assignment until a suitable subagent joins.</p><button class="secondary-button work-icon-button" onclick={() => showMembers = true} title="Join subagents" aria-label="Join subagents"><UserPlus aria-hidden="true" size={17} /></button></div>
-  {/if}
-  {#if showMembers && project && kind === 'ticket'}
-    <section class="work-create" aria-label="Workspace members"><h2>Workspace members</h2><p>Join existing subagent profiles to this project. System One checks suitability before each execution.</p>
-      <label>Profile directory<select bind:value={agentRoot} onchange={loadAgents}>{#each project.workspace_roots as root}<option value={root}>{root}</option>{/each}</select></label>
-      <label>Subagent<select aria-label="Join subagent" bind:value={agentID}>{#each agentOptions as option}<option value={option.id}>{option.id} · {option.description}</option>{/each}</select></label>
-      <label>Execution directory<select bind:value={executionRoot}>{#each project.workspace_roots as root}<option value={root}>{root}</option>{/each}</select></label><button class="secondary-button work-icon-button" onclick={joinMember} disabled={busy || !agentID} title="Join workspace" aria-label="Join workspace"><UserPlus aria-hidden="true" size={17} /></button>
-      {#each members as member}<div class="member-row"><div class="member-description"><strong>{member.agent_id}</strong><small>{member.execution_root}</small></div><span class="member-status">{member.disabled ? 'Disabled' : 'Joined'}</span><button class="secondary-button work-icon-button" onclick={() => toggleMember(member)} disabled={busy} title={member.disabled ? 'Enable member' : 'Disable member'} aria-label={member.disabled ? 'Enable member' : 'Disable member'}>{#if member.disabled}<UserCheck aria-hidden="true" size={17} />{:else}<UserMinus aria-hidden="true" size={17} />{/if}</button></div>{:else}<p>No joined subagents.</p>{/each}
-    </section>
+    <div class="work-notice" role="status"><p>No subagents have joined this project. Issued tickets wait for assignment until a suitable subagent joins.</p><a class="secondary-button work-icon-button" href={`/projects?project_id=${workspaceID}&section=members`} title="Project subagents" aria-label="Project subagents"><Settings2 aria-hidden="true" size={17} /></a></div>
   {/if}
   {#if creating}
     <form class="work-create" onsubmit={(event) => { event.preventDefault(); void create(); }}>
@@ -224,11 +208,6 @@
   .work-icon-button:focus-visible { outline: 2px solid var(--violet); outline-offset: 3px; }
   .work-icon-button.danger { color: var(--error); }
   .work-action-group { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
-  .member-count { position: absolute; top: -5px; right: -5px; display: grid; place-items: center; min-width: 18px; height: 18px; padding: 0 4px; border: 1px solid var(--border); border-radius: 9px; background: var(--panel-bg); color: var(--muted); font-size: calc(10px * var(--text-scale)); }
-  .member-row { display: flex; align-items: center; gap: 12px; padding-top: 14px; border-top: 1px solid var(--border); }
-  .member-description { flex: 1; min-width: 0; overflow-wrap: anywhere; }
-  .member-status { color: var(--muted); font-size: calc(12px * var(--text-scale)); }
-  .secondary-button.active { color: var(--accent-text); border-color: var(--violet); background: var(--violet-soft); }
   .work-toolbar { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
   .project-field { width: min(100%, 300px); }
   .work-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }

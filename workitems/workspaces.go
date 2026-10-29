@@ -33,16 +33,19 @@ type Workspace struct {
 	Name           string   `json:"name"`
 	WorkspaceRoots []string `json:"workspace_roots"`
 	// ManagerSessionID is the Integrator's identity, retained for compatibility.
-	ManagerSessionID     string     `json:"manager_session_id"`
-	CoordinatorSessionID string     `json:"coordinator_session_id"`
-	CreatedAt            time.Time  `json:"created_at"`
-	UpdatedAt            time.Time  `json:"updated_at"`
-	ArchivedAt           *time.Time `json:"archived_at,omitempty"`
+	ManagerSessionID     string        `json:"manager_session_id"`
+	CoordinatorSessionID string        `json:"coordinator_session_id"`
+	CreatedAt            time.Time     `json:"created_at"`
+	UpdatedAt            time.Time     `json:"updated_at"`
+	ArchivedAt           *time.Time    `json:"archived_at,omitempty"`
+	Limits               ProjectLimits `json:"limits"`
 }
 
 type WorkspaceInput struct {
-	Name           string   `json:"name"`
-	WorkspaceRoots []string `json:"workspace_roots"`
+	Limits         *ProjectLimits `json:"limits,omitempty"`
+	InitialMembers *[]MemberInput `json:"initial_members,omitempty"`
+	Name           string         `json:"name"`
+	WorkspaceRoots []string       `json:"workspace_roots"`
 }
 
 type Store struct{ db *sql.DB }
@@ -79,7 +82,7 @@ func (s *Store) initialize(ctx context.Context, dir string) error {
 	if err := s.db.QueryRowContext(ctx, `PRAGMA user_version`).Scan(&version); err != nil {
 		return err
 	}
-	if version < 0 || version > 6 {
+	if version < 0 || version > 7 {
 		return fmt.Errorf("workitems: unsupported catalog schema version %d", version)
 	}
 	_, err := s.db.ExecContext(ctx, `
@@ -106,6 +109,9 @@ CREATE TABLE IF NOT EXISTS catalog_migrations (name TEXT PRIMARY KEY, completed_
 		return err
 	}
 	if err := s.initializeManagerRoles(ctx, version); err != nil {
+		return err
+	}
+	if err := s.initializeProjectSettings(ctx); err != nil {
 		return err
 	}
 	var complete int
@@ -225,6 +231,11 @@ func (s *Store) initializeManagerRoles(ctx context.Context, version int) error {
 }
 
 func normalize(input WorkspaceInput) (WorkspaceInput, error) {
+	if input.Limits != nil {
+		if err := input.Limits.Validate(); err != nil {
+			return WorkspaceInput{}, err
+		}
+	}
 	input.Name = strings.TrimSpace(input.Name)
 	if input.Name == "" || len(input.Name) > 128 {
 		return WorkspaceInput{}, fmt.Errorf("%w: name must contain 1 to 128 bytes", ErrInvalidInput)
@@ -298,7 +309,7 @@ func mutationError(err error) error {
 }
 
 func (s *Store) ListWorkspaces(ctx context.Context, includeArchived bool) ([]Workspace, error) {
-	query := `SELECT w.id,w.name,w.manager_session_id,w.coordinator_session_id,w.created_at,w.updated_at,w.archived_at,r.path FROM workspaces w JOIN workspace_roots r ON r.workspace_id=w.id`
+	query := `SELECT w.id,w.name,w.manager_session_id,w.coordinator_session_id,w.created_at,w.updated_at,w.archived_at,r.path,coalesce(p.max_parallel_tickets,0),coalesce(p.max_parallel_subagents,0) FROM workspaces w JOIN workspace_roots r ON r.workspace_id=w.id LEFT JOIN workspace_settings p ON p.workspace_id=w.id`
 	if !includeArchived {
 		query += ` WHERE w.archived_at IS NULL`
 	}
@@ -313,7 +324,7 @@ func (s *Store) ListWorkspaces(ctx context.Context, includeArchived bool) ([]Wor
 		var value Workspace
 		var created, updated, path string
 		var archived sql.NullString
-		if err := rows.Scan(&value.ID, &value.Name, &value.ManagerSessionID, &value.CoordinatorSessionID, &created, &updated, &archived, &path); err != nil {
+		if err := rows.Scan(&value.ID, &value.Name, &value.ManagerSessionID, &value.CoordinatorSessionID, &created, &updated, &archived, &path, &value.Limits.MaxParallelTickets, &value.Limits.MaxParallelSubagents); err != nil {
 			return nil, err
 		}
 		if len(values) == 0 || values[len(values)-1].ID != value.ID {
@@ -362,6 +373,36 @@ func (s *Store) CreateWorkspace(ctx context.Context, input WorkspaceInput) (Work
 	if err := insertWorkspace(ctx, tx, value); err != nil {
 		return Workspace{}, err
 	}
+	if input.Limits != nil {
+		value.Limits = *input.Limits
+	}
+	if err := saveProjectLimits(ctx, tx, value.ID, value.Limits); err != nil {
+		return Workspace{}, err
+	}
+	members := input.InitialMembers
+	if members == nil {
+		defaults, err := projectDefaultsTx(ctx, tx)
+		if err != nil {
+			return Workspace{}, err
+		}
+		initial := make([]MemberInput, 0, len(defaults.AgentIDs))
+		for _, agent := range defaults.AgentIDs {
+			initial = append(initial, MemberInput{AgentID: agent, DefinitionRoot: value.WorkspaceRoots[0], ExecutionRoot: value.WorkspaceRoots[0]})
+		}
+		members = &initial
+	}
+	if len(*members) > 64 {
+		return Workspace{}, ErrInvalidInput
+	}
+	for _, member := range *members {
+		if member.ID != "" || member.Revision != 0 {
+			return Workspace{}, ErrInvalidInput
+		}
+		if _, err := putMemberTx(ctx, tx, value.ID, member); err != nil {
+			return Workspace{}, err
+		}
+	}
+
 	if err := tx.Commit(); err != nil {
 		return Workspace{}, err
 	}
@@ -369,6 +410,9 @@ func (s *Store) CreateWorkspace(ctx context.Context, input WorkspaceInput) (Work
 }
 
 func (s *Store) UpdateWorkspace(ctx context.Context, id string, input WorkspaceInput) (Workspace, error) {
+	if input.InitialMembers != nil {
+		return Workspace{}, fmt.Errorf("%w: initial_members is only accepted at creation", ErrInvalidInput)
+	}
 	input, err := normalize(input)
 	if err != nil {
 		return Workspace{}, err
@@ -384,6 +428,15 @@ func (s *Store) UpdateWorkspace(ctx context.Context, id string, input WorkspaceI
 		return Workspace{}, ErrNotFound
 	} else if err != nil {
 		return Workspace{}, err
+	}
+	if err := tx.QueryRowContext(ctx, `SELECT coalesce((SELECT max_parallel_tickets FROM workspace_settings WHERE workspace_id=?),0),coalesce((SELECT max_parallel_subagents FROM workspace_settings WHERE workspace_id=?),0)`, id, id).Scan(&value.Limits.MaxParallelTickets, &value.Limits.MaxParallelSubagents); err != nil {
+		return Workspace{}, err
+	}
+	if input.Limits != nil {
+		value.Limits = *input.Limits
+		if err := saveProjectLimits(ctx, tx, id, value.Limits); err != nil {
+			return Workspace{}, err
+		}
 	}
 	value.CreatedAt, err = time.Parse(time.RFC3339Nano, created)
 	if err != nil {

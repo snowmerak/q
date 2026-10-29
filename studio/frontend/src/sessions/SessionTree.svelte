@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { ChevronDown, Folders, GitBranch, MessageSquarePlus, Plus, RefreshCw, Search, X } from '@lucide/svelte';
+  import { ChevronDown, Folders, GitBranch, MessageSquarePlus, Plus, RefreshCw, Search, Settings2, X } from '@lucide/svelte';
   import { formatSessionTime, shortID } from './format';
   import { flattenDelegations } from './tree';
   import { workspaceRoleTitle, workspaceRoleDescription } from './types';
@@ -59,7 +59,7 @@
 </script>
 
   <aside id="session-tree" class="session-rail" aria-label="Registered session tree">
-    <div class="session-list-heading"><span>YOUR SESSIONS</span><div><button title="Refresh session tree" aria-label="Refresh session tree" onclick={onrefresh} disabled={workspaceLoading}><RefreshCw aria-hidden="true" size={14} /></button><button title="Create project" aria-label="Create project" onclick={() => onproject()} disabled={sessionLoading}><Folders aria-hidden="true" size={15} /></button></div></div>
+    <div class="session-list-heading"><span>YOUR SESSIONS</span><div><button title="Refresh session tree" aria-label="Refresh session tree" onclick={onrefresh} disabled={workspaceLoading}><RefreshCw aria-hidden="true" size={14} /></button></div></div>
     <div class="session-create-actions"><button class="primary-button" title="New chat" onclick={onchat} disabled={sessionLoading}><MessageSquarePlus aria-hidden="true" size={15} />New chat</button><button class="secondary-button" title="Add or create session" aria-label="Add or create session" onclick={onregistration} disabled={sessionLoading}><Plus aria-hidden="true" size={15} />New session</button></div>
     <div class="session-search"><Search aria-hidden="true" size={15} /><input bind:this={searchInput} bind:value={search} aria-label="Search sessions" placeholder="Search sessions…" onkeydown={(event) => { if (event.key === 'Escape') clearSearch(); }} />{#if search}<button aria-label="Clear session search" onclick={clearSearch}><X aria-hidden="true" size={14} /></button>{/if}</div>
     {#if typeFilter !== 'all' || registeredSessions.some(item => item.session.type && item.session.type !== 'interaction')}
@@ -103,7 +103,7 @@
         {/if}
         {#each visibleProjects as project}
           {@const sessions = projectSessions(filteredSessions, project.id)}
-          <div class="session-project-heading">{@render groupHeading(project.id, project.name, sessions.length)}<button title={`Edit ${project.name}`} aria-label={`Edit project ${project.name}`} onclick={() => onproject(project)}>Edit</button></div>
+          <div class="session-project-heading">{@render groupHeading(project.id, project.name, sessions.length)}<button title={`Project settings ${project.name}`} aria-label={`Project settings ${project.name}`} onclick={() => onproject(project)}><Settings2 aria-hidden="true" size={14} /></button></div>
           <div id={`session-group-${project.id}`} hidden={!query && collapsedGroups.has(project.id)}>
           {#each sessions as registration}
             {@render sessionBranch(registration)}

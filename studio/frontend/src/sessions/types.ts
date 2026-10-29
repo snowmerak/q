@@ -94,6 +94,7 @@ export type RegisteredSessionTree = {
   issue?: string;
 };
 export type StudioProject = {
+  limits: { max_parallel_tickets: number; max_parallel_subagents: number };
   id: string;
   name: string;
   workspace_roots: string[];

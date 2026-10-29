@@ -157,39 +157,47 @@ func (s *Store) PutMember(ctx context.Context, workspaceID string, in MemberInpu
 		return Member{}, ErrInvalidInput
 	}
 	return mutate(ctx, s, workspaceID, "member", in.RequestID, in, func(tx *sql.Tx) (Member, error) {
-		var belongs int
-		if err := tx.QueryRowContext(ctx, `SELECT 1 FROM workspace_roots WHERE workspace_id=? AND path=? AND active=1`, workspaceID, in.ExecutionRoot).Scan(&belongs); err != nil {
-			return Member{}, fmt.Errorf("%w: execution root must belong to the project", ErrInvalidInput)
-		}
-		if err := tx.QueryRowContext(ctx, `SELECT 1 FROM workspace_roots WHERE workspace_id=? AND path=? AND active=1`, workspaceID, in.DefinitionRoot).Scan(&belongs); err != nil {
-			return Member{}, fmt.Errorf("%w: definition root must belong to the project", ErrInvalidInput)
-		}
-		value := Member{ID: in.ID, WorkspaceID: workspaceID, AgentID: in.AgentID, DefinitionRoot: filepath.Clean(in.DefinitionRoot), ExecutionRoot: filepath.Clean(in.ExecutionRoot), Disabled: in.Disabled, Revision: 1}
-		if in.ID != "" {
-			old, err := decodeRow[Member](tx.QueryRowContext(ctx, `SELECT payload FROM workspace_member_bindings WHERE id=? AND workspace_id=?`, in.ID, workspaceID))
-			if err != nil {
-				return Member{}, err
-			}
-			if old.Revision != in.Revision {
-				return Member{}, ErrConflict
-			}
-			value.Revision = old.Revision + 1
-		} else {
-			value.ID = uuid.NewString()
-			if in.Revision != 0 {
-				return Member{}, ErrConflict
-			}
-		}
-		raw, err := json.Marshal(value)
+		return putMemberTx(ctx, tx, workspaceID, in)
+	})
+}
+
+func putMemberTx(ctx context.Context, tx *sql.Tx, workspaceID string, in MemberInput) (Member, error) {
+	if strings.TrimSpace(in.AgentID) == "" || len(in.AgentID) > 256 || !filepath.IsAbs(in.DefinitionRoot) || !filepath.IsAbs(in.ExecutionRoot) {
+		return Member{}, ErrInvalidInput
+	}
+
+	var belongs int
+	if err := tx.QueryRowContext(ctx, `SELECT 1 FROM workspace_roots WHERE workspace_id=? AND path=? AND active=1`, workspaceID, in.ExecutionRoot).Scan(&belongs); err != nil {
+		return Member{}, fmt.Errorf("%w: execution root must belong to the project", ErrInvalidInput)
+	}
+	if err := tx.QueryRowContext(ctx, `SELECT 1 FROM workspace_roots WHERE workspace_id=? AND path=? AND active=1`, workspaceID, in.DefinitionRoot).Scan(&belongs); err != nil {
+		return Member{}, fmt.Errorf("%w: definition root must belong to the project", ErrInvalidInput)
+	}
+	value := Member{ID: in.ID, WorkspaceID: workspaceID, AgentID: in.AgentID, DefinitionRoot: filepath.Clean(in.DefinitionRoot), ExecutionRoot: filepath.Clean(in.ExecutionRoot), Disabled: in.Disabled, Revision: 1}
+	if in.ID != "" {
+		old, err := decodeRow[Member](tx.QueryRowContext(ctx, `SELECT payload FROM workspace_member_bindings WHERE id=? AND workspace_id=?`, in.ID, workspaceID))
 		if err != nil {
 			return Member{}, err
 		}
-		_, err = tx.ExecContext(ctx, `INSERT INTO workspace_member_bindings(id,workspace_id,agent_id,definition_root,execution_root,payload) VALUES(?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET agent_id=excluded.agent_id,definition_root=excluded.definition_root,execution_root=excluded.execution_root,payload=excluded.payload`, value.ID, workspaceID, value.AgentID, value.DefinitionRoot, value.ExecutionRoot, raw)
-		if err != nil {
-			return Member{}, mutationError(err)
+		if old.Revision != in.Revision {
+			return Member{}, ErrConflict
 		}
-		return value, nil
-	})
+		value.Revision = old.Revision + 1
+	} else {
+		value.ID = uuid.NewString()
+		if in.Revision != 0 {
+			return Member{}, ErrConflict
+		}
+	}
+	raw, err := json.Marshal(value)
+	if err != nil {
+		return Member{}, err
+	}
+	_, err = tx.ExecContext(ctx, `INSERT INTO workspace_member_bindings(id,workspace_id,agent_id,definition_root,execution_root,payload) VALUES(?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET agent_id=excluded.agent_id,definition_root=excluded.definition_root,execution_root=excluded.execution_root,payload=excluded.payload`, value.ID, workspaceID, value.AgentID, value.DefinitionRoot, value.ExecutionRoot, raw)
+	if err != nil {
+		return Member{}, mutationError(err)
+	}
+	return value, nil
 }
 
 func ticketTx(ctx context.Context, tx *sql.Tx, id string) (Item, error) {
@@ -291,6 +299,16 @@ func (s *Store) ClaimTicket(ctx context.Context, id string, in ClaimInput) (Atte
 		}
 		if active >= limit {
 			return Attempt{}, fmt.Errorf("%w: ticket execution capacity is busy", ErrConflict)
+		}
+		var projectLimit, projectActive int
+		if err := tx.QueryRowContext(ctx, `SELECT coalesce((SELECT max_parallel_tickets FROM workspace_settings WHERE workspace_id=?),0)`, item.WorkspaceID).Scan(&projectLimit); err != nil {
+			return Attempt{}, err
+		}
+		if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM ticket_attempts WHERE workspace_id=? AND json_extract(payload,'$.status') IN ('reserved','running')`, item.WorkspaceID).Scan(&projectActive); err != nil {
+			return Attempt{}, err
+		}
+		if projectActive >= EffectiveParallel(projectLimit, limit) {
+			return Attempt{}, fmt.Errorf("%w: project ticket capacity is busy", ErrConflict)
 		}
 		member, err := decodeRow[Member](tx.QueryRowContext(ctx, `SELECT payload FROM workspace_member_bindings WHERE id=? AND workspace_id=?`, in.MemberID, item.WorkspaceID))
 		if err != nil {

@@ -107,12 +107,14 @@ test('workspace issues preserve source posts, content pages, search scope and pe
 test('issuing a ticket automatically requests assignment without a start action', async ({ page, request }) => {
   const project = (await (await request.get('/api/v1/projects')).json()).projects.find(p => p.name === 'Integration');
   await page.goto(`/tickets?workspace_id=${project.id}`);
-  await page.getByRole('button', { name: /^Workspace members/ }).click();
-  const members = page.getByRole('region', { name: 'Workspace members', exact: true });
+  await page.getByRole('link', { name: 'Project settings', exact: true }).click();
+  await page.locator('.project-tabs').getByRole('button', { name: 'Subagents', exact: true }).click();
+  const members = page.locator('.members-list');
   await page.getByRole('combobox', { name: 'Join subagent' }).selectOption('builtin/research');
-  await members.getByRole('button', { name: 'Join workspace', exact: true }).click();
+  await page.getByRole('button', { name: 'Join project', exact: true }).click();
   await expect(members).toContainText('builtin/research');
   await expect(members.getByRole('button', { name: 'Disable member' }).first()).toBeVisible();
+  await page.goto(`/tickets?workspace_id=${project.id}`);
   await page.getByRole('button', { name: 'New ticket', exact: true }).click();
   const executionMode = page.getByRole('combobox', { name: 'Execution mode', exact: true });
   await expect(page.locator('.mode-help')).toContainText('Read-only research');
@@ -295,47 +297,101 @@ test('project selection refreshes workspaces and clears the previous selection',
   await expect(dialog.getByRole('button', { name: /Create new session/ })).toBeVisible();
 });
 
-test('project dialog creates, cancels edits, updates, and archives a saved project', async ({ page, request }) => {
+test('Projects manages defaults, atomic initial members, limits, bindings and archive', async ({ page, request }) => {
   const fixture = await (await request.get('/_test/fixture')).json();
-  await page.getByTitle('Create project', { exact: true }).click();
-  const create = page.getByRole('dialog', { name: 'Create project', exact: true });
-  await create.getByPlaceholder('Project name').fill('UI refactor project');
-  await create.getByPlaceholder('/path/to/workspace').fill(fixture.project_root);
-  await create.getByRole('button', { name: 'Add', exact: true }).click();
-  await create.getByRole('button', { name: 'Choose workspace folder' }).click();
+  await expect(page.getByRole('button', { name: 'Create project', exact: true })).toHaveCount(0);
+  const before = (await (await request.get('/api/v1/projects')).json()).projects;
+  await page.goto('/projects?defaults=1');
+  await page.getByRole('checkbox', { name: /^builtin\/research/ }).check();
+  await page.getByRole('button', { name: 'Save defaults', exact: true }).click();
+  await expect(page.getByRole('status')).toContainText('Default subagents saved');
+  await page.getByRole('button', { name: 'New project', exact: true }).click();
+  await page.getByRole('textbox', { name: 'Project name', exact: true }).fill('UI refactor project');
+  await page.getByRole('textbox', { name: 'Project workspace path' }).fill(fixture.project_root);
+  await page.getByRole('button', { name: 'Add directory', exact: true }).click();
+  await page.getByRole('button', { name: 'Browse project directory', exact: true }).click();
   const browser = page.getByRole('dialog', { name: 'Choose a folder' });
   await browser.getByRole('textbox', { name: 'Directory path' }).fill(fixture.project_other);
   await browser.getByRole('button', { name: 'Go', exact: true }).click();
   await expect(browser.locator('footer code')).toHaveText(fixture.project_other);
   await browser.getByRole('button', { name: 'Choose folder', exact: true }).click();
-  await expect(create.getByPlaceholder('/path/to/workspace')).toHaveValue(fixture.project_other);
-  await expect(create.locator('.auxiliary-list > div')).toHaveCount(1);
-  await create.getByRole('button', { name: 'Add', exact: true }).click();
-  await expect(create.locator('.auxiliary-list > div')).toHaveCount(2);
-  await create.getByRole('button', { name: 'Save', exact: true }).click();
-  await expect(create).toHaveCount(0);
-
-  const edit = page.getByRole('dialog', { name: 'Edit project', exact: true });
-  await page.getByRole('button', { name: 'Edit project UI refactor project', exact: true }).click();
-  await edit.getByPlaceholder('Project name').fill('Unsaved name');
-  await edit.getByRole('button', { name: `Remove ${fixture.project_other}`, exact: true }).click();
-  await edit.getByRole('button', { name: 'Cancel', exact: true }).click();
-  await page.getByRole('button', { name: 'Edit project UI refactor project', exact: true }).click();
-  await expect(edit.getByPlaceholder('Project name')).toHaveValue('UI refactor project');
-  await expect(edit.locator('.auxiliary-list > div')).toHaveCount(2);
-  await edit.getByPlaceholder('Project name').fill('UI refactor updated');
-  await edit.getByRole('button', { name: `Remove ${fixture.project_other}`, exact: true }).click();
-  await edit.getByRole('button', { name: 'Save', exact: true }).click();
-  await expect(edit).toHaveCount(0);
-  await page.reload();
-  await page.getByRole('button', { name: 'Edit project UI refactor updated', exact: true }).click();
-  await expect(edit.locator('.auxiliary-list > div')).toHaveCount(1);
-  const projects = (await (await request.get('/api/v1/projects')).json()).projects;
-  expect(projects.find((project) => project.name === 'UI refactor updated').workspace_roots).toEqual([fixture.project_root]);
-  page.once('dialog', (dialog) => dialog.accept());
-  await edit.getByRole('button', { name: 'Archive', exact: true }).click();
-  await expect(edit).toHaveCount(0);
-  await expect(page.getByRole('button', { name: 'Edit project UI refactor updated', exact: true })).toHaveCount(0);
+  await page.getByRole('button', { name: 'Add directory', exact: true }).click();
+  await expect(page.locator('.root-row')).toHaveCount(2);
+  await page.locator('.project-tabs').getByRole('button', { name: 'Subagents', exact: true }).click();
+  await expect(page.getByRole('checkbox', { name: /^builtin\/research/ })).toBeChecked();
+  await page.locator('.project-tabs').getByRole('button', { name: 'Execution', exact: true }).click();
+  await page.getByRole('spinbutton', { name: 'Concurrent tickets', exact: true }).fill('1');
+  await page.getByRole('spinbutton', { name: 'Concurrent subagents per parent', exact: true }).fill('2');
+  await page.getByRole('button', { name: 'Create project', exact: true }).click();
+  await expect(page.getByRole('status')).toContainText('Project saved');
+  const saved = (await (await request.get('/api/v1/projects')).json()).projects.find(p => p.name === 'UI refactor project');
+  expect(saved.workspace_roots).toEqual([fixture.project_root, fixture.project_other]);
+  expect(saved.limits).toEqual({ max_parallel_tickets: 1, max_parallel_subagents: 2 });
+  const membersURL = `/api/v1/projects/${saved.id}/members`;
+  let members = (await (await request.get(membersURL)).json()).members;
+  expect(members).toHaveLength(1);
+  const originalMember = members[0];
+  expect(originalMember.agent_id).toBe('builtin/research');
+  expect(originalMember.definition_root).toBe(fixture.project_root);
+  for (const p of before) expect((await (await request.get(`/api/v1/projects/${p.id}/members`)).json()).members).not.toContainEqual(expect.objectContaining({ definition_root: fixture.project_root }));
+  await page.locator('.project-tabs').getByRole('button', { name: 'Subagents', exact: true }).click();
+  await page.getByRole('button', { name: 'Edit member', exact: true }).click();
+  await page.getByRole('combobox', { name: 'Execution directory', exact: true }).selectOption(fixture.project_other);
+  await page.getByRole('button', { name: 'Save member', exact: true }).click();
+  await expect(page.locator('.member-card')).toContainText(`Execution · ${fixture.project_other}`);
+  await page.getByRole('button', { name: 'Disable member', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Enable member', exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'Enable member', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Disable member', exact: true })).toBeVisible();
+  members = (await (await request.get(membersURL)).json()).members;
+  expect(members[0].id).toBe(originalMember.id);
+  expect(members[0].execution_root).toBe(fixture.project_other);
+  await page.screenshot({ path: join(tmpdir(), 'q-projects-members.png') });
+  for (const width of [1440, 390]) {
+    await page.setViewportSize({ width, height: 900 });
+    for (const scale of [1, 1.3]) {
+      await page.evaluate(value => document.documentElement.style.setProperty('--text-scale', String(value)), scale);
+      for (const section of ['General', 'Subagents', 'Execution']) {
+        await page.locator('.project-tabs').getByRole('button', { name: section, exact: true }).click();
+        const layout = await page.locator('.projects-view').evaluate(root => ({
+          overflow: document.documentElement.scrollWidth > innerWidth,
+          clipped: [...root.querySelectorAll('select,input:not([type=checkbox])')].filter(el => {
+            if (!el.getBoundingClientRect().height) return false;
+            const css = getComputedStyle(el);
+            const line = Number.parseFloat(css.lineHeight) || Number.parseFloat(css.fontSize) * 1.45;
+            return el.clientHeight + .5 < line + Number.parseFloat(css.paddingTop) + Number.parseFloat(css.paddingBottom);
+          }).map(el => el.getAttribute('aria-label'))
+        }));
+        expect(layout).toEqual({ overflow: false, clipped: [] });
+      }
+    }
+    await page.screenshot({ path: join(tmpdir(), `q-projects-${width}.png`) });
+  }
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.evaluate(() => document.documentElement.style.setProperty('--text-scale', '1'));
+  await page.locator('.project-tabs').getByRole('button', { name: 'General', exact: true }).click();
+  await page.getByRole('textbox', { name: 'Project name', exact: true }).fill('Unsaved');
+  page.once('dialog', dialog => dialog.dismiss());
+  await page.getByRole('button', { name: /Default subagents/ }).click();
+  await expect(page.getByRole('textbox', { name: 'Project name', exact: true })).toHaveValue('Unsaved');
+  page.once('dialog', dialog => dialog.accept());
+  await page.getByRole('button', { name: /Default subagents/ }).click();
+  await page.getByRole('checkbox', { name: /^builtin\/research/ }).uncheck();
+  await page.getByRole('button', { name: 'Save defaults', exact: true }).click();
+  await expect(page.getByRole('status')).toContainText('Default subagents saved');
+  expect((await (await request.get(membersURL)).json()).members).toEqual(members);
+  await page.goto(`/projects?project_id=${saved.id}`);
+  await expect(page.getByRole('textbox', { name: 'Project name', exact: true })).toHaveValue('UI refactor project');
+  await page.getByRole('textbox', { name: 'Project name', exact: true }).fill('UI refactor updated');
+  await page.getByRole('button', { name: 'Save project', exact: true }).click();
+  await expect(page.getByRole('status')).toContainText('Project saved');
+  await page.goto('/sessions');
+  await page.getByRole('button', { name: 'Project settings UI refactor updated', exact: true }).click();
+  await expect(page.getByRole('textbox', { name: 'Project name', exact: true })).toHaveValue('UI refactor updated');
+  page.once('dialog', dialog => dialog.accept());
+  await page.getByRole('button', { name: 'Archive project', exact: true }).click();
+  await expect(page.getByRole('status')).toContainText('Project archived');
+  expect((await (await request.get('/api/v1/projects')).json()).projects.find(p => p.id === saved.id)).toBeUndefined();
 });
 
 test('Coordinator and Integrator stay independent and protected after clear', async ({ page, request }) => {

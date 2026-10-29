@@ -65,7 +65,7 @@ func (e *Engine) log(err error) {
 		e.options.Log(err)
 	}
 }
-func (e *Engine) launch(key string, run func()) {
+func (e *Engine) launch(key string, run func()) bool {
 	e.mu.Lock()
 	limit := 3
 	if e.options.Parallel != nil {
@@ -82,7 +82,7 @@ func (e *Engine) launch(key string, run func()) {
 	}
 	if e.active[key] || (key != "embeddings" && active >= limit) {
 		e.mu.Unlock()
-		return
+		return false
 	}
 	e.active[key] = true
 	e.jobs.Add(1)
@@ -92,6 +92,7 @@ func (e *Engine) launch(key string, run func()) {
 		defer func() { e.mu.Lock(); delete(e.active, key); e.mu.Unlock() }()
 		run()
 	}()
+	return true
 }
 func (e *Engine) loop() {
 	defer close(e.done)
@@ -134,25 +135,44 @@ func (e *Engine) scan(ctx context.Context) (returnErr error) {
 	}
 	for _, project := range projects.Workspaces {
 		cursor := ""
+		var tickets []workitems.Item
 		for {
 			page, err := c.ListItems(ctx, project.ID, workitems.Ticket, cursor, 100)
 			if err != nil {
 				return err
 			}
-			for _, item := range page.Items {
-				if item.Deleted {
-					continue
-				}
-				if needsAssignment(item) && !time.Now().Before(item.NextAssignmentAt) {
-					e.launch(item.ID, func() { e.log(e.execute(project, item)) })
-				}
-				if item.ExecutionState == "merge_queued" || item.ExecutionState == "close_queued" {
-					e.launch(item.ID, func() { e.log(e.merge(project, item)) })
-				}
-			}
+			tickets = append(tickets, page.Items...)
 			cursor = page.NextCursor
 			if cursor == "" {
 				break
+			}
+		}
+		parallel := 3
+		if e.options.Parallel != nil {
+			parallel = max(1, e.options.Parallel())
+		}
+		active := 0
+		e.mu.Lock()
+		for _, item := range tickets {
+			if item.ExecutionState == "running" || item.ExecutionState == "reserved" || item.ExecutionState == "stopping" || (needsAssignment(item) && e.active[item.ID]) {
+				active++
+			}
+		}
+		e.mu.Unlock()
+		remaining := workitems.EffectiveParallel(project.Limits.MaxParallelTickets, parallel) - active
+		for _, item := range tickets {
+			if item.Deleted {
+				continue
+			}
+			// Filter full projects before occupying a host worker slot. Otherwise
+			// their queued assignments can starve projects that still have room.
+			if remaining > 0 && needsAssignment(item) && !time.Now().Before(item.NextAssignmentAt) {
+				if e.launch(item.ID, func() { e.log(e.execute(project, item)) }) {
+					remaining--
+				}
+			}
+			if item.ExecutionState == "merge_queued" || item.ExecutionState == "close_queued" {
+				e.launch(item.ID, func() { e.log(e.merge(project, item)) })
 			}
 		}
 		if e.options.Deliver != nil {
@@ -229,6 +249,11 @@ func (e *Engine) execute(project workitems.Workspace, item workitems.Item) (retu
 	if err != nil {
 		return waiting(err)
 	}
+	parallel := 3
+	if e.options.Parallel != nil {
+		parallel = max(1, e.options.Parallel())
+	}
+	active := 0
 	loads := map[string]int{}
 	cursor := ""
 	for {
@@ -237,14 +262,18 @@ func (e *Engine) execute(project workitems.Workspace, item workitems.Item) (retu
 			return waiting(err)
 		}
 		for _, ticket := range page.Items {
-			if ticket.ExecutionState == "running" || ticket.ExecutionState == "reserved" {
+			if ticket.ExecutionState == "running" || ticket.ExecutionState == "reserved" || ticket.ExecutionState == "stopping" {
 				loads[ticket.AssignedMemberID]++
+				active++
 			}
 		}
 		cursor = page.NextCursor
 		if cursor == "" {
 			break
 		}
+	}
+	if active >= workitems.EffectiveParallel(project.Limits.MaxParallelTickets, parallel) {
+		return nil
 	}
 	for i := range candidates {
 		candidates[i].ActiveAttempts = loads[candidates[i].Member.ID]
@@ -258,10 +287,6 @@ func (e *Engine) execute(project workitems.Workspace, item workitems.Item) (retu
 	cancelDecision()
 	if err != nil {
 		return waiting(err)
-	}
-	parallel := 3
-	if e.options.Parallel != nil {
-		parallel = max(1, e.options.Parallel())
 	}
 	attempt, err := c.ClaimTicket(e.ctx, item.ID, workitems.ClaimInput{Revision: item.Revision, MemberID: candidate.Member.ID, MemberRevision: candidate.Member.Revision, DefinitionDigest: candidate.Digest, Owner: e.owner, RequestID: uuid.NewString(), ParallelLimit: parallel})
 	if err != nil {

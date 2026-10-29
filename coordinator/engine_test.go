@@ -90,6 +90,89 @@ func TestScanAdmitsLegacyTicketsAndPreservesExplicitStops(t *testing.T) {
 	}
 }
 
+func TestFullProjectBacklogDoesNotOccupyOtherProjectsWorkerSlots(t *testing.T) {
+	ctx, dir := t.Context(), t.TempDir()
+	source, err := workitems.Open(ctx, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	makeProject := func(name string) (workitems.Workspace, workitems.Member) {
+		t.Helper()
+		root := t.TempDir()
+		p, err := source.CreateWorkspace(ctx, workitems.WorkspaceInput{Name: name, WorkspaceRoots: []string{root}, Limits: &workitems.ProjectLimits{MaxParallelTickets: 1}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		m, err := source.PutMember(ctx, p.ID, workitems.MemberInput{AgentID: "builtin/research", DefinitionRoot: root, ExecutionRoot: root})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return p, m
+	}
+	first, member := makeProject("A full")
+	second, _ := makeProject("B available")
+	issue := func(p workitems.Workspace) workitems.Item {
+		t.Helper()
+		item, err := source.CreateItem(ctx, workitems.CreateInput{WorkspaceID: p.ID, Kind: workitems.Ticket, Title: "Research", Content: "Inspect", Author: "user"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return item
+	}
+	active := issue(first)
+	if _, err := source.ClaimTicket(ctx, active.ID, workitems.ClaimInput{ParallelLimit: 2, Revision: active.Revision, MemberID: member.ID, MemberRevision: member.Revision, Owner: "live", DefinitionDigest: "profile", RequestID: "reserve"}); err != nil {
+		t.Fatal(err)
+	}
+	for range 5 {
+		issue(first)
+	}
+	other := issue(second)
+	if err := source.Close(); err != nil {
+		t.Fatal(err)
+	}
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := listener.Addr().(*net.TCPAddr).Port
+	if err := listener.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := (library.ConfigStore{Dir: dir}).Save(library.Config{Host: "127.0.0.1", Port: port}); err != nil {
+		t.Fatal(err)
+	}
+	runtime, err := library.Ensure(ctx, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := runtime.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
+	seen := make(chan string, 8)
+	release := make(chan struct{})
+	e := &Engine{ctx: ctx, owner: "scheduler", active: map[string]bool{active.ID: true}, options: EngineOptions{Directory: dir, Parallel: func() int { return 2 }, Candidates: func(ctx context.Context, p workitems.Workspace, _ workitems.Item, _ []workitems.Member) ([]Candidate, error) {
+		seen <- p.ID
+		if p.ID == first.ID {
+			<-release
+		}
+		return nil, nil
+	}}}
+	defer func() { close(release); e.jobs.Wait() }()
+	if err := e.scan(ctx); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case id := <-seen:
+		if id != second.ID {
+			t.Fatalf("full project consumed assignment slot: %s", id)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatalf("available project ticket %s was starved", other.ID)
+	}
+}
+
 func TestManagerQuestionsAndEmbeddingDoNotConsumeWorkerCapacity(t *testing.T) {
 	e := &Engine{active: map[string]bool{}, options: EngineOptions{Parallel: func() int { return 1 }}}
 	release := make(chan struct{})

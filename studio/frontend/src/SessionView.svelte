@@ -4,7 +4,6 @@
   import SessionTree from './sessions/SessionTree.svelte';
   import Transcript from './sessions/Transcript.svelte';
   import { loadDraft, saveDraft } from './sessions/drafts';
-  import ProjectDialog from './sessions/ProjectDialog.svelte';
   import SessionRegistration from './sessions/SessionRegistration.svelte';
   import SessionModelPicker from './sessions/SessionModelPicker.svelte';
   import CouncilView from './CouncilView.svelte';
@@ -90,8 +89,7 @@
   let registrationDialogOpen = false;
   let registrationMode: 'chat' | 'workspace' = 'chat';
   let sessionListOpen = false;
-  let projectDialogOpen = false;
-  let editingProject: StudioProject | undefined;
+  export let openProject: (path: string) => void = path => { location.href = path; };
   let filesOpen = false;
   let openedFilePath = '';
   let openedFileLine = 1;
@@ -229,15 +227,7 @@
   }
 
   function openProjectDialog(project?: StudioProject) {
-    editingProject = project;
-    projectDialogOpen = true;
-    error = '';
-  }
-
-  async function projectSaved(status: string) {
-    projectDialogOpen = false;
-    await loadRegisteredSessions(selectedRegistration?.registration_id || '');
-    runStatus = status;
+    openProject(project ? `/projects?project_id=${encodeURIComponent(project.id)}` : `/projects?new=1&workspace_root=${encodeURIComponent(workspaceRoot)}`);
   }
 
   async function clearSession() {
@@ -874,7 +864,3 @@
   .workflow-panel { display:flex; flex-direction:column; min-width:0; min-height:0; overflow:hidden; }
   @media(max-width:800px) { .workflow-panel { min-height:560px; overflow:visible; } }
 </style>
-
-{#if projectDialogOpen}
-  <ProjectDialog project={editingProject} {workspaceRoot} onsaved={projectSaved} onclose={() => projectDialogOpen = false} />
-{/if}

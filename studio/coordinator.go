@@ -84,6 +84,12 @@ func (s *sessionsService) serveWorkMembers(w http.ResponseWriter, r *http.Reques
 		writeAPIError(w, 400, err)
 		return
 	}
+	if !in.Disabled {
+		if err := s.validateProjectAgent(in.AgentID, in.DefinitionRoot); err != nil {
+			writeAPIError(w, http.StatusBadRequest, err)
+			return
+		}
+	}
 	workResponse(s, w, r, 200, func(ctx context.Context, c *library.Client) (workitems.Member, error) {
 		return c.PutMember(ctx, r.PathValue("project"), in)
 	})

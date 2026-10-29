@@ -44,7 +44,7 @@ func (host *SessionHost) startCoordinator() {
 		if err != nil {
 			return 1
 		}
-		return value.Agents.MaxParallel
+		return value.EffectiveAgents().MaxParallel
 	}, Log: func(err error) {
 		if host.logs != nil {
 			_, _ = host.logs.Write([]byte("coordinator: " + err.Error() + "\n"))
@@ -322,6 +322,8 @@ func (host *SessionHost) runNativeTicket(ctx context.Context, c *library.Client,
 	m.config = value
 	m.client = configuredClient
 	m.workspaceStore = &worker
+	m.libraryClient = c
+	m.studioWorkspaceContext = &SessionWorkspaceContext{ProjectID: a.WorkspaceID}
 	m.runID = a.ID
 	m.archive, m.archiveSearch = writer, archive
 	runtime, err := m.configuredDelegationRuntimeIn(base, executionWorkspace{sessionStore: &worker, workspaceStateRoot: candidate.Member.DefinitionRoot, checkoutRoot: root}, candidate.Member.AgentID, []string{candidate.Member.AgentID})

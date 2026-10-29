@@ -18,7 +18,7 @@ import (
 
 const (
 	ServiceName           = "q-library"
-	ProtocolVersion       = 10
+	ProtocolVersion       = 11
 	Implementation        = "0.1.0"
 	defaultRequestTimeout = 5 * time.Second
 	registrationTimeout   = 2 * time.Minute
