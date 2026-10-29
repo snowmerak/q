@@ -15,10 +15,9 @@ import (
 
 func TestRuntimeModelDoesNotInitializeOrUpdateTerminalControls(t *testing.T) {
 	state := newRuntimeModel(t.Context(), config.Store{Dir: t.TempDir()}, nil, nil)
-	state.workspaceLearning = workspace.LearningConfig{Disabled: true}
-	state.workspaceLearningRestored = true
+
 	state.enterSession(config.Default(), &fakeClient{})
-	t.Cleanup(state.stopSessionLearning)
+
 	updated, command := state.updateExecution(tea.WindowSizeMsg{Width: 150, Height: 60})
 	state = updated.(model)
 	if !state.headless || state.width != 0 || state.height != 0 || state.viewport.Width() != 0 ||

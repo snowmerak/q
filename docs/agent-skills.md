@@ -265,13 +265,13 @@ projections. A matching projection contributes according to description (4),
 tag (3), or name (2); the best weighted projection represents the skill in the
 vector ranking before reciprocal-rank fusion with BM25. Assigning a new model
 or finding an old combined skill vector backfills active skills. Model assignment
-also re-embeds existing global propositions, preserving their content, queries,
-provenance and registration identity. Studio migrates existing archives for all
+also rebuilds issue/ticket vectors, preserving authoritative source content,
+provenance and source identity. Studio migrates existing archives for all
 registered project and session workspaces, even without a selected workspace.
 Failed migrations report an error; retrying resumes missing or outdated vectors.
 Semantic workspace searches reconcile missing and outdated record embeddings
-before querying, regardless of Studio registration. Global skill/proposition
-searches and proposition registration also repair their embeddings on use.
+before querying, regardless of Studio registration. Global skill
+searches also repair embeddings on use. Issue/ticket indexing uses the Library outbox and background vector batches; semantic unavailability and hybrid fallback are explicit.
 These checks run again on subsequent use, so a later import or a failed startup
 migration does not require another settings save. Matching vectors are reused;
 repair errors are returned and a later request retries the remaining records.

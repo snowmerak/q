@@ -23,7 +23,6 @@ import (
 	"github.com/snowmerak/q/sessionstore"
 	"github.com/snowmerak/q/subagent"
 	"github.com/snowmerak/q/tools/builtin"
-	"github.com/snowmerak/q/worklock"
 	"github.com/snowmerak/q/workspace"
 )
 
@@ -65,7 +64,7 @@ func TestRuntimeListsAndCallsBuiltinTools(t *testing.T) {
 			t.Error(err)
 		}
 	}()
-	if len(runtime.Tools()) != 15 {
+	if len(runtime.Tools()) != 14 {
 		t.Fatalf("runtime tools = %d", len(runtime.Tools()))
 	}
 	tools := runtime.Tools()
@@ -79,16 +78,8 @@ func TestRuntimeListsAndCallsBuiltinTools(t *testing.T) {
 			t.Fatalf("runtime tool %q has invalid properties: %#v", tool.Function.Name, tool.Function.Parameters["properties"])
 		}
 	}
-	if runtimeHasTool(runtime, "search_skills") || runtimeHasTool(runtime, "get_skill") || !runtimeHasTool(runtime, "learn") {
-		t.Fatalf("default runtime advertised unavailable skill tools or omitted learn: %#v", runtime.Tools())
-	}
-	learned, err := runtime.client.CallTool(context.Background(), &mcp.CallToolParams{Name: "learn"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	structured, ok := learned.StructuredContent.(map[string]any)
-	if learned.IsError || !ok || structured["enqueued"] != true {
-		t.Fatalf("unexpected learn result: %+v", learned)
+	if runtimeHasTool(runtime, "search_skills") || runtimeHasTool(runtime, "get_skill") || runtimeHasTool(runtime, "learn") {
+		t.Fatal("default runtime advertised unavailable skill tools or a retired learning tool")
 	}
 	environment := runtime.Environment()
 	if environment.OS != goruntime.GOOS || environment.Architecture != goruntime.GOARCH || environment.Shell == "" {
@@ -493,8 +484,8 @@ func TestRuntimeExposesAndCallsArchiveTools(t *testing.T) {
 			t.Error(err)
 		}
 	}()
-	if len(runtime.Tools()) != 19 || !runtimeHasTool(runtime, "search_archive") || !runtimeHasTool(runtime, "get_archive_record") {
-		t.Fatalf("runtime tools = %#v", runtime.Tools())
+	if len(runtime.Tools()) != 18 || !runtimeHasTool(runtime, "search_archive") || !runtimeHasTool(runtime, "get_archive_record") {
+		t.Fatalf("runtime tools = %d", len(runtime.Tools()))
 	}
 
 	searched, err := runtime.Call(context.Background(), client.ToolCall{
@@ -668,18 +659,6 @@ func TestSkillToolsUseAuthenticatedGlobalLibraryAPIEndToEnd(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(skillDirectory, "SKILL.md"), []byte("---\nname: global-e2e-skill\ndescription: Authenticated Library MCP integration token.\n---\n\n# End-to-end body\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	propositionPayload, err := json.Marshal(qlibrary.PropositionPayload{
-		Queries: []string{"which MCP server contains durable facts"}, ExtractorModel: "test-model", ExtractorVersion: "v1",
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	seedGlobalLibraryRecords(t, configDirectory, sessionstore.Record{
-		ID: "prop-mcp-e2e", Kind: sessionstore.KindProposition, Scope: "global",
-		Content:    "Durable propositions are read through the existing q-tools MCP server.",
-		SearchText: "which MCP server contains durable facts", Refs: []string{"thread://mcp-e2e"},
-		Tags: []string{"mcp"}, Payload: propositionPayload,
-	})
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -726,10 +705,6 @@ func TestSkillToolsUseAuthenticatedGlobalLibraryAPIEndToEnd(t *testing.T) {
 			t.Error(err)
 		}
 	}()
-	if !runtimeHasTool(runtime, "search_propositions") || !runtimeHasTool(runtime, "get_proposition") {
-		t.Fatalf("proposition tools are missing: %#v", runtime.Tools())
-	}
-
 	found, err := runtime.Call(context.Background(), client.ToolCall{
 		ID: "call-e2e-library-search", Type: client.ToolTypeFunction,
 		Function: client.FunctionCall{Name: "search_skills", Arguments: `{"query":"Authenticated Library MCP integration token","scopes":["global"]}`},
@@ -759,34 +734,6 @@ func TestSkillToolsUseAuthenticatedGlobalLibraryAPIEndToEnd(t *testing.T) {
 		t.Fatalf("end-to-end Library skill = %#v", skill)
 	}
 
-	propositions, err := runtime.Call(context.Background(), client.ToolCall{
-		ID: "call-e2e-proposition-search", Type: client.ToolTypeFunction,
-		Function: client.FunctionCall{Name: "search_propositions", Arguments: `{"query":"which MCP server contains durable facts"}`},
-	})
-	if err != nil || propositions.IsError {
-		t.Fatalf("end-to-end proposition search = %#v, err = %v", propositions, err)
-	}
-	var propositionSearch builtin.SearchPropositionsOutput
-	if err := decodeReceiptResult(propositions.Content, &propositionSearch); err != nil {
-		t.Fatal(err)
-	}
-	if len(propositionSearch.Hits) != 1 || propositionSearch.Hits[0].ID != "prop-mcp-e2e" {
-		t.Fatalf("end-to-end proposition hits = %#v", propositionSearch)
-	}
-	loadedProposition, err := runtime.Call(context.Background(), client.ToolCall{
-		ID: "call-e2e-proposition-get", Type: client.ToolTypeFunction,
-		Function: client.FunctionCall{Name: "get_proposition", Arguments: `{"id":"prop-mcp-e2e"}`},
-	})
-	if err != nil || loadedProposition.IsError {
-		t.Fatalf("end-to-end proposition get = %#v, err = %v", loadedProposition, err)
-	}
-	var proposition builtin.GetPropositionOutput
-	if err := decodeReceiptResult(loadedProposition.Content, &proposition); err != nil {
-		t.Fatal(err)
-	}
-	if proposition.ID != "prop-mcp-e2e" || len(proposition.Payload.Queries) != 1 || proposition.Refs[0] != "thread://mcp-e2e" {
-		t.Fatalf("end-to-end proposition = %#v", proposition)
-	}
 }
 
 func TestSearchSkillsRefreshesSessionStoreSnapshotWhenDue(t *testing.T) {
@@ -1152,37 +1099,5 @@ func TestSchemaObjectAddsPropertiesToEmptyObjectSchema(t *testing.T) {
 	}
 	if !reflect.DeepEqual(schema["properties"], existing) {
 		t.Fatalf("existing properties changed: %#v", schema["properties"])
-	}
-}
-
-func seedGlobalLibraryRecords(t *testing.T, dir string, records ...sessionstore.Record) {
-	t.Helper()
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	lock, err := worklock.AcquireFile(dir, qlibrary.LockFileName, "seed Library MCP test records")
-	if err != nil {
-		t.Fatal(err)
-	}
-	store, err := sessionstore.OpenWithOptions(dir, sessionstore.OpenOptions{
-		WorkspaceLock: lock, Directory: "library",
-	})
-	if err != nil {
-		_ = lock.Close()
-		t.Fatal(err)
-	}
-	for _, record := range records {
-		if _, err := store.Save(record); err != nil {
-			_ = store.Close()
-			_ = lock.Close()
-			t.Fatal(err)
-		}
-	}
-	if err := store.Close(); err != nil {
-		_ = lock.Close()
-		t.Fatal(err)
-	}
-	if err := lock.Close(); err != nil {
-		t.Fatal(err)
 	}
 }

@@ -1,16 +1,16 @@
 package app
 
 import (
+	tea "charm.land/bubbletea/v2"
 	"context"
 	"errors"
 	"sync"
 	"testing"
 	"time"
 
-	"github.com/snowmerak/q/client"
 	"github.com/snowmerak/q/config"
 	qlibrary "github.com/snowmerak/q/library"
-	"github.com/snowmerak/q/thinker"
+
 	"github.com/snowmerak/q/workspace"
 )
 
@@ -39,18 +39,17 @@ func requireSessionLease(t *testing.T, host *SessionHost, session *liveSession, 
 
 func TestLiveSessionSlowReleaseDoesNotBlockOtherSessions(t *testing.T) {
 	fast, host := testLiveSession(t, &fakeClient{})
-	configured := &drainingLearnerClient{started: make(chan struct{}), stopping: make(chan struct{}), allowExit: make(chan struct{}), closedClient: make(chan struct{})}
+	configured := &drainingBackgroundClient{started: make(chan struct{}), stopping: make(chan struct{}), allowExit: make(chan struct{}), closedClient: make(chan struct{})}
 	ctx, cancel := context.WithCancel(t.Context())
 	state := newModel(ctx, config.Store{Dir: t.TempDir()}, nil)
 	state.enterChat(config.Default(), configured)
-	if err := state.ensureLearningMachine(thinker.LearningState{}, nil); err != nil {
-		t.Fatal(err)
-	}
+
 	state.libraryClient = &qlibrary.Client{}
-	state.learning.AppendMessage(client.Message{Role: client.RoleUser, Content: "background learning"})
-	state.learning.EnqueueExplicit()
+
 	store := workspace.Store{Root: t.TempDir(), SessionID: "slow-session"}
 	slow := newLiveSession(ctx, cancel, &preparedSession{state: state, store: store, client: configured, lifecycle: newStartupLifecycle()})
+	command := slow.commands.wrap(func() tea.Msg { _, _ = configured.ListModels(ctx); return nil })
+	go command()
 	host.liveMu.Lock()
 	host.liveSessions[liveSessionKey(store, store.SessionID)] = slow
 	host.liveMu.Unlock()
@@ -58,14 +57,14 @@ func TestLiveSessionSlowReleaseDoesNotBlockOtherSessions(t *testing.T) {
 	select {
 	case <-configured.started:
 	case <-time.After(5 * time.Second):
-		t.Fatal("background learner did not start")
+		t.Fatal("background command did not start")
 	}
 	released := make(chan error, 1)
 	go func() { released <- host.ReleaseSession(store, store.SessionID) }()
 	select {
 	case <-configured.stopping:
 	case <-time.After(5 * time.Second):
-		t.Fatal("release did not cancel learning")
+		t.Fatal("release did not cancel the background command")
 	}
 	requireSessionLease(t, host, fast, nil)
 	requireSessionLease(t, host, slow, workspace.ErrLocked)
@@ -85,7 +84,7 @@ func TestLiveSessionSlowReleaseDoesNotBlockOtherSessions(t *testing.T) {
 	case err := <-closed:
 		t.Fatalf("host shutdown skipped a draining session: %v", err)
 	case err := <-released:
-		t.Fatalf("session release skipped its learner: %v", err)
+		t.Fatalf("session release skipped its background command: %v", err)
 	default:
 	}
 	configured.allowExit <- struct{}{}
@@ -96,7 +95,7 @@ func TestLiveSessionSlowReleaseDoesNotBlockOtherSessions(t *testing.T) {
 				t.Fatal(err)
 			}
 		case <-time.After(5 * time.Second):
-			t.Fatal("shutdown did not finish after the learner drained")
+			t.Fatal("shutdown did not finish after the background command drained")
 		}
 	}
 }

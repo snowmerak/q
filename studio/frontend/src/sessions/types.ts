@@ -83,7 +83,7 @@ export type DelegationNode = {
 export type DelegationSession = { node: DelegationNode; kind: string; run?: { id: string; status: string; error?: string } };
 export type FlatDelegation = DelegationNode & { depth: number; path: string };
 export type RegisteredSessionTree = {
-	kind?: 'chat';
+	kind?: 'chat' | 'manager' | 'coordinator' | 'integrator';
   registration_id: string;
   workspace_root: string;
   project_id?: string;
@@ -97,6 +97,16 @@ export type StudioProject = {
   id: string;
   name: string;
   workspace_roots: string[];
+  manager_session_id: string;
+  coordinator_session_id: string;
   created_at: string;
   updated_at: string;
 };
+
+export function workspaceRoleTitle(kind?: string): string {
+  return kind === 'coordinator' ? 'Coordinator' : kind === 'integrator' || kind === 'manager' ? 'Integrator' : '';
+}
+
+export function workspaceRoleDescription(kind?: string): string {
+  return kind === 'coordinator' ? 'Request intake and planning' : kind === 'integrator' || kind === 'manager' ? 'Review and merge' : '';
+}

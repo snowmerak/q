@@ -2,6 +2,122 @@ import { test, expect } from '@playwright/test';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+test('issues and tickets keep readable controls at desktop, mobile and larger text sizes', async ({ page }) => {
+  for (const route of ['issues', 'tickets']) {
+    await page.goto(`/${route}`);
+    await expect(page).toHaveTitle(/Q Studio/);
+    await expect(page.getByRole('heading', { name: route === 'issues' ? 'Issues' : 'Tickets', exact: true })).toBeVisible();
+    await expect(page.getByRole('combobox', { name: 'Work item project' })).not.toHaveValue('');
+    await page.screenshot({ path: join(tmpdir(), `q-work-${route}-default.png`) });
+    await page.getByText('Filters', { exact: true }).click();
+    await expect(page.getByRole('combobox', { name: 'Search state' })).toBeVisible();
+    for (const width of [1440, 390]) {
+      await page.setViewportSize({ width, height: 900 });
+      for (const scale of [1, 1.3]) {
+        await page.evaluate(value => document.documentElement.style.setProperty('--text-scale', String(value)), scale);
+        const layout = await page.locator('.work-items').evaluate(root => {
+          const controls = [...root.querySelectorAll('select')].filter(el => el.getBoundingClientRect().height > 0);
+          return {
+            overflow: document.documentElement.scrollWidth > innerWidth,
+            clipped: controls.filter(el => {
+              const style = getComputedStyle(el);
+              const line = Number.parseFloat(style.lineHeight) || Number.parseFloat(style.fontSize) * 1.45;
+              return el.clientHeight + .5 < line + Number.parseFloat(style.paddingTop) + Number.parseFloat(style.paddingBottom);
+            }).map(el => el.getAttribute('aria-label'))
+          };
+        });
+        expect(layout).toEqual({ overflow: false, clipped: [] });
+        if (width === 1440) {
+          const query = await page.getByRole('textbox', { name: 'Search work items' }).boundingBox();
+          const mode = await page.getByRole('combobox', { name: 'Work search mode' }).boundingBox();
+          expect(Math.abs(query.y - mode.y)).toBeLessThan(2);
+          expect(mode.width).toBeLessThan(200);
+        }
+        await page.screenshot({ path: join(tmpdir(), `q-work-${route}-${width}-${scale}.png`) });
+      }
+    }
+    await page.evaluate(() => document.documentElement.style.removeProperty('--text-scale'));
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.getByRole('button', { name: route === 'issues' ? 'New issue' : 'New ticket', exact: true }).click();
+    await expect(page.getByRole('textbox', { name: 'Work item title' })).toBeVisible();
+    await expect(page.getByRole('textbox', { name: 'Work item body' })).toBeVisible();
+    await page.getByRole('button', { name: 'Cancel', exact: true }).click();
+  }
+});
+
+test('workspace issues preserve source posts, content pages, search scope and permalinks', async ({ page, request }) => {
+  const projects = (await (await request.get('/api/v1/projects')).json()).projects;
+  const project = projects.find(p => p.name === 'Integration');
+  await page.goto(`/issues?workspace_id=${project.id}`);
+  await page.getByRole('button', { name: 'New issue', exact: true }).click();
+  await page.getByRole('textbox', { name: 'Work item title' }).fill('Coordinator source evidence');
+  await page.getByRole('textbox', { name: 'Work item body' }).fill('Unique quartz coordinator decision. ' + '긴 원본🙂'.repeat(500));
+  await page.getByRole('button', { name: 'Create issue', exact: true }).click();
+  const thread = page.getByRole('region', { name: 'Work item thread' });
+  await expect(thread.getByRole('heading', { name: /Coordinator source evidence/ })).toBeVisible();
+  await thread.getByRole('button', { name: 'Read more', exact: true }).click();
+  await expect(thread.locator('.post-content').first()).toContainText('긴 원본🙂'.repeat(500));
+  await page.getByRole('textbox', { name: 'Work item reply' }).fill('A verified zeolite lesson with source evidence.');
+  await page.getByRole('button', { name: 'Add reply', exact: true }).click();
+  await expect(thread).toContainText('A verified zeolite lesson');
+  await page.screenshot({ path: join(tmpdir(), 'q-work-issue-thread.png') });
+  const sourceLink = thread.getByRole('link', { name: /^post / }).last();
+  const href = await sourceLink.getAttribute('href');
+  await page.goto(href);
+  await expect(thread).toContainText('A verified zeolite lesson');
+  await page.getByRole('textbox', { name: 'Search work items' }).fill('zeolite');
+  await page.getByRole('combobox', { name: 'Work search mode' }).selectOption('lexical');
+  await page.getByRole('button', { name: 'Search', exact: true }).click();
+  await expect(page.getByRole('region', { name: 'Work search results' })).toContainText('A verified zeolite lesson');
+  const other = projects.find(p => p.name === 'Solo');
+  await page.getByRole('combobox', { name: 'Work item project' }).selectOption(other.id);
+  await page.getByRole('button', { name: 'Search', exact: true }).click();
+  await expect(page.getByRole('region', { name: 'Work search results' })).toContainText('No matching passages');
+  await page.getByRole('checkbox', { name: 'All projects' }).check();
+  await page.getByRole('button', { name: 'Search', exact: true }).click();
+  await expect(page.getByRole('region', { name: 'Work search results' })).toContainText('A verified zeolite lesson');
+  await page.setViewportSize({ width: 390, height: 844 });
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+});
+
+test('issuing a ticket automatically requests assignment without a start action', async ({ page, request }) => {
+  const project = (await (await request.get('/api/v1/projects')).json()).projects.find(p => p.name === 'Integration');
+  await page.goto(`/tickets?workspace_id=${project.id}`);
+  await page.getByRole('button', { name: /^Workspace members/ }).click();
+  const members = page.getByRole('region', { name: 'Workspace members', exact: true });
+  await page.getByRole('combobox', { name: 'Join subagent' }).selectOption('builtin/research');
+  await members.getByRole('button', { name: 'Join workspace', exact: true }).click();
+  await expect(members).toContainText('builtin/research');
+  await expect(members.getByRole('button', { name: 'Disable member' }).first()).toBeVisible();
+  await page.getByRole('button', { name: 'New ticket', exact: true }).click();
+  const executionMode = page.getByRole('combobox', { name: 'Execution mode', exact: true });
+  await expect(page.locator('.mode-help')).toContainText('Read-only research');
+  await executionMode.selectOption('git');
+  await expect(page.locator('.mode-help')).toContainText('clean Git repository with an initial commit');
+  await page.locator('.work-create').filter({ has: executionMode }).screenshot({ path: join(tmpdir(), 'q-ticket-git-mode-guide.png') });
+  await executionMode.selectOption('report');
+  await page.getByRole('textbox', { name: 'Work item title' }).fill('Inspect coordinator contracts');
+  await page.getByRole('textbox', { name: 'Work item body' }).fill('Review source identity and durable admission.');
+  await page.getByRole('button', { name: 'Create ticket', exact: true }).click();
+  const execution = page.getByRole('region', { name: 'Ticket execution' });
+  await expect(page.getByRole('button', { name: 'Start ticket', exact: true })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Stop ticket', exact: true })).toHaveCount(0);
+  await expect(page.getByRole('checkbox', { name: 'Queue execution after creation' })).toHaveCount(0);
+  const board = page.getByRole('region', { name: 'Ticket board' });
+  await expect(board.getByRole('heading', { name: 'To do', exact: true })).toBeVisible();
+  await expect(board.getByRole('heading', { name: 'In progress', exact: true })).toBeVisible();
+  await expect(board.getByRole('heading', { name: 'Done', exact: true })).toBeVisible();
+  await page.screenshot({ path: join(tmpdir(), 'q-work-ticket-populated.png') });
+  await expect(execution).toContainText('Waiting for a suitable agent', { timeout: 20000 });
+  await expect(execution).toContainText('System One');
+  await execution.screenshot({ path: join(tmpdir(), 'q-ticket-without-start-stop.png') });
+  const itemID = new URL(page.url()).searchParams.get('item_id');
+  const ticket = await (await request.get(`/api/v1/work/items/${itemID}`)).json();
+  const stopped = await request.post(`/api/v1/work/items/${itemID}/control`, { data: { action: 'cancel', revision: ticket.revision, request_id: `stop-${itemID}` } });
+  expect(stopped.ok()).toBe(true);
+  await expect(execution).toContainText('cancelled');
+});
+
 test.beforeEach(async ({ page }) => {
   const errors = [];
   page.testErrors = errors;
@@ -90,7 +206,7 @@ test('help exposes the command reference and scrolls to every section on desktop
     const index = page.getByRole('navigation', { name: 'Help sections' });
     await expect(guide.getByRole('heading', { name: 'Sessions, commands, and everyday workflows' })).toBeVisible();
     await expect(guide.locator('#help-cli .reference-list > div')).toHaveCount(21);
-    await expect(guide.locator('#help-slash .reference-list > div')).toHaveCount(25);
+    await expect(guide.locator('#help-slash .reference-list > div')).toHaveCount(23);
     expect(await guide.evaluate((element) => element.scrollHeight > element.clientHeight)).toBe(true);
     await guide.hover();
     await page.mouse.wheel(0, 700);
@@ -155,19 +271,8 @@ test('project selection refreshes workspaces and clears the previous selection',
   await expect(dialog.getByRole('button', { name: /Create new session/ })).toBeVisible();
 });
 
-test('project dialog creates, cancels edits, updates, and deletes a saved project', async ({ page, request }) => {
+test('project dialog creates, cancels edits, updates, and archives a saved project', async ({ page, request }) => {
   const fixture = await (await request.get('/_test/fixture')).json();
-  // An empty registry makes Create project start a new project instead of
-  // editing the currently selected session's project.
-  const registry = await (await request.get('/api/v1/registered-sessions')).json();
-  for (const session of registry.sessions) {
-    const type = session.session.type;
-    const path = type === 'council' || type === 'composer'
-      ? `/api/v1/${type === 'council' ? 'councils' : 'composers'}/${session.session.session_id}`
-      : `/api/v1/registered-sessions/${session.registration_id}`;
-    expect((await request.delete(path)).ok()).toBe(true);
-  }
-  await page.reload();
   await page.getByTitle('Create project', { exact: true }).click();
   const create = page.getByRole('dialog', { name: 'Create project', exact: true });
   await create.getByPlaceholder('Project name').fill('UI refactor project');
@@ -204,9 +309,51 @@ test('project dialog creates, cancels edits, updates, and deletes a saved projec
   const projects = (await (await request.get('/api/v1/projects')).json()).projects;
   expect(projects.find((project) => project.name === 'UI refactor updated').workspace_roots).toEqual([fixture.project_root]);
   page.once('dialog', (dialog) => dialog.accept());
-  await edit.getByRole('button', { name: 'Delete', exact: true }).click();
+  await edit.getByRole('button', { name: 'Archive', exact: true }).click();
   await expect(edit).toHaveCount(0);
   await expect(page.getByRole('button', { name: 'Edit project UI refactor updated', exact: true })).toHaveCount(0);
+});
+
+test('Coordinator and Integrator stay independent and protected after clear', async ({ page, request }) => {
+  const { projects, sessions } = await (await request.get('/api/v1/registered-sessions')).json();
+  const project = projects.find((item) => item.name === 'Integration');
+  const group = page.locator(`[id="session-group-${project.id}"]`);
+  const identities = [];
+  for (const [role, title, description, sessionID] of [
+    ['coordinator', 'Coordinator', 'Request intake and planning', project.coordinator_session_id],
+    ['integrator', 'Integrator', 'Review and merge', project.manager_session_id]
+  ]) {
+    const registration = sessions.find((item) => item.kind === role && item.project_id === project.id);
+    expect(registration.session.session_id).toBe(sessionID);
+    identities.push(sessionID);
+    await page.getByRole('textbox', { name: 'Search sessions', exact: true }).fill('');
+    const row = group.locator('.session-root').filter({ has: page.getByText(description, { exact: true }) });
+    await expect(row).toHaveCount(1);
+    await expect(row.locator('.session-delete')).toHaveCount(0);
+    await row.locator('.session-select').click();
+    await expect(page.getByRole('heading', { name: title, exact: true })).toBeVisible();
+    await expect(page.locator('.composer textarea')).toBeEnabled();
+    await page.getByLabel('More session actions', { exact: true }).click();
+    await expect(page.getByRole('button', { name: 'Delete workspace session', exact: true })).toHaveCount(0);
+    page.once('dialog', (dialog) => dialog.accept());
+    await page.getByRole('button', { name: 'Clear conversation', exact: true }).click();
+    await expect(page.getByText('Conversation cleared', { exact: true })).toBeVisible();
+    const current = await (await request.get(`/api/v1/projects/${project.id}/${role}`)).json();
+    expect(current.registration_id).toBe(registration.registration_id);
+    expect(current.session.session_id).toBe(sessionID);
+    await page.reload();
+    await page.getByRole('textbox', { name: 'Search sessions', exact: true }).fill(title);
+    await expect(row).toBeVisible();
+    await page.screenshot({ path: join(tmpdir(), `q-workspace-${role}.png`) });
+  }
+  expect(new Set(identities).size).toBe(2);
+  const legacy = await (await request.get(`/api/v1/projects/${project.id}/manager`)).json();
+  expect(legacy.kind).toBe('integrator');
+  for (const role of ['coordinator', 'integrator']) {
+    await page.goto(`/tickets?workspace_id=${project.id}`);
+    await page.getByRole('button', { name: role === 'coordinator' ? 'Coordinator' : 'Integrator', exact: true }).click();
+    await expect(page.getByRole('heading', { name: role === 'coordinator' ? 'Coordinator' : 'Integrator', exact: true })).toBeVisible();
+  }
 });
 
 test('folder browser closes before registration and registers the selected workspace', async ({ page, request }) => {
@@ -229,8 +376,11 @@ test('folder browser closes before registration and registers the selected works
   await browser.getByRole('button', { name: 'Choose folder', exact: true }).click();
   await expect(browser).toHaveCount(0);
   await expect(registry.getByLabel('Workspace directory')).toHaveValue(fixture.root);
+  const registrationResponse = page.waitForResponse(response => new URL(response.url()).pathname === '/api/v1/registered-sessions' && response.request().method() === 'POST');
   await registry.getByRole('button', { name: /Create new session/ }).click();
+  const createdRegistration = await (await registrationResponse).json();
   await expect(registry).toHaveCount(0);
+  await expect(page).toHaveURL(new RegExp(`/sessions/${createdRegistration.registration_id}$`));
   await expect(page.locator('.composer textarea')).toBeEnabled();
   const selectedID = new URL(page.url()).pathname.split('/').at(-1);
   const registered = (await (await request.get('/api/v1/registered-sessions')).json()).sessions;
@@ -1332,6 +1482,10 @@ test('system one routing and listener key management persist through native sett
   await expect(gatewayKey).toContainText('Revoked');
   await page.reload();
   await expect(library.getByRole('textbox', { name: 'Host', exact: true })).toHaveValue('127.0.0.2');
+  // Listener changes apply on restart; restore the fixture's active address for later tests.
+  await library.getByRole('textbox', { name: 'Host', exact: true }).fill('127.0.0.1');
+  await library.getByRole('textbox', { name: 'Host', exact: true }).press('Tab');
+  await expect(page.locator('.save-state')).toHaveText('Saved');
   await expect(gatewayKey).toContainText('Revoked');
 });
 

@@ -6,6 +6,7 @@ import (
 	"unicode"
 
 	tea "charm.land/bubbletea/v2"
+
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 )
@@ -31,7 +32,6 @@ var localSlashCommands = []slashCommand{
 	{"/new", "", "Create a new session."},
 	{"/clear", "", "Empty the current session in place."},
 	{"/compact", "", "Summarize older context while keeping the transcript."},
-	{"/learn", "[on|off|status]", "Checkpoint or control Thinker learning for this workspace."},
 	{"/model", "", "Assign models, manage native roles, and configure fallback groups."},
 	{"/systemone", "", "Configure System One providers, decision models, keys, and listener."},
 	{"/gateway", "", "Configure Gateway network, API keys, and providers."},

@@ -313,35 +313,6 @@ func TestSessionsAPIClearsAndDeletesSessions(t *testing.T) {
 	}
 }
 
-func TestWorkspaceLearningAPI(t *testing.T) {
-	root := t.TempDir()
-	handler, err := newHandler(config.Store{Dir: t.TempDir()})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	response := httptest.NewRecorder()
-	handler.ServeHTTP(response, httptest.NewRequest(
-		http.MethodGet, "/api/v1/workspaces/learning?workspace_root="+url.QueryEscape(root), nil,
-	))
-	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"enabled":true`) {
-		t.Fatalf("default learning = %d %s", response.Code, response.Body.String())
-	}
-
-	response = httptest.NewRecorder()
-	handler.ServeHTTP(response, httptest.NewRequest(
-		http.MethodPut, "/api/v1/workspaces/learning",
-		bytes.NewBufferString(`{"workspace_root":`+quotedJSON(root)+`,"disabled":true}`),
-	))
-	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"enabled":false`) {
-		t.Fatalf("disable learning = %d %s", response.Code, response.Body.String())
-	}
-	value, err := (workspace.Store{Root: root}).LoadLearningConfig()
-	if err != nil || !value.Disabled {
-		t.Fatalf("stored learning = %#v, %v", value, err)
-	}
-}
-
 func TestSessionDelegationTreeIncludesChildStateAndTranscript(t *testing.T) {
 	root := t.TempDir()
 	store, lock, err := workspace.CreateSession(root, "test")

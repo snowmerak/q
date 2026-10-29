@@ -22,7 +22,6 @@ type EnsureOptions struct {
 	Dir            string
 	Config         Config
 	Vector         sessionstore.VectorConfig
-	Judge          PropositionJudge
 	ProbeTimeout   time.Duration
 	StartupTimeout time.Duration
 	RequestTimeout time.Duration
@@ -79,6 +78,9 @@ func EnsureWithOptions(ctx context.Context, options EnsureOptions) (*Runtime, er
 			if !health.Compatible() {
 				return nil, incompatibleError(health)
 			}
+			if err := requireConfigDirectory(options.Dir, health.ConfigDirectory); err != nil {
+				return nil, err
+			}
 			return &Runtime{client: client}, nil
 		}
 		if err := ctx.Err(); err != nil {
@@ -92,6 +94,9 @@ func EnsureWithOptions(ctx context.Context, options EnsureOptions) (*Runtime, er
 				if !health.Compatible() {
 					return nil, incompatibleError(health)
 				}
+				if err := requireConfigDirectory(options.Dir, health.ConfigDirectory); err != nil {
+					return nil, err
+				}
 				return &Runtime{client: client}, nil
 			}
 			// A canceled probe must not fall through to binding the configured port.
@@ -104,7 +109,7 @@ func EnsureWithOptions(ctx context.Context, options EnsureOptions) (*Runtime, er
 				_ = lock.Close()
 				lastListenErr = listenErr
 			} else {
-				leader, startErr := startLeader(ctx, options.Dir, options.Vector, options.Judge, listener, lock)
+				leader, startErr := startLeader(ctx, options.Dir, options.Vector, listener, lock)
 				if startErr != nil {
 					_ = listener.Close()
 					_ = lock.Close()
@@ -129,6 +134,17 @@ func EnsureWithOptions(ctx context.Context, options EnsureOptions) (*Runtime, er
 		}
 		delay = min(delay*2, 500*time.Millisecond)
 	}
+}
+
+// A compatible protocol is not enough: the same rendezvous port can be
+// accidentally configured for two different user data directories.
+func requireConfigDirectory(expected, actual string) error {
+	left, leftErr := os.Stat(expected)
+	right, rightErr := os.Stat(actual)
+	if leftErr != nil || rightErr != nil || !os.SameFile(left, right) {
+		return fmt.Errorf("library: configured endpoint belongs to a different configuration directory (%q); choose a separate Library port", actual)
+	}
+	return nil
 }
 
 func (r *Runtime) Client() *Client { return r.client }

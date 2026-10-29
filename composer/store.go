@@ -161,7 +161,7 @@ func writeConversation(store workspace.Store, c Conversation) error {
 }
 
 // Save writes only the presentation projection. SessionHost exclusively owns
-// session.json while a reply or background learning is running.
+// session.json while a reply is running.
 func (s *Store) Save(c Conversation) error {
 	if !ValidID(c.ID) || c.SessionID != c.ID {
 		return ErrInvalidID

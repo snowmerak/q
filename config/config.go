@@ -149,7 +149,7 @@ type AgentConnectionConfig struct {
 	Env        map[string]string `yaml:"env,omitempty" json:"env"`
 	AuthMethod string            `yaml:"auth_method,omitempty" json:"auth_method,omitempty"`
 	Disabled   bool              `yaml:"disabled,omitempty" json:"disabled,omitempty"`
-	// Library exposes global lookup and reviewed learning tools to ACP Sessions.
+	// Library exposes skills and workspace issue/ticket tools to ACP Sessions.
 	Library bool `yaml:"library,omitempty" json:"library,omitempty"`
 }
 
@@ -216,8 +216,6 @@ var agentRoles = []string{
 	AgentRoleCoder,
 	AgentRoleCommit,
 	AgentRoleAdvisor,
-	AgentRoleThinker,
-	AgentRoleLibrarian,
 }
 
 // Legacy roles remain resolvable for saved configuration and execution records.
@@ -681,6 +679,7 @@ func ValidCustomName(name string) bool {
 // in addition to applying the shared custom identifier syntax.
 func ValidCustomRoleName(name string) bool {
 	return ValidCustomName(name) && name != "default" && name != "embedding" &&
+		name != AgentRoleThinker && name != AgentRoleLibrarian &&
 		!IsExternalAgentRole(name) && !IsAgentRole(name) && !slices.Contains(legacyAgentRoles, name)
 }
 
@@ -784,6 +783,8 @@ func (s Store) Load() (Config, error) {
 		return Config{}, fmt.Errorf("config: decode %s: %w", s.Path(), err)
 	}
 	loaded := document.Config
+	delete(loaded.Agents.Roles, AgentRoleThinker)
+	delete(loaded.Agents.Roles, AgentRoleLibrarian)
 	normalizedLSP, err := loaded.LSP.Normalized()
 	if err != nil {
 		return Config{}, fmt.Errorf("config: %w", err)
@@ -802,6 +803,8 @@ func (s Store) Save(value Config) error {
 	}
 	value.Context = value.EffectiveContext()
 	value.Agents = value.EffectiveAgents()
+	delete(value.Agents.Roles, AgentRoleThinker)
+	delete(value.Agents.Roles, AgentRoleLibrarian)
 	value.Loom = value.EffectiveLoom()
 	normalizedLSP, err := value.LSP.Normalized()
 	if err != nil {

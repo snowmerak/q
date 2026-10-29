@@ -33,8 +33,6 @@ export const slash: Command[] = [
   { command: '/sessions', action: 'Resume or manage a saved terminal workspace session.', studio: 'Sessions · session tree / root registration' },
   { command: '/clear', action: 'Clear the current conversation in place.', studio: 'Sessions · Clear conversation' },
   { command: '/compact', action: 'Summarize older model context while retaining the transcript.', studio: 'Sessions · Compact context' },
-  { command: '/learn', action: 'Queue a learning checkpoint when learning is enabled.', studio: 'Sessions · Learning / Settings · Runtime' },
-  { command: '/learn on|off|status', action: 'Enable, disable, or inspect durable learning for this workspace.', studio: 'Sessions · Learning toggle' },
   { command: '/commit', action: 'Open the interactive commit proposal and approval session.', studio: 'Changes · commit review' },
   { command: '/changes', action: 'Browse staged, unstaged, and untracked diffs without modifying files.', studio: 'Changes / Sessions · Repository changes' },
   { command: '/model', action: 'Assign chat, embedding, and role models; manage custom roles and fallback groups.', studio: 'Settings · Models' },
@@ -133,4 +131,4 @@ export const terminalKeys: ShortcutGroup[] = [
   ] },
 ];
 
-export const acpCommands = '/commit, /learn [on|off|status], /clear, /compact, /help, /subagents [list|show <name>], /subagent <name> <request>';
+export const acpCommands = '/commit, /clear, /compact, /help, /subagents [list|show <name>], /subagent <name> <request>';

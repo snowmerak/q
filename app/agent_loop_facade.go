@@ -75,7 +75,7 @@ func projectAgentLoopEvent(source agentloop.Event) agentEvent {
 		event.taskStarted = &task
 	}
 	event.taskCompleted = source.TaskCompleted()
-	event.learningName, event.learningPayload = source.Learning()
+
 	if result, ok := source.Result(); ok {
 		event.response = result.Response
 		event.complete = true

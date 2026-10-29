@@ -81,10 +81,9 @@ func newServer(
 		Name:    ServerName,
 		Version: ServerVersion,
 	}, nil)
-	propositions, _ := globalSkills.(builtin.PropositionLibrary)
 	fs, err := builtin.RegisterWithRoots(server, checkoutRoot, auxiliaryCheckoutRoots, builtin.Dependencies{
 		Archive: archive, Loom: loomRuntime, Skills: skills, SkillStore: skillStore, GlobalSkills: globalSkills,
-		SkillRanker: skillRanker, ArchiveRanker: archiveRanker, Propositions: propositions, LSP: lspManager,
+		SkillRanker: skillRanker, ArchiveRanker: archiveRanker, LSP: lspManager,
 	})
 	if err != nil {
 		return nil, nil, nil, err

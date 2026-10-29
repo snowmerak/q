@@ -69,6 +69,7 @@ type acpRemoteClient struct {
 	configOptions           []acp.SessionConfigOption
 	mcpServers              []acp.McpServer
 	libraryInstructionsSent bool
+	libraryRoleInstructions string
 
 	slashCommandsBySession map[acp.SessionId][]slashCommand
 

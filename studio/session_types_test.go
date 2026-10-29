@@ -31,7 +31,7 @@ func (h *workflowGuardHost) Compact(context.Context, workspace.Store, string) (s
 
 func TestTypedWorkflowsRejectOrdinarySessionMutations(t *testing.T) {
 	host := &workflowGuardHost{}
-	handler, commits, sessions, err := newHandlerRuntime(t.Context(), config.Store{Dir: t.TempDir()}, host)
+	handler, commits, sessions, err := newHandlerRuntime(t.Context(), config.Store{Dir: studioCatalogTestDirectory(t, t.TempDir())}, host)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -8,6 +8,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/snowmerak/q/coordinator"
 	"github.com/snowmerak/q/internal/sessioncatalog"
 	"github.com/snowmerak/q/workspace"
 )
@@ -53,19 +54,31 @@ type registerSessionRequest struct {
 func (service *sessionsService) serveRegisteredCollection(writer http.ResponseWriter, request *http.Request) {
 	switch request.Method {
 	case http.MethodGet:
-		items, err := service.registry.list()
+		projects, err := service.projects.list()
 		if err != nil {
 			writeAPIError(writer, http.StatusInternalServerError, err)
 			return
 		}
-		projects, err := service.projects.list()
+		if err := service.ensureProjectManagers(request.Context(), projects); err != nil {
+			writeSessionError(writer, err)
+			return
+		}
+		items, err := service.registry.list()
 		if err != nil {
 			writeAPIError(writer, http.StatusInternalServerError, err)
 			return
 		}
 		trees := make([]registeredSessionTree, 0, len(items))
 		for _, item := range items {
-			tree := service.registeredTree(item, projectForWorkspace(projects, item.WorkspaceRoot))
+			project, managed, err := service.projectForRegistration(projects, item)
+			if err != nil {
+				writeSessionError(writer, err)
+				return
+			}
+			if managed && project == nil {
+				continue
+			}
+			tree := service.registeredTree(item, project)
 			trees = append(trees, tree)
 		}
 		sort.SliceStable(trees, func(left, right int) bool {
@@ -121,7 +134,11 @@ func (service *sessionsService) serveRegisteredCollection(writer http.ResponseWr
 			writeAPIError(writer, http.StatusInternalServerError, projectErr)
 			return
 		}
-		project = projectForWorkspace(projects, root)
+		project, _, err = service.projectForRegistration(projects, item)
+		if err != nil {
+			writeSessionError(writer, err)
+			return
+		}
 		writeJSON(writer, http.StatusCreated, service.registeredTree(item, project))
 	default:
 		writer.Header().Set("Allow", "GET, POST")
@@ -145,6 +162,10 @@ func (service *sessionsService) serveRegisteredItem(writer http.ResponseWriter, 
 			continue
 		}
 		store := workspace.Store{Root: item.WorkspaceRoot, SessionID: item.SessionID}
+		if err := store.RequireDeletable(); err != nil {
+			writeSessionError(writer, err)
+			return
+		}
 		if err := store.RequireInteraction(); err != nil && !errors.Is(err, workspace.ErrNotFound) {
 			writeSessionError(writer, err)
 			return
@@ -154,7 +175,7 @@ func (service *sessionsService) serveRegisteredItem(writer http.ResponseWriter, 
 		if errors.Is(err, os.ErrNotExist) {
 			writeAPIError(writer, http.StatusNotFound, errors.New("registered session does not exist"))
 		} else {
-			writeAPIError(writer, http.StatusInternalServerError, err)
+			writeSessionError(writer, err)
 		}
 		return
 	}
@@ -171,6 +192,7 @@ func (service *sessionsService) registeredTree(item registeredSession, project *
 	} else if project != nil {
 		tree.ProjectID = project.ID
 		tree.ProjectName = project.Name
+		tree.Kind = coordinator.SessionRole(*project, item.SessionID)
 	}
 	store, err := (workspace.Store{Root: item.WorkspaceRoot}).ForSession(item.SessionID)
 	if err != nil {

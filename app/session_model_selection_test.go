@@ -23,12 +23,6 @@ func TestSessionModelOverridesWorkspaceWithoutChangingSharedServices(t *testing.
 			if active.Provider.Model != "session-model" {
 				t.Fatalf("active model = %s", active.Provider.Model)
 			}
-			for _, role := range []string{config.AgentRoleThinker, config.AgentRoleLibrarian} {
-				agent, err := active.EffectiveAgent(role)
-				if err != nil || agent.Model != "global-model" {
-					t.Fatalf("shared service %s = %+v, %v", role, agent, err)
-				}
-			}
 			if len(value.Agents.Roles) != len(state.config.Agents.Roles) || state.config.Provider.Model != "global-model" {
 				t.Fatal("session selection changed global settings")
 			}

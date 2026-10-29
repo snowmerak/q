@@ -11,7 +11,7 @@ q usage
 service가 없으면 현재 process가 leader가 되어 Ctrl-C까지 SQLite와 dashboard를
 소유하고, 있으면 같은 service에 연결한다.
 
-대상은 main loop, ACP, Q 내부 subagent, Thinker, Librarian, commit agent, embedding
+대상은 main loop, ACP, Q 내부 subagent, commit agent, embedding
 호출과 managed/standalone Q Gateway를 통과한 호출이다. `codex`, `lms`, `ollama`,
 `grok` 같은 provider를 이름으로 분기하지 않고 OpenAI 호환 응답으로 들어오는 동일한
 `usage` 계약을 사용한다. Q 밖에서 실행되는 external agent도 `q gateway start`를

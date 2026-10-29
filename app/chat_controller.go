@@ -164,38 +164,7 @@ func (m model) submitChat() (tea.Model, tea.Cmd) {
 		case "/sessions":
 			m.resetChatInput()
 			return m.enterSessions()
-		case "/learn":
-			m.resetChatInput()
-			if m.learningDisabled() {
-				m.status = "Learning is disabled for this workspace · /learn on to enable"
-				return m, m.focusChatInput()
-			}
-			m.status = "Learning checkpoint enqueued"
-			return m, tea.Batch(m.focusChatInput(), m.enqueueExplicitLearning())
-		case "/learn off":
-			m.resetChatInput()
-			if err := m.setWorkspaceLearningDisabled(true); err != nil {
-				m.status = err.Error()
-				return m, m.focusChatInput()
-			}
-			m.status = "Learning disabled for this workspace"
-			return m, m.focusChatInput()
-		case "/learn on":
-			m.resetChatInput()
-			if err := m.setWorkspaceLearningDisabled(false); err != nil {
-				m.status = err.Error()
-				return m, m.focusChatInput()
-			}
-			m.status = "Learning enabled for this workspace"
-			return m, tea.Batch(m.focusChatInput(), m.startNextLearningSegment())
-		case "/learn status":
-			m.resetChatInput()
-			if m.learningDisabled() {
-				m.status = "Learning is disabled for this workspace"
-			} else {
-				m.status = "Learning is enabled for this workspace"
-			}
-			return m, m.focusChatInput()
+
 		case "/model":
 			m.resetChatInput()
 			return m.discoverCurrentModels()
@@ -266,7 +235,7 @@ func (m model) startChatTurn(content string, compact bool) (tea.Model, tea.Cmd) 
 	userMessage := client.Message{Role: client.RoleUser, Content: content}
 	m.archiveMessage(userMessage, sessionstore.StatusSubmitted, false)
 	m.messages = append(m.messages, userMessage)
-	learning := m.observeLearningMessage(userMessage)
+
 	if m.memory == nil {
 		m.memory = memory.New(memoryPolicy(m.activeConfig()), nil)
 	}
@@ -318,10 +287,10 @@ func (m model) startChatTurn(content string, compact bool) (tea.Model, tea.Cmd) 
 	if compactionPlan != nil {
 		m.compacting = true
 		m.status = "Compacting context…"
-		return m, tea.Batch(m.chatTick(), m.compactContext(*compactionPlan, false), learning)
+		return m, tea.Batch(m.chatTick(), m.compactContext(*compactionPlan, false))
 	}
 	m.status = "Thinking…"
-	return m, tea.Batch(m.chatTick(), m.sendChatRequest(), learning)
+	return m, tea.Batch(m.chatTick(), m.sendChatRequest())
 }
 
 // resumeRecoveredTurn continues the parent model after its saved delegate

@@ -15,6 +15,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/snowmerak/q/agentskills"
 	"github.com/snowmerak/q/client"
+	"github.com/snowmerak/q/internal/workitemtools"
 	qlibrary "github.com/snowmerak/q/library"
 	"github.com/snowmerak/q/loom"
 	"github.com/snowmerak/q/lsp"
@@ -53,6 +54,8 @@ func sameRuntimeRoots(root string) RuntimeRoots {
 }
 
 type runtimeOptions struct {
+	workClient    *qlibrary.Client
+	workBinding   workitemtools.Binding
 	skillRanker   builtin.SkillRanker
 	archiveRanker builtin.ArchiveRanker
 }
@@ -75,6 +78,8 @@ type CaptureSource struct {
 
 // Runtime connects q's chat loop to the builtin MCP server in-process.
 type Runtime struct {
+	workClient     *qlibrary.Client
+	workBinding    workitemtools.Binding
 	client         *mcp.ClientSession
 	server         *mcp.ServerSession
 	fs             *builtin.FS
@@ -97,6 +102,8 @@ type Runtime struct {
 }
 
 type runtimeTemplate struct {
+	workClient    *qlibrary.Client
+	workBinding   workitemtools.Binding
 	roots         RuntimeRoots
 	archive       builtin.Archive
 	loomOptions   loom.StoreOptions
@@ -226,6 +233,7 @@ func NewRuntimeWithRoots(
 		return nil, err
 	}
 	runtime.template = &runtimeTemplate{
+		workClient: runtime.workClient, workBinding: runtime.workBinding,
 		roots: roots, archive: archive, loomOptions: options,
 		globalLSP: global, workspaceLSP: workspace,
 		globalSkills: globalSkills, skillRanker: runtime.skillRanker,
@@ -247,6 +255,8 @@ func (r *Runtime) NewCheckoutRuntime(ctx context.Context, checkoutRoot string) (
 		CheckoutRoot:       checkoutRoot,
 	}, template.archive, template.loomOptions, template.globalLSP, template.workspaceLSP, template.globalSkills,
 		func(options *runtimeOptions) {
+			options.workClient = template.workClient
+			options.workBinding = template.workBinding
 			options.skillRanker = template.skillRanker
 			options.archiveRanker = template.archiveRanker
 		},
@@ -348,7 +358,9 @@ func newRuntimeWithLSP(
 	if err != nil {
 		return nil, err
 	}
-	builtin.RegisterLearning(server)
+	if optionsValue.workClient != nil {
+		workitemtools.Register(server, optionsValue.workClient, optionsValue.workBinding)
+	}
 	serverTransport, clientTransport := mcp.NewInMemoryTransports()
 	serverSession, err := server.Connect(ctx, serverTransport, nil)
 	if err != nil {
@@ -362,6 +374,7 @@ func newRuntimeWithLSP(
 		return nil, fmt.Errorf("tools: connect builtin MCP client: %w", err)
 	}
 	runtime := &Runtime{
+		workClient: optionsValue.workClient, workBinding: optionsValue.workBinding,
 		client: clientSession, server: serverSession, fs: fs, loom: loomRuntime, lsp: lspManager,
 		skills: skills, skillStore: skillStore, globalSkills: globalSkills, skillRanker: optionsValue.skillRanker,
 		archiveRanker:  optionsValue.archiveRanker,

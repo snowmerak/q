@@ -50,14 +50,14 @@ func (m model) configureEmbeddingRuntime(value config.Config, configuredClient c
 			}
 		}
 		if archive == nil {
-			return archiveEmbeddingConfiguredMsg{globalSkills: libraryStats.Skills, globalPropositions: libraryStats.Propositions, err: libraryErr}
+			return archiveEmbeddingConfiguredMsg{globalSkills: libraryStats.Skills, globalWorkItems: libraryStats.WorkItems, err: libraryErr}
 		}
 		if err := archive.Configure(embedder, value.Embedding.Model, value.Embedding.Dimensions); err != nil {
-			return archiveEmbeddingConfiguredMsg{globalSkills: libraryStats.Skills, globalPropositions: libraryStats.Propositions, err: errors.Join(libraryErr, err)}
+			return archiveEmbeddingConfiguredMsg{globalSkills: libraryStats.Skills, globalWorkItems: libraryStats.WorkItems, err: errors.Join(libraryErr, err)}
 		}
 		stats, err := archive.Backfill(ctx)
 		return archiveEmbeddingConfiguredMsg{
-			stats: stats, globalSkills: libraryStats.Skills, globalPropositions: libraryStats.Propositions, err: errors.Join(libraryErr, err),
+			stats: stats, globalSkills: libraryStats.Skills, globalWorkItems: libraryStats.WorkItems, err: errors.Join(libraryErr, err),
 		}
 	}
 }

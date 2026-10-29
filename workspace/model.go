@@ -125,7 +125,7 @@ func (s Store) LoadModelConfig() (ModelConfig, error) {
 func legacyModelRole(role string) bool {
 	switch role {
 	case config.AgentRoleGriller, config.AgentRoleScout, config.AgentRolePlanner,
-		config.AgentRoleSeniorDeveloper, config.AgentRoleJuniorDeveloper:
+		config.AgentRoleSeniorDeveloper, config.AgentRoleJuniorDeveloper, config.AgentRoleThinker, config.AgentRoleLibrarian:
 		return true
 	default:
 		return false
@@ -151,7 +151,7 @@ func (c ModelConfig) Validate() error {
 }
 
 // ModelOverrideAllowed reports whether a target may have workspace-local model
-// state. Embedding, Thinker, and Librarian remain global shared services.
+// state. Embeddings stay global; retired learning roles cannot be overridden.
 func ModelOverrideAllowed(role string) bool {
 	if role == "default" {
 		return true

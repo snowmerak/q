@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/snowmerak/q/third_party/acp-go-sdk"
 	"io"
 	"log/slog"
 	"os"
@@ -15,14 +16,13 @@ import (
 	"sync"
 	"time"
 
-	tea "charm.land/bubbletea/v2"
 	"github.com/snowmerak/q/client"
 	"github.com/snowmerak/q/config"
 	"github.com/snowmerak/q/internal/hostruntime"
 	"github.com/snowmerak/q/mcpconfig"
 	"github.com/snowmerak/q/memory"
 	"github.com/snowmerak/q/sessionstore"
-	"github.com/snowmerak/q/third_party/acp-go-sdk"
+
 	qtools "github.com/snowmerak/q/tools"
 	"github.com/snowmerak/q/workspace"
 )
@@ -38,7 +38,7 @@ func RunACPDefault(ctx context.Context, root string, input io.Reader, output, lo
 
 // RunACP serves ACP over the supplied streams. A server process is bound to one
 // workspace and may keep multiple ACP sessions active concurrently. Each
-// session owns an independent conversation projection, learning lifecycle, and
+// session owns an independent conversation projection and
 // workspace session lock.
 func RunACP(ctx context.Context, store config.Store, root string, input io.Reader, output, logOutput io.Writer) (runErr error) {
 	if input == nil || output == nil {
@@ -182,26 +182,23 @@ type acpAgent struct {
 	root   string
 	logger *slog.Logger
 
-	stateMu             sync.Mutex
-	activationWG        sync.WaitGroup
-	promptMu            sync.Mutex
-	mcpMu               sync.Mutex
-	learningMu          sync.Mutex
-	connection          acpSessionConnection
-	clientCapabilities  acp.ClientCapabilities
-	sessions            map[acp.SessionId]*acpAgent
-	opening             map[acp.SessionId]chan struct{}
-	closedSessions      map[acp.SessionId]struct{}
-	owner               *acpAgent
-	sessionID           acp.SessionId
-	sessionOpen         bool
-	closing             bool
-	shuttingDown        bool
-	turnCancel          context.CancelFunc
-	learningInterrupt   context.CancelFunc
-	learningVersion     uint64
-	learningPending     bool
-	learningDisabled    bool
+	stateMu      sync.Mutex
+	activationWG sync.WaitGroup
+	promptMu     sync.Mutex
+	mcpMu        sync.Mutex
+
+	connection         acpSessionConnection
+	clientCapabilities acp.ClientCapabilities
+	sessions           map[acp.SessionId]*acpAgent
+	opening            map[acp.SessionId]chan struct{}
+	closedSessions     map[acp.SessionId]struct{}
+	owner              *acpAgent
+	sessionID          acp.SessionId
+	sessionOpen        bool
+	closing            bool
+	shuttingDown       bool
+	turnCancel         context.CancelFunc
+
 	sessionMCPBase      mcpconfig.Config
 	sessionMCPBaseSet   bool
 	sessionMCPConfig    mcpconfig.Config
@@ -231,7 +228,7 @@ func newACPAgent(state *model, root string, logger *slog.Logger) *acpAgent {
 
 // newSessionRuntime creates the mutable model projection owned by one ACP
 // session. Provider, archive, Library, and builtin tool services are shared;
-// conversation state, Thinker state, workspace lock, and optional ACP-provided
+// conversation state, workspace lock, and optional ACP-provided
 // MCP connections are not.
 func (a *acpAgent) newSessionRuntime() *acpAgent {
 	template := a.state
@@ -269,20 +266,6 @@ func (a *acpAgent) registerSession(runtime *acpAgent) error {
 	if runtime == nil || runtime.sessionID == "" {
 		return errors.New("ACP session runtime is unavailable")
 	}
-	a.learningMu.Lock()
-	defer a.learningMu.Unlock()
-	learning, err := (workspace.Store{Root: a.root}).LoadLearningConfig()
-	if err != nil {
-		return err
-	}
-	wasDisabled := runtime.state.learningDisabled()
-	runtime.state.workspaceLearning = learning
-	if learning.Disabled {
-		runtime.state.stopSessionLearning()
-	} else if wasDisabled {
-		runtime.state.resetSessionLearning()
-	}
-	runtime.syncLearningInterrupt()
 	a.stateMu.Lock()
 	defer a.stateMu.Unlock()
 	if a.shuttingDown {
@@ -291,8 +274,6 @@ func (a *acpAgent) registerSession(runtime *acpAgent) error {
 	if _, exists := a.sessions[runtime.sessionID]; exists {
 		return fmt.Errorf("ACP session %q is already active", runtime.sessionID)
 	}
-	runtime.learningVersion = a.learningVersion
-	runtime.learningDisabled = learning.Disabled
 	a.sessions[runtime.sessionID] = runtime
 	delete(a.closedSessions, runtime.sessionID)
 	return nil
@@ -404,7 +385,7 @@ func (a *acpAgent) NewSession(ctx context.Context, request acp.NewSessionRequest
 		_ = store.ClearSession()
 		return acp.NewSessionResponse{}, err
 	}
-	_ = runtime.startLearningIfOpen()
+
 	return acp.NewSessionResponse{SessionId: runtime.sessionID}, nil
 }
 
@@ -537,7 +518,7 @@ func (a *acpAgent) UnstableDeleteSession(
 		if store == nil || store.SessionID != sessionID {
 			clearErr = errors.New("active ACP session storage is unavailable")
 		}
-		runtime.state.stopSessionLearning()
+
 		if clearErr == nil {
 			clearErr = store.ClearSession()
 		}
@@ -565,14 +546,9 @@ func (a *acpAgent) ResumeSession(ctx context.Context, request acp.ResumeSessionR
 		}
 		return acp.ResumeSessionResponse{}, nil
 	}
-	runtime, activated, err := a.activateSession(ctx, request.SessionId, request.McpServers)
+	_, _, err := a.activateSession(ctx, request.SessionId, request.McpServers)
 	if err != nil {
 		return acp.ResumeSessionResponse{}, err
-	}
-	if activated {
-		if err := runtime.startLearningIfOpen(); err != nil {
-			return acp.ResumeSessionResponse{}, err
-		}
 	}
 	return acp.ResumeSessionResponse{}, nil
 }
@@ -595,7 +571,7 @@ func (a *acpAgent) LoadSession(ctx context.Context, request acp.LoadSessionReque
 		}
 		return acp.LoadSessionResponse{}, nil
 	}
-	runtime, activated, err := a.activateSession(ctx, request.SessionId, request.McpServers)
+	runtime, _, err := a.activateSession(ctx, request.SessionId, request.McpServers)
 	if err != nil {
 		return acp.LoadSessionResponse{}, err
 	}
@@ -611,20 +587,7 @@ func (a *acpAgent) LoadSession(ctx context.Context, request acp.LoadSessionReque
 		_ = runtime.closeRuntime()
 		return acp.LoadSessionResponse{}, err
 	}
-	if activated {
-		runtime.launchLearning(runtime.state.startNextLearningSegment())
-	}
 	return acp.LoadSessionResponse{}, nil
-}
-
-func (a *acpAgent) startLearningIfOpen() error {
-	a.promptMu.Lock()
-	defer a.promptMu.Unlock()
-	if err := a.requireSession(a.sessionID); err != nil {
-		return err
-	}
-	a.launchLearning(a.state.startNextLearningSegment())
-	return nil
 }
 
 func (a *acpAgent) activeSession(sessionID acp.SessionId) (*acpAgent, bool) {
@@ -751,7 +714,7 @@ func (a *acpAgent) activateStore(
 	a.stateMu.Lock()
 	a.sessionID = acpSessionID(store.SessionID)
 	a.sessionOpen = true
-	a.learningInterrupt = a.state.learningCancel
+
 	a.stateMu.Unlock()
 	return nil
 }
@@ -1097,11 +1060,6 @@ func (a *acpAgent) prompt(ctx context.Context, request acp.PromptRequest) (acp.P
 		return acp.PromptResponse{}, err
 	}
 	text := userMessage.TextContent()
-	if !hasNonText && isWorkspaceLearningControl(text) {
-		response, err := a.coordinator().runACPWorkspaceLearningControl(ctx, a, strings.TrimSpace(text))
-		response.UserMessageId = request.MessageId
-		return response, err
-	}
 
 	a.promptMu.Lock()
 	defer a.promptMu.Unlock()
@@ -1112,9 +1070,7 @@ func (a *acpAgent) prompt(ctx context.Context, request acp.PromptRequest) (acp.P
 	if a.promptLocked != nil {
 		a.promptLocked()
 	}
-	if next := a.applyPendingLearningLocked(); next != nil {
-		a.launchLearning(next)
-	}
+
 	turnContext, cancel := context.WithCancel(ctx)
 	coordinator := a.coordinator()
 	coordinator.stateMu.Lock()
@@ -1212,193 +1168,8 @@ func (a *acpAgent) prompt(ctx context.Context, request acp.PromptRequest) (acp.P
 	return response, err
 }
 
-func isWorkspaceLearningControl(command string) bool {
-	switch strings.TrimSpace(command) {
-	case "/learn on", "/learn off", "/learn status":
-		return true
-	default:
-		return false
-	}
-}
-
-func (a *acpAgent) runACPWorkspaceLearningControl(
-	ctx context.Context,
-	target *acpAgent,
-	command string,
-) (acp.PromptResponse, error) {
-	a.learningMu.Lock()
-	defer a.learningMu.Unlock()
-	target.promptMu.Lock()
-	defer target.promptMu.Unlock()
-	turnContext, cancel := context.WithCancel(ctx)
-	a.stateMu.Lock()
-	shuttingDown := a.shuttingDown
-	a.stateMu.Unlock()
-	if shuttingDown {
-		cancel()
-		return acp.PromptResponse{}, errors.New("ACP agent is shutting down")
-	}
-	target.stateMu.Lock()
-	if target.closing || !target.sessionOpen {
-		target.stateMu.Unlock()
-		cancel()
-		return acp.PromptResponse{}, fmt.Errorf("unknown ACP session %q", target.sessionID)
-	}
-	target.turnCancel = cancel
-	target.stateMu.Unlock()
-	defer func() {
-		cancel()
-		target.stateMu.Lock()
-		target.turnCancel = nil
-		target.stateMu.Unlock()
-	}()
-	if next := target.applyPendingLearningLocked(); next != nil {
-		target.launchLearning(next)
-	}
-	if target.pendingCommit != nil || target.pendingQuestion != nil {
-		restoreMCP, err := target.enterSessionMCP(turnContext)
-		if err != nil {
-			return acp.PromptResponse{}, err
-		}
-		defer restoreMCP()
-	}
-	if err := target.emitAvailableCommandsContext(turnContext); err != nil {
-		return acp.PromptResponse{}, err
-	}
-	if response, handled, commitErr := target.runPendingACPCommit(
-		turnContext,
-		client.Message{Role: client.RoleUser, Content: command},
-		false,
-	); handled {
-		return response, commitErr
-	}
-	if response, handled, questionErr := target.runPendingACPQuestion(
-		turnContext,
-		client.Message{Role: client.RoleUser, Content: command},
-		false,
-	); handled {
-		return response, questionErr
-	}
-
-	output := ""
-	var next tea.Cmd
-	switch command {
-	case "/learn status":
-		if target.state.learningDisabled() {
-			output = "Learning is disabled for this workspace."
-		} else {
-			output = "Learning is enabled for this workspace."
-		}
-	case "/learn off":
-		if err := turnContext.Err(); err != nil {
-			return acp.PromptResponse{}, err
-		}
-		if err := target.state.setWorkspaceLearningDisabled(true); err != nil {
-			return acp.PromptResponse{}, err
-		}
-		target.syncLearningInterrupt()
-		a.propagateLearningSetting(target, true)
-		output = "Learning disabled for this workspace."
-	case "/learn on":
-		if err := turnContext.Err(); err != nil {
-			return acp.PromptResponse{}, err
-		}
-		if err := target.state.setWorkspaceLearningDisabled(false); err != nil {
-			return acp.PromptResponse{}, err
-		}
-		target.syncLearningInterrupt()
-		a.propagateLearningSetting(target, false)
-		next = target.state.startNextLearningSegment()
-		output = "Learning enabled for this workspace."
-	}
-	if err := target.updateContext(turnContext, acp.UpdateAgentMessageText(output)); err != nil {
-		return acp.PromptResponse{}, err
-	}
-	target.launchLearning(next)
-	return acp.PromptResponse{StopReason: acp.StopReasonEndTurn}, nil
-}
-
-func (a *acpAgent) propagateLearningSetting(target *acpAgent, disabled bool) {
-	a.stateMu.Lock()
-	a.learningVersion++
-	version := a.learningVersion
-	runtimes := make([]*acpAgent, 0, len(a.sessions))
-	for _, runtime := range a.sessions {
-		runtimes = append(runtimes, runtime)
-	}
-	a.stateMu.Unlock()
-	target.stateMu.Lock()
-	target.learningVersion = version
-	target.learningPending = false
-	target.learningDisabled = disabled
-	target.stateMu.Unlock()
-	for _, runtime := range runtimes {
-		if runtime != target {
-			runtime.scheduleLearningSetting(version, disabled)
-		}
-	}
-}
-
-func (a *acpAgent) scheduleLearningSetting(version uint64, disabled bool) {
-	a.stateMu.Lock()
-	if version < a.learningVersion || a.closing || !a.sessionOpen {
-		a.stateMu.Unlock()
-		return
-	}
-	a.learningVersion = version
-	a.learningPending = true
-	a.learningDisabled = disabled
-	interrupt := a.learningInterrupt
-	a.stateMu.Unlock()
-	if disabled && interrupt != nil {
-		interrupt()
-	}
-	apply := func() {
-		a.promptMu.Lock()
-		next := a.applyPendingLearningLocked()
-		a.promptMu.Unlock()
-		a.launchLearning(next)
-	}
-	if a.promptMu.TryLock() {
-		next := a.applyPendingLearningLocked()
-		a.promptMu.Unlock()
-		a.launchLearning(next)
-		return
-	}
-	go apply()
-}
-
 // applyPendingLearningLocked reconciles the process-wide workspace setting
 // with one session model. The caller owns promptMu.
-func (a *acpAgent) applyPendingLearningLocked() tea.Cmd {
-	a.stateMu.Lock()
-	if !a.learningPending || a.closing || !a.sessionOpen {
-		a.stateMu.Unlock()
-		return nil
-	}
-	disabled := a.learningDisabled
-	a.learningPending = false
-	a.stateMu.Unlock()
-	a.state.workspaceLearning = workspace.LearningConfig{
-		Version: workspace.LearningConfigVersion, Disabled: disabled,
-	}
-	if disabled {
-		a.state.stopSessionLearning()
-	} else {
-		a.state.resetSessionLearning()
-	}
-	a.syncLearningInterrupt()
-	if disabled {
-		return nil
-	}
-	return a.state.startNextLearningSegment()
-}
-
-func (a *acpAgent) syncLearningInterrupt() {
-	a.stateMu.Lock()
-	a.learningInterrupt = a.state.learningCancel
-	a.stateMu.Unlock()
-}
 
 func (a *acpAgent) runPrompt(ctx context.Context, userMessage client.Message) (acp.PromptResponse, error) {
 	a.state.turnMessageStart = len(a.state.messages)
@@ -1415,7 +1186,7 @@ func (a *acpAgent) runPrompt(ctx context.Context, userMessage client.Message) (a
 		return acp.PromptResponse{}, err
 	}
 	a.state.memory.Append(userMessage)
-	a.launchLearning(a.state.observeLearningMessage(userMessage))
+
 	if err := a.state.saveWorkspaceSession(); err != nil {
 		return acp.PromptResponse{}, err
 	}
@@ -1563,9 +1334,7 @@ func (a *acpAgent) continueACPAgentTurn(
 				}
 			}
 		}
-		if event.learningName != "" {
-			a.launchLearning(a.state.enqueueLearningSpecial(event.learningName, event.learningPayload))
-		}
+
 		if event.streamDelta != nil {
 			if event.streamDelta.Start && event.streamDelta.Kind == chatStreamResponse {
 				*streamedResponse = ""
@@ -1617,7 +1386,8 @@ func (a *acpAgent) continueACPAgentTurn(
 		}
 		if event.message != nil {
 			message := *event.message
-			a.launchLearning(a.state.appendSessionMessage(message, nil))
+			a.state.appendSessionMessage(message, nil)
+
 			switch message.Role {
 			case client.RoleTool:
 				a.state.archiveSessionMessage(message, event.toolIsError)
@@ -1698,7 +1468,7 @@ func (a *acpAgent) finishPrompt(response client.ChatResponse, requestEstimate in
 	a.state.memory.ObserveUsage(response.Usage.PromptTokens, requestEstimate)
 	a.state.conversationID = response.ConversationID
 	a.state.archiveMessage(message, sessionstore.StatusSucceeded, false)
-	a.launchLearning(a.state.observeLearningMessage(message))
+
 	a.state.sessionUpdatedAt = time.Now().UTC()
 	if err := a.state.saveWorkspaceSession(); err != nil {
 		return acp.PromptResponse{}, err
@@ -1936,10 +1706,6 @@ func (a *acpAgent) emitAvailableCommandsContext(ctx context.Context) error {
 		{Name: "subagents", Description: "List available subagents or show a definition.", Input: &acp.AvailableCommandInput{Unstructured: &acp.UnstructuredCommandInput{Hint: "list | show <name>"}}},
 		{Name: "subagent", Description: "Run a builtin or custom subagent.", Input: &acp.AvailableCommandInput{Unstructured: &acp.UnstructuredCommandInput{Hint: "<name> <request>"}}},
 		{Name: "commit", Description: "Review generated commit proposals, then commit or commit and push after approval."},
-		{
-			Name: "learn", Description: "Checkpoint or control q learning for this workspace.",
-			Input: &acp.AvailableCommandInput{Unstructured: &acp.UnstructuredCommandInput{Hint: "on, off, or status"}},
-		},
 		{Name: "clear", Description: "Clear q's conversation context for this workspace."},
 		{Name: "compact", Description: "Summarize older context while keeping the transcript."},
 		{Name: "help", Description: "Show the slash commands available through ACP."},
@@ -1967,30 +1733,7 @@ func (a *acpAgent) runACPCommand(ctx context.Context, text string) (acp.PromptRe
 		output = a.state.customInfo(command)
 	case command == "/help":
 		output = renderACPCommandHelp()
-	case command == "/learn":
-		if a.state.learningDisabled() {
-			output = "Learning is disabled for this workspace. Use /learn on to enable it."
-		} else {
-			output = "Learning checkpoint enqueued."
-			a.launchLearning(a.state.enqueueExplicitLearning())
-		}
-	case command == "/learn on":
-		if err := a.state.setWorkspaceLearningDisabled(false); err != nil {
-			return acp.PromptResponse{}, true, err
-		}
-		output = "Learning enabled for this workspace."
-		a.launchLearning(a.state.startNextLearningSegment())
-	case command == "/learn off":
-		if err := a.state.setWorkspaceLearningDisabled(true); err != nil {
-			return acp.PromptResponse{}, true, err
-		}
-		output = "Learning disabled for this workspace."
-	case command == "/learn status":
-		if a.state.learningDisabled() {
-			output = "Learning is disabled for this workspace."
-		} else {
-			output = "Learning is enabled for this workspace."
-		}
+
 	case command == "/compact":
 		if !hasCompactionHistory(a.state.memory.Messages()) {
 			output = "Nothing to compact."
@@ -2016,11 +1759,7 @@ func (a *acpAgent) runACPCommand(ctx context.Context, text string) (acp.PromptRe
 		}
 		output = "Conversation cleared for this workspace."
 	default:
-		if strings.HasPrefix(command, "/learn ") {
-			output = "Usage: /learn [on|off|status]"
-		} else {
-			return acp.PromptResponse{}, false, nil
-		}
+		return acp.PromptResponse{}, false, nil
 	}
 	if err := a.updateContext(ctx, acp.UpdateAgentMessageText(output)); err != nil {
 		return acp.PromptResponse{}, true, err
@@ -2032,7 +1771,6 @@ func renderACPCommandHelp() string {
 	lines := []string{"Available ACP commands:"}
 	lines = append(lines,
 		"- /commit",
-		"- /learn [on|off|status]",
 		"- /clear",
 		"- /compact",
 		"- /help",
@@ -2045,7 +1783,7 @@ func renderACPCommandHelp() string {
 func (a *acpAgent) clearACPConversation(ctx context.Context) error {
 	runID := a.state.runID
 	a.state.resetConversationState(runID)
-	a.syncLearningInterrupt()
+
 	// An ACP slash command cannot replace the active client-side session ID.
 	// Keep its backing run stable while clearing only q's conversation projection.
 	if a.state.workspaceStore == nil {
@@ -2134,9 +1872,7 @@ func (a *acpAgent) continueACPSubagent(
 				return response, nil
 			}
 		}
-		if event.learningName != "" {
-			a.launchLearning(a.state.enqueueLearningSpecial(event.learningName, event.learningPayload))
-		}
+
 		if event.err != nil {
 			if !run.detailed {
 				_ = a.emitTaskPlanContext(a.state.ctx, run.objective, acp.PlanEntryStatusCompleted)
@@ -2278,13 +2014,12 @@ func (a *acpAgent) closeRuntime() error {
 	a.closing = true
 	a.sessionOpen = false
 	a.turnCancel = nil
-	a.learningInterrupt = nil
-	a.learningPending = false
+
 	a.stateMu.Unlock()
 	if cancel != nil {
 		cancel()
 	}
-	a.state.stopSessionLearning()
+
 	commitErr := a.closePendingACPCommit()
 	questionErr := a.closePendingACPQuestion()
 	lock := a.state.workspaceLock
@@ -2306,62 +2041,6 @@ func (a *acpAgent) closeRuntime() error {
 		scopeErr = scope.Close()
 	}
 	return errors.Join(commitErr, questionErr, scopeErr, lockErr)
-}
-
-func (a *acpAgent) launchLearning(command tea.Cmd) {
-	if command == nil {
-		return
-	}
-	go func() {
-		message := command()
-		result, ok := message.(thinkerResultMsg)
-		if !ok {
-			return
-		}
-
-		a.promptMu.Lock()
-		next := a.applyPendingLearningLocked()
-		matched := result.jobID == a.state.thinkerJobID && result.sessionGeneration == a.state.sessionGeneration
-		canLaunchNext := true
-		if matched {
-			a.state.thinkerBusy = false
-			a.state.thinkerJobID = ""
-			if result.result.LogError != "" {
-				a.state.archiveFailure("thinker log", errors.New(result.result.LogError))
-				_ = a.state.flushArchive()
-			}
-			if result.err != nil {
-				a.state.archiveFailure("learning update failed", result.err)
-				_ = a.state.flushArchive()
-			} else {
-				if a.state.learning != nil {
-					if err := a.state.learning.Commit(result.jobID); err != nil {
-						a.state.archiveFailure("learning checkpoint failed", err)
-						canLaunchNext = false
-					} else {
-						if err := a.state.saveWorkspaceSession(); err != nil {
-							a.state.archiveFailure("persist learning checkpoint failed", err)
-							canLaunchNext = false
-						} else if result.checkpointStore != nil {
-							if err := result.checkpointStore.ClearThinkerCheckpoint(result.jobID); err != nil {
-								a.state.archiveFailure("clear Thinker checkpoint failed", err)
-							}
-						}
-					}
-				}
-			}
-		}
-		a.stateMu.Lock()
-		open := a.sessionOpen
-		a.stateMu.Unlock()
-		if !canLaunchNext {
-			next = nil
-		} else if next == nil && matched && open {
-			next = a.state.startNextLearningSegment()
-		}
-		a.promptMu.Unlock()
-		a.launchLearning(next)
-	}()
 }
 
 func acpPromptMessage(blocks []acp.ContentBlock, imagesSupported bool) (client.Message, bool, error) {

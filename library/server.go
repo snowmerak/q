@@ -15,19 +15,19 @@ import (
 	"time"
 
 	"github.com/snowmerak/q/sessionstore"
+	"github.com/snowmerak/q/workitems"
 	"github.com/snowmerak/q/worklock"
 )
 
 type leader struct {
-	health       Health
-	server       *http.Server
-	archive      *sessionstore.Store
-	propositions *propositionService
-	queue        *propositionQueue
-	judge        *modelPropositionJudge
-	lock         *worklock.Lock
-	cancel       context.CancelFunc
-	done         chan struct{}
+	health     Health
+	server     *http.Server
+	archive    *sessionstore.Store
+	workspaces *workitems.Store
+	knowledge  *knowledgeIndex
+	lock       *worklock.Lock
+	cancel     context.CancelFunc
+	done       chan struct{}
 
 	closeOnce sync.Once
 	errMu     sync.Mutex
@@ -38,10 +38,23 @@ func startLeader(
 	parent context.Context,
 	dir string,
 	vector sessionstore.VectorConfig,
-	configuredJudge PropositionJudge,
 	listener net.Listener,
 	lock *worklock.Lock,
 ) (*leader, error) {
+	directory, err := filepath.Abs(dir)
+	if err != nil {
+		return nil, err
+	}
+	catalog, err := workitems.Open(parent, dir)
+	if err != nil {
+		return nil, fmt.Errorf("library: open workspace catalog: %w", err)
+	}
+	keepCatalog := false
+	defer func() {
+		if !keepCatalog {
+			_ = catalog.Close()
+		}
+	}()
 	root := filepath.Join(dir, "library")
 	if err := os.MkdirAll(root, 0o700); err != nil {
 		return nil, fmt.Errorf("library: create store root: %w", err)
@@ -52,47 +65,29 @@ func startLeader(
 	if err != nil {
 		return nil, fmt.Errorf("library: open global Store: %w", err)
 	}
-	queue, err := openPropositionQueue(dir)
-	if err != nil {
-		_ = archive.Close()
-		return nil, err
-	}
 	skills, err := newSkillService(parent, dir, archive)
 	if err != nil {
-		_ = queue.close()
 		_ = archive.Close()
 		return nil, err
 	}
 	storeID, err := loadOrCreateID(filepath.Join(root, "store.id"))
 	if err != nil {
-		_ = queue.close()
 		_ = archive.Close()
 		return nil, err
 	}
 	generation, err := randomID()
 	if err != nil {
-		_ = queue.close()
 		_ = archive.Close()
 		return nil, err
 	}
 	health := Health{
-		Service: ServiceName, ProtocolVersion: ProtocolVersion,
+		ConfigDirectory: directory,
+		Service:         ServiceName, ProtocolVersion: ProtocolVersion,
 		Implementation: Implementation, StoreID: storeID,
 		Generation: generation, Ready: true,
 	}
 
 	ctx, cancel := context.WithCancel(parent)
-	judge := configuredJudge
-	var modelJudge *modelPropositionJudge
-	var judgeErr error
-	if judge == nil {
-		modelJudge, judgeErr = newConfiguredPropositionJudge(ctx, dir)
-		if modelJudge != nil {
-			judge = modelJudge
-		}
-	}
-	propositions := newPropositionService(ctx, archive, queue, judge, judgeErr)
-	propositions.embeddingConfigDir = dir
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /v1/health", func(writer http.ResponseWriter, _ *http.Request) {
 		writeJSON(writer, http.StatusOK, health)
@@ -101,26 +96,32 @@ func startLeader(
 		writeJSON(writer, http.StatusOK, health)
 	})
 	registerSkillRoutes(mux, skills)
-	registerPropositionRoutes(mux, propositions)
-	registerPropositionEmbeddingRoutes(mux, propositions)
+	registerWorkspaceRoutes(mux, catalog)
+	registerItemRoutes(mux, catalog)
+	registerCoordinatorRoutes(mux, catalog)
+	registerWorkerRoute(mux, catalog, dir)
+	knowledge := newKnowledgeIndex(ctx, dir, catalog, lock, vector)
+	registerKnowledgeRoutes(mux, knowledge)
 	l := &leader{
-		health: health, archive: archive, propositions: propositions, queue: queue, judge: modelJudge,
-		lock: lock, cancel: cancel, done: make(chan struct{}),
+		health: health, archive: archive,
+		workspaces: catalog,
+		knowledge:  knowledge,
+		lock:       lock, cancel: cancel, done: make(chan struct{}),
 		server: &http.Server{Handler: mux, ReadHeaderTimeout: 10 * time.Second},
 	}
+	keepCatalog = true
 	go func() {
 		serveErr := l.server.Serve(listener)
 		cancel()
-		l.propositions.close()
-		judgeErr := l.judge.Close()
-		queueErr := l.queue.close()
+		knowledgeErr := l.knowledge.Close()
 		archiveErr := l.archive.Close()
+		catalogErr := l.workspaces.Close()
 		lockErr := l.lock.Close()
 		if errors.Is(serveErr, http.ErrServerClosed) {
 			serveErr = nil
 		}
 		l.errMu.Lock()
-		l.err = errors.Join(serveErr, judgeErr, queueErr, archiveErr, lockErr)
+		l.err = errors.Join(serveErr, archiveErr, catalogErr, knowledgeErr, lockErr)
 		l.errMu.Unlock()
 		close(l.done)
 	}()

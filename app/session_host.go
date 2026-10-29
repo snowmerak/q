@@ -12,6 +12,7 @@ import (
 	"github.com/snowmerak/llm-provider/gateway"
 	"github.com/snowmerak/q/client"
 	"github.com/snowmerak/q/config"
+	"github.com/snowmerak/q/coordinator"
 	"github.com/snowmerak/q/internal/hostruntime"
 	qlibrary "github.com/snowmerak/q/library"
 	"github.com/snowmerak/q/providerhost"
@@ -62,6 +63,7 @@ type SessionWorkspaceContext struct {
 	ProjectID      string
 	ProjectName    string
 	AuxiliaryRoots []string
+	Role           string `json:",omitempty"`
 }
 
 // SessionWorkspaceResolver resolves Studio-owned project context for a
@@ -171,6 +173,10 @@ func (control *SessionRunControl) result() error {
 // SessionHost owns process-wide dependencies and live repository sessions.
 // Runs reuse each session's model, provider affinity and tool connections.
 type SessionHost struct {
+	coordinatorMu       sync.Mutex
+	coordinator         *coordinator.Engine
+	coordinatorClosed   bool
+	coordinatorDelivery func(context.Context, workspace.Store, string, string) error
 	liveMu              sync.Mutex
 	liveSessions        map[string]*liveSession
 	liveOperations      map[string]*liveSessionOperation
@@ -183,6 +189,7 @@ type SessionHost struct {
 	factory             clientFactory
 	providerMu          sync.Mutex
 	providerReady       bool
+	embeddingBridgePath string
 	workspaceMu         sync.RWMutex
 	workspace           SessionWorkspaceResolver
 	embeddingWorkspaces func() ([]string, error)
@@ -220,6 +227,9 @@ func (host *SessionHost) SetSessionWorkspaceResolver(resolver SessionWorkspaceRe
 	host.workspaceMu.Lock()
 	host.workspace = resolver
 	host.workspaceMu.Unlock()
+	if resolver != nil {
+		host.startCoordinator()
+	}
 }
 
 func (host *SessionHost) resolveSessionWorkspace(primary string) (SessionWorkspaceContext, bool, error) {
@@ -238,6 +248,8 @@ func (host *SessionHost) Close() error {
 	if host == nil {
 		return nil
 	}
+	defer host.removeEmbeddingBridge()
+	host.stopCoordinator()
 	host.delegationMu.Lock()
 	host.delegationClosing = true
 	if host.delegationCancel != nil {
@@ -266,7 +278,7 @@ func (host *SessionHost) ensureProviderContext(ctx context.Context, loaded confi
 		return loaded, err
 	}
 	if host.providerReady {
-		return loaded, nil
+		return loaded, host.publishEmbeddingBridge()
 	}
 	initialized, err := initializeManagedProvider(ctx, host.store, host.manager, loaded, nil)
 	if err != nil {
@@ -275,7 +287,7 @@ func (host *SessionHost) ensureProviderContext(ctx context.Context, loaded confi
 	if host.manager.Endpoint() != "" {
 		host.providerReady = true
 	}
-	return initialized, nil
+	return initialized, host.publishEmbeddingBridge()
 }
 
 // ApplyGateway replaces the managed Gateway child and persists its provider
@@ -291,7 +303,7 @@ func (host *SessionHost) ApplyGateway(ctx context.Context, value gateway.Config)
 		return err
 	}
 	host.providerReady = true
-	return nil
+	return host.publishEmbeddingBridge()
 }
 
 // SyncEmbeddings migrates the global Library and all known workspace archives
@@ -451,21 +463,23 @@ func (host *SessionHost) Compact(requestContext context.Context, workspaceStore 
 }
 
 type preparedSession struct {
-	state       model
-	store       workspace.Store
-	lock        *workspace.Lock
-	lifecycle   *startupLifecycle
-	client      chatClient
-	warnings    []error
-	created     bool
-	toolsCloser io.Closer
+	state          model
+	store          workspace.Store
+	lock           *workspace.Lock
+	lifecycle      *startupLifecycle
+	client         chatClient
+	warnings       []error
+	created        bool
+	toolsCloser    io.Closer
+	executionRoot  string
+	projectContext *SessionWorkspaceContext
 }
 
 func (prepared *preparedSession) Close() error {
 	if prepared == nil {
 		return nil
 	}
-	prepared.state.stopSessionLearning()
+
 	prepared.lifecycle.waitIfStarted()
 	resourcesErr := prepared.lifecycle.closeResources()
 	var clientErr error
@@ -520,6 +534,23 @@ func (host *SessionHost) prepareSession(runContext context.Context, workspaceSto
 		}
 	}
 
+	options := SessionOptions{}
+	if len(configured) > 0 {
+		options = configured[0]
+	}
+	executionRoot, projectContext, projectFound, err := host.resolveSessionExecution(runContext, prepared.store, configured...)
+	if err != nil {
+		return nil, fmt.Errorf("resolve session execution workspace: %w", err)
+	}
+	prepared.executionRoot = executionRoot
+	if projectFound {
+		prepared.projectContext = &projectContext
+		options.SystemPrompt = strings.TrimSpace(options.SystemPrompt + "\n\n" + coordinator.RoleInstructions(projectContext.Role))
+	}
+	if executionRoot != prepared.store.Root {
+		options.WorkingDirectory = executionRoot
+		options.AuxiliaryDirectories = append([]string(nil), projectContext.AuxiliaryRoots...)
+	}
 	if prepared.store.SessionID != "" && len(configured) == 0 {
 		selection, err := prepared.store.LoadSessionModelConfig()
 		if err != nil {
@@ -546,10 +577,6 @@ func (host *SessionHost) prepareSession(runContext context.Context, workspaceSto
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrSessionRuntimeUnavailable, err)
 	}
-	options := SessionOptions{}
-	if len(configured) > 0 {
-		options = configured[0]
-	}
 	if prepared.store.SessionID != "" {
 		persisted, err := prepared.store.Load()
 		if err != nil {
@@ -565,14 +592,6 @@ func (host *SessionHost) prepareSession(runContext context.Context, workspaceSto
 	}
 	if len(configured) > 0 {
 		loaded.Provider.ReasoningEffort = options.ReasoningEffort
-	}
-	executionRoot := prepared.store.Root
-	if options.WorkingDirectory != "" {
-		executionRoot = options.WorkingDirectory
-	}
-	projectContext, projectFound, err := host.resolveSessionWorkspace(executionRoot)
-	if err != nil {
-		return nil, fmt.Errorf("resolve Studio project workspaces: %w", err)
 	}
 	memoryContext := host.ctx
 	if host.runtime != nil {
@@ -608,6 +627,7 @@ func (host *SessionHost) prepareSession(runContext context.Context, workspaceSto
 			auxiliary = options.AuxiliaryDirectories
 		}
 		startup = startupRequest{
+			projectID: projectContext.ProjectID, sessionID: prepared.store.SessionID, projectManager: projectContext.Role == coordinator.RoleIntegrator,
 			ctx: runContext, memoryCtx: memoryContext, store: host.store, workspaceStore: prepared.store,
 			loaded: loaded, manager: host.manager, factory: host.factory, lifecycle: prepared.lifecycle, providerReady: true,
 			disableExternalMCP: options.DisableExternalMCP,
@@ -662,17 +682,13 @@ func (host *SessionHost) prepareSession(runContext context.Context, workspaceSto
 	if options.Model == "" {
 		options.Model = sessionModel.Model
 	}
-	if len(configured) > 0 || options.Model != "" || sessionModel.ReasoningEffort != "" {
+	if len(configured) > 0 || options.Model != "" || sessionModel.ReasoningEffort != "" || options.WorkingDirectory != "" {
 		stable := options
 		stable.OperationID = ""
 		stable.Control = nil
 		prepared.state.sessionOptions = &stable
 		if injected != nil {
 			prepared.state.toolRuntime = injected
-		}
-		if options.DisableLearning {
-			prepared.state.workspaceLearning.Disabled = true
-			prepared.state.workspaceLearningRestored = true
 		}
 	}
 	prepared.state.libraryClient = startup.library

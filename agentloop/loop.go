@@ -12,7 +12,6 @@ import (
 	"github.com/snowmerak/q/client"
 	"github.com/snowmerak/q/internal/toolbatch"
 	"github.com/snowmerak/q/memory"
-	"github.com/snowmerak/q/thinker"
 	"github.com/snowmerak/q/workspace"
 )
 
@@ -386,11 +385,6 @@ func RunAgentLoop(ctx context.Context, request Request, events chan<- Event) {
 				if !emitEvent(ctx, events, Event{taskCompleted: true}) {
 					return
 				}
-				if !emitEvent(ctx, events, Event{
-					learningName: thinker.TaskCompleteEventName, learningPayload: append(json.RawMessage(nil), body...),
-				}) {
-					return
-				}
 				if !emitEvent(ctx, events, Event{status: "Finalizing task…"}) {
 					return
 				}
@@ -445,7 +439,7 @@ func RunAgentLoop(ctx context.Context, request Request, events chan<- Event) {
 				}
 				response = finished.Response
 				response.Choices[0].Message = client.Message{
-					Role: client.RoleAssistant, Name: thinker.TaskCompletionReplyName,
+					Role: client.RoleAssistant, Name: "q_task_complete_reply",
 					Content: renderTaskCompletion(completion),
 				}
 				loopContext.Observe(response.Usage, requestEstimate)

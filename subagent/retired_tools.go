@@ -5,7 +5,8 @@ package subagent
 // external_search and builtin/web-search are the supported ACP search path.
 func retiredBuiltinSearchTool(name string) bool {
 	switch name {
-	case "browser_search", "web_search", "web_search_batch",
+	case "learn", "request_learning", "search_propositions", "get_proposition", "register_proposition",
+		"browser_search", "web_search", "web_search_batch",
 		"browser_open", "browser_read", "browser_snapshot", "browser_click", "browser_fill", "browser_close":
 		return true
 	}

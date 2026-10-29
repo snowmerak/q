@@ -18,7 +18,7 @@ import (
 
 const (
 	ServiceName           = "q-library"
-	ProtocolVersion       = 6
+	ProtocolVersion       = 10
 	Implementation        = "0.1.0"
 	defaultRequestTimeout = 5 * time.Second
 	registrationTimeout   = 2 * time.Minute
@@ -26,6 +26,7 @@ const (
 )
 
 type Health struct {
+	ConfigDirectory string `json:"config_directory"`
 	Service         string `json:"service"`
 	ProtocolVersion int    `json:"protocol_version"`
 	Implementation  string `json:"implementation"`
@@ -44,9 +45,25 @@ type Client struct {
 	register *http.Client
 	index    *http.Client
 
-	embeddingMu sync.RWMutex
-	embedding   embeddingClientConfig
-	reconcile   chan struct{}
+	embeddingMu           sync.RWMutex
+	embedding             embeddingClientConfig
+	workEmbeddingResolver func(context.Context) (Embedder, string, int, error)
+	reconcile             chan struct{}
+}
+
+// ResponseError preserves the HTTP status for clients adapting Library errors
+// to another API without classifying human-readable message strings.
+type ResponseError struct {
+	Path       string
+	StatusCode int
+	Message    string
+}
+
+func (e *ResponseError) Error() string {
+	if e.Message != "" {
+		return fmt.Sprintf("library: %s returned HTTP %d: %s", e.Path, e.StatusCode, e.Message)
+	}
+	return fmt.Sprintf("library: %s returned HTTP %d", e.Path, e.StatusCode)
 }
 
 // Embedder is the subset of q's configured LLM client needed for Library
@@ -79,6 +96,26 @@ func NewClient(endpoint, _ string, timeout time.Duration) *Client {
 }
 
 func (c *Client) Endpoint() string { return c.endpoint }
+
+// SetWorkEmbeddingResolver refreshes query settings for a long-lived MCP
+// bridge. Source writes and lexical reads never invoke the resolver.
+func (c *Client) SetWorkEmbeddingResolver(resolve func(context.Context) (Embedder, string, int, error)) {
+	c.embeddingMu.Lock()
+	c.workEmbeddingResolver = resolve
+	c.embeddingMu.Unlock()
+}
+
+func (c *Client) workEmbeddingConfig(ctx context.Context) (embeddingClientConfig, error) {
+	c.embeddingMu.RLock()
+	resolve := c.workEmbeddingResolver
+	configured := c.embedding
+	c.embeddingMu.RUnlock()
+	if resolve == nil {
+		return configured, nil
+	}
+	provider, model, dimensions, err := resolve(ctx)
+	return embeddingClientConfig{provider: provider, model: model, dimensions: dimensions}, err
+}
 
 // ConfigureEmbedding enables automatic semantic query and indexing support on
 // this client. A zero model and dimensions clear the configuration and retain
@@ -208,114 +245,6 @@ func (c *Client) ReloadSkills(ctx context.Context) (SkillReloadResponse, error) 
 	return output, nil
 }
 
-func (c *Client) SearchPropositions(ctx context.Context, input PropositionSearchRequest) (PropositionSearchResponse, error) {
-	query := strings.TrimSpace(input.Query)
-	if len([]rune(query)) > maximumPropositionQueryRunes {
-		return PropositionSearchResponse{}, fmt.Errorf("library: proposition query exceeds %d characters", maximumPropositionQueryRunes)
-	}
-	if query != "" || len(input.Embedding) > 0 {
-		configured, unlock, err := c.lockEmbedding(ctx)
-		if err != nil {
-			return PropositionSearchResponse{}, err
-		}
-		defer unlock()
-		if configured.provider != nil {
-			if _, err := c.syncEmbeddings(ctx, configured); err != nil {
-				return PropositionSearchResponse{}, fmt.Errorf("library: repair embeddings before proposition search: %w", err)
-			}
-			configured = c.embeddingConfig()
-			if configured.model == "" {
-				input.Embedding = nil
-			} else if len(input.Embedding) == 0 || input.EmbeddingModel != configured.model || len(input.Embedding) != configured.dimensions {
-				if query == "" {
-					return PropositionSearchResponse{}, errors.New("library: outdated query vector requires query text for repair")
-				}
-				vectors, err := embedTexts(ctx, configured, []string{query})
-				if err != nil {
-					return PropositionSearchResponse{}, fmt.Errorf("library: embed proposition search query: %w", err)
-				}
-				input.Embedding = vectors[0]
-				input.EmbeddingModel = configured.model
-			}
-		}
-	}
-	var output PropositionSearchResponse
-	if err := c.doJSON(ctx, http.MethodPost, "/propositions/search", input, &output); err != nil {
-		return PropositionSearchResponse{}, err
-	}
-	return output, nil
-}
-
-func (c *Client) GetProposition(ctx context.Context, id string) (Proposition, error) {
-	var output Proposition
-	path := "/propositions/" + url.PathEscape(strings.TrimSpace(id))
-	if err := c.doJSON(ctx, http.MethodGet, path, nil, &output); err != nil {
-		return Proposition{}, err
-	}
-	return output, nil
-}
-
-// EnqueueProposition returns after durable queue acceptance. Embedding and
-// Librarian model calls are not prerequisites for accepting a learning request.
-func (c *Client) EnqueueProposition(ctx context.Context, idempotencyKey string, input PropositionRegisterRequest) (PropositionEnqueueResponse, error) {
-	if c == nil {
-		return PropositionEnqueueResponse{}, errors.New("library: client is nil")
-	}
-	var output PropositionEnqueueResponse
-	if err := c.doJSONWithClient(ctx, c.http, http.MethodPost, "/propositions/enqueue", input, &output, map[string]string{"Idempotency-Key": idempotencyKey}); err != nil {
-		return PropositionEnqueueResponse{}, err
-	}
-	if !output.Enqueued {
-		return PropositionEnqueueResponse{}, errors.New("library: learning request was not accepted")
-	}
-	return output, nil
-}
-
-func (c *Client) RegisterProposition(ctx context.Context, idempotencyKey string, input PropositionRegisterRequest) (PropositionRegisterResponse, error) {
-	configured, unlock, err := c.lockEmbedding(ctx)
-	if err != nil {
-		return PropositionRegisterResponse{}, err
-	}
-	defer unlock()
-	if configured.provider != nil {
-		if _, err := c.syncEmbeddings(ctx, configured); err != nil {
-			return PropositionRegisterResponse{}, fmt.Errorf("library: repair embeddings before proposition registration: %w", err)
-		}
-		configured = c.embeddingConfig()
-		if configured.model == "" {
-			input.Embeddings = nil
-		} else if input.Embeddings != nil && (input.Embeddings.Model != configured.model || input.Embeddings.Dimensions != configured.dimensions) {
-			input.Embeddings = nil
-		}
-	}
-	if input.Embeddings == nil {
-		if configured.provider != nil && configured.model != "" {
-			normalized, err := normalizePropositionRegisterRequest(input)
-			if err != nil {
-				return PropositionRegisterResponse{}, err
-			}
-			texts := make([]string, 0, len(normalized.Queries)+1)
-			texts = append(texts, normalized.Content)
-			texts = append(texts, normalized.Queries...)
-			vectors, err := embedTexts(ctx, configured, texts)
-			if err != nil {
-				return PropositionRegisterResponse{}, fmt.Errorf("library: embed proposition registration: %w", err)
-			}
-			normalized.Embeddings = &PropositionEmbeddings{
-				Model: configured.model, Dimensions: configured.dimensions, Vectors: vectors,
-			}
-			input = normalized
-		}
-	}
-	var output PropositionRegisterResponse
-	if err := c.doJSONWithClient(ctx, c.register, http.MethodPost, "/propositions", input, &output, map[string]string{
-		"Idempotency-Key": idempotencyKey,
-	}); err != nil {
-		return PropositionRegisterResponse{}, err
-	}
-	return output, nil
-}
-
 func (c *Client) embeddingConfig() embeddingClientConfig {
 	if c == nil {
 		return embeddingClientConfig{}
@@ -359,8 +288,8 @@ func embedTexts(ctx context.Context, configured embeddingClientConfig, texts []s
 
 // EmbeddingSyncStats reports completed global record migrations.
 type EmbeddingSyncStats struct {
-	Skills       int
-	Propositions int
+	Skills    int
+	WorkItems int
 }
 
 // SyncEmbeddings migrates all global searchable records to the configured model.
@@ -381,8 +310,8 @@ func (c *Client) syncEmbeddings(ctx context.Context, configured embeddingClientC
 	if err != nil || configured.model == "" {
 		return stats, err
 	}
-	propositions, err := c.syncEmbeddingSources(ctx, configured, "propositions")
-	stats.Propositions = propositions.Embedded
+	work, err := c.SyncWorkEmbeddings(ctx)
+	stats.WorkItems = work
 	return stats, err
 }
 
@@ -479,15 +408,6 @@ func (c *Client) syncEmbeddingSources(ctx context.Context, configured embeddingC
 	}
 }
 
-func (c *Client) DeleteProposition(ctx context.Context, id string) (PropositionDeleteResponse, error) {
-	var output PropositionDeleteResponse
-	path := "/propositions/" + url.PathEscape(strings.TrimSpace(id))
-	if err := c.doJSON(ctx, http.MethodDelete, path, nil, &output); err != nil {
-		return PropositionDeleteResponse{}, err
-	}
-	return output, nil
-}
-
 func (c *Client) doJSON(ctx context.Context, method, path string, input, output any) error {
 	return c.doJSONWithHeaders(ctx, method, path, input, output, nil)
 }
@@ -536,10 +456,7 @@ func (c *Client) doJSONWithClient(ctx context.Context, httpClient *http.Client, 
 			} `json:"error"`
 		}
 		_ = json.NewDecoder(response.Body).Decode(&envelope)
-		if envelope.Error.Message != "" {
-			return fmt.Errorf("library: %s returned HTTP %d: %s", path, response.StatusCode, envelope.Error.Message)
-		}
-		return fmt.Errorf("library: %s returned HTTP %d", path, response.StatusCode)
+		return &ResponseError{Path: path, StatusCode: response.StatusCode, Message: envelope.Error.Message}
 	}
 	decoder := json.NewDecoder(response.Body)
 	decoder.DisallowUnknownFields()

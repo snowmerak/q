@@ -8,7 +8,6 @@ import (
 	"github.com/snowmerak/q/gatewayconfig"
 	qlibrary "github.com/snowmerak/q/library"
 	"github.com/snowmerak/q/mcpconfig"
-	"github.com/snowmerak/q/thinker"
 )
 
 // newRuntimeModel constructs execution state without terminal widgets. The TUI
@@ -16,9 +15,9 @@ import (
 func newRuntimeModel(ctx context.Context, store config.Store, factory clientFactory, runtime providerRuntime) model {
 	m := model{
 		hostState:      hostState{ctx: ctx, store: store, factory: factory, runtime: runtime, headless: true},
-		lifecycleState: lifecycleState{thinkerSerial: &thinker.Serial{}},
+		lifecycleState: lifecycleState{},
 	}
-	m.resetSessionLearning()
+
 	if runtime != nil {
 		m.gatewayConfig = runtime.Config()
 	}
@@ -30,7 +29,7 @@ func newRuntimeModel(ctx context.Context, store config.Store, factory clientFact
 
 // updateExecution dispatches only session messages, never terminal input,
 // window changes, or settings-screen messages. Bubble Tea remains the shared
-// serializer for foreground execution and background learning.
+// serializer for foreground execution and tracked background commands.
 func (m model) updateExecution(message tea.Msg) (tea.Model, tea.Cmd) {
 	switch message := message.(type) {
 	case agentEventMsg:
@@ -39,8 +38,7 @@ func (m model) updateExecution(message tea.Msg) (tea.Model, tea.Cmd) {
 		return m.updateChatResult(message)
 	case compactionResultMsg:
 		return m.updateCompactionResult(message)
-	case thinkerResultMsg:
-		return m.updateThinkerResult(message)
+
 	case delegationRecoveryMsg:
 		command := m.acceptDelegationRecovery(message)
 		return m, command

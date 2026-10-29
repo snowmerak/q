@@ -1,135 +1,77 @@
 package studio
 
 import (
-	"encoding/json"
+	"context"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/snowmerak/q/app"
-	"github.com/snowmerak/q/internal/fsreplace"
-	"github.com/snowmerak/q/workspace"
+	qlibrary "github.com/snowmerak/q/library"
+	"github.com/snowmerak/q/workitems"
 )
 
-const (
-	studioProjectsVersion        = 1
-	studioProjectsFileName       = "studio-projects.json"
-	maximumStudioProjectsSize    = 1 << 20
-	maximumProjectWorkspaceRoots = 32
-)
+const maximumProjectWorkspaceRoots = 32
 
-type studioProject struct {
-	ID             string    `json:"id"`
-	Name           string    `json:"name"`
-	WorkspaceRoots []string  `json:"workspace_roots"`
-	CreatedAt      time.Time `json:"created_at"`
-	UpdatedAt      time.Time `json:"updated_at"`
-}
-
-type studioProjectsDocument struct {
-	Version  int             `json:"version"`
-	Projects []studioProject `json:"projects"`
-}
+type studioProject = workitems.Workspace
+type studioProjectUpdateRequest = workitems.WorkspaceInput
 
 type studioProjectsResponse struct {
 	Projects []studioProject `json:"projects"`
 }
 
-type studioProjectUpdateRequest struct {
-	Name           string   `json:"name"`
-	WorkspaceRoots []string `json:"workspace_roots"`
-}
-
-type studioProjectStore struct {
-	path string
-	mu   sync.Mutex
-}
+type studioProjectStore struct{ directory string }
 
 func newStudioProjectStore(configDirectory string) *studioProjectStore {
-	return &studioProjectStore{path: filepath.Join(configDirectory, studioProjectsFileName)}
+	return &studioProjectStore{directory: configDirectory}
+}
+
+// Studio retains its project API, but Library is the only catalog writer.
+// In normal use SessionHost already hosts Library; a standalone embedder can
+// temporarily own it for this bounded operation and then release it.
+func withProjectCatalog[T any](store *studioProjectStore, action func(context.Context, *qlibrary.Client) (T, error)) (result T, resultErr error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	runtime, err := qlibrary.Ensure(ctx, store.directory)
+	if err != nil {
+		return result, err
+	}
+	defer func() { resultErr = errors.Join(resultErr, runtime.Close()) }()
+	result, resultErr = action(ctx, runtime.Client())
+	if response, ok := errors.AsType[*qlibrary.ResponseError](resultErr); ok && response.StatusCode == http.StatusNotFound {
+		resultErr = os.ErrNotExist
+	}
+	return result, resultErr
 }
 
 func (store *studioProjectStore) list() ([]studioProject, error) {
-	store.mu.Lock()
-	defer store.mu.Unlock()
-	value, err := store.loadLocked()
-	if err != nil {
-		return nil, err
-	}
-	projects := cloneStudioProjects(value.Projects)
-	sort.SliceStable(projects, func(left, right int) bool {
-		return strings.ToLower(projects[left].Name) < strings.ToLower(projects[right].Name)
+	return withProjectCatalog(store, func(ctx context.Context, client *qlibrary.Client) ([]studioProject, error) {
+		result, err := client.ListWorkspaces(ctx, false)
+		return result.Workspaces, err
 	})
-	return projects, nil
 }
 
 func (store *studioProjectStore) create(input studioProjectUpdateRequest) (studioProject, error) {
-	store.mu.Lock()
-	defer store.mu.Unlock()
-	value, err := store.loadLocked()
-	if err != nil {
-		return studioProject{}, err
-	}
-	id, err := workspace.NewSessionID()
-	if err != nil {
-		return studioProject{}, err
-	}
-	now := time.Now().UTC()
-	project := studioProject{
-		ID: id, Name: strings.TrimSpace(input.Name), WorkspaceRoots: append([]string(nil), input.WorkspaceRoots...),
-		CreatedAt: now, UpdatedAt: now,
-	}
-	value.Projects = append(value.Projects, project)
-	if err := store.saveLocked(value); err != nil {
-		return studioProject{}, err
-	}
-	return project, nil
+	return withProjectCatalog(store, func(ctx context.Context, client *qlibrary.Client) (studioProject, error) {
+		return client.CreateWorkspace(ctx, input)
+	})
 }
 
 func (store *studioProjectStore) update(id string, input studioProjectUpdateRequest) (studioProject, error) {
-	store.mu.Lock()
-	defer store.mu.Unlock()
-	value, err := store.loadLocked()
-	if err != nil {
-		return studioProject{}, err
-	}
-	for index := range value.Projects {
-		if value.Projects[index].ID != id {
-			continue
-		}
-		value.Projects[index].Name = strings.TrimSpace(input.Name)
-		value.Projects[index].WorkspaceRoots = append([]string(nil), input.WorkspaceRoots...)
-		value.Projects[index].UpdatedAt = time.Now().UTC()
-		if err := store.saveLocked(value); err != nil {
-			return studioProject{}, err
-		}
-		return cloneStudioProject(value.Projects[index]), nil
-	}
-	return studioProject{}, os.ErrNotExist
+	return withProjectCatalog(store, func(ctx context.Context, client *qlibrary.Client) (studioProject, error) {
+		return client.UpdateWorkspace(ctx, id, input)
+	})
 }
 
 func (store *studioProjectStore) delete(id string) error {
-	store.mu.Lock()
-	defer store.mu.Unlock()
-	value, err := store.loadLocked()
-	if err != nil {
-		return err
-	}
-	for index, project := range value.Projects {
-		if project.ID != id {
-			continue
-		}
-		value.Projects = append(value.Projects[:index], value.Projects[index+1:]...)
-		return store.saveLocked(value)
-	}
-	return os.ErrNotExist
+	_, err := withProjectCatalog(store, func(ctx context.Context, client *qlibrary.Client) (struct{}, error) {
+		return struct{}{}, client.ArchiveWorkspace(ctx, id)
+	})
+	return err
 }
 
 func (store *studioProjectStore) resolve(primaryRoot string) (app.SessionWorkspaceContext, bool, error) {
@@ -149,115 +91,10 @@ func (store *studioProjectStore) resolve(primaryRoot string) (app.SessionWorkspa
 			auxiliary = append(auxiliary, root)
 		}
 		if matched {
-			return app.SessionWorkspaceContext{
-				ProjectID: project.ID, ProjectName: project.Name, AuxiliaryRoots: auxiliary,
-			}, true, nil
+			return app.SessionWorkspaceContext{ProjectID: project.ID, ProjectName: project.Name, AuxiliaryRoots: auxiliary}, true, nil
 		}
 	}
 	return app.SessionWorkspaceContext{}, false, nil
-}
-
-func (store *studioProjectStore) loadLocked() (studioProjectsDocument, error) {
-	file, err := os.Open(store.path)
-	if errors.Is(err, os.ErrNotExist) {
-		return studioProjectsDocument{Version: studioProjectsVersion, Projects: []studioProject{}}, nil
-	}
-	if err != nil {
-		return studioProjectsDocument{}, fmt.Errorf("open Studio projects: %w", err)
-	}
-	defer func() { _ = file.Close() }()
-	info, err := file.Stat()
-	if err != nil {
-		return studioProjectsDocument{}, fmt.Errorf("inspect Studio projects: %w", err)
-	}
-	if info.Size() > maximumStudioProjectsSize {
-		return studioProjectsDocument{}, errors.New("studio projects file is too large")
-	}
-	decoder := json.NewDecoder(io.LimitReader(file, maximumStudioProjectsSize+1))
-	decoder.DisallowUnknownFields()
-	var value studioProjectsDocument
-	if err := decoder.Decode(&value); err != nil {
-		return studioProjectsDocument{}, fmt.Errorf("decode Studio projects: %w", err)
-	}
-	var trailing any
-	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
-		return studioProjectsDocument{}, errors.New("decode Studio projects: multiple JSON values")
-	}
-	if err := validateStudioProjects(value); err != nil {
-		return studioProjectsDocument{}, err
-	}
-	value.Projects = cloneStudioProjects(value.Projects)
-	return value, nil
-}
-
-func (store *studioProjectStore) saveLocked(value studioProjectsDocument) error {
-	value.Version = studioProjectsVersion
-	if err := validateStudioProjects(value); err != nil {
-		return err
-	}
-	body, err := json.MarshalIndent(value, "", "  ")
-	if err != nil {
-		return err
-	}
-	body = append(body, '\n')
-	if len(body) > maximumStudioProjectsSize {
-		return errors.New("studio projects file is too large")
-	}
-	directory := filepath.Dir(store.path)
-	if err := os.MkdirAll(directory, 0o700); err != nil {
-		return fmt.Errorf("create Studio config directory: %w", err)
-	}
-	if err := os.Chmod(directory, 0o700); err != nil {
-		return fmt.Errorf("secure Studio config directory: %w", err)
-	}
-	if err := fsreplace.WriteFile(store.path, body, 0o600); err != nil {
-		return fmt.Errorf("save Studio projects: %w", err)
-	}
-	return nil
-}
-
-func validateStudioProjects(value studioProjectsDocument) error {
-	if value.Version != studioProjectsVersion {
-		return fmt.Errorf("unsupported Studio projects version %d", value.Version)
-	}
-	ids := make(map[string]struct{}, len(value.Projects))
-	names := make(map[string]struct{}, len(value.Projects))
-	roots := make(map[string]string)
-	for _, project := range value.Projects {
-		if _, err := (workspace.Store{Root: os.TempDir()}).ForSession(project.ID); err != nil {
-			return errors.New("invalid Studio project ID")
-		}
-		name := strings.TrimSpace(project.Name)
-		if name == "" || name != project.Name || len(name) > 128 {
-			return errors.New("studio project names must contain 1 to 128 characters without surrounding whitespace")
-		}
-		if project.CreatedAt.IsZero() || project.UpdatedAt.IsZero() {
-			return errors.New("studio project timestamps are required")
-		}
-		if len(project.WorkspaceRoots) == 0 || len(project.WorkspaceRoots) > maximumProjectWorkspaceRoots {
-			return fmt.Errorf("studio projects must contain 1 to %d workspace roots", maximumProjectWorkspaceRoots)
-		}
-		if _, exists := ids[project.ID]; exists {
-			return errors.New("duplicate Studio project ID")
-		}
-		nameKey := strings.ToLower(name)
-		if _, exists := names[nameKey]; exists {
-			return fmt.Errorf("duplicate Studio project name %q", name)
-		}
-		ids[project.ID] = struct{}{}
-		names[nameKey] = struct{}{}
-		for _, root := range project.WorkspaceRoots {
-			if !filepath.IsAbs(root) || filepath.Clean(root) != root {
-				return fmt.Errorf("invalid workspace root %q in Studio project %q", root, name)
-			}
-			key := comparableStudioPath(root)
-			if owner, exists := roots[key]; exists {
-				return fmt.Errorf("workspace root %q belongs to both %q and %q", root, owner, name)
-			}
-			roots[key] = name
-		}
-	}
-	return nil
 }
 
 func canonicalProjectInput(input studioProjectUpdateRequest) (studioProjectUpdateRequest, error) {
@@ -299,20 +136,16 @@ func cloneStudioProject(value studioProject) studioProject {
 	return value
 }
 
-func cloneStudioProjects(values []studioProject) []studioProject {
-	result := make([]studioProject, len(values))
-	for index, value := range values {
-		result[index] = cloneStudioProject(value)
-	}
-	return result
-}
-
 func (service *sessionsService) serveProjects(writer http.ResponseWriter, request *http.Request) {
 	switch request.Method {
 	case http.MethodGet:
 		projects, err := service.projects.list()
 		if err != nil {
 			writeAPIError(writer, http.StatusInternalServerError, err)
+			return
+		}
+		if err := service.ensureProjectManagers(request.Context(), projects); err != nil {
+			writeSessionError(writer, err)
 			return
 		}
 		writeJSON(writer, http.StatusOK, studioProjectsResponse{Projects: projects})
@@ -330,6 +163,10 @@ func (service *sessionsService) serveProjects(writer http.ResponseWriter, reques
 		project, err := service.projects.create(input)
 		if err != nil {
 			writeAPIError(writer, http.StatusBadRequest, err)
+			return
+		}
+		if err := service.ensureProjectManagers(request.Context(), []studioProject{project}); err != nil {
+			writeSessionError(writer, err)
 			return
 		}
 		writeJSON(writer, http.StatusCreated, project)

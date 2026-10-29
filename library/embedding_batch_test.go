@@ -1,14 +1,10 @@
 package library
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"strings"
 	"testing"
-
-	llmclient "github.com/snowmerak/q/client"
-	"github.com/snowmerak/q/sessionstore"
 )
 
 func TestEmbeddingBatchProjectionAndRecordLimits(t *testing.T) {
@@ -70,49 +66,5 @@ func TestEmbeddingBatchJSONByteBoundary(t *testing.T) {
 	first.ID += strings.Repeat("x", limit-len(encoded)+1)
 	if _, err := nextEmbeddingBatch(model, 1, []SkillEmbeddingItem{first}); err == nil || !strings.Contains(err.Error(), "request bytes") {
 		t.Fatalf("oversized record error = %v", err)
-	}
-}
-
-type largeBatchEmbedder struct{}
-
-func (largeBatchEmbedder) Embed(_ context.Context, request llmclient.EmbeddingRequest) (*llmclient.EmbeddingResponse, error) {
-	texts := request.Input.([]string)
-	response := &llmclient.EmbeddingResponse{Data: make([]llmclient.Embedding, len(texts))}
-	for index := range texts {
-		vector := make([]float32, *request.Dimensions)
-		for dimension := range vector {
-			vector[dimension] = -0.000001000001
-		}
-		response.Data[index] = llmclient.Embedding{Index: index, Embedding: vector}
-	}
-	return response, nil
-}
-
-func TestGlobalEmbeddingMigrationSplitsLargeJSONBatches(t *testing.T) {
-	dir := t.TempDir()
-	var records []sessionstore.Record
-	for index := 0; index < 32; index++ {
-		records = append(records, sessionstore.Record{
-			ID: fmt.Sprintf("large-%02d", index), Kind: sessionstore.KindProposition, Scope: "global",
-			Content: "Source evidence", Payload: []byte(`{"queries":["first","second","third"]}`),
-		})
-	}
-	seedLibraryRecords(t, dir, records...)
-	runtime, err := EnsureWithOptions(t.Context(), testOptions(dir, testConfig(t)))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = runtime.Close() })
-	client := runtime.Client()
-	if err := client.ConfigureEmbedding(largeBatchEmbedder{}, "current", 4096); err != nil {
-		t.Fatal(err)
-	}
-	stats, err := client.SyncEmbeddings(t.Context())
-	if err != nil || stats.Propositions != 32 {
-		t.Fatalf("large migration = %+v, %v", stats, err)
-	}
-	stats, err = client.SyncEmbeddings(t.Context())
-	if err != nil || stats.Propositions != 0 {
-		t.Fatalf("completed migration repeated work = %+v, %v", stats, err)
 	}
 }

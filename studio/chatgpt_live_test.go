@@ -113,9 +113,6 @@ func TestLiveStudioChatGPTPersonalChat(t *testing.T) {
 	chat := createTestChat(t, fixture.handler)
 	fixture.root = chat.WorkspaceRoot
 	fixture.session = workspace.Store{Root: chat.WorkspaceRoot, SessionID: chat.Session.SessionID}
-	if err := fixture.session.SaveLearningConfig(workspace.LearningConfig{Version: workspace.LearningConfigVersion, Disabled: true}); err != nil {
-		t.Fatal(err)
-	}
 	// Recreate the reported user-only failed history in this disposable chat.
 	saved, err := fixture.session.Load()
 	if err != nil {

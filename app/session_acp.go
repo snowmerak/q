@@ -14,7 +14,9 @@ import (
 
 	"github.com/snowmerak/q/client"
 	"github.com/snowmerak/q/config"
+	"github.com/snowmerak/q/coordinator"
 	"github.com/snowmerak/q/internal/fsreplace"
+	"github.com/snowmerak/q/internal/workitemtools"
 	"github.com/snowmerak/q/workspace"
 )
 
@@ -48,8 +50,17 @@ func (host *SessionHost) prepareACPSession(ctx context.Context, prepared *prepar
 	if err != nil {
 		return nil, err
 	}
-	if connection.Library {
-		command.mcpServers, err = acpLibraryServers(host.store.Dir)
+	if connection.Library || prepared.executionRoot != prepared.store.Root {
+		binding := workitemtools.Binding{SessionID: prepared.store.SessionID}
+		binding.EmbeddingConnection, err = host.workEmbeddingConnection()
+		if err != nil {
+			return nil, err
+		}
+		if prepared.projectContext != nil {
+			binding.WorkspaceID = prepared.projectContext.ProjectID
+			binding.Manager = prepared.projectContext.Role == coordinator.RoleIntegrator
+		}
+		command.mcpServers, err = acpLibraryServers(host.store.Dir, binding)
 		if err != nil {
 			return nil, fmt.Errorf("configure ACP Library: %w", err)
 		}
@@ -61,6 +72,36 @@ func (host *SessionHost) prepareACPSession(ctx context.Context, prepared *prepar
 	body, err := json.Marshal(connection)
 	if err != nil {
 		return nil, err
+	}
+	// Connection files rotate with the host process; they do not change the
+	// workspace/tool binding and must not discard a resumable ACP conversation.
+	workspaceID := ""
+	integrator := false
+	if prepared.projectContext != nil {
+		workspaceID = prepared.projectContext.ProjectID
+		integrator = prepared.projectContext.Role == coordinator.RoleIntegrator
+	}
+	mcpBinding, err := json.Marshal(struct {
+		Enabled                bool
+		WorkspaceID, SessionID string
+		Manager                bool
+	}{len(command.mcpServers) > 0, workspaceID, prepared.store.SessionID, integrator})
+	if err != nil {
+		return nil, err
+	}
+	body = append(body, mcpBinding...)
+	if prepared.executionRoot != prepared.store.Root {
+		// A resumed remote agent must see the current project roots too.
+		// Role is bound by the reserved session ID and manager permission above.
+		// Exclude the new display field to retain existing ACP resume fingerprints.
+		projectContext := *prepared.projectContext
+		projectContext.Role = ""
+		project, err := json.Marshal(projectContext)
+		if err != nil {
+			return nil, err
+		}
+		body = append(body, []byte("\n"+prepared.executionRoot+"\n")...)
+		body = append(body, project...)
 	}
 	checkpoint := acpSessionCheckpoint{Agent: agent, Connection: sha256.Sum256(body)}
 	remoteID := ""
@@ -77,7 +118,7 @@ func (host *SessionHost) prepareACPSession(ctx context.Context, prepared *prepar
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return nil, err
 	}
-	remote, err := startACPRemoteClientWithResume(ctx, command, prepared.store.Root, remoteID, connection.AuthMethod, io.Discard, true)
+	remote, err := startACPRemoteClientWithResume(ctx, command, prepared.executionRoot, remoteID, connection.AuthMethod, io.Discard, true)
 	if err != nil {
 		return nil, err
 	}
@@ -93,18 +134,27 @@ func (host *SessionHost) prepareACPSession(ctx context.Context, prepared *prepar
 		}
 	}
 	remote.sessionCheckpoint = &checkpoint
+	if prepared.projectContext != nil {
+		remote.libraryRoleInstructions = coordinator.RoleInstructions(prepared.projectContext.Role)
+	}
 	remote.libraryInstructionsSent = remote.resumed && libraryInstructionsVersion == acpLibraryInstructionsVersion
 	if !remote.resumed {
 		remote.initialContext = completedACPContext(saved.Transcript)
+		if prepared.executionRoot != prepared.store.Root && prepared.projectContext != nil {
+			remote.initialContext = fmt.Sprintf("Project: %s\nProject directories: %s\n\n", prepared.projectContext.ProjectName, strings.Join(append([]string{prepared.executionRoot}, prepared.projectContext.AuxiliaryRoots...), ", ")) + remote.initialContext
+		}
 	}
 	prepared.state = newRuntimeModel(ctx, host.store, host.factory, host.manager)
 	prepared.state.workspaceStore = &prepared.store
 	prepared.state.workspaceLock = prepared.lock
-	// The remote agent owns its loop and context compaction. Q's automatic
-	// transcript learner stays disabled; Library MCP learning is explicit.
-	prepared.state.workspaceLearning = workspace.LearningConfig{Disabled: true}
-	prepared.state.workspaceLearningRestored = true
 	prepared.state.sessionOptions = &SessionOptions{Agent: agent, DisableLearning: true}
+	if prepared.executionRoot != prepared.store.Root {
+		prepared.state.sessionOptions.WorkingDirectory = prepared.executionRoot
+		if prepared.projectContext != nil {
+			prepared.state.studioWorkspaceContext = prepared.projectContext
+			prepared.state.sessionOptions.AuxiliaryDirectories = append([]string(nil), prepared.projectContext.AuxiliaryRoots...)
+		}
+	}
 	loaded.Provider.Model, loaded.Provider.ReasoningEffort, loaded.Provider.SystemPrompt = "acp/"+agent, "", ""
 	prepared.state.enterSession(loaded, remote)
 	return prepared, nil

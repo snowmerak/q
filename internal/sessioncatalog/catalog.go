@@ -101,6 +101,9 @@ func (registry *Catalog) Unregister(id string) error {
 		if item.ID != id {
 			continue
 		}
+		if err := (workspace.Store{Root: item.WorkspaceRoot, SessionID: item.SessionID}).RequireDeletable(); err != nil {
+			return err
+		}
 		value.Items = append(value.Items[:index], value.Items[index+1:]...)
 		return registry.saveLocked(value)
 	}

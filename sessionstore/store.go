@@ -214,6 +214,21 @@ func (s *Store) VectorConfig() VectorConfig {
 	return s.vectorCfg
 }
 
+// IndexCounts reports the currently searchable text documents and HNSW
+// projections without opening a second reader or scanning source files.
+func (s *Store) IndexCounts() (documents uint64, vectors int, err error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if err := s.requireOpenLocked(); err != nil {
+		return 0, 0, err
+	}
+	documents, err = s.index.DocCount()
+	if s.vectors != nil {
+		vectors = s.vectors.graph.Len()
+	}
+	return documents, vectors, err
+}
+
 // ConfigureVector switches the derived HNSW graph without reopening the
 // source store. Records with non-matching embeddings remain available to text
 // search and can be re-embedded in the background.

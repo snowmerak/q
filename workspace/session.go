@@ -16,7 +16,6 @@ import (
 	"github.com/snowmerak/q/client"
 	"github.com/snowmerak/q/internal/fsopen"
 	"github.com/snowmerak/q/internal/fsreplace"
-	"github.com/snowmerak/q/thinker"
 )
 
 const (
@@ -47,11 +46,13 @@ type Session struct {
 	Context            []client.Message    `json:"context,omitempty"`
 	// ResponseReplay is private provider state aligned to Context indexes. It
 	// is not included in the searchable conversation archive.
-	ResponseReplay   []ResponseReplayItem  `json:"response_replay,omitempty"`
-	ResponseAffinity *ResponseAffinity     `json:"response_affinity,omitempty"`
-	Learning         thinker.LearningState `json:"learning"`
-	ActiveTask       *ActiveTask           `json:"active_task,omitempty"`
-	Operation        *SessionOperation     `json:"operation,omitempty"`
+	ResponseReplay   []ResponseReplayItem `json:"response_replay,omitempty"`
+	ResponseAffinity *ResponseAffinity    `json:"response_affinity,omitempty"`
+	// Learning accepts retired metadata when decoding older session files.
+	// It is discarded on load and is never emitted or executed.
+	Learning   json.RawMessage   `json:"learning,omitempty"`
+	ActiveTask *ActiveTask       `json:"active_task,omitempty"`
+	Operation  *SessionOperation `json:"operation,omitempty"`
 }
 
 // SessionOperation checkpoints an embedding caller's current turn together
@@ -305,6 +306,9 @@ func (s Store) Save(session Session) error {
 }
 
 func (s Store) Clear() error {
+	if err := s.RequireDeletable(); err != nil {
+		return err
+	}
 	return withLoomRootMutation(s.Root, func() error {
 		err := os.Remove(s.Path())
 		if errors.Is(err, os.ErrNotExist) {
@@ -368,6 +372,9 @@ func (s Store) ListSessions() ([]SessionEntry, error) {
 // session directory. Its lock file lives outside the session directory and is
 // intentionally retained as reusable metadata.
 func (s Store) ClearSession() error {
+	if err := s.RequireDeletable(); err != nil {
+		return err
+	}
 	if s.SessionID == "" {
 		return errors.New("workspace: a session ID is required")
 	}
@@ -464,7 +471,7 @@ func cloneSession(session Session) Session {
 	}
 	session.Transcript = append([]client.Message(nil), session.Transcript...)
 	session.Context = append([]client.Message(nil), session.Context...)
-	session.Learning = session.Learning.Clone()
+	session.Learning = nil
 	if session.UpdatedAt != nil {
 		updatedAt := *session.UpdatedAt
 		session.UpdatedAt = &updatedAt

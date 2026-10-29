@@ -26,10 +26,10 @@ func TestReadOnlyLSPToolsAreAvailableToQueryRoles(t *testing.T) {
 	}
 }
 
-func TestReadOnlyPropositionToolsAreAvailableToQueryRoles(t *testing.T) {
+func TestReadOnlyWorkspaceKnowledgeToolsAreAvailableToQueryRoles(t *testing.T) {
 	available := []client.Tool{
-		scoutFunctionTool("search_propositions"),
-		scoutFunctionTool("get_proposition"),
+		scoutFunctionTool("search_work"),
+		scoutFunctionTool("post_get"),
 	}
 	for label, tools := range map[string][]client.Tool{
 		"scout":          scoutTools(available),
@@ -37,8 +37,8 @@ func TestReadOnlyPropositionToolsAreAvailableToQueryRoles(t *testing.T) {
 		"planner review": plannerReviewTools(available),
 		"coder":          coderTools(available),
 	} {
-		if !hasScoutTool(tools, "search_propositions") || !hasScoutTool(tools, "get_proposition") {
-			t.Fatalf("%s proposition tools = %#v", label, tools)
+		if !hasScoutTool(tools, "search_work") || !hasScoutTool(tools, "post_get") {
+			t.Fatalf("%s knowledge tools = %#v", label, tools)
 		}
 	}
 }

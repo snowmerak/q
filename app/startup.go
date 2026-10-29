@@ -147,6 +147,9 @@ type startupRequest struct {
 	store              config.Store
 	workspaceStore     workspace.Store
 	checkoutRoot       string
+	projectID          string
+	sessionID          string
+	projectManager     bool
 	auxiliaryRoots     []string
 	loaded             config.Config
 	configErr          error
@@ -295,6 +298,7 @@ func (request startupRequest) run(modelReady chan<- struct{}) (result runtimeIni
 			}, toolArchive, loaded.LoomStoreOptions(nil), loaded.LSP, workspaceLSP, libraryClient,
 			qtools.WithSystemOneSkillRanking(systemoneconfig.Store{Dir: request.store.Dir}),
 			qtools.WithSystemOneArchiveRanking(systemoneconfig.Store{Dir: request.store.Dir}),
+			qtools.WithWorkspaceWork(libraryClient, request.projectID, request.sessionID, request.projectManager),
 		)
 		result.tools = tools
 		result.library = libraryClient

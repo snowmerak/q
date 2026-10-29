@@ -68,7 +68,7 @@ agent message와 result를 같은 저장소에 기록할 수 있게 준비되어
 
 TUI와 ACP는 UUID별 lock을 잡아 서로 다른 세션을 같은 workspace에서 동시에 열 수
 있다. 하나의 ACP 프로세스도 `session ID -> runtime` map으로 여러 세션을 동시에
-유지하며, 각 runtime은 conversation, Thinker context, lock, session MCP overlay를
+유지하며, 각 runtime은 conversation, lock, session MCP overlay를
 따로 소유한다. ACP의 list/load/resume/close/delete는 이 projection을 직접 대상으로 하며,
 close는 해당 메모리와 session 제공 MCP 연결만 해제한다. 구형 workspace-wide
 projection의 migration은 목적지 session lock을 잡은 상태에서 publish와 legacy

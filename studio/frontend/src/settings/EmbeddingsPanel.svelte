@@ -141,7 +141,7 @@
         <thead><tr><th>Archive</th><th>Status</th><th>Current / eligible</th><th>Missing</th><th>Outdated</th><th>Vectors</th><th>Sync</th></tr></thead>
         <tbody>{#each snapshot.archives as archive (archive.workspace_root || archive.scope)}
           <tr>
-            <td><strong>{archive.name}</strong><small>{archive.scope === 'global' ? 'Global skills and propositions' : archive.registered ? 'Registered workspace' : 'Unregistered workspace'}</small>{#if archive.workspace_root}<code>{archive.workspace_root}</code>{/if}</td>
+            <td><strong>{archive.name}</strong><small>{archive.scope === 'global' ? 'Global skills' : archive.registered ? 'Registered workspace' : 'Unregistered workspace'}</small>{#if archive.workspace_root}<code>{archive.workspace_root}</code>{/if}</td>
             <td><span class="status-badge" class:pending={archive.state === 'pending'} class:failed={archive.state === 'error'}>{embeddingStateLabels[archive.state]}</span></td>
             <td>{archive.current.toLocaleString()} / {archive.eligible.toLocaleString()}</td><td>{archive.missing.toLocaleString()}</td><td>{archive.stale.toLocaleString()}</td><td>{archive.vectors.toLocaleString()}</td>
             <td><button class="secondary-button" aria-label={`Sync ${archive.name}`} onclick={() => startSync(archive)} disabled={!snapshot.enabled || !archive.exists || loading || syncStarting || syncActive}><RotateCw aria-hidden="true" size={14} /> Sync</button></td>

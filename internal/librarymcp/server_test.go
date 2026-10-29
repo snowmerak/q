@@ -1,231 +1,142 @@
 package librarymcp
 
 import (
-	"context"
 	"encoding/json"
 	"net"
-	"net/http"
-	"net/http/httptest"
-	"os"
-	"path/filepath"
-	"slices"
-	"strings"
 	"testing"
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"github.com/snowmerak/q/internal/workitemtools"
 	"github.com/snowmerak/q/library"
-	"github.com/snowmerak/q/tools/builtin"
+	"github.com/snowmerak/q/workitems"
 )
 
-type createJudge struct{}
-
-func (createJudge) JudgeProposition(_ context.Context, request library.PropositionRegisterRequest, candidates []library.PropositionSearchHit) (library.PropositionDecision, error) {
-	for _, candidate := range candidates {
-		if candidate.Content == request.Content {
-			return library.PropositionDecision{Action: library.PropositionActionDiscard, TargetID: candidate.ID}, nil
-		}
-	}
-	return library.PropositionDecision{Action: library.PropositionActionCreate}, nil
-}
-
-func connect(t *testing.T, client *library.Client) *mcp.ClientSession {
+func connect(t *testing.T, client *library.Client, binding workitemtools.Binding) *mcp.ClientSession {
 	t.Helper()
-	serverSide, clientSide := mcp.NewInMemoryTransports()
-	server, err := NewServer(client).Connect(t.Context(), serverSide, nil)
+	serverTransport, clientTransport := mcp.NewInMemoryTransports()
+	server, err := NewServer(client, binding).Connect(t.Context(), serverTransport, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	session, err := mcp.NewClient(&mcp.Implementation{Name: "test", Version: "0"}, nil).Connect(t.Context(), clientSide, nil)
+	t.Cleanup(func() { _ = server.Close() })
+	session, err := mcp.NewClient(&mcp.Implementation{Name: "test", Version: "1"}, nil).Connect(t.Context(), clientTransport, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = session.Close(); _ = server.Wait() })
+	t.Cleanup(func() { _ = session.Close() })
 	return session
 }
 
-func call(t *testing.T, session *mcp.ClientSession, name string, input any, output any) *mcp.CallToolResult {
-	t.Helper()
-	result, err := session.CallTool(t.Context(), &mcp.CallToolParams{Name: name, Arguments: input})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if output != nil {
-		if result.IsError {
-			t.Fatalf("%s: %+v", name, result.Content)
-		}
-		body, err := json.Marshal(result.StructuredContent)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := json.Unmarshal(body, output); err != nil {
-			t.Fatal(err)
-		}
-	}
-	return result
-}
-
-func TestLibraryToolsLookupAndReviewedLearning(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	t.Setenv("USERPROFILE", home)
-	dir := filepath.Join(home, ".q")
-	skillDir := filepath.Join(dir, "skills", "orchard")
-	if err := os.MkdirAll(skillDir, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	const skillText = "---\nname: orchard\ndescription: Orchard pruning instructions\n---\n\n# Pruning\nRead references/pruning.md.\n"
-	if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte(skillText), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.MkdirAll(filepath.Join(skillDir, "references"), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(skillDir, "references", "pruning.md"), []byte("Prune dormant branches."), 0o600); err != nil {
-		t.Fatal(err)
-	}
+func TestWorkspaceSourceToolsAndRetiredLearning(t *testing.T) {
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
 	port := listener.Addr().(*net.TCPAddr).Port
 	_ = listener.Close()
-	runtime, err := library.EnsureWithOptions(t.Context(), library.EnsureOptions{Dir: dir, Config: library.Config{Host: "127.0.0.1", Port: port}, Judge: createJudge{}})
+	runtime, err := library.EnsureWithOptions(t.Context(), library.EnsureOptions{Dir: t.TempDir(), Config: library.Config{Host: "127.0.0.1", Port: port}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() {
+	defer func() {
 		if err := runtime.Close(); err != nil {
 			t.Error(err)
 		}
-	})
-	session := connect(t, runtime.Client())
-	listed, err := session.ListTools(t.Context(), nil)
+	}()
+	client := runtime.Client()
+	w, err := client.CreateWorkspace(t.Context(), workitems.WorkspaceInput{Name: "Project", WorkspaceRoots: []string{t.TempDir()}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	names := []string{}
-	for _, tool := range listed.Tools {
-		names = append(names, tool.Name)
+	session := connect(t, client, workitemtools.Binding{WorkspaceID: w.ID, SessionID: "actor"})
+	tools, err := session.ListTools(t.Context(), nil)
+	if err != nil {
+		t.Fatal(err)
 	}
-	slices.Sort(names)
-	if !slices.Equal(names, []string{"get_proposition", "get_skill", "request_learning", "search_propositions", "search_skills"}) {
-		t.Fatalf("tools: %v", names)
+	names := map[string]bool{}
+	for _, tool := range tools.Tools {
+		names[tool.Name] = true
 	}
-	var skills library.SkillSearchResponse
-	call(t, session, "search_skills", map[string]any{"query": "orchard"}, &skills)
-	if len(skills.Hits) != 1 || skills.Hits[0].Scope != "global" {
-		t.Fatalf("skills: %+v", skills)
+	for _, name := range []string{"learn", "request_learning", "search_propositions", "get_proposition"} {
+		if names[name] {
+			t.Fatalf("retired tool still advertised: %s", name)
+		}
 	}
-	var resource skillOutput
-	call(t, session, "get_skill", map[string]any{"id": skills.Hits[0].ID}, &resource)
-	if resource.Content != skillText {
-		t.Fatalf("skill text: %q", resource.Content)
+	for _, name := range []string{"issue_create", "issue_reply", "post_get", "search_work", "search_skills", "get_skill"} {
+		if !names[name] {
+			t.Fatalf("missing tool: %s", name)
+		}
 	}
-	call(t, session, "get_skill", map[string]any{"id": skills.Hits[0].ID, "path": "references/pruning.md"}, &resource)
-	if resource.Content != "Prune dormant branches." {
-		t.Fatalf("resource: %+v", resource)
+	result, err := session.CallTool(t.Context(), &mcp.CallToolParams{Name: "issue_create", Arguments: map[string]any{"title": "Decision", "content": "Retain source evidence", "refs": []string{"test://source"}, "request_id": "once"}})
+	if err != nil || result.IsError {
+		t.Fatalf("create: %+v %v", result, err)
 	}
-	request := map[string]any{"content": "The user keeps an orchard.", "queries": []string{"What does the user grow?"}, "refs": []string{"user:confirmed"}, "confidence": 1.0}
-	var acknowledged builtin.LearnOutput
-	result := call(t, session, "request_learning", request, &acknowledged)
 	body, err := json.Marshal(result.StructuredContent)
-	if err != nil || string(body) != `{"enqueued":true}` || !acknowledged.Enqueued {
-		t.Fatalf("learning acknowledgement: %s, %v", body, err)
+	if err != nil {
+		t.Fatal(err)
 	}
-	// A fresh bridge retains durable idempotency through the Library service.
-	var retry builtin.LearnOutput
-	call(t, connect(t, runtime.Client()), "request_learning", request, &retry)
-	if !retry.Enqueued {
-		t.Fatalf("retry: %+v", retry)
+	var item workitems.Item
+	if err := json.Unmarshal(body, &item); err != nil || item.WorkspaceID != w.ID || item.ID == "" {
+		t.Fatalf("source acknowledgement: %s %v", body, err)
 	}
-	// Review is asynchronous; lookups become visible after it finishes.
-	var propositions library.PropositionSearchResponse
-	deadline := time.After(3 * time.Second)
-	ticker := time.NewTicker(10 * time.Millisecond)
-	defer ticker.Stop()
-	for {
-		call(t, session, "search_propositions", map[string]any{"query": "orchard"}, &propositions)
-		if len(propositions.Hits) > 0 {
-			break
-		}
-		select {
-		case <-deadline:
-			t.Fatal("review did not finish")
-		case <-ticker.C:
-		}
+	result, err = session.CallTool(t.Context(), &mcp.CallToolParams{Name: "issue_reply", Arguments: map[string]any{"id": item.ID, "content": "A verified lesson", "request_id": "reply-once"}})
+	if err != nil || result.IsError {
+		t.Fatalf("reply: %+v %v", result, err)
 	}
-	if len(propositions.Hits) != 1 {
-		t.Fatalf("propositions: %+v", propositions)
+	thread, err := client.ReadThread(t.Context(), item.ID, "", 20)
+	if err != nil || len(thread.Posts) != 2 || thread.Posts[1].Author != "agent/actor" {
+		t.Fatalf("thread source: %+v %v", thread, err)
 	}
-	var proposition library.Proposition
-	call(t, session, "get_proposition", map[string]any{"id": propositions.Hits[0].ID}, &proposition)
-	if proposition.Content != request["content"] || len(proposition.Refs) != 1 {
-		t.Fatalf("proposition: %+v", proposition)
+	result, err = session.CallTool(t.Context(), &mcp.CallToolParams{Name: "ticket_create", Arguments: map[string]any{"title": "Inspect", "content": "Find evidence", "request_id": "auto-ticket"}})
+	if err != nil || result.IsError {
+		t.Fatalf("ticket issue: %+v %v", result, err)
 	}
-	if result := call(t, session, "get_skill", map[string]any{"id": skills.Hits[0].ID, "path": "../outside"}, nil); !result.IsError {
-		t.Fatal("skill traversal accepted")
+	encoded, err := json.Marshal(result.StructuredContent)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if result := call(t, session, "request_learning", map[string]any{"content": "unsupported", "refs": []string{}, "confidence": 1}, nil); !result.IsError {
-		t.Fatal("missing evidence accepted")
+	var ticket workitems.Item
+	if err := json.Unmarshal(encoded, &ticket); err != nil || ticket.ExecutionState != "queued" || ticket.State != "todo" {
+		t.Fatalf("MCP ticket was not automatically admitted: %s %v", encoded, err)
 	}
-	if result := call(t, session, "request_learning", map[string]any{"content": "unsupported", "refs": []string{"  "}, "confidence": 1}, nil); !result.IsError {
-		t.Fatal("blank evidence accepted")
-	}
-	if result := call(t, session, "request_learning", map[string]any{"content": "api_key: sk-thisisasecretcredential123456", "refs": []string{"user:secret"}, "confidence": 1}, nil); !result.IsError {
-		t.Fatal("Library credential validation bypassed")
-	}
-	if _, err := session.CallTool(t.Context(), &mcp.CallToolParams{Name: "execute_command", Arguments: map[string]any{}}); err == nil {
-		t.Fatal("non-Library tool accepted")
+	result, err = session.CallTool(t.Context(), &mcp.CallToolParams{Name: "request_learning", Arguments: map[string]any{"content": "old"}})
+	if err == nil && !result.IsError {
+		t.Fatal("retired learning tool succeeded")
 	}
 }
 
 func TestLibraryUnavailableDoesNotPreventMCPInitialization(t *testing.T) {
-	session := connect(t, library.NewClient("http://127.0.0.1:1/v1", "", 100*time.Millisecond))
-	if listed, err := session.ListTools(t.Context(), nil); err != nil || len(listed.Tools) != 5 {
-		t.Fatalf("tools = %+v, %v", listed, err)
+	session := connect(t, library.NewClient("http://127.0.0.1:1/v1", "", 100*time.Millisecond), workitemtools.Binding{WorkspaceID: "project"})
+	if _, err := session.ListTools(t.Context(), nil); err != nil {
+		t.Fatal(err)
 	}
-	result := call(t, session, "search_propositions", map[string]any{"query": "unavailable"}, nil)
-	if !result.IsError || len(result.Content) == 0 {
-		t.Fatalf("error result: %+v", result)
-	}
-	if strings.Contains(Instructions, "task_complete") || strings.Contains(Instructions, "ask_to_user") {
-		t.Fatal("Q workflow leaked into Library instructions")
+	result, err := session.CallTool(t.Context(), &mcp.CallToolParams{Name: "search_work", Arguments: map[string]any{"query": "unavailable"}})
+	if err == nil && !result.IsError {
+		t.Fatal("unavailable Library reported success")
 	}
 }
 
-func TestLearningReturnsOnlyQueueAcknowledgement(t *testing.T) {
-	for _, response := range []struct {
-		name     string
-		status   int
-		body     string
-		accepted bool
-	}{
-		{"accepted", http.StatusAccepted, `{"enqueued":true}`, true},
-		{"write failed", http.StatusInternalServerError, `{"error":{"message":"queue write failed"}}`, false},
-		{"not accepted", http.StatusOK, `{"enqueued":false}`, false},
-	} {
-		t.Run(response.name, func(t *testing.T) {
-			server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-				if request.Method != http.MethodPost || request.URL.Path != "/v1/propositions/enqueue" {
-					t.Errorf("unexpected registration call: %s %s", request.Method, request.URL.Path)
-					http.NotFound(writer, request)
-					return
-				}
-				writer.Header().Set("Content-Type", "application/json")
-				writer.WriteHeader(response.status)
-				_, _ = writer.Write([]byte(response.body))
-			}))
-			defer server.Close()
-			session := connect(t, library.NewClient(server.URL+"/v1", "", 0))
-			result := call(t, session, "request_learning", map[string]any{"content": "An established decision.", "refs": []string{"user:confirmed"}, "confidence": 1}, nil)
-			if result.IsError == response.accepted {
-				t.Fatalf("queue acceptance=%v, result=%+v", response.accepted, result)
+func TestReservedRoleToolCatalogs(t *testing.T) {
+	for _, role := range []string{"coordinator", "integrator"} {
+		t.Run(role, func(t *testing.T) {
+			session := connect(t, library.NewClient("http://127.0.0.1:1/v1", "", time.Second), workitemtools.Binding{WorkspaceID: "project", SessionID: role, Manager: role == "integrator"})
+			catalog, err := session.ListTools(t.Context(), nil)
+			if err != nil {
+				t.Fatal(err)
 			}
-			if response.accepted {
-				body, err := json.Marshal(result.StructuredContent)
-				if err != nil || string(body) != `{"enqueued":true}` {
-					t.Fatalf("acknowledgement: %s, %v", body, err)
+			names := map[string]bool{}
+			for _, tool := range catalog.Tools {
+				names[tool.Name] = true
+			}
+			for _, name := range []string{"issue_create", "ticket_create", "ticket_get", "ticket_worker_read"} {
+				if !names[name] {
+					t.Fatalf("%s lacks %s", role, name)
+				}
+			}
+			for _, name := range []string{"manager_inbox", "ticket_review"} {
+				if names[name] != (role == "integrator") {
+					t.Fatalf("%s has incorrect review access: %s=%t", role, name, names[name])
 				}
 			}
 		})

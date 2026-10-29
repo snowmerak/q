@@ -4,7 +4,7 @@ package agentloop
 
 import (
 	"context"
-	"encoding/json"
+
 	"errors"
 
 	"github.com/snowmerak/q/client"
@@ -99,13 +99,12 @@ type Event struct {
 	outcome         string
 	requestEstimate int
 	toolCalls       int
-	learningName    string
-	learningPayload json.RawMessage
-	streamDelta     *AgentStreamDelta
-	taskStarted     *workspace.ActiveTask
-	taskCompleted   bool
-	contextReplace  *ContextReplacement
-	err             error
+
+	streamDelta    *AgentStreamDelta
+	taskStarted    *workspace.ActiveTask
+	taskCompleted  bool
+	contextReplace *ContextReplacement
+	err            error
 }
 
 func (e Event) Status() (string, bool) { return e.status, e.status != "" }
@@ -171,10 +170,6 @@ func (e Event) TaskStarted() (workspace.ActiveTask, bool) {
 }
 
 func (e Event) TaskCompleted() bool { return e.taskCompleted }
-
-func (e Event) Learning() (string, json.RawMessage) {
-	return e.learningName, append(json.RawMessage(nil), e.learningPayload...)
-}
 
 func (e Event) Result() (Result, bool) {
 	if !e.complete {

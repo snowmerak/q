@@ -21,7 +21,7 @@ import (
 	"github.com/snowmerak/q/mcpconfig"
 	"github.com/snowmerak/q/memory"
 	"github.com/snowmerak/q/systemoneconfig"
-	"github.com/snowmerak/q/thinker"
+
 	"github.com/snowmerak/q/workspace"
 )
 
@@ -62,12 +62,6 @@ type hostState struct {
 
 // lifecycleState owns one copyable part of the Bubble Tea model.
 type lifecycleState struct {
-	thinkerSerial     *thinker.Serial
-	learning          *thinker.Machine
-	learningCtx       context.Context
-	learningCancel    context.CancelFunc
-	thinkerBusy       bool
-	thinkerJobID      string
 	sessionGeneration uint64
 }
 
@@ -87,18 +81,17 @@ type sessionState struct {
 	recoverDelegationTurn     bool
 	workspaceModel            workspace.ModelConfig
 	workspaceModelRestored    bool
-	workspaceLearning         workspace.LearningConfig
-	workspaceLearningRestored bool
-	studioWorkspaceContext    *SessionWorkspaceContext
-	archive                   recordArchive
-	archiveSearch             *archiveembed.Archive
-	archiveErr                error
-	runID                     string
-	sessionTitle              string
-	sessionUpdatedAt          time.Time
-	responseUsage             []workspace.ResponseUsage
-	standalone                bool
-	standaloneRoot            screen
+
+	studioWorkspaceContext *SessionWorkspaceContext
+	archive                recordArchive
+	archiveSearch          *archiveembed.Archive
+	archiveErr             error
+	runID                  string
+	sessionTitle           string
+	sessionUpdatedAt       time.Time
+	responseUsage          []workspace.ResponseUsage
+	standalone             bool
+	standaloneRoot         screen
 }
 
 // providerState owns one copyable part of the Bubble Tea model.

@@ -17,6 +17,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	qlibrary "github.com/snowmerak/q/library"
+	"github.com/snowmerak/q/workitems"
 )
 
 func TestLibraryCommandServesHealth(t *testing.T) {
@@ -102,29 +103,78 @@ func TestLibraryCommandServesHealth(t *testing.T) {
 	// Launch the actual bridge executable against this custom Library address.
 	// Its stdout must contain only MCP frames, even though the Library service
 	// itself reports status on a separate process's stdout.
-	bridge, err := mcp.NewClient(&mcp.Implementation{Name: "q-test", Version: "0"}, nil).Connect(ctx, &mcp.CommandTransport{Command: exec.CommandContext(ctx, binary, "library", "mcp", "--config-dir", configDir)}, nil)
+	publicClient := qlibrary.NewClient(value.Endpoint(), "", 0)
+	project, err := publicClient.CreateWorkspace(ctx, workitems.WorkspaceInput{Name: "Bridge project", WorkspaceRoots: []string{t.TempDir()}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	bridge, err := mcp.NewClient(&mcp.Implementation{Name: "q-test", Version: "0"}, nil).Connect(ctx, &mcp.CommandTransport{Command: exec.CommandContext(ctx, binary, "library", "mcp", "--config-dir", configDir, "--workspace-id", project.ID, "--session-id", project.ManagerSessionID, "--manager")}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	listed, err := bridge.ListTools(ctx, nil)
-	if err != nil || len(listed.Tools) != 5 {
+	if err != nil {
 		t.Fatalf("Library MCP tools = %+v, %v", listed, err)
 	}
-	result, err := bridge.CallTool(ctx, &mcp.CallToolParams{Name: "search_propositions", Arguments: map[string]any{"query": ""}})
+	names := map[string]bool{}
+	for _, tool := range listed.Tools {
+		names[tool.Name] = true
+	}
+	for _, required := range []string{"issue_create", "issue_reply", "post_get", "ticket_create", "ticket_review", "ticket_change_read", "search_work"} {
+		if !names[required] {
+			t.Fatalf("MCP tool missing: %s", required)
+		}
+	}
+	for _, retired := range []string{"learn", "request_learning", "search_propositions", "get_proposition"} {
+		if names[retired] {
+			t.Fatalf("retired MCP tool: %s", retired)
+		}
+	}
+	result, err := bridge.CallTool(ctx, &mcp.CallToolParams{Name: "search_work", Arguments: map[string]any{"query": "", "mode": "lexical"}})
 	if err != nil || result.IsError {
 		t.Fatalf("Library MCP search = %+v, %v", result, err)
 	}
-	// This Library has no configured Librarian. Learning still acknowledges
-	// the durable queue write through the actual stdio bridge executable.
-	result, err = bridge.CallTool(ctx, &mcp.CallToolParams{Name: "request_learning", Arguments: map[string]any{
-		"content": "The user confirmed this integration-test decision.", "refs": []string{"user:integration-test"}, "confidence": 1,
+	result, err = bridge.CallTool(ctx, &mcp.CallToolParams{Name: "issue_create", Arguments: map[string]any{
+		"title": "Verified decision", "content": "The user confirmed this integration-test decision.", "refs": []string{"user:integration-test"}, "request_id": "source-once",
 	}})
 	if err != nil || result.IsError {
-		t.Fatalf("Library MCP learning = %+v, %v", result, err)
+		t.Fatalf("Library MCP issue = %+v, %v", result, err)
 	}
 	ack, err := json.Marshal(result.StructuredContent)
-	if err != nil || string(ack) != `{"enqueued":true}` {
+	var item workitems.Item
+	if err == nil {
+		err = json.Unmarshal(ack, &item)
+	}
+	if err != nil || item.WorkspaceID != project.ID || item.ID == "" || item.Revision != 1 {
 		t.Fatalf("Library MCP acknowledgement = %s, %v", ack, err)
+	}
+	member, err := publicClient.PutMember(ctx, project.ID, workitems.MemberInput{AgentID: "builtin/research", DefinitionRoot: project.WorkspaceRoots[0], ExecutionRoot: project.WorkspaceRoots[0]})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ticket, err := publicClient.CreateItem(ctx, workitems.CreateInput{WorkspaceID: project.ID, Kind: workitems.Ticket, Title: "Report", Content: "Inspect", Author: "user"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ticket, err = publicClient.ControlTicket(ctx, ticket.ID, workitems.TicketAction{Action: "queue", Revision: ticket.Revision})
+	if err != nil {
+		t.Fatal(err)
+	}
+	attempt, err := publicClient.ClaimTicket(ctx, ticket.ID, workitems.ClaimInput{Revision: ticket.Revision, MemberID: member.ID, MemberRevision: member.Revision, DefinitionDigest: "fixture", Owner: "fixture", RequestID: "claim"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	attempt, err = publicClient.UpdateAttempt(ctx, attempt.ID, workitems.AttemptUpdate{Owner: attempt.Owner, Token: attempt.Token, Generation: attempt.Generation, Status: "awaiting_review", Result: []byte(`{"outcome":"succeeded"}`)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err = bridge.CallTool(ctx, &mcp.CallToolParams{Name: "ticket_review", Arguments: map[string]any{"id": attempt.ID, "decision": "accept", "request_id": "manager-review"}})
+	if err != nil || result.IsError {
+		t.Fatalf("stdio manager review: %+v %v", result, err)
+	}
+	ticket, err = publicClient.GetItem(ctx, ticket.ID)
+	if err != nil || ticket.State != "done" {
+		t.Fatalf("review result: %+v %v", ticket, err)
 	}
 	if err := bridge.Close(); err != nil {
 		t.Fatal(err)

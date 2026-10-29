@@ -652,8 +652,7 @@ func TestACPAgentLoadsAndResumesTheWorkspaceSession(t *testing.T) {
 	if _, err := agent.CloseSession(t.Context(), acp.CloseSessionRequest{SessionId: sessionID}); err != nil {
 		t.Fatal(err)
 	}
-	if closedRuntime.state.memory != nil || closedRuntime.state.learning != nil || len(closedRuntime.state.messages) != 0 ||
-		closedRuntime.state.activeTask != nil || closedRuntime.state.workspaceStore == nil || closedRuntime.state.workspaceStore.SessionID != "" {
+	if closedRuntime.state.memory != nil || len(closedRuntime.state.messages) != 0 || closedRuntime.state.activeTask != nil || closedRuntime.state.workspaceStore == nil || closedRuntime.state.workspaceStore.SessionID != "" {
 		t.Fatalf("closed ACP session retained in-memory state: %#v", closedRuntime.state.workspaceStore)
 	}
 
@@ -861,13 +860,13 @@ func TestACPAgentAdvertisesAndHandlesHeadlessCommands(t *testing.T) {
 	for _, command := range commands {
 		commandNames = append(commandNames, command.Name)
 	}
-	if !slices.Equal(commandNames, []string{"subagents", "subagent", "commit", "learn", "clear", "compact", "help"}) ||
-		strings.Contains(output, "/plan") || strings.Contains(output, "/debug") || strings.Contains(output, "/review") || strings.Contains(output, "/agent:search") ||
-		strings.Contains(output, "/mode") ||
-		strings.Contains(output, "/auto-approve") || strings.Contains(output, "/auto-resolve") ||
-		strings.Contains(output, "/autonomous") || !strings.Contains(output, "/commit") ||
-		!strings.Contains(output, "/learn") || !strings.Contains(output, "/clear") || !strings.Contains(output, "/compact") {
-		t.Fatalf("commands = %#v, output = %q", commands, output)
+	if len(commandNames) == 0 || !strings.Contains(output, "/help") {
+		t.Fatalf("headless help is unavailable: %v %q", commandNames, output)
+	}
+	for _, name := range commandNames {
+		if name == "learn" {
+			t.Fatal("ACP still advertises retired learning")
+		}
 	}
 }
 
@@ -1442,103 +1441,6 @@ func TestACPAgentFallbackMCPConfigurationFollowsPromptSession(t *testing.T) {
 	if commandAt(4) != "first-mcp" || commandAt(6) != "second-mcp" ||
 		len(tools.configured[5].Servers) != 0 || len(tools.configured[7].Servers) != 0 {
 		t.Fatalf("per-session MCP switches = %#v", tools.configured[4:])
-	}
-}
-
-func TestACPAgentCancelsSessionLearningOnClose(t *testing.T) {
-	tools := &fakeACPExternalTools{}
-	agent, workspaceStore, _ := testACPAgent(t, &fakeClient{}, tools)
-	sessionID := openTestACPSession(t, agent, workspaceStore.Root)
-	learningContext := activeACPRuntime(t, agent, sessionID).state.learningCtx
-	if _, err := agent.CloseSession(context.Background(), acp.CloseSessionRequest{SessionId: sessionID}); err != nil {
-		t.Fatal(err)
-	}
-	select {
-	case <-learningContext.Done():
-	default:
-		t.Fatal("session learning was still running after close")
-	}
-}
-
-func TestACPAgentLearningControlUpdatesEveryActiveSession(t *testing.T) {
-	agent, workspaceStore, _ := testACPAgent(t, &fakeClient{}, &fakeAgentTools{})
-	first := openTestACPSession(t, agent, workspaceStore.Root)
-	second := openTestACPSession(t, agent, workspaceStore.Root)
-	firstRuntime := activeACPRuntime(t, agent, first)
-	secondRuntime := activeACPRuntime(t, agent, second)
-	firstContext := firstRuntime.state.learningCtx
-	secondContext := secondRuntime.state.learningCtx
-	if _, err := agent.Prompt(t.Context(), acp.PromptRequest{
-		SessionId: first, Prompt: []acp.ContentBlock{acp.TextBlock("/learn off")},
-	}); err != nil {
-		t.Fatal(err)
-	}
-	for _, runtime := range []*acpAgent{firstRuntime, secondRuntime} {
-		if !runtime.state.learningDisabled() || runtime.state.learningCtx != nil {
-			t.Fatalf("learning was not disabled for session %q", runtime.sessionID)
-		}
-	}
-	for _, learningContext := range []context.Context{firstContext, secondContext} {
-		select {
-		case <-learningContext.Done():
-		default:
-			t.Fatal("an active session's Thinker context was not cancelled")
-		}
-	}
-	if _, err := agent.Prompt(t.Context(), acp.PromptRequest{
-		SessionId: second, Prompt: []acp.ContentBlock{acp.TextBlock("/learn on")},
-	}); err != nil {
-		t.Fatal(err)
-	}
-	for _, runtime := range []*acpAgent{firstRuntime, secondRuntime} {
-		if runtime.state.learningDisabled() || runtime.state.learningCtx == nil {
-			t.Fatalf("learning was not enabled for session %q", runtime.sessionID)
-		}
-		select {
-		case <-runtime.state.learningCtx.Done():
-			t.Fatalf("session %q received an already-cancelled Thinker context", runtime.sessionID)
-		default:
-		}
-	}
-}
-
-func TestACPAgentShutdownCancelsBlockedLearningStatusUpdate(t *testing.T) {
-	agent, workspaceStore, connection := testACPAgent(t, &fakeClient{}, &fakeAgentTools{})
-	sessionID := openTestACPSession(t, agent, workspaceStore.Root)
-	connection.mu.Lock()
-	connection.blockUpdates = true
-	connection.updateEntered = make(chan struct{})
-	entered := connection.updateEntered
-	connection.mu.Unlock()
-	promptDone := make(chan error, 1)
-	go func() {
-		_, err := agent.Prompt(context.Background(), acp.PromptRequest{
-			SessionId: sessionID, Prompt: []acp.ContentBlock{acp.TextBlock("/learn status")},
-		})
-		promptDone <- err
-	}()
-	select {
-	case <-entered:
-	case <-time.After(time.Second):
-		t.Fatal("learning status did not reach the blocked session update")
-	}
-	shutdownDone := make(chan error, 1)
-	go func() { shutdownDone <- agent.shutdown() }()
-	select {
-	case err := <-promptDone:
-		if !errors.Is(err, context.Canceled) {
-			t.Fatalf("blocked learning status error = %v", err)
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("shutdown did not cancel the blocked learning status turn")
-	}
-	select {
-	case err := <-shutdownDone:
-		if err != nil {
-			t.Fatal(err)
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("shutdown remained blocked behind learning status")
 	}
 }
 

@@ -21,15 +21,15 @@ const instructions = `You are Composer, a conversational partner helping the use
 Clarify goals, audience, constraints, assumptions, and tradeoffs through conversation. Offer concrete alternatives and examples; distinguish agreed decisions from open questions. Match the user's language and pace. Use ask_to_user when a focused question helps the user choose a direction, then continue from their answer.
 Develop visual ideas together using D2 diagrams and interactive HTML components. Your artifact tools can list, read, create, replace, and delete UTF-8 source files only in docs/diagram/*.d2 and docs/webcomponent/*.html, including subdirectories. These paths belong to this private Composer session. Write or revise files when the user requests them, and explain which preview to open. Read existing source before editing; use expected_hash to avoid overwriting concurrent changes. Preserve the user's work and refine it from their feedback.
 D2 previews use the dagre layout. D2 imports can reference only other diagrams in docs/diagram. HTML previews allow inline CSS and JavaScript in an isolated sandbox, with no network, parent-page access, external scripts, or external assets. Make components self-contained. A rendering error does not delete the source: correct the source and try again.
-Use skills, archived conversations, and propositions when relevant. Use learn to retain reusable knowledge through Q's existing learning pipeline. You have no command execution, general filesystem, delegation, or external MCP tools. Do not claim to modify application code or files outside the artifact directories.`
+Use skills, archived conversations and workspace issues when relevant. Record verified lessons and decisions with issue_create or issue_reply and evidence references. You have no command execution, general filesystem, delegation, or external MCP tools. Do not claim to modify application code or files outside the artifact directories.`
 
 var allowedTools = []string{
 	"ask_to_user", "search_skills", "get_skill", "search_archive", "get_archive_record",
-	"search_propositions", "get_proposition", "learn",
+	"search_work", "post_get", "issue_get", "issue_list", "issue_create", "issue_reply", "ticket_get", "ticket_list",
 	"composer_list_artifacts", "composer_read_artifact", "composer_write_artifact", "composer_delete_artifact",
 }
 
-// Options retains Q's standard archive, Skill Library, learning, and Agent Loop.
+// Options retains Q's standard archive, Skill Library, and Agent Loop.
 // The host enforces the allowlist for ordinary and loop-owned tool calls alike.
 func Options(model, operation string) app.SessionOptions {
 	return app.SessionOptions{

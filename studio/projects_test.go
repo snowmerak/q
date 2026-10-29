@@ -1,13 +1,18 @@
 package studio
 
 import (
+	"bytes"
 	"encoding/json"
 	"net/http"
 	"net/url"
+	"os"
+	"path/filepath"
 	"reflect"
 	"testing"
 
 	"github.com/snowmerak/q/config"
+	qlibrary "github.com/snowmerak/q/library"
+	"github.com/snowmerak/q/workitems"
 	"github.com/snowmerak/q/workspace"
 )
 
@@ -16,12 +21,78 @@ type embeddingCatalogRunner struct {
 	roots func() ([]string, error)
 }
 
+func TestStudioProjectCatalogMigratesAndSharesLibraryAuthority(t *testing.T) {
+	dir := studioCatalogTestDirectory(t, t.TempDir())
+	root, auxiliary := t.TempDir(), t.TempDir()
+	session, lock, err := workspace.CreateSession(root, "migration test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := lock.Close(); err != nil {
+		t.Fatal(err)
+	}
+	id, err := workspace.NewSessionID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := json.Marshal(map[string]any{"version": 1, "projects": []map[string]any{{"id": id, "name": "Original", "workspace_roots": []string{root, auxiliary}, "created_at": "2026-10-29T08:33:00+09:00", "updated_at": "2026-10-29T08:33:00+09:00"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacy := filepath.Join(dir, "studio-projects.json")
+	if err := os.WriteFile(legacy, body, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := newSessionRegistry(dir).register(root, session.SessionID); err != nil {
+		t.Fatal(err)
+	}
+	handler, err := newHandler(config.Store{Dir: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := serveJSON(t, handler, http.MethodGet, "/api/v1/registered-sessions", nil)
+	var catalog registeredSessionsResponse
+	if err := json.Unmarshal(response.Body.Bytes(), &catalog); err != nil {
+		t.Fatal(err)
+	}
+	if response.Code != http.StatusOK || len(catalog.Projects) != 1 || len(catalog.Sessions) != 3 || catalog.Projects[0].ID != id {
+		t.Fatalf("migration changed identities: %d %+v", response.Code, catalog)
+	}
+	var preserved bool
+	for _, item := range catalog.Sessions {
+		preserved = preserved || item.ProjectID == id && item.Session.SessionID == session.SessionID
+	}
+	if !preserved {
+		t.Fatal("migration detached the existing session")
+	}
+	library, err := qlibrary.Ensure(t.Context(), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = library.Close() }()
+	if _, err := library.Client().UpdateWorkspace(t.Context(), id, workitems.WorkspaceInput{Name: "Central", WorkspaceRoots: []string{root, auxiliary}}); err != nil {
+		t.Fatal(err)
+	}
+	response = serveJSON(t, handler, http.MethodGet, "/api/v1/projects", nil)
+	var projects studioProjectsResponse
+	if err := json.Unmarshal(response.Body.Bytes(), &projects); err != nil {
+		t.Fatal(err)
+	}
+	if response.Code != http.StatusOK || len(projects.Projects) != 1 || projects.Projects[0].Name != "Central" {
+		t.Fatalf("Studio did not use Library authority: %d %s", response.Code, response.Body.String())
+	}
+	backup, err := os.ReadFile(legacy)
+	if err != nil || !bytes.Equal(backup, body) {
+		t.Fatalf("legacy backup was overwritten: %v", err)
+	}
+}
+
 func (runner *embeddingCatalogRunner) SetEmbeddingWorkspaceResolver(resolver func() ([]string, error)) {
 	runner.roots = resolver
 }
 
 func TestEmbeddingCatalogIncludesProjectAndIndependentSessionRoots(t *testing.T) {
-	dir := t.TempDir()
+	dir := studioCatalogTestDirectory(t, t.TempDir())
 	projectRoot, sessionRoot := t.TempDir(), t.TempDir()
 	if _, err := newStudioProjectStore(dir).create(studioProjectUpdateRequest{Name: "project", WorkspaceRoots: []string{projectRoot}}); err != nil {
 		t.Fatal(err)
@@ -89,7 +160,7 @@ func TestStudioProjectsGroupSessionsAndResolveAuxiliaryRoots(t *testing.T) {
 	if err := json.Unmarshal(response.Body.Bytes(), &catalog); err != nil {
 		t.Fatal(err)
 	}
-	if len(catalog.Projects) != 1 || len(catalog.Sessions) != 1 || catalog.Sessions[0].ProjectID != project.ID || catalog.Sessions[0].ProjectName != "Q" {
+	if len(catalog.Projects) != 1 || len(catalog.Sessions) != 3 || catalog.Sessions[0].ProjectID != project.ID || catalog.Sessions[0].ProjectName != "Q" {
 		t.Fatalf("project session catalog = %#v", catalog)
 	}
 

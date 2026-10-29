@@ -61,17 +61,17 @@
     }
   }
 
-  async function deleteProject() {
+  async function archiveProject() {
     if (!editingProjectID || projectSaving) return;
-    if (!window.confirm(`Delete project ${projectName}? Its sessions and workspace data will remain available as independents.`)) return;
+    if (!window.confirm(`Archive project ${projectName}? Its sessions will remain available as independents, and the project history will be kept.`)) return;
     projectSaving = true;
     projectDialogError = '';
     try {
       const response = await fetch(`/api/v1/projects/${encodeURIComponent(editingProjectID)}`, { method: 'DELETE' });
       if (!response.ok) throw new Error(await apiError(response));
-      await onsaved('Project deleted');
+      await onsaved('Project archived');
     } catch (cause) {
-      projectDialogError = cause instanceof Error ? cause.message : 'Could not delete the project';
+      projectDialogError = cause instanceof Error ? cause.message : 'Could not archive the project';
     } finally {
       projectSaving = false;
     }
@@ -110,7 +110,7 @@
         {/each}
       </div>
     </div>
-    <footer class="project-dialog-footer"><div><span>PROJECT CONTEXT</span><code>Workspace changes apply to project sessions on their next turn.</code></div>{#if editingProjectID}<button class="danger-button" onclick={deleteProject} disabled={projectSaving}>Delete</button>{/if}<button class="secondary-button" onclick={() => onclose()}>Cancel</button><button class="primary-button" onclick={saveProject} disabled={projectSaving || !projectName.trim() || (!projectRoots.length && !projectRootInput.trim()) || projectRoots.length > 32}>{projectSaving ? 'Saving…' : 'Save'}</button></footer>
+    <footer class="project-dialog-footer"><div><span>PROJECT CONTEXT</span><code>Workspace changes apply to project sessions on their next turn.</code></div>{#if editingProjectID}<button class="danger-button" onclick={archiveProject} disabled={projectSaving}>Archive</button>{/if}<button class="secondary-button" onclick={() => onclose()}>Cancel</button><button class="primary-button" onclick={saveProject} disabled={projectSaving || !projectName.trim() || (!projectRoots.length && !projectRootInput.trim()) || projectRoots.length > 32}>{projectSaving ? 'Saving…' : 'Save'}</button></footer>
   </div>
 </div>
 

@@ -289,7 +289,7 @@ func (s *composerService) execute(ctx context.Context, cancel context.CancelFunc
 			turn.Status = "cancelled"
 		}
 	}
-	// Keep the native session alive so queued learning can finish between turns.
+	// Retain the native session and tool connections between turns.
 	c.Question = nil
 	s.mu.Lock()
 	defer s.mu.Unlock()

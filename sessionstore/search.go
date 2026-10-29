@@ -24,17 +24,20 @@ const (
 
 // Filters are ANDed across fields and ORed within each field.
 type Filters struct {
-	RunIDs    []string
-	TaskIDs   []string
-	ParentIDs []string
-	Kinds     []string
-	Roles     []string
-	Models    []string
-	Efforts   []string
-	Statuses  []string
-	Scopes    []string
-	Refs      []string
-	Tags      []string
+	WorkspaceIDs []string
+	EntityIDs    []string
+	PostIDs      []string
+	RunIDs       []string
+	TaskIDs      []string
+	ParentIDs    []string
+	Kinds        []string
+	Roles        []string
+	Models       []string
+	Efforts      []string
+	Statuses     []string
+	Scopes       []string
+	Refs         []string
+	Tags         []string
 }
 
 // Recency boosts text relevance using a half-life decay. CandidateLimit bounds
@@ -425,6 +428,9 @@ func recordMatchesSearch(record Record, options SearchOptions) bool {
 		return false
 	}
 	filters := options.Filters
+	if !matches(record.WorkspaceID, filters.WorkspaceIDs) || !matches(record.EntityID, filters.EntityIDs) || !matches(record.PostID, filters.PostIDs) {
+		return false
+	}
 	if !matches(record.RunID, filters.RunIDs) || !matches(record.TaskID, filters.TaskIDs) ||
 		!matches(record.ParentID, filters.ParentIDs) || !matches(record.Kind, filters.Kinds) ||
 		!matches(record.Role, filters.Roles) || !matches(record.Model, filters.Models) ||
@@ -469,6 +475,7 @@ func buildQuery(options SearchOptions) blevequery.Query {
 		conjuncts = append(conjuncts, bleve.NewDisjunctionQuery(fields...))
 	}
 	for field, values := range map[string][]string{
+		"workspace_id": options.Filters.WorkspaceIDs, "entity_id": options.Filters.EntityIDs, "post_id": options.Filters.PostIDs,
 		"run_id": options.Filters.RunIDs, "task_id": options.Filters.TaskIDs,
 		"parent_id": options.Filters.ParentIDs, "kind": options.Filters.Kinds,
 		"role": options.Filters.Roles, "model": options.Filters.Models,

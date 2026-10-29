@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { ArrowUp, Bot, BrainCircuit, ChevronDown, Ellipsis, Eraser, Files, Folders, GitCompareArrows, Layers, Minimize2, Pause, Play, Plus, Square, Trash2 } from '@lucide/svelte';
+  import { ArrowUp, Bot, ChevronDown, Ellipsis, Eraser, Files, Folders, GitCompareArrows, Layers, Minimize2, Pause, Play, Plus, Square, Trash2 } from '@lucide/svelte';
   import { onMount } from 'svelte';
   import SessionTree from './sessions/SessionTree.svelte';
   import Transcript from './sessions/Transcript.svelte';
@@ -14,6 +14,7 @@
   import { apiError, requestResponse } from './api';
   import { contextPercent, formatTokenCount, shortID } from './sessions/format';
   import { RunMonitor, runStatusLabel, terminalRun } from './sessions/run-monitor';
+  import { workspaceRoleTitle, workspaceRoleDescription } from './sessions/types';
   import type { DelegationNode, DelegationSession, FlatDelegation, Message, RegisteredSessionTree, RunEvent, RunSnapshot, SessionDetail, StudioProject, SessionType } from './sessions/types';
 
   export let openChanges: (workspaceRoot: string) => void = () => {};
@@ -84,8 +85,8 @@
   let sessionGeneration = 0;
   let questionAnswer = '';
   let delegationRefresh: ReturnType<typeof setTimeout> | null = null;
-  let learningEnabled = true;
-  let learningLoading = false;
+
+
   let registrationDialogOpen = false;
   let registrationMode: 'chat' | 'workspace' = 'chat';
   let sessionListOpen = false;
@@ -97,10 +98,11 @@
   let openedFileRoot = '';
   let lastFileContext = '';
   let fileExplorer: FileExplorer | null = null;
+  $: selectedProject = projects.find((project) => project.id === selectedRegistration?.project_id);
   $: fileWorkspace = selectedDelegation
     ? selectedDelegation.state?.change_request?.worktree_path || selectedDelegation.bookmark.working_directory || selectedDelegation.state?.change_request?.repository_root || workspaceRoot
-    : workspaceRoot;
-  $: fileRoots = [...new Set([fileWorkspace, workspaceRoot, ...(projects.find((project) => project.id === selectedRegistration?.project_id)?.workspace_roots || [])].filter(Boolean))];
+    : !!workspaceRoleTitle(selectedRegistration?.kind) ? selectedProject?.workspace_roots[0] || '' : workspaceRoot;
+  $: fileRoots = [...new Set([fileWorkspace, ...(!!workspaceRoleTitle(selectedRegistration?.kind) ? [] : [workspaceRoot]), ...(selectedProject?.workspace_roots || [])].filter(Boolean))];
   $: fileContext = `${selectedRegistration?.registration_id || ''}/${selectedDelegation?.path || ''}`;
   $: if (fileContext !== lastFileContext) {
     lastFileContext = fileContext;
@@ -227,7 +229,7 @@
   }
 
   function openProjectDialog(project?: StudioProject) {
-    editingProject = project || projects.find((candidate) => candidate.id === selectedRegistration?.project_id);
+    editingProject = project;
     projectDialogOpen = true;
     error = '';
   }
@@ -296,7 +298,7 @@
     selected = null;
     workspaceRoot = '';
     sessionLoading = false;
-    learningLoading = false;
+
     messages = [];
     events = [];
     activeRun = null;
@@ -398,39 +400,6 @@
     }
   }
 
-  async function loadLearning() {
-    if (!workspaceRoot) return;
-    learningLoading = true;
-    const generation = sessionGeneration;
-    try {
-      const response = await requestResponse(`/api/v1/workspaces/learning?workspace_root=${encodeURIComponent(workspaceRoot)}`);
-      const result = (await response.json()) as { enabled: boolean };
-      if (isCurrentSession(generation)) learningEnabled = result.enabled;
-    } catch (cause) {
-      if (isCurrentSession(generation)) error = cause instanceof Error ? cause.message : 'Could not load learning settings';
-    } finally {
-      if (isCurrentSession(generation)) learningLoading = false;
-    }
-  }
-
-  async function toggleLearning() {
-    if (!workspaceRoot || learningLoading) return;
-    learningLoading = true;
-    error = '';
-    try {
-      const response = await requestResponse('/api/v1/workspaces/learning', {
-        method: 'PUT', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ workspace_root: workspaceRoot, disabled: learningEnabled })
-      });
-      learningEnabled = ((await response.json()) as { enabled: boolean }).enabled;
-      runStatus = `Learning ${learningEnabled ? 'enabled' : 'disabled'}`;
-    } catch (cause) {
-      error = cause instanceof Error ? cause.message : 'Could not update learning settings';
-    } finally {
-      learningLoading = false;
-    }
-  }
-
   async function selectRegisteredSession(registration: RegisteredSessionTree, push = true, approved = false) {
     if (registration.registration_id !== selectedRegistration?.registration_id || workflowCreate) {
       if (!approved && !canLeave()) return;
@@ -473,7 +442,7 @@
       activeRun = null;
       questionAnswer = '';
       if (push) window.history.pushState({}, '', `/sessions/${encodeURIComponent(registration.registration_id)}`);
-      await Promise.all([loadLearning(), reconnectLatestRun(sessionID), loadDelegations(sessionID)]);
+      await Promise.all([reconnectLatestRun(sessionID), loadDelegations(sessionID)]);
     } catch (cause) {
       if (isCurrentSession(generation)) error = cause instanceof Error ? cause.message : 'Could not load the session';
     } finally {
@@ -815,7 +784,7 @@
     {#if error}<div class="session-error" role="alert">{error}</div>{/if}
     {#if selected}
       <div class="chat-heading" class:personal-chat={selectedRegistration?.kind === 'chat' && !selectedDelegation}>
-        <div><h2>{selectedDelegation ? selectedDelegation.bookmark.agent.replace(/^builtin\//, '') : selected.session.title || (selectedRegistration?.kind === 'chat' ? 'New chat' : 'New session')}</h2><p>{selectedDelegation ? `${selectedDelegation.bookmark.working_directory ? `${selectedDelegation.bookmark.working_directory} · ` : ''}${selectedDelegation.bookmark.prompt}` : selectedRegistration?.kind === 'chat' ? 'Personal chat' : workspaceRoot}</p></div>
+        <div><h2>{selectedDelegation ? selectedDelegation.bookmark.agent.replace(/^builtin\//, '') : workspaceRoleTitle(selectedRegistration?.kind) || selected.session.title || (selectedRegistration?.kind === 'chat' ? 'New chat' : 'New session')}</h2><p>{selectedDelegation ? `${selectedDelegation.bookmark.working_directory ? `${selectedDelegation.bookmark.working_directory} · ` : ''}${selectedDelegation.bookmark.prompt}` : workspaceRoleDescription(selectedRegistration?.kind) || (selectedRegistration?.kind === 'chat' ? 'Personal chat' : workspaceRoot)}</p></div>
         <div class="chat-heading-actions">
           {#if !selectedDelegation && activeRun?.context_size}
             <div class="context-usage" title={`Estimated context usage: ${formatTokenCount(activeRun.context_used)} of ${formatTokenCount(activeRun.context_size)} tokens`}>
@@ -834,11 +803,10 @@
                 {#if selectedDelegation}
                   <button onclick={() => { closeActions(); void deleteDelegation(); }} disabled={sending || sessionLoading}><Trash2 aria-hidden="true" size={15} />Delete completed delegation</button>
                 {:else}
-                  {#if selectedRegistration?.kind !== 'chat'}<button aria-label="Configure session project" onclick={() => { closeActions(); openProjectDialog(); }} disabled={sending || sessionLoading}><Folders aria-hidden="true" size={15} />Configure project</button>{/if}
-                  <button class:enabled={learningEnabled} aria-label={`Turn learning ${learningEnabled ? 'off' : 'on'}`} onclick={() => { closeActions(); void toggleLearning(); }} disabled={sending || learningLoading}><BrainCircuit aria-hidden="true" size={15} />Learning {learningEnabled ? 'enabled' : 'disabled'}</button>
+                  {#if selectedRegistration?.kind !== 'chat'}<button aria-label="Configure session project" onclick={() => { closeActions(); openProjectDialog(selectedProject); }} disabled={sending || sessionLoading}><Folders aria-hidden="true" size={15} />Configure project</button>{/if}
                   <button onclick={() => { closeActions(); void compactSession(); }} title={sessionAgent ? 'The ACP agent manages its own context' : undefined} disabled={sending || sessionLoading || modelSaving || !!sessionAgent}><Minimize2 aria-hidden="true" size={15} />Compact context</button>
                   <button onclick={() => { closeActions(); void clearSession(); }} disabled={sending || sessionLoading}><Eraser aria-hidden="true" size={15} />Clear conversation</button>
-                  <button class="danger-action" onclick={() => { closeActions(); void deleteSession(); }} disabled={sending || sessionLoading}><Trash2 aria-hidden="true" size={15} />{selectedRegistration?.kind === 'chat' ? 'Delete chat' : 'Delete workspace session'}</button>
+                  {#if !workspaceRoleTitle(selectedRegistration?.kind)}<button class="danger-action" onclick={() => { closeActions(); void deleteSession(); }} disabled={sending || sessionLoading}><Trash2 aria-hidden="true" size={15} />{selectedRegistration?.kind === 'chat' ? 'Delete chat' : 'Delete workspace session'}</button>{/if}
                 {/if}
               </div>
             </details>
@@ -874,7 +842,7 @@
       {:else}
         <div class="composer-wrap">
           <div class="composer">
-            <textarea bind:value={prompt} oninput={(event) => saveDraft(draftKey, event.currentTarget.value)} aria-label="Message Q" onkeydown={submitFromKeyboard} placeholder={sending ? 'Guide the current turn…' : selectedRegistration?.kind === 'chat' ? 'Message Q…' : 'Ask Q to work in this repository…'} rows="3" disabled={sessionLoading}></textarea>
+            <textarea bind:value={prompt} oninput={(event) => saveDraft(draftKey, event.currentTarget.value)} aria-label="Message Q" onkeydown={submitFromKeyboard} placeholder={sending ? 'Guide the current turn…' : selectedRegistration?.kind === 'coordinator' ? 'Describe the work to plan and delegate…' : workspaceRoleTitle(selectedRegistration?.kind) ? 'Discuss results and review changes…' : selectedRegistration?.kind === 'chat' ? 'Message Q…' : 'Ask Q to work in this repository…'} rows="3" disabled={sessionLoading}></textarea>
             <button class="send-button" title={sending ? 'Guide current turn' : 'Send message'} onclick={sendPrompt} disabled={sessionLoading || modelSaving || !prompt.trim()}><ArrowUp aria-hidden="true" size={17} /></button>
           </div>
           <div class="composer-footer">
@@ -883,7 +851,7 @@
                 <SessionModelPicker {workspaceRoot} sessionID={selected.session.session_id} disabled={sending || sessionLoading} bind:saving={modelSaving} bind:agent={sessionAgent} />
               {/key}
             {/if}
-            <p>{sending ? 'Enter to redirect the current work with guidance' : 'Enter to send'} · Shift+Enter for a new line · {selectedRegistration?.kind === 'chat' ? 'Personal chat' : workspaceRoot}</p>
+            <p>{sending ? 'Enter to redirect the current work with guidance' : 'Enter to send'} · Shift+Enter for a new line · {workspaceRoleTitle(selectedRegistration?.kind) ? selectedProject?.name || workspaceRoleTitle(selectedRegistration?.kind) : selectedRegistration?.kind === 'chat' ? 'Personal chat' : workspaceRoot}</p>
           </div>
         </div>
       {/if}

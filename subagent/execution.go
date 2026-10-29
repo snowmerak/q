@@ -647,7 +647,7 @@ Include a concise user-visible review note with the tool call, without exposing 
 func plannerReviewTools(available []client.Tool, executors ...string) []client.Tool {
 	allowed := map[string]struct{}{
 		"read_file": {}, "loom_inspect": {}, "loom_read": {}, "loom_eval": {},
-		"run_command": {}, "wait": {}, "search_propositions": {}, "get_proposition": {},
+		"run_command": {}, "wait": {}, "search_work": {}, "post_get": {},
 		ExternalSearchToolName: {},
 	}
 	result := make([]client.Tool, 0, len(allowed)+1)

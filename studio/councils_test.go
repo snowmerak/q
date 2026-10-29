@@ -299,7 +299,7 @@ func TestStudioCouncilExportIncludesRunningTurnSnapshot(t *testing.T) {
 }
 
 func TestStudioCouncilCreationSupportsWorkspaceAndProject(t *testing.T) {
-	dir := t.TempDir()
+	dir := studioCatalogTestDirectory(t, t.TempDir())
 	handler, commits, sessions, err := newHandlerRuntime(t.Context(), config.Store{Dir: dir}, councilTestHost{})
 	if err != nil {
 		t.Fatal(err)

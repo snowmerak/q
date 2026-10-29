@@ -134,14 +134,14 @@ func TestSlashCompletionKeepsArgumentsEditable(t *testing.T) {
 	for _, key := range []tea.KeyPressMsg{{Code: tea.KeyTab}, {Code: tea.KeyEnter}} {
 		t.Run(key.String(), func(t *testing.T) {
 			m := newSlashCompletionModel(t)
-			m.input.SetValue("/lea")
+			m.input.SetValue("/suba")
 			m, _ = completionKey(m, key)
-			if m.input.Value() != "/learn " || m.input.Column() != len("/learn ") || m.submitPending {
+			if m.input.Value() != "/subagents " || m.input.Column() != len("/subagents ") || m.submitPending {
 				t.Fatalf("completion did not leave room for arguments: %q", m.input.Value())
 			}
 			updated, _ := m.Update(tea.PasteMsg{Content: "한글 query"})
 			m = updated.(model)
-			if m.input.Value() != "/learn 한글 query" || len(m.slashCompletionMatches()) != 0 {
+			if m.input.Value() != "/subagents 한글 query" || len(m.slashCompletionMatches()) != 0 {
 				t.Fatalf("arguments were changed or reopened completion: %q", m.input.Value())
 			}
 		})
@@ -175,7 +175,7 @@ func TestSlashCompletionEscapeDismissesUntilInputChanges(t *testing.T) {
 }
 
 func TestSlashCompletionOnlyHandlesCommandInput(t *testing.T) {
-	for _, value := range []string{"", "normal message", "use /model", " /model", "/unknown", "/tmp/file", "/plan request", "/learn off", "/\n", "/model\t"} {
+	for _, value := range []string{"", "normal message", "use /model", " /model", "/unknown", "/tmp/file", "/plan request", "/subagents off", "/\n", "/model\t"} {
 		t.Run(fmt.Sprintf("input=%q", value), func(t *testing.T) {
 			m := newSlashCompletionModel(t)
 			m.input.SetValue(value)

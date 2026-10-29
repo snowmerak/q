@@ -6,7 +6,7 @@ import (
 	"charm.land/bubbles/v2/textinput"
 	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
-	"charm.land/lipgloss/v2"
+
 	"context"
 	"encoding/json"
 	"errors"
@@ -24,7 +24,8 @@ import (
 	"github.com/snowmerak/q/memory"
 	"github.com/snowmerak/q/sessionstore"
 	"github.com/snowmerak/q/subagent"
-	"github.com/snowmerak/q/thinker"
+
+	"charm.land/lipgloss/v2"
 	qtools "github.com/snowmerak/q/tools"
 	"github.com/snowmerak/q/workspace"
 	"golang.org/x/text/unicode/norm"
@@ -163,10 +164,10 @@ type configuredMsg struct {
 }
 
 type archiveEmbeddingConfiguredMsg struct {
-	stats              archiveembed.BackfillStats
-	globalSkills       int
-	globalPropositions int
-	err                error
+	stats           archiveembed.BackfillStats
+	globalSkills    int
+	globalWorkItems int
+	err             error
 }
 
 type mcpSettingsSavedMsg struct {
@@ -241,14 +242,13 @@ type AgentEvent struct {
 	outcome         string
 	requestEstimate int
 	toolCalls       int
-	learningName    string
-	learningPayload json.RawMessage
-	streamDelta     *chatStreamDelta
-	questionCallID  string
-	taskStarted     *workspace.ActiveTask
-	taskCompleted   bool
-	contextReplace  *agentContextReplacement
-	err             error
+
+	streamDelta    *chatStreamDelta
+	questionCallID string
+	taskStarted    *workspace.ActiveTask
+	taskCompleted  bool
+	contextReplace *agentContextReplacement
+	err            error
 }
 
 type agentEvent = AgentEvent
@@ -329,14 +329,6 @@ type deferredSubmitMsg struct{}
 type loomStatsMsg struct {
 	stats loom.Stats
 	err   error
-}
-
-type thinkerResultMsg struct {
-	jobID             string
-	sessionGeneration uint64
-	checkpointStore   *workspace.Store
-	result            thinker.Result
-	err               error
 }
 
 type loomActionMsg struct {
@@ -697,7 +689,7 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		m.resize(m.width, m.height)
 		if m.screen == screenChat {
 			resume := m.continueRecoveredSession()
-			return m, tea.Batch(m.focusChatInput(), m.startNextLearningSegment(), resume)
+			return m, tea.Batch(m.focusChatInput(), resume)
 		}
 		if m.screen == screenSessions {
 			return m, nil
@@ -709,8 +701,7 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		return m, m.setup[m.setupFocus].Focus()
-	case thinkerResultMsg:
-		return m.updateThinkerResult(message)
+
 	case configuredMsg:
 		if message.err != nil {
 			m.status = message.err.Error()
@@ -750,21 +741,21 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 				m.status = "Model changed to " + message.config.Provider.Model
 			}
 			m.refreshTranscript()
-			m.refreshLearningContextLength()
+
 		} else {
 			m.enterChat(message.config, message.client)
 		}
 		resume := m.continueRecoveredSession()
-		return m, tea.Batch(m.focusChatInput(), m.startNextLearningSegment(), embeddingCommand, resume)
+		return m, tea.Batch(m.focusChatInput(), embeddingCommand, resume)
 	case archiveEmbeddingConfiguredMsg:
 		if message.err != nil {
 			m.status = "Embedding: " + message.err.Error()
 		} else if m.config.Embedding.Model == "" {
 			m.status = "Embedding disabled"
-		} else if message.stats.Embedded > 0 || message.globalSkills > 0 || message.globalPropositions > 0 {
+		} else if message.stats.Embedded > 0 || message.globalSkills > 0 || message.globalWorkItems > 0 {
 			m.status = fmt.Sprintf(
-				"Embedded %d workspace record(s) and %d global skill(s) · %d proposition(s)",
-				message.stats.Embedded, message.globalSkills, message.globalPropositions,
+				"Embedded %d workspace record(s) and %d global skill(s) · %d issue/ticket passage(s)",
+				message.stats.Embedded, message.globalSkills, message.globalWorkItems,
 			)
 		} else {
 			m.status = "Embedding index up to date · 0 new workspace records · 0 new global skills"
@@ -1088,7 +1079,7 @@ func (m *model) enterSession(value config.Config, configuredClient chatClient) {
 	m.config = value
 	m.client = configuredClient
 	workspaceModelErr := m.restoreWorkspaceModel()
-	workspaceLearningErr := m.restoreWorkspaceLearning()
+
 	active := m.activeConfig()
 	m.messages = nil
 	m.responseUsage = nil
@@ -1103,7 +1094,7 @@ func (m *model) enterSession(value config.Config, configuredClient chatClient) {
 	m.runID = ""
 	m.sessionTitle = ""
 	m.sessionUpdatedAt = time.Time{}
-	m.resetSessionLearning()
+
 	m.waiting = false
 	m.compacting = false
 	m.asking = false
@@ -1122,12 +1113,7 @@ func (m *model) enterSession(value config.Config, configuredClient chatClient) {
 		}
 		m.status += workspaceModelErr.Error()
 	}
-	if workspaceLearningErr != nil {
-		if m.status != "" {
-			m.status += " · "
-		}
-		m.status += workspaceLearningErr.Error()
-	}
+
 	m.ensureRunID()
 }
 
@@ -1571,10 +1557,7 @@ func (m *model) resetConversationState(runIDs ...string) {
 	m.sessionTitle = ""
 	m.sessionUpdatedAt = time.Now().UTC()
 	m.ensureRunID()
-	m.resetSessionLearning()
-	if err := m.ensureLearningMachine(thinker.LearningState{}, nil); err != nil {
-		m.status = err.Error()
-	}
+
 	m.compactionTarget = 0
 	m.submitPending = false
 	m.asking = false
@@ -1591,14 +1574,14 @@ func (m *model) resetConversationState(runIDs ...string) {
 // releaseConversationState drops the in-memory projection owned by a closed
 // ACP session without changing its durable files or workspace-wide settings.
 func (m *model) releaseConversationState(root string) {
-	m.stopSessionLearning()
+
 	if m.turnCancel != nil {
 		m.turnCancel()
 	}
 	m.messages = nil
 	m.memory = nil
 	m.responseUsage = nil
-	m.learning = nil
+
 	m.conversationID = ""
 	m.activeTask = nil
 	m.delegationRecoveryPending = false
@@ -1649,26 +1632,6 @@ func (m *model) startNewWorkspaceSession() error {
 	return nil
 }
 
-func (m *model) stopSessionLearning() {
-	if m.learningCancel != nil {
-		m.learningCancel()
-	}
-	m.learningCtx = nil
-	m.learningCancel = nil
-	m.sessionGeneration++
-	m.thinkerBusy = false
-	m.thinkerJobID = ""
-}
-
-func (m *model) resetSessionLearning() {
-	m.stopSessionLearning()
-	parent := m.ctx
-	if parent == nil {
-		parent = context.Background()
-	}
-	m.learningCtx, m.learningCancel = context.WithCancel(parent)
-}
-
 func (m *model) restoreWorkspaceSession() {
 	if m.workspaceStore == nil || m.workspaceRestored {
 		return
@@ -1678,9 +1641,7 @@ func (m *model) restoreWorkspaceSession() {
 	m.recoverDelegationTurn = false
 	session, err := m.workspaceStore.Load()
 	if errors.Is(err, workspace.ErrNotFound) {
-		if learningErr := m.ensureLearningMachine(thinker.LearningState{}, nil); learningErr != nil {
-			m.status = learningErr.Error()
-		}
+
 		return
 	}
 	if err != nil {
@@ -1730,9 +1691,7 @@ func (m *model) restoreWorkspaceSession() {
 		requestContext, contextInterruptedCalls = reconcileInterruptedToolCalls(requestContext)
 	}
 	m.memory = memory.New(memoryPolicy(m.activeConfig()), mergeWorkspaceMessages(base, requestContext))
-	if learningErr := m.ensureLearningMachine(session.Learning, requestContext); learningErr != nil {
-		m.status = learningErr.Error()
-	}
+
 	m.runID = session.RunID
 	if affinity := session.ResponseAffinity; affinity != nil &&
 		affinity.Model == m.activeModel() && strings.HasPrefix(affinity.Key, "cache_") &&
@@ -1824,22 +1783,6 @@ func (m *model) restoreWorkspaceModel() error {
 	return nil
 }
 
-func (m *model) restoreWorkspaceLearning() error {
-	if m.workspaceStore == nil || m.workspaceLearningRestored {
-		return nil
-	}
-	m.workspaceLearningRestored = true
-	value, err := m.workspaceStore.LoadLearningConfig()
-	if err != nil {
-		m.workspaceLearning = workspace.LearningConfig{
-			Version: workspace.LearningConfigVersion, Disabled: true,
-		}
-		return err
-	}
-	m.workspaceLearning = value
-	return nil
-}
-
 // activeConfig applies workspace and session interactive model overrides while
 // pinning shared-state model roles to their global inheritance. Embedding
 // configuration is already independent from Provider.Model.
@@ -1859,16 +1802,6 @@ func (m model) activeConfig() config.Config {
 			agent.Model = override.Model
 			agent.Group = ""
 			value.Agents.Roles[role] = agent
-		}
-	}
-	if len(m.workspaceModel.Overrides) > 0 || (m.sessionOptions != nil && m.sessionOptions.Model != "") {
-		value.Agents.Roles = cloneAgentRoles(value.Agents.Roles)
-		for _, role := range []string{config.AgentRoleThinker, config.AgentRoleLibrarian} {
-			agent := value.Agents.Roles[role]
-			if agent.Model == "" && agent.Group == "" {
-				agent.Model = m.config.Provider.Model
-				value.Agents.Roles[role] = agent
-			}
 		}
 	}
 	if m.sessionOptions != nil {
@@ -1937,12 +1870,6 @@ func (m *model) saveWorkspaceSession() error {
 		ResponseAffinity:   responseAffinity,
 		ActiveTask:         cloneActiveTask(m.activeTask),
 		Operation:          m.sessionOperation,
-		Learning: func() thinker.LearningState {
-			if m.learning == nil {
-				return thinker.LearningState{}
-			}
-			return m.learning.State()
-		}(),
 	})
 	if err != nil {
 		return &workspaceSessionSaveError{err: err}

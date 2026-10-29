@@ -36,7 +36,7 @@ func TestSessionPickerRendersTitlesTimesAndEmptyFallback(t *testing.T) {
 	}
 }
 
-func TestSessionPickerSelectionRestoresSessionAndCancelsOldLearning(t *testing.T) {
+func TestSessionPickerSelectionRestoresSessionAndReleasesOldLock(t *testing.T) {
 	root := t.TempDir()
 	current, currentLock, err := workspace.CreateSession(root, "test current")
 	if err != nil {
@@ -62,7 +62,6 @@ func TestSessionPickerSelectionRestoresSessionAndCancelsOldLearning(t *testing.T
 	m.client = &fakeClient{}
 	m.screen = screenSessions
 	m.sessions = []workspace.SessionEntry{target}
-	oldLearningContext := m.learningCtx
 
 	updated, _ := m.updateSessions(tea.KeyPressMsg{Code: tea.KeyEnter})
 	m = updated.(model)
@@ -77,11 +76,6 @@ func TestSessionPickerSelectionRestoresSessionAndCancelsOldLearning(t *testing.T
 	}
 	if m.sessionTitle != "Target conversation" || !containsMessageText(m.messages, "restored question") {
 		t.Fatalf("restored title/messages = %q, %#v", m.sessionTitle, m.messages)
-	}
-	select {
-	case <-oldLearningContext.Done():
-	default:
-		t.Fatal("switching sessions did not cancel the previous learning context")
 	}
 	if contender, err := workspace.AcquireSessionLock(root, current.SessionID, "verify released"); err != nil {
 		t.Fatalf("previous session lock was not released: %v", err)

@@ -20,6 +20,17 @@ tool connections and saves `workspace.Session`, including tool transcripts,
 compact context, active tasks, native response replay and provider affinity.
 Call the host again with the same store and session ID to continue the session.
 
+For a Library-owned project manager, `coordinator.EnsureManager` materializes
+the workspace's reserved manager identity in the central configuration directory.
+Pass the returned store and its existing ID to SessionHost normally. SessionHost
+resolves and verifies the current Library binding on each turn, and runs native
+tools or ACP in the project's first directory while retaining transcripts in
+the central store. Idle runtime fingerprints include the current project roots.
+`workspace.ResetSession` clears this conversation without removing its required
+binding or selected provider; delete and catalog unregister reject the manager.
+This provides manager chat lifecycle only; ticket execution and manager MR tools
+are separate coordinator milestones.
+
 `SessionOptions` can select a model and reasoning effort, append stable system
 instructions, and separate the authorized checkout roots from the state root.
 An injected `RuntimeFactory` supplies the complete authorized tool catalog and
@@ -27,7 +38,7 @@ its closer; the host does not add delegation or external tools to that runtime.
 Give the policy a stable `RuntimeKey` so live sessions reopen when it changes.
 
 `WrapRuntime` can restrict or extend the standard runtime while the host retains
-its archive, Skill Library, learning, and resource ownership. `AllowedTools`
+its archive, Skill Library, and resource ownership. `AllowedTools`
 filters the complete model catalog and rejects hidden calls, including loop-owned
 tools. Nil keeps the standard catalog; an empty non-nil list disables all tools.
 Pass a fresh `Control` on each `RunWithOptions` turn to answer interactive
@@ -35,10 +46,10 @@ questions; `AnswerQuestion` also checks that the question's call ID still matche
 
 Studio's standalone Composer runs through this same shared Agent Loop with a
 private persisted session. Its allowlist contains `ask_to_user`, skill/archive/
-proposition lookup, `learn`, and four `composer_*_artifact(s)` tools. Generic
+issue/ticket lookup, explicit issue writing, and four `composer_*_artifact(s)` tools. Generic
 filesystem, command, MCP, delegation, task lifecycle, and context-memory tools
-are excluded. Native sessions remain alive between turns so queued learning
-can finish; deletion and service shutdown release them.
+are excluded. Native sessions retain their runner between turns; deletion and
+service shutdown drain in-flight commands and release their resources.
 
 All user session types use `<workspace-root>/.q/sessions/<session-id>/`.
 `session.json` version 3 explicitly records `type` as `interaction`, `council`,
@@ -76,7 +87,7 @@ each session in `.q/sessions/<session-id>/model.json`. An explicit `SessionOptio
 precedence over that selection, followed by the workspace and global defaults.
 Changes are accepted between turns and take effect on the next turn; clearing
 the conversation retains the choice. Selecting Default restores inheritance.
-Thinker and Librarian keep their global model assignments.
+Automatic learning, Thinker and Librarian were removed.
 
 `SessionModelConfig.ReasoningEffort` affects ordinary SessionHost chat turns.
 An empty effort inherits the global chat default; a nonempty effort overrides
@@ -302,7 +313,7 @@ make a Q workspace behave like a Q workspace:
 
 - root `AGENTS.md` instructions;
 - host OS, architecture, shell, workspace root, and `.qignore` guidance;
-- Agent Skill and proposition guidance when the corresponding tools exist;
+- Agent Skill and workspace issue/ticket guidance when the corresponding tools exist;
 - archive guidance only when `ArchiveAvailable` is true;
 - the `task_start`, `ask_to_user`, and `task_complete` contract.
 

@@ -7,28 +7,27 @@ import (
 	"time"
 
 	"github.com/snowmerak/q/client"
-	"github.com/snowmerak/q/thinker"
 )
 
 // sessionFile is Q's durable conversation format. Transport adapters convert
 // its messages to Chat Completions or Responses only when making a request.
 type sessionFile struct {
-	Version            int                   `json:"version"`
-	Type               SessionType           `json:"type"`
-	ID                 string                `json:"id,omitempty"`
-	RunID              string                `json:"run_id,omitempty"`
-	LoopMode           string                `json:"loop_mode,omitempty"`
-	Title              string                `json:"title,omitempty"`
-	UpdatedAt          *time.Time            `json:"updated_at,omitempty"`
-	Transcript         []sessionMessage      `json:"transcript,omitempty"`
-	ResponseUsage      []ResponseUsage       `json:"response_usage,omitempty"`
-	TranscriptThoughts []TranscriptThought   `json:"transcript_thoughts,omitempty"`
-	Context            []sessionMessage      `json:"context,omitempty"`
-	ResponseReplay     []ResponseReplayItem  `json:"response_replay,omitempty"`
-	ResponseAffinity   *ResponseAffinity     `json:"response_affinity,omitempty"`
-	Learning           thinker.LearningState `json:"learning"`
-	ActiveTask         *ActiveTask           `json:"active_task,omitempty"`
-	Operation          *SessionOperation     `json:"operation,omitempty"`
+	Version            int                  `json:"version"`
+	Type               SessionType          `json:"type"`
+	ID                 string               `json:"id,omitempty"`
+	RunID              string               `json:"run_id,omitempty"`
+	LoopMode           string               `json:"loop_mode,omitempty"`
+	Title              string               `json:"title,omitempty"`
+	UpdatedAt          *time.Time           `json:"updated_at,omitempty"`
+	Transcript         []sessionMessage     `json:"transcript,omitempty"`
+	ResponseUsage      []ResponseUsage      `json:"response_usage,omitempty"`
+	TranscriptThoughts []TranscriptThought  `json:"transcript_thoughts,omitempty"`
+	Context            []sessionMessage     `json:"context,omitempty"`
+	ResponseReplay     []ResponseReplayItem `json:"response_replay,omitempty"`
+	ResponseAffinity   *ResponseAffinity    `json:"response_affinity,omitempty"`
+	Learning           json.RawMessage      `json:"learning,omitempty"`
+	ActiveTask         *ActiveTask          `json:"active_task,omitempty"`
+	Operation          *SessionOperation    `json:"operation,omitempty"`
 }
 
 type sessionMessage struct {
@@ -69,7 +68,7 @@ func (s Session) MarshalJSON() ([]byte, error) {
 		ResponseUsage:      s.ResponseUsage,
 		TranscriptThoughts: s.TranscriptThoughts,
 		ResponseReplay:     s.ResponseReplay, ResponseAffinity: s.ResponseAffinity,
-		Learning: s.Learning, ActiveTask: s.ActiveTask, Operation: s.Operation,
+		ActiveTask: s.ActiveTask, Operation: s.Operation,
 	})
 }
 
@@ -90,6 +89,7 @@ func (s *Session) UnmarshalJSON(data []byte) error {
 			return err
 		}
 		*s = Session(legacy)
+		s.Learning = nil
 		s.Type = s.Type.Effective()
 		if err := s.Type.Validate(); err != nil {
 			return err
@@ -117,7 +117,7 @@ func (s *Session) UnmarshalJSON(data []byte) error {
 			ResponseUsage:      saved.ResponseUsage,
 			TranscriptThoughts: saved.TranscriptThoughts,
 			ResponseReplay:     saved.ResponseReplay, ResponseAffinity: saved.ResponseAffinity,
-			Learning: saved.Learning, ActiveTask: saved.ActiveTask, Operation: saved.Operation,
+			ActiveTask: saved.ActiveTask, Operation: saved.Operation,
 		}
 		return nil
 	default:

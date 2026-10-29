@@ -86,6 +86,7 @@ export type SettingsSnapshot = {
     default_model: string;
     agent_skill_model: string;
     archive_model: string;
+      assignment_model: string;
     providers: SystemOneProvider[];
     api_keys: ServiceAPIKey[];
     active_api_keys: number;

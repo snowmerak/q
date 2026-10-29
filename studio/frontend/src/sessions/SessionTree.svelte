@@ -2,6 +2,7 @@
   import { ChevronDown, Folders, GitBranch, MessageSquarePlus, Plus, RefreshCw, Search, X } from '@lucide/svelte';
   import { formatSessionTime, shortID } from './format';
   import { flattenDelegations } from './tree';
+  import { workspaceRoleTitle, workspaceRoleDescription } from './types';
   import type { FlatDelegation, RegisteredSessionTree, StudioProject, SessionType } from './types';
 
   export let projects: StudioProject[];
@@ -27,8 +28,8 @@
   $: filteredSessions = registeredSessions.filter(registration => {
     if (typeFilter !== 'all' && (registration.session.type || 'interaction') !== typeFilter) return false;
     const project = projects.find(project => project.id === registration.project_id);
-    const title = registration.session.title || (registration.kind === 'chat' ? 'New chat' : 'New session');
-    const terms = [title, registration.session.type, registration.kind === 'chat' ? 'Personal chat' : '', registration.session.session_id, registration.workspace_root, project?.name,
+    const title = workspaceRoleTitle(registration.kind) || registration.session.title || (registration.kind === 'chat' ? 'New chat' : 'New session');
+    const terms = [title, registration.session.type, workspaceRoleDescription(registration.kind) || (registration.kind === 'chat' ? 'Personal chat' : ''), registration.session.session_id, registration.workspace_root, project?.name,
       ...flattenDelegations(registration.delegations || [], 1).map(node => node.bookmark.agent)];
     return !query || terms.some(term => term?.toLocaleLowerCase().includes(query));
   });
@@ -38,8 +39,11 @@
     || filteredSessions.some(session => session.project_id === project.id));
 
   function projectSessions(sessions: RegisteredSessionTree[], projectID: string) {
-    return sessions.filter((registration) => registration.project_id === projectID);
+    return sessions.filter((registration) => registration.project_id === projectID)
+      .sort((left, right) => roleOrder(left.kind) - roleOrder(right.kind));
   }
+
+  function roleOrder(kind?: string) { return kind === 'coordinator' ? 0 : workspaceRoleTitle(kind) ? 1 : 2; }
 
   function toggleGroup(id: string) {
     const next = new Set(collapsedGroups);
@@ -73,11 +77,11 @@
       {#snippet sessionBranch(registration: RegisteredSessionTree)}
         <div class="session-list-item session-root" class:active={selectedRegistrationID === registration.registration_id && !selectedDelegationPath} class:broken={!!registration.issue}>
           <button class="session-select" aria-current={selectedRegistrationID === registration.registration_id && !selectedDelegationPath ? 'true' : undefined} onclick={() => !registration.issue && onselect(registration)} disabled={!!registration.issue}>
-            <strong>{registration.session.title || (registration.kind === 'chat' ? 'New chat' : 'New session')}</strong>
-            <small title={registration.kind === 'chat' ? undefined : registration.workspace_root}>{#if registration.session.type === 'council'}Council · {:else if registration.session.type === 'composer'}Composer · {/if}{registration.kind === 'chat' ? 'Personal chat' : registration.workspace_root}</small>
+            <strong>{workspaceRoleTitle(registration.kind) || registration.session.title || (registration.kind === 'chat' ? 'New chat' : 'New session')}</strong>
+            <small title={registration.kind === 'chat' || !!workspaceRoleTitle(registration.kind) ? undefined : registration.workspace_root}>{#if registration.session.type === 'council'}Council · {:else if registration.session.type === 'composer'}Composer · {/if}{workspaceRoleDescription(registration.kind) || (registration.kind === 'chat' ? 'Personal chat' : registration.workspace_root)}</small>
             <code>{registration.issue || `${formatSessionTime(registration.session.updated_at)} · ${shortID(registration.session.session_id)}`}</code>
           </button>
-          <button class="session-delete" title={registration.session.type && registration.session.type !== 'interaction' ? 'Delete session' : registration.kind === 'chat' ? 'Delete chat' : 'Remove from Studio'} aria-label={registration.session.type && registration.session.type !== 'interaction' ? `Delete ${registration.session.type} ${registration.session.title || ''}`.trim() : registration.kind === 'chat' ? `Delete chat ${registration.session.title || ''}`.trim() : `Remove ${registration.session.title || 'session'} from Studio`} onclick={() => onunregister(registration)} disabled={sending || sessionLoading}><X aria-hidden="true" size={13} /></button>
+          {#if !workspaceRoleTitle(registration.kind)}<button class="session-delete" title={registration.session.type && registration.session.type !== 'interaction' ? 'Delete session' : registration.kind === 'chat' ? 'Delete chat' : 'Remove from Studio'} aria-label={registration.session.type && registration.session.type !== 'interaction' ? `Delete ${registration.session.type} ${registration.session.title || ''}`.trim() : registration.kind === 'chat' ? `Delete chat ${registration.session.title || ''}`.trim() : `Remove ${registration.session.title || 'session'} from Studio`} onclick={() => onunregister(registration)} disabled={sending || sessionLoading}><X aria-hidden="true" size={13} /></button>{/if}
         </div>
         {#each flattenDelegations(registration.delegations || [], 1) as node}
           <button class="session-child" class:active={selectedRegistrationID === registration.registration_id && selectedDelegationPath === node.path} style={`--tree-depth: ${node.depth}`} onclick={() => ondelegate(registration, node)} disabled={!!registration.issue}>

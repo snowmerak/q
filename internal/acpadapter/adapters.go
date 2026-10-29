@@ -111,7 +111,7 @@ func packageCommand(directory, binary string, lookPath func(string) (string, err
 	}
 	node, err := lookPath("node")
 	if err != nil {
-		return Command{}, "", errors.New("Node.js is required to run this ACP adapter")
+		return Command{}, "", errors.New("running this ACP adapter requires Node.js")
 	}
 	return Command{Name: node, Args: []string{script}}, manifest.Version, nil
 }
@@ -123,7 +123,7 @@ func npmCommand(lookPath func(string) (string, error)) (Command, error) {
 	}
 	node, err := lookPath("node")
 	if err != nil {
-		return Command{}, errors.New("Node.js is required to install ACP adapters")
+		return Command{}, errors.New("installing ACP adapters requires Node.js")
 	}
 	resolved, err := filepath.EvalSymlinks(npm)
 	if err == nil && strings.EqualFold(filepath.Ext(resolved), ".js") {
@@ -186,7 +186,7 @@ func (m Manager) install(ctx context.Context, preset string, lookPath func(strin
 		return Status{}, err
 	}
 	if d.pkg == "" {
-		return Status{}, errors.New("Grok supports ACP natively; no npm adapter is needed")
+		return Status{}, errors.New("the Grok CLI supports ACP natively; no npm adapter is needed")
 	}
 	if err := ctx.Err(); err != nil {
 		return Status{}, err

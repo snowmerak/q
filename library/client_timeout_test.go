@@ -14,10 +14,11 @@ import (
 )
 
 func TestEnsureSeparatesProbeAndRequestTimeouts(t *testing.T) {
+	directory := t.TempDir()
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		switch request.URL.Path {
 		case "/v1/health":
-			writeJSON(writer, http.StatusOK, Health{Service: ServiceName, ProtocolVersion: ProtocolVersion, Ready: true})
+			writeJSON(writer, http.StatusOK, Health{Service: ServiceName, ProtocolVersion: ProtocolVersion, Ready: true, ConfigDirectory: directory})
 		case "/v1/skills/search":
 			select {
 			case <-time.After(100 * time.Millisecond):
@@ -32,7 +33,7 @@ func TestEnsureSeparatesProbeAndRequestTimeouts(t *testing.T) {
 	value := Config{Version: ConfigVersion, Host: "127.0.0.1", Port: server.Listener.Addr().(*net.TCPAddr).Port}
 	for _, timeout := range []time.Duration{0, time.Second} {
 		t.Run(timeout.String(), func(t *testing.T) {
-			options := testOptions(t.TempDir(), value)
+			options := testOptions(directory, value)
 			options.ProbeTimeout = 20 * time.Millisecond
 			options.RequestTimeout = timeout
 			runtime, err := EnsureWithOptions(t.Context(), options)

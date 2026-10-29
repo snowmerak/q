@@ -17,7 +17,7 @@ import (
 
 // A live session owns the same model and tool connections across turns, like
 // the TUI. Only its event sink and foreground cancellation belong to a turn.
-// Bubble Tea serializes foreground events and background learning updates.
+// Bubble Tea serializes foreground events and tracked background commands.
 type liveSession struct {
 	busy          sync.Mutex
 	ctx           context.Context
@@ -27,10 +27,11 @@ type liveSession struct {
 	done          chan struct{}
 	err           error
 	configuration [32]byte
+	commands      *liveSessionCommands
 }
 
 // Reserve a session key while opening or draining it. Registry locks protect
-// only map changes; slow provider and learner shutdowns run outside them.
+// only map changes; slow provider and command shutdowns run outside them.
 type liveSessionOperation struct {
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -88,11 +89,6 @@ type liveSessionRequest struct {
 type liveSessionCancel struct{ request *liveSessionRequest }
 type liveSessionReady struct{}
 
-type liveSessionLearning struct {
-	value workspace.LearningConfig
-	done  chan struct{}
-}
-
 type liveSessionModel struct {
 	execution sessionExecutionModel
 	request   *liveSessionRequest
@@ -103,7 +99,7 @@ type liveSessionModel struct {
 
 // Bubble Tea stops its event loop without joining commands already running.
 // Drain those commands before closing resources or releasing the workspace
-// lock, so a cancelled learner cannot write a checkpoint after clear/delete.
+// lock, so cancelled commands cannot write state after clear/delete.
 type liveSessionCommands struct {
 	mu     sync.Mutex
 	closed bool
@@ -173,11 +169,11 @@ func (host *SessionHost) sessionConfiguration(store workspace.Store, configured 
 	if err != nil {
 		return [32]byte{}, err
 	}
-	project, _, err := host.resolveSessionWorkspace(store.Root)
+	executionRoot, project, _, err := host.resolveSessionExecution(host.ctx, store, configured...)
 	if err != nil {
 		return [32]byte{}, err
 	}
-	values := []any{loaded, modelConfig, sessionModel, lsp, mcp, project}
+	values := []any{loaded, modelConfig, sessionModel, lsp, mcp, executionRoot, project}
 	if len(configured) > 0 {
 		stable := configured[0]
 		stable.OperationID = ""
@@ -273,6 +269,7 @@ func (host *SessionHost) acquireLiveSession(store workspace.Store, sessionID str
 func newLiveSession(ctx context.Context, cancel context.CancelFunc, prepared *preparedSession) *liveSession {
 	session := &liveSession{ctx: ctx, cancel: cancel, prepared: prepared, done: make(chan struct{})}
 	commands := &liveSessionCommands{}
+	session.commands = commands
 	session.program = tea.NewProgram(
 		liveSessionModel{execution: sessionExecutionModel{state: prepared.state, keepAlive: true}, created: prepared.created, warnings: prepared.warnings, commands: commands},
 		tea.WithContext(ctx), tea.WithInput(nil), tea.WithOutput(io.Discard),
@@ -286,7 +283,7 @@ func newLiveSession(ctx context.Context, cancel context.CancelFunc, prepared *pr
 		if ctx.Err() != nil && errors.Is(err, tea.ErrProgramKilled) {
 			err = nil
 		}
-		prepared.state.stopSessionLearning()
+
 		commands.close()
 		session.err = errors.Join(err, prepared.Close())
 		close(session.done)
@@ -394,34 +391,6 @@ func (host *SessionHost) closeLiveSessions() error {
 	return err
 }
 
-// RefreshLearning applies a workspace toggle to live sessions immediately,
-// including learners running between foreground turns.
-func (host *SessionHost) RefreshLearning(ctx context.Context, store workspace.Store) error {
-	value, err := store.LoadLearningConfig()
-	if err != nil {
-		return err
-	}
-	host.liveMu.Lock()
-	var sessions []*liveSession
-	for _, session := range host.liveSessions {
-		if session.prepared.store.Root == store.Root {
-			sessions = append(sessions, session)
-		}
-	}
-	host.liveMu.Unlock()
-	for _, session := range sessions {
-		message := liveSessionLearning{value: value, done: make(chan struct{})}
-		session.program.Send(message)
-		select {
-		case <-message.done:
-		case <-session.done:
-		case <-ctx.Done():
-			return ctx.Err()
-		}
-	}
-	return nil
-}
-
 // Embedding transitions need the old archive leases closed before rebuilding.
 func (host *SessionHost) releaseIdleSessions() error {
 	return host.withIdleSessions(host.ctx, nil)
@@ -495,25 +464,8 @@ func (m liveSessionModel) Update(message tea.Msg) (updatedModel tea.Model, nextC
 	defer func() { nextCommand = m.commands.wrap(nextCommand) }()
 	switch request := message.(type) {
 	case liveSessionReady:
-		command := m.execution.state.startNextLearningSegment()
-		return m, command
-	case liveSessionLearning:
-		if m.execution.state.clientIsACPRemote() {
-			close(request.done)
-			return m, nil
-		}
-		var command tea.Cmd
-		if m.execution.state.workspaceLearning.Disabled != request.value.Disabled {
-			m.execution.state.workspaceLearning = request.value
-			if request.value.Disabled {
-				m.execution.state.stopSessionLearning()
-			} else {
-				m.execution.state.resetSessionLearning()
-				command = m.execution.state.startNextLearningSegment()
-			}
-		}
-		close(request.done)
-		return m, command
+		return m, nil
+
 	case *liveSessionRequest:
 		if m.request != nil {
 			request.result <- liveSessionResult{err: workspace.ErrLocked}
@@ -557,7 +509,7 @@ func (m liveSessionModel) Update(message tea.Msg) (updatedModel tea.Model, nextC
 			m.finish(err)
 			return m, nil
 		}
-		// The turn follows the caller's cancellation; learning and tools keep
+		// The turn follows the caller's cancellation; tools keep
 		// their session context. Commands capture this turn context on start.
 		parent := m.execution.state.ctx
 		m.execution.state.ctx = request.ctx

@@ -135,7 +135,7 @@ Workspace Memory intentionally owns only records and their derived indexes.
 The following remain outside the service:
 
 - `.q/sessions/<uuid>/session.json`, including one session's transcript
-  projection, run identity, task lifecycle, and Thinker queue;
+  projection, run identity and task lifecycle;
 - `.q/sessions/<uuid>/plan-execution.json`, that session's approved execution
   checkpoint;
 - `.q/loom/` and its garbage collection, shared through a short-lived
@@ -174,11 +174,9 @@ data ownership:
 | Service | Durable scope |
 |---|---|
 | Workspace Memory | Workspace history records, project Agent Skill record projections, Bleve, and HNSW under the workspace `.q/` directory. |
-| Global Library | Global Agent Skills, propositions, Library search projections, and proposition judging under `~/.q/library/`. |
+| Global Library | Global Agent Skills, workspace issue/ticket/member/attempt/inbox originals, and derived BM25/HNSW indexes under `~/.q/library/`. |
 
-In particular, `~/.q/library/proposition-jobs.sqlite` remains the Global
-Library's serialized proposition-judging queue. Workspace Memory neither opens
-that SQLite database nor introduces a workspace SQLite database.
+Library owns the central workspace knowledge SQLite database; Workspace Memory does not open it. The retired proposition queue is retained only as an inert backup. See [Library and coordinator](library.md) for workspace identity and ownership.
 
 ## Failure and recovery behavior
 

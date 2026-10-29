@@ -340,7 +340,7 @@ func runGriller[T any](
 					return scoutToolError(err), nil
 				}
 				return invocationTools.Call(ctx, call)
-			case DelegateScoutToolName, "loom_inspect", "loom_read", "loom_eval", "search_skills", "get_skill", "search_propositions", "get_proposition":
+			case DelegateScoutToolName, "loom_inspect", "loom_read", "loom_eval", "search_skills", "get_skill", "search_work", "post_get":
 				return invocationTools.Call(ctx, call)
 			default:
 				if externalMCPToolAllowed(call.Function.Name) {
@@ -451,7 +451,7 @@ func runGriller[T any](
 					return completed, err
 				}
 				result = scoutToolError(parseErr)
-			case DelegateScoutToolName, "loom_inspect", "loom_read", "loom_eval", "search_skills", "get_skill", "search_propositions", "get_proposition":
+			case DelegateScoutToolName, "loom_inspect", "loom_read", "loom_eval", "search_skills", "get_skill", "search_work", "post_get":
 				result, err = batch.Call(ctx, index)
 				if err != nil {
 					result = scoutToolError(err)
@@ -820,7 +820,7 @@ func grillerToolsWithCompletion(available []client.Tool, completion client.Tool)
 			result = append(result, tool)
 		case tool.Function.Name == "loom_inspect", tool.Function.Name == "loom_read", tool.Function.Name == "loom_eval",
 			tool.Function.Name == "search_skills", tool.Function.Name == "get_skill",
-			tool.Function.Name == "search_propositions", tool.Function.Name == "get_proposition":
+			tool.Function.Name == "search_work", tool.Function.Name == "post_get":
 			result = append(result, tool)
 		}
 	}

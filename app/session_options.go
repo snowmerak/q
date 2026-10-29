@@ -25,12 +25,13 @@ type SessionOptions struct {
 	SystemPrompt         string
 	WorkingDirectory     string
 	AuxiliaryDirectories []string
-	DisableLearning      bool
-	DisableExternalMCP   bool
-	RuntimeKey           string
-	RuntimeFactory       func(context.Context, workspace.Store) (AgentToolRuntime, io.Closer, error) `json:"-"`
+	// Deprecated: automatic learning was removed; this compatibility field is ignored.
+	DisableLearning    bool
+	DisableExternalMCP bool
+	RuntimeKey         string
+	RuntimeFactory     func(context.Context, workspace.Store) (AgentToolRuntime, io.Closer, error) `json:"-"`
 	// WrapRuntime restricts or extends the standard runtime without replacing
-	// its archive, Skill Library, learning, or resource ownership.
+	// its archive, Skill Library, or resource ownership.
 	WrapRuntime func(context.Context, workspace.Store, AgentToolRuntime) (AgentToolRuntime, error) `json:"-"`
 	// AllowedTools filters the complete catalog. Nil preserves Q's default tools;
 	// an empty non-nil list disables all tools.

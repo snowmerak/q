@@ -232,7 +232,7 @@ func (m model) activatePickedSession(store workspace.Store, lock *workspace.Lock
 		m.resize(m.width, m.height)
 		closePrevious()
 		resume := m.continueRecoveredSession()
-		return m, tea.Batch(m.input.Focus(), m.startNextLearningSegment(), resume)
+		return m, tea.Batch(m.input.Focus(), resume)
 	}
 	closePrevious()
 	if len(m.gatewayConfig.Providers) > 0 {

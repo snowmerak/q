@@ -78,7 +78,7 @@ func (host *SessionHost) SyncEmbeddingArchive(ctx context.Context, root string) 
 			return 0, err
 		}
 		stats, err := libraryRuntime.Client().SyncEmbeddings(ctx)
-		return stats.Skills + stats.Propositions, errors.Join(err, guard.check(ctx))
+		return stats.Skills + stats.WorkItems, errors.Join(err, guard.check(ctx))
 	}
 	memoryRuntime, err := workspacememory.Ensure(ctx, host.store.Dir)
 	if err != nil {

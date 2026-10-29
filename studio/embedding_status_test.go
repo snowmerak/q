@@ -13,7 +13,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/snowmerak/q/agentskills"
 	"github.com/snowmerak/q/config"
+	qlibrary "github.com/snowmerak/q/library"
 	"github.com/snowmerak/q/sessionstore"
 )
 
@@ -68,9 +70,26 @@ func TestEmbeddingStatusReportsCoverageWithoutRepairingLockedArchives(t *testing
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = global.Close() })
-	if _, err := global.Save(sessionstore.Record{ID: "prop", Kind: "proposition", Scope: "global", Content: "proposition", Payload: json.RawMessage(`{"queries":["query"]}`), VectorProjections: []sessionstore.VectorProjection{{ID: "content", Embedding: *current}}}); err != nil {
+	seedGlobalEmbeddingSkill(t, configDirectory, global, current)
+	// Library now owns the project catalog. Keep its real leader running with
+	// the deliberately old index configuration while testing read-only status.
+	if err := global.Close(); err != nil {
 		t.Fatal(err)
 	}
+	studioCatalogTestDirectory(t, configDirectory)
+	libraryConfig, err := (qlibrary.ConfigStore{Dir: configDirectory}).LoadOrDefault()
+	if err != nil {
+		t.Fatal(err)
+	}
+	libraryRuntime, err := qlibrary.EnsureWithOptions(t.Context(), qlibrary.EnsureOptions{Dir: configDirectory, Config: libraryConfig, Vector: old})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := libraryRuntime.Close(); err != nil {
+			t.Error(err)
+		}
+	})
 	projects := newStudioProjectStore(configDirectory)
 	if _, err := projects.create(studioProjectUpdateRequest{Name: "project", WorkspaceRoots: []string{root, absent}}); err != nil {
 		t.Fatal(err)
@@ -157,6 +176,35 @@ func TestEmbeddingStatusReportsCoverageWithoutRepairingLockedArchives(t *testing
 	}
 }
 
+func seedGlobalEmbeddingSkill(t *testing.T, directory string, archive *sessionstore.Store, vector *sessionstore.Embedding) {
+	t.Helper()
+	root := filepath.Join(directory, "skills", "embedding-test")
+	if err := os.MkdirAll(root, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "SKILL.md"), []byte("---\nname: embedding-test\ndescription: Procedure awaiting embedding.\n---\n\nFollow the procedure.\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	registry, err := agentskills.DiscoverGlobal(directory, directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := registry.SyncRecords(t.Context(), archive); err != nil {
+		t.Fatal(err)
+	}
+	if vector != nil {
+		result, err := archive.Search(t.Context(), sessionstore.SearchOptions{Limit: 10, Filters: sessionstore.Filters{Kinds: []string{sessionstore.KindSkill}}})
+		if err != nil || len(result.Hits) != 1 {
+			t.Fatalf("seed skill: %+v %v", result, err)
+		}
+		record := result.Hits[0].Record
+		record.VectorProjections = []sessionstore.VectorProjection{{ID: "content", Embedding: *vector}}
+		if _, err := archive.Save(record); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
 func TestEmbeddingStatusRecognizesCurrentCoverageAndIndex(t *testing.T) {
 	base := t.TempDir()
 	root := filepath.Join(base, "workspace")
@@ -178,7 +226,7 @@ func TestEmbeddingStatusRecognizesCurrentCoverageAndIndex(t *testing.T) {
 	if _, err := archive.Save(sessionstore.Record{ID: "current", Kind: "message", Content: "current", Embedding: &sessionstore.Embedding{Model: "current", Dimensions: 2, Vector: []float32{1, 0}, CreatedAt: time.Now().UTC()}}); err != nil {
 		t.Fatal(err)
 	}
-	service := embeddingStatusService{main: main, sessions: newSessionsService(t.Context(), nil, main.Dir)}
+	service := embeddingStatusService{main: main, sessions: newSessionsService(t.Context(), nil, studioCatalogTestDirectory(t, main.Dir))}
 	result, err := service.snapshot(t.Context(), root)
 	if err != nil || !result.Complete || len(result.Archives) != 2 || result.Archives[1].State != "current" || result.Archives[1].Current != 1 || result.Archives[1].Vectors != 1 {
 		t.Fatalf("current snapshot = %+v, %v", result, err)
@@ -202,7 +250,7 @@ func TestEmbeddingStatusShowsReadFailuresAndDisabledConfiguration(t *testing.T) 
 	if err := main.Save(value); err != nil {
 		t.Fatal(err)
 	}
-	service := embeddingStatusService{main: main, sessions: newSessionsService(t.Context(), nil, main.Dir)}
+	service := embeddingStatusService{main: main, sessions: newSessionsService(t.Context(), nil, studioCatalogTestDirectory(t, main.Dir))}
 	result, err := service.snapshot(t.Context(), root)
 	if err != nil {
 		t.Fatal(err)
@@ -247,7 +295,7 @@ func TestEmbeddingStatusFlushesEachArchiveBeforeInspectingTheNext(t *testing.T) 
 	if err := main.Save(value); err != nil {
 		t.Fatal(err)
 	}
-	service := embeddingStatusService{main: main, sessions: newSessionsService(t.Context(), nil, main.Dir)}
+	service := embeddingStatusService{main: main, sessions: newSessionsService(t.Context(), nil, studioCatalogTestDirectory(t, main.Dir))}
 	response := httptest.NewRecorder()
 	var events []embeddingStatusEvent
 	var offset int
@@ -307,7 +355,7 @@ func TestEmbeddingStatusFlushesEachArchiveBeforeInspectingTheNext(t *testing.T) 
 
 func TestEmbeddingStatusStopsScanningAfterStreamWriteFailure(t *testing.T) {
 	main := config.Store{Dir: t.TempDir()}
-	service := embeddingStatusService{main: main, sessions: newSessionsService(t.Context(), nil, main.Dir)}
+	service := embeddingStatusService{main: main, sessions: newSessionsService(t.Context(), nil, studioCatalogTestDirectory(t, main.Dir))}
 	stopped := errors.New("consumer disconnected")
 	var kinds []string
 	result, err := service.scan(t.Context(), t.TempDir(), func(event embeddingStatusEvent) error {

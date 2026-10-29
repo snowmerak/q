@@ -120,7 +120,7 @@
     <path d="M 830 695 V 910 H 707 V 970" class="state-flow" />
     <text class="edge-label" x="837" y="898" fill="#92400E">archive search</text>
     <path d="M 1055 580 V 910 H 985 V 970" class="state-flow" />
-    <text class="edge-label" x="1015" y="875" fill="#92400E">register propositions</text>
+    <text class="edge-label" x="1015" y="875" fill="#92400E">attempts / manager inbox</text>
     <path d="M 915 835 V 900 H 985 V 970" class="state-flow" />
     <text class="edge-label" x="938" y="892" fill="#92400E">skills / retrieval</text>
     <path d="M 1090 835 V 900 H 1570 V 970" class="state-flow" />
@@ -198,9 +198,9 @@
   </g>
   <g filter="url(#shadow)">
     <rect x="940" y="475" width="230" height="105" rx="12" fill="#FAF5FF" stroke="#9333EA" stroke-width="1.5" />
-    <text text-anchor="middle" x="1055" y="505" class="box-title">Learning pipeline</text>
-    <text text-anchor="middle" x="1055" y="529" class="box-package" fill="#7E22CE">thinker</text>
-    <text text-anchor="middle" x="1055" y="554" class="box-sub">segments → propositions</text>
+    <text text-anchor="middle" x="1055" y="505" class="box-title">Ticket coordinator</text>
+    <text text-anchor="middle" x="1055" y="529" class="box-package" fill="#7E22CE">coordinator</text>
+    <text text-anchor="middle" x="1055" y="554" class="box-sub">assign → run → manager review</text>
   </g>
 
   <!-- Tool runtime -->
@@ -279,7 +279,7 @@
     <text text-anchor="middle" x="442" y="998" class="state-title">Workspace session state</text>
     <text text-anchor="middle" x="442" y="1021" class="state-package">workspace</text>
     <text text-anchor="middle" x="442" y="1046" class="state-sub">.q/sessions · checkpoints</text>
-    <text text-anchor="middle" x="442" y="1067" class="state-sub">model / LSP / learning config</text>
+    <text text-anchor="middle" x="442" y="1067" class="state-sub">model / LSP / session config</text>
   </g>
   <g filter="url(#shadow)">
     <rect x="585" y="970" width="245" height="120" rx="11" fill="#FEF3C7" stroke="#D97706" stroke-width="1.4" />
@@ -292,8 +292,8 @@
     <rect x="850" y="970" width="270" height="120" rx="11" fill="#FEF3C7" stroke="#D97706" stroke-width="1.4" />
     <text text-anchor="middle" x="985" y="998" class="state-title">Global Library</text>
     <text text-anchor="middle" x="985" y="1021" class="state-package">library</text>
-    <text text-anchor="middle" x="985" y="1046" class="state-sub">~/.q · skills · propositions</text>
-    <text text-anchor="middle" x="985" y="1067" class="state-sub">SQLite queue · BM25 / HNSW</text>
+    <text text-anchor="middle" x="985" y="1046" class="state-sub">~/.q · skills · issues / tickets</text>
+    <text text-anchor="middle" x="985" y="1067" class="state-sub">SQLite source · BM25 / HNSW</text>
   </g>
   <g filter="url(#shadow)">
     <rect x="1140" y="970" width="270" height="120" rx="11" fill="#FEF3C7" stroke="#D97706" stroke-width="1.4" />

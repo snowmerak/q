@@ -1,4 +1,4 @@
-// Package library provides q's user-level Agent Skill and proposition service.
+// Package library provides q's user-level skills and workspace knowledge service.
 package library
 
 import (

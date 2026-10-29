@@ -30,7 +30,7 @@ import (
 	"github.com/snowmerak/q/memory"
 	"github.com/snowmerak/q/sessionstore"
 	"github.com/snowmerak/q/subagent"
-	"github.com/snowmerak/q/thinker"
+
 	qtools "github.com/snowmerak/q/tools"
 	"github.com/snowmerak/q/tools/builtin"
 	"github.com/snowmerak/q/workspace"
@@ -1108,126 +1108,6 @@ func TestSlashModelConfiguresCommitAgentModelAndReasoning(t *testing.T) {
 	}
 }
 
-func TestModelTargetsIncludeLearningRoles(t *testing.T) {
-	m := model{}
-	for _, expected := range []string{config.AgentRoleThinker, config.AgentRoleLibrarian} {
-		found := slices.Contains(m.modelTargets(), expected)
-		if !found {
-			t.Fatalf("model targets = %#v; missing %q", m.modelTargets(), expected)
-		}
-	}
-}
-
-func TestExplicitLearningSegmentStartsThinkerExtractionThroughLibraryClient(t *testing.T) {
-	var registered qlibrary.PropositionRegisterRequest
-	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		writer.Header().Set("Content-Type", "application/json")
-		switch request.URL.Path {
-		case "/v1/skills/embeddings/configure":
-			_, _ = writer.Write([]byte(`{}`))
-			return
-		case "/v1/skills/embeddings/sources", "/v1/propositions/embeddings/sources":
-			_ = json.NewEncoder(writer).Encode(qlibrary.SkillEmbeddingSourceResponse{})
-			return
-		}
-		if request.URL.Path != "/v1/propositions" || !strings.HasPrefix(request.Header.Get("Idempotency-Key"), "thinker-v1/") || !strings.HasSuffix(request.Header.Get("Idempotency-Key"), "/0") {
-			t.Errorf("registration request = %s %s, key %q", request.Method, request.URL.Path, request.Header.Get("Idempotency-Key"))
-		}
-		if err := json.NewDecoder(request.Body).Decode(&registered); err != nil {
-			t.Error(err)
-		}
-		_, _ = writer.Write([]byte(`{"id":"prop-app-test","created":true}`))
-	}))
-	defer server.Close()
-	configuredClient := &extractionClient{responses: []client.Message{
-		{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{{
-			ID: "register", Type: client.ToolTypeFunction,
-			Function: client.FunctionCall{Name: thinker.RegisterToolName, Arguments: `{"content":"Use one proposition per call.","queries":["proposition call size"],"confidence":0.9,"tags":["thinker"]}`},
-		}}},
-		{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{{
-			ID: "complete", Type: client.ToolTypeFunction,
-			Function: client.FunctionCall{Name: thinker.CompleteToolName, Arguments: `{}`},
-		}}},
-	}}
-	value := config.Default()
-	value.Provider.Model = "thinker-model"
-	value.Embedding = config.EmbeddingConfig{Model: "embed-model", Dimensions: 3}
-	m := newModel(context.Background(), config.Store{Dir: t.TempDir()}, nil)
-	workspaceStore := workspace.Store{Root: t.TempDir(), SessionID: "11111111-1111-4111-8111-111111111111"}
-	m.workspaceStore = &workspaceStore
-	m.config = value
-	m.client = configuredClient
-	m.libraryClient = qlibrary.NewClient(server.URL+"/v1", "test-key", time.Second)
-	if err := m.libraryClient.ConfigureEmbedding(configuredClient, value.Embedding.Model, value.Embedding.Dimensions); err != nil {
-		t.Fatal(err)
-	}
-	m.models = []client.Model{{ID: "thinker-model", ContextLength: 16_000}}
-	m.messages = []client.Message{
-		{Role: client.RoleSystem, Content: "main prompt"},
-		{Role: client.RoleUser, Content: "Remember this decision."},
-		{Role: client.RoleAssistant, Content: "Understood."},
-	}
-	m.runID = "run-test"
-	if err := m.ensureLearningMachine(thinker.LearningState{}, nil); err != nil {
-		t.Fatal(err)
-	}
-	m.learning.AppendMessage(m.messages[1])
-	m.learning.AppendMessage(m.messages[2])
-	m.learning.EnqueueExplicit()
-	command := m.startNextLearningSegment()
-	if command == nil {
-		t.Fatal("explicit segment did not start Thinker extraction")
-	}
-	message, ok := command().(thinkerResultMsg)
-	if !ok || message.err != nil || message.result.Registered != 1 {
-		t.Fatalf("Thinker result = %#v", message)
-	}
-	if checkpoint, found, err := workspaceStore.LoadThinkerCheckpoint(); err != nil || !found || !checkpoint.Completed {
-		t.Fatalf("completed Thinker checkpoint = %#v, found=%v, err=%v", checkpoint, found, err)
-	}
-	updated, _ := m.Update(message)
-	m = updated.(model)
-	if _, found, err := workspaceStore.LoadThinkerCheckpoint(); err != nil || found {
-		t.Fatalf("Thinker checkpoint after durable segment commit: found=%v err=%v", found, err)
-	}
-	if _, _, queued := m.learning.Next(); queued {
-		t.Fatal("completed learning segment remained queued")
-	}
-	if message.result.LogPath == "" || filepath.Dir(message.result.LogPath) != filepath.Join(m.store.Dir, "logs", "thinker") {
-		t.Fatalf("Thinker log path = %q", message.result.LogPath)
-	}
-	if registered.Content != "Use one proposition per call." || registered.ExtractorModel != "thinker-model" || registered.ExtractorVersion != thinker.ExtractorVersion ||
-		registered.Embeddings == nil || len(registered.Embeddings.Vectors) != 2 || len(configuredClient.embeddings) != 1 {
-		t.Fatalf("registered proposition = %#v", registered)
-	}
-}
-
-func TestSessionLearningContextIsCancelledOnResetAndStop(t *testing.T) {
-	m := newModel(context.Background(), config.Store{Dir: t.TempDir()}, nil)
-	first := m.learningCtx
-	m.resetSessionLearning()
-	select {
-	case <-first.Done():
-	default:
-		t.Fatal("reset did not cancel the previous session learning context")
-	}
-	second := m.learningCtx
-	select {
-	case <-second.Done():
-		t.Fatal("replacement session learning context is already cancelled")
-	default:
-	}
-	m.stopSessionLearning()
-	select {
-	case <-second.Done():
-	default:
-		t.Fatal("stop did not cancel the active session learning context")
-	}
-	if m.learningCtx != nil || m.learningCancel != nil {
-		t.Fatal("stopped session retained its learning context")
-	}
-}
-
 func TestModelPickerConfiguresEmbeddingModelAndDimensions(t *testing.T) {
 	store := config.Store{Dir: t.TempDir()}
 	value := config.Default()
@@ -1294,8 +1174,8 @@ func TestEmbeddingModelAssignmentIndexesExistingGlobalSkills(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		writer.Header().Set("Content-Type", "application/json")
 		switch request.URL.Path {
-		case "/v1/propositions/embeddings/sources":
-			_ = json.NewEncoder(writer).Encode(qlibrary.SkillEmbeddingSourceResponse{})
+		case "/v1/work/embeddings":
+			_ = json.NewEncoder(writer).Encode(qlibrary.WorkEmbeddingBatch{})
 		case "/v1/skills/embeddings/configure":
 			if err := json.NewDecoder(request.Body).Decode(&configured); err != nil {
 				t.Error(err)
@@ -1381,16 +1261,6 @@ func TestEmbeddingModelAssignmentReportsUpToDateIndexes(t *testing.T) {
 	m = updated.(model)
 	if m.status != "Embedding index up to date · 0 new workspace records · 0 new global skills" {
 		t.Fatalf("up-to-date indexing status = %q", m.status)
-	}
-}
-
-func TestEmbeddingModelAssignmentReportsPropositionMigration(t *testing.T) {
-	m := newModel(t.Context(), config.Store{Dir: t.TempDir()}, nil)
-	m.config.Embedding = config.EmbeddingConfig{Model: "embed-model", Dimensions: 3}
-	updated, _ := m.Update(archiveEmbeddingConfiguredMsg{globalPropositions: 105})
-	m = updated.(model)
-	if !strings.Contains(m.status, "105 proposition(s)") {
-		t.Fatalf("proposition migration status = %q", m.status)
 	}
 }
 
@@ -1781,7 +1651,7 @@ func TestHelpCommandAndShortcutKeepCommandsOutOfChatFooter(t *testing.T) {
 	if !strings.Contains(chat, "ctrl+h help") {
 		t.Fatalf("chat footer does not advertise help:\n%s", chat)
 	}
-	for _, command := range []string{"/clear", "/learn", "/commit", "/model", "/gateway", "/loom", "/ignore", "/skills", "/mcp", "/help"} {
+	for _, command := range []string{"/clear", "/commit", "/model", "/gateway", "/loom", "/ignore", "/skills", "/mcp", "/help"} {
 		if strings.Contains(chat, command) {
 			t.Fatalf("chat footer exposes %q:\n%s", command, chat)
 		}
@@ -1795,7 +1665,7 @@ func TestHelpCommandAndShortcutKeepCommandsOutOfChatFooter(t *testing.T) {
 	help := ansi.Strip(m.View().Content)
 	for _, expected := range []string{
 		"q · Help", "SLASH COMMANDS",
-		"/commit", "/new", "/clear", "/learn [on|off|status]", "/model",
+		"/commit", "/new", "/clear", "/model",
 		"/gateway", "/changes",
 	} {
 		if !strings.Contains(help, expected) {
@@ -1869,161 +1739,6 @@ func TestSlashSkillsShowsCatalogAndReloads(t *testing.T) {
 	m = updated.(model)
 	if tools.skillReloads != 1 || !strings.Contains(m.status, "1 active") {
 		t.Fatalf("reloads=%d status=%q", tools.skillReloads, m.status)
-	}
-}
-
-func TestSlashLearnAcknowledgesEmptyAndClosesEligibleContext(t *testing.T) {
-	value := config.Default()
-	value.Provider.Model = "test-model"
-	workspaceStore := workspace.Store{Root: t.TempDir()}
-	m := newModel(context.Background(), config.Store{Dir: t.TempDir()}, nil)
-	m.workspaceStore = &workspaceStore
-	m.enterChat(value, &fakeClient{})
-
-	m.input.SetValue("/learn")
-	updated, _ := m.submitChat()
-	m = updated.(model)
-	if m.status != "Learning checkpoint enqueued" {
-		t.Fatalf("empty /learn status = %q", m.status)
-	}
-	if _, _, ok := m.learning.Next(); ok {
-		t.Fatal("empty /learn created a learning segment")
-	}
-
-	m.learning.AppendMessage(client.Message{Role: client.RoleUser, Content: "Prefer checkpointed learning."})
-	m.input.SetValue("/learn")
-	updated, _ = m.submitChat()
-	m = updated.(model)
-	segment, messages, ok := m.learning.Next()
-	if !ok || segment.Reason != thinker.BoundaryExplicit || len(messages) != 1 ||
-		messages[0].Content != "Prefer checkpointed learning." {
-		t.Fatalf("explicit learning segment = %#v, %#v", segment, messages)
-	}
-}
-
-func TestWorkspaceLearningCanBeDisabledAndReenabled(t *testing.T) {
-	value := config.Default()
-	value.Provider.Model = "test-model"
-	workspaceStore := workspace.Store{Root: t.TempDir()}
-	m := newModel(context.Background(), config.Store{Dir: t.TempDir()}, nil)
-	m.workspaceStore = &workspaceStore
-	m.enterChat(value, &fakeClient{})
-
-	m.learning.AppendMessage(client.Message{Role: client.RoleUser, Content: "queued before disabling"})
-	m.learning.EnqueueExplicit()
-	before := m.learning.State()
-	learningContext := m.learningCtx
-	m.input.SetValue("/learn off")
-	updated, _ := m.submitChat()
-	m = updated.(model)
-	if !m.learningDisabled() || m.status != "Learning disabled for this workspace" {
-		t.Fatalf("disabled=%v status=%q", m.learningDisabled(), m.status)
-	}
-	stored, err := workspaceStore.LoadLearningConfig()
-	if err != nil || !stored.Disabled {
-		t.Fatalf("stored learning config = %#v, %v", stored, err)
-	}
-	select {
-	case <-learningContext.Done():
-	default:
-		t.Fatal("disabling learning did not cancel current Thinker work")
-	}
-	if m.learningCtx != nil || m.thinkerBusy || m.thinkerJobID != "" {
-		t.Fatal("disabled learning retained an active Thinker session")
-	}
-	if command := m.observeLearningMessage(client.Message{Role: client.RoleUser, Content: "do not learn this"}); command != nil {
-		t.Fatal("disabled learning observed a conversation message")
-	}
-	if command := m.enqueueLearningSpecial(thinker.TaskCompleteEventName, json.RawMessage(`{"summary":"ignored"}`)); command != nil {
-		t.Fatal("disabled learning enqueued a task completion")
-	}
-	if command := m.enqueueExplicitLearning(); command != nil {
-		t.Fatal("disabled learning enqueued an explicit boundary")
-	}
-	after := m.learning.State()
-	if len(after.Events) != len(before.Events) || len(after.Queue) != len(before.Queue) {
-		t.Fatalf("disabled learning changed state: before=%#v after=%#v", before, after)
-	}
-
-	m.input.SetValue("/learn")
-	updated, _ = m.submitChat()
-	m = updated.(model)
-	if m.status != "Learning is disabled for this workspace · /learn on to enable" {
-		t.Fatalf("disabled /learn status = %q", m.status)
-	}
-	m.input.SetValue("/learn status")
-	updated, _ = m.submitChat()
-	m = updated.(model)
-	if m.status != "Learning is disabled for this workspace" {
-		t.Fatalf("disabled status = %q", m.status)
-	}
-
-	m.input.SetValue("/learn on")
-	updated, _ = m.submitChat()
-	m = updated.(model)
-	if m.learningDisabled() || m.status != "Learning enabled for this workspace" {
-		t.Fatalf("disabled=%v status=%q", m.learningDisabled(), m.status)
-	}
-	if _, err := os.Stat(workspaceStore.LearningPath()); !os.IsNotExist(err) {
-		t.Fatalf("learning config after enabling: %v", err)
-	}
-	if m.learningCtx == nil {
-		t.Fatal("enabling learning did not create a fresh Thinker context")
-	}
-	select {
-	case <-m.learningCtx.Done():
-		t.Fatal("replacement Thinker context is already cancelled")
-	default:
-	}
-	if state := m.learning.State(); len(state.Queue) != len(before.Queue) {
-		t.Fatalf("enabling did not preserve queued segments: %#v", state)
-	}
-}
-
-func TestDisabledWorkspaceLearningDoesNotSeedRestoredTranscript(t *testing.T) {
-	value := config.Default()
-	value.Provider.Model = "test-model"
-	workspaceStore := workspace.Store{Root: t.TempDir()}
-	if err := workspaceStore.SaveLearningConfig(workspace.LearningConfig{Disabled: true}); err != nil {
-		t.Fatal(err)
-	}
-	if err := workspaceStore.Save(workspace.Session{Transcript: []client.Message{
-		{Role: client.RoleUser, Content: "do not seed this transcript"},
-	}}); err != nil {
-		t.Fatal(err)
-	}
-
-	m := newModel(context.Background(), config.Store{Dir: t.TempDir()}, nil)
-	m.workspaceStore = &workspaceStore
-	m.enterChat(value, &fakeClient{})
-	if !m.learningDisabled() {
-		t.Fatal("workspace learning setting was not restored")
-	}
-	state := m.learning.State()
-	if len(state.Events) != 0 || len(state.Queue) != 0 {
-		t.Fatalf("disabled learning seeded restored transcript: %#v", state)
-	}
-}
-
-func TestInvalidWorkspaceLearningConfigFailsClosed(t *testing.T) {
-	value := config.Default()
-	value.Provider.Model = "test-model"
-	workspaceStore := workspace.Store{Root: t.TempDir()}
-	if err := os.MkdirAll(workspaceStore.Dir(), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(workspaceStore.LearningPath(), []byte(`{"version":2,"disabled":false}`), 0o600); err != nil {
-		t.Fatal(err)
-	}
-
-	m := newModel(context.Background(), config.Store{Dir: t.TempDir()}, nil)
-	m.workspaceStore = &workspaceStore
-	m.enterChat(value, &fakeClient{})
-	if !m.learningDisabled() || !strings.Contains(m.status, "unsupported learning settings version") {
-		t.Fatalf("invalid config did not fail closed: disabled=%v status=%q", m.learningDisabled(), m.status)
-	}
-	if command := m.observeLearningMessage(client.Message{Role: client.RoleUser, Content: "must not be learned"}); command != nil {
-		t.Fatal("invalid workspace learning config allowed collection")
 	}
 }
 
@@ -3171,18 +2886,10 @@ func TestModelPickerMakesWorkspaceAndGlobalScopesExplicit(t *testing.T) {
 		}
 	}
 
-	m.modelPickerStage = modelPickerTargets
-	m.modelScopeCursor = modelScopeWorkspace
-	for index, target := range m.modelTargets() {
-		if target == config.AgentRoleThinker {
-			m.modelTargetCursor = index
-			break
+	for _, target := range m.modelTargets() {
+		if target == config.AgentRoleThinker || target == config.AgentRoleLibrarian {
+			t.Fatalf("retired learning role is visible: %s", target)
 		}
-	}
-	updated, command := m.updateModelPicker(tea.KeyPressMsg{Code: tea.KeyEnter})
-	m = updated.(model)
-	if command != nil || m.modelPickerStage != modelPickerTargets || !strings.Contains(m.status, "shared globally") {
-		t.Fatalf("Thinker workspace cell = command %v, stage %v, status %q", command != nil, m.modelPickerStage, m.status)
 	}
 }
 
@@ -3307,15 +3014,6 @@ func TestWorkspaceModelDoesNotOverrideGlobalServiceModels(t *testing.T) {
 	if active.Provider.Model != "workspace-main" || active.Embedding != value.Embedding {
 		t.Fatalf("active config = %#v", active)
 	}
-	for _, role := range []string{config.AgentRoleThinker, config.AgentRoleLibrarian} {
-		agent, err := active.EffectiveAgent(role)
-		if err != nil || agent.Model != "global-main" {
-			t.Fatalf("active shared-state %s = %#v, err = %v", role, agent, err)
-		}
-	}
-	if contextLength := m.learningContextLength(); contextLength != 16000 {
-		t.Fatalf("Thinker context length = %d", contextLength)
-	}
 	planner, err := active.EffectiveAgent(config.AgentRoleManager)
 	if err != nil || planner.Model != "workspace-planner" {
 		t.Fatalf("active planner = %#v, err = %v", planner, err)
@@ -3365,9 +3063,6 @@ func TestChatHeaderShowsAbsoluteWorkspacePath(t *testing.T) {
 
 func TestClearEmptiesWorkspaceSession(t *testing.T) {
 	workspaceStore := workspace.Store{Root: t.TempDir()}
-	if err := workspaceStore.SaveLearningConfig(workspace.LearningConfig{Disabled: true}); err != nil {
-		t.Fatal(err)
-	}
 	if err := workspaceStore.Save(workspace.Session{
 		Transcript: []client.Message{{Role: client.RoleUser, Content: "old"}},
 		Context:    []client.Message{{Role: client.RoleUser, Content: "old"}},
@@ -3383,10 +3078,7 @@ func TestClearEmptiesWorkspaceSession(t *testing.T) {
 	if session, err := workspaceStore.Load(); err != nil || len(session.Transcript) != 0 || len(session.Context) != 0 {
 		t.Fatalf("workspace session was not emptied: session=%#v err=%v", session, err)
 	}
-	learning, err := workspaceStore.LoadLearningConfig()
-	if err != nil || !learning.Disabled {
-		t.Fatalf("workspace learning setting after clear = %#v, %v", learning, err)
-	}
+
 }
 
 func TestNewCommandCreatesAnotherWorkspaceSession(t *testing.T) {
@@ -3662,12 +3354,6 @@ func TestChatExecutesToolCallsAndContinuesTurn(t *testing.T) {
 	completedSession, err := workspaceStore.Load()
 	if err != nil || completedSession.ActiveTask != nil {
 		t.Fatalf("completed active task = %#v, err = %v", completedSession.ActiveTask, err)
-	}
-	segment, learningMessages, ok := m.learning.Next()
-	if !ok || segment.Reason != thinker.BoundaryTaskComplete || len(learningMessages) != 2 ||
-		learningMessages[0].Role != client.RoleUser || learningMessages[1].Name != thinker.TaskCompleteEventName ||
-		!strings.Contains(learningMessages[1].Content, `"summary":"Created main.go"`) {
-		t.Fatalf("task completion learning segment = %#v, %#v", segment, learningMessages)
 	}
 	archived, err := archiveStore.Search(context.Background(), sessionstore.SearchOptions{
 		Filters: sessionstore.Filters{RunIDs: []string{m.runID}},

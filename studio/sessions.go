@@ -73,16 +73,6 @@ type workspaceRequest struct {
 	WorkspaceRoot string `json:"workspace_root"`
 }
 
-type learningUpdateRequest struct {
-	WorkspaceRoot string `json:"workspace_root"`
-	Disabled      bool   `json:"disabled"`
-}
-
-type learningResponse struct {
-	WorkspaceRoot string `json:"workspace_root"`
-	Enabled       bool   `json:"enabled"`
-}
-
 type sessionOperationResponse struct {
 	Status string `json:"status"`
 }
@@ -97,6 +87,11 @@ func newSessionsService(parent context.Context, runner sessionRunner, configDire
 		main:   config.Store{Dir: configDirectory},
 		runner: runner, runs: newSessionRunService(parent, runner), registry: newSessionRegistry(configDirectory),
 		projects: newStudioProjectStore(configDirectory),
+	}
+	if setter, ok := runner.(interface {
+		SetCoordinatorDelivery(func(context.Context, workspace.Store, string, string) error)
+	}); ok {
+		setter.SetCoordinatorDelivery(service.deliverManagerOperation)
 	}
 	if setter, ok := runner.(interface {
 		SetSessionWorkspaceResolver(app.SessionWorkspaceResolver)
@@ -252,6 +247,10 @@ func (service *sessionsService) serveDelete(writer http.ResponseWriter, request 
 		writeSessionError(writer, err)
 		return
 	}
+	if err := store.RequireDeletable(); err != nil {
+		writeSessionError(writer, err)
+		return
+	}
 	if err := store.RequireInteraction(); err != nil && !errors.Is(err, workspace.ErrNotFound) {
 		writeSessionError(writer, err)
 		return
@@ -268,6 +267,9 @@ func (service *sessionsService) serveDelete(writer http.ResponseWriter, request 
 }
 
 func (service *sessionsService) deleteSession(store workspace.Store) (returnErr error) {
+	if err := store.RequireDeletable(); err != nil {
+		return err
+	}
 	if err := store.RequireInteraction(); err != nil && !errors.Is(err, workspace.ErrNotFound) {
 		return err
 	}
@@ -363,51 +365,6 @@ func (service *sessionsService) serveCompact(writer http.ResponseWriter, request
 		return
 	}
 	writeJSON(writer, http.StatusOK, sessionOperationResponse{Status: status})
-}
-
-func (service *sessionsService) serveLearning(writer http.ResponseWriter, request *http.Request) {
-	switch request.Method {
-	case http.MethodGet:
-		root, err := canonicalWorkspaceDirectory(request.URL.Query().Get("workspace_root"))
-		if err != nil {
-			writeAPIError(writer, http.StatusBadRequest, err)
-			return
-		}
-		value, err := (workspace.Store{Root: root}).LoadLearningConfig()
-		if err != nil {
-			writeAPIError(writer, http.StatusInternalServerError, err)
-			return
-		}
-		writeJSON(writer, http.StatusOK, learningResponse{WorkspaceRoot: root, Enabled: !value.Disabled})
-	case http.MethodPut:
-		var input learningUpdateRequest
-		if err := decodeSessionRequest(writer, request, &input); err != nil {
-			writeAPIError(writer, http.StatusBadRequest, err)
-			return
-		}
-		root, err := canonicalWorkspaceDirectory(input.WorkspaceRoot)
-		if err != nil {
-			writeAPIError(writer, http.StatusBadRequest, err)
-			return
-		}
-		value := workspace.LearningConfig{Version: workspace.LearningConfigVersion, Disabled: input.Disabled}
-		if err := (workspace.Store{Root: root}).SaveLearningConfig(value); err != nil {
-			writeAPIError(writer, http.StatusInternalServerError, err)
-			return
-		}
-		if runtime, ok := service.runner.(interface {
-			RefreshLearning(context.Context, workspace.Store) error
-		}); ok {
-			if err := runtime.RefreshLearning(request.Context(), workspace.Store{Root: root}); err != nil {
-				writeAPIError(writer, http.StatusInternalServerError, err)
-				return
-			}
-		}
-		writeJSON(writer, http.StatusOK, learningResponse{WorkspaceRoot: root, Enabled: !value.Disabled})
-	default:
-		writer.Header().Set("Allow", "GET, PUT")
-		writeAPIError(writer, http.StatusMethodNotAllowed, errors.New("method not allowed"))
-	}
 }
 
 func (service *sessionsService) serveMessage(writer http.ResponseWriter, request *http.Request) {
@@ -519,6 +476,8 @@ func decodeSessionRequest(writer http.ResponseWriter, request *http.Request, tar
 
 func writeSessionError(writer http.ResponseWriter, err error) {
 	switch {
+	case errors.Is(err, workspace.ErrRequiredManager):
+		writeAPIError(writer, http.StatusConflict, err)
 	case errors.Is(err, workspace.ErrWorkflowRequired):
 		writeAPIError(writer, http.StatusConflict, err)
 	case errors.Is(err, workspace.ErrLocked):

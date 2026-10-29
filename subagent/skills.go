@@ -155,8 +155,8 @@ func withRetrievalCatalog(prompt string, tools []client.Tool) string {
 	if hasTool(tools, "search_archive") && hasTool(tools, "get_archive_record") {
 		prompt += "\n\nWorkspace archive records are retrieved on demand. Before starting substantive work, call search_archive with concise, task-specific terms to check relevant prior conversations, decisions, agent results, and tool failures. Before finalizing substantive work, search again using any new decision terms, failures, or verification questions revealed by the work. Use get_archive_record only for selected results that need more detail."
 	}
-	if hasTool(tools, "search_propositions") && hasTool(tools, "get_proposition") {
-		prompt += "\n\nDurable cross-workspace facts are stored as global propositions. Search them with search_propositions when prior preferences, decisions, constraints, or reusable resolutions may matter; call get_proposition only for a selected result that needs provenance or extraction details."
+	if hasTool(tools, "search_work") && hasTool(tools, "post_get") {
+		prompt += "\n\nProject knowledge is stored in workspace issue and ticket threads. Use search_work for relevant decisions or evidence and post_get to read selected source posts. Explicit all:true requests cross-workspace search. If issue_create or issue_reply is available, record verified lessons with evidence there."
 	}
 	return prompt
 }

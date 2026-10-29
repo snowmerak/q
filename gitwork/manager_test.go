@@ -72,6 +72,26 @@ func TestManagerRejectsDirtyParent(t *testing.T) {
 	}
 }
 
+func TestManagerExplainsMissingInitialCommitAndAcceptsEmptyBase(t *testing.T) {
+	root := t.TempDir()
+	gitTest(t, root, "init", "-b", "main")
+	manager := Manager{Root: filepath.Join(t.TempDir(), "leases")}
+	if _, err := manager.Prepare(t.Context(), root, "new-project"); err == nil || !strings.Contains(err.Error(), "initial commit") {
+		t.Fatalf("missing initial commit error: %v", err)
+	}
+	if _, err := os.Stat(manager.Root); !os.IsNotExist(err) {
+		t.Fatalf("created a lease before validating parent HEAD: %v", err)
+	}
+	gitTest(t, root, "-c", "user.name=Test", "-c", "user.email=test@example.test", "commit", "--allow-empty", "-m", "Initial commit")
+	request, err := manager.Prepare(t.Context(), root, "new-project")
+	if err != nil || request.BaseCommit == "" {
+		t.Fatalf("empty initial commit was not accepted: %+v %v", request, err)
+	}
+	if _, err := manager.Close(t.Context(), request); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestManagerRecoversBranchCreatedBeforeWorktree(t *testing.T) {
 	repository := newRepository(t)
 	manager := Manager{Root: filepath.Join(t.TempDir(), "leases")}

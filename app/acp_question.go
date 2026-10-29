@@ -1,6 +1,7 @@
 package app
 
 import (
+	"github.com/snowmerak/q/third_party/acp-go-sdk"
 	"context"
 	"errors"
 	"fmt"
@@ -11,7 +12,6 @@ import (
 	"github.com/snowmerak/q/client"
 	"github.com/snowmerak/q/memory"
 	"github.com/snowmerak/q/sessionstore"
-	"github.com/snowmerak/q/third_party/acp-go-sdk"
 )
 
 type acpPendingQuestion struct {
@@ -164,7 +164,7 @@ func (a *acpAgent) beginACPPendingQuestionInput(
 		}
 		a.state.memory.Append(message)
 	}
-	a.launchLearning(a.state.observeLearningMessage(message))
+
 	a.state.sessionUpdatedAt = time.Now().UTC()
 	if err := a.state.saveWorkspaceSession(); err != nil {
 		return err

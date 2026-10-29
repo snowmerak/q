@@ -34,7 +34,7 @@ func validateFixtureLibraryServers(servers []acp.McpServer) error {
 		return fmt.Errorf("expected one Library stdio server: %+v", servers)
 	}
 	server := servers[0].Stdio
-	if server.Name != "q-library" || !filepath.IsAbs(server.Command) || len(server.Args) != 4 || strings.Join(server.Args[:3], " ") != "library mcp --config-dir" || !filepath.IsAbs(server.Args[3]) || len(server.Env) != 0 {
+	if server.Name != "q-library" || !filepath.IsAbs(server.Command) || len(server.Args) < 4 || strings.Join(server.Args[:3], " ") != "library mcp --config-dir" || !filepath.IsAbs(server.Args[3]) || len(server.Env) != 0 {
 		return fmt.Errorf("invalid Library server: %+v", server)
 	}
 	return nil

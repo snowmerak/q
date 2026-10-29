@@ -67,7 +67,7 @@ func (m Manager) Prepare(ctx context.Context, parentCheckout, id string) (change
 	}
 	baseCommit, err := gitText(ctx, parentCheckout, "rev-parse", "HEAD")
 	if err != nil {
-		return change.Request{}, err
+		return change.Request{}, fmt.Errorf("gitwork: resolve parent HEAD (new repositories need an initial commit): %w", err)
 	}
 	commonDir, err := gitText(ctx, parentCheckout, "rev-parse", "--path-format=absolute", "--git-common-dir")
 	if err != nil {

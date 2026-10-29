@@ -29,12 +29,10 @@ func TestStoreRoundTrip(t *testing.T) {
 		}},
 	}
 	want.Agents.Roles = map[string]AgentConfig{
-		AgentRolePlanner:   {Group: "heavy"},
-		AgentRoleCoder:     {Model: "coding-model", ReasoningEffort: "medium"},
-		AgentRoleCommit:    {Model: "commit-model", ReasoningEffort: "low"},
-		AgentRoleThinker:   {Model: "thinking-model", ReasoningEffort: "high"},
-		AgentRoleLibrarian: {Model: "librarian-model", ReasoningEffort: "medium"},
-		AgentRoleSearch:    {Agent: "primary"},
+		AgentRolePlanner: {Group: "heavy"},
+		AgentRoleCoder:   {Model: "coding-model", ReasoningEffort: "medium"},
+		AgentRoleCommit:  {Model: "commit-model", ReasoningEffort: "low"},
+		AgentRoleSearch:  {Agent: "primary"},
 	}
 	want.Agents.Connections = map[string]AgentConnectionConfig{
 		"primary":  {Preset: "codex", Library: true},
@@ -264,58 +262,6 @@ func TestEffectiveModelCandidatesResolvesOrderedGroup(t *testing.T) {
 		candidates[0].ReasoningEffort != "high" || candidates[0].Timeout != 10*time.Second ||
 		candidates[1].Model != "secondary" || candidates[1].ReasoningEffort != "medium" {
 		t.Fatalf("candidates = %#v", candidates)
-	}
-}
-
-func TestThinkerUsesRoleOverrideAndActiveModelFallback(t *testing.T) {
-	value := Default()
-	value.Provider.Model = "active-model"
-
-	inherited, err := value.EffectiveAgent(AgentRoleThinker)
-	if err != nil || inherited.Model != "active-model" || inherited.ReasoningEffort != "" {
-		t.Fatalf("inherited thinker = %#v, err = %v", inherited, err)
-	}
-
-	value.Agents.Roles = map[string]AgentConfig{
-		AgentRoleThinker: {Model: "thinking-model", ReasoningEffort: "high"},
-	}
-	overridden, err := value.EffectiveAgent(AgentRoleThinker)
-	if err != nil || overridden.Model != "thinking-model" || overridden.ReasoningEffort != "high" {
-		t.Fatalf("overridden thinker = %#v, err = %v", overridden, err)
-	}
-}
-
-func TestLibrarianUsesRoleOverrideAndActiveModelFallback(t *testing.T) {
-	value := Default()
-	value.Provider.Model = "active-model"
-
-	inherited, err := value.EffectiveAgent(AgentRoleLibrarian)
-	if err != nil || inherited.Model != "active-model" || inherited.ReasoningEffort != "" {
-		t.Fatalf("inherited librarian = %#v, err = %v", inherited, err)
-	}
-
-	value.Agents.Roles = map[string]AgentConfig{
-		AgentRoleLibrarian: {Model: "librarian-model", ReasoningEffort: "medium"},
-	}
-	overridden, err := value.EffectiveAgent(AgentRoleLibrarian)
-	if err != nil || overridden.Model != "librarian-model" || overridden.ReasoningEffort != "medium" {
-		t.Fatalf("overridden librarian = %#v, err = %v", overridden, err)
-	}
-}
-
-func TestAgentRolesIncludesLearningRoles(t *testing.T) {
-	roles := AgentRoles()
-	if IsAgentRole("executor") || slices.Contains(roles, "executor") {
-		t.Fatalf("retired executor role is still built in: %v", roles)
-	}
-	for _, expected := range []string{AgentRoleThinker, AgentRoleLibrarian} {
-		if !IsAgentRole(expected) {
-			t.Fatalf("%s is not recognized as an agent role", expected)
-		}
-		found := slices.Contains(roles, expected)
-		if !found {
-			t.Fatalf("agent roles = %#v; missing %q", roles, expected)
-		}
 	}
 }
 

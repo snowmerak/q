@@ -1,6 +1,7 @@
 package app
 
 import (
+	"github.com/snowmerak/q/third_party/acp-go-sdk"
 	"context"
 	"errors"
 	"fmt"
@@ -12,7 +13,7 @@ import (
 	"github.com/snowmerak/q/memory"
 	"github.com/snowmerak/q/sessionstore"
 	"github.com/snowmerak/q/subagent"
-	"github.com/snowmerak/q/third_party/acp-go-sdk"
+
 	"github.com/snowmerak/q/workspace"
 )
 
@@ -54,7 +55,7 @@ func (m model) startExternalAgent(command externalAgentCommand, request string) 
 	message := client.Message{Role: client.RoleUser, Content: request}
 	m.archiveMessage(message, sessionstore.StatusSubmitted, false)
 	m.messages = append(m.messages, message)
-	learning := m.observeLearningMessage(message)
+
 	if m.memory == nil {
 		m.memory = memory.New(memoryPolicy(m.activeConfig()), nil)
 	}
@@ -74,7 +75,7 @@ func (m model) startExternalAgent(command externalAgentCommand, request string) 
 		m.status = err.Error()
 		return m, m.input.Focus()
 	}
-	return m, tea.Batch(m.spinner.Tick, m.sendExternalAgent(command, toolRuntime, request), learning)
+	return m, tea.Batch(m.spinner.Tick, m.sendExternalAgent(command, toolRuntime, request))
 }
 
 func (m *model) sendExternalAgent(command externalAgentCommand, toolRuntime agentToolRuntime, request string) tea.Cmd {
@@ -242,7 +243,7 @@ func (a *acpAgent) runACPExternalAgent(ctx context.Context, toolRuntime agentToo
 		a.state.memory = memory.New(memoryPolicy(a.state.activeConfig()), nil)
 	}
 	a.state.memory.Append(message)
-	a.launchLearning(a.state.observeLearningMessage(message))
+
 	if err := a.state.saveWorkspaceSession(); err != nil {
 		return acp.PromptResponse{}, err
 	}

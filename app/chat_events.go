@@ -49,10 +49,7 @@ func (m model) updateAgentEvent(message agentEventMsg) (tea.Model, tea.Cmd) {
 		m.refreshTranscript()
 		return m, tea.Batch(m.chatTick(), waitAgentEvent(message.events, message.turnID))
 	}
-	if event.learningName != "" {
-		command := m.enqueueLearningSpecial(event.learningName, event.learningPayload)
-		return m, tea.Batch(m.chatTick(), waitAgentEvent(message.events, message.turnID), command)
-	}
+
 	if event.plan != nil {
 		m.status = agentPlanStatus(*event.plan)
 		return m, tea.Batch(m.chatTick(), waitAgentEvent(message.events, message.turnID))
@@ -96,11 +93,8 @@ func (m model) updateAgentEvent(message agentEventMsg) (tea.Model, tea.Cmd) {
 	if event.call != nil {
 		m.archiveToolCall(*event.call)
 		m.status = "Running tool · " + describeToolCall(*event.call)
-		var learning tea.Cmd
-		if event.call.Function.Name == "learn" {
-			learning = m.enqueueExplicitLearning()
-		}
-		return m, tea.Batch(m.chatTick(), waitAgentEvent(message.events, message.turnID), learning)
+
+		return m, tea.Batch(m.chatTick(), waitAgentEvent(message.events, message.turnID))
 	}
 	if event.question != nil {
 		m.asking = true
@@ -125,7 +119,8 @@ func (m model) updateAgentEvent(message agentEventMsg) (tea.Model, tea.Cmd) {
 	}
 	if event.message != nil {
 		m.streamResponse = ""
-		learning := m.appendSessionMessage(*event.message, event.usage)
+		m.appendSessionMessage(*event.message, event.usage)
+
 		m.archiveSessionMessage(*event.message, event.toolIsError)
 		if event.message.Role == client.RoleAssistant {
 			m.status = "Preparing tool call…"
@@ -141,7 +136,7 @@ func (m model) updateAgentEvent(message agentEventMsg) (tea.Model, tea.Cmd) {
 			}
 			acknowledgeAgentPersistence(event)
 		}
-		return m, tea.Batch(m.chatTick(), waitAgentEvent(message.events, message.turnID), learning)
+		return m, tea.Batch(m.chatTick(), waitAgentEvent(message.events, message.turnID))
 	}
 	return m.updateChatResult(chatResultMsg{
 		turnID:   message.turnID,
@@ -201,11 +196,7 @@ func (m model) updateChatResult(message chatResultMsg) (tea.Model, tea.Cmd) {
 	m.messages = append(m.messages, message.intermediate...)
 	m.messages = append(m.messages, assistant)
 	m.recordResponseUsage(message.response.Usage)
-	learningCommands := make([]tea.Cmd, 0, len(message.intermediate)+2)
-	for _, intermediate := range message.intermediate {
-		learningCommands = append(learningCommands, m.observeLearningMessage(intermediate))
-	}
-	learningCommands = append(learningCommands, m.observeLearningMessage(assistant))
+
 	for _, intermediate := range message.intermediate {
 		m.archiveMessage(intermediate, sessionstore.StatusSucceeded, false)
 	}
@@ -259,8 +250,8 @@ func (m model) updateChatResult(message chatResultMsg) (tea.Model, tea.Cmd) {
 		m.status = "archive: " + err.Error()
 	}
 	focus := m.focusChatInput()
-	learningCommands = append(learningCommands, focus, m.startNextLearningSegment())
-	return m, tea.Batch(learningCommands...)
+
+	return m, tea.Batch(focus)
 }
 
 func (m model) updateCompactionResult(message compactionResultMsg) (tea.Model, tea.Cmd) {

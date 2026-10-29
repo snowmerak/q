@@ -250,7 +250,8 @@ func CanonicalProfileID(scope, name string) string {
 func BuiltinAgentDefinitions() []AgentDefinition {
 	readTools := []string{
 		"read_file", "list_directory", "loom_inspect", "loom_read", "loom_eval",
-		"search_skills", "get_skill", "search_propositions", "get_proposition",
+		"search_skills", "get_skill", "search_work", "post_get",
+		"issue_list", "issue_get", "issue_create", "issue_reply", "ticket_list", "ticket_get",
 		"search_archive", "get_archive_record", "lsp_status", "lsp_diagnostics",
 		"lsp_hover", "lsp_definition", "lsp_references", "lsp_document_symbols",
 		"lsp_workspace_symbols",

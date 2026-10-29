@@ -20,11 +20,11 @@ func (m *model) appendSessionMessage(message client.Message, usage *client.Usage
 	if message.Role == client.RoleAssistant && usage != nil {
 		m.recordResponseUsage(*usage)
 	}
-	learning := m.observeLearningMessage(message)
+
 	if m.memory != nil {
 		m.memory.Append(message)
 	}
-	return learning
+	return nil
 }
 
 func (m *model) archiveSessionMessage(message client.Message, isError bool) {

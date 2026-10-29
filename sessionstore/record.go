@@ -22,26 +22,30 @@ var ErrNotFound = errors.New("sessionstore: record not found")
 // Record is the common envelope stored for messages, agent lifecycle events,
 // task projections, results, questions, artifacts, and summaries.
 type Record struct {
-	ID         string     `json:"id"`
-	Kind       string     `json:"kind"`
-	Version    int        `json:"version"`
-	RunID      string     `json:"run_id,omitempty"`
-	TaskID     string     `json:"task_id,omitempty"`
-	ParentID   string     `json:"parent_id,omitempty"`
-	Role       string     `json:"role,omitempty"`
-	Model      string     `json:"model,omitempty"`
-	Effort     string     `json:"effort,omitempty"`
-	Status     string     `json:"status,omitempty"`
-	Scope      string     `json:"scope,omitempty"`
-	Location   string     `json:"location,omitempty"`
-	CreatedAt  time.Time  `json:"created_at"`
-	UpdatedAt  time.Time  `json:"updated_at"`
-	Summary    string     `json:"summary,omitempty"`
-	Content    string     `json:"content,omitempty"`
-	SearchText string     `json:"search_text,omitempty"`
-	Refs       []string   `json:"refs,omitempty"`
-	Tags       []string   `json:"tags,omitempty"`
-	Embedding  *Embedding `json:"embedding,omitempty"`
+	WorkspaceID    string     `json:"workspace_id,omitempty"`
+	EntityID       string     `json:"entity_id,omitempty"`
+	PostID         string     `json:"post_id,omitempty"`
+	SourceRevision int64      `json:"source_revision,omitempty"`
+	ID             string     `json:"id"`
+	Kind           string     `json:"kind"`
+	Version        int        `json:"version"`
+	RunID          string     `json:"run_id,omitempty"`
+	TaskID         string     `json:"task_id,omitempty"`
+	ParentID       string     `json:"parent_id,omitempty"`
+	Role           string     `json:"role,omitempty"`
+	Model          string     `json:"model,omitempty"`
+	Effort         string     `json:"effort,omitempty"`
+	Status         string     `json:"status,omitempty"`
+	Scope          string     `json:"scope,omitempty"`
+	Location       string     `json:"location,omitempty"`
+	CreatedAt      time.Time  `json:"created_at"`
+	UpdatedAt      time.Time  `json:"updated_at"`
+	Summary        string     `json:"summary,omitempty"`
+	Content        string     `json:"content,omitempty"`
+	SearchText     string     `json:"search_text,omitempty"`
+	Refs           []string   `json:"refs,omitempty"`
+	Tags           []string   `json:"tags,omitempty"`
+	Embedding      *Embedding `json:"embedding,omitempty"`
 	// VectorProjections are derived semantic views of this source record. They
 	// remain in the source record so the HNSW graph can always be rebuilt.
 	VectorProjections []VectorProjection `json:"vector_projections,omitempty"`

@@ -9,8 +9,7 @@ import (
 
 	"github.com/snowmerak/q/client"
 	"github.com/snowmerak/q/config"
-	qlibrary "github.com/snowmerak/q/library"
-	"github.com/snowmerak/q/thinker"
+
 	"github.com/snowmerak/q/workspace"
 )
 
@@ -44,7 +43,7 @@ func testLiveSession(t *testing.T, configured chatClient) (*liveSession, *Sessio
 	return session, host
 }
 
-type drainingLearnerClient struct {
+type drainingBackgroundClient struct {
 	fakeClient
 	started      chan struct{}
 	stopping     chan struct{}
@@ -52,7 +51,7 @@ type drainingLearnerClient struct {
 	closedClient chan struct{}
 }
 
-func (configured *drainingLearnerClient) ListModels(ctx context.Context) ([]client.Model, error) {
+func (configured *drainingBackgroundClient) ListModels(ctx context.Context) ([]client.Model, error) {
 	close(configured.started)
 	<-ctx.Done()
 	close(configured.stopping)
@@ -60,83 +59,9 @@ func (configured *drainingLearnerClient) ListModels(ctx context.Context) ([]clie
 	return nil, ctx.Err()
 }
 
-func (configured *drainingLearnerClient) Close() error {
+func (configured *drainingBackgroundClient) Close() error {
 	close(configured.closedClient)
 	return nil
-}
-
-func TestLiveSessionCloseWaitsForBackgroundCommands(t *testing.T) {
-	configured := &drainingLearnerClient{started: make(chan struct{}), stopping: make(chan struct{}), allowExit: make(chan struct{}), closedClient: make(chan struct{})}
-	ctx, cancel := context.WithCancel(t.Context())
-	state := newModel(ctx, config.Store{Dir: t.TempDir()}, nil)
-	state.enterChat(config.Default(), configured)
-	if err := state.ensureLearningMachine(thinker.LearningState{}, nil); err != nil {
-		t.Fatal(err)
-	}
-	state.libraryClient = &qlibrary.Client{}
-	state.learning.AppendMessage(client.Message{Role: client.RoleUser, Content: "learn from this turn"})
-	state.learning.EnqueueExplicit()
-	prepared := &preparedSession{state: state, lifecycle: newStartupLifecycle(), client: configured}
-	session := newLiveSession(ctx, cancel, prepared)
-	t.Cleanup(func() { _ = session.close() })
-	t.Cleanup(func() { close(configured.allowExit) })
-	select {
-	case <-configured.started:
-	case <-time.After(5 * time.Second):
-		t.Fatal("restored learning queue did not resume")
-	}
-	closed := make(chan error, 1)
-	go func() { closed <- session.close() }()
-	select {
-	case <-configured.stopping:
-	case <-time.After(5 * time.Second):
-		t.Fatal("session close did not cancel learning")
-	}
-	select {
-	case <-configured.closedClient:
-		t.Fatal("client closed before learner exited")
-	case <-session.done:
-		t.Fatal("session released its resources before learner exited")
-	default:
-	}
-	// Release the blocked learner before cleanup; ownership must remain with
-	// the session until every command that could write a checkpoint returns.
-	configured.allowExit <- struct{}{}
-	select {
-	case err := <-closed:
-		if err != nil {
-			t.Fatal(err)
-		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("session close did not drain learning")
-	}
-}
-
-func TestLiveSessionLearningToggleRetainsProviderState(t *testing.T) {
-	session, host := testLiveSession(t, &fakeClient{})
-	if _, err := session.execute(t.Context(), "first", false, nil, nil); err != nil {
-		t.Fatal(err)
-	}
-	if err := session.prepared.store.SaveLearningConfig(workspace.LearningConfig{Version: workspace.LearningConfigVersion, Disabled: true}); err != nil {
-		t.Fatal(err)
-	}
-	if err := host.RefreshLearning(t.Context(), session.prepared.store); err != nil {
-		t.Fatal(err)
-	}
-	leased, err := host.acquireLiveSession(session.prepared.store, session.prepared.store.SessionID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if leased != session {
-		t.Fatal("learning toggle recreated provider state")
-	}
-	leased.busy.Unlock()
-	if err := session.close(); err != nil {
-		t.Fatal(err)
-	}
-	if !session.prepared.state.learningDisabled() || session.prepared.state.learningCtx != nil {
-		t.Fatal("learning toggle did not stop the live learner")
-	}
 }
 
 func TestLiveSessionIgnoresCancelledTurnEvents(t *testing.T) {
@@ -249,34 +174,6 @@ func TestLiveSessionCancellationKeepsRuntimeAndClearsForegroundState(t *testing.
 	}
 	if session.prepared.state.waiting {
 		t.Fatal("cancelled foreground state remained active")
-	}
-}
-
-func TestLiveSessionProcessesBackgroundLearningAfterTurn(t *testing.T) {
-	ctx, cancel := context.WithCancel(t.Context())
-	state := newModel(ctx, config.Store{Dir: t.TempDir()}, nil)
-	store := workspace.Store{Root: t.TempDir(), SessionID: "learning-session"}
-	state.workspaceStore = &store
-	state.enterChat(config.Default(), &fakeClient{})
-	state.thinkerBusy, state.thinkerJobID = true, "background-job"
-	generation := state.sessionGeneration
-	prepared := &preparedSession{state: state, store: store, lifecycle: newStartupLifecycle(), client: state.client}
-	session := newLiveSession(ctx, cancel, prepared)
-	t.Cleanup(func() { _ = session.close() })
-	if _, err := session.execute(t.Context(), "first", false, nil, nil); err != nil {
-		t.Fatal(err)
-	}
-	session.program.Send(thinkerResultMsg{jobID: "background-job", sessionGeneration: generation, err: errors.New("diagnostic learning result")})
-	// A second request is a barrier after the background result on the same
-	// serialized event loop. The result must not be lost at turn completion.
-	if _, err := session.execute(t.Context(), "second", false, nil, nil); err != nil {
-		t.Fatal(err)
-	}
-	if err := session.close(); err != nil {
-		t.Fatal(err)
-	}
-	if prepared.state.thinkerBusy || prepared.state.thinkerJobID != "" {
-		t.Fatal("idle session stopped processing background learning")
 	}
 }
 

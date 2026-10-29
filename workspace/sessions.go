@@ -115,6 +115,9 @@ func DeleteSession(root, sessionID, command string) (returnErr error) {
 	if err != nil {
 		return err
 	}
+	if err := store.RequireDeletable(); err != nil {
+		return err
+	}
 	if err := store.RequireInteraction(); err != nil && !errors.Is(err, ErrNotFound) {
 		return err
 	}
@@ -165,6 +168,15 @@ func ResetSession(root, sessionID, command string) (session Session, returnErr e
 	}
 	if err := store.ClearExecution(); err != nil {
 		return Session{}, err
+	}
+	if err := withLoomRootMutation(store.Root, func() error {
+		err := os.Remove(filepath.Join(store.SessionDir(), ACPSessionFileName))
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		return err
+	}); err != nil {
+		return Session{}, fmt.Errorf("workspace: reset ACP session: %w", err)
 	}
 	runID, err := NewSessionID()
 	if err != nil {

@@ -13,7 +13,6 @@ import (
 
 	"github.com/snowmerak/q/client"
 	"github.com/snowmerak/q/loom"
-	"github.com/snowmerak/q/thinker"
 )
 
 func TestDefaultStoreRejectsHomeDirectory(t *testing.T) {
@@ -79,10 +78,6 @@ func TestStoreRoundTripAndClear(t *testing.T) {
 		ActiveTask: &ActiveTask{
 			Objective: "finish the durable task", CompletionCriteria: []string{"tests pass"}, StartedAt: startedAt,
 		},
-		Learning: thinker.LearningState{
-			Version: 1, StreamID: "stream", NextCursor: 2,
-			Events: []thinker.LearningEvent{{Cursor: 1, Message: client.Message{Role: client.RoleUser, Content: "durable decision"}}},
-		},
 	}
 	if err := store.Save(want); err != nil {
 		t.Fatal(err)
@@ -94,7 +89,6 @@ func TestStoreRoundTripAndClear(t *testing.T) {
 	if got.Version != CurrentVersion || got.Title != "Workspace session" || got.UpdatedAt == nil || !got.UpdatedAt.Equal(startedAt) ||
 		len(got.Transcript) != 1 || got.Transcript[0].Content != "question" ||
 		len(got.Context) != 1 || got.Context[0].Content != "summary" ||
-		got.Learning.StreamID != "stream" || len(got.Learning.Events) != 1 || got.Learning.Events[0].Message.Content != "durable decision" ||
 		got.ActiveTask == nil || got.ActiveTask.Objective != "finish the durable task" ||
 		!reflect.DeepEqual(got.ActiveTask.CompletionCriteria, []string{"tests pass"}) || !got.ActiveTask.StartedAt.Equal(startedAt) {
 		t.Fatalf("loaded session = %#v", got)

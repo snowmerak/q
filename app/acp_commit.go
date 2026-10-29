@@ -1,6 +1,7 @@
 package app
 
 import (
+	"github.com/snowmerak/q/third_party/acp-go-sdk"
 	"context"
 	"errors"
 	"fmt"
@@ -10,7 +11,6 @@ import (
 	"github.com/snowmerak/q/commitagent"
 	"github.com/snowmerak/q/memory"
 	"github.com/snowmerak/q/sessionstore"
-	"github.com/snowmerak/q/third_party/acp-go-sdk"
 )
 
 const maximumACPCommitProposal = 64 << 10
@@ -203,7 +203,7 @@ func (a *acpAgent) beginACPCommitInputTurn(message client.Message) error {
 		a.state.memory = memory.New(memoryPolicy(a.state.activeConfig()), nil)
 	}
 	a.state.memory.Append(message)
-	a.launchLearning(a.state.observeLearningMessage(message))
+
 	if err := a.state.saveWorkspaceSession(); err != nil {
 		return err
 	}
@@ -239,7 +239,7 @@ func (a *acpAgent) beginACPCommitTurn() error {
 		a.state.memory = memory.New(memoryPolicy(a.state.activeConfig()), nil)
 	}
 	a.state.memory.Append(message)
-	a.launchLearning(a.state.observeLearningMessage(message))
+
 	if err := a.state.saveWorkspaceSession(); err != nil {
 		return err
 	}

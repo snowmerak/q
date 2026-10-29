@@ -37,7 +37,7 @@
     }
   }
 
-  function saveSystemOneModel(target: 'default' | 'agent-skill-decision' | 'archive-decision', model: string) {
+  function saveSystemOneModel(target: 'default' | 'agent-skill-decision' | 'archive-decision' | 'task-assignment', model: string) {
     queueSave(() => putSettings(`/api/v1/settings/system-one/models/${target}`, JSON.stringify({ model })));
   }
 
@@ -121,6 +121,14 @@
   {#if systemOneModelsError}<p class="inline-warning">{systemOneModelsError}</p>{/if}
 
   <div class="settings-card assignment-list system-one-assignments">
+    <div class="assignment-row system-one-assignment">
+      <div><strong>Ticket assignment</strong><small>{settings.system_one.assignment_model ? 'Dedicated role model' : `Uses ${settings.system_one.default_model}`}</small></div>
+      <label><span>Model</span><select bind:value={settings.system_one.assignment_model} onchange={() => saveSystemOneModel('task-assignment', settings!.system_one.assignment_model)} disabled={systemOneModelsLoading}>
+        <option value="">Use default · {settings.system_one.default_model}</option>
+        {#if settings.system_one.assignment_model && !systemOneModels.some((model) => model.id === settings?.system_one.assignment_model)}<option value={settings.system_one.assignment_model}>{settings.system_one.assignment_model}</option>{/if}
+        {#each systemOneModels as model}<option value={model.id}>{model.id}</option>{/each}
+      </select></label>
+    </div>
     <div class="assignment-row system-one-assignment">
       <div><strong>Default</strong><small>Representative decision model</small></div>
       <label><span>Model</span><select bind:value={settings.system_one.default_model} onchange={() => saveSystemOneModel('default', settings!.system_one.default_model)} disabled={systemOneModelsLoading}>

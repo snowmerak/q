@@ -13,6 +13,29 @@ import (
 
 const GitIgnoreFileName = ".gitignore"
 
+// EnsureQGitLocallyIgnored keeps Q metadata out of centrally managed checkouts
+// without editing versioned project files or hiding changes to tracked files.
+// Git resolves info/exclude through the common directory for linked worktrees.
+func (s Store) EnsureQGitLocallyIgnored(ctx context.Context) error {
+	_, found, err := gitRepositoryRoot(ctx, s.Root)
+	if err != nil || !found {
+		return err
+	}
+	command := exec.CommandContext(ctx, "git", "-C", s.Root, "rev-parse", "--path-format=absolute", "--git-path", "info/exclude")
+	body, err := command.Output()
+	if err != nil {
+		return fmt.Errorf("workspace: resolve local Git exclude: %w", err)
+	}
+	path := strings.TrimSpace(string(body))
+	if !filepath.IsAbs(path) {
+		return errors.New("workspace: Git returned a non-absolute exclude path")
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	return ensureQGitIgnore(path)
+}
+
 // EnsureQGitIgnored adds q's workspace metadata directory to the repository
 // root .gitignore when the workspace belongs to a Git work tree. Existing
 // ignore rules that already cover the directory are left unchanged.

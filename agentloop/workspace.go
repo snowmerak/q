@@ -74,10 +74,10 @@ func PrepareWorkspaceMessages(messages []client.Message, options WorkspaceMessag
 		}
 	}
 	for _, tool := range runtimeTools {
-		if tool.Function.Name == "search_propositions" {
+		if tool.Function.Name == "search_work" {
 			result = append(result, client.Message{
-				Role: client.RoleDeveloper, Name: "q_propositions",
-				Content: "Durable cross-workspace facts are stored as global q Library propositions. When a prior preference, decision, constraint, stable fact, or reusable resolution may be relevant, call search_propositions, then call get_proposition only for a selected result that needs full provenance or extraction metadata.",
+				Role: client.RoleDeveloper, Name: "q_workspace_knowledge",
+				Content: "Workspace issues and ticket threads contain project knowledge. Use search_work for relevant evidence, decisions and constraints; use issue_get/ticket_get for threads and post_get for complete versioned bodies or replies. Search stays in this workspace unless all:true is explicitly requested. Record verified lessons and decisions with evidence in issue_create or issue_reply. Source storage, indexing, ticket execution and review completion are distinct acknowledgements.",
 			})
 			break
 		}

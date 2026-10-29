@@ -14,6 +14,7 @@ import (
 
 	"github.com/snowmerak/q/app"
 	"github.com/snowmerak/q/config"
+	"github.com/snowmerak/q/sessionstore"
 	"github.com/snowmerak/q/workspace"
 )
 
@@ -39,7 +40,7 @@ func newEmbeddingSyncTestService(t *testing.T, runner *embeddingSyncRunner) (*em
 	if err := main.Save(value); err != nil {
 		t.Fatal(err)
 	}
-	status := embeddingStatusService{main: main, sessions: newSessionsService(t.Context(), runner, main.Dir)}
+	status := embeddingStatusService{main: main, sessions: newSessionsService(t.Context(), runner, studioCatalogTestDirectory(t, main.Dir))}
 	service := newEmbeddingSyncService(t.Context(), status, runner)
 	service.status.sessions.embeddingSync = service
 	t.Cleanup(func() { _ = service.Close() })
@@ -165,6 +166,16 @@ func TestEmbeddingSyncAllIncludesUnregisteredArchivesAndContinuesAfterFailure(t 
 		if err := os.MkdirAll(directory, 0o700); err != nil {
 			t.Fatal(err)
 		}
+	}
+	// Project catalog access starts Library, which can legitimately create a
+	// current empty index. Seed actual missing work so global sync is required.
+	global, err := sessionstore.OpenWithOptions(service.status.main.Dir, sessionstore.OpenOptions{Directory: "library"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	seedGlobalEmbeddingSkill(t, service.status.main.Dir, global, nil)
+	if err := global.Close(); err != nil {
+		t.Fatal(err)
 	}
 	if _, err := service.status.sessions.projects.create(studioProjectUpdateRequest{Name: "project", WorkspaceRoots: []string{registered, absent}}); err != nil {
 		t.Fatal(err)

@@ -436,7 +436,7 @@ func runSeat(ctx context.Context, host SessionRunner, seat Seat, prompt string, 
 	}
 	options := app.SessionOptions{
 		Model: seat.Model, Agent: seat.Agent, ReasoningEffort: seat.ReasoningEffort, SystemPrompt: system,
-		DisableLearning: true, RuntimeKey: "council-read-only-v1", OperationID: operationID,
+		RuntimeKey: "council-read-only-v1", OperationID: operationID,
 		AnthropicPromptCache: "1h",
 		RuntimeFactory:       readRuntimeFactory(roots),
 	}

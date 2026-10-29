@@ -76,7 +76,7 @@
       <label><span>Host</span><input bind:value={settings.services.system_one.host} onchange={() => saveService('system-one')} /></label><label><span>Port</span><input type="number" min="0" max="65535" bind:value={settings.services.system_one.port} onchange={() => saveService('system-one')} /></label><code>{settings.services.system_one.config_path}</code>
     </article>
     <article class="settings-card service-card">
-      <div class="card-heading"><div><h3>Library</h3><p>Global Agent Skill and proposition service.</p></div><span class="count-badge">local</span></div>
+      <div class="card-heading"><div><h3>Library</h3><p>Global skills and workspace issue/ticket service.</p></div><span class="count-badge">local</span></div>
       <label><span>Host</span><input bind:value={settings.services.library.host} onchange={() => saveService('library')} /></label><label><span>Port</span><input type="number" min="1" max="65535" bind:value={settings.services.library.port} onchange={() => saveService('library')} /></label><code>{settings.services.library.config_path}</code>
     </article>
   </div>

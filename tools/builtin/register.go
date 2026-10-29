@@ -18,7 +18,6 @@ type Dependencies struct {
 	GlobalSkills  GlobalSkillLibrary
 	SkillRanker   SkillRanker
 	ArchiveRanker ArchiveRanker
-	Propositions  PropositionLibrary
 	LSP           lsp.Service
 }
 
@@ -187,22 +186,6 @@ func RegisterWithRoots(server *mcp.Server, root string, additional []string, dep
 			Annotations: &mcp.ToolAnnotations{ReadOnlyHint: readOnly, IdempotentHint: true},
 		}, contextValueHandler(func(ctx context.Context, input GetSkillInput) (GetSkillOutput, error) {
 			return getSkill(ctx, dependencies.Skills, dependencies.GlobalSkills, input)
-		}))
-	}
-	if dependencies.Propositions != nil {
-		mcp.AddTool(server, &mcp.Tool{
-			Name:        "search_propositions",
-			Description: "Search durable global propositions in q Library. Matching includes canonical proposition text and generated query variants, with a configurable created_at recency boost. Use get_proposition for a selected result.",
-			Annotations: &mcp.ToolAnnotations{ReadOnlyHint: readOnly, IdempotentHint: true},
-		}, contextValueHandler(func(ctx context.Context, input SearchPropositionsInput) (SearchPropositionsOutput, error) {
-			return searchPropositions(ctx, dependencies.Propositions, input)
-		}))
-		mcp.AddTool(server, &mcp.Tool{
-			Name:        "get_proposition",
-			Description: "Get one durable global proposition by the exact ID returned from search_propositions, including provenance and extraction metadata.",
-			Annotations: &mcp.ToolAnnotations{ReadOnlyHint: readOnly, IdempotentHint: true},
-		}, contextValueHandler(func(ctx context.Context, input GetPropositionInput) (GetPropositionOutput, error) {
-			return getProposition(ctx, dependencies.Propositions, input)
 		}))
 	}
 	if dependencies.LSP != nil {

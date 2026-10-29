@@ -7,7 +7,7 @@ import (
 	"github.com/snowmerak/q/sessionstore"
 )
 
-// InspectEmbeddingStatus reports global skill and proposition coverage without
+// InspectEmbeddingStatus reports global skill coverage without
 // starting the Library service or changing its vector configuration.
 func InspectEmbeddingStatus(ctx context.Context, directory string, config sessionstore.VectorConfig) (sessionstore.EmbeddingStatus, error) {
 	return sessionstore.InspectEmbeddings(ctx, directory, config, func(record sessionstore.Record, config sessionstore.VectorConfig) (sessionstore.EmbeddingRecordState, error) {
@@ -19,10 +19,6 @@ func InspectEmbeddingStatus(ctx context.Context, directory string, config sessio
 		switch record.Kind {
 		case sessionstore.KindSkill:
 			parts, err = agentskills.EmbeddingParts(record.Summary, record.Content, record.Tags)
-		case sessionstore.KindProposition:
-			var source SkillEmbeddingSource
-			source, err = propositionEmbeddingSource(record)
-			parts = source.Parts
 		default:
 			return sessionstore.EmbeddingRecordState{}, nil
 		}

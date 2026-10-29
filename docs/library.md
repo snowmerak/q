@@ -1,620 +1,285 @@
-# Global Library plan
+# Library and workspace coordinator
 
-## Current implementation baseline
+Library owns global Agent Skills and the workspace knowledge/work catalog. A
+Studio project is one workspace UUID containing up to 32 ordered directory
+roots. Issue, ticket, reply, member, attempt and manager inbox originals live in
+one SQLite database, partitioned logically by `workspace_id`.
 
-The first runnable slice implements the shared server component, foreground
-hosting via `q library start`, ordinary q in-process hosting, fixed-port discovery,
-exclusive leader ownership, failure takeover, loopback-only unauthenticated
-HTTP, and persistent global Session Store ownership. `/v1/health` and
-`/v1/status` are available for lifecycle verification. Global Agent Skill
-search, resource reads, and explicit reconciliation are available through the
-`/v1/skills/*` routes and are consumed by the existing MCP skill tools.
+## Ownership and storage
 
-Proposition extraction, queued writes, persistent write idempotency, BM25
-search, embedding generation, multi-vector hybrid search, bounded Librarian
-retrieval during adjudication, and `created_at` recency ranking are implemented.
-
-## ACP Sessions and Library MCP
-
-Providers → ACP offers a per-connection **Q Library for Sessions** switch
-(`agents.connections.<id>.library: true`). Existing connections default to off.
-Saving the switch affects the next idle session connection/turn; an active
-turn keeps its current connection. A configuration change opens a new remote
-session with completed conversation restored. An unchanged connection passes
-the same Library MCP configuration during ACP new, load and resume.
-
-The application supplies `q library mcp --config-dir <absolute Q directory>`
-as a stdio MCP server named `q-library`, using the running Q executable. It
-exposes exactly `search_skills`, `get_skill`, `search_propositions`,
-`get_proposition` and `request_learning`. It only calls the existing Library
-HTTP API, never opens the database, starts workspace services, or registers
-Q filesystem, shell, task or delegation tools. Search uses BM25 without an
-embedding provider. The bridge reads `library.json` at launch; reconnect after
-changing the Library address. It can initialize while Library is offline;
-individual calls return errors and ordinary ACP chat can continue.
-
-A short Library usage instruction is included in MCP initialization and the
-first successful prompt of a remote session. Q persists its instruction version
-with the ACP checkpoint, so successful load/resume avoids repeating the prompt
-instruction. New sessions and fallback transcript restoration receive it again.
-No general Q workflow or native agent-loop system prompt is injected. This
-switch currently applies to ACP Sessions, not Council or subagent invocations.
-
-`request_learning` accepts one concise established fact, preference or decision,
-confidence, evidence/source refs, and optional retrieval queries and tags.
-It sends a stable, content-derived idempotency key to the existing durable
-proposition review queue and returns `{"enqueued":true}` after the queue
-transaction commits, reusing the session MCP `learn` acknowledgement contract.
-It supplies content explicitly because the standalone bridge does not own the
-ACP conversation history. Queue acceptance does not require a Librarian model
-or wait for model calls. Background review records processing failures and may
-eventually create, merge or discard the request. Invalid input or a failed queue
-write returns an error. Repeating an accepted request does not duplicate it.
-ACP Sessions continue to disable automatic transcript learning.
-
-The bridge uses `POST /v1/propositions/enqueue`, which returns HTTP 202 after
-durable acceptance. The existing synchronous `POST /v1/propositions` API used
-by Thinker still waits for the review outcome.
-
-## Purpose and decisions
-
-The Library provides one user-level service for durable information that must
-be available across workspaces. It is not a replacement for the workspace
-Session Store.
-
-The initial Library owns:
-
-- global Agent Skill projections and access to their resources;
-- global `proposition` records extracted from conversations;
-- generated retrieval queries for each proposition;
-- the Bleve BM25 and HNSW projections used to retrieve those records.
-
-The initial Library does not own raw conversations, tool results, plan
-checkpoints, Loom artifacts, LSP state, or workspace-scoped Agent Skills. Those
-remain workspace-local where they already exist. q does not create or store
-workspace-specific propositions; proposition memory has one global scope only.
-
-Propositions initially track only their immutable `created_at` time. The
-Library does not attempt global equivalence, reconfirmation, contradiction,
-supersession, or validity-window tracking. Those operations require comparing
-an ever-growing corpus and are deliberately outside the first implementation.
-
-## Process and ownership model
-
-Every Library-aware q process uses the same configured address and the same
-user-level lock file. At most one local process is the Library leader. The
-leader holds the OS file lock for its entire lifetime, owns the TCP listener,
-and is the only process allowed to open the global Store read-write. All other
-processes are HTTP clients and never open the Store directly.
-
-The same Library server component supports two hosting forms:
-
-- `q library start` runs it as a dedicated foreground service;
-- an ordinary `q` session embeds it in-process on a background goroutine when
-  no compatible service exists and that q process wins the leader lock.
-
-These are two entry points to the same server implementation, Store ownership,
-HTTP routes, local trust boundary, and election protocol. An ordinary q
-installation therefore needs no second executable or separately installed
-daemon. Running only `q` is enough to make the Library available, while
-`q library start` is the explicit form for users who want its lifetime
-independent of a workspace TUI.
+Every Q process uses the configured loopback address and `library.lock`. One
+process holds the OS lock, owns the listener and opens the source stores. Other
+processes use HTTP. `q library start` and ordinary Q/Studio hosting use the same
+server, identity checks, election and takeover implementation. Lock-file
+existence alone does not prove ownership.
 
 ```text
-q workspace A (possible embedded leader) --\
-q workspace B -------------------------+-- HTTP --> global Store
-q library start (possible dedicated leader) ----/     |
-                                                library.lock
+<config>/
+  library.json
+  library.lock
+  library/
+    workspace-knowledge.sqlite        # authoritative workspace/work sources
+    data/records/                    # global skill projections
+    index/                           # global skill BM25/HNSW
+    knowledge-index/<generation>/
+      all/                           # global issue/ticket projection
+      workspace-<workspace-id>/       # workspace-specific BM25/HNSW
+  workspaces/<workspace-id>/
+    .q/sessions/<manager-session-id>/ # protected Integrator (existing identity)
+    coordinator/.q/sessions/<id>/     # protected Coordinator intake conversation
+    workers/.q/sessions/<worker-id>/  # native/ACP ticket checkpoints
+  worktrees/                         # existing Git worktree/MR leases
+  coordinator/                       # OS locks for ticket/review operations
 ```
 
-The global files live below the personal q configuration directory:
+SQLite schema version 6 stores workspace metadata/roots, source items/posts,
+immutable revisions, mutation receipts, the indexing outbox, projection cursors,
+member references, attempts and manager inbox events. Legacy
+`library/studio-projects.json` is imported once, transactionally, preserving
+project IDs and timestamps. Its original file is retained as a backup. Project
+removal archives metadata and preserves source records and conversations.
+
+HTTP is loopback-only and unauthenticated; another local process is inside this
+trust boundary. The former Library authentication settings are ignored and
+omitted on save. Gateway authentication is separate. Protocol version 10 checks
+service identity, readiness and configuration-directory filesystem identity.
+An incompatible process or a different configuration directory using the same
+port is reported instead of replaced. Stop older Q processes before upgrading;
+separate configuration directories require separate Library ports.
+
+## Issues, tickets and source reads
+
+Issues have open/closed state. Tickets have exactly three board columns:
+`todo`, `in_progress`, and `done`. Each item has a stable ID, a per-workspace/kind
+number and an independent body-post ID. Replies have their own IDs and monotone
+thread sequence numbers. Bodies and replies retain immutable revisions.
+
+Writes commit originals, revision history, outbox entries and optional request
+receipts in the same transaction. A repeated `request_id` with identical input
+returns its original acknowledgement; changing input under the same key returns
+409. `revision` is required for optimistic edits. `source_revision` advances on
+content/metadata changes, separately from scheduling/lease changes. This keeps
+System One retry keys stable while an unchanged ticket waits for assignment.
+Source acceptance does not require embedding, System One or an agent response.
+
+Thread reads use a snapshot upper sequence and keyset cursors. They return
+bounded previews and `content_truncated`; `post_get`/the post-content API return
+complete content in Unicode-safe pages pinned to one revision. Concurrent edits
+cannot splice versions. Tombstones retain revision history and remove derived
+search hits. Long source content is limited to 2 MiB per post.
+
+## Search and embeddings
+
+Search accepts natural-language query text and lexical, semantic or hybrid mode.
+The default scope is the host-bound workspace; `all:true` explicitly selects all
+workspaces. Kind, board/issue state and label filters apply in either scope.
+
+Workspace and global BM25/HNSW stores are separate derived projections, so a
+small workspace does not depend on post-filtering a global ANN candidate set.
+Post chunks contain workspace, item/post IDs, source revision and character
+offset. Hits are checked against current originals before being returned.
+Lexical totals count matching chunks; semantic/hybrid totals are a candidate
+lower bound. Cursors bind the query, scope, filters, index generation and source
+cursor; changed generations/source cursors return 409 and require a fresh search.
+
+The transactional outbox can be replayed after interruption. Each projection
+has its own committed cursor. Reindex and model/dimension changes rebuild derived
+stores while leaving SQLite originals intact. `index_pending` identifies source
+projection lag, and `embedding_pending` identifies missing current vectors.
+Hybrid retrieval explicitly reports lexical fallback when embeddings are
+unavailable. Semantic-only retrieval reports unavailability instead of a
+successful empty result when its configured vectors are absent.
+
+Q's existing configured embedding client generates vectors. Each batch is
+accepted only if the model, dimensions, source digest, post revision and item
+revision still match. Stale provider results cannot replace a newer source.
+Studio's coordinator fills missing batches in the background; no Librarian or
+additional agent/model judgement runs during source writes or indexing.
+
+ACP stdio bridges reuse the owning host's existing Gateway for query embeddings.
+A private per-host connection file is refreshed when Gateway changes and removed
+on clean shutdown. The bridge rereads embedding settings and connection data on
+each query, validates loopback routing, and rejects responses if settings changed
+during generation. It does not start a second provider. While the Gateway or
+vectors are unavailable, hybrid/semantic responses keep their explicit fallback
+or error behavior.
+
+## Membership and execution
+
+Ticket issuers should always choose `execution_mode` explicitly:
+
+| Mode | Use | Completion |
+| --- | --- | --- |
+| `report` | Read-only investigation, analysis and recommendations; no project-file changes | The manager accepts the report |
+| `git` | Creating or editing code/project files, including project initialization | The manager reviews and merges the pinned change request |
+
+Git mode requires an existing Git repository with a checked-out branch, an
+initial commit and no uncommitted changes. Prepare that repository before
+delegating its first code task; a missing repository does not make code work a
+report task. Omitted modes still default to `report` for compatibility.
+
+In Studio, choose **Execution mode** when creating a ticket, or change it through
+**Edit details → Execution mode → Save details** before execution starts. Leaving
+**Requested member** empty lets System One choose. Native and ACP ticket tool
+descriptions carry the same guidance; `ticket_create` should include
+`"execution_mode":"git"` for code/file changes or `"execution_mode":"report"`
+for read-only work. Issuance automatically requests assignment in either mode.
+
+Workspace membership references existing global/workspace profiles by canonical
+agent ID plus definition and execution roots. Profiles, permissions and ACP
+connections remain in their original settings. Disabling a member prevents new
+assignment and fences subsequent running checkpoints. Root changes, missing
+profiles/connections, direct junior delegation and unsuitable mutation modes are
+excluded before selection.
+
+Issuing a ticket commits its source and `queued` assignment state in the same
+transaction, for Studio, native tools and ACP alike. No separate Start action is
+required. The coordinator checks every two seconds while Studio runs. The board
+stays `todo` until an eligible worker is reserved. Older unstarted tickets with
+an empty execution state are admitted automatically; explicit stops and uncertain
+outcomes still require an explicit retry. Source acknowledgement does not wait
+for assignment, execution or review. System One
+must select an eligible joined member even when a member was explicitly
+requested. Missing settings, missing credentials, failed/invalid answers and
+`none` leave `assignment_waiting` with a reason and bounded retry delay. There is
+no first-member or main-model fallback. Candidate batches retain every eligible
+member and validate returned member IDs. Assignment HTTP calls use the same
+two-minute budget as the coordinator, while caller cancellation can stop them
+earlier; the general System One client default remains unchanged.
+
+The existing GeneralRunner/delegation runtime executes native workers. Each
+attempt has a distinct ID, durable worker session reference, owner/generation/
+token and renewable lease. An OS lock is held for the complete ticket execution
+across processes; source transitions and checkpoints are additionally fenced by
+the reservation. Worker results, ticket replies and inbox events commit together.
+Success moves the ticket to `awaiting_review`, not `done`.
+
+Mutating workers require Git execution mode and an isolated worktree owned by the
+existing `gitwork.Manager`. Report mode allows non-mutating profiles. A feedback
+attempt retains the same worker conversation and active worktree when its member,
+roots and definition/model fingerprint still match. Changed profiles cannot
+silently take over an existing worktree.
+
+Managed role sessions, ticket workers and pinned merge retries ensure `.q`
+metadata is locally ignored through Git's common `info/exclude` file. This does
+not edit project `.gitignore` files or hide modifications to already tracked
+files. Unrelated uncommitted project changes still block preparation and merges.
+
+ACP workers persist the external session ID, connection/definition fingerprint,
+root and prompt completion marker. Follow-ups require real load/resume support;
+there is no fallback to a new external session. A prompt with an unknown outcome
+is never automatically replayed. Native recovery records unfinished tool
+outcomes as unknown and requires explicit continuation/inspection without replaying those calls. Stop is requested durably and
+cancels execution when the next fence/heartbeat observes it. Expired agent leases
+become `unknown` and require an explicit retry/inspection.
+
+## Coordinator, Integrator and MR review
+
+Each workspace reserves two independent conversations:
+
+- **Coordinator** receives requests, records requirements and plans in issues,
+  and creates actionable tickets with acceptance criteria and explicit execution
+  modes. System One still selects from joined subagents. Planning and dependent
+  implementation must be issued in order; there is no ticket dependency scheduler.
+- **Integrator** receives worker result notifications, reviews the pinned changes,
+  requests rework or accepts/rejects results, and authorizes merges.
+
+The existing `manager_session_id` and its storage remain the Integrator identity
+for API and on-disk compatibility. Schema 6 adds a stable
+`coordinator_session_id` to all existing workspaces, including archived ones;
+existing history, model selections and ACP checkpoints are preserved. New
+workspaces reserve both IDs in the source transaction. The UI labels these
+sessions by role, independently of their conversation titles. Studio creates and
+registers both and reconciles interrupted creation on later project reads. Native
+and ACP sessions use the normal SessionHost/model controls and receive their
+role instructions. Each has its own conversation and model/provider selection.
+Their state stays in the central directory while tools/ACP execute in current project roots. Missing
+roots or archived projects block execution while retaining conversation history.
+
+The local manager marker, central reserved ID and storage filesystem identity
+must agree. Workspace/CLI/catalog deletion and unregister paths reject managers.
+Clear is allowed when idle, retains identity and model/provider selection, and
+removes conversation/ACP resume state. Issues, tickets, attempts, MR ownership
+and inbox events remain in Library.
+
+The background scheduling engine delivers durable inbox events to the Integrator
+through ordinary Studio runs with
+stable operation IDs. Existing run monitoring, questions and turn controls
+remain available. Failed delivery records its error and a bounded retry backoff.
+Completion receipts survive conversation clear and later user turns. Manager turns
+waiting for input do not consume worker capacity. Busy managers defer delivery.
+Completion before an inbox
+acknowledgement is safe to replay through the saved operation result. Superseded
+notifications are acknowledged without executing an obsolete review.
+
+`ticket_change_read` resolves the attempt's actual pinned MR. The ordinary
+`change_request_*` tools retain their existing direct-child ownership rules.
+Only the centrally reserved Integrator session may review an attempt; the source also rejects review requests carrying the Coordinator identity. Report
+acceptance marks `done`. Git acceptance durably queues a real pinned merge;
+`done` is committed only after Git succeeds. Dirty parents, moved bases/heads,
+merge/cleanup failures and stale attempts remain visible conflicts. Merge
+operations serialize per repository/ref and hold the ticket lock. The existing
+exact two-parent merge recovery handles a process stopping after Git commits
+but before the source acknowledgement. Rejecting Git work queues normal
+worktree/MR closure. Feedback is stored as a searchable ticket reply and queues
+another checked assignment to the original member.
+
+## Native and ACP tools
+
+The same workspace source tools are registered for native Q and `q-library` MCP:
+
+- `issue_create/list/get/reply/update`, `ticket_create/list/get/reply/update`;
+- `post_get/update`, `search_work`, `workspace_members`;
+- `ticket_start/retry/cancel`, `ticket_attempt_list/get`, `ticket_change_read`, `ticket_worker_read`;
+- only the Integrator receives `manager_inbox` and `ticket_review`; the Coordinator has issue/ticket tools without review authority.
+
+The host binds workspace and actor; tool arguments cannot select another write
+scope or impersonate a manager. Explicit global reads do not grant cross-project
+writes. `search_skills`/`get_skill` continue to expose global skills through MCP.
+Ordinary ACP connections opt in using **Q Library for Sessions**. Managers and
+ticket workers always receive their required workspace tools.
 
 ```text
-~/.q/
-|- library.json
-|- library.lock
-`- library/
-   |- data/records/
-   `- index/
-      |- bleve/
-      |- vectors.hnsw
-      |- vectors.ids.json
-      `- state.json
+q library mcp --config-dir <directory> --workspace-id <id> --session-id <id> [--manager]
 ```
 
-The lock is an operating-system lock held on an open file handle. Lock-file
-existence is diagnostic metadata only and never proves ownership. The metadata
-records the PID, host, start time, q version, configured listener, and leader
-generation for diagnostics.
-
-## Listener and local trust boundary
-
-The Library has a configured, stable TCP port so every q process has a common
-rendezvous point. Both the bind host and optional probe host must be loopback IP
-addresses; wildcard and non-loopback addresses are rejected. Every Library HTTP
-route is unauthenticated. Loopback binding is therefore the service boundary:
-remote hosts cannot connect, but another local process can call the API.
-
-Legacy `api_key_env` and `api_keys` fields in `library.json` remain readable so
-existing configuration files continue to load, but the server and client ignore
-them and the next config save drops them. q no longer creates `library.key`
-during Library startup; a file left by an older version is ignored. Gateway
-authentication remains independent and is unchanged. A valid wildcard or
-non-loopback address saved by an older release is localized to `127.0.0.1` when
-loaded.
-
-## Discovery and leader election
-
-Both hosting forms use one connect-first, elect-second protocol:
-
-1. Call the configured local identity/health endpoint with a short timeout.
-2. If it reports a compatible, ready q Library, connect as a client.
-3. If connection fails, try to acquire `library.lock` exclusively.
-4. A process that acquires the lock probes the endpoint again to close the race
-   between the first probe and lock acquisition.
-5. If no compatible server exists, bind the configured port, open the global
-   Store, finish index recovery, start the shared Library server component,
-   and then advertise readiness. An ordinary q hosts it in-process;
-   `q library start` hosts it in the foreground.
-6. A process that loses the lock race waits for the winner to become ready,
-   using bounded exponential backoff with jitter, and then connects.
-7. If binding the configured port fails, release the lock, wait briefly, and
-   restart at the health probe. A compatible server that became ready during
-   the bind race is then reused. Retries stop at the startup deadline.
-
-The health response identifies the service, protocol version, store ID,
-instance generation, readiness, and q version. Merely accepting TCP
-connections does not identify a q Library. If the fixed port is occupied by an
-unrelated or incompatible service, q reports a port collision and does not
-silently choose another port; changing the rendezvous port would split clients
-between different global stores.
-
-The leader initializes resources in this order:
-
-```text
-exclusive lock
-  -> fixed-port listener
-  -> global Store and index recovery
-  -> HTTP routes
-  -> ready
-```
-
-It shuts down in reverse order and releases the lock last. A process that owns
-the lock but cannot bind the configured port must close any partially opened
-resources and release the lock before returning an error.
-
-An embedded leader is intentionally tied to its owning q session. When that q
-process exits, it gracefully closes the Library, and another active or newly
-started q process may take over. A dedicated process started with
-`q library start` is the way to keep the service available without keeping a
-workspace session open. The initial implementation does not need to spawn a
-child process: embedding and foreground hosting share the same Go component
-directly.
-
-## Failure detection and takeover
-
-There is no separate heartbeat election protocol. Normal requests and the
-health endpoint detect leader failure. On connection refusal, reset, or a
-failed readiness check, a local managed client discards its connection and
-runs the same connect-or-elect procedure again.
-
-Processes that fail to acquire the lock must not spin. They wait with short,
-bounded exponential backoff and jitter while the winner starts. All clients
-participate through the configured loopback endpoint; remote/client-only mode
-is not supported.
-
-Reads may be retried after reconnecting. Mutating requests need a caller-made
-idempotency key. The Library persists the relationship between that key and
-the completed result so a response lost during leader failure does not create
-duplicate propositions or repeat a skill mutation after takeover.
-
-## Proposition record
-
-`sessionstore.KindProposition` is added to the common record envelope. A
-proposition is an atomic, reusable statement rather than a transcript excerpt.
-The source record remains the durable source of truth; all search structures
-are rebuildable projections.
-
-```text
-kind:        proposition
-content:     canonical proposition text
-search_text: generated queries joined for BM25 indexing
-created_at:  immutable extraction time
-refs:        source conversation provenance when available
-payload:
-  queries:            generated retrieval queries
-  confidence:         extractor confidence
-  extractor_model:    model identifier
-  extractor_version:  prompt/schema version
-```
-
-The initial schema has no `last_confirmed_at`, `valid_from`, `valid_until`,
-`superseded_at`, or workspace scope. Repeated or conflicting statements may
-produce separate proposition records. Search-time result collapsing controls
-duplicate presentation without pretending to maintain a complete global
-truth graph.
-
-Secrets, credentials, raw environment values, and other configured sensitive
-classes must be rejected before persistence. The extraction response is
-strictly schema validated and bounded in proposition count, proposition
-length, generated-query count, and query length.
-
-## Extraction pipeline
-
-Extraction is not performed for every message or completed turn. A durable
-workspace-local state machine accumulates filtered conversation events after a
-committed cursor, closes non-overlapping learning segments, and sends only
-closed segments to the Thinker. The persisted state contains the stream ID,
-next and committed cursors, uncommitted events, and a FIFO segment queue.
-
-The extraction model uses the built-in `thinker` role. Like other role models,
-it is configurable from `/model` or `agents.roles.thinker` and inherits the
-active chat model when no override is present. Thinker jobs are serialized so
-their idempotency slots and source order remain stable. A segment checkpoint is
-committed only after the Thinker successfully calls `thinking_complete`; a
-failure leaves the same queue head and deterministic segment ID available for
-retry after restart or the next trigger.
-
-Each active segment also has a private write-ahead checkpoint at
-`.q/sessions/<session-id>/thinker-checkpoint.json`. Before calling Library,
-Thinker atomically stores the exact normalized proposition request, a random
-checkpoint generation, and its stable slot key. An ambiguous transport failure
-therefore resumes by replaying the same payload and key before asking the model
-for more output. After a successful response, the disposition and processed
-ledger are atomically advanced. `thinking_complete` marks the checkpoint
-complete; q removes it only after the learning queue commit has been saved in
-`session.json`. A completed checkpoint can finish that commit after a host
-restart without repeating model or Library work. Explicit conversation reset
-and session deletion remove the checkpoint as part of their projection cleanup.
-
-Every completed or failed Thinker invocation writes one private diagnostic JSON
-file below `~/.q/logs/thinker/`. The record includes the segment boundary, the
-effective model and reasoning effort, the filtered and size-bounded input
-messages actually supplied for extraction, per-round tool choices, aggregate
-result counts, and any terminal error. A zero-proposition run therefore still
-records its `thinking_complete` choice. Raw provider responses and hidden model
-reasoning are not logged. Before each new record is written, Thinker removes its
-own regular JSON log files whose modification time is strictly more than 72
-hours old; unrelated files, links, and the exact 72-hour boundary are retained.
-On POSIX systems the directory and files use modes `0700` and `0600`.
-
-The registration adjudicator uses the separate built-in `librarian` role. It
-is configurable from `/model` or `agents.roles.librarian` and independently
-inherits the active chat model when no override is present. A running Library
-process reads this setting at startup. Like other agent roles, `librarian` may
-reference a `model_groups` entry; candidate timeout and HTTP 5xx failures use
-the ordered fallback and process-local circuit breaker policy.
-
-With no existing checkpoint, accumulation starts at the latest context
-compaction summary, or at the first user message when no summary exists. A
-segment closes under exactly four conditions:
-
-1. adding an event reaches 45% of the Thinker model's advertised context;
-2. a validated `task_complete` result is appended;
-3. a plan is approved and its complete plan payload is appended;
-4. the user enters `/learn` or the agent calls the active chat's session-only
-   MCP `learn` tool. The standalone `q-mcp` server does not expose this tool.
-
-`/learn off` persists a workspace-local disable switch in `.q/learning.json`.
-While disabled, conversation events are not collected, none of the four
-boundaries enqueue work, and queued Thinker segments are not started. Existing
-events and queued segments remain durable and resume after `/learn on`; events
-produced during the disabled interval are not recovered later. `/learn status`
-reports the current workspace setting.
-
-If adding the next ordinary message would exceed 45%, the segment closes
-before that message and the message starts the next segment. Exact 45% includes
-the event and closes the segment. A single oversized event is shortened only
-when it is prepared for the Thinker. The remaining 55% is reserved for the
-system prompt, tool schemas, and repeated registration exchanges.
-
-Ordinary tool-result messages and assistant `tool_calls` are excluded entirely;
-an assistant message containing only tool calls is excluded, while accompanying
-assistant prose remains. A successful `task_complete` result is the sole tool
-result exception and is retained as a complete special event. Plan approval is
-also a special event containing the approval marker, objective, and complete
-approved plan; execution output starts the following segment.
-
-When learning is enabled, both explicit controls are fire-and-forget. They
-immediately acknowledge that learning was enqueued and close the current
-segment when it contains eligible context. If the segment is empty, the worker
-performs no model call, creates no empty segment, and does not advance the
-checkpoint. The session-only MCP `learn` call and its result are themselves
-excluded like other tool traffic.
-
-For a closed segment:
-
-```text
-checkpoint-bounded conversation segment
-  -> proposition/query extraction
-  -> schema and sensitive-data validation
-  -> one register_proposition call per proposition
-  -> durable SQLite registration queue
-  -> hybrid duplicate candidates with recency disabled
-  -> fresh Library-owned Thinker create/merge/discard decision
-  -> idempotent Library mutation and BM25/HNSW update
-```
-
-The submitted context is bounded independently of the full workspace archive.
-Its provenance identifies the originating workspace, run, and source records,
-but the persisted proposition itself is global. Other workspaces may retrieve
-the proposition even when they cannot open its workspace-local source records.
-
-The Library should own final validation, persistence, and indexing so all
-callers produce the same durable format. The exact division of model execution
-between the caller and Library may be implemented in stages, but only validated
-Library records become searchable.
-
-## Text and vector projections
-
-BM25 indexes the canonical proposition through `content` and all generated
-queries through `search_text`. An empty generated-query list is valid but
-reduces retrieval recall.
-
-HNSW needs more than the current one-vector-per-record layout. Each proposition
-produces bounded vector variants that resolve back to one record:
-
-```text
-<proposition-id>#content  -> <proposition-id>
-<proposition-id>#query-0  -> <proposition-id>
-<proposition-id>#query-1  -> <proposition-id>
-...
-```
-
-Vector variants are derived data and are not separate Session Store records.
-Deleting or rebuilding a proposition projection removes and regenerates all
-of its variants together. Candidate results are collapsed by proposition ID
-before they are returned.
-
-Proposition retrieval performs:
-
-```text
-BM25 candidates ----------------\
-                                 +-- rank fusion -- created_at decay -- top K
-HNSW variants -- record collapse /
-```
-
-BM25 and vector scores are not added directly. Their independently ranked
-candidate lists are combined with reciprocal-rank fusion. A configurable
-half-life decay based only on immutable `created_at` then boosts newer
-propositions. Time affects ranking, not eligibility: an old proposition can
-still win when it is substantially more relevant.
-
-## Agent Skills
-
-The Library becomes the owner of global Agent Skill search projections for
-`~/.agents/skills` and `~/.q/skills`. It discovers and reconciles those roots
-at leader startup and after explicit install, update, remove, or reload
-operations. `search_skills` queries the Library's BM25 and, when configured,
-field-specific HNSW projections. It never scans the filesystem, parses YAML,
-or reconciles records per query.
-
-Project roots under `<workspace>/.agents/skills` and
-`<workspace>/.q/skills` remain workspace-side in the initial implementation.
-The q client may merge their results with global Library results, but the
-Library does not persist them or expose them to unrelated workspaces.
-
-When `get_skill` selects a global skill, the Library validates and reads the
-skill-relative resource. The receiving q process captures the response in its
-workspace Loom store, preserving the existing rule that model-facing resource
-content passes through Loom rather than becoming permanent Library content.
-
-## Initial HTTP surface
-
-The exact encoding may use the existing MCP/JSON conventions, but the service
-boundary needs at least these operations:
-
-```text
-GET  /v1/health
-POST /v1/propositions
-POST /v1/propositions/search
-GET  /v1/propositions/{id}
-DELETE /v1/propositions/{id}
-POST /v1/skills/search
-GET  /v1/skills/{id}/resources/{path...}
-POST /v1/skills/reload
-```
-
-All routes are available without a bearer key on the loopback-only listener.
-Mutating routes still require their existing idempotency keys and bounded
-request bodies where applicable.
-
-The global skill routes are implemented as the first data slice. Leader
-startup and `/skills/reload` reconcile file digests against the persisted
-projection; they do not blindly rewrite every skill. `search_skills` and
-resource reads never trigger discovery or reconciliation.
-
-Global proposition reads are also implemented. `POST /propositions/search`
-queries only records with `kind=proposition` and `scope=global`; it searches
-both canonical `content` and generated-query `search_text`. The default ranking
-applies a `created_at` boost with weight `0.25` and a 720-hour half-life. A
-request may override both values, and an explicit zero weight disables the
-boost. `GET /propositions/{id}` returns the canonical text, provenance refs,
-tags, and extraction payload.
-
-`POST /propositions` is also implemented for the Thinker-local
-`register_proposition` tool. It requires an `Idempotency-Key`, validates the
-bounded single-proposition schema and obvious credential-like content, then
-places the request in a durable SQLite FIFO queue. The handler waits while the
-single Library worker searches up to five existing propositions using the
-final hybrid score with recency disabled and starts a fresh `librarian` role
-session. The Librarian can decide immediately from those candidates or use
-`search_propositions` to reformulate a query and `get_proposition` to inspect a
-returned candidate's provenance and extraction metadata. It finishes with
-`resolve_proposition`, choosing `create`, `merge`, or `discard`. Create persists a new global
-record; merge unions bounded refs, queries, tags, confidence, and matching query
-vectors into the selected record; discard writes no proposition. Reusing a key
-with identical input returns the stored decision; different input returns HTTP
-409. Thinker keys include a per-checkpoint random generation and monotonic slot,
-so a missing legacy checkpoint cannot reuse an older segment key with newly
-generated content. Within a checkpoint, the key is never advanced until the
-stored request receives a Library disposition.
-
-Each judgment allows at most three additional searches, with five results per
-search, and five detail reads. Search queries contain at most 512 characters;
-all adjudication searches disable recency weighting. Rewritten queries use the
-leader's configured embedding provider for hybrid search, or BM25 alone when
-embedding is not configured. Detail reads and merge/discard targets must refer
-to candidates actually returned in that judgment. The Library tracks those
-IDs independently of the model and validates the final target before saving
-the decision.
-
-The initial search, model rounds, lookups, and terminal acknowledgment share
-the existing 90-second judgment deadline. Initial input and accumulated tool
-results, assistant text, and arguments have a 128 KiB byte budget (not a model
-token guarantee). The three tool definitions remain fixed throughout the
-session. Each round accepts one tool call; lookups are read-only, and only the
-saved final decision can mutate proposition memory. Search, embedding, and
-detail failures, exhausted limits, invalid targets, or cancellation leave no
-new disposition to apply; a lookup failure is never treated as an empty match.
-
-Research messages and candidate lists are temporary. An interrupted judgment
-can repeat its reads when the same registration is resubmitted. Once a valid
-decision is saved, recovery applies that decision without repeating research.
-Embedded callers that supply the original `PropositionJudge` interface keep
-their initial-candidate behavior; implementing `PropositionRetrievalJudge`
-opts into the bounded, read-only `PropositionLookup` capability. No stored
-proposition or queue schema migration is required. This adds retrieval, not
-supersession or validity tracking.
-
-Deterministic tests cover finding and merging a memory absent from the initial
-candidates, delivery of detail metadata, model fallback with retained evidence,
-lookup failures and limits, cancellation, independent host target validation,
-failed-job resubmission after restart, and replay of a saved decision without
-model calls. Live-model retrieval quality and latency have not been measured.
-The full regression suite passed with `go test -p 1 ./... -timeout=120s`.
-Static validation used `go vet ./...` and golangci-lint 2.14.0 on `./library`
-with `--no-config` (errcheck, govet, ineffassign, staticcheck, and unused), all
-passing. The isolated module archive installation check also passed.
-`govulncheck` was unavailable in this environment and was not run.
-
-On the first run after this checkpoint format is introduced, an already
-partially applied legacy segment has no recoverable payload. Its new generation
-avoids the old conflicting key; if the model proposes an earlier fact again,
-the normal Librarian duplicate decision merges or discards it instead of
-silently accepting a mismatched idempotency request.
-
-Queue state progresses through `queued`, `running`, `decided`, `applying`, and
-`succeeded` or `failed`. A decision is persisted before its mutation so leader
-takeover can replay an idempotent create or merge without another model call.
-Successful job payloads are removed after seven days. Compact receipts mapping
-the idempotency key and request digest to the final result remain durable after
-job cleanup and leader restart. A failed job may be resubmitted with the same
-key and identical request.
-
-The existing `q-tools` MCP server exposes the reads as
-`search_propositions` and `get_proposition`; there is no separate proposition
-MCP server. Search results are captured through the normal workspace Loom
-boundary. The mutation tool is private to the Thinker runner rather than being
-added to the general MCP catalog.
-
-The registration API can atomically accept a bounded embedding batch ordered
-as canonical content followed by one vector per normalized retrieval query.
-The Library assigns stable `content`, `query-0`, ... projection IDs, persists
-them inside the proposition source record, and adds every matching projection
-to HNSW. The configured global `embedding.model` and `embedding.dimensions`
-select the Library graph shape at leader startup. Updates and deletes rebuild
-the derived graph because the current pure-Go HNSW implementation has no
-in-place deletion. `DELETE /propositions/{id}` is idempotent and removes the
-source record, BM25 document, and all vector variants together.
-
-Semantic search accepts one query embedding, collapses HNSW variants by source
-proposition before reciprocal-rank fusion with BM25, and then applies the
-existing immutable-`created_at` boost. The shared Library client uses q's
-configured embedding provider to generate the registration batch and search
-query vector automatically. Consequently the private Thinker
-`register_proposition` tool and the existing MCP `search_propositions` tool use
-the same semantic path without exposing vectors to either model-facing schema.
-When embedding configuration is absent, both retain BM25-only behavior.
-
-Embedding vectors are excluded from the idempotency digest because they are
-derived data and may differ slightly when an identical logical request is
-retried. The canonical content, normalized queries, metadata, tags, and refs
-still define request identity.
-
-## CLI and runtime integration
-
-`q library start` runs the shared Library component as a dedicated foreground
-service. If another compatible leader is already serving the configured
-address, it reports that instance instead of opening a second Store. Ordinary
-q sessions call the same ensure-and-connect component during startup. If no
-leader exists and the session wins the lock, it starts the component in-process
-and uses its HTTP client surface like every other session. Its embedded Library
-remains alive until that q process closes; another active session can take over
-after graceful shutdown or failure.
-
-Callers do not bypass HTTP merely because they host the embedded leader. Using
-the same client path avoids a separate in-process behavior and keeps dedicated
-and embedded operation equivalent. Internal
-health and lifecycle coordination may use direct handles, but data operations
-continue through the local Library service boundary.
-
-`q library` opens the standalone Library listener settings, and
-`/library` opens the same settings from the regular q TUI. Both edit the
-default bind host and fixed rendezvous port in `library.json`. Port `0` is not
-valid for the Library because every process must be able to find the same
-endpoint. Listener changes take effect after the current Library leader is
-restarted.
-
-Configuration includes a loopback listen host, fixed port, and optional
-loopback probe host. The Thinker model is configured through q's agent-role
-settings. The Library currently uses q's global embedding model and dimensions
-for its HNSW index; listener and index-shape changes require a Library restart.
-
-The Library must fail independently from workspace startup where possible. A
-workspace remains usable without global memory, while its status clearly says
-that global skill/proposition retrieval and extraction are unavailable.
-
-## Implementation stages
-
-1. Establish a loopback-only local trust boundary and extract the OS lock
-   primitive without changing existing Gateway behavior.
-2. Add the reusable Library server component, configuration, identity/health,
-   fixed-port serving, connection, leader election, startup waiting, shutdown,
-   and takeover tests; host the same component from `q library start` and
-   ordinary q.
-3. Add the global Store owner and read/write HTTP operations with persistent
-   idempotency records.
-4. Move global Agent Skill synchronization and retrieval behind the Library;
-   keep workspace skills workspace-local and remove any per-query reconciliation.
-5. Add `KindProposition`, bounded extraction records, generated BM25 query
-   text, and proposition search without vectors.
-6. Generalize HNSW projection IDs to support multiple vector variants per
-   proposition, add hybrid RRF retrieval, and connect automatic embedding to
-   Thinker registration and MCP proposition search. Implemented.
-7. Add immutable `created_at` decay, extraction gating, failure recovery, and
-   TUI/CLI status surfaces.
-8. Serialize proposition registration through a durable SQLite queue and use a
-   fresh Library-owned Thinker session to create, merge, or discard hybrid
-   duplicate candidates. Implemented.
-9. Add per-session Thinker write-ahead checkpoints so an interrupted slot
-   replays its exact proposition payload and idempotency key, and clear the
-   checkpoint only after the segment commit is durable. Implemented.
-
-## Verification
-
-The implementation is complete only when tests cover:
-
-- two processes starting concurrently and exactly one becoming leader;
-- an ordinary q session becoming an embedded leader without another binary;
-- `q library start` hosting the same server as a dedicated foreground process;
-- a second `q library start` detecting and reporting the existing compatible leader;
-- losers connecting while the winner is still initializing;
-- embedded-leader shutdown followed by takeover without Store corruption;
-- leader termination followed by bounded takeover and successful retry;
-- a fixed-port collision with a non-Library service;
-- rejection of non-loopback and wildcard bind or probe addresses;
-- unauthenticated status, skill, proposition read, and proposition mutation
-  requests on the loopback listener;
-- duplicate mutating requests before and after leader takeover;
-- Store/index recovery while the lock remains exclusively owned;
-- global skills changing only on startup or explicit management/reload;
-- no filesystem work during a skill search;
-- proposition extraction bounds and sensitive-data rejection;
-- interruption before a Library response, interruption after Library success
-  but before checkpoint advancement, completed-checkpoint replay, and guarded
-  cleanup after the durable learning-segment commit;
-- BM25 query expansion, multiple HNSW variants, result collapsing, RRF, and
-  deterministic `created_at` decay;
-- Library unavailability degrading workspace startup without corrupting the
-  workspace Session Store.
+`--embedding-connection` is supplied internally by the host. Bridge stdout
+contains MCP frames only. It stays initializable during Library outages and
+reports individual operation failures accurately.
+
+## Retired automatic learning
+
+`learn`, `request_learning`, proposition read/write/search APIs, Thinker,
+Librarian judgement, learning commands/UI and automatic transcript/task/size/
+restore triggers have been removed. Task lifecycle, transcript persistence,
+context compaction, skills and Workspace Memory remain available. Failed delivery records its error and a bounded retry backoff. Completion receipts survive conversation clear and later user turns. Manager turns waiting for input do not consume worker capacity. Verified
+lessons and decisions are written explicitly into issues/comments.
+
+Old learning metadata can be read solely to preserve historical conversations;
+it is discarded and omitted on new saves. Retired model assignments are removed
+on load/save and their names cannot become custom roles. Existing proposition,
+queue, checkpoint and diagnostic files are retained as inert backups; they are
+not replayed, judged or included in the new issue/ticket projections. No project
+ownership is guessed for old global knowledge.
+
+## HTTP surface
+
+All Library routes use `/v1`:
+
+| Resource | Operations |
+| --- | --- |
+| Health | `GET /health`, `/status` |
+| Workspaces | `GET/POST /workspaces`, `PUT /workspaces/{id}`, `POST /workspaces/{id}/archive` |
+| Sources | `GET/POST /items`, `GET/PUT /items/{id}`, `GET/POST /items/{id}/posts`, `GET/PUT /posts/{id}` |
+| Search/index | `POST /work/search`, `GET/POST /work/embeddings`, `POST /work/reindex` |
+| Membership | `GET/POST /workspaces/{id}/members` |
+| Execution | `POST /items/{id}/control`, `/claim`, `GET /items/{id}/attempts`, `GET/POST /attempts/{id}`, `POST /attempts/recover` |
+| Worker history | `GET /attempts/{id}/worker` (bounded public transcript and unknown-tool pages) |
+| Review | `POST /attempts/{id}/review`, `/merge`, `GET /workspaces/{id}/inbox`, `POST /inbox/{id}/ack`, `/defer` |
+| Skills | Existing `/skills/search`, resource, reload and embedding routes |
+
+Studio adapts source/search routes below `/api/v1/work`, membership/inbox below
+`/api/v1/projects/{id}`, and exposes Issues, Tickets, Coordinator and Integrator navigation. The role endpoints are `GET /api/v1/projects/{id}/coordinator` and `/integrator`; `/manager` remains an alias for the Integrator.
+Source and execution errors preserve HTTP status; stale revisions return 409.
+See [the coordinator plan](workspace-issues-tickets-plan.md) for acceptance scope
+and implementation/verification status.

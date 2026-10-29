@@ -47,6 +47,7 @@ type studioRunQuestion struct {
 }
 
 type studioRunSnapshot struct {
+	OperationID     string             `json:"operation_id,omitempty"`
 	Version         int                `json:"version"`
 	ID              string             `json:"id"`
 	SessionID       string             `json:"session_id"`
@@ -154,6 +155,10 @@ func studioRunKey(root, sessionID, runID string) string {
 }
 
 func (service *sessionRunService) start(root, sessionID, prompt string, causes ...context.Context) (*studioRun, error) {
+	return service.startOperation(root, sessionID, prompt, "", causes...)
+}
+
+func (service *sessionRunService) startOperation(root, sessionID, prompt, operationID string, causes ...context.Context) (*studioRun, error) {
 	if err := (workspace.Store{Root: root, SessionID: sessionID}).RequireInteraction(); err != nil {
 		return nil, err
 	}
@@ -178,6 +183,10 @@ func (service *sessionRunService) start(root, sessionID, prompt string, causes .
 	key := sessionRunKey(root, sessionID)
 	service.mu.Lock()
 	if activeID := service.active[key]; activeID != "" {
+		if existing := service.runs[studioRunKey(root, sessionID, activeID)]; operationID != "" && existing != nil && existing.snapshotCopy().OperationID == operationID {
+			service.mu.Unlock()
+			return existing, nil
+		}
 		service.mu.Unlock()
 		return nil, errors.New("the selected session already has a running turn")
 	}
@@ -202,6 +211,12 @@ func (service *sessionRunService) start(root, sessionID, prompt string, causes .
 	run, err := createStudioRun(root, store, runID, diagnostics.RequestID(cause))
 	if err != nil {
 		service.mu.Unlock()
+		return nil, err
+	}
+	run.snapshot.OperationID = operationID
+	if err := run.persistSnapshotLocked(); err != nil {
+		service.mu.Unlock()
+		_ = run.close()
 		return nil, err
 	}
 	service.runs[studioRunKey(root, sessionID, runID)] = run
@@ -261,7 +276,11 @@ func (service *sessionRunService) execute(run *studioRun, prompt string) {
 		return nil
 	}
 	var runErr error
-	if controlled, ok := service.runner.(controlledSessionRunner); ok {
+	if withOptions, ok := service.runner.(interface {
+		RunWithOptions(context.Context, workspace.Store, string, string, app.SessionOptions, app.SessionEventSink) error
+	}); ok && run.snapshot.OperationID != "" {
+		runErr = withOptions.RunWithOptions(runContext, run.store, run.store.SessionID, prompt, app.SessionOptions{OperationID: run.snapshot.OperationID, Control: run.control}, emit)
+	} else if controlled, ok := service.runner.(controlledSessionRunner); ok {
 		runErr = controlled.RunControlled(runContext, run.store, run.store.SessionID, prompt, emit, run.control)
 	} else {
 		runErr = service.runner.Run(runContext, run.store, run.store.SessionID, prompt, emit)

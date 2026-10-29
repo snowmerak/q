@@ -11,7 +11,7 @@ import (
 	"github.com/snowmerak/llm-provider/gateway"
 	"github.com/snowmerak/q/client"
 	"github.com/snowmerak/q/config"
-	"github.com/snowmerak/q/thinker"
+
 	"github.com/snowmerak/q/third_party/acp-go-sdk"
 )
 
@@ -135,7 +135,7 @@ func TestTaskCompletionDrainsProviderBeforeNextTUIRequest(t *testing.T) {
 			m = runTerminalTestTurn(t, m, "Inspect repository")
 			assertTerminalDelivery(t, p)
 			last := m.messages[len(m.messages)-1]
-			if last.Name != thinker.TaskCompletionReplyName || last.Content != "Repository inspected" || m.activeTask != nil {
+			if last.Name != "q_task_complete_reply" || last.Content != "Repository inspected" || m.activeTask != nil {
 				t.Fatalf("structured completion changed: last=%#v active=%#v", last, m.activeTask)
 			}
 			m = runTerminalTestTurn(t, m, "Explain the Dockerfile")

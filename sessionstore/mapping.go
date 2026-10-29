@@ -5,7 +5,7 @@ import (
 	"github.com/blevesearch/bleve/v2/mapping"
 )
 
-const MappingVersion = 3
+const MappingVersion = 4
 
 func indexMapping() *mapping.IndexMappingImpl {
 	index := bleve.NewIndexMapping()
@@ -14,6 +14,7 @@ func indexMapping() *mapping.IndexMappingImpl {
 	for _, field := range []string{
 		"id", "kind", "run_id", "task_id", "parent_id", "role", "model",
 		"effort", "status", "scope", "refs", "tags",
+		"workspace_id", "entity_id", "post_id",
 	} {
 		value := bleve.NewKeywordFieldMapping()
 		value.Name = field

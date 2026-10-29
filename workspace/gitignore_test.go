@@ -6,8 +6,64 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 )
+
+func TestLocalQExclusionPreservesProjectFilesAndTrackedChanges(t *testing.T) {
+	root := newGitRepository(t)
+	run := func(args ...string) string {
+		t.Helper()
+		output, err := exec.Command("git", append([]string{"-C", root}, args...)...).CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %v: %v: %s", args, err, output)
+		}
+		return string(output)
+	}
+	if err := os.MkdirAll(filepath.Join(root, DirectoryName), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	tracked := filepath.Join(root, DirectoryName, "tracked.txt")
+	if err := os.WriteFile(tracked, []byte("base"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	run("add", ".q/tracked.txt")
+	run("-c", "user.name=Test", "-c", "user.email=test@example.test", "commit", "-m", "base")
+	excludePath := filepath.Join(root, ".git", "info", "exclude")
+	if err := os.WriteFile(excludePath, []byte("# keep existing rules\n*.local\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		if err := (Store{Root: root}).EnsureQGitLocallyIgnored(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	body, err := os.ReadFile(excludePath)
+	if err != nil || string(body) != "# keep existing rules\n*.local\n.q\n" {
+		t.Fatalf("exclude rules changed: %q %v", body, err)
+	}
+	if _, err := os.Stat(filepath.Join(root, GitIgnoreFileName)); !os.IsNotExist(err) {
+		t.Fatalf("local exclusion edited project .gitignore: %v", err)
+	}
+	for path, content := range map[string]string{tracked: "modified", filepath.Join(root, DirectoryName, "runtime.json"): "metadata", filepath.Join(root, "user.txt"): "user work"} {
+		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	status := run("status", "--porcelain=v1", "--untracked-files=all")
+	if !strings.Contains(status, " M .q/tracked.txt") || !strings.Contains(status, "?? user.txt") || strings.Contains(status, "runtime.json") {
+		t.Fatalf("exclusion hid user work or exposed metadata: %s", status)
+	}
+	linked := filepath.Join(t.TempDir(), "linked")
+	run("worktree", "add", "--detach", linked, "HEAD")
+	if err := (Store{Root: linked}).EnsureQGitLocallyIgnored(t.Context()); err != nil {
+		t.Fatalf("local exclusion failed with a worktree .git file: %v", err)
+	}
+	body, err = os.ReadFile(excludePath)
+	if err != nil || strings.Count(string(body), ".q\n") != 1 {
+		t.Fatalf("linked worktree did not reuse common exclude: %q %v", body, err)
+	}
+}
 
 func TestEnsureQGitIgnoredCreatesRepositoryRootGitIgnore(t *testing.T) {
 	repositoryRoot := newGitRepository(t)

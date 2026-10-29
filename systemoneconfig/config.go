@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -24,6 +25,7 @@ const (
 	Version                = 2
 	RoleAgentSkillDecision = "agent_skill_decision"
 	RoleArchiveDecision    = "archive_decision"
+	RoleTaskAssignment     = "task_assignment"
 )
 
 type ServerConfig struct {
@@ -146,10 +148,16 @@ func (p ProviderConfig) ResolveAPIKey() string {
 }
 
 func (p ProviderConfig) NewClient() (*systemone.Client, error) {
+	return p.NewClientWithHTTPClient(nil)
+}
+
+// NewClientWithHTTPClient retains provider validation and credentials while
+// allowing a caller to use its own request budget and transport.
+func (p ProviderConfig) NewClientWithHTTPClient(httpClient *http.Client) (*systemone.Client, error) {
 	if err := p.Validate(); err != nil {
 		return nil, err
 	}
-	return systemone.New(systemone.Config{BaseURL: p.BaseURL(), APIKey: p.ResolveAPIKey()})
+	return systemone.New(systemone.Config{BaseURL: p.BaseURL(), APIKey: p.ResolveAPIKey(), HTTPClient: httpClient})
 }
 
 // ModelForRole returns the role override, or the representative model.

@@ -114,8 +114,9 @@ func TestComposerRealRuntimeUsesSharedLoopAndRetainsConversation(t *testing.T) {
 					t.Fatalf("wrong reasoning effort: %q", input.ReasoningEffort)
 				}
 				allowed := map[string]bool{
-					"ask_to_user": true, "search_skills": true, "get_skill": true, "search_archive": true, "get_archive_record": true, "learn": true,
-					"search_propositions": true, "get_proposition": true, "composer_list_artifacts": true, "composer_read_artifact": true, "composer_write_artifact": true, "composer_delete_artifact": true,
+					"ask_to_user": true, "search_skills": true, "get_skill": true, "search_archive": true, "get_archive_record": true,
+					"issue_create": true, "issue_reply": true, "issue_get": true, "issue_list": true, "ticket_get": true, "ticket_list": true, "post_get": true, "search_work": true,
+					"composer_list_artifacts": true, "composer_read_artifact": true, "composer_write_artifact": true, "composer_delete_artifact": true,
 				}
 				if len(input.Tools) != len(allowed) {
 					t.Fatalf("wrong loop tool catalog: %+v", input.Tools)

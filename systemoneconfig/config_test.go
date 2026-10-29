@@ -137,6 +137,14 @@ func TestProviderClientUsesEndpointAndKey(t *testing.T) {
 	if err != nil || len(models.Models) != 1 || models.Models[0].Name != "jev-preview" {
 		t.Fatalf("models = %#v, %v", models, err)
 	}
+	custom, err := provider.NewClientWithHTTPClient(server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	models, err = custom.ListModels(t.Context())
+	if err != nil || len(models.Models) != 1 || models.Models[0].Name != "jev-preview" {
+		t.Fatalf("custom transport lost provider routing or credentials: %#v, %v", models, err)
+	}
 }
 
 func TestValidateRejectsInvalidProvider(t *testing.T) {

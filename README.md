@@ -308,7 +308,6 @@ help entry points.
 | `/new` | Create and switch to a new session. |
 | `/clear` | Clear the current conversation projection. |
 | `/compact` | Summarize older model context without deleting the transcript (TUI and ACP). |
-| `/learn [on\|off\|status]` | Checkpoint or control durable conversation learning. |
 | `/model` | Assign models, manage native roles, and configure fallback groups. |
 | `/systemone` | Configure System One providers, models, and its standalone server. |
 | `/gateway` | Configure Gateway providers, listener settings, and API keys. |
@@ -598,7 +597,7 @@ short conclusion in `summary` and may include a Markdown `report` up to 256 KiB
 for detailed analysis, design rationale, review notes, or research synthesis.
 Large results use the existing Loom receipt and retrieval path.
 
-## Sessions, history, and learning
+## Sessions, history, and workspace knowledge
 
 Each workspace can hold multiple UUID-based sessions. The startup picker shows
 their titles and recent activity. Press `d` on a selected inactive session, then `y`
@@ -616,24 +615,24 @@ separately. When context metadata is available, q compacts model context while
 leaving the complete visible transcript intact. Workspace Memory stores durable
 messages, tool activity, failures, lifecycle events, and search indexes.
 
-After successful turns, Thinker can extract reusable propositions. A successful
-task result may support durable project facts, reusable resolutions, and
-evidence-backed research findings without a separate user confirmation. Thinker
-keeps only findings likely to influence future technical choices or actions and
-remain useful across multiple tasks, including established workflows and
-recurring behavior patterns. Project-specific propositions use a stable project
-name and workspace-relative file paths; the host's absolute working directory is
-scope input only and is never persisted in proposition content, queries, or
-tags. Run-specific test, formatting, audit, and build snapshots remain in task
-history. Thinker also preserves whether a result is merely recommended or
-actually adopted. Librarian decides whether each proposition should be created,
-merged, or discarded in the global Library. `/learn off` stops collection and
-queue processing without deleting already queued data. Each completed or failed
-Thinker invocation also writes a short-lived diagnostic JSON file below
-`~/.q/logs/thinker/`; files older than three days are removed when the next
-Thinker log is written. In-flight proposition writes use a private per-session
-write-ahead checkpoint, so a restart replays the exact payload and idempotency
-key before the model can generate another proposition for that slot.
+Issues and tickets belong to Studio projects (one project may contain several
+directories). Library stores their originals centrally, with workspace and
+explicit global text/semantic/hybrid search. Bodies and replies have stable IDs,
+revision history and paginated reads. Record verified lessons explicitly in
+issues/comments; automatic learning, Thinker, Librarian, `learn`,
+`request_learning`, and proposition APIs have been removed. Old learning data is
+inert and cannot restart background work.
+
+Each project has one protected Manager session, using either Q's API loop or
+ACP. Clear retains its identity, model choice, work items and review inbox. The
+Tickets board uses To do / In progress / Done. Join existing subagent profiles
+to a project. Issuing a ticket automatically queues it for assignment; System One
+checks joined candidates before every execution; failed selection remains
+visible as assignment waiting. Native workers reuse GeneralRunner; mutating
+native/ACP workers use the existing isolated Git worktree/MR flow. Results wait
+for manager review. Feedback continues the worker conversation; report
+acceptance or a successful pinned Git merge marks the ticket done. Interrupted
+work is fenced and uncertain side effects are not blindly replayed.
 
 See [Session Store notes](docs/session-store-notes.md),
 [Workspace Memory](docs/workspace-memory.md), and
@@ -789,8 +788,8 @@ Expose q's builtin workspace tools to another MCP client:
 q-mcp -root C:\path\to\workspace
 ```
 
-`q-mcp` uses stdio, applies the same root jail and Loom limits, and deliberately
-omits the chat-only `learn` tool.
+`q-mcp` uses stdio and applies the same root jail and Loom limits. Project issue
+and ticket tools are supplied by the host-bound `q library mcp` bridge.
 
 ### Standalone commands
 
@@ -906,7 +905,6 @@ the [Q Studio blueprint](docs/studio-blueprint.md).
 | `~/.q/systemone.json` | System One providers, model assignments, listener settings, and client key hashes (saved with private file permissions). |
 | `~/.q/systemone.key` | Private master key used to verify managed System One API keys. |
 | `~/.q/skills/` | q-managed global Agent Skills. |
-| `~/.q/logs/thinker/` | Private Thinker invocation diagnostics retained for three days. |
 | `~/.q/logs/studio/` | Rotating Studio diagnostics; 25 MiB per file, 1 GB total, seven-day retention. |
 | `~/.q/usage/usage.sqlite` | Recent token-only events and all-time daily rollups. |
 | `~/.q/usage/archive/` | Daily Parquet archives for raw events older than 90 days. |
@@ -922,13 +920,12 @@ restricted by q; Windows file modes do not manage ACLs.
 
 | Path | Purpose |
 |---|---|
-| `.q/sessions/<uuid>/session.json` | Transcript, compacted context, title, task lifecycle, and learning state. |
+| `.q/sessions/<uuid>/session.json` | Transcript, compacted context, title, and task lifecycle. |
 | `.q/sessions/<uuid>/delegations.json` | Bookmarks linking this session to its delegated child calls. |
 | `.q/sessions/<uuid>/delegates/<invocation-id>/` | Child session, execution state, and nested delegation tree. |
 | `.q/sessions/<uuid>/plan-execution.json` | Legacy plan checkpoint, retained for existing data. |
 | `.q/plan-executions/` | Legacy execution snapshots. |
 | `.q/model.json` | Workspace model-role overrides. |
-| `.q/learning.json` | Workspace learning switch. |
 | `.q/lsp.json` | Workspace LSP roots and overrides. |
 | `.q/data/` and `.q/index/` | Durable history records and derived indexes. |
 | `.q/loom/` | Content-addressed tool artifacts and GC metadata. |
@@ -954,7 +951,7 @@ Editable source: [docs/architecture.drawio](docs/architecture.drawio).
 | Managed Gateway child | Provider aggregation for that q process on a private loopback endpoint. |
 | Workspace runtime | Root-scoped tools and local LSP sessions. |
 | Workspace Memory | Durable records and Bleve/HNSW indexes for leased workspace roots. |
-| Global Library | Shared skills, propositions, search indexes, and judging queue. |
+| Global Library | Global skills, workspace issues/tickets, search projections and coordinator state. |
 | Usage service | Token-only SQLite hot store, daily rollups, Parquet archive, and local dashboard. |
 
 This separation allows several q processes to share durable services without
