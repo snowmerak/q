@@ -124,7 +124,7 @@ func executeACPExternalSearch(
 func disposeACPRemote(remote *acpRemoteClient) error {
 	cleanupContext, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	return errors.Join(remote.disposeSession(cleanupContext), remote.Close())
+	return errors.Join(remote.disposeSession(cleanupContext), remote.close(false))
 }
 
 func (r *acpRemoteClient) disposeSession(ctx context.Context) error {
@@ -134,12 +134,15 @@ func (r *acpRemoteClient) disposeSession(ctx context.Context) error {
 	canDelete := r.capabilities.SessionCapabilities.Delete != nil
 	canClose := r.capabilities.SessionCapabilities.Close != nil
 	r.mu.Unlock()
-	if connection == nil || sessionID == "" {
+	if connection == nil || sessionID == "" || r.processInterrupted() {
 		return nil
 	}
 	var disposeErr error
 	if canDelete {
 		_, disposeErr = connection.UnstableDeleteSession(ctx, acp.UnstableDeleteSessionRequest{SessionId: sessionID})
+		if r.processInterrupted() {
+			return nil
+		}
 		if disposeErr == nil {
 			r.clearDisposedSession(sessionID)
 			return nil
@@ -147,6 +150,9 @@ func (r *acpRemoteClient) disposeSession(ctx context.Context) error {
 	}
 	if canClose {
 		_, closeErr := connection.CloseSession(ctx, acp.CloseSessionRequest{SessionId: sessionID})
+		if r.processInterrupted() {
+			return nil
+		}
 		if closeErr == nil {
 			r.clearDisposedSession(sessionID)
 			return nil

@@ -73,12 +73,13 @@ type acpRemoteClient struct {
 
 	slashCommandsBySession map[acp.SessionId][]slashCommand
 
-	stdin       io.WriteCloser
-	cancel      context.CancelFunc
-	processDone <-chan error
-	stderr      *synchronizedTailBuffer
-	closeOnce   sync.Once
-	closeErr    error
+	stdin          io.WriteCloser
+	processContext context.Context
+	cancel         context.CancelFunc
+	processDone    <-chan error
+	stderr         *synchronizedTailBuffer
+	closeOnce      sync.Once
+	closeErr       error
 }
 
 type acpRemoteTurn struct {
@@ -211,12 +212,15 @@ func startACPRemoteClientWithResume(
 		return nil, fmt.Errorf("start %s ACP agent: %w", command.display, err)
 	}
 	wait := make(chan error, 1)
-	go func() { wait <- cmd.Wait() }()
+	go func() {
+		wait <- cmd.Wait()
+		close(wait)
+	}()
 
 	remote := &acpRemoteClient{
 		root: root, agent: strings.ToLower(command.display), display: command.display,
 		command: strings.Join(append([]string{filepath.Base(command.name)}, command.args...), " "),
-		stdin:   stdin, cancel: cancel, processDone: wait, stderr: stderr,
+		stdin:   stdin, cancel: cancel, processContext: processContext, processDone: wait, stderr: stderr,
 		mcpServers: command.mcpServers,
 	}
 	if remote.mcpServers == nil {
@@ -308,16 +312,33 @@ func (r *acpRemoteClient) ListModels(context.Context) ([]client.Model, error) {
 }
 
 func (r *acpRemoteClient) Close() error {
+	return r.close(true)
+}
+
+// processInterrupted refers to the process lifetime, never a cancelled prompt.
+// exec.CommandContext kills the child and closes stdio before owner cleanup.
+func (r *acpRemoteClient) processInterrupted() bool {
+	return r.processContext != nil && r.processContext.Err() != nil
+}
+
+// close always releases transport resources once. A caller that already tried
+// to dispose the session must not issue another session/close on that transport.
+func (r *acpRemoteClient) close(closeSession bool) error {
 	r.closeOnce.Do(func() {
 		r.mu.Lock()
 		connection := r.connection
 		sessionID := r.sessionID
 		canClose := r.capabilities.SessionCapabilities.Close != nil
 		r.mu.Unlock()
-		if connection != nil && sessionID != "" && canClose {
+		if closeSession && connection != nil && sessionID != "" && canClose && !r.processInterrupted() {
 			closeContext, cancel := context.WithTimeout(context.Background(), time.Second)
 			_, r.closeErr = connection.CloseSession(closeContext, acp.CloseSessionRequest{SessionId: sessionID})
 			cancel()
+			// Parent interruption can race an in-flight close RPC. The process
+			// is already being terminated; preserve live-peer failures otherwise.
+			if r.processInterrupted() {
+				r.closeErr = nil
+			}
 		}
 		if r.cancel != nil {
 			r.cancel()
@@ -353,6 +374,9 @@ func (r *acpRemoteClient) runPrompt(ctx context.Context, content string, events 
 }
 
 func (r *acpRemoteClient) prompt(ctx context.Context, content string, events chan<- agentEvent) (*client.ChatResponse, int, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, 0, err
+	}
 	turn := &acpRemoteTurn{
 		ctx: ctx, events: events, display: r.display,
 		toolTitles: make(map[acp.ToolCallId]string), toolCalls: make(map[acp.ToolCallId]struct{}),
@@ -389,6 +413,9 @@ func (r *acpRemoteClient) prompt(ctx context.Context, content string, events cha
 		Prompt:    promptBlocks,
 	})
 	if err != nil {
+		if ctx.Err() != nil {
+			return nil, 0, ctx.Err()
+		}
 		return nil, 0, r.decorateError("ACP prompt", err)
 	}
 	if libraryInstructions {

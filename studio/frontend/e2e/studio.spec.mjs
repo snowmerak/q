@@ -60,6 +60,26 @@ test('workspace issues preserve source posts, content pages, search scope and pe
   await page.getByRole('textbox', { name: 'Work item reply' }).fill('A verified zeolite lesson with source evidence.');
   await page.getByRole('button', { name: 'Add reply', exact: true }).click();
   await expect(thread).toContainText('A verified zeolite lesson');
+  const replyPost = thread.locator('.work-post').filter({ hasText: 'A verified zeolite lesson' });
+  await replyPost.getByRole('button', { name: 'Edit reply', exact: true }).click();
+  await thread.getByRole('textbox', { name: 'Edit post content', exact: true }).fill('A verified zeolite lesson with source evidence. Reviewed.');
+  await thread.getByRole('button', { name: 'Save post', exact: true }).click();
+  await expect(replyPost).toContainText('Reviewed.');
+  await thread.getByRole('button', { name: 'Edit details', exact: true }).click();
+  await thread.getByRole('textbox', { name: 'Edit work item title', exact: true }).fill('Coordinator source evidence reviewed');
+  await thread.getByRole('button', { name: 'Save details', exact: true }).click();
+  await expect(thread.getByRole('heading', { name: /Coordinator source evidence reviewed/ })).toBeVisible();
+  await thread.getByRole('button', { name: 'Close issue', exact: true }).click();
+  await expect(thread.getByRole('button', { name: 'Reopen issue', exact: true })).toBeVisible();
+  await thread.getByRole('button', { name: 'Reopen issue', exact: true }).click();
+  await expect(thread.getByRole('button', { name: 'Close issue', exact: true })).toBeVisible();
+  const iconControls = await page.locator('.work-icon-button').evaluateAll(controls => controls.map(control => {
+    const bounds = control.getBoundingClientRect();
+    return { name: control.getAttribute('aria-label'), title: control.getAttribute('title'), square: Math.abs(bounds.width - bounds.height) < 1, icon: !!control.querySelector('svg') };
+  }));
+  expect(iconControls.length).toBeGreaterThan(5);
+  expect(iconControls.every(control => control.name && control.title && control.square && control.icon)).toBe(true);
+  await thread.scrollIntoViewIfNeeded();
   await page.screenshot({ path: join(tmpdir(), 'q-work-issue-thread.png') });
   const sourceLink = thread.getByRole('link', { name: /^post / }).last();
   const href = await sourceLink.getAttribute('href');
@@ -76,8 +96,12 @@ test('workspace issues preserve source posts, content pages, search scope and pe
   await page.getByRole('checkbox', { name: 'All projects' }).check();
   await page.getByRole('button', { name: 'Search', exact: true }).click();
   await expect(page.getByRole('region', { name: 'Work search results' })).toContainText('A verified zeolite lesson');
+  await page.goto(href);
+  await expect(thread).toContainText('A verified zeolite lesson');
   await page.setViewportSize({ width: 390, height: 844 });
+  await thread.scrollIntoViewIfNeeded();
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await page.screenshot({ path: join(tmpdir(), 'q-work-issue-thread-mobile.png') });
 });
 
 test('issuing a ticket automatically requests assignment without a start action', async ({ page, request }) => {
