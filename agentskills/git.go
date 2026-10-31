@@ -167,7 +167,7 @@ func (r *gitCommitResolver) commit(directory string) string {
 }
 
 func gitWorkTreeRoot(directory string) string {
-	if resolved, err := filepath.EvalSymlinks(directory); err == nil {
+	if resolved, err := resolveSkillPath(directory); err == nil {
 		directory = resolved
 	}
 	for current := filepath.Clean(directory); ; current = filepath.Dir(current) {

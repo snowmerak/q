@@ -223,6 +223,13 @@ checkout can still be pulled or removed; each scope keeps its own projection,
 and merged search suppresses same-named hits when both appear in the bounded
 result sets. Validation and shadowing notes remain visible in the manager.
 
+Directory symlinks and Windows junctions are supported for both skill roots
+and individual skills. Q resolves their targets without recursively searching
+child directories. Link cycles and chains exceeding 255 links are reported as
+discovery issues and skipped while other skills continue to load. Skill IDs,
+Git commit detection, and resource boundary checks use the resolved target;
+resource links that escape the skill directory are rejected.
+
 ## Git management
 
 q manages Git checkouts in its native roots. Open `/skills`; the two panels map

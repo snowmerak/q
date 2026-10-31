@@ -191,7 +191,7 @@ func (r *Registry) Reload() error {
 	var issues []Issue
 	gitCommits := newGitCommitResolver()
 	for _, location := range locations {
-		entries, err := os.ReadDir(location.path)
+		entries, err := skillDirectoryEntries(location.path)
 		if errors.Is(err, os.ErrNotExist) {
 			continue
 		}
@@ -200,7 +200,7 @@ func (r *Registry) Reload() error {
 			continue
 		}
 		for _, entry := range entries {
-			if !entry.IsDir() && entry.Type()&os.ModeSymlink == 0 {
+			if !entry.IsDir() && entry.Type()&(os.ModeSymlink|os.ModeIrregular) == 0 {
 				continue
 			}
 			directory := filepath.Join(location.path, entry.Name())
@@ -288,7 +288,11 @@ func (r *Registry) ReadSkillFile(id, path string) (Skill, string, []byte, error)
 	if strings.TrimSpace(path) == "" {
 		path = "SKILL.md"
 	}
-	resource, err := resolveResource(skill.Directory, path)
+	root, err := resolveSkillPath(skill.Directory)
+	if err != nil {
+		return Skill{}, "", nil, fmt.Errorf("agent skills: resolve skill directory: %w", err)
+	}
+	resource, err := resolveResource(root, path)
 	if err != nil {
 		return Skill{}, "", nil, err
 	}
@@ -299,7 +303,7 @@ func (r *Registry) ReadSkillFile(id, path string) (Skill, string, []byte, error)
 	if len(data) > maximumResourceBytes {
 		return Skill{}, "", nil, fmt.Errorf("agent skills: resource exceeds %d bytes", maximumResourceBytes)
 	}
-	relative, _ := filepath.Rel(skill.Directory, resource)
+	relative, _ := filepath.Rel(root, resource)
 	return skill, filepath.ToSlash(relative), data, nil
 }
 
@@ -325,11 +329,15 @@ type frontmatter struct {
 }
 
 func loadSkill(directory string, source Source) (Skill, error) {
-	info, err := os.Stat(directory)
+	resolved, err := resolveSkillPath(directory)
+	if err != nil {
+		return Skill{}, err
+	}
+	info, err := os.Stat(resolved)
 	if err != nil || !info.IsDir() {
 		return Skill{}, errors.New("SKILL.md parent is not a directory")
 	}
-	data, err := os.ReadFile(filepath.Join(directory, "SKILL.md"))
+	data, err := os.ReadFile(filepath.Join(resolved, "SKILL.md"))
 	if err != nil {
 		return Skill{}, fmt.Errorf("read SKILL.md: %w", err)
 	}
@@ -369,7 +377,7 @@ func sameDirectory(left, right string) bool {
 }
 
 func skillID(directory string) string {
-	resolved, err := filepath.EvalSymlinks(directory)
+	resolved, err := resolveSkillPath(directory)
 	if err != nil {
 		resolved = directory
 	}
@@ -411,11 +419,11 @@ func resolveResource(directory, path string) (string, error) {
 	if path == "." || filepath.IsAbs(path) || path == ".." || strings.HasPrefix(path, ".."+string(filepath.Separator)) {
 		return "", errors.New("agent skills: resource path must stay inside the skill directory")
 	}
-	root, err := filepath.EvalSymlinks(directory)
+	root, err := resolveSkillPath(directory)
 	if err != nil {
 		return "", fmt.Errorf("agent skills: resolve skill directory: %w", err)
 	}
-	target, err := filepath.EvalSymlinks(filepath.Join(directory, path))
+	target, err := resolveSkillPath(filepath.Join(root, path))
 	if err != nil {
 		return "", fmt.Errorf("agent skills: resolve resource: %w", err)
 	}
