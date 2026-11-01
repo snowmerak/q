@@ -56,7 +56,7 @@ func TestStudioRunContinuesAfterSnapshotReaderCloses(t *testing.T) {
 		t.Fatal(err)
 	}
 	service.wg.Wait()
-	page := run.page(0, maximumRunEventPage)
+	page := mustStudioRunPage(t, run, 0, maximumRunEventPage)
 	if page.Run.Status != "completed" || page.Run.Error != "" {
 		t.Fatalf("run after reader closed = %#v", page.Run)
 	}
@@ -64,7 +64,7 @@ func TestStudioRunContinuesAfterSnapshotReaderCloses(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := reloaded.page(0, maximumRunEventPage); got.Run.Status != "completed" || got.Run.Error != "" {
+	if got := mustStudioRunPage(t, reloaded, 0, maximumRunEventPage); got.Run.Status != "completed" || got.Run.Error != "" {
 		t.Fatalf("reloaded run = %#v", got.Run)
 	}
 }

@@ -17,6 +17,15 @@ import (
 	"github.com/snowmerak/q/workspace"
 )
 
+func mustStudioRunPage(t *testing.T, run *studioRun, after int64, limit int) studioRunPage {
+	t.Helper()
+	page, err := run.page(after, limit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return page
+}
+
 func TestStudioRunSurvivesRequestAndReplaysFromDisk(t *testing.T) {
 	root := t.TempDir()
 	store, lock, err := workspace.CreateSession(root, "test")
@@ -143,7 +152,7 @@ func TestStudioRunSurvivesRequestAndReplaysFromDisk(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	loaded := replayed.page(0, maximumRunEventPage)
+	loaded := mustStudioRunPage(t, replayed, 0, maximumRunEventPage)
 	encoded, _ := json.Marshal(loaded.Events)
 	if loaded.Run.Status != "completed" || loaded.Run.ContextUsed != 32000 || loaded.Run.ContextSize != 128000 || !strings.Contains(string(encoded), `"content":"durable"`) {
 		t.Fatalf("replayed run = %#v events=%s", loaded.Run, encoded)

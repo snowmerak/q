@@ -29,7 +29,6 @@ const (
 	studioRunsDirectory = "studio-runs"
 	studioLatestRunFile = "studio-run.json"
 	studioRunVersion    = 1
-	maximumRunLogSize   = 128 << 20
 	maximumRunEventSize = 8 << 20
 	maximumRunEventPage = 256
 	maximumRunWait      = 30 * time.Second
@@ -92,10 +91,12 @@ type studioRun struct {
 	log      *os.File
 	mu       sync.Mutex
 	snapshot studioRunSnapshot
-	events   []studioRunEvent
-	notify   chan struct{}
-	guidance string
-	closed   bool
+	// Event bodies stay on disk; each cursor indexes its record's byte offset.
+	eventOffsets []int64
+	logBytes     int64
+	notify       chan struct{}
+	guidance     string
+	closed       bool
 }
 
 type sessionRunService struct {
@@ -476,22 +477,18 @@ func loadLatestStudioRun(root string, store workspace.Store) (*studioRun, error)
 	if snapshot.Version != studioRunVersion || snapshot.ID == "" || snapshot.SessionID != store.SessionID {
 		return nil, errors.New("invalid Studio run snapshot")
 	}
-	events, err := readStudioRunEvents(filepath.Join(store.SessionDir(), studioRunsDirectory, snapshot.ID+".ndjson"))
+	run := &studioRun{root: root, store: store, snapshot: snapshot, notify: make(chan struct{}), closed: true}
+	run.snapshot.Status, run.snapshot.Outcome, run.snapshot.Error = "queued", "", ""
+	run.snapshot.PendingQuestion, run.snapshot.FinishedAt, run.snapshot.Cursor = nil, nil, 0
+	run.logBytes, err = readStudioRunEvents(run.logPath(), func(event studioRunEvent, offset int64) {
+		run.eventOffsets = append(run.eventOffsets, offset)
+		run.snapshot.Cursor, run.snapshot.UpdatedAt = event.Cursor, event.At
+		run.applyEventLocked(event.Event, event.At)
+	})
 	if err != nil {
 		return nil, err
 	}
-	rebuilt := snapshot
-	rebuilt.Status, rebuilt.Outcome, rebuilt.Error = "queued", "", ""
-	rebuilt.PendingQuestion, rebuilt.FinishedAt, rebuilt.Cursor = nil, nil, 0
-	for _, event := range events {
-		rebuilt.Cursor, rebuilt.UpdatedAt = event.Cursor, event.At
-		placeholder := &studioRun{snapshot: rebuilt}
-		placeholder.applyEventLocked(event.Event, event.At)
-		rebuilt = placeholder.snapshot
-	}
-	snapshot = rebuilt
-	run := &studioRun{root: root, store: store, snapshot: snapshot, events: events, notify: make(chan struct{}), closed: true}
-	if !terminalRunStatus(snapshot.Status) {
+	if !terminalRunStatus(run.snapshot.Status) {
 		log, openErr := os.OpenFile(filepath.Join(store.SessionDir(), studioRunsDirectory, snapshot.ID+".ndjson"), os.O_RDWR, 0o600)
 		if openErr != nil {
 			return nil, openErr
@@ -500,11 +497,12 @@ func loadLatestStudioRun(root string, store workspace.Store) (*studioRun, error)
 			_ = log.Close()
 			return nil, err
 		}
-		if _, err := log.Seek(0, io.SeekEnd); err != nil {
+		end, err := log.Seek(0, io.SeekEnd)
+		if err != nil {
 			_ = log.Close()
 			return nil, err
 		}
-		run.log, run.closed = log, false
+		run.log, run.logBytes, run.closed = log, end, false
 		if err := run.append(app.SessionEvent{Type: "recovered", RunID: snapshot.ID, Detail: "Studio restarted while this turn was active; continue the session to recover persisted work"}); err != nil {
 			_ = log.Close()
 			return nil, err
@@ -538,56 +536,47 @@ func repairStudioRunTail(file *os.File) error {
 	return file.Truncate(start + int64(boundary))
 }
 
-func readStudioRunEvents(path string) ([]studioRunEvent, error) {
-	file, err := os.Open(path)
+func readStudioRunEvents(path string, visit func(studioRunEvent, int64)) (int64, error) {
+	file, err := fsopen.Open(path)
 	if err != nil {
-		return nil, err
+		return 0, err
 	}
 	defer func() { _ = file.Close() }()
-	info, err := file.Stat()
-	if err != nil {
-		return nil, err
-	}
-	if info.Size() > maximumRunLogSize {
-		return nil, fmt.Errorf("studio run log exceeds %d bytes", maximumRunLogSize)
-	}
-	scanner := bufio.NewScanner(io.LimitReader(file, maximumRunLogSize+1))
-	scanner.Buffer(make([]byte, 64<<10), maximumRunEventSize)
-	result := make([]studioRunEvent, 0)
-	var previous int64
-	var pending []byte
-	decode := func(body []byte) error {
+	return walkStudioRunEvents(file, 0, visit)
+}
+
+// walkStudioRunEvents retains one record at a time. Only incomplete final JSON
+// without a newline may be ignored; complete corrupt records and cursor gaps fail.
+func walkStudioRunEvents(source io.Reader, previous int64, visit func(studioRunEvent, int64)) (int64, error) {
+	reader := bufio.NewReader(source)
+	var offset int64
+	for {
+		body, readErr := reader.ReadBytes('\n')
+		if readErr != nil && !errors.Is(readErr, io.EOF) {
+			return offset, readErr
+		}
+		if len(body) == 0 {
+			return offset, nil
+		}
 		var event studioRunEvent
 		if err := json.Unmarshal(body, &event); err != nil {
-			return fmt.Errorf("decode Studio run event: %w", err)
+			if errors.Is(readErr, io.EOF) && !json.Valid(body) {
+				return offset, nil
+			}
+			return offset, fmt.Errorf("decode Studio run event: %w", err)
 		}
 		if event.Cursor != previous+1 {
-			return errors.New("studio run event cursor is not contiguous")
+			return offset, errors.New("studio run event cursor is not contiguous")
 		}
 		previous = event.Cursor
-		result = append(result, event)
-		return nil
-	}
-	for scanner.Scan() {
-		if pending != nil {
-			if err := decode(pending); err != nil {
-				return nil, err
-			}
+		if visit != nil {
+			visit(event, offset)
 		}
-		pending = append(pending[:0], scanner.Bytes()...)
-	}
-	if err := scanner.Err(); err != nil {
-		return nil, err
-	}
-	if pending != nil {
-		var tail [1]byte
-		_, readErr := file.ReadAt(tail[:], max(0, info.Size()-1))
-		partialTail := readErr == nil && tail[0] != '\n'
-		if err := decode(pending); err != nil && (!partialTail || json.Valid(pending)) {
-			return nil, err
+		offset += int64(len(body))
+		if errors.Is(readErr, io.EOF) {
+			return offset, nil
 		}
 	}
-	return result, nil
 }
 
 func (run *studioRun) append(event app.SessionEvent) error {
@@ -615,7 +604,8 @@ func (run *studioRun) append(event app.SessionEvent) error {
 	run.snapshot.Cursor = record.Cursor
 	run.snapshot.UpdatedAt = now
 	run.applyEventLocked(event, now)
-	run.events = append(run.events, record)
+	run.eventOffsets = append(run.eventOffsets, run.logBytes)
+	run.logBytes += int64(len(body))
 	if event.Type != "stream" || record.Cursor%32 == 0 {
 		if err := run.log.Sync(); err != nil {
 			return err
@@ -738,9 +728,12 @@ func (run *studioRun) snapshotCopy() studioRunSnapshot {
 	return result
 }
 
-func (run *studioRun) page(after int64, limit int) studioRunPage {
+func (run *studioRun) logPath() string {
+	return filepath.Join(run.store.SessionDir(), studioRunsDirectory, run.snapshot.ID+".ndjson")
+}
+
+func (run *studioRun) page(after int64, limit int) (studioRunPage, error) {
 	run.mu.Lock()
-	defer run.mu.Unlock()
 	if limit <= 0 || limit > maximumRunEventPage {
 		limit = maximumRunEventPage
 	}
@@ -750,20 +743,38 @@ func (run *studioRun) page(after int64, limit int) studioRunPage {
 		question.Choices = append([]app.AgentQuestionChoice(nil), question.Choices...)
 		result.Run.PendingQuestion = &question
 	}
-	for _, event := range run.events {
-		if event.Cursor <= after {
-			continue
-		}
+	first := max(after, 0)
+	if first >= int64(len(run.eventOffsets)) {
+		run.mu.Unlock()
+		return result, nil
+	}
+	count := min(limit, len(run.eventOffsets)-int(first))
+	start, end := run.eventOffsets[first], run.logBytes
+	if next := int(first) + count; next < len(run.eventOffsets) {
+		end = run.eventOffsets[next]
+	}
+	path := run.logPath()
+	run.mu.Unlock()
+
+	file, err := fsopen.Open(path)
+	if err != nil {
+		return studioRunPage{}, err
+	}
+	defer func() { _ = file.Close() }()
+	read, err := walkStudioRunEvents(io.NewSectionReader(file, start, end-start), first, func(event studioRunEvent, _ int64) {
 		result.Events = append(result.Events, event)
 		result.NextCursor = event.Cursor
-		if len(result.Events) == limit {
-			break
-		}
+	})
+	if err != nil {
+		return studioRunPage{}, err
 	}
-	return result
+	if len(result.Events) != count || read != end-start {
+		return studioRunPage{}, errors.New("studio run log is missing indexed events")
+	}
+	return result, nil
 }
 
-func (run *studioRun) wait(after int64, duration time.Duration, ctx context.Context) studioRunPage {
+func (run *studioRun) wait(after int64, duration time.Duration, ctx context.Context) (studioRunPage, error) {
 	for {
 		run.mu.Lock()
 		ready := run.snapshot.Cursor > after || terminalRunStatus(run.snapshot.Status)
@@ -890,7 +901,12 @@ func (service *sessionsService) serveRunEvents(writer http.ResponseWriter, reque
 	}
 	wait := min(time.Duration(waitMilliseconds)*time.Millisecond, maximumRunWait)
 	writer.Header().Set("Cache-Control", "no-store")
-	writeJSON(writer, http.StatusOK, run.wait(after, wait, request.Context()))
+	page, err := run.wait(after, wait, request.Context())
+	if err != nil {
+		writeSessionError(writer, err)
+		return
+	}
+	writeJSON(writer, http.StatusOK, page)
 }
 
 func (service *sessionsService) serveRunCommand(writer http.ResponseWriter, request *http.Request) {

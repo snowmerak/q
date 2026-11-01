@@ -25,6 +25,10 @@ local OpenAI-compatible HTTP fixture. They cover:
   record; a second restart must still replay all durable events exactly once.
 - Complete JSON records missing a final newline, corrupt complete records, and
   cursor gaps. Only incomplete final JSON can be discarded during recovery.
+- Run logs beyond 128 MiB, cursor paging after repeated restarts, and records at
+  the writable event-size boundary. Recovery streams the existing NDJSON format;
+  only record offsets remain in memory, and pages read their event bodies from
+  disk. Missing indexed records return an error instead of an empty success.
 - Gateway and System One provider creation/deletion, duplicate rejection,
   handler reopen, last-provider protection, and preservation of saved settings
   when Gateway application fails.

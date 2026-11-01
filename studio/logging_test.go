@@ -280,7 +280,7 @@ func TestRequestCorrelationSurvivesBrowserCancellation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, event := range reloaded.page(0, maximumRunEventPage).Events {
+	for _, event := range mustStudioRunPage(t, reloaded, 0, maximumRunEventPage).Events {
 		if event.Event.RequestID != requestID {
 			t.Fatalf("event lost correlation: %+v", event)
 		}

@@ -57,7 +57,7 @@ func TestStudioRunPreservesFailureDetails(t *testing.T) {
 						t.Fatal(err)
 					}
 				}
-				page := run.page(0, maximumRunEventPage)
+				page := mustStudioRunPage(t, run, 0, maximumRunEventPage)
 				if page.Run.Status != test.status || !strings.Contains(page.Run.Error, test.wantDetail) || !strings.Contains(page.Run.Error, test.failure.Error()) {
 					t.Fatalf("reloaded=%v: run = %#v", reload, page.Run)
 				}
@@ -95,7 +95,7 @@ func TestStudioRunKeepsEventFailureWhenRunnerReturnsCancellation(t *testing.T) {
 		t.Fatal(err)
 	}
 	service.wg.Wait()
-	page := run.page(0, maximumRunEventPage)
+	page := mustStudioRunPage(t, run, 0, maximumRunEventPage)
 	if page.Run.Status != "failed" || !strings.Contains(page.Run.Error, "persist Studio message event") || !strings.Contains(page.Run.Error, "studio run event exceeds") {
 		t.Fatalf("failure = %#v", page.Run)
 	}
@@ -128,7 +128,7 @@ func TestStudioRunDoesNotDuplicateReturnedEventFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 	service.wg.Wait()
-	page := run.page(0, maximumRunEventPage)
+	page := mustStudioRunPage(t, run, 0, maximumRunEventPage)
 	if page.Run.Status != "failed" || strings.Count(page.Run.Error, "persist Studio message event") != 1 {
 		t.Fatalf("failure = %#v", page.Run)
 	}

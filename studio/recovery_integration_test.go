@@ -110,7 +110,7 @@ func TestStudioRunRecoveryRepairsTailAndRebuildsStaleSnapshot(t *testing.T) {
 					_ = service.Close()
 					t.Fatalf("restart %d: %v", restart, loadErr)
 				}
-				page := recovered.page(0, maximumRunEventPage)
+				page := mustStudioRunPage(t, recovered, 0, maximumRunEventPage)
 				if page.Run.Status != "interrupted" || page.Run.PendingQuestion != nil {
 					t.Fatalf("restart %d: %#v", restart, page.Run)
 				}
@@ -139,14 +139,14 @@ func TestStudioRunRecoveryRejectsCorruptionBeforeTail(t *testing.T) {
 	if err := os.WriteFile(path, []byte("{broken}\n{\"cursor\":2}\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := readStudioRunEvents(path); err == nil {
+	if _, err := readStudioRunEvents(path, nil); err == nil {
 		t.Fatal("corrupt complete record was silently discarded")
 	}
 	for _, suffix := range []string{"\n", ""} {
 		if err := os.WriteFile(path, []byte("{\"cursor\":1}\n{\"cursor\":3}"+suffix), 0o600); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := readStudioRunEvents(path); err == nil || !strings.Contains(err.Error(), "contiguous") {
+		if _, err := readStudioRunEvents(path, nil); err == nil || !strings.Contains(err.Error(), "contiguous") {
 			t.Fatalf("cursor gap with suffix %q = %v", suffix, err)
 		}
 	}
