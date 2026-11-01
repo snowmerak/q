@@ -181,6 +181,13 @@ func resolveCommitRuntime(ctx context.Context, store config.Store, value config.
 		}
 		configuredClient, err = client.New(client.Config{
 			BaseURL: manager.Endpoint(), APIKey: manager.APIKey(), DefaultModel: value.Provider.Model,
+			GenerationConfig: func(ctx context.Context, model string) (client.GenerationSettings, error) {
+				current, err := store.Load()
+				if err != nil {
+					return client.GenerationSettings{}, err
+				}
+				return providerhost.ModelGenerationSettings(manager.Config(), current, model), nil
+			},
 			ModelAPIModes: value.EffectiveModelAPIModes(), ForwardUsageMetadata: true,
 			UsageRecorder: usageRecorder,
 		})
@@ -196,6 +203,13 @@ func resolveCommitRuntime(ctx context.Context, store config.Store, value config.
 		var err error
 		configuredClient, err = client.New(client.Config{
 			BaseURL: value.Provider.BaseURL, APIKey: apiKey, DefaultModel: value.Provider.Model, DisableAPIKey: apiKey == "",
+			GenerationConfig: func(ctx context.Context, model string) (client.GenerationSettings, error) {
+				current, err := store.Load()
+				if err != nil {
+					return client.GenerationSettings{}, err
+				}
+				return client.GenerationSettings{MaxTokens: current.ModelOutputLimits[model], TokenField: current.ModelOutputTokenFields[model], MaxAttempts: current.GenerationRecovery.Attempts(), SafeReplay: true, RequireFinishReason: !current.ModelAllowMissingFinishReason[model]}, nil
+			},
 			ModelAPIModes: value.EffectiveModelAPIModes(),
 			UsageRecorder: usageRecorder,
 		})

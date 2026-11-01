@@ -66,6 +66,16 @@ func (service *settingsService) serveModelCatalog(writer http.ResponseWriter, re
 	for _, model := range models {
 		option := modelOption{ID: model.ID, ContextLength: model.ContextLength, APIMode: mainConfig.ModelAPIMode(model.ID)}
 		option.Sampling = mainConfig.ModelSampling[model.ID]
+		option.MaxOutputTokens = model.MaxOutputTokens
+		option.AllowMissingFinishReason = mainConfig.ModelAllowMissingFinishReason[model.ID]
+		option.OutputTokenField = mainConfig.ModelOutputTokenFields[model.ID]
+		if limit, ok := mainConfig.ModelOutputLimits[model.ID]; ok {
+			option.OutputLimit = &limit
+		}
+		if i, _, ok := studioGatewayModelLocation(providerConfig, model.ID); ok {
+			kind := providerConfig.Providers[i].Type
+			option.OutputLimitUnsupported = kind == "chatgpt" || kind == "codex"
+		}
 		if providerIndex, upstreamID, found := studioGatewayModelLocation(providerConfig, model.ID); found {
 			option.ContextOverride = providerConfig.Providers[providerIndex].ModelMetadata[upstreamID].ContextLength
 		}

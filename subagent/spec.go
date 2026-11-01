@@ -3,6 +3,7 @@ package subagent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 
@@ -173,6 +174,20 @@ func (s *Spec) Chat(ctx context.Context, configured client.ModelChatClient, requ
 	if s == nil {
 		return nil, fmt.Errorf("subagent: model spec is nil")
 	}
+	if s.Group != "" {
+		request.Model = "group/" + s.Group
+	} else {
+		s.Apply(&request)
+	}
+	return client.RecoverGeneration(ctx, configured, request, func(ctx context.Context, request client.ChatRequest) (*client.ChatResponse, error) {
+		return s.chat(ctx, configured, request)
+	})
+}
+
+func (s *Spec) chat(ctx context.Context, configured client.ModelChatClient, request client.ChatRequest) (*client.ChatResponse, error) {
+	if s == nil {
+		return nil, fmt.Errorf("subagent: model spec is nil")
+	}
 	if request.ConversationID == "" {
 		request.ConversationID = s.conversationID
 	}
@@ -188,7 +203,7 @@ func (s *Spec) Chat(ctx context.Context, configured client.ModelChatClient, requ
 	}
 	previousCandidate := s.activeCandidate
 	response, selected, err := s.Router.RouteChat(ctx, configured, request, s.Candidates, s.activeCandidate)
-	if err == nil {
+	if _, incomplete := errors.AsType[*client.IncompleteGeneration](err); err == nil || incomplete {
 		s.activeCandidate = selected
 		s.Model = s.Candidates[selected].Model
 		s.ReasoningEffort = s.Candidates[selected].ReasoningEffort

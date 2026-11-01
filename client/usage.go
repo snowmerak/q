@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"net/http"
@@ -229,6 +230,9 @@ func (s *usageStream) Recv() (*ChatChunk, error) {
 		s.observe(chunk)
 	}
 	if err != nil {
+		if incomplete, ok := errors.AsType[*IncompleteGeneration](err); ok && incomplete.Response != nil {
+			s.usage = incomplete.Response.Usage
+		}
 		s.finish()
 	}
 	return chunk, err

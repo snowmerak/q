@@ -244,6 +244,9 @@ func parseResponseDocument(body json.RawMessage, affinity, requestedModel string
 	if document.Error != nil {
 		return nil, fmt.Errorf("client: Responses failed: %s", responseFailureMessage(document))
 	}
+	if document.Status == "incomplete" {
+		return nil, incompleteResponse(document, affinity, requestedModel, body)
+	}
 	if document.Status != "completed" {
 		return nil, fmt.Errorf("client: Responses ended with status %q: %s", document.Status, responseFailureMessage(document))
 	}
@@ -331,6 +334,10 @@ func (c *Client) responsesChat(ctx context.Context, request ChatRequest) (*ChatR
 		return nil, err
 	}
 	response, err := parseResponseDocument(raw.Body, affinity, request.Model)
+	if incomplete, ok := errors.AsType[*IncompleteGeneration](err); ok && incomplete.Response != nil {
+		incomplete.Response.Headers = raw.Headers
+		c.recordChatUsage(ctx, request, incomplete.Response.Model, incomplete.Response.Usage, estimateResponseTokens(incomplete.Response))
+	}
 	if response != nil {
 		response.Headers = raw.Headers
 		c.recordChatUsage(ctx, request, response.Model, response.Usage, estimateResponseTokens(response))
@@ -467,6 +474,19 @@ func (s *responsesChunkStream) Recv() (*ChatChunk, error) {
 			}
 			s.output[index] = append(json.RawMessage(nil), data.Item...)
 		case "response.failed", "response.incomplete", "error":
+			if kind == "response.incomplete" && len(data.Response) > 0 {
+				var document responseDocument
+				if err := json.Unmarshal(data.Response, &document); err != nil {
+					return nil, err
+				}
+				incomplete := incompleteResponse(document, s.affinity, s.model, data.Response)
+				if incomplete.Response.Choices[0].Message.Content == "" {
+					incomplete.Response.Choices[0].Message.Content = s.text.String()
+				}
+				incomplete.Response.Headers = s.ResponseHeaders()
+				s.completed = true
+				return nil, incomplete
+			}
 			message := data.Message
 			if data.Error != nil && data.Error.Message != "" {
 				message = data.Error.Message

@@ -23,6 +23,16 @@ func (state *transferState) merge(section, id string, data json.RawMessage) erro
 	switch section {
 	case "models":
 		switch kind {
+		case "generation-recovery":
+			if id != kind {
+				break
+			}
+			value, err := transferValue[config.GenerationRecoveryConfig](data)
+			if err != nil {
+				return err
+			}
+			state.main.GenerationRecovery = value
+			return nil
 		case "default":
 			if id != kind {
 				break
@@ -87,6 +97,36 @@ func (state *transferState) merge(section, id string, data json.RawMessage) erro
 				state.main.ModelAPIModes = make(map[string]string)
 			}
 			state.main.ModelAPIModes[name] = value
+			return nil
+		case "allow-missing-finish-reason":
+			value, err := transferValue[bool](data)
+			if err != nil {
+				return err
+			}
+			if state.main.ModelAllowMissingFinishReason == nil {
+				state.main.ModelAllowMissingFinishReason = make(map[string]bool)
+			}
+			state.main.ModelAllowMissingFinishReason[name] = value
+			return nil
+		case "output-limit":
+			value, err := transferValue[int](data)
+			if err != nil {
+				return err
+			}
+			if state.main.ModelOutputLimits == nil {
+				state.main.ModelOutputLimits = make(map[string]int)
+			}
+			state.main.ModelOutputLimits[name] = value
+			return nil
+		case "output-token-field":
+			value, err := transferValue[string](data)
+			if err != nil {
+				return err
+			}
+			if state.main.ModelOutputTokenFields == nil {
+				state.main.ModelOutputTokenFields = make(map[string]string)
+			}
+			state.main.ModelOutputTokenFields[name] = value
 			return nil
 		case "sampling":
 			value, err := transferValue[config.SamplingConfig](data)
@@ -343,6 +383,9 @@ func transferTouchesMain(bundle settingsBundle) bool {
 // Validate the complete merged state before any file is changed, so dependencies
 // can be imported together even when they span multiple tabs.
 func (state *transferState) validate(ctx context.Context, bundle settingsBundle, directory string) error {
+	if err := providerhost.ValidateOutputLimits(state.providers, state.main); err != nil {
+		return err
+	}
 	if transferTouchesMain(bundle) || len(bundle.Sections["subagents"]) > 0 {
 		normalized, err := state.main.LSP.Normalized()
 		if err != nil {

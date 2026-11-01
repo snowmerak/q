@@ -48,7 +48,7 @@ type skillHintSearcher interface {
 	SearchSkillHints(context.Context, string, int) (qtools.SkillHintSearchResult, error)
 }
 
-func managedClientFactory(runtime providerRuntime, recorder client.UsageRecorder) clientFactory {
+func managedClientFactory(runtime providerRuntime, recorder client.UsageRecorder, stores ...config.Store) clientFactory {
 	return func(value config.Config) (chatClient, error) {
 		endpoint, apiKey := managedGatewayConnection(runtime)
 		if endpoint == "" {
@@ -69,6 +69,17 @@ func managedClientFactory(runtime providerRuntime, recorder client.UsageRecorder
 			ProviderAPIModes:     providerModes,
 			UsageRecorder:        recorder,
 			ForwardUsageMetadata: true,
+			GenerationConfig: func(ctx context.Context, model string) (client.GenerationSettings, error) {
+				current := value
+				if len(stores) > 0 {
+					var err error
+					current, err = stores[0].Load()
+					if err != nil {
+						return client.GenerationSettings{}, err
+					}
+				}
+				return providerhost.ModelGenerationSettings(runtime.Config(), current, model), nil
+			},
 		})
 	}
 }
@@ -105,7 +116,7 @@ func Run(ctx context.Context, store config.Store) (returnErr error) {
 	runtimeContext := host.Context()
 	memoryContext := host.MemoryContext()
 	manager := host.Manager()
-	factory := managedClientFactory(manager, host.Recorder())
+	factory := managedClientFactory(manager, host.Recorder(), store)
 	lifecycle := newStartupLifecycle()
 	initialModel := newManagedModel(runtimeContext, store, factory, manager)
 	initialModel.workspaceStore = &workspaceStore
@@ -170,7 +181,7 @@ func RunGatewayConfig(ctx context.Context, store config.Store) (returnErr error)
 	}
 	usageRecorder := newUsageRecorder(store)
 	defer func() { returnErr = errors.Join(returnErr, usageRecorder.Close()) }()
-	m := newManagedModel(runtimeContext, store, managedClientFactory(manager, usageRecorder), manager)
+	m := newManagedModel(runtimeContext, store, managedClientFactory(manager, usageRecorder, store), manager)
 	m.gatewayConfigOnly = true
 	m.config = config.Default()
 	m.enterGatewaySettings()

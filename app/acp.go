@@ -110,7 +110,7 @@ func openACPHost(parent context.Context, store config.Store, root string) (*acpH
 	manager := runtime.Manager()
 	lifecycle := newStartupLifecycle()
 	host.lifecycle = lifecycle
-	factory := managedClientFactory(manager, runtime.Recorder())
+	factory := managedClientFactory(manager, runtime.Recorder(), store)
 	initialized := (startupRequest{
 		ctx:            runtimeContext,
 		memoryCtx:      memoryContext,
@@ -1465,7 +1465,7 @@ func (a *acpAgent) finishPrompt(response client.ChatResponse, requestEstimate in
 	}
 	a.state.messages = append(a.state.messages, message)
 	a.state.memory.Append(message)
-	a.state.memory.ObserveUsage(response.Usage.PromptTokens, requestEstimate)
+	a.state.memory.ObserveUsage(client.ContextUsage(&response).PromptTokens, requestEstimate)
 	a.state.conversationID = response.ConversationID
 	a.state.archiveMessage(message, sessionstore.StatusSucceeded, false)
 

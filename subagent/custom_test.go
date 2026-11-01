@@ -262,7 +262,7 @@ func TestCustomRunnerEmptyLimitAndCancellation(t *testing.T) {
 		responses []client.Message
 		rounds    int
 		want      string
-	}{{"empty", []client.Message{{Role: client.RoleAssistant}, {Role: client.RoleAssistant}, {Role: client.RoleAssistant}, {Role: client.RoleAssistant}}, 4, "without task_complete"}, {"limit", []client.Message{{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{scoutCall("nope", "{}")}}}, 1, "exceeded"}} {
+	}{{"empty", []client.Message{{Role: client.RoleAssistant}, {Role: client.RoleAssistant}, {Role: client.RoleAssistant}, {Role: client.RoleAssistant}}, 4, "empty_response"}, {"limit", []client.Message{{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{scoutCall("nope", "{}")}}}, 1, "exceeded"}} {
 		t.Run(tc.name, func(t *testing.T) {
 			_, err := (CustomRunner{Client: &fakeScoutClient{responses: tc.responses}, Tools: &fakeScoutTools{available: skillTestTools()}, Profile: p, Spec: Spec{Role: p.Role, Model: "test"}, MaxRounds: tc.rounds}).Run(t.Context(), "test")
 			if err == nil || !strings.Contains(err.Error(), tc.want) {

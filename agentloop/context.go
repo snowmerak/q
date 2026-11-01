@@ -123,13 +123,31 @@ func (c *Context) CompactIfNeeded(
 	return c.compact(ctx, configuredClient, modelID, reasoningEffort, plan)
 }
 
+// CompactAfterLimit uses only normal retained history. It never installs the
+// rejected provider output and the compaction model cannot recursively retry.
+func (c *Context) CompactAfterLimit(ctx context.Context, configuredClient ChatClient, modelID, effort string) (*AgentContextCompaction, error) {
+	if c == nil || c.manager == nil {
+		return nil, errors.New("context compaction is unavailable")
+	}
+	plan, err := c.manager.PlanWithRetention(loopRetention())
+	if err != nil {
+		return nil, err
+	}
+	settings, err := client.ResolveGenerationSettings(ctx, configuredClient, modelID)
+	if err != nil {
+		return nil, err
+	}
+	settings.MaxAttempts = 0
+	return c.compact(client.WithGenerationSettings(ctx, settings), configuredClient, modelID, effort, plan)
+}
+
 func (c *Context) compact(ctx context.Context, configuredClient ChatClient, modelID, reasoningEffort string, plan memory.Plan) (*AgentContextCompaction, error) {
 	checkpointText, ready := plan.CheckpointWithoutModel()
 	if !ready {
 		if configuredClient == nil {
 			return nil, errors.New("agent loop: context compaction requires a model client")
 		}
-		response, err := chatWithEmptyResponseRecovery(ctx, configuredClient, client.ChatRequest{
+		response, err := chatWithEmptyResponseRecovery(client.WithStructuredGeneration(ctx), configuredClient, client.ChatRequest{
 			Model: modelID, Messages: plan.RequestMessages(),
 			ReasoningEffort: reasoningEffort, Extra: c.extra,
 		})

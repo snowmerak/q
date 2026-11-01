@@ -97,6 +97,8 @@ func newHandlerRuntime(parent context.Context, store config.Store, runner sessio
 	mux.HandleFunc("DELETE /api/v1/settings/roles/{role}", settings.serveCustomRoleDelete)
 	mux.HandleFunc("PUT /api/v1/settings/model-api-mode", settings.serveModelAPIModeUpdate)
 	mux.HandleFunc("PUT /api/v1/settings/model-sampling", settings.serveModelSamplingUpdate)
+	mux.HandleFunc("PUT /api/v1/settings/model-output-limit", settings.serveModelOutputLimitUpdate)
+	mux.HandleFunc("PUT /api/v1/settings/generation-recovery", settings.serveGenerationRecoveryUpdate)
 	mux.HandleFunc("PUT /api/v1/settings/gateway/model-metadata", settings.serveModelMetadataUpdate)
 	mux.HandleFunc("POST /api/v1/settings/gateway/providers", settings.serveProviderCreate)
 	mux.HandleFunc("PUT /api/v1/settings/gateway/providers/{provider}", settings.serveProviderUpdate)

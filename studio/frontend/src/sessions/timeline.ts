@@ -64,6 +64,12 @@ export function buildTimeline(messages: Message[], thoughts: { before: number; c
       entries.push({ kind: 'message', message: { role: 'tool', name: event.name, tool_call_id: event.call_id, content: event.content } });
     } else if (event.type === 'result') {
       finishResponse(event.content || '', event.usage);
+    } else if (event.type === 'trace' && event.kind === 'generation') {
+      try {
+        const attempt = JSON.parse(event.content || '{}');
+        if (attempt.action === 'regenerate') finishResponse('');
+      } catch { /* retain legacy trace */ }
+      entries.push({ kind: 'activity', event });
     } else if (['activity', 'trace', 'question', 'error', 'cancelled', 'recovered', 'control'].includes(event.type)) {
       if (['error', 'cancelled', 'recovered'].includes(event.type)) finishResponse('');
       entries.push({ kind: 'activity', event });

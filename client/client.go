@@ -32,6 +32,7 @@ type Config struct {
 	// ForwardUsageMetadata sends Q's bounded role and event ID headers. Enable
 	// it only when BaseURL is a trusted Q Gateway, not an arbitrary provider.
 	ForwardUsageMetadata bool
+	GenerationConfig     func(context.Context, string) (GenerationSettings, error)
 
 	// DisableAPIKey explicitly suppresses OPENAI_API_KEY. This is useful for
 	// local compatible servers when the environment contains an unrelated key.
@@ -49,6 +50,7 @@ type Client struct {
 	forwardUsageMetadata bool
 	modelAPIModes        map[string]string
 	providerAPIModes     map[string]string
+	generationConfig     func(context.Context, string) (GenerationSettings, error)
 }
 
 // New validates config and constructs an OpenAI-compatible client.
@@ -100,6 +102,7 @@ func New(config Config) (*Client, error) {
 		forwardUsageMetadata: config.ForwardUsageMetadata,
 		modelAPIModes:        config.ModelAPIModes,
 		providerAPIModes:     config.ProviderAPIModes,
+		generationConfig:     config.GenerationConfig,
 	}, nil
 }
 

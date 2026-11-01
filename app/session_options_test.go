@@ -209,7 +209,7 @@ func TestSessionOptionsRetainActualQContextAndResumeAcrossHosts(t *testing.T) {
 	if _, err := run(host, "empty", "empty chair"); err == nil {
 		t.Fatal("expected empty response error")
 	} else {
-		for _, detail := range []string{"empty assistant response", "finish_reason=length", "response_id=response-123", "prompt_tokens=321", "completion_tokens=64"} {
+		for _, detail := range []string{"output_limit", "attempts=1", "response_id=response-123", "prompt_tokens=321", "output_tokens=64"} {
 			if !strings.Contains(err.Error(), detail) {
 				t.Fatalf("missing %s from %v", detail, err)
 			}

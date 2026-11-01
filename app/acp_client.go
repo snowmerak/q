@@ -424,17 +424,21 @@ func (r *acpRemoteClient) prompt(ctx context.Context, content string, events cha
 		r.mu.Unlock()
 	}
 	message, toolCalls := turn.result()
-	if requireCompletedText && (strings.TrimSpace(message.TextContent()) == "" || response.StopReason != acp.StopReasonEndTurn) {
-		return nil, toolCalls, errors.New("ACP participant did not produce a completed textual answer")
-	}
+	missingText := strings.TrimSpace(message.TextContent()) == ""
 	if strings.TrimSpace(message.TextContent()) == "" {
 		message.Content = "Agent turn completed without a textual response."
-		if response.StopReason != "" && response.StopReason != acp.StopReasonEndTurn {
+		if response.StopReason != acp.StopReasonEndTurn {
 			message.Content = "Agent stopped: " + string(response.StopReason)
 		}
 	}
 	result := &client.ChatResponse{Choices: []client.Choice{{Message: message}}}
 	result.Usage = acpResponseUsage(response.Usage)
+	if requireCompletedText && (missingText || response.StopReason != acp.StopReasonEndTurn) {
+		return result, toolCalls, &client.IncompleteGeneration{Reason: "incomplete_acp_participant", Response: result, Attempts: 1}
+	}
+	if response.StopReason != "" && response.StopReason != acp.StopReasonEndTurn {
+		return result, toolCalls, &client.IncompleteGeneration{Reason: string(response.StopReason), Response: result, Attempts: 1}
+	}
 	return result, toolCalls, nil
 }
 

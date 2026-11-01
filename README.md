@@ -988,6 +988,7 @@ failure diagnostics.
 - [Delegated subagents](docs/delegated-subagents.md)
 - [Delegation session recovery](docs/delegation-session-recovery.md)
 - [Model API modes and portable sessions](docs/model-api-mode-responses-plan.md)
+- [Model output limits and response recovery](docs/model-output-limits.md)
 - [Subagent architecture](docs/subagent-architecture-notes.md)
 - [Context compaction](docs/context-compaction-plan.md)
 - [Session Store](docs/session-store-notes.md)

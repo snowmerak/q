@@ -163,6 +163,16 @@ func (state transferState) bundle() (settingsBundle, error) {
 		put("models", "default", transferDefaultModel{Model: state.main.Provider.Model, ReasoningEffort: state.main.Provider.ReasoningEffort, ContextWindow: state.main.Provider.ContextWindow})
 	}
 	put("models", "embedding", transferEmbedding(state.main.Embedding))
+	put("models", "generation-recovery", state.main.GenerationRecovery)
+	for model, allow := range state.main.ModelAllowMissingFinishReason {
+		put("models", "allow-missing-finish-reason/"+model, allow)
+	}
+	for model, limit := range state.main.ModelOutputLimits {
+		put("models", "output-limit/"+model, limit)
+	}
+	for model, field := range state.main.ModelOutputTokenFields {
+		put("models", "output-token-field/"+model, field)
+	}
 	for _, role := range state.main.NativeRoles() {
 		assignment, found := state.main.Agents.Roles[role]
 		if !found {

@@ -593,7 +593,11 @@
     } else if (event.type === 'tool_call' || event.type === 'trace' || event.type === 'question') {
       if (event.type === 'tool_call') runStatus = `Running ${event.name || 'tool'}…`;
       if (event.type === 'question') runStatus = 'Waiting for your answer';
-      if (event.type === 'trace') scheduleDelegationRefresh();
+      if (event.type === 'trace') {
+        if (event.kind === 'generation') {
+          try { const attempt = JSON.parse(event.content || '{}'); if (attempt.action) runStatus = `Recovering response · ${attempt.action}`; } catch { /* legacy trace */ }
+        } else scheduleDelegationRefresh();
+      }
     } else if (event.type === 'result') {
       runStatus = event.outcome === 'succeeded' ? 'Completed' : event.outcome || 'Completed';
     } else if (event.type === 'error' || event.type === 'cancelled' || event.type === 'recovered') {

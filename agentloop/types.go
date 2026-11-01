@@ -103,6 +103,7 @@ type Event struct {
 	streamDelta    *AgentStreamDelta
 	taskStarted    *workspace.ActiveTask
 	taskCompleted  bool
+	generation     *client.GenerationAttempt
 	contextReplace *ContextReplacement
 	err            error
 }
@@ -176,6 +177,13 @@ func (e Event) Result() (Result, bool) {
 		return Result{}, false
 	}
 	return Result{Response: e.response, Outcome: e.outcome, RequestEstimate: e.requestEstimate, ToolCalls: e.toolCalls}, true
+}
+
+func (e Event) Generation() (client.GenerationAttempt, bool) {
+	if e.generation == nil {
+		return client.GenerationAttempt{}, false
+	}
+	return *e.generation, true
 }
 
 func (e Event) Err() error { return e.err }

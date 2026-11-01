@@ -43,15 +43,17 @@ type loomSettings struct {
 }
 
 type modelSettings struct {
-	ConfigPath          string                `json:"config_path"`
-	DefaultModel        string                `json:"default_model"`
-	DefaultReasoning    string                `json:"default_reasoning_effort"`
-	EmbeddingModel      string                `json:"embedding_model"`
-	EmbeddingDimensions int                   `json:"embedding_dimensions"`
-	EmbeddingChange     *embeddingChange      `json:"embedding_change,omitempty"`
-	GroupCount          int                   `json:"group_count"`
-	Groups              []modelGroupSettings  `json:"groups"`
-	Roles               []roleModelAssignment `json:"roles"`
+	ConfigPath          string                          `json:"config_path"`
+	DefaultModel        string                          `json:"default_model"`
+	DefaultReasoning    string                          `json:"default_reasoning_effort"`
+	EmbeddingModel      string                          `json:"embedding_model"`
+	EmbeddingDimensions int                             `json:"embedding_dimensions"`
+	EmbeddingChange     *embeddingChange                `json:"embedding_change,omitempty"`
+	GenerationRecovery  config.GenerationRecoveryConfig `json:"generation_recovery"`
+	RecoveryAttempts    int                             `json:"recovery_attempts"`
+	GroupCount          int                             `json:"group_count"`
+	Groups              []modelGroupSettings            `json:"groups"`
+	Roles               []roleModelAssignment           `json:"roles"`
 }
 
 type modelGroupSettings struct {
@@ -230,15 +232,20 @@ type systemOneModelOption struct {
 }
 
 type modelOption struct {
-	ID               string                `json:"id"`
-	ContextLength    int64                 `json:"context_length,omitempty"`
-	ReasoningControl string                `json:"reasoning_control,omitempty"`
-	ReasoningEfforts []string              `json:"reasoning_efforts,omitempty"`
-	DefaultEffort    string                `json:"default_effort,omitempty"`
-	Group            bool                  `json:"group,omitempty"`
-	APIMode          string                `json:"api_mode,omitempty"`
-	ContextOverride  int64                 `json:"context_override,omitempty"`
-	Sampling         config.SamplingConfig `json:"sampling"`
+	ID                       string                `json:"id"`
+	ContextLength            int64                 `json:"context_length,omitempty"`
+	ReasoningControl         string                `json:"reasoning_control,omitempty"`
+	ReasoningEfforts         []string              `json:"reasoning_efforts,omitempty"`
+	DefaultEffort            string                `json:"default_effort,omitempty"`
+	Group                    bool                  `json:"group,omitempty"`
+	APIMode                  string                `json:"api_mode,omitempty"`
+	ContextOverride          int64                 `json:"context_override,omitempty"`
+	AllowMissingFinishReason bool                  `json:"allow_missing_finish_reason"`
+	OutputLimit              *int                  `json:"output_limit,omitempty"`
+	OutputTokenField         string                `json:"output_token_field,omitempty"`
+	MaxOutputTokens          int64                 `json:"max_output_tokens,omitempty"`
+	OutputLimitUnsupported   bool                  `json:"output_limit_unsupported,omitempty"`
+	Sampling                 config.SamplingConfig `json:"sampling"`
 }
 
 type modelSamplingUpdate struct {

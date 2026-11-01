@@ -202,8 +202,9 @@ func (service *settingsService) snapshot() (settingsSnapshot, error) {
 			ConfigPath: service.main.Path(), DefaultModel: main.Provider.Model,
 			DefaultReasoning: main.Provider.EffectiveReasoningEffort(),
 			EmbeddingModel:   main.Embedding.Model, EmbeddingDimensions: main.Embedding.Dimensions,
-			EmbeddingChange: change,
-			GroupCount:      len(main.ModelGroups), Groups: groups, Roles: roleAssignments,
+			EmbeddingChange:    change,
+			GenerationRecovery: main.GenerationRecovery, RecoveryAttempts: main.GenerationRecovery.Attempts(),
+			GroupCount: len(main.ModelGroups), Groups: groups, Roles: roleAssignments,
 		},
 		Providers: providerSettings{ConfigPath: service.providers.Path(), Items: providerItems, APIKeys: gatewayKeys},
 		SystemOne: systemOneAPISettings{

@@ -527,7 +527,7 @@ func TestStudioBrowserFixture(t *testing.T) {
 	if address == "" {
 		t.Skip("launched by npm run test:e2e; browser boundary is not part of go test")
 	}
-	fixture := newStudioIntegration(t)
+	fixture := newStudioIntegrationConfigured(t, generationBrowserModel(t), nil)
 	other := t.TempDir()
 	gatewayProvider := serveJSON(t, fixture.handler, http.MethodPost, "/api/v1/settings/gateway/providers",
 		map[string]any{"id": "default", "type": "openai-compatible", "enabled": true, "base_url": fixture.modelURI})

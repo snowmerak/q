@@ -3,6 +3,7 @@ package providerhost
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -33,7 +34,7 @@ func ModelGroupHandler(inner http.Handler, store config.Store) http.Handler {
 		inner = http.NotFoundHandler()
 	}
 	return &modelGroupHandler{
-		inner: inner, store: store,
+		inner: inner, store: store, snapshotKey: rand.Text(),
 		circuits: make(map[string]*gatewayModelCircuit), now: time.Now,
 	}
 }
@@ -45,8 +46,9 @@ type gatewayModelCircuit struct {
 }
 
 type modelGroupHandler struct {
-	inner http.Handler
-	store config.Store
+	snapshotKey string
+	inner       http.Handler
+	store       config.Store
 
 	mu       sync.Mutex
 	circuits map[string]*gatewayModelCircuit
@@ -63,7 +65,7 @@ func (h *modelGroupHandler) ServeHTTP(writer http.ResponseWriter, request *http.
 		return
 	}
 	groups := value.ModelGroups
-	if len(groups) == 0 && len(value.ModelSampling) == 0 {
+	if len(groups) == 0 && len(value.ModelSampling) == 0 && len(value.ModelOutputLimits) == 0 && request.Method != http.MethodPost {
 		h.inner.ServeHTTP(writer, request)
 		return
 	}
@@ -201,6 +203,9 @@ func (h *modelGroupHandler) serveGroupRequest(writer http.ResponseWriter, reques
 		h.serveInnerBody(writer, request, body)
 		return
 	}
+	snapshot := request.Header.Get(client.OutputLimitSnapshotHeader)
+	request.Header = request.Header.Clone()
+	request.Header.Del(client.OutputLimitSnapshotHeader)
 	name, grouped := strings.CutPrefix(externalModel, modelGroupPrefix)
 	group, found := value.ModelGroups[name]
 	if !grouped || !found {
@@ -209,11 +214,16 @@ func (h *modelGroupHandler) serveGroupRequest(writer http.ResponseWriter, reques
 				writeGroupError(writer, http.StatusInternalServerError, err)
 				return
 			}
-			body, err = json.Marshal(fields)
-			if err != nil {
-				writeGroupError(writer, http.StatusInternalServerError, err)
-				return
-			}
+
+		}
+		if err := h.applyGenerationLimit(writer, fields, value, externalModel, responses, snapshot); err != nil {
+			writeGroupError(writer, http.StatusBadRequest, err)
+			return
+		}
+		body, err = json.Marshal(fields)
+		if err != nil {
+			writeGroupError(writer, http.StatusBadRequest, err)
+			return
 		}
 		h.serveInnerBody(writer, request, body)
 		return
@@ -239,6 +249,20 @@ func (h *modelGroupHandler) serveGroupRequest(writer http.ResponseWriter, reques
 		attemptBody, err := rewriteGroupRequest(fields, candidate, responses, value.ModelSampling[candidate.Model])
 		if err != nil {
 			writeGroupError(writer, http.StatusInternalServerError, err)
+			return
+		}
+		var attemptFields map[string]json.RawMessage
+		if err := json.Unmarshal(attemptBody, &attemptFields); err != nil {
+			writeGroupError(writer, http.StatusBadRequest, err)
+			return
+		}
+		if err := h.applyGenerationLimit(writer, attemptFields, value, candidate.Model, responses, snapshot); err != nil {
+			writeGroupError(writer, http.StatusBadRequest, err)
+			return
+		}
+		attemptBody, err = json.Marshal(attemptFields)
+		if err != nil {
+			writeGroupError(writer, http.StatusBadRequest, err)
 			return
 		}
 		attemptContext := request.Context()

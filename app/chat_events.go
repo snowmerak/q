@@ -1,6 +1,7 @@
 package app
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -61,8 +62,20 @@ func (m model) updateAgentEvent(message agentEventMsg) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(m.chatTick(), waitAgentEvent(message.events, message.turnID))
 	}
 	if event.trace != nil {
+		if event.trace.Kind == "generation" {
+			var attempt client.GenerationAttempt
+			if json.Unmarshal([]byte(event.trace.Content), &attempt) == nil && attempt.Action != "" {
+				m.status = "Recovering model response · " + attempt.Action
+			}
+			if attempt.Action == "regenerate" {
+				m.streamResponse = ""
+			}
+		}
 		m.appendAgentTrace(*event.trace)
 		m.resize(m.width, m.height)
+		if event.trace.Kind == "generation" {
+			m.rememberArchiveError(m.saveWorkspaceSession())
+		}
 		return m, tea.Batch(m.chatTick(), waitAgentEvent(message.events, message.turnID))
 	}
 	if event.status != "" {
@@ -160,7 +173,16 @@ func (m model) updateChatResult(message chatResultMsg) (tea.Model, tea.Cmd) {
 	m.pendingMessage = client.Message{}
 	m.streamResponse = ""
 	if message.err != nil {
+		if incomplete, ok := errors.AsType[*client.IncompleteGeneration](message.err); ok && incomplete.Response != nil {
+			partial := incomplete.Response
+			content := ""
+			if len(partial.Choices) > 0 {
+				content = partial.Choices[0].Message.TextContent()
+			}
+			m.retainIncompleteGeneration(incomplete.Reason, content, partial.Usage)
+		}
 		m.turnErr = errors.Join(m.turnErr, message.err)
+		m.refreshTranscript()
 		if saveErr := m.saveWorkspaceSession(); saveErr != nil {
 			m.turnErr = errors.Join(m.turnErr, saveErr)
 		}
@@ -209,7 +231,7 @@ func (m model) updateChatResult(message chatResultMsg) (tea.Model, tea.Cmd) {
 		if requestEstimate == 0 {
 			requestEstimate = m.requestEstimate
 		}
-		m.memory.ObserveUsage(message.response.Usage.PromptTokens, requestEstimate)
+		m.memory.ObserveUsage(client.ContextUsage(message.response).PromptTokens, requestEstimate)
 		m.memory.Append(assistant)
 	}
 	if m.compactionTarget > 0 && message.response.Usage.PromptTokens > m.compactionTarget {

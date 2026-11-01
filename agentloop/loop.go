@@ -31,6 +31,9 @@ func RunAgentLoop(ctx context.Context, request Request, events chan<- Event) {
 		emitEvent(ctx, events, Event{err: errors.New("agent loop tool runtime is required")})
 		return
 	}
+	ctx = client.WithGenerationObserver(ctx, func(attempt client.GenerationAttempt) { emitEvent(ctx, events, Event{generation: &attempt}) })
+	contextLimitRecovered := false
+	var nextGenerationSettings *client.GenerationSettings
 	configuredClient := request.Client
 	toolRuntime := request.Tools
 	if request.AllowedTools != nil {
@@ -125,20 +128,42 @@ func RunAgentLoop(ctx context.Context, request Request, events chan<- Event) {
 		}
 		parallel := true
 		request.ParallelToolCalls = &parallel
+		generationCtx := ctx
+		if nextGenerationSettings != nil {
+			generationCtx = client.WithGenerationSettings(ctx, *nextGenerationSettings)
+			nextGenerationSettings = nil
+		}
 		var response *client.ChatResponse
 		if streamEnabled {
-			response, err = streamChatWithEmptyResponseRecovery(ctx, configuredClient, request, func(delta chatStreamDelta) bool {
+			response, err = streamChatWithEmptyResponseRecovery(generationCtx, configuredClient, request, func(delta chatStreamDelta) bool {
 				return emitEvent(ctx, events, Event{streamDelta: &delta})
 			})
 		} else {
-			response, err = chatWithEmptyResponseRecovery(ctx, configuredClient, request)
+			response, err = chatWithEmptyResponseRecovery(generationCtx, configuredClient, request)
 		}
 		if err != nil {
+			if incomplete, ok := errors.AsType[*client.IncompleteGeneration](err); ok && incomplete.Reason == "context_limit" && !contextLimitRecovered {
+				settings, settingsErr := client.ResolveGenerationSettings(generationCtx, configuredClient, modelID)
+				if incomplete.Settings != nil {
+					settings = *incomplete.Settings
+				}
+				if settingsErr == nil && settings.SafeReplay && settings.MaxAttempts-(incomplete.Attempts-1) > 0 {
+					contextLimitRecovered = true
+					compacted, compactErr := loopContext.CompactAfterLimit(ctx, configuredClient, modelID, reasoningEffort)
+					if compactErr == nil && compacted != nil && emitEvent(ctx, events, Event{compaction: compacted}) {
+						conversationID = ""
+						settings.MaxAttempts -= incomplete.Attempts
+						nextGenerationSettings = &settings
+						continue
+					}
+					err = errors.Join(err, compactErr)
+				}
+			}
 			emitEvent(ctx, events, Event{err: err})
 			return
 		}
 		if response != nil {
-			loopContext.Observe(response.Usage, requestEstimate)
+			loopContext.Observe(client.ContextUsage(response), requestEstimate)
 		}
 		if response == nil || len(response.Choices) == 0 {
 			emitEvent(ctx, events, Event{response: response, complete: true})
@@ -442,7 +467,7 @@ func RunAgentLoop(ctx context.Context, request Request, events chan<- Event) {
 					Role: client.RoleAssistant, Name: "q_task_complete_reply",
 					Content: renderTaskCompletion(completion),
 				}
-				loopContext.Observe(response.Usage, requestEstimate)
+				loopContext.Observe(client.ContextUsage(response), requestEstimate)
 				if !appendHistory(response.Choices[0].Message) {
 					return
 				}

@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"testing"
 
@@ -79,7 +80,7 @@ func (c *recoveringStreamingClient) ListModels(context.Context) ([]client.Model,
 }
 func (c *recoveringStreamingClient) Close() error { return nil }
 
-func TestStreamChatRetriesEmptyResponseThenDropsToolCallHistory(t *testing.T) {
+func TestStreamChatBoundsRecoveryAndRetainsToolCallHistory(t *testing.T) {
 	configured := &recoveringStreamingClient{}
 	tools := []client.Tool{{Type: client.ToolTypeFunction, Function: client.FunctionDefinition{Name: "inspect"}}}
 	response, err := streamChatWithEmptyResponseRecovery(t.Context(), configured, client.ChatRequest{
@@ -97,31 +98,16 @@ func TestStreamChatRetriesEmptyResponseThenDropsToolCallHistory(t *testing.T) {
 			{Role: client.RoleUser, Content: "continue"},
 		},
 	}, nil)
-	if err != nil {
-		t.Fatal(err)
+	if !errors.Is(err, agentloop.ErrEmptyChatResponse) || response != nil {
+		t.Fatalf("response=%+v err=%v", response, err)
 	}
-	if response.Choices[0].Message.Content != "recovered" || response.ConversationID != "recovered-thread" {
-		t.Fatalf("response = %#v", response)
+	if len(configured.requests) != 3 {
+		t.Fatalf("requests=%d; want a shared three-attempt bound", len(configured.requests))
 	}
-	if len(configured.requests) != 4 {
-		t.Fatalf("requests = %d, want 4", len(configured.requests))
-	}
-	if configured.requests[0].ConversationID != "existing-thread" {
-		t.Fatalf("first conversation = %q", configured.requests[0].ConversationID)
-	}
-	for index, request := range configured.requests[1:] {
-		if request.ConversationID != "" {
-			t.Fatalf("retry %d conversation = %q, want fresh", index+1, request.ConversationID)
+	for _, request := range configured.requests {
+		if len(request.Messages) != 6 || len(request.Messages[1].ToolCalls) != 1 || request.Messages[2].Role != client.RoleTool {
+			t.Fatalf("recovery discarded normal tool history: %+v", request.Messages)
 		}
-	}
-	recovery := configured.requests[3]
-	if len(recovery.Tools) != 1 || recovery.Tools[0].Function.Name != "inspect" {
-		t.Fatalf("recovery tools = %#v", recovery.Tools)
-	}
-	if len(recovery.Messages) != 3 || recovery.Messages[0].Role != client.RoleUser ||
-		recovery.Messages[1].Role != client.RoleAssistant || recovery.Messages[1].Content != "I found a clue." ||
-		len(recovery.Messages[1].ToolCalls) != 0 || recovery.Messages[2].Content != "continue" {
-		t.Fatalf("recovery messages = %#v", recovery.Messages)
 	}
 }
 

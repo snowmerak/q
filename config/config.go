@@ -50,18 +50,22 @@ const (
 var ErrNotFound = errors.New("q config not found")
 
 type Config struct {
-	Logging       LoggingConfig               `yaml:"logging,omitempty"`
-	Version       int                         `yaml:"version"`
-	Provider      ProviderConfig              `yaml:"provider"`
-	Embedding     EmbeddingConfig             `yaml:"embedding,omitempty"`
-	Context       ContextConfig               `yaml:"context,omitempty"`
-	Plan          PlanConfig                  `yaml:"plan,omitempty"`
-	ModelGroups   map[string]ModelGroupConfig `yaml:"model_groups,omitempty"`
-	ModelAPIModes map[string]string           `yaml:"model_api_modes,omitempty"`
-	ModelSampling map[string]SamplingConfig   `yaml:"model_sampling,omitempty"`
-	Agents        AgentsConfig                `yaml:"agents,omitempty"`
-	Loom          LoomConfig                  `yaml:"loom,omitempty"`
-	LSP           lsp.GlobalConfig            `yaml:"lsp,omitempty"`
+	Logging                       LoggingConfig               `yaml:"logging,omitempty"`
+	Version                       int                         `yaml:"version"`
+	Provider                      ProviderConfig              `yaml:"provider"`
+	Embedding                     EmbeddingConfig             `yaml:"embedding,omitempty"`
+	Context                       ContextConfig               `yaml:"context,omitempty"`
+	Plan                          PlanConfig                  `yaml:"plan,omitempty"`
+	ModelGroups                   map[string]ModelGroupConfig `yaml:"model_groups,omitempty"`
+	ModelAPIModes                 map[string]string           `yaml:"model_api_modes,omitempty"`
+	ModelSampling                 map[string]SamplingConfig   `yaml:"model_sampling,omitempty"`
+	ModelAllowMissingFinishReason map[string]bool             `yaml:"model_allow_missing_finish_reason,omitempty"`
+	ModelOutputLimits             map[string]int              `yaml:"model_output_limits,omitempty"`
+	ModelOutputTokenFields        map[string]string           `yaml:"model_output_token_fields,omitempty"`
+	GenerationRecovery            GenerationRecoveryConfig    `yaml:"generation_recovery,omitempty"`
+	Agents                        AgentsConfig                `yaml:"agents,omitempty"`
+	Loom                          LoomConfig                  `yaml:"loom,omitempty"`
+	LSP                           lsp.GlobalConfig            `yaml:"lsp,omitempty"`
 }
 
 type ProviderConfig struct {
@@ -254,6 +258,9 @@ func Default() Config {
 }
 
 func (c Config) Validate() error {
+	if err := c.validateGeneration(); err != nil {
+		return err
+	}
 	if c.Version != CurrentVersion {
 		return fmt.Errorf("config: unsupported version %d", c.Version)
 	}

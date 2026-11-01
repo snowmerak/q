@@ -280,7 +280,7 @@ func RunModel(ctx context.Context, store config.Store) (returnErr error) {
 
 	usageRecorder := newUsageRecorder(store)
 	defer func() { returnErr = errors.Join(returnErr, usageRecorder.Close()) }()
-	factory := managedClientFactory(manager, usageRecorder)
+	factory := managedClientFactory(manager, usageRecorder, store)
 	configuredClient, err := factory(loaded)
 	if err != nil {
 		return err

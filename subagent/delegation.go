@@ -692,7 +692,7 @@ func (r GeneralRunner) Run(ctx context.Context, prompt string) (result TaskResul
 		if !started {
 			request.ToolChoice = client.NamedToolChoice(TaskStartToolName)
 		}
-		response, err := r.Spec.Chat(ctx, r.Client, request)
+		response, err := history.Chat(withGenerationTrace(ctx, r.Trace, r.Spec.Role), &r.Spec, r.Client, request)
 		if err != nil {
 			return TaskResult{}, fmt.Errorf("subagent: model: %w", err)
 		}
@@ -708,7 +708,7 @@ func (r GeneralRunner) Run(ctx context.Context, prompt string) (result TaskResul
 		if assistant.ResponseModel == "" {
 			assistant.ResponseModel = r.Spec.Model
 		}
-		history.Observe(response.Usage)
+		history.Observe(client.ContextUsage(response))
 		history.Append(assistant)
 		state.Transcript = append(state.Transcript, assistant)
 		state.Round++

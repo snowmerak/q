@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 
 	"github.com/snowmerak/q/agentloop"
 )
@@ -48,6 +49,10 @@ func runAgentLoop(ctx context.Context, request AgentLoopRequest, events chan<- A
 func projectAgentLoopEvent(source agentloop.Event) agentEvent {
 	event := agentEvent{err: source.Err()}
 	event.status, _ = source.Status()
+	if attempt, ok := source.Generation(); ok {
+		content, _ := json.Marshal(attempt)
+		event.trace = &agentTrace{Agent: "model", Kind: "generation", Name: attempt.Reason, Content: string(content)}
+	}
 	if message, ok := source.Message(); ok {
 		event.message = &message
 		event.toolIsError = source.MessageIsToolError()

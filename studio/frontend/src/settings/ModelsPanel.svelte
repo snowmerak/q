@@ -74,7 +74,7 @@
       const response = await fetch('/api/v1/settings/models', { headers: { Accept: 'application/json' } });
       if (!response.ok) throw new Error(await responseError(response));
       const catalog = (await response.json()) as { models: ModelOption[] };
-      if (generation === catalogGeneration) modelOptions = catalog.models.map(model => ({ ...model, sampling: model.sampling ?? {} }));
+      if (generation === catalogGeneration) modelOptions = catalog.models.map(model => ({ ...model, sampling: model.sampling ?? {}, output_token_field: model.output_token_field ?? "" }));
     } catch (error) {
       if (generation === catalogGeneration) modelsError = error instanceof Error ? error.message : 'Models are unavailable';
     } finally {
@@ -170,6 +170,16 @@
     const root = localStorage.getItem('q-studio-workspace-root') || '';
     const query = root ? `?workspace_root=${encodeURIComponent(root)}` : '';
     queueSave(() => writeSettings('DELETE', `/api/v1/settings/roles/${encodeURIComponent(role.role)}${query}`));
+  }
+
+  function saveOutputLimit(model: ModelOption) {
+    const payload = JSON.stringify({ model: model.id, output_limit: model.output_limit ?? null, output_token_field: model.output_token_field || '', allow_missing_finish_reason: model.allow_missing_finish_reason ?? false });
+    queueSave(() => putSettings('/api/v1/settings/model-output-limit', payload));
+  }
+
+  function saveRecovery(value: string) {
+    const maxAttempts = value === '' ? null : Number(value);
+    queueSave(() => putSettings('/api/v1/settings/generation-recovery', JSON.stringify({ max_attempts: maxAttempts })));
   }
 
   function saveModelAPIMode(model: ModelOption) {
@@ -276,15 +286,24 @@
   </div>
   <div id="model-panel-behavior" role="tabpanel" aria-labelledby="model-tab-behavior" tabindex="0" hidden={activeTab !== 'behavior'}>
   <div class="subsection-heading"><div><h3>Model behavior</h3><p>Select an API mode, override context metadata, and configure sampling per model.</p></div></div>
+  <div class="settings-card generation-recovery-settings">
+    <label><span>Additional recovery attempts</span><input aria-label="Additional recovery attempts" type="number" min="0" max="5" step="1" value={settings.models.generation_recovery?.max_attempts ?? ''} placeholder="Default: 2" onchange={event => { if (event.currentTarget.reportValidity()) saveRecovery(event.currentTarget.value); }} /></label>
+    <p>Leave blank for 2 additional attempts. Zero disables automatic recovery. Each request keeps its output limit; recovery can increase the total token cost. Remote agents are not automatically replayed.</p>
+  </div>
   <div class="settings-card model-behavior-list">
     {#each modelOptions.filter((model) => !model.group) as model}
-      <div class="model-behavior-row"><div><strong>{model.id}</strong><small>{model.context_length ? `Discovered context ${model.context_length.toLocaleString()}` : 'No context metadata'}</small></div><label><span>API mode</span><select bind:value={model.api_mode} onchange={() => saveModelAPIMode(model)}><option value="chat_completions">Chat Completions</option><option value="responses">Responses</option></select></label><label><span>Context override</span><input type="number" min="0" placeholder="Provider metadata" bind:value={model.context_override} onchange={() => saveModelContextOverride(model)} /></label><ModelSampling model={model.id} bind:sampling={model.sampling} save={() => saveModelSampling(model)} /></div>
+      <div class="model-behavior-row"><div><strong>{model.id}</strong><small>{model.context_length ? `Discovered context ${model.context_length.toLocaleString()}` : 'No context metadata'}</small></div><label><span>API mode</span><select bind:value={model.api_mode} onchange={() => saveModelAPIMode(model)}><option value="chat_completions">Chat Completions</option><option value="responses">Responses</option></select></label><label><span>Context override</span><input type="number" min="0" placeholder="Provider metadata" bind:value={model.context_override} onchange={() => saveModelContextOverride(model)} /></label><label><span>Maximum output tokens</span><input aria-label={`Maximum output tokens for ${model.id}`} type="number" min="1" max={model.max_output_tokens || undefined} step="1" placeholder="Request / provider default" bind:value={model.output_limit} disabled={model.output_limit_unsupported} onchange={event => { if (event.currentTarget.reportValidity()) saveOutputLimit(model); }} /><small>{model.output_limit_unsupported ? 'This agent connection does not support an output limit.' : model.max_output_tokens ? `Model maximum: ${model.max_output_tokens.toLocaleString()}. Includes reasoning tokens.` : 'Includes reasoning tokens. Model maximum is unknown.'}</small></label><label><span>Chat token parameter</span><select aria-label={`Chat token parameter for ${model.id}`} bind:value={model.output_token_field} disabled={model.output_limit_unsupported} onchange={() => saveOutputLimit(model)}><option value="">Standard</option><option value="max_tokens">Legacy</option></select><small>{model.output_token_field || 'max_completion_tokens'}</small></label><label><span>Compatible server</span><span><input type="checkbox" aria-label={`Allow missing finish reason for ${model.id}`} bind:checked={model.allow_missing_finish_reason} onchange={() => saveOutputLimit(model)} /> Allow missing finish reason</span><small>Only enable for a server that omits termination metadata.</small></label><ModelSampling model={model.id} bind:sampling={model.sampling} save={() => saveModelSampling(model)} /></div>
     {:else}<div class="api-key-empty">Refresh Gateway models to edit their behavior.</div>{/each}
   </div>
   </div>
 </section>
 
 <style>
+  .generation-recovery-settings { display: grid; gap: 12px; margin-bottom: 18px; padding: 18px 20px; }
+  .generation-recovery-settings label { display: grid; gap: 8px; max-width: 260px; }
+  .generation-recovery-settings p { color: var(--muted); margin: 0; }
+  .model-behavior-row label { align-self: start; grid-template-rows: auto auto 1fr; }
+  .model-behavior-row label > span:has(input[type="checkbox"]) { display: flex; align-items: center; gap: 8px; }
   .model-tabs { display: flex; gap: 5px; overflow-x: auto; margin: 18px 0 24px; border-bottom: 1px solid var(--border); }
   .model-tabs button { flex: none; padding: 12px 14px; color: var(--muted); border: 0; border-bottom: 2px solid transparent; background: transparent; cursor: pointer; font-size: calc(14px * var(--text-scale)); }
   .model-tabs button[aria-selected="true"] { color: var(--accent-text); border-bottom-color: var(--accent); }

@@ -21,7 +21,7 @@ import (
 func TestConsumeChatStreamRetainsResponsesReplayItems(t *testing.T) {
 	output := json.RawMessage(`{"type":"reasoning","encrypted_content":"opaque"}`)
 	configured := &scriptedClient{stream: &chunkStream{chunks: []*client.ChatChunk{{
-		Choices: []client.Choice{{Delta: &client.Message{Role: client.RoleAssistant, Phase: "final_answer", Content: "answer", ResponseOutput: []json.RawMessage{output}, ResponseModel: "native/model"}}},
+		Choices: []client.Choice{{FinishReason: "stop", Delta: &client.Message{Role: client.RoleAssistant, Phase: "final_answer", Content: "answer", ResponseOutput: []json.RawMessage{output}, ResponseModel: "native/model"}}},
 	}}}}
 	response, _, err := agentloop.ConsumeChatStream(t.Context(), configured, client.ChatRequest{Model: "native/model"}, nil)
 	if err != nil {

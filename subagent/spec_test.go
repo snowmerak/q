@@ -24,7 +24,7 @@ func (c *groupChatClient) Chat(_ context.Context, request client.ChatRequest) (*
 	if request.Model == "primary" {
 		return nil, &client.APIError{StatusCode: http.StatusServiceUnavailable, Message: "temporary"}
 	}
-	return &client.ChatResponse{ConversationID: "cache_secondary"}, nil
+	return &client.ChatResponse{ConversationID: "cache_secondary", Choices: []client.Choice{{Message: client.Message{Content: "ready"}, FinishReason: "stop"}}}, nil
 }
 
 type conversationChatClient struct {
@@ -33,7 +33,7 @@ type conversationChatClient struct {
 
 func (c *conversationChatClient) Chat(_ context.Context, request client.ChatRequest) (*client.ChatResponse, error) {
 	c.requests = append(c.requests, request)
-	return &client.ChatResponse{ConversationID: "cache_subagent"}, nil
+	return &client.ChatResponse{ConversationID: "cache_subagent", Choices: []client.Choice{{Message: client.Message{Content: "ready"}, FinishReason: "stop"}}}, nil
 }
 
 type emptyFallbackChatClient struct {
@@ -45,7 +45,7 @@ func (c *emptyFallbackChatClient) Chat(_ context.Context, request client.ChatReq
 	if request.Model == "primary" {
 		return nil, &client.APIError{StatusCode: http.StatusServiceUnavailable, Message: "temporary"}
 	}
-	return &client.ChatResponse{}, nil
+	return &client.ChatResponse{Choices: []client.Choice{{Message: client.Message{Content: "ready"}, FinishReason: "stop"}}}, nil
 }
 
 func TestSpecChatReusesConversationIDWithinExecution(t *testing.T) {

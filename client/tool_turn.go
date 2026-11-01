@@ -37,6 +37,7 @@ func FinishToolTurn(
 	chat func(context.Context, ChatRequest) (*ChatResponse, error),
 	observe func(Message) error,
 ) (ToolTurnResult, error) {
+	ctx = context.WithValue(ctx, terminalGenerationKey{}, true)
 	var result ToolTurnResult
 	if len(request.Messages) == 0 || request.Messages[len(request.Messages)-1].Role != RoleTool {
 		return result, errors.New("finish tool turn: trailing tool result is required")

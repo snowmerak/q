@@ -207,7 +207,7 @@ func (r PlannerReviewRunner) Run(ctx context.Context, input TaskReviewRequest) (
 		} else if len(available) == 1 {
 			request.ToolChoice = client.NamedToolChoice(ReviewTaskToolName)
 		}
-		response, err := r.Spec.Chat(ctx, r.Client, request)
+		response, err := history.Chat(withGenerationTrace(ctx, r.Trace, r.Spec.Role), &r.Spec, r.Client, request)
 		if err != nil {
 			return TaskReview{}, fmt.Errorf("subagent: planner review model: %w", err)
 		}
@@ -215,7 +215,7 @@ func (r PlannerReviewRunner) Run(ctx context.Context, input TaskReviewRequest) (
 		if err != nil {
 			return TaskReview{}, fmt.Errorf("subagent: planner review: %w", err)
 		}
-		history.Observe(response.Usage)
+		history.Observe(client.ContextUsage(response))
 		history.Append(assistant)
 		traceAssistant(r.Trace, "planner", taskID, r.ExecutionID, assistant)
 		if lifecycle != nil {

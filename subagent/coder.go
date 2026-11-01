@@ -136,7 +136,7 @@ func (r *CoderRunner) run(
 		} else if reminders > 0 {
 			request.ToolChoice = client.NamedToolChoice(CoderCompleteToolName)
 		}
-		response, err := r.Spec.Chat(ctx, r.Client, request)
+		response, err := history.Chat(withGenerationTrace(ctx, r.Trace, r.Spec.Role), &r.Spec, r.Client, request)
 		if err != nil {
 			return CoderResult{}, fmt.Errorf("subagent: coder model: %w", err)
 		}
@@ -144,7 +144,7 @@ func (r *CoderRunner) run(
 		if err != nil {
 			return CoderResult{}, fmt.Errorf("subagent: coder: %w", err)
 		}
-		history.Observe(response.Usage)
+		history.Observe(client.ContextUsage(response))
 		history.Append(assistant)
 		traceAssistant(r.Trace, "coder", taskID, r.ExecutionID, assistant)
 		if lifecycle != nil {

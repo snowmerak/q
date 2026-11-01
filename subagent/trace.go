@@ -1,10 +1,25 @@
 package subagent
 
 import (
+	"context"
+	"encoding/json"
 	"strings"
 
 	"github.com/snowmerak/q/client"
 )
+
+func withGenerationTrace(ctx context.Context, trace TraceFunc, agent string) context.Context {
+	if trace == nil {
+		return ctx
+	}
+	if agent == "" {
+		agent = "model"
+	}
+	return client.WithGenerationObserver(ctx, func(attempt client.GenerationAttempt) {
+		body, _ := json.Marshal(attempt)
+		reportTrace(trace, TraceEvent{Agent: agent, Kind: "generation", Name: attempt.Reason, Content: string(body), IsError: attempt.Action == "" && attempt.Reason != "completed"})
+	})
+}
 
 const (
 	TraceAssistant  = "assistant"

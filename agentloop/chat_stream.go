@@ -59,8 +59,21 @@ func streamChatWithEmptyResponseRecovery(
 	emit func(chatStreamDelta) bool,
 ) (*client.ChatResponse, error) {
 	ctx = client.WithUsageRole(ctx, "main")
-	return recoverEmptyChatResponse(ctx, request, func(ctx context.Context, request client.ChatRequest) (*client.ChatResponse, error) {
-		return streamChatWithConversationRecovery(ctx, configuredClient, request, emit)
+	responseStarted := false
+	wrapped := func(delta chatStreamDelta) bool {
+		if delta.Kind == chatStreamResponse {
+			if responseStarted {
+				delta.Start = false
+			}
+			responseStarted = true
+		}
+		if emit == nil {
+			return true
+		}
+		return emit(delta)
+	}
+	return client.RecoverGeneration(ctx, configuredClient, request, func(ctx context.Context, request client.ChatRequest) (*client.ChatResponse, error) {
+		return streamChatWithConversationRecovery(ctx, configuredClient, request, wrapped)
 	})
 }
 
@@ -111,22 +124,52 @@ func consumeChatStream(
 			Index: 0, Message: client.Message{Role: client.RoleAssistant},
 		}},
 	}
+	if headers, ok := stream.(client.ResponseHeaderer); ok {
+		response.Headers = headers.ResponseHeaders()
+	}
 	received := false
 	startedThinking := false
 	startedResponse := false
+	refused := false
 	for {
 		chunk, recvErr := stream.Recv()
 		if errors.Is(recvErr, io.EOF) {
+			if refused {
+				response.Choices[0].FinishReason = "refusal"
+			}
+			settings, settingsErr := client.ResolveGenerationSettings(ctx, configuredClient, request.Model)
+			if settingsErr != nil {
+				return response, received, settingsErr
+			}
+			if response.Choices[0].FinishReason == "" && settings.RequireFinishReason {
+				return response, received, &client.IncompleteGeneration{Reason: "missing_finish_reason", Response: response}
+			}
 			return response, received, nil
 		}
 		if recvErr != nil {
-			return nil, received, recvErr
+			var incomplete *client.IncompleteGeneration
+			if errors.As(recvErr, &incomplete) {
+				if incomplete.Response != nil {
+					return incomplete.Response, received, recvErr
+				}
+				incomplete.Response = response
+				return response, received, incomplete
+			}
+			return response, received, &client.IncompleteGeneration{Reason: "stream_interrupted", Response: response, Cause: recvErr}
 		}
 		if chunk == nil {
 			continue
 		}
 		received = true
 		mergeChunkMetadata(response, chunk)
+		if refusal := client.RefusalText(chunk.Raw); refusal != "" {
+			refused = true
+			response.Choices[0].Message.Content += refusal
+			if emit != nil && !emit(chatStreamDelta{Kind: chatStreamResponse, Content: refusal, Start: !startedResponse}) {
+				return response, received, ctx.Err()
+			}
+			startedResponse = true
+		}
 		for _, choice := range chunk.Choices {
 			if choice.FinishReason != "" {
 				response.Choices[0].FinishReason = choice.FinishReason
@@ -183,6 +226,12 @@ func withStreamUsage(request client.ChatRequest) client.ChatRequest {
 }
 
 func mergeChunkMetadata(response *client.ChatResponse, chunk *client.ChatChunk) {
+	var raw struct {
+		Usage json.RawMessage `json:"usage"`
+	}
+	if len(chunk.Raw) > 0 && json.Unmarshal(chunk.Raw, &raw) == nil && len(raw.Usage) > 0 && string(raw.Usage) != "null" {
+		response.Raw = append(json.RawMessage(nil), chunk.Raw...)
+	}
 	if response.ID == "" {
 		response.ID = chunk.ID
 	}

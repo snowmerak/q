@@ -10,6 +10,20 @@ authorization, persistence, and dependency lifetimes.
 `app.RunAgentLoop` remains a compatibility facade for existing callers and
 projects core events into the TUI/ACP event shape.
 
+Model generation checks termination before dispatching tools. To opt an injected
+pure model client into bounded output recovery, pass a context created with
+`client.WithGenerationSettings(ctx, client.GenerationSettings{MaxTokens: 16384,
+MaxAttempts: 2, SafeReplay: true, RequireFinishReason: true})`. Leave `SafeReplay`
+false for clients that can execute their own tools. `MaxAttempts` counts extra
+semantic generations, excluding transport retries; zero disables them. Q's
+configured HTTP clients resolve this policy from model settings automatically.
+
+`Event.Generation()` reports incomplete/recovered attempts without inserting
+partial tool proposals into model context. `client.IncompleteGeneration` preserves
+partial output, usage and reason when recovery stops. A host should display and
+archive that output while keeping it out of the next model request. See
+[model output limits and recovery](model-output-limits.md) for the full policy.
+
 ## Install and import
 
 ### Reuse an existing Q session

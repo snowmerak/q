@@ -213,7 +213,7 @@ func NewSessionHost(parent context.Context, store config.Store) (*SessionHost, e
 	manager := runtime.Manager()
 	return &SessionHost{
 		ctx: runtime.Context(), runtime: runtime, store: store, manager: manager,
-		factory: managedClientFactory(manager, runtime.Recorder()), logs: logs,
+		factory: managedClientFactory(manager, runtime.Recorder(), store), logs: logs,
 	}, nil
 }
 

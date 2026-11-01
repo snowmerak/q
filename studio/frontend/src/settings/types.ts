@@ -45,6 +45,11 @@ export type ModelSampling = {
 export type ModelOption = {
   id: string;
   context_length?: number;
+  allow_missing_finish_reason?: boolean;
+  output_limit?: number | null;
+  output_token_field?: string;
+  max_output_tokens?: number;
+  output_limit_unsupported?: boolean;
   reasoning_control?: string;
   reasoning_efforts?: string[];
   default_effort?: string;
@@ -68,6 +73,8 @@ export type SettingsSnapshot = {
   };
   models: {
     config_path: string;
+    generation_recovery?: { max_attempts?: number };
+    recovery_attempts?: number;
     default_model: string;
     default_reasoning_effort: string;
     embedding_model: string;

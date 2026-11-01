@@ -117,7 +117,11 @@ func (c *ContextCompactor) Observe(usage client.Usage) {
 // after applying the new context so stateful providers cannot retain the
 // discarded pre-compaction history.
 func (c *ContextCompactor) CompactIfNeeded(ctx context.Context, spec *Spec, configured AgentClient) error {
-	if c == nil || c.memory == nil || !c.memory.ShouldCompact() {
+	return c.compact(ctx, spec, configured, false)
+}
+
+func (c *ContextCompactor) compact(ctx context.Context, spec *Spec, configured AgentClient, force bool) error {
+	if c == nil || c.memory == nil || !force && !c.memory.ShouldCompact() {
 		return nil
 	}
 	if spec == nil {
@@ -128,7 +132,7 @@ func (c *ContextCompactor) CompactIfNeeded(ctx context.Context, spec *Spec, conf
 		SummarizeOversizedRecent: true,
 	})
 	if err != nil {
-		if errors.Is(err, memory.ErrNothingToCompact) {
+		if errors.Is(err, memory.ErrNothingToCompact) && !force {
 			return nil
 		}
 		return err
@@ -141,7 +145,7 @@ func (c *ContextCompactor) CompactIfNeeded(ctx context.Context, spec *Spec, conf
 		}
 		compactor := *spec
 		compactor.conversationID = ""
-		response, err := compactor.Chat(ctx, configured, client.ChatRequest{
+		response, err := compactor.Chat(client.WithStructuredGeneration(ctx), configured, client.ChatRequest{
 			Messages: plan.RequestMessages(),
 		})
 		if err != nil {
@@ -162,6 +166,29 @@ func (c *ContextCompactor) CompactIfNeeded(ctx context.Context, spec *Spec, conf
 	c.usage = addUsage(c.usage, usage)
 	spec.conversationID = ""
 	return nil
+}
+
+// Chat permits one verified compaction on an explicit context-limit failure.
+// Rejected output is never appended, and the retry consumes the same budget.
+func (c *ContextCompactor) Chat(ctx context.Context, spec *Spec, configured AgentClient, request client.ChatRequest) (*client.ChatResponse, error) {
+	response, err := spec.Chat(ctx, configured, request)
+	incomplete, ok := errors.AsType[*client.IncompleteGeneration](err)
+	if !ok || incomplete.Reason != "context_limit" || incomplete.Settings == nil {
+		return response, err
+	}
+	settings := *incomplete.Settings
+	if !settings.SafeReplay || settings.MaxAttempts-incomplete.Attempts < 0 {
+		return response, err
+	}
+	compactionSettings := settings
+	compactionSettings.MaxAttempts = 0
+	if compactErr := c.compact(client.WithGenerationSettings(ctx, compactionSettings), spec, configured, true); compactErr != nil {
+		return response, errors.Join(err, compactErr)
+	}
+	settings.MaxAttempts -= incomplete.Attempts
+	request.Messages = c.RequestMessages()
+	request.ConversationID = ""
+	return spec.Chat(client.WithGenerationSettings(ctx, settings), configured, request)
 }
 
 func (s Spec) memoryPolicy() memory.Policy {

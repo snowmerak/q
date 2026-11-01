@@ -217,7 +217,7 @@ func (r *ScoutRunner) run(ctx context.Context, task ScoutTask, prompt string, li
 		} else if reminders > 0 {
 			request.ToolChoice = client.NamedToolChoice(ScoutCompleteToolName)
 		}
-		response, err := r.Spec.Chat(ctx, r.Client, request)
+		response, err := history.Chat(withGenerationTrace(ctx, r.Trace, r.Spec.Role), &r.Spec, r.Client, request)
 		if err != nil {
 			return ScoutResult{}, fmt.Errorf("subagent: scout model: %w", err)
 		}
@@ -226,7 +226,7 @@ func (r *ScoutRunner) run(ctx context.Context, task ScoutTask, prompt string, li
 			return ScoutResult{}, err
 		}
 		usage = addUsage(usage, response.Usage)
-		history.Observe(response.Usage)
+		history.Observe(client.ContextUsage(response))
 		history.Append(assistant)
 		traceAssistant(r.Trace, "scout", task.ID, task.ParentID, assistant)
 		if lifecycle != nil {

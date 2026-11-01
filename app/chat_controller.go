@@ -412,6 +412,7 @@ func (m model) interruptTurn() (tea.Model, tea.Cmd) {
 	m.asking = false
 	m.submitPending = false
 	m.pendingMessage = client.Message{}
+	m.retainIncompleteGeneration("cancelled", m.streamResponse, client.Usage{})
 	m.streamResponse = ""
 	m.pendingQuestion = askToUserInput{}
 	m.questionAnswer = nil

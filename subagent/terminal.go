@@ -28,7 +28,7 @@ func (s *Spec) FinishToolTurn(ctx context.Context, configured client.ModelChatCl
 			ctx, cancel = context.WithTimeout(ctx, s.Candidates[s.activeCandidate].Timeout)
 			defer cancel()
 		}
-		response, err := configured.Chat(ctx, request)
+		response, err := client.RecoverGeneration(ctx, configured, request, configured.Chat)
 		if err == nil && response != nil && response.ConversationID != "" {
 			s.conversationID = response.ConversationID
 		}
@@ -40,6 +40,7 @@ func finishRoleTool(ctx context.Context, configured AgentClient, spec *Spec, his
 	request client.ChatRequest, call client.ToolCall, result client.ToolResult,
 	trace TraceFunc, agent, taskID, parentID string, lifecycle *Lifecycle,
 ) (client.Usage, error) {
+	ctx = withGenerationTrace(ctx, trace, agent)
 	record := func(message client.Message) error {
 		history.Append(message)
 		if message.Role == client.RoleAssistant {

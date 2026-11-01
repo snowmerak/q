@@ -311,7 +311,7 @@ func runGriller[T any](
 		} else if reminders > 0 {
 			request.ToolChoice = client.NamedToolChoice(completion.tool.Function.Name)
 		}
-		response, err := r.Spec.Chat(ctx, r.Client, request)
+		response, err := history.Chat(withGenerationTrace(ctx, r.Trace, r.Spec.Role), &r.Spec, r.Client, request)
 		if err != nil {
 			return output, fmt.Errorf("subagent: griller model: %w", err)
 		}
@@ -319,7 +319,7 @@ func runGriller[T any](
 		if err != nil {
 			return output, fmt.Errorf("subagent: griller: %w", err)
 		}
-		history.Observe(response.Usage)
+		history.Observe(client.ContextUsage(response))
 		history.Append(assistant)
 		traceAssistant(r.Trace, "griller", task.ID, task.ParentID, assistant)
 		if len(assistant.ToolCalls) == 0 {
@@ -546,7 +546,7 @@ func (r PlannerRunner) Run(ctx context.Context, brief GrillBrief) (proposal Plan
 		} else if reminders > 0 {
 			request.ToolChoice = client.NamedToolChoice(SubmitPlanToolName)
 		}
-		response, err := r.Spec.Chat(ctx, r.Client, request)
+		response, err := history.Chat(withGenerationTrace(ctx, r.Trace, r.Spec.Role), &r.Spec, r.Client, request)
 		if err != nil {
 			return PlanProposal{}, fmt.Errorf("subagent: planner model: %w", err)
 		}
@@ -554,7 +554,7 @@ func (r PlannerRunner) Run(ctx context.Context, brief GrillBrief) (proposal Plan
 		if err != nil {
 			return PlanProposal{}, fmt.Errorf("subagent: planner: %w", err)
 		}
-		history.Observe(response.Usage)
+		history.Observe(client.ContextUsage(response))
 		history.Append(assistant)
 		traceAssistant(r.Trace, "planner", r.TaskID, r.ParentID, assistant)
 		if len(assistant.ToolCalls) == 0 {
