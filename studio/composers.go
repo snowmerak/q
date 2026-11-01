@@ -104,14 +104,29 @@ func (s *composerService) serveCollection(w http.ResponseWriter, r *http.Request
 	}
 }
 
-// recover marks abandoned turns only while holding the process lock. A second
-// Studio may read an active conversation but cannot mistake it for a crash.
+// recover reconciles abandoned turns with native completion while holding the
+// process lock. A second Studio cannot mistake an active conversation for a crash.
 func (s *composerService) recover(c *composer.Conversation) error {
 	changed := false
+	var operation *workspace.SessionOperation
 	for i := range c.Turns {
 		if c.Turns[i].Status == "running" {
-			c.Turns[i].Status = "interrupted"
-			c.Turns[i].Error = "Studio stopped before this reply finished. You can continue the conversation."
+			if !changed {
+				session, err := s.store.SessionStore(*c).Load()
+				if err != nil {
+					return err
+				}
+				operation = session.Operation
+			}
+			turn := &c.Turns[i]
+			turn.Status = "interrupted"
+			turn.Error = "Studio stopped before this reply finished. You can continue the conversation."
+			if operation != nil && operation.ID == turn.ID && operation.Prompt == turn.Prompt && operation.Completed {
+				turn.Answer, turn.Status, turn.Error = operation.Result, "completed", ""
+				if strings.TrimSpace(turn.Answer) == "" {
+					turn.Status, turn.Error = "failed", "model returned an empty reply"
+				}
+			}
 			changed = true
 		}
 	}
