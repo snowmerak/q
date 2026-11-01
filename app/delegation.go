@@ -86,10 +86,6 @@ type delegateInput struct {
 	WorkingDirectory string `json:"working_directory,omitempty"`
 }
 
-type delegateListInput struct {
-	WorkingDirectory string `json:"working_directory,omitempty"`
-}
-
 type changeRequestInput struct {
 	ID string `json:"change_request_id"`
 }
@@ -272,32 +268,6 @@ func findCheckoutRuntimeCloner(runtime agentToolRuntime) checkoutRuntimeCloner {
 	return nil
 }
 
-func canonicalDelegationDirectory(base, value string) (string, error) {
-	value = strings.TrimSpace(value)
-	if value == "" {
-		return "", errors.New("delegation: working directory is required")
-	}
-	if !filepath.IsAbs(value) {
-		value = filepath.Join(base, value)
-	}
-	absolute, err := filepath.Abs(value)
-	if err != nil {
-		return "", fmt.Errorf("delegation: resolve working directory: %w", err)
-	}
-	canonical, err := filepath.EvalSymlinks(absolute)
-	if err != nil {
-		return "", fmt.Errorf("delegation: resolve working directory links: %w", err)
-	}
-	info, err := os.Stat(canonical)
-	if err != nil {
-		return "", fmt.Errorf("delegation: inspect working directory: %w", err)
-	}
-	if !info.IsDir() {
-		return "", errors.New("delegation: working directory is not a directory")
-	}
-	return filepath.Clean(canonical), nil
-}
-
 func sameDelegationDirectory(left, right string) bool {
 	leftInfo, leftErr := os.Stat(left)
 	rightInfo, rightErr := os.Stat(right)
@@ -349,39 +319,21 @@ func (d *delegationDispatcher) forCheckout(ctx context.Context, checkoutRoot str
 	return child, closer, nil
 }
 
-func (d *delegationDispatcher) forWorkingDirectory(ctx context.Context, root string) (*delegationDispatcher, io.Closer, error) {
-	child, closer, err := d.forCheckout(ctx, root)
-	if err != nil {
-		return nil, nil, err
-	}
-	fail := func(err error) (*delegationDispatcher, io.Closer, error) {
-		if closer != nil {
-			_ = closer.Close()
-		}
-		return nil, nil, err
-	}
-	if d.registryFor != nil {
-		registry, err := d.registryFor(root)
-		if err != nil {
-			return fail(err)
-		}
-		child.registry = registry
-		child.external = configuredExternalDelegates(d.value, root, registry)
-	}
-	return child, closer, nil
-}
-
 func (r *delegationRuntime) Tools() []client.Tool {
 	if r == nil {
 		return nil
 	}
 	var result []client.Tool
-	result = append(result, r.base.Tools()...)
-	if len(r.available()) > 0 {
-		result = append(result, subagent.DelegateTools()...)
+	for _, tool := range r.base.Tools() {
+		if tool.Function.Name != subagent.DelegateListToolName && tool.Function.Name != subagent.DelegateToolName {
+			result = append(result, tool)
+		}
 	}
-	if r.store != nil && r.dispatcher.worktrees != nil {
-		result = append(result, subagent.ChangeRequestTools()...)
+	if r.store != nil && r.dispatcher != nil && r.dispatcher.worktrees != nil {
+		// Keep cleanup tools only for historical children; new work uses ticket review.
+		if bookmarks, err := r.store.LoadDelegations(); err == nil && len(bookmarks) > 0 {
+			result = append(result, subagent.ChangeRequestTools()...)
+		}
 	}
 	return result
 }
@@ -398,64 +350,11 @@ func (r *delegationRuntime) Call(ctx context.Context, call client.ToolCall) (cli
 		return client.ToolResult{}, errors.New("subagent delegation is unavailable")
 	}
 	switch call.Function.Name {
-	case subagent.DelegateListToolName:
-		var input delegateListInput
-		if err := decodeDelegationArguments(call.Function.Arguments, &input); err != nil {
-			return client.ToolResult{Content: err.Error(), IsError: true}, nil
+	case subagent.DelegateListToolName, subagent.DelegateToolName:
+		if call.Function.Name == subagent.DelegateToolName && r.store != nil {
+			return recoverRetiredDelegate(ctx, *r.store, call)
 		}
-		dispatcher := r.dispatcher
-		input.WorkingDirectory = strings.TrimSpace(input.WorkingDirectory)
-		var closer io.Closer
-		if input.WorkingDirectory != "" {
-			resolved, err := canonicalDelegationDirectory(dispatcher.workspace.checkoutRoot, input.WorkingDirectory)
-			if err != nil {
-				return client.ToolResult{Content: err.Error(), IsError: true}, nil
-			}
-			if !sameDelegationDirectory(resolved, dispatcher.workspace.checkoutRoot) {
-				dispatcher, closer, err = dispatcher.forWorkingDirectory(ctx, resolved)
-				if err != nil {
-					return client.ToolResult{Content: "open delegated working directory: " + err.Error(), IsError: true}, nil
-				}
-				defer func() { _ = closer.Close() }()
-			}
-		}
-		target := &delegationRuntime{dispatcher: dispatcher, caller: r.caller, stack: r.stack}
-		body, err := json.Marshal(target.available())
-		if err != nil {
-			return client.ToolResult{}, err
-		}
-		return client.ToolResult{Content: string(body)}, nil
-	case subagent.DelegateToolName:
-		var input delegateInput
-		if err := decodeDelegationArguments(call.Function.Arguments, &input); err != nil {
-			return client.ToolResult{Content: err.Error(), IsError: true}, nil
-		}
-		input.SubagentName = strings.TrimSpace(input.SubagentName)
-		input.Prompt = strings.TrimSpace(input.Prompt)
-		input.WorkingDirectory = strings.TrimSpace(input.WorkingDirectory)
-		if input.SubagentName == "" || input.Prompt == "" {
-			return client.ToolResult{Content: "subagent_name and prompt are required", IsError: true}, nil
-		}
-		if len(input.Prompt) > subagent.MaximumDelegatePromptBytes {
-			return client.ToolResult{Content: fmt.Sprintf("prompt must not exceed %d bytes", subagent.MaximumDelegatePromptBytes), IsError: true}, nil
-		}
-		dispatcher := r.dispatcher
-		var closer io.Closer
-		if input.WorkingDirectory != "" {
-			resolved, err := canonicalDelegationDirectory(dispatcher.workspace.checkoutRoot, input.WorkingDirectory)
-			if err != nil {
-				return client.ToolResult{Content: err.Error(), IsError: true}, nil
-			}
-			input.WorkingDirectory = resolved
-			if !sameDelegationDirectory(resolved, dispatcher.workspace.checkoutRoot) {
-				dispatcher, closer, err = dispatcher.forWorkingDirectory(ctx, resolved)
-				if err != nil {
-					return client.ToolResult{Content: "open delegated working directory: " + err.Error(), IsError: true}, nil
-				}
-				defer func() { _ = closer.Close() }()
-			}
-		}
-		return dispatcher.dispatch(ctx, r.caller, r.stack, r.store, r.taskID, call, input)
+		return retiredDelegationResult(), nil
 	case subagent.ChangeRequestReadToolName, subagent.ChangeRequestMergeToolName, subagent.ChangeRequestCloseToolName:
 		return r.callChangeRequest(ctx, call)
 	default:

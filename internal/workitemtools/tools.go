@@ -108,7 +108,7 @@ func Register(server *mcp.Server, client *library.Client, binding Binding) {
 	for _, kind := range []string{workitems.Issue, workitems.Ticket} {
 		description := "Create a workspace " + kind + " and its independently addressable body. Returns after durable source commit. Use issues/comments to record lessons and decisions, with evidence refs."
 		if kind == workitems.Ticket {
-			description += " Issuing a ticket automatically queues it for System One assignment to a joined subagent; no separate start call is required. Execution and manager review complete asynchronously."
+			description += " This is the supported way to request subagent work. Inspect workspace_members for joined candidates. Issuing a ticket automatically queues it for System One assignment to a joined subagent; no separate start call is required. Execution and manager review complete asynchronously."
 			description += " Always set execution_mode explicitly: report for read-only research; git for creating or editing project files, including project initialization. Git mode requires a clean existing repository with an initial commit; a missing repository does not make code work a report task."
 		}
 		mcp.AddTool(server, &mcp.Tool{Name: kind + "_create", Description: description}, func(ctx context.Context, _ *mcp.CallToolRequest, in createInput) (*mcp.CallToolResult, workitems.Item, error) {

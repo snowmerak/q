@@ -182,7 +182,7 @@ func TestCustomScreenShowsSeniorDeveloperReviewRoleAndDirectMutation(t *testing.
 		t.Fatal("senior developer definition is missing")
 	}
 	plain := ansi.Strip(m.customSelectionDetail())
-	for _, wanted := range []string{"INNER · MUTATES WORKSPACE", "Role    reviewer", "read_file", "list_directory", "loom_read", "edit_file", "write_file", "run_command", subagent.BuiltinJuniorDeveloperID, subagent.BuiltinWebSearchID} {
+	for _, wanted := range []string{"INNER · MUTATES WORKSPACE", "Role    reviewer", "read_file", "list_directory", "loom_read", "edit_file", "write_file", "run_command", "workspace_members", "ticket_create"} {
 		if !strings.Contains(plain, wanted) {
 			t.Fatalf("senior developer detail missing %q:\n%s", wanted, plain)
 		}

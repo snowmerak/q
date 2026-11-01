@@ -65,36 +65,13 @@ func TestStreamAgentWebTesterReturnsParentSynthesis(t *testing.T) {
 	}
 }
 
-func TestACPAgentRunsCanonicalWebTesterSubagentCommand(t *testing.T) {
-	parentClient := &fakeClient{}
-	agent, workspaceStore, connection := testACPAgent(t, parentClient, &fakeAgentTools{})
-	var received subagent.ExternalWebTesterInput
-	agent.state.toolRuntime = testAgentWebTesterRuntime(t, func(_ context.Context, input subagent.ExternalWebTesterInput) (subagent.ExternalWebTesterResult, error) {
-		received = input
-		return subagent.ExternalWebTesterResult{Agent: "browser", Outcome: "succeeded", Summary: "login verified"}, nil
-	})
-	agent.state.config.Agents.Connections = map[string]config.AgentConnectionConfig{"browser": {Preset: "codex"}}
-	agent.state.config.Agents.Roles = map[string]config.AgentConfig{
-		config.AgentRoleExternalWebTester: {Agent: "browser"},
-	}
-	sessionID := openTestACPSession(t, agent, workspaceStore.Root)
-	response, err := agent.Prompt(t.Context(), acp.PromptRequest{
-		SessionId: sessionID, Prompt: []acp.ContentBlock{acp.TextBlock("/subagent builtin/web-tester verify login")},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if response.StopReason != acp.StopReasonEndTurn || received.Request != "verify login" || len(parentClient.requests) != 1 {
-		t.Fatalf("response=%#v input=%#v requests=%#v", response, received, parentClient.requests)
-	}
-	var output string
-	for _, notification := range connection.snapshot() {
-		if update := notification.Update.AgentMessageChunk; update != nil && update.Content.Text != nil {
-			output += update.Content.Text.Text
-		}
-	}
-	if output != "reply 1" {
-		t.Fatalf("output = %q", output)
+func TestACPAgentRejectsDirectWebTesterSubagentCommand(t *testing.T) {
+	c := &fakeClient{}
+	agent, ws, _ := testACPAgent(t, c, &fakeAgentTools{})
+	id := openTestACPSession(t, agent, ws.Root)
+	_, err := agent.Prompt(t.Context(), acp.PromptRequest{SessionId: id, Prompt: []acp.ContentBlock{acp.TextBlock("/subagent builtin/web-tester inspect")}})
+	if err == nil || !strings.Contains(err.Error(), "ticket_create") || len(c.requests) != 0 {
+		t.Fatalf("direct subagent executed: %v requests=%d", err, len(c.requests))
 	}
 }
 

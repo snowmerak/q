@@ -2,6 +2,8 @@
   import { onMount } from 'svelte';
   import { Check, ChevronDown, ChevronsDown, CircleCheck, CircleDot, CircleX, ClipboardList, FileText, GitCompareArrows, GitMerge, Link2, MessageSquareReply, MessagesSquare, Pencil, Plus, RefreshCw, RotateCcw, Save, Search, Send, Settings2, SlidersHorizontal, X } from '@lucide/svelte';
   import { requestResponse } from './api';
+  import Markdown from './Markdown.svelte';
+  import AttemptResult from './workitems/AttemptResult.svelte';
   import type { StudioProject } from './sessions/types';
   export let kind: 'issue' | 'ticket' = 'issue';
   type Item = { id: string; workspace_id: string; kind: string; number: number; title: string; body_post_id: string; state: string; labels: string[]; acceptance?: string[]; execution_mode?: string; requested_member_id?: string; linked_issue_id?: string; execution_state?: string; execution_reason?: string; active_attempt_id?: string; assigned_member_id?: string; revision: number; deleted: boolean; updated_at: string };
@@ -39,6 +41,7 @@
   let members: Member[] = [];
   let memberID = '';
   let attempts: Attempt[] = [];
+  let openAttempts: Record<string, boolean> = {};
   let deliveryErrors: { id: string; delivery_error: string; next_delivery_at?: string }[] = [];
   let feedback = '';
   let diff = '';
@@ -170,19 +173,22 @@
     </section>
     {#if selected}<section class="work-thread" aria-label="Work item thread"><header><div class="thread-heading"><small>{project?.name} · {selected.state}</small><div class="work-action-group"><button class="secondary-button work-icon-button" onclick={beginDetails} disabled={busy} title="Edit details" aria-label="Edit details"><Settings2 aria-hidden="true" size={17} /></button>{#if kind === 'issue'}<button class="secondary-button work-icon-button" onclick={toggleIssue} disabled={busy} title={selected.state === 'open' ? 'Close issue' : 'Reopen issue'} aria-label={selected.state === 'open' ? 'Close issue' : 'Reopen issue'}>{#if selected.state === 'open'}<CircleCheck aria-hidden="true" size={17} />{:else}<CircleDot aria-hidden="true" size={17} />{/if}</button>{/if}</div></div><h2>#{selected.number} {selected.title}</h2><code>{selected.id}</code></header>
       {#if editDetails}<form onsubmit={(event) => { event.preventDefault(); void saveDetails(); }}><label>Title<input aria-label="Edit work item title" bind:value={detailTitle} required maxlength="512" /></label><label>Labels<input bind:value={detailLabels} /></label>{#if selected.kind === 'ticket'}<label>Acceptance criteria<textarea bind:value={detailAcceptance} rows="3"></textarea></label><label>Execution mode<select aria-label="Execution mode" bind:value={detailMode}><option value="report">Report / research</option><option value="git">Git worktree with review</option></select><small class="mode-help">{executionGuidance[detailMode]}</small></label><label>Requested member<select bind:value={detailMember}><option value="">System One selects</option>{#each members.filter(m => !m.disabled) as member}<option value={member.id}>{member.agent_id}</option>{/each}</select></label><label>Linked issue ID<input bind:value={detailIssue} /></label>{/if}<div class="work-action-group"><button class="secondary-button work-icon-button" type="submit" disabled={busy} title="Save details" aria-label="Save details"><Save aria-hidden="true" size={17} /></button><button class="secondary-button work-icon-button" type="button" onclick={() => editDetails = false} title="Cancel" aria-label="Cancel"><X aria-hidden="true" size={17} /></button></div></form>{/if}
-      {#if selected.acceptance?.length}<h3>Acceptance criteria</h3><ul>{#each selected.acceptance as criterion}<li>{criterion}</li>{/each}</ul>{/if}
+      {#if selected.acceptance?.length}<h3>Acceptance criteria</h3><ul class="acceptance-criteria">{#each selected.acceptance as criterion}<li><Markdown content={criterion} /></li>{/each}</ul>{/if}
       {#if selected.kind === 'ticket'}
         <section aria-label="Ticket execution">{#each deliveryErrors as notification}<p role="status">Integrator notification pending: {notification.delivery_error}{notification.next_delivery_at ? ` · retry after ${new Date(notification.next_delivery_at).toLocaleTimeString()}` : ""}</p>{/each}<h3>Execution · {executionLabel(selected.execution_state)}</h3>{#if selected.execution_reason}<p role="status">{selected.execution_reason}</p>{/if}<p>Assigned member: {members.find(m => m.id === selected?.assigned_member_id)?.agent_id || 'Unassigned'}</p>
           {#if selected.state !== 'done' && ['cancelled','blocked','failed','unknown','rejected'].includes(selected.execution_state || '')}<button class="secondary-button work-icon-button" disabled={busy} onclick={() => controlTicket('retry')} title="Retry execution" aria-label="Retry execution"><RotateCcw aria-hidden="true" size={17} /></button>{/if}
-          {#each attempts as attempt}<details open={attempt.id === selected.active_attempt_id}><summary>{attempt.status} · {attempt.id}</summary><p>Worker: <code>{attempt.worker_session_id}</code></p><button class="secondary-button work-icon-button" onclick={() => readWorker(attempt)} title="Read worker conversation" aria-label="Read worker conversation"><MessagesSquare aria-hidden="true" size={17} /></button>{#if attempt.result}<pre>{JSON.stringify(attempt.result, null, 2)}</pre>{/if}{#if attempt.feedback}<p>Integrator feedback: {attempt.feedback}</p>{/if}{#if attempt.operation_error}<p role="status">{attempt.operation_error}</p>{/if}
-            {#if workerPages[attempt.id]}<section aria-label="Worker conversation">{#if workerPages[attempt.id].unknown}<pre>{workerPages[attempt.id].unknown}</pre>{/if}{#each workerPages[attempt.id].messages as message}<article><strong>{message.role} {message.name || ''} · message {message.index}</strong><pre>{message.content}{message.truncated ? '\n[preview truncated]' : ''}</pre>{#each message.tool_calls || [] as call}<pre>{call.name} ({call.id})\n{call.arguments}{call.truncated ? '\n[arguments truncated]' : ''}</pre>{/each}</article>{/each}{#if workerPages[attempt.id].cursor}<button class="secondary-button work-icon-button" onclick={() => readWorker(attempt, true)} title="More worker messages" aria-label="More worker messages"><ChevronDown aria-hidden="true" size={17} /></button>{/if}</section>{/if}
+          {#each attempts as attempt (attempt.id)}<details open={openAttempts[attempt.id] ?? (attempt.id === selected.active_attempt_id)} ontoggle={event => {
+            const open = event.currentTarget.open;
+            if (openAttempts[attempt.id] !== open) openAttempts = { ...openAttempts, [attempt.id]: open };
+          }}><summary>{attempt.status} · {attempt.id}</summary><p>Worker: <code>{attempt.worker_session_id}</code></p><button class="secondary-button work-icon-button" onclick={() => readWorker(attempt)} title="Read worker conversation" aria-label="Read worker conversation"><MessagesSquare aria-hidden="true" size={17} /></button>{#if attempt.result}<AttemptResult result={attempt.result} />{/if}{#if attempt.feedback}<section class="work-prose" aria-label="Integrator feedback"><h4>Integrator feedback</h4><Markdown content={attempt.feedback} /></section>{/if}{#if attempt.operation_error}<p role="status">{attempt.operation_error}</p>{/if}
+            {#if workerPages[attempt.id]}<section aria-label="Worker conversation">{#if workerPages[attempt.id].unknown}<pre>{workerPages[attempt.id].unknown}</pre>{/if}{#each workerPages[attempt.id].messages as message}<article class="worker-message"><strong>{message.role} {message.name || ''} · message {message.index}</strong>{#if message.role === 'user' || message.role === 'assistant'}<div class="work-prose"><Markdown content={message.content} /></div>{:else}<pre>{message.content}</pre>{/if}{#if message.truncated}<p class="preview-note">Message preview truncated.</p>{/if}{#each message.tool_calls || [] as call}<pre>{call.name} ({call.id})\n{call.arguments}{call.truncated ? '\n[arguments truncated]' : ''}</pre>{/each}</article>{/each}{#if workerPages[attempt.id].cursor}<button class="secondary-button work-icon-button" onclick={() => readWorker(attempt, true)} title="More worker messages" aria-label="More worker messages"><ChevronDown aria-hidden="true" size={17} /></button>{/if}</section>{/if}
             {#if attempt.change_request}<p>Pinned base: <code>{attempt.change_request.base_commit}</code><br />Pinned head: <code>{attempt.change_request.head_commit || 'Working'}</code></p>{#if attempt.change_request.head_commit}<button class="secondary-button work-icon-button" onclick={() => readDiff(attempt)} title="Read change request" aria-label="Read change request"><GitCompareArrows aria-hidden="true" size={17} /></button>{/if}{/if}
             {#if attempt.id === selected.active_attempt_id && ['awaiting_review','blocked','failed','unknown','merge_failed','close_failed'].includes(attempt.status)}<label>Review feedback<textarea aria-label="Ticket review feedback" bind:value={feedback} rows="3"></textarea></label><div class="work-action-group">{#if ['awaiting_review','merge_failed'].includes(attempt.status)}<button class="secondary-button work-icon-button" onclick={() => review(attempt, 'accept')} disabled={busy} title={attempt.change_request ? 'Accept and merge' : 'Accept result'} aria-label={attempt.change_request ? 'Accept and merge' : 'Accept result'}>{#if attempt.change_request}<GitMerge aria-hidden="true" size={17} />{:else}<Check aria-hidden="true" size={17} />{/if}</button>{/if}<button class="secondary-button work-icon-button" onclick={() => review(attempt, 'request_changes')} disabled={busy || !feedback.trim()} title="Request changes" aria-label="Request changes"><MessageSquareReply aria-hidden="true" size={17} /></button><button class="secondary-button work-icon-button danger" onclick={() => review(attempt, 'reject')} disabled={busy} title="Reject result" aria-label="Reject result"><CircleX aria-hidden="true" size={17} /></button></div>{/if}
           </details>{/each}{#if diff}<pre aria-label="Ticket change diff">{diff}</pre>{/if}
         </section>
       {/if}
       {#each posts as post}<article class="work-post"><header><div class="post-meta"><strong>{post.kind === 'body' ? 'Body' : post.author}</strong><small>revision {post.revision}</small></div><div class="work-action-group"><a class="work-icon-button post-permalink" href={permalink(post)} title={`Post permalink · ${post.id}`} aria-label={`post ${post.id}`}><Link2 aria-hidden="true" size={17} /></a>{#if !post.deleted}<button class="secondary-button work-icon-button" onclick={() => editPost(post)} disabled={busy} title={`Edit ${post.kind}`} aria-label={`Edit ${post.kind}`}><Pencil aria-hidden="true" size={17} /></button>{/if}</div></header>
-        {#if editing === post.id}<textarea aria-label="Edit post content" rows="10" bind:value={editContent}></textarea><div class="work-action-group"><button class="secondary-button work-icon-button" onclick={savePost} disabled={busy || !editContent.trim()} title="Save post" aria-label="Save post"><Save aria-hidden="true" size={17} /></button><button class="secondary-button work-icon-button" onclick={() => editing = ''} title="Cancel" aria-label="Cancel"><X aria-hidden="true" size={17} /></button></div>{:else}<div class="post-content">{post.deleted ? 'Deleted post' : expanded[post.id]?.content || post.content}</div>{#if post.content_truncated && (!expanded[post.id] || expanded[post.id].cursor)}<button class="secondary-button work-icon-button" onclick={() => expand(post)} title="Read more" aria-label="Read more"><ChevronsDown aria-hidden="true" size={17} /></button>{/if}{/if}
+        {#if editing === post.id}<textarea aria-label="Edit post content" rows="10" bind:value={editContent}></textarea><div class="work-action-group"><button class="secondary-button work-icon-button" onclick={savePost} disabled={busy || !editContent.trim()} title="Save post" aria-label="Save post"><Save aria-hidden="true" size={17} /></button><button class="secondary-button work-icon-button" onclick={() => editing = ''} title="Cancel" aria-label="Cancel"><X aria-hidden="true" size={17} /></button></div>{:else}<div class="post-content">{#if post.deleted}<p>Deleted post</p>{:else}<Markdown content={expanded[post.id]?.content ?? post.content} />{/if}</div>{#if post.content_truncated && (!expanded[post.id] || expanded[post.id].cursor)}<button class="secondary-button work-icon-button" onclick={() => expand(post)} title="Read more" aria-label="Read more"><ChevronsDown aria-hidden="true" size={17} /></button>{/if}{/if}
         {#if post.refs?.length}<ul>{#each post.refs as ref}<li>{ref}</li>{/each}</ul>{/if}
       </article>{/each}
       {#if threadCursor}<button class="secondary-button work-icon-button" onclick={() => selected && selectItem(selected.id, true)} disabled={busy} title="More replies" aria-label="More replies"><ChevronDown aria-hidden="true" size={17} /></button>{/if}
@@ -198,14 +204,14 @@
   input:not([type="checkbox"]) { padding: 0 11px; }
   select { padding: 0 30px 0 11px; line-height: 1.4; background-position: calc(100% - 15px) 50%, calc(100% - 10px) 50%; }
   textarea { width: 100%; min-width: 0; padding: 11px; color: var(--text); border: 1px solid var(--border-strong); border-radius: 5px; background: var(--field-bg); font: inherit; line-height: 1.6; resize: vertical; }
-  textarea:focus { border-color: var(--violet); }
+  textarea:focus { border-color: var(--accent); }
   button { font: inherit; cursor: pointer; }
   button:disabled { cursor: not-allowed; opacity: .5; }
   .primary-button, .secondary-button { display: inline-flex; align-items: center; justify-content: center; gap: 7px; min-height: calc(38px * var(--text-scale)); padding: 6px 12px; white-space: nowrap; }
   .work-icon-button { position: relative; display: inline-flex; align-items: center; justify-content: center; flex: none; width: calc(38px * var(--text-scale)); height: calc(38px * var(--text-scale)); min-height: calc(38px * var(--text-scale)); padding: 0; color: var(--muted); border: 1px solid var(--border); border-radius: 6px; background: var(--surface-raised); text-decoration: none; }
   .work-icon-button :global(svg) { flex: none; width: calc(17px * var(--text-scale)); height: calc(17px * var(--text-scale)); stroke-width: 1.75px; }
   .work-icon-button:hover { color: var(--text); border-color: var(--border-strong); background: var(--hover-bg); }
-  .work-icon-button:focus-visible { outline: 2px solid var(--violet); outline-offset: 3px; }
+  .work-icon-button:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
   .work-icon-button.danger { color: var(--error); }
   .work-action-group { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
   .work-toolbar { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
@@ -229,10 +235,10 @@
   .work-layout.has-selection:not(.ticket-layout) { grid-template-columns: minmax(230px, .8fr) minmax(0, 1.6fr); }
   .work-card, .search-hit { display: block; width: 100%; min-width: 0; padding: 16px; border: 1px solid var(--border); border-radius: 7px; background: var(--panel-bg); color: var(--text); text-align: left; overflow-wrap: anywhere; }
   .work-card:hover, .search-hit:hover { border-color: var(--border-strong); background: var(--surface-raised); }
-  .work-card.active { border-color: var(--violet); background: var(--violet-soft); }
+  .work-card.active { border-color: var(--accent); background: var(--accent-soft); }
   .work-card strong { font-weight: 500; line-height: 1.5; }
   .work-card small { display: block; margin-top: 8px; color: var(--muted); font-size: calc(12px * var(--text-scale)); }
-  .work-card span { display: inline-block; margin: 10px 5px 0 0; padding: 2px 7px; border: 1px solid var(--border); border-radius: 4px; color: var(--muted); font-size: calc(11px * var(--text-scale)); }
+  .work-card span { display: inline-block; margin: 10px 5px 0 0; padding: 2px 7px; border: 1px solid var(--border); border-radius: 4px; color: var(--muted); font-size: var(--type-small); }
   .work-empty { display: grid; min-height: 280px; justify-items: center; align-content: center; gap: 10px; padding: 32px 20px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel-subtle); text-align: center; }
   .empty-symbol { display: grid; width: 44px; height: 44px; margin-bottom: 3px; place-items: center; color: var(--accent-muted); border: 1px solid var(--border); border-radius: 9px; background: var(--surface-raised); }
   .work-empty h2 { margin: 0; font-size: calc(17px * var(--text-scale)); font-weight: 500; }
@@ -250,13 +256,19 @@
   .post-meta { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 10px; min-width: 0; overflow-wrap: anywhere; }
   .work-thread h2 { margin: 2px 0; font-size: calc(20px * var(--text-scale)); overflow-wrap: anywhere; }
   .work-thread h3 { font-size: calc(15px * var(--text-scale)); }
-  .work-thread code, .search-hit code { overflow-wrap: anywhere; font-size: calc(11px * var(--text-scale)); color: var(--subtle); }
+  .work-thread code, .search-hit code { overflow-wrap: anywhere; font-size: var(--type-small); color: var(--subtle); }
   .work-thread form { display: grid; gap: 12px; }
   .work-thread form > button { justify-self: start; }
   .work-post { display: grid; min-width: 0; gap: 12px; padding-top: 20px; border-top: 1px solid var(--border); }
   .work-post header small { color: var(--subtle); }
-  .work-post header a { overflow-wrap: anywhere; color: var(--accent-text); font-size: calc(11px * var(--text-scale)); }
-  .post-content { white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.7; }
+  .work-post header a { overflow-wrap: anywhere; color: var(--accent-text); font-size: var(--type-small); }
+  .post-content, .work-prose { min-width: 0; overflow-x: auto; }
+  .work-prose h4 { margin: 16px 0 8px; color: var(--muted); font-size: var(--type-small); font-weight: 600; }
+  .acceptance-criteria { display: grid; min-width: 0; gap: 8px; margin: 0; padding-left: 1.5em; }
+  .acceptance-criteria li, .worker-message { min-width: 0; }
+  .acceptance-criteria li { overflow-wrap: anywhere; }
+  .worker-message { display: grid; gap: 10px; margin-top: 16px; }
+  .preview-note { color: var(--subtle); font-size: var(--type-small); }
   pre { max-height: 36rem; overflow: auto; padding: 16px; border: 1px solid var(--border); border-radius: 5px; background: var(--code-bg); color: var(--code-text); font-size: calc(12px * var(--text-scale)); white-space: pre-wrap; overflow-wrap: anywhere; }
   details:not(.work-filters) { margin: 12px 0; padding: 12px; border: 1px solid var(--border); border-radius: 6px; }
   .work-error { padding: 14px 16px; color: var(--error); border: 1px solid var(--error); border-radius: 6px; overflow-wrap: anywhere; }
@@ -269,7 +281,7 @@
   .ticket-column h2 { display: flex; align-items: center; gap: 8px; margin: 0 0 5px; font-size: inherit; font-weight: 500; }
   .column-count { margin-left: auto; }
   .column-dot { width: 7px; height: 7px; flex: none; border-radius: 50%; background: var(--subtle); }
-  .column-dot.in-progress { background: var(--violet); }
+  .column-dot.in-progress { background: var(--accent); }
   .column-dot.done { background: var(--green); }
   .column-empty { margin: 16px 0 0; color: var(--subtle); text-align: center; font-size: calc(12px * var(--text-scale)); }
   @media (max-width: 1000px) {

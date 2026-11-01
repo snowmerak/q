@@ -83,5 +83,5 @@
   label { display: grid; gap: 8px; min-width: 0; color: var(--muted); font-size: calc(13px * var(--text-scale)); }
   .provider-actions { flex-wrap: wrap; gap: 8px; }
   a { color: var(--muted); font-size: calc(13px * var(--text-scale)); text-underline-offset: 3px; }
-  [role='alert'] { color: #e5a1a1; overflow-wrap: anywhere; }
+  [role='alert'] { color: var(--error); overflow-wrap: anywhere; }
 </style>

@@ -8,8 +8,9 @@
 `execution-orchestration.md`다.
 
 역사 참고: 이 문서에서 사용하는 `/agent:search`와 `/agent:web-tester` 명령은 이후
-제거되었다. 현재 직접 호출 표면은 `/subagent builtin/web-search <query>`와
-`/subagent builtin/web-tester <request>`다.
+제거되었다. 이후 `/subagent` 직접 실행도 제거했으며, 현재는 프로젝트 참여
+멤버를 `ticket_create`로 요청해 할당·실행한다. 아래는 구현 당시의 역사 기록이고,
+현재 계약은 [서브에이전트와 티켓 할당](delegated-subagents.md)을 따른다.
 
 대상 독자: Q의 agent connection, `/plan`, ACP 및 실행 checkpoint를 변경하는 구현자와
 리뷰어.

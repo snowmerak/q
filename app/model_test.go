@@ -3301,9 +3301,14 @@ func TestChatExecutesToolCallsAndContinuesTurn(t *testing.T) {
 	if len(configuredClient.requests) != 4 {
 		t.Fatalf("agent requests = %#v", configuredClient.requests)
 	}
-	for _, name := range []string{"write_file", subagent.DelegateListToolName, subagent.DelegateToolName, taskStartToolName, askToUserToolName, taskCompleteToolName} {
+	for _, name := range []string{"write_file", taskStartToolName, askToUserToolName, taskCompleteToolName} {
 		if !requestHasTool(configuredClient.requests[0].Tools, name) {
 			t.Fatalf("orchestration tools missing %s: %#v", name, configuredClient.requests[0].Tools)
+		}
+	}
+	for _, name := range []string{subagent.DelegateListToolName, subagent.DelegateToolName} {
+		if requestHasTool(configuredClient.requests[0].Tools, name) {
+			t.Fatalf("retired direct delegation tool %s exposed", name)
 		}
 	}
 	runtimePromptFound := false

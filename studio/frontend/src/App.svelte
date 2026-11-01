@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Activity, CircleDot, CircleHelp, Files, Folders, GitCompareArrows, House, Kanban, Layers, PanelLeftClose, PanelLeftOpen, Settings } from '@lucide/svelte';
+  import { Activity, CircleDot, CircleHelp, Files, Folders, GitCompareArrows, House, Kanban, Layers, Settings } from '@lucide/svelte';
   import { onMount } from 'svelte';
   import ChangesView from './ChangesView.svelte';
   import FilesView from './FilesView.svelte';
@@ -142,10 +142,8 @@
 <div class="app-shell" class:sidebar-collapsed={sidebarCollapsed}>
   <aside class="sidebar" aria-label="Studio navigation">
     <div class="brand">
-      <span class="brand-mark">Q</span><span class="brand-name">Studio</span>
-      <button class="sidebar-toggle" aria-label={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'} title={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'} aria-expanded={!sidebarCollapsed} aria-controls="studio-navigation" onclick={toggleSidebar}>
-        {#if sidebarCollapsed}<PanelLeftOpen aria-hidden="true" size={18} />{:else}<PanelLeftClose aria-hidden="true" size={18} />{/if}
-      </button>
+      <button type="button" class="brand-mark" aria-label={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'} title={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'} aria-expanded={!sidebarCollapsed} aria-controls="studio-navigation" onclick={toggleSidebar}><span aria-hidden="true">Q</span></button>
+      <span class="brand-name">Studio</span>
     </div>
     <nav id="studio-navigation" aria-label="Main navigation">
       {#each [{ label: 'Workspace', items: navigation.slice(0, 5) }, { label: 'Manage', items: navigation.slice(5) }] as group}

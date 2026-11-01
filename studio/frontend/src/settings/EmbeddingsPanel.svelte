@@ -168,8 +168,8 @@
   .status-actions { display: flex; flex-wrap: wrap; gap: 8px; }
   .sync-progress { padding: 18px; margin-bottom: 18px; }
   .sync-progress p { font-size: 13px; margin: 8px 0; color: var(--muted); }
-  .sync-progress .status-error { color: var(--danger, #d96666); }
-  .sync-progress progress { width: 100%; accent-color: var(--violet); }
+  .sync-progress .status-error { color: var(--danger, var(--error)); }
+  .sync-progress progress { width: 100%; accent-color: var(--accent); }
   .section-heading { padding-right: 0; }
   .secondary-button { display: inline-flex; align-items: center; justify-content: center; gap: 7px; flex-shrink: 0; white-space: nowrap; }
   .workspace-inspect { display: flex; align-items: end; gap: 12px; margin-bottom: 20px; }
@@ -186,8 +186,8 @@
   td small, td code { display: block; margin-top: 5px; }
   td code { max-width: 360px; overflow-wrap: anywhere; font-size: 12px; color: var(--muted); }
   .status-badge { white-space: nowrap; color: var(--text); }
-  .status-badge.pending { color: var(--warning, #d8a447); }
-  .status-badge.failed, .status-error { color: var(--danger, #d96666); }
+  .status-badge.pending { color: var(--warning, var(--warning)); }
+  .status-badge.failed, .status-error { color: var(--danger, var(--error)); }
   .status-error { margin: 12px 0; overflow-wrap: anywhere; }
   details summary { cursor: pointer; color: var(--muted); }
   .details-row td { padding-top: 0; }

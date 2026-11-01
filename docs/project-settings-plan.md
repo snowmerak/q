@@ -62,3 +62,17 @@
 - 임대 만료 복구는 활성 임대와 만료 시각 인덱스로 조회하고, 매니저 알림은 미전달·재시도 가능한 항목 중 첫 항목만 조회한다. 일반 화면의 티켓/실행/알림 이력 조회 계약은 유지한다.
 - 새 Library 계약: `GET /v1/workspaces/{id}/ticket-queue?queue=assignment|merge`, `GET /v1/workspaces/{id}/ticket-load`, `GET /v1/workspaces/{id}/inbox?pending=true`. 큐는 기존 방식의 최대 100개 커서 페이지를 제공한다.
 - 검증: 부분 인덱스의 실행 계획, 기존 데이터의 인덱스 생성, 프로젝트 격리와 페이지네이션, 취소/재시도 반영, 완료 이력 미역직렬화, 만료 복구와 알림 재시도, 기존 coordinator 회귀 시나리오를 확인했다. `go test ./workitems ./library ./coordinator -count=1 -timeout=120s`, app/studio의 티켓·Coordinator·프로젝트·워크스페이스 관련 테스트, `go vet`, golangci-lint 기본 검사를 통과했다. `bin/q.exe`도 다시 빌드했다.
+
+
+## 2026-11-01 정책 변경: 직접 위임 제거
+
+`delegate_list`/`delegate`, `/subagent` 실행, 이전 자식 세션의 후속 직접 실행은 제거했다.
+신규 작업은 프로젝트 참여 멤버에게 티켓을 발행하고 System One이 할당한다.
+구버전 부모별 직접 위임 제한은 UI에서 제거하고 저장 필드는 호환성을 위해 유지한다.
+동시 워커 제한은 기존 프로젝트 동시 티켓 수와 전역 상한으로 적용한다.
+주니어 개발자도 프로젝트에 참여하면 티켓 담당 후보가 되며, 실행 모드와 도구 권한 검사는 유지한다.
+기존 기록과 저장된 완료 결과는 보존하고, 재시작 시 미완료 직접 호출을 새로 실행하지 않는다.
+자세한 현재 계약은 [서브에이전트와 티켓 할당](delegated-subagents.md)을 따른다.
+
+
+검증 기록(2026-11-01): app/studio 전체 테스트, agentloop/subagent/coordinator/library MCP 테스트를 통과했다. 직접 도구 호출·미완료 자식 재개 거부, 저장된 완료 결과 복구, 참여 주니어의 티켓 후보 선택과 report 모드 제한을 회귀 테스트로 검증했다. Playwright의 티켓 접수·프로젝트 설정·과거 내부/외부 자식 기록·중첩 기록 삭제 등 5개 시나리오를 통과했다. 프런트엔드 check/build, Go build/vet와 golangci-lint 기본 검사를 통과했다. 현재 실행 중인 사용자 Studio는 재시작하지 않았다.

@@ -252,6 +252,7 @@ func BuiltinAgentDefinitions() []AgentDefinition {
 		"read_file", "list_directory", "loom_inspect", "loom_read", "loom_eval",
 		"search_skills", "get_skill", "search_work", "post_get",
 		"issue_list", "issue_get", "issue_create", "issue_reply", "ticket_list", "ticket_get",
+		"workspace_members", "ticket_create", "ticket_reply", "ticket_attempt_list", "ticket_attempt_get", "ticket_worker_read",
 		"search_archive", "get_archive_record", "lsp_status", "lsp_diagnostics",
 		"lsp_hover", "lsp_definition", "lsp_references", "lsp_document_symbols",
 		"lsp_workspace_symbols",
@@ -262,21 +263,21 @@ func BuiltinAgentDefinitions() []AgentDefinition {
 		{
 			Info: DelegateInfo{Name: BuiltinInterviewerID, Source: "builtin", Kind: AgentKindInner, Role: config.AgentRoleInterviewer,
 				Description: "Clarify consequential ambiguity in requirements and report focused questions and confirmed decisions."},
-			SystemPrompt: "You are an interviewer responsible for understanding the user's actual requirements. Read relevant context and delegate focused investigation when needed. Ask only questions whose answers materially change the work. You cannot directly question the user in this child session: return the exact questions and why they matter to the caller. Distinguish confirmed answers from assumptions. Do not edit the workspace.",
+			SystemPrompt: "You are an interviewer responsible for understanding the user's actual requirements. Read relevant context and create focused investigation tickets for additional work when needed. Ask only questions whose answers materially change the work. You cannot directly question the user in this child session: return the exact questions and why they matter to the caller. Distinguish confirmed answers from assumptions. Do not edit the workspace.",
 			Tools:        append([]string(nil), readTools...),
 			Delegates:    []string{BuiltinResearchID},
 		},
 		{
 			Info: DelegateInfo{Name: BuiltinManagerID, Source: "builtin", Kind: AgentKindInner, Role: config.AgentRoleManager,
 				Description: "Own product requirements, priorities, acceptance criteria, and the work plan; coordinate specialists as needed."},
-			SystemPrompt: "You are the project manager. Read the request and relevant workspace evidence yourself. Own the objective, priorities, dependencies, acceptance criteria, and a concise actionable plan. Delegate interviewing, research, or technical assessment only when needed; inspect their results before deciding. If explicitly requested implementation returns a change request, read its pinned diff and merge it only when it satisfies the agreed acceptance criteria; close unexpected or rejected work. Record unresolved questions and assumptions explicitly. Coordinate work rather than treating planning as a mandatory separate mode. Do not make direct workspace edits.",
+			SystemPrompt: "You are the project manager. Read the request and relevant workspace evidence yourself. Own the objective, priorities, dependencies, acceptance criteria, and a concise actionable plan. Create tickets for interviewing, research, or technical assessment when needed; use workspace_members to inspect eligible joined subagents and report the issued ticket IDs. Ticket assignment, execution and Integrator review are asynchronous. Do not directly invoke other subagents or wait synchronously for their results. Record unresolved questions and assumptions explicitly. Coordinate work rather than treating planning as a mandatory separate mode. Do not make direct workspace edits.",
 			Tools:        append([]string(nil), readTools...),
 			Delegates:    []string{BuiltinInterviewerID, BuiltinResearchID, BuiltinSeniorDeveloperID},
 		},
 		{
 			Info: DelegateInfo{Name: BuiltinSeniorDeveloperID, Source: "builtin", Kind: AgentKindInner, Role: config.AgentRoleReviewer,
-				Description: "Own the technical approach, implement directly or delegate bounded work, and review changes and verification.", MutatesWorkspace: true},
-			SystemPrompt: "You are the senior developer accountable for the technical result. Inspect the relevant code and select a coherent approach. Make focused changes yourself when appropriate, or delegate bounded implementation to the junior developer when useful. Give the junior developer concrete scope, constraints, and acceptance criteria. A successful mutating delegate returns an internal change request. Read its pinned diff with change_request_read, verify the actual change and evidence, and merge it with change_request_merge only after it passes review; close rejected work with change_request_close. Report what was verified and what remains uncertain. Do not claim work is complete from a delegate summary alone.",
+				Description: "Own the technical approach, implement the assigned ticket, and review changes and verification.", MutatesWorkspace: true},
+			SystemPrompt: "You are the senior developer accountable for the technical result. Inspect the relevant code and select a coherent approach. Make focused changes for the assigned ticket. When additional work needs another subagent, inspect workspace_members and issue a ticket with concrete scope, constraints, and acceptance criteria. Assignment and execution are asynchronous; report the new ticket IDs and do not wait synchronously for other workers. Return your own changes through the ticket result for Integrator review. Report what was verified and what remains uncertain. Do not claim work is complete from a delegate summary alone.",
 			Tools:        append([]string(nil), developerTools...),
 			Delegates:    []string{BuiltinJuniorDeveloperID, BuiltinResearchID},
 		},
@@ -289,20 +290,18 @@ func BuiltinAgentDefinitions() []AgentDefinition {
 		{
 			Info: DelegateInfo{Name: BuiltinResearchID, Source: "builtin", Kind: AgentKindInner, Role: config.AgentRoleResearch,
 				Description: "Investigate a focused problem using repository and external evidence, compare options, and recommend a supported approach."},
-			SystemPrompt: "You are a researcher. Investigate the assigned question using relevant local evidence and, when needed, delegate external research to the configured web search agent. Compare viable options, cite evidence, separate facts from inference, and recommend an approach with uncertainties. Do not modify the workspace.",
+			SystemPrompt: "You are a researcher. Investigate the assigned question using relevant local evidence and, when additional investigation is needed, create a focused research ticket for assignment to a joined subagent. Compare viable options, cite evidence, separate facts from inference, and recommend an approach with uncertainties. Do not modify the workspace.",
 			Tools:        append([]string(nil), readTools...),
 		},
 	}
 }
 
 func PublicAgentDefinitions() []AgentDefinition {
-	definitions := BuiltinAgentDefinitions()
+	definitions := append(BuiltinAgentDefinitions(), ExternalAgentDefinitions()...)
 	for index := range definitions {
-		if definitions[index].Info.Name == BuiltinSeniorDeveloperID || definitions[index].Info.Name == BuiltinResearchID {
-			definitions[index].Delegates = append(definitions[index].Delegates, BuiltinWebSearchID)
-		}
+		definitions[index].Delegates = nil
 	}
-	return append(definitions, ExternalAgentDefinitions()...)
+	return definitions
 }
 
 func ExternalAgentDefinitions() []AgentDefinition {
@@ -429,29 +428,9 @@ func TaskLifecycleTools() []client.Tool {
 	}
 }
 
-func DelegateTools() []client.Tool {
-	strict := false
-	return []client.Tool{
-		{Type: client.ToolTypeFunction, Function: client.FunctionDefinition{
-			Name: DelegateListToolName, Description: "List the subagents this agent is currently allowed to call, optionally for another working directory.", Strict: &strict,
-			Parameters: map[string]any{"type": "object", "properties": map[string]any{
-				"working_directory": map[string]any{
-					"type": "string", "description": "Existing directory whose workspace subagent profiles should be listed. Relative paths resolve from the caller's working directory.",
-				},
-			}, "additionalProperties": false},
-		}},
-		{Type: client.ToolTypeFunction, Function: client.FunctionDefinition{
-			Name: DelegateToolName, Description: "Run one allowed subagent synchronously for a bounded prompt, optionally in another working directory. A mutating child in a Git repository returns an internal change request that the caller must read and then merge or close.", Strict: &strict,
-			Parameters: map[string]any{"type": "object", "properties": map[string]any{
-				"subagent_name": map[string]any{"type": "string"},
-				"prompt":        map[string]any{"type": "string", "maxLength": MaximumDelegatePromptBytes},
-				"working_directory": map[string]any{
-					"type": "string", "description": "Existing directory for the temporary child session. Relative paths resolve from the caller's working directory; omitted uses the caller's directory.",
-				},
-			}, "required": []string{"subagent_name", "prompt"}, "additionalProperties": false},
-		}},
-	}
-}
+// DelegateTools remains for Go source compatibility with existing embedders.
+// Deprecated: direct delegation was removed; use workspace_members and ticket_create.
+func DelegateTools() []client.Tool { return nil }
 
 func ChangeRequestTools() []client.Tool {
 	strict := true

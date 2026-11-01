@@ -30,9 +30,6 @@ func (s *sessionsService) projectAgentOptions(root string) ([]projectAgentOption
 	}
 	options := []projectAgentOption{}
 	for _, def := range subagent.PublicAgentDefinitions() {
-		if def.Info.Name == "builtin/junior-developer" {
-			continue
-		}
 		o := projectAgentOption{ID: def.Info.Name, Description: def.Info.Description, Kind: def.Info.Kind, Available: true}
 		if o.Kind == subagent.AgentKindExternal {
 			_, _, o.Available = value.ExternalAgentConnection(def.Info.Role)

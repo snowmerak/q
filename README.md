@@ -318,17 +318,16 @@ help entry points.
 | `/lsp` | Configure language servers and project roots. |
 | `/mcp` | Configure external MCP servers and role assignments. |
 | `/subagents [list\|show <name>]` | Manage builtin/custom subagents, external bindings, and ACP connections. |
-| `/subagent <name> <request>` | Run a public builtin or custom subagent. |
 | `/help` | Open the scrollable command and key guide. |
 
 Start typing a slash command to filter the catalog. Up/Down selects an entry;
 Tab or Enter completes it. Enter runs a command that is already complete, and
 Escape closes the completion popup.
 
-External subagents are invoked through `/subagent builtin/web-search <query>` or
-`/subagent builtin/web-tester <request>`. Availability depends on assigning the
-builtin to an existing enabled ACP connection in `/subagents`. The same rule
-controls availability in general chat and explicit subagent calls.
+To assign work to an external subagent, bind its profile to an enabled ACP
+connection in `/subagents`, join it to the Studio project, and issue a ticket.
+`workspace_members` lists joined candidates; `ticket_create` queues the work
+for asynchronous System One assignment and execution.
 
 Web Tester invocations run in an isolated ACP process/session with a fixed
 15-minute deadline. q automatically selects `allow_once`, falling back to an
@@ -393,12 +392,12 @@ flowchart LR
     J --> S
 ```
 
-The main agent can delegate directly to a suitable role while continuing to use
-its own tools.
+The main agent can work directly or issue a project ticket for a joined subagent.
+Ticket assignment, execution, and Integrator review are asynchronous.
 
 The former `/plan` command and its approval automation have been removed. Use
-`/subagent builtin/manager <request>` for a focused PM task, or ask the main
-agent to coordinate specialists in ordinary chat. Existing plan checkpoints
+a project ticket assigned to a joined manager profile for a focused PM task,
+or ask the main agent to plan and issue tickets in ordinary chat. Existing plan checkpoints
 remain on disk as legacy data; new work does not resume that workflow.
 
 ## Commit workflow
@@ -463,36 +462,26 @@ only when automation requires it.
 
 ## Subagents
 
-### Delegation
+### Ticket assignment
 
-The default chat loop exposes both its direct workspace tools and delegation to
-available built-in, custom, or external subagents. The main agent chooses
-whether to work directly or assign bounded work based on the request. For an
-explicit one-off invocation, use `/subagent <name> <request>`. The former
-`/mode` command and its delegation-only root restrictions have been removed.
+The default chat loop keeps its workspace tools. To request another subagent,
+use `workspace_members` to inspect joined profiles and `ticket_create` to issue
+a ticket with scope, acceptance criteria, and `report` or `git` execution mode.
+System One selects a suitable joined member, subject to project and global
+capacity limits. The Integrator reviews results and pinned Git changes through
+the ticket workflow. Ticket creation acknowledges durable queuing, not completion.
 
-Child progress and tool activity appear in the transcript; `Ctrl+G` expands or
-collapses the trace. Each delegation has a saved child session and bookmark.
-After an interruption, Q restores nested children before continuing the parent.
-An in-flight tool with no recorded result is reported as `unknown` and is not
-automatically run again. External ACP children cannot resume their internal
-turn; an interrupted invocation is returned as `unknown`.
-
-For a persisted session in a clean Git checkout, a mutating inner subagent runs
-on a local `q/delegate/<invocation-id>` branch in a linked worktree. Its completed
-changes are committed and returned as an internal change request pinned to base
-and head commits. The caller reads the diff with `change_request_read`, then
-merges it into its current branch with `change_request_merge` or discards it with
-`change_request_close`. Nested mutating delegates follow the same rule, so a
-senior developer reviews and merges a junior developer's branch before its own
-change request reaches the parent. No remote push or hosted Git service is
-required for this local flow.
-
+Direct `delegate_list`/`delegate` tools and the `/subagent` execution command
+have been retired. Previous child transcripts and completed results remain
+readable; reopening a parent never starts or resumes a legacy child. Existing
+saved results can finish an interrupted parent tool response. Historical change
+requests can still be inspected and cleaned up by their owning parent.
+See [subagent execution](docs/delegated-subagents.md) for the current contract.
 
 Open `/subagents` in the TUI to inspect builtin definitions and manage runnable custom
 profiles. Inner and external execution are shown by the stored `kind`, not by an ID namespace.
-Builtin inner entries are fixed definitions; their access label reflects both direct tools and
-delegates. Pressing `e` on a builtin external entry changes only
+Builtin inner entries are fixed definitions; their access label reflects their
+workspace mutation capability. Pressing `e` on a builtin external entry changes only
 its ACP binding; its built-in system prompt remains fixed. Press `c` to register, edit, test,
 enable, disable, or delete shared ACP connections. For custom entries, `a` adds, `e` edits,
 and `d` deletes the selected profile after confirmation. Each list row summarizes
@@ -571,13 +560,12 @@ tools: []
 delegates: []
 ```
 
-TUI and ACP support `/subagents list`, `/subagents show code-reader`, and
-`/subagent code-reader explain the cancellation handling in app/model.go`.
+TUI and ACP support `/subagents list` and `/subagents show code-reader`.
+Join a profile in Projects and issue a ticket to request its work.
 The public builtin IDs are `builtin/interviewer`, `builtin/manager`,
 `builtin/senior-developer`, `builtin/junior-developer`, `builtin/research`,
 `builtin/web-search`, and `builtin/web-tester`.
-The junior developer is assigned through the senior developer and is not a
-root delegation target. The latter two have `kind: external`; other external agents use their normal
+The junior developer can be joined to a project and assigned a Git ticket. The latter two have `kind: external`; other external agents use their normal
 `global/...` or `workspace/...` profile ID. Bare `/subagents` opens the profile UI
 in the TUI and lists all available definitions in ACP. Creation, editing, and
 deletion use the TUI or profile files. Pass all necessary task context in the
@@ -586,13 +574,12 @@ request: the child does not automatically inherit the parent conversation.
 IDs (`builtin/...`, `global/...`, or `workspace/...`). Unavailable tools, roles,
 or delegates produce an error before the model runs.
 
-Inner delegated agents share the host-provided `task_start` and `task_complete`
-lifecycle. External delegates bypass native model and tool scoping and use their existing ACP
-invocation adapter and Loom capture. General chat receives `delegate_list` and `delegate`; custom agents
-receive them only when their profile has direct grants. The manager can delegate
-to the interviewer, researcher, and senior developer. The senior developer can
-implement directly or assign work to the junior developer and review its result.
-The researcher can delegate to configured web search. A task result keeps its
+Inner ticket workers share the host-provided `task_start` and `task_complete`
+lifecycle. External workers use their existing ACP invocation adapter and Loom
+capture. Native builtins can inspect workspace members and issue followup tickets;
+custom profiles must allow the corresponding ticket tools. Additional work is
+assigned asynchronously rather than invoked through a nested direct tool call.
+A task result keeps its
 short conclusion in `summary` and may include a Markdown `report` up to 256 KiB
 for detailed analysis, design rationale, review notes, or research synthesis.
 Large results use the existing Loom receipt and retrieval path.

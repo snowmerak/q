@@ -100,10 +100,10 @@ func TestPublicAgentDefinitionsIncludeExternalACPAdapters(t *testing.T) {
 			t.Fatalf("external definition uses inner execution fields: %#v", definition)
 		}
 	}
-	if got := delegateNames(registry.Allowed(BuiltinSeniorDeveloperID)); !slices.Contains(got, BuiltinWebSearchID) {
+	if got := delegateNames(registry.Allowed(BuiltinSeniorDeveloperID)); len(got) != 0 {
 		t.Fatalf("senior developer web search grant = %v", got)
 	}
-	if got := delegateNames(registry.Allowed(BuiltinResearchID)); !slices.Contains(got, BuiltinWebSearchID) {
+	if got := delegateNames(registry.Allowed(BuiltinResearchID)); len(got) != 0 {
 		t.Fatalf("research web search grant = %v", got)
 	}
 }
@@ -118,6 +118,8 @@ func TestSeniorDeveloperToolSurfaceAllowsDirectMutation(t *testing.T) {
 		t.Fatal("senior developer definition is missing")
 	}
 	runtime := &fakeScoutTools{available: append(append(append(DelegateTools(), ChangeRequestTools()...), skillTestTools()...),
+		client.Tool{Type: client.ToolTypeFunction, Function: client.FunctionDefinition{Name: "workspace_members"}},
+		client.Tool{Type: client.ToolTypeFunction, Function: client.FunctionDefinition{Name: "ticket_create"}},
 		client.Tool{Type: client.ToolTypeFunction, Function: client.FunctionDefinition{Name: "read_file"}},
 		client.Tool{Type: client.ToolTypeFunction, Function: client.FunctionDefinition{Name: "loom_read"}},
 		client.Tool{Type: client.ToolTypeFunction, Function: client.FunctionDefinition{Name: "edit_file"}},
@@ -128,7 +130,12 @@ func TestSeniorDeveloperToolSurfaceAllowsDirectMutation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, required := range []string{DelegateListToolName, DelegateToolName, ChangeRequestReadToolName, ChangeRequestMergeToolName, ChangeRequestCloseToolName, TaskStartToolName, TaskCompleteToolName, "read_file", "loom_read", "edit_file", "write_file", "run_command"} {
+	for _, retired := range []string{DelegateListToolName, DelegateToolName} {
+		if hasTool(tools, retired) {
+			t.Fatalf("retired tool %s is exposed", retired)
+		}
+	}
+	for _, required := range []string{"workspace_members", "ticket_create", TaskStartToolName, TaskCompleteToolName, "read_file", "loom_read", "edit_file", "write_file", "run_command"} {
 		if !hasTool(tools, required) {
 			t.Fatalf("senior developer runtime is missing %q: %#v", required, tools)
 		}

@@ -1684,23 +1684,6 @@ func (a *acpAgent) emitTaskPlanContext(ctx context.Context, objective string, st
 	}))
 }
 
-func (a *acpAgent) emitAgentPlanContext(ctx context.Context, update agentPlanUpdate) error {
-	entries := make([]acp.PlanEntry, 0, len(update.Entries))
-	for _, entry := range update.Entries {
-		status := acp.PlanEntryStatusPending
-		switch entry.Status {
-		case agentPlanInProgress:
-			status = acp.PlanEntryStatusInProgress
-		case agentPlanCompleted:
-			status = acp.PlanEntryStatusCompleted
-		}
-		entries = append(entries, acp.PlanEntry{
-			Content: entry.Content, Priority: acp.PlanEntryPriorityMedium, Status: status,
-		})
-	}
-	return a.updateContext(ctx, acp.UpdatePlan(entries...))
-}
-
 func (a *acpAgent) emitAvailableCommandsContext(ctx context.Context) error {
 	commands := []acp.AvailableCommand{
 		{Name: "subagents", Description: "List available subagents or show a definition.", Input: &acp.AvailableCommandInput{Unstructured: &acp.UnstructuredCommandInput{Hint: "list | show <name>"}}},
@@ -1720,7 +1703,7 @@ func (a *acpAgent) runACPCommand(ctx context.Context, text string) (acp.PromptRe
 	var output string
 	switch {
 	case retiredLoopModeCommand(command):
-		output = "Loop modes were removed. Ordinary chat can use direct tools and delegate work."
+		output = "Loop modes were removed. Ordinary chat can use direct tools and issue tickets for subagent work."
 	case retiredPlanCommand(command):
 		output = "Plan mode was removed. Use /subagent builtin/manager for a focused PM request."
 	case command == "/commit":
@@ -1805,104 +1788,6 @@ func (a *acpAgent) clearACPConversation(ctx context.Context) error {
 	}
 	a.publishUsageUpdate()
 	return nil
-}
-
-func (a *acpAgent) continueACPSubagent(
-	ctx context.Context,
-	run *acpSubagentContinuation,
-	persistent bool,
-) (response acp.PromptResponse, runErr error) {
-	suspended := false
-	stopPromptCancel := func() bool { return true }
-	if persistent {
-		stopPromptCancel = context.AfterFunc(ctx, run.cancel)
-	}
-	defer func() {
-		stopPromptCancel()
-		if !suspended {
-			if errors.Is(ctx.Err(), context.Canceled) && errors.Is(runErr, context.Canceled) {
-				response, runErr = a.finishCancelledPrompt(), nil
-			}
-			runErr = errors.Join(runErr, run.finish(a, ctx, response, runErr))
-		}
-	}()
-
-	for event := range run.events {
-		if event.plan != nil {
-			run.detailed = true
-			if err := a.emitAgentPlanContext(ctx, *event.plan); err != nil {
-				return acp.PromptResponse{}, err
-			}
-		}
-		if event.activity != nil {
-			progress := strings.TrimSpace(strings.Join([]string{acpTraceAgentLabel(event.activity.Agent, event.activity.TaskID), event.activity.Action, event.activity.Detail}, " · "))
-			if progress != "" {
-				if err := a.updateContext(ctx, acp.UpdateAgentThoughtText(progress+"\n")); err != nil {
-					return acp.PromptResponse{}, err
-				}
-			}
-		}
-		if event.trace != nil {
-			if err := run.trace.handle(ctx, *event.trace); err != nil {
-				return acp.PromptResponse{}, err
-			}
-		}
-		if event.question != nil {
-			if !persistent {
-				event.answer <- a.elicitAnswer(ctx, *event.question)
-			} else {
-				response, err := a.suspendACPQuestion(
-					ctx,
-					*event.question,
-					event.answer,
-					isPlanApprovalQuestion(*event.question),
-					true,
-					false,
-					func(nextCtx context.Context) (acp.PromptResponse, error) {
-						return a.continueACPSubagent(nextCtx, run, true)
-					},
-					func() error {
-						return run.finish(a, a.state.ctx, acp.PromptResponse{}, context.Canceled)
-					},
-				)
-				if err != nil {
-					return acp.PromptResponse{}, err
-				}
-				suspended = true
-				return response, nil
-			}
-		}
-
-		if event.err != nil {
-			if !run.detailed {
-				_ = a.emitTaskPlanContext(a.state.ctx, run.objective, acp.PlanEntryStatusCompleted)
-			}
-			if errors.Is(event.err, context.Canceled) || errors.Is(ctx.Err(), context.Canceled) ||
-				errors.Is(run.workflowCtx.Err(), context.Canceled) {
-				return a.finishCancelledPrompt(), nil
-			}
-			a.state.archiveFailure("ACP "+run.workflowName()+" failed", event.err)
-			_ = a.state.flushArchive()
-			return acp.PromptResponse{}, event.err
-		}
-		if event.response != nil {
-			if !run.detailed {
-				if err := a.emitTaskPlanContext(ctx, run.objective, acp.PlanEntryStatusCompleted); err != nil {
-					return acp.PromptResponse{}, err
-				}
-			}
-			streamedResponse := ""
-			return a.finishPrompt(*event.response, event.requestEstimate, &streamedResponse)
-		}
-	}
-
-	if errors.Is(ctx.Err(), context.Canceled) || errors.Is(run.workflowCtx.Err(), context.Canceled) {
-		if !run.detailed {
-			_ = a.emitTaskPlanContext(a.state.ctx, run.objective, acp.PlanEntryStatusCompleted)
-		}
-		return a.finishCancelledPrompt(), nil
-	}
-	return acp.PromptResponse{}, fmt.Errorf("%s workflow ended without a response", run.workflowName())
 }
 
 func (a *acpAgent) update(update acp.SessionUpdate) error {

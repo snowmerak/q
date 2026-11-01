@@ -66,7 +66,7 @@ func registerCoordinator(server *mcp.Server, c *library.Client, b Binding) {
 		}
 		return a, nil
 	}
-	mcp.AddTool(server, &mcp.Tool{Name: "workspace_members", Description: "List the subagents joined to this workspace. Profiles remain in their existing global/workspace stores.", Annotations: readOnly}, func(ctx context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, library.MemberList, error) {
+	mcp.AddTool(server, &mcp.Tool{Name: "workspace_members", Description: "List joined subagents as candidates for ticket assignment. Use ticket_create to request work; direct subagent execution is not supported. Profiles remain in their existing global/workspace stores.", Annotations: readOnly}, func(ctx context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, library.MemberList, error) {
 		if b.WorkspaceID == "" {
 			return nil, library.MemberList{}, errors.New("no current workspace")
 		}

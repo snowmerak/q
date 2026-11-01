@@ -267,20 +267,13 @@ func TestWorkspacePromptDescribesPrimaryAndAuxiliaryRoots(t *testing.T) {
 	}
 }
 
-func TestWorkspacePromptGuidesDefaultLoopDelegationWhenAvailable(t *testing.T) {
-	runtime := &scriptedTools{names: []string{"delegate_list", "delegate"}}
-	messages := agentloop.PrepareWorkspaceMessages(nil, agentloop.WorkspaceMessageOptions{
-		Root: t.TempDir(), Tools: runtime,
-	})
+func TestWorkspacePromptGuidesTicketAssignment(t *testing.T) {
+	runtime := &scriptedTools{names: []string{"workspace_members", "ticket_create"}}
+	messages := agentloop.PrepareWorkspaceMessages(nil, agentloop.WorkspaceMessageOptions{Root: t.TempDir(), Tools: runtime})
 	prompt := joined(messages)
-	for _, expected := range []string{
-		"When a task is sufficiently large or complex, use delegation.",
-		"Call delegate_list to inspect the available agents",
-		"an engineering workflow appropriate to the task",
-		"pass the same working_directory to delegate_list and delegate",
-	} {
+	for _, expected := range []string{"inspect workspace_members", "issue ticket_create", "System One selects a joined subagent", "asynchronously", "Report the ticket IDs"} {
 		if !strings.Contains(prompt, expected) {
-			t.Fatalf("workspace prompt omitted %q:\n%s", expected, prompt)
+			t.Fatalf("workspace prompt omitted %q: %s", expected, prompt)
 		}
 	}
 }

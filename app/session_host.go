@@ -197,7 +197,6 @@ type SessionHost struct {
 	delegationMu        sync.Mutex
 	delegationRuns      map[string]*delegationRunControl
 	delegationWG        sync.WaitGroup
-	delegationCtx       context.Context
 	delegationCancel    context.CancelFunc
 	delegationClosing   bool
 }

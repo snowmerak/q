@@ -7,7 +7,6 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/snowmerak/q/client"
-	"github.com/snowmerak/q/mcpconfig"
 	"github.com/snowmerak/q/sessionstore"
 	"github.com/snowmerak/q/subagent"
 	"github.com/snowmerak/q/workspace"
@@ -156,40 +155,22 @@ func (m *model) recoverPendingWorkspaceCalls(recoveryContext context.Context, se
 	if len(calls) <= completed {
 		return 0, nil
 	}
-	var runtime agentToolRuntime
-	for _, call := range calls[completed:] {
-		if call.Function.Name != subagent.DelegateToolName {
-			continue
-		}
-		if m.toolRuntime == nil || m.client == nil {
-			return 0, errors.New("delegation recovery requires the configured model and tools")
-		}
-		base, err := configuredAgentToolRuntime(m.toolRuntime, mcpconfig.RoleDefault, m.activeConfig(), m.workspaceStore.Root)
-		if err != nil {
-			return 0, err
-		}
-		runtime, err = m.configuredDelegationRuntime(base, m.workspaceStore.Root)
-		if err != nil {
-			return 0, err
-		}
-		if delegation, ok := runtime.(*delegationRuntime); ok && observe != nil {
-			delegation.observeDelegationEvents(observe)
-		}
-		break
-	}
 	recovered := 0
 	if recoveryContext == nil {
 		recoveryContext = context.Background()
 	}
 	for _, call := range calls[completed:] {
 		var result client.ToolResult
-		if call.Function.Name == subagent.DelegateToolName {
+		switch call.Function.Name {
+		case subagent.DelegateToolName:
 			var err error
-			result, err = runtime.Call(recoveryContext, call)
+			result, err = recoverRetiredDelegate(recoveryContext, *m.workspaceStore, call)
 			if err != nil {
 				return recovered, fmt.Errorf("recover delegation %s: %w", call.ID, err)
 			}
-		} else {
+		case subagent.DelegateListToolName:
+			result = retiredDelegationResult()
+		default:
 			result = client.ToolResult{Content: `{"status":"unknown","detail":"execution outcome unknown after session restart"}`, IsError: true}
 		}
 		message := client.ToolResultMessage(call, result)

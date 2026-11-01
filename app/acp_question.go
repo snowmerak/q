@@ -1,12 +1,11 @@
 package app
 
 import (
-	"github.com/snowmerak/q/third_party/acp-go-sdk"
 	"context"
 	"errors"
 	"fmt"
+	"github.com/snowmerak/q/third_party/acp-go-sdk"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/snowmerak/q/client"
@@ -22,56 +21,6 @@ type acpPendingQuestion struct {
 	toolBacked      bool
 	resume          func(context.Context) (acp.PromptResponse, error)
 	abort           func() error
-}
-
-type acpSubagentContinuation struct {
-	workflowCtx context.Context
-	cancel      context.CancelFunc
-	events      <-chan agentEvent
-	trace       *acpPlanTrace
-	objective   string
-	workflow    string
-	detailed    bool
-	finishOnce  sync.Once
-	finishErr   error
-}
-
-func (run *acpSubagentContinuation) workflowName() string {
-	if run == nil || strings.TrimSpace(run.workflow) == "" {
-		return "subagent"
-	}
-	return strings.TrimSpace(run.workflow)
-}
-
-func (run *acpSubagentContinuation) finish(
-	a *acpAgent,
-	ctx context.Context,
-	response acp.PromptResponse,
-	runErr error,
-) error {
-	if run == nil {
-		return nil
-	}
-	run.finishOnce.Do(func() {
-		run.cancel()
-		name := strings.ToUpper(run.workflowName()[:1]) + run.workflowName()[1:]
-		reason := name + " workflow ended before the tool returned a result."
-		if runErr != nil {
-			reason = name + " workflow stopped: " + runErr.Error()
-		}
-		if errors.Is(ctx.Err(), context.Canceled) || response.StopReason == acp.StopReasonCancelled {
-			reason = name + " workflow cancelled before the tool returned a result."
-		}
-		cleanupCtx, cleanupCancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
-		defer cleanupCancel()
-		if run.trace != nil {
-			run.finishErr = run.trace.finishPending(cleanupCtx, reason)
-			if run.finishErr != nil && a.logger != nil {
-				a.logger.Warn("finish ACP subagent tool calls", "error", run.finishErr)
-			}
-		}
-	})
-	return run.finishErr
 }
 
 func (a *acpAgent) suspendACPQuestion(

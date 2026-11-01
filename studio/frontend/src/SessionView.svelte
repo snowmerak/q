@@ -801,7 +801,7 @@
               </div>
             </details>
           {/if}
-          {#if !selectedDelegation || delegationKind === 'inner'}
+          {#if !selectedDelegation}
             {#if sending && activeRun?.status === 'paused'}<button title="Resume turn" aria-label="Resume turn" onclick={() => commandRun('resume')}><Play aria-hidden="true" size={15} /></button>{:else if sending}<button title="Pause turn" aria-label="Pause turn" onclick={() => commandRun('pause')}><Pause aria-hidden="true" size={15} /></button>{/if}
             {#if sending}<button class="stop-control" title="Stop turn" aria-label="Stop turn" onclick={stopTurn}><Square aria-hidden="true" size={13} fill="currentColor" /></button>{/if}
           {/if}
@@ -827,8 +827,8 @@
       {/if}
       {#if selectedDelegation && !delegationKind}
         <div class="delegated-session-note"><span>Loading delegated session…</span></div>
-      {:else if selectedDelegation && delegationKind !== 'inner'}
-        <div class="delegated-session-note"><strong>External ACP session</strong><span>Chat and execution controls are unavailable for external ACP sessions.</span></div>
+      {:else if selectedDelegation}
+        <div class="delegated-session-note"><strong>Archived delegation</strong><span>Direct subagent execution was removed. Create a project ticket for new work or feedback.</span></div>
       {:else}
         <div class="composer-wrap">
           <div class="composer">

@@ -97,7 +97,7 @@ func (host *SessionHost) coordinatorCandidates(ctx context.Context, project work
 			return nil, err
 		}
 		definition, found := registry.Get(member.AgentID)
-		if !found || !registry.CanDelegate("", member.AgentID) {
+		if !found {
 			continue
 		}
 		if item.ExecutionMode == "report" && definition.Info.MutatesWorkspace {

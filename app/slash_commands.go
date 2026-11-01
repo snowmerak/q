@@ -42,7 +42,6 @@ var localSlashCommands = []slashCommand{
 	{"/lsp", "", "Configure global language servers and workspace project roots."},
 	{"/mcp", "", "Configure external MCP tool servers and per-role assignments."},
 	{"/subagents", "[list|show <name>]", "Manage subagents, external bindings, and ACP connections."},
-	{"/subagent", "<name> <request>", "Run a builtin or custom subagent with an explicit request."},
 	{"/help", "", "Open this help screen."},
 }
 

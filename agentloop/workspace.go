@@ -92,17 +92,8 @@ func PrepareWorkspaceMessages(messages []client.Message, options WorkspaceMessag
 			orchestrationPrompt = "Use ask_to_user to clarify a required user decision or missing detail. Wait for the user's answer, then continue the same conversation. Respond directly when no question or tool is needed."
 		}
 	}
-	delegateListAvailable, delegateAvailable := false, false
-	for _, tool := range runtimeTools {
-		switch tool.Function.Name {
-		case "delegate_list":
-			delegateListAvailable = true
-		case "delegate":
-			delegateAvailable = true
-		}
-	}
-	if delegateListAvailable && delegateAvailable {
-		orchestrationPrompt += " When a task is sufficiently large or complex, use delegation. Call delegate_list to inspect the available agents, then select and arrange them according to their listed responsibilities and an engineering workflow appropriate to the task. When the assigned work belongs in another repository or directory, pass the same working_directory to delegate_list and delegate."
+	if catalogHas(runtimeTools, "ticket_create") {
+		orchestrationPrompt += " To assign work to a subagent, inspect workspace_members and issue ticket_create in the current project. Ticket creation acknowledges durable queuing; System One selects a joined subagent and execution and Integrator review complete asynchronously. Report the ticket IDs and do not call delegate_list or delegate or synchronously wait for another worker. If no project is bound, ask the user to select one before issuing tickets."
 	}
 	if orchestrationPrompt != "" {
 		result = append(result, client.Message{

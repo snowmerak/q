@@ -130,7 +130,7 @@ func (m model) submitChat() (tea.Model, tea.Cmd) {
 	if !remoteChat {
 		if retiredLoopModeCommand(content) {
 			m.resetChatInput()
-			m.status = "Loop modes were removed. Ordinary chat can use direct tools and delegate work."
+			m.status = "Loop modes were removed. Ordinary chat can use direct tools and issue tickets for subagent work."
 			return m, m.focusChatInput()
 		}
 		if retiredPlanCommand(content) {

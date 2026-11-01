@@ -103,7 +103,7 @@ func TestProjectOptionsKeepQualifiedGlobalAndWorkspaceProfiles(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, id := range []string{"global/shared", "workspace/shared"} {
+	for _, id := range []string{"global/shared", "workspace/shared", "builtin/junior-developer"} {
 		found := false
 		for _, option := range options {
 			found = found || option.ID == id && option.Available

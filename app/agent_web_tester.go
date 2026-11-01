@@ -1,16 +1,12 @@
 package app
 
 import (
-	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"strings"
 
 	"github.com/snowmerak/q/client"
-	"github.com/snowmerak/q/mcpconfig"
 	"github.com/snowmerak/q/subagent"
-	"github.com/snowmerak/q/third_party/acp-go-sdk"
 )
 
 var webTesterAgentCommand = externalAgentCommand{
@@ -45,18 +41,4 @@ func agentWebTesterToolCall(request, callID string) (client.ToolCall, error) {
 		ID: callID, Type: client.ToolTypeFunction,
 		Function: client.FunctionCall{Name: subagent.ExternalWebTesterToolName, Arguments: string(payload)},
 	}, nil
-}
-
-func (a *acpAgent) runACPAgentWebTester(ctx context.Context, request string) (acp.PromptResponse, error) {
-	toolRuntime, err := configuredAgentToolRuntime(
-		a.state.toolRuntime, mcpconfig.RoleDefault, a.state.activeConfig(), a.root,
-	)
-	if err != nil {
-		return acp.PromptResponse{}, err
-	}
-	if !toolAvailable(toolRuntime, subagent.ExternalWebTesterToolName) {
-		return acp.PromptResponse{}, errors.New("external web tester is unavailable")
-	}
-
-	return a.runACPExternalAgent(ctx, toolRuntime, webTesterAgentCommand, request)
 }

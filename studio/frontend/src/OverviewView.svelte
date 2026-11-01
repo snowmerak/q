@@ -67,13 +67,13 @@
 <style>
   .overview-content { width: min(100%, 900px); margin: 0 auto; padding: 48px 0 30px; }
   .overview-welcome { padding: 12px 0 44px; }
-  .welcome-mark { display: grid; width: 48px; height: 48px; place-items: center; margin-bottom: 24px; border: 1px solid var(--border-strong); border-radius: 13px; background: var(--violet-soft); color: var(--accent-text); font-size: calc(29px * var(--text-scale)); font-weight: 650; }
+  .welcome-mark { display: grid; width: 48px; height: 48px; place-items: center; margin-bottom: 24px; border: 1px solid var(--border-strong); border-radius: 13px; background: var(--accent-soft); color: var(--accent-text); font-size: calc(29px * var(--text-scale)); font-weight: 650; }
   .overview-welcome h2 { font-size: clamp(calc(26px * var(--text-scale)), calc(3vw * var(--text-scale)), calc(36px * var(--text-scale))); font-weight: 600; letter-spacing: -.035em; line-height: 1.2; }
   .overview-welcome p { max-width: 540px; margin-top: 12px; color: var(--muted); line-height: 1.7; }
   .overview-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 26px; }
   .overview-actions button { display: inline-flex; min-height: 42px; align-items: center; justify-content: center; gap: 9px; padding-inline: 17px; border-radius: 7px; font-size: calc(14px * var(--text-scale)); }
-  .overview-actions .primary-button { color: var(--on-accent); border-color: var(--violet); background: var(--violet); }
-  .overview-actions .primary-button:hover { filter: brightness(1.1); }
+  .overview-actions .primary-button { color: var(--on-accent); border-color: var(--accent); background: var(--accent); }
+  .overview-actions .primary-button:hover { border-color: var(--accent-hover); background: var(--accent-hover); }
   .overview-section-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding-bottom: 13px; border-bottom: 1px solid var(--border); }
   .overview-section-heading h2 { font-size: calc(15px * var(--text-scale)); font-weight: 600; }
   .overview-section-heading .text-button { display: inline-flex; align-items: center; gap: 8px; font-size: calc(13px * var(--text-scale)); }

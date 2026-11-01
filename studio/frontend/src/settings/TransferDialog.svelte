@@ -175,7 +175,7 @@
 </dialog>
 
 <style>
-  .transfer-dialog { width: min(960px, calc(100vw - 40px)); max-height: calc(100dvh - 40px); padding: 0; margin: auto; color: var(--text); background: var(--surface); border: 1px solid var(--border-strong); border-radius: 8px; box-shadow: 0 28px 90px rgba(0, 0, 0, .55); }
+  .transfer-dialog { width: min(960px, calc(100vw - 40px)); max-height: calc(100dvh - 40px); padding: 0; margin: auto; color: var(--text); background: var(--surface); border: 1px solid var(--border-strong); border-radius: 8px; box-shadow: var(--shadow-floating); }
   .transfer-dialog[open] { display: flex; flex-direction: column; }
   .transfer-dialog::backdrop { background: var(--overlay); backdrop-filter: blur(4px); }
   header { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; padding: 22px; }
@@ -186,32 +186,32 @@
   .file-picker input { min-width: 0; max-width: 100%; font-size: calc(12px * var(--text-scale)); }
   .transfer-tabs { display: flex; flex-shrink: 0; overflow-x: auto; border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); }
   .transfer-tabs button { display: grid; flex: 1; gap: 5px; padding: 13px 15px; border: 0; border-bottom: 2px solid transparent; border-radius: 0; white-space: nowrap; background: transparent; color: var(--muted); font-size: calc(12px * var(--text-scale)); }
-  .transfer-tabs button.active { color: var(--text); border-bottom-color: var(--violet); background: rgba(160, 132, 232, .06); }
-  .transfer-tabs span { font-size: calc(10px * var(--text-scale)); color: var(--subtle); }
+  .transfer-tabs button.active { color: var(--text); border-bottom-color: var(--accent); background: var(--accent-soft); }
+  .transfer-tabs span { font-size: var(--type-caption); color: var(--subtle); }
   .transfer-toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; padding: 12px 22px; font-size: calc(12px * var(--text-scale)); color: var(--muted); }
   .transfer-toolbar > div { display: flex; gap: 14px; }
   .transfer-body { min-height: 180px; overflow-y: auto; padding: 0 22px 20px; }
   .select-section { display: flex; align-items: center; gap: 10px; padding: 8px 0 16px; font-size: calc(12px * var(--text-scale)); }
-  input[type=checkbox] { flex: none; width: 15px; height: 15px; accent-color: var(--violet); }
+  input[type=checkbox] { flex: none; width: 15px; height: 15px; accent-color: var(--accent); }
   .transfer-item { margin-bottom: 8px; border: 1px solid var(--border); border-radius: 5px; }
-  .transfer-item.selected { border-color: rgba(160, 132, 232, .5); background: rgba(160, 132, 232, .04); }
+  .transfer-item.selected { border-color: var(--accent-border); background: var(--accent-soft); }
   .transfer-item > label { display: flex; align-items: center; gap: 12px; padding: 14px; cursor: pointer; }
   .transfer-item label > span { display: grid; flex: 1; min-width: 0; gap: 5px; }
   .transfer-item strong { font-size: calc(13px * var(--text-scale)); font-weight: 500; overflow-wrap: anywhere; }
-  .transfer-item small { color: var(--muted); font-size: calc(11px * var(--text-scale)); overflow-wrap: anywhere; }
-  .transfer-item em { font-size: calc(10px * var(--text-scale)); font-style: normal; color: var(--violet); white-space: nowrap; }
+  .transfer-item small { color: var(--muted); font-size: var(--type-small); overflow-wrap: anywhere; }
+  .transfer-item em { font-size: var(--type-caption); font-style: normal; color: var(--accent); white-space: nowrap; }
   details { padding: 0 14px 12px 41px; }
-  summary { color: var(--subtle); font-size: calc(11px * var(--text-scale)); cursor: pointer; }
+  summary { color: var(--subtle); font-size: var(--type-small); cursor: pointer; }
   .value-comparison { display: flex; flex-wrap: wrap; gap: 12px; padding-top: 12px; }
   .value-comparison > div { flex: 1 1 240px; min-width: 0; }
-  h4 { margin: 0 0 6px; font-size: calc(11px * var(--text-scale)); color: var(--muted); }
-  pre { max-height: 220px; overflow: auto; padding: 10px; white-space: pre-wrap; overflow-wrap: anywhere; background: var(--field-bg); font-size: calc(11px * var(--text-scale)); line-height: 1.6; }
+  h4 { margin: 0 0 6px; font-size: var(--type-small); color: var(--muted); }
+  pre { max-height: 220px; overflow: auto; padding: 10px; white-space: pre-wrap; overflow-wrap: anywhere; background: var(--field-bg); font-size: var(--type-small); line-height: 1.6; }
   .transfer-empty { padding: 45px 0; text-align: center; color: var(--subtle); font-size: calc(13px * var(--text-scale)); }
   .workspace-dialog-error { margin-bottom: 14px; }
   footer { display: flex; flex-shrink: 0; flex-wrap: wrap; align-items: center; gap: 12px; padding: 18px 22px; border-top: 1px solid var(--border); background: var(--field-bg); }
   footer > div { display: grid; flex: 1; gap: 6px; min-width: 200px; }
   footer strong { font-size: calc(12px * var(--text-scale)); }
-  footer small { font-size: calc(11px * var(--text-scale)); color: var(--muted); }
+  footer small { font-size: var(--type-small); color: var(--muted); }
   footer button { display: inline-flex; align-items: center; gap: 8px; }
   @media (max-width: 600px) {
     .transfer-dialog { width: calc(100vw - 20px); max-height: calc(100dvh - 20px); }

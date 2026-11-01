@@ -23,7 +23,7 @@
       <ul class="recovery-list">
         <li><strong>Develop an idea</strong><span>In Sessions, choose New session, then New Composer and select a model. Explore your idea through questions and discussion, refine diagrams and HTML previews, and reopen the session to continue. Use New Council to compare ideas with multiple participants.</span></li>
         <li><strong>Start and guide work</strong><span>In Sessions, add a root session by directory or project workspace. Choose a saved session or create one. Send a prompt; while a turn is active, the same composer sends guidance. Pause, resume, cancel, and answer questions using the session controls.</span></li>
-        <li><strong>Follow delegation</strong><span>Ask the default loop to delegate suitable tasks. Expand the session tree to inspect each child’s transcript and activity. Writing agents work in Git worktrees and return change requests for their caller to review and accept. Deleting a completed delegation removes its descendants; the parent conversation remains.</span></li>
+        <li><strong>Assign work with tickets</strong><span>Join subagents in Projects, then issue a ticket. System One assigns an enabled member; execution and Integrator review complete asynchronously. Native and ACP sessions can use workspace_members and ticket_create. Previous direct-delegation sessions remain available as read-only history.</span></li>
         <li><strong>Manage projects</strong><span>Projects groups workspace directories, joined Q and ACP subagents, and execution limits. Default subagents preselect members for new projects. Existing projects keep their own membership. Set a limit to 0 to inherit the global runtime limit. ACP agents control their own internal subagents.</span></li>
         <li><strong>Configure Q</strong><span>Settings covers global/workspace models, providers, System One, runtime, services, integrations, and subagents. Edits save automatically. Operations shows usage, workers, local services, logs, and retention.</span></li>
       </ul>
@@ -70,7 +70,7 @@ q studio --host 0.0.0.0 --port 7070 --no-open</code></pre><p>Use an IP address f
 <style>
   .help-index { display: flex; flex: none; flex-wrap: wrap; gap: 7px; padding: 14px 0; }
   .help-index button { width: auto; min-height: 34px; padding: 6px 12px; border: 1px solid var(--border); background: var(--panel, var(--surface)); color: var(--muted); font-size: calc(13px * var(--text-scale)); cursor: pointer; }
-  .help-index button:focus-visible, .help-view:focus-visible { outline: 2px solid var(--violet); outline-offset: -2px; }
+  .help-index button:focus-visible, .help-view:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
   .help-view { min-height: 0; min-width: 0; flex: 1; overflow-y: auto; overscroll-behavior: contain; padding: 0 12px 28px 0; scrollbar-gutter: stable; }
   .help-content { display: grid; gap: 18px; max-width: 1120px; }
   .help-card { min-width: 0; border: 1px solid var(--border); border-radius: 7px; background: var(--panel, var(--surface)); scroll-margin-top: 14px; }
@@ -84,7 +84,7 @@ q studio --host 0.0.0.0 --port 7070 --no-open</code></pre><p>Use an IP address f
   h3 { margin: 18px 22px 10px; font-size: calc(16px * var(--text-scale)); }
   .reference-list > div { display: grid; gap: 7px; padding: 16px 22px; border-bottom: 1px solid var(--border); }
   .reference-list > div:last-child { border-bottom: 0; }
-  code { color: #c6b1ff; font: calc(13px * var(--text-scale))/1.6 ui-monospace, SFMono-Regular, Consolas, monospace; overflow-wrap: anywhere; }
+  code { color: var(--accent-text); font: calc(13px * var(--text-scale))/1.6 var(--font-code); overflow-wrap: anywhere; }
   .reference-list p, .help-note p { color: var(--muted); font-size: calc(14px * var(--text-scale)); line-height: 1.7; }
   .reference-list small { color: var(--subtle); font-size: calc(13px * var(--text-scale)); }
   .help-note { padding: 18px 22px; border-top: 1px solid var(--border); }
@@ -93,7 +93,7 @@ q studio --host 0.0.0.0 --port 7070 --no-open</code></pre><p>Use an IP address f
   .shortcut-list { display: grid; }
   .shortcut-list > div { display: grid; grid-template-columns: minmax(160px, .6fr) minmax(0, 1fr); align-items: start; gap: 20px; padding: 13px 22px; border-top: 1px solid var(--border); }
   .shortcut-list > div:first-child { border-top: 0; }
-  kbd { width: fit-content; max-width: 100%; padding: 4px 8px; color: var(--accent-text); border: 1px solid var(--border-strong); border-bottom-width: 2px; border-radius: 4px; background: var(--violet-soft); font: calc(13px * var(--text-scale))/1.5 ui-monospace, SFMono-Regular, Consolas, monospace; overflow-wrap: anywhere; }
+  kbd { width: fit-content; max-width: 100%; padding: 4px 8px; color: var(--accent-text); border: 1px solid var(--border-strong); border-bottom-width: 2px; border-radius: 4px; background: var(--accent-soft); font: calc(13px * var(--text-scale))/1.5 var(--font-code); overflow-wrap: anywhere; }
   .shortcut-list span { color: var(--muted); font-size: calc(14px * var(--text-scale)); line-height: 1.65; }
   details { border-top: 1px solid var(--border); }
   summary { padding: 16px 22px; color: var(--text); font-size: calc(16px * var(--text-scale)); cursor: pointer; }

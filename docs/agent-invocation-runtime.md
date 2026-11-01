@@ -77,17 +77,11 @@ Default, Griller, Planner의 자율 호출은 각자의 기존 model/tool loop�
 모델은 tool call을 생성하고 같은 call ID의 `role: tool` 메시지로 Loom receipt를 받은
 뒤 다음 model round를 계속한다.
 
-`/subagent builtin/web-search <query>`와
-`/subagent builtin/web-tester <request>`는 상위 모델에게 tool 선택을 맡기지 않고 해당
-lifecycle을 강제로 실행한다. q가 synthetic assistant tool call을 생성하고 기록한 뒤
-같은 runtime으로 외부 agent를 호출하고, matching tool result를 기록한 다음 기존
-Default loop를 재개한다. 이때 원래 사용자 메시지를 synthetic evidence prompt로
-교체하지 않는다. 과거 `/agent:search`와 `/agent:web-tester` alias는 더 이상 등록하거나
-처리하지 않는다.
-
-TUI와 ACP server surface는 같은 tool lifecycle을 사용한다. 양쪽 모두 assistant tool
-call, capture된 tool result, 최종 상위 agent 응답을 workspace session과 archive에
-저장한다.
+직접 실행용 `/subagent <name> <request>` 명령은 제거했다. 네이티브/ACP
+프로필을 프로젝트에 참여시키고 `workspace_members`와 `ticket_create`를 통해
+작업을 요청한다. 할당과 실행, Integrator 리뷰는 비동기로 진행한다.
+이전 위임 기록은 조회할 수 있지만 새 실행이나 후속 직접 호출로 재개하지 않는다.
+현재 계약은 [서브에이전트와 티켓 할당](delegated-subagents.md)을 따른다.
 
 ## 구성과 갱신
 

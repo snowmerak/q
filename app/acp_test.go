@@ -1220,47 +1220,13 @@ func TestParseACPPlanApprovalAction(t *testing.T) {
 	}
 }
 
-func TestACPAgentRunsCanonicalSearchSubagentCommand(t *testing.T) {
-	parentClient := &fakeClient{}
-	agent, workspaceStore, connection := testACPAgent(t, parentClient, &fakeAgentTools{})
-	var received subagent.ExternalSearchInput
-	agent.state.toolRuntime = testAgentSearchRuntime(t, func(_ context.Context, input subagent.ExternalSearchInput) (subagent.ExternalSearchResult, error) {
-		received = input
-		return subagent.ExternalSearchResult{
-			Agent: "codex", Summary: "ACP evidence: https://agentclientprotocol.com",
-		}, nil
-	})
-	agent.state.config.Agents.Connections = map[string]config.AgentConnectionConfig{"search": {Preset: "codex"}}
-	agent.state.config.Agents.Roles = map[string]config.AgentConfig{config.AgentRoleSearch: {Agent: "search"}}
-	sessionID := openTestACPSession(t, agent, workspaceStore.Root)
-	response, err := agent.Prompt(t.Context(), acp.PromptRequest{
-		SessionId: sessionID,
-		Prompt:    []acp.ContentBlock{acp.TextBlock("/subagent builtin/web-search current ACP lifecycle")},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if response.StopReason != acp.StopReasonEndTurn || received.Query != "current ACP lifecycle" ||
-		len(received.CompletionCriteria) == 0 {
-		t.Fatalf("response = %#v, input = %#v", response, received)
-	}
-	var output, thought string
-	for _, notification := range connection.snapshot() {
-		if update := notification.Update.AgentMessageChunk; update != nil && update.Content.Text != nil {
-			output += update.Content.Text.Text
-		}
-		if update := notification.Update.AgentThoughtChunk; update != nil && update.Content.Text != nil {
-			thought += update.Content.Text.Text
-		}
-	}
-	if output != "reply 1" || !strings.Contains(thought, "Search agent started") ||
-		!strings.Contains(thought, "Main agent is preparing") {
-		t.Fatalf("output = %q, thought = %q", output, thought)
-	}
-	if len(parentClient.requests) != 1 ||
-		!strings.Contains(parentClient.requests[0].Messages[len(parentClient.requests[0].Messages)-1].Content, "https://agentclientprotocol.com") ||
-		!strings.Contains(parentClient.requests[0].Messages[len(parentClient.requests[0].Messages)-1].Content, "loom_ref") {
-		t.Fatalf("parent requests = %#v", parentClient.requests)
+func TestACPAgentRejectsDirectSearchSubagentCommand(t *testing.T) {
+	c := &fakeClient{}
+	agent, ws, _ := testACPAgent(t, c, &fakeAgentTools{})
+	id := openTestACPSession(t, agent, ws.Root)
+	_, err := agent.Prompt(t.Context(), acp.PromptRequest{SessionId: id, Prompt: []acp.ContentBlock{acp.TextBlock("/subagent builtin/web-search inspect")}})
+	if err == nil || !strings.Contains(err.Error(), "ticket_create") || len(c.requests) != 0 {
+		t.Fatalf("direct subagent executed: %v requests=%d", err, len(c.requests))
 	}
 }
 

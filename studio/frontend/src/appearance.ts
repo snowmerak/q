@@ -24,6 +24,8 @@ export function applyAppearance(theme: StudioTheme, textScale: TextScale) {
   document.documentElement.dataset.theme = theme;
   document.documentElement.style.setProperty('--text-scale', String(textScale / 100));
   document.documentElement.style.colorScheme = theme === 'light' ? 'light' : 'dark';
+  document.querySelector('meta[name="theme-color"]')?.setAttribute('content',
+    getComputedStyle(document.documentElement).getPropertyValue('--background').trim());
 }
 
 export function saveAppearance(theme: StudioTheme, textScale: TextScale) {

@@ -50,8 +50,8 @@ func TestLegacyExternalSlashCommandsAreNotDiscovered(t *testing.T) {
 			t.Fatalf("legacy command %q was discovered: %v", legacy, names)
 		}
 	}
-	if !slices.Contains(names, "/subagent") {
-		t.Fatalf("canonical subagent command missing: %v", names)
+	if slices.Contains(names, "/subagent") {
+		t.Fatalf("retired direct subagent command is advertised: %v", names)
 	}
 }
 

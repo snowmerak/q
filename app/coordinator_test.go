@@ -43,6 +43,23 @@ func TestWorkSearchFallsBackWhenEmbeddingProviderCannotStart(t *testing.T) {
 	}
 }
 
+func TestJoinedJuniorDeveloperIsAssignedThroughTickets(t *testing.T) {
+	host, c, project, _ := testManagerHost(t)
+	root := project.WorkspaceRoots[0]
+	member, err := c.PutMember(t.Context(), project.ID, workitems.MemberInput{AgentID: subagent.BuiltinJuniorDeveloperID, DefinitionRoot: root, ExecutionRoot: root})
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidates, err := host.coordinatorCandidates(t.Context(), project, workitems.Item{ExecutionMode: "git"}, []workitems.Member{member})
+	if err != nil || len(candidates) != 1 || candidates[0].Member.ID != member.ID {
+		t.Fatalf("joined junior not assignable: %+v %v", candidates, err)
+	}
+	candidates, err = host.coordinatorCandidates(t.Context(), project, workitems.Item{ExecutionMode: "report"}, []workitems.Member{member})
+	if err != nil || len(candidates) != 0 {
+		t.Fatalf("writing worker admitted to read-only report: %+v %v", candidates, err)
+	}
+}
+
 func TestTicketNativeWorkerFeedbackAndPinnedMerge(t *testing.T) {
 	host, c, project, _ := testManagerHost(t)
 	if err := (workspacememory.ConfigStore{Dir: host.store.Dir}).Save(workspacememory.Config{Host: "127.0.0.1", Port: reserveTestPort(t)}); err != nil {

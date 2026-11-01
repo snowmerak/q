@@ -11,7 +11,7 @@ import (
 	"github.com/snowmerak/q/workspace"
 )
 
-func TestDefaultLoopOffersDirectAndDelegationTools(t *testing.T) {
+func TestDefaultLoopKeepsDirectToolsAndRetiresDelegation(t *testing.T) {
 	value := config.Default()
 	value.Provider.Model = "test-model"
 	m := newModel(context.Background(), config.Store{Dir: t.TempDir()}, nil)
@@ -29,9 +29,18 @@ func TestDefaultLoopOffersDirectAndDelegationTools(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{"read_file", "write_file", subagent.DelegateListToolName, subagent.DelegateToolName} {
+	for _, name := range []string{"read_file", "write_file"} {
 		if !toolAvailable(runtime, name) {
 			t.Fatalf("default loop tool %q is unavailable", name)
+		}
+	}
+	for _, name := range []string{subagent.DelegateListToolName, subagent.DelegateToolName} {
+		if toolAvailable(runtime, name) {
+			t.Fatalf("retired tool %s is advertised", name)
+		}
+		result, err := runtime.Call(t.Context(), client.ToolCall{Function: client.FunctionCall{Name: name, Arguments: `{}`}})
+		if err != nil || !result.IsError {
+			t.Fatalf("retired tool executed: %+v %v", result, err)
 		}
 	}
 	if _, err := runtime.Call(context.Background(), client.ToolCall{Function: client.FunctionCall{Name: "write_file"}}); err != nil {
@@ -63,7 +72,7 @@ func TestRetiredLoopModeCommandDoesNotStartATurn(t *testing.T) {
 
 	updated, _ := m.submitChat()
 	m = updated.(model)
-	if m.waiting || len(configured.requests) != 0 || m.status != "Loop modes were removed. Ordinary chat can use direct tools and delegate work." {
+	if m.waiting || len(configured.requests) != 0 || m.status != "Loop modes were removed. Ordinary chat can use direct tools and issue tickets for subagent work." {
 		t.Fatalf("retired mode command started a turn: waiting=%v requests=%d status=%q", m.waiting, len(configured.requests), m.status)
 	}
 }

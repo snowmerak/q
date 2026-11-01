@@ -287,6 +287,6 @@
 <style>
   .model-tabs { display: flex; gap: 5px; overflow-x: auto; margin: 18px 0 24px; border-bottom: 1px solid var(--border); }
   .model-tabs button { flex: none; padding: 12px 14px; color: var(--muted); border: 0; border-bottom: 2px solid transparent; background: transparent; cursor: pointer; font-size: calc(14px * var(--text-scale)); }
-  .model-tabs button[aria-selected="true"] { color: var(--accent-text); border-bottom-color: var(--violet); }
+  .model-tabs button[aria-selected="true"] { color: var(--accent-text); border-bottom-color: var(--accent); }
   [role="tabpanel"][hidden] { display: none; }
 </style>

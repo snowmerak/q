@@ -1,0 +1,123 @@
+/* Q's reading workspace: slate, warm paper, and graphite share the same roles.
+   Keep action fills separate from accent text so both remain readable. */
+:root, .theme-preview {
+  color-scheme: dark;
+  --font-ui: "Segoe UI Variable", "Segoe UI", "Noto Sans KR", system-ui, sans-serif;
+  --font-code: "Cascadia Code", "SFMono-Regular", Consolas, monospace;
+  --text-scale: 1;
+  --type-caption: calc(12px * var(--text-scale));
+  --type-small: calc(13px * var(--text-scale));
+  --type-label: calc(14px * var(--text-scale));
+  --type-body: calc(15px * var(--text-scale));
+  --background: #151d26;
+  --surface: #1c2732;
+  --surface-raised: #263440;
+  --sidebar-bg: #111922;
+  --bar-bg: #111922;
+  --panel-subtle: #18222c;
+  --field-bg: #16212a;
+  --border: #354450;
+  --border-strong: #526472;
+  --text: #edf2f3;
+  --muted: #bac8cf;
+  --subtle: #9cafb9;
+  --accent: #8cdbc8;
+  --accent-hover: #adebdc;
+  --on-accent: #102c27;
+  --accent-text: #a4e5d5;
+  --accent-muted: #8ccebf;
+  --code-bg: #121b24;
+  --code-gutter: #18232d;
+  --code-text: #dbe5e9;
+  --syntax-keyword: #c7b7f2;
+  --syntax-number: #e6c08c;
+  --syntax-variable: #9dc9ec;
+  --error: #ffb3b7;
+  --warning: #edcf91;
+  --success-text: #a1d6af;
+  --overlay: rgb(6 12 18 / 76%);
+  --shadow-panel: 0 2px 8px rgb(0 0 0 / 8%);
+  --shadow-floating: 0 16px 48px rgb(0 0 0 / 32%);
+}
+
+:root[data-theme="light"], .theme-preview-light {
+  color-scheme: light;
+  --background: #f3f2ed;
+  --surface: #fffefa;
+  --surface-raised: #eaece5;
+  --sidebar-bg: #e8ebe3;
+  --bar-bg: #e8ebe3;
+  --panel-subtle: #eeefe9;
+  --field-bg: #fffefa;
+  --border: #d2d8ce;
+  --border-strong: #9daaa0;
+  --text: #24352e;
+  --muted: #4c6056;
+  --subtle: #5c6e64;
+  --accent: #216452;
+  --accent-hover: #184f40;
+  --on-accent: #ffffff;
+  --accent-text: #205e4d;
+  --accent-muted: #326c5b;
+  --code-bg: #f4f5ef;
+  --code-gutter: #eaece5;
+  --code-text: #2c4038;
+  --syntax-keyword: #704c98;
+  --syntax-number: #865512;
+  --syntax-variable: #245e8a;
+  --error: #aa3044;
+  --warning: #80530e;
+  --success-text: #2f693d;
+  --overlay: rgb(25 39 32 / 38%);
+  --shadow-panel: 0 2px 8px rgb(30 50 38 / 4%);
+  --shadow-floating: 0 16px 48px rgb(30 50 38 / 18%);
+}
+
+:root[data-theme="night"], .theme-preview-night {
+  color-scheme: dark;
+  --background: #101414;
+  --surface: #191f1e;
+  --surface-raised: #252e2b;
+  --sidebar-bg: #0b100f;
+  --bar-bg: #0b100f;
+  --panel-subtle: #141b18;
+  --field-bg: #111815;
+  --border: #37433e;
+  --border-strong: #5c7065;
+  --text: #edf2e9;
+  --muted: #c3cec3;
+  --subtle: #a5b8a8;
+  --accent: #c0dca3;
+  --accent-hover: #d3e9bd;
+  --on-accent: #1d2d19;
+  --accent-text: #cce6b2;
+  --accent-muted: #b5d19a;
+  --code-bg: #0c1210;
+  --code-gutter: #141c18;
+  --code-text: #dce8dc;
+  --syntax-keyword: #cdbde3;
+  --syntax-number: #e7c794;
+  --syntax-variable: #a8cce2;
+  --error: #ffb5b5;
+  --warning: #f0d5a0;
+  --success-text: #a9d6b0;
+  --overlay: rgb(0 5 2 / 84%);
+}
+
+:root, .theme-preview {
+  --panel-bg: var(--surface);
+  --panel: var(--surface);
+  --green: var(--success-text);
+  --hover-bg: color-mix(in srgb, var(--text) 6%, transparent);
+  --accent-soft: color-mix(in srgb, var(--accent) 11%, transparent);
+  --accent-border: color-mix(in srgb, var(--accent) 42%, var(--border));
+  --error-soft: color-mix(in srgb, var(--error) 9%, transparent);
+  --error-border: color-mix(in srgb, var(--error) 45%, var(--border));
+  --warning-soft: color-mix(in srgb, var(--warning) 9%, transparent);
+  --warning-border: color-mix(in srgb, var(--warning) 45%, var(--border));
+  --success-soft: color-mix(in srgb, var(--success-text) 10%, transparent);
+  --added-gutter: color-mix(in srgb, var(--success-text) 16%, var(--code-bg));
+  --removed-gutter: color-mix(in srgb, var(--error) 16%, var(--code-bg));
+  --question-bg: var(--accent-soft);
+  --help-intro: var(--accent-soft);
+}

@@ -83,32 +83,23 @@ func TestCustomInfoShowsExactCanonicalProfile(t *testing.T) {
 	}
 }
 
-func TestCustomACPExecuteAndList(t *testing.T) {
-	c := &planningClient{responses: []client.Message{
-		{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{planToolCall(subagent.TaskStartToolName, `{"objective":"inspect"}`)}},
-		{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{planToolCall(subagent.TaskCompleteToolName, `{"outcome":"succeeded","summary":"ACP custom result"}`)}},
-		{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{planToolCall(subagent.TaskStartToolName, `{"objective":"inspect builtin"}`)}},
-		{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{planToolCall(subagent.TaskCompleteToolName, `{"outcome":"succeeded","summary":"ACP builtin result"}`)}},
-	}}
+func TestCustomACPManagementRemainsAndExecutionRequiresTickets(t *testing.T) {
+	c := &fakeClient{}
 	agent, ws, connection := testACPAgent(t, c, &fakeAgentTools{})
-	agent.state.config.Provider.Model = "plan-model"
 	profiles := subagent.ProfileStore{Workspace: ws.Root + "/.q/subagents"}
-	if err := profiles.Save(subagent.Profile{Version: 1, Name: "inspector", Role: config.AgentRoleResearch, SystemPrompt: "ACP profile prompt", Tools: []string{}}, "workspace", nil); err != nil {
+	if err := profiles.Save(subagent.Profile{Version: 1, Name: "inspector", Role: config.AgentRoleResearch, SystemPrompt: "Inspect", Tools: []string{}}, "workspace", nil); err != nil {
 		t.Fatal(err)
 	}
 	id := openTestACPSession(t, agent, ws.Root)
-	for _, command := range []string{
-		"/subagents list", "/subagents show inspector", "/subagents show builtin/senior-developer",
-		"/subagent inspector explicit context", "/subagent builtin/senior-developer inspect builtin context",
-	} {
+	for _, command := range []string{"/subagents list", "/subagents show inspector"} {
 		response, err := agent.Prompt(t.Context(), acp.PromptRequest{SessionId: id, Prompt: []acp.ContentBlock{acp.TextBlock(command)}})
 		if err != nil || response.StopReason != acp.StopReasonEndTurn {
-			t.Fatalf("%s: %+v %v", command, response, err)
+			t.Fatalf("management %s: %+v %v", command, response, err)
 		}
 	}
-	if len(c.requests) != 4 || len(c.requests[0].Messages) != 2 ||
-		!strings.HasPrefix(c.requests[0].Messages[0].Content, "ACP profile prompt\n\nAgent Skills are retrieved") {
-		t.Fatal(c.requests)
+	_, err := agent.Prompt(t.Context(), acp.PromptRequest{SessionId: id, Prompt: []acp.ContentBlock{acp.TextBlock("/subagent inspector inspect")}})
+	if err == nil || !strings.Contains(err.Error(), "ticket_create") || len(c.requests) != 0 {
+		t.Fatalf("direct run: %v requests=%d", err, len(c.requests))
 	}
 	var output string
 	for _, n := range connection.snapshot() {
@@ -116,9 +107,8 @@ func TestCustomACPExecuteAndList(t *testing.T) {
 			output += u.Content.Text.Text
 		}
 	}
-	if !strings.Contains(output, "ACP custom result") || !strings.Contains(output, "ACP builtin result") ||
-		!strings.Contains(output, "inspector") || !strings.Contains(output, subagent.BuiltinSeniorDeveloperID) {
-		t.Fatal(output)
+	if !strings.Contains(output, "inspector") {
+		t.Fatal("profile management output disappeared")
 	}
 }
 
@@ -146,39 +136,15 @@ func TestCustomEditorShowsStatusWithoutLosingDraft(t *testing.T) {
 	}
 }
 
-func TestCustomTUIExecute(t *testing.T) {
-	value := config.Default()
-	value.Provider.Model = "plan-model"
-	value.Agents.Roles = map[string]config.AgentConfig{"analyst": {}}
+func TestCustomTUIRequiresTicketAssignment(t *testing.T) {
 	m := newModel(t.Context(), config.Store{Dir: t.TempDir()}, nil)
-	store := workspace.Store{Root: t.TempDir()}
-	m.workspaceStore = &store
-	m.toolRuntime = &fakeAgentTools{}
-	c := &planningClient{responses: []client.Message{
-		{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{planToolCall(subagent.TaskStartToolName, `{"objective":"inspect"}`)}},
-		{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{planToolCall(subagent.TaskCompleteToolName, `{"outcome":"succeeded","summary":"custom result"}`)}},
-	}}
-	m.enterChat(value, c)
-	m.resize(100, 36)
-	if err := m.customStore().Save(subagent.Profile{Version: 1, Name: "inspector", Role: "analyst", SystemPrompt: "custom prompt", Tools: []string{}}, "workspace", nil); err != nil {
-		t.Fatal(err)
-	}
-	m.input.SetValue("/subagent inspector inspect this")
+	c := &fakeClient{}
+	m.enterChat(config.Default(), c)
+	m.input.SetValue("/subagent builtin/research inspect this")
 	updated, cmd := m.submitChat()
 	m = updated.(model)
-	if !m.waiting {
-		t.Fatal(m.status)
-	}
-	for i := 0; m.waiting && i < 64; i++ {
-		updated, cmd = m.Update(nextAgentMessage(t, cmd))
-		m = updated.(model)
-	}
-	if m.waiting || m.messages[len(m.messages)-1].Content != "custom result" {
-		t.Fatalf("%s %+v", m.status, m.messages)
-	}
-	if len(c.requests) != 2 || len(c.requests[0].Messages) != 2 ||
-		!strings.HasPrefix(c.requests[0].Messages[0].Content, "custom prompt\n\nAgent Skills are retrieved") {
-		t.Fatal(c.requests)
+	if m.waiting || cmd != nil || len(c.requests) != 0 || !strings.Contains(m.status, "ticket_create") {
+		t.Fatalf("direct invocation started: %s %+v", m.status, c.requests)
 	}
 }
 func TestCustomTUIManageProfile(t *testing.T) {
