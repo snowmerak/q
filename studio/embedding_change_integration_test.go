@@ -5,11 +5,80 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/snowmerak/q/config"
+	"github.com/snowmerak/q/sessionstore"
 	"github.com/snowmerak/q/workspace"
 )
+
+func TestStudioDisablesEmbeddingsAfterOldProviderFails(t *testing.T) {
+	var embeddingCalls atomic.Int64
+	fixture := newStudioIntegrationConfigured(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v1/embeddings" {
+			embeddingCalls.Add(1)
+			http.Error(w, `model "removed/embedding" uses unknown provider prefix "removed"`, http.StatusBadRequest)
+			return
+		}
+		studioTestModel(w, r)
+	}, func(value *config.Config) {
+		value.Embedding = config.EmbeddingConfig{Model: "default/embedding", Dimensions: 3}
+	})
+	server := httptest.NewServer(fixture.handler)
+	defer server.Close()
+	turn := func() studioRunPage {
+		t.Helper()
+		run := fixture.start(t, "controlled finish")
+		endpoint := server.URL + "/api/v1/sessions/" + fixture.session.SessionID + "/runs/" + run.ID + "/events?workspace_root=" + url.QueryEscape(fixture.root)
+		return waitStudioPage(t, endpoint, func(page studioRunPage) bool { return terminalRunStatus(page.Run.Status) })
+	}
+	turn()
+	if embeddingCalls.Load() == 0 {
+		t.Fatal("old provider did not fail before disabling embeddings")
+	}
+	response := serveJSON(t, fixture.handler, http.MethodPut, "/api/v1/settings/models/embedding", map[string]any{
+		"model": "", "embedding_dimensions": 0, "workspace_root": fixture.root,
+	})
+	if response.Code != http.StatusAccepted {
+		t.Fatalf("disable = %d %s", response.Code, response.Body.String())
+	}
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		response = serveJSON(t, fixture.handler, http.MethodGet, "/api/v1/settings", nil)
+		var value settingsSnapshot
+		if err := json.Unmarshal(response.Body.Bytes(), &value); err != nil {
+			t.Fatal(err)
+		}
+		if value.Models.EmbeddingChange == nil && value.Models.EmbeddingModel == "" && value.Models.EmbeddingDimensions == 0 {
+			break
+		}
+		if time.Now().After(deadline) || value.Models.EmbeddingChange != nil && value.Models.EmbeddingChange.State == "failed" {
+			t.Fatalf("disabled request blocked by old provider: %+v", value.Models)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	// Failed enrichment must still leave the original conversation searchable.
+	archive, err := sessionstore.Open(fixture.root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, searchErr := archive.Search(t.Context(), sessionstore.SearchOptions{Text: "controlled finish", Limit: 10})
+	closeErr := archive.Close()
+	if searchErr != nil || closeErr != nil || len(result.Hits) == 0 {
+		t.Fatalf("original archive lost: %+v, %v, %v", result, searchErr, closeErr)
+	}
+	calls := embeddingCalls.Load()
+	page := turn()
+	if page.Run.Status != "completed" || strings.Contains(page.Run.Error, "embedding") {
+		t.Fatalf("turn after disabling = %+v", page.Run)
+	}
+	if embeddingCalls.Load() != calls {
+		t.Fatal("disabled session still called embedding provider")
+	}
+}
 
 func TestStudioEmbeddingChangeAppliesAfterAllSessionTurnsFinish(t *testing.T) {
 	first := newStudioIntegration(t)

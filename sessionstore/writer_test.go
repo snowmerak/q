@@ -162,6 +162,8 @@ func TestWriterPersistsRecordsWhenOptionalPreparationFails(t *testing.T) {
 	}
 	if err := writer.Flush(); err == nil {
 		t.Fatal("Flush succeeded after preparation failure")
+	} else if _, ok := errors.AsType[*PreparationError](err); !ok {
+		t.Fatalf("Flush error = %v; want optional PreparationError", err)
 	}
 	result, err := store.Search(context.Background(), SearchOptions{Text: "lexical fallback", Limit: 10})
 	if err != nil {
@@ -169,5 +171,29 @@ func TestWriterPersistsRecordsWhenOptionalPreparationFails(t *testing.T) {
 	}
 	if len(result.Hits) != 1 {
 		t.Fatalf("fallback hits = %#v", result.Hits)
+	}
+}
+
+type failingWriterStore struct {
+	interfaceWriterStore
+	err error
+}
+
+func (s *failingWriterStore) Save(Record) (Record, error)          { return Record{}, s.err }
+func (s *failingWriterStore) SaveBatch([]Record) ([]Record, error) { return nil, s.err }
+
+func TestWriterPreparationFailureDoesNotHidePersistenceFailure(t *testing.T) {
+	preparation := errors.New("embedding provider unavailable")
+	persistence := errors.New("archive disk full")
+	writer := NewWriterWithOptions(&failingWriterStore{err: persistence}, WriterOptions{
+		Prepare: func(context.Context, []Record) ([]Record, error) { return nil, preparation },
+	})
+	if err := writer.Append(Record{Kind: KindMessage, Content: "must persist"}); err != nil {
+		t.Fatal(err)
+	}
+	for _, err := range []error{writer.Flush(), writer.Close()} {
+		if !errors.Is(err, preparation) || !errors.Is(err, persistence) {
+			t.Fatalf("archive barrier lost an error: %v", err)
+		}
 	}
 }

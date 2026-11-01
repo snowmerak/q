@@ -26,6 +26,19 @@ type writeRequest struct {
 // derived data cannot cause archive loss.
 type RecordBatchPreparer func(context.Context, []Record) ([]Record, error)
 
+// PreparationError reports a failure of optional record enrichment. The writer
+// still attempts to persist the original records; persistence errors are reported
+// separately so callers can distinguish them from missing derived data.
+type PreparationError struct {
+	Err error
+}
+
+func (e *PreparationError) Error() string {
+	return fmt.Sprintf("sessionstore: prepare archive records: %v", e.Err)
+}
+
+func (e *PreparationError) Unwrap() error { return e.Err }
+
 type WriterOptions struct {
 	Buffer    int
 	BatchSize int
@@ -52,10 +65,11 @@ type Writer struct {
 	prepare   RecordBatchPreparer
 	batchSize int
 
-	mu       sync.Mutex
-	closed   bool
-	errMu    sync.Mutex
-	firstErr error
+	mu         sync.Mutex
+	closed     bool
+	errMu      sync.Mutex
+	firstErr   error
+	prepareErr error
 }
 
 func NewWriter(store WriterStore, buffer int) *Writer {
@@ -118,14 +132,14 @@ func (w *Writer) Flush() error {
 	return w.Err()
 }
 
-// Err reports the first background persistence error, if any.
+// Err reports the first persistence and optional preparation errors, if any.
 func (w *Writer) Err() error {
 	if w == nil {
 		return ErrWriterClosed
 	}
 	w.errMu.Lock()
 	defer w.errMu.Unlock()
-	return w.firstErr
+	return errors.Join(w.firstErr, w.prepareErr)
 }
 
 // Close drains queued records and closes the owned Store.
@@ -204,9 +218,9 @@ func (w *Writer) saveBatch(records []Record) {
 		}
 		candidate, err := w.prepare(w.ctx, copies)
 		if err != nil {
-			w.rememberError(fmt.Errorf("sessionstore: prepare archive records: %w", err))
+			w.rememberPreparationError(err)
 		} else if len(candidate) != len(prepared) {
-			w.rememberError(fmt.Errorf("sessionstore: prepared %d archive records; want %d", len(candidate), len(prepared)))
+			w.rememberPreparationError(fmt.Errorf("prepared %d archive records; want %d", len(candidate), len(prepared)))
 		} else {
 			prepared = candidate
 		}
@@ -253,5 +267,13 @@ func (w *Writer) rememberError(err error) {
 	defer w.errMu.Unlock()
 	if w.firstErr == nil {
 		w.firstErr = err
+	}
+}
+
+func (w *Writer) rememberPreparationError(err error) {
+	w.errMu.Lock()
+	defer w.errMu.Unlock()
+	if w.prepareErr == nil {
+		w.prepareErr = &PreparationError{Err: err}
 	}
 }

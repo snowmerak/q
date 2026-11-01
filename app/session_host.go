@@ -335,29 +335,28 @@ func (host *SessionHost) syncEmbeddings(ctx context.Context, root string, value 
 	if err != nil {
 		return err
 	}
-	value, err = host.ensureProviderContext(ctx, value)
-	if err != nil {
-		return err
-	}
-	configuredClient, err := host.factory(value)
-	if err != nil {
-		return err
-	}
-	defer func() { returnErr = errors.Join(returnErr, configuredClient.Close()) }()
-
-	libraryRuntime, err := qlibrary.Ensure(ctx, host.store.Dir)
-	if err != nil {
-		return err
-	}
-	defer func() { returnErr = errors.Join(returnErr, libraryRuntime.Close()) }()
 	var embedder qlibrary.Embedder
 	if value.Embedding.Model != "" {
+		value, err = host.ensureProviderContext(ctx, value)
+		if err != nil {
+			return err
+		}
+		configuredClient, err := host.factory(value)
+		if err != nil {
+			return err
+		}
+		defer func() { returnErr = errors.Join(returnErr, configuredClient.Close()) }()
 		var ok bool
 		embedder, ok = configuredClient.(qlibrary.Embedder)
 		if !ok {
 			return errors.New("configured LLM client does not support embeddings")
 		}
 	}
+	libraryRuntime, err := qlibrary.Ensure(ctx, host.store.Dir)
+	if err != nil {
+		return err
+	}
+	defer func() { returnErr = errors.Join(returnErr, libraryRuntime.Close()) }()
 	if err := libraryRuntime.Client().ConfigureEmbedding(embedder, value.Embedding.Model, value.Embedding.Dimensions); err != nil {
 		return err
 	}

@@ -86,6 +86,34 @@ func TestSessionHostMigratesAllCatalogArchivesWithoutSelectedRoot(t *testing.T) 
 	}
 }
 
+func TestSessionHostDisablesEmbeddingsWithoutProvider(t *testing.T) {
+	settings := config.Store{Dir: t.TempDir()}
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := listener.Addr().(*net.TCPAddr).Port
+	_ = listener.Close()
+	if err := (qlibrary.ConfigStore{Dir: settings.Dir}).Save(qlibrary.Config{Host: "127.0.0.1", Port: port}); err != nil {
+		t.Fatal(err)
+	}
+	value := config.Default()
+	value.Provider.Model = "test-model"
+	value.Embedding = config.EmbeddingConfig{}
+	if err := settings.Save(value); err != nil {
+		t.Fatal(err)
+	}
+	// No provider manager is available, and constructing a client must not run.
+	host := &SessionHost{ctx: t.Context(), runtime: &hostruntime.Runtime{}, store: settings,
+		factory: func(config.Config) (chatClient, error) {
+			t.Error("disabling embeddings constructed a model client")
+			return nil, errors.New("provider unavailable")
+		}}
+	if err := host.SyncEmbeddings(t.Context(), "", value); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestManualEmbeddingSyncUsesSavedSettingsAndOnlySelectedArchive(t *testing.T) {
 	settings := config.Store{Dir: t.TempDir()}
 	listener, err := net.Listen("tcp", "127.0.0.1:0")

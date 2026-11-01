@@ -9,6 +9,7 @@ import (
 
 	"github.com/snowmerak/q/client"
 	"github.com/snowmerak/q/config"
+	"github.com/snowmerak/q/sessionstore"
 
 	"github.com/snowmerak/q/workspace"
 )
@@ -212,5 +213,34 @@ func TestLiveSessionManualCompactionRetainsSession(t *testing.T) {
 	}
 	if _, err := session.execute(t.Context(), "after compaction", false, nil, nil); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestEmbeddingTransitionPreservesRequiredCloseErrors(t *testing.T) {
+	persistence := errors.New("archive disk full")
+	optional := &sessionstore.PreparationError{Err: errors.New("unknown provider prefix")}
+	for _, test := range []struct {
+		name string
+		err  error
+		want error
+	}{
+		{"optional", errors.Join(optional, errors.Join(optional)), nil},
+		{"persistence", persistence, persistence},
+		{"mixed", errors.Join(optional, errors.Join(persistence, optional)), persistence},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			done := make(chan struct{})
+			close(done)
+			session := &liveSession{cancel: func() {}, done: done, err: test.err}
+			host := &SessionHost{liveSessions: map[string]*liveSession{"old": session}}
+			applied := false
+			err := host.withIdleSessions(t.Context(), func() error { applied = true; return nil })
+			if test.want == nil && (err != nil || !applied) {
+				t.Fatalf("optional failure blocked transition: applied=%v, err=%v", applied, err)
+			}
+			if test.want != nil && (!errors.Is(err, test.want) || applied) {
+				t.Fatalf("required failure ignored: applied=%v, err=%v", applied, err)
+			}
+		})
 	}
 }

@@ -12,6 +12,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/snowmerak/q/config"
 	"github.com/snowmerak/q/mcpconfig"
+	"github.com/snowmerak/q/sessionstore"
 	"github.com/snowmerak/q/workspace"
 )
 
@@ -439,13 +440,31 @@ func (host *SessionHost) withIdleSessions(ctx context.Context, apply func() erro
 	}
 	var err error
 	for _, session := range leased {
-		err = errors.Join(err, session.close())
+		err = errors.Join(err, embeddingTransitionError(session.close()))
 	}
 	if err == nil {
 		err = ctx.Err()
 	}
 	if err == nil && apply != nil {
 		err = apply()
+	}
+	return err
+}
+
+// Optional embeddings from the old model must not prevent switching models or
+// disabling them. Keep every persistence/resource error, even when it is joined
+// with an enrichment failure by the archive flush and close barriers.
+func embeddingTransitionError(err error) error {
+	if joined, ok := err.(interface{ Unwrap() []error }); ok {
+		var required []error
+		for _, child := range joined.Unwrap() {
+			required = append(required, embeddingTransitionError(child))
+		}
+		return errors.Join(required...)
+	}
+	var preparation *sessionstore.PreparationError
+	if errors.As(err, &preparation) {
+		return nil
 	}
 	return err
 }
