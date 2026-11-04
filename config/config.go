@@ -57,6 +57,7 @@ type Config struct {
 	Context                       ContextConfig               `yaml:"context,omitempty"`
 	Plan                          PlanConfig                  `yaml:"plan,omitempty"`
 	ModelGroups                   map[string]ModelGroupConfig `yaml:"model_groups,omitempty"`
+	ProviderAPIModes              map[string]string           `yaml:"provider_api_modes,omitempty"`
 	ModelAPIModes                 map[string]string           `yaml:"model_api_modes,omitempty"`
 	ModelSampling                 map[string]SamplingConfig   `yaml:"model_sampling,omitempty"`
 	ModelAllowMissingFinishReason map[string]bool             `yaml:"model_allow_missing_finish_reason,omitempty"`
@@ -282,6 +283,14 @@ func (c Config) Validate() error {
 	}
 	if !c.Provider.Managed && strings.TrimSpace(c.Provider.Model) == "" {
 		return fmt.Errorf("config: provider model is required")
+	}
+	for provider, mode := range c.ProviderAPIModes {
+		if provider == "" || provider != strings.TrimSpace(provider) {
+			return fmt.Errorf("config: provider_api_modes key %q must be a provider ID without surrounding whitespace", provider)
+		}
+		if mode != "chat_completions" && mode != "responses" {
+			return fmt.Errorf("config: provider_api_modes[%q] must be chat_completions or responses", provider)
+		}
 	}
 	for model, mode := range c.ModelAPIModes {
 		if model == "" || model != strings.TrimSpace(model) || strings.HasPrefix(model, "group/") {

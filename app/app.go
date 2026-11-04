@@ -57,7 +57,7 @@ func managedClientFactory(runtime providerRuntime, recorder client.UsageRecorder
 		if apiKey == "" {
 			return nil, errors.New("internal LLM Gateway API key is unavailable")
 		}
-		providerModes := providerhost.PreferredProviderAPIModes(runtime.Config())
+		providerModes := providerhost.PreferredProviderAPIModes(runtime.Config(), value)
 		retry := value.Provider.EffectiveRequestRetry()
 		return client.New(client.Config{
 			Retry:                client.RetryPolicy{MaxAttempts: retry.MaxAttempts, InitialBackoff: retry.InitialBackoff, MaxBackoff: retry.MaxBackoff},

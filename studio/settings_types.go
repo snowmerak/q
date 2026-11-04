@@ -86,6 +86,7 @@ type gatewayProviderSettings struct {
 	ID              string `json:"id"`
 	Type            string `json:"type"`
 	Kind            string `json:"kind"`
+	APIMode         string `json:"api_mode"`
 	Prefix          string `json:"prefix"`
 	Enabled         bool   `json:"enabled"`
 	BaseURL         string `json:"base_url"`
@@ -187,15 +188,16 @@ type workspaceRoleModelAssignment struct {
 }
 
 type gatewayProviderUpdate struct {
-	ID          string `json:"id"`
-	Type        string `json:"type"`
-	Kind        string `json:"kind,omitempty"`
-	Prefix      string `json:"prefix,omitempty"`
-	Enabled     bool   `json:"enabled"`
-	BaseURL     string `json:"base_url,omitempty"`
-	APIKeyEnv   string `json:"api_key_env,omitempty"`
-	APIKey      string `json:"api_key,omitempty"`
-	ClearAPIKey bool   `json:"clear_api_key,omitempty"`
+	ID          string  `json:"id"`
+	Type        string  `json:"type"`
+	Kind        string  `json:"kind,omitempty"`
+	APIMode     *string `json:"api_mode,omitempty"`
+	Prefix      string  `json:"prefix,omitempty"`
+	Enabled     bool    `json:"enabled"`
+	BaseURL     string  `json:"base_url,omitempty"`
+	APIKeyEnv   string  `json:"api_key_env,omitempty"`
+	APIKey      string  `json:"api_key,omitempty"`
+	ClearAPIKey bool    `json:"clear_api_key,omitempty"`
 }
 
 type systemOneProviderUpdate struct {
@@ -239,6 +241,7 @@ type modelOption struct {
 	DefaultEffort            string                `json:"default_effort,omitempty"`
 	Group                    bool                  `json:"group,omitempty"`
 	APIMode                  string                `json:"api_mode,omitempty"`
+	APIModeOverride          string                `json:"api_mode_override"`
 	ContextOverride          int64                 `json:"context_override,omitempty"`
 	AllowMissingFinishReason bool                  `json:"allow_missing_finish_reason"`
 	OutputLimit              *int                  `json:"output_limit,omitempty"`

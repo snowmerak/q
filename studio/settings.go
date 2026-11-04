@@ -152,7 +152,7 @@ func (service *settingsService) snapshot() (settingsSnapshot, error) {
 			modelCount = len(provider.ModelMetadata)
 		}
 		providerItems = append(providerItems, gatewayProviderSettings{
-			ID: provider.ID, Type: provider.Type, Kind: provider.Kind, Prefix: provider.Prefix,
+			ID: provider.ID, Type: provider.Type, Kind: provider.Kind, Prefix: provider.Prefix, APIMode: providerhost.ProviderAPIMode(main, provider.ID),
 			Enabled: provider.Enabled, BaseURL: provider.BaseURL, APIKeyEnv: provider.APIKeyEnv,
 			HasInlineAPIKey: provider.APIKey != "", ModelCount: modelCount,
 		})

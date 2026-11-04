@@ -63,8 +63,9 @@ func (service *settingsService) serveModelCatalog(writer http.ResponseWriter, re
 		return
 	}
 	result := modelCatalog{Models: make([]modelOption, 0, len(models)+len(mainConfig.ModelGroups))}
+	providerModes := providerhost.PreferredProviderAPIModes(providerConfig, mainConfig)
 	for _, model := range models {
-		option := modelOption{ID: model.ID, ContextLength: model.ContextLength, APIMode: mainConfig.ModelAPIMode(model.ID)}
+		option := modelOption{ID: model.ID, ContextLength: model.ContextLength, APIMode: providerhost.PreferredModelAPIMode(mainConfig, providerModes, model.ID), APIModeOverride: mainConfig.ModelAPIModes[model.ID]}
 		option.Sampling = mainConfig.ModelSampling[model.ID]
 		option.MaxOutputTokens = model.MaxOutputTokens
 		option.AllowMissingFinishReason = mainConfig.ModelAllowMissingFinishReason[model.ID]
@@ -248,7 +249,7 @@ func (service *settingsService) serveModelAPIModeUpdate(writer http.ResponseWrit
 	if value.ModelAPIModes == nil {
 		value.ModelAPIModes = make(map[string]string)
 	}
-	if update.Mode == "" || update.Mode == "chat_completions" {
+	if update.Mode == "" {
 		delete(value.ModelAPIModes, update.Model)
 	} else {
 		value.ModelAPIModes[update.Model] = update.Mode

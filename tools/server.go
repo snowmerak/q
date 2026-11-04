@@ -201,7 +201,7 @@ func RunStdioWithLoomOptions(ctx context.Context, root string, options loom.Stor
 			embeddingClient, err = client.New(client.Config{
 				BaseURL: embeddingManager.Endpoint(), APIKey: embeddingManager.APIKey(),
 				DefaultModel: loaded.Provider.Model, ModelAPIModes: loaded.EffectiveModelAPIModes(),
-				ProviderAPIModes: providerhost.PreferredProviderAPIModes(embeddingManager.Config()),
+				ProviderAPIModes: providerhost.PreferredProviderAPIModes(embeddingManager.Config(), loaded),
 				UsageRecorder:    usageRecorder, ForwardUsageMetadata: true,
 			})
 		} else {

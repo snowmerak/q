@@ -140,6 +140,17 @@ func (state *transferState) merge(section, id string, data json.RawMessage) erro
 			return nil
 		}
 	case "providers":
+		if kind == "api-mode" && name != "" {
+			mode, err := transferValue[string](data)
+			if err != nil {
+				return err
+			}
+			if state.main.ProviderAPIModes == nil {
+				state.main.ProviderAPIModes = make(map[string]string)
+			}
+			state.main.ProviderAPIModes[name] = mode
+			return nil
+		}
 		if kind == "provider" && name != "" {
 			value, err := transferValue[gateway.ProviderConfig](data)
 			if err != nil {
@@ -364,6 +375,11 @@ func (state *transferState) merge(section, id string, data json.RawMessage) erro
 }
 
 func transferTouchesMain(bundle settingsBundle) bool {
+	for id := range bundle.Sections["providers"] {
+		if strings.HasPrefix(id, "api-mode/") {
+			return true
+		}
+	}
 	if len(bundle.Sections["models"])+len(bundle.Sections["runtime"]) > 0 {
 		return true
 	}

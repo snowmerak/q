@@ -184,7 +184,7 @@ func TestManagedClientFactoryUsesGatewayAPIKey(t *testing.T) {
 	}
 }
 
-func TestManagedClientFactoryPrefersResponsesForKnownProvider(t *testing.T) {
+func TestManagedClientFactoryUsesConfiguredProviderAPIMode(t *testing.T) {
 	var paths []string
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		paths = append(paths, request.URL.Path)
@@ -204,6 +204,7 @@ func TestManagedClientFactoryPrefersResponsesForKnownProvider(t *testing.T) {
 	}}}
 	value := config.Default()
 	value.Provider.Model = "openai/gpt-5-nano"
+	value.ProviderAPIModes = map[string]string{"openai": "responses"}
 	factory := managedClientFactory(runtime, nil)
 	configured, err := factory(value)
 	if err != nil {

@@ -84,6 +84,10 @@ func (service *settingsService) saveTransfer(request *http.Request, state transf
 			writes = append(writes, transferWrite{path, func() error { return profiles.Save(entry.Profile, "global", original) }})
 		}
 	}
+	return service.saveSettingsWrites(request, writes)
+}
+
+func (service *settingsService) saveSettingsWrites(request *http.Request, writes []transferWrite) error {
 	backups := make([]transferBackup, 0, len(writes))
 	for _, write := range writes {
 		backup := transferBackup{path: write.path, mode: 0600}
@@ -114,7 +118,7 @@ func (service *settingsService) saveTransfer(request *http.Request, state transf
 		for index := count - 1; index >= 0; index-- {
 			errs = append(errs, backups[index].restore())
 		}
-		return errors.Join(fmt.Errorf("import failed; restoring previous settings: %w", cause), errors.Join(errs...))
+		return errors.Join(fmt.Errorf("save settings failed; restoring previous settings: %w", cause), errors.Join(errs...))
 	}
 	for index, write := range writes {
 		if err := write.save(); err != nil {

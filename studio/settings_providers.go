@@ -3,11 +3,14 @@ package studio
 import (
 	"errors"
 	"fmt"
+	"maps"
 	"net/http"
+	"reflect"
 	"strings"
 	"time"
 
 	"github.com/snowmerak/llm-provider/gateway"
+	"github.com/snowmerak/q/config"
 	"github.com/snowmerak/q/providerhost"
 )
 
@@ -26,7 +29,7 @@ func (service *settingsService) serveProviderCreate(writer http.ResponseWriter, 
 	}
 	provider := applyProviderUpdate(gateway.ProviderConfig{}, update)
 	value.Providers = append(value.Providers, provider)
-	if err := service.saveProviderConfig(request, value); err != nil {
+	if err := service.saveProviderSettings(request, value, gateway.ProviderConfig{}, provider, update.APIMode); err != nil {
 		writeAPIError(writer, http.StatusUnprocessableEntity, err)
 		return
 	}
@@ -51,8 +54,10 @@ func (service *settingsService) serveProviderUpdate(writer http.ResponseWriter, 
 		writeAPIError(writer, http.StatusNotFound, errors.New("gateway provider does not exist"))
 		return
 	}
-	value.Providers[index] = applyProviderUpdate(value.Providers[index], update)
-	if err := service.saveProviderConfig(request, value); err != nil {
+	previous := value.Providers[index]
+	provider := applyProviderUpdate(previous, update)
+	value.Providers[index] = provider
+	if err := service.saveProviderSettings(request, value, previous, provider, update.APIMode); err != nil {
 		writeAPIError(writer, http.StatusUnprocessableEntity, err)
 		return
 	}
@@ -76,8 +81,9 @@ func (service *settingsService) serveProviderDelete(writer http.ResponseWriter, 
 		writeAPIError(writer, http.StatusUnprocessableEntity, errors.New("at least one Gateway provider is required"))
 		return
 	}
+	previous := value.Providers[index]
 	value.Providers = append(value.Providers[:index], value.Providers[index+1:]...)
-	if err := service.saveProviderConfig(request, value); err != nil {
+	if err := service.saveProviderSettings(request, value, previous, gateway.ProviderConfig{}, nil); err != nil {
 		writeAPIError(writer, http.StatusUnprocessableEntity, err)
 		return
 	}
@@ -206,4 +212,50 @@ func providerIndex(value gateway.Config, id string) int {
 		}
 	}
 	return -1
+}
+
+// Keep provider routing and Q's API option in the existing rollback boundary.
+func (service *settingsService) saveProviderSettings(request *http.Request, providers gateway.Config, previous, next gateway.ProviderConfig, requested *string) error {
+	main, err := service.main.Load()
+	if errors.Is(err, config.ErrNotFound) {
+		main = config.Default()
+		main.UseManagedGateway()
+		err = nil
+	}
+	if err != nil {
+		return err
+	}
+	original := main.ProviderAPIModes
+	main.ProviderAPIModes = maps.Clone(original)
+	if main.ProviderAPIModes == nil {
+		main.ProviderAPIModes = make(map[string]string)
+	}
+	if previous.ID != "" && previous.ID != next.ID {
+		if mode, ok := main.ProviderAPIModes[previous.ID]; ok && next.ID != "" {
+			main.ProviderAPIModes[next.ID] = mode
+		}
+		delete(main.ProviderAPIModes, previous.ID)
+	}
+	if next.ID != "" {
+		if requested != nil {
+			mode := strings.TrimSpace(*requested)
+			if mode == "" {
+				delete(main.ProviderAPIModes, next.ID)
+			} else {
+				main.ProviderAPIModes[next.ID] = mode
+			}
+		} else if (previous.Kind == "" && next.Kind != "" || previous.Type != next.Type) && providerhost.InitialProviderAPIMode(next) == "responses" {
+			main.ProviderAPIModes[next.ID] = "responses"
+		}
+	}
+	if len(main.ProviderAPIModes) == 0 && original == nil {
+		main.ProviderAPIModes = nil
+	}
+	if reflect.DeepEqual(original, main.ProviderAPIModes) {
+		return service.saveProviderConfig(request, providers)
+	}
+	return service.saveSettingsWrites(request, []transferWrite{
+		{service.main.Path(), func() error { return service.main.Save(main) }},
+		{service.providers.Path(), func() error { return service.saveProviderConfig(request, providers) }},
+	})
 }

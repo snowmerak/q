@@ -22,6 +22,7 @@ export type GatewayProvider = {
   id: string;
   type: string;
   kind: string;
+  api_mode: string;
   prefix: string;
   enabled: boolean;
   base_url: string;
@@ -55,6 +56,7 @@ export type ModelOption = {
   default_effort?: string;
   group?: boolean;
   api_mode?: string;
+  api_mode_override?: string;
   context_override?: number;
   sampling?: ModelSampling;
 };

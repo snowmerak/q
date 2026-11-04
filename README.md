@@ -446,9 +446,9 @@ Assignments may reference ordered model groups. A group can fall back after a
 candidate timeout or transient HTTP 5xx response; user cancellation, tool
 failure, and validation errors do not trigger fallback.
 
-Q selects Chat Completions or Responses per model. Known native OpenAI, xAI,
-and OpenRouter Gateway routes prefer Responses; Codex App Server, Anthropic,
-and unknown compatible endpoints use their existing route. Override a concrete
+Q selects Chat Completions or Responses per model. Provider API modes are saved explicitly. Changing an Auto provider kind to
+OpenAI, xAI, or OpenRouter initializes Responses once; later requests use the
+saved choice. Providers without a saved choice use Chat Completions. Override a concrete
 model in `/model` or `~/.q/config.yaml` with `model_api_modes`, using
 `chat_completions` or `responses`. The Gateway accepts both API routes. Session
 messages use a common format so saved conversations can continue across a

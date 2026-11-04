@@ -180,14 +180,14 @@ func (m model) preferredModelAPIMode(modelID string) string {
 	if m.runtime == nil {
 		return m.draftConfig.ModelAPIMode(modelID)
 	}
-	return providerhost.PreferredModelAPIMode(m.draftConfig, providerhost.PreferredProviderAPIModes(m.runtime.Config()), modelID)
+	return providerhost.PreferredModelAPIMode(m.draftConfig, providerhost.PreferredProviderAPIModes(m.runtime.Config(), m.draftConfig), modelID)
 }
 
 func (m model) activeModelAPIMode(modelID string) string {
 	if m.runtime == nil {
 		return m.activeConfig().ModelAPIMode(modelID)
 	}
-	return providerhost.PreferredModelAPIMode(m.activeConfig(), providerhost.PreferredProviderAPIModes(m.runtime.Config()), modelID)
+	return providerhost.PreferredModelAPIMode(m.activeConfig(), providerhost.PreferredProviderAPIModes(m.runtime.Config(), m.activeConfig()), modelID)
 }
 
 func (m model) updateModelTargetPicker(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {

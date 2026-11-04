@@ -1,63 +1,68 @@
 package providerhost
 
 import (
-	"net/url"
 	"strings"
 
 	"github.com/snowmerak/llm-provider/gateway"
 	"github.com/snowmerak/q/config"
 )
 
-// PreferredProviderAPIModes selects Responses for Gateway routes whose upstream
-// API is known to support native Responses. Unknown compatible endpoints stay
-// on Chat Completions until a concrete model is explicitly configured.
-func PreferredProviderAPIModes(gatewayConfig gateway.Config) map[string]string {
+// PreferredProviderAPIModes maps saved provider options to Gateway model prefixes.
+// Missing options use Chat Completions; provider identity is never reinterpreted
+// while constructing a client. The optional config preserves existing callers.
+func PreferredProviderAPIModes(gatewayConfig gateway.Config, configured ...config.Config) map[string]string {
 	modes := make(map[string]string)
+	if len(configured) == 0 {
+		return modes
+	}
 	for _, provider := range gatewayConfig.Providers {
-		if !provider.Enabled || !knownNativeResponsesProvider(provider) {
+		if !provider.Enabled {
+			continue
+		}
+		mode := configured[0].ProviderAPIModes[provider.ID]
+		if mode == "" {
 			continue
 		}
 		prefix := provider.Prefix
 		if prefix == "" {
 			prefix = provider.ID
 		}
-		modes[prefix] = "responses"
+		modes[prefix] = mode
 	}
 	return modes
 }
 
-func knownNativeResponsesProvider(provider gateway.ProviderConfig) bool {
-	switch provider.Type {
-	case "openrouter", "xai", "grok", "chatgpt":
-		return true
-	case "openai-compatible":
-		switch provider.Kind {
-		case "openai", "openai-compatible", "openrouter", "xai", "grok":
-			return true
-		case "", "generic":
-			if provider.Kind == "generic" {
-				return false
-			}
-			parsed, err := url.Parse(provider.BaseURL)
-			if err != nil || parsed.Scheme != "https" {
-				return false
-			}
-			switch strings.ToLower(parsed.Hostname()) {
-			case "api.openai.com", "api.x.ai", "openrouter.ai":
-				return true
-			}
-		}
+// ProviderAPIMode is the saved Q API option for a provider, independent of kind.
+func ProviderAPIMode(value config.Config, id string) string {
+	if mode := value.ProviderAPIModes[id]; mode != "" {
+		return mode
 	}
-	return false
+	return "chat_completions"
 }
 
-// PreferredModelAPIMode applies a model override before the Gateway default.
+// InitialProviderAPIMode is only used when choosing an explicit provider kind.
+// It is a settings initializer, never a request-time override or URL inference.
+func InitialProviderAPIMode(provider gateway.ProviderConfig) string {
+	kind := provider.Kind
+	if kind == "" {
+		kind = provider.Type
+	}
+	switch kind {
+	case "openai", "openrouter", "xai", "grok":
+		return "responses"
+	}
+	return "chat_completions"
+}
+
+// PreferredModelAPIMode applies a model override before the saved provider option.
 func PreferredModelAPIMode(value config.Config, providerModes map[string]string, model string) string {
 	if mode := value.ModelAPIModes[model]; mode != "" {
 		return mode
 	}
-	if prefix, _, found := strings.Cut(model, "/"); found && providerModes[prefix] == "responses" {
-		return "responses"
+	if prefix, _, found := strings.Cut(model, "/"); found {
+		if mode := providerModes[prefix]; mode != "" {
+			return mode
+		}
 	}
 	return "chat_completions"
 }

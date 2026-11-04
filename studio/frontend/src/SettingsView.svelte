@@ -72,7 +72,7 @@
     const nextSavedSystemOneProviders = snapshot.system_one.providers.map(provider => ({ ...provider }));
     if (settings && preserveDrafts) {
       preserveProviderDrafts(snapshot.gateway_providers.items, settings.gateway_providers.items, savedProviders,
-        ['id', 'type', 'kind', 'prefix', 'enabled', 'base_url', 'api_key_env', 'api_key']);
+        ['id', 'type', 'kind', 'api_mode', 'prefix', 'enabled', 'base_url', 'api_key_env', 'api_key']);
       preserveProviderDrafts(snapshot.system_one.providers, settings.system_one.providers, savedSystemOneProviders,
         ['id', 'uri', 'api_key_env']);
     }

@@ -33,14 +33,15 @@
     ];
   }
 
-  function saveProvider(provider: GatewayProvider, clearAPIKey = false) {
+  function saveProvider(provider: GatewayProvider, clearAPIKey = false, saveAPIMode = false) {
     const originalID = provider._original_id || provider.id;
     const nextID = provider.id;
     const submittedKey = provider.api_key || '';
     const payload = JSON.stringify({
       id: provider.id, type: provider.type, kind: provider.kind, prefix: provider.prefix,
       enabled: provider.enabled, base_url: provider.base_url, api_key_env: provider.api_key_env,
-      api_key: provider.api_key || '', clear_api_key: clearAPIKey
+      api_key: provider.api_key || '', clear_api_key: clearAPIKey,
+      ...(saveAPIMode ? { api_mode: provider.api_mode } : {})
     });
     queueSave(async () => {
       const currentID = providerIDs.get(provider) || originalID;
@@ -114,6 +115,7 @@
           <label><span>Model prefix</span><input placeholder={provider.id} bind:value={provider.prefix} onchange={() => saveProvider(provider)} /></label>
           <label><span>API type</span><select bind:value={provider.type} onchange={() => changeProviderType(provider)}><option value="openai-compatible">OpenAI compatible</option><option value="openrouter">OpenRouter</option><option value="xai">xAI</option><option value="anthropic">Anthropic</option><option value="codex">Codex App Server</option><option value="chatgpt">ChatGPT plan</option></select></label>
           <label><span>Provider kind</span><select bind:value={provider.kind} onchange={() => saveProvider(provider)}>{#each providerKinds(provider.type) as kind}<option value={kind.value}>{kind.label}</option>{/each}</select></label>
+          <label><span>API mode</span><select bind:value={provider.api_mode} onchange={() => saveProvider(provider, false, true)}><option value="chat_completions">Chat Completions</option><option value="responses">Responses</option></select></label>
           {#if provider.type !== 'chatgpt'}
           {#if usesDefaultBaseURL(provider.type)}
             {#if provider.base_url}

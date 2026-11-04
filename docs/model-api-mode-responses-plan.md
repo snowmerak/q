@@ -6,7 +6,7 @@
 
 ## 목적과 결정 사항
 
-Q는 native Responses가 확인된 Gateway 공급자에서 Responses를 우선 사용한다. Codex App Server, Anthropic 직접 경로, 지원 여부가 불명확한 호환 서버는 Chat Completions를 사용한다. 사용자는 모델별로 어느 API든 명시적으로 지정할 수 있다. 선택한 API에 관계없이 Q의 대화, 이미지 입력, 도구 호출, 스트리밍, 사용량 집계와 모델 전환이 같은 의미로 동작해야 한다.
+Q는 공급자별로 저장된 API 모드를 사용한다. Studio에서 Auto 종류를 OpenAI·xAI·OpenRouter로 바꿀 때만 공급자 API 모드를 Responses로 한 번 초기화하며, 이후 사용자가 고른 Chat Completions 또는 Responses를 유지한다. API 모드가 저장되지 않은 공급자는 Chat Completions를 사용하고 요청 시 공급자 종류나 URL로 덮어쓰지 않는다. Codex App Server, Anthropic 직접 경로, 지원 여부가 불명확한 호환 서버는 Chat Completions를 사용한다. 사용자는 모델별로 어느 API든 명시적으로 지정할 수 있다. 선택한 API에 관계없이 Q의 대화, 이미지 입력, 도구 호출, 스트리밍, 사용량 집계와 모델 전환이 같은 의미로 동작해야 한다.
 
 이 문서는 구현 범위와 통과 조건을 정한다. 아래 설정 키는 이번 구현에 반영되었으며, 실제 공급자별 지원 여부는 별도 검증이 필요하다.
 
@@ -26,7 +26,7 @@ Q는 native Responses가 확인된 Gateway 공급자에서 Responses를 우선 �
 
 Responses 지원은 새 요청·응답 변환기와 이어가기 상태를 중심으로 추가한다. 기존 Chat 요청 생성, 스트림 해석, 도구 호출 처리와 `conversation_id` 동작은 그대로 사용한다. 공통 코드의 변경은 모델별 API 선택을 위한 설정·분기와 두 API가 공유해야 하는 결과 전달에 한정한다. 따라서 코드 변경 위치가 Responses 파일에만 국한되지는 않는다.
 
-API 종류를 명시한 모델은 해당 설정을 따른다. 미설정 모델은 Gateway 공급자가 OpenAI, xAI, OpenRouter의 native Responses 경로로 식별되는 경우 Responses를 사용하고, 그 밖에는 Chat 경로로 들어간다. 이 분기는 요청 시작 시 확정하며, Responses 오류나 타임아웃을 이유로 같은 턴을 Chat으로 재실행하지 않는다.
+API 종류를 명시한 모델은 해당 설정을 따른다. 미설정 모델은 전역 `provider_api_modes`에 공급자 ID별로 저장된 API 모드를 따른다. 모델별 `model_api_modes`의 명시적 Chat Completions도 그대로 저장하며, Studio의 Provider default를 선택한 경우에만 모델 override를 삭제한다. 이 분기는 요청 시작 시 확정하며, Responses 오류나 타임아웃을 이유로 같은 턴을 Chat으로 재실행하지 않는다.
 
 구현 전후에 기존 Chat 단위·통합 테스트를 통과시키고, Chat 경로의 요청 본문, 스트림 이벤트, 도구 실행, 이미지, 캐시 필드, 사용량과 모델 그룹 전환을 비교한다. 이 검증이 끝나기 전에는 기존 동작이 보존되었다고 단정하지 않는다.
 
@@ -44,7 +44,7 @@ Qumi에서 Responses의 프롬프트 접두사 캐시 적중이 관찰되었다.
 
 ## 외부 설정 계약
 
-모델 ID별 명시적 API 선택을 전역 설정에 둔다. 작업 공간의 기본 모델 변경과 역할별 모델 변경은 기존처럼 모델 ID만 선택한다. 미설정 모델은 Gateway 공급자의 native Responses 지원 정책을 따른다. 따라서 같은 모델 ID는 어디에서 사용하든 같은 API 종류를 가진다.
+모델 ID별 명시적 API 선택을 전역 설정에 둔다. 작업 공간의 기본 모델 변경과 역할별 모델 변경은 기존처럼 모델 ID만 선택한다. 미설정 모델은 저장된 공급자 API 모드를 따른다. 따라서 같은 모델 ID는 어디에서 사용하든 같은 API 종류를 가진다.
 
 ```yaml
 # 정확한 모델 ID별 명시적 설정. 없으면 Gateway 공급자 기본값을 따른다.
@@ -57,7 +57,7 @@ model_api_modes:
 - 값은 `chat_completions` 또는 `responses`다. 명시한 값은 공급자 기본값보다 우선한다. 알 수 없는 값은 설정 오류로 표시한다.
 - 모델 설정 화면에서 현재 선택 모델의 API 종류를 보고 수정할 수 있어야 한다. Responses가 지원되지 않는 모델은 선택할 수 없게 하거나 선택 시 지원 이유가 포함된 오류를 표시한다.
 - Responses를 선택한 요청이 실패했다고 Chat Completions로 자동 재시도하지 않는다. 재시도는 같은 API 안에서 안전한 경우에만 수행한다.
-- 기존 설정 파일은 수정하지 않는다. 설정에 API 종류가 없는 모델은 확인된 공급자에서 Responses로 전환된다.
+- 기존 설정 파일은 수정하지 않는다. 설정에 API 종류가 없는 모델은 저장된 공급자 API 모드를 따른다. 기존 공급자에 API 모드가 없으면 Chat Completions로 남는다.
 
 Gateway 공급자의 종류, 명시적 `kind`, 공식 API 호스트로 native Responses 경로를 식별한다. 일반 호환 서버는 자동 선택 대상이 아니다. Gateway의 Chat 기반 Responses 어댑터는 원본 출력 항목과 도구 이어가기의 동등성을 보장하지 않으므로 Q가 native Responses를 요구할 때 거절한다. 사용자가 미지원 모델에 Responses를 명시한 경우에도 조용히 Chat으로 전환하지 않고 오류를 표시한다.
 
@@ -152,3 +152,7 @@ OpenRouter의 Claude Responses 캐시는 [OpenRouter의 `cache_control` 계약](
 - [OpenAI Prompt Caching](https://developers.openai.com/api/docs/guides/prompt-caching)
 - [OpenRouter Responses API](https://openrouter.ai/docs/api/api-reference/responses/create-responses)
 - [xAI Prompt Caching](https://docs.x.ai/developers/advanced-api-usage/prompt-caching/maximizing-cache-hits)
+
+## 공급자 API 옵션 저장 (2026-11-04)
+
+Providers의 API mode는 Q 전역 설정의 `provider_api_modes`에 공급자 ID로 저장한다. 공급자 ID를 바꾸면 옵션도 옮기고, model prefix는 요청 시 저장 옵션을 조회하는 별칭으로만 사용한다. 공급자 종류의 Auto→OpenAI/xAI/OpenRouter 전환은 최초 Responses 선택을 편하게 하는 편집 동작이며, 일반 저장·재시작·모델 요청은 그 초기값을 다시 적용하지 않는다. 호출 API는 모델 override → 저장된 공급자 옵션 → Chat Completions 순서로 결정된다. 공급자 옵션도 Providers 설정 내보내기/가져오기에 포함된다.

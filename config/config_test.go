@@ -541,3 +541,20 @@ func TestModelAPIModesDefaultAndGroupValidation(t *testing.T) {
 		t.Fatalf("invalid API mode error = %v", err)
 	}
 }
+
+func TestProviderAPIModesValidation(t *testing.T) {
+	for _, test := range []struct {
+		id, mode string
+		valid    bool
+	}{
+		{"provider", "chat_completions", true}, {"provider", "responses", true},
+		{"provider", "auto", false}, {"provider", "", false}, {"", "responses", false}, {" provider", "responses", false},
+	} {
+		value := Default()
+		value.UseManagedGateway()
+		value.ProviderAPIModes = map[string]string{test.id: test.mode}
+		if err := value.Validate(); (err == nil) != test.valid {
+			t.Fatalf("id=%q mode=%q error=%v", test.id, test.mode, err)
+		}
+	}
+}
