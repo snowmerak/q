@@ -468,7 +468,7 @@ type fakeAgentClient struct {
 func (fake *fakeAgentClient) Chat(_ context.Context, request client.ChatRequest) (*client.ChatResponse, error) {
 	fake.mu.Lock()
 	defer fake.mu.Unlock()
-	if request.ToolChoice == client.ToolChoiceNone && len(request.Messages) > 0 && request.Messages[len(request.Messages)-1].Role == client.RoleTool {
+	if len(request.Messages) > 0 && request.Messages[len(request.Messages)-1].Role == client.RoleTool && strings.Contains(request.Messages[len(request.Messages)-1].Content, "The task is finished. End this turn with a short acknowledgment") {
 		fake.terminalRequests = append(fake.terminalRequests, request)
 		return &client.ChatResponse{Choices: []client.Choice{{Message: client.Message{Role: client.RoleAssistant}, FinishReason: "stop"}}}, fake.terminalErr
 	}

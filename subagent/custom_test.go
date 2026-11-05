@@ -18,7 +18,7 @@ type fallbackCustomClient struct {
 }
 
 func (c *fallbackCustomClient) Chat(_ context.Context, request client.ChatRequest) (*client.ChatResponse, error) {
-	if request.ToolChoice == client.ToolChoiceNone {
+	if request.ToolChoice == client.ToolChoiceNone || terminalToolResultRequest(request) {
 		return &client.ChatResponse{Choices: []client.Choice{{Message: client.Message{Role: client.RoleAssistant}, FinishReason: "stop"}}}, nil
 	}
 	c.models = append(c.models, request.Model)

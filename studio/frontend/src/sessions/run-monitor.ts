@@ -76,7 +76,8 @@ export class RunMonitor {
           continue;
         }
         if (page.events.length) cursor = page.events[page.events.length - 1].cursor;
-        if (terminalRun(page.run.status)) {
+        // A terminal run can still have unread event pages after reconnecting.
+        if (terminalRun(page.run.status) && cursor >= page.run.cursor) {
           await this.observer.complete();
           return;
         }

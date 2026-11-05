@@ -18,7 +18,7 @@ type recoveryToolRuntime struct{ calls int }
 func TestGeneralRunnerMemoryToolsAcrossTaskLifecycle(t *testing.T) {
 	steps := 0
 	configured := contextChatFunc(func(_ context.Context, request client.ChatRequest) (*client.ChatResponse, error) {
-		if request.ToolChoice == client.ToolChoiceNone {
+		if request.ToolChoice == client.ToolChoiceNone || terminalToolResultRequest(request) {
 			return contextResponse("ack"), nil
 		}
 		for _, name := range []string{memory.SetActiveWorkTool, memory.CompleteWorkTool, memory.RecordFactTool} {
@@ -117,7 +117,7 @@ func TestGeneralRunnerDoesNotExecuteToolAfterCheckpointFailure(t *testing.T) {
 func TestGeneralRunnerAssignsStableIDsBeforeCheckpoint(t *testing.T) {
 	responses := 0
 	configured := contextChatFunc(func(_ context.Context, request client.ChatRequest) (*client.ChatResponse, error) {
-		if request.ToolChoice == client.ToolChoiceNone {
+		if request.ToolChoice == client.ToolChoiceNone || terminalToolResultRequest(request) {
 			return &client.ChatResponse{Choices: []client.Choice{{Message: client.Message{Role: client.RoleAssistant, Content: "ack"}}}}, nil
 		}
 		responses++
@@ -164,7 +164,7 @@ func TestGeneralRunnerPreservesStartedLifecycleAcrossCompaction(t *testing.T) {
 		if isContextCheckpointRequest(request) {
 			return contextResponse(contextCheckpointJSON("continue the active task")), nil
 		}
-		if request.ToolChoice == client.ToolChoiceNone {
+		if request.ToolChoice == client.ToolChoiceNone || terminalToolResultRequest(request) {
 			return contextResponse("ack"), nil
 		}
 		modelRequests++

@@ -115,7 +115,7 @@ func assertTerminalDelivery(t *testing.T, p *parkedTerminalClient) {
 	request := p.requests[2]
 	last := request.Messages[len(request.Messages)-1]
 	call := p.requests[2].Messages[len(request.Messages)-2].ToolCalls[0]
-	if request.ConversationID != "same-conversation" || request.ToolChoice != client.ToolChoiceNone || last.Role != client.RoleTool || last.ToolCallID != call.ID || !strings.Contains(last.Content, `"summary":"Repository inspected"`) {
+	if request.ConversationID != "same-conversation" || request.ToolChoice != nil || request.ParallelToolCalls == nil || !*request.ParallelToolCalls || last.Role != client.RoleTool || last.ToolCallID != call.ID || !strings.Contains(last.Content, `"summary":"Repository inspected"`) {
 		t.Fatalf("terminal result was not returned to the same provider: %#v", request)
 	}
 }

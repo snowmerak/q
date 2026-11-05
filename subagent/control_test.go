@@ -28,7 +28,7 @@ func TestGeneralRunnerFollowupStartsNewLifecycleAndRoundBudget(t *testing.T) {
 	runner.MaxRounds = 2
 	steps := 0
 	runner.Client = contextChatFunc(func(_ context.Context, request client.ChatRequest) (*client.ChatResponse, error) {
-		if request.ToolChoice == client.ToolChoiceNone {
+		if request.ToolChoice == client.ToolChoiceNone || terminalToolResultRequest(request) {
 			return contextResponse("ack"), nil
 		}
 		steps++
@@ -67,7 +67,7 @@ func TestGeneralRunnerFollowupDoesNotReplayInterruptedTool(t *testing.T) {
 	saved := GeneralRunState{Transcript: messages, Context: messages, Round: 1, Started: true, Spec: SpecCheckpoint{Model: "model"}}
 	runner.Resume, runner.Followup = &saved, "finish"
 	runner.Client = contextChatFunc(func(_ context.Context, request client.ChatRequest) (*client.ChatResponse, error) {
-		if request.ToolChoice == client.ToolChoiceNone {
+		if request.ToolChoice == client.ToolChoiceNone || terminalToolResultRequest(request) {
 			return contextResponse("ack"), nil
 		}
 		if request.Messages[3].Role != client.RoleTool || request.Messages[3].ToolCallID != "write" {
@@ -165,7 +165,7 @@ func TestGeneralRunnerAcceptsQueuedGuidanceBeforeCompletion(t *testing.T) {
 	ack := make(chan error, 1)
 	steps := 0
 	runner.Client = contextChatFunc(func(_ context.Context, request client.ChatRequest) (*client.ChatResponse, error) {
-		if request.ToolChoice == client.ToolChoiceNone {
+		if request.ToolChoice == client.ToolChoiceNone || terminalToolResultRequest(request) {
 			return contextResponse("ack"), nil
 		}
 		steps++

@@ -24,6 +24,7 @@ export type SessionDetail = {
   transcript: Message[];
   transcript_thoughts?: { before: number; content: string }[];
   active_task?: { objective: string; completion_criteria?: string[]; started_at: string };
+  history?: { start: number; end: number; total: number };
 };
 export type RunEvent = {
   usage?: TokenUsage;

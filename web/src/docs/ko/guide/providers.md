@@ -38,6 +38,10 @@ Studio의 **Settings → Providers**에서 공급자를 추가하고 **Settings 
 
 API 유형이 `openrouter`인 공급자에게 Q는 `HTTP-Referer: https://q.saturday.ne.kr`와 `X-OpenRouter-Title: Q`를 보냅니다. OpenRouter는 이렇게 식별된 사용량을 공개 앱 순위에 포함할 수 있습니다. 다른 앱 이름을 쓰려면 `~/.q/providers.json`에서 해당 공급자의 `headers`에 원하는 값을 지정하세요. 직접 지정한 값이 Q의 기본값보다 우선합니다.
 
+Studio의 **Settings → Providers → Model filter regex**에서 공급자별 모델 목록을 제한할 수 있습니다. 정규식은 Q의 공급자 접두사를 제외한 원래 모델 ID에 적용됩니다. 예를 들어 `^(gpt-|o[134])` 또는 OpenRouter의 `^anthropic/`를 사용할 수 있습니다. 빈 값은 전체 모델을 표시하며, Go 정규식 문법과 `(?i)` 대소문자 무시 옵션을 지원합니다. 잘못된 정규식은 저장되지 않습니다.
+
+필터는 `~/.q/config.yaml`의 `provider_model_filters`에 공급자 ID별로 저장되며 모델 목록을 다음에 조회할 때 반영됩니다. 기존 세션·역할에서 선택한 모델로의 요청을 차단하지 않습니다.
+
 ## 모델 역할 할당
 
 **Settings → Models**에서 기본 채팅과 `interviewer`, `manager`, `research`, `reviewer`, `coder`, `commit`, `thinker`, `librarian` 같은 전문 역할에 모델을 할당합니다. senior developer는 `reviewer`, junior developer는 `coder` 모델 역할을 사용합니다.

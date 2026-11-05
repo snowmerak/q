@@ -29,6 +29,7 @@ export type GatewayProvider = {
   api_key_env: string;
   has_inline_api_key: boolean;
   model_count: number;
+  model_filter_regex: string;
   api_key?: string;
   _original_id?: string;
   _original_type?: string;

@@ -27,10 +27,10 @@ func ToolResultMessage(call ToolCall, result ToolResult) Message {
 }
 
 // FinishToolTurn sends the already-recorded terminal tool results upstream and
-// consumes the provider's final response. It never executes more tools. Some
-// stateful providers resume a parked callback before applying tool_choice, so
-// unexpected calls must receive explicit rejection results rather than being
-// dropped. observe records those exchanges and the final acknowledgment.
+// consumes the provider's final response. It preserves cache-relevant tool
+// settings and never executes more tools. Unexpected calls receive explicit
+// rejection results rather than being dropped. observe records those exchanges
+// and the final acknowledgment.
 func FinishToolTurn(
 	ctx context.Context,
 	request ChatRequest,
@@ -47,9 +47,23 @@ func FinishToolTurn(
 	// a parked Codex callback only sees its tool output when it resumes.
 	last := len(request.Messages) - 1
 	request.Messages[last].Content += "\n\n" + terminalResultInstruction
-	request.ToolChoice = ToolChoiceNone
-	parallel := false
-	request.ParallelToolCalls = &parallel
+	// Changing tool_choice or parallel_tool_calls can change the provider's
+	// rendered prompt even when the tool catalog is unchanged. Keep automatic
+	// choices and parallel settings; only relax choices that require another call.
+	switch choice := request.ToolChoice.(type) {
+	case ToolChoiceMode:
+		if choice == ToolChoiceRequired {
+			request.ToolChoice = ToolChoiceAuto
+		}
+	case string:
+		if choice == string(ToolChoiceRequired) {
+			request.ToolChoice = ToolChoiceAuto
+		}
+	case map[string]any:
+		if kind, _ := choice["type"].(string); kind == "function" {
+			request.ToolChoice = ToolChoiceAuto
+		}
+	}
 	for round := range maximumTerminalRounds {
 		if err := ctx.Err(); err != nil {
 			return result, err

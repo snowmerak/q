@@ -282,7 +282,12 @@ func studioTestModel(w http.ResponseWriter, r *http.Request) {
 	if len(message.ToolCalls) > 0 {
 		finish = "tool_calls"
 	}
-	if !composerChat && fmt.Sprint(request.ToolChoice) != string(client.ToolChoiceNone) {
+	terminal := fmt.Sprint(request.ToolChoice) == string(client.ToolChoiceNone)
+	if len(request.Messages) > 0 {
+		last := request.Messages[len(request.Messages)-1]
+		terminal = terminal || last.Role == client.RoleTool && strings.Contains(last.TextContent(), "The host has accepted this terminal tool result.")
+	}
+	if !composerChat && !terminal {
 		finish = "tool_calls"
 		message.ToolCalls = []client.ToolCall{{ID: "test-" + name, Type: client.ToolTypeFunction, Function: client.FunctionCall{Name: name, Arguments: arguments}}}
 	}

@@ -81,7 +81,7 @@ type extractionClient struct {
 }
 
 func (c *extractionClient) Chat(_ context.Context, request client.ChatRequest) (*client.ChatResponse, error) {
-	if request.ToolChoice == client.ToolChoiceNone && len(request.Messages) > 0 && request.Messages[len(request.Messages)-1].Role == client.RoleTool {
+	if (request.ToolChoice == client.ToolChoiceNone || terminalToolResultRequest(request)) && len(request.Messages) > 0 && request.Messages[len(request.Messages)-1].Role == client.RoleTool {
 		c.terminalRequests = append(c.terminalRequests, request)
 		return terminalAcknowledgment(""), nil
 	}
@@ -634,7 +634,7 @@ func (f *prematureCompletionClient) Close() error { return nil }
 func (f *askingClient) Chat(_ context.Context, request client.ChatRequest) (*client.ChatResponse, error) {
 	request.Messages = append([]client.Message(nil), request.Messages...)
 	f.requests = append(f.requests, request)
-	if request.ToolChoice == client.ToolChoiceNone {
+	if request.ToolChoice == client.ToolChoiceNone || terminalToolResultRequest(request) {
 		return terminalAcknowledgment(""), nil
 	}
 	if len(f.requests) == 1 {
@@ -673,7 +673,7 @@ func (f *askingClient) Close() error                                       { ret
 func (f *toolCallingClient) Chat(_ context.Context, request client.ChatRequest) (*client.ChatResponse, error) {
 	request.Messages = append([]client.Message(nil), request.Messages...)
 	f.requests = append(f.requests, request)
-	if request.ToolChoice == client.ToolChoiceNone {
+	if request.ToolChoice == client.ToolChoiceNone || terminalToolResultRequest(request) {
 		return terminalAcknowledgment("tool-conversation"), nil
 	}
 	if len(f.requests) == 1 {

@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"sort"
 	"strings"
@@ -57,6 +58,7 @@ type Config struct {
 	Context                       ContextConfig               `yaml:"context,omitempty"`
 	Plan                          PlanConfig                  `yaml:"plan,omitempty"`
 	ModelGroups                   map[string]ModelGroupConfig `yaml:"model_groups,omitempty"`
+	ProviderModelFilters          map[string]string           `yaml:"provider_model_filters,omitempty"`
 	ProviderAPIModes              map[string]string           `yaml:"provider_api_modes,omitempty"`
 	ModelAPIModes                 map[string]string           `yaml:"model_api_modes,omitempty"`
 	ModelSampling                 map[string]SamplingConfig   `yaml:"model_sampling,omitempty"`
@@ -283,6 +285,14 @@ func (c Config) Validate() error {
 	}
 	if !c.Provider.Managed && strings.TrimSpace(c.Provider.Model) == "" {
 		return fmt.Errorf("config: provider model is required")
+	}
+	for provider, pattern := range c.ProviderModelFilters {
+		if provider == "" || provider != strings.TrimSpace(provider) || strings.ContainsAny(provider, "/\r\n\t ") {
+			return fmt.Errorf("config: provider_model_filters key %q must be a provider ID without slash or whitespace", provider)
+		}
+		if _, err := regexp.Compile(pattern); err != nil {
+			return fmt.Errorf("config: provider_model_filters[%q]: %w", provider, err)
+		}
 	}
 	for provider, mode := range c.ProviderAPIModes {
 		if provider == "" || provider != strings.TrimSpace(provider) {

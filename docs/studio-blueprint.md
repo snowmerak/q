@@ -405,6 +405,15 @@ Browser reconnect는 마지막 확인 cursor 이후 event를 다시 받아 proje
 한다. Studio용 event가 없는 과거 session은 transcript와 저장된 child tree에서 초기
 projection을 만들고, 이후 발생한 event만 append한다.
 
+Interaction 대화 화면은 최신 transcript부터 조회하고, 위로 스크롤하면 `before`
+cursor로 이전 기록을 추가한다. 기본 페이지 목표는 80개 메시지이며 사용자 요청과
+이어지는 응답·도구 호출·결과는 함께 반환하므로 긴 한 턴은 이 수를 넘을 수 있다.
+생각과 토큰 사용량의 위치도 해당 페이지에 맞춰 유지하고, 이전 기록을 추가할 때
+현재 스크롤 위치를 보존한다. 완료된 실행을 열 때는 저장된 transcript를 표시한다.
+진행 중인 실행의 이벤트를 복원할 때는 상태가 완료여도 마지막 cursor까지 읽는다.
+현재 저장 형식은 단일 `session.json`이므로 서버의 파일 디코딩은 여전히 전체
+세션을 대상으로 하며, 이 페이지네이션은 응답 전송량과 브라우저 렌더링 범위를 줄인다.
+
 ## 11. 사용자 개입 계약
 
 개입은 worker process의 임의 메모리를 직접 바꾸는 대신 기록 가능한 command로

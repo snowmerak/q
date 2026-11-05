@@ -36,8 +36,8 @@ func TestFinishToolTurnReturnsResultUpstreamBeforeEnding(t *testing.T) {
 		if sent.Model != request.Model || sent.ConversationID != request.ConversationID || sent.ReasoningEffort != request.ReasoningEffort || sent.WorkingDirectory != request.WorkingDirectory {
 			t.Fatalf("terminal result changed provider/session: %#v", sent)
 		}
-		if sent.ToolChoice != ToolChoiceNone || sent.ParallelToolCalls == nil || *sent.ParallelToolCalls || !reflect.DeepEqual(sent.Tools, request.Tools) {
-			t.Fatalf("terminal request permits tool execution or loses catalog: %#v", sent)
+		if sent.ToolChoice != ToolChoiceAuto || sent.ParallelToolCalls != request.ParallelToolCalls || !reflect.DeepEqual(sent.Tools, request.Tools) {
+			t.Fatalf("terminal request changed tool settings or still forces a tool call: %#v", sent)
 		}
 		if len(sent.Messages) != len(request.Messages) {
 			t.Fatalf("terminal delivery must not append a user message: %#v", sent.Messages)
@@ -61,6 +61,41 @@ func TestFinishToolTurnReturnsResultUpstreamBeforeEnding(t *testing.T) {
 	}
 }
 
+func TestFinishToolTurnPreservesToolChoiceAndParallelSettings(t *testing.T) {
+	for _, test := range []struct {
+		name             string
+		choice, expected any
+	}{
+		{"default", nil, nil},
+		{"auto", ToolChoiceAuto, ToolChoiceAuto},
+		{"string auto", "auto", "auto"},
+		{"explicit none", ToolChoiceNone, ToolChoiceNone},
+		{"required", ToolChoiceRequired, ToolChoiceAuto},
+		{"string required", "required", ToolChoiceAuto},
+		{"named", NamedToolChoice("task_complete"), ToolChoiceAuto},
+	} {
+		for _, setting := range []struct {
+			name  string
+			value *bool
+		}{{"default", nil}, {"enabled", new(true)}, {"disabled", new(false)}} {
+			t.Run(test.name+"/parallel="+setting.name, func(t *testing.T) {
+				parallel := setting.value
+				request := terminalRequest()
+				request.ToolChoice, request.ParallelToolCalls = test.choice, parallel
+				_, err := FinishToolTurn(t.Context(), request, func(_ context.Context, sent ChatRequest) (*ChatResponse, error) {
+					if !reflect.DeepEqual(sent.ToolChoice, test.expected) || sent.ParallelToolCalls != parallel {
+						t.Fatalf("choice=%#v parallel=%v", sent.ToolChoice, sent.ParallelToolCalls)
+					}
+					return terminalResponse(Message{Role: RoleAssistant, Content: "done"}), nil
+				}, nil)
+				if err != nil {
+					t.Fatal(err)
+				}
+			})
+		}
+	}
+}
+
 func TestFinishToolTurnRejectsEveryExtraCallAndDrainsItsResults(t *testing.T) {
 	extra := Message{Role: RoleAssistant, ToolCalls: []ToolCall{
 		{ID: "late-write", Type: ToolTypeFunction, Function: FunctionCall{Name: "write_file", Arguments: `{}`}},
@@ -68,8 +103,13 @@ func TestFinishToolTurnRejectsEveryExtraCallAndDrainsItsResults(t *testing.T) {
 	}}
 	calls := 0
 	var observed []Message
-	finished, err := FinishToolTurn(t.Context(), terminalRequest(), func(_ context.Context, request ChatRequest) (*ChatResponse, error) {
+	request := terminalRequest()
+	request.ToolChoice, request.ParallelToolCalls = nil, new(true)
+	finished, err := FinishToolTurn(t.Context(), request, func(_ context.Context, request ChatRequest) (*ChatResponse, error) {
 		calls++
+		if request.ToolChoice != nil || request.ParallelToolCalls == nil || !*request.ParallelToolCalls {
+			t.Fatal("rejection round changed cache-relevant tool settings")
+		}
 		response := terminalResponse(Message{Role: RoleAssistant, Content: "Finished."})
 		response.Usage = Usage{PromptTokens: 10, CompletionTokens: 2, TotalTokens: 12}
 		if calls == 1 {

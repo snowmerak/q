@@ -22,7 +22,7 @@ type fakeScoutClient struct {
 }
 
 func (f *fakeScoutClient) Chat(_ context.Context, request client.ChatRequest) (*client.ChatResponse, error) {
-	if request.ToolChoice == client.ToolChoiceNone && len(request.Messages) > 0 && request.Messages[len(request.Messages)-1].Role == client.RoleTool {
+	if (request.ToolChoice == client.ToolChoiceNone || terminalToolResultRequest(request)) && len(request.Messages) > 0 && request.Messages[len(request.Messages)-1].Role == client.RoleTool {
 		f.terminalRequests = append(f.terminalRequests, request)
 		return &client.ChatResponse{ConversationID: f.conversationID, Choices: []client.Choice{{Message: client.Message{Role: client.RoleAssistant}, FinishReason: "stop"}}}, nil
 	}

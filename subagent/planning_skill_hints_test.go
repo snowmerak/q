@@ -36,7 +36,7 @@ func TestPlanPlannerStartsWithSkillHintsAndCanLoadSkill(t *testing.T) {
 	runtime := &planSkillTools{fakeScoutTools: &fakeScoutTools{}}
 	rounds := 0
 	model := contextChatFunc(func(_ context.Context, request client.ChatRequest) (*client.ChatResponse, error) {
-		if request.ToolChoice == client.ToolChoiceNone {
+		if request.ToolChoice == client.ToolChoiceNone || terminalToolResultRequest(request) {
 			return contextResponse("ack"), nil
 		}
 		if rounds == 0 && !reflect.DeepEqual(request.ToolChoice, client.NamedToolChoice(TaskStartToolName)) {

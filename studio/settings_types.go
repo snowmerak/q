@@ -83,16 +83,17 @@ type providerSettings struct {
 }
 
 type gatewayProviderSettings struct {
-	ID              string `json:"id"`
-	Type            string `json:"type"`
-	Kind            string `json:"kind"`
-	APIMode         string `json:"api_mode"`
-	Prefix          string `json:"prefix"`
-	Enabled         bool   `json:"enabled"`
-	BaseURL         string `json:"base_url"`
-	APIKeyEnv       string `json:"api_key_env"`
-	HasInlineAPIKey bool   `json:"has_inline_api_key"`
-	ModelCount      int    `json:"model_count"`
+	ID               string `json:"id"`
+	Type             string `json:"type"`
+	Kind             string `json:"kind"`
+	APIMode          string `json:"api_mode"`
+	Prefix           string `json:"prefix"`
+	Enabled          bool   `json:"enabled"`
+	BaseURL          string `json:"base_url"`
+	APIKeyEnv        string `json:"api_key_env"`
+	HasInlineAPIKey  bool   `json:"has_inline_api_key"`
+	ModelCount       int    `json:"model_count"`
+	ModelFilterRegex string `json:"model_filter_regex"`
 }
 
 type systemOneAPISettings struct {
@@ -188,16 +189,17 @@ type workspaceRoleModelAssignment struct {
 }
 
 type gatewayProviderUpdate struct {
-	ID          string  `json:"id"`
-	Type        string  `json:"type"`
-	Kind        string  `json:"kind,omitempty"`
-	APIMode     *string `json:"api_mode,omitempty"`
-	Prefix      string  `json:"prefix,omitempty"`
-	Enabled     bool    `json:"enabled"`
-	BaseURL     string  `json:"base_url,omitempty"`
-	APIKeyEnv   string  `json:"api_key_env,omitempty"`
-	APIKey      string  `json:"api_key,omitempty"`
-	ClearAPIKey bool    `json:"clear_api_key,omitempty"`
+	ID               string  `json:"id"`
+	Type             string  `json:"type"`
+	Kind             string  `json:"kind,omitempty"`
+	APIMode          *string `json:"api_mode,omitempty"`
+	ModelFilterRegex *string `json:"model_filter_regex,omitempty"`
+	Prefix           string  `json:"prefix,omitempty"`
+	Enabled          bool    `json:"enabled"`
+	BaseURL          string  `json:"base_url,omitempty"`
+	APIKeyEnv        string  `json:"api_key_env,omitempty"`
+	APIKey           string  `json:"api_key,omitempty"`
+	ClearAPIKey      bool    `json:"clear_api_key,omitempty"`
 }
 
 type systemOneProviderUpdate struct {

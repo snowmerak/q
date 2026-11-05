@@ -41,6 +41,7 @@
       id: provider.id, type: provider.type, kind: provider.kind, prefix: provider.prefix,
       enabled: provider.enabled, base_url: provider.base_url, api_key_env: provider.api_key_env,
       api_key: provider.api_key || '', clear_api_key: clearAPIKey,
+      model_filter_regex: provider.model_filter_regex || '',
       ...(saveAPIMode ? { api_mode: provider.api_mode } : {})
     });
     queueSave(async () => {
@@ -115,6 +116,7 @@
           <label><span>Model prefix</span><input placeholder={provider.id} bind:value={provider.prefix} onchange={() => saveProvider(provider)} /></label>
           <label><span>API type</span><select bind:value={provider.type} onchange={() => changeProviderType(provider)}><option value="openai-compatible">OpenAI compatible</option><option value="openrouter">OpenRouter</option><option value="xai">xAI</option><option value="anthropic">Anthropic</option><option value="codex">Codex App Server</option><option value="chatgpt">ChatGPT plan</option></select></label>
           <label><span>Provider kind</span><select bind:value={provider.kind} onchange={() => saveProvider(provider)}>{#each providerKinds(provider.type) as kind}<option value={kind.value}>{kind.label}</option>{/each}</select></label>
+          <label class="wide-field"><span>Model filter regex</span><input aria-label="Model filter regex" aria-describedby={`model-filter-help-${provider.id}`} placeholder="All models · e.g. ^(gpt-|o[134])" spellcheck={false} bind:value={provider.model_filter_regex} onchange={() => saveProvider(provider)} /><small id={`model-filter-help-${provider.id}`}>Show matching upstream model IDs, without the provider prefix. Empty shows all models. Go regex syntax; use (?i) to ignore case.</small></label>
           <label><span>API mode</span><select bind:value={provider.api_mode} onchange={() => saveProvider(provider, false, true)}><option value="chat_completions">Chat Completions</option><option value="responses">Responses</option></select></label>
           {#if provider.type !== 'chatgpt'}
           {#if usesDefaultBaseURL(provider.type)}

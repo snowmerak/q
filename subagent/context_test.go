@@ -266,7 +266,7 @@ func TestInternalRunnersCompactBetweenToolRoundsAndKeepContracts(t *testing.T) {
 			var first, resumed []client.Message
 			normalCalls, summaryCalls := 0, 0
 			fake := contextChatFunc(func(_ context.Context, request client.ChatRequest) (*client.ChatResponse, error) {
-				if request.ToolChoice == client.ToolChoiceNone {
+				if request.ToolChoice == client.ToolChoiceNone || terminalToolResultRequest(request) {
 					return contextResponse(""), nil
 				}
 				if isContextCheckpointRequest(request) {

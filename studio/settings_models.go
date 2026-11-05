@@ -62,9 +62,17 @@ func (service *settingsService) serveModelCatalog(writer http.ResponseWriter, re
 		writeAPIError(writer, http.StatusBadGateway, fmt.Errorf("discover Gateway models: %w", err))
 		return
 	}
+	filter, err := providerhost.NewProviderModelFilter(providerConfig, mainConfig.ProviderModelFilters)
+	if err != nil {
+		writeAPIError(writer, http.StatusInternalServerError, err)
+		return
+	}
 	result := modelCatalog{Models: make([]modelOption, 0, len(models)+len(mainConfig.ModelGroups))}
 	providerModes := providerhost.PreferredProviderAPIModes(providerConfig, mainConfig)
 	for _, model := range models {
+		if !filter.Allows(model.ID) {
+			continue
+		}
 		option := modelOption{ID: model.ID, ContextLength: model.ContextLength, APIMode: providerhost.PreferredModelAPIMode(mainConfig, providerModes, model.ID), APIModeOverride: mainConfig.ModelAPIModes[model.ID]}
 		option.Sampling = mainConfig.ModelSampling[model.ID]
 		option.MaxOutputTokens = model.MaxOutputTokens

@@ -29,7 +29,7 @@ func (service *settingsService) serveProviderCreate(writer http.ResponseWriter, 
 	}
 	provider := applyProviderUpdate(gateway.ProviderConfig{}, update)
 	value.Providers = append(value.Providers, provider)
-	if err := service.saveProviderSettings(request, value, gateway.ProviderConfig{}, provider, update.APIMode); err != nil {
+	if err := service.saveProviderSettings(request, value, gateway.ProviderConfig{}, provider, update.APIMode, update.ModelFilterRegex); err != nil {
 		writeAPIError(writer, http.StatusUnprocessableEntity, err)
 		return
 	}
@@ -57,7 +57,7 @@ func (service *settingsService) serveProviderUpdate(writer http.ResponseWriter, 
 	previous := value.Providers[index]
 	provider := applyProviderUpdate(previous, update)
 	value.Providers[index] = provider
-	if err := service.saveProviderSettings(request, value, previous, provider, update.APIMode); err != nil {
+	if err := service.saveProviderSettings(request, value, previous, provider, update.APIMode, update.ModelFilterRegex); err != nil {
 		writeAPIError(writer, http.StatusUnprocessableEntity, err)
 		return
 	}
@@ -83,7 +83,7 @@ func (service *settingsService) serveProviderDelete(writer http.ResponseWriter, 
 	}
 	previous := value.Providers[index]
 	value.Providers = append(value.Providers[:index], value.Providers[index+1:]...)
-	if err := service.saveProviderSettings(request, value, previous, gateway.ProviderConfig{}, nil); err != nil {
+	if err := service.saveProviderSettings(request, value, previous, gateway.ProviderConfig{}, nil, nil); err != nil {
 		writeAPIError(writer, http.StatusUnprocessableEntity, err)
 		return
 	}
@@ -215,7 +215,7 @@ func providerIndex(value gateway.Config, id string) int {
 }
 
 // Keep provider routing and Q's API option in the existing rollback boundary.
-func (service *settingsService) saveProviderSettings(request *http.Request, providers gateway.Config, previous, next gateway.ProviderConfig, requested *string) error {
+func (service *settingsService) saveProviderSettings(request *http.Request, providers gateway.Config, previous, next gateway.ProviderConfig, requested, requestedFilter *string) error {
 	main, err := service.main.Load()
 	if errors.Is(err, config.ErrNotFound) {
 		main = config.Default()
@@ -223,6 +223,27 @@ func (service *settingsService) saveProviderSettings(request *http.Request, prov
 		err = nil
 	}
 	if err != nil {
+		return err
+	}
+	originalFilters := main.ProviderModelFilters
+	main.ProviderModelFilters = maps.Clone(originalFilters)
+	if previous.ID != "" && previous.ID != next.ID {
+		if pattern, ok := main.ProviderModelFilters[previous.ID]; ok && next.ID != "" {
+			main.ProviderModelFilters[next.ID] = pattern
+		}
+		delete(main.ProviderModelFilters, previous.ID)
+	}
+	if next.ID != "" && requestedFilter != nil {
+		if *requestedFilter == "" {
+			delete(main.ProviderModelFilters, next.ID)
+		} else {
+			if main.ProviderModelFilters == nil {
+				main.ProviderModelFilters = make(map[string]string)
+			}
+			main.ProviderModelFilters[next.ID] = *requestedFilter
+		}
+	}
+	if err := main.Validate(); err != nil {
 		return err
 	}
 	original := main.ProviderAPIModes
@@ -251,7 +272,7 @@ func (service *settingsService) saveProviderSettings(request *http.Request, prov
 	if len(main.ProviderAPIModes) == 0 && original == nil {
 		main.ProviderAPIModes = nil
 	}
-	if reflect.DeepEqual(original, main.ProviderAPIModes) {
+	if reflect.DeepEqual(original, main.ProviderAPIModes) && reflect.DeepEqual(originalFilters, main.ProviderModelFilters) {
 		return service.saveProviderConfig(request, providers)
 	}
 	return service.saveSettingsWrites(request, []transferWrite{

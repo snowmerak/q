@@ -15,6 +15,14 @@ import (
 	"github.com/snowmerak/q/sessionstore"
 )
 
+func terminalToolResultRequest(request client.ChatRequest) bool {
+	if len(request.Messages) == 0 {
+		return false
+	}
+	last := request.Messages[len(request.Messages)-1]
+	return last.Role == client.RoleTool && strings.Contains(last.Content, "The task is finished. End this turn with a short acknowledgment")
+}
+
 func TestRoleTerminalToolsDeliverResultsBeforeReturning(t *testing.T) {
 	plan, err := json.Marshal(executableTestPlan())
 	if err != nil {
@@ -44,7 +52,7 @@ func TestRoleTerminalToolsDeliverResultsBeforeReturning(t *testing.T) {
 						}}}}, nil
 					}
 					last := request.Messages[len(request.Messages)-1]
-					if calls != 2 || request.Model != "role-model" || request.ReasoningEffort != "high" || request.ConversationID != "role-conversation" || request.ToolChoice != client.ToolChoiceNone || last.Role != client.RoleTool || last.Name != name || last.ToolCallID != call.ID || strings.HasPrefix(last.Content, "Tool error:") {
+					if calls != 2 || request.Model != "role-model" || request.ReasoningEffort != "high" || request.ConversationID != "role-conversation" || request.ToolChoice == client.ToolChoiceNone || last.Role != client.RoleTool || last.Name != name || last.ToolCallID != call.ID || strings.HasPrefix(last.Content, "Tool error:") {
 						t.Fatalf("terminal result was not delivered: %#v", request)
 					}
 					for _, record := range sink.records {

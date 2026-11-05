@@ -4,6 +4,7 @@
   import SessionTree from './sessions/SessionTree.svelte';
   import Transcript from './sessions/Transcript.svelte';
   import { loadDraft, saveDraft } from './sessions/drafts';
+  import { historyPageSize, mergeHistory } from './sessions/history';
   import SessionRegistration from './sessions/SessionRegistration.svelte';
   import SessionModelPicker from './sessions/SessionModelPicker.svelte';
   import CouncilView from './CouncilView.svelte';
@@ -73,6 +74,7 @@
 
   let workspaceLoading = false;
   let sessionLoading = false;
+  let historyLoading = false;
   let sending = false;
   let error = '';
   let runStatus = '';
@@ -181,6 +183,7 @@
     if (!canLeave()) return;
     sessionLoading = true;
     sessionGeneration += 1;
+    historyLoading = false;
     runMonitor.stop();
     error = '';
     try {
@@ -242,6 +245,7 @@
       });
       selected = (await response.json()) as SessionDetail;
       sessionGeneration += 1;
+      historyLoading = false;
       runMonitor.stop();
       messages = selected.transcript;
       events = [];
@@ -281,6 +285,7 @@
     workflowDirty = false;
     switchDraft('');
     sessionGeneration += 1;
+    historyLoading = false;
     runMonitor.stop();
     stopDelegationMonitor();
     selectedRegistration = null;
@@ -405,6 +410,7 @@
     // them with its inactive prompt when the selection changes.
     switchDraft(registration.session.type === 'council' || registration.session.type === 'composer' ? '' : registration.registration_id);
     const generation = ++sessionGeneration;
+    historyLoading = false;
     runMonitor.stop();
     stopDelegationMonitor();
     activeRun = null;
@@ -422,7 +428,7 @@
         if (push) window.history.pushState({}, '', `/sessions/${encodeURIComponent(registration.registration_id)}`);
         return;
       }
-      const response = await requestResponse(`/api/v1/sessions/${encodeURIComponent(sessionID)}?workspace_root=${encodeURIComponent(workspaceRoot)}`);
+      const response = await requestResponse(`/api/v1/sessions/${encodeURIComponent(sessionID)}?workspace_root=${encodeURIComponent(workspaceRoot)}&limit=${historyPageSize}`);
       const detail = (await response.json()) as SessionDetail;
       if (!isCurrentSession(generation)) return;
       selected = detail;
@@ -451,6 +457,7 @@
     if (selectedRegistration?.registration_id !== registration.registration_id) return;
     switchDraft(`${registration.registration_id}/${node.path}`);
     const generation = ++sessionGeneration;
+    historyLoading = false;
     runMonitor.stop();
     stopDelegationMonitor();
     activeRun = null;
@@ -581,6 +588,9 @@
     activeRun = run;
     sending = !terminalRun(run.status);
     runStatus = runStatusLabel(run);
+    // Completed messages and thoughts are already in the durable transcript.
+    // Replaying their stream fragments would replace it with a partial tail.
+    if (terminalRun(run.status)) return;
     runMonitor.start(target, run.id);
   }
 
@@ -608,12 +618,32 @@
   async function reloadSelected() {
     if (!selected || !workspaceRoot) return;
     const generation = sessionGeneration;
-    const response = await fetch(`/api/v1/sessions/${encodeURIComponent(selected.session.session_id)}?workspace_root=${encodeURIComponent(workspaceRoot)}`);
+    const response = await fetch(`/api/v1/sessions/${encodeURIComponent(selected.session.session_id)}?workspace_root=${encodeURIComponent(workspaceRoot)}&limit=${historyPageSize}`);
     if (!response.ok) return;
     const detail = (await response.json()) as SessionDetail;
     if (!isCurrentSession(generation)) return;
-    selected = detail;
+    selected = mergeHistory(selected, detail);
     if (!selectedDelegation) messages = selected.transcript;
+  }
+
+  async function loadEarlierHistory() {
+    if (!selected?.history?.start || selectedDelegation || historyLoading) return;
+    const generation = sessionGeneration;
+    const before = selected.history.start;
+    historyLoading = true;
+    try {
+      const query = new URLSearchParams({ workspace_root: workspaceRoot, limit: String(historyPageSize), before: String(before) });
+      const response = await requestResponse(`/api/v1/sessions/${encodeURIComponent(selected.session.session_id)}?${query}`);
+      const earlier = await response.json() as SessionDetail;
+      if (!isCurrentSession(generation) || !selected) return;
+      if (earlier.history?.end !== before) throw new Error('Session history changed. Reopen the session to reload it.');
+      selected = mergeHistory(earlier, { ...selected, transcript: messages });
+      messages = selected.transcript;
+    } catch (cause) {
+      if (isCurrentSession(generation)) error = cause instanceof Error ? cause.message : 'Could not load earlier messages';
+    } finally {
+      if (isCurrentSession(generation)) historyLoading = false;
+    }
   }
 
 
@@ -739,6 +769,7 @@
       saveDraft(draftKey, prompt);
       disposed = true;
       sessionGeneration += 1;
+      historyLoading = false;
       runMonitor.stop();
       stopDelegationMonitor();
       if (delegationRefresh) clearTimeout(delegationRefresh);
@@ -818,7 +849,7 @@
           {#if selected.active_task}<small>The task is still active. Send a message to continue.</small>{/if}
         </div>
       {/if}
-      <Transcript {messages} thoughts={selectedDelegation ? [] : selected?.transcript_thoughts || []} events={selectedDelegation ? [] : events} sessionKey={fileContext} loading={sessionLoading} onfile={openFileLink} />
+      <Transcript {messages} thoughts={selectedDelegation ? [] : selected?.transcript_thoughts || []} events={selectedDelegation ? [] : events} sessionKey={fileContext} loading={sessionLoading} hasEarlier={!selectedDelegation && !!selected?.history?.start} loadingEarlier={historyLoading} onearlier={loadEarlierHistory} onfile={openFileLink} />
       {#if !selectedDelegation && activeRun?.pending_question}
         <section class="run-question" aria-labelledby="run-question-title">
           <div><span>Q NEEDS INPUT</span><h3 id="run-question-title">{activeRun.pending_question.question}</h3>{#if activeRun.pending_question.context}<p>{activeRun.pending_question.context}</p>{/if}</div>

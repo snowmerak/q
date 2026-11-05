@@ -62,6 +62,7 @@ type sessionDetail struct {
 	Transcript         []sessionMessage              `json:"transcript"`
 	TranscriptThoughts []workspace.TranscriptThought `json:"transcript_thoughts,omitempty"`
 	ActiveTask         *workspace.ActiveTask         `json:"active_task,omitempty"`
+	History            *sessionHistory               `json:"history,omitempty"`
 }
 
 type sessionListResponse struct {
@@ -233,7 +234,12 @@ func (service *sessionsService) serveDetail(writer http.ResponseWriter, request 
 		writeSessionError(writer, err)
 		return
 	}
-	writeJSON(writer, http.StatusOK, detailFromSession(root, store, value))
+	detail, err := requestedSessionHistory(request, root, store, value)
+	if err != nil {
+		writeAPIError(writer, http.StatusBadRequest, err)
+		return
+	}
+	writeJSON(writer, http.StatusOK, detail)
 }
 
 func (service *sessionsService) serveDelete(writer http.ResponseWriter, request *http.Request) {
@@ -413,17 +419,27 @@ func summarizeSession(entry workspace.SessionEntry) sessionSummary {
 }
 
 func detailFromSession(root string, store workspace.Store, value workspace.Session) sessionDetail {
+	return detailFromSessionRange(root, store, value, 0, len(value.Transcript))
+}
+
+func detailFromSessionRange(root string, store workspace.Store, value workspace.Session, start, end int) sessionDetail {
 	updatedAt := time.Time{}
 	if value.UpdatedAt != nil {
 		updatedAt = value.UpdatedAt.UTC()
 	}
-	transcript := make([]sessionMessage, 0, len(value.Transcript))
+	transcript := make([]sessionMessage, 0, end-start)
 	usageByAssistant := make(map[int]workspace.TokenUsage, len(value.ResponseUsage))
 	for _, usage := range value.ResponseUsage {
 		usageByAssistant[usage.AssistantIndex] = usage.TokenUsage
 	}
 	assistantIndex := 0
-	for _, message := range value.Transcript {
+	for index, message := range value.Transcript[:end] {
+		if index < start {
+			if message.Role == client.RoleAssistant {
+				assistantIndex++
+			}
+			continue
+		}
 		projected := sessionMessage{
 			Role: string(message.Role), Content: message.TextContent(), Name: message.Name,
 			ToolCallID: message.ToolCallID, ToolCalls: message.ToolCalls,
@@ -436,6 +452,13 @@ func detailFromSession(root string, store workspace.Store, value workspace.Sessi
 		}
 		transcript = append(transcript, projected)
 	}
+	var thoughts []workspace.TranscriptThought
+	for _, thought := range value.TranscriptThoughts {
+		if thought.Before >= start && (thought.Before < end || end == len(value.Transcript) && thought.Before == end) {
+			thought.Before -= start
+			thoughts = append(thoughts, thought)
+		}
+	}
 	return sessionDetail{
 		WorkspaceRoot: root,
 		Session: sessionSummary{
@@ -443,7 +466,7 @@ func detailFromSession(root string, store workspace.Store, value workspace.Sessi
 			SessionID: store.SessionID, RunID: value.RunID,
 			Title: value.Title, UpdatedAt: updatedAt,
 		},
-		Transcript: transcript, TranscriptThoughts: value.TranscriptThoughts, ActiveTask: value.ActiveTask,
+		Transcript: transcript, TranscriptThoughts: thoughts, ActiveTask: value.ActiveTask,
 	}
 }
 

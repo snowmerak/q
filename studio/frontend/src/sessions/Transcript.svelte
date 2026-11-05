@@ -1,10 +1,10 @@
 <script lang="ts">
-  import { Bot, User, Wrench } from '@lucide/svelte';
+  import { Bot, ChevronUp, User, Wrench } from '@lucide/svelte';
   import Markdown from '../Markdown.svelte';
   import { eventBody, eventTitle, shortID, toolArguments } from './format';
   import { buildTimeline } from './timeline';
   import type { Message, RunEvent } from './types';
-  import { afterUpdate, beforeUpdate } from 'svelte';
+  import { afterUpdate, beforeUpdate, tick } from 'svelte';
 
   export let messages: Message[] = [];
   export let thoughts: { before: number; content: string }[] = [];
@@ -14,6 +14,10 @@
   export let onfile: ((path: string) => void) | undefined = undefined;
   export let assistantLabel = 'Q';
   export let label = '';
+  export let hasEarlier = false;
+  export let loadingEarlier = false;
+  export let onearlier: (() => Promise<void>) | undefined = undefined;
+  let prepending = false;
   let transcriptElement: HTMLElement | null = null;
   let follow = true;
   let previousSession = '';
@@ -27,15 +31,36 @@
     return distance <= 0 || transcriptElement.scrollTop / distance >= 0.95;
   }
 
-  beforeUpdate(() => { follow = sessionKey !== previousSession || nearBottom(); });
+  beforeUpdate(() => { follow = sessionKey !== previousSession || (!prepending && nearBottom()); });
   afterUpdate(() => {
     previousSession = sessionKey;
     if (follow) transcriptElement?.scrollTo({ top: transcriptElement.scrollHeight, behavior: 'instant' });
   });
+
+  async function loadEarlier() {
+    if (!transcriptElement || !hasEarlier || loadingEarlier || prepending || !onearlier) return;
+    const element = transcriptElement;
+    const key = sessionKey;
+    const height = element.scrollHeight;
+    const top = element.scrollTop;
+    prepending = true;
+    try {
+      await onearlier();
+      await tick();
+      if (sessionKey === key) element.scrollTop = top + element.scrollHeight - height;
+    } finally {
+      prepending = false;
+    }
+  }
+
+  function scrolled() {
+    if (!loading && transcriptElement && transcriptElement.scrollTop <= 80) void loadEarlier();
+  }
 </script>
 
 <!-- svelte-ignore a11y_no_noninteractive_tabindex (Named conversation regions support keyboard scrolling.) -->
-<div class="transcript" bind:this={transcriptElement} aria-live="polite" role={label ? 'region' : undefined} aria-label={label || undefined} tabindex={label ? 0 : undefined}>
+<div class="transcript" bind:this={transcriptElement} onscroll={scrolled} aria-live="polite" role={label ? 'region' : undefined} aria-label={label || undefined} tabindex={label ? 0 : undefined}>
+  {#if hasEarlier}<button class="secondary-button history-earlier" disabled={loadingEarlier} onclick={loadEarlier}><ChevronUp aria-hidden="true" size={15} />{loadingEarlier ? 'Loading earlier messages…' : 'Load earlier messages'}</button>{/if}
   {#each entries as entry, entryIndex (entryIndex)}
     {#if entry.kind === 'thinking'}
       <details class="thinking-block"><summary>Thinking</summary><Markdown compact content={entry.content} {onfile} /></details>
@@ -84,6 +109,7 @@
 </div>
 
 <style>
+  .history-earlier { display:flex; align-items:center; gap:.5rem; margin:0 auto 1rem; color:var(--muted); }
   .message-progress { color:var(--muted); font-size:calc(13px * var(--text-scale)); }
   .message-failure { color:var(--error); font-size:calc(13px * var(--text-scale)); overflow-wrap:anywhere; }
 </style>

@@ -149,7 +149,7 @@ func TestProviderAPIModeFailedRoutingUpdateRestoresOption(t *testing.T) {
 	next := previous
 	next.Kind = "grok"
 	providers.Providers[0] = next
-	if err := service.saveProviderSettings(httptest.NewRequest("PUT", "/", nil), providers, previous, next, nil); err == nil {
+	if err := service.saveProviderSettings(httptest.NewRequest("PUT", "/", nil), providers, previous, next, nil, nil); err == nil {
 		t.Fatal("routing update unexpectedly succeeded")
 	}
 	afterMain, _ := os.ReadFile(store.Path())

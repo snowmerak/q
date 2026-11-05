@@ -202,6 +202,9 @@ func (state transferState) bundle() (settingsBundle, error) {
 	for model, sampling := range state.main.ModelSampling {
 		put("models", "sampling/"+model, sampling)
 	}
+	for id, pattern := range state.main.ProviderModelFilters {
+		put("providers", "model-filter/"+id, pattern)
+	}
 	for id, mode := range state.main.ProviderAPIModes {
 		put("providers", "api-mode/"+id, mode)
 	}

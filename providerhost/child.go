@@ -46,7 +46,7 @@ func RunChild(ctx context.Context, configPath, apiKey string, ready func(ReadyMe
 
 	server := &http.Server{
 		Handler: AuthenticatedHandler(apiKey, ModelGroupHandler(
-			UsageTrackingHandler(usageRecorder, instance.Handler()), qconfig.Store{Dir: configDir},
+			ProviderModelFilterHandler(UsageTrackingHandler(usageRecorder, instance.Handler()), value, qconfig.Store{Dir: configDir}), qconfig.Store{Dir: configDir},
 		)),
 		ReadHeaderTimeout: 10 * time.Second,
 	}

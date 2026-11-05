@@ -155,6 +155,7 @@ func (service *settingsService) snapshot() (settingsSnapshot, error) {
 			ID: provider.ID, Type: provider.Type, Kind: provider.Kind, Prefix: provider.Prefix, APIMode: providerhost.ProviderAPIMode(main, provider.ID),
 			Enabled: provider.Enabled, BaseURL: provider.BaseURL, APIKeyEnv: provider.APIKeyEnv,
 			HasInlineAPIKey: provider.APIKey != "", ModelCount: modelCount,
+			ModelFilterRegex: main.ProviderModelFilters[provider.ID],
 		})
 	}
 	gatewayKeys := make([]serviceAPIKeySettings, 0, len(gateway.APIKeys))

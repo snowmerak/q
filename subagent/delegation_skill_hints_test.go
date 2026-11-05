@@ -67,7 +67,7 @@ func TestGeneralScoutTaskStartReceivesSkillHints(t *testing.T) {
 	runtime := &delegatedSkillRuntime{}
 	rounds := 0
 	configured := contextChatFunc(func(_ context.Context, request client.ChatRequest) (*client.ChatResponse, error) {
-		if request.ToolChoice == client.ToolChoiceNone {
+		if request.ToolChoice == client.ToolChoiceNone || terminalToolResultRequest(request) {
 			return contextResponse("ack"), nil
 		}
 		if !hasTool(request.Tools, "search_skills") || !hasTool(request.Tools, "get_skill") {

@@ -140,6 +140,17 @@ func (state *transferState) merge(section, id string, data json.RawMessage) erro
 			return nil
 		}
 	case "providers":
+		if kind == "model-filter" && name != "" {
+			pattern, err := transferValue[string](data)
+			if err != nil {
+				return err
+			}
+			if state.main.ProviderModelFilters == nil {
+				state.main.ProviderModelFilters = make(map[string]string)
+			}
+			state.main.ProviderModelFilters[name] = pattern
+			return nil
+		}
 		if kind == "api-mode" && name != "" {
 			mode, err := transferValue[string](data)
 			if err != nil {

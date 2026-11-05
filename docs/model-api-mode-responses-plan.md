@@ -156,3 +156,24 @@ OpenRouter의 Claude Responses 캐시는 [OpenRouter의 `cache_control` 계약](
 ## 공급자 API 옵션 저장 (2026-11-04)
 
 Providers의 API mode는 Q 전역 설정의 `provider_api_modes`에 공급자 ID로 저장한다. 공급자 ID를 바꾸면 옵션도 옮기고, model prefix는 요청 시 저장 옵션을 조회하는 별칭으로만 사용한다. 공급자 종류의 Auto→OpenAI/xAI/OpenRouter 전환은 최초 Responses 선택을 편하게 하는 편집 동작이며, 일반 저장·재시작·모델 요청은 그 초기값을 다시 적용하지 않는다. 호출 API는 모델 override → 저장된 공급자 옵션 → Chat Completions 순서로 결정된다. 공급자 옵션도 Providers 설정 내보내기/가져오기에 포함된다.
+
+## Hermes proxy 캐시 관찰 범위 (2026-11-05)
+
+낮은 캐시 적중률을 조사한 환경은 Hermes proxy의 xAI Grok OAuth 경로와 `hermes/grok-4.7`이다. 이를 xAI 직접 API 전체의 문제나 Responses만의 문제로 일반화하지 않는다. 사용자 화면의 사용량과 Studio의 `model.call.finished` 로그를 입력·출력 토큰 수로 대조한 결과는 다음과 같다. 시각은 한국 시간이다.
+
+| 시각 | 요청 모델 | Q → Gateway API | 입력 / 출력 토큰 | 화면 캐시 적중률 |
+| --- | --- | --- | --- | --- |
+| 11월 4일 22:56:19 | `hermes/grok-4.7` | Chat Completions | 69,931 / 924 | 1.6% |
+| 11월 4일 23:12:38 | `hermes/grok-4.7` | Chat Completions | 59,570 / 28 | 96.3% |
+| 11월 4일 23:22:25 | `hermes/grok-4.7` | Responses | 49,382 / 1,310 | 2.3% |
+| 11월 5일 00:04:56 | `codex/gpt-6.1-sol` | Chat Completions | 43,700 / 200 | 99.6% |
+
+마지막 99.6%는 Codex 공급자의 후속 대화 결과이며 Hermes 경로의 개선을 검증한 수치가 아니다. 공급자 API 모드 저장 수정은 의도하지 않은 API 전환을 방지하지만, 이 결과만으로 Hermes의 캐시 문제가 해결됐다고 판단하지 않는다.
+
+확인한 로컬 Hermes 구현의 `hermes_cli/proxy/adapters/xai.py`는 `/responses`와 `/chat/completions`를 모두 허용한다. `server.py`의 `_open_upstream`은 같은 경로와 요청 본문을 upstream으로 전달하고, `_stream_back`은 응답 본문을 청크 단위로 전달한다. SSE의 누락된 `[DONE]`을 보완하는 동작은 있지만 캐시 토큰 수치를 계산하거나 usage를 재작성하는 코드는 없다. 따라서 관찰한 캐시 수치는 upstream 보고값을 전달받은 것이며, 낮은 적중률의 원인이 proxy 자체인지 upstream의 캐시 동작인지는 아직 분리해 검증하지 않았다.
+
+## 종료 요청의 도구 설정 유지 (2026-11-05)
+
+`FinishToolTurn`은 종료 결과를 전달할 때 기존 `tool_choice`와 `parallel_tool_calls`를 유지한다. `required` 또는 특정 함수 지정처럼 새 호출을 강제하는 선택만 `auto`로 완화한다. 호출자가 명시한 `none`은 보존하지만 호스트가 종료를 이유로 새로 설정하지 않는다. 추가 도구 요청은 실행하지 않고 호출 ID에 맞는 거절 결과를 반환하며, 기존 4회 종료 한도를 유지한다.
+
+가짜 upstream을 사용한 Agent Loop→Gateway 통합 검사에서 Grok·OpenRouter의 Chat Completions·Responses 경로 모두 종료 전후의 도구 정의·설정·캐시 식별자와 기존 대화 접두사가 유지됨을 확인했다. 이는 전송 계약의 검사이며 실제 공급자의 캐시 적중률 개선을 입증한 결과는 아니다.
