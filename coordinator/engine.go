@@ -134,6 +134,9 @@ func (e *Engine) scan(ctx context.Context) (returnErr error) {
 		return err
 	}
 	for _, project := range projects.Workspaces {
+		if _, err := c.DispatchTicketSchedules(ctx, project.ID); err != nil {
+			return err
+		}
 		load, err := c.GetTicketLoad(ctx, project.ID)
 		if err != nil {
 			return err
@@ -206,7 +209,7 @@ func (e *Engine) scan(ctx context.Context) (returnErr error) {
 }
 
 func needsAssignment(item workitems.Item) bool {
-	return !item.Deleted && (item.ExecutionState == "queued" || item.ExecutionState == "assignment_waiting" ||
+	return !item.Deleted && workitems.TicketReadyAt(item, time.Now()) && (item.ExecutionState == "queued" || item.ExecutionState == "assignment_waiting" ||
 		(item.ExecutionState == "" && item.State == "todo" && item.ActiveAttemptID == ""))
 }
 

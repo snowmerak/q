@@ -22,28 +22,32 @@ const (
 
 // Item contains thread metadata; its body lives only in the referenced Post.
 type Item struct {
-	ID                string    `json:"id"`
-	WorkspaceID       string    `json:"workspace_id"`
-	Kind              string    `json:"kind"`
-	Number            int64     `json:"number"`
-	Title             string    `json:"title"`
-	BodyPostID        string    `json:"body_post_id"`
-	State             string    `json:"state"`
-	Labels            []string  `json:"labels"`
-	Acceptance        []string  `json:"acceptance,omitempty"`
-	ExecutionMode     string    `json:"execution_mode,omitempty"`
-	RequestedMemberID string    `json:"requested_member_id,omitempty"`
-	LinkedIssueID     string    `json:"linked_issue_id,omitempty"`
-	ExecutionState    string    `json:"execution_state,omitempty"`
-	ExecutionReason   string    `json:"execution_reason,omitempty"`
-	ActiveAttemptID   string    `json:"active_attempt_id,omitempty"`
-	AssignedMemberID  string    `json:"assigned_member_id,omitempty"`
-	NextAssignmentAt  time.Time `json:"next_assignment_at,omitempty"`
-	Revision          int64     `json:"revision"`
-	SourceRevision    int64     `json:"source_revision"`
-	Deleted           bool      `json:"deleted"`
-	CreatedAt         time.Time `json:"created_at"`
-	UpdatedAt         time.Time `json:"updated_at"`
+	ID                string          `json:"id"`
+	WorkspaceID       string          `json:"workspace_id"`
+	Kind              string          `json:"kind"`
+	Number            int64           `json:"number"`
+	Title             string          `json:"title"`
+	BodyPostID        string          `json:"body_post_id"`
+	State             string          `json:"state"`
+	Labels            []string        `json:"labels"`
+	Schedule          *TicketSchedule `json:"schedule,omitempty"`
+	ScheduleID        string          `json:"schedule_id,omitempty"`
+	ScheduledFor      time.Time       `json:"scheduled_for,omitempty"`
+	NextScheduledAt   time.Time       `json:"next_scheduled_at,omitempty"`
+	Acceptance        []string        `json:"acceptance,omitempty"`
+	ExecutionMode     string          `json:"execution_mode,omitempty"`
+	RequestedMemberID string          `json:"requested_member_id,omitempty"`
+	LinkedIssueID     string          `json:"linked_issue_id,omitempty"`
+	ExecutionState    string          `json:"execution_state,omitempty"`
+	ExecutionReason   string          `json:"execution_reason,omitempty"`
+	ActiveAttemptID   string          `json:"active_attempt_id,omitempty"`
+	AssignedMemberID  string          `json:"assigned_member_id,omitempty"`
+	NextAssignmentAt  time.Time       `json:"next_assignment_at,omitempty"`
+	Revision          int64           `json:"revision"`
+	SourceRevision    int64           `json:"source_revision"`
+	Deleted           bool            `json:"deleted"`
+	CreatedAt         time.Time       `json:"created_at"`
+	UpdatedAt         time.Time       `json:"updated_at"`
 }
 
 type Post struct {
@@ -64,31 +68,33 @@ type Post struct {
 }
 
 type CreateInput struct {
-	WorkspaceID       string   `json:"workspace_id"`
-	Kind              string   `json:"kind"`
-	Title             string   `json:"title"`
-	Content           string   `json:"content"`
-	Labels            []string `json:"labels,omitempty"`
-	Acceptance        []string `json:"acceptance,omitempty"`
-	ExecutionMode     string   `json:"execution_mode,omitempty"`
-	RequestedMemberID string   `json:"requested_member_id,omitempty"`
-	LinkedIssueID     string   `json:"linked_issue_id,omitempty"`
-	Author            string   `json:"author"`
-	Refs              []string `json:"refs,omitempty"`
-	RequestID         string   `json:"request_id,omitempty"`
+	Schedule          *TicketSchedule `json:"schedule,omitempty"`
+	WorkspaceID       string          `json:"workspace_id"`
+	Kind              string          `json:"kind"`
+	Title             string          `json:"title"`
+	Content           string          `json:"content"`
+	Labels            []string        `json:"labels,omitempty"`
+	Acceptance        []string        `json:"acceptance,omitempty"`
+	ExecutionMode     string          `json:"execution_mode,omitempty"`
+	RequestedMemberID string          `json:"requested_member_id,omitempty"`
+	LinkedIssueID     string          `json:"linked_issue_id,omitempty"`
+	Author            string          `json:"author"`
+	Refs              []string        `json:"refs,omitempty"`
+	RequestID         string          `json:"request_id,omitempty"`
 }
 
 type UpdateInput struct {
-	Revision          int64    `json:"revision"`
-	Title             string   `json:"title"`
-	State             string   `json:"state"`
-	Labels            []string `json:"labels"`
-	Acceptance        []string `json:"acceptance,omitempty"`
-	RequestedMemberID string   `json:"requested_member_id,omitempty"`
-	LinkedIssueID     string   `json:"linked_issue_id,omitempty"`
-	ExecutionMode     string   `json:"execution_mode,omitempty"`
-	Deleted           bool     `json:"deleted"`
-	RequestID         string   `json:"request_id,omitempty"`
+	Schedule          *TicketSchedule `json:"schedule,omitempty"`
+	Revision          int64           `json:"revision"`
+	Title             string          `json:"title"`
+	State             string          `json:"state"`
+	Labels            []string        `json:"labels"`
+	Acceptance        []string        `json:"acceptance,omitempty"`
+	RequestedMemberID string          `json:"requested_member_id,omitempty"`
+	LinkedIssueID     string          `json:"linked_issue_id,omitempty"`
+	ExecutionMode     string          `json:"execution_mode,omitempty"`
+	Deleted           bool            `json:"deleted"`
+	RequestID         string          `json:"request_id,omitempty"`
 }
 
 type PostInput struct {
@@ -294,39 +300,51 @@ func (s *Store) CreateItem(ctx context.Context, in CreateInput) (Item, error) {
 	if in.ExecutionMode != "report" && in.ExecutionMode != "git" {
 		return Item{}, ErrInvalidInput
 	}
+	var err error
+	in.Schedule, err = normalizeTicketSchedule(in.Kind, in.Schedule)
+	if err != nil {
+		return Item{}, err
+	}
 	return mutate(ctx, s, in.WorkspaceID, "create", in.RequestID, in, func(tx *sql.Tx) (Item, error) {
-		now := time.Now().UTC()
-		item := Item{ID: uuid.NewString(), WorkspaceID: in.WorkspaceID, Kind: in.Kind, Title: in.Title, State: "open", Labels: in.Labels, Revision: 1, SourceRevision: 1, CreatedAt: now, UpdatedAt: now}
-		if item.Labels == nil {
-			item.Labels = []string{}
-		}
-		if in.Kind == Ticket {
-			item.State = "todo"
-			item.ExecutionState = "queued"
-			item.Acceptance = in.Acceptance
-			item.ExecutionMode = in.ExecutionMode
-			item.RequestedMemberID = in.RequestedMemberID
-			item.LinkedIssueID = in.LinkedIssueID
-		}
-		if in.LinkedIssueID != "" {
-			linked, err := decodeRow[Item](tx.QueryRowContext(ctx, `SELECT payload FROM items WHERE id=? AND workspace_id=? AND kind='issue'`, in.LinkedIssueID, in.WorkspaceID))
-			if err != nil || linked.Deleted {
-				return Item{}, ErrInvalidInput
-			}
-		}
-		if err := tx.QueryRowContext(ctx, `SELECT COALESCE(MAX(number),0)+1 FROM items WHERE workspace_id=? AND kind=?`, in.WorkspaceID, in.Kind).Scan(&item.Number); err != nil {
-			return Item{}, err
-		}
-		post := Post{ID: uuid.NewString(), WorkspaceID: item.WorkspaceID, ItemID: item.ID, Kind: "body", Seq: 1, Content: in.Content, Author: in.Author, Refs: in.Refs, Revision: 1, CreatedAt: now, UpdatedAt: now}
-		item.BodyPostID = post.ID
-		if _, err := tx.ExecContext(ctx, `INSERT INTO items(id,workspace_id,kind,number,payload) VALUES(?,?,?,?,?)`, item.ID, item.WorkspaceID, item.Kind, item.Number, []byte(`{}`)); err != nil {
-			return Item{}, err
-		}
-		if err := savePost(ctx, tx, post, true); err != nil {
-			return Item{}, err
-		}
-		return item, saveItem(ctx, tx, item)
+		return createItemTx(ctx, tx, in, "", time.Time{})
 	})
+}
+
+func createItemTx(ctx context.Context, tx *sql.Tx, in CreateInput, scheduleID string, scheduledFor time.Time) (Item, error) {
+	now := time.Now().UTC()
+	item := Item{ScheduleID: scheduleID, ScheduledFor: scheduledFor, ID: uuid.NewString(), WorkspaceID: in.WorkspaceID, Kind: in.Kind, Title: in.Title, State: "open", Labels: in.Labels, Revision: 1, SourceRevision: 1, CreatedAt: now, UpdatedAt: now}
+	if item.Labels == nil {
+		item.Labels = []string{}
+	}
+	if in.Kind == Ticket {
+		item.State = "todo"
+		item.ExecutionState = "queued"
+		item.Acceptance = in.Acceptance
+		item.ExecutionMode = in.ExecutionMode
+		item.RequestedMemberID = in.RequestedMemberID
+		item.LinkedIssueID = in.LinkedIssueID
+		if err := applyTicketSchedule(&item, in.Schedule, now); err != nil {
+			return Item{}, err
+		}
+	}
+	if in.LinkedIssueID != "" {
+		linked, err := decodeRow[Item](tx.QueryRowContext(ctx, `SELECT payload FROM items WHERE id=? AND workspace_id=? AND kind='issue'`, in.LinkedIssueID, in.WorkspaceID))
+		if err != nil || linked.Deleted {
+			return Item{}, ErrInvalidInput
+		}
+	}
+	if err := tx.QueryRowContext(ctx, `SELECT COALESCE(MAX(number),0)+1 FROM items WHERE workspace_id=? AND kind=?`, in.WorkspaceID, in.Kind).Scan(&item.Number); err != nil {
+		return Item{}, err
+	}
+	post := Post{ID: uuid.NewString(), WorkspaceID: item.WorkspaceID, ItemID: item.ID, Kind: "body", Seq: 1, Content: in.Content, Author: in.Author, Refs: in.Refs, Revision: 1, CreatedAt: now, UpdatedAt: now}
+	item.BodyPostID = post.ID
+	if _, err := tx.ExecContext(ctx, `INSERT INTO items(id,workspace_id,kind,number,payload) VALUES(?,?,?,?,?)`, item.ID, item.WorkspaceID, item.Kind, item.Number, []byte(`{}`)); err != nil {
+		return Item{}, err
+	}
+	if err := savePost(ctx, tx, post, true); err != nil {
+		return Item{}, err
+	}
+	return item, saveItem(ctx, tx, item)
 }
 
 func (s *Store) GetItem(ctx context.Context, id string) (Item, error) {
@@ -384,6 +402,15 @@ func (s *Store) UpdateItem(ctx context.Context, id string, in UpdateInput) (Item
 			}
 			if a.Status == "reserved" || a.Status == "running" || a.Status == "merging" || a.Status == "closing" || a.ChangeRequest != nil && !a.ChangeRequest.Final() {
 				return Item{}, fmt.Errorf("%w: stop and resolve active work before deleting the ticket", ErrConflict)
+			}
+		}
+		if in.Schedule != nil {
+			schedule, err := normalizeTicketSchedule(item.Kind, in.Schedule)
+			if err != nil {
+				return Item{}, err
+			}
+			if err := applyTicketSchedule(&item, schedule, time.Now().UTC()); err != nil {
+				return Item{}, err
 			}
 		}
 		item.Title, item.State, item.Labels, item.Deleted = strings.TrimSpace(in.Title), in.State, in.Labels, in.Deleted

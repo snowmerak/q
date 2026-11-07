@@ -70,7 +70,7 @@ func TestSchedulingQueuesUseIndexesAndFollowPayloadTransitions(t *testing.T) {
 	merge := makeItem(p.ID, Ticket, "merge_queued", false, time.Time{})
 	closeItem := makeItem(p.ID, Ticket, "close_queued", false, time.Time{})
 	// Simulate upgrading an existing catalog: the indexes are backfilled at open.
-	if _, err := s.db.ExecContext(ctx, `DROP INDEX ticket_assignment_queue; DROP INDEX ticket_merge_queue; DROP INDEX attempts_active; DROP INDEX attempts_lease_expiry; DROP INDEX inbox_pending;`); err != nil {
+	if _, err := s.db.ExecContext(ctx, `DROP INDEX ticket_assignment_queue_v2; DROP INDEX ticket_merge_queue; DROP INDEX attempts_active; DROP INDEX attempts_lease_expiry; DROP INDEX inbox_pending;`); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.Close(); err != nil {
@@ -143,8 +143,10 @@ func TestSchedulingQueuesUseIndexesAndFollowPayloadTransitions(t *testing.T) {
 			t.Fatalf("query missed partial index %s: %v", index, details)
 		}
 	}
-	assertPlan(`SELECT payload FROM items INDEXED BY ticket_assignment_queue WHERE `+assignmentQueue+` AND workspace_id=? AND seq>? AND seq<=? AND `+assignmentDue+`<=julianday(?) ORDER BY seq LIMIT 101`, "SEARCH items USING INDEX ticket_assignment_queue", p.ID, 0, 10000, stamp(time.Now()))
+	assertPlan(`SELECT payload FROM items INDEXED BY ticket_assignment_queue_v2 WHERE `+assignmentQueue+` AND workspace_id=? AND seq>? AND seq<=? AND `+assignmentDue+`<=julianday(?) ORDER BY seq LIMIT 101`, "SEARCH items USING INDEX ticket_assignment_queue_v2", p.ID, 0, 10000, stamp(time.Now()))
 	assertPlan(`SELECT payload FROM items INDEXED BY ticket_merge_queue WHERE `+mergeQueue+` AND workspace_id=? AND seq>? ORDER BY seq LIMIT 101`, "SEARCH items USING INDEX ticket_merge_queue", p.ID, 0)
+	assertPlan(`SELECT id FROM items INDEXED BY ticket_schedule_due WHERE `+recurringScheduleQueue+` AND workspace_id=? AND julianday(json_extract(payload,'$.next_scheduled_at'))<=julianday(?) ORDER BY julianday(json_extract(payload,'$.next_scheduled_at')),seq LIMIT 100`, "SEARCH items USING INDEX ticket_schedule_due", p.ID, stamp(time.Now()))
+	assertPlan(`SELECT EXISTS(SELECT 1 FROM items INDEXED BY ticket_schedule_runs WHERE `+pendingScheduleRun+` AND json_extract(payload,'$.schedule_id')=? LIMIT 1)`, "SEARCH items USING INDEX ticket_schedule_runs", "schedule")
 	assertPlan(`SELECT count(*) FROM ticket_attempts WHERE `+activeAttempts+` AND workspace_id=?`, "attempts_active", p.ID)
 	assertPlan(`SELECT payload FROM ticket_attempts WHERE `+leasedAttempts+` AND julianday(json_extract(payload,'$.lease_until'))<julianday(?)`, "SEARCH ticket_attempts USING INDEX attempts_lease_expiry", stamp(time.Now()))
 	assertPlan(`SELECT payload FROM manager_inbox_events WHERE `+pendingInbox+` AND workspace_id=? ORDER BY julianday(json_extract(payload,'$.created_at')),id LIMIT 1`, "SEARCH manager_inbox_events USING INDEX inbox_pending", p.ID)

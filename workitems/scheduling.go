@@ -9,9 +9,9 @@ import (
 // Keep these predicates identical in the indexes and reads. SQLite maintains
 // membership with the payload mutation, including retries and legacy tickets.
 const (
-	assignmentQueue = `kind='ticket' AND coalesce(json_extract(payload,'$.deleted'),0)=0 AND (json_extract(payload,'$.execution_state') IN ('queued','assignment_waiting') OR (coalesce(json_extract(payload,'$.execution_state'),'')='' AND json_extract(payload,'$.state')='todo' AND coalesce(json_extract(payload,'$.active_attempt_id'),'')=''))`
+	assignmentQueue = `kind='ticket' AND coalesce(json_extract(payload,'$.deleted'),0)=0 AND coalesce(json_extract(payload,'$.schedule.every'),'')='' AND coalesce(json_extract(payload,'$.schedule.paused'),0)=0 AND (json_extract(payload,'$.execution_state') IN ('queued','assignment_waiting') OR (coalesce(json_extract(payload,'$.execution_state'),'')='' AND json_extract(payload,'$.state')='todo' AND coalesce(json_extract(payload,'$.active_attempt_id'),'')=''))`
 	mergeQueue      = `kind='ticket' AND coalesce(json_extract(payload,'$.deleted'),0)=0 AND json_extract(payload,'$.execution_state') IN ('merge_queued','close_queued')`
-	assignmentDue   = `coalesce(julianday(json_extract(payload,'$.next_assignment_at')),0)`
+	assignmentDue   = `max(coalesce(julianday(json_extract(payload,'$.next_assignment_at')),0),coalesce(julianday(json_extract(payload,'$.schedule.not_before')),0))`
 	activeAttempts  = `json_extract(payload,'$.status') IN ('reserved','running')`
 	leasedAttempts  = `json_extract(payload,'$.status') IN ('reserved','running','merging','closing')`
 	pendingInbox    = `coalesce(json_extract(payload,'$.delivered'),0)=0`
@@ -19,11 +19,14 @@ const (
 
 func (s *Store) initializeScheduling(ctx context.Context) error {
 	_, err := s.db.ExecContext(ctx, `
-CREATE INDEX IF NOT EXISTS ticket_assignment_queue ON items(workspace_id,seq,`+assignmentDue+`) WHERE `+assignmentQueue+`;
+DROP INDEX IF EXISTS ticket_assignment_queue;
+CREATE INDEX IF NOT EXISTS ticket_assignment_queue_v2 ON items(workspace_id,seq,`+assignmentDue+`) WHERE `+assignmentQueue+`;
+CREATE INDEX IF NOT EXISTS ticket_schedule_due ON items(workspace_id,julianday(json_extract(payload,'$.next_scheduled_at')),seq) WHERE `+recurringScheduleQueue+`;
+CREATE INDEX IF NOT EXISTS ticket_schedule_runs ON items(json_extract(payload,'$.schedule_id'),seq) WHERE `+pendingScheduleRun+`;
 CREATE INDEX IF NOT EXISTS ticket_merge_queue ON items(workspace_id,seq) WHERE `+mergeQueue+`;
 CREATE INDEX IF NOT EXISTS attempts_active ON ticket_attempts(workspace_id,json_extract(payload,'$.member_id'),ticket_id) WHERE `+activeAttempts+`;
 CREATE INDEX IF NOT EXISTS attempts_lease_expiry ON ticket_attempts(julianday(json_extract(payload,'$.lease_until'))) WHERE `+leasedAttempts+`;
-CREATE INDEX IF NOT EXISTS inbox_pending ON manager_inbox_events(workspace_id,julianday(json_extract(payload,'$.created_at')),id) WHERE `+pendingInbox+`;`)
+CREATE INDEX IF NOT EXISTS inbox_pending ON manager_inbox_events(workspace_id,julianday(json_extract(payload,'$.created_at')),id) WHERE `+pendingInbox+`; PRAGMA user_version=8;`)
 	return err
 }
 
@@ -31,7 +34,7 @@ CREATE INDEX IF NOT EXISTS inbox_pending ON manager_inbox_events(workspace_id,ju
 // work. Completed, cancelled, deleted, and already claimed tickets stay out of
 // the partial indexes. The normal UI list contract remains unchanged.
 func (s *Store) ListTicketQueue(ctx context.Context, workspaceID, queue, token string, limit int) (ItemPage, error) {
-	predicate, index := assignmentQueue, "ticket_assignment_queue"
+	predicate, index := assignmentQueue, "ticket_assignment_queue_v2"
 	if queue == "merge" {
 		predicate, index = mergeQueue, "ticket_merge_queue"
 	} else if queue != "assignment" {

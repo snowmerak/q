@@ -100,6 +100,32 @@ func TestWorkspaceSourceToolsAndRetiredLearning(t *testing.T) {
 	if err := json.Unmarshal(encoded, &ticket); err != nil || ticket.ExecutionState != "queued" || ticket.State != "todo" {
 		t.Fatalf("MCP ticket was not automatically admitted: %s %v", encoded, err)
 	}
+	start := time.Now().Add(time.Hour).UTC().Truncate(time.Second)
+	result, err = session.CallTool(t.Context(), &mcp.CallToolParams{Name: "ticket_create", Arguments: map[string]any{
+		"title": "Scheduled research", "content": "Collect news", "execution_mode": "report",
+		"schedule": map[string]any{"not_before": start.Format(time.RFC3339), "every": "30m"},
+	}})
+	if err != nil || result.IsError {
+		t.Fatalf("scheduled MCP create: %+v %v", result, err)
+	}
+	encoded, err = json.Marshal(result.StructuredContent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(encoded, &ticket); err != nil || ticket.Schedule == nil || !ticket.Schedule.NotBefore.Equal(start) || ticket.Schedule.Every != "30m0s" || ticket.ExecutionState != "scheduled" {
+		t.Fatalf("scheduled MCP acknowledgement: %s %v", encoded, err)
+	}
+	result, err = session.CallTool(t.Context(), &mcp.CallToolParams{Name: "ticket_update", Arguments: map[string]any{
+		"id": ticket.ID, "revision": ticket.Revision, "title": ticket.Title, "state": ticket.State, "labels": []string{},
+		"schedule": map[string]any{"not_before": start.Format(time.RFC3339), "every": "30m", "paused": true},
+	}})
+	if err != nil || result.IsError {
+		t.Fatalf("scheduled MCP update: %+v %v", result, err)
+	}
+	stored, err := client.GetItem(t.Context(), ticket.ID)
+	if err != nil || stored.Schedule == nil || !stored.Schedule.Paused {
+		t.Fatalf("MCP schedule not durable: %+v %v", stored, err)
+	}
 	result, err = session.CallTool(t.Context(), &mcp.CallToolParams{Name: "request_learning", Arguments: map[string]any{"content": "old"}})
 	if err == nil && !result.IsError {
 		t.Fatal("retired learning tool succeeded")

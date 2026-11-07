@@ -230,8 +230,14 @@ func (s *Store) ControlTicket(ctx context.Context, id string, in TicketAction) (
 		if item.Revision != in.Revision {
 			return Item{}, ErrConflict
 		}
+		if item.Schedule != nil && item.Schedule.Every != "" {
+			return Item{}, fmt.Errorf("%w: edit or pause the recurring schedule; control an individual run instead", ErrInvalidInput)
+		}
 		switch in.Action {
 		case "queue", "retry":
+			if err := requireExclusiveScheduleRun(ctx, tx, item); err != nil {
+				return Item{}, err
+			}
 			if in.Action == "queue" && item.ExecutionState == "queued" {
 				return item, nil
 			}
@@ -288,6 +294,12 @@ func (s *Store) ClaimTicket(ctx context.Context, id string, in ClaimInput) (Atte
 		}
 		if item.Revision != in.Revision || (item.ExecutionState != "queued" && item.ExecutionState != "assignment_waiting") {
 			return Attempt{}, ErrConflict
+		}
+		if !TicketReadyAt(item, time.Now()) {
+			return Attempt{}, fmt.Errorf("%w: ticket is not eligible at this time", ErrConflict)
+		}
+		if err := requireExclusiveScheduleRun(ctx, tx, item); err != nil {
+			return Attempt{}, err
 		}
 		limit := in.ParallelLimit
 		if limit <= 0 {

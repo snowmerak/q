@@ -174,7 +174,7 @@ func TestProjectSettingsMigrationPreservesCatalog(t *testing.T) {
 		t.Fatalf("migration changed catalog: %+v %v", all, err)
 	}
 	var version int
-	if err := s.db.QueryRowContext(t.Context(), `PRAGMA user_version`).Scan(&version); err != nil || version != 7 {
+	if err := s.db.QueryRowContext(t.Context(), `PRAGMA user_version`).Scan(&version); err != nil || version != 8 {
 		t.Fatalf("schema: %d %v", version, err)
 	}
 }

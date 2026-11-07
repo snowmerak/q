@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"time"
 
 	"github.com/snowmerak/q/workitems"
 )
@@ -17,6 +18,12 @@ type AttemptList struct {
 }
 type InboxList struct {
 	Entries []workitems.InboxEntry `json:"entries"`
+}
+
+func (c *Client) DispatchTicketSchedules(ctx context.Context, workspaceID string) (workitems.ItemPage, error) {
+	var out workitems.ItemPage
+	err := c.doJSON(ctx, http.MethodPost, "/workspaces/"+url.PathEscape(workspaceID)+"/ticket-schedules/dispatch", struct{}{}, &out)
+	return out, err
 }
 
 func (c *Client) ListTicketQueue(ctx context.Context, workspaceID, queue, cursor string, limit int) (workitems.ItemPage, error) {
@@ -117,6 +124,9 @@ func coordinatorWrite[I, O any](mux *http.ServeMux, route string, action func(co
 }
 
 func registerCoordinatorRoutes(mux *http.ServeMux, s *workitems.Store) {
+	coordinatorWrite(mux, "POST /v1/workspaces/{workspace}/ticket-schedules/dispatch", func(ctx context.Context, r *http.Request, _ struct{}) (workitems.ItemPage, error) {
+		return s.DispatchTicketSchedules(ctx, r.PathValue("workspace"), time.Now().UTC())
+	})
 	mux.HandleFunc("GET /v1/workspaces/{workspace}/ticket-queue", func(w http.ResponseWriter, r *http.Request) {
 		limit, err := strconv.Atoi(r.URL.Query().Get("limit"))
 		if err != nil && r.URL.Query().Get("limit") != "" {

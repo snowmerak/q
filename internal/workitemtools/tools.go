@@ -18,15 +18,16 @@ type Binding struct {
 	EmbeddingConnection string
 }
 type createInput struct {
-	Title             string   `json:"title"`
-	Content           string   `json:"content"`
-	Labels            []string `json:"labels,omitempty"`
-	Acceptance        []string `json:"acceptance,omitempty"`
-	ExecutionMode     string   `json:"execution_mode,omitempty" jsonschema:"Always choose explicitly for tickets: report for read-only investigation; git for creating or editing code or project files, including project initialization. Git requires an existing clean repository with an initial commit. Omission defaults to report for compatibility. Ignored for issues."`
-	RequestedMemberID string   `json:"requested_member_id,omitempty" jsonschema:"Optional joined workspace member ID. System One still checks suitability; omit to let it choose."`
-	LinkedIssueID     string   `json:"linked_issue_id,omitempty"`
-	Refs              []string `json:"refs,omitempty"`
-	RequestID         string   `json:"request_id,omitempty"`
+	Schedule          *workitems.TicketSchedule `json:"schedule,omitempty" jsonschema:"Optional ticket-only schedule: not_before is an RFC3339 instant; every is a Go duration of at least 1m, such as 30m or 24h. Empty every executes once. Repeating schedules issue independent run tickets."`
+	Title             string                    `json:"title"`
+	Content           string                    `json:"content"`
+	Labels            []string                  `json:"labels,omitempty"`
+	Acceptance        []string                  `json:"acceptance,omitempty"`
+	ExecutionMode     string                    `json:"execution_mode,omitempty" jsonschema:"Always choose explicitly for tickets: report for read-only investigation; git for creating or editing code or project files, including project initialization. Git requires an existing clean repository with an initial commit. Omission defaults to report for compatibility. Ignored for issues."`
+	RequestedMemberID string                    `json:"requested_member_id,omitempty" jsonschema:"Optional joined workspace member ID. System One still checks suitability; omit to let it choose."`
+	LinkedIssueID     string                    `json:"linked_issue_id,omitempty"`
+	Refs              []string                  `json:"refs,omitempty"`
+	RequestID         string                    `json:"request_id,omitempty"`
 }
 type itemInput struct {
 	ID     string `json:"id"`
@@ -48,17 +49,18 @@ type replyInput struct {
 	RequestID     string   `json:"request_id,omitempty"`
 }
 type updateInput struct {
-	ID                string    `json:"id"`
-	Revision          int64     `json:"revision"`
-	Title             string    `json:"title"`
-	State             string    `json:"state"`
-	Labels            []string  `json:"labels"`
-	Deleted           bool      `json:"deleted,omitempty"`
-	RequestID         string    `json:"request_id,omitempty"`
-	Acceptance        *[]string `json:"acceptance,omitempty"`
-	RequestedMemberID *string   `json:"requested_member_id,omitempty"`
-	LinkedIssueID     *string   `json:"linked_issue_id,omitempty"`
-	ExecutionMode     string    `json:"execution_mode,omitempty"`
+	Schedule          *workitems.TicketSchedule `json:"schedule,omitempty" jsonschema:"Omit to preserve scheduling; use an empty object to remove it or paused:true to suspend it. Schedules can change before execution or on recurring templates."`
+	ID                string                    `json:"id"`
+	Revision          int64                     `json:"revision"`
+	Title             string                    `json:"title"`
+	State             string                    `json:"state"`
+	Labels            []string                  `json:"labels"`
+	Deleted           bool                      `json:"deleted,omitempty"`
+	RequestID         string                    `json:"request_id,omitempty"`
+	Acceptance        *[]string                 `json:"acceptance,omitempty"`
+	RequestedMemberID *string                   `json:"requested_member_id,omitempty"`
+	LinkedIssueID     *string                   `json:"linked_issue_id,omitempty"`
+	ExecutionMode     string                    `json:"execution_mode,omitempty"`
 }
 type postUpdateInput struct {
 	ID        string   `json:"id"`
@@ -108,14 +110,14 @@ func Register(server *mcp.Server, client *library.Client, binding Binding) {
 	for _, kind := range []string{workitems.Issue, workitems.Ticket} {
 		description := "Create a workspace " + kind + " and its independently addressable body. Returns after durable source commit. Use issues/comments to record lessons and decisions, with evidence refs."
 		if kind == workitems.Ticket {
-			description += " This is the supported way to request subagent work. Inspect workspace_members for joined candidates. Issuing a ticket automatically queues it for System One assignment to a joined subagent; no separate start call is required. Execution and manager review complete asynchronously."
+			description += " This is the supported way to request subagent work. Inspect workspace_members for joined candidates. An optional schedule delays eligibility or issues recurring run tickets. Issuing a ticket without a schedule automatically queues it for System One assignment to a joined subagent; no separate start call is required. Execution and manager review complete asynchronously."
 			description += " Always set execution_mode explicitly: report for read-only research; git for creating or editing project files, including project initialization. Git mode requires a clean existing repository with an initial commit; a missing repository does not make code work a report task."
 		}
 		mcp.AddTool(server, &mcp.Tool{Name: kind + "_create", Description: description}, func(ctx context.Context, _ *mcp.CallToolRequest, in createInput) (*mcp.CallToolResult, workitems.Item, error) {
 			if binding.WorkspaceID == "" {
 				return nil, workitems.Item{}, errors.New("select a Studio project before creating work items")
 			}
-			out, err := client.CreateItem(ctx, workitems.CreateInput{WorkspaceID: binding.WorkspaceID, Kind: kind, Title: in.Title, Content: in.Content, Labels: in.Labels, Acceptance: in.Acceptance, ExecutionMode: in.ExecutionMode, RequestedMemberID: in.RequestedMemberID, LinkedIssueID: in.LinkedIssueID, Author: actor, Refs: in.Refs, RequestID: in.RequestID})
+			out, err := client.CreateItem(ctx, workitems.CreateInput{Schedule: in.Schedule, WorkspaceID: binding.WorkspaceID, Kind: kind, Title: in.Title, Content: in.Content, Labels: in.Labels, Acceptance: in.Acceptance, ExecutionMode: in.ExecutionMode, RequestedMemberID: in.RequestedMemberID, LinkedIssueID: in.LinkedIssueID, Author: actor, Refs: in.Refs, RequestID: in.RequestID})
 			return nil, out, err
 		})
 		mcp.AddTool(server, &mcp.Tool{Name: kind + "_list", Description: "List " + kind + " threads using a source snapshot cursor. all:true explicitly searches all workspaces.", Annotations: readOnly}, func(ctx context.Context, _ *mcp.CallToolRequest, in listInput) (*mcp.CallToolResult, workitems.ItemPage, error) {
@@ -160,7 +162,7 @@ func Register(server *mcp.Server, client *library.Client, binding Binding) {
 			if in.LinkedIssueID != nil {
 				item.LinkedIssueID = *in.LinkedIssueID
 			}
-			out, err := client.UpdateItem(ctx, in.ID, workitems.UpdateInput{Revision: in.Revision, Title: in.Title, State: in.State, Labels: in.Labels, Deleted: in.Deleted, Acceptance: item.Acceptance, RequestedMemberID: item.RequestedMemberID, LinkedIssueID: item.LinkedIssueID, ExecutionMode: in.ExecutionMode, RequestID: in.RequestID})
+			out, err := client.UpdateItem(ctx, in.ID, workitems.UpdateInput{Schedule: in.Schedule, Revision: in.Revision, Title: in.Title, State: in.State, Labels: in.Labels, Deleted: in.Deleted, Acceptance: item.Acceptance, RequestedMemberID: item.RequestedMemberID, LinkedIssueID: item.LinkedIssueID, ExecutionMode: in.ExecutionMode, RequestID: in.RequestID})
 			return nil, out, err
 		})
 	}
