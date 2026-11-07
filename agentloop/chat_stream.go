@@ -1,12 +1,14 @@
 package agentloop
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"maps"
+	"slices"
 
 	"github.com/snowmerak/q/client"
 )
@@ -249,10 +251,15 @@ func mergeChunkMetadata(response *client.ChatResponse, chunk *client.ChatChunk) 
 func mergeToolCallFragments(message *client.Message, fragments []client.ToolCall) {
 	for _, fragment := range fragments {
 		index := max(fragment.Index, 0)
-		for len(message.ToolCalls) <= index {
-			message.ToolCalls = append(message.ToolCalls, client.ToolCall{Index: len(message.ToolCalls)})
+		// Indices identify streamed calls; they need not start at zero in a
+		// delegated Codex continuation. Never invent calls for missing indices.
+		position, found := slices.BinarySearchFunc(message.ToolCalls, index, func(call client.ToolCall, index int) int {
+			return cmp.Compare(call.Index, index)
+		})
+		if !found {
+			message.ToolCalls = slices.Insert(message.ToolCalls, position, client.ToolCall{Index: index})
 		}
-		call := &message.ToolCalls[index]
+		call := &message.ToolCalls[position]
 		if fragment.ID != "" {
 			call.ID = fragment.ID
 		}
