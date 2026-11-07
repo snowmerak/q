@@ -227,6 +227,7 @@ type chatResultMsg struct {
 // AgentEvent reports progress and results from RunAgentLoop. Embedders should
 // inspect events through the exported accessor methods.
 type AgentEvent struct {
+	conversationID      string
 	contextMessage      *client.Message
 	responseContext     *client.Message
 	replyAlreadyEmitted bool
@@ -1699,8 +1700,7 @@ func (m *model) restoreWorkspaceSession() {
 
 	m.runID = session.RunID
 	if affinity := session.ResponseAffinity; affinity != nil &&
-		affinity.Model == m.activeModel() && strings.HasPrefix(affinity.Key, "cache_") &&
-		m.activeModelAPIMode(affinity.Model) == "responses" {
+		affinity.Model == m.activeModel() && m.canResumeSessionConversation(affinity.Key) {
 		m.conversationID = affinity.Key
 	}
 	m.sessionTitle = session.Title
@@ -1859,7 +1859,7 @@ func (m *model) saveWorkspaceSession() error {
 	}
 	requestContext := workspaceSessionMessages(m.memory.Messages())
 	var responseAffinity *workspace.ResponseAffinity
-	if strings.HasPrefix(m.conversationID, "cache_") && m.activeModelAPIMode(m.activeModel()) == "responses" {
+	if m.canResumeSessionConversation(m.conversationID) {
 		responseAffinity = &workspace.ResponseAffinity{Model: m.activeModel(), Key: m.conversationID}
 	}
 	err := m.workspaceStore.Save(workspace.Session{

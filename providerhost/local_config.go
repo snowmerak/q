@@ -15,6 +15,15 @@ func LocalConfig(value gateway.Config, directory string) gateway.Config {
 	value.Providers = append([]gateway.ProviderConfig(nil), value.Providers...)
 	for index := range value.Providers {
 		switch value.Providers[index].Type {
+		case "codex", "codex-app-server":
+			// Q persists the thread ID with its session, so the app server must
+			// retain a rollout that can be resumed after a process restart.
+			value.Providers[index].Codex.Ephemeral = new(false)
+			if value.Providers[index].Codex.ThreadStart != nil {
+				params := maps.Clone(value.Providers[index].Codex.ThreadStart)
+				params["ephemeral"] = false
+				value.Providers[index].Codex.ThreadStart = params
+			}
 		case "chatgpt":
 			value.Providers[index].ChatGPT = gateway.ChatGPTConfig{AppID: "q", AppName: "Q", Directory: filepath.Join(directory, "chatgpt")}
 		case "openrouter":

@@ -5,10 +5,31 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"testing"
 
 	"github.com/snowmerak/llm-provider/gateway"
 )
+
+func TestCodexLocalConfigCreatesDurableThreadsWithoutChangingSavedOptions(t *testing.T) {
+	for _, overrides := range []map[string]any{nil, {"ephemeral": true, "serviceName": "custom"}} {
+		configured := gateway.Config{Providers: []gateway.ProviderConfig{{ID: "local", Type: "codex", Codex: gateway.CodexConfig{Ephemeral: new(true), ThreadStart: overrides}}}}
+		value := LocalConfig(configured, t.TempDir())
+		codex := value.Providers[0].Codex
+		if codex.Ephemeral == nil || *codex.Ephemeral || codex.ThreadStart["ephemeral"] == true {
+			t.Fatalf("ephemeral Codex thread: %+v", codex)
+		}
+		if !*configured.Providers[0].Codex.Ephemeral || overrides != nil && overrides["ephemeral"] != true {
+			t.Fatal("runtime policy changed saved Codex options")
+		}
+		if overrides != nil && codex.ThreadStart["serviceName"] != "custom" {
+			t.Fatal("unrelated thread options were lost")
+		}
+		if second := LocalConfig(value, t.TempDir()); !reflect.DeepEqual(value, second) {
+			t.Fatal("durable thread policy is not idempotent")
+		}
+	}
+}
 
 func TestOpenRouterIdentitySentUpstream(t *testing.T) {
 	requests := make(chan http.Header, 1)

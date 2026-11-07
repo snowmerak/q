@@ -23,6 +23,11 @@ func (e AgentEvent) Status() (string, bool) {
 	return e.status, e.status != ""
 }
 
+// ConversationID identifies the provider thread associated with an assistant message.
+func (e AgentEvent) ConversationID() (string, bool) {
+	return e.conversationID, e.conversationID != ""
+}
+
 // Message reports a message appended to the loop transcript.
 func (e AgentEvent) Message() (client.Message, bool) {
 	if e.message == nil {

@@ -410,6 +410,7 @@ Events are ordered and apply to the context used inside the loop:
 | `Status` | Update transient UI status. |
 | `ToolCall` | Record or display the call before execution. |
 | `Message` | Append intermediate assistant/tool messages in order. Use `MessageIsToolError` for presentation or audit status. |
+| `ConversationID` | Checkpoint the provider thread alongside its assistant message before executing the next tool. |
 | `ContextMessage` | Append model-only history without displaying or archiving it. |
 | `Question` | Send exactly one `AgentAnswer`, or `ErrInteractionUnavailable` for a headless host. |
 | `StreamDelta` | Render partial thinking/response text; do not also treat it as durable final content. |
@@ -490,6 +491,18 @@ Carry `Result.Response.ConversationID` into the next request when the provider
 supports stateful conversations. After compaction, the loop clears its local
 conversation ID because the request context has changed; the host should use
 the ID from the terminal response rather than retaining an older value.
+
+Q's native Codex app-server routes create durable threads (`ephemeral: false`),
+including when older provider options request ephemeral threads. This runtime
+policy does not rewrite `providers.json`. SessionHost, TUI and the ACP host save
+the thread ID as `session.json`'s `response_affinity.key`, qualified by the model.
+They restore it only for a currently enabled Codex route for that model.
+Assistant tool turns checkpoint the ID before dispatching tools, so a completed
+user turn is not required to retain it. The provider uses `thread/resume` after
+reopening its process. If Codex reports that the rollout no longer exists, Q
+retries once without the stale ID and injects the saved model context into a new
+durable thread; its new ID replaces the saved one. Other failures are surfaced
+normally. Clearing or compacting the session drops the saved thread affinity.
 
 ## Verification checklist
 

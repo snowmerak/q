@@ -199,7 +199,7 @@ func RunAgentLoop(ctx context.Context, request Request, events chan<- Event) {
 			if !appendHistory(assistant, reminder) {
 				return
 			}
-			if !emitEvent(ctx, events, Event{message: &assistant, usage: &response.Usage}) {
+			if !emitEvent(ctx, events, Event{message: &assistant, conversationID: conversationID, usage: &response.Usage}) {
 				return
 			}
 			if isUserAnswer(assistant) {
@@ -242,7 +242,7 @@ func RunAgentLoop(ctx context.Context, request Request, events chan<- Event) {
 			if !appendHistory(assistant) {
 				return
 			}
-			if !emitEvent(ctx, events, Event{message: &assistant, usage: &response.Usage}) {
+			if !emitEvent(ctx, events, Event{message: &assistant, conversationID: conversationID, usage: &response.Usage}) {
 				return
 			}
 			sources := strings.Join(agentinstructions.Sources(newInstructions), ", ")
@@ -268,7 +268,7 @@ func RunAgentLoop(ctx context.Context, request Request, events chan<- Event) {
 		if !appendHistory(assistant) {
 			return
 		}
-		if !emitEvent(ctx, events, Event{message: &assistant, usage: &response.Usage}) {
+		if !emitEvent(ctx, events, Event{message: &assistant, conversationID: conversationID, usage: &response.Usage}) {
 			return
 		}
 		batch := toolbatch.New(assistant.ToolCalls, toolbatch.IsLoopTool, func(ctx context.Context, _ int, call client.ToolCall) (client.ToolResult, error) {
@@ -478,7 +478,7 @@ func RunAgentLoop(ctx context.Context, request Request, events chan<- Event) {
 					if !appendHistory(message) {
 						return errors.New("agent loop: could not reserve context for terminal history")
 					}
-					if !emitEvent(ctx, events, Event{message: &message, toolIsError: message.Role == client.RoleTool}) {
+					if !emitEvent(ctx, events, Event{message: &message, conversationID: conversationID, toolIsError: message.Role == client.RoleTool}) {
 						return ctx.Err()
 					}
 					for _, extra := range message.ToolCalls {

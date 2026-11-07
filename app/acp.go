@@ -1391,6 +1391,9 @@ func (a *acpAgent) continueACPAgentTurn(
 			}
 		}
 		if event.message != nil {
+			if event.conversationID != "" {
+				a.state.conversationID = event.conversationID
+			}
 			message := *event.message
 			a.state.appendSessionMessage(message, nil)
 

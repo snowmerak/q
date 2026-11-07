@@ -92,6 +92,7 @@ var errInteractionUnavailable = ErrInteractionUnavailable
 
 // Event reports progress and results from RunAgentLoop.
 type Event struct {
+	conversationID      string
 	status              string
 	message             *client.Message
 	contextMessage      *client.Message
@@ -118,6 +119,12 @@ type Event struct {
 }
 
 func (e Event) Status() (string, bool) { return e.status, e.status != "" }
+
+// ConversationID accompanies assistant messages so hosts can checkpoint the
+// provider thread before executing tools, rather than waiting for the final result.
+func (e Event) ConversationID() (string, bool) {
+	return e.conversationID, e.conversationID != ""
+}
 
 func (e Event) Message() (client.Message, bool) {
 	if e.message == nil {

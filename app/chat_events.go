@@ -145,6 +145,9 @@ func (m model) updateAgentEvent(message agentEventMsg) (tea.Model, tea.Cmd) {
 		return m, m.focusChatInput()
 	}
 	if event.message != nil {
+		if event.conversationID != "" {
+			m.conversationID = event.conversationID
+		}
 		m.streamResponse = ""
 		m.appendSessionMessage(*event.message, event.usage)
 

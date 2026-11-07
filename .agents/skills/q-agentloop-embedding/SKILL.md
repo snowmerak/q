@@ -65,6 +65,8 @@ the response message. Display and archive the result answer only when
 `ReplyAlreadyEmitted` is false; a task answer can arrive in an earlier `Message`
 event. Streaming deltas are presentation data, not durable messages.
 
+Checkpoint `ConversationID` together with its assistant message before tool
+execution, rather than waiting for `Result` to retain the provider thread.
 Persist `TaskStarted` and pass it back as `AgentLoopRequest.ActiveTask`; clear
 it after `TaskCompleted`. Carry the terminal response's `ConversationID` into
 the next turn. Keep the full audit transcript separate from compact model
