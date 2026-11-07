@@ -96,6 +96,29 @@ func TestFinishToolTurnPreservesToolChoiceAndParallelSettings(t *testing.T) {
 	}
 }
 
+func TestFinishToolTurnRetainsCustomReplyInstructionAfterRejectedCalls(t *testing.T) {
+	const instruction = "Provide the requested findings, not a completion acknowledgment. No more tools."
+	request := terminalRequest()
+	rounds := 0
+	finished, err := FinishToolTurn(t.Context(), request, func(_ context.Context, sent ChatRequest) (*ChatResponse, error) {
+		rounds++
+		last := sent.Messages[len(sent.Messages)-1]
+		if !strings.Contains(last.Content, instruction) || strings.Contains(last.Content, "short acknowledgment") {
+			t.Fatalf("reply policy changed: %s", last.Content)
+		}
+		if rounds == 1 {
+			return terminalResponse(Message{ToolCalls: []ToolCall{{ID: "late", Function: FunctionCall{Name: "write_file", Arguments: `{}`}}}}), nil
+		}
+		if last.ToolCallID != "late" || !strings.Contains(last.Content, "Tool error:") {
+			t.Fatalf("late call was not rejected: %+v", last)
+		}
+		return terminalResponse(Message{Content: "Here are the findings."}), nil
+	}, nil, FinishToolTurnOptions{Instruction: instruction})
+	if err != nil || rounds != 2 || finished.Response.Choices[0].Message.Content != "Here are the findings." {
+		t.Fatalf("finished=%+v rounds=%d err=%v", finished, rounds, err)
+	}
+}
+
 func TestFinishToolTurnRejectsEveryExtraCallAndDrainsItsResults(t *testing.T) {
 	extra := Message{Role: RoleAssistant, ToolCalls: []ToolCall{
 		{ID: "late-write", Type: ToolTypeFunction, Function: FunctionCall{Name: "write_file", Arguments: `{}`}},

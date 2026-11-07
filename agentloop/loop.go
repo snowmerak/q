@@ -83,6 +83,7 @@ func RunAgentLoop(ctx context.Context, request Request, events chan<- Event) {
 	loopContext.extra = requestExtra
 	toolCalls := 0
 	taskStarted := activeTask != nil
+	var deliveredReply *client.Message
 	appendHistory := func(messages ...client.Message) bool {
 		if loopContext.manager.ShouldCompactAfterAppend(messages...) {
 			if !emitEvent(ctx, events, Event{status: "Compacting context before adding history…"}) {
@@ -189,15 +190,31 @@ func RunAgentLoop(ctx context.Context, request Request, events chan<- Event) {
 				})
 				return
 			}
-			if !appendHistory(assistant, client.Message{
+			reminder := client.Message{
 				Role: client.RoleUser,
-				Content: "This task was started with task_start and is not complete until you call task_complete. " +
-					"Call task_complete now with the final outcome and summary; " +
-					"if more work is required, continue the work first.",
-			}) {
+				Content: "This task was started with task_start and still needs task_complete to record its outcome. " +
+					"If the work and user-facing answer are complete, call task_complete now with a brief work summary; do not repeat the answer. " +
+					"If more work is required, continue it and deliver the final results before completing the task.",
+			}
+			if !appendHistory(assistant, reminder) {
+				return
+			}
+			if !emitEvent(ctx, events, Event{message: &assistant, usage: &response.Usage}) {
+				return
+			}
+			if isUserAnswer(assistant) {
+				answer := assistant
+				deliveredReply = &answer
+			}
+			if !emitEvent(ctx, events, Event{contextMessage: &reminder}) {
 				return
 			}
 			continue
+		}
+		// Text accompanying ordinary tool calls is progress, not a final answer.
+		// Further work invalidates a previously offered answer for this turn.
+		if len(assistant.ToolCalls) != 1 || assistant.ToolCalls[0].Function.Name != taskCompleteToolName {
+			deliveredReply = nil
 		}
 		for index := range assistant.ToolCalls {
 			if assistant.ToolCalls[index].ID == "" {
@@ -399,6 +416,10 @@ func RunAgentLoop(ctx context.Context, request Request, events chan<- Event) {
 					}
 					continue
 				}
+				if isUserAnswer(assistant) {
+					answer := assistant
+					deliveredReply = &answer
+				}
 				body, _ := json.Marshal(completion)
 				message := orchestrationToolResult(call, string(body), false)
 				if !appendHistory(message) {
@@ -415,6 +436,10 @@ func RunAgentLoop(ctx context.Context, request Request, events chan<- Event) {
 				}
 				request.Messages = loopContext.Messages()
 				request.ConversationID = conversationID
+				finishOptions := client.FinishToolTurnOptions{}
+				if deliveredReply == nil {
+					finishOptions.Instruction = terminalAnswerInstruction
+				}
 				finished, finishErr := client.FinishToolTurn(ctx, request, func(ctx context.Context, request client.ChatRequest) (*client.ChatResponse, error) {
 					// Rejected terminal calls can trigger pre-append compaction too.
 					// Keep the provider request on the loop's current context/thread.
@@ -431,7 +456,12 @@ func RunAgentLoop(ctx context.Context, request Request, events chan<- Event) {
 					var response *client.ChatResponse
 					var err error
 					if streamEnabled {
-						response, err = streamChatWithConversationRecovery(ctx, configuredClient, request, func(chatStreamDelta) bool { return true })
+						response, err = streamChatWithConversationRecovery(ctx, configuredClient, request, func(delta chatStreamDelta) bool {
+							if deliveredReply != nil {
+								return true
+							}
+							return emitEvent(ctx, events, Event{streamDelta: &delta})
+						})
 					} else {
 						response, err = chatWithConversationRecovery(ctx, configuredClient, request)
 					}
@@ -440,8 +470,8 @@ func RunAgentLoop(ctx context.Context, request Request, events chan<- Event) {
 					}
 					return response, err
 				}, func(message client.Message) error {
-					// Keep the structured completion as the one user-visible final
-					// answer, but archive any extra calls and their rejection results.
+					// The final provider reply is handled once below. Preserve extra
+					// calls and their rejection results without executing them.
 					if message.Role == client.RoleAssistant && len(message.ToolCalls) == 0 {
 						return nil
 					}
@@ -457,23 +487,37 @@ func RunAgentLoop(ctx context.Context, request Request, events chan<- Event) {
 						}
 					}
 					return nil
-				})
+				}, finishOptions)
 				if finishErr != nil {
 					emitEvent(ctx, events, Event{err: finishErr})
 					return
 				}
 				response = finished.Response
-				response.Choices[0].Message = client.Message{
-					Role: client.RoleAssistant, Name: "q_task_complete_reply",
-					Content: renderTaskCompletion(completion),
+				providerReply := response.Choices[0].Message
+				if providerReply.Role == "" {
+					providerReply.Role = client.RoleAssistant
 				}
 				loopContext.Observe(client.ContextUsage(response), requestEstimate)
-				if !appendHistory(response.Choices[0].Message) {
+				if !appendHistory(providerReply) {
 					return
+				}
+				var responseContext *client.Message
+				if deliveredReply != nil || strings.TrimSpace(providerReply.TextContent()) == "" {
+					// Retain the real provider reply and replay metadata in context,
+					// independently of the user-facing result projection.
+					responseContext = &providerReply
+					projected := *response
+					projected.Choices = append([]client.Choice(nil), response.Choices...)
+					visible := client.Message{Role: client.RoleAssistant, Name: "q_task_complete_reply", Content: renderTaskCompletion(completion)}
+					if deliveredReply != nil {
+						visible.Content = deliveredReply.TextContent()
+					}
+					projected.Choices[0].Message = visible
+					response = &projected
 				}
 				response.ConversationID = conversationID
 				emitEvent(ctx, events, Event{
-					response: response, complete: true, outcome: completion.Outcome, requestEstimate: requestEstimate, toolCalls: toolCalls,
+					response: response, responseContext: responseContext, replyAlreadyEmitted: deliveredReply != nil, complete: true, outcome: completion.Outcome, requestEstimate: requestEstimate, toolCalls: toolCalls,
 				})
 				return
 			}

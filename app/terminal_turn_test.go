@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
@@ -19,13 +20,17 @@ import (
 // terminal callback receives a result. A user message sent while parked gets
 // the old acknowledgment instead of an answer to the new request.
 type parkedTerminalClient struct {
-	requests    []client.ChatRequest
-	phase       int
-	pending     bool
-	extraCalls  bool
-	terminalErr error
-	streams     int
-	closed      int
+	beforeReply   string
+	completeReply string
+	finalReply    string
+	replay        []json.RawMessage
+	requests      []client.ChatRequest
+	phase         int
+	pending       bool
+	extraCalls    bool
+	terminalErr   error
+	streams       int
+	closed        int
 }
 
 func (p *parkedTerminalClient) Chat(_ context.Context, request client.ChatRequest) (*client.ChatResponse, error) {
@@ -36,14 +41,28 @@ func (p *parkedTerminalClient) Chat(_ context.Context, request client.ChatReques
 		response.Choices[0] = client.Choice{Message: client.Message{Role: client.RoleAssistant, ToolCalls: calls}, FinishReason: "tool_calls"}
 		return response, nil
 	}
+	complete := func() (*client.ChatResponse, error) {
+		p.pending = true
+		result, err := toolResponse(planToolCall(taskCompleteToolName, `{"outcome":"succeeded","summary":"Repository inspected"}`))
+		result.Choices[0].Message.Content = p.completeReply
+		return result, err
+	}
 	switch p.phase {
 	case 0:
 		p.phase++
 		return toolResponse(planToolCall(taskStartToolName, `{"objective":"Inspect repository"}`))
 	case 1:
 		p.phase++
-		p.pending = true
-		return toolResponse(planToolCall(taskCompleteToolName, `{"outcome":"succeeded","summary":"Repository inspected"}`))
+		if p.beforeReply != "" {
+			response.Choices[0].Message.Content = p.beforeReply
+			return response, nil
+		}
+		return complete()
+	case 2:
+		if p.beforeReply != "" && !p.pending {
+			p.phase++
+			return complete()
+		}
 	}
 	if p.pending {
 		if p.terminalErr != nil {
@@ -58,6 +77,14 @@ func (p *parkedTerminalClient) Chat(_ context.Context, request client.ChatReques
 		}
 		p.pending = false
 		response.Choices[0].Message.Content = "Old task acknowledgment from provider"
+		if strings.Contains(request.Messages[len(request.Messages)-1].Content, "Provide the final answer") {
+			response.Choices[0].Message.Content = "Repository inspected"
+			if p.finalReply != "" {
+				response.Choices[0].Message.Content = p.finalReply
+			}
+		}
+		response.Choices[0].Message.ResponseOutput = p.replay
+		response.Choices[0].Message.ResponseModel = "test/model"
 		return response, nil
 	}
 	for _, v := range slices.Backward(request.Messages) {
@@ -135,7 +162,7 @@ func TestTaskCompletionDrainsProviderBeforeNextTUIRequest(t *testing.T) {
 			m = runTerminalTestTurn(t, m, "Inspect repository")
 			assertTerminalDelivery(t, p)
 			last := m.messages[len(m.messages)-1]
-			if last.Name != "q_task_complete_reply" || last.Content != "Repository inspected" || m.activeTask != nil {
+			if last.Content != "Repository inspected" || m.activeTask != nil {
 				t.Fatalf("structured completion changed: last=%#v active=%#v", last, m.activeTask)
 			}
 			m = runTerminalTestTurn(t, m, "Explain the Dockerfile")

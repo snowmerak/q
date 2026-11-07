@@ -214,34 +214,39 @@ type workspaceModelConfiguredMsg struct {
 }
 
 type chatResultMsg struct {
-	turnID          uint64
-	response        *client.ChatResponse
-	intermediate    []client.Message
-	requestEstimate int
-	toolCalls       int
-	err             error
+	responseContext     *client.Message
+	replyAlreadyEmitted bool
+	turnID              uint64
+	response            *client.ChatResponse
+	intermediate        []client.Message
+	requestEstimate     int
+	toolCalls           int
+	err                 error
 }
 
 // AgentEvent reports progress and results from RunAgentLoop. Embedders should
 // inspect events through the exported accessor methods.
 type AgentEvent struct {
-	persistenceAck  chan struct{}
-	usage           *client.Usage
-	status          string
-	activity        *agentActivity
-	trace           *agentTrace
-	plan            *agentPlanUpdate
-	message         *client.Message
-	call            *client.ToolCall
-	question        *askToUserInput
-	answer          chan<- askToUserOutput
-	toolIsError     bool
-	compaction      *agentContextCompaction
-	response        *client.ChatResponse
-	complete        bool
-	outcome         string
-	requestEstimate int
-	toolCalls       int
+	contextMessage      *client.Message
+	responseContext     *client.Message
+	replyAlreadyEmitted bool
+	persistenceAck      chan struct{}
+	usage               *client.Usage
+	status              string
+	activity            *agentActivity
+	trace               *agentTrace
+	plan                *agentPlanUpdate
+	message             *client.Message
+	call                *client.ToolCall
+	question            *askToUserInput
+	answer              chan<- askToUserOutput
+	toolIsError         bool
+	compaction          *agentContextCompaction
+	response            *client.ChatResponse
+	complete            bool
+	outcome             string
+	requestEstimate     int
+	toolCalls           int
 
 	streamDelta    *chatStreamDelta
 	questionCallID string

@@ -10,6 +10,12 @@ const maximumTerminalRounds = 4
 
 const terminalResultInstruction = "The host has accepted this terminal tool result. The task is finished. End this turn with a short acknowledgment and no further tool calls."
 
+// FinishToolTurnOptions lets a caller request its final user answer instead of
+// the default short acknowledgment used by structured worker/commit protocols.
+type FinishToolTurnOptions struct {
+	Instruction string
+}
+
 // ToolTurnResult separates the final response's usage from the total cost of
 // draining a terminal tool exchange (including any rejected extra tool calls).
 type ToolTurnResult struct {
@@ -30,23 +36,28 @@ func ToolResultMessage(call ToolCall, result ToolResult) Message {
 // consumes the provider's final response. It preserves cache-relevant tool
 // settings and never executes more tools. Unexpected calls receive explicit
 // rejection results rather than being dropped. observe records those exchanges
-// and the final acknowledgment.
+// and the final response.
 func FinishToolTurn(
 	ctx context.Context,
 	request ChatRequest,
 	chat func(context.Context, ChatRequest) (*ChatResponse, error),
 	observe func(Message) error,
+	options ...FinishToolTurnOptions,
 ) (ToolTurnResult, error) {
 	ctx = context.WithValue(ctx, terminalGenerationKey{}, true)
 	var result ToolTurnResult
 	if len(request.Messages) == 0 || request.Messages[len(request.Messages)-1].Role != RoleTool {
 		return result, errors.New("finish tool turn: trailing tool result is required")
 	}
+	instruction := terminalResultInstruction
+	if len(options) > 0 && options[0].Instruction != "" {
+		instruction = options[0].Instruction
+	}
 	request.Messages = append([]Message(nil), request.Messages...)
 	// This is transport-only guidance, not another user request. In particular,
 	// a parked Codex callback only sees its tool output when it resumes.
 	last := len(request.Messages) - 1
-	request.Messages[last].Content += "\n\n" + terminalResultInstruction
+	request.Messages[last].Content += "\n\n" + instruction
 	// Changing tool_choice or parallel_tool_calls can change the provider's
 	// rendered prompt even when the tool catalog is unchanged. Keep automatic
 	// choices and parallel settings; only relax choices that require another call.
@@ -107,7 +118,7 @@ func FinishToolTurn(
 		request.Messages = append(request.Messages, assistant)
 		for _, call := range assistant.ToolCalls {
 			message := ToolResultMessage(call, ToolResult{
-				IsError: true, Content: "No tools may run after the terminal result was accepted. " + terminalResultInstruction,
+				IsError: true, Content: "No tools may run after the terminal result was accepted. " + instruction,
 			})
 			request.Messages = append(request.Messages, message)
 			if observe != nil {

@@ -31,6 +31,15 @@ func (e AgentEvent) Message() (client.Message, bool) {
 	return *e.message, true
 }
 
+// ContextMessage reports model-only history. Persist it without displaying or
+// indexing it as a user-visible message.
+func (e AgentEvent) ContextMessage() (client.Message, bool) {
+	if e.contextMessage == nil {
+		return client.Message{}, false
+	}
+	return *e.contextMessage, true
+}
+
 // MessageIsToolError reports whether Message is a failed tool result.
 func (e AgentEvent) MessageIsToolError() bool {
 	return e.toolIsError
@@ -98,10 +107,12 @@ func (e AgentEvent) Result() (AgentLoopResult, bool) {
 		return AgentLoopResult{}, false
 	}
 	return AgentLoopResult{
-		Response:        e.response,
-		Outcome:         e.outcome,
-		RequestEstimate: e.requestEstimate,
-		ToolCalls:       e.toolCalls,
+		Response:            e.response,
+		ContextMessage:      e.responseContext,
+		ReplyAlreadyEmitted: e.replyAlreadyEmitted,
+		Outcome:             e.outcome,
+		RequestEstimate:     e.requestEstimate,
+		ToolCalls:           e.toolCalls,
 	}, true
 }
 

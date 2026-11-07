@@ -55,6 +55,12 @@ type Request struct {
 
 // Result is the terminal response and loop accounting data.
 type Result struct {
+	// ReplyAlreadyEmitted means Response's visible answer was delivered by a
+	// Message event. Hosts must finish the turn without appending it twice.
+	ReplyAlreadyEmitted bool
+	// ContextMessage is the actual final provider reply when Response projects
+	// an earlier answer or a fallback. Append this to model context instead.
+	ContextMessage  *client.Message
 	Response        *client.ChatResponse
 	Outcome         string
 	RequestEstimate int
@@ -86,19 +92,22 @@ var errInteractionUnavailable = ErrInteractionUnavailable
 
 // Event reports progress and results from RunAgentLoop.
 type Event struct {
-	status          string
-	message         *client.Message
-	usage           *client.Usage
-	call            *client.ToolCall
-	question        *AgentQuestion
-	answer          chan AgentAnswer
-	toolIsError     bool
-	compaction      *AgentContextCompaction
-	response        *client.ChatResponse
-	complete        bool
-	outcome         string
-	requestEstimate int
-	toolCalls       int
+	status              string
+	message             *client.Message
+	contextMessage      *client.Message
+	responseContext     *client.Message
+	replyAlreadyEmitted bool
+	usage               *client.Usage
+	call                *client.ToolCall
+	question            *AgentQuestion
+	answer              chan AgentAnswer
+	toolIsError         bool
+	compaction          *AgentContextCompaction
+	response            *client.ChatResponse
+	complete            bool
+	outcome             string
+	requestEstimate     int
+	toolCalls           int
 
 	streamDelta    *AgentStreamDelta
 	taskStarted    *workspace.ActiveTask
@@ -115,6 +124,15 @@ func (e Event) Message() (client.Message, bool) {
 		return client.Message{}, false
 	}
 	return *e.message, true
+}
+
+// ContextMessage is internal model history, such as a completion reminder.
+// Persist it to context without adding it to the visible transcript or archive.
+func (e Event) ContextMessage() (client.Message, bool) {
+	if e.contextMessage == nil {
+		return client.Message{}, false
+	}
+	return *e.contextMessage, true
 }
 
 func (e Event) MessageIsToolError() bool { return e.toolIsError }
@@ -176,7 +194,7 @@ func (e Event) Result() (Result, bool) {
 	if !e.complete {
 		return Result{}, false
 	}
-	return Result{Response: e.response, Outcome: e.outcome, RequestEstimate: e.requestEstimate, ToolCalls: e.toolCalls}, true
+	return Result{ReplyAlreadyEmitted: e.replyAlreadyEmitted, ContextMessage: e.responseContext, Response: e.response, Outcome: e.outcome, RequestEstimate: e.requestEstimate, ToolCalls: e.toolCalls}, true
 }
 
 func (e Event) Generation() (client.GenerationAttempt, bool) {

@@ -59,9 +59,11 @@ optionally implement `Prepare` to add embeddings; it does not need `Get`.
 
 Process events in order. Append `Message` values to model context, apply
 `ContextReplacement` at its index, apply `Compaction` through
-`memory.Manager.ApplyCheckpoint`, and append the final assistant message from
-`Result`. Streaming deltas are presentation data, not the durable final
-message.
+`memory.Manager.ApplyCheckpoint`, and append `ContextMessage` events only to
+model context. For `Result`, append its `ContextMessage` when present, otherwise
+the response message. Display and archive the result answer only when
+`ReplyAlreadyEmitted` is false; a task answer can arrive in an earlier `Message`
+event. Streaming deltas are presentation data, not durable messages.
 
 Persist `TaskStarted` and pass it back as `AgentLoopRequest.ActiveTask`; clear
 it after `TaskCompleted`. Carry the terminal response's `ConversationID` into

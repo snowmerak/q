@@ -237,12 +237,17 @@ func runTurn(ctx context.Context, root, prompt string) error {
 		if call, ok := event.ToolCall(); ok {
 			fmt.Printf("tool: %s\n", call.Function.Name)
 		}
+		if message, ok := event.Message(); ok && message.Role == client.RoleAssistant {
+			fmt.Println(message.TextContent())
+		}
 		if result, ok := event.Result(); ok {
 			resultSeen = true
 			if result.Response == nil || len(result.Response.Choices) == 0 {
 				return fmt.Errorf("model returned no response choices")
 			}
-			fmt.Println(result.Response.Choices[0].Message.Content)
+			if !result.ReplyAlreadyEmitted {
+				fmt.Println(result.Response.Choices[0].Message.TextContent())
+			}
 		}
 		if err := event.Err(); err != nil {
 			return err
@@ -405,18 +410,33 @@ Events are ordered and apply to the context used inside the loop:
 | `Status` | Update transient UI status. |
 | `ToolCall` | Record or display the call before execution. |
 | `Message` | Append intermediate assistant/tool messages in order. Use `MessageIsToolError` for presentation or audit status. |
+| `ContextMessage` | Append model-only history without displaying or archiving it. |
 | `Question` | Send exactly one `AgentAnswer`, or `ErrInteractionUnavailable` for a headless host. |
 | `StreamDelta` | Render partial thinking/response text; do not also treat it as durable final content. |
 | `ContextReplacement` | Replace the indexed message in the retained model context. |
 | `Compaction` | Apply the plan and summary to the retained model context. |
 | `TaskStarted` | Persist the active task and supply it as `ActiveTask` on a later turn. |
 | `TaskCompleted` | Clear the persisted active task. |
-| `Result` | Append the final assistant message and retain the returned conversation ID. |
+| `Result` | Display/persist the final answer unless `ReplyAlreadyEmitted`. Append `ContextMessage` to model context when present, otherwise append the response message. Retain the returned conversation ID. |
 | `Err` | Abort the host turn and report the terminal failure. |
 
-A final assistant message is carried by `Result`, not necessarily by a
-`Message` event. A durable consumer therefore needs both. Streaming deltas are
-for live presentation; persist the complete assistant message from the result.
+A final assistant message can arrive through `Message` before or alongside
+`task_complete`, or through `Result` after it. A durable consumer needs both.
+`Result.ReplyAlreadyEmitted` prevents displaying or archiving an earlier answer
+twice. Streaming deltas are for live presentation; persist the complete message.
+
+`task_complete` records task lifecycle and a brief work summary; the summary
+does not replace the requested findings. If the model has not yet delivered an
+answer, the terminal callback asks for the actual answer and forwards it. If an
+answer was already delivered, Q still drains the callback but retains its
+acknowledgment only in model context. Further ordinary tool calls invalidate an
+earlier answer candidate. An empty final callback without an earlier answer
+falls back to the structured task summary.
+
+The tool catalog, automatic tool choice, parallel-call setting and conversation
+identity are preserved during this exchange. Unexpected terminal tool calls
+are rejected with paired results. Subagent and commit-agent completion protocols
+retain their default brief acknowledgment policy.
 
 Keep the user-visible transcript separate from the compact model context. A
 simple host can maintain the latter with `memory.Manager`:
@@ -438,8 +458,15 @@ if compaction, ok := event.Compaction(); ok {
 if message, ok := event.Message(); ok {
 	manager.Append(message)
 }
+if message, ok := event.ContextMessage(); ok {
+	manager.Append(message)
+}
 if result, ok := event.Result(); ok && result.Response != nil && len(result.Response.Choices) > 0 {
-	manager.Append(result.Response.Choices[0].Message)
+	message := result.Response.Choices[0].Message
+	if result.ContextMessage != nil {
+		message = *result.ContextMessage
+	}
+	manager.Append(message)
 }
 ```
 

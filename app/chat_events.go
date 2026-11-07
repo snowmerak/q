@@ -95,6 +95,20 @@ func (m model) updateAgentEvent(message agentEventMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, tea.Batch(m.chatTick(), waitAgentEvent(message.events, message.turnID))
 	}
+	if event.contextMessage != nil {
+		if m.memory != nil {
+			m.memory.Append(*event.contextMessage)
+		}
+		if err := m.persistAgentMessage(event); err != nil {
+			m.turnErr = errors.Join(m.turnErr, err)
+			m.status = err.Error()
+			if m.turnCancel != nil {
+				m.turnCancel()
+			}
+			acknowledgeAgentPersistence(event)
+		}
+		return m, tea.Batch(m.chatTick(), waitAgentEvent(message.events, message.turnID))
+	}
 	if event.contextReplace != nil {
 		if m.memory != nil {
 			if err := m.memory.Replace(event.contextReplace.Index, event.contextReplace.Message); err != nil {
@@ -152,7 +166,8 @@ func (m model) updateAgentEvent(message agentEventMsg) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(m.chatTick(), waitAgentEvent(message.events, message.turnID))
 	}
 	return m.updateChatResult(chatResultMsg{
-		turnID:   message.turnID,
+		turnID:          message.turnID,
+		responseContext: event.responseContext, replyAlreadyEmitted: event.replyAlreadyEmitted,
 		response: event.response, requestEstimate: event.requestEstimate,
 		toolCalls: event.toolCalls, err: event.err,
 	})
@@ -216,13 +231,17 @@ func (m model) updateChatResult(message chatResultMsg) (tea.Model, tea.Cmd) {
 		m.conversationID = message.response.ConversationID
 	}
 	m.messages = append(m.messages, message.intermediate...)
-	m.messages = append(m.messages, assistant)
-	m.recordResponseUsage(message.response.Usage)
+	if !message.replyAlreadyEmitted {
+		m.messages = append(m.messages, assistant)
+		m.recordResponseUsage(message.response.Usage)
+	}
 
 	for _, intermediate := range message.intermediate {
 		m.archiveMessage(intermediate, sessionstore.StatusSucceeded, false)
 	}
-	m.archiveMessage(assistant, sessionstore.StatusSucceeded, false)
+	if !message.replyAlreadyEmitted {
+		m.archiveMessage(assistant, sessionstore.StatusSucceeded, false)
+	}
 	if m.memory != nil {
 		for _, intermediate := range message.intermediate {
 			m.memory.Append(intermediate)
@@ -232,7 +251,11 @@ func (m model) updateChatResult(message chatResultMsg) (tea.Model, tea.Cmd) {
 			requestEstimate = m.requestEstimate
 		}
 		m.memory.ObserveUsage(client.ContextUsage(message.response).PromptTokens, requestEstimate)
-		m.memory.Append(assistant)
+		contextMessage := assistant
+		if message.responseContext != nil {
+			contextMessage = *message.responseContext
+		}
+		m.memory.Append(contextMessage)
 	}
 	if m.compactionTarget > 0 && message.response.Usage.PromptTokens > m.compactionTarget {
 		m.status = fmt.Sprintf("Context remains above target · %s/%s", formatTokens(message.response.Usage.PromptTokens), formatTokens(m.compactionTarget))

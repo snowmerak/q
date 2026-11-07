@@ -102,6 +102,9 @@ func generationBrowserModel(t *testing.T) http.HandlerFunc {
 			return
 		}
 		r.Body = io.NopCloser(bytes.NewReader(body))
+		if taskAnswerFixtureResponse(w, body) {
+			return
+		}
 		var request struct {
 			Messages []struct {
 				Role    string `json:"role"`

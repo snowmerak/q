@@ -13,8 +13,8 @@ func RunAgentLoop(ctx context.Context, request AgentLoopRequest, events chan<- A
 	runAgentLoop(ctx, request, events, false)
 }
 
-// runPersistedAgentLoop waits for the host to save checkpoints, assistant tool
-// turns and tool results before the core loop can dispatch the next tool. The core
+// runPersistedAgentLoop waits for the host to save checkpoints, assistant
+// messages, model-only history and tool results before dispatching the next tool. The core
 // and UI use two event channels, so an ordinary unbuffered send is insufficient.
 func runPersistedAgentLoop(ctx context.Context, request AgentLoopRequest, events chan<- AgentEvent) {
 	runAgentLoop(ctx, request, events, true)
@@ -29,8 +29,8 @@ func runAgentLoop(ctx context.Context, request AgentLoopRequest, events chan<- A
 	go agentloop.RunAgentLoop(ctx, request, source)
 	for event := range source {
 		projected := projectAgentLoopEvent(event)
-		if persisted && (projected.compaction != nil || projected.message != nil &&
-			((projected.message.Role == "assistant" && len(projected.message.ToolCalls) > 0) || projected.message.Role == "tool")) {
+		if persisted && (projected.compaction != nil || projected.contextMessage != nil || projected.message != nil &&
+			(projected.message.Role == "assistant" || projected.message.Role == "tool")) {
 			projected.persistenceAck = make(chan struct{})
 		}
 		if !emitAgentEvent(ctx, events, projected) {
@@ -56,6 +56,9 @@ func projectAgentLoopEvent(source agentloop.Event) agentEvent {
 	if message, ok := source.Message(); ok {
 		event.message = &message
 		event.toolIsError = source.MessageIsToolError()
+	}
+	if message, ok := source.ContextMessage(); ok {
+		event.contextMessage = &message
 	}
 	if usage, ok := source.Usage(); ok {
 		event.usage = &usage
@@ -83,6 +86,8 @@ func projectAgentLoopEvent(source agentloop.Event) agentEvent {
 
 	if result, ok := source.Result(); ok {
 		event.response = result.Response
+		event.responseContext = result.ContextMessage
+		event.replyAlreadyEmitted = result.ReplyAlreadyEmitted
 		event.complete = true
 		event.outcome = result.Outcome
 		event.requestEstimate = result.RequestEstimate

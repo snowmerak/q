@@ -1301,6 +1301,12 @@ func (a *acpAgent) continueACPAgentTurn(
 				return acp.PromptResponse{}, err
 			}
 		}
+		if event.contextMessage != nil {
+			a.state.memory.Append(*event.contextMessage)
+			if err := a.state.persistAgentMessage(event); err != nil {
+				return acp.PromptResponse{}, err
+			}
+		}
 		if event.contextReplace != nil {
 			if err := a.state.memory.Replace(event.contextReplace.Index, event.contextReplace.Message); err != nil {
 				return acp.PromptResponse{}, fmt.Errorf("update model context: %w", err)
@@ -1420,7 +1426,7 @@ func (a *acpAgent) continueACPAgentTurn(
 			return acp.PromptResponse{}, event.err
 		}
 		if event.response != nil {
-			return a.finishPrompt(*event.response, event.requestEstimate, streamedResponse)
+			return a.finishPrompt(*event.response, event.requestEstimate, streamedResponse, event.responseContext, event.replyAlreadyEmitted)
 		}
 	}
 
@@ -1452,7 +1458,7 @@ func (a *acpAgent) finishCancelledPrompt() acp.PromptResponse {
 	return acp.PromptResponse{StopReason: acp.StopReasonCancelled}
 }
 
-func (a *acpAgent) finishPrompt(response client.ChatResponse, requestEstimate int, streamedResponse *string) (acp.PromptResponse, error) {
+func (a *acpAgent) finishPrompt(response client.ChatResponse, requestEstimate int, streamedResponse *string, responseContext *client.Message, replyAlreadyEmitted bool) (acp.PromptResponse, error) {
 	if len(response.Choices) == 0 {
 		return acp.PromptResponse{}, errors.New("model returned no response choices")
 	}
@@ -1460,14 +1466,22 @@ func (a *acpAgent) finishPrompt(response client.ChatResponse, requestEstimate in
 	if message.Role == "" {
 		message.Role = client.RoleAssistant
 	}
-	if err := a.emitMissingAssistantText(message.Content, streamedResponse); err != nil {
-		return acp.PromptResponse{}, err
+	if !replyAlreadyEmitted {
+		if err := a.emitMissingAssistantText(message.Content, streamedResponse); err != nil {
+			return acp.PromptResponse{}, err
+		}
+		a.state.messages = append(a.state.messages, message)
 	}
-	a.state.messages = append(a.state.messages, message)
-	a.state.memory.Append(message)
+	contextMessage := message
+	if responseContext != nil {
+		contextMessage = *responseContext
+	}
+	a.state.memory.Append(contextMessage)
 	a.state.memory.ObserveUsage(client.ContextUsage(&response).PromptTokens, requestEstimate)
 	a.state.conversationID = response.ConversationID
-	a.state.archiveMessage(message, sessionstore.StatusSucceeded, false)
+	if !replyAlreadyEmitted {
+		a.state.archiveMessage(message, sessionstore.StatusSucceeded, false)
+	}
 
 	a.state.sessionUpdatedAt = time.Now().UTC()
 	if err := a.state.saveWorkspaceSession(); err != nil {

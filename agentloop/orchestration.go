@@ -147,7 +147,7 @@ func orchestrationTools() []client.Tool {
 			Type: client.ToolTypeFunction,
 			Function: client.FunctionDefinition{
 				Name:        taskCompleteToolName,
-				Description: "Finish the active task previously started with task_start and return its structured result. A restored task may have started in an earlier turn.",
+				Description: "Record the outcome of the active task previously started with task_start. Deliver the actual user-facing answer before or alongside this call. summary is a brief work record, not a substitute for the requested results. A restored task may have started in an earlier turn.",
 				Parameters: map[string]any{
 					"type": "object",
 					"properties": map[string]any{

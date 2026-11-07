@@ -15,7 +15,7 @@ func terminalToolResultRequest(request client.ChatRequest) bool {
 		return false
 	}
 	last := request.Messages[len(request.Messages)-1]
-	return last.Role == client.RoleTool && strings.Contains(last.Content, "The task is finished. End this turn with a short acknowledgment")
+	return last.Role == client.RoleTool && strings.Contains(last.Content, "The host has accepted this terminal tool result. The task is finished.")
 }
 
 type planningClient struct {

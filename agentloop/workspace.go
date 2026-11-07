@@ -82,7 +82,7 @@ func PrepareWorkspaceMessages(messages []client.Message, options WorkspaceMessag
 			break
 		}
 	}
-	orchestrationPrompt := "Use task_start before work that requires tools or multiple execution steps. Once task_start succeeds, that task must finish with exactly one successful task_complete call; do not finish it with a plain assistant response. " +
+	orchestrationPrompt := "Use task_start before work that requires tools or multiple execution steps. Once task_start succeeds, provide the user-facing results and then finish the task with exactly one successful task_complete call. A normal answer does not close the task; task_complete records its outcome. You may include the answer alongside that tool call. " +
 		"Direct questions and short answers may finish normally without task_start or task_complete. Use ask_to_user when a required user decision or missing detail prevents safe progress; wait for the answer and then continue the same turn. " +
 		"Call task_complete only for a started task after all requested work and appropriate verification are done, or with outcome blocked when progress genuinely cannot continue."
 	loopTools := filterTools(orchestrationTools(), options.AllowedTools)

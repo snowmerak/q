@@ -634,6 +634,11 @@ func (f *prematureCompletionClient) Close() error { return nil }
 func (f *askingClient) Chat(_ context.Context, request client.ChatRequest) (*client.ChatResponse, error) {
 	request.Messages = append([]client.Message(nil), request.Messages...)
 	f.requests = append(f.requests, request)
+	if isCheckpointRequestForTest(request) {
+		return &client.ChatResponse{Choices: []client.Choice{{Message: client.Message{
+			Role: client.RoleAssistant, Content: testCheckpointJSON("preserve the color selection"),
+		}}}}, nil
+	}
 	if request.ToolChoice == client.ToolChoiceNone || terminalToolResultRequest(request) {
 		return terminalAcknowledgment(""), nil
 	}
@@ -3354,7 +3359,13 @@ func TestChatExecutesToolCallsAndContinuesTurn(t *testing.T) {
 			}
 		}
 	}
-	if m.messages[len(m.messages)-1].Content != "Created main.go" || !strings.Contains(m.status, "Tools used · 1") {
+	answers := 0
+	for _, message := range m.messages {
+		if message.Role == client.RoleAssistant && message.Content == "Created main.go" {
+			answers++
+		}
+	}
+	if answers != 1 || !strings.Contains(m.status, "Tools used · 1") {
 		t.Fatalf("final transcript = %#v, status = %q", m.messages, m.status)
 	}
 	completedSession, err := workspaceStore.Load()
@@ -3684,7 +3695,7 @@ func TestRestoredActiveTaskCanCompleteInANewTurn(t *testing.T) {
 		m = updated.(model)
 	}
 	if len(configuredClient.requests) != 2 || m.activeTask != nil ||
-		!strings.Contains(m.messages[len(m.messages)-1].Content, "Too early") {
+		m.messages[len(m.messages)-1].Content != "Direct answer after correction" {
 		t.Fatalf("completed restored task: requests = %d, active = %#v, messages = %#v",
 			len(configuredClient.requests), m.activeTask, m.messages)
 	}

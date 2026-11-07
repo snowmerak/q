@@ -846,9 +846,13 @@ func (m sessionExecutionModel) updateAgentEvent(eventMessage agentEventMsg) (tea
 			if m.state.workspaceStore != nil {
 				sessionID = m.state.workspaceStore.SessionID
 			}
+			content := strings.TrimSpace(event.response.Choices[0].Message.TextContent())
+			if event.replyAlreadyEmitted {
+				content = ""
+			}
 			if err := m.emit(SessionEvent{
 				Type: "result", SessionID: sessionID, Outcome: event.outcome,
-				Content: strings.TrimSpace(event.response.Choices[0].Message.TextContent()),
+				Content: content,
 				Usage:   responseTokenUsage(event.response.Usage),
 			}); err != nil {
 				m.err = err
