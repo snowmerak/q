@@ -128,7 +128,7 @@ func TestEmbeddingStatusReportsCoverageWithoutRepairingLockedArchives(t *testing
 				t.Fatalf("absent status = %+v", status)
 			}
 		case "":
-			if status.Scope != "global" || status.Stale != 1 || status.Eligible != 1 {
+			if status.Scope != "global" || status.Stale != 1 || status.Eligible != 2 || status.Missing != 1 {
 				t.Fatalf("global partial projections = %+v", status)
 			}
 		default:

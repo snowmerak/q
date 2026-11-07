@@ -5,6 +5,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -167,7 +168,7 @@ func TestStandaloneModelEmbeddingAssignmentBackfillsSkillsAndWorkspace(t *testin
 	}
 	m = updated.(model)
 	result, ok := command().(archiveEmbeddingConfiguredMsg)
-	if !ok || result.err != nil || result.globalSkills != 1 || result.stats.Embedded != 1 {
+	if !ok || result.err != nil || result.globalSkills != 2 || result.stats.Embedded != 1 {
 		t.Fatalf("standalone embedding result = %#v", result)
 	}
 	reloaded, err := m.archiveSearch.Get(workspaceRecord.ID)
@@ -182,7 +183,7 @@ func TestStandaloneModelEmbeddingAssignmentBackfillsSkillsAndWorkspace(t *testin
 		t.Fatalf("workspace semantic search = %#v, err = %v", workspaceHits, err)
 	}
 	global, err := m.libraryClient.SearchSkills(context.Background(), qlibrary.SkillSearchRequest{Query: "feline"})
-	if err != nil || len(global.Hits) != 1 || global.Hits[0].Title != "animal-care" {
+	if err != nil || !slices.ContainsFunc(global.Hits, func(hit qlibrary.SkillSearchHit) bool { return hit.Title == "animal-care" }) {
 		t.Fatalf("global skill search = %#v, err = %v", global, err)
 	}
 }

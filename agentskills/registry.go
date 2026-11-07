@@ -16,6 +16,7 @@ import (
 	"sync"
 	"unicode/utf8"
 
+	"github.com/snowmerak/q/internal/skillbundle"
 	"gopkg.in/yaml.v3"
 )
 
@@ -29,6 +30,7 @@ var validName = regexp.MustCompile(`^[a-z0-9]+(?:-[a-z0-9]+)*$`)
 type Source string
 
 const (
+	SourceBundled         Source = "library:bundled"
 	SourceUserPortable    Source = "user:.agents"
 	SourceUserQ           Source = "user:.q"
 	SourceProjectPortable Source = "project:.agents"
@@ -160,6 +162,17 @@ func (r *Registry) Reload() error {
 	if r.qDir != "" {
 		locations[1].path = filepath.Join(r.qDir, "skills")
 	}
+	qDir := r.qDir
+	if qDir == "" {
+		qDir = filepath.Join(r.home, ".q")
+	}
+	bundled, bundleErr := skillbundle.Location(qDir)
+	if bundleErr == nil {
+		locations = append([]struct {
+			path   string
+			source Source
+		}{{bundled, SourceBundled}}, locations...)
+	}
 	if !r.global {
 		seenLocations := make(map[string]struct{})
 		addLocation := func(path string, source Source) {
@@ -189,6 +202,9 @@ func (r *Registry) Reload() error {
 	skills := make(map[string]Skill)
 	var discovered []Skill
 	var issues []Issue
+	if bundleErr != nil && !errors.Is(bundleErr, os.ErrNotExist) {
+		issues = append(issues, Issue{Path: qDir, Message: bundleErr.Error()})
+	}
 	gitCommits := newGitCommitResolver()
 	for _, location := range locations {
 		entries, err := skillDirectoryEntries(location.path)
@@ -210,6 +226,10 @@ func (r *Registry) Reload() error {
 				continue
 			}
 			skill.GitCommit = gitCommits.commit(directory)
+			if location.source == SourceBundled {
+				// Keep IDs stable across content-addressed bundle generations.
+				skill.ID = skillID(filepath.Join(qDir, "library", "builtin-skills", skill.Name))
+			}
 			if previous, exists := skills[skill.Name]; exists {
 				issues = append(issues, Issue{Path: previous.Directory, Message: fmt.Sprintf("shadowed by %s", directory)})
 			}
@@ -386,7 +406,7 @@ func skillID(directory string) string {
 }
 
 func sourceScope(source Source) string {
-	if source == SourceUserPortable || source == SourceUserQ {
+	if source == SourceUserPortable || source == SourceUserQ || source == SourceBundled {
 		return "global"
 	}
 	return "project"

@@ -1,8 +1,6 @@
 module github.com/snowmerak/q
 
-go 1.26.9
-
-toolchain go1.27.2
+go 1.27.3
 
 require (
 	charm.land/bubbles/v2 v2.1.1
@@ -21,6 +19,7 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/modelcontextprotocol/go-sdk v1.7.0
 	github.com/parquet-go/parquet-go v0.32.0
+	github.com/snowmerak/cdp-q-driver v0.0.0-20261107143548-ec463b2b34af
 	github.com/snowmerak/llm-provider v0.0.0-20261014110600-2b9dafbe5452
 	github.com/snowmerak/q/third_party/acp-go-sdk v0.0.0-20260827012000-155b26051836
 	github.com/zeebo/blake3 v0.2.4
@@ -62,6 +61,8 @@ require (
 	github.com/charmbracelet/x/term v0.2.2 // indirect
 	github.com/charmbracelet/x/termios v0.1.1 // indirect
 	github.com/charmbracelet/x/windows v0.2.2 // indirect
+	github.com/chromedp/cdproto v0.159.0 // indirect
+	github.com/chromedp/chromedp v0.23.0 // indirect
 	github.com/clipperhouse/displaywidth v0.11.0 // indirect
 	github.com/clipperhouse/uax29/v2 v2.7.0 // indirect
 	github.com/coreos/go-oidc/v3 v3.21.0 // indirect
@@ -70,6 +71,7 @@ require (
 	github.com/dlclark/regexp2/v2 v2.5.2 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/go-jose/go-jose/v4 v4.1.4 // indirect
+	github.com/go-json-experiment/json v0.0.0-20260213210345-44df1a37e875 // indirect
 	github.com/go-sourcemap/sourcemap v2.1.4+incompatible // indirect
 	github.com/golang/freetype v0.0.0-20170609003504-e2365dfdc4a0 // indirect
 	github.com/golang/snappy v1.0.0 // indirect

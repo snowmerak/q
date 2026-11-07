@@ -65,6 +65,11 @@ export type SystemOneProvider = { id: string; uri: string; api_key_env: string; 
 export type SystemOneModelOption = { id: string; description?: string; release_date?: string };
 export type ServiceAPIKey = { id: string; alias: string; created_at?: string; revoked_at?: string; legacy?: boolean };
 export type SettingsSnapshot = {
+	 browser_control: {
+	   config: { enabled: boolean; preferred: string; drivers: Record<string, {command: string; args: string[]}> };
+	   drivers: {id: string; command: string; args: string[]; resolved_command?: string; available: boolean; error?: string}[];
+	   prompt: string;
+	 };
   version: number;
   scope: 'global';
   runtime: {
@@ -111,7 +116,7 @@ export type SettingsSnapshot = {
     lsp: { config_path: string; items: number; bindings: number };
   };
 };
-export type SettingsSection = 'appearance' | 'models' | 'embeddings' | 'providers' | 'system-one' | 'runtime' | 'services' | 'subagents' | 'integrations' | 'import-export';
+export type SettingsSection = 'appearance' | 'models' | 'embeddings' | 'providers' | 'system-one' | 'runtime' | 'browser-control' | 'services' | 'subagents' | 'integrations' | 'import-export';
 export type SaveState = { kind: 'idle' | 'saving' | 'saved' | 'error'; message?: string };
 export type LoomStats = { artifacts: number; blobs: number; bytes: number };
 export type LoomGCResult = { artifacts_removed: number; blobs_removed: number; bytes_reclaimed: number; dry_run: boolean };

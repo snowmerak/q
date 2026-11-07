@@ -589,8 +589,9 @@ func (m *model) sendChatRequest() tea.Cmd {
 				Messages: history, ConversationID: conversationID, WorkingDirectory: workingDirectory,
 				AuxiliaryDirectories: auxiliaryDirectories,
 				ActiveTask:           activeTask, Stream: streamEnabled, CoalesceInstructions: coalesceInstructions,
-				ContextPolicy: memoryPolicy(m.activeConfig()),
-				AllowedTools:  allowedTools,
+				ContextPolicy:     memoryPolicy(m.activeConfig()),
+				BrowserPreference: m.browserPreference(),
+				AllowedTools:      allowedTools,
 			}, events)
 		}
 		return waitAgentEvent(events, turnID)()

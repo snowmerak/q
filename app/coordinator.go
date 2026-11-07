@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/snowmerak/q/archiveembed"
+	"github.com/snowmerak/q/browsercontrol"
 	"github.com/snowmerak/q/change"
 	"github.com/snowmerak/q/client"
 	"github.com/snowmerak/q/config"
@@ -374,6 +375,7 @@ type ticketACPCheckpoint struct {
 	Agent, SessionID, Root, Digest, AttemptID string
 	Started, Completed                        bool
 	Answer                                    string
+	BrowserPreference                         string
 }
 
 func (host *SessionHost) runACPTicket(ctx context.Context, c *library.Client, worker workspace.Store, candidate coordinator.Candidate, a workitems.Attempt, prompt, root string) (result subagent.TaskResult, returnErr error) {
@@ -394,6 +396,7 @@ func (host *SessionHost) runACPTicket(ctx context.Context, c *library.Client, wo
 		return result, err
 	}
 	command.mcpServers, err = acpLibraryServers(host.store.Dir, workitemtools.Binding{WorkspaceID: a.WorkspaceID, SessionID: a.WorkerSessionID, EmbeddingConnection: bridgePath})
+	command.browserStore = &host.store
 	if err != nil {
 		return result, err
 	}
@@ -429,6 +432,14 @@ func (host *SessionHost) runACPTicket(ctx context.Context, c *library.Client, wo
 		remote.permissions = acpPermissionAutomatic
 	}
 	remote.requireCompletedText = true
+	if remote.resumed {
+		remote.lastBrowserPreference = saved.BrowserPreference
+	}
+	// Keep possible active guidance across an unknown prompt outcome. A
+	// successful prompt below records the exact delivered preference.
+	if preference := browsercontrol.Prompt(value.BrowserControl); preference != "" {
+		saved.BrowserPreference = preference
+	}
 	saved.SessionID = string(remote.sessionID)
 	saved.AttemptID = a.ID
 	saved.Started = true
@@ -451,6 +462,7 @@ func (host *SessionHost) runACPTicket(ctx context.Context, c *library.Client, wo
 		return result, err
 	}
 	saved.Completed = true
+	saved.BrowserPreference = remote.lastBrowserPreference
 	saved.Answer = answer
 	raw, _ = json.Marshal(saved)
 	if err := fsreplace.WriteFile(path, raw, 0o600); err != nil {

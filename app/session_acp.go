@@ -26,6 +26,7 @@ type acpSessionCheckpoint struct {
 	Connection                 [32]byte `json:"connection"`
 	Transcript                 [32]byte `json:"transcript"`
 	LibraryInstructionsVersion int      `json:"library_instructions_version,omitempty"`
+	BrowserPreference          string   `json:"browser_preference,omitempty"`
 }
 
 func acpSessionPath(store workspace.Store) string {
@@ -50,6 +51,7 @@ func (host *SessionHost) prepareACPSession(ctx context.Context, prepared *prepar
 	if err != nil {
 		return nil, err
 	}
+	command.browserStore = &host.store
 	if connection.Library || prepared.executionRoot != prepared.store.Root {
 		binding := workitemtools.Binding{SessionID: prepared.store.SessionID}
 		binding.EmbeddingConnection, err = host.workEmbeddingConnection()
@@ -106,6 +108,7 @@ func (host *SessionHost) prepareACPSession(ctx context.Context, prepared *prepar
 	checkpoint := acpSessionCheckpoint{Agent: agent, Connection: sha256.Sum256(body)}
 	remoteID := ""
 	libraryInstructionsVersion := 0
+	previousBrowserPreference := ""
 	if body, err := os.ReadFile(acpSessionPath(prepared.store)); err == nil {
 		var previous acpSessionCheckpoint
 		if err := json.Unmarshal(body, &previous); err != nil {
@@ -114,6 +117,7 @@ func (host *SessionHost) prepareACPSession(ctx context.Context, prepared *prepar
 		if previous.Agent == agent && previous.Connection == checkpoint.Connection && previous.Transcript == acpTranscriptDigest(saved.Transcript) {
 			remoteID = previous.SessionID
 			libraryInstructionsVersion = previous.LibraryInstructionsVersion
+			previousBrowserPreference = previous.BrowserPreference
 		}
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return nil, err
@@ -138,6 +142,9 @@ func (host *SessionHost) prepareACPSession(ctx context.Context, prepared *prepar
 		remote.libraryRoleInstructions = coordinator.RoleInstructions(prepared.projectContext.Role)
 	}
 	remote.libraryInstructionsSent = remote.resumed && libraryInstructionsVersion == acpLibraryInstructionsVersion
+	if remote.resumed {
+		remote.lastBrowserPreference = previousBrowserPreference
+	}
 	if !remote.resumed {
 		remote.initialContext = completedACPContext(saved.Transcript)
 		if prepared.executionRoot != prepared.store.Root && prepared.projectContext != nil {
@@ -187,6 +194,7 @@ func saveACPSessionCheckpoint(store workspace.Store, remote *acpRemoteClient, me
 	checkpoint := *remote.sessionCheckpoint
 	checkpoint.SessionID = string(remote.sessionID)
 	checkpoint.Transcript = acpTranscriptDigest(messages)
+	checkpoint.BrowserPreference = remote.lastBrowserPreference
 	if len(remote.mcpServers) > 0 && remote.libraryInstructionsSent {
 		checkpoint.LibraryInstructionsVersion = acpLibraryInstructionsVersion
 	}

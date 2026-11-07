@@ -8,6 +8,7 @@ import (
 	"slices"
 
 	"github.com/snowmerak/q/agentinstructions"
+	"github.com/snowmerak/q/browsercontrol"
 	"github.com/snowmerak/q/client"
 	"github.com/snowmerak/q/config"
 )
@@ -16,18 +17,19 @@ import (
 // Reasoning describes model-list metadata for callers that need to present
 // supported controls in a UI.
 type Spec struct {
-	Role            string
-	Group           string
-	Model           string
-	ReasoningEffort string
-	Reasoning       *client.ReasoningCapabilities
-	ContextLength   int64
-	MaxOutputTokens int64
-	ContextPolicy   config.ContextConfig
-	Candidates      []client.ModelCandidate
-	Router          *client.ModelRouter
-	activeCandidate int
-	conversationID  string
+	Role              string
+	Group             string
+	Model             string
+	ReasoningEffort   string
+	Reasoning         *client.ReasoningCapabilities
+	ContextLength     int64
+	MaxOutputTokens   int64
+	ContextPolicy     config.ContextConfig
+	BrowserPreference string
+	Candidates        []client.ModelCandidate
+	Router            *client.ModelRouter
+	activeCandidate   int
+	conversationID    string
 }
 
 // SpecCheckpoint retains the selected backend and stateful conversation of a
@@ -110,8 +112,9 @@ func Resolve(value config.Config, role string, models []client.Model) (Spec, err
 		Role: role, Group: agent.Group,
 		Model: candidates[0].Model, ReasoningEffort: candidates[0].ReasoningEffort,
 		Reasoning: cloneReasoning(primary), ContextLength: minimumContext, MaxOutputTokens: minimumOutput,
-		ContextPolicy: value.EffectiveContext(),
-		Candidates:    candidates,
+		ContextPolicy:     value.EffectiveContext(),
+		BrowserPreference: browsercontrol.Prompt(value.BrowserControl),
+		Candidates:        candidates,
 	}, nil
 }
 

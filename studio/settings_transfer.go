@@ -224,6 +224,7 @@ func (state transferState) bundle() (settingsBundle, error) {
 	loom := state.main.EffectiveLoom()
 	put("runtime", "loom", transferLoom{loom.MaximumArtifactMiB, loom.MaximumStoreMiB, transferLoomGC(loom.GC)})
 	put("runtime", "system-prompt", state.main.Provider.SystemPrompt)
+	put("runtime", "browser-control", state.main.BrowserControl)
 	put("services", "gateway", serviceUpdate{Host: state.gateway.Server.Host, Port: state.gateway.Server.Port})
 	put("services", "system-one", serviceUpdate{Host: state.systemOne.Server.Host, Port: state.systemOne.Server.Port})
 	put("services", "library", transferLocalService{state.library.Host, state.library.Port, state.library.ProbeHost})

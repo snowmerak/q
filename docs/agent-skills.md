@@ -37,6 +37,22 @@ returns the complete resource text directly in its `content` field, whether or
 not Loom is available. It does not create a Loom artifact. There is no separate
 Library MCP tool.
 
+Skills already read in the current context should be reused across tasks and
+turns. Search again only when additional guidance is needed; read again when a
+resource changed or its complete text is no longer available. The native chat
+and general ticket-worker loops still fetch the current resource to detect
+updates, but replace an unchanged duplicate with `already_in_context: true`,
+`previous_tool_call_id` and a short instruction to consult that earlier result.
+The compact response omits `content`, so it cannot replace the actual resource
+body in skill-retention processing. Comparison is per skill ID, resource path,
+digest and exact text, scoped to the current model context. A different session,
+changed resource, read error or an evicted body does not reuse stale text.
+Other native inner-agent contexts apply the same reuse policy when appending
+skill results to model history.
+Pre-append compaction rechecks body presence before returning a reference.
+The underlying stateless MCP/Library retrieval API continues returning full text;
+an external ACP agent owns its context and must apply its own reuse policy.
+
 The model-facing search tool is named `search_skills` (plural). `SearchSkillHints`
 is a host-side method that retrieves candidate metadata; it is not a model tool.
 Every q-owned inner subagent receives `task_start`, `search_skills`, and

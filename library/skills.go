@@ -10,10 +10,13 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/snowmerak/q/agentskills"
 	qconfig "github.com/snowmerak/q/config"
+	"github.com/snowmerak/q/internal/bundledskills"
+	"github.com/snowmerak/q/internal/skillbundle"
 	"github.com/snowmerak/q/sessionstore"
 )
 
@@ -116,9 +119,14 @@ type skillService struct {
 	registry *agentskills.Registry
 	archive  *sessionstore.Store
 	mu       sync.Mutex
+	bundle   atomic.Pointer[skillbundle.Manifest]
 }
 
 func newSkillService(ctx context.Context, dir string, archive *sessionstore.Store) (*skillService, error) {
+	manifest, err := skillbundle.Install(dir, bundledskills.CDP())
+	if err != nil {
+		return nil, fmt.Errorf("library: install bundled skills: %w", err)
+	}
 	home := dir
 	if strings.EqualFold(filepath.Base(filepath.Clean(dir)), ".q") {
 		home = filepath.Dir(filepath.Clean(dir))
@@ -128,6 +136,7 @@ func newSkillService(ctx context.Context, dir string, archive *sessionstore.Stor
 		return nil, err
 	}
 	service := &skillService{dir: dir, registry: registry, archive: archive}
+	service.bundle.Store(&manifest)
 	if err := registry.SyncRecords(ctx, archive); err != nil {
 		return nil, fmt.Errorf("library: reconcile global Agent Skills: %w", err)
 	}
@@ -359,6 +368,23 @@ func (s *skillService) reload(ctx context.Context) (SkillReloadResponse, error) 
 }
 
 func registerSkillRoutes(mux *http.ServeMux, skills *skillService) {
+	mux.HandleFunc("PUT /v1/skills/bundled/cdp", func(writer http.ResponseWriter, request *http.Request) {
+		var input skillbundle.Bundle
+		if err := decodeLibraryJSON(writer, request, &input); err != nil {
+			writeLibraryError(writer, http.StatusBadRequest, err)
+			return
+		}
+		if _, err := input.Manifest(); err != nil {
+			writeLibraryError(writer, http.StatusBadRequest, err)
+			return
+		}
+		manifest, err := skills.syncBundle(request.Context(), input)
+		if err != nil {
+			writeLibraryError(writer, http.StatusInternalServerError, err)
+			return
+		}
+		writeJSON(writer, http.StatusOK, manifest)
+	})
 	mux.Handle("POST /v1/skills/search", http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		var input SkillSearchRequest
 		if err := decodeLibraryJSON(writer, request, &input); err != nil {

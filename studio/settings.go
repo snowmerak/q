@@ -182,8 +182,9 @@ func (service *settingsService) snapshot() (settingsSnapshot, error) {
 		})
 	}
 	return settingsSnapshot{
-		Version: 1,
-		Scope:   "global",
+		BrowserControl: browserSettings(main.BrowserControl),
+		Version:        1,
+		Scope:          "global",
 		Runtime: runtimeSettings{
 			Configured: configured, ConfigPath: service.main.Path(), MaxParallel: agentsValue.MaxParallel,
 			Context: contextSettings{

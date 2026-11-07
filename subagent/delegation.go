@@ -16,6 +16,7 @@ import (
 	"github.com/snowmerak/q/config"
 	"github.com/snowmerak/q/diagnostics"
 	"github.com/snowmerak/q/internal/toolbatch"
+	"github.com/snowmerak/q/memory"
 	"github.com/snowmerak/q/sessionstore"
 )
 
@@ -890,8 +891,11 @@ func (r *GeneralRunner) completeGeneralCalls(ctx context.Context, state *General
 		if err := ctx.Err(); err != nil {
 			return TaskResult{}, false, err
 		}
-		traceToolResult(r.Trace, r.Definition.Info.Name, taskID, r.ParentID, call, toolResult)
 		message := client.ToolResultMessage(call, toolResult)
+		if shortened, reused := memory.ReuseSkillResource(message, history.Messages()); reused {
+			message, toolResult.Content = shortened, shortened.Content
+		}
+		traceToolResult(r.Trace, r.Definition.Info.Name, taskID, r.ParentID, call, toolResult)
 		history.Append(message)
 		state.Transcript = append(state.Transcript, message)
 		if err := checkpoint(); err != nil {

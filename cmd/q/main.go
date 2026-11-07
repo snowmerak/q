@@ -10,6 +10,7 @@ import (
 	"os/signal"
 	"strings"
 
+	cdpcli "github.com/snowmerak/cdp-q-driver/cli"
 	"github.com/snowmerak/q/app"
 	"github.com/snowmerak/q/commitagent"
 	"github.com/snowmerak/q/config"
@@ -22,6 +23,11 @@ import (
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
+	if len(os.Args) > 1 && os.Args[1] == "cdp" {
+		code := cdpcli.MainWithOptions(ctx, os.Args[2:], os.Stdin, os.Stdout, os.Stderr, cdpcli.Options{CommandPrefix: []string{"cdp"}})
+		stop()
+		os.Exit(code)
+	}
 	if len(os.Args) > 1 && os.Args[1] == loom.ChildCommand {
 		if err := loom.RunChild(ctx, os.Stdin, os.Stdout); err != nil {
 			fmt.Fprintln(os.Stderr, err)

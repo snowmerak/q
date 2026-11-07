@@ -21,6 +21,8 @@ existence alone does not prove ownership.
     workspace-knowledge.sqlite        # authoritative workspace/work sources
     data/records/                    # global skill projections
     index/                           # global skill BM25/HNSW
+    builtin-skills/current.json      # selected bundled-skill generation
+    builtin-skills/<digest>/q-cdp/   # immutable built-in skill and references
     knowledge-index/<generation>/
       all/                           # global issue/ticket projection
       workspace-<workspace-id>/       # workspace-specific BM25/HNSW

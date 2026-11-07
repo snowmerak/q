@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/snowmerak/q/browsercontrol"
 	"github.com/snowmerak/q/client"
 	"github.com/snowmerak/q/config"
 	"github.com/snowmerak/q/memory"
@@ -14,10 +15,11 @@ import (
 // memory behavior as the main chat while preserving their initial role/task
 // messages verbatim. The full lifecycle archive remains untouched.
 type ContextCompactor struct {
-	memory         *memory.Manager
-	anchorCount    int
-	preservedTools []string
-	usage          client.Usage
+	memory            *memory.Manager
+	anchorCount       int
+	preservedTools    []string
+	usage             client.Usage
+	browserPreference string
 }
 
 // IncludeMemoryTools adds Q's session-memory tools to every role catalog,
@@ -38,6 +40,14 @@ func (c *ContextCompactor) PreserveTools(names ...string) {
 // NewContextCompactor creates a loop-local context. The first anchorCount
 // messages are retained verbatim through every compaction.
 func NewContextCompactor(spec Spec, initial []client.Message, tools []client.Tool, anchorCount int) *ContextCompactor {
+	preference := ""
+	for _, tool := range tools {
+		if tool.Function.Name == "run_command" {
+			preference = spec.BrowserPreference
+			initial = browsercontrol.AppendPreference(initial, preference)
+			break
+		}
+	}
 	manager := memory.New(spec.memoryPolicy(), initial)
 	// Tool definitions consume prompt tokens on every role request. Seed them as
 	// provider overhead so compaction still triggers when usage is unavailable.
@@ -46,7 +56,7 @@ func NewContextCompactor(spec Spec, initial []client.Message, tools []client.Too
 		manager.ObserveUsage(local+toolTokens, local)
 	}
 	return &ContextCompactor{
-		memory: manager, anchorCount: min(max(anchorCount, 0), len(initial)),
+		memory: manager, anchorCount: min(max(anchorCount, 0), len(initial)), browserPreference: preference,
 	}
 }
 
@@ -76,6 +86,13 @@ func (c *ContextCompactor) Append(messages ...client.Message) {
 		return
 	}
 	for _, message := range messages {
+		if message.Role == client.RoleUser && c.browserPreference != "" {
+			context := append(c.memory.Messages(), message)
+			message = browsercontrol.AppendPreference(context, c.browserPreference)[len(context)-1]
+		}
+		if message.Role == client.RoleTool && message.Name == "get_skill" {
+			message, _ = memory.ReuseSkillResource(message, c.memory.Messages())
+		}
 		c.memory.Append(message)
 	}
 }

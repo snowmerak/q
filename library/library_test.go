@@ -233,7 +233,7 @@ func TestGlobalSkillAPIReconcilesOnlyOnExplicitReload(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if reloaded.Active != 1 {
+	if reloaded.Active != 2 { // User skill plus the bundled q-cdp skill.
 		t.Fatalf("reload response = %#v", reloaded)
 	}
 	afterReload, err := client.SearchSkills(context.Background(), SkillSearchRequest{Query: "Updated explicit reload token"})
@@ -276,10 +276,10 @@ func TestGlobalSkillSearchBackfillsAndReassignsEmbeddingModel(t *testing.T) {
 		t.Fatal(err)
 	}
 	stats, err := client.SyncSkillEmbeddings(context.Background())
-	if err != nil || stats.Embedded != 1 {
+	if err != nil || stats.Embedded != 2 { // Both user and bundled skills need initial embeddings.
 		t.Fatalf("initial skill embedding sync = %#v, %v", stats, err)
 	}
-	semantic, err := client.SearchSkills(context.Background(), SkillSearchRequest{Query: "feline"})
+	semantic, err := client.SearchSkills(context.Background(), SkillSearchRequest{Query: "feline", Tags: []string{"pets"}})
 	if err != nil || len(semantic.Hits) != 1 || semantic.Hits[0].Title != "animal-care" {
 		t.Fatalf("semantic skill search = %#v, %v", semantic, err)
 	}
@@ -309,7 +309,7 @@ func TestGlobalSkillSearchBackfillsAndReassignsEmbeddingModel(t *testing.T) {
 		t.Fatal(err)
 	}
 	stats, err = client.SyncSkillEmbeddings(context.Background())
-	if err != nil || stats.Embedded != 1 {
+	if err != nil || stats.Embedded != 2 {
 		t.Fatalf("reassigned skill embedding sync = %#v, %v", stats, err)
 	}
 	record, err = runtime.leader.archive.Get(semantic.Hits[0].ID)

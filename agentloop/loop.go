@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/snowmerak/q/agentinstructions"
+	"github.com/snowmerak/q/browsercontrol"
 	"github.com/snowmerak/q/client"
 	"github.com/snowmerak/q/internal/toolbatch"
 	"github.com/snowmerak/q/memory"
@@ -71,6 +72,11 @@ func RunAgentLoop(ctx context.Context, request Request, events chan<- Event) {
 			hints := automaticSkillHints(ctx, toolRuntime, query, "user_input", hintedSkillIDs)
 			updated = appendSkillHintContext(updated, hints)
 		}
+		if catalogHas(availableTools, "run_command") {
+			context := append([]client.Message(nil), history...)
+			context[index] = updated
+			updated = browsercontrol.AppendPreference(context, request.BrowserPreference)[index]
+		}
 		if updated.TextContent() != original.TextContent() {
 			history[index] = updated
 			replacement := &ContextReplacement{Index: index, Message: updated}
@@ -84,7 +90,7 @@ func RunAgentLoop(ctx context.Context, request Request, events chan<- Event) {
 	toolCalls := 0
 	taskStarted := activeTask != nil
 	var deliveredReply *client.Message
-	appendHistory := func(messages ...client.Message) bool {
+	reserveHistory := func(messages ...client.Message) bool {
 		if loopContext.manager.ShouldCompactAfterAppend(messages...) {
 			if !emitEvent(ctx, events, Event{status: "Compacting context before adding history…"}) {
 				return false
@@ -100,6 +106,12 @@ func RunAgentLoop(ctx context.Context, request Request, events chan<- Event) {
 					return false
 				}
 			}
+		}
+		return true
+	}
+	appendHistory := func(messages ...client.Message) bool {
+		if !reserveHistory(messages...) {
+			return false
 		}
 		loopContext.Append(messages...)
 		return true
@@ -539,6 +551,16 @@ func RunAgentLoop(ctx context.Context, request Request, events chan<- Event) {
 			message := client.Message{
 				Role: client.RoleTool, Name: call.Function.Name,
 				ToolCallID: call.ID, Content: content,
+			}
+			if shortened, reused := memory.ReuseSkillResource(message, loopContext.Messages()); reused {
+				if !reserveHistory(shortened) {
+					return
+				}
+				// Compaction may have evicted the original body while reserving
+				// this result. Never send a reference to absent instructions.
+				if shortened, stillPresent := memory.ReuseSkillResource(message, loopContext.Messages()); stillPresent {
+					message = shortened
+				}
 			}
 			if !appendHistory(message) {
 				return

@@ -48,6 +48,8 @@ type Request struct {
 	Stream               bool
 	CoalesceInstructions bool
 	ContextPolicy        memory.Policy
+	// BrowserPreference is host guidance for runtimes that expose run_command.
+	BrowserPreference string
 	// AllowedTools filters the complete catalog, including loop-owned tools.
 	// Nil retains the default catalog; an empty non-nil slice disables all tools.
 	AllowedTools []string

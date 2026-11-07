@@ -85,15 +85,16 @@ func startLeader(
 		Service:         ServiceName, ProtocolVersion: ProtocolVersion,
 		Implementation: Implementation, StoreID: storeID,
 		Generation: generation, Ready: true,
+		BundledSkills: true,
 	}
 
 	ctx, cancel := context.WithCancel(parent)
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /v1/health", func(writer http.ResponseWriter, _ *http.Request) {
-		writeJSON(writer, http.StatusOK, health)
+		writeJSON(writer, http.StatusOK, skills.bundleHealth(health))
 	})
 	mux.HandleFunc("GET /v1/status", func(writer http.ResponseWriter, _ *http.Request) {
-		writeJSON(writer, http.StatusOK, health)
+		writeJSON(writer, http.StatusOK, skills.bundleHealth(health))
 	})
 	registerSkillRoutes(mux, skills)
 	registerWorkspaceRoutes(mux, catalog)

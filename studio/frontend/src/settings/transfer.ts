@@ -66,7 +66,7 @@ export function transferLabel(section: TransferSection, id: string): string {
   const names: Record<string, string> = {
     'models:default': 'Default chat model', 'models:embedding': 'Embedding model',
     'system-one:default': 'Default decision model', 'runtime:parallel-agents': 'Maximum parallel agents',
-    'runtime:context': 'Context compaction', 'runtime:loom': 'Loom storage', 'runtime:system-prompt': 'System prompt',
+    'runtime:context': 'Context compaction', 'runtime:loom': 'Loom storage', 'runtime:system-prompt': 'System prompt', 'runtime:browser-control': 'Browser control',
     'services:gateway': 'Gateway listener', 'services:system-one': 'System One listener',
     'services:library': 'Library listener', 'services:workspace-memory': 'Workspace Memory listener', 'services:usage': 'Usage listener'
   };

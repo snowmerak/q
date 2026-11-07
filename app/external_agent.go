@@ -32,16 +32,17 @@ func (m *model) sendExternalAgent(command externalAgentCommand, toolRuntime agen
 		workingDirectory = m.workspaceStore.Root
 	}
 	parent := externalAgentParent{
-		client:           m.client,
-		tools:            toolRuntime,
-		model:            m.activeModel(),
-		reasoningEffort:  m.activeConfig().Provider.EffectiveReasoningEffort(),
-		history:          m.memory.Messages(),
-		conversationID:   m.conversationID,
-		workingDirectory: workingDirectory,
-		activeTask:       cloneActiveTask(m.activeTask),
-		streamEnabled:    m.streamsActiveChat(),
-		contextPolicy:    memoryPolicy(m.activeConfig()),
+		client:            m.client,
+		tools:             toolRuntime,
+		model:             m.activeModel(),
+		reasoningEffort:   m.activeConfig().Provider.EffectiveReasoningEffort(),
+		history:           m.memory.Messages(),
+		conversationID:    m.conversationID,
+		workingDirectory:  workingDirectory,
+		activeTask:        cloneActiveTask(m.activeTask),
+		streamEnabled:     m.streamsActiveChat(),
+		contextPolicy:     memoryPolicy(m.activeConfig()),
+		browserPreference: m.browserPreference(),
 		coalesceInstructions: modelNeedsSystemInstructionCoalescing(
 			m.gatewayConfig, m.activeConfig().ModelGroups, m.activeModel(), nil,
 		),
@@ -65,6 +66,7 @@ type externalAgentParent struct {
 	streamEnabled        bool
 	coalesceInstructions bool
 	contextPolicy        memory.Policy
+	browserPreference    string
 }
 
 // The parent continuation closes events after a successful invocation; only
@@ -146,6 +148,7 @@ func streamExternalAgent(
 		Messages: history, ConversationID: parent.conversationID, WorkingDirectory: parent.workingDirectory,
 		ActiveTask: parent.activeTask, Stream: parent.streamEnabled,
 		CoalesceInstructions: parent.coalesceInstructions, ContextPolicy: parent.contextPolicy,
+		BrowserPreference: parent.browserPreference,
 	}, events)
 }
 

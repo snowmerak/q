@@ -33,6 +33,9 @@ func TestRetrievalCatalogRequiresInitialSkillLookup(t *testing.T) {
 		"search_archive",
 		"get_archive_record",
 		"returned directly in content",
+		"Reuse applicable skills",
+		"already_in_context",
+		"previous_tool_call_id",
 	} {
 		if !strings.Contains(prompt, required) {
 			t.Fatalf("retrieval guidance does not require %q:\n%s", required, prompt)

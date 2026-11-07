@@ -182,7 +182,7 @@ func RegisterWithRoots(server *mcp.Server, root string, additional []string, dep
 		}))
 		mcp.AddTool(server, &mcp.Tool{
 			Name:        "get_skill",
-			Description: "Get the complete text of one selected SKILL.md or skill-relative resource directly. The response is never replaced by a Loom artifact.",
+			Description: "Read one selected SKILL.md or skill-relative resource. Reuse complete text already in the current context instead of reading it again. Q may return already_in_context with previous_tool_call_id for an unchanged resource; consult that earlier result. Otherwise the complete text is returned directly, never replaced by a Loom artifact.",
 			Annotations: &mcp.ToolAnnotations{ReadOnlyHint: readOnly, IdempotentHint: true},
 		}, contextValueHandler(func(ctx context.Context, input GetSkillInput) (GetSkillOutput, error) {
 			return getSkill(ctx, dependencies.Skills, dependencies.GlobalSkills, input)

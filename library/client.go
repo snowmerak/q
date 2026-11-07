@@ -26,13 +26,16 @@ const (
 )
 
 type Health struct {
-	ConfigDirectory string `json:"config_directory"`
-	Service         string `json:"service"`
-	ProtocolVersion int    `json:"protocol_version"`
-	Implementation  string `json:"implementation"`
-	StoreID         string `json:"store_id"`
-	Generation      string `json:"generation"`
-	Ready           bool   `json:"ready"`
+	BundledSkills      bool   `json:"bundled_skills,omitempty"`
+	SkillBundleVersion string `json:"skill_bundle_version,omitempty"`
+	SkillBundleDigest  string `json:"skill_bundle_digest,omitempty"`
+	ConfigDirectory    string `json:"config_directory"`
+	Service            string `json:"service"`
+	ProtocolVersion    int    `json:"protocol_version"`
+	Implementation     string `json:"implementation"`
+	StoreID            string `json:"store_id"`
+	Generation         string `json:"generation"`
+	Ready              bool   `json:"ready"`
 }
 
 func (h Health) Compatible() bool {

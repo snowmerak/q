@@ -1250,7 +1250,8 @@ func (a *acpAgent) runAgentTurn(ctx context.Context, history []client.Message) (
 		CoalesceInstructions: modelNeedsSystemInstructionCoalescing(
 			a.state.gatewayConfig, a.state.activeConfig().ModelGroups, a.state.activeModel(), nil,
 		),
-		ContextPolicy: memoryPolicy(a.state.activeConfig()),
+		ContextPolicy:     memoryPolicy(a.state.activeConfig()),
+		BrowserPreference: a.state.browserPreference(),
 	}, events)
 
 	streamedResponse := ""

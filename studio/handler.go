@@ -115,6 +115,7 @@ func newHandlerRuntime(parent context.Context, store config.Store, runner sessio
 	mux.HandleFunc("POST /api/v1/settings/system-one/api-keys", settings.serveSystemOneAPIKeyCreate)
 	mux.HandleFunc("DELETE /api/v1/settings/system-one/api-keys/{key}", settings.serveSystemOneAPIKeyRevoke)
 	mux.HandleFunc("PUT /api/v1/settings/runtime", settings.serveRuntimeUpdate)
+	mux.HandleFunc("PUT /api/v1/settings/browser-control", settings.serveBrowserControlUpdate)
 	mux.HandleFunc("GET /api/v1/workspaces/loom", settings.serveLoomStatus)
 	mux.HandleFunc("POST /api/v1/workspaces/loom/collect", settings.serveLoomCollect)
 	mux.HandleFunc("PUT /api/v1/settings/services/{service}", settings.serveServiceUpdate)

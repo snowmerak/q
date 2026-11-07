@@ -51,6 +51,7 @@ const (
 var ErrNotFound = errors.New("q config not found")
 
 type Config struct {
+	BrowserControl                BrowserControlConfig        `yaml:"browser_control,omitempty"`
 	Logging                       LoggingConfig               `yaml:"logging,omitempty"`
 	Version                       int                         `yaml:"version"`
 	Provider                      ProviderConfig              `yaml:"provider"`
@@ -266,6 +267,9 @@ func (c Config) Validate() error {
 	}
 	if c.Version != CurrentVersion {
 		return fmt.Errorf("config: unsupported version %d", c.Version)
+	}
+	if err := c.BrowserControl.Validate(); err != nil {
+		return err
 	}
 	retry := c.Provider.EffectiveRequestRetry()
 	if retry.MaxAttempts < 1 || retry.MaxAttempts > 10 || retry.InitialBackoff < 0 || retry.MaxBackoff < retry.InitialBackoff {

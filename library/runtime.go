@@ -81,6 +81,12 @@ func EnsureWithOptions(ctx context.Context, options EnsureOptions) (*Runtime, er
 			if err := requireConfigDirectory(options.Dir, health.ConfigDirectory); err != nil {
 				return nil, err
 			}
+			if err := client.syncBundledSkills(ctx, health); err != nil {
+				if after, probeErr := probe.Health(ctx); time.Now().Before(deadline) && (probeErr != nil || after.Generation != health.Generation) {
+					continue
+				}
+				return nil, err
+			}
 			return &Runtime{client: client}, nil
 		}
 		if err := ctx.Err(); err != nil {
@@ -95,6 +101,12 @@ func EnsureWithOptions(ctx context.Context, options EnsureOptions) (*Runtime, er
 					return nil, incompatibleError(health)
 				}
 				if err := requireConfigDirectory(options.Dir, health.ConfigDirectory); err != nil {
+					return nil, err
+				}
+				if err := client.syncBundledSkills(ctx, health); err != nil {
+					if after, probeErr := probe.Health(ctx); time.Now().Before(deadline) && (probeErr != nil || after.Generation != health.Generation) {
+						continue
+					}
 					return nil, err
 				}
 				return &Runtime{client: client}, nil

@@ -226,6 +226,16 @@ func (state *transferState) merge(section, id string, data json.RawMessage) erro
 		}
 	case "runtime":
 		switch id {
+		case "browser-control":
+			value, err := transferValue[config.BrowserControlConfig](data)
+			if err != nil {
+				return err
+			}
+			if err := value.Validate(); err != nil {
+				return err
+			}
+			state.main.BrowserControl = value
+			return nil
 		case "logging":
 			value, err := transferValue[config.LoggingConfig](data)
 			if err != nil {

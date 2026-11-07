@@ -1,0 +1,5 @@
+interface:
+  display_name: "CDP Q Driver"
+  short_description: "Control Chromium with named CDP sessions"
+
+<!-- Bundled from github.com/snowmerak/cdp-q-driver v0.0.0-20261107143548-ec463b2b34af; refresh with go generate ./internal/bundledskills. -->

@@ -3,19 +3,27 @@ package studio
 import (
 	"time"
 
+	"github.com/snowmerak/q/browsercontrol"
 	"github.com/snowmerak/q/config"
 	"github.com/snowmerak/q/loom"
 )
 
 type settingsSnapshot struct {
-	Version      int                  `json:"version"`
-	Scope        string               `json:"scope"`
-	Runtime      runtimeSettings      `json:"runtime"`
-	Models       modelSettings        `json:"models"`
-	Providers    providerSettings     `json:"gateway_providers"`
-	SystemOne    systemOneAPISettings `json:"system_one"`
-	Services     serviceSettings      `json:"services"`
-	Integrations integrationSettings  `json:"integrations"`
+	BrowserControl browserControlSettings `json:"browser_control"`
+	Version        int                    `json:"version"`
+	Scope          string                 `json:"scope"`
+	Runtime        runtimeSettings        `json:"runtime"`
+	Models         modelSettings          `json:"models"`
+	Providers      providerSettings       `json:"gateway_providers"`
+	SystemOne      systemOneAPISettings   `json:"system_one"`
+	Services       serviceSettings        `json:"services"`
+	Integrations   integrationSettings    `json:"integrations"`
+}
+
+type browserControlSettings struct {
+	Config  config.BrowserControlConfig   `json:"config"`
+	Drivers []browsercontrol.DriverStatus `json:"drivers"`
+	Prompt  string                        `json:"prompt"`
 }
 
 type runtimeSettings struct {

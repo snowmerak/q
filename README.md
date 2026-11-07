@@ -34,13 +34,17 @@ the resulting diff, and create a commit from one local Studio process.
 
 ## Requirements
 
-- Go 1.26.9 or later
+- Go 1.27.3 or later
 - Git on `PATH`
 - At least one configured model provider
 - A local Web browser
 
-Node.js is needed only when changing or rebuilding the embedded Q Studio
-frontend. Installing and running a released q binary does not require Node.js.
+Node.js is needed when rebuilding Q Studio or running JavaScript workflows with
+`q cdp run`. Ordinary Q sessions and other built-in CDP commands do not require it.
+
+Q includes CDP Q Driver as `q cdp`; run `q cdp help` for its commands. Configure
+the preferred browser CLI under **Settings → Browser control**. See
+[browser control](./docs/browser-control.md) for executable paths and bundled skills.
 
 [Task](https://taskfile.dev/) is optional; the same build and test commands can
 be run directly with Go.

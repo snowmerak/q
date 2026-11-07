@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { ArrowLeftRight, Bot, BrainCircuit, Cpu, Database, Network, Palette, Server, SlidersHorizontal, Unplug } from '@lucide/svelte';
+  import { ArrowLeftRight, Bot, BrainCircuit, Cpu, Database, Globe, Network, Palette, Server, SlidersHorizontal, Unplug } from '@lucide/svelte';
   import { onMount } from 'svelte';
   import { requestJSON } from './api';
   import IntegrationsView from './IntegrationsView.svelte';
@@ -10,6 +10,7 @@
   import ProvidersView from './settings/ProvidersView.svelte';
   import SystemOnePanel from './settings/SystemOnePanel.svelte';
   import RuntimePanel from './settings/RuntimePanel.svelte';
+  import BrowserControlPanel from './settings/BrowserControlPanel.svelte';
   import ServicesPanel from './settings/ServicesPanel.svelte';
   import TransferPanel from './settings/TransferPanel.svelte';
   import { preserveProviderDrafts } from './settings/providerDrafts';
@@ -25,6 +26,7 @@
     { id: 'providers' as const, label: 'Providers', description: 'API providers and ACP agents', icon: Network },
     { id: 'system-one' as const, label: 'System One', description: 'Decision API and access keys', icon: BrainCircuit },
     { id: 'runtime' as const, label: 'Runtime', description: 'Execution, context, and storage', icon: SlidersHorizontal },
+    { id: 'browser-control' as const, label: 'Browser control', description: 'Preferred browser CLI and executable paths', icon: Globe },
     { id: 'services' as const, label: 'Services', description: 'Gateway and System One', icon: Server },
     { id: 'subagents' as const, label: 'Subagents', description: 'Profiles and role bindings', icon: Bot },
     { id: 'integrations' as const, label: 'Integrations', description: 'MCP and language servers', icon: Unplug },
@@ -172,6 +174,7 @@
         <div hidden={activeSection !== 'providers'}><ProvidersView bind:settings {queueSave} active={active && activeSection === 'providers'} /></div>
         <div hidden={activeSection !== 'system-one'}><SystemOnePanel bind:settings {queueSave} active={active && activeSection === 'system-one'} /></div>
         <div hidden={activeSection !== 'runtime'}><RuntimePanel bind:settings {queueSave} active={active && activeSection === 'runtime'} /></div>
+        {#if settings.browser_control}<div hidden={activeSection !== 'browser-control'}><BrowserControlPanel bind:settings {queueSave} /></div>{/if}
         <div hidden={activeSection !== 'services'}><ServicesPanel bind:settings {queueSave} /></div>
         {#if active && activeSection === 'subagents'}<SubagentsView />{/if}
         {#if active && activeSection === 'integrations'}<IntegrationsView />{/if}
