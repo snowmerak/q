@@ -17,6 +17,9 @@ MaxAttempts: 2, SafeReplay: true, RequireFinishReason: true})`. Leave `SafeRepla
 false for clients that can execute their own tools. `MaxAttempts` counts extra
 semantic generations, excluding transport retries; zero disables them. Q's
 configured HTTP clients resolve this policy from model settings automatically.
+For those clients, `SafeReplay: false` also limits generation requests to one
+HTTP attempt, including stream opening and reconnects before the first chunk.
+An absent response does not establish that a remote agent performed no work.
 
 `Event.Generation()` reports incomplete/recovered attempts without inserting
 partial tool proposals into model context. `client.IncompleteGeneration` preserves

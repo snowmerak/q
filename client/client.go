@@ -143,13 +143,17 @@ func (c *Client) Chat(ctx context.Context, request ChatRequest) (response *ChatR
 		call.observeResponse(response)
 		call.finish(err, "completed")
 	}()
+	policy, err := c.generationRetryPolicy(ctx, request.Model)
+	if err != nil {
+		return nil, err
+	}
 	if c.apiMode(request.Model) == "responses" {
-		return retryRequest(&requestRetry{ctx: ctx, policy: c.retry}, func() (*ChatResponse, error) {
+		return retryRequest(&requestRetry{ctx: ctx, policy: policy}, func() (*ChatResponse, error) {
 			return c.responsesChat(ctx, request)
 		})
 	}
 	usageContext := ctx
-	response, err = retryRequest(&requestRetry{ctx: ctx, policy: c.retry}, func() (*ChatResponse, error) {
+	response, err = retryRequest(&requestRetry{ctx: ctx, policy: policy}, func() (*ChatResponse, error) {
 		attempt := request
 		usageContext, attempt.Headers = c.withUsageMetadata(ctx, request.Headers, "")
 		return c.inner.Chat(usageContext, attempt)
@@ -165,7 +169,12 @@ func (c *Client) Chat(ctx context.Context, request ChatRequest) (response *ChatR
 func (c *Client) ChatStream(ctx context.Context, request ChatRequest) (Stream, error) {
 	request.Model = c.model(request.Model)
 	call := startModelCall(ctx, request.Model, c.apiMode(request.Model), true)
-	stream, err := openRetryStream(ctx, c.retry, func(attemptContext context.Context) (retryStreamSource[ChatChunk], error) {
+	policy, err := c.generationRetryPolicy(ctx, request.Model)
+	if err != nil {
+		call.finish(err, "failed")
+		return nil, err
+	}
+	stream, err := openRetryStream(ctx, policy, func(attemptContext context.Context) (retryStreamSource[ChatChunk], error) {
 		return c.chatStream(attemptContext, request)
 	})
 	if err != nil {
@@ -249,7 +258,11 @@ func (c *Client) CreateResponse(ctx context.Context, body json.RawMessage, heade
 	if err != nil {
 		return nil, err
 	}
-	return retryRequest(&requestRetry{ctx: ctx, policy: c.retry}, func() (*RawResponse, error) {
+	policy, err := c.responseRetryPolicy(ctx, prepared)
+	if err != nil {
+		return nil, err
+	}
+	return retryRequest(&requestRetry{ctx: ctx, policy: policy}, func() (*RawResponse, error) {
 		_, attemptHeaders := c.withUsageMetadata(ctx, headers, "")
 		return c.provider.CreateResponse(ctx, prepared, attemptHeaders)
 	})
@@ -262,7 +275,11 @@ func (c *Client) CreateResponseStream(ctx context.Context, body json.RawMessage,
 	if err != nil {
 		return nil, err
 	}
-	return openRetryStream(ctx, c.retry, func(attemptContext context.Context) (retryStreamSource[ResponseEvent], error) {
+	policy, err := c.responseRetryPolicy(ctx, prepared)
+	if err != nil {
+		return nil, err
+	}
+	return openRetryStream(ctx, policy, func(attemptContext context.Context) (retryStreamSource[ResponseEvent], error) {
 		_, attemptHeaders := c.withUsageMetadata(attemptContext, headers, "")
 		return c.provider.CreateResponseStream(attemptContext, prepared, attemptHeaders)
 	})

@@ -136,13 +136,16 @@ func runStudioAt(
 		<-shutdownDone
 		return fmt.Errorf("q studio: report listen address: %w", err)
 	}
+	// A cold browser launch may block; serve its first request independently.
+	serveDone := make(chan error, 1)
+	go func() { serveDone <- server.Serve(listener) }()
 	logger.Info("studio.ready", "address", listener.Addr().String())
 	if !options.noOpen && open != nil {
 		if err := open(openURL); err != nil {
 			logger.Warn("studio.browser.failed", "error", err)
 		}
 	}
-	serveErr := server.Serve(listener)
+	serveErr := <-serveDone
 	cancelServer()
 	<-shutdownDone
 	if errors.Is(serveErr, http.ErrServerClosed) {

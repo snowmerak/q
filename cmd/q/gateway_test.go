@@ -111,6 +111,8 @@ func TestParseGatewayOptionsRejectsInvalidValues(t *testing.T) {
 }
 
 func TestRunGatewayWithStoreServesConfiguredProviders(t *testing.T) {
+	httpClient := &http.Client{Transport: http.DefaultTransport.(*http.Transport).Clone()}
+	defer httpClient.CloseIdleConnections()
 	upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		switch request.URL.Path {
 		case "/v1/models":
@@ -176,7 +178,7 @@ func TestRunGatewayWithStoreServesConfiguredProviders(t *testing.T) {
 		t.Fatal(err)
 	}
 	endpoint := strings.TrimSpace(strings.TrimPrefix(line, "q gateway listening on "))
-	unauthorized, err := http.Get(endpoint + "/models")
+	unauthorized, err := httpClient.Get(endpoint + "/models")
 	if err != nil {
 		cancel()
 		t.Fatal(err)
@@ -192,7 +194,7 @@ func TestRunGatewayWithStoreServesConfiguredProviders(t *testing.T) {
 		t.Fatal(err)
 	}
 	request.Header.Set("Authorization", "Bearer "+generated.Secret)
-	response, err := http.DefaultClient.Do(request)
+	response, err := httpClient.Do(request)
 	if err != nil {
 		cancel()
 		t.Fatal(err)
@@ -224,7 +226,7 @@ func TestRunGatewayWithStoreServesConfiguredProviders(t *testing.T) {
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set(client.UsageEventIDHeader, eventID)
 	request.Header.Set(client.UsageRoleHeader, "Planner")
-	response, err = http.DefaultClient.Do(request)
+	response, err = httpClient.Do(request)
 	if err != nil {
 		cancel()
 		t.Fatal(err)
@@ -242,7 +244,7 @@ func TestRunGatewayWithStoreServesConfiguredProviders(t *testing.T) {
 	}
 	deadline := time.Now().Add(3 * time.Second)
 	for {
-		response, err = http.Get(endpoint + "/models")
+		response, err = httpClient.Get(endpoint + "/models")
 		if err != nil {
 			cancel()
 			t.Fatal(err)
@@ -258,6 +260,9 @@ func TestRunGatewayWithStoreServesConfiguredProviders(t *testing.T) {
 		time.Sleep(50 * time.Millisecond)
 	}
 
+	// Close this test's own keep-alive pool before waiting for graceful server
+	// shutdown; unused speculative connections otherwise outlive the deadline.
+	httpClient.CloseIdleConnections()
 	cancel()
 	select {
 	case err := <-done:

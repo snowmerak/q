@@ -10,6 +10,7 @@ func incompleteResponse(document responseDocument, affinity, model string, raw j
 	for _, raw := range document.Output {
 		var item struct {
 			Type      string `json:"type"`
+			Phase     string `json:"phase"`
 			CallID    string `json:"call_id"`
 			Name      string `json:"name"`
 			Arguments string `json:"arguments"`
@@ -25,6 +26,14 @@ func incompleteResponse(document responseDocument, affinity, model string, raw j
 			message.ToolCalls = append(message.ToolCalls, ToolCall{ID: item.CallID, Type: ToolTypeFunction, Function: FunctionCall{Name: item.Name, Arguments: item.Arguments}})
 		}
 		if item.Type == "message" {
+			// Match completed Responses parsing: progress is not partial final
+			// answer text and must not be fed into a continuation as the answer.
+			if item.Phase == "commentary" {
+				continue
+			}
+			if item.Phase != "" {
+				message.Phase = item.Phase
+			}
 			for _, part := range item.Content {
 				if part.Type == "output_text" {
 					message.Content += part.Text

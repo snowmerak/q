@@ -20,7 +20,7 @@ require (
 	github.com/modelcontextprotocol/go-sdk v1.7.0
 	github.com/parquet-go/parquet-go v0.32.0
 	github.com/snowmerak/cdp-q-driver v0.0.0-20261107143548-ec463b2b34af
-	github.com/snowmerak/llm-provider v0.0.0-20261014110600-2b9dafbe5452
+	github.com/snowmerak/llm-provider v0.0.0-20261108025312-195d7124fbea
 	github.com/snowmerak/q/third_party/acp-go-sdk v0.0.0-20260827012000-155b26051836
 	github.com/zeebo/blake3 v0.2.4
 	go.etcd.io/bbolt v1.4.0

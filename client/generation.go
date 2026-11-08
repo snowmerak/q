@@ -340,6 +340,7 @@ func RecoverGeneration(ctx context.Context, configured any, request ChatRequest,
 func RefusalText(raw json.RawMessage) string {
 	var body struct {
 		Choices []struct {
+			Index   int `json:"index"`
 			Message struct {
 				Refusal string `json:"refusal"`
 			} `json:"message"`
@@ -351,7 +352,12 @@ func RefusalText(raw json.RawMessage) string {
 	if json.Unmarshal(raw, &body) != nil || len(body.Choices) == 0 {
 		return ""
 	}
-	return body.Choices[0].Message.Refusal + body.Choices[0].Delta.Refusal
+	for _, choice := range body.Choices {
+		if choice.Index == 0 {
+			return choice.Message.Refusal + choice.Delta.Refusal
+		}
+	}
+	return ""
 }
 
 func reportedReasoningTokens(response *ChatResponse) *int {

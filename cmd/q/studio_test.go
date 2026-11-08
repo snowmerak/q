@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -16,6 +17,7 @@ import (
 	"time"
 
 	"github.com/snowmerak/llm-provider/gateway"
+	qlibrary "github.com/snowmerak/q/library"
 	"github.com/snowmerak/q/providerhost"
 )
 
@@ -112,6 +114,66 @@ func TestStudioServiceStatusAndShutdownSmoke(t *testing.T) {
 	}
 	if slog.Default() != defaultLogger {
 		t.Fatal("Studio replaced the process-wide logger")
+	}
+}
+
+func TestStudioServesBeforeBrowserOpenerReturns(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := listener.Addr().(*net.TCPAddr).Port
+	if err := listener.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := (qlibrary.ConfigStore{Dir: filepath.Join(home, ".q")}).Save(qlibrary.Config{Host: "127.0.0.1", Port: port}); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	output, diagnostics := newNotifyWriter(), newNotifyWriter()
+	opened := make(chan string, 1)
+	release := make(chan struct{})
+	done := make(chan error, 1)
+	go func() {
+		done <- runStudioAt(ctx, nil, output, diagnostics, func(url string) error {
+			opened <- url
+			<-release
+			return nil
+		}, "/")
+	}()
+	t.Cleanup(func() {
+		cancel()
+		close(release)
+		select {
+		case err := <-done:
+			if err != nil {
+				t.Errorf("shutdown: %v; diagnostics: %s", err, diagnostics.String())
+			}
+		case <-time.After(10 * time.Second):
+			t.Error("Studio did not shut down")
+		}
+	})
+	var url string
+	select {
+	case url = <-opened:
+	case <-time.After(10 * time.Second):
+		t.Fatalf("browser opener was not called; diagnostics: %s", diagnostics.String())
+	}
+	client := &http.Client{Timeout: 2 * time.Second}
+	defer client.CloseIdleConnections()
+	for _, path := range []string{"/", "/api/v1/status"} {
+		response, err := client.Get(url + path)
+		if err != nil {
+			t.Fatalf("request %s blocked on browser launch: %v", path, err)
+		}
+		_, readErr := io.Copy(io.Discard, response.Body)
+		closeErr := response.Body.Close()
+		if response.StatusCode != http.StatusOK || readErr != nil || closeErr != nil {
+			t.Fatalf("request %s: status=%d read=%v close=%v", path, response.StatusCode, readErr, closeErr)
+		}
 	}
 }
 

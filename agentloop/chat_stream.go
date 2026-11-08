@@ -173,6 +173,11 @@ func consumeChatStream(
 			startedResponse = true
 		}
 		for _, choice := range chunk.Choices {
+			// The loop consumes one completion, just as the non-streaming path
+			// consumes Choices[0]. Alternatives have independent tool indices.
+			if choice.Index != 0 {
+				continue
+			}
 			if choice.FinishReason != "" {
 				response.Choices[0].FinishReason = choice.FinishReason
 			}
@@ -283,18 +288,26 @@ func rawThinkingDelta(raw json.RawMessage) string {
 	}
 	var envelope struct {
 		Choices []struct {
+			Index int                        `json:"index"`
 			Delta map[string]json.RawMessage `json:"delta"`
 		} `json:"choices"`
 	}
 	if json.Unmarshal(raw, &envelope) != nil || len(envelope.Choices) == 0 {
 		return ""
 	}
+	var delta map[string]json.RawMessage
+	for _, choice := range envelope.Choices {
+		if choice.Index == 0 {
+			delta = choice.Delta
+			break
+		}
+	}
 	for _, field := range []string{"reasoning_content", "reasoning", "thinking"} {
 		var value string
 		// Whitespace is content in a token stream. Compatible providers often
 		// emit spaces and newlines as standalone reasoning deltas; dropping them
 		// joins paragraphs and fenced code into a single unreadable line.
-		if json.Unmarshal(envelope.Choices[0].Delta[field], &value) == nil && value != "" {
+		if json.Unmarshal(delta[field], &value) == nil && value != "" {
 			return value
 		}
 	}

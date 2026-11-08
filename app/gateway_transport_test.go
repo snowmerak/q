@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/snowmerak/llm-provider/gateway"
 	"github.com/snowmerak/q/client"
 	"github.com/snowmerak/q/config"
 )
@@ -35,7 +36,7 @@ func (runtime *reconnectingTestRuntime) setConnection(endpoint, key string) {
 func TestManagedGatewayRetryFollowsReplacement(t *testing.T) {
 	for _, operation := range []string{"embedding", "chat", "chat stream", "responses chat", "responses chat stream", "responses stream", "models"} {
 		t.Run(operation, func(t *testing.T) {
-			runtime := &reconnectingTestRuntime{providerRuntime: &fakeProviderRuntime{}}
+			runtime := &reconnectingTestRuntime{providerRuntime: &fakeProviderRuntime{config: gateway.Config{Providers: []gateway.ProviderConfig{{ID: "test", Type: "openai-compatible", Enabled: true}}}}}
 			var firstCalls, replacementCalls atomic.Int32
 			replacement := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				replacementCalls.Add(1)
@@ -80,10 +81,10 @@ func TestManagedGatewayRetryFollowsReplacement(t *testing.T) {
 			defer first.Close()
 			runtime.setConnection(first.URL+"/v1", "first-key")
 			value := config.Default()
-			value.Provider.Model = "test"
+			value.Provider.Model = "test/model"
 			value.Provider.RequestRetry = config.RequestRetryConfig{MaxAttempts: 3, InitialBackoff: time.Millisecond}
 			if operation == "responses chat" || operation == "responses chat stream" {
-				value.ModelAPIModes = map[string]string{"test": "responses"}
+				value.ModelAPIModes = map[string]string{"test/model": "responses"}
 			}
 			configured, err := managedClientFactory(runtime, nil)(value)
 			if err != nil {
@@ -91,7 +92,7 @@ func TestManagedGatewayRetryFollowsReplacement(t *testing.T) {
 			}
 			defer func() { _ = configured.Close() }()
 			model := configured.(*client.Client)
-			request := client.ChatRequest{Model: "test", Messages: []client.Message{{Role: client.RoleUser, Content: "hello"}}}
+			request := client.ChatRequest{Model: "test/model", Messages: []client.Message{{Role: client.RoleUser, Content: "hello"}}}
 			switch operation {
 			case "embedding":
 				response, err := model.Embed(t.Context(), client.EmbeddingRequest{Model: "test", Input: []string{"hello"}})
@@ -114,7 +115,7 @@ func TestManagedGatewayRetryFollowsReplacement(t *testing.T) {
 					t.Fatalf("stream = %+v, %v", chunk, err)
 				}
 			case "responses stream":
-				stream, err := model.CreateResponseStream(t.Context(), json.RawMessage(`{"model":"test","input":"hello"}`), nil)
+				stream, err := model.CreateResponseStream(t.Context(), json.RawMessage(`{"model":"test/model","input":"hello"}`), nil)
 				if err != nil {
 					t.Fatal(err)
 				}

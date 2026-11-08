@@ -2,6 +2,7 @@ package client
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"net"
@@ -25,6 +26,36 @@ type requestRetry struct {
 	ctx      context.Context
 	policy   RetryPolicy
 	attempts int
+}
+
+// A transport failure does not prove that a remote agent did no work. Use the
+// same replay decision for HTTP attempts as for semantic generation recovery.
+func (c *Client) generationRetryPolicy(ctx context.Context, model string) (RetryPolicy, error) {
+	policy := c.retry
+	if policy.MaxAttempts <= 1 {
+		return policy, nil
+	}
+	settings, err := ResolveGenerationSettings(ctx, c, model)
+	if err != nil {
+		return RetryPolicy{}, err
+	}
+	if !settings.SafeReplay {
+		policy.MaxAttempts = 1
+	}
+	return policy, nil
+}
+
+func (c *Client) responseRetryPolicy(ctx context.Context, body json.RawMessage) (RetryPolicy, error) {
+	if c.retry.MaxAttempts <= 1 {
+		return c.retry, nil
+	}
+	var request struct {
+		Model string `json:"model"`
+	}
+	if err := json.Unmarshal(body, &request); err != nil {
+		return RetryPolicy{}, err
+	}
+	return c.generationRetryPolicy(ctx, c.model(request.Model))
 }
 
 func retryRequest[T any](retry *requestRetry, operation func() (T, error)) (T, error) {
