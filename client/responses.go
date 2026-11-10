@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"time"
 )
 
 const responseCachePrefix = "cache_"
@@ -345,7 +346,7 @@ func (c *Client) responsesChat(ctx context.Context, request ChatRequest) (*ChatR
 	return response, err
 }
 
-func (c *Client) responsesChatStream(ctx context.Context, request ChatRequest) (Stream, error) {
+func (c *Client) responsesChatStream(ctx context.Context, request ChatRequest, call *modelCallLog) (Stream, error) {
 	affinity, err := responseAffinity(request.ConversationID)
 	if err != nil {
 		return nil, err
@@ -366,7 +367,7 @@ func (c *Client) responsesChatStream(ctx context.Context, request ChatRequest) (
 	if err != nil {
 		return nil, err
 	}
-	stream := &responsesChunkStream{inner: raw, model: request.Model, affinity: affinity}
+	stream := &responsesChunkStream{inner: raw, model: request.Model, affinity: affinity, call: call}
 	if c.usageRecorder == nil {
 		return stream, nil
 	}
@@ -379,6 +380,7 @@ func (c *Client) responsesChatStream(ctx context.Context, request ChatRequest) (
 
 type responsesChunkStream struct {
 	inner            ResponseStream
+	call             *modelCallLog
 	model            string
 	affinity         string
 	text             strings.Builder
@@ -409,6 +411,7 @@ func (s *responsesChunkStream) Recv() (*ChatChunk, error) {
 		if err != nil {
 			return nil, err
 		}
+		received := time.Now()
 		var data struct {
 			Type        string          `json:"type"`
 			Delta       string          `json:"delta"`
@@ -435,17 +438,25 @@ func (s *responsesChunkStream) Recv() (*ChatChunk, error) {
 		case "response.output_item.added":
 			var item struct {
 				Phase string `json:"phase"`
+				Type  string `json:"type"`
+				Name  string `json:"name"`
 			}
 			if len(data.Item) > 0 {
 				if err := json.Unmarshal(data.Item, &item); err != nil {
 					return nil, fmt.Errorf("client: decode Responses added item: %w", err)
 				}
 			}
+			if item.Type == "function_call" && item.Name != "" {
+				s.call.observeOutput(received)
+			}
 			if s.phases == nil {
 				s.phases = make(map[int]string)
 			}
 			s.phases[index] = item.Phase
 		case "response.output_text.delta", "response.refusal.delta":
+			if data.Delta != "" {
+				s.call.observeOutput(received)
+			}
 			phase := s.phases[index]
 			if phase != "commentary" {
 				s.text.WriteString(data.Delta)
@@ -464,7 +475,12 @@ func (s *responsesChunkStream) Recv() (*ChatChunk, error) {
 				continue
 			}
 			s.reasoningSources[index] = kind
+			s.call.observeOutput(received)
 			return &ChatChunk{Model: s.model, Choices: []Choice{{Index: 0, Phase: "commentary", Delta: &Message{Role: RoleAssistant, Content: data.Delta}}}}, nil
+		case "response.function_call_arguments.delta":
+			if data.Delta != "" {
+				s.call.observeOutput(received)
+			}
 		case "response.output_item.done":
 			if data.OutputIndex == nil || index < 0 || len(data.Item) == 0 || string(data.Item) == "null" {
 				return nil, errors.New("client: completed output item is missing its index or value")
@@ -524,6 +540,7 @@ func (s *responsesChunkStream) Recv() (*ChatChunk, error) {
 			}
 			message.Content = strings.TrimPrefix(message.Content, s.text.String())
 			s.completed = true
+			s.call.observeCompletion(received)
 			return &ChatChunk{
 				ID: response.ID, Model: response.Model, ConversationID: response.ConversationID, Usage: &response.Usage,
 				Choices: []Choice{{Index: 0, Delta: &message, FinishReason: response.Choices[0].FinishReason}},

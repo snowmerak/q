@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/snowmerak/q/diagnostics"
 )
@@ -95,8 +96,12 @@ func TestModelStreamLogsCompletionAfterEOFForBothAPIs(t *testing.T) {
 				writer.Header().Set("Content-Type", "text/event-stream")
 				writer.Header().Set("X-Trace-Test", "preserved")
 				if mode == "responses" {
+					_, _ = io.WriteString(writer, "event: response.reasoning_summary_text.delta\ndata: "+`{"type":"response.reasoning_summary_text.delta","delta":"private-reasoning"}`+"\n\n")
+					_, _ = io.WriteString(writer, "event: response.output_text.delta\ndata: "+`{"type":"response.output_text.delta","delta":"private-response"}`+"\n\n")
 					_, _ = io.WriteString(writer, "event: response.completed\ndata: "+`{"type":"response.completed","response":{"id":"resp_1","model":"resolved/model","status":"completed","output":[{"type":"message","content":[{"type":"output_text","text":"private-response"}]}],"usage":{"input_tokens":10,"output_tokens":2,"total_tokens":12}}}`+"\n\n")
 				} else {
+					_, _ = io.WriteString(writer, "data: "+`{"choices":[{"index":0,"delta":{"role":"assistant"}}]}`+"\n\n")
+					_, _ = io.WriteString(writer, "data: "+`{"choices":[{"index":0,"delta":{"reasoning_content":"private-reasoning"}}]}`+"\n\n")
 					_, _ = io.WriteString(writer, "data: "+`{"model":"resolved/model","choices":[{"index":0,"delta":{"content":"private-response"},"finish_reason":"stop"}],"usage":{"prompt_tokens":10,"completion_tokens":2,"total_tokens":12}}`+"\n\ndata: [DONE]\n\n")
 				}
 			}))
@@ -107,6 +112,10 @@ func TestModelStreamLogsCompletionAfterEOFForBothAPIs(t *testing.T) {
 			}
 			t.Cleanup(func() { _ = configured.Close() })
 			ctx, output := modelLogContext(t)
+			var timings []ModelCallTiming
+			ctx = WithModelCallObserver(ctx, func(timing ModelCallTiming) {
+				timings = append(timings, timing)
+			})
 			stream, err := configured.ChatStream(ctx, ChatRequest{Messages: []Message{{Role: RoleUser, Content: "private-prompt"}}})
 			if err != nil {
 				t.Fatal(err)
@@ -119,12 +128,16 @@ func TestModelStreamLogsCompletionAfterEOFForBothAPIs(t *testing.T) {
 				t.Fatal("stream lost response header interface")
 			}
 			for {
-				_, err := stream.Recv()
+				chunk, err := stream.Recv()
 				if errors.Is(err, io.EOF) {
 					break
 				}
 				if err != nil {
 					t.Fatal(err)
+				}
+				if chatChunkHasOutput(chunk) {
+					// Keep a measurable first-output interval on low-resolution clocks.
+					time.Sleep(20 * time.Millisecond)
 				}
 			}
 			if err := stream.Close(); err != nil {
@@ -135,7 +148,44 @@ func TestModelStreamLogsCompletionAfterEOFForBothAPIs(t *testing.T) {
 			if records[1]["response_model"] != "resolved/model" || records[1]["prompt_tokens"] != float64(10) || records[1]["total_tokens"] != float64(12) {
 				t.Fatalf("stream metadata = %+v", records[1])
 			}
+			if len(timings) != 1 {
+				t.Fatalf("observed calls = %+v", timings)
+			}
+			timing := timings[0]
+			if timing.TTFTMS == nil || timing.AfterFirstMS == nil || timing.MaxOutputGapMS == nil || timing.OutputTokensPerSec == nil {
+				t.Fatalf("incomplete stream timing = %+v", timing)
+			}
+			if last := records[1]; last["model_call_id"] != timing.ID || last["duration_ms"] != float64(timing.DurationMS) ||
+				last["ttft_ms"] != float64(*timing.TTFTMS) || last["after_first_ms"] != float64(*timing.AfterFirstMS) ||
+				last["max_output_gap_ms"] != float64(*timing.MaxOutputGapMS) || last["output_tokens_per_second"] != *timing.OutputTokensPerSec {
+				t.Fatalf("log differs from observed timing: %+v, %+v", last, timing)
+			}
 		})
+	}
+}
+
+func TestModelTimingUsesOutputDeltas(t *testing.T) {
+	start := time.Now()
+	call := &modelCallLog{started: start}
+	for index, frame := range []string{
+		`{"choices":[{"delta":{"role":"assistant"}}]}`,
+		`{"choices":[],"usage":{"completion_tokens":20}}`,
+		`{"choices":[{"delta":{"reasoning_content":"checking"}}]}`,
+		`{"choices":[{"delta":{"tool_calls":[{"function":{"name":"lookup"}}]}}]}`,
+	} {
+		var chunk ChatChunk
+		if err := json.Unmarshal([]byte(frame), &chunk); err != nil {
+			t.Fatal(err)
+		}
+		chunk.Raw = []byte(frame)
+		call.observeChunk(&chunk, start.Add(time.Duration(index)*time.Second))
+	}
+	tokens := 20
+	timing := ModelCallTiming{Status: "completed", OutputTokens: &tokens}
+	call.output.apply(&timing, start, start.Add(4*time.Second))
+	if timing.TTFTMS == nil || *timing.TTFTMS != 2000 || timing.AfterFirstMS == nil || *timing.AfterFirstMS != 2000 ||
+		timing.MaxOutputGapMS == nil || *timing.MaxOutputGapMS != 1000 || timing.OutputTokensPerSec == nil || *timing.OutputTokensPerSec != 10 {
+		t.Fatalf("unexpected stream timing: %+v", timing)
 	}
 }
 

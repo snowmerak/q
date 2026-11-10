@@ -53,6 +53,8 @@ type SessionEvent struct {
 	ContextUsed      int                   `json:"context_used,omitempty"`
 	ContextSize      int                   `json:"context_size,omitempty"`
 	Usage            *workspace.TokenUsage `json:"usage,omitempty"`
+
+	ModelCall *client.ModelCallTiming `json:"model_call,omitempty"`
 }
 
 type SessionEventSink func(SessionEvent) error

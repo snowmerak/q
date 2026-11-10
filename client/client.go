@@ -175,7 +175,7 @@ func (c *Client) ChatStream(ctx context.Context, request ChatRequest) (Stream, e
 		return nil, err
 	}
 	stream, err := openRetryStream(ctx, policy, func(attemptContext context.Context) (retryStreamSource[ChatChunk], error) {
-		return c.chatStream(attemptContext, request)
+		return c.chatStream(attemptContext, request, call)
 	})
 	if err != nil {
 		call.finish(err, "failed")
@@ -188,9 +188,9 @@ func (c *Client) ChatStream(ctx context.Context, request ChatRequest) (Stream, e
 	return &modelLogHeaderStream{modelLogStream: tracked, headers: stream}, nil
 }
 
-func (c *Client) chatStream(ctx context.Context, request ChatRequest) (Stream, error) {
+func (c *Client) chatStream(ctx context.Context, request ChatRequest, call *modelCallLog) (Stream, error) {
 	if c.apiMode(request.Model) == "responses" {
-		return c.responsesChatStream(ctx, request)
+		return c.responsesChatStream(ctx, request, call)
 	}
 	ctx, request.Headers = c.withUsageMetadata(ctx, request.Headers, "")
 	stream, err := c.inner.ChatStream(ctx, request)
@@ -201,7 +201,7 @@ func (c *Client) chatStream(ctx context.Context, request ChatRequest) (Stream, e
 		return stream, nil
 	}
 	tracked := &usageStream{
-		inner: stream, client: c, request: request,
+		inner: stream, client: c, request: request, call: call,
 		role: usageRole(ctx), eventID: usageEventID(ctx),
 	}
 	if headers, ok := stream.(ResponseHeaderer); ok {

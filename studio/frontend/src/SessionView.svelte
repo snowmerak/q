@@ -3,6 +3,7 @@
   import { onMount } from 'svelte';
   import SessionTree from './sessions/SessionTree.svelte';
   import Transcript from './sessions/Transcript.svelte';
+  import ModelTimings from './sessions/ModelTimings.svelte';
   import { loadDraft, saveDraft } from './sessions/drafts';
   import { historyPageSize, mergeHistory } from './sessions/history';
   import SessionRegistration from './sessions/SessionRegistration.svelte';
@@ -842,6 +843,9 @@
           {/if}
         </div>
       </div>
+      {#if !selectedDelegation && activeRun?.model_calls?.length}
+        {#key activeRun.id}<ModelTimings calls={activeRun.model_calls} />{/key}
+      {/if}
       {#if runError}
         <div class="session-error run-error" role="alert">
           <strong>{runStatusLabel(activeRun!)}</strong>

@@ -17,24 +17,34 @@ import (
 // modelCallLog describes one Q client call, including the full stream
 // lifetime. It stores metadata only; prompts, chunks and headers stay private.
 type modelCallLog struct {
-	ctx      context.Context
-	logger   *slog.Logger
-	started  time.Time
-	once     sync.Once
-	mu       sync.Mutex
-	model    string
-	usage    Usage
-	reported bool
+	ctx             context.Context
+	logger          *slog.Logger
+	started         time.Time
+	completedAt     time.Time
+	once            sync.Once
+	mu              sync.Mutex
+	model           string
+	usage           Usage
+	reported        bool
+	timing          ModelCallTiming
+	output          modelOutputTiming
+	observe         func(ModelCallTiming)
+	nativeResponses bool
 }
 
 func startModelCall(ctx context.Context, model, apiMode string, streaming bool) *modelCallLog {
 	logger := diagnostics.Logger(ctx)
-	if !logger.Enabled(ctx, slog.LevelInfo) && !logger.Enabled(ctx, slog.LevelError) {
+	observe, _ := ctx.Value(modelCallObserverKey{}).(func(ModelCallTiming))
+	if !streaming {
+		observe = nil
+	}
+	if observe == nil && !logger.Enabled(ctx, slog.LevelInfo) && !logger.Enabled(ctx, slog.LevelError) {
 		return nil
 	}
-	logger = logger.With("model_call_id", uuid.NewString(), "requested_model", model,
-		"api_mode", apiMode, "streaming", streaming, "usage_role", usageRole(ctx))
-	call := &modelCallLog{ctx: ctx, logger: logger, started: time.Now()}
+	timing := ModelCallTiming{ID: uuid.NewString(), Model: model, Role: usageRole(ctx)}
+	logger = logger.With("model_call_id", timing.ID, "requested_model", model,
+		"api_mode", apiMode, "streaming", streaming, "usage_role", timing.Role)
+	call := &modelCallLog{ctx: ctx, logger: logger, started: time.Now(), timing: timing, observe: observe, nativeResponses: apiMode == "responses"}
 	logger.Info("model.call.started")
 	return call
 }
@@ -56,7 +66,7 @@ func (call *modelCallLog) observeUsage(model string, usage Usage) {
 	call.reported = usage.PromptTokens != 0 || usage.CompletionTokens != 0 || usage.TotalTokens != 0
 }
 
-func (call *modelCallLog) observeChunk(chunk *ChatChunk) {
+func (call *modelCallLog) observeChunk(chunk *ChatChunk, received time.Time) {
 	if call == nil || chunk == nil {
 		return
 	}
@@ -67,6 +77,27 @@ func (call *modelCallLog) observeChunk(chunk *ChatChunk) {
 	}
 	if chunk.Usage != nil {
 		call.usage, call.reported = *chunk.Usage, true
+	}
+	if !call.nativeResponses && chatChunkHasOutput(chunk) {
+		call.output.observe(received)
+	}
+}
+
+func (call *modelCallLog) observeOutput(received time.Time) {
+	if call != nil {
+		call.mu.Lock()
+		call.output.observe(received)
+		call.mu.Unlock()
+	}
+}
+
+func (call *modelCallLog) observeCompletion(received time.Time) {
+	if call != nil {
+		call.mu.Lock()
+		if call.completedAt.IsZero() {
+			call.completedAt = received
+		}
+		call.mu.Unlock()
 	}
 }
 
@@ -82,13 +113,37 @@ func (call *modelCallLog) finish(err error, status string) {
 			level, status = slog.LevelError, "failed"
 		}
 		call.mu.Lock()
-		attrs := []any{"status", status, "duration_ms", time.Since(call.started).Milliseconds(),
+		ended := time.Now()
+		if status == "completed" && !call.completedAt.IsZero() {
+			ended = call.completedAt
+		}
+		timing := call.timing
+		timing.Status, timing.DurationMS = status, ended.Sub(call.started).Milliseconds()
+		if call.model != "" {
+			timing.Model = call.model
+		}
+		attrs := []any{"status", status, "duration_ms", timing.DurationMS,
 			"response_model", call.model, "usage_reported", call.reported}
 		if call.reported {
+			outputTokens := call.usage.CompletionTokens
+			timing.OutputTokens = &outputTokens
 			attrs = append(attrs, "prompt_tokens", call.usage.PromptTokens,
 				"completion_tokens", call.usage.CompletionTokens, "total_tokens", call.usage.TotalTokens)
 		}
+		call.output.apply(&timing, call.started, ended)
 		call.mu.Unlock()
+		if timing.TTFTMS != nil {
+			attrs = append(attrs, "ttft_ms", *timing.TTFTMS)
+		}
+		if timing.AfterFirstMS != nil {
+			attrs = append(attrs, "after_first_ms", *timing.AfterFirstMS)
+		}
+		if timing.MaxOutputGapMS != nil {
+			attrs = append(attrs, "max_output_gap_ms", *timing.MaxOutputGapMS)
+		}
+		if timing.OutputTokensPerSec != nil {
+			attrs = append(attrs, "output_tokens_per_second", *timing.OutputTokensPerSec)
+		}
 		if err != nil {
 			attrs = append(attrs, "error_type", fmt.Sprintf("%T", err))
 			if apiErr, ok := errors.AsType[*APIError](err); ok {
@@ -96,6 +151,9 @@ func (call *modelCallLog) finish(err error, status string) {
 			}
 		}
 		call.logger.Log(call.ctx, level, "model.call.finished", attrs...)
+		if call.observe != nil {
+			call.observe(timing)
+		}
 	})
 }
 
@@ -106,7 +164,7 @@ type modelLogStream struct {
 
 func (stream *modelLogStream) Recv() (*ChatChunk, error) {
 	chunk, err := stream.Stream.Recv()
-	stream.call.observeChunk(chunk)
+	stream.call.observeChunk(chunk, time.Now())
 	if errors.Is(err, io.EOF) {
 		stream.call.finish(nil, "completed")
 	} else if err != nil {

@@ -12,12 +12,14 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/snowmerak/q/app"
+	"github.com/snowmerak/q/client"
 	"github.com/snowmerak/q/diagnostics"
 	"github.com/snowmerak/q/internal/fsopen"
 	"github.com/snowmerak/q/internal/fsreplace"
@@ -26,12 +28,13 @@ import (
 )
 
 const (
-	studioRunsDirectory = "studio-runs"
-	studioLatestRunFile = "studio-run.json"
-	studioRunVersion    = 1
-	maximumRunEventSize = 8 << 20
-	maximumRunEventPage = 256
-	maximumRunWait      = 30 * time.Second
+	studioRunsDirectory  = "studio-runs"
+	studioLatestRunFile  = "studio-run.json"
+	studioRunVersion     = 1
+	maximumRunEventSize  = 8 << 20
+	maximumRunEventPage  = 256
+	maximumRunModelCalls = 32
+	maximumRunWait       = 30 * time.Second
 )
 
 type controlledSessionRunner interface {
@@ -61,6 +64,8 @@ type studioRunSnapshot struct {
 	CreatedAt       time.Time          `json:"created_at"`
 	UpdatedAt       time.Time          `json:"updated_at"`
 	FinishedAt      *time.Time         `json:"finished_at,omitempty"`
+
+	ModelCalls []client.ModelCallTiming `json:"model_calls,omitempty"`
 }
 
 type studioRunEvent struct {
@@ -242,6 +247,12 @@ func (service *sessionRunService) execute(run *studioRun, prompt string) {
 	run.cancel = cancel
 	run.mu.Unlock()
 	defer cancel()
+	runContext = client.WithModelCallObserver(runContext, func(timing client.ModelCallTiming) {
+		event := app.SessionEvent{Type: "model_call", RunID: run.snapshot.ID, ModelCall: &timing}
+		if err := run.append(event); err != nil {
+			logger.Warn("studio.model_timing.persistence_failed", "model_call_id", timing.ID, "error_type", fmt.Sprintf("%T", err))
+		}
+	})
 	var emitFailures []error
 	var emitMu sync.Mutex
 	toolCalls := diagnostics.NewToolCalls("studio.tool")
@@ -480,6 +491,7 @@ func loadLatestStudioRun(root string, store workspace.Store) (*studioRun, error)
 	run := &studioRun{root: root, store: store, snapshot: snapshot, notify: make(chan struct{}), closed: true}
 	run.snapshot.Status, run.snapshot.Outcome, run.snapshot.Error = "queued", "", ""
 	run.snapshot.PendingQuestion, run.snapshot.FinishedAt, run.snapshot.Cursor = nil, nil, 0
+	run.snapshot.ModelCalls = nil
 	run.logBytes, err = readStudioRunEvents(run.logPath(), func(event studioRunEvent, offset int64) {
 		run.eventOffsets = append(run.eventOffsets, offset)
 		run.snapshot.Cursor, run.snapshot.UpdatedAt = event.Cursor, event.At
@@ -659,6 +671,14 @@ func (run *studioRun) applyEventLocked(event app.SessionEvent, now time.Time) {
 	case "context_usage":
 		run.snapshot.ContextUsed = max(0, event.ContextUsed)
 		run.snapshot.ContextSize = max(0, event.ContextSize)
+	case "model_call":
+		if event.ModelCall != nil {
+			calls := run.snapshot.ModelCalls
+			if len(calls) == maximumRunModelCalls {
+				calls = calls[1:]
+			}
+			run.snapshot.ModelCalls = append(calls, *event.ModelCall)
+		}
 	case "result":
 		run.snapshot.Outcome = event.Outcome
 		run.snapshot.PendingQuestion = nil
@@ -720,6 +740,7 @@ func (run *studioRun) snapshotCopy() studioRunSnapshot {
 	run.mu.Lock()
 	defer run.mu.Unlock()
 	result := run.snapshot
+	result.ModelCalls = slices.Clone(result.ModelCalls)
 	if run.snapshot.PendingQuestion != nil {
 		question := *run.snapshot.PendingQuestion
 		question.Choices = append([]app.AgentQuestionChoice(nil), question.Choices...)
@@ -738,6 +759,7 @@ func (run *studioRun) page(after int64, limit int) (studioRunPage, error) {
 		limit = maximumRunEventPage
 	}
 	result := studioRunPage{Run: run.snapshot, Events: make([]studioRunEvent, 0, limit), NextCursor: after}
+	result.Run.ModelCalls = slices.Clone(result.Run.ModelCalls)
 	if run.snapshot.PendingQuestion != nil {
 		question := *run.snapshot.PendingQuestion
 		question.Choices = append([]app.AgentQuestionChoice(nil), question.Choices...)
@@ -801,7 +823,10 @@ func (run *studioRun) wait(after int64, duration time.Duration, ctx context.Cont
 }
 
 func (run *studioRun) persistSnapshotLocked() error {
-	body, err := json.MarshalIndent(run.snapshot, "", "  ")
+	snapshot := run.snapshot
+	// Call timings are stored in the event journal and rebuilt during replay.
+	snapshot.ModelCalls = nil
+	body, err := json.MarshalIndent(snapshot, "", "  ")
 	if err != nil {
 		return err
 	}

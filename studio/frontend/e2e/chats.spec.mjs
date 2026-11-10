@@ -32,13 +32,21 @@ test('create a personal chat without selecting a workspace, reload it, and delet
   await expect(page).toHaveURL(new RegExp(`/sessions/${chat.registration_id}$`));
   await expect(page.getByRole('dialog')).toHaveCount(0);
   const composer = page.getByPlaceholder('Message Q…');
-  await composer.fill('controlled finish');
+  await composer.fill('show reasoning controlled finish');
   await page.getByRole('button', { name: 'Send message', exact: true }).click();
   await expect(page.getByPlaceholder('Message Q…')).toBeVisible();
   await expect(page.locator('.session-root.active')).toContainText('Personal chat');
+  const modelTiming = page.getByText('Model timing', { exact: true });
+  await expect(modelTiming).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Stop turn', exact: true })).toHaveCount(0);
   await page.reload();
   await expect(page.locator('.session-root.active')).toContainText('Personal chat');
   await expect(page.locator('.chat-panel')).toContainText('controlled finish');
+  await modelTiming.click();
+  const calls = page.getByRole('list', { name: 'Recent streaming model calls in this turn' });
+  await expect(calls).toContainText('TTFT');
+  await expect(calls).toContainText('Max gap');
+  await expect(calls).toContainText('tok/s');
   for (const width of [1440, 390]) {
     await page.setViewportSize({ width, height: 900 });
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);

@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"math"
 	"net/http"
 	"strings"
@@ -203,6 +204,7 @@ func estimateJSONTokens(value any, items, perItem int) int {
 type usageStream struct {
 	inner           Stream
 	client          *Client
+	call            *modelCallLog
 	request         ChatRequest
 	model           string
 	usage           Usage
@@ -226,6 +228,10 @@ func (s *usageHeaderStream) ResponseHeaders() http.Header {
 
 func (s *usageStream) Recv() (*ChatChunk, error) {
 	chunk, err := s.inner.Recv()
+	if s.call != nil && errors.Is(err, io.EOF) {
+		// Usage persistence runs synchronously after the stream has ended.
+		s.call.observeCompletion(time.Now())
+	}
 	if chunk != nil {
 		s.observe(chunk)
 	}

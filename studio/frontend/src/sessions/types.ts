@@ -50,6 +50,18 @@ export type RunEvent = {
   context_size?: number;
 };
 export type RunQuestion = { call_id: string; question: string; context?: string; choices?: { id: string; label: string; description?: string }[] };
+export type ModelCallTiming = {
+  model_call_id: string;
+  model: string;
+  usage_role: string;
+  status: string;
+  duration_ms: number;
+  ttft_ms?: number;
+  after_first_ms?: number;
+  max_output_gap_ms?: number;
+  output_tokens?: number;
+  output_tokens_per_second?: number;
+};
 export type RunSnapshot = {
   id: string;
   session_id: string;
@@ -59,6 +71,7 @@ export type RunSnapshot = {
   pending_question?: RunQuestion;
   context_used?: number;
   context_size?: number;
+  model_calls?: ModelCallTiming[];
   cursor: number;
 };
 export type RunEventEnvelope = { cursor: number; at: string; event: RunEvent };

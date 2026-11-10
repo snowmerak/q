@@ -13,6 +13,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -295,6 +296,10 @@ func studioTestModel(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		if strings.Contains(text, "show reasoning") {
 			_, _ = io.WriteString(w, "data: {\"choices\":[{\"index\":0,\"delta\":{\"reasoning_content\":\"Inspecting the request before taking action.\"}}]}\n\n")
+			if flusher, ok := w.(http.Flusher); ok {
+				flusher.Flush()
+			}
+			time.Sleep(25 * time.Millisecond)
 		}
 		calls := []map[string]any{}
 		for i, call := range message.ToolCalls {
@@ -427,14 +432,33 @@ func TestStudioRealRuntimeReportsResponseUsage(t *testing.T) {
 		t.Fatalf("run failed: %#v", page.Run)
 	}
 	resultUsageFound := false
+	var modelCalls []client.ModelCallTiming
+	timedOutputFound := false
 	for _, record := range page.Events {
 		if record.Event.Type == "result" {
 			usage := record.Event.Usage
 			resultUsageFound = usage != nil && usage.InputTokens == 2048 && usage.OutputTokens == 96 && usage.CachedTokens != nil && *usage.CachedTokens == 1536
 		}
+		if record.Event.Type == "model_call" && record.Event.ModelCall != nil {
+			call := *record.Event.ModelCall
+			modelCalls = append(modelCalls, call)
+			if call.ID != "" && call.Status == "completed" && call.TTFTMS != nil && call.AfterFirstMS != nil && call.OutputTokens != nil && *call.OutputTokens == 96 {
+				timedOutputFound = true
+			}
+		}
 	}
 	if !resultUsageFound {
 		t.Fatal("result event omitted provider usage")
+	}
+	if !timedOutputFound || len(modelCalls) < 3 || !reflect.DeepEqual(page.Run.ModelCalls, modelCalls) {
+		t.Fatalf("run did not surface model timings: journal=%+v run=%+v", modelCalls, page.Run.ModelCalls)
+	}
+	reloaded, err := loadLatestStudioRun(fixture.root, fixture.session)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(reloaded.snapshot.ModelCalls, modelCalls) {
+		t.Fatalf("replayed model timings differ from the journal: %+v", reloaded.snapshot.ModelCalls)
 	}
 	saved, err := fixture.session.Load()
 	if err != nil {
