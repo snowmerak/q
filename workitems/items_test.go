@@ -6,6 +6,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 func TestIssuingTicketsQueuesAssignmentInTheSourceTransaction(t *testing.T) {
@@ -162,5 +163,102 @@ func TestConcurrentRepliesHaveDistinctMonotoneSequences(t *testing.T) {
 	changes, err := s.Changes(ctx, 0, 100)
 	if err != nil || len(changes) != 34 {
 		t.Fatalf("source/outbox not committed together: %d %v", len(changes), err)
+	}
+}
+
+func TestIssueDeletionRequiresLinkedTicketsToEndAndPreventsTheirRetry(t *testing.T) {
+	s := openTestStore(t, t.TempDir())
+	ctx := t.Context()
+	w, err := s.CreateWorkspace(ctx, WorkspaceInput{Name: "Issue lifecycle", WorkspaceRoots: []string{t.TempDir()}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	issue, err := s.CreateItem(ctx, CreateInput{WorkspaceID: w.ID, Kind: Issue, Title: "Plan", Content: "Evidence", Author: "user"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ticket, err := s.CreateItem(ctx, CreateInput{WorkspaceID: w.ID, Kind: Ticket, Title: "Linked work", Content: "Inspect", Author: "user", LinkedIssueID: issue.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	deleteIssue := UpdateInput{Revision: issue.Revision, Title: issue.Title, State: issue.State, Deleted: true}
+	if _, err := s.UpdateItem(ctx, issue.ID, deleteIssue); !errors.Is(err, ErrConflict) {
+		t.Fatalf("deleted issue with queued work: %v", err)
+	}
+	current, err := s.GetItem(ctx, issue.ID)
+	if err != nil || current.Deleted || current.Revision != issue.Revision {
+		t.Fatalf("rejected deletion changed issue: %+v %v", current, err)
+	}
+	ticket, err = s.ControlTicket(ctx, ticket.ID, TicketAction{Revision: ticket.Revision, Action: "cancel"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Unrelated queued work does not prevent this issue's deletion.
+	if _, err := s.CreateItem(ctx, CreateInput{WorkspaceID: w.ID, Kind: Ticket, Title: "Unrelated", Content: "Inspect", Author: "user"}); err != nil {
+		t.Fatal(err)
+	}
+	issue, err = s.UpdateItem(ctx, issue.ID, deleteIssue)
+	if err != nil || !issue.Deleted {
+		t.Fatalf("resolved ticket prevented deletion: %+v %v", issue, err)
+	}
+	if _, err := s.ControlTicket(ctx, ticket.ID, TicketAction{Revision: ticket.Revision, Action: "retry"}); !errors.Is(err, ErrConflict) {
+		t.Fatalf("retried work linked to deleted issue: %v", err)
+	}
+	ticket, err = s.UpdateItem(ctx, ticket.ID, UpdateInput{Revision: ticket.Revision, Title: ticket.Title, State: ticket.State})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.ControlTicket(ctx, ticket.ID, TicketAction{Revision: ticket.Revision, Action: "retry"}); err != nil {
+		t.Fatalf("unlinked work cannot retry: %v", err)
+	}
+}
+
+func TestIssueDeletionRequiresRecurringTemplateAndItsRunsToEnd(t *testing.T) {
+	s := openTestStore(t, t.TempDir())
+	ctx := t.Context()
+	w, err := s.CreateWorkspace(ctx, WorkspaceInput{Name: "Recurring lifecycle", WorkspaceRoots: []string{t.TempDir()}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	issue, err := s.CreateItem(ctx, CreateInput{WorkspaceID: w.ID, Kind: Issue, Title: "Plan", Content: "Evidence", Author: "user"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	parent, err := s.CreateItem(ctx, CreateInput{WorkspaceID: w.ID, Kind: Ticket, Title: "Repeat", Content: "Inspect", Author: "user", LinkedIssueID: issue.ID, Schedule: &TicketSchedule{Every: "1m", Paused: true}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	deleteIssue := UpdateInput{Revision: issue.Revision, Title: issue.Title, State: issue.State, Deleted: true}
+	if _, err := s.UpdateItem(ctx, issue.ID, deleteIssue); !errors.Is(err, ErrConflict) {
+		t.Fatalf("paused template allowed issue deletion: %v", err)
+	}
+	parent, err = s.UpdateItem(ctx, parent.ID, UpdateInput{Revision: parent.Revision, Title: parent.Title, State: parent.State, LinkedIssueID: issue.ID, Schedule: &TicketSchedule{Every: "1m"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	page, err := s.DispatchTicketSchedules(ctx, w.ID, time.Now())
+	if err != nil || len(page.Items) != 1 {
+		t.Fatalf("dispatch: %+v %v", page, err)
+	}
+	parent, err = s.GetItem(ctx, parent.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.UpdateItem(ctx, parent.ID, UpdateInput{Revision: parent.Revision, Title: parent.Title, State: parent.State, LinkedIssueID: issue.ID, Deleted: true}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.UpdateItem(ctx, issue.ID, deleteIssue); !errors.Is(err, ErrConflict) {
+		t.Fatalf("deleted template hid its unresolved run: %v", err)
+	}
+	run := page.Items[0]
+	if _, err := s.ControlTicket(ctx, run.ID, TicketAction{Revision: run.Revision, Action: "cancel"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.UpdateItem(ctx, issue.ID, deleteIssue); err != nil {
+		t.Fatalf("ended schedule prevented deletion: %v", err)
+	}
+	page, err = s.DispatchTicketSchedules(ctx, w.ID, time.Now().Add(time.Hour))
+	if err != nil || len(page.Items) != 0 {
+		t.Fatalf("ended schedule dispatched after issue deletion: %+v %v", page, err)
 	}
 }

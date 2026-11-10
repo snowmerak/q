@@ -78,7 +78,7 @@
   async function json<T>(path: string, init?: RequestInit): Promise<T> { return (await requestResponse('/api/v1/' + path, init)).json(); }
   function write(method: string, value: unknown): RequestInit { return { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(value) }; }
   function message(cause: unknown) { error = cause instanceof Error ? cause.message : String(cause); }
-  onMount(() => { void (async () => { try { projects = (await json<{ projects: StudioProject[] }>('projects')).projects; const params = new URL(location.href).searchParams; workspaceID = projects.find(p => p.id === params.get('workspace_id'))?.id || projects[0]?.id || ''; mounted = true; await changeProject(); const id = params.get('item_id'); if (id) await selectItem(id); const postID = params.get('post_id'); if (postID) await revealPost(postID); } catch (cause) { message(cause); } })(); const timer = setInterval(() => { if (document.visibilityState === 'visible' && kind === 'ticket' && !busy && !editing && !editDetails) { void loadItems(); if (selected) void loadAttempts(selected.id); } }, 5000); return () => clearInterval(timer); });
+  onMount(() => { void (async () => { try { projects = (await json<{ projects: StudioProject[] }>('projects')).projects; const params = new URL(location.href).searchParams; workspaceID = projects.find(p => p.id === params.get('workspace_id'))?.id || projects[0]?.id || ''; mounted = true; await changeProject(); const id = params.get('item_id'); if (id) await selectItem(id); const postID = params.get('post_id'); if (postID) await revealPost(postID); } catch (cause) { message(cause); } })(); const timer = setInterval(() => { if (document.visibilityState === 'visible' && kind === 'ticket' && !busy && !loading && !editing && !editDetails) { void loadItems(false, true); if (selected) void loadAttempts(selected.id); } }, 5000); return () => clearInterval(timer); });
   async function changeProject() { selected = null; searched = false; attempts = []; diff = ''; await Promise.all([loadItems(), loadMembers()]); }
   async function loadMembers() { const id = workspaceID; if (!id) { members = []; return; } try { const value = (await json<{ members: Member[] }>(`projects/${id}/members`)).members; if (id === workspaceID) members = value; } catch (cause) { if (id === workspaceID) message(cause); } }
   async function loadAttempts(id: string) { const scope = workspaceID; try { const [value, inbox] = await Promise.all([json<{ attempts: Attempt[] }>(`work/items/${id}/attempts`), json<{ entries: { id: string; ticket_id: string; delivered: boolean; delivery_error: string; next_delivery_at?: string }[] }>(`projects/${scope}/inbox`)]); if (selected?.id !== id) return; attempts = value.attempts; deliveryErrors = inbox.entries.filter(entry => entry.ticket_id === id && !entry.delivered && entry.delivery_error); const current = items.find(i => i.id === id); if (current) selected = current; } catch (cause) { message(cause); } }
@@ -89,11 +89,23 @@
   async function openWorkspaceRole(role: 'coordinator' | 'integrator') { try { const value = await json<{ registration_id: string }>(`projects/${workspaceID}/${role}`); location.href = `/sessions/${value.registration_id}`; } catch (cause) { message(cause); } }
   async function revealPost(id: string) { const value = await json<{ post: Post; next_cursor?: string }>(`work/posts/${id}?limit=8192`); if (!posts.some(p => p.id === id)) posts = [...posts, value.post]; expanded = { ...expanded, [id]: { content: value.post.content, cursor: value.next_cursor || '' } }; }
   function permalink(post?: Post) { if (!selected) return ''; const params = new URLSearchParams({ workspace_id: selected.workspace_id, item_id: selected.id }); if (post) params.set('post_id', post.id); return `/${selected.kind === 'ticket' ? 'tickets' : 'issues'}?${params}`; }
-  async function loadItems(more = false) {
+  async function loadItems(more = false, refresh = false) {
     const generation = ++listGeneration;
     if (!workspaceID) { items = []; return; }
     loading = true;
-    try { const value = await json<{ items: Item[]; next_cursor?: string }>(`work/items?${new URLSearchParams({ workspace_id: workspaceID, kind, cursor: more ? cursor : '', limit: '100' })}`); if (generation !== listGeneration) return; items = more ? [...items, ...value.items] : value.items; cursor = value.next_cursor || ''; } catch (cause) { if (generation === listGeneration) message(cause); } finally { if (generation === listGeneration) loading = false; }
+    const target = refresh ? items.length : 0;
+    let next = more ? cursor : '';
+    let loaded: Item[] = [];
+    try {
+      do {
+        const value = await json<{ items: Item[]; next_cursor?: string }>(`work/items?${new URLSearchParams({ workspace_id: workspaceID, kind, cursor: next, limit: '100' })}`);
+        if (generation !== listGeneration) return;
+        loaded = [...loaded, ...value.items];
+        next = value.next_cursor || '';
+      } while (refresh && next && loaded.length < target);
+      items = more ? [...items, ...loaded] : loaded;
+      cursor = next;
+    } catch (cause) { if (generation === listGeneration) message(cause); } finally { if (generation === listGeneration) loading = false; }
   }
   async function selectItem(id: string, more = false) {
 	if (!more) editDetails = false;

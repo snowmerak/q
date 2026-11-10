@@ -5,6 +5,8 @@ import (
 	"errors"
 	"testing"
 	"time"
+
+	"github.com/snowmerak/q/change"
 )
 
 func TestTicketReservationReviewFeedbackAndFencing(t *testing.T) {
@@ -233,5 +235,127 @@ func TestWorkerCapacityAndLateResultsRespectStopAndMembership(t *testing.T) {
 	b, err = s.UpdateAttempt(ctx, b.ID, AttemptUpdate{Owner: b.Owner, Token: b.Token, Generation: b.Generation, Status: "awaiting_review", Result: result})
 	if err != nil || b.Status != "blocked" || b.OperationError == "" || string(b.Result) != string(result) {
 		t.Fatalf("late result after member disabled: %+v %v", b, err)
+	}
+}
+
+func TestCancellationInvalidatesReviewAndClosesPendingGitChanges(t *testing.T) {
+	for _, scenario := range []struct{ mode, stage string }{
+		{"report", "awaiting_review"},
+		{"git", "awaiting_review"},
+		{"git", "merge_queued"},
+		{"git", "running"},
+	} {
+		t.Run(scenario.mode+"/"+scenario.stage, func(t *testing.T) {
+			mode := scenario.mode
+			s := openTestStore(t, t.TempDir())
+			ctx, root := t.Context(), t.TempDir()
+			w, err := s.CreateWorkspace(ctx, WorkspaceInput{Name: "Cancel review", WorkspaceRoots: []string{root}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			m, err := s.PutMember(ctx, w.ID, MemberInput{AgentID: "builtin/research", DefinitionRoot: root, ExecutionRoot: root})
+			if err != nil {
+				t.Fatal(err)
+			}
+			issue, err := s.CreateItem(ctx, CreateInput{WorkspaceID: w.ID, Kind: Issue, Title: "Plan", Content: "Evidence", Author: "user"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			item, err := s.CreateItem(ctx, CreateInput{WorkspaceID: w.ID, Kind: Ticket, Title: "Cancel", Content: "Inspect", Author: "user", ExecutionMode: mode, LinkedIssueID: issue.ID})
+			if err != nil {
+				t.Fatal(err)
+			}
+			a, err := s.ClaimTicket(ctx, item.ID, ClaimInput{Revision: item.Revision, MemberID: m.ID, MemberRevision: m.Revision, Owner: "host", DefinitionDigest: "profile", RequestID: "claim"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			update := AttemptUpdate{Owner: a.Owner, Token: a.Token, Generation: a.Generation, Status: "awaiting_review", Result: []byte(`{"outcome":"succeeded"}`)}
+			if mode == "git" {
+				update.ChangeRequest = &change.Request{Status: change.StatusOpen, HeadCommit: "pinned-head"}
+			}
+			if scenario.stage == "running" {
+				update.Status = "running"
+				update.Result, update.ChangeRequest = nil, nil
+			}
+			a, err = s.UpdateAttempt(ctx, a.ID, update)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if scenario.stage == "merge_queued" {
+				a, err = s.ReviewAttempt(ctx, a.ID, ReviewInput{ManagerSessionID: w.ManagerSessionID, Decision: "accept", RequestID: "approve-before-cancel"})
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			item, err = s.GetItem(ctx, item.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			deleteIssue := UpdateInput{Revision: issue.Revision, Title: issue.Title, State: issue.State, Deleted: true}
+			item, err = s.ControlTicket(ctx, item.ID, TicketAction{Action: "cancel", Revision: item.Revision, RequestID: "cancel"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if mode == "git" {
+				if _, err := s.UpdateItem(ctx, issue.ID, deleteIssue); !errors.Is(err, ErrConflict) {
+					t.Fatalf("deleted issue before cancelled Git cleanup: %v", err)
+				}
+			}
+			if scenario.stage == "running" {
+				if item.ExecutionState != "stopping" {
+					t.Fatalf("worker was not stopped: %+v", item)
+				}
+				update.Status, update.Result = "awaiting_review", []byte(`{"outcome":"succeeded"}`)
+				update.ChangeRequest = &change.Request{Status: change.StatusOpen, HeadCommit: "late-pinned-head"}
+				if _, err := s.UpdateAttempt(ctx, a.ID, update); err != nil {
+					t.Fatal(err)
+				}
+				item, err = s.GetItem(ctx, item.ID)
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			for _, decision := range []string{"accept", "request_changes"} {
+				if _, err := s.ReviewAttempt(ctx, a.ID, ReviewInput{ManagerSessionID: w.ManagerSessionID, Decision: decision, Feedback: "Continue", RequestID: decision}); !errors.Is(err, ErrConflict) {
+					t.Fatalf("review %s revived cancellation: %v", decision, err)
+				}
+			}
+			if mode == "git" {
+				if item.ExecutionState != "close_queued" {
+					t.Fatalf("Git cancellation skipped cleanup: %+v", item)
+				}
+				a, err = s.ClaimMerge(ctx, a.ID, "closer")
+				if err != nil || a.Status != "closing" {
+					t.Fatalf("cancelled change can still merge: %+v %v", a, err)
+				}
+				closed := *a.ChangeRequest
+				closed.Status = change.StatusClosed
+				if _, err := s.UpdateAttempt(ctx, a.ID, AttemptUpdate{Owner: a.Owner, Token: a.Token, Generation: a.Generation, Status: "rejected", ChangeRequest: &closed}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			item, err = s.GetItem(ctx, item.ID)
+			if err != nil || item.ExecutionState != "cancelled" || item.State == "done" {
+				t.Fatalf("cancellation lost: %+v %v", item, err)
+			}
+			a, err = s.GetAttempt(ctx, a.ID)
+			if err != nil || a.Status != "cancelled" || len(a.Result) == 0 {
+				t.Fatalf("cancelled result not preserved: %+v %v", a, err)
+			}
+			issue, err = s.UpdateItem(ctx, issue.ID, deleteIssue)
+			if err != nil {
+				t.Fatalf("finished cancellation prevented issue deletion: %v", err)
+			}
+			if _, err := s.UpdateItem(ctx, issue.ID, UpdateInput{Revision: issue.Revision, Title: issue.Title, State: issue.State}); err != nil {
+				t.Fatal(err)
+			}
+			item, err = s.ControlTicket(ctx, item.ID, TicketAction{Action: "retry", Revision: item.Revision})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := s.ClaimTicket(ctx, item.ID, ClaimInput{Revision: item.Revision, MemberID: m.ID, MemberRevision: m.Revision, Owner: "retry-host", DefinitionDigest: "profile", RequestID: "retry-claim"}); err != nil {
+				t.Fatalf("explicit retry blocked: %v", err)
+			}
+		})
 	}
 }

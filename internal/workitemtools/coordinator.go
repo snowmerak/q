@@ -73,7 +73,7 @@ func registerCoordinator(server *mcp.Server, c *library.Client, b Binding) {
 		out, err := c.ListMembers(ctx, b.WorkspaceID)
 		return nil, out, err
 	})
-	for _, action := range []struct{ name, action, description string }{{"ticket_start", "queue", "Resume an inactive ticket for System One assignment. Newly issued tickets are queued automatically and do not require this call. Returns durable admission, not execution completion."}, {"ticket_retry", "retry", "Explicitly retry a blocked/unknown ticket. Saved uncertain tool or ACP outcomes remain blocked until inspected; they are never blindly replayed."}, {"ticket_cancel", "cancel", "Cancel a queued or inactive ticket. Active executions must stop before cancellation."}} {
+	for _, action := range []struct{ name, action, description string }{{"ticket_start", "queue", "Resume an inactive ticket for System One assignment. Newly issued tickets are queued automatically and do not require this call. Returns durable admission, not execution completion."}, {"ticket_retry", "retry", "Explicitly retry a blocked/unknown ticket. Saved uncertain tool or ACP outcomes remain blocked until inspected; they are never blindly replayed."}, {"ticket_cancel", "cancel", "Request cancellation of an unfinished ticket. Active executions stop first; pending Git changes close before cancellation completes. Cancelled results cannot be accepted."}} {
 		mcp.AddTool(server, &mcp.Tool{Name: action.name, Description: action.description}, func(ctx context.Context, _ *mcp.CallToolRequest, in ticketStartInput) (*mcp.CallToolResult, workitems.Item, error) {
 			if _, err := requireItem(ctx, in.ID); err != nil {
 				return nil, workitems.Item{}, err

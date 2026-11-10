@@ -370,6 +370,11 @@ func (s *Store) UpdateItem(ctx context.Context, id string, in UpdateInput) (Item
 		if item.Kind == Issue && in.State != "open" && in.State != "closed" {
 			return Item{}, ErrInvalidInput
 		}
+		if item.Kind == Issue && in.Deleted {
+			if err := requireResolvedIssueTickets(ctx, tx, item); err != nil {
+				return Item{}, err
+			}
+		}
 		// Ticket transitions belong to the coordinator's attempt/review methods.
 		if item.Kind == Ticket && in.State != item.State {
 			return Item{}, fmt.Errorf("%w: use the ticket execution/review operations to move columns", ErrInvalidInput)
@@ -420,6 +425,44 @@ func (s *Store) UpdateItem(ctx context.Context, id string, in UpdateInput) (Item
 		item.UpdatedAt = time.Now().UTC()
 		return item, saveItem(ctx, tx, item)
 	})
+}
+
+// Deletion and ticket transitions share a transaction owner, so an issue cannot
+// disappear while linked work or a recurring template can still execute.
+func requireResolvedIssueTickets(ctx context.Context, tx *sql.Tx, issue Item) error {
+	var unresolved bool
+	err := tx.QueryRowContext(ctx, `SELECT EXISTS(
+ SELECT 1 FROM items AS ticket
+ LEFT JOIN ticket_attempts AS attempt ON attempt.id=json_extract(ticket.payload,'$.active_attempt_id')
+ WHERE ticket.workspace_id=? AND ticket.kind='ticket'
+ AND json_extract(ticket.payload,'$.linked_issue_id')=?
+ AND coalesce(json_extract(ticket.payload,'$.deleted'),0)=0
+ AND (
+   (json_extract(ticket.payload,'$.state')<>'done' AND coalesce(json_extract(ticket.payload,'$.execution_state'),'') NOT IN ('cancelled','rejected'))
+   OR json_extract(attempt.payload,'$.status') IN ('reserved','running','merging','closing')
+   OR (json_extract(attempt.payload,'$.change_request') IS NOT NULL AND coalesce(json_extract(attempt.payload,'$.change_request.status'),'') NOT IN ('merged','closed'))
+ ) LIMIT 1)`, issue.WorkspaceID, issue.ID).Scan(&unresolved)
+	if err != nil {
+		return err
+	}
+	if unresolved {
+		return fmt.Errorf("%w: finish or cancel all linked tickets and resolve their Git changes before deleting this issue; recurring templates must be removed", ErrConflict)
+	}
+	return nil
+}
+
+func requireTicketIssue(ctx context.Context, tx *sql.Tx, item Item) error {
+	if item.LinkedIssueID == "" {
+		return nil
+	}
+	issue, err := decodeRow[Item](tx.QueryRowContext(ctx, `SELECT payload FROM items WHERE id=? AND workspace_id=? AND kind='issue'`, item.LinkedIssueID, item.WorkspaceID))
+	if err != nil {
+		return err
+	}
+	if issue.Deleted {
+		return fmt.Errorf("%w: restore or unlink the deleted issue before executing this ticket", ErrConflict)
+	}
+	return nil
 }
 
 func (s *Store) AddPost(ctx context.Context, itemID string, in PostInput) (Post, error) {

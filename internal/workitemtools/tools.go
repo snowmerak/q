@@ -148,7 +148,11 @@ func Register(server *mcp.Server, client *library.Client, binding Binding) {
 			out, err := client.AddPost(ctx, in.ID, workitems.PostInput{Content: in.Content, Author: actor, Refs: in.Refs, ReplyToPostID: in.ReplyToPostID, RequestID: in.RequestID})
 			return nil, out, err
 		})
-		mcp.AddTool(server, &mcp.Tool{Name: kind + "_update", Description: "Edit thread metadata with the expected revision. Ticket column changes use execution/review tools."}, func(ctx context.Context, _ *mcp.CallToolRequest, in updateInput) (*mcp.CallToolResult, workitems.Item, error) {
+		updateDescription := "Edit thread metadata with the expected revision. Ticket column changes use execution/review tools."
+		if kind == workitems.Issue {
+			updateDescription += " Deletion requires all linked tickets to be completed, cancelled, rejected or deleted, with Git changes resolved. Remove recurring templates and end their issued runs first."
+		}
+		mcp.AddTool(server, &mcp.Tool{Name: kind + "_update", Description: updateDescription}, func(ctx context.Context, _ *mcp.CallToolRequest, in updateInput) (*mcp.CallToolResult, workitems.Item, error) {
 			item, err := requireItem(ctx, in.ID, kind, false)
 			if err != nil {
 				return nil, item, err

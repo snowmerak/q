@@ -235,6 +235,9 @@ func (s *Store) ControlTicket(ctx context.Context, id string, in TicketAction) (
 		}
 		switch in.Action {
 		case "queue", "retry":
+			if err := requireTicketIssue(ctx, tx, item); err != nil {
+				return Item{}, err
+			}
 			if err := requireExclusiveScheduleRun(ctx, tx, item); err != nil {
 				return Item{}, err
 			}
@@ -255,22 +258,32 @@ func (s *Store) ControlTicket(ctx context.Context, id string, in TicketAction) (
 			item.ExecutionReason = in.Reason
 			item.NextAssignmentAt = time.Now().UTC().Add(time.Minute)
 		case "cancel":
+			if item.State == "done" {
+				return Item{}, fmt.Errorf("%w: completed tickets cannot be cancelled", ErrConflict)
+			}
 			if item.ExecutionState == "merging" || item.ExecutionState == "closing" {
 				return Item{}, fmt.Errorf("%w: Git review operation is already running", ErrConflict)
 			}
-			if item.ExecutionState == "running" || item.ExecutionState == "reserved" || item.ExecutionState == "stopping" {
+			item.ExecutionState = "cancelled"
+			if item.ActiveAttemptID != "" {
 				a, err := decodeRow[Attempt](tx.QueryRowContext(ctx, `SELECT payload FROM ticket_attempts WHERE id=?`, item.ActiveAttemptID))
 				if err != nil {
 					return Item{}, err
 				}
 				a.StopRequested = true
+				a.UpdatedAt = time.Now().UTC()
+				if a.Status == "reserved" || a.Status == "running" {
+					item.ExecutionState = "stopping"
+				} else {
+					// Invalidate pending review/merge approval with the cancellation.
+					a.Status = cancelledAttemptStatus(a)
+					a.Decision, a.DecisionID = "", ""
+					item.ExecutionState = a.Status
+				}
 				if err := saveAttempt(ctx, tx, a, false); err != nil {
 					return Item{}, err
 				}
-				item.ExecutionState = "stopping"
-				return touchTicket(ctx, tx, item)
 			}
-			item.ExecutionState = "cancelled"
 			item.ExecutionReason = in.Reason
 		default:
 			return Item{}, ErrInvalidInput
@@ -297,6 +310,9 @@ func (s *Store) ClaimTicket(ctx context.Context, id string, in ClaimInput) (Atte
 		}
 		if !TicketReadyAt(item, time.Now()) {
 			return Attempt{}, fmt.Errorf("%w: ticket is not eligible at this time", ErrConflict)
+		}
+		if err := requireTicketIssue(ctx, tx, item); err != nil {
+			return Attempt{}, err
 		}
 		if err := requireExclusiveScheduleRun(ctx, tx, item); err != nil {
 			return Attempt{}, err
@@ -466,6 +482,21 @@ func (s *Store) UpdateAttempt(ctx context.Context, id string, in AttemptUpdate) 
 	if !allowed {
 		return Attempt{}, ErrConflict
 	}
+	// A stopped worker may still return a pinned worktree. Close it through the
+	// existing Git operation before releasing cancellation or recurring runs.
+	if a.StopRequested && (a.Status == "reserved" || a.Status == "running") && status != "running" && status != a.Status {
+		cancelled := a
+		if in.ChangeRequest != nil {
+			cancelled.ChangeRequest = in.ChangeRequest
+		}
+		status = cancelledAttemptStatus(cancelled)
+	}
+	if a.StopRequested && a.Status == "closing" && status == "rejected" {
+		if in.ChangeRequest == nil || in.ChangeRequest.Status != change.StatusClosed {
+			return Attempt{}, fmt.Errorf("%w: cancellation requires the Git change request to be closed", ErrInvalidInput)
+		}
+		status = "cancelled"
+	}
 	previousStatus := a.Status
 	if status == "accepted" && (in.ChangeRequest == nil || in.ChangeRequest.Status != "merged" || in.ChangeRequest.MergedCommit == "") {
 		return Attempt{}, ErrInvalidInput
@@ -479,7 +510,7 @@ func (s *Store) UpdateAttempt(ctx context.Context, id string, in AttemptUpdate) 
 	if in.ChangeRequest != nil {
 		a.ChangeRequest = in.ChangeRequest
 	}
-	if status == "merge_failed" || status == "close_failed" || status == "accepted" || status == "rejected" {
+	if status == "merge_failed" || status == "close_failed" || status == "accepted" || status == "rejected" || status == "cancelled" {
 		a.OperationError = in.OperationError
 	}
 	if err := saveAttempt(ctx, tx, a, false); err != nil {
@@ -506,6 +537,13 @@ func (s *Store) UpdateAttempt(ctx context.Context, id string, in AttemptUpdate) 
 		}
 	}
 	return a, tx.Commit()
+}
+
+func cancelledAttemptStatus(a Attempt) string {
+	if a.ChangeRequest != nil && !a.ChangeRequest.Final() {
+		return "close_queued"
+	}
+	return "cancelled"
 }
 
 func putInbox(ctx context.Context, tx *sql.Tx, a Attempt) error {
@@ -624,8 +662,11 @@ func (s *Store) ReviewAttempt(ctx context.Context, id string, in ReviewInput) (A
 		if err != nil {
 			return Attempt{}, err
 		}
-		if item.ActiveAttemptID != id || (a.Status != "awaiting_review" && a.Status != "blocked" && a.Status != "failed" && a.Status != "unknown" && a.Status != "merge_failed" && a.Status != "close_failed") {
+		if item.ExecutionState == "cancelled" || item.ActiveAttemptID != id || (a.Status != "awaiting_review" && a.Status != "blocked" && a.Status != "failed" && a.Status != "unknown" && a.Status != "merge_failed" && a.Status != "close_failed") {
 			return Attempt{}, ErrConflict
+		}
+		if a.StopRequested && in.Decision != "reject" {
+			return Attempt{}, fmt.Errorf("%w: cancelled work can only finish closing its Git change request", ErrConflict)
 		}
 		a.Decision = in.Decision
 		a.DecisionID = in.RequestID
@@ -777,7 +818,7 @@ func (s *Store) ClaimMerge(ctx context.Context, id, owner string) (Attempt, erro
 	if err := requireWorkspace(ctx, tx, a.WorkspaceID); err != nil {
 		return Attempt{}, err
 	}
-	if (a.Status != "merge_queued" && a.Status != "close_queued") || item.ActiveAttemptID != a.ID {
+	if (a.Status != "merge_queued" && a.Status != "close_queued") || item.ActiveAttemptID != a.ID || item.ExecutionState != a.Status {
 		return Attempt{}, ErrConflict
 	}
 	a.Owner = owner
