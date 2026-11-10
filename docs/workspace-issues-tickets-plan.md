@@ -523,9 +523,11 @@ Each Studio workspace now reserves two protected sessions. Coordinator receives
 requests, writes issue plans and issues tickets; Integrator receives attempt
 notifications, reviews pinned results, requests changes and approves merges.
 System One's assignment to joined subagents is unchanged. Coordinator cannot use
-`ticket_review`, and the source rejects its ID as a review actor. This does not
-add an automatic ticket dependency scheduler: dependent implementation tickets
-must be issued after the required planning result is available.
+`ticket_review`, and the source rejects its ID as a review actor. This did not
+originally add an automatic ticket dependency scheduler. The subsequent
+[ticket dependency implementation](ticket-dependencies.md) now supports
+`depends_on`: dependent tickets may be issued together and wait until every
+prerequisite reaches `done`.
 
 Schema 6 preserves the original `manager_session_id` as Integrator, adding a
 stable `coordinator_session_id` for active and archived workspaces. Coordinator

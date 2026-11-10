@@ -100,6 +100,38 @@ func TestWorkspaceSourceToolsAndRetiredLearning(t *testing.T) {
 	if err := json.Unmarshal(encoded, &ticket); err != nil || ticket.ExecutionState != "queued" || ticket.State != "todo" {
 		t.Fatalf("MCP ticket was not automatically admitted: %s %v", encoded, err)
 	}
+	prerequisite := ticket
+	result, err = session.CallTool(t.Context(), &mcp.CallToolParams{Name: "ticket_create", Arguments: map[string]any{
+		"title": "Dependent work", "content": "Use the accepted research", "depends_on": []string{prerequisite.ID},
+	}})
+	if err != nil || result.IsError {
+		t.Fatalf("dependent MCP create: %+v %v", result, err)
+	}
+	encoded, err = json.Marshal(result.StructuredContent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var dependent workitems.Item
+	if err := json.Unmarshal(encoded, &dependent); err != nil || len(dependent.DependsOn) != 1 || dependent.DependsOn[0] != prerequisite.ID {
+		t.Fatalf("MCP dependencies lost: %s %v", encoded, err)
+	}
+	for _, clear := range []bool{false, true} {
+		args := map[string]any{"id": dependent.ID, "revision": dependent.Revision, "title": dependent.Title, "state": dependent.State, "labels": []string{}}
+		if clear {
+			args["depends_on"] = []string{}
+		}
+		result, err = session.CallTool(t.Context(), &mcp.CallToolParams{Name: "ticket_update", Arguments: args})
+		if err != nil || result.IsError {
+			t.Fatalf("dependent MCP update: %+v %v", result, err)
+		}
+		dependent, err = client.GetItem(t.Context(), dependent.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if clear && len(dependent.DependsOn) != 0 || !clear && (len(dependent.DependsOn) != 1 || len(dependent.WaitingOn) != 1) {
+			t.Fatalf("dependency presence was not preserved: %+v", dependent)
+		}
+	}
 	start := time.Now().Add(time.Hour).UTC().Truncate(time.Second)
 	result, err = session.CallTool(t.Context(), &mcp.CallToolParams{Name: "ticket_create", Arguments: map[string]any{
 		"title": "Scheduled research", "content": "Collect news", "execution_mode": "report",

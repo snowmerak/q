@@ -56,6 +56,7 @@ func (s *Store) ListTicketQueue(ctx context.Context, workspaceID, queue, token s
 	args := []any{workspaceID, c.After, c.Upper}
 	if queue == "assignment" {
 		query += ` AND ` + assignmentDue + `<=julianday(?)`
+		query += ` AND NOT EXISTS(` + unmetDependencies + `)`
 		args = append(args, stamp(time.Now()))
 	}
 	limit = pageLimit(limit)

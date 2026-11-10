@@ -314,6 +314,9 @@ func (s *Store) ClaimTicket(ctx context.Context, id string, in ClaimInput) (Atte
 		if err := requireTicketIssue(ctx, tx, item); err != nil {
 			return Attempt{}, err
 		}
+		if err := requireReadyDependencies(ctx, tx, item.ID); err != nil {
+			return Attempt{}, err
+		}
 		if err := requireExclusiveScheduleRun(ctx, tx, item); err != nil {
 			return Attempt{}, err
 		}

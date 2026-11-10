@@ -99,6 +99,17 @@ func TestTicketNativeWorkerFeedbackAndPinnedMerge(t *testing.T) {
 		t.Fatal(err)
 	}
 	var previous workitems.Attempt
+	dependent, err := c.CreateItem(ctx, workitems.CreateInput{WorkspaceID: project.ID, Kind: workitems.Ticket, Title: "Use merged note", Content: "Inspect child.txt after the merge", Author: "user", DependsOn: []string{item.ID}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertDependentWaiting := func() {
+		t.Helper()
+		current, err := c.GetItem(ctx, dependent.ID)
+		if err != nil || len(current.WaitingOn) != 1 || current.WaitingOn[0] != item.ID || current.ActiveAttemptID != "" {
+			t.Fatalf("dependent started before the source recorded a successful merge: %+v %v", current, err)
+		}
+	}
 	for index, content := range []string{"first", "revised"} {
 		if index == 0 {
 			item, err = c.ControlTicket(ctx, item.ID, workitems.TicketAction{Action: "queue", Revision: item.Revision})
@@ -154,6 +165,7 @@ func TestTicketNativeWorkerFeedbackAndPinnedMerge(t *testing.T) {
 			t.Fatal(err)
 		}
 		previous = a
+		assertDependentWaiting()
 	}
 	manager := gitwork.Manager{Root: filepath.Join(host.store.Dir, "worktrees")}
 	diff, err := manager.Read(ctx, *previous.ChangeRequest)
@@ -163,6 +175,7 @@ func TestTicketNativeWorkerFeedbackAndPinnedMerge(t *testing.T) {
 	if _, err := c.ReviewAttempt(ctx, previous.ID, workitems.ReviewInput{ManagerSessionID: project.ManagerSessionID, Decision: "accept", RequestID: "merge"}); err != nil {
 		t.Fatal(err)
 	}
+	assertDependentWaiting()
 	a, err := c.ClaimMerge(ctx, previous.ID, "merge-owner")
 	if err != nil {
 		t.Fatal(err)
@@ -171,12 +184,17 @@ func TestTicketNativeWorkerFeedbackAndPinnedMerge(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	assertDependentWaiting()
 	if _, err := c.UpdateAttempt(ctx, a.ID, workitems.AttemptUpdate{Owner: a.Owner, Token: a.Token, Generation: a.Generation, Status: "accepted", ChangeRequest: &request}); err != nil {
 		t.Fatal(err)
 	}
 	item, err = c.GetItem(context.Background(), item.ID)
 	if err != nil || item.State != "done" {
 		t.Fatalf("final ticket %+v %v", item, err)
+	}
+	ready, err := c.ListTicketQueue(ctx, project.ID, "assignment", "", 100)
+	if err != nil || len(ready.Items) != 1 || ready.Items[0].ID != dependent.ID {
+		t.Fatalf("successful merge did not release dependent: %+v %v", ready, err)
 	}
 	body, err := os.ReadFile(filepath.Join(root, "child.txt"))
 	if err != nil || string(body) != "revised" {

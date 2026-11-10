@@ -209,7 +209,7 @@ func (e *Engine) scan(ctx context.Context) (returnErr error) {
 }
 
 func needsAssignment(item workitems.Item) bool {
-	return !item.Deleted && workitems.TicketReadyAt(item, time.Now()) && (item.ExecutionState == "queued" || item.ExecutionState == "assignment_waiting" ||
+	return !item.Deleted && len(item.WaitingOn) == 0 && workitems.TicketReadyAt(item, time.Now()) && (item.ExecutionState == "queued" || item.ExecutionState == "assignment_waiting" ||
 		(item.ExecutionState == "" && item.State == "todo" && item.ActiveAttemptID == ""))
 }
 
@@ -297,6 +297,9 @@ func (e *Engine) execute(project workitems.Workspace, item workitems.Item) (retu
 	prompt := fmt.Sprintf("Workspace %s (%s)\nTicket #%d: %s\nTicket ID: %s; body post: %s\nExecution mode: %s\nAcceptance criteria:\n%s\n\nBody excerpt:\n%s\n\nRead the ticket and source posts through the workspace tools when more context is needed. Record findings and lessons as issue comments. Complete with evidence and a structured result for the workspace manager.", project.Name, project.ID, item.Number, item.Title, item.ID, item.BodyPostID, item.ExecutionMode, excerptBytes(strings.Join(item.Acceptance, "\n"), 8000), excerptBytes(body.Post.Content, 12000))
 	if attempt.Feedback != "" {
 		prompt += "\n\nManager feedback:\n" + excerptBytes(attempt.Feedback, 4000)
+	}
+	if len(item.DependsOn) > 0 {
+		prompt += "\n\nCompleted prerequisite ticket IDs:\n" + strings.Join(item.DependsOn, "\n") + "\nRead their results and source posts through the ticket tools before continuing dependent work."
 	}
 	if attempt.PreviousStatus == "unknown" || attempt.PreviousStatus == "cancelled" {
 		prompt += "\n\nA previous attempt may have produced side effects with an unknown result. Do not replay pending operations or assume failure. Inspect saved outcomes and the current workspace before deciding what remains."

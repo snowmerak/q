@@ -49,6 +49,6 @@ unknown runs require resolution rather than automatic replay. Skipped intervals
 do not accumulate a backlog. Editing a template does not rewrite earlier runs.
 
 Assignment, due schedules and unresolved runs use partial SQLite indexes; the
-sweep does not deserialize completed ticket history. Catalog schema version 8
+sweep does not deserialize completed ticket history. Catalog schema version 9
 prevents older coordinators from opening it and ignoring the new start/pause
 constraints. Existing unscheduled tickets retain their automatic assignment.

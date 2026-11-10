@@ -22,6 +22,8 @@ const (
 
 // Item contains thread metadata; its body lives only in the referenced Post.
 type Item struct {
+	DependsOn         []string        `json:"depends_on,omitempty"`
+	WaitingOn         []string        `json:"waiting_on,omitempty"`
 	ID                string          `json:"id"`
 	WorkspaceID       string          `json:"workspace_id"`
 	Kind              string          `json:"kind"`
@@ -68,6 +70,7 @@ type Post struct {
 }
 
 type CreateInput struct {
+	DependsOn         []string        `json:"depends_on,omitempty"`
 	Schedule          *TicketSchedule `json:"schedule,omitempty"`
 	WorkspaceID       string          `json:"workspace_id"`
 	Kind              string          `json:"kind"`
@@ -84,6 +87,7 @@ type CreateInput struct {
 }
 
 type UpdateInput struct {
+	DependsOn         *[]string       `json:"depends_on,omitempty"`
 	Schedule          *TicketSchedule `json:"schedule,omitempty"`
 	Revision          int64           `json:"revision"`
 	Title             string          `json:"title"`
@@ -240,6 +244,7 @@ func mutate[T any](ctx context.Context, s *Store, workspaceID, operation, reques
 }
 
 func saveItem(ctx context.Context, tx *sql.Tx, item Item) error {
+	item.WaitingOn = nil
 	body, err := json.Marshal(item)
 	if err != nil {
 		return err
@@ -287,6 +292,9 @@ func decodeRow[T any](row *sql.Row) (T, error) {
 }
 
 func (s *Store) CreateItem(ctx context.Context, in CreateInput) (Item, error) {
+	if in.Kind != Ticket && len(in.DependsOn) > 0 {
+		return Item{}, fmt.Errorf("%w: only tickets support dependencies", ErrInvalidInput)
+	}
 	in.Title = strings.TrimSpace(in.Title)
 	if !validKind(in.Kind) || in.Title == "" || len(in.Title) > 512 || !validItemText(in.Labels, in.Acceptance) {
 		return Item{}, ErrInvalidInput
@@ -344,11 +352,16 @@ func createItemTx(ctx context.Context, tx *sql.Tx, in CreateInput, scheduleID st
 	if err := savePost(ctx, tx, post, true); err != nil {
 		return Item{}, err
 	}
+	if in.Kind == Ticket {
+		if err := setTicketDependencies(ctx, tx, &item, in.DependsOn, true); err != nil {
+			return Item{}, err
+		}
+	}
 	return item, saveItem(ctx, tx, item)
 }
 
 func (s *Store) GetItem(ctx context.Context, id string) (Item, error) {
-	return decodeRow[Item](s.db.QueryRowContext(ctx, `SELECT payload FROM items WHERE id=?`, id))
+	return decodeRow[Item](s.db.QueryRowContext(ctx, `SELECT `+itemReadPayload+` FROM items WHERE id=?`, id))
 }
 
 func (s *Store) UpdateItem(ctx context.Context, id string, in UpdateInput) (Item, error) {
@@ -415,6 +428,21 @@ func (s *Store) UpdateItem(ctx context.Context, id string, in UpdateInput) (Item
 				return Item{}, err
 			}
 			if err := applyTicketSchedule(&item, schedule, time.Now().UTC()); err != nil {
+				return Item{}, err
+			}
+			if schedule != nil && schedule.Every != "" {
+				if err := requireNoUnfinishedDependents(ctx, tx, item); err != nil {
+					return Item{}, err
+				}
+			}
+		}
+		if in.DependsOn != nil {
+			if err := setTicketDependencies(ctx, tx, &item, *in.DependsOn, false); err != nil {
+				return Item{}, err
+			}
+		}
+		if item.Kind == Ticket && in.Deleted && item.State != "done" {
+			if err := requireNoUnfinishedDependents(ctx, tx, item); err != nil {
 				return Item{}, err
 			}
 		}
@@ -596,7 +624,7 @@ func (s *Store) ListItems(ctx context.Context, workspaceID, kind, token string, 
 			return ItemPage{}, err
 		}
 	}
-	query := `SELECT seq,payload FROM items WHERE seq>? AND seq<=? AND kind=?`
+	query := `SELECT seq,` + itemReadPayload + ` FROM items WHERE seq>? AND seq<=? AND kind=?`
 	args := []any{c.After, c.Upper, kind}
 	if workspaceID != "" {
 		query += ` AND workspace_id=?`

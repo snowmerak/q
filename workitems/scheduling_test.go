@@ -143,7 +143,7 @@ func TestSchedulingQueuesUseIndexesAndFollowPayloadTransitions(t *testing.T) {
 			t.Fatalf("query missed partial index %s: %v", index, details)
 		}
 	}
-	assertPlan(`SELECT payload FROM items INDEXED BY ticket_assignment_queue_v2 WHERE `+assignmentQueue+` AND workspace_id=? AND seq>? AND seq<=? AND `+assignmentDue+`<=julianday(?) ORDER BY seq LIMIT 101`, "SEARCH items USING INDEX ticket_assignment_queue_v2", p.ID, 0, 10000, stamp(time.Now()))
+	assertPlan(`SELECT payload FROM items INDEXED BY ticket_assignment_queue_v2 WHERE `+assignmentQueue+` AND workspace_id=? AND seq>? AND seq<=? AND `+assignmentDue+`<=julianday(?) AND NOT EXISTS(`+unmetDependencies+`) ORDER BY seq LIMIT 101`, "SEARCH items USING INDEX ticket_assignment_queue_v2", p.ID, 0, 10000, stamp(time.Now()))
 	assertPlan(`SELECT payload FROM items INDEXED BY ticket_merge_queue WHERE `+mergeQueue+` AND workspace_id=? AND seq>? ORDER BY seq LIMIT 101`, "SEARCH items USING INDEX ticket_merge_queue", p.ID, 0)
 	assertPlan(`SELECT id FROM items INDEXED BY ticket_schedule_due WHERE `+recurringScheduleQueue+` AND workspace_id=? AND julianday(json_extract(payload,'$.next_scheduled_at'))<=julianday(?) ORDER BY julianday(json_extract(payload,'$.next_scheduled_at')),seq LIMIT 100`, "SEARCH items USING INDEX ticket_schedule_due", p.ID, stamp(time.Now()))
 	assertPlan(`SELECT EXISTS(SELECT 1 FROM items INDEXED BY ticket_schedule_runs WHERE `+pendingScheduleRun+` AND json_extract(payload,'$.schedule_id')=? LIMIT 1)`, "SEARCH items USING INDEX ticket_schedule_runs", "schedule")

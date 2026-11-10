@@ -34,16 +34,16 @@ existence alone does not prove ownership.
   coordinator/                       # OS locks for ticket/review operations
 ```
 
-SQLite schema version 6 stores workspace metadata/roots, source items/posts,
+SQLite schema version 9 stores workspace metadata/roots, source items/posts,
 immutable revisions, mutation receipts, the indexing outbox, projection cursors,
-member references, attempts and manager inbox events. Legacy
+member references, attempts, ticket dependency edges and manager inbox events. Legacy
 `library/studio-projects.json` is imported once, transactionally, preserving
 project IDs and timestamps. Its original file is retained as a backup. Project
 removal archives metadata and preserves source records and conversations.
 
 HTTP is loopback-only and unauthenticated; another local process is inside this
 trust boundary. The former Library authentication settings are ignored and
-omitted on save. Gateway authentication is separate. Protocol version 10 checks
+omitted on save. Gateway authentication is separate. Protocol version 13 checks
 service identity, readiness and configuration-directory filesystem identity.
 An incompatible process or a different configuration directory using the same
 port is reported instead of replaced. Stop older Q processes before upgrading;
@@ -182,7 +182,8 @@ Each workspace reserves two independent conversations:
 - **Coordinator** receives requests, records requirements and plans in issues,
   and creates actionable tickets with acceptance criteria and explicit execution
   modes. System One still selects from joined subagents. Planning and dependent
-  implementation must be issued in order; there is no ticket dependency scheduler.
+  implementation tickets may be issued together using prerequisite relationships;
+  implementation waits for the required planning tickets to reach `done`.
 - **Integrator** receives worker result notifications, reviews the pinned changes,
   requests rework or accepts/rejects results, and authorizes merges.
 
@@ -227,6 +228,11 @@ worktree/MR closure. Feedback is stored as a searchable ticket reply and queues
 another checked assignment to the original member.
 
 ## Native and ACP tools
+
+Ticket execution honors prerequisite relationships configured in Studio's
+**Prerequisite tickets** field or `depends_on` in `ticket_create/update`.
+See [Ticket dependencies](ticket-dependencies.md) for completion, editing,
+recurring-ticket and compatibility rules.
 
 The same workspace source tools are registered for native Q and `q-library` MCP:
 

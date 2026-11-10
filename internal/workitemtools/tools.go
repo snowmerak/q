@@ -18,6 +18,7 @@ type Binding struct {
 	EmbeddingConnection string
 }
 type createInput struct {
+	DependsOn         []string                  `json:"depends_on,omitempty" jsonschema:"Prerequisite ticket IDs in this workspace, all of which must reach done before this ticket can run. Independent tickets can run concurrently. Recurring templates are not valid prerequisites."`
 	Schedule          *workitems.TicketSchedule `json:"schedule,omitempty" jsonschema:"Optional ticket-only schedule: not_before is an RFC3339 instant; every is a Go duration of at least 1m, such as 30m or 24h. Empty every executes once. Repeating schedules issue independent run tickets."`
 	Title             string                    `json:"title"`
 	Content           string                    `json:"content"`
@@ -49,6 +50,7 @@ type replyInput struct {
 	RequestID     string   `json:"request_id,omitempty"`
 }
 type updateInput struct {
+	DependsOn         *[]string                 `json:"depends_on,omitempty" jsonschema:"Omit to preserve dependencies; use [] to clear them. Editable before first execution or on recurring templates. Self references and cycles are rejected."`
 	Schedule          *workitems.TicketSchedule `json:"schedule,omitempty" jsonschema:"Omit to preserve scheduling; use an empty object to remove it or paused:true to suspend it. Schedules can change before execution or on recurring templates."`
 	ID                string                    `json:"id"`
 	Revision          int64                     `json:"revision"`
@@ -117,7 +119,7 @@ func Register(server *mcp.Server, client *library.Client, binding Binding) {
 			if binding.WorkspaceID == "" {
 				return nil, workitems.Item{}, errors.New("select a Studio project before creating work items")
 			}
-			out, err := client.CreateItem(ctx, workitems.CreateInput{Schedule: in.Schedule, WorkspaceID: binding.WorkspaceID, Kind: kind, Title: in.Title, Content: in.Content, Labels: in.Labels, Acceptance: in.Acceptance, ExecutionMode: in.ExecutionMode, RequestedMemberID: in.RequestedMemberID, LinkedIssueID: in.LinkedIssueID, Author: actor, Refs: in.Refs, RequestID: in.RequestID})
+			out, err := client.CreateItem(ctx, workitems.CreateInput{DependsOn: in.DependsOn, Schedule: in.Schedule, WorkspaceID: binding.WorkspaceID, Kind: kind, Title: in.Title, Content: in.Content, Labels: in.Labels, Acceptance: in.Acceptance, ExecutionMode: in.ExecutionMode, RequestedMemberID: in.RequestedMemberID, LinkedIssueID: in.LinkedIssueID, Author: actor, Refs: in.Refs, RequestID: in.RequestID})
 			return nil, out, err
 		})
 		mcp.AddTool(server, &mcp.Tool{Name: kind + "_list", Description: "List " + kind + " threads using a source snapshot cursor. all:true explicitly searches all workspaces.", Annotations: readOnly}, func(ctx context.Context, _ *mcp.CallToolRequest, in listInput) (*mcp.CallToolResult, workitems.ItemPage, error) {
@@ -166,7 +168,7 @@ func Register(server *mcp.Server, client *library.Client, binding Binding) {
 			if in.LinkedIssueID != nil {
 				item.LinkedIssueID = *in.LinkedIssueID
 			}
-			out, err := client.UpdateItem(ctx, in.ID, workitems.UpdateInput{Schedule: in.Schedule, Revision: in.Revision, Title: in.Title, State: in.State, Labels: in.Labels, Deleted: in.Deleted, Acceptance: item.Acceptance, RequestedMemberID: item.RequestedMemberID, LinkedIssueID: item.LinkedIssueID, ExecutionMode: in.ExecutionMode, RequestID: in.RequestID})
+			out, err := client.UpdateItem(ctx, in.ID, workitems.UpdateInput{DependsOn: in.DependsOn, Schedule: in.Schedule, Revision: in.Revision, Title: in.Title, State: in.State, Labels: in.Labels, Deleted: in.Deleted, Acceptance: item.Acceptance, RequestedMemberID: item.RequestedMemberID, LinkedIssueID: item.LinkedIssueID, ExecutionMode: in.ExecutionMode, RequestID: in.RequestID})
 			return nil, out, err
 		})
 	}
