@@ -97,6 +97,9 @@ func (s *sessionsService) serveWorkMembers(w http.ResponseWriter, r *http.Reques
 
 func (s *sessionsService) serveTicketWorker(w http.ResponseWriter, r *http.Request) {
 	workResponse(s, w, r, 200, func(ctx context.Context, c *library.Client) (library.WorkerPage, error) {
+		if r.URL.Query().Get("latest") == "true" {
+			return c.ReadLatestWorker(ctx, r.PathValue("attempt"), 20)
+		}
 		return c.ReadWorker(ctx, r.PathValue("attempt"), r.URL.Query().Get("cursor"), 20)
 	})
 }

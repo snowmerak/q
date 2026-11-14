@@ -72,3 +72,43 @@ test('ticket reports and feedback render as Markdown while retaining raw result 
   await page.waitForResponse(r => r.url().endsWith(`/work/items/${item.id}/attempts`));
   await expect(details).toHaveJSProperty('open', true);
 });
+
+test('an assigned ticket shows worker checkpoints while the attempt runs', async ({ page, request }) => {
+  const project = (await (await request.get('/api/v1/projects')).json()).projects.find(p => p.name === 'Integration');
+  const response = await request.post('/api/v1/work/items', { data: {
+    workspace_id: project.id, kind: 'ticket', title: 'Watch worker', content: 'Inspect the project.',
+    schedule: { paused: true }
+  } });
+  expect(response.ok()).toBe(true);
+  const item = { ...await response.json(), active_attempt_id: 'live-attempt', execution_state: 'running' };
+  let status = 'running';
+  let checkpoint = { messages: [] };
+  let reads = 0;
+  await page.route('**/api/v1/work/items?*', route => route.fulfill({ json: { items: [item] } }));
+  await page.route(`**/api/v1/work/items/${item.id}/posts?*`, route => route.fulfill({ json: { item, posts: [] } }));
+  await page.route(`**/api/v1/work/items/${item.id}/attempts`, route => route.fulfill({
+    json: { attempts: [{ id: 'live-attempt', ticket_id: item.id, status, worker_session_id: 'worker' }] }
+  }));
+  await page.route('**/api/v1/work/attempts/live-attempt/worker?latest=true', route => {
+    reads++;
+    return route.fulfill({ json: checkpoint });
+  });
+  await page.clock.install();
+  await page.goto(`/tickets?workspace_id=${project.id}&item_id=${item.id}`);
+  const activity = page.getByRole('region', { name: 'Worker conversation' });
+  await expect(activity.getByText('Waiting for the first worker update…')).toBeVisible();
+  checkpoint = { messages: [{ index: 21, role: 'assistant', content: 'Checking the implementation.' }], running_call: { name: 'read_file' } };
+  await page.clock.fastForward(5000);
+  await expect(activity.getByText('Checking the implementation.')).toBeVisible();
+  await expect(activity.getByRole('status')).toHaveText('Running tool read_file');
+
+  status = 'awaiting_review';
+  checkpoint = { messages: [{ index: 22, role: 'assistant', content: 'Review ready.' }] };
+  await page.clock.fastForward(5000);
+  await expect(page.locator('.work-thread details > summary').filter({ hasText: 'live-attempt' })).toContainText('awaiting_review');
+  await expect(activity.getByText('Review ready.')).toBeVisible();
+  await expect(activity.getByText('Running tool')).toHaveCount(0);
+  const readsAfterCompletion = reads;
+  await page.clock.fastForward(10_000);
+  expect(reads).toBe(readsAfterCompletion);
+});

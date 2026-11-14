@@ -59,7 +59,11 @@ export type ModelCallTiming = {
   ttft_ms?: number;
   after_first_ms?: number;
   max_output_gap_ms?: number;
+  input_tokens?: number;
   output_tokens?: number;
+  total_tokens?: number;
+  cached_tokens?: number;
+  cache_hit_rate?: number;
   output_tokens_per_second?: number;
 };
 export type RunSnapshot = {

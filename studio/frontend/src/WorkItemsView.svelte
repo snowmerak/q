@@ -1,18 +1,18 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { Check, ChevronDown, ChevronsDown, CircleCheck, CircleDot, CircleX, ClipboardList, FileText, GitCompareArrows, GitMerge, Link2, MessageSquareReply, MessagesSquare, Pencil, Plus, RefreshCw, RotateCcw, Save, Search, Send, Settings2, SlidersHorizontal, X } from '@lucide/svelte';
+  import { Check, ChevronDown, ChevronsDown, CircleCheck, CircleDot, CircleX, ClipboardList, FileText, GitCompareArrows, GitMerge, Link2, MessageSquareReply, Pencil, Plus, RefreshCw, RotateCcw, Save, Search, Send, Settings2, SlidersHorizontal, X } from '@lucide/svelte';
   import { requestResponse } from './api';
   import Markdown from './Markdown.svelte';
   import AttemptResult from './workitems/AttemptResult.svelte';
   import TicketScheduleFields from './workitems/TicketScheduleFields.svelte';
   import TicketDependencies from './workitems/TicketDependencies.svelte';
+  import WorkerConversation from './workitems/WorkerConversation.svelte';
   import { emptyScheduleDraft, scheduleDraft, scheduleInput, scheduleTime, type TicketSchedule } from './workitems/schedule';
   import type { StudioProject } from './sessions/types';
   export let kind: 'issue' | 'ticket' = 'issue';
   type Item = { depends_on?: string[]; waiting_on?: string[]; schedule?: TicketSchedule; schedule_id?: string; scheduled_for?: string; next_scheduled_at?: string; id: string; workspace_id: string; kind: string; number: number; title: string; body_post_id: string; state: string; labels: string[]; acceptance?: string[]; execution_mode?: string; requested_member_id?: string; linked_issue_id?: string; execution_state?: string; execution_reason?: string; active_attempt_id?: string; assigned_member_id?: string; revision: number; deleted: boolean; updated_at: string };
   type Member = { id: string; workspace_id: string; agent_id: string; definition_root: string; execution_root: string; revision: number; disabled: boolean };
   type Attempt = { id: string; ticket_id: string; status: string; worker_session_id: string; member_id: string; acceptance?: string[]; result?: unknown; feedback?: string; operation_error?: string; change_request?: { head_commit?: string; base_commit?: string; status: string } };
-  type WorkerMessage = { index: number; role: string; content: string; name?: string; truncated?: boolean; tool_calls?: { id: string; name: string; arguments: string; truncated?: boolean }[] };
   type Post = { id: string; item_id: string; kind: string; content: string; content_truncated?: boolean; author: string; refs?: string[]; revision: number; deleted: boolean; created_at: string };
   type Hit = { item_id: string; post_id: string; workspace_id: string; title: string; snippet: string; revision: number; offset: number };
   const executionGuidance: Record<string, string> = {
@@ -52,7 +52,6 @@
   let deliveryErrors: { id: string; delivery_error: string; next_delivery_at?: string }[] = [];
   let feedback = '';
   let diff = '';
-  let workerPages: Record<string, { messages: WorkerMessage[]; cursor: string; unknown: string }> = {};
   let filters = '';
   let stateFilter = '';
   let createRequestID = crypto.randomUUID();
@@ -88,7 +87,6 @@
   async function controlTicket(action: string) { if (!selected) return; busy = true; error = ''; try { selected = await json<Item>(`work/items/${selected.id}/control`, write('POST', { action, revision: selected.revision, request_id: crypto.randomUUID() })); await loadItems(); await loadAttempts(selected.id); } catch (cause) { message(cause); } finally { busy = false; } }
   async function review(attempt: Attempt, decision: string) { busy = true; error = ''; try { await json(`work/attempts/${attempt.id}/review`, write('POST', { decision, feedback, request_id: crypto.randomUUID() })); feedback = ''; await loadItems(); await loadAttempts(attempt.ticket_id); } catch (cause) { message(cause); } finally { busy = false; } }
   async function readDiff(attempt: Attempt) { try { const value = await json<{ patch: string; truncated?: boolean }>(`work/attempts/${attempt.id}/change`); diff = value.patch + (value.truncated ? '\n[diff truncated]' : ''); } catch (cause) { message(cause); } }
-  async function readWorker(attempt: Attempt, more = false) { try { const previous = workerPages[attempt.id]; const value = await json<{ messages: WorkerMessage[]; next_cursor?: string; running_call?: unknown; unknown_tools?: unknown[] }>(`work/attempts/${attempt.id}/worker?cursor=${encodeURIComponent(more ? previous?.cursor || '' : '')}`); workerPages = { ...workerPages, [attempt.id]: { messages: more ? [...previous.messages, ...value.messages] : value.messages, cursor: value.next_cursor || '', unknown: value.running_call || value.unknown_tools?.length ? JSON.stringify({ running: value.running_call, unknown: value.unknown_tools }, null, 2) : '' } }; } catch (cause) { message(cause); } }
   async function openWorkspaceRole(role: 'coordinator' | 'integrator') { try { const value = await json<{ registration_id: string }>(`projects/${workspaceID}/${role}`); location.href = `/sessions/${value.registration_id}`; } catch (cause) { message(cause); } }
   async function revealPost(id: string) { const value = await json<{ post: Post; next_cursor?: string }>(`work/posts/${id}?limit=8192`); if (!posts.some(p => p.id === id)) posts = [...posts, value.post]; expanded = { ...expanded, [id]: { content: value.post.content, cursor: value.next_cursor || '' } }; }
   function permalink(post?: Post) { if (!selected) return ''; const params = new URLSearchParams({ workspace_id: selected.workspace_id, item_id: selected.id }); if (post) params.set('post_id', post.id); return `/${selected.kind === 'ticket' ? 'tickets' : 'issues'}?${params}`; }
@@ -201,11 +199,14 @@
       {#if selected.kind === 'ticket'}
         <section aria-label="Ticket execution">{#each deliveryErrors as notification}<p role="status">Integrator notification pending: {notification.delivery_error}{notification.next_delivery_at ? ` · retry after ${new Date(notification.next_delivery_at).toLocaleTimeString()}` : ""}</p>{/each}<h3>Execution · {executionLabel(selected.execution_state, selected)}</h3>{#if selected.execution_reason}<p role="status">{selected.execution_reason}</p>{/if}{#if selected.schedule?.every}<p>Run assignment: {members.find(m => m.id === selected?.requested_member_id)?.agent_id || 'System One selects'}</p>{:else}<p>Assigned member: {members.find(m => m.id === selected?.assigned_member_id)?.agent_id || 'Unassigned'}</p>{/if}
           {#if selected.state !== 'done' && ['cancelled','blocked','failed','unknown','rejected'].includes(selected.execution_state || '')}<button class="secondary-button work-icon-button" disabled={busy} onclick={() => controlTicket('retry')} title="Retry execution" aria-label="Retry execution"><RotateCcw aria-hidden="true" size={17} /></button>{/if}
-          {#each attempts as attempt (attempt.id)}<details open={openAttempts[attempt.id] ?? (attempt.id === selected.active_attempt_id)} ontoggle={event => {
+          {#each attempts.filter(attempt => attempt.ticket_id === selected?.id) as attempt (attempt.id)}
+          {@const open = openAttempts[attempt.id] ?? (attempt.id === selected.active_attempt_id)}
+          <details {open} ontoggle={event => {
             const open = event.currentTarget.open;
             if (openAttempts[attempt.id] !== open) openAttempts = { ...openAttempts, [attempt.id]: open };
-          }}><summary>{attempt.status} · {attempt.id}</summary><p>Worker: <code>{attempt.worker_session_id}</code></p><button class="secondary-button work-icon-button" onclick={() => readWorker(attempt)} title="Read worker conversation" aria-label="Read worker conversation"><MessagesSquare aria-hidden="true" size={17} /></button>{#if attempt.result}<AttemptResult result={attempt.result} />{/if}{#if attempt.feedback}<section class="work-prose" aria-label="Integrator feedback"><h4>Integrator feedback</h4><Markdown content={attempt.feedback} /></section>{/if}{#if attempt.operation_error}<p role="status">{attempt.operation_error}</p>{/if}
-            {#if workerPages[attempt.id]}<section aria-label="Worker conversation">{#if workerPages[attempt.id].unknown}<pre>{workerPages[attempt.id].unknown}</pre>{/if}{#each workerPages[attempt.id].messages as message}<article class="worker-message"><strong>{message.role} {message.name || ''} · message {message.index}</strong>{#if message.role === 'user' || message.role === 'assistant'}<div class="work-prose"><Markdown content={message.content} /></div>{:else}<pre>{message.content}</pre>{/if}{#if message.truncated}<p class="preview-note">Message preview truncated.</p>{/if}{#each message.tool_calls || [] as call}<pre>{call.name} ({call.id})\n{call.arguments}{call.truncated ? '\n[arguments truncated]' : ''}</pre>{/each}</article>{/each}{#if workerPages[attempt.id].cursor}<button class="secondary-button work-icon-button" onclick={() => readWorker(attempt, true)} title="More worker messages" aria-label="More worker messages"><ChevronDown aria-hidden="true" size={17} /></button>{/if}</section>{/if}
+          }}><summary>{attempt.status} · {attempt.id}</summary><p>Worker: <code>{attempt.worker_session_id}</code></p>
+            {#if open}<WorkerConversation attemptID={attempt.id} live={['reserved', 'running'].includes(attempt.status)} />{/if}
+            {#if attempt.result}<AttemptResult result={attempt.result} />{/if}{#if attempt.feedback}<section class="work-prose" aria-label="Integrator feedback"><h4>Integrator feedback</h4><Markdown content={attempt.feedback} /></section>{/if}{#if attempt.operation_error}<p role="status">{attempt.operation_error}</p>{/if}
             {#if attempt.change_request}<p>Pinned base: <code>{attempt.change_request.base_commit}</code><br />Pinned head: <code>{attempt.change_request.head_commit || 'Working'}</code></p>{#if attempt.change_request.head_commit}<button class="secondary-button work-icon-button" onclick={() => readDiff(attempt)} title="Read change request" aria-label="Read change request"><GitCompareArrows aria-hidden="true" size={17} /></button>{/if}{/if}
             {#if attempt.id === selected.active_attempt_id && ['awaiting_review','blocked','failed','unknown','merge_failed','close_failed'].includes(attempt.status)}<label>Review feedback<textarea aria-label="Ticket review feedback" bind:value={feedback} rows="3"></textarea></label><div class="work-action-group">{#if ['awaiting_review','merge_failed'].includes(attempt.status)}<button class="secondary-button work-icon-button" onclick={() => review(attempt, 'accept')} disabled={busy} title={attempt.change_request ? 'Accept and merge' : 'Accept result'} aria-label={attempt.change_request ? 'Accept and merge' : 'Accept result'}>{#if attempt.change_request}<GitMerge aria-hidden="true" size={17} />{:else}<Check aria-hidden="true" size={17} />{/if}</button>{/if}<button class="secondary-button work-icon-button" onclick={() => review(attempt, 'request_changes')} disabled={busy || !feedback.trim()} title="Request changes" aria-label="Request changes"><MessageSquareReply aria-hidden="true" size={17} /></button><button class="secondary-button work-icon-button danger" onclick={() => review(attempt, 'reject')} disabled={busy} title="Reject result" aria-label="Reject result"><CircleX aria-hidden="true" size={17} /></button></div>{/if}
           </details>{/each}{#if diff}<pre aria-label="Ticket change diff">{diff}</pre>{/if}
@@ -289,10 +290,8 @@
   .post-content, .work-prose { min-width: 0; overflow-x: auto; }
   .work-prose h4 { margin: 16px 0 8px; color: var(--muted); font-size: var(--type-small); font-weight: 600; }
   .acceptance-criteria { display: grid; min-width: 0; gap: 8px; margin: 0; padding-left: 1.5em; }
-  .acceptance-criteria li, .worker-message { min-width: 0; }
+  .acceptance-criteria li { min-width: 0; }
   .acceptance-criteria li { overflow-wrap: anywhere; }
-  .worker-message { display: grid; gap: 10px; margin-top: 16px; }
-  .preview-note { color: var(--subtle); font-size: var(--type-small); }
   pre { max-height: 36rem; overflow: auto; padding: 16px; border: 1px solid var(--border); border-radius: 5px; background: var(--code-bg); color: var(--code-text); font-size: calc(12px * var(--text-scale)); white-space: pre-wrap; overflow-wrap: anywhere; }
   details:not(.work-filters) { margin: 12px 0; padding: 12px; border: 1px solid var(--border); border-radius: 6px; }
   .work-error { padding: 14px 16px; color: var(--error); border: 1px solid var(--error); border-radius: 6px; overflow-wrap: anywhere; }

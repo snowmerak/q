@@ -17,7 +17,11 @@ type ModelCallTiming struct {
 	TTFTMS             *int64   `json:"ttft_ms,omitempty"`
 	AfterFirstMS       *int64   `json:"after_first_ms,omitempty"`
 	MaxOutputGapMS     *int64   `json:"max_output_gap_ms,omitempty"`
+	InputTokens        *int     `json:"input_tokens,omitempty"`
 	OutputTokens       *int     `json:"output_tokens,omitempty"`
+	TotalTokens        *int     `json:"total_tokens,omitempty"`
+	CachedTokens       *int     `json:"cached_tokens,omitempty"`
+	CacheHitRate       *float64 `json:"cache_hit_rate,omitempty"`
 	OutputTokensPerSec *float64 `json:"output_tokens_per_second,omitempty"`
 }
 

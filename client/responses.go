@@ -28,17 +28,21 @@ type responseDocument struct {
 	MaxOutputTokens *int              `json:"max_output_tokens"`
 	Output          []json.RawMessage `json:"output"`
 	Usage           struct {
-		InputTokens  int `json:"input_tokens"`
-		OutputTokens int `json:"output_tokens"`
-		TotalTokens  int `json:"total_tokens"`
-		InputDetails struct {
-			CachedTokens     int `json:"cached_tokens"`
-			CacheWriteTokens int `json:"cache_write_tokens"`
-		} `json:"input_tokens_details"`
+		InputTokens   int           `json:"input_tokens"`
+		OutputTokens  int           `json:"output_tokens"`
+		TotalTokens   int           `json:"total_tokens"`
+		InputDetails  *TokenDetails `json:"input_tokens_details"`
 		OutputDetails struct {
 			ReasoningTokens int `json:"reasoning_tokens"`
 		} `json:"output_tokens_details"`
 	} `json:"usage"`
+}
+
+func (document responseDocument) tokenUsage() Usage {
+	return Usage{
+		PromptTokens: document.Usage.InputTokens, CompletionTokens: document.Usage.OutputTokens,
+		TotalTokens: document.Usage.TotalTokens, PromptDetails: document.Usage.InputDetails,
+	}
 }
 
 func responseFailureMessage(document responseDocument) string {
@@ -300,15 +304,13 @@ func parseResponseDocument(body json.RawMessage, affinity, requestedModel string
 	if message.Content == "" && len(message.ToolCalls) == 0 {
 		return nil, errors.New("client: Responses completed without text or function calls")
 	}
-	usage := Usage{PromptTokens: document.Usage.InputTokens, CompletionTokens: document.Usage.OutputTokens, TotalTokens: document.Usage.TotalTokens}
-	usage.PromptDetails = &TokenDetails{CachedTokens: document.Usage.InputDetails.CachedTokens, CacheWriteTokens: document.Usage.InputDetails.CacheWriteTokens}
 	finishReason := "stop"
 	if len(message.ToolCalls) > 0 {
 		finishReason = "tool_calls"
 	}
 	return &ChatResponse{
 		ID: document.ID, Object: "chat.completion", Model: document.Model,
-		ConversationID: affinity, Usage: usage, Raw: append(json.RawMessage(nil), body...),
+		ConversationID: affinity, Usage: document.tokenUsage(), Raw: append(json.RawMessage(nil), body...),
 		Choices: []Choice{{Index: 0, Message: message, FinishReason: finishReason}},
 	}, nil
 }

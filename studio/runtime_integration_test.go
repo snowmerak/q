@@ -442,7 +442,10 @@ func TestStudioRealRuntimeReportsResponseUsage(t *testing.T) {
 		if record.Event.Type == "model_call" && record.Event.ModelCall != nil {
 			call := *record.Event.ModelCall
 			modelCalls = append(modelCalls, call)
-			if call.ID != "" && call.Status == "completed" && call.TTFTMS != nil && call.AfterFirstMS != nil && call.OutputTokens != nil && *call.OutputTokens == 96 {
+			if call.ID != "" && call.Status == "completed" && call.TTFTMS != nil && call.AfterFirstMS != nil &&
+				call.InputTokens != nil && *call.InputTokens == 2048 && call.OutputTokens != nil && *call.OutputTokens == 96 &&
+				call.TotalTokens != nil && *call.TotalTokens == 2144 && call.CachedTokens != nil && *call.CachedTokens == 1536 &&
+				call.CacheHitRate != nil && *call.CacheHitRate == 0.75 {
 				timedOutputFound = true
 			}
 		}

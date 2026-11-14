@@ -5,6 +5,7 @@
   export let calls: ModelCallTiming[];
   const decimal = new Intl.NumberFormat(undefined, { maximumFractionDigits: 1 });
   const count = new Intl.NumberFormat();
+  const percent = new Intl.NumberFormat(undefined, { style: 'percent', maximumFractionDigits: 1 });
   $: latest = calls.at(-1);
 
   function duration(ms?: number) {
@@ -14,6 +15,10 @@
 
   function rate(tokensPerSecond?: number) {
     return tokensPerSecond === undefined ? '—' : `${decimal.format(tokensPerSecond)} tok/s`;
+  }
+
+  function tokens(value?: number) {
+    return value === undefined ? '—' : count.format(value);
   }
 </script>
 
@@ -26,6 +31,8 @@
         {#if latest.ttft_ms !== undefined}<span>TTFT {duration(latest.ttft_ms)}</span>{/if}
         <span>{latest.status === 'completed' ? 'Total' : 'Elapsed'} {duration(latest.duration_ms)}</span>
         {#if latest.output_tokens_per_second !== undefined}<span>{rate(latest.output_tokens_per_second)}</span>{/if}
+        {#if latest.total_tokens !== undefined}<span>{tokens(latest.total_tokens)} tokens</span>{/if}
+        {#if latest.cache_hit_rate !== undefined}<span>{percent.format(latest.cache_hit_rate)} cache hit</span>{/if}
       </small>
       <span class="expand"><ChevronDown size={14} aria-hidden="true" /></span>
     </summary>
@@ -42,8 +49,14 @@
             <div title="Request start to stream end or stop"><dt>{call.status === 'completed' ? 'Total' : 'Elapsed'}</dt><dd>{duration(call.duration_ms)}</dd></div>
             <div title="First model output to stream completion"><dt>After first</dt><dd>{duration(call.after_first_ms)}</dd></div>
             <div title="Longest interval between model output chunks received by Q"><dt>Max gap</dt><dd>{duration(call.max_output_gap_ms)}</dd></div>
-            <div title="Provider-reported output tokens"><dt>Output</dt><dd>{call.output_tokens === undefined ? '—' : count.format(call.output_tokens)}</dd></div>
             <div title="Provider-reported output tokens divided by the time from first output to completion"><dt>Output rate</dt><dd>{rate(call.output_tokens_per_second)}</dd></div>
+          </dl>
+          <dl aria-label="Token usage">
+            <div><dt>Input tokens</dt><dd>{tokens(call.input_tokens)}</dd></div>
+            <div><dt>Output tokens</dt><dd>{tokens(call.output_tokens)}</dd></div>
+            <div><dt>Total tokens</dt><dd>{tokens(call.total_tokens)}</dd></div>
+            <div title="Cached tokens are included in input tokens"><dt>Cached tokens</dt><dd>{tokens(call.cached_tokens)}</dd></div>
+            <div title="Cached tokens divided by input tokens"><dt>Cache hit</dt><dd>{call.cache_hit_rate === undefined ? '—' : percent.format(call.cache_hit_rate)}</dd></div>
           </dl>
         </li>
       {/each}

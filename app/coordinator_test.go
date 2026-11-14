@@ -137,6 +137,12 @@ func TestTicketNativeWorkerFeedbackAndPinnedMerge(t *testing.T) {
 		if index > 0 && a.WorkerSessionID != previous.WorkerSessionID {
 			t.Fatal("feedback changed worker session")
 		}
+		if index == 0 {
+			page, err := c.ReadLatestWorker(ctx, a.ID, 2)
+			if err != nil || page.SessionID != a.WorkerSessionID || len(page.Messages) != 0 {
+				t.Fatalf("worker before the first checkpoint: %+v %v", page, err)
+			}
+		}
 		a, err = c.UpdateAttempt(ctx, a.ID, workitems.AttemptUpdate{Owner: a.Owner, Token: a.Token, Generation: a.Generation, Status: "running"})
 		if err != nil {
 			t.Fatal(err)
@@ -159,6 +165,19 @@ func TestTicketNativeWorkerFeedbackAndPinnedMerge(t *testing.T) {
 		nextPage, err := c.ReadWorker(ctx, a.ID, workerPage.NextCursor, 1)
 		if err != nil || len(nextPage.Messages) != 1 || nextPage.Messages[0].Index != 1 {
 			t.Fatalf("worker page %+v %v", nextPage, err)
+		}
+		tail, err := c.ReadLatestWorker(ctx, a.ID, 1)
+		if err != nil || tail.RunID != a.ID || len(tail.Messages) != 1 || tail.Messages[0].Index <= nextPage.Messages[0].Index || tail.NextCursor != "" {
+			t.Fatalf("worker latest checkpoint: %+v %v", tail, err)
+		}
+		recent, err := c.ReadLatestWorker(ctx, a.ID, 20)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, message := range recent.Messages {
+			if message.Role == string(client.RoleSystem) || message.Role == string(client.RoleDeveloper) {
+				t.Fatalf("worker activity included an instruction message at index %d", message.Index)
+			}
 		}
 		a, err = c.UpdateAttempt(ctx, a.ID, workitems.AttemptUpdate{Owner: a.Owner, Token: a.Token, Generation: a.Generation, Status: "awaiting_review", Result: []byte(`{"outcome":"succeeded"}`), ChangeRequest: result.ChangeRequest})
 		if err != nil {

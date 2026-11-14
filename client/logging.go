@@ -63,7 +63,7 @@ func (call *modelCallLog) observeUsage(model string, usage Usage) {
 	call.mu.Lock()
 	defer call.mu.Unlock()
 	call.model, call.usage = model, usage
-	call.reported = usage.PromptTokens != 0 || usage.CompletionTokens != 0 || usage.TotalTokens != 0
+	call.reported = usage.PromptTokens != 0 || usage.CompletionTokens != 0 || usage.TotalTokens != 0 || usage.PromptDetails != nil
 }
 
 func (call *modelCallLog) observeChunk(chunk *ChatChunk, received time.Time) {
@@ -125,10 +125,22 @@ func (call *modelCallLog) finish(err error, status string) {
 		attrs := []any{"status", status, "duration_ms", timing.DurationMS,
 			"response_model", call.model, "usage_reported", call.reported}
 		if call.reported {
-			outputTokens := call.usage.CompletionTokens
-			timing.OutputTokens = &outputTokens
-			attrs = append(attrs, "prompt_tokens", call.usage.PromptTokens,
-				"completion_tokens", call.usage.CompletionTokens, "total_tokens", call.usage.TotalTokens)
+			inputTokens, outputTokens, totalTokens := call.usage.PromptTokens, call.usage.CompletionTokens, call.usage.TotalTokens
+			if totalTokens == 0 {
+				totalTokens = inputTokens + outputTokens
+			}
+			timing.InputTokens, timing.OutputTokens, timing.TotalTokens = &inputTokens, &outputTokens, &totalTokens
+			attrs = append(attrs, "prompt_tokens", inputTokens, "completion_tokens", outputTokens, "total_tokens", totalTokens)
+			if details := call.usage.PromptDetails; details != nil {
+				cachedTokens := max(0, details.CachedTokens)
+				timing.CachedTokens = &cachedTokens
+				attrs = append(attrs, "cached_tokens", cachedTokens)
+				if inputTokens > 0 {
+					hitRate := float64(min(cachedTokens, inputTokens)) / float64(inputTokens)
+					timing.CacheHitRate = &hitRate
+					attrs = append(attrs, "cache_hit_rate", hitRate)
+				}
+			}
 		}
 		call.output.apply(&timing, call.started, ended)
 		call.mu.Unlock()

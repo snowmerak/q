@@ -52,15 +52,10 @@ func incompleteResponse(document responseDocument, affinity, model string, raw j
 	if document.MaxOutputTokens != nil {
 		limit = *document.MaxOutputTokens
 	}
-	response := &ChatResponse{ID: document.ID, Model: model, ConversationID: affinity, Choices: []Choice{{Message: message, FinishReason: "length"}}, Usage: Usage{PromptTokens: document.Usage.InputTokens, CompletionTokens: document.Usage.OutputTokens, TotalTokens: document.Usage.TotalTokens, PromptDetails: &TokenDetails{CachedTokens: document.Usage.InputDetails.CachedTokens, CacheWriteTokens: document.Usage.InputDetails.CacheWriteTokens}}}
-	response.Raw = append(json.RawMessage(nil), raw...)
-	var presence struct {
-		Usage struct {
-			InputDetails json.RawMessage `json:"input_tokens_details"`
-		} `json:"usage"`
-	}
-	if json.Unmarshal(raw, &presence) != nil || len(presence.Usage.InputDetails) == 0 || string(presence.Usage.InputDetails) == "null" {
-		response.Usage.PromptDetails = nil
+	response := &ChatResponse{
+		ID: document.ID, Model: model, ConversationID: affinity,
+		Choices: []Choice{{Message: message, FinishReason: "length"}},
+		Usage:   document.tokenUsage(), Raw: append(json.RawMessage(nil), raw...),
 	}
 	return &IncompleteGeneration{Reason: reason, Response: response, Limit: limit, Cause: responseDiagnostic(responseFailureMessage(document))}
 }
