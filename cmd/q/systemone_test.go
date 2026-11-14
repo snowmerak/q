@@ -9,6 +9,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -251,4 +253,35 @@ func TestSystemOneKeyringReloadsWhileServing(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitStatus(http.StatusOK)
+}
+
+func TestSystemOneConfigChangedDetectsReplacementWithSameModTime(t *testing.T) {
+	directory := t.TempDir()
+	firstPath := filepath.Join(directory, "first.json")
+	secondPath := filepath.Join(directory, "second.json")
+	for _, path := range []string{firstPath, secondPath} {
+		if err := os.WriteFile(path, []byte(`{"api_keys":[]}`), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	first, err := os.Stat(firstPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(secondPath, first.ModTime(), first.ModTime()); err != nil {
+		t.Fatal(err)
+	}
+	second, err := os.Stat(secondPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !first.ModTime().Equal(second.ModTime()) {
+		t.Fatalf("modification times differ: first = %v, second = %v", first.ModTime(), second.ModTime())
+	}
+	if systemOneConfigChanged(first, first) {
+		t.Fatal("unchanged file reported as changed")
+	}
+	if !systemOneConfigChanged(first, second) {
+		t.Fatal("replacement with the same modification time was not detected")
+	}
 }
