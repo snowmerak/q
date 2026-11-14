@@ -16,12 +16,12 @@ func LocalConfig(value gateway.Config, directory string) gateway.Config {
 	for index := range value.Providers {
 		switch value.Providers[index].Type {
 		case "codex", "codex-app-server":
-			// Q persists the thread ID with its session, so the app server must
-			// retain a rollout that can be resumed after a process restart.
-			value.Providers[index].Codex.Ephemeral = new(false)
+			// Q owns conversation persistence and reconstructs lost app-server
+			// threads from its saved history after a provider restart.
+			value.Providers[index].Codex.Ephemeral = new(true)
 			if value.Providers[index].Codex.ThreadStart != nil {
 				params := maps.Clone(value.Providers[index].Codex.ThreadStart)
-				params["ephemeral"] = false
+				params["ephemeral"] = true
 				value.Providers[index].Codex.ThreadStart = params
 			}
 		case "chatgpt":

@@ -495,16 +495,17 @@ supports stateful conversations. After compaction, the loop clears its local
 conversation ID because the request context has changed; the host should use
 the ID from the terminal response rather than retaining an older value.
 
-Q's native Codex app-server routes create durable threads (`ephemeral: false`),
-including when older provider options request ephemeral threads. This runtime
+Q's native Codex app-server routes create ephemeral threads (`ephemeral: true`),
+including when older provider options request durable threads. This runtime
 policy does not rewrite `providers.json`. SessionHost, TUI and the ACP host save
 the thread ID as `session.json`'s `response_affinity.key`, qualified by the model.
 They restore it only for a currently enabled Codex route for that model.
 Assistant tool turns checkpoint the ID before dispatching tools, so a completed
-user turn is not required to retain it. The provider uses `thread/resume` after
-reopening its process. If Codex reports that the rollout no longer exists, Q
+user turn is not required to retain it. The provider reuses a loaded thread
+within the same app-server process and tries `thread/resume` after reopening
+its process. If Codex reports that the rollout no longer exists, Q
 retries once without the stale ID and injects the saved model context into a new
-durable thread; its new ID replaces the saved one. Other failures are surfaced
+ephemeral thread; its new ID replaces the saved one. Other failures are surfaced
 normally. Clearing or compacting the session drops the saved thread affinity.
 
 ## Verification checklist
