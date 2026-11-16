@@ -228,7 +228,7 @@
 {#if browsing}<DirectoryBrowser kind="project" onselect={path => { rootInput = path; browsing = false; }} onclose={() => browsing = false} />{/if}
 
 <style>
-  .projects-view { display:grid; grid-template-columns:240px minmax(0,1fr); gap:32px; max-width:1240px; margin:0 auto; align-items:start; }
+  .projects-view { display:grid; grid-template-columns:240px minmax(0,1fr); gap:32px; max-width:1240px; margin:24px auto 0; align-items:start; }
   .mobile-project-toolbar { display:none; }
   .project-list { border:1px solid var(--border); border-radius:12px; background:var(--surface); padding:16px; display:grid; gap:16px; min-width:0; }
   .list-heading,.section-heading,.project-heading,.root-row,.save-bar,.member-actions,.project-status { display:flex; align-items:center; gap:12px; }
