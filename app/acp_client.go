@@ -70,6 +70,7 @@ type acpRemoteClient struct {
 	sessionCheckpoint       *acpSessionCheckpoint
 	configOptions           []acp.SessionConfigOption
 	mcpServers              []acp.McpServer
+	libraryInstructions     string
 	libraryInstructionsSent bool
 	libraryRoleInstructions string
 	browserStore            *config.Store

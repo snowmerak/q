@@ -63,7 +63,7 @@ test('Providers groups API and ACP while Sessions chats with an ACP agent', asyn
   await expect(page.getByRole('heading', { name: 'ACP providers', exact: true })).toBeVisible();
   const card = page.locator('.integration-editor').filter({ has: page.getByRole('heading', { name: id, exact: true }) });
   await expect(card.getByLabel('Command', { exact: true })).toHaveValue(fixture.acp_executable);
-  const library = card.getByRole('checkbox', { name: /Q Library for Sessions/ });
+  const library = card.getByRole('checkbox', { name: /Q issues and tickets/ });
   await expect(library).not.toBeChecked();
   await library.check();
   await expect.poll(async () => (await (await request.get('/api/v1/settings/acp')).json()).connections[id].library).toBe(true);

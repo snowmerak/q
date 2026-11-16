@@ -6,12 +6,15 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/snowmerak/q/internal/librarymcp"
+	"github.com/snowmerak/q/internal/workitemtools"
 	"github.com/snowmerak/q/third_party/acp-go-sdk"
 )
 
 func TestACPLibraryInstructionsRetryAndReset(t *testing.T) {
 	connection := &fakeACPRemoteConnection{newSessionID: "next"}
 	remote := &acpRemoteClient{connection: connection, sessionID: "first", mcpServers: []acp.McpServer{{Stdio: &acp.McpServerStdio{Name: "q-library"}}}}
+	remote.libraryInstructions = librarymcp.InstructionsFor(workitemtools.Binding{WorkspaceID: "project", Manager: true})
 	var prompts []string
 	connection.prompt = func(_ context.Context, request acp.PromptRequest) (acp.PromptResponse, error) {
 		prompts = append(prompts, request.Prompt[0].Text.Text)
@@ -31,6 +34,9 @@ func TestACPLibraryInstructionsRetryAndReset(t *testing.T) {
 	}
 	if !strings.Contains(prompts[0], "Q Library provides") || !strings.Contains(prompts[1], "Q Library provides") || prompts[2] != "second" {
 		t.Fatalf("instructions not retried or deduplicated: %v", prompts)
+	}
+	if !strings.Contains(prompts[1], "project ID: project") || !strings.Contains(prompts[1], "ticket_review") || strings.Contains(prompts[1], "search_skills") {
+		t.Fatalf("wrong project workflow instructions: %s", prompts[1])
 	}
 	if _, err := remote.newSession(t.Context()); err != nil {
 		t.Fatal(err)

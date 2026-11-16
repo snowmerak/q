@@ -10,7 +10,7 @@ import (
 	"github.com/snowmerak/q/third_party/acp-go-sdk"
 )
 
-const acpLibraryInstructionsVersion = 6
+const acpLibraryInstructionsVersion = 7
 
 func acpLibraryServers(configDir string, configured ...workitemtools.Binding) ([]acp.McpServer, error) {
 	executable, err := os.Executable()
@@ -42,7 +42,11 @@ func (r *acpRemoteClient) libraryPrompt(content, restored string) (string, bool)
 	include := len(r.mcpServers) > 0 && !r.libraryInstructionsSent
 	prefix := restored
 	if include {
-		prefix = strings.TrimSpace(prefix + "\n\n" + librarymcp.Instructions)
+		instructions := r.libraryInstructions
+		if instructions == "" {
+			instructions = librarymcp.InstructionsFor(workitemtools.Binding{})
+		}
+		prefix = strings.TrimSpace(prefix + "\n\n" + instructions)
 		if r.libraryRoleInstructions != "" {
 			prefix += "\n\n" + r.libraryRoleInstructions
 		}

@@ -14,6 +14,7 @@ import (
 
 	"github.com/snowmerak/q/config"
 	"github.com/snowmerak/q/internal/librarymcp"
+	"github.com/snowmerak/q/internal/workitemtools"
 	"github.com/snowmerak/q/third_party/acp-go-sdk"
 	"github.com/snowmerak/q/workspace"
 )
@@ -323,7 +324,7 @@ func TestStudioACPSessionsStreamResumeAndRequireApproval(t *testing.T) {
 			}
 			isolatedPrompt := "isolated"
 			if useLibrary {
-				isolatedPrompt = librarymcp.Instructions + "\n\nCurrent request:\nisolated"
+				isolatedPrompt = librarymcp.InstructionsFor(workitemtools.Binding{}) + "\n\nCurrent request:\nisolated"
 			}
 			if isolated["session"] == calls[0]["session"] || isolated["prompt"] != isolatedPrompt {
 				t.Fatalf("ACP context leaked: %+v", isolated)

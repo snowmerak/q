@@ -22,6 +22,7 @@ import (
 	"github.com/snowmerak/q/coordinator"
 	"github.com/snowmerak/q/gitwork"
 	"github.com/snowmerak/q/internal/fsreplace"
+	"github.com/snowmerak/q/internal/librarymcp"
 	"github.com/snowmerak/q/internal/workitemtools"
 	"github.com/snowmerak/q/library"
 	"github.com/snowmerak/q/mcpconfig"
@@ -395,7 +396,8 @@ func (host *SessionHost) runACPTicket(ctx context.Context, c *library.Client, wo
 	if err != nil {
 		return result, err
 	}
-	command.mcpServers, err = acpLibraryServers(host.store.Dir, workitemtools.Binding{WorkspaceID: a.WorkspaceID, SessionID: a.WorkerSessionID, EmbeddingConnection: bridgePath})
+	binding := workitemtools.Binding{WorkspaceID: a.WorkspaceID, SessionID: a.WorkerSessionID, EmbeddingConnection: bridgePath}
+	command.mcpServers, err = acpLibraryServers(host.store.Dir, binding)
 	command.browserStore = &host.store
 	if err != nil {
 		return result, err
@@ -427,6 +429,7 @@ func (host *SessionHost) runACPTicket(ctx context.Context, c *library.Client, wo
 		return result, err
 	}
 	defer func() { returnErr = errors.Join(returnErr, remote.Close()) }()
+	remote.libraryInstructions = librarymcp.InstructionsFor(binding)
 	remote.permissions = acpPermissionReadOnly
 	if candidate.Definition.Info.MutatesWorkspace {
 		remote.permissions = acpPermissionAutomatic

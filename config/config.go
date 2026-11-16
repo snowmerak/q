@@ -157,7 +157,7 @@ type AgentConnectionConfig struct {
 	Env        map[string]string `yaml:"env,omitempty" json:"env"`
 	AuthMethod string            `yaml:"auth_method,omitempty" json:"auth_method,omitempty"`
 	Disabled   bool              `yaml:"disabled,omitempty" json:"disabled,omitempty"`
-	// Library exposes skills and workspace issue/ticket tools to ACP Sessions.
+	// Library exposes issue/ticket tools and workflow instructions to ACP Sessions.
 	Library bool `yaml:"library,omitempty" json:"library,omitempty"`
 }
 

@@ -3,6 +3,7 @@ package librarymcp
 import (
 	"encoding/json"
 	"net"
+	"strings"
 	"testing"
 	"time"
 
@@ -58,12 +59,12 @@ func TestWorkspaceSourceToolsAndRetiredLearning(t *testing.T) {
 	for _, tool := range tools.Tools {
 		names[tool.Name] = true
 	}
-	for _, name := range []string{"learn", "request_learning", "search_propositions", "get_proposition"} {
+	for _, name := range []string{"learn", "request_learning", "search_propositions", "get_proposition", "search_skills", "get_skill"} {
 		if names[name] {
 			t.Fatalf("retired tool still advertised: %s", name)
 		}
 	}
-	for _, name := range []string{"issue_create", "issue_reply", "post_get", "search_work", "search_skills", "get_skill"} {
+	for _, name := range []string{"issue_create", "issue_reply", "post_get", "search_work"} {
 		if !names[name] {
 			t.Fatalf("missing tool: %s", name)
 		}
@@ -176,9 +177,13 @@ func TestLibraryUnavailableDoesNotPreventMCPInitialization(t *testing.T) {
 }
 
 func TestReservedRoleToolCatalogs(t *testing.T) {
-	for _, role := range []string{"coordinator", "integrator"} {
+	for _, role := range []string{"unbound", "worker", "coordinator", "integrator"} {
 		t.Run(role, func(t *testing.T) {
-			session := connect(t, library.NewClient("http://127.0.0.1:1/v1", "", time.Second), workitemtools.Binding{WorkspaceID: "project", SessionID: role, Manager: role == "integrator"})
+			binding := workitemtools.Binding{SessionID: role, Manager: role == "integrator"}
+			if role != "unbound" {
+				binding.WorkspaceID = "project"
+			}
+			session := connect(t, library.NewClient("http://127.0.0.1:1/v1", "", time.Second), binding)
 			catalog, err := session.ListTools(t.Context(), nil)
 			if err != nil {
 				t.Fatal(err)
@@ -187,10 +192,29 @@ func TestReservedRoleToolCatalogs(t *testing.T) {
 			for _, tool := range catalog.Tools {
 				names[tool.Name] = true
 			}
-			for _, name := range []string{"issue_create", "ticket_create", "ticket_get", "ticket_worker_read"} {
+			for _, name := range []string{"issue_get", "ticket_get", "post_get", "search_work"} {
 				if !names[name] {
 					t.Fatalf("%s lacks %s", role, name)
 				}
+			}
+			for _, name := range []string{"issue_create", "ticket_create", "ticket_worker_read"} {
+				if names[name] != (role != "unbound") {
+					t.Fatalf("%s has incorrect project access: %s=%t", role, name, names[name])
+				}
+			}
+			wantCount := 21
+			switch role {
+			case "unbound":
+				wantCount = 6
+			case "integrator":
+				wantCount = 23
+			}
+			if len(names) != wantCount || names["search_skills"] || names["get_skill"] {
+				t.Fatalf("unexpected %s catalog: %v", role, names)
+			}
+			instructions := session.InitializeResult().Instructions
+			if instructions != InstructionsFor(binding) || strings.Contains(instructions, "ticket_review") != binding.Manager {
+				t.Fatalf("wrong %s instructions: %s", role, instructions)
 			}
 			for _, name := range []string{"manager_inbox", "ticket_review"} {
 				if names[name] != (role == "integrator") {

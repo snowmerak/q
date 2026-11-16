@@ -16,6 +16,7 @@ import (
 	"github.com/snowmerak/q/config"
 	"github.com/snowmerak/q/coordinator"
 	"github.com/snowmerak/q/internal/fsreplace"
+	"github.com/snowmerak/q/internal/librarymcp"
 	"github.com/snowmerak/q/internal/workitemtools"
 	"github.com/snowmerak/q/workspace"
 )
@@ -52,8 +53,8 @@ func (host *SessionHost) prepareACPSession(ctx context.Context, prepared *prepar
 		return nil, err
 	}
 	command.browserStore = &host.store
+	binding := workitemtools.Binding{SessionID: prepared.store.SessionID}
 	if connection.Library || prepared.executionRoot != prepared.store.Root {
-		binding := workitemtools.Binding{SessionID: prepared.store.SessionID}
 		binding.EmbeddingConnection, err = host.workEmbeddingConnection()
 		if err != nil {
 			return nil, err
@@ -83,11 +84,16 @@ func (host *SessionHost) prepareACPSession(ctx context.Context, prepared *prepar
 		workspaceID = prepared.projectContext.ProjectID
 		integrator = prepared.projectContext.Role == coordinator.RoleIntegrator
 	}
+	catalogVersion := 0
+	if len(command.mcpServers) > 0 {
+		catalogVersion = acpLibraryInstructionsVersion
+	}
 	mcpBinding, err := json.Marshal(struct {
 		Enabled                bool
 		WorkspaceID, SessionID string
 		Manager                bool
-	}{len(command.mcpServers) > 0, workspaceID, prepared.store.SessionID, integrator})
+		CatalogVersion         int `json:",omitempty"`
+	}{len(command.mcpServers) > 0, workspaceID, prepared.store.SessionID, integrator, catalogVersion})
 	if err != nil {
 		return nil, err
 	}
@@ -138,6 +144,7 @@ func (host *SessionHost) prepareACPSession(ctx context.Context, prepared *prepar
 		}
 	}
 	remote.sessionCheckpoint = &checkpoint
+	remote.libraryInstructions = librarymcp.InstructionsFor(binding)
 	if prepared.projectContext != nil {
 		remote.libraryRoleInstructions = coordinator.RoleInstructions(prepared.projectContext.Role)
 	}

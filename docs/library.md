@@ -243,9 +243,18 @@ The same workspace source tools are registered for native Q and `q-library` MCP:
 
 The host binds workspace and actor; tool arguments cannot select another write
 scope or impersonate a manager. Explicit global reads do not grant cross-project
-writes. `search_skills`/`get_skill` continue to expose global skills through MCP.
-Ordinary ACP connections opt in using **Q Library for Sessions**. Managers and
-ticket workers always receive their required workspace tools.
+writes. ACP MCP does not expose skill tools; external agents discover their shared
+skills directly. Sessions without a project receive six global read tools; project
+sessions receive 21 tools, and Integrators receive 23 including review operations.
+Ordinary ACP connections opt in using **Q issues and tickets**. Reserved project
+sessions and ticket workers always receive their required workspace tools.
+
+Project-specific workflow and role instructions accompany MCP initialization and
+the first ACP prompt. ACP has no separate system-prompt field, so Q prepends these
+instructions once per remote session, retries them after a failed prompt and
+refreshes them when their version changes. A catalog change reconnects foreground
+sessions and restores completed conversation context. Git acceptance authorizes
+Q to merge the pinned commit locally; remote pushes remain separate.
 
 ```text
 q library mcp --config-dir <directory> --workspace-id <id> --session-id <id> [--manager]

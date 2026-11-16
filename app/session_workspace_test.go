@@ -129,6 +129,35 @@ func TestManagerNativeContextAndRootChanges(t *testing.T) {
 	}
 }
 
+func TestManagerACPOperationHonorsSelectedAgent(t *testing.T) {
+	host, _, project, store := testManagerHost(t)
+	if err := store.SaveSessionModelConfig(workspace.SessionModelConfig{Agent: "wire"}); err != nil {
+		t.Fatal(err)
+	}
+	host.factory = func(config.Config) (chatClient, error) {
+		return nil, fmt.Errorf("selected ACP agent was bypassed")
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	var answer string
+	options := SessionOptions{OperationID: "review-one", Control: NewSessionRunControl()}
+	if err := host.RunWithOptions(ctx, store, store.SessionID, "review the worker result", options, func(event SessionEvent) error {
+		if event.Type == "result" {
+			answer = event.Content
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(answer, project.WorkspaceRoots[0]) || !strings.Contains(answer, "role="+coordinator.RoleIntegrator) {
+		t.Fatalf("ACP operation lost project role or directory: %s", answer)
+	}
+	live := host.liveSessions[liveSessionKey(store, store.SessionID)]
+	if _, ok := live.prepared.client.(*acpRemoteClient); !ok {
+		t.Fatal("manager operation did not use ACP")
+	}
+}
+
 func TestManagerACPUsesProjectCWDAndResumesUntilClear(t *testing.T) {
 	for _, role := range []string{coordinator.RoleCoordinator, coordinator.RoleIntegrator} {
 		t.Run(role, func(t *testing.T) {
