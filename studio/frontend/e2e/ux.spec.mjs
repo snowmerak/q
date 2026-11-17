@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect } from './test.mjs';
 
 test('overview starts a chat once, resumes it, and opens workspace and provider setup', async ({ page, request }) => {
   await page.goto('/');

@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect } from './test.mjs';
 
 test('provider API mode initializes once and model Chat override survives reload', async ({ page, request }, testInfo) => {
   const errors = [];

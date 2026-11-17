@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect } from './test.mjs';
 
 test('ticket prerequisites survive creation and editing, expose cancellation waits, and reject cycles', async ({ page, request }, testInfo) => {
   const errors = [];

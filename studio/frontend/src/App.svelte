@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { uiStateError, uiStorage } from './uiStorage';
   import { Activity, CircleDot, CircleHelp, Files, Folders, GitCompareArrows, House, Kanban, Layers, Settings } from '@lucide/svelte';
   import { onMount } from 'svelte';
   import ChangesView from './ChangesView.svelte';
@@ -53,7 +54,7 @@
   function toggleSidebar() {
     sidebarCollapsed = !sidebarCollapsed;
     try {
-      localStorage.setItem('q-studio-sidebar-collapsed', String(sidebarCollapsed));
+      uiStorage.setItem('q-studio-sidebar-collapsed', String(sidebarCollapsed));
     } catch {
       // Keep the toggle usable when browser storage is unavailable.
     }
@@ -76,7 +77,7 @@
   function openWorkspaceChanges(workspaceRoot: string) {
     const root = workspaceRoot.trim();
     if (!root) return;
-    localStorage.setItem('q-studio-workspace-root', root);
+    uiStorage.setItem('q-studio-workspace-root', root);
     activeView = 'changes';
     const url = new URL(window.location.href);
     url.pathname = '/changes';
@@ -102,7 +103,7 @@
 
   onMount(() => {
     try {
-      sidebarCollapsed = localStorage.getItem('q-studio-sidebar-collapsed') !== 'false';
+      sidebarCollapsed = uiStorage.getItem('q-studio-sidebar-collapsed') !== 'false';
     } catch {
       // Use the collapsed default when browser storage is unavailable.
     }
@@ -169,6 +170,8 @@
     <header class="page-header">
       <div><h1>{activeView === 'projects' ? 'Projects' : activeView === 'issues' ? 'Issues' : activeView === 'tickets' ? 'Tickets' : activeView === 'settings' ? 'Settings' : activeView === 'sessions' ? 'Sessions' : activeView === 'councils' ? 'Councils' : activeView === 'composers' ? 'Composer' : activeView === 'files' ? 'Files' : activeView === 'changes' ? 'Changes' : activeView === 'operations' ? 'Operations' : activeView === 'help' ? 'Help' : 'Studio overview'}</h1>{#if activeView === 'projects'}<p class="page-description">Workspace directories, subagents, and execution limits.</p>{:else if activeView === 'issues'}<p class="page-description">Project knowledge, decisions, and discussions.</p>{:else if activeView === 'tickets'}<p class="page-description">Plan work, track execution, and review results.</p>{:else if activeView === 'settings'}<p class="page-description">Studio appearance and global and repository configuration.</p>{:else if activeView === 'sessions'}<p class="page-description">Chat with Q or continue your workspace sessions.</p>{:else if activeView === 'composers'}<p class="page-description">Develop ideas through conversation with your chosen model.</p>{:else if activeView === 'councils'}<p class="page-description">Independent and repository councils with configurable members and chair.</p>{:else if activeView === 'files'}<p class="page-description">Browse workspace files and switch between raw content and Git diffs.</p>{:else if activeView === 'changes'}<p class="page-description">Inspect bounded diffs and review commits.</p>{:else if activeView === 'operations'}<p class="page-description">Usage, workers, local services, logs, and retention.</p>{:else if activeView === 'help'}<p class="page-description">Studio workflows, shortcuts, and recovery.</p>{/if}</div>
     </header>
+
+    {#if $uiStateError}<div class="overview-connection-error" role="alert">{$uiStateError}</div>{/if}
 
     {#if activeView === 'overview'}
       {#if connection.kind === 'error'}<div class="overview-connection-error" role="alert"><span>{connection.message}</span><button class="retry" onclick={loadStatus}>Retry connection</button></div>{/if}

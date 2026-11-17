@@ -133,6 +133,11 @@ func TestEngineIntegration(t *testing.T) {
 	if _, err = host.browserURL(ctx); err != nil {
 		t.Fatal(err)
 	}
+	response = httptest.NewRecorder()
+	host.ServeHTTP(response, httptest.NewRequest(http.MethodPatch, "http://wails.localhost/api/v1/ui-state", strings.NewReader(`{"values":{"q-studio-theme":"night"}}`)))
+	if response.Code != http.StatusNoContent {
+		t.Fatalf("save UI state through desktop proxy: %d %s", response.Code, response.Body)
+	}
 	if err = owner.close(); err != nil {
 		t.Fatal(err)
 	}
@@ -141,5 +146,19 @@ func TestEngineIntegration(t *testing.T) {
 	host.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "http://wails.localhost/api/v1/status", nil))
 	if response.Code != 503 {
 		t.Fatal("stopped engine still serving")
+	}
+	restarted, err := startEngine(ctx, path, os.Stderr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = restarted.close() })
+	host.process = restarted
+	response = httptest.NewRecorder()
+	host.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "http://wails.localhost/api/v1/ui-state", nil))
+	var ui struct {
+		Values map[string]*string `json:"values"`
+	}
+	if response.Code != http.StatusOK || json.Unmarshal(response.Body.Bytes(), &ui) != nil || ui.Values["q-studio-theme"] == nil || *ui.Values["q-studio-theme"] != "night" {
+		t.Fatalf("restore UI state after engine restart: %d %s", response.Code, response.Body)
 	}
 }

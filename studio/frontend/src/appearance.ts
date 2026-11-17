@@ -1,3 +1,5 @@
+import { uiStorage } from './uiStorage';
+
 export type StudioTheme = 'light' | 'dawn' | 'night';
 export type TextScale = 100 | 115 | 130 | 145;
 
@@ -8,16 +10,12 @@ const themeKey = 'q-studio-theme';
 const textScaleKey = 'q-studio-text-scale';
 
 export function loadAppearance(): { theme: StudioTheme; textScale: TextScale } {
-  try {
-    const savedTheme = localStorage.getItem(themeKey);
-    const savedScale = Number(localStorage.getItem(textScaleKey));
-    return {
-      theme: themes.includes(savedTheme as StudioTheme) ? savedTheme as StudioTheme : 'dawn',
-      textScale: textScales.includes(savedScale as TextScale) ? savedScale as TextScale : 100
-    };
-  } catch {
-    return { theme: 'dawn', textScale: 100 };
-  }
+  const savedTheme = uiStorage.getItem(themeKey);
+  const savedScale = Number(uiStorage.getItem(textScaleKey));
+  return {
+    theme: themes.includes(savedTheme as StudioTheme) ? savedTheme as StudioTheme : 'dawn',
+    textScale: textScales.includes(savedScale as TextScale) ? savedScale as TextScale : 100
+  };
 }
 
 export function applyAppearance(theme: StudioTheme, textScale: TextScale) {
@@ -30,10 +28,6 @@ export function applyAppearance(theme: StudioTheme, textScale: TextScale) {
 
 export function saveAppearance(theme: StudioTheme, textScale: TextScale) {
   applyAppearance(theme, textScale);
-  try {
-    localStorage.setItem(themeKey, theme);
-    localStorage.setItem(textScaleKey, String(textScale));
-  } catch {
-    // Keep the selection active for this page when storage is unavailable.
-  }
+  uiStorage.setItem(themeKey, theme);
+  uiStorage.setItem(textScaleKey, String(textScale));
 }

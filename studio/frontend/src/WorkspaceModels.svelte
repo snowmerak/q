@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { uiStorage } from './uiStorage';
   import { RefreshCw } from '@lucide/svelte';
   import { onMount } from 'svelte';
   import { requestResponse } from './api';
@@ -29,7 +30,7 @@
       const response = await requestResponse(`/api/v1/workspaces/models?workspace_root=${encodeURIComponent(root)}`, { headers: { Accept: 'application/json' } });
       snapshot = await response.json() as Snapshot;
       workspaceRoot = snapshot.workspace_root;
-      localStorage.setItem('q-studio-workspace-root', workspaceRoot);
+      uiStorage.setItem('q-studio-workspace-root', workspaceRoot);
     } catch (reason) {
       error = reason instanceof Error ? reason.message : 'Workspace model settings are unavailable';
     } finally {
@@ -67,7 +68,7 @@
   }
 
   onMount(() => {
-    workspaceRoot = new URL(window.location.href).searchParams.get('workspace_root') || localStorage.getItem('q-studio-workspace-root') || '';
+    workspaceRoot = new URL(window.location.href).searchParams.get('workspace_root') || uiStorage.getItem('q-studio-workspace-root') || '';
     if (workspaceRoot) void load();
   });
 </script>

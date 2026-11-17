@@ -4,16 +4,27 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/snowmerak/q/internal/studioprocess"
+	qlibrary "github.com/snowmerak/q/library"
+	"github.com/snowmerak/q/workspacememory"
 )
 
 func TestDesktopOwnerAttachmentAndParentExit(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
+	directory := filepath.Join(home, ".q")
+	// Never attach this disposable profile to the user's running services.
+	if err := (qlibrary.ConfigStore{Dir: directory}).Save(qlibrary.Config{Host: "127.0.0.1", Port: availableUsagePort(t)}); err != nil {
+		t.Fatal(err)
+	}
+	if err := (workspacememory.ConfigStore{Dir: directory}).Save(workspacememory.Config{Host: "127.0.0.1", Port: availableUsagePort(t)}); err != nil {
+		t.Fatal(err)
+	}
 	start := func() (studioprocess.Endpoint, io.Closer, <-chan error) {
 		input, writer := io.Pipe()
 		reader, output := io.Pipe()

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { uiStorage } from '../uiStorage';
   import { RefreshCw } from '@lucide/svelte';
   import { formatBytes } from './format';
   import type { LoomStats, LoomGCResult } from './types';
@@ -31,7 +32,7 @@
 
   async function loadLoomStatus() {
     const generation = ++loomGeneration;
-    const root = localStorage.getItem('q-studio-workspace-root') || '';
+    const root = uiStorage.getItem('q-studio-workspace-root') || '';
     loomError = '';
     loomResult = null;
     if (!root) {

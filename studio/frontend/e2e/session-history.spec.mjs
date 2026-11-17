@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect } from './test.mjs';
 
 test('session drafts survive switching, navigation, reload, and clear after sending', async ({ page, request }) => {
   const first = await (await request.post('/api/v1/chats', { data: {} })).json();
@@ -41,7 +41,7 @@ test('session drafts survive switching, navigation, reload, and clear after send
   }
 });
 
-test('root and nested delegation drafts stay separate', async ({ page, request }) => {
+test('root drafts survive navigation through archived delegations', async ({ page, request }) => {
   const fixture = await (await request.get('/_test/fixture')).json();
   const registration = await (await request.post('/api/v1/registered-sessions', { data: {
     workspace_root: fixture.tree_root, session_id: fixture.tree_session_id
@@ -51,22 +51,25 @@ test('root and nested delegation drafts stay separate', async ({ page, request }
   const tree = page.getByRole('complementary', { name: 'Registered session tree' });
   const senior = tree.getByRole('button', { name: 'senior-developer completed', exact: true });
   const junior = tree.getByRole('button', { name: 'junior-developer completed', exact: true });
-  await expect(composer).toBeEnabled();
-  await composer.fill('root draft');
-  await senior.click();
-  await expect(composer).toHaveValue('');
-  await composer.fill('senior draft');
-  await junior.click();
-  await expect(composer).toHaveValue('');
-  await composer.fill('junior draft');
-  await senior.click();
-  await expect(composer).toHaveValue('senior draft');
-  await tree.locator('.session-root .session-select').filter({ hasText: registration.session.session_id.slice(0, 10) }).click();
-  await expect(composer).toHaveValue('root draft');
-  await page.reload();
-  await junior.click();
-  await expect(composer).toHaveValue('junior draft');
-  await request.delete(`/api/v1/registered-sessions/${registration.registration_id}`);
+  try {
+    await expect(composer).toBeEnabled();
+    await composer.fill('root draft');
+    for (const delegation of [senior, junior, senior]) {
+      await delegation.click();
+      await expect(page.getByText('Archived delegation', { exact: true })).toBeVisible();
+      await expect(composer).toHaveCount(0);
+    }
+    await tree.locator('.session-root .session-select').filter({ hasText: registration.session.session_id.slice(0, 10) }).click();
+    await expect(composer).toHaveValue('root draft');
+    await page.reload();
+    await expect(composer).toHaveValue('root draft');
+    await junior.click();
+    await expect(composer).toHaveCount(0);
+    await tree.locator('.session-root .session-select').filter({ hasText: registration.session.session_id.slice(0, 10) }).click();
+    await expect(composer).toHaveValue('root draft');
+  } finally {
+    await request.delete(`/api/v1/registered-sessions/${registration.registration_id}`);
+  }
 });
 
 test('live tools and output appear inline and follow only from at least 95 percent scroll', async ({ page, request }, testInfo) => {

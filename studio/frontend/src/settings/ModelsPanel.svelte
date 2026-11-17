@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { uiStorage } from '../uiStorage';
   import { ChevronDown, ChevronUp, Plus, RefreshCw, Trash2 } from '@lucide/svelte';
   import { onMount } from 'svelte';
   import WorkspaceModels from '../WorkspaceModels.svelte';
@@ -101,7 +102,7 @@
       model: embeddingModel,
       reasoning_effort: '',
       embedding_dimensions: embeddingDimensions,
-      workspace_root: localStorage.getItem('q-studio-workspace-root') || ''
+      workspace_root: uiStorage.getItem('q-studio-workspace-root') || ''
     });
   }
 
@@ -167,7 +168,7 @@
 
   function deleteCustomRole(role: RoleModelAssignment) {
     if (!window.confirm(`Delete custom role “${role.role}”?`)) return;
-    const root = localStorage.getItem('q-studio-workspace-root') || '';
+    const root = uiStorage.getItem('q-studio-workspace-root') || '';
     const query = root ? `?workspace_root=${encodeURIComponent(root)}` : '';
     queueSave(() => writeSettings('DELETE', `/api/v1/settings/roles/${encodeURIComponent(role.role)}${query}`));
   }

@@ -630,6 +630,17 @@ func TestStudioBrowserFixture(t *testing.T) {
 		t.Fatal(err)
 	}
 	mux := http.NewServeMux()
+	uiStore, err := config.DefaultStore()
+	if err != nil {
+		t.Fatal(err)
+	}
+	mux.HandleFunc("POST /_test/reset-ui-state", func(w http.ResponseWriter, _ *http.Request) {
+		if err := os.Remove(filepath.Join(uiStore.Dir, "studio", "ui-state.json")); err != nil && !errors.Is(err, os.ErrNotExist) {
+			writeAPIError(w, http.StatusInternalServerError, err)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	})
 	mux.HandleFunc("GET /_test/fixture", func(w http.ResponseWriter, r *http.Request) {
 		executable, _ := os.Executable()
 		writeJSON(w, 200, map[string]string{

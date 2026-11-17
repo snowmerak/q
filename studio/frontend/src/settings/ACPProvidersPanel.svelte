@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { uiStorage } from '../uiStorage';
   import { CheckCircle2, RefreshCw } from '@lucide/svelte';
   import { onMount, onDestroy } from 'svelte';
   import { requestJSON } from '../api';
@@ -20,7 +21,7 @@
       if (current === generation) agents = value;
     }, '');
   }
-  onMount(() => { workspaceRoot = localStorage.getItem('q-studio-workspace-root') || ''; load(); });
+  onMount(() => { workspaceRoot = uiStorage.getItem('q-studio-workspace-root') || ''; load(); });
   onDestroy(() => { generation++; });
 </script>
 

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { uiStorage } from './uiStorage';
   import { CheckCircle2, RefreshCw } from '@lucide/svelte';
   import { onMount } from 'svelte';
   import MCPPanel from './integrations/MCPPanel.svelte';
@@ -25,8 +26,8 @@
 
   function loadPanel() {
     repositoryRoot = workspaceRoot.trim();
-    if (repositoryRoot) localStorage.setItem('q-studio-workspace-root', repositoryRoot);
-    else localStorage.removeItem('q-studio-workspace-root');
+    if (repositoryRoot) uiStorage.setItem('q-studio-workspace-root', repositoryRoot);
+    else uiStorage.removeItem('q-studio-workspace-root');
     reloadToken += 1;
   }
 
@@ -37,7 +38,7 @@
 
   onMount(() => {
     const location = new URL(window.location.href);
-    workspaceRoot = location.searchParams.get('workspace_root') || localStorage.getItem('q-studio-workspace-root') || '';
+    workspaceRoot = location.searchParams.get('workspace_root') || uiStorage.getItem('q-studio-workspace-root') || '';
     repositoryRoot = workspaceRoot.trim();
     const requestedPanel = location.searchParams.get('panel') as Panel | null;
     if (requestedPanel && panels.some((candidate) => candidate.id === requestedPanel)) panel = requestedPanel;

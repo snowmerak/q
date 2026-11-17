@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"net/http"
 	"path"
+	"path/filepath"
 	"strings"
 
 	"github.com/snowmerak/q/app"
@@ -77,6 +78,9 @@ func newHandlerRuntime(parent context.Context, store config.Store, runner sessio
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/v1/status", serveStatus)
+	ui := &uiStateService{path: filepath.Join(store.Dir, "studio", "ui-state.json")}
+	mux.HandleFunc("GET /api/v1/ui-state", ui.serveGet)
+	mux.HandleFunc("PATCH /api/v1/ui-state", ui.servePatch)
 	var settingsRuntimes []settingsRuntime
 	if runtime, ok := runner.(settingsRuntime); ok {
 		settingsRuntimes = append(settingsRuntimes, runtime)

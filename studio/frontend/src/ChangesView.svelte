@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { uiStorage } from './uiStorage';
   import { GitCommitHorizontal, RefreshCw } from '@lucide/svelte';
   import { onDestroy, onMount } from 'svelte';
   import { requestJSON } from './api';
@@ -41,7 +42,7 @@
       if (generation !== loadGeneration) return;
       workspaceRoot = response.workspace_root;
       workspaceInput = response.workspace_root;
-      localStorage.setItem('q-studio-workspace-root', response.workspace_root);
+      uiStorage.setItem('q-studio-workspace-root', response.workspace_root);
       snapshot = response.snapshot;
       selected = response.snapshot.files.find((file) => file.path === preferred) || response.snapshot.files[0] || null;
       if (selected) await loadDetail(selected);
@@ -79,7 +80,7 @@
   }
 
   onMount(() => {
-    workspaceInput = new URL(window.location.href).searchParams.get('workspace_root') || localStorage.getItem('q-studio-workspace-root') || '';
+    workspaceInput = new URL(window.location.href).searchParams.get('workspace_root') || uiStorage.getItem('q-studio-workspace-root') || '';
     if (workspaceInput) void loadChanges();
   });
   onDestroy(() => {

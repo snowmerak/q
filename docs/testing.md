@@ -16,6 +16,12 @@ engine. Numeric `v<version>` tag pushes publish the complete artifact set to a
 GitHub Release only after all builds succeed; manual runs can build without
 publishing. A successful package build does not replace a platform UI/login test.
 
+UI-state regression tests cover file persistence across server restarts and
+ports, concurrent partial updates and legacy migration without resurrecting
+cleared drafts. Browser checks in `ui-state.spec.mjs` use two real HTTP origins
+and also exercise blocked localStorage and save retries. The shared browser
+fixture resets only its isolated UI-state file between tests.
+
 Focused integration and regression checks:
 
 ```powershell

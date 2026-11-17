@@ -22,7 +22,7 @@
 </script>
 
 <section class="settings-section appearance-section" aria-labelledby="appearance-heading">
-  <div class="section-heading"><div><p class="eyebrow">PERSONAL DISPLAY</p><h2 id="appearance-heading">Appearance</h2><p>Choose colors and a comfortable reading size for this browser.</p></div></div>
+  <div class="section-heading"><div><p class="eyebrow">PERSONAL DISPLAY</p><h2 id="appearance-heading">Appearance</h2><p>Choose colors and a comfortable reading size for this Studio profile, shared by the app and browser.</p></div></div>
 
   <fieldset class="appearance-group">
     <legend>Theme</legend>

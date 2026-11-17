@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect } from './test.mjs';
 
 test('model sampling preset, individual zero, reload, and clear', async ({ page, request }, testInfo) => {
   const errors = [];

@@ -69,7 +69,7 @@ task desktop:package
 Equivalent commands with an explicit version or NSIS path:
 
 ```powershell
-go run ./scripts/desktopbuild -version 0.0.1
+go run ./scripts/desktopbuild -version 0.0.2
 go run ./scripts/desktopbuild -installer -nsis C:\path\to\makensis.exe
 ```
 
@@ -121,8 +121,8 @@ After committing the desktop implementation and workflow, push a numeric
 `v<major>.<minor>.<patch>` tag, for example:
 
 ```sh
-git tag -a v0.0.1 -m 'Q Studio 0.0.1'
-git push origin v0.0.1
+git tag -a v0.0.2 -m 'Q Studio 0.0.2'
+git push origin v0.0.2
 ```
 
 All six builds must succeed before the release job runs. It checks for eight
@@ -169,6 +169,7 @@ replayed. A stale lock file does not retain ownership.
 | --- | --- |
 | Existing `~/.q` and workspace stores | Shared application settings, providers and work |
 | `~/.q/desktop/settings.json` | Window-close and hidden-login preferences |
+| `~/.q/studio/ui-state.json` | Shared theme, text size, sidebar, last workspace and unsent session drafts |
 | OS login registration | Actual enabled/disabled login startup state |
 | `~/.q/desktop/desktop.log` | Desktop startup/engine diagnostics; one previous log retained after a 5 MiB startup rotation |
 | `~/.q/logs/studio/` | Existing rotated structured Studio logs |
@@ -182,6 +183,17 @@ them without exposing them to Svelte/preview JavaScript. Browser launch exchange
 a one-use link for an HttpOnly SameSite session; mutations check the origin.
 Standalone web CLI access retains its existing authentication behavior. No Go
 services are bound to the desktop frontend.
+
+Display and navigation preferences and session drafts belong to the Studio
+profile. The frontend loads them through `/api/v1/ui-state` before mounting,
+so a new HTTP port or a different app/browser origin restores the same state.
+Updates merge individual keys and atomically replace the private profile file;
+failed saves show an alert and retry without replacing newer edits.
+Browser localStorage is a fallback cache and a source for one-time migration.
+Existing profile values and cleared drafts take precedence over legacy caches.
+Browsers cannot read storage belonging to a different old origin: to migrate
+those legacy values, open that original address with the updated server first.
+Already-open windows load other windows' changes when refreshed.
 
 Login startup uses Windows HKCU Run, a macOS LaunchAgent preserving
 `--autostart`, or Linux XDG autostart. Starting the app does not overwrite an
@@ -243,8 +255,9 @@ and archive integrity were inspected, including Unix executable permissions.
 Local macOS/Linux binaries were cross-built using the experimental purego
 backend, with macOS images assembled by Wails under Linux. The real Linux
 ARM64 engine integration tests also passed under WSL Debian; Linux desktop UI
-and macOS execution have not been verified. The native CI workflow has been
-added but not run remotely.
+and macOS UI execution have not been verified. Native GitHub Actions builds
+and assembled-engine tests passed for all six OS/architecture pairs in the
+v0.0.1 release.
 Native macOS/Linux behavior, clean-account Windows installation/removal and an
 actual logout/login cycle still need platform testing. Signing certificates and
 auto-updates are not included.

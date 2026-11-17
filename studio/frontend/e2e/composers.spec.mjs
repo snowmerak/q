@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect } from './test.mjs';
 
 test('Composer expands previews and supports readable D2 zoom and pan', async ({ page, request }, testInfo) => {
   const errors = [];

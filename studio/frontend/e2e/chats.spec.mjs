@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect } from './test.mjs';
 
 test('session registration can start a chat with an empty workspace field', async ({ page, request }) => {
   await page.goto('/sessions');

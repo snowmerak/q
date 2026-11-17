@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { uiStorage } from './uiStorage';
   import { CheckCircle2, RefreshCw } from '@lucide/svelte';
   import { onDestroy, onMount } from 'svelte';
   import { requestJSON } from './api';
@@ -29,8 +30,8 @@
 
   function rememberWorkspace() {
     const root = rootValue();
-    if (root) localStorage.setItem('q-studio-workspace-root', root);
-    else localStorage.removeItem('q-studio-workspace-root');
+    if (root) uiStorage.setItem('q-studio-workspace-root', root);
+    else uiStorage.removeItem('q-studio-workspace-root');
     return root;
   }
 
@@ -49,7 +50,7 @@
 
   onMount(() => {
     const location = new URL(window.location.href);
-    workspaceRoot = location.searchParams.get('workspace_root') || localStorage.getItem('q-studio-workspace-root') || '';
+    workspaceRoot = location.searchParams.get('workspace_root') || uiStorage.getItem('q-studio-workspace-root') || '';
     void loadAgents();
   });
 </script>

@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect } from './test.mjs';
 
 const markdown = '# 읽기 확인\n\n**강조 문장**과 `inline code`\n\n- 첫 항목\n- 둘째 항목\n\n| 이름 | 상태 |\n| --- | --- |\n| Q | Ready |\n\n```go\nvar answer = 42\n```\n\n[Documentation](https://example.com/docs)\n\n<img src=x onerror="window.markdownExecuted=true">';
 

@@ -168,6 +168,11 @@ The bare `q` command remains a compatibility terminal client. Former standalone
 configuration commands such as `q model`, `q gateway`, `q systemone`, `q skills`,
 and `q help` now open their corresponding Studio surface. `q studio` also starts
 the standalone Gateway listener using the saved Gateway address and providers.
+
+Studio saves appearance, sidebar state, the last workspace and unsent session
+drafts in `~/.q/studio/ui-state.json`. These preferences are shared by the app
+and browsers and survive port changes. Browser storage is a cache; readable
+legacy values migrate without overwriting existing profile preferences.
 `q gateway start`, `q systemone start`, and
 `q library start` still run foreground services independently of Studio.
 

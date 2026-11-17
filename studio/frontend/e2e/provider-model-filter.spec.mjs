@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect } from './test.mjs';
 
 test('provider model regex filters the catalog, persists and rejects invalid input', async ({ page, request }, testInfo) => {
   const errors = [];
