@@ -88,7 +88,9 @@ jobs:
           - runner: macos-15-intel
             target: darwin/amd64
             key: darwin-amd64
-          - runner: macos-15
+          # Use Apple's ARM64 cross compiler on Intel macOS. Hosted ARM64
+          # capacity can cancel queued jobs before a build even starts.
+          - runner: macos-15-intel
             target: darwin/arm64
             key: darwin-arm64
           - runner: ubuntu-24.04
@@ -156,18 +158,35 @@ jobs:
           if (-not $compiler) { throw 'NSIS compiler missing from archive' }
           $compiler.DirectoryName | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
       - name: Build native packages (Unix)
-        if: runner.os != 'Windows'
+        if: runner.os != 'Windows' && matrix.target != 'darwin/arm64'
         run: go run ./scripts/desktopbuild -version "$Q_STUDIO_VERSION" -targets "$Q_STUDIO_TARGET" -installer
+      - name: Build macOS ARM64 with Apple SDK
+        if: matrix.target == 'darwin/arm64'
+        run: |
+          set -euo pipefail
+          directory="$PWD/bin/studio/darwin-arm64"
+          mkdir -p "$directory"
+          GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 go build -trimpath -o "$directory/q-engine" ./cmd/q
+          GOOS=darwin GOARCH=arm64 CGO_ENABLED=1 CC=clang CXX=clang++ go -C desktop build -trimpath -tags production -ldflags '-s -w' -o "$directory/Q Studio" .
+          # Package prebuilt binaries so existing immutable tags can use this
+          # recovery path without changes to their desktopbuild host guard.
+          go run ./scripts/desktopbuild -version "$Q_STUDIO_VERSION" -targets "$Q_STUDIO_TARGET" -package-only
       - name: Build native packages (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
         run: go run ./scripts/desktopbuild -version $env:Q_STUDIO_VERSION -targets $env:Q_STUDIO_TARGET -installer
       - name: Test assembled engine and desktop module (Unix)
-        if: runner.os != 'Windows'
+        if: runner.os != 'Windows' && matrix.target != 'darwin/arm64'
         run: |
           export Q_STUDIO_TEST_ENGINE="$PWD/bin/studio/${{ matrix.key }}/q-engine"
           go -C desktop test ./...
           go -C desktop vet ./...
+      - name: Verify macOS ARM64 binaries and desktop module
+        if: matrix.target == 'darwin/arm64'
+        run: |
+          lipo -verify_arch arm64 'bin/studio/darwin-arm64/Q Studio'
+          lipo -verify_arch arm64 bin/studio/darwin-arm64/q-engine
+          GOOS=darwin GOARCH=arm64 CGO_ENABLED=1 CC=clang CXX=clang++ go -C desktop vet ./...
       - name: Test assembled engine and installer checks (Windows)
         if: runner.os == 'Windows'
         shell: pwsh

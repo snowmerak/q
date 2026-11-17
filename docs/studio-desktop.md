@@ -112,10 +112,14 @@ of a cross-built macOS pair preserves those permissions.
 ## GitHub Actions and releases
 
 The [Q Studio desktop release workflow](../.github/workflows/studio-desktop.yml)
-uses six native runners: Windows, macOS and Ubuntu, each on amd64 and arm64.
+builds six targets: Windows, macOS and Ubuntu, each on amd64 and arm64.
 Each runner builds the frontend from its lockfile before compiling and packaging
-the app, then tests the assembled engine. Windows uses a checksum-verified
-portable NSIS compiler, including on ARM64.
+the app. Windows uses a checksum-verified portable NSIS compiler, including
+on ARM64. macOS ARM64 uses an Intel macOS runner and Apple's ARM64 C/Objective-C
+compiler with the native Wails backend, avoiding hosted ARM64 capacity queues.
+That target checks Mach-O architecture and runs cross-target vet; its engine
+cannot be executed on the Intel runner. The other five targets execute their
+assembled-engine tests on matching hardware.
 
 After committing the desktop implementation and workflow, push a numeric
 `v<major>.<minor>.<patch>` tag, for example:

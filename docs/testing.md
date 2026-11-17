@@ -11,8 +11,10 @@ The native shell is an isolated module. Run `task desktop:check` for its tests
 and vet; see [desktop verification](studio-desktop.md#verification) for checks
 against the assembled engine. The root suite covers the shared HTTP runtime.
 The `Q Studio desktop release` workflow builds installation artifacts
-on Windows, macOS and Linux for both amd64 and arm64, then tests each assembled
-engine. Numeric `v<version>` tag pushes publish the complete artifact set to a
+on Windows, macOS and Linux for both amd64 and arm64. macOS ARM64 cross-builds
+with Apple's SDK on Intel macOS and verifies architecture plus cross-target vet;
+the other five targets test their assembled engines on matching hardware.
+Numeric `v<version>` tag pushes publish the complete artifact set to a
 GitHub Release only after all builds succeed; manual runs can build without
 publishing. A successful package build does not replace a platform UI/login test.
 

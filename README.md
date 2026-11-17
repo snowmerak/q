@@ -159,7 +159,7 @@ ticket schedules. It does not run before login or while the computer sleeps.
 The app and `q studio` reuse a compatible user-level Studio. An app attached to
 a CLI-owned engine leaves it running on quit. See the [desktop guide](docs/studio-desktop.md)
 for installation, prerequisites, runtime ownership, and platform validation.
-Pushing a numeric `v<major>.<minor>.<patch>` tag runs all six native builds and
+Pushing a numeric `v<major>.<minor>.<patch>` tag runs all six platform builds and
 attaches the installers, portable ZIPs and SHA256 checksums to its GitHub Release.
 The [release workflow](.github/workflows/studio-desktop.yml) also supports manual
 builds without publishing.
