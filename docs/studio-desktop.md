@@ -149,6 +149,25 @@ Only the release job receives `contents: write`; build jobs use read access.
 The built-in `GITHUB_TOKEN` is sufficient; no personal access token is needed.
 The workflow does not sign binaries or notarize macOS apps.
 
+The [infrastructure retry workflow](../.github/workflows/studio-desktop-retry.yml)
+watches completed release builds from the default branch. It retries recognized
+runner-allocation, runner-disconnection and transient setup/download/upload
+errors after 1, 3 and 10 minutes, with at most three additional attempts.
+Successful jobs and their artifacts are retained; GitHub reruns unsuccessful
+jobs and their dependents, including release publication. Build/test failures,
+unknown errors and manual cancellations stop automatic retries. Setup network
+errors must have a recognizable error in their check annotations; ordinary
+log messages alone do not trigger retries. Existing manual reruns count toward
+the same attempt limit. A controller waits up to 65 minutes for each rerun and
+stops if its API request fails, without blindly replaying an ambiguous request.
+Its Actions summary records the retry or stop reason.
+
+This workflow needs to be present on the default branch. Its controller uses
+`actions: write` and `checks: read`, runs only default-branch code, and accepts
+only this repository's release workflow push/dispatch events. It never checks
+out the failed run's source. No additional token or paid retry service is used.
+Run `task ci:check` to test the policy locally without dispatching Actions.
+
 ## Upgrades and removal
 
 Windows upgrades/removal request normal quit and wait up to 20 seconds before
@@ -236,6 +255,12 @@ The integration test isolates its home and Library/Memory ports. Startup tests
 use private temporary registry keys and do not change the real login item.
 Coverage includes browser admission/replay, cross-origin mutation rejection,
 engine control, ownership, proxy credentials, settings and OS-disabled startup.
+The engine test also calls Overview's registered-sessions API, which initializes
+Library and the bundled browser skill. Checking only Studio's status endpoint
+does not detect a malformed embedded skill. Embedded skill resources use LF in
+Git, and validation, hashing, upload and installation canonicalize CRLF to LF
+so Windows and Unix builds produce the same skill identity. The bundle version
+advances for this correction to supersede earlier noncanonical installations.
 
 Windows installer regression tests compile and execute the actual WebView2
 admission routine in silent NSIS harnesses:

@@ -130,6 +130,13 @@ func TestEngineIntegration(t *testing.T) {
 	if response.Code != 200 || json.Unmarshal(response.Body.Bytes(), &status) != nil || !status.Ready {
 		t.Fatalf("real proxy: %d %s", response.Code, response.Body)
 	}
+	// Overview loads this route, which initializes Library and bundled skills.
+	// The lightweight status endpoint alone cannot detect a broken bundle.
+	response = httptest.NewRecorder()
+	host.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "http://wails.localhost/api/v1/registered-sessions", nil))
+	if response.Code != http.StatusOK {
+		t.Fatalf("load Overview sessions and bundled skills: %d %s", response.Code, response.Body)
+	}
 	if _, err = host.browserURL(ctx); err != nil {
 		t.Fatal(err)
 	}

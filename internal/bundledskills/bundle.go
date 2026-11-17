@@ -14,7 +14,7 @@ import (
 var resources embed.FS
 
 func CDP() skillbundle.Bundle {
-	bundle := skillbundle.Bundle{Version: "20261107143548.0001", Files: map[string]string{}}
+	bundle := skillbundle.Bundle{Version: "20261107143548.0002", Files: map[string]string{}}
 	err := fs.WalkDir(resources, "cdp", func(path string, entry fs.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -26,7 +26,9 @@ func CDP() skillbundle.Bundle {
 		if err != nil {
 			return err
 		}
-		bundle.Files[strings.TrimPrefix(path, "cdp/")] = string(data)
+		// Older running Library processes validate uploaded bundles too.
+		// Send canonical bytes as well as computing a canonical manifest.
+		bundle.Files[strings.TrimPrefix(path, "cdp/")] = strings.ReplaceAll(string(data), "\r\n", "\n")
 		return nil
 	})
 	if err != nil {

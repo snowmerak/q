@@ -1,0 +1,2 @@
+# Keep embedded skill resources byte-identical across build platforms.
+/internal/bundledskills/cdp/** text eol=lf

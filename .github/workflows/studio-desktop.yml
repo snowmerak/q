@@ -125,6 +125,8 @@ jobs:
         run: npm --prefix studio/frontend run check
       - name: Build embedded Studio frontend
         run: npm --prefix studio/frontend run build
+      - name: Verify embedded skill bundle
+        run: go test ./internal/skillbundle ./internal/bundledskills
       - name: Install Linux native GUI build dependencies
         if: runner.os == 'Linux'
         run: |
