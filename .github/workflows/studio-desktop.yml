@@ -184,8 +184,8 @@ jobs:
       - name: Verify macOS ARM64 binaries and desktop module
         if: matrix.target == 'darwin/arm64'
         run: |
-          lipo -verify_arch arm64 'bin/studio/darwin-arm64/Q Studio'
-          lipo -verify_arch arm64 bin/studio/darwin-arm64/q-engine
+          lipo 'bin/studio/darwin-arm64/Q Studio' -verify_arch arm64
+          lipo bin/studio/darwin-arm64/q-engine -verify_arch arm64
           GOOS=darwin GOARCH=arm64 CGO_ENABLED=1 CC=clang CXX=clang++ go -C desktop vet ./...
       - name: Test assembled engine and installer checks (Windows)
         if: runner.os == 'Windows'
