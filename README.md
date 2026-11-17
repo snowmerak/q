@@ -137,6 +137,33 @@ created. Open **Sessions**, choose a repository, then register an existing root
 session or create a new one. Registered roots and their delegated sessions appear
 in one global tree.
 
+### Q Studio desktop app
+
+Q Studio also runs as a native desktop app with the same interface, settings,
+workspaces, and background ticket scheduler. Its installer bundles a matching
+`q-engine` executable. The existing Go installation above remains a web server and does
+not acquire desktop build dependencies.
+
+```powershell
+task desktop:build    # paired executables and portable archive
+task desktop:package  # Wails: Windows EXE, macOS DMG, Linux DEB and RPM
+```
+
+The app's **Q Studio** menu and tray menu offer **Keep running when window
+closes**, **Start at login**, and **Start hidden at login**. Closing the window
+keeps background work running by default. Use **Quit Q Studio** to stop the app
+and its owned engine. Login startup is off until enabled; hidden login startup
+is on by default. This starts after user login and supports existing background
+ticket schedules. It does not run before login or while the computer sleeps.
+
+The app and `q studio` reuse a compatible user-level Studio. An app attached to
+a CLI-owned engine leaves it running on quit. See the [desktop guide](docs/studio-desktop.md)
+for installation, prerequisites, runtime ownership, and platform validation.
+Pushing a numeric `v<major>.<minor>.<patch>` tag runs all six native builds and
+attaches the installers, portable ZIPs and SHA256 checksums to its GitHub Release.
+The [release workflow](.github/workflows/studio-desktop.yml) also supports manual
+builds without publishing.
+
 The bare `q` command remains a compatibility terminal client. Former standalone
 configuration commands such as `q model`, `q gateway`, `q systemone`, `q skills`,
 and `q help` now open their corresponding Studio surface. `q studio` also starts

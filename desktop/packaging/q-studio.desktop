@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Q Studio
+Comment=Workspace coding agent
+Exec=/usr/lib/q-studio/q-studio
+Icon=q-studio
+Terminal=false
+Categories=Development;IDE;

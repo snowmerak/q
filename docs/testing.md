@@ -7,6 +7,15 @@ root Go module, both nested ACP modules, generated ACP binding checks, and the
 Studio Svelte/TypeScript check. Browser tests are opt-in and are not silently
 counted as passing when Chromium is missing.
 
+The native shell is an isolated module. Run `task desktop:check` for its tests
+and vet; see [desktop verification](studio-desktop.md#verification) for checks
+against the assembled engine. The root suite covers the shared HTTP runtime.
+The `Q Studio desktop release` workflow builds installation artifacts
+on Windows, macOS and Linux for both amd64 and arm64, then tests each assembled
+engine. Numeric `v<version>` tag pushes publish the complete artifact set to a
+GitHub Release only after all builds succeed; manual runs can build without
+publishing. A successful package build does not replace a platform UI/login test.
+
 Focused integration and regression checks:
 
 ```powershell

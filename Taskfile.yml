@@ -16,6 +16,24 @@ tasks:
     cmds:
       - go build -o ./bin/ ./cmd/q ./cmd/q-mcp
 
+  desktop:build:
+    desc: Build Q Studio and its bundled q engine into ./bin/studio and a portable archive
+    cmds:
+      - go run ./scripts/desktopbuild {{.CLI_ARGS}}
+
+  desktop:package:
+    desc: Build installable Q Studio packages with pinned Wails (Windows EXE, macOS DMG, Linux DEB/RPM)
+    cmds:
+      - go run ./scripts/desktopbuild -installer {{.CLI_ARGS}}
+
+  desktop:check:
+    desc: Test and vet the isolated Q Studio desktop module
+    dir: desktop
+    env: { GOWORK: "off" }
+    cmds:
+      - go test ./...
+      - go vet ./...
+
   studio:install:
     desc: Install the pinned Q Studio frontend dependencies
     cmds:

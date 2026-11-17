@@ -23,6 +23,13 @@ import (
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
+	if len(os.Args) == 2 && os.Args[1] == "__studio_desktop" {
+		if err := runStudioDesktop(ctx, os.Stdin, os.Stdout, os.Stderr); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
 	if len(os.Args) > 1 && os.Args[1] == "cdp" {
 		code := cdpcli.MainWithOptions(ctx, os.Args[2:], os.Stdin, os.Stdout, os.Stderr, cdpcli.Options{CommandPrefix: []string{"cdp"}})
 		stop()

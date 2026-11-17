@@ -1,0 +1,145 @@
+package main
+
+import (
+	"context"
+	"encoding/json"
+	"io"
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+)
+
+func TestProxyKeepsCredentialsOutOfFrontend(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer private-token" || r.Header.Get("Cookie") != "" || r.Header.Get("Origin") != "" {
+			t.Error("proxy did not replace caller credentials")
+		}
+		if r.URL.RequestURI() != "/api/v1/events?after=2" {
+			t.Error(r.URL)
+		}
+		w.Header().Set("Content-Security-Policy", "default-src 'self'")
+		_, _ = io.WriteString(w, "events")
+	}))
+	defer server.Close()
+	host := newEngineHost("", io.Discard)
+	host.process = &engineProcess{endpoint: engineEndpoint{URL: server.URL, Token: "private-token"}}
+	req := httptest.NewRequest(http.MethodGet, "http://wails.localhost/api/v1/events?after=2", nil)
+	req.Header.Set("Cookie", "unrelated=secret")
+	req.Header.Set("Origin", "http://wails.localhost")
+	req.Header.Set("Authorization", "Bearer attacker")
+	response := httptest.NewRecorder()
+	host.ServeHTTP(response, req)
+	if response.Code != 200 || response.Body.String() != "events" || response.Header().Get("Content-Security-Policy") == "" {
+		t.Fatalf("proxy: %d %s", response.Code, response.Body)
+	}
+	response = httptest.NewRecorder()
+	host.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "http://wails.localhost"+controlPath+"launch", nil))
+	if response.Code != 404 {
+		t.Fatal("frontend can access engine control")
+	}
+}
+
+func TestInvalidEngineReadiness(t *testing.T) {
+	for _, address := range []string{"http://attacker.invalid:7070", "http://127.0.0.1:7070/path", "https://127.0.0.1:7070", "http://user:pass@127.0.0.1:7070"} {
+		e := engineEndpoint{Protocol: 1, URL: address, Token: strings.Repeat("s", 32), Instance: "instance"}
+		if e.validate() == nil {
+			t.Error(address)
+		}
+	}
+}
+
+func TestDesktopSettingsRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	initial, err := loadSettings(dir)
+	if err != nil || !initial.KeepRunning || !initial.StartHidden {
+		t.Fatalf("defaults: %+v %v", initial, err)
+	}
+	want := desktopSettings{KeepRunning: false, StartHidden: true}
+	for range 2 {
+		if err = saveSettings(dir, want); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := loadSettings(dir)
+	if err != nil || got != want {
+		t.Fatalf("saved settings: %+v %v", got, err)
+	}
+}
+
+// Set Q_STUDIO_TEST_ENGINE to the assembled q executable to verify the real
+// stdio protocol, auth, attachment, and process containment together.
+func TestEngineIntegration(t *testing.T) {
+	path := os.Getenv("Q_STUDIO_TEST_ENGINE")
+	if path == "" {
+		t.Skip("Q_STUDIO_TEST_ENGINE is not set")
+	}
+	path, err := filepath.Abs(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	if err = os.MkdirAll(filepath.Join(home, ".q"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"library.json", "workspace-memory.json"} {
+		listener, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		port := listener.Addr().(*net.TCPAddr).Port
+		_ = listener.Close()
+		body, _ := json.Marshal(map[string]any{"version": 1, "host": "127.0.0.1", "port": port})
+		if err = os.WriteFile(filepath.Join(home, ".q", name), body, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), time.Minute)
+	defer cancel()
+	owner, err := startEngine(ctx, path, os.Stderr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = owner.close() })
+	if !owner.endpoint.Owned || !owner.endpoint.Secure {
+		t.Fatal("engine ownership or auth missing")
+	}
+	attached, err := startEngine(ctx, path, os.Stderr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if attached.endpoint.Owned || attached.endpoint.Instance != owner.endpoint.Instance {
+		t.Fatal("engine duplicated")
+	}
+	if err = attached.close(); err != nil {
+		t.Fatal(err)
+	}
+	host := newEngineHost(path, os.Stderr)
+	host.process = owner
+	response := httptest.NewRecorder()
+	host.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "http://wails.localhost/api/v1/status", nil))
+	var status struct {
+		Ready bool `json:"ready"`
+	}
+	if response.Code != 200 || json.Unmarshal(response.Body.Bytes(), &status) != nil || !status.Ready {
+		t.Fatalf("real proxy: %d %s", response.Code, response.Body)
+	}
+	if _, err = host.browserURL(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err = owner.close(); err != nil {
+		t.Fatal(err)
+	}
+	// close is intentionally safe to repeat during application teardown.
+	response = httptest.NewRecorder()
+	host.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "http://wails.localhost/api/v1/status", nil))
+	if response.Code != 503 {
+		t.Fatal("stopped engine still serving")
+	}
+}

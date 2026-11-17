@@ -1,0 +1,242 @@
+name: Q Studio desktop release
+
+on:
+  push:
+    tags:
+      - 'v[0-9]*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Product version (major.minor.patch)
+        required: true
+        default: 0.0.1
+        type: string
+      publish_release:
+        description: Attach packages to the existing v<version> tag's GitHub Release
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: studio-desktop-${{ github.event_name == 'push' && github.ref_name || format('v{0}', inputs.version) }}
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.release.outputs.version }}
+      tag: ${{ steps.release.outputs.tag }}
+      source: ${{ steps.release.outputs.source }}
+      publish: ${{ steps.release.outputs.publish }}
+    steps:
+      - name: Resolve release version and source commit
+        id: release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INPUT_VERSION: ${{ inputs.version }}
+          INPUT_PUBLISH: ${{ inputs.publish_release }}
+        run: |
+          set -euo pipefail
+          publish=false
+          version="$INPUT_VERSION"
+          source="$GITHUB_SHA"
+          if [[ "$GITHUB_EVENT_NAME" == push ]]; then
+            version="${GITHUB_REF_NAME#v}"
+            publish=true
+          elif [[ "$INPUT_PUBLISH" == true ]]; then
+            publish=true
+          fi
+          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo '::error::Use a numeric major.minor.patch version or a v<version> tag.'
+            exit 1
+          fi
+          tag="v$version"
+          if [[ "$publish" == true ]]; then
+            # Resolve an existing tag, including annotated tags, to one commit.
+            gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$tag" --silent
+            source=$(gh api "repos/$GITHUB_REPOSITORY/commits/$tag" --jq .sha)
+            if [[ "$GITHUB_EVENT_NAME" == push ]]; then
+              triggered=$(gh api "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA" --jq .sha)
+              if [[ "$source" != "$triggered" ]]; then
+                echo '::error::The tag moved after this workflow was triggered.'
+                exit 1
+              fi
+            fi
+          fi
+          printf 'version=%s\ntag=%s\nsource=%s\npublish=%s\n' "$version" "$tag" "$source" "$publish" >> "$GITHUB_OUTPUT"
+
+  package:
+    needs: prepare
+    name: ${{ matrix.target }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: windows-2025
+            target: windows/amd64
+            key: windows-amd64
+          - runner: windows-11-arm
+            target: windows/arm64
+            key: windows-arm64
+          - runner: macos-15-intel
+            target: darwin/amd64
+            key: darwin-amd64
+          - runner: macos-15
+            target: darwin/arm64
+            key: darwin-arm64
+          - runner: ubuntu-24.04
+            target: linux/amd64
+            key: linux-amd64
+          - runner: ubuntu-24.04-arm
+            target: linux/arm64
+            key: linux-arm64
+    env:
+      GOWORK: "off"
+      Q_STUDIO_VERSION: ${{ needs.prepare.outputs.version }}
+      Q_STUDIO_TARGET: ${{ matrix.target }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.prepare.outputs.source }}
+          persist-credentials: false
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: |
+            go.sum
+            desktop/go.sum
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: studio/frontend/package-lock.json
+      - name: Install Studio frontend dependencies
+        run: npm --prefix studio/frontend ci
+      - name: Check Studio frontend
+        run: npm --prefix studio/frontend run check
+      - name: Build embedded Studio frontend
+        run: npm --prefix studio/frontend run build
+      - name: Install Linux native GUI build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential pkg-config libgtk-4-dev libwebkitgtk-6.0-dev
+      - name: Prepare NSIS
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $archive = Join-Path $env:RUNNER_TEMP 'nsis-3.11.zip'
+          $expected = 'C7D27F780DDB6CFFB4730138CD1591E841F4B7EDB155856901CDF5F214394FA1'
+          $urls = @(
+            'https://downloads.sourceforge.net/project/nsis/NSIS%203/3.11/nsis-3.11.zip',
+            'https://ftp.kaist.ac.kr/macports/distfiles/nsis/nsis-3.11.zip'
+          )
+          $downloaded = $false
+          foreach ($url in $urls) {
+            try {
+              Invoke-WebRequest -Uri $url -OutFile $archive
+              if ((Get-FileHash $archive -Algorithm SHA256).Hash -ne $expected) {
+                throw 'NSIS archive checksum mismatch'
+              }
+              $downloaded = $true
+              break
+            } catch { Write-Warning $_ }
+          }
+          if (-not $downloaded) { throw 'Unable to download the verified NSIS compiler' }
+          $destination = Join-Path $env:RUNNER_TEMP 'studio-nsis'
+          Expand-Archive -LiteralPath $archive -DestinationPath $destination -Force
+          $compiler = Get-ChildItem $destination -Filter makensis.exe -Recurse | Select-Object -First 1
+          if (-not $compiler) { throw 'NSIS compiler missing from archive' }
+          $compiler.DirectoryName | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+      - name: Build native packages (Unix)
+        if: runner.os != 'Windows'
+        run: go run ./scripts/desktopbuild -version "$Q_STUDIO_VERSION" -targets "$Q_STUDIO_TARGET" -installer
+      - name: Build native packages (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: go run ./scripts/desktopbuild -version $env:Q_STUDIO_VERSION -targets $env:Q_STUDIO_TARGET -installer
+      - name: Test assembled engine and desktop module (Unix)
+        if: runner.os != 'Windows'
+        run: |
+          export Q_STUDIO_TEST_ENGINE="$PWD/bin/studio/${{ matrix.key }}/q-engine"
+          go -C desktop test ./...
+          go -C desktop vet ./...
+      - name: Test assembled engine and installer checks (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $env:Q_STUDIO_TEST_ENGINE = (Resolve-Path 'bin/studio/${{ matrix.key }}/q-engine.exe').Path
+          $env:Q_STUDIO_NSIS = (Get-Command makensis.exe).Source
+          go -C desktop test ./...
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          go test ./scripts/desktopbuild
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          go -C desktop vet ./...
+      - name: Upload installation artifacts
+        uses: actions/upload-artifact@v6
+        with:
+          name: Q-Studio-${{ needs.prepare.outputs.version }}-${{ matrix.key }}
+          if-no-files-found: error
+          path: |
+            bin/Q-Studio-*.exe
+            bin/Q-Studio-*.dmg
+            bin/Q-Studio-*.deb
+            bin/Q-Studio-*.rpm
+            bin/Q-Studio-*.zip
+
+  release:
+    name: Attach packages to GitHub Release
+    needs: [prepare, package]
+    if: needs.prepare.outputs.publish == 'true'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      Q_STUDIO_VERSION: ${{ needs.prepare.outputs.version }}
+      Q_STUDIO_TAG: ${{ needs.prepare.outputs.tag }}
+      Q_STUDIO_SOURCE: ${{ needs.prepare.outputs.source }}
+    steps:
+      - uses: actions/download-artifact@v6
+        with:
+          pattern: Q-Studio-${{ needs.prepare.outputs.version }}-*
+          path: release
+          merge-multiple: true
+      - name: Verify assets and generate SHA256 checksums
+        shell: bash
+        working-directory: release
+        run: |
+          set -euo pipefail
+          for arch in amd64 arm64; do
+            for suffix in "windows-$arch-setup.exe" "darwin-$arch.dmg" "linux-$arch.deb" "linux-$arch.rpm"; do
+              test -s "Q-Studio-$Q_STUDIO_VERSION-$suffix"
+            done
+            for os in windows darwin linux; do
+              test -s "Q-Studio-$Q_STUDIO_VERSION-$os-$arch.zip"
+            done
+          done
+          sha256sum Q-Studio-*.exe Q-Studio-*.dmg Q-Studio-*.deb Q-Studio-*.rpm Q-Studio-*.zip > "Q-Studio-$Q_STUDIO_VERSION-SHA256SUMS.txt"
+          sha256sum --check "Q-Studio-$Q_STUDIO_VERSION-SHA256SUMS.txt"
+      - name: Create or update release
+        shell: bash
+        working-directory: release
+        run: |
+          set -euo pipefail
+          current=$(gh api "repos/$GH_REPO/commits/$Q_STUDIO_TAG" --jq .sha)
+          if [[ "$current" != "$Q_STUDIO_SOURCE" ]]; then
+            echo '::error::The release tag moved during the build.'
+            exit 1
+          fi
+          if gh release view "$Q_STUDIO_TAG" > /dev/null 2>&1; then
+            gh release upload "$Q_STUDIO_TAG" Q-Studio-* --clobber
+          else
+            gh release create "$Q_STUDIO_TAG" Q-Studio-* --verify-tag --title "Q Studio $Q_STUDIO_TAG" --generate-notes
+          fi
