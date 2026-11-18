@@ -4,5 +4,6 @@ Name=Q Studio
 Comment=Workspace coding agent
 Exec=/usr/lib/q-studio/q-studio
 Icon=q-studio
+StartupWMClass=ne.saturday.q-studio
 Terminal=false
 Categories=Development;IDE;

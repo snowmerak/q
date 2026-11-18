@@ -22,6 +22,8 @@ contents:
   - src: ./assets/appicon.png
     dst: /usr/share/icons/hicolor/64x64/apps/q-studio.png
   - src: ./assets/q-studio.desktop
+    dst: /usr/share/applications/ne.saturday.q-studio.desktop
+  - src: ./assets/q-studio-legacy.desktop
     dst: /usr/share/applications/q-studio.desktop
 depends:
   - libgtk-4-1

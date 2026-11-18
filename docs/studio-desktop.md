@@ -35,8 +35,9 @@ Move it to its final location before enabling login startup. Signed, notarized
 macOS distribution requires the distributor's Apple credentials. Published
 macOS ZIPs from the signing-enabled workflow contain a signed, notarized
 `Q Studio.app`, including its engine and an attached notarization ticket.
-Local builds and manual runs with publication off remain unsigned development
-packages; their portable ZIPs contain the raw executable pair.
+Local packages and manual runs with publication off contain an unsigned
+`Q Studio.app` in the ZIP. A build without packaging produces the raw executable
+pair instead.
 Linux packages install the paired binaries in `/usr/lib/q-studio`,
 an application launcher, an icon and the `/usr/bin/q-studio` symlink. Native
 Wails v3.1 requires GTK4 and WebKitGTK 6.0; package managers resolve these
@@ -87,6 +88,10 @@ the prebuilt pair to Wails v3.1.0 with `build --skip-build`. It installs a pinne
 CLI in `bin/tools` if needed. Wails owns package assembly, platform metadata,
 icons and companion placement. Windows lifecycle/WebView2 checks and Linux
 installation paths are maintained templates under `desktop/packaging`.
+
+After changing `desktop/assets/icon.png`, run `go -C desktop generate .` from
+the repository root to refresh the Windows executable icons and browser
+favicon, then run `task studio:build` to update the embedded frontend.
 
 macOS staging prepares a 1024-pixel copy of the existing logo so Wails emits all
 ICNS representations, including 512- and 1024-pixel sizes. The custom macOS

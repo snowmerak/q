@@ -19,6 +19,8 @@ import (
 //go:embed assets/icon.png
 var appIcon []byte
 
+//go:generate go -C .. run ./scripts/studioicons
+
 type desktopShell struct {
 	app       *application.App
 	host      *engineHost
@@ -80,8 +82,9 @@ func run() error {
 	defer cancel()
 	monitorDone := make(chan struct{})
 	app := application.New(application.Options{
-		Name: "Q Studio", Description: "Q workspace coding agent", Icon: appIcon, Logger: logger,
+		Name: "Q Studio", Description: "Q workspace coding agent", Icon: windowIcon(), Logger: logger,
 		Assets:  application.AssetOptions{Handler: shell, DisableLogging: true},
+		Linux:   application.LinuxOptions{ApplicationID: "ne.saturday.q-studio"},
 		Mac:     application.MacOptions{ApplicationShouldTerminateAfterLastWindowClosed: false},
 		Windows: application.WindowsOptions{WndClass: "QStudioApplication"},
 		SingleInstance: &application.SingleInstanceOptions{
@@ -138,6 +141,19 @@ func run() error {
 	// Some platforms terminate from the native loop, so OnShutdown is primary.
 	shell.quit.Do(func() { cancel(); <-monitorDone; shell.host.close() })
 	return err
+}
+
+func windowIcon() []byte {
+	if runtime.GOOS == "darwin" {
+		if executable, err := os.Executable(); err == nil {
+			// Use the bundle's full-size icon for the Dock when it is available.
+			icon := filepath.Join(filepath.Dir(executable), "..", "Resources", "icons.icns")
+			if info, err := os.Stat(icon); err == nil && info.Mode().IsRegular() {
+				return nil
+			}
+		}
+	}
+	return appIcon
 }
 
 func (s *desktopShell) show() {

@@ -22,6 +22,7 @@ require (
 	github.com/snowmerak/cdp-q-driver v0.0.0-20261107143548-ec463b2b34af
 	github.com/snowmerak/llm-provider v0.0.0-20261108025312-195d7124fbea
 	github.com/snowmerak/q/third_party/acp-go-sdk v0.0.0-20260827012000-155b26051836
+	github.com/tc-hib/winres v0.3.1
 	github.com/zeebo/blake3 v0.2.4
 	go.etcd.io/bbolt v1.4.0
 	golang.org/x/image v0.20.0
@@ -90,6 +91,7 @@ require (
 	github.com/mschoch/smat v0.2.0 // indirect
 	github.com/muesli/cancelreader v0.2.2 // indirect
 	github.com/ncruces/go-strftime v1.0.0 // indirect
+	github.com/nfnt/resize v0.0.0-20180221191011-83c6a9932646 // indirect
 	github.com/parquet-go/bitpack v1.0.0 // indirect
 	github.com/parquet-go/jsonlite v1.0.0 // indirect
 	github.com/pierrec/lz4/v4 v4.1.21 // indirect

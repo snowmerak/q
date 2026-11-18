@@ -2,6 +2,7 @@ package main
 
 import (
 	"archive/zip"
+	"bytes"
 	"errors"
 	"fmt"
 	"io"
@@ -112,7 +113,21 @@ func packageTarget(root, binaries string, t target, options buildOptions) error 
 	if err = command(stage, env, cli, "build", "--skip-build", "--targets", t.os+"/"+t.arch, "--formats", formats); err != nil {
 		return err
 	}
-	return collectPackages(root, stage, t, options.version, formats)
+	if err = collectPackages(root, stage, t, options.version, formats); err != nil {
+		return err
+	}
+	if t.os == "darwin" {
+		// Wails 3.1 keeps the assembled app in its artifact directory when
+		// exporting a DMG. Archive that same bundle so Finder can load its icon.
+		app, _ := t.names()
+		bundle := filepath.Join(stage, ".wails", "build", "default", "darwin-"+t.arch, "artifacts", app+".app")
+		archive := filepath.Join(root, "bin", fmt.Sprintf("Q-Studio-%s-darwin-%s.zip", options.version, t.arch))
+		if err = zipDirectory(bundle, archive, true); err != nil {
+			return err
+		}
+		fmt.Println("Application bundle:", archive)
+	}
+	return nil
 }
 
 func stagePackage(root, stage, binaries string, t target, options buildOptions) error {
@@ -201,6 +216,17 @@ func stageLinuxConfig(stage string, t target, version string) error {
 	}
 	config["version"] = version
 	config["arch"] = t.arch
+	if t.os == "linux" {
+		// Keep existing shortcuts working without showing a second menu entry.
+		support := filepath.Join(stage, "support")
+		launcher, err := os.ReadFile(filepath.Join(support, "q-studio.desktop"))
+		if err != nil {
+			return err
+		}
+		if err = os.WriteFile(filepath.Join(support, "q-studio-legacy.desktop"), append(bytes.TrimRight(launcher, "\r\n"), []byte("\nNoDisplay=true\n")...), 0o644); err != nil {
+			return err
+		}
+	}
 	for _, item := range config["contents"].([]any) {
 		entry := item.(map[string]any)
 		if entry["type"] == "symlink" {
@@ -211,7 +237,7 @@ func stageLinuxConfig(stage string, t target, version string) error {
 		case strings.HasSuffix(source, "appicon.png"):
 			entry["src"] = filepath.Join(stage, "assets", "icon.png")
 		case strings.HasSuffix(source, ".desktop"):
-			entry["src"] = filepath.Join(stage, "support", "q-studio.desktop")
+			entry["src"] = filepath.Join(stage, "support", filepath.Base(source))
 		default:
 			entry["src"] = filepath.Join(stage, filepath.FromSlash(source))
 		}
@@ -236,12 +262,6 @@ func collectPackages(root, stage string, t target, version, formats string) erro
 		}
 		if entry.IsDir() {
 			if strings.HasSuffix(entry.Name(), ".app") {
-				out := prefix + ".app.zip"
-				if err := zipDirectory(path, out, true); err != nil {
-					return err
-				}
-				fmt.Println("Application bundle:", out)
-				count++
 				return filepath.SkipDir
 			}
 			return nil

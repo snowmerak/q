@@ -6,7 +6,7 @@ test.beforeEach(async ({ page }) => {
   page.providerErrors = [];
   page.on('pageerror', error => page.providerErrors.push(error.message));
   page.on('console', message => {
-    if (message.type() === 'error' && !message.location().url.endsWith('/favicon.ico')) {
+    if (message.type() === 'error') {
       page.providerErrors.push(message.text());
     }
   });

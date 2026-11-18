@@ -123,6 +123,9 @@ func buildTarget(root string, t target, options buildOptions) error {
 			return fmt.Errorf("missing paired executable %s", name)
 		}
 	}
+	if t.os == "darwin" && (options.installer || options.packageOnly) {
+		return packageTarget(root, directory, t, options)
+	}
 	archive := filepath.Join(root, "bin", fmt.Sprintf("Q-Studio-%s-%s-%s.zip", options.version, t.os, t.arch))
 	if err := zipDirectory(directory, archive, false, app, engine); err != nil {
 		return err
