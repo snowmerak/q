@@ -17,6 +17,7 @@ func runLibraryMCP(ctx context.Context, args []string, stderr io.Writer) error {
 	flags := flag.NewFlagSet("q library mcp", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	dir := flags.String("config-dir", "", "Q configuration directory containing library.json")
+	skillsOnly := flags.Bool("skills-only", false, "Expose only the global Agent Skills read tools")
 	workspaceID := flags.String("workspace-id", "", "Host-selected Studio project ID")
 	sessionID := flags.String("session-id", "", "Host-selected Q session ID")
 	manager := flags.Bool("manager", false, "Host-selected project manager binding")
@@ -41,6 +42,9 @@ func runLibraryMCP(ctx context.Context, args []string, stderr io.Writer) error {
 	// The application host owns Library. This bridge stays available when its
 	// HTTP service is temporarily down; individual tool calls report errors.
 	client := library.NewClient(value.Endpoint(), "", 0)
+	if *skillsOnly {
+		return librarymcp.NewSkillsServer(client).Run(ctx, &mcp.StdioTransport{})
+	}
 	if *connection != "" {
 		store := config.Store{Dir: *dir}
 		client.SetWorkEmbeddingResolver(func(context.Context) (library.Embedder, string, int, error) {

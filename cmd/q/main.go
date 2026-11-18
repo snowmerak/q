@@ -125,7 +125,7 @@ func main() {
 		}
 		mode, serviceArgs, ok := parseServiceCommand(os.Args[2:])
 		if !ok || (mode == serviceCommandStart && len(serviceArgs) != 0) {
-			fmt.Fprintln(os.Stderr, "usage: q library | q library start | q library mcp [--config-dir <dir>]")
+			fmt.Fprintln(os.Stderr, "usage: q library | q library start | q library mcp [--config-dir <dir>] [--skills-only]")
 			os.Exit(2)
 		}
 		if mode == serviceCommandConfigure {

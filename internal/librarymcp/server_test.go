@@ -15,8 +15,13 @@ import (
 
 func connect(t *testing.T, client *library.Client, binding workitemtools.Binding) *mcp.ClientSession {
 	t.Helper()
+	return connectServer(t, NewServer(client, binding))
+}
+
+func connectServer(t *testing.T, mcpServer *mcp.Server) *mcp.ClientSession {
+	t.Helper()
 	serverTransport, clientTransport := mcp.NewInMemoryTransports()
-	server, err := NewServer(client, binding).Connect(t.Context(), serverTransport, nil)
+	server, err := mcpServer.Connect(t.Context(), serverTransport, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

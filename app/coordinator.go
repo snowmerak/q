@@ -15,7 +15,6 @@ import (
 	"time"
 
 	"github.com/snowmerak/q/archiveembed"
-	"github.com/snowmerak/q/browsercontrol"
 	"github.com/snowmerak/q/change"
 	"github.com/snowmerak/q/client"
 	"github.com/snowmerak/q/config"
@@ -398,7 +397,6 @@ func (host *SessionHost) runACPTicket(ctx context.Context, c *library.Client, wo
 	}
 	binding := workitemtools.Binding{WorkspaceID: a.WorkspaceID, SessionID: a.WorkerSessionID, EmbeddingConnection: bridgePath}
 	command.mcpServers, err = acpLibraryServers(host.store.Dir, binding)
-	command.browserStore = &host.store
 	if err != nil {
 		return result, err
 	}
@@ -437,11 +435,6 @@ func (host *SessionHost) runACPTicket(ctx context.Context, c *library.Client, wo
 	remote.requireCompletedText = true
 	if remote.resumed {
 		remote.lastBrowserPreference = saved.BrowserPreference
-	}
-	// Keep possible active guidance across an unknown prompt outcome. A
-	// successful prompt below records the exact delivered preference.
-	if preference := browsercontrol.Prompt(value.BrowserControl); preference != "" {
-		saved.BrowserPreference = preference
 	}
 	saved.SessionID = string(remote.sessionID)
 	saved.AttemptID = a.ID

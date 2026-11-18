@@ -4,10 +4,10 @@ Settings → Browser control records which CLI the user prefers for browser work
 The presets are CDP Q Driver, Ego Browser and Playwright CLI. The preference is
 disabled by default. Enabling it adds guidance on the next user turn; changing
 or disabling it updates existing conversations, including persistent Codex
-threads, without resetting their identity. ACP sessions receive the same
-guidance. Native workers receive it when their tool catalog allows commands.
-ACP checkpoints retain the last delivered preference so reconnecting can apply
-changes or clear a preference disabled while the session was closed.
+threads, without resetting their identity. Native workers receive it when their
+tool catalog allows commands. Prompts sent to external ACP agents treat the
+preference as disabled. A resumed ACP conversation that received an earlier Q
+preference gets the same one-time withdrawal as a disabled preference.
 
 Q stores the executable and argument array separately in global `config.yaml`:
 

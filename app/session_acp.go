@@ -52,9 +52,14 @@ func (host *SessionHost) prepareACPSession(ctx context.Context, prepared *prepar
 	if err != nil {
 		return nil, err
 	}
-	command.browserStore = &host.store
+	command.mcpServers, err = acpSkillServers(host.store.Dir)
+	if err != nil {
+		return nil, fmt.Errorf("configure ACP skills: %w", err)
+	}
+	instructions := librarymcp.SkillInstructions
+	withWorkTools := connection.Library || prepared.executionRoot != prepared.store.Root
 	binding := workitemtools.Binding{SessionID: prepared.store.SessionID}
-	if connection.Library || prepared.executionRoot != prepared.store.Root {
+	if withWorkTools {
 		binding.EmbeddingConnection, err = host.workEmbeddingConnection()
 		if err != nil {
 			return nil, err
@@ -63,10 +68,12 @@ func (host *SessionHost) prepareACPSession(ctx context.Context, prepared *prepar
 			binding.WorkspaceID = prepared.projectContext.ProjectID
 			binding.Manager = prepared.projectContext.Role == coordinator.RoleIntegrator
 		}
-		command.mcpServers, err = acpLibraryServers(host.store.Dir, binding)
+		servers, err := acpLibraryServers(host.store.Dir, binding)
 		if err != nil {
 			return nil, fmt.Errorf("configure ACP Library: %w", err)
 		}
+		command.mcpServers = append(servers, command.mcpServers...)
+		instructions += "\n\n" + librarymcp.InstructionsFor(binding)
 	}
 	saved, err := prepared.store.Load()
 	if err != nil {
@@ -144,8 +151,8 @@ func (host *SessionHost) prepareACPSession(ctx context.Context, prepared *prepar
 		}
 	}
 	remote.sessionCheckpoint = &checkpoint
-	remote.libraryInstructions = librarymcp.InstructionsFor(binding)
-	if prepared.projectContext != nil {
+	remote.libraryInstructions = instructions
+	if withWorkTools && prepared.projectContext != nil {
 		remote.libraryRoleInstructions = coordinator.RoleInstructions(prepared.projectContext.Role)
 	}
 	remote.libraryInstructionsSent = remote.resumed && libraryInstructionsVersion == acpLibraryInstructionsVersion

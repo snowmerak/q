@@ -10,7 +10,17 @@ import (
 	"github.com/snowmerak/q/third_party/acp-go-sdk"
 )
 
-const acpLibraryInstructionsVersion = 7
+const acpLibraryInstructionsVersion = 8
+
+func acpSkillServers(configDir string) ([]acp.McpServer, error) {
+	servers, err := acpLibraryServers(configDir)
+	if err != nil {
+		return nil, err
+	}
+	servers[0].Stdio.Name = "q-skills"
+	servers[0].Stdio.Args = append(servers[0].Stdio.Args, "--skills-only")
+	return servers, nil
+}
 
 func acpLibraryServers(configDir string, configured ...workitemtools.Binding) ([]acp.McpServer, error) {
 	executable, err := os.Executable()

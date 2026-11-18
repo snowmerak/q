@@ -34,8 +34,12 @@ lexical hits only when the semantic branch has a confident candidate; otherwise
 the complete lexical branch remains in the fusion.
 `get_skill` routes the selected ID to the Library or local registry and always
 returns the complete resource text directly in its `content` field, whether or
-not Loom is available. It does not create a Loom artifact. There is no separate
-Library MCP tool.
+not Loom is available. It does not create a Loom artifact.
+
+Interactive ACP sessions can call `search_skills` and `get_skill` through the
+read-only `q-skills` MCP server. This searches the global Library, including
+bundled skills such as `q-cdp`. Workspace skill indexes remain part of the native
+Q tool runtime.
 
 Skills already read in the current context should be reused across tasks and
 turns. Search again only when additional guidance is needed; read again when a

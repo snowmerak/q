@@ -50,7 +50,14 @@ func Prompt(value config.BrowserControlConfig) string {
 	}
 	driver := Inspect(value.Preferred, value.Drivers[value.Preferred])
 	body, _ := json.Marshal(driver)
-	return "The user prefers this CLI for browser control. Find suitable skills yourself and reuse any complete instructions already in context. A skill is optional; use the CLI's help if no applicable skill exists. Use the configured executable and argument array through an available command tool, quoting them for the host shell. This preference does not grant unavailable tools. Reuse the intended browser session and clean up only resources owned by your task.\n" + string(body)
+	guidance := "Start browser work with the user's selected CLI. Open a known source URL directly and verify claims against the observed page or tool output. Find skills suited to the selected CLI and reuse complete instructions already in context. A skill is optional; use the CLI's help if no applicable skill exists. Use resolved_command when present, otherwise command, with the configured argument array. Quote for the host shell and use an available command tool. If the CLI is unavailable or fails and you switch tools, report the reason. Reuse the intended browser session and clean up only resources owned by your task."
+	switch value.Preferred {
+	case "ego-browser":
+		guidance += " Look up ego-browser. Load the installed version's usage guide with the selected executable's skill subcommand when that guide is missing from context. Use a snapshot to establish page structure before choosing unfamiliar selectors."
+	case "cdp-q-driver":
+		guidance += " Look up q-cdp for the bundled CDP driver's usage guide."
+	}
+	return guidance + "\n" + string(body)
 }
 
 // AppendPreference delivers changes in user input so an existing stateful

@@ -31,7 +31,6 @@ type acpAgentCommand struct {
 	display       string
 	installPreset string
 	mcpServers    []acp.McpServer
-	browserStore  *config.Store
 }
 
 type acpRemoteConnection interface {
@@ -73,8 +72,8 @@ type acpRemoteClient struct {
 	libraryInstructions     string
 	libraryInstructionsSent bool
 	libraryRoleInstructions string
-	browserStore            *config.Store
-	lastBrowserPreference   string
+	// Last preference delivered by an older Q version, for one-time withdrawal.
+	lastBrowserPreference string
 
 	slashCommandsBySession map[acp.SessionId][]slashCommand
 
@@ -226,7 +225,7 @@ func startACPRemoteClientWithResume(
 		root: root, agent: strings.ToLower(command.display), display: command.display,
 		command: strings.Join(append([]string{filepath.Base(command.name)}, command.args...), " "),
 		stdin:   stdin, cancel: cancel, processContext: processContext, processDone: wait, stderr: stderr,
-		mcpServers: command.mcpServers, browserStore: command.browserStore,
+		mcpServers: command.mcpServers,
 	}
 	if remote.mcpServers == nil {
 		remote.mcpServers = []acp.McpServer{}
@@ -382,14 +381,6 @@ func (r *acpRemoteClient) prompt(ctx context.Context, content string, events cha
 	if err := ctx.Err(); err != nil {
 		return nil, 0, err
 	}
-	browserPreference := ""
-	if r.browserStore != nil {
-		value, err := r.browserStore.Load()
-		if err != nil {
-			return nil, 0, fmt.Errorf("load browser preference: %w", err)
-		}
-		browserPreference = browsercontrol.Prompt(value.BrowserControl)
-	}
 	turn := &acpRemoteTurn{
 		ctx: ctx, events: events, display: r.display,
 		toolTitles: make(map[acp.ToolCallId]string), toolCalls: make(map[acp.ToolCallId]struct{}),
@@ -408,15 +399,13 @@ func (r *acpRemoteClient) prompt(ctx context.Context, content string, events cha
 	initialContext := r.initialContext
 	r.initialContext = ""
 	content, libraryInstructions := r.libraryPrompt(content, initialContext)
-	previousPreference := r.lastBrowserPreference
-	if r.browserStore != nil {
-		previous := []client.Message{}
-		if previousPreference != "" {
-			previous = append(previous, client.Message{Role: client.RoleUser, Content: "<q_browser_control>\n" + previousPreference + "\n</q_browser_control>"})
+	clearBrowserPreference := r.lastBrowserPreference != ""
+	if clearBrowserPreference {
+		messages := []client.Message{
+			{Role: client.RoleUser, Content: "<q_browser_control>\n" + r.lastBrowserPreference + "\n</q_browser_control>"},
+			{Role: client.RoleUser, Content: content},
 		}
-		previous = append(previous, client.Message{Role: client.RoleUser, Content: content})
-		updated := browsercontrol.AppendPreference(previous, browserPreference)
-		content = updated[len(updated)-1].TextContent()
+		content = browsercontrol.AppendPreference(messages, "")[1].TextContent()
 	}
 	r.mu.Unlock()
 	defer func() {
@@ -446,9 +435,9 @@ func (r *acpRemoteClient) prompt(ctx context.Context, content string, events cha
 		r.libraryInstructionsSent = true
 		r.mu.Unlock()
 	}
-	if r.browserStore != nil {
+	if clearBrowserPreference {
 		r.mu.Lock()
-		r.lastBrowserPreference = browserPreference
+		r.lastBrowserPreference = ""
 		r.mu.Unlock()
 	}
 	message, toolCalls := turn.result()

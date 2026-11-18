@@ -158,6 +158,43 @@ func TestManagerACPOperationHonorsSelectedAgent(t *testing.T) {
 	}
 }
 
+func TestInteractiveACPReceivesSkillsWithoutWorkTools(t *testing.T) {
+	host, _, _, _ := testManagerHost(t)
+	value, err := host.store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	value.BrowserControl.Enabled = true
+	value.BrowserControl.Preferred = "ego-browser"
+	if err := host.store.Save(value); err != nil {
+		t.Fatal(err)
+	}
+	store, lock, err := workspace.CreateSession(t.TempDir(), "test ACP skills")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := lock.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SaveSessionModelConfig(workspace.SessionModelConfig{Agent: "wire"}); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	var answer string
+	if err := host.Run(ctx, store, store.SessionID, "find an applicable skill", func(event SessionEvent) error {
+		if event.Type == "result" {
+			answer = event.Content
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(answer, "skills=true work-tools=false skill-guidance=true browser-guidance=false") {
+		t.Fatalf("external agent received the wrong MCP capabilities or prompt: %s", answer)
+	}
+}
+
 func TestManagerACPUsesProjectCWDAndResumesUntilClear(t *testing.T) {
 	for _, role := range []string{coordinator.RoleCoordinator, coordinator.RoleIntegrator} {
 		t.Run(role, func(t *testing.T) {
@@ -285,15 +322,18 @@ func TestManagerACPHelperProcess(t *testing.T) {
 	}
 	decoder, encoder := json.NewDecoder(os.Stdin), json.NewEncoder(os.Stdout)
 	cwd, _ := os.Getwd()
-	resumed := false
+	resumed, skills, workTools := false, false, false
 	for {
 		var request struct {
 			ID     json.RawMessage `json:"id"`
 			Method string          `json:"method"`
 			Params struct {
-				Cwd       string `json:"cwd"`
-				SessionID string `json:"sessionId"`
-				Prompt    []struct {
+				Cwd        string `json:"cwd"`
+				SessionID  string `json:"sessionId"`
+				MCPServers []struct {
+					Name string `json:"name"`
+				} `json:"mcpServers"`
+				Prompt []struct {
 					Text string `json:"text"`
 				} `json:"prompt"`
 			} `json:"params"`
@@ -310,19 +350,27 @@ func TestManagerACPHelperProcess(t *testing.T) {
 				os.Exit(2)
 			}
 			resumed = request.Method == "session/load"
+			skills, workTools = false, false
+			for _, server := range request.Params.MCPServers {
+				skills = skills || server.Name == "q-skills"
+				workTools = workTools || server.Name == "q-library"
+			}
 			if !resumed {
 				result = map[string]any{"sessionId": fmt.Sprintf("remote-%d", os.Getpid())}
 			}
 		case "session/prompt":
-			role := "none"
+			role, skillGuidance, browserGuidance := "none", false, false
 			for _, block := range request.Params.Prompt {
+				skillGuidance = skillGuidance || strings.Contains(block.Text, "search_skills") && strings.Contains(block.Text, "get_skill")
+				browserGuidance = browserGuidance || strings.Contains(block.Text, "<q_browser_control>")
 				for _, candidate := range []string{coordinator.RoleCoordinator, coordinator.RoleIntegrator} {
 					if strings.Contains(block.Text, coordinator.RoleInstructions(candidate)) {
 						role = candidate
 					}
 				}
 			}
-			_ = encoder.Encode(map[string]any{"jsonrpc": "2.0", "method": "session/update", "params": map[string]any{"sessionId": request.Params.SessionID, "update": map[string]any{"sessionUpdate": "agent_message_chunk", "content": map[string]any{"type": "text", "text": fmt.Sprintf("cwd=%s resumed=%t role=%s", cwd, resumed, role)}}}})
+			text := fmt.Sprintf("cwd=%s resumed=%t role=%s skills=%t work-tools=%t skill-guidance=%t browser-guidance=%t", cwd, resumed, role, skills, workTools, skillGuidance, browserGuidance)
+			_ = encoder.Encode(map[string]any{"jsonrpc": "2.0", "method": "session/update", "params": map[string]any{"sessionId": request.Params.SessionID, "update": map[string]any{"sessionUpdate": "agent_message_chunk", "content": map[string]any{"type": "text", "text": text}}}})
 			result = map[string]any{"stopReason": "end_turn"}
 		}
 		if len(request.ID) != 0 {
