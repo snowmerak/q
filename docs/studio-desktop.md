@@ -73,7 +73,7 @@ task desktop:package
 Equivalent commands with an explicit version or NSIS path:
 
 ```powershell
-go run ./scripts/desktopbuild -version 0.0.2
+go run ./scripts/desktopbuild -version 0.1.0
 go run ./scripts/desktopbuild -installer -nsis C:\path\to\makensis.exe
 ```
 
@@ -136,8 +136,8 @@ After committing the desktop implementation and workflow, push a numeric
 `v<major>.<minor>.<patch>` tag, for example:
 
 ```sh
-git tag -a v0.0.2 -m 'Q Studio 0.0.2'
-git push origin v0.0.2
+git tag -a v0.1.0 -m 'Q Studio 0.1.0'
+git push origin v0.1.0
 ```
 
 All six builds must succeed before the release job runs. It checks for eight
