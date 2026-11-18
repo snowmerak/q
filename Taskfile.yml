@@ -35,9 +35,10 @@ tasks:
       - go vet ./...
 
   ci:check:
-    desc: Check the desktop release infrastructure retry policy
+    desc: Check desktop release signing and infrastructure retry behavior
     cmds:
       - node --test scripts/ci/studio-retry.test.mjs
+      - node --test scripts/ci/macos-release.test.mjs
 
   studio:install:
     desc: Install the pinned Q Studio frontend dependencies

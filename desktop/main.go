@@ -2,13 +2,13 @@ package main
 
 import (
 	"context"
-	"crypto/sha256"
 	_ "embed"
 	"flag"
 	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"sync"
 
@@ -79,14 +79,13 @@ func run() error {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	monitorDone := make(chan struct{})
-	identity := sha256.Sum256([]byte(filepath.Clean(home)))
 	app := application.New(application.Options{
 		Name: "Q Studio", Description: "Q workspace coding agent", Icon: appIcon, Logger: logger,
 		Assets:  application.AssetOptions{Handler: shell, DisableLogging: true},
 		Mac:     application.MacOptions{ApplicationShouldTerminateAfterLastWindowClosed: false},
 		Windows: application.WindowsOptions{WndClass: "QStudioApplication"},
 		SingleInstance: &application.SingleInstanceOptions{
-			UniqueID: fmt.Sprintf("ne.saturday.q-studio.%x", identity[:12]),
+			UniqueID: singleInstanceID(home, runtime.GOOS),
 			OnSecondInstanceLaunch: func(data application.SecondInstanceData) {
 				if slices.Contains(data.Args, "--quit") {
 					go shell.app.Quit()

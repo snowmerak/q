@@ -16,7 +16,7 @@ jobs:
   retry:
     if: contains(fromJSON('["failure", "timed_out"]'), github.event.workflow_run.conclusion)
     runs-on: ubuntu-24.04
-    timeout-minutes: 240
+    timeout-minutes: 360
     permissions:
       contents: read
       actions: write

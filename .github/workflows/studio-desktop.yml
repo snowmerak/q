@@ -74,7 +74,7 @@ jobs:
     needs: prepare
     name: ${{ matrix.target }}
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 45
+    timeout-minutes: ${{ startsWith(matrix.target, 'darwin/') && 90 || 45 }}
     strategy:
       fail-fast: false
       matrix:
@@ -108,6 +108,14 @@ jobs:
         with:
           ref: ${{ needs.prepare.outputs.source }}
           persist-credentials: false
+      # Release tools follow the workflow revision; application sources remain
+      # pinned to the tag, including tags that predate these helper scripts.
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: .release-tools
+          sparse-checkout: scripts/ci
+          persist-credentials: false
       - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
@@ -119,6 +127,18 @@ jobs:
           node-version: '24'
           cache: npm
           cache-dependency-path: studio/frontend/package-lock.json
+      - name: Check release automation
+        run: node --test .release-tools/scripts/ci/macos-release.test.mjs .release-tools/scripts/ci/studio-retry.test.mjs
+      - name: Check macOS distribution credentials
+        if: runner.os == 'macOS' && needs.prepare.outputs.publish == 'true'
+        run: node .release-tools/scripts/ci/macos-release.mjs --check
+        env:
+          APPLE_DEVELOPER_ID_CERTIFICATE_BASE64: ${{ secrets.APPLE_DEVELOPER_ID_CERTIFICATE_BASE64 }}
+          APPLE_DEVELOPER_ID_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_DEVELOPER_ID_CERTIFICATE_PASSWORD }}
+          APPLE_DEVELOPER_TEAM_ID: ${{ secrets.APPLE_DEVELOPER_TEAM_ID }}
+          APPLE_NOTARY_KEY_BASE64: ${{ secrets.APPLE_NOTARY_KEY_BASE64 }}
+          APPLE_NOTARY_KEY_ID: ${{ secrets.APPLE_NOTARY_KEY_ID }}
+          APPLE_NOTARY_ISSUER_ID: ${{ secrets.APPLE_NOTARY_ISSUER_ID }}
       - name: Install Studio frontend dependencies
         run: npm --prefix studio/frontend ci
       - name: Check Studio frontend
@@ -200,7 +220,18 @@ jobs:
           go test ./scripts/desktopbuild
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           go -C desktop vet ./...
+      - name: Sign, notarize and verify macOS distributions
+        if: runner.os == 'macOS' && needs.prepare.outputs.publish == 'true'
+        run: node .release-tools/scripts/ci/macos-release.mjs
+        env:
+          APPLE_DEVELOPER_ID_CERTIFICATE_BASE64: ${{ secrets.APPLE_DEVELOPER_ID_CERTIFICATE_BASE64 }}
+          APPLE_DEVELOPER_ID_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_DEVELOPER_ID_CERTIFICATE_PASSWORD }}
+          APPLE_DEVELOPER_TEAM_ID: ${{ secrets.APPLE_DEVELOPER_TEAM_ID }}
+          APPLE_NOTARY_KEY_BASE64: ${{ secrets.APPLE_NOTARY_KEY_BASE64 }}
+          APPLE_NOTARY_KEY_ID: ${{ secrets.APPLE_NOTARY_KEY_ID }}
+          APPLE_NOTARY_ISSUER_ID: ${{ secrets.APPLE_NOTARY_ISSUER_ID }}
       - name: Upload installation artifacts
+        # Published macOS artifacts must pass signing and notarization first.
         uses: actions/upload-artifact@v6
         with:
           name: Q-Studio-${{ needs.prepare.outputs.version }}-${{ matrix.key }}

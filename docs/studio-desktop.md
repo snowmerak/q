@@ -32,8 +32,12 @@ All three platforms support amd64 (Intel/AMD x64) and arm64:
 
 The macOS image contains `Q Studio.app` with its engine inside the bundle.
 Move it to its final location before enabling login startup. Signed, notarized
-macOS distribution requires the distributor's Apple credentials; local packages
-are unsigned. Linux packages install the paired binaries in `/usr/lib/q-studio`,
+macOS distribution requires the distributor's Apple credentials. Published
+macOS ZIPs from the signing-enabled workflow contain a signed, notarized
+`Q Studio.app`, including its engine and an attached notarization ticket.
+Local builds and manual runs with publication off remain unsigned development
+packages; their portable ZIPs contain the raw executable pair.
+Linux packages install the paired binaries in `/usr/lib/q-studio`,
 an application launcher, an icon and the `/usr/bin/q-studio` symlink. Native
 Wails v3.1 requires GTK4 and WebKitGTK 6.0; package managers resolve these
 dependencies. Linux distributions without those libraries are not supported by
@@ -146,8 +150,10 @@ For manual runs in **Actions → Q Studio desktop release → Run workflow**:
   packages to its release. That tag must contain the desktop build sources.
 
 Only the release job receives `contents: write`; build jobs use read access.
-The built-in `GITHUB_TOKEN` is sufficient; no personal access token is needed.
-The workflow does not sign binaries or notarize macOS apps.
+The built-in `GITHUB_TOKEN` is sufficient for GitHub; no personal access token
+is needed. macOS publication additionally requires the Apple credentials below.
+Release helpers come from the workflow commit, while application sources stay
+pinned to the selected tag. This also supports recovery of older source tags.
 
 The [infrastructure retry workflow](../.github/workflows/studio-desktop-retry.yml)
 watches completed release builds from the default branch. It retries recognized
@@ -158,7 +164,7 @@ jobs and their dependents, including release publication. Build/test failures,
 unknown errors and manual cancellations stop automatic retries. Setup network
 errors must have a recognizable error in their check annotations; ordinary
 log messages alone do not trigger retries. Existing manual reruns count toward
-the same attempt limit. A controller waits up to 65 minutes for each rerun and
+the same attempt limit. A controller waits up to 110 minutes for each rerun and
 stops if its API request fails, without blindly replaying an ambiguous request.
 Its Actions summary records the retry or stop reason.
 
@@ -167,6 +173,55 @@ This workflow needs to be present on the default branch. Its controller uses
 only this repository's release workflow push/dispatch events. It never checks
 out the failed run's source. No additional token or paid retry service is used.
 Run `task ci:check` to test the policy locally without dispatching Actions.
+
+### macOS signing and notarization
+
+Configure these repository **Settings → Secrets and variables → Actions** secrets:
+
+| Secret | Value |
+| --- | --- |
+| `APPLE_DEVELOPER_ID_CERTIFICATE_BASE64` | Base64 of a password-protected `.p12` export containing the **Developer ID Application** certificate and private key |
+| `APPLE_DEVELOPER_ID_CERTIFICATE_PASSWORD` | Password for that `.p12` export |
+| `APPLE_DEVELOPER_TEAM_ID` | The certificate's 10-character Apple developer team ID |
+| `APPLE_NOTARY_KEY_BASE64` | Base64 of the App Store Connect team API key's `.p8` private key |
+| `APPLE_NOTARY_KEY_ID` | The API key's 10-character key ID |
+| `APPLE_NOTARY_ISSUER_ID` | The team API key's issuer UUID |
+
+On a Mac, `base64 -i DeveloperID.p12 | pbcopy` and
+`base64 -i AuthKey_KEYID.p8 | pbcopy` produce the corresponding secret values.
+Use a team API key with access to Apple's notary service. An Apple Development
+or Developer ID Installer certificate does not satisfy the app-signing check.
+
+For publishing runs, both Mac targets check required credential configuration
+before building. Native certificate validation happens during signing.
+Missing/invalid credentials, rejected notarization or failed signature/ticket/
+Gatekeeper verification fail the build and prevent release publication;
+publication never falls back to unsigned packages. Mac jobs allow 90 minutes;
+the app and DMG notarization submissions each wait at most 15 minutes. The retry
+controller allows 110 minutes per rerun within its six-hour overall limit.
+
+The signing helper extracts the Wails-produced app into a private workspace,
+signs its engine before sealing the app with hardened runtime and timestamps,
+notarizes an app archive, and staples the app's ticket. It then creates and signs
+the final DMG, notarizes it, and staples that ticket too. Both final containers
+are checked: the DMG is mounted again and the published ZIP is extracted again,
+with app signatures, tickets and Gatekeeper assessments checked before upload.
+The artifact names and release SHA256 manifest remain unchanged.
+
+Only the credential-check and signing steps receive Apple secrets. Signing uses
+an isolated temporary keychain and restores the original keychain search list;
+private key files and the keychain are cleaned on success or failure. Published
+artifacts include neither those credentials nor the signing workspace.
+
+`task ci:check` exercises credential rejection, signing/notarization failures,
+artifact publication gating and cleanup using a native-command adapter. These
+local tests do not establish real Apple signing or notarization. That requires
+a macOS runner and the configured credentials. Existing v0.0.2/v0.0.3 releases
+remain unsigned; this pipeline applies when the updated workflow is run.
+
+References: [Apple distribution packaging](https://developer.apple.com/documentation/xcode/packaging-mac-software-for-distribution),
+[Apple notarization workflow](https://developer.apple.com/documentation/security/customizing-the-notarization-workflow),
+[GitHub runner certificates](https://docs.github.com/en/actions/how-tos/deploy/deploy-to-third-party-platforms/sign-xcode-applications).
 
 ## Upgrades and removal
 
@@ -238,6 +293,13 @@ guarantee during sleep/offline periods.
 
 ## Verification
 
+On Linux, an exit without a window or terminal output can be diagnosed in
+`~/.q/desktop/desktop.log`. The v0.0.2/v0.0.3 shell used a home-directory hash as
+the final D-Bus single-instance name component. A hash starting with a digit
+made startup fail before a window was created. The corrected source prefixes
+only those invalid Linux components with a letter, preserving working Linux
+identities and all Windows/macOS identities.
+
 ```powershell
 go test ./internal/studioprocess ./cmd/q
 task desktop:check
@@ -283,10 +345,17 @@ two Windows EXEs, two macOS DMGs and four Linux DEB/RPM files. Package contents
 and archive integrity were inspected, including Unix executable permissions.
 Local macOS/Linux binaries were cross-built using the experimental purego
 backend, with macOS images assembled by Wails under Linux. The real Linux
-ARM64 engine integration tests also passed under WSL Debian; Linux desktop UI
-and macOS UI execution have not been verified. Native GitHub Actions builds
+ARM64 engine integration tests also passed under WSL Debian. Native Linux ARM64
+builds and actual window rendering were subsequently verified with Go 1.27.3,
+GTK 4.18.6 and WebKitGTK 2.54.0 on Debian 13/WSLg. Both released ARM64 DEBs were
+extracted and executed: valid profile IDs opened Overview, while digit-leading
+IDs exited silently. The corrected native build opened the same failing
+profile, reached Ready, reused its window on a second launch and shut down
+normally through `--quit`. macOS UI execution has not been verified.
+Native GitHub Actions builds
 and assembled-engine tests passed for all six OS/architecture pairs in the
 v0.0.1 release.
-Native macOS/Linux behavior, clean-account Windows installation/removal and an
-actual logout/login cycle still need platform testing. Signing certificates and
-auto-updates are not included.
+Native macOS behavior, Linux desktop environments outside WSLg (including
+NVIDIA GB10), clean-account Windows installation/removal and an actual
+logout/login cycle still need platform testing. Apple signing credentials must
+be supplied separately; auto-updates are not included.

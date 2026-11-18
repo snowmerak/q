@@ -90,7 +90,7 @@ export async function retryRun({ api, repository, runID, wait = sleep, now = Dat
     await api('POST', endpoint);
     report(`Retry ${run.run_attempt}/3 requested for ${plan.jobs.length} unsuccessful job(s) and their dependents.`);
     const previousAttempt = run.run_attempt;
-    const deadline = now() + 65 * 60_000;
+    const deadline = now() + 110 * 60_000;
     do {
       if (now() >= deadline) throw new Error('Timed out waiting for the rerun; no further retry requested.');
       await wait(30_000);
