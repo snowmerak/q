@@ -34,6 +34,15 @@ test('success, running state, manual cancellation, and unknown failures never re
   assert.equal(retryPlan(run(), [job(), job({ id: 9, conclusion: 'failure', annotations: [] })]).jobs, undefined);
 });
 
+test('a downstream missing-artifact failure does not suppress a recognized upstream infrastructure retry', () => {
+  const dependent = job({ id: 8, name: 'Attach packages to GitHub Release', conclusion: 'failure',
+    annotations: [{ title: 'Q Studio release dependency', message: 'Required Windows/Linux asset missing: package.zip' }] });
+  assert.deepEqual(retryPlan(run(), [job(), dependent]).jobs, [7]);
+  assert.equal(retryPlan(run(), [dependent]).jobs, undefined);
+  assert.equal(retryPlan(run(), [job({ annotations: [] }), dependent]).jobs, undefined);
+  assert.equal(retryPlan(run(), [job(), { ...dependent, annotations: [] }]).jobs, undefined);
+});
+
 test('network failures retry only recognizable setup/download/upload steps', () => {
   for (const name of ['Run actions/setup-go@v6', 'Install Studio frontend dependencies', 'Upload installation artifacts']) {
     assert.deepEqual(retryPlan(run(), [job({ conclusion: 'failure', runner_name: 'runner', steps: [{ name, conclusion: 'failure' }], annotations: [{ message: 'Error: HTTP status code 503' }] })]).jobs, [7]);

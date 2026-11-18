@@ -39,6 +39,7 @@ tasks:
     cmds:
       - node --test scripts/ci/studio-retry.test.mjs
       - node --test scripts/ci/macos-release.test.mjs
+      - node --test scripts/ci/studio-release.test.mjs
 
   studio:install:
     desc: Install the pinned Q Studio frontend dependencies

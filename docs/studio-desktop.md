@@ -123,7 +123,10 @@ of a cross-built macOS pair preserves those permissions.
 ## GitHub Actions and releases
 
 The [Q Studio desktop release workflow](../.github/workflows/studio-desktop.yml)
-builds six targets: Windows, macOS and Ubuntu, each on amd64 and arm64.
+requires Windows and Ubuntu builds on amd64 and arm64. macOS on both
+architectures is optional: publishing runs skip Macs without Apple signing
+credentials, and Mac build/signing failures do not block Windows/Linux releases.
+Development-only manual runs still attempt all six targets without credentials.
 Each runner builds the frontend from its lockfile before compiling and packaging
 the app. Windows uses a checksum-verified portable NSIS compiler, including
 on ARM64. macOS ARM64 uses an Intel macOS runner and Apple's ARM64 C/Objective-C
@@ -140,11 +143,15 @@ git tag -a v0.1.0 -m 'Q Studio 0.1.0'
 git push origin v0.1.0
 ```
 
-All six builds must succeed before the release job runs. It checks for eight
-installation files (two EXEs, two DMGs, two DEBs and two RPMs), six portable ZIPs
-and generates a SHA256 manifest. It creates the tag's GitHub Release with
+All four Windows/Linux builds must produce their six installation files
+(two EXEs, two DEBs and two RPMs) and four portable ZIPs. Successful signed
+Mac targets add a DMG and app ZIP each; missing/incomplete Mac pairs are omitted.
+The release job hashes only its verified artifact list and uploads that list
+plus a SHA256 manifest. It creates the tag's GitHub Release with
 generated notes, or attaches the files to an existing release while preserving
 its notes and publication state. A rerun replaces assets with the same names.
+If an existing release has assets missing from a rerun, publication stops to
+avoid leaving those assets outside the new manifest; rerun with complete inputs.
 The build source is pinned to the tag's commit; moving the tag during a run
 causes release publication to fail. The workflow never creates Git tags.
 
@@ -201,9 +208,10 @@ or Developer ID Installer certificate does not satisfy the app-signing check.
 
 For publishing runs, both Mac targets check required credential configuration
 before building. Native certificate validation happens during signing.
-Missing/invalid credentials, rejected notarization or failed signature/ticket/
-Gatekeeper verification fail the build and prevent release publication;
-publication never falls back to unsigned packages. Mac jobs allow 90 minutes;
+Missing credentials skip Mac targets. Invalid credentials, rejected notarization
+or failed signature/ticket/Gatekeeper verification fail the affected Mac job and
+omit its artifacts, while Windows/Linux remain required. Published Mac artifacts
+never fall back to unsigned packages. Mac jobs allow 90 minutes;
 the app and DMG notarization submissions each wait at most 15 minutes. The retry
 controller allows 110 minutes per rerun within its six-hour overall limit.
 

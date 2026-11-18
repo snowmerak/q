@@ -32,6 +32,7 @@ jobs:
       tag: ${{ steps.release.outputs.tag }}
       source: ${{ steps.release.outputs.source }}
       publish: ${{ steps.release.outputs.publish }}
+      matrix: ${{ steps.matrix.outputs.matrix }}
     steps:
       - name: Resolve release version and source commit
         id: release
@@ -69,36 +70,37 @@ jobs:
             fi
           fi
           printf 'version=%s\ntag=%s\nsource=%s\npublish=%s\n' "$version" "$tag" "$source" "$publish" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: .release-tools
+          sparse-checkout: scripts/ci
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+      - name: Select required and available optional targets
+        id: matrix
+        run: node .release-tools/scripts/ci/studio-release.mjs matrix
+        env:
+          PUBLISH: ${{ steps.release.outputs.publish }}
+          MACOS_SIGNING_CONFIGURED: >-
+            ${{ secrets.APPLE_DEVELOPER_ID_CERTIFICATE_BASE64 != '' &&
+                secrets.APPLE_DEVELOPER_ID_CERTIFICATE_PASSWORD != '' &&
+                secrets.APPLE_DEVELOPER_TEAM_ID != '' &&
+                secrets.APPLE_NOTARY_KEY_BASE64 != '' &&
+                secrets.APPLE_NOTARY_KEY_ID != '' &&
+                secrets.APPLE_NOTARY_ISSUER_ID != '' }}
 
   package:
     needs: prepare
     name: ${{ matrix.target }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: ${{ startsWith(matrix.target, 'darwin/') && 90 || 45 }}
+    continue-on-error: ${{ startsWith(matrix.target, 'darwin/') }}
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - runner: windows-2025
-            target: windows/amd64
-            key: windows-amd64
-          - runner: windows-11-arm
-            target: windows/arm64
-            key: windows-arm64
-          - runner: macos-15-intel
-            target: darwin/amd64
-            key: darwin-amd64
-          # Use Apple's ARM64 cross compiler on Intel macOS. Hosted ARM64
-          # capacity can cancel queued jobs before a build even starts.
-          - runner: macos-15-intel
-            target: darwin/arm64
-            key: darwin-arm64
-          - runner: ubuntu-24.04
-            target: linux/amd64
-            key: linux-amd64
-          - runner: ubuntu-24.04-arm
-            target: linux/arm64
-            key: linux-arm64
+      matrix: ${{ fromJSON(needs.prepare.outputs.matrix) }}
     env:
       GOWORK: "off"
       Q_STUDIO_VERSION: ${{ needs.prepare.outputs.version }}
@@ -128,7 +130,7 @@ jobs:
           cache: npm
           cache-dependency-path: studio/frontend/package-lock.json
       - name: Check release automation
-        run: node --test .release-tools/scripts/ci/macos-release.test.mjs .release-tools/scripts/ci/studio-retry.test.mjs
+        run: node --test .release-tools/scripts/ci/macos-release.test.mjs .release-tools/scripts/ci/studio-retry.test.mjs .release-tools/scripts/ci/studio-release.test.mjs
       - name: Check macOS distribution credentials
         if: runner.os == 'macOS' && needs.prepare.outputs.publish == 'true'
         run: node .release-tools/scripts/ci/macos-release.mjs --check
@@ -246,7 +248,9 @@ jobs:
   release:
     name: Attach packages to GitHub Release
     needs: [prepare, package]
-    if: needs.prepare.outputs.publish == 'true'
+    # Optional Mac failures must not skip publication. Required Windows/Linux
+    # files are checked below even when a package job failed.
+    if: ${{ !cancelled() && needs.prepare.result == 'success' && needs.prepare.outputs.publish == 'true' }}
     runs-on: ubuntu-24.04
     permissions:
       contents: write
@@ -257,6 +261,15 @@ jobs:
       Q_STUDIO_TAG: ${{ needs.prepare.outputs.tag }}
       Q_STUDIO_SOURCE: ${{ needs.prepare.outputs.source }}
     steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: .release-tools
+          sparse-checkout: scripts/ci
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
       - uses: actions/download-artifact@v6
         with:
           pattern: Q-Studio-${{ needs.prepare.outputs.version }}-*
@@ -267,15 +280,7 @@ jobs:
         working-directory: release
         run: |
           set -euo pipefail
-          for arch in amd64 arm64; do
-            for suffix in "windows-$arch-setup.exe" "darwin-$arch.dmg" "linux-$arch.deb" "linux-$arch.rpm"; do
-              test -s "Q-Studio-$Q_STUDIO_VERSION-$suffix"
-            done
-            for os in windows darwin linux; do
-              test -s "Q-Studio-$Q_STUDIO_VERSION-$os-$arch.zip"
-            done
-          done
-          sha256sum Q-Studio-*.exe Q-Studio-*.dmg Q-Studio-*.deb Q-Studio-*.rpm Q-Studio-*.zip > "Q-Studio-$Q_STUDIO_VERSION-SHA256SUMS.txt"
+          node ../.release-tools/scripts/ci/studio-release.mjs assets . "$Q_STUDIO_VERSION"
           sha256sum --check "Q-Studio-$Q_STUDIO_VERSION-SHA256SUMS.txt"
       - name: Create or update release
         shell: bash
@@ -288,7 +293,11 @@ jobs:
             exit 1
           fi
           if gh release view "$Q_STUDIO_TAG" > /dev/null 2>&1; then
-            gh release upload "$Q_STUDIO_TAG" Q-Studio-* --clobber
+            gh release view "$Q_STUDIO_TAG" --json assets --jq '.assets[].name' > existing-assets.txt
+            node ../.release-tools/scripts/ci/studio-release.mjs check-existing existing-assets.txt assets.txt
+            mapfile -t assets < assets.txt
+            gh release upload "$Q_STUDIO_TAG" "${assets[@]}" --clobber
           else
-            gh release create "$Q_STUDIO_TAG" Q-Studio-* --verify-tag --title "Q Studio $Q_STUDIO_TAG" --generate-notes
+            mapfile -t assets < assets.txt
+            gh release create "$Q_STUDIO_TAG" "${assets[@]}" --verify-tag --title "Q Studio $Q_STUDIO_TAG" --generate-notes --notes-file release-notes.md
           fi

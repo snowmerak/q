@@ -19,7 +19,12 @@ export function retryPlan(run, jobs) {
   if (!Number.isSafeInteger(run.run_attempt) || run.run_attempt < 1 || run.run_attempt > backoff.length) {
     return { reason: 'Retry budget exhausted (at most three additional attempts).' };
   }
-  const candidates = jobs.filter(failed);
+  const unsuccessful = jobs.filter(failed);
+  // The release job still runs after optional Mac failures. A missing required
+  // artifact can therefore be a consequence of an upstream runner failure;
+  // retry that upstream job and let GitHub rerun its dependent release job.
+  const candidates = unsuccessful.filter((job) => !(job.name === 'Attach packages to GitHub Release' &&
+    job.conclusion === 'failure' && job.annotations?.some((annotation) => annotation.title === 'Q Studio release dependency')));
   if (!candidates.length) return { reason: 'No failed jobs to retry.' };
   for (const job of candidates) {
     const messages = (job.annotations ?? []).map((a) => a.message ?? '').join('\n');
