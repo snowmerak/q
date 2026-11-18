@@ -24,6 +24,7 @@ require (
 	github.com/snowmerak/q/third_party/acp-go-sdk v0.0.0-20260827012000-155b26051836
 	github.com/zeebo/blake3 v0.2.4
 	go.etcd.io/bbolt v1.4.0
+	golang.org/x/image v0.20.0
 	golang.org/x/sys v0.49.0
 	golang.org/x/text v0.43.0
 	gopkg.in/yaml.v3 v3.0.1
@@ -103,7 +104,6 @@ require (
 	github.com/yuin/goldmark v1.7.17 // indirect
 	github.com/yuin/goldmark-emoji v1.0.5 // indirect
 	golang.org/x/exp v0.0.0-20240909161429-701f63a606c0 // indirect
-	golang.org/x/image v0.20.0 // indirect
 	golang.org/x/net v0.62.0 // indirect
 	golang.org/x/oauth2 v0.36.0 // indirect
 	golang.org/x/sync v0.24.0 // indirect

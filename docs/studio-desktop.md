@@ -88,6 +88,13 @@ CLI in `bin/tools` if needed. Wails owns package assembly, platform metadata,
 icons and companion placement. Windows lifecycle/WebView2 checks and Linux
 installation paths are maintained templates under `desktop/packaging`.
 
+macOS staging prepares a 1024-pixel copy of the existing logo so Wails emits all
+ICNS representations, including 512- and 1024-pixel sizes. The custom macOS
+Info.plist explicitly selects `Contents/Resources/icons.icns` and omits
+`CFBundleIconName`, preventing the bundled default asset catalog from taking
+precedence. These inputs apply to unsigned local packages too, before signing
+or notarization can seal the bundle.
+
 This uses Wails' **experimental YAML packaging pipeline**, explicitly enabled
 only for the packaging child process with `WAILS_EXP_USE_WAKE=1`. The GUI backend
 uses Wails' native defaults. Windows needs NSIS (`makensis` on PATH or `-nsis`).

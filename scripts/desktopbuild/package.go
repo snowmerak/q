@@ -130,6 +130,11 @@ func stagePackage(root, stage, binaries string, t target, options buildOptions) 
 	if err := copyFile(filepath.Join(root, "desktop", "assets", "icon.png"), filepath.Join(stage, "assets", "icon.png"), 0o644); err != nil {
 		return err
 	}
+	if t.os == "darwin" {
+		if err := stageDarwinAssets(root, stage, options.version); err != nil {
+			return err
+		}
+	}
 	for _, name := range []string{"windows-wails.nsi", "webview2.nsh", "nfpm.yaml", "q-studio.desktop"} {
 		if err := copyFile(filepath.Join(root, "desktop", "packaging", name), filepath.Join(stage, "support", name), 0o644); err != nil {
 			return err
@@ -165,6 +170,14 @@ func stagePackage(root, stage, binaries string, t target, options buildOptions) 
 	project := manifest["project"].(map[string]any)
 	project["version"] = options.version
 	project["binary_name"] = strings.TrimSuffix(app, ".exe")
+	if t.os == "darwin" {
+		platform, _ := manifest["darwin"].(map[string]any)
+		if platform == nil {
+			platform = map[string]any{}
+		}
+		platform["info_plist"] = "support/darwin-Info.plist"
+		manifest["darwin"] = platform
+	}
 	manifest["targets"] = map[string]any{t.os + "/" + t.arch: map[string]any{}}
 	// Wails uses the first field to distinguish its native manifest from legacy
 	// metadata, so preserve the version marker ahead of the sorted YAML map.

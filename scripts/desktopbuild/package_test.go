@@ -2,6 +2,8 @@ package main
 
 import (
 	"archive/zip"
+	"bytes"
+	"image/png"
 	"os"
 	"path/filepath"
 	"strings"
@@ -58,6 +60,21 @@ func TestPackageStagingPreservesEngineAndInstallContracts(t *testing.T) {
 			project := manifest["project"].(map[string]any)
 			if project["version"] != "2.3.4" || project["binary_name"] != strings.TrimSuffix(app, ".exe") {
 				t.Fatal("package metadata does not match target")
+			}
+			if target.os == "darwin" {
+				config := manifest["darwin"].(map[string]any)
+				plist, err := os.ReadFile(filepath.Join(stage, filepath.FromSlash(config["info_plist"].(string))))
+				if err != nil || !bytes.Contains(plist, []byte("<string>icons.icns</string>")) || bytes.Contains(plist, []byte("CFBundleIconName")) || !bytes.Contains(plist, []byte("<string>2.3.4</string>")) {
+					t.Fatalf("macOS icon or version metadata is incorrect: %s %v", plist, err)
+				}
+				artwork, err := os.ReadFile(filepath.Join(stage, "assets", "icon.png"))
+				if err != nil {
+					t.Fatal(err)
+				}
+				image, err := png.DecodeConfig(bytes.NewReader(artwork))
+				if err != nil || image.Width != 1024 || image.Height != 1024 {
+					t.Fatalf("macOS artwork lacks full ICNS size coverage: %+v %v", image, err)
+				}
 			}
 			for _, name := range []string{app, engine} {
 				copied, err := os.ReadFile(filepath.Join(stage, "bin", name))
