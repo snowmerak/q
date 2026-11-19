@@ -12,7 +12,7 @@ let retryDelay = 1000;
 export const uiStateError = writable('');
 
 function isUIKey(key: string) {
-  return ['q-studio-theme', 'q-studio-text-scale', 'q-studio-sidebar-collapsed', 'q-studio-workspace-root'].includes(key)
+  return ['q-studio-theme', 'q-studio-text-scale', 'q-studio-compact-sessions', 'q-studio-sidebar-collapsed', 'q-studio-workspace-root'].includes(key)
     || key.startsWith('q-studio-draft:');
 }
 

@@ -449,6 +449,20 @@ dd.success { color: var(--green); }
 .chat-heading-actions > button.stop-control { color: var(--error); border-color: var(--error-border); background: var(--error-soft); }
 .chat-heading-actions > button:disabled { cursor: wait; opacity: 0.5; }
 
+.compact-sessions .sessions-main .page-header { min-height: 56px; padding-block: 8px; }
+.compact-sessions .sessions-main .page-header h1 { font-size: calc(20px * var(--text-scale)); }
+.compact-sessions .sessions-main .page-description { display: none; }
+.compact-sessions .sessions-main .session-list-heading { padding-block: 8px 4px; }
+.compact-sessions .sessions-main .session-create-actions { padding-bottom: 8px; }
+.compact-sessions .sessions-main .session-search { margin-bottom: 4px; }
+.compact-sessions .sessions-main .session-tree { padding-top: 4px; }
+.compact-sessions .sessions-main .session-project-heading { margin-top: 7px; padding-block: 4px; }
+.compact-sessions .sessions-main .session-project-heading:first-child { margin-top: 0; }
+.compact-sessions .sessions-main .session-select { min-height: 36px; gap: 3px; padding-block: 7px; }
+.compact-sessions .sessions-main .session-child { min-height: 28px; padding-block: 5px; }
+.compact-sessions .sessions-main .chat-heading { min-height: 50px; padding-block: 6px; }
+.compact-sessions .sessions-main .chat-heading p { margin-top: 3px; }
+
 .session-error { flex: none; margin: 12px 18px 0; padding: 10px 12px; color: var(--error); border: 1px solid var(--error-border); border-radius: 5px; background: var(--error-soft); font-size: calc(13px * var(--text-scale)); }
 .run-error { max-height: 30vh; overflow-y: auto; }
 .run-error p { margin: 6px 0; white-space: pre-wrap; overflow-wrap: anywhere; }

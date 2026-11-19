@@ -1,4 +1,4 @@
-/* Q's reading workspace: slate, warm paper, and graphite share the same roles.
+/* Q's reading workspace themes share the same color roles.
    Keep action fills separate from accent text so both remain readable. */
 :root, .theme-preview {
   color-scheme: dark;
@@ -102,6 +102,31 @@
   --warning: #f0d5a0;
   --success-text: #a9d6b0;
   --overlay: rgb(0 5 2 / 84%);
+}
+
+:root[data-theme="graphite"], .theme-preview-graphite {
+  color-scheme: dark;
+  --background: #171717;
+  --surface: #1e1e1e;
+  --surface-raised: #292929;
+  --sidebar-bg: #1b1b1b;
+  --bar-bg: #1b1b1b;
+  --panel-subtle: #151515;
+  --field-bg: #212121;
+  --border: #383838;
+  --border-strong: #727272;
+  --text: #ededed;
+  --muted: #bdbdbd;
+  --subtle: #a0a0a0;
+  --accent: #d9d9d9;
+  --accent-hover: #eeeeee;
+  --on-accent: #1c1c1c;
+  --accent-text: #ededed;
+  --accent-muted: #c5c5c5;
+  --code-bg: #111111;
+  --code-gutter: #1c1c1c;
+  --code-text: #e0e0e0;
+  --overlay: rgb(0 0 0 / 80%);
 }
 
 :root, .theme-preview {

@@ -1,23 +1,29 @@
 <script lang="ts">
   import { loadAppearance, saveAppearance, textScales, themes, type StudioTheme, type TextScale } from '../appearance';
 
-  const labels: Record<StudioTheme, string> = { light: 'Light', dawn: 'Dawn', night: 'Night' };
+  const labels: Record<StudioTheme, string> = { light: 'Light', dawn: 'Dawn', night: 'Night', graphite: 'Graphite' };
   const descriptions: Record<StudioTheme, string> = {
     light: 'Warm paper, forest accents, and crisp ink',
     dawn: 'Blue slate, sea-glass accents, and soft white text',
-    night: 'Quiet graphite, sage accents, and clear contrast'
+    night: 'Deep charcoal with sage accents',
+    graphite: 'Neutral grays and soft white text'
   };
 
-  let { theme, textScale } = loadAppearance();
+  let { theme, textScale, compactSessions } = loadAppearance();
 
   function chooseTheme(value: StudioTheme) {
     theme = value;
-    saveAppearance(theme, textScale);
+    saveAppearance({ theme });
   }
 
   function chooseTextScale(value: TextScale) {
     textScale = value;
-    saveAppearance(theme, textScale);
+    saveAppearance({ textScale });
+  }
+
+  function chooseCompactSessions(value: boolean) {
+    compactSessions = value;
+    saveAppearance({ compactSessions });
   }
 </script>
 
@@ -52,13 +58,22 @@
       {/each}
     </div>
   </fieldset>
+
+  <fieldset class="appearance-group">
+    <legend>Session layout</legend>
+    <label class="compact-toggle session-layout-option">
+      <input type="checkbox" checked={compactSessions} onchange={(event) => chooseCompactSessions(event.currentTarget.checked)} />
+      Compact session view
+    </label>
+  </fieldset>
 </section>
 
 <style>
+  .appearance-section { container: appearance / inline-size; }
   .appearance-group { min-width: 0; margin: 24px 0 0; padding: 0; border: 0; }
   .appearance-group legend { margin-bottom: 12px; color: var(--text); font-weight: 600; }
   .appearance-group p { margin-bottom: 14px; color: var(--muted); }
-  .theme-options { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+  .theme-options { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
   .theme-option { display: grid; align-content: start; gap: 8px; min-width: 0; padding: 16px; border: 1px solid var(--border-strong); border-radius: 10px; background: var(--surface); cursor: pointer; }
   .theme-option.selected, .text-scale-options label.selected { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
   .theme-option:focus-within, .text-scale-options label:focus-within { outline: 2px solid var(--accent); outline-offset: 2px; }
@@ -80,5 +95,8 @@
   .preview-action { width: 35%; height: 12px; border-radius: 3px; background: var(--accent); }
   .text-scale-options { display: flex; flex-wrap: wrap; gap: 10px; }
   .text-scale-options label { min-width: 80px; padding: 10px 14px; border: 1px solid var(--border-strong); border-radius: 6px; background: var(--surface); color: var(--text); text-align: center; cursor: pointer; }
-  @media (max-width: 760px) { .theme-options { grid-template-columns: 1fr; } .theme-option { grid-template-columns: 90px 1fr; align-items: center; } .theme-preview { grid-row: span 2; height: 62px; margin: 0; } }
+  .session-layout-option { min-height: 34px; color: var(--text); cursor: pointer; }
+  .session-layout-option input { accent-color: var(--accent); }
+  @container appearance (max-width: 760px) { .theme-options { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+  @container appearance (max-width: 440px) { .theme-options { grid-template-columns: 1fr; } .theme-option { grid-template-columns: 90px 1fr; align-items: center; } .theme-preview { grid-row: span 2; height: 62px; margin: 0; } }
 </style>

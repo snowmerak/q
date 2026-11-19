@@ -124,7 +124,7 @@ func validUIStateKey(key string) bool {
 		return false
 	}
 	switch key {
-	case "q-studio-theme", "q-studio-text-scale", "q-studio-sidebar-collapsed", "q-studio-workspace-root":
+	case "q-studio-theme", "q-studio-text-scale", "q-studio-compact-sessions", "q-studio-sidebar-collapsed", "q-studio-workspace-root":
 		return true
 	default:
 		return strings.HasPrefix(key, "q-studio-draft:") && len(key) > len("q-studio-draft:")

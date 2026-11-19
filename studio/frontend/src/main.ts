@@ -8,8 +8,7 @@ import './files/files.css';
 
 async function start() {
   await initializeUIStorage();
-  const { theme, textScale } = loadAppearance();
-  applyAppearance(theme, textScale);
+  applyAppearance(loadAppearance());
   mount(App, { target: document.getElementById('app')! });
 }
 
