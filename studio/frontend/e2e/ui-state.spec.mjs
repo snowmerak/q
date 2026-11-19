@@ -8,7 +8,7 @@ test('legacy browser preferences migrate without replacing profile settings', as
   });
   await page.goto('/settings?section=appearance');
   await expect(page.getByRole('radio', { name: /^Night/ })).toBeChecked();
-  await expect(page.getByRole('radio', { name: '145%' })).toBeChecked();
+  await expect(page.getByRole('radio', { name: '140%' })).toBeChecked();
   expect((await (await request.get('/api/v1/ui-state')).json()).values['q-studio-theme']).toBe('night');
   await request.patch('/api/v1/ui-state', { data: { values: { 'q-studio-theme': 'light' } } });
   await page.reload();
@@ -37,7 +37,7 @@ test('appearance, navigation and drafts survive switching to another port', asyn
     await page.goto('/settings?section=appearance');
     await page.getByRole('radio', { name: /^Graphite/ }).check();
     await page.getByRole('checkbox', { name: 'Compact session view' }).check();
-    await page.getByRole('radio', { name: '145%' }).check();
+    await page.getByRole('radio', { name: '140%' }).check();
     await page.getByRole('button', { name: 'Expand sidebar' }).click();
     await request.patch('/api/v1/ui-state', { data: { values: { 'q-studio-workspace-root': fixture.root } } });
     await page.goto(`/sessions/${chat.registration_id}`);
@@ -50,7 +50,7 @@ test('appearance, navigation and drafts survive switching to another port', asyn
     expect(await page.evaluate(() => window.preferencesBeforeLoad)).toBeNull();
     await expect(page.locator('html')).toHaveAttribute('data-theme', 'graphite');
     await expect(page.locator('html')).toHaveClass(/\bcompact-sessions\b/);
-    await expect(page.locator('html')).toHaveCSS('--text-scale', '1.45');
+    await expect(page.locator('html')).toHaveCSS('--text-scale', '1.4');
     await expect(page.getByRole('button', { name: 'Collapse sidebar' })).toBeVisible();
     await expect(input).toHaveValue('Unsent draft across changing ports');
     expect(await page.evaluate(() => localStorage.getItem('q-studio-workspace-root'))).toBe(fixture.root);
@@ -126,7 +126,7 @@ test('profile persistence works when browser storage is blocked', async ({ page,
   });
   await page.goto('/settings?section=appearance');
   await expect(page.getByRole('radio', { name: /^Light/ })).toBeChecked();
-  await expect(page.getByRole('radio', { name: '115%' })).toBeChecked();
+  await expect(page.getByRole('radio', { name: '120%' })).toBeChecked();
   await page.getByRole('radio', { name: /^Night/ }).check();
   await expect.poll(async () => (await (await request.get('/api/v1/ui-state')).json()).values['q-studio-theme']).toBe('night');
   await page.reload();

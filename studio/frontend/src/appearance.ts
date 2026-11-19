@@ -1,7 +1,9 @@
 import { uiStorage } from './uiStorage';
 
 export type StudioTheme = 'light' | 'dawn' | 'night' | 'graphite';
-export type TextScale = 100 | 115 | 130 | 145;
+
+export const textScales = [60, 70, 80, 90, 100, 110, 120, 130, 140] as const;
+export type TextScale = (typeof textScales)[number];
 
 type Appearance = {
   theme: StudioTheme;
@@ -10,7 +12,7 @@ type Appearance = {
 };
 
 export const themes: StudioTheme[] = ['light', 'dawn', 'night', 'graphite'];
-export const textScales: TextScale[] = [100, 115, 130, 145];
+const legacyTextScales = new Map<number, TextScale>([[115, 120], [145, 140]]);
 
 const themeKey = 'q-studio-theme';
 const textScaleKey = 'q-studio-text-scale';
@@ -21,7 +23,7 @@ export function loadAppearance(): Appearance {
   const savedScale = Number(uiStorage.getItem(textScaleKey));
   return {
     theme: themes.includes(savedTheme as StudioTheme) ? savedTheme as StudioTheme : 'dawn',
-    textScale: textScales.includes(savedScale as TextScale) ? savedScale as TextScale : 100,
+    textScale: textScales.find(option => option === savedScale) ?? legacyTextScales.get(savedScale) ?? 100,
     compactSessions: uiStorage.getItem(compactSessionsKey) === 'true'
   };
 }
