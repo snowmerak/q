@@ -54,6 +54,7 @@ type studioRunSnapshot struct {
 	ID              string             `json:"id"`
 	SessionID       string             `json:"session_id"`
 	RequestID       string             `json:"request_id,omitempty"`
+	ProviderKind    string             `json:"provider_kind,omitempty"`
 	Status          string             `json:"status"`
 	Outcome         string             `json:"outcome,omitempty"`
 	Error           string             `json:"error,omitempty"`
@@ -652,6 +653,7 @@ func (run *studioRun) applyEventLocked(event app.SessionEvent, now time.Time) {
 	switch event.Type {
 	case "session":
 		run.snapshot.Status = "running"
+		run.snapshot.ProviderKind = event.Kind
 	case "question":
 		run.snapshot.Status = "waiting"
 		run.snapshot.PendingQuestion = &studioRunQuestion{

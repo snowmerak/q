@@ -2,6 +2,60 @@ import { test, expect } from './test.mjs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+test('ACP restores the saved final answer and retires live work on completion', async ({ page, request }) => {
+  const chat = await (await request.post('/api/v1/chats', { data: {} })).json();
+  const base = `/api/v1/sessions/${chat.session.session_id}`;
+  const address = `/sessions/${chat.registration_id}`;
+  const user = { role: 'user', content: 'Check the status.' };
+  const reply = { role: 'assistant', content: 'The final ACP answer is now saved.' };
+  const running = { id: 'acp-render-test', session_id: chat.session.session_id, provider_kind: 'acp', status: 'running', cursor: 2 };
+  const completed = { ...running, status: 'completed', outcome: 'succeeded', cursor: 3 };
+  let finish;
+  const finishing = new Promise(resolve => { finish = resolve; });
+  let saved = false;
+  let omitFinalFromNextRead = false;
+  await page.route(`**${base}?*`, route => {
+    const transcript = saved && !omitFinalFromNextRead ? [user, reply] : [user];
+    omitFinalFromNextRead = false;
+    return route.fulfill({ json: { workspace_root: chat.workspace_root, session: chat.session, transcript } });
+  });
+  await page.route(`**${base}/runs/latest?*`, route => route.fulfill({ json: saved ? completed : running }));
+  await page.route(`**${base}/runs/acp-render-test/events?*`, async route => {
+    const after = Number(new URL(route.request().url()).searchParams.get('after'));
+    if (after === 0) {
+      const events = [
+        { type: 'activity', agent: 'Fixture ACP', task_id: 'inspect', action: 'running', detail: 'Inspecting the status' },
+        { type: 'stream', kind: 'response', start: true, content: 'Checking the status…' }
+      ].map((event, index) => ({ cursor: index + 1, at: new Date().toISOString(), event }));
+      return route.fulfill({ json: { run: running, events, next_cursor: 2 } });
+    }
+    await finishing;
+    saved = true;
+    return route.fulfill({ json: { run: completed, events: [
+      { cursor: 3, at: new Date().toISOString(), event: { type: 'result', outcome: 'succeeded' } }
+    ], next_cursor: 3 } });
+  });
+  try {
+    await page.goto(address);
+    const transcript = page.locator('.transcript');
+    await expect(transcript.getByText('Fixture ACP · running', { exact: true })).toBeVisible();
+    await expect(transcript.getByText('Checking the status…', { exact: true })).toBeVisible();
+    finish();
+    await expect(transcript.getByText(reply.content, { exact: true })).toHaveCount(1, { timeout: 5000 });
+    await expect(transcript.locator('.transcript-activity')).toHaveCount(0);
+    await expect(transcript.getByText('Checking the status…', { exact: true })).toHaveCount(0);
+
+    // The first transcript read can finish just before the ACP turn does.
+    omitFinalFromNextRead = true;
+    await page.reload();
+    await expect(transcript.getByText(reply.content, { exact: true })).toHaveCount(1, { timeout: 5000 });
+    await expect(transcript.locator('.transcript-activity')).toHaveCount(0);
+  } finally {
+    finish();
+    await request.delete(`/api/v1/chats/${chat.registration_id}`);
+  }
+});
+
 test('ACP runtimes install npm adapters and show native or unavailable runtimes', async ({ page }) => {
   let installs = 0;
   const codex = { preset: 'codex', name: 'Codex', package: '@agentclientprotocol/codex-acp', installed: false, can_install: true, detail: 'Installs automatically on first use with npm' };
@@ -185,6 +239,10 @@ test('ACP model selection stays in the session and cache hit rates survive reloa
     const reply = page.locator('.chat-message').filter({ has: page.getByText('ACP model: fixture-b', { exact: true }) });
     await expect(reply.locator('.response-usage')).toContainText('Input 100');
     await expect(reply.locator('.response-usage')).toContainText('Cache hit 60%');
+    const committedRun = await request.get(`/api/v1/sessions/${chat.session.session_id}/runs/latest`, {
+      params: { workspace_root: chat.workspace_root }
+    });
+    expect(await committedRun.json()).toMatchObject({ provider_kind: 'acp', status: 'completed' });
     await page.reload();
     await expect(model).toBeEnabled();
     await expect(model).toHaveValue('fixture-b');

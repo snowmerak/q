@@ -5,7 +5,7 @@ export type RunTarget = { workspaceRoot: string; sessionID: string };
 
 type RunObserver = {
   page: (page: RunPage) => void | Promise<void>;
-  complete: () => Promise<void>;
+  complete: (run: RunSnapshot, signal: AbortSignal) => Promise<void>;
   retry: (cause: unknown) => void;
 };
 
@@ -78,7 +78,7 @@ export class RunMonitor {
         if (page.events.length) cursor = page.events[page.events.length - 1].cursor;
         // A terminal run can still have unread event pages after reconnecting.
         if (terminalRun(page.run.status) && cursor >= page.run.cursor) {
-          await this.observer.complete();
+          await this.observer.complete(page.run, signal);
           return;
         }
       } catch (cause) {

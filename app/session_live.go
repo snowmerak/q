@@ -501,7 +501,11 @@ func (m liveSessionModel) Update(message tea.Msg) (updatedModel tea.Model, nextC
 		}
 		if request.emit != nil {
 			store := m.execution.state.workspaceStore
-			if err := request.emit(SessionEvent{Type: "session", WorkingDirectory: store.Root, SessionID: store.SessionID, Created: m.created}); err != nil {
+			kind := "native"
+			if m.execution.state.clientIsACPRemote() {
+				kind = "acp"
+			}
+			if err := request.emit(SessionEvent{Type: "session", Kind: kind, WorkingDirectory: store.Root, SessionID: store.SessionID, Created: m.created}); err != nil {
 				m.finish(err)
 				return m, nil
 			}

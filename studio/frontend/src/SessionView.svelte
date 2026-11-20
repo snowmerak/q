@@ -81,6 +81,7 @@
   let runStatus = '';
   let events: RunEvent[] = [];
   let activeRun: RunSnapshot | null = null;
+  $: finishingRun = sending && !!activeRun && terminalRun(activeRun.status);
   $: runError = activeRun && ['failed', 'cancelled', 'interrupted'].includes(activeRun.status)
     ? activeRun.error || (activeRun.status === 'failed' ? 'The turn failed without an error detail.' : 'The turn stopped before completion.')
     : '';
@@ -149,17 +150,27 @@
           return;
         }
       }
-      sending = !terminalRun(page.run.status);
+      sending = !terminalRun(page.run.status) || page.next_cursor < page.run.cursor || completedACP(page.run);
       runStatus = runStatusLabel(page.run);
     },
-    complete: async () => {
-      await Promise.all([reloadSelected(), refreshSessionListOnly(), loadDelegations()]);
+    complete: async (run, signal) => {
+      const refreshed = await reloadSelected(signal);
+      if (signal.aborted || activeRun?.id !== run.id) return;
+      // ACP tool and plan updates are live UI. Once the saved conversation
+      // arrives, replaying them would mask its authoritative final answer.
+      if (refreshed && completedACP(run)) events = [];
+      sending = false;
+      await Promise.all([refreshSessionListOnly(), loadDelegations()]);
     },
     retry: (cause) => {
       error = cause instanceof Error ? cause.message : 'Could not reconnect to the run';
       runStatus = 'Connection lost · retrying…';
     }
   });
+
+  function completedACP(run: RunSnapshot) {
+    return run.status === 'completed' && (run.provider_kind === 'acp' || (!run.provider_kind && !!sessionAgent));
+  }
 
   function isCurrentSession(generation: number) {
     return generation === sessionGeneration;
@@ -516,7 +527,7 @@
   async function sendPrompt() {
     if (modelSaving) return;
     const content = prompt.trim();
-    if (!selected || !workspaceRoot || !content || sessionLoading) return;
+    if (!selected || !workspaceRoot || !content || sessionLoading || finishingRun) return;
     const generation = sessionGeneration;
     if (selectedDelegation && delegationKind !== 'inner') return;
     if (selectedDelegation && !sending) {
@@ -549,6 +560,7 @@
       return;
     }
     const target = { workspaceRoot, sessionID: selected.session.session_id };
+    runMonitor.stop();
     clearPrompt();
     sending = true;
     error = '';
@@ -589,9 +601,11 @@
     activeRun = run;
     sending = !terminalRun(run.status);
     runStatus = runStatusLabel(run);
-    // Completed messages and thoughts are already in the durable transcript.
-    // Replaying their stream fragments would replace it with a partial tail.
-    if (terminalRun(run.status)) return;
+    if (terminalRun(run.status)) {
+      // An ACP turn may finish between loading its transcript and run status.
+      if (completedACP(run)) await reloadSelected();
+      return;
+    }
     runMonitor.start(target, run.id);
   }
 
@@ -616,15 +630,16 @@
     }
   }
 
-  async function reloadSelected() {
-    if (!selected || !workspaceRoot) return;
+  async function reloadSelected(signal?: AbortSignal): Promise<boolean> {
+    if (!selected || !workspaceRoot || signal?.aborted) return false;
     const generation = sessionGeneration;
-    const response = await fetch(`/api/v1/sessions/${encodeURIComponent(selected.session.session_id)}?workspace_root=${encodeURIComponent(workspaceRoot)}&limit=${historyPageSize}`);
-    if (!response.ok) return;
+    const response = await fetch(`/api/v1/sessions/${encodeURIComponent(selected.session.session_id)}?workspace_root=${encodeURIComponent(workspaceRoot)}&limit=${historyPageSize}`, { cache: 'no-store', signal });
+    if (!response.ok) return false;
     const detail = (await response.json()) as SessionDetail;
-    if (!isCurrentSession(generation)) return;
+    if (!isCurrentSession(generation) || signal?.aborted) return false;
     selected = mergeHistory(selected, detail);
     if (!selectedDelegation) messages = selected.transcript;
+    return true;
   }
 
   async function loadEarlierHistory() {
@@ -837,9 +852,9 @@
               </div>
             </details>
           {/if}
-          {#if !selectedDelegation}
-            {#if sending && activeRun?.status === 'paused'}<button title="Resume turn" aria-label="Resume turn" onclick={() => commandRun('resume')}><Play aria-hidden="true" size={15} /></button>{:else if sending}<button title="Pause turn" aria-label="Pause turn" onclick={() => commandRun('pause')}><Pause aria-hidden="true" size={15} /></button>{/if}
-            {#if sending}<button class="stop-control" title="Stop turn" aria-label="Stop turn" onclick={stopTurn}><Square aria-hidden="true" size={13} fill="currentColor" /></button>{/if}
+          {#if !selectedDelegation && sending && !finishingRun}
+            {#if activeRun?.status === 'paused'}<button title="Resume turn" aria-label="Resume turn" onclick={() => commandRun('resume')}><Play aria-hidden="true" size={15} /></button>{:else}<button title="Pause turn" aria-label="Pause turn" onclick={() => commandRun('pause')}><Pause aria-hidden="true" size={15} /></button>{/if}
+            <button class="stop-control" title="Stop turn" aria-label="Stop turn" onclick={stopTurn}><Square aria-hidden="true" size={13} fill="currentColor" /></button>
           {/if}
         </div>
       </div>
@@ -871,8 +886,8 @@
       {:else}
         <div class="composer-wrap">
           <div class="composer">
-            <textarea bind:value={prompt} oninput={(event) => saveDraft(draftKey, event.currentTarget.value)} aria-label="Message Q" onkeydown={submitFromKeyboard} placeholder={sending ? 'Guide the current turn…' : selectedRegistration?.kind === 'coordinator' ? 'Describe the work to plan and delegate…' : workspaceRoleTitle(selectedRegistration?.kind) ? 'Discuss results and review changes…' : selectedRegistration?.kind === 'chat' ? 'Message Q…' : 'Ask Q to work in this repository…'} rows="3" disabled={sessionLoading}></textarea>
-            <button class="send-button" title={sending ? 'Guide current turn' : 'Send message'} onclick={sendPrompt} disabled={sessionLoading || modelSaving || !prompt.trim()}><ArrowUp aria-hidden="true" size={17} /></button>
+            <textarea bind:value={prompt} oninput={(event) => saveDraft(draftKey, event.currentTarget.value)} aria-label="Message Q" onkeydown={submitFromKeyboard} placeholder={sending && !finishingRun ? 'Guide the current turn…' : selectedRegistration?.kind === 'coordinator' ? 'Describe the work to plan and delegate…' : workspaceRoleTitle(selectedRegistration?.kind) ? 'Discuss results and review changes…' : selectedRegistration?.kind === 'chat' ? 'Message Q…' : 'Ask Q to work in this repository…'} rows="3" disabled={sessionLoading}></textarea>
+            <button class="send-button" title={sending && !finishingRun ? 'Guide current turn' : 'Send message'} onclick={sendPrompt} disabled={sessionLoading || modelSaving || finishingRun || !prompt.trim()}><ArrowUp aria-hidden="true" size={17} /></button>
           </div>
           <div class="composer-footer">
             {#if !selectedDelegation && selected.session.session_id === selectedRegistration?.session.session_id && selected.workspace_root === workspaceRoot}
@@ -880,7 +895,7 @@
                 <SessionModelPicker {workspaceRoot} sessionID={selected.session.session_id} disabled={sending || sessionLoading} bind:saving={modelSaving} bind:agent={sessionAgent} />
               {/key}
             {/if}
-            <p>{sending ? 'Enter to redirect the current work with guidance' : 'Enter to send'} · Shift+Enter for a new line · {workspaceRoleTitle(selectedRegistration?.kind) ? selectedProject?.name || workspaceRoleTitle(selectedRegistration?.kind) : selectedRegistration?.kind === 'chat' ? 'Personal chat' : workspaceRoot}</p>
+            <p>{finishingRun ? 'Loading the final reply…' : sending ? 'Enter to redirect the current work with guidance' : 'Enter to send'} · Shift+Enter for a new line · {workspaceRoleTitle(selectedRegistration?.kind) ? selectedProject?.name || workspaceRoleTitle(selectedRegistration?.kind) : selectedRegistration?.kind === 'chat' ? 'Personal chat' : workspaceRoot}</p>
           </div>
         </div>
       {/if}
