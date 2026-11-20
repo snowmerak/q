@@ -8,7 +8,7 @@ project:
   identifier: ne.saturday.q-studio
   binary_name: q-studio
   kind: gui
-  version: 0.1.1
+  version: 0.1.2
   company: Q contributors
   description: Workspace coding agent
   icon: assets/icon.png
