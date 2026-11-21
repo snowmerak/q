@@ -74,7 +74,7 @@
 </script>
 
 <div class="workspace-model-heading">
-  <div><h3>Workspace overrides</h3><p>Override the default and occupational role models for one repository.</p></div>
+  <div><h3>Workspace overrides</h3><p>Override the default and commit models for one repository.</p></div>
   <span class:error={!!error}>{loading ? 'Loading…' : error || saved}</span>
 </div>
 <div class="settings-card workspace-model-card">
@@ -85,7 +85,7 @@
   {#if snapshot}
     <code>{snapshot.config_path}</code>
     <div class="workspace-assignments">
-      {#each snapshot.assignments as assignment}
+      {#each snapshot.assignments.filter(item => item.role === 'default' || item.role === 'commit') as assignment}
         <div class="workspace-assignment">
           <div><strong>{label(assignment.role)}</strong><small>{assignment.inherited ? `Inherits ${assignment.effective_model}` : assignment.effective_model}</small></div>
           <label><span>Model</span><select bind:value={assignment.configured_model} onchange={() => save(assignment)} disabled={loading}>

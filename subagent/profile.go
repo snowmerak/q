@@ -15,16 +15,17 @@ import (
 )
 
 type Profile struct {
-	Version          int      `yaml:"version" json:"version"`
-	Name             string   `yaml:"name" json:"name"`
-	Description      string   `yaml:"description,omitempty" json:"description,omitempty"`
-	Kind             string   `yaml:"kind,omitempty" json:"kind,omitempty"`
-	Role             string   `yaml:"role,omitempty" json:"role,omitempty"`
-	Agent            string   `yaml:"agent,omitempty" json:"agent,omitempty"`
-	SystemPrompt     string   `yaml:"system_prompt" json:"system_prompt"`
-	MutatesWorkspace bool     `yaml:"mutates_workspace,omitempty" json:"mutates_workspace,omitempty"`
-	Tools            []string `yaml:"tools" json:"tools"`
-	Delegates        []string `yaml:"delegates" json:"delegates"`
+	Version          int                    `yaml:"version" json:"version"`
+	Name             string                 `yaml:"name" json:"name"`
+	Description      string                 `yaml:"description,omitempty" json:"description,omitempty"`
+	Kind             string                 `yaml:"kind,omitempty" json:"kind,omitempty"`
+	Role             string                 `yaml:"role,omitempty" json:"role,omitempty"`
+	Agent            string                 `yaml:"agent,omitempty" json:"agent,omitempty"`
+	Target           *config.SubagentTarget `yaml:"target,omitempty" json:"target,omitempty"`
+	SystemPrompt     string                 `yaml:"system_prompt" json:"system_prompt"`
+	MutatesWorkspace bool                   `yaml:"mutates_workspace,omitempty" json:"mutates_workspace,omitempty"`
+	Tools            []string               `yaml:"tools" json:"tools"`
+	Delegates        []string               `yaml:"delegates" json:"delegates"`
 }
 
 func (p Profile) EffectiveKind() string {
@@ -32,6 +33,13 @@ func (p Profile) EffectiveKind() string {
 		return AgentKindInner
 	}
 	return strings.TrimSpace(p.Kind)
+}
+
+func (p Profile) ACPConnection() string {
+	if p.Target != nil && p.Target.Agent != "" {
+		return p.Target.Agent
+	}
+	return p.Agent
 }
 
 func (p Profile) Validate() error {
@@ -47,9 +55,14 @@ func (p Profile) Validate() error {
 	if strings.TrimSpace(p.SystemPrompt) == "" {
 		return errors.New("profile: system_prompt is required")
 	}
+	if p.Target != nil {
+		if err := p.Target.Validate(); err != nil {
+			return fmt.Errorf("profile: %w", err)
+		}
+	}
 	switch p.EffectiveKind() {
 	case AgentKindInner:
-		if !config.IsAgentRole(p.Role) && !config.ValidCustomRoleName(p.Role) {
+		if p.Role != "" && !config.IsAgentRole(p.Role) && !config.ValidCustomRoleName(p.Role) {
 			return errors.New("profile: invalid role")
 		}
 		if p.Agent != "" {
@@ -62,6 +75,9 @@ func (p Profile) Validate() error {
 			return errors.New("profile: tools is required for inner subagents (use [] for none)")
 		}
 	case AgentKindExternal:
+		if p.Target != nil {
+			return errors.New("profile: external subagent selects its ACP connection with agent")
+		}
 		if p.Role != "" {
 			return errors.New("profile: external subagent does not accept a model role")
 		}

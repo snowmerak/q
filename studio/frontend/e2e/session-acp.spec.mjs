@@ -134,7 +134,7 @@ test('Providers groups API and ACP while Sessions chats with an ACP agent', asyn
   await page.screenshot({ path: join(tmpdir(), 'q-acp-providers-mobile.png') });
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto('/settings?section=subagents');
-  await page.getByRole('button', { name: /^External role bindings/ }).click();
+  await page.getByRole('button', { name: /^Built in/ }).click();
   await expect(page.getByLabel('Connection ID', { exact: true })).toHaveCount(0);
 
   const chat = await (await request.post('/api/v1/chats', { data: {} })).json();

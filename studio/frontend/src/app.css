@@ -1087,9 +1087,9 @@ input[type="checkbox"] { width: 17px; height: 17px; padding: 0; accent-color: va
 .issue-list { margin-top: 14px; padding: 18px 20px; }
 .issue-list h3 { margin: 0; }
 .issue-list p { margin: 8px 0 0; color: var(--error); font-size: calc(13px * var(--text-scale)); }
-.binding-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; padding: 18px 20px; }
-.binding-grid label { display: grid; gap: 7px; color: var(--muted); font-size: calc(12px * var(--text-scale)); }
 .agent-definition { padding: 0; overflow: hidden; }
+.agent-definition > .execution-fields { margin: 0 16px 12px; }
+.agent-definition .execution-fields label { display: grid; min-width: 0; gap: 7px; color: var(--muted); font-size: calc(13px * var(--text-scale)); }
 .agent-definition summary { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; padding: 16px; cursor: pointer; list-style: none; }
 .agent-definition summary::-webkit-details-marker { display: none; }
 .agent-definition summary span:first-child { min-width: 0; }
@@ -1101,7 +1101,7 @@ input[type="checkbox"] { width: 17px; height: 17px; padding: 0; accent-color: va
 .stacked-field { display: grid; gap: 7px; margin-top: 13px; color: var(--muted); font-size: calc(12px * var(--text-scale)); }
 .stacked-field textarea { width: 100%; resize: vertical; }
 .subagent-manager { padding-bottom: 64px; }
-.subagent-tabs { grid-template-columns: repeat(3, minmax(0, 1fr)); margin-top: 18px; }
+.subagent-tabs { grid-template-columns: repeat(2, minmax(0, 1fr)); margin-top: 18px; }
 .context-note { margin: -5px 0 18px; color: var(--subtle); font-size: calc(12px * var(--text-scale)); line-height: 1.5; }
 .context-note code { color: var(--accent-text); }
 .profile-create { display: grid; grid-template-columns: minmax(190px, 1fr) minmax(120px, .45fr) minmax(140px, .55fr) auto; align-items: end; gap: 14px; padding: 18px 20px; }
@@ -1260,7 +1260,7 @@ input[type="checkbox"] { width: 17px; height: 17px; padding: 0; accent-color: va
   .api-key-create { grid-template-columns: 1fr; }
   .api-key-row { grid-template-columns: minmax(0, 1fr) auto; }
   .api-key-row .text-button { grid-column: 1 / -1; }
-  .workspace-context, .binding-grid, .skill-grid, .agent-definition-grid { grid-template-columns: 1fr; }
+  .workspace-context, .skill-grid, .agent-definition-grid { grid-template-columns: 1fr; }
   .integration-tabs { display: flex; overflow-x: auto; }
   .integration-tabs button { min-width: 140px; }
   .permission-heading { align-items: stretch; flex-direction: column; }

@@ -30,5 +30,5 @@
   <ACPAdaptersPanel />
   <div class="workspace-context settings-card"><label><span>Test workspace · optional</span><input bind:value={workspaceRoot} placeholder="Workspace directory for ACP connection tests" onkeydown={event => event.key === 'Enter' && load()} /></label><button class="text-button" onclick={load}>Load workspace</button></div>
   {#if $operations.error}<p class="inline-warning">{$operations.error}</p>{:else if $operations.message}<p class="integration-success"><CheckCircle2 size={14} /> {$operations.message}</p>{/if}
-  {#if agents}<ConnectionsPanel bind:agents {operations} showBindings={false} endpoint="/api/v1/settings/acp" />{:else}<p>Loading ACP providers…</p>{/if}
+  {#if agents}<ConnectionsPanel bind:agents {operations} />{:else}<p>Loading ACP providers…</p>{/if}
 </section>

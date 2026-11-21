@@ -3,11 +3,14 @@
   import { onDestroy } from 'svelte';
   import { requestJSON } from '../api';
   import { prepareAgents } from './catalog';
+  import ExecutionPicker from './ExecutionPicker.svelte';
   import type { SettingsOperations } from '../settings/operations';
-  import type { AgentResponse, Profile, ProfileEntry } from './types';
+  import type { ModelOption } from '../settings/types';
+  import type { AgentResponse, ExecutionTarget, Profile, ProfileEntry } from './types';
 
   export let agents: AgentResponse;
   export let operations: SettingsOperations;
+  export let models: ModelOption[];
   let disposed = false;
   onDestroy(() => { disposed = true; });
 
@@ -15,7 +18,7 @@
 
   let newProfileName = '';
   let newProfileScope = 'global';
-  let newProfileKind = 'inner';
+  let newProfileTarget: ExecutionTarget | null = null;
   let toolFilters: Record<string, string> = {};
   let delegateFilters: Record<string, string> = {};
   let editGeneration = 0;
@@ -25,32 +28,29 @@
     if (!disposed && edit === editGeneration) agents = { ...agents, profiles: result.profiles || [] };
   }
 
-  $: enabledConnections = Object.entries(agents.connections).filter(([, connection]) => !connection.disabled);
+  $: enabledConnections = Object.entries(agents.connections).filter(([, connection]) => !connection.disabled).map(([id]) => id).sort();
 
   function addProfile() {
     if (!agents) return;
     const name = newProfileName.trim();
     if (!name) return;
     const scope = newProfileScope === 'workspace' && rootValue() ? 'workspace' : 'global';
-    const kind = newProfileKind === 'external' ? 'external' : 'inner';
-    const connection = enabledConnections[0]?.[0] || '';
-    if (kind === 'external' && !connection) {
-      operations.fail(new Error('Add and enable an ACP connection before creating an external profile.'));
-      return;
-    }
+    const connection = newProfileTarget?.agent || '';
+    const kind = connection ? 'external' : 'inner';
     const profile: Profile = {
       version: 1,
       name,
       description: '',
       kind,
-      role: kind === 'inner' ? agents.native_roles[0] || 'research' : '',
-      agent: kind === 'external' ? connection : '',
+      agent: connection,
+      target: kind === 'inner' ? newProfileTarget || { default: true } : undefined,
       system_prompt: 'Complete the assigned request and report verified results.',
       mutates_workspace: false,
       tools: [],
       delegates: []
     };
     newProfileName = '';
+    newProfileTarget = null;
     const root = rootValue();
     const edit = ++editGeneration;
     operations.run(async () => {
@@ -92,22 +92,29 @@
     });
   }
 
-  function changeProfileKind(entry: ProfileEntry) {
+  function changeProfileTarget(entry: ProfileEntry, target: ExecutionTarget | null) {
+    const root = rootValue();
+    if (root && entry.scope === 'global' && entry.profile.kind === 'inner') {
+      const edit = ++editGeneration;
+      operations.run(async () => {
+        const result = prepareAgents(await requestJSON<AgentResponse>('PUT', '/api/v1/settings/subagents/target', {
+          workspace_root: root, scope: 'workspace', id: `global/${entry.profile.name}`, target
+        }));
+        adoptProfiles(result, edit);
+      });
+      return;
+    }
     if (entry.profile.kind === 'external') {
-      const connection = enabledConnections[0]?.[0];
-      if (!connection) {
+      if (target?.agent) {
+        entry.profile.agent = target.agent;
+      } else if (target) {
         entry.profile.kind = 'inner';
-        operations.fail(new Error('Add and enable an ACP connection before changing this profile to external.'));
-        return;
+        entry.profile.agent = '';
+        entry.profile.mutates_workspace = false;
+        entry.profile.target = target;
       }
-      entry.profile.agent = connection;
-      entry.profile.role = '';
-      entry.profile.tools = [];
-      entry.profile.delegates = [];
     } else {
-      entry.profile.role = agents?.native_roles[0] || 'research';
-      entry.profile.agent = '';
-      entry.profile.mutates_workspace = false;
+      entry.profile.target = target || { default: true };
     }
     saveProfile(entry);
   }
@@ -171,12 +178,13 @@
   }
 </script>
 
-<div class="subsection-heading"><div><h3>Custom profiles</h3><p>Create reusable inner roles or external ACP delegates. Existing changes save automatically.</p></div><span class="count-badge">{agents.profiles.length} profiles</span></div>
+<div class="subsection-heading"><div><h3>Custom profiles</h3><p>Create reusable profiles. Existing changes save automatically.</p></div><span class="count-badge">{agents.profiles.length} profiles</span></div>
 <div class="settings-card profile-create">
   <label><span>Profile name</span><input bind:value={newProfileName} placeholder="security-reviewer" onkeydown={(event) => event.key === 'Enter' && addProfile()} /></label>
   <label><span>Scope</span><select bind:value={newProfileScope}><option value="global">Global</option><option value="workspace" disabled={!rootValue()}>Repository</option></select></label>
-  <label><span>Kind</span><select bind:value={newProfileKind}><option value="inner">Inner</option><option value="external">External ACP</option></select></label>
-  <button class="primary-button" onclick={addProfile} disabled={!newProfileName.trim() || (newProfileKind === 'external' && enabledConnections.length === 0)}><Plus size={15} /> Add profile</button>
+  <ExecutionPicker target={newProfileTarget} {models} connections={enabledConnections} defaultModel={agents.default_model}
+    selectTarget={target => newProfileTarget = target} />
+  <button class="primary-button" onclick={addProfile} disabled={!newProfileName.trim()}><Plus size={15} /> Add profile</button>
 </div>
 
 {#each agents.profiles as entry (entry.path)}
@@ -185,17 +193,15 @@
     {#if entry.error}<p class="profile-error">{entry.error}</p>{:else}
       <div class="field-grid">
         <label><span>Scope</span><select bind:value={entry.scope} onchange={() => saveProfile(entry)}><option value="global">Global</option><option value="workspace" disabled={!rootValue()}>Repository</option></select></label>
-        <label><span>Kind</span><select bind:value={entry.profile.kind} onchange={() => changeProfileKind(entry)}><option value="inner">Inner</option><option value="external">External ACP</option></select></label>
+        <ExecutionPicker target={entry.effective_target} {models} connections={enabledConnections} defaultModel={agents.default_model}
+          selectTarget={target => changeProfileTarget(entry, target)} />
         <label class="wide-field"><span>Description</span><input bind:value={entry.profile.description} onchange={() => saveProfile(entry)} /></label>
         {#if entry.profile.kind === 'external'}
-          <label><span>ACP connection</span><select bind:value={entry.profile.agent} onchange={() => saveProfile(entry)}>{#each enabledConnections as [id]}<option value={id}>{id}</option>{/each}</select></label>
           <label class="toggle-field"><span>Mutation access</span><input type="checkbox" bind:checked={entry.profile.mutates_workspace} onchange={() => saveProfile(entry)} /><small>{entry.profile.mutates_workspace ? 'Mutates workspace' : 'Read only'}</small></label>
-        {:else}
-          <label><span>Model role</span><select bind:value={entry.profile.role} onchange={() => saveProfile(entry)}>{#each agents.native_roles as role}<option value={role}>{role}</option>{/each}</select></label>
         {/if}
       </div>
       <label class="stacked-field prompt-field"><span>System prompt</span><textarea rows="6" bind:value={entry.profile.system_prompt} onchange={() => saveProfile(entry)}></textarea></label>
-      {#if entry.profile.kind === 'inner'}
+      {#if entry.profile.kind === 'inner' && !entry.effective_target?.agent}
         <div class="permission-section">
           <div class="permission-heading"><div><strong>Tools</strong><small>Q tools this profile may call</small></div><label class="permission-search"><Search size={13} /><input value={toolFilters[profileKey(entry)] || ''} oninput={(event) => updateFilter(toolFilters, profileKey(entry), event.currentTarget.value)} placeholder="Filter tools" /></label></div>
           <div class="permission-grid tool-permissions">{#each toolOptions(entry) as name}<label class="permission-option"><input type="checkbox" checked={entry.profile.tools.includes(name)} onchange={(event) => toggleProfileList(entry, 'tools', name, event.currentTarget.checked)} /><span><strong>{name}</strong></span></label>{:else}<p>No matching tools.</p>{/each}</div>

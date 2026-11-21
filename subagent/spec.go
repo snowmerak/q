@@ -66,6 +66,23 @@ func Resolve(value config.Config, role string, models []client.Model) (Spec, err
 	if err != nil {
 		return Spec{}, err
 	}
+	return resolveCandidates(value, role, agent.Group, configured, models)
+}
+
+// ResolveDefinition uses a profile's direct model when one is selected.
+func ResolveDefinition(value config.Config, definition AgentDefinition, models []client.Model) (Spec, error) {
+	if definition.Target == nil {
+		return Resolve(value, definition.Info.Role, models)
+	}
+	assignment := definition.Target.ModelConfig(value.Provider.Model)
+	candidates, err := value.ModelCandidates(definition.Info.Name, assignment)
+	if err != nil {
+		return Spec{}, err
+	}
+	return resolveCandidates(value, definition.Info.Role, assignment.Group, candidates, models)
+}
+
+func resolveCandidates(value config.Config, role, group string, configured []config.ModelCandidateConfig, models []client.Model) (Spec, error) {
 	candidates := make([]client.ModelCandidate, 0, len(configured))
 	var primary client.Model
 	var minimumContext, minimumOutput int64
@@ -101,7 +118,7 @@ func Resolve(value config.Config, role string, models []client.Model) (Spec, err
 	}
 	if !contextKnown {
 		minimumContext = 0
-		if agent.Group == "" && len(candidates) == 1 && candidates[0].Model == value.Provider.Model {
+		if group == "" && len(candidates) == 1 && candidates[0].Model == value.Provider.Model {
 			minimumContext = value.EffectiveContextWindow()
 		}
 	}
@@ -109,7 +126,7 @@ func Resolve(value config.Config, role string, models []client.Model) (Spec, err
 		minimumOutput = 0
 	}
 	return Spec{
-		Role: role, Group: agent.Group,
+		Role: role, Group: group,
 		Model: candidates[0].Model, ReasoningEffort: candidates[0].ReasoningEffort,
 		Reasoning: cloneReasoning(primary), ContextLength: minimumContext, MaxOutputTokens: minimumOutput,
 		ContextPolicy:     value.EffectiveContext(),

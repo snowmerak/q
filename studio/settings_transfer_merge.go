@@ -305,6 +305,21 @@ func (state *transferState) merge(section, id string, data json.RawMessage) erro
 		}
 	case "subagents":
 		switch kind {
+		case "target":
+			value, err := transferValue[config.SubagentTarget](data)
+			if err != nil {
+				return err
+			}
+			for _, definition := range subagent.BuiltinAgentDefinitions() {
+				if definition.Info.Name == name {
+					if state.main.Agents.SubagentTargets == nil {
+						state.main.Agents.SubagentTargets = make(map[string]config.SubagentTarget)
+					}
+					state.main.Agents.SubagentTargets[name] = value
+					return nil
+				}
+			}
+			return fmt.Errorf("unknown built-in subagent %q", name)
 		case "connection":
 			value, err := transferValue[config.AgentConnectionConfig](data)
 			if err != nil {
@@ -467,13 +482,13 @@ func (state *transferState) validate(ctx context.Context, bundle settingsBundle,
 		definitions := subagent.PublicAgentDefinitions()
 		for _, entry := range state.profiles {
 			profile := entry.Profile
-			if profile.EffectiveKind() == subagent.AgentKindExternal {
-				connection, found := state.main.Agents.Connections[profile.Agent]
+			if id := profile.ACPConnection(); id != "" {
+				connection, found := state.main.Agents.Connections[id]
 				_, importingProfile := bundle.Sections["subagents"]["profile/"+profile.Name]
 				if !found || connection.Disabled && importingProfile {
-					return fmt.Errorf("profile %q requires enabled connection %q", profile.Name, profile.Agent)
+					return fmt.Errorf("profile %q requires enabled connection %q", profile.Name, id)
 				}
-			} else if !state.main.HasNativeRole(profile.Role) {
+			} else if profile.Target == nil && profile.Role != "" && !state.main.HasNativeRole(profile.Role) {
 				return fmt.Errorf("profile %q requires model role %q", profile.Name, profile.Role)
 			}
 			definition, err := subagent.DefinitionForProfile(entry)

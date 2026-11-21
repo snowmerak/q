@@ -136,6 +136,7 @@ func newHandlerRuntime(parent context.Context, store config.Store, runner sessio
 	mux.HandleFunc("PUT /api/v1/workspaces/agents/profiles", integrations.serveProfiles)
 	mux.HandleFunc("DELETE /api/v1/workspaces/agents/profiles/{profile}", integrations.serveProfileDelete)
 	mux.HandleFunc("/api/v1/settings/subagents", integrations.serveAgents)
+	mux.HandleFunc("PUT /api/v1/settings/subagents/target", integrations.serveSubagentTarget)
 	mux.HandleFunc("/api/v1/settings/acp", integrations.serveAgents)
 	mux.HandleFunc("GET /api/v1/settings/acp/adapters", integrations.serveACPAdapters)
 	mux.HandleFunc("POST /api/v1/settings/acp/adapters", integrations.serveACPAdapters)

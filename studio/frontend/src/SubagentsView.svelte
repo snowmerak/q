@@ -6,21 +6,23 @@
   import { prepareAgents } from './subagents/catalog';
   import { createSettingsOperations } from './settings/operations';
   import ProfilesPanel from './subagents/ProfilesPanel.svelte';
-  import ConnectionsPanel from './subagents/ConnectionsPanel.svelte';
   import BuiltinProfiles from './subagents/BuiltinProfiles.svelte';
+  import type { ModelOption } from './settings/types';
   import type { AgentResponse } from './subagents/types';
 
-  type Tab = 'profiles' | 'builtins' | 'connections';
+  type Tab = 'profiles' | 'builtins';
 
   const tabs: { id: Tab; label: string; detail: string }[] = [
     { id: 'profiles', label: 'Custom profiles', detail: 'Roles, tools, and delegation grants' },
-    { id: 'builtins', label: 'Built in', detail: 'Occupational roles shipped with Q' },
-    { id: 'connections', label: 'External role bindings', detail: 'Assign ACP providers to roles' }
+    { id: 'builtins', label: 'Built in', detail: 'Occupational roles shipped with Q' }
   ];
 
   let tab: Tab = 'profiles';
   let workspaceRoot = '';
   let agents: AgentResponse | null = null;
+  let models: ModelOption[] = [];
+  let modelError = '';
+  let destroyed = false;
   let loadGeneration = 0;
   const operations = createSettingsOperations();
 
@@ -46,19 +48,26 @@
     }, '');
   }
 
-  onDestroy(() => { loadGeneration += 1; });
+  function loadModels() {
+    void requestJSON<{ models: ModelOption[] }>('GET', '/api/v1/settings/models')
+      .then(result => { if (!destroyed) { models = result.models; modelError = ''; } })
+      .catch(() => { if (!destroyed) modelError = 'API models are unavailable. Check Providers → API Provider.'; });
+  }
+
+  onDestroy(() => { loadGeneration += 1; destroyed = true; });
 
   onMount(() => {
     const location = new URL(window.location.href);
     workspaceRoot = location.searchParams.get('workspace_root') || uiStorage.getItem('q-studio-workspace-root') || '';
     void loadAgents();
+    loadModels();
   });
 </script>
 
 <section class="settings-section subagent-manager">
   <div class="section-heading">
-    <div><p class="eyebrow">SUBAGENTS</p><h2>Delegation profiles</h2><p>Configure occupational roles, delegation grants, and external role bindings.</p></div>
-    <button class="icon-button" title="Reload subagent settings" onclick={loadAgents} disabled={$operations.busy}><RefreshCw size={16} class={$operations.busy ? 'spin' : undefined} /></button>
+    <div><p class="eyebrow">SUBAGENTS</p><h2>Delegation profiles</h2><p>Choose models or ACP connections and configure custom profile tools.</p></div>
+    <button class="icon-button" title="Reload subagent settings" onclick={() => { loadAgents(); loadModels(); }} disabled={$operations.busy}><RefreshCw size={16} class={$operations.busy ? 'spin' : undefined} /></button>
   </div>
   <code class="config-path">{agents?.config_path || '~/.q/config.yaml'}</code>
 
@@ -72,12 +81,12 @@
     {#each tabs as item}<button class:active={tab === item.id} onclick={() => tab = item.id}><strong>{item.label}</strong><small>{item.detail}</small></button>{/each}
   </div>
   {#if $operations.error}<p class="inline-warning integration-message">{$operations.error}</p>{:else if $operations.message}<p class="integration-success integration-message"><CheckCircle2 size={14} /> {$operations.message}</p>{/if}
+  {#if modelError}<p class="inline-warning integration-message">{modelError}</p>{/if}
 
   {#if !agents}
     <div class="loading-panel">Loading subagent settings…</div>
   {:else}
-    <div hidden={tab !== 'profiles'}><ProfilesPanel bind:agents {operations} /></div>
-    <div hidden={tab !== 'builtins'}><BuiltinProfiles definitions={agents.builtins} /></div>
-    <div hidden={tab !== 'connections'}><ConnectionsPanel bind:agents {operations} showConnections={false} /></div>
+    <div hidden={tab !== 'profiles'}><ProfilesPanel bind:agents {models} {operations} /></div>
+    <div hidden={tab !== 'builtins'}><BuiltinProfiles bind:agents {models} {operations} /></div>
   {/if}
 </section>

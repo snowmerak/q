@@ -9,9 +9,7 @@
 
   export let agents: AgentResponse;
   export let operations: SettingsOperations;
-  export let showBindings = true;
-  export let showConnections = true;
-  export let endpoint = '/api/v1/settings/subagents';
+  const endpoint = '/api/v1/settings/acp';
   let disposed = false;
   onDestroy(() => { disposed = true; });
 
@@ -21,8 +19,6 @@
   let probeStates: Record<string, string> = {};
   let editGeneration = 0;
   let jsonDrafts: Record<string, Partial<Record<'args' | 'env', string>>> = {};
-
-  $: enabledConnections = Object.entries(agents.connections).filter(([, connection]) => !connection.disabled);
 
   function setConnectionEnabled(id: string, enabled: boolean) {
     agents = {
@@ -35,7 +31,6 @@
   function saveConnections() {
     if (!agents) return;
     const connections = structuredClone(agents.connections);
-    const bindings = structuredClone(agents.bindings);
     const root = rootValue();
     const edit = ++editGeneration;
     const submittedJSON: Record<string, Partial<Record<'args' | 'env', string>>> = {};
@@ -52,7 +47,7 @@
     }
     operations.run(async () => {
       const result = prepareAgents(await requestJSON<AgentResponse>('PUT', endpoint, {
-        workspace_root: root, connections: showConnections ? connections : undefined, bindings: showBindings ? bindings : undefined
+        workspace_root: root, connections
       }));
       if (!disposed && edit === editGeneration) {
         for (const [id, updated] of Object.entries(result.connections)) {
@@ -89,10 +84,8 @@
   function removeConnection(id: string) {
     if (!agents || !confirm(`Delete ACP connection “${id}”?`)) return;
     const connections = { ...agents.connections };
-    const bindings = { ...agents.bindings };
     delete connections[id];
-    for (const role of agents.external_roles) if (bindings[role] === id) bindings[role] = '';
-    agents = { ...agents, connections, bindings };
+    agents = { ...agents, connections };
     saveConnections();
   }
 
@@ -121,12 +114,6 @@
   }
 </script>
 
-{#if showBindings}
-<div class="subsection-heading"><div><h3>External role bindings</h3><p>Assign enabled ACP providers to Q's fixed external roles. Manage connections in Providers → ACP.</p></div><code>{agents.config_path}</code></div>
-<div class="settings-card binding-grid">{#each agents.external_roles as role}<label><span>{role}</span><select bind:value={agents.bindings[role]} onchange={saveConnections}><option value="">Unassigned</option>{#each enabledConnections as [id]}<option value={id}>{id}</option>{/each}</select></label>{/each}</div>
-{/if}
-
-{#if showConnections}
 <div class="subsection-heading"><div><h3>ACP connections</h3><p>Preset or custom stdio processes used by Sessions, Councils, and subagent profiles.</p></div></div>
 <div class="inline-create settings-card"><label><span>Connection ID</span><input bind:value={newConnectionID} placeholder="codex-local" onkeydown={(event) => event.key === 'Enter' && addConnection()} /></label><button class="primary-button" onclick={addConnection} disabled={!newConnectionID.trim()}><Plus size={15} /> Add connection</button></div>
 {#each Object.entries(agents.connections) as [id, connection]}
@@ -134,4 +121,3 @@
     <div class="field-grid"><label><span>Preset</span><select bind:value={connection.preset} onchange={() => { if (connection.preset) connection.command = ''; saveConnections(); }}><option value="">Custom command</option><option value="codex">Codex</option><option value="claude">Claude</option><option value="grok">Grok</option></select></label><label><span>Command</span><input bind:value={connection.command} onchange={() => { if (connection.command) connection.preset = ''; saveConnections(); }} disabled={!!connection.preset} /></label><label><span>Arguments · JSON</span><input value={jsonDrafts[id]?.args ?? jsonText(connection.args, [])} oninput={(event) => editJSON(id, 'args', event.currentTarget.value)} onchange={(event) => setConnectionJSON(connection, 'args', event.currentTarget.value)} /></label><label><span>Child environment · JSON</span><input value={jsonDrafts[id]?.env ?? jsonText(connection.env, {})} oninput={(event) => editJSON(id, 'env', event.currentTarget.value)} onchange={(event) => setConnectionJSON(connection, 'env', event.currentTarget.value)} /></label><label><span>ACP auth method</span><input bind:value={connection.auth_method} onchange={saveConnections} /></label><label class="toggle-field"><span>Q issues and tickets</span><input type="checkbox" bind:checked={connection.library} onchange={saveConnections} /><small>Issue/ticket tools and workflow instructions · applies on next session connection</small></label><label class="toggle-field"><span>Connection state</span><input type="checkbox" checked={!connection.disabled} onchange={(event) => setConnectionEnabled(id, event.currentTarget.checked)} /><small>{connection.disabled ? 'Disabled' : 'Enabled'}</small></label></div>
   </article>
 {:else}<div class="empty-card">No ACP connections configured.</div>{/each}
-{/if}

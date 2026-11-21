@@ -873,9 +873,7 @@ test('global subagent profiles save roles, permissions, prompts, and deletion', 
   await page.getByRole('button', { name: 'Add profile', exact: true }).click();
   expect((await saved).ok()).toBe(true);
   const card = page.locator('.subagent-profile').filter({ has: page.getByRole('heading', { name: 'ui-inspector', exact: true }) });
-  saved = save('PUT');
-  await card.getByRole('combobox', { name: 'Model role', exact: true }).selectOption('reviewer');
-  expect((await saved).ok()).toBe(true);
+  await expect(card.getByRole('combobox', { name: 'Run with', exact: true })).toHaveValue('');
   saved = save('PUT');
   await card.getByRole('textbox', { name: 'System prompt', exact: true }).fill('Review the code and report evidence.');
   await card.getByRole('textbox', { name: 'System prompt', exact: true }).press('Tab');
@@ -889,7 +887,7 @@ test('global subagent profiles save roles, permissions, prompts, and deletion', 
   await card.getByRole('checkbox', { name: /^builtin\/research / }).check();
   expect((await saved).ok()).toBe(true);
   await page.reload();
-  await expect(card.getByRole('combobox', { name: 'Model role', exact: true })).toHaveValue('reviewer');
+  await expect(card.getByRole('combobox', { name: 'Run with', exact: true })).toHaveValue('');
   await expect(card.getByRole('textbox', { name: 'System prompt', exact: true })).toHaveValue('Review the code and report evidence.');
   await expect(card.getByRole('checkbox', { name: 'read_file', exact: true })).toBeChecked();
   await expect(card.getByRole('checkbox', { name: /^builtin\/research / })).toBeChecked();
@@ -897,6 +895,14 @@ test('global subagent profiles save roles, permissions, prompts, and deletion', 
   const profile = snapshot.profiles.find((entry) => entry.profile.name === 'ui-inspector').profile;
   expect(profile.tools).toContain('read_file');
   expect(profile.delegates).toContain('builtin/research');
+  const models = (await (await request.get('/api/v1/settings/models')).json()).models;
+  const model = models.find((candidate) => !candidate.group).id;
+  saved = save('PUT');
+  await card.getByRole('combobox', { name: 'Run with', exact: true }).selectOption(`model:${model}`);
+  expect((await saved).ok()).toBe(true);
+  await page.reload();
+  await expect(card.getByRole('combobox', { name: 'Run with', exact: true })).toHaveValue(`model:${model}`);
+  await expect(card.getByRole('checkbox', { name: 'read_file', exact: true })).toBeChecked();
   page.once('dialog', (dialog) => dialog.accept());
   saved = save('DELETE');
   await card.getByTitle('Delete profile', { exact: true }).click();
@@ -928,7 +934,8 @@ test('queued profile edits preserve revisions, scope migration, and the original
     await card.getByRole('textbox', { name: 'Description', exact: true }).fill('First draft');
     await card.getByRole('textbox', { name: 'Description', exact: true }).press('Tab');
     await held;
-    await card.getByRole('combobox', { name: 'Model role', exact: true }).selectOption('reviewer');
+    await card.getByRole('textbox', { name: 'System prompt', exact: true }).fill('Preserve the queued prompt.');
+    await card.getByRole('textbox', { name: 'System prompt', exact: true }).press('Tab');
     await card.getByRole('combobox', { name: 'Scope', exact: true }).selectOption('workspace');
     await card.getByRole('textbox', { name: 'Description', exact: true }).fill('Final draft');
     await card.getByRole('textbox', { name: 'Description', exact: true }).press('Tab');
@@ -947,7 +954,7 @@ test('queued profile edits preserve revisions, scope migration, and the original
     const entry = snapshot.profiles.find((entry) => entry.profile.name === 'ui-queued');
     expect(entry.scope).toBe('workspace');
     expect(entry.profile.description).toBe('Final draft');
-    expect(entry.profile.role).toBe('reviewer');
+    expect(entry.profile.system_prompt).toBe('Preserve the queued prompt.');
     await expect(card).toHaveCount(0);
   } finally { release(); }
 });
@@ -976,16 +983,38 @@ test('ACP connections preserve secret mappings, enabled state, and role bindings
   await card.getByRole('checkbox', { name: /^Connection state/ }).check();
   expect((await saved).ok()).toBe(true);
   await page.goto('/settings?section=subagents');
-  await page.getByRole('button', { name: /^External role bindings/ }).click();
+  await page.getByRole('button', { name: /^Built in/ }).click();
   await expect(page.getByRole('textbox', { name: 'Connection ID', exact: true })).toHaveCount(0);
-  endpoint = '/api/v1/settings/subagents';
-  const binding = page.locator('.binding-grid select').first();
+  endpoint = '/api/v1/settings/subagents/target';
+  const webSearch = page.locator('.agent-definition').filter({ hasText: 'builtin/web-search' });
+  const binding = webSearch.getByRole('combobox', { name: 'Run with', exact: true });
+  await webSearch.locator('summary').click();
   saved = save();
-  await binding.selectOption('ui-acp');
+  await binding.selectOption('acp:ui-acp');
   expect((await saved).ok()).toBe(true);
   await page.reload();
-  await page.getByRole('button', { name: /^External role bindings/ }).click();
-  await expect(binding).toHaveValue('ui-acp');
+  await page.getByRole('button', { name: /^Built in/ }).click();
+  await webSearch.locator('summary').click();
+  await expect(binding).toHaveValue('acp:ui-acp');
+  const research = page.locator('.agent-definition').filter({ hasText: 'builtin/research' });
+  await research.locator('summary').click();
+  const target = research.getByRole('combobox', { name: 'Run with', exact: true });
+  saved = save();
+  await target.selectOption('acp:ui-acp');
+  expect((await saved).ok()).toBe(true);
+  await expect(target).toHaveValue('acp:ui-acp');
+  await expect(research.getByText('external', { exact: true })).toBeVisible();
+  const models = (await (await request.get('/api/v1/settings/models')).json()).models;
+  const model = models.find((candidate) => !candidate.group).id;
+  saved = save();
+  await target.selectOption(`model:${model}`);
+  expect((await saved).ok()).toBe(true);
+  await expect(target).toHaveValue(`model:${model}`);
+  await expect(research.getByText('inner', { exact: true })).toBeVisible();
+  saved = save();
+  await target.selectOption('');
+  expect((await saved).ok()).toBe(true);
+  await expect(target).toHaveValue('');
   await page.goto('/settings?section=providers&provider_tab=acp');
   endpoint = '/api/v1/settings/acp';
   await expect(env).toHaveValue('{"Q_STUDIO_TEST_TOKEN":"********"}');
@@ -1223,7 +1252,7 @@ test('tool results align with tool calls across wide and narrow viewports', asyn
 
 test('model settings scroll inside the content pane at desktop and narrow widths', async ({ page }) => {
   for (const width of [1440, 900]) {
-    await page.setViewportSize({ width, height: 650 });
+    await page.setViewportSize({ width, height: 420 });
     await page.goto('/settings?section=models');
     const pane = page.locator('.settings-content');
     await expect(pane.getByRole('heading', { name: 'Models', exact: true })).toBeVisible();
@@ -1378,12 +1407,12 @@ test('operations keep the selected period and stop polling on navigation', async
 test('global model editors preserve queued drafts across settings panels', async ({ page, request }) => {
   await page.goto('/settings?section=models');
   await expect(page.getByTitle('Refresh Gateway models', { exact: true })).toBeEnabled();
-  await page.getByRole('textbox', { name: 'Role name', exact: true }).fill('ui-model-role');
-  await page.getByRole('button', { name: 'Add role', exact: true }).click();
-  const role = page.locator('.assignment-row').filter({ has: page.getByText('Ui Model Role', { exact: true }) });
+  await expect(page.locator('#model-panel-assignments .assignment-list .assignment-row strong')).toHaveText(['Default', 'Embeddings', 'Commit']);
+  const role = page.locator('.assignment-row').filter({ has: page.getByText('Commit', { exact: true }) });
   await expect(role).toBeVisible();
   const model = page.locator('.primary-assignment').first().getByRole('combobox', { name: 'Model', exact: true });
   const selectedModel = await model.inputValue();
+  const previousCommitModel = await role.getByRole('combobox', { name: 'Model', exact: true }).inputValue();
   await role.getByRole('combobox', { name: 'Model', exact: true }).selectOption(selectedModel);
   await expect(page.locator('.save-state')).toHaveText('Saved');
   await page.getByRole('tab', { name: 'Fallback groups', exact: true }).click();
@@ -1424,10 +1453,8 @@ test('global model editors preserve queued drafts across settings panels', async
   page.once('dialog', (dialog) => dialog.accept());
   await group.getByTitle('Delete model group', { exact: true }).click();
   await expect(group).toHaveCount(0);
-  page.once('dialog', (dialog) => dialog.accept());
   await page.getByRole('tab', { name: 'Assignments', exact: true }).click();
-  await role.getByTitle('Delete custom role', { exact: true }).click();
-  await expect(role).toHaveCount(0);
+  await role.getByRole('combobox', { name: 'Model', exact: true }).selectOption(previousCommitModel);
 });
 
 test('gateway provider edits follow an acknowledged rename in the save queue', async ({ page, request }) => {
