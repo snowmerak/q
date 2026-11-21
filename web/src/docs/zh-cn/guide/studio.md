@@ -58,7 +58,7 @@ q studio --host 0.0.0.0 --port 7070 --no-open
 
 ## 设置与运维
 
-**Settings** 管理全局模型与角色分配、Gateway 提供商、System One 提供商与决策模型、运行时限制、服务、职业型子代理、Agent Skills、MCP、语言服务器和 `.qignore`。字段更改后会自动保存，不需要单独的保存快捷键。
+**Settings** 管理全局模型与角色分配、Gateway 提供商、Decisions 提供商与决策模型、运行时限制、服务、职业型子代理、Agent Skills、MCP、语言服务器和 `.qignore`。字段更改后会自动保存，不需要单独的保存快捷键。
 
 选择工作区后会显示仓库级模型覆盖。提供商变更无需重启 Studio，会从下一轮开始生效。API 密钥按 secret 处理，读取 API 不会返回密钥值。
 
@@ -68,4 +68,4 @@ q studio --host 0.0.0.0 --port 7070 --no-open
 
 Studio 默认绑定到回环地址，文件、进程、Git 和配置操作均由本地 q 进程执行。浏览器不会获得直接访问文件系统的权限。Shell 命令仍以本地 q 进程的权限运行，并非操作系统沙箱。使用 `--host` 扩大网络边界时，必须由网络或经过认证的反向代理实施访问控制。
 
-bare `q` 继续作为兼容聊天客户端，`q acp` 继续作为 ACP 服务器入口。`q model`、`q gateway`、`q systemone`、`q subagents`、`q skills`、`q mcp` 和 `q lsp` 等配置命令会打开对应的 Studio 页面。
+bare `q` 继续作为兼容聊天客户端，`q acp` 继续作为 ACP 服务器入口。`q model`、`q gateway`、`q decisions`、`q subagents`、`q skills`、`q mcp` 和 `q lsp` 等配置命令会打开对应的 Studio 页面。

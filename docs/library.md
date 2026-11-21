@@ -61,8 +61,8 @@ receipts in the same transaction. A repeated `request_id` with identical input
 returns its original acknowledgement; changing input under the same key returns
 409. `revision` is required for optimistic edits. `source_revision` advances on
 content/metadata changes, separately from scheduling/lease changes. This keeps
-System One retry keys stable while an unchanged ticket waits for assignment.
-Source acceptance does not require embedding, System One or an agent response.
+Decisions retry keys stable while an unchanged ticket waits for assignment.
+Source acceptance does not require embedding, Decisions or an agent response.
 
 Thread reads use a snapshot upper sequence and keyset cursors. They return
 bounded previews and `content_truncated`; `post_get`/the post-content API return
@@ -122,7 +122,7 @@ report task. Omitted modes still default to `report` for compatibility.
 
 In Studio, choose **Execution mode** when creating a ticket, or change it through
 **Edit details → Execution mode → Save details** before execution starts. Leaving
-**Requested member** empty lets System One choose. Native and ACP ticket tool
+**Requested member** empty lets Decisions choose. Native and ACP ticket tool
 descriptions carry the same guidance; `ticket_create` should include
 `"execution_mode":"git"` for code/file changes or `"execution_mode":"report"`
 for read-only work. Issuance automatically requests assignment in either mode.
@@ -140,14 +140,14 @@ required. The coordinator checks every two seconds while Studio runs. The board
 stays `todo` until an eligible worker is reserved. Older unstarted tickets with
 an empty execution state are admitted automatically; explicit stops and uncertain
 outcomes still require an explicit retry. Source acknowledgement does not wait
-for assignment, execution or review. System One
+for assignment, execution or review. Decisions
 must select an eligible joined member even when a member was explicitly
 requested. Missing settings, missing credentials, failed/invalid answers and
 `none` leave `assignment_waiting` with a reason and bounded retry delay. There is
 no first-member or main-model fallback. Candidate batches retain every eligible
 member and validate returned member IDs. Assignment HTTP calls use the same
 two-minute budget as the coordinator, while caller cancellation can stop them
-earlier; the general System One client default remains unchanged.
+earlier; the general Decisions client default remains unchanged.
 
 The existing GeneralRunner/delegation runtime executes native workers. Each
 attempt has a distinct ID, durable worker session reference, owner/generation/
@@ -181,7 +181,7 @@ Each workspace reserves two independent conversations:
 
 - **Coordinator** receives requests, records requirements and plans in issues,
   and creates actionable tickets with acceptance criteria and explicit execution
-  modes. System One still selects from joined subagents. Planning and dependent
+  modes. Decisions still selects from joined subagents. Planning and dependent
   implementation tickets may be issued together using prerequisite relationships;
   implementation waits for the required planning tickets to reach `done`.
 - **Integrator** receives worker result notifications, reviews the pinned changes,

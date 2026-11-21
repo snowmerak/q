@@ -10,7 +10,7 @@ import (
 	"github.com/snowmerak/q/workspace"
 )
 
-const directDelegationRetired = "direct subagent execution was removed; use workspace_members and ticket_create in a Studio project for asynchronous System One assignment"
+const directDelegationRetired = "direct subagent execution was removed; use workspace_members and ticket_create in a Studio project for asynchronous Decisions assignment"
 
 func retiredDelegationResult() client.ToolResult {
 	return client.ToolResult{Content: directDelegationRetired, IsError: true}

@@ -10,8 +10,12 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"regexp"
+	"slices"
 	"strings"
 	"time"
+
+	"github.com/snowmerak/decisions"
 )
 
 const (
@@ -26,22 +30,30 @@ type Config struct {
 	BaseURL    string
 	APIKey     string
 	HTTPClient *http.Client
+	// API defaults to the native System One protocol.
+	API decisions.API
+	// ModelFilterRegex matches upstream model IDs during discovery.
+	ModelFilterRegex string
 }
 
 // Client sends native System One requests. It is safe to share between goroutines.
 type Client struct {
-	baseURL    string
-	apiKey     string
-	httpClient *http.Client
+	baseURL        string
+	apiKey         string
+	httpClient     *http.Client
+	decisionConfig decisions.Config
+	decisionModels *decisions.Client
+	modelFilter    *regexp.Regexp
 }
 
 func New(config Config) (*Client, error) {
 	baseURL := config.BaseURL
-	if baseURL == "" {
+	translated := config.API != "" && config.API != decisions.SystemOneAPI
+	if baseURL == "" && !translated {
 		baseURL = DefaultBaseURL
 	}
 	parsed, err := url.Parse(baseURL)
-	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
+	if baseURL != "" && (err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "") {
 		return nil, errors.New("systemone: BaseURL must be an HTTP(S) URL without credentials, query, or fragment")
 	}
 	key := config.APIKey
@@ -56,7 +68,21 @@ func New(config Config) (*Client, error) {
 	// credential to a redirect target, including one chosen by a custom client.
 	copyClient := *httpClient
 	copyClient.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
-	return &Client{baseURL: strings.TrimRight(baseURL, "/"), apiKey: key, httpClient: &copyClient}, nil
+	client := &Client{baseURL: strings.TrimRight(baseURL, "/"), apiKey: key, httpClient: &copyClient}
+	if config.ModelFilterRegex != "" {
+		client.modelFilter, err = regexp.Compile(config.ModelFilterRegex)
+		if err != nil {
+			return nil, fmt.Errorf("systemone: model_filter_regex: %w", err)
+		}
+	}
+	if translated {
+		client.decisionConfig = decisions.Config{API: config.API, BaseURL: baseURL, APIKey: key, HTTPClient: &copyClient}
+		client.decisionModels, err = decisions.NewClient(client.decisionConfig)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return client, nil
 }
 
 // Evaluate marshals a typed request and sends one decision operation. It does
@@ -71,8 +97,8 @@ func (c *Client) Evaluate(ctx context.Context, request Request, options CallOpti
 	return c.EvaluateRaw(ctx, body, options)
 }
 
-// EvaluateRaw preserves the supplied JSON bytes, including numeric literals,
-// field order, and extension fields. The server validates the native contract.
+// EvaluateRaw forwards the JSON unchanged to native System One providers.
+// Other providers receive the supported questions translated to their protocol.
 func (c *Client) EvaluateRaw(ctx context.Context, body json.RawMessage, options CallOptions) (result *Result, returnErr error) {
 	if len(body) == 0 || len(body) > maxRequestBytes || !json.Valid(body) || bytes.TrimSpace(body)[0] != '{' {
 		return nil, errors.New("systemone: request must be a JSON object of at most 65536 bytes")
@@ -86,6 +112,9 @@ func (c *Client) EvaluateRaw(ctx context.Context, body json.RawMessage, options 
 	_ = json.Unmarshal(body, &selected)
 	finish := logDecision(ctx, selected.Model)
 	defer func() { finish(result, returnErr) }()
+	if c != nil && c.decisionModels != nil {
+		return c.evaluateDecision(ctx, body, options)
+	}
 	responseBody, header, err := c.do(ctx, http.MethodPost, "systemone", body, options.IdempotencyKey)
 	if err != nil {
 		return nil, err
@@ -102,6 +131,9 @@ func (c *Client) EvaluateRaw(ctx context.Context, body json.RawMessage, options 
 // ListModels returns the endpoint's model catalog. Versioned model IDs can be
 // valid even when they do not appear in this list.
 func (c *Client) ListModels(ctx context.Context) (*ModelsResult, error) {
+	if c != nil && c.decisionModels != nil {
+		return c.listDecisionModels(ctx)
+	}
 	responseBody, header, err := c.do(ctx, http.MethodGet, "models", nil, "")
 	if err != nil {
 		return nil, err
@@ -110,9 +142,16 @@ func (c *Client) ListModels(ctx context.Context) (*ModelsResult, error) {
 	if err := json.Unmarshal(responseBody, &result); err != nil {
 		return nil, fmt.Errorf("systemone: decode model catalog: %w", err)
 	}
+	if c.modelFilter != nil {
+		result.Models = slices.DeleteFunc(result.Models, func(model Model) bool { return !c.allowsModel(model.Name) })
+	}
 	result.Raw = responseBody
 	result.Header = header
 	return &result, nil
+}
+
+func (c *Client) allowsModel(id string) bool {
+	return c.modelFilter == nil || c.modelFilter.MatchString(id)
 }
 
 func (c *Client) do(ctx context.Context, method, path string, body []byte, idempotencyKey string) (json.RawMessage, http.Header, error) {

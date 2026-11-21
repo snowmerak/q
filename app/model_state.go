@@ -163,7 +163,7 @@ type systemOneState struct {
 	systemOnePage           systemOnePage
 	systemOneListCursor     int
 	systemOnePending        bool
-	systemOneInputs         [8]textinput.Model
+	systemOneInputs         [systemOneFieldCount]textinput.Model
 	systemOneFocus          int
 	systemOneModelTarget    int
 	systemOneModels         []systemone.Model

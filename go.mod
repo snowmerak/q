@@ -1,6 +1,6 @@
 module github.com/snowmerak/q
 
-go 1.27.3
+go 1.27.4
 
 require (
 	charm.land/bubbles/v2 v2.1.1
@@ -20,6 +20,7 @@ require (
 	github.com/modelcontextprotocol/go-sdk v1.7.0
 	github.com/parquet-go/parquet-go v0.32.0
 	github.com/snowmerak/cdp-q-driver v0.0.0-20261107143548-ec463b2b34af
+	github.com/snowmerak/decisions v1.0.0
 	github.com/snowmerak/llm-provider v0.0.0-20261108025312-195d7124fbea
 	github.com/snowmerak/q/third_party/acp-go-sdk v0.0.0-20260827012000-155b26051836
 	github.com/tc-hib/winres v0.3.1

@@ -30,7 +30,7 @@ Studio 会输出回环 URL 并在浏览器中打开。使用界面时，请保�
 
 在 **Settings → Providers** 中添加 Gateway 提供商，并填写 endpoint 与 API 密钥环境变量。然后在 **Settings → Models** 中将发现的模型分配给 **Default**。提供商与模型更改会自动保存。
 
-仅当 Agent Skill 相关性检查等工作需要独立的 typed decision 提供商时，才需配置 **Settings → System One**。
+仅当 Agent Skill 相关性检查等工作需要独立的 typed decision 提供商时，才需配置 **Settings → Decisions**。
 
 ## 创建会话
 

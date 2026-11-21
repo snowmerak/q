@@ -30,7 +30,7 @@ Studio는 루프백 URL을 출력하고 브라우저에서 엽니다. 인터페�
 
 **Settings → Providers**에서 Gateway 공급자를 추가하고 endpoint와 API 키 환경변수를 입력하세요. 그다음 **Settings → Models**에서 검색된 모델을 **Default**에 할당합니다. 공급자와 모델 변경은 자동 저장됩니다.
 
-Agent Skill 적합성 검사처럼 별도의 typed decision 공급자를 사용할 때만 **Settings → System One**을 구성하면 됩니다.
+Agent Skill 적합성 검사처럼 별도의 typed decision 공급자를 사용할 때만 **Settings → Decisions**을 구성하면 됩니다.
 
 ## 세션 생성
 

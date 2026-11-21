@@ -24,7 +24,7 @@ toc:
 | `/learn [on\|off\|status]` | 永続学習をチェックポイントまたは制御します。 |
 | `/model` | モデルを割り当て、フォールバックグループを設定します。 |
 | `/gateway` | プロバイダーと Gateway リスナーを設定します。 |
-| `/systemone` | System One のプロバイダー、decision モデル、キー、リスナーを設定します。 |
+| `/decisions` | Decisions のプロバイダー、decision モデル、キー、リスナーを設定します。 |
 | `/library` | グローバル Library リスナーを設定します。 |
 | `/loom` | Loom ストレージと GC を確認・設定します。 |
 | `/ignore` | `.qignore` の探索ルールを編集します。 |
@@ -43,8 +43,8 @@ toc:
 | `q studio [--host <ip>] [--port <port>] [--no-open]` | 組み込み Studio Web インターフェースを起動します。デフォルトは `127.0.0.1` とランダムなポートです。 |
 | `q gateway` | Studio で Gateway のプロバイダーとリスナー設定を開きます。 |
 | `q gateway start` | OpenAI 互換 Gateway を起動します。 |
-| `q systemone` | Studio で System One のプロバイダー、decision モデル、キーを開きます。 |
-| `q systemone start [--host <ip>] [--port <port>]` | System One decision API を起動します。 |
+| `q decisions` | Studio で Decisions のプロバイダー、decision モデル、キーを開きます。 |
+| `q decisions start [--host <ip>] [--port <port>]` | Decisions API を起動します。 |
 | `q library` | Studio でグローバル Library リスナー設定を開きます。 |
 | `q library start` | グローバル Library をフォアグラウンドで稼働させます。 |
 | `q memory` | Workspace Memory を独立して稼働させます。 |

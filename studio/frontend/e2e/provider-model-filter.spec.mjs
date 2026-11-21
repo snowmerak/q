@@ -1,5 +1,44 @@
 import { test, expect } from './test.mjs';
 
+test('Decisions provider regex updates the displayed catalog and rejects invalid input', async ({ page, request }) => {
+  const id = 'system-one-regex';
+  const fixture = await (await request.get('/_test/fixture')).json();
+  const providerPath = `/api/v1/settings/decisions/providers/${id}`;
+  expect((await request.post('/api/v1/settings/decisions/providers', { data: { id, uri: fixture.decision_uri } })).ok()).toBe(true);
+  const savedFilter = async () => {
+    const settings = await (await request.get('/api/v1/settings')).json();
+    return settings.system_one.providers.find(provider => provider.id === id).model_filter_regex;
+  };
+  try {
+    await page.goto('/settings?section=decisions');
+    const card = page.locator('.system-one-provider-card').filter({ has: page.getByRole('heading', { name: id, exact: true }) });
+    const filter = card.getByRole('textbox', { name: 'Model filter regex', exact: true });
+    const defaultModel = page.locator('.system-one-assignment').filter({ has: page.getByText('Default', { exact: true }) }).getByRole('combobox');
+    const model = defaultModel.locator(`option[value="${id}/decision-test"]`);
+    await expect(model).toHaveCount(1);
+    await filter.fill('^$');
+    await filter.press('Tab');
+    await expect.poll(savedFilter).toBe('^$');
+    await expect(model).toHaveCount(0);
+    await page.reload();
+    await expect(filter).toHaveValue('^$');
+    await filter.fill('[');
+    await filter.press('Tab');
+    await expect(page.locator('.save-state')).toContainText('model_filter_regex');
+    expect(await savedFilter()).toBe('^$');
+    await filter.fill('^decision-test$');
+    await filter.press('Tab');
+    await expect.poll(savedFilter).toBe('^decision-test$');
+    await expect(model).toHaveCount(1);
+    await filter.fill('');
+    await filter.press('Tab');
+    await expect.poll(savedFilter).toBe('');
+    await expect(page.locator('.save-state')).toHaveText('Saved');
+  } finally {
+    await request.delete(providerPath);
+  }
+});
+
 test('provider model regex filters the catalog, persists and rejects invalid input', async ({ page, request }, testInfo) => {
   const errors = [];
   page.on('pageerror', error => errors.push(error.message));

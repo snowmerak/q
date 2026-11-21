@@ -135,7 +135,7 @@ test('issuing a ticket automatically requests assignment without a start action'
   await expect(board.getByRole('heading', { name: 'Done', exact: true })).toBeVisible();
   await page.screenshot({ path: join(tmpdir(), 'q-work-ticket-populated.png') });
   await expect(execution).toContainText('Waiting for a suitable agent', { timeout: 20000 });
-  await expect(execution).toContainText('System One');
+  await expect(execution).toContainText('Decisions');
   await execution.screenshot({ path: join(tmpdir(), 'q-ticket-without-start-stop.png') });
   const itemID = new URL(page.url()).searchParams.get('item_id');
   const ticket = await (await request.get(`/api/v1/work/items/${itemID}`)).json();
@@ -1532,13 +1532,13 @@ test('gateway provider edits follow an acknowledged rename in the save queue', a
 });
 
 
-test('system one routing and listener key management persist through native settings panels', async ({ page, request }) => {
+test('Decisions routing and listener key management persist through native settings panels', async ({ page, request }) => {
   const fixture = await (await request.get('/_test/fixture')).json();
-  expect((await request.post('/api/v1/settings/system-one/providers', { data: {
+  expect((await request.post('/api/v1/settings/decisions/providers', { data: {
     id: 'ui-decision', uri: fixture.decision_uri, api_key_env: ''
   } })).ok()).toBe(true);
-  await page.goto('/settings?section=system-one');
-  await expect(page.getByTitle('Refresh System One models', { exact: true })).toBeEnabled();
+  await page.goto('/settings?section=decisions');
+  await expect(page.getByTitle('Refresh Decisions models', { exact: true })).toBeEnabled();
   const role = page.locator('.system-one-assignment').filter({ hasText: 'Agent Skill Decision' });
   await expect(role.getByRole('combobox', { name: 'Model', exact: true }).locator('option[value="ui-decision/decision-test"]')).toHaveCount(1);
   await role.getByRole('combobox', { name: 'Model', exact: true }).selectOption('ui-decision/decision-test');
@@ -1552,7 +1552,7 @@ test('system one routing and listener key management persist through native sett
   let notify;
   const held = new Promise((resolve) => { notify = resolve; });
   const writes = [];
-  await page.route('**/api/v1/settings/system-one/providers/*', async (route) => {
+  await page.route('**/api/v1/settings/decisions/providers/*', async (route) => {
     if (route.request().method() !== 'PUT') return route.continue();
     writes.push(route.request().url());
     const response = await route.fetch();
@@ -1565,7 +1565,7 @@ test('system one routing and listener key management persist through native sett
   await card.getByRole('textbox', { name: 'API key environment', exact: true }).press('Tab');
   release();
   await expect(page.locator('.save-state')).toHaveText('Saved');
-  expect(new URL(writes[1]).pathname).toBe('/api/v1/settings/system-one/providers/ui-decision-renamed');
+  expect(new URL(writes[1]).pathname).toBe('/api/v1/settings/decisions/providers/ui-decision-renamed');
   await expect(role.getByRole('combobox', { name: 'Model', exact: true })).toHaveValue('ui-decision-renamed/decision-test');
   await expect(archiveRole.getByRole('combobox', { name: 'Model', exact: true })).toHaveValue('ui-decision-renamed/decision-test');
   await page.reload();
@@ -1592,6 +1592,18 @@ test('system one routing and listener key management persist through native sett
   await expect(card).toHaveCount(0);
 
   await page.getByRole('complementary', { name: 'Settings sections' }).getByRole('button', { name: /^Services/ }).click();
+  const decisions = page.locator('.service-card').filter({ has: page.getByRole('heading', { name: 'Decisions', exact: true }) });
+  const port = decisions.getByRole('spinbutton', { name: 'Port', exact: true });
+  const originalPort = await port.inputValue();
+  const temporaryPort = originalPort === '8123' ? '8124' : '8123';
+  await port.fill(temporaryPort);
+  await port.press('Tab');
+  await expect(page.locator('.save-state')).toHaveText('Saved');
+  const saved = await (await request.get('/api/v1/settings')).json();
+  expect(saved.services.system_one.port).toBe(Number(temporaryPort));
+  expect((await request.put('/api/v1/settings/services/system-one', { data: {
+    host: saved.services.system_one.host, port: Number(originalPort)
+  } })).ok()).toBe(true);
   const library = page.locator('.service-card').filter({ has: page.getByRole('heading', { name: 'Library', exact: true }) });
   await library.getByRole('textbox', { name: 'Host', exact: true }).fill('127.0.0.2');
   await library.getByRole('textbox', { name: 'Host', exact: true }).press('Tab');

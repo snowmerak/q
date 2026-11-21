@@ -63,20 +63,21 @@ func main() {
 		}
 		return
 	}
-	if len(os.Args) > 1 && os.Args[1] == "systemone" {
+	if len(os.Args) > 1 && (os.Args[1] == "decisions" || os.Args[1] == "systemone") {
+		command := os.Args[1]
 		mode, serviceArgs, ok := parseServiceCommand(os.Args[2:])
 		if !ok {
-			fmt.Fprintln(os.Stderr, "usage: q systemone | q systemone start [--host <ip>] [--port <port>]")
+			fmt.Fprintf(os.Stderr, "usage: q %s | q %s start [--host <ip>] [--port <port>]\n", command, command)
 			os.Exit(2)
 		}
 		if mode == serviceCommandConfigure {
-			if err := runStudioCommandAt(ctx, "/settings?section=system-one"); err != nil {
+			if err := runStudioCommandAt(ctx, "/settings?section=decisions"); err != nil {
 				fmt.Fprintln(os.Stderr, err)
 				os.Exit(1)
 			}
 			return
 		}
-		if err := runSystemOneCommand(ctx, serviceArgs, os.Stdout, os.Stderr); err != nil {
+		if err := runSystemOneCommand(ctx, command, serviceArgs, os.Stdout, os.Stderr); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}

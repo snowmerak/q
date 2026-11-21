@@ -34,9 +34,11 @@ test('settings export keeps selections across tabs and downloads only selected i
   await dialog.getByRole('checkbox', { name: /^Default chat model / }).check();
   await dialog.getByRole('tab', { name: /^Runtime / }).click();
   await dialog.getByRole('checkbox', { name: /^Maximum parallel agents / }).check();
+  await dialog.getByRole('tab', { name: /^Decisions / }).click();
+  await dialog.getByRole('checkbox', { name: /^Default decision model / }).check();
   await dialog.getByRole('tab', { name: /^Models / }).click();
   await expect(dialog.getByRole('checkbox', { name: /^Default chat model / })).toBeChecked();
-  await expect(dialog.getByText('2 selected across all tabs', { exact: true })).toBeVisible();
+  await expect(dialog.getByText('3 selected across all tabs', { exact: true })).toBeVisible();
   const downloadPromise = page.waitForEvent('download');
   await dialog.getByRole('button', { name: 'Export file', exact: true }).click();
   const download = await downloadPromise;
@@ -45,11 +47,12 @@ test('settings export keeps selections across tabs and downloads only selected i
   expect(bundle.format).toBe('q-settings');
   expect(bundle.version).toBe(1);
   expect(bundle.scope).toBe('global');
-  expect(Object.keys(bundle.sections)).toEqual(['models', 'runtime']);
+  expect(Object.keys(bundle.sections).sort()).toEqual(['models', 'runtime', 'system-one']);
+  expect(Object.keys(bundle.sections['system-one'])).toEqual(['default']);
   expect(Object.keys(bundle.sections.models)).toEqual(['default']);
   expect(Object.keys(bundle.sections.runtime)).toEqual(['parallel-agents']);
   await expect(dialog).not.toBeVisible();
-  await expect(page.getByRole('status')).toContainText('Exported 2 settings');
+  await expect(page.getByRole('status')).toContainText('Exported 3 settings');
   expect(errors).toEqual([]);
 });
 

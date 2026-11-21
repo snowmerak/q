@@ -33,7 +33,7 @@ var localSlashCommands = []slashCommand{
 	{"/clear", "", "Empty the current session in place."},
 	{"/compact", "", "Summarize older context while keeping the transcript."},
 	{"/model", "", "Assign models, manage native roles, and configure fallback groups."},
-	{"/systemone", "", "Configure System One providers, decision models, keys, and listener."},
+	{"/decisions", "", "Configure Decisions providers, role models, keys, and listener."},
 	{"/gateway", "", "Configure Gateway network, API keys, and providers."},
 	{"/library", "", "Configure the global Library listener defaults."},
 	{"/loom", "", "Inspect Loom storage and garbage-collection settings."},

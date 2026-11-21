@@ -16,7 +16,7 @@
     </div>
     <p>Times use {timezone}. Leave the interval empty to run once. Repeats require at least 1m; 24h is one day. Leave the start empty to begin now when repeating.</p>
     <label class="toggle"><input type="checkbox" bind:checked={draft.paused} />Pause schedule</label>
-    <p>Each repeat creates a separate ticket for the requested member or System One assignment. Pause stops future occurrences; existing run tickets continue. Unresolved runs prevent overlap; missed intervals are combined into the latest occurrence.</p>
+    <p>Each repeat creates a separate ticket for the requested member or Decisions assignment. Pause stops future occurrences; existing run tickets continue. Unresolved runs prevent overlap; missed intervals are combined into the latest occurrence.</p>
   {/if}
 </fieldset>
 

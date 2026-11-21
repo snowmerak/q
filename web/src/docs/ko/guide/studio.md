@@ -60,7 +60,7 @@ Studio를 시작한 디렉터리가 워크스페이스 범위를 제한하지 �
 
 ## 설정과 운영
 
-**Settings**에서는 전역 모델과 역할 할당, Gateway 공급자, System One 공급자와 decision 모델, 런타임 제한, 서비스, 직업형 서브에이전트, Agent Skills, MCP, 언어 서버와 `.qignore`를 관리합니다. 필드는 변경되면 자동 저장되며 별도의 저장 단축키가 없습니다.
+**Settings**에서는 전역 모델과 역할 할당, Gateway 공급자, Decisions 공급자와 decision 모델, 런타임 제한, 서비스, 직업형 서브에이전트, Agent Skills, MCP, 언어 서버와 `.qignore`를 관리합니다. 필드는 변경되면 자동 저장되며 별도의 저장 단축키가 없습니다.
 
 워크스페이스를 선택하면 저장소별 모델 오버라이드가 표시됩니다. 공급자 변경은 Studio를 재시작하지 않아도 다음 턴부터 적용됩니다. API 키 값은 secret으로 처리되며 읽기 API로 다시 반환되지 않습니다.
 
@@ -70,4 +70,4 @@ Studio를 시작한 디렉터리가 워크스페이스 범위를 제한하지 �
 
 Studio는 기본적으로 루프백에 바인딩되며 파일, 프로세스, Git, 구성 작업은 로컬 q 프로세스를 통해 수행합니다. 브라우저에는 파일시스템 직접 접근 권한이 없습니다. 셸 명령은 로컬 q 프로세스의 권한으로 실행되며 운영체제 샌드박스는 아닙니다. `--host`로 네트워크 경계를 넓힌 경우 네트워크 또는 인증된 리버스 프록시에서 접근을 통제해야 합니다.
 
-bare `q`는 호환 채팅 클라이언트로, `q acp`는 ACP 서버 진입점으로 유지됩니다. `q model`, `q gateway`, `q systemone`, `q subagents`, `q skills`, `q mcp`, `q lsp` 같은 구성 명령은 대응하는 Studio 화면을 엽니다.
+bare `q`는 호환 채팅 클라이언트로, `q acp`는 ACP 서버 진입점으로 유지됩니다. `q model`, `q gateway`, `q decisions`, `q subagents`, `q skills`, `q mcp`, `q lsp` 같은 구성 명령은 대응하는 Studio 화면을 엽니다.

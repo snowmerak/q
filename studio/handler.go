@@ -111,13 +111,16 @@ func newHandlerRuntime(parent context.Context, store config.Store, runner sessio
 	mux.HandleFunc("POST /api/v1/settings/gateway/providers/{provider}/chatgpt/{action}", settings.serveChatGPT)
 	mux.HandleFunc("POST /api/v1/settings/gateway/api-keys", settings.serveGatewayAPIKeyCreate)
 	mux.HandleFunc("DELETE /api/v1/settings/gateway/api-keys/{key}", settings.serveGatewayAPIKeyRevoke)
-	mux.HandleFunc("GET /api/v1/settings/system-one/models", settings.serveSystemOneModelCatalog)
-	mux.HandleFunc("PUT /api/v1/settings/system-one/models/{target}", settings.serveSystemOneModelAssignmentUpdate)
-	mux.HandleFunc("POST /api/v1/settings/system-one/providers", settings.serveSystemOneProviderCreate)
-	mux.HandleFunc("PUT /api/v1/settings/system-one/providers/{provider}", settings.serveSystemOneProviderUpdate)
-	mux.HandleFunc("DELETE /api/v1/settings/system-one/providers/{provider}", settings.serveSystemOneProviderDelete)
-	mux.HandleFunc("POST /api/v1/settings/system-one/api-keys", settings.serveSystemOneAPIKeyCreate)
-	mux.HandleFunc("DELETE /api/v1/settings/system-one/api-keys/{key}", settings.serveSystemOneAPIKeyRevoke)
+	for _, section := range []string{"decisions", "system-one"} {
+		path := "/api/v1/settings/" + section
+		mux.HandleFunc("GET "+path+"/models", settings.serveSystemOneModelCatalog)
+		mux.HandleFunc("PUT "+path+"/models/{target}", settings.serveSystemOneModelAssignmentUpdate)
+		mux.HandleFunc("POST "+path+"/providers", settings.serveSystemOneProviderCreate)
+		mux.HandleFunc("PUT "+path+"/providers/{provider}", settings.serveSystemOneProviderUpdate)
+		mux.HandleFunc("DELETE "+path+"/providers/{provider}", settings.serveSystemOneProviderDelete)
+		mux.HandleFunc("POST "+path+"/api-keys", settings.serveSystemOneAPIKeyCreate)
+		mux.HandleFunc("DELETE "+path+"/api-keys/{key}", settings.serveSystemOneAPIKeyRevoke)
+	}
 	mux.HandleFunc("PUT /api/v1/settings/runtime", settings.serveRuntimeUpdate)
 	mux.HandleFunc("PUT /api/v1/settings/browser-control", settings.serveBrowserControlUpdate)
 	mux.HandleFunc("GET /api/v1/workspaces/loom", settings.serveLoomStatus)

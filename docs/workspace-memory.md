@@ -119,9 +119,9 @@ default and accepts `limit` values from 1 to 12. `offset` applies after ranking
 within that fixed window (0 through 32); `total` reports the window size rather
 than all index matches. Use a more specific query or filters to find other records.
 
-When System One settings exist, nonempty relevance queries score all candidates
+When Decisions settings exist, nonempty relevance queries score all candidates
 in one request using the `archive_decision` role, falling back to the default
-System One model when that role has no assignment. Studio's System One settings
+Decisions model when that role has no assignment. Studio's Decisions settings
 and the terminal settings expose Archive Decision independently of Agent Skill
 Decision. The decision receives bounded summaries, excerpts, roles, kinds,
 statuses, and timestamps; records themselves are unchanged. Equal scores retain

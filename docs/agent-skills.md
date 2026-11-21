@@ -178,7 +178,7 @@ receive the same instruction after `task_start` for their assigned task. They
 load applicable instructions with `get_skill` and search again when new
 information calls for more guidance.
 
-The normalized query is limited to 4,000 runes. Without System One reranking,
+The normalized query is limited to 4,000 runes. Without Decisions reranking,
 `task_start` requests at most twelve search hits and adds at most six candidates;
 other contextual triggers request at most eight hits and add at most four
 candidates. In the main chat it removes skill
@@ -190,7 +190,7 @@ In the main chat, previously seen IDs are recovered from earlier contextual hint
 
 When `systemone.json` exists, q uses its `agent_skill_decision` model assignment
 or representative-model fallback to rerank Agent Skills. Contextual discovery
-retrieves 32 candidates, sends one System One request containing one score
+retrieves 32 candidates, sends one Decisions request containing one score
 question per candidate, and keeps the top eight for `task_start` or the top six
 for other contextual triggers. `search_skills` retrieves and
 scores 32 candidates, then returns at most 20 or the smaller requested limit;

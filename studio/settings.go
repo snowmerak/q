@@ -168,7 +168,8 @@ func (service *settingsService) snapshot() (settingsSnapshot, error) {
 	systemOneProviders := make([]systemOneProviderSettings, 0, len(systemOne.Providers))
 	for _, provider := range systemOne.Providers {
 		systemOneProviders = append(systemOneProviders, systemOneProviderSettings{
-			ID: provider.ID, URI: provider.URI, APIKeyEnv: provider.APIKeyEnv,
+			ID: provider.ID, URI: provider.URI, APIKeyEnv: provider.APIKeyEnv, API: string(provider.API),
+			ModelFilterRegex: provider.ModelFilterRegex,
 		})
 	}
 	systemOneKeys := make([]serviceAPIKeySettings, 0, len(systemOne.APIKeys)+1)
