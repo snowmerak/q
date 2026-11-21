@@ -268,7 +268,8 @@ func TestTicketACPWorkerResumesSameRemoteSessionAndBlocksUnknownPrompt(t *testin
 		if index > 0 {
 			expected = "resumed=true"
 		}
-		if err != nil || !strings.Contains(result.Report, expected) {
+		if err != nil || !strings.Contains(result.Report, expected) ||
+			!strings.Contains(result.Report, "skills=true work-tools=true skill-guidance=true") {
 			t.Fatalf("ACP worker %+v %v", result, err)
 		}
 		a, err = c.UpdateAttempt(ctx, a.ID, workitems.AttemptUpdate{Owner: a.Owner, Token: a.Token, Generation: a.Generation, Status: "awaiting_review", Result: []byte(`{"outcome":"succeeded"}`)})

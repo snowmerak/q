@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -331,7 +332,8 @@ func TestManagerACPHelperProcess(t *testing.T) {
 				Cwd        string `json:"cwd"`
 				SessionID  string `json:"sessionId"`
 				MCPServers []struct {
-					Name string `json:"name"`
+					Name string   `json:"name"`
+					Args []string `json:"args"`
 				} `json:"mcpServers"`
 				Prompt []struct {
 					Text string `json:"text"`
@@ -350,11 +352,13 @@ func TestManagerACPHelperProcess(t *testing.T) {
 				os.Exit(2)
 			}
 			resumed = request.Method == "session/load"
-			skills, workTools = false, false
-			for _, server := range request.Params.MCPServers {
-				skills = skills || server.Name == "q-skills"
-				workTools = workTools || server.Name == "q-library"
+			servers := request.Params.MCPServers
+			if len(servers) != 1 || servers[0].Name != "q-library" {
+				fmt.Fprintf(os.Stderr, "expected one q-library server, got %+v\n", servers)
+				os.Exit(3)
 			}
+			skills = true
+			workTools = !slices.Contains(servers[0].Args, "--skills-only")
 			if !resumed {
 				result = map[string]any{"sessionId": fmt.Sprintf("remote-%d", os.Getpid())}
 			}

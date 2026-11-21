@@ -8,7 +8,7 @@ import (
 	"github.com/snowmerak/q/library"
 )
 
-const SkillInstructions = "Q supplies global and bundled Agent Skills through the read-only q-skills MCP server. Call search_skills with the skill name or relevant keywords, then call get_skill with a returned ID before using its instructions. Reuse complete skill text already available in the current conversation."
+const SkillInstructions = "Q supplies global and bundled Agent Skills through the q-library MCP server. Call search_skills with the skill name or relevant keywords, then call get_skill with a returned ID before using its instructions. Reuse complete skill text already available in the current conversation."
 
 type skillSearchInput struct {
 	Query string   `json:"query" jsonschema:"Skill name or concise keywords for the procedure needed"`
@@ -27,9 +27,7 @@ type skillOutput struct {
 	Content string            `json:"content"`
 }
 
-// NewSkillsServer shares the global skill catalog without granting work-item tools.
-func NewSkillsServer(client *library.Client) *mcp.Server {
-	server := mcp.NewServer(&mcp.Implementation{Name: "q-skills", Version: "0.1.0"}, &mcp.ServerOptions{Instructions: SkillInstructions})
+func registerSkillTools(server *mcp.Server, client *library.Client) {
 	readOnly := &mcp.ToolAnnotations{ReadOnlyHint: true, IdempotentHint: true}
 	mcp.AddTool(server, &mcp.Tool{
 		Name: "search_skills", Description: "Search global and bundled Q skills. Use get_skill with a result's ID to read the instructions.", Annotations: readOnly,
@@ -46,5 +44,4 @@ func NewSkillsServer(client *library.Client) *mcp.Server {
 		}
 		return nil, skillOutput{Skill: out.Skill, Path: out.Path, Content: string(out.Content)}, nil
 	})
-	return server
 }

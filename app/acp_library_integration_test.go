@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/snowmerak/q/internal/workitemtools"
 	"github.com/snowmerak/q/library"
 )
 
@@ -50,7 +51,7 @@ func TestNPMACPLibraryLookupIntegration(t *testing.T) {
 			if err := (library.ConfigStore{Dir: dir}).Save(library.Config{Host: "127.0.0.1", Port: port}); err != nil {
 				t.Fatal(err)
 			}
-			command.mcpServers, err = acpLibraryServers(dir)
+			command.mcpServers, err = acpLibraryServers(dir, &workitemtools.Binding{})
 			if err != nil {
 				t.Fatal(err)
 			}

@@ -10,19 +10,9 @@ import (
 	"github.com/snowmerak/q/third_party/acp-go-sdk"
 )
 
-const acpLibraryInstructionsVersion = 8
+const acpLibraryInstructionsVersion = 9
 
-func acpSkillServers(configDir string) ([]acp.McpServer, error) {
-	servers, err := acpLibraryServers(configDir)
-	if err != nil {
-		return nil, err
-	}
-	servers[0].Stdio.Name = "q-skills"
-	servers[0].Stdio.Args = append(servers[0].Stdio.Args, "--skills-only")
-	return servers, nil
-}
-
-func acpLibraryServers(configDir string, configured ...workitemtools.Binding) ([]acp.McpServer, error) {
+func acpLibraryServers(configDir string, binding *workitemtools.Binding) ([]acp.McpServer, error) {
 	executable, err := os.Executable()
 	if err != nil {
 		return nil, err
@@ -35,15 +25,17 @@ func acpLibraryServers(configDir string, configured ...workitemtools.Binding) ([
 		Name: "q-library", Command: executable,
 		Args: []string{"library", "mcp", "--config-dir", dir}, Env: []acp.EnvVariable{},
 	}}}
-	if len(configured) > 0 {
-		binding := configured[0]
-		servers[0].Stdio.Args = append(servers[0].Stdio.Args, "--workspace-id", binding.WorkspaceID, "--session-id", binding.SessionID)
-		if binding.Manager {
-			servers[0].Stdio.Args = append(servers[0].Stdio.Args, "--manager")
-		}
-		if binding.EmbeddingConnection != "" {
-			servers[0].Stdio.Args = append(servers[0].Stdio.Args, "--embedding-connection", binding.EmbeddingConnection)
-		}
+	server := servers[0].Stdio
+	if binding == nil {
+		server.Args = append(server.Args, "--skills-only")
+		return servers, nil
+	}
+	server.Args = append(server.Args, "--workspace-id", binding.WorkspaceID, "--session-id", binding.SessionID)
+	if binding.Manager {
+		server.Args = append(server.Args, "--manager")
+	}
+	if binding.EmbeddingConnection != "" {
+		server.Args = append(server.Args, "--embedding-connection", binding.EmbeddingConnection)
 	}
 	return servers, nil
 }
@@ -54,7 +46,7 @@ func (r *acpRemoteClient) libraryPrompt(content, restored string) (string, bool)
 	if include {
 		instructions := r.libraryInstructions
 		if instructions == "" {
-			instructions = librarymcp.InstructionsFor(workitemtools.Binding{})
+			instructions = librarymcp.InstructionsFor(&workitemtools.Binding{})
 		}
 		prefix = strings.TrimSpace(prefix + "\n\n" + instructions)
 		if r.libraryRoleInstructions != "" {

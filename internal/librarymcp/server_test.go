@@ -15,7 +15,7 @@ import (
 
 func connect(t *testing.T, client *library.Client, binding workitemtools.Binding) *mcp.ClientSession {
 	t.Helper()
-	return connectServer(t, NewServer(client, binding))
+	return connectServer(t, NewServer(client, &binding))
 }
 
 func connectServer(t *testing.T, mcpServer *mcp.Server) *mcp.ClientSession {
@@ -64,12 +64,12 @@ func TestWorkspaceSourceToolsAndRetiredLearning(t *testing.T) {
 	for _, tool := range tools.Tools {
 		names[tool.Name] = true
 	}
-	for _, name := range []string{"learn", "request_learning", "search_propositions", "get_proposition", "search_skills", "get_skill"} {
+	for _, name := range []string{"learn", "request_learning", "search_propositions", "get_proposition"} {
 		if names[name] {
 			t.Fatalf("retired tool still advertised: %s", name)
 		}
 	}
-	for _, name := range []string{"issue_create", "issue_reply", "post_get", "search_work"} {
+	for _, name := range []string{"issue_create", "issue_reply", "post_get", "search_work", "search_skills", "get_skill"} {
 		if !names[name] {
 			t.Fatalf("missing tool: %s", name)
 		}
@@ -197,7 +197,7 @@ func TestReservedRoleToolCatalogs(t *testing.T) {
 			for _, tool := range catalog.Tools {
 				names[tool.Name] = true
 			}
-			for _, name := range []string{"issue_get", "ticket_get", "post_get", "search_work"} {
+			for _, name := range []string{"issue_get", "ticket_get", "post_get", "search_work", "search_skills", "get_skill"} {
 				if !names[name] {
 					t.Fatalf("%s lacks %s", role, name)
 				}
@@ -207,18 +207,18 @@ func TestReservedRoleToolCatalogs(t *testing.T) {
 					t.Fatalf("%s has incorrect project access: %s=%t", role, name, names[name])
 				}
 			}
-			wantCount := 21
+			wantCount := 23
 			switch role {
 			case "unbound":
-				wantCount = 6
+				wantCount = 8
 			case "integrator":
-				wantCount = 23
+				wantCount = 25
 			}
-			if len(names) != wantCount || names["search_skills"] || names["get_skill"] {
+			if len(names) != wantCount {
 				t.Fatalf("unexpected %s catalog: %v", role, names)
 			}
 			instructions := session.InitializeResult().Instructions
-			if instructions != InstructionsFor(binding) || strings.Contains(instructions, "ticket_review") != binding.Manager {
+			if instructions != InstructionsFor(&binding) || strings.Contains(instructions, "ticket_review") != binding.Manager {
 				t.Fatalf("wrong %s instructions: %s", role, instructions)
 			}
 			for _, name := range []string{"manager_inbox", "ticket_review"} {

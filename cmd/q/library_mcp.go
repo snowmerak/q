@@ -43,7 +43,7 @@ func runLibraryMCP(ctx context.Context, args []string, stderr io.Writer) error {
 	// HTTP service is temporarily down; individual tool calls report errors.
 	client := library.NewClient(value.Endpoint(), "", 0)
 	if *skillsOnly {
-		return librarymcp.NewSkillsServer(client).Run(ctx, &mcp.StdioTransport{})
+		return librarymcp.NewServer(client, nil).Run(ctx, &mcp.StdioTransport{})
 	}
 	if *connection != "" {
 		store := config.Store{Dir: *dir}
@@ -58,5 +58,5 @@ func runLibraryMCP(ctx context.Context, args []string, stderr io.Writer) error {
 			return &embeddingbridge.Embedder{Path: *connection, Store: store, Model: value.Embedding.Model, Dimensions: value.Embedding.Dimensions}, value.Embedding.Model, value.Embedding.Dimensions, nil
 		})
 	}
-	return librarymcp.NewServer(client, workitemtools.Binding{WorkspaceID: *workspaceID, SessionID: *sessionID, Manager: *manager}).Run(ctx, &mcp.StdioTransport{})
+	return librarymcp.NewServer(client, &workitemtools.Binding{WorkspaceID: *workspaceID, SessionID: *sessionID, Manager: *manager}).Run(ctx, &mcp.StdioTransport{})
 }

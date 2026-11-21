@@ -395,7 +395,7 @@ func (host *SessionHost) runACPTicket(ctx context.Context, c *library.Client, wo
 	if err != nil {
 		return result, err
 	}
-	binding := workitemtools.Binding{WorkspaceID: a.WorkspaceID, SessionID: a.WorkerSessionID, EmbeddingConnection: bridgePath}
+	binding := &workitemtools.Binding{WorkspaceID: a.WorkspaceID, SessionID: a.WorkerSessionID, EmbeddingConnection: bridgePath}
 	command.mcpServers, err = acpLibraryServers(host.store.Dir, binding)
 	if err != nil {
 		return result, err

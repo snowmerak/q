@@ -243,12 +243,15 @@ The same workspace source tools are registered for native Q and `q-library` MCP:
 
 The host binds workspace and actor; tool arguments cannot select another write
 scope or impersonate a manager. Explicit global reads do not grant cross-project
-writes. The work server provides six global read tools without a project, 21
-tools for project sessions, and 23 for Integrators including review operations.
-Ordinary ACP connections opt in using **Q issues and tickets**. Reserved project
-sessions and ticket workers always receive their required workspace tools.
-Interactive ACP sessions also receive a separate read-only `q-skills` MCP server
-for global and bundled skills, regardless of the issue and ticket setting.
+writes. When enabled, the work catalog provides six global read tools without
+a project, 21 tools for project sessions, and 23 for Integrators including
+review operations.
+
+Interactive ACP sessions and ACP ticket workers receive one `q-library` MCP
+connection with `search_skills` and `get_skill` for global and bundled skills.
+Ordinary ACP connections add work tools by enabling **Q issues and tickets**.
+Reserved project sessions and ticket workers automatically receive work tools
+scoped to their project and role.
 
 Project-specific workflow and role instructions accompany MCP initialization and
 the first ACP prompt. ACP has no separate system-prompt field, so Q prepends these
@@ -259,6 +262,7 @@ Q to merge the pinned commit locally; remote pushes remain separate.
 
 ```text
 q library mcp --config-dir <directory> --workspace-id <id> --session-id <id> [--manager]
+q library mcp --config-dir <directory> --skills-only
 ```
 
 `--embedding-connection` is supplied internally by the host. Bridge stdout

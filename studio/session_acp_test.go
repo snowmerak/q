@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -27,16 +28,20 @@ type studioACPFixture struct {
 	effort     string
 }
 
-func validateFixtureLibraryServers(servers []acp.McpServer) error {
-	if os.Getenv("Q_STUDIO_ACP_LIBRARY") != "1" {
+func validateFixtureMCPServers(servers []acp.McpServer) error {
+	library := os.Getenv("Q_STUDIO_ACP_LIBRARY")
+	if library == "" {
 		return nil
 	}
 	if len(servers) != 1 || servers[0].Stdio == nil {
-		return fmt.Errorf("expected one Library stdio server: %+v", servers)
+		return fmt.Errorf("expected one stdio MCP server with Library=%s, got %+v", library, servers)
 	}
 	server := servers[0].Stdio
 	if server.Name != "q-library" || !filepath.IsAbs(server.Command) || len(server.Args) < 4 || strings.Join(server.Args[:3], " ") != "library mcp --config-dir" || !filepath.IsAbs(server.Args[3]) || len(server.Env) != 0 {
 		return fmt.Errorf("invalid Library server: %+v", server)
+	}
+	if skillsOnly := library != "1"; slices.Contains(server.Args[4:], "--skills-only") != skillsOnly {
+		return fmt.Errorf("q-library: want --skills-only=%v, got args %q", skillsOnly, server.Args)
 	}
 	return nil
 }
@@ -101,7 +106,7 @@ func (agent *studioACPFixture) Initialize(context.Context, acp.InitializeRequest
 }
 
 func (agent *studioACPFixture) NewSession(_ context.Context, request acp.NewSessionRequest) (acp.NewSessionResponse, error) {
-	if err := validateFixtureLibraryServers(request.McpServers); err != nil {
+	if err := validateFixtureMCPServers(request.McpServers); err != nil {
 		return acp.NewSessionResponse{}, err
 	}
 	agent.id = acp.SessionId(fmt.Sprintf("fixture-%d", os.Getpid()))
@@ -111,7 +116,7 @@ func (agent *studioACPFixture) NewSession(_ context.Context, request acp.NewSess
 }
 
 func (agent *studioACPFixture) ResumeSession(_ context.Context, request acp.ResumeSessionRequest) (acp.ResumeSessionResponse, error) {
-	if err := validateFixtureLibraryServers(request.McpServers); err != nil {
+	if err := validateFixtureMCPServers(request.McpServers); err != nil {
 		return acp.ResumeSessionResponse{}, err
 	}
 	agent.id = request.SessionId
@@ -194,7 +199,7 @@ func TestStudioACPSessionsStreamResumeAndRequireApproval(t *testing.T) {
 				t.Fatal(err)
 			}
 			log := filepath.Join(t.TempDir(), "prompts.jsonl")
-			environment := map[string]string{"Q_STUDIO_ACP_FIXTURE": "1", "Q_STUDIO_ACP_LOG": log}
+			environment := map[string]string{"Q_STUDIO_ACP_FIXTURE": "1", "Q_STUDIO_ACP_LOG": log, "Q_STUDIO_ACP_LIBRARY": "0"}
 			if useLibrary {
 				environment["Q_STUDIO_ACP_LIBRARY"] = "1"
 			}
@@ -271,14 +276,29 @@ func TestStudioACPSessionsStreamResumeAndRequireApproval(t *testing.T) {
 			if len(calls) != 3 || calls[0]["session"] != calls[1]["session"] {
 				t.Fatalf("session not retained: %+v", calls)
 			}
-			if strings.Contains(calls[0]["prompt"], "Q Library provides") != useLibrary || strings.Contains(calls[1]["prompt"], "Q Library provides") || (useLibrary && !resume && strings.Count(calls[2]["prompt"], "Q Library provides") != 1) {
-				t.Fatalf("Library instructions were omitted or duplicated: %+v", calls)
+			var binding *workitemtools.Binding
+			if useLibrary {
+				binding = &workitemtools.Binding{}
+			}
+			promptPrefix := librarymcp.InstructionsFor(binding) + "\n\nCurrent request:\n"
+			if got, want := calls[0]["prompt"], promptPrefix+"first"; got != want {
+				t.Fatalf("first ACP prompt = %q, want %q", got, want)
+			}
+			if got := calls[1]["prompt"]; got != "second" {
+				t.Fatalf("second ACP prompt = %q, want only the current request", got)
 			}
 			if resume && (calls[2]["session"] != calls[0]["session"] || calls[2]["prompt"] != "third") {
 				t.Fatalf("session not resumed: %+v", calls)
 			}
-			if !resume && !strings.Contains(calls[2]["prompt"], "ACP answer: first") {
-				t.Fatalf("completed history not restored: %+v", calls)
+			if !resume {
+				prompt := calls[2]["prompt"]
+				history, found := strings.CutSuffix(prompt, "\n\n"+promptPrefix+"third")
+				if !found || !strings.Contains(history, "ACP answer: first") {
+					t.Fatalf("fallback ACP prompt missing completed history or tool instructions: %q", prompt)
+				}
+				if strings.Contains(history, librarymcp.SkillInstructions) || strings.Contains(history, librarymcp.Instructions) {
+					t.Fatalf("fallback ACP prompt repeated tool instructions in restored history: %q", prompt)
+				}
 			}
 			run("permission")
 			waiting := fixture.start(t, "wait")
@@ -322,12 +342,11 @@ func TestStudioACPSessionsStreamResumeAndRequireApproval(t *testing.T) {
 			if err := json.Unmarshal([]byte(lines[len(lines)-1]), &isolated); err != nil {
 				t.Fatal(err)
 			}
-			isolatedPrompt := "isolated"
-			if useLibrary {
-				isolatedPrompt = librarymcp.InstructionsFor(workitemtools.Binding{}) + "\n\nCurrent request:\nisolated"
+			if isolated["session"] == calls[0]["session"] {
+				t.Fatalf("independent Q session reused ACP session %q", isolated["session"])
 			}
-			if isolated["session"] == calls[0]["session"] || isolated["prompt"] != isolatedPrompt {
-				t.Fatalf("ACP context leaked: %+v", isolated)
+			if got, want := isolated["prompt"], promptPrefix+"isolated"; got != want {
+				t.Fatalf("independent ACP session prompt = %q, want %q", got, want)
 			}
 			invalid := serveJSON(t, fixture.handler, http.MethodPut, base+"/model", map[string]string{"workspace_root": fixture.root, "agent": "missing"})
 			if invalid.Code != 422 {

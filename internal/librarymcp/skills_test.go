@@ -23,7 +23,10 @@ func TestSkillsMCPFindsAndReadsBundledSkill(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = runtime.Close() })
-	session := connectServer(t, NewSkillsServer(runtime.Client()))
+	session := connectServer(t, NewServer(runtime.Client(), nil))
+	if got := session.InitializeResult().ServerInfo.Name; got != "q-library" {
+		t.Fatalf("skills-only server name = %q, want q-library", got)
+	}
 
 	catalog, err := session.ListTools(t.Context(), nil)
 	if err != nil {
