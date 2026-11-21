@@ -106,9 +106,9 @@ func watchSystemOneKeyring(ctx context.Context, store systemoneconfig.Store, ser
 		defer close(done)
 		ticker := time.NewTicker(500 * time.Millisecond)
 		defer ticker.Stop()
-		var lastModified time.Time
+		var lastInfo os.FileInfo
 		if info, err := os.Stat(store.Path()); err == nil {
-			lastModified = info.ModTime()
+			lastInfo = info
 		}
 		for {
 			select {
@@ -116,10 +116,10 @@ func watchSystemOneKeyring(ctx context.Context, store systemoneconfig.Store, ser
 				return
 			case <-ticker.C:
 				info, err := os.Stat(store.Path())
-				if err != nil || info.ModTime().Equal(lastModified) {
+				if err != nil || !systemOneConfigChanged(lastInfo, info) {
 					continue
 				}
-				lastModified = info.ModTime()
+				lastInfo = info
 				value, err := store.LoadOrDefault()
 				if err != nil {
 					_, _ = fmt.Fprintf(output, "q systemone: API key reload skipped: %v\n", err)
@@ -142,6 +142,13 @@ func watchSystemOneKeyring(ctx context.Context, store systemoneconfig.Store, ser
 		}
 	}()
 	return done
+}
+
+func systemOneConfigChanged(previous, current os.FileInfo) bool {
+	if previous == nil {
+		return true
+	}
+	return !os.SameFile(previous, current) || !previous.ModTime().Equal(current.ModTime())
 }
 
 func parseSystemOneOptions(args []string, output io.Writer) (systemOneCommandOptions, error) {
