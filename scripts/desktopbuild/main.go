@@ -30,7 +30,7 @@ func main() {
 
 func run() error {
 	var options buildOptions
-	flag.StringVar(&options.version, "version", "0.1.2", "product version (major.minor.patch)")
+	flag.StringVar(&options.version, "version", "0.2.1", "product version (major.minor.patch)")
 	flag.StringVar(&options.targets, "targets", runtime.GOOS+"/"+runtime.GOARCH, "comma-separated OS/architecture targets")
 	flag.StringVar(&options.formats, "formats", "", "package formats (default: Windows nsis; macOS dmg; Linux deb,rpm)")
 	flag.StringVar(&options.nsis, "nsis", "", "optional NSIS compiler path")
