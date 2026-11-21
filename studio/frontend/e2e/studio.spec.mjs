@@ -1421,6 +1421,45 @@ test('global model editors preserve queued drafts across settings panels', async
   const group = page.locator('.model-group-card').filter({ has: page.getByRole('heading', { name: 'ui-fallback', exact: true }) });
   const timeout = group.getByRole('textbox', { name: 'Timeout', exact: true });
   await expect(timeout).toBeVisible();
+  const catalogResponse = await request.get('/api/v1/settings/models');
+  expect(catalogResponse.ok()).toBe(true);
+  const catalog = await catalogResponse.json();
+  expect(catalog.models.filter(model => model.id === 'group/ui-fallback')).toEqual([
+    expect.objectContaining({ id: 'group/ui-fallback', group: true })
+  ]);
+  const subagents = await page.context().newPage();
+  try {
+    await subagents.route('**/api/v1/settings/models', route => route.fulfill({
+      json: {
+        ...catalog,
+        models: catalog.models.map(model => model.id === 'default/test-model'
+          ? { ...model, reasoning_control: 'effort', reasoning_efforts: ['low', 'high'] }
+          : model)
+      }
+    }));
+    await subagents.goto('/settings?section=subagents');
+    await subagents.getByRole('button', { name: /^Built in/ }).click();
+    const profile = subagents.locator('.agent-definition').filter({ hasText: 'builtin/research' });
+    await profile.locator('summary').click();
+    const picker = profile.getByRole('combobox', { name: 'Run with', exact: true });
+    await expect(picker.locator('optgroup[label="Fallback groups"] option[value="model:group/ui-fallback"]')).toHaveText('group/ui-fallback');
+    await expect(picker.locator('optgroup[label="API Provider"] option[value="model:group/ui-fallback"]')).toHaveCount(0);
+    const previousTarget = await picker.inputValue();
+    const reasoning = profile.getByRole('combobox', { name: 'Reasoning', exact: true });
+    await picker.selectOption('model:group/ui-fallback');
+    await expect(picker).toHaveValue('model:group/ui-fallback');
+    await expect(picker).toBeEnabled();
+    await expect(reasoning).toBeDisabled();
+    await expect(reasoning.locator('option:checked')).toHaveText('Fallback group settings');
+    await picker.selectOption('model:default/test-model');
+    await expect(picker).toHaveValue('model:default/test-model');
+    await expect(reasoning).toBeEnabled();
+    await picker.selectOption(previousTarget);
+    await expect(picker).toHaveValue(previousTarget);
+    await expect(picker).toBeEnabled();
+  } finally {
+    await subagents.close();
+  }
   let release;
   const gate = new Promise((resolve) => { release = resolve; });
   let notify;

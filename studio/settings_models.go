@@ -68,12 +68,23 @@ func (service *settingsService) serveModelCatalog(writer http.ResponseWriter, re
 		return
 	}
 	result := modelCatalog{Models: make([]modelOption, 0, len(models)+len(mainConfig.ModelGroups))}
+	groups := make(map[string]bool, len(mainConfig.ModelGroups))
+	for name := range mainConfig.ModelGroups {
+		groups["group/"+name] = false
+	}
 	providerModes := providerhost.PreferredProviderAPIModes(providerConfig, mainConfig)
 	for _, model := range models {
 		if !filter.Allows(model.ID) {
 			continue
 		}
-		option := modelOption{ID: model.ID, ContextLength: model.ContextLength, APIMode: providerhost.PreferredModelAPIMode(mainConfig, providerModes, model.ID), APIModeOverride: mainConfig.ModelAPIModes[model.ID]}
+		seen, grouped := groups[model.ID]
+		if seen {
+			continue
+		}
+		if grouped {
+			groups[model.ID] = true
+		}
+		option := modelOption{ID: model.ID, Group: grouped, ContextLength: model.ContextLength, APIMode: providerhost.PreferredModelAPIMode(mainConfig, providerModes, model.ID), APIModeOverride: mainConfig.ModelAPIModes[model.ID]}
 		option.Sampling = mainConfig.ModelSampling[model.ID]
 		option.MaxOutputTokens = model.MaxOutputTokens
 		option.AllowMissingFinishReason = mainConfig.ModelAllowMissingFinishReason[model.ID]
@@ -96,8 +107,10 @@ func (service *settingsService) serveModelCatalog(writer http.ResponseWriter, re
 		}
 		result.Models = append(result.Models, option)
 	}
-	for name := range mainConfig.ModelGroups {
-		result.Models = append(result.Models, modelOption{ID: "group/" + name, Group: true})
+	for id, seen := range groups {
+		if !seen {
+			result.Models = append(result.Models, modelOption{ID: id, Group: true})
+		}
 	}
 	sort.Slice(result.Models, func(i, j int) bool { return result.Models[i].ID < result.Models[j].ID })
 	writeJSON(writer, http.StatusOK, result)

@@ -14,7 +14,13 @@
 
   $: value = target?.agent ? `acp:${target.agent}` : target?.model ? `model:${target.model}` : '';
   $: effort = target?.reasoning_effort || '';
-  $: efforts = reasoningOptions(target?.model || defaultModel, effort, models);
+  $: effectiveModel = target?.model || defaultModel;
+  $: usesFallbackGroup = effectiveModel.startsWith('group/');
+  $: efforts = reasoningOptions(effectiveModel, effort, models);
+  $: apiModels = models.filter(model => !model.group);
+  $: fallbackGroups = models.filter(model => model.group);
+  $: unavailableModel = target?.model && !models.some(model => model.id === target?.model) ? target.model : '';
+  $: unavailableGroup = unavailableModel.startsWith('group/') ? unavailableModel : '';
 
   function change(event: Event) {
     const select = event.currentTarget as HTMLSelectElement;
@@ -41,11 +47,19 @@
     <option value="">{externalOnly ? 'Unassigned' : 'Use default model'}</option>
     {#if !externalOnly}
       <optgroup label="API Provider">
-        {#if target?.model && !models.some(model => model.id === target?.model)}
-          <option value={`model:${target.model}`}>{target.model} · unavailable</option>
+        {#if unavailableModel && !unavailableGroup}
+          <option value={`model:${unavailableModel}`}>{unavailableModel} · unavailable</option>
         {/if}
-        {#each models as model}<option value={`model:${model.id}`}>{model.id}{model.group ? ' · group' : ''}</option>{/each}
+        {#each apiModels as model}<option value={`model:${model.id}`}>{model.id}</option>{/each}
       </optgroup>
+      {#if fallbackGroups.length || unavailableGroup}
+        <optgroup label="Fallback groups">
+          {#if unavailableGroup}
+            <option value={`model:${unavailableGroup}`}>{unavailableGroup} · unavailable</option>
+          {/if}
+          {#each fallbackGroups as group}<option value={`model:${group.id}`}>{group.id}</option>{/each}
+        </optgroup>
+      {/if}
     {/if}
     <optgroup label="ACP">
       {#if target?.agent && !connections.includes(target.agent)}
@@ -58,8 +72,8 @@
 {#if !externalOnly && !target?.agent && efforts.length}
   <label>
     <span>Reasoning</span>
-    <select value={effort} aria-label="Reasoning" onchange={changeEffort} {disabled}>
-      <option value="">Provider default</option>
+    <select value={effort} aria-label="Reasoning" onchange={changeEffort} disabled={disabled || usesFallbackGroup}>
+      <option value="">{usesFallbackGroup ? 'Fallback group settings' : 'Provider default'}</option>
       {#each efforts as option}<option value={option}>{option}</option>{/each}
     </select>
   </label>
