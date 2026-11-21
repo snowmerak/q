@@ -158,7 +158,17 @@ func windowIcon() []byte {
 
 func (s *desktopShell) show() {
 	if s.window == nil {
-		s.window = s.app.Window.NewWithOptions(application.WebviewWindowOptions{Name: "q-studio", Title: "Q Studio", Width: 1280, Height: 850, MinWidth: 760, MinHeight: 540, URL: "/", DevToolsEnabled: false, UseApplicationMenu: true})
+		s.window = s.app.Window.NewWithOptions(application.WebviewWindowOptions{
+			Name:               "q-studio",
+			Title:              "Q Studio",
+			Width:              1280,
+			Height:             850,
+			MinWidth:           760,
+			MinHeight:          540,
+			URL:                "/",
+			DevToolsEnabled:    false,
+			UseApplicationMenu: runtime.GOOS != "windows",
+		})
 		s.window.RegisterHook(events.Common.WindowClosing, func(e *application.WindowEvent) {
 			if s.settings.KeepRunning && s.canHide {
 				s.window.Hide()
