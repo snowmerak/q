@@ -166,8 +166,9 @@ builds without publishing.
 
 The bare `q` command remains a compatibility terminal client. Former standalone
 configuration commands such as `q model`, `q gateway`, `q decisions`, `q skills`,
-and `q help` now open their corresponding Studio surface. `q studio` also starts
-the standalone Gateway listener using the saved Gateway address and providers.
+and `q help` now open their corresponding Studio surface. Studio starts the Gateway
+and Decisions listeners using their saved addresses and providers, reloads their
+saved settings, and stops both listeners when the owning engine shuts down.
 
 Studio saves appearance, sidebar state, the last workspace and unsent session
 drafts in `~/.q/studio/ui-state.json`. These preferences are shared by the app

@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/snowmerak/q/config"
@@ -152,14 +153,16 @@ func serveStudio(ctx context.Context, options studioCommandOptions, stdout, stde
 		ErrorLog:          diagnostics.HTTPErrorLogger(logger),
 	}
 	serverContext, cancelServer := context.WithCancel(ctx)
-	gatewayDone := make(chan struct{})
-	go func() {
-		defer close(gatewayDone)
+	var services sync.WaitGroup
+	services.Go(func() {
 		runStudioGateway(serverContext, store.Dir, stdout, stderr)
-	}()
+	})
+	services.Go(func() {
+		runStudioDecisions(serverContext, store.Dir, stdout, stderr)
+	})
 	defer func() {
 		cancelServer()
-		<-gatewayDone
+		services.Wait()
 	}()
 	shutdownDone := make(chan struct{})
 	go func() {
