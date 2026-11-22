@@ -1,9 +1,12 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -26,7 +29,7 @@ func TestProxyKeepsCredentialsOutOfFrontend(t *testing.T) {
 		_, _ = io.WriteString(w, "events")
 	}))
 	defer server.Close()
-	host := newEngineHost("", io.Discard)
+	host := newEngineHost("", io.Discard, slog.New(slog.DiscardHandler))
 	host.process = &engineProcess{endpoint: engineEndpoint{URL: server.URL, Token: "private-token"}}
 	req := httptest.NewRequest(http.MethodGet, "http://wails.localhost/api/v1/events?after=2", nil)
 	req.Header.Set("Cookie", "unrelated=secret")
@@ -41,6 +44,83 @@ func TestProxyKeepsCredentialsOutOfFrontend(t *testing.T) {
 	host.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "http://wails.localhost"+controlPath+"launch", nil))
 	if response.Code != 404 {
 		t.Fatal("frontend can access engine control")
+	}
+}
+
+func TestProxyLogsUnavailable(t *testing.T) {
+	const headerTimeout = 30 * time.Millisecond
+	connectionError := &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("connection refused")}
+	for _, test := range []struct {
+		reason      string
+		detail      string
+		minDuration time.Duration
+		setup       func(*testing.T, *engineHost)
+	}{
+		{
+			reason: "connection_failed",
+			detail: connectionError.Error(),
+			setup: func(_ *testing.T, host *engineHost) {
+				host.process = &engineProcess{endpoint: engineEndpoint{URL: "http://127.0.0.1:1"}}
+				transport := host.proxy.Transport.(*http.Transport)
+				transport.DialContext = func(context.Context, string, string) (net.Conn, error) {
+					return nil, connectionError
+				}
+			},
+		},
+		{
+			reason:      "timeout",
+			detail:      "net/http: timeout awaiting response headers",
+			minDuration: headerTimeout,
+			setup: func(t *testing.T, host *engineHost) {
+				release := make(chan struct{})
+				server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+					<-release
+				}))
+				t.Cleanup(server.Close)
+				t.Cleanup(func() { close(release) })
+				host.process = &engineProcess{endpoint: engineEndpoint{URL: server.URL}}
+				host.proxy.Transport.(*http.Transport).ResponseHeaderTimeout = headerTimeout
+			},
+		},
+		{reason: "engine_unavailable", detail: "no Q engine endpoint is connected"},
+	} {
+		t.Run(test.reason, func(t *testing.T) {
+			var logs bytes.Buffer
+			host := newEngineHost("", io.Discard, slog.New(slog.NewJSONHandler(&logs, nil)))
+			if test.setup != nil {
+				test.setup(t, host)
+			}
+			response := httptest.NewRecorder()
+			req := httptest.NewRequest(http.MethodGet, "http://wails.localhost/api/v1/events?workspace_root=private-query", nil)
+			req.Header.Set("Authorization", "Bearer private-header")
+			host.ServeHTTP(response, req)
+			if response.Code != http.StatusServiceUnavailable || !strings.HasPrefix(response.Body.String(), "Q engine reconnecting") {
+				t.Fatalf("unexpected response: %d %s", response.Code, response.Body)
+			}
+			if strings.Contains(logs.String(), "private-query") || strings.Contains(logs.String(), "private-header") {
+				t.Fatal("proxy logged request query or credentials")
+			}
+			var entry struct {
+				Message    string `json:"msg"`
+				Level      string `json:"level"`
+				Method     string `json:"method"`
+				Path       string `json:"path"`
+				Status     int    `json:"status"`
+				Reason     string `json:"reason_code"`
+				Error      string `json:"error"`
+				DurationMS *int64 `json:"duration_ms"`
+			}
+			if err := json.Unmarshal(logs.Bytes(), &entry); err != nil {
+				t.Fatalf("decode proxy failure log: %v", err)
+			}
+			if entry.Message != "desktop.engine.proxy_failed" || entry.Level != "ERROR" || entry.Status != response.Code ||
+				entry.Method != http.MethodGet || entry.Path != "/api/v1/events" || entry.Reason != test.reason || entry.Error != test.detail {
+				t.Fatalf("unexpected proxy failure log: %s", logs.String())
+			}
+			if entry.DurationMS == nil || *entry.DurationMS < test.minDuration.Milliseconds() {
+				t.Fatalf("missing or incorrect duration: %s", logs.String())
+			}
+		})
 	}
 }
 
@@ -120,7 +200,7 @@ func TestEngineIntegration(t *testing.T) {
 	if err = attached.close(); err != nil {
 		t.Fatal(err)
 	}
-	host := newEngineHost(path, os.Stderr)
+	host := newEngineHost(path, os.Stderr, slog.New(slog.NewJSONHandler(os.Stderr, nil)))
 	host.process = owner
 	response := httptest.NewRecorder()
 	host.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "http://wails.localhost/api/v1/status", nil))

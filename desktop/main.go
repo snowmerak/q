@@ -120,7 +120,7 @@ func run() error {
 		close(monitorDone)
 		return err
 	}
-	shell.host = newEngineHost(engine, logFile)
+	shell.host = newEngineHost(engine, logFile, logger)
 	if err = shell.host.connect(ctx); err != nil {
 		logger.Error("desktop.engine.start_failed", "error", err)
 	}

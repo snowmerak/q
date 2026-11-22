@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/http/httputil"
@@ -155,16 +156,22 @@ type engineHost struct {
 	process     *engineProcess
 	path        string
 	diagnostics io.Writer
+	logger      *slog.Logger
 	proxy       *httputil.ReverseProxy
 }
 
-type endpointContextKey struct{}
+type proxyRequestContextKey struct{}
 
-func newEngineHost(path string, diagnostics io.Writer) *engineHost {
-	host := &engineHost{path: path, diagnostics: diagnostics}
+type engineProxyRequest struct {
+	endpoint engineEndpoint
+	started  time.Time
+}
+
+func newEngineHost(path string, diagnostics io.Writer, logger *slog.Logger) *engineHost {
+	host := &engineHost{path: path, diagnostics: diagnostics, logger: logger}
 	host.proxy = &httputil.ReverseProxy{
 		Rewrite: func(request *httputil.ProxyRequest) {
-			endpoint := request.In.Context().Value(endpointContextKey{}).(engineEndpoint)
+			endpoint := request.In.Context().Value(proxyRequestContextKey{}).(engineProxyRequest).endpoint
 			target, _ := url.Parse(endpoint.URL)
 			request.SetURL(target)
 			request.Out.Host = target.Host
@@ -173,7 +180,11 @@ func newEngineHost(path string, diagnostics io.Writer) *engineHost {
 			request.Out.Header.Del("Origin")
 		},
 		Transport: &http.Transport{Proxy: nil, ResponseHeaderTimeout: 40 * time.Second},
-		ErrorHandler: func(w http.ResponseWriter, _ *http.Request, _ error) {
+		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
+			if !errors.Is(err, context.Canceled) {
+				request := r.Context().Value(proxyRequestContextKey{}).(engineProxyRequest)
+				host.logProxyFailure(r, request.started, proxyFailureReason(err), err.Error())
+			}
 			http.Error(w, "Q engine reconnecting. Reopen Q Studio in a moment.", http.StatusServiceUnavailable)
 		},
 	}
@@ -205,12 +216,40 @@ func (h *engineHost) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
+	started := time.Now()
 	endpoint, ok := h.endpoint()
 	if !ok {
+		h.logProxyFailure(r, started, "engine_unavailable", "no Q engine endpoint is connected")
 		http.Error(w, "Q engine reconnecting", http.StatusServiceUnavailable)
 		return
 	}
-	h.proxy.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), endpointContextKey{}, endpoint)))
+	request := engineProxyRequest{endpoint: endpoint, started: started}
+	h.proxy.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), proxyRequestContextKey{}, request)))
+}
+
+func proxyFailureReason(err error) string {
+	if networkErr, ok := errors.AsType[net.Error](err); ok && networkErr.Timeout() {
+		return "timeout"
+	}
+	if operation, ok := errors.AsType[*net.OpError](err); ok && operation.Op == "dial" {
+		return "connection_failed"
+	}
+	return "transport_error"
+}
+
+func (h *engineHost) logProxyFailure(r *http.Request, started time.Time, reason, detail string) {
+	h.logger.ErrorContext(r.Context(), "desktop.engine.proxy_failed",
+		"method", boundedProxyLogText(r.Method), "path", boundedProxyLogText(r.URL.EscapedPath()),
+		"status", http.StatusServiceUnavailable, "duration_ms", time.Since(started).Milliseconds(),
+		"reason_code", reason, "error", boundedProxyLogText(detail))
+}
+
+func boundedProxyLogText(value string) string {
+	const maxBytes = 2048
+	if len(value) > maxBytes {
+		return value[:maxBytes] + "…"
+	}
+	return value
 }
 
 func (h *engineHost) browserURL(ctx context.Context) (string, error) {
