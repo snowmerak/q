@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -58,6 +59,82 @@ func TestJoinedJuniorDeveloperIsAssignedThroughTickets(t *testing.T) {
 	candidates, err = host.coordinatorCandidates(t.Context(), project, workitems.Item{ExecutionMode: "report"}, []workitems.Member{member})
 	if err != nil || len(candidates) != 0 {
 		t.Fatalf("writing worker admitted to read-only report: %+v %v", candidates, err)
+	}
+}
+
+func TestBuiltinCodeReviewerRunsReportTicketReadOnly(t *testing.T) {
+	host, c, project, _ := testManagerHost(t)
+	ctx := t.Context()
+	root := project.WorkspaceRoots[0]
+	if err := (workspacememory.ConfigStore{Dir: host.store.Dir}).Save(workspacememory.Config{Host: "127.0.0.1", Port: reserveTestPort(t)}); err != nil {
+		t.Fatal(err)
+	}
+	value, err := host.store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	value.Provider.Model = "plan-model"
+	if err := host.store.Save(value); err != nil {
+		t.Fatal(err)
+	}
+	var members []workitems.Member
+	for _, id := range []string{subagent.BuiltinSeniorDeveloperID, subagent.BuiltinJuniorDeveloperID, subagent.BuiltinCodeReviewerID} {
+		member, err := c.PutMember(ctx, project.ID, workitems.MemberInput{AgentID: id, DefinitionRoot: root, ExecutionRoot: root})
+		if err != nil {
+			t.Fatal(err)
+		}
+		members = append(members, member)
+	}
+	item, err := c.CreateItem(ctx, workitems.CreateInput{
+		WorkspaceID: project.ID, Kind: workitems.Ticket, Title: "Review a note", Content: "Inspect notes.txt",
+		Author: "user", ExecutionMode: "report", RequestedRole: config.AgentRoleReviewer,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidates, err := host.coordinatorCandidates(ctx, project, item, members)
+	if err != nil || len(candidates) != 1 || candidates[0].Member.AgentID != subagent.BuiltinCodeReviewerID {
+		t.Fatalf("report candidates: %+v %v", candidates, err)
+	}
+	candidate := candidates[0]
+	attempt, err := c.ClaimTicket(ctx, item.ID, workitems.ClaimInput{
+		Revision: item.Revision, MemberID: candidate.Member.ID, MemberRevision: candidate.Member.Revision,
+		Role: candidate.Definition.Info.Role, DefinitionDigest: candidate.Digest, Owner: "test", RequestID: "review",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "notes.txt"), []byte("Report evidence\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	configured := &planningClient{responses: []client.Message{
+		{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{planToolCall("task_start", `{"objective":"Review notes"}`)}},
+		{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{planToolCall("read_file", `{"path":"notes.txt"}`)}},
+		{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{planToolCall("task_complete", `{"outcome":"succeeded","summary":"Reviewed the note","findings":["The note needs supporting evidence."]}`)}},
+	}}
+	host.factory = func(config.Config) (chatClient, error) { return configured, nil }
+	result, err := host.runTicket(ctx, c, project, item, candidate, attempt, "Review notes.txt")
+	if err != nil || result.Outcome != "succeeded" || result.ChangeRequest != nil || len(result.Findings) != 1 {
+		t.Fatalf("review result: %+v %v", result, err)
+	}
+	readEvidence := false
+	for _, request := range configured.requests {
+		readEvidence = readEvidence || slices.ContainsFunc(request.Messages, func(message client.Message) bool {
+			return message.Role == client.RoleTool && message.Name == "read_file" && strings.Contains(message.TextContent(), "Report evidence")
+		})
+		if slices.ContainsFunc(request.Tools, func(tool client.Tool) bool {
+			switch tool.Function.Name {
+			case "write_file", "edit_file", "run_command", "ticket_create", "ticket_review":
+				return true
+			default:
+				return false
+			}
+		}) {
+			t.Fatal("report reviewer received a mutation tool")
+		}
+	}
+	if !readEvidence {
+		t.Fatal("report reviewer did not read the project file")
 	}
 }
 

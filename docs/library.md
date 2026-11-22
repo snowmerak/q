@@ -127,6 +127,10 @@ descriptions carry the same guidance; `ticket_create` should include
 `"execution_mode":"git"` for code/file changes or `"execution_mode":"report"`
 for read-only work. Issuance automatically requests assignment in either mode.
 
+For a read-only code review, join `builtin/code-reviewer` in the project and issue
+a `report` ticket with `requested_role: reviewer`. The reviewer can inspect
+repository files and pinned ticket diffs and returns its findings in the report.
+
 Workspace membership references existing global/workspace profiles by canonical
 agent ID plus definition and execution roots. Profiles, permissions and ACP
 connections remain in their original settings. Disabling a member prevents new

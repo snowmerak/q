@@ -33,6 +33,7 @@ const (
 	BuiltinManagerID         = "builtin/manager"
 	BuiltinSeniorDeveloperID = "builtin/senior-developer"
 	BuiltinJuniorDeveloperID = "builtin/junior-developer"
+	BuiltinCodeReviewerID    = "builtin/code-reviewer"
 	BuiltinResearchID        = "builtin/research"
 	BuiltinWebSearchID       = "builtin/web-search"
 	BuiltinWebTesterID       = "builtin/web-tester"
@@ -330,6 +331,16 @@ func BuiltinAgentDefinitions() []AgentDefinition {
 				Description: "Read and modify the code for an assigned task, run relevant checks, and revise it after review.", MutatesWorkspace: true},
 			SystemPrompt: "You are the junior developer responsible for an assigned implementation. Inspect the relevant code and instructions, make the requested change, run focused verification, and report changed files, results, and remaining risks. When the senior developer returns feedback, revise the implementation and verify again. Stay within the assigned scope and do not delegate your implementation.",
 			Tools:        append([]string(nil), developerTools...),
+		},
+		{
+			Info: DelegateInfo{Name: BuiltinCodeReviewerID, Source: "builtin", Kind: AgentKindInner, Role: config.AgentRoleReviewer,
+				Description: "Review code and submitted changes and report findings with severity and evidence."},
+			SystemPrompt: "You are a read-only code reviewer. Inspect the assigned code and any referenced ticket or pinned change. Check correctness, regressions, and missing verification against the acceptance criteria. Report actionable findings in severity order with file locations and evidence. If there are no findings, say so and describe the remaining uncertainty. Return the review as the task result.",
+			Tools: []string{
+				"read_file", "list_directory", "search_work", "issue_get", "post_get", "ticket_list", "ticket_get",
+				"ticket_attempt_list", "ticket_attempt_get", "ticket_worker_read", "ticket_change_read",
+			},
+			StrictTools: true,
 		},
 		{
 			Info: DelegateInfo{Name: BuiltinResearchID, Source: "builtin", Kind: AgentKindInner, Role: config.AgentRoleResearch,

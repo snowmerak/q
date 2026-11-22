@@ -600,10 +600,12 @@ delegates: []
 TUI and ACP support `/subagents list` and `/subagents show code-reader`.
 Join a profile in Projects and issue a ticket to request its work.
 The public builtin IDs are `builtin/interviewer`, `builtin/manager`,
-`builtin/senior-developer`, `builtin/junior-developer`, `builtin/research`,
-`builtin/web-search`, and `builtin/web-tester`.
-The junior developer can be joined to a project and assigned a Git ticket. The latter two have `kind: external`; other external agents use their normal
-`global/...` or `workspace/...` profile ID. Bare `/subagents` opens the profile UI
+`builtin/senior-developer`, `builtin/junior-developer`, `builtin/code-reviewer`,
+`builtin/research`, `builtin/web-search`, and `builtin/web-tester`.
+Join the code reviewer for read-only review tickets and the junior developer
+for Git implementation tickets. Web Search and Web Tester have `kind: external`.
+Other external agents use their normal `global/...` or `workspace/...` profile ID.
+Bare `/subagents` opens the profile UI
 in the TUI and lists all available definitions in ACP. Creation, editing, and
 deletion use the TUI or profile files. Pass all necessary task context in the
 request: the child does not automatically inherit the parent conversation.
@@ -613,8 +615,9 @@ or delegates produce an error before the model runs.
 
 Inner ticket workers share the host-provided `task_start` and `task_complete`
 lifecycle. External workers use their existing ACP invocation adapter and Loom
-capture. Native builtins can inspect workspace members and issue followup tickets;
-custom profiles must allow the corresponding ticket tools. Additional work is
+capture. Built-in planning and implementation profiles can inspect workspace
+members and issue follow-up tickets. Custom profiles must allow the corresponding
+ticket tools. Additional work is
 assigned asynchronously rather than invoked through a nested direct tool call.
 A task result keeps its
 short conclusion in `summary` and may include a Markdown `report` up to 256 KiB
