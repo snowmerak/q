@@ -23,6 +23,7 @@ import (
 	"github.com/snowmerak/q/diagnostics"
 	"github.com/snowmerak/q/internal/fsopen"
 	"github.com/snowmerak/q/internal/fsreplace"
+	"github.com/snowmerak/q/internal/workitemtools"
 	"github.com/snowmerak/q/subagent"
 	"github.com/snowmerak/q/workspace"
 )
@@ -209,8 +210,10 @@ func (service *sessionRunService) startOperation(root, sessionID, prompt, operat
 		return nil, err
 	}
 	cause := service.ctx
+	var review workitemtools.ReviewAssignment
 	if len(causes) > 0 {
 		cause = diagnostics.Inherit(cause, causes[0])
+		review = workitemtools.AssignedReview(causes[0])
 	}
 	if diagnostics.RequestID(cause) == "" {
 		cause = diagnostics.WithRequestID(cause, "")
@@ -231,15 +234,18 @@ func (service *sessionRunService) startOperation(root, sessionID, prompt, operat
 	service.latestIDs[key] = runID
 	service.wg.Add(1)
 	service.mu.Unlock()
-	go service.execute(run, prompt)
+	go service.execute(run, prompt, review)
 	return run, nil
 }
 
-func (service *sessionRunService) execute(run *studioRun, prompt string) {
+func (service *sessionRunService) execute(run *studioRun, prompt string, review workitemtools.ReviewAssignment) {
 	defer service.wg.Done()
 	started := time.Now()
 	logger := service.logger.With("session_id", run.store.SessionID, "run_id", run.snapshot.ID)
 	runContext := diagnostics.WithRequestID(service.ctx, run.snapshot.RequestID)
+	if review.Active() && review.OperationID == run.snapshot.OperationID {
+		runContext = workitemtools.WithReviewAssignment(runContext, review)
+	}
 	runContext = diagnostics.WithLogger(runContext, logger)
 	logger = diagnostics.Logger(runContext)
 	logger.Info("studio.run.started")

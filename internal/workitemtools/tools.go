@@ -16,19 +16,22 @@ type Binding struct {
 	SessionID           string
 	Manager             bool
 	EmbeddingConnection string
+	Worker              *workitems.WorkerBinding
+	Review              ReviewAssignment
 }
 type createInput struct {
-	DependsOn         []string                  `json:"depends_on,omitempty" jsonschema:"Prerequisite ticket IDs in this workspace, all of which must reach done before this ticket can run. Independent tickets can run concurrently. Recurring templates are not valid prerequisites."`
-	Schedule          *workitems.TicketSchedule `json:"schedule,omitempty" jsonschema:"Optional ticket-only schedule: not_before is an RFC3339 instant; every is a Go duration of at least 1m, such as 30m or 24h. Empty every executes once. Repeating schedules issue independent run tickets."`
-	Title             string                    `json:"title"`
-	Content           string                    `json:"content"`
-	Labels            []string                  `json:"labels,omitempty"`
-	Acceptance        []string                  `json:"acceptance,omitempty"`
-	ExecutionMode     string                    `json:"execution_mode,omitempty" jsonschema:"Always choose explicitly for tickets: report for read-only investigation; git for creating or editing code or project files, including project initialization. Git requires an existing clean repository with an initial commit. Omission defaults to report for compatibility. Ignored for issues."`
-	RequestedMemberID string                    `json:"requested_member_id,omitempty" jsonschema:"Optional joined workspace member ID. Decisions still checks suitability; omit to let it choose."`
-	LinkedIssueID     string                    `json:"linked_issue_id,omitempty"`
-	Refs              []string                  `json:"refs,omitempty"`
-	RequestID         string                    `json:"request_id,omitempty"`
+	AsChild       bool                      `json:"as_child,omitempty" jsonschema:"Issue a Git child of the current worker ticket. Requires a live ticket worker and request_id. The child starts when the parent yields."`
+	DependsOn     []string                  `json:"depends_on,omitempty" jsonschema:"Prerequisite ticket IDs in this workspace, all of which must reach done before this ticket can run. Independent tickets can run concurrently. Recurring templates are not valid prerequisites."`
+	Schedule      *workitems.TicketSchedule `json:"schedule,omitempty" jsonschema:"Optional ticket-only schedule: not_before is an RFC3339 instant; every is a Go duration of at least 1m, such as 30m or 24h. Empty every executes once. Repeating schedules issue independent run tickets."`
+	Title         string                    `json:"title"`
+	Content       string                    `json:"content"`
+	Labels        []string                  `json:"labels,omitempty"`
+	Acceptance    []string                  `json:"acceptance,omitempty"`
+	ExecutionMode string                    `json:"execution_mode,omitempty" jsonschema:"Always choose explicitly for tickets: report for read-only investigation; git for creating or editing code or project files, including project initialization. Git requires an existing clean repository with an initial commit. Omission defaults to report for compatibility. Ignored for issues."`
+	RequestedRole string                    `json:"requested_role,omitempty" jsonschema:"Optional profile role such as coder, reviewer, or research. Decisions chooses a suitable joined subagent with that role."`
+	LinkedIssueID string                    `json:"linked_issue_id,omitempty"`
+	Refs          []string                  `json:"refs,omitempty"`
+	RequestID     string                    `json:"request_id,omitempty"`
 }
 type itemInput struct {
 	ID     string `json:"id"`
@@ -50,19 +53,19 @@ type replyInput struct {
 	RequestID     string   `json:"request_id,omitempty"`
 }
 type updateInput struct {
-	DependsOn         *[]string                 `json:"depends_on,omitempty" jsonschema:"Omit to preserve dependencies; use [] to clear them. Editable before first execution or on recurring templates. Self references and cycles are rejected."`
-	Schedule          *workitems.TicketSchedule `json:"schedule,omitempty" jsonschema:"Omit to preserve scheduling; use an empty object to remove it or paused:true to suspend it. Schedules can change before execution or on recurring templates."`
-	ID                string                    `json:"id"`
-	Revision          int64                     `json:"revision"`
-	Title             string                    `json:"title"`
-	State             string                    `json:"state"`
-	Labels            []string                  `json:"labels"`
-	Deleted           bool                      `json:"deleted,omitempty"`
-	RequestID         string                    `json:"request_id,omitempty"`
-	Acceptance        *[]string                 `json:"acceptance,omitempty"`
-	RequestedMemberID *string                   `json:"requested_member_id,omitempty"`
-	LinkedIssueID     *string                   `json:"linked_issue_id,omitempty"`
-	ExecutionMode     string                    `json:"execution_mode,omitempty"`
+	DependsOn     *[]string                 `json:"depends_on,omitempty" jsonschema:"Omit to preserve dependencies; use [] to clear them. Editable before first execution or on recurring templates. Self references and cycles are rejected."`
+	Schedule      *workitems.TicketSchedule `json:"schedule,omitempty" jsonschema:"Omit to preserve scheduling; use an empty object to remove it or paused:true to suspend it. Schedules can change before execution or on recurring templates."`
+	ID            string                    `json:"id"`
+	Revision      int64                     `json:"revision"`
+	Title         string                    `json:"title"`
+	State         string                    `json:"state"`
+	Labels        []string                  `json:"labels"`
+	Deleted       bool                      `json:"deleted,omitempty"`
+	RequestID     string                    `json:"request_id,omitempty"`
+	Acceptance    *[]string                 `json:"acceptance,omitempty"`
+	RequestedRole *string                   `json:"requested_role,omitempty" jsonschema:"Change the requested profile role before the first execution. Omit to preserve it or use an empty string to clear it."`
+	LinkedIssueID *string                   `json:"linked_issue_id,omitempty"`
+	ExecutionMode string                    `json:"execution_mode,omitempty"`
 }
 type postUpdateInput struct {
 	ID        string   `json:"id"`
@@ -112,14 +115,21 @@ func Register(server *mcp.Server, client *library.Client, binding Binding) {
 	for _, kind := range []string{workitems.Issue, workitems.Ticket} {
 		description := "Create a workspace " + kind + " and its independently addressable body. Returns after durable source commit. Use issues/comments to record lessons and decisions, with evidence refs."
 		if kind == workitems.Ticket {
-			description += " This is the supported way to request subagent work. Inspect workspace_members for joined candidates. An optional schedule delays eligibility or issues recurring run tickets. Issuing a ticket without a schedule automatically queues it for Decisions assignment to a joined subagent; no separate start call is required. Execution and manager review complete asynchronously."
+			description += " This is the supported way to request subagent work. Use requested_role to target a profile role. An optional schedule delays eligibility or issues recurring run tickets. Issuing a ticket without a schedule automatically queues it for Decisions assignment to a joined subagent; no separate start call is required. Execution and review complete asynchronously."
 			description += " Always set execution_mode explicitly: report for read-only research; git for creating or editing project files, including project initialization. Git mode requires a clean existing repository with an initial commit; a missing repository does not make code work a report task."
 		}
 		mcp.AddTool(server, &mcp.Tool{Name: kind + "_create", Description: description}, func(ctx context.Context, _ *mcp.CallToolRequest, in createInput) (*mcp.CallToolResult, workitems.Item, error) {
 			if binding.WorkspaceID == "" {
 				return nil, workitems.Item{}, errors.New("select a Studio project before creating work items")
 			}
-			out, err := client.CreateItem(ctx, workitems.CreateInput{DependsOn: in.DependsOn, Schedule: in.Schedule, WorkspaceID: binding.WorkspaceID, Kind: kind, Title: in.Title, Content: in.Content, Labels: in.Labels, Acceptance: in.Acceptance, ExecutionMode: in.ExecutionMode, RequestedMemberID: in.RequestedMemberID, LinkedIssueID: in.LinkedIssueID, Author: actor, Refs: in.Refs, RequestID: in.RequestID})
+			var parent *workitems.WorkerBinding
+			if in.AsChild {
+				if kind != workitems.Ticket || binding.Worker == nil || binding.Review.Active() {
+					return nil, workitems.Item{}, errors.New("child creation requires an active parent ticket worker")
+				}
+				parent = binding.Worker
+			}
+			out, err := client.CreateItem(ctx, workitems.CreateInput{ParentWorker: parent, DependsOn: in.DependsOn, Schedule: in.Schedule, WorkspaceID: binding.WorkspaceID, Kind: kind, Title: in.Title, Content: in.Content, Labels: in.Labels, Acceptance: in.Acceptance, ExecutionMode: in.ExecutionMode, RequestedRole: in.RequestedRole, LinkedIssueID: in.LinkedIssueID, Author: actor, Refs: in.Refs, RequestID: in.RequestID})
 			return nil, out, err
 		})
 		mcp.AddTool(server, &mcp.Tool{Name: kind + "_list", Description: "List " + kind + " threads using a source snapshot cursor. all:true explicitly searches all workspaces.", Annotations: readOnly}, func(ctx context.Context, _ *mcp.CallToolRequest, in listInput) (*mcp.CallToolResult, workitems.ItemPage, error) {
@@ -162,13 +172,13 @@ func Register(server *mcp.Server, client *library.Client, binding Binding) {
 			if in.Acceptance != nil {
 				item.Acceptance = *in.Acceptance
 			}
-			if in.RequestedMemberID != nil {
-				item.RequestedMemberID = *in.RequestedMemberID
+			if in.RequestedRole != nil {
+				item.RequestedMemberID = ""
 			}
 			if in.LinkedIssueID != nil {
 				item.LinkedIssueID = *in.LinkedIssueID
 			}
-			out, err := client.UpdateItem(ctx, in.ID, workitems.UpdateInput{DependsOn: in.DependsOn, Schedule: in.Schedule, Revision: in.Revision, Title: in.Title, State: in.State, Labels: in.Labels, Deleted: in.Deleted, Acceptance: item.Acceptance, RequestedMemberID: item.RequestedMemberID, LinkedIssueID: item.LinkedIssueID, ExecutionMode: in.ExecutionMode, RequestID: in.RequestID})
+			out, err := client.UpdateItem(ctx, in.ID, workitems.UpdateInput{DependsOn: in.DependsOn, Schedule: in.Schedule, Revision: in.Revision, Title: in.Title, State: in.State, Labels: in.Labels, Deleted: in.Deleted, Acceptance: item.Acceptance, RequestedMemberID: item.RequestedMemberID, RequestedRole: in.RequestedRole, LinkedIssueID: item.LinkedIssueID, ExecutionMode: in.ExecutionMode, RequestID: in.RequestID})
 			return nil, out, err
 		})
 	}

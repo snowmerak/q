@@ -1001,26 +1001,30 @@ func reconcileChildExecutionState(session workspace.Session, state workspace.Del
 				completed = false
 			}
 		case client.RoleAssistant:
-			if index > 0 && session.Transcript[index-1].Role == client.RoleTool && session.Transcript[index-1].Name == subagent.TaskCompleteToolName {
-				continue
+			// The terminal acknowledgement can contain several assistant/tool
+			// exchanges. Only a successfully completed task starts that phase.
+			if !completed {
+				rounds++
 			}
-			rounds++
 		case client.RoleSystem:
 			if index > 1 {
 				reminders++
 			}
 		case client.RoleTool:
+			if completed {
+				continue
+			}
 			if message.Name == subagent.TaskStartToolName {
 				var result struct {
 					Started bool `json:"started"`
 				}
-				if json.Unmarshal([]byte(message.Content), &result) == nil && result.Started {
+				if json.Unmarshal([]byte(message.TextContent()), &result) == nil && result.Started {
 					started, completed = true, false
 				}
 			}
 			if message.Name == subagent.TaskCompleteToolName {
 				var result subagent.TaskResult
-				completed = json.Unmarshal([]byte(message.Content), &result) == nil && result.Outcome != ""
+				completed = json.Unmarshal([]byte(message.TextContent()), &result) == nil && result.Outcome != ""
 			}
 		}
 	}

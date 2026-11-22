@@ -10,9 +10,9 @@
   import { emptyScheduleDraft, scheduleDraft, scheduleInput, scheduleTime, type TicketSchedule } from './workitems/schedule';
   import type { StudioProject } from './sessions/types';
   export let kind: 'issue' | 'ticket' = 'issue';
-  type Item = { depends_on?: string[]; waiting_on?: string[]; schedule?: TicketSchedule; schedule_id?: string; scheduled_for?: string; next_scheduled_at?: string; id: string; workspace_id: string; kind: string; number: number; title: string; body_post_id: string; state: string; labels: string[]; acceptance?: string[]; execution_mode?: string; requested_member_id?: string; linked_issue_id?: string; execution_state?: string; execution_reason?: string; active_attempt_id?: string; assigned_member_id?: string; revision: number; deleted: boolean; updated_at: string };
+  type Item = { parent_ticket_id?: string; handoff_member_id?: string; depends_on?: string[]; waiting_on?: string[]; schedule?: TicketSchedule; schedule_id?: string; scheduled_for?: string; next_scheduled_at?: string; id: string; workspace_id: string; kind: string; number: number; title: string; body_post_id: string; state: string; labels: string[]; acceptance?: string[]; execution_mode?: string; requested_member_id?: string; linked_issue_id?: string; execution_state?: string; execution_reason?: string; active_attempt_id?: string; assigned_member_id?: string; revision: number; deleted: boolean; updated_at: string };
   type Member = { id: string; workspace_id: string; agent_id: string; definition_root: string; execution_root: string; revision: number; disabled: boolean };
-  type Attempt = { id: string; ticket_id: string; status: string; worker_session_id: string; member_id: string; acceptance?: string[]; result?: unknown; feedback?: string; operation_error?: string; change_request?: { head_commit?: string; base_commit?: string; status: string } };
+  type Attempt = { id: string; ticket_id: string; status: string; worker_session_id: string; member_id: string; acceptance?: string[]; result?: unknown; feedback?: string; operation_error?: string; change_request?: { head_commit?: string; base_commit?: string; base_ref?: string; status: string } };
   type Post = { id: string; item_id: string; kind: string; content: string; content_truncated?: boolean; author: string; refs?: string[]; revision: number; deleted: boolean; created_at: string };
   type Hit = { item_id: string; post_id: string; workspace_id: string; title: string; snippet: string; revision: number; offset: number };
   const executionGuidance: Record<string, string> = {
@@ -48,6 +48,9 @@
   let members: Member[] = [];
   let memberID = '';
   let attempts: Attempt[] = [];
+  let children: Item[] = [];
+  let parent: Item | null = null;
+  let handoffMemberID = '';
   let openAttempts: Record<string, boolean> = {};
   let deliveryErrors: { id: string; delivery_error: string; next_delivery_at?: string }[] = [];
   let feedback = '';
@@ -83,8 +86,25 @@
   onMount(() => { void (async () => { try { projects = (await json<{ projects: StudioProject[] }>('projects')).projects; const params = new URL(location.href).searchParams; workspaceID = projects.find(p => p.id === params.get('workspace_id'))?.id || projects[0]?.id || ''; mounted = true; await changeProject(); const id = params.get('item_id'); if (id) await selectItem(id); const postID = params.get('post_id'); if (postID) await revealPost(postID); } catch (cause) { message(cause); } })(); const timer = setInterval(() => { if (document.visibilityState === 'visible' && kind === 'ticket' && !busy && !loading && !editing && !editDetails) { void loadItems(false, true); if (selected) void loadAttempts(selected.id); } }, 5000); return () => clearInterval(timer); });
   async function changeProject() { createDependencies = []; selected = null; searched = false; attempts = []; diff = ''; await Promise.all([loadItems(), loadMembers()]); }
   async function loadMembers() { const id = workspaceID; if (!id) { members = []; return; } try { const value = (await json<{ members: Member[] }>(`projects/${id}/members`)).members; if (id === workspaceID) members = value; } catch (cause) { if (id === workspaceID) message(cause); } }
-  async function loadAttempts(id: string) { const scope = workspaceID; try { const [value, inbox] = await Promise.all([json<{ attempts: Attempt[] }>(`work/items/${id}/attempts`), json<{ entries: { id: string; ticket_id: string; delivered: boolean; delivery_error: string; next_delivery_at?: string }[] }>(`projects/${scope}/inbox`)]); if (selected?.id !== id) return; attempts = value.attempts; deliveryErrors = inbox.entries.filter(entry => entry.ticket_id === id && !entry.delivered && entry.delivery_error); const current = items.find(i => i.id === id); if (current) selected = current; } catch (cause) { message(cause); } }
-  async function controlTicket(action: string) { if (!selected) return; busy = true; error = ''; try { selected = await json<Item>(`work/items/${selected.id}/control`, write('POST', { action, revision: selected.revision, request_id: crypto.randomUUID() })); await loadItems(); await loadAttempts(selected.id); } catch (cause) { message(cause); } finally { busy = false; } }
+  async function loadAttempts(id: string) {
+    const scope = workspaceID, parentID = selected?.parent_ticket_id;
+    try {
+      const [value, inbox, childPage, parentItem] = await Promise.all([
+        json<{ attempts: Attempt[] }>(`work/items/${id}/attempts`),
+        json<{ entries: { id: string; ticket_id: string; delivered: boolean; delivery_error: string; next_delivery_at?: string }[] }>(`projects/${scope}/inbox`),
+        json<{ items: Item[] }>(`work/items/${id}/children`),
+        parentID ? json<Item>(`work/items/${parentID}`) : Promise.resolve(null)
+      ]);
+      if (selected?.id !== id) return;
+      attempts = value.attempts;
+      children = childPage.items;
+      parent = parentItem;
+      deliveryErrors = inbox.entries.filter(entry => entry.ticket_id === id && !entry.delivered && entry.delivery_error);
+      const current = items.find(item => item.id === id);
+      if (current && current.revision >= selected.revision) selected = current;
+    } catch (cause) { if (selected?.id === id) message(cause); }
+  }
+  async function controlTicket(action: string) { if (!selected) return; busy = true; error = ''; try { selected = await json<Item>(`work/items/${selected.id}/control`, write('POST', { action, ...(action === 'handoff' ? { member_id: handoffMemberID } : {}), revision: selected.revision, request_id: crypto.randomUUID() })); await loadItems(); await loadAttempts(selected.id); } catch (cause) { message(cause); } finally { busy = false; } }
   async function review(attempt: Attempt, decision: string) { busy = true; error = ''; try { await json(`work/attempts/${attempt.id}/review`, write('POST', { decision, feedback, request_id: crypto.randomUUID() })); feedback = ''; await loadItems(); await loadAttempts(attempt.ticket_id); } catch (cause) { message(cause); } finally { busy = false; } }
   async function readDiff(attempt: Attempt) { try { const value = await json<{ patch: string; truncated?: boolean }>(`work/attempts/${attempt.id}/change`); diff = value.patch + (value.truncated ? '\n[diff truncated]' : ''); } catch (cause) { message(cause); } }
   async function openWorkspaceRole(role: 'coordinator' | 'integrator') { try { const value = await json<{ registration_id: string }>(`projects/${workspaceID}/${role}`); location.href = `/sessions/${value.registration_id}`; } catch (cause) { message(cause); } }
@@ -110,6 +130,7 @@
   }
   async function selectItem(id: string, more = false) {
 	if (!more) editDetails = false;
+    if (!more && selected?.id !== id) { children = []; parent = null; handoffMemberID = ''; }
     const generation = ++detailGeneration;
     try { const value = await json<{ item: Item; posts: Post[]; next_cursor?: string }>(`work/items/${encodeURIComponent(id)}/posts?${new URLSearchParams({ cursor: more ? threadCursor : '', limit: '20' })}`); if (generation !== detailGeneration) return; selected = value.item; workspaceID = value.item.workspace_id; posts = more ? [...posts, ...value.posts] : value.posts; threadCursor = value.next_cursor || ''; if (!more) { expanded = {}; editing = ''; diff = ''; history.replaceState(null, '', permalink()); } if (value.item.kind === 'ticket') await loadAttempts(id); } catch (cause) { if (generation === detailGeneration) message(cause); }
   }
@@ -138,7 +159,7 @@
   }
   function beginDetails() { if (!selected) return; detailRevision = selected.revision; detailTitle = selected.title; detailLabels = selected.labels.join(', '); detailAcceptance = selected.acceptance?.join('\n') || ''; detailMember = selected.requested_member_id || ''; detailMode = selected.execution_mode || 'report'; detailIssue = selected.linked_issue_id || ''; detailSchedule = scheduleDraft(selected.schedule); detailDependencies = [...(selected.depends_on || [])]; editDetails = true; }
   async function saveDetails() { if (!selected) return; busy = true; error = ''; try { selected = await json<Item>(`work/items/${selected.id}`, write('PUT', { ...(selected.kind === 'ticket' && !selected.active_attempt_id && !selected.schedule_id && selected.state === 'todo' ? { schedule: scheduleInput(detailSchedule) } : {}), ...(selected.kind === 'ticket' && !selected.active_attempt_id && !selected.schedule_id && selected.state === 'todo' ? { depends_on: detailDependencies } : {}), title: detailTitle, revision: detailRevision, state: selected.state, labels: detailLabels.split(',').map(s => s.trim()).filter(Boolean), acceptance: detailAcceptance.split('\n').map(s => s.trim()).filter(Boolean), requested_member_id: detailMember, execution_mode: detailMode, linked_issue_id: detailIssue.trim(), request_id: crypto.randomUUID() })); editDetails = false; await loadItems(); await selectItem(selected.id); } catch (cause) { message(cause); } finally { busy = false; } }
-  function executionLabel(state?: string, item?: Item) { if (item?.waiting_on?.length && (!state || ['queued', 'assignment_waiting'].includes(state))) return 'Waiting for prerequisite tickets'; if (item?.schedule?.paused) return 'Schedule paused'; if (item?.schedule?.not_before && new Date(item.schedule.not_before).getTime() > Date.now()) return 'Scheduled'; if (state === 'scheduled') return 'Recurring schedule'; if (!state || state === 'queued') return 'Waiting for assignment'; if (state === 'assignment_waiting') return 'Waiting for a suitable agent'; return state; }
+  function executionLabel(state?: string, item?: Item) { if (item?.waiting_on?.length && (!state || ['queued', 'assignment_waiting'].includes(state))) return 'Waiting for prerequisite tickets'; if (item?.schedule?.paused) return 'Schedule paused'; if (item?.schedule?.not_before && new Date(item.schedule.not_before).getTime() > Date.now()) return 'Scheduled'; if (state === 'scheduled') return 'Recurring schedule'; if (!state || state === 'queued') return 'Waiting for assignment'; if (state === 'assignment_waiting') return 'Waiting for a suitable agent'; if (state === 'waiting_children') return 'Waiting for child tickets'; return state; }
   async function search(more = false) {
     error = ''; busy = true;
     try { const value = await json<{ hits: Hit[]; next_cursor?: string; mode: string; fallback?: string; index_pending: boolean; embedding_pending: boolean; total: number; total_relation: string }>('work/search', write('POST', { workspace_id: workspaceID, all, kind, query, mode, labels: filters.split(',').map(s => s.trim()).filter(Boolean), states: stateFilter ? [stateFilter] : [], cursor: more ? searchCursor : '', limit: 30 })); embeddingPending = value.embedding_pending; hits = more ? [...hits, ...value.hits] : value.hits; searchCursor = value.next_cursor || ''; searched = true; searchStatus = `${value.mode}${value.fallback ? ' · embedding unavailable' : ''}${value.index_pending ? ' · indexing pending' : ''} · ${value.total} ${value.total_relation === 'exact_chunks' ? 'matching passages' : 'candidates (lower bound)'}`; } catch (cause) { message(cause); } finally { busy = false; }
@@ -197,8 +218,24 @@
       {#if selected.depends_on?.length}<TicketDependencies workspaceID={selected.workspace_id} ticketID={selected.id} ids={selected.depends_on} waitingOn={selected.waiting_on || []} />{/if}
       {#if selected.acceptance?.length}<h3>Acceptance criteria</h3><ul class="acceptance-criteria">{#each selected.acceptance as criterion}<li><Markdown content={criterion} /></li>{/each}</ul>{/if}
       {#if selected.kind === 'ticket'}
+        {#if selected.parent_ticket_id}
+          <p>Parent ticket <a href={`/tickets?workspace_id=${selected.workspace_id}&item_id=${selected.parent_ticket_id}`}>{parent ? `#${parent.number} ${parent.title}` : selected.parent_ticket_id}</a></p>
+          <p>Reviewer · {members.find(member => member.id === parent?.assigned_member_id)?.agent_id || 'Parent worker'}</p>
+        {/if}
+        {#if children.length}
+          <section aria-label="Child tickets">
+            <h3>Child tickets</h3>
+            <ul>{#each children as child (child.id)}<li><a href={`/tickets?workspace_id=${child.workspace_id}&item_id=${child.id}`}>#{child.number} {child.title}</a> · {child.state === 'done' ? 'Completed' : executionLabel(child.execution_state, child)}</li>{/each}</ul>
+            {#if ['waiting_children', 'blocked', 'unknown'].includes(selected.execution_state || '')}
+              {#if selected.handoff_member_id}<p role="status">Handoff pending · {members.find(member => member.id === selected?.handoff_member_id)?.agent_id || selected.handoff_member_id}</p>{/if}
+              {@const owner = members.find(member => member.id === selected?.assigned_member_id)}
+              <label>Handoff to<select bind:value={handoffMemberID}><option value="">Select a subagent</option>{#each members.filter(member => !member.disabled && member.execution_root === owner?.execution_root && !children.some(child => child.state !== 'done' && (child.assigned_member_id === member.id || child.requested_member_id === member.id))) as member}<option value={member.id}>{member.agent_id}</option>{/each}</select></label>
+              <button class="secondary-button" type="button" disabled={busy || !handoffMemberID} onclick={() => controlTicket('handoff')}>Hand off parent ticket</button>
+            {/if}
+          </section>
+        {/if}
         <section aria-label="Ticket execution">{#each deliveryErrors as notification}<p role="status">Integrator notification pending: {notification.delivery_error}{notification.next_delivery_at ? ` · retry after ${new Date(notification.next_delivery_at).toLocaleTimeString()}` : ""}</p>{/each}<h3>Execution · {executionLabel(selected.execution_state, selected)}</h3>{#if selected.execution_reason}<p role="status">{selected.execution_reason}</p>{/if}{#if selected.schedule?.every}<p>Run assignment: {members.find(m => m.id === selected?.requested_member_id)?.agent_id || 'Decisions selects'}</p>{:else}<p>Assigned member: {members.find(m => m.id === selected?.assigned_member_id)?.agent_id || 'Unassigned'}</p>{/if}
-          {#if selected.state !== 'done' && ['cancelled','blocked','failed','unknown','rejected'].includes(selected.execution_state || '')}<button class="secondary-button work-icon-button" disabled={busy} onclick={() => controlTicket('retry')} title="Retry execution" aria-label="Retry execution"><RotateCcw aria-hidden="true" size={17} /></button>{/if}
+          {#if selected.state !== 'done' && ['cancelled','blocked','failed','unknown','rejected','close_failed'].includes(selected.execution_state || '')}<button class="secondary-button work-icon-button" disabled={busy} onclick={() => controlTicket('retry')} title={selected.execution_state === 'close_failed' ? 'Retry cleanup' : 'Retry execution'} aria-label={selected.execution_state === 'close_failed' ? 'Retry cleanup' : 'Retry execution'}><RotateCcw aria-hidden="true" size={17} /></button>{/if}
           {#each attempts.filter(attempt => attempt.ticket_id === selected?.id) as attempt (attempt.id)}
           {@const open = openAttempts[attempt.id] ?? (attempt.id === selected.active_attempt_id)}
           <details {open} ontoggle={event => {
@@ -206,9 +243,9 @@
             if (openAttempts[attempt.id] !== open) openAttempts = { ...openAttempts, [attempt.id]: open };
           }}><summary>{attempt.status} · {attempt.id}</summary><p>Worker: <code>{attempt.worker_session_id}</code></p>
             {#if open}<WorkerConversation attemptID={attempt.id} live={['reserved', 'running'].includes(attempt.status)} />{/if}
-            {#if attempt.result}<AttemptResult result={attempt.result} />{/if}{#if attempt.feedback}<section class="work-prose" aria-label="Integrator feedback"><h4>Integrator feedback</h4><Markdown content={attempt.feedback} /></section>{/if}{#if attempt.operation_error}<p role="status">{attempt.operation_error}</p>{/if}
-            {#if attempt.change_request}<p>Pinned base: <code>{attempt.change_request.base_commit}</code><br />Pinned head: <code>{attempt.change_request.head_commit || 'Working'}</code></p>{#if attempt.change_request.head_commit}<button class="secondary-button work-icon-button" onclick={() => readDiff(attempt)} title="Read change request" aria-label="Read change request"><GitCompareArrows aria-hidden="true" size={17} /></button>{/if}{/if}
-            {#if attempt.id === selected.active_attempt_id && ['awaiting_review','blocked','failed','unknown','merge_failed','close_failed'].includes(attempt.status)}<label>Review feedback<textarea aria-label="Ticket review feedback" bind:value={feedback} rows="3"></textarea></label><div class="work-action-group">{#if ['awaiting_review','merge_failed'].includes(attempt.status)}<button class="secondary-button work-icon-button" onclick={() => review(attempt, 'accept')} disabled={busy} title={attempt.change_request ? 'Accept and merge' : 'Accept result'} aria-label={attempt.change_request ? 'Accept and merge' : 'Accept result'}>{#if attempt.change_request}<GitMerge aria-hidden="true" size={17} />{:else}<Check aria-hidden="true" size={17} />{/if}</button>{/if}<button class="secondary-button work-icon-button" onclick={() => review(attempt, 'request_changes')} disabled={busy || !feedback.trim()} title="Request changes" aria-label="Request changes"><MessageSquareReply aria-hidden="true" size={17} /></button><button class="secondary-button work-icon-button danger" onclick={() => review(attempt, 'reject')} disabled={busy} title="Reject result" aria-label="Reject result"><CircleX aria-hidden="true" size={17} /></button></div>{/if}
+            {#if attempt.result}<AttemptResult result={attempt.result} />{/if}{#if attempt.feedback}<section class="work-prose" aria-label="Review feedback"><h4>Review feedback</h4><Markdown content={attempt.feedback} /></section>{/if}{#if attempt.operation_error}<p role="status">{attempt.operation_error}</p>{/if}
+            {#if attempt.change_request}<p>Merge target · <code>{attempt.change_request.base_ref}</code><br />Pinned base · <code>{attempt.change_request.base_commit}</code><br />Pinned head · <code>{attempt.change_request.head_commit || 'Working'}</code></p>{#if attempt.change_request.head_commit}<button class="secondary-button work-icon-button" onclick={() => readDiff(attempt)} title="Read change request" aria-label="Read change request"><GitCompareArrows aria-hidden="true" size={17} /></button>{/if}{/if}
+            {#if !selected.parent_ticket_id && attempt.id === selected.active_attempt_id && ['awaiting_review','blocked','failed','unknown','merge_failed','close_failed'].includes(attempt.status)}<label>Review feedback<textarea aria-label="Ticket review feedback" bind:value={feedback} rows="3"></textarea></label><div class="work-action-group">{#if ['awaiting_review','merge_failed'].includes(attempt.status)}<button class="secondary-button work-icon-button" onclick={() => review(attempt, 'accept')} disabled={busy} title={attempt.change_request ? 'Accept and merge' : 'Accept result'} aria-label={attempt.change_request ? 'Accept and merge' : 'Accept result'}>{#if attempt.change_request}<GitMerge aria-hidden="true" size={17} />{:else}<Check aria-hidden="true" size={17} />{/if}</button>{/if}<button class="secondary-button work-icon-button" onclick={() => review(attempt, 'request_changes')} disabled={busy || !feedback.trim()} title="Request changes" aria-label="Request changes"><MessageSquareReply aria-hidden="true" size={17} /></button><button class="secondary-button work-icon-button danger" onclick={() => review(attempt, 'reject')} disabled={busy} title="Reject result" aria-label="Reject result"><CircleX aria-hidden="true" size={17} /></button></div>{/if}
           </details>{/each}{#if diff}<pre aria-label="Ticket change diff">{diff}</pre>{/if}
         </section>
       {/if}

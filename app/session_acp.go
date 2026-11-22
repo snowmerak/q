@@ -27,6 +27,7 @@ type acpSessionCheckpoint struct {
 	Connection                 [32]byte `json:"connection"`
 	Transcript                 [32]byte `json:"transcript"`
 	LibraryInstructionsVersion int      `json:"library_instructions_version,omitempty"`
+	AssignedReview             bool     `json:"assigned_review,omitempty"`
 	BrowserPreference          string   `json:"browser_preference,omitempty"`
 }
 
@@ -52,10 +53,10 @@ func (host *SessionHost) prepareACPSession(ctx context.Context, prepared *prepar
 	if err != nil {
 		return nil, err
 	}
-	withWorkTools := connection.Library || prepared.executionRoot != prepared.store.Root
+	withWorkTools := connection.Library || prepared.executionRoot != prepared.store.Root || prepared.review.Active()
 	var binding *workitemtools.Binding
 	if withWorkTools {
-		binding = &workitemtools.Binding{SessionID: prepared.store.SessionID}
+		binding = &workitemtools.Binding{SessionID: prepared.store.SessionID, Review: prepared.review}
 		binding.EmbeddingConnection, err = host.workEmbeddingConnection()
 		if err != nil {
 			return nil, err
@@ -77,8 +78,8 @@ func (host *SessionHost) prepareACPSession(ctx context.Context, prepared *prepar
 	if err != nil {
 		return nil, err
 	}
-	// Connection files rotate with the host process; they do not change the
-	// workspace/tool binding and must not discard a resumable ACP conversation.
+	// Keep the persisted connection fingerprint compatible when connection
+	// files, prompt instructions or the assigned review change.
 	workspaceID := ""
 	integrator := false
 	if prepared.projectContext != nil {
@@ -90,7 +91,7 @@ func (host *SessionHost) prepareACPSession(ctx context.Context, prepared *prepar
 		WorkspaceID, SessionID string
 		Manager                bool
 		CatalogVersion         int `json:",omitempty"`
-	}{withWorkTools, workspaceID, prepared.store.SessionID, integrator, acpLibraryInstructionsVersion})
+	}{withWorkTools, workspaceID, prepared.store.SessionID, integrator, acpLibraryCatalogVersion})
 	if err != nil {
 		return nil, err
 	}
@@ -108,9 +109,10 @@ func (host *SessionHost) prepareACPSession(ctx context.Context, prepared *prepar
 		body = append(body, []byte("\n"+prepared.executionRoot+"\n")...)
 		body = append(body, project...)
 	}
-	checkpoint := acpSessionCheckpoint{Agent: agent, Connection: sha256.Sum256(body)}
+	checkpoint := acpSessionCheckpoint{Agent: agent, Connection: sha256.Sum256(body), AssignedReview: prepared.review.Active()}
 	remoteID := ""
 	libraryInstructionsVersion := 0
+	previousAssignedReview := false
 	previousBrowserPreference := ""
 	if body, err := os.ReadFile(acpSessionPath(prepared.store)); err == nil {
 		var previous acpSessionCheckpoint
@@ -120,6 +122,7 @@ func (host *SessionHost) prepareACPSession(ctx context.Context, prepared *prepar
 		if previous.Agent == agent && previous.Connection == checkpoint.Connection && previous.Transcript == acpTranscriptDigest(saved.Transcript) {
 			remoteID = previous.SessionID
 			libraryInstructionsVersion = previous.LibraryInstructionsVersion
+			previousAssignedReview = previous.AssignedReview
 			previousBrowserPreference = previous.BrowserPreference
 		}
 	} else if !errors.Is(err, os.ErrNotExist) {
@@ -145,7 +148,9 @@ func (host *SessionHost) prepareACPSession(ctx context.Context, prepared *prepar
 	if withWorkTools && prepared.projectContext != nil {
 		remote.libraryRoleInstructions = coordinator.RoleInstructions(prepared.projectContext.Role)
 	}
-	remote.libraryInstructionsSent = remote.resumed && libraryInstructionsVersion == acpLibraryInstructionsVersion
+	// A fresh Integrator connection can have a different review scope while
+	// resuming the same conversation. Send its current tool instructions.
+	remote.libraryInstructionsSent = remote.resumed && libraryInstructionsVersion == acpLibraryInstructionsVersion && !checkpoint.AssignedReview && !previousAssignedReview
 	if remote.resumed {
 		remote.lastBrowserPreference = previousBrowserPreference
 	}

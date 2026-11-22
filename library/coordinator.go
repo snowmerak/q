@@ -48,6 +48,12 @@ func (c *Client) ListMembers(ctx context.Context, id string) (MemberList, error)
 	err := c.doJSON(ctx, http.MethodGet, "/workspaces/"+url.PathEscape(id)+"/members", nil, &out)
 	return out, err
 }
+func (c *Client) ListChildren(ctx context.Context, id, worktree string) (workitems.ItemPage, error) {
+	var out workitems.ItemPage
+	query := url.Values{"worktree": {worktree}}
+	err := c.doJSON(ctx, http.MethodGet, "/items/"+url.PathEscape(id)+"/children?"+query.Encode(), nil, &out)
+	return out, err
+}
 func (c *Client) PutMember(ctx context.Context, id string, in workitems.MemberInput) (workitems.Member, error) {
 	var out workitems.Member
 	err := c.doJSON(ctx, http.MethodPost, "/workspaces/"+url.PathEscape(id)+"/members", in, &out)
@@ -180,6 +186,14 @@ func registerCoordinatorRoutes(mux *http.ServeMux, s *workitems.Store) {
 			return
 		}
 		writeJSON(w, 200, AttemptList{Attempts: out})
+	})
+	mux.HandleFunc("GET /v1/items/{item}/children", func(w http.ResponseWriter, r *http.Request) {
+		out, err := s.ListChildren(r.Context(), r.PathValue("item"), r.URL.Query().Get("worktree"))
+		if err != nil {
+			workspaceError(w, err)
+			return
+		}
+		writeJSON(w, 200, out)
 	})
 	mux.HandleFunc("GET /v1/attempts/{attempt}", func(w http.ResponseWriter, r *http.Request) {
 		out, err := s.GetAttempt(r.Context(), r.PathValue("attempt"))

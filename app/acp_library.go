@@ -1,6 +1,7 @@
 package app
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -10,7 +11,10 @@ import (
 	"github.com/snowmerak/q/third_party/acp-go-sdk"
 )
 
-const acpLibraryInstructionsVersion = 9
+const (
+	acpLibraryCatalogVersion      = 9
+	acpLibraryInstructionsVersion = 10
+)
 
 func acpLibraryServers(configDir string, binding *workitemtools.Binding) ([]acp.McpServer, error) {
 	executable, err := os.Executable()
@@ -33,6 +37,16 @@ func acpLibraryServers(configDir string, binding *workitemtools.Binding) ([]acp.
 	server.Args = append(server.Args, "--workspace-id", binding.WorkspaceID, "--session-id", binding.SessionID)
 	if binding.Manager {
 		server.Args = append(server.Args, "--manager")
+	}
+	if binding.Worker != nil {
+		credential, err := json.Marshal(binding.Worker)
+		if err != nil {
+			return nil, err
+		}
+		server.Env = append(server.Env, acp.EnvVariable{Name: "Q_LIBRARY_TICKET_WORKER", Value: string(credential)})
+	}
+	if binding.Review.Active() {
+		server.Args = append(server.Args, "--review-attempt", binding.Review.AttemptID, "--review-operation", binding.Review.OperationID)
 	}
 	if binding.EmbeddingConnection != "" {
 		server.Args = append(server.Args, "--embedding-connection", binding.EmbeddingConnection)

@@ -13,6 +13,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/google/uuid"
+	"github.com/snowmerak/q/config"
 )
 
 const (
@@ -22,6 +23,9 @@ const (
 
 // Item contains thread metadata; its body lives only in the referenced Post.
 type Item struct {
+	ParentTicketID    string          `json:"parent_ticket_id,omitempty"`
+	ParentWorktreeID  string          `json:"parent_worktree_id,omitempty"`
+	HandoffMemberID   string          `json:"handoff_member_id,omitempty"`
 	DependsOn         []string        `json:"depends_on,omitempty"`
 	WaitingOn         []string        `json:"waiting_on,omitempty"`
 	ID                string          `json:"id"`
@@ -39,6 +43,7 @@ type Item struct {
 	Acceptance        []string        `json:"acceptance,omitempty"`
 	ExecutionMode     string          `json:"execution_mode,omitempty"`
 	RequestedMemberID string          `json:"requested_member_id,omitempty"`
+	RequestedRole     string          `json:"requested_role,omitempty"`
 	LinkedIssueID     string          `json:"linked_issue_id,omitempty"`
 	ExecutionState    string          `json:"execution_state,omitempty"`
 	ExecutionReason   string          `json:"execution_reason,omitempty"`
@@ -70,6 +75,7 @@ type Post struct {
 }
 
 type CreateInput struct {
+	ParentWorker      *WorkerBinding  `json:"parent_worker,omitempty"`
 	DependsOn         []string        `json:"depends_on,omitempty"`
 	Schedule          *TicketSchedule `json:"schedule,omitempty"`
 	WorkspaceID       string          `json:"workspace_id"`
@@ -80,6 +86,7 @@ type CreateInput struct {
 	Acceptance        []string        `json:"acceptance,omitempty"`
 	ExecutionMode     string          `json:"execution_mode,omitempty"`
 	RequestedMemberID string          `json:"requested_member_id,omitempty"`
+	RequestedRole     string          `json:"requested_role,omitempty"`
 	LinkedIssueID     string          `json:"linked_issue_id,omitempty"`
 	Author            string          `json:"author"`
 	Refs              []string        `json:"refs,omitempty"`
@@ -95,6 +102,7 @@ type UpdateInput struct {
 	Labels            []string        `json:"labels"`
 	Acceptance        []string        `json:"acceptance,omitempty"`
 	RequestedMemberID string          `json:"requested_member_id,omitempty"`
+	RequestedRole     *string         `json:"requested_role,omitempty"`
 	LinkedIssueID     string          `json:"linked_issue_id,omitempty"`
 	ExecutionMode     string          `json:"execution_mode,omitempty"`
 	Deleted           bool            `json:"deleted"`
@@ -309,13 +317,46 @@ func (s *Store) CreateItem(ctx context.Context, in CreateInput) (Item, error) {
 		return Item{}, ErrInvalidInput
 	}
 	var err error
+	in.RequestedRole, err = normalizeRequestedRole(in.Kind, in.RequestedRole)
+	if err != nil {
+		return Item{}, err
+	}
+	if in.RequestedRole != "" && in.RequestedMemberID != "" {
+		return Item{}, fmt.Errorf("%w: choose a requested role or a specific member", ErrInvalidInput)
+	}
 	in.Schedule, err = normalizeTicketSchedule(in.Kind, in.Schedule)
 	if err != nil {
 		return Item{}, err
 	}
-	return mutate(ctx, s, in.WorkspaceID, "create", in.RequestID, in, func(tx *sql.Tx) (Item, error) {
+	operation, receiptInput := "create", in
+	if in.ParentWorker != nil {
+		a, err := s.GetAttempt(ctx, in.ParentWorker.AttemptID)
+		if err != nil {
+			return Item{}, err
+		}
+		if in.ParentWorker.Token == "" || a.Binding() != *in.ParentWorker || a.WorkspaceID != in.WorkspaceID {
+			return Item{}, ErrConflict
+		}
+		// The request ID names the same child after a parent session resumes
+		// with a new lease or a selected member takes over the same worktree.
+		operation = "create-child:" + a.WorktreeID
+		receiptInput.ParentWorker = nil
+		receiptInput.Author = "agent"
+	}
+	return mutate(ctx, s, in.WorkspaceID, operation, in.RequestID, receiptInput, func(tx *sql.Tx) (Item, error) {
 		return createItemTx(ctx, tx, in, "", time.Time{})
 	})
+}
+
+func normalizeRequestedRole(kind, role string) (string, error) {
+	role = config.CanonicalAgentRole(strings.TrimSpace(role))
+	if role == "" {
+		return "", nil
+	}
+	if kind != Ticket || (!config.IsAgentRole(role) && !config.IsExternalAgentRole(role) && !config.ValidCustomRoleName(role)) {
+		return "", fmt.Errorf("%w: invalid requested ticket role %q", ErrInvalidInput, role)
+	}
+	return role, nil
 }
 
 func createItemTx(ctx context.Context, tx *sql.Tx, in CreateInput, scheduleID string, scheduledFor time.Time) (Item, error) {
@@ -324,12 +365,27 @@ func createItemTx(ctx context.Context, tx *sql.Tx, in CreateInput, scheduleID st
 	if item.Labels == nil {
 		item.Labels = []string{}
 	}
+	if in.ParentWorker != nil {
+		if in.Kind != Ticket || in.ExecutionMode != "git" || in.Schedule != nil || in.RequestID == "" {
+			return Item{}, fmt.Errorf("%w: child creation requires a Git ticket and a request ID", ErrInvalidInput)
+		}
+		parent, err := boundWorker(ctx, tx, *in.ParentWorker)
+		if err != nil {
+			return Item{}, err
+		}
+		if parent.WorkspaceID != in.WorkspaceID || parent.ChangeRequest == nil || parent.ChangeRequest.Status != "working" || parent.ReviewChildAttemptID != "" {
+			return Item{}, fmt.Errorf("%w: child creation requires an active parent Git worktree", ErrConflict)
+		}
+		item.ParentTicketID, item.ParentWorktreeID = parent.TicketID, parent.WorktreeID
+		in.Author = "agent/" + parent.WorkerSessionID
+	}
 	if in.Kind == Ticket {
 		item.State = "todo"
 		item.ExecutionState = "queued"
 		item.Acceptance = in.Acceptance
 		item.ExecutionMode = in.ExecutionMode
 		item.RequestedMemberID = in.RequestedMemberID
+		item.RequestedRole = in.RequestedRole
 		item.LinkedIssueID = in.LinkedIssueID
 		if err := applyTicketSchedule(&item, in.Schedule, now); err != nil {
 			return Item{}, err
@@ -393,6 +449,9 @@ func (s *Store) UpdateItem(ctx context.Context, id string, in UpdateInput) (Item
 			return Item{}, fmt.Errorf("%w: use the ticket execution/review operations to move columns", ErrInvalidInput)
 		}
 		if item.Kind == Ticket && in.ExecutionMode != "" && in.ExecutionMode != item.ExecutionMode {
+			if item.ParentTicketID != "" {
+				return Item{}, fmt.Errorf("%w: child tickets use Git execution", ErrConflict)
+			}
 			if in.ExecutionMode != "git" && in.ExecutionMode != "report" {
 				return Item{}, ErrInvalidInput
 			}
@@ -442,9 +501,27 @@ func (s *Store) UpdateItem(ctx context.Context, id string, in UpdateInput) (Item
 			}
 		}
 		if item.Kind == Ticket && in.Deleted && item.State != "done" {
+			if item.ParentTicketID != "" && item.ExecutionState != "cancelled" && item.ExecutionState != "rejected" {
+				return Item{}, fmt.Errorf("%w: resolve the child ticket before removing it", ErrConflict)
+			}
 			if err := requireNoUnfinishedDependents(ctx, tx, item); err != nil {
 				return Item{}, err
 			}
+		}
+		if in.RequestedRole != nil {
+			role, err := normalizeRequestedRole(item.Kind, *in.RequestedRole)
+			if err != nil {
+				return Item{}, err
+			}
+			if item.ActiveAttemptID != "" {
+				return Item{}, fmt.Errorf("%w: the requested role can change before the first execution", ErrConflict)
+			}
+			if role != "" && in.RequestedMemberID != "" {
+				return Item{}, fmt.Errorf("%w: choose a requested role or a specific member", ErrInvalidInput)
+			}
+			item.RequestedRole = role
+		} else if in.RequestedMemberID != "" && in.RequestedMemberID != item.RequestedMemberID {
+			item.RequestedRole = ""
 		}
 		item.Title, item.State, item.Labels, item.Deleted = strings.TrimSpace(in.Title), in.State, in.Labels, in.Deleted
 		item.Acceptance, item.RequestedMemberID, item.LinkedIssueID = in.Acceptance, in.RequestedMemberID, in.LinkedIssueID

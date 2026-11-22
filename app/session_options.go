@@ -9,6 +9,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/snowmerak/q/client"
+	"github.com/snowmerak/q/internal/workitemtools"
 	"github.com/snowmerak/q/workspace"
 )
 
@@ -41,6 +42,7 @@ type SessionOptions struct {
 	// OperationID makes retries continue a saved operation without appending
 	// the same user prompt again. A completed operation returns its saved result.
 	OperationID string `json:"-"`
+	review      workitemtools.ReviewAssignment
 }
 
 // configuresRuntime excludes turn controls, which must preserve the session's

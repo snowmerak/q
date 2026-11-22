@@ -14,6 +14,7 @@ import (
 
 	"github.com/snowmerak/q/config"
 	"github.com/snowmerak/q/coordinator"
+	"github.com/snowmerak/q/internal/workitemtools"
 	qlibrary "github.com/snowmerak/q/library"
 	"github.com/snowmerak/q/providerhost"
 	"github.com/snowmerak/q/workitems"
@@ -142,7 +143,9 @@ func TestManagerACPOperationHonorsSelectedAgent(t *testing.T) {
 	defer cancel()
 	var answer string
 	options := SessionOptions{OperationID: "review-one", Control: NewSessionRunControl()}
-	if err := host.RunWithOptions(ctx, store, store.SessionID, "review the worker result", options, func(event SessionEvent) error {
+	review := workitemtools.ReviewAssignment{AttemptID: "test-attempt", OperationID: options.OperationID}
+	reviewCtx := workitemtools.WithReviewAssignment(ctx, review)
+	if err := host.RunWithOptions(reviewCtx, store, store.SessionID, "review the worker result", options, func(event SessionEvent) error {
 		if event.Type == "result" {
 			answer = event.Content
 		}
@@ -150,12 +153,23 @@ func TestManagerACPOperationHonorsSelectedAgent(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(answer, project.WorkspaceRoots[0]) || !strings.Contains(answer, "role="+coordinator.RoleIntegrator) {
+	if !strings.Contains(answer, project.WorkspaceRoots[0]) || !strings.Contains(answer, "role="+coordinator.RoleIntegrator) || !strings.Contains(answer, "review=test-attempt/review-one review-guidance=true") {
 		t.Fatalf("ACP operation lost project role or directory: %s", answer)
 	}
 	live := host.liveSessions[liveSessionKey(store, store.SessionID)]
 	if _, ok := live.prepared.client.(*acpRemoteClient); !ok {
 		t.Fatal("manager operation did not use ACP")
+	}
+	if err := host.Run(ctx, store, store.SessionID, "continue the conversation", func(event SessionEvent) error {
+		if event.Type == "result" {
+			answer = event.Content
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(answer, "resumed=true") || !strings.Contains(answer, "role="+coordinator.RoleIntegrator) || !strings.Contains(answer, "review=/ review-guidance=false") {
+		t.Fatalf("ACP did not resume with manual review tools: %s", answer)
 	}
 }
 
@@ -324,6 +338,7 @@ func TestManagerACPHelperProcess(t *testing.T) {
 	decoder, encoder := json.NewDecoder(os.Stdin), json.NewEncoder(os.Stdout)
 	cwd, _ := os.Getwd()
 	resumed, skills, workTools := false, false, false
+	reviewAttempt, reviewOperation := "", ""
 	for {
 		var request struct {
 			ID     json.RawMessage `json:"id"`
@@ -359,21 +374,30 @@ func TestManagerACPHelperProcess(t *testing.T) {
 			}
 			skills = true
 			workTools = !slices.Contains(servers[0].Args, "--skills-only")
+			for i, arg := range servers[0].Args[:len(servers[0].Args)-1] {
+				switch arg {
+				case "--review-attempt":
+					reviewAttempt = servers[0].Args[i+1]
+				case "--review-operation":
+					reviewOperation = servers[0].Args[i+1]
+				}
+			}
 			if !resumed {
 				result = map[string]any{"sessionId": fmt.Sprintf("remote-%d", os.Getpid())}
 			}
 		case "session/prompt":
-			role, skillGuidance, browserGuidance := "none", false, false
+			role, skillGuidance, browserGuidance, reviewGuidance := "none", false, false, false
 			for _, block := range request.Params.Prompt {
 				skillGuidance = skillGuidance || strings.Contains(block.Text, "search_skills") && strings.Contains(block.Text, "get_skill")
 				browserGuidance = browserGuidance || strings.Contains(block.Text, "<q_browser_control>")
+				reviewGuidance = reviewGuidance || strings.Contains(block.Text, workitemtools.AssignedReviewInstructions)
 				for _, candidate := range []string{coordinator.RoleCoordinator, coordinator.RoleIntegrator} {
 					if strings.Contains(block.Text, coordinator.RoleInstructions(candidate)) {
 						role = candidate
 					}
 				}
 			}
-			text := fmt.Sprintf("cwd=%s resumed=%t role=%s skills=%t work-tools=%t skill-guidance=%t browser-guidance=%t", cwd, resumed, role, skills, workTools, skillGuidance, browserGuidance)
+			text := fmt.Sprintf("cwd=%s resumed=%t role=%s skills=%t work-tools=%t skill-guidance=%t browser-guidance=%t review=%s/%s review-guidance=%t", cwd, resumed, role, skills, workTools, skillGuidance, browserGuidance, reviewAttempt, reviewOperation, reviewGuidance)
 			_ = encoder.Encode(map[string]any{"jsonrpc": "2.0", "method": "session/update", "params": map[string]any{"sessionId": request.Params.SessionID, "update": map[string]any{"sessionUpdate": "agent_message_chunk", "content": map[string]any{"type": "text", "text": text}}}})
 			result = map[string]any{"stopReason": "end_turn"}
 		}

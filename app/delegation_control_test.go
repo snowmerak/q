@@ -30,3 +30,27 @@ func TestReconcileChildFollowupAfterSessionWriteGap(t *testing.T) {
 		t.Fatalf("reconciliation is not stable: changed=%v, err=%v", changed, err)
 	}
 }
+
+func TestReconcileChildCountsRetryAfterRejectedCompletion(t *testing.T) {
+	start := planToolCall(subagent.TaskStartToolName, `{"objective":"work"}`)
+	invalid := planToolCall(subagent.TaskCompleteToolName, `{"outcome":"succeeded","result":"invalid"}`)
+	complete := planToolCall(subagent.TaskCompleteToolName, `{"outcome":"succeeded","summary":"done"}`)
+	transcript := []client.Message{
+		{Role: client.RoleSystem, Content: "system"}, {Role: client.RoleUser, Content: "work"},
+		{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{start}},
+		client.ToolResultMessage(start, client.ToolResult{Content: `{"started":true}`}),
+		{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{invalid}},
+		client.ToolResultMessage(invalid, client.ToolResult{Content: "invalid arguments", IsError: true}),
+		{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{complete}},
+		client.ToolResultMessage(complete, client.ToolResult{Content: `{"outcome":"succeeded","summary":"done"}`}),
+		{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{complete}},
+		client.ToolResultMessage(complete, client.ToolResult{Content: "no tools may run after the result", IsError: true}),
+		{Role: client.RoleAssistant, Content: "ack"},
+		{Role: client.RoleUser, Name: subagent.FollowupMessageName, Content: "review the child"},
+	}
+	old := workspace.DelegationState{Round: 3, Started: true}
+	updated, changed, err := reconcileChildExecutionState(workspace.Session{Transcript: transcript}, old, subagent.Spec{})
+	if err != nil || !changed || updated.Started || updated.Round != 3 || updated.TurnStartRound != 3 {
+		t.Fatalf("reconciled = %#v, changed=%v, err=%v", updated, changed, err)
+	}
+}

@@ -11,6 +11,7 @@ import (
 const (
 	assignmentQueue = `kind='ticket' AND coalesce(json_extract(payload,'$.deleted'),0)=0 AND coalesce(json_extract(payload,'$.schedule.every'),'')='' AND coalesce(json_extract(payload,'$.schedule.paused'),0)=0 AND (json_extract(payload,'$.execution_state') IN ('queued','assignment_waiting') OR (coalesce(json_extract(payload,'$.execution_state'),'')='' AND json_extract(payload,'$.state')='todo' AND coalesce(json_extract(payload,'$.active_attempt_id'),'')=''))`
 	mergeQueue      = `kind='ticket' AND coalesce(json_extract(payload,'$.deleted'),0)=0 AND json_extract(payload,'$.execution_state') IN ('merge_queued','close_queued')`
+	resumeQueue     = `kind='ticket' AND coalesce(json_extract(payload,'$.deleted'),0)=0 AND json_extract(payload,'$.execution_state')='waiting_children'`
 	assignmentDue   = `max(coalesce(julianday(json_extract(payload,'$.next_assignment_at')),0),coalesce(julianday(json_extract(payload,'$.schedule.not_before')),0))`
 	activeAttempts  = `json_extract(payload,'$.status') IN ('reserved','running')`
 	leasedAttempts  = `json_extract(payload,'$.status') IN ('reserved','running','merging','closing')`
@@ -37,6 +38,8 @@ func (s *Store) ListTicketQueue(ctx context.Context, workspaceID, queue, token s
 	predicate, index := assignmentQueue, "ticket_assignment_queue_v2"
 	if queue == "merge" {
 		predicate, index = mergeQueue, "ticket_merge_queue"
+	} else if queue == "resume" {
+		predicate, index = resumeQueue, "ticket_parent_resume"
 	} else if queue != "assignment" {
 		return ItemPage{}, ErrInvalidInput
 	}
@@ -58,6 +61,17 @@ func (s *Store) ListTicketQueue(ctx context.Context, workspaceID, queue, token s
 		query += ` AND ` + assignmentDue + `<=julianday(?)`
 		query += ` AND NOT EXISTS(` + unmetDependencies + `)`
 		args = append(args, stamp(time.Now()))
+	}
+	if queue == "resume" {
+		query += ` AND ` + assignmentDue + `<=julianday(?) AND ` + resumeReadySQL
+		args = append(args, stamp(time.Now()))
+	}
+	if queue != "merge" {
+		query += ` AND ` + parentReadySQL
+	} else {
+		query += ` AND ((json_extract(payload,'$.execution_state')='merge_queued' AND ` + parentReadySQL + `)
+ OR (json_extract(payload,'$.execution_state')='close_queued' AND NOT EXISTS (SELECT 1 FROM items AS child WHERE ` + directChildSQL + `
+ AND json_extract(child.payload,'$.state')<>'done' AND json_extract(child.payload,'$.execution_state') NOT IN ('cancelled','rejected'))))`
 	}
 	limit = pageLimit(limit)
 	query += ` ORDER BY seq LIMIT ?`

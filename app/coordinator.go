@@ -106,6 +106,9 @@ func (host *SessionHost) coordinatorCandidates(ctx context.Context, project work
 			return nil, err
 		}
 		definition = subagent.ExecutionDefinition(value, definition, targets)
+		if item.RequestedRole != "" && config.CanonicalAgentRole(definition.Info.Role) != item.RequestedRole {
+			continue
+		}
 		if item.ExecutionMode == "report" && definition.Info.MutatesWorkspace {
 			continue
 		}
@@ -219,6 +222,14 @@ func (host *SessionHost) runTicket(ctx context.Context, c *library.Client, proje
 		return result, err
 	}
 	defer func() { returnErr = errors.Join(returnErr, lock.Close()) }()
+	if a.ResumeParent {
+		if _, err := worker.Load(); err != nil {
+			return result, fmt.Errorf("resume parent conversation: %w; select a handoff member if the checkpoint is unavailable", err)
+		}
+		if _, err := worker.LoadDelegationState(); err != nil {
+			return result, fmt.Errorf("resume parent execution: %w; select a handoff member if the checkpoint is unavailable", err)
+		}
+	}
 	root := candidate.Member.ExecutionRoot
 	if err := (workspace.Store{Root: root}).EnsureQGitLocallyIgnored(ctx); err != nil {
 		return result, err
@@ -234,7 +245,27 @@ func (host *SessionHost) runTicket(ctx context.Context, c *library.Client, proje
 	}
 	if item.ExecutionMode == "git" {
 		if request == nil {
-			prepared, err := worktrees.Prepare(ctx, root, a.WorktreeID)
+			parentRoot := root
+			if item.ParentTicketID != "" {
+				parent, err := c.GetItem(ctx, item.ParentTicketID)
+				if err != nil {
+					return result, err
+				}
+				owner, err := c.GetAttempt(ctx, parent.ActiveAttemptID)
+				if err != nil {
+					return result, err
+				}
+				if owner.WorktreeID != item.ParentWorktreeID || owner.ChangeRequest == nil || owner.ChangeRequest.Status != change.StatusWorking || owner.StopRequested {
+					return result, errors.New("parent Git worktree is no longer available")
+				}
+				parentRoot = owner.ChangeRequest.WorktreePath
+				if same, err := gitwork.SameRepository(ctx, root, parentRoot); err != nil {
+					return result, err
+				} else if !same {
+					return result, errors.New("parent and child belong to different Git repositories")
+				}
+			}
+			prepared, err := worktrees.Prepare(ctx, parentRoot, a.WorktreeID)
 			if err != nil {
 				return result, err
 			}
@@ -268,6 +299,16 @@ func (host *SessionHost) runTicket(ctx context.Context, c *library.Client, proje
 	if _, err := c.UpdateAttempt(ctx, a.ID, workitems.AttemptUpdate{Owner: a.Owner, Token: a.Token, Generation: a.Generation, Status: "running", ChangeRequest: request}); err != nil {
 		return result, err
 	}
+	var reviewHead string
+	if a.ReviewChildAttemptID != "" {
+		if err := gitwork.Clean(ctx, root); err != nil {
+			return result, err
+		}
+		reviewHead, err = gitwork.CheckoutHead(ctx, root)
+		if err != nil {
+			return result, err
+		}
+	}
 	if candidate.Definition.Info.Kind == subagent.AgentKindExternal {
 		result, returnErr = host.runACPTicket(ctx, c, worker, candidate, a, prompt, root)
 	} else {
@@ -275,9 +316,38 @@ func (host *SessionHost) runTicket(ctx context.Context, c *library.Client, proje
 	}
 	if request != nil {
 		if returnErr == nil && result.Outcome == "succeeded" {
-			submitted, err := worktrees.Submit(ctx, *request, result.Summary)
-			request = &submitted
-			returnErr = errors.Join(returnErr, err)
+			park, err := parentMustWait(ctx, c, a)
+			if err == nil && reviewHead != "" {
+				if head, headErr := gitwork.CheckoutHead(ctx, root); headErr != nil {
+					err = headErr
+				} else if head != reviewHead {
+					err = errors.New("parent checkout changed during a review turn; inspect it before retrying")
+				} else {
+					err = worktrees.Resume(ctx, *request)
+				}
+			}
+			if err != nil {
+				returnErr = err
+			} else if park {
+				if err := gitwork.Clean(ctx, root); err != nil {
+					returnErr = fmt.Errorf("park parent with a clean committed worktree: %w", err)
+				} else {
+					result.Outcome = workitems.WaitingChildren
+				}
+			} else {
+				if a.RepairBase != "" {
+					rebased, err := gitwork.RepairReviewBase(ctx, *request, a.RepairBase)
+					if err != nil {
+						returnErr = err
+					} else {
+						request = &rebased
+					}
+				}
+				if returnErr == nil {
+					submitted, err := worktrees.Submit(ctx, *request, result.Summary)
+					request, returnErr = &submitted, err
+				}
+			}
 		} else {
 			blocked := worktrees.MarkBlocked(*request)
 			request = &blocked
@@ -293,6 +363,38 @@ func (host *SessionHost) runTicket(ctx context.Context, c *library.Client, proje
 	}
 	returnErr = errors.Join(returnErr, worker.SaveDelegationState(state))
 	return result, returnErr
+}
+
+func parentMustWait(ctx context.Context, c *library.Client, a workitems.Attempt) (bool, error) {
+	if a.ReviewChildAttemptID != "" {
+		child, err := c.GetAttempt(ctx, a.ReviewChildAttemptID)
+		if err != nil {
+			return false, err
+		}
+		switch child.Status {
+		case "awaiting_review", "failed", "blocked", "unknown", "merge_failed", "close_failed":
+			return false, errors.New("parent review ended without recording a child decision; retry the parent ticket")
+		}
+		return true, nil
+	}
+	page, err := c.ListChildren(ctx, a.TicketID, a.WorktreeID)
+	if err != nil {
+		return false, err
+	}
+	for _, child := range page.Items {
+		if child.State != "done" {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func ticketWorkBinding(a workitems.Attempt, bridge string) workitemtools.Binding {
+	worker := a.Binding()
+	return workitemtools.Binding{
+		WorkspaceID: a.WorkspaceID, SessionID: a.WorkerSessionID, EmbeddingConnection: bridge, Worker: &worker,
+		Review: workitemtools.ReviewAssignment{AttemptID: a.ReviewChildAttemptID, OperationID: a.ID},
+	}
 }
 
 func (host *SessionHost) runNativeTicket(ctx context.Context, c *library.Client, worker workspace.Store, candidate coordinator.Candidate, a workitems.Attempt, prompt, root string, state *workspace.DelegationState) (result subagent.TaskResult, returnErr error) {
@@ -358,7 +460,7 @@ func (host *SessionHost) runNativeTicket(ctx context.Context, c *library.Client,
 	if err != nil {
 		return result, err
 	}
-	base, err := qtools.NewRuntimeWithRoots(ctx, qtools.RuntimeRoots{WorkspaceStateRoot: candidate.Member.ExecutionRoot, CheckoutRoot: root}, archive, value.LoomStoreOptions(nil), value.LSP, lsp, c, qtools.WithWorkspaceWork(c, a.WorkspaceID, a.WorkerSessionID, false), qtools.WithSystemOneSkillRanking(systemoneconfig.Store{Dir: host.store.Dir}), qtools.WithSystemOneArchiveRanking(systemoneconfig.Store{Dir: host.store.Dir}))
+	base, err := qtools.NewRuntimeWithRoots(ctx, qtools.RuntimeRoots{WorkspaceStateRoot: candidate.Member.ExecutionRoot, CheckoutRoot: root}, archive, value.LoomStoreOptions(nil), value.LSP, lsp, c, qtools.WithWorkspaceWorkBinding(c, ticketWorkBinding(a, "")), qtools.WithSystemOneSkillRanking(systemoneconfig.Store{Dir: host.store.Dir}), qtools.WithSystemOneArchiveRanking(systemoneconfig.Store{Dir: host.store.Dir}))
 	if err != nil {
 		return result, err
 	}
@@ -382,6 +484,9 @@ func (host *SessionHost) runNativeTicket(ctx context.Context, c *library.Client,
 	}
 	var resume *subagent.GeneralRunState
 	if saved, err := worker.Load(); err == nil {
+		if a.ResumeParent && state.Model == "" {
+			return result, errors.New("parent worker model checkpoint is missing; select a handoff member to continue")
+		}
 		if state.Model != "" {
 			if state.APIMode != value.ModelAPIMode(state.Model) {
 				return result, errors.New("saved worker model API mode changed")
@@ -416,7 +521,13 @@ func (host *SessionHost) runNativeTicket(ctx context.Context, c *library.Client,
 	if resume != nil {
 		followup = prompt
 	}
-	return (subagent.GeneralRunner{Client: configuredClient, Tools: runtime, Spec: spec, Definition: candidate.Definition, WorkingDirectory: root, Environment: fmt.Sprintf("%+v", base.Environment()), RunID: a.ID, TaskID: a.WorktreeID, ParentID: itemParent(a), Resume: resume, Checkpoint: checkpoint, Followup: followup, Sink: writer}).Run(ctx, state.Prompt)
+	definition := candidate.Definition
+	if a.ReviewChildAttemptID != "" {
+		definition.StrictTools = true
+		definition.Tools = []string{"read_file", "list_directory", "ticket_get", "post_get", "ticket_attempt_get", "ticket_change_read", "ticket_worker_read", "ticket_review"}
+		definition.Delegates = nil
+	}
+	return (subagent.GeneralRunner{Client: configuredClient, Tools: runtime, Spec: spec, Definition: definition, WorkingDirectory: root, Environment: fmt.Sprintf("%+v", base.Environment()), RunID: a.ID, TaskID: a.WorktreeID, ParentID: itemParent(a), Resume: resume, Checkpoint: checkpoint, Followup: followup, Sink: writer}).Run(ctx, state.Prompt)
 }
 func itemParent(a workitems.Attempt) string { return "ticket/" + a.TicketID }
 
@@ -444,8 +555,8 @@ func (host *SessionHost) runACPTicket(ctx context.Context, c *library.Client, wo
 	if err != nil {
 		return result, err
 	}
-	binding := &workitemtools.Binding{WorkspaceID: a.WorkspaceID, SessionID: a.WorkerSessionID, EmbeddingConnection: bridgePath}
-	command.mcpServers, err = acpLibraryServers(host.store.Dir, binding)
+	binding := ticketWorkBinding(a, bridgePath)
+	command.mcpServers, err = acpLibraryServers(host.store.Dir, &binding)
 	if err != nil {
 		return result, err
 	}
@@ -460,7 +571,7 @@ func (host *SessionHost) runACPTicket(ctx context.Context, c *library.Client, wo
 			return result, errors.New("ACP worker checkpoint configuration changed")
 		}
 		if saved.Started && !saved.Completed {
-			if saved.AttemptID == a.ID || a.PreviousAttemptID != saved.AttemptID || strings.TrimSpace(a.Feedback) == "" {
+			if saved.AttemptID == a.ID || a.PreviousAttemptID != saved.AttemptID || (strings.TrimSpace(a.Feedback) == "" && a.PreviousStatus != workitems.WaitingChildren) {
 				return result, errors.New("ACP worker prompt has an unknown outcome; manager feedback and real session resume are required")
 			}
 			recovering = true
@@ -471,14 +582,17 @@ func (host *SessionHost) runACPTicket(ctx context.Context, c *library.Client, wo
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return result, err
 	}
+	if a.ResumeParent && saved.SessionID == "" {
+		return result, errors.New("parent ACP session checkpoint is missing; select a handoff member to continue")
+	}
 	remote, err := startACPRemoteClientWithResume(ctx, command, root, saved.SessionID, connection.AuthMethod, io.Discard, false)
 	if err != nil {
 		return result, err
 	}
 	defer func() { returnErr = errors.Join(returnErr, remote.Close()) }()
-	remote.libraryInstructions = librarymcp.InstructionsFor(binding)
+	remote.libraryInstructions = librarymcp.InstructionsFor(&binding)
 	remote.permissions = acpPermissionReadOnly
-	if candidate.Definition.Info.MutatesWorkspace {
+	if candidate.Definition.Info.MutatesWorkspace && a.ReviewChildAttemptID == "" {
 		remote.permissions = acpPermissionAutomatic
 	}
 	remote.requireCompletedText = true
@@ -500,7 +614,11 @@ func (host *SessionHost) runACPTicket(ctx context.Context, c *library.Client, wo
 		prompt = externalSubagentPrompt(candidate.Definition.SystemPrompt, prompt)
 	}
 	if recovering {
-		prompt = "The previous prompt has an unknown outcome. Do not replay it or assume its effects failed. Inspect the persisted agent state and current files first. Continue only according to this manager feedback, and report any remaining uncertainty.\nTicket ID: " + a.TicketID + "\n\nManager feedback:\n" + a.Feedback
+		if a.PreviousStatus == workitems.WaitingChildren {
+			prompt = "The previous review turn was interrupted after Q recorded the decision. Inspect saved ticket results before acting on this follow-up.\n\n" + prompt
+		} else {
+			prompt = "The previous prompt has an unknown outcome. Do not replay it or assume its effects failed. Inspect the persisted agent state and current files first. Continue only according to this manager feedback, and report any remaining uncertainty.\nTicket ID: " + a.TicketID + "\n\nManager feedback:\n" + a.Feedback
+		}
 	}
 	answer, err := remote.promptText(ctx, prompt)
 	if err != nil {
@@ -535,6 +653,7 @@ func (host *SessionHost) deliverTicketReview(ctx context.Context, project workit
 		return err
 	}
 	prompt := fmt.Sprintf("Ticket result ready for manager review.\nTicket ID: %s\nAttempt ID: %s\nWorker session: %s\nStatus: %s\n\nUse ticket_attempt_get and ticket_change_read to inspect the durable result and pinned diff. Review against the ticket acceptance criteria. Use ticket_review with accept, request_changes (include feedback), or reject. A Git accept queues the actual pinned merge; the ticket is done only after it succeeds.\n\nResult excerpt:\n%s", entry.TicketID, a.ID, a.WorkerSessionID, a.Status, truncateTicketResult(string(a.Result)))
+	ctx = workitemtools.WithReviewAssignment(ctx, workitemtools.ReviewAssignment{AttemptID: a.ID, OperationID: entry.OperationID})
 	host.coordinatorMu.Lock()
 	deliver := host.coordinatorDelivery
 	host.coordinatorMu.Unlock()

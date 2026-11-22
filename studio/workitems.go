@@ -40,6 +40,7 @@ func (s *sessionsService) serveWorkItems(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	in.Author = "user"
+	in.ParentWorker = nil
 	workResponse(s, w, r, 201, func(ctx context.Context, c *library.Client) (workitems.Item, error) { return c.CreateItem(ctx, in) })
 }
 func (s *sessionsService) serveWorkItem(w http.ResponseWriter, r *http.Request) {

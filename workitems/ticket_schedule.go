@@ -159,7 +159,7 @@ func (s *Store) DispatchTicketSchedules(ctx context.Context, workspaceID string,
 					WorkspaceID: parent.WorkspaceID, Kind: Ticket, Title: parent.Title,
 					Content: body.Content, Author: "schedule/" + id, Refs: body.Refs,
 					Labels: parent.Labels, Acceptance: parent.Acceptance,
-					ExecutionMode: parent.ExecutionMode, RequestedMemberID: parent.RequestedMemberID, LinkedIssueID: parent.LinkedIssueID,
+					ExecutionMode: parent.ExecutionMode, RequestedMemberID: parent.RequestedMemberID, RequestedRole: parent.RequestedRole, LinkedIssueID: parent.LinkedIssueID,
 					DependsOn: parent.DependsOn,
 				}, id, due)
 				if err != nil {

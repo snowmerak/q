@@ -21,10 +21,20 @@ func InstructionsFor(binding *workitemtools.Binding) string {
 	}
 	instructions += "\nCurrent Studio project ID: " + binding.WorkspaceID + `.
 Searches default to this project; all:true explicitly reads across projects. Record verified lessons and decisions with evidence in issue_create or issue_reply. Reuse request_id when retrying the same write and use the current revision when updating content.
-Issue tickets with acceptance criteria and execution_mode: report for read-only investigation, git for creating or editing project files. Git mode requires a clean Git repository with an initial commit. ticket_create queues assignment automatically. Set depends_on for prerequisites; only done satisfies a prerequisite, while cancellation and rejection continue to block it. Use ticket_attempt_list/get, ticket_worker_read and ticket_change_read to inspect progress and results. Inspect uncertain outcomes before retrying.
+Issue tickets with acceptance criteria and execution_mode: report for read-only investigation, git for creating or editing project files. Git mode requires a clean Git repository with an initial commit. ticket_create queues assignment automatically. Use requested_role when a particular role should do the work; Decisions selects an eligible joined subagent. Set depends_on for prerequisites; only done satisfies a prerequisite, while cancellation and rejection continue to block it. Use ticket_attempt_list/get, ticket_worker_read and ticket_change_read to inspect progress and results. Inspect uncertain outcomes before retrying.
 Worker success moves work to awaiting_review. Completion requires Integrator review and, for Git work, successful merge. Source writes acknowledge storage before background execution completes.`
+	if binding.Review.Active() {
+		instructions += "\n" + workitemtools.AssignedReviewInstructions
+		if binding.Worker != nil {
+			return instructions + " Keep the parent checkout clean."
+		}
+		return instructions + " Accepting Git work queues Q's pinned local merge. Confirm merge success before reporting the ticket done."
+	}
 	if binding.Manager {
-		return instructions + "\nYou are the project's Integrator. Read manager_inbox, inspect the attempt's acceptance criteria and pinned diff, and use ticket_review with accept, request_changes (include feedback), or reject. Accepting Git work queues Q's pinned local merge. Confirm successful merge and ticket completion before reporting done. If merge fails, inspect the recorded error and request revisions as needed."
+		return instructions + "\nYou are the project's Integrator. For a manual review, read manager_inbox and identify the attempt to inspect. Use ticket_review with the attempt ID, a retry key, and accept, request_changes (include feedback), or reject. Accepting Git work queues Q's pinned local merge. Confirm successful merge and ticket completion before reporting done. If merge fails, inspect the recorded error and request revisions as needed."
+	}
+	if binding.Worker != nil {
+		return instructions + "\nUse ticket_create with as_child:true and a stable request_id to delegate within a Git ticket. End the current turn with a clean checkout so Q can run the child."
 	}
 	return instructions + "\nThe project's Integrator reviews results and authorizes merging. Hand off findings and changes for that review."
 }

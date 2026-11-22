@@ -2,8 +2,10 @@ package workitemtools
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"strings"
 
@@ -19,13 +21,26 @@ type ticketStartInput struct {
 	RequestID string `json:"request_id"`
 }
 type attemptInput struct {
-	ID string `json:"id"`
+	ID string `json:"id" jsonschema:"Exact execution attempt ID from the current review notification or ticket_attempt_list."`
+}
+type ticketInput struct {
+	ID string `json:"id" jsonschema:"Ticket ID."`
 }
 type reviewInput struct {
-	ID        string `json:"id"`
+	ID        string `json:"id" jsonschema:"Exact active execution attempt ID listed in the current review notification."`
 	Decision  string `json:"decision"`
 	Feedback  string `json:"feedback,omitempty"`
-	RequestID string `json:"request_id"`
+	RequestID string `json:"request_id" jsonschema:"A stable key you choose for this review decision. Reuse it when retrying the same decision."`
+}
+
+type assignedReviewInput struct {
+	Decision string `json:"decision" jsonschema:"Choose accept, request_changes, or reject."`
+	Feedback string `json:"feedback,omitempty" jsonschema:"Actionable feedback is required when requesting changes."`
+}
+
+type workerPageInput struct {
+	Cursor string `json:"cursor,omitempty"`
+	Limit  int    `json:"limit,omitempty"`
 }
 
 type attemptListOutput struct {
@@ -82,7 +97,7 @@ func registerCoordinator(server *mcp.Server, c *library.Client, b Binding) {
 			return nil, out, err
 		})
 	}
-	mcp.AddTool(server, &mcp.Tool{Name: "ticket_attempt_list", Description: "Read execution attempts and worker session references for a ticket.", Annotations: readOnly}, func(ctx context.Context, _ *mcp.CallToolRequest, in attemptInput) (*mcp.CallToolResult, attemptListOutput, error) {
+	mcp.AddTool(server, &mcp.Tool{Name: "ticket_attempt_list", Description: "Read execution attempts and worker session references for a ticket.", Annotations: readOnly}, func(ctx context.Context, _ *mcp.CallToolRequest, in ticketInput) (*mcp.CallToolResult, attemptListOutput, error) {
 		if _, err := requireItem(ctx, in.ID); err != nil {
 			return nil, attemptListOutput{}, err
 		}
@@ -93,12 +108,12 @@ func registerCoordinator(server *mcp.Server, c *library.Client, b Binding) {
 		}
 		return nil, view, err
 	})
-	mcp.AddTool(server, &mcp.Tool{Name: "ticket_attempt_get", Description: "Read the persisted worker result and pinned change request for an attempt.", Annotations: readOnly}, func(ctx context.Context, _ *mcp.CallToolRequest, in attemptInput) (*mcp.CallToolResult, map[string]any, error) {
-		out, err := requireAttempt(ctx, in.ID)
+	readAttempt := func(ctx context.Context, id string) (*mcp.CallToolResult, map[string]any, error) {
+		out, err := requireAttempt(ctx, id)
 		return nil, attemptOutput(out), err
-	})
-	mcp.AddTool(server, &mcp.Tool{Name: "ticket_change_read", Description: "Inspect the actual pinned Git change request belonging to this ticket attempt. Normal delegated-child MR ownership remains separate.", Annotations: readOnly}, func(ctx context.Context, _ *mcp.CallToolRequest, in attemptInput) (*mcp.CallToolResult, gitwork.Diff, error) {
-		a, err := requireAttempt(ctx, in.ID)
+	}
+	readChange := func(ctx context.Context, id string) (*mcp.CallToolResult, gitwork.Diff, error) {
+		a, err := requireAttempt(ctx, id)
 		if err != nil {
 			return nil, gitwork.Diff{}, err
 		}
@@ -108,33 +123,68 @@ func registerCoordinator(server *mcp.Server, c *library.Client, b Binding) {
 		manager := gitwork.Manager{Root: filepath.Dir(filepath.Dir(a.ChangeRequest.WorktreePath))}
 		out, err := manager.Read(ctx, *a.ChangeRequest)
 		return nil, out, err
-	})
-	mcp.AddTool(server, &mcp.Tool{Name: "ticket_worker_read", Description: "Read a snapshot page of the ticket worker's persisted transcript and unknown-tool markers. Content and arguments are bounded previews; inspect referenced artifacts/files for full evidence.", Annotations: readOnly}, func(ctx context.Context, _ *mcp.CallToolRequest, in itemInput) (*mcp.CallToolResult, library.WorkerPage, error) {
-		if _, err := requireAttempt(ctx, in.ID); err != nil {
+	}
+	readWorker := func(ctx context.Context, id, cursor string, limit int) (*mcp.CallToolResult, library.WorkerPage, error) {
+		if _, err := requireAttempt(ctx, id); err != nil {
 			return nil, library.WorkerPage{}, err
 		}
-		limit := in.Limit
 		if limit <= 0 {
 			limit = 5
 		}
-		out, err := c.ReadWorker(ctx, in.ID, in.Cursor, min(limit, 10))
+		out, err := c.ReadWorker(ctx, id, cursor, min(limit, 10))
 		return nil, out, err
-	})
+	}
+	if b.Review.Active() {
+		mcp.AddTool(server, &mcp.Tool{Name: "ticket_attempt_get", Description: "Read the result and acceptance criteria of the assigned review.", Annotations: readOnly}, func(ctx context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, map[string]any, error) {
+			return readAttempt(ctx, b.Review.AttemptID)
+		})
+		mcp.AddTool(server, &mcp.Tool{Name: "ticket_change_read", Description: "Read the pinned Git diff of the assigned review.", Annotations: readOnly}, func(ctx context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, gitwork.Diff, error) {
+			return readChange(ctx, b.Review.AttemptID)
+		})
+		mcp.AddTool(server, &mcp.Tool{Name: "ticket_worker_read", Description: "Read a page of the assigned worker result transcript.", Annotations: readOnly}, func(ctx context.Context, _ *mcp.CallToolRequest, in workerPageInput) (*mcp.CallToolResult, library.WorkerPage, error) {
+			return readWorker(ctx, b.Review.AttemptID, in.Cursor, in.Limit)
+		})
+	} else {
+		mcp.AddTool(server, &mcp.Tool{Name: "ticket_attempt_get", Description: "Read the persisted worker result and pinned change request for an attempt.", Annotations: readOnly}, func(ctx context.Context, _ *mcp.CallToolRequest, in attemptInput) (*mcp.CallToolResult, map[string]any, error) {
+			return readAttempt(ctx, in.ID)
+		})
+		mcp.AddTool(server, &mcp.Tool{Name: "ticket_change_read", Description: "Inspect the pinned Git change request for this ticket attempt.", Annotations: readOnly}, func(ctx context.Context, _ *mcp.CallToolRequest, in attemptInput) (*mcp.CallToolResult, gitwork.Diff, error) {
+			return readChange(ctx, in.ID)
+		})
+		mcp.AddTool(server, &mcp.Tool{Name: "ticket_worker_read", Description: "Read a page of the ticket worker's persisted transcript.", Annotations: readOnly}, func(ctx context.Context, _ *mcp.CallToolRequest, in itemInput) (*mcp.CallToolResult, library.WorkerPage, error) {
+			return readWorker(ctx, in.ID, in.Cursor, in.Limit)
+		})
+	}
+	if b.Manager {
+		mcp.AddTool(server, &mcp.Tool{Name: "manager_inbox", Description: "Read this workspace Integrator's persistent ticket result inbox. Clearing a conversation does not remove inbox entries.", Annotations: readOnly}, func(ctx context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, library.InboxList, error) {
+			out, err := c.ListInbox(ctx, b.WorkspaceID)
+			return nil, out, err
+		})
+	}
+	review := func(ctx context.Context, id, requestID, decision, feedback string) (*mcp.CallToolResult, map[string]any, error) {
+		if _, err := requireAttempt(ctx, id); err != nil {
+			return nil, nil, err
+		}
+		out, err := c.ReviewAttempt(ctx, id, workitems.ReviewInput{Reviewer: b.Worker, ManagerSessionID: b.SessionID, Decision: decision, Feedback: feedback, RequestID: requestID})
+		return nil, attemptOutput(out), err
+	}
+	if b.Review.Active() && (b.Manager || b.Worker != nil) {
+		key := sha256.Sum256([]byte(b.Review.AttemptID + "\x00" + b.Review.OperationID))
+		mcp.AddTool(server, &mcp.Tool{Name: "ticket_review", Description: "Record the decision for the assigned review. Accept queues the pinned merge for Git work."}, func(ctx context.Context, _ *mcp.CallToolRequest, in assignedReviewInput) (*mcp.CallToolResult, map[string]any, error) {
+			return review(ctx, b.Review.AttemptID, fmt.Sprintf("assigned-review-%x", key), in.Decision, in.Feedback)
+		})
+		return
+	}
 	if !b.Manager {
 		return
 	}
-	mcp.AddTool(server, &mcp.Tool{Name: "manager_inbox", Description: "Read this workspace Integrator's persistent ticket result inbox. Clearing a conversation does not remove inbox entries.", Annotations: readOnly}, func(ctx context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, library.InboxList, error) {
-		out, err := c.ListInbox(ctx, b.WorkspaceID)
-		return nil, out, err
-	})
-	mcp.AddTool(server, &mcp.Tool{Name: "ticket_review", Description: "Review an attempt as the workspace's reserved Integrator: accept, request_changes (requires feedback), or reject. Git accept durably queues the pinned merge; done is recorded only after Git succeeds."}, func(ctx context.Context, _ *mcp.CallToolRequest, in reviewInput) (*mcp.CallToolResult, map[string]any, error) {
-		if _, err := requireAttempt(ctx, in.ID); err != nil {
-			return nil, nil, err
+	mcp.AddTool(server, &mcp.Tool{Name: "ticket_review", Description: "Review a selected attempt: accept, request_changes (requires feedback), or reject. Git accept queues the reviewed merge; done is recorded after Git succeeds."}, func(ctx context.Context, _ *mcp.CallToolRequest, in reviewInput) (*mcp.CallToolResult, map[string]any, error) {
+		if strings.TrimSpace(in.RequestID) == "" || len(in.RequestID) > 256 {
+			return nil, nil, errors.New("request_id must contain 1 to 256 bytes")
 		}
-		if strings.TrimSpace(in.RequestID) == "" {
-			return nil, nil, errors.New("request_id is required")
-		}
-		out, err := c.ReviewAttempt(ctx, in.ID, workitems.ReviewInput{ManagerSessionID: b.SessionID, Decision: in.Decision, Feedback: in.Feedback, RequestID: in.RequestID})
-		return nil, attemptOutput(out), err
+		// Workers can reuse the ticket's creation key in a review. Limit the
+		// model-provided key to this review operation and attempt.
+		key := sha256.Sum256([]byte(in.ID + "\x00" + in.RequestID))
+		return review(ctx, in.ID, fmt.Sprintf("ticket-review-%x", key), in.Decision, in.Feedback)
 	})
 }

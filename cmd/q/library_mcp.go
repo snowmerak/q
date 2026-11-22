@@ -2,8 +2,11 @@ package main
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"flag"
 	"io"
+	"os"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/snowmerak/q/config"
@@ -11,6 +14,7 @@ import (
 	"github.com/snowmerak/q/internal/librarymcp"
 	"github.com/snowmerak/q/internal/workitemtools"
 	"github.com/snowmerak/q/library"
+	"github.com/snowmerak/q/workitems"
 )
 
 func runLibraryMCP(ctx context.Context, args []string, stderr io.Writer) error {
@@ -21,6 +25,8 @@ func runLibraryMCP(ctx context.Context, args []string, stderr io.Writer) error {
 	workspaceID := flags.String("workspace-id", "", "Host-selected Studio project ID")
 	sessionID := flags.String("session-id", "", "Host-selected Q session ID")
 	manager := flags.Bool("manager", false, "Host-selected project manager binding")
+	reviewAttempt := flags.String("review-attempt", "", "Host-selected attempt for this review turn")
+	reviewOperation := flags.String("review-operation", "", "Host-selected operation for this review turn")
 	connection := flags.String("embedding-connection", "", "Host-owned Gateway connection for semantic queries")
 	if err := flags.Parse(args); err != nil {
 		return err
@@ -58,5 +64,18 @@ func runLibraryMCP(ctx context.Context, args []string, stderr io.Writer) error {
 			return &embeddingbridge.Embedder{Path: *connection, Store: store, Model: value.Embedding.Model, Dimensions: value.Embedding.Dimensions}, value.Embedding.Model, value.Embedding.Dimensions, nil
 		})
 	}
-	return librarymcp.NewServer(client, &workitemtools.Binding{WorkspaceID: *workspaceID, SessionID: *sessionID, Manager: *manager}).Run(ctx, &mcp.StdioTransport{})
+	binding := &workitemtools.Binding{WorkspaceID: *workspaceID, SessionID: *sessionID, Manager: *manager}
+	if raw := os.Getenv("Q_LIBRARY_TICKET_WORKER"); raw != "" {
+		binding.Worker = new(workitems.WorkerBinding)
+		if err := json.Unmarshal([]byte(raw), binding.Worker); err != nil {
+			return err
+		}
+	}
+	if *reviewAttempt != "" || *reviewOperation != "" {
+		binding.Review = workitemtools.ReviewAssignment{AttemptID: *reviewAttempt, OperationID: *reviewOperation}
+		if !binding.Review.Active() || *workspaceID == "" || *sessionID == "" || (!binding.Manager && binding.Worker == nil) {
+			return errors.New("assigned review requires an attempt, operation, project, and reviewer binding")
+		}
+	}
+	return librarymcp.NewServer(client, binding).Run(ctx, &mcp.StdioTransport{})
 }

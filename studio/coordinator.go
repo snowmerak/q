@@ -114,12 +114,28 @@ func (s *sessionsService) serveTicketControl(w http.ResponseWriter, r *http.Requ
 		writeAPIError(w, 400, err)
 		return
 	}
-	if in.Action != "queue" && in.Action != "retry" && in.Action != "cancel" {
-		writeAPIError(w, 400, errors.New("action must be queue, retry, or cancel"))
+	if in.Action != "queue" && in.Action != "retry" && in.Action != "cancel" && in.Action != "handoff" {
+		writeAPIError(w, 400, errors.New("action must be queue, retry, cancel, or handoff"))
 		return
 	}
 	workResponse(s, w, r, 200, func(ctx context.Context, c *library.Client) (workitems.Item, error) {
 		return c.ControlTicket(ctx, r.PathValue("item"), in)
+	})
+}
+func (s *sessionsService) serveTicketChildren(w http.ResponseWriter, r *http.Request) {
+	workResponse(s, w, r, 200, func(ctx context.Context, c *library.Client) (workitems.ItemPage, error) {
+		item, err := c.GetItem(ctx, r.PathValue("item"))
+		if err != nil {
+			return workitems.ItemPage{}, err
+		}
+		if item.ActiveAttemptID == "" {
+			return workitems.ItemPage{Items: []workitems.Item{}}, nil
+		}
+		a, err := c.GetAttempt(ctx, item.ActiveAttemptID)
+		if err != nil {
+			return workitems.ItemPage{}, err
+		}
+		return c.ListChildren(ctx, item.ID, a.WorktreeID)
 	})
 }
 func (s *sessionsService) serveTicketAttempts(w http.ResponseWriter, r *http.Request) {
@@ -162,6 +178,7 @@ func (s *sessionsService) serveTicketReview(w http.ResponseWriter, r *http.Reque
 			return a, err
 		}
 		in.ManagerSessionID = ""
+		in.Reviewer = nil
 		for _, p := range projects.Workspaces {
 			if p.ID == a.WorkspaceID {
 				in.ManagerSessionID = p.ManagerSessionID

@@ -217,7 +217,7 @@ notifications are acknowledged without executing an obsolete review.
 
 `ticket_change_read` resolves the attempt's actual pinned MR. The ordinary
 `change_request_*` tools retain their existing direct-child ownership rules.
-Only the centrally reserved Integrator session may review an attempt; the source also rejects review requests carrying the Coordinator identity. Report
+The centrally reserved Integrator reviews top-level attempts. A live parent worker reviews a child attempt through a reservation scoped to that child. Report
 acceptance marks `done`. Git acceptance durably queues a real pinned merge;
 `done` is committed only after Git succeeds. Dirty parents, moved bases/heads,
 merge/cleanup failures and stale attempts remain visible conflicts. Merge
@@ -226,6 +226,27 @@ exact two-parent merge recovery handles a process stopping after Git commits
 but before the source acknowledgement. Rejecting Git work queues normal
 worktree/MR closure. Feedback is stored as a searchable ticket reply and queues
 another checked assignment to the original member.
+
+From a running Git ticket, a worker can issue another Git ticket with
+`ticket_create`, `as_child: true`, and a stable `request_id`. Set
+`requested_role` to a profile role such as `coder` to narrow the eligible
+members. Decisions chooses among the eligible joined members, and Q records
+the actual member and worker session with the attempt. Commit existing
+parent changes and finish the turn to release its execution slot. Children use the
+parent's worktree as the merge target. Q reopens the parent worker session to review
+each result, then resumes it again to verify and submit the combined work. Studio
+shows the parent, child tickets, and merge target. If a session loses its checkpoint
+or its ACP connection cannot resume it, select a joined member in **Handoff to**
+on the parent ticket to continue in the same worktree.
+
+Approved tickets can share a starting commit. The merge queue takes each reviewed
+head in turn and computes its merge against the current target. Git conflicts
+hold the affected ticket and leave the target checkout clean. Request changes to
+reopen the worker with the conflicting target commit, then review the updated
+diff. Moving-target merges require Git with `merge-tree --write-tree`.
+Repositories with merge commit hooks use the original hook-aware merge path.
+When the target moves in such a repository, update the ticket against the new
+target and review the result before merging.
 
 ## Native and ACP tools
 
@@ -239,7 +260,14 @@ The same workspace source tools are registered for native Q and `q-library` MCP:
 - `issue_create/list/get/reply/update`, `ticket_create/list/get/reply/update`;
 - `post_get/update`, `search_work`, `workspace_members`;
 - `ticket_start/retry/cancel`, `ticket_attempt_list/get`, `ticket_change_read`, `ticket_worker_read`;
-- only the Integrator receives `manager_inbox` and `ticket_review`; the Coordinator has issue/ticket tools without review authority.
+- the Integrator receives `manager_inbox` and `ticket_review`. A parent worker also receives `ticket_review` for its assigned child review turn.
+
+On an assigned review turn, Q supplies the attempt ID and a stable review
+request key. Call `ticket_attempt_get` and `ticket_change_read` with empty
+arguments, `ticket_worker_read` with optional pagination, and `ticket_review`
+with `decision` and optional `feedback`. Feedback is required for
+`request_changes`. On an ordinary Integrator turn, select an attempt
+explicitly and supply the review request key.
 
 The host binds workspace and actor; tool arguments cannot select another write
 scope or impersonate a manager. Explicit global reads do not grant cross-project
@@ -256,9 +284,10 @@ scoped to their project and role.
 Project-specific workflow and role instructions accompany MCP initialization and
 the first ACP prompt. ACP has no separate system-prompt field, so Q prepends these
 instructions once per remote session, retries them after a failed prompt and
-refreshes them when their version changes. A catalog change reconnects foreground
-sessions and restores completed conversation context. Git acceptance authorizes
-Q to merge the pinned commit locally; remote pushes remain separate.
+refreshes them when their version or the current review scope changes. Q
+reopens the tools for a changed review scope and resumes the ACP conversation
+when the connection supports it. Git acceptance authorizes Q to merge the
+pinned commit locally; remote pushes remain separate.
 
 ```text
 q library mcp --config-dir <directory> --workspace-id <id> --session-id <id> [--manager]

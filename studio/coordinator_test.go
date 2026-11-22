@@ -9,6 +9,7 @@ import (
 
 	"github.com/snowmerak/q/app"
 	"github.com/snowmerak/q/config"
+	"github.com/snowmerak/q/internal/workitemtools"
 	"github.com/snowmerak/q/workspace"
 )
 
@@ -24,6 +25,9 @@ func (r *managerDeliveryRunner) Run(context.Context, workspace.Store, string, st
 func (r *managerDeliveryRunner) RunWithOptions(ctx context.Context, _ workspace.Store, id, _ string, options app.SessionOptions, emit app.SessionEventSink) error {
 	if options.OperationID != "review-one" || options.Control == nil {
 		return errors.New("manager operation identity or turn control was lost")
+	}
+	if review := workitemtools.AssignedReview(ctx); review.AttemptID != "assigned-attempt" || review.OperationID != options.OperationID {
+		return errors.New("manager review assignment was lost")
 	}
 	r.calls.Add(1)
 	if err := emit(app.SessionEvent{Type: "question", SessionID: id, CallID: "question-one", Question: "Review this result?"}); err != nil {
@@ -57,7 +61,8 @@ func TestManagerDeliveryUsesMonitoredOperationAndSurvivesClear(t *testing.T) {
 	service := &sessionsService{main: settings, registry: newSessionRegistry(settings.Dir), runs: runs}
 	finished := make(chan error, 1)
 	go func() {
-		finished <- service.deliverManagerOperation(t.Context(), store, "review-one", "Review the worker result")
+		ctx := workitemtools.WithReviewAssignment(t.Context(), workitemtools.ReviewAssignment{AttemptID: "assigned-attempt", OperationID: "review-one"})
+		finished <- service.deliverManagerOperation(ctx, store, "review-one", "Review the worker result")
 	}()
 	select {
 	case <-runner.ready:

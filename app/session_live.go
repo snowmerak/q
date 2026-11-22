@@ -178,7 +178,12 @@ func (host *SessionHost) sessionConfiguration(store workspace.Store, configured 
 	if len(configured) > 0 {
 		stable := configured[0]
 		stable.OperationID = ""
-		values = append(values, stable)
+		if stable.configuresRuntime() {
+			values = append(values, stable)
+		}
+		if stable.review.Active() {
+			values = append(values, stable.review)
+		}
 	}
 	if host.manager != nil {
 		values = append(values, host.manager.Config(), host.manager.Endpoint())

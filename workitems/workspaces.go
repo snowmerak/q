@@ -82,7 +82,7 @@ func (s *Store) initialize(ctx context.Context, dir string) error {
 	if err := s.db.QueryRowContext(ctx, `PRAGMA user_version`).Scan(&version); err != nil {
 		return err
 	}
-	if version < 0 || version > 9 {
+	if version < 0 || version > 10 {
 		return fmt.Errorf("workitems: unsupported catalog schema version %d", version)
 	}
 	_, err := s.db.ExecContext(ctx, `
@@ -118,6 +118,9 @@ CREATE TABLE IF NOT EXISTS catalog_migrations (name TEXT PRIMARY KEY, completed_
 		return err
 	}
 	if err := s.initializeDependencies(ctx); err != nil {
+		return err
+	}
+	if err := s.initializeChildren(ctx); err != nil {
 		return err
 	}
 	var complete int

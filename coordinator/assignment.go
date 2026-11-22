@@ -54,6 +54,9 @@ func SelectMember(ctx context.Context, store systemoneconfig.Store, ticket worki
 		return Candidate{}, err
 	}
 	state := map[string]any{"ticket_id": ticket.ID, "source_revision": ticket.SourceRevision, "title": ticket.Title, "body_excerpt": excerptBytes(body, 6000), "acceptance": excerptBytes(strings.Join(ticket.Acceptance, "\n"), 8000), "execution_mode": ticket.ExecutionMode}
+	if ticket.RequestedRole != "" {
+		state["requested_role"] = ticket.RequestedRole
+	}
 	choose := func(group []Candidate) (*Candidate, error) {
 		criteria := map[string]any{"none": "No candidate is suitable for the requested work."}
 		for _, candidate := range group {
