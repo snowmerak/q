@@ -14,12 +14,13 @@ import (
 )
 
 type studioProfileEntry struct {
-	Profile  subagent.Profile `json:"profile"`
-	Scope    string           `json:"scope"`
-	Path     string           `json:"path"`
-	Revision string           `json:"revision"`
-	Shadowed bool             `json:"shadowed"`
-	Error    string           `json:"error,omitempty"`
+	Profile         subagent.Profile       `json:"profile"`
+	Scope           string                 `json:"scope"`
+	Path            string                 `json:"path"`
+	Revision        string                 `json:"revision"`
+	Shadowed        bool                   `json:"shadowed"`
+	Error           string                 `json:"error,omitempty"`
+	EffectiveTarget *config.SubagentTarget `json:"effective_target,omitempty"`
 }
 
 type profileUpdate struct {
@@ -75,13 +76,17 @@ func (service *integrationService) serveProfiles(writer http.ResponseWriter, req
 		}
 		original = &entry
 	}
-	if input.Profile.EffectiveKind() == subagent.AgentKindExternal {
-		if connection, found := value.Agents.Connections[input.Profile.Agent]; !found || connection.Disabled {
+	if id := input.Profile.ACPConnection(); id != "" {
+		if connection, found := value.Agents.Connections[id]; !found || connection.Disabled {
 			writeAPIError(writer, http.StatusUnprocessableEntity, errors.New("external subagent requires an enabled ACP connection"))
 			return
 		}
-	} else if !value.HasNativeRole(input.Profile.Role) {
+	} else if input.Profile.Target == nil && input.Profile.Role != "" && !value.HasNativeRole(input.Profile.Role) {
 		writeAPIError(writer, http.StatusUnprocessableEntity, errors.New("inner subagent references an unavailable model role"))
+		return
+	}
+	if err := validateSubagentTarget(value, input.Profile.Target); err != nil {
+		writeAPIError(writer, http.StatusUnprocessableEntity, err)
 		return
 	}
 	if err := validateProfileGraph(store, input.Profile, input.Scope, original); err != nil {

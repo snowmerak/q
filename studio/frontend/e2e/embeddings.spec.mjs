@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect } from './test.mjs';
 
 test('pending model changes show the requested model and refresh after application', async ({ page, request }) => {
   const original = await (await request.get('/api/v1/settings')).json();

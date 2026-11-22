@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect } from './test.mjs';
 
 test('browser CLI preferences save, reload and fit narrow screens', async ({ page, request }, testInfo) => {
   const errors = [];

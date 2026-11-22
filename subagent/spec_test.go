@@ -116,6 +116,20 @@ func TestResolveUsesRoleModelAndReasoningEffort(t *testing.T) {
 	if request.Model != "planning-model" || request.ReasoningEffort != "high" {
 		t.Fatalf("request = %#v", request)
 	}
+	value.ModelGroups = map[string]config.ModelGroupConfig{
+		"direct": {Candidates: []config.ModelCandidateConfig{{Model: "planning-model"}}},
+	}
+	definition := AgentDefinition{
+		Info:   DelegateInfo{Name: "builtin/research", Role: config.AgentRoleResearch},
+		Target: &config.SubagentTarget{Model: "group/direct", ReasoningEffort: "low"},
+	}
+	direct, err := ResolveDefinition(value, definition, models)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if direct.Model != "planning-model" || direct.Group != "direct" || direct.ReasoningEffort != "low" {
+		t.Fatalf("direct group target = %#v", direct)
+	}
 }
 
 func TestResolveInheritsActiveModelAndProviderDefaultEffort(t *testing.T) {

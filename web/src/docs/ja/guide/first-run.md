@@ -30,7 +30,7 @@ Studio はループバック URL を表示してブラウザで開きます。�
 
 **Settings → Providers** で Gateway プロバイダーを追加し、endpoint と API キー環境変数を入力します。次に **Settings → Models** で検出されたモデルを **Default** に割り当てます。変更は自動保存されます。
 
-Agent Skill の適合性確認などに独立した typed decision プロバイダーを使う場合だけ、**Settings → System One** を設定します。
+Agent Skill の適合性確認などに独立した typed decision プロバイダーを使う場合だけ、**Settings → Decisions** を設定します。
 
 ## セッションを作成
 

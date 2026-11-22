@@ -3,7 +3,7 @@
 Tickets can delay their first execution or define a repeating task. Configure
 **Schedule execution**, **Available from**, and **Repeat every** in Studio's
 ticket creation/details form. The existing requested-member selection applies to
-scheduled work too; System One still checks suitability before assigning it.
+scheduled work too; Decisions still checks suitability before assigning it.
 
 The start field uses the browser's displayed time zone and is sent as an RFC3339
 instant. An empty repeat interval runs the original ticket once, no earlier than

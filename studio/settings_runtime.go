@@ -128,7 +128,7 @@ func (service *settingsService) serveServiceUpdate(writer http.ResponseWriter, r
 			value.Server = gatewayconfig.ServerConfig{Host: update.Host, Port: update.Port}
 			err = service.gateway.Save(value)
 		}
-	case "system-one":
+	case "decisions", "system-one":
 		var value systemoneconfig.Config
 		value, err = service.systemOne.LoadOrDefault()
 		if err == nil {

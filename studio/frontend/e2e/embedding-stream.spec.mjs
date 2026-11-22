@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect } from './test.mjs';
 import { createServer } from 'node:http';
 
 const archive = (name, scope = 'global') => ({

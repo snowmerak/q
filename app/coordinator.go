@@ -15,13 +15,13 @@ import (
 	"time"
 
 	"github.com/snowmerak/q/archiveembed"
-	"github.com/snowmerak/q/browsercontrol"
 	"github.com/snowmerak/q/change"
 	"github.com/snowmerak/q/client"
 	"github.com/snowmerak/q/config"
 	"github.com/snowmerak/q/coordinator"
 	"github.com/snowmerak/q/gitwork"
 	"github.com/snowmerak/q/internal/fsreplace"
+	"github.com/snowmerak/q/internal/librarymcp"
 	"github.com/snowmerak/q/internal/workitemtools"
 	"github.com/snowmerak/q/library"
 	"github.com/snowmerak/q/mcpconfig"
@@ -101,17 +101,15 @@ func (host *SessionHost) coordinatorCandidates(ctx context.Context, project work
 		if !found {
 			continue
 		}
+		targets, err := (workspace.Store{Root: member.DefinitionRoot}).LoadSubagentTargets()
+		if err != nil {
+			return nil, err
+		}
+		definition = subagent.ExecutionDefinition(value, definition, targets)
 		if item.ExecutionMode == "report" && definition.Info.MutatesWorkspace {
 			continue
 		}
 		var assignment any
-		workspaceModels, err := (workspace.Store{Root: member.DefinitionRoot}).LoadModelConfig()
-		if err != nil {
-			return nil, err
-		}
-		effective := model{conversationState: conversationState{config: value}}
-		effective.workspaceModel = workspaceModels
-		memberConfig := effective.activeConfig()
 		if definition.Info.Kind == subagent.AgentKindExternal {
 			if definition.Connection == "" {
 				id, _, available := value.ExternalAgentConnection(definition.Info.Role)
@@ -125,7 +123,32 @@ func (host *SessionHost) coordinatorCandidates(ctx context.Context, project work
 				continue
 			}
 			assignment = connection
+		} else if definition.Target != nil {
+			memberConfig, err := ticketDefaultConfig(value, member.DefinitionRoot, definition.Target)
+			if err != nil {
+				return nil, err
+			}
+			selected := definition.Target.ModelConfig(memberConfig.Provider.Model)
+			candidates, err := memberConfig.ModelCandidates(definition.Info.Name, selected)
+			if err != nil {
+				continue
+			}
+			provider := memberConfig.Provider
+			provider.Model, provider.ReasoningEffort, provider.ContextWindow = selected.Model, selected.ReasoningEffort, 0
+			modes := make(map[string]string, len(candidates))
+			for _, candidate := range candidates {
+				modes[candidate.Model] = memberConfig.ModelAPIMode(candidate.Model)
+			}
+			assignment = struct {
+				Provider   config.ProviderConfig
+				Candidates []config.ModelCandidateConfig
+				APIModes   map[string]string
+			}{provider, candidates, modes}
 		} else {
+			memberConfig, err := ticketRoleConfig(value, member.DefinitionRoot)
+			if err != nil {
+				return nil, err
+			}
 			role, err := memberConfig.EffectiveAgent(definition.Info.Role)
 			if err != nil {
 				continue
@@ -144,6 +167,31 @@ func (host *SessionHost) coordinatorCandidates(ctx context.Context, project work
 		out = append(out, coordinator.Candidate{Member: member, Definition: definition, Digest: hex.EncodeToString(digest[:])})
 	}
 	return out, ctx.Err()
+}
+
+func ticketRoleConfig(value config.Config, root string) (config.Config, error) {
+	overrides, err := (workspace.Store{Root: root}).LoadModelConfig()
+	if err != nil {
+		return config.Config{}, err
+	}
+	effective := model{conversationState: conversationState{config: value}}
+	effective.workspaceModel = overrides
+	return effective.activeConfig(), nil
+}
+
+func ticketDefaultConfig(value config.Config, root string, target *config.SubagentTarget) (config.Config, error) {
+	if !target.Default {
+		return value, nil
+	}
+	settings, err := (workspace.Store{Root: root}).LoadModelConfig()
+	if err != nil {
+		return config.Config{}, err
+	}
+	if override, found := settings.Overrides["default"]; found {
+		value.Provider.Model = override.Model
+		value.Provider.ContextWindow = 0
+	}
+	return value, nil
 }
 
 func ticketWorkerStore(directory string, a workitems.Attempt) workspace.Store {
@@ -266,14 +314,15 @@ func (host *SessionHost) runNativeTicket(ctx context.Context, c *library.Client,
 	if err != nil {
 		return result, err
 	}
-	workspaceModels, err := (workspace.Store{Root: candidate.Member.DefinitionRoot}).LoadModelConfig()
+	if candidate.Definition.Target == nil {
+		value, err = ticketRoleConfig(value, candidate.Member.DefinitionRoot)
+	} else {
+		value, err = ticketDefaultConfig(value, candidate.Member.DefinitionRoot, candidate.Definition.Target)
+	}
 	if err != nil {
 		return result, err
 	}
-	effective := model{conversationState: conversationState{config: value}}
-	effective.workspaceModel = workspaceModels
-	value = effective.activeConfig()
-	spec, err := subagent.Resolve(value, candidate.Definition.Info.Role, models)
+	spec, err := subagent.ResolveDefinition(value, candidate.Definition, models)
 	if err != nil {
 		return result, err
 	}
@@ -395,8 +444,8 @@ func (host *SessionHost) runACPTicket(ctx context.Context, c *library.Client, wo
 	if err != nil {
 		return result, err
 	}
-	command.mcpServers, err = acpLibraryServers(host.store.Dir, workitemtools.Binding{WorkspaceID: a.WorkspaceID, SessionID: a.WorkerSessionID, EmbeddingConnection: bridgePath})
-	command.browserStore = &host.store
+	binding := &workitemtools.Binding{WorkspaceID: a.WorkspaceID, SessionID: a.WorkerSessionID, EmbeddingConnection: bridgePath}
+	command.mcpServers, err = acpLibraryServers(host.store.Dir, binding)
 	if err != nil {
 		return result, err
 	}
@@ -427,6 +476,7 @@ func (host *SessionHost) runACPTicket(ctx context.Context, c *library.Client, wo
 		return result, err
 	}
 	defer func() { returnErr = errors.Join(returnErr, remote.Close()) }()
+	remote.libraryInstructions = librarymcp.InstructionsFor(binding)
 	remote.permissions = acpPermissionReadOnly
 	if candidate.Definition.Info.MutatesWorkspace {
 		remote.permissions = acpPermissionAutomatic
@@ -434,11 +484,6 @@ func (host *SessionHost) runACPTicket(ctx context.Context, c *library.Client, wo
 	remote.requireCompletedText = true
 	if remote.resumed {
 		remote.lastBrowserPreference = saved.BrowserPreference
-	}
-	// Keep possible active guidance across an unknown prompt outcome. A
-	// successful prompt below records the exact delivered preference.
-	if preference := browsercontrol.Prompt(value.BrowserControl); preference != "" {
-		saved.BrowserPreference = preference
 	}
 	saved.SessionID = string(remote.sessionID)
 	saved.AttemptID = a.ID

@@ -1,9 +1,9 @@
 <script lang="ts">
+  import { uiStorage } from '../uiStorage';
   import { ChevronDown, ChevronUp, Plus, RefreshCw, Trash2 } from '@lucide/svelte';
   import { onMount } from 'svelte';
   import WorkspaceModels from '../WorkspaceModels.svelte';
   import ModelSampling from './ModelSampling.svelte';
-  import { roleLabel } from './format';
   import type { ModelGroup, ModelOption, RoleModelAssignment } from './types';
   import { apiError as responseError } from '../api';
   import { putSettings, writeSettings } from './persistence';
@@ -63,7 +63,6 @@
   let modelsError = '';
   let catalogGeneration = 0;
   let newModelGroupName = '';
-  let newCustomRoleName = '';
   $: if (active && !started) { started = true; void loadModels(); }
 
   async function loadModels() {
@@ -101,7 +100,7 @@
       model: embeddingModel,
       reasoning_effort: '',
       embedding_dimensions: embeddingDimensions,
-      workspace_root: localStorage.getItem('q-studio-workspace-root') || ''
+      workspace_root: uiStorage.getItem('q-studio-workspace-root') || ''
     });
   }
 
@@ -158,20 +157,6 @@
     saveModelGroup(group);
   }
 
-  function addCustomRole() {
-    const role = newCustomRoleName.trim();
-    if (!role) return;
-    newCustomRoleName = '';
-    queueSave(() => writeSettings('POST', '/api/v1/settings/roles', JSON.stringify({ role })));
-  }
-
-  function deleteCustomRole(role: RoleModelAssignment) {
-    if (!window.confirm(`Delete custom role “${role.role}”?`)) return;
-    const root = localStorage.getItem('q-studio-workspace-root') || '';
-    const query = root ? `?workspace_root=${encodeURIComponent(root)}` : '';
-    queueSave(() => writeSettings('DELETE', `/api/v1/settings/roles/${encodeURIComponent(role.role)}${query}`));
-  }
-
   function saveOutputLimit(model: ModelOption) {
     const payload = JSON.stringify({ model: model.id, output_limit: model.output_limit ?? null, output_token_field: model.output_token_field || '', allow_missing_finish_reason: model.allow_missing_finish_reason ?? false });
     queueSave(() => putSettings('/api/v1/settings/model-output-limit', payload));
@@ -217,7 +202,7 @@
   <div id="model-panel-assignments" role="tabpanel" aria-labelledby="model-tab-assignments" tabindex="0" hidden={activeTab !== 'assignments'}>
   <div class="settings-card assignment-list">
     <div class="assignment-row primary-assignment">
-      <div><strong>Default</strong><small>Primary chat model and role fallback</small></div>
+      <div><strong>Default</strong><small>Primary model for chats and profiles using the default</small></div>
       <label><span>Model</span><select bind:value={settings.models.default_model} onchange={saveDefaultModel} disabled={modelsLoading}>
         {#if !settings.models.default_model}<option value="" disabled>Choose a default model</option>{/if}
         {#if settings.models.default_model && !modelOptions.some((model) => model.id === settings?.models.default_model)}<option value={settings.models.default_model}>{settings.models.default_model}</option>{/if}
@@ -226,7 +211,7 @@
       <label><span>Reasoning</span><select bind:value={settings.models.default_reasoning_effort} onchange={saveDefaultModel}><option value="">Provider default</option>{#each reasoningOptions(settings.models.default_model, settings.models.default_reasoning_effort) as effort}<option value={effort}>{effort}</option>{/each}</select></label>
     </div>
     <div class="assignment-row primary-assignment">
-      <div><strong>Embedding</strong><small>Semantic indexes and skill search</small></div>
+      <div><strong>Embeddings</strong><small>Semantic indexes and skill search</small></div>
       <label><span>Model</span><select bind:value={embeddingModel} onchange={saveEmbeddingModel} disabled={modelsLoading}>
         <option value="">Disabled</option>
         {#if embeddingModel && !modelOptions.some((model) => model.id === embeddingModel)}<option value={embeddingModel}>{embeddingModel}</option>{/if}
@@ -242,9 +227,9 @@
         Currently configured: {settings.models.embedding_model || 'Disabled'}{settings.models.embedding_model ? ` · ${settings.models.embedding_dimensions} dimensions` : ''}.
       </p>
     {/if}
-    {#each settings.models.roles as role}
+    {#each settings.models.roles.filter(role => role.role === 'commit') as role}
       <div class="assignment-row">
-        <div class="assignment-role"><span><strong>{roleLabel(role.role)}</strong><small>{role.inherited ? `Inherits ${role.effective_model}` : role.role}</small></span>{#if role.custom}<button class="danger-icon" title="Delete custom role" onclick={() => deleteCustomRole(role)}><Trash2 aria-hidden="true" size={14} /></button>{/if}</div>
+        <div class="assignment-role"><span><strong>Commit</strong><small>{role.inherited ? `Inherits ${role.effective_model}` : 'Commit message proposals'}</small></span></div>
         <label><span>Model</span><select bind:value={role.configured_model} onchange={() => saveRoleModel(role)} disabled={modelsLoading}>
           <option value="">Inherit</option>
           {#if role.configured_model && !modelOptions.some((model) => model.id === role.configured_model)}<option value={role.configured_model}>{role.configured_model}</option>{/if}
@@ -256,9 +241,6 @@
   </div>
 
   {#if started}<WorkspaceModels models={modelOptions} />{/if}
-
-  <div class="subsection-heading"><div><h3>Custom roles</h3><p>Create a reusable model role for subagents.</p></div></div>
-  <div class="settings-card inline-create"><label><span>Role name</span><input placeholder="security-reviewer" bind:value={newCustomRoleName} onkeydown={(event) => event.key === 'Enter' && addCustomRole()} /></label><button class="primary-button" onclick={addCustomRole} disabled={!newCustomRoleName.trim()}><Plus aria-hidden="true" size={15} /> Add role</button></div>
 
   </div>
   <div id="model-panel-fallback" role="tabpanel" aria-labelledby="model-tab-fallback" tabindex="0" hidden={activeTab !== 'fallback'}>

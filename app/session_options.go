@@ -43,6 +43,16 @@ type SessionOptions struct {
 	OperationID string `json:"-"`
 }
 
+// configuresRuntime excludes turn controls, which must preserve the session's
+// selected native model or ACP connection.
+func (options SessionOptions) configuresRuntime() bool {
+	return options.Type != "" || options.Model != "" || options.Agent != "" ||
+		options.ReasoningEffort != "" || options.AnthropicPromptCache != "" ||
+		options.SystemPrompt != "" || options.WorkingDirectory != "" || options.AuxiliaryDirectories != nil ||
+		options.DisableLearning || options.DisableExternalMCP || options.RuntimeKey != "" ||
+		options.RuntimeFactory != nil || options.WrapRuntime != nil || options.AllowedTools != nil
+}
+
 func (m model) startSessionOperation(prompt, id string) (tea.Model, tea.Cmd) {
 	if id == "" {
 		m.sessionOperation = nil

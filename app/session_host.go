@@ -433,6 +433,9 @@ func (host *SessionHost) run(
 	if len(configured) > 0 {
 		options = configured[0]
 	}
+	if !options.configuresRuntime() {
+		configured = nil
+	}
 	session, err := host.acquireLiveSession(workspaceStore, sessionID, configured...)
 	if err != nil {
 		return err

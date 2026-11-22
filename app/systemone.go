@@ -10,6 +10,7 @@ import (
 
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
+	"github.com/snowmerak/decisions"
 	"github.com/snowmerak/q/client/systemone"
 	"github.com/snowmerak/q/config"
 	"github.com/snowmerak/q/systemoneconfig"
@@ -36,16 +37,19 @@ const (
 	systemOneFieldProviderID = iota
 	systemOneFieldURI
 	systemOneFieldKeyEnv
+	systemOneFieldAPI
+	systemOneFieldModelFilterRegex
 	systemOneFieldDefaultModel
 	systemOneFieldAgentSkillModel
 	systemOneFieldArchiveModel
 	systemOneFieldHost
 	systemOneFieldPort
+	systemOneFieldCount
 )
 
 func (m *model) initSystemOne(dir string) {
 	m.systemOneStore = systemoneconfig.Store{Dir: dir}
-	for index, prompt := range []string{"Provider ID", "URI", "API key environment variable", "Default model", "Agent Skill Decision model", "Archive Decision model", "Listen host", "Listen port"} {
+	for index, prompt := range []string{"Provider ID", "URI", "API key environment variable", "systemone, decision, or gemini", "All models · Go regex", "Default model", "Agent Skill Decision model", "Archive Decision model", "Listen host", "Listen port"} {
 		field := textinput.New()
 		field.Prompt = ""
 		field.Placeholder = prompt
@@ -104,7 +108,7 @@ func (m model) enterSystemOne() (tea.Model, tea.Cmd) {
 func (m *model) loadSystemOneFields() {
 	provider := m.systemOneConfig.Providers[m.systemOneProvider]
 	for index, value := range []string{
-		provider.ID, provider.URI, provider.APIKeyEnv,
+		provider.ID, provider.URI, provider.APIKeyEnv, string(provider.API), provider.ModelFilterRegex,
 		m.systemOneConfig.DefaultModel, m.systemOneConfig.RoleModels[systemoneconfig.RoleAgentSkillDecision],
 		m.systemOneConfig.RoleModels[systemoneconfig.RoleArchiveDecision],
 		m.systemOneConfig.Server.Host, strconv.Itoa(m.systemOneConfig.Server.Port),
@@ -393,7 +397,7 @@ func (m model) updateSystemOneKeys(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m model) updateSystemOneEditor(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
-	first, last := systemOneFieldProviderID, systemOneFieldKeyEnv
+	first, last := systemOneFieldProviderID, systemOneFieldModelFilterRegex
 	if m.systemOnePage == systemOnePageNetwork {
 		first, last = systemOneFieldHost, systemOneFieldPort
 	}
@@ -449,7 +453,7 @@ func (m model) updateSystemOneInput(message tea.Msg) (tea.Model, tea.Cmd) {
 		m.systemOneKeyAlias, command = m.systemOneKeyAlias.Update(message)
 		return m, command
 	}
-	first, last := systemOneFieldProviderID, systemOneFieldKeyEnv
+	first, last := systemOneFieldProviderID, systemOneFieldModelFilterRegex
 	if m.systemOnePage == systemOnePageNetwork {
 		first, last = systemOneFieldHost, systemOneFieldPort
 	}
@@ -467,9 +471,11 @@ func (m model) updateSystemOneInput(message tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m model) systemOneProviderDraft() systemoneconfig.ProviderConfig {
 	return systemoneconfig.ProviderConfig{
-		ID:        strings.TrimSpace(m.systemOneInputs[systemOneFieldProviderID].Value()),
-		URI:       strings.TrimSpace(m.systemOneInputs[systemOneFieldURI].Value()),
-		APIKeyEnv: strings.TrimSpace(m.systemOneInputs[systemOneFieldKeyEnv].Value()),
+		ID:               strings.TrimSpace(m.systemOneInputs[systemOneFieldProviderID].Value()),
+		API:              decisions.API(strings.TrimSpace(m.systemOneInputs[systemOneFieldAPI].Value())),
+		URI:              strings.TrimSpace(m.systemOneInputs[systemOneFieldURI].Value()),
+		APIKeyEnv:        strings.TrimSpace(m.systemOneInputs[systemOneFieldKeyEnv].Value()),
+		ModelFilterRegex: m.systemOneInputs[systemOneFieldModelFilterRegex].Value(),
 	}
 }
 
@@ -491,7 +497,7 @@ func (m model) loadSystemOneModels() (tea.Model, tea.Cmd) {
 	m.systemOneModelTarget = m.systemOneFocus
 	m.systemOneLoading = true
 	m.systemOneModels = nil
-	m.status = "Loading models from System One providers…"
+	m.status = "Loading models from Decisions providers…"
 	m.focusSystemOne()
 	return m, func() tea.Msg {
 		defer cancel()
@@ -527,11 +533,11 @@ func (m model) receiveSystemOneModels(message systemOneModelsMsg) (tea.Model, te
 	m.systemOneLoading = false
 	m.systemOneCancel = nil
 	if message.err != nil {
-		m.status = "Load System One models: " + message.err.Error()
+		m.status = "Load Decisions models: " + message.err.Error()
 		return m, m.focusSystemOne()
 	}
 	if len(message.models) == 0 {
-		m.status = "No models returned by the configured System One providers"
+		m.status = "No models returned by the configured Decisions providers"
 		return m, m.focusSystemOne()
 	}
 	if m.systemOneModelTarget == systemOneFieldAgentSkillModel || m.systemOneModelTarget == systemOneFieldArchiveModel {
@@ -600,13 +606,13 @@ func (m *model) persistSystemOne() bool {
 		return false
 	}
 	m.systemOnePending = false
-	m.status = "System One settings saved"
+	m.status = "Decisions settings saved"
 	return true
 }
 
 func (m model) viewSystemOne() string {
 	var body strings.Builder
-	body.WriteString(titleStyle.Render("q · System One"))
+	body.WriteString(titleStyle.Render("q · Decisions"))
 	body.WriteString("\n")
 	body.WriteString(subtleStyle.Render("settings · " + m.systemOneStore.Path()))
 	body.WriteString("\n\n")
@@ -677,7 +683,7 @@ func (m model) viewSystemOneKeys() string {
 	var body strings.Builder
 	body.WriteString(agentTraceTitleStyle(m.dark).Render("API KEYS"))
 	body.WriteString("\n")
-	body.WriteString(subtleStyle.Render("These keys authenticate `q systemone start`; without active keys, authentication is disabled."))
+	body.WriteString(subtleStyle.Render("These keys authenticate clients of q decisions start. The server accepts unauthenticated requests when there are no active keys."))
 	body.WriteString("\n")
 	if m.generatedSystemOneKey != "" {
 		body.WriteString("\n")
@@ -733,8 +739,8 @@ func (m model) systemOneKeyRow(index int, alias, id, state string) string {
 
 func (m model) viewSystemOneEditor() string {
 	var body strings.Builder
-	first, last := systemOneFieldProviderID, systemOneFieldKeyEnv
-	labels := []string{"Provider ID", "Endpoint URI", "API key env"}
+	first, last := systemOneFieldProviderID, systemOneFieldModelFilterRegex
+	labels := []string{"Provider ID", "Endpoint URI", "API key env", "Provider protocol", "Model filter regex"}
 	if m.systemOnePage == systemOnePageNetwork {
 		first, last = systemOneFieldHost, systemOneFieldPort
 		labels = []string{"Listen host", "Listen port"}
@@ -765,7 +771,7 @@ func (m model) viewSystemOneEditor() string {
 		body.WriteString(subtleStyle.Render("Using " + m.systemOneInputs[systemOneFieldKeyEnv].Value() + " for upstream authentication."))
 	} else {
 		body.WriteString("\n")
-		body.WriteString(subtleStyle.Render("No environment key is set; upstream requests omit Authorization."))
+		body.WriteString(subtleStyle.Render("No environment key is set for upstream authentication."))
 	}
 	return body.String()
 }
@@ -796,13 +802,13 @@ func (m model) viewSystemOneModels() string {
 	return body.String()
 }
 
-// RunSystemOne opens System One settings without starting chat or Gateway.
+// RunSystemOne opens Decisions settings without starting chat or Gateway.
 func RunSystemOne(ctx context.Context, store config.Store) error {
 	m := newModel(ctx, store, nil)
 	updated, _ := m.enterSystemOne()
 	m = updated.(model)
 	if m.screen != screenSystemOne {
-		return fmt.Errorf("q systemone: %s", m.status)
+		return fmt.Errorf("q decisions: %s", m.status)
 	}
 	_, err := runStandalone(m, screenSystemOne)
 	return err

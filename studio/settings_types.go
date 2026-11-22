@@ -116,9 +116,11 @@ type systemOneAPISettings struct {
 }
 
 type systemOneProviderSettings struct {
-	ID        string `json:"id"`
-	URI       string `json:"uri"`
-	APIKeyEnv string `json:"api_key_env"`
+	ID               string `json:"id"`
+	URI              string `json:"uri"`
+	APIKeyEnv        string `json:"api_key_env"`
+	API              string `json:"api,omitempty"`
+	ModelFilterRegex string `json:"model_filter_regex"`
 }
 
 type serviceAPIKeySettings struct {
@@ -211,9 +213,11 @@ type gatewayProviderUpdate struct {
 }
 
 type systemOneProviderUpdate struct {
-	ID        string `json:"id"`
-	URI       string `json:"uri"`
-	APIKeyEnv string `json:"api_key_env,omitempty"`
+	ID               string  `json:"id"`
+	URI              string  `json:"uri"`
+	APIKeyEnv        string  `json:"api_key_env,omitempty"`
+	API              *string `json:"api,omitempty"`
+	ModelFilterRegex *string `json:"model_filter_regex,omitempty"`
 }
 
 type systemOneModelUpdate struct {

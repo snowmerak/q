@@ -23,9 +23,9 @@
       <ul class="recovery-list">
         <li><strong>Develop an idea</strong><span>In Sessions, choose New session, then New Composer and select a model. Explore your idea through questions and discussion, refine diagrams and HTML previews, and reopen the session to continue. Use New Council to compare ideas with multiple participants.</span></li>
         <li><strong>Start and guide work</strong><span>In Sessions, add a root session by directory or project workspace. Choose a saved session or create one. Send a prompt; while a turn is active, the same composer sends guidance. Pause, resume, cancel, and answer questions using the session controls.</span></li>
-        <li><strong>Assign work with tickets</strong><span>Join subagents in Projects, then issue a ticket. System One assigns an enabled member; execution and Integrator review complete asynchronously. Native and ACP sessions can use workspace_members and ticket_create. Previous direct-delegation sessions remain available as read-only history.</span></li>
+        <li><strong>Assign work with tickets</strong><span>Join subagents in Projects, then issue a ticket. Decisions assigns an enabled member; execution and Integrator review complete asynchronously. Native and ACP sessions can use workspace_members and ticket_create. Previous direct-delegation sessions remain available as read-only history.</span></li>
         <li><strong>Manage projects</strong><span>Projects groups workspace directories, joined Q and ACP subagents, and execution limits. Default subagents preselect members for new projects. Existing projects keep their own membership. Set a limit to 0 to inherit the global runtime limit. ACP agents control their own internal subagents.</span></li>
-        <li><strong>Configure Q</strong><span>Settings covers global/workspace models, providers, System One, runtime, services, integrations, and subagents. Edits save automatically. Operations shows usage, workers, local services, logs, and retention.</span></li>
+        <li><strong>Configure Q</strong><span>Settings covers global/workspace models, providers, Decisions, runtime, services, integrations, and subagents. Edits save automatically. Operations shows usage, workers, local services, logs, and retention.</span></li>
       </ul>
     </article>
 

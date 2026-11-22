@@ -146,13 +146,18 @@ func (m model) deleteAgentConnection() (tea.Model, tea.Cmd) {
 	}
 	id := ids[min(m.agentsCursor[1], len(ids)-1)]
 	var references []string
+	for name, target := range m.agentsDraft.Agents.SubagentTargets {
+		if target.Agent == id {
+			references = append(references, name)
+		}
+	}
 	for _, definition := range subagent.ExternalAgentDefinitions() {
 		if m.agentsDraft.Agents.Roles[definition.Info.Role].Agent == id {
 			references = append(references, definition.Info.Name)
 		}
 	}
 	for _, entry := range m.customStore().List() {
-		if entry.Err == nil && entry.Profile.EffectiveKind() == subagent.AgentKindExternal && entry.Profile.Agent == id {
+		if entry.Err == nil && entry.Profile.ACPConnection() == id {
 			references = append(references, subagent.CanonicalProfileID(entry.Scope, entry.Profile.Name))
 		}
 	}

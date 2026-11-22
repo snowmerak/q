@@ -15,6 +15,7 @@ import (
 	qlsp "github.com/snowmerak/q/lsp"
 	"github.com/snowmerak/q/mcpconfig"
 	"github.com/snowmerak/q/subagent"
+	"github.com/snowmerak/q/workspace"
 )
 
 func TestIntegrationAPIMCPAndLSPRoundTrip(t *testing.T) {
@@ -240,6 +241,52 @@ func TestIntegrationAPIAgentConnectionsAndProfiles(t *testing.T) {
 	if response.Code != http.StatusOK {
 		t.Fatalf("DELETE profile = %d %s", response.Code, response.Body.String())
 	}
+}
+
+func TestSubagentTargetPreservesLegacyReasoningAndWorkspaceScope(t *testing.T) {
+	store := config.Store{Dir: t.TempDir()}
+	value := configuredIntegrationTestConfig()
+	value.Agents.Roles = map[string]config.AgentConfig{
+		config.AgentRoleCoder: {Model: "global-model", ReasoningEffort: "xhigh"},
+	}
+	if err := store.Save(value); err != nil {
+		t.Fatal(err)
+	}
+	root := t.TempDir()
+	if err := (workspace.Store{Root: root}).SaveModelConfig(workspace.ModelConfig{
+		Overrides: map[string]workspace.ModelOverride{config.AgentRoleCoder: {Model: "workspace-model"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	handler, err := newHandler(store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	check := func(response *httptest.ResponseRecorder, want config.SubagentTarget) {
+		t.Helper()
+		if response.Code != http.StatusOK {
+			t.Fatalf("subagent settings = %d %s", response.Code, response.Body.String())
+		}
+		var snapshot agentSettingsResponse
+		if err := json.Unmarshal(response.Body.Bytes(), &snapshot); err != nil {
+			t.Fatal(err)
+		}
+		for _, builtin := range snapshot.Builtins {
+			if builtin.Name == subagent.BuiltinJuniorDeveloperID && builtin.Target != nil && *builtin.Target == want {
+				return
+			}
+		}
+		t.Fatalf("junior developer target did not match %+v", want)
+	}
+	endpoint := "/api/v1/settings/subagents"
+	check(serveJSON(t, handler, http.MethodGet, endpoint, nil), config.SubagentTarget{Model: "global-model", ReasoningEffort: "xhigh"})
+	check(serveJSON(t, handler, http.MethodGet, endpoint+"?workspace_root="+url.QueryEscape(root), nil),
+		config.SubagentTarget{Model: "workspace-model", ReasoningEffort: "xhigh"})
+	selected := config.SubagentTarget{Default: true, ReasoningEffort: "high"}
+	check(serveJSON(t, handler, http.MethodPut, endpoint+"/target", subagentTargetUpdate{
+		WorkspaceRoot: root, Scope: "workspace", ID: subagent.BuiltinJuniorDeveloperID, Target: &selected,
+	}), selected)
+	check(serveJSON(t, handler, http.MethodGet, endpoint, nil), config.SubagentTarget{Model: "global-model", ReasoningEffort: "xhigh"})
 }
 
 func TestIntegrationAPISubagentsSupportsGlobalProfilesWithoutWorkspace(t *testing.T) {

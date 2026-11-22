@@ -81,7 +81,7 @@ func TestBundledSkillUpdatesThroughRunningLibraryWithoutChangingID(t *testing.T)
 		t.Fatal(err)
 	}
 	updated := bundledskills.CDP()
-	updated.Version = "20261107143548.0002"
+	updated.Version = "20261107143548.0003"
 	updated.Files["SKILL.md"] += "\nChanged bundled browser guidance.\n"
 	updated.Files["references/javascript.md"] += "\nChanged reference.\n"
 	var manifest skillbundle.Manifest
@@ -124,7 +124,7 @@ func TestBundledSkillUpdatesThroughRunningLibraryWithoutChangingID(t *testing.T)
 		t.Fatal("user skill was modified")
 	}
 	invalid := bundledskills.CDP()
-	invalid.Version = "20261107143548.0003"
+	invalid.Version = "20261107143548.0004"
 	invalid.Files["../../outside"] = "bad"
 	if err := c.doJSON(t.Context(), "PUT", "/skills/bundled/cdp", invalid, &manifest); err == nil {
 		t.Fatal("path escape accepted")

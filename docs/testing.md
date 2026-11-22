@@ -7,6 +7,23 @@ root Go module, both nested ACP modules, generated ACP binding checks, and the
 Studio Svelte/TypeScript check. Browser tests are opt-in and are not silently
 counted as passing when Chromium is missing.
 
+The native shell is an isolated module. Run `task desktop:check` for its tests
+and vet; see [desktop verification](studio-desktop.md#verification) for checks
+against the assembled engine. The root suite covers the shared HTTP runtime.
+The `Q Studio desktop release` workflow builds installation artifacts
+on Windows, macOS and Linux for both amd64 and arm64. macOS ARM64 cross-builds
+with Apple's SDK on Intel macOS and verifies architecture plus cross-target vet;
+the other five targets test their assembled engines on matching hardware.
+Numeric `v<version>` tag pushes publish the complete artifact set to a
+GitHub Release only after all builds succeed; manual runs can build without
+publishing. A successful package build does not replace a platform UI/login test.
+
+UI-state regression tests cover file persistence across server restarts and
+ports, concurrent partial updates and legacy migration without resurrecting
+cleared drafts. Browser checks in `ui-state.spec.mjs` use two real HTTP origins
+and also exercise blocked localStorage and save retries. The shared browser
+fixture resets only its isolated UI-state file between tests.
+
 Focused integration and regression checks:
 
 ```powershell

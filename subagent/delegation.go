@@ -62,6 +62,38 @@ type AgentDefinition struct {
 	Tools        []string
 	Delegates    []string
 	StrictTools  bool
+	Target       *config.SubagentTarget `json:",omitempty"`
+}
+
+// ExecutionDefinition applies an execution choice without editing the profile's grants.
+func ExecutionDefinition(value config.Config, definition AgentDefinition, workspaceTargets map[string]config.SubagentTarget) AgentDefinition {
+	if target, exists := workspaceTargets[definition.Info.Name]; exists && definition.Info.Kind == AgentKindInner {
+		definition.Target = &target
+		return applyExecutionTarget(definition)
+	}
+	if definition.Info.Source == "builtin" {
+		if definition.Info.Kind == AgentKindExternal {
+			definition.Connection = value.Agents.Roles[definition.Info.Role].Agent
+		} else if target, exists := value.Agents.SubagentTargets[definition.Info.Name]; exists {
+			definition.Target = &target
+		}
+	}
+	return applyExecutionTarget(definition)
+}
+
+func applyExecutionTarget(definition AgentDefinition) AgentDefinition {
+	if definition.Target == nil {
+		return definition
+	}
+	if definition.Target.Agent != "" {
+		definition.Info.Kind = AgentKindExternal
+		definition.Connection = definition.Target.Agent
+		definition.Tools, definition.Delegates = nil, nil
+	} else {
+		definition.Info.Kind = AgentKindInner
+		definition.Connection = ""
+	}
+	return definition
 }
 
 type Registry struct {
@@ -344,13 +376,21 @@ func DefinitionForProfile(entry ProfileEntry) (AgentDefinition, error) {
 	if id == "" {
 		return AgentDefinition{}, fmt.Errorf("subagent: invalid profile identity %s/%s", entry.Scope, entry.Profile.Name)
 	}
+	role, target := entry.Profile.Role, entry.Profile.Target
+	if entry.Profile.EffectiveKind() == AgentKindInner && role == "" {
+		role = config.AgentRoleResearch
+		if target == nil {
+			target = &config.SubagentTarget{Default: true}
+		}
+	}
 	return AgentDefinition{
 		Info: DelegateInfo{
-			Name: id, Description: entry.Profile.Description, Source: entry.Scope, Kind: entry.Profile.EffectiveKind(), Role: entry.Profile.Role,
+			Name: id, Description: entry.Profile.Description, Source: entry.Scope, Kind: entry.Profile.EffectiveKind(), Role: role,
 			MutatesWorkspace: entry.Profile.MutatesWorkspace || profileMayMutate(entry.Profile.Tools),
 		},
 		SystemPrompt: entry.Profile.SystemPrompt,
 		Connection:   entry.Profile.Agent,
+		Target:       target,
 		Tools:        withoutRetiredSearchTools(entry.Profile.Tools), Delegates: append([]string(nil), entry.Profile.Delegates...),
 		StrictTools: true,
 	}, nil

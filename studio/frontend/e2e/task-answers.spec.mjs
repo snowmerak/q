@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect } from './test.mjs';
 
 for (const placement of ['before', 'alongside', 'after']) {
   test(`task answer ${placement} completion stays visible once after reconnect`, async ({ page, request }, testInfo) => {

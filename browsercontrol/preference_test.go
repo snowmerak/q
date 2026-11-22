@@ -53,6 +53,13 @@ func TestPromptAndExecutableResolution(t *testing.T) {
 	if !strings.Contains(Prompt(value), "A skill is optional") {
 		t.Fatal("preference requires a skill")
 	}
+	if !strings.Contains(Prompt(value), "Look up q-cdp") {
+		t.Fatal("built-in browser preference lacks its skill name")
+	}
+	value.Preferred = "ego-browser"
+	if prompt := Prompt(value); strings.Contains(prompt, "Look up q-cdp") || !strings.Contains(prompt, "Look up ego-browser") {
+		t.Fatalf("Ego Browser preference suggested the wrong skill: %s", prompt)
+	}
 	if Inspect("missing", config.BrowserCLI{Command: "q-missing-browser-executable-12345"}).Available {
 		t.Fatal("missing command reported available")
 	}

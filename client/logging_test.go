@@ -85,6 +85,9 @@ func TestModelCallLogsActualModelAndUsageAtInfo(t *testing.T) {
 			if last["response_model"] != "resolved/model" || last["usage_reported"] != true || last["prompt_tokens"] != float64(10) || last["completion_tokens"] != float64(2) || last["total_tokens"] != float64(12) || last["level"] != "INFO" {
 				t.Fatalf("reported usage = %+v", last)
 			}
+			if last["cached_tokens"] != nil || last["cache_hit_rate"] != nil {
+				t.Fatalf("unreported cache usage was logged: %+v", last)
+			}
 		})
 	}
 }
@@ -98,11 +101,11 @@ func TestModelStreamLogsCompletionAfterEOFForBothAPIs(t *testing.T) {
 				if mode == "responses" {
 					_, _ = io.WriteString(writer, "event: response.reasoning_summary_text.delta\ndata: "+`{"type":"response.reasoning_summary_text.delta","delta":"private-reasoning"}`+"\n\n")
 					_, _ = io.WriteString(writer, "event: response.output_text.delta\ndata: "+`{"type":"response.output_text.delta","delta":"private-response"}`+"\n\n")
-					_, _ = io.WriteString(writer, "event: response.completed\ndata: "+`{"type":"response.completed","response":{"id":"resp_1","model":"resolved/model","status":"completed","output":[{"type":"message","content":[{"type":"output_text","text":"private-response"}]}],"usage":{"input_tokens":10,"output_tokens":2,"total_tokens":12}}}`+"\n\n")
+					_, _ = io.WriteString(writer, "event: response.completed\ndata: "+`{"type":"response.completed","response":{"id":"resp_1","model":"resolved/model","status":"completed","output":[{"type":"message","content":[{"type":"output_text","text":"private-response"}]}],"usage":{"input_tokens":10,"output_tokens":2,"input_tokens_details":{"cached_tokens":0}}}}`+"\n\n")
 				} else {
 					_, _ = io.WriteString(writer, "data: "+`{"choices":[{"index":0,"delta":{"role":"assistant"}}]}`+"\n\n")
 					_, _ = io.WriteString(writer, "data: "+`{"choices":[{"index":0,"delta":{"reasoning_content":"private-reasoning"}}]}`+"\n\n")
-					_, _ = io.WriteString(writer, "data: "+`{"model":"resolved/model","choices":[{"index":0,"delta":{"content":"private-response"},"finish_reason":"stop"}],"usage":{"prompt_tokens":10,"completion_tokens":2,"total_tokens":12}}`+"\n\ndata: [DONE]\n\n")
+					_, _ = io.WriteString(writer, "data: "+`{"model":"resolved/model","choices":[{"index":0,"delta":{"content":"private-response"},"finish_reason":"stop"}],"usage":{"prompt_tokens":10,"completion_tokens":2,"total_tokens":12,"prompt_tokens_details":{"cached_tokens":8}}}`+"\n\ndata: [DONE]\n\n")
 				}
 			}))
 			defer server.Close()
@@ -152,6 +155,17 @@ func TestModelStreamLogsCompletionAfterEOFForBothAPIs(t *testing.T) {
 				t.Fatalf("observed calls = %+v", timings)
 			}
 			timing := timings[0]
+			wantCached := 8
+			if mode == "responses" {
+				wantCached = 0
+			}
+			if timing.InputTokens == nil || *timing.InputTokens != 10 || timing.TotalTokens == nil || *timing.TotalTokens != 12 ||
+				timing.CachedTokens == nil || *timing.CachedTokens != wantCached || timing.CacheHitRate == nil || *timing.CacheHitRate != float64(wantCached)/10 {
+				t.Fatalf("incomplete token usage: %+v", timing)
+			}
+			if last := records[1]; last["cached_tokens"] != float64(wantCached) || last["cache_hit_rate"] != *timing.CacheHitRate {
+				t.Fatalf("log differs from observed cache usage: %+v", last)
+			}
 			if timing.TTFTMS == nil || timing.AfterFirstMS == nil || timing.MaxOutputGapMS == nil || timing.OutputTokensPerSec == nil {
 				t.Fatalf("incomplete stream timing = %+v", timing)
 			}

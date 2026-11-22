@@ -137,11 +137,44 @@ created. Open **Sessions**, choose a repository, then register an existing root
 session or create a new one. Registered roots and their delegated sessions appear
 in one global tree.
 
+### Q Studio desktop app
+
+Q Studio also runs as a native desktop app with the same interface, settings,
+workspaces, and background ticket scheduler. Its installer bundles a matching
+`q-engine` executable. The existing Go installation above remains a web server and does
+not acquire desktop build dependencies.
+
+```powershell
+task desktop:build    # paired executables and portable archive
+task desktop:package  # Wails: Windows EXE, macOS DMG, Linux DEB and RPM
+```
+
+The app's **Q Studio** menu and tray menu offer **Keep running when window
+closes**, **Start at login**, and **Start hidden at login**. Closing the window
+keeps background work running by default. Use **Quit Q Studio** to stop the app
+and its owned engine. Login startup is off until enabled; hidden login startup
+is on by default. This starts after user login and supports existing background
+ticket schedules. It does not run before login or while the computer sleeps.
+
+The app and `q studio` reuse a compatible user-level Studio. An app attached to
+a CLI-owned engine leaves it running on quit. See the [desktop guide](docs/studio-desktop.md)
+for installation, prerequisites, runtime ownership, and platform validation.
+Pushing a numeric `v<major>.<minor>.<patch>` tag runs all six platform builds and
+attaches the installers, portable ZIPs and SHA256 checksums to its GitHub Release.
+The [release workflow](.github/workflows/studio-desktop.yml) also supports manual
+builds without publishing.
+
 The bare `q` command remains a compatibility terminal client. Former standalone
-configuration commands such as `q model`, `q gateway`, `q systemone`, `q skills`,
-and `q help` now open their corresponding Studio surface. `q studio` also starts
-the standalone Gateway listener using the saved Gateway address and providers.
-`q gateway start`, `q systemone start`, and
+configuration commands such as `q model`, `q gateway`, `q decisions`, `q skills`,
+and `q help` now open their corresponding Studio surface. Studio starts the Gateway
+and Decisions listeners using their saved addresses and providers, reloads their
+saved settings, and stops both listeners when the owning engine shuts down.
+
+Studio saves appearance, sidebar state, the last workspace and unsent session
+drafts in `~/.q/studio/ui-state.json`. These preferences are shared by the app
+and browsers and survive port changes. Browser storage is a cache; readable
+legacy values migrate without overwriting existing profile preferences.
+`q gateway start`, `q decisions start`, and
 `q library start` still run foreground services independently of Studio.
 
 ## Embed the Agent Loop in Go
@@ -313,7 +346,7 @@ help entry points.
 | `/clear` | Clear the current conversation projection. |
 | `/compact` | Summarize older model context without deleting the transcript (TUI and ACP). |
 | `/model` | Assign models, manage native roles, and configure fallback groups. |
-| `/systemone` | Configure System One providers, models, and its standalone server. |
+| `/decisions` | Configure Decisions providers, models, and its standalone server. |
 | `/gateway` | Configure Gateway providers, listener settings, and API keys. |
 | `/library` | Configure the global Library listener. |
 | `/loom` | Inspect Loom usage and configure or run garbage collection. |
@@ -331,7 +364,7 @@ Escape closes the completion popup.
 To assign work to an external subagent, bind its profile to an enabled ACP
 connection in `/subagents`, join it to the Studio project, and issue a ticket.
 `workspace_members` lists joined candidates; `ticket_create` queues the work
-for asynchronous System One assignment and execution.
+for asynchronous Decisions assignment and execution.
 
 Web Tester invocations run in an isolated ACP process/session with a fixed
 15-minute deadline. q automatically selects `allow_once`, falling back to an
@@ -471,7 +504,7 @@ only when automation requires it.
 The default chat loop keeps its workspace tools. To request another subagent,
 use `workspace_members` to inspect joined profiles and `ticket_create` to issue
 a ticket with scope, acceptance criteria, and `report` or `git` execution mode.
-System One selects a suitable joined member, subject to project and global
+Decisions selects a suitable joined member, subject to project and global
 capacity limits. The Integrator reviews results and pinned Git changes through
 the ticket workflow. Ticket creation acknowledges durable queuing, not completion.
 
@@ -617,7 +650,7 @@ inert and cannot restart background work.
 Each project has one protected Manager session, using either Q's API loop or
 ACP. Clear retains its identity, model choice, work items and review inbox. The
 Tickets board uses To do / In progress / Done. Join existing subagent profiles
-to a project. Issuing a ticket automatically queues it for assignment; System One
+to a project. Issuing a ticket automatically queues it for assignment; Decisions
 checks joined candidates before every execution; failed selection remains
 visible as assignment waiting. Native workers reuse GeneralRunner; mutating
 native/ACP workers use the existing isolated Git worktree/MR flow. Results wait
@@ -674,10 +707,10 @@ turn, and roles with skill tools can still call `search_skills` whenever later
 work needs more guidance. Already hinted or loaded skill IDs are not suggested
 again in the same context.
 
-When System One settings have been saved, q retrieves 32 hint candidates,
+When Decisions settings have been saved, q retrieves 32 hint candidates,
 scores every candidate in one `agent_skill_decision` request, and supplies the
 top eight for `task_start` or the top six for other contextual triggers.
-Without System One reranking, `task_start` retrieves at most twelve candidates
+Without Decisions reranking, `task_start` retrieves at most twelve candidates
 and supplies at most six. A direct `search_skills` call retrieves and scores
 32 candidates and returns at most 20, or the smaller requested limit. If the decision request
 fails, q keeps the original search order and reports a non-blocking warning.
@@ -795,8 +828,8 @@ and ticket tools are supplied by the host-bound `q library mcp` bridge.
 | `q usage` | Open Studio Operations for usage, workers, services, logs, and retention. |
 | `q commit` | Run the interactive terminal commit session for the current repository: generate, review, edit, and approve proposals. |
 | `q model` | Configure model and role assignments. |
-| `q systemone` | Configure System One providers, models, and its standalone server. |
-| `q systemone start [--host <ip>] [--port <port>]` | Run the standalone System One API server. |
+| `q decisions` | Configure Decisions providers, models, and its standalone server. |
+| `q decisions start [--host <ip>] [--port <port>]` | Run the standalone Decisions API server. |
 | `q subagents` | Manage subagents, external bindings, and ACP connections. (`q agents` is a compatibility alias.) |
 | `q mcp` | Configure external MCP servers. |
 | `q skills` | Manage Agent Skills. |
@@ -804,31 +837,36 @@ and ticket tools are supplied by the host-bound `q library mcp` bridge.
 | `q ignore` | Edit `.qignore`. |
 | `q help` | Open Studio Help. |
 
-System One runs independently of Q's chat Gateway. In `q systemone`, use
-↑/↓ or Tab to select a setting, Enter to edit it, `a` to add a provider, and `d` to
-remove the selected provider. Valid changes are saved as they are made, including
-model selections. Providers contain an endpoint and an optional API key environment
-variable name; q reads provider keys from the environment and does not write them
-to `systemone.json`.
-Older inline provider keys are ignored; set the named environment variable to
-keep authenticating with the provider. The old field is removed on the next save.
-The API keys screen uses `a` to generate a client key and `r` twice to revoke one.
-Generated keys are shown once; only their hashes are stored. With no active keys,
-`q systemone start` accepts requests without authentication.
-The representative `default_model` and optional
-`agent_skill_decision` role assignment are separate `provider-id/model-name`
-values; clear the role assignment in its model picker to use the default.
-Press Enter on either assignment to pick from all configured providers. The listen host,
-port, and client key records are stored in the same settings file.
+Decisions runs independently of Q's chat Gateway. Run `q decisions` to open
+**Settings → Decisions** in Studio. Choose a protocol when adding a provider.
+The provider settings store an endpoint and an optional API key environment
+variable name in `systemone.json`. Q reads the key itself from the environment.
+
+| Protocol (`api`) | Example endpoint URI | Environment variable |
+| --- | --- | --- |
+| System One (`systemone`, the default) | `https://api.typesafe.ai/v1/systemone` | `TYPESAFE_API_KEY` |
+| OpenAI-compatible Decisions (`decision`) | `https://api.openai.com/v1/decisions` | `OPENAI_API_KEY` |
+| Gemini Decisions (`gemini`) | `https://generativelanguage.googleapis.com/v1beta/decisions` | `GEMINI_API_KEY` |
+
+Use **Model filter regex** (`model_filter_regex`) to match upstream model IDs in a provider's catalog. The OpenAI-compatible preset starts with `^gpt-6-luna$`. Clear the field to show all discovered models. Q filters Gemini models with advertised methods to those supporting `createDecision`. OpenAI-compatible and Gemini providers support choice, score, and yes/no questions through the Decisions API.
+
+Set the named environment variable when migrating older inline provider keys.
+Use **Server API keys** to generate and revoke client keys. Q shows a generated
+key once and stores its hash. With no active keys, `q decisions start` accepts
+requests without authentication.
+The default model and each optional role assignment use `provider-id/model-name`.
+Select **Use default** in a role picker to inherit the default model. Studio's
+**Services** settings control the listen host and port in the same settings file.
 Existing single-provider settings are converted when loaded and saved in the
 new format on the next change.
 
-`q systemone start` serves `GET /v1/models` and `POST /v1/systemone`.
+`q decisions start` serves `GET /v1/models` and `POST /v1/systemone`.
+The existing `q systemone`, `q systemone start`, and `/systemone` commands are aliases.
 Discovered models and routed requests use `provider-id/model-name`; a model
 name without a provider ID goes to the provider named by `default_model` for
 compatibility. Each provider may serve multiple models.
 The server listens on `127.0.0.1` with a random port by default. Clients send
-an active System One API key as a Bearer token. With no active keys, requests
+an active Decisions API key as a Bearer token. With no active keys, requests
 are accepted without authentication, including on non-loopback hosts. Existing
 single server keys remain active until revoked in the API keys screen. `--host`
 and `--port` override the saved listen address for one run.
@@ -863,7 +901,7 @@ reconnect without owning the run lifetime.
 Studio also provides the application shell and global Settings for
 runtime, context, Loom, and service listeners. Changes save automatically through
 the same validated stores used by the TUI. Gateway providers and global model
-assignments use discovery-backed editors. System One providers, decision model
+assignments use discovery-backed editors. Decisions providers, decision model
 routing, listener settings, and server API key lifecycle are also available;
 provider authentication uses environment variables only. Workspace model
 overrides, MCP/LSP management, session questions, durable event reconnection,
@@ -881,8 +919,8 @@ the [Q Studio blueprint](docs/studio-blueprint.md).
 | `~/.q/config.yaml` | Main model, roles, context, Loom, and LSP configuration. |
 | `~/.q/providers.json` | Managed Gateway providers and model metadata. |
 | `~/.q/gateway.json` | Standalone Gateway listener and key metadata. |
-| `~/.q/systemone.json` | System One providers, decision model routing, listener, and server API key metadata. |
-| `~/.q/systemone.key` | Private master key used only to verify System One server API keys. |
+| `~/.q/systemone.json` | Decisions providers, decision model routing, listener, and server API key metadata. |
+| `~/.q/systemone.key` | Private master key used only to verify Decisions server API keys. |
 | `~/.q/library.json` | Global Library loopback listener settings. |
 | `~/.q/workspace-memory.json` | Workspace Memory settings. |
 | `~/.q/usage.json` | Token Usage service loopback endpoint settings. |
@@ -893,8 +931,8 @@ the [Q Studio blueprint](docs/studio-blueprint.md).
 | `<workspace-root>/.q/sessions/<session-id>/council/` | Council configuration, turn checkpoints, and internal participant contexts. |
 | `<workspace-root>/.q/sessions/<session-id>/composer/` and `docs/` | Composer presentation state and managed D2/HTML artifacts inside its session. |
 | `~/.q/worktrees/<repository-hash>/<invocation-id>/` | Linked Git worktree leases for mutating delegated sessions. |
-| `~/.q/systemone.json` | System One providers, model assignments, listener settings, and client key hashes (saved with private file permissions). |
-| `~/.q/systemone.key` | Private master key used to verify managed System One API keys. |
+| `~/.q/systemone.json` | Decisions providers, model assignments, listener settings, and client key hashes (saved with private file permissions). |
+| `~/.q/systemone.key` | Private master key used to verify managed Decisions API keys. |
 | `~/.q/skills/` | q-managed global Agent Skills. |
 | `~/.q/logs/studio/` | Rotating Studio diagnostics; 25 MiB per file, 1 GB total, seven-day retention. |
 | `~/.q/usage/usage.sqlite` | Recent token-only events and all-time daily rollups. |

@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect } from './test.mjs';
 
 test('session type tabs keep separate selections and fit desktop and mobile', async ({ page, request }, testInfo) => {
   const errors = [];

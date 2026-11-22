@@ -142,9 +142,52 @@ type EmbeddingConfig struct {
 }
 
 type AgentsConfig struct {
-	MaxParallel int                              `yaml:"max_parallel,omitempty"`
-	Connections map[string]AgentConnectionConfig `yaml:"connections,omitempty"`
-	Roles       map[string]AgentConfig           `yaml:"roles,omitempty"`
+	MaxParallel     int                              `yaml:"max_parallel,omitempty"`
+	Connections     map[string]AgentConnectionConfig `yaml:"connections,omitempty"`
+	Roles           map[string]AgentConfig           `yaml:"roles,omitempty"`
+	SubagentTargets map[string]SubagentTarget        `yaml:"subagent_targets,omitempty"`
+}
+
+// SubagentTarget selects the execution backend for a single profile.
+type SubagentTarget struct {
+	Model           string `yaml:"model,omitempty" json:"model,omitempty"`
+	Agent           string `yaml:"agent,omitempty" json:"agent,omitempty"`
+	Default         bool   `yaml:"default,omitempty" json:"default,omitempty"`
+	ReasoningEffort string `yaml:"reasoning_effort,omitempty" json:"reasoning_effort,omitempty"`
+}
+
+func (target SubagentTarget) Validate() error {
+	if target.Default && (target.Model != "" || target.Agent != "") ||
+		!target.Default && (target.Model == "") == (target.Agent == "") {
+		return errors.New("select the default model, one API model or one ACP connection")
+	}
+	if target.Model != strings.TrimSpace(target.Model) {
+		return errors.New("model must not have surrounding whitespace")
+	}
+	if target.Model == "group/" {
+		return errors.New("model group name is required")
+	}
+	if target.Agent != "" && !ValidAgentConnectionID(target.Agent) {
+		return errors.New("invalid ACP connection ID")
+	}
+	if target.ReasoningEffort != strings.TrimSpace(target.ReasoningEffort) {
+		return errors.New("reasoning effort must not have surrounding whitespace")
+	}
+	if target.Agent != "" && target.ReasoningEffort != "" {
+		return errors.New("an ACP connection uses its own reasoning settings")
+	}
+	return nil
+}
+
+func (target SubagentTarget) ModelConfig(defaultModel string) AgentConfig {
+	assignment := AgentConfig{Model: target.Model, ReasoningEffort: target.ReasoningEffort}
+	if target.Default {
+		assignment.Model = defaultModel
+	}
+	if group, found := strings.CutPrefix(assignment.Model, "group/"); found {
+		assignment.Model, assignment.Group = "", group
+	}
+	return assignment
 }
 
 // AgentConnectionConfig describes one ACP agent process. Preset supplies the
@@ -157,7 +200,7 @@ type AgentConnectionConfig struct {
 	Env        map[string]string `yaml:"env,omitempty" json:"env"`
 	AuthMethod string            `yaml:"auth_method,omitempty" json:"auth_method,omitempty"`
 	Disabled   bool              `yaml:"disabled,omitempty" json:"disabled,omitempty"`
-	// Library exposes skills and workspace issue/ticket tools to ACP Sessions.
+	// Library exposes issue/ticket tools and workflow instructions to ACP Sessions.
 	Library bool `yaml:"library,omitempty" json:"library,omitempty"`
 }
 
@@ -428,6 +471,25 @@ func (c Config) Validate() error {
 			return fmt.Errorf("config: agent connection %q auth_method must not have surrounding whitespace", id)
 		}
 	}
+	for id, target := range c.Agents.SubagentTargets {
+		name, builtin := strings.CutPrefix(id, "builtin/")
+		if !builtin || !ValidCustomName(name) {
+			return fmt.Errorf("config: invalid built-in subagent ID %q", id)
+		}
+		if err := target.Validate(); err != nil {
+			return fmt.Errorf("config: subagent %q: %w", id, err)
+		}
+		if target.Agent != "" {
+			if _, found := c.Agents.Connections[target.Agent]; !found {
+				return fmt.Errorf("config: subagent %q references unknown ACP connection %q", id, target.Agent)
+			}
+		}
+		if group, grouped := strings.CutPrefix(target.Model, "group/"); grouped {
+			if _, found := c.ModelGroups[group]; !found {
+				return fmt.Errorf("config: subagent %q references unknown model group %q", id, group)
+			}
+		}
+	}
 	for role, agent := range c.Agents.Roles {
 		if IsExternalAgentRole(role) {
 			if agent.Model != "" || agent.Group != "" || strings.TrimSpace(agent.ReasoningEffort) != "" {
@@ -633,6 +695,7 @@ func (c Config) ExternalAgentConnection(role string) (string, AgentConnectionCon
 // EffectiveAgents fills defaults omitted by older or hand-written configs.
 func (c Config) EffectiveAgents() AgentsConfig {
 	result := c.Agents
+	result.SubagentTargets = maps.Clone(c.Agents.SubagentTargets)
 	if result.MaxParallel == 0 {
 		result.MaxParallel = DefaultAgentMaxParallel
 	}
@@ -666,6 +729,15 @@ func (c Config) EffectiveAgent(role string) (AgentConfig, error) {
 	if !c.HasNativeRole(role) {
 		return AgentConfig{}, fmt.Errorf("config: unsupported agent role %q", role)
 	}
+	result := c.ConfiguredAgent(role)
+	if result.Model == "" && result.Group == "" {
+		result.Model = c.Provider.Model
+	}
+	return result, nil
+}
+
+// ConfiguredAgent reads the saved controls, including older role aliases.
+func (c Config) ConfiguredAgent(role string) AgentConfig {
 	roles := c.EffectiveAgents().Roles
 	result, configured := roles[role]
 	if !configured {
@@ -686,10 +758,7 @@ func (c Config) EffectiveAgent(role string) (AgentConfig, error) {
 			result = roles[legacy]
 		}
 	}
-	if result.Model == "" && result.Group == "" {
-		result.Model = c.Provider.Model
-	}
-	return result, nil
+	return result
 }
 
 // ValidCustomName validates user-defined role and profile identifiers.
@@ -740,12 +809,17 @@ func (c Config) EffectiveModelCandidates(role string) ([]ModelCandidateConfig, e
 	if err != nil {
 		return nil, err
 	}
+	return c.ModelCandidates(role, agent)
+}
+
+// ModelCandidates expands a selected model or group with its reasoning controls.
+func (c Config) ModelCandidates(subject string, agent AgentConfig) ([]ModelCandidateConfig, error) {
 	if agent.Group == "" {
 		return []ModelCandidateConfig{{Model: agent.Model, ReasoningEffort: agent.ReasoningEffort}}, nil
 	}
 	group, found := c.ModelGroups[agent.Group]
 	if !found {
-		return nil, fmt.Errorf("config: agent %q references unknown model group %q", role, agent.Group)
+		return nil, fmt.Errorf("config: agent %q references unknown model group %q", subject, agent.Group)
 	}
 	result := make([]ModelCandidateConfig, len(group.Candidates))
 	copy(result, group.Candidates)

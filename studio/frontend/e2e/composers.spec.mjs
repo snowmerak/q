@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect } from './test.mjs';
 
 test('Composer expands previews and supports readable D2 zoom and pan', async ({ page, request }, testInfo) => {
   const errors = [];
@@ -146,12 +146,13 @@ test('Composer creates a model conversation, saves history, and continues after 
     { id: 'default/other-model', reasoning_control: 'effort', reasoning_efforts: ['low'] },
     { id: 'a-fallback-group', group: true }
   ] } }));
-  await page.addInitScript(() => localStorage.setItem('q-studio-text-scale', '145'));
+  await page.addInitScript(() => localStorage.setItem('q-studio-text-scale', '140'));
   let id;
   try {
     await page.goto('/');
     await page.getByRole('button', { name: 'Sessions', exact: true }).click();
     await expect(page).toHaveTitle('Sessions · Q Studio');
+    await expect(page.getByRole('button', { name: 'Refresh session tree', exact: true })).toBeEnabled();
     await page.getByRole('button', { name: 'Add or create session', exact: true }).click();
     await page.getByRole('button', { name: 'New Composer', exact: true }).click();
     await page.getByLabel('Name', { exact: true }).fill('Reading club idea');

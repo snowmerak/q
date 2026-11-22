@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"net/http"
 	"path"
+	"path/filepath"
 	"strings"
 
 	"github.com/snowmerak/q/app"
@@ -77,6 +78,9 @@ func newHandlerRuntime(parent context.Context, store config.Store, runner sessio
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/v1/status", serveStatus)
+	ui := &uiStateService{path: filepath.Join(store.Dir, "studio", "ui-state.json")}
+	mux.HandleFunc("GET /api/v1/ui-state", ui.serveGet)
+	mux.HandleFunc("PATCH /api/v1/ui-state", ui.servePatch)
 	var settingsRuntimes []settingsRuntime
 	if runtime, ok := runner.(settingsRuntime); ok {
 		settingsRuntimes = append(settingsRuntimes, runtime)
@@ -107,13 +111,16 @@ func newHandlerRuntime(parent context.Context, store config.Store, runner sessio
 	mux.HandleFunc("POST /api/v1/settings/gateway/providers/{provider}/chatgpt/{action}", settings.serveChatGPT)
 	mux.HandleFunc("POST /api/v1/settings/gateway/api-keys", settings.serveGatewayAPIKeyCreate)
 	mux.HandleFunc("DELETE /api/v1/settings/gateway/api-keys/{key}", settings.serveGatewayAPIKeyRevoke)
-	mux.HandleFunc("GET /api/v1/settings/system-one/models", settings.serveSystemOneModelCatalog)
-	mux.HandleFunc("PUT /api/v1/settings/system-one/models/{target}", settings.serveSystemOneModelAssignmentUpdate)
-	mux.HandleFunc("POST /api/v1/settings/system-one/providers", settings.serveSystemOneProviderCreate)
-	mux.HandleFunc("PUT /api/v1/settings/system-one/providers/{provider}", settings.serveSystemOneProviderUpdate)
-	mux.HandleFunc("DELETE /api/v1/settings/system-one/providers/{provider}", settings.serveSystemOneProviderDelete)
-	mux.HandleFunc("POST /api/v1/settings/system-one/api-keys", settings.serveSystemOneAPIKeyCreate)
-	mux.HandleFunc("DELETE /api/v1/settings/system-one/api-keys/{key}", settings.serveSystemOneAPIKeyRevoke)
+	for _, section := range []string{"decisions", "system-one"} {
+		path := "/api/v1/settings/" + section
+		mux.HandleFunc("GET "+path+"/models", settings.serveSystemOneModelCatalog)
+		mux.HandleFunc("PUT "+path+"/models/{target}", settings.serveSystemOneModelAssignmentUpdate)
+		mux.HandleFunc("POST "+path+"/providers", settings.serveSystemOneProviderCreate)
+		mux.HandleFunc("PUT "+path+"/providers/{provider}", settings.serveSystemOneProviderUpdate)
+		mux.HandleFunc("DELETE "+path+"/providers/{provider}", settings.serveSystemOneProviderDelete)
+		mux.HandleFunc("POST "+path+"/api-keys", settings.serveSystemOneAPIKeyCreate)
+		mux.HandleFunc("DELETE "+path+"/api-keys/{key}", settings.serveSystemOneAPIKeyRevoke)
+	}
 	mux.HandleFunc("PUT /api/v1/settings/runtime", settings.serveRuntimeUpdate)
 	mux.HandleFunc("PUT /api/v1/settings/browser-control", settings.serveBrowserControlUpdate)
 	mux.HandleFunc("GET /api/v1/workspaces/loom", settings.serveLoomStatus)
@@ -132,6 +139,7 @@ func newHandlerRuntime(parent context.Context, store config.Store, runner sessio
 	mux.HandleFunc("PUT /api/v1/workspaces/agents/profiles", integrations.serveProfiles)
 	mux.HandleFunc("DELETE /api/v1/workspaces/agents/profiles/{profile}", integrations.serveProfileDelete)
 	mux.HandleFunc("/api/v1/settings/subagents", integrations.serveAgents)
+	mux.HandleFunc("PUT /api/v1/settings/subagents/target", integrations.serveSubagentTarget)
 	mux.HandleFunc("/api/v1/settings/acp", integrations.serveAgents)
 	mux.HandleFunc("GET /api/v1/settings/acp/adapters", integrations.serveACPAdapters)
 	mux.HandleFunc("POST /api/v1/settings/acp/adapters", integrations.serveACPAdapters)

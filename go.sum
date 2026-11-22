@@ -175,6 +175,8 @@ github.com/muesli/cancelreader v0.2.2 h1:3I4Kt4BQjOR54NavqnDogx/MIoWBFa0StPA8ELU
 github.com/muesli/cancelreader v0.2.2/go.mod h1:3XuTXfFS2VjM+HTLZY9Ak0l6eUKfijIfMUZ4EgX0QYo=
 github.com/ncruces/go-strftime v1.0.0 h1:HMFp8mLCTPp341M/ZnA4qaf7ZlsbTc+miZjCLOFAw7w=
 github.com/ncruces/go-strftime v1.0.0/go.mod h1:Fwc5htZGVVkseilnfgOVb9mKy6w1naJmn9CehxcKcls=
+github.com/nfnt/resize v0.0.0-20180221191011-83c6a9932646 h1:zYyBkD/k9seD2A7fsi6Oo2LfFZAehjjQMERAvZLEDnQ=
+github.com/nfnt/resize v0.0.0-20180221191011-83c6a9932646/go.mod h1:jpp1/29i3P1S/RLdc7JQKbRpFeM1dOBd8T9ki5s+AY8=
 github.com/onsi/gomega v1.39.1 h1:1IJLAad4zjPn2PsnhH70V4DKRFlrCzGBNrNaru+Vf28=
 github.com/onsi/gomega v1.39.1/go.mod h1:hL6yVALoTOxeWudERyfppUcZXjMwIMLnuSfruD2lcfg=
 github.com/parquet-go/bitpack v1.0.0 h1:AUqzlKzPPXf2bCdjfj4sTeacrUwsT7NlcYDMUQxPcQA=
@@ -203,12 +205,16 @@ github.com/segmentio/encoding v0.5.4 h1:OW1VRern8Nw6ITAtwSZ7Idrl3MXCFwXHPgqESYfv
 github.com/segmentio/encoding v0.5.4/go.mod h1:HS1ZKa3kSN32ZHVZ7ZLPLXWvOVIiZtyJnO1gPH1sKt0=
 github.com/snowmerak/cdp-q-driver v0.0.0-20261107143548-ec463b2b34af h1:BVp6Y+wG54FpJw8wbylaW7HWtui76loT1LE+EhS8/3Q=
 github.com/snowmerak/cdp-q-driver v0.0.0-20261107143548-ec463b2b34af/go.mod h1:2Xxgxq0a+FJXgWINPUiCH4CUE2y5njWqQWsOCaLjQjk=
+github.com/snowmerak/decisions v1.0.0 h1:zxaucEqRl4ygFFRcZNq2afetC66npqvXSV06H99A9yw=
+github.com/snowmerak/decisions v1.0.0/go.mod h1:ynWJ/JCj6fc+6KnQYtZodBL9PiXSNbN+vAvMl4LUwHg=
 github.com/snowmerak/llm-provider v0.0.0-20261108025312-195d7124fbea h1:Gt89m9um2MPkegFEX8nfDWybc8FFTBaU22TXAFlzQBk=
 github.com/snowmerak/llm-provider v0.0.0-20261108025312-195d7124fbea/go.mod h1:Am5z7SOelJH0F7UfaQaT8jrUfbLfC+Ylvl1t03ZlkuE=
 github.com/snowmerak/q/third_party/acp-go-sdk v0.0.0-20260827012000-155b26051836 h1:Rw5MHyEJAtSSVs0gjP2znWFcFx92IhLXdcN3moT0ZFw=
 github.com/snowmerak/q/third_party/acp-go-sdk v0.0.0-20260827012000-155b26051836/go.mod h1:A3GH5F1IiBCYNpC2LNwHw6gpgoxQxSk+5bQfkuOdVGg=
 github.com/stretchr/testify v1.11.1 h1:7s2iGBzp5EwR7/aIZr8ao5+dra3wiQyKjjFuvgVKu7U=
 github.com/stretchr/testify v1.11.1/go.mod h1:wZwfW3scLgRK+23gO65QZefKpKQRnfz6sD981Nm4B6U=
+github.com/tc-hib/winres v0.3.1 h1:CwRjEGrKdbi5CvZ4ID+iyVhgyfatxFoizjPhzez9Io4=
+github.com/tc-hib/winres v0.3.1/go.mod h1:C/JaNhH3KBvhNKVbvdlDWkbMDO9H4fKKDaN7/07SSuk=
 github.com/twpayne/go-geom v1.6.1 h1:iLE+Opv0Ihm/ABIcvQFGIiFBXd76oBIar9drAwHFhR4=
 github.com/twpayne/go-geom v1.6.1/go.mod h1:Kr+Nly6BswFsKM5sd31YaoWS5PeDDH2NftJTK7Gd028=
 github.com/xo/terminfo v0.0.0-20220910002029-abceb7e1c41e h1:JVG44RsyaB9T2KIHavMF/ppJZNG9ZpyihvCd0w101no=

@@ -21,8 +21,8 @@ toc:
 | `~/.q/providers.json` | Managed Gateway providers and model metadata. |
 | `~/.q/gateway.json` | Standalone Gateway listener and key metadata. |
 | `~/.q/gateway.key` | Private master key used to verify Gateway API keys. |
-| `~/.q/systemone.json` | System One providers, model routing, listener, and API key metadata. |
-| `~/.q/systemone.key` | Private master key used to verify System One API keys. |
+| `~/.q/systemone.json` | Decisions providers, model routing, listener, and API key metadata. |
+| `~/.q/systemone.key` | Private master key used to verify Decisions API keys. |
 | `~/.q/library.json` | Global Library loopback listener settings. |
 | `~/.q/workspace-memory.json` | Workspace Memory loopback listener settings. |
 | `~/.q/usage.json` | Token Usage service loopback listener settings. |
@@ -47,7 +47,7 @@ stops immediately. Streams reconnect only before their first returned chunk.
 
 ## Import and export
 
-Open **Settings → Import / Export** in Studio to move global settings. The dialog has Models, Providers, System One, Runtime, Services, Subagents, and Integrations tabs. Selections persist across tabs and export together in one JSON file.
+Open **Settings → Import / Export** in Studio to move global settings. The dialog has Models, Providers, Decisions, Runtime, Services, Subagents, and Integrations tabs. Selections persist across tabs and export together in one JSON file.
 
 To import, choose a file, select its items, review additions and replacements, then apply. Matching item IDs are replaced; unselected items remain unchanged. Select related model groups, ACP connections, or MCP servers together when they do not already exist at the destination. Missing references are rejected before writing. Listener changes take effect when their services restart.
 

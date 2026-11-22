@@ -271,7 +271,7 @@ func TestWorkspacePromptGuidesTicketAssignment(t *testing.T) {
 	runtime := &scriptedTools{names: []string{"workspace_members", "ticket_create"}}
 	messages := agentloop.PrepareWorkspaceMessages(nil, agentloop.WorkspaceMessageOptions{Root: t.TempDir(), Tools: runtime})
 	prompt := joined(messages)
-	for _, expected := range []string{"inspect workspace_members", "issue ticket_create", "System One selects a joined subagent", "asynchronously", "Report the ticket IDs"} {
+	for _, expected := range []string{"inspect workspace_members", "issue ticket_create", "Decisions selects a joined subagent", "asynchronously", "Report the ticket IDs"} {
 		if !strings.Contains(prompt, expected) {
 			t.Fatalf("workspace prompt omitted %q: %s", expected, prompt)
 		}

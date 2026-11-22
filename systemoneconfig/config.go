@@ -10,8 +10,10 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 
+	"github.com/snowmerak/decisions"
 	"github.com/snowmerak/q/client/systemone"
 	"github.com/snowmerak/q/internal/authkey"
 	"github.com/snowmerak/q/internal/fsreplace"
@@ -38,9 +40,11 @@ type ServerConfig struct {
 type APIKey = authkey.Record
 
 type ProviderConfig struct {
-	ID        string `json:"id"`
-	URI       string `json:"uri"`
-	APIKeyEnv string `json:"api_key_env,omitempty"`
+	ID               string        `json:"id"`
+	URI              string        `json:"uri"`
+	APIKeyEnv        string        `json:"api_key_env,omitempty"`
+	API              decisions.API `json:"api,omitempty"`
+	ModelFilterRegex string        `json:"model_filter_regex,omitempty"`
 }
 
 type Config struct {
@@ -121,16 +125,36 @@ func (p ProviderConfig) Validate() error {
 	if p.ID == "" || strings.ContainsAny(p.ID, "/ \t\r\n") {
 		return errors.New("systemone: provider ID must be nonempty and contain no slash or whitespace")
 	}
+	path := p.endpointPath()
+	if path == "" {
+		return fmt.Errorf("systemone: provider %q has unsupported API %q", p.ID, p.API)
+	}
 	parsed, err := url.Parse(p.URI)
 	if err != nil || parsed == nil || (parsed.Scheme != "http" && parsed.Scheme != "https") ||
 		parsed.Host == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" ||
-		parsed.Opaque != "" || !strings.HasSuffix(strings.TrimRight(parsed.Path, "/"), "/systemone") {
-		return fmt.Errorf("systemone: provider %q URI must be an HTTP(S) /systemone endpoint without credentials, query, or fragment", p.ID)
+		parsed.Opaque != "" || !strings.HasSuffix(strings.TrimRight(parsed.Path, "/"), path) {
+		return fmt.Errorf("systemone: provider %q URI must be an HTTP(S) %s endpoint without credentials, query, or fragment", p.ID, path)
 	}
 	if strings.ContainsAny(p.APIKeyEnv, "\r\n") {
 		return fmt.Errorf("systemone: provider %q API key environment variable must be a single line", p.ID)
 	}
+	if p.ModelFilterRegex != "" {
+		if _, err := regexp.Compile(p.ModelFilterRegex); err != nil {
+			return fmt.Errorf("systemone: provider %q model_filter_regex: %w", p.ID, err)
+		}
+	}
 	return nil
+}
+
+func (p ProviderConfig) endpointPath() string {
+	switch p.API {
+	case "", decisions.SystemOneAPI:
+		return "/systemone"
+	case decisions.DecisionAPI, decisions.GeminiDecisionAPI:
+		return "/decisions"
+	default:
+		return ""
+	}
 }
 
 func (p ProviderConfig) BaseURL() string {
@@ -138,7 +162,7 @@ func (p ProviderConfig) BaseURL() string {
 	if err != nil || parsed == nil {
 		return ""
 	}
-	parsed.Path = strings.TrimSuffix(strings.TrimRight(parsed.Path, "/"), "/systemone")
+	parsed.Path = strings.TrimSuffix(strings.TrimRight(parsed.Path, "/"), p.endpointPath())
 	parsed.RawPath = ""
 	return parsed.String()
 }
@@ -157,7 +181,9 @@ func (p ProviderConfig) NewClientWithHTTPClient(httpClient *http.Client) (*syste
 	if err := p.Validate(); err != nil {
 		return nil, err
 	}
-	return systemone.New(systemone.Config{BaseURL: p.BaseURL(), APIKey: p.ResolveAPIKey(), HTTPClient: httpClient})
+	return systemone.New(systemone.Config{
+		API: p.API, BaseURL: p.BaseURL(), APIKey: p.ResolveAPIKey(), HTTPClient: httpClient, ModelFilterRegex: p.ModelFilterRegex,
+	})
 }
 
 // ModelForRole returns the role override, or the representative model.

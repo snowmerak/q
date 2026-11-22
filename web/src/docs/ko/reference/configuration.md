@@ -20,8 +20,8 @@ toc:
 | `~/.q/providers.json` | 관리형 Gateway 공급자와 모델 메타데이터 |
 | `~/.q/gateway.json` | 독립 Gateway 리스너와 키 메타데이터 |
 | `~/.q/gateway.key` | Gateway API 키 검증용 비공개 마스터 키 |
-| `~/.q/systemone.json` | System One 공급자, 모델 라우팅, 리스너와 API 키 메타데이터 |
-| `~/.q/systemone.key` | System One API 키 검증용 비공개 마스터 키 |
+| `~/.q/systemone.json` | Decisions 공급자, 모델 라우팅, 리스너와 API 키 메타데이터 |
+| `~/.q/systemone.key` | Decisions API 키 검증용 비공개 마스터 키 |
 | `~/.q/library.json` | Global Library 루프백 리스너 설정 |
 | `~/.q/workspace-memory.json` | Workspace Memory 루프백 리스너 설정 |
 | `~/.q/usage.json` | 토큰 Usage 서비스 루프백 리스너 설정 |
@@ -52,7 +52,7 @@ model_sampling:
     frequency_penalty: 0
 ```
 
-Studio의 **Settings → Import / Export**에서 전역 설정을 옮길 수 있습니다. 팝업의 Models, Providers, System One, Runtime, Services, Subagents, Integrations 탭에서 항목을 선택하세요. 탭을 바꾸어도 선택은 유지되며, 선택한 항목을 하나의 JSON 파일로 내보냅니다.
+Studio의 **Settings → Import / Export**에서 전역 설정을 옮길 수 있습니다. 팝업의 Models, Providers, Decisions, Runtime, Services, Subagents, Integrations 탭에서 항목을 선택하세요. 탭을 바꾸어도 선택은 유지되며, 선택한 항목을 하나의 JSON 파일로 내보냅니다.
 
 가져오기는 파일 선택 → 항목 선택 → 변경 검토 → 적용 순서입니다. 같은 ID의 항목은 덮어쓰고, 선택하지 않은 항목은 유지합니다. 모델 그룹, ACP 연결, MCP 서버 등 필요한 참조가 없으면 적용 전에 오류를 표시하므로 관련 항목을 함께 선택하세요. 리스너 주소와 포트 변경은 해당 서비스가 재시작될 때 적용됩니다.
 

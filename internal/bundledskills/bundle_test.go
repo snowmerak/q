@@ -20,6 +20,9 @@ func TestBundleMatchesPinnedDriverAndUsesEmbeddedCommand(t *testing.T) {
 		t.Fatal("refresh bundled skill when updating the pinned CDP module")
 	}
 	for path, body := range bundle.Files {
+		if strings.Contains(body, "\r\n") {
+			t.Fatalf("%s contains platform-dependent line endings", path)
+		}
 		if !strings.Contains(body, version) {
 			t.Fatalf("%s missing upstream provenance", path)
 		}

@@ -1,0 +1,303 @@
+name: Q Studio desktop release
+
+on:
+  push:
+    tags:
+      - 'v[0-9]*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Product version (major.minor.patch)
+        required: true
+        default: 0.2.2
+        type: string
+      publish_release:
+        description: Attach packages to the existing v<version> tag's GitHub Release
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: studio-desktop-${{ github.event_name == 'push' && github.ref_name || format('v{0}', inputs.version) }}
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.release.outputs.version }}
+      tag: ${{ steps.release.outputs.tag }}
+      source: ${{ steps.release.outputs.source }}
+      publish: ${{ steps.release.outputs.publish }}
+      matrix: ${{ steps.matrix.outputs.matrix }}
+    steps:
+      - name: Resolve release version and source commit
+        id: release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INPUT_VERSION: ${{ inputs.version }}
+          INPUT_PUBLISH: ${{ inputs.publish_release }}
+        run: |
+          set -euo pipefail
+          publish=false
+          version="$INPUT_VERSION"
+          source="$GITHUB_SHA"
+          if [[ "$GITHUB_EVENT_NAME" == push ]]; then
+            version="${GITHUB_REF_NAME#v}"
+            publish=true
+          elif [[ "$INPUT_PUBLISH" == true ]]; then
+            publish=true
+          fi
+          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo '::error::Use a numeric major.minor.patch version or a v<version> tag.'
+            exit 1
+          fi
+          tag="v$version"
+          if [[ "$publish" == true ]]; then
+            # Resolve an existing tag, including annotated tags, to one commit.
+            gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$tag" --silent
+            source=$(gh api "repos/$GITHUB_REPOSITORY/commits/$tag" --jq .sha)
+            if [[ "$GITHUB_EVENT_NAME" == push ]]; then
+              triggered=$(gh api "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA" --jq .sha)
+              if [[ "$source" != "$triggered" ]]; then
+                echo '::error::The tag moved after this workflow was triggered.'
+                exit 1
+              fi
+            fi
+          fi
+          printf 'version=%s\ntag=%s\nsource=%s\npublish=%s\n' "$version" "$tag" "$source" "$publish" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: .release-tools
+          sparse-checkout: scripts/ci
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+      - name: Select required and available optional targets
+        id: matrix
+        run: node .release-tools/scripts/ci/studio-release.mjs matrix
+        env:
+          PUBLISH: ${{ steps.release.outputs.publish }}
+          MACOS_SIGNING_CONFIGURED: >-
+            ${{ secrets.APPLE_DEVELOPER_ID_CERTIFICATE_BASE64 != '' &&
+                secrets.APPLE_DEVELOPER_ID_CERTIFICATE_PASSWORD != '' &&
+                secrets.APPLE_DEVELOPER_TEAM_ID != '' &&
+                secrets.APPLE_NOTARY_KEY_BASE64 != '' &&
+                secrets.APPLE_NOTARY_KEY_ID != '' &&
+                secrets.APPLE_NOTARY_ISSUER_ID != '' }}
+
+  package:
+    needs: prepare
+    name: ${{ matrix.target }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: ${{ startsWith(matrix.target, 'darwin/') && 90 || 45 }}
+    continue-on-error: ${{ startsWith(matrix.target, 'darwin/') }}
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.prepare.outputs.matrix) }}
+    env:
+      GOWORK: "off"
+      Q_STUDIO_VERSION: ${{ needs.prepare.outputs.version }}
+      Q_STUDIO_TARGET: ${{ matrix.target }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.prepare.outputs.source }}
+          persist-credentials: false
+      # Release tools follow the workflow revision; application sources remain
+      # pinned to the tag, including tags that predate these helper scripts.
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: .release-tools
+          sparse-checkout: scripts/ci
+          persist-credentials: false
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: |
+            go.sum
+            desktop/go.sum
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: studio/frontend/package-lock.json
+      - name: Check release automation
+        run: node --test .release-tools/scripts/ci/macos-release.test.mjs .release-tools/scripts/ci/studio-retry.test.mjs .release-tools/scripts/ci/studio-release.test.mjs
+      - name: Check macOS distribution credentials
+        if: runner.os == 'macOS' && needs.prepare.outputs.publish == 'true'
+        run: node .release-tools/scripts/ci/macos-release.mjs --check
+        env:
+          APPLE_DEVELOPER_ID_CERTIFICATE_BASE64: ${{ secrets.APPLE_DEVELOPER_ID_CERTIFICATE_BASE64 }}
+          APPLE_DEVELOPER_ID_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_DEVELOPER_ID_CERTIFICATE_PASSWORD }}
+          APPLE_DEVELOPER_TEAM_ID: ${{ secrets.APPLE_DEVELOPER_TEAM_ID }}
+          APPLE_NOTARY_KEY_BASE64: ${{ secrets.APPLE_NOTARY_KEY_BASE64 }}
+          APPLE_NOTARY_KEY_ID: ${{ secrets.APPLE_NOTARY_KEY_ID }}
+          APPLE_NOTARY_ISSUER_ID: ${{ secrets.APPLE_NOTARY_ISSUER_ID }}
+      - name: Install Studio frontend dependencies
+        run: npm --prefix studio/frontend ci
+      - name: Check Studio frontend
+        run: npm --prefix studio/frontend run check
+      - name: Build embedded Studio frontend
+        run: npm --prefix studio/frontend run build
+      - name: Verify embedded skill bundle
+        run: go test ./internal/skillbundle ./internal/bundledskills
+      - name: Install Linux native GUI build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential pkg-config libgtk-4-dev libwebkitgtk-6.0-dev
+      - name: Prepare NSIS
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $archive = Join-Path $env:RUNNER_TEMP 'nsis-3.11.zip'
+          $expected = 'C7D27F780DDB6CFFB4730138CD1591E841F4B7EDB155856901CDF5F214394FA1'
+          $urls = @(
+            'https://downloads.sourceforge.net/project/nsis/NSIS%203/3.11/nsis-3.11.zip',
+            'https://ftp.kaist.ac.kr/macports/distfiles/nsis/nsis-3.11.zip'
+          )
+          $downloaded = $false
+          foreach ($url in $urls) {
+            try {
+              Invoke-WebRequest -Uri $url -OutFile $archive
+              if ((Get-FileHash $archive -Algorithm SHA256).Hash -ne $expected) {
+                throw 'NSIS archive checksum mismatch'
+              }
+              $downloaded = $true
+              break
+            } catch { Write-Warning $_ }
+          }
+          if (-not $downloaded) { throw 'Unable to download the verified NSIS compiler' }
+          $destination = Join-Path $env:RUNNER_TEMP 'studio-nsis'
+          Expand-Archive -LiteralPath $archive -DestinationPath $destination -Force
+          $compiler = Get-ChildItem $destination -Filter makensis.exe -Recurse | Select-Object -First 1
+          if (-not $compiler) { throw 'NSIS compiler missing from archive' }
+          $compiler.DirectoryName | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+      - name: Build native packages (Unix)
+        if: runner.os != 'Windows' && matrix.target != 'darwin/arm64'
+        run: go run ./scripts/desktopbuild -version "$Q_STUDIO_VERSION" -targets "$Q_STUDIO_TARGET" -installer
+      - name: Build macOS ARM64 with Apple SDK
+        if: matrix.target == 'darwin/arm64'
+        run: |
+          set -euo pipefail
+          directory="$PWD/bin/studio/darwin-arm64"
+          mkdir -p "$directory"
+          GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 go build -trimpath -o "$directory/q-engine" ./cmd/q
+          GOOS=darwin GOARCH=arm64 CGO_ENABLED=1 CC=clang CXX=clang++ go -C desktop build -trimpath -tags production -ldflags '-s -w' -o "$directory/Q Studio" .
+          # Package prebuilt binaries so existing immutable tags can use this
+          # recovery path without changes to their desktopbuild host guard.
+          go run ./scripts/desktopbuild -version "$Q_STUDIO_VERSION" -targets "$Q_STUDIO_TARGET" -package-only
+      - name: Build native packages (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: go run ./scripts/desktopbuild -version $env:Q_STUDIO_VERSION -targets $env:Q_STUDIO_TARGET -installer
+      - name: Test assembled engine and desktop module (Unix)
+        if: runner.os != 'Windows' && matrix.target != 'darwin/arm64'
+        run: |
+          export Q_STUDIO_TEST_ENGINE="$PWD/bin/studio/${{ matrix.key }}/q-engine"
+          go -C desktop test ./...
+          go -C desktop vet ./...
+      - name: Verify macOS ARM64 binaries and desktop module
+        if: matrix.target == 'darwin/arm64'
+        run: |
+          lipo 'bin/studio/darwin-arm64/Q Studio' -verify_arch arm64
+          lipo bin/studio/darwin-arm64/q-engine -verify_arch arm64
+          GOOS=darwin GOARCH=arm64 CGO_ENABLED=1 CC=clang CXX=clang++ go -C desktop vet ./...
+      - name: Test assembled engine and installer checks (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $env:Q_STUDIO_TEST_ENGINE = (Resolve-Path 'bin/studio/${{ matrix.key }}/q-engine.exe').Path
+          $env:Q_STUDIO_NSIS = (Get-Command makensis.exe).Source
+          go -C desktop test ./...
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          go test ./scripts/desktopbuild
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          go -C desktop vet ./...
+      - name: Sign, notarize and verify macOS distributions
+        if: runner.os == 'macOS' && needs.prepare.outputs.publish == 'true'
+        run: node .release-tools/scripts/ci/macos-release.mjs
+        env:
+          APPLE_DEVELOPER_ID_CERTIFICATE_BASE64: ${{ secrets.APPLE_DEVELOPER_ID_CERTIFICATE_BASE64 }}
+          APPLE_DEVELOPER_ID_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_DEVELOPER_ID_CERTIFICATE_PASSWORD }}
+          APPLE_DEVELOPER_TEAM_ID: ${{ secrets.APPLE_DEVELOPER_TEAM_ID }}
+          APPLE_NOTARY_KEY_BASE64: ${{ secrets.APPLE_NOTARY_KEY_BASE64 }}
+          APPLE_NOTARY_KEY_ID: ${{ secrets.APPLE_NOTARY_KEY_ID }}
+          APPLE_NOTARY_ISSUER_ID: ${{ secrets.APPLE_NOTARY_ISSUER_ID }}
+      - name: Upload installation artifacts
+        # Published macOS artifacts must pass signing and notarization first.
+        uses: actions/upload-artifact@v6
+        with:
+          name: Q-Studio-${{ needs.prepare.outputs.version }}-${{ matrix.key }}
+          if-no-files-found: error
+          path: |
+            bin/Q-Studio-*.exe
+            bin/Q-Studio-*.dmg
+            bin/Q-Studio-*.deb
+            bin/Q-Studio-*.rpm
+            bin/Q-Studio-*.zip
+
+  release:
+    name: Attach packages to GitHub Release
+    needs: [prepare, package]
+    # Optional Mac failures must not skip publication. Required Windows/Linux
+    # files are checked below even when a package job failed.
+    if: ${{ !cancelled() && needs.prepare.result == 'success' && needs.prepare.outputs.publish == 'true' }}
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      Q_STUDIO_VERSION: ${{ needs.prepare.outputs.version }}
+      Q_STUDIO_TAG: ${{ needs.prepare.outputs.tag }}
+      Q_STUDIO_SOURCE: ${{ needs.prepare.outputs.source }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: .release-tools
+          sparse-checkout: scripts/ci
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+      - uses: actions/download-artifact@v6
+        with:
+          pattern: Q-Studio-${{ needs.prepare.outputs.version }}-*
+          path: release
+          merge-multiple: true
+      - name: Verify assets and generate SHA256 checksums
+        shell: bash
+        working-directory: release
+        run: |
+          set -euo pipefail
+          node ../.release-tools/scripts/ci/studio-release.mjs assets . "$Q_STUDIO_VERSION"
+          sha256sum --check "Q-Studio-$Q_STUDIO_VERSION-SHA256SUMS.txt"
+      - name: Create or update release
+        shell: bash
+        working-directory: release
+        run: |
+          set -euo pipefail
+          current=$(gh api "repos/$GH_REPO/commits/$Q_STUDIO_TAG" --jq .sha)
+          if [[ "$current" != "$Q_STUDIO_SOURCE" ]]; then
+            echo '::error::The release tag moved during the build.'
+            exit 1
+          fi
+          if gh release view "$Q_STUDIO_TAG" > /dev/null 2>&1; then
+            gh release view "$Q_STUDIO_TAG" --json assets --jq '.assets[].name' > existing-assets.txt
+            node ../.release-tools/scripts/ci/studio-release.mjs check-existing existing-assets.txt assets.txt
+            mapfile -t assets < assets.txt
+            gh release upload "$Q_STUDIO_TAG" "${assets[@]}" --clobber
+          else
+            mapfile -t assets < assets.txt
+            gh release create "$Q_STUDIO_TAG" "${assets[@]}" --verify-tag --title "Q Studio $Q_STUDIO_TAG" --generate-notes --notes-file release-notes.md
+          fi

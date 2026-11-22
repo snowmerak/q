@@ -35,25 +35,35 @@ func (b Bundle) Manifest() (Manifest, error) {
 	if !versionPattern.MatchString(b.Version) || len(b.Files) == 0 || len(b.Files) > 32 {
 		return Manifest{}, errors.New("invalid bundled skill version or file count")
 	}
-	if !strings.HasPrefix(b.Files["SKILL.md"], "---\nname: q-cdp\n") {
+	if !strings.HasPrefix(canonicalText(b.Files["SKILL.md"]), "---\nname: q-cdp\n") {
 		return Manifest{}, errors.New("bundled skill must be named q-cdp")
 	}
 	size := 0
+	canonical := Bundle{Version: b.Version, Files: make(map[string]string, len(b.Files))}
 	for path, content := range b.Files {
 		if !fs.ValidPath(path) || strings.ContainsAny(path, "\\:") || strings.HasPrefix(path, ".") {
 			return Manifest{}, fmt.Errorf("invalid bundled skill resource %q", path)
 		}
+		content = canonicalText(content)
+		canonical.Files[path] = content
 		size += len(path) + len(content)
 	}
 	if size > 48<<10 {
 		return Manifest{}, errors.New("bundled skill resources exceed size limit")
 	}
-	data, err := json.Marshal(b)
+	data, err := json.Marshal(canonical)
 	if err != nil {
 		return Manifest{}, err
 	}
 	digest := sha256.Sum256(data)
 	return Manifest{Version: b.Version, Digest: hex.EncodeToString(digest[:])}, nil
+}
+
+// Text resources have one identity across LF and Windows CRLF checkouts.
+// Canonicalize both hashing and storage so an OS change cannot create a
+// conflicting immutable generation at the same bundle version.
+func canonicalText(content string) string {
+	return strings.ReplaceAll(content, "\r\n", "\n")
 }
 
 func Current(configDir string) (Manifest, error) {
@@ -109,6 +119,7 @@ func Install(configDir string, bundle Bundle) (Manifest, error) {
 	}
 	defer func() { _ = root.Close() }()
 	for path, content := range bundle.Files {
+		content = canonicalText(content)
 		name := directory + "/" + manifest.Digest + "/q-cdp/" + path
 		if err := root.MkdirAll(filepath.Dir(name), 0o700); err != nil {
 			return Manifest{}, err

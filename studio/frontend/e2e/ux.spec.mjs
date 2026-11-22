@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect } from './test.mjs';
 
 test('overview starts a chat once, resumes it, and opens workspace and provider setup', async ({ page, request }) => {
   await page.goto('/');
@@ -87,7 +87,7 @@ test('mobile session picker reveals the list and closes after selection without 
       expect((await page.locator('.chat-heading h2').boundingBox()).width).toBeGreaterThan(80);
     }
     await page.goto('/settings?section=appearance');
-    await page.getByRole('radio', { name: '145%', exact: true }).check();
+    await page.getByRole('radio', { name: '140%', exact: true }).check();
     await page.goto(`/sessions/${chat.registration_id}`);
     for (const width of [320, 390, 900]) {
       await page.setViewportSize({ width, height: 844 });

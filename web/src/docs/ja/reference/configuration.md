@@ -20,8 +20,8 @@ toc:
 | `~/.q/providers.json` | 管理対象 Gateway のプロバイダーとモデルメタデータ |
 | `~/.q/gateway.json` | 単独 Gateway のリスナーとキーメタデータ |
 | `~/.q/gateway.key` | Gateway API キー検証用の非公開マスターキー |
-| `~/.q/systemone.json` | System One のプロバイダー、モデルルーティング、リスナー、API キーメタデータ |
-| `~/.q/systemone.key` | System One API キー検証用の非公開マスターキー |
+| `~/.q/systemone.json` | Decisions のプロバイダー、モデルルーティング、リスナー、API キーメタデータ |
+| `~/.q/systemone.key` | Decisions API キー検証用の非公開マスターキー |
 | `~/.q/library.json` | Global Library のループバックリスナー設定 |
 | `~/.q/workspace-memory.json` | Workspace Memory のループバックリスナー設定 |
 | `~/.q/usage.json` | トークン Usage サービスのループバックリスナー設定 |

@@ -28,7 +28,7 @@ type Candidate struct {
 	ActiveAttempts int                      `json:"active_attempts"`
 }
 
-// SelectMember requires an actual System One decision, even for an explicitly
+// SelectMember requires a decision from the configured provider, even for an explicitly
 // requested member. "none" is a valid answer and never falls back to list order.
 // Batches keep every joined candidate eligible within the native request bound.
 func SelectMember(ctx context.Context, store systemoneconfig.Store, ticket workitems.Item, body string, candidates []Candidate) (Candidate, error) {
@@ -36,18 +36,18 @@ func SelectMember(ctx context.Context, store systemoneconfig.Store, ticket worki
 		return Candidate{}, errors.New("no eligible joined subagent")
 	}
 	if _, err := os.Stat(store.Path()); err != nil {
-		return Candidate{}, fmt.Errorf("assignment requires configured System One: %w", err)
+		return Candidate{}, fmt.Errorf("assignment requires configured Decisions settings: %w", err)
 	}
 	value, err := store.LoadOrDefault()
 	if err != nil {
-		return Candidate{}, fmt.Errorf("assignment requires configured System One: %w", err)
+		return Candidate{}, fmt.Errorf("assignment requires configured Decisions settings: %w", err)
 	}
 	provider, model, err := value.ResolveModel(systemoneconfig.RoleTaskAssignment)
 	if err != nil {
 		return Candidate{}, err
 	}
 	if provider.APIKeyEnv != "" && provider.ResolveAPIKey() == "" {
-		return Candidate{}, errors.New("system one assignment provider credential is unavailable")
+		return Candidate{}, errors.New("missing credential for the Decisions assignment provider")
 	}
 	client, err := provider.NewClientWithHTTPClient(&http.Client{Timeout: assignmentTimeout})
 	if err != nil {
@@ -67,11 +67,11 @@ func SelectMember(ctx context.Context, store systemoneconfig.Store, ticket worki
 		sum := sha256.Sum256(raw)
 		result, err := client.EvaluateRaw(ctx, raw, systemone.CallOptions{IdempotencyKey: "q-ticket-" + hex.EncodeToString(sum[:])})
 		if err != nil {
-			return nil, fmt.Errorf("assignment through System One failed: %w", err)
+			return nil, fmt.Errorf("assignment through Decisions failed: %w", err)
 		}
 		answer, ok := result.Answers["assignee"]
 		if !ok || answer.Type != systemone.QuestionChoice {
-			return nil, errors.New("system one returned an invalid assignment answer")
+			return nil, errors.New("invalid assignment answer from Decisions")
 		}
 		if answer.Choice == "none" {
 			return nil, nil
@@ -81,7 +81,7 @@ func SelectMember(ctx context.Context, store systemoneconfig.Store, ticket worki
 				return &candidate, nil
 			}
 		}
-		return nil, errors.New("system one selected a member outside the supplied candidates")
+		return nil, errors.New("member selected by Decisions is outside the supplied candidates")
 	}
 	for len(candidates) > 8 {
 		winners := []Candidate{}
@@ -95,7 +95,7 @@ func SelectMember(ctx context.Context, store systemoneconfig.Store, ticket worki
 			}
 		}
 		if len(winners) == 0 {
-			return Candidate{}, errors.New("system one found no suitable joined subagent")
+			return Candidate{}, errors.New("no suitable joined subagent found by Decisions")
 		}
 		candidates = winners
 	}
@@ -104,7 +104,7 @@ func SelectMember(ctx context.Context, store systemoneconfig.Store, ticket worki
 		return Candidate{}, err
 	}
 	if winner == nil {
-		return Candidate{}, errors.New("system one found no suitable joined subagent")
+		return Candidate{}, errors.New("no suitable joined subagent found by Decisions")
 	}
 	return *winner, nil
 }

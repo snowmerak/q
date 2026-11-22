@@ -15,6 +15,7 @@ import (
 	"github.com/snowmerak/q/library"
 	"github.com/snowmerak/q/subagent"
 	"github.com/snowmerak/q/workitems"
+	"github.com/snowmerak/q/workspace"
 	"github.com/snowmerak/q/workspacememory"
 )
 
@@ -85,7 +86,14 @@ func TestTicketNativeWorkerFeedbackAndPinnedMerge(t *testing.T) {
 		t.Fatal(err)
 	}
 	value.Provider.Model = "plan-model"
+	value.Agents.Roles = map[string]config.AgentConfig{config.AgentRoleReviewer: {Model: "legacy-role-model"}}
+	value.Agents.SubagentTargets = map[string]config.SubagentTarget{subagent.BuiltinSeniorDeveloperID: {Model: "global-model"}}
 	if err := host.store.Save(value); err != nil {
+		t.Fatal(err)
+	}
+	if err := (workspace.Store{Root: root}).SaveSubagentTargets(map[string]config.SubagentTarget{
+		subagent.BuiltinSeniorDeveloperID: {Model: "plan-model"},
+	}); err != nil {
 		t.Fatal(err)
 	}
 	configured := &planningClient{}
@@ -137,6 +145,12 @@ func TestTicketNativeWorkerFeedbackAndPinnedMerge(t *testing.T) {
 		if index > 0 && a.WorkerSessionID != previous.WorkerSessionID {
 			t.Fatal("feedback changed worker session")
 		}
+		if index == 0 {
+			page, err := c.ReadLatestWorker(ctx, a.ID, 2)
+			if err != nil || page.SessionID != a.WorkerSessionID || len(page.Messages) != 0 {
+				t.Fatalf("worker before the first checkpoint: %+v %v", page, err)
+			}
+		}
 		a, err = c.UpdateAttempt(ctx, a.ID, workitems.AttemptUpdate{Owner: a.Owner, Token: a.Token, Generation: a.Generation, Status: "running"})
 		if err != nil {
 			t.Fatal(err)
@@ -145,6 +159,9 @@ func TestTicketNativeWorkerFeedbackAndPinnedMerge(t *testing.T) {
 		result, err := host.runTicket(ctx, c, project, item, candidate, a, "Create child.txt: "+content)
 		if err != nil || result.Outcome != "succeeded" || result.ChangeRequest == nil {
 			t.Fatalf("worker: %+v %v", result, err)
+		}
+		if len(configured.requests) == 0 || configured.requests[len(configured.requests)-1].Model != "plan-model" {
+			t.Fatal("ticket worker did not use the directly assigned API model")
 		}
 		if _, err := os.Stat(filepath.Join(root, "child.txt")); !os.IsNotExist(err) {
 			t.Fatalf("worker edited parent before review: %v", err)
@@ -159,6 +176,19 @@ func TestTicketNativeWorkerFeedbackAndPinnedMerge(t *testing.T) {
 		nextPage, err := c.ReadWorker(ctx, a.ID, workerPage.NextCursor, 1)
 		if err != nil || len(nextPage.Messages) != 1 || nextPage.Messages[0].Index != 1 {
 			t.Fatalf("worker page %+v %v", nextPage, err)
+		}
+		tail, err := c.ReadLatestWorker(ctx, a.ID, 1)
+		if err != nil || tail.RunID != a.ID || len(tail.Messages) != 1 || tail.Messages[0].Index <= nextPage.Messages[0].Index || tail.NextCursor != "" {
+			t.Fatalf("worker latest checkpoint: %+v %v", tail, err)
+		}
+		recent, err := c.ReadLatestWorker(ctx, a.ID, 20)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, message := range recent.Messages {
+			if message.Role == string(client.RoleSystem) || message.Role == string(client.RoleDeveloper) {
+				t.Fatalf("worker activity included an instruction message at index %d", message.Index)
+			}
 		}
 		a, err = c.UpdateAttempt(ctx, a.ID, workitems.AttemptUpdate{Owner: a.Owner, Token: a.Token, Generation: a.Generation, Status: "awaiting_review", Result: []byte(`{"outcome":"succeeded"}`), ChangeRequest: result.ChangeRequest})
 		if err != nil {
@@ -207,7 +237,10 @@ func TestTicketACPWorkerResumesSameRemoteSessionAndBlocksUnknownPrompt(t *testin
 	ctx := t.Context()
 	root := project.WorkspaceRoots[0]
 	profiles := (model{hostState: hostState{store: host.store}}).customStoreAt(root)
-	if err := profiles.Save(subagent.Profile{Version: 1, Name: "acp-reader", Kind: subagent.AgentKindExternal, Agent: "wire", SystemPrompt: "Return evidence."}, "workspace", nil); err != nil {
+	if err := profiles.Save(subagent.Profile{
+		Version: 1, Name: "acp-reader", Kind: subagent.AgentKindInner, Role: config.AgentRoleResearch,
+		Target: &config.SubagentTarget{Agent: "wire"}, Tools: []string{"read_file"}, SystemPrompt: "Return evidence.",
+	}, "workspace", nil); err != nil {
 		t.Fatal(err)
 	}
 	m, err := c.PutMember(ctx, project.ID, workitems.MemberInput{AgentID: "workspace/acp-reader", DefinitionRoot: root, ExecutionRoot: root})
@@ -249,7 +282,8 @@ func TestTicketACPWorkerResumesSameRemoteSessionAndBlocksUnknownPrompt(t *testin
 		if index > 0 {
 			expected = "resumed=true"
 		}
-		if err != nil || !strings.Contains(result.Report, expected) {
+		if err != nil || !strings.Contains(result.Report, expected) ||
+			!strings.Contains(result.Report, "skills=true work-tools=true skill-guidance=true") {
 			t.Fatalf("ACP worker %+v %v", result, err)
 		}
 		a, err = c.UpdateAttempt(ctx, a.ID, workitems.AttemptUpdate{Owner: a.Owner, Token: a.Token, Generation: a.Generation, Status: "awaiting_review", Result: []byte(`{"outcome":"succeeded"}`)})

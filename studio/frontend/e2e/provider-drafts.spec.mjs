@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect } from './test.mjs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -6,7 +6,7 @@ test.beforeEach(async ({ page }) => {
   page.providerErrors = [];
   page.on('pageerror', error => page.providerErrors.push(error.message));
   page.on('console', message => {
-    if (message.type() === 'error' && !message.location().url.endsWith('/favicon.ico')) {
+    if (message.type() === 'error') {
       page.providerErrors.push(message.text());
     }
   });
@@ -56,20 +56,44 @@ test('provider save acknowledgements preserve the next field before blur', async
   await expect(key).toHaveAttribute('placeholder', 'Stored · enter to replace');
 });
 
-test('System One provider acknowledgements preserve the next field before blur', async ({ page, request }) => {
+test('Decision API adds and persists OpenAI and Gemini providers', async ({ page, request }) => {
+  await page.goto('/settings?section=system-one');
+  await expect(page.getByRole('heading', { name: 'Decisions', exact: true })).toBeVisible();
+  await page.goto('/settings?section=decisions');
+  const protocol = page.getByRole('combobox', { name: 'Provider protocol', exact: true });
+  for (const { api, id, label, uri, env } of [
+    { api: 'decision', id: 'openai', label: 'OpenAI-compatible Decisions', uri: 'https://api.openai.com/v1/decisions', env: 'OPENAI_API_KEY' },
+    { api: 'gemini', id: 'gemini', label: 'Gemini Decisions', uri: 'https://generativelanguage.googleapis.com/v1beta/decisions', env: 'GEMINI_API_KEY' }
+  ]) {
+    await protocol.selectOption(api);
+    await page.getByRole('button', { name: 'Add provider', exact: true }).click();
+    const card = page.locator('.system-one-provider-card').filter({ has: page.getByRole('heading', { name: id, exact: true }) });
+    await expect(card).toContainText(label);
+    await expect(card.getByRole('textbox', { name: 'Endpoint URI' })).toHaveValue(uri);
+    await expect(card.getByRole('textbox', { name: 'API key environment' })).toHaveValue(env);
+    const response = await request.get('/api/v1/settings');
+    const settings = await response.json();
+    expect(settings.system_one.providers).toContainEqual(expect.objectContaining({ id, api, uri, api_key_env: env }));
+    page.once('dialog', dialog => dialog.accept());
+    await card.getByTitle('Delete provider', { exact: true }).click();
+    await expect(card).toHaveCount(0);
+  }
+});
+
+test('Decisions provider acknowledgements preserve the next field before blur', async ({ page, request }) => {
   const id = 'draft-system-one';
   const fixture = await (await request.get('/_test/fixture')).json();
-  expect((await request.post('/api/v1/settings/system-one/providers', { data: {
+  expect((await request.post('/api/v1/settings/decisions/providers', { data: {
     id, uri: fixture.decision_uri, api_key_env: ''
   } })).ok()).toBe(true);
-  await page.goto('/settings?section=system-one');
+  await page.goto('/settings?section=decisions');
   const card = page.locator('.system-one-provider-card').filter({ hasText: id });
   let release;
   const gate = new Promise(resolve => { release = resolve; });
   let notify;
   const held = new Promise(resolve => { notify = resolve; });
   let first = true;
-  await page.route('**/api/v1/settings/system-one/providers/*', async route => {
+  await page.route('**/api/v1/settings/decisions/providers/*', async route => {
     if (route.request().method() !== 'PUT') return route.continue();
     const response = await route.fetch();
     if (first) { first = false; notify(); await gate; }
@@ -92,16 +116,16 @@ test('System One provider acknowledgements preserve the next field before blur',
 });
 
 for (const field of ['Provider ID', 'Endpoint URI', 'API key environment']) {
-  test(`System One keeps ${field} reverted while its save is in flight`, async ({ page, request }) => {
+  test(`Decisions keeps ${field} reverted while its save is in flight`, async ({ page, request }) => {
     const property = { 'Provider ID': 'id', 'Endpoint URI': 'uri', 'API key environment': 'api_key_env' }[field];
     const id = `reverted-system-one-${property}`;
     const fixture = await (await request.get('/_test/fixture')).json();
     const original = { id, uri: fixture.decision_uri, api_key_env: '' }[property];
     const changed = { id: id + '-renamed', uri: fixture.decision_uri.replace('/systemone', '/changed/systemone'), api_key_env: 'Q_CHANGED_KEY' }[property];
-    expect((await request.post('/api/v1/settings/system-one/providers', { data: {
+    expect((await request.post('/api/v1/settings/decisions/providers', { data: {
       id, uri: fixture.decision_uri, api_key_env: ''
     } })).ok()).toBe(true);
-    await page.goto('/settings?section=system-one');
+    await page.goto('/settings?section=decisions');
     const card = page.locator('.system-one-provider-card').filter({ hasText: id });
     const input = card.getByRole('textbox', { name: field, exact: true });
     let release;
@@ -109,7 +133,7 @@ for (const field of ['Provider ID', 'Endpoint URI', 'API key environment']) {
     let notify;
     const held = new Promise(resolve => { notify = resolve; });
     let first = true;
-    await page.route('**/api/v1/settings/system-one/providers/*', async route => {
+    await page.route('**/api/v1/settings/decisions/providers/*', async route => {
       if (route.request().method() !== 'PUT') return route.continue();
       const response = await route.fetch();
       if (first) { first = false; notify(); await gate; }
@@ -134,20 +158,20 @@ for (const field of ['Provider ID', 'Endpoint URI', 'API key environment']) {
   });
 }
 
-test('System One queued saves use the normalized provider ID after a rename', async ({ page, request }) => {
+test('Decisions queued saves use the normalized provider ID after a rename', async ({ page, request }) => {
   const id = 'normalized-system-one';
   const fixture = await (await request.get('/_test/fixture')).json();
-  expect((await request.post('/api/v1/settings/system-one/providers', { data: {
+  expect((await request.post('/api/v1/settings/decisions/providers', { data: {
     id, uri: fixture.decision_uri, api_key_env: ''
   } })).ok()).toBe(true);
-  await page.goto('/settings?section=system-one');
+  await page.goto('/settings?section=decisions');
   const card = page.locator('.system-one-provider-card').filter({ hasText: id });
   let release;
   const gate = new Promise(resolve => { release = resolve; });
   let notify;
   const held = new Promise(resolve => { notify = resolve; });
   let first = true;
-  await page.route('**/api/v1/settings/system-one/providers/*', async route => {
+  await page.route('**/api/v1/settings/decisions/providers/*', async route => {
     if (route.request().method() !== 'PUT') return route.continue();
     const response = await route.fetch();
     if (first) { first = false; notify(); await gate; }

@@ -15,7 +15,7 @@ type SearchSkillsInput struct {
 	Query  string   `json:"query" jsonschema:"Concise English keywords describing the procedure or expertise needed; translate non-English requests"`
 	Scopes []string `json:"scopes,omitempty" jsonschema:"Optional exact scopes: global or workspace"`
 	Tags   []string `json:"tags,omitempty" jsonschema:"Optional tags; a skill must match at least one"`
-	Limit  int      `json:"limit,omitempty" jsonschema:"Maximum returned results; defaults to 20 and System One ranking caps it at 20"`
+	Limit  int      `json:"limit,omitempty" jsonschema:"Maximum returned results; defaults to 20 and Decisions ranking caps it at 20"`
 }
 
 type SkillSearchHit struct {
@@ -96,7 +96,7 @@ func searchSkillsWithRanker(
 	if rankingEnabled {
 		ranked, rankErr := ranker.RankSkills(ctx, input.Query, output.Hits)
 		if rankErr != nil {
-			output.Warnings = append(output.Warnings, "System One skill relevance unavailable: "+rankErr.Error())
+			output.Warnings = append(output.Warnings, "Decisions skill relevance unavailable: "+rankErr.Error())
 		} else {
 			output.Hits = ranked
 			output.Reranked = true
@@ -171,7 +171,7 @@ func retrieveSkills(
 	return output, nil
 }
 
-// SearchSkillHints retrieves and reranks up to 32 candidates in one System One
+// SearchSkillHints retrieves and reranks up to 32 candidates in one Decisions
 // request. Hint consumers apply their own hint limits; retaining the
 // ranked window here lets them skip candidates already shown in the context.
 func SearchSkillHints(
@@ -191,7 +191,7 @@ func SearchSkillHints(
 	}
 	ranked, rankErr := ranker.RankSkills(ctx, query, output.Hits)
 	if rankErr != nil {
-		output.Warnings = append(output.Warnings, "System One skill relevance unavailable: "+rankErr.Error())
+		output.Warnings = append(output.Warnings, "Decisions skill relevance unavailable: "+rankErr.Error())
 		if len(output.Hits) > limit {
 			output.Hits = output.Hits[:limit]
 		}

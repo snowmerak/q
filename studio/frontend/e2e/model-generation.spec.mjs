@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect } from './test.mjs';
 
  test('model output limit and recovery settings persist, clear, and fit mobile', async ({ page, request }, testInfo) => {
   const errors=[];
