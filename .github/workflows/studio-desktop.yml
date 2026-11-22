@@ -9,7 +9,7 @@ on:
       version:
         description: Product version (major.minor.patch)
         required: true
-        default: 0.2.2
+        default: 0.3.0
         type: string
       publish_release:
         description: Attach packages to the existing v<version> tag's GitHub Release
