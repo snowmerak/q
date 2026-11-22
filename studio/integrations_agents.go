@@ -137,7 +137,7 @@ func (service *integrationService) serveSubagentTarget(writer http.ResponseWrite
 			if value.Agents.Roles == nil {
 				value.Agents.Roles = make(map[string]config.AgentConfig)
 			}
-			value.Agents.Roles[profile.Info.Role] = config.AgentConfig{Agent: input.Target.Agent}
+			value.Agents.Roles[profile.Info.Role] = config.AgentConfig{Agent: input.Target.Agent, ACPSelection: input.Target.ACPSelection}
 		}
 	} else if input.Target == nil {
 		delete(value.Agents.SubagentTargets, input.ID)
@@ -185,7 +185,7 @@ func studioSubagentTarget(value config.Config, definition subagent.AgentDefiniti
 		if definition.Connection == "" {
 			return nil
 		}
-		return &config.SubagentTarget{Agent: definition.Connection}
+		return &config.SubagentTarget{Agent: definition.Connection, ACPSelection: definition.ACPOptions()}
 	}
 	role := definition.Info.Role
 	assignment := value.ConfiguredAgent(role)
@@ -209,8 +209,10 @@ type agentConnectionsUpdate struct {
 }
 
 type agentProbeRequest struct {
-	WorkspaceRoot string `json:"workspace_root"`
-	ConnectionID  string `json:"connection_id"`
+	WorkspaceRoot        string `json:"workspace_root"`
+	ConnectionID         string `json:"connection_id"`
+	IncludeModelSettings bool   `json:"include_model_settings,omitempty"`
+	Model                string `json:"model,omitempty"`
 }
 
 func (service *integrationService) serveAgents(writer http.ResponseWriter, request *http.Request) {
@@ -278,7 +280,11 @@ func (service *integrationService) serveAgents(writer http.ResponseWriter, reque
 			continue
 		}
 		assignment := value.Agents.Roles[role]
-		assignment.Agent = strings.TrimSpace(input.Bindings[role])
+		agent := strings.TrimSpace(input.Bindings[role])
+		if agent != assignment.Agent {
+			assignment.ACPSelection = config.ACPSelection{}
+		}
+		assignment.Agent = agent
 		if assignment.Agent == "" {
 			delete(value.Agents.Roles, role)
 		} else {
@@ -302,6 +308,9 @@ func (service *integrationService) serveAgentProbe(writer http.ResponseWriter, r
 		writeAPIError(writer, http.StatusBadRequest, err)
 		return
 	}
+	if input.IncludeModelSettings && strings.TrimSpace(input.WorkspaceRoot) == "" {
+		input.WorkspaceRoot = service.main.Dir
+	}
 	root, err := canonicalWorkspaceDirectory(input.WorkspaceRoot)
 	if err != nil {
 		writeAPIError(writer, http.StatusBadRequest, err)
@@ -321,6 +330,23 @@ func (service *integrationService) serveAgentProbe(writer http.ResponseWriter, r
 	}
 	ctx, cancel := context.WithTimeout(request.Context(), 45*time.Second)
 	defer cancel()
+	if input.IncludeModelSettings {
+		if connection.Disabled {
+			writeAPIError(writer, http.StatusUnprocessableEntity, errors.New("select an enabled ACP connection"))
+			return
+		}
+		if err := (config.ACPSelection{AgentModel: input.Model}).ValidateForAgent(input.ConnectionID); err != nil {
+			writeAPIError(writer, http.StatusUnprocessableEntity, err)
+			return
+		}
+		settings, err := app.ProbeACPModelSettings(ctx, root, input.ConnectionID, connection, input.Model)
+		if err != nil {
+			writeAPIError(writer, http.StatusBadGateway, err)
+			return
+		}
+		writeJSON(writer, http.StatusOK, settings)
+		return
+	}
 	if err := app.ProbeACPAgentConnection(ctx, root, input.ConnectionID, connection); err != nil {
 		writeAPIError(writer, http.StatusBadGateway, err)
 		return

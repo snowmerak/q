@@ -15,17 +15,18 @@ import (
 )
 
 type Profile struct {
-	Version          int                    `yaml:"version" json:"version"`
-	Name             string                 `yaml:"name" json:"name"`
-	Description      string                 `yaml:"description,omitempty" json:"description,omitempty"`
-	Kind             string                 `yaml:"kind,omitempty" json:"kind,omitempty"`
-	Role             string                 `yaml:"role,omitempty" json:"role,omitempty"`
-	Agent            string                 `yaml:"agent,omitempty" json:"agent,omitempty"`
-	Target           *config.SubagentTarget `yaml:"target,omitempty" json:"target,omitempty"`
-	SystemPrompt     string                 `yaml:"system_prompt" json:"system_prompt"`
-	MutatesWorkspace bool                   `yaml:"mutates_workspace,omitempty" json:"mutates_workspace,omitempty"`
-	Tools            []string               `yaml:"tools" json:"tools"`
-	Delegates        []string               `yaml:"delegates" json:"delegates"`
+	Version             int    `yaml:"version" json:"version"`
+	Name                string `yaml:"name" json:"name"`
+	Description         string `yaml:"description,omitempty" json:"description,omitempty"`
+	Kind                string `yaml:"kind,omitempty" json:"kind,omitempty"`
+	Role                string `yaml:"role,omitempty" json:"role,omitempty"`
+	Agent               string `yaml:"agent,omitempty" json:"agent,omitempty"`
+	config.ACPSelection `yaml:",inline"`
+	Target              *config.SubagentTarget `yaml:"target,omitempty" json:"target,omitempty"`
+	SystemPrompt        string                 `yaml:"system_prompt" json:"system_prompt"`
+	MutatesWorkspace    bool                   `yaml:"mutates_workspace,omitempty" json:"mutates_workspace,omitempty"`
+	Tools               []string               `yaml:"tools" json:"tools"`
+	Delegates           []string               `yaml:"delegates" json:"delegates"`
 }
 
 func (p Profile) EffectiveKind() string {
@@ -59,6 +60,9 @@ func (p Profile) Validate() error {
 		if err := p.Target.Validate(); err != nil {
 			return fmt.Errorf("profile: %w", err)
 		}
+	}
+	if err := p.ValidateForAgent(p.Agent); err != nil {
+		return fmt.Errorf("profile: %w", err)
 	}
 	switch p.EffectiveKind() {
 	case AgentKindInner:

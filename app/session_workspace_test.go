@@ -332,13 +332,34 @@ func TestManagerRequiresLibraryBindingAndAvailableExecutionRoot(t *testing.T) {
 // A deterministic ACP peer exercises the real stdio transport without sending
 // a prompt to a paid provider. It verifies both process CWD and ACP's Cwd field.
 func TestManagerACPHelperProcess(t *testing.T) {
-	if len(os.Args) < 2 || os.Args[len(os.Args)-1] != "manager-acp-helper" {
+	mode := os.Args[len(os.Args)-1]
+	if mode != "manager-acp-helper" && mode != "subagent-acp-helper" {
 		return
 	}
 	decoder, encoder := json.NewDecoder(os.Stdin), json.NewEncoder(os.Stdout)
 	cwd, _ := os.Getwd()
 	resumed, skills, workTools := false, false, false
 	reviewAttempt, reviewOperation := "", ""
+	model, effort := "base", "medium"
+	efforts := func() []string {
+		if model == "deep" {
+			return []string{"high", "max"}
+		}
+		return []string{"low", "medium"}
+	}
+	options := func() []map[string]any {
+		selectOption := func(id, category, current string, choices []string) map[string]any {
+			values := make([]map[string]string, 0, len(choices))
+			for _, choice := range choices {
+				values = append(values, map[string]string{"value": choice, "name": choice})
+			}
+			return map[string]any{"id": id, "type": "select", "name": category, "category": category, "currentValue": current, "options": values}
+		}
+		return []map[string]any{
+			selectOption("selected-model", "model", model, []string{"base", "fast", "deep"}),
+			selectOption("depth", "thought_level", effort, efforts()),
+		}
+	}
 	for {
 		var request struct {
 			ID     json.RawMessage `json:"id"`
@@ -346,6 +367,8 @@ func TestManagerACPHelperProcess(t *testing.T) {
 			Params struct {
 				Cwd        string `json:"cwd"`
 				SessionID  string `json:"sessionId"`
+				ConfigID   string `json:"configId"`
+				Value      string `json:"value"`
 				MCPServers []struct {
 					Name string   `json:"name"`
 					Args []string `json:"args"`
@@ -368,26 +391,49 @@ func TestManagerACPHelperProcess(t *testing.T) {
 			}
 			resumed = request.Method == "session/load"
 			servers := request.Params.MCPServers
-			if len(servers) != 1 || servers[0].Name != "q-library" {
+			if mode == "manager-acp-helper" && (len(servers) != 1 || servers[0].Name != "q-library") {
 				fmt.Fprintf(os.Stderr, "expected one q-library server, got %+v\n", servers)
 				os.Exit(3)
 			}
-			skills = true
-			workTools = !slices.Contains(servers[0].Args, "--skills-only")
-			for i, arg := range servers[0].Args[:len(servers[0].Args)-1] {
-				switch arg {
-				case "--review-attempt":
-					reviewAttempt = servers[0].Args[i+1]
-				case "--review-operation":
-					reviewOperation = servers[0].Args[i+1]
+			if len(servers) != 0 {
+				skills = true
+				workTools = !slices.Contains(servers[0].Args, "--skills-only")
+				for i, arg := range servers[0].Args[:len(servers[0].Args)-1] {
+					switch arg {
+					case "--review-attempt":
+						reviewAttempt = servers[0].Args[i+1]
+					case "--review-operation":
+						reviewOperation = servers[0].Args[i+1]
+					}
 				}
 			}
+			setup := map[string]any{"configOptions": options()}
 			if !resumed {
-				result = map[string]any{"sessionId": fmt.Sprintf("remote-%d", os.Getpid())}
+				setup["sessionId"] = fmt.Sprintf("remote-%d", os.Getpid())
 			}
+			result = setup
+		case "session/set_config_option":
+			switch request.Params.ConfigID {
+			case "selected-model":
+				model = request.Params.Value
+				effort = "medium"
+				if model == "deep" {
+					effort = "high"
+				}
+			case "depth":
+				if !slices.Contains(efforts(), request.Params.Value) {
+					os.Exit(4)
+				}
+				effort = request.Params.Value
+			default:
+				os.Exit(5)
+			}
+			result = map[string]any{"configOptions": options()}
 		case "session/prompt":
 			role, skillGuidance, browserGuidance, reviewGuidance := "none", false, false, false
+			webTester := false
 			for _, block := range request.Params.Prompt {
+				webTester = webTester || strings.Contains(block.Text, "You are q's isolated external Web Tester")
 				skillGuidance = skillGuidance || strings.Contains(block.Text, "search_skills") && strings.Contains(block.Text, "get_skill")
 				browserGuidance = browserGuidance || strings.Contains(block.Text, "<q_browser_control>")
 				reviewGuidance = reviewGuidance || strings.Contains(block.Text, workitemtools.AssignedReviewInstructions)
@@ -397,7 +443,11 @@ func TestManagerACPHelperProcess(t *testing.T) {
 					}
 				}
 			}
-			text := fmt.Sprintf("cwd=%s resumed=%t role=%s skills=%t work-tools=%t skill-guidance=%t browser-guidance=%t review=%s/%s review-guidance=%t", cwd, resumed, role, skills, workTools, skillGuidance, browserGuidance, reviewAttempt, reviewOperation, reviewGuidance)
+			text := fmt.Sprintf("cwd=%s resumed=%t role=%s skills=%t work-tools=%t skill-guidance=%t browser-guidance=%t review=%s/%s review-guidance=%t model=%s effort=%s", cwd, resumed, role, skills, workTools, skillGuidance, browserGuidance, reviewAttempt, reviewOperation, reviewGuidance, model, effort)
+			if webTester {
+				body, _ := json.Marshal(map[string]string{"outcome": "succeeded", "summary": text})
+				text = string(body)
+			}
 			_ = encoder.Encode(map[string]any{"jsonrpc": "2.0", "method": "session/update", "params": map[string]any{"sessionId": request.Params.SessionID, "update": map[string]any{"sessionUpdate": "agent_message_chunk", "content": map[string]any{"type": "text", "text": text}}}})
 			result = map[string]any{"stopReason": "end_turn"}
 		}

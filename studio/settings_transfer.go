@@ -235,7 +235,12 @@ func (state transferState) bundle() (settingsBundle, error) {
 		put("subagents", "connection/"+id, connection)
 	}
 	for _, role := range config.ExternalAgentRoles() {
-		put("subagents", "binding/"+role, state.main.Agents.Roles[role].Agent)
+		assignment := state.main.Agents.Roles[role]
+		if assignment.ACPSelection == (config.ACPSelection{}) {
+			put("subagents", "binding/"+role, assignment.Agent)
+		} else {
+			put("subagents", "binding/"+role, config.SubagentTarget{Agent: assignment.Agent, ACPSelection: assignment.ACPSelection})
+		}
 	}
 	for id, target := range state.main.Agents.SubagentTargets {
 		put("subagents", "target/"+id, target)

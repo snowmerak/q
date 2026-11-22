@@ -249,6 +249,7 @@ func TestSubagentTargetPreservesLegacyReasoningAndWorkspaceScope(t *testing.T) {
 	value.Agents.Roles = map[string]config.AgentConfig{
 		config.AgentRoleCoder: {Model: "global-model", ReasoningEffort: "xhigh"},
 	}
+	value.Agents.Connections = map[string]config.AgentConnectionConfig{"wire": {Preset: "codex"}}
 	if err := store.Save(value); err != nil {
 		t.Fatal(err)
 	}
@@ -287,6 +288,11 @@ func TestSubagentTargetPreservesLegacyReasoningAndWorkspaceScope(t *testing.T) {
 		WorkspaceRoot: root, Scope: "workspace", ID: subagent.BuiltinJuniorDeveloperID, Target: &selected,
 	}), selected)
 	check(serveJSON(t, handler, http.MethodGet, endpoint, nil), config.SubagentTarget{Model: "global-model", ReasoningEffort: "xhigh"})
+	acp := config.SubagentTarget{Agent: "wire", ACPSelection: config.ACPSelection{AgentModel: "deep", AgentReasoningEffort: "max"}}
+	check(serveJSON(t, handler, http.MethodPut, endpoint+"/target", subagentTargetUpdate{
+		WorkspaceRoot: root, Scope: "workspace", ID: subagent.BuiltinJuniorDeveloperID, Target: &acp,
+	}), acp)
+	check(serveJSON(t, handler, http.MethodGet, endpoint+"?workspace_root="+url.QueryEscape(root), nil), acp)
 }
 
 func TestIntegrationAPISubagentsSupportsGlobalProfilesWithoutWorkspace(t *testing.T) {

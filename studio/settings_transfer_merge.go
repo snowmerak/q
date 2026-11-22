@@ -338,14 +338,25 @@ func (state *transferState) merge(section, id string, data json.RawMessage) erro
 			if !config.IsExternalAgentRole(name) {
 				break
 			}
-			value, err := transferValue[string](data)
+			agent, err := transferValue[string](data)
+			assignment := config.AgentConfig{Agent: agent}
 			if err != nil {
-				return err
+				target, err := transferValue[config.SubagentTarget](data)
+				if err != nil {
+					return err
+				}
+				if target.Agent == "" {
+					return errors.New("external agent binding requires an ACP connection")
+				}
+				if err := target.Validate(); err != nil {
+					return err
+				}
+				assignment = config.AgentConfig{Agent: target.Agent, ACPSelection: target.ACPSelection}
 			}
 			if state.main.Agents.Roles == nil {
 				state.main.Agents.Roles = make(map[string]config.AgentConfig)
 			}
-			state.main.Agents.Roles[name] = config.AgentConfig{Agent: value}
+			state.main.Agents.Roles[name] = assignment
 			return nil
 		case "profile":
 			value, err := transferValue[subagent.Profile](data)

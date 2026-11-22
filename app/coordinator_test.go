@@ -233,14 +233,30 @@ func TestTicketNativeWorkerFeedbackAndPinnedMerge(t *testing.T) {
 }
 
 func TestTicketACPWorkerResumesSameRemoteSessionAndBlocksUnknownPrompt(t *testing.T) {
+	fast := config.ACPSelection{AgentModel: "fast", AgentReasoningEffort: "low"}
+	deep := config.ACPSelection{AgentModel: "deep", AgentReasoningEffort: "max"}
+	t.Run("profile target", func(t *testing.T) {
+		testTicketACPWorkerModelSelection(t, subagent.Profile{
+			Version: 1, Name: "acp-reader", Kind: subagent.AgentKindInner, Role: config.AgentRoleResearch,
+			Target: &config.SubagentTarget{Agent: "wire", ACPSelection: deep},
+			Tools:  []string{"read_file"}, SystemPrompt: "Return evidence.",
+		}, "model=deep effort=max")
+	})
+	t.Run("external profile", func(t *testing.T) {
+		testTicketACPWorkerModelSelection(t, subagent.Profile{
+			Version: 1, Name: "acp-reader", Kind: subagent.AgentKindExternal, Agent: "wire",
+			ACPSelection: fast, SystemPrompt: "Return evidence.",
+		}, "model=fast effort=low")
+	})
+}
+
+func testTicketACPWorkerModelSelection(t *testing.T, profile subagent.Profile, expectedSettings string) {
+	t.Helper()
 	host, c, project, _ := testManagerHost(t)
 	ctx := t.Context()
 	root := project.WorkspaceRoots[0]
 	profiles := (model{hostState: hostState{store: host.store}}).customStoreAt(root)
-	if err := profiles.Save(subagent.Profile{
-		Version: 1, Name: "acp-reader", Kind: subagent.AgentKindInner, Role: config.AgentRoleResearch,
-		Target: &config.SubagentTarget{Agent: "wire"}, Tools: []string{"read_file"}, SystemPrompt: "Return evidence.",
-	}, "workspace", nil); err != nil {
+	if err := profiles.Save(profile, "workspace", nil); err != nil {
 		t.Fatal(err)
 	}
 	m, err := c.PutMember(ctx, project.ID, workitems.MemberInput{AgentID: "workspace/acp-reader", DefinitionRoot: root, ExecutionRoot: root})
@@ -282,7 +298,7 @@ func TestTicketACPWorkerResumesSameRemoteSessionAndBlocksUnknownPrompt(t *testin
 		if index > 0 {
 			expected = "resumed=true"
 		}
-		if err != nil || !strings.Contains(result.Report, expected) ||
+		if err != nil || !strings.Contains(result.Report, expected) || !strings.Contains(result.Report, expectedSettings) ||
 			!strings.Contains(result.Report, "skills=true work-tools=true skill-guidance=true") {
 			t.Fatalf("ACP worker %+v %v", result, err)
 		}

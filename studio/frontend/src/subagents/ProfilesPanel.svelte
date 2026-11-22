@@ -35,7 +35,8 @@
     const name = newProfileName.trim();
     if (!name) return;
     const scope = newProfileScope === 'workspace' && rootValue() ? 'workspace' : 'global';
-    const connection = newProfileTarget?.agent || '';
+    const acpTarget = newProfileTarget?.agent ? newProfileTarget : undefined;
+    const connection = acpTarget?.agent || '';
     const kind = connection ? 'external' : 'inner';
     const profile: Profile = {
       version: 1,
@@ -43,6 +44,8 @@
       description: '',
       kind,
       agent: connection,
+      agent_model: acpTarget?.agent_model,
+      agent_reasoning_effort: acpTarget?.agent_reasoning_effort,
       target: kind === 'inner' ? newProfileTarget || { default: true } : undefined,
       system_prompt: 'Complete the assigned request and report verified results.',
       mutates_workspace: false,
@@ -70,6 +73,8 @@
       desired.delegates = [];
     } else {
       desired.agent = '';
+      desired.agent_model = undefined;
+      desired.agent_reasoning_effort = undefined;
       desired.mutates_workspace = false;
     }
     const root = rootValue();
@@ -107,9 +112,13 @@
     if (entry.profile.kind === 'external') {
       if (target?.agent) {
         entry.profile.agent = target.agent;
+        entry.profile.agent_model = target.agent_model;
+        entry.profile.agent_reasoning_effort = target.agent_reasoning_effort;
       } else if (target) {
         entry.profile.kind = 'inner';
         entry.profile.agent = '';
+        entry.profile.agent_model = undefined;
+        entry.profile.agent_reasoning_effort = undefined;
         entry.profile.mutates_workspace = false;
         entry.profile.target = target;
       }
@@ -182,7 +191,7 @@
 <div class="settings-card profile-create">
   <label><span>Profile name</span><input bind:value={newProfileName} placeholder="security-reviewer" onkeydown={(event) => event.key === 'Enter' && addProfile()} /></label>
   <label><span>Scope</span><select bind:value={newProfileScope}><option value="global">Global</option><option value="workspace" disabled={!rootValue()}>Repository</option></select></label>
-  <ExecutionPicker target={newProfileTarget} {models} connections={enabledConnections} defaultModel={agents.default_model}
+  <ExecutionPicker target={newProfileTarget} {models} connections={enabledConnections} workspaceRoot={agents.workspace_root} defaultModel={agents.default_model}
     selectTarget={target => newProfileTarget = target} />
   <button class="primary-button" onclick={addProfile} disabled={!newProfileName.trim()}><Plus size={15} /> Add profile</button>
 </div>
@@ -193,7 +202,7 @@
     {#if entry.error}<p class="profile-error">{entry.error}</p>{:else}
       <div class="field-grid">
         <label><span>Scope</span><select bind:value={entry.scope} onchange={() => saveProfile(entry)}><option value="global">Global</option><option value="workspace" disabled={!rootValue()}>Repository</option></select></label>
-        <ExecutionPicker target={entry.effective_target} {models} connections={enabledConnections} defaultModel={agents.default_model}
+        <ExecutionPicker target={entry.effective_target} {models} connections={enabledConnections} workspaceRoot={agents.workspace_root} defaultModel={agents.default_model}
           selectTarget={target => changeProfileTarget(entry, target)} />
         <label class="wide-field"><span>Description</span><input bind:value={entry.profile.description} onchange={() => saveProfile(entry)} /></label>
         {#if entry.profile.kind === 'external'}

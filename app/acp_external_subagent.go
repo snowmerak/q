@@ -76,11 +76,7 @@ func runACPExternalSubagent(
 	if strings.TrimSpace(request) == "" {
 		return "", errors.New("external subagent request is required")
 	}
-	command, err := resolveConfiguredACPAgentCommand(connection, exec.LookPath)
-	if err != nil {
-		return "", fmt.Errorf("external subagent %q: %w", definition.Info.Name, err)
-	}
-	remote, err := startACPRemoteClient(ctx, command, root, "", connection.AuthMethod, io.Discard)
+	remote, err := startACPSubagent(ctx, root, connection, definition.ACPOptions())
 	if err != nil {
 		return "", fmt.Errorf("external subagent %q: %w", definition.Info.Name, err)
 	}
@@ -98,4 +94,19 @@ func runACPExternalSubagent(
 		return "", fmt.Errorf("external subagent %q via ACP agent %q: %w", definition.Info.Name, connectionID, err)
 	}
 	return strings.TrimSpace(report), nil
+}
+
+func startACPSubagent(ctx context.Context, root string, connection config.AgentConnectionConfig, selection config.ACPSelection) (*acpRemoteClient, error) {
+	command, err := resolveConfiguredACPAgentCommand(connection, exec.LookPath)
+	if err != nil {
+		return nil, err
+	}
+	remote, err := startACPRemoteClient(ctx, command, root, "", connection.AuthMethod, io.Discard)
+	if err != nil {
+		return nil, err
+	}
+	if err := remote.applyModelSelection(ctx, selection); err != nil {
+		return nil, errors.Join(err, disposeACPRemote(remote))
+	}
+	return remote, nil
 }

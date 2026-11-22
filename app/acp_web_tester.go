@@ -5,8 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
-	"os/exec"
 	"strings"
 	"time"
 
@@ -22,6 +20,7 @@ func configuredExternalWebTesterInvocation(value config.Config, root string) (su
 	if !configured {
 		return subagent.Invocation{}, false
 	}
+	selection := value.Agents.Roles[config.AgentRoleExternalWebTester].ACPSelection
 	return subagent.Invocation{
 		Tool: subagent.ExternalWebTesterTool(),
 		Source: subagent.InvocationSource{
@@ -33,7 +32,7 @@ func configuredExternalWebTesterInvocation(value config.Config, root string) (su
 			if err != nil {
 				return client.ToolResult{}, err
 			}
-			result, err := runACPExternalWebTester(ctx, root, connectionID, connection, input)
+			result, err := runACPExternalWebTester(ctx, root, connectionID, connection, selection, input)
 			if err != nil {
 				return client.ToolResult{}, err
 			}
@@ -50,15 +49,12 @@ func runACPExternalWebTester(
 	ctx context.Context,
 	root, connectionID string,
 	connection config.AgentConnectionConfig,
+	selection config.ACPSelection,
 	input subagent.ExternalWebTesterInput,
 ) (subagent.ExternalWebTesterResult, error) {
 	ctx, cancel := context.WithTimeout(ctx, externalWebTesterTimeout)
 	defer cancel()
-	command, err := resolveConfiguredACPAgentCommand(connection, exec.LookPath)
-	if err != nil {
-		return subagent.ExternalWebTesterResult{}, fmt.Errorf("web tester agent %q: %w", connectionID, err)
-	}
-	remote, err := startACPRemoteClient(ctx, command, root, "", connection.AuthMethod, io.Discard)
+	remote, err := startACPSubagent(ctx, root, connection, selection)
 	if err != nil {
 		return subagent.ExternalWebTesterResult{}, fmt.Errorf("web tester agent %q: %w", connectionID, err)
 	}

@@ -63,6 +63,15 @@ type AgentDefinition struct {
 	Delegates    []string
 	StrictTools  bool
 	Target       *config.SubagentTarget `json:",omitempty"`
+	config.ACPSelection
+}
+
+// ACPOptions returns the selection at the same scope as the ACP connection.
+func (definition AgentDefinition) ACPOptions() config.ACPSelection {
+	if definition.Target != nil && definition.Target.Agent != "" {
+		return definition.Target.ACPSelection
+	}
+	return definition.ACPSelection
 }
 
 // ExecutionDefinition applies an execution choice without editing the profile's grants.
@@ -73,7 +82,9 @@ func ExecutionDefinition(value config.Config, definition AgentDefinition, worksp
 	}
 	if definition.Info.Source == "builtin" {
 		if definition.Info.Kind == AgentKindExternal {
-			definition.Connection = value.Agents.Roles[definition.Info.Role].Agent
+			assignment := value.Agents.Roles[definition.Info.Role]
+			definition.Connection = assignment.Agent
+			definition.ACPSelection = assignment.ACPSelection
 		} else if target, exists := value.Agents.SubagentTargets[definition.Info.Name]; exists {
 			definition.Target = &target
 		}
@@ -390,6 +401,7 @@ func DefinitionForProfile(entry ProfileEntry) (AgentDefinition, error) {
 		},
 		SystemPrompt: entry.Profile.SystemPrompt,
 		Connection:   entry.Profile.Agent,
+		ACPSelection: entry.Profile.ACPSelection,
 		Target:       target,
 		Tools:        withoutRetiredSearchTools(entry.Profile.Tools), Delegates: append([]string(nil), entry.Profile.Delegates...),
 		StrictTools: true,

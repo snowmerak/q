@@ -5,9 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
-	"os/exec"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -25,6 +24,7 @@ func configuredExternalSearchInvocation(value config.Config, root string) (subag
 	if !configured {
 		return subagent.Invocation{}, false
 	}
+	selection := value.Agents.Roles[config.AgentRoleSearch].ACPSelection
 	return subagent.Invocation{
 		Tool: subagent.ExternalSearchTool(),
 		Source: subagent.InvocationSource{
@@ -36,7 +36,7 @@ func configuredExternalSearchInvocation(value config.Config, root string) (subag
 			if err != nil {
 				return client.ToolResult{}, err
 			}
-			result, err := runACPExternalSearch(ctx, root, connectionID, connection, input)
+			result, err := runACPExternalSearch(ctx, root, connectionID, connection, selection, input)
 			if err != nil {
 				return client.ToolResult{}, err
 			}
@@ -53,13 +53,10 @@ func runACPExternalSearch(
 	ctx context.Context,
 	root, connectionID string,
 	connection config.AgentConnectionConfig,
+	selection config.ACPSelection,
 	input subagent.ExternalSearchInput,
 ) (result subagent.ExternalSearchResult, runErr error) {
-	command, err := resolveConfiguredACPAgentCommand(connection, exec.LookPath)
-	if err != nil {
-		return subagent.ExternalSearchResult{}, fmt.Errorf("search agent %q: %w", connectionID, err)
-	}
-	remote, err := startACPRemoteClient(ctx, command, root, "", connection.AuthMethod, io.Discard)
+	remote, err := startACPSubagent(ctx, root, connection, selection)
 	if err != nil {
 		return subagent.ExternalSearchResult{}, fmt.Errorf("search agent %q: %w", connectionID, err)
 	}
@@ -71,15 +68,8 @@ func probeACPAgentConnection(
 	root, connectionID string,
 	connection config.AgentConnectionConfig,
 ) error {
-	command, err := resolveConfiguredACPAgentCommand(connection, exec.LookPath)
-	if err != nil {
-		return fmt.Errorf("agent connection %q: %w", connectionID, err)
-	}
-	remote, err := startACPRemoteClient(ctx, command, root, "", connection.AuthMethod, io.Discard)
-	if err != nil {
-		return fmt.Errorf("agent connection %q: %w", connectionID, err)
-	}
-	return disposeACPRemote(remote)
+	_, err := ProbeACPModelSettings(ctx, root, connectionID, connection, "")
+	return err
 }
 
 // ProbeACPAgentConnection validates an ACP connection by completing the same
@@ -92,6 +82,26 @@ func ProbeACPAgentConnection(
 	connection config.AgentConnectionConfig,
 ) error {
 	return probeACPAgentConnection(ctx, root, connectionID, connection)
+}
+
+// ProbeACPModelSettings reads the options from a temporary session. Preview a
+// model only when the agent offers it, so stale saved IDs can be replaced.
+func ProbeACPModelSettings(ctx context.Context, root, connectionID string, connection config.AgentConnectionConfig, model string) (_ ACPModelSettings, returnErr error) {
+	remote, err := startACPSubagent(ctx, root, connection, config.ACPSelection{})
+	if err != nil {
+		return ACPModelSettings{}, fmt.Errorf("agent connection %q: %w", connectionID, err)
+	}
+	defer func() { returnErr = errors.Join(returnErr, disposeACPRemote(remote)) }()
+	settings := remote.modelSettings()
+	if model != "" && model != settings.CurrentModel && slices.ContainsFunc(settings.Models, func(option ACPModelOption) bool {
+		return option.ID == model
+	}) {
+		if err := remote.setModel(ctx, model); err != nil {
+			return ACPModelSettings{}, fmt.Errorf("preview ACP model %q: %w", model, err)
+		}
+		settings = remote.modelSettings()
+	}
+	return settings, nil
 }
 
 func executeACPExternalSearch(

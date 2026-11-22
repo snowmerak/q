@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/snowmerak/q/config"
 	"github.com/snowmerak/q/third_party/acp-go-sdk"
 	"github.com/snowmerak/q/workspace"
 )
@@ -96,6 +97,20 @@ func (r *acpRemoteClient) setModel(ctx context.Context, model string) error {
 
 func (r *acpRemoteClient) setReasoningEffort(ctx context.Context, effort string) error {
 	return r.setConfigValue(ctx, acp.SessionConfigOptionCategoryThoughtLevel, "reasoning_effort", effort)
+}
+
+func (r *acpRemoteClient) applyModelSelection(ctx context.Context, selection config.ACPSelection) error {
+	if selection.AgentModel != "" && r.modelSettings().CurrentModel != selection.AgentModel {
+		if err := r.setModel(ctx, selection.AgentModel); err != nil {
+			return fmt.Errorf("configure ACP model %q: %w", selection.AgentModel, err)
+		}
+	}
+	if selection.AgentReasoningEffort != "" && r.modelSettings().CurrentReasoningEffort != selection.AgentReasoningEffort {
+		if err := r.setReasoningEffort(ctx, selection.AgentReasoningEffort); err != nil {
+			return fmt.Errorf("configure ACP reasoning effort %q: %w", selection.AgentReasoningEffort, err)
+		}
+	}
+	return nil
 }
 
 func (r *acpRemoteClient) setConfigValue(ctx context.Context, category acp.SessionConfigOptionCategory, fallbackID acp.SessionConfigId, value string) error {

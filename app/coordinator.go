@@ -590,6 +590,9 @@ func (host *SessionHost) runACPTicket(ctx context.Context, c *library.Client, wo
 		return result, err
 	}
 	defer func() { returnErr = errors.Join(returnErr, remote.Close()) }()
+	if err := remote.applyModelSelection(ctx, candidate.Definition.ACPOptions()); err != nil {
+		return result, err
+	}
 	remote.libraryInstructions = librarymcp.InstructionsFor(&binding)
 	remote.permissions = acpPermissionReadOnly
 	if candidate.Definition.Info.MutatesWorkspace && a.ReviewChildAttemptID == "" {

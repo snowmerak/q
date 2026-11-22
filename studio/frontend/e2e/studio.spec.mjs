@@ -996,6 +996,42 @@ test('ACP connections preserve secret mappings, enabled state, and role bindings
   await page.getByRole('button', { name: /^Built in/ }).click();
   await webSearch.locator('summary').click();
   await expect(binding).toHaveValue('acp:ui-acp');
+  await page.route('**/api/v1/settings/subagents/probe', route => {
+    const input = route.request().postDataJSON();
+    expect(input.connection_id).toBe('ui-acp');
+    expect(input.include_model_settings).toBe(true);
+    const model = input.model || 'fast';
+    return route.fulfill({ json: {
+      supported: true,
+      current_model: model,
+      models: [{ id: 'fast', name: 'Fast' }, { id: 'deep', name: 'Deep' }],
+      reasoning_supported: true,
+      current_reasoning_effort: model === 'deep' ? 'max' : 'low',
+      reasoning_efforts: model === 'deep' ? [{ id: 'max', name: 'Max' }] : [{ id: 'low', name: 'Low' }]
+    } });
+  });
+  await webSearch.getByRole('button', { name: 'Load ACP options', exact: true }).click();
+  const acpModel = webSearch.getByRole('combobox', { name: 'ACP model', exact: true });
+  const acpEffort = webSearch.getByRole('combobox', { name: 'ACP reasoning effort', exact: true });
+  await expect(acpEffort.locator('option[value="low"]')).toHaveCount(1);
+  saved = save();
+  await acpEffort.selectOption('low');
+  expect((await saved).ok()).toBe(true);
+  await expect(acpEffort).toHaveValue('low');
+  saved = save();
+  await acpModel.selectOption('deep');
+  expect((await saved).ok()).toBe(true);
+  await expect(acpModel).toHaveValue('deep');
+  await expect(acpEffort).toHaveValue('');
+  await expect(acpEffort.locator('option[value="low"]')).toHaveCount(0);
+  saved = save();
+  await acpEffort.selectOption('max');
+  expect((await saved).ok()).toBe(true);
+  await page.reload();
+  await page.getByRole('button', { name: /^Built in/ }).click();
+  await webSearch.locator('summary').click();
+  await expect(acpModel).toHaveValue('deep');
+  await expect(acpEffort).toHaveValue('max');
   const research = page.locator('.agent-definition').filter({ hasText: 'builtin/research' });
   await research.locator('summary').click();
   const target = research.getByRole('combobox', { name: 'Run with', exact: true });

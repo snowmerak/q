@@ -154,6 +154,30 @@ type SubagentTarget struct {
 	Agent           string `yaml:"agent,omitempty" json:"agent,omitempty"`
 	Default         bool   `yaml:"default,omitempty" json:"default,omitempty"`
 	ReasoningEffort string `yaml:"reasoning_effort,omitempty" json:"reasoning_effort,omitempty"`
+	ACPSelection    `yaml:",inline"`
+}
+
+// ACPSelection contains the optional IDs advertised by the selected ACP agent.
+type ACPSelection struct {
+	AgentModel           string `yaml:"agent_model,omitempty" json:"agent_model,omitempty"`
+	AgentReasoningEffort string `yaml:"agent_reasoning_effort,omitempty" json:"agent_reasoning_effort,omitempty"`
+}
+
+func (selection ACPSelection) ValidateForAgent(agent string) error {
+	for _, option := range []struct{ name, value string }{
+		{"model", selection.AgentModel}, {"reasoning effort", selection.AgentReasoningEffort},
+	} {
+		if option.value == "" {
+			continue
+		}
+		if agent == "" {
+			return fmt.Errorf("an ACP %s requires an ACP connection", option.name)
+		}
+		if option.value != strings.TrimSpace(option.value) || len(option.value) > 4096 {
+			return fmt.Errorf("ACP %s must be at most 4096 bytes without surrounding whitespace", option.name)
+		}
+	}
+	return nil
 }
 
 func (target SubagentTarget) Validate() error {
@@ -176,7 +200,7 @@ func (target SubagentTarget) Validate() error {
 	if target.Agent != "" && target.ReasoningEffort != "" {
 		return errors.New("an ACP connection uses its own reasoning settings")
 	}
-	return nil
+	return target.ValidateForAgent(target.Agent)
 }
 
 func (target SubagentTarget) ModelConfig(defaultModel string) AgentConfig {
@@ -222,6 +246,7 @@ type AgentConfig struct {
 	Group           string `yaml:"group,omitempty"`
 	ReasoningEffort string `yaml:"reasoning_effort,omitempty"`
 	Agent           string `yaml:"agent,omitempty"`
+	ACPSelection    `yaml:",inline"`
 }
 
 // ModelAPIMode returns the selected API for a concrete model. Existing
@@ -491,6 +516,9 @@ func (c Config) Validate() error {
 		}
 	}
 	for role, agent := range c.Agents.Roles {
+		if err := agent.ValidateForAgent(agent.Agent); err != nil {
+			return fmt.Errorf("config: agent role %q: %w", role, err)
+		}
 		if IsExternalAgentRole(role) {
 			if agent.Model != "" || agent.Group != "" || strings.TrimSpace(agent.ReasoningEffort) != "" {
 				return fmt.Errorf("config: external agent role %q accepts agent only, not model controls", role)

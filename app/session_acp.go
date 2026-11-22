@@ -133,15 +133,10 @@ func (host *SessionHost) prepareACPSession(ctx context.Context, prepared *prepar
 		return nil, err
 	}
 	prepared.client = remote
-	if selected.AgentModel != "" && remote.modelSettings().CurrentModel != selected.AgentModel {
-		if err := remote.setModel(ctx, selected.AgentModel); err != nil {
-			return nil, err
-		}
-	}
-	if selected.AgentReasoningEffort != "" && remote.modelSettings().CurrentReasoningEffort != selected.AgentReasoningEffort {
-		if err := remote.setReasoningEffort(ctx, selected.AgentReasoningEffort); err != nil {
-			return nil, err
-		}
+	if err := remote.applyModelSelection(ctx, config.ACPSelection{
+		AgentModel: selected.AgentModel, AgentReasoningEffort: selected.AgentReasoningEffort,
+	}); err != nil {
+		return nil, err
 	}
 	remote.sessionCheckpoint = &checkpoint
 	remote.libraryInstructions = librarymcp.InstructionsFor(binding)

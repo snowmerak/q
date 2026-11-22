@@ -1,11 +1,13 @@
 <script lang="ts">
   import type { ModelOption } from '../settings/types';
   import { reasoningOptions } from '../settings/reasoning';
+  import ACPExecutionOptions from './ACPExecutionOptions.svelte';
   import type { ExecutionTarget } from './types';
 
   export let target: ExecutionTarget | null | undefined = undefined;
   export let models: ModelOption[];
   export let connections: string[];
+  export let workspaceRoot = '';
   export let externalOnly = false;
   export let defaultModel = '';
   export let disabled = false;
@@ -69,7 +71,11 @@
     </optgroup>
   </select>
 </label>
-{#if !externalOnly && !target?.agent && efforts.length}
+{#if target?.agent}
+  {#key JSON.stringify([workspaceRoot, target.agent])}
+    <ACPExecutionOptions {target} {workspaceRoot} {selectTarget} disabled={disabled || !connections.includes(target.agent)} />
+  {/key}
+{:else if !externalOnly && efforts.length}
   <label>
     <span>Reasoning</span>
     <select value={effort} aria-label="Reasoning" onchange={changeEffort} disabled={disabled || usesFallbackGroup}>

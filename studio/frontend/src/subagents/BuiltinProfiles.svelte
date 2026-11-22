@@ -31,7 +31,8 @@
         <span class="source-badge">{definition.role || definition.kind}</span>
       </summary>
       <ExecutionPicker target={definition.target} {models} connections={enabledConnections} externalOnly={!!definition.external_only}
-        defaultModel={agents.default_model} disabled={$operations.busy} selectTarget={target => saveTarget(definition.name, target, !!definition.external_only)} />
+        workspaceRoot={agents.workspace_root} defaultModel={agents.default_model} disabled={$operations.busy}
+        selectTarget={target => saveTarget(definition.name, target, !!definition.external_only)} />
       <div class="definition-meta">
         <span>{definition.kind}</span><span>{definition.mutates_workspace ? 'Mutates workspace' : 'Read only'}</span>
         <span>{definition.available ? definition.connection || 'Available' : 'Unavailable'}</span>
