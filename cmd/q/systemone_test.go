@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/snowmerak/q/internal/fsreplace"
 	"github.com/snowmerak/q/systemoneconfig"
 	"github.com/snowmerak/q/systemoneserver"
 )
@@ -257,21 +258,25 @@ func TestSystemOneKeyringReloadsWhileServing(t *testing.T) {
 
 func TestSystemOneConfigChangedDetectsReplacementWithSameModTime(t *testing.T) {
 	directory := t.TempDir()
-	firstPath := filepath.Join(directory, "first.json")
-	secondPath := filepath.Join(directory, "second.json")
-	for _, path := range []string{firstPath, secondPath} {
-		if err := os.WriteFile(path, []byte(`{"api_keys":[]}`), 0o600); err != nil {
-			t.Fatal(err)
-		}
+	path := filepath.Join(directory, systemoneconfig.FileName)
+	if err := os.WriteFile(path, []byte(`{"api_keys":[]}`), 0o600); err != nil {
+		t.Fatal(err)
 	}
-	first, err := os.Stat(firstPath)
+	first, err := systemOneConfigSnapshot(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Chtimes(secondPath, first.ModTime(), first.ModTime()); err != nil {
+	replacement := filepath.Join(directory, "replacement.json")
+	if err := os.WriteFile(replacement, []byte(`{"api_keys":[{"id":"replacement"}]}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	second, err := os.Stat(secondPath)
+	if err := os.Chtimes(replacement, first.ModTime(), first.ModTime()); err != nil {
+		t.Fatal(err)
+	}
+	if err := fsreplace.Replace(replacement, path); err != nil {
+		t.Fatal(err)
+	}
+	second, err := systemOneConfigSnapshot(path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -282,6 +287,6 @@ func TestSystemOneConfigChangedDetectsReplacementWithSameModTime(t *testing.T) {
 		t.Fatal("unchanged file reported as changed")
 	}
 	if !systemOneConfigChanged(first, second) {
-		t.Fatal("replacement with the same modification time was not detected")
+		t.Fatal("replacement at the watched path with the same modification time was not detected")
 	}
 }

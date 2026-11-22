@@ -107,7 +107,7 @@ func watchSystemOneKeyring(ctx context.Context, store systemoneconfig.Store, ser
 		ticker := time.NewTicker(500 * time.Millisecond)
 		defer ticker.Stop()
 		var lastInfo os.FileInfo
-		if info, err := os.Stat(store.Path()); err == nil {
+		if info, err := systemOneConfigSnapshot(store.Path()); err == nil {
 			lastInfo = info
 		}
 		for {
@@ -115,7 +115,7 @@ func watchSystemOneKeyring(ctx context.Context, store systemoneconfig.Store, ser
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				info, err := os.Stat(store.Path())
+				info, err := systemOneConfigSnapshot(store.Path())
 				if err != nil || !systemOneConfigChanged(lastInfo, info) {
 					continue
 				}
@@ -142,6 +142,15 @@ func watchSystemOneKeyring(ctx context.Context, store systemoneconfig.Store, ser
 		}
 	}()
 	return done
+}
+
+func systemOneConfigSnapshot(path string) (os.FileInfo, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = file.Close() }()
+	return file.Stat()
 }
 
 func systemOneConfigChanged(previous, current os.FileInfo) bool {
