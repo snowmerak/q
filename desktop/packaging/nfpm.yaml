@@ -2,7 +2,7 @@
 name: q-studio
 arch: ${GOARCH}
 platform: linux
-version: 0.3.1
+version: 0.4.0
 maintainer: Q contributors
 description: Workspace coding agent
 homepage: https://github.com/snowmerak/q
