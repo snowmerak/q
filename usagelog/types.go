@@ -5,7 +5,7 @@ import "time"
 const (
 	ServiceName     = "q-usage"
 	ProtocolVersion = 1
-	Implementation  = "0.1.0"
+	Implementation  = "0.2.0"
 	HotRetention    = 90 * 24 * time.Hour
 )
 
@@ -22,10 +22,11 @@ func (h Health) Compatible() bool {
 }
 
 type Filter struct {
-	From  time.Time
-	To    time.Time
-	Model string
-	Role  string
+	From    time.Time
+	To      time.Time
+	Model   string
+	Role    string
+	Details bool
 }
 
 type Totals struct {
@@ -37,6 +38,8 @@ type Totals struct {
 	CacheWriteTokens    int64 `json:"cache_write_tokens"`
 	EstimatedCalls      int64 `json:"estimated_calls"`
 	CacheEstimatedCalls int64 `json:"cache_estimated_calls"`
+	CacheHitCalls       int64 `json:"cache_hit_calls,omitempty"`
+	CacheHitSamples     int64 `json:"cache_hit_samples,omitempty"`
 }
 
 type SeriesPoint struct {
@@ -46,17 +49,34 @@ type SeriesPoint struct {
 
 type DimensionTotal struct {
 	Name string `json:"name"`
+	ID   string `json:"id,omitempty"`
 	Totals
 }
 
+type ModelPerformance struct {
+	Name          string   `json:"name"`
+	Completed     int64    `json:"completed"`
+	Failed        int64    `json:"failed"`
+	Stopped       int64    `json:"stopped"`
+	Retried       int64    `json:"retried"`
+	DurationP50MS *float64 `json:"duration_p50_ms,omitempty"`
+	DurationP95MS *float64 `json:"duration_p95_ms,omitempty"`
+	TTFTP50MS     *float64 `json:"ttft_p50_ms,omitempty"`
+	TTFTP95MS     *float64 `json:"ttft_p95_ms,omitempty"`
+	OutputRateP50 *float64 `json:"output_rate_p50,omitempty"`
+}
+
 type UsageView struct {
-	From       time.Time        `json:"from"`
-	To         time.Time        `json:"to"`
-	Resolution string           `json:"resolution"`
-	Totals     Totals           `json:"totals"`
-	Series     []SeriesPoint    `json:"series"`
-	Models     []DimensionTotal `json:"models"`
-	Roles      []DimensionTotal `json:"roles"`
+	From        time.Time          `json:"from"`
+	To          time.Time          `json:"to"`
+	Resolution  string             `json:"resolution"`
+	Totals      Totals             `json:"totals"`
+	Series      []SeriesPoint      `json:"series"`
+	Models      []DimensionTotal   `json:"models"`
+	Roles       []DimensionTotal   `json:"roles"`
+	Projects    []DimensionTotal   `json:"projects,omitempty"`
+	Subagents   []DimensionTotal   `json:"subagents,omitempty"`
+	Performance []ModelPerformance `json:"performance,omitempty"`
 }
 
 type archiveManifest struct {

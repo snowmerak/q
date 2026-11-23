@@ -315,7 +315,7 @@ func parseResponseDocument(body json.RawMessage, affinity, requestedModel string
 	}, nil
 }
 
-func (c *Client) responsesChat(ctx context.Context, request ChatRequest) (*ChatResponse, error) {
+func (c *Client) responsesChat(ctx context.Context, request ChatRequest, call *modelCallLog) (*ChatResponse, error) {
 	affinity, err := responseAffinity(request.ConversationID)
 	if err != nil {
 		return nil, err
@@ -343,6 +343,7 @@ func (c *Client) responsesChat(ctx context.Context, request ChatRequest) (*ChatR
 	}
 	if response != nil {
 		response.Headers = raw.Headers
+		call.observeCompletion(time.Now())
 		c.recordChatUsage(ctx, request, response.Model, response.Usage, estimateResponseTokens(response))
 	}
 	return response, err
@@ -373,7 +374,7 @@ func (c *Client) responsesChatStream(ctx context.Context, request ChatRequest, c
 	if c.usageRecorder == nil {
 		return stream, nil
 	}
-	tracked := &usageStream{inner: stream, client: c, request: request, role: usageRole(ctx), eventID: usageEventID(ctx)}
+	tracked := &usageStream{inner: stream, client: c, request: request, ctx: ctx}
 	if headers, ok := raw.(ResponseHeaderer); ok {
 		return &usageHeaderStream{usageStream: tracked, headers: headers}, nil
 	}

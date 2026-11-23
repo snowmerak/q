@@ -603,6 +603,7 @@ func (r GeneralRunner) Run(ctx context.Context, prompt string) (result TaskResul
 		taskID = strings.ReplaceAll(r.Definition.Info.Name, "/", "-") + "-" + generated
 	}
 	ctx = sessionstore.WithSearchScope(ctx, r.RunID, taskID)
+	ctx = client.WithUsageSubagent(ctx, r.Definition.Info.Name)
 	ctx = diagnostics.WithAttrs(ctx, slog.String("agent", r.Definition.Info.Name), slog.String("task_id", taskID), slog.String("parent_id", r.ParentID))
 	startedAt := time.Now()
 	logger := diagnostics.Logger(ctx)

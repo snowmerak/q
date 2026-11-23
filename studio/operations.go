@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/snowmerak/q/app"
@@ -48,6 +49,8 @@ type operationsSnapshot struct {
 	Services         []app.RuntimeServiceStatus `json:"services"`
 	Usage            usagelog.UsageView         `json:"usage"`
 	UsageError       string                     `json:"usage_error,omitempty"`
+	PreviousUsage    *usagelog.Totals           `json:"previous_usage,omitempty"`
+	ComparisonError  string                     `json:"comparison_error,omitempty"`
 	Retention        retentionOperationsStatus  `json:"retention"`
 	Logs             []string                   `json:"logs"`
 }
@@ -68,7 +71,15 @@ func (service *operationsService) serveSnapshot(writer http.ResponseWriter, requ
 		}
 		days = parsed
 	}
+	query := request.URL.Query()
+	model, role := strings.TrimSpace(query.Get("model")), strings.TrimSpace(query.Get("role"))
+	if len(model) > 256 || len(role) > 64 {
+		writeAPIError(writer, http.StatusBadRequest, fmt.Errorf("model or role filter is too long"))
+		return
+	}
 	now := service.now().UTC()
+	period := time.Duration(days) * 24 * time.Hour
+	end := now.Truncate(time.Second)
 	active, resident := service.sessions.runs.stats()
 	snapshot := operationsSnapshot{
 		GeneratedAt: now, RuntimeAvailable: service.runtime != nil,
@@ -78,11 +89,19 @@ func (service *operationsService) serveSnapshot(writer http.ResponseWriter, requ
 	if service.runtime != nil {
 		status := service.runtime.RuntimeStatus(request.Context())
 		snapshot.Services, snapshot.Logs = status.Services, status.Logs
-		usage, err := service.runtime.Usage(request.Context(), usagelog.Filter{From: now.Add(-time.Duration(days) * 24 * time.Hour), To: now})
+		filter := usagelog.Filter{From: end.Add(-period), To: end, Model: model, Role: role, Details: true}
+		usage, err := service.runtime.Usage(request.Context(), filter)
 		if err != nil {
 			snapshot.UsageError = err.Error()
 		} else {
 			snapshot.Usage = usage
+			filter.To, filter.From, filter.Details = filter.From, filter.From.Add(-period), false
+			previous, err := service.runtime.Usage(request.Context(), filter)
+			if err != nil {
+				snapshot.ComparisonError = err.Error()
+			} else {
+				snapshot.PreviousUsage = &previous.Totals
+			}
 		}
 	}
 	writeJSON(writer, http.StatusOK, snapshot)

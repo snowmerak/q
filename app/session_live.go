@@ -10,6 +10,7 @@ import (
 	"sync"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/snowmerak/q/client"
 	"github.com/snowmerak/q/config"
 	"github.com/snowmerak/q/mcpconfig"
 	"github.com/snowmerak/q/sessionstore"
@@ -541,6 +542,9 @@ func (m liveSessionModel) Update(message tea.Msg) (updatedModel tea.Model, nextC
 		// their session context. Commands capture this turn context on start.
 		parent := m.execution.state.ctx
 		m.execution.state.ctx = request.ctx
+		if project := m.execution.state.studioWorkspaceContext; project != nil {
+			m.execution.state.ctx = client.WithUsageProject(request.ctx, project.ProjectID, project.ProjectName)
+		}
 		var updated tea.Model
 		var command tea.Cmd
 		if request.compact {

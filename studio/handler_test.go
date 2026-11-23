@@ -33,7 +33,9 @@ type settingsRuntimeRunner struct {
 	syncValue config.Config
 }
 
-type operationsRuntimeRunner struct{}
+type operationsRuntimeRunner struct {
+	observeFilter func(usagelog.Filter)
+}
 
 func (operationsRuntimeRunner) Run(context.Context, workspace.Store, string, string, app.SessionEventSink) error {
 	return nil
@@ -46,7 +48,10 @@ func (operationsRuntimeRunner) RuntimeStatus(context.Context) app.RuntimeStatus 
 	}
 }
 
-func (operationsRuntimeRunner) Usage(_ context.Context, filter usagelog.Filter) (usagelog.UsageView, error) {
+func (runtime operationsRuntimeRunner) Usage(_ context.Context, filter usagelog.Filter) (usagelog.UsageView, error) {
+	if runtime.observeFilter != nil {
+		runtime.observeFilter(filter)
+	}
 	return usagelog.UsageView{
 		From: filter.From, To: filter.To, Resolution: "day",
 		Totals: usagelog.Totals{Calls: 2, TotalTokens: 42},
@@ -433,12 +438,15 @@ func TestOperationsAPICombinesRuntimeWorkersUsageAndRetention(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	handler, err := newHandlerWithRunner(store, operationsRuntimeRunner{})
+	var filters []usagelog.Filter
+	handler, err := newHandlerWithRunner(store, operationsRuntimeRunner{observeFilter: func(filter usagelog.Filter) {
+		filters = append(filters, filter)
+	}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	response := httptest.NewRecorder()
-	handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/v1/operations?days=7", nil))
+	handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/v1/operations?days=7&model=provider%2Fmodel&role=reviewer", nil))
 	if response.Code != http.StatusOK {
 		t.Fatalf("GET operations = %d %s", response.Code, response.Body.String())
 	}
@@ -451,6 +459,15 @@ func TestOperationsAPICombinesRuntimeWorkersUsageAndRetention(t *testing.T) {
 	}
 	if snapshot.Retention.HotDays != 90 || snapshot.Retention.DatabaseBytes != int64(len("database")+len("wal")) || snapshot.Retention.ArchiveFiles != 1 || snapshot.Retention.ArchiveBytes != int64(len("archive")) || snapshot.Usage.To.Sub(snapshot.Usage.From) < 7*24*time.Hour-time.Second {
 		t.Fatalf("operations retention/period = %#v, %s", snapshot.Retention, snapshot.Usage.To.Sub(snapshot.Usage.From))
+	}
+	if snapshot.PreviousUsage == nil || snapshot.PreviousUsage.TotalTokens != 42 || len(filters) != 2 {
+		t.Fatalf("comparison = %#v, filters = %#v", snapshot.PreviousUsage, filters)
+	}
+	current, previous := filters[0], filters[1]
+	if current.Model != "provider/model" || current.Role != "reviewer" || !current.Details || previous.Details ||
+		previous.Model != current.Model || previous.Role != current.Role || !previous.To.Equal(current.From) ||
+		previous.To.Sub(previous.From) != current.To.Sub(current.From) {
+		t.Fatalf("expected adjacent, equally filtered periods: %#v", filters)
 	}
 
 	response = httptest.NewRecorder()

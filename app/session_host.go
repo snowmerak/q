@@ -579,6 +579,7 @@ func (host *SessionHost) prepareSession(runContext context.Context, workspaceSto
 	prepared.executionRoot = executionRoot
 	if projectFound {
 		prepared.projectContext = &projectContext
+		runContext = client.WithUsageProject(runContext, projectContext.ProjectID, projectContext.ProjectName)
 		options.SystemPrompt = strings.TrimSpace(options.SystemPrompt + "\n\n" + coordinator.RoleInstructions(projectContext.Role))
 	}
 	if options.review.Active() {

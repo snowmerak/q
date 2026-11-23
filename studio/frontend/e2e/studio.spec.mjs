@@ -1424,13 +1424,13 @@ test('operations keep the selected period and stop polling on navigation', async
   await page.goto('/operations');
   await held;
   await page.getByRole('combobox', { name: 'Usage period', exact: true }).selectOption('7');
-  await expect(page.locator('.usage-card')).toContainText('7 day window');
+  await expect(page.locator('.usage-card')).toContainText('Last 7 days');
   await expect(page.getByRole('heading', { name: 'Services', exact: true })).toBeVisible();
   await expect(page.getByRole('heading', { name: 'Retention', exact: true })).toBeVisible();
   await expect(page.getByRole('heading', { name: 'Runtime logs', exact: true })).toBeVisible();
   await expect.poll(() => aborted).toBe(true);
   release();
-  await expect(page.locator('.usage-card')).not.toContainText('30 day window');
+  await expect(page.locator('.usage-card')).not.toContainText('Last 30 days');
   const before = reads;
   await page.clock.fastForward('00:00:16');
   await expect.poll(() => reads).toBeGreaterThan(before);
@@ -1439,6 +1439,128 @@ test('operations keep the selected period and stop polling on navigation', async
   const stopped = reads;
   await page.clock.fastForward('00:00:31');
   expect(reads).toBe(stopped);
+});
+
+
+test('operations show token and cache totals with missing cache reports', async ({ page }) => {
+  const usage = (calls, input, output, read, write, missing = 0) => ({
+    calls, prompt_tokens: input, completion_tokens: output, total_tokens: input + output,
+    cached_tokens: read, cache_write_tokens: write, estimated_calls: 0, cache_estimated_calls: missing,
+  });
+  const totals = { ...usage(4, 400, 70, 80, 40, 1), cache_hit_calls: 2, cache_hit_samples: 3 };
+  const received = [];
+  await page.route('**/api/v1/operations?**', async (route) => {
+    const response = await route.fetch();
+    const snapshot = await response.json();
+    const query = new URL(route.request().url()).searchParams;
+    const filtered = query.has('model') && query.has('role');
+    received.push([query.get('days'), query.get('model'), query.get('role')]);
+    const current = filtered ? usage(1, 80, 36, 20, 10) : totals;
+    await route.fulfill({ response, json: { ...snapshot, previous_usage: usage(2, 200, 40, 20, 10), usage: {
+      resolution: 'day', totals: current, series: [{ bucket: '2026-11-23', ...current }],
+      models: [
+        { name: 'provider/chat', ...usage(2, 200, 60, 80, 40) },
+        { name: 'provider/embedding', ...usage(1, 150, 0, 0, 0, 1) },
+        { name: 'provider/review', ...usage(1, 50, 10, 0, 0) },
+      ],
+      roles: [
+        { name: 'main', ...usage(1, 120, 24, 60, 30) },
+        { name: 'coder', ...usage(1, 80, 36, 20, 10) },
+        { name: 'reviewer', ...usage(1, 50, 10, 0, 0) },
+        { name: 'embedding', ...usage(1, 150, 0, 0, 0, 1) },
+      ],
+      projects: [{ id: 'project-1', name: 'Studio project', ...usage(2, 200, 60, 80, 40) }],
+      subagents: [{ name: 'builtin/junior-developer', ...usage(1, 80, 36, 20, 10) }],
+      performance: [{
+        name: 'provider/chat', completed: 3, failed: 1, stopped: 1, retried: 1,
+        ttft_p50_ms: 125, ttft_p95_ms: 230, duration_p50_ms: 1000, duration_p95_ms: 1600, output_rate_p50: 23.5,
+      }],
+    } } });
+  });
+  await page.goto('/operations');
+  const card = page.locator('.usage-card');
+  const tokenTotals = card.locator('[aria-label="Token volume"]').getByRole('definition');
+  const cacheTotals = card.locator('[aria-label="Prompt cache"]').getByRole('definition');
+  await expect(tokenTotals).toHaveText(['400', '70', '100', '17.5']);
+  await expect(cacheTotals).toHaveText(['80', '40', '20% Cache reads / total input', '66.7% 2 of 3 measured']);
+  await expect(card.locator('[aria-label="Previous period totals and changes"]').getByRole('definition'))
+    .toHaveText(['2 (+100%)', '240 (+95.8%)', '200 (+100%)', '40 (+75%)']);
+  await expect(card).toContainText('Cache data missing for 1 of 4 calls');
+  await expect(card.locator('.usage-column')).toHaveAttribute('title', /Input 400 · Output 70\nCache read 80 · Cache write 40\nCache hit rate 20%/);
+
+  const models = page.getByRole('table', { name: 'Model usage' });
+  await expect(models.getByRole('row', { name: /provider\/chat/ }).getByRole('cell'))
+    .toHaveText(['2', '200', '60', '80', '40', '40%', '260']);
+  await expect(models.getByRole('row', { name: /provider\/embedding/ }).getByRole('cell'))
+    .toHaveText(['1', '150', '0', '—', '—', '— 1 missing', '150']);
+  await expect(models.getByRole('row', { name: /provider\/review/ }).getByRole('cell'))
+    .toHaveText(['1', '50', '10', '0', '0', '0%', '60']);
+  const roles = page.getByRole('table', { name: 'Role usage' });
+  await expect(roles.getByRole('row', { name: /coder/ }).getByRole('cell'))
+    .toHaveText(['1', '80', '36', '20', '10', '25%', '116']);
+  await expect(page.getByRole('table', { name: 'Project usage' })).toContainText('Studio project');
+  await expect(page.getByRole('table', { name: 'Subagent usage' })).toContainText('builtin/junior-developer');
+  await expect(page.getByRole('table', { name: 'Model performance', exact: true }).getByRole('cell'))
+    .toHaveText(['4 1 stopped', '25% 1 failed', '25%', '125 ms / 230 ms', '1 s / 1.6 s', '23.5']);
+  await page.getByText('What are roles?', { exact: true }).press('Enter');
+  await expect(card.getByText('Roles label where Q made a model call.', { exact: false })).toBeVisible();
+
+  await page.getByRole('combobox', { name: 'Model', exact: true }).selectOption('provider/chat');
+  await page.getByRole('combobox', { name: 'Role', exact: true }).selectOption('coder');
+  await expect(tokenTotals).toHaveText(['80', '36', '80', '36']);
+  await expect(cacheTotals).toHaveText(['20', '10', '25% Cache reads / total input', '—']);
+  await page.getByRole('combobox', { name: 'Usage period' }).selectOption('7');
+  await expect(card).toContainText('Last 7 days');
+  expect(received).toContainEqual(['7', 'provider/chat', 'coder']);
+
+  await page.setViewportSize({ width: 390, height: 900 });
+  const modelScroll = page.getByRole('region', { name: 'Model usage table' });
+  await modelScroll.focus();
+  await page.keyboard.press('ArrowRight');
+  await expect.poll(() => modelScroll.evaluate(element => element.scrollLeft)).toBeGreaterThan(0);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(390);
+});
+
+
+test('operations keeps large token totals whole at different widths and text sizes', async ({ page }) => {
+  const totals = {
+    calls: 3288, prompt_tokens: 291184338, completion_tokens: 1252950, total_tokens: 292437288,
+    cached_tokens: 264737088, cache_write_tokens: 0, estimated_calls: 0,
+    cache_estimated_calls: 191, cache_hit_calls: 2895, cache_hit_samples: 3097,
+  };
+  await page.route('**/api/v1/operations?**', async (route) => {
+    const response = await route.fetch();
+    const snapshot = await response.json();
+    await route.fulfill({ response, json: { ...snapshot, usage: { resolution: 'hour', totals } } });
+  });
+  await page.goto('/operations');
+  await page.getByRole('combobox', { name: 'Usage period', exact: true }).selectOption('1');
+  await expect(page.locator('.usage-card')).toContainText('Last 24 hours · Hourly');
+  const summary = page.locator('.usage-summary').first();
+  await expect(summary).toContainText('291,184,338');
+
+  for (const width of [1440, 1024, 390]) {
+    await page.setViewportSize({ width, height: 900 });
+    for (const scale of [1, 1.4]) {
+      await page.evaluate(value => document.documentElement.style.setProperty('--text-scale', String(value)), scale);
+      if (width === 1440 && scale === 1) {
+        await summary.screenshot({ path: join(tmpdir(), 'q-operations-usage-summary.png') });
+      }
+      const clipped = await summary.getByRole('definition').evaluateAll((values) => values.flatMap((element) => {
+        const text = [...element.childNodes].find(node => node.nodeType === Node.TEXT_NODE && node.textContent.trim());
+        const range = document.createRange();
+        range.selectNodeContents(text);
+        const rects = [...range.getClientRects()].filter(rect => rect.width > 0);
+        const bounds = element.getBoundingClientRect();
+        const label = element.previousElementSibling.getBoundingClientRect();
+        const onOneLine = rects.length === 1 && rects[0].right <= bounds.right + 1;
+        const belowLabel = bounds.top >= label.bottom && Math.abs(bounds.left - label.left) < 1;
+        return onOneLine && belowLabel ? [] : [text.textContent.trim()];
+      }));
+      expect(clipped, width + ' px at text scale ' + scale).toEqual([]);
+      expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(width);
+    }
+  }
 });
 
 

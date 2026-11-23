@@ -254,7 +254,7 @@ func TestModelStreamFailureCancellationAndEarlyClose(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			ctx, output := modelLogContext(t)
-			stream := &modelLogStream{Stream: failingModelLogStream{test.err}, call: startModelCall(ctx, "selected/model", "chat_completions", true)}
+			stream := &modelLogStream{Stream: failingModelLogStream{test.err}, call: startModelCall(ctx, "selected/model", "chat_completions", true, nil)}
 			if !test.closeEarly {
 				if _, err := stream.Recv(); err != test.err {
 					t.Fatalf("receive error changed: %v", err)

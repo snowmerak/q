@@ -204,6 +204,7 @@ func ticketWorkerStore(directory string, a workitems.Attempt) workspace.Store {
 // runTicket uses GeneralRunner and the existing delegation runtime. The worker
 // owns a separate durable session; the manager receives only its final handoff.
 func (host *SessionHost) runTicket(ctx context.Context, c *library.Client, project workitems.Workspace, item workitems.Item, candidate coordinator.Candidate, a workitems.Attempt, prompt string) (result subagent.TaskResult, returnErr error) {
+	ctx = client.WithUsageProject(ctx, project.ID, project.Name)
 	// Settings/profile changes between selection and execution invalidate the
 	// reservation rather than switching capabilities beneath the chosen agent.
 	current, err := host.coordinatorCandidates(ctx, project, item, []workitems.Member{candidate.Member})
