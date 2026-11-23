@@ -29,7 +29,7 @@ mime TEXT NOT NULL, data BLOB NOT NULL, PRIMARY KEY(workspace_id, id)
 	return err
 }
 
-func (s *Store) PutAsset(ctx context.Context, workspace string, data []byte, imagesOnly bool) (Asset, error) {
+func (s *Store) PutAsset(ctx context.Context, workspace string, data []byte, imagesOnly bool) (_ Asset, returnErr error) {
 	mime := http.DetectContentType(data)
 	if !workmedia.Supported(mime) {
 		if imagesOnly || !utf8.Valid(data) || strings.ContainsRune(string(data), 0) {
@@ -46,7 +46,11 @@ func (s *Store) PutAsset(ctx context.Context, workspace string, data []byte, ima
 	if err != nil {
 		return Asset{}, err
 	}
-	defer tx.Rollback()
+	defer func() {
+		if err := tx.Rollback(); err != nil && !errors.Is(err, sql.ErrTxDone) {
+			returnErr = errors.Join(returnErr, err)
+		}
+	}()
 	if err := requireWorkspace(ctx, tx, workspace); err != nil {
 		return Asset{}, err
 	}

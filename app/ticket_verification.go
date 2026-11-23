@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -106,7 +107,6 @@ func saveTicketVerification(ctx context.Context, c *library.Client, a workitems.
 		if err != nil {
 			return err
 		}
-		defer opened.Close()
 		for _, name := range result.Artifacts {
 			if seen[name] || len(seen) >= 8 || strings.Contains(name, "://") {
 				continue
@@ -123,6 +123,9 @@ func saveTicketVerification(ctx context.Context, c *library.Client, a workitems.
 				continue
 			}
 			files = append(files, subagent.VerificationFile{ID: asset.ID, Name: name, MIME: asset.MIME})
+		}
+		if err := opened.Close(); err != nil {
+			fmt.Fprintf(&report, "\nCould not close the artifact directory: %v\n", err)
 		}
 	}
 	asset, err := c.PutWorkAsset(ctx, a.WorkspaceID, library.AssetUpload{Data: []byte(report.String())})
@@ -149,6 +152,6 @@ func readVerificationFile(root *os.Root, name string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer file.Close()
-	return io.ReadAll(io.LimitReader(file, workmedia.MaxImageBytes+1))
+	data, err := io.ReadAll(io.LimitReader(file, workmedia.MaxImageBytes+1))
+	return data, errors.Join(err, file.Close())
 }

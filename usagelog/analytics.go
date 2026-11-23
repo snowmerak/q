@@ -122,14 +122,14 @@ func (s *Store) queryAnalytics(ctx context.Context, filter Filter, view *UsageVi
 	return nil
 }
 
-func (s *Store) queryAttribution(ctx context.Context, labels, group, where string, args []any) ([]DimensionTotal, error) {
+func (s *Store) queryAttribution(ctx context.Context, labels, group, where string, args []any) (_ []DimensionTotal, returnErr error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT `+labels+", "+totalsSQL+`
 FROM usage_attribution JOIN usage_events USING(event_id)
 WHERE `+where+" AND "+group+" <> '' GROUP BY "+group+" ORDER BY SUM(total_tokens) DESC, 1", args...)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { returnErr = errors.Join(returnErr, rows.Close()) }()
 	var values []DimensionTotal
 	for rows.Next() {
 		var value DimensionTotal
@@ -151,13 +151,13 @@ type modelSamples struct {
 	duration, firstOutput, outputRate []float64
 }
 
-func (s *Store) queryPerformance(ctx context.Context, where string, args []any) ([]ModelPerformance, error) {
+func (s *Store) queryPerformance(ctx context.Context, where string, args []any) (_ []ModelPerformance, returnErr error) {
 	rows, err := s.db.QueryContext(ctx, `
 SELECT model, status, duration_ms, ttft_ms, output_rate, retried FROM model_calls WHERE `+where, args...)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { returnErr = errors.Join(returnErr, rows.Close()) }()
 	models := make(map[string]*modelSamples)
 	for rows.Next() {
 		var name, status string

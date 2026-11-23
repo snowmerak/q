@@ -42,7 +42,11 @@ PRAGMA user_version = 1;`); err != nil {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer store.Close()
+	t.Cleanup(func() {
+		if err := store.Close(); err != nil {
+			t.Error(err)
+		}
+	})
 
 	hit.Attribution = client.UsageAttribution{ProjectID: "project-1", ProjectName: "A project", Subagent: "builtin/reviewer"}
 	if inserted, err := store.Append(t.Context(), hit); inserted || err != nil {

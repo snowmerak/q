@@ -60,7 +60,11 @@ func TestUsageRecordsGenerationFailureRetryAndAttribution(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer configured.Close()
+	defer func() {
+		if err := configured.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	ctx := WithUsageRole(WithUsageSubagent(WithUsageProject(t.Context(), "project-1", "Proj"), "builtin/reviewer"), "reviewer")
 	ctx = WithGenerationSettings(ctx, GenerationSettings{SafeReplay: true, RequireFinishReason: true})
 	_, err = RecoverGeneration(ctx, configured, ChatRequest{Model: "provider/model", Messages: []Message{{Role: RoleUser, Content: "hi"}}}, configured.Chat)

@@ -3,6 +3,7 @@ package workitems
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"time"
 )
 
@@ -25,7 +26,7 @@ type HumanInbox struct {
 	More    bool              `json:"more,omitempty"`
 }
 
-func (s *Store) HumanInbox(ctx context.Context, workspaceID string) (HumanInbox, error) {
+func (s *Store) HumanInbox(ctx context.Context, workspaceID string) (_ HumanInbox, returnErr error) {
 	rows, err := s.db.QueryContext(ctx, `
 SELECT w.name, i.payload, coalesce(a.payload,'{}')
 FROM items i JOIN workspaces w ON w.id=i.workspace_id
@@ -39,7 +40,7 @@ ORDER BY json_extract(i.payload,'$.updated_at') DESC, i.seq DESC LIMIT 101`, wor
 	if err != nil {
 		return HumanInbox{}, err
 	}
-	defer rows.Close()
+	defer func() { returnErr = errors.Join(returnErr, rows.Close()) }()
 	out := HumanInbox{Entries: []HumanInboxEntry{}}
 	for rows.Next() {
 		var project string
