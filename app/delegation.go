@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -20,6 +21,7 @@ import (
 	"github.com/snowmerak/q/config"
 	"github.com/snowmerak/q/diagnostics"
 	"github.com/snowmerak/q/gitwork"
+	"github.com/snowmerak/q/internal/workitemtools"
 	"github.com/snowmerak/q/mcpconfig"
 	"github.com/snowmerak/q/subagent"
 	qtools "github.com/snowmerak/q/tools"
@@ -32,27 +34,29 @@ const (
 )
 
 type delegationDispatcher struct {
-	registry    *subagent.Registry
-	client      chatClient
-	tools       agentToolRuntime
-	value       config.Config
-	workspace   executionWorkspace
-	environment string
-	runID       string
-	sink        subagent.RecordSink
-	capture     subagent.InvocationCaptureFunc
-	external    map[string]subagent.Invocation
-	store       *workspace.Store
-	apiMode     func(string) string
-	progress    subagent.ProgressFunc
-	trace       subagent.TraceFunc
-	worktrees   *gitwork.Manager
-	checkout    checkoutRuntimeFactory
-	registryFor func(string) (*subagent.Registry, error)
-	parallel    func(context.Context) (int, error)
-	active      map[string]int
-	notify      chan struct{}
-	coordinator *delegationDispatcher
+	registry      *subagent.Registry
+	client        chatClient
+	tools         agentToolRuntime
+	value         config.Config
+	workspace     executionWorkspace
+	environment   string
+	runID         string
+	sink          subagent.RecordSink
+	capture       subagent.InvocationCaptureFunc
+	external      map[string]subagent.Invocation
+	store         *workspace.Store
+	apiMode       func(string) string
+	progress      subagent.ProgressFunc
+	trace         subagent.TraceFunc
+	worktrees     *gitwork.Manager
+	checkout      checkoutRuntimeFactory
+	registryFor   func(string) (*subagent.Registry, error)
+	parallel      func(context.Context) (int, error)
+	active        map[string]int
+	notify        chan struct{}
+	coordinator   *delegationDispatcher
+	workConfigDir string
+	workProjectID string
 
 	mu       sync.Mutex
 	calls    int
@@ -194,6 +198,9 @@ func (m model) configuredDelegationRuntimeIn(base agentToolRuntime, execution ex
 			return buildSubagentRegistry(m.customStoreAt(root))
 		},
 	}
+	if m.studioWorkspaceContext != nil {
+		dispatcher.workConfigDir, dispatcher.workProjectID = m.store.Dir, m.studioWorkspaceContext.ProjectID
+	}
 	if clone := findCheckoutRuntimeCloner(base); clone != nil && strings.TrimSpace(m.store.Dir) != "" {
 		dispatcher.checkout = func(ctx context.Context, checkoutRoot string) (agentToolRuntime, io.Closer, error) {
 			runtime, err := clone.NewCheckoutRuntime(ctx, checkoutRoot)
@@ -315,6 +322,7 @@ func (d *delegationDispatcher) forCheckout(ctx context.Context, checkoutRoot str
 		external: configuredExternalDelegates(d.value, checkoutRoot, d.registry),
 		store:    d.store, apiMode: d.apiMode, progress: d.progress, trace: d.trace,
 		worktrees: d.worktrees, checkout: d.checkout, registryFor: d.registryFor, coordinator: d.shared(),
+		workConfigDir: d.workConfigDir, workProjectID: d.workProjectID,
 	}
 	return child, closer, nil
 }
@@ -546,7 +554,7 @@ func (d *delegationDispatcher) dispatch(
 		Client: d.client, Tools: runtime, Spec: spec, Definition: definition,
 		WorkingDirectory: d.workspace.checkoutRoot, Environment: d.environment, RunID: d.runID,
 		Sink: d.sink, Progress: d.progress, Trace: d.trace,
-	}).Run(ctx, input.Prompt)
+	}).Run(d.withWorkSession(ctx, definition.Info.Name, call.ID), input.Prompt)
 	if err != nil {
 		return client.ToolResult{Content: err.Error(), IsError: true}, nil
 	}
@@ -918,7 +926,7 @@ func (d *delegationDispatcher) runStoredInner(ctx context.Context, definition su
 		Client: runDispatcher.client, Tools: runtime, Spec: spec, Definition: definition,
 		WorkingDirectory: runDispatcher.workspace.checkoutRoot, Environment: runDispatcher.environment, RunID: runDispatcher.runID,
 		ParentID: parentTaskID, TaskID: state.TaskID, Sink: runDispatcher.sink, Progress: runDispatcher.progress, Trace: runDispatcher.trace, Resume: resume, Checkpoint: checkpoint, Control: control, Followup: followup,
-	}).Run(runContext, input.Prompt)
+	}).Run(d.withWorkSession(runContext, definition.Info.Name, state.TaskID), input.Prompt)
 	if runErr != nil {
 		if !errors.Is(context.Cause(runContext), subagent.ErrRunStopped) || ctx.Err() != nil {
 			return client.ToolResult{}, runErr
@@ -1162,6 +1170,13 @@ func (d *delegationDispatcher) dispatchExternalObserved(ctx context.Context, def
 		}
 	}
 	report(subagent.ProgressStarted, "external agent")
+	ctx = d.withWorkSession(ctx, definition.Info.Name, taskID)
+	if d.workProjectID != "" {
+		ctx = context.WithValue(ctx, acpWorkScopeKey{}, acpWorkScope{
+			configDir: d.workConfigDir,
+			binding:   workitemtools.Binding{WorkspaceID: d.workProjectID, SessionID: workitemtools.DelegatedSession(ctx)},
+		})
+	}
 	result, err := d.dispatchExternal(ctx, definition, call, prompt)
 	if err != nil {
 		report(subagent.ProgressFailed, err.Error())
@@ -1171,6 +1186,17 @@ func (d *delegationDispatcher) dispatchExternalObserved(ctx context.Context, def
 		report(subagent.ProgressCompleted, "external agent returned")
 	}
 	return result, err
+}
+
+func (d *delegationDispatcher) withWorkSession(ctx context.Context, agent, taskID string) context.Context {
+	if d.workProjectID == "" {
+		return ctx
+	}
+	if d.workspace.sessionStore != nil {
+		taskID = d.workspace.sessionStore.SessionID + "\x00" + taskID
+	}
+	key := sha256.Sum256([]byte(d.workProjectID + "\x00" + agent + "\x00" + taskID))
+	return workitemtools.WithDelegatedSession(ctx, fmt.Sprintf("delegate-%x", key))
 }
 
 func (d *delegationDispatcher) loadModels(ctx context.Context) ([]client.Model, error) {

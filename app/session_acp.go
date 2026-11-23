@@ -53,7 +53,7 @@ func (host *SessionHost) prepareACPSession(ctx context.Context, prepared *prepar
 	if err != nil {
 		return nil, err
 	}
-	withWorkTools := connection.Library || prepared.executionRoot != prepared.store.Root || prepared.review.Active()
+	withWorkTools := connection.Library || prepared.projectContext != nil
 	var binding *workitemtools.Binding
 	if withWorkTools {
 		binding = &workitemtools.Binding{SessionID: prepared.store.SessionID, Review: prepared.review}
@@ -64,6 +64,7 @@ func (host *SessionHost) prepareACPSession(ctx context.Context, prepared *prepar
 		if prepared.projectContext != nil {
 			binding.WorkspaceID = prepared.projectContext.ProjectID
 			binding.Manager = prepared.projectContext.Role == coordinator.RoleIntegrator
+			binding.Coordinator = prepared.projectContext.Role == coordinator.RoleCoordinator
 		}
 	}
 	command.mcpServers, err = acpLibraryServers(host.store.Dir, binding)

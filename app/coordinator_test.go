@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -107,9 +108,16 @@ func TestBuiltinCodeReviewerRunsReportTicketReadOnly(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "notes.txt"), []byte("Report evidence\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	issue, err := c.CreateItem(ctx, workitems.CreateInput{WorkspaceID: project.ID, Kind: workitems.Issue, Title: "Review follow-up", Content: "Track review findings", Author: "user"})
+	if err != nil {
+		t.Fatal(err)
+	}
 	configured := &planningClient{responses: []client.Message{
 		{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{planToolCall("task_start", `{"objective":"Review notes"}`)}},
 		{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{planToolCall("read_file", `{"path":"notes.txt"}`)}},
+		{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{planToolCall("issue_reply", fmt.Sprintf(`{"id":%q,"content":"The note needs supporting evidence."}`, issue.ID))}},
+		{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{planToolCall("post_update", fmt.Sprintf(`{"id":%q,"revision":1,"content":"Inspect notes.txt and confirm sources"}`, item.BodyPostID))}},
+		{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{planToolCall("ticket_create", fmt.Sprintf(`{"title":"Find supporting evidence","content":"Inspect the sources.","execution_mode":"report","linked_issue_id":%q}`, issue.ID))}},
 		{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{planToolCall("task_complete", `{"outcome":"succeeded","summary":"Reviewed the note","findings":["The note needs supporting evidence."]}`)}},
 	}}
 	host.factory = func(config.Config) (chatClient, error) { return configured, nil }
@@ -124,7 +132,7 @@ func TestBuiltinCodeReviewerRunsReportTicketReadOnly(t *testing.T) {
 		})
 		if slices.ContainsFunc(request.Tools, func(tool client.Tool) bool {
 			switch tool.Function.Name {
-			case "write_file", "edit_file", "run_command", "ticket_create", "ticket_review":
+			case "write_file", "edit_file", "run_command", "ticket_review":
 				return true
 			default:
 				return false
@@ -135,6 +143,20 @@ func TestBuiltinCodeReviewerRunsReportTicketReadOnly(t *testing.T) {
 	}
 	if !readEvidence {
 		t.Fatal("report reviewer did not read the project file")
+	}
+	thread, err := c.ReadThread(ctx, issue.ID, "", 10)
+	if err != nil || len(thread.Posts) != 2 || thread.Posts[1].Author != "agent/"+attempt.WorkerSessionID {
+		t.Fatalf("reviewer's issue reply: %+v %v", thread, err)
+	}
+	body, err := c.ReadContent(ctx, item.BodyPostID, "", 100)
+	if err != nil || body.Post.Content != "Inspect notes.txt and confirm sources" || body.Post.Author != "user" {
+		t.Fatalf("assigned ticket body: %+v %v", body, err)
+	}
+	tickets, err := c.ListItems(ctx, project.ID, workitems.Ticket, "", 10)
+	if err != nil || !slices.ContainsFunc(tickets.Items, func(ticket workitems.Item) bool {
+		return ticket.Title == "Find supporting evidence" && ticket.LinkedIssueID == issue.ID && ticket.ExecutionState == "queued"
+	}) {
+		t.Fatalf("reviewer's follow-up ticket: %+v %v", tickets, err)
 	}
 }
 

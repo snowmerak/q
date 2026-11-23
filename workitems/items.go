@@ -110,13 +110,14 @@ type UpdateInput struct {
 }
 
 type PostInput struct {
-	Content       string   `json:"content"`
-	Author        string   `json:"author"`
-	Refs          []string `json:"refs,omitempty"`
-	ReplyToPostID string   `json:"reply_to_post_id,omitempty"`
-	Revision      int64    `json:"revision,omitempty"`
-	Deleted       bool     `json:"deleted,omitempty"`
-	RequestID     string   `json:"request_id,omitempty"`
+	Worker        *WorkerBinding `json:"worker,omitempty"`
+	Content       string         `json:"content"`
+	Author        string         `json:"author"`
+	Refs          []string       `json:"refs,omitempty"`
+	ReplyToPostID string         `json:"reply_to_post_id,omitempty"`
+	Revision      int64          `json:"revision,omitempty"`
+	Deleted       bool           `json:"deleted,omitempty"`
+	RequestID     string         `json:"request_id,omitempty"`
 }
 
 type Thread struct {
@@ -632,11 +633,21 @@ func (s *Store) UpdatePost(ctx context.Context, id string, in PostInput) (Post, 
 		if post.Revision != in.Revision {
 			return Post{}, ErrConflict
 		}
+		if in.Worker != nil {
+			worker, err := boundWorker(ctx, tx, *in.Worker)
+			if err != nil {
+				return Post{}, err
+			}
+			if post.Kind != "body" || post.ItemID != worker.TicketID || post.Deleted != in.Deleted {
+				return Post{}, fmt.Errorf("%w: a worker can edit only its assigned ticket body", ErrConflict)
+			}
+		}
 		post.Revision++
 		post.UpdatedAt = time.Now().UTC()
 		post.Deleted = in.Deleted
 		if !in.Deleted {
-			post.Content, post.Author, post.Refs = in.Content, in.Author, in.Refs
+			// Keep the original author as the owner across revisions.
+			post.Content, post.Refs = in.Content, in.Refs
 		}
 		if err := savePost(ctx, tx, post, false); err != nil {
 			return Post{}, err

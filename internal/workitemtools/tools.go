@@ -15,6 +15,7 @@ type Binding struct {
 	WorkspaceID         string
 	SessionID           string
 	Manager             bool
+	Coordinator         bool
 	EmbeddingConnection string
 	Worker              *workitems.WorkerBinding
 	Review              ReviewAssignment
@@ -60,7 +61,7 @@ type updateInput struct {
 	Title         string                    `json:"title"`
 	State         string                    `json:"state"`
 	Labels        []string                  `json:"labels"`
-	Deleted       bool                      `json:"deleted,omitempty"`
+	Deleted       *bool                     `json:"deleted,omitempty"`
 	RequestID     string                    `json:"request_id,omitempty"`
 	Acceptance    *[]string                 `json:"acceptance,omitempty"`
 	RequestedRole *string                   `json:"requested_role,omitempty" jsonschema:"Change the requested profile role before the first execution. Omit to preserve it or use an empty string to clear it."`
@@ -72,7 +73,7 @@ type postUpdateInput struct {
 	Revision  int64    `json:"revision"`
 	Content   string   `json:"content"`
 	Refs      []string `json:"refs,omitempty"`
-	Deleted   bool     `json:"deleted,omitempty"`
+	Deleted   *bool    `json:"deleted,omitempty"`
 	RequestID string   `json:"request_id,omitempty"`
 }
 type searchInput struct {
@@ -89,10 +90,6 @@ type searchInput struct {
 func Register(server *mcp.Server, client *library.Client, binding Binding) {
 	registerCoordinator(server, client, binding)
 	readOnly := &mcp.ToolAnnotations{ReadOnlyHint: true, IdempotentHint: true}
-	actor := "agent"
-	if binding.SessionID != "" {
-		actor += "/" + binding.SessionID
-	}
 	scope := func(workspaceID string, all bool) error {
 		if all {
 			return nil
@@ -119,6 +116,7 @@ func Register(server *mcp.Server, client *library.Client, binding Binding) {
 			description += " Always set execution_mode explicitly: report for read-only research; git for creating or editing project files, including project initialization. Git mode requires a clean existing repository with an initial commit; a missing repository does not make code work a report task."
 		}
 		mcp.AddTool(server, &mcp.Tool{Name: kind + "_create", Description: description}, func(ctx context.Context, _ *mcp.CallToolRequest, in createInput) (*mcp.CallToolResult, workitems.Item, error) {
+			binding := binding.caller(ctx)
 			if binding.WorkspaceID == "" {
 				return nil, workitems.Item{}, errors.New("select a Studio project before creating work items")
 			}
@@ -129,7 +127,7 @@ func Register(server *mcp.Server, client *library.Client, binding Binding) {
 				}
 				parent = binding.Worker
 			}
-			out, err := client.CreateItem(ctx, workitems.CreateInput{ParentWorker: parent, DependsOn: in.DependsOn, Schedule: in.Schedule, WorkspaceID: binding.WorkspaceID, Kind: kind, Title: in.Title, Content: in.Content, Labels: in.Labels, Acceptance: in.Acceptance, ExecutionMode: in.ExecutionMode, RequestedRole: in.RequestedRole, LinkedIssueID: in.LinkedIssueID, Author: actor, Refs: in.Refs, RequestID: in.RequestID})
+			out, err := client.CreateItem(ctx, workitems.CreateInput{ParentWorker: parent, DependsOn: in.DependsOn, Schedule: in.Schedule, WorkspaceID: binding.WorkspaceID, Kind: kind, Title: in.Title, Content: in.Content, Labels: in.Labels, Acceptance: in.Acceptance, ExecutionMode: in.ExecutionMode, RequestedRole: in.RequestedRole, LinkedIssueID: in.LinkedIssueID, Author: binding.actor(), Refs: in.Refs, RequestID: in.RequestID})
 			return nil, out, err
 		})
 		mcp.AddTool(server, &mcp.Tool{Name: kind + "_list", Description: "List " + kind + " threads using a source snapshot cursor. all:true explicitly searches all workspaces.", Annotations: readOnly}, func(ctx context.Context, _ *mcp.CallToolRequest, in listInput) (*mcp.CallToolResult, workitems.ItemPage, error) {
@@ -157,17 +155,27 @@ func Register(server *mcp.Server, client *library.Client, binding Binding) {
 			if _, err := requireItem(ctx, in.ID, kind, false); err != nil {
 				return nil, workitems.Post{}, err
 			}
-			out, err := client.AddPost(ctx, in.ID, workitems.PostInput{Content: in.Content, Author: actor, Refs: in.Refs, ReplyToPostID: in.ReplyToPostID, RequestID: in.RequestID})
+			out, err := client.AddPost(ctx, in.ID, workitems.PostInput{Content: in.Content, Author: binding.caller(ctx).actor(), Refs: in.Refs, ReplyToPostID: in.ReplyToPostID, RequestID: in.RequestID})
 			return nil, out, err
 		})
-		updateDescription := "Edit thread metadata with the expected revision. Ticket column changes use execution/review tools."
+		updateDescription := "Edit thread metadata with the expected revision as the issuer, Coordinator, or Integrator. Ticket column changes use execution/review tools."
 		if kind == workitems.Issue {
 			updateDescription += " Deletion requires all linked tickets to be completed, cancelled, rejected or deleted, with Git changes resolved. Remove recurring templates and end their issued runs first."
 		}
 		mcp.AddTool(server, &mcp.Tool{Name: kind + "_update", Description: updateDescription}, func(ctx context.Context, _ *mcp.CallToolRequest, in updateInput) (*mcp.CallToolResult, workitems.Item, error) {
+			binding := binding.caller(ctx)
 			item, err := requireItem(ctx, in.ID, kind, false)
 			if err != nil {
 				return nil, item, err
+			}
+			if err := binding.requireItemOwner(ctx, client, item); err != nil {
+				return nil, workitems.Item{}, err
+			}
+			if in.Deleted != nil {
+				if !binding.canPlan() && *in.Deleted != item.Deleted {
+					return nil, workitems.Item{}, errors.New("deleting or restoring an item requires the Coordinator or Integrator")
+				}
+				item.Deleted = *in.Deleted
 			}
 			if in.Acceptance != nil {
 				item.Acceptance = *in.Acceptance
@@ -178,7 +186,7 @@ func Register(server *mcp.Server, client *library.Client, binding Binding) {
 			if in.LinkedIssueID != nil {
 				item.LinkedIssueID = *in.LinkedIssueID
 			}
-			out, err := client.UpdateItem(ctx, in.ID, workitems.UpdateInput{DependsOn: in.DependsOn, Schedule: in.Schedule, Revision: in.Revision, Title: in.Title, State: in.State, Labels: in.Labels, Deleted: in.Deleted, Acceptance: item.Acceptance, RequestedMemberID: item.RequestedMemberID, RequestedRole: in.RequestedRole, LinkedIssueID: item.LinkedIssueID, ExecutionMode: in.ExecutionMode, RequestID: in.RequestID})
+			out, err := client.UpdateItem(ctx, in.ID, workitems.UpdateInput{DependsOn: in.DependsOn, Schedule: in.Schedule, Revision: in.Revision, Title: in.Title, State: in.State, Labels: in.Labels, Deleted: item.Deleted, Acceptance: item.Acceptance, RequestedMemberID: item.RequestedMemberID, RequestedRole: in.RequestedRole, LinkedIssueID: item.LinkedIssueID, ExecutionMode: in.ExecutionMode, RequestID: in.RequestID})
 			return nil, out, err
 		})
 	}
@@ -196,7 +204,8 @@ func Register(server *mcp.Server, client *library.Client, binding Binding) {
 		}
 		return nil, out, nil
 	})
-	mcp.AddTool(server, &mcp.Tool{Name: "post_update", Description: "Edit or tombstone a body/reply using its expected revision. Historical content remains revision-addressable."}, func(ctx context.Context, _ *mcp.CallToolRequest, in postUpdateInput) (*mcp.CallToolResult, workitems.Post, error) {
+	mcp.AddTool(server, &mcp.Tool{Name: "post_update", Description: "Edit your own reply, a thread you issued, or the body of your assigned ticket. The Coordinator and Integrator can edit project thread bodies and delete posts. Use the expected post revision."}, func(ctx context.Context, _ *mcp.CallToolRequest, in postUpdateInput) (*mcp.CallToolResult, workitems.Post, error) {
+		binding := binding.caller(ctx)
 		current, err := client.ReadContent(ctx, in.ID, "", 1)
 		if err != nil {
 			return nil, workitems.Post{}, err
@@ -204,7 +213,23 @@ func Register(server *mcp.Server, client *library.Client, binding Binding) {
 		if err := scope(current.Post.WorkspaceID, false); err != nil {
 			return nil, workitems.Post{}, err
 		}
-		out, err := client.UpdatePost(ctx, in.ID, workitems.PostInput{Content: in.Content, Author: actor, Refs: in.Refs, Deleted: in.Deleted, Revision: in.Revision, RequestID: in.RequestID})
+		post := current.Post
+		deleted := post.Deleted
+		if in.Deleted != nil {
+			deleted = *in.Deleted
+		}
+		if deleted != post.Deleted && !binding.canPlan() {
+			return nil, workitems.Post{}, errors.New("deleting or restoring a post requires the Coordinator or Integrator")
+		}
+		var worker *workitems.WorkerBinding
+		switch {
+		case binding.owns(post), binding.canPlan() && (post.Kind == "body" || deleted != post.Deleted):
+		case post.Kind == "body" && binding.Worker != nil:
+			worker = binding.Worker
+		default:
+			return nil, workitems.Post{}, errors.New("edit your own posts or the body of your assigned ticket; use a reply to contribute to this thread")
+		}
+		out, err := client.UpdatePost(ctx, in.ID, workitems.PostInput{Content: in.Content, Author: binding.actor(), Refs: in.Refs, Deleted: deleted, Revision: in.Revision, RequestID: in.RequestID, Worker: worker})
 		return nil, out, err
 	})
 	mcp.AddTool(server, &mcp.Tool{Name: "search_work", Description: "Search issue and ticket bodies/replies using lexical, semantic or hybrid retrieval. Defaults to this workspace; all:true explicitly searches across projects. Results contain source IDs/revisions and content offsets.", Annotations: readOnly}, func(ctx context.Context, _ *mcp.CallToolRequest, in searchInput) (*mcp.CallToolResult, library.WorkSearchResponse, error) {

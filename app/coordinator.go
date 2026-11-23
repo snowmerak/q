@@ -594,6 +594,7 @@ func (host *SessionHost) runACPTicket(ctx context.Context, c *library.Client, wo
 		return result, err
 	}
 	remote.libraryInstructions = librarymcp.InstructionsFor(&binding)
+	remote.projectLibrary = true
 	remote.permissions = acpPermissionReadOnly
 	if candidate.Definition.Info.MutatesWorkspace && a.ReviewChildAttemptID == "" {
 		remote.permissions = acpPermissionAutomatic

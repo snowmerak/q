@@ -151,6 +151,7 @@ type startupRequest struct {
 	projectID          string
 	sessionID          string
 	projectManager     bool
+	projectCoordinator bool
 	review             workitemtools.ReviewAssignment
 	auxiliaryRoots     []string
 	loaded             config.Config
@@ -301,7 +302,7 @@ func (request startupRequest) run(modelReady chan<- struct{}) (result runtimeIni
 			qtools.WithSystemOneSkillRanking(systemoneconfig.Store{Dir: request.store.Dir}),
 			qtools.WithSystemOneArchiveRanking(systemoneconfig.Store{Dir: request.store.Dir}),
 			qtools.WithWorkspaceWorkBinding(libraryClient, workitemtools.Binding{
-				WorkspaceID: request.projectID, SessionID: request.sessionID, Manager: request.projectManager, Review: request.review,
+				WorkspaceID: request.projectID, SessionID: request.sessionID, Manager: request.projectManager, Coordinator: request.projectCoordinator, Review: request.review,
 			}),
 		)
 		result.tools = tools

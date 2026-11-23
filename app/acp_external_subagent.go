@@ -10,8 +10,17 @@ import (
 
 	"github.com/snowmerak/q/client"
 	"github.com/snowmerak/q/config"
+	"github.com/snowmerak/q/internal/librarymcp"
+	"github.com/snowmerak/q/internal/workitemtools"
 	"github.com/snowmerak/q/subagent"
 )
+
+type acpWorkScopeKey struct{}
+
+type acpWorkScope struct {
+	configDir string
+	binding   workitemtools.Binding
+}
 
 type externalSubagentInput struct {
 	Request string `json:"request"`
@@ -101,12 +110,23 @@ func startACPSubagent(ctx context.Context, root string, connection config.AgentC
 	if err != nil {
 		return nil, err
 	}
+	scope, scoped := ctx.Value(acpWorkScopeKey{}).(acpWorkScope)
+	if scoped {
+		command.mcpServers, err = acpLibraryServers(scope.configDir, &scope.binding)
+		if err != nil {
+			return nil, err
+		}
+	}
 	remote, err := startACPRemoteClient(ctx, command, root, "", connection.AuthMethod, io.Discard)
 	if err != nil {
 		return nil, err
 	}
 	if err := remote.applyModelSelection(ctx, selection); err != nil {
 		return nil, errors.Join(err, disposeACPRemote(remote))
+	}
+	if scoped {
+		remote.projectLibrary = true
+		remote.libraryInstructions = librarymcp.InstructionsFor(&scope.binding)
 	}
 	return remote, nil
 }

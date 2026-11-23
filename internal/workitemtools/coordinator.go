@@ -90,7 +90,11 @@ func registerCoordinator(server *mcp.Server, c *library.Client, b Binding) {
 	})
 	for _, action := range []struct{ name, action, description string }{{"ticket_start", "queue", "Resume an inactive ticket for Decisions assignment. Newly issued tickets are queued automatically and do not require this call. Returns durable admission, not execution completion."}, {"ticket_retry", "retry", "Explicitly retry a blocked/unknown ticket. Saved uncertain tool or ACP outcomes remain blocked until inspected; they are never blindly replayed."}, {"ticket_cancel", "cancel", "Request cancellation of an unfinished ticket. Active executions stop first; pending Git changes close before cancellation completes. Cancelled results cannot be accepted."}} {
 		mcp.AddTool(server, &mcp.Tool{Name: action.name, Description: action.description}, func(ctx context.Context, _ *mcp.CallToolRequest, in ticketStartInput) (*mcp.CallToolResult, workitems.Item, error) {
-			if _, err := requireItem(ctx, in.ID); err != nil {
+			item, err := requireItem(ctx, in.ID)
+			if err != nil {
+				return nil, workitems.Item{}, err
+			}
+			if err := b.caller(ctx).requireItemOwner(ctx, c, item); err != nil {
 				return nil, workitems.Item{}, err
 			}
 			out, err := c.ControlTicket(ctx, in.ID, workitems.TicketAction{Action: action.action, Revision: in.Revision, RequestID: in.RequestID})
@@ -162,6 +166,9 @@ func registerCoordinator(server *mcp.Server, c *library.Client, b Binding) {
 		})
 	}
 	review := func(ctx context.Context, id, requestID, decision, feedback string) (*mcp.CallToolResult, map[string]any, error) {
+		if DelegatedSession(ctx) != "" {
+			return nil, nil, errors.New("this review belongs to the parent session")
+		}
 		if _, err := requireAttempt(ctx, id); err != nil {
 			return nil, nil, err
 		}

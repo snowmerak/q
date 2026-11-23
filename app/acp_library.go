@@ -12,8 +12,8 @@ import (
 )
 
 const (
-	acpLibraryCatalogVersion      = 9
-	acpLibraryInstructionsVersion = 11
+	acpLibraryCatalogVersion      = 10
+	acpLibraryInstructionsVersion = 12
 )
 
 func acpLibraryServers(configDir string, binding *workitemtools.Binding) ([]acp.McpServer, error) {
@@ -37,6 +37,9 @@ func acpLibraryServers(configDir string, binding *workitemtools.Binding) ([]acp.
 	server.Args = append(server.Args, "--workspace-id", binding.WorkspaceID, "--session-id", binding.SessionID)
 	if binding.Manager {
 		server.Args = append(server.Args, "--manager")
+	}
+	if binding.Coordinator {
+		server.Args = append(server.Args, "--coordinator")
 	}
 	if binding.Worker != nil {
 		credential, err := json.Marshal(binding.Worker)

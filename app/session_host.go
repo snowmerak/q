@@ -644,7 +644,8 @@ func (host *SessionHost) prepareSession(runContext context.Context, workspaceSto
 			auxiliary = options.AuxiliaryDirectories
 		}
 		startup = startupRequest{
-			projectID: projectContext.ProjectID, sessionID: prepared.store.SessionID, projectManager: projectContext.Role == coordinator.RoleIntegrator,
+			projectID: projectContext.ProjectID, sessionID: prepared.store.SessionID,
+			projectManager: projectContext.Role == coordinator.RoleIntegrator, projectCoordinator: projectContext.Role == coordinator.RoleCoordinator,
 			review: prepared.review,
 			ctx:    runContext, memoryCtx: memoryContext, store: host.store, workspaceStore: prepared.store,
 			loaded: loaded, manager: host.manager, factory: host.factory, lifecycle: prepared.lifecycle, providerReady: true,

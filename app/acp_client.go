@@ -21,6 +21,7 @@ import (
 	"github.com/snowmerak/q/client"
 	"github.com/snowmerak/q/config"
 	"github.com/snowmerak/q/internal/acpadapter"
+	"github.com/snowmerak/q/internal/workitemtools"
 	"github.com/snowmerak/q/third_party/acp-go-sdk"
 )
 
@@ -72,6 +73,7 @@ type acpRemoteClient struct {
 	libraryInstructions     string
 	libraryInstructionsSent bool
 	libraryRoleInstructions string
+	projectLibrary          bool
 	// Last preference delivered by an older Q version, for one-time withdrawal.
 	lastBrowserPreference string
 
@@ -550,11 +552,15 @@ func (r *acpRemoteClient) RequestPermission(ctx context.Context, request acp.Req
 	r.mu.Lock()
 	turn := r.turn
 	permissions := r.permissions
+	projectLibrary := r.projectLibrary
 	r.mu.Unlock()
 	if turn == nil {
 		return cancelledPermission(), nil
 	}
 	if permissions == acpPermissionReadOnly {
+		if projectLibrary && qualifiedLibraryTool(request.ToolCall) {
+			return allowOncePermission(request), nil
+		}
 		return readOnlyPermission(request), nil
 	}
 	if permissions == acpPermissionAutomatic {
@@ -596,18 +602,67 @@ func (r *acpRemoteClient) RequestPermission(ctx context.Context, request acp.Req
 	}
 }
 
+// ACP tool titles can be descriptive. Only use a provider's explicit qualified
+// tool identifier, never a match on the human-readable description.
+func qualifiedLibraryTool(call acp.ToolCallUpdate) bool {
+	if call.Title == nil {
+		return false
+	}
+	args, ok := call.RawInput.(map[string]any)
+	if !ok {
+		return false
+	}
+	// An external command must not borrow a Library tool's permission by
+	// looking like its display title.
+	for _, field := range []string{"command", "cmd", "path"} {
+		if _, exists := args[field]; exists {
+			return false
+		}
+	}
+	hasString := func(key string) bool {
+		_, exists := args[key].(string)
+		return exists
+	}
+	for _, prefix := range []string{"mcp__q-library__", "q-library/", "Run mcp_q-library_"} {
+		name, ok := strings.CutPrefix(*call.Title, prefix)
+		if !ok || !workitemtools.IsCollaborationTool(name) {
+			continue
+		}
+		switch name {
+		case "issue_create", "ticket_create":
+			return hasString("title") && hasString("content")
+		case "issue_reply", "ticket_reply", "post_update":
+			return hasString("id") && hasString("content")
+		case "issue_update", "ticket_update":
+			return hasString("id") && hasString("title")
+		case "post_get", "issue_get", "ticket_get":
+			return hasString("id")
+		case "search_work":
+			return hasString("query")
+		case "issue_list", "ticket_list":
+			return true
+		}
+	}
+	return false
+}
+
 func readOnlyPermission(request acp.RequestPermissionRequest) acp.RequestPermissionResponse {
 	if request.ToolCall.Kind == nil {
 		return cancelledPermission()
 	}
 	switch *request.ToolCall.Kind {
 	case acp.ToolKindRead, acp.ToolKindSearch, acp.ToolKindFetch, acp.ToolKindThink:
-		for _, option := range request.Options {
-			if option.Kind == acp.PermissionOptionKindAllowOnce {
-				return acp.RequestPermissionResponse{Outcome: acp.RequestPermissionOutcome{
-					Selected: &acp.RequestPermissionOutcomeSelected{OptionId: option.OptionId},
-				}}
-			}
+		return allowOncePermission(request)
+	}
+	return cancelledPermission()
+}
+
+func allowOncePermission(request acp.RequestPermissionRequest) acp.RequestPermissionResponse {
+	for _, option := range request.Options {
+		if option.Kind == acp.PermissionOptionKindAllowOnce {
+			return acp.RequestPermissionResponse{Outcome: acp.RequestPermissionOutcome{
+				Selected: &acp.RequestPermissionOutcomeSelected{OptionId: option.OptionId},
+			}}
 		}
 	}
 	return cancelledPermission()

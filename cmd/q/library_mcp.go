@@ -25,6 +25,7 @@ func runLibraryMCP(ctx context.Context, args []string, stderr io.Writer) error {
 	workspaceID := flags.String("workspace-id", "", "Host-selected Studio project ID")
 	sessionID := flags.String("session-id", "", "Host-selected Q session ID")
 	manager := flags.Bool("manager", false, "Host-selected project manager binding")
+	coordinator := flags.Bool("coordinator", false, "Host-selected project coordinator binding")
 	reviewAttempt := flags.String("review-attempt", "", "Host-selected attempt for this review turn")
 	reviewOperation := flags.String("review-operation", "", "Host-selected operation for this review turn")
 	connection := flags.String("embedding-connection", "", "Host-owned Gateway connection for semantic queries")
@@ -64,7 +65,7 @@ func runLibraryMCP(ctx context.Context, args []string, stderr io.Writer) error {
 			return &embeddingbridge.Embedder{Path: *connection, Store: store, Model: value.Embedding.Model, Dimensions: value.Embedding.Dimensions}, value.Embedding.Model, value.Embedding.Dimensions, nil
 		})
 	}
-	binding := &workitemtools.Binding{WorkspaceID: *workspaceID, SessionID: *sessionID, Manager: *manager}
+	binding := &workitemtools.Binding{WorkspaceID: *workspaceID, SessionID: *sessionID, Manager: *manager, Coordinator: *coordinator}
 	if raw := os.Getenv("Q_LIBRARY_TICKET_WORKER"); raw != "" {
 		binding.Worker = new(workitems.WorkerBinding)
 		if err := json.Unmarshal([]byte(raw), binding.Worker); err != nil {

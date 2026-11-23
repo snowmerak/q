@@ -16,6 +16,7 @@ import (
 	"github.com/snowmerak/q/config"
 	"github.com/snowmerak/q/diagnostics"
 	"github.com/snowmerak/q/internal/toolbatch"
+	"github.com/snowmerak/q/internal/workitemtools"
 	"github.com/snowmerak/q/memory"
 	"github.com/snowmerak/q/sessionstore"
 )
@@ -989,7 +990,7 @@ func selectDefinitionTools(definition AgentDefinition, runtime ToolRuntime) ([]c
 	found := make(map[string]bool, len(wanted))
 	for _, tool := range runtime.Tools() {
 		name := tool.Function.Name
-		if _, selected := wanted[name]; selected || (delegationCoordinationTool(name) && len(definition.Delegates) > 0) {
+		if _, selected := wanted[name]; selected || workitemtools.IsCollaborationTool(name) || (delegationCoordinationTool(name) && len(definition.Delegates) > 0) {
 			result = append(result, tool)
 			found[name] = true
 		}
