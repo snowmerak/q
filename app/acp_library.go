@@ -13,7 +13,7 @@ import (
 
 const (
 	acpLibraryCatalogVersion      = 9
-	acpLibraryInstructionsVersion = 10
+	acpLibraryInstructionsVersion = 11
 )
 
 func acpLibraryServers(configDir string, binding *workitemtools.Binding) ([]acp.McpServer, error) {

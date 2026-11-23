@@ -268,7 +268,7 @@ func TestManagerACPUsesProjectCWDAndResumesUntilClear(t *testing.T) {
 			if err := json.Unmarshal(body, &old); err != nil {
 				t.Fatal(err)
 			}
-			old.LibraryInstructionsVersion = 5
+			old.LibraryInstructionsVersion = acpLibraryInstructionsVersion - 1
 			body, err = json.Marshal(old)
 			if err != nil {
 				t.Fatal(err)
