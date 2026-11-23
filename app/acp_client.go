@@ -369,9 +369,9 @@ func (r *acpRemoteClient) close(closeSession bool) error {
 	return r.closeErr
 }
 
-func (r *acpRemoteClient) runPrompt(ctx context.Context, content string, events chan<- agentEvent) {
+func (r *acpRemoteClient) runPrompt(ctx context.Context, content string, events chan<- agentEvent, images ...string) {
 	defer close(events)
-	result, toolCalls, err := r.prompt(ctx, content, events)
+	result, toolCalls, err := r.prompt(ctx, content, events, images...)
 	if err != nil {
 		emitAgentEvent(ctx, events, agentEvent{err: err})
 		return
@@ -379,7 +379,7 @@ func (r *acpRemoteClient) runPrompt(ctx context.Context, content string, events 
 	emitAgentEvent(ctx, events, agentEvent{response: result, toolCalls: toolCalls})
 }
 
-func (r *acpRemoteClient) prompt(ctx context.Context, content string, events chan<- agentEvent) (*client.ChatResponse, int, error) {
+func (r *acpRemoteClient) prompt(ctx context.Context, content string, events chan<- agentEvent, images ...string) (*client.ChatResponse, int, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, 0, err
 	}
@@ -391,6 +391,10 @@ func (r *acpRemoteClient) prompt(ctx context.Context, content string, events cha
 	if r.turn != nil {
 		r.mu.Unlock()
 		return nil, 0, errors.New("another ACP turn is already active")
+	}
+	if len(images) != 0 && !r.capabilities.PromptCapabilities.Image {
+		r.mu.Unlock()
+		return nil, 0, errors.New("the selected ACP agent does not accept images")
 	}
 	r.turn = turn
 	connection := r.connection
@@ -421,6 +425,11 @@ func (r *acpRemoteClient) prompt(ctx context.Context, content string, events cha
 	promptBlocks, err := acpPromptBlocksForText(root, content, embeddedContext)
 	if err != nil {
 		return nil, 0, err
+	}
+	for _, image := range images {
+		header, data, _ := strings.Cut(image, ",")
+		mime := strings.TrimSuffix(strings.TrimPrefix(header, "data:"), ";base64")
+		promptBlocks = append(promptBlocks, acp.ImageBlock(data, mime))
 	}
 	response, err := connection.Prompt(ctx, acp.PromptRequest{
 		SessionId: sessionID,
@@ -461,8 +470,8 @@ func (r *acpRemoteClient) prompt(ctx context.Context, content string, events cha
 	return result, toolCalls, nil
 }
 
-func (r *acpRemoteClient) promptText(ctx context.Context, content string) (string, error) {
-	response, _, err := r.prompt(ctx, content, nil)
+func (r *acpRemoteClient) promptText(ctx context.Context, content string, images ...string) (string, error) {
+	response, _, err := r.prompt(ctx, content, nil, images...)
 	if err != nil {
 		return "", err
 	}

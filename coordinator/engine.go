@@ -347,6 +347,7 @@ func (e *Engine) execute(project workitems.Workspace, item workitems.Item) (retu
 	if attempt.Feedback != "" {
 		prompt += "\n\nManager feedback:\n" + excerptBytes(attempt.Feedback, 4000)
 	}
+	prompt += "\nRecord observed checks in verification. Include project-relative UTF-8 logs or PNG, JPEG, WebP, or GIF screenshots in artifacts when they support the result."
 	if len(item.DependsOn) > 0 {
 		prompt += "\n\nCompleted prerequisite ticket IDs:\n" + strings.Join(item.DependsOn, "\n") + "\nRead their results and source posts through the ticket tools before continuing dependent work."
 	}
@@ -407,6 +408,8 @@ func (e *Engine) execute(project workitems.Workspace, item workitems.Item) (retu
 		result.Blocker = runErr.Error()
 	} else if result.Outcome == workitems.WaitingChildren {
 		status = workitems.WaitingChildren
+	} else if result.Outcome == workitems.WaitingUser {
+		status = workitems.WaitingUser
 	} else if result.Outcome != "succeeded" {
 		status = "blocked"
 	}
@@ -418,6 +421,7 @@ func (e *Engine) execute(project workitems.Workspace, item workitems.Item) (retu
 	update.Result = raw
 	update.ChangeRequest = result.ChangeRequest
 	update.OperationError = errorText(runErr)
+	update.UserQuestion = result.UserQuestion
 	cleanup, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	_, saveErr := c.UpdateAttempt(cleanup, attempt.ID, update)
@@ -435,7 +439,7 @@ func continuationMember(ctx context.Context, c *library.Client, item workitems.I
 	if item.HandoffMemberID != "" {
 		return item.HandoffMemberID, previous, nil
 	}
-	if item.ExecutionState == workitems.WaitingChildren {
+	if item.ExecutionState == workitems.WaitingChildren || previous.Status == workitems.WaitingUser {
 		return previous.MemberID, previous, nil
 	}
 	if request := previous.ChangeRequest; request != nil && !request.Final() {

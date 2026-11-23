@@ -108,14 +108,33 @@ func (s *sessionsService) serveWorkInbox(w http.ResponseWriter, r *http.Request)
 		return c.ListInbox(ctx, r.PathValue("project"))
 	})
 }
+
+func (s *sessionsService) serveHumanInbox(w http.ResponseWriter, r *http.Request) {
+	workResponse(s, w, r, http.StatusOK, func(ctx context.Context, c *library.Client) (workitems.HumanInbox, error) {
+		return c.HumanInbox(ctx, r.URL.Query().Get("workspace_id"))
+	})
+}
+
+func (s *sessionsService) serveTicketAnswer(w http.ResponseWriter, r *http.Request) {
+	var input workitems.AnswerInput
+	if err := decodeWorkRequest(w, r, &input); err != nil {
+		writeAPIError(w, http.StatusBadRequest, err)
+		return
+	}
+	workResponse(s, w, r, http.StatusOK, func(ctx context.Context, c *library.Client) (workitems.Item, error) {
+		return c.AnswerTicketQuestion(ctx, r.PathValue("attempt"), input)
+	})
+}
 func (s *sessionsService) serveTicketControl(w http.ResponseWriter, r *http.Request) {
 	var in workitems.TicketAction
 	if err := decodeWorkRequest(w, r, &in); err != nil {
 		writeAPIError(w, 400, err)
 		return
 	}
-	if in.Action != "queue" && in.Action != "retry" && in.Action != "cancel" && in.Action != "handoff" {
-		writeAPIError(w, 400, errors.New("action must be queue, retry, cancel, or handoff"))
+	switch in.Action {
+	case "queue", "retry", "cancel", "handoff", "approve_start":
+	default:
+		writeAPIError(w, 400, errors.New("unsupported ticket action"))
 		return
 	}
 	workResponse(s, w, r, 200, func(ctx context.Context, c *library.Client) (workitems.Item, error) {

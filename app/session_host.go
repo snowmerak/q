@@ -18,6 +18,7 @@ import (
 	"github.com/snowmerak/q/diagnostics"
 	"github.com/snowmerak/q/internal/hostruntime"
 	"github.com/snowmerak/q/internal/workitemtools"
+	"github.com/snowmerak/q/internal/workmedia"
 	qlibrary "github.com/snowmerak/q/library"
 	"github.com/snowmerak/q/providerhost"
 	"github.com/snowmerak/q/workspace"
@@ -430,12 +431,18 @@ func (host *SessionHost) run(
 		return err
 	}
 	prompt = strings.TrimSpace(prompt)
-	if prompt == "" {
-		return errors.New("prompt is required")
-	}
 	options := SessionOptions{}
 	if len(configured) > 0 {
 		options = configured[0]
+	}
+	if prompt == "" && len(options.Images) == 0 {
+		return errors.New("prompt is required")
+	}
+	if err := workmedia.Validate(options.Images); err != nil {
+		return err
+	}
+	if options.OperationID != "" && len(options.Images) != 0 {
+		return errors.New("idempotent session operations accept text prompts only")
 	}
 	if review := workitemtools.AssignedReview(requestContext); review.Active() && review.OperationID == options.OperationID {
 		options.review = review
@@ -449,7 +456,7 @@ func (host *SessionHost) run(
 		return err
 	}
 	defer session.busy.Unlock()
-	_, err = session.execute(requestContext, prompt, false, emit, control, options.OperationID)
+	_, err = session.execute(requestContext, prompt, false, emit, control, options)
 	return err
 }
 

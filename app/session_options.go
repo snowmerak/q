@@ -10,6 +10,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/snowmerak/q/client"
 	"github.com/snowmerak/q/internal/workitemtools"
+	"github.com/snowmerak/q/internal/workmedia"
 	"github.com/snowmerak/q/workspace"
 )
 
@@ -41,9 +42,12 @@ type SessionOptions struct {
 	Control *SessionRunControl `json:"-"`
 	// OperationID makes retries continue a saved operation without appending
 	// the same user prompt again. A completed operation returns its saved result.
-	OperationID string `json:"-"`
+	OperationID string       `json:"-"`
+	Images      []ImageInput `json:"-"`
 	review      workitemtools.ReviewAssignment
 }
+
+type ImageInput = workmedia.Image
 
 // configuresRuntime excludes turn controls, which must preserve the session's
 // selected native model or ACP connection.
@@ -55,10 +59,10 @@ func (options SessionOptions) configuresRuntime() bool {
 		options.RuntimeFactory != nil || options.WrapRuntime != nil || options.AllowedTools != nil
 }
 
-func (m model) startSessionOperation(prompt, id string) (tea.Model, tea.Cmd) {
+func (m model) startSessionOperation(prompt, id string, images []ImageInput) (tea.Model, tea.Cmd) {
 	if id == "" {
 		m.sessionOperation = nil
-		return m.startChatTurn(prompt, !m.clientIsACPRemote())
+		return m.startChatTurn(prompt, !m.clientIsACPRemote(), images...)
 	}
 	if operation := m.sessionOperation; operation != nil && operation.ID == id {
 		if operation.Prompt != prompt {

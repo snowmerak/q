@@ -13,6 +13,7 @@ import (
 	"github.com/snowmerak/q/app"
 	"github.com/snowmerak/q/client"
 	"github.com/snowmerak/q/config"
+	"github.com/snowmerak/q/internal/workmedia"
 	"github.com/snowmerak/q/subagent"
 	"github.com/snowmerak/q/workspace"
 )
@@ -50,6 +51,7 @@ type sessionSummary struct {
 type sessionMessage struct {
 	Role       string                `json:"role"`
 	Content    string                `json:"content,omitempty"`
+	Images     []string              `json:"images,omitempty"`
 	Name       string                `json:"name,omitempty"`
 	ToolCallID string                `json:"tool_call_id,omitempty"`
 	ToolCalls  []client.ToolCall     `json:"tool_calls,omitempty"`
@@ -79,8 +81,9 @@ type sessionOperationResponse struct {
 }
 
 type sessionRunRequest struct {
-	WorkspaceRoot string `json:"workspace_root"`
-	Content       string `json:"content"`
+	WorkspaceRoot string           `json:"workspace_root"`
+	Content       string           `json:"content"`
+	Images        []app.ImageInput `json:"images,omitempty"`
 }
 
 func newSessionsService(parent context.Context, runner sessionRunner, configDirectory string) *sessionsService {
@@ -379,13 +382,17 @@ func (service *sessionsService) serveMessage(writer http.ResponseWriter, request
 		return
 	}
 	var input sessionRunRequest
-	if err := decodeSessionRequest(writer, request, &input); err != nil {
+	if err := decodeRequest(writer, request, &input, workmedia.MaxImageJSON, "decode message"); err != nil {
 		writeAPIError(writer, http.StatusBadRequest, err)
 		return
 	}
 	input.Content = strings.TrimSpace(input.Content)
-	if input.Content == "" {
-		writeAPIError(writer, http.StatusBadRequest, errors.New("content is required"))
+	if input.Content == "" && len(input.Images) == 0 {
+		writeAPIError(writer, http.StatusBadRequest, errors.New("content or an image is required"))
+		return
+	}
+	if err := workmedia.Validate(input.Images); err != nil {
+		writeAPIError(writer, http.StatusBadRequest, err)
 		return
 	}
 	if len(input.Content) > subagent.MaximumDelegatePromptBytes {
@@ -397,7 +404,7 @@ func (service *sessionsService) serveMessage(writer http.ResponseWriter, request
 		writeAPIError(writer, http.StatusBadRequest, err)
 		return
 	}
-	run, err := service.runs.start(root, request.PathValue("session"), input.Content, request.Context())
+	run, err := service.runs.startTurn(root, request.PathValue("session"), input.Content, "", input.Images, request.Context())
 	if err != nil {
 		if strings.Contains(err.Error(), "already has a running turn") {
 			writeAPIError(writer, http.StatusConflict, err)
@@ -442,6 +449,7 @@ func detailFromSessionRange(root string, store workspace.Store, value workspace.
 		}
 		projected := sessionMessage{
 			Role: string(message.Role), Content: message.TextContent(), Name: message.Name,
+			Images:     workmedia.URLs(message),
 			ToolCallID: message.ToolCallID, ToolCalls: message.ToolCalls,
 		}
 		if message.Role == client.RoleAssistant {

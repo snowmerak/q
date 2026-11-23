@@ -11,6 +11,7 @@ export type TokenUsage = { input_tokens: number; cached_tokens?: number; output_
 export type Message = {
   role: string;
   content?: string;
+  images?: string[];
   name?: string;
   tool_call_id?: string;
   tool_calls?: ToolCall[];
@@ -113,7 +114,7 @@ export type RegisteredSessionTree = {
   issue?: string;
 };
 export type StudioProject = {
-  limits: { max_parallel_tickets: number; max_parallel_subagents: number };
+  limits: { max_parallel_tickets: number; max_parallel_subagents: number; require_ticket_approval?: boolean };
   id: string;
   name: string;
   workspace_roots: string[];

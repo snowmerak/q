@@ -3,6 +3,8 @@
   import { onMount } from 'svelte';
   import SessionTree from './sessions/SessionTree.svelte';
   import Transcript from './sessions/Transcript.svelte';
+  import ImagePicker from './workitems/ImagePicker.svelte';
+  import { appendImages, imageDataURL, imageFiles } from './workitems/images';
   import ModelTimings from './sessions/ModelTimings.svelte';
   import { loadDraft, saveDraft } from './sessions/drafts';
   import { historyPageSize, mergeHistory } from './sessions/history';
@@ -114,16 +116,28 @@
     saveDraft(draftKey, prompt);
     draftKey = key;
     prompt = key ? loadDraft(key) : '';
+    imageDraft = [];
     closeActions();
   }
 
   function clearPrompt() {
     prompt = '';
+    imageDraft = [];
     saveDraft(draftKey, '');
   }
 
   function closeActions() {
     if (actionsMenu) actionsMenu.open = false;
+  }
+
+  let imageDraft: File[] = [];
+
+  function pasteImages(event: ClipboardEvent) {
+    const files = imageFiles(event);
+    if (!files.length || sending || selectedDelegation) return;
+    event.preventDefault();
+    try { imageDraft = appendImages(imageDraft, files); }
+    catch (cause) { error = (cause as Error).message; }
   }
 
   function openFileLink(value: string) {
@@ -527,7 +541,8 @@
   async function sendPrompt() {
     if (modelSaving) return;
     const content = prompt.trim();
-    if (!selected || !workspaceRoot || !content || sessionLoading || finishingRun) return;
+    if (!selected || !workspaceRoot || (!content && !imageDraft.length) || sessionLoading || finishingRun) return;
+    if ((selectedDelegation || sending) && !content) return;
     const generation = sessionGeneration;
     if (selectedDelegation && delegationKind !== 'inner') return;
     if (selectedDelegation && !sending) {
@@ -550,16 +565,20 @@
       return;
     }
     if (sending && activeRun) {
+      const guidedRunID = activeRun.id;
       sessionLoading = true;
       try { await commandRun('guidance', { content }); }
       finally { if (isCurrentSession(generation)) sessionLoading = false; }
       if (isCurrentSession(generation) && !error) {
         clearPrompt();
-        runStatus = selectedDelegation ? 'Guidance sent' : 'Guidance queued…';
+        if (activeRun?.id === guidedRunID && sending) {
+          runStatus = selectedDelegation ? 'Guidance sent' : 'Guidance queued…';
+        }
       }
       return;
     }
     const target = { workspaceRoot, sessionID: selected.session.session_id };
+    const files = imageDraft;
     runMonitor.stop();
     clearPrompt();
     sending = true;
@@ -567,11 +586,13 @@
     runStatus = 'Starting default loop…';
     activeRun = null;
     events = [];
-    messages = [...messages, { role: 'user', content }];
     try {
-      const response = await requestResponse(`/api/v1/sessions/${encodeURIComponent(selected.session.session_id)}/messages`, {
+      const images = await Promise.all(files.map(imageDataURL));
+      if (!isCurrentSession(generation)) return;
+      messages = [...messages, { role: 'user', content, images }];
+      const response = await requestResponse(`/api/v1/sessions/${encodeURIComponent(target.sessionID)}/messages`, {
         method: 'POST', headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-        body: JSON.stringify({ workspace_root: workspaceRoot, content })
+        body: JSON.stringify({ workspace_root: target.workspaceRoot, content, images: images.map(url => ({ data: url.split(',')[1] })) })
       });
       const run = (await response.json()) as RunSnapshot;
       if (!isCurrentSession(generation)) return;
@@ -582,6 +603,7 @@
       error = cause instanceof Error ? cause.message : 'The turn failed';
       runStatus = 'Turn failed';
       if (!prompt) { prompt = content; saveDraft(draftKey, content); }
+      if (!imageDraft.length) imageDraft = files;
       await reloadSelected();
       if (!isCurrentSession(generation)) return;
       sending = false;
@@ -700,6 +722,7 @@
     if (!selected || !workspaceRoot || !activeRun) return;
     error = '';
     const generation = sessionGeneration;
+    const runID = activeRun.id;
     try {
       if (selectedDelegation) {
         if (delegationKind !== 'inner') return;
@@ -711,12 +734,13 @@
         if (isCurrentSession(generation)) applyDelegationSession(value);
         return;
       }
-      const response = await requestResponse(`/api/v1/sessions/${encodeURIComponent(selected.session.session_id)}/runs/${encodeURIComponent(activeRun.id)}/commands`, {
+      const response = await requestResponse(`/api/v1/sessions/${encodeURIComponent(selected.session.session_id)}/runs/${encodeURIComponent(runID)}/commands`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ workspace_root: workspaceRoot, action, ...extra })
       });
       const run = (await response.json()) as RunSnapshot;
-      if (!isCurrentSession(generation)) return;
+      // Polling can already have followed a redirect or read newer events.
+      if (!isCurrentSession(generation) || activeRun?.id !== runID || run.cursor < activeRun.cursor) return;
       activeRun = run;
       sending = !terminalRun(activeRun.status);
       runStatus = runStatusLabel(activeRun);
@@ -886,10 +910,11 @@
       {:else}
         <div class="composer-wrap">
           <div class="composer">
-            <textarea bind:value={prompt} oninput={(event) => saveDraft(draftKey, event.currentTarget.value)} aria-label="Message Q" onkeydown={submitFromKeyboard} placeholder={sending && !finishingRun ? 'Guide the current turn…' : selectedRegistration?.kind === 'coordinator' ? 'Describe the work to plan and delegate…' : workspaceRoleTitle(selectedRegistration?.kind) ? 'Discuss results and review changes…' : selectedRegistration?.kind === 'chat' ? 'Message Q…' : 'Ask Q to work in this repository…'} rows="3" disabled={sessionLoading}></textarea>
-            <button class="send-button" title={sending && !finishingRun ? 'Guide current turn' : 'Send message'} onclick={sendPrompt} disabled={sessionLoading || modelSaving || finishingRun || !prompt.trim()}><ArrowUp aria-hidden="true" size={17} /></button>
+            <textarea bind:value={prompt} oninput={(event) => saveDraft(draftKey, event.currentTarget.value)} aria-label="Message Q" onkeydown={submitFromKeyboard} onpaste={pasteImages} placeholder={sending && !finishingRun ? 'Guide the current turn…' : selectedRegistration?.kind === 'coordinator' ? 'Describe the work to plan and delegate…' : workspaceRoleTitle(selectedRegistration?.kind) ? 'Discuss results and review changes…' : selectedRegistration?.kind === 'chat' ? 'Message Q…' : 'Ask Q to work in this repository…'} rows="3" disabled={sessionLoading}></textarea>
+            <button class="send-button" title={sending && !finishingRun ? 'Guide current turn' : 'Send message'} onclick={sendPrompt} disabled={sessionLoading || modelSaving || finishingRun || (!prompt.trim() && !imageDraft.length)}><ArrowUp aria-hidden="true" size={17} /></button>
           </div>
           <div class="composer-footer">
+            {#if !selectedDelegation}<ImagePicker bind:files={imageDraft} disabled={sending || sessionLoading} onerror={value => error = value} />{/if}
             {#if !selectedDelegation && selected.session.session_id === selectedRegistration?.session.session_id && selected.workspace_root === workspaceRoot}
               {#key `${workspaceRoot}/${selected.session.session_id}`}
                 <SessionModelPicker {workspaceRoot} sessionID={selected.session.session_id} disabled={sending || sessionLoading} bind:saving={modelSaving} bind:agent={sessionAgent} />

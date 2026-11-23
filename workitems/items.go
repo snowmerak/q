@@ -23,38 +23,40 @@ const (
 
 // Item contains thread metadata; its body lives only in the referenced Post.
 type Item struct {
-	ParentTicketID    string          `json:"parent_ticket_id,omitempty"`
-	ParentWorktreeID  string          `json:"parent_worktree_id,omitempty"`
-	HandoffMemberID   string          `json:"handoff_member_id,omitempty"`
-	DependsOn         []string        `json:"depends_on,omitempty"`
-	WaitingOn         []string        `json:"waiting_on,omitempty"`
-	ID                string          `json:"id"`
-	WorkspaceID       string          `json:"workspace_id"`
-	Kind              string          `json:"kind"`
-	Number            int64           `json:"number"`
-	Title             string          `json:"title"`
-	BodyPostID        string          `json:"body_post_id"`
-	State             string          `json:"state"`
-	Labels            []string        `json:"labels"`
-	Schedule          *TicketSchedule `json:"schedule,omitempty"`
-	ScheduleID        string          `json:"schedule_id,omitempty"`
-	ScheduledFor      time.Time       `json:"scheduled_for,omitempty"`
-	NextScheduledAt   time.Time       `json:"next_scheduled_at,omitempty"`
-	Acceptance        []string        `json:"acceptance,omitempty"`
-	ExecutionMode     string          `json:"execution_mode,omitempty"`
-	RequestedMemberID string          `json:"requested_member_id,omitempty"`
-	RequestedRole     string          `json:"requested_role,omitempty"`
-	LinkedIssueID     string          `json:"linked_issue_id,omitempty"`
-	ExecutionState    string          `json:"execution_state,omitempty"`
-	ExecutionReason   string          `json:"execution_reason,omitempty"`
-	ActiveAttemptID   string          `json:"active_attempt_id,omitempty"`
-	AssignedMemberID  string          `json:"assigned_member_id,omitempty"`
-	NextAssignmentAt  time.Time       `json:"next_assignment_at,omitempty"`
-	Revision          int64           `json:"revision"`
-	SourceRevision    int64           `json:"source_revision"`
-	Deleted           bool            `json:"deleted"`
-	CreatedAt         time.Time       `json:"created_at"`
-	UpdatedAt         time.Time       `json:"updated_at"`
+	ParentTicketID        string          `json:"parent_ticket_id,omitempty"`
+	ParentWorktreeID      string          `json:"parent_worktree_id,omitempty"`
+	HandoffMemberID       string          `json:"handoff_member_id,omitempty"`
+	DependsOn             []string        `json:"depends_on,omitempty"`
+	WaitingOn             []string        `json:"waiting_on,omitempty"`
+	ID                    string          `json:"id"`
+	WorkspaceID           string          `json:"workspace_id"`
+	Kind                  string          `json:"kind"`
+	Number                int64           `json:"number"`
+	Title                 string          `json:"title"`
+	BodyPostID            string          `json:"body_post_id"`
+	State                 string          `json:"state"`
+	Labels                []string        `json:"labels"`
+	Schedule              *TicketSchedule `json:"schedule,omitempty"`
+	ScheduleID            string          `json:"schedule_id,omitempty"`
+	ScheduledFor          time.Time       `json:"scheduled_for,omitempty"`
+	NextScheduledAt       time.Time       `json:"next_scheduled_at,omitempty"`
+	Acceptance            []string        `json:"acceptance,omitempty"`
+	ExecutionMode         string          `json:"execution_mode,omitempty"`
+	RequestedMemberID     string          `json:"requested_member_id,omitempty"`
+	RequestedRole         string          `json:"requested_role,omitempty"`
+	LinkedIssueID         string          `json:"linked_issue_id,omitempty"`
+	RequireStartApproval  bool            `json:"require_start_approval,omitempty"`
+	ApprovedStartContract string          `json:"approved_start_contract,omitempty"`
+	ExecutionState        string          `json:"execution_state,omitempty"`
+	ExecutionReason       string          `json:"execution_reason,omitempty"`
+	ActiveAttemptID       string          `json:"active_attempt_id,omitempty"`
+	AssignedMemberID      string          `json:"assigned_member_id,omitempty"`
+	NextAssignmentAt      time.Time       `json:"next_assignment_at,omitempty"`
+	Revision              int64           `json:"revision"`
+	SourceRevision        int64           `json:"source_revision"`
+	Deleted               bool            `json:"deleted"`
+	CreatedAt             time.Time       `json:"created_at"`
+	UpdatedAt             time.Time       `json:"updated_at"`
 }
 
 type Post struct {
@@ -75,22 +77,23 @@ type Post struct {
 }
 
 type CreateInput struct {
-	ParentWorker      *WorkerBinding  `json:"parent_worker,omitempty"`
-	DependsOn         []string        `json:"depends_on,omitempty"`
-	Schedule          *TicketSchedule `json:"schedule,omitempty"`
-	WorkspaceID       string          `json:"workspace_id"`
-	Kind              string          `json:"kind"`
-	Title             string          `json:"title"`
-	Content           string          `json:"content"`
-	Labels            []string        `json:"labels,omitempty"`
-	Acceptance        []string        `json:"acceptance,omitempty"`
-	ExecutionMode     string          `json:"execution_mode,omitempty"`
-	RequestedMemberID string          `json:"requested_member_id,omitempty"`
-	RequestedRole     string          `json:"requested_role,omitempty"`
-	LinkedIssueID     string          `json:"linked_issue_id,omitempty"`
-	Author            string          `json:"author"`
-	Refs              []string        `json:"refs,omitempty"`
-	RequestID         string          `json:"request_id,omitempty"`
+	RequireStartApproval bool            `json:"require_start_approval,omitempty"`
+	ParentWorker         *WorkerBinding  `json:"parent_worker,omitempty"`
+	DependsOn            []string        `json:"depends_on,omitempty"`
+	Schedule             *TicketSchedule `json:"schedule,omitempty"`
+	WorkspaceID          string          `json:"workspace_id"`
+	Kind                 string          `json:"kind"`
+	Title                string          `json:"title"`
+	Content              string          `json:"content"`
+	Labels               []string        `json:"labels,omitempty"`
+	Acceptance           []string        `json:"acceptance,omitempty"`
+	ExecutionMode        string          `json:"execution_mode,omitempty"`
+	RequestedMemberID    string          `json:"requested_member_id,omitempty"`
+	RequestedRole        string          `json:"requested_role,omitempty"`
+	LinkedIssueID        string          `json:"linked_issue_id,omitempty"`
+	Author               string          `json:"author"`
+	Refs                 []string        `json:"refs,omitempty"`
+	RequestID            string          `json:"request_id,omitempty"`
 }
 
 type UpdateInput struct {
@@ -399,6 +402,14 @@ func createItemTx(ctx context.Context, tx *sql.Tx, in CreateInput, scheduleID st
 		if err := applyTicketSchedule(&item, in.Schedule, now); err != nil {
 			return Item{}, err
 		}
+		required, err := projectRequiresStartApproval(ctx, tx, item.WorkspaceID)
+		if err != nil {
+			return Item{}, err
+		}
+		item.RequireStartApproval = in.RequireStartApproval || required
+		if requiresFreshStartApproval(item) {
+			resetStartApproval(&item)
+		}
 	}
 	if in.LinkedIssueID != "" {
 		linked, err := decodeRow[Item](tx.QueryRowContext(ctx, `SELECT payload FROM items WHERE id=? AND workspace_id=? AND kind='issue'`, in.LinkedIssueID, in.WorkspaceID))
@@ -442,6 +453,16 @@ func (s *Store) UpdateItem(ctx context.Context, id string, in UpdateInput) (Item
 		if item.Revision != in.Revision {
 			return Item{}, ErrConflict
 		}
+		if item.Kind == Ticket {
+			waiting, err := awaitingTicketDecision(ctx, tx, item)
+			if err != nil {
+				return Item{}, err
+			}
+			if waiting {
+				return Item{}, fmt.Errorf("%w: cancel the pending execution before changing its scope", ErrConflict)
+			}
+		}
+		originalContract := ticketContract(item, 0)
 		if strings.TrimSpace(in.Title) == "" || len(in.Title) > 512 || !validItemText(in.Labels, in.Acceptance) {
 			return Item{}, ErrInvalidInput
 		}
@@ -534,6 +555,11 @@ func (s *Store) UpdateItem(ctx context.Context, id string, in UpdateInput) (Item
 		}
 		item.Title, item.State, item.Labels, item.Deleted = strings.TrimSpace(in.Title), in.State, in.Labels, in.Deleted
 		item.Acceptance, item.RequestedMemberID, item.LinkedIssueID = in.Acceptance, in.RequestedMemberID, in.LinkedIssueID
+		if requiresFreshStartApproval(item) && (item.ApprovedStartContract == "" || originalContract != ticketContract(item, 0)) {
+			resetStartApproval(&item)
+		} else if item.RequireStartApproval && item.ActiveAttemptID == "" && originalContract != ticketContract(item, 0) {
+			item.ApprovedStartContract = ""
+		}
 		item.Revision++
 		item.SourceRevision++
 		item.UpdatedAt = time.Now().UTC()
@@ -663,6 +689,20 @@ func (s *Store) UpdatePost(ctx context.Context, id string, in PostInput) (Post, 
 		item, err := decodeRow[Item](tx.QueryRowContext(ctx, `SELECT payload FROM items WHERE id=?`, post.ItemID))
 		if err != nil {
 			return Post{}, err
+		}
+		if item.Kind == Ticket && post.Kind == "body" {
+			waiting, err := awaitingTicketDecision(ctx, tx, item)
+			if err != nil {
+				return Post{}, err
+			}
+			if waiting {
+				return Post{}, fmt.Errorf("%w: cancel the pending execution before changing its scope", ErrConflict)
+			}
+			if requiresFreshStartApproval(item) {
+				resetStartApproval(&item)
+			} else if item.RequireStartApproval && item.ActiveAttemptID == "" {
+				item.ApprovedStartContract = ""
+			}
 		}
 		item.UpdatedAt = post.UpdatedAt
 		item.Revision++

@@ -2,6 +2,53 @@ import { test, expect } from './test.mjs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+const referenceImage = {
+  name: 'reference.png', mimeType: 'image/png',
+  buffer: Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aip0AAAAASUVORK5CYII=', 'base64'),
+};
+
+test('chat image survives a completed turn and reload', async ({ page, request }) => {
+  const fixture = await (await request.get('/_test/fixture')).json();
+  const session = await (await request.post('/api/v1/registered-sessions', {
+    data: { workspace_root: fixture.root, create: true },
+  })).json();
+  await page.goto(`/sessions/${session.registration_id}`);
+  const composer = page.getByRole('textbox', { name: 'Message Q' });
+  await composer.fill('Inspect this reference and write the requested file');
+  await page.locator('.image-picker input[type=file]').setInputFiles(referenceImage);
+  await composer.press('Enter');
+  await expect(page.getByRole('heading', { name: 'Studio result' })).toBeVisible();
+  await page.reload();
+  const image = page.getByRole('img', { name: 'Attached image 1' });
+  await expect(image).toBeVisible();
+  await expect.poll(() => image.evaluate(value => value.naturalWidth)).toBe(1);
+});
+
+test('ticket image persists and the inbox opens its start approval', async ({ page, request }) => {
+  const { projects } = await (await request.get('/api/v1/projects')).json();
+  const project = projects.find(value => value.name === 'Integration');
+  await page.goto(`/tickets?workspace_id=${project.id}`);
+  await page.getByRole('button', { name: 'New ticket', exact: true }).click();
+  const title = 'Confirm the attached design';
+  await page.getByRole('textbox', { name: 'Work item title' }).fill(title);
+  await page.getByRole('textbox', { name: 'Work item body' }).fill('Check the attached reference image.');
+  await page.getByRole('checkbox', { name: 'Require approval before this ticket starts' }).check();
+  await page.locator('.work-create input[type=file]').setInputFiles(referenceImage);
+  await page.getByRole('button', { name: 'Create ticket', exact: true }).click();
+  await expect(page.getByRole('img', { name: 'Attached image 1' })).toBeVisible();
+  const id = new URL(page.url()).searchParams.get('item_id');
+  await page.getByRole('button', { name: 'Inbox', exact: true }).click();
+  const row = page.getByRole('article').filter({ hasText: title });
+  await expect(row).toContainText('Start approval requested');
+  await row.getByRole('button', { name: 'Open ticket' }).click();
+  await expect(page.getByRole('img', { name: 'Attached image 1' })).toBeVisible();
+  await page.getByRole('button', { name: 'Approve and queue', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Approve and queue', exact: true })).toHaveCount(0);
+  const item = await (await request.get(`/api/v1/work/items/${id}`)).json();
+  expect(item.require_start_approval).toBe(true);
+  expect(item.execution_state).not.toBe('waiting_approval');
+});
+
 test('issues and tickets keep readable controls at desktop, mobile and larger text sizes', async ({ page }) => {
   for (const route of ['issues', 'tickets']) {
     await page.goto(`/${route}`);
@@ -599,6 +646,42 @@ test('guidance redirects a real run without refresh and renders markdown and cod
   const detail = await request.get(`/api/v1/sessions/${session.session.session_id}?workspace_root=${encodeURIComponent(fixture.root)}`);
   const transcript = (await detail.json()).transcript;
   expect(transcript.some((message) => message.role === 'user' && message.content.includes('write the requested file'))).toBe(true);
+});
+
+test('guidance keeps the newer run complete when the command response arrives late', async ({ page, request }) => {
+  const fixture = await (await request.get('/_test/fixture')).json();
+  const session = await (await request.post('/api/v1/registered-sessions', {
+    data: { workspace_root: fixture.root, create: true },
+  })).json();
+  let releaseResponse;
+  let receiveResponse;
+  const held = new Promise(resolve => { releaseResponse = resolve; });
+  const received = new Promise(resolve => { receiveResponse = resolve; });
+  await page.route('**/runs/*/commands', async route => {
+    if (route.request().postDataJSON().action !== 'guidance') return route.continue();
+    const response = await route.fetch();
+    receiveResponse(response.status());
+    await held;
+    await route.fulfill({ response });
+  });
+  try {
+    await page.goto('/sessions/' + session.registration_id);
+    const composer = page.getByRole('textbox', { name: 'Message Q' });
+    await composer.fill('wait for guidance');
+    await composer.press('Enter');
+    await expect(page.getByRole('heading', { name: 'Which direction?' })).toBeVisible();
+    await composer.fill('write the requested file');
+    await composer.press('Enter');
+    expect(await received).toBe(200);
+    await expect(page.getByRole('heading', { name: 'Studio result' })).toBeVisible();
+    await expect(composer).toHaveAttribute('placeholder', 'Ask Q to work in this repository…');
+    releaseResponse();
+    await expect(composer).toBeEnabled();
+    await expect(composer).toHaveAttribute('placeholder', 'Ask Q to work in this repository…');
+    await expect(page.getByRole('button', { name: 'Stop turn' })).toHaveCount(0);
+  } finally {
+    releaseResponse();
+  }
 });
 
 for (const cache of [

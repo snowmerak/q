@@ -99,6 +99,7 @@ func startLeader(
 	registerSkillRoutes(mux, skills)
 	registerWorkspaceRoutes(mux, catalog)
 	registerItemRoutes(mux, catalog)
+	registerWorkAssetRoutes(mux, catalog)
 	registerCoordinatorRoutes(mux, catalog)
 	registerWorkerRoute(mux, catalog, dir)
 	knowledge := newKnowledgeIndex(ctx, dir, catalog, lock, vector)

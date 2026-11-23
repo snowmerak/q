@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -14,6 +15,7 @@ import (
 	"github.com/snowmerak/q/client"
 	"github.com/snowmerak/q/config"
 	"github.com/snowmerak/q/gitwork"
+	"github.com/snowmerak/q/internal/workmedia"
 	"github.com/snowmerak/q/library"
 	"github.com/snowmerak/q/subagent"
 	"github.com/snowmerak/q/workitems"
@@ -157,6 +159,105 @@ func TestBuiltinCodeReviewerRunsReportTicketReadOnly(t *testing.T) {
 		return ticket.Title == "Find supporting evidence" && ticket.LinkedIssueID == issue.ID && ticket.ExecutionState == "queued"
 	}) {
 		t.Fatalf("reviewer's follow-up ticket: %+v %v", tickets, err)
+	}
+}
+
+func TestTicketImageDecisionAndVerificationAcrossWorkerTurns(t *testing.T) {
+	host, c, project, _ := testManagerHost(t)
+	ctx := t.Context()
+	root := project.WorkspaceRoots[0]
+	if err := (workspacememory.ConfigStore{Dir: host.store.Dir}).Save(workspacememory.Config{Host: "127.0.0.1", Port: reserveTestPort(t)}); err != nil {
+		t.Fatal(err)
+	}
+	value, err := host.store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	value.Provider.Model = "plan-model"
+	if err := host.store.Save(value); err != nil {
+		t.Fatal(err)
+	}
+	image, err := base64.StdEncoding.DecodeString("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aip0AAAAASUVORK5CYII=")
+	if err != nil {
+		t.Fatal(err)
+	}
+	asset, err := c.PutWorkAsset(ctx, project.ID, library.AssetUpload{Data: image, ImagesOnly: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	issue, err := c.CreateItem(ctx, workitems.CreateInput{WorkspaceID: project.ID, Kind: workitems.Issue, Title: "Screenshot", Content: "Expected layout", Refs: []string{workitems.AssetPrefix + asset.ID}, Author: "user"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	item, err := c.CreateItem(ctx, workitems.CreateInput{WorkspaceID: project.ID, Kind: workitems.Ticket, Title: "Review layout", Content: "Check layout", LinkedIssueID: issue.ID, Author: "user", ExecutionMode: "report"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	member, err := c.PutMember(ctx, project.ID, workitems.MemberInput{AgentID: subagent.BuiltinCodeReviewerID, DefinitionRoot: root, ExecutionRoot: root})
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidates, err := host.coordinatorCandidates(ctx, project, item, []workitems.Member{member})
+	if err != nil || len(candidates) != 1 {
+		t.Fatalf("candidates=%v err=%v", candidates, err)
+	}
+	candidate := candidates[0]
+	claim := func(item workitems.Item, key string) workitems.Attempt {
+		t.Helper()
+		a, err := c.ClaimTicket(ctx, item.ID, workitems.ClaimInput{Revision: item.Revision, MemberID: member.ID, MemberRevision: member.Revision, Owner: "test", DefinitionDigest: candidate.Digest, RequestID: key})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return a
+	}
+	a := claim(item, "start")
+	configured := &planningClient{responses: []client.Message{
+		{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{planToolCall("task_start", `{"objective":"Review layout"}`)}},
+		{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{planToolCall("ask_to_user", `{"question":"Which variant should I verify?","choices":["Compact","Default"]}`)}},
+	}}
+	host.factory = func(config.Config) (chatClient, error) { return configured, nil }
+	result, err := host.runTicket(ctx, c, project, item, candidate, a, "Check the linked issue screenshot")
+	if err != nil || result.Outcome != workitems.WaitingUser || result.UserQuestion == nil {
+		t.Fatalf("parked result=%+v err=%v", result, err)
+	}
+	gotImage := false
+	for _, message := range configured.requests[0].Messages {
+		gotImage = gotImage || len(workmedia.URLs(message)) == 1
+	}
+	if !gotImage {
+		t.Fatal("linked issue image did not reach the model")
+	}
+	a, err = c.UpdateAttempt(ctx, a.ID, workitems.AttemptUpdate{Owner: a.Owner, Token: a.Token, Generation: a.Generation, Status: workitems.WaitingUser, UserQuestion: result.UserQuestion})
+	if err != nil {
+		t.Fatal(err)
+	}
+	item, err = c.AnswerTicketQuestion(ctx, a.ID, workitems.AnswerInput{QuestionID: a.UserQuestion.ID, Answer: "Compact", RequestID: "decision"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	next := claim(item, "resume")
+	if next.WorkerSessionID != a.WorkerSessionID || next.PreviousAnswer == nil {
+		t.Fatal("worker did not retain its session and answer")
+	}
+	if err := os.WriteFile(filepath.Join(root, "layout.log"), []byte("Compact matches the reference.\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	configured.responses = []client.Message{
+		{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{planToolCall("task_complete", `{"outcome":"succeeded","summary":"Layout checked","verification":["Compared the compact layout"],"artifacts":["layout.log"]}`)}},
+	}
+	result, err = host.runTicket(ctx, c, project, item, candidate, next, "User decision: "+next.PreviousAnswer.Answer)
+	if err != nil || result.Outcome != "succeeded" || len(result.VerificationFiles) != 2 {
+		t.Fatalf("resumed result=%+v err=%v", result, err)
+	}
+	last := configured.requests[len(configured.requests)-1].Messages
+	if !slices.ContainsFunc(last, func(message client.Message) bool {
+		return message.Name == subagent.FollowupMessageName && strings.Contains(message.TextContent(), `"answer":"Compact"`)
+	}) {
+		t.Fatal("the same worker did not receive the stored answer")
+	}
+	log, err := c.GetWorkAsset(ctx, project.ID, result.VerificationFiles[1].ID)
+	if err != nil || string(log.Data) != "Compact matches the reference.\n" {
+		t.Fatalf("verification log=%q err=%v", log.Data, err)
 	}
 }
 
@@ -430,7 +531,7 @@ func testTicketACPWorkerModelSelection(t *testing.T, profile subagent.Profile, e
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := host.runACPTicket(ctx, c, worker, candidates[0], previous, "Do not replay", root); err == nil || !strings.Contains(err.Error(), "unknown outcome") {
+	if _, err := host.runACPTicket(ctx, c, worker, candidates[0], previous, "Do not replay", root, nil); err == nil || !strings.Contains(err.Error(), "unknown outcome") {
 		t.Fatalf("unknown ACP prompt replayed: %v", err)
 	}
 }

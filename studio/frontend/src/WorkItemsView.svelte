@@ -7,13 +7,16 @@
   import TicketScheduleFields from './workitems/TicketScheduleFields.svelte';
   import TicketDependencies from './workitems/TicketDependencies.svelte';
   import WorkerConversation from './workitems/WorkerConversation.svelte';
+  import ImagePicker from './workitems/ImagePicker.svelte';
+  import TicketDecision, { type UserQuestion } from './workitems/TicketDecision.svelte';
+  import { assetURL, imageRefs, uploadImages } from './workitems/images';
   import { emptyScheduleDraft, scheduleDraft, scheduleInput, scheduleTime, type TicketSchedule } from './workitems/schedule';
   import type { StudioProject } from './sessions/types';
   export let kind: 'issue' | 'ticket' = 'issue';
   type Item = { parent_ticket_id?: string; handoff_member_id?: string; depends_on?: string[]; waiting_on?: string[]; schedule?: TicketSchedule; schedule_id?: string; scheduled_for?: string; next_scheduled_at?: string; id: string; workspace_id: string; kind: string; number: number; title: string; body_post_id: string; state: string; labels: string[]; acceptance?: string[]; execution_mode?: string; requested_member_id?: string; linked_issue_id?: string; execution_state?: string; execution_reason?: string; active_attempt_id?: string; assigned_member_id?: string; revision: number; deleted: boolean; updated_at: string };
   type ItemPage = { items: Item[]; next_cursor?: string };
   type Member = { id: string; workspace_id: string; agent_id: string; definition_root: string; execution_root: string; revision: number; disabled: boolean };
-  type Attempt = { id: string; ticket_id: string; status: string; worker_session_id: string; member_id: string; acceptance?: string[]; result?: unknown; feedback?: string; operation_error?: string; change_request?: { head_commit?: string; base_commit?: string; base_ref?: string; status: string } };
+  type Attempt = { id: string; ticket_id: string; status: string; worker_session_id: string; member_id: string; acceptance?: string[]; result?: unknown; feedback?: string; operation_error?: string; user_question?: UserQuestion; change_request?: { head_commit?: string; base_commit?: string; base_ref?: string; status: string } };
   type Post = { id: string; item_id: string; kind: string; content: string; content_truncated?: boolean; author: string; refs?: string[]; revision: number; deleted: boolean; created_at: string };
   type Hit = { item_id: string; post_id: string; workspace_id: string; title: string; snippet: string; revision: number; offset: number };
   const executionGuidance: Record<string, string> = {
@@ -46,11 +49,14 @@
   let creating = false;
   let title = '';
   let body = '';
+  let bodyImages: File[] = [];
+  let replyImages: File[] = [];
   let labels = '';
   let acceptance = '';
   let createDependencies: string[] = [];
   let detailDependencies: string[] = [];
   let executionMode = 'report';
+  let requireStartApproval = false;
   let createSchedule = emptyScheduleDraft();
   let detailSchedule = emptyScheduleDraft();
   let members: Member[] = [];
@@ -96,8 +102,8 @@
   async function json<T>(path: string, init?: RequestInit): Promise<T> { return (await requestResponse('/api/v1/' + path, init)).json(); }
   function write(method: string, value: unknown): RequestInit { return { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(value) }; }
   function message(cause: unknown) { error = cause instanceof Error ? cause.message : String(cause); }
-  onMount(() => { void (async () => { try { projects = (await json<{ projects: StudioProject[] }>('projects')).projects; const params = new URL(location.href).searchParams; workspaceID = projects.find(p => p.id === params.get('workspace_id'))?.id || projects[0]?.id || ''; mounted = true; await changeProject(); const id = params.get('item_id'); if (id) await selectItem(id); const postID = params.get('post_id'); if (postID) await revealPost(postID); } catch (cause) { message(cause); } })(); const timer = setInterval(() => { if (document.visibilityState === 'visible' && kind === 'ticket' && !busy && !loading && !editing && !editDetails) { void loadItems(false, true); if (selected) void loadAttempts(selected.id); } }, 5000); return () => clearInterval(timer); });
-  async function changeProject() { createDependencies = []; selected = null; searched = false; attempts = []; diff = ''; await Promise.all([loadItems(), loadMembers()]); }
+  onMount(() => { void (async () => { try { projects = (await json<{ projects: StudioProject[] }>('projects')).projects; const params = new URL(location.href).searchParams; workspaceID = projects.find(p => p.id === params.get('workspace_id'))?.id || projects[0]?.id || ''; mounted = true; await changeProject(); const id = params.get('item_id'); if (id) await selectItem(id); const attemptID = params.get('attempt_id'); if (attemptID) openAttempts = { ...openAttempts, [attemptID]: true }; const postID = params.get('post_id'); if (postID) await revealPost(postID); } catch (cause) { message(cause); } })(); const timer = setInterval(() => { if (document.visibilityState === 'visible' && kind === 'ticket' && !busy && !loading && !editing && !editDetails) { void loadItems(false, true); if (selected) void loadAttempts(selected.id); } }, 5000); return () => clearInterval(timer); });
+  async function changeProject() { createDependencies = []; bodyImages = []; replyImages = []; selected = null; searched = false; attempts = []; diff = ''; await Promise.all([loadItems(), loadMembers()]); }
   async function loadMembers() { const id = workspaceID; if (!id) { members = []; return; } try { const value = (await json<{ members: Member[] }>(`projects/${id}/members`)).members; if (id === workspaceID) members = value; } catch (cause) { if (id === workspaceID) message(cause); } }
   async function loadAttempts(id: string) {
     const scope = workspaceID, parentID = selected?.parent_ticket_id;
@@ -180,11 +186,13 @@
   async function create() {
     if (!workspaceID || busy) return;
     busy = true; error = '';
-    try { const item = await json<Item>('work/items', write('POST', { ...(kind === 'ticket' ? { schedule: scheduleInput(createSchedule) } : {}), workspace_id: workspaceID, kind, title, content: body, ...(kind === 'ticket' ? { depends_on: createDependencies } : {}), labels: labels.split(',').map(s => s.trim()).filter(Boolean), acceptance: acceptance.split('\n').map(s => s.trim()).filter(Boolean), execution_mode: executionMode, requested_member_id: memberID, author: 'user', request_id: createRequestID })); createRequestID = crypto.randomUUID(); creating = false; title = ''; body = ''; labels = ''; acceptance = ''; createDependencies = []; createSchedule = emptyScheduleDraft(); await loadItems(); await selectItem(item.id); } catch (cause) { message(cause); } finally { busy = false; }
+    const projectID = workspaceID;
+    try { const refs = await uploadImages(projectID, bodyImages); if (projectID !== workspaceID) return; const item = await json<Item>('work/items', write('POST', { ...(kind === 'ticket' ? { schedule: scheduleInput(createSchedule), require_start_approval: requireStartApproval } : {}), workspace_id: projectID, kind, title, content: body, refs, ...(kind === 'ticket' ? { depends_on: createDependencies } : {}), labels: labels.split(',').map(s => s.trim()).filter(Boolean), acceptance: acceptance.split('\n').map(s => s.trim()).filter(Boolean), execution_mode: executionMode, requested_member_id: memberID, author: 'user', request_id: createRequestID })); createRequestID = crypto.randomUUID(); creating = false; title = ''; body = ''; bodyImages = []; labels = ''; acceptance = ''; createDependencies = []; createSchedule = emptyScheduleDraft(); requireStartApproval = false; await loadItems(); await selectItem(item.id); } catch (cause) { message(cause); } finally { busy = false; }
   }
   async function addReply() {
     if (!selected || busy) return; busy = true; error = '';
-    try { await json(`work/items/${selected.id}/posts`, write('POST', { content: reply, author: 'user', request_id: crypto.randomUUID() })); reply = ''; await selectItem(selected.id); await loadItems(); } catch (cause) { message(cause); } finally { busy = false; }
+    const target = selected;
+    try { const refs = await uploadImages(target.workspace_id, replyImages); if (selected?.id !== target.id) return; await json(`work/items/${target.id}/posts`, write('POST', { content: reply, refs, author: 'user', request_id: crypto.randomUUID() })); if (selected?.id !== target.id) return; reply = ''; replyImages = []; await selectItem(target.id); await loadItems(); } catch (cause) { message(cause); } finally { busy = false; }
   }
   async function expand(post: Post) {
     try { const previous = expanded[post.id]; const value = await json<{ post: Post; next_cursor?: string }>(`work/posts/${post.id}?${new URLSearchParams({ cursor: previous?.cursor || '', limit: '8192' })}`); expanded = { ...expanded, [post.id]: { content: (previous?.content || '') + value.post.content, cursor: value.next_cursor || '' } }; } catch (cause) { message(cause); }
@@ -194,7 +202,7 @@
   }
   async function savePost() {
     if (!selected || busy || !editing) return; busy = true; error = '';
-    try { await json(`work/posts/${editing}`, write('PUT', { content: editContent, author: 'user', revision: editRevision, request_id: crypto.randomUUID() })); await selectItem(selected.id); await loadItems(); } catch (cause) { message(cause); } finally { busy = false; }
+    try { await json(`work/posts/${editing}`, write('PUT', { content: editContent, refs: posts.find(post => post.id === editing)?.refs || [], author: 'user', revision: editRevision, request_id: crypto.randomUUID() })); await selectItem(selected.id); await loadItems(); } catch (cause) { message(cause); } finally { busy = false; }
   }
   async function toggleIssue() {
     if (!selected || busy) return; busy = true;
@@ -202,7 +210,7 @@
   }
   function beginDetails() { if (!selected) return; detailRevision = selected.revision; detailTitle = selected.title; detailLabels = selected.labels.join(', '); detailAcceptance = selected.acceptance?.join('\n') || ''; detailMember = selected.requested_member_id || ''; detailMode = selected.execution_mode || 'report'; detailIssue = selected.linked_issue_id || ''; detailSchedule = scheduleDraft(selected.schedule); detailDependencies = [...(selected.depends_on || [])]; editDetails = true; }
   async function saveDetails() { if (!selected) return; busy = true; error = ''; try { selected = await json<Item>(`work/items/${selected.id}`, write('PUT', { ...(selected.kind === 'ticket' && !selected.active_attempt_id && !selected.schedule_id && selected.state === 'todo' ? { schedule: scheduleInput(detailSchedule) } : {}), ...(selected.kind === 'ticket' && !selected.active_attempt_id && !selected.schedule_id && selected.state === 'todo' ? { depends_on: detailDependencies } : {}), title: detailTitle, revision: detailRevision, state: selected.state, labels: detailLabels.split(',').map(s => s.trim()).filter(Boolean), acceptance: detailAcceptance.split('\n').map(s => s.trim()).filter(Boolean), requested_member_id: detailMember, execution_mode: detailMode, linked_issue_id: detailIssue.trim(), request_id: crypto.randomUUID() })); editDetails = false; await loadItems(); await selectItem(selected.id); } catch (cause) { message(cause); } finally { busy = false; } }
-  function executionLabel(state?: string, item?: Item) { if (item?.waiting_on?.length && (!state || ['queued', 'assignment_waiting'].includes(state))) return 'Waiting for prerequisite tickets'; if (item?.schedule?.paused) return 'Schedule paused'; if (item?.schedule?.not_before && new Date(item.schedule.not_before).getTime() > Date.now()) return 'Scheduled'; if (state === 'scheduled') return 'Recurring schedule'; if (!state || state === 'queued') return 'Waiting for assignment'; if (state === 'assignment_waiting') return 'Waiting for a suitable agent'; if (state === 'waiting_children') return 'Waiting for child tickets'; return state; }
+  function executionLabel(state?: string, item?: Item) { if (item?.waiting_on?.length && (!state || ['queued', 'assignment_waiting'].includes(state))) return 'Waiting for prerequisite tickets'; if (item?.schedule?.paused) return 'Schedule paused'; if (item?.schedule?.not_before && new Date(item.schedule.not_before).getTime() > Date.now()) return 'Scheduled'; if (state === 'scheduled') return 'Recurring schedule'; if (!state || state === 'queued') return 'Waiting for assignment'; if (state === 'assignment_waiting') return 'Waiting for a suitable agent'; if (state === 'waiting_children') return 'Waiting for child tickets'; if (state === 'waiting_user') return 'Waiting for your decision'; if (state === 'waiting_approval') return 'Waiting for start approval'; return state; }
   async function search(more = false) {
     error = ''; busy = true;
     try { const value = await json<{ hits: Hit[]; next_cursor?: string; mode: string; fallback?: string; index_pending: boolean; embedding_pending: boolean; total: number; total_relation: string }>('work/search', write('POST', { workspace_id: workspaceID, all, kind, query, mode, labels: filters.split(',').map(s => s.trim()).filter(Boolean), states: stateFilter ? [stateFilter] : [], cursor: more ? searchCursor : '', limit: 30 })); embeddingPending = value.embedding_pending; hits = more ? [...hits, ...value.hits] : value.hits; searchCursor = value.next_cursor || ''; searched = true; searchStatus = `${value.mode}${value.fallback ? ' · embedding unavailable' : ''}${value.index_pending ? ' · indexing pending' : ''} · ${value.total} ${value.total_relation === 'exact_chunks' ? 'matching passages' : 'candidates (lower bound)'}`; } catch (cause) { message(cause); } finally { busy = false; }
@@ -228,9 +236,10 @@
     <form class="work-create" onsubmit={(event) => { event.preventDefault(); void create(); }}>
       <h2>New {kind}</h2><label>Title<input aria-label="Work item title" bind:value={title} maxlength="512" required /></label>
       <label>Body<textarea aria-label="Work item body" bind:value={body} rows="7" required></textarea></label>
+      <ImagePicker bind:files={bodyImages} disabled={busy} onerror={value => error = value} />
       <label>Labels<input bind:value={labels} placeholder="Comma-separated labels" /></label>
       {#if kind === 'ticket'}<label>Acceptance criteria<textarea bind:value={acceptance} rows="3" placeholder="One criterion per line"></textarea></label><label>Execution mode<select aria-label="Execution mode" bind:value={executionMode}><option value="report">Report / research</option><option value="git">Git worktree with review</option></select><small class="mode-help">{executionGuidance[executionMode]}</small></label>{/if}
-      {#if kind === 'ticket'}<label>Requested member<select aria-label="Requested member" bind:value={memberID}><option value="">Decisions selects from joined members</option>{#each members.filter(m => !m.disabled) as member}<option value={member.id}>{member.agent_id}</option>{/each}</select></label><TicketDependencies {workspaceID} bind:ids={createDependencies} editable /><TicketScheduleFields bind:draft={createSchedule} /><p class="queue-hint">Eligible tickets are assigned automatically. Decisions checks the requested member or selects a suitable joined subagent.</p>{/if}
+      {#if kind === 'ticket'}<label>Requested member<select aria-label="Requested member" bind:value={memberID}><option value="">Decisions selects from joined members</option>{#each members.filter(m => !m.disabled) as member}<option value={member.id}>{member.agent_id}</option>{/each}</select></label><TicketDependencies {workspaceID} bind:ids={createDependencies} editable /><label class="start-approval"><input type="checkbox" bind:checked={requireStartApproval} /> Require approval before this ticket starts</label><TicketScheduleFields bind:draft={createSchedule} /><p class="queue-hint">Eligible tickets are assigned automatically. Decisions checks the requested member or selects a suitable joined subagent.</p>{/if}
       <div class="work-action-group"><button class="primary-button" type="submit" disabled={busy || !title.trim() || !body.trim()}><Plus aria-hidden="true" size={16} />Create {kind}</button> <button class="secondary-button work-icon-button" type="button" onclick={() => creating = false} title="Cancel" aria-label="Cancel"><X aria-hidden="true" size={17} /></button></div>
     </form>
   {/if}
@@ -302,15 +311,18 @@
           </section>
         {/if}
         <section aria-label="Ticket execution">{#each deliveryErrors as notification}<p role="status">Integrator notification pending: {notification.delivery_error}{notification.next_delivery_at ? ` · retry after ${new Date(notification.next_delivery_at).toLocaleTimeString()}` : ""}</p>{/each}<h3>Execution · {executionLabel(selected.execution_state, selected)}</h3>{#if selected.execution_reason}<p role="status">{selected.execution_reason}</p>{/if}{#if selected.schedule?.every}<p>Run assignment: {members.find(m => m.id === selected?.requested_member_id)?.agent_id || 'Decisions selects'}</p>{:else}<p>Assigned member: {members.find(m => m.id === selected?.assigned_member_id)?.agent_id || 'Unassigned'}</p>{/if}
+          {#if ['waiting_approval','waiting_user'].includes(selected.execution_state || '')}<button class="secondary-button" onclick={() => controlTicket('cancel')} disabled={busy}>Cancel ticket</button>{/if}
           {#if selected.state !== 'done' && ['cancelled','blocked','failed','unknown','rejected','close_failed'].includes(selected.execution_state || '')}<button class="secondary-button work-icon-button" disabled={busy} onclick={() => controlTicket('retry')} title={selected.execution_state === 'close_failed' ? 'Retry cleanup' : 'Retry execution'} aria-label={selected.execution_state === 'close_failed' ? 'Retry cleanup' : 'Retry execution'}><RotateCcw aria-hidden="true" size={17} /></button>{/if}
+          {#if selected.execution_state === 'waiting_approval'}{#key selected.id}<TicketDecision ticketID={selected.id} approvalRevision={selected.revision} onresolved={() => { if (selected) void selectItem(selected.id); void loadItems(); }} />{/key}{/if}
           {#each attempts.filter(attempt => attempt.ticket_id === selected?.id) as attempt (attempt.id)}
           {@const open = openAttempts[attempt.id] ?? (attempt.id === selected.active_attempt_id)}
           <details {open} ontoggle={event => {
             const open = event.currentTarget.open;
             if (openAttempts[attempt.id] !== open) openAttempts = { ...openAttempts, [attempt.id]: open };
           }}><summary>{attempt.status} · {attempt.id}</summary><p>Worker: <code>{attempt.worker_session_id}</code></p>
+            {#if attempt.user_question && (attempt.user_question.answer || (attempt.status === 'waiting_user' && attempt.id === selected.active_attempt_id))}<TicketDecision ticketID={selected.id} attemptID={attempt.id} question={attempt.user_question} onresolved={() => { if (selected) void selectItem(selected.id); void loadItems(); }} />{/if}
             {#if open}<WorkerConversation attemptID={attempt.id} live={['reserved', 'running'].includes(attempt.status)} />{/if}
-            {#if attempt.result}<AttemptResult result={attempt.result} />{/if}{#if attempt.feedback}<section class="work-prose" aria-label="Review feedback"><h4>Review feedback</h4><Markdown content={attempt.feedback} /></section>{/if}{#if attempt.operation_error}<p role="status">{attempt.operation_error}</p>{/if}
+            {#if attempt.result}<AttemptResult result={attempt.result} workspaceID={selected.workspace_id} />{/if}{#if attempt.feedback}<section class="work-prose" aria-label="Review feedback"><h4>Review feedback</h4><Markdown content={attempt.feedback} /></section>{/if}{#if attempt.operation_error}<p role="status">{attempt.operation_error}</p>{/if}
             {#if attempt.change_request}<p>Merge target · <code>{attempt.change_request.base_ref}</code><br />Pinned base · <code>{attempt.change_request.base_commit}</code><br />Pinned head · <code>{attempt.change_request.head_commit || 'Working'}</code></p>{#if attempt.change_request.head_commit}<button class="secondary-button work-icon-button" onclick={() => readDiff(attempt)} title="Read change request" aria-label="Read change request"><GitCompareArrows aria-hidden="true" size={17} /></button>{/if}{/if}
             {#if !selected.parent_ticket_id && attempt.id === selected.active_attempt_id && ['awaiting_review','blocked','failed','unknown','merge_failed','close_failed'].includes(attempt.status)}<label>Review feedback<textarea aria-label="Ticket review feedback" bind:value={feedback} rows="3"></textarea></label><div class="work-action-group">{#if ['awaiting_review','merge_failed'].includes(attempt.status)}<button class="secondary-button work-icon-button" onclick={() => review(attempt, 'accept')} disabled={busy} title={attempt.change_request ? 'Accept and merge' : 'Accept result'} aria-label={attempt.change_request ? 'Accept and merge' : 'Accept result'}>{#if attempt.change_request}<GitMerge aria-hidden="true" size={17} />{:else}<Check aria-hidden="true" size={17} />{/if}</button>{/if}<button class="secondary-button work-icon-button" onclick={() => review(attempt, 'request_changes')} disabled={busy || !feedback.trim()} title="Request changes" aria-label="Request changes"><MessageSquareReply aria-hidden="true" size={17} /></button><button class="secondary-button work-icon-button danger" onclick={() => review(attempt, 'reject')} disabled={busy} title="Reject result" aria-label="Reject result"><CircleX aria-hidden="true" size={17} /></button></div>{/if}
           </details>{/each}{#if diff}<pre aria-label="Ticket change diff">{diff}</pre>{/if}
@@ -318,15 +330,20 @@
       {/if}
       {#each posts as post}<article class="work-post"><header><div class="post-meta"><strong>{post.kind === 'body' ? 'Body' : post.author}</strong><small>revision {post.revision}</small></div><div class="work-action-group"><a class="work-icon-button post-permalink" href={permalink(post)} title={`Post permalink · ${post.id}`} aria-label={`post ${post.id}`}><Link2 aria-hidden="true" size={17} /></a>{#if !post.deleted}<button class="secondary-button work-icon-button" onclick={() => editPost(post)} disabled={busy} title={`Edit ${post.kind}`} aria-label={`Edit ${post.kind}`}><Pencil aria-hidden="true" size={17} /></button>{/if}</div></header>
         {#if editing === post.id}<textarea aria-label="Edit post content" rows="10" bind:value={editContent}></textarea><div class="work-action-group"><button class="secondary-button work-icon-button" onclick={savePost} disabled={busy || !editContent.trim()} title="Save post" aria-label="Save post"><Save aria-hidden="true" size={17} /></button><button class="secondary-button work-icon-button" onclick={() => editing = ''} title="Cancel" aria-label="Cancel"><X aria-hidden="true" size={17} /></button></div>{:else}<div class="post-content">{#if post.deleted}<p>Deleted post</p>{:else}<Markdown content={expanded[post.id]?.content ?? post.content} />{/if}</div>{#if post.content_truncated && (!expanded[post.id] || expanded[post.id].cursor)}<button class="secondary-button work-icon-button" onclick={() => expand(post)} title="Read more" aria-label="Read more"><ChevronsDown aria-hidden="true" size={17} /></button>{/if}{/if}
-        {#if post.refs?.length}<ul>{#each post.refs as ref}<li>{ref}</li>{/each}</ul>{/if}
+        {#if !post.deleted}
+          {#each imageRefs(post.refs) as id, index}<a href={assetURL(selected.workspace_id, id)} target="_blank" rel="noreferrer"><img class="post-image" src={assetURL(selected.workspace_id, id)} alt={`Attached image ${index + 1}`} loading="lazy" /></a>{/each}
+          {#if post.refs?.some(ref => !ref.startsWith('q-asset:'))}<ul>{#each post.refs.filter(ref => !ref.startsWith('q-asset:')) as ref}<li>{ref}</li>{/each}</ul>{/if}
+        {/if}
       </article>{/each}
       {#if threadCursor}<button class="secondary-button work-icon-button" onclick={() => selected && selectItem(selected.id, true)} disabled={busy} title="More replies" aria-label="More replies"><ChevronDown aria-hidden="true" size={17} /></button>{/if}
-      <form onsubmit={(event) => { event.preventDefault(); void addReply(); }}><label>Reply<textarea aria-label="Work item reply" bind:value={reply} rows="4" required></textarea></label><button class="primary-button" disabled={busy || !reply.trim()}><Send aria-hidden="true" size={16} />Add reply</button></form>
+      <form onsubmit={(event) => { event.preventDefault(); void addReply(); }}><label>Reply<textarea aria-label="Work item reply" bind:value={reply} rows="4" required></textarea></label><ImagePicker bind:files={replyImages} disabled={busy} onerror={value => error = value} /><button class="primary-button" disabled={busy || !reply.trim()}><Send aria-hidden="true" size={16} />Add reply</button></form>
     </section>{/if}
   </div>
 </section>
 
 <style>
+  .start-approval { display: flex; align-items: center; gap: .45rem; }
+  .post-image { display: block; max-width: min(100%, 460px); max-height: 380px; object-fit: contain; border-radius: 6px; }
   .work-items { display: grid; gap: 20px; min-width: 0; padding-top: 22px; font-size: calc(14px * var(--text-scale)); }
   label { display: grid; min-width: 0; gap: 7px; color: var(--muted); font-size: inherit; }
   input:not([type="checkbox"]), select { height: calc(38px * var(--text-scale)); font: inherit; }

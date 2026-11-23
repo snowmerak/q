@@ -75,6 +75,7 @@
       <article class="chat-message" class:user-message={message.role === 'user'} class:streaming-message={entry.streaming}>
         <div class="message-avatar">{#if message.role === 'user'}<User aria-hidden="true" size={16} />{:else}<Bot aria-hidden="true" size={17} />{/if}</div>
         <div class="message-content"><header>{message.role === 'user' ? 'You' : assistantLabel}{#if entry.streaming || message.status === 'running'}<span>responding</span>{/if}</header>{#if message.content}<Markdown content={message.content} {onfile} />{/if}
+          {#each message.images || [] as image, index}<img class="message-image" src={image} alt={`Attached image ${index + 1}`} loading="lazy" />{/each}
           {#if message.status === 'running' && !message.content}<p class="message-progress" role="status">Thinking through your idea…</p>
           {:else if message.status && !['completed', 'running'].includes(message.status)}<p class="message-failure">{message.status === 'cancelled' ? 'Reply stopped. You can continue the conversation.' : message.error || 'This reply did not finish.'}</p>{/if}
           {#if message.tool_calls?.length}
@@ -109,6 +110,7 @@
 </div>
 
 <style>
+  .message-image { display: block; max-width: min(100%, 540px); max-height: 420px; object-fit: contain; margin-block: .5rem; border-radius: 6px; }
   .history-earlier { display:flex; align-items:center; gap:.5rem; margin:0 auto 1rem; color:var(--muted); }
   .message-progress { color:var(--muted); font-size:calc(13px * var(--text-scale)); }
   .message-failure { color:var(--error); font-size:calc(13px * var(--text-scale)); overflow-wrap:anywhere; }

@@ -43,7 +43,8 @@
   $: selectionOptions = defaultsMode ? globalOptions : options;
   $: missingIDs = selectedAgents.filter(id => !selectionOptions.some(o => o.id === id));
   $: invalidSelection = missingIDs.length > 0 || selectionOptions.some(o => selectedAgents.includes(o.id) && !o.available);
-  $: dirty = editing && (defaultsMode ? JSON.stringify(defaultIDs) !== JSON.stringify(defaults.agent_ids) : !project || name !== project.name || JSON.stringify(roots) !== JSON.stringify(project.workspace_roots) || tickets !== (project.limits?.max_parallel_tickets || 0) || subagents !== (project.limits?.max_parallel_subagents || 0) || !!rootInput.trim());
+  let requireTicketApproval = false;
+  $: dirty = editing && (defaultsMode ? JSON.stringify(defaultIDs) !== JSON.stringify(defaults.agent_ids) : !project || name !== project.name || JSON.stringify(roots) !== JSON.stringify(project.workspace_roots) || tickets !== (project.limits?.max_parallel_tickets || 0) || subagents !== (project.limits?.max_parallel_subagents || 0) || requireTicketApproval !== !!project.limits?.require_ticket_approval || !!rootInput.trim());
   function message(cause: unknown) { error = cause instanceof Error ? cause.message : String(cause); }
   function effective(value: number) { return value > 0 ? Math.min(value, globalLimit) : globalLimit; }
   function canSwitch() { return !busy && (!dirty || window.confirm('Discard unsaved project settings?')); }
@@ -77,7 +78,7 @@
     const current = ++generation;
     selectedID = value?.id || ''; defaultsMode = false; editing = true; error = ''; status = ''; loading = true;
     name = value?.name || ''; roots = [...(value?.workspace_roots || [])]; rootInput = ''; members = [];
-    tickets = value?.limits?.max_parallel_tickets || 0; subagents = value?.limits?.max_parallel_subagents || 0;
+    tickets = value?.limits?.max_parallel_tickets || 0; subagents = value?.limits?.max_parallel_subagents || 0; requireTicketApproval = !!value?.limits?.require_ticket_approval;
     initialIDs = [...defaults.agent_ids];
     updateURL();
     try {
@@ -117,7 +118,7 @@
         status = 'Default subagents saved. Existing projects keep their members.';
       } else {
         if (rootInput.trim()) await addRoot();
-        const input = { name, workspace_roots: roots, limits: { max_parallel_tickets: tickets, max_parallel_subagents: subagents }, ...(!selectedID ? { initial_members: initialIDs.map(id => ({ agent_id: id, definition_root: roots[0], execution_root: roots[0], disabled: false })) } : {}) };
+        const input = { name, workspace_roots: roots, limits: { max_parallel_tickets: tickets, max_parallel_subagents: subagents, require_ticket_approval: requireTicketApproval }, ...(!selectedID ? { initial_members: initialIDs.map(id => ({ agent_id: id, definition_root: roots[0], execution_root: roots[0], disabled: false })) } : {}) };
         const saved = await requestJSON<StudioProject>(selectedID ? 'PUT' : 'POST', selectedID ? `/api/v1/projects/${selectedID}` : '/api/v1/projects', input);
         projects = (await requestJSON<{ projects: StudioProject[] }>('GET', '/api/v1/projects')).projects;
         await choose(saved, true);
@@ -207,6 +208,7 @@
         {#if !defaultsMode && section === 'execution'}
           <h3>Execution limits</h3><p class="muted">0 inherits the global limit of {globalLimit}. Project limits are capped at the global limit. Changes apply to new work; active work continues.</p>
           <div class="limits-grid"><label>Concurrent tickets<input type="number" aria-label="Concurrent tickets" min="0" max="64" step="1" required bind:value={tickets} /><small>Effective: {effective(tickets)} · Q and ACP ticket workers</small></label></div>
+          <label><span><input type="checkbox" bind:checked={requireTicketApproval} /> Require start approval for new tickets</span></label>
           <p class="help-note">Subagents run through ticket assignment. The ticket limit applies to Q and ACP workers; ACP agents manage their own internal subagents.</p>
         {/if}
         {#if defaultsMode || (section === 'members' && !selectedID)}

@@ -42,6 +42,10 @@ type controlledSessionRunner interface {
 	RunControlled(context.Context, workspace.Store, string, string, app.SessionEventSink, *app.SessionRunControl) error
 }
 
+type sessionOptionsRunner interface {
+	RunWithOptions(context.Context, workspace.Store, string, string, app.SessionOptions, app.SessionEventSink) error
+}
+
 type studioRunQuestion struct {
 	CallID   string                    `json:"call_id"`
 	Question string                    `json:"question"`
@@ -167,6 +171,10 @@ func (service *sessionRunService) start(root, sessionID, prompt string, causes .
 }
 
 func (service *sessionRunService) startOperation(root, sessionID, prompt, operationID string, causes ...context.Context) (*studioRun, error) {
+	return service.startTurn(root, sessionID, prompt, operationID, nil, causes...)
+}
+
+func (service *sessionRunService) startTurn(root, sessionID, prompt, operationID string, images []app.ImageInput, causes ...context.Context) (*studioRun, error) {
 	if err := (workspace.Store{Root: root, SessionID: sessionID}).RequireInteraction(); err != nil {
 		return nil, err
 	}
@@ -181,7 +189,12 @@ func (service *sessionRunService) startOperation(root, sessionID, prompt, operat
 		return nil, err
 	}
 	prompt = strings.TrimSpace(prompt)
-	if prompt == "" {
+	if len(images) != 0 {
+		if _, ok := service.runner.(sessionOptionsRunner); !ok {
+			return nil, errors.New("session runtime does not accept images")
+		}
+	}
+	if prompt == "" && len(images) == 0 {
 		return nil, errors.New("content is required")
 	}
 	if len(prompt) > subagent.MaximumDelegatePromptBytes {
@@ -234,11 +247,11 @@ func (service *sessionRunService) startOperation(root, sessionID, prompt, operat
 	service.latestIDs[key] = runID
 	service.wg.Add(1)
 	service.mu.Unlock()
-	go service.execute(run, prompt, review)
+	go service.execute(run, prompt, images, review)
 	return run, nil
 }
 
-func (service *sessionRunService) execute(run *studioRun, prompt string, review workitemtools.ReviewAssignment) {
+func (service *sessionRunService) execute(run *studioRun, prompt string, images []app.ImageInput, review workitemtools.ReviewAssignment) {
 	defer service.wg.Done()
 	started := time.Now()
 	logger := service.logger.With("session_id", run.store.SessionID, "run_id", run.snapshot.ID)
@@ -295,10 +308,8 @@ func (service *sessionRunService) execute(run *studioRun, prompt string, review 
 		return nil
 	}
 	var runErr error
-	if withOptions, ok := service.runner.(interface {
-		RunWithOptions(context.Context, workspace.Store, string, string, app.SessionOptions, app.SessionEventSink) error
-	}); ok && run.snapshot.OperationID != "" {
-		runErr = withOptions.RunWithOptions(runContext, run.store, run.store.SessionID, prompt, app.SessionOptions{OperationID: run.snapshot.OperationID, Control: run.control}, emit)
+	if withOptions, ok := service.runner.(sessionOptionsRunner); ok && (run.snapshot.OperationID != "" || len(images) != 0) {
+		runErr = withOptions.RunWithOptions(runContext, run.store, run.store.SessionID, prompt, app.SessionOptions{OperationID: run.snapshot.OperationID, Control: run.control, Images: images}, emit)
 	} else if controlled, ok := service.runner.(controlledSessionRunner); ok {
 		runErr = controlled.RunControlled(runContext, run.store, run.store.SessionID, prompt, emit, run.control)
 	} else {

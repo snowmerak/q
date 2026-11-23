@@ -12,6 +12,7 @@ import (
 	"github.com/snowmerak/q/agentloop"
 	"github.com/snowmerak/q/client"
 	"github.com/snowmerak/q/diagnostics"
+	"github.com/snowmerak/q/internal/workmedia"
 	"github.com/snowmerak/q/mcpconfig"
 	"github.com/snowmerak/q/memory"
 	"github.com/snowmerak/q/sessionstore"
@@ -221,13 +222,13 @@ func retiredLoopModeCommand(command string) bool {
 	return command == "/mode" || strings.HasPrefix(command, "/mode ")
 }
 
-func (m model) startChatTurn(content string, compact bool) (tea.Model, tea.Cmd) {
+func (m model) startChatTurn(content string, compact bool, images ...ImageInput) (tea.Model, tea.Cmd) {
 	content = strings.TrimSpace(norm.NFC.String(content))
 	if m.delegationRecoveryPending && !m.waiting {
 		command := m.startDelegationRecovery()
 		return m, command
 	}
-	if m.waiting || content == "" || m.client == nil {
+	if m.waiting || (content == "" && len(images) == 0) || m.client == nil {
 		return m, nil
 	}
 	m.clearAgentActivities()
@@ -235,7 +236,7 @@ func (m model) startChatTurn(content string, compact bool) (tea.Model, tea.Cmd) 
 	m.beginTurn()
 	m.turnMessageStart = len(m.messages)
 	m.touchSessionMetadata(content)
-	userMessage := client.Message{Role: client.RoleUser, Content: content}
+	userMessage := workmedia.Message(content, images)
 	m.archiveMessage(userMessage, sessionstore.StatusSubmitted, false)
 	m.messages = append(m.messages, userMessage)
 
@@ -554,8 +555,9 @@ func (m *model) sendChatRequest() tea.Cmd {
 	events := make(chan agentEvent)
 	if remote, ok := configuredClient.(*acpRemoteClient); ok {
 		content := m.pendingMessage.TextContent()
+		images := workmedia.URLs(m.pendingMessage)
 		return func() tea.Msg {
-			go remote.runPrompt(turnContext, content, events)
+			go remote.runPrompt(turnContext, content, events, images...)
 			return waitAgentEvent(events, turnID)()
 		}
 	}

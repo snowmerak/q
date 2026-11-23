@@ -21,18 +21,19 @@ type Binding struct {
 	Review              ReviewAssignment
 }
 type createInput struct {
-	AsChild       bool                      `json:"as_child,omitempty" jsonschema:"Issue a Git child of the current worker ticket. Requires a live ticket worker and request_id. The child starts when the parent yields."`
-	DependsOn     []string                  `json:"depends_on,omitempty" jsonschema:"Prerequisite ticket IDs in this workspace, all of which must reach done before this ticket can run. Independent tickets can run concurrently. Recurring templates are not valid prerequisites."`
-	Schedule      *workitems.TicketSchedule `json:"schedule,omitempty" jsonschema:"Optional ticket-only schedule: not_before is an RFC3339 instant; every is a Go duration of at least 1m, such as 30m or 24h. Empty every executes once. Repeating schedules issue independent run tickets."`
-	Title         string                    `json:"title"`
-	Content       string                    `json:"content"`
-	Labels        []string                  `json:"labels,omitempty"`
-	Acceptance    []string                  `json:"acceptance,omitempty"`
-	ExecutionMode string                    `json:"execution_mode,omitempty" jsonschema:"Always choose explicitly for tickets: report for read-only investigation; git for creating or editing code or project files, including project initialization. Git requires an existing clean repository with an initial commit. Omission defaults to report for compatibility. Ignored for issues."`
-	RequestedRole string                    `json:"requested_role,omitempty" jsonschema:"Optional profile role such as coder, reviewer, or research. Decisions chooses a suitable joined subagent with that role."`
-	LinkedIssueID string                    `json:"linked_issue_id,omitempty"`
-	Refs          []string                  `json:"refs,omitempty"`
-	RequestID     string                    `json:"request_id,omitempty"`
+	RequireStartApproval bool                      `json:"require_start_approval,omitempty" jsonschema:"Request user approval before the ticket starts. Use for decisions on material changes outside the authorized scope or when required by the project. The user approves in the Studio inbox."`
+	AsChild              bool                      `json:"as_child,omitempty" jsonschema:"Issue a Git child of the current worker ticket. Requires a live ticket worker and request_id. The child starts when the parent yields."`
+	DependsOn            []string                  `json:"depends_on,omitempty" jsonschema:"Prerequisite ticket IDs in this workspace, all of which must reach done before this ticket can run. Independent tickets can run concurrently. Recurring templates are not valid prerequisites."`
+	Schedule             *workitems.TicketSchedule `json:"schedule,omitempty" jsonschema:"Optional ticket-only schedule: not_before is an RFC3339 instant; every is a Go duration of at least 1m, such as 30m or 24h. Empty every executes once. Repeating schedules issue independent run tickets."`
+	Title                string                    `json:"title"`
+	Content              string                    `json:"content"`
+	Labels               []string                  `json:"labels,omitempty"`
+	Acceptance           []string                  `json:"acceptance,omitempty"`
+	ExecutionMode        string                    `json:"execution_mode,omitempty" jsonschema:"Always choose explicitly for tickets: report for read-only investigation; git for creating or editing code or project files, including project initialization. Git requires an existing clean repository with an initial commit. Omission defaults to report for compatibility. Ignored for issues."`
+	RequestedRole        string                    `json:"requested_role,omitempty" jsonschema:"Optional profile role such as coder, reviewer, or research. Decisions chooses a suitable joined subagent with that role."`
+	LinkedIssueID        string                    `json:"linked_issue_id,omitempty"`
+	Refs                 []string                  `json:"refs,omitempty"`
+	RequestID            string                    `json:"request_id,omitempty"`
 }
 type itemInput struct {
 	ID     string `json:"id"`
@@ -127,7 +128,7 @@ func Register(server *mcp.Server, client *library.Client, binding Binding) {
 				}
 				parent = binding.Worker
 			}
-			out, err := client.CreateItem(ctx, workitems.CreateInput{ParentWorker: parent, DependsOn: in.DependsOn, Schedule: in.Schedule, WorkspaceID: binding.WorkspaceID, Kind: kind, Title: in.Title, Content: in.Content, Labels: in.Labels, Acceptance: in.Acceptance, ExecutionMode: in.ExecutionMode, RequestedRole: in.RequestedRole, LinkedIssueID: in.LinkedIssueID, Author: binding.actor(), Refs: in.Refs, RequestID: in.RequestID})
+			out, err := client.CreateItem(ctx, workitems.CreateInput{ParentWorker: parent, DependsOn: in.DependsOn, Schedule: in.Schedule, WorkspaceID: binding.WorkspaceID, Kind: kind, Title: in.Title, Content: in.Content, Labels: in.Labels, Acceptance: in.Acceptance, ExecutionMode: in.ExecutionMode, RequestedRole: in.RequestedRole, LinkedIssueID: in.LinkedIssueID, Author: binding.actor(), Refs: in.Refs, RequestID: in.RequestID, RequireStartApproval: in.RequireStartApproval})
 			return nil, out, err
 		})
 		mcp.AddTool(server, &mcp.Tool{Name: kind + "_list", Description: "List " + kind + " threads using a source snapshot cursor. all:true explicitly searches all workspaces.", Annotations: readOnly}, func(ctx context.Context, _ *mcp.CallToolRequest, in listInput) (*mcp.CallToolResult, workitems.ItemPage, error) {

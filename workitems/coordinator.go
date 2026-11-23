@@ -46,6 +46,7 @@ type Attempt struct {
 	MemberRevision       int64                  `json:"member_revision"`
 	DefinitionDigest     string                 `json:"definition_digest"`
 	TicketRevision       int64                  `json:"ticket_revision"`
+	TicketContract       string                 `json:"ticket_contract,omitempty"`
 	BodyRevision         int64                  `json:"body_revision"`
 	Acceptance           []string               `json:"acceptance"`
 	WorkerSessionID      string                 `json:"worker_session_id"`
@@ -69,6 +70,8 @@ type Attempt struct {
 	Decision             string                 `json:"decision,omitempty"`
 	DecisionID           string                 `json:"decision_id,omitempty"`
 	OperationError       string                 `json:"operation_error,omitempty"`
+	UserQuestion         *UserQuestion          `json:"user_question,omitempty"`
+	PreviousAnswer       *UserQuestion          `json:"previous_answer,omitempty"`
 	CreatedAt            time.Time              `json:"created_at"`
 	UpdatedAt            time.Time              `json:"updated_at"`
 }
@@ -118,6 +121,7 @@ type AttemptUpdate struct {
 	MergeLanded    bool                   `json:"merge_landed,omitempty"`
 	RepairBase     string                 `json:"repair_base,omitempty"`
 	OperationError string                 `json:"operation_error,omitempty"`
+	UserQuestion   *UserQuestion          `json:"user_question,omitempty"`
 }
 
 type ReviewInput struct {
@@ -245,6 +249,8 @@ func (s *Store) ControlTicket(ctx context.Context, id string, in TicketAction) (
 			return Item{}, fmt.Errorf("%w: edit or pause the recurring schedule; control an individual run instead", ErrInvalidInput)
 		}
 		switch in.Action {
+		case "approve_start":
+			return approveTicketStart(ctx, tx, item, in)
 		case "handoff":
 			if item.ActiveAttemptID == "" || item.State == "done" || in.RequestID == "" || (item.ExecutionState != WaitingChildren && item.ExecutionState != "blocked" && item.ExecutionState != "unknown") {
 				return Item{}, ErrConflict
@@ -280,6 +286,16 @@ func (s *Store) ControlTicket(ctx context.Context, id string, in TicketAction) (
 			item.ExecutionReason = ""
 			item.NextAssignmentAt = time.Time{}
 		case "queue", "retry":
+			if item.RequireStartApproval && item.ActiveAttemptID == "" && item.ApprovedStartContract == "" {
+				if in.Action == "retry" && item.ExecutionState == "cancelled" {
+					if err := requireExclusiveScheduleRun(ctx, tx, item); err != nil {
+						return Item{}, err
+					}
+					resetStartApproval(&item)
+					return touchTicket(ctx, tx, item)
+				}
+				return Item{}, ErrConflict
+			}
 			if in.Action == "retry" && item.ExecutionState == "close_failed" {
 				a, err := decodeRow[Attempt](tx.QueryRowContext(ctx, `SELECT payload FROM ticket_attempts WHERE id=?`, item.ActiveAttemptID))
 				if err != nil {
@@ -304,7 +320,7 @@ func (s *Store) ControlTicket(ctx context.Context, id string, in TicketAction) (
 			if item.ExecutionState == WaitingChildren {
 				return item, nil
 			}
-			if item.State == "done" || item.ExecutionState == "running" || item.ExecutionState == "reserved" || item.ExecutionState == "awaiting_review" || item.ExecutionState == "merging" || item.ExecutionState == "merge_queued" || item.ExecutionState == "closing" || item.ExecutionState == "close_queued" || item.ExecutionState == "stopping" {
+			if item.State == "done" || item.ExecutionState == "running" || item.ExecutionState == "reserved" || item.ExecutionState == "awaiting_review" || item.ExecutionState == "merging" || item.ExecutionState == "merge_queued" || item.ExecutionState == "closing" || item.ExecutionState == "close_queued" || item.ExecutionState == "stopping" || item.ExecutionState == WaitingUser {
 				return Item{}, ErrConflict
 			}
 			item.ExecutionState = "queued"
@@ -418,6 +434,10 @@ func (s *Store) ClaimTicket(ctx context.Context, id string, in ClaimInput) (Atte
 			return Attempt{}, err
 		}
 		attempt.BodyRevision = body.Revision
+		attempt.TicketContract = ticketContract(item, body.Revision)
+		if item.RequireStartApproval && item.ActiveAttemptID == "" && item.ApprovedStartContract != attempt.TicketContract {
+			return Attempt{}, fmt.Errorf("%w: current ticket scope requires start approval", ErrConflict)
+		}
 		if item.ActiveAttemptID != "" {
 			previous, err := decodeRow[Attempt](tx.QueryRowContext(ctx, `SELECT payload FROM ticket_attempts WHERE id=?`, item.ActiveAttemptID))
 			if err != nil {
@@ -429,6 +449,12 @@ func (s *Store) ClaimTicket(ctx context.Context, id string, in ClaimInput) (Atte
 			attempt.Generation = previous.Generation + 1
 			attempt.PreviousAttemptID = previous.ID
 			attempt.PreviousStatus = previous.Status
+			if previous.Status == WaitingUser {
+				if previous.UserQuestion == nil || previous.UserQuestion.Answer == "" || previous.MemberID != member.ID || previous.DefinitionDigest != in.DefinitionDigest || attempt.TicketContract != previous.TicketContract {
+					return Attempt{}, ErrConflict
+				}
+				attempt.PreviousAnswer = previous.UserQuestion
+			}
 			attempt.Feedback = previous.Feedback
 			attempt.RepairBase = previous.RepairBase
 			review, hasChildren, outstanding, err := childContinuation(ctx, tx, previous)
@@ -557,7 +583,7 @@ func (s *Store) UpdateAttempt(ctx context.Context, id string, in AttemptUpdate) 
 			return Attempt{}, ErrConflict
 		}
 	}
-	allowed := status == a.Status || a.Status == "reserved" && status == "running" || (a.Status == "reserved" || a.Status == "running") && (status == WaitingChildren || status == "awaiting_review" || status == "failed" || status == "blocked" || status == "unknown" || status == "cancelled") || a.Status == "merging" && (status == "accepted" || status == "merge_failed") || a.Status == "closing" && (status == "rejected" || status == "close_failed")
+	allowed := status == a.Status || a.Status == "reserved" && status == "running" || (a.Status == "reserved" || a.Status == "running") && (status == WaitingChildren || status == WaitingUser || status == "awaiting_review" || status == "failed" || status == "blocked" || status == "unknown" || status == "cancelled") || a.Status == "merging" && (status == "accepted" || status == "merge_failed") || a.Status == "closing" && (status == "rejected" || status == "close_failed")
 	if !allowed {
 		return Attempt{}, ErrConflict
 	}
@@ -577,6 +603,26 @@ func (s *Store) UpdateAttempt(ctx context.Context, id string, in AttemptUpdate) 
 		status = "cancelled"
 	}
 	previousStatus := a.Status
+	if status == WaitingUser {
+		if in.UserQuestion == nil || in.UserQuestion.Answer != "" || in.UserQuestion.ID != "" {
+			return Attempt{}, ErrInvalidInput
+		}
+		if err := in.UserQuestion.Validate(); err != nil {
+			return Attempt{}, err
+		}
+		body, err := decodeRow[Post](tx.QueryRowContext(ctx, `SELECT payload FROM posts WHERE id=?`, item.BodyPostID))
+		if err != nil {
+			return Attempt{}, err
+		}
+		if ticketContract(item, body.Revision) != a.TicketContract {
+			status = "blocked"
+			in.OperationError = "Ticket scope changed during execution. Review the current ticket before continuing."
+		} else {
+			question := *in.UserQuestion
+			question.ID = a.ID
+			a.UserQuestion = &question
+		}
+	}
 	if status == "accepted" && (in.ChangeRequest == nil || in.ChangeRequest.Status != "merged" || in.ChangeRequest.MergedCommit == "") {
 		return Attempt{}, ErrInvalidInput
 	}

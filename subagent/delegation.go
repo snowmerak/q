@@ -8,6 +8,7 @@ import (
 	"io"
 	"log/slog"
 	"reflect"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -17,8 +18,10 @@ import (
 	"github.com/snowmerak/q/diagnostics"
 	"github.com/snowmerak/q/internal/toolbatch"
 	"github.com/snowmerak/q/internal/workitemtools"
+	"github.com/snowmerak/q/internal/workmedia"
 	"github.com/snowmerak/q/memory"
 	"github.com/snowmerak/q/sessionstore"
+	"github.com/snowmerak/q/workitems"
 )
 
 const (
@@ -547,6 +550,8 @@ type GeneralRunner struct {
 	Checkpoint                           func(GeneralRunState) error
 	Control                              *RunControl
 	Followup                             string
+	PromptImages                         []workmedia.Image
+	TicketQuestions                      bool
 }
 
 // GeneralRunState is a full, provider-neutral child checkpoint. Transcript is
@@ -589,6 +594,9 @@ func (r GeneralRunner) Run(ctx context.Context, prompt string) (result TaskResul
 		return TaskResult{}, err
 	}
 	available = IncludeMemoryTools(available)
+	if r.TicketQuestions {
+		available = append(available, ticketQuestionDefinition())
+	}
 	if r.Resume != nil {
 		if err := r.Spec.Restore(r.Resume.Spec); err != nil {
 			return TaskResult{}, err
@@ -658,7 +666,10 @@ func (r GeneralRunner) Run(ctx context.Context, prompt string) (result TaskResul
 
 	systemPrompt := withRetrievalCatalog(r.Definition.SystemPrompt, available) + "\n\nRuntime environment: " + r.Environment + "\nWorking directory: " + r.WorkingDirectory +
 		"\n\nStart by calling task_start. Do not call any other tool before task_start succeeds. Finish with task_complete as the only tool call in that turn. Keep summary concise. Put detailed final analysis, design rationale, review notes, or research synthesis in the optional Markdown report field without exposing hidden chain-of-thought. task_complete uses the common schema exactly; do not invent agent-specific fields."
-	messages := []client.Message{{Role: client.RoleSystem, Content: systemPrompt}, {Role: client.RoleUser, Content: prompt}}
+	messages := []client.Message{{Role: client.RoleSystem, Content: systemPrompt}, workmedia.Message(prompt, r.PromptImages)}
+	if r.TicketQuestions {
+		messages[0].Content += "\nAfter task_start, check scope, prerequisites, and acceptance before changes. Use read-only inspection to resolve routine uncertainties. Ask for a decision with ask_to_user only when the user must choose a materially different outcome, approval boundary, or compatibility requirement. Call it alone before acting on the uncertainty. Include the evidence, recommendation, alternatives, and what waits. If the decision was discovered after implementation or verification, use late:true so Q compacts first. Q saves this turn and resumes the worker with the answer."
+	}
 	state := GeneralRunState{Transcript: append([]client.Message(nil), messages...), Context: append([]client.Message(nil), messages...), Spec: r.Spec.Checkpoint()}
 	if r.Resume != nil {
 		state = *r.Resume
@@ -680,7 +691,8 @@ func (r GeneralRunner) Run(ctx context.Context, prompt string) (result TaskResul
 			state.Transcript = append(state.Transcript, message)
 			state.Context = append(state.Context, message)
 		}
-		message := client.Message{Role: client.RoleUser, Name: FollowupMessageName, Content: r.Followup}
+		message := workmedia.Message(r.Followup, r.PromptImages)
+		message.Name = FollowupMessageName
 		state.Transcript = append(state.Transcript, message)
 		state.Context = append(state.Context, message)
 		state.Reminders = 0
@@ -690,6 +702,9 @@ func (r GeneralRunner) Run(ctx context.Context, prompt string) (result TaskResul
 	// GeneralRunState.Started remains authoritative across compaction and
 	// restart. Preserve the matching exchange so the model sees the same state.
 	history.PreserveTools(TaskStartToolName)
+	if r.TicketQuestions {
+		history.PreserveTools(ticketQuestionTool)
+	}
 	checkpoint := func() error {
 		state.Context = history.Messages()
 		state.Spec = r.Spec.Checkpoint()
@@ -889,6 +904,9 @@ func (r *GeneralRunner) completeGeneralCalls(ctx context.Context, state *General
 		reportProgress(r.Progress, ProgressEvent{Agent: r.Definition.Info.Name, TaskID: taskID, ParentID: r.ParentID, Action: ProgressTool, Detail: call.Function.Name})
 		return nil
 	}
+	mixedQuestion := r.TicketQuestions && len(calls) != 1 && slices.ContainsFunc(calls, func(call client.ToolCall) bool {
+		return call.Function.Name == ticketQuestionTool
+	})
 	for index := completed; index < len(calls); index++ {
 		if err := r.Control.wait(ctx); err != nil {
 			return TaskResult{}, false, err
@@ -899,8 +917,21 @@ func (r *GeneralRunner) completeGeneralCalls(ctx context.Context, state *General
 			reportProgress(r.Progress, ProgressEvent{Agent: r.Definition.Info.Name, TaskID: taskID, ParentID: r.ParentID, Action: ProgressTool, Detail: call.Function.Name})
 		}
 		var toolResult client.ToolResult
-		switch call.Function.Name {
-		case TaskStartToolName:
+		switch {
+		case mixedQuestion:
+			toolResult = scoutToolError(errors.New("call ask_to_user by itself"))
+		case r.TicketQuestions && call.Function.Name == ticketQuestionTool:
+			if !*started {
+				toolResult = scoutToolError(errors.New("call task_start before asking for a ticket decision"))
+				break
+			}
+			result, err := r.storeTicketQuestion(ctx, state, history, call, checkpoint)
+			if errors.Is(err, workitems.ErrInvalidInput) {
+				toolResult = scoutToolError(errors.New("invalid ticket question"))
+				break
+			}
+			return result, err == nil, err
+		case call.Function.Name == TaskStartToolName:
 			input, parseErr := parseGeneralTaskStart(call.Function.Arguments)
 			if parseErr == nil && *started {
 				parseErr = errors.New("another task_start lifecycle is already active")
@@ -917,7 +948,7 @@ func (r *GeneralRunner) completeGeneralCalls(ctx context.Context, state *General
 				body, _ := json.Marshal(output)
 				toolResult = client.ToolResult{Content: string(body)}
 			}
-		case TaskCompleteToolName:
+		case call.Function.Name == TaskCompleteToolName:
 			if !*started {
 				toolResult = scoutToolError(errors.New("task_complete requires task_start"))
 			} else if r.Control.hasGuidance() {

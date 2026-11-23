@@ -52,6 +52,12 @@ func (c *Client) ReadContent(ctx context.Context, id, cursor string, limit int) 
 	err := c.doJSON(ctx, http.MethodGet, "/posts/"+url.PathEscape(id)+"?"+query.Encode(), nil, &output)
 	return output, err
 }
+
+func (c *Client) ReadPostRevision(ctx context.Context, id string, revision int64) (workitems.Post, error) {
+	var out workitems.Post
+	err := c.doJSON(ctx, http.MethodGet, "/posts/"+url.PathEscape(id)+"/revision/"+strconv.FormatInt(revision, 10), nil, &out)
+	return out, err
+}
 func (c *Client) UpdatePost(ctx context.Context, id string, input workitems.PostInput) (workitems.Post, error) {
 	var output workitems.Post
 	err := c.doJSON(ctx, http.MethodPut, "/posts/"+url.PathEscape(id), input, &output)
@@ -71,6 +77,19 @@ func queryLimit(r *http.Request) (int, error) {
 }
 
 func registerItemRoutes(mux *http.ServeMux, store *workitems.Store) {
+	mux.HandleFunc("GET /v1/posts/{post}/revision/{revision}", func(w http.ResponseWriter, r *http.Request) {
+		revision, err := strconv.ParseInt(r.PathValue("revision"), 10, 64)
+		if err != nil || revision < 0 {
+			workspaceError(w, workitems.ErrInvalidInput)
+			return
+		}
+		post, err := store.GetPost(r.Context(), r.PathValue("post"), revision)
+		if err != nil {
+			workspaceError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, post)
+	})
 	mux.HandleFunc("GET /v1/items", func(w http.ResponseWriter, r *http.Request) {
 		limit, err := queryLimit(r)
 		if err != nil {

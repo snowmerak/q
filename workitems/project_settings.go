@@ -9,8 +9,9 @@ import (
 )
 
 type ProjectLimits struct {
-	MaxParallelTickets   int `json:"max_parallel_tickets"`
-	MaxParallelSubagents int `json:"max_parallel_subagents"`
+	MaxParallelTickets    int  `json:"max_parallel_tickets"`
+	MaxParallelSubagents  int  `json:"max_parallel_subagents"`
+	RequireTicketApproval bool `json:"require_ticket_approval,omitempty"`
 }
 
 func (l ProjectLimits) Validate() error {
@@ -40,12 +41,24 @@ func (s *Store) initializeProjectSettings(ctx context.Context) error {
 workspace_id TEXT PRIMARY KEY REFERENCES workspaces(id), max_parallel_tickets INTEGER NOT NULL DEFAULT 0, max_parallel_subagents INTEGER NOT NULL DEFAULT 0);
 CREATE TABLE IF NOT EXISTS workspace_defaults (id INTEGER PRIMARY KEY CHECK(id=1), revision INTEGER NOT NULL, agent_ids BLOB NOT NULL);
 INSERT OR IGNORE INTO workspace_defaults VALUES(1,1,'[]'); PRAGMA user_version=7;`)
+	if err == nil {
+		_, err = s.db.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS workspace_start_approval (workspace_id TEXT PRIMARY KEY REFERENCES workspaces(id), required INTEGER NOT NULL DEFAULT 0)`)
+	}
 	return err
 }
 
 func saveProjectLimits(ctx context.Context, tx *sql.Tx, id string, limits ProjectLimits) error {
 	_, err := tx.ExecContext(ctx, `INSERT INTO workspace_settings VALUES(?,?,?) ON CONFLICT(workspace_id) DO UPDATE SET max_parallel_tickets=excluded.max_parallel_tickets,max_parallel_subagents=excluded.max_parallel_subagents`, id, limits.MaxParallelTickets, limits.MaxParallelSubagents)
+	if err == nil {
+		_, err = tx.ExecContext(ctx, `INSERT INTO workspace_start_approval VALUES(?,?) ON CONFLICT(workspace_id) DO UPDATE SET required=excluded.required`, id, limits.RequireTicketApproval)
+	}
 	return err
+}
+
+func projectRequiresStartApproval(ctx context.Context, tx *sql.Tx, workspace string) (bool, error) {
+	var required bool
+	err := tx.QueryRowContext(ctx, `SELECT coalesce((SELECT required FROM workspace_start_approval WHERE workspace_id=?),0)`, workspace).Scan(&required)
+	return required, err
 }
 
 func projectDefaultsTx(ctx context.Context, tx *sql.Tx) (ProjectDefaults, error) {

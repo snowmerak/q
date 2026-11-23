@@ -16,6 +16,7 @@ import (
 	"github.com/snowmerak/q/internal/toolbatch"
 	"github.com/snowmerak/q/loom"
 	"github.com/snowmerak/q/sessionstore"
+	"github.com/snowmerak/q/workitems"
 )
 
 const (
@@ -47,16 +48,24 @@ type TargetSelector struct {
 }
 
 type TaskResult struct {
-	Executor      string          `json:"executor,omitempty"`
-	Outcome       string          `json:"outcome"`
-	Summary       string          `json:"summary"`
-	Report        string          `json:"report,omitempty"`
-	ChangeRequest *change.Request `json:"change_request,omitempty"`
-	Findings      []string        `json:"findings,omitempty"`
-	Artifacts     []string        `json:"artifacts,omitempty"`
-	Verification  []string        `json:"verification,omitempty"`
-	Blocker       string          `json:"blocker,omitempty"`
-	Evidence      []TaskEvidence  `json:"evidence,omitempty"`
+	Executor          string                  `json:"executor,omitempty"`
+	Outcome           string                  `json:"outcome"`
+	Summary           string                  `json:"summary"`
+	Report            string                  `json:"report,omitempty"`
+	ChangeRequest     *change.Request         `json:"change_request,omitempty"`
+	Findings          []string                `json:"findings,omitempty"`
+	Artifacts         []string                `json:"artifacts,omitempty"`
+	Verification      []string                `json:"verification,omitempty"`
+	VerificationFiles []VerificationFile      `json:"verification_files,omitempty"`
+	UserQuestion      *workitems.UserQuestion `json:"user_question,omitempty"`
+	Blocker           string                  `json:"blocker,omitempty"`
+	Evidence          []TaskEvidence          `json:"evidence,omitempty"`
+}
+
+type VerificationFile struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+	MIME string `json:"mime"`
 }
 
 // CoderResult remains an alias for source compatibility with native Coder

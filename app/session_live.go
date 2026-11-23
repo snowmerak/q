@@ -81,6 +81,7 @@ type liveSessionRequest struct {
 	ctx         context.Context
 	cancel      context.CancelFunc
 	prompt      string
+	images      []ImageInput
 	compact     bool
 	emit        SessionEventSink
 	control     *SessionRunControl
@@ -298,7 +299,7 @@ func newLiveSession(ctx context.Context, cancel context.CancelFunc, prepared *pr
 	return session
 }
 
-func (session *liveSession) execute(parent context.Context, prompt string, compact bool, emit SessionEventSink, control *SessionRunControl, operationIDs ...string) (string, error) {
+func (session *liveSession) execute(parent context.Context, prompt string, compact bool, emit SessionEventSink, control *SessionRunControl, options ...SessionOptions) (string, error) {
 	if parent == nil {
 		parent = context.Background()
 	}
@@ -310,8 +311,9 @@ func (session *liveSession) execute(parent context.Context, prompt string, compa
 	defer stop()
 	defer cancel()
 	request := &liveSessionRequest{ctx: ctx, cancel: cancel, prompt: prompt, compact: compact, emit: emit, control: control, result: make(chan liveSessionResult, 1)}
-	if len(operationIDs) > 0 {
-		request.operationID = operationIDs[0]
+	if len(options) > 0 {
+		request.operationID = options[0].OperationID
+		request.images = options[0].Images
 	}
 	session.program.Send(request)
 	select {
@@ -550,7 +552,7 @@ func (m liveSessionModel) Update(message tea.Msg) (updatedModel tea.Model, nextC
 		if request.compact {
 			updated, command = m.execution.state.startManualCompaction()
 		} else {
-			updated, command = m.execution.state.startSessionOperation(request.prompt, request.operationID)
+			updated, command = m.execution.state.startSessionOperation(request.prompt, request.operationID, request.images)
 		}
 		m.execution.state = updated.(model)
 		m.execution.state.ctx = parent
