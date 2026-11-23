@@ -334,7 +334,8 @@ func TestManagerRequiresLibraryBindingAndAvailableExecutionRoot(t *testing.T) {
 func TestManagerACPHelperProcess(t *testing.T) {
 	mode := os.Args[len(os.Args)-1]
 	compaction := mode == "compaction-acp-helper"
-	if mode != "manager-acp-helper" && mode != "subagent-acp-helper" && !compaction {
+	activity := mode == "activity-acp-helper"
+	if mode != "manager-acp-helper" && mode != "subagent-acp-helper" && !compaction && !activity {
 		return
 	}
 	decoder, encoder := json.NewDecoder(os.Stdin), json.NewEncoder(os.Stdout)
@@ -454,6 +455,29 @@ func TestManagerACPHelperProcess(t *testing.T) {
 			}
 			result = map[string]any{"configOptions": options()}
 		case "session/prompt":
+			if activity {
+				session := request.Params.SessionID
+				update(session, map[string]any{"sessionUpdate": "plan", "entries": []map[string]string{
+					{"content": "Check evidence", "priority": "medium", "status": "in_progress"},
+				}})
+				update(session, map[string]any{"sessionUpdate": "tool_call", "toolCallId": "read-1", "title": "Inspect notes", "status": "in_progress"})
+				update(session, map[string]any{"sessionUpdate": "agent_thought_chunk", "content": map[string]string{"type": "text", "text": "private trace"}})
+				update(session, map[string]any{"sessionUpdate": "agent_message_chunk", "content": map[string]string{"type": "text", "text": "Found evidence"}})
+				deadline := time.Now().Add(20 * time.Second)
+				for {
+					if _, err := os.Stat(filepath.Join(cwd, "allow-acp-result")); err == nil {
+						break
+					}
+					if time.Now().After(deadline) {
+						os.Exit(7)
+					}
+					time.Sleep(25 * time.Millisecond)
+				}
+				update(session, map[string]any{"sessionUpdate": "tool_call_update", "toolCallId": "read-1", "status": "completed"})
+				update(session, map[string]any{"sessionUpdate": "agent_message_chunk", "content": map[string]string{"type": "text", "text": " in notes."}})
+				result = map[string]any{"stopReason": "end_turn"}
+				break
+			}
 			if compaction {
 				session := request.Params.SessionID
 				text := request.Params.Prompt[0].Text

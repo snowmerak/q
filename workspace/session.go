@@ -16,10 +16,11 @@ import (
 	"github.com/snowmerak/q/client"
 	"github.com/snowmerak/q/internal/fsopen"
 	"github.com/snowmerak/q/internal/fsreplace"
+	"github.com/snowmerak/q/internal/sessionmessage"
 )
 
 const (
-	CurrentVersion = 3
+	CurrentVersion = sessionmessage.CurrentVersion
 	DirectoryName  = ".q"
 	SessionsName   = "sessions"
 	FileName       = "session.json"

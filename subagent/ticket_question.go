@@ -31,6 +31,9 @@ func (r *GeneralRunner) storeTicketQuestion(ctx context.Context, state *GeneralR
 	if err := json.Unmarshal([]byte(call.Function.Arguments), &q); err != nil || q.Validate() != nil || q.ID != "" || q.Answer != "" {
 		return TaskResult{}, workitems.ErrInvalidInput
 	}
+	if err := r.sealTicketGuidance(ctx); err != nil {
+		return TaskResult{}, err
+	}
 	q.Late = q.Late || questionFollowsChanges(state.Transcript)
 	message := client.ToolResultMessage(call, client.ToolResult{Content: `{"status":"waiting_for_user"}`})
 	history.Append(message)

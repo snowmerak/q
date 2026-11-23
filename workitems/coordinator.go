@@ -73,6 +73,9 @@ type Attempt struct {
 	UserQuestion         *UserQuestion          `json:"user_question,omitempty"`
 	PreviousAnswer       *UserQuestion          `json:"previous_answer,omitempty"`
 	CompactionAttemptID  string                 `json:"compaction_attempt_id,omitempty"`
+	WorkerKind           string                 `json:"worker_kind,omitempty"`
+	GuidanceOpen         bool                   `json:"guidance_open,omitempty"`
+	Guidance             *TicketGuidance        `json:"guidance,omitempty"`
 	CreatedAt            time.Time              `json:"created_at"`
 	UpdatedAt            time.Time              `json:"updated_at"`
 }
@@ -128,6 +131,9 @@ type AttemptUpdate struct {
 	OperationError    string                 `json:"operation_error,omitempty"`
 	UserQuestion      *UserQuestion          `json:"user_question,omitempty"`
 	PendingCompaction bool                   `json:"pending_compaction,omitempty"`
+	WorkerKind        string                 `json:"worker_kind,omitempty"`
+	GuidanceAck       string                 `json:"guidance_ack,omitempty"`
+	SealGuidance      bool                   `json:"seal_guidance,omitempty"`
 }
 
 type ReviewInput struct {
@@ -598,6 +604,24 @@ func (s *Store) UpdateAttempt(ctx context.Context, id string, in AttemptUpdate) 
 	allowed := status == a.Status || a.Status == "reserved" && status == "running" || (a.Status == "reserved" || a.Status == "running") && (status == WaitingChildren || status == WaitingUser || status == "awaiting_review" || status == "failed" || status == "blocked" || status == "unknown" || status == "cancelled") || a.Status == "merging" && (status == "accepted" || status == "merge_failed") || a.Status == "closing" && (status == "rejected" || status == "close_failed")
 	if !allowed {
 		return Attempt{}, ErrConflict
+	}
+	if in.WorkerKind != "" {
+		if status != "running" || (in.WorkerKind != "native" && in.WorkerKind != "acp") || (a.WorkerKind != "" && a.WorkerKind != in.WorkerKind) {
+			return Attempt{}, ErrConflict
+		}
+		if a.WorkerKind == "" {
+			a.WorkerKind = in.WorkerKind
+			a.GuidanceOpen = in.WorkerKind == "native"
+		}
+	}
+	if in.GuidanceAck != "" {
+		if a.Guidance == nil || a.Guidance.ID != in.GuidanceAck {
+			return Attempt{}, ErrConflict
+		}
+		a.Guidance = nil
+	}
+	if status != "running" || (in.SealGuidance && a.Guidance == nil) {
+		a.GuidanceOpen = false
 	}
 	// A stopped worker may still return a pinned worktree. Close it through the
 	// existing Git operation before releasing cancellation or recurring runs.

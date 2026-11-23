@@ -66,6 +66,63 @@ test('ticket image persists and the inbox opens its start approval', async ({ pa
   expect(item.execution_state).not.toBe('waiting_approval');
 });
 
+for (const kind of ['native', 'acp']) {
+  test(`ticket shows ${kind === 'native' ? 'guidance status' : 'live ACP activity'} in the worker conversation`, async ({ page, request }) => {
+    const { projects } = await (await request.get('/api/v1/projects')).json();
+    const project = projects.find(value => value.name === 'Integration');
+    const created = await request.post('/api/v1/work/items', { data: {
+      workspace_id: project.id, kind: 'ticket', title: `Inspect files with ${kind}`, content: 'Inspect the relevant files',
+      execution_mode: 'report', require_start_approval: true,
+    } });
+    expect(created.status()).toBe(201);
+    const item = await created.json();
+    const attempt = {
+      id: `worker-${kind}`, ticket_id: item.id, status: 'running', worker_session_id: `session-${kind}`,
+    };
+    const worker = { messages: [], worker_kind: kind, attempt_status: attempt.status, accepts_guidance: kind === 'native' };
+    await page.route(`**/api/v1/work/items/${item.id}/attempts`, route => route.fulfill({ json: { attempts: [attempt] } }));
+    await page.route(`**/api/v1/work/attempts/${attempt.id}/worker?*`, route => route.fulfill({ json: worker }));
+
+    if (kind === 'native') {
+      await page.route(`**/api/v1/work/attempts/${attempt.id}/guidance`, async route => {
+        const input = route.request().postDataJSON();
+        expect(input.request_id).toBeTruthy();
+        worker.pending_guidance = { id: 'guidance-1', content: input.content };
+        await route.fulfill({ status: 202, json: worker.pending_guidance });
+      });
+    } else {
+      worker.acp_activity = {
+        plan: [{ id: 'plan-1', title: 'Inspect inputs', status: 'in_progress' }],
+        tools: [{ id: 'read-1', title: 'Read notes', status: 'running' }],
+        response: 'Draft findings',
+      };
+    }
+
+    await page.goto(`/tickets?workspace_id=${project.id}&item_id=${item.id}&attempt_id=${attempt.id}`);
+    const panel = page.getByRole('region', { name: 'Worker conversation' });
+    if (kind === 'native') {
+      await panel.getByRole('textbox', { name: 'Guide this worker' }).fill('Keep the API stable.');
+      await panel.getByRole('button', { name: 'Send guidance' }).click();
+      await expect(panel.getByText('Guidance pending', { exact: true })).toBeVisible();
+      worker.messages = [{ index: 0, role: 'user', name: 'q_ticket_guidance_guidance-1', content: worker.pending_guidance.content }];
+      delete worker.pending_guidance;
+      await expect(panel.getByText('Guidance applied', { exact: false })).toBeVisible();
+      await expect(panel.getByText('Keep the API stable.', { exact: true })).toHaveCount(1);
+    } else {
+      await expect(panel.getByLabel('ACP plan')).toContainText('Inspect inputs');
+      await expect(panel.getByLabel('ACP tools')).toContainText('Read notes');
+      await expect(panel.getByLabel('ACP response in progress')).toContainText('Draft findings');
+      await expect(panel.getByRole('button', { name: 'Send guidance' })).toHaveCount(0);
+      worker.messages = [{ index: 0, role: 'assistant', content: 'Final findings.' }];
+      delete worker.acp_activity;
+      attempt.status = 'awaiting_review';
+      worker.attempt_status = attempt.status;
+      await expect(panel.getByText('Final findings.', { exact: true })).toHaveCount(1);
+      await expect(panel.getByLabel('ACP response in progress')).toHaveCount(0);
+    }
+  });
+}
+
 test('issues and tickets keep readable controls at desktop, mobile and larger text sizes', async ({ page }) => {
   for (const route of ['issues', 'tickets']) {
     await page.goto(`/${route}`);

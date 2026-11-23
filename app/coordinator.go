@@ -302,7 +302,11 @@ func (host *SessionHost) runTicket(ctx context.Context, c *library.Client, proje
 	if err := worker.SaveDelegationState(state); err != nil {
 		return result, err
 	}
-	if _, err := c.UpdateAttempt(ctx, a.ID, workitems.AttemptUpdate{Owner: a.Owner, Token: a.Token, Generation: a.Generation, Status: "running", ChangeRequest: request}); err != nil {
+	workerKind := "native"
+	if candidate.Definition.Info.Kind == subagent.AgentKindExternal {
+		workerKind = "acp"
+	}
+	if _, err := c.UpdateAttempt(ctx, a.ID, workitems.AttemptUpdate{Owner: a.Owner, Token: a.Token, Generation: a.Generation, Status: "running", ChangeRequest: request, WorkerKind: workerKind}); err != nil {
 		return result, err
 	}
 	var reviewHead string
@@ -538,7 +542,25 @@ func (host *SessionHost) runNativeTicket(ctx context.Context, c *library.Client,
 		definition.Tools = []string{"read_file", "list_directory", "ticket_get", "post_get", "ticket_attempt_get", "ticket_change_read", "ticket_worker_read", "ticket_review"}
 		definition.Delegates = nil
 	}
-	return (subagent.GeneralRunner{Client: configuredClient, Tools: runtime, Spec: spec, Definition: definition, WorkingDirectory: root, Environment: fmt.Sprintf("%+v", base.Environment()), RunID: a.ID, TaskID: a.WorktreeID, ParentID: itemParent(a), Resume: resume, Checkpoint: checkpoint, Followup: followup, Sink: writer, PromptImages: images, TicketQuestions: a.ReviewChildAttemptID == ""}).Run(ctx, state.Prompt)
+	guidance := &subagent.TicketGuidanceControl{
+		Pending: func(ctx context.Context, seal bool) (*workitems.TicketGuidance, error) {
+			if seal {
+				current, err := c.UpdateAttempt(ctx, a.ID, workitems.AttemptUpdate{
+					Owner: a.Owner, Token: a.Token, Generation: a.Generation, SealGuidance: true,
+				})
+				return current.Guidance, err
+			}
+			current, err := c.GetAttempt(ctx, a.ID)
+			return current.Guidance, err
+		},
+		Acknowledge: func(ctx context.Context, id string) error {
+			_, err := c.UpdateAttempt(ctx, a.ID, workitems.AttemptUpdate{
+				Owner: a.Owner, Token: a.Token, Generation: a.Generation, GuidanceAck: id,
+			})
+			return err
+		},
+	}
+	return (subagent.GeneralRunner{Client: configuredClient, Tools: runtime, Spec: spec, Definition: definition, WorkingDirectory: root, Environment: fmt.Sprintf("%+v", base.Environment()), RunID: a.ID, TaskID: a.WorktreeID, ParentID: itemParent(a), Resume: resume, Checkpoint: checkpoint, Followup: followup, Sink: writer, PromptImages: images, TicketQuestions: a.ReviewChildAttemptID == "", TicketGuidance: guidance}).Run(ctx, state.Prompt)
 }
 func itemParent(a workitems.Attempt) string { return "ticket/" + a.TicketID }
 
@@ -658,7 +680,16 @@ func (host *SessionHost) runACPTicket(ctx context.Context, c *library.Client, wo
 		prompt += "\nBefore making changes, check the ticket's scope, prerequisites, and acceptance criteria. If only the user can make a material early decision, finish this turn without making the dependent change. End with a fenced q-user-decision JSON block containing question, context (evidence, recommendation, and what waits), and optionally choices (array of strings). Q will save this session and return the answer. For a decision discovered after changes, set late:true and include the relevant work and evidence. Q will request and verify compaction before posting the question."
 	}
 	user := workmedia.Message(prompt, images)
-	answer, err := remote.promptText(ctx, prompt, workmedia.URLs(user)...)
+	session, err := worker.Load()
+	if errors.Is(err, workspace.ErrNotFound) {
+		session = workspace.Session{}
+	} else if err != nil {
+		return result, err
+	}
+	activity := ticketACPActivity{snapshot: library.WorkerACPActivity{AttemptID: a.ID, TranscriptLength: len(session.Transcript)}}
+	stopActivity := activity.publish(ctx, filepath.Join(worker.SessionDir(), library.WorkerACPActivityFile))
+	answer, err := remote.promptTextWithUpdates(ctx, prompt, activity.observe, workmedia.URLs(user)...)
+	stopActivity()
 	if err != nil {
 		return result, err
 	}
@@ -675,12 +706,7 @@ func (host *SessionHost) runACPTicket(ctx context.Context, c *library.Client, wo
 		return result, err
 	}
 	assistant := client.Message{Role: client.RoleAssistant, Content: answer}
-	session, err := worker.Load()
-	if errors.Is(err, workspace.ErrNotFound) {
-		session = workspace.Session{}
-	} else if err != nil {
-		return result, err
-	}
+	session.RunID = a.ID
 	session.Transcript = append(session.Transcript, user, assistant)
 	session.Context = append(session.Context, user, assistant)
 	if err := worker.Save(session); err != nil {

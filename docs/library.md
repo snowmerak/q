@@ -329,7 +329,8 @@ All Library routes use `/v1`:
 | Search/index | `POST /work/search`, `GET/POST /work/embeddings`, `POST /work/reindex` |
 | Membership | `GET/POST /workspaces/{id}/members` |
 | Execution | `POST /items/{id}/control`, `/claim`, `GET /items/{id}/attempts`, `GET/POST /attempts/{id}`, `POST /attempts/recover` |
-| Worker history | `GET /attempts/{id}/worker` (bounded public transcript and unknown-tool pages) |
+| Worker history and activity | `GET /attempts/{id}/worker` (bounded transcript, unknown-tool pages, and live ACP updates when `latest=true`) |
+| Native worker guidance | `POST /attempts/{id}/guidance` queues a request for the current running attempt. The worker saves it at a tool boundary before continuing. |
 | Review | `POST /attempts/{id}/review`, `/merge`, `GET /workspaces/{id}/inbox`, `POST /inbox/{id}/ack`, `/defer` |
 | Skills | Existing `/skills/search`, resource, reload and embedding routes |
 

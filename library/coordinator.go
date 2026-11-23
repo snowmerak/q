@@ -32,6 +32,12 @@ func (c *Client) AnswerTicketQuestion(ctx context.Context, attempt string, input
 	return out, err
 }
 
+func (c *Client) QueueTicketGuidance(ctx context.Context, attempt string, input workitems.TicketGuidanceInput) (workitems.TicketGuidance, error) {
+	var out workitems.TicketGuidance
+	err := c.doJSON(ctx, http.MethodPost, "/attempts/"+url.PathEscape(attempt)+"/guidance", input, &out)
+	return out, err
+}
+
 func (c *Client) DispatchTicketSchedules(ctx context.Context, workspaceID string) (workitems.ItemPage, error) {
 	var out workitems.ItemPage
 	err := c.doJSON(ctx, http.MethodPost, "/workspaces/"+url.PathEscape(workspaceID)+"/ticket-schedules/dispatch", struct{}{}, &out)
@@ -142,6 +148,9 @@ func coordinatorWrite[I, O any](mux *http.ServeMux, route string, action func(co
 }
 
 func registerCoordinatorRoutes(mux *http.ServeMux, s *workitems.Store) {
+	coordinatorWrite(mux, "POST /v1/attempts/{attempt}/guidance", func(ctx context.Context, r *http.Request, input workitems.TicketGuidanceInput) (workitems.TicketGuidance, error) {
+		return s.QueueTicketGuidance(ctx, r.PathValue("attempt"), input)
+	})
 	coordinatorWrite(mux, "POST /v1/attempts/{attempt}/answer", func(ctx context.Context, r *http.Request, input workitems.AnswerInput) (workitems.Item, error) {
 		return s.AnswerQuestion(ctx, r.PathValue("attempt"), input)
 	})

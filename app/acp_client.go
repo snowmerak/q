@@ -96,6 +96,7 @@ type acpRemoteTurn struct {
 	compactionStatus string
 	ctx              context.Context
 	events           chan<- agentEvent
+	observe          func(acp.SessionUpdate)
 	display          string
 	mu               sync.Mutex
 	response         strings.Builder
@@ -399,11 +400,15 @@ func (r *acpRemoteClient) runPrompt(ctx context.Context, content string, events 
 }
 
 func (r *acpRemoteClient) prompt(ctx context.Context, content string, events chan<- agentEvent, images ...string) (*client.ChatResponse, int, error) {
+	return r.promptWithUpdates(ctx, content, events, nil, images...)
+}
+
+func (r *acpRemoteClient) promptWithUpdates(ctx context.Context, content string, events chan<- agentEvent, observe func(acp.SessionUpdate), images ...string) (*client.ChatResponse, int, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, 0, err
 	}
 	turn := &acpRemoteTurn{
-		ctx: ctx, events: events, display: r.display,
+		ctx: ctx, events: events, observe: observe, display: r.display,
 		toolTitles: make(map[acp.ToolCallId]string), toolCalls: make(map[acp.ToolCallId]struct{}),
 	}
 	r.mu.Lock()
@@ -490,7 +495,11 @@ func (r *acpRemoteClient) prompt(ctx context.Context, content string, events cha
 }
 
 func (r *acpRemoteClient) promptText(ctx context.Context, content string, images ...string) (string, error) {
-	response, _, err := r.prompt(ctx, content, nil, images...)
+	return r.promptTextWithUpdates(ctx, content, nil, images...)
+}
+
+func (r *acpRemoteClient) promptTextWithUpdates(ctx context.Context, content string, observe func(acp.SessionUpdate), images ...string) (string, error) {
+	response, _, err := r.promptWithUpdates(ctx, content, nil, observe, images...)
 	if err != nil {
 		return "", err
 	}
@@ -573,7 +582,13 @@ func (r *acpRemoteClient) SessionUpdate(ctx context.Context, notification acp.Se
 	if notification.SessionId != sessionID || turn == nil {
 		return nil
 	}
-	return turn.update(ctx, notification.Update)
+	if err := turn.update(ctx, notification.Update); err != nil {
+		return err
+	}
+	if turn.observe != nil {
+		turn.observe(notification.Update)
+	}
+	return nil
 }
 
 func (r *acpRemoteClient) RequestPermission(ctx context.Context, request acp.RequestPermissionRequest) (acp.RequestPermissionResponse, error) {

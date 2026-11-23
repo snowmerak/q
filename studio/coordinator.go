@@ -125,6 +125,17 @@ func (s *sessionsService) serveTicketAnswer(w http.ResponseWriter, r *http.Reque
 		return c.AnswerTicketQuestion(ctx, r.PathValue("attempt"), input)
 	})
 }
+
+func (s *sessionsService) serveTicketGuidance(w http.ResponseWriter, r *http.Request) {
+	var input workitems.TicketGuidanceInput
+	if err := decodeWorkRequest(w, r, &input); err != nil {
+		writeAPIError(w, http.StatusBadRequest, err)
+		return
+	}
+	workResponse(s, w, r, http.StatusAccepted, func(ctx context.Context, c *library.Client) (workitems.TicketGuidance, error) {
+		return c.QueueTicketGuidance(ctx, r.PathValue("attempt"), input)
+	})
+}
 func (s *sessionsService) serveTicketControl(w http.ResponseWriter, r *http.Request) {
 	var in workitems.TicketAction
 	if err := decodeWorkRequest(w, r, &in); err != nil {

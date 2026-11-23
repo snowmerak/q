@@ -215,6 +215,7 @@ func newHandlerRuntime(parent context.Context, store config.Store, runner sessio
 	mux.HandleFunc("GET /api/v1/projects/{project}/inbox", sessions.serveWorkInbox)
 	mux.HandleFunc("GET /api/v1/inbox", sessions.serveHumanInbox)
 	mux.HandleFunc("POST /api/v1/work/attempts/{attempt}/answer", sessions.serveTicketAnswer)
+	mux.HandleFunc("POST /api/v1/work/attempts/{attempt}/guidance", sessions.serveTicketGuidance)
 	mux.HandleFunc("POST /api/v1/projects/{project}/assets", sessions.serveWorkAssetUpload)
 	mux.HandleFunc("GET /api/v1/projects/{project}/assets/{asset}", sessions.serveWorkAsset)
 	mux.HandleFunc("POST /api/v1/work/items/{item}/control", sessions.serveTicketControl)

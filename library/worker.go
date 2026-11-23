@@ -17,6 +17,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/snowmerak/q/client"
 	"github.com/snowmerak/q/internal/fsopen"
+	"github.com/snowmerak/q/internal/sessionmessage"
 	"github.com/snowmerak/q/workitems"
 )
 
@@ -36,13 +37,35 @@ type WorkerCall struct {
 	Truncated bool   `json:"truncated,omitempty"`
 }
 type WorkerPage struct {
-	WorkspaceID  string           `json:"workspace_id"`
-	SessionID    string           `json:"session_id"`
-	RunID        string           `json:"run_id"`
-	Messages     []WorkerMessage  `json:"messages"`
-	NextCursor   string           `json:"next_cursor,omitempty"`
-	RunningCall  *WorkerToolCall  `json:"running_call,omitempty"`
-	UnknownTools []WorkerToolCall `json:"unknown_tools,omitempty"`
+	WorkspaceID     string                    `json:"workspace_id"`
+	SessionID       string                    `json:"session_id"`
+	RunID           string                    `json:"run_id"`
+	Messages        []WorkerMessage           `json:"messages"`
+	NextCursor      string                    `json:"next_cursor,omitempty"`
+	RunningCall     *WorkerToolCall           `json:"running_call,omitempty"`
+	UnknownTools    []WorkerToolCall          `json:"unknown_tools,omitempty"`
+	WorkerKind      string                    `json:"worker_kind,omitempty"`
+	AttemptStatus   string                    `json:"attempt_status,omitempty"`
+	AcceptsGuidance bool                      `json:"accepts_guidance,omitempty"`
+	PendingGuidance *workitems.TicketGuidance `json:"pending_guidance,omitempty"`
+	ACPActivity     *WorkerACPActivity        `json:"acp_activity,omitempty"`
+}
+
+const WorkerACPActivityFile = "acp-activity.json"
+
+type WorkerACPActivity struct {
+	AttemptID        string               `json:"attempt_id"`
+	TranscriptLength int                  `json:"transcript_length"`
+	Response         string               `json:"response,omitempty"`
+	Truncated        bool                 `json:"truncated,omitempty"`
+	Tools            []WorkerActivityItem `json:"tools,omitempty"`
+	Plan             []WorkerActivityItem `json:"plan,omitempty"`
+}
+
+type WorkerActivityItem struct {
+	ID     string `json:"id"`
+	Title  string `json:"title"`
+	Status string `json:"status"`
 }
 
 type WorkerToolCall struct {
@@ -99,11 +122,7 @@ func registerWorkerRoute(mux *http.ServeMux, s *workitems.Store, directory strin
 		}
 		path := filepath.Join(directory, "workspaces", a.WorkspaceID, "workers", ".q", "sessions", a.WorkerSessionID)
 		latest := r.URL.Query().Get("latest") == "true"
-		var session struct {
-			ID         string           `json:"id"`
-			RunID      string           `json:"run_id"`
-			Transcript []client.Message `json:"transcript"`
-		}
+		var session sessionmessage.Transcript
 		if err := readWorkerJSON(filepath.Join(path, "session.json"), &session); err != nil {
 			if !latest || !errors.Is(err, os.ErrNotExist) {
 				writeLibraryError(w, 404, err)
@@ -153,6 +172,28 @@ func registerWorkerRoute(mux *http.ServeMux, s *workitems.Store, directory strin
 			position.Digest = digest
 		}
 		out := WorkerPage{WorkspaceID: a.WorkspaceID, SessionID: session.ID, RunID: session.RunID, Messages: []WorkerMessage{}}
+		if latest {
+			out.WorkerKind = a.WorkerKind
+			out.AttemptStatus = a.Status
+			out.AcceptsGuidance = a.AcceptsGuidance()
+			out.PendingGuidance = a.Guidance
+			if a.Guidance != nil {
+				for i := len(session.Transcript) - 1; i >= 0; i-- {
+					message := session.Transcript[i]
+					if message.Role == client.RoleUser && message.Name == workitems.TicketGuidanceMessagePrefix+a.Guidance.ID {
+						out.PendingGuidance = nil
+						break
+					}
+				}
+			}
+			if a.WorkerKind == "acp" && a.Status == "running" {
+				var activity WorkerACPActivity
+				if err := readWorkerJSON(filepath.Join(path, WorkerACPActivityFile), &activity); err == nil &&
+					activity.AttemptID == a.ID && activity.TranscriptLength == len(session.Transcript) {
+					out.ACPActivity = &activity
+				}
+			}
+		}
 		for index := position.After; index < end; index++ {
 			message := session.Transcript[index]
 			if latest && (message.Role == client.RoleSystem || message.Role == client.RoleDeveloper) {

@@ -552,6 +552,7 @@ type GeneralRunner struct {
 	Followup                             string
 	PromptImages                         []workmedia.Image
 	TicketQuestions                      bool
+	TicketGuidance                       *TicketGuidanceControl
 }
 
 // GeneralRunState is a full, provider-neutral child checkpoint. Transcript is
@@ -756,6 +757,10 @@ func (r GeneralRunner) Run(ctx context.Context, prompt string) (result TaskResul
 		if err := r.applyGuidance(&state, history, lifecycle, checkpoint); err != nil {
 			return TaskResult{}, err
 		}
+		if err := r.applyTicketGuidance(ctx, &state, history, lifecycle, checkpoint); err != nil {
+			return TaskResult{}, err
+		}
+		reminders = state.Reminders
 		if len(state.Transcript) > 0 {
 			last := state.Transcript[len(state.Transcript)-1]
 			if last.Role == client.RoleAssistant && len(last.ToolCalls) == 0 {
@@ -895,6 +900,18 @@ func (r *GeneralRunner) completeGeneralCalls(ctx context.Context, state *General
 		if !hasTool(available, call.Function.Name) && (!recovering || call.Function.Name != DelegateToolName) {
 			return scoutToolError(fmt.Errorf("tool %q is unavailable", call.Function.Name)), nil
 		}
+		if r.TicketGuidance != nil {
+			guidance, err := r.TicketGuidance.Pending(ctx, false)
+			if err != nil {
+				return client.ToolResult{}, err
+			}
+			if guidance != nil {
+				if recovering {
+					return client.ToolResult{Content: `{"status":"unknown","detail":"tool execution outcome could not be confirmed after session restart"}`, IsError: true}, nil
+				}
+				return scoutToolError(errTicketGuidancePending), nil
+			}
+		}
 		return r.Tools.Call(ctx, call)
 	})
 	batch.Before = func(_ int, call client.ToolCall) error {
@@ -913,11 +930,22 @@ func (r *GeneralRunner) completeGeneralCalls(ctx context.Context, state *General
 		}
 		call := calls[index]
 		recovering := index < recoveryEnd
-		if toolbatch.IsLoopTool(call) {
+		loopTool := toolbatch.IsLoopTool(call)
+		if loopTool {
 			reportProgress(r.Progress, ProgressEvent{Agent: r.Definition.Info.Name, TaskID: taskID, ParentID: r.ParentID, Action: ProgressTool, Detail: call.Function.Name})
 		}
 		var toolResult client.ToolResult
+		var guidance *workitems.TicketGuidance
+		if r.TicketGuidance != nil && loopTool {
+			var err error
+			guidance, err = r.TicketGuidance.Pending(ctx, false)
+			if err != nil {
+				return TaskResult{}, false, err
+			}
+		}
 		switch {
+		case guidance != nil:
+			toolResult = scoutToolError(errTicketGuidancePending)
 		case mixedQuestion:
 			toolResult = scoutToolError(errors.New("call ask_to_user by itself"))
 		case r.TicketQuestions && call.Function.Name == ticketQuestionTool:
@@ -928,6 +956,10 @@ func (r *GeneralRunner) completeGeneralCalls(ctx context.Context, state *General
 			result, err := r.storeTicketQuestion(ctx, state, history, call, checkpoint)
 			if errors.Is(err, workitems.ErrInvalidInput) {
 				toolResult = scoutToolError(errors.New("invalid ticket question"))
+				break
+			}
+			if errors.Is(err, errTicketGuidancePending) {
+				toolResult = scoutToolError(err)
 				break
 			}
 			return result, err == nil, err
@@ -960,6 +992,13 @@ func (r *GeneralRunner) completeGeneralCalls(ctx context.Context, state *General
 				if parseErr != nil {
 					toolResult = scoutToolError(parseErr)
 				} else {
+					if err := r.sealTicketGuidance(ctx); err != nil {
+						if !errors.Is(err, errTicketGuidancePending) {
+							return TaskResult{}, false, err
+						}
+						toolResult = scoutToolError(err)
+						break
+					}
 					body, _ := json.Marshal(completed)
 					parallel := false
 					request := client.ChatRequest{Messages: history.RequestMessages(), Tools: available, ToolChoice: client.ToolChoiceAuto, ParallelToolCalls: &parallel, WorkingDirectory: r.WorkingDirectory}
