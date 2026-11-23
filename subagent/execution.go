@@ -58,6 +58,7 @@ type TaskResult struct {
 	Verification      []string                `json:"verification,omitempty"`
 	VerificationFiles []VerificationFile      `json:"verification_files,omitempty"`
 	UserQuestion      *workitems.UserQuestion `json:"user_question,omitempty"`
+	PendingCompaction bool                    `json:"pending_compaction,omitempty"`
 	Blocker           string                  `json:"blocker,omitempty"`
 	Evidence          []TaskEvidence          `json:"evidence,omitempty"`
 }

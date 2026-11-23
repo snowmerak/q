@@ -84,6 +84,7 @@
   let events: RunEvent[] = [];
   let activeRun: RunSnapshot | null = null;
   $: finishingRun = sending && !!activeRun && terminalRun(activeRun.status);
+  $: compacting = sending && activeRun?.kind === 'compaction';
   $: runError = activeRun && ['failed', 'cancelled', 'interrupted'].includes(activeRun.status)
     ? activeRun.error || (activeRun.status === 'failed' ? 'The turn failed without an error detail.' : 'The turn stopped before completion.')
     : '';
@@ -164,7 +165,8 @@
           return;
         }
       }
-      sending = !terminalRun(page.run.status) || page.next_cursor < page.run.cursor || completedACP(page.run);
+      sending = !terminalRun(page.run.status) || page.next_cursor < page.run.cursor || completedACP(page.run) ||
+        (page.run.kind === 'compaction' && page.run.status === 'completed');
       runStatus = runStatusLabel(page.run);
     },
     complete: async (run, signal) => {
@@ -287,22 +289,29 @@
 
   async function compactSession() {
     if (!selected || !workspaceRoot || sending || sessionLoading) return;
+    const generation = sessionGeneration;
+    const target = { workspaceRoot, sessionID: selected.session.session_id };
     sessionLoading = true;
     error = '';
     runStatus = 'Compacting context…';
     try {
-      const response = await requestResponse(`/api/v1/sessions/${encodeURIComponent(selected.session.session_id)}/compact`, {
+      const response = await requestResponse(`/api/v1/sessions/${encodeURIComponent(target.sessionID)}/compact`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ workspace_root: workspaceRoot })
+        body: JSON.stringify({ workspace_root: target.workspaceRoot, background: true })
       });
-      runStatus = ((await response.json()) as { status?: string }).status || 'Context compacted';
+      const run = (await response.json()) as RunSnapshot;
+      if (!isCurrentSession(generation)) return;
+      activeRun = run;
+      sending = true;
+      runStatus = runStatusLabel(run);
       events = [];
-      await reloadSelected();
+      runMonitor.start(target, run.id);
     } catch (cause) {
+      if (!isCurrentSession(generation)) return;
       error = cause instanceof Error ? cause.message : 'Could not compact the context';
       runStatus = 'Compaction failed';
     } finally {
-      sessionLoading = false;
+      if (isCurrentSession(generation)) sessionLoading = false;
     }
   }
 
@@ -539,7 +548,7 @@
   }
 
   async function sendPrompt() {
-    if (modelSaving) return;
+    if (modelSaving || compacting) return;
     const content = prompt.trim();
     if (!selected || !workspaceRoot || (!content && !imageDraft.length) || sessionLoading || finishingRun) return;
     if ((selectedDelegation || sending) && !content) return;
@@ -877,8 +886,10 @@
             </details>
           {/if}
           {#if !selectedDelegation && sending && !finishingRun}
-            {#if activeRun?.status === 'paused'}<button title="Resume turn" aria-label="Resume turn" onclick={() => commandRun('resume')}><Play aria-hidden="true" size={15} /></button>{:else}<button title="Pause turn" aria-label="Pause turn" onclick={() => commandRun('pause')}><Pause aria-hidden="true" size={15} /></button>{/if}
-            <button class="stop-control" title="Stop turn" aria-label="Stop turn" onclick={stopTurn}><Square aria-hidden="true" size={13} fill="currentColor" /></button>
+            {#if !compacting}
+              {#if activeRun?.status === 'paused'}<button title="Resume turn" aria-label="Resume turn" onclick={() => commandRun('resume')}><Play aria-hidden="true" size={15} /></button>{:else}<button title="Pause turn" aria-label="Pause turn" onclick={() => commandRun('pause')}><Pause aria-hidden="true" size={15} /></button>{/if}
+            {/if}
+            <button class="stop-control" title={compacting ? 'Stop compaction' : 'Stop turn'} aria-label={compacting ? 'Stop compaction' : 'Stop turn'} onclick={stopTurn}><Square aria-hidden="true" size={13} fill="currentColor" /></button>
           {/if}
         </div>
       </div>
@@ -910,8 +921,8 @@
       {:else}
         <div class="composer-wrap">
           <div class="composer">
-            <textarea bind:value={prompt} oninput={(event) => saveDraft(draftKey, event.currentTarget.value)} aria-label="Message Q" onkeydown={submitFromKeyboard} onpaste={pasteImages} placeholder={sending && !finishingRun ? 'Guide the current turn…' : selectedRegistration?.kind === 'coordinator' ? 'Describe the work to plan and delegate…' : workspaceRoleTitle(selectedRegistration?.kind) ? 'Discuss results and review changes…' : selectedRegistration?.kind === 'chat' ? 'Message Q…' : 'Ask Q to work in this repository…'} rows="3" disabled={sessionLoading}></textarea>
-            <button class="send-button" title={sending && !finishingRun ? 'Guide current turn' : 'Send message'} onclick={sendPrompt} disabled={sessionLoading || modelSaving || finishingRun || (!prompt.trim() && !imageDraft.length)}><ArrowUp aria-hidden="true" size={17} /></button>
+            <textarea bind:value={prompt} oninput={(event) => saveDraft(draftKey, event.currentTarget.value)} aria-label="Message Q" onkeydown={submitFromKeyboard} onpaste={pasteImages} placeholder={sending && !finishingRun && !compacting ? 'Guide the current turn…' : selectedRegistration?.kind === 'coordinator' ? 'Describe the work to plan and delegate…' : workspaceRoleTitle(selectedRegistration?.kind) ? 'Discuss results and review changes…' : selectedRegistration?.kind === 'chat' ? 'Message Q…' : 'Ask Q to work in this repository…'} rows="3" disabled={sessionLoading}></textarea>
+            <button class="send-button" title={sending && !finishingRun && !compacting ? 'Guide current turn' : 'Send message'} onclick={sendPrompt} disabled={sessionLoading || modelSaving || finishingRun || compacting || (!prompt.trim() && !imageDraft.length)}><ArrowUp aria-hidden="true" size={17} /></button>
           </div>
           <div class="composer-footer">
             {#if !selectedDelegation}<ImagePicker bind:files={imageDraft} disabled={sending || sessionLoading} onerror={value => error = value} />{/if}
@@ -920,7 +931,7 @@
                 <SessionModelPicker {workspaceRoot} sessionID={selected.session.session_id} disabled={sending || sessionLoading} bind:saving={modelSaving} bind:agent={sessionAgent} />
               {/key}
             {/if}
-            <p>{finishingRun ? 'Loading the final reply…' : sending ? 'Enter to redirect the current work with guidance' : 'Enter to send'} · Shift+Enter for a new line · {workspaceRoleTitle(selectedRegistration?.kind) ? selectedProject?.name || workspaceRoleTitle(selectedRegistration?.kind) : selectedRegistration?.kind === 'chat' ? 'Personal chat' : workspaceRoot}</p>
+            <p>{compacting ? 'Send after compaction finishes' : finishingRun ? 'Loading the final reply…' : sending ? 'Enter to redirect the current work with guidance' : 'Enter to send'} · Shift+Enter for a new line · {workspaceRoleTitle(selectedRegistration?.kind) ? selectedProject?.name || workspaceRoleTitle(selectedRegistration?.kind) : selectedRegistration?.kind === 'chat' ? 'Personal chat' : workspaceRoot}</p>
           </div>
         </div>
       {/if}

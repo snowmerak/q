@@ -333,7 +333,8 @@ func TestManagerRequiresLibraryBindingAndAvailableExecutionRoot(t *testing.T) {
 // a prompt to a paid provider. It verifies both process CWD and ACP's Cwd field.
 func TestManagerACPHelperProcess(t *testing.T) {
 	mode := os.Args[len(os.Args)-1]
-	if mode != "manager-acp-helper" && mode != "subagent-acp-helper" {
+	compaction := mode == "compaction-acp-helper"
+	if mode != "manager-acp-helper" && mode != "subagent-acp-helper" && !compaction {
 		return
 	}
 	decoder, encoder := json.NewDecoder(os.Stdin), json.NewEncoder(os.Stdout)
@@ -341,6 +342,12 @@ func TestManagerACPHelperProcess(t *testing.T) {
 	resumed, skills, workTools := false, false, false
 	reviewAttempt, reviewOperation := "", ""
 	model, effort := "base", "medium"
+	update := func(session string, value map[string]any) {
+		_ = encoder.Encode(map[string]any{"jsonrpc": "2.0", "method": "session/update", "params": map[string]any{"sessionId": session, "update": value}})
+	}
+	compact := func(session, id, status string) {
+		update(session, map[string]any{"sessionUpdate": "compaction_update", "compactionId": id, "status": status})
+	}
 	efforts := func() []string {
 		if model == "deep" {
 			return []string{"high", "max"}
@@ -365,10 +372,15 @@ func TestManagerACPHelperProcess(t *testing.T) {
 			ID     json.RawMessage `json:"id"`
 			Method string          `json:"method"`
 			Params struct {
-				Cwd        string `json:"cwd"`
-				SessionID  string `json:"sessionId"`
-				ConfigID   string `json:"configId"`
-				Value      string `json:"value"`
+				Cwd                string `json:"cwd"`
+				SessionID          string `json:"sessionId"`
+				ConfigID           string `json:"configId"`
+				Value              string `json:"value"`
+				ClientCapabilities struct {
+					Session struct {
+						Compaction *struct{} `json:"compaction"`
+					} `json:"session"`
+				} `json:"clientCapabilities"`
 				MCPServers []struct {
 					Name string   `json:"name"`
 					Args []string `json:"args"`
@@ -384,6 +396,9 @@ func TestManagerACPHelperProcess(t *testing.T) {
 		var result any = map[string]any{}
 		switch request.Method {
 		case "initialize":
+			if compaction && request.Params.ClientCapabilities.Session.Compaction == nil {
+				os.Exit(6)
+			}
 			result = map[string]any{"protocolVersion": 1, "agentCapabilities": map[string]any{"loadSession": true}}
 		case "session/new", "session/load":
 			if filepath.Clean(request.Params.Cwd) != filepath.Clean(cwd) {
@@ -411,6 +426,15 @@ func TestManagerACPHelperProcess(t *testing.T) {
 			if !resumed {
 				setup["sessionId"] = fmt.Sprintf("remote-%d", os.Getpid())
 			}
+			if compaction {
+				session := request.Params.SessionID
+				if !resumed {
+					session = setup["sessionId"].(string)
+				} else {
+					compact(session, "prior", "completed")
+				}
+				update(session, map[string]any{"sessionUpdate": "available_commands_update", "availableCommands": []map[string]string{{"name": "compact", "description": "Compact older context"}}})
+			}
 			result = setup
 		case "session/set_config_option":
 			switch request.Params.ConfigID {
@@ -430,6 +454,32 @@ func TestManagerACPHelperProcess(t *testing.T) {
 			}
 			result = map[string]any{"configOptions": options()}
 		case "session/prompt":
+			if compaction {
+				session := request.Params.SessionID
+				text := request.Params.Prompt[0].Text
+				switch {
+				case text == "/compact":
+					if resumed {
+						compact(session, "current", "in_progress")
+						compact(session, "current", "completed")
+						text = ""
+					} else {
+						compact(session, "prior", "completed")
+						compact(session+"-other", "different-session", "completed")
+						text = "Context compacted."
+					}
+				case strings.Contains(text, `"answer":"Keep compatibility"`):
+					text = "Applied Keep compatibility in " + session
+				default:
+					compact(session, "prior", "completed")
+					text = "Compatibility discovered late.\n```q-user-decision\n" + `{"question":"Keep compatibility?","late":true,"choices":["Keep compatibility","Remove compatibility"]}` + "\n```"
+				}
+				if text != "" {
+					update(session, map[string]any{"sessionUpdate": "agent_message_chunk", "content": map[string]any{"type": "text", "text": text}})
+				}
+				result = map[string]any{"stopReason": "end_turn"}
+				break
+			}
 			role, skillGuidance, browserGuidance, reviewGuidance := "none", false, false, false
 			webTester := false
 			for _, block := range request.Params.Prompt {

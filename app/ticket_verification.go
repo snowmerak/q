@@ -18,7 +18,7 @@ import (
 	"github.com/snowmerak/q/workspace"
 )
 
-func acpTicketResult(answer string, decisions bool) subagent.TaskResult {
+func acpTicketResult(answer string, decisions bool, compactStatus string) subagent.TaskResult {
 	result := subagent.TaskResult{Outcome: "succeeded", Summary: "ACP worker completed", Report: strings.TrimSpace(answer)}
 	if decisions {
 		if _, data, found := fencedTicketResult(answer, "q-user-decision"); found {
@@ -26,8 +26,8 @@ func acpTicketResult(answer string, decisions bool) subagent.TaskResult {
 			if json.Unmarshal([]byte(data), &q) != nil || q.Validate() != nil || q.ID != "" || q.Answer != "" {
 				return subagent.TaskResult{Outcome: "blocked", Summary: "Invalid ACP decision request", Blocker: "The ACP worker sent an invalid q-user-decision response."}
 			}
-			if q.Late {
-				return subagent.TaskResult{Outcome: "blocked", Summary: "ACP decision requires a compacted checkpoint", Blocker: "Resolve this decision in a follow-up ticket. Q cannot confirm compaction of this ACP session.", Report: q.Question + "\n\n" + q.Context}
+			if q.Late && compactStatus != "completed" && compactStatus != "not_needed" {
+				return subagent.TaskResult{Outcome: "blocked", PendingCompaction: true, Summary: "ACP decision requires a compacted checkpoint", Blocker: "ACP compaction did not finish.", Report: q.Question + "\n\n" + q.Context}
 			}
 			return subagent.TaskResult{Outcome: workitems.WaitingUser, Summary: q.Question, UserQuestion: &q}
 		}

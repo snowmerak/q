@@ -26,6 +26,61 @@ func mustStudioRunPage(t *testing.T, run *studioRun, after int64, limit int) stu
 	return page
 }
 
+type cancellableTestCompactor struct {
+	sessionRunnerFunc
+	started chan struct{}
+}
+
+func (c cancellableTestCompactor) Compact(ctx context.Context, _ workspace.Store, _ string) (string, error) {
+	close(c.started)
+	<-ctx.Done()
+	return "", ctx.Err()
+}
+
+func TestStudioBackgroundCompactionCanBeStopped(t *testing.T) {
+	root := t.TempDir()
+	store, lock, err := workspace.CreateSession(root, "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := lock.Close(); err != nil {
+		t.Fatal(err)
+	}
+	runner := cancellableTestCompactor{started: make(chan struct{})}
+	runs := newSessionRunService(t.Context(), runner)
+	t.Cleanup(func() { _ = runs.Close() })
+	service := &sessionsService{runner: runner, runs: runs}
+	run, err := runs.startCompaction(root, store.SessionID, t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-runner.started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("compaction did not start")
+	}
+	command := func(action string) *httptest.ResponseRecorder {
+		data, _ := json.Marshal(studioRunCommandRequest{WorkspaceRoot: root, Action: action})
+		w := httptest.NewRecorder()
+		r := httptest.NewRequest(http.MethodPost, "/commands", bytes.NewReader(data))
+		r.SetPathValue("session", store.SessionID)
+		r.SetPathValue("run", run.snapshot.ID)
+		service.serveRunCommand(w, r)
+		return w
+	}
+	if response := command("pause"); response.Code != http.StatusConflict {
+		t.Fatalf("pause request = %d %s", response.Code, response.Body)
+	}
+	cursor := run.snapshotCopy().Cursor
+	if response := command("cancel"); response.Code != http.StatusOK {
+		t.Fatalf("cancel request = %d %s", response.Code, response.Body)
+	}
+	page, err := run.wait(cursor, 5*time.Second, t.Context())
+	if err != nil || page.Run.Status != "cancelled" {
+		t.Fatalf("compaction did not stop: %+v %v", page.Run, err)
+	}
+}
+
 func TestStudioRunSurvivesRequestAndReplaysFromDisk(t *testing.T) {
 	root := t.TempDir()
 	store, lock, err := workspace.CreateSession(root, "test")

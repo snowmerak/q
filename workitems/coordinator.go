@@ -72,8 +72,13 @@ type Attempt struct {
 	OperationError       string                 `json:"operation_error,omitempty"`
 	UserQuestion         *UserQuestion          `json:"user_question,omitempty"`
 	PreviousAnswer       *UserQuestion          `json:"previous_answer,omitempty"`
+	CompactionAttemptID  string                 `json:"compaction_attempt_id,omitempty"`
 	CreatedAt            time.Time              `json:"created_at"`
 	UpdatedAt            time.Time              `json:"updated_at"`
+}
+
+func (a Attempt) CanRetryCompaction() bool {
+	return a.CompactionAttemptID != "" && (a.Status == "blocked" || a.Status == "unknown")
 }
 
 type InboxEntry struct {
@@ -111,17 +116,18 @@ type ClaimInput struct {
 }
 
 type AttemptUpdate struct {
-	Owner          string                 `json:"owner"`
-	Token          string                 `json:"token"`
-	Generation     int64                  `json:"generation"`
-	Status         string                 `json:"status"`
-	Result         json.RawMessage        `json:"result,omitempty"`
-	ChangeRequest  *change.Request        `json:"change_request,omitempty"`
-	MergeCandidate *change.MergeCandidate `json:"merge_candidate,omitempty"`
-	MergeLanded    bool                   `json:"merge_landed,omitempty"`
-	RepairBase     string                 `json:"repair_base,omitempty"`
-	OperationError string                 `json:"operation_error,omitempty"`
-	UserQuestion   *UserQuestion          `json:"user_question,omitempty"`
+	Owner             string                 `json:"owner"`
+	Token             string                 `json:"token"`
+	Generation        int64                  `json:"generation"`
+	Status            string                 `json:"status"`
+	Result            json.RawMessage        `json:"result,omitempty"`
+	ChangeRequest     *change.Request        `json:"change_request,omitempty"`
+	MergeCandidate    *change.MergeCandidate `json:"merge_candidate,omitempty"`
+	MergeLanded       bool                   `json:"merge_landed,omitempty"`
+	RepairBase        string                 `json:"repair_base,omitempty"`
+	OperationError    string                 `json:"operation_error,omitempty"`
+	UserQuestion      *UserQuestion          `json:"user_question,omitempty"`
+	PendingCompaction bool                   `json:"pending_compaction,omitempty"`
 }
 
 type ReviewInput struct {
@@ -449,6 +455,12 @@ func (s *Store) ClaimTicket(ctx context.Context, id string, in ClaimInput) (Atte
 			attempt.Generation = previous.Generation + 1
 			attempt.PreviousAttemptID = previous.ID
 			attempt.PreviousStatus = previous.Status
+			if previous.CanRetryCompaction() {
+				if handoff || previous.MemberID != member.ID || previous.DefinitionDigest != in.DefinitionDigest || attempt.TicketContract != previous.TicketContract {
+					return Attempt{}, fmt.Errorf("%w: pending compaction belongs to the original worker and ticket scope", ErrConflict)
+				}
+				attempt.CompactionAttemptID = previous.CompactionAttemptID
+			}
 			if previous.Status == WaitingUser {
 				if previous.UserQuestion == nil || previous.UserQuestion.Answer == "" || previous.MemberID != member.ID || previous.DefinitionDigest != in.DefinitionDigest || attempt.TicketContract != previous.TicketContract {
 					return Attempt{}, ErrConflict
@@ -627,6 +639,14 @@ func (s *Store) UpdateAttempt(ctx context.Context, id string, in AttemptUpdate) 
 		return Attempt{}, ErrInvalidInput
 	}
 	a.Status = status
+	switch status {
+	case "reserved", "running", "blocked", "unknown":
+		if in.PendingCompaction && a.CompactionAttemptID == "" {
+			a.CompactionAttemptID = a.ID
+		}
+	default:
+		a.CompactionAttemptID = ""
+	}
 	a.UpdatedAt = time.Now().UTC()
 	a.LeaseUntil = a.UpdatedAt.Add(45 * time.Second)
 	if len(in.Result) > 0 {

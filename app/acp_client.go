@@ -26,12 +26,13 @@ import (
 )
 
 type acpAgentCommand struct {
-	name          string
-	args          []string
-	env           map[string]string
-	display       string
-	installPreset string
-	mcpServers    []acp.McpServer
+	name             string
+	args             []string
+	env              map[string]string
+	display          string
+	installPreset    string
+	mcpServers       []acp.McpServer
+	ticketCompaction bool
 }
 
 type acpRemoteConnection interface {
@@ -78,6 +79,7 @@ type acpRemoteClient struct {
 	lastBrowserPreference string
 
 	slashCommandsBySession map[acp.SessionId][]slashCommand
+	compactions            map[acpCompactionKey]struct{}
 
 	stdin          io.WriteCloser
 	processContext context.Context
@@ -89,17 +91,20 @@ type acpRemoteClient struct {
 }
 
 type acpRemoteTurn struct {
-	ctx             context.Context
-	events          chan<- agentEvent
-	display         string
-	mu              sync.Mutex
-	response        strings.Builder
-	contentParts    []client.MessageContentPart
-	structured      bool
-	responseStarted bool
-	thoughtStarted  bool
-	toolTitles      map[acp.ToolCallId]string
-	toolCalls       map[acp.ToolCallId]struct{}
+	compacting       bool
+	compactionIDs    map[string]bool
+	compactionStatus string
+	ctx              context.Context
+	events           chan<- agentEvent
+	display          string
+	mu               sync.Mutex
+	response         strings.Builder
+	contentParts     []client.MessageContentPart
+	structured       bool
+	responseStarted  bool
+	thoughtStarted   bool
+	toolTitles       map[acp.ToolCallId]string
+	toolCalls        map[acp.ToolCallId]struct{}
 }
 
 type acpSessionResetMsg struct {
@@ -219,7 +224,15 @@ func startACPRemoteClientWithResume(
 	}
 	wait := make(chan error, 1)
 	go func() {
-		wait <- cmd.Wait()
+		err := cmd.Wait()
+		// Windows can deny TerminateProcess when the peer exits concurrently.
+		// The reaped process state establishes whether it actually exited cleanly.
+		var stopErr *os.SyscallError
+		if cmd.ProcessState != nil && cmd.ProcessState.Success() && errors.As(err, &stopErr) &&
+			stopErr.Syscall == "TerminateProcess" && errors.Is(stopErr, os.ErrPermission) {
+			err = nil
+		}
+		wait <- err
 		close(wait)
 	}()
 
@@ -232,7 +245,13 @@ func startACPRemoteClientWithResume(
 	if remote.mcpServers == nil {
 		remote.mcpServers = []acp.McpServer{}
 	}
-	connection := acp.NewClientSideConnection(remote, stdin, stdout)
+	var input io.Writer = stdin
+	var output io.Reader = stdout
+	if command.ticketCompaction {
+		input = acpCompactionWriter{stdin}
+		output = newACPCompactionReader(stdout, remote.observeCompaction)
+	}
+	connection := acp.NewClientSideConnection(remote, input, output)
 	connection.SetLogger(slog.New(slog.NewTextHandler(stderr, nil)))
 	remote.connection = connection
 
@@ -563,7 +582,7 @@ func (r *acpRemoteClient) RequestPermission(ctx context.Context, request acp.Req
 	permissions := r.permissions
 	projectLibrary := r.projectLibrary
 	r.mu.Unlock()
-	if turn == nil {
+	if turn == nil || turn.compacting {
 		return cancelledPermission(), nil
 	}
 	if permissions == acpPermissionReadOnly {

@@ -134,7 +134,7 @@ func TestACPCompactCommandPreservesTranscriptWithoutChatTurn(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if response.StopReason != acp.StopReasonEndTurn || len(fake.requests) != 1 || !isCheckpointRequestForTest(fake.requests[0]) {
+	if response.StopReason != acp.StopReasonEndTurn || response.Meta[acpCompactionMeta] != "completed" || len(fake.requests) != 1 || !isCheckpointRequestForTest(fake.requests[0]) {
 		t.Fatalf("ACP command = %#v, requests = %#v", response, fake.requests)
 	}
 	if len(runtime.state.messages) != before || !hasMessageNamed(runtime.state.memory.Messages(), memory.SummaryName) || runtime.state.conversationID != "" {
@@ -167,7 +167,7 @@ func TestACPCompactCommandNoHistory(t *testing.T) {
 	response, err := agent.Prompt(t.Context(), acp.PromptRequest{
 		SessionId: sessionID, Prompt: []acp.ContentBlock{acp.TextBlock("/compact")},
 	})
-	if err != nil || response.StopReason != acp.StopReasonEndTurn || len(fake.requests) != 0 {
+	if err != nil || response.StopReason != acp.StopReasonEndTurn || response.Meta[acpCompactionMeta] != "not_needed" || len(fake.requests) != 0 {
 		t.Fatalf("ACP empty compact: response=%#v err=%v requests=%d", response, err, len(fake.requests))
 	}
 	var output string

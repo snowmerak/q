@@ -41,11 +41,16 @@ func awaitingTicketDecision(ctx context.Context, tx *sql.Tx, item Item) (bool, e
 	if item.ExecutionState == WaitingUser {
 		return true, nil
 	}
-	if item.ActiveAttemptID == "" || (item.ExecutionState != "queued" && item.ExecutionState != "assignment_waiting") {
+	if item.ActiveAttemptID == "" {
+		return false, nil
+	}
+	switch item.ExecutionState {
+	case "queued", "assignment_waiting", "blocked", "unknown", "reserved", "running":
+	default:
 		return false, nil
 	}
 	attempt, err := decodeRow[Attempt](tx.QueryRowContext(ctx, `SELECT payload FROM ticket_attempts WHERE id=?`, item.ActiveAttemptID))
-	return attempt.Status == WaitingUser, err
+	return attempt.Status == WaitingUser || attempt.CanRetryCompaction() || attempt.CompactionAttemptID != "" && (attempt.Status == "running" || attempt.Status == "reserved"), err
 }
 
 func (s *Store) AnswerQuestion(ctx context.Context, id string, in AnswerInput) (Item, error) {

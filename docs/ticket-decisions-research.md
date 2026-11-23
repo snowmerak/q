@@ -51,6 +51,8 @@
 
 네이티브 티켓의 자동 압축은 도구 라운드 사이에서 동작하고, 이미 실패 시 이력을 보존하는 테스트가 있다. 이 경로를 활용하는 명시적 체크포인트가 필요하다. 외부 ACP는 자체 문맥을 관리한다. Q가 확인 가능한 압축 이벤트나 에이전트별 제어 기능을 지원할 때만 원래 워커의 압축을 확인할 수 있다. 지원이 없다면 Q가 만든 인계 요약을 사용한 후속 티켓을 대안으로 삼고, 화면에도 인계 요약을 사용했다고 표시한다. [네이티브 압축](../subagent/delegation.go#L756) · [ACP 압축 이벤트](https://agentclientprotocol.com/protocol/v1/prompt-turn#session-compaction)
 
+ACP 구현에서는 워커의 결과를 먼저 보존한 뒤, 해당 세션이 광고한 `/compact`를 별도 턴으로 호출한다. 같은 세션에서 새 압축 완료 이벤트를 받거나 Q ACP 서버의 체크포인트 응답을 받으면 이를 저장하고 질문을 게시한다. 실패한 시도는 인박스에 원인을 표시한다. 재시도는 원래 워커의 세션과 질문 초안을 이어받아 압축부터 진행한다. [ACP 슬래시 명령](https://agentclientprotocol.com/protocol/v1/slash-commands) · [티켓 ACP 압축](../app/acp_compaction.go)
+
 ## 외부 사례에서 적용할 부분
 
 - GitHub Actions는 특정 배포 잡에 리뷰를 걸고, 승인 등 보호 규칙이 통과하면 해당 잡에 필요한 환경 비밀을 내준다. Q에서도 승인 단위를 전체 프로젝트 실행에서 배포나 외부 상태 변경처럼 실제로 결정해야 하는 작업까지 좁힐 수 있다. [GitHub 배포 리뷰](https://docs.github.com/en/actions/how-tos/deploy/configure-and-manage-deployments/review-deployments)

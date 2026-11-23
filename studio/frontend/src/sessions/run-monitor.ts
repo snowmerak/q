@@ -14,6 +14,13 @@ export function terminalRun(status: string) {
 }
 
 export function runStatusLabel(run: RunSnapshot) {
+  if (run.kind === 'compaction') {
+    if (run.status === 'queued' || run.status === 'running') return 'Compacting context…';
+    if (run.status === 'completed') return run.status_detail || 'Context compacted';
+    if (run.status === 'cancelled') return 'Compaction stopped';
+    if (run.status === 'failed') return 'Compaction failed';
+    if (run.status === 'interrupted') return 'Compaction interrupted';
+  }
   if (run.status === 'waiting') return 'Waiting for your answer';
   if (run.status === 'paused') return 'Paused';
   if (run.status === 'running' || run.status === 'queued') return 'Running';

@@ -17,7 +17,7 @@ func ticketAnswerPrompt(answer *workitems.UserQuestion) string {
 }
 
 func ticketImages(ctx context.Context, c *library.Client, item workitems.Item, attempt workitems.Attempt) ([]ImageInput, error) {
-	if attempt.PreviousAnswer != nil {
+	if attempt.PreviousAnswer != nil || attempt.CompactionAttemptID != "" {
 		return nil, nil
 	}
 	body, err := c.ReadPostRevision(ctx, item.BodyPostID, attempt.BodyRevision)

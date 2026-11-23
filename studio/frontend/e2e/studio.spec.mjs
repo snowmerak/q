@@ -7,6 +7,23 @@ const referenceImage = {
   buffer: Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aip0AAAAASUVORK5CYII=', 'base64'),
 };
 
+test('manual compaction uses a background run and survives reload', async ({ page, request }) => {
+  const fixture = await (await request.get('/_test/fixture')).json();
+  const session = await (await request.post('/api/v1/registered-sessions', {
+    data: { workspace_root: fixture.root, create: true },
+  })).json();
+  await page.goto(`/sessions/${session.registration_id}`);
+  await page.getByLabel('More session actions', { exact: true }).click();
+  const acknowledged = page.waitForResponse(response => response.url().endsWith('/compact') && response.request().method() === 'POST');
+  await page.getByRole('button', { name: 'Compact context' }).click();
+  const response = await acknowledged;
+  expect(response.status()).toBe(202);
+  expect((await response.json()).kind).toBe('compaction');
+  await page.reload();
+  await expect(page.getByText('Nothing to compact', { exact: true })).toBeVisible();
+  await expect(page.locator('.transcript .chat-message')).toHaveCount(0);
+});
+
 test('chat image survives a completed turn and reload', async ({ page, request }) => {
   const fixture = await (await request.get('/_test/fixture')).json();
   const session = await (await request.post('/api/v1/registered-sessions', {

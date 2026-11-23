@@ -80,6 +80,11 @@ type sessionOperationResponse struct {
 	Status string `json:"status"`
 }
 
+type sessionCompactRequest struct {
+	WorkspaceRoot string `json:"workspace_root"`
+	Background    bool   `json:"background,omitempty"`
+}
+
 type sessionRunRequest struct {
 	WorkspaceRoot string           `json:"workspace_root"`
 	Content       string           `json:"content"`
@@ -353,7 +358,7 @@ func (service *sessionsService) serveCompact(writer http.ResponseWriter, request
 		writeAPIError(writer, http.StatusServiceUnavailable, app.ErrSessionRuntimeUnavailable)
 		return
 	}
-	var input workspaceRequest
+	var input sessionCompactRequest
 	if err := decodeSessionRequest(writer, request, &input); err != nil {
 		writeAPIError(writer, http.StatusBadRequest, err)
 		return
@@ -364,6 +369,16 @@ func (service *sessionsService) serveCompact(writer http.ResponseWriter, request
 		return
 	}
 	store := workspace.Store{Root: root, SessionID: request.PathValue("session")}
+	if input.Background {
+		run, err := service.runs.startCompaction(root, store.SessionID, request.Context())
+		if err != nil {
+			writeSessionError(writer, err)
+			return
+		}
+		writer.Header().Set("Cache-Control", "no-store")
+		writeJSON(writer, http.StatusAccepted, run.snapshotCopy())
+		return
+	}
 	if err := store.RequireInteraction(); err != nil {
 		writeSessionError(writer, err)
 		return
@@ -406,11 +421,7 @@ func (service *sessionsService) serveMessage(writer http.ResponseWriter, request
 	}
 	run, err := service.runs.startTurn(root, request.PathValue("session"), input.Content, "", input.Images, request.Context())
 	if err != nil {
-		if strings.Contains(err.Error(), "already has a running turn") {
-			writeAPIError(writer, http.StatusConflict, err)
-		} else {
-			writeSessionError(writer, err)
-		}
+		writeSessionError(writer, err)
 		return
 	}
 	writer.Header().Set("Cache-Control", "no-store")
@@ -507,6 +518,8 @@ func decodeSessionRequest(writer http.ResponseWriter, request *http.Request, tar
 
 func writeSessionError(writer http.ResponseWriter, err error) {
 	switch {
+	case errors.Is(err, errSessionRunActive):
+		writeAPIError(writer, http.StatusConflict, err)
 	case errors.Is(err, workspace.ErrRequiredManager):
 		writeAPIError(writer, http.StatusConflict, err)
 	case errors.Is(err, workspace.ErrWorkflowRequired):

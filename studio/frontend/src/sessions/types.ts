@@ -70,6 +70,8 @@ export type ModelCallTiming = {
 export type RunSnapshot = {
   id: string;
   session_id: string;
+  kind?: 'compaction';
+  status_detail?: string;
   provider_kind?: 'native' | 'acp';
   status: string;
   outcome?: string;

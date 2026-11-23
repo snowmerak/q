@@ -1719,6 +1719,7 @@ func (a *acpAgent) emitAvailableCommandsContext(ctx context.Context) error {
 func (a *acpAgent) runACPCommand(ctx context.Context, text string) (acp.PromptResponse, bool, error) {
 	command := strings.TrimSpace(text)
 	var output string
+	var compactionStatus string
 	switch {
 	case retiredLoopModeCommand(command):
 		output = "Loop modes were removed. Ordinary chat can use direct tools and issue tickets for subagent work."
@@ -1738,12 +1739,14 @@ func (a *acpAgent) runACPCommand(ctx context.Context, text string) (acp.PromptRe
 	case command == "/compact":
 		if !hasCompactionHistory(a.state.memory.Messages()) {
 			output = "Nothing to compact."
+			compactionStatus = "not_needed"
 			break
 		}
 		before := a.state.memory.PredictedTokens()
 		if err := a.compactContext(ctx, true); err != nil {
 			if errors.Is(err, memory.ErrNothingToCompact) {
 				output = "Nothing to compact."
+				compactionStatus = "not_needed"
 				break
 			}
 			a.state.archiveFailure("ACP context compaction failed", err)
@@ -1751,6 +1754,7 @@ func (a *acpAgent) runACPCommand(ctx context.Context, text string) (acp.PromptRe
 			return acp.PromptResponse{}, true, err
 		}
 		output = fmt.Sprintf("Context compacted · %s → %s", formatTokens(before), formatTokens(a.state.memory.PredictedTokens()))
+		compactionStatus = "completed"
 		if err := a.state.flushArchive(); err != nil {
 			output += " · archive: " + err.Error()
 		}
@@ -1765,7 +1769,11 @@ func (a *acpAgent) runACPCommand(ctx context.Context, text string) (acp.PromptRe
 	if err := a.updateContext(ctx, acp.UpdateAgentMessageText(output)); err != nil {
 		return acp.PromptResponse{}, true, err
 	}
-	return acp.PromptResponse{StopReason: acp.StopReasonEndTurn}, true, nil
+	response := acp.PromptResponse{StopReason: acp.StopReasonEndTurn}
+	if compactionStatus != "" {
+		response.Meta = map[string]any{acpCompactionMeta: compactionStatus}
+	}
+	return response, true, nil
 }
 
 func renderACPCommandHelp() string {

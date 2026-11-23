@@ -548,6 +548,7 @@ type ticketACPCheckpoint struct {
 	Answer                                    string
 	BrowserPreference                         string
 	CanAsk                                    bool
+	CompactionStatus                          string
 }
 
 func (host *SessionHost) runACPTicket(ctx context.Context, c *library.Client, worker workspace.Store, candidate coordinator.Candidate, a workitems.Attempt, prompt, root string, images []ImageInput) (result subagent.TaskResult, returnErr error) {
@@ -563,6 +564,7 @@ func (host *SessionHost) runACPTicket(ctx context.Context, c *library.Client, wo
 	if err != nil {
 		return result, err
 	}
+	command.ticketCompaction = true
 	bridgePath, err := host.workEmbeddingConnection()
 	if err != nil {
 		return result, err
@@ -575,6 +577,7 @@ func (host *SessionHost) runACPTicket(ctx context.Context, c *library.Client, wo
 	path := filepath.Join(worker.SessionDir(), "ticket-acp.json")
 	saved := ticketACPCheckpoint{Agent: candidate.Definition.Connection, Root: root, Digest: a.DefinitionDigest}
 	recovering := false
+	finishSavedDecision := false
 	if raw, err := os.ReadFile(path); err == nil {
 		if err := json.Unmarshal(raw, &saved); err != nil {
 			return result, err
@@ -588,13 +591,20 @@ func (host *SessionHost) runACPTicket(ctx context.Context, c *library.Client, wo
 			}
 			recovering = true
 		}
-		if saved.AttemptID == a.ID && saved.Completed {
-			return acpTicketResult(saved.Answer, saved.CanAsk), nil
+		if saved.Completed && (saved.AttemptID == a.ID || saved.AttemptID == a.CompactionAttemptID) {
+			savedResult := acpTicketResult(saved.Answer, saved.CanAsk, saved.CompactionStatus)
+			if !savedResult.PendingCompaction {
+				return savedResult, nil
+			}
+			finishSavedDecision = true
 		}
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return result, err
 	}
-	if (a.ResumeParent || a.PreviousAnswer != nil) && saved.SessionID == "" {
+	if a.CompactionAttemptID != "" && !finishSavedDecision {
+		return result, errors.New("the ACP worker decision checkpoint is missing or incomplete")
+	}
+	if (a.ResumeParent || a.PreviousAnswer != nil || finishSavedDecision) && saved.SessionID == "" {
 		return result, errors.New("parent ACP session checkpoint is missing; select a handoff member to continue")
 	}
 	remote, err := startACPRemoteClientWithResume(ctx, command, root, saved.SessionID, connection.AuthMethod, io.Discard, false)
@@ -615,13 +625,16 @@ func (host *SessionHost) runACPTicket(ctx context.Context, c *library.Client, wo
 	if remote.resumed {
 		remote.lastBrowserPreference = saved.BrowserPreference
 	}
+	if finishSavedDecision {
+		return finishACPTicketDecision(ctx, remote, path, saved)
+	}
 	saved.SessionID = string(remote.sessionID)
 	saved.CanAsk = a.ReviewChildAttemptID == "" && (remote.capabilities.LoadSession || remote.capabilities.SessionCapabilities.Resume != nil)
 	saved.AttemptID = a.ID
 	saved.Started = true
 	saved.Completed = false
-	raw, _ := json.Marshal(saved)
-	if err := fsreplace.WriteFile(path, raw, 0o600); err != nil {
+	saved.CompactionStatus = ""
+	if err := saveTicketACPCheckpoint(path, saved); err != nil {
 		return result, err
 	}
 	if _, err := c.UpdateAttempt(ctx, a.ID, workitems.AttemptUpdate{Owner: a.Owner, Token: a.Token, Generation: a.Generation, Status: "running"}); err != nil {
@@ -642,7 +655,7 @@ func (host *SessionHost) runACPTicket(ctx context.Context, c *library.Client, wo
 	}
 	prompt += "\n\nReport checks actually run. To attach verification files, finish with a fenced q-verification JSON block with keys verification (array of observed checks) and artifacts (array of project-relative PNG, JPEG, WebP, GIF, or UTF-8 log paths)."
 	if saved.CanAsk {
-		prompt += "\nBefore making changes, check the ticket's scope, prerequisites, and acceptance criteria. If only the user can make a material early decision, finish this turn without making the dependent change. End with a fenced q-user-decision JSON block containing question, context (evidence, recommendation, and what waits), and optionally choices (array of strings). Q will save this session and return the answer. For a decision discovered after changes, set late:true and describe the work and decision so they can be handed off after compaction."
+		prompt += "\nBefore making changes, check the ticket's scope, prerequisites, and acceptance criteria. If only the user can make a material early decision, finish this turn without making the dependent change. End with a fenced q-user-decision JSON block containing question, context (evidence, recommendation, and what waits), and optionally choices (array of strings). Q will save this session and return the answer. For a decision discovered after changes, set late:true and include the relevant work and evidence. Q will request and verify compaction before posting the question."
 	}
 	user := workmedia.Message(prompt, images)
 	answer, err := remote.promptText(ctx, prompt, workmedia.URLs(user)...)
@@ -652,8 +665,13 @@ func (host *SessionHost) runACPTicket(ctx context.Context, c *library.Client, wo
 	saved.Completed = true
 	saved.BrowserPreference = remote.lastBrowserPreference
 	saved.Answer = answer
-	raw, _ = json.Marshal(saved)
-	if err := fsreplace.WriteFile(path, raw, 0o600); err != nil {
+	result = acpTicketResult(answer, saved.CanAsk, "")
+	if result.PendingCompaction {
+		if _, err := c.UpdateAttempt(ctx, a.ID, workitems.AttemptUpdate{Owner: a.Owner, Token: a.Token, Generation: a.Generation, Status: "running", PendingCompaction: true}); err != nil {
+			return result, err
+		}
+	}
+	if err := saveTicketACPCheckpoint(path, saved); err != nil {
 		return result, err
 	}
 	assistant := client.Message{Role: client.RoleAssistant, Content: answer}
@@ -668,7 +686,38 @@ func (host *SessionHost) runACPTicket(ctx context.Context, c *library.Client, wo
 	if err := worker.Save(session); err != nil {
 		return result, err
 	}
-	return acpTicketResult(answer, saved.CanAsk), nil
+	if result.PendingCompaction {
+		return finishACPTicketDecision(ctx, remote, path, saved)
+	}
+	return result, nil
+}
+
+func saveTicketACPCheckpoint(path string, saved ticketACPCheckpoint) error {
+	raw, err := json.Marshal(saved)
+	if err != nil {
+		return err
+	}
+	return fsreplace.WriteFile(path, raw, 0o600)
+}
+
+func finishACPTicketDecision(ctx context.Context, remote *acpRemoteClient, path string, saved ticketACPCheckpoint) (subagent.TaskResult, error) {
+	result := acpTicketResult(saved.Answer, saved.CanAsk, saved.CompactionStatus)
+	if !result.PendingCompaction {
+		return result, nil
+	}
+	status, err := remote.compactTicketContext(ctx)
+	if err != nil {
+		if ctx.Err() != nil {
+			return result, ctx.Err()
+		}
+		result.Blocker = err.Error()
+		return result, nil
+	}
+	saved.CompactionStatus = status
+	if err := saveTicketACPCheckpoint(path, saved); err != nil {
+		return result, err
+	}
+	return acpTicketResult(saved.Answer, saved.CanAsk, status), nil
 }
 
 func (host *SessionHost) deliverTicketReview(ctx context.Context, project workitems.Workspace, entry workitems.InboxEntry, a workitems.Attempt) error {

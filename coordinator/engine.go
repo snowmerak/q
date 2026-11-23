@@ -422,6 +422,10 @@ func (e *Engine) execute(project workitems.Workspace, item workitems.Item) (retu
 	update.ChangeRequest = result.ChangeRequest
 	update.OperationError = errorText(runErr)
 	update.UserQuestion = result.UserQuestion
+	update.PendingCompaction = result.PendingCompaction
+	if result.PendingCompaction && update.OperationError == "" {
+		update.OperationError = result.Blocker
+	}
 	cleanup, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	_, saveErr := c.UpdateAttempt(cleanup, attempt.ID, update)
@@ -439,7 +443,7 @@ func continuationMember(ctx context.Context, c *library.Client, item workitems.I
 	if item.HandoffMemberID != "" {
 		return item.HandoffMemberID, previous, nil
 	}
-	if item.ExecutionState == workitems.WaitingChildren || previous.Status == workitems.WaitingUser {
+	if item.ExecutionState == workitems.WaitingChildren || previous.Status == workitems.WaitingUser || previous.CanRetryCompaction() {
 		return previous.MemberID, previous, nil
 	}
 	if request := previous.ChangeRequest; request != nil && !request.Final() {
