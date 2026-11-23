@@ -2,11 +2,39 @@ package agentloop_test
 
 import (
 	"errors"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 
+	llmprovider "github.com/snowmerak/llm-provider"
 	"github.com/snowmerak/q/agentloop"
 	"github.com/snowmerak/q/client"
 )
+
+func TestChatStreamReportsUpstreamErrorBeforeDone(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, "data: {\"error\":{\"code\":502,\"type\":\"provider_error\",\"message\":\"Model could not complete this request.\"}}\n\ndata: [DONE]\n\n")
+	}))
+	defer server.Close()
+	configured, err := client.New(client.Config{BaseURL: server.URL, DisableAPIKey: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = configured.Close() }()
+	_, err = agentloop.StreamChatWithEmptyResponseRecovery(t.Context(), configured, client.ChatRequest{
+		Model: "fixture/model", Messages: []client.Message{{Role: client.RoleUser, Content: "hello"}},
+	}, nil)
+	var incomplete *client.IncompleteGeneration
+	var upstream llmprovider.APIError
+	if !errors.As(err, &incomplete) || incomplete.Reason != "stream_interrupted" ||
+		!errors.As(err, &upstream) || upstream.HTTPStatusCode() != http.StatusBadGateway ||
+		upstream.APIErrorCode() != float64(502) || upstream.APIErrorType() != "provider_error" ||
+		upstream.APIErrorMessage() != "Model could not complete this request." {
+		t.Fatalf("stream lost upstream error: %v", err)
+	}
+}
 
 func TestStreamSparseToolIndicesMergeOnlyReceivedCalls(t *testing.T) {
 	configured := &scriptedClient{stream: &chunkStream{chunks: []*client.ChatChunk{

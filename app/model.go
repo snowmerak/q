@@ -2294,7 +2294,7 @@ func (m model) renderedAgentActivities() string {
 func agentSummary(states map[string]string) string {
 	parts := []string{titleStyle.Render("agents")}
 	roles := []string{
-		subagent.BuiltinManagerID, subagent.BuiltinInterviewerID,
+		subagent.BuiltinManagerID,
 		subagent.BuiltinResearchID, subagent.BuiltinSeniorDeveloperID,
 		subagent.BuiltinJuniorDeveloperID,
 		subagent.BuiltinWebSearchID, subagent.BuiltinWebTesterID,

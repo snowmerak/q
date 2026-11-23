@@ -25,7 +25,12 @@ func (c *Client) GetItem(ctx context.Context, id string) (workitems.Item, error)
 	return output, err
 }
 func (c *Client) ListItems(ctx context.Context, workspaceID, kind, cursor string, limit int) (workitems.ItemPage, error) {
-	query := url.Values{"workspace_id": {workspaceID}, "kind": {kind}, "cursor": {cursor}, "limit": {strconv.Itoa(limit)}}
+	return c.listItems(ctx, url.Values{"workspace_id": {workspaceID}, "kind": {kind}, "cursor": {cursor}, "limit": {strconv.Itoa(limit)}})
+}
+func (c *Client) ListBoardTickets(ctx context.Context, workspaceID, view, cursor string, limit int) (workitems.ItemPage, error) {
+	return c.listItems(ctx, url.Values{"workspace_id": {workspaceID}, "kind": {workitems.Ticket}, "board": {view}, "cursor": {cursor}, "limit": {strconv.Itoa(limit)}})
+}
+func (c *Client) listItems(ctx context.Context, query url.Values) (workitems.ItemPage, error) {
 	var output workitems.ItemPage
 	err := c.doJSON(ctx, http.MethodGet, "/items?"+query.Encode(), nil, &output)
 	return output, err
@@ -72,7 +77,17 @@ func registerItemRoutes(mux *http.ServeMux, store *workitems.Store) {
 			workspaceError(w, err)
 			return
 		}
-		out, err := store.ListItems(r.Context(), r.URL.Query().Get("workspace_id"), r.URL.Query().Get("kind"), r.URL.Query().Get("cursor"), limit)
+		query := r.URL.Query()
+		var out workitems.ItemPage
+		if board := query.Get("board"); board != "" {
+			if query.Get("kind") != workitems.Ticket {
+				workspaceError(w, workitems.ErrInvalidInput)
+				return
+			}
+			out, err = store.ListBoardTickets(r.Context(), query.Get("workspace_id"), board, query.Get("cursor"), limit)
+		} else {
+			out, err = store.ListItems(r.Context(), query.Get("workspace_id"), query.Get("kind"), query.Get("cursor"), limit)
+		}
 		if err != nil {
 			workspaceError(w, err)
 			return

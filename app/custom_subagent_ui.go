@@ -787,7 +787,7 @@ func (m model) validateCustomDelegates(profile subagent.Profile, scope string, o
 		if entry.Err != nil || original != nil && entry.Path == original.Path {
 			continue
 		}
-		definition, err := definitionForStoredProfile(entry)
+		definition, err := subagent.StoredDefinitionForProfile(entry)
 		if err != nil {
 			return err
 		}

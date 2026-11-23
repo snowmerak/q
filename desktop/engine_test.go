@@ -15,6 +15,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 func TestProxyKeepsCredentialsOutOfFrontend(t *testing.T) {
@@ -24,6 +26,10 @@ func TestProxyKeepsCredentialsOutOfFrontend(t *testing.T) {
 		}
 		if r.URL.RequestURI() != "/api/v1/events?after=2" {
 			t.Error(r.URL)
+		}
+		id, err := uuid.Parse(r.Header.Get("X-Request-ID"))
+		if err != nil || id == uuid.Nil {
+			t.Error("proxy did not supply a request ID")
 		}
 		w.Header().Set("Content-Security-Policy", "default-src 'self'")
 		_, _ = io.WriteString(w, "events")
@@ -35,6 +41,7 @@ func TestProxyKeepsCredentialsOutOfFrontend(t *testing.T) {
 	req.Header.Set("Cookie", "unrelated=secret")
 	req.Header.Set("Origin", "http://wails.localhost")
 	req.Header.Set("Authorization", "Bearer attacker")
+	req.Header.Set("X-Request-ID", "private-invalid-id")
 	response := httptest.NewRecorder()
 	host.ServeHTTP(response, req)
 	if response.Code != 200 || response.Body.String() != "events" || response.Header().Get("Content-Security-Policy") == "" {
@@ -44,6 +51,60 @@ func TestProxyKeepsCredentialsOutOfFrontend(t *testing.T) {
 	host.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "http://wails.localhost"+controlPath+"launch", nil))
 	if response.Code != 404 {
 		t.Fatal("frontend can access engine control")
+	}
+}
+
+func TestProxyCompactTimeoutAndCorrelation(t *testing.T) {
+	var logs bytes.Buffer
+	host := newEngineHost("", io.Discard, slog.New(slog.NewJSONHandler(&logs, nil)))
+	ordinary := host.proxy.Transport.(*http.Transport)
+	compact := host.compactProxy.Transport.(*http.Transport)
+	if ordinary.ResponseHeaderTimeout != 40*time.Second || compact.ResponseHeaderTimeout != 5*time.Minute {
+		t.Fatalf("timeouts = %v and %v", ordinary.ResponseHeaderTimeout, compact.ResponseHeaderTimeout)
+	}
+	ordinary.DialContext = func(context.Context, string, string) (net.Conn, error) {
+		return nil, errors.New("ordinary transport")
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Request-ID", r.Header.Get("X-Request-ID"))
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(server.Close)
+	host.process = &engineProcess{endpoint: engineEndpoint{URL: server.URL}}
+	for _, test := range []struct {
+		method, path string
+		status       int
+	}{
+		{http.MethodPost, "/api/v1/sessions/session/compact?private=secret", http.StatusOK},
+		{http.MethodGet, "/api/v1/sessions/session/compact", http.StatusServiceUnavailable},
+		{http.MethodPost, "/api/v1/sessions/session/messages", http.StatusServiceUnavailable},
+		{http.MethodPost, "/api/v1/sessions/session/compact/extra", http.StatusServiceUnavailable},
+	} {
+		logs.Reset()
+		response := httptest.NewRecorder()
+		request := httptest.NewRequest(test.method, test.path, nil)
+		const suppliedID = "99298933-36AB-4749-9FE4-4CAC6EB32D16"
+		if test.status == http.StatusOK {
+			request.Header.Set("X-Request-ID", suppliedID)
+		}
+		host.ServeHTTP(response, request)
+		if response.Code != test.status {
+			t.Fatalf("%s %s: status = %d, want %d", test.method, test.path, response.Code, test.status)
+		}
+		var record struct {
+			Message   string `json:"msg"`
+			RequestID string `json:"request_id"`
+			TimeoutMS int64  `json:"response_header_timeout_ms"`
+		}
+		if err := json.Unmarshal(logs.Bytes(), &record); err != nil {
+			t.Fatal(err)
+		}
+		if err := uuid.Validate(record.RequestID); err != nil || record.RequestID != response.Header().Get("X-Request-ID") {
+			t.Fatalf("request ID did not match response: %s", logs.String())
+		}
+		if test.status == http.StatusOK && (record.Message != "desktop.engine.compact.forwarded" || record.RequestID != strings.ToLower(suppliedID) || record.TimeoutMS != 300000 || strings.Contains(logs.String(), "secret")) {
+			t.Fatalf("unexpected compact log: %s", logs.String())
+		}
 	}
 }
 

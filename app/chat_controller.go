@@ -1,18 +1,21 @@
 package app
 
 import (
-	tea "charm.land/bubbletea/v2"
 	"context"
 	"errors"
+	"log/slog"
+	"strings"
+	"time"
+
+	tea "charm.land/bubbletea/v2"
 	"github.com/snowmerak/q/agentinstructions"
 	"github.com/snowmerak/q/agentloop"
 	"github.com/snowmerak/q/client"
+	"github.com/snowmerak/q/diagnostics"
 	"github.com/snowmerak/q/mcpconfig"
 	"github.com/snowmerak/q/memory"
 	"github.com/snowmerak/q/sessionstore"
 	"golang.org/x/text/unicode/norm"
-	"strings"
-	"time"
 )
 
 func (m model) updateChatKey(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
@@ -477,18 +480,20 @@ func hasCompactionHistory(messages []client.Message) bool {
 	return false
 }
 
+const nothingToCompactStatus = "Nothing to compact"
+
 // startManualCompaction uses the automatic checkpoint path without adding a user turn.
 func (m model) startManualCompaction() (tea.Model, tea.Cmd) {
 	m.resetChatInput()
 	m.turnErr = nil
 	if m.memory == nil || !hasCompactionHistory(m.memory.Messages()) {
-		m.status = "Nothing to compact"
+		m.status = nothingToCompactStatus
 		return m, m.focusChatInput()
 	}
 	plan, err := m.memory.Plan()
 	if err != nil {
 		if errors.Is(err, memory.ErrNothingToCompact) {
-			m.status = "Nothing to compact"
+			m.status = nothingToCompactStatus
 		} else {
 			m.turnErr = err
 			m.status = "compact context: " + err.Error()
@@ -513,11 +518,22 @@ func (m model) compactContext(plan memory.Plan, manual bool) tea.Cmd {
 	turnContext := m.activeTurnContext()
 	turnID := m.turnID
 	return func() tea.Msg {
+		if err := turnContext.Err(); err != nil {
+			return compactionResultMsg{turnID: turnID, plan: plan, err: err, manual: manual}
+		}
 		if checkpoint, ready := plan.CheckpointWithoutModel(); ready {
 			return compactionResultMsg{turnID: turnID, checkpoint: checkpoint, plan: plan, err: turnContext.Err(), manual: manual}
 		}
+		messages := plan.RequestMessages()
+		if manual {
+			logger := diagnostics.Logger(turnContext)
+			if logger.Enabled(turnContext, slog.LevelInfo) {
+				logger.InfoContext(turnContext, "studio.compact.model_input", "requested_model", modelID,
+					"input_tokens_estimate", memory.CountMessages(messages))
+			}
+		}
 		response, err := chatWithEmptyResponseRecovery(turnContext, configuredClient, client.ChatRequest{
-			Model: modelID, Messages: plan.RequestMessages(),
+			Model: modelID, Messages: messages,
 			ReasoningEffort: reasoningEffort, Extra: requestExtra,
 		})
 		return compactionResultMsg{turnID: turnID, response: response, plan: plan, err: err, manual: manual}

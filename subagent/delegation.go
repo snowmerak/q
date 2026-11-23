@@ -30,7 +30,6 @@ const (
 	TaskStartToolName          = "task_start"
 	TaskCompleteToolName       = "task_complete"
 
-	BuiltinInterviewerID     = "builtin/interviewer"
 	BuiltinManagerID         = "builtin/manager"
 	BuiltinSeniorDeveloperID = "builtin/senior-developer"
 	BuiltinJuniorDeveloperID = "builtin/junior-developer"
@@ -307,18 +306,11 @@ func BuiltinAgentDefinitions() []AgentDefinition {
 		"edit_file", "write_file", "create_directory", "move_path", "copy_path", "remove_path", "run_command", "cmd_status", "wait")
 	return []AgentDefinition{
 		{
-			Info: DelegateInfo{Name: BuiltinInterviewerID, Source: "builtin", Kind: AgentKindInner, Role: config.AgentRoleInterviewer,
-				Description: "Clarify consequential ambiguity in requirements and report focused questions and confirmed decisions."},
-			SystemPrompt: "You are an interviewer responsible for understanding the user's actual requirements. Read relevant context and create focused investigation tickets for additional work when needed. Ask only questions whose answers materially change the work. You cannot directly question the user in this child session: return the exact questions and why they matter to the caller. Distinguish confirmed answers from assumptions. Do not edit the workspace.",
-			Tools:        append([]string(nil), readTools...),
-			Delegates:    []string{BuiltinResearchID},
-		},
-		{
 			Info: DelegateInfo{Name: BuiltinManagerID, Source: "builtin", Kind: AgentKindInner, Role: config.AgentRoleManager,
 				Description: "Own product requirements, priorities, acceptance criteria, and the work plan; coordinate specialists as needed."},
-			SystemPrompt: "You are the project manager. Read the request and relevant workspace evidence yourself. Own the objective, priorities, dependencies, acceptance criteria, and a concise actionable plan. Create tickets for interviewing, research, or technical assessment when needed; use workspace_members to inspect eligible joined subagents and report the issued ticket IDs. Ticket assignment, execution and Integrator review are asynchronous. Do not directly invoke other subagents or wait synchronously for their results. Record unresolved questions and assumptions explicitly. Coordinate work rather than treating planning as a mandatory separate mode. Do not make direct workspace edits.",
+			SystemPrompt: "You are the project manager. Read the request and relevant workspace evidence yourself. Own the objective, priorities, dependencies, acceptance criteria, and a concise actionable plan. Create tickets for research or technical assessment when needed; use workspace_members to inspect eligible joined subagents and report the issued ticket IDs. Ticket assignment, execution and Integrator review are asynchronous. Do not directly invoke other subagents or wait synchronously for their results. Record unresolved questions and assumptions explicitly. Coordinate work rather than treating planning as a mandatory separate mode. Do not make direct workspace edits.",
 			Tools:        append([]string(nil), readTools...),
-			Delegates:    []string{BuiltinInterviewerID, BuiltinResearchID, BuiltinSeniorDeveloperID},
+			Delegates:    []string{BuiltinResearchID, BuiltinSeniorDeveloperID},
 		},
 		{
 			Info: DelegateInfo{Name: BuiltinSeniorDeveloperID, Source: "builtin", Kind: AgentKindInner, Role: config.AgentRoleReviewer,
@@ -418,6 +410,25 @@ func DefinitionForProfile(entry ProfileEntry) (AgentDefinition, error) {
 		Tools:        withoutRetiredSearchTools(entry.Profile.Tools), Delegates: append([]string(nil), entry.Profile.Delegates...),
 		StrictTools: true,
 	}, nil
+}
+
+// StoredDefinitionForProfile ignores grants to retired built-ins in saved profiles.
+// Use DefinitionForProfile to validate new or edited grants.
+func StoredDefinitionForProfile(entry ProfileEntry) (AgentDefinition, error) {
+	definition, err := DefinitionForProfile(entry)
+	if err != nil {
+		return AgentDefinition{}, err
+	}
+	grants := definition.Delegates[:0]
+	for _, target := range definition.Delegates {
+		switch target {
+		case "builtin/scout", "builtin/griller", "builtin/planner", "builtin/executor", "builtin/coder", "builtin/reviewer", "builtin/interviewer":
+			continue
+		}
+		grants = append(grants, target)
+	}
+	definition.Delegates = grants
+	return definition, nil
 }
 
 func profileMayMutate(tools []string) bool {

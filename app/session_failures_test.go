@@ -1,8 +1,11 @@
 package app
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -12,6 +15,7 @@ import (
 
 	"github.com/snowmerak/q/client"
 	"github.com/snowmerak/q/config"
+	"github.com/snowmerak/q/diagnostics"
 	"github.com/snowmerak/q/memory"
 	"github.com/snowmerak/q/sessionstore"
 	"github.com/snowmerak/q/workspace"
@@ -181,6 +185,72 @@ func TestLiveSessionSuccessfulManualCompactionDoesNotSendChat(t *testing.T) {
 	}
 	if got := session.prepared.state.messages; len(got) != len(history)+2 || !reflect.DeepEqual(got[:len(history)], history) {
 		t.Fatal("manual compaction altered the transcript")
+	}
+}
+
+func TestSessionHostLogsManualCompaction(t *testing.T) {
+	for _, test := range []struct {
+		status string
+		err    error
+	}{
+		{status: "completed"},
+		{status: "cancelled", err: context.Canceled},
+		{status: "failed", err: errors.New("private provider error")},
+	} {
+		t.Run(test.status, func(t *testing.T) {
+			session, _ := testCompactingSession(t, &sessionFailureClient{checkpointErr: test.err})
+			store := session.prepared.store
+			host := &SessionHost{ctx: t.Context(), store: session.prepared.state.store,
+				liveSessions: map[string]*liveSession{liveSessionKey(store, store.SessionID): session}}
+			var err error
+			session.configuration, err = host.sessionConfiguration(store)
+			if err != nil {
+				t.Fatal(err)
+			}
+			plan, err := session.prepared.state.memory.Plan()
+			if err != nil {
+				t.Fatal(err)
+			}
+			wantTokens := memory.CountMessages(plan.RequestMessages())
+			var logs bytes.Buffer
+			ctx := diagnostics.WithRequestID(t.Context(), "")
+			ctx = diagnostics.WithLogger(ctx, slog.New(slog.NewJSONHandler(&logs, nil)))
+			if _, err := host.Compact(ctx, store, store.SessionID); !errors.Is(err, test.err) {
+				t.Fatalf("compact error = %v, want %v", err, test.err)
+			}
+			var events []string
+			for _, line := range bytes.Split(bytes.TrimSpace(logs.Bytes()), []byte("\n")) {
+				var event struct {
+					Message    string `json:"msg"`
+					RequestID  string `json:"request_id"`
+					SessionID  string `json:"session_id"`
+					Tokens     int    `json:"input_tokens_estimate"`
+					DurationMS *int64 `json:"duration_ms"`
+					Status     string `json:"status"`
+				}
+				if err := json.Unmarshal(line, &event); err != nil {
+					t.Fatal(err)
+				}
+				if event.RequestID != diagnostics.RequestID(ctx) || event.SessionID != store.SessionID {
+					t.Fatalf("missing compaction correlation: %s", line)
+				}
+				events = append(events, event.Message)
+				switch event.Message {
+				case "studio.compact.model_input":
+					if event.Tokens != wantTokens || event.Tokens <= 0 {
+						t.Fatalf("input token estimate = %d, want %d", event.Tokens, wantTokens)
+					}
+				case "studio.compact.finished":
+					if event.Status != test.status || event.DurationMS == nil || *event.DurationMS < 0 {
+						t.Fatalf("incorrect compaction result: %s", line)
+					}
+				}
+			}
+			wantEvents := []string{"studio.compact.started", "studio.compact.model_input", "studio.compact.finished"}
+			if !reflect.DeepEqual(events, wantEvents) || strings.Contains(logs.String(), "old facts") || strings.Contains(logs.String(), "private provider error") {
+				t.Fatalf("unexpected compaction logs: %s", logs.String())
+			}
+		})
 	}
 }
 

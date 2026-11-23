@@ -5,14 +5,17 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"strings"
 	"sync"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/snowmerak/llm-provider/gateway"
 	"github.com/snowmerak/q/client"
 	"github.com/snowmerak/q/config"
 	"github.com/snowmerak/q/coordinator"
+	"github.com/snowmerak/q/diagnostics"
 	"github.com/snowmerak/q/internal/hostruntime"
 	"github.com/snowmerak/q/internal/workitemtools"
 	qlibrary "github.com/snowmerak/q/library"
@@ -452,7 +455,7 @@ func (host *SessionHost) run(
 
 // Compact summarizes older context for one inactive session without adding a
 // user message or changing its transcript.
-func (host *SessionHost) Compact(requestContext context.Context, workspaceStore workspace.Store, sessionID string) (string, error) {
+func (host *SessionHost) Compact(requestContext context.Context, workspaceStore workspace.Store, sessionID string) (status string, resultErr error) {
 	if host == nil {
 		return "", fmt.Errorf("%w: host is unavailable", ErrSessionRuntimeUnavailable)
 	}
@@ -462,12 +465,33 @@ func (host *SessionHost) Compact(requestContext context.Context, workspaceStore 
 	if strings.TrimSpace(sessionID) == "" {
 		return "", errors.New("session ID is required")
 	}
+	if requestContext == nil {
+		requestContext = context.Background()
+	}
+	ctx := diagnostics.WithAttrs(requestContext, slog.String("session_id", sessionID))
+	logger := diagnostics.Logger(ctx)
+	started := time.Now()
+	logger.InfoContext(ctx, "studio.compact.started")
+	defer func() {
+		outcome, level := "completed", slog.LevelInfo
+		switch {
+		case errors.Is(resultErr, context.DeadlineExceeded):
+			outcome, level = "timeout", slog.LevelError
+		case errors.Is(resultErr, context.Canceled):
+			outcome = "cancelled"
+		case resultErr != nil:
+			outcome, level = "failed", slog.LevelError
+		case status == nothingToCompactStatus:
+			outcome = "skipped"
+		}
+		logger.Log(ctx, level, "studio.compact.finished", "status", outcome, "duration_ms", time.Since(started).Milliseconds())
+	}()
 	session, err := host.acquireLiveSession(workspaceStore, sessionID)
 	if err != nil {
 		return "", err
 	}
 	defer session.busy.Unlock()
-	return session.execute(requestContext, "", true, nil, nil)
+	return session.execute(ctx, "", true, nil, nil)
 }
 
 type preparedSession struct {

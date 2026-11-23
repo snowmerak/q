@@ -1,8 +1,10 @@
 package studio
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
+	"slices"
 	"testing"
 
 	"github.com/snowmerak/q/config"
@@ -10,6 +12,79 @@ import (
 	"github.com/snowmerak/q/subagent"
 	"github.com/snowmerak/q/workitems"
 )
+
+func TestNewProjectJoinsBuiltinSubagents(t *testing.T) {
+	dir := studioCatalogTestDirectory(t, t.TempDir())
+	handler, err := newHandler(config.Store{Dir: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{
+		subagent.BuiltinManagerID, subagent.BuiltinSeniorDeveloperID,
+		subagent.BuiltinJuniorDeveloperID, subagent.BuiltinCodeReviewerID, subagent.BuiltinResearchID,
+	}
+	readDefaults := func() workitems.ProjectDefaults {
+		t.Helper()
+		response := serveJSON(t, handler, http.MethodGet, "/api/v1/project-defaults", nil)
+		var defaults workitems.ProjectDefaults
+		if err := json.Unmarshal(response.Body.Bytes(), &defaults); response.Code != 200 || err != nil {
+			t.Fatalf("defaults: %d %s (%v)", response.Code, response.Body.String(), err)
+		}
+		return defaults
+	}
+	defaults := readDefaults()
+	if !slices.Equal(defaults.AgentIDs, want) {
+		t.Fatalf("initial defaults = %v, want %v", defaults.AgentIDs, want)
+	}
+	createProject := func(name string, initial *[]workitems.MemberInput, expected []string) {
+		t.Helper()
+		root := t.TempDir()
+		response := serveJSON(t, handler, http.MethodPost, "/api/v1/projects", studioProjectUpdateRequest{
+			Name: name, WorkspaceRoots: []string{root}, InitialMembers: initial,
+		})
+		var project studioProject
+		if err := json.Unmarshal(response.Body.Bytes(), &project); response.Code != 201 || err != nil {
+			t.Fatalf("create project: %d %s (%v)", response.Code, response.Body.String(), err)
+		}
+		response = serveJSON(t, handler, http.MethodGet, "/api/v1/projects/"+project.ID+"/members", nil)
+		var members library.MemberList
+		if err := json.Unmarshal(response.Body.Bytes(), &members); response.Code != 200 || err != nil {
+			t.Fatalf("members: %d %s (%v)", response.Code, response.Body.String(), err)
+		}
+		var ids []string
+		for _, member := range members.Members {
+			if member.DefinitionRoot != project.WorkspaceRoots[0] || member.ExecutionRoot != project.WorkspaceRoots[0] || member.Disabled {
+				t.Fatalf("unexpected binding: %+v", member)
+			}
+			ids = append(ids, member.AgentID)
+		}
+		slices.Sort(ids)
+		if !slices.Equal(ids, slices.Sorted(slices.Values(expected))) {
+			t.Fatalf("project members = %v, want %v", ids, expected)
+		}
+	}
+	createProject("Initial built-ins", nil, want)
+	createProject("Explicitly empty", &[]workitems.MemberInput{}, nil)
+
+	defaults.AgentIDs = []string{"builtin/interviewer", subagent.BuiltinResearchID}
+	if _, err := withProjectCatalog(newStudioProjectStore(dir), func(ctx context.Context, c *library.Client) (workitems.ProjectDefaults, error) {
+		return c.UpdateProjectDefaults(ctx, defaults)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	defaults = readDefaults()
+	if !slices.Equal(defaults.AgentIDs, []string{subagent.BuiltinResearchID}) {
+		t.Fatalf("legacy defaults = %v", defaults.AgentIDs)
+	}
+	createProject("Legacy defaults", nil, defaults.AgentIDs)
+
+	defaults.AgentIDs = []string{}
+	response := serveJSON(t, handler, http.MethodPut, "/api/v1/project-defaults", defaults)
+	if response.Code != 200 {
+		t.Fatal(response.Body.String())
+	}
+	createProject("Saved empty defaults", nil, nil)
+}
 
 func TestProjectSettingsAPIValidatesProfilesAndSnapshotsDefaults(t *testing.T) {
 	dir := studioCatalogTestDirectory(t, t.TempDir())

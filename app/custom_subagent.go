@@ -81,7 +81,7 @@ func (m model) resolvePublicAgent(name string) (subagent.AgentDefinition, error)
 	if err != nil {
 		return subagent.AgentDefinition{}, err
 	}
-	return definitionForStoredProfile(entry)
+	return subagent.StoredDefinitionForProfile(entry)
 }
 
 func (m model) customInfo(command string) string {

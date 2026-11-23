@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { Check, ChevronDown, ChevronsDown, CircleCheck, CircleDot, CircleX, ClipboardList, FileText, GitCompareArrows, GitMerge, Link2, MessageSquareReply, Pencil, Plus, RefreshCw, RotateCcw, Save, Search, Send, Settings2, SlidersHorizontal, X } from '@lucide/svelte';
+  import { Check, ChevronDown, ChevronLeft, ChevronRight, ChevronsDown, CircleCheck, CircleDot, CircleX, ClipboardList, FileText, GitCompareArrows, GitMerge, Link2, MessageSquareReply, Pencil, Plus, RefreshCw, RotateCcw, Save, Search, Send, Settings2, SlidersHorizontal, X } from '@lucide/svelte';
   import { requestResponse } from './api';
   import Markdown from './Markdown.svelte';
   import AttemptResult from './workitems/AttemptResult.svelte';
@@ -11,6 +11,7 @@
   import type { StudioProject } from './sessions/types';
   export let kind: 'issue' | 'ticket' = 'issue';
   type Item = { parent_ticket_id?: string; handoff_member_id?: string; depends_on?: string[]; waiting_on?: string[]; schedule?: TicketSchedule; schedule_id?: string; scheduled_for?: string; next_scheduled_at?: string; id: string; workspace_id: string; kind: string; number: number; title: string; body_post_id: string; state: string; labels: string[]; acceptance?: string[]; execution_mode?: string; requested_member_id?: string; linked_issue_id?: string; execution_state?: string; execution_reason?: string; active_attempt_id?: string; assigned_member_id?: string; revision: number; deleted: boolean; updated_at: string };
+  type ItemPage = { items: Item[]; next_cursor?: string };
   type Member = { id: string; workspace_id: string; agent_id: string; definition_root: string; execution_root: string; revision: number; disabled: boolean };
   type Attempt = { id: string; ticket_id: string; status: string; worker_session_id: string; member_id: string; acceptance?: string[]; result?: unknown; feedback?: string; operation_error?: string; change_request?: { head_commit?: string; base_commit?: string; base_ref?: string; status: string } };
   type Post = { id: string; item_id: string; kind: string; content: string; content_truncated?: boolean; author: string; refs?: string[]; revision: number; deleted: boolean; created_at: string };
@@ -23,6 +24,13 @@
   let workspaceID = '';
   let items: Item[] = [];
   let cursor = '';
+  let doneItems: Item[] = [];
+  let doneCursors = [''];
+  let doneNext = '';
+  let doneWorkspace = '';
+  let doneLoading = false;
+  let doneGeneration = 0;
+  const donePageSize = 20;
   let selected: Item | null = null;
   let posts: Post[] = [];
   let threadCursor = '';
@@ -77,7 +85,12 @@
   let loadedKind = kind;
   let listGeneration = 0;
   let detailGeneration = 0;
-  const columns = [{ id: 'todo', name: 'To do' }, { id: 'in_progress', name: 'In progress' }, { id: 'done', name: 'Done' }];
+  const columns = [{ id: 'todo', name: 'To do' }, { id: 'in_progress', name: 'In progress' }, { id: 'done', name: 'Done' }] as const;
+  $: columnItems = {
+    todo: items.filter(item => !item.deleted && item.state === 'todo'),
+    in_progress: items.filter(item => !item.deleted && item.state === 'in_progress'),
+    done: doneItems.filter(item => !item.deleted && item.state === 'done')
+  };
   $: project = projects.find(value => value.id === workspaceID);
   $: if (mounted && loadedKind !== kind) { loadedKind = kind; selected = null; searched = false; creating = false; void loadItems(); }
   async function json<T>(path: string, init?: RequestInit): Promise<T> { return (await requestResponse('/api/v1/' + path, init)).json(); }
@@ -96,12 +109,13 @@
         parentID ? json<Item>(`work/items/${parentID}`) : Promise.resolve(null)
       ]);
       if (selected?.id !== id) return;
+      const current = items.find(item => item.id === id) ?? doneItems.find(item => item.id === id) ?? await json<Item>(`work/items/${id}`);
+      if (selected?.id !== id) return;
       attempts = value.attempts;
       children = childPage.items;
       parent = parentItem;
       deliveryErrors = inbox.entries.filter(entry => entry.ticket_id === id && !entry.delivered && entry.delivery_error);
-      const current = items.find(item => item.id === id);
-      if (current && current.revision >= selected.revision) selected = current;
+      if (current.revision >= selected.revision) selected = current;
     } catch (cause) { if (selected?.id === id) message(cause); }
   }
   async function controlTicket(action: string) { if (!selected) return; busy = true; error = ''; try { selected = await json<Item>(`work/items/${selected.id}/control`, write('POST', { action, ...(action === 'handoff' ? { member_id: handoffMemberID } : {}), revision: selected.revision, request_id: crypto.randomUUID() })); await loadItems(); await loadAttempts(selected.id); } catch (cause) { message(cause); } finally { busy = false; } }
@@ -110,16 +124,45 @@
   async function openWorkspaceRole(role: 'coordinator' | 'integrator') { try { const value = await json<{ registration_id: string }>(`projects/${workspaceID}/${role}`); location.href = `/sessions/${value.registration_id}`; } catch (cause) { message(cause); } }
   async function revealPost(id: string) { const value = await json<{ post: Post; next_cursor?: string }>(`work/posts/${id}?limit=8192`); if (!posts.some(p => p.id === id)) posts = [...posts, value.post]; expanded = { ...expanded, [id]: { content: value.post.content, cursor: value.next_cursor || '' } }; }
   function permalink(post?: Post) { if (!selected) return ''; const params = new URLSearchParams({ workspace_id: selected.workspace_id, item_id: selected.id }); if (post) params.set('post_id', post.id); return `/${selected.kind === 'ticket' ? 'tickets' : 'issues'}?${params}`; }
+  async function loadDone(cursors: string[]) {
+    const workspace = workspaceID;
+    const generation = ++doneGeneration;
+    doneLoading = true;
+    try {
+      const params = new URLSearchParams({ workspace_id: workspace, kind: 'ticket', board: 'done', limit: String(donePageSize), cursor: cursors[cursors.length - 1] });
+      const value = await json<ItemPage>(`work/items?${params}`);
+      if (generation !== doneGeneration || workspace !== workspaceID || kind !== 'ticket') return;
+      doneItems = value.items;
+      doneCursors = cursors;
+      doneNext = value.next_cursor || '';
+    } catch (cause) {
+      if (generation === doneGeneration) message(cause);
+    } finally {
+      if (generation === doneGeneration) doneLoading = false;
+    }
+  }
   async function loadItems(more = false, refresh = false) {
     const generation = ++listGeneration;
-    if (!workspaceID) { items = []; return; }
+    const doneScope = kind === 'ticket' ? workspaceID : '';
+    if (doneScope !== doneWorkspace) {
+      doneWorkspace = doneScope;
+      doneGeneration++;
+      doneItems = [];
+      doneCursors = [''];
+      doneNext = '';
+      doneLoading = false;
+    }
+    if (!workspaceID) { items = []; cursor = ''; loading = false; return; }
+    if (doneScope && !more && !doneLoading && doneCursors.length === 1) void loadDone(doneCursors);
     loading = true;
     const target = refresh ? items.length : 0;
     let next = more ? cursor : '';
     let loaded: Item[] = [];
     try {
       do {
-        const value = await json<{ items: Item[]; next_cursor?: string }>(`work/items?${new URLSearchParams({ workspace_id: workspaceID, kind, cursor: next, limit: '100' })}`);
+        const params = new URLSearchParams({ workspace_id: workspaceID, kind, cursor: next, limit: '100' });
+        if (kind === 'ticket') params.set('board', 'active');
+        const value = await json<ItemPage>(`work/items?${params}`);
         if (generation !== listGeneration) return;
         loaded = [...loaded, ...value.items];
         next = value.next_cursor || '';
@@ -206,7 +249,31 @@
   {#if searched}<section aria-label="Work search results"><small>{searchStatus}{embeddingPending ? ' · embeddings pending' : ''}</small>{#each hits as hit}<button class="search-hit" onclick={() => chooseHit(hit)}><strong>{hit.title}</strong><p>{hit.snippet}</p><code>{hit.workspace_id} · post {hit.post_id} · revision {hit.revision} · offset {hit.offset}</code></button>{:else}<p>No matching passages.</p>{/each}{#if searchCursor}<button class="secondary-button work-icon-button" onclick={() => search(true)} disabled={busy} title="More search results" aria-label="More search results"><ChevronDown aria-hidden="true" size={17} /></button>{/if}</section>{/if}
   <div class:ticket-layout={kind === 'ticket'} class:has-selection={!!selected} class="work-layout">
     <section class="work-list" aria-label={kind === 'ticket' ? 'Ticket board' : 'Issue list'}>
-      {#if kind === 'ticket'}<div class="ticket-board">{#each columns as column}<section class="ticket-column"><h2><span class="column-dot" class:in-progress={column.id === 'in_progress'} class:done={column.id === 'done'}></span>{column.name}<span class="column-count" aria-hidden="true">{items.filter(i => !i.deleted && i.state === column.id).length}</span></h2>{#each items.filter(i => !i.deleted && i.state === column.id) as item}<button class="work-card" class:active={selected?.id === item.id} onclick={() => selectItem(item.id)}><strong>#{item.number} {item.title}</strong><small>{item.execution_mode} · {executionLabel(item.execution_state, item)}</small>{#if item.schedule}<small>{item.schedule.paused ? 'Paused · ' : ''}{item.schedule.every ? `Every ${item.schedule.every} · Next ${scheduleTime(item.next_scheduled_at)}` : `Available ${scheduleTime(item.schedule.not_before)}`}</small>{:else if item.schedule_id}<small>Scheduled run · {scheduleTime(item.scheduled_for)}</small>{/if}{#each item.labels as label}<span>{label}</span>{/each}</button>{:else}<p class="column-empty">No tickets</p>{/each}</section>{/each}</div>{:else}{#each items.filter(i => !i.deleted) as item}<button class="work-card" class:active={selected?.id === item.id} onclick={() => selectItem(item.id)}><strong>#{item.number} {item.title}</strong><small>{item.state}</small>{#each item.labels as label}<span>{label}</span>{/each}</button>{:else}<div class="work-empty"><div class="empty-symbol"><FileText size={23} /></div><h2>{loading ? 'Loading issues…' : 'No issues yet'}</h2><p>{workspaceID ? 'Keep project decisions, findings, and discussions together.' : 'Select a project to view its issues.'}</p>{#if workspaceID && !loading}<button class="primary-button" disabled={busy} onclick={() => creating = true}><Plus aria-hidden="true" size={15} />Create an issue</button>{/if}</div>{/each}{/if}
+      {#if kind === 'ticket'}
+        <div class="ticket-board">
+          {#each columns as column}
+            <section class="ticket-column" aria-label={column.name} aria-busy={column.id === 'done' ? doneLoading : loading}>
+              <h2><span class="column-dot" class:in-progress={column.id === 'in_progress'} class:done={column.id === 'done'}></span>{column.name}<span class="column-count" aria-hidden="true">{columnItems[column.id].length}</span></h2>
+              {#each columnItems[column.id] as item (item.id)}
+                <button class="work-card" class:active={selected?.id === item.id} onclick={() => selectItem(item.id)}>
+                  <strong>#{item.number} {item.title}</strong>
+                  <small>{item.execution_mode} · {executionLabel(item.execution_state, item)}</small>
+                  {#if item.schedule}<small>{item.schedule.paused ? 'Paused · ' : ''}{item.schedule.every ? `Every ${item.schedule.every} · Next ${scheduleTime(item.next_scheduled_at)}` : `Available ${scheduleTime(item.schedule.not_before)}`}</small>
+                  {:else if item.schedule_id}<small>Scheduled run · {scheduleTime(item.scheduled_for)}</small>{/if}
+                  {#each item.labels as label}<span>{label}</span>{/each}
+                </button>
+              {:else}<p class="column-empty">{(column.id === 'done' ? doneLoading : loading) ? 'Loading tickets…' : 'No tickets'}</p>{/each}
+              {#if column.id === 'done' && (doneNext || doneCursors.length > 1)}
+                <nav class="column-pagination" aria-label="Done pages">
+                  <button class="secondary-button work-icon-button" title="Newer tickets" aria-label="Newer done tickets" disabled={doneLoading || doneCursors.length === 1} onclick={() => loadDone(doneCursors.slice(0, -1))}><ChevronLeft aria-hidden="true" size={17} /></button>
+                  <span>Page {doneCursors.length}</span>
+                  <button class="secondary-button work-icon-button" title="Older tickets" aria-label="Older done tickets" disabled={doneLoading || !doneNext} onclick={() => loadDone([...doneCursors, doneNext])}><ChevronRight aria-hidden="true" size={17} /></button>
+                </nav>
+              {/if}
+            </section>
+          {/each}
+        </div>
+      {:else}{#each items.filter(i => !i.deleted) as item}<button class="work-card" class:active={selected?.id === item.id} onclick={() => selectItem(item.id)}><strong>#{item.number} {item.title}</strong><small>{item.state}</small>{#each item.labels as label}<span>{label}</span>{/each}</button>{:else}<div class="work-empty"><div class="empty-symbol"><FileText size={23} /></div><h2>{loading ? 'Loading issues…' : 'No issues yet'}</h2><p>{workspaceID ? 'Keep project decisions, findings, and discussions together.' : 'Select a project to view its issues.'}</p>{#if workspaceID && !loading}<button class="primary-button" disabled={busy} onclick={() => creating = true}><Plus aria-hidden="true" size={15} />Create an issue</button>{/if}</div>{/each}{/if}
       {#if cursor}<button class="secondary-button work-icon-button" onclick={() => loadItems(true)} disabled={loading} title={`More ${kind}s`} aria-label={`More ${kind}s`}><ChevronDown aria-hidden="true" size={17} /></button>{/if}
     </section>
     {#if selected}<section class="work-thread" aria-label="Work item thread"><header><div class="thread-heading"><small>{project?.name} · {selected.state}</small><div class="work-action-group"><button class="secondary-button work-icon-button" onclick={beginDetails} disabled={busy} title="Edit details" aria-label="Edit details"><Settings2 aria-hidden="true" size={17} /></button>{#if kind === 'issue'}<button class="secondary-button work-icon-button" onclick={toggleIssue} disabled={busy} title={selected.state === 'open' ? 'Close issue' : 'Reopen issue'} aria-label={selected.state === 'open' ? 'Close issue' : 'Reopen issue'}>{#if selected.state === 'open'}<CircleCheck aria-hidden="true" size={17} />{:else}<CircleDot aria-hidden="true" size={17} />{/if}</button>{/if}</div></div><h2>#{selected.number} {selected.title}</h2><code>{selected.id}</code></header>
@@ -344,6 +411,7 @@
   .column-dot.in-progress { background: var(--accent); }
   .column-dot.done { background: var(--green); }
   .column-empty { margin: 16px 0 0; color: var(--subtle); text-align: center; font-size: calc(12px * var(--text-scale)); }
+  .column-pagination { display: flex; align-items: center; justify-content: center; gap: 10px; color: var(--muted); font-size: calc(12px * var(--text-scale)); }
   @media (max-width: 1000px) {
     .work-search { grid-template-columns: minmax(0, 1fr) 130px auto; }
     .work-query { grid-column: 1 / -1; }

@@ -19,6 +19,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 const engineProtocol = 1
@@ -152,12 +154,13 @@ func (p *engineProcess) close() error {
 // engineHost serializes ownership changes and allows in-flight proxy requests
 // to finish against their original generation during a reconnect.
 type engineHost struct {
-	mu          sync.RWMutex
-	process     *engineProcess
-	path        string
-	diagnostics io.Writer
-	logger      *slog.Logger
-	proxy       *httputil.ReverseProxy
+	mu           sync.RWMutex
+	process      *engineProcess
+	path         string
+	diagnostics  io.Writer
+	logger       *slog.Logger
+	proxy        *httputil.ReverseProxy
+	compactProxy *httputil.ReverseProxy
 }
 
 type proxyRequestContextKey struct{}
@@ -165,29 +168,35 @@ type proxyRequestContextKey struct{}
 type engineProxyRequest struct {
 	endpoint engineEndpoint
 	started  time.Time
+	id       string
 }
 
 func newEngineHost(path string, diagnostics io.Writer, logger *slog.Logger) *engineHost {
 	host := &engineHost{path: path, diagnostics: diagnostics, logger: logger}
 	host.proxy = &httputil.ReverseProxy{
 		Rewrite: func(request *httputil.ProxyRequest) {
-			endpoint := request.In.Context().Value(proxyRequestContextKey{}).(engineProxyRequest).endpoint
-			target, _ := url.Parse(endpoint.URL)
+			proxied := request.In.Context().Value(proxyRequestContextKey{}).(engineProxyRequest)
+			target, _ := url.Parse(proxied.endpoint.URL)
 			request.SetURL(target)
 			request.Out.Host = target.Host
-			request.Out.Header.Set("Authorization", "Bearer "+endpoint.Token)
+			request.Out.Header.Set("Authorization", "Bearer "+proxied.endpoint.Token)
+			request.Out.Header.Set("X-Request-ID", proxied.id)
 			request.Out.Header.Del("Cookie")
 			request.Out.Header.Del("Origin")
 		},
 		Transport: &http.Transport{Proxy: nil, ResponseHeaderTimeout: 40 * time.Second},
 		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
+			request := r.Context().Value(proxyRequestContextKey{}).(engineProxyRequest)
+			w.Header().Set("X-Request-ID", request.id)
 			if !errors.Is(err, context.Canceled) {
-				request := r.Context().Value(proxyRequestContextKey{}).(engineProxyRequest)
-				host.logProxyFailure(r, request.started, proxyFailureReason(err), err.Error())
+				host.logProxyFailure(r, request, proxyFailureReason(err), err.Error())
 			}
 			http.Error(w, "Q engine reconnecting. Reopen Q Studio in a moment.", http.StatusServiceUnavailable)
 		},
 	}
+	compactProxy := *host.proxy
+	compactProxy.Transport = &http.Transport{Proxy: nil, ResponseHeaderTimeout: 5 * time.Minute}
+	host.compactProxy = &compactProxy
 	return host
 }
 
@@ -216,15 +225,41 @@ func (h *engineHost) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	started := time.Now()
+	request := engineProxyRequest{started: time.Now(), id: proxyRequestID(r)}
 	endpoint, ok := h.endpoint()
 	if !ok {
-		h.logProxyFailure(r, started, "engine_unavailable", "no Q engine endpoint is connected")
+		w.Header().Set("X-Request-ID", request.id)
+		h.logProxyFailure(r, request, "engine_unavailable", "no Q engine endpoint is connected")
 		http.Error(w, "Q engine reconnecting", http.StatusServiceUnavailable)
 		return
 	}
-	request := engineProxyRequest{endpoint: endpoint, started: started}
-	h.proxy.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), proxyRequestContextKey{}, request)))
+	request.endpoint = endpoint
+	proxy := h.proxy
+	if isCompactRequest(r) {
+		proxy = h.compactProxy
+		h.logger.InfoContext(r.Context(), "desktop.engine.compact.forwarded",
+			"request_id", request.id, "method", r.Method, "path", boundedProxyLogText(r.URL.EscapedPath()),
+			"response_header_timeout_ms", proxy.Transport.(*http.Transport).ResponseHeaderTimeout.Milliseconds())
+	}
+	proxy.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), proxyRequestContextKey{}, request)))
+}
+
+func proxyRequestID(r *http.Request) string {
+	if supplied := r.Header.Get("X-Request-ID"); len(supplied) == 36 {
+		if id, err := uuid.Parse(supplied); err == nil {
+			return id.String()
+		}
+	}
+	return uuid.NewString()
+}
+
+func isCompactRequest(r *http.Request) bool {
+	if r.Method != http.MethodPost {
+		return false
+	}
+	path, ok := strings.CutPrefix(r.URL.EscapedPath(), "/api/v1/sessions/")
+	session, action, _ := strings.Cut(path, "/")
+	return ok && session != "" && action == "compact"
 }
 
 func proxyFailureReason(err error) string {
@@ -237,10 +272,11 @@ func proxyFailureReason(err error) string {
 	return "transport_error"
 }
 
-func (h *engineHost) logProxyFailure(r *http.Request, started time.Time, reason, detail string) {
+func (h *engineHost) logProxyFailure(r *http.Request, request engineProxyRequest, reason, detail string) {
 	h.logger.ErrorContext(r.Context(), "desktop.engine.proxy_failed",
+		"request_id", request.id,
 		"method", boundedProxyLogText(r.Method), "path", boundedProxyLogText(r.URL.EscapedPath()),
-		"status", http.StatusServiceUnavailable, "duration_ms", time.Since(started).Milliseconds(),
+		"status", http.StatusServiceUnavailable, "duration_ms", time.Since(request.started).Milliseconds(),
 		"reason_code", reason, "error", boundedProxyLogText(detail))
 }
 
@@ -287,6 +323,7 @@ func (h *engineHost) close() {
 		_ = p.close()
 	}
 	h.proxy.Transport.(*http.Transport).CloseIdleConnections()
+	h.compactProxy.Transport.(*http.Transport).CloseIdleConnections()
 }
 
 // Reconnect the engine, never replay an accepted agent turn. Borrowed engines

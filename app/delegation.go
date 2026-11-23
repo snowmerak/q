@@ -126,33 +126,13 @@ func buildSubagentRegistry(store subagent.ProfileStore) (*subagent.Registry, err
 		if entry.Err != nil {
 			continue
 		}
-		definition, err := definitionForStoredProfile(entry)
+		definition, err := subagent.StoredDefinitionForProfile(entry)
 		if err != nil {
 			return nil, err
 		}
 		definitions = append(definitions, definition)
 	}
 	return subagent.NewRegistry(definitions)
-}
-
-// Retired grants in existing profiles have no target. Ignore only those grants
-// at runtime so other subagents remain usable; new profile saves still reject
-// them through normal registry validation.
-func definitionForStoredProfile(entry subagent.ProfileEntry) (subagent.AgentDefinition, error) {
-	definition, err := subagent.DefinitionForProfile(entry)
-	if err != nil {
-		return subagent.AgentDefinition{}, err
-	}
-	grants := definition.Delegates[:0]
-	for _, target := range definition.Delegates {
-		switch target {
-		case "builtin/scout", "builtin/griller", "builtin/planner", "builtin/executor", "builtin/coder", "builtin/reviewer":
-			continue
-		}
-		grants = append(grants, target)
-	}
-	definition.Delegates = grants
-	return definition, nil
 }
 
 func (m model) configuredDelegationRuntime(base agentToolRuntime, root string) (agentToolRuntime, error) {

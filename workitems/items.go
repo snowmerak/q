@@ -142,6 +142,12 @@ type Change struct {
 	PostID      string `json:"post_id,omitempty"`
 }
 
+const (
+	visibleBoardTicket = `kind='ticket' AND coalesce(json_extract(payload,'$.deleted'),0)=0`
+	activeBoardTickets = visibleBoardTicket + ` AND json_extract(payload,'$.state') IN ('todo','in_progress')`
+	doneBoardTickets   = visibleBoardTicket + ` AND json_extract(payload,'$.state')='done'`
+)
+
 func (s *Store) initializeItems(ctx context.Context) error {
 	_, err := s.db.ExecContext(ctx, `
 CREATE TABLE IF NOT EXISTS items (
@@ -150,6 +156,8 @@ CREATE TABLE IF NOT EXISTS items (
  number INTEGER NOT NULL, payload BLOB NOT NULL, UNIQUE(workspace_id,kind,number)
 );
 CREATE INDEX IF NOT EXISTS items_workspace ON items(workspace_id,kind,seq);
+CREATE INDEX IF NOT EXISTS items_ticket_board_active ON items(workspace_id,seq) WHERE `+activeBoardTickets+`;
+CREATE INDEX IF NOT EXISTS items_ticket_board_done ON items(workspace_id,seq) WHERE `+doneBoardTickets+`;
 CREATE TABLE IF NOT EXISTS posts (
  id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL REFERENCES workspaces(id), item_id TEXT NOT NULL REFERENCES items(id),
  seq INTEGER NOT NULL, revision INTEGER NOT NULL, payload BLOB NOT NULL, UNIQUE(item_id,seq)
@@ -720,6 +728,40 @@ func (s *Store) ListItems(ctx context.Context, workspaceID, kind, token string, 
 	}
 	query += ` ORDER BY seq LIMIT ?`
 	args = append(args, limit+1)
+	return s.readItemPage(ctx, c, limit, query, args...)
+}
+
+// ListBoardTickets gives active work and completed history separate cursors.
+// Completed history is ordered newest ticket number first.
+func (s *Store) ListBoardTickets(ctx context.Context, workspaceID, view, token string, limit int) (ItemPage, error) {
+	if workspaceID == "" || (view != "active" && view != "done") {
+		return ItemPage{}, ErrInvalidInput
+	}
+	c, err := readCursor(token, "ticket-board:"+workspaceID+":"+view)
+	if err != nil {
+		return ItemPage{}, err
+	}
+	if token == "" {
+		if err := s.db.QueryRowContext(ctx, `SELECT coalesce(max(seq),0) FROM items`).Scan(&c.Upper); err != nil {
+			return ItemPage{}, err
+		}
+	}
+	limit = pageLimit(limit)
+	prefix := `SELECT seq,` + itemReadPayload + ` FROM items WHERE workspace_id=? AND seq<=? AND `
+	if view == "active" {
+		query := prefix + activeBoardTickets + ` AND seq>? ORDER BY seq LIMIT ?`
+		return s.readItemPage(ctx, c, limit, query, workspaceID, c.Upper, c.After, limit+1)
+	}
+	query := prefix + doneBoardTickets
+	args := []any{workspaceID, c.Upper}
+	if c.After > 0 {
+		query += ` AND seq<?`
+		args = append(args, c.After)
+	}
+	return s.readItemPage(ctx, c, limit, query+` ORDER BY seq DESC LIMIT ?`, append(args, limit+1)...)
+}
+
+func (s *Store) readItemPage(ctx context.Context, c pageCursor, limit int, query string, args ...any) (ItemPage, error) {
 	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return ItemPage{}, err

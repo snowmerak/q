@@ -70,7 +70,7 @@ func TestStoredProfileRetiredGrantsAreInactiveButNewGrantsAreRejected(t *testing
 	legacy := subagent.Profile{
 		Version: 1, Name: "legacy-reader", Role: config.AgentRoleAdvisor,
 		SystemPrompt: "Read.", Tools: []string{},
-		Delegates: []string{"builtin/scout", "builtin/griller", "builtin/planner", "builtin/executor", "builtin/coder", "builtin/reviewer", subagent.BuiltinSeniorDeveloperID},
+		Delegates: []string{"builtin/scout", "builtin/griller", "builtin/planner", "builtin/executor", "builtin/coder", "builtin/reviewer", "builtin/interviewer", subagent.BuiltinSeniorDeveloperID},
 	}
 	if err := m.customStore().Save(legacy, "workspace", nil); err != nil {
 		t.Fatal(err)

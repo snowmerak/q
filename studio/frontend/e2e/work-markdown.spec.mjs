@@ -63,7 +63,7 @@ test('ticket reports and feedback render as Markdown while retaining raw result 
   const details = page.locator('.work-thread details').filter({ has: attempt });
   await details.locator(':scope > summary').click();
   await expect(attempt.locator('.markdown-body h1')).toHaveText('Report');
-  await expect(page.getByRole('region', { name: 'Integrator feedback' }).locator('strong')).toHaveText('Accepted evidence');
+  await expect(page.getByRole('region', { name: 'Review feedback' }).locator('strong')).toHaveText('Accepted evidence');
   await attempt.getByText('Raw result', { exact: true }).click();
   expect(JSON.parse(await attempt.locator('pre').textContent())).toEqual(result);
   await page.getByRole('button', { name: 'Read worker conversation', exact: true }).click();

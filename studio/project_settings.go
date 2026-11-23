@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
 
 	"github.com/snowmerak/q/config"
 	"github.com/snowmerak/q/library"
@@ -119,15 +120,30 @@ func (s *sessionsService) serveProjectDefaults(w http.ResponseWriter, r *http.Re
 		if r.Method == http.MethodPut {
 			return c.UpdateProjectDefaults(ctx, value)
 		}
-		return c.GetProjectDefaults(ctx)
+		return loadProjectDefaults(ctx, c)
 	})
+}
+
+func loadProjectDefaults(ctx context.Context, c *library.Client) (workitems.ProjectDefaults, error) {
+	defaults, err := c.GetProjectDefaults(ctx)
+	if err != nil {
+		return defaults, err
+	}
+	// The catalog starts at revision 1. Later revisions can intentionally be empty.
+	if defaults.Revision == 1 && len(defaults.AgentIDs) == 0 {
+		for _, definition := range subagent.BuiltinAgentDefinitions() {
+			defaults.AgentIDs = append(defaults.AgentIDs, definition.Info.Name)
+		}
+	}
+	defaults.AgentIDs = slices.DeleteFunc(defaults.AgentIDs, func(id string) bool {
+		return id == "builtin/interviewer"
+	})
+	return defaults, nil
 }
 
 func (s *sessionsService) prepareInitialMembers(input *studioProjectUpdateRequest) error {
 	if input.InitialMembers == nil {
-		defaults, err := withProjectCatalog(s.projects, func(ctx context.Context, c *library.Client) (workitems.ProjectDefaults, error) {
-			return c.GetProjectDefaults(ctx)
-		})
+		defaults, err := withProjectCatalog(s.projects, loadProjectDefaults)
 		if err != nil {
 			return err
 		}

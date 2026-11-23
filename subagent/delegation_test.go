@@ -12,17 +12,19 @@ import (
 
 func TestBuiltinAgentDefinitionsArePublicAndBounded(t *testing.T) {
 	definitions := BuiltinAgentDefinitions()
-	if len(definitions) != 6 {
+	if len(definitions) != 5 {
 		t.Fatalf("builtins = %#v", definitions)
 	}
 	registry, err := NewRegistry(definitions)
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{BuiltinCodeReviewerID, BuiltinInterviewerID, BuiltinJuniorDeveloperID, BuiltinManagerID, BuiltinResearchID, BuiltinSeniorDeveloperID}
+	want := []string{BuiltinCodeReviewerID, BuiltinJuniorDeveloperID, BuiltinManagerID, BuiltinResearchID, BuiltinSeniorDeveloperID}
 	listed := registry.List()
-	if _, found := registry.Get("builtin/reviewer"); found {
-		t.Fatal("retired reviewer ID is still registered")
+	for _, id := range []string{"builtin/reviewer", "builtin/interviewer"} {
+		if _, found := registry.Get(id); found {
+			t.Fatalf("retired ID %q is still registered", id)
+		}
 	}
 	if slices.Contains(delegateNames(registry.Allowed("")), BuiltinJuniorDeveloperID) {
 		t.Fatal("junior developer must be assigned by a senior developer")
@@ -33,8 +35,7 @@ func TestBuiltinAgentDefinitionsArePublicAndBounded(t *testing.T) {
 		}
 	}
 	for name, wantGrants := range map[string][]string{
-		BuiltinInterviewerID:     {BuiltinResearchID},
-		BuiltinManagerID:         {BuiltinInterviewerID, BuiltinResearchID, BuiltinSeniorDeveloperID},
+		BuiltinManagerID:         {BuiltinResearchID, BuiltinSeniorDeveloperID},
 		BuiltinSeniorDeveloperID: {BuiltinJuniorDeveloperID, BuiltinResearchID},
 		BuiltinJuniorDeveloperID: {},
 		BuiltinCodeReviewerID:    {},

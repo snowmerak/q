@@ -415,14 +415,13 @@ bounded subagents when a specialist is useful.
 The manager owns product requirements and the work plan. The senior developer
 can edit and verify changes directly or assign bounded implementation to a junior
 developer, then inspect the result and request corrections when needed. The
-interviewer clarifies consequential questions; the researcher compares approaches.
+researcher compares approaches.
 Each role can read relevant workspace evidence directly. Both developers have
 workspace editing and command tools.
 
 ```mermaid
 flowchart LR
     U[Request] --> M[Manager]
-    M --> I[Interviewer]
     M --> R[Researcher]
     M --> S[Senior developer]
     S --> J[Junior developer]
@@ -599,11 +598,13 @@ delegates: []
 
 TUI and ACP support `/subagents list` and `/subagents show code-reader`.
 Join a profile in Projects and issue a ticket to request its work.
-The public builtin IDs are `builtin/interviewer`, `builtin/manager`,
+The public builtin IDs are `builtin/manager`,
 `builtin/senior-developer`, `builtin/junior-developer`, `builtin/code-reviewer`,
 `builtin/research`, `builtin/web-search`, and `builtin/web-tester`.
-Join the code reviewer for read-only review tickets and the junior developer
-for Git implementation tickets. Web Search and Web Tester have `kind: external`.
+New Studio projects preselect the five built-in Q subagents unless a custom
+default set was saved. Use the code reviewer for read-only review tickets and
+the junior developer for Git implementation tickets. Web Search and Web Tester
+have `kind: external`.
 Other external agents use their normal `global/...` or `workspace/...` profile ID.
 Bare `/subagents` opens the profile UI
 in the TUI and lists all available definitions in ACP. Creation, editing, and

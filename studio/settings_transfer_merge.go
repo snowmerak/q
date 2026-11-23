@@ -502,7 +502,7 @@ func (state *transferState) validate(ctx context.Context, bundle settingsBundle,
 			} else if profile.Target == nil && profile.Role != "" && !state.main.HasNativeRole(profile.Role) {
 				return fmt.Errorf("profile %q requires model role %q", profile.Name, profile.Role)
 			}
-			definition, err := subagent.DefinitionForProfile(entry)
+			definition, err := subagent.StoredDefinitionForProfile(entry)
 			if err != nil {
 				return err
 			}

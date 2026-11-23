@@ -110,8 +110,6 @@ test('issuing a ticket automatically requests assignment without a start action'
   await page.getByRole('link', { name: 'Project settings', exact: true }).click();
   await page.locator('.project-tabs').getByRole('button', { name: 'Subagents', exact: true }).click();
   const members = page.locator('.members-list');
-  await page.getByRole('combobox', { name: 'Join subagent' }).selectOption('builtin/research');
-  await page.getByRole('button', { name: 'Join project', exact: true }).click();
   await expect(members).toContainText('builtin/research');
   await expect(members.getByRole('button', { name: 'Disable member' }).first()).toBeVisible();
   await page.goto(`/tickets?workspace_id=${project.id}`);
@@ -302,7 +300,11 @@ test('Projects manages defaults, atomic initial members, limits, bindings and ar
   await expect(page.getByRole('button', { name: 'Create project', exact: true })).toHaveCount(0);
   const before = (await (await request.get('/api/v1/projects')).json()).projects;
   await page.goto('/projects?defaults=1');
-  await page.getByRole('checkbox', { name: /^builtin\/research/ }).check();
+  await expect(page.locator('.agent-options').getByRole('checkbox', { checked: true })).toHaveCount(5);
+  await expect(page.getByRole('checkbox', { name: /^builtin\/research/ })).toBeChecked();
+  for (const id of ['manager', 'senior-developer', 'junior-developer', 'code-reviewer']) {
+    await page.getByRole('checkbox', { name: new RegExp(`^builtin/${id}`) }).uncheck();
+  }
   await page.getByRole('button', { name: 'Save defaults', exact: true }).click();
   await expect(page.getByRole('status')).toContainText('Default subagents saved');
   await page.getByRole('button', { name: 'New project', exact: true }).click();

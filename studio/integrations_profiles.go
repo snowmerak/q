@@ -177,30 +177,24 @@ func findProfileEntry(entries []subagent.ProfileEntry, scope, name string) (suba
 
 func validateProfileGraph(store subagent.ProfileStore, candidate subagent.Profile, scope string, original *subagent.ProfileEntry) error {
 	definitions := subagent.PublicAgentDefinitions()
-	replaced := false
 	for _, entry := range store.List() {
 		if entry.Err != nil {
 			return fmt.Errorf("subagent profile %s: %w", entry.Path, entry.Err)
 		}
 		if original != nil && entry.Path == original.Path {
-			entry.Profile = candidate
-			entry.Scope = scope
-			replaced = true
+			continue
 		}
-		definition, err := subagent.DefinitionForProfile(entry)
+		definition, err := subagent.StoredDefinitionForProfile(entry)
 		if err != nil {
 			return err
 		}
 		definitions = append(definitions, definition)
 	}
-	if !replaced {
-		definition, err := subagent.DefinitionForProfile(subagent.ProfileEntry{Profile: candidate, Scope: scope})
-		if err != nil {
-			return err
-		}
-		definitions = append(definitions, definition)
+	definition, err := subagent.DefinitionForProfile(subagent.ProfileEntry{Profile: candidate, Scope: scope})
+	if err != nil {
+		return err
 	}
-	_, err := subagent.NewRegistry(definitions)
+	_, err = subagent.NewRegistry(append(definitions, definition))
 	return err
 }
 
