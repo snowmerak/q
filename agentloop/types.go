@@ -115,12 +115,13 @@ type Event struct {
 	requestEstimate     int
 	toolCalls           int
 
-	streamDelta    *AgentStreamDelta
-	taskStarted    *workspace.ActiveTask
-	taskCompleted  bool
-	generation     *client.GenerationAttempt
-	contextReplace *ContextReplacement
-	err            error
+	streamDelta       *AgentStreamDelta
+	taskStarted       *workspace.ActiveTask
+	taskCompleted     bool
+	generation        *client.GenerationAttempt
+	contextReplace    *ContextReplacement
+	toolTokenEstimate int
+	err               error
 }
 
 func (e Event) Status() (string, bool) { return e.status, e.status != "" }
@@ -193,6 +194,9 @@ func (e Event) ContextReplacement() (ContextReplacement, bool) {
 	}
 	return *e.contextReplace, true
 }
+
+// ToolTokenEstimate reports the estimated cost of the active tool catalog before a request.
+func (e Event) ToolTokenEstimate() int { return e.toolTokenEstimate }
 
 func (e Event) StreamDelta() (AgentStreamDelta, bool) {
 	if e.streamDelta == nil {

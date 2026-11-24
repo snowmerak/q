@@ -12,25 +12,31 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/snowmerak/q/client"
 	"github.com/snowmerak/q/config"
+	"github.com/snowmerak/q/memory"
 )
 
 func TestStudioRecoversCutoffStreamAndRetainsUsageAndAttemptLog(t *testing.T) {
 	var calls atomic.Int32
+	var firstToolTokens atomic.Int64
 	fixture := newStudioIntegrationConfigured(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/v1/chat/completions" {
 			studioTestModel(w, r)
 			return
 		}
 		var request struct {
-			Limit  int               `json:"max_completion_tokens"`
-			Tools  []json.RawMessage `json:"tools"`
-			Stream bool              `json:"stream"`
+			Limit  int           `json:"max_completion_tokens"`
+			Tools  []client.Tool `json:"tools"`
+			Stream bool          `json:"stream"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
 			t.Error(err)
 		}
 		n := calls.Add(1)
+		if n == 1 {
+			firstToolTokens.Store(int64(memory.CountTools(request.Tools)))
+		}
 		if request.Limit != 128 {
 			t.Errorf("request %d limit=%d", n, request.Limit)
 		}
@@ -70,10 +76,21 @@ func TestStudioRecoversCutoffStreamAndRetainsUsageAndAttemptLog(t *testing.T) {
 		t.Fatal(err)
 	}
 	foundResult, foundRecovery, foundReportedContext := false, false, false
+	firstEstimate, readyEstimate := 0, 0
+	firstCallRecorded := false
 	for _, record := range replay.Events {
 		event := record.Event
-		if event.Type == "context_usage" && event.ContextUsed == 700 {
-			foundReportedContext = true
+		if event.Type == "model_call" {
+			firstCallRecorded = true
+		}
+		if event.Type == "context_usage" {
+			if !firstCallRecorded {
+				if firstEstimate == 0 {
+					firstEstimate = event.ContextUsed
+				}
+				readyEstimate = event.ContextUsed
+			}
+			foundReportedContext = foundReportedContext || event.ContextUsed == 700
 		}
 		if event.Type == "result" {
 			foundResult = event.Content == "The answer is 42."
@@ -91,6 +108,9 @@ func TestStudioRecoversCutoffStreamAndRetainsUsageAndAttemptLog(t *testing.T) {
 	}
 	if !foundResult || !foundRecovery {
 		t.Fatalf("missing result or audit: %s", body)
+	}
+	if toolTokens := int(firstToolTokens.Load()); toolTokens <= 0 || firstEstimate <= 0 || readyEstimate < firstEstimate+toolTokens {
+		t.Fatalf("estimate before the response did not include the request's tools: initial=%d ready=%d tool tokens=%d", firstEstimate, readyEstimate, toolTokens)
 	}
 	if !foundReportedContext || replay.Run.ContextUsed <= 700 || replay.Run.ContextUsed >= 750 {
 		t.Fatalf("context did not use the last input count plus the reply estimate: reported=%v final=%d", foundReportedContext, replay.Run.ContextUsed)

@@ -56,6 +56,8 @@ func RunAgentLoop(ctx context.Context, request Request, events chan<- Event) {
 	if !catalogHas(availableTools, taskCompleteToolName) {
 		activeTask = nil
 	}
+	toolTokens := memory.CountTools(availableTools)
+	var replacement *ContextReplacement
 	hintedSkillIDs := knownSkillIDs(history)
 	if len(history) > 0 && history[len(history)-1].Role == client.RoleUser {
 		index := len(history) - 1
@@ -79,13 +81,14 @@ func RunAgentLoop(ctx context.Context, request Request, events chan<- Event) {
 		}
 		if updated.TextContent() != original.TextContent() {
 			history[index] = updated
-			replacement := &ContextReplacement{Index: index, Message: updated}
-			if !emitEvent(ctx, events, Event{contextReplace: replacement}) {
-				return
-			}
+			replacement = &ContextReplacement{Index: index, Message: updated}
 		}
 	}
-	loopContext := newAgentLoopContext(contextPolicy, history, availableTools)
+	if (replacement != nil || toolTokens > 0) &&
+		!emitEvent(ctx, events, Event{contextReplace: replacement, toolTokenEstimate: toolTokens}) {
+		return
+	}
+	loopContext := newAgentLoopContext(contextPolicy, history, toolTokens)
 	loopContext.extra = requestExtra
 	loopContext.manager.ObserveUsage(request.PromptUsage.InputTokens, request.PromptUsage.LocalEstimate)
 	observePrompt := func(response *client.ChatResponse, requestEstimate int) bool {

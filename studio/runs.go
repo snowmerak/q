@@ -176,11 +176,11 @@ func (service *sessionRunService) start(root, sessionID, prompt string, causes .
 }
 
 func (service *sessionRunService) startOperation(root, sessionID, prompt, operationID string, causes ...context.Context) (*studioRun, error) {
-	return service.startTurn(root, sessionID, prompt, operationID, nil, causes...)
+	return service.startTurn(root, sessionID, prompt, operationID, nil, 0, causes...)
 }
 
-func (service *sessionRunService) startTurn(root, sessionID, prompt, operationID string, images []app.ImageInput, causes ...context.Context) (*studioRun, error) {
-	return service.startRun(root, sessionID, studioRunInput{prompt: prompt, operationID: operationID, images: images}, causes...)
+func (service *sessionRunService) startTurn(root, sessionID, prompt, operationID string, images []app.ImageInput, imageMaxEdge int, causes ...context.Context) (*studioRun, error) {
+	return service.startRun(root, sessionID, studioRunInput{prompt: prompt, operationID: operationID, images: images, imageMaxEdge: imageMaxEdge}, causes...)
 }
 
 func (service *sessionRunService) startCompaction(root, sessionID string, cause context.Context) (*studioRun, error) {
@@ -190,6 +190,7 @@ func (service *sessionRunService) startCompaction(root, sessionID string, cause 
 type studioRunInput struct {
 	prompt, operationID string
 	images              []app.ImageInput
+	imageMaxEdge        int
 	kind                string
 	responseChange      *app.SessionResponseChange
 }
@@ -339,7 +340,8 @@ func (service *sessionRunService) execute(runContext context.Context, run *studi
 	} else if input.responseChange != nil {
 		runErr = service.executeResponseChange(runContext, run.store, *input.responseChange, emit)
 	} else if withOptions, ok := service.runner.(sessionOptionsRunner); ok && (input.operationID != "" || len(input.images) != 0) {
-		runErr = withOptions.RunWithOptions(runContext, run.store, run.store.SessionID, input.prompt, app.SessionOptions{OperationID: input.operationID, Control: run.control, Images: input.images}, emit)
+		options := app.SessionOptions{OperationID: input.operationID, Control: run.control, Images: input.images, ImageMaxEdge: input.imageMaxEdge}
+		runErr = withOptions.RunWithOptions(runContext, run.store, run.store.SessionID, input.prompt, options, emit)
 	} else if controlled, ok := service.runner.(controlledSessionRunner); ok {
 		runErr = controlled.RunControlled(runContext, run.store, run.store.SessionID, input.prompt, emit, run.control)
 	} else {

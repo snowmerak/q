@@ -252,12 +252,13 @@ type AgentEvent struct {
 	requestEstimate     int
 	toolCalls           int
 
-	streamDelta    *chatStreamDelta
-	questionCallID string
-	taskStarted    *workspace.ActiveTask
-	taskCompleted  bool
-	contextReplace *agentContextReplacement
-	err            error
+	streamDelta       *chatStreamDelta
+	questionCallID    string
+	taskStarted       *workspace.ActiveTask
+	taskCompleted     bool
+	contextReplace    *agentContextReplacement
+	toolTokenEstimate int
+	err               error
 }
 
 type agentEvent = AgentEvent

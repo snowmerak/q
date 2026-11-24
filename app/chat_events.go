@@ -115,10 +115,13 @@ func (m model) updateAgentEvent(message agentEventMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, tea.Batch(m.chatTick(), waitAgentEvent(message.events, message.turnID))
 	}
-	if event.contextReplace != nil {
+	if event.contextReplace != nil || event.toolTokenEstimate > 0 {
 		if m.memory != nil {
-			if err := m.memory.Replace(event.contextReplace.Index, event.contextReplace.Message); err != nil {
-				m.status = "update model context: " + err.Error()
+			m.memory.ReserveToolTokens(event.toolTokenEstimate)
+			if replacement := event.contextReplace; replacement != nil {
+				if err := m.memory.Replace(replacement.Index, replacement.Message); err != nil {
+					m.status = "update model context: " + err.Error()
+				}
 			}
 		}
 		return m, tea.Batch(m.chatTick(), waitAgentEvent(message.events, message.turnID))

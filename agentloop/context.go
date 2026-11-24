@@ -24,12 +24,12 @@ type Context struct {
 
 // NewContext creates loop-local memory for a test or embedding host.
 func NewContext(policy memory.Policy, initial []client.Message, tools []client.Tool) *Context {
-	return newAgentLoopContext(policy, initial, tools)
+	return newAgentLoopContext(policy, initial, memory.CountTools(tools))
 }
 
-func newAgentLoopContext(policy memory.Policy, initial []client.Message, tools []client.Tool) *Context {
+func newAgentLoopContext(policy memory.Policy, initial []client.Message, toolTokens int) *Context {
 	manager := memory.New(policy, initial)
-	manager.ReserveToolTokens(memory.CountTools(tools))
+	manager.ReserveToolTokens(toolTokens)
 	return &Context{manager: manager}
 }
 

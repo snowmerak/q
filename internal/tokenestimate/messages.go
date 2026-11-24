@@ -68,6 +68,8 @@ func estimateImagePart(part llmprovider.MessageContentPart) (llmprovider.Message
 		return nil, 0
 	}
 	estimated := maps.Clone(part)
+	// ACP replay metadata can contain the original image. Only the image URL is sent.
+	delete(estimated, "q_acp_content_block")
 	if url != "" {
 		if imageURL == nil {
 			estimated["image_url"] = ""

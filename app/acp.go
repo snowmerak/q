@@ -19,6 +19,7 @@ import (
 	"github.com/snowmerak/q/client"
 	"github.com/snowmerak/q/config"
 	"github.com/snowmerak/q/internal/hostruntime"
+	"github.com/snowmerak/q/internal/workmedia"
 	"github.com/snowmerak/q/mcpconfig"
 	"github.com/snowmerak/q/memory"
 	"github.com/snowmerak/q/sessionstore"
@@ -1318,6 +1319,10 @@ func (a *acpAgent) continueACPAgentTurn(
 				return acp.PromptResponse{}, fmt.Errorf("update model context: %w", err)
 			}
 		}
+		if event.toolTokenEstimate > 0 {
+			a.state.memory.ReserveToolTokens(event.toolTokenEstimate)
+			a.publishUsageUpdate()
+		}
 		if event.compaction != nil {
 			if err := a.state.persistAgentCompaction(event); err != nil {
 				return acp.PromptResponse{}, fmt.Errorf("apply agent context compaction: %w", err)
@@ -2024,6 +2029,14 @@ func acpImageDataURI(data, mimeType string) (string, error) {
 	}
 	if len(decoded) > maximumImageBytes {
 		return "", fmt.Errorf("ACP image exceeds %d bytes", maximumImageBytes)
+	}
+	image := workmedia.Image{Data: decoded}
+	if workmedia.Supported(image.MIME()) {
+		resized, err := workmedia.Resize(image, workmedia.DefaultMaxEdge, maximumImageBytes)
+		if err != nil {
+			return "", fmt.Errorf("prepare ACP image: %w", err)
+		}
+		return resized.URL(), nil
 	}
 	return "data:" + mimeType + ";base64," + data, nil
 }

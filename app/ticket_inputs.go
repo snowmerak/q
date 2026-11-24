@@ -74,5 +74,5 @@ func ticketImages(ctx context.Context, c *library.Client, item workitems.Item, a
 			break
 		}
 	}
-	return images, nil
+	return workmedia.Prepare(images, workmedia.DefaultMaxEdge)
 }

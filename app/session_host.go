@@ -438,12 +438,14 @@ func (host *SessionHost) run(
 	if prompt == "" && len(options.Images) == 0 {
 		return errors.New("prompt is required")
 	}
-	if err := workmedia.Validate(options.Images); err != nil {
-		return err
-	}
 	if options.OperationID != "" && len(options.Images) != 0 {
 		return errors.New("idempotent session operations accept text prompts only")
 	}
+	images, err := workmedia.Prepare(options.Images, options.ImageMaxEdge)
+	if err != nil {
+		return err
+	}
+	options.Images = images
 	if review := workitemtools.AssignedReview(requestContext); review.Active() && review.OperationID == options.OperationID {
 		options.review = review
 	}

@@ -33,7 +33,12 @@ test('chat image survives a completed turn and reload', async ({ page, request }
   const composer = page.getByRole('textbox', { name: 'Message Q' });
   await composer.fill('Inspect this reference and write the requested file');
   await page.locator('.image-picker input[type=file]').setInputFiles(referenceImage);
+  const resolution = page.getByLabel('Image resolution');
+  await expect(resolution).toHaveValue('2048');
+  await resolution.selectOption({ label: 'Smaller · 1,600 px' });
+  const submitted = page.waitForRequest(value => value.method() === 'POST' && value.url().endsWith('/messages'));
   await composer.press('Enter');
+  expect((await submitted).postDataJSON().image_max_edge).toBe(1600);
   await expect(page.getByRole('heading', { name: 'Studio result' })).toBeVisible();
   await page.reload();
   const image = page.getByRole('img', { name: 'Attached image 1' });

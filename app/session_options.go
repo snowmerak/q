@@ -44,7 +44,10 @@ type SessionOptions struct {
 	// the same user prompt again. A completed operation returns its saved result.
 	OperationID string       `json:"-"`
 	Images      []ImageInput `json:"-"`
-	review      workitemtools.ReviewAssignment
+	// ImageMaxEdge selects the 1600px or 2048px limit for this turn's images.
+	// A zero value selects 2048px.
+	ImageMaxEdge int `json:"-"`
+	review       workitemtools.ReviewAssignment
 }
 
 type ImageInput = workmedia.Image

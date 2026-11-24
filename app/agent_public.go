@@ -93,6 +93,9 @@ func (e AgentEvent) ContextReplacement() (AgentContextReplacement, bool) {
 	return *e.contextReplace, true
 }
 
+// ToolTokenEstimate reports the estimated cost of the active tool catalog before a request.
+func (e AgentEvent) ToolTokenEstimate() int { return e.toolTokenEstimate }
+
 // StreamDelta reports a partial thinking or response fragment.
 func (e AgentEvent) StreamDelta() (AgentStreamDelta, bool) {
 	if e.streamDelta == nil {

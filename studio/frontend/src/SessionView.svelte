@@ -121,12 +121,14 @@
     draftKey = key;
     prompt = key ? loadDraft(key) : '';
     imageDraft = [];
+    imageMaxEdge = 2048;
     closeActions();
   }
 
   function clearPrompt() {
     prompt = '';
     imageDraft = [];
+    imageMaxEdge = 2048;
     saveDraft(draftKey, '');
   }
 
@@ -135,6 +137,7 @@
   }
 
   let imageDraft: File[] = [];
+  let imageMaxEdge = 2048;
 
   function pasteImages(event: ClipboardEvent) {
     const files = imageFiles(event);
@@ -617,6 +620,7 @@
     }
     const target = { workspaceRoot, sessionID: selected.session.session_id };
     const files = imageDraft;
+    const maxEdge = imageMaxEdge;
     runMonitor.stop();
     clearPrompt();
     sending = true;
@@ -630,7 +634,7 @@
       messages = [...messages, { role: 'user', content, images }];
       const response = await requestResponse(`/api/v1/sessions/${encodeURIComponent(target.sessionID)}/messages`, {
         method: 'POST', headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-        body: JSON.stringify({ workspace_root: target.workspaceRoot, content, images: images.map(url => ({ data: url.split(',')[1] })) })
+        body: JSON.stringify({ workspace_root: target.workspaceRoot, content, images: images.map(url => ({ data: url.split(',')[1] })), image_max_edge: images.length && maxEdge === 1600 ? maxEdge : undefined })
       });
       const run = (await response.json()) as RunSnapshot;
       if (!isCurrentSession(generation)) return;
@@ -641,7 +645,7 @@
       error = cause instanceof Error ? cause.message : 'The turn failed';
       runStatus = 'Turn failed';
       if (!prompt) { prompt = content; saveDraft(draftKey, content); }
-      if (!imageDraft.length) imageDraft = files;
+      if (!imageDraft.length && files.length) { imageDraft = files; imageMaxEdge = maxEdge; }
       await reloadSelected();
       if (!isCurrentSession(generation)) return;
       sending = false;
@@ -964,6 +968,14 @@
           </div>
           <div class="composer-footer">
             {#if !selectedDelegation}<ImagePicker bind:files={imageDraft} disabled={sending || sessionLoading} onerror={value => error = value} />{/if}
+            {#if imageDraft.length}
+              <label class="image-resolution"><span>Image resolution</span>
+                <select bind:value={imageMaxEdge} disabled={sending || sessionLoading}>
+                  <option value={2048}>Standard · 2,048 px</option>
+                  <option value={1600}>Smaller · 1,600 px</option>
+                </select>
+              </label>
+            {/if}
             {#if !selectedDelegation && selected.session.session_id === selectedRegistration?.session.session_id && selected.workspace_root === workspaceRoot}
               {#key `${workspaceRoot}/${selected.session.session_id}`}
                 <SessionModelPicker {workspaceRoot} sessionID={selected.session.session_id} disabled={sending || sessionLoading} bind:saving={modelSaving} bind:agent={sessionAgent} />
@@ -990,5 +1002,7 @@
 
 <style>
   .workflow-panel { display:flex; flex-direction:column; min-width:0; min-height:0; overflow:hidden; }
+  .image-resolution { display: flex; align-items: center; gap: 6px; color: var(--subtle); font-size: var(--type-small); }
+  .image-resolution select { width: auto; }
   @media(max-width:800px) { .workflow-panel { min-height:560px; overflow:visible; } }
 </style>

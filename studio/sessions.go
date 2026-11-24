@@ -91,6 +91,7 @@ type sessionRunRequest struct {
 	WorkspaceRoot string           `json:"workspace_root"`
 	Content       string           `json:"content"`
 	Images        []app.ImageInput `json:"images,omitempty"`
+	ImageMaxEdge  int              `json:"image_max_edge,omitempty"`
 }
 
 func newSessionsService(parent context.Context, runner sessionRunner, configDirectory string) *sessionsService {
@@ -412,6 +413,10 @@ func (service *sessionsService) serveMessage(writer http.ResponseWriter, request
 		writeAPIError(writer, http.StatusBadRequest, err)
 		return
 	}
+	if err := workmedia.ValidateMaxEdge(input.ImageMaxEdge); err != nil {
+		writeAPIError(writer, http.StatusBadRequest, err)
+		return
+	}
 	if len(input.Content) > subagent.MaximumDelegatePromptBytes {
 		writeAPIError(writer, http.StatusRequestEntityTooLarge, fmt.Errorf("content must not exceed %d bytes", subagent.MaximumDelegatePromptBytes))
 		return
@@ -421,7 +426,7 @@ func (service *sessionsService) serveMessage(writer http.ResponseWriter, request
 		writeAPIError(writer, http.StatusBadRequest, err)
 		return
 	}
-	run, err := service.runs.startTurn(root, request.PathValue("session"), input.Content, "", input.Images, request.Context())
+	run, err := service.runs.startTurn(root, request.PathValue("session"), input.Content, "", input.Images, input.ImageMaxEdge, request.Context())
 	if err != nil {
 		writeSessionError(writer, err)
 		return
