@@ -238,6 +238,7 @@ func newHandlerRuntime(parent context.Context, store config.Store, runner sessio
 	mux.HandleFunc("POST /api/v1/sessions/{session}/clear", sessions.serveClear)
 	mux.HandleFunc("POST /api/v1/sessions/{session}/compact", sessions.serveCompact)
 	mux.HandleFunc("POST /api/v1/sessions/{session}/messages", sessions.serveMessage)
+	mux.HandleFunc("POST /api/v1/sessions/{session}/responses", sessions.serveResponseChange)
 	mux.HandleFunc("GET /api/v1/sessions/{session}/runs/latest", sessions.serveRunLatest)
 	mux.HandleFunc("GET /api/v1/sessions/{session}/runs/{run}", sessions.serveRunDetail)
 	mux.HandleFunc("GET /api/v1/sessions/{session}/runs/{run}/events", sessions.serveRunEvents)

@@ -89,6 +89,7 @@ type sessionState struct {
 	runID                  string
 	sessionTitle           string
 	sessionUpdatedAt       time.Time
+	historyRevision        string
 	responseUsage          []workspace.ResponseUsage
 	standalone             bool
 	standaloneRoot         screen

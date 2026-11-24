@@ -1100,6 +1100,7 @@ func (m *model) enterSession(value config.Config, configuredClient chatClient) {
 	m.runID = ""
 	m.sessionTitle = ""
 	m.sessionUpdatedAt = time.Time{}
+	m.historyRevision = ""
 
 	m.waiting = false
 	m.compacting = false
@@ -1540,6 +1541,7 @@ func (m *model) resetConversationState(runIDs ...string) {
 	m.sessionOperation = nil
 	m.messages = nil
 	m.responseUsage = nil
+	m.historyRevision = ""
 	m.transcriptThoughts = nil
 	m.streamResponse = ""
 	if prompt := m.activeConfig().Provider.SystemPrompt; prompt != "" {
@@ -1685,6 +1687,7 @@ func (m *model) restoreWorkspaceSession() {
 	interruptedCalls := len(interruptedResults)
 	m.messages = mergeWorkspaceMessages(base, transcript)
 	m.responseUsage = append([]workspace.ResponseUsage(nil), session.ResponseUsage...)
+	m.historyRevision = session.HistoryRevision
 	m.transcriptThoughts = restoreTranscriptThoughts(base, transcript, session.TranscriptThoughts)
 	requestContext := session.Context
 	if len(requestContext) == 0 {
@@ -1868,6 +1871,7 @@ func (m *model) saveWorkspaceSession() error {
 		Title:              m.sessionTitle,
 		UpdatedAt:          workspaceTimePointer(m.sessionUpdatedAt),
 		Transcript:         workspaceSessionMessages(m.messages),
+		HistoryRevision:    m.historyRevision,
 		ResponseUsage:      m.responseUsage,
 		TranscriptThoughts: collectTranscriptThoughts(m.messages, m.transcriptThoughts),
 		Context:            requestContext,

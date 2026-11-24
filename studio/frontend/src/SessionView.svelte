@@ -17,8 +17,8 @@
   import { apiError, requestResponse } from './api';
   import { contextPercent, formatTokenCount, shortID } from './sessions/format';
   import { RunMonitor, runStatusLabel, terminalRun } from './sessions/run-monitor';
-  import { workspaceRoleTitle, workspaceRoleDescription } from './sessions/types';
-  import type { DelegationNode, DelegationSession, FlatDelegation, Message, RegisteredSessionTree, RunEvent, RunSnapshot, SessionDetail, StudioProject, SessionType } from './sessions/types';
+  import { sessionListVisible, workspaceRoleTitle, workspaceRoleDescription } from './sessions/types';
+  import type { DelegationNode, DelegationSession, FlatDelegation, Message, RegisteredSessionTree, ResponseAction, RunEvent, RunSnapshot, SessionDetail, StudioProject, SessionType } from './sessions/types';
 
   export let openChanges: (workspaceRoot: string) => void = () => {};
   let workflowCreate: 'council' | 'composer' | null = null;
@@ -83,8 +83,11 @@
   let runStatus = '';
   let events: RunEvent[] = [];
   let activeRun: RunSnapshot | null = null;
+  let loadedRunReply = '';
   $: finishingRun = sending && !!activeRun && terminalRun(activeRun.status);
   $: compacting = sending && activeRun?.kind === 'compaction';
+  $: revisingResponse = sending && activeRun?.kind === 'response_change';
+  $: maintenanceRun = compacting || revisingResponse;
   $: runError = activeRun && ['failed', 'cancelled', 'interrupted'].includes(activeRun.status)
     ? activeRun.error || (activeRun.status === 'failed' ? 'The turn failed without an error detail.' : 'The turn stopped before completion.')
     : '';
@@ -155,7 +158,7 @@
   const runMonitor = new RunMonitor({
     page: async (page) => {
       activeRun = page.run;
-      events = [...events, ...page.events.map(record => record.event)];
+      if (page.run.kind !== 'response_change') events = [...events, ...page.events.map(record => record.event)];
       for (const record of page.events) {
         handleRunEvent(record.event);
         if (record.event.type === 'redirect' && record.event.run_id) {
@@ -166,12 +169,13 @@
         }
       }
       sending = !terminalRun(page.run.status) || page.next_cursor < page.run.cursor || completedACP(page.run) ||
-        (page.run.kind === 'compaction' && page.run.status === 'completed');
+        ((page.run.kind === 'compaction' || page.run.kind === 'response_change') && page.run.status === 'completed');
       runStatus = runStatusLabel(page.run);
     },
     complete: async (run, signal) => {
       const refreshed = await reloadSelected(signal);
       if (signal.aborted || activeRun?.id !== run.id) return;
+      if (refreshed) loadedRunReply = run.id;
       // ACP tool and plan updates are live UI. Once the saved conversation
       // arrives, replaying them would mask its authoritative final answer.
       if (refreshed && completedACP(run)) events = [];
@@ -315,6 +319,31 @@
     }
   }
 
+  async function changeResponse(action: ResponseAction, index: number, content?: string) {
+    if (!selected || selectedDelegation || !workspaceRoot || sending || sessionLoading || historyLoading || modelSaving) return;
+    const generation = sessionGeneration;
+    const target = { workspaceRoot, sessionID: selected.session.session_id };
+    sessionLoading = true;
+    error = '';
+    try {
+      const response = await requestResponse(`/api/v1/sessions/${encodeURIComponent(target.sessionID)}/responses`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ workspace_root: target.workspaceRoot, updated_at: selected.session.updated_at, action, index, content })
+      });
+      const run = (await response.json()) as RunSnapshot;
+      if (!isCurrentSession(generation)) return;
+      activeRun = run;
+      events = [];
+      sending = true;
+      runStatus = runStatusLabel(run);
+      runMonitor.start(target, run.id);
+    } catch (cause) {
+      if (isCurrentSession(generation)) error = cause instanceof Error ? cause.message : 'Could not update the response';
+    } finally {
+      if (isCurrentSession(generation)) sessionLoading = false;
+    }
+  }
+
   function clearSelectedSession() {
     workflowCreate = null;
     workflowDirty = false;
@@ -348,7 +377,7 @@
       const targetID = preferredRegistration || selectedRegistration?.registration_id || sessionFromLocation();
       const legacyTarget = legacy?.[2] ? registeredSessions.find(item => item.session.type === typeFilter && item.session.session_id === decodeURIComponent(legacy[2])) : null;
       const target = legacyTarget || registeredSessions.find((registration) => registration.registration_id === targetID && !registration.issue)
-        || (!legacy?.[2] ? registeredSessions.find((registration) => !registration.issue && (typeFilter === 'all' || registration.session.type === typeFilter)) : null);
+        || (!legacy?.[2] ? registeredSessions.find((registration) => sessionListVisible(registration.kind) && !registration.issue && (typeFilter === 'all' || registration.session.type === typeFilter)) : null);
       if (target) {
         await selectRegisteredSession(target, false, approved);
         window.history.replaceState({}, '', currentPath());
@@ -375,7 +404,7 @@
       registeredSessions = registeredSessions.filter((item) => item.registration_id !== registration.registration_id);
       if (selectedRegistration?.registration_id === registration.registration_id) {
         workflowDirty = false;
-        const next = registeredSessions.find((item) => !item.issue);
+        const next = registeredSessions.find((item) => sessionListVisible(item.kind) && !item.issue);
         if (next) await selectRegisteredSession(next, false);
         else clearSelectedSession();
         window.history.replaceState({}, '', next ? `/sessions/${encodeURIComponent(next.registration_id)}` : '/sessions');
@@ -400,7 +429,7 @@
       const response = await requestResponse(`/api/v1/sessions/${encodeURIComponent(selected.session.session_id)}?workspace_root=${encodeURIComponent(workspaceRoot)}`, { method: 'DELETE' });
       await fetch(`/api/v1/registered-sessions/${encodeURIComponent(selectedRegistration.registration_id)}`, { method: 'DELETE' });
       registeredSessions = registeredSessions.filter((item) => item.registration_id !== selectedRegistration?.registration_id);
-      const next = registeredSessions.find((item) => !item.issue);
+      const next = registeredSessions.find((item) => sessionListVisible(item.kind) && !item.issue);
       if (next) await selectRegisteredSession(next, false);
       else clearSelectedSession();
       window.history.replaceState({}, '', next ? `/sessions/${encodeURIComponent(next.registration_id)}` : '/sessions');
@@ -548,7 +577,7 @@
   }
 
   async function sendPrompt() {
-    if (modelSaving || compacting) return;
+    if (modelSaving || maintenanceRun) return;
     const content = prompt.trim();
     if (!selected || !workspaceRoot || (!content && !imageDraft.length) || sessionLoading || finishingRun) return;
     if ((selectedDelegation || sending) && !content) return;
@@ -634,7 +663,7 @@
     runStatus = runStatusLabel(run);
     if (terminalRun(run.status)) {
       // An ACP turn may finish between loading its transcript and run status.
-      if (completedACP(run)) await reloadSelected();
+      if (completedACP(run) || run.kind === 'response_change') await reloadSelected();
       return;
     }
     runMonitor.start(target, run.id);
@@ -664,7 +693,8 @@
   async function reloadSelected(signal?: AbortSignal): Promise<boolean> {
     if (!selected || !workspaceRoot || signal?.aborted) return false;
     const generation = sessionGeneration;
-    const response = await fetch(`/api/v1/sessions/${encodeURIComponent(selected.session.session_id)}?workspace_root=${encodeURIComponent(workspaceRoot)}&limit=${historyPageSize}`, { cache: 'no-store', signal });
+    const limit = activeRun?.kind === 'response_change' ? Math.min(200, Math.max(historyPageSize, messages.length)) : historyPageSize;
+    const response = await fetch(`/api/v1/sessions/${encodeURIComponent(selected.session.session_id)}?workspace_root=${encodeURIComponent(workspaceRoot)}&limit=${limit}`, { cache: 'no-store', signal });
     if (!response.ok) return false;
     const detail = (await response.json()) as SessionDetail;
     if (!isCurrentSession(generation) || signal?.aborted) return false;
@@ -683,7 +713,10 @@
       const response = await requestResponse(`/api/v1/sessions/${encodeURIComponent(selected.session.session_id)}?${query}`);
       const earlier = await response.json() as SessionDetail;
       if (!isCurrentSession(generation) || !selected) return;
-      if (earlier.history?.end !== before) throw new Error('Session history changed. Reopen the session to reload it.');
+      if (earlier.history?.end !== before || earlier.history_revision !== selected.history_revision) {
+        await reloadSelected();
+        return;
+      }
       selected = mergeHistory(earlier, { ...selected, transcript: messages });
       messages = selected.transcript;
     } catch (cause) {
@@ -886,10 +919,11 @@
             </details>
           {/if}
           {#if !selectedDelegation && sending && !finishingRun}
-            {#if !compacting}
+            {#if !maintenanceRun}
               {#if activeRun?.status === 'paused'}<button title="Resume turn" aria-label="Resume turn" onclick={() => commandRun('resume')}><Play aria-hidden="true" size={15} /></button>{:else}<button title="Pause turn" aria-label="Pause turn" onclick={() => commandRun('pause')}><Pause aria-hidden="true" size={15} /></button>{/if}
             {/if}
-            <button class="stop-control" title={compacting ? 'Stop compaction' : 'Stop turn'} aria-label={compacting ? 'Stop compaction' : 'Stop turn'} onclick={stopTurn}><Square aria-hidden="true" size={13} fill="currentColor" /></button>
+            {@const stopLabel = compacting ? 'Stop compaction' : revisingResponse ? 'Stop response change' : 'Stop turn'}
+            <button class="stop-control" title={stopLabel} aria-label={stopLabel} onclick={stopTurn}><Square aria-hidden="true" size={13} fill="currentColor" /></button>
           {/if}
         </div>
       </div>
@@ -903,7 +937,11 @@
           {#if selected.active_task}<small>The task is still active. Send a message to continue.</small>{/if}
         </div>
       {/if}
-      <Transcript {messages} thoughts={selectedDelegation ? [] : selected?.transcript_thoughts || []} events={selectedDelegation ? [] : events} sessionKey={fileContext} loading={sessionLoading} hasEarlier={!selectedDelegation && !!selected?.history?.start} loadingEarlier={historyLoading} onearlier={loadEarlierHistory} onfile={openFileLink} />
+      <Transcript {messages} thoughts={selectedDelegation ? [] : selected?.transcript_thoughts || []} events={selectedDelegation ? [] : events} sessionKey={fileContext}
+        historyRevision={selected.history_revision || ''} useSavedReply={!!activeRun && loadedRunReply === activeRun.id}
+        loading={sessionLoading} hasEarlier={!selectedDelegation && !!selected?.history?.start} loadingEarlier={historyLoading}
+        onearlier={loadEarlierHistory} onfile={openFileLink} onresponse={selectedDelegation ? undefined : changeResponse}
+        responseActionsDisabled={sending || sessionLoading || historyLoading || modelSaving} canRegenerate={!sessionAgent} />
       {#if !selectedDelegation && activeRun?.pending_question}
         <section class="run-question" aria-labelledby="run-question-title">
           <div><span>Q NEEDS INPUT</span><h3 id="run-question-title">{activeRun.pending_question.question}</h3>{#if activeRun.pending_question.context}<p>{activeRun.pending_question.context}</p>{/if}</div>
@@ -921,8 +959,8 @@
       {:else}
         <div class="composer-wrap">
           <div class="composer">
-            <textarea bind:value={prompt} oninput={(event) => saveDraft(draftKey, event.currentTarget.value)} aria-label="Message Q" onkeydown={submitFromKeyboard} onpaste={pasteImages} placeholder={sending && !finishingRun && !compacting ? 'Guide the current turn…' : selectedRegistration?.kind === 'coordinator' ? 'Describe the work to plan and delegate…' : workspaceRoleTitle(selectedRegistration?.kind) ? 'Discuss results and review changes…' : selectedRegistration?.kind === 'chat' ? 'Message Q…' : 'Ask Q to work in this repository…'} rows="3" disabled={sessionLoading}></textarea>
-            <button class="send-button" title={sending && !finishingRun && !compacting ? 'Guide current turn' : 'Send message'} onclick={sendPrompt} disabled={sessionLoading || modelSaving || finishingRun || compacting || (!prompt.trim() && !imageDraft.length)}><ArrowUp aria-hidden="true" size={17} /></button>
+            <textarea bind:value={prompt} oninput={(event) => saveDraft(draftKey, event.currentTarget.value)} aria-label="Message Q" onkeydown={submitFromKeyboard} onpaste={pasteImages} placeholder={sending && !finishingRun && !maintenanceRun ? 'Guide the current turn…' : selectedRegistration?.kind === 'coordinator' ? 'Describe the work to plan and delegate…' : workspaceRoleTitle(selectedRegistration?.kind) ? 'Discuss results and review changes…' : selectedRegistration?.kind === 'chat' ? 'Message Q…' : 'Ask Q to work in this repository…'} rows="3" disabled={sessionLoading}></textarea>
+            <button class="send-button" title={sending && !finishingRun && !maintenanceRun ? 'Guide current turn' : 'Send message'} onclick={sendPrompt} disabled={sessionLoading || modelSaving || finishingRun || maintenanceRun || (!prompt.trim() && !imageDraft.length)}><ArrowUp aria-hidden="true" size={17} /></button>
           </div>
           <div class="composer-footer">
             {#if !selectedDelegation}<ImagePicker bind:files={imageDraft} disabled={sending || sessionLoading} onerror={value => error = value} />{/if}
@@ -931,7 +969,7 @@
                 <SessionModelPicker {workspaceRoot} sessionID={selected.session.session_id} disabled={sending || sessionLoading} bind:saving={modelSaving} bind:agent={sessionAgent} />
               {/key}
             {/if}
-            <p>{compacting ? 'Send after compaction finishes' : finishingRun ? 'Loading the final reply…' : sending ? 'Enter to redirect the current work with guidance' : 'Enter to send'} · Shift+Enter for a new line · {workspaceRoleTitle(selectedRegistration?.kind) ? selectedProject?.name || workspaceRoleTitle(selectedRegistration?.kind) : selectedRegistration?.kind === 'chat' ? 'Personal chat' : workspaceRoot}</p>
+            <p>{maintenanceRun ? 'Send after the current operation finishes' : finishingRun ? 'Loading the final reply…' : sending ? 'Enter to redirect the current work with guidance' : 'Enter to send'} · Shift+Enter for a new line · {workspaceRoleTitle(selectedRegistration?.kind) ? selectedProject?.name || workspaceRoleTitle(selectedRegistration?.kind) : selectedRegistration?.kind === 'chat' ? 'Personal chat' : workspaceRoot}</p>
           </div>
         </div>
       {/if}

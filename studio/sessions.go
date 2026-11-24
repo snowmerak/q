@@ -50,6 +50,7 @@ type sessionSummary struct {
 
 type sessionMessage struct {
 	Role       string                `json:"role"`
+	Index      int                   `json:"index"`
 	Content    string                `json:"content,omitempty"`
 	Images     []string              `json:"images,omitempty"`
 	Name       string                `json:"name,omitempty"`
@@ -62,6 +63,7 @@ type sessionDetail struct {
 	WorkspaceRoot      string                        `json:"workspace_root"`
 	Session            sessionSummary                `json:"session"`
 	Transcript         []sessionMessage              `json:"transcript"`
+	HistoryRevision    string                        `json:"history_revision,omitempty"`
 	TranscriptThoughts []workspace.TranscriptThought `json:"transcript_thoughts,omitempty"`
 	ActiveTask         *workspace.ActiveTask         `json:"active_task,omitempty"`
 	History            *sessionHistory               `json:"history,omitempty"`
@@ -459,7 +461,7 @@ func detailFromSessionRange(root string, store workspace.Store, value workspace.
 			continue
 		}
 		projected := sessionMessage{
-			Role: string(message.Role), Content: message.TextContent(), Name: message.Name,
+			Role: string(message.Role), Index: index, Content: message.TextContent(), Name: message.Name,
 			Images:     workmedia.URLs(message),
 			ToolCallID: message.ToolCallID, ToolCalls: message.ToolCalls,
 		}
@@ -485,7 +487,7 @@ func detailFromSessionRange(root string, store workspace.Store, value workspace.
 			SessionID: store.SessionID, RunID: value.RunID,
 			Title: value.Title, UpdatedAt: updatedAt,
 		},
-		Transcript: transcript, TranscriptThoughts: thoughts, ActiveTask: value.ActiveTask,
+		Transcript: transcript, HistoryRevision: value.HistoryRevision, TranscriptThoughts: thoughts, ActiveTask: value.ActiveTask,
 	}
 }
 

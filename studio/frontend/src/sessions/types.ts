@@ -10,6 +10,7 @@ export type ToolCall = { id: string; function?: { name?: string; arguments?: str
 export type TokenUsage = { input_tokens: number; cached_tokens?: number; output_tokens: number };
 export type Message = {
   role: string;
+  index?: number;
   content?: string;
   images?: string[];
   name?: string;
@@ -19,10 +20,12 @@ export type Message = {
   status?: string;
   error?: string;
 };
+export type ResponseAction = 'regenerate' | 'delete' | 'edit';
 export type SessionDetail = {
   workspace_root: string;
   session: SessionSummary;
   transcript: Message[];
+  history_revision?: string;
   transcript_thoughts?: { before: number; content: string }[];
   active_task?: { objective: string; completion_criteria?: string[]; started_at: string };
   history?: { start: number; end: number; total: number };
@@ -70,7 +73,7 @@ export type ModelCallTiming = {
 export type RunSnapshot = {
   id: string;
   session_id: string;
-  kind?: 'compaction';
+  kind?: 'compaction' | 'response_change';
   status_detail?: string;
   provider_kind?: 'native' | 'acp';
   status: string;
@@ -128,6 +131,10 @@ export type StudioProject = {
 
 export function workspaceRoleTitle(kind?: string): string {
   return kind === 'coordinator' ? 'Coordinator' : kind === 'integrator' || kind === 'manager' ? 'Integrator' : '';
+}
+
+export function sessionListVisible(kind?: string): boolean {
+  return kind !== 'integrator' && kind !== 'manager';
 }
 
 export function workspaceRoleDescription(kind?: string): string {

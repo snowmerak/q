@@ -102,6 +102,12 @@ func generationBrowserModel(t *testing.T) http.HandlerFunc {
 			return
 		}
 		r.Body = io.NopCloser(bytes.NewReader(body))
+		if bytes.Contains(body, []byte("Write a replacement answer to the last user message")) {
+			writeJSON(w, http.StatusOK, map[string]any{"id": "replacement", "model": "test-model", "choices": []any{
+				map[string]any{"index": 0, "message": map[string]string{"role": "assistant", "content": "Regenerated Studio reply."}, "finish_reason": "stop"},
+			}})
+			return
+		}
 		if taskAnswerFixtureResponse(w, body) {
 			return
 		}

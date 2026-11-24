@@ -20,6 +20,7 @@ type sessionFile struct {
 	Title              string                   `json:"title,omitempty"`
 	UpdatedAt          *time.Time               `json:"updated_at,omitempty"`
 	Transcript         []sessionmessage.Message `json:"transcript,omitempty"`
+	HistoryRevision    string                   `json:"history_revision,omitempty"`
 	ResponseUsage      []ResponseUsage          `json:"response_usage,omitempty"`
 	TranscriptThoughts []TranscriptThought      `json:"transcript_thoughts,omitempty"`
 	Context            []sessionmessage.Message `json:"context,omitempty"`
@@ -37,7 +38,7 @@ func (s Session) MarshalJSON() ([]byte, error) {
 	return json.Marshal(sessionFile{
 		Type:    s.Type.Effective(),
 		Version: CurrentVersion, ID: s.ID, RunID: s.RunID, Title: s.Title, UpdatedAt: s.UpdatedAt,
-		Transcript: sessionmessage.Encode(s.Transcript), Context: sessionmessage.Encode(s.Context),
+		Transcript: sessionmessage.Encode(s.Transcript), Context: sessionmessage.Encode(s.Context), HistoryRevision: s.HistoryRevision,
 		ResponseUsage:      s.ResponseUsage,
 		TranscriptThoughts: s.TranscriptThoughts,
 		ResponseReplay:     s.ResponseReplay, ResponseAffinity: s.ResponseAffinity,
@@ -86,7 +87,7 @@ func (s *Session) UnmarshalJSON(data []byte) error {
 		*s = Session{
 			Type:    saved.Type.Effective(),
 			Version: CurrentVersion, ID: saved.ID, RunID: saved.RunID, Title: saved.Title, UpdatedAt: saved.UpdatedAt,
-			Transcript: sessionmessage.Decode(saved.Transcript), Context: sessionmessage.Decode(saved.Context),
+			Transcript: sessionmessage.Decode(saved.Transcript), Context: sessionmessage.Decode(saved.Context), HistoryRevision: saved.HistoryRevision,
 			ResponseUsage:      saved.ResponseUsage,
 			TranscriptThoughts: saved.TranscriptThoughts,
 			ResponseReplay:     saved.ResponseReplay, ResponseAffinity: saved.ResponseAffinity,

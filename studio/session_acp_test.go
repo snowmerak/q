@@ -13,6 +13,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/snowmerak/q/client"
 	"github.com/snowmerak/q/config"
 	"github.com/snowmerak/q/internal/librarymcp"
 	"github.com/snowmerak/q/internal/workitemtools"
@@ -298,6 +299,36 @@ func TestStudioACPSessionsStreamResumeAndRequireApproval(t *testing.T) {
 				}
 				if strings.Contains(history, librarymcp.SkillInstructions) || strings.Contains(history, librarymcp.Instructions) {
 					t.Fatalf("fallback ACP prompt repeated tool instructions in restored history: %q", prompt)
+				}
+			}
+			if options.load {
+				saved, err := fixture.session.Load()
+				if err != nil {
+					t.Fatal(err)
+				}
+				index := slices.IndexFunc(saved.Transcript, func(message client.Message) bool {
+					return message.TextContent() == "ACP answer: first"
+				})
+				if index < 0 || saved.UpdatedAt == nil {
+					t.Fatal("original ACP reply is missing")
+				}
+				edited := runStudioResponseChange(t, fixture, server.URL, index, "edit", "Corrected ACP reply", *saved.UpdatedAt)
+				if edited.Status != "completed" {
+					t.Fatalf("ACP response edit: %+v", edited)
+				}
+				run("after history edit")
+				body, err = os.ReadFile(log)
+				if err != nil {
+					t.Fatal(err)
+				}
+				lines := strings.Split(strings.TrimSpace(string(body)), "\n")
+				var changed map[string]string
+				if err := json.Unmarshal([]byte(lines[len(lines)-1]), &changed); err != nil {
+					t.Fatal(err)
+				}
+				if changed["session"] == calls[0]["session"] || !strings.Contains(changed["prompt"], "Corrected ACP reply") ||
+					strings.Contains(changed["prompt"], "ACP answer: first") || !strings.Contains(changed["prompt"], "ACP answer: second") {
+					t.Fatalf("ACP did not continue with edited history: %+v", changed)
 				}
 			}
 			run("permission")

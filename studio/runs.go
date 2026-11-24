@@ -191,6 +191,7 @@ type studioRunInput struct {
 	prompt, operationID string
 	images              []app.ImageInput
 	kind                string
+	responseChange      *app.SessionResponseChange
 }
 
 func (service *sessionRunService) startRun(root, sessionID string, input studioRunInput, causes ...context.Context) (*studioRun, error) {
@@ -213,7 +214,7 @@ func (service *sessionRunService) startRun(root, sessionID string, input studioR
 			return nil, errors.New("session runtime does not accept images")
 		}
 	}
-	if input.kind != compactionRunKind && input.prompt == "" && len(input.images) == 0 {
+	if input.kind == "" && input.prompt == "" && len(input.images) == 0 {
 		return nil, errors.New("content is required")
 	}
 	if len(input.prompt) > subagent.MaximumDelegatePromptBytes {
@@ -261,7 +262,7 @@ func (service *sessionRunService) startRun(root, sessionID string, input studioR
 	}
 	run.snapshot.OperationID = input.operationID
 	run.snapshot.Kind = input.kind
-	if input.kind == compactionRunKind {
+	if input.kind != "" {
 		run.control = nil
 	}
 	if err := run.persistSnapshotLocked(); err != nil {
@@ -335,6 +336,8 @@ func (service *sessionRunService) execute(runContext context.Context, run *studi
 	var runErr error
 	if input.kind == compactionRunKind {
 		runErr = service.executeCompaction(runContext, run, emit)
+	} else if input.responseChange != nil {
+		runErr = service.executeResponseChange(runContext, run.store, *input.responseChange, emit)
 	} else if withOptions, ok := service.runner.(sessionOptionsRunner); ok && (input.operationID != "" || len(input.images) != 0) {
 		runErr = withOptions.RunWithOptions(runContext, run.store, run.store.SessionID, input.prompt, app.SessionOptions{OperationID: input.operationID, Control: run.control, Images: input.images}, emit)
 	} else if controlled, ok := service.runner.(controlledSessionRunner); ok {
@@ -357,9 +360,13 @@ func (service *sessionRunService) execute(runContext context.Context, run *studi
 		if service.ctx.Err() != nil {
 			typeName = "cancelled"
 			detail = "Turn stopped because studio is shutting down: " + detail
-		} else if input.kind == compactionRunKind && errors.Is(runContext.Err(), context.Canceled) {
+		} else if input.kind != "" && errors.Is(runContext.Err(), context.Canceled) {
 			typeName = "cancelled"
-			detail = "Context compaction was stopped"
+			if input.kind == compactionRunKind {
+				detail = "Context compaction was stopped"
+			} else {
+				detail = "Response change was stopped"
+			}
 		}
 		if err := run.append(app.SessionEvent{Type: typeName, RunID: run.snapshot.ID, Detail: detail}); err != nil {
 			logger.Error("studio.persistence.failed", "event_type", typeName, "error", err)
@@ -748,7 +755,7 @@ func (run *studioRun) applyEventLocked(event app.SessionEvent, now time.Time) {
 		}
 	case "result":
 		run.snapshot.Outcome = event.Outcome
-		if run.snapshot.Kind == compactionRunKind {
+		if run.snapshot.Kind != "" {
 			run.snapshot.StatusDetail = event.Detail
 		}
 		run.snapshot.PendingQuestion = nil
@@ -1026,9 +1033,9 @@ func (service *sessionsService) serveRunCommand(writer http.ResponseWriter, requ
 		return
 	}
 	snapshot := run.snapshotCopy()
-	if snapshot.Kind == compactionRunKind && !terminalRunStatus(snapshot.Status) && run.cancel != nil {
+	if (snapshot.Kind == compactionRunKind || snapshot.Kind == responseChangeRunKind) && !terminalRunStatus(snapshot.Status) && run.cancel != nil {
 		if strings.TrimSpace(input.Action) != "cancel" {
-			writeAPIError(writer, http.StatusConflict, errors.New("compaction only supports cancellation"))
+			writeAPIError(writer, http.StatusConflict, errors.New("this operation only supports cancellation"))
 			return
 		}
 		run.cancel()

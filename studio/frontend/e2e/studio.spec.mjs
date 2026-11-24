@@ -517,7 +517,7 @@ test('Projects manages defaults, atomic initial members, limits, bindings and ar
   expect((await (await request.get('/api/v1/projects')).json()).projects.find(p => p.id === saved.id)).toBeUndefined();
 });
 
-test('Coordinator and Integrator stay independent and protected after clear', async ({ page, request }) => {
+test('Integrator stays hidden in the session tree and accessible from tickets', async ({ page, request }) => {
   const { projects, sessions } = await (await request.get('/api/v1/registered-sessions')).json();
   const project = projects.find((item) => item.name === 'Integration');
   const group = page.locator(`[id="session-group-${project.id}"]`);
@@ -531,9 +531,14 @@ test('Coordinator and Integrator stay independent and protected after clear', as
     identities.push(sessionID);
     await page.getByRole('textbox', { name: 'Search sessions', exact: true }).fill('');
     const row = group.locator('.session-root').filter({ has: page.getByText(description, { exact: true }) });
-    await expect(row).toHaveCount(1);
-    await expect(row.locator('.session-delete')).toHaveCount(0);
-    await row.locator('.session-select').click();
+    if (role === 'coordinator') {
+      await expect(row).toHaveCount(1);
+      await expect(row.locator('.session-delete')).toHaveCount(0);
+      await row.locator('.session-select').click();
+    } else {
+      await expect(row).toHaveCount(0);
+      await page.goto('/sessions/' + registration.registration_id);
+    }
     await expect(page.getByRole('heading', { name: title, exact: true })).toBeVisible();
     await expect(page.locator('.composer textarea')).toBeEnabled();
     await page.getByLabel('More session actions', { exact: true }).click();
@@ -546,7 +551,8 @@ test('Coordinator and Integrator stay independent and protected after clear', as
     expect(current.session.session_id).toBe(sessionID);
     await page.reload();
     await page.getByRole('textbox', { name: 'Search sessions', exact: true }).fill(title);
-    await expect(row).toBeVisible();
+    if (role === 'coordinator') await expect(row).toBeVisible();
+    else await expect(row).toHaveCount(0);
     await page.screenshot({ path: join(tmpdir(), `q-workspace-${role}.png`) });
   }
   expect(new Set(identities).size).toBe(2);
@@ -557,6 +563,41 @@ test('Coordinator and Integrator stay independent and protected after clear', as
     await page.getByRole('button', { name: role === 'coordinator' ? 'Coordinator' : 'Integrator', exact: true }).click();
     await expect(page.getByRole('heading', { name: role === 'coordinator' ? 'Coordinator' : 'Integrator', exact: true })).toBeVisible();
   }
+});
+
+test('saved responses can be edited, regenerated and deleted in place', async ({ page, request }) => {
+  const fixture = await (await request.get('/_test/fixture')).json();
+  const registration = await (await request.post('/api/v1/registered-sessions', {
+    data: { workspace_root: fixture.root, create: true },
+  })).json();
+  await page.goto('/sessions/' + registration.registration_id);
+  const composer = page.getByRole('textbox', { name: 'Message Q' });
+  const first = page.locator('.chat-message').filter({ has: page.getByRole('heading', { name: 'Studio result' }) }).first();
+  await composer.fill('Produce a first answer');
+  await composer.press('Enter');
+  await expect(first.getByRole('button', { name: 'Edit response' })).toBeEnabled();
+  await composer.fill('Produce a later answer');
+  await composer.press('Enter');
+  await expect(page.getByRole('heading', { name: 'Studio result' })).toHaveCount(2);
+  await expect(first.getByRole('button', { name: 'Edit response' })).toBeEnabled();
+  await first.getByRole('button', { name: 'Edit response' }).click();
+  await page.getByRole('textbox', { name: 'Response text' }).fill('My edited response.');
+  await page.getByRole('button', { name: 'Save response' }).click();
+  const edited = page.locator('.chat-message').filter({ hasText: 'My edited response.' });
+  await expect(edited.getByRole('button', { name: 'Regenerate response' })).toBeEnabled();
+  await edited.getByRole('button', { name: 'Regenerate response' }).click();
+  const regenerated = page.locator('.chat-message').filter({ hasText: 'Regenerated Studio reply.' });
+  await expect(regenerated.getByRole('button', { name: 'Delete response' })).toBeEnabled();
+  await expect(page.getByRole('heading', { name: 'Studio result' })).toHaveCount(1);
+  page.once('dialog', dialog => dialog.accept());
+  await regenerated.getByRole('button', { name: 'Delete response' }).click();
+  await expect(regenerated).toHaveCount(0);
+  await page.reload();
+  await expect(page.getByRole('heading', { name: 'Studio result' })).toHaveCount(1);
+  const prompts = page.locator('.transcript .user-message');
+  await expect(prompts.getByText('Produce a first answer', { exact: true })).toBeVisible();
+  await expect(prompts.getByText('Produce a later answer', { exact: true })).toBeVisible();
+  await expect(regenerated).toHaveCount(0);
 });
 
 test('folder browser closes before registration and registers the selected workspace', async ({ page, request }) => {
