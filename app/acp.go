@@ -1251,6 +1251,7 @@ func (a *acpAgent) runAgentTurn(ctx context.Context, history []client.Message) (
 			a.state.gatewayConfig, a.state.activeConfig().ModelGroups, a.state.activeModel(), nil,
 		),
 		ContextPolicy:     memoryPolicy(a.state.activeConfig()),
+		PromptUsage:       a.state.memory.PromptUsage(),
 		BrowserPreference: a.state.browserPreference(),
 	}, events)
 
@@ -1289,6 +1290,10 @@ func (a *acpAgent) continueACPAgentTurn(
 	}()
 
 	for event := range events {
+		if event.promptUsage != nil {
+			a.state.memory.ObserveUsage(event.promptUsage.InputTokens, event.promptUsage.LocalEstimate)
+			a.publishUsageUpdate()
+		}
 		if event.activity != nil {
 			progress := strings.TrimSpace(strings.Join([]string{acpTraceAgentLabel(event.activity.Agent, event.activity.TaskID), event.activity.Action, event.activity.Detail}, " · "))
 			if progress != "" {
@@ -1430,7 +1435,7 @@ func (a *acpAgent) continueACPAgentTurn(
 			return acp.PromptResponse{}, event.err
 		}
 		if event.response != nil {
-			return a.finishPrompt(*event.response, event.requestEstimate, streamedResponse, event.responseContext, event.replyAlreadyEmitted)
+			return a.finishPrompt(*event.response, streamedResponse, event.responseContext, event.replyAlreadyEmitted)
 		}
 	}
 
@@ -1462,7 +1467,7 @@ func (a *acpAgent) finishCancelledPrompt() acp.PromptResponse {
 	return acp.PromptResponse{StopReason: acp.StopReasonCancelled}
 }
 
-func (a *acpAgent) finishPrompt(response client.ChatResponse, requestEstimate int, streamedResponse *string, responseContext *client.Message, replyAlreadyEmitted bool) (acp.PromptResponse, error) {
+func (a *acpAgent) finishPrompt(response client.ChatResponse, streamedResponse *string, responseContext *client.Message, replyAlreadyEmitted bool) (acp.PromptResponse, error) {
 	if len(response.Choices) == 0 {
 		return acp.PromptResponse{}, errors.New("model returned no response choices")
 	}
@@ -1481,7 +1486,6 @@ func (a *acpAgent) finishPrompt(response client.ChatResponse, requestEstimate in
 		contextMessage = *responseContext
 	}
 	a.state.memory.Append(contextMessage)
-	a.state.memory.ObserveUsage(client.ContextUsage(&response).PromptTokens, requestEstimate)
 	a.state.conversationID = response.ConversationID
 	if !replyAlreadyEmitted {
 		a.state.archiveMessage(message, sessionstore.StatusSucceeded, false)

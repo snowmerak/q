@@ -76,6 +76,9 @@ func TestCheckpointCopyKeepsOriginalUntilCommit(t *testing.T) {
 	if compacted.Stats().Compactions != 1 || compacted.Stats().ProviderOverhead != m.Stats().ProviderOverhead {
 		t.Fatalf("staged manager lost statistics: %#v", compacted.Stats())
 	}
+	if compacted.PromptUsage() != (PromptUsage{}) || m.PromptUsage().InputTokens == 0 {
+		t.Fatal("compaction must discard the observation only for the new context")
+	}
 	if len(compacted.Messages()) >= len(before) {
 		t.Fatalf("staged manager was not compacted: %d >= %d", len(compacted.Messages()), len(before))
 	}
@@ -111,6 +114,31 @@ func TestUsageCalibratesProviderOverhead(t *testing.T) {
 	stats := m.Stats()
 	if stats.ProviderOverhead != 16000-estimate {
 		t.Fatalf("overhead = %d", stats.ProviderOverhead)
+	}
+}
+
+func TestReportedUsageReplacesEstimateAndKeepsOnlyHistoryDelta(t *testing.T) {
+	manager := New(Policy{ContextWindow: 1000, TriggerRatio: .85}, []client.Message{
+		{Role: client.RoleUser, Content: strings.Repeat("x", 2500)},
+	})
+	if !manager.ShouldCompact() {
+		t.Fatal("fixture must reach the threshold by local estimate")
+	}
+	requestEstimate := manager.LocalEstimate()
+	manager.ObserveUsage(900, requestEstimate)
+	manager.ObserveUsage(400, requestEstimate)
+	manager.ObserveUsage(0, requestEstimate)
+	if got := manager.PredictedTokens(); got != 400 || manager.ShouldCompact() {
+		t.Fatalf("predicted tokens = %d, want the latest reported input below the threshold", got)
+	}
+	reply := client.Message{Role: client.RoleAssistant, Content: "short reply"}
+	manager.Append(reply)
+	want := 400 + manager.LocalEstimate() - requestEstimate
+	if got := manager.PredictedTokens(); got != want {
+		t.Fatalf("predicted tokens = %d, want %d after appending the reply", got, want)
+	}
+	if !manager.ShouldCompactAfterAppend(client.Message{Role: client.RoleUser, Content: strings.Repeat("y", 1400)}) {
+		t.Fatal("a later input should still trigger compaction when its estimate fills the context")
 	}
 }
 

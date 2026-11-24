@@ -26,7 +26,7 @@ require (
 	github.com/tc-hib/winres v0.3.1
 	github.com/zeebo/blake3 v0.2.4
 	go.etcd.io/bbolt v1.4.0
-	golang.org/x/image v0.20.0
+	golang.org/x/image v0.45.0
 	golang.org/x/sys v0.49.0
 	golang.org/x/text v0.43.0
 	gopkg.in/yaml.v3 v3.0.1

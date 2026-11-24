@@ -48,6 +48,8 @@ type Request struct {
 	Stream               bool
 	CoalesceInstructions bool
 	ContextPolicy        memory.Policy
+	// PromptUsage is the most recent observation for this retained history.
+	PromptUsage memory.PromptUsage
 	// BrowserPreference is host guidance for runtimes that expose run_command.
 	BrowserPreference string
 	// AllowedTools filters the complete catalog, including loop-owned tools.
@@ -101,6 +103,7 @@ type Event struct {
 	responseContext     *client.Message
 	replyAlreadyEmitted bool
 	usage               *client.Usage
+	promptUsage         *memory.PromptUsage
 	call                *client.ToolCall
 	question            *AgentQuestion
 	answer              chan AgentAnswer
@@ -152,6 +155,14 @@ func (e Event) Usage() (client.Usage, bool) {
 		return client.Usage{}, false
 	}
 	return *e.usage, true
+}
+
+// PromptUsage reports a model call's input count before subsequent history changes.
+func (e Event) PromptUsage() (memory.PromptUsage, bool) {
+	if e.promptUsage == nil {
+		return memory.PromptUsage{}, false
+	}
+	return *e.promptUsage, true
 }
 
 func (e Event) ToolCall() (client.ToolCall, bool) {

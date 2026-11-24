@@ -17,6 +17,12 @@ func (m model) updateAgentEvent(message agentEventMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	event := message.event
+	if event.promptUsage != nil {
+		if m.memory != nil {
+			m.memory.ObserveUsage(event.promptUsage.InputTokens, event.promptUsage.LocalEstimate)
+		}
+		return m, waitAgentEvent(message.events, message.turnID)
+	}
 	if event.taskStarted != nil {
 		if err := m.saveActiveTask(event.taskStarted); err != nil {
 			m.turnErr = errors.Join(m.turnErr, err)
@@ -171,7 +177,8 @@ func (m model) updateAgentEvent(message agentEventMsg) (tea.Model, tea.Cmd) {
 	return m.updateChatResult(chatResultMsg{
 		turnID:          message.turnID,
 		responseContext: event.responseContext, replyAlreadyEmitted: event.replyAlreadyEmitted,
-		response: event.response, requestEstimate: event.requestEstimate,
+		promptUsageManaged: event.promptUsageManaged,
+		response:           event.response, requestEstimate: event.requestEstimate,
 		toolCalls: event.toolCalls, err: event.err,
 	})
 }
@@ -249,11 +256,14 @@ func (m model) updateChatResult(message chatResultMsg) (tea.Model, tea.Cmd) {
 		for _, intermediate := range message.intermediate {
 			m.memory.Append(intermediate)
 		}
-		requestEstimate := message.requestEstimate
-		if requestEstimate == 0 {
-			requestEstimate = m.requestEstimate
+		// Agent loop observations arrive before any subsequent compaction.
+		if !message.promptUsageManaged {
+			requestEstimate := message.requestEstimate
+			if requestEstimate == 0 {
+				requestEstimate = m.requestEstimate
+			}
+			m.memory.ObserveUsage(client.ContextUsage(message.response).PromptTokens, requestEstimate)
 		}
-		m.memory.ObserveUsage(client.ContextUsage(message.response).PromptTokens, requestEstimate)
 		contextMessage := assistant
 		if message.responseContext != nil {
 			contextMessage = *message.responseContext

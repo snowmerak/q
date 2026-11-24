@@ -14,6 +14,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/snowmerak/q/internal/tokenestimate"
 )
 
 const (
@@ -211,7 +213,7 @@ func normalizedUsageRecord(model string, reported Usage, promptEstimate, complet
 }
 
 func estimateRequestTokens(request ChatRequest) int {
-	return estimateJSONTokens(request.Messages, len(request.Messages), 4) +
+	return tokenestimate.Messages(request.Messages) +
 		estimateJSONTokens(request.Tools, len(request.Tools), 4)
 }
 

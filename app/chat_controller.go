@@ -543,6 +543,7 @@ func (m model) compactContext(plan memory.Plan, manual bool) tea.Cmd {
 
 func (m *model) sendChatRequest() tea.Cmd {
 	history := m.memory.Messages()
+	promptUsage := m.memory.PromptUsage()
 	m.requestEstimate = memory.CountMessages(history)
 	conversationID := m.conversationID
 	configuredClient := m.client
@@ -608,6 +609,7 @@ func (m *model) sendChatRequest() tea.Cmd {
 				AuxiliaryDirectories: auxiliaryDirectories,
 				ActiveTask:           activeTask, Stream: streamEnabled, CoalesceInstructions: coalesceInstructions,
 				ContextPolicy:     memoryPolicy(m.activeConfig()),
+				PromptUsage:       promptUsage,
 				BrowserPreference: m.browserPreference(),
 				AllowedTools:      allowedTools,
 			}, events)

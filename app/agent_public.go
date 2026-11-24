@@ -3,6 +3,7 @@ package app
 import (
 	"github.com/snowmerak/q/agentloop"
 	"github.com/snowmerak/q/client"
+	"github.com/snowmerak/q/memory"
 	"github.com/snowmerak/q/workspace"
 )
 
@@ -73,6 +74,14 @@ func (e AgentEvent) Compaction() (AgentContextCompaction, bool) {
 		return AgentContextCompaction{}, false
 	}
 	return *e.compaction, true
+}
+
+// PromptUsage reports a model call's input count before subsequent history changes.
+func (e AgentEvent) PromptUsage() (memory.PromptUsage, bool) {
+	if e.promptUsage == nil {
+		return memory.PromptUsage{}, false
+	}
+	return *e.promptUsage, true
 }
 
 // ContextReplacement reports a repaired message that the host should use when

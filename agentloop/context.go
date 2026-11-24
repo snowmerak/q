@@ -29,10 +29,7 @@ func NewContext(policy memory.Policy, initial []client.Message, tools []client.T
 
 func newAgentLoopContext(policy memory.Policy, initial []client.Message, tools []client.Tool) *Context {
 	manager := memory.New(policy, initial)
-	if toolTokens := memory.CountTools(tools); toolTokens > 0 {
-		local := manager.LocalEstimate()
-		manager.ObserveUsage(local+toolTokens, local)
-	}
+	manager.ReserveToolTokens(memory.CountTools(tools))
 	return &Context{manager: manager}
 }
 

@@ -216,6 +216,7 @@ type workspaceModelConfiguredMsg struct {
 type chatResultMsg struct {
 	responseContext     *client.Message
 	replyAlreadyEmitted bool
+	promptUsageManaged  bool
 	turnID              uint64
 	response            *client.ChatResponse
 	intermediate        []client.Message
@@ -233,6 +234,8 @@ type AgentEvent struct {
 	replyAlreadyEmitted bool
 	persistenceAck      chan struct{}
 	usage               *client.Usage
+	promptUsage         *memory.PromptUsage
+	promptUsageManaged  bool
 	status              string
 	activity            *agentActivity
 	trace               *agentTrace
@@ -800,6 +803,9 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		m.config, m.draftConfig, m.client = message.config, message.config, message.client
 		m.conversationID = ""
 		m.clearResponseReplay()
+		if m.memory != nil {
+			m.memory.Configure(memoryPolicy(m.activeConfig()))
+		}
 		m.status = message.modelID + " · " + m.preferredModelAPIMode(message.modelID)
 		return m, m.modelFilter.Focus()
 	case modelRoleConfiguredMsg:

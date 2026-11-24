@@ -6,9 +6,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"math"
 
 	"github.com/snowmerak/q/client"
+	"github.com/snowmerak/q/internal/tokenestimate"
 )
 
 const SummaryName = "q_context_summary"
@@ -69,11 +69,18 @@ type Stats struct {
 	Compactions      int
 }
 
+// PromptUsage pairs the last reported input tokens with the local estimate of
+// the same request. A zero input count means no observation is available.
+type PromptUsage struct {
+	InputTokens   int
+	LocalEstimate int
+}
+
 type Manager struct {
 	policy           Policy
 	messages         []client.Message
 	taskMemory       taskMemory
-	lastPromptTokens int
+	promptUsage      PromptUsage
 	providerOverhead int
 	compactions      int
 }
@@ -87,7 +94,7 @@ func New(policy Policy, initial []client.Message) *Manager {
 
 func (m *Manager) Configure(policy Policy) {
 	m.policy = policy
-	m.lastPromptTokens = 0
+	m.promptUsage = PromptUsage{}
 	m.providerOverhead = 0
 }
 
@@ -95,7 +102,7 @@ func (m *Manager) Reset(messages []client.Message) {
 	m.messages = cloneMessages(messages)
 	m.taskMemory = taskMemory{}
 	m.taskMemory.replay(messages)
-	m.lastPromptTokens = 0
+	m.promptUsage = PromptUsage{}
 	m.providerOverhead = 0
 	m.compactions = 0
 }
@@ -162,11 +169,13 @@ func (m *Manager) LocalEstimate() int {
 }
 
 func (m *Manager) PredictedTokens() int {
-	if len(m.messages) == 0 {
+	local := m.LocalEstimate()
+	if usage := m.promptUsage; usage.InputTokens > 0 {
+		return max(0, usage.InputTokens+(local-usage.LocalEstimate))
+	}
+	if local == 0 {
 		return m.providerOverhead
 	}
-	// The estimator is intentionally conservative before usage calibration.
-	local := m.LocalEstimate()
 	return local + m.providerOverhead + max(8, local/10)
 }
 
@@ -198,17 +207,28 @@ func (m *Manager) ObserveUsage(promptTokens, localEstimate int) {
 	if promptTokens <= 0 || localEstimate < 0 {
 		return
 	}
-	m.lastPromptTokens = promptTokens
+	m.promptUsage = PromptUsage{InputTokens: promptTokens, LocalEstimate: localEstimate}
 	observed := max(0, promptTokens-localEstimate)
 	// Do not immediately forget provider-injected context. A decaying high-water
 	// mark avoids underestimating the next request when overhead fluctuates.
 	m.providerOverhead = max(observed, m.providerOverhead*3/4)
 }
 
+// PromptUsage returns the observation so a loop can estimate an extension of
+// the same context before making its next request.
+func (m *Manager) PromptUsage() PromptUsage {
+	return m.promptUsage
+}
+
+// ReserveToolTokens seeds the fallback for tool definitions while usage is unknown.
+func (m *Manager) ReserveToolTokens(tokens int) {
+	m.providerOverhead = max(m.providerOverhead, tokens)
+}
+
 func (m *Manager) Stats() Stats {
 	return Stats{
 		ContextWindow: m.policy.ContextWindow, PredictedTokens: m.PredictedTokens(),
-		LastPromptTokens: m.lastPromptTokens, ProviderOverhead: m.providerOverhead,
+		LastPromptTokens: m.promptUsage.InputTokens, ProviderOverhead: m.providerOverhead,
 		Compactions: m.compactions,
 	}
 }
@@ -456,6 +476,7 @@ func (m *Manager) ApplyCheckpoint(plan Plan, response string) (string, error) {
 		}
 	}
 	m.messages = compacted
+	m.promptUsage = PromptUsage{}
 	m.taskMemory = taskMemory{}
 	m.taskMemory.replay(compacted)
 	m.providerOverhead = max(m.providerOverhead, plan.ProviderOverhead)
@@ -464,14 +485,7 @@ func (m *Manager) ApplyCheckpoint(plan Plan, response string) (string, error) {
 }
 
 func CountMessages(messages []client.Message) int {
-	if len(messages) == 0 {
-		return 0
-	}
-	body, err := json.Marshal(messages)
-	if err != nil {
-		return len(messages) * 8
-	}
-	return int(math.Ceil(float64(len(body))/3.0)) + len(messages)*4
+	return tokenestimate.Messages(messages)
 }
 
 // CountTools estimates the request cost of tool definitions using the same
