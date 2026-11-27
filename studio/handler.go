@@ -126,6 +126,7 @@ func newHandlerRuntime(parent context.Context, store config.Store, runner sessio
 	mux.HandleFunc("GET /api/v1/workspaces/loom", settings.serveLoomStatus)
 	mux.HandleFunc("POST /api/v1/workspaces/loom/collect", settings.serveLoomCollect)
 	mux.HandleFunc("PUT /api/v1/settings/services/{service}", settings.serveServiceUpdate)
+	mux.HandleFunc("POST /api/v1/settings/provider-environment/reload", settings.serveProviderEnvironmentReload)
 	integrations := newIntegrationService(store, runner, &settings.mu)
 	mux.HandleFunc("/api/v1/integrations/mcp", integrations.serveMCP)
 	mux.HandleFunc("/api/v1/workspaces/lsp", integrations.serveLSP)

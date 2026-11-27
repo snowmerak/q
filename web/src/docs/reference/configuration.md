@@ -45,6 +45,23 @@ In `config.yaml`, `provider.request_retry` accepts `max_attempts` (1–10),
 next turn. A retry uses the current Gateway address and credential; cancellation
 stops immediately. Streams reconnect only before their first returned chunk.
 
+Studio reads provider API keys referenced by `api_key_env` from the environment
+it inherited at startup. To rotate a key while Studio stays open, select
+**Settings → Services → Reload credentials**. On macOS and Linux, configure a
+command that prints a JSON object of variable names and values:
+
+```yaml
+provider_environment:
+  shell: /bin/zsh
+  command: zsh -lic 'jq -n env'
+```
+
+`shell` runs `command` with `-c` and defaults to `$SHELL`. On Windows, Studio
+reads a fresh user and system environment when no command is set. Studio keeps
+only the variables that provider settings reference, keeps them in memory, and
+restarts the managed Gateway, the standalone Gateway, and Decisions with them.
+A failed command or Gateway restart keeps the working credentials.
+
 ## Import and export
 
 Open **Settings → Import / Export** in Studio to move global settings. The dialog has Models, Providers, Decisions, Runtime, Services, Subagents, and Integrations tabs. Selections persist across tabs and export together in one JSON file.

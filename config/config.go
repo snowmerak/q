@@ -4,6 +4,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"github.com/snowmerak/q/internal/providerenv"
 	"maps"
 	"net/url"
 	"os"
@@ -70,6 +71,16 @@ type Config struct {
 	Agents                        AgentsConfig                `yaml:"agents,omitempty"`
 	Loom                          LoomConfig                  `yaml:"loom,omitempty"`
 	LSP                           lsp.GlobalConfig            `yaml:"lsp,omitempty"`
+	ProviderEnvironment           ProviderEnvironmentConfig   `yaml:"provider_environment,omitempty"`
+}
+
+// ProviderEnvironmentConfig tells Studio how to obtain fresh provider
+// credentials while it stays open. Command prints a JSON object that maps
+// environment variable names to values; Shell runs it with "-c". Without a
+// command, Windows reads a fresh user and system environment block.
+type ProviderEnvironmentConfig struct {
+	Shell   string `yaml:"shell,omitempty"`
+	Command string `yaml:"command,omitempty"`
 }
 
 type ProviderConfig struct {
@@ -872,7 +883,7 @@ func (p ProviderConfig) ResolveAPIKey() string {
 		return p.APIKey
 	}
 	if p.APIKeyEnv != "" {
-		return os.Getenv(p.APIKeyEnv)
+		return providerenv.Getenv(p.APIKeyEnv)
 	}
 	return ""
 }

@@ -26,7 +26,7 @@ func TestCommitCommandUsesTerminalWorkflow(t *testing.T) {
 	if ctx.Err() != nil {
 		t.Fatalf("q commit did not enter the terminal workflow: %v\n%s", ctx.Err(), body)
 	}
-	if err == nil || !strings.Contains(strings.ToLower(string(body)), "not a git repository") || strings.Contains(string(body), "q studio listening") {
+	if err == nil || !strings.Contains(string(body), "find repository") || strings.Contains(string(body), "q studio listening") {
 		t.Fatalf("q commit should reject a non-repository without opening Studio: err=%v output=%s", err, body)
 	}
 }

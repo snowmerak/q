@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Check, Copy, KeyRound } from '@lucide/svelte';
+  import { Check, Copy, KeyRound, RefreshCw } from '@lucide/svelte';
   import { formatKeyDate } from './format';
   import type { ServiceAPIKey } from './types';
   import { apiError as responseError } from '../api';
@@ -41,6 +41,28 @@
     gatewayKeyCopied = true;
   }
 
+  let credentialsReloading = false;
+  let credentialsStatus = '';
+  let credentialsError = '';
+
+  async function reloadProviderCredentials() {
+    if (credentialsReloading) return;
+    credentialsReloading = true;
+    credentialsStatus = '';
+    credentialsError = '';
+    try {
+      const response = await fetch('/api/v1/settings/provider-environment/reload', { method: 'POST' });
+      if (!response.ok) throw new Error(await responseError(response));
+      const result = (await response.json()) as { loaded: string[]; missing: string[] };
+      credentialsStatus = result.loaded.length ? `Reloaded ${result.loaded.join(', ')}.` : 'No referenced variables were provided.';
+      if (result.missing.length) credentialsStatus += ` Still inherited: ${result.missing.join(', ')}.`;
+    } catch (error) {
+      credentialsError = error instanceof Error ? error.message : String(error);
+    } finally {
+      credentialsReloading = false;
+    }
+  }
+
   function saveService(name: 'gateway' | 'decisions' | 'library') {
     if (!settings) return;
     const service = name === 'decisions' ? settings.services.system_one : settings.services[name];
@@ -78,6 +100,12 @@
     <article class="settings-card service-card">
       <div class="card-heading"><div><h3>Library</h3><p>Global skills and workspace issue/ticket service.</p></div><span class="count-badge">local</span></div>
       <label><span>Host</span><input bind:value={settings.services.library.host} onchange={() => saveService('library')} /></label><label><span>Port</span><input type="number" min="1" max="65535" bind:value={settings.services.library.port} onchange={() => saveService('library')} /></label><code>{settings.services.library.config_path}</code>
+    </article>
+    <article class="settings-card service-card">
+      <div class="card-heading"><div><h3>Provider credentials</h3><p>Reload API keys referenced by <code>api_key_env</code> without restarting Studio. Configure <code>provider_environment</code> in config.yaml; Windows reads the current user environment when no command is set.</p></div></div>
+      <button class="primary-button" onclick={reloadProviderCredentials} disabled={credentialsReloading}><RefreshCw aria-hidden="true" size={15} /> {credentialsReloading ? 'Reloading…' : 'Reload credentials'}</button>
+      {#if credentialsStatus}<p>{credentialsStatus}</p>{/if}
+      {#if credentialsError}<p class="status-error" role="alert">{credentialsError}</p>{/if}
     </article>
   </div>
 </section>

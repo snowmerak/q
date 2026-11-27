@@ -8,10 +8,10 @@ import (
 	"io"
 	"net"
 	"net/http"
-	"os"
 	"time"
 
 	"github.com/snowmerak/q/config"
+	"github.com/snowmerak/q/internal/configwatch"
 	"github.com/snowmerak/q/systemoneconfig"
 	"github.com/snowmerak/q/systemoneserver"
 )
@@ -102,24 +102,15 @@ func runSystemOneWithStore(
 
 func watchSystemOneKeyring(ctx context.Context, command string, store systemoneconfig.Store, server *systemoneserver.Server, output io.Writer) <-chan struct{} {
 	done := make(chan struct{})
+	watcher := configwatch.New(ctx, []string{store.Path()}, configwatch.Options{})
 	go func() {
 		defer close(done)
-		ticker := time.NewTicker(500 * time.Millisecond)
-		defer ticker.Stop()
-		var lastModified time.Time
-		if info, err := os.Stat(store.Path()); err == nil {
-			lastModified = info.ModTime()
-		}
+		defer func() { <-watcher.Done() }()
 		for {
 			select {
 			case <-ctx.Done():
 				return
-			case <-ticker.C:
-				info, err := os.Stat(store.Path())
-				if err != nil || info.ModTime().Equal(lastModified) {
-					continue
-				}
-				lastModified = info.ModTime()
+			case <-watcher.Changes():
 				value, err := store.LoadOrDefault()
 				if err != nil {
 					_, _ = fmt.Fprintf(output, "q %s: API key reload skipped: %v\n", command, err)

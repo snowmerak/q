@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -9,10 +10,13 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/snowmerak/q/internal/fsreplace"
 	"github.com/snowmerak/q/systemoneconfig"
 	"github.com/snowmerak/q/systemoneserver"
 )
@@ -251,4 +255,87 @@ func TestSystemOneKeyringReloadsWhileServing(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitStatus(http.StatusOK)
+}
+
+func TestSystemOneKeyringReloadsAfterReplacementWithSameMetadata(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		_, _ = io.WriteString(writer, `{"models":[{"name":"jev"}]}`)
+	}))
+	defer upstream.Close()
+	store := systemoneconfig.Store{Dir: t.TempDir()}
+	value := systemoneconfig.Default()
+	value.Providers[0].URI = upstream.URL + "/v1/systemone"
+	if err := store.Save(value); err != nil {
+		t.Fatal(err)
+	}
+	keyless, err := os.ReadFile(store.Path())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := store.CreateAPIKey(value, "desktop", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	keyed, err := os.ReadFile(store.Path())
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Pad the keyless settings with trailing whitespace so that both versions
+	// have the same size, then restore them with a fixed modification time.
+	if len(keyless) > len(keyed) {
+		t.Fatalf("keyless settings are larger than keyed settings")
+	}
+	keyless = append(keyless, bytes.Repeat([]byte(" "), len(keyed)-len(keyless))...)
+	modified := time.Now().Add(-time.Hour).Truncate(time.Second)
+	if err := os.WriteFile(store.Path(), keyless, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(store.Path(), modified, modified); err != nil {
+		t.Fatal(err)
+	}
+
+	instance, err := systemoneserver.New(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(instance.Handler())
+	defer server.Close()
+	ctx, cancel := context.WithCancel(t.Context())
+	done := watchSystemOneKeyring(ctx, "decisions", store, instance, io.Discard)
+	defer func() { cancel(); <-done }()
+
+	replacement := filepath.Join(store.Dir, "replacement.json")
+	if err := os.WriteFile(replacement, keyed, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(replacement, modified, modified); err != nil {
+		t.Fatal(err)
+	}
+	if err := fsreplace.Replace(replacement, store.Path()); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(store.Path())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Size() != int64(len(keyless)) || !info.ModTime().Equal(modified) {
+		t.Fatalf("replacement changed metadata: size = %d, modified = %v", info.Size(), info.ModTime())
+	}
+
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		response, err := http.Get(server.URL + "/v1/models")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := response.Body.Close(); err != nil {
+			t.Error(err)
+		}
+		if response.StatusCode == http.StatusUnauthorized {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("status = %d after replacing the watched settings", response.StatusCode)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
 }
