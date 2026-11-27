@@ -700,6 +700,7 @@ func (r GeneralRunner) Run(ctx context.Context, prompt string) (result TaskResul
 		state.TurnStartRound = state.Round
 	}
 	history := NewContextCompactor(r.Spec, state.Context, available, 2)
+	history.SetWorkingDirectory(r.WorkingDirectory)
 	// GeneralRunState.Started remains authoritative across compaction and
 	// restart. Preserve the matching exchange so the model sees the same state.
 	history.PreserveTools(TaskStartToolName)

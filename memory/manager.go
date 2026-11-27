@@ -402,6 +402,47 @@ Return JSON only, without Markdown fences or explanatory prose.`, p.OutputBudget
 	}
 }
 
+// InPrefixPrompt builds the user-turn compaction instruction appended to an
+// existing provider prefix so prompt caches can be reused during compaction.
+func (p Plan) InPrefixPrompt() string {
+	instructions := fmt.Sprintf(`Context compaction requested. Do NOT call any tools.
+Update the session continuation checkpoint from the conversation above using no more than %d tokens.
+The most recent turns will remain verbatim after compaction, so focus the checkpoint on durable state, completed/active work, and facts needed to continue cleanly.
+Return one JSON object with exactly these four sections (prefer short arrays of strings, though a string or small object is acceptable and q will normalize it):
+{"current_request":[],"active_work":[],"previous_work":[],"facts":[]}
+current_request: what the user originally and currently asked for, including completion conditions and constraints. NEVER include this compaction request or trivial status-check meta-turns in current_request, and do not leave current_request empty.
+active_work: what is being done now, remaining unfinished work, latest outcome, next action, and any blocker. Keep active_work distinct from current_request and non-empty whenever unfinished work remains.
+previous_work: earlier completed or abandoned work and its outcome.
+facts: confirmed, user-relevant facts, decisions, exact file paths with line numbers, identifiers, commands, config keys/values, and errors that must survive later compactions.
+Never copy raw tool output, debug dumps, or transient observations. Distinguish unfinished work from completed work and do not invent facts.
+Return JSON only, without Markdown fences or explanatory prose.`, p.OutputBudget)
+	if p.Maintained != nil {
+		instructions += fmt.Sprintf("\nThe maintained task memory already covers earlier conversation through revision %d. Preserve its entries and evidence references unless newer conversation explicitly supersedes them, and merge in all newer progress.", p.MaintainedRevision)
+	}
+	return instructions
+}
+
+// InPrefixMessage returns the user message appended to a live conversation when
+// compacting in-prefix.
+func (p Plan) InPrefixMessage() client.Message {
+	return client.Message{Role: client.RoleUser, Content: p.InPrefixPrompt()}
+}
+
+// CanCompactInPrefix reports whether the live history can be sent verbatim with
+// an appended compaction turn to preserve provider prompt caches. Incomplete
+// tool exchanges or tight context headroom fall back to the detached request.
+func (m *Manager) CanCompactInPrefix(plan Plan) bool {
+	if m == nil || len(m.messages) == 0 || m.policy.ContextWindow <= 0 {
+		return false
+	}
+	if !completeToolHistory(m.messages) {
+		return false
+	}
+	promptTokens := CountMessages([]client.Message{plan.InPrefixMessage()})
+	outputHeadroom := min(max(plan.OutputBudget, 128), 512)
+	return m.PredictedTokens()+promptTokens+outputHeadroom < m.policy.ContextWindow
+}
+
 func (m *Manager) Apply(plan Plan, response string) error {
 	_, err := m.ApplyCheckpoint(plan, response)
 	return err

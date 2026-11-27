@@ -285,6 +285,7 @@ func runGriller[T any](
 		{Role: client.RoleUser, Content: completion.requestLabel + "\n\n" + string(body)},
 	}
 	history := NewContextCompactor(r.Spec, messages, available, len(messages))
+	history.SetWorkingDirectory(r.WorkingDirectory)
 	history.PreserveTools(AskToUserToolName)
 	rounds := r.MaxRounds
 	if rounds <= 0 {
@@ -528,6 +529,7 @@ func (r PlannerRunner) Run(ctx context.Context, brief GrillBrief) (proposal Plan
 	reminders := 0
 	started := false
 	history := NewContextCompactor(r.Spec, messages, available, len(messages))
+	history.SetWorkingDirectory(r.WorkingDirectory)
 	for round := 0; round < rounds; round++ {
 		if err := history.CompactIfNeeded(ctx, &r.Spec, r.Client); err != nil {
 			return PlanProposal{}, fmt.Errorf("subagent: planner context: %w", err)

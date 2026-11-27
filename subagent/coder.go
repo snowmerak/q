@@ -111,6 +111,7 @@ func (r *CoderRunner) run(
 		)},
 	}
 	history := NewContextCompactor(r.Spec, messages, available, len(messages))
+	history.SetWorkingDirectory(r.WorkingDirectory)
 	rounds := r.MaxRounds
 	if rounds <= 0 {
 		rounds = defaultCoderRounds

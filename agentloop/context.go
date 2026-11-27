@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/snowmerak/q/agentinstructions"
 	"github.com/snowmerak/q/client"
 	"github.com/snowmerak/q/memory"
 )
@@ -18,19 +19,42 @@ type AgentContextCompaction struct {
 
 // Context holds loop-local conversation memory and compaction policy.
 type Context struct {
-	manager *memory.Manager
-	extra   map[string]any
+	manager              *memory.Manager
+	extra                map[string]any
+	tools                []client.Tool
+	conversationID       string
+	coalesceInstructions bool
+	workingDirectory     string
+	parallelToolCalls    *bool
 }
 
 // NewContext creates loop-local memory for a test or embedding host.
 func NewContext(policy memory.Policy, initial []client.Message, tools []client.Tool) *Context {
-	return newAgentLoopContext(policy, initial, memory.CountTools(tools))
+	return newAgentLoopContext(policy, initial, memory.CountTools(tools), tools)
 }
 
-func newAgentLoopContext(policy memory.Policy, initial []client.Message, toolTokens int) *Context {
+func newAgentLoopContext(policy memory.Policy, initial []client.Message, toolTokens int, tools []client.Tool) *Context {
 	manager := memory.New(policy, initial)
 	manager.ReserveToolTokens(toolTokens)
-	return &Context{manager: manager}
+	return &Context{manager: manager, tools: append([]client.Tool(nil), tools...)}
+}
+
+func (c *Context) setPrefix(tools []client.Tool, conversationID string, coalesce bool, workingDir string, parallel *bool) {
+	if c == nil {
+		return
+	}
+	c.tools = append([]client.Tool(nil), tools...)
+	c.conversationID = conversationID
+	c.coalesceInstructions = coalesce
+	c.workingDirectory = workingDir
+	c.parallelToolCalls = parallel
+}
+
+func (c *Context) setConversationID(id string) {
+	if c == nil {
+		return
+	}
+	c.conversationID = id
 }
 
 func (c *Context) Messages() []client.Message {
@@ -98,7 +122,7 @@ func (c *Context) CompactBeforeAppend(ctx context.Context, configuredClient Chat
 	if err != nil {
 		return nil, fmt.Errorf("agent loop: reserve context for incoming history: %w", err)
 	}
-	return c.compact(ctx, configuredClient, modelID, reasoningEffort, plan)
+	return c.compact(ctx, configuredClient, modelID, reasoningEffort, plan, true)
 }
 
 // CompactIfNeeded summarizes completed tool-loop history on a fresh provider
@@ -117,7 +141,7 @@ func (c *Context) CompactIfNeeded(
 	if err != nil {
 		return nil, fmt.Errorf("agent loop: plan context compaction: %w", err)
 	}
-	return c.compact(ctx, configuredClient, modelID, reasoningEffort, plan)
+	return c.compact(ctx, configuredClient, modelID, reasoningEffort, plan, true)
 }
 
 // CompactAfterLimit uses only normal retained history. It never installs the
@@ -135,16 +159,47 @@ func (c *Context) CompactAfterLimit(ctx context.Context, configuredClient ChatCl
 		return nil, err
 	}
 	settings.MaxAttempts = 0
-	return c.compact(client.WithGenerationSettings(ctx, settings), configuredClient, modelID, effort, plan)
+	return c.compact(client.WithGenerationSettings(ctx, settings), configuredClient, modelID, effort, plan, false)
 }
 
-func (c *Context) compact(ctx context.Context, configuredClient ChatClient, modelID, reasoningEffort string, plan memory.Plan) (*AgentContextCompaction, error) {
+func (c *Context) compact(ctx context.Context, configuredClient ChatClient, modelID, reasoningEffort string, plan memory.Plan, allowInPrefix bool) (*AgentContextCompaction, error) {
 	checkpointText, ready := plan.CheckpointWithoutModel()
 	if !ready {
 		if configuredClient == nil {
 			return nil, errors.New("agent loop: context compaction requires a model client")
 		}
-		response, err := chatWithEmptyResponseRecovery(client.WithStructuredGeneration(ctx), configuredClient, client.ChatRequest{
+		structuredCtx := client.WithStructuredGeneration(ctx)
+		if allowInPrefix && c.manager.CanCompactInPrefix(plan) {
+			inPrefixMessages := append(
+				providerMessages(agentinstructions.Normalize(c.manager.Messages()), c.coalesceInstructions),
+				plan.InPrefixMessage(),
+			)
+			response, err := chatWithEmptyResponseRecovery(structuredCtx, configuredClient, client.ChatRequest{
+				Model:             modelID,
+				Messages:          inPrefixMessages,
+				ConversationID:    c.conversationID,
+				Tools:             c.tools,
+				ReasoningEffort:   reasoningEffort,
+				WorkingDirectory:  c.workingDirectory,
+				Extra:             c.extra,
+				ParallelToolCalls: c.parallelToolCalls,
+			})
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return nil, ctxErr
+			}
+			if err != nil {
+				if incomplete, ok := errors.AsType[*client.IncompleteGeneration](err); !ok || incomplete.Reason != "context_limit" {
+					return nil, fmt.Errorf("agent loop: compact context: %w", err)
+				}
+			} else if response != nil && len(response.Choices) > 0 && len(response.Choices[0].Message.ToolCalls) == 0 {
+				if next, checkpoint, applyErr := c.manager.CheckpointCopy(plan, response.Choices[0].Message.TextContent()); applyErr == nil {
+					c.manager = next
+					c.conversationID = ""
+					return &AgentContextCompaction{Plan: plan, Summary: checkpoint}, nil
+				}
+			}
+		}
+		response, err := chatWithEmptyResponseRecovery(structuredCtx, configuredClient, client.ChatRequest{
 			Model: modelID, Messages: plan.RequestMessages(),
 			ReasoningEffort: reasoningEffort, Extra: c.extra,
 		})
@@ -164,5 +219,6 @@ func (c *Context) compact(ctx context.Context, configuredClient ChatClient, mode
 		return nil, fmt.Errorf("agent loop: compact context: %w", err)
 	}
 	c.manager = next
+	c.conversationID = ""
 	return &AgentContextCompaction{Plan: plan, Summary: checkpoint}, nil
 }

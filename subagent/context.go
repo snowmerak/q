@@ -18,6 +18,8 @@ type ContextCompactor struct {
 	memory            *memory.Manager
 	anchorCount       int
 	preservedTools    []string
+	tools             []client.Tool
+	workingDirectory  string
 	usage             client.Usage
 	browserPreference string
 }
@@ -56,7 +58,16 @@ func NewContextCompactor(spec Spec, initial []client.Message, tools []client.Too
 		manager.ObserveUsage(local+toolTokens, local)
 	}
 	return &ContextCompactor{
-		memory: manager, anchorCount: min(max(anchorCount, 0), len(initial)), browserPreference: preference,
+		memory: manager, anchorCount: min(max(anchorCount, 0), len(initial)),
+		tools: append([]client.Tool(nil), tools...), browserPreference: preference,
+	}
+}
+
+// SetWorkingDirectory records the execution working directory so in-prefix
+// compaction requests match the runner's normal request shape.
+func (c *ContextCompactor) SetWorkingDirectory(dir string) {
+	if c != nil {
+		c.workingDirectory = dir
 	}
 }
 
@@ -160,9 +171,42 @@ func (c *ContextCompactor) compact(ctx context.Context, spec *Spec, configured A
 		if configured == nil {
 			return errors.New("subagent: context compaction requires a model client")
 		}
+		structuredCtx := client.WithStructuredGeneration(ctx)
+		if !force && c.memory.CanCompactInPrefix(plan) {
+			compactor := *spec
+			parallel := true
+			inPrefixReq := client.ChatRequest{
+				Messages:         append(c.RequestMessages(), plan.InPrefixMessage()),
+				Tools:            c.tools,
+				WorkingDirectory: c.workingDirectory,
+			}
+			if len(c.tools) > 0 {
+				inPrefixReq.ToolChoice = client.ToolChoiceAuto
+				inPrefixReq.ParallelToolCalls = &parallel
+			}
+			response, err := compactor.Chat(structuredCtx, configured, inPrefixReq)
+			if response != nil {
+				usage = addUsage(usage, response.Usage)
+			}
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return ctxErr
+			}
+			if err != nil {
+				if incomplete, ok := errors.AsType[*client.IncompleteGeneration](err); !ok || incomplete.Reason != "context_limit" {
+					return fmt.Errorf("subagent: compact context: %w", err)
+				}
+			} else if response != nil && len(response.Choices) > 0 && len(response.Choices[0].Message.ToolCalls) == 0 {
+				if next, _, applyErr := c.memory.CheckpointCopy(plan, response.Choices[0].Message.TextContent()); applyErr == nil {
+					c.memory = next
+					c.usage = addUsage(c.usage, usage)
+					spec.conversationID = ""
+					return nil
+				}
+			}
+		}
 		compactor := *spec
 		compactor.conversationID = ""
-		response, err := compactor.Chat(client.WithStructuredGeneration(ctx), configured, client.ChatRequest{
+		response, err := compactor.Chat(structuredCtx, configured, client.ChatRequest{
 			Messages: plan.RequestMessages(),
 		})
 		if err != nil {
@@ -171,7 +215,8 @@ func (c *ContextCompactor) compact(ctx context.Context, spec *Spec, configured A
 		if response == nil || len(response.Choices) == 0 {
 			return errors.New("subagent: compact context returned no choices")
 		}
-		checkpointText, usage = response.Choices[0].Message.TextContent(), response.Usage
+		checkpointText = response.Choices[0].Message.TextContent()
+		usage = addUsage(usage, response.Usage)
 	}
 	if err := ctx.Err(); err != nil {
 		return err

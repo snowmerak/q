@@ -1529,10 +1529,22 @@ func (a *acpAgent) compactContext(ctx context.Context, force bool, incoming ...c
 	}
 	checkpointText, ready := plan.CheckpointWithoutModel()
 	if !ready {
-		response, err := chatWithConversationRecovery(ctx, a.state.client, client.ChatRequest{
-			Model:           a.state.activeModel(),
-			ReasoningEffort: a.state.activeConfig().Provider.EffectiveReasoningEffort(),
-			Messages:        plan.RequestMessages(),
+		modelID := a.state.activeModel()
+		coalesceInstructions := modelNeedsSystemInstructionCoalescing(
+			a.state.gatewayConfig, a.state.activeConfig().ModelGroups, modelID, nil,
+		)
+		tools, allowInPrefix := a.state.compactionToolCatalog(a.root)
+		response, err := runCompactionChat(ctx, a.state.memory.Copy(), plan, compactionCallOptions{
+			Model:                modelID,
+			ReasoningEffort:      a.state.activeConfig().Provider.EffectiveReasoningEffort(),
+			ConversationID:       a.state.conversationID,
+			Tools:                tools,
+			CoalesceInstructions: coalesceInstructions,
+			WorkingDirectory:     a.root,
+			Extra:                a.state.anthropicRequestExtra(modelID),
+			AllowInPrefix:        allowInPrefix,
+		}, func(callCtx context.Context, request client.ChatRequest) (*client.ChatResponse, error) {
+			return chatWithConversationRecovery(callCtx, a.state.client, request)
 		})
 		if err != nil {
 			return err

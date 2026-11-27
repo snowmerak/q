@@ -61,7 +61,18 @@ func TestContextCompactorProjectsCoveredMemoryWithoutUsage(t *testing.T) {
 }
 
 func isContextCheckpointRequest(request client.ChatRequest) bool {
-	return len(request.Tools) == 0 && len(request.Messages) > 0 &&
+	if len(request.Messages) == 0 {
+		return false
+	}
+	if len(request.Tools) == 0 && strings.Contains(request.Messages[0].Content, "session continuation checkpoint") {
+		return true
+	}
+	last := request.Messages[len(request.Messages)-1]
+	return last.Role == client.RoleUser && strings.Contains(last.Content, "session continuation checkpoint")
+}
+
+func isDetachedContextCheckpointRequest(request client.ChatRequest) bool {
+	return len(request.Tools) == 0 && request.ConversationID == "" && len(request.Messages) > 0 &&
 		strings.Contains(request.Messages[0].Content, "session continuation checkpoint")
 }
 
@@ -77,13 +88,12 @@ func TestContextCompactorKeepsAnchorsAndUserAnswersAcrossCompactions(t *testing.
 	answer := client.Message{Role: client.RoleTool, Name: AskToUserToolName, ToolCallID: question.ToolCalls[0].ID, Content: `{"freeform":"SQLite only; never Redis."}`}
 	history.Append(question, answer)
 	compactions := 0
+	expectedConvIDs := []string{"old-backend", ""}
 	fake := contextChatFunc(func(_ context.Context, request client.ChatRequest) (*client.ChatResponse, error) {
+		wantConv := expectedConvIDs[compactions]
 		compactions++
-		if request.ConversationID != "" || request.MaxCompletionTokens != nil || !isContextCheckpointRequest(request) || request.Model != "griller" {
-			t.Fatalf("summary request reused execution state: %#v", request)
-		}
-		if strings.Contains(request.Messages[1].Content, "SQLite only") {
-			t.Fatal("authoritative user answer was sent to the summarizer instead of retained verbatim")
+		if request.ConversationID != wantConv || request.MaxCompletionTokens != nil || !isContextCheckpointRequest(request) || request.Model != "griller" {
+			t.Fatalf("summary request = %#v (want conv %q)", request, wantConv)
 		}
 		response := contextResponse(contextCheckpointJSON("Repository investigated. Remaining work is to submit the brief. Keep the Loom references."))
 		response.ConversationID = "summary-backend"
@@ -335,4 +345,100 @@ func TestInternalRunnersCompactBetweenToolRoundsAndKeepContracts(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestContextCompactorInPrefixPreservesToolsAndFallsBackToDetached(t *testing.T) {
+	tools := []client.Tool{scoutFunctionTool("loom_read")}
+
+	t.Run("preserves_tools_and_conversation", func(t *testing.T) {
+		spec := Spec{Role: config.AgentRoleScout, Model: "scout", ContextLength: 32_000, conversationID: "live-thread"}
+		history := NewContextCompactor(spec, []client.Message{
+			{Role: client.RoleSystem, Content: "role"},
+			{Role: client.RoleUser, Content: "task"},
+		}, tools, 2)
+		history.SetWorkingDirectory("/repo")
+		history.Append(client.Message{Role: client.RoleAssistant, Content: strings.Repeat("analysis ", 10_000)})
+		var seen client.ChatRequest
+		fake := contextChatFunc(func(_ context.Context, request client.ChatRequest) (*client.ChatResponse, error) {
+			seen = request
+			return contextResponse(contextCheckpointJSON("kept prefix")), nil
+		})
+		if err := history.CompactIfNeeded(t.Context(), &spec, fake); err != nil {
+			t.Fatal(err)
+		}
+		if seen.ConversationID != "live-thread" || len(seen.Tools) != len(tools) || seen.WorkingDirectory != "/repo" {
+			t.Fatalf("in-prefix request lost live prefix metadata: %#v", seen)
+		}
+		if spec.conversationID != "" {
+			t.Fatalf("spec conversationID was not reset after compaction: %q", spec.conversationID)
+		}
+	})
+
+	for _, mode := range []string{"tool_call", "invalid_json"} {
+		t.Run("fallback_"+mode, func(t *testing.T) {
+			spec := Spec{Role: config.AgentRoleScout, Model: "scout", ContextLength: 32_000, conversationID: "live-thread"}
+			history := NewContextCompactor(spec, []client.Message{
+				{Role: client.RoleSystem, Content: "role"},
+				{Role: client.RoleUser, Content: "task"},
+			}, tools, 2)
+			history.Append(client.Message{Role: client.RoleAssistant, Content: strings.Repeat("analysis ", 10_000)})
+			var requests []client.ChatRequest
+			fake := contextChatFunc(func(_ context.Context, request client.ChatRequest) (*client.ChatResponse, error) {
+				requests = append(requests, request)
+				if !isDetachedContextCheckpointRequest(request) {
+					if mode == "tool_call" {
+						return &client.ChatResponse{Choices: []client.Choice{{Message: client.Message{
+							Role: client.RoleAssistant, ToolCalls: []client.ToolCall{scoutCall("loom_read", `{}`)},
+						}}}}, nil
+					}
+					return contextResponse("not json"), nil
+				}
+				return contextResponse(contextCheckpointJSON("detached fallback")), nil
+			})
+			if err := history.CompactIfNeeded(t.Context(), &spec, fake); err != nil {
+				t.Fatal(err)
+			}
+			if len(requests) != 2 || isDetachedContextCheckpointRequest(requests[0]) || !isDetachedContextCheckpointRequest(requests[1]) {
+				t.Fatalf("expected in-prefix then detached fallback, got %#v", requests)
+			}
+			if spec.conversationID != "" {
+				t.Fatalf("spec conversationID not reset: %q", spec.conversationID)
+			}
+		})
+	}
+
+	t.Run("context_limit_recovery_uses_detached_directly", func(t *testing.T) {
+		spec := Spec{Role: config.AgentRoleScout, Model: "scout", ContextLength: 32_000, conversationID: "live-thread"}
+		history := NewContextCompactor(spec, []client.Message{
+			{Role: client.RoleSystem, Content: "role"},
+			{Role: client.RoleUser, Content: "task"},
+		}, tools, 2)
+		history.Append(client.Message{Role: client.RoleAssistant, Content: strings.Repeat("analysis ", 10_000)})
+		var requests []client.ChatRequest
+		fake := contextChatFunc(func(_ context.Context, request client.ChatRequest) (*client.ChatResponse, error) {
+			requests = append(requests, request)
+			switch len(requests) {
+			case 1:
+				return nil, &client.IncompleteGeneration{
+					Reason: "context_limit", Attempts: 1,
+					Settings: &client.GenerationSettings{MaxAttempts: 2, SafeReplay: true},
+				}
+			case 2:
+				if !isDetachedContextCheckpointRequest(request) {
+					t.Fatalf("context_limit recovery must skip in-prefix and use detached: %#v", request)
+				}
+				return contextResponse(contextCheckpointJSON("recovered")), nil
+			default:
+				return contextResponse("final"), nil
+			}
+		})
+		ctx := client.WithGenerationSettings(t.Context(), client.GenerationSettings{MaxAttempts: 2, SafeReplay: true})
+		resp, err := history.Chat(ctx, &spec, fake, client.ChatRequest{Messages: history.RequestMessages(), Tools: tools})
+		if err != nil || resp == nil || resp.Choices[0].Message.Content != "final" {
+			t.Fatalf("recovery failed: resp=%#v err=%v", resp, err)
+		}
+		if len(requests) != 3 {
+			t.Fatalf("requests = %d, want 3", len(requests))
+		}
+	})
 }

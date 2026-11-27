@@ -16,6 +16,16 @@ import (
 	"github.com/snowmerak/q/workspace"
 )
 
+// ToolCatalog returns the exact tool list RunAgentLoop sends to models for
+// toolRuntime and allowedTools, including orchestration and memory tools.
+func ToolCatalog(toolRuntime ToolRuntime, allowedTools []string) []client.Tool {
+	if toolRuntime == nil {
+		return nil
+	}
+	available := memory.AppendMemoryTools(append(append([]client.Tool(nil), toolRuntime.Tools()...), orchestrationTools()...))
+	return filterTools(available, allowedTools)
+}
+
 // RunAgentLoop runs Q's existing model/tool loop. It is synchronous; callers
 // commonly invoke it in a goroutine while consuming events. The function owns
 // and closes events, but does not close the injected client or tool runtime.
@@ -51,8 +61,7 @@ func RunAgentLoop(ctx context.Context, request Request, events chan<- Event) {
 	coalesceInstructions := request.CoalesceInstructions
 	contextPolicy := request.ContextPolicy
 	requestExtra := request.Extra
-	availableTools := memory.AppendMemoryTools(append(append([]client.Tool(nil), toolRuntime.Tools()...), orchestrationTools()...))
-	availableTools = filterTools(availableTools, request.AllowedTools)
+	availableTools := ToolCatalog(toolRuntime, request.AllowedTools)
 	if !catalogHas(availableTools, taskCompleteToolName) {
 		activeTask = nil
 	}
@@ -88,8 +97,10 @@ func RunAgentLoop(ctx context.Context, request Request, events chan<- Event) {
 		!emitEvent(ctx, events, Event{contextReplace: replacement, toolTokenEstimate: toolTokens}) {
 		return
 	}
-	loopContext := newAgentLoopContext(contextPolicy, history, toolTokens)
+	loopContext := newAgentLoopContext(contextPolicy, history, toolTokens, availableTools)
 	loopContext.extra = requestExtra
+	parallelTools := true
+	loopContext.setPrefix(availableTools, conversationID, coalesceInstructions, workingDirectory, &parallelTools)
 	loopContext.manager.ObserveUsage(request.PromptUsage.InputTokens, request.PromptUsage.LocalEstimate)
 	observePrompt := func(response *client.ChatResponse, requestEstimate int) bool {
 		usage := client.ContextUsage(response)
@@ -115,6 +126,7 @@ func RunAgentLoop(ctx context.Context, request Request, events chan<- Event) {
 			}
 			if compaction != nil {
 				conversationID = ""
+				loopContext.setConversationID("")
 				if !emitEvent(ctx, events, Event{compaction: compaction}) {
 					return false
 				}
@@ -142,6 +154,7 @@ func RunAgentLoop(ctx context.Context, request Request, events chan<- Event) {
 		}
 		if compaction != nil {
 			conversationID = ""
+			loopContext.setConversationID("")
 			if !emitEvent(ctx, events, Event{compaction: compaction}) {
 				return
 			}
@@ -178,6 +191,7 @@ func RunAgentLoop(ctx context.Context, request Request, events chan<- Event) {
 					compacted, compactErr := loopContext.CompactAfterLimit(ctx, configuredClient, modelID, reasoningEffort)
 					if compactErr == nil && compacted != nil && emitEvent(ctx, events, Event{compaction: compacted}) {
 						conversationID = ""
+						loopContext.setConversationID("")
 						settings.MaxAttempts -= incomplete.Attempts
 						nextGenerationSettings = &settings
 						continue
@@ -201,6 +215,7 @@ func RunAgentLoop(ctx context.Context, request Request, events chan<- Event) {
 		}
 		if response.ConversationID != "" {
 			conversationID = response.ConversationID
+			loopContext.setConversationID(conversationID)
 		}
 		if len(assistant.ToolCalls) == 0 {
 			if !taskStarted {

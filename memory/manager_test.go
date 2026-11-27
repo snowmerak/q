@@ -277,3 +277,52 @@ func TestRetentionPinsWholePendingToolExchange(t *testing.T) {
 		t.Fatalf("pending tool exchange was separated: %#v", plan.Immutable)
 	}
 }
+
+func TestInPrefixMessageAndEligibility(t *testing.T) {
+	basePlan := Plan{OutputBudget: 512}
+	msg := basePlan.InPrefixMessage()
+	if msg.Role != client.RoleUser || !strings.Contains(msg.Content, "Do NOT call any tools") ||
+		!strings.Contains(msg.Content, "using no more than 512 tokens") ||
+		strings.Contains(msg.Content, "maintained task memory already covers") {
+		t.Fatalf("unexpected base InPrefixMessage: %#v", msg)
+	}
+	maintainedPlan := Plan{OutputBudget: 512, Maintained: &Checkpoint{Facts: []string{"f-1: ok"}}, MaintainedRevision: 3}
+	if !strings.Contains(maintainedPlan.InPrefixMessage().Content, "revision 3") {
+		t.Fatalf("missing maintained revision guidance: %q", maintainedPlan.InPrefixMessage().Content)
+	}
+
+	m := New(Policy{ContextWindow: 16_000, TriggerRatio: .85, TargetRatio: .22, RecentRatio: .07}, []client.Message{
+		{Role: client.RoleSystem, Content: "contract"},
+		{Role: client.RoleAssistant, Content: strings.Repeat("work ", 2_000)},
+		{Role: client.RoleUser, Content: "next"},
+	})
+	plan, err := m.Plan()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !m.CanCompactInPrefix(plan) {
+		t.Fatalf("expected eligible normal history (predicted=%d, window=16000)", m.PredictedTokens())
+	}
+
+	var nilMgr *Manager
+	if nilMgr.CanCompactInPrefix(plan) {
+		t.Fatal("nil manager should not be eligible")
+	}
+
+	unknown := New(Policy{ContextWindow: 0}, m.Messages())
+	if unknown.CanCompactInPrefix(plan) {
+		t.Fatal("zero context window should not be eligible")
+	}
+
+	pending := New(Policy{ContextWindow: 16_000, TriggerRatio: .85, TargetRatio: .22, RecentRatio: .07}, append(m.Messages(), client.Message{
+		Role: client.RoleAssistant, ToolCalls: []client.ToolCall{{ID: "c-1", Function: client.FunctionCall{Name: "read_file"}}},
+	}))
+	if pending.CanCompactInPrefix(plan) {
+		t.Fatal("pending tool exchange should fall back to detached compaction")
+	}
+
+	tight := New(Policy{ContextWindow: m.PredictedTokens() + 100, TriggerRatio: .85, TargetRatio: .22, RecentRatio: .07}, m.Messages())
+	if tight.CanCompactInPrefix(plan) {
+		t.Fatal("insufficient headroom should fall back to detached compaction")
+	}
+}

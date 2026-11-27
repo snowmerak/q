@@ -65,6 +65,31 @@ checkpoint는 적용하지 않는다. 임계치 85%와 일반 압축 목표 22%�
 
 구현 경계와 검증 결과는 [수동 압축 안정성 리뷰](manual-compact-stability-review.md)에 정리했다.
 
+### In-Prefix 압축 및 Detached 폴백 (2026-11-27)
+
+정상 압축(85% 자동 트리거, 추가 전 공간 예약 `PlanBeforeAppend`, 수동 `/compact`,
+서브에이전트 루프)은 직전 턴까지 누적된 프로바이더 KV 캐시와 stateful 스레드
+(`ConversationID`)를 재사용하기 위해 In-Prefix 방식을 우선 시도한다.
+
+- **전송 형식**: 현재 모델 컨텍스트와 동일한 `ConversationID`, `Tools`,
+  `WorkingDirectory`, 정규화·병합된 메시지 접두사 끝에 `Plan.InPrefixMessage()`
+  (`Role: user`, 도구 호출 금지 및 메타 지시 배제 규칙 포함)만 1턴 추가해
+  체크포인트 JSON을 요청한다. 압축 성공 후에만 `conversation_id`를 초기화한다.
+- **적용 조건 (`Manager.CanCompactInPrefix`)**: `ContextWindow > 0`, 완료된 도구
+  교환 경계(`completeToolHistory`), 그리고 현재 예상 입력 + 압축 지시 + 최소
+  출력 여유가 `ContextWindow` 미만일 때만 In-Prefix를 사용한다.
+- **자동 Detached 폴백**:
+  - `CompactAfterLimit` 및 서브에이전트 `context_limit` 복구(`force=true`)는
+    In-Prefix를 건너뛰고 즉시 `Plan.RequestMessages()`(Detached)를 사용한다.
+  - 미완료 tool call이 남아 있거나 컨텍스트 여유가 부족해도 Detached로 바로
+    이동한다.
+  - In-Prefix 응답이 도구를 호출하거나, `CheckpointCopy` 검증에 실패하거나,
+    `context_limit` 오류를 반환하면 같은 압축 턴 안에서 Detached 요청으로
+    자동 폴백한다(일반 네트워크/프로바이더 오류는 즉시 반환).
+- **무호출 투영 유지**: `memory_checkpoint`로 요약 대상 구간이 이미 모두 커버된
+  경우 `Plan.CheckpointWithoutModel()`이 최우선으로 실행되어 모델 호출 없이
+  체크포인트를 적용한다.
+
 ### 점진적 task memory 압축 (2026-10-03)
 
 기존 `memory_set_active_work`, `memory_complete_work`, `memory_record_fact`에

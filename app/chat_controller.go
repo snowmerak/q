@@ -3,7 +3,6 @@ package app
 import (
 	"context"
 	"errors"
-	"log/slog"
 	"strings"
 	"time"
 
@@ -11,7 +10,6 @@ import (
 	"github.com/snowmerak/q/agentinstructions"
 	"github.com/snowmerak/q/agentloop"
 	"github.com/snowmerak/q/client"
-	"github.com/snowmerak/q/diagnostics"
 	"github.com/snowmerak/q/internal/workmedia"
 	"github.com/snowmerak/q/mcpconfig"
 	"github.com/snowmerak/q/memory"
@@ -518,6 +516,16 @@ func (m model) compactContext(plan memory.Plan, manual bool) tea.Cmd {
 	reasoningEffort := m.activeConfig().Provider.EffectiveReasoningEffort()
 	turnContext := m.activeTurnContext()
 	turnID := m.turnID
+	workingDirectory, _ := m.executionRoots()
+	coalesceInstructions := modelNeedsSystemInstructionCoalescing(
+		m.gatewayConfig, m.activeConfig().ModelGroups, modelID, nil,
+	)
+	tools, allowInPrefix := m.compactionToolCatalog(workingDirectory)
+	var memorySnapshot *memory.Manager
+	if m.memory != nil {
+		memorySnapshot = m.memory.Copy()
+	}
+	conversationID := m.conversationID
 	return func() tea.Msg {
 		if err := turnContext.Err(); err != nil {
 			return compactionResultMsg{turnID: turnID, plan: plan, err: err, manual: manual}
@@ -525,17 +533,18 @@ func (m model) compactContext(plan memory.Plan, manual bool) tea.Cmd {
 		if checkpoint, ready := plan.CheckpointWithoutModel(); ready {
 			return compactionResultMsg{turnID: turnID, checkpoint: checkpoint, plan: plan, err: turnContext.Err(), manual: manual}
 		}
-		messages := plan.RequestMessages()
-		if manual {
-			logger := diagnostics.Logger(turnContext)
-			if logger.Enabled(turnContext, slog.LevelInfo) {
-				logger.InfoContext(turnContext, "studio.compact.model_input", "requested_model", modelID,
-					"input_tokens_estimate", memory.CountMessages(messages))
-			}
-		}
-		response, err := chatWithEmptyResponseRecovery(turnContext, configuredClient, client.ChatRequest{
-			Model: modelID, Messages: messages,
-			ReasoningEffort: reasoningEffort, Extra: requestExtra,
+		response, err := runCompactionChat(turnContext, memorySnapshot, plan, compactionCallOptions{
+			Model:                modelID,
+			ReasoningEffort:      reasoningEffort,
+			ConversationID:       conversationID,
+			Tools:                tools,
+			CoalesceInstructions: coalesceInstructions,
+			WorkingDirectory:     workingDirectory,
+			Extra:                requestExtra,
+			AllowInPrefix:        allowInPrefix,
+			LogManualInput:       manual,
+		}, func(callCtx context.Context, request client.ChatRequest) (*client.ChatResponse, error) {
+			return chatWithEmptyResponseRecovery(callCtx, configuredClient, request)
 		})
 		return compactionResultMsg{turnID: turnID, response: response, plan: plan, err: err, manual: manual}
 	}

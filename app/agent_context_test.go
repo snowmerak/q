@@ -31,7 +31,18 @@ func testCheckpointJSON(activeWork string) string {
 }
 
 func isCheckpointRequestForTest(request client.ChatRequest) bool {
-	return len(request.Tools) == 0 && len(request.Messages) > 0 &&
+	if len(request.Messages) == 0 {
+		return false
+	}
+	if len(request.Tools) == 0 && strings.Contains(request.Messages[0].Content, "session continuation checkpoint") {
+		return true
+	}
+	last := request.Messages[len(request.Messages)-1]
+	return last.Role == client.RoleUser && strings.Contains(last.Content, "session continuation checkpoint")
+}
+
+func isDetachedCheckpointRequestForTest(request client.ChatRequest) bool {
+	return len(request.Tools) == 0 && request.ConversationID == "" && len(request.Messages) > 0 &&
 		strings.Contains(request.Messages[0].Content, "session continuation checkpoint")
 }
 

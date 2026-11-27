@@ -192,6 +192,7 @@ func (r *ScoutRunner) run(ctx context.Context, task ScoutTask, prompt string, li
 		{Role: client.RoleUser, Content: prompt},
 	}
 	history := NewContextCompactor(r.Spec, messages, tools, len(messages))
+	history.SetWorkingDirectory(r.WorkingDirectory)
 	rounds := r.MaxRounds
 	if rounds <= 0 {
 		rounds = defaultScoutRounds

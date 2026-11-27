@@ -189,6 +189,7 @@ func (r PlannerReviewRunner) Run(ctx context.Context, input TaskReviewRequest) (
 	available = withDedicatedTaskStart(available, ReviewTaskToolName)
 	messages[0].Content = withRetrievalCatalog(messages[0].Content, available) + "\n\nStart by calling task_start to receive task-specific skill candidates."
 	history := NewContextCompactor(r.Spec, messages, available, len(messages))
+	history.SetWorkingDirectory(r.WorkingDirectory)
 	started := false
 	rounds := r.MaxRounds
 	if rounds <= 0 {
