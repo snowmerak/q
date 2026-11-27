@@ -13,6 +13,7 @@ import (
 	"time"
 
 	qconfig "github.com/snowmerak/q/config"
+	"github.com/snowmerak/q/internal/closeutil"
 	"github.com/snowmerak/q/internal/localservice"
 	"github.com/snowmerak/q/sessionstore"
 	"github.com/snowmerak/q/worklock"
@@ -40,13 +41,21 @@ func Ensure(ctx context.Context, dir string) (*Runtime, error) {
 	if err != nil {
 		return nil, err
 	}
-	options := EnsureOptions{Dir: dir, Config: value}
+	backends, err := ResolveBackends(dir)
+	if err != nil {
+		return nil, err
+	}
+	options := EnsureOptions{Dir: dir, Config: value, Backends: backends}
 	if global, loadErr := (qconfig.Store{Dir: dir}).Load(); loadErr == nil {
 		options.Vector = sessionstore.VectorConfig{
 			Model: global.Embedding.Model, Dimensions: global.Embedding.Dimensions,
 		}
 	}
-	return EnsureWithOptions(ctx, options)
+	rt, err := EnsureWithOptions(ctx, options)
+	if err != nil || !rt.IsLeader() {
+		_ = closeutil.CloseAll(backends.Closers)
+	}
+	return rt, err
 }
 
 func EnsureWithOptions(ctx context.Context, options EnsureOptions) (*Runtime, error) {

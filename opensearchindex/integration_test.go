@@ -3,20 +3,13 @@ package opensearchindex
 import (
 	"context"
 	"fmt"
-	"io"
 	"math"
-	"net"
 	"net/http"
 	"os"
-	"path/filepath"
-	"sync/atomic"
 	"testing"
 	"time"
 
-	"github.com/snowmerak/q/library"
 	"github.com/snowmerak/q/sessionstore"
-	"github.com/snowmerak/q/workitems"
-	"github.com/snowmerak/q/workspacememory"
 )
 
 func requireLiveOpenSearch(t *testing.T) (*Client, string) {
@@ -46,19 +39,6 @@ func requireLiveOpenSearch(t *testing.T) (*Client, string) {
 		_ = client.Close()
 	})
 	return client, prefix
-}
-
-func freeLoopbackPort(t *testing.T) int {
-	t.Helper()
-	l, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	port := l.Addr().(*net.TCPAddr).Port
-	if err := l.Close(); err != nil {
-		t.Fatal(err)
-	}
-	return port
 }
 
 func TestOpenSearchIndexContract(t *testing.T) {
@@ -208,122 +188,3 @@ func TestOpenSearchIndexContract(t *testing.T) {
 		t.Fatalf("Get after Delete = %v, want ErrNotFound", err)
 	}
 }
-
-func TestOpenSearchWithLibraryAndWorkspaceMemory(t *testing.T) {
-	osClient, _ := requireLiveOpenSearch(t)
-	ctx := t.Context()
-
-	var trackedCloserCalls atomic.Int32
-	clientCloser := closerFunc(func() error {
-		trackedCloserCalls.Add(1)
-		return osClient.Close()
-	})
-
-	libDir := t.TempDir()
-	libRT, err := library.EnsureWithOptions(ctx, library.EnsureOptions{
-		Dir:            libDir,
-		Config:         library.Config{Version: library.ConfigVersion, Host: "127.0.0.1", Port: freeLoopbackPort(t)},
-		ProbeTimeout:   300 * time.Millisecond,
-		StartupTimeout: 5 * time.Second,
-		Backends: library.Backends{
-			Search:  NewLibraryBackend(osClient),
-			Closers: []io.Closer{clientCloser},
-		},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() {
-		_ = libRT.Close()
-	}()
-
-	ws, err := libRT.Client().CreateWorkspace(ctx, workitems.WorkspaceInput{
-		Name:           "os-library-ws",
-		WorkspaceRoots: []string{t.TempDir()},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	issue, err := libRT.Client().CreateItem(ctx, workitems.CreateInput{
-		WorkspaceID: ws.ID,
-		Kind:        workitems.Issue,
-		Title:       "OpenSearch Knowledge Integration",
-		Content:     "OpenSearch indexes workspace issues and skills over shared client.",
-		Author:      "tester",
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	workHits, err := libRT.Client().SearchWork(ctx, library.WorkSearchRequest{
-		WorkspaceID: ws.ID,
-		Query:       "shared client",
-		Mode:        "lexical",
-	})
-	if err != nil || len(workHits.Hits) != 1 || workHits.Hits[0].ItemID != issue.ID {
-		t.Fatalf("SearchWork = %#v, err = %v", workHits, err)
-	}
-
-	skillHits, err := libRT.Client().SearchSkills(ctx, library.SkillSearchRequest{Query: "cdp"})
-	if err != nil || len(skillHits.Hits) == 0 {
-		t.Fatalf("SearchSkills = %#v, err = %v", skillHits, err)
-	}
-
-	// Share another OpenSearch client for workspacememory (so libRT.Close doesn't interrupt wm first).
-	wmClient, err := NewClient(Config{
-		Endpoint:    osClient.baseURL,
-		IndexPrefix: osClient.prefix + "wm",
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = wmClient.Close() }()
-	t.Cleanup(func() {
-		cleanupCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		_ = wmClient.doJSON(cleanupCtx, http.MethodDelete, "/"+wmClient.prefix+"-*", nil, nil)
-	})
-
-	wmRT, err := workspacememory.EnsureWithOptions(ctx, workspacememory.EnsureOptions{
-		Dir:            t.TempDir(),
-		Config:         workspacememory.Config{Version: workspacememory.ConfigVersion, Host: "127.0.0.1", Port: freeLoopbackPort(t)},
-		OpenStore:      WorkspaceMemoryOpener(wmClient),
-		ProbeTimeout:   300 * time.Millisecond,
-		StartupTimeout: 5 * time.Second,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = wmRT.Close() }()
-
-	wmRoot := filepath.Clean(t.TempDir())
-	wmWS, err := wmRT.Client().OpenWorkspace(ctx, wmRoot, sessionstore.VectorConfig{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	saved, err := wmWS.Save(sessionstore.Record{
-		Kind:    sessionstore.KindMessage,
-		Content: "Persisted archive message routed through OpenSearch",
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	wmSearch, err := wmWS.Search(ctx, sessionstore.SearchOptions{Text: "routed OpenSearch"})
-	if err != nil || len(wmSearch.Hits) != 1 || wmSearch.Hits[0].Record.ID != saved.ID {
-		t.Fatalf("workspacememory Search = %#v, err = %v", wmSearch, err)
-	}
-	if err := wmWS.Close(); err != nil {
-		t.Fatal(err)
-	}
-
-	if err := libRT.Close(); err != nil {
-		t.Fatal(err)
-	}
-	if got := trackedCloserCalls.Load(); got != 1 {
-		t.Fatalf("shared client closer count = %d, want 1", got)
-	}
-}
-
-type closerFunc func() error
-
-func (f closerFunc) Close() error { return f() }

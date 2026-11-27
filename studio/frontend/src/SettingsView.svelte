@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { ArrowLeftRight, Bot, BrainCircuit, Cpu, Database, Globe, Network, Palette, Server, SlidersHorizontal, Unplug } from '@lucide/svelte';
+  import { ArrowLeftRight, Bot, BrainCircuit, Cpu, Database, Globe, HardDrive, Network, Palette, Server, SlidersHorizontal, Unplug } from '@lucide/svelte';
   import { onMount } from 'svelte';
   import { requestJSON } from './api';
   import IntegrationsView from './IntegrationsView.svelte';
@@ -12,6 +12,7 @@
   import RuntimePanel from './settings/RuntimePanel.svelte';
   import BrowserControlPanel from './settings/BrowserControlPanel.svelte';
   import ServicesPanel from './settings/ServicesPanel.svelte';
+  import StorageView from './settings/StorageView.svelte';
   import TransferPanel from './settings/TransferPanel.svelte';
   import { preserveProviderDrafts } from './settings/providerDrafts';
   import type { SettingsBundle } from './settings/transfer';
@@ -28,6 +29,7 @@
     { id: 'runtime' as const, label: 'Runtime', description: 'Execution, context, and storage', icon: SlidersHorizontal },
     { id: 'browser-control' as const, label: 'Browser control', description: 'Preferred browser CLI and executable paths', icon: Globe },
     { id: 'services' as const, label: 'Services', description: 'Gateway and Decisions', icon: Server },
+    { id: 'storage' as const, label: 'Storage', description: 'Local or remote database and search', icon: HardDrive },
     { id: 'subagents' as const, label: 'Subagents', description: 'Profiles and role bindings', icon: Bot },
     { id: 'integrations' as const, label: 'Integrations', description: 'MCP and language servers', icon: Unplug },
     { id: 'import-export' as const, label: 'Import / Export', description: 'Move selected settings', icon: ArrowLeftRight }
@@ -177,6 +179,7 @@
         <div hidden={activeSection !== 'runtime'}><RuntimePanel bind:settings {queueSave} active={active && activeSection === 'runtime'} /></div>
         {#if settings.browser_control}<div hidden={activeSection !== 'browser-control'}><BrowserControlPanel bind:settings {queueSave} /></div>{/if}
         <div hidden={activeSection !== 'services'}><ServicesPanel bind:settings {queueSave} /></div>
+        <div hidden={activeSection !== 'storage'}><StorageView bind:settings {queueSave} /></div>
         {#if active && activeSection === 'subagents'}<SubagentsView />{/if}
         {#if active && activeSection === 'integrations'}<IntegrationsView />{/if}
         {#if active && activeSection === 'import-export'}<TransferPanel busy={pending > 0} onimport={applyImportedSettings} />{/if}

@@ -1,6 +1,5 @@
-// Package opensearchindex implements sessionstore.SearchIndex,
-// library.SearchBackend, and workspacememory.StoreOpener backed by OpenSearch
-// over HTTP/JSON without external client dependencies.
+// Package opensearchindex implements sessionstore.SearchIndex backed by
+// OpenSearch over HTTP/JSON without external client dependencies.
 package opensearchindex
 
 import (
@@ -22,6 +21,7 @@ import (
 )
 
 const (
+	MappingVersion      = "opensearch-v1"
 	defaultIndexPrefix  = "q"
 	defaultRefreshMode  = "wait_for"
 	maximumIndexNameLen = 240

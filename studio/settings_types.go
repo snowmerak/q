@@ -17,6 +17,7 @@ type settingsSnapshot struct {
 	Providers      providerSettings       `json:"gateway_providers"`
 	SystemOne      systemOneAPISettings   `json:"system_one"`
 	Services       serviceSettings        `json:"services"`
+	Storage        storageSettings        `json:"storage"`
 	Integrations   integrationSettings    `json:"integrations"`
 }
 
@@ -298,4 +299,84 @@ type loomStatusResponse struct {
 	WorkspaceRoot string         `json:"workspace_root"`
 	Stats         loom.Stats     `json:"stats"`
 	Result        *loom.GCResult `json:"result,omitempty"`
+}
+
+type storageSettings struct {
+	ConfigPath string                `json:"config_path"`
+	Mode       string                `json:"mode"`
+	Remote     remoteStorageSettings `json:"remote"`
+}
+
+type remoteStorageSettings struct {
+	OpenSearch openSearchStorageSettings `json:"opensearch"`
+	Postgres   postgresStorageSettings   `json:"postgres"`
+}
+
+type openSearchStorageSettings struct {
+	Enabled              bool                     `json:"enabled"`
+	Endpoint             string                   `json:"endpoint"`
+	IndexPrefix          string                   `json:"index_prefix"`
+	Refresh              string                   `json:"refresh"`
+	Username             string                   `json:"username"`
+	PasswordEnv          string                   `json:"password_env"`
+	HasInlinePassword    bool                     `json:"has_inline_password"`
+	BearerTokenEnv       string                   `json:"bearer_token_env"`
+	HasInlineBearerToken bool                     `json:"has_inline_bearer_token"`
+	Targets              openSearchTargetSettings `json:"targets"`
+}
+
+type openSearchTargetSettings struct {
+	Skills          bool `json:"skills"`
+	Knowledge       bool `json:"knowledge"`
+	WorkspaceMemory bool `json:"workspace_memory"`
+}
+
+type postgresStorageSettings struct {
+	Enabled      bool   `json:"enabled"`
+	DSNEnv       string `json:"dsn_env"`
+	HasInlineDSN bool   `json:"has_inline_dsn"`
+}
+
+type storageUpdateRequest struct {
+	Mode   string                `json:"mode"`
+	Remote remoteStorageUpdate `json:"remote"`
+}
+
+type remoteStorageUpdate struct {
+	OpenSearch openSearchStorageUpdate `json:"opensearch"`
+	Postgres   postgresStorageUpdate   `json:"postgres"`
+}
+
+type openSearchStorageUpdate struct {
+	Enabled          bool                     `json:"enabled"`
+	Endpoint         string                   `json:"endpoint"`
+	IndexPrefix      string                   `json:"index_prefix"`
+	Refresh          string                   `json:"refresh"`
+	Username         string                   `json:"username"`
+	PasswordEnv      string                   `json:"password_env"`
+	Password         string                   `json:"password,omitempty"`
+	ClearPassword    bool                     `json:"clear_password,omitempty"`
+	BearerTokenEnv   string                   `json:"bearer_token_env"`
+	BearerToken      string                   `json:"bearer_token,omitempty"`
+	ClearBearerToken bool                     `json:"clear_bearer_token,omitempty"`
+	Targets          openSearchTargetSettings `json:"targets"`
+}
+
+type postgresStorageUpdate struct {
+	Enabled  bool   `json:"enabled"`
+	DSNEnv   string `json:"dsn_env"`
+	DSN      string `json:"dsn,omitempty"`
+	ClearDSN bool   `json:"clear_dsn,omitempty"`
+}
+
+type storageTestRequest struct {
+	Target string              `json:"target"`
+	Remote remoteStorageUpdate `json:"remote"`
+}
+
+type storageTestResponse struct {
+	OK        bool   `json:"ok"`
+	Target    string `json:"target"`
+	Message   string `json:"message"`
+	LatencyMS int64  `json:"latency_ms"`
 }

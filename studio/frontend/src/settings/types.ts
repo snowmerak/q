@@ -112,12 +112,45 @@ export type SettingsSnapshot = {
     system_one: ListenerSettings & { provider_count: number; default_model: string; role_model_count: number };
     library: ListenerSettings;
   };
+  storage: StorageSettings;
   integrations: {
     mcp: { config_path: string; items: number; bindings: number };
     lsp: { config_path: string; items: number; bindings: number };
   };
 };
-export type SettingsSection = 'appearance' | 'models' | 'embeddings' | 'providers' | 'decisions' | 'runtime' | 'browser-control' | 'services' | 'subagents' | 'integrations' | 'import-export';
+export type OpenSearchStorageSettings = {
+  enabled: boolean;
+  endpoint: string;
+  index_prefix: string;
+  refresh: string;
+  username: string;
+  password_env: string;
+  has_inline_password: boolean;
+  bearer_token_env: string;
+  has_inline_bearer_token: boolean;
+  targets: {
+    skills: boolean;
+    knowledge: boolean;
+    workspace_memory: boolean;
+  };
+  password?: string;
+  bearer_token?: string;
+};
+export type PostgresStorageSettings = {
+  enabled: boolean;
+  dsn_env: string;
+  has_inline_dsn: boolean;
+  dsn?: string;
+};
+export type StorageSettings = {
+  config_path: string;
+  mode: 'local' | 'remote';
+  remote: {
+    opensearch: OpenSearchStorageSettings;
+    postgres: PostgresStorageSettings;
+  };
+};
+export type SettingsSection = 'appearance' | 'models' | 'embeddings' | 'providers' | 'decisions' | 'runtime' | 'browser-control' | 'services' | 'storage' | 'subagents' | 'integrations' | 'import-export';
 export type SaveState = { kind: 'idle' | 'saving' | 'saved' | 'error'; message?: string };
 export type LoomStats = { artifacts: number; blobs: number; bytes: number };
 export type LoomGCResult = { artifacts_removed: number; blobs_removed: number; bytes_reclaimed: number; dry_run: boolean };

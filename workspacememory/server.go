@@ -17,6 +17,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/snowmerak/q/internal/closeutil"
 	"github.com/snowmerak/q/sessionstore"
 	"github.com/snowmerak/q/worklock"
 )
@@ -647,6 +648,7 @@ type leader struct {
 	health       Health
 	server       *http.Server
 	manager      *workspaceManager
+	closers      []io.Closer
 	lock         *worklock.Lock
 	cancel       context.CancelFunc
 	done         chan struct{}
@@ -669,7 +671,7 @@ func startLeader(parent context.Context, options EnsureOptions, listener net.Lis
 	manager := newWorkspaceManager(options.effectiveLeaseTTL(), options.OpenStore)
 	ctx, cancel := context.WithCancel(parent)
 	leader := &leader{
-		health: health, manager: manager, lock: serviceLock, cancel: cancel,
+		health: health, manager: manager, closers: closeutil.Deduplicate(options.Closers), lock: serviceLock, cancel: cancel,
 		done: make(chan struct{}), shutdownDone: make(chan struct{}),
 		server: &http.Server{Handler: newHandler(health, manager), ReadHeaderTimeout: 10 * time.Second},
 	}
@@ -694,12 +696,13 @@ func startLeader(parent context.Context, options EnsureOptions, listener net.Lis
 		<-sweepDone
 		<-leader.shutdownDone
 		managerErr := manager.close()
+		closersErr := closeutil.CloseAll(leader.closers)
 		lockErr := leader.lock.Close()
 		if errors.Is(serveErr, http.ErrServerClosed) {
 			serveErr = nil
 		}
 		leader.errMu.Lock()
-		leader.err = errors.Join(leader.err, serveErr, managerErr, lockErr)
+		leader.err = errors.Join(leader.err, serveErr, managerErr, closersErr, lockErr)
 		leader.errMu.Unlock()
 		close(leader.done)
 	}()

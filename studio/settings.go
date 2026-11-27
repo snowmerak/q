@@ -13,6 +13,7 @@ import (
 	qlibrary "github.com/snowmerak/q/library"
 	"github.com/snowmerak/q/mcpconfig"
 	"github.com/snowmerak/q/providerhost"
+	"github.com/snowmerak/q/storageconfig"
 	"github.com/snowmerak/q/systemoneconfig"
 )
 
@@ -24,6 +25,7 @@ type settingsService struct {
 	mcp              mcpconfig.Store
 	providers        providerhost.Store
 	library          qlibrary.ConfigStore
+	storage          storageconfig.Store
 	runtime          settingsRuntime
 	embeddingChanges *embeddingChangeService
 }
@@ -44,6 +46,7 @@ func newSettingsService(store config.Store, runtimes ...settingsRuntime) *settin
 		mcp:       mcpconfig.Store{Dir: store.Dir},
 		providers: providerhost.Store{Dir: store.Dir},
 		library:   qlibrary.ConfigStore{Dir: store.Dir},
+		storage:   storageconfig.Store{Dir: store.Dir},
 	}
 	if len(runtimes) > 0 {
 		service.runtime = runtimes[0]
@@ -93,6 +96,10 @@ func (service *settingsService) snapshot() (settingsSnapshot, error) {
 		return settingsSnapshot{}, err
 	}
 	library, err := service.library.LoadOrDefault()
+	if err != nil {
+		return settingsSnapshot{}, err
+	}
+	storage, err := service.storage.LoadOrDefault()
 	if err != nil {
 		return settingsSnapshot{}, err
 	}
@@ -232,6 +239,7 @@ func (service *settingsService) snapshot() (settingsSnapshot, error) {
 			},
 			Library: listenerSettings{ConfigPath: service.library.Path(), Host: library.Host, Port: library.Port},
 		},
+		Storage: makeStorageSettings(service.storage.Path(), storage),
 		Integrations: integrationSettings{
 			MCP: integrationSummary{ConfigPath: service.mcp.Path(), Items: len(mcp.Servers), Bindings: len(mcp.Roles)},
 			LSP: integrationSummary{ConfigPath: service.main.Path(), Items: len(main.LSP.Servers), Bindings: len(main.LSP.Languages)},

@@ -12,6 +12,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/snowmerak/q/internal/closeutil"
 	"github.com/snowmerak/q/internal/localservice"
 	"github.com/snowmerak/q/sessionstore"
 	"github.com/snowmerak/q/worklock"
@@ -31,6 +32,7 @@ type EnsureOptions struct {
 	Dir            string
 	Config         Config
 	OpenStore      StoreOpener
+	Closers        []io.Closer
 	ProbeTimeout   time.Duration
 	StartupTimeout time.Duration
 	RequestTimeout time.Duration
@@ -85,7 +87,24 @@ func Ensure(ctx context.Context, dir string) (*Runtime, error) {
 	if err != nil {
 		return nil, err
 	}
-	return EnsureWithOptions(ctx, EnsureOptions{Dir: dir, Config: config})
+	opener, closer, err := ResolveStoreOpener(dir)
+	if err != nil {
+		return nil, err
+	}
+	var closers []io.Closer
+	if closer != nil {
+		closers = []io.Closer{closer}
+	}
+	rt, err := EnsureWithOptions(ctx, EnsureOptions{
+		Dir:       dir,
+		Config:    config,
+		OpenStore: opener,
+		Closers:   closers,
+	})
+	if err != nil || !rt.IsLeader() {
+		_ = closeutil.CloseAll(closers)
+	}
+	return rt, err
 }
 
 func EnsureWithOptions(ctx context.Context, options EnsureOptions) (*Runtime, error) {
