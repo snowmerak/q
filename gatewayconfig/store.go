@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/snowmerak/q/internal/fsopen"
 	"os"
 	"path/filepath"
 
@@ -27,7 +28,7 @@ func (s Store) Path() string { return filepath.Join(s.Dir, FileName) }
 func (s Store) MasterKeyPath() string { return filepath.Join(s.Dir, MasterKeyName) }
 
 func (s Store) Load() (Config, error) {
-	file, err := os.Open(s.Path())
+	file, err := fsopen.Open(s.Path())
 	if errors.Is(err, os.ErrNotExist) {
 		return Config{}, ErrNotFound
 	}

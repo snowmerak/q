@@ -8,10 +8,10 @@ import (
 	"io"
 	"net"
 	"net/http"
-	"os"
 	"time"
 
 	"github.com/snowmerak/q/config"
+	"github.com/snowmerak/q/internal/configwatch"
 	"github.com/snowmerak/q/systemoneconfig"
 	"github.com/snowmerak/q/systemoneserver"
 )
@@ -102,24 +102,15 @@ func runSystemOneWithStore(
 
 func watchSystemOneKeyring(ctx context.Context, command string, store systemoneconfig.Store, server *systemoneserver.Server, output io.Writer) <-chan struct{} {
 	done := make(chan struct{})
+	watcher := configwatch.New(ctx, []string{store.Path()}, configwatch.Options{})
 	go func() {
 		defer close(done)
-		ticker := time.NewTicker(500 * time.Millisecond)
-		defer ticker.Stop()
-		var lastInfo os.FileInfo
-		if info, err := systemOneConfigSnapshot(store.Path()); err == nil {
-			lastInfo = info
-		}
+		defer func() { <-watcher.Done() }()
 		for {
 			select {
 			case <-ctx.Done():
 				return
-			case <-ticker.C:
-				info, err := systemOneConfigSnapshot(store.Path())
-				if err != nil || !systemOneConfigChanged(lastInfo, info) {
-					continue
-				}
-				lastInfo = info
+			case <-watcher.Changes():
 				value, err := store.LoadOrDefault()
 				if err != nil {
 					_, _ = fmt.Fprintf(output, "q %s: API key reload skipped: %v\n", command, err)
@@ -142,22 +133,6 @@ func watchSystemOneKeyring(ctx context.Context, command string, store systemonec
 		}
 	}()
 	return done
-}
-
-func systemOneConfigSnapshot(path string) (os.FileInfo, error) {
-	file, err := os.Open(path)
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = file.Close() }()
-	return file.Stat()
-}
-
-func systemOneConfigChanged(previous, current os.FileInfo) bool {
-	if previous == nil {
-		return true
-	}
-	return !os.SameFile(previous, current) || !previous.ModTime().Equal(current.ModTime())
 }
 
 func parseSystemOneOptions(command string, args []string, output io.Writer) (systemOneCommandOptions, error) {

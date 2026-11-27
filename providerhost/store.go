@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/snowmerak/q/internal/fsopen"
 	"os"
 	"path/filepath"
 
@@ -29,7 +30,7 @@ func (s Store) RuntimeDir() string {
 }
 
 func (s Store) Load() (gateway.Config, error) {
-	file, err := os.Open(s.Path())
+	file, err := fsopen.Open(s.Path())
 	if errors.Is(err, os.ErrNotExist) {
 		return gateway.Config{}, ErrNotFound
 	}
