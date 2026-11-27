@@ -11,6 +11,7 @@ import (
 	"github.com/snowmerak/q/diagnostics"
 	"github.com/snowmerak/q/gatewayconfig"
 	"github.com/snowmerak/q/internal/configwatch"
+	"github.com/snowmerak/q/internal/providerenv"
 	"github.com/snowmerak/q/providerhost"
 	"github.com/snowmerak/q/systemoneconfig"
 )
@@ -89,7 +90,8 @@ func sameStudioServiceSettings(left, right any) bool {
 
 // runStudioService runs a standalone server for the lifetime of its owning
 // Studio. It restarts the server when the settings it reads at startup change
-// and retries a server that stopped once its configuration changes.
+// or provider credentials are reloaded, and retries a server that stopped once
+// either changes.
 func runStudioService(ctx context.Context, service studioService, stderr io.Writer) {
 	logger := diagnostics.Logger(ctx)
 	event := "studio." + strings.ToLower(service.name)
@@ -98,6 +100,7 @@ func runStudioService(ctx context.Context, service studioService, stderr io.Writ
 	for ctx.Err() == nil {
 		logger.Info(event + ".starting")
 		applied, _ := service.settings()
+		credentials := providerenv.Changed()
 		runContext, cancel := context.WithCancel(ctx)
 		done := make(chan error, 1)
 		go func() { done <- service.run(runContext) }()
@@ -113,6 +116,12 @@ func runStudioService(ctx context.Context, service studioService, stderr io.Writ
 				break watch
 			case runErr = <-done:
 				stopped = true
+				break watch
+			case <-credentials:
+				// Provider clients resolve their API keys when they are built.
+				logger.Info(event+".restarting", "reason_code", "credentials_reloaded")
+				cancel()
+				runErr = <-done
 				break watch
 			case <-watcher.Changes():
 				current, err := service.settings()
@@ -144,6 +153,7 @@ func runStudioService(ctx context.Context, service studioService, stderr io.Writ
 			select {
 			case <-ctx.Done():
 			case <-watcher.Changes():
+			case <-credentials:
 			}
 		}
 	}

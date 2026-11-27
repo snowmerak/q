@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/snowmerak/q/gatewayconfig"
+	"github.com/snowmerak/q/internal/providerenv"
 	"github.com/snowmerak/q/providerhost"
 )
 
@@ -74,4 +75,8 @@ func TestStudioServiceRestartsOnlyForStartupSettings(t *testing.T) {
 	}
 	waitStarts(2)
 	settle(2)
+
+	// Reloaded provider credentials rebuild the provider clients.
+	providerenv.Notify()
+	waitStarts(3)
 }
