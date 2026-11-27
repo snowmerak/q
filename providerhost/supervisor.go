@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/snowmerak/llm-provider/gateway"
+	"github.com/snowmerak/q/internal/providerenv"
 )
 
 const childStartupTimeout = 30 * time.Second
@@ -73,7 +74,7 @@ func (s *Supervisor) Prepare(ctx context.Context, value gateway.Config) (*genera
 	arguments := append([]string(nil), s.argsPrefix...)
 	arguments = append(arguments, ChildCommand, "--config", configPath)
 	command := exec.CommandContext(s.ctx, s.executable, arguments...)
-	command.Env = environmentWithValue(os.Environ(), ChildAPIKeyEnv, apiKey)
+	command.Env = environmentWithValue(providerenv.Environment(os.Environ()), ChildAPIKeyEnv, apiKey)
 	configureChildProcess(command)
 	stdin, err := command.StdinPipe()
 	if err != nil {

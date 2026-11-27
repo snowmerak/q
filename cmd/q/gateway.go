@@ -74,7 +74,7 @@ func runGatewayWithStore(
 		return err
 	}
 	defer func() { _ = listener.Close() }() // Serve closes the listener too.
-	instance, err := gateway.NewContext(ctx, providerhost.LocalConfig(value, providerStore.Dir))
+	instance, err := gateway.NewContext(ctx, providerhost.WithRefreshedEnvironment(providerhost.LocalConfig(value, providerStore.Dir)))
 	if err != nil {
 		return fmt.Errorf("q gateway: initialize: %w", err)
 	}
