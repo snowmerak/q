@@ -9,6 +9,7 @@ import (
 
 	"github.com/snowmerak/q/client"
 	"github.com/snowmerak/q/config"
+	"github.com/snowmerak/q/internal/terminalturn"
 	"github.com/snowmerak/q/memory"
 	"github.com/snowmerak/q/tools/builtin"
 )
@@ -17,8 +18,8 @@ type recoveryToolRuntime struct{ calls int }
 
 func TestGeneralRunnerMemoryToolsAcrossTaskLifecycle(t *testing.T) {
 	steps := 0
-	configured := contextChatFunc(func(_ context.Context, request client.ChatRequest) (*client.ChatResponse, error) {
-		if request.ToolChoice == client.ToolChoiceNone || terminalToolResultRequest(request) {
+	configured := contextChatFunc(func(ctx context.Context, request client.ChatRequest) (*client.ChatResponse, error) {
+		if terminalturn.Active(ctx) {
 			return contextResponse("ack"), nil
 		}
 		for _, name := range []string{memory.SetActiveWorkTool, memory.CompleteWorkTool, memory.RecordFactTool} {
@@ -116,8 +117,8 @@ func TestGeneralRunnerDoesNotExecuteToolAfterCheckpointFailure(t *testing.T) {
 
 func TestGeneralRunnerAssignsStableIDsBeforeCheckpoint(t *testing.T) {
 	responses := 0
-	configured := contextChatFunc(func(_ context.Context, request client.ChatRequest) (*client.ChatResponse, error) {
-		if request.ToolChoice == client.ToolChoiceNone || terminalToolResultRequest(request) {
+	configured := contextChatFunc(func(ctx context.Context, request client.ChatRequest) (*client.ChatResponse, error) {
+		if terminalturn.Active(ctx) {
 			return &client.ChatResponse{Choices: []client.Choice{{Message: client.Message{Role: client.RoleAssistant, Content: "ack"}}}}, nil
 		}
 		responses++
@@ -160,11 +161,11 @@ func TestGeneralRunnerPreservesStartedLifecycleAcrossCompaction(t *testing.T) {
 		client.ToolResultMessage(read, client.ToolResult{Content: strings.Repeat("large result ", 6_000)}),
 	}
 	modelRequests := 0
-	configured := contextChatFunc(func(_ context.Context, request client.ChatRequest) (*client.ChatResponse, error) {
-		if isContextCheckpointRequest(request) {
+	configured := contextChatFunc(func(ctx context.Context, request client.ChatRequest) (*client.ChatResponse, error) {
+		if memory.ClassifyCheckpointRequest(request) != memory.CheckpointNone {
 			return contextResponse(contextCheckpointJSON("continue the active task")), nil
 		}
-		if request.ToolChoice == client.ToolChoiceNone || terminalToolResultRequest(request) {
+		if terminalturn.Active(ctx) {
 			return contextResponse("ack"), nil
 		}
 		modelRequests++

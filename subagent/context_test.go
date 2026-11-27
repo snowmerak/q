@@ -10,6 +10,7 @@ import (
 
 	"github.com/snowmerak/q/client"
 	"github.com/snowmerak/q/config"
+	"github.com/snowmerak/q/internal/terminalturn"
 	"github.com/snowmerak/q/memory"
 )
 
@@ -60,22 +61,6 @@ func TestContextCompactorProjectsCoveredMemoryWithoutUsage(t *testing.T) {
 	}
 }
 
-func isContextCheckpointRequest(request client.ChatRequest) bool {
-	if len(request.Messages) == 0 {
-		return false
-	}
-	if len(request.Tools) == 0 && strings.Contains(request.Messages[0].Content, "session continuation checkpoint") {
-		return true
-	}
-	last := request.Messages[len(request.Messages)-1]
-	return last.Role == client.RoleUser && strings.Contains(last.Content, "session continuation checkpoint")
-}
-
-func isDetachedContextCheckpointRequest(request client.ChatRequest) bool {
-	return len(request.Tools) == 0 && request.ConversationID == "" && len(request.Messages) > 0 &&
-		strings.Contains(request.Messages[0].Content, "session continuation checkpoint")
-}
-
 func TestContextCompactorKeepsAnchorsAndUserAnswersAcrossCompactions(t *testing.T) {
 	spec := Spec{Role: config.AgentRoleGriller, Model: "griller", ContextLength: 16_000, conversationID: "old-backend"}
 	anchors := []client.Message{
@@ -92,7 +77,7 @@ func TestContextCompactorKeepsAnchorsAndUserAnswersAcrossCompactions(t *testing.
 	fake := contextChatFunc(func(_ context.Context, request client.ChatRequest) (*client.ChatResponse, error) {
 		wantConv := expectedConvIDs[compactions]
 		compactions++
-		if request.ConversationID != wantConv || request.MaxCompletionTokens != nil || !isContextCheckpointRequest(request) || request.Model != "griller" {
+		if request.ConversationID != wantConv || request.MaxCompletionTokens != nil || memory.ClassifyCheckpointRequest(request) == memory.CheckpointNone || request.Model != "griller" {
 			t.Fatalf("summary request = %#v (want conv %q)", request, wantConv)
 		}
 		response := contextResponse(contextCheckpointJSON("Repository investigated. Remaining work is to submit the brief. Keep the Loom references."))
@@ -225,7 +210,7 @@ func TestContextCompactorIncludesToolSchemasWithoutHardOutputLimit(t *testing.T)
 	called := false
 	if err := history.CompactIfNeeded(t.Context(), &spec, contextChatFunc(func(_ context.Context, request client.ChatRequest) (*client.ChatResponse, error) {
 		called = true
-		if request.MaxCompletionTokens != nil || !isContextCheckpointRequest(request) {
+		if request.MaxCompletionTokens != nil || memory.ClassifyCheckpointRequest(request) == memory.CheckpointNone {
 			t.Fatalf("checkpoint request imposed a hard output limit: %#v", request)
 		}
 		return contextResponse(contextCheckpointJSON("continue from the contract")), nil
@@ -256,7 +241,7 @@ func TestGrillerRetainsActualUserAnswerAfterToolHistoryCompaction(t *testing.T) 
 		t.Fatal(err)
 	}
 	if len(fake.requests) != 4 || fake.requests[2].MaxCompletionTokens != nil ||
-		!isContextCheckpointRequest(fake.requests[2]) || fake.requests[3].ConversationID != "" {
+		memory.ClassifyCheckpointRequest(fake.requests[2]) == memory.CheckpointNone || fake.requests[3].ConversationID != "" {
 		t.Fatalf("unexpected compaction sequence: %#v", fake.requests)
 	}
 	got := fake.requests[3].Messages
@@ -275,11 +260,11 @@ func TestInternalRunnersCompactBetweenToolRoundsAndKeepContracts(t *testing.T) {
 		t.Run(role, func(t *testing.T) {
 			var first, resumed []client.Message
 			normalCalls, summaryCalls := 0, 0
-			fake := contextChatFunc(func(_ context.Context, request client.ChatRequest) (*client.ChatResponse, error) {
-				if request.ToolChoice == client.ToolChoiceNone || terminalToolResultRequest(request) {
+			fake := contextChatFunc(func(ctx context.Context, request client.ChatRequest) (*client.ChatResponse, error) {
+				if terminalturn.Active(ctx) {
 					return contextResponse(""), nil
 				}
-				if isContextCheckpointRequest(request) {
+				if memory.ClassifyCheckpointRequest(request) != memory.CheckpointNone {
 					summaryCalls++
 					return contextResponse(contextCheckpointJSON("Read the repository evidence. Continue from the exact role contract and task.")), nil
 				}
@@ -357,7 +342,7 @@ func TestContextCompactorInPrefixPreservesToolsAndFallsBackToDetached(t *testing
 			{Role: client.RoleUser, Content: "task"},
 		}, tools, 2)
 		history.SetWorkingDirectory("/repo")
-		history.Append(client.Message{Role: client.RoleAssistant, Content: strings.Repeat("analysis ", 10_000)})
+		history.Append(client.Message{Role: client.RoleAssistant, Content: strings.Repeat("analysis ", 9_000)})
 		var seen client.ChatRequest
 		fake := contextChatFunc(func(_ context.Context, request client.ChatRequest) (*client.ChatResponse, error) {
 			seen = request
@@ -366,8 +351,10 @@ func TestContextCompactorInPrefixPreservesToolsAndFallsBackToDetached(t *testing
 		if err := history.CompactIfNeeded(t.Context(), &spec, fake); err != nil {
 			t.Fatal(err)
 		}
-		if seen.ConversationID != "live-thread" || len(seen.Tools) != len(tools) || seen.WorkingDirectory != "/repo" {
-			t.Fatalf("in-prefix request lost live prefix metadata: %#v", seen)
+		if kind := memory.ClassifyCheckpointRequest(seen); kind != memory.CheckpointInPrefix ||
+			seen.ConversationID != "live-thread" || len(seen.Tools) != len(tools) || seen.WorkingDirectory != "/repo" {
+			t.Fatalf("in-prefix request lost live prefix metadata: kind=%v conversation=%q tools=%d directory=%q",
+				kind, seen.ConversationID, len(seen.Tools), seen.WorkingDirectory)
 		}
 		if spec.conversationID != "" {
 			t.Fatalf("spec conversationID was not reset after compaction: %q", spec.conversationID)
@@ -381,11 +368,11 @@ func TestContextCompactorInPrefixPreservesToolsAndFallsBackToDetached(t *testing
 				{Role: client.RoleSystem, Content: "role"},
 				{Role: client.RoleUser, Content: "task"},
 			}, tools, 2)
-			history.Append(client.Message{Role: client.RoleAssistant, Content: strings.Repeat("analysis ", 10_000)})
+			history.Append(client.Message{Role: client.RoleAssistant, Content: strings.Repeat("analysis ", 9_000)})
 			var requests []client.ChatRequest
 			fake := contextChatFunc(func(_ context.Context, request client.ChatRequest) (*client.ChatResponse, error) {
 				requests = append(requests, request)
-				if !isDetachedContextCheckpointRequest(request) {
+				if memory.ClassifyCheckpointRequest(request) == memory.CheckpointInPrefix {
 					if mode == "tool_call" {
 						return &client.ChatResponse{Choices: []client.Choice{{Message: client.Message{
 							Role: client.RoleAssistant, ToolCalls: []client.ToolCall{scoutCall("loom_read", `{}`)},
@@ -398,8 +385,12 @@ func TestContextCompactorInPrefixPreservesToolsAndFallsBackToDetached(t *testing
 			if err := history.CompactIfNeeded(t.Context(), &spec, fake); err != nil {
 				t.Fatal(err)
 			}
-			if len(requests) != 2 || isDetachedContextCheckpointRequest(requests[0]) || !isDetachedContextCheckpointRequest(requests[1]) {
-				t.Fatalf("expected in-prefix then detached fallback, got %#v", requests)
+			if len(requests) != 2 {
+				t.Fatalf("expected in-prefix then detached fallback, got %d requests", len(requests))
+			}
+			first, second := memory.ClassifyCheckpointRequest(requests[0]), memory.ClassifyCheckpointRequest(requests[1])
+			if first != memory.CheckpointInPrefix || second != memory.CheckpointDetached {
+				t.Fatalf("expected in-prefix then detached fallback, got %v then %v", first, second)
 			}
 			if spec.conversationID != "" {
 				t.Fatalf("spec conversationID not reset: %q", spec.conversationID)
@@ -424,7 +415,7 @@ func TestContextCompactorInPrefixPreservesToolsAndFallsBackToDetached(t *testing
 					Settings: &client.GenerationSettings{MaxAttempts: 2, SafeReplay: true},
 				}
 			case 2:
-				if !isDetachedContextCheckpointRequest(request) {
+				if memory.ClassifyCheckpointRequest(request) != memory.CheckpointDetached {
 					t.Fatalf("context_limit recovery must skip in-prefix and use detached: %#v", request)
 				}
 				return contextResponse(contextCheckpointJSON("recovered")), nil

@@ -28,7 +28,7 @@ func TestToolResultsCompactBeforeAppendAndPreservePendingBatch(t *testing.T) {
 			configured := &scriptedClient{}
 			ordinary := 0
 			configured.chat = func(request client.ChatRequest) *client.ChatResponse {
-				if isPreAppendCheckpoint(request) {
+				if memory.ClassifyCheckpointRequest(request) != memory.CheckpointNone {
 					if strings.Contains(joined(request.Messages), "EXACT_RANGE:") {
 						t.Error("the new range was included in the summary request")
 					}
@@ -95,16 +95,12 @@ func TestToolResultsCompactBeforeAppendAndPreservePendingBatch(t *testing.T) {
 	}
 }
 
-func isPreAppendCheckpoint(request client.ChatRequest) bool {
-	return len(request.Tools) == 0 && strings.Contains(joined(request.Messages), "session continuation checkpoint")
-}
-
 func TestOversizedToolResultFailsBeforeEnteringHistory(t *testing.T) {
 	policy := memory.Policy{ContextWindow: 16000, TriggerRatio: .85, TargetRatio: .22, RecentRatio: .07}
 	history := []client.Message{{Role: client.RoleAssistant, Content: strings.Repeat("x", 24000)}, {Role: client.RoleUser, Content: "read"}}
 	runtime := &scriptedTools{name: "loom_read", content: strings.Repeat("y", 50000)}
 	configured := &scriptedClient{chat: func(request client.ChatRequest) *client.ChatResponse {
-		if isPreAppendCheckpoint(request) {
+		if memory.ClassifyCheckpointRequest(request) != memory.CheckpointNone {
 			t.Error("a result larger than the limit cannot be fixed by summarizing history")
 		}
 		return toolResponse("loom_read")

@@ -17,19 +17,6 @@ func (f funcChatClient) Chat(ctx context.Context, request client.ChatRequest) (*
 	return f(ctx, request)
 }
 
-func isInPrefixCheckpointRequest(request client.ChatRequest) bool {
-	if len(request.Messages) == 0 {
-		return false
-	}
-	last := request.Messages[len(request.Messages)-1]
-	return last.Role == client.RoleUser && strings.Contains(last.Content, "session continuation checkpoint")
-}
-
-func isDetachedCheckpointRequest(request client.ChatRequest) bool {
-	return len(request.Tools) == 0 && request.ConversationID == "" && len(request.Messages) > 0 &&
-		strings.Contains(request.Messages[0].Content, "session continuation checkpoint")
-}
-
 func TestRunAgentLoopCompactsInPrefixAndResetsConversationAfterwards(t *testing.T) {
 	var requests []client.ChatRequest
 	chatClient := funcChatClient(func(_ context.Context, request client.ChatRequest) (*client.ChatResponse, error) {
@@ -37,7 +24,7 @@ func TestRunAgentLoopCompactsInPrefixAndResetsConversationAfterwards(t *testing.
 		request.Tools = append([]client.Tool(nil), request.Tools...)
 		requests = append(requests, request)
 
-		if isInPrefixCheckpointRequest(request) {
+		if memory.ClassifyCheckpointRequest(request) == memory.CheckpointInPrefix {
 			body, _ := json.Marshal(memory.Checkpoint{ActiveWork: []string{"in-prefix checkpoint"}})
 			return finalResponse(string(body)), nil
 		}
@@ -78,7 +65,7 @@ func TestRunAgentLoopCompactsInPrefixAndResetsConversationAfterwards(t *testing.
 
 	compactIdx := -1
 	for i, req := range requests {
-		if isInPrefixCheckpointRequest(req) {
+		if memory.ClassifyCheckpointRequest(req) == memory.CheckpointInPrefix {
 			compactIdx = i
 			break
 		}
@@ -114,7 +101,7 @@ func TestInPrefixCompactionFallsBackToDetached(t *testing.T) {
 			var requests []client.ChatRequest
 			chatClient := funcChatClient(func(_ context.Context, request client.ChatRequest) (*client.ChatResponse, error) {
 				requests = append(requests, request)
-				if isInPrefixCheckpointRequest(request) {
+				if memory.ClassifyCheckpointRequest(request) == memory.CheckpointInPrefix {
 					switch reason {
 					case "tool_call":
 						return toolResponse("read_file"), nil
@@ -124,7 +111,7 @@ func TestInPrefixCompactionFallsBackToDetached(t *testing.T) {
 						return nil, &client.IncompleteGeneration{Reason: "context_limit"}
 					}
 				}
-				if isDetachedCheckpointRequest(request) {
+				if memory.ClassifyCheckpointRequest(request) == memory.CheckpointDetached {
 					body, _ := json.Marshal(memory.Checkpoint{ActiveWork: []string{"detached fallback"}})
 					return finalResponse(string(body)), nil
 				}
@@ -144,7 +131,7 @@ func TestInPrefixCompactionFallsBackToDetached(t *testing.T) {
 			if err != nil || compaction == nil {
 				t.Fatalf("compaction=%#v err=%v", compaction, err)
 			}
-			if len(requests) != 2 || !isInPrefixCheckpointRequest(requests[0]) || !isDetachedCheckpointRequest(requests[1]) {
+			if len(requests) != 2 || memory.ClassifyCheckpointRequest(requests[0]) != memory.CheckpointInPrefix || memory.ClassifyCheckpointRequest(requests[1]) != memory.CheckpointDetached {
 				t.Fatalf("expected in-prefix then detached fallback, got requests=%#v", requests)
 			}
 			if !strings.Contains(compaction.Summary, "detached fallback") {
@@ -174,7 +161,7 @@ func TestCompactAfterLimitUsesDetachedOnly(t *testing.T) {
 	if err != nil || compaction == nil {
 		t.Fatalf("compaction=%#v err=%v", compaction, err)
 	}
-	if len(requests) != 1 || !isDetachedCheckpointRequest(requests[0]) {
+	if len(requests) != 1 || memory.ClassifyCheckpointRequest(requests[0]) != memory.CheckpointDetached {
 		t.Fatalf("CompactAfterLimit must skip in-prefix and use detached directly: %#v", requests)
 	}
 }
@@ -201,7 +188,7 @@ func TestCompactBeforeAppendDuringPendingToolCallUsesDetached(t *testing.T) {
 	if err != nil || compaction == nil {
 		t.Fatalf("compaction=%#v err=%v", compaction, err)
 	}
-	if len(requests) != 1 || !isDetachedCheckpointRequest(requests[0]) {
+	if len(requests) != 1 || memory.ClassifyCheckpointRequest(requests[0]) != memory.CheckpointDetached {
 		t.Fatalf("pending tool call must fall back to detached compaction: %#v", requests)
 	}
 }

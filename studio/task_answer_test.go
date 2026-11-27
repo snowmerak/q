@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/snowmerak/q/client"
+	"github.com/snowmerak/q/internal/terminalturn"
 )
 
 const fixtureTaskAnswer = "## Research results\n\nThe verified answer is **42**. Source: https://example.com/evidence"
@@ -42,7 +43,7 @@ func taskAnswerFixtureResponse(w http.ResponseWriter, body []byte) bool {
 		answered = answered || message.Role == client.RoleAssistant && message.TextContent() == fixtureTaskAnswer
 	}
 	last := request.Messages[len(request.Messages)-1]
-	terminal := last.Role == client.RoleTool && strings.Contains(last.TextContent(), "The host has accepted this terminal tool result.")
+	terminal := last.Role == client.RoleTool && strings.Contains(last.TextContent(), terminalturn.InstructionPrefix)
 	message := client.Message{Role: client.RoleAssistant}
 	if terminal {
 		message.Content = "Internal completion acknowledgment."

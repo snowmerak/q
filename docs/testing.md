@@ -58,6 +58,24 @@ Command regressions run the platform shell: a wait timeout keeps the command
 alive, a later wait observes completion, runtime close terminates a running
 command, and output cursors report eviction and drain without duplicate bytes.
 
+## Go agent-loop tests
+
+Drive TUI turns to the state under test. In `app`, use `pumpAgentUntil`,
+`pumpAgentToStatus`, or `pumpAgentToIdle` for question prompts, progress, and
+completion. The helper bounds the wait and reports the last state and turn
+events on failure. Test the order of user-visible milestones when it matters.
+
+Use `memory.ClassifyCheckpointRequest` in model doubles that need to respond to
+checkpoint requests. Check the request's tools, conversation ID, and other
+metadata separately in tests that verify prefix reuse or fallback. In-process
+model doubles can use `terminalturn.Active(ctx)` to answer terminal tool turns.
+
+Leave usage unset in shared model doubles. When a test exercises usage
+calibration or accounting, configure the usage for that case. Contexts created
+with `memory.NewWithToolTokens` reserve the catalog estimate before the first
+model call. An actual provider observation supplies the baseline for subsequent
+estimates.
+
 ## Studio browser suite
 
 ```powershell

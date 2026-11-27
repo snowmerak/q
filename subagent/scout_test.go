@@ -9,6 +9,7 @@ import (
 
 	"github.com/snowmerak/q/client"
 	"github.com/snowmerak/q/config"
+	"github.com/snowmerak/q/internal/terminalturn"
 	"github.com/snowmerak/q/loom"
 	"github.com/snowmerak/q/sessionstore"
 	"github.com/snowmerak/q/tools/builtin"
@@ -19,10 +20,11 @@ type fakeScoutClient struct {
 	requests         []client.ChatRequest
 	terminalRequests []client.ChatRequest
 	conversationID   string
+	usage            client.Usage
 }
 
-func (f *fakeScoutClient) Chat(_ context.Context, request client.ChatRequest) (*client.ChatResponse, error) {
-	if (request.ToolChoice == client.ToolChoiceNone || terminalToolResultRequest(request)) && len(request.Messages) > 0 && request.Messages[len(request.Messages)-1].Role == client.RoleTool {
+func (f *fakeScoutClient) Chat(ctx context.Context, request client.ChatRequest) (*client.ChatResponse, error) {
+	if terminalturn.Active(ctx) {
 		f.terminalRequests = append(f.terminalRequests, request)
 		return &client.ChatResponse{ConversationID: f.conversationID, Choices: []client.Choice{{Message: client.Message{Role: client.RoleAssistant}, FinishReason: "stop"}}}, nil
 	}
@@ -35,7 +37,7 @@ func (f *fakeScoutClient) Chat(_ context.Context, request client.ChatRequest) (*
 	return &client.ChatResponse{
 		ConversationID: f.conversationID,
 		Choices:        []client.Choice{{Message: message}},
-		Usage:          client.Usage{PromptTokens: 10, CompletionTokens: 2, TotalTokens: 12},
+		Usage:          f.usage,
 	}, nil
 }
 
@@ -89,10 +91,13 @@ func TestScoutRunnerUsesInvestigationToolsAndReturnsStructuredReport(t *testing.
 		}],
 		"verification":["Read subagent/scout.go"]
 	}`
-	fakeClient := &fakeScoutClient{conversationID: "cache_scout", responses: []client.Message{
-		{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{scoutCall("read_file", `{"path":"subagent/scout.go"}`)}},
-		{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{scoutCall(ScoutCompleteToolName, complete)}},
-	}}
+	fakeClient := &fakeScoutClient{
+		conversationID: "cache_scout",
+		usage:          client.Usage{PromptTokens: 10, CompletionTokens: 2, TotalTokens: 12},
+		responses: []client.Message{
+			{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{scoutCall("read_file", `{"path":"subagent/scout.go"}`)}},
+			{Role: client.RoleAssistant, ToolCalls: []client.ToolCall{scoutCall(ScoutCompleteToolName, complete)}},
+		}}
 	fakeTools := &fakeScoutTools{available: []client.Tool{
 		scoutFunctionTool("edit_file"), scoutFunctionTool("loom_eval"), scoutFunctionTool("read_file"),
 		scoutFunctionTool("run_command"), scoutFunctionTool("cmd_status"), scoutFunctionTool("wait"),

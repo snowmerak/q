@@ -9,6 +9,30 @@ import (
 	"github.com/snowmerak/q/client"
 )
 
+func TestClassifyCheckpointRequest(t *testing.T) {
+	plan := Plan{OutputBudget: 600}
+	for _, test := range []struct {
+		name    string
+		request client.ChatRequest
+		want    CheckpointRequestKind
+	}{
+		{"empty", client.ChatRequest{}, CheckpointNone},
+		{"ordinary mention", client.ChatRequest{Messages: []client.Message{
+			{Role: client.RoleUser, Content: "Explain the session continuation checkpoint."},
+		}}, CheckpointNone},
+		{"detached", client.ChatRequest{Messages: plan.RequestMessages()}, CheckpointDetached},
+		{"in prefix without tools", client.ChatRequest{Messages: []client.Message{
+			{Role: client.RoleUser, Content: "Inspect the project."}, plan.InPrefixMessage(),
+		}}, CheckpointInPrefix},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := ClassifyCheckpointRequest(test.request); got != test.want {
+				t.Fatalf("checkpoint request kind = %v, want %v", got, test.want)
+			}
+		})
+	}
+}
+
 func TestApplyCheckpointRecoversAndNormalizesSmallModelJSON(t *testing.T) {
 	manager := New(Policy{ContextWindow: 16_000, TriggerRatio: .85, TargetRatio: .22, RecentRatio: .07}, nil)
 	response := "Here is the checkpoint:\n```json\n" + `{

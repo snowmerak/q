@@ -319,7 +319,7 @@ func TestQuestionCanResumeThroughPublicEvent(t *testing.T) {
 func TestCompactionResumesWithCheckpoint(t *testing.T) {
 	configured := &scriptedClient{}
 	configured.chat = func(request client.ChatRequest) *client.ChatResponse {
-		if len(request.Tools) == 0 && strings.Contains(joined(request.Messages), "session continuation checkpoint") {
+		if memory.ClassifyCheckpointRequest(request) != memory.CheckpointNone {
 			body, _ := json.Marshal(memory.Checkpoint{ActiveWork: []string{"condensed evidence"}})
 			return finalResponse(string(body))
 		}

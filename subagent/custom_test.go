@@ -10,6 +10,7 @@ import (
 
 	"github.com/snowmerak/q/client"
 	"github.com/snowmerak/q/config"
+	"github.com/snowmerak/q/internal/terminalturn"
 )
 
 type fallbackCustomClient struct {
@@ -17,8 +18,8 @@ type fallbackCustomClient struct {
 	secondaryCalls int
 }
 
-func (c *fallbackCustomClient) Chat(_ context.Context, request client.ChatRequest) (*client.ChatResponse, error) {
-	if request.ToolChoice == client.ToolChoiceNone || terminalToolResultRequest(request) {
+func (c *fallbackCustomClient) Chat(ctx context.Context, request client.ChatRequest) (*client.ChatResponse, error) {
+	if terminalturn.Active(ctx) {
 		return &client.ChatResponse{Choices: []client.Choice{{Message: client.Message{Role: client.RoleAssistant}, FinishReason: "stop"}}}, nil
 	}
 	c.models = append(c.models, request.Model)

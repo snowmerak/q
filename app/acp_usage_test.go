@@ -280,7 +280,7 @@ type stagedCompactingACPClient struct {
 }
 
 func (c *stagedCompactingACPClient) Chat(ctx context.Context, request client.ChatRequest) (*client.ChatResponse, error) {
-	if isCheckpointRequestForTest(request) {
+	if memory.ClassifyCheckpointRequest(request) != memory.CheckpointNone {
 		close(c.compactionStarted)
 		select {
 		case <-c.releaseCompaction:

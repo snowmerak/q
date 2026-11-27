@@ -123,15 +123,7 @@ func runTerminalTestTurn(t *testing.T, m model, prompt string) model {
 	t.Helper()
 	m.input.SetValue(prompt)
 	updated, command := m.submitChat()
-	m = updated.(model)
-	for count := 0; m.waiting; count++ {
-		if count > 100 {
-			t.Fatal("turn did not finish")
-		}
-		updated, command = m.Update(nextAgentMessage(t, command))
-		m = updated.(model)
-	}
-	return m
+	return pumpAgentToIdle(t, updated.(model), command)
 }
 
 func assertTerminalDelivery(t *testing.T, p *parkedTerminalClient) {

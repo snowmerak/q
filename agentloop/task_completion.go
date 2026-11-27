@@ -4,9 +4,10 @@ import (
 	"strings"
 
 	"github.com/snowmerak/q/client"
+	"github.com/snowmerak/q/internal/terminalturn"
 )
 
-const terminalAnswerInstruction = "The host has accepted this terminal tool result. The task is finished. " +
+const terminalAnswerInstruction = terminalturn.InstructionPrefix +
 	"Provide the final answer to the user's original request using the evidence and results already collected. " +
 	"Include the requested findings, explanation, source references and limitations as appropriate. " +
 	"Do not merely acknowledge completion or describe what you did. Do not call any more tools."

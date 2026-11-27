@@ -9,6 +9,7 @@ import (
 
 	"github.com/snowmerak/q/client"
 	"github.com/snowmerak/q/config"
+	"github.com/snowmerak/q/internal/terminalturn"
 )
 
 func controlledTestRunner() GeneralRunner {
@@ -27,8 +28,8 @@ func TestGeneralRunnerFollowupStartsNewLifecycleAndRoundBudget(t *testing.T) {
 	runner := controlledTestRunner()
 	runner.MaxRounds = 2
 	steps := 0
-	runner.Client = contextChatFunc(func(_ context.Context, request client.ChatRequest) (*client.ChatResponse, error) {
-		if request.ToolChoice == client.ToolChoiceNone || terminalToolResultRequest(request) {
+	runner.Client = contextChatFunc(func(ctx context.Context, request client.ChatRequest) (*client.ChatResponse, error) {
+		if terminalturn.Active(ctx) {
 			return contextResponse("ack"), nil
 		}
 		steps++
@@ -66,8 +67,8 @@ func TestGeneralRunnerFollowupDoesNotReplayInterruptedTool(t *testing.T) {
 	messages := []client.Message{{Role: client.RoleSystem, Content: "Work."}, {Role: client.RoleUser, Content: "work"}, {Role: client.RoleAssistant, ToolCalls: []client.ToolCall{write}}}
 	saved := GeneralRunState{Transcript: messages, Context: messages, Round: 1, Started: true, Spec: SpecCheckpoint{Model: "model"}}
 	runner.Resume, runner.Followup = &saved, "finish"
-	runner.Client = contextChatFunc(func(_ context.Context, request client.ChatRequest) (*client.ChatResponse, error) {
-		if request.ToolChoice == client.ToolChoiceNone || terminalToolResultRequest(request) {
+	runner.Client = contextChatFunc(func(ctx context.Context, request client.ChatRequest) (*client.ChatResponse, error) {
+		if terminalturn.Active(ctx) {
 			return contextResponse("ack"), nil
 		}
 		if request.Messages[3].Role != client.RoleTool || request.Messages[3].ToolCallID != "write" {
@@ -164,8 +165,8 @@ func TestGeneralRunnerAcceptsQueuedGuidanceBeforeCompletion(t *testing.T) {
 	runner.Control = control
 	ack := make(chan error, 1)
 	steps := 0
-	runner.Client = contextChatFunc(func(_ context.Context, request client.ChatRequest) (*client.ChatResponse, error) {
-		if request.ToolChoice == client.ToolChoiceNone || terminalToolResultRequest(request) {
+	runner.Client = contextChatFunc(func(ctx context.Context, request client.ChatRequest) (*client.ChatResponse, error) {
+		if terminalturn.Active(ctx) {
 			return contextResponse("ack"), nil
 		}
 		steps++

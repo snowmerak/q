@@ -3,20 +3,12 @@ package app
 import (
 	"context"
 	"errors"
-	"strings"
 	"sync"
 
 	"github.com/snowmerak/q/client"
+	"github.com/snowmerak/q/internal/terminalturn"
 	"github.com/snowmerak/q/subagent"
 )
-
-func terminalToolResultRequest(request client.ChatRequest) bool {
-	if len(request.Messages) == 0 {
-		return false
-	}
-	last := request.Messages[len(request.Messages)-1]
-	return last.Role == client.RoleTool && strings.Contains(last.Content, "The host has accepted this terminal tool result. The task is finished.")
-}
 
 type planningClient struct {
 	mu               sync.Mutex
@@ -28,13 +20,13 @@ type planningClient struct {
 
 func (p *planningClient) Chat(ctx context.Context, request client.ChatRequest) (*client.ChatResponse, error) {
 	p.mu.Lock()
-	if p.respond != nil && request.ToolChoice != client.ToolChoiceNone && !terminalToolResultRequest(request) {
+	if p.respond != nil && !terminalturn.Active(ctx) {
 		p.requests = append(p.requests, request)
 		p.mu.Unlock()
 		return p.respond(ctx, request)
 	}
 	defer p.mu.Unlock()
-	if (request.ToolChoice == client.ToolChoiceNone || terminalToolResultRequest(request)) && len(request.Messages) > 0 && request.Messages[len(request.Messages)-1].Role == client.RoleTool {
+	if terminalturn.Active(ctx) {
 		p.terminalRequests = append(p.terminalRequests, request)
 		return terminalAcknowledgment(""), nil
 	}

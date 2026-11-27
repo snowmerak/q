@@ -54,7 +54,7 @@ func TestChatCompactsBeforeAppendingUserRequest(t *testing.T) {
 			result = message
 		}
 	}
-	if len(fake.requests) != 1 || !isCheckpointRequestForTest(fake.requests[0]) || result.plan.ReservedTokens == 0 {
+	if len(fake.requests) != 1 || memory.ClassifyCheckpointRequest(fake.requests[0]) == memory.CheckpointNone || result.plan.ReservedTokens == 0 {
 		t.Fatal("expected a checkpoint request reserving the new input")
 	}
 	for _, message := range fake.requests[0].Messages {

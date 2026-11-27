@@ -25,6 +25,7 @@ import (
 	"github.com/snowmerak/q/commitagent"
 	"github.com/snowmerak/q/config"
 	"github.com/snowmerak/q/gatewayconfig"
+	"github.com/snowmerak/q/internal/terminalturn"
 	qlibrary "github.com/snowmerak/q/library"
 	"github.com/snowmerak/q/loom"
 	"github.com/snowmerak/q/memory"
@@ -80,8 +81,8 @@ type extractionClient struct {
 	embeddings       [][]string
 }
 
-func (c *extractionClient) Chat(_ context.Context, request client.ChatRequest) (*client.ChatResponse, error) {
-	if (request.ToolChoice == client.ToolChoiceNone || terminalToolResultRequest(request)) && len(request.Messages) > 0 && request.Messages[len(request.Messages)-1].Role == client.RoleTool {
+func (c *extractionClient) Chat(ctx context.Context, request client.ChatRequest) (*client.ChatResponse, error) {
+	if terminalturn.Active(ctx) {
 		c.terminalRequests = append(c.terminalRequests, request)
 		return terminalAcknowledgment(""), nil
 	}
@@ -398,17 +399,14 @@ func TestAutomaticSkillHintsAreAppendedWithoutChangingTheTranscriptOrEarlierPref
 			}}},
 		},
 	}
-	m := newModel(context.Background(), config.Store{Dir: t.TempDir()}, nil)
+	m := newModel(t.Context(), config.Store{Dir: t.TempDir()}, nil)
 	m.toolRuntime = agentTools
 	m.enterChat(value, configuredClient)
 
 	m.input.SetValue("review this Go change")
 	updated, command := m.submitChat()
 	m = updated.(model)
-	for m.waiting {
-		updated, command = m.Update(nextAgentMessage(t, command))
-		m = updated.(model)
-	}
+	m = pumpAgentToIdle(t, m, command)
 
 	if len(configuredClient.requests) != 1 || len(agentTools.skillHintQueries) != 1 ||
 		agentTools.skillHintQueries[0] != "review this Go change" {
@@ -445,10 +443,7 @@ func TestAutomaticSkillHintsAreAppendedWithoutChangingTheTranscriptOrEarlierPref
 	m.input.SetValue("and check the tests")
 	updated, command = m.submitChat()
 	m = updated.(model)
-	for m.waiting {
-		updated, command = m.Update(nextAgentMessage(t, command))
-		m = updated.(model)
-	}
+	m = pumpAgentToIdle(t, m, command)
 	second := configuredClient.requests[1]
 	secondPrefix, err := json.Marshal(second.Messages[:len(request.Messages)])
 	if err != nil {
@@ -478,23 +473,17 @@ func TestAutomaticSkillHintsUseTaskStartAndUserAnswerSuffixes(t *testing.T) {
 			{Hits: []builtin.SkillSearchHit{{ID: "answer", Title: "answer", Scope: "global"}}},
 		},
 	}
-	m := newModel(context.Background(), config.Store{Dir: t.TempDir()}, nil)
+	m := newModel(t.Context(), config.Store{Dir: t.TempDir()}, nil)
 	m.toolRuntime = agentTools
 	m.enterChat(value, configuredClient)
 	m.input.SetValue("choose a color")
 	updated, command := m.submitChat()
 	m = updated.(model)
-	for !m.asking {
-		updated, command = m.Update(nextAgentMessage(t, command))
-		m = updated.(model)
-	}
+	m, _ = pumpAgentUntil(t, m, command, "question prompt", func(m model) bool { return m.asking })
 	m.questionChoice = 1
 	updated, command = m.submitQuestionAnswer("")
 	m = updated.(model)
-	for m.waiting {
-		updated, command = m.Update(nextAgentMessage(t, command))
-		m = updated.(model)
-	}
+	m = pumpAgentToIdle(t, m, command)
 
 	if len(agentTools.skillHintQueries) != 3 || agentTools.skillHintQueries[1] != "Choose an accent color" ||
 		!strings.Contains(agentTools.skillHintQueries[2], "Which color?") ||
@@ -529,16 +518,13 @@ func TestAutomaticSkillHintFailureFallsBackToModelSearch(t *testing.T) {
 		},
 		skillHintErr: errors.New("embedding unavailable"),
 	}
-	m := newModel(context.Background(), config.Store{Dir: t.TempDir()}, nil)
+	m := newModel(t.Context(), config.Store{Dir: t.TempDir()}, nil)
 	m.toolRuntime = agentTools
 	m.enterChat(value, configuredClient)
 	m.input.SetValue("answer directly")
 	updated, command := m.submitChat()
 	m = updated.(model)
-	for m.waiting {
-		updated, command = m.Update(nextAgentMessage(t, command))
-		m = updated.(model)
-	}
+	m = pumpAgentToIdle(t, m, command)
 
 	last := configuredClient.requests[0].Messages[len(configuredClient.requests[0].Messages)-1]
 	if last.Content != "answer directly" || !strings.Contains(modelInstruction(m.messages, "q_agent_skills"), "call search_skills") {
@@ -631,15 +617,15 @@ func (f *prematureCompletionClient) ListModels(context.Context) ([]client.Model,
 }
 func (f *prematureCompletionClient) Close() error { return nil }
 
-func (f *askingClient) Chat(_ context.Context, request client.ChatRequest) (*client.ChatResponse, error) {
+func (f *askingClient) Chat(ctx context.Context, request client.ChatRequest) (*client.ChatResponse, error) {
 	request.Messages = append([]client.Message(nil), request.Messages...)
 	f.requests = append(f.requests, request)
-	if isCheckpointRequestForTest(request) {
+	if memory.ClassifyCheckpointRequest(request) != memory.CheckpointNone {
 		return &client.ChatResponse{Choices: []client.Choice{{Message: client.Message{
 			Role: client.RoleAssistant, Content: testCheckpointJSON("preserve the color selection"),
 		}}}}, nil
 	}
-	if request.ToolChoice == client.ToolChoiceNone || terminalToolResultRequest(request) {
+	if terminalturn.Active(ctx) {
 		return terminalAcknowledgment(""), nil
 	}
 	if len(f.requests) == 1 {
@@ -675,10 +661,10 @@ func (f *askingClient) Chat(_ context.Context, request client.ChatRequest) (*cli
 func (f *askingClient) ListModels(context.Context) ([]client.Model, error) { return nil, nil }
 func (f *askingClient) Close() error                                       { return nil }
 
-func (f *toolCallingClient) Chat(_ context.Context, request client.ChatRequest) (*client.ChatResponse, error) {
+func (f *toolCallingClient) Chat(ctx context.Context, request client.ChatRequest) (*client.ChatResponse, error) {
 	request.Messages = append([]client.Message(nil), request.Messages...)
 	f.requests = append(f.requests, request)
-	if request.ToolChoice == client.ToolChoiceNone || terminalToolResultRequest(request) {
+	if terminalturn.Active(ctx) {
 		return terminalAcknowledgment("tool-conversation"), nil
 	}
 	if len(f.requests) == 1 {
@@ -729,7 +715,7 @@ func (f *fakeClient) Chat(_ context.Context, request client.ChatRequest) (*clien
 	f.requests = append(f.requests, request)
 	n := len(f.requests)
 	content := "reply " + string(rune('0'+n))
-	if isCheckpointRequestForTest(request) {
+	if memory.ClassifyCheckpointRequest(request) != memory.CheckpointNone {
 		content = testCheckpointJSON("preserve the pending request")
 	}
 	return &client.ChatResponse{
@@ -831,7 +817,7 @@ func TestChatCompactsAtThresholdThenSendsPendingMessage(t *testing.T) {
 		}
 	}
 	if !found || len(fake.requests) != 1 || fake.requests[0].MaxCompletionTokens != nil ||
-		!isCheckpointRequestForTest(fake.requests[0]) || fake.requests[0].Model != "workspace-model" {
+		memory.ClassifyCheckpointRequest(fake.requests[0]) == memory.CheckpointNone || fake.requests[0].Model != "workspace-model" {
 		t.Fatalf("compaction request = %#v", fake.requests)
 	}
 
@@ -3214,7 +3200,7 @@ func TestOpenAICompatibleChatCoalescesInitialRuntimeInstructions(t *testing.T) {
 	value := config.Default()
 	value.Provider.Model = "lms/local-model"
 	configuredClient := &fakeClient{}
-	m := newModel(context.Background(), config.Store{Dir: t.TempDir()}, nil)
+	m := newModel(t.Context(), config.Store{Dir: t.TempDir()}, nil)
 	workspaceStore := workspace.Store{Root: t.TempDir()}
 	m.workspaceStore = &workspaceStore
 	m.toolRuntime = &fakeAgentTools{}
@@ -3225,8 +3211,7 @@ func TestOpenAICompatibleChatCoalescesInitialRuntimeInstructions(t *testing.T) {
 	m.input.SetValue("hello")
 	updated, command := m.submitChat()
 	m = updated.(model)
-	updated, _ = m.Update(nextAgentMessage(t, command))
-	m = updated.(model)
+	m = pumpAgentToIdle(t, m, command)
 
 	if len(configuredClient.requests) != 1 || len(configuredClient.requests[0].Messages) != 2 {
 		t.Fatalf("compatible request messages = %#v", configuredClient.requests)
@@ -3252,7 +3237,7 @@ func TestChatExecutesToolCallsAndContinuesTurn(t *testing.T) {
 	}
 	archiveWriter := sessionstore.NewWriter(archiveStore, 16)
 	t.Cleanup(func() { _ = archiveWriter.Close() })
-	m := newModel(context.Background(), config.Store{Dir: t.TempDir()}, nil)
+	m := newModel(t.Context(), config.Store{Dir: t.TempDir()}, nil)
 	m.workspaceStore = &workspaceStore
 	m.toolRuntime = agentTools
 	m.archive = archiveWriter
@@ -3261,48 +3246,30 @@ func TestChatExecutesToolCallsAndContinuesTurn(t *testing.T) {
 	updated, command := m.submitChat()
 	m = updated.(model)
 
-	updated, command = m.Update(nextAgentMessage(t, command))
-	m = updated.(model)
-	if !m.waiting || !strings.Contains(m.status, "Preparing tool") ||
-		len(m.messages[len(m.messages)-1].ToolCalls) != 2 {
+	m, command = pumpAgentToStatus(t, m, command, "Preparing tool")
+	if !m.waiting || len(m.messages) == 0 || len(m.messages[len(m.messages)-1].ToolCalls) != 2 {
 		t.Fatalf("tool-call progress = waiting %v, status %q, messages %#v", m.waiting, m.status, m.messages)
 	}
 
-	updated, command = m.Update(nextAgentMessage(t, command))
-	m = updated.(model)
-	if !strings.Contains(m.status, "Running tool") || !strings.Contains(m.status, "start task") {
-		t.Fatalf("task-start progress status = %q", m.status)
+	m, command = pumpAgentToStatus(t, m, command, "Running tool · start task")
+	m, command = pumpAgentToStatus(t, m, command, taskStartToolName+" completed")
+	if last := m.messages[len(m.messages)-1]; last.Role != client.RoleTool || last.Name != taskStartToolName {
+		t.Fatalf("task-start result = %#v", last)
 	}
 
-	updated, command = m.Update(nextAgentMessage(t, command))
-	m = updated.(model)
-	if m.messages[len(m.messages)-1].Name != taskStartToolName || !strings.Contains(m.status, "completed") {
-		t.Fatalf("task-start result = status %q, messages %#v", m.status, m.messages)
-	}
-
-	updated, command = m.Update(nextAgentMessage(t, command))
-	m = updated.(model)
+	m, command = pumpAgentUntil(t, m, command, "active task", func(m model) bool { return m.activeTask != nil })
 	startedSession, err := workspaceStore.Load()
 	if err != nil || startedSession.ActiveTask == nil || startedSession.ActiveTask.Objective != "Create a Go project" {
 		t.Fatalf("persisted active task = %#v, err = %v", startedSession.ActiveTask, err)
 	}
 
-	updated, command = m.Update(nextAgentMessage(t, command))
-	m = updated.(model)
-	if !strings.Contains(m.status, "Running tool") || !strings.Contains(m.status, "write main.go") {
-		t.Fatalf("tool-start progress status = %q", m.status)
+	m, command = pumpAgentToStatus(t, m, command, "Running tool · write main.go")
+	m, command = pumpAgentToStatus(t, m, command, "write_file completed")
+	if last := m.messages[len(m.messages)-1]; last.Role != client.RoleTool || last.Name != "write_file" {
+		t.Fatalf("write result = %#v", last)
 	}
 
-	updated, command = m.Update(nextAgentMessage(t, command))
-	m = updated.(model)
-	if m.messages[len(m.messages)-1].Role != client.RoleTool || !strings.Contains(m.status, "completed") {
-		t.Fatalf("tool-result progress = status %q, messages %#v", m.status, m.messages)
-	}
-
-	for m.waiting {
-		updated, command = m.Update(nextAgentMessage(t, command))
-		m = updated.(model)
-	}
+	m = pumpAgentToIdle(t, m, command)
 
 	if len(configuredClient.requests) != 4 {
 		t.Fatalf("agent requests = %#v", configuredClient.requests)
@@ -3414,7 +3381,7 @@ func TestAskToUserPausesForAnswerAndResumesSameTask(t *testing.T) {
 	value := config.Default()
 	value.Provider.Model = "tool-model"
 	configuredClient := &askingClient{}
-	m := newModel(context.Background(), config.Store{Dir: t.TempDir()}, nil)
+	m := newModel(t.Context(), config.Store{Dir: t.TempDir()}, nil)
 	m.toolRuntime = &fakeAgentTools{}
 	m.enterChat(value, configuredClient)
 	m.resize(80, 24)
@@ -3422,10 +3389,7 @@ func TestAskToUserPausesForAnswerAndResumesSameTask(t *testing.T) {
 	updated, command := m.submitChat()
 	m = updated.(model)
 
-	for range 6 {
-		updated, command = m.Update(nextAgentMessage(t, command))
-		m = updated.(model)
-	}
+	m, _ = pumpAgentUntil(t, m, command, "question prompt", func(m model) bool { return m.asking })
 	if !m.asking || !m.waiting || m.pendingQuestion.Question != "Which color?" ||
 		!strings.Contains(m.View().Content, "› blue · Blue") {
 		t.Fatalf("question state = asking %v, waiting %v, question %#v, view %q", m.asking, m.waiting, m.pendingQuestion, m.View().Content)
@@ -3462,10 +3426,7 @@ func TestAskToUserPausesForAnswerAndResumesSameTask(t *testing.T) {
 	if m.asking || !m.waiting || command == nil {
 		t.Fatalf("answer submit state = asking %v, waiting %v, command %v", m.asking, m.waiting, command != nil)
 	}
-	for m.waiting {
-		updated, command = m.Update(nextAgentMessage(t, command))
-		m = updated.(model)
-	}
+	m = pumpAgentToIdle(t, m, command)
 	if len(configuredClient.requests) != 3 {
 		t.Fatalf("requests = %#v", configuredClient.requests)
 	}
@@ -3618,15 +3579,14 @@ func TestDirectAnswerDoesNotRequireTaskLifecycle(t *testing.T) {
 	value := config.Default()
 	value.Provider.Model = "tool-model"
 	configuredClient := &fakeClient{}
-	m := newModel(context.Background(), config.Store{Dir: t.TempDir()}, nil)
+	m := newModel(t.Context(), config.Store{Dir: t.TempDir()}, nil)
 	m.toolRuntime = &fakeAgentTools{}
 	m.enterChat(value, configuredClient)
 	m.input.SetValue("answer briefly")
 	updated, command := m.submitChat()
 	m = updated.(model)
 
-	updated, _ = m.Update(nextAgentMessage(t, command))
-	m = updated.(model)
+	m = pumpAgentToIdle(t, m, command)
 	if m.waiting || len(configuredClient.requests) != 1 ||
 		m.messages[len(m.messages)-1].Content != "reply 1" {
 		t.Fatalf("direct answer state = waiting %v, requests %d, messages %#v", m.waiting, len(configuredClient.requests), m.messages)
@@ -3637,17 +3597,14 @@ func TestTaskCompleteIsRejectedWithoutTaskStart(t *testing.T) {
 	value := config.Default()
 	value.Provider.Model = "tool-model"
 	configuredClient := &prematureCompletionClient{}
-	m := newModel(context.Background(), config.Store{Dir: t.TempDir()}, nil)
+	m := newModel(t.Context(), config.Store{Dir: t.TempDir()}, nil)
 	m.toolRuntime = &fakeAgentTools{}
 	m.enterChat(value, configuredClient)
 	m.input.SetValue("answer directly")
 	updated, command := m.submitChat()
 	m = updated.(model)
 
-	for m.waiting {
-		updated, command = m.Update(nextAgentMessage(t, command))
-		m = updated.(model)
-	}
+	m = pumpAgentToIdle(t, m, command)
 	if len(configuredClient.requests) != 2 || m.messages[len(m.messages)-1].Content != "Direct answer after correction" {
 		t.Fatalf("requests = %d, transcript = %#v", len(configuredClient.requests), m.messages)
 	}
@@ -3678,7 +3635,7 @@ func TestRestoredActiveTaskCanCompleteInANewTurn(t *testing.T) {
 	value := config.Default()
 	value.Provider.Model = "tool-model"
 	configuredClient := &prematureCompletionClient{}
-	m := newModel(context.Background(), config.Store{Dir: t.TempDir()}, nil)
+	m := newModel(t.Context(), config.Store{Dir: t.TempDir()}, nil)
 	m.workspaceStore = &workspaceStore
 	m.toolRuntime = &fakeAgentTools{}
 	m.enterChat(value, configuredClient)
@@ -3690,10 +3647,7 @@ func TestRestoredActiveTaskCanCompleteInANewTurn(t *testing.T) {
 	m.input.SetValue("continue")
 	updated, command := m.submitChat()
 	m = updated.(model)
-	for m.waiting {
-		updated, command = m.Update(nextAgentMessage(t, command))
-		m = updated.(model)
-	}
+	m = pumpAgentToIdle(t, m, command)
 	if len(configuredClient.requests) != 2 || m.activeTask != nil ||
 		m.messages[len(m.messages)-1].Content != "Direct answer after correction" {
 		t.Fatalf("completed restored task: requests = %d, active = %#v, messages = %#v",
@@ -3957,28 +3911,6 @@ func TestTranscriptMarkdownWrapsAndTracksTerminalTheme(t *testing.T) {
 	if messages[0].Content != "This is a long Markdown paragraph that must wrap to the current viewport width without changing the stored message." {
 		t.Fatalf("rendering mutated stored message: %#v", messages[0])
 	}
-}
-
-func nextAgentMessage(t *testing.T, command tea.Cmd) agentEventMsg {
-	t.Helper()
-	if command == nil {
-		t.Fatal("agent command is nil")
-	}
-	message := command()
-	if event, ok := message.(agentEventMsg); ok {
-		return event
-	}
-	batch, ok := message.(tea.BatchMsg)
-	if !ok {
-		t.Fatalf("agent command returned %T", message)
-	}
-	for _, child := range batch {
-		if event, ok := child().(agentEventMsg); ok {
-			return event
-		}
-	}
-	t.Fatal("batch did not contain an agent event")
-	return agentEventMsg{}
 }
 
 func TestProviderSettingsCanBeCancelled(t *testing.T) {

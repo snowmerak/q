@@ -30,11 +30,11 @@ type sessionFailureClient struct {
 }
 
 func (configured *sessionFailureClient) Chat(ctx context.Context, request client.ChatRequest) (*client.ChatResponse, error) {
-	if isCheckpointRequestForTest(request) && configured.checkpointErr != nil {
+	if memory.ClassifyCheckpointRequest(request) != memory.CheckpointNone && configured.checkpointErr != nil {
 		return nil, configured.checkpointErr
 	}
 	response, err := configured.fakeClient.Chat(ctx, request)
-	if isCheckpointRequestForTest(request) && configured.checkpoint != "" {
+	if memory.ClassifyCheckpointRequest(request) != memory.CheckpointNone && configured.checkpoint != "" {
 		response.Choices[0].Message.Content = configured.checkpoint
 	}
 	if configured.blockSave {
@@ -174,7 +174,7 @@ func TestLiveSessionSuccessfulManualCompactionDoesNotSendChat(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
 	status, err := session.execute(ctx, "", true, nil, nil)
-	if err != nil || !strings.Contains(status, "Context compacted") || len(configured.requests) != 1 || !isCheckpointRequestForTest(configured.requests[0]) {
+	if err != nil || !strings.Contains(status, "Context compacted") || len(configured.requests) != 1 || memory.ClassifyCheckpointRequest(configured.requests[0]) == memory.CheckpointNone {
 		t.Fatalf("manual compaction did not finish independently: status=%q err=%v requests=%d", status, err, len(configured.requests))
 	}
 	if _, err := session.execute(ctx, "after compaction", false, nil, nil); err != nil {

@@ -8,6 +8,23 @@ import (
 	"github.com/snowmerak/q/client"
 )
 
+func TestNewWithToolTokensPreservesUnreportedUsage(t *testing.T) {
+	initial := []client.Message{{Role: client.RoleUser, Content: "Inspect the project."}}
+	const toolTokens = 70
+	m := NewWithToolTokens(Policy{}, initial, toolTokens)
+	if m.PromptUsage() != (PromptUsage{}) {
+		t.Fatalf("reserved tools reported as prompt usage: %#v", m.PromptUsage())
+	}
+	want := New(Policy{}, initial).PredictedTokens() + toolTokens
+	if got := m.PredictedTokens(); got != want {
+		t.Fatalf("predicted tokens = %d, want %d with tool reservation", got, want)
+	}
+	m.ObserveUsage(200, m.LocalEstimate())
+	if got := m.PredictedTokens(); got != 200 {
+		t.Fatalf("predicted tokens = %d after provider usage of 200", got)
+	}
+}
+
 func TestThresholdUsesSeventyEightPercent(t *testing.T) {
 	m := New(Policy{ContextWindow: 1000, TriggerRatio: .85, TargetRatio: .22, RecentRatio: .07}, nil)
 	m.Append(client.Message{Role: client.RoleUser, Content: strings.Repeat("x", 2200)})

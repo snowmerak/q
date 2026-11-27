@@ -16,7 +16,9 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/snowmerak/q/client"
+	"github.com/snowmerak/q/internal/terminalturn"
 	"github.com/snowmerak/q/loom"
+	"github.com/snowmerak/q/memory"
 	"github.com/snowmerak/q/subagent"
 )
 
@@ -274,9 +276,11 @@ func TestCommitAgentCompactsAndRetainsStagedOverview(t *testing.T) {
 	if err != nil || fallback || proposal.Single == nil {
 		t.Fatalf("proposal=%#v fallback=%v err=%v", proposal, fallback, err)
 	}
-	if len(fake.requests) != 4 || fake.requests[2].MaxCompletionTokens != nil ||
-		len(fake.requests[2].Messages) == 0 || !strings.Contains(fake.requests[2].Messages[0].Content, "session continuation checkpoint") {
-		t.Fatalf("compaction sequence has %d requests", len(fake.requests))
+	if len(fake.requests) != 4 {
+		t.Fatalf("compaction sequence has %d requests, want 4", len(fake.requests))
+	}
+	if checkpoint := fake.requests[2]; memory.ClassifyCheckpointRequest(checkpoint) == memory.CheckpointNone || checkpoint.MaxCompletionTokens != nil {
+		t.Fatal("third request did not ask for a checkpoint without a completion limit")
 	}
 	before, after := fake.requests[1].Messages, fake.requests[3].Messages
 	if before[0].Content != after[0].Content || before[1].Content != after[1].Content ||
@@ -465,10 +469,10 @@ type fakeAgentClient struct {
 	terminalErr      error
 }
 
-func (fake *fakeAgentClient) Chat(_ context.Context, request client.ChatRequest) (*client.ChatResponse, error) {
+func (fake *fakeAgentClient) Chat(ctx context.Context, request client.ChatRequest) (*client.ChatResponse, error) {
 	fake.mu.Lock()
 	defer fake.mu.Unlock()
-	if len(request.Messages) > 0 && request.Messages[len(request.Messages)-1].Role == client.RoleTool && strings.Contains(request.Messages[len(request.Messages)-1].Content, "The task is finished. End this turn with a short acknowledgment") {
+	if terminalturn.Active(ctx) {
 		fake.terminalRequests = append(fake.terminalRequests, request)
 		return &client.ChatResponse{Choices: []client.Choice{{Message: client.Message{Role: client.RoleAssistant}, FinishReason: "stop"}}}, fake.terminalErr
 	}

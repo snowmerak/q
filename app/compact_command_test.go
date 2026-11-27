@@ -63,7 +63,7 @@ func TestTUICompactCommandPreservesTranscriptWithoutSendingChat(t *testing.T) {
 			result, found = message, true
 		}
 	}
-	if !found || !result.manual || len(fake.requests) != 1 || !isCheckpointRequestForTest(fake.requests[0]) {
+	if !found || !result.manual || len(fake.requests) != 1 || memory.ClassifyCheckpointRequest(fake.requests[0]) == memory.CheckpointNone {
 		t.Fatalf("checkpoint request = %#v, result = %#v", fake.requests, result)
 	}
 	updated, _ = m.Update(result)
@@ -134,7 +134,7 @@ func TestACPCompactCommandPreservesTranscriptWithoutChatTurn(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if response.StopReason != acp.StopReasonEndTurn || response.Meta[acpCompactionMeta] != "completed" || len(fake.requests) != 1 || !isCheckpointRequestForTest(fake.requests[0]) {
+	if response.StopReason != acp.StopReasonEndTurn || response.Meta[acpCompactionMeta] != "completed" || len(fake.requests) != 1 || memory.ClassifyCheckpointRequest(fake.requests[0]) == memory.CheckpointNone {
 		t.Fatalf("ACP command = %#v, requests = %#v", response, fake.requests)
 	}
 	if len(runtime.state.messages) != before || !hasMessageNamed(runtime.state.memory.Messages(), memory.SummaryName) || runtime.state.conversationID != "" {
@@ -315,7 +315,7 @@ func TestACPCompactCommandSaveFailureKeepsContext(t *testing.T) {
 	_, err := agent.Prompt(t.Context(), acp.PromptRequest{
 		SessionId: sessionID, Prompt: []acp.ContentBlock{acp.TextBlock("/compact")},
 	})
-	if err == nil || len(fake.requests) != 1 || !isCheckpointRequestForTest(fake.requests[0]) {
+	if err == nil || len(fake.requests) != 1 || memory.ClassifyCheckpointRequest(fake.requests[0]) == memory.CheckpointNone {
 		t.Fatalf("ACP save failure: err=%v requests=%#v", err, fake.requests)
 	}
 	if got := runtime.state.memory.Messages(); len(got) != len(before) || hasMessageNamed(got, memory.SummaryName) || runtime.state.memory.Stats().Compactions != 0 || runtime.state.conversationID != "previous-conversation" {
@@ -354,7 +354,7 @@ func TestACPCompactCommandCancelledProviderResultKeepsContext(t *testing.T) {
 	if err := runtime.compactContext(ctx, true); !errors.Is(err, context.Canceled) {
 		t.Fatalf("cancelled checkpoint error = %v", err)
 	}
-	if len(fake.requests) != 1 || !isCheckpointRequestForTest(fake.requests[0]) {
+	if len(fake.requests) != 1 || memory.ClassifyCheckpointRequest(fake.requests[0]) == memory.CheckpointNone {
 		t.Fatalf("checkpoint request = %#v", fake.requests)
 	}
 	if got := runtime.state.memory.Messages(); len(got) != len(before) || hasMessageNamed(got, memory.SummaryName) || runtime.state.memory.Stats().Compactions != 0 || runtime.state.conversationID != "previous-conversation" {

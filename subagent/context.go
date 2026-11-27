@@ -50,13 +50,7 @@ func NewContextCompactor(spec Spec, initial []client.Message, tools []client.Too
 			break
 		}
 	}
-	manager := memory.New(spec.memoryPolicy(), initial)
-	// Tool definitions consume prompt tokens on every role request. Seed them as
-	// provider overhead so compaction still triggers when usage is unavailable.
-	if toolTokens := memory.CountTools(tools); toolTokens > 0 {
-		local := manager.LocalEstimate()
-		manager.ObserveUsage(local+toolTokens, local)
-	}
+	manager := memory.NewWithToolTokens(spec.memoryPolicy(), initial, memory.CountTools(tools))
 	return &ContextCompactor{
 		memory: manager, anchorCount: min(max(anchorCount, 0), len(initial)),
 		tools: append([]client.Tool(nil), tools...), browserPreference: preference,

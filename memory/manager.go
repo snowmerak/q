@@ -92,6 +92,14 @@ func New(policy Policy, initial []client.Message) *Manager {
 	return m
 }
 
+// NewWithToolTokens creates a manager with tool overhead reserved until the
+// provider reports prompt usage.
+func NewWithToolTokens(policy Policy, initial []client.Message, toolTokens int) *Manager {
+	m := New(policy, initial)
+	m.ReserveToolTokens(toolTokens)
+	return m
+}
+
 func (m *Manager) Configure(policy Policy) {
 	m.policy = policy
 	m.promptUsage = PromptUsage{}
@@ -376,7 +384,7 @@ func (m *Manager) PlanWithRetention(retention Retention) (Plan, error) {
 }
 
 func (p Plan) RequestMessages() []client.Message {
-	instructions := fmt.Sprintf(`Update the session continuation checkpoint from the supplied conversation using no more than %d tokens.
+	instructions := fmt.Sprintf(detachedCheckpointPrefix+`%d tokens.
 Return one JSON object with exactly these four useful sections. Prefer short arrays of strings, but a string or small object is acceptable and q will normalize it:
 {"current_request":[],"active_work":[],"previous_work":[],"facts":[]}
 current_request: what the user currently asked for, including completion conditions and constraints.
@@ -405,7 +413,7 @@ Return JSON only, without Markdown fences or explanatory prose.`, p.OutputBudget
 // InPrefixPrompt builds the user-turn compaction instruction appended to an
 // existing provider prefix so prompt caches can be reused during compaction.
 func (p Plan) InPrefixPrompt() string {
-	instructions := fmt.Sprintf(`Context compaction requested. Do NOT call any tools.
+	instructions := fmt.Sprintf(inPrefixCheckpointPrefix+`
 Update the session continuation checkpoint from the conversation above using no more than %d tokens.
 The most recent turns will remain verbatim after compaction, so focus the checkpoint on durable state, completed/active work, and facts needed to continue cleanly.
 Return one JSON object with exactly these four sections (prefer short arrays of strings, though a string or small object is acceptable and q will normalize it):

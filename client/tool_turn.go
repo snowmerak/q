@@ -4,11 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+
+	"github.com/snowmerak/q/internal/terminalturn"
 )
 
 const maximumTerminalRounds = 4
 
-const terminalResultInstruction = "The host has accepted this terminal tool result. The task is finished. End this turn with a short acknowledgment and no further tool calls."
+const terminalResultInstruction = terminalturn.InstructionPrefix + "End this turn with a short acknowledgment and no further tool calls."
 
 // FinishToolTurnOptions lets a caller request its final user answer instead of
 // the default short acknowledgment used by structured worker/commit protocols.
@@ -44,7 +46,7 @@ func FinishToolTurn(
 	observe func(Message) error,
 	options ...FinishToolTurnOptions,
 ) (ToolTurnResult, error) {
-	ctx = context.WithValue(ctx, terminalGenerationKey{}, true)
+	ctx = terminalturn.Mark(ctx)
 	var result ToolTurnResult
 	if len(request.Messages) == 0 || request.Messages[len(request.Messages)-1].Role != RoleTool {
 		return result, errors.New("finish tool turn: trailing tool result is required")

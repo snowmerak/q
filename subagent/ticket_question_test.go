@@ -8,6 +8,7 @@ import (
 
 	"github.com/snowmerak/q/client"
 	"github.com/snowmerak/q/config"
+	"github.com/snowmerak/q/memory"
 	"github.com/snowmerak/q/workitems"
 )
 
@@ -24,7 +25,7 @@ func TestLateTicketQuestionWaitsForCompactedCheckpoint(t *testing.T) {
 	checkpoints, compactions := 0, 0
 	retryable := errors.New("provider timeout")
 	r := GeneralRunner{Spec: spec, Client: contextChatFunc(func(_ context.Context, request client.ChatRequest) (*client.ChatResponse, error) {
-		if !isContextCheckpointRequest(request) {
+		if memory.ClassifyCheckpointRequest(request) == memory.CheckpointNone {
 			t.Fatal("late decision called model outside compaction")
 		}
 		compactions++

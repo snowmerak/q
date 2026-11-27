@@ -9,6 +9,7 @@ import (
 
 	"github.com/snowmerak/q/client"
 	"github.com/snowmerak/q/config"
+	"github.com/snowmerak/q/internal/terminalturn"
 	"github.com/snowmerak/q/tools/builtin"
 )
 
@@ -35,8 +36,8 @@ func (r *planSkillTools) Call(_ context.Context, call client.ToolCall) (client.T
 func TestPlanPlannerStartsWithSkillHintsAndCanLoadSkill(t *testing.T) {
 	runtime := &planSkillTools{fakeScoutTools: &fakeScoutTools{}}
 	rounds := 0
-	model := contextChatFunc(func(_ context.Context, request client.ChatRequest) (*client.ChatResponse, error) {
-		if request.ToolChoice == client.ToolChoiceNone || terminalToolResultRequest(request) {
+	model := contextChatFunc(func(ctx context.Context, request client.ChatRequest) (*client.ChatResponse, error) {
+		if terminalturn.Active(ctx) {
 			return contextResponse("ack"), nil
 		}
 		if rounds == 0 && !reflect.DeepEqual(request.ToolChoice, client.NamedToolChoice(TaskStartToolName)) {

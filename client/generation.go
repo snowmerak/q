@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+
+	"github.com/snowmerak/q/internal/terminalturn"
 )
 
 // ErrEmptyResponse identifies a completion with neither text nor tool calls.
@@ -250,7 +252,7 @@ func RecoverGeneration(ctx context.Context, configured any, request ChatRequest,
 		if callErr == nil {
 			callErr = CheckGeneration(response, settings.RequireFinishReason)
 		}
-		blank := !terminalGeneration(ctx) && callErr == nil && response != nil && len(response.Choices) > 0 && strings.TrimSpace(response.Choices[0].Message.TextContent()) == "" && len(response.Choices[0].Message.ToolCalls) == 0
+		blank := !terminalturn.Active(ctx) && callErr == nil && response != nil && len(response.Choices) > 0 && strings.TrimSpace(response.Choices[0].Message.TextContent()) == "" && len(response.Choices[0].Message.ToolCalls) == 0
 		if blank {
 			callErr = &IncompleteGeneration{Reason: "empty_response", Response: response, Cause: ErrEmptyResponse}
 		}
@@ -388,12 +390,6 @@ func reportedReasoningTokens(response *ChatResponse) *int {
 }
 
 type structuredGenerationKey struct{}
-type terminalGenerationKey struct{}
-
-func terminalGeneration(ctx context.Context) bool {
-	value, _ := ctx.Value(terminalGenerationKey{}).(bool)
-	return value
-}
 
 func WithStructuredGeneration(ctx context.Context) context.Context {
 	return context.WithValue(ctx, structuredGenerationKey{}, true)

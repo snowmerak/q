@@ -23,6 +23,7 @@ import (
 	"github.com/snowmerak/q/change"
 	"github.com/snowmerak/q/client"
 	"github.com/snowmerak/q/config"
+	"github.com/snowmerak/q/internal/terminalturn"
 	qlibrary "github.com/snowmerak/q/library"
 	"github.com/snowmerak/q/loom"
 	"github.com/snowmerak/q/providerhost"
@@ -286,7 +287,7 @@ func studioTestModel(w http.ResponseWriter, r *http.Request) {
 	terminal := fmt.Sprint(request.ToolChoice) == string(client.ToolChoiceNone)
 	if len(request.Messages) > 0 {
 		last := request.Messages[len(request.Messages)-1]
-		terminal = terminal || last.Role == client.RoleTool && strings.Contains(last.TextContent(), "The host has accepted this terminal tool result.")
+		terminal = terminal || last.Role == client.RoleTool && strings.Contains(last.TextContent(), terminalturn.InstructionPrefix)
 	}
 	if !composerChat && !terminal {
 		finish = "tool_calls"

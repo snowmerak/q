@@ -30,27 +30,11 @@ func testCheckpointJSON(activeWork string) string {
 	return string(body)
 }
 
-func isCheckpointRequestForTest(request client.ChatRequest) bool {
-	if len(request.Messages) == 0 {
-		return false
-	}
-	if len(request.Tools) == 0 && strings.Contains(request.Messages[0].Content, "session continuation checkpoint") {
-		return true
-	}
-	last := request.Messages[len(request.Messages)-1]
-	return last.Role == client.RoleUser && strings.Contains(last.Content, "session continuation checkpoint")
-}
-
-func isDetachedCheckpointRequestForTest(request client.ChatRequest) bool {
-	return len(request.Tools) == 0 && request.ConversationID == "" && len(request.Messages) > 0 &&
-		strings.Contains(request.Messages[0].Content, "session continuation checkpoint")
-}
-
 func (c *compactingLoopClient) Chat(_ context.Context, request client.ChatRequest) (*client.ChatResponse, error) {
 	request.Messages = append([]client.Message(nil), request.Messages...)
 	request.Tools = append([]client.Tool(nil), request.Tools...)
 	c.requests = append(c.requests, request)
-	if isCheckpointRequestForTest(request) {
+	if memory.ClassifyCheckpointRequest(request) != memory.CheckpointNone {
 		c.compactCalls++
 		if c.compactionErr != nil {
 			return nil, c.compactionErr
@@ -233,7 +217,7 @@ func TestStreamAgentLoopCompactsBetweenToolRounds(t *testing.T) {
 	var compactRequest, resumedRequest *client.ChatRequest
 	for index := range configuredClient.requests {
 		request := &configuredClient.requests[index]
-		if isCheckpointRequestForTest(*request) {
+		if memory.ClassifyCheckpointRequest(*request) != memory.CheckpointNone {
 			compactRequest = request
 		}
 		if len(request.Tools) > 0 && request.ConversationID == "" {

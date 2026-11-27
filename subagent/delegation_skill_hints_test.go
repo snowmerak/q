@@ -11,6 +11,7 @@ import (
 
 	"github.com/snowmerak/q/client"
 	"github.com/snowmerak/q/config"
+	"github.com/snowmerak/q/internal/terminalturn"
 	"github.com/snowmerak/q/tools/builtin"
 )
 
@@ -66,8 +67,8 @@ func TestTaskStartSkillHintLimits(t *testing.T) {
 func TestGeneralScoutTaskStartReceivesSkillHints(t *testing.T) {
 	runtime := &delegatedSkillRuntime{}
 	rounds := 0
-	configured := contextChatFunc(func(_ context.Context, request client.ChatRequest) (*client.ChatResponse, error) {
-		if request.ToolChoice == client.ToolChoiceNone || terminalToolResultRequest(request) {
+	configured := contextChatFunc(func(ctx context.Context, request client.ChatRequest) (*client.ChatResponse, error) {
+		if terminalturn.Active(ctx) {
 			return contextResponse("ack"), nil
 		}
 		if !hasTool(request.Tools, "search_skills") || !hasTool(request.Tools, "get_skill") {

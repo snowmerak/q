@@ -33,12 +33,12 @@ func TestAppCompactionUsesInPrefixWithToolsAndConversationIDAndFallsBack(t *test
 		t.Run(mode, func(t *testing.T) {
 			fake := &inPrefixFakeClient{}
 			fake.chat = func(_ context.Context, request client.ChatRequest) (*client.ChatResponse, error) {
-				if isDetachedCheckpointRequestForTest(request) {
+				if memory.ClassifyCheckpointRequest(request) == memory.CheckpointDetached {
 					return &client.ChatResponse{Choices: []client.Choice{{Message: client.Message{
 						Role: client.RoleAssistant, Content: testCheckpointJSON("detached fallback checkpoint"),
 					}}}}, nil
 				}
-				if isCheckpointRequestForTest(request) {
+				if memory.ClassifyCheckpointRequest(request) != memory.CheckpointNone {
 					switch mode {
 					case "fallback_tool_call":
 						return &client.ChatResponse{Choices: []client.Choice{{Message: client.Message{
@@ -108,14 +108,14 @@ func TestAppCompactionUsesInPrefixWithToolsAndConversationIDAndFallsBack(t *test
 					t.Fatalf("requests = %d, want 1", len(fake.requests))
 				}
 				req := fake.requests[0]
-				if req.ConversationID != "live-conv-123" || len(req.Tools) == 0 || !isCheckpointRequestForTest(req) || isDetachedCheckpointRequestForTest(req) {
+				if req.ConversationID != "live-conv-123" || len(req.Tools) == 0 || memory.ClassifyCheckpointRequest(req) != memory.CheckpointInPrefix {
 					t.Fatalf("expected in-prefix request with conversationID and tools, got %#v", req)
 				}
 			} else {
 				if len(fake.requests) != 2 {
 					t.Fatalf("requests = %d, want 2 (in-prefix + detached)", len(fake.requests))
 				}
-				if isDetachedCheckpointRequestForTest(fake.requests[0]) || !isDetachedCheckpointRequestForTest(fake.requests[1]) {
+				if memory.ClassifyCheckpointRequest(fake.requests[0]) != memory.CheckpointInPrefix || memory.ClassifyCheckpointRequest(fake.requests[1]) != memory.CheckpointDetached {
 					t.Fatalf("expected in-prefix then detached fallback, got %#v", fake.requests)
 				}
 			}
@@ -157,7 +157,7 @@ func TestAppPreAppendUsesInPrefixBeforeOverflow(t *testing.T) {
 	if result.err != nil && !errors.Is(result.err, nil) {
 		t.Fatal(result.err)
 	}
-	if len(fake.requests) != 1 || fake.requests[0].ConversationID != "old-conversation" || len(fake.requests[0].Tools) == 0 || isDetachedCheckpointRequestForTest(fake.requests[0]) {
+	if len(fake.requests) != 1 || fake.requests[0].ConversationID != "old-conversation" || len(fake.requests[0].Tools) == 0 || memory.ClassifyCheckpointRequest(fake.requests[0]) != memory.CheckpointInPrefix {
 		t.Fatalf("expected in-prefix pre-append request, got %#v", fake.requests)
 	}
 	for _, msg := range fake.requests[0].Messages {

@@ -34,8 +34,7 @@ func NewContext(policy memory.Policy, initial []client.Message, tools []client.T
 }
 
 func newAgentLoopContext(policy memory.Policy, initial []client.Message, toolTokens int, tools []client.Tool) *Context {
-	manager := memory.New(policy, initial)
-	manager.ReserveToolTokens(toolTokens)
+	manager := memory.NewWithToolTokens(policy, initial, toolTokens)
 	return &Context{manager: manager, tools: append([]client.Tool(nil), tools...)}
 }
 
